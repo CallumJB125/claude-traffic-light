@@ -35,6 +35,10 @@
     "files": [
       "main.js",
       "src/**/*",
+      "build/plugin-catalog/**/*",
+      "build/codex-plugins/**/*",
+      "build/catalog-key*.pub.pem",
+      "build/codex-plugin-key*.pub.pem",
       "!src/update-stub.js",
       "board/shared/secret-patterns.mjs",
       "preload.js",

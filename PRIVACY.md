@@ -17,6 +17,8 @@ Plexiform is a desktop app that watches your AI coding sessions and shows their 
 
 ## What stays on your machine
 
+- **Plugin review (read-only groundwork).** The verifier checks bundled plugin descriptions and exact local source files. The manifest's `agent-plugins.org` schema identifier is checked locally without contacting that site. Private review plans stay in memory; this stage does not install plugins, change agent settings, contact a provider or save a settings journal.
+
 - **Automatic work-card routing (local lookup).** <!-- flow:work-capture-repository files=src/work-capture.js --> Plexiform reads a reported working folder's local Git origin with a bounded, read-only Git configuration command. It loads its own repository-name normalizer locally; this lookup does not contact GitHub or run project commands. A private file records task identities, their pinned board destinations, remembered repository defaults and whether automatic cards are enabled. It does not read AI transcripts.
 
 Plexiform reads these on your computer and never uploads them:
