@@ -43,6 +43,14 @@
 //     fetch without retries; its errors are fixed text with no `cause`.
 //     `webhookUrl` names the pending id the connection keeps; `identityRedirectUri`
 //     is exactly the redirectUri D98's identity flow will use.)
+//     // Optional, prepare connectors only, needs ackBody (D97, slice B3): the one
+//     // delivery a ready pending id answers. Called synchronously, only after
+//     // verify() passed under that pending row's own secrets and parseBody;
+//     // only a plain `true` counts. The answer is then ackBody's string, which
+//     // must be 1–256 printable ASCII characters (Slack: the url_verification
+//     // challenge); anything else, and every other delivery, is the
+//     // unknown-connection 404. Nothing else runs (no handler, lease or audit).
+//     handshake({ payload, headers }) → boolean,   // Slack: payload.type === 'url_verification'
 //     async verifyToken({ token, fetch }) → { external_id, display_name, scopes, secrets }, // token
 //     (`fetch` here is restricted to `hosts`, with a timeout; errors never reach users)
 //   },
