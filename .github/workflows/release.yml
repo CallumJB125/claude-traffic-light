@@ -115,7 +115,7 @@ jobs:
           run() { if [ "$RUNNER_OS" = Linux ]; then xvfb-run --auto-servernum "$@"; else "$@"; fi; }
           status=0
           run node --test --test-force-exit --test-timeout=120000 test/*.test.js test/adapters/*.test.js || status=1
-          node --test --test-force-exit --test-timeout=120000 remote/test/ || status=1
+          node --test --test-force-exit --test-timeout=120000 remote/test/*.test.js || status=1
           exit $status
         continue-on-error: ${{ !startsWith(github.ref, 'refs/tags/') || matrix.platform == 'win' }}
 
@@ -134,9 +134,13 @@ jobs:
         if: matrix.platform == 'linux'
         run: xvfb-run --auto-servernum node scripts/smoke-installed.js
 
+      # Windows only reports, like its Unit tests: a failing Windows job would
+      # otherwise skip stage (needs: build) and block the macOS release.
+      # Remove together with the Unit tests one when WINDOWS_RELEASE flips.
       - name: Smoke test (Mac, Windows)
         if: matrix.platform != 'linux'
         run: node scripts/smoke-installed.js
+        continue-on-error: ${{ matrix.platform == 'win' }}
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
