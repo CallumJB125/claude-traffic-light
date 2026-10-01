@@ -31,6 +31,7 @@ board/
     mesh.js               task-to-task messaging: addresses, resolution, wrapper, flags, rate limits, loop detector, durable inbox
     client.js             the client library (UI main process, CLI, MCP tools)
     mock-server.js        runnable mock of this API (npm run tasks:mock)
+  tasks-engine/           the real engine behind this API (startTasksEngine; see its README)
     test/                 node --test (npm run test:tasks)
 ```
 
@@ -47,10 +48,11 @@ No new dependencies (CONTRACT.md §1). `face.js`, `protocol.js`, `validate.js` a
 
 | Item | Rule |
 |---|---|
-| Socket | The supervisor's control socket `BOARD_HOME/runner.sock` (default `~/.board/runner.sock`, CONTRACT.md §6.10). `BOARD_HOME` dir 0700, socket 0600 |
-| Coexistence | A frame with a `method` field is a Tasks API request. A frame with a `type` field is the existing runner control protocol (CONTRACT.md §6.10: `status`, `opt_in`, `confirm_offer`, `stop_all`, `host_*`). Both share the socket. (Proposed to the CONTRACT.md owner: token-gate the `type` frames too, §17 P4) |
+| Socket | Its own socket `tasks.sock` (`SOCKET_NAME`) in the Tasks engine's private data dir (`board/tasks-engine`; the desktop gives it a dir of its own, `BOARD_HOME` for CLI use). Dir 0700 (a symlink or another user's dir is refused), socket 0600; the engine refuses to start over a non-socket, another user's socket or a live engine, replaces a dead socket, and refuses a socket path over 103 bytes |
+| Coexistence | The runner's control socket (`runner.sock`, CONTRACT.md §6.10, `type` frames) is a separate socket in the runner's dir. A `type` frame sent to `tasks.sock` is refused (`VALIDATION`). (Proposed to the CONTRACT.md owner: token-gate the `type` frames too, §17 P4) |
 | Framing | NDJSON, UTF-8, one JSON object per line, **≤ 1 MiB per line in both directions**. An oversized request line → `PAYLOAD_TOO_LARGE`, then the server closes the connection. The server never sends a line ≥ 1 MiB: large text is chunked (transcript ≤ 64 KiB/event) or truncated with `truncated:true` (diff patch ≤ 256 KiB) |
 | Token | Per-user token in `BOARD_HOME/tasks.token`, file 0600, owner = the user, created by the supervisor at first start: `btk_` + base64url(32 random bytes). Every request carries it. The supervisor compares sha256 digests with `crypto.timingSafeEqual` (constant time; a prefix of the token is still wrong). Wrong or missing → `{id, error:{code:'UNAUTHENTICATED'}}` and the connection is closed |
+| Relay tokens | Every relay gets its own `btr_` + base64url(32) token from trusted main code (`tasks-engine/relay-tokens.js addRelayToken`); only sha256 hashes and issuer-owned grants are stored in private `relay-tokens.json`. MCP grants bind a required live `parentSessionId` and can read/act only on that parent and its same-repo descendants. Other sources require a verified `userId` plus explicit `taskIds`, or `allowCreate:true` and canonical `repoRoots`; newly created tasks are owned by that exact grant, never every token of the same user/source. Missing legacy grants fail closed. Metadata from requests cannot widen authority. A relay cannot approve, answer, take over, accept a start or change device limits. Reads, claims, replay, live events and heartbeats enforce the same task scope. Grants expire after 24h by default (issuer maximum30days), and can be revoked individually or by source; each request and push rechecks authority, including after queue waits. Inactive MCP parents close relay connections. A connection pins one principal at hello. Idempotency caches bind the principal and exact request; reusing an action id for a different target/payload is `CONFLICT` |
 | Client token read | `client.readToken()` refuses a token file with any group/other permission bits or owned by another uid (`FORBIDDEN`), so a loosened file is noticed, not used |
 | Peer uid | Node has no `getpeereid`/`SO_PEERCRED` API. The OS-level guard is the 0700 `BOARD_HOME` + 0600 socket; the token is the second factor. A native peer-uid check is optional later (it would reject a peer uid ≠ the supervisor's uid) |
 | Windows (later, spec only) | Named pipe `\\.\pipe\buddy-board-<sha256(user SID)[0..16]>` created with a DACL granting only the current user SID (and SYSTEM), `PIPE_REJECT_REMOTE_CLIENTS`. Token file `%LOCALAPPDATA%\Buddy\board\tasks.token` with an ACL for the current user only. Same framing and methods; `net.createConnection(pipePath)` works unchanged in `client.js` |
@@ -79,7 +81,7 @@ push      {push:'event', sub, event}
 |---|---|---|---|
 | `hello` | `HelloParams {protocol, client}` | `HelloResult {protocol, serverVersion, epoch, mock}` | `PROTOCOL_UNSUPPORTED` |
 | `createTask` | `CreateTaskParams {requestId, spec:TaskSpec}` | `CreateTaskResult {id, duplicate}` | `VALIDATION`, `CONFLICT`, `POLICY_DENIED`, `AI_UNAVAILABLE`, `CAPABILITY_MISSING`, `IN_PLACE_BUSY`, `DISK_FULL`, `BUDGET_EXCEEDED` |
-| `listTasks` | `ListTasksParams {includeDone?}` (default true) | `ListTasksResult [TaskView]` | — |
+| `listTasks` | `ListTasksParams {includeDone?, after?, limit?}` (includeDone default true; one page in creation order, `after` = the previous page's last id, `limit` 1–500, default 200) | `ListTasksResult [TaskView]` | — |
 | `getTask` | `GetTaskParams {id}` | `TaskDetail` | `NOT_FOUND` |
 | `subscribe` | `SubscribeParams {id: taskId \| '*', fromSeq?, epoch?}` | `SubscribeResult {sub, epoch, latestSeq, replayed}` | `NOT_FOUND` |
 | `unsubscribe` | `UnsubscribeParams {sub}` | `{}` | — |
@@ -156,9 +158,9 @@ A remote task awaiting a local accept (`queued` + `awaitingConfirm`) offers `app
 
 ### 5.4 Take over / hand back
 
-- Claude: `argv = [claude, --resume, <sessionId>, --setting-sources, "", --settings, <run_dir>/settings.json, --strict-mcp-config, --mcp-config, <run_dir>/mcp.json, --permission-mode, <mapped>]`: the **same isolation flags** as the background run (spike 5a), minus `-p`, the stream-json flags and `--permission-prompt-tool` (in a terminal the user answers prompts). Hooks keep reporting, so the lamp and the task view stay truthful while the user drives.
+- Claude: `argv = [<absolute claude path>, --resume, <sessionId>, --setting-sources, "", --settings, <run_dir>/settings.json, --strict-mcp-config, --mcp-config, <run_dir>/mcp.json, --disallowedTools, <the background run's deny rules + the engine data dir>, --permission-mode, <mapped>]`: the background run's isolation (spike 5a), minus `-p`, the stream-json flags, `--permission-prompt-tool` (in a terminal the user answers prompts), the `--tools` allowlist and the budget (the user is driving). Hooks keep reporting, so the lamp and the task view stay truthful while the user drives.
 - Codex: `argv = [codex, resume, <sessionId>]` (verify flags, §15). No resume capability → a new session seeded with the handover, `resumed:false`, and `note` says so (plan §3.2).
-- `env` holds only the variables to add (`BOARD_RUN_SOCKET`, `BOARD_RUN_TOKEN`, `BOARD_SUPERVISOR_PID`, `BOARD_SUPERVISOR_LSTART`, `BUDDY_TASK_ID`); the terminal keeps the user's own environment (it's the user driving now).
+- `env` holds only the variables to add (`BOARD_RUN_SOCKET`, `BOARD_SUPERVISOR_PID`, `BOARD_SUPERVISOR_LSTART`, `BUDDY_TASK_ID`) and nothing secret: the run token stays in files (the hook shim reads `<run_dir>/hook.token`, board-mcp reads `mcp.json`), never in an env every tool shell would see (D26). The terminal keeps the user's own environment (it's the user driving now).
 - `mode`: `tab` = the UI opens a tab in the user's terminal app; `tmux` = the UI runs `tmux new-session -d -s buddy-<slug> -c <cwd> -- <argv>`; `print` = show the command to copy. The supervisor never opens terminals.
 
 ### 5.5 Error codes
@@ -232,7 +234,7 @@ Every event: `{type, seq, taskId, at_age_ms, …}` (`$defs.Event`, one `oneOf` b
 
 - `subscribe(id | '*', {fromSeq?, epoch?})`. Without `fromSeq`: live only, starting after `latestSeq`. With `fromSeq`: the retained events with `seq ≥ fromSeq` for that filter are replayed first (`replayed` = count), then live.
 - The supervisor retains the last **10 000** events (`RING_EVENTS`; the real supervisor also persists them per task, the mock keeps them in memory). If `fromSeq` is older than the ring → push `reset {reason:'gap', latestSeq}`; if the client's `epoch` differs from the supervisor's (it restarted) → `reset {reason:'epoch'}`. After a `reset` the client refetches (`listTasks`/`getTask`/`listMessages`) and carries on from `latestSeq`. A gap is never silent.
-- Backpressure: if a connection's unsent buffer exceeds **4 MiB** (`BACKPRESSURE_BYTES`) the supervisor drops that subscription (never blocks other clients or the tasks) and, once the socket drains, pushes `lagged {sub, lastSeq}`. `client.js` resubscribes with `fromSeq = lastSeq + 1` automatically and dedupes by seq.
+- Backpressure: if a connection's unsent buffer exceeds **4 MiB** (`BACKPRESSURE_BYTES`) the supervisor drops that subscription (never blocks other clients or the tasks) and, once the socket drains, pushes `lagged {sub, lastSeq}`. `client.js` resubscribes with `fromSeq = lastSeq + 1` automatically and dedupes by seq. A long replay is paged the same way: past `BACKPRESSURE_BYTES` the supervisor stops replaying and pushes `lagged` (possibly before the client has seen the subscribe reply). A connection whose unsent buffer passes 16 MiB is closed.
 - Transcript text is chunked (≤ 64 KiB/event) so no event approaches the frame cap.
 
 ## 7. States: the plan's words → board states
@@ -350,15 +352,22 @@ The same tools route through the hub when the address resolves off-machine. Prop
 
 Only the user's own processes that can read the 0600 token can call the API (§3). The token is never logged, never put in argv (clients read it from the file), never sent over the network. The supervisor logs JSON lines without tokens or task text at `info`.
 
+**What the token is, plainly:** a same-user-process boundary, not an app boundary. It keeps other OS users out. Any process running as this user that can read `tasks.token` (anything the user runs outside a sandbox: a script, an editor plugin, a compromised dev tool) can do everything the UI can: create tasks as `local` in any folder the in-place rules allow, approve and answer, take over and discard. The agent itself can't: the data dir is denied to it (sandbox `denyRead`, `Read/Edit/Write` disallow rules, PreToolUse confinement) and the sandbox grants no unix-socket access. Relays get scoped tokens (§3) so a relay can't act as the user.
+
 ### 9.2 Where a task came from (plan §9)
 
 | `source` | Who | Rules applied by the supervisor (clients cannot opt out) |
 |---|---|---|
 | `local`, `cli` | The user on this machine | As chosen. `bypass` only with the per-project opt-in; red badge |
-| `mcp` | An agent spun it off (`buddy_spin_off`) | Agent-authored: `permissionLevel` capped at the parent task's level and at most `auto-edits`; never `bypass`; the UI shows "Claude spun off a task" with Stop. If the parent was remote-sourced, the remote rules apply (inherited via `sourceMeta.parentSessionId`) |
-| `board` (a teammate), `phone`, `slack`, `voice` | Remote | **Always `planFirst`**; never more than `auto-edits` without a confirm on this machine (`auto` is clamped, `bypass` refused); auto-accept only if `sourceMeta.userId` is in the runner's trusted list (`policy.json accept_from`), otherwise the task waits in `queued` with `awaitingConfirm:true` and a `StartTask` approval (`approve` starts it, `deny` discards it) |
+| `mcp` | An agent spun it off (`buddy_spin_off`) | Agent-authored: needs a git repo, never in place; `permissionLevel` capped at the parent task's level and at most `auto-edits`; never `bypass`; with a known parent task (by `sourceMeta.parentSessionId`) only in the parent's repo; the UI shows "Claude spun off a task" with Stop. If the parent ran under the remote rules, they apply (repo opt-in, plan first, local accept unless the original sender is in `accept_from`) |
+| `board` (a teammate), `phone`, `slack`, `voice` | Remote | **Always `planFirst`**; never more than `auto-edits` without a confirm on this machine (`auto` is clamped, `bypass` refused); only in a git repo opted in with `policy.json repos[<realpath or canonical remote>].remote_tasks: true` (else `POLICY_DENIED`), always in a worktree; auto-accept only if `sourceMeta.userId` is in `policy.json accept_from` (the data dir's `policy.json`, re-read on every create, ignored if others can write it), otherwise the task waits in `queued` with `awaitingConfirm:true` and a `StartTask` approval naming the resolved folder (`approve` starts it, `deny` discards it) |
 
-Relays (phone bridge, Slack app, voice) are local processes that hold the token; they must pass `source` honestly. v2 will give relays their own scoped tokens so a relay can't claim `local` (§17 P5).
+Relays (phone bridge, Slack app, voice, the spin-off MCP tool) hold their own scoped relay token (§3), which fixes their `source` and security identity; they never hold `tasks.token`. Only trusted main-process code creates a token with a sender or parent binding after authenticating that identity. Request metadata cannot choose one. Only `local`/`cli` tasks may work in place, never in `$HOME`, an ancestor of it, or a dot-dir or `Library` directly under it; in place, file tools may not touch `.git/`, `.claude/`, `.mcp.json`, `CLAUDE.md` or `AGENTS.md`. The Bash sandbox explicitly denies writes to git hooks/config, agent config and root instruction files. All tasks deny writes to the engine data directory and use a private per-task temp/cache directory, not the shared temp root. At most 100 tasks per source wait in `queued` (`RATE_LIMITED`). Finished tasks are pruned after 30 days or beyond the newest 500.
+
+MCP parent bindings are usable only while that task is active (starting, running, quiet,
+blocked, checkpointing or handed over). An inactive parent's token cannot spawn more work.
+Until a parent's plan is approved, its effective permission cap is `plan` even when its
+nominal post-plan level is `auto-edits`; children inherit that cap and the plan-first gate.
 
 ### 9.3 Task text is data
 
@@ -411,7 +420,7 @@ Offline hub → hub-routed acts fail with `HUB_UNREACHABLE`; the task keeps runn
 
 ## 13. Limits, queueing, claims
 
-- `Limits {maxParallel, maxParallelDefault, perAi, ramGb, running, queued}`. `maxParallelDefault` = 1 below 16 GB RAM, 2 from 16 GB, 4 from 32 GB (plan §10); `setLimits` overrides (1–64). A slot is held by `claimed`, `running`, `quiet`, `blocked`, `handing_over`. Extra tasks stay `queued` with a reason ("2 tasks running · starts when one finishes"); memory/CPU pressure holds the queue too.
+- `Limits {maxParallel, maxParallelDefault, perAi, ramGb, running, queued}`. `maxParallelDefault` = 1 below 16 GB RAM, 2 from 16 GB, 4 from 32 GB (plan §10); `setLimits` overrides (1–8, `perAi` 0–8). A slot is held by `claimed`, `running`, `quiet`, `blocked`, `handing_over`. Extra tasks stay `queued` with a reason ("2 tasks running · starts when one finishes"); memory/CPU pressure holds the queue too.
 - Per-AI concurrency (`perAi`) and usage windows: when an AI's 5-hour window is nearly used (stream `rate_limit_event`, spike 1a), new tasks for it stay queued with "starts after reset", or the user picks another AI.
 - `getClaims(repo)` → `{repo, claims:[{taskId, branch, paths, areas, note, claimedAgeMs}]}` from the supervisor-written `.buddy/claims.json` (git-ignored); `claims` events announce changes; `overlap` events come from `shared/overlap.js`.
 
@@ -477,7 +486,7 @@ Proposed to the CONTRACT.md owner (not edited here):
 - **P2** `buddy_message` and `check_messages` in the per-run MCP tool surface (CONTRACT.md §7.3 says "no other tools exist").
 - **P3** `buddy_spin_off` in the per-run MCP surface.
 - **P4** Token-gate the `type`-framed control commands on `runner.sock` with the same `tasks.token`.
-- **P5** Scoped relay tokens (a phone/Slack relay can't claim `source:'local'`).
+- **P5** Scoped relay tokens (a phone/Slack relay can't claim `source:'local'`): done in the engine (§3).
 
 ## 18. Still to verify before the supervisor implements (plan §12)
 

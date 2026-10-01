@@ -8,7 +8,8 @@
 // the hub WS connect. data_dir replaces BOARD_HOME (runs, worktrees, outbox).
 // An enrolled runner sends `Authorization: Bearer brt_…` + `Board-Team`.
 // Replies: runner.ready, runner.status {state, detail?}, runner.fatal {message},
-// runner.stopped {parked, parked_pending, orphaned}. `runner.presence` feeds team presence
+// runner.stopped {parked, parked_pending, orphaned}, runner.event {event:'run.budget_reached', …}
+// (the giver's own device only). `runner.presence` feeds team presence
 // (D37b). SIGTERM/SIGINT → park every live run (bounded), exit 0.
 import path from 'node:path';
 import { WS_CLOSE } from '../shared/protocol.js';
@@ -88,6 +89,7 @@ async function start(m) {
     sup = new Supervisor({ home: m.data_dir, device, log });
     presence = new PresenceReporter(sup);
     sup.on('connected', () => status('connected'));
+    sup.on('runner_event', (ev) => post(ev));
     sup.on('hub_closed', ({ code }) => status(STATE_OF_CLOSE[code] ?? 'backoff', code == null ? 'hub unreachable' : `closed ${code}`));
     await sup.start();
   } catch (e) {

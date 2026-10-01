@@ -1605,6 +1605,98 @@ function createWaitingWindow() {
   });
 }
 
+// ── Tasks page ────────────────────────────────────────────────────────────
+// Own window until the Plexiform window's sidebar entry ('tasks') is local; the
+// same page then also lives there. The page never touches the supervisor's
+// socket or token: this process does (src/tasks-service.js) and hands it
+// sanitised tasks over the IPC below, every one checked for its sender.
+// Dev runs point at the mock supervisor through an env var, never in a package.
+let tasksWin = null;
+let tasksSvc = null;
+let tasksProcess = null;
+const tasksPages = () => [tasksWin?.webContents, buddyWin?.pageWebContents('tasks')].filter((w) => w && !w.isDestroyed());
+const tasksSenderOk = (e) => !!e.sender && tasksPages().includes(e.sender) && e.senderFrame === e.sender.mainFrame;
+const TASKS_SEEN_FILE = path.join(ROOT_DIR, 'tasks-seen.json');
+function getTasks() {
+  if (tasksSvc) return tasksSvc;
+  const dev = IS_DEV_RUN && !app.isPackaged;
+  const fixtureHome = dev && process.env.CLAUDE_TRAFFIC_LIGHT_TASKS_HOME;
+  const dataDir = fixtureHome || path.join(app.getPath('userData'), 'tasks');
+  if (!fixtureHome) {
+    tasksProcess = require('./src/tasks-process.js').createTasksSupervisor({
+      fork: require('electron').utilityProcess.fork,
+      entry: path.join(__dirname, 'board', 'tasks-engine', 'utility-entry.js'), dataDir,
+    });
+  }
+  tasksSvc = require('./src/tasks-service.js').createTasksService({
+    boardHome: dataDir,
+    ensureSupervisor: () => tasksProcess?.ensure(),
+    homeDir: os.homedir(),
+    copy: (text) => clipboard.writeText(text),
+    onChange: (snap) => { for (const wc of tasksPages()) wc.send('tasks:changed', snap); },
+    onEvent: (wcId, id, event) => { const wc = tasksPages().find((w) => w.id === wcId); if (wc) wc.send('tasks:event', { id, event }); },
+    // The confirmation for the risky actions is main's: a native dialog, Cancel the default, the page's click never counts.
+    confirmDialog: async (info, wcId) => {
+      const wc = tasksPages().find((w) => w.id === wcId);
+      const parent = (wc && BrowserWindow.fromWebContents(wc)) || undefined;
+      const r = await dialog.showMessageBox(parent, {
+        type: 'warning', buttons: ['Cancel', info.label], defaultId: 0, cancelId: 0, noLink: true,
+        message: `${info.label}?`,
+        detail: [`Task: ${info.title}`, info.where ? `Runs in: ${info.where}` : '', info.detail].filter(Boolean).join('\n'),
+      });
+      return r.response === 1;
+    },
+    seen: {
+      load: () => { try { return JSON.parse(fs.readFileSync(TASKS_SEEN_FILE, 'utf8')); } catch { return {}; } },
+      save: (o) => { try { SessionState.writeJsonAtomic(TASKS_SEEN_FILE, o); } catch (err) { console.warn('[tasks] seen not saved:', err.message); } },
+    },
+    log: (...a) => console.log('[tasks]', ...a),
+  });
+  return tasksSvc;
+}
+function createTasksWindow() {
+  if (tasksWin) { tasksWin.show(); tasksWin.focus(); return; }
+  tasksWin = new BrowserWindow({
+    width: 1000, height: 680, minWidth: 640, minHeight: 420,
+    title: `Tasks — ${Brand.name}`,
+    titleBarStyle: 'hiddenInset',
+    backgroundColor: '#1c1a1f',
+    webPreferences: { preload: path.join(__dirname, 'tasks-preload.js'), contextIsolation: true, sandbox: true, spellcheck: false, nodeIntegration: false },
+  });
+  tasksWin.setMenuBarVisibility(false);
+  tasksWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  tasksWin.webContents.on('will-navigate', (e) => e.preventDefault());
+  tasksWin.loadFile('tasks.html');
+  showDock();
+  const tasksWcId = tasksWin.webContents.id;
+  tasksWin.on('closed', () => {
+    tasksWin = null;
+    tasksSvc?.closeTask(tasksWcId);
+    if (IS_MAC && !lightsWin && !settingsWin && !updatesWin && !buddyWin?.isOpen()) app.dock.hide();
+  });
+}
+ipcMain.handle('tasks:state', (e) => { if (!tasksSenderOk(e)) return null; const s = getTasks(); s.start(); return s.snapshot(); });
+ipcMain.handle('tasks:retry', (e) => { if (tasksSenderOk(e)) getTasks().retryNow(); });
+ipcMain.handle('tasks:open', (e, id) => (tasksSenderOk(e) ? getTasks().openTask(id, e.sender.id) : null));
+ipcMain.handle('tasks:close', (e) => { if (tasksSenderOk(e)) return getTasks().closeTask(e.sender.id); return null; });
+ipcMain.handle('tasks:act', (e, req) => (tasksSenderOk(e) ? getTasks().act(req, e.sender.id) : null));
+ipcMain.handle('tasks:create', (e, draft) => (tasksSenderOk(e) ? getTasks().create(draft) : null));
+ipcMain.handle('tasks:composer', (e) => (tasksSenderOk(e) ? getTasks().composerInfo() : null));
+ipcMain.handle('tasks:copy-takeover', (e, id) => !!tasksSenderOk(e) && typeof id === 'string' && getTasks().copyTakeover(id));
+// The folder comes back as an opaque handle plus a label: the page cannot name a path of its own.
+ipcMain.handle('tasks:pick-folder', async (e) => {
+  if (!tasksSenderOk(e)) return null;
+  let dir = null;
+  if (IS_DEV_RUN && !app.isPackaged && process.env.CLAUDE_TRAFFIC_LIGHT_TASKS_PICK) dir = process.env.CLAUDE_TRAFFIC_LIGHT_TASKS_PICK;
+  else {
+    const r = await dialog.showOpenDialog(BrowserWindow.fromWebContents(e.sender) || undefined, { title: 'Choose the folder the task works in', properties: ['openDirectory', 'createDirectory'] });
+    dir = r.canceled ? null : r.filePaths[0];
+  }
+  try { if (!dir || !path.isAbsolute(dir) || !fs.statSync(dir).isDirectory()) return null; } catch { return null; }
+  return getTasks().registerFolder(dir);
+});
+app.on('will-quit', () => tasksSvc?.stop());
+
 let lightsWin = null;
 
 function createLightsWindow() {
@@ -2687,7 +2779,7 @@ function createTray() {
   const buildMenu = (from = 'tray') => Menu.buildFromTemplate([
     ...budgetItems(),
     ...scopeItem(),
-    ...AppMenu.appItems({ pages: BuddyPages.PAGES, groups: BuddyPages.GROUPS, open: openBuddy, openLabel: BRAND.OPEN_MENU_LABEL, feedback: { label: "Something's off / Idea…", click: createFeedbackWindow }, popOuts: { usage: () => createUsagePopWindow(from) } }),
+    ...AppMenu.appItems({ pages: BuddyPages.PAGES, groups: BuddyPages.GROUPS, open: openBuddy, openLabel: BRAND.OPEN_MENU_LABEL, feedback: { label: "Something's off / Idea…", click: createFeedbackWindow }, popOuts: { usage: () => createUsagePopWindow(from), tasks: createTasksWindow } }),
     { label: 'Open Claude', click: () => shell.openExternal('https://claude.ai') },
     { label: 'Show Widget Now', click: () => { saveConfig({ showWidget: true }); clearTimeout(snoozeTimer); if (!win) createWindow(); win.showInactive(); createTray(); } },
     { label: 'Reset Widget Position', click: () => { const wa = screen.getPrimaryDisplay().workArea; if (!win) createWindow(); strip = WidgetStrip.NONE; win.setMaximumSize(MAX_WIDTH, Math.round(MAX_WIDTH / WIDGET_ASPECT)); win.setAspectRatio(WIDGET_ASPECT); win.setBounds({ x: wa.x + wa.width - 140, y: wa.y + 46, width: 107, height: 137 }); win.showInactive(); broadcastStatus(); } },
@@ -4435,10 +4527,11 @@ app.on('before-quit', () => { flushStats(); backups?.flush(); lightsWin?.destroy
 // before we exit, once; a second quit goes straight through.
 let hubStopped = false;
 app.on('before-quit', (e) => {
-  if (hubStopped || !buddyWin) return;
+  if (hubStopped || (!buddyWin && !tasksProcess)) return;
   e.preventDefault();
   hubStopped = true;
-  buddyWin.stop().finally(() => app.quit());
+  tasksSvc?.stop();
+  Promise.allSettled([buddyWin?.stop(), tasksProcess?.stop({ final: true })]).finally(() => app.quit());
 });
 
 app.on('activate', () => { if (!lightsWin && !settingsWin) win?.showInactive(); });
