@@ -22,8 +22,9 @@
   }
 
   // Two clicks, like the other destructive buttons here: the first says what happens.
-  function armed(text, armedText, fn) {
+  function armed(text, armedText, fn, onArm) {
     const b = button(text, async () => {
+      if (!b.dataset.armed && onArm) await onArm();
       if (b.dataset.armed) { clearTimeout(b._t); delete b.dataset.armed; b.textContent = text; b.disabled = true; await fn(); b.disabled = false; return; }
       b.dataset.armed = '1';
       b.textContent = armedText;
@@ -41,6 +42,9 @@
     open = null;
     await refresh(true);
   }
+
+  // Click actions run commands, so a backup that would add some says so in words, in both the diff and the confirmation.
+  const commandsNote = (cmds) => el('div', 'bk-note bk-bad bk-commands', `This backup's rules would run: ${cmds.join('; ')}`);
 
   async function showDiff(s, holder) {
     holder.replaceChildren(el('div', 'bk-note', 'Comparing…'));
@@ -62,7 +66,10 @@
     for (const f of d.files) {
       if (f.name === 'config.json' && d.configKeys.length) {
         list.append(el('div', 'bk-head', 'Your settings and rules'));
-        for (const k of d.configKeys) list.append(k.status === 'only-now' ? el('div', 'bk-note', k.say) : row(k.say, { key: k.key }));
+        for (const k of d.configKeys) {
+          list.append(k.status === 'only-now' ? el('div', 'bk-note', k.say) : row(k.say, { key: k.key }));
+          if (k.key === 'rules' && d.commands.length) list.append(commandsNote(d.commands));
+        }
       } else if (f.status === 'only-now') {
         list.append(el('div', 'bk-note', f.say));
       } else list.append(row(f.say, { file: f.name }));
@@ -93,7 +100,11 @@
       const acts = el('div', 'row wrap');
       acts.append(
         button("See what's different", () => { open = s.id; showDiff(s, holder); }),
-        armed('Restore everything', 'Click again to restore everything', () => restore(s, undefined)),
+        armed('Restore everything', 'Click again to restore everything', () => restore(s, undefined), async () => {
+          const d = await api.backupsDiff(s.id);
+          holder.querySelector('.bk-confirm')?.remove();
+          if (d && d.commands && d.commands.length) holder.prepend(el('div', 'bk-note bk-bad bk-confirm', `Restoring everything also brings back rules that would run: ${d.commands.join('; ')}`));
+        }),
       );
       acts.lastChild.setAttribute('aria-label', `Restore everything from ${when(s.createdAt)}`);
       li.append(acts);

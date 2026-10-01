@@ -4,6 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const Backups = require('../src/backups.js');
+const Rules = require('../rules.js');
 
 const DAY = 86400000;
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -378,6 +379,13 @@ test('main wiring: every destructive action snapshots first, every backups IPC c
   assert.match(main.slice(bf, bf + 300), /snapshotSafe\('manual'\)/, 'backupFirst must use the non-throwing call');
   assert.doesNotMatch(main.slice(bf, bf + 300), /\.snapshot\(/);
   assert.match(main, /const safeId = Backups\.isSnapshotId/);
+  const rh = main.indexOf("ipcMain.handle('backups-restore'");
+  const restoreHandler = main.slice(rh, main.indexOf("ipcMain.handle('backups-open-folder'"));
+  assert.match(restoreHandler, /applyConfigEffects\(prevConfig, loadConfig\(\)\)/, 'a restore applies the same side effects as a save');
+  assert.match(restoreHandler, /JSON\.stringify\(r\.restored\)[\s\S]*JSON\.stringify\(r\.configKeys\)/, 'snapshot-supplied names are logged escaped');
+  assert.match(main.slice(main.indexOf("ipcMain.handle('backups-open-folder'"), main.indexOf("ipcMain.handle('backups-open-folder'") + 400), /chmodSync\(backups\.dir, 0o700\)/);
+  const ce = main.indexOf('function commitConfig(');
+  assert.match(main.slice(ce, ce + 1500), /applyConfigEffects\(prev, next/, 'a save uses the shared side effects');
   const handlers = [...main.matchAll(/ipcMain\.handle\('(backups-[a-z-]+)'[^\n]*\n([^\n]*\n){0,2}/g)];
   assert.equal(handlers.length, 5);
   for (const m of handlers) assert.match(m[0], /backupsSenderOk\(e\)/, `${m[1]} must check its sender`);
@@ -584,4 +592,120 @@ test('M4: which saves count as replacing the rules', () => {
   assert.equal(need({ nextRules: prev, marker: 'bogus' }), null, 'an unknown marker is ignored');
   assert.equal(need({ nextPresets: [], prevPresets: [{ id: 'p' }] }), 'preset-removed');
   assert.equal(need({}), null, 'a save with no rules in it');
+});
+
+// ── Opus pass on 5c4ebcf ──
+const rewrite = (f, id, name, text) => {
+  fs.mkdirSync(path.dirname(path.join(snapDir(f, id), 'files', name)), { recursive: true });
+  fs.writeFileSync(path.join(snapDir(f, id), 'files', name), text);
+  const mp = path.join(snapDir(f, id), 'manifest.json');
+  const m = JSON.parse(fs.readFileSync(mp, 'utf8'));
+  const e = m.files.find((x) => x.name === name);
+  e.size = Buffer.byteLength(text);
+  e.sha256 = require('crypto').createHash('sha256').update(text).digest('hex');
+  fs.writeFileSync(mp, JSON.stringify(m));
+};
+
+test('1: a damaged newest snapshot never counts as "unchanged": a new backup is taken', () => {
+  const f = fixture({ rules: [{ id: 'v0' }] });
+  const b = f.make();
+  b.snapshot('save');
+  f.tick(1000);
+  f.setConfig({ rules: [{ id: 'v1' }] });
+  const newest = b.snapshot('manual');
+  fs.appendFileSync(path.join(snapDir(f, newest.id), 'files', 'config.json'), ' ');
+  f.tick(1000);
+  const r = b.snapshotSafe('manual');
+  assert.equal(r.taken, true, `got ${JSON.stringify(r)}`);
+  assert.equal(b.list()[0].damaged, false);
+});
+
+test('2: a config that is not an object is damaged, so it can never be restored', () => {
+  for (const bad of ['null', '[]', '5', '"text"', 'true']) {
+    const f = fixture();
+    const b = f.make();
+    const s = b.snapshot('save');
+    rewrite(f, s.id, 'config.json', bad);
+    assert.equal(b.verify(s.id).ok, false, bad);
+    assert.match(b.restore(s.id).error, /damaged/, bad);
+  }
+  const f = fixture();
+  const b = f.make();
+  const s = b.snapshot('save');
+  rewrite(f, s.id, 'cameos/index.json', '[]');
+  assert.equal(b.verify(s.id).ok, false, 'cameo index');
+  const s2 = b.snapshot('manual', { force: true });
+  rewrite(f, s2.id, 'usage/daily/2026-09.json', 'null');
+  assert.equal(b.verify(s2.id).ok, false, 'usage month');
+});
+
+test('4: the diff lists click commands the backup would add', () => {
+  const planted = { id: 'x', name: 'x', enabled: true, when: { signal: ['tool-use'] }, then: { clicks: { click: { type: 'shell', arg: 'echo planted-command' } } } };
+  assert.deepEqual(Rules.clickCommands([planted]), ['echo planted-command'], 'the helper sees it');
+  const f = fixture({ rules: [planted] });
+  const b = f.make({ clickCommands: Rules.clickCommands });
+  const s = b.snapshot('save');
+  f.setConfig({ rules: [] });
+  assert.deepEqual(b.diff(s.id).commands, ['echo planted-command']);
+  f.setConfig({ rules: [planted] });
+  assert.deepEqual(b.diff(s.id).commands, [], 'one the current rules already run is not news');
+  const same = f.make({ clickCommands: Rules.clickCommands });
+  f.setConfig({ rules: [] });
+  assert.deepEqual(same.diff(s.id).commands, ['echo planted-command']);
+});
+
+test('5: restoring everything keeps keys added since the backup', () => {
+  const f = fixture({ rules: [{ id: 'old' }], roam: true });
+  const b = f.make();
+  const s = b.snapshot('save');
+  f.setConfig({ rules: [{ id: 'new' }], roam: false, voice: { on: true } });
+  b.restore(s.id);
+  assert.deepEqual(f.config(), { rules: [{ id: 'old' }], roam: true, voice: { on: true } });
+});
+
+test('6: a symlinked or oversized data file is not backed up; a symlinked data folder is not restored through', () => {
+  const f = fixture();
+  const secret = path.join(f.base, 'secret.txt');
+  fs.writeFileSync(secret, fakeSecret());
+  fs.rmSync(path.join(f.dataDir, 'config.json'));
+  fs.symlinkSync(secret, path.join(f.dataDir, 'config.json'));
+  const b = f.make();
+  const s = b.snapshot('save');
+  assert.ok(!b.list()[0] || !fs.existsSync(path.join(snapDir(f, s.id), 'files', 'config.json')), 'the linked config was not copied');
+  fs.rmSync(path.join(f.dataDir, 'config.json'));
+  fs.writeFileSync(path.join(f.dataDir, 'config.json'), '{"a":1}');
+  const good = b.snapshot('manual');
+  const elsewhere = path.join(f.base, 'elsewhere');
+  fs.mkdirSync(elsewhere);
+  fs.rmSync(path.join(f.dataDir, 'cameos'), { recursive: true });
+  fs.symlinkSync(elsewhere, path.join(f.dataDir, 'cameos'));
+  const r = b.restore(good.id, { files: ['cameos/dad.png'] });
+  assert.ok(r.error, 'refused');
+  assert.deepEqual(fs.readdirSync(elsewhere), [], 'nothing was written through the link');
+});
+
+test('7: the keep-newest floor counts only snapshots whose hashes check out, and a planted future date cannot pin a snapshot', () => {
+  const f = fixture();
+  const lax = f.make({ keepNewest: 50, maxAgeMs: 1000 * DAY });
+  f.setConfig({ n: 'good' });
+  const good = lax.snapshot('save');
+  f.tick(40 * DAY);
+  const bad = [];
+  for (let i = 0; i < 5; i++) { f.setConfig({ n: i }); bad.push(lax.snapshot('save').id); f.tick(1000); }
+  for (const id of bad) { const p = path.join(snapDir(f, id), 'files', 'config.json'); const t = fs.readFileSync(p, 'utf8'); fs.writeFileSync(p, t.replace(/[0-9a-z]/, 'Z')); }
+  f.make({ keepNewest: 5 }).prune();
+  assert.ok(f.make().list().some((s) => s.id === good.id), 'same-size corruption still pushed the good one out');
+  const g = fixture();
+  const c = g.make({ keepNewest: 1, maxAgeMs: 20 * DAY });
+  g.setConfig({ n: 0 });
+  const pinned = c.snapshot('before-restore', { force: true });
+  const mp = path.join(snapDir(g, pinned.id), 'manifest.json');
+  const m = JSON.parse(fs.readFileSync(mp, 'utf8'));
+  m.createdAt = '2099-01-01T00:00:00.000Z';
+  fs.writeFileSync(mp, JSON.stringify(m));
+  g.tick(30 * DAY);
+  g.setConfig({ n: 1 }); c.snapshot('save');
+  g.tick(DAY);
+  g.setConfig({ n: 2 }); c.snapshot('save');
+  assert.ok(!c.list().some((s) => s.id === pinned.id), 'a before-restore snapshot older than 7 days by its id is pruned whatever its manifest claims');
 });

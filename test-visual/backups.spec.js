@@ -116,3 +116,48 @@ test('a backup folder that cannot be written never blocks a save, a reset or a f
     fs.rmSync(blocked, { force: true });
   }
 });
+
+test('a save with a backup marker never writes the marker into config.json', async () => {
+  const widget = await windowByFile(h.app, 'index.html');
+  await widget.evaluate(() => window.trafficLight.openLights());
+  const lights = await windowByFile(h.app, 'lights.html');
+  await lights.waitForLoadState('load');
+  const rule = { id: 'marked', name: 'Marked', enabled: true, when: { signal: ['tool-use'] }, then: { lamp: 'green' } };
+  const saved = await lights.evaluate((r) => window.lightsApi.saveConfig({ rules: [r], template: null, __backupReason: 'template' }), rule);
+  expect(saved.error).toBeUndefined();
+  expect(readConfig().rules.map((r) => r.id)).toEqual(['marked']);
+  expect(JSON.stringify(readConfig())).not.toContain('__backupReason');
+  expect(saved.__backupReason).toBeUndefined();
+});
+
+test('a config.json that is not an object does not take the app down', async () => {
+  for (const bad of ['null', '[]', '5', '"text"']) {
+    const g = await launchApp({ files: { 'config.json': bad } });
+    try {
+      const widget = await windowByFile(g.app, 'index.html');
+      await widget.evaluate(() => window.trafficLight.openLights());
+      const lights = await windowByFile(g.app, 'lights.html');
+      await lights.waitForLoadState('load');
+      const cfg = await lights.evaluate(() => window.lightsApi.getConfig());
+      expect(Array.isArray(cfg.rules), bad).toBe(true);
+      const saved = await lights.evaluate(() => window.lightsApi.saveConfig({ roam: false }));
+      expect(saved.error, bad).toBeUndefined();
+    } finally { await g.cleanup(); }
+  }
+});
+
+test('Backups: a planted click command is named in the diff and in the Restore everything confirmation', async () => {
+  const planted = { id: 'planted', name: 'Planted', enabled: true, when: { signal: ['tool-use'] }, then: { lamp: 'green', clicks: { click: { type: 'shell', arg: 'echo planted-command' } } } };
+  const data = fs.mkdtempSync(path.join(os.tmpdir(), 'cbuddy-bk-plant-'));
+  fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({ ...CFG, rules: [planted] }));
+  const b = Backups.create({ dataDir: data, backupsDir: h.backups, now: () => Date.parse('2026-09-27T08:00:00.000Z'), clickCommands: require('../rules.js').clickCommands });
+  const s = b.snapshot('manual', { force: true });
+  fs.rmSync(data, { recursive: true, force: true });
+  await settings.locator('#backups-recheck').click();
+  const item = settings.locator(`.bk-item[data-id="${s.id}"]`);
+  await item.getByRole('button', { name: "See what's different" }).click();
+  await expect(item.locator('.bk-commands')).toContainText("This backup's rules would run: echo planted-command");
+  await item.getByRole('button', { name: /Restore everything/ }).click();
+  await expect(item.locator('.bk-confirm')).toContainText('echo planted-command');
+  fs.rmSync(path.join(h.backups, s.id), { recursive: true, force: true });
+});

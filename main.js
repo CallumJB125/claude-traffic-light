@@ -35,6 +35,7 @@ const GitSignals = require('./src/github-signals.js');
 const Voice = require('./src/voice.js');
 const Health = require('./src/health.js');
 const Backups = require('./src/backups.js');
+const { applyConfigSideEffects } = require('./src/config-effects.js');
 const { createMotionGate, staleMachineReasons, askKey, statusPushWanted } = require('./src/motion-gate.js');
 const { createAwayFeeds } = require('./src/away-feeds.js');
 const { createProbeBackoff } = require('./src/probe-backoff.js');
@@ -211,7 +212,9 @@ function loadConfig() {
 function buildConfig() {
   let saved = {};
   try {
-    saved = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+    const parsed = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+    // a config that is null, a list or a bare value must not take every read down with it
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) saved = parsed;
   } catch {
     // no config yet
   }
@@ -264,7 +267,7 @@ function saveConfig(partial) {
 // (src/backups.js). A dev run without its own folder makes none: it must not
 // write into the real install's backups.
 const BACKUPS_DIR = process.env.CLAUDE_TRAFFIC_LIGHT_BACKUPS || (IS_DEV_RUN ? null : path.join(app.getPath('appData'), `${Brand.name} Backups`));
-const backups = BACKUPS_DIR ? Backups.create({ dataDir: ROOT_DIR, backupsDir: BACKUPS_DIR, appVersion: app.getVersion(), log: (m) => console.warn(m) }) : null;
+const backups = BACKUPS_DIR ? Backups.create({ dataDir: ROOT_DIR, backupsDir: BACKUPS_DIR, appVersion: app.getVersion(), log: (m) => console.warn(m), clickCommands: Rules.clickCommands }) : null;
 // Before anything that deletes or replaces what the user made. A failed backup
 // is logged, not fatal: a full disk must not make Reset impossible.
 function backupFirst() {
@@ -2561,6 +2564,13 @@ ipcMain.handle('save-config', (e, partial) => {
   }
 });
 // saveConfig plus everything a changed setting has to reach outside config.json.
+function applyConfigEffects(prev, next, touched) {
+  applyConfigSideEffects(prev, next, {
+    installHooks,
+    enableCalendar: () => BusyWatch.enableCalendar().catch((err) => console.warn('[busy]', err.message)),
+    applyWidgetVisibility, syncTailnetListener, createTray, applyVoiceHotkey, broadcastStatus,
+  }, touched);
+}
 function commitConfig(partial) {
   const prev = loadConfig();
   // The Lights window says when a save replaces the rules wholesale
@@ -2571,15 +2581,8 @@ function commitConfig(partial) {
     prevRules: prev.rules, nextRules: Array.isArray(partial.rules) ? partial.rules.map(Rules.normalizeRule) : undefined,
     prevPresets: prev.presets, nextPresets: partial.presets, marker: typeof marker === 'string' ? marker : null,
   })) backupFirst();
-  const before = prev.askFromWidget;
   const next = saveConfig(partial);
-  if ('askFromWidget' in partial && !!partial.askFromWidget !== !!before) installHooks();
-  if (partial.busyCalendar === true && !prev.busyCalendar) BusyWatch.enableCalendar().catch((err) => console.warn('[busy]', err.message));
-  if ('showWidget' in partial) applyWidgetVisibility();
-  if ('remoteTailscale' in partial) syncTailnetListener();
-  if ('menuBarMode' in partial || 'showWidget' in partial) createTray();
-  if ('voice' in partial) applyVoiceHotkey();
-  broadcastStatus();
+  applyConfigEffects(prev, next, (k) => k in partial);
   return next;
 }
 
@@ -3469,15 +3472,16 @@ ipcMain.handle('backups-restore', (e, id, pick) => {
   if (!safeId(id)) return { error: 'bad arguments' };
   const strs = (a) => (Array.isArray(a) ? a.filter((x) => typeof x === 'string').slice(0, 500) : undefined);
   let r;
+  const prevConfig = loadConfig();
   try { r = backups.restore(id, { files: strs(pick?.files), configKeys: strs(pick?.configKeys) }); } catch (err) { return { error: `Could not restore: ${err.message}` }; }
   if (r.error) return r;
-  console.log(`[backups] restored ${id}: ${r.restored.join(', ')}${r.configKeys.length ? ` + keys ${r.configKeys.join(', ')}` : ''}`);
+  console.log(`[backups] restored ${id}: ${JSON.stringify(r.restored)} keys ${JSON.stringify(r.configKeys)}`);
   // Config and rules are read from disk on every change; usage history is
   // held by the history worker, so restoring it takes a relaunch.
   configCache = { key: null, value: null };
   historyStore = null;
   cameosChanged();
-  broadcastStatus();
+  applyConfigEffects(prevConfig, loadConfig());
   const relaunch = r.usage && !IS_DEV_RUN;
   if (relaunch) setTimeout(() => { app.relaunch(); app.exit(0); }, 2500);
   return { ...r, relaunch };
@@ -3485,6 +3489,7 @@ ipcMain.handle('backups-restore', (e, id, pick) => {
 ipcMain.handle('backups-open-folder', (e) => {
   if (!backupsSenderOk(e) || !backups) return null;
   fs.mkdirSync(backups.dir, { recursive: true, mode: 0o700 });
+  try { fs.chmodSync(backups.dir, 0o700); } catch { /* not ours to change */ }
   return shell.openPath(backups.dir);
 });
 

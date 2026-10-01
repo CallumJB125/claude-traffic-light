@@ -74,7 +74,7 @@ const allowed = (name) => typeof name === 'string' && !name.includes('..') && SO
 function create({
   dataDir, backupsDir, fs = nodeFs, now = Date.now, appVersion = '0.0.0',
   setTimer = (fn, ms) => { const t = setTimeout(fn, ms); if (t.unref) t.unref(); return t; }, clearTimer = clearTimeout,
-  log = () => {}, ...limits
+  log = () => {}, clickCommands = () => [], ...limits
 }) {
   const cfg = { ...DEFAULTS, ...limits };
   let lastSaveAt = 0;
@@ -87,13 +87,14 @@ function create({
     const out = [];
     for (const src of SOURCES) {
       const abs = path.join(dataDir, src.dir);
+      if (src.dir && !src.dir.split('/').every((_, i, a) => isRealDir(path.join(dataDir, ...a.slice(0, i + 1))))) continue;
       let names = [];
       try { names = fs.readdirSync(abs); } catch { continue; }
       for (const n of names.sort()) {
         const name = src.dir ? `${src.dir}/${n}` : n;
         if (!src.match.test(name)) continue;
         try {
-          const buf = fs.readFileSync(path.join(dataDir, name));
+          const buf = readRegular(path.join(dataDir, name), MAX_FILE);
           out.push({ name, buf, sha256: sha256(buf), size: buf.length });
         } catch { /* vanished or unreadable: not backed up this time */ }
       }
@@ -123,7 +124,10 @@ function create({
 
   // A file that would break the app when put back is refused, not restored.
   const contentProblem = (name, buf) => {
-    if (name.endsWith('.json')) { try { JSON.parse(buf.toString('utf8')); } catch { return `${name} is not valid settings data`; } }
+    if (name.endsWith('.json')) {
+      // every file we back up is a JSON object; null, a list or a bare value would break its loader
+      try { const v = JSON.parse(buf.toString('utf8')); if (!v || typeof v !== 'object' || Array.isArray(v)) throw new Error('shape'); } catch { return `${name} is not valid settings data`; }
+    }
     else if (name.endsWith('.png') && (buf.length < 8 || !buf.subarray(0, 8).equals(PNG_MAGIC))) return `${name} is not a valid image`;
     return null;
   };
@@ -156,13 +160,6 @@ function create({
     return { ok: !problems.length, problems, manifest: m, data };
   }
   const verify = (id) => inspect(id);
-
-  // Stat-only version for pruning, which runs after every snapshot.
-  function looksIntact(id) {
-    let m;
-    try { m = readManifest(id); } catch { return false; }
-    return m.files.every((f) => { const st = lstat(path.join(backupsDir, id, 'files', f.name)); return st && st.isFile() && st.size === f.size; });
-  }
 
   function ids() {
     let names = [];
@@ -201,7 +198,7 @@ function create({
   }
 
   function newestManifest() {
-    for (const id of ids()) { try { return { id, manifest: readManifest(id) }; } catch { /* damaged: look further back */ } }
+    for (const id of ids()) { const v = inspect(id); if (v.ok) return { id, manifest: v.manifest }; }
     return null;
   }
 
@@ -243,7 +240,7 @@ function create({
     const all = ids().map((id) => {
       let manifest = null;
       try { manifest = readManifest(id); } catch { /* damaged */ }
-      return { id, at: manifest ? Date.parse(manifest.createdAt) : idToMs(id), reason: manifest && manifest.reason, size: dirSize(id), good: !!manifest && looksIntact(id) };
+      return { id, at: manifest ? Math.min(Date.parse(manifest.createdAt), idToMs(id) || Infinity) : idToMs(id), reason: manifest && manifest.reason, size: dirSize(id), good: inspect(id).ok };
     });
     // The floor of newest snapshots counts only ones that can be restored, so
     // a run of damaged ones cannot push the last good backup out.
@@ -343,11 +340,30 @@ function create({
         configKeys.push({ key, label: name, status, say: status === 'missing-now' ? `${name}: gone now, the backup has it` : status === 'only-now' ? `${name}: added since this backup, kept as it is` : `${name}: different from the backup` });
       }
     }
-    return { id, createdAt: v.manifest.createdAt, files, configKeys, same: !files.length };
+    // Click actions run commands: say which ones this backup would bring that the current rules do not already have.
+    const rulesOf = (c) => (c && Array.isArray(c.rules) ? c.rules.filter((r) => r && typeof r === 'object') : []);
+    let commands = [];
+    try {
+      const have = new Set(clickCommands(rulesOf(is)));
+      commands = clickCommands(rulesOf(was)).filter((c) => !have.has(c));
+    } catch { /* a rule too odd to read is damaged enough; the rules row still shows */ }
+    return { id, createdAt: v.manifest.createdAt, files, configKeys, commands, same: !files.length };
   }
 
+  // Walk down from the data folder, making what is missing and refusing a link: a planted symlink must not redirect a restore.
+  const safeDir = (dir) => {
+    const parts = path.relative(dataDir, dir).split(path.sep).filter(Boolean);
+    fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+    let at = dataDir;
+    for (const part of parts) {
+      at = path.join(at, part);
+      const st = lstat(at);
+      if (!st) fs.mkdirSync(at, { mode: 0o700 });
+      else if (!st.isDirectory() || st.isSymbolicLink()) throw new Error(`${part} is not a plain folder`);
+    }
+  };
   const writeAtomic = (file, buf) => {
-    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+    safeDir(path.dirname(file));
     const tmp = `${file}.restore-tmp`;
     fs.rmSync(tmp, { force: true });
     fs.writeFileSync(tmp, buf, { mode: 0o600, flag: 'wx' });
@@ -375,7 +391,17 @@ function create({
     const keysDone = [];
     try {
       for (const name of names) {
-        writeAtomic(path.join(dataDir, name), v.data.get(name));
+        let buf = v.data.get(name);
+        if (name === 'config.json') {
+          // keep what was added since the backup, as the panel promises
+          const cur = readJson(path.join(dataDir, 'config.json'));
+          const was = safeParse(buf);
+          if (cur && typeof cur === 'object' && !Array.isArray(cur)) {
+            const added = Object.fromEntries(Object.entries(cur).filter(([k]) => !Object.prototype.hasOwnProperty.call(was, k) && k !== '__proto__'));
+            buf = Buffer.from(JSON.stringify({ ...was, ...added }, null, 2));
+          }
+        }
+        writeAtomic(path.join(dataDir, name), buf);
         restored.push(name);
       }
       if (wantKeys && !names.includes('config.json')) {
