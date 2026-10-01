@@ -260,23 +260,86 @@ const tmuxAnswers = (clients = '/dev/ttys009\t$1\t100\n/dev/ttys003\t$0\t50\n') 
   return { ok: true, stdout: 'ok' };
 };
 
-test('tmux: points the client at the pane on the session\'s own socket, then focuses the outer tab by tty', async () => {
+test('tmux: the one client on the session\'s own socket has its outer tab focused by tty, then the pane is selected', async () => {
   const s = sess(TMUX_ENV, { hostApp: 'iTerm2' });
-  const { calls, exec } = fakeExec(tmuxAnswers());
+  const { calls, exec } = fakeExec(tmuxAnswers('/dev/ttys009\t$2\t100\n/dev/ttys003\t$0\t50\n'));
   const r = await Focus.focusSession(s, ctxOf({ exec }));
   assert.equal(r.ok, true);
   assert.equal(r.adapter, 'tmux+iterm');
-  const tmux = calls.filter((c) => c.file === Tmux.BINS[0]).map((c) => c.args);
   const sock = ['-S', '/private/tmp/tmux-501/default'];
-  assert.deepEqual(tmux, [
-    [...sock, 'display-message', '-p', '-t', '%5', '#{session_id}'],
-    [...sock, 'list-clients', '-F', '#{client_tty}\t#{session_id}\t#{client_activity}'],
-    [...sock, 'switch-client', '-c', '/dev/ttys009', '-t', '%5'],
-    [...sock, 'select-window', '-t', '%5'],
-    [...sock, 'select-pane', '-t', '%5'],
-  ]);
-  const osa = calls.find((c) => c.file === '/usr/bin/osascript');
-  assert.deepEqual(osa.args, ['-e', ITerm.SCRIPT, '', '/dev/ttys009']);
+  assert.deepEqual(calls.map((c) => (c.file === Tmux.BINS[0] ? c.args.slice(2)[0] : c.file)), ['display-message', 'list-clients', '/usr/bin/osascript', 'select-window', 'select-pane']);
+  assert.deepEqual(calls[0].args, [...sock, 'display-message', '-p', '-t', '%5', '#{session_id}\t#{session_name}']);
+  assert.deepEqual(calls[3].args, [...sock, 'select-window', '-t', '%5']);
+  assert.deepEqual(calls[4].args, [...sock, 'select-pane', '-t', '%5']);
+  assert.deepEqual(calls[2].args, ['-e', ITerm.SCRIPT, '', '/dev/ttys009']);
+});
+
+const MUTATING = ['switch-client', 'select-window', 'select-pane', 'select-layout', 'new-window', 'attach-session', 'attach'];
+const tmuxMutations = (calls) => calls.filter((c) => c.file === Tmux.BINS[0] && c.args.some((a) => MUTATING.includes(a)));
+const osaCalls = (calls) => calls.filter((c) => c.file === '/usr/bin/osascript' || c.file === '/usr/bin/open');
+const namedAnswers = (clients) => (file, args) => (args.includes('display-message') ? { ok: true, stdout: '$2\twork\n' } : tmuxAnswers(clients)(file, args));
+
+for (const hostApp of ['iTerm2', 'Terminal', 'Ghostty', 'kitty', undefined]) {
+  test(`tmux detached (no client on its session, another session has one): nothing is switched and no tab is touched (${hostApp || 'no host'})`, async () => {
+    const s = sess(TMUX_ENV, hostApp ? { hostApp } : {});
+    const { calls, exec } = fakeExec(namedAnswers('/dev/ttys009\t$1\t100\n'));
+    const r = await Focus.focusSession(s, ctxOf({ exec }));
+    assert.equal(r.ok, false);
+    assert.equal(r.detached, true);
+    assert.equal(r.command, 'tmux attach -t work');
+    assert.deepEqual(tmuxMutations(calls), [], 'a tmux command changed the state of the user\'s current client');
+    assert.deepEqual(osaCalls(calls), [], 'a terminal was asked to select or open something');
+  });
+}
+
+test('tmux detached with no clients at all: nothing is selected, not even on the detached session', async () => {
+  const { calls, exec } = fakeExec(namedAnswers(''));
+  const r = await Focus.focusSession(sess(TMUX_ENV, { hostApp: 'iTerm2' }), ctxOf({ exec }));
+  assert.equal(r.detached, true);
+  assert.deepEqual(tmuxMutations(calls), []);
+  assert.deepEqual(osaCalls(calls), []);
+});
+
+test('tmux detached: the attach command names the socket when it is not the default, and is dropped for an unsafe session name', async () => {
+  const other = { TMUX: '/private/tmp/tmux-501/work-sock,812,0', TMUX_PANE: '%5' };
+  const r = await Focus.focusSession(sess(other), ctxOf({ exec: fakeExec(namedAnswers('')).exec }));
+  assert.equal(r.command, 'tmux -S /private/tmp/tmux-501/work-sock attach -t work');
+  const bad = await Focus.focusSession(sess(TMUX_ENV), ctxOf({ exec: fakeExec((f, a) => (a.includes('display-message') ? { ok: true, stdout: '$2\t-x; rm -rf ~\n' } : tmuxAnswers('')(f, a))).exec }));
+  assert.equal(bad.detached, true);
+  assert.equal(bad.command, undefined);
+});
+
+test('tmux: two clients on the session is ambiguous, so nothing is touched', async () => {
+  const { calls, exec } = fakeExec(namedAnswers('/dev/ttys009\t$2\t100\n/dev/ttys003\t$2\t50\n'));
+  const r = await Focus.focusSession(sess(TMUX_ENV, { hostApp: 'iTerm2' }), ctxOf({ exec }));
+  assert.equal(r.ok, false);
+  assert.deepEqual(tmuxMutations(calls), []);
+  assert.deepEqual(osaCalls(calls), []);
+});
+
+test('tmux: an attached client whose terminal has no adapter (Ghostty has no tty) leaves tmux alone', async () => {
+  const { calls, exec } = fakeExec(namedAnswers('/dev/ttys009\t$2\t100\n'));
+  const r = await Focus.focusSession(sess(TMUX_ENV, { hostApp: 'Ghostty' }), ctxOf({ exec }));
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /no adapter/);
+  assert.deepEqual(tmuxMutations(calls), [], 'the session\'s pane was selected although no tab could be focused');
+  assert.deepEqual(osaCalls(calls), []);
+});
+
+test('tmux: an outer tab that is not found leaves tmux alone', async () => {
+  const { calls, exec } = fakeExec((file, args) => (file === '/usr/bin/osascript' ? { ok: true, stdout: 'no match' } : namedAnswers('/dev/ttys009\t$2\t100\n')(file, args)));
+  const r = await Focus.focusSession(sess(TMUX_ENV, { hostApp: 'iTerm2' }), ctxOf({ exec }));
+  assert.equal(r.ok, false);
+  assert.deepEqual(tmuxMutations(calls), []);
+});
+
+test('an unknown tty or no recorded terminal: no adapter runs any command', async () => {
+  for (const s of [sess({ TERM_PROGRAM: 'Apple_Terminal' }, { hostApp: 'Terminal' }), sess({}, { hostApp: 'iTerm2' }), sess({})]) {
+    const { calls, exec } = fakeExec();
+    const r = await Focus.focusSession(s, ctxOf({ exec }));
+    assert.equal(r.ok, false);
+    assert.equal(calls.length, 0);
+  }
 });
 
 test('tmux: stale outer ids inherited by the pane are never used, and a miss is not reported as exact', async () => {
@@ -300,7 +363,7 @@ test('tmux: with no recorded host, the outer tab is looked up by tty in iTerm2 t
   const s = sess(TMUX_ENV);
   const { calls, exec } = fakeExec((file, args) => {
     if (file === '/usr/bin/osascript') return { ok: true, stdout: args[1] === ITerm.SCRIPT ? 'not-running' : 'ok' };
-    return tmuxAnswers()(file, args);
+    return tmuxAnswers('/dev/ttys009\t$2\t100\n')(file, args);
   });
   const r = await Focus.focusSession(s, ctxOf({ exec }));
   assert.equal(r.ok, true);
@@ -319,8 +382,8 @@ test('tmux: hostile panes, sockets, server pids and client ttys are refused', ()
   let seen = null;
   Tmux.canHandle(sess({ TMUX: '/tmp/t,1;2,0', TMUX_PANE: '%1' }), ctxOf({ tmuxServerOk: (sock, pid) => { seen = pid; return true; } }));
   assert.equal(seen, null, 'a malformed server pid is not passed on');
-  assert.equal(Tmux.pickClient('/dev/ttys1"; x\t$1\t9\n/dev/ttys2\t$1\t1', '$1').tty, '/dev/ttys2');
-  assert.equal(Tmux.pickClient('garbage', '$1'), null);
+  assert.deepEqual(Tmux.sessionClients('/dev/ttys1"; x\t$1\t9\n/dev/ttys2\t$1\t1\n/dev/ttys3\t$2\t5', '$1').map((c) => c.tty), ['/dev/ttys2']);
+  assert.deepEqual(Tmux.sessionClients('garbage', '$1'), []);
 });
 
 test('tmux: the socket must be a socket we own, in a private directory, with a live server we own', async () => {
@@ -348,12 +411,12 @@ test('tmux: the socket must be a socket we own, in a private directory, with a l
   }
 });
 
-test('tmux: pane selected but no outer tab found still reports a miss, so the app is activated', async () => {
+test('tmux: no outer tab found still reports a miss', async () => {
   const s = sess({ TMUX: '/tmp/t,1,0', TMUX_PANE: '%1' }, { hostApp: 'Alacritty' });
   const { exec } = fakeExec((file, args) => (args.includes('display-message') ? { ok: true, stdout: '$0' } : args.includes('list-clients') ? { ok: true, stdout: '/dev/ttys1\t$0\t1' } : { ok: true }));
   const r = await Focus.focusSession(s, ctxOf({ exec }));
   assert.equal(r.ok, false);
-  assert.match(r.reason, /tmux pane selected/);
+  assert.match(r.reason, /left alone/);
 });
 
 test('VS Code: opens the folder the session started in; with none, only activates the app', async () => {
@@ -483,13 +546,15 @@ function jumperWith({ focusResult = { ok: false, reason: 'miss' }, platform = 'd
   return { jump, log };
 }
 
-test('a session with nothing recorded activates the app exactly as before', async () => {
+test('a local session with nothing recorded is never guessed at: no app is activated, the note says so; no session still opens the app', async () => {
   const { jump, log } = jumperWith();
-  assert.deepEqual(await jump({ host: HOST, cwd: '/x' }, 'x', 'Ghostty'), { app: 'Terminal', exact: false });
+  const r = await jump({ host: HOST, cwd: '/x' }, 'x', 'Ghostty');
+  assert.equal(r.app, null);
+  assert.match(r.cant, /can.t tell which terminal/i);
   assert.equal(log.focus.length, 0);
-  assert.deepEqual(log.activate, [['x', 'Ghostty']]);
-  await jump(null, 'y');
-  assert.deepEqual(log.activate[1], ['y', null]);
+  assert.equal(log.activate.length, 0);
+  assert.deepEqual(await jump(null, 'y'), { app: 'Terminal', exact: false });
+  assert.deepEqual(log.activate, [['y', null]]);
 });
 
 test('a remote session is never focused and never activates anything, whatever host it claims', async () => {
@@ -512,17 +577,37 @@ test('another host\'s session, or another platform, skips the adapters but still
   assert.equal(log.activate.length + win.log.activate.length, 2);
 });
 
-test('a hit reports the tab; a miss falls back to activating; a refusal is explained', async () => {
+test('a hit reports the tab; a miss or a refusal never activates the app and says it could not jump', async () => {
   const hit = jumperWith({ focusResult: { ok: true, adapter: 'tmux+iterm', exact: true } });
   assert.deepEqual(await hit.jump({ host: HOST, terminal: { env: {} } }, 'x'), { app: 'iTerm2', exact: true });
   assert.equal(hit.log.activate.length, 0);
   const miss = jumperWith();
-  assert.deepEqual(await miss.jump({ host: HOST, terminal: { env: {} } }, 'x', 'kitty'), { app: 'Terminal', exact: false });
-  assert.deepEqual(miss.log.activate, [['x', 'kitty']]);
+  const m = await miss.jump({ host: HOST, terminal: { env: {} } }, 'x', 'kitty');
+  assert.equal(m.app, null);
+  assert.match(m.cant, /can.t tell which terminal/i);
+  assert.equal(miss.log.activate.length, 0);
   const denied = jumperWith({ focusResult: { ok: false, denied: 'automation', needs: ITerm.needs } });
   await denied.jump({ host: HOST, terminal: { env: {} } }, 'x');
   assert.deepEqual(denied.log.denied, [ITerm.needs]);
-  assert.equal(denied.log.activate.length, 1);
+  assert.equal(denied.log.activate.length, 0);
+});
+
+test('a detached tmux session gets the attach hint and command, and nothing is activated', async () => {
+  const { jump, log } = jumperWith({ focusResult: { ok: false, adapter: 'tmux', detached: true, command: 'tmux attach -t work', reason: 'detached' } });
+  const r = await jump({ host: HOST, terminal: { env: { TMUX_PANE: '%1' } } }, 'x', 'iTerm2');
+  assert.equal(r.app, null);
+  assert.equal(r.cant, 'This session is running in tmux with no terminal window open. Run `tmux attach -t work` in a terminal.');
+  assert.equal(r.command, 'tmux attach -t work');
+  assert.equal(log.activate.length, 0);
+  const nameless = jumperWith({ focusResult: { ok: false, adapter: 'tmux', detached: true } });
+  assert.equal((await nameless.jump({ host: HOST, terminal: { env: {} } }, 'x')).cant, 'This session is running in tmux with no terminal window open. Run `tmux attach` in a terminal.');
+});
+
+test('a session file with no host (a tmux pane dialog) is treated as local', async () => {
+  const { jump, log } = jumperWith({ focusResult: { ok: true, adapter: 'tmux+iterm', exact: true } });
+  assert.deepEqual(await jump({ terminal: { env: { TMUX_PANE: '%1' } } }, 'x'), { app: 'iTerm2', exact: true });
+  assert.equal(log.focus.length, 1);
+  assert.equal(log.activate.length, 0);
 });
 
 test('the same target clicked twice shares the jump in flight; a later click runs again', async () => {

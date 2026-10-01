@@ -81,6 +81,7 @@
     const sending = new Set();
     const answered = new Set();
     const errors = new Map();
+    const commands = new Map();
     const full = new Set();
     const notes = new Map(); // id → explanation shown under a blocked input
     const picked = new Map(); // id → { questionId: [optionId] }
@@ -124,7 +125,8 @@
       if (!input) return;
       let r;
       try { r = await api.openInput(input.id); } catch { r = null; }
-      if (!r || !r.ok) setError(input.id, r && r.error === 'gone' ? 'It is no longer waiting.' : 'Could not find its terminal.');
+      if (r && r.command) commands.set(input.id, r.command); else commands.delete(input.id);
+      if (!r || !r.ok) setError(input.id, r && r.error === 'gone' ? 'It is no longer waiting.' : (r && r.note) || 'Could not find its terminal.');
     }
 
     function optionButton(input, o, extra, onClick) {
@@ -402,6 +404,13 @@
       }
       const err = errors.get(input.id);
       if (err) { const e = el('div', 'ib-err', err); e.setAttribute('role', 'alert'); body.appendChild(e); }
+      if (err && commands.has(input.id)) {
+        const cmd = commands.get(input.id);
+        const c = el('button', 'ib-opt tone-plain ib-copy', 'Copy command');
+        c.type = 'button';
+        c.addEventListener('click', (ev) => { ev.stopPropagation(); try { navigator.clipboard.writeText(cmd); c.textContent = 'Copied'; } catch { c.textContent = 'Could not copy'; } });
+        body.appendChild(c);
+      }
       if (sending.has(input.id)) body.appendChild(el('div', 'ib-hint', 'Sending…'));
       return body;
     }
@@ -512,7 +521,7 @@
       scopes = extra.scopes && typeof extra.scopes === 'object' ? extra.scopes : {};
       const ids = new Set(inputs.map((i) => i.id));
       for (const s of [answered, sending, full, scopeMore, denyOpen, noAutoExpand]) for (const id of [...s]) if (!ids.has(id)) s.delete(id);
-      for (const m of [errors, notes, picked, typed, formValues, reasons, shownAt, shownKey]) for (const id of [...m.keys()]) if (!ids.has(id)) m.delete(id);
+      for (const m of [errors, commands, notes, picked, typed, formValues, reasons, shownAt, shownKey]) for (const id of [...m.keys()]) if (!ids.has(id)) m.delete(id);
       const list = live_();
       if (expanded && !list.some((i) => i.id === expanded)) expanded = null;
       // One waiting input opens straight away, like the old Allow/Deny strip

@@ -2582,6 +2582,7 @@ ipcMain.handle('go-to-needing-session', async () => {
   return {
     opened: activated?.app || 'none-found',
     exact: activated?.exact || false,
+    ...(activated?.cant ? { note: activated.cant, command: activated.command || null } : {}),
     cwd: target.cwd,
     signal: target.signal,
     index: shownIndex,
@@ -2999,7 +3000,7 @@ async function runAction(action, st) {
     }
     case 'terminal': {
       const a = await jumpToSession(target, folderHint);
-      return { feedback: a ? `→ ${a.app}` : 'no terminal running' };
+      return { feedback: a?.cant ? a.cant : a ? `→ ${a.app}` : 'no terminal running' };
     }
     case 'allow': case 'deny': {
       // Tool permissions only: a plan, question or elicitation is answered
@@ -3068,6 +3069,7 @@ async function jumpToNeeding() {
   const folderHint = Rules.folderOf(target.cwd);
   const activated = await jumpToSession(target, folderHint);
   const badge = queue.length > 1 ? ` (${shownIndex}/${queue.length})` : '';
+  if (activated?.cant) return `${folderHint}${badge}: ${activated.cant}`;
   return `→ ${folderHint}${badge}${activated?.exact ? ' · tab found' : ''} · path copied`;
 }
 
@@ -3297,6 +3299,7 @@ ipcMain.handle('open-input', async (e, id) => {
   const session = dialog ? dialog.jump : (aggregateState().sessions || []).find((s) => s.sessionId === item.session);
   if (!session) return { ok: false, error: 'session not found' };
   const r = await jumpToSession(session, String(session.cwd || '').split('/').filter(Boolean).pop() || '', session.hostApp);
+  if (r && r.cant) return { ok: false, note: r.cant, command: r.command || null };
   return { ok: !!r, app: r ? r.app : null };
 });
 
