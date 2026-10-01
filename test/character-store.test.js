@@ -106,3 +106,26 @@ test('store: the count is capped', () => {
   assert.throws(() => store.save({ ...otter(), id: 'one-too-many' }), /at most/);
   assert.equal(store.list().length, Store.LIMITS.count);
 });
+
+test('store: a symlink planted where the temp file goes is not written through', { skip: process.platform === 'win32' }, () => {
+  const { store, dir } = make();
+  const victim = path.join(dir, 'victim.txt');
+  fs.writeFileSync(victim, 'untouched');
+  const folder = path.join(dir, 'characters', 'u-otter');
+  fs.mkdirSync(folder, { recursive: true });
+  fs.symlinkSync(victim, path.join(folder, `character.json.tmp-${process.pid}`));
+  store.save(otter(), { overwrite: true });
+  assert.equal(fs.readFileSync(victim, 'utf8'), 'untouched');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(folder, 'character.json'), 'utf8')).id, 'u-otter');
+});
+
+test('store: list scans a bounded number of entries, so thousands of planted folders cannot stall it', () => {
+  const { store, dir } = make();
+  const root = path.join(dir, 'characters');
+  fs.mkdirSync(root, { recursive: true });
+  for (let i = 0; i < Store.LIMITS.count * 4 + 50; i += 1) fs.mkdirSync(path.join(root, `u-plant-${String(i).padStart(4, '0')}`));
+  const t0 = Date.now();
+  assert.deepEqual(store.list(), []);
+  assert.ok(Date.now() - t0 < 2000);
+  for (let i = 0; i < 70; i += 1) store.list();
+});

@@ -117,10 +117,23 @@ test('runHatch: after N failed attempts it keeps a valid template (never the AI\
   assert.equal(validateCharacter(r.character, { source: 'import' }).ok, true);
 });
 
-test('runHatch: the budget cap stops further attempts', async () => {
+test('runHatch: the budget cap stops further attempts, and never starts one it cannot cover', async () => {
   let calls = 0;
   const r = await Hatch.runHatch({ params: {}, maxAttempts: 5, maxCostUsd: 0.1, generate: async () => { calls += 1; return { text: 'nope', costUsd: 0.06 }; } });
-  assert.equal(calls, 2); assert.equal(r.reason, 'budget'); assert.ok(r.spentUsd >= 0.1);
+  assert.equal(calls, 1, 'a second attempt would cost about 0.06 more and pass the 0.10 cap');
+  assert.equal(r.reason, 'budget'); assert.ok(r.spentUsd <= 0.1);
+  let more = 0;
+  const r2 = await Hatch.runHatch({ params: {}, maxAttempts: 5, maxCostUsd: 0.2, generate: async () => { more += 1; return { text: 'nope', costUsd: 0.06 }; } });
+  assert.equal(more, 3); assert.equal(r2.reason, 'budget'); assert.ok(r2.spentUsd <= 0.2);
+});
+
+test('runHatch: a negative or odd reported cost cannot lower the spend or dodge the cap', async () => {
+  let calls = 0;
+  const r = await Hatch.runHatch({ params: {}, maxAttempts: 5, maxCostUsd: 0.1, generate: async () => { calls += 1; return { text: 'nope', costUsd: calls === 1 ? 0.09 : -50 }; } });
+  assert.ok(r.spentUsd >= 0.09, `spent ${r.spentUsd}`);
+  assert.equal(calls, 1);
+  const s = await Hatch.runHatch({ params: {}, maxAttempts: 2, generate: async () => ({ text: 'nope', costUsd: 'free' }) });
+  assert.equal(s.spentUsd, 0);
 });
 
 test('runHatch: attempts are capped at the hard limit whatever is asked, and a thrown error is survivable', async () => {

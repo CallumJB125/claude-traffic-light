@@ -22,15 +22,21 @@ function create({ dir, log = () => {} }) {
     if (path.dirname(p) !== root) throw new Error('not a character id');
     return p;
   };
-  // a regular file we own, small enough to read: never a symlink, a device or a huge file
+  // a regular file, small enough to read: opened without following a symlink, then
+  // checked on the descriptor itself, so nothing can be swapped in between
   const readSmall = (file) => {
-    const st = fs.lstatSync(file);
-    if (!st.isFile() || st.size > LIMITS.fileBytes) throw new Error('not a regular file of a sane size');
-    return fs.readFileSync(file, 'utf8');
+    const fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+    try {
+      const st = fs.fstatSync(fd);
+      if (!st.isFile() || st.size > LIMITS.fileBytes) throw new Error('not a regular file of a sane size');
+      return fs.readFileSync(fd, 'utf8');
+    } finally { fs.closeSync(fd); }
   };
+  // O_EXCL: fails on an existing path or a planted symlink instead of writing through it
   const writeAtomic = (file, text) => {
     const tmp = `${file}.tmp-${process.pid}`;
-    fs.writeFileSync(tmp, text, { mode: 0o600, flag: 'w' });
+    try { fs.unlinkSync(tmp); } catch { /* none */ }
+    fs.writeFileSync(tmp, text, { mode: 0o600, flag: 'wx' });
     fs.renameSync(tmp, file);
   };
 
@@ -38,7 +44,8 @@ function create({ dir, log = () => {} }) {
     let names;
     try { names = fs.readdirSync(root); } catch { return []; }
     const out = [];
-    for (const name of names.sort()) {
+    for (const name of names.sort().slice(0, LIMITS.count * 4)) {
+      if (out.length >= LIMITS.count) break;
       if (!ID.test(name)) continue;
       try {
         const dirStat = fs.lstatSync(path.join(root, name));

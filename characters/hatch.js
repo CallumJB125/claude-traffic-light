@@ -240,12 +240,17 @@ async function runHatch({ params, generate, maxAttempts = 3, maxCostUsd = 0.5, o
   const cap = Math.max(1, Math.min(LIMITS.maxAttempts, maxAttempts | 0 || 3));
   let errors = [];
   let spent = 0;
+  let lastCost = 0;
+  let overBudget = false;
   for (let attempt = 1; attempt <= cap; attempt += 1) {
     if (signal && signal.aborted) return { ok: false, source: 'cancelled', attempts: attempt - 1, spentUsd: spent, character: null, params: p };
+    // never start an attempt the budget cannot cover (an attempt costs about what the last one did)
+    if (attempt > 1 && spent + lastCost > maxCostUsd) { overBudget = true; break; }
     onProgress({ attempt, of: cap, state: attempt === 1 ? 'hatching' : 'tweaking' });
     let reply;
     try { reply = await generate({ request, attempt, errors, signal }); } catch (e) { errors = [{ path: '', message: `the AI did not answer (${String(e && e.message || e).slice(0, 80)})` }]; if (e && e.fatal) break; continue; }
-    spent += Number.isFinite(reply && reply.costUsd) ? reply.costUsd : 0;
+    lastCost = Number.isFinite(reply && reply.costUsd) ? Math.max(0, reply.costUsd) : 0;
+    spent += lastCost;
     let json;
     try { json = parseAiOutput(reply && reply.text); } catch (e) { errors = [{ path: '', message: e.message }]; if (spent >= maxCostUsd) break; continue; }
     const v = validateCharacter(json, { source: 'import' });
@@ -254,7 +259,7 @@ async function runHatch({ params, generate, maxAttempts = 3, maxCostUsd = 0.5, o
     if (spent >= maxCostUsd) break;
   }
   // over budget, out of attempts, or no AI: keep a valid character the user can edit
-  return { ...fallback(spent >= maxCostUsd ? 'budget' : 'attempts', cap, spent), lastErrors: summarise(errors) };
+  return { ...fallback(overBudget || spent >= maxCostUsd ? 'budget' : 'attempts', cap, spent), lastErrors: summarise(errors) };
 }
 
 module.exports = { SHAPES, SIZES, ARMS, ACCESSORIES, LIMITS, DEFAULTS, normalizeParams, surprise, templateCharacter, buildAiRequest, parseAiOutput, estimateCost, runHatch };

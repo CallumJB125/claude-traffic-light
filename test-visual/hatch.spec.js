@@ -52,7 +52,13 @@ test('Hatch: choices in, a saved character out, picked in Lights, deleted again'
   expect(JSON.stringify(saved)).not.toMatch(/script|onload|href/);
   if (process.platform !== 'win32') expect(fs.statSync(path.join(charDir('u-otter'), 'character.json')).mode & 0o777).toBe(0o600);
 
-  // saving again gives a second character with a free id, never an overwrite
+  // a token saves once: clicking Save again changes nothing
+  await hatch.click('#save');
+  await expect(hatch.locator('#status')).toContainText('Nothing to save yet', { timeout: 10000 });
+  expect(fs.existsSync(charDir('u-otter-2'))).toBe(false);
+  // making another (a new choice) and saving gives a second character with a free id, never an overwrite
+  await hatch.locator('.seg[id=size] label', { hasText: 'tall' }).click();
+  await expect(hatch.locator('#status')).toHaveText('', { timeout: 10000 });
   await hatch.click('#save');
   await expect(hatch.locator('#status')).toContainText('Saved as Otter', { timeout: 10000 });
   expect(fs.existsSync(path.join(charDir('u-otter-2'), 'character.json'))).toBe(true);

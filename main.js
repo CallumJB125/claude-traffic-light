@@ -1169,7 +1169,8 @@ function createHatchWindow() {
   });
   hatchWin.setMenuBarVisibility(false);
   hatchWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  const stay = (e, url) => { if (!/\/hatch\.html(\?|#|$)/.test(url)) e.preventDefault(); };
+  const HATCH_URL = require('url').pathToFileURL(path.join(__dirname, 'hatch.html')).href;
+  const stay = (e, url) => { if (url.split(/[?#]/)[0] !== HATCH_URL) e.preventDefault(); };
   hatchWin.webContents.on('will-navigate', stay);
   hatchWin.webContents.on('will-redirect', stay);
   hatchWin.loadFile('hatch.html');
@@ -1202,6 +1203,7 @@ ipcMain.handle('hatch:save', (e, token) => {
   if (!made) return { error: 'Nothing to save yet.' };
   try {
     const saved = characterStore.save({ ...made.character, id: characterStore.freeId(made.character.name) }, { source: 'hatch', params: made.params });
+    hatchResults.delete(token); // one token, one save
     broadcastCharacters();
     return { ok: true, id: saved.id, name: saved.name };
   } catch (err) {
