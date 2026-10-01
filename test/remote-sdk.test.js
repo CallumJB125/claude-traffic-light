@@ -50,3 +50,50 @@ test('SDK honors cancellation before a request and bounds a real fetch wait with
  const canceled=new AbortController();canceled.abort();await assert.rejects(client.listBoards({signal:canceled.signal}),error=>error.code==='TIMEOUT');assert.equal(count,0);
  const began=performance.now();await assert.rejects(client.addComment({card_id:'task',request_id:'same-uncertain-choice',body:'Reported'}),error=>error.code==='TIMEOUT');assert.ok(performance.now()-began<1000);assert.equal(count,1);
 });
+
+// Run stalled injected fetch/standard stream cases in bounded children. The
+// keeper makes an unresolved SDK promise fail the process deadline, rather than
+// passing because Node has no remaining handles. No real request is made.
+function deadlineProbe(body){
+ const source=require('node:url').pathToFileURL(require('node:path').resolve(__dirname,'../sdk/remote-client.mjs')).href;
+ const code=`import assert from 'node:assert/strict';import {createPlexiformClient,MAX_BYTES} from ${JSON.stringify(source)};const token='pfi_'+'a'.repeat(43),origin='https://synthetic.invalid';const keep=setInterval(()=>{},10000);process.on('unhandledRejection',()=>{process.exitCode=19;});try{${body}}finally{clearInterval(keep);}`;
+ const child=require('node:child_process').spawnSync(process.execPath,['--input-type=module','-e',code],{encoding:'utf8',timeout:2000});
+ assert.equal(child.status,0,JSON.stringify({status:child.status,signal:child.signal,error:child.error?.code,stderr:child.stderr}));
+}
+
+test('SDK deadline rejects a supplied fetch that never returns or honors AbortSignal',()=>deadlineProbe(`
+ let calls=0,signal;const client=createPlexiformClient({origin,token,timeoutMs:30,fetchImpl:async(u,o)=>{calls++;signal=o.signal;return new Promise(()=>{});}});
+ await assert.rejects(client.listBoards(),e=>e.code==='TIMEOUT');assert.equal(signal.aborted,true);assert.equal(calls,1);
+`));
+
+test('SDK deadline rejects a pending standard reader even if cancellation never settles',()=>deadlineProbe(`
+ let canceled=0;const stream=new ReadableStream({start(c){c.enqueue(new TextEncoder().encode('{'));},cancel(){canceled++;return new Promise(()=>{});}});
+ const client=createPlexiformClient({origin,token,timeoutMs:30,fetchImpl:async()=>new Response(stream,{headers:{'content-type':'application/json'}})});
+ await assert.rejects(client.listBoards(),e=>e.code==='TIMEOUT');assert.equal(canceled,1);assert.equal(stream.locked,false);
+`));
+
+test('SDK caller cancellation rejects a pending reader without waiting for stream cleanup',()=>deadlineProbe(`
+ let entered;const ready=new Promise(r=>entered=r);let canceled=0;const stream=new ReadableStream({start(c){c.enqueue(new TextEncoder().encode('{'));},cancel(){canceled++;return new Promise(()=>{});}});
+ const controller=new AbortController(),client=createPlexiformClient({origin,token,timeoutMs:500,fetchImpl:async()=>{entered();return new Response(stream,{headers:{'content-type':'application/json'}});}});
+ const pending=client.listBoards({signal:controller.signal});await ready;await new Promise(r=>setTimeout(r,10));controller.abort();
+ await assert.rejects(pending,e=>e.code==='TIMEOUT');assert.equal(canceled,1);assert.equal(stream.locked,false);
+`));
+
+test('SDK declared size refusal does not await a stalled body cancellation',()=>deadlineProbe(`
+ let canceled=0;const stream=new ReadableStream({cancel(){canceled++;return new Promise(()=>{});}});
+ const client=createPlexiformClient({origin,token,timeoutMs:30,fetchImpl:async()=>new Response(stream,{headers:{'content-type':'application/json','content-length':String(MAX_BYTES+1)}})});
+ await assert.rejects(client.listBoards(),e=>e.code==='PAYLOAD_TOO_LARGE');assert.equal(canceled,1);
+`));
+
+test('SDK streamed size refusal does not await a stalled reader cancellation',()=>deadlineProbe(`
+ let canceled=0;const stream=new ReadableStream({start(c){c.enqueue(new Uint8Array(MAX_BYTES+1));},cancel(){canceled++;return new Promise(()=>{});}});
+ const client=createPlexiformClient({origin,token,timeoutMs:30,fetchImpl:async()=>new Response(stream,{headers:{'content-type':'application/json'}})});
+ await assert.rejects(client.listBoards(),e=>e.code==='PAYLOAD_TOO_LARGE');assert.equal(canceled,1);assert.equal(stream.locked,false);
+`));
+
+test('SDK cancels a late supplied response without retry or leaking cleanup rejection',()=>deadlineProbe(`
+ let finish,canceled=0,calls=0;const client=createPlexiformClient({origin,token,timeoutMs:30,fetchImpl:()=>{calls++;return new Promise(r=>finish=r);}});
+ await assert.rejects(client.listBoards(),e=>e.code==='TIMEOUT');assert.equal(calls,1);
+ finish(new Response(new ReadableStream({cancel(){canceled++;return Promise.reject(new Error('synthetic cleanup refusal'));}}),{headers:{'content-type':'application/json'}}));
+ await new Promise(r=>setTimeout(r,25));assert.equal(canceled,1);assert.equal(calls,1);
+`));

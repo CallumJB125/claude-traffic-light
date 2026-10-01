@@ -25,15 +25,34 @@ function endpoint(origin){
     ||!(u.protocol==='https:'||u.protocol==='http:'&&['127.0.0.1','[::1]'].includes(u.hostname)))fail('VALIDATION');
   return `${u.origin}/api/integration/v1`;
 }
+// A supplied fetch/stream may ignore AbortSignal. Own each asynchronous wait;
+// cleanup is best effort and never extends the request deadline or size refusal.
+function cancel(resource){try{Promise.resolve(resource?.cancel?.()).catch(()=>{});}catch{}}
+function boundedWait(start,signal,discard=null){
+  return new Promise((resolve,reject)=>{
+    let settled=false;
+    const finish=(fn,value)=>{if(settled)return;settled=true;signal.removeEventListener('abort',aborted);fn(value);};
+    const aborted=()=>finish(reject,new PlexiformError('TIMEOUT'));
+    signal.addEventListener('abort',aborted,{once:true});
+    if(signal.aborted){aborted();return;}
+    let operation;try{operation=start();}catch(error){finish(reject,error);return;}
+    Promise.resolve(operation).then(value=>{
+      if(signal.aborted)aborted();
+      if(settled){try{discard?.(value);}catch{}return;}
+      finish(resolve,value);
+    },error=>finish(reject,error));
+  });
+}
 async function responseJson(response,signal){
-  if(!/^application\/json(?:\s*;|$)/i.test(response.headers.get('content-type')??''))throw new PlexiformError('REMOTE_ERROR',response.status);
+  if(signal.aborted){cancel(response.body);throw new PlexiformError('TIMEOUT');}
+  if(!/^application\/json(?:\s*;|$)/i.test(response.headers.get('content-type')??'')){cancel(response.body);throw new PlexiformError('REMOTE_ERROR',response.status);}
   const length=Number(response.headers.get('content-length'));
-  if(length>MAX_BYTES){await response.body?.cancel();throw new PlexiformError('PAYLOAD_TOO_LARGE',response.status);}
+  if(length>MAX_BYTES){cancel(response.body);throw new PlexiformError('PAYLOAD_TOO_LARGE',response.status);}
   if(!response.body?.getReader)throw new PlexiformError('REMOTE_ERROR',response.status);
-  const reader=response.body.getReader(),chunks=[];let size=0;
-  try{for(;;){if(signal.aborted)throw new PlexiformError('TIMEOUT');const {done,value}=await reader.read();if(done)break;
-    size+=value.byteLength;if(size>MAX_BYTES){await reader.cancel();throw new PlexiformError('PAYLOAD_TOO_LARGE',response.status);}chunks.push(value);
-  }}finally{reader.releaseLock();}
+  const reader=response.body.getReader(),chunks=[];let size=0,complete=false;
+  try{for(;;){const {done,value}=await boundedWait(()=>reader.read(),signal);if(done){complete=true;break;}
+    size+=value.byteLength;if(size>MAX_BYTES)throw new PlexiformError('PAYLOAD_TOO_LARGE',response.status);chunks.push(value);
+  }}finally{if(!complete)cancel(reader);reader.releaseLock();}
   if(signal.aborted)throw new PlexiformError('TIMEOUT');
   const data=new Uint8Array(size);let at=0;for(const chunk of chunks){data.set(chunk,at);at+=chunk.byteLength;}
   try{return JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(data));}catch{throw new PlexiformError('REMOTE_ERROR',response.status);}
@@ -53,8 +72,8 @@ export function createPlexiformClient({origin,token,fetchImpl,timeoutMs=20_000}=
     options.signal?.addEventListener('abort',abort,{once:true});if(options.signal?.aborted)abort();
     try{
       if(controller.signal.aborted)throw new PlexiformError('TIMEOUT');
-      const response=await send(url,{method:tool==null?'GET':'POST',headers:{accept:'application/json',authorization:`Bearer ${token}`,...(body?{'content-type':'application/json'}:{})},
-        body,signal:controller.signal,credentials:'omit',redirect:'error'}); // privacy-flow: remote-integration-sdk
+      const response=await boundedWait(()=>send(url,{method:tool==null?'GET':'POST',headers:{accept:'application/json',authorization:`Bearer ${token}`,...(body?{'content-type':'application/json'}:{})},
+        body,signal:controller.signal,credentials:'omit',redirect:'error'}),controller.signal,response=>cancel(response?.body)); // privacy-flow: remote-integration-sdk
       const result=await responseJson(response,controller.signal);
       if(!response.ok){const code=typeof result?.error?.code==='string'&&/^[A-Z_]{1,80}$/.test(result.error.code)?result.error.code:'REMOTE_ERROR';
         const retry=Number(response.headers.get('retry-after'));throw new PlexiformError(code,response.status,Number.isFinite(retry)&&retry>0?Math.min(retry,86400):null);}
