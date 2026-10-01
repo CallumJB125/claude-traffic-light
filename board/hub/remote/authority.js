@@ -171,11 +171,13 @@ export class RemoteAuthority {
     return { ...this.liveGrant(row.grant_id, this.audience(kind), write), tokenHash };
   }
   register(body, { ip = 'local' } = {}) {
-    closed(body, ['client_name', 'redirect_uris', 'token_endpoint_auth_method', 'grant_types', 'response_types', 'scope'], ['client_name', 'redirect_uris']);
+    // Native/web is unverified client metadata; redirect and grant rules stay fixed.
+    closed(body, ['client_name', 'redirect_uris', 'token_endpoint_auth_method', 'grant_types', 'response_types', 'scope', 'application_type'], ['client_name', 'redirect_uris']);
     if (body.token_endpoint_auth_method != null && body.token_endpoint_auth_method !== 'none'
       || body.grant_types != null && JSON.stringify(body.grant_types) !== JSON.stringify(['authorization_code', 'refresh_token'])
       || body.response_types != null && JSON.stringify(body.response_types) !== JSON.stringify(['code'])
-      || body.scope != null && !['boards:read', 'boards:read boards:collaborate'].includes(body.scope)) throw invalid();
+      || body.scope != null && !['boards:read', 'boards:read boards:collaborate'].includes(body.scope)
+      || body.application_type !== undefined && !['native', 'web'].includes(body.application_type)) throw invalid();
     if (!Array.isArray(body.redirect_uris) || body.redirect_uris.length < 1 || body.redirect_uris.length > 3) throw invalid();
     const redirects = body.redirect_uris.map(redirect);
     if (new Set(redirects).size !== redirects.length || typeof ip !== 'string' || ip.length > 100) throw invalid();
@@ -186,7 +188,8 @@ export class RemoteAuthority {
     this.db.insert('remote_clients', { id, name: clientName, redirects: JSON.stringify(redirects),
       registered_ip_hash: ipHash, created_at: this.hub.iso(), revoked_at: null });
     return { client_id: id, client_name: clientName, redirect_uris: redirects, token_endpoint_auth_method: 'none',
-      grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'] };
+      grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'],
+      ...(body.application_type !== undefined ? { application_type: body.application_type } : {}) };
   }
   authorize(params) {
     closed(params, ['client_id', 'redirect_uri', 'response_type', 'state', 'resource', 'code_challenge', 'code_challenge_method', 'scope']);
