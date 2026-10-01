@@ -60,11 +60,12 @@ test('leftover shim: an rc block is found and the exact removal command given; n
   fs.writeFileSync(path.join(home, '.claude-traffic-light', 'bin', 'claude'), '#!/bin/sh\n');
   const r = LeftoverShim.detect({ home, env: {}, platform: 'darwin' });
   assert.deepEqual(r.files, [zshrc]);
-  assert.equal(r.command, `sed -i '' '/^# claude-buddy router >>>$/,/^# claude-buddy router <<<$/d' '${zshrc}' && rm -f '${home}/.claude-traffic-light/bin/claude'`);
+  assert.equal(r.command, `sed -i '' '/^# claude-buddy router >>>$/,/^# claude-buddy router <<<$/d' '${zshrc}' && rm -f '${path.join(home, '.claude-traffic-light', 'bin', 'claude')}'`);
   assert.match(r.note, /~\/\.zshrc/);
   assert.equal(fs.readFileSync(zshrc, 'utf8'), text, 'the rc file is untouched');
   assert.match(LeftoverShim.detect({ home, env: {}, platform: 'linux' }).command, /^sed -i '\/\^# claude/);
-  // The command really does remove exactly the block.
+  // The command really does remove exactly the block (it is a POSIX sh line: not run on Windows).
+  if (process.platform === 'win32') return;
   const run = spawnSync('/bin/sh', ['-c', LeftoverShim.detect({ home, env: {} }).command]);
   assert.equal(run.status, 0, run.stderr.toString());
   assert.equal(fs.readFileSync(zshrc, 'utf8'), 'export A=1\n\n');
@@ -93,9 +94,10 @@ test('leftover shim: old buddy-reader / buddy-worker agent files are found and l
   fs.writeFileSync(path.join(agents, 'mine.md'), 'x');
   const r = LeftoverShim.detect({ home, env: {}, platform: 'linux' });
   assert.deepEqual(r.agentFiles, [path.join(agents, 'buddy-reader.md'), path.join(agents, 'buddy-worker.md')]);
-  assert.equal(r.command, `rm -f '${agents}/buddy-reader.md' && rm -f '${agents}/buddy-worker.md'`);
+  assert.equal(r.command, `rm -f '${path.join(agents, 'buddy-reader.md')}' && rm -f '${path.join(agents, 'buddy-worker.md')}'`);
   assert.equal(fs.existsSync(path.join(agents, 'buddy-reader.md')), true, 'detect never deletes');
   assert.equal(LeftoverShim.detect({ home, env: {}, platform: 'linux' }).files.length, 0);
+  if (process.platform === 'win32') return; // the command is a POSIX sh line: not run on Windows
   assert.equal(spawnSync('/bin/sh', ['-c', r.command]).status, 0);
   assert.equal(LeftoverShim.detect({ home, env: {} }), null);
   assert.equal(fs.existsSync(path.join(agents, 'mine.md')), true);
