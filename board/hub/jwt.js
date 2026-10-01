@@ -11,6 +11,7 @@ export class JwtInvalid extends Error {
 }
 
 const SUB_MAX = 255;
+const MIN_RSA_BITS = 2048;
 
 /**
  * A JWKS cache. `load()` → the parsed key set ({keys:[jwk]}), throwing when
@@ -18,22 +19,35 @@ const SUB_MAX = 255;
  * the last attempt); an unknown kid refetches at most once per kidRefetchMs,
  * so tokens with made-up kids can't make every call a fetch. Concurrent
  * callers share one fetch. A stale set that still knows the kid answers when
- * the refetch fails.
+ * the refetch fails; while the last fetch failed, an unknown kid throws that
+ * failure rather than answering null. Only RSA keys of at least 2048 bits
+ * whose `use` (when set) is `sig` and `alg` (when set) is `RS256` are kept.
  */
 export function createJwks({ load, now, ttlMs, kidRefetchMs, retryMs = 0 }) {
   let keys = new Map();
   let fetchedAt = -Infinity;
   let triedAt = -Infinity;
   let running = null;
+  let failed = null;
 
   async function refresh() {
     triedAt = now();
+    try { await refreshKeys(); } catch (e) { failed = e; throw e; }
+    failed = null;
+  }
+
+  async function refreshKeys() {
     const doc = await load();
     if (!Array.isArray(doc?.keys)) throw new Error('not a key set');
     const next = new Map();
     for (const jwk of doc.keys) {
       if (jwk?.kty !== 'RSA' || typeof jwk.kid !== 'string') continue;
-      try { next.set(jwk.kid, createPublicKey({ key: jwk, format: 'jwk' })); } catch { /* skip a bad key */ }
+      // An encryption key or one meant for another alg is never a signing key here.
+      if (('use' in jwk && jwk.use !== 'sig') || ('alg' in jwk && jwk.alg !== 'RS256')) continue;
+      let key;
+      try { key = createPublicKey({ key: jwk, format: 'jwk' }); } catch { continue; }
+      if (!(key.asymmetricKeyDetails?.modulusLength >= MIN_RSA_BITS)) continue;
+      next.set(jwk.kid, key);
     }
     keys = next;
     fetchedAt = now();
@@ -50,6 +64,8 @@ export function createJwks({ load, now, ttlMs, kidRefetchMs, retryMs = 0 }) {
         if (!keys.has(kid) || !Number.isFinite(fetchedAt)) throw e;
       }
     }
+    // A kid we can't check while the key set is unreachable is an outage, not a bad token.
+    if (!keys.has(kid) && failed) throw failed;
     return keys.get(kid) ?? null;
   }
 
@@ -64,9 +80,9 @@ const sameText = (a, b) => {
 
 /**
  * → the claims of a valid token, else throws JwtInvalid (a key-set failure
- * from keyFor propagates as it is). Only RS256 with a kid; `iss` one of
- * `issuers`; `aud` (string or array) includes `audience`, and with several
- * audiences `azp` equals it; `exp > now − skew`; `iat ≤ now + skew`;
+ * from keyFor propagates as it is). Only RS256 with a kid and no `crit`;
+ * `iss` one of `issuers`; `aud` (string or array) includes `audience`, and
+ * `azp`, when present or with several audiences, equals it; `exp > now − skew`; `iat ≤ now + skew`;
  * `nonce` equal (constant time) to a non-empty expected nonce; `sub` a string
  * of 1–255 chars.
  */
@@ -80,12 +96,14 @@ export async function verifyRs256(token, { keyFor, issuers, audience, nonce, now
     claims = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
   } catch { throw new JwtInvalid(); }
   if (header?.alg !== 'RS256' || typeof header.kid !== 'string' || !claims || typeof claims !== 'object') throw new JwtInvalid();
+  // We implement no JWS extension, and a crit we ignored could change what was signed.
+  if (Object.hasOwn(header, 'crit')) throw new JwtInvalid();
   const key = await keyFor(header.kid);
   if (!key) throw new JwtInvalid();
   if (!cryptoVerify('RSA-SHA256', Buffer.from(`${parts[0]}.${parts[1]}`), key, Buffer.from(parts[2], 'base64url'))) throw new JwtInvalid();
   const auds = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
   if (!issuers.includes(claims.iss) || typeof audience !== 'string' || !audience || !auds.includes(audience)) throw new JwtInvalid();
-  if (auds.length > 1 && claims.azp !== audience) throw new JwtInvalid();
+  if ((auds.length > 1 || Object.hasOwn(claims, 'azp')) && claims.azp !== audience) throw new JwtInvalid();
   if (typeof claims.exp !== 'number' || claims.exp + skewS <= nowS) throw new JwtInvalid();
   if (typeof claims.iat !== 'number' || claims.iat - skewS > nowS) throw new JwtInvalid();
   if (typeof claims.nonce !== 'string' || typeof nonce !== 'string' || !nonce || !sameText(claims.nonce, nonce)) throw new JwtInvalid();

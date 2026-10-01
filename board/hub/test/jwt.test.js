@@ -14,8 +14,8 @@ const AUD = `client-${randomBytes(4).toString('hex')}`;
 const ISS = 'https://idp.example';
 const NOW = 1_800_000_000;
 
-function jwt(claims = {}, { alg = 'RS256', kid = KID, privateKey = key.privateKey, hmacKey = null, sig = null } = {}) {
-  const head = b64(JSON.stringify({ alg, kid, typ: 'JWT' }));
+function jwt(claims = {}, { alg = 'RS256', kid = KID, privateKey = key.privateKey, hmacKey = null, sig = null, header = {} } = {}) {
+  const head = b64(JSON.stringify({ alg, kid, typ: 'JWT', ...header }));
   const body = b64(JSON.stringify({ iss: ISS, aud: AUD, sub: 'U123', nonce: 'n-1', iat: NOW, exp: NOW + 600, ...claims }));
   const input = `${head}.${body}`;
   if (sig !== null) return `${input}.${sig}`;
@@ -119,4 +119,52 @@ test('JWKS: Google\'s settings (retryMs 0) refetch a stale or failed set on the 
   r.advance(10_000);
   await assert.rejects(r.verify(jwt({}, { kid: 'nope3' })), JwtInvalid);
   assert.equal(r.loads, 3);
+});
+
+test('JWKS: a key under 2048 bits, or one whose use is set but not sig, or whose alg is set but not RS256, is skipped; 2048-bit sig/RS256 keys and keys without use/alg verify', async () => {
+  const mk = (bits) => generateKeyPairSync('rsa', { modulusLength: bits });
+  const k1024 = mk(1024);
+  const k2048 = mk(2048);
+  const jwkOf = (k, extra) => ({ ...k.publicKey.export({ format: 'jwk' }), ...extra });
+  const r = rig({
+    keys: [
+      jwkOf(k1024, { kid: 'small', alg: 'RS256', use: 'sig' }),
+      jwkOf(k2048, { kid: 'enc', use: 'enc' }),
+      jwkOf(k2048, { kid: 'rs512', alg: 'RS512' }),
+      jwkOf(k2048, { kid: 'oaep', alg: 'RSA-OAEP' }),
+      jwkOf(k2048, { kid: 'empty-use', use: '' }),
+      jwkOf(k2048, { kid: 'sig', alg: 'RS256', use: 'sig' }),
+      jwkOf(k2048, { kid: 'bare' }),
+    ],
+  });
+  for (const kid of ['small', 'enc', 'rs512', 'oaep', 'empty-use']) {
+    await assert.rejects(r.verify(jwt({}, { kid, privateKey: kid === 'small' ? k1024.privateKey : k2048.privateKey })), JwtInvalid, kid);
+  }
+  for (const kid of ['sig', 'bare']) assert.equal((await r.verify(jwt({}, { kid, privateKey: k2048.privateKey }))).sub, 'U123', kid);
+  assert.equal(r.loads, 1, 'a skipped kid is unknown: within kidRefetchMs it never refetches');
+});
+
+test('verifyRs256: a header with crit is refused (we understand no extension), and azp other than our client id is refused even with a single audience', async () => {
+  const r = rig();
+  for (const crit of [['exp'], ['b64'], [], 'x']) await assert.rejects(r.verify(jwt({}, { header: { crit, b64: false, exp: 1 } })), JwtInvalid, JSON.stringify(crit));
+  await assert.rejects(r.verify(jwt({ azp: 'other' })), JwtInvalid, 'single aud, other azp');
+  await assert.rejects(r.verify(jwt({ azp: '' })), JwtInvalid, 'single aud, empty azp');
+  await assert.rejects(r.verify(jwt({ azp: null })), JwtInvalid, 'single aud, null azp');
+  // Google's ID tokens carry azp = the client id: still valid, as is a token without azp.
+  assert.equal((await r.verify(jwt({ azp: AUD }))).sub, 'U123');
+  assert.equal((await r.verify(jwt({ aud: [AUD], azp: AUD }))).sub, 'U123');
+  assert.equal((await r.verify(jwt())).sub, 'U123');
+});
+
+test('JWKS: while the last fetch failed, an unknown kid throws that failure (an outage), never JwtInvalid (a bad token); once a fetch succeeds it is JwtInvalid again', async () => {
+  const r = rig();
+  r.fail = true;
+  for (let i = 0; i < 5; i += 1) {
+    await assert.rejects(r.verify(jwt({}, { kid: randomBytes(4).toString('hex') })), (e) => !(e instanceof JwtInvalid) && /down/.test(e.message));
+  }
+  assert.equal(r.loads, 1);
+  r.fail = false;
+  r.advance(60_000);
+  assert.equal((await r.verify(jwt())).sub, 'U123');
+  await assert.rejects(r.verify(jwt({}, { kid: 'nope' })), JwtInvalid);
 });

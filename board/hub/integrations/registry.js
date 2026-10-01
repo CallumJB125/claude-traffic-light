@@ -79,6 +79,7 @@ const ID_TOKEN_MAX = 16 * 1024;
 const LINK_INVALID = 'This link is not valid. Start again from Buddy.';
 const LINK_GONE = 'This link can no longer be used. Start again from Buddy.';
 const LINK_FAILED = 'The provider did not confirm your account. Start again from Buddy.';
+const LINK_UNAVAILABLE = 'The provider could not be reached. Try again in a minute from Buddy.';
 
 const safeJson = (s, fallback) => { try { return JSON.parse(s); } catch { return fallback; } };
 const isPlainObject = (v) => v != null && typeof v === 'object' && !Array.isArray(v);
@@ -357,15 +358,12 @@ export function createIntegrations({
       throw last;
     }
 
-    // Only the member who connected it, or one linked from this workspace by
-    // an explicit identity link (never any writable member of the org).
-    const mayActAs = (memberId) => memberId === c.created_by
-      || !!db.get('SELECT 1 AS x FROM external_identities WHERE connection_id = ? AND member_id = ?', c.id, memberId);
-
     // D98: the member a provider user acts as, linked on this connection, of
-    // its team and able to write; else null (a viewer acts as nobody).
+    // its team and able to write; else null (a viewer acts as nobody). Only
+    // while the connection is active, re-read: a ctx can outlive a pause.
     function memberFor(subject) {
       if (typeof subject !== 'string' || !subject || subject.length > SUBJECT_MAX) return null;
+      if (db.get('SELECT status FROM connections WHERE id = ?', c.id)?.status !== 'active') return null;
       const l = db.get('SELECT member_id FROM external_identities WHERE connection_id = ? AND subject = ?', c.id, subject);
       const m = l && hub.member(l.member_id);
       return m && m.org_id === c.org_id && !m.removed_at && hub.canWrite(m) ? m.id : null;
@@ -380,7 +378,7 @@ export function createIntegrations({
     // Re-read on every call: a handle must not outlive a removal or demotion.
     function actor(memberId) {
       const m = hub.member(memberId);
-      if (!m || m.org_id !== c.org_id || !mayActAs(m.id)) throw new HubError('FORBIDDEN', 'this integration may not act as that member');
+      if (!m || m.org_id !== c.org_id) throw new HubError('FORBIDDEN', 'this integration may not act as that member');
       if (m.removed_at || !hub.canWrite(m)) throw new ActorUnavailable();
       // Admin rights never pass to a tool (Api uses role for "involved" checks).
       return hub.isAdmin(m) ? { ...m, role: 'member' } : m;
@@ -404,9 +402,11 @@ export function createIntegrations({
 
     function actAs(memberId, { live, action: actName, track, external_ref, subjectKey, subject = null }) {
       // An act() for a provider user acts only as that user's linked member,
-      // checked again on every call: never as whoever connected the tool.
+      // never as whoever connected the tool; one without a subject only as
+      // the member who connected it, never as some other linked member.
+      // Checked again on every call.
       const bound = () => {
-        if (subject != null && memberFor(subject) !== memberId) throw new HubError('FORBIDDEN', 'this integration may not act as that member');
+        if (subject != null ? memberFor(subject) !== memberId : memberId !== c.created_by) throw new HubError('FORBIDDEN', 'this integration may not act as that member');
       };
       bound();
       const first = actor(memberId);
@@ -1494,10 +1494,21 @@ export function createIntegrations({
     } catch { idToken = null; }
     if (!idToken) return refuse(LINK_FAILED, 'exchange_failed');
     let claims;
+    let outage = false;
+    const { keyFor } = jwksFor(conn);
     try {
-      claims = await verifyRs256(idToken, { keyFor: jwksFor(conn).keyFor, issuers: [conn.identity.issuer], audience: pinnedClientId(c), nonce: st.k, nowS: hub.wallMs() / 1000 });
+      claims = await verifyRs256(idToken, {
+        keyFor: (kid) => keyFor(kid).catch((e) => { outage = true; throw e; }),
+        issuers: [conn.identity.issuer], audience: pinnedClientId(c), nonce: st.k, nowS: hub.wallMs() / 1000,
+      });
     } catch { claims = null; }
     idToken = null;
+    // The provider's key set being unreachable is not the caller's failure:
+    // it spends nothing, so an outage can't lock members out of linking.
+    if (!claims && outage) {
+      log?.warn?.('integration identity link refused', { integration: provider, err: 'jwks_unavailable' });
+      return { ok: false, status: 503, error: LINK_UNAVAILABLE };
+    }
     if (!claims) return refuse(LINK_FAILED, 'id_token_refused');
     if (claims[conn.identity.workspaceClaim] !== c.external_id) return refuse('That account is in another workspace. Sign in to the connected workspace and start again.', 'other_workspace');
     const sub = claims.sub;

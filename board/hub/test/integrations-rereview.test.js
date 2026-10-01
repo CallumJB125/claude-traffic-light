@@ -179,7 +179,9 @@ test('M-1: acts only as the connecting member or one linked by external identity
     assert.throws(() => h.db.run("INSERT INTO external_identities (provider, workspace_id, subject, member_id, connection_id, verified_via, linked_at) VALUES ('fake', 'other-ws', 'U1', ?, ?, 'oauth_link', ?)", h.ids.bob, conn.id, h.hub.iso()), /cross-team reference/);
     await ctx.act('card.create', {}, async (s) => { assert.throws(() => s.actAs(h.ids.bob), (e) => e.code === 'FORBIDDEN', 'a link in another workspace does not count'); });
     h.db.run("INSERT INTO external_identities (provider, workspace_id, subject, member_id, connection_id, verified_via, linked_at) VALUES ('fake', ?, 'U2', ?, ?, 'oauth_link', ?)", conn.external_id, h.ids.bob, conn.id, h.hub.iso());
-    await ctx.act('card.create', {}, async (s) => { assert.equal(s.actAs(h.ids.bob).member.id, h.ids.bob); });
+    // A linked member is acted as only for its own subject, never by an act() without one.
+    await ctx.act('card.create', {}, async (s) => { assert.throws(() => s.actAs(h.ids.bob), (e) => e.code === 'FORBIDDEN'); });
+    await ctx.act('card.create', { subject: 'U2' }, async (s) => { assert.equal(s.actAs(h.ids.bob).member.id, h.ids.bob); });
     // What the Api sees is the capped member.
     let seen;
     const spy = createIntegrations({ hub: h.hub, api: { createCard: async (m) => { seen = m; return { card: { id: 'x' } }; } }, log: null });

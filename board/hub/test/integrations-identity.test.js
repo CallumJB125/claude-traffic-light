@@ -367,14 +367,14 @@ test('JWKS: fetched through the restricted fetch; a flood of random-kid tokens c
   const big = await setup();
   try {
     big.beh.jwks = () => new Response(JSON.stringify({ keys: [], pad: 'x'.repeat(70 * 1024) }), { status: 200 });
-    assert.equal((await link(big.h, big.bob, big.conn)).status, 400);
+    assert.equal((await link(big.h, big.bob, big.conn)).status, 503, 'refused as an outage (spends no link_fail_ip)');
     assert.equal(links(big.h).length, 0);
   } finally { await big.h.close(); }
   const slow = await setup();
   try {
     slow.beh.jwks = (init) => new Promise((_, reject) => init.signal?.addEventListener('abort', () => reject(init.signal.reason)));
     const t0 = Date.now();
-    assert.equal((await link(slow.h, slow.bob, slow.conn)).status, 400);
+    assert.equal((await link(slow.h, slow.bob, slow.conn)).status, 503);
     const took = Date.now() - t0;
     assert.ok(took >= 4_500 && took < 9_000, `gave up after ${took} ms (≈ 5 s)`);
   } finally { await slow.h.close(); }
@@ -583,6 +583,38 @@ test('rate limit: integration_link_fail_ip refuses the callback (429 page) once 
   } finally { await h.close(); }
 });
 
+test('rate limit: a JWKS outage (an error answer, a failed fetch, an oversized set) answers a fixed page and spends no integration_link_fail_ip; bad tokens still do', async () => {
+  const lines = [];
+  const { h, beh, bob, conn } = await setup({
+    config: { rateLimits: { ...ROOMY.rateLimits, integration_link_fail_ip: { capacity: 3, per_ms: 600_000 } } },
+    log: createLogger({ level: 'debug', sink: (l) => lines.push(l) }),
+  });
+  try {
+    const outages = [
+      () => new Response('{}', { status: 500 }),
+      () => { throw new TypeError('fetch failed'); },
+      () => new Response(JSON.stringify({ keys: [], pad: 'x'.repeat(70 * 1024) }), { status: 200 }),
+    ];
+    for (const outage of outages) {
+      beh.jwks = outage;
+      for (let i = 0; i < 5; i += 1) {
+        const out = await link(h, bob, conn);
+        assert.equal(out.status, 503, out.text);
+        assert.match(out.text, /could not be reached/);
+      }
+      h.clock.advance(60_000);
+    }
+    assert.equal(links(h).length, 0);
+    assert.ok(lines.some((l) => /jwks_unavailable/.test(JSON.stringify(l))));
+    beh.jwks = null;
+    assert.equal((await link(h, bob, conn)).status, 200, 'the bucket is untouched');
+    h.db.run('DELETE FROM external_identities');
+    beh.sign = { privateKey: generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey };
+    for (let i = 0; i < 3; i += 1) assert.equal((await link(h, bob, conn)).status, 400);
+    assert.equal((await link(h, bob, conn)).status, 429, 'bad tokens spend it');
+  } finally { await h.close(); }
+});
+
 // ── ctx.memberFor / subjectFor and the act() subject binding ─────────────
 
 test('memberFor: null for an unlinked subject, a viewer, a removed member and a link on another connection; subjectFor keeps a viewer\'s, not a removed or other-team member\'s', async () => {
@@ -641,6 +673,52 @@ test('act(…, {subject}): actAs only memberFor(subject) — an unlinked user ca
     }), (e) => e.code === 'FORBIDDEN');
     // Without a subject (notifications, onEvent) created_by still acts.
     assert.equal((await make(undefined, h.ids.alice)).decision, 'auto');
+  } finally { await h.close(); }
+});
+
+test('act() without a subject acts only as created_by: a member linked on the connection is FORBIDDEN (audited failed/forbidden), and with a subject only its linked member', async () => {
+  const { h, reg, beh, bob, conn } = await setup();
+  try {
+    const ctx = reg.ctxFor(conn);
+    const make = (subject, as) => ctx.act('card.create', { subject }, (s) => s.actAs(as).createCard(h.ids.board, { request_id: randomUUID(), title: 'From chat' }));
+    const ub = beh.sub;
+    await link(h, bob, conn);
+    assert.equal(ctx.memberFor(ub), h.ids.bob);
+    await assert.rejects(make(undefined, h.ids.bob), (e) => e.code === 'FORBIDDEN', 'a linked member is not acted as without its subject');
+    assert.deepEqual([reg.audit(conn)[0].decision, reg.audit(conn)[0].error], ['failed', 'forbidden']);
+    await assert.rejects(make(null, h.ids.bob), (e) => e.code === 'FORBIDDEN');
+    assert.equal((await make(undefined, h.ids.alice)).decision, 'auto');
+    assert.equal((await make(ub, h.ids.bob)).decision, 'auto');
+    await assert.rejects(make(ub, h.ids.alice), (e) => e.code === 'FORBIDDEN');
+    assert.equal(h.db.get("SELECT COUNT(*) AS n FROM cards WHERE title = 'From chat'").n, 2);
+  } finally { await h.close(); }
+});
+
+test('a paused or error connection resolves no member and refuses a subject-bound act(), checked live on a ctx built while active; active again, both work', async () => {
+  const { h, reg, beh, bob, conn } = await setup();
+  try {
+    const ub = beh.sub;
+    await link(h, bob, conn);
+    const ctx = reg.ctxFor(conn);
+    const make = (c) => c.act('card.create', { subject: ub }, (s) => s.actAs(h.ids.bob).createCard(h.ids.board, { request_id: randomUUID(), title: 'From chat' }));
+    for (const status of ['paused', 'error']) {
+      h.db.run('UPDATE connections SET status = ? WHERE id = ?', status, conn);
+      assert.equal(ctx.memberFor(ub), null, status);
+      assert.equal(reg.ctxFor(conn).memberFor(ub), null, `${status}: a ctx built now`);
+      await assert.rejects(make(ctx), (e) => e.code === 'FORBIDDEN', status);
+      assert.deepEqual([reg.audit(conn)[0].decision, reg.audit(conn)[0].error], ['failed', 'forbidden']);
+      // A handle taken while active stops once the connection is paused.
+      h.db.run("UPDATE connections SET status = 'active' WHERE id = ?", conn);
+      await assert.rejects(ctx.act('card.create', { subject: ub }, async (s) => {
+        const as = s.actAs(h.ids.bob);
+        h.db.run('UPDATE connections SET status = ? WHERE id = ?', status, conn);
+        await as.createCard(h.ids.board, { request_id: randomUUID(), title: 'late' });
+      }), (e) => e.code === 'FORBIDDEN', `${status}: a live handle`);
+      h.db.run("UPDATE connections SET status = 'active' WHERE id = ?", conn);
+    }
+    assert.equal(ctx.memberFor(ub), h.ids.bob);
+    assert.equal((await make(ctx)).decision, 'auto');
+    assert.equal(h.db.get("SELECT COUNT(*) AS n FROM cards WHERE title = 'late'").n, 0);
   } finally { await h.close(); }
 });
 
