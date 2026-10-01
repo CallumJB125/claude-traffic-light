@@ -261,8 +261,10 @@ test('hook: request files are 0600 in a 0700 directory', async () => {
     const deadline = Date.now() + 3000;
     let f = null;
     while (!f && Date.now() < deadline) { f = fs.existsSync(dir) && fs.readdirSync(dir).find((x) => x.endsWith('.json')); if (!f) await new Promise((r) => setTimeout(r, 20)); }
-    assert.equal(fs.statSync(path.join(dir, f)).mode & 0o777, 0o600);
-    assert.equal(fs.statSync(dir).mode & 0o777, 0o700);
+    if (process.platform !== 'win32') { // POSIX modes only: Windows reports 0666/0777
+      assert.equal(fs.statSync(path.join(dir, f)).mode & 0o777, 0o600);
+      assert.equal(fs.statSync(dir).mode & 0o777, 0o700);
+    }
     await h.done;
   } finally { app.close(); }
 });
