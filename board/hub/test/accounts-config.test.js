@@ -179,7 +179,7 @@ test('007–012 in order: a fresh DB and a populated 006 DB end with every xteam
 
   const fresh = new DatabaseSync(':memory:');
   migrate(fresh, { migrations: all });
-  assert.deepEqual(fresh.prepare('SELECT version FROM schema_migrations WHERE version >= 7 ORDER BY version').all().map((r) => r.version), [7, 8, 9, 10, 11, 12, 13]);
+  assert.deepEqual(fresh.prepare('SELECT version FROM schema_migrations WHERE version >= 7 ORDER BY version').all().map((r) => r.version), [7, 8, 9, 10, 11, 12, 13, 16]);
   assert.deepEqual(triggers(fresh), want);
   fresh.close();
 

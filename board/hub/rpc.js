@@ -7,7 +7,7 @@ import { RPC_METHODS, TOOL_SCOPES } from '../shared/protocol.js';
 import { PLAN_APPROVAL_LABEL, POLICY_LABELS } from '../shared/states.js';
 import { HubError } from './db.js';
 import { parseRunToken } from './auth.js';
-import { prNumberOf } from './github.js';
+import { prBound, prNumberOf } from './github.js';
 import { limitOrThrow } from './ratelimit.js';
 
 const EVIDENCE_KINDS = ['pr', 'commit', 'test_run', 'screenshot', 'log', 'url', 'no_tests_reason'];
@@ -296,10 +296,12 @@ async function attachEvidence(hub, device, msg) {
   const { run, row } = verifyRun(hub, device, msg);
   const canonical = hub.repo(run.repo_id)?.canonical_url;
   let verified = false;
+  let binding = null;
   try {
     if (params.kind === 'pr') {
       const pull = await hub.github.getPull(canonical, prNumberOf(params.ref));
-      verified = !!pull && (pull.head_ref === run.branch || String(pull.head_ref ?? '').startsWith(`board/${row.key}-r`));
+      verified = prBound(pull, { branch: run.branch, key: row.key, baseRef: run.base_ref });
+      if (verified) binding = { head_repo_id: pull.head_repo_id, base_repo_id: pull.base_repo_id, base_ref: pull.base_ref };
     } else if (params.kind === 'commit') {
       verified = !!(await hub.github.getCommit(canonical, params.ref.trim()));
     }
@@ -314,6 +316,7 @@ async function attachEvidence(hub, device, msg) {
       hub.db.insert('evidence', {
         id, card_id: row.id, run_id: again.run.id, kind: params.kind, ref: params.ref, summary: params.summary == null ? null : clip(params.summary, 500),
         result: params.kind === 'test_run' ? params.result ?? null : null, verification, verified_at: verified ? hub.iso() : null, created_at: hub.iso(),
+        pr_head_repo_id: binding?.head_repo_id ?? null, pr_base_repo_id: binding?.base_repo_id ?? null, pr_base_ref: binding?.base_ref ?? null,
       });
       hub.feed(row.id, 'evidence', { kind: params.kind, ref: params.ref, verification, result: params.result ?? null }, { run: again.run });
       hub.journal({ board_id: row.board_id, card_id: row.id, run_id: again.run.id, actor_kind: 'runner', actor_id: device.id, kind: 'evidence.create', payload: { evidence_id: id, kind: params.kind, ref: params.ref, verification, result: params.result ?? null } });

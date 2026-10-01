@@ -21,7 +21,7 @@ import { applyRestoreBump } from '../shared/migrate.js';
 import { FEED_KINDS, WS_CLOSE } from '../shared/protocol.js';
 import { HubError, json } from './db.js';
 import { mintRunToken } from './auth.js';
-import { noGitHub, prNumberOf } from './github.js';
+import { noGitHub, prBound, prNumberOf } from './github.js';
 import { cardView, leaseView } from './views.js';
 import { DEFAULT_LIMITS, RateLimiter } from './ratelimit.js';
 import { isAdmin, canWrite } from './permissions.js';
@@ -58,6 +58,7 @@ export class Hub extends EventEmitter {
     this.pendingCmds = new Map();   // device_id → cmd frames for an offline device
     this.notifications = [];
     this.overlapDue = new Map();    // repo_id → due (mono)
+    this.unboundPrLogged = new Set(); // card ids already warned about an unbound PR (D90)
     this.prStatus = new Map();      // card_id → PR status from the merge poll
     this.requestCache = new Map();  // `${member}|${request_id}` → {status, body, exp}
     this.tunnel = { ok: true, okSinceMono: this.bootMono };
@@ -1055,6 +1056,16 @@ export class Hub extends EventEmitter {
         continue;
       }
       if (!pull) continue;
+      const run = ev.run_id ? this.db.get('SELECT branch, base_ref FROM runs WHERE id = ?', ev.run_id) : null;
+      const stored = ev.pr_base_ref == null ? null : { head_repo_id: ev.pr_head_repo_id, base_ref: ev.pr_base_ref };
+      const baseRef = run?.base_ref ?? row.base_ref ?? this.repo(row.repo_id)?.default_branch ?? 'main';
+      if (!prBound(pull, { branch: run?.branch, key: row.key, baseRef, stored })) {
+        if (!this.unboundPrLogged.has(row.id)) {
+          this.unboundPrLogged.add(row.id);
+          this.log.warn('merge poll: PR not bound to this card (fork, retargeted base or foreign branch); ignoring', { card_id: row.id, pr: number, head_repo_id: pull.head_repo_id, base_repo_id: pull.base_repo_id, base_ref: pull.base_ref });
+        }
+        continue;
+      }
       this.prStatus.set(row.id, { number, url: pull.html_url, state: pull.merged ? 'merged' : pull.state, merged_by: pull.merged_by, merged_at: pull.merged_at });
       if (pull.merged || pull.state === 'closed') {
         await this.withBoard(row.board_id, () => {
