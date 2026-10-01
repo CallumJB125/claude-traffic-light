@@ -1026,8 +1026,8 @@ function updaterTrayItems() {
   const items = UpdateView.trayItems(updaterService && updaterService.getState());
   return items.map((i) => {
     const item = { label: i.label, enabled: i.enabled };
-    if (i.id === 'check') item.click = () => { createUpdatesWindow(); updaterService.check(); };
-    if (i.id === 'install') item.click = async () => { const r = await updaterService.install({ when: 'now' }); if (r && r.deferred) createUpdatesWindow(); };
+    if (i.id === 'check') item.click = () => { createUpdatesWindow(); updaterService.check({ user: true }); }; // a user check, so an offline or server error is shown, not swallowed
+    if (i.id === 'install') item.click = async () => { const r = await updaterService.install({ when: 'now' }); if (r && (r.deferred || r.ok === false)) createUpdatesWindow(); };
     return item;
   });
 }
@@ -3393,7 +3393,7 @@ app.whenReady().then(() => {
   // In-app updates on every platform, each checked against the signed release
   // (src/updater/). A dev run gets the IPC but never installs; the visual tests
   // stand in a fixture-driven stub instead (excluded from the package).
-  if (IS_DEV_RUN && process.env.CLAUDE_BUDDY_UPDATER_STUB) {
+  if (IS_DEV_RUN && !app.isPackaged && process.env.CLAUDE_BUDDY_UPDATER_STUB) {
     const UpdateStub = require('./src/update-stub.js');
     updaterService = UpdateStub.create(process.env.CLAUDE_BUDDY_UPDATER_STUB);
     UpdateStub.register(ipcMain, updaterService);

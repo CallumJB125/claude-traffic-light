@@ -273,8 +273,10 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
   function showLocal(page) {
     if (!win || !page) return;
     let v = localViews.get(page.id);
+    if (v && v.webContents.isDestroyed()) { localViews.delete(page.id); v = null; } // a crashed renderer is rebuilt, not re-attached
     if (!v) {
       v = new WebContentsView({ webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, preload: path.join(DIR, '..', page.preload) } });
+      v.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#1c1a1f' : '#eceaf0');
       lockLocal(v);
       localViews.set(page.id, v);
       v.webContents.loadFile(path.join(DIR, '..', page.file)).catch(() => {});

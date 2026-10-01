@@ -301,3 +301,9 @@ test('notes: bounded and tolerant of non-strings', () => {
   assert.ok(flat(V.sanitizeNotes('- x\n'.repeat(5000))).length < 20000);
   assert.ok(!flat(V.sanitizeNotes('a‮b')).includes('‮'));
 });
+
+test('the tray "Check for Updates…" is a user check, so offline and server errors are shown', () => {
+  const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'main.js'), 'utf8');
+  assert.match(src, /item\.click = \(\) => \{ createUpdatesWindow\(\); updaterService\.check\(\{ user: true \}\); \}/);
+  assert.match(src, /IS_DEV_RUN && !app\.isPackaged && process\.env\.CLAUDE_BUDDY_UPDATER_STUB/);
+});
