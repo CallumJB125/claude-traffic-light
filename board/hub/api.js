@@ -645,7 +645,7 @@ export class Api {
     return { card: cardView(this.hub, this.hub.card(cardId), me), ...(res.run_id ? { run_id: res.run_id } : {}) };
   }
 
-  async answerPermission(member, prId, body) {
+  async answerPermission(member, prId, body, { cred = null } = {}) {
     const pr0 = this.db.get('SELECT * FROM permission_requests WHERE id = ?', prId);
     if (!pr0) throw new HubError('NOT_FOUND', 'permission request not found');
     const row0 = this.cardFor(member, pr0.card_id);
@@ -653,6 +653,10 @@ export class Api {
     const scope = body.scope ?? 'once';
     if (!['once', 'run'].includes(scope)) throw new HubError('VALIDATION', 'scope must be once or run');
     return this.withWritableBoard(row0.board_id, () => {
+      if (cred && !this.hub.accounts.credValid(cred)) throw new HubError('UNAUTHENTICATED', 'sign in again');
+      const current = this.hub.activeMember(member.id);
+      if (!current || current.org_id !== member.org_id || !this.hub.canWrite(current)) throw new HubError('FORBIDDEN', 'current membership cannot authorize edits');
+      member = current;
       const pr = this.db.get('SELECT * FROM permission_requests WHERE id = ?', prId);
       if (pr.tool === CODEX_PLAN_PERMISSION && this.hub.viaScope.getStore()) throw new HubError('FORBIDDEN', 'a human must authorize Codex edits');
       if (!['open', 'parked'].includes(pr.state)) {

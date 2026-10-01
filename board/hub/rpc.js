@@ -22,7 +22,14 @@ export const relPath = (p) => typeof p === 'string' && p.length > 0 && p.length 
 // carry prose or a tag inside a "path".
 const planPath = (p) => relPath(p) && !/[\s<]/u.test(p);
 
-export function verifyRun(hub, device, msg) {
+export function verifyRun(hub, device, msg, connection = null) {
+  if (!device) throw new HubError('FORBIDDEN', 'runner device unavailable');
+  if (connection) {
+    const enrollment = connection.enrollmentId && hub.db.get('SELECT * FROM runner_enrollments WHERE id = ?', connection.enrollmentId);
+    if (connection.closed || !connection.ready || connection.device_id !== device.id || hub.runners.get(device.id) !== connection
+      || (hub.config.auth === 'accounts' && !connection.enrollmentId)
+      || (connection.enrollmentId && (enrollment?.device_id !== device.id || hub.enrolments.problem(enrollment)))) throw new HubError('FORBIDDEN', 'runner connection no longer authorized');
+  } else if (hub.config.auth === 'accounts') throw new HubError('FORBIDDEN', 'authenticated runner connection required');
   const tok = parseRunToken(hub.secret, msg.run_token);
   if (!tok || tok.run_id !== msg.run_id || tok.card_id !== msg.card_id) throw new HubError('UNAUTHENTICATED', 'bad run token');
   const run = hub.run(msg.run_id);
@@ -328,12 +335,12 @@ export const METHOD_SCOPES = Object.freeze({
   runner_plan_status: 'card:read',
 });
 
-async function attachEvidence(hub, device, msg) {
+async function attachEvidence(hub, device, msg, connection) {
   const params = msg.params ?? {};
   if (!EVIDENCE_KINDS.includes(params.kind)) throw new HubError('VALIDATION', `kind must be one of ${EVIDENCE_KINDS.join('|')}`);
   if (typeof params.ref !== 'string' || !params.ref || params.ref.length > 500) throw new HubError('VALIDATION', 'ref required');
   if (params.result != null && !['pass', 'fail'].includes(params.result)) throw new HubError('VALIDATION', 'result must be pass|fail');
-  const { run, row } = verifyRun(hub, device, msg);
+  const { run, row } = verifyRun(hub, device, msg, connection);
   const canonical = hub.repo(run.repo_id)?.canonical_url;
   let verified = false;
   let binding = null;
@@ -356,7 +363,7 @@ async function attachEvidence(hub, device, msg) {
     hub.log.warn('evidence verification failed', { card_id: row.id, err: e });
   }
   return hub.withBoard(row.board_id, () => {
-    const again = verifyRun(hub, device, msg);
+    const again = verifyRun(hub, device, msg, connection);
     const id = randomUUID();
     const verification = verified ? 'hub_verified' : 'self_reported';
     hub.txn(() => {
@@ -373,14 +380,14 @@ async function attachEvidence(hub, device, msg) {
   });
 }
 
-export async function handleRpc(hub, device, msg) {
+export async function handleRpc(hub, device, msg, { connection = null } = {}) {
   if (!RPC_METHODS.includes(msg.method)) throw new HubError('VALIDATION', `unknown method ${msg.method}`);
   if (!Object.hasOwn(METHOD_SCOPES, msg.method) || !TOOL_SCOPES[METHOD_SCOPES[msg.method]]) throw new HubError('FORBIDDEN', `method ${msg.method} has no declared scope`);
-  if (msg.method === 'board_attach_evidence') return attachEvidence(hub, device, msg);
+  if (msg.method === 'board_attach_evidence') return attachEvidence(hub, device, msg, connection);
   const row = hub.card(msg.card_id);
   if (!row) throw new HubError('NOT_FOUND', 'card not found');
   return hub.withBoard(row.board_id, () => {
-    const c = verifyRun(hub, device, msg);
+    const c = verifyRun(hub, device, msg, connection);
     return METHODS[msg.method](hub, c, msg.params ?? {});
   });
 }

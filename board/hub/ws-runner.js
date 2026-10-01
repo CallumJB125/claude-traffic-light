@@ -623,7 +623,7 @@ export class RunnerConn {
   // ── rpc + salvage ─────────────────────────────────────────────────────────
   async onRpc(msg) {
     try {
-      const result = await handleRpc(this.hub, this.hub.device(this.device_id), msg);
+      const result = await handleRpc(this.hub, this.hub.device(this.device_id), msg, { connection: this });
       this.send({ type: 'rpc.result', re: msg.id, ok: true, result });
     } catch (e) {
       if (!(e instanceof HubError)) this.hub.log.error('rpc failed', { method: msg.method, err: e });

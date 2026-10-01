@@ -389,7 +389,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     return h;
   });
   route('GET', '/api/cards/:card_id/overlap-preview', ({ member, params, query }) => api.overlapPreview(member, params.card_id, query.get('target_member_id'), query.get('repo_id')));
-  route('POST', '/api/permission-requests/:id/answer', ({ member, params, body }) => api.answerPermission(member, params.id, body));
+  route('POST', '/api/permission-requests/:id/answer', ({ member, params, body, ident }) => api.answerPermission(member, params.id, body, { cred: ident?.cred ?? null }));
   route('GET', '/api/devices', ({ member }) => api.listDevices(member));
   // Accounts mode mints runner credentials only by enrolment (D79, H1); listing and revoking stay for cleanup.
   if (config.auth !== 'accounts') route('POST', '/api/devices', ({ member, body }) => api.createDevice(member, body));
