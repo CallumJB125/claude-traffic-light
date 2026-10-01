@@ -455,3 +455,9 @@ test('L1: a merged PR is final for its card; only the verified PR could replace 
   assert.equal(ctx.linked('pr', '992'), null);
   assert.ok(!ctx.calls.some((c) => c[0] === 'relink'));
 });
+
+test('ingressCidrs: GitHub\'s published hook ranges, all accepted by the registry', () => {
+  assert.deepEqual(github.ingressCidrs.slice(0, 4), ['192.30.252.0/22', '185.199.108.0/22', '140.82.112.0/20', '143.55.64.0/20']);
+  assert.equal(github.ingressCidrs.length, 13);
+  assert.ok(github.ingressCidrs.includes('2a0a:a447::/32') && github.ingressCidrs.includes('2606:50c0::/32'));
+});

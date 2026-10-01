@@ -191,6 +191,15 @@ export default defineConnector({
   scopes: ['pull_requests:read', 'checks:read', 'metadata:read'],
   secrets: ['app_private_key', 'webhook_secret'],
   hosts: ['api.github.com', 'github.com'],
+  // GitHub's webhook senders, the `hooks` array of GET https://api.github.com/meta
+  // (2026-10-01). Only a head start past the in-flight cap; every delivery
+  // still needs its signature. The hub takes IPv6 /32 or narrower, so the /29
+  // is its eight /32s. Refresh when GitHub changes the list.
+  ingressCidrs: [
+    '192.30.252.0/22', '185.199.108.0/22', '140.82.112.0/20', '143.55.64.0/20',
+    ...[0, 1, 2, 3, 4, 5, 6, 7].map((i) => `2a0a:a44${i}::/32`),
+    '2606:50c0::/32',
+  ],
 
   connect: {
     kind: 'app_install',
@@ -207,7 +216,7 @@ export default defineConnector({
     async exchange({ query, fetch, config }) {
       const code = String(query?.code ?? '');
       if (!/^[A-Za-z0-9]{1,100}$/.test(code)) throw new Error('bad manifest code');
-      const res = await fetch(`${API}/app-manifests/${code}/conversions`, { method: 'POST', headers: { accept: 'application/vnd.github+json' } });
+      const res = await fetch(`${API}/app-manifests/${code}/conversions`, { method: 'POST', headers: { accept: 'application/vnd.github+json' } }); // privacy-flow: integrations-hub
       if (!res.ok) throw new Error(`manifest conversion failed: ${res.status}`);
       const app = checkApp(await res.json());
       const org = validLogin(config?.org) ?? (app.owner.type === 'Organization' ? app.owner.login : null);
