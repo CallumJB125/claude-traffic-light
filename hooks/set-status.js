@@ -195,25 +195,57 @@ function detectHostApp(cached) {
 // shell ever sits in between, recording that short-lived shell would hide a
 // live session, so the parent is checked once per session with ps.
 const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'fish']);
-function claudePid(cached) {
+// Windows: the .cmd shim's cmd.exe and Claude Code's Git Bash sit between.
+const WIN_SHELLS = new Set(['cmd.exe', 'bash.exe', 'sh.exe', 'dash.exe', 'powershell.exe', 'pwsh.exe']);
+let parentOf = null;
+function lookupParent(pid, timeout) {
+  if (!parentOf) {
+    const { execFileSync } = require('child_process');
+    parentOf = require('./process-tree.js').parentLookup({ run: (file, args, ms) => execFileSync(file, args, { encoding: 'utf8', timeout: ms, windowsHide: true }) });
+  }
+  return parentOf(pid, timeout);
+}
+// `fresh`: walk even when a live pid is cached (a SessionStart may be a
+// resume in a new process).
+function claudePid(cached, { fresh = false } = {}) {
+  if (process.platform === 'win32') return claudePidWindows(cached, fresh);
   if (process.platform !== 'darwin' && process.platform !== 'linux') return null;
   const ppid = process.ppid;
   if (!ppid || ppid <= 1) return null;
   if (cached === ppid) return ppid;
-  const { execFileSync } = require('child_process');
   let pid = ppid;
   for (let depth = 0; depth < 3 && pid > 1; depth += 1) {
-    let line;
+    let m;
     if (lookupTimeout() <= 0) return null;
     try {
-      line = execFileSync('/bin/ps', ['-o', 'ppid=,comm=', '-p', String(pid)], { encoding: 'utf8', timeout: lookupTimeout() }).trim();
+      m = lookupParent(pid, lookupTimeout());
     } catch {
       return null;
     }
-    const m = /^(\d+)\s+(.*)$/.exec(line);
     if (!m) return null;
-    if (!SHELLS.has((m[2].split('/').pop() || '').replace(/^-/, ''))) return pid;
-    pid = Number(m[1]);
+    if (!SHELLS.has((m.comm.split('/').pop() || '').replace(/^-/, ''))) return pid;
+    pid = m.ppid;
+  }
+  return null;
+}
+
+// Windows: the hook's parent is always a short-lived cmd.exe, so the walk
+// can't be skipped by comparing with the parent the way it is above. It
+// takes one PowerShell process snapshot, so it runs only when there is no
+// live cached pid, or at SessionStart.
+function claudePidWindows(cached, fresh) {
+  if (!fresh && Number.isInteger(cached) && cached > 1) {
+    try { process.kill(cached, 0); return cached; } catch (e) { if (e.code === 'EPERM') return cached; }
+  }
+  let pid = process.ppid;
+  for (let depth = 0; depth < 5 && pid > 1; depth += 1) {
+    const budget = Math.min(3000, LOOKUP_DEADLINE - Date.now());
+    if (budget <= 0) return null;
+    let m;
+    try { m = lookupParent(pid, budget); } catch { return null; }
+    if (!m) return null;
+    if (!WIN_SHELLS.has(m.comm.toLowerCase())) return pid;
+    pid = m.ppid;
   }
   return null;
 }
@@ -552,8 +584,8 @@ if (prevOnEntry && resolved !== 'subagent-start' && resolved !== 'subagent-done'
 // SessionStart (a resume, say) may be in a different tab or app from the last
 // one, so the host is detected afresh and the old tab is always replaced —
 // by an empty record if capture fails, never left pointing at a stale tab.
-const pidNow = claudePid(prevOnEntry?.claudePid);
 const starting = signal === 'session-start';
+const pidNow = claudePid(prevOnEntry?.claudePid, { fresh: starting });
 let terminal = null;
 let owned;
 if (starting) {

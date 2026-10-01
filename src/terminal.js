@@ -12,6 +12,8 @@ const Focus = require('./focus/index.js');
 const Permission = require('./focus/permission.js');
 const Jump = require('./focus/jump.js');
 const { writeJsonAtomic } = require('../hooks/session-state.js');
+const PowerShell = require('./powershell.js');
+const LinuxActivate = require('./linux-activate.js');
 
 const IS_MAC = process.platform === 'darwin';
 const IS_WIN = process.platform === 'win32';
@@ -35,12 +37,18 @@ function activateTerminalApp(folderHint, preferApp = null) {
     // falling back to a terminal's own name.
     return new Promise((resolve) => {
       const tries = [folderHint, 'Windows Terminal', 'PowerShell', 'Command Prompt'].filter(Boolean);
-      const ps = `$w = New-Object -ComObject WScript.Shell; foreach ($t in @(${tries.map((t) => `'${t.replace(/'/g, "''")}'`).join(',')})) { if ($w.AppActivate($t)) { Write-Output $t; exit } }; Write-Output NONE`;
-      execFile('powershell', ['-NoProfile', '-c', ps], (err, out) => { // privacy-flow: terminal-jump
+      PowerShell.run(PowerShell.SCRIPTS.appActivate, tries, {}, (err, out) => { // privacy-flow: terminal-jump
         const hit = (out || '').trim();
         resolve(!err && hit && hit !== 'NONE' ? { app: hit, exact: hit === folderHint } : null);
       });
     });
+  }
+  if (process.platform === 'linux') {
+    // exec: true on exit 0, false on another code, throws when wmctrl is missing.
+    const exec = (file, args) => new Promise((resolve, reject) => execFile(file, args, { timeout: 2000 }, (err) => { // privacy-flow: terminal-jump
+      if (err && err.code === 'ENOENT') reject(err); else resolve(!err);
+    }));
+    return LinuxActivate.activate(folderHint, exec);
   }
   return new Promise((resolve) => {
     const hint = escapeForAppleScript((folderHint || '').toLowerCase());

@@ -7,12 +7,16 @@
 // Command forms:
 //   shell string, macOS/Linux: ELECTRON_RUN_AS_NODE=1 "<exe>" "<script>" <args>
 //   shell string, Windows:     "<data>\bin\buddy-hook.cmd" "<script>" <args>
-//   argv array (any OS):       ["<data>/bin/buddy-hook[.cmd]", "<script>", ...args]
+//   argv array, macOS/Linux:   ["<data>/bin/buddy-hook", "<script>", ...args]
+//   argv array, Windows:       ["<exe>", "--buddy-hook", "<script>", ...args]
 //   dev fallback:              node "<script>" <args>  /  ["node", "<script>", ...args]
 //
 // Windows gets the .cmd shim for shell strings too: `set VAR=1&& …` only
 // parses in cmd.exe, while a quoted path to a .cmd runs from cmd.exe and from
-// the Git Bash that Claude Code uses for hooks on Windows alike.
+// the Git Bash that Claude Code uses for hooks on Windows alike. An argv
+// array is different: the .cmd would put it through cmd.exe's parsing again,
+// which mangles the JSON Codex passes as the last argument (BatBadBut), so on
+// Windows it runs the exe itself with --buddy-hook (src/buddy-hook-runner.js).
 //
 // Dependency-free (path, fs): the packaged hooks require it from
 // Resources/adapters with plain ELECTRON_RUN_AS_NODE.
@@ -59,14 +63,17 @@ function ensureWrapper(rt, fsImpl = fs) {
   return file;
 }
 
-// Whether a shell-string install needs the wrapper file on disk.
+// Whether a shell-string / argv install needs the wrapper file on disk.
 const shellNeedsWrapper = (rt) => !rt.node && isWin(rt);
+const argvNeedsWrapper = (rt) => !rt.node && !isWin(rt);
 
-// False when the installed command form runs through a wrapper that is no
-// longer on disk (argv forms always do; shell strings only on Windows).
+// False when the installed command form runs through a wrapper (argv forms
+// off Windows, shell strings on Windows) that is gone or no longer runs
+// this binary: the wrapper's path never changes, so a reinstall to another
+// folder or a moved AppImage leaves a matching command and a stale wrapper.
 function wrapperPresent(rt, { argv = false } = {}, fsImpl = fs) {
-  if (!(argv ? !rt.node : shellNeedsWrapper(rt))) return true;
-  try { return fsImpl.existsSync(wrapperPath(rt)); } catch { return false; }
+  if (!(argv ? argvNeedsWrapper(rt) : shellNeedsWrapper(rt))) return true;
+  try { return fsImpl.readFileSync(wrapperPath(rt), 'utf8') === wrapperText(rt); } catch { return false; }
 }
 
 function shellCommand(rt, scriptPath, args = []) {
@@ -77,7 +84,9 @@ function shellCommand(rt, scriptPath, args = []) {
 }
 
 function argvCommand(rt, scriptPath, args = []) {
-  return [rt.node ? 'node' : wrapperPath(rt), scriptPath, ...args];
+  if (rt.node) return ['node', scriptPath, ...args];
+  if (isWin(rt)) return [rt.execPath, '--buddy-hook', scriptPath, ...args];
+  return [wrapperPath(rt), scriptPath, ...args];
 }
 
 // A command string one of Buddy's scripts runs in, whatever form or app path
@@ -139,4 +148,4 @@ function stripMatcherHooks(hooks, isOurs) {
   return out;
 }
 
-module.exports = { stripMatcherHooks, readJsonConfig, writeJsonConfig, backupOnce, make, script, wrapperPath, wrapperText, ensureWrapper, shellNeedsWrapper, wrapperPresent, shellCommand, argvCommand, runsScript, pathFor };
+module.exports = { stripMatcherHooks, readJsonConfig, writeJsonConfig, backupOnce, make, script, wrapperPath, wrapperText, ensureWrapper, shellNeedsWrapper, argvNeedsWrapper, wrapperPresent, shellCommand, argvCommand, runsScript, pathFor };

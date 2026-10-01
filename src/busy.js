@@ -335,7 +335,7 @@ function expandICS(events, from, to, { titles = false } = {}) {
 // and the phone (F6) can read the same file later. v bumps on any shape
 // change a reader would care about.
 const RECAP_VERSION = 1;
-const folderOf = (cwd) => String(cwd || '').split('/').filter(Boolean).pop() || '';
+const { folderOf } = require('../rules.js');
 
 // What a session's move from one signal to another means for the recap.
 function awayKind(prev, next) {

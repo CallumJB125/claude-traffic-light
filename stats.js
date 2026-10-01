@@ -19,9 +19,9 @@
 //     seen: { sessionId: updatedAt },          // last event we counted
 //   }
 (function (root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory();
-  else root.TrafficLightStats = factory();
-})(typeof self !== 'undefined' ? self : this, function () {
+  if (typeof module === 'object' && module.exports) module.exports = factory(require('./rules.js'));
+  else root.TrafficLightStats = factory(root.TrafficLightRules);
+})(typeof self !== 'undefined' ? self : this, function (Rules) {
   const WAITING = new Set(['permission-ask', 'limit-hit']);
   const DONE = new Set(['stop', 'idle-nudge']);
   const TOOL_SIGNALS = new Set(['tool-use', 'tool-done', 'tool-failed']);
@@ -37,7 +37,7 @@
   }
 
   function project(cwd) {
-    return (cwd || '').split('/').filter(Boolean).pop() || 'unknown';
+    return Rules.folderOf(cwd) || 'unknown';
   }
 
   // What the machine as a whole is doing, given every live session.

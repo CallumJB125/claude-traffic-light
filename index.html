@@ -400,6 +400,7 @@
       if (drag) return;
       hitTest(e.clientX, e.clientY);
     });
+    window.trafficLight.onHitTest((x, y) => { if (!drag) hitTest(x, y); });
     // A glide can land under a cursor that never moves, so no mousemove comes.
     const retestUnderCursor = async () => {
       if (drag) return;
@@ -524,10 +525,10 @@
     document.getElementById('help').addEventListener('mousedown', (e) => e.stopPropagation());
     document.getElementById('help').addEventListener('click', (e) => { e.stopPropagation(); window.trafficLight.openHelp(); });
 
-    // Right-click the widget → Lights editor.
+    // Right-click the widget → Lights editor (on Linux, the tray menu).
     app.addEventListener('contextmenu', (e) => {
       e.preventDefault();
-      window.trafficLight.openLights();
+      window.trafficLight.widgetMenu();
     });
   </script>
 </body>

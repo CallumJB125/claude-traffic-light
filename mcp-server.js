@@ -268,7 +268,7 @@ function matchReport(rule, entry) {
   if (!sig || !r.when.signal.includes(sig)) failed.push(`signal ${sig || 'none'} not in [${r.when.signal.join(', ')}]`);
   if (r.when.source && r.when.source !== (entry.source || 'claude').toLowerCase()) failed.push(`source ${entry.source || 'claude'} ≠ ${r.when.source}`);
   if (!Rules.toolMatches(r.when.tool, entry.tool)) failed.push(`tool ${entry.tool || 'none'} ≠ ${r.when.tool}`);
-  if (!Rules.cwdMatches(r.when.cwd, entry.cwd)) failed.push(`project ${String(entry.cwd || '').split('/').filter(Boolean).pop() || 'none'} ≠ ${r.when.cwd}`);
+  if (!Rules.cwdMatches(r.when.cwd, entry.cwd)) failed.push(`project ${Rules.folderOf(entry.cwd) || 'none'} ≠ ${r.when.cwd}`);
   return { sessionId: entry.sessionId || null, signal: sig, cwd: entry.cwd || null, tool: entry.tool || null, virtual: !!entry.virtual, matches: Rules.ruleMatches(r, entry), failed };
 }
 

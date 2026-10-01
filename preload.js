@@ -17,9 +17,12 @@ contextBridge.exposeInMainWorld('trafficLight', {
   onMotionPaused: (cb) => ipcRenderer.on('motion-paused', (e, paused) => cb(paused)),
   setReducedMotion: (on) => ipcRenderer.send('reduced-motion', on),
   setClickThrough: (ignore) => ipcRenderer.send('set-click-through', ignore),
+  // Linux only: main reports the cursor while clicks pass through (src/click-through.js).
+  onHitTest: (cb) => ipcRenderer.on('hit-test', (e, x, y) => cb(x, y)),
   resizeWindowBy: (factor) => ipcRenderer.send('resize-window-by', factor),
   onStatusChanged: (callback) => ipcRenderer.on('status-changed', callback),
   openLights: () => ipcRenderer.invoke('open-lights'),
+  widgetMenu: () => ipcRenderer.invoke('widget-menu'),
   openHelp: () => ipcRenderer.invoke('open-help'),
   onBurst: (cb) => ipcRenderer.on('burst', (e, ms) => cb(ms)),
   onAim: (cb) => ipcRenderer.on('aim', (e, a) => cb(a)),

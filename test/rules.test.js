@@ -759,11 +759,11 @@ test('adapters: old node-style installs are recognised and replaced on reinstall
   assert.deepEqual(Gemini.apply(oldGemini, APP).hooks.BeforeTool.flatMap((g) => g.hooks.map((h) => h.command)), [`${RUN} "/App/Resources/hooks/emit.js" --adapter gemini BeforeTool`]);
 });
 
-test('adapters: Windows commands go through the .cmd shim; argv arrays through the wrapper everywhere', () => {
+test('adapters: Windows shell commands go through the .cmd shim; argv arrays through the exe on Windows, the wrapper elsewhere', () => {
   const shim = 'C:\\Users\\me\\.claude-traffic-light\\bin\\buddy-hook.cmd';
   assert.equal(Claude.commandFor('Stop', WIN), `"${shim}" "C:\\Program Files\\Claude Buddy\\resources\\hooks\\set-status.js" stop`);
   assert.equal(Cursor.commandFor('stop', WIN), `"${shim}" "C:\\Program Files\\Claude Buddy\\resources\\hooks\\emit.js" --adapter cursor stop`);
-  assert.deepEqual(Codex.commandFor('notify', WIN), [shim, 'C:\\Program Files\\Claude Buddy\\resources\\hooks\\emit.js', '--adapter', 'codex']);
+  assert.deepEqual(Codex.commandFor('notify', WIN), ['C:\\Program Files\\Claude Buddy\\Claude Buddy.exe', '--buddy-hook', 'C:\\Program Files\\Claude Buddy\\resources\\hooks\\emit.js', '--adapter', 'codex']);
   assert.equal(Runtime.wrapperText(WIN), '@echo off\r\nset ELECTRON_RUN_AS_NODE=1\r\n"C:\\Program Files\\Claude Buddy\\Claude Buddy.exe" %*\r\n');
   assert.deepEqual(Codex.commandFor('notify', APP), ['/Users/me/.claude-traffic-light/bin/buddy-hook', '/App/Resources/hooks/emit.js', '--adapter', 'codex']);
   assert.match(Runtime.wrapperText(APP), /^#!\/bin\/sh\n[\s\S]*ELECTRON_RUN_AS_NODE=1 exec '\/Applications\/Claude Buddy\.app\/Contents\/MacOS\/Claude Buddy' "\$@"\n$/);

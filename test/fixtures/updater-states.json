@@ -1,0 +1,510 @@
+{
+  "_comment": "Every UpdaterState variant, for the updater UI (src/updater/service.js getState). autoDownload is off unless the person turned it on. test/updater-service.test.js checks each has exactly the service's fields.",
+  "states": {
+    "idle-never-checked": {
+      "status": "idle",
+      "currentVersion": "1.1.0",
+      "channel": "stable",
+      "autoDownload": false,
+      "lastCheckedAt": null,
+      "available": null,
+      "progress": null,
+      "error": null,
+      "canRevert": false,
+      "previousVersion": null,
+      "requiredByHub": null,
+      "busyReason": null,
+      "installKind": "restart"
+    },
+    "idle-up-to-date": {
+      "status": "idle",
+      "currentVersion": "1.1.0",
+      "channel": "stable",
+      "autoDownload": false,
+      "lastCheckedAt": "2026-10-01T08:00:00.000Z",
+      "available": null,
+      "progress": null,
+      "error": null,
+      "canRevert": false,
+      "previousVersion": null,
+      "requiredByHub": null,
+      "busyReason": null,
+      "installKind": "restart"
+    },
+    "idle-with-revert": {
+      "status": "idle",
+      "currentVersion": "1.2.0",
+      "channel": "stable",
+      "autoDownload": false,
+      "lastCheckedAt": "2026-10-01T08:00:00.000Z",
+      "available": null,
+      "progress": null,
+      "error": null,
+      "canRevert": true,
+      "previousVersion": "1.1.0",
+      "requiredByHub": null,
+      "busyReason": null,
+      "installKind": "restart"
+    },
+    "checking": {
+      "status": "checking",
+      "currentVersion": "1.1.0",
+      "channel": "stable",
+      "autoDownload": false,
+      "lastCheckedAt": "2026-10-01T08:00:00.000Z",
+      "available": null,
+      "progress": null,
+      "error": null,
+      "canRevert": false,
+      "previousVersion": null,
+      "requiredByHub": null,
+      "busyReason": null,
+      "installKind": "restart"
+    },
+    "available-manual-download": {
+      "status": "available",
+      "currentVersion": "1.1.0",
+      "channel": "stable",
+      "autoDownload": false,
+      "lastCheckedAt": "2026-10-01T08:00:00.000Z",
+      "available": {
+        "version": "1.2.0",
+        "notes": "Plexiform 1.2.0\n\n- Faster startup\n- Fixes the tray icon on Linux",
+        "size": 104857600,
+        "publishedAt": "2026-10-01T06:00:00.000Z"
+      },
+      "progress": null,
+      "error": null,
+      "canRevert": false,
+      "previousVersion": null,
+      "requiredByHub": null,
+      "busyReason": null,
+      "installKind": "restart"
+    },
+    "available-beta": {
+      "status": "available",
+      "currentVersion": "1.2.0-beta.3",
+      "channel": "beta",
+      "autoDownload": false,
+      "lastCheckedAt": "2026-10-01T08:00:00.000Z",
+      "available": {
+        "version": "1.2.0-beta.4",
+        "notes": "Plexiform 1.2.0\n\n- Faster startup\n- Fixes the tray icon on Linux",
+        "size": 104857600,
+        "publishedAt": "2026-10-01T06:00:00.000Z"
+      },
+      "progress": null,
+      "error": null,
+      "canRevert": false,
+      "previousVersion": null,
+      "requiredByHub": null,
+      "busyReason": null,
+      "installKind": "restart"
+    },
+    "downloading": {
+      "status": "downloading",
+      "currentVersion": "1.1.0",
+      "channel": "stable",
+      "autoDownload": false,
+      "lastCheckedAt": "2026-10-01T08:00:00.000Z",
+      "available": {
+        "version": "1.2.0",
+        "notes": "Plexiform 1.2.0\n\n- Faster startup\n- Fixes the tray icon on Linux",
+        "size": 104857600,
+        "publishedAt": "2026-10-01T06:00:00.000Z"
+      },
+      "progress": {
+        "percent": 42,
+        "transferred": 44040192,
+        "total": 104857600
+      },
+      "error": null,
+      "canRevert": false,
+      "previousVersion": null,
+      "requiredByHub": null,
+      "busyReason": null,
+      "installKind": "restart"
+    },
+    "ready-restart": {
+      "status": "ready",
+      "currentVersion": "1.1.0",
+      "channel": "stable",
+      "autoDownload": false,
+      "lastCheckedAt": "2026-10-01T08:00:00.000Z",
+      "available": {
+        "version": "1.2.0",
+        "notes": "Plexiform 1.2.0\n\n- Faster startup\n- Fixes the tray icon on Linux",
+        "size": 104857600,
+        "publishedAt": "2026-10-01T06:00:00.000Z"
+      },
+      "progress": null,
+      "error": null,
+      "canRevert": false,
+      "previousVersion": null,
+      "requiredByHub": null,
+      "busyReason": null,
+      "installKind": "restart"
+    },
+    "ready-swap-mac": {
+      "status": "ready",
+      "currentVersion": "1.1.0",
+      "channel": "stable",
+      "autoDownload": false,
+      "lastCheckedAt": "2026-10-01T08:00:00.000Z",
+      "available": {
+        "version": "1.2.0",
+        "notes": "Plexiform 1.2.0\n\n- Faster startup\n- Fixes the tray icon on Linux",
+        "size": 104857600,
+        "publishedAt": "2026-10-01T06:00:00.000Z"
+      },
+      "progress": null,
+      "error": null,
+      "canRevert": true,
+      "previousVersion": "1.0.3",
+      "requiredByHub": null,
+      "busyReason": null,
+      "installKind": "swap"
+    },
+    "ready-deb-manual": {
+      "status": "ready",
+      "currentVersion": "1.1.0",
+      "channel": "stable",
+      "autoDownload": false,
+      "lastCheckedAt": "2026-10-01T08:00:00.000Z",
+      "available": {
+        "version": "1.2.0",
+        "notes": "Plexiform 1.2.0\n\n- Faster startup\n- Fixes the tray icon on Linux",
+        "size": 104857600,
+        "publishedAt": "2026-10-01T06:00:00.000Z"
+      },
+      "progress": null,
+      "error": null,
+      "canRevert": false,
+      "previousVersion": null,
+      "requiredByHub": null,
+      "busyReason": null,
+      "installKind": "deb-manual"
+    },
+    "ready-deferred-busy": {
+      "status": "ready",
+      "currentVersion": "1.1.0",
+      "channel": "stable",
+      "autoDownload": false,
+      "lastCheckedAt": "2026-10-01T08:00:00.000Z",
+      "available": {
+        "version": "1.2.0",
+        "notes": "Plexiform 1.2.0\n\n- Faster startup\n- Fixes the tray icon on Linux",
+        "size": 104857600,
+        "publishedAt": "2026-10-01T06:00:00.000Z"
+      },
+      "progress": null,
+      "error": null,
+      "canRevert": false,
+      "previousVersion": null,
+      "requiredByHub": null,
+      "busyReason": "A session in claude-traffic-light is working.",
+      "installKind": "restart"
+    },
+    "ready-revert": {
+      "status": "ready",
+      "currentVersion": "1.2.0",
+      "channel": "stable",
+      "autoDownload": false,
+      "lastCheckedAt": "2026-10-01T08:00:00.000Z",
+      "available": {
+        "version": "1.1.0",
+        "notes": "",
+        "size": null,
+        "publishedAt": null
+      },
+      "progress": null,
+      "error": null,
+      "canRevert": true,
+      "previousVersion": "1.1.0",
+      "requiredByHub": null,
+      "busyReason": null,
+      "installKind": "swap"
+    },
+    "installing": {
+      "status": "installing",
+      "currentVersion": "1.1.0",
+      "channel": "stable",
+      "autoDownload": false,
+      "lastCheckedAt": "2026-10-01T08:00:00.000Z",
+      "available": {
+        "version": "1.2.0",
+        "notes": "Plexiform 1.2.0\n\n- Faster startup\n- Fixes the tray icon on Linux",
+        "size": 104857600,
+        "publishedAt": "2026-10-01T06:00:00.000Z"
+      },
+      "progress": null,
+      "error": null,
+      "canRevert": false,
+      "previousVersion": null,
+      "requiredByHub": null,
+      "busyReason": null,
+      "installKind": "restart"
+    },
+    "required-by-hub": {
+      "status": "available",
+      "currentVersion": "1.1.0",
+      "channel": "stable",
+      "autoDownload": false,
+      "lastCheckedAt": "2026-10-01T08:00:00.000Z",
+      "available": {
+        "version": "1.2.0",
+        "notes": "Plexiform 1.2.0\n\n- Faster startup\n- Fixes the tray icon on Linux",
+        "size": 104857600,
+        "publishedAt": "2026-10-01T06:00:00.000Z"
+      },
+      "progress": null,
+      "error": null,
+      "canRevert": false,
+      "previousVersion": null,
+      "requiredByHub": {
+        "minVersion": "1.2.0",
+        "hubName": "Acme team"
+      },
+      "busyReason": null,
+      "installKind": "restart"
+    },
+    "error-offline": {
+      "status": "error",
+      "currentVersion": "1.1.0",
+      "channel": "stable",
+      "autoDownload": false,
+      "lastCheckedAt": "2026-10-01T08:00:00.000Z",
+      "available": null,
+      "progress": null,
+      "error": {
+        "code": "offline",
+        "detail": "Could not reach the update server (ENOTFOUND)."
+      },
+      "canRevert": false,
+      "previousVersion": null,
+      "requiredByHub": null,
+      "busyReason": null,
+      "installKind": "restart"
+    },
+    "error-signature": {
+      "status": "error",
+      "currentVersion": "1.1.0",
+      "channel": "stable",
+      "autoDownload": false,
+      "lastCheckedAt": "2026-10-01T08:00:00.000Z",
+      "available": null,
+      "progress": null,
+      "error": {
+        "code": "signature",
+        "detail": "release.json is not signed by Plexiform"
+      },
+      "canRevert": false,
+      "previousVersion": null,
+      "requiredByHub": null,
+      "busyReason": null,
+      "installKind": "restart"
+    },
+    "error-verify": {
+      "status": "error",
+      "currentVersion": "1.1.0",
+      "channel": "stable",
+      "autoDownload": false,
+      "lastCheckedAt": "2026-10-01T08:00:00.000Z",
+      "available": {
+        "version": "1.2.0",
+        "notes": "Plexiform 1.2.0\n\n- Faster startup\n- Fixes the tray icon on Linux",
+        "size": 104857600,
+        "publishedAt": "2026-10-01T06:00:00.000Z"
+      },
+      "progress": null,
+      "error": {
+        "code": "verify",
+        "detail": "Plexiform-1.2.0-mac-arm64.zip: checksum does not match the signed release"
+      },
+      "canRevert": false,
+      "previousVersion": null,
+      "requiredByHub": null,
+      "busyReason": null,
+      "installKind": "restart"
+    },
+    "error-downgrade": {
+      "status": "error",
+      "currentVersion": "1.1.0",
+      "channel": "stable",
+      "autoDownload": false,
+      "lastCheckedAt": "2026-10-01T08:00:00.000Z",
+      "available": null,
+      "progress": null,
+      "error": {
+        "code": "downgrade",
+        "detail": "the server offers 1.0.0, older than 1.1.0, and it is not a signed rollback"
+      },
+      "canRevert": false,
+      "previousVersion": null,
+      "requiredByHub": null,
+      "busyReason": null,
+      "installKind": "restart"
+    },
+    "error-translocated": {
+      "status": "error",
+      "currentVersion": "1.1.0",
+      "channel": "stable",
+      "autoDownload": false,
+      "lastCheckedAt": "2026-10-01T08:00:00.000Z",
+      "available": {
+        "version": "1.2.0",
+        "notes": "Plexiform 1.2.0\n\n- Faster startup\n- Fixes the tray icon on Linux",
+        "size": 104857600,
+        "publishedAt": "2026-10-01T06:00:00.000Z"
+      },
+      "progress": null,
+      "error": {
+        "code": "translocated",
+        "detail": "macOS is running Plexiform from a temporary copy, so it can't update itself. Move Plexiform to your Applications folder and open it from there, or download the .dmg."
+      },
+      "canRevert": false,
+      "previousVersion": null,
+      "requiredByHub": null,
+      "busyReason": null,
+      "installKind": "swap"
+    },
+    "error-not-writable": {
+      "status": "error",
+      "currentVersion": "1.1.0",
+      "channel": "stable",
+      "autoDownload": false,
+      "lastCheckedAt": "2026-10-01T08:00:00.000Z",
+      "available": {
+        "version": "1.2.0",
+        "notes": "Plexiform 1.2.0\n\n- Faster startup\n- Fixes the tray icon on Linux",
+        "size": 104857600,
+        "publishedAt": "2026-10-01T06:00:00.000Z"
+      },
+      "progress": null,
+      "error": {
+        "code": "not-writable",
+        "detail": "Plexiform can't replace itself in /Applications (no permission to write there). Download the .dmg and drag it in, or move Plexiform to a folder you can write to."
+      },
+      "canRevert": false,
+      "previousVersion": null,
+      "requiredByHub": null,
+      "busyReason": null,
+      "installKind": "swap"
+    },
+    "error-disk-full": {
+      "status": "error",
+      "currentVersion": "1.1.0",
+      "channel": "stable",
+      "autoDownload": false,
+      "lastCheckedAt": "2026-10-01T08:00:00.000Z",
+      "available": {
+        "version": "1.2.0",
+        "notes": "Plexiform 1.2.0\n\n- Faster startup\n- Fixes the tray icon on Linux",
+        "size": 104857600,
+        "publishedAt": "2026-10-01T06:00:00.000Z"
+      },
+      "progress": null,
+      "error": {
+        "code": "disk-full",
+        "detail": "Not enough disk space for the update."
+      },
+      "canRevert": false,
+      "previousVersion": null,
+      "requiredByHub": null,
+      "busyReason": null,
+      "installKind": "restart"
+    },
+    "error-server": {
+      "status": "error",
+      "currentVersion": "1.1.0",
+      "channel": "stable",
+      "autoDownload": false,
+      "lastCheckedAt": "2026-10-01T08:00:00.000Z",
+      "available": null,
+      "progress": null,
+      "error": {
+        "code": "server",
+        "detail": "The update server answered 503 for /release.json."
+      },
+      "canRevert": false,
+      "previousVersion": null,
+      "requiredByHub": null,
+      "busyReason": null,
+      "installKind": "restart"
+    },
+    "error-unknown-update-failed": {
+      "status": "error",
+      "currentVersion": "1.1.0",
+      "channel": "stable",
+      "autoDownload": false,
+      "lastCheckedAt": "2026-10-01T08:00:00.000Z",
+      "available": null,
+      "progress": null,
+      "error": {
+        "code": "unknown",
+        "detail": "The new version did not start, so Plexiform went back to this one."
+      },
+      "canRevert": false,
+      "previousVersion": null,
+      "requiredByHub": null,
+      "busyReason": null,
+      "installKind": "swap"
+    },
+    "idle-auto-download-on": {
+      "status": "idle",
+      "currentVersion": "1.1.0",
+      "channel": "stable",
+      "autoDownload": true,
+      "lastCheckedAt": "2026-10-01T08:00:00.000Z",
+      "available": null,
+      "progress": null,
+      "error": null,
+      "canRevert": false,
+      "previousVersion": null,
+      "requiredByHub": null,
+      "busyReason": null,
+      "installKind": "restart"
+    },
+    "ready-install-stalled": {
+      "status": "ready",
+      "currentVersion": "1.1.0",
+      "channel": "stable",
+      "autoDownload": false,
+      "lastCheckedAt": "2026-10-01T08:00:00.000Z",
+      "available": {
+        "version": "1.2.0",
+        "notes": "Plexiform 1.2.0\n\n- Faster startup\n- Fixes the tray icon on Linux",
+        "size": 104857600,
+        "publishedAt": "2026-10-01T06:00:00.000Z"
+      },
+      "progress": null,
+      "error": {
+        "code": "install-stalled",
+        "detail": "The update did not start. Try again, or quit Plexiform and open it again."
+      },
+      "canRevert": false,
+      "previousVersion": null,
+      "requiredByHub": null,
+      "busyReason": null,
+      "installKind": "restart"
+    },
+    "error-expired": {
+      "status": "error",
+      "currentVersion": "1.1.0",
+      "channel": "stable",
+      "autoDownload": false,
+      "lastCheckedAt": "2026-10-01T08:00:00.000Z",
+      "available": null,
+      "progress": null,
+      "error": {
+        "code": "expired",
+        "detail": "Couldn't confirm Plexiform is up to date since 2026-09-01: the update server keeps offering a release that has expired."
+      },
+      "canRevert": false,
+      "previousVersion": null,
+      "requiredByHub": null,
+      "busyReason": null,
+      "installKind": "restart"
+    }
+  }
+}

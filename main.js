@@ -1,3 +1,14 @@
+// Windows hook commands in argv form run the exe with --buddy-hook: the hook
+// script runs here and the process exits before any of the app starts.
+if (process.argv.includes('--buddy-hook')) require('./src/buddy-hook-runner.js').run(process.argv);
+// `--uninstall-hooks`: the Windows uninstaller runs this to take Buddy's
+// entries out of the agents' configs before the binary goes, then exits
+// before any window, lock or data folder is touched (the .deb's prerm runs
+// the same code through hooks/uninstall-hooks.js).
+if (process.argv.includes('--uninstall-hooks')) {
+  require('./hooks/uninstall-hooks.js').main({ mcp: require('./mcp-install.js') });
+  process.exit(0);
+}
 const { app, BrowserWindow, Tray, Menu, shell, ipcMain, screen, clipboard, systemPreferences, nativeImage, dialog, net, powerMonitor, Notification, globalShortcut } = require('electron'); // privacy-flow: ics-feed
 const path = require('path');
 const fs = require('fs');
@@ -164,7 +175,8 @@ const DEFAULT_CONFIG = {
   busyCalendar: false, // off until ticked in Settings, which is what asks macOS for access
   busyCalendarTitles: false,
   busyIcsUrl: '',
-  busyFocus: true,
+  // Focus and the Calendar helper are macOS-only readers.
+  busyFocus: process.platform === 'darwin',
   busyFocusShortcut: '',
   voice: { ...Voice.DEFAULTS },
   // Accept paired devices' events on the Tailscale address too (loopback
@@ -260,17 +272,23 @@ function flushStats() {
 }
 
 // Inside the packaged .app, hooks/ is bundled as an extraResource; in dev it's
-// the checked-out hooks/ dir next to main.js.
-const HOOKS_DIR = app.isPackaged ? path.join(process.resourcesPath, 'hooks') : path.join(__dirname, 'hooks');
+// the checked-out hooks/ dir next to main.js. A Linux AppImage copies it out
+// to a path that survives a relaunch (src/hook-paths.js).
+const HookPaths = require('./src/hook-paths.js');
+const HOOK_PATHS = HookPaths.forApp(app, ROOT_DIR);
+const HOOKS_DIR = HOOK_PATHS.hooksDir;
 const EMIT_SCRIPT = path.join(HOOKS_DIR, 'emit.js');
 // Hooks run the app's own binary as Node (ELECTRON_RUN_AS_NODE), so a machine
 // without node still lights up. An unpackaged dev run has no app binary worth
 // pinning into agent configs and falls back to plain `node`.
-const HOOK_RUNTIME = Adapters.Runtime.make({ execPath: app.isPackaged ? process.execPath : null, hooksDir: HOOKS_DIR, dataDir: ROOT_DIR });
+const HOOK_RUNTIME = Adapters.Runtime.make({ execPath: HOOK_PATHS.execPath, hooksDir: HOOKS_DIR, dataDir: ROOT_DIR });
 const IS_MAC = process.platform === 'darwin';
 const IS_WIN = process.platform === 'win32';
+const IS_LINUX = process.platform === 'linux';
 // Linux panels are often dark and don't recolour template images, so it gets its own colour icon.
-const TRAY_ICON = IS_WIN ? 'tray-win.png' : process.platform === 'linux' ? 'tray-linux.png' : 'trayTemplate.png';
+const TRAY_ICON = IS_WIN ? 'tray-win.png' : IS_LINUX ? 'tray-linux.png' : 'trayTemplate.png';
+require('./src/spellcheck.js').keepOffline({ app, getDefaultSession: () => require('electron').session.defaultSession });
+require('./src/desktop-shell.js').setup({ app, Menu });
 
 function claudeHookOpts() {
   return { home: os.homedir(), runtime: HOOK_RUNTIME, askFromWidget: !!loadConfig().askFromWidget };
@@ -311,6 +329,8 @@ const RemoteDevices = require('./src/remote-devices.js')({
   onChange: () => { stateMemo = { at: 0, key: null, value: null }; broadcastStatus(); },
   log: (m) => console.log(m),
 });
+const Smoke = require('./src/smoke.js');
+const Updater = require('./src/updater/index.js');
 const { SIGNAL_PORT, startSignalServer, readRequests, answerRequest, keyFor } = require('./src/signal-server.js')({
   rootDir: ROOT_DIR,
   sessionsDir: SESSIONS_DIR,
@@ -956,6 +976,8 @@ function createSettingsWindow() {
   });
   settingsWin.setMenuBarVisibility(false);
   settingsWin.loadFile('settings.html');
+  // The macOS Calendar and Focus readers don't exist elsewhere; the ICS feed stays.
+  if (!IS_MAC) settingsWin.webContents.on('dom-ready', () => settingsWin?.webContents.insertCSS('#busy-sources, .field:has(#busyFocusShortcut) { display: none; }').catch(() => {}));
   if (IS_MAC) app.dock.show();
   settingsWin.on('closed', () => {
     settingsWin = null;
@@ -1022,6 +1044,9 @@ function handleDeepLink(url) {
   }
 }
 app.on('open-url', (e, url) => { e.preventDefault(); handleDeepLink(url); });
+// The updater IPC trusts the app's own pages by path, so an app window must
+// never be navigated to another page (a dropped file, a stray link).
+app.on('web-contents-created', (_e, wc) => Updater.guardNavigation(wc));
 // Only an installed app may claim the scheme: a dev run would steal it from it.
 if (app.isPackaged) for (const scheme of BRAND.SCHEMES) app.setAsDefaultProtocolClient(scheme);
 let lightsWin = null;
@@ -1039,7 +1064,8 @@ function createLightsWindow() {
     minHeight: 560,
     useContentSize: true,
     title: 'Lights',
-    titleBarStyle: 'hiddenInset',
+    // Off macOS 'hiddenInset' hides the window controls with the title bar.
+    titleBarStyle: IS_MAC ? 'hiddenInset' : 'default',
     backgroundColor: '#1c1a1f',
     webPreferences: {
       spellcheck: false,
@@ -1069,6 +1095,8 @@ function createLightsWindow() {
   // pins document.hasFocus()), so the window's is sent in.
   lightsWin.on('focus', () => lightsWin?.webContents.send('window-focus', true));
   lightsWin.on('blur', () => lightsWin?.webContents.send('window-focus', false));
+  // The page's own title bar leaves room for the macOS traffic lights.
+  if (!IS_MAC) lightsWin.webContents.on('dom-ready', () => lightsWin?.webContents.insertCSS('#titlebar { padding-left: 14px; }').catch(() => {}));
   // Dev: `electron . --lights --shot out.png [--select <ruleId>] [--mode live]`
   // captures the editor and quits.
   const shotAt = process.argv.indexOf('--shot');
@@ -1246,7 +1274,7 @@ function maybeNotify(st) {
       // Another machine's session: nothing on this Mac to jump to.
       if (String(n.sessionId || '').startsWith('remote:') || isRemote(s) || isRemote({ sessionId: n.sessionId })) return;
       if (n.hostApp || n.kind === 'runaway') {
-        jumpToSession(s, String(n.cwd || '').split('/').filter(Boolean).pop() || '', n.hostApp).catch((err) => console.warn('[jump] failed:', err.message));
+        jumpToSession(s, Rules.folderOf(n.cwd), n.hostApp).catch((err) => console.warn('[jump] failed:', err.message));
       }
     });
     note.on('close', () => liveNotifications.delete(note));
@@ -1526,7 +1554,8 @@ function updateTrayMode() {
 
 function applyWidgetVisibility() {
   if (!win) return;
-  if (loadConfig().showWidget) win.showInactive(); else win.hide();
+  // Linux with no tray: the widget is the only way back in, so it stays.
+  if (loadConfig().showWidget || (IS_LINUX && !tray)) win.showInactive(); else win.hide();
 }
 
 // ── Garden on the real screen (Desktop-Goose style) ────────────────────────
@@ -2045,6 +2074,7 @@ function maybeRandomEvent(st) {
   win.webContents.send('event', milestone ? 'ufo' : names[Math.floor(Math.random() * names.length)]);
 }
 
+const LoginItem = require('./src/login-item.js').create({ app, name: require('./brand.js').name });
 function createTray() {
   if (tray) {
     tray.destroy();
@@ -2054,7 +2084,10 @@ function createTray() {
   try {
     tray = new Tray(trayIconPath);
   } catch {
-    return;
+    // Linux without a tray still needs a way to Quit: the same menu opens
+    // from a right-click on the widget (widget-menu below), which stays up.
+    if (process.platform !== 'linux') return;
+    tray = null;
   }
 
   function setManual(state) {
@@ -2115,16 +2148,26 @@ function createTray() {
     {
       label: 'Open at Login',
       type: 'checkbox',
-      checked: app.getLoginItemSettings().openAtLogin,
-      click: (item) => app.setLoginItemSettings({ openAtLogin: item.checked }),
+      checked: LoginItem.get(),
+      click: (item) => LoginItem.set(item.checked),
     },
     { type: 'separator' },
     { label: 'Quit', click: () => app.quit() },
   ]);
+  trayMenu = menu;
+  if (!tray) { if (!win) createWindow(); win.showInactive(); return; }
   tray.setToolTip('Claude Buddy');
   tray.setContextMenu(menu);
   updateTrayMode();
 }
+
+// Right-click on the widget: the Lights editor, or on Linux the tray's menu,
+// since GNOME shows no tray at all and that menu is the only way to Quit.
+let trayMenu = null;
+ipcMain.handle('widget-menu', () => {
+  if (IS_LINUX && trayMenu && win && !win.isDestroyed()) { trayMenu.popup({ window: win }); return; }
+  createLightsWindow();
+});
 
 ipcMain.handle('open-claude', () => {
   shell.openExternal('https://claude.ai');
@@ -2254,8 +2297,9 @@ ipcMain.on('reduced-motion', (e, on) => {
 
 // The widget window is a transparent rectangle; the renderer reports whether
 // the cursor is over something drawn so clicks on empty space fall through.
+const ClickThrough = require('./src/click-through.js').create({ screen, getWin: () => win, every, stopTimer });
 ipcMain.on('set-click-through', (e, ignore) => {
-  try { win?.setIgnoreMouseEvents(!!ignore, { forward: true }); } catch { /* window gone */ }
+  try { ClickThrough.set(ignore); } catch { /* window gone */ }
 });
 
 ipcMain.on('resize-window-by', (e, factor) => {
@@ -2293,7 +2337,7 @@ ipcMain.handle('go-to-needing-session', async () => {
   cycleIndex += 1;
 
   clipboard.writeText(target.cwd);
-  const folderHint = target.cwd.split('/').filter(Boolean).pop() || '';
+  const folderHint = Rules.folderOf(target.cwd);
   const activated = await jumpToSession(target, folderHint);
   return {
     opened: activated?.app || 'none-found',
@@ -2357,7 +2401,9 @@ function runCcusage(args) {
     // ccusage walks every transcript on disk; it must never be allowed to run
     // forever or pile up, so it gets a hard timeout and is killed on expiry.
     execFile('ccusage', [...args, '--json', '--offline'], {
-      env: { ...process.env, PATH: `${process.env.PATH || ''}:/opt/homebrew/bin:/usr/local/bin` },
+      env: require('./src/tool-path.js').toolEnv(),
+      // Windows: npm installs ccusage as a .cmd, which only runs through a shell (the args are fixed words).
+      shell: IS_WIN,
       maxBuffer: 16 * 1024 * 1024,
       timeout: 25000,
       killSignal: 'SIGKILL',
@@ -2441,8 +2487,9 @@ async function computeCosts() {
     if (!f) return null;
     try {
       const fd = fs.openSync(f, 'r'); const buf = Buffer.alloc(4096); const n = fs.readSync(fd, buf, 0, 4096, 0); fs.closeSync(fd);
-      const m = /"cwd":"([^"]+)"/.exec(buf.toString('utf8', 0, n));
-      cwdById[id] = m ? m[1] : null;
+      // A JSON string match, decoded: a Windows cwd arrives as "C:\\Users\\…".
+      const m = /"cwd":("(?:[^"\\]|\\.)*")/.exec(buf.toString('utf8', 0, n));
+      cwdById[id] = m ? JSON.parse(m[1]) || null : null;
       return cwdById[id];
     } catch { return null; }
   };
@@ -2451,7 +2498,7 @@ async function computeCosts() {
   for (const sname of session?.session || []) {
     const id = sname.period;
     const cwd = cwdFromTranscript(id) || (sname.metadata && (sname.metadata.projectPath || sname.metadata.cwd)) || null;
-    const project = cwd ? String(cwd).split('/').filter(Boolean).pop() : (sname.metadata?.project || 'other');
+    const project = cwd ? Rules.folderOf(cwd) : (sname.metadata?.project || 'other');
     const tokens = sname.totalTokens || ((sname.inputTokens || 0) + (sname.outputTokens || 0) + (sname.cacheCreationTokens || 0) + (sname.cacheReadTokens || 0));
     if (!projects[project]) projects[project] = { cost: 0, tokens: 0 };
     projects[project].cost += sname.totalCost || 0;
@@ -2665,7 +2712,7 @@ function spendNote(rules, fired, sessions, spend) {
     const sig = rule ? rule.when.signal : [];
     if (sig.includes('runaway')) {
       const v = Rules.spendSessions(sessions, { spend }).find((x) => x.signal === 'runaway');
-      if (v) return { rule: rule.name, text: `${v.burn}${v.cwd ? ` in ${v.cwd.split('/').filter(Boolean).pop()}` : ''}` };
+      if (v) return { rule: rule.name, text: `${v.burn}${v.cwd ? ` in ${Rules.folderOf(v.cwd)}` : ''}` };
     }
     if ((sig.includes('budget-exceeded') || sig.includes('budget-warning')) && spend.budgetText) return { rule: rule.name, text: spend.budgetText };
     if (sig.includes('above-usual-pace') && spend.pace && spend.pace.text) return { rule: rule.name, text: spend.pace.text };
@@ -2686,12 +2733,13 @@ ipcMain.handle('get-spend', () => {
 // ── Gestures on the avatar → the action the current state programmed ──────
 let snoozeTimer = null;
 let cycleIndex = 0;
+const LinuxActions = require('./src/linux-actions.js');
 async function runAction(action, st) {
   const local = localSessions(st.sessions);
   const needing = local.filter((s) => WAITING_SIGNALS.has(s.signal)).sort((a, b) => new Date(a.updatedAt) - new Date(b.updatedAt));
   const target = needing[0] || local[0] || null;
   const cwd = target?.cwd || null;
-  const folderHint = cwd ? cwd.split('/').filter(Boolean).pop() : '';
+  const folderHint = cwd ? Rules.folderOf(cwd) : '';
   switch (action.type) {
     case 'jump': {
       if (!needing.length) {
@@ -2725,7 +2773,9 @@ async function runAction(action, st) {
     case 'editor': {
       if (!cwd) return { feedback: 'no session folder' };
       if (IS_WIN) execFile('cmd', ['/c', 'start', '', action.arg || 'code', cwd], () => {});
-      else execFile('open', ['-a', action.arg || 'Visual Studio Code', cwd], () => {});
+      else if (IS_MAC) execFile('open', ['-a', action.arg || 'Visual Studio Code', cwd], () => {});
+      // Linux: the editor's command; if there is none, the folder in the file manager.
+      else execFile(LinuxActions.editorCommand(action.arg), [cwd], (err) => { if (err && err.code === 'ENOENT') shell.openPath(cwd); }); // privacy-flow: rule-command
       return { feedback: `${action.arg || 'Visual Studio Code'} → ${folderHint}` };
     }
     case 'copy-path': if (!cwd) return { feedback: 'no session folder' }; clipboard.writeText(cwd); return { feedback: 'path copied' };
@@ -2734,10 +2784,10 @@ async function runAction(action, st) {
       if (!action.arg) return { feedback: 'no command set' };
       // The user's own command, run in their shell; the session folder is CLAUDE_CWD.
       if (IS_WIN) execFile('powershell', ['-NoProfile', '-c', action.arg], { env: { ...process.env, CLAUDE_CWD: cwd || '' } }, () => {}); // privacy-flow: rule-command
-      else execFile('/bin/zsh', ['-lc', action.arg], { env: { ...process.env, CLAUDE_CWD: cwd || '' } }, () => {}); // privacy-flow: rule-command
+      else execFile(IS_MAC ? '/bin/zsh' : LinuxActions.userShell(), ['-lc', action.arg], { env: { ...process.env, CLAUDE_CWD: cwd || '' } }, () => {}); // privacy-flow: rule-command
       return { feedback: 'ran' };
     }
-    case 'shortcut': if (IS_WIN) return { feedback: 'Shortcuts are macOS only' }; if (!action.arg) return { feedback: 'no shortcut set' }; execFile('shortcuts', ['run', action.arg], () => {}); return { feedback: `Shortcut: ${action.arg}` };
+    case 'shortcut': if (!IS_MAC) return { feedback: 'Shortcuts are macOS only' }; if (!action.arg) return { feedback: 'no shortcut set' }; execFile('shortcuts', ['run', action.arg], () => {}); return { feedback: `Shortcut: ${action.arg}` };
     case 'say': speak(action.arg || (target ? `${folderHint} needs you` : 'hello')); return { react: { pose: 'bubble' }, ms: 1500, feedback: 'said' };
     case 'snooze': {
       win?.hide();
@@ -2763,7 +2813,7 @@ async function jumpToNeeding() {
   const shownIndex = cycleIndex + 1;
   cycleIndex += 1;
   clipboard.writeText(target.cwd);
-  const folderHint = target.cwd.split('/').filter(Boolean).pop() || '';
+  const folderHint = Rules.folderOf(target.cwd);
   const activated = await jumpToSession(target, folderHint);
   const badge = queue.length > 1 ? ` (${shownIndex}/${queue.length})` : '';
   return `→ ${folderHint}${badge}${activated?.exact ? ' · tab found' : ''} · path copied`;
@@ -2951,7 +3001,7 @@ ipcMain.handle('import-rules', async () => {
 function mcpOpts() {
   return {
     home: IS_DEV_RUN ? path.join(os.tmpdir(), 'claude-buddy-mcp-dev-home') : os.homedir(),
-    entry: McpInstall.launch({ packaged: app.isPackaged, execPath: process.execPath, appPath: app.getAppPath(), dir: __dirname, root: process.env.CLAUDE_TRAFFIC_LIGHT_HOME }),
+    entry: McpInstall.launch({ packaged: app.isPackaged, execPath: HOOK_PATHS.execPath || process.execPath, appPath: HOOK_PATHS.mcpAppPath, dir: __dirname, root: process.env.CLAUDE_TRAFFIC_LIGHT_HOME }),
   };
 }
 ipcMain.handle('mcp-status', () => McpInstall.status(mcpOpts()));
@@ -3014,8 +3064,8 @@ ipcMain.handle('remote-revoke', (_e, id) => {
 });
 
 // ── Health (Preferences → Health, tray Health…) ────────────────────────────
-// Item 1's updater replaces this; until then the check says "not set up yet".
-let updateStatus = Health.notConfigured;
+// The updater answers synchronously from its last check.
+const updateStatus = () => (Updater ? Updater.healthStatus() : { state: 'unknown' });
 function healthReport() {
   const report = Health.runChecks({
     home: os.homedir(),
@@ -3249,19 +3299,28 @@ if (!gotLock) {
 app.whenReady().then(() => {
   if (DEMO || DIAG) console.error('[startup] ready');
   if (process.platform === 'darwin') app.dock.hide();
+  // Release CI: start, install hooks, run one, open the window, quit (src/smoke.js).
+  const smokeReport = Smoke.reportPathFrom(process.argv);
+  // An AppImage's copies for older versions go only once this is the one running instance.
+  if (gotLock) { try { HookPaths.prune(HOOK_PATHS); } catch (err) { console.warn('[hooks] could not tidy old copies:', err.message); } }
+  if (smokeReport) { Smoke.run({ app, installHooks, areHooksInstalled, createWindow, getWindow: () => win, settingsPath: CLAUDE_SETTINGS_PATH, sessionsDir: SESSIONS_DIR, reportPath: smokeReport }); return; }
   // Dev runs share the machine with a real install: they must not rewrite the
   // user's hooks or claim Open at Login out from under it.
   if (AUTO_INSTALL_HOOKS && !areHooksInstalled()) installHooks();
 
   const autoLaunchMarker = path.join(ROOT_DIR, '.auto-launch-configured');
   if (!IS_DEV_RUN && !fs.existsSync(autoLaunchMarker)) {
-    app.setLoginItemSettings({ openAtLogin: true });
+    LoginItem.set(true);
     fs.mkdirSync(ROOT_DIR, { recursive: true });
     fs.writeFileSync(autoLaunchMarker, new Date().toISOString());
   }
 
   createWindow();
   createTray();
+  // In-app updates on every platform, each checked against the signed
+  // release (src/updater/). A dev run gets the IPC but never installs.
+  Updater.start({ app, ipcMain, net, dev: IS_DEV_RUN, isBusy: () => Updater.busyReason(aggregateState({ ignoreTravel: true })) });
+  Updater.markLaunched({ app });
   signalServer = startSignalServer();
   signalServer.on('error', (e) => { signalServerError = e.code || e.message; });
   signalServer.on('listening', () => { signalServerError = null; });

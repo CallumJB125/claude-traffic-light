@@ -681,12 +681,20 @@
     return tool.toLowerCase() === pattern.toLowerCase();
   }
 
+  // The last segment of a path from any OS. A POSIX path (leading '/')
+  // splits on '/' only, since '\' is an ordinary filename character there;
+  // anything else (C:\…, \\server\…) splits on either slash.
+  function folderOf(p) {
+    const s = String(p || '');
+    return s.split(s.startsWith('/') ? '/' : /[\\/]+/).filter(Boolean).pop() || '';
+  }
+
   // Project scope: matches the folder name (last path segment) or a prefix
   // with `*` — 'bondly*' covers every bondly worktree.
   function cwdMatches(pattern, cwd) {
     if (!pattern) return true;
     if (!cwd) return false;
-    const name = String(cwd).split('/').filter(Boolean).pop() || '';
+    const name = folderOf(cwd);
     const p = pattern.toLowerCase();
     return p.endsWith('*') ? name.toLowerCase().startsWith(p.slice(0, -1)) : name.toLowerCase() === p;
   }
@@ -811,5 +819,5 @@
     };
   }
 
-  return { AGENT_KINDS, AGENT_STATUSES, MODES, normalizeAgent, liveAgents, filterAgentKinds, sessionMode, ralphIteration, fillText, seasonalCostume, seasonalEffect, ACTIONS, GESTURES, DEFAULT_CLICKS, SIGNALS, TOOL_SUGGESTIONS, LAMPS, LAMP_FX, SIGNS, LAMP_SHAPES, SIGN_FX, NUMBERS, SCREEN_FX, POSES, COSTUMES, CAMEOS, CAMEO_ID, BODIES, EYE_MOODS, EFFECTS, PETS, AGENT_STYLES, SOUNDS, WAITING_ON_YOU, TURN_END, effectiveSignal, presentSignal, TRANSIENT_ASK_MS, AGENT_KEEPALIVE_MS: Machine.AGENT_KEEPALIVE_MS, classifySession: Machine.classify, LONG_RUNNING_MS, defaultRules, RULES_VERSION, LEGACY_RULES_VERSION, rulesVersionOf, migrateRules, templatePrefs, shareFile, templates, applyTemplate, normalizeRule, clickCommands, orderedRules, ruleMatches, toolMatches, cwdMatches, resolve, firedNames, previewLook, sessionSignal, virtualSessions, uid, GIT_SIGNALS, gitDefaultRules, gitSessions, SPEND_RULES, placeSpendRules, spendSessions, ...F5_EXPORTS };
+  return { AGENT_KINDS, AGENT_STATUSES, MODES, normalizeAgent, liveAgents, filterAgentKinds, sessionMode, ralphIteration, fillText, seasonalCostume, seasonalEffect, ACTIONS, GESTURES, DEFAULT_CLICKS, SIGNALS, TOOL_SUGGESTIONS, LAMPS, LAMP_FX, SIGNS, LAMP_SHAPES, SIGN_FX, NUMBERS, SCREEN_FX, POSES, COSTUMES, CAMEOS, CAMEO_ID, BODIES, EYE_MOODS, EFFECTS, PETS, AGENT_STYLES, SOUNDS, WAITING_ON_YOU, TURN_END, effectiveSignal, presentSignal, TRANSIENT_ASK_MS, AGENT_KEEPALIVE_MS: Machine.AGENT_KEEPALIVE_MS, classifySession: Machine.classify, LONG_RUNNING_MS, defaultRules, RULES_VERSION, LEGACY_RULES_VERSION, rulesVersionOf, migrateRules, templatePrefs, shareFile, templates, applyTemplate, normalizeRule, clickCommands, orderedRules, ruleMatches, toolMatches, cwdMatches, folderOf, resolve, firedNames, previewLook, sessionSignal, virtualSessions, uid, GIT_SIGNALS, gitDefaultRules, gitSessions, SPEND_RULES, placeSpendRules, spendSessions, ...F5_EXPORTS };
 });
