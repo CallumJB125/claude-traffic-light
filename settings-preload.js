@@ -34,5 +34,8 @@ contextBridge.exposeInMainWorld('settingsApi', {
   backupsDiff: (id) => ipcRenderer.invoke('backups-diff', id),
   backupsRestore: (id, pick) => ipcRenderer.invoke('backups-restore', id, pick),
   backupsOpenFolder: () => ipcRenderer.invoke('backups-open-folder'),
+  accountView: () => ipcRenderer.invoke('account-view'),
+  accountOpen: (which) => ipcRenderer.invoke('account-open', which),
+  onAccountChanged: (cb) => ipcRenderer.on('account-changed', () => cb()),
   onShowSection: (cb) => ipcRenderer.on('show-section', (e, id) => cb(id)),
 });

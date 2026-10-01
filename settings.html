@@ -153,6 +153,8 @@
   #remote-list .revoke-note:empty { display: none; }
   .remote-steps { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
   #remote-code pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-xs); user-select: all; }
+  /* A whole-pixel height, so the Health panel below keeps its place whatever the hint's wrapping. */
+  #account-section { flex: none; display: flow-root; box-sizing: border-box; height: 104px; }
   #health { display: flex; flex-direction: column; gap: 10px; }
   #health h2 { margin-bottom: 0; }
   #health-summary { font-weight: 600; min-height: 18px; }
@@ -482,6 +484,17 @@
       <div id="privacy-body" class="pv"></div>
     </details>
   </div>
+  <section id="account-section">
+  <h2>Account &amp; team</h2>
+  <div class="field" id="account">
+    <div class="hint" id="account-line" role="status" aria-live="polite"></div>
+    <div class="row wrap">
+      <button type="button" class="secondary" id="account-team">Open Team…</button>
+      <button type="button" class="secondary" id="account-signin">Sign in…</button>
+      <button type="button" class="secondary" id="account-open">Open Account…</button>
+    </div>
+  </div>
+  </section>
   <details id="backups">
     <summary><h2 id="backups-title">Backups</h2><span class="toggle" aria-hidden="true"></span></summary>
     <div id="backups-body">

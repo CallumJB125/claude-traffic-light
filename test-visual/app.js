@@ -16,6 +16,8 @@ const FIXED_CONFIG = {
   seasonal: false,
   showTasks: false,
   showAgents: false,
+  // The one-time Team hint grows the idle widget; only team-entry.spec turns it on.
+  hints: { teamSeen: true },
 };
 
 function freePort() {

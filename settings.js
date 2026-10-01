@@ -372,6 +372,19 @@
       document.getElementById('health').scrollIntoView({ block: 'start' });
     });
     // ── end Health ──
+
+    // ── Account & team ── main reads no auth by itself: the line is neutral unless the Plexiform window can say.
+    const showAccount = async () => {
+      const v = await window.settingsApi.accountView().catch(() => null);
+      if (!v) return;
+      document.getElementById('account-line').textContent = v.line;
+      document.getElementById('account-signin').hidden = !v.signIn;
+    };
+    document.getElementById('account-team').addEventListener('click', () => window.settingsApi.accountOpen('team'));
+    document.getElementById('account-signin').addEventListener('click', () => window.settingsApi.accountOpen('signin'));
+    document.getElementById('account-open').addEventListener('click', () => window.settingsApi.accountOpen('account'));
+    window.settingsApi.onAccountChanged(showAccount);
+    showAccount();
     load();
 
     // ── Voice (F7) ── its own saves, so the Save button's list stays untouched.

@@ -1184,15 +1184,43 @@ function getBuddy() {
       onClosed: () => { if (IS_MAC && !lightsWin && !settingsWin && !updatesWin) app.dock.hide(); },
       devAccountsHub: app.isPackaged ? null : devAccountsHub,
     });
+    if (typeof buddyWin.onAccountChange === 'function') buddyWin.onAccountChange(() => settingsWin?.webContents.send('account-changed'));
   }
   return buddyWin;
 }
+// Optional, like the work-scope module: only a Plexiform window that offers it says who is signed in.
+const accountSummary = () => { try { return typeof buddyWin?.accountSummary === 'function' ? buddyWin.accountSummary() : null; } catch { return null; } };
 function openBuddy(page = null) {
   if (!devMockReady) return;
   getBuddy();
   if (IS_MAC) app.dock.show();
   buddyWin.open(page);
 }
+
+// Settings → Account & team, and the widget's one-time Team hint. Each
+// handler checks its sender; the page to open is never taken from the renderer.
+const TeamEntry = require('./src/team-entry.js');
+const settingsOnly = (e) => !!settingsWin && e.sender === settingsWin.webContents;
+ipcMain.handle('account-view', (e) => {
+  if (!settingsOnly(e)) return null;
+  return TeamEntry.settingsView(accountSummary(), new URL(BRAND.DEFAULT_HUB).host);
+});
+ipcMain.handle('account-open', (e, which) => {
+  if (!settingsOnly(e)) return false;
+  openBuddy(['team', 'signin'].includes(which) ? which : 'account');
+  return true;
+});
+const widgetOnly = (e) => !!win && e.sender === win.webContents;
+const teamHint = () => TeamEntry.hintFor(accountSummary(), loadConfig().hints?.teamSeen === true);
+ipcMain.handle('team-hint', (e) => widgetOnly(e) ? teamHint() : null);
+ipcMain.handle('team-hint-done', (e, open) => {
+  if (!widgetOnly(e)) return false;
+  const hint = teamHint();
+  if (!hint) return false;
+  saveConfig({ hints: { ...loadConfig().hints, teamSeen: true } });
+  if (open === true) openBuddy(hint.page);
+  return true;
+});
 
 // Preferences scrolled to its Health section, rechecked.
 function showHealth() {
@@ -2348,6 +2376,8 @@ function createTray() {
     { type: 'separator' },
     { label: 'What does this mean?…', click: createHelpWindow },
     { label: 'Waiting on you…', click: createWaitingWindow },
+    { label: 'Team…', click: () => openBuddy('team') },
+    { label: 'Integrations…', click: () => openBuddy('integrations') },
     { label: 'Lights…', accelerator: 'CmdOrCtrl+L', click: createLightsWindow },
     { label: 'Model mix…', click: () => { createLightsWindow(); lightsWin?.webContents.once('did-finish-load', () => lightsWin?.webContents.send('show-view', 'mix')); lightsWin?.webContents.send('show-view', 'mix'); } },
     { label: 'Preferences…', accelerator: 'CmdOrCtrl+,', click: createSettingsWindow },

@@ -107,6 +107,9 @@ function applyStatus(data) {
   if (data.reason === 'travel') bubble.update([]);
   else if (Array.isArray(data.inputs)) bubble.update(data.inputs, { scopes: window.WorkScopeView.scopesBySession(data.sessions) });
   renderAway(data.reason === 'travel' ? null : data.away);
+  idleNow = data.reason === 'idle' && !(data.inputs && data.inputs.length);
+  if (idleNow && !hintAsked) { hintAsked = true; window.trafficLight.teamHint().then((h) => { hintOffer = h; paintRow(); }).catch(() => {}); }
+  else paintRow();
   // Confetti fires on entering a celebrating state, then again every 10s
   // for as long as that state holds.
   if (look.celebrate && look.ruleId !== lastRuleId) {
@@ -155,22 +158,49 @@ function renderUpdate(state) {
   if (state && updateState && updateKey(state) !== updateKey(updateState)) { armed = false; dismissedFor = null; }
   updateState = state;
   updateRow = state && dismissedFor !== updateKey(state) ? window.UpdateView.widgetRow(state, { name: window.Brand.name, armed }) : null;
+  paintRow();
+}
+// The one-time Team hint rides in the update row's box and strip, below the
+// ask, the recap and the update itself. main decides whether there is one
+// (never after dismissal); it ends on a click or after HINT_MS, then never again.
+const HINT_MS = 20000;
+let hintOffer = null;
+let hintAsked = false;
+let hintOn = false;
+let hintTimer = null;
+let idleNow = false;
+function hintDone(open) {
+  clearTimeout(hintTimer);
+  hintOffer = null;
+  window.trafficLight.teamHintDone(open).catch(() => {});
+  paintRow();
+}
+function paintRow() {
+  const wantHint = !updateRow && !!hintOffer && idleNow && !document.body.classList.contains('asking') && !document.body.classList.contains('away');
+  if (wantHint && !hintOn) hintTimer = setTimeout(() => hintDone(false), HINT_MS);
+  if (!wantHint && hintOn) clearTimeout(hintTimer);
+  hintOn = wantHint;
+  const row = updateRow || (hintOn ? { kind: 'hint', text: hintOffer.text, sub: '', button: { label: hintOffer.label } } : null);
   const box = document.getElementById('update');
-  box.className = updateRow ? updateRow.kind : '';
-  if (updateRow) {
-    document.getElementById('update-text').textContent = updateRow.text;
-    document.getElementById('update-sub').textContent = updateRow.sub || '';
+  box.className = row ? row.kind : '';
+  if (row) {
+    document.getElementById('update-text').textContent = row.text;
+    document.getElementById('update-sub').textContent = row.sub || '';
     const b = document.getElementById('update-btn');
-    b.hidden = !updateRow.button;
-    b.textContent = updateRow.button ? updateRow.button.label : '';
+    b.hidden = !row.button;
+    b.textContent = row.button ? row.button.label : '';
+    const later = document.getElementById('update-later');
+    later.textContent = hintOn ? '×' : 'Later';
+    later.title = hintOn ? 'Dismiss' : 'Hide this until something changes; the tray keeps the update';
   }
-  document.body.classList.toggle('updating', !!updateRow);
-  window.trafficLight.updateRowShown(!!updateRow);
+  document.body.classList.toggle('updating', !!row);
+  window.trafficLight.updateRowShown(!!row);
 }
 const stop = (e) => e.stopPropagation();
 for (const id of ['update-btn', 'update-later']) document.getElementById(id).addEventListener('mousedown', stop);
 document.getElementById('update-btn').addEventListener('click', async (e) => {
   e.stopPropagation();
+  if (hintOn) { hintDone(true); return; }
   const id = updateRow && updateRow.button && updateRow.button.id;
   if (id === 'open-updates') { window.trafficLight.openUpdates(); return; }
   const when = id === 'install-now' ? 'now' : id === 'install-idle' ? 'idle' : null;
@@ -183,6 +213,7 @@ document.getElementById('update-btn').addEventListener('click', async (e) => {
 });
 document.getElementById('update-later').addEventListener('click', (e) => {
   e.stopPropagation();
+  if (hintOn) { hintDone(false); return; }
   if (updateState) { dismissedFor = updateKey(updateState); renderUpdate(updateState); }
 });
 window.trafficLight.onUpdaterState(renderUpdate);
