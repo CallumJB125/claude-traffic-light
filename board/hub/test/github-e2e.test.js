@@ -192,3 +192,79 @@ test('e2e M4: reconnecting makes a second app and a second connection, not a CON
     assert.throws(() => create({ external_id: '802', display_name: 'acme', scopes: [], secrets: { app_private_key: 'x', webhook_secret: randomBytes(20).toString('hex') } }), (e) => e.code === 'CONFLICT', 'the same app twice is still one connection');
   } finally { await h.close(); }
 });
+
+const unmerged = { merged: false, merged_by: null, merged_at: null, merge_commit_sha: null, state: 'closed' };
+const kinds = (h, conn) => h.db.all('SELECT kind, external_id FROM external_links WHERE connection_id = ? ORDER BY created_at, rowid', conn.id).map((l) => `${l.kind}:${l.external_id}`);
+
+test('e2e N1: #12 closed unmerged, then #13 opened, verified and merged: #13 takes the card\'s PR slot and moves the card', async () => {
+  const { h, conn, send, verify, column } = await setup();
+  try {
+    await send('pull_request', raw('pull_request.opened.json'));
+    verify();
+    assert.equal((await send('pull_request', variant('pull_request.closed.json', unmerged))).status, 200);
+    h.db.run("UPDATE cards SET run_state = 'in_review', column_name = 'in_review' WHERE key = ?", KEY);
+    assert.equal((await send('pull_request', decoy('pull_request.opened.json', 13, 'main'))).status, 200);
+    assert.deepEqual(kinds(h, conn), ['pr_superseded:2100000012', 'pr:2100000013']);
+    verify('https://github.com/acme/app/pull/13');
+    assert.equal((await send('pull_request', decoy('pull_request.closed.json', 13, 'main'))).status, 200);
+    assert.equal(column(), 'done');
+  } finally { await h.close(); }
+});
+
+test('e2e N1: a squatter PR #11 linked first; the real #12, verified, relinks and its merge moves the card', async () => {
+  const { h, conn, send, verify, column } = await setup();
+  try {
+    await send('pull_request', decoy('pull_request.opened.json', 11, 'main', { user: { login: 'mallory', id: 9100066 } }));
+    assert.deepEqual(kinds(h, conn), ['pr:2100000011']);
+    verify();
+    assert.equal((await send('pull_request', raw('pull_request.opened.json'))).status, 200);
+    assert.deepEqual(kinds(h, conn), ['pr_superseded:2100000011', 'pr:2100000012']);
+    assert.equal((await send('pull_request', raw('pull_request.closed.json'))).status, 200);
+    assert.equal(column(), 'done');
+  } finally { await h.close(); }
+});
+
+test('e2e N1: a second PR that is not the verified one, while the first is open, is not linked and moves nothing', async () => {
+  const { h, reg, conn, send, verify, column } = await setup();
+  try {
+    await send('pull_request', raw('pull_request.opened.json'));
+    verify();
+    assert.equal((await send('pull_request', decoy('pull_request.opened.json', 14, 'main'))).status, 200);
+    assert.equal((await send('pull_request', decoy('pull_request.closed.json', 14, 'main'))).status, 200);
+    assert.deepEqual(kinds(h, conn), ['pr:2100000012']);
+    assert.equal(column(), 'in_review');
+    assert.ok(!reg.audit(conn.id).some((a) => a.external_ref === '2100000014'), 'not even tried');
+  } finally { await h.close(); }
+});
+
+test('e2e N3: with bare #12 evidence, PR #12 in a repo alias (a mirror) never moves the card', async () => {
+  const { h, reg, conn, send, verify, column } = await setup();
+  try {
+    h.db.run('UPDATE repos SET aliases = ? WHERE id = ?', JSON.stringify(['github.com/acme/app-mirror']), h.ids.repo);
+    verify('#12');
+    const o = fixture('pull_request.opened.json');
+    const mirror = { ...o.repository, id: 424242, full_name: 'acme/app-mirror', name: 'app-mirror' };
+    const onMirror = (p) => ({ ...p, repository: mirror, pull_request: { ...p.pull_request, id: 777, html_url: 'https://github.com/acme/app-mirror/pull/12', head: { ...p.pull_request.head, repo: mirror }, base: { ...p.pull_request.base, repo: mirror } } });
+    assert.equal((await send('pull_request', onMirror(fixture('pull_request.opened.json')))).status, 200);
+    assert.equal((await send('pull_request', onMirror(fixture('pull_request.closed.json')))).status, 200);
+    assert.equal(column(), 'in_review');
+    const a = reg.audit(conn.id).find((x) => x.action === 'system.pr_merged');
+    assert.deepEqual([a.decision, a.error], ['failed', 'not_the_verified_pr'], 'the event names the mirror, and bare #12 is the card\'s own repo');
+  } finally { await h.close(); }
+});
+
+test('e2e N3: with bare #12 evidence, a mirror\'s #12 cannot relink the card away from its own open #12', async () => {
+  const { h, conn, send, verify, column } = await setup();
+  try {
+    h.db.run('UPDATE repos SET aliases = ? WHERE id = ?', JSON.stringify(['github.com/acme/app-mirror']), h.ids.repo);
+    verify('#12');
+    await send('pull_request', raw('pull_request.opened.json'));
+    const o = fixture('pull_request.opened.json');
+    const mirror = { ...o.repository, id: 424242, full_name: 'acme/app-mirror', name: 'app-mirror' };
+    const onMirror = (p) => ({ ...p, repository: mirror, pull_request: { ...p.pull_request, id: 777, html_url: 'https://github.com/acme/app-mirror/pull/12', head: { ...p.pull_request.head, repo: mirror }, base: { ...p.pull_request.base, repo: mirror } } });
+    assert.equal((await send('pull_request', onMirror(fixture('pull_request.opened.json')))).status, 200, 'the registry\'s CONFLICT is an answer');
+    assert.equal((await send('pull_request', onMirror(fixture('pull_request.closed.json')))).status, 200);
+    assert.deepEqual(kinds(h, conn), ['pr:2100000012']);
+    assert.equal(column(), 'in_review');
+  } finally { await h.close(); }
+});

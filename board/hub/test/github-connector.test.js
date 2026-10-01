@@ -1,6 +1,7 @@
 // GitHub connector behaviour against a stub ctx shaped like builder-5's
-// registry (feat/integrations-ctx): cardForBranch → {card_id, base_ref},
-// linkedByCard → external_id | null, s.link refuses a second PR on a card.
+// registry (feat/integrations-ctx, feat/integrations-prslot): cardForBranch →
+// {card_id, base_ref}, linkedByCard → external_id | null, s.link refuses a
+// second PR on a card, s.relink swaps it, linkStatusFor reads it back.
 // github-e2e.test.js drives the real registry.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -12,24 +13,38 @@ const repo = { id: 501, full_name: 'acme/app', default_branch: 'main' };
 const pr = (over = {}) => ({ id: 991, number: 42, state: 'open', html_url: 'https://github.com/acme/app/pull/42', draft: false, merged: false,
   head: { ref: 'board/BDL-12-r3', sha: 'a'.repeat(40), repo }, base: { ref: 'main', repo }, requested_reviewers: [], ...over });
 
-function stubCtx({ branches = { 'acme/app board/BDL-12-r3': { card_id: 'card-12', base_ref: 'main' } } } = {}) {
+function stubCtx({ branches = { 'acme/app board/BDL-12-r3': { card_id: 'card-12', base_ref: 'main' } }, verified = {} } = {}) {
   const links = new Map();
+  const status = new Map();
   const calls = [];
+  const fail = (code) => { throw Object.assign(new Error(code), { code }); };
   const byCard = (card, kind) => [...links].filter(([k, c]) => c === card && k.startsWith(`${kind}:`)).map(([k]) => k.slice(kind.length + 1)).at(-1) ?? null;
   const ctx = {
-    calls, links,
+    calls, links, status, verified,
     linked: (kind, id) => links.get(`${kind}:${id}`) ?? null,
     linkedByCard: byCard,
+    linkStatusFor: (card, kind) => { const id = byCard(card, kind); return id == null ? null : { external_id: id, ...status.get(id) }; },
+    verifiedPr: (card) => verified[card] ?? null,
     cardForBranch: (r, b) => branches[`${r.toLowerCase()} ${b}`] ?? null,
     async act(action, meta, run) {
       calls.push(['act', action, meta.external_ref]);
       await run({
         link: (card, kind, id, url) => {
           const have = byCard(card, kind);
-          if (kind === 'pr' && have != null && have !== String(id)) throw Object.assign(new Error('this card already has a PR'), { code: 'CONFLICT' });
+          if (kind === 'pr' && have != null && have !== String(id)) fail('CONFLICT');
           links.set(`${kind}:${id}`, card); calls.push(['link', card, id, url]);
         },
-        linkStatus: (card, kind, id, status) => calls.push(['status', card, id, status]),
+        // The registry's rule (builder-5, s.relink), minus the repo check.
+        relink: (card, kind, from, to, url) => {
+          const have = byCard(card, kind);
+          if (have === to) return;
+          if (have == null) fail('NOT_FOUND');
+          if (have !== from || links.has(`pr:${to}`)) fail('CONFLICT');
+          const v = verified[card];
+          if (!(v && url?.endsWith(`/pull/${v.number}`)) && !['closed', 'merged'].includes(status.get(from)?.state)) fail('CONFLICT');
+          links.delete(`pr:${from}`); links.set(`pr:${to}`, card); calls.push(['relink', card, from, to, url]);
+        },
+        linkStatus: (card, kind, id, st) => { status.set(id, { ...status.get(id), ...st }); calls.push(['status', card, id, st]); },
       });
     },
     system: { event: async (type, ev) => { calls.push(['system', type, ev.external_id, ev.pr, ev.by]); ctx.lastEvent = ev; return { done: false, reason: 'no_verified_pr' }; } },
@@ -323,4 +338,52 @@ test('N2: an edit to a merged PR keeps it merged, and a closed PR is never first
   const fresh = stubCtx();
   await run(fresh, 'pull_request', { action: 'edited', pull_request: pr({ state: 'closed', merged: false }), repository: repo });
   assert.deepEqual(fresh.calls.filter((c) => c[0] === 'link'), [], 'a closed PR is never first-linked');
+});
+
+test('N1: a new PR for a card whose PR was closed unmerged relinks the card to it', async () => {
+  const ctx = stubCtx();
+  await run(ctx, 'pull_request', { action: 'opened', pull_request: pr(), repository: repo });
+  await run(ctx, 'pull_request', { action: 'closed', pull_request: pr({ state: 'closed' }), repository: repo, sender: { login: 'callum' } });
+  ctx.calls.length = 0;
+  const next = pr({ id: 992, number: 43, html_url: 'https://github.com/acme/app/pull/43' });
+  await run(ctx, 'pull_request', { action: 'opened', pull_request: next, repository: repo });
+  assert.deepEqual(ctx.calls.filter((c) => c[0] === 'relink'), [['relink', 'card-12', '991', '992', 'https://github.com/acme/app/pull/43']]);
+  assert.equal(ctx.linked('pr', '992'), 'card-12');
+  await run(ctx, 'pull_request', { action: 'closed', pull_request: { ...next, state: 'closed', merged: true, merged_by: { login: 'tonde' } }, repository: repo });
+  assert.deepEqual(ctx.calls.at(-1), ['system', 'pr_merged', '992', 43, 'tonde']);
+});
+
+test('N1: the card\'s verified PR takes the slot from a PR that is still open; any other PR does not', async () => {
+  const ctx = stubCtx({ verified: { 'card-12': { number: 43, repo: 'acme/app' } } });
+  await run(ctx, 'pull_request', { action: 'opened', pull_request: pr({ id: 990, number: 41, html_url: 'https://github.com/acme/app/pull/41' }), repository: repo });
+  await run(ctx, 'pull_request', { action: 'opened', pull_request: pr({ id: 991, number: 42 }), repository: repo });
+  assert.equal(ctx.linked('pr', '991'), null, 'not the verified PR, and #41 is still open');
+  assert.ok(!ctx.calls.some((c) => c[0] === 'relink' || (c[0] === 'act' && c[2] === '991')), 'no relink is even tried');
+  await run(ctx, 'pull_request', { action: 'opened', pull_request: pr({ id: 992, number: 43, html_url: 'https://github.com/acme/app/pull/43' }), repository: repo });
+  assert.equal(ctx.linked('pr', '992'), 'card-12');
+  assert.equal(ctx.linked('pr', '990'), null);
+});
+
+test('N1: verified evidence in another repo, or a closed event, never relinks', async () => {
+  const ctx = stubCtx({ verified: { 'card-12': { number: 43, repo: 'acme/other' } } });
+  await run(ctx, 'pull_request', { action: 'opened', pull_request: pr(), repository: repo });
+  const next = pr({ id: 992, number: 43, html_url: 'https://github.com/acme/app/pull/43' });
+  await run(ctx, 'pull_request', { action: 'opened', pull_request: next, repository: repo });
+  assert.equal(ctx.linked('pr', '992'), null);
+  ctx.verified['card-12'] = { number: 43 };
+  await run(ctx, 'pull_request', { action: 'closed', pull_request: { ...next, state: 'closed', merged: true }, repository: repo });
+  assert.equal(ctx.linked('pr', '992'), null, 'a closed event is never a link');
+  assert.ok(!ctx.calls.some((c) => c[0] === 'relink' || c[0] === 'system'));
+});
+
+test('N1: CONFLICT, NOT_FOUND and VALIDATION from s.relink are answers, other errors are not', async () => {
+  for (const code of ['CONFLICT', 'NOT_FOUND', 'VALIDATION', 'INTERNAL']) {
+    const ctx = stubCtx({ verified: { 'card-12': { number: 43 } } });
+    await run(ctx, 'pull_request', { action: 'opened', pull_request: pr(), repository: repo });
+    const act = ctx.act;
+    ctx.act = (a, m, fn) => act(a, m, (s) => fn({ ...s, relink: () => { throw Object.assign(new Error(code), { code }); } }));
+    const p = run(ctx, 'pull_request', { action: 'opened', pull_request: pr({ id: 992, number: 43, html_url: 'https://github.com/acme/app/pull/43' }), repository: repo });
+    if (code === 'INTERNAL') await assert.rejects(p, /INTERNAL/);
+    else await assert.doesNotReject(p, code);
+  }
 });

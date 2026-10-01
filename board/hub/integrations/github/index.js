@@ -80,30 +80,42 @@ function boardCard(ctx, f) {
 
 // The card a fact belongs to: its existing link, or (firstLink, only for a PR
 // from a board branch in the same repo into that branch's base) the card
-// whose run made that branch, unless that card already has a PR.
+// whose run made that branch. A card that already has another PR gets this
+// one only as a relink, and only when this PR is the card's verified PR or
+// the old one has ended (closed or merged); the registry checks both again.
 function cardFor(ctx, f, firstLink) {
   const linked = f.pr_id ? ctx.linked('pr', f.pr_id) : null;
   if (linked) return { card: linked, linked: true };
   if (!firstLink) return null;
   const b = boardCard(ctx, f);
   if (!b || f.base_ref !== b.base) return null;
-  if (typeof ctx.linkedByCard === 'function' && ctx.linkedByCard(b.card, 'pr') != null) return null;
-  return { card: b.card, linked: false };
+  const have = typeof ctx.linkedByCard === 'function' ? ctx.linkedByCard(b.card, 'pr') : null;
+  if (have == null) return { card: b.card, linked: false };
+  if (typeof ctx.linkStatusFor !== 'function' || !f.url) return null;
+  const v = typeof ctx.verifiedPr === 'function' ? ctx.verifiedPr(b.card) : null;
+  // Evidence that names no repo is bound to the card's own repo, which only
+  // the registry knows: it refuses the relink if f.url is another repo.
+  const verified = !!v && v.number === f.number && (!v.repo || v.repo.toLowerCase() === String(f.repo).toLowerCase());
+  const ended = ['closed', 'merged'].includes(ctx.linkStatusFor(b.card, 'pr')?.state);
+  return verified || ended ? { card: b.card, linked: false, relink: have } : null;
 }
+
+// What s.link and s.relink refuse is an answer about the card's PR slot (it
+// has another PR, the PR is not the card's), not a failure: a throw would
+// make GitHub redeliver it again and again.
+const SLOT_ANSWERS = new Set(['CONFLICT', 'NOT_FOUND', 'VALIDATION']);
 
 async function linkAndStatus(ctx, f, status, firstLink = false) {
   const hit = cardFor(ctx, f, firstLink);
   if (!hit) return null;
   try {
     await ctx.act(hit.linked ? 'pr.status' : 'pr.link', { external_ref: f.pr_id, detail: { pr: f.number } }, async (s) => {
-      if (!hit.linked) s.link(hit.card, 'pr', f.pr_id, f.url);
+      if (hit.relink) s.relink(hit.card, 'pr', hit.relink, f.pr_id, f.url);
+      else if (!hit.linked) s.link(hit.card, 'pr', f.pr_id, f.url);
       s.linkStatus(hit.card, 'pr', f.pr_id, status);
     });
   } catch (e) {
-    // The card got another PR between the check and the link (s.link allows
-    // one per card). That's an answer, not a failure: a throw would make
-    // GitHub redeliver it again and again.
-    if (e?.code === 'CONFLICT' && !hit.linked) return null;
+    if (!hit.linked && (e?.code === 'CONFLICT' || (hit.relink && SLOT_ANSWERS.has(e?.code)))) return null;
     throw e;
   }
   return hit;
