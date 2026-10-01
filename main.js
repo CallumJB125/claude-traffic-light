@@ -1126,7 +1126,7 @@ function createFeedbackWindow() {
   });
   feedbackWin.setMenuBarVisibility(false);
   feedbackWin.loadFile('feedback.html');
-  if (IS_MAC) app.dock.show();
+  showDock();
   feedbackWin.on('closed', () => {
     feedbackWin = null; feedbackShot = null; feedbackLast = null;
     if (IS_MAC && !lightsWin && !settingsWin && !updatesWin && !buddyWin?.isOpen()) app.dock.hide();
@@ -1191,6 +1191,10 @@ ipcMain.handle('feedback-save', (e, d) => {
 });
 ipcMain.handle('feedback-show', (e) => { if (feedbackSenderOk(e) && feedbackLast) shell.showItemInFolder(path.join(feedbackLast.folder, 'report.md')); });
 ipcMain.handle('feedback-copy', (e) => { if (feedbackSenderOk(e) && feedbackLast) clipboard.writeText(feedbackLast.text); });
+ipcMain.handle('feedback-board', (e) => {
+  if (!feedbackSenderOk(e)) return null;
+  return Feedback.sendToBoard({ last: feedbackLast, buddyWin });
+});
 ipcMain.handle('feedback-github', (e) => {
   if (!feedbackSenderOk(e) || !feedbackLast) return false;
   const url = Feedback.githubUrl(loadConfig().feedbackRepo, feedbackLast.report, feedbackLast.diagnostics, { screenshot: feedbackLast.shot });

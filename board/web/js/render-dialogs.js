@@ -5,6 +5,7 @@ import { h } from './h.js';
 import { icon, pixelClaude } from './icons.js';
 import { formatAge } from './view.js';
 import { paletteDialog } from './render-palette.js';
+import { SENT_TEXT, VIEWER_TEXT } from './feedback-send.js';
 import { LABEL_COLORS, labelClass, managerRows } from './labels.js';
 
 function shell(kind, title, content, { wide = false, describedBy = null } = {}) {
@@ -220,6 +221,24 @@ export function labelsDialog(dlg, model) {
     errorLine(dlg)));
 }
 
+export function feedbackDialog(dlg, model) {
+  const p = dlg.payload;
+  const team = model.me?.org?.name ?? 'your team';
+  const sent = dlg.result?.ok ? dlg.result : null;
+  const viewer = model.readOnly || !model.me?.member;
+  return shell('feedback', 'Send feedback', h('div', { class: 'modal-body' },
+    h('p', { class: 'modal-lede' }, `Everyone on ${team}’s board can see this card.`),
+    h('p', { class: 'hint' }, p.kind === 'idea' ? 'Idea' : 'Something’s off'),
+    h('p', null, h('strong', { 'data-feedback': 'title' }, p.title)),
+    h('pre', { class: 'feedback-body', 'data-feedback': 'body', tabindex: '0' }, p.body),
+    sent ? h('p', { class: 'callout callout-ok', role: 'status' }, SENT_TEXT, ' ', h('a', { href: `/?board=${encodeURIComponent(sent.boardId)}#card=${encodeURIComponent(sent.cardId)}` }, 'Open the card')) : null,
+    dlg.result && !dlg.result.ok ? h('p', { class: 'form-error', role: 'alert' }, dlg.result.text) : null,
+    viewer ? h('p', { class: 'hint' }, VIEWER_TEXT) : null,
+    h('div', { class: 'modal-actions' },
+      h('button', { type: 'button', class: 'btn btn-ghost', 'data-action': 'close-dialog' }, sent ? 'Close' : 'Cancel'),
+      sent ? null : h('button', { type: 'button', class: 'btn btn-primary', 'data-action': 'feedback-send', disabled: dlg.busy || viewer || null }, 'Send to the Plexiform feedback board'))));
+}
+
 export function dialog(model) {
   const d = model.dialog;
   if (!d) return null;
@@ -231,6 +250,7 @@ export function dialog(model) {
     case 'new': return newCardDialog(d, model);
     case 'palette': return paletteDialog(d, model);
     case 'labels': return labelsDialog(d, model);
+    case 'feedback': return feedbackDialog(d, model);
     default: return null;
   }
 }

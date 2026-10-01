@@ -22,6 +22,7 @@ import { VIEWS } from './views.js';
 import { drawer } from './render-drawer.js';
 import { colorMap } from './labels.js';
 import { dialog } from './render-dialogs.js';
+import { decodeFeedback, sendFeedback, FRAGMENT_PREFIX } from './feedback-send.js';
 import { signinScreen, noTeamScreen } from './render-signin.js';
 import { accountErrorText, parseJoin } from './account-text.js';
 import { PLAN_APPROVAL_LABEL } from '../../shared/states.js';
@@ -626,6 +627,7 @@ function onMessage(msg) {
       state.members = new Map(msg.members.map((m) => [m.member_id, m]));
       state.cards = new Map(msg.cards.map((c) => [c.id, { view: c, rx: now }]));
       state.cardsRev += 1;
+      openPendingFeedback();
       state.selection = pruneSelection(state.selection, state.cards.keys());
       if (state.showArchived) loadArchived();
       if (state.detail) refreshDetail(state.detail.cardId);
@@ -829,6 +831,34 @@ function takeDevSecretFromHash() {
   if (!m) return;
   rememberDevSecret(decodeURIComponent(m[1]));
   history.replaceState(null, '', location.pathname + location.search);
+}
+
+// The fragment is dropped before anything is shown; a report that arrives
+// before sign-in/board load waits here and opens once the board is ready.
+let pendingFeedback = null;
+function takeFeedbackFromHash() {
+  if (!location.hash.startsWith(FRAGMENT_PREFIX)) return;
+  const payload = decodeFeedback(location.hash);
+  history.replaceState(null, '', location.pathname + location.search);
+  if (!payload) return;
+  pendingFeedback = payload;
+  openPendingFeedback();
+}
+
+function openPendingFeedback() {
+  if (!pendingFeedback || state.auth !== 'ok' || !state.board) return;
+  state.dialog = { kind: 'feedback', payload: pendingFeedback, busy: false, result: null };
+  pendingFeedback = null;
+  update();
+}
+
+async function submitFeedback() {
+  const d = state.dialog;
+  if (d?.kind !== 'feedback' || d.busy || d.result?.ok || state.me?.member?.role === 'viewer') return;
+  state.dialog = { ...d, busy: true, result: null };
+  update();
+  const result = await sendFeedback({ api, boards: state.me?.boards, payload: d.payload });
+  if (state.dialog?.kind === 'feedback') { state.dialog = { ...state.dialog, busy: false, result }; update(); }
 }
 
 function openFromHash() {
@@ -1347,6 +1377,7 @@ function onClick(e) {
     case 'close-drawer': root.querySelector('dialog[data-dialog="drawer"]')?.close(); return;
     case 'close-dialog': el.closest('dialog')?.close(); return;
     case 'new-card': openNewCard(); return;
+    case 'feedback-send': submitFeedback(); return;
     case 'palette': togglePalette(); return;
     case 'palette-run': { const hit = paletteNow()[Number(el.dataset.index)]; if (hit) runPalette(hit.item); return; }
     case 'quick-add': openQuickAdd(); return;
@@ -1605,4 +1636,6 @@ loadLocalCard();
 loadView();
 loadFilters();
 takeDevSecretFromHash();
+takeFeedbackFromHash();
+addEventListener('hashchange', takeFeedbackFromHash);
 boot();

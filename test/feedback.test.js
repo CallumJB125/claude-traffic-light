@@ -78,9 +78,68 @@ test('the GitHub link is encoded, capped, and absent without a repo', () => {
   assert.match(new URL(big).searchParams.get('body'), /drag it into the issue/);
 });
 
-test('the GitHub sender is only available when feedbackRepo is set; the hub sender is a stub', () => {
+test('the GitHub sender is only available when feedbackRepo is set', () => {
   const gh = F.senders.find((s) => s.id === 'github');
   assert.equal(gh.available({}), false);
   assert.equal(gh.available({ feedbackRepo: 'owner/repo' }), true);
-  assert.equal(F.senders.find((s) => s.id === 'hub').available({ feedbackRepo: 'owner/repo' }), false);
+});
+
+const RID = '123e4567-e89b-42d3-a456-426614174000';
+const decodeFrag = (f) => JSON.parse(Buffer.from(f.slice('plexiform-feedback='.length), 'base64url').toString());
+const rep = (text, kind = 'off') => F.buildReport({ ...base, kind, text });
+
+test('board payload: v1, mapped kind, title, the saved text plus diagnostics, request id; fragment is base64url', () => {
+  const report = rep('The lamp stayed red\nmore', 'idea');
+  const { payload, fragment } = F.buildBoardFragment({ report, diagnostics: 'diag line', requestId: RID });
+  assert.match(fragment, /^plexiform-feedback=[A-Za-z0-9_-]+$/);
+  assert.deepEqual(decodeFrag(fragment), payload);
+  assert.deepEqual(Object.keys(payload), ['v', 'kind', 'title', 'body', 'requestId']);
+  assert.equal(payload.v, 1);
+  assert.equal(payload.kind, 'idea');
+  assert.equal(payload.title, 'Idea: The lamp stayed red');
+  assert.equal(payload.body, `${report.markdown}\n## Diagnostics\n\ndiag line`);
+  assert.equal(F.buildBoardFragment({ report: rep('x'), requestId: RID }).payload.kind, 'bug');
+});
+
+test('a screenshot only adds a note; its bytes are never in the payload', () => {
+  const { payload } = F.buildBoardFragment({ report: rep('x'), screenshot: true, requestId: RID });
+  assert.match(payload.body, /A screenshot was saved on the reporter's Mac; ask for it if needed\.$/);
+  assert.equal(F.buildBoardFragment({ report: rep('x'), requestId: RID }).payload.body.includes('screenshot'), false);
+});
+
+test('a huge diagnostics block is cut with a marker and the fragment stays within 32 KB', () => {
+  for (const diagnostics of ['d'.repeat(50_000), '€'.repeat(20_000)]) {
+    const { payload, fragment } = F.buildBoardFragment({ report: rep('x'), diagnostics, screenshot: true, requestId: RID });
+    assert.ok(fragment.length <= 32 * 1024, String(fragment.length));
+    assert.ok(payload.body.length <= 20_000);
+    assert.match(payload.body, /\(truncated; full report saved on the reporter's Mac\)/);
+    assert.match(payload.body, /A screenshot was saved/);
+  }
+});
+
+test('the request id is made once per report folder (0600) and reused', { skip: process.platform === 'win32' }, () => {
+  const folder = tmp();
+  const a = F.requestIdFor(folder);
+  assert.match(a, /^[0-9a-f-]{36}$/);
+  assert.equal(F.requestIdFor(folder), a);
+  assert.equal(fs.statSync(path.join(folder, 'request-id')).mode & 0o777, 0o600);
+  assert.notEqual(F.requestIdFor(tmp()), a);
+});
+
+test('sending: no openWithFragment or no-team shows the join-a-team message; other failures have their own', async () => {
+  const folder = tmp();
+  const last = { folder, report: rep('x'), diagnostics: '', shot: false };
+  assert.equal((await F.sendToBoard({ last, buddyWin: {} })).message, F.MSG.noTeam);
+  assert.equal((await F.sendToBoard({ last, buddyWin: null })).message, F.MSG.noTeam);
+  assert.match(F.MSG.noTeam, /^Join a team to send feedback to its board\. Your report is saved on this Mac\.$/);
+  const seen = [];
+  const win = (r) => ({ openWithFragment: async (page, f) => { seen.push([page, f]); if (r instanceof Error) throw r; return r; } });
+  assert.equal((await F.sendToBoard({ last, buddyWin: win({ ok: false, why: 'no-team' }) })).message, F.MSG.noTeam);
+  assert.equal((await F.sendToBoard({ last, buddyWin: win({ ok: false, why: 'invalid' }) })).message, F.MSG.invalid);
+  assert.equal((await F.sendToBoard({ last, buddyWin: win({ ok: false, why: 'unavailable' }) })).message, F.MSG.unavailable);
+  assert.equal((await F.sendToBoard({ last, buddyWin: win(new Error('boom')) })).message, F.MSG.unavailable);
+  const ok = await F.sendToBoard({ last, buddyWin: win({ ok: true }) });
+  assert.equal(ok.ok, true);
+  assert.equal(seen[0][0], 'board');
+  assert.equal(new Set(seen.map(([, f]) => f)).size, 1);
 });

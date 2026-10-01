@@ -9,5 +9,6 @@ contextBridge.exposeInMainWorld('feedbackApi', {
   save: (draft) => ipcRenderer.invoke('feedback-save', draft),
   showReport: () => ipcRenderer.invoke('feedback-show'),
   copyReport: () => ipcRenderer.invoke('feedback-copy'),
+  sendToBoard: () => ipcRenderer.invoke('feedback-board'),
   openGithub: () => ipcRenderer.invoke('feedback-github'),
 });

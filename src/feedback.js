@@ -95,13 +95,73 @@ function githubUrl(repo, report, diagnostics = '', { screenshot = false } = {}) 
   return head + encodeURIComponent(body);
 }
 
-// Senders are offered next to "Saved". Each answers available() and, when
-// clicked, send(). The hub sender is not wired yet.
-// TODO(hub): POST to the team hub as the signed-in member:
-//   {title, body, labels: ['feedback', kind]}, optional PNG <= 2 MB.
+// Sending to the team board: main only builds the text and hands the page a
+// fragment; the signed-in board page shows it and posts it on a click, so main
+// never touches the hub session.
+const BOARD_KIND = { off: 'bug', idea: 'idea' };
+const MAX_TITLE = 200;
+const MAX_BODY = 20000;
+const MAX_FRAGMENT = 32000;
+const FRAGMENT_KEY = 'plexiform-feedback=';
+const CUT_MARK = "\n\n…(truncated; full report saved on the reporter's Mac)";
+const SHOT_NOTE = "\n\nA screenshot was saved on the reporter's Mac; ask for it if needed.";
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Stored beside the report so a retry (or a second click) reuses the id and the hub dedupes.
+function requestIdFor(folder, { fs = nodeFs, randomUUID = () => require('crypto').randomUUID() } = {}) {
+  const file = path.join(folder, 'request-id');
+  try { const v = fs.readFileSync(file, 'utf8').trim(); if (UUID.test(v)) return v; } catch { /* first send */ }
+  const id = randomUUID();
+  fs.writeFileSync(file, `${id}\n`, { mode: 0o600 });
+  try { fs.chmodSync(file, 0o600); } catch { /* best effort */ }
+  return id;
+}
+
+const fragmentOf = (payload) => FRAGMENT_KEY + Buffer.from(JSON.stringify(payload)).toString('base64url');
+
+// Never includes the screenshot, only a line saying one exists.
+function buildBoardFragment({ report, diagnostics = '', screenshot = false, requestId }) {
+  const text = reportAsText(report, diagnostics);
+  const note = screenshot ? SHOT_NOTE : '';
+  const make = (body) => ({ v: 1, kind: BOARD_KIND[report.kind], title: cap(`${KIND_LABEL[report.kind]}: ${report.title}`, MAX_TITLE), body, requestId });
+  let body = text + note;
+  let payload = make(body);
+  let fragment = fragmentOf(payload);
+  if (body.length > MAX_BODY || fragment.length > MAX_FRAGMENT) {
+    let keep = text.slice(0, MAX_BODY - CUT_MARK.length - note.length);
+    for (;;) {
+      body = keep.trimEnd() + CUT_MARK + note;
+      payload = make(body);
+      fragment = fragmentOf(payload);
+      if (fragment.length <= MAX_FRAGMENT || !keep) break;
+      keep = keep.slice(0, Math.floor(keep.length * 0.9));
+    }
+  }
+  return { payload, fragment };
+}
+
+const MSG = {
+  noTeam: 'Join a team to send feedback to its board. Your report is saved on this Mac.',
+  invalid: "Couldn't prepare the report for sending. It's saved on this Mac.",
+  unavailable: "The team board isn't reachable right now. Your report is saved on this Mac.",
+  opened: "Opened your team's board. Check the text there, then click Send.",
+};
+
+// `buddyWin.openWithFragment` may not exist yet in every build, so it is feature-checked.
+async function sendToBoard({ last, buddyWin, fs = nodeFs, randomUUID }) {
+  if (!last || typeof buddyWin?.openWithFragment !== 'function') return { ok: false, message: MSG.noTeam };
+  let fragment;
+  try {
+    fragment = buildBoardFragment({ report: last.report, diagnostics: last.diagnostics, screenshot: last.shot, requestId: requestIdFor(last.folder, { fs, randomUUID }) }).fragment;
+  } catch { return { ok: false, message: MSG.invalid }; }
+  let r;
+  try { r = await buddyWin.openWithFragment('board', fragment); } catch { r = { ok: false, why: 'unavailable' }; }
+  if (r?.ok) return { ok: true, message: MSG.opened };
+  return { ok: false, message: r?.why === 'no-team' ? MSG.noTeam : r?.why === 'invalid' ? MSG.invalid : MSG.unavailable };
+}
+
 const senders = [
-  { id: 'hub', label: 'Send to the team', available: () => false },
   { id: 'github', label: 'Open a GitHub issue', available: (config) => !!githubUrl(config?.feedbackRepo, { kind: 'off', title: '', markdown: '' }) },
 ];
 
-module.exports = { KINDS, KIND_LABEL, MAX_TEXT, KEEP, MAX_ISSUE_URL, cleanText, buildReport, reportAsText, save, prune, githubUrl, senders };
+module.exports = { KINDS, KIND_LABEL, MAX_TEXT, KEEP, MAX_ISSUE_URL, cleanText, buildReport, reportAsText, save, prune, githubUrl, senders, requestIdFor, buildBoardFragment, sendToBoard, MSG, MAX_FRAGMENT };

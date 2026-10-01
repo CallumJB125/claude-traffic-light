@@ -42,6 +42,11 @@
   });
   $('show').addEventListener('click', () => api.showReport());
   $('copy').addEventListener('click', async () => { await api.copyReport(); say('Copied.'); });
+  $('board').addEventListener('click', async () => {
+    say('');
+    const r = await api.sendToBoard();
+    if (r) say(r.message, !r.ok);
+  });
   $('github').addEventListener('click', () => api.openGithub());
 
   (async () => {
