@@ -140,7 +140,10 @@ export function createBackup({ dataDir, db = path.join(dataDir, 'board.db'), out
   const complete = fs.readdirSync(outDir).filter((n) => BUNDLE.test(n)).sort().filter((n) => {
     try { validateBackup(path.join(outDir, n)); return true; } catch { return false; }
   });
-  const old = complete.slice(0, Math.max(0, complete.length - keep));
+  // Wall-clock rollback and same-millisecond random suffixes must never
+  // prune the bundle this successful call is returning.
+  const previous = complete.filter((n) => n !== name);
+  const old = previous.slice(0, Math.max(0, previous.length - (keep - 1)));
   for (const n of old) fs.rmSync(path.join(outDir, n), { recursive: true });
   syncDir(outDir);
   return { bundle, artifact_count: manifest.artifacts.length, pruned: old.length };

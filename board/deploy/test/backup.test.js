@@ -112,3 +112,20 @@ test('the nightly executable and snapshot modes also support pre-artifact databa
   assert.equal(call('--stage-restore', exact, path.join(r.root, 'prepared')).artifact_count, 0);
   assert.equal(validateBackup(exact).artifacts.length, 0);
 });
+
+test('retention always preserves the returned bundle across clock rollback and equal timestamps', (t) => {
+  const r = rig(t); r.add();
+  const ActualDate = Date;
+  let now = '2099-01-01T00:00:00.000Z';
+  t.mock.method(globalThis, 'Date', function (...args) { return new ActualDate(...(args.length ? args : [now])); });
+  const previous = createBackup({ dataDir: r.dataDir, keep: 1 });
+  now = '2000-01-01T00:00:00.000Z';
+  const rollback = createBackup({ dataDir: r.dataDir, keep: 1 });
+  assert.equal(rollback.pruned, 1); assert.equal(fs.existsSync(previous.bundle), false);
+  assert.equal(validateBackup(rollback.bundle).artifacts.length, 1);
+  // Put a valid older invocation last in the same-timestamp sort order.
+  const high = rollback.bundle.replace(/[0-9a-f]{8}$/, 'ffffffff'); fs.renameSync(rollback.bundle, high);
+  const equal = createBackup({ dataDir: r.dataDir, keep: 1 });
+  assert.equal(equal.pruned, 1); assert.equal(fs.existsSync(high), false);
+  assert.equal(validateBackup(equal.bundle).artifacts.length, 1);
+});
