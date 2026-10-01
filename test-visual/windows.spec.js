@@ -35,3 +35,12 @@ test('settings window renders its default state', async () => {
   const settings = await settled(await windowByFile(h.app, 'settings.html'));
   await expect(settings).toHaveScreenshot('settings-window.png');
 });
+
+// Each test launch is a fresh app copy; showing it in the Dock left stray icons behind.
+test('a test run never shows in the Dock, even with windows open', async () => {
+  test.skip(process.platform !== 'darwin', 'the Dock is macOS-only');
+  const lights = await windowByFile(h.app, 'lights.html');
+  await lights.evaluate(() => window.lightsApi.openPreferences());
+  await windowByFile(h.app, 'settings.html');
+  expect(await h.app.evaluate(({ app }) => app.dock.isVisible())).toBe(false);
+});

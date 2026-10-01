@@ -111,6 +111,11 @@ const DIAG = process.argv.includes('--diag');
 // Dev runs (shots, playtests, demos) must never touch the real install: no
 // hook writes, no login item, no stale lock left behind.
 const IS_DEV_RUN = !!DEMO || process.argv.includes('--shot') || process.argv.includes('--shot-help') || process.argv.includes('--help-window') || process.argv.includes('--playtest') || process.argv.includes('--lights') || process.argv.includes('--buddy');
+// The visual tests launch a fresh copy of the app each time; on macOS every one
+// that showed in the Dock left a stray Dock icon and LaunchServices entry
+// behind. A test run is unpackaged and passes `--demo visual`.
+const NO_DOCK = DEMO === 'visual' && !app.isPackaged;
+function showDock() { if (IS_MAC && !NO_DOCK) app.dock.show(); }
 
 // Every interval/timeout the app owns goes through these so --diag can count
 // them and so nothing can leak a live timer on shutdown.
@@ -1094,7 +1099,7 @@ function createSettingsWindow() {
   settingsWin.loadFile('settings.html');
   // The macOS Calendar and Focus readers don't exist elsewhere; the ICS feed stays.
   if (!IS_MAC) settingsWin.webContents.on('dom-ready', () => settingsWin?.webContents.insertCSS('#busy-sources, .field:has(#busyFocusShortcut) { display: none; }').catch(() => {}));
-  if (IS_MAC) app.dock.show();
+  showDock();
   settingsWin.on('closed', () => {
     settingsWin = null;
     if (process.platform === 'darwin' && !lightsWin && !updatesWin && !buddyWin?.isOpen()) app.dock.hide();
@@ -1126,7 +1131,7 @@ function createUpdatesWindow() {
   updatesWin.webContents.on('will-navigate', stay);
   updatesWin.webContents.on('will-redirect', stay);
   updatesWin.loadFile('updates.html');
-  if (IS_MAC) app.dock.show();
+  showDock();
   updatesWin.on('closed', () => {
     updatesWin = null;
     if (process.platform === 'darwin' && !lightsWin && !settingsWin && !updatesWin && !buddyWin?.isOpen()) app.dock.hide();
@@ -1195,7 +1200,7 @@ const accountSummary = () => { try { return typeof buddyWin?.accountSummary === 
 function openBuddy(page = null) {
   if (!devMockReady) return;
   getBuddy();
-  if (IS_MAC) app.dock.show();
+  showDock();
   buddyWin.open(page);
 }
 
@@ -1276,7 +1281,7 @@ function createWaitingWindow() {
   waitingWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   waitingWin.webContents.on('will-navigate', (e) => e.preventDefault());
   waitingWin.loadFile('waiting.html');
-  if (IS_MAC) app.dock.show();
+  showDock();
   waitingWin.on('closed', () => {
     waitingWin = null;
     if (IS_MAC && !lightsWin && !settingsWin && !buddyWin?.isOpen()) app.dock.hide();
@@ -1406,7 +1411,7 @@ function createLightsWindow() {
       }, 2000);
     });
   }
-  if (IS_MAC) app.dock.show();
+  showDock();
   lightsWin.on('closed', () => {
     lightsWin = null;
     // The next editor opens shown; only the machine-wide reasons carry over.
