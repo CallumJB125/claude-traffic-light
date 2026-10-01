@@ -436,6 +436,7 @@ const SCREENS = {
         el('div', { class: 'acct-who' }, el('span', { class: 'acct-name' }, 'Create cards from reported AI work'),
           el('span', { class: 'acct-mail' }, 'Work in a linked team repository goes to that team’s board. Other work goes to My board. Only task details and reported progress are sent; transcripts stay private. Finished reports move to Review for you to check.')),
         toggle(s.workCapture.enabled, 'Create cards automatically from reported AI work', async on => { const r = await api.captureEnabled(on); if (r?.ok) render(); return r; })));
+      if (s.workCapture.notice) sec.append(el('p', { class: 'acct-hint', role: 'status' }, s.workCapture.notice));
       for (const t of s.workCapture.tasks) {
         const d = t.destination, destination = d.kind === 'team' ? `${d.team_name || 'Team'} · ${d.board_name || 'Board'}` : 'My board (this Mac)';
         const status = t.untracked ? 'Tracking stopped' : !t.card_id ? 'Waiting to sync' : `Last report: ${t.status || 'activity'}`;

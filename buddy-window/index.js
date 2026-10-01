@@ -753,13 +753,13 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
       if (args.length !== types.length || args.some((a, i) => typeof a !== types[i] || (typeof a === 'string' && a.length > 2048))) return { ok: false, error: 'Not allowed.' };
       try {
         const result = await fn(...args);
-        return op === 'state' && result?.screen === 'thismac' ? { ...result, workCapture: { enabled: captureEnabled && workCapture.enabled(), tasks: workCapture.snapshot().slice(-100), choices: workCapture.choices() } } : result;
+        return op === 'state' && result?.screen === 'thismac' ? { ...result, workCapture: { enabled: captureEnabled && workCapture.enabled(), notice: workCapture.notice(), tasks: workCapture.snapshot().slice(-100), choices: workCapture.choices() } } : result;
       } catch (err) { log('account action failed', op, err.message); return { ok: false, error: 'Something went wrong. Try again.' }; }
     });
   }
   ipcMain.handle('buddy:acct:captureEnabled', (e, on) => {
     if (!fromAccount(e) || typeof on !== 'boolean' || !captureEnabled) return { ok: false, error: 'Not allowed.' };
-    workCapture.setEnabled(on); return { ok: true };
+    return workCapture.setEnabled(on) ? { ok: true } : { ok: false, error: workCapture.notice() || 'Could not save automatic card settings.' };
   });
   ipcMain.handle('buddy:acct:captureDefault', async (e, repo, key) => {
     if (!fromAccount(e) || typeof repo !== 'string' || typeof key !== 'string' || !captureEnabled) return { ok: false, error: 'Not allowed.' };
