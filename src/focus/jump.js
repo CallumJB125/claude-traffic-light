@@ -11,19 +11,40 @@ function createJumper({ localHost, platform, focus, activate, explainer, log = (
   let current = null; // { key, gen, promise } of the jump in flight
   let gen = 0;
 
-  // Same shape as activate's answer: { app, exact } or null. `stale()` turns
+  // When the target can't be pinned down, the click must not change what the
+  // user is looking at: no app is activated, a note says why instead.
+  const NOTE_DETACHED = 'This session is running in tmux with no terminal window open.';
+  const NOTE_UNKNOWN = "Can't tell which terminal window this session is in, so nothing was switched.";
+  function cantJump(r, session) {
+    if (r && r.sibling) return { app: null, exact: false, cant: "This session's windows are shown in another tmux session's tab." };
+    if (r && r.selected) {
+      const app = session && session.hostApp;
+      return { app: null, exact: false, cant: `Switched the tmux window in its terminal. Bring ${app || 'it'} forward to see it.` };
+    }
+    if (r && r.detached) {
+      return { app: null, exact: false, cant: `${NOTE_DETACHED} Run \`${r.command || 'tmux attach'}\` in a terminal.`, ...(r.command ? { command: r.command } : {}) };
+    }
+    return { app: null, exact: false, cant: NOTE_UNKNOWN };
+  }
+
+  // Same shape as activate's answer: { app, exact } or null, or
+  // { app: null, cant, command? } when nothing was switched. `stale()` turns
   // true once a click for another target has superseded this one.
   async function run(session, folderHint, preferApp, stale) {
     if (isRemote(session)) return null;
-    if (platform === 'darwin' && session && session.terminal && session.host === localHost) {
-      const r = await focus(session, { onNeeds: (needs) => explainer.onNeeds(needs), isCancelled: stale });
+    // A pane dialog's session has no host: it is a pane on this Mac.
+    const here = !!session && (!session.host || session.host === localHost);
+    if (platform === 'darwin' && here) {
+      if (!session.terminal) { log('no terminal recorded; nothing switched'); return stale() ? null : cantJump(null); }
+      const r = await focus(session, { onNeeds: (needs) => explainer.onNeeds(needs), isCancelled: stale, log });
       if (stale()) return null;
       if (r.ok) {
         const adapter = ADAPTERS.find((a) => a.id === String(r.adapter).split('+').pop());
         return { app: r.app || session.hostApp || (adapter && adapter.app) || 'terminal', exact: !!r.exact };
       }
-      log(`${r.adapter || 'no adapter'}: ${r.reason || 'failed'}; activating the app instead`);
+      log(`${r.adapter || 'no adapter'}: ${r.reason || 'failed'}; nothing switched`);
       if (r.denied) explainer.onDenied(r.needs);
+      return cantJump(r, session);
     }
     return stale() ? null : activate(folderHint, preferApp);
   }

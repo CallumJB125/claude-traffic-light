@@ -1,7 +1,7 @@
 // Jump to the exact terminal tab a session runs in. Each adapter knows one
 // terminal; the first that can handle the session and succeeds wins. Any
-// miss, error or timeout returns { ok: false } and the caller falls back to
-// activating the app, which is what the jump did before this existed.
+// miss, error or timeout returns { ok: false } and the caller switches
+// nothing: guessing at a window would move the tab the user is working in.
 //
 // Nothing here ever types into a terminal or fakes input: only
 // each terminal's own select/focus API.

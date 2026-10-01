@@ -31,6 +31,7 @@ contextBridge.exposeInMainWorld('trafficLight', {
   // PendingInput (docs/waiting-inputs.md): answer by option id; open = jump to its terminal.
   answerInput: (id, optionId, more) => ipcRenderer.invoke('answer-input', id, optionId, more),
   openInput: (id) => ipcRenderer.invoke('open-input', id),
+  copyInputCommand: (id) => ipcRenderer.invoke('copy-input-command', id),
   // The bubble's height: main grows the window by it so Claude keeps his size.
   setBubbleHeight: (px) => ipcRenderer.send('set-bubble-height', px),
   // main has given the bubble that much room (until then it may be clipped).

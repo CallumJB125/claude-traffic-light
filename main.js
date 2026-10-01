@@ -906,13 +906,13 @@ function showAwayRecap(recap) {
   note.on('close', () => liveNotifications.delete(note));
   note.show();
 }
+const AwayOpen = require('./src/away-open.js');
 async function openAwayItem(i) {
   const recap = BusyWatch.recap();
   const item = recap && recap.items[Number(i) || 0];
   if (!item) return { opened: 'none' };
   if (item.cwd) clipboard.writeText(item.cwd);
-  const activated = await activateTerminalApp(item.folder, item.hostApp || undefined);
-  return { opened: activated?.app || 'none-found', folder: item.folder };
+  return AwayOpen.openAway({ item, sessions: aggregateState().sessions || [], jump: jumpToSession, isRemote });
 }
 ipcMain.handle('away-open', (_e, i) => openAwayItem(i));
 ipcMain.handle('away-dismiss', () => { BusyWatch.dismiss(); stateMemo = { at: 0, key: null, value: null }; broadcastStatus(); });
@@ -2582,6 +2582,7 @@ ipcMain.handle('go-to-needing-session', async () => {
   return {
     opened: activated?.app || 'none-found',
     exact: activated?.exact || false,
+    ...(activated?.cant ? { note: activated.cant, feedback: activated.cant, command: activated.command || null } : {}),
     cwd: target.cwd,
     signal: target.signal,
     index: shownIndex,
@@ -2999,7 +3000,7 @@ async function runAction(action, st) {
     }
     case 'terminal': {
       const a = await jumpToSession(target, folderHint);
-      return { feedback: a ? `→ ${a.app}` : 'no terminal running' };
+      return { feedback: a?.cant ? a.cant : a ? `→ ${a.app}` : 'no terminal running' };
     }
     case 'allow': case 'deny': {
       // Tool permissions only: a plan, question or elicitation is answered
@@ -3068,6 +3069,7 @@ async function jumpToNeeding() {
   const folderHint = Rules.folderOf(target.cwd);
   const activated = await jumpToSession(target, folderHint);
   const badge = queue.length > 1 ? ` (${shownIndex}/${queue.length})` : '';
+  if (activated?.cant) return `${folderHint}${badge}: ${activated.cant}`;
   return `→ ${folderHint}${badge}${activated?.exact ? ' · tab found' : ''} · path copied`;
 }
 
@@ -3288,6 +3290,16 @@ ipcMain.handle('open-auto-rule', (e, from) => {
 });
 ipcMain.handle('check-auto-rule', (e, rule) => (lightsWin && e.sender === lightsWin.webContents ? { reason: AutoRules.refusal(rule) } : { reason: 'not allowed' }));
 
+// The attach command a detached session's open returned, by input id. The
+// renderer asks for it to be copied; it never supplies the text.
+const attachCommands = new Map();
+ipcMain.handle('copy-input-command', (e, id) => {
+  if (!inputSenderOk(e)) return { ok: false };
+  const cmd = attachCommands.get(String(id));
+  if (!cmd) return { ok: false };
+  try { clipboard.writeText(cmd); return { ok: clipboard.readText() === cmd }; } catch { return { ok: false }; }
+});
+
 // "Open it": jump to the pane or tab the input is waiting in. Never types.
 ipcMain.handle('open-input', async (e, id) => {
   if (!inputSenderOk(e)) return { ok: false, error: 'not allowed' };
@@ -3297,6 +3309,8 @@ ipcMain.handle('open-input', async (e, id) => {
   const session = dialog ? dialog.jump : (aggregateState().sessions || []).find((s) => s.sessionId === item.session);
   if (!session) return { ok: false, error: 'session not found' };
   const r = await jumpToSession(session, String(session.cwd || '').split('/').filter(Boolean).pop() || '', session.hostApp);
+  if (r && r.command) attachCommands.set(item.id, r.command); else attachCommands.delete(item.id);
+  if (r && r.cant) return { ok: false, note: r.cant, command: r.command || null };
   return { ok: !!r, app: r ? r.app : null };
 });
 

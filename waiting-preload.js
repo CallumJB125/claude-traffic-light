@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('waitingApi', {
   getInputs: () => ipcRenderer.invoke('get-inputs'),
   answerInput: (id, optionId, more) => ipcRenderer.invoke('answer-input', id, optionId, more),
   openInput: (id) => ipcRenderer.invoke('open-input', id),
+  copyInputCommand: (id) => ipcRenderer.invoke('copy-input-command', id),
   openAutoRule: (from) => ipcRenderer.invoke('open-auto-rule', from),
   nudgeMute: (key) => ipcRenderer.invoke('nudge-mute', key),
   setSessionScope: (sessionId, mode) => ipcRenderer.invoke('set-session-scope', sessionId, mode),

@@ -17,7 +17,8 @@ function setup(opts = {}) {
   let reply = opts.reply || (() => ({ ok: true }));
   const api = {
     answerInput: async (id, optionId, more) => { calls.answer.push([id, optionId, more]); return reply(id, optionId); },
-    openInput: async (id) => { calls.open.push(id); return { ok: true }; },
+    openInput: async (id) => { calls.open.push(id); return opts.openReply || { ok: true }; },
+    copyCommand: opts.copyCommand || (async () => ({ ok: true })),
     openAutoRule: (id) => calls.rule.push(id),
     openWaiting: () => { calls.waiting++; },
     setSessionScope: async (id, mode) => { calls.scope.push(['session', id, mode]); return { ok: true }; },
@@ -96,6 +97,25 @@ test('expired: "answer in terminal", no answer buttons, Open it jumps to the ter
   t.$('.ib-open').click();
   await tick();
   assert.deepEqual(t.calls.open, ['r1']);
+});
+
+test('Open it on a detached tmux session shows the note and a Copy command button that reports the truth', async () => {
+  const copyCalls = [];
+  let copyOk = true;
+  const t = setup({ openReply: { ok: false, note: 'This session is running in tmux with no terminal window open. Run `tmux attach -t work` in a terminal.', command: 'tmux attach -t work' }, copyCommand: async (id) => { copyCalls.push(id); return { ok: copyOk }; } });
+  t.show([perm({ expires_at: ago(0.1) })]);
+  t.$('.ib-open').click();
+  await tick();
+  assert.match(t.$('.ib-err').textContent, /no terminal window open/);
+  assert.deepEqual(copyCalls, []);
+  t.$('.ib-copy').click();
+  await tick();
+  assert.deepEqual(copyCalls, ['r1']);
+  assert.equal(t.$('.ib-copy').textContent, 'Copied');
+  copyOk = false;
+  t.$('.ib-copy').click();
+  await tick();
+  assert.equal(t.$('.ib-copy').textContent, "Couldn't copy: select the text");
 });
 
 test('Enter allows once only when main marked it allow-listed; ⌘. denies; Esc collapses then dismisses', async () => {
