@@ -22,7 +22,7 @@ contextBridge.exposeInMainWorld('trafficLight', {
   resizeWindowBy: (factor) => ipcRenderer.send('resize-window-by', factor),
   onStatusChanged: (callback) => ipcRenderer.on('status-changed', callback),
   openLights: () => ipcRenderer.invoke('open-lights'),
-  widgetMenu: () => ipcRenderer.invoke('widget-menu'),
+  widgetMenu: (menu) => ipcRenderer.invoke('widget-menu', { menu: menu === true }),
   openHelp: () => ipcRenderer.invoke('open-help'),
   onBurst: (cb) => ipcRenderer.on('burst', (e, ms) => cb(ms)),
   onAim: (cb) => ipcRenderer.on('aim', (e, a) => cb(a)),
@@ -53,6 +53,8 @@ contextBridge.exposeInMainWorld('trafficLight', {
   updateRowShown: (on) => ipcRenderer.send('update-row', !!on),
   awayOpen: (i) => ipcRenderer.invoke('away-open', i),
   awayDismiss: () => ipcRenderer.invoke('away-dismiss'),
+  // Budget notice: the widget names a run and an action; main builds the fragment.
+  budgetNotice: (action, runId) => ipcRenderer.invoke('budget-notice', { action, runId }),
   // Push-to-talk (F7): long-press starts and ends a question; main pushes
   // listening / thinking / talking / idle / error back for the mic badge and the mouth.
   teamHint: () => ipcRenderer.invoke('team-hint'),

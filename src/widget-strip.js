@@ -1,5 +1,5 @@
 // The widget's size while something hangs under Claude (the waiting-input
-// bubble or the "while you were away" recap). The widget's own rect is the
+// bubble, the budget notice or the "while you were away" recap). The widget's own rect is the
 // base; a strip adds height, and for the bubble enough width to read it,
 // split evenly so Claude stays put. The grown rect is kept on screen by
 // moving it up or left, never by shrinking it. Pure: main applies the result.
@@ -12,7 +12,7 @@ function baseOf(current, strip = NONE) {
   return { x: current.x + strip.dx, y: current.y + strip.dy, width: current.width - strip.w, height: current.height - strip.px };
 }
 
-// next: { kind: 'bubble'|'away'|null, px, minWidth }. → { bounds, strip }
+// next: { kind: 'bubble'|'budget'|'away'|'update'|null, px, minWidth }. → { bounds, strip }
 function stripBounds(current, strip = NONE, next = {}, workArea = null) {
   const base = baseOf(current, strip);
   const px = next.kind ? Math.max(0, Math.round(next.px || 0)) : 0;
@@ -41,7 +41,7 @@ const shouldAck = (strip, asked, acked, maxPx) => !!strip && strip.kind === 'bub
 // recap change the window's width or hang a lot under Claude, so moving or
 // resizing the grown rect would carry them along wrongly; the quiet update
 // row (no extra width, no offset of its own) can ride along.
-const blocksTravel = (strip) => !!strip && (strip.kind === 'bubble' || strip.kind === 'away');
+const blocksTravel = (strip) => !!strip && (strip.kind === 'bubble' || strip.kind === 'away' || strip.kind === 'budget');
 
 // Resize the widget's own rect by `factor` about its centre, keeping its
 // shape and limits, then hang the same strip under it again.

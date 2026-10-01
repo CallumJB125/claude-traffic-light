@@ -47,6 +47,7 @@ const { createMotionGate, staleMachineReasons, askKey, statusPushWanted } = requ
 const { createAwayFeeds } = require('./src/away-feeds.js');
 const { createProbeBackoff } = require('./src/probe-backoff.js');
 const UpdateView = require('./src/update-view.js');
+const Feedback = require('./src/feedback');
 const http = require('http'); // privacy-flow: local-server
 const crypto = require('crypto');
 const Terminal = require('./src/terminal.js')({ getSessions: () => localSessions(aggregateState().sessions), getRootDir: () => ROOT_DIR, getLocalHost: () => LOCAL_HOST });
@@ -788,6 +789,8 @@ function cameosChanged() {
   return cameoListing();
 }
 
+const budgetView = () => budgetNotices.list().map((n) => ({ runId: n.runId, text: BudgetNotice.text(n) }));
+
 function computeState(opts = {}) {
   const config = loadConfig();
   const requests = readRequests();
@@ -799,7 +802,7 @@ function computeState(opts = {}) {
     return { look: previewLook.look, reason: 'preview', sessions, fired: [], pending: [], tasks: null };
   }
   if (travelLook && !opts.ignoreTravel) {
-    return { look: { ...travelLook, tasks }, reason: 'travel', sessions, fired: [], pending, inputs, tasks, away: BusyWatch.recap() };
+    return { look: { ...travelLook, tasks }, reason: 'travel', sessions, fired: [], pending, inputs, tasks, away: BusyWatch.recap(), budget: null };
   }
   const override = readManualOverride();
   if (override) {
@@ -822,7 +825,7 @@ function computeState(opts = {}) {
   }
   const minions = config.showAgents ? Rules.filterAgentKinds(Rules.liveAgents(sessions), config.agentKinds).slice(0, 32) : [];
   const sNote = spendNote(config.rules, fired, sessions, spend);
-  return { look: { ...withNumber(look, sessions, tasks), tasks, minions, agentRoster: config.agentRoster !== false, agentChipSize: config.agentChipSize }, reason: sessions.length ? 'session' : 'idle', sessions, fired, owned, firedNames: Rules.firedNames(config.rules, fired, owned), tool: currentTool(sessions), agentCount, pending, inputs, tasks, minions, spend, spendNote: sNote, paceLine: config.paceTooltip !== false && spend && spend.pace && spend.pace.noteworthy && !sNote ? spend.pace.text : null, away: BusyWatch.recap(), busy: BusyWatch.holding() };
+  return { look: { ...withNumber(look, sessions, tasks), tasks, minions, agentRoster: config.agentRoster !== false, agentChipSize: config.agentChipSize }, reason: sessions.length ? 'session' : 'idle', sessions, fired, owned, firedNames: Rules.firedNames(config.rules, fired, owned), tool: currentTool(sessions), agentCount, pending, inputs, tasks, minions, spend, spendNote: sNote, paceLine: config.paceTooltip !== false && spend && spend.pace && spend.pace.noteworthy && !sNote ? spend.pace.text : null, away: BusyWatch.recap(), budget: budgetView(), busy: BusyWatch.holding() };
 }
 
 // The tool of the most recently updated session that is using one.
@@ -921,6 +924,57 @@ async function openAwayItem(i) {
 }
 ipcMain.handle('away-open', (_e, i) => openAwayItem(i));
 ipcMain.handle('away-dismiss', () => { BusyWatch.dismiss(); stateMemo = { at: 0, key: null, value: null }; broadcastStatus(); });
+// ── Budget notice (src/budget-notice.js) ───────────────────────────────────
+// A Give-to-Claude run stopped at its budget. Any such event is for the
+// signed-in person (runs execute only on their runner). The widget row, the
+// tray item and one notification all open the board card through the Plexiform
+// window's fragment; this process never reads the hub token or calls the hub.
+const BudgetNotice = require('./src/budget-notice.js');
+const budgetNotices = BudgetNotice.createNotices();
+const budgetNotified = new Set();
+const BUDGET_TRAY_ITEMS = 3;
+const budgetChanged = () => { stateMemo = { at: 0, key: null, value: null }; broadcastStatus(); refreshTrayMenu(); };
+function handleBudgetEvent(ev) {
+  const r = budgetNotices.handle(ev);
+  if (!r.changed) return;
+  if (r.added && !budgetNotified.has(r.notice.runId)) {
+    budgetNotified.add(r.notice.runId);
+    notifyBudget(r.notice);
+  }
+  budgetChanged();
+}
+function notifyBudget(n) {
+  console.log(`[budget] ${n.runId} — ${BudgetNotice.text(n)}`);
+  if (IS_DEV_RUN || loadConfig().notifyOnStates === false || !Notification.isSupported()) return;
+  const note = new Notification({ title: 'Run reached its budget', body: BudgetNotice.text(n), silent: true });
+  liveNotifications.add(note);
+  note.on('click', () => { liveNotifications.delete(note); openBudgetNotice(n.runId); });
+  note.on('close', () => liveNotifications.delete(note));
+  note.show();
+}
+// The Plexiform window may not offer a fragment opener yet (and a dev spec can
+// stand one in): then the answer is {ok:false} and the widget says where to go.
+async function openBudgetNotice(runId) {
+  const n = budgetNotices.get(runId);
+  if (!n) return { ok: false };
+  const spy = IS_DEV_RUN && !app.isPackaged && process.env.CLAUDE_BUDDY_BUDGET_HOOK === '1' ? global.__budgetOpenWithFragment : null;
+  try {
+    const open = spy || (devMockReady ? getBuddy()[BudgetNotice.CONTRACT.openMethod]?.bind(getBuddy()) : null);
+    if (typeof open !== 'function') return { ok: false };
+    showDock();
+    const r = await open(BudgetNotice.CONTRACT.boardPage, BudgetNotice.fragment(n));
+    return { ok: !(r && r.ok === false) };
+  } catch (err) { console.warn('[budget] open failed:', err.message); return { ok: false }; }
+}
+ipcMain.handle('budget-notice', (e, msg) => {
+  if (!win || win.isDestroyed() || e.sender !== win.webContents) return { ok: false };
+  const runId = msg && typeof msg.runId === 'string' ? msg.runId : '';
+  if (msg && msg.action === 'dismiss') { budgetNotices.dismiss(runId); budgetChanged(); return { ok: true }; }
+  if (msg && msg.action === 'board') { openBuddy(BudgetNotice.CONTRACT.boardPage); return { ok: true }; }
+  if (msg && msg.action === 'open') return openBudgetNotice(runId);
+  return { ok: false };
+});
+if (IS_DEV_RUN && !app.isPackaged && process.env.CLAUDE_BUDDY_BUDGET_HOOK === '1') global.__budgetInject = handleBudgetEvent;
 ipcMain.handle('busy-status', () => BusyWatch.status());
 // Settings' "Reconnect calendar": macOS forgot an earlier grant, so ask again.
 ipcMain.handle('busy-reconnect-calendar', async () => { await BusyWatch.enableCalendar(); return BusyWatch.status(); });
@@ -1105,6 +1159,103 @@ function createSettingsWindow() {
     if (process.platform === 'darwin' && !lightsWin && !updatesWin && !buddyWin?.isOpen() && !hatchWin) app.dock.hide();
   });
 }
+
+// ── Feedback ("Something's off / Idea") ──────────────────────────────────────
+// One window, opened from the tray, Preferences and the Lights editor. Saved
+// reports stay on this computer; nothing is sent unless the person clicks a
+// send option (see src/feedback.js).
+let feedbackWin = null;
+let feedbackShot = null; // the PNG the preview showed: what is saved is what they saw
+let feedbackLast = null; // { folder, text } of the report just saved
+const FEEDBACK_DIR = path.join(ROOT_DIR, 'feedback');
+const feedbackSenderOk = (e) => !!feedbackWin && e.sender === feedbackWin.webContents;
+
+function createFeedbackWindow() {
+  if (feedbackWin) { feedbackWin.show(); feedbackWin.focus(); return; }
+  feedbackWin = new BrowserWindow({
+    width: 440, height: 720, useContentSize: true, minimizable: false, maximizable: false,
+    title: 'Send feedback',
+    webPreferences: { spellcheck: false, preload: path.join(__dirname, 'feedback-preload.js'), contextIsolation: true, sandbox: true, nodeIntegration: false },
+  });
+  feedbackWin.setMenuBarVisibility(false);
+  feedbackWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  feedbackWin.webContents.on('will-navigate', (e) => e.preventDefault());
+  feedbackWin.loadFile('feedback.html');
+  showDock();
+  feedbackWin.on('closed', () => {
+    feedbackWin = null; feedbackShot = null; feedbackLast = null;
+    if (IS_MAC && !lightsWin && !settingsWin && !updatesWin && !buddyWin?.isOpen()) app.dock.hide();
+  });
+}
+
+// Only Plexiform's own windows, never the screen or another app.
+function feedbackTargets() {
+  const all = [
+    { id: 'widget', label: 'the widget', w: win },
+    { id: 'lights', label: 'Lights', w: lightsWin },
+    { id: 'settings', label: 'Settings', w: settingsWin },
+  ];
+  return all.filter((t) => t.w && !t.w.isDestroyed() && t.w.isVisible());
+}
+
+function feedbackDraft(d) {
+  if (!d || typeof d !== 'object') throw new Error('bad draft');
+  const home = os.homedir();
+  return Feedback.buildReport({
+    kind: d.kind, text: String(d.text || '').slice(0, Feedback.MAX_TEXT * 2), expected: String(d.expected || '').slice(0, Feedback.MAX_TEXT * 2),
+    version: app.getVersion(), os: `${process.platform} ${IS_MAC ? process.getSystemVersion() : os.release()} ${process.arch}`, home,
+  });
+}
+
+ipcMain.handle('open-feedback', (e) => { if (settingsOnly(e)) createFeedbackWindow(); });
+ipcMain.handle('feedback-info', (e) => {
+  if (!feedbackSenderOk(e)) return null;
+  const t = feedbackTargets();
+  return { windows: t.map(({ id, label }) => ({ id, label })), github: Feedback.senders.find((s) => s.id === 'github').available(loadConfig()), maxText: Feedback.MAX_TEXT };
+});
+ipcMain.handle('feedback-screenshot', async (e, id) => {
+  if (!feedbackSenderOk(e)) return null;
+  feedbackShot = null;
+  const t = feedbackTargets().find((x) => x.id === id);
+  if (!t) return { error: 'That window is not open.' };
+  const img = await t.w.webContents.capturePage();
+  if (img.isEmpty()) return { error: 'Could not capture that window.' };
+  feedbackShot = img.toPNG();
+  return { dataUrl: `data:image/png;base64,${feedbackShot.toString('base64')}`, label: t.label };
+});
+ipcMain.handle('feedback-clear-screenshot', (e) => { if (feedbackSenderOk(e)) feedbackShot = null; });
+ipcMain.handle('feedback-preview', (e, d) => {
+  if (!feedbackSenderOk(e)) return null;
+  try { return { markdown: feedbackDraft(d).markdown, diagnostics: d.diagnostics ? buildDiagnostics() : '' }; } catch (err) { return { error: err.message === 'empty' ? 'Say what happened first.' : 'Could not read that.' }; }
+});
+ipcMain.handle('feedback-save', (e, d) => {
+  if (!feedbackSenderOk(e)) return null;
+  let report;
+  try { report = feedbackDraft(d); } catch (err) { return { error: err.message === 'empty' ? 'Say what happened first.' : 'Could not read that.' }; }
+  try {
+    const diagnostics = d.diagnostics ? buildDiagnostics() : '';
+    const shot = d.screenshot ? feedbackShot : null;
+    const folder = Feedback.save({ dir: FEEDBACK_DIR, report, diagnostics, screenshot: shot });
+    feedbackLast = { folder, report, diagnostics, shot: !!shot, text: Feedback.reportAsText(report, diagnostics) };
+    return { ok: true };
+  } catch (err) {
+    console.warn('[feedback] save failed:', err.message);
+    return { error: "Couldn't save the report." };
+  }
+});
+ipcMain.handle('feedback-show', (e) => { if (feedbackSenderOk(e) && feedbackLast) shell.showItemInFolder(path.join(feedbackLast.folder, 'report.md')); });
+ipcMain.handle('feedback-copy', (e) => { if (feedbackSenderOk(e) && feedbackLast) clipboard.writeText(feedbackLast.text); });
+ipcMain.handle('feedback-board', (e) => {
+  if (!feedbackSenderOk(e)) return null;
+  return Feedback.sendToBoard({ last: feedbackLast, buddyWin });
+});
+ipcMain.handle('feedback-github', (e) => {
+  if (!feedbackSenderOk(e) || !feedbackLast) return false;
+  const url = Feedback.githubUrl(loadConfig().feedbackRepo, feedbackLast.report, feedbackLast.diagnostics, { screenshot: feedbackLast.shot });
+  if (!url) return false;
+  shell.openExternal(url); // privacy-flow: feedback-github
+  return true;
+});
 
 // About & Updates, standalone (the tray opens it; the Buddy window has it as a page).
 let updatesWin = null;
@@ -1354,6 +1505,10 @@ function getBuddy() {
       onClosed: () => { if (IS_MAC && !lightsWin && !settingsWin && !updatesWin) app.dock.hide(); },
       devAccountsHub: app.isPackaged ? null : devAccountsHub,
     });
+    if (typeof buddyWin[BudgetNotice.CONTRACT.subscribeMethod] === 'function') {
+      const unsubscribe = buddyWin[BudgetNotice.CONTRACT.subscribeMethod](handleBudgetEvent);
+      if (typeof unsubscribe === 'function') app.once('will-quit', unsubscribe);
+    }
     if (typeof buddyWin.onAccountChange === 'function') buddyWin.onAccountChange(() => settingsWin?.webContents.send('account-changed'));
   }
   return buddyWin;
@@ -2260,7 +2415,8 @@ function broadcastStatus() {
     const tk = JSON.stringify(WorkScopeView.trayItem(localSessions(st.sessions || []), { available: typeof WorkScope?.setSessionScope === 'function' }));
     if (tk !== trayScopeKey) { trayScopeKey = tk; refreshTrayMenu(); }
     stripAway = !!st.away && !travelLook;
-    applyStrip(travelLook ? 0 : bubblePx, stripAway, updateRowShown && !travelLook);
+    stripBudget = budgetNotices.list().length > 0;
+    applyStrip(travelLook ? 0 : bubblePx, stripAway, updateRowShown && !travelLook, stripBudget && !travelLook);
     updateGarden(st);
     maybeRoam(st);
     maybeRandomEvent(st);
@@ -2525,9 +2681,14 @@ function createTray() {
       click: () => { if (!item.sessionId) return; WorkScope.setSessionScope(item.sessionId, item.checked ? 'auto' : 'personal'); scopeChanged(); },
     }, { type: 'separator' }];
   };
+  const budgetItems = () => {
+    const shown = budgetNotices.list().slice(0, BUDGET_TRAY_ITEMS).map((n) => ({ label: `${BudgetNotice.text(n).replace(/ \(\$.*$/, '')}…`, click: () => { openBudgetNotice(n.runId).then((r) => { if (!r.ok) openBuddy(BudgetNotice.CONTRACT.boardPage); }); } }));
+    return shown.length ? [...shown, { type: 'separator' }] : [];
+  };
   const buildMenu = (from = 'tray') => Menu.buildFromTemplate([
+    ...budgetItems(),
     ...scopeItem(),
-    ...AppMenu.appItems({ pages: BuddyPages.PAGES, groups: BuddyPages.GROUPS, open: openBuddy, openLabel: BRAND.OPEN_MENU_LABEL, feedback: null, popOuts: { usage: () => createUsagePopWindow(from) } }),
+    ...AppMenu.appItems({ pages: BuddyPages.PAGES, groups: BuddyPages.GROUPS, open: openBuddy, openLabel: BRAND.OPEN_MENU_LABEL, feedback: { label: "Something's off / Idea…", click: createFeedbackWindow }, popOuts: { usage: () => createUsagePopWindow(from) } }),
     { label: 'Open Claude', click: () => shell.openExternal('https://claude.ai') },
     { label: 'Show Widget Now', click: () => { saveConfig({ showWidget: true }); clearTimeout(snoozeTimer); if (!win) createWindow(); win.showInactive(); createTray(); } },
     { label: 'Reset Widget Position', click: () => { const wa = screen.getPrimaryDisplay().workArea; if (!win) createWindow(); strip = WidgetStrip.NONE; win.setMaximumSize(MAX_WIDTH, Math.round(MAX_WIDTH / WIDGET_ASPECT)); win.setAspectRatio(WIDGET_ASPECT); win.setBounds({ x: wa.x + wa.width - 140, y: wa.y + 46, width: 107, height: 137 }); win.showInactive(); broadcastStatus(); } },
@@ -2595,13 +2756,15 @@ function createTray() {
   updateTrayMode();
 }
 
-// Right-click on the widget: the tray's menu, built fresh from the same
-// template (the whole app plus the widget's own items), and on Linux the only
-// way to Quit where GNOME shows no tray. Before a tray exists: the Lights editor.
+// Right-click on the widget opens the Plexiform window: one app, on the page
+// last used (focused if already open). Shift/Option-right-click: the tray's
+// menu, built fresh from the same template, and on Linux the only way to Quit
+// where GNOME shows no tray. Before a tray exists: the Lights editor.
 let trayMenu = null;
 let buildWidgetMenu = null;
-ipcMain.handle('widget-menu', (e) => {
+ipcMain.handle('widget-menu', (e, opts) => {
   if (!win || win.isDestroyed() || e.sender !== win.webContents) return;
+  if (!(opts && opts.menu === true)) { openBuddy(); return; }
   if (!buildWidgetMenu) { createLightsWindow(); return; }
   const menu = buildWidgetMenu('widget');
   if (IS_DEV_RUN && !app.isPackaged && process.env.CLAUDE_TRAFFIC_LIGHT_MENU_SPY === '1') { global.__buddyWidgetMenu = menu; return; } // specs read it: a native popup would block them
@@ -3520,6 +3683,7 @@ ipcMain.handle('open-input', async (e, id) => {
 const AWAY_PX = 64;
 const UPDATE_PX = 72;
 const BUBBLE_MAX_PX = 300;
+const BUDGET_PX = 64;
 const BUBBLE_MIN_W = 230;
 const WidgetStrip = require('./src/widget-strip.js');
 let strip = WidgetStrip.NONE;
@@ -3532,12 +3696,13 @@ ipcMain.on('update-row', (e, on) => {
 });
 let bubblePx = 0;
 let stripAway = false;
+let stripBudget = false;
 ipcMain.on('set-bubble-height', (e, px) => {
   if (!win || e.sender !== win.webContents) return;
   bubbleAsked = Math.round(Number(px) || 0);
   bubbleAcked = null;
   bubblePx = Math.max(0, Math.min(BUBBLE_MAX_PX, bubbleAsked));
-  applyStrip(travelLook ? 0 : bubblePx, stripAway, updateRowShown && !travelLook);
+  applyStrip(travelLook ? 0 : bubblePx, stripAway, updateRowShown && !travelLook, stripBudget && !travelLook);
 });
 // The widget's size is the base (src/widget-strip.js); the strip adds the
 // bubble's or the recap's height, and width for the bubble. Computed from the
@@ -3553,9 +3718,9 @@ function ackStrip() {
   bubbleAcked = bubbleAsked;
   win.webContents.send('strip-applied', bubbleAsked);
 }
-function applyStrip(asking, away = false, update = false) {
+function applyStrip(asking, away = false, update = false, budget = false) {
   if (!win) return;
-  const next = asking ? { kind: 'bubble', px: Math.min(BUBBLE_MAX_PX, asking), minWidth: BUBBLE_MIN_W } : away ? { kind: 'away', px: AWAY_PX } : update ? { kind: 'update', px: UPDATE_PX } : { kind: null };
+  const next = asking ? { kind: 'bubble', px: Math.min(BUBBLE_MAX_PX, asking), minWidth: BUBBLE_MIN_W } : budget ? { kind: 'budget', px: BUDGET_PX, minWidth: BUBBLE_MIN_W } : away ? { kind: 'away', px: AWAY_PX } : update ? { kind: 'update', px: UPDATE_PX } : { kind: null };
   if (WidgetStrip.sameStrip(strip, next)) { ackStrip(); return; }
   // The garden or a roam is moving the widget's own rect: grow once it's home
   // (the next broadcast tries again).
@@ -3740,7 +3905,9 @@ ipcMain.handle('backups-open-folder', (e) => {
   return shell.openPath(backups.dir);
 });
 
-ipcMain.handle('health-copy-diagnostics', () => {
+// Shared by Health's Copy diagnostics and the feedback form, so both carry
+// the same already-scrubbed text.
+function buildDiagnostics() {
   let logText = '';
   for (const f of ['app.log.old', 'app.log']) { try { logText += fs.readFileSync(path.join(ROOT_DIR, f), 'utf8'); } catch { /* rotated away or never written */ } }
   const text = Health.diagnostics({
@@ -3759,6 +3926,10 @@ ipcMain.handle('health-copy-diagnostics', () => {
       ],
     },
   });
+  return text;
+}
+ipcMain.handle('health-copy-diagnostics', () => {
+  const text = buildDiagnostics();
   clipboard.writeText(text);
   return { lines: text.split('\n').length - 1 };
 });
@@ -4225,7 +4396,7 @@ function guardRenderer(w, name, recreate) {
 }
 
 // Quitting must not be vetoed by the editor's unsaved-changes prompt.
-app.on('before-quit', () => { flushStats(); backups?.flush(); lightsWin?.destroy(); settingsWin?.destroy(); });
+app.on('before-quit', () => { flushStats(); backups?.flush(); lightsWin?.destroy(); settingsWin?.destroy(); feedbackWin?.destroy(); });
 // The embedded board hub gets SIGTERM and a grace period to close its DB
 // before we exit, once; a second quit goes straight through.
 let hubStopped = false;

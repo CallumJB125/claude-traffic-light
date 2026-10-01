@@ -89,12 +89,28 @@ test.describe('tray and Settings', () => {
 });
 
 test.describe('widget right-click', () => {
-  test('opens the same full-app menu plus the widget items, and only for the widget', async () => {
+  test('a plain right-click opens the Plexiform window, and a second one focuses it rather than opening another', async () => {
     const h = await launchApp({ env: { CLAUDE_TRAFFIC_LIGHT_MENU_SPY: '1' } });
     try {
       const w = await windowByFile(h.app, 'index.html');
       await expect.poll(() => trayLabels(h.app).catch(() => []), { timeout: 15000 }).toContain('Open Team…');
-      await w.evaluate(() => window.trafficLight.widgetMenu());
+      const plexiformWindows = async () => h.app.windows().filter((p) => p.url().endsWith('/sidebar.html')).length;
+      await w.evaluate(() => document.getElementById('app').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })));
+      await windowByFile(h.app, 'sidebar.html');
+      await expect.poll(plexiformWindows, { timeout: 10000 }).toBe(1);
+      await w.evaluate(() => document.getElementById('app').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })));
+      await w.waitForTimeout(500);
+      expect(await plexiformWindows()).toBe(1);
+      expect(await h.app.evaluate(() => global.__buddyWidgetMenu || null)).toBeNull();
+    } finally { await h.cleanup(); }
+  });
+
+  test('Shift-right-click opens the same full-app menu plus the widget items, and only for the widget', async () => {
+    const h = await launchApp({ env: { CLAUDE_TRAFFIC_LIGHT_MENU_SPY: '1' } });
+    try {
+      const w = await windowByFile(h.app, 'index.html');
+      await expect.poll(() => trayLabels(h.app).catch(() => []), { timeout: 15000 }).toContain('Open Team…');
+      await w.evaluate(() => document.getElementById('app').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, shiftKey: true })));
       const labels = await h.app.evaluate(() => global.__buddyWidgetMenu.items.map((i) => i.label).filter(Boolean));
       for (const l of ['Open Plexiform…', 'Open Team…', 'Open Integrations…', 'Open Board…', 'Open Tasks… (soon)', 'Open Usage…', 'Open Settings…', 'Open About & Updates…', 'Floating Widget', 'Open at Login', 'Quit']) expect(labels).toContain(l);
       expect(labels).toEqual(await trayLabels(h.app).then((t) => t.filter(Boolean)));

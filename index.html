@@ -84,8 +84,8 @@
   /* "While you were away": what happened during a meeting or Focus, shown
      once it ends. Each row jumps to that session's terminal. */
   #away { display: none; position: absolute; left: 4px; right: 4px; bottom: 2px; height: 60px; box-sizing: border-box; padding: 3px 5px; border-radius: var(--radius); background: rgba(20, 20, 22, 0.92); color: rgba(255, 255, 255, 0.92); font: 500 9px/1.25 -apple-system, system-ui, sans-serif; flex-direction: column; gap: 1px; overflow: hidden; }
-  body.away:not(.asking) #away { display: flex; }
-  body.away:not(.asking) #app { height: calc(100% - 64px); }
+  body.away:not(.asking):not(.budget) #away { display: flex; }
+  body.away:not(.asking):not(.budget) #app { height: calc(100% - 64px); }
   #away .head { display: flex; align-items: center; gap: 4px; font-weight: 700; color: var(--accent); }
   #away .head span { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #away .x { border: none; background: none; color: inherit; font: 700 10px -apple-system, system-ui, sans-serif; padding: 0 2px; cursor: pointer; opacity: 0.7; }
@@ -100,11 +100,24 @@
   #away .more { opacity: 0.65; }
   #away .row.held { cursor: default; opacity: 0.8; }
   #away .row.held:hover { text-decoration: none; color: inherit; }
+  /* "Run reached its budget": a stop that needs the person, so it ranks right
+     after the ask bubble and above the recap and the update row. */
+  #budget { display: none; position: absolute; left: 4px; right: 4px; bottom: 2px; height: 60px; box-sizing: border-box; padding: 4px 6px; border-radius: var(--radius); background: rgba(20, 20, 22, 0.92); color: rgba(255, 255, 255, 0.92); font: 500 9px/1.25 -apple-system, system-ui, sans-serif; flex-direction: column; gap: 3px; overflow: hidden; }
+  body.budget:not(.asking) #budget { display: flex; }
+  body.budget:not(.asking) #app { height: calc(100% - 64px); }
+  #budget .top { display: flex; align-items: flex-start; gap: 4px; }
+  #budget .text { flex: 1; min-width: 0; font-weight: 700; color: var(--amber); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  #budget .x { border: none; background: none; color: inherit; font: 700 10px -apple-system, system-ui, sans-serif; padding: 0 2px; cursor: pointer; opacity: 0.7; }
+  #budget .x:hover { opacity: 1; }
+  #budget .acts { margin-top: auto; display: flex; gap: 4px; }
+  #budget .acts button { height: 18px; padding: 0 8px; border: none; border-radius: var(--radius); background: var(--accent); color: var(--accent-ink); font: 600 9px -apple-system, system-ui, sans-serif; cursor: pointer; }
+  #budget .acts button.quiet { background: rgba(255, 255, 255, 0.14); color: rgba(255, 255, 255, 0.85); font-weight: 500; }
+  #budget .acts button:active { transform: scale(0.96); }
   /* "Update ready": quiet on purpose (no red, no blinking). The ask and the
      recap both outrank it, so it only shows when neither does. */
   #update { display: none; position: absolute; left: 4px; right: 4px; bottom: 2px; height: 68px; box-sizing: border-box; padding: 4px 6px; border-radius: var(--radius); background: rgba(20, 20, 22, 0.92); color: rgba(255, 255, 255, 0.92); font: 500 9px/1.25 -apple-system, system-ui, sans-serif; flex-direction: column; gap: 2px; overflow: hidden; }
-  body.updating:not(.asking):not(.away) #update { display: flex; }
-  body.updating:not(.asking):not(.away) #app { height: calc(100% - 72px); }
+  body.updating:not(.asking):not(.budget):not(.away) #update { display: flex; }
+  body.updating:not(.asking):not(.budget):not(.away) #app { height: calc(100% - 72px); }
   #update .text { font-weight: 700; color: var(--text); }
   #update.ready .text { color: var(--accent); }
   #update .sub { opacity: 0.7; }
@@ -130,6 +143,10 @@
   <button id="help" title="What does this mean?">?</button>
   <div id="mic" role="status" aria-label="Listening" title="Listening — let go to ask"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5.5" y="1.8" width="5" height="8" rx="2.5"/><path d="M3.3 7.8a4.7 4.7 0 0 0 9.4 0M8 12.5v2"/></svg></div>
   <div id="bubble"></div>
+  <div id="budget" role="status" aria-live="polite">
+    <div class="top"><div class="text" id="budget-text"></div><button class="x" id="budget-x" title="Dismiss" aria-label="Dismiss">×</button></div>
+    <div class="acts" id="budget-acts"></div>
+  </div>
   <div id="away" role="status" aria-live="polite" aria-label="While you were away">
     <div class="head"><span id="away-head">While you were away</span><button class="x" id="away-x" title="Dismiss" aria-label="Dismiss">×</button></div>
     <div id="away-rows"></div>

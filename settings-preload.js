@@ -37,5 +37,6 @@ contextBridge.exposeInMainWorld('settingsApi', {
   accountView: () => ipcRenderer.invoke('account-view'),
   accountOpen: (which) => ipcRenderer.invoke('account-open', which),
   onAccountChanged: (cb) => ipcRenderer.on('account-changed', () => cb()),
+  openFeedback: () => ipcRenderer.invoke('open-feedback'),
   onShowSection: (cb) => ipcRenderer.on('show-section', (e, id) => cb(id)),
 });

@@ -207,3 +207,28 @@ test('usage pop-out: renders under the policy, and an inline handler and a fetch
   await collect(pop, 'usage-pop');
   expect(violations).toEqual([]);
 });
+
+test('feedback: the form, a screenshot preview and the scrubbed preview run under the policy', async () => {
+  const settings = await windowByFile(h.app, 'settings.html');
+  await settings.locator('#feedback-open').click();
+  const form = await windowByFile(h.app, 'feedback.html');
+  await form.waitForLoadState('load');
+  await watch(form, 'feedback');
+  await form.fill('#text', 'csp check');
+  await form.locator('#shot-on').check();
+  await expect(form.locator('#shot')).toBeVisible({ timeout: 10000 });
+  await form.locator('#see').click();
+  await expect(form.locator('#included')).toBeVisible();
+  await form.evaluate(() => { const b = document.createElement('b'); b.setAttribute('onclick', 'window.__x = 1'); document.body.append(b); b.click(); fetch('https://example.invalid/').catch(() => {}); });
+  await form.waitForTimeout(300);
+  expect(await form.evaluate(() => window.__x)).toBeUndefined();
+  const seen = await form.evaluate(() => window.__csp);
+  expect(seen.some((s) => s.startsWith('script-src'))).toBe(true);
+  expect(seen.some((s) => s.startsWith('connect-src'))).toBe(true);
+  await form.evaluate(() => { window.__csp.length = 0; });
+  violations.length = 0;
+  await form.locator('#save').click();
+  await expect(form.locator('#done')).toBeVisible({ timeout: 10000 });
+  await collect(form, 'feedback');
+  expect(violations).toEqual([]);
+});
