@@ -14,8 +14,10 @@
 //                           last to the root
 //   promote-beta <version> --manifest-dir <dir>
 //                           the same from beta/<version>/ to beta/
-//   fetch-live <dir> [--beta]
-//                           download the live release.json(.sig), if any
+//   fetch-live <dir> [--beta] [--version v]
+//                           download the live release.json(.sig), if any;
+//                           with --version, the one <version>/ was promoted
+//                           with (a rollback checks its files against it)
 //   fetch-staged <version> <dir> [--beta]
 //                           download what <version>/ staged, to check it
 //                           against the GitHub Release before signing
@@ -62,8 +64,8 @@ function config(env = process.env) {
 // files, the manifest, SHA256SUMS.txt) is re-read on every request.
 const cacheControl = (name) => (/\d+\.\d+\.\d+/.test(name) ? 'public, max-age=31536000, immutable' : 'no-cache, max-age=0');
 
-function aws(cfg, args, run = execFileSync) {
-  return run('aws', ['s3', ...args, '--endpoint-url', cfg.endpoint], { env: cfg.env, stdio: ['ignore', 'pipe', 'inherit'], encoding: 'utf8' }); // privacy-flow: release-upload (CI only, never in the app)
+function aws(cfg, args, run = execFileSync, stderr = 'inherit') {
+  return run('aws', ['s3', ...args, '--endpoint-url', cfg.endpoint], { env: cfg.env, stdio: ['ignore', 'pipe', stderr], encoding: 'utf8' }); // privacy-flow: release-upload (CI only, never in the app)
 }
 
 const checkVersion = (version) => { if (!VERSION.test(version || '')) throw new Error(`not a version: ${version}`); };
@@ -90,9 +92,18 @@ function flag(argv, name) {
   return i >= 0 ? argv[i + 1] || true : null;
 }
 
+// What is under key. `aws s3 ls` exits 1, and says nothing, for an empty
+// prefix; any other failure (credentials, network, bucket) throws with its
+// stderr, so a broken listing is never read as "nothing there".
 const listNames = (cfg, key, run) => {
-  let out = '';
-  try { out = aws(cfg, ['ls', `s3://${cfg.bucket}/${key}`], run); } catch { return []; }
+  let out;
+  try {
+    out = aws(cfg, ['ls', `s3://${cfg.bucket}/${key}`], run, 'pipe');
+  } catch (err) {
+    const stderr = String(err?.stderr || '').trim();
+    if (err?.status === 1 && !stderr && !String(err?.stdout || '').trim()) return [];
+    throw new Error(`aws s3 ls s3://${cfg.bucket}/${key} failed${err?.status != null ? ` (exit ${err.status})` : ''}: ${stderr || err?.message || err}`);
+  }
   return out.split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('PRE ')).map((l) => l.split(/\s+/).slice(3).join(' ')).filter(Boolean);
 };
 
@@ -132,10 +143,13 @@ function main(argv, run, log = console.log, env = process.env) {
     }
   } else if (cmd === 'fetch-live') {
     const out = version;
+    const v = flag(argv, '--version');
+    if (v !== null) checkVersion(v);
+    const from = v ? `${prefix}${v}/` : prefix;
     fs.mkdirSync(out, { recursive: true });
-    const live = listNames(cfg, prefix, run);
-    if (!MANIFEST.every((n) => live.includes(n))) { log(`R2: nothing live at ${prefix || 'the root'}`); return; }
-    for (const n of MANIFEST) aws(cfg, ['cp', `s3://${cfg.bucket}/${prefix}${n}`, path.join(out, n), '--only-show-errors'], run);
+    const live = listNames(cfg, from, run);
+    if (!MANIFEST.every((n) => live.includes(n))) { log(`R2: no release.json at ${from || 'the root'}`); return; }
+    for (const n of MANIFEST) aws(cfg, ['cp', `s3://${cfg.bucket}/${from}${n}`, path.join(out, n), '--only-show-errors'], run);
   } else if (cmd === 'fetch-staged') {
     checkVersion(version);
     fs.mkdirSync(dir, { recursive: true });
@@ -144,7 +158,7 @@ function main(argv, run, log = console.log, env = process.env) {
       aws(cfg, ['cp', `s3://${cfg.bucket}/${prefix}${version}/${n}`, path.join(dir, n), '--only-show-errors'], run);
     }
   } else {
-    throw new Error('usage: release-r2.js stage|stage-beta <version> <dir> | promote|promote-beta <version> --manifest-dir <dir> | fetch-live <dir> [--beta] | fetch-staged <version> <dir> [--beta]');
+    throw new Error('usage: release-r2.js stage|stage-beta <version> <dir> | promote|promote-beta <version> --manifest-dir <dir> | fetch-live <dir> [--beta] [--version v] | fetch-staged <version> <dir> [--beta]');
   }
 }
 

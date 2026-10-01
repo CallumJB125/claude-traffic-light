@@ -142,7 +142,10 @@ Run **Promote release** with the previous version and tick **rollback**.
 It signs that version's GitHub Release assets afresh with `rollback: true`
 and `rollbackFrom` = the live version (plus what the live one rolled back
 from, plus anything in **rollback_from**). Apps on those versions accept the
-downgrade; nobody else does. Installer file names carry their version, so
+downgrade; nobody else does. Only a version that was promoted before can
+be rolled back to: every asset must have the sha512 that version's own
+`<version>/release.json` on R2 lists (verified with this repo's key for the
+channel), so a rollback never signs bytes that weren't signed before. Installer file names carry their version, so
 nothing is overwritten. To go forward again, promote the newer version as
 usual: it is signed fresh too.
 

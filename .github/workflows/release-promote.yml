@@ -9,7 +9,9 @@
 #   3. sign a fresh release.json from the assets (new issuedAt, expiresAt in
 #      30 days). An older version than the live one is refused unless
 #      "rollback" is ticked; a rollback names the versions it rolls back from
-#      (the live one, what it rolled back from, and "rollback_from")
+#      (the live one, what it rolled back from, and "rollback_from"), and
+#      every asset must match the release.json that version was first
+#      promoted with (R2 <version>/, verified with this repo's key)
 #   4. check that what R2 staged is byte for byte the signed files
 #   5. point the R2 feed at it: installers, feed files, then the signed
 #      release.json last (scripts/release-r2.js)
@@ -107,7 +109,11 @@ jobs:
           PLEXIFORM_UPDATE_SIGNING_KEY_BETA: ${{ secrets.PLEXIFORM_UPDATE_SIGNING_KEY_BETA }}
         run: |
           extra=()
-          if [ "$ROLLBACK" = true ]; then extra=(--rollback --rollback-from "$ROLLBACK_FROM"); fi
+          if [ "$ROLLBACK" = true ]; then
+            # the release.json this version was promoted with: a rollback re-signs only its files
+            node scripts/release-r2.js fetch-live promoted $R2_BETA --version "$VERSION"
+            extra=(--rollback --promoted promoted --rollback-from "$ROLLBACK_FROM")
+          fi
           node scripts/release-sign.js build assets --channel "$CHANNEL" --version "$VERSION" --notes-file docs/release-notes.md --live live --out signed "${extra[@]}"
 
       - name: Check what R2 staged against the signed files

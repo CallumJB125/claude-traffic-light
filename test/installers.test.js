@@ -60,7 +60,9 @@ test('R2 promote plan: installers, then the feed files (latest*.yml or beta*.yml
   assert.deepEqual(beta.map((p) => p.to), ['beta/Plexiform-1.2.0-beta.3-win-x64.exe', 'beta/beta.yml']);
 });
 
-// A fake `aws s3` over an in-memory bucket.
+// A fake `aws s3` over an in-memory bucket. An empty prefix fails as the real
+// CLI does: exit 1, nothing on stdout or stderr.
+const awsFail = (status, stderr = '') => Object.assign(new Error(`Command failed: aws (exit ${status})`), { status, stdout: '', stderr });
 function fakeAws(bucket) {
   const calls = [];
   const run = (_bin, args) => {
@@ -70,7 +72,7 @@ function fakeAws(bucket) {
     if (op === 'ls') {
       const prefix = key(a);
       const names = [...bucket.keys()].filter((k) => k.startsWith(prefix) && !k.slice(prefix.length).includes('/')).map((k) => k.slice(prefix.length));
-      if (!names.length) throw new Error('exit 1');
+      if (!names.length) throw awsFail(1);
       return names.map((n) => `2026-10-01 00:00:00 1 ${n}`).join('\n');
     }
     if (op === 'cp') {
@@ -196,6 +198,41 @@ test('R2 fetch-live and fetch-staged download what is there, and nothing when no
   assert.deepEqual(fs.readdirSync(staged), ['beta.yml'], 'the staged files, never a manifest');
 });
 
+// N4 (security re-review): a failed listing read as "nothing there" could stage over a promoted version.
+test('N4: an aws ls failure is an error with its stderr; only a genuinely empty prefix is empty', () => {
+  const failing = (err) => () => { throw err; };
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stage-ls-'));
+  fs.writeFileSync(path.join(dir, 'latest-mac.yml'), 'y');
+  const denied = awsFail(255, 'An error occurred (AccessDenied) when calling the ListObjectsV2 operation: Access Denied');
+  assert.throws(() => R2.main(['stage', '1.2.0', dir], failing(denied), () => {}, R2_ENV), /aws s3 ls s3:\/\/bk\/1\.2\.0\/ failed \(exit 255\): An error occurred \(AccessDenied\)/);
+  // exit 1 with something on stderr is a failure too, not an empty prefix
+  assert.throws(() => R2.main(['fetch-live', dir], failing(awsFail(1, 'Could not connect to the endpoint URL')), () => {}, R2_ENV), /exit 1\): Could not connect/);
+  assert.throws(() => R2.main(['fetch-staged', '1.2.0', dir], failing(Object.assign(new Error('spawn aws ENOENT'), { code: 'ENOENT' })), () => {}, R2_ENV), /failed: spawn aws ENOENT/);
+  const signed = fs.mkdtempSync(path.join(os.tmpdir(), 'signed-ls-'));
+  for (const n of ['release.json', 'release.json.sig']) fs.writeFileSync(path.join(signed, n), n);
+  assert.throws(() => R2.main(['promote', '1.2.0', '--manifest-dir', signed], failing(denied), () => {}, R2_ENV), /AccessDenied/);
+  // stage asks for stderr to be piped to it, so it can say what went wrong
+  let opts = null;
+  const empty = fakeAws(new Map());
+  R2.main(['stage', '1.3.0', dir], (bin, args, o) => { if (args[1] === 'ls') opts = o; return empty.run(bin, args, o); }, () => {}, R2_ENV);
+  assert.deepEqual(opts.stdio, ['ignore', 'pipe', 'pipe']);
+  assert.deepEqual(empty.calls.filter((c) => c[0] === 'cp').map((c) => c[2]), ['s3://bk/1.3.0/latest-mac.yml'], 'an empty prefix stages as before');
+});
+
+test('N4: fetch-live --version downloads the release.json that version was promoted with', () => {
+  const { run } = fakeAws(new Map([['release.json', 'live'], ['release.json.sig', 'ls'], ['1.2.0/release.json', 'old'], ['1.2.0/release.json.sig', 'os'], ['1.2.0/latest-mac.yml', 'y']]));
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'promoted-'));
+  R2.main(['fetch-live', out, '--version', '1.2.0'], run, () => {}, R2_ENV);
+  assert.equal(fs.readFileSync(path.join(out, 'release.json'), 'utf8'), 'old');
+  assert.equal(fs.readFileSync(path.join(out, 'release.json.sig'), 'utf8'), 'os');
+  const none = fs.mkdtempSync(path.join(os.tmpdir(), 'promoted-'));
+  const logs = [];
+  R2.main(['fetch-live', none, '--version', '1.1.0'], run, (m) => logs.push(m), R2_ENV);
+  assert.deepEqual(fs.readdirSync(none), []);
+  assert.match(logs[0], /no release\.json at 1\.1\.0\//);
+  assert.throws(() => R2.main(['fetch-live', none, '--version', '../x'], run, () => {}, R2_ENV), /not a version/);
+});
+
 test('the smoke test refuses a real home or data folder', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'smoke-t-'));
   assert.equal(Smoke.unsafeReason({ home: tmp, dataDir: tmp, tmp: os.tmpdir() }), null);
@@ -294,11 +331,12 @@ test('release-promote.yml: the release environment, both keys only there, signed
   assert.match(jobs.promote, /PLEXIFORM_UPDATE_SIGNING_KEY: \$\{\{ secrets\.PLEXIFORM_UPDATE_SIGNING_KEY \}\}/);
   assert.match(jobs.promote, /PLEXIFORM_UPDATE_SIGNING_KEY_BETA: \$\{\{ secrets\.PLEXIFORM_UPDATE_SIGNING_KEY_BETA \}\}/);
   assert.match(yml, /\npermissions:\n {2}contents: read\n/);
-  const order = ['gh release download', 'release-r2.js fetch-live', 'release-sign.js build assets', 'release-sign.js verify-files', 'release-r2.js "$cmd"', 'gh release edit'];
+  const order = ['gh release download', 'release-r2.js fetch-live live', 'release-r2.js fetch-live promoted', 'release-sign.js build assets', 'release-sign.js verify-files', 'release-r2.js "$cmd"', 'gh release edit'];
   const at = order.map((s) => jobs.promote.indexOf(s));
   assert.ok(at.every((i) => i > 0), JSON.stringify(at));
   assert.deepEqual([...at].sort((a, b) => a - b), at, 'download, live, sign, check R2, promote R2, then publish on GitHub');
   assert.ok(!/resign/.test(jobs.promote), 'never re-signs what R2 serves');
+  assert.match(jobs.promote, /extra=\(--rollback --promoted promoted /, 'N4: a rollback is checked against the release.json it was promoted with');
   assert.match(jobs.promote, /\n {6}WINDOWS_RELEASE: \$\{\{ vars\.WINDOWS_RELEASE \}\}\n/, 'N2: sign and promote read the repo variable');
 });
 

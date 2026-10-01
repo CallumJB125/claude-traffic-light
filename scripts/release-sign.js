@@ -10,12 +10,15 @@
 //       list the installers in <dir>, hash them, cross-check the feed files
 //       (latest*.yml or beta*.yml); writes nothing (the stage job's early check)
 //   build <dir> --channel c --version v [--notes-file f] [--live <dir>]
-//         [--rollback [--rollback-from v1,v2]] [--out <dir>]
+//         [--rollback --promoted <dir> [--rollback-from v1,v2]] [--out <dir>]
 //       the same, then write release.json and release.json.sig with a fresh
 //       issuedAt and expiresAt = issuedAt + 30 days. --live is a folder with
 //       the feed's current release.json(.sig): verified with this repo's key,
 //       it stops promoting an older version without --rollback, and a
-//       rollback names it (and what it rolled back from) in rollbackFrom
+//       rollback names it (and what it rolled back from) in rollbackFrom.
+//       A rollback also needs --promoted, the release.json(.sig) that version
+//       was promoted with (R2 <version>/): it must verify for exactly this
+//       channel and version, and every file must have its sha512
 //   resign <release.json> --channel c --version v [--rollback [--rollback-from ...]]
 //          [--check-dir <dir>] [--out <dir>]
 //       a manifest that already verifies with this repo's key for that
@@ -183,6 +186,19 @@ function promoteCheck({ live, version, rollback, rollbackFrom = [] }) {
   return unique.sort(Verify.compareVersions);
 }
 
+// A rollback goes back to bytes that were already signed: every file of the
+// new manifest must be in the one <version> was promoted with, unchanged.
+function rollbackCheck(manifest, promoted) {
+  if (!promoted) throw new Error(`a rollback needs the release.json ${manifest.version} was promoted with (--promoted <dir>)`);
+  if (promoted.version !== manifest.version) throw new Error(`the promoted release.json is for ${promoted.version}, not ${manifest.version}`);
+  const old = new Map(promoted.files.map((f) => [f.name, f]));
+  for (const f of manifest.files) {
+    const o = old.get(f.name);
+    if (!o) throw new Error(`${f.name} was not in ${manifest.version} when it was promoted`);
+    if (o.sha512 !== f.sha512 || o.size !== f.size) throw new Error(`${f.name} is not the file ${manifest.version} was promoted with`);
+  }
+}
+
 function resign(manifest, { channel, version, rollback, rollbackFrom, issuedAt = new Date().toISOString() }) {
   if (manifest.version !== version) throw new Error(`the manifest is for ${manifest.version}, not ${version}`);
   if (manifest.channel !== channel) throw new Error(`the manifest is for the ${manifest.channel} channel, not ${channel}`);
@@ -229,6 +245,7 @@ function main(argv, env = process.env, log = console, keyring = null) {
     const rollbackFrom = promoteCheck({ live, version: a.version, rollback: !!a.rollback, rollbackFrom: listVersions(a['rollback-from']) });
     const notes = a['notes-file'] ? fs.readFileSync(a['notes-file'], 'utf8') : '';
     const manifest = buildManifest({ dir: target, channel: a.channel, version: a.version, notes, rollback: !!a.rollback, rollbackFrom, windows: windowsEnabled(env) });
+    if (a.rollback) rollbackCheck(manifest, a.promoted ? openFile(path.join(a.promoted, 'release.json'), { channel: a.channel, keyring: ring() }) : null);
     write(a.out || target, sign(manifest, key));
     log.log(`release.json: ${manifest.product} ${manifest.channel} ${manifest.version}${manifest.rollback ? ` (rollback from ${manifest.rollbackFrom.join(', ')})` : ''}, ${manifest.files.length} files, signed, issued ${manifest.issuedAt}`);
     return 0;

@@ -154,7 +154,7 @@ test('H5: promoting an older version than the live one needs rollback; a rollbac
   const liveM = readSigned(liveDir);
   const dir = dist('1.2.0');
   assert.throws(() => run(['build', dir, '--channel', 'stable', '--version', '1.2.0', '--live', liveDir]), /older than the live 1\.3\.0: tick rollback/);
-  run(['build', dir, '--channel', 'stable', '--version', '1.2.0', '--live', liveDir, '--rollback', '--rollback-from', '1.2.5']);
+  run(['build', dir, '--channel', 'stable', '--version', '1.2.0', '--live', liveDir, '--rollback', '--promoted', live('1.2.0'), '--rollback-from', '1.2.5']);
   const m = readSigned(dir);
   assert.equal(m.rollback, true);
   assert.deepEqual(m.rollbackFrom, ['1.2.5', '1.3.0']);
@@ -166,12 +166,44 @@ test('H5: promoting an older version than the live one needs rollback; a rollbac
   assert.throws(() => run(['build', dist('1.2.0'), '--channel', 'stable', '--version', '1.2.0', '--live', tmp('empty'), '--rollback']), /needs the versions it rolls back from/);
   // a rollback of a rollback keeps the versions the first one rolled back from
   const second = dist('1.1.0');
-  run(['build', second, '--channel', 'stable', '--version', '1.1.0', '--live', dir, '--rollback']);
+  run(['build', second, '--channel', 'stable', '--version', '1.1.0', '--live', dir, '--rollback', '--promoted', live('1.1.0')]);
   assert.deepEqual(readSigned(second).rollbackFrom, ['1.2.0', '1.2.5', '1.3.0']);
   // re-promoting the live version (or a newer one) is an ordinary, fresh signature
   const again = dist('1.3.0');
   run(['build', again, '--channel', 'stable', '--version', '1.3.0', '--live', liveDir]);
   assert.equal(readSigned(again).rollback, false);
+});
+
+// N4 (security re-review): a rollback signed whatever the GitHub Release held for that version.
+test('N4: a rollback needs the release.json the version was promoted with, verified, and every asset unchanged', () => {
+  const liveDir = live('1.3.0');
+  const promoted = live('1.2.0');
+  const roll = (dir, extra) => run(['build', dir, '--channel', 'stable', '--version', '1.2.0', '--live', liveDir, '--rollback', ...extra]);
+  assert.throws(() => roll(dist('1.2.0'), []), /needs the release\.json 1\.2\.0 was promoted with/);
+  assert.throws(() => roll(dist('1.2.0'), ['--promoted', tmp('none')]), /needs the release\.json 1\.2\.0 was promoted with/);
+  assert.throws(() => roll(dist('1.2.0'), ['--promoted', live('1.2.1')]), /is for 1\.2\.1, not 1\.2\.0/);
+  // signed with another key (the beta one) or tampered with: refused
+  const betaSigned = dist('1.2.0', { feed: 'beta' });
+  Sign.main(['build', betaSigned, '--channel', 'beta', '--version', '1.2.0'], env, quiet, keys);
+  assert.throws(() => roll(dist('1.2.0'), ['--promoted', betaSigned]), /not signed with Plexiform's stable key/);
+  const tampered = tmp('tampered');
+  fs.writeFileSync(path.join(tampered, 'release.json'), fs.readFileSync(path.join(promoted, 'release.json'), 'utf8').replace(sha('exe-bytes 1.2.0'), sha('MALWARE')));
+  fs.copyFileSync(path.join(promoted, 'release.json.sig'), path.join(tampered, 'release.json.sig'));
+  assert.throws(() => roll(dist('1.2.0'), ['--promoted', tampered]), /not signed/);
+  // an asset swapped on the GitHub Release (its feed file updated to match)
+  const swapped = dist('1.2.0');
+  fs.writeFileSync(path.join(swapped, 'Plexiform-1.2.0-linux-amd64.deb'), 'other deb');
+  assert.throws(() => roll(swapped, ['--promoted', promoted]), /Plexiform-1\.2\.0-linux-amd64\.deb is not the file 1\.2\.0 was promoted with/);
+  // an asset that wasn't there when it was promoted
+  const added = dist('1.2.0');
+  fs.writeFileSync(path.join(added, 'Plexiform-1.2.0-linux-arm64.deb'), 'new');
+  assert.throws(() => roll(added, ['--promoted', promoted]), /linux-arm64\.deb was not in 1\.2\.0 when it was promoted/);
+  // nothing written by any refusal; the real one signs
+  const ok = dist('1.2.0');
+  roll(ok, ['--promoted', promoted]);
+  assert.deepEqual(readSigned(ok).files, readSigned(promoted).files);
+  assert.equal(readSigned(ok).rollback, true);
+  assert.ok(!fs.existsSync(path.join(swapped, 'release.json')));
 });
 
 test('a live manifest that does not verify with this repo\'s key stops the promote', () => {
