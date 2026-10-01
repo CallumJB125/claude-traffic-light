@@ -22,7 +22,7 @@ startTasksEngine({ dataDir, backends?, log?, now?, env?, maxParallel?, retention
 <dataDir>/              0700, must not be a symlink or another user's dir
   tasks.sock            0600 (refuses to start over a live socket, a non-socket, or another user's socket)
   tasks.token           0600 btk_…; reused across restarts, replaced if it was loosened or malformed
-  relay-tokens.json     0600, sha256 hashes of the relay tokens and their forced source
+  relay-tokens.json     0600, sha256 hashes and bound source/sender/parent of relay tokens
   policy.json           optional, written by the UI: {accept_from:[userId], repos:{<path|canonical>:{remote_tasks:true}}}
   store/                tasks.jsonl, events.jsonl (0600)
   mesh/<taskId>.ndjson  human messages (tasks-api/mesh.js MessageStore)
@@ -76,7 +76,8 @@ and its task becomes `orphaned`; nothing restarts on its own.
 - AIs: Claude through `runner/backends/claude.js`; Codex is detected but not
   startable (`AI_UNAVAILABLE`, "not available in Plexiform yet").
 - Trust (§3, §9.2): `tasks.token` is the UI/CLI's; relays get scoped `btr_`
-  tokens (`relay-tokens.js addRelayToken`) that force their source and can't
+  tokens (`relay-tokens.js addRelayToken`) that bind their source and verified sender
+  (`userId`), or require their parent session (`parentSessionId` for MCP), and can't
   approve, answer, take over or accept a start. `bypass` refused; `mcp` and
   remote sources clamped to `auto-edits` (spin-offs also to the parent's level,
   in the parent's repo); remote work needs `policy.json`

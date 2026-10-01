@@ -90,7 +90,7 @@ const LEVELS = Object.freeze({
 });
 const READ_ALLOW = Object.freeze(['Read', 'Glob', 'Grep', ...TASK_TOOLS, 'Task', 'mcp__board']);
 
-export function buildSettings({ worktree, tmpdir, node = process.execPath, repo = {}, boardHome = null, apiKeyFile = null, extraDenyRead = [], level = null, cacheWrite = CACHE_WRITE, electron = underElectron() }) {
+export function buildSettings({ worktree, tmpdir, node = process.execPath, repo = {}, boardHome = null, apiKeyFile = null, extraDenyRead = [], extraDenyWrite = [], level = null, cacheWrite = CACHE_WRITE, electron = underElectron() }) {
   const hook = (event, timeout, matcher) => [{ ...(matcher ? { matcher } : {}), hooks: [{ type: 'command', command: hookCmd(node, event, electron), timeout }] }];
   const lv = level ? LEVELS[level] ?? LEVELS.ask : null;
   const bashAllow = [...GIT_ALLOW, ...(repo.bash_allow ?? []).map((c) => (c.startsWith('Bash(') ? c : `Bash(${c})`))];
@@ -113,6 +113,7 @@ export function buildSettings({ worktree, tmpdir, node = process.execPath, repo 
       filesystem: {
         allowWrite: [worktree, tmpdir, ...cacheWrite, ...(repo.allow_write_extra ?? [])].filter(Boolean),
         denyRead: [...DENY_READ, ...boardHomeRules(boardHome).denyRead, ...extraDenyRead],
+        ...(extraDenyWrite.length ? { denyWrite: extraDenyWrite } : {}),
       },
       network: { allowedDomains: [...new Set(repo.allowed_domains ?? [])], strictAllowlist: true },
     },

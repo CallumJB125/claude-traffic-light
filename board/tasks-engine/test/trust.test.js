@@ -66,6 +66,51 @@ test('remote tasks need policy.json repos[...].remote_tasks; accept_from comes f
   } finally { await m.done(); }
 });
 
+test('relay sender trust is bound by its private token record, never caller metadata', async () => {
+  const m = await setup();
+  const relays = [];
+  try {
+    writePolicy(m.dataDir, { accept_from: ['trusted-user'], repos: { [m.repo.checkout]: { remote_tasks: true } } });
+    const relay = async (userId) => {
+      const c = await connect({ socketPath: m.eng.socketPath, token: addRelayToken({ dataDir: m.dataDir, source: 'phone', userId }) });
+      relays.push(c); return c;
+    };
+    const unbound = await relay(null);
+    const bound = await relay('trusted-user');
+    const requestId = 'same-request-across-principals';
+    const a = await unbound.createTask({ ...m.spec, sourceMeta: { userId: 'trusted-user' } }, { requestId });
+    const ad = await m.client.getTask(a.id);
+    assert.equal(ad.awaitingConfirm, true, 'forged accept_from identity does not start');
+    assert.equal(ad.spec.sourceMeta.userId, undefined);
+    const b = await bound.createTask({ ...m.spec, sourceMeta: { userId: 'forged-other' } }, { requestId });
+    const bd = await m.client.getTask(b.id);
+    assert.notEqual(b.id, a.id, 'idempotency cache is principal scoped');
+    assert.equal(bd.awaitingConfirm, false);
+    assert.equal(bd.spec.sourceMeta.userId, 'trusted-user');
+  } finally { for (const c of relays) c.close(); await m.done(); }
+});
+
+test('MCP relay cannot omit or replace its authenticated parent to widen repo or permission scope', async () => {
+  const m = await setup({ steps: [{ result: 'success', text: 'plan' }] });
+  const other = makeRepo(fs.mkdtempSync(path.join(m.dir, 'other-')));
+  let relay;
+  try {
+    assert.throws(() => addRelayToken({ dataDir: m.dataDir, source: 'mcp' }), /parent session/);
+    const { id } = await m.client.createTask({ ...m.spec, permissionLevel: 'plan' });
+    const parent = await m.client.getTask(id);
+    relay = await connect({ socketPath: m.eng.socketPath, token: addRelayToken({ dataDir: m.dataDir, source: 'mcp', parentSessionId: parent.sessionId }) });
+    for (const sourceMeta of [{}, { parentSessionId: '00000000-0000-4000-8000-000000000000' }]) {
+      await assert.rejects(relay.createTask({ text: 'escape', cwd: other.checkout, permissionLevel: 'auto-edits', sourceMeta }), (e) => e.code === 'POLICY_DENIED');
+      const k = await relay.createTask({ ...m.spec, permissionLevel: 'auto-edits', sourceMeta });
+      const kid = await m.client.getTask(k.id);
+      assert.equal(kid.permissionLevel, 'plan');
+      assert.equal(kid.spec.sourceMeta.parentSessionId, parent.sessionId);
+    }
+    const stale = await connect({ socketPath: m.eng.socketPath, token: addRelayToken({ dataDir: m.dataDir, source: 'mcp', parentSessionId: '00000000-0000-4000-8000-000000000000' }) });
+    try { await assert.rejects(stale.createTask(m.spec), (e) => e.code === 'POLICY_DENIED'); } finally { stale.close(); }
+  } finally { relay?.close(); await m.done(); }
+});
+
 test('spin-offs: limited to the parent task\'s repo, capped at its level, and a remote parent\'s rules carry over', async () => {
   const m = await setup({ steps: [{ tool: 'Bash', input: { command: 'sleep 1' }, ms: 60000 }] });
   const other = makeRepo(fs.mkdtempSync(path.join(m.dir, 'o-')));
@@ -98,6 +143,21 @@ test('caches go to a per-task dir; the global caches are not writable', async ()
     for (const k of ['npm_config_cache', 'XDG_CACHE_HOME', 'PIP_CACHE_DIR', 'UV_CACHE_DIR']) assert.ok(env[k]?.includes(id), `${k} is per task`);
     const s = JSON.parse(fs.readFileSync(path.join(runDirOf(m, id), 'settings.json'), 'utf8'));
     assert.ok(!s.sandbox.filesystem.allowWrite.some((p) => /\.cache|Library\/Caches|\.npm/.test(p)));
+    assert.ok(env.TMPDIR.includes(id), 'temp files are per task too');
+    assert.ok(!s.sandbox.filesystem.allowWrite.includes('/tmp'), 'shared temp root is not writable');
+    assert.ok(s.sandbox.filesystem.denyWrite.includes(fs.realpathSync(m.dataDir)), 'cannot alter engine config/tokens through Bash');
+  } finally { await m.done(); }
+});
+
+test('in-place Bash sandbox protects instructions and config even within its writable folder', async () => {
+  const m = await setup();
+  try {
+    const { id } = await m.client.createTask({ ...m.spec, workInPlace: true, permissionLevel: 'auto' });
+    await waitFor(() => fs.existsSync(path.join(runDirOf(m, id), 'settings.json')));
+    const s = JSON.parse(fs.readFileSync(path.join(runDirOf(m, id), 'settings.json'), 'utf8'));
+    for (const p of ['.git/config', '.git/hooks', '.claude', '.mcp.json', 'CLAUDE.md', 'AGENTS.md']) {
+      assert.ok(s.sandbox.filesystem.denyWrite.includes(path.join(m.repo.checkout, p)), p);
+    }
   } finally { await m.done(); }
 });
 

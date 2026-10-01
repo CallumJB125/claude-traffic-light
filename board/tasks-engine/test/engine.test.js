@@ -297,7 +297,8 @@ test('take over returns the resume command with the same isolation flags; hand b
   assert.ok(!JSON.stringify(t).includes('BOARD_RUN_TOKEN'));
   assert.ok(!t.argv.includes('-p') && !t.argv.includes('--permission-prompt-tool'));
   assert.equal(t.cwd, d0.worktree);
-  assert.deepEqual(Object.keys(t.env).sort(), ['BOARD_RUN_SOCKET', 'BOARD_SUPERVISOR_LSTART', 'BOARD_SUPERVISOR_PID', 'BUDDY_TASK_ID']);
+  assert.deepEqual(Object.keys(t.env).sort(), ['BOARD_RUN_SOCKET', 'BOARD_SUPERVISOR_LSTART', 'BOARD_SUPERVISOR_PID', 'BUDDY_TASK_ID', 'TMPDIR']);
+  assert.ok(t.env.TMPDIR.includes(id), 'takeover preserves private task temp directory');
   assert.equal(t.resumed, true);
   const back = await m.client.act(id, 'handback', { note: 'I fixed the import by hand' });
   assert.notEqual(back.task.state, 'handed_over');

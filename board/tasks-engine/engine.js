@@ -387,9 +387,20 @@ export class TasksEngine extends EventEmitter {
   async createTask({ requestId, spec }, ctx = {}) {
     this.#gc();
     // A relay token decides the source; what the client claims is not trusted (§9.2).
-    if (ctx.principal?.kind === 'relay') spec = { ...spec, source: ctx.principal.source };
+    const principal = ctx.principal;
+    if (principal?.kind === 'relay') {
+      const { userId: _claimedUser, parentSessionId: _claimedParent, ...metadata } = spec.sourceMeta ?? {};
+      spec = { ...spec, source: principal.source, sourceMeta: {
+        ...metadata, ...(principal.userId ? { userId: principal.userId } : {}),
+        ...(principal.parentSessionId ? { parentSessionId: principal.parentSessionId } : {}),
+      } };
+      if (principal.source === 'mcp' && (!principal.parentSessionId || ![...this.tasks.values()].some((t) => t.sessionId === principal.parentSessionId))) {
+        throw new ApiError('POLICY_DENIED', 'an agent relay needs its authenticated parent task');
+      }
+    }
+    const cacheKey = `${principal?.kind === 'relay' ? principal.id : 'full'}:${requestId}`;
     const hash = crypto.createHash('sha256').update(JSON.stringify(spec)).digest('hex');
-    const prior = this.createCache.get(requestId);
+    const prior = this.createCache.get(cacheKey);
     if (prior) {
       if (prior.hash !== hash) throw new ApiError('CONFLICT', 'requestId reused with a different spec');
       const id = await prior.pending;
@@ -397,11 +408,11 @@ export class TasksEngine extends EventEmitter {
     }
     const pending = this.#create(spec);
     const entry = { hash, at: this.now(), pending };
-    this.createCache.set(requestId, entry);
+    this.createCache.set(cacheKey, entry);
     try {
       return { id: await pending, duplicate: false };
     } catch (e) {
-      this.createCache.delete(requestId);
+      this.createCache.delete(cacheKey);
       throw e;
     }
   }
@@ -646,11 +657,17 @@ export class TasksEngine extends EventEmitter {
   #writeRunFiles(task, runDir, socketPath, token) {
     ensureDir(runDir);
     ensureDir(path.join(runDir, 'shell'));
+    const cacheDir = this.#cacheDir(task);
+    ensureDir(cacheDir);
+    ensureDir(path.join(cacheDir, 'tmp'));
+    const protectedWrite = task.workInPlace
+      ? ['.git/config', '.git/hooks', '.claude', '.mcp.json', 'CLAUDE.md', 'AGENTS.md'].map((p) => path.join(task.worktree, p)) : [];
     const apiKeyFile = this.env.ANTHROPIC_API_KEY ? path.join(runDir, API_KEY_FILE) : null;
     if (apiKeyFile) writeFileAtomic(apiKeyFile, this.env.ANTHROPIC_API_KEY);
     writeJsonAtomic(path.join(runDir, 'settings.json'), buildSettings({
-      worktree: task.worktree, tmpdir: this.env.TMPDIR || '/tmp', repo: {}, apiKeyFile, extraDenyRead: [fs.realpathSync(this.dataDir)],
-      level: task.planFirst && !task.planApproved ? 'plan' : task.permissionLevel, cacheWrite: [],
+      worktree: task.worktree, tmpdir: path.join(cacheDir, 'tmp'), repo: {}, apiKeyFile, extraDenyRead: [fs.realpathSync(this.dataDir)],
+      extraDenyWrite: [fs.realpathSync(this.dataDir), ...protectedWrite],
+      level: task.planFirst && !task.planApproved ? 'plan' : task.permissionLevel, cacheWrite: [cacheDir],
     }));
     writeJsonAtomic(path.join(runDir, 'mcp.json'), buildMcpConfig({ socket: socketPath, token, server: this.mcpServer }));
     writeFileAtomic(path.join(runDir, HOOK_TOKEN_FILE), token);
@@ -676,7 +693,7 @@ export class TasksEngine extends EventEmitter {
     // Package-manager caches live in a per-task dir, never the user's global caches.
     const cacheDir = this.#cacheDir(task);
     fs.mkdirSync(cacheDir, { recursive: true, mode: 0o700 });
-    Object.assign(env, { npm_config_cache: path.join(cacheDir, 'npm'), XDG_CACHE_HOME: path.join(cacheDir, 'xdg'), PIP_CACHE_DIR: path.join(cacheDir, 'pip'), UV_CACHE_DIR: path.join(cacheDir, 'uv') });
+    Object.assign(env, { TMPDIR: path.join(cacheDir, 'tmp'), npm_config_cache: path.join(cacheDir, 'npm'), XDG_CACHE_HOME: path.join(cacheDir, 'xdg'), PIP_CACHE_DIR: path.join(cacheDir, 'pip'), UV_CACHE_DIR: path.join(cacheDir, 'uv') });
     const dataReal = fs.realpathSync(this.dataDir);
     const remaining = task.cost.budgetUsd != null ? Math.max(0.01, round2(task.cost.budgetUsd - task.cost.usd)) : null;
     const backend = new B({
@@ -1129,7 +1146,8 @@ export class TasksEngine extends EventEmitter {
     this.#gc();
     // Only the UI/CLI token approves, answers, takes over or accepts a start (§9.2).
     if (ctx.principal?.kind === 'relay' && RELAY_DENIED.has(action)) throw new ApiError('POLICY_DENIED', `a relay can't ${action}`);
-    const cached = this.actCache.get(requestId);
+    const cacheKey = `${ctx.principal?.kind === 'relay' ? ctx.principal.id : 'full'}:${requestId}`;
+    const cached = this.actCache.get(cacheKey);
     if (cached) return cached.pending;
     const task = this.tasks.get(id);
     if (!task) throw new ApiError('NOT_FOUND', 'no such task');
@@ -1144,8 +1162,8 @@ export class TasksEngine extends EventEmitter {
       this.#save(task);
       return { ok: true, task: this.#view(task), ...out };
     });
-    this.actCache.set(requestId, { pending, at: this.now() });
-    pending.catch(() => this.actCache.delete(requestId));
+    this.actCache.set(cacheKey, { pending, at: this.now() });
+    pending.catch(() => this.actCache.delete(cacheKey));
     return pending;
   }
 
@@ -1246,7 +1264,7 @@ export class TasksEngine extends EventEmitter {
               '--disallowedTools', ...DISALLOWED_TOOLS, ...['Read', 'Edit', 'Write'].map((t) => `${t}(/${fs.realpathSync(this.dataDir)}/**)`),
               '--permission-mode', mode],
             cwd: task.worktree,
-            env: { BOARD_RUN_SOCKET: socketPath, BOARD_SUPERVISOR_PID: String(process.pid), BOARD_SUPERVISOR_LSTART: this.lstart ?? '', BUDDY_TASK_ID: task.id },
+            env: { TMPDIR: path.join(this.#cacheDir(task), 'tmp'), BOARD_RUN_SOCKET: socketPath, BOARD_SUPERVISOR_PID: String(process.pid), BOARD_SUPERVISOR_LSTART: this.lstart ?? '', BUDDY_TASK_ID: task.id },
             mode: payload.mode ?? 'tab', sessionId: task.sessionId, resumed: task.sessionStarted,
             note: task.sessionStarted ? `Resumes the same session with the background run's settings, MCP config and deny rules (no --tools allowlist or budget: you drive). Handover v${task.handover.version} is saved.`
               : 'Starts the session in your terminal; nothing ran in the background yet.',

@@ -15,6 +15,8 @@ export const RELAY_SOURCES = Object.freeze(['mcp', 'board', 'phone', 'slack', 'v
 export const RELAY_TOKEN_RE = /^btr_[A-Za-z0-9_-]{43}$/;
 
 const hashOf = (t) => crypto.createHash('sha256').update(t).digest('hex');
+const identity = (v) => typeof v === 'string' && v.length > 0 && v.length <= 256 ? v : null;
+const session = (v) => typeof v === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(v) ? v : null;
 
 /** The file's entries, or [] if it is missing, malformed, a symlink, someone else's, or writable by others. */
 export function readRelayFile(dataDir) {
@@ -28,11 +30,14 @@ export function readRelayFile(dataDir) {
 }
 
 /** Creates a relay token for `source` and returns it once (only its hash is kept). */
-export function addRelayToken({ dataDir, source, label = null }) {
+export function addRelayToken({ dataDir, source, label = null, userId = null, parentSessionId = null }) {
   if (!RELAY_SOURCES.includes(source)) throw new Error('a relay token needs a relay source');
+  if (userId != null && !identity(userId)) throw new Error('a relay userId must be a bounded identity');
+  if (parentSessionId != null && !session(parentSessionId)) throw new Error('a relay parentSessionId must be a session UUID');
+  if (source === 'mcp' && !session(parentSessionId)) throw new Error('an MCP relay token needs its parent session');
   const token = `btr_${crypto.randomBytes(32).toString('base64url')}`;
   const tokens = readRelayFile(dataDir);
-  tokens.push({ hash: hashOf(token), source, label: typeof label === 'string' ? label.slice(0, 80) : null, createdAt: Date.now() });
+  tokens.push({ hash: hashOf(token), source, userId: identity(userId), parentSessionId: session(parentSessionId), label: typeof label === 'string' ? label.slice(0, 80) : null, createdAt: Date.now() });
   writeFileAtomic(path.join(dataDir, RELAY_FILE), `${JSON.stringify({ v: 1, tokens }, null, 2)}\n`, 0o600);
   return token;
 }
@@ -54,9 +59,10 @@ export function relayLookup(dataDir) {
     const now = st ? `${st.mtimeMs}:${st.size}:${st.mode}:${st.ino}` : 'none';
     if (now !== stamp) {
       stamp = now;
-      map = new Map(readRelayFile(dataDir).map((t) => [t.hash, t.source]));
+      map = new Map(readRelayFile(dataDir).map((t) => [t.hash, t]));
     }
-    const source = map.get(hashOf(token));
-    return source ? { kind: 'relay', source } : null;
+    const hash = hashOf(token);
+    const record = map.get(hash);
+    return record ? { kind: 'relay', id: hash, source: record.source, userId: identity(record.userId), parentSessionId: session(record.parentSessionId) } : null;
   };
 }
