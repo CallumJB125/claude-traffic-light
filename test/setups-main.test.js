@@ -26,6 +26,14 @@ test('renderer cannot add authority, roots, executables, crypto or unbounded val
  for(const value of [{...choice(),profile:'/foreign'},{...choice(),values:{HOME:'/foreign'}},{...choice(),values:{NAME:'x'.repeat(4097)}},{...choice(),values:{NAME:'a\0b'}},{...choice(),files:[{...choice().files[0],approved:true}]},{...choice(),files:[...choice().files,...choice().files]},{files:[],values:{}},{...choice(),values:{'SECRET:':'bad'}}]){const f=fixture();assert.equal((await f.invoke('plan',ID,value)).ok,false);assert.equal(f.calls.length,0);}
  for(const [channel,args]of [['local-state',[{crypto:true}]],['apply',[ID,HASH,{approved:true}]],['apply',[ID,'f'.repeat(63)]],['recover',['/foreign']],['check',[ID,'extra']],['confirm-undo',[ID,{}]],['local-status',[ID,null]],['list-locked',['extra']]]){const f=fixture();assert.equal((await f.invoke(channel,...args)).ok,false);assert.equal(f.calls.length,0);}
 });
+test('opaque strings and hashes refuse structured-clone arrays and boxed values before composition',async()=>{
+ for(const bad of [[ID],new String(ID),{id:ID}]){
+  for(const channel of ['check','local-status','recover','confirm-undo']){const f=fixture();assert.equal((await f.invoke(channel,bad)).ok,false);assert.equal(f.calls.length,0);}
+  const f=fixture();assert.equal((await f.invoke('plan',ID,{...choice(),files:[{...choice().files[0],id:bad}]})).ok,false);assert.equal(f.calls.length,0);
+  const g=fixture();assert.equal((await g.invoke('plan',bad,choice())).ok,false);assert.equal(g.calls.length,0);
+ }
+ for(const bad of [[HASH],new String(HASH),{hash:HASH}]){const f=fixture();assert.equal((await f.invoke('apply',ID,bad)).ok,false);assert.equal(f.calls.length,0);}
+});
 test('choice values are copied before an async operation sees caller mutation',async()=>{
  let received;const f=fixture({runtimeFactory:opts=>({plan:async(_id,input)=>{received=input;await Promise.resolve();return {ok:true};}})}),input=choice(),pending=f.invoke('plan',ID,input);input.values.NAME='Mutated';input.files[0].mode='merge';await pending;assert.equal(received.values.NAME,'Synthetic local value');assert.equal(received.files[0].mode,'replace');
 });
