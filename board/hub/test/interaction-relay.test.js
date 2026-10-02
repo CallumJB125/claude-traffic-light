@@ -37,7 +37,7 @@ async function rig({ limits } = {}) {
   const winB = await signIn('bob@dev.local', 'Bob Windows');
   const wsUrl = `${h.base.replace('http', 'ws')}/ws/interaction-host`;
   const hosts = [];
-  const host = async (dev, { userId = dev.user, retry } = {}) => {
+  const host = async (dev, { userId = dev.user, retry, expect = 'connected' } = {}) => {
     const adapter = createCodexAppServer({ bin: FAKE });
     // Contract defaults: boardCurrent refuses unless supplied; remote sessions are board-less.
     const x = createRemoteInteractionHost({ userId, adapters: { codex: adapter }, boardCurrent: (b) => b === null, retry });
@@ -45,7 +45,7 @@ async function rig({ limits } = {}) {
     hosts.push(x);
     // The explicit opt-in: this device's role becomes 'host', then it connects.
     const st = await x.enable({ baseUrl: h.base, token: dev.token, WebSocket });
-    assert.equal(st.state, 'connected');
+    if (expect) assert.equal(st.state, expect);
     return x;
   };
   const setRole = (dev, role) => h.call('PUT', '/api/interaction/v1/role', { token: dev.token, body: { role } });
@@ -274,6 +274,14 @@ test('HOSTILE: hosting needs the device\'s own opt-in; a host cannot call and a 
     assert.equal((await r.h.call('PUT', '/api/interaction/v1/role', { token: r.winA.token, body: { role: 'host', device: r.macA.device } })).status, 400);
     const web = await r.h.webSignIn('alice@dev.local');
     assert.equal((await r.h.call('PUT', '/api/interaction/v1/role', { cookie: web.cookie, headers: { 'x-csrf-token': web.csrf }, body: { role: 'host' } })).status, 403);
+    // Only a desktop platform may host: a phone, an unknown or a missing platform may not.
+    for (const platform of ['phone-web', 'ios', 'darwin-arm64; x', null]) {
+      r.h.db.run('UPDATE user_devices SET platform = ? WHERE id = ?', platform, r.winB.device);
+      assert.equal((await r.setRole(r.winB, 'host')).status, 403, String(platform));
+    }
+    r.h.db.run("UPDATE user_devices SET platform = 'win32-x64' WHERE id = ?", r.winB.device);
+    assert.equal((await r.setRole(r.winB, 'host')).status, 200);
+    assert.equal((await r.setRole(r.winB, 'client')).status, 200);
     // Turning hosting off drops the live socket and hides the host at once.
     assert.equal((await r.client(r.winA).hosts()).body.hosts.length, 1);
     assert.equal((await r.setRole(r.macA, 'client')).status, 200);
@@ -519,5 +527,67 @@ test('RESILIENCE: reconnects with backoff after a hub restart (4000); a refusal 
     relay().hosts.get(r.macB.device).ws.close(4000, 'restart');
     await until(() => mac3.hub.targetOf(s3.session) === null);
     assert.equal(mac3.status().state, 'retrying');
+  } finally { await r.close(); }
+});
+
+test('HOSTILE: a 409 at the upgrade is retried once past the probe, then shown as held and never retried', async () => {
+  const r = await rig({ limits: { probeMs: 100 } });
+  try {
+    // A thief with the Mac's token holds the host slot (and answers pings).
+    await r.setRole(r.macA, 'host');
+    const thief = await r.rawHost(r.macA);
+    const mac = await r.host(r.macA, { retry: { baseMs: 20, maxMs: 40, heldProbeMs: 200 }, expect: null });
+    await until(() => mac.status().state === 'held');
+    const relay = r.h.hub.interactionRelay;
+    assert.equal(relay.hosts.get(r.macA.device).ws.readyState, 1);
+    // No more attempts: the thief keeps its socket and is told only of the two refusals.
+    const notices = () => thief.frames.filter((f) => f.kind === 'replace-refused').length;
+    await until(() => notices() === 2);
+    await new Promise((res) => setTimeout(res, 300));
+    assert.equal(notices(), 2);
+    assert.equal(mac.status().state, 'held');
+    assert.equal(mac.connected(), false);
+    // The owner's fix: revoke the device. The thief is cut off at once.
+    const other = await r.h.signIn('alice@dev.local', { device_name: 'Alice laptop' });
+    assert.equal((await r.h.call('DELETE', `/api/account/devices/${r.macA.device}`, { token: other.body.device_token, body: {} })).status, 200);
+    await until(() => thief.closed !== null);
+  } finally { await r.close(); }
+});
+
+test('HOSTILE: our own half-open socket is not "held": the one retry after the probe gets back in', async () => {
+  const r = await rig({ limits: { probeMs: 100 } });
+  try {
+    await r.setRole(r.macA, 'host');
+    const dead = await r.rawHost(r.macA, {}, { autoPong: false }); // our previous run, gone half-open
+    const mac = await r.host(r.macA, { retry: { baseMs: 20, maxMs: 40, heldProbeMs: 250 }, expect: null });
+    await until(() => mac.status().state === 'connected');
+    await until(() => dead.closed !== null);
+  } finally { await r.close(); }
+});
+
+test('HOSTILE: stale host role while the Mac is off — a thief gets the slot; resetting the role on quit closes that window', async () => {
+  const r = await rig({ limits: { probeMs: 100 } });
+  try {
+    // The Mac quits without telling the hub (old behaviour): its role stays 'host'.
+    const mac = await r.host(r.macA);
+    mac.close();
+    await until(() => !r.h.hub.interactionRelay.hosts.has(r.macA.device));
+    const thief = await r.rawHost(r.macA); // the stolen token alone is enough
+    assert.ok(thief.welcome);
+    // The real Mac comes back: held, shown, not fought over.
+    const back = await r.host(r.macA, { retry: { baseMs: 20, maxMs: 40, heldProbeMs: 150 }, expect: null });
+    await until(() => back.status().state === 'held');
+    back.close();
+    thief.ws.terminate();
+    await until(() => !r.h.hub.interactionRelay.hosts.has(r.macA.device));
+
+    // With the fix: quitting resets the role (bounded), so a thief's socket is refused.
+    const mac2 = await r.host(r.macA);
+    assert.equal(await mac2.disable({ baseUrl: r.h.base, token: r.macA.token, timeoutMs: 1500 }), true);
+    await assert.rejects(r.rawHost(r.macA), (e) => e.status === 403);
+    // A hub that cannot be reached is reported as not told (the caller retries).
+    const mac3 = createRemoteInteractionHost({ userId: r.macA.user, adapters: {} });
+    assert.equal(await mac3.disable({ baseUrl: 'http://127.0.0.1:9', token: r.macA.token, timeoutMs: 500 }), false);
+    mac3.close();
   } finally { await r.close(); }
 });

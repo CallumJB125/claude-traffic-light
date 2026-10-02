@@ -47,6 +47,7 @@ root.addEventListener('click', async (e) => {
     case 'dismiss': return ctl.dismissNotice();
     case 'restart-signin': return ctl.restartSignIn();
     case 'signout': return ctl.signOut();
+    case 'retry-signout': return ctl.retrySignOut();
     case 'refresh': return ctl.state.view === 'hosts' ? ctl.loadHosts() : ctl.loadSessions();
     case 'open-host': return ctl.openHost(id);
     case 'open-session': return ctl.openSession(id);

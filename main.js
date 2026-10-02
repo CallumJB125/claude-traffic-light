@@ -231,6 +231,8 @@ const DEFAULT_CONFIG = {
   remoteTailscale: false,
   // Remote interaction host: off until ticked in Preferences.
   remoteInteractionHost: false,
+  // A role reset the team hub never acknowledged ({origin, userId}; no token): retried at start.
+  remoteInteractionResetPending: null,
   // Auto-answer rules (src/auto-rules.js). Saved and shown in Lights; nothing
   // answers from them until the hook side evaluates them.
   autoAnswer: { v: 1, sealed: null, rules: [] },
@@ -1426,40 +1428,37 @@ app.on('will-quit',()=>InteractionMain.close());
 ipcMain.handle('compaction-stats',e=>settingsOnly(e)?{...CompactionLedger.summary(),settings:loadConfig().compaction}:null);
 // Remote interaction host (src/remote-interaction.js): OFF unless the
 // "Let my other devices use sessions Plexiform started on this Mac"
-// preference is ticked. Uses the active team hub's own device sign-in (read
-// per connect via buddyWin.interactionHostIdentity, never copied or logged)
-// and its own interaction hub, separate from Overview's. Signing out, another
-// account, or unticking ends it and its remote sessions.
+// preference is ticked. Uses the active team hub's own device sign-in (via
+// buddyWin.interactionHostIdentity; held in memory only for the role reset,
+// never written or logged) and its own interaction hub, separate from
+// Overview's. Signing out, another account, unticking or quitting ends it and
+// its remote sessions (src/interaction-host-sync.js).
 const RemoteInteraction=require('./src/remote-interaction');
-let remoteHost=null,remoteHostKey=null;
-function syncInteractionHost(){
-  const want=loadConfig().remoteInteractionHost===true&&devMockReady;
-  let id=null;
-  try{id=want?getBuddy().interactionHostIdentity?.()??null:null;}catch{id=null;}
-  const key=id?`${id.origin}\n${id.userId}`:null;
-  if(key===remoteHostKey)return;
-  const prev=remoteHost,prevId=remoteHostKey&&remoteHost?.identity;
-  remoteHost=null;remoteHostKey=key;
-  // Opting out tells the hub (role back to client) while the sign-in still works.
-  if(prev)prev.disable(prevId?{baseUrl:prevId.origin,token:prevId.token,fetch:net.fetch}:{}).catch(()=>{}).finally(()=>prev.close()); // privacy-flow: remote-interaction
-  if(!id)return;
-  remoteHost=RemoteInteraction.createRemoteInteractionHost({
+const hostSync=require('./src/interaction-host-sync').createInteractionHostSync({
+  want:()=>loadConfig().remoteInteractionHost===true&&devMockReady,
+  identity:()=>devMockReady?getBuddy().interactionHostIdentity?.()??null:null,
+  createHost:id=>RemoteInteraction.createRemoteInteractionHost({
     userId:id.userId,
     adapters:{codex:Object.assign(CodexAppServer.createCodexAppServer({bin:codexBin,clientVersion:app.getVersion()}),codexBin?{}:{available:false,reason:'Codex CLI not found'})},
     workspace:()=>fs.mkdtempSync(path.join(os.tmpdir(),'plexiform-owned-')),
     boardCurrent:board=>board===null,
     log:m=>console.log(m),
-  });
-  remoteHost.identity=id;
-  remoteHost.enable({baseUrl:id.origin,token:id.token,WebSocket:require('ws'),fetch:net.fetch}).catch(e=>console.warn('[remote-interaction]',e.message)); // privacy-flow: remote-interaction
-}
-app.on('will-quit',()=>{remoteHost?.close();remoteHost=null;});
-const INTERACTION_HOST_LINES={connecting:'Connecting…',connected:'On: your other signed-in devices can use sessions started from them on this Mac.',retrying:'Can\'t reach your team hub; retrying.','signed-out':'Stopped: this Mac is signed out or was removed from your account.',replaced:'Stopped: another connection took over this Mac\'s sign-in. If that wasn\'t you, remove this device in Account and sign in again.',refused:'Stopped: the hub named a different account.'};
+  }),
+  connect:(host,o)=>host.enable({...o,WebSocket:require('ws')}), // privacy-flow: remote-interaction
+  resetRole:RemoteInteraction.resetRole,
+  fetch:(...a)=>net.fetch(...a), // privacy-flow: remote-interaction
+  pending:{get:()=>loadConfig().remoteInteractionResetPending??null,set:v=>saveConfig({remoteInteractionResetPending:v})},
+  log:m=>console.log(m),
+});
+function syncInteractionHost(){hostSync.sync();}
+app.on('will-quit',()=>hostSync.close());
+const INTERACTION_HOST_LINES={connecting:'Connecting…',connected:'On: your other signed-in devices can use sessions started from them on this Mac.',retrying:'Can\'t reach your team hub; retrying.','signed-out':'Stopped: this Mac is signed out or was removed from your account.',replaced:'Stopped: another connection took over this Mac\'s sign-in. If that wasn\'t you, remove this device in Account and sign in again.',refused:'Stopped: the hub named a different account.',held:'Stopped: another connection is using this Mac\'s sign-in, so your devices can\'t reach it. If that wasn\'t you, remove this Mac from your account (Account → Devices) and sign in again.'};
 ipcMain.handle('interaction-host-status',e=>{
   if(!settingsOnly(e))return null;
   if(loadConfig().remoteInteractionHost!==true)return 'Off.';
-  if(!remoteHost)return 'Sign in to a team hub to turn this on.';
-  const st=remoteHost.status();
+  const host=hostSync.host();
+  if(!host)return 'Sign in to a team hub to turn this on.';
+  const st=host.status();
   return [INTERACTION_HOST_LINES[st.state]??'',st.notice??''].filter(Boolean).join(' ');
 });
 
@@ -4461,11 +4460,12 @@ app.on('before-quit', () => { flushStats(); backups?.flush(); lightsWin?.destroy
 // before we exit, once; a second quit goes straight through.
 let hubStopped = false;
 app.on('before-quit', (e) => {
-  if (hubStopped || (!buddyWin && !tasksProcess)) return;
+  if (hubStopped || (!buddyWin && !tasksProcess && !hostSync.active())) return;
   e.preventDefault();
   hubStopped = true;
   tasksSvc?.stop();
-  Promise.allSettled([buddyWin?.stop(), tasksProcess?.stop({ final: true })]).finally(() => app.quit());
+  // Hosting off on the team hub first (≤ 1.5 s), while its sign-in still works.
+  hostSync.release().catch(() => {}).finally(() => Promise.allSettled([buddyWin?.stop(), tasksProcess?.stop({ final: true })]).finally(() => app.quit()));
 });
 
 app.on('activate', () => { if (!lightsWin && !settingsWin) win?.showInactive(); });
