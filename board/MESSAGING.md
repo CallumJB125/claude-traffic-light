@@ -71,6 +71,13 @@ active members, at send and again at every read/receipt.
 
 `authority_version` = the target generation the message was accepted against (0 for people).
 
+`reason` values (stable): `expired`, `sender_revoked`, `sender_removed`, `recipient_removed`,
+`account_gone`, `card_gone`, `not_permitted`, `automation_off`, `target_replaced`, `target_gone`,
+`unshared`, `device_revoked`, `hosting_off`, `owner_removed`, `owner_gone`, `source_<any of these>`,
+`receiver_<reason>` (reported by the receiver, e.g. `receiver_duplicate`), `receiver_lost` (lease
+lapsed after `accepted` ⇒ `outcome_unknown`), `busy` (still queued), `turn_<interrupted|failed>`.
+A viewer who lost access reads `response: null` (or 404 for a person recipient who left the team).
+
 Bounds: body ≤ 4000 chars / 8 KiB, no control chars except `\n\t`; response ≤ 16000 chars;
 handoff brief ≤ 4000, ≤ 8 card refs, ≤ 16 artifacts (`{kind:'path', path}` relative, private
 segments refused); `ttl_s` 10…86400 (default 3600) for sessions, ≤ 7 days for people.
