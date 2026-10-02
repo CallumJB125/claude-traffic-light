@@ -71,7 +71,9 @@ function createOverviewService({sessions=()=>[],work=async()=>({sources:[],captu
   const binding=(raw)=>{if(raw.remote||raw.device)return null;const capture=all.capture.find(c=>c.provider===raw.source&&c.session_id===raw.sessionId&&c.task_id===(raw.taskId??'session')&&!c.untracked&&id(c.card_id));if(!capture)return null;
    for(const {source,data}of good){if(!source.matches?.(capture.destination))continue;const row=data.cards.find(r=>r.card?.id===capture.card_id&&(!capture.destination.board_id||r.board_id===capture.destination.board_id)&&(!capture.destination.team_id||r.team_id===capture.destination.team_id));if(row&&id(row.card.id)&&id(row.board_id)&&id(row.member_id)&&!row.card.archived)return{source,data,row};}return null;};
   const buildLocal=(raw,parentId=null)=>{
-   if(!object(raw)||!id(raw.sessionId))return null;const elapsed=age(raw.source==='codex'&&raw.codexLifecycle===1?raw.codexHookAt:raw.updatedAt,time),fresh=freshness(elapsed),bound=binding(raw),card=bound?.row.card;
+   if(!object(raw)||!id(raw.sessionId))return null;
+   // Claude Code's own hook (set-status.js) writes no source field.
+   if(raw.source==null)raw={...raw,source:'claude'};const elapsed=age(raw.source==='codex'&&raw.codexLifecycle===1?raw.codexHookAt:raw.updatedAt,time),fresh=freshness(elapsed),bound=binding(raw),card=bound?.row.card;
    const identity=stable(['reported',raw.device??'local',raw.source??'unknown',raw.sessionId??null,raw.taskId??'session',card?.id??null,bound?actorOf(bound.data,bound.row):null,bound?.source.key??null,parentId]);
    const projected=Session.snapshot({sessions:[{...raw,remote:false,device:null}],now:time}).sessions[0];
    let status=projected?.status??'Unknown';if(raw.source==='codex'&&Machine.codexInputPending?.(raw,time))status='Waiting on you';

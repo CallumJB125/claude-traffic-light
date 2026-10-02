@@ -103,6 +103,10 @@ test('My sessions: an owned session and an observed Codex session, each with hon
     open.click(); await tick();
     assert.equal(s.doc.activeElement, s.doc.querySelector('.owned-session textarea'));
     assert.match(s.$('mine-summary').textContent, /2My sessions/);
+    // Claude Code's own hook writes no source field: still Claude Code, never "Local AI".
+    s.raw.push({ sessionId: 'claude-1', signal: 'tool-use', updatedAt: new Date().toISOString(), cwd: '/Users/me/other' });
+    await s.poll();
+    assert.match(s.row('mine-list', /Claude Code/).textContent, /Claude Code activity hooks report activity only/);
     // No private identifiers in anything the page received.
     const wire = JSON.stringify(s.results.filter(([ch]) => ch === 'overview:directory'));
     for (const leak of ['thread-SECRET-1', '/Users/me', 'private-repo', 'target-1', '/private/tmp']) assert.equal(wire.includes(leak), false, leak);

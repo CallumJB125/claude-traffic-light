@@ -70,7 +70,7 @@
     set(v.title, e.task.source === 'unknown' ? `${e.provider.label} session` : e.task.title);
     set(v.owner, `${e.owner.self ? 'You' : e.owner.name}${e.task.source === 'human' ? ' · task title edited by a person' : e.task.source === 'unknown' ? ' · task not reported' : ''}`);
     set(v.tag, stateText(e, f)); v.tag.className = `tag ${tone(e, f)}`;
-    set(v.meta, [e.provider.label + (e.provider.kind === 'local' ? ' · local model' : ''), e.device.label + (e.device.local ? ' (this device)' : ''), e.board.label, e.card?.key ? `Card ${e.card.key}` : ''].filter(Boolean).join(' · '));
+    set(v.meta, [e.provider.label + (e.provider.kind === 'local' ? ' · local model' : ''), e.device.label + (e.device.local && e.device.label !== 'This device' ? ' (this device)' : ''), e.board.label, e.card?.key ? `Card ${e.card.key}` : ''].filter(Boolean).join(' · '));
     set(v.badges, [...e.teams.map(t => `Team: ${t.name}`), ...e.provenance.map(p => PROVENANCE[p])].join(' · '));
     set(v.when, `Last observed ${age(f.ageMs)}${f.freshness === 'stale' ? ' · stale' : f.freshness === 'unknown' ? ' · freshness unknown' : ''}`);
     set(v.self, e.selfReported ? `Self-reported: ${e.selfReported.state}${e.selfReported.at !== null ? ` at ${new Date(e.selfReported.at).toLocaleTimeString()}` : ''} (not verified)` : ''); v.self.hidden = !e.selfReported;

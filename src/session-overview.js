@@ -46,7 +46,8 @@ function snapshot({ sessions = [], activity = {}, available = true, now = Date.n
       label: `${lifecycle ? 'Codex subagent' : 'Agent'} ${index + 1}`, status: lifecycle && row.codexClosedTurn === false && child.status !== 'done' && Machine.codexInputPending({ source: 'codex', codexLifecycle: 1, codexTurnId: child.turnId, codexClosedTurn: false, codexInputRequests: child.codexInputRequests }, time) ? 'Waiting on you' : CHILD_STATUSES[child.status],
     })) : [];
     rows.push({
-      provider: typeof row.source === 'string' && Object.hasOwn(PROVIDERS, row.source) ? PROVIDERS[row.source] : 'Local AI',
+      // Claude Code's own hook (set-status.js) writes no source field.
+      provider: row.source == null ? PROVIDERS.claude : typeof row.source === 'string' && Object.hasOwn(PROVIDERS, row.source) ? PROVIDERS[row.source] : 'Local AI',
       project: projectLeaf(row.cwd),
       status: lifecycle && row.codexClosedTurn === true ? 'Turn stopped' : Machine.codexInputPending(row, time) ? 'Waiting on you' : typeof row.signal === 'string' && Object.hasOwn(STATUSES, row.signal) ? STATUSES[row.signal] : 'Unknown',
       freshness: age === null ? 'unknown' : age <= RECENT_MS ? 'recent' : 'stale', age_ms: age, lifecycle, children,
