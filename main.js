@@ -1408,6 +1408,7 @@ const InteractionMain=require('./src/interaction-main').createInteractionMain({
   workspace:()=>fs.mkdtempSync(path.join(os.tmpdir(),'plexiform-owned-')),
   // No board source binds owned sessions yet: only unbound sessions are current.
   boardCurrent:board=>board===null,
+  localModelsFile:path.join(app.getPath('userData'),'local-models.json'),
 });
 InteractionMain.register(ipcMain);
 app.on('will-quit',()=>InteractionMain.close());

@@ -4,17 +4,18 @@
 // never names it. Effects need the foreground document; reads need the
 // visible one. Pushes go only to the document that owns the session.
 const { createInteractionHub } = require('./session-interaction');
+const { createLocalModels } = require('./local-models');
 
 const CHANNELS = Object.freeze({
   capabilities: 'interaction:capabilities', list: 'interaction:list', state: 'interaction:state',
   launch: 'interaction:launch', send: 'interaction:send', interrupt: 'interaction:interrupt', close: 'interaction:close',
-  event: 'interaction:event',
+  event: 'interaction:event', localModels: 'interaction:local-models',
 });
 const denied = { ok: false, status: 'forbidden', error: 'Focus Plexiform Overview and try again.' };
 
 // Only one Overview document is current. When it is replaced (reload or new
 // generation) the old actor's sessions are reaped and `documents` holds one entry.
-function createInteractionMain({ context, readContext = context, adapters, workspace, boardCurrent, now }) {
+function createInteractionMain({ context, readContext = context, adapters, workspace, boardCurrent, now, localModelsFile = null, localModels = adapters ? createLocalModels({ adapters, configFile: localModelsFile }) : null }) {
   const documents = new Map();
   const hub = createInteractionHub({
     adapters, workspace, boardCurrent, now,
@@ -41,6 +42,8 @@ function createInteractionMain({ context, readContext = context, adapters, works
     register(ipc) {
       ipc.handle(CHANNELS.capabilities, async (e) => ((await actorOf(e, false)) ? hub.capabilities() : []));
       ipc.handle(CHANNELS.list, async (e) => { const a = await actorOf(e, false); return a ? hub.list(a) : []; });
+      // Local models register into `adapters` as they are found (read-only loopback probes + configured endpoints).
+      ipc.handle(CHANNELS.localModels, async (e) => ((await actorOf(e, false)) && localModels ? localModels.refresh() : null));
       ipc.handle(CHANNELS.state, async (e, ...args) => { const a = await actorOf(e, false); return a ? hub.state(one(args), a) : null; });
       for (const action of ['launch', 'send', 'interrupt', 'close']) {
         ipc.handle(CHANNELS[action], async (e, ...args) => {
