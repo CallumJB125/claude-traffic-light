@@ -24,7 +24,7 @@ function createOverviewService({sessions=()=>[],work=async()=>({sources:[],captu
   const sources=await Promise.all(list.map(async source=>{let data;try{if(source.current())data=await source.read();}catch{}return{source,data};}));
   return{sources,capture:Array.isArray(registered?.capture)?registered.capture.slice(0,2000):[],partial:registered?.partial===true||registered?.sources?.length>9};};
  const validData=(source,data)=>source.current()&&data?.ok===true&&['complete','partial'].includes(data.status)&&object(data.principal)&&(!source.userId||data.principal.user_id===source.userId)&&Array.isArray(data.cards)&&data.cards.length<=500&&Array.isArray(data.agents)&&data.agents.length<=500;
- const keyOf=row=>[row?.card?.id,row?.board_id,row?.member_id,row?.card?.run?.id??null,row?.card?.fence??null];
+ const keyOf=row=>[row?.card?.id,row?.board_id,row?.member_id,row?.card?.run?.id??null,row?.card?.fence??null,row?.card?.version??null,row?.card?.title??null];
  const liveOwn=(data,row)=>data.agents.some(a=>a.card_id===row.card.id&&a.board_id===row.board_id&&a.member_id===row.member_id&&a.connection==='accepted'&&a.live?.green===true&&Number.isFinite(a.live.hb_age_ms)&&a.live.hb_age_ms>=0&&a.live.hb_age_ms<=Session.RECENT_MS);
  function register(row,entry,next){const handle=crypto.randomUUID();next.set(handle,{...entry,canOpen:row.capabilities.open.enabled===true,canMessage:row.capabilities.message.enabled===true,expires:now()+45000});row.handle=handle;return row;}
  async function snapshot(){
