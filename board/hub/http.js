@@ -35,6 +35,7 @@ import { readOwnership, guardOwnership } from './ownership-view.js';
 import { createRemoteHttp } from './remote/http.js';
 import { strictJson } from './remote/validation.js';
 import { readWorkContext, guardWorkContext, workContextArgs } from './work-context.js';
+import { InteractionRelay, INTERACTION_WS_PATH } from './interaction-relay.js';
 
 const MAX_BODY = 1024 * 1024;
 // Every request's ceilings (D105); config.requestLimits overrides them (tests, no env).
@@ -348,6 +349,8 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   }, { auth: 'none' });
   if (config.auth === 'accounts') {
     remote.management(route);
+    hub.interactionRelay ??= new InteractionRelay(hub, config.interactionLimits);
+    hub.interactionRelay.routes(route);
     const acc = hub.accounts;
     route('GET', '/api/auth/methods', ({ ip }) => acc.methods({ ip }), { auth: 'none' });
     route('POST', '/api/auth/email/start', ({ body, ip, ident, req, res }) => acc.start(body, { ip, ident, req, res }), { auth: 'optional' });
@@ -1078,6 +1081,16 @@ export function createUpgradeHandler({ hub, config, wss, authenticate }) {
         try { member = pickMember(hub, auth.candidates, { requestedOrg: searchParams.get('org') }); } catch { member = null; }
         new BrowserConn(hub, ws, { member, candidates: auth.candidates, expMs: auth.exp_ms });
       });
+    }
+    // Remote interaction host (accounts only): a desktop device token, never a
+    // browser (no Origin) and never a cookie session.
+    if (pathname === INTERACTION_WS_PATH) {
+      if (config.auth !== 'accounts' || !hub.interactionRelay) return refuse(socket, 404, 'Not Found');
+      if (req.headers.origin !== undefined) return refuse(socket, 403, 'Forbidden');
+      let auth;
+      try { auth = await authenticate(req); } catch { return refuse(socket, 401, 'Unauthorized'); }
+      if (auth.cred.kind !== 'device') return refuse(socket, 403, 'Forbidden');
+      return wss.handleUpgrade(req, socket, head, (ws) => hub.interactionRelay.attach(ws, auth));
     }
     if (pathname === WS_PATHS.runner) {
       const auth = await authenticateRunner(hub, req, { ip: clientIp(req, config) });
