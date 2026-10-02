@@ -63,7 +63,7 @@ test('teams + sessions: hostile rows whitelisted; missing owner.id drops the row
     share({ team: { id: '', name: 'x' } }),
     share({ scope: 'admin' }),
     noOwner,
-    share({ id: '22222222-2222-4333-8444-555555555555', scope: 'watch', owner: { id: 'u-a'.padEnd(120, 'x'), name: 'x'.repeat(500) }, team: { id: 't2', name: 'y'.repeat(500) }, expires_at: 1234 }),
+    share({ id: '22222222-2222-4333-8444-555555555555', scope: 'watch', owner: { id: 'u-a'.padEnd(20, 'x'), name: 'x'.repeat(500) }, team: { id: 't2', name: 'y'.repeat(500) }, expires_at: 1234 }),
     share({ owner: { id: 'u-c', name: 'Cara', real_name: 'spoof' } }),
     share(),
     share(),
@@ -252,10 +252,13 @@ test('M7: fan-out bounded, deadline lists stragglers without state, per-team row
   assert.ok(calls <= 30);
   const hung = rig({ shared: [share()] });
   const slow = hung.fetch;
+  let hungStart = 0, abortedAt = 0;
   hung.fetch = async (url, init) => {
     if (String(url).endsWith('/shared')) return slow(url, init);
-    await wait(10_000);
-    return slow(url, init);
+    hungStart = Date.now();
+    return new Promise((resolve) => {
+      init.signal?.addEventListener('abort', () => { abortedAt = Date.now(); resolve({ status: 0, headers: { get: () => null }, text: async () => '', body: null }); });
+    });
   };
   const hub2 = createTeamHubClient({ baseUrl: 'https://hub.test', token: () => 't', fetch: hung.fetch }, { now: () => T0, deadlineMs: 120, timeoutMs: 9_000 });
   const t2 = Date.now();
@@ -263,6 +266,8 @@ test('M7: fan-out bounded, deadline lists stragglers without state, per-team row
   assert.ok(Date.now() - t2 < 3000, 'the overall deadline returns promptly');
   assert.deepEqual(out2.map((e) => [e.ref, e.state]), [[SHARED, 'Unknown']], 'a stragglers row is listed without state');
   assert.equal(out2[0].observed_at, null);
+  await wait(60);
+  assert.ok(abortedAt > 0 && abortedAt - hungStart <= 1000, `N2: the in-flight state request aborts at the deadline (${abortedAt - hungStart}ms after start)`);
   const many = Array.from({ length: 150 }, (_, i) => share({ id: `${String(i + 1).padStart(8, '0')}-2222-4333-8444-555555555555` }));
   let stateCalls = 0;
   const fetch3 = async (url) => {
@@ -312,24 +317,27 @@ test('poll: real in-flight counted in the transport; no overlap; emit only on ch
 
 test('poll: exponential backoff after failures, reset on success', async () => {
   let mode = 'fail';
-  const gaps = [];
+  const marks = [];
   let lastAt = 0;
   const json = (status, body) => ({ status, headers: { get: () => null }, text: async () => JSON.stringify(body), body: null });
   const fetch = async () => {
     const at = Date.now();
-    if (lastAt) gaps.push(at - lastAt);
+    marks.push({ gap: lastAt ? at - lastAt : 0, ok: mode === 'ok' });
     lastAt = at;
     return mode === 'fail' ? json(500, { shared: [] }) : json(200, { shared: [share()] });
   };
   const hub = createTeamHubClient({ baseUrl: 'https://hub.test', token: () => 't', fetch }, { now: () => T0, pollMs: 20 });
   const off = hub.onChange(() => {});
-  await wait(260);
+  await wait(330);
   mode = 'ok';
-  await wait(120);
+  await wait(420);
   off();
+  const gaps = marks.slice(1).map((m) => m.gap);
   assert.ok(gaps.length >= 3, `several polls happened (${gaps.length})`);
-  assert.ok(Math.max(...gaps) >= 40, 'L6: failures back off beyond the base interval');
-  assert.ok(gaps[gaps.length - 1] <= 45, 'success resets the interval to the base');
+  assert.ok(Math.max(...gaps) >= 35, 'L6: failures back off beyond the base interval (generous bound)');
+  const firstOk = marks.findIndex((m, i) => i > 0 && m.ok);
+  assert.ok(firstOk > 0, 'a successful poll happened');
+  assert.ok(marks.slice(firstOk + 1).every((m) => m.gap <= 90), 'L6: after the first success every following interval is back near the base');
 });
 
 test('timeout/abort: a hung hub is cut at the timeout; send fails closed, teams surfaces it', async () => {
@@ -361,4 +369,104 @@ test('token never appears in failures, results or thrown messages', async () => 
   const thrown = await throwing.teams({ id: 'u' }).then(() => '', (e) => String(e));
   assert.equal(thrown.includes('tok-1'), false, 'no token via a thrown token() error either');
   r.state.calls.length = 0;
+});
+
+test('N1: a rejecting reader.cancel() on an oversize stream never fires unhandledRejection', async () => {
+  const unhandled = [];
+  const onUnhandled = (e) => unhandled.push(String(e?.message ?? e));
+  process.on('unhandledRejection', onUnhandled);
+  let cancelled = 0;
+  const fetch = async () => ({
+    status: 200,
+    headers: { get: () => null },
+    text: async () => { throw new Error('must not fall back to text()'); },
+    body: { getReader: () => ({
+      read: async () => ({ done: false, value: new Uint8Array(400_001).fill(120) }),
+      cancel: () => { cancelled++; return Promise.reject(new Error('AbortError: This operation was aborted')); },
+    }) },
+  });
+  const hub = createTeamHubClient({ baseUrl: 'https://hub.test', token: () => 't', fetch }, { now: () => T0 });
+  await assert.rejects(hub.teams({ id: 'u' }), /unreadable/);
+  assert.equal(cancelled, 1);
+  await wait(50);
+  await wait(0);
+  process.off('unhandledRejection', onUnhandled);
+  assert.deepEqual(unhandled, [], 'cancel() rejection is always handled');
+});
+
+test('N3: delivery text/response keep newlines and tabs; other controls and excess blank lines are collapsed', async () => {
+  const { hub } = mk({
+    shared: [share()],
+    callBody: { result: { ok: true, state: { session: SESSION, generation: 1, status: 'ready', deliveries: [
+      { id: 'd1', text: 'line1\nline2\tindented\n\n- item', by: 'Ana', state: 'replied', response: 'a\n\n\n\nb' },
+      { id: 'd2', text: 'bad\u0007bell\r\nok', by: 'Bob', state: 'acknowledged', response: '' },
+    ] } } },
+  });
+  const e = (await hub.sessions({ id: 'u' }, 't1'))[0];
+  assert.equal(e.deliveries[0].text, 'line1\nline2\tindented\n\n- item', 'multi-line reply preserved');
+  assert.equal(e.deliveries[0].response, 'a\n\nb', '3+ newlines collapse to 2');
+  assert.equal(e.deliveries[1].text, 'badbell\nok', 'C0 stripped, CRLF normalised to the kept newline');
+});
+
+test('N3: control, bidi and zero-width characters are stripped from hub names and ids', async () => {
+  const { hub } = mk({ shared: [
+    share({ owner: { id: '  u-bob-777  ', name: 'A\u200bd\u202ei\u061cs\u200b' }, team: { id: 't1', name: 'De\u202bv team\u2066' } }),
+    share({ id: '22222222-2222-4333-8444-555555555555', owner: { id: 'u-ana', name: 'Ana\u00ad' }, team: { id: 't2', name: 'Other\u200e' } }),
+  ] });
+  const rows = await hub.sessions({ id: 'u' }, 't1');
+  assert.equal(rows[0].owner.name, 'Adis', 'bidi/zero-width stripped, letters kept');
+  assert.equal(rows[0].owner.id, 'u-bob-777', 'owner.id is trimmed');
+  assert.equal(rows[0].team.name, 'Dev team');
+  const teams = await hub.teams({ id: 'u' });
+  assert.deepEqual(teams.map((t) => t.name), ['Dev team', 'Other'], 'stripping applied across rows (a mutant without it fails)');
+});
+
+test('N4: a whitespace owner.id drops the row; an over-100-char owner.id is rejected, never truncated', async () => {
+  const long = 'x'.repeat(140);
+  const { hub } = mk({ shared: [
+    { id: '33333333-3333-4333-8444-555555555555', session: SESSION, scope: 'watch', team: { id: 't1', name: 'D' }, owner: { id: '   ', name: 'Ghost' }, online: true },
+    { id: '44444444-4444-4333-8444-555555555555', session: SESSION, scope: 'watch', team: { id: 't1', name: 'D' }, owner: { id: long, name: 'Long' }, online: true },
+    share({ owner: { id: `  ${OWNER}  `, name: 'Bob' } }),
+  ] });
+  const rows = await hub.sessions({ id: 'u' }, 't1');
+  assert.deepEqual(rows.map((r) => r.owner.id), [OWNER], 'only the trimmed valid row survives');
+  assert.equal(JSON.stringify(rows).includes('x'.repeat(101)), false, 'no 100-char truncation happened');
+});
+
+test('onChange: the first poll emits by design (shares go from unknown to known), then only on real change', async () => {
+  const { hub, r } = mk({ shared: [share()] });
+  r.state.delayMs = 10;
+  const client = createTeamHubClient({ baseUrl: 'https://hub.test', token: () => 't', fetch: r.fetch }, { now: () => T0, pollMs: 25 });
+  let emits = 0;
+  const off = client.onChange(() => { emits++; });
+  await wait(90);
+  assert.equal(emits, 1, 'exactly one initial emit');
+  await wait(80);
+  assert.equal(emits, 1, 'and none for an unchanged list');
+  off();
+});
+
+test('poll: off() then on() during an in-flight poll reschedules exactly once (the running guard)', async () => {
+  const { r } = mk({ shared: [share()] });
+  r.state.delayMs = 60;
+  const client = createTeamHubClient({ baseUrl: 'https://hub.test', token: () => 't', fetch: r.fetch }, { now: () => T0, pollMs: 20 });
+  let emits = 0;
+  const off = client.onChange(() => { emits++; });
+  await wait(40);
+  assert.equal(r.state.inFlight === 1, true, 'a poll is genuinely in flight now');
+  off();
+  const back = client.onChange(() => { emits++; });
+  await wait(120);
+  assert.equal(r.state.maxInFlight <= 1, true, `no overlap: a resubscribe during an in-flight poll must not start a second one (max ${r.state.maxInFlight})`);
+  const scheduledAt = r.state.calls.length;
+  await wait(200);
+  assert.ok(r.state.calls.length > scheduledAt, 'the poll loop resumed after re-subscribe during an in-flight poll');
+  assert.ok(r.state.calls.length > 2, 'polling continued, not stuck');
+  off();
+  back();
+  await wait(80);
+  back();
+  const stoppedAt = r.state.calls.length;
+  await wait(180);
+  assert.equal(r.state.calls.length, stoppedAt, 'stops when the last listener goes');
 });

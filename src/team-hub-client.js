@@ -19,8 +19,10 @@ const REASONS = Object.freeze({
   invalid: 'Check the message and try again.',
 });
 const HIDDEN = /[\u0000-\u001f\u007f-\u009f\u00ad\u061c\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g;
+const LOOSE = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u00ad\u061c\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g;
 const object = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const str = (v, max) => (typeof v === 'string' ? [...v.replace(HIDDEN, '')].slice(0, max).join('') : '');
+const prose = (v, max) => (typeof v === 'string' ? [...v.replace(LOOSE, '')].slice(0, max).join('').replace(/\n{3,}/g, '\n\n') : '');
 const failed = (status, reason) => ({ ok: false, status, reason, error: reason });
 const bounded = (v, dflt) => (Number.isSafeInteger(v) && v > 0 ? v : dflt);
 
@@ -40,8 +42,8 @@ function shareRow(x) {
   const id = str(x.id, 100), session = str(x.session, 100);
   const scope = x.scope === 'interact' || x.scope === 'watch' ? x.scope : '';
   const team = object(x.team) ? { id: str(x.team.id, 100), name: str(x.team.name, 80) || 'Team' } : null;
-  const ownerId = object(x.owner) ? str(x.owner.id, 100) : '';
-  if (!UUID.test(id) || !UUID.test(session) || !scope || !team || !team.id || !ownerId) return null;
+  const ownerId = object(x.owner) && typeof x.owner.id === 'string' ? x.owner.id.trim() : '';
+  if (!UUID.test(id) || !UUID.test(session) || !scope || !team || !team.id || !ownerId || ownerId.length > 100) return null;
   return {
     ref: id, session, scope, team,
     expiresAt: typeof x.expires_at === 'string' && x.expires_at.length <= 60 ? x.expires_at : null,
@@ -92,7 +94,7 @@ function createTeamHubClient({ baseUrl, token, fetch = globalThis.fetch, viewer:
           const chunk = await reader.read();
           if (chunk.done) break;
           bytes += chunk.value?.byteLength ?? 0;
-          if (bytes > MAX_BODY) { ctl.abort(); try { reader.cancel(); } catch { /* already aborting */ } return { status: res.status, body: null }; }
+          if (bytes > MAX_BODY) { ctl.abort(); Promise.resolve(reader.cancel?.()).catch(() => {}); return { status: res.status, body: null }; }
           parts.push(chunk.value);
         }
         return { status: res.status, body: json(Buffer.concat(parts).toString('utf8')) };
@@ -131,8 +133,8 @@ function createTeamHubClient({ baseUrl, token, fetch = globalThis.fetch, viewer:
   }
 
   const deliveryOf = (d) => object(d) && typeof d.id === 'string' && d.id ? {
-    id: str(d.id, 80), text: str(d.text, 4000), by: typeof d.by === 'string' && d.by ? str(d.by, 80) : null,
-    state: DELIVERY_STATES.includes(d.state) ? d.state : 'unknown', response: str(d.response, 4000),
+    id: str(d.id, 80), text: prose(d.text, 4000), by: typeof d.by === 'string' && d.by ? str(d.by, 80) : null,
+    state: DELIVERY_STATES.includes(d.state) ? d.state : 'unknown', response: prose(d.response, 4000),
   } : null;
 
   async function teams() {
@@ -168,17 +170,18 @@ function createTeamHubClient({ baseUrl, token, fetch = globalThis.fetch, viewer:
     cache = all;
     const rows = all.filter((r) => r.team.id === teamId).slice(0, MAX_PER_TEAM);
     const deadline = Date.now() + span, out = rows.map(baseEntry);
-    let next = 0;
+    let next = 0, settled = false;
     const cut = new Promise((done) => { const t = setTimeout(done, Math.max(deadline - Date.now(), 0)); t.unref?.(); });
     const worker = async () => {
       for (;;) {
         const i = next++;
-        if (i >= rows.length || Date.now() >= deadline) return;
+        if (settled || i >= rows.length || Date.now() >= deadline) return;
         try { applyState(out[i], hubResult(await sharedCall(rows[i].ref, crypto.randomUUID(), 'state', { session: rows[i].session }, deadline)), atNow()); }
         catch { /* listed without state */ }
       }
     };
     await Promise.race([Promise.all(Array.from({ length: Math.min(FANOUT, rows.length) }, worker)), cut]);
+    settled = true;
     return out;
   }
 
