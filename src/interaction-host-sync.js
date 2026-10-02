@@ -15,10 +15,13 @@
 // - release() (app quit) resets the role with a short bound, so a Mac that is
 //   off does not leave a host slot open for its token.
 // - attach(host, {origin, userId, token}) → {stop} (optional: session messaging)
-//   runs only once a host has connected with the hub, and is stopped before
-//   that host is disabled or closed. `token` is the identity's getter, so a
+//   runs only while a host is connected with the hub: it starts when the host
+//   connects (also later, after retrying), stops when the host ends up
+//   replaced, held, refused, signed out or off, and is stopped before that
+//   host is disabled or closed. `token` is the identity's getter, so a
 //   refreshed sign-in is picked up.
 
+const STOPPED = new Set(['replaced', 'held', 'refused', 'signed-out', 'off']);
 const RESET = { baseMs: 2000, maxMs: 5 * 60_000, timeoutMs: 5000, quitTimeoutMs: 1500 };
 
 function createInteractionHostSync({
@@ -96,12 +99,18 @@ function createInteractionHostSync({
       current = { host: createHost(id), origin: id.origin, userId: id.userId, token };
     }
     const next = current;
+    const follow = (st) => {
+      if (!attach || current !== next) return;
+      if (st === 'connected') { if (!next.attached) next.attached = attach(next.host, { origin: next.origin, userId: next.userId, token: id.token }); }
+      else if (STOPPED.has(st)) detach(next);
+    };
     chain = chain.then(async () => {
       if (prev) await stop(prev);
       settlePending(id);
       if (next && current === next) {
+        next.host.onState?.(follow);
         const st = await connect(next.host, { baseUrl: next.origin, token: id.token, fetch });
-        if (attach && current === next && st?.state === 'connected') next.attached = attach(next.host, { origin: next.origin, userId: next.userId, token: id.token });
+        follow(st?.state);
       }
     }).catch((e) => log(`[remote-interaction] ${e.message}`));
     return chain;

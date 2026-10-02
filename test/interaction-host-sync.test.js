@@ -18,8 +18,10 @@ function world({ resetAnswers = [], attach = null, enableState } = {}) {
     pending: null,
     resets: [],
     timers: [],
+    listeners: [],
     log,
   };
+  w.emit = (st) => { for (const fn of w.listeners) fn(st); };
   const identity = () => (w.id ? { origin: w.id.origin, userId: w.id.userId, token: () => w.id?.tok ?? null } : null);
   const createHost = (id) => {
     const h = {
@@ -27,6 +29,7 @@ function world({ resetAnswers = [], attach = null, enableState } = {}) {
       async enable(o) { log.push(['enable', id.userId, o.token()]); return enableState === undefined ? undefined : { state: enableState }; },
       async disable(o) { log.push(['disable', id.userId, o.token, o.timeoutMs]); return resetAnswers.length ? resetAnswers.shift() : true; },
       close() { h.closed = true; log.push(['close', id.userId]); },
+      onState(fn) { w.listeners.push(fn); },
     };
     return h;
   };
@@ -176,4 +179,31 @@ test('messaging attaches only to a connected host, reads the live token, and sto
   const plain = world({ enableState: 'connected' });
   await plain.sync.sync();
   assert.equal(plain.sync.active(), true, 'no attach: hosting unchanged');
+});
+
+test('messaging follows the host: starts when it connects later, stops when it is replaced, held, refused or signed out', T, async () => {
+  const attached = [];
+  const attach = (host, o) => { const a = { user: o.userId, stopped: false }; attached.push(a); return { stop() { a.stopped = true; } }; };
+  const w = world({ attach, enableState: 'retrying' });
+  await w.sync.sync();
+  assert.equal(attached.length, 0, 'not while retrying');
+  w.emit('connected');
+  assert.equal(attached.length, 1, 'started once the host reconnected');
+  w.emit('connected');
+  assert.equal(attached.length, 1, 'never twice');
+  w.emit('retrying');
+  assert.equal(attached[0].stopped, false, 'a brief retry keeps it');
+  for (const st of ['replaced', 'held', 'refused', 'signed-out']) {
+    w.emit('connected');
+    const a = attached.at(-1);
+    assert.equal(a.stopped, false);
+    w.emit(st);
+    assert.equal(a.stopped, true, `stopped on ${st}`);
+  }
+  // A superseded host's late news does nothing.
+  w.id = { origin: 'https://hub.example', userId: 'bob', tok: 'bdt_bob' };
+  await w.sync.sync();
+  const n = attached.length;
+  w.listeners[0]('connected');
+  assert.equal(attached.length, n);
 });

@@ -336,6 +336,9 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
   }
 
   let state = 'off', notice = null, resume = null, retryTimer = null, idleTimer = null, attempts = 0, conflicts = 0, running = null;
+  // Told when hosting connects or stops (session messaging follows it).
+  const stateListeners = new Set();
+  function tell() { for (const fn of [...stateListeners]) { try { fn(state); } catch (e) { log(`[remote-interaction] ${e.message}`); } } }
   const reapRemote = () => hub.reap(() => false).catch(() => {});
   function idleFrom() {
     if (idleTimer || !running) return;
@@ -348,6 +351,7 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
     shares.clear(); prints.clear();
     clearTimeout(retryTimer); retryTimer = null;
     clearTimeout(idleTimer); idleTimer = null;
+    tell();
   }
 
   /**
@@ -412,6 +416,7 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
       if (run !== running) return;
       attempts = 0; conflicts = 0; state = 'connected';
       clearTimeout(idleTimer); idleTimer = null;
+      tell();
     } catch (e) {
       if (run !== running) return;
       if (e.status === 401 || e.status === 403 || e.wrongAccount) { reapRemote(); stopRunning(e.wrongAccount ? 'refused' : 'signed-out'); return; }
@@ -463,7 +468,8 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
   function close() { stopRunning('off'); disconnect(); for (const w of [...watchers]) w(); hub.stopAll(); }
 
   // `hub` is a main-only seam (tests and proof logs), never exposed remotely.
-  return { handle, connect, enable, disable, status, disconnect, close, hub, actor, connected: () => socket?.readyState === 1, shareSession, listShares, stopSharing, shared: () => [...shares.values()].map(shareView) };
+  const onState = (fn) => { stateListeners.add(fn); return () => stateListeners.delete(fn); };
+  return { handle, connect, enable, disable, status, disconnect, close, onState, hub, actor, connected: () => socket?.readyState === 1, shareSession, listShares, stopSharing, shared: () => [...shares.values()].map(shareView) };
 }
 
 /** PUT role=client with this token, bounded. → true once the hub has no host role for it. */

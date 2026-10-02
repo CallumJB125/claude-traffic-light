@@ -345,8 +345,11 @@ test('HOSTILE: host module shows REPLACED and does not reconnect', async () => {
   const r = await rig();
   try {
     const mac = await r.host(r.macA, { retry: { baseMs: 20, maxMs: 40 } });
+    const told = [];
+    mac.onState((st) => told.push(st));
     r.h.hub.interactionRelay.hosts.get(r.macA.device).ws.close(4409, 'replaced by a newer connection');
     await until(() => mac.status().state === 'replaced');
+    assert.deepEqual(told, ['replaced'], 'listeners (session messaging) are told it stopped');
     await new Promise((res) => setTimeout(res, 120));
     assert.equal(mac.connected(), false);
     assert.equal(mac.status().state, 'replaced');
@@ -500,12 +503,15 @@ test('RESILIENCE: reconnects with backoff after a hub restart (4000); a refusal 
   try {
     const relay = () => r.h.hub.interactionRelay;
     const mac = await r.host(r.macA, { retry: { baseMs: 30, maxMs: 120, idleReapMs: 60_000 } });
+    const told = [];
+    mac.onState((st) => told.push(st));
     const win = r.client(r.winA);
     const s = (await win.call(r.macA.device, 'launch', { provider: 'codex' })).body.result.state;
     const before = relay().hosts.get(r.macA.device);
     relay().close();
     await until(() => { const now = relay().hosts.get(r.macA.device); return now && now !== before; });
     await until(() => mac.status().state === 'connected');
+    await until(() => told.includes('connected'));
     const after = await win.call(r.macA.device, 'list');
     assert.equal(after.body.result?.sessions[0].session, s.session, JSON.stringify(after.body));
 
@@ -537,7 +543,10 @@ test('HOSTILE: a 409 at the upgrade is retried once past the probe, then shown a
     await r.setRole(r.macA, 'host');
     const thief = await r.rawHost(r.macA);
     const mac = await r.host(r.macA, { retry: { baseMs: 20, maxMs: 40, heldProbeMs: 200 }, expect: null });
+    const told = [];
+    mac.onState((st) => told.push(st));
     await until(() => mac.status().state === 'held');
+    assert.deepEqual(told, ['held']);
     const relay = r.h.hub.interactionRelay;
     assert.equal(relay.hosts.get(r.macA.device).ws.readyState, 1);
     // No more attempts: the thief keeps its socket and is told only of the two refusals.
