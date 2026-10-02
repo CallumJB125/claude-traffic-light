@@ -1358,6 +1358,7 @@ const MyDay = require('./src/my-day-service.js').createMyDayService({
 });
 const myDaySender = e => !!e.sender && e.sender === buddyWin?.pageWebContents('myday') && e.senderFrame === e.sender.mainFrame;
 const SessionOverview = require('./src/session-overview.js');
+const ProviderStatus = require('./src/provider-status.js');
 const sessionsSender = e => fromUtilityPage(e, 'sessions');
 ipcMain.handle('sessions:state', e => {
   if (!sessionsSender(e)) return null;
@@ -1690,7 +1691,7 @@ function createHelpWindow() { openBuddy('help'); }
 
 function helpState() {
   const real = aggregateState({ ignoreTravel: true });
-  return Help.explain(real, loadConfig().rules, { travel: travelLook ? travelLook.name : null, busy: BusyWatch.status() });
+  return Help.explain(real, loadConfig().rules, { travel: travelLook ? travelLook.name : null, busy: BusyWatch.status(), providerStatus: ProviderStatus.snapshot({ sessions: localSessions(real.sessions || []), online }) });
 }
 
 ipcMain.handle('open-help', e => { if (widgetOnly(e) || widgetConfigSender(e)) createHelpWindow(); });
@@ -2813,7 +2814,7 @@ ipcMain.on('resize-window-by', (e, factor) => {
 utilityHandle('get-aggregate-status', e => widgetOnly(e) || widgetConfigSender(e), () => {
   const state = aggregateState();
   const facing = widgetMuzzle()?.facing || 'right';
-  return { ...state, look: { ...state.look, facing } };
+  return { ...state, providerStatus: ProviderStatus.snapshot({ sessions: localSessions(state.sessions || []), online }), look: { ...state.look, facing } };
 });
 
 // Click handler: jump to whichever session needs the user — the ones whose

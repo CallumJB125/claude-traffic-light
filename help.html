@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="utf-8" />
-<title>What is Claude doing?</title>
+<title>What are your AI agents doing?</title>
 <link rel="stylesheet" href="tokens.css" />
 <style>
   * { box-sizing: border-box; }
@@ -36,13 +36,14 @@
 </style>
 </head>
 <body>
-  <main aria-label="What Claude is doing right now">
+  <main aria-label="What your AI agents are reporting right now">
   <div class="now" role="status" aria-live="polite">
     <div class="lamp" id="lamp" aria-hidden="true"></div>
     <div>
       <h1 id="headline">…</h1>
       <div class="sub" id="lampText"></div>
       <p id="meaning"></p>
+      <p id="providers" class="rule"></p>
     </div>
   </div>
 
@@ -66,28 +67,28 @@
 
   <details>
     <summary>“Needs your input” vs “Waiting for you”</summary>
-    <p><b>Needs your input</b> (amber, waving): Claude is stuck mid-task on a permission prompt or a question. Nothing moves until you answer in the terminal.</p>
-    <p><b>Waiting for you</b>: Claude finished its turn. It's simply your turn to type — nothing is stuck.</p>
+    <p><b>Needs your input</b> (amber, waving): An AI agent has paused mid-task on a permission prompt or a question. Nothing moves until you answer in the terminal.</p>
+    <p><b>Waiting for you</b>: An AI agent finished its turn. It's simply your turn to type — nothing is stuck.</p>
   </details>
   <details>
     <summary>What the colours usually mean</summary>
-    <p><b>Green</b>: working, or just finished. <b>Amber</b>: needs you, a failed turn, or nothing running. <b>Red</b>: out of tokens, offline, a runaway session, or over budget. Every colour is programmable in Lights, so yours may differ.</p>
+    <p><b>Green</b>: working, or just finished. <b>Amber</b>: needs you, a failed turn, or nothing running. <b>Red</b>: out of tokens, offline, a runaway session, or over budget. Every colour is programmable in Widget configuration, so yours may differ.</p>
   </details>
   <details>
     <summary>Spend: budgets and runaway sessions</summary>
     <p>Buddy prices every turn from your Claude Code transcripts at API list prices. Set a daily or weekly budget in <b>Preferences → Spend</b>: near it (80% by default) the light goes amber with money eyes when a turn ends; over it, red with money eyes.</p>
-    <p><b>Runaway session</b> (pulsing red, wide eyes; hover Claude for the burn rate, like “$47.20 in 18 min”): one session spent more than your threshold ($40 in 20 minutes by default) and is still working. You get one notification; click it to jump to that terminal. Buddy never types into or stops a session you started.</p>
+    <p><b>Runaway session</b> (pulsing red, wide eyes; hover the widget for the burn rate, like “$47.20 in 18 min”): one session spent more than your threshold ($40 in 20 minutes by default) and is still working. You get one notification; click it to jump to that terminal. Buddy never types into or stops a session you started.</p>
     <p>On a Pro or Max plan you aren't billed per token, so these are API-price equivalents, not a share of your usage window.</p>
   </details>
   <details>
     <summary>Ask him out loud</summary>
-    <p>Press and hold Claude (or hold the key you picked in Preferences → Voice), ask, and let go. He answers “What's blocked?”, “What's my Claude doing?”, “How much have I spent today?” and “What happened while I was out?”. The red mic badge shows whenever he's listening; speech becomes text on this Mac and audio is never kept. A teammate's Claude needs the team board.</p>
+    <p>Press and hold the widget (or hold the key you picked in Preferences → Voice), ask, and let go. He answers “What's blocked?”, “What are my sessions doing?”, “How much have I spent today?” and “What happened while I was out?”. The red mic badge shows whenever he's listening; speech becomes text on this Mac and audio is never kept. A teammate’s AI activity needs the team board.</p>
   </details>
   </main>
 
   <div class="actions">
-    <span class="note">Reopen from the <b>?</b> on Claude, or open Help in the main app.</span>
-    <button id="lights" title="Change what Claude does for each state">Open Lights</button>
+    <span class="note">Reopen from the <b>?</b> on the widget, or open Help in the main app.</span>
+    <button id="lights" title="Change what the widget does for each state">Widget configuration</button>
     <button class="primary" id="close">Got it</button>
   </div>
 
@@ -104,6 +105,7 @@
       $('headline').textContent = h.headline;
       $('lampText').textContent = `${h.lampText}${h.sessions ? ` · ${h.sessions} session${h.sessions === 1 ? '' : 's'}${h.remote ? ` (${h.remote})` : ''}` : ''}`;
       $('meaning').textContent = h.meaning || '';
+      $('providers').textContent = h.providerStatus ? h.providerStatus.detail + (h.providerStatus.omitted ? ` ${h.providerStatus.omitted} additional reports omitted.` : '') : '';
       $('activity-box').hidden = !h.activity;
       $('activity').textContent = h.activity || '';
       const why = $('why');
