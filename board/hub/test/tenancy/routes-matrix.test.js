@@ -53,6 +53,16 @@ const MATRIX = {
   'GET /api/auth/oauth/web/github/callback': { kind: 'public', reason: 'fixed GitHub callback requires authenticated browser cookie/state/PKCE; no tenant selector' },
   'POST /api/auth/oauth/web/result': { kind: 'public', reason: 'browser-bound result; success exact live self session plus CSRF, failures no account credential' },
   'POST /api/auth/signout': { kind: 'self' },
+  'PUT /api/interaction/v1/role': { kind: 'self' },
+  'GET /api/interaction/v1/hosts': { kind: 'self' },
+  'POST /api/interaction/v1/hosts/:host_id/call': { kind: 'cross', path: f => `/api/interaction/v1/hosts/${f.users.ub.device_id}/call`, body: { op: 'list', args: {} } },
+  'GET /api/interaction/v1/shares': { kind: 'self' },
+  // Only a host-role device creates shares (403 for every other caller); naming a foreign team is 404 (interaction-shares.test.js).
+  'POST /api/interaction/v1/shares': { kind: 'cross', status: 403, path: () => '/api/interaction/v1/shares', body: f => ({ session: randomUUID(), team: f.B.team, scope: 'interact' }) },
+  'DELETE /api/interaction/v1/shares/:share_id': { kind: 'cross', path: f => `/api/interaction/v1/shares/${f.B.share}` },
+  'DELETE /api/teams/:team_id/interaction-shares/:share_id': { kind: 'cross', path: f => `/api/teams/${f.B.team}/interaction-shares/${f.B.share}` },
+  'GET /api/interaction/v1/shared': { kind: 'self' },
+  'POST /api/interaction/v1/shared/:share_id/call': { kind: 'cross', path: f => `/api/interaction/v1/shared/${f.B.share}/call`, body: f => ({ op: 'state', args: { session: f.B.shareSession } }) },
   'GET /api/account': { kind: 'self' },
   'GET /api/work-capture/routes': { kind: 'self' },
   'GET /api/my-day': { kind: 'self' },
@@ -283,6 +293,9 @@ async function sweep(fx, caller) {
   const setup=await fx.as(fx.users.ub,'POST',`/api/teams/${fx.B.team}/setups`,{request_id:randomUUID(),expected_version_id:null,payload,review:{schema:1,approved:true,content_hash:checked.content_hash,file_hashes:checked.file_hashes}},{'x-plexiform-account':fx.users.ub.id,'x-plexiform-member':fx.B.owner});
   assert.equal(setup.status,200,setup.text);fx.B.setupProfile=setup.body.profile.id;fx.B.setupVersion=setup.body.version.id;
   const setupsBefore=JSON.stringify(fx.db.all('SELECT * FROM setup_versions WHERE profile_id=?',fx.B.setupProfile));
+  // A live share of a B member's session with team B.
+  fx.B.share = randomUUID(); fx.B.shareSession = randomUUID();
+  fx.db.insert('interaction_shares', { id: fx.B.share, owner_user_id: fx.users.ub.id, host_device_id: fx.users.ub.device_id, session_id: fx.B.shareSession, org_id: fx.B.team, scope: 'interact', created_at: fx.h.hub.iso() });
   const before = fx.snapshotB();
   const leaks = [];
   let calls = 0;
