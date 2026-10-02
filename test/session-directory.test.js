@@ -4,6 +4,7 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const { createSessionDirectory, freshness, taskOf, CAPABILITIES } = require('../src/session-directory');
 const { createFakeTeamHub } = require('../src/team-hub-fake');
+const { createTeamHubClient } = require('../src/team-hub-client');
 
 const T0 = 1_800_000_000_000;
 const SESSION = '10000000-0000-4000-8000-000000000001';
@@ -143,4 +144,38 @@ test('mine: an attached codex-daemon session is labelled as started outside Plex
   assert.equal(e.scope, 'personal'); assert.deepEqual(e.teams, []);
   assert.equal(e.capabilities.remoteControl.available, false);
   assert.match(e.capabilities.remoteControl.reason, /never shared/);
+});
+
+// The real hub client (src/team-hub-client.js) projects share rows with a
+// `share.scope` field, not a top-level one: a viewer with only the watch role
+// must never see an enabled Send, an interact share keeps it.
+test('viewer roles over real hub rows: watch-only shows no Send, interact keeps it', async () => {
+  const T0HUB = 1_800_000_000_000;
+  const ref = '11111111-2222-4333-8444-555555555555', ref2 = '22222222-2222-4333-8444-555555555555';
+  const shared = [
+    { id: ref, session: SESSION, scope: 'watch', expires_at: null, team: { id: 'team-1', name: 'Dev team' }, owner: { id: 'u-bob-777', name: 'Bob' }, online: true },
+    { id: ref2, session: SESSION, scope: 'interact', expires_at: null, team: { id: 'team-1', name: 'Dev team' }, owner: { id: 'u-ana-999', name: 'Ana' }, online: true },
+  ];
+  const json = (status, body) => ({ status, headers: { get: () => null }, text: async () => JSON.stringify(body), body: null });
+  const fetchHub = async (url) => {
+    if (String(url).endsWith('/api/interaction/v1/shared')) return json(200, { shared });
+    return json(200, { result: { ok: true, state: { session: SESSION, generation: 1, status: 'working', observed_at: T0HUB - 1000, provider: { id: 'claude', label: 'Claude Code' }, capabilities: { steer: true, interrupt: true } } } });
+  };
+  const hub = createTeamHubClient({ baseUrl: 'https://hub.test', token: () => 't', fetch: fetchHub }, { now: () => T0HUB });
+  const d = createSessionDirectory({ now: () => T0 });
+  const rows = await hub.sessions({ id: 'u-me' }, 'team-1');
+  const { entries } = d.team({ team: { key: TEAM.key, name: TEAM.name, id: 'team-1' }, viewer: VIEWER, member: true, hubEntries: rows });
+  const watch = entries.find((e) => e.owner.name === 'Bob'), interact = entries.find((e) => e.owner.name === 'Ana');
+  assert.ok(watch && interact, 'both rows survive the directory filter with the real row shape');
+  // Watch role: no Send control at all, and the receive capability states why.
+  assert.equal(watch.interact, null, 'no interact ref for a watch-only share');
+  assert.equal(watch.capabilities.receive.available, false, 'Send disabled for the watch role');
+  assert.equal(watch.capabilities.receive.reason, 'Bob shared this session with your team to watch only.', 'clear watch-only reason');
+  assert.equal(watch.capabilities.reply.available, false);
+  assert.equal(watch.capabilities.steer.available, false);
+  assert.equal(watch.capabilities.interrupt.available, false);
+  // Interact role: Send stays, gated only by liveness/online.
+  assert.deepEqual(interact.interact, { kind: 'team', ref: interact.id });
+  assert.equal(interact.capabilities.receive.available, true, 'Send kept for the interact role');
+  assert.equal(interact.capabilities.receive.reason, '');
 });
