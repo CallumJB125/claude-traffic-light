@@ -10,7 +10,8 @@
   const ageValid = value => value === null || Number.isFinite(value) && value >= 0;
   const taskValid = task => obj(task) && ['tracked', 'unknown'].includes(task.status) && str(task.title) && (task.key === null || str(task.key));
   const capValid = cap => obj(cap) && typeof cap.enabled === 'boolean' && str(cap.label) && str(cap.reason);
-  const validWork = row => obj(row) && str(row.id) && str(row.label) && str(row.status) && ['recent', 'stale', 'unknown'].includes(row.freshness) && ageValid(row.age_ms) && taskValid(row.task) && obj(row.capabilities) && capValid(row.capabilities.open) && capValid(row.capabilities.message);
+  const reportingValid = value => value === undefined || obj(value) && Object.keys(value).length === 2 && value.source === 'self-reported' && Number.isSafeInteger(value.observed_at) && value.observed_at >= 0;
+  const validWork = row => obj(row) && str(row.id) && str(row.label) && str(row.status) && ['recent', 'stale', 'unknown'].includes(row.freshness) && ageValid(row.age_ms) && reportingValid(row.reporting) && taskValid(row.task) && obj(row.capabilities) && capValid(row.capabilities.open) && capValid(row.capabilities.message);
   function validSnapshot(value) {
     if (!obj(value) || value.schema !== 1 || !['complete', 'partial', 'unavailable'].includes(value.status) || !Number.isFinite(value.observed_at) || value.observed_at < 0 || !Number.isSafeInteger(value.omitted) || value.omitted < 0 || !Array.isArray(value.sessions) || value.sessions.length > 500) return false;
     const ids = new Set();
@@ -134,7 +135,7 @@
     heading.append(title, node('span', fresh === 'recent' ? row.status : `${row.status} · ${fresh === 'stale' ? 'Stale' : 'Freshness unknown'}`, `tag ${tone}`));
     el.append(heading);
     if (!child) el.append(node('p', `${parent.provider.label}${parent.provider.kind === 'local' ? ' · local model' : ''} · ${parent.project} · ${parent.device.label}${parent.device.local ? ' (this device)' : ''} · ${parent.board.label}${parent.board.kind === 'unknown' ? ' (board unknown)' : ''}`, 'row-meta'));
-    el.append(node('p', `${ageText(ageNow(row))} · Reported activity`, 'muted'), actions(row, parent));
+    el.append(node('p', `${ageText(ageNow(row))} · ${row.reporting?.source === 'self-reported' ? 'Self-reported activity' : 'Reported activity'}`, 'muted'), actions(row, parent));
     const comp = composer(row); if (comp) el.append(comp);
     if (!child && row.children.length) {
       const details = node('details', '', 'children'); details.dataset.focus = `${row.id}:agents`;

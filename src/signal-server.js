@@ -12,6 +12,7 @@ const Rules = require('../rules.js');
 const SessionState = require('../hooks/session-state.js');
 const Adapters = require('../adapters/index.js');
 const Answer = require('../hooks/answer-file.js');
+const AgentReports = require('./agent-self-report');
 const { describeRequest } = require('./request-view.js');
 
 const SIGNAL_PORT = Number(process.env.CLAUDE_TRAFFIC_LIGHT_PORT || 47172);
@@ -71,8 +72,22 @@ module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcast
           : done(400, { error: 'nonce must be 64 hex chars' })));
       }
       const hookRoute = /^\/hook\/([\w-]+)(?:\?event=([\w-]*))?$/.exec(req.url || '');
-      if (req.method !== 'POST' || (req.url !== '/signal' && req.url !== '/request-key' && !hookRoute)) return done(404, { error: 'POST /signal, POST /hook/:adapter or GET /status' });
+      if (req.method !== 'POST' || (req.url !== '/signal' && req.url !== '/request-key' && req.url !== '/metadata/agents' && !hookRoute)) return done(404, { error: 'POST /signal, POST /hook/:adapter or GET /status' });
       if (!tokenMatches(req.headers[SIGNAL_TOKEN_HEADER])) return done(401, { error: `send header ${SIGNAL_TOKEN_HEADER} with the contents of ${tokenFile}` });
+      if (req.url === '/metadata/agents') { // privacy-flow: agent-self-report
+        let bytes = 0; const chunks = [];
+        const bodyDeadline = setTimeout(() => req.destroy(),1500);
+        req.once('close', () => clearTimeout(bodyDeadline));
+        req.on('data', chunk => { bytes += chunk.length; if (bytes > 4096) req.destroy(); else chunks.push(chunk); });
+        req.on('end', () => {
+          clearTimeout(bodyDeadline);
+          let request; try { request = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { return done(400,{ok:false,status:'invalid'}); }
+          let result; try { result = AgentReports.apply({sessionsDir,host:os.hostname().split('.')[0],request}); } catch { result = {ok:false,status:'unavailable'}; }
+          if (result.ok) broadcastStatus();
+          done(result.ok ? 200 : result.status === 'invalid' ? 400 : 409,result);
+        });
+        return;
+      }
       if (hookRoute) return readBody(req, done, (d) => hookEvent(hookRoute[1], hookRoute[2] || d.hook_event_name || '', d, done));
       if (req.url === '/request-key') return readBody(req, done, (d) => (requestKeys.register(d.id, d.key) ? done(200, { ok: true }) : done(409, { error: 'bad or duplicate request key' }))); // privacy-flow: request-key
       readBody(req, done, (d) => {

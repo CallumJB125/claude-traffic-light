@@ -37,6 +37,7 @@
     "files": [
       "main.js",
       "src/**/*",
+      "scripts/report-agent-status.js",
       "build/plugin-catalog/**/*",
       "build/codex-plugins/**/*",
       "build/catalog-key*.pub.pem",

@@ -4,6 +4,7 @@
 const crypto=require('node:crypto');
 const Session=require('./session-overview');
 const Machine=require('../hooks/session-machine');
+const AgentReports=require('./agent-self-report');
 const {clean}=require('./work-capture');
 const PROVIDERS=Object.freeze({codex:'Codex',claude:'Claude Code','claude-code':'Claude Code',cursor:'Cursor',gemini:'Gemini',hermes:'Hermes',opencode:'OpenCode',copilot:'Copilot',ollama:'Ollama',lmstudio:'LM Studio','llama.cpp':'llama.cpp',local:'Local model'});
 const LOCAL=new Set(['ollama','lmstudio','llama.cpp','local']);
@@ -61,6 +62,10 @@ function createOverviewService({sessions=()=>[],work=async()=>({sources:[],captu
     // A parent Stop does not end independently reported child work.
     if(raw.source==='codex'&&['working','waiting'].includes(child.status)&&Machine.codexInputPending({source:'codex',codexLifecycle:1,codexClosedTurn:false,codexTurnId:child.turnId,codexInputRequests:child.codexInputRequests},time))childDto.status='Waiting on you';
     if(!dto.children.some(c=>c.id===childDto.id))dto.children.push(childDto);
+   }
+   for(const child of AgentReports.project(raw,time)){
+    if(dto.children.length>=64)break;
+    dto.children.push({id:stable([identity,'self-report',child.id]),handle:null,label:child.name,status:child.status==='done'?'Done':child.status==='waiting'?'Waiting':'Working',freshness:child.freshness,age_ms:child.ageMs,task:task({title:child.taskTitle}),reporting:{source:'self-reported',observed_at:child.observedAt},capabilities:{open:capability(false,'Open','This self-reported agent has no supported open target.'),message:capability(false,'Message','This self-reported agent has no supported message interface.')}});
    }
    return dto;
   };
