@@ -113,6 +113,7 @@ static BOOL make_root(const WCHAR *path) {
 }
 
 static BOOL make_file(const WCHAR *path, const WCHAR *sddl, DWORD size) {
+    WCHAR ownerOnly[512];
     PSECURITY_DESCRIPTOR security = NULL;
     SECURITY_ATTRIBUTES sa;
     HANDLE handle;
@@ -120,16 +121,67 @@ static BOOL make_file(const WCHAR *path, const WCHAR *sddl, DWORD size) {
     BOOL ok;
     if (size > sizeof(pattern)) return FALSE;
     ZeroMemory(&sa, sizeof(sa)); sa.nLength = (DWORD)sizeof(sa);
-    if (sddl) {
-        if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, SDDL_REVISION_1, &security, NULL)) return FALSE;
-        sa.lpSecurityDescriptor = security;
+    /* TokenOwner may be an administrative group. Positive fixtures require
+     * TokenUser ownership, independently of the actual inherited DACL. Set
+     * only that owner at exclusive creation; never repair an existing file. */
+    if (!sddl) {
+        if (swprintf_s(ownerOnly, sizeof(ownerOnly) / sizeof(ownerOnly[0]), L"O:%s", sidText) <= 0) return FALSE;
+        sddl = ownerOnly;
     }
+    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, SDDL_REVISION_1, &security, NULL)) return FALSE;
+    sa.lpSecurityDescriptor = security;
     handle = CreateFileW(path, GENERIC_WRITE, 0, &sa, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
     if (security) LocalFree(security);
     if (handle == INVALID_HANDLE_VALUE) return FALSE;
     ok = WriteFile(handle, pattern, size, &written, NULL) && written == size;
     CloseHandle(handle);
     return ok;
+}
+
+static BOOL independently_user_owned_and_inherited(const WCHAR *path) {
+    PSECURITY_DESCRIPTOR security = NULL; PSID owner = NULL, expected = NULL; PACL acl = NULL;
+    BYTE system[SECURITY_MAX_SID_SIZE], administrators[SECURITY_MAX_SID_SIZE];
+    DWORD i, size = SECURITY_MAX_SID_SIZE, principals = 0; BOOL ok = FALSE;
+    if (!CreateWellKnownSid(WinLocalSystemSid, NULL, system, &size)) return FALSE;
+    size = SECURITY_MAX_SID_SIZE;
+    if (!CreateWellKnownSid(WinBuiltinAdministratorsSid, NULL, administrators, &size)) return FALSE;
+    if (!ConvertStringSidToSidW(sidText, &expected) ||
+        GetNamedSecurityInfoW((WCHAR *)path, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+            &owner, NULL, &acl, NULL, &security) != ERROR_SUCCESS || !owner || !acl ||
+        !IsValidSid(owner) || !IsValidAcl(acl) || !EqualSid(owner, expected) || acl->AceCount != 3) goto done;
+    for (i = 0; i < acl->AceCount; i++) {
+        ACE_HEADER *ace = NULL;
+        if (!GetAce(acl, i, (LPVOID *)&ace) || !ace || ace->AceType != ACCESS_ALLOWED_ACE_TYPE ||
+            !(ace->AceFlags & INHERITED_ACE) || (ace->AceFlags & INHERIT_ONLY_ACE) ||
+            ace->AceSize < offsetof(ACCESS_ALLOWED_ACE, SidStart) + 8) goto done;
+        {
+            ACCESS_ALLOWED_ACE *allow = (ACCESS_ALLOWED_ACE *)ace;
+            PSID sid = &allow->SidStart;
+            if (!IsValidSid(sid) || GetLengthSid(sid) > ace->AceSize - offsetof(ACCESS_ALLOWED_ACE, SidStart) ||
+                allow->Mask != FILE_ALL_ACCESS) goto done;
+            if (EqualSid(sid, expected)) principals |= 1;
+            else if (EqualSid(sid, system)) principals |= 2;
+            else if (EqualSid(sid, administrators)) principals |= 4;
+            else goto done;
+        }
+    }
+    ok = principals == 7;
+done:
+    if (security) LocalFree(security); if (expected) LocalFree(expected); return ok;
+}
+
+static void default_owner_diagnostic(void) {
+    HANDLE token = NULL; TOKEN_OWNER *owner = NULL; PSID user = NULL; DWORD size = 0;
+    const char *status = "unavailable";
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token) || !ConvertStringSidToSidW(sidText, &user)) goto done;
+    GetTokenInformation(token, TokenOwner, NULL, 0, &size);
+    if (!size || size > 65536) goto done;
+    owner = (TOKEN_OWNER *)HeapAlloc(GetProcessHeap(), 0, size);
+    if (owner && GetTokenInformation(token, TokenOwner, owner, size, &size) && IsValidSid(owner->Owner))
+        status = EqualSid(owner->Owner, user) ? "current-user" : "different-principal";
+done:
+    printf("# fixture default-owner=%s\n", status);
+    if (owner) HeapFree(GetProcessHeap(), 0, owner); if (user) LocalFree(user); if (token) CloseHandle(token);
 }
 
 static PSECURITY_DESCRIPTOR named_security(const WCHAR *path) {
@@ -337,6 +389,7 @@ int wmain(void) {
     if (!check(sidText != NULL && GetTempPathW(PF_ROOT_LIMIT + 1, temp) > 0 && wcslen(temp) < PF_ROOT_LIMIT - 64 &&
         UuidCreate(&uuid) == RPC_S_OK && UuidToStringW(&uuid, &uuidText) == RPC_S_OK,
         "obtain real current account SID and fresh bounded temporary namespace")) goto done;
+    default_owner_diagnostic();
     if (!check(swprintf_s(root, PF_ROOT_LIMIT + 1, L"%spf-private-file-%s", temp, uuidText) > 0 && make_root(root),
         "create fresh independently private NTFS fixture root")) goto done;
     rootCreated = TRUE;
@@ -350,6 +403,7 @@ int wmain(void) {
         PFFileRole role = i == 2 ? PF_FILE_TASKS_TOKEN : PF_FILE_GRANT;
         DWORD capacity = role == PF_FILE_TASKS_TOKEN ? PF_TOKEN_BYTES : PF_GRANT_BYTES;
         check(child_path(path, root, L"positive") && make_file(path, NULL, size), "construct actual inherited private file");
+        check(independently_user_owned_and_inherited(path), "independent native query verifies current user owner and three inherited grants");
         before = named_security(path);
         reset_mode(FX_NONE, NULL, NULL);
         result = read_case(&directory, L"positive", role, NULL, output, capacity, &length, &stamp);
