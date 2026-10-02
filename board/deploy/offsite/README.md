@@ -54,6 +54,22 @@ An unfinished namespace expires 24 hours after its first upload attempt; clock r
 
 `--retrieve` fetches a bounded completion and verifies the externally pinned signature/expected namespace before trusting the manifest. It checks/decrypts every bounded ciphertext, rejects extra/missing/reordered or arbitrary file mappings, verifies complete database/artifact hashes, publishes the original manifest last, and calls `validateBackup`. Output is a **new verified paired bundle**, not a running hub. Wrong key, corruption, missing/oversized/slow stream or failed write leaves no complete destination. Existing destinations are refused, including concurrent reservations. Cleanup removes only this operation's new temporary directory.
 
+## Disposable recovery drill
+
+```
+node cli.mjs --drill UPLOADER_CONFIG RECOVERY_CONFIG EXISTING_VERIFIED_PAIRED_BUNDLE PRIVATE_WORK_DIR
+```
+
+One command runs the whole acceptance sequence in a fresh `drill-<uuid>` directory under the private (`0700`) work directory: verified copy of the bundle (the original is only read) → age encryption → conditional upload and readback with the **uploader** credential → privilege probes → removal of every local copy and the outbox → retrieval with the **recovery** credential → decryption and hash checks against the pre-upload manifest → `stageRestore` into a temporary data directory and `PRAGMA integrity_check`. Plaintext drill directories are always removed; only `drill-<uuid>.receipt.json` (`0600`) remains. Exit status is nonzero unless the drill passed.
+
+The configs must share installation, endpoint and bucket, and must use **different access keys**. The uploader config holds no recovery identity and the recovery config holds no signing key. The recovery config's trusted keys must contain the uploader's signing public key.
+
+Privilege probes, all against a drill-only `drill-canary.bin` in the transport prefix: the uploader PUTs the canary, then attempts `DeleteObject` (must be refused and the canary must still read back); the recovery credential attempts a PUT (must be refused with 403 and the key must stay absent) and a delete (must be refused). That delete attempt is the only delete request this tool ever makes, and it is a negative probe. R2 has no PUT-only object token. The uploader also needs GET for readback, so it is an Object Read & Write token. Deletion is refused by the **bucket lock rule**, not by token scope. The probe therefore proves the effective control: locked objects cannot be deleted with the uploader key.
+
+The receipt's `offsite_acceptance` is `REAL_R2_DRILL_PASSED_PENDING_INDEPENDENT_REVIEW` only when every step and probe passed, both stores are validated R2 origins (the CLI cannot construct loopback stores), and both ciphers are genuine age. In every other case, including all local fixture runs, it is `NOT_PROVEN`. Even a real pass does not prove the 35-day lock or 90-day lifecycle settings, which must be read back from the bucket configuration separately.
+
+Large files: the database is split into ≤16 MiB independently encrypted objects, each a single conditional PUT far below R2's single-PUT limit. Per-object resume replaces S3 multipart, which would complicate `If-None-Match` creation and readback. The bucket's 7-day abort-incomplete-multipart rule is harmless and unused.
+
 ## Limits, failure and retention
 
 Default hard caps: database 4 GiB, artifact 8 MiB, 10,000 artifacts, internal manifest 16 MiB, total plaintext 8 GiB, persistent outbox 32 GiB, database chunk 16 MiB, and 10,256 data objects. Ciphertext has a small bounded age framing allowance. Policy may reduce these limits, never increase them or truncate data. Budget is checked before copying; upload/prune reserve a readback/state rewrite. Streams and actual decrypted bytes are checked again. One transfer runs at a time.
