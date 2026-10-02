@@ -22,12 +22,14 @@ const NAME_MAX = 60;
 
 // What a session sees: who it is from (hub-proven), that it is task data, and the
 // body inside a block delimited by a per-message random nonce. The body cannot
-// close the block (it never contains '<<<' or '>>>') and a line in it that looks
-// like a Plexiform header has its brackets turned into parentheses, so it cannot
-// forge a sender label. Every rewrite keeps length in chars and bytes: the hub's
-// session body budget (MESSAGING.md §3) keeps the framed text within the adapter's limit.
+// close the block (it never contains '<<<' or '>>>') and every square bracket in it,
+// ASCII or lookalike, becomes a parenthesis, so no line can open like a Plexiform
+// header whatever homoglyphs or invisible characters it hides. Every rewrite keeps
+// length in chars and bytes: the hub's session body budget (MESSAGING.md §3) keeps
+// the framed text within the adapter's limit.
 const neutral = (text) => text.replace(/\r/g, '\n').replace(/<<</g, '(((').replace(/>>>/g, ')))')
-  .split('\n').map((l) => (/via\s+plexiform|plexiform\s*[\]·]/i.test(l) ? l.replace(/\[/g, '(').replace(/\]/g, ')') : l)).join('\n');
+  .replace(/\[/g, '(').replace(/\]/g, ')')
+  .replace(/[［⟦〚【〔⁅﹝]/g, '（').replace(/[］⟧〛】〕⁆﹞]/g, '）');
 const label = (v, fallback) => {
   const s = typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f\u2028\u2029[\]<>]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, NAME_MAX) : '';
   return s || fallback;
