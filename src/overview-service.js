@@ -14,9 +14,9 @@ const response=(status)=>({ok:['opened','queued'].includes(status),status,error:
 const closed=(v,keys)=>object(v)&&Object.keys(v).length===keys.length&&keys.every(k=>Object.hasOwn(v,k));
 const age=(v,now)=>{const t=typeof v==='string'?Date.parse(v):NaN;return Number.isFinite(t)&&t>=0&&t<=now?now-t:null;};
 const freshness=n=>n===null?'unknown':n<=Session.RECENT_MS?'recent':'stale';
-// Existing Codex sessions run on a private app-server; the only supported
-// route into them is the shared Codex daemon, which the human must opt into.
-const CODEX_UNMANAGED='Not started by Plexiform. Codex offers no supported message channel into this session; messaging it needs your opt-in to run Codex sessions on the shared Codex daemon.';
+// Existing Codex sessions run on their own private app-server; Codex offers no
+// supported way for another app to send into them. No opt-in is promised.
+const CODEX_UNMANAGED='Plexiform can message sessions it starts itself. This one was started in Codex, which has no supported way for another app to send to it.';
 const capability=(enabled,label,reason)=>({enabled:enabled===true,label,reason:enabled?'':reason});
 const task=card=>card&&typeof card.title==='string'?{status:'tracked',title:clean(card.title,200)||'Untitled task',key:typeof card.key==='string'?clean(card.key,80):null}:{status:'unknown',title:'Task not reported',key:null};
 const provider=(source,model)=>{const known=typeof source==='string'&&Object.hasOwn(PROVIDERS,source);return{id:known?source:'unknown',label:(known?PROVIDERS[source]:'Local AI')+(typeof model==='string'&&/^[A-Za-z0-9._:/@+-]{1,80}$/.test(model)?` · ${clean(model,80)}`:''),kind:LOCAL.has(source)?'local':'integrated'};};

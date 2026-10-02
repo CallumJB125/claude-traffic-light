@@ -29,7 +29,8 @@ contextBridge.exposeInMainWorld('overviewApi', {
     capabilities: () => ipcRenderer.invoke('interaction:capabilities'),
     list: () => ipcRenderer.invoke('interaction:list'),
     state: request => closed(request, ['session']) && uuid(request.session) ? ipcRenderer.invoke('interaction:state', { session: request.session }) : Promise.resolve(null),
-    launch: request => closed(request, ['provider']) && request.provider === 'codex' ? ipcRenderer.invoke('interaction:launch', { provider: 'codex' }) : denied(),
+    // Any listed provider id (codex, claude, gemini, local-<endpoint>-<hash>); main decides if it exists.
+    launch: request => closed(request, ['provider']) && typeof request.provider === 'string' && /^[a-z][a-z0-9-]{0,79}$/.test(request.provider) ? ipcRenderer.invoke('interaction:launch', { provider: request.provider }) : denied(),
     send: request => {
       const steer = closed(request, ['session', 'generation', 'text', 'expectedTurn']);
       if (!steer && !closed(request, ['session', 'generation', 'text'])) return denied();
@@ -39,6 +40,15 @@ contextBridge.exposeInMainWorld('overviewApi', {
     },
     interrupt: request => closed(request, ['session', 'generation', 'turn']) && uuid(request.session) && generation(request.generation) && uuid(request.turn) ? ipcRenderer.invoke('interaction:interrupt', { session: request.session, generation: request.generation, turn: request.turn }) : denied(),
     close: request => closed(request, ['session', 'generation']) && uuid(request.session) && generation(request.generation) ? ipcRenderer.invoke('interaction:close', { session: request.session, generation: request.generation }) : denied(),
+    localModels: () => ipcRenderer.invoke('interaction:local-models'),
+    // Ask all: one message to up to 6 distinct owned sessions; main sends each through the per-session guards.
+    fanout: request => {
+      if (!closed(request, ['sessions', 'text']) || !Array.isArray(request.sessions) || request.sessions.length < 1 || request.sessions.length > 6) return denied();
+      const sessions = request.sessions.map(t => closed(t, ['session', 'generation']) && uuid(t.session) && generation(t.generation) ? { session: t.session, generation: t.generation } : null);
+      const text = messageText(request.text);
+      if (text === null || sessions.includes(null) || new Set(sessions.map(t => t.session)).size !== sessions.length) return denied();
+      return ipcRenderer.invoke('interaction:fanout', { sessions, text });
+    },
     onEvent: callback => {
       if (typeof callback !== 'function') return () => {};
       const listener = (_event, ...args) => { if (args.length === 1 && args[0] !== null && typeof args[0] === 'object') callback(args[0]); };
