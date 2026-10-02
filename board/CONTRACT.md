@@ -589,10 +589,11 @@ Codes and HTTP statuses: `protocol.ERRORS`.
 | `STEP_UP_REQUIRED` | 401 | Accounts: needs a fresh step-up first: an email code (purpose `delete` for the account, `delete_team` for a team, verified ≤ 5 min ago) or a Google/GitHub re-authentication from this device (D78); `max_age_s`, `purpose` (D56, D74) |
 | `FORBIDDEN` | 403 | Authenticated but not allowed (viewer, not an approver, cross-origin) |
 | `POLICY_DENIED` | 403 | Hub or runner policy refuses (never_auto, budget, requeue, plan kind) |
-| `QUOTA_EXCEEDED` | 403 | Accounts: a plan limit (teams per user, members or boards per team, pending invites); `resource`, `limit` (D62) |
+| `QUOTA_EXCEEDED` | 403 | Accounts: a plan limit (teams per user, members or boards per team, pending invites, cards or comments per team); `resource`, `limit` (D62). New-item admission can also be temporarily refused for configured storage pressure (`resource: 'storage'`); edits, reads, deletion and accepted runner outcomes remain available. |
 | `EMAIL_UNVERIFIED` | 403 | Accounts: creating a team or inviting needs a verified email (D59) |
 | `WRONG_ACCOUNT` | 403 | Accounts: a valid invite token held by a signed-in user whose verified email isn't the invite's; names no address (D64) |
 | `SIGNUP_CLOSED` | 403 | Accounts: a new account the sign-up control does not admit; the fixed invite-only text, never the list (D104) |
+| `SIGNUP_PAUSED` | 503 | New-account creation temporarily paused by configured storage pressure; existing sign-ins remain available. Browser OAuth carries this code through its callback redirect and result response rather than returning HTTP 503 from the callback. |
 | `NOT_FOUND` | 404 | — |
 | `METHOD_DISABLED` | 404 | Accounts: that sign-in method is not configured on this hub, e.g. an email-code route without a mailer (D66) |
 | `ILLEGAL_TRANSITION` | 409 | `step()` has no row for (state, event) |
