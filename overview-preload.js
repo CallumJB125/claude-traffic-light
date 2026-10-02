@@ -49,6 +49,14 @@ contextBridge.exposeInMainWorld('overviewApi', {
       if (text === null || sessions.includes(null) || new Set(sessions.map(t => t.session)).size !== sessions.length) return denied();
       return ipcRenderer.invoke('interaction:fanout', { sessions, text });
     },
+    // Team sharing of one of this page's sessions (watch, or interact = also send/steer/interrupt).
+    shareList: () => ipcRenderer.invoke('interaction:share-list'),
+    shareCreate: request => {
+      if (!closed(request, ['session', 'team', 'scope', 'expiresInS']) || !uuid(request.session) || typeof request.team !== 'string' || !request.team || request.team.length > 100
+        || !['watch', 'interact'].includes(request.scope) || (request.expiresInS !== null && !(Number.isSafeInteger(request.expiresInS) && request.expiresInS >= 60 && request.expiresInS <= 30 * 86400))) return denied();
+      return ipcRenderer.invoke('interaction:share-create', { session: request.session, team: request.team, scope: request.scope, expiresInS: request.expiresInS });
+    },
+    shareStop: request => closed(request, ['share']) && typeof request.share === 'string' && request.share.length <= 100 ? ipcRenderer.invoke('interaction:share-stop', { share: request.share }) : denied(),
     onEvent: callback => {
       if (typeof callback !== 'function') return () => {};
       const listener = (_event, ...args) => { if (args.length === 1 && args[0] !== null && typeof args[0] === 'object') callback(args[0]); };

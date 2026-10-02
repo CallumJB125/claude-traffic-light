@@ -60,7 +60,7 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
     let state = d.state;
     if (state === 'acknowledged' && t) state = FINAL.includes(t.status) ? t.status : t.response ? 'responding' : recorded ? 'recorded' : 'acknowledged';
     if (state === 'acknowledged' && r.ended) state = 'failed';
-    return { id: d.id, text: d.text, mode: d.mode, state, recorded, turn: t?.tag ?? null, response: t?.response ?? '', error: t?.error ?? null, notices: t ? [...t.notices] : [], sentAt: d.sentAt, finishedAt: t?.finishedAt ?? null };
+    return { id: d.id, text: d.text, by: d.by ?? null, mode: d.mode, state, recorded, turn: t?.tag ?? null, response: t?.response ?? '', error: t?.error ?? null, notices: t ? [...t.notices] : [], sentAt: d.sentAt, finishedAt: t?.finishedAt ?? null };
   }
   function dto(r) {
     const active = r.activeTurn ? r.turns.get(r.activeTurn) : null;
@@ -144,7 +144,9 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
     return { ok: true, status: 'launched', state: dto(r) };
   }
 
-  async function send(req, actor) {
+  // `by` (main-only, never from a request): the teammate a shared session's
+  // message came from (src/remote-interaction.js), shown as "Sent by <by>".
+  async function send(req, actor, { by = null } = {}) {
     if (!closed(req, ['session', 'generation', 'board', 'text', 'expectedTurn']) || typeof req.text !== 'string' || req.text.includes('\0')) return refuse('invalid', ERRORS.invalid);
     const text = req.text.trim();
     if (!text || text.length > MAX_TEXT || Buffer.byteLength(text) > MAX_BYTES) return refuse('invalid', ERRORS.invalid);
@@ -169,7 +171,7 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
       if (r.activeTurn) return refuse('busy', ERRORS.busy);
     }
     const target = r.target, generation = r.generation;
-    const d = { id: crypto.randomUUID(), clientId: crypto.randomUUID(), text, mode: expectedTurnId ? 'steer' : 'new-turn', state: 'sending', turnId: null, sentAt: now() };
+    const d = { id: crypto.randomUUID(), clientId: crypto.randomUUID(), text, by: typeof by === 'string' && by && by.length <= 80 ? by : null, mode: expectedTurnId ? 'steer' : 'new-turn', state: 'sending', turnId: null, sentAt: now() };
     r.deliveries.set(d.id, d);
     while (r.deliveries.size > MAX_DELIVERIES) r.deliveries.delete(r.deliveries.keys().next().value);
     r.sending = true;

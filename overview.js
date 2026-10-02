@@ -254,7 +254,7 @@
     return { el, who, tag, said, response, wait, details, sig: null };
   }
   function updateDelivery(v, d, label, tagText) {
-    set(v.who, d.mode === 'steer' ? 'You (steer)' : 'You'); set(v.said, d.text);
+    set(v.who, `${text(d.by, 80) && d.by ? `Sent by ${d.by}` : 'You'}${d.mode === 'steer' ? ' (steer)' : ''}`); set(v.said, d.text);
     set(v.tag, tagText ?? deliveryLabel(d.state, label)); v.tag.className = `tag ${d.state}`;
     set(v.response, d.response); v.response.hidden = !d.response; v.response.setAttribute('aria-label', `${label} response`);
     const waiting = !d.response && ['acknowledged', 'recorded', 'responding'].includes(d.state);
@@ -287,6 +287,7 @@
     heading.append(title, tag);
     const meta = node('p', '', 'row-meta'), body = node('div'), notice = node('p', '', 'reason'); notice.setAttribute('role', 'status');
     el.append(heading, meta, body, notice);
+    globalThis.OverviewShare?.mount(el, id);
     entry.el = el; entry.parts = { title, tag, meta, body, notice };
     return el;
   }
