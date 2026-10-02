@@ -238,6 +238,23 @@ test('reader: a promoted session carries the turn it hides', () => {
   assert.deepEqual([c.session.signal, c.session.tool, c.session.turnSignal], ['tool-use', 'Agent', 'stop']);
 });
 
+test('reader: a hook subagent quiet past AGENT_QUIET_MS reads stale, not working, and stops promoting the session', () => {
+  const quiet = M.AGENT_QUIET_MS;
+  const agent = (over) => ({ id: 'a', kind: 'subagent', source: 'hook', status: 'working', since: iso(-quiet - 60000), ...over });
+  const stale = M.classify({ signal: 'stop', updatedAt: iso(0), agents: [agent({})] }, CTX);
+  assert.equal(stale.presented, 'stop', 'no longer promoted to working');
+  assert.equal(stale.session.agents[0].status, 'stale');
+  const busy = M.classify({ signal: 'stop', updatedAt: iso(0), agents: [agent({ lastAt: iso(-60000) })] }, CTX);
+  assert.deepEqual([busy.presented, busy.session.agents[0].status], ['tool-use', 'working'], 'its own tool use keeps it fresh');
+  const young = M.classify({ signal: 'stop', updatedAt: iso(0), agents: [agent({ since: iso(-60000) })] }, CTX);
+  assert.equal(young.session.agents[0].status, 'working');
+  const scanned = M.classify({ signal: 'stop', updatedAt: iso(0), agents: [agent({ source: 'scan' })] }, CTX);
+  assert.equal(scanned.session.agents[0].status, 'working', 'the scan owns its own entries');
+  const stopped = M.classify({ signal: 'stop', updatedAt: iso(0), agents: [agent({ status: 'stopped', since: iso(0) })] }, CTX);
+  assert.equal(stopped.presented, 'stop', 'a stopped agent is not working');
+  assert.ok(M.AGENT_STATUSES.includes('stale') && M.AGENT_STATUSES.includes('stopped'));
+});
+
 // ── Doc ───────────────────────────────────────────────────────────────────
 test('docs/state-machine.md is generated from the table (run node scripts/state-machine-doc.js)', () => {
   assert.equal(fs.readFileSync(Doc.OUT, 'utf8'), Doc.render());

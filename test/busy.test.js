@@ -57,10 +57,10 @@ test('pingsWhileBusy: red through by default, per-rule override, mine as a stub'
   assert.equal(R.pingsWhileBusy(undefined, { lamp: 'amber' }), false);
 });
 
-test('default locked rules still ping while busy; finished and nudges wait', () => {
+test('default red rules (blocked or broken) still ping while busy; finished and nudges wait', () => {
   const byId = Object.fromEntries(R.defaultRules().map((r) => [r.id, R.normalizeRule(r)]));
-  for (const id of ['limit', 'permission', 'offline']) assert.equal(R.pingsWhileBusy(byId[id]), true, id);
-  for (const id of ['done', 'nudge', 'failed-turn', 'working']) assert.equal(R.pingsWhileBusy(byId[id]), false, id);
+  for (const id of ['limit', 'permission', 'offline', 'failed-turn']) assert.equal(R.pingsWhileBusy(byId[id]), true, id);
+  for (const id of ['done', 'nudge', 'working']) assert.equal(R.pingsWhileBusy(byId[id]), false, id);
 });
 
 // ── busyAt ──────────────────────────────────────────────────────────────────

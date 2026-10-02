@@ -273,6 +273,50 @@ test('set-status: auto-compaction leaves background agents working; a real sessi
   assert.deepEqual(read(home, 'ca').agents.map((a) => [a.id, a.status]), [['bg-1', 'done']]);
 });
 
+test('set-status: the session keeps the cwd it started in; a cd or a subagent\'s cwd never relabels it', () => {
+  const home = tmpHome();
+  run(home, 'session-start', { session_id: 'cw', source: 'startup', cwd: '/proj' });
+  run(home, 'prompt-submit', { session_id: 'cw', cwd: '/proj' });
+  run(home, 'tool-use', { session_id: 'cw', tool_name: 'Bash', cwd: '/proj/memory' });
+  assert.equal(read(home, 'cw').cwd, '/proj', 'a Bash cd on the main thread');
+  run(home, 'subagent-start', { session_id: 'cw', agent_id: 'ag-1', agent_type: 'executor', cwd: '/wt/lane-a' });
+  run(home, 'tool-done', { session_id: 'cw', tool_name: 'Read', agent_id: 'ag-1', cwd: '/wt/lane-a' });
+  run(home, 'subagent-done', { session_id: 'cw', agent_id: 'ag-1', cwd: '/wt/lane-a' });
+  assert.equal(read(home, 'cw').cwd, '/proj', 'a subagent\'s events carry its own cwd');
+  run(home, 'session-start', { session_id: 'cw', source: 'compact', cwd: '/proj/memory' });
+  assert.equal(read(home, 'cw').cwd, '/proj', 'a compaction is the same session');
+  run(home, 'session-start', { session_id: 'cw', source: 'resume', cwd: '/elsewhere' });
+  assert.equal(read(home, 'cw').cwd, '/elsewhere', 'a resume starts afresh where it was opened');
+  run(home, 'prompt-submit', { session_id: 'first', cwd: '/first' });
+  assert.equal(read(home, 'first').cwd, '/first', 'no session-start seen: the first event\'s cwd');
+});
+
+test('set-status: a subagent the parent stopped (TaskStop) is retired as stopped, never done', () => {
+  const home = tmpHome();
+  run(home, 'prompt-submit', { session_id: 'ts' });
+  run(home, 'subagent-start', { session_id: 'ts', agent_id: 'ag-1', agent_type: 'executor' });
+  run(home, 'subagent-start', { session_id: 'ts', agent_id: 'ag-2', agent_type: 'executor' });
+  run(home, 'tool-use', { session_id: 'ts', tool_name: 'TaskStop', tool_input: { task_id: 'ag-1' } });
+  assert.equal(read(home, 'ts').agents.find((a) => a.id === 'ag-1').status, 'working', 'asking to stop is not stopped');
+  run(home, 'tool-done', { session_id: 'ts', tool_name: 'TaskStop', tool_input: { task_id: 'ag-1' } });
+  assert.deepEqual(read(home, 'ts').agents.map((a) => [a.id, a.status]), [['ag-1', 'stopped'], ['ag-2', 'working']]);
+  run(home, 'stop', { session_id: 'ts' });
+  run(home, 'tool-done', { session_id: 'ts', tool_name: 'TaskStop', tool_input: { task_id: 'ag-2' } });
+  assert.deepEqual(read(home, 'ts').agents.map((a) => [a.id, a.status]), [['ag-1', 'stopped'], ['ag-2', 'stopped']], 'after the turn too');
+});
+
+test('set-status: a subagent\'s own tool events stamp its lastAt', () => {
+  const home = tmpHome();
+  run(home, 'prompt-submit', { session_id: 'la' });
+  run(home, 'subagent-start', { session_id: 'la', agent_id: 'ag-1', agent_type: 'executor' });
+  const started = read(home, 'la').agents[0];
+  assert.equal(started.lastAt, undefined);
+  run(home, 'tool-use', { session_id: 'la', tool_name: 'Bash', agent_id: 'ag-1' });
+  const a = read(home, 'la').agents[0];
+  assert.ok(Date.parse(a.lastAt) >= Date.parse(started.since));
+  assert.equal(a.status, 'working');
+});
+
 test('set-status: a permission denial mid-turn keeps the turn, its clock and the ignored timer', () => {
   const home = tmpHome();
   run(home, 'prompt-submit', { session_id: 'pd' });
