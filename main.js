@@ -1396,6 +1396,18 @@ const OverviewMain=require('./src/overview-main').createOverviewMain({
 });
 OverviewMain.register(ipcMain);
 app.on('will-quit',()=>OverviewMain.close());
+// Owned-session interaction: Plexiform starts its own provider sessions and
+// talks only to those. Existing unmanaged sessions stay observation-only.
+const CodexAppServer=require('./src/codex-app-server');
+const codexBin=CodexAppServer.findCodexBin();
+const InteractionMain=require('./src/interaction-main').createInteractionMain({
+  context:()=>buddyWin?.overviewContext?.()??null,
+  readContext:()=>buddyWin?.overviewReadContext?.()??null,
+  adapters:{codex:Object.assign(CodexAppServer.createCodexAppServer({bin:codexBin,clientVersion:app.getVersion()}),codexBin?{}:{available:false,reason:'Codex CLI not found'})},
+  workspace:id=>{const dir=path.join(app.getPath('userData'),'owned-sessions',id);fs.mkdirSync(dir,{recursive:true,mode:0o700});return dir;},
+});
+InteractionMain.register(ipcMain);
+app.on('will-quit',()=>InteractionMain.close());
 
 ipcMain.handle('myday:state', e => myDaySender(e) ? MyDay.snapshot() : null);
 ipcMain.handle('myday:open', (e, handle) => myDaySender(e) && typeof handle === 'string' && handle.length <= 100 ? MyDay.open(handle) : false);
