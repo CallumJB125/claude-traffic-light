@@ -34,6 +34,13 @@
       <p id="router-hint" class="reason" role="status" aria-live="polite"></p>
       <div class="actions"><button id="start-session" type="button" disabled>Start session</button><button id="router-use" type="button" hidden></button></div>
     </fieldset>
+    <fieldset id="existing-picker" class="picker" hidden>
+      <legend>Codex CLI sessions you started yourself</legend>
+      <p id="existing-reason" class="reason" role="status" aria-live="polite"></p>
+      <p id="existing-precondition" class="muted"></p>
+      <div class="actions"><button id="existing-find" type="button" disabled>Find sessions</button></div>
+      <ul id="existing-list" class="provider-list" aria-label="Codex CLI sessions on the shared daemon"></ul>
+    </fieldset>
     <div id="owned"></div>
     <section id="ask-all" class="ask-all" aria-labelledby="ask-all-title" hidden>
       <h3 id="ask-all-title">Ask all</h3>

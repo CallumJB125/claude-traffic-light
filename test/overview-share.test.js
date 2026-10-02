@@ -38,11 +38,11 @@ function fakeHost() {
   };
 }
 
-function stack({ host = fakeHost() } = {}) {
+function stack({ host = fakeHost(), extra = {} } = {}) {
   const handlers = new Map(), listeners = new Map();
   const contents = { id: 9, isDestroyed: () => false, mainFrame: {}, send: (ch, s) => { for (const fn of listeners.get(ch) ?? []) fn({}, structuredClone(s)); } };
   const ctx = { contents, generation: 1, document: 1, foreground: true };
-  const main = createInteractionMain({ context: () => ctx, adapters: { codex: memAdapter() }, owned: null, localModels: null, workspace: () => null, currentBoard: () => 'local', shares: () => host });
+  const main = createInteractionMain({ context: () => ctx, adapters: { codex: memAdapter(), ...extra }, owned: null, localModels: null, workspace: () => null, currentBoard: () => 'local', shares: () => host });
   main.register({ handle: (ch, fn) => handlers.set(ch, fn) });
   let api;
   vm.runInNewContext(bridge, { Buffer, Promise, require: () => ({ contextBridge: { exposeInMainWorld(_n, v) { api = v; } }, ipcRenderer: {
@@ -126,5 +126,28 @@ test('Overview Share…: with hosting off the card explains how to turn sharing 
     await s.start();
     s.btn('Share…').click(); await tick(8);
     assert.match(s.card().textContent, /Let my other devices use sessions/);
+  } finally { s.close(); }
+});
+
+test('Overview Share…: a session started outside Plexiform (codex-daemon) is never shared with a team', async () => {
+  const ee = new EventEmitter();
+  const daemon = {
+    label: 'Codex CLI', capabilities: { newTurn: true, steer: true, interrupt: true, existingSessions: true, startSessions: false },
+    discover: async () => [{ id: 'thread-x', title: 'mine', project: '/tmp/p', status: 'idle' }],
+    attach: async ({ target }) => ({ target, status: 'idle', permissions: { approvalPolicy: 'never', sandbox: 'dangerFullAccess' } }),
+    send: async () => ({ turnId: 't1', mode: 'new-turn' }), interrupt: async () => true, release: async () => true, alive: () => true, stop() {},
+    on: (fn) => { ee.on('e', fn); return () => ee.off('e', fn); },
+  };
+  const s = stack({ extra: { 'codex-daemon': daemon } });
+  try {
+    await s.ready();
+    const found = await s.api.interaction.discover({ provider: 'codex-daemon' });
+    const attached = await s.api.interaction.attach({ provider: 'codex-daemon', handle: found.threads[0].handle });
+    assert.equal(attached.ok, true);
+    const session = attached.state.session;
+    assert.equal(attached.state.ownership, 'existing-unmanaged');
+    assert.equal((await s.api.interaction.shareCreate({ session, team: 'team-1', scope: 'watch', expiresInS: null })).ok, false);
+    assert.equal(s.main.sharedTarget(session), null);
+    assert.ok(!s.host.calls.some(([k]) => k === 'share'));
   } finally { s.close(); }
 });

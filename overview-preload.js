@@ -31,6 +31,9 @@ contextBridge.exposeInMainWorld('overviewApi', {
     state: request => closed(request, ['session']) && uuid(request.session) ? ipcRenderer.invoke('interaction:state', { session: request.session }) : Promise.resolve(null),
     // Any listed provider id (codex, claude, gemini, local-<endpoint>-<hash>); main decides if it exists.
     launch: request => closed(request, ['provider']) && typeof request.provider === 'string' && /^[a-z][a-z0-9-]{0,79}$/.test(request.provider) ? ipcRenderer.invoke('interaction:launch', { provider: request.provider }) : denied(),
+    // Existing sessions on an opt-in provider: a metadata list (opaque handles), then attach one by handle.
+    discover: request => closed(request, ['provider']) && typeof request.provider === 'string' && /^[a-z][a-z0-9-]{0,79}$/.test(request.provider) ? ipcRenderer.invoke('interaction:discover', { provider: request.provider }) : denied(),
+    attach: request => closed(request, ['provider', 'handle']) && typeof request.provider === 'string' && /^[a-z][a-z0-9-]{0,79}$/.test(request.provider) && uuid(request.handle) ? ipcRenderer.invoke('interaction:attach', { provider: request.provider, handle: request.handle }) : denied(),
     send: request => {
       const steer = closed(request, ['session', 'generation', 'text', 'expectedTurn']);
       if (!steer && !closed(request, ['session', 'generation', 'text'])) return denied();

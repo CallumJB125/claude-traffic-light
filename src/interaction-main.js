@@ -18,7 +18,7 @@ const { createLocalModels } = require('./local-models');
 
 const CHANNELS = Object.freeze({
   capabilities: 'interaction:capabilities', list: 'interaction:list', state: 'interaction:state',
-  launch: 'interaction:launch', send: 'interaction:send', interrupt: 'interaction:interrupt', close: 'interaction:close',
+  launch: 'interaction:launch', discover: 'interaction:discover', attach: 'interaction:attach', send: 'interaction:send', interrupt: 'interaction:interrupt', close: 'interaction:close',
   event: 'interaction:event', localModels: 'interaction:local-models', fanout: 'interaction:fanout',
   shareList: 'interaction:share-list', shareCreate: 'interaction:share-create', shareStop: 'interaction:share-stop',
 });
@@ -76,6 +76,9 @@ function createInteractionMain({ context, readContext = context, adapters: given
   }
   const effects = {
     launch: (req, actor) => (object(req) && !Object.hasOwn(req, 'board') ? hub.launch({ ...req, board: boardKey(currentBoard()) }, actor) : hub.launch(null, actor)),
+    // Existing sessions on an opt-in provider (codex-daemon): metadata list, then subscribe to one by handle.
+    discover: (req, actor) => hub.discover(req, actor),
+    attach: (req, actor) => (object(req) && !Object.hasOwn(req, 'board') ? hub.attach({ ...req, board: boardKey(currentBoard()) }, actor) : hub.attach(null, actor)),
     async send(req, actor) {
       if (!object(req) || Object.hasOwn(req, 'board')) return hub.send(null, actor);
       const result = await hub.send({ ...req, board: boardKey(currentBoard()) }, actor);
@@ -101,6 +104,8 @@ function createInteractionMain({ context, readContext = context, adapters: given
   const one = (args) => (args.length === 1 ? args[0] : undefined);
   // Team sharing of this document's sessions: only its own sessions, through the remote host.
   const owns = (session, actor) => typeof session === 'string' && UUID.test(session) && !!hub.state({ session }, actor);
+  // A session started outside Plexiform (codex-daemon) runs with its own permissions: never shared with a team.
+  const shareable = (session, actor) => owns(session, actor) && hub.state({ session }, actor).ownership === 'plexiform-owned';
   const sharing = {
     async [CHANNELS.shareList](req, actor) {
       const host = shares();
@@ -111,7 +116,7 @@ function createInteractionMain({ context, readContext = context, adapters: given
     async [CHANNELS.shareCreate](req, actor) {
       const host = shares();
       if (!host) return noSharing;
-      if (!object(req) || !owns(req.session, actor)) return { ok: false, status: 'invalid', error: 'Check the selected session.' };
+      if (!object(req) || !shareable(req.session, actor)) return { ok: false, status: 'invalid', error: 'Check the selected session.' };
       return host.shareSession({ session: req.session, team: req.team, scope: req.scope, expiresInS: req.expiresInS ?? null });
     },
     async [CHANNELS.shareStop](req, actor) {
@@ -127,7 +132,7 @@ function createInteractionMain({ context, readContext = context, adapters: given
     documents: () => documents.size,
     // The remote host serves a shared session of the current document from this hub (never through 'list').
     sharedTarget(session) {
-      for (const actor of documents.keys()) if (owns(session, actor)) return { hub, actor };
+      for (const actor of documents.keys()) if (shareable(session, actor)) return { hub, actor };
       return null;
     },
     // The Overview document was reloaded, crashed or destroyed: its sessions end now, not on the next request.

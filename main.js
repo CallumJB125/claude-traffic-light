@@ -233,6 +233,8 @@ const DEFAULT_CONFIG = {
   remoteInteractionHost: false,
   // A role reset the team hub never acknowledged ({origin, userId}; no token): retried at start.
   remoteInteractionResetPending: null,
+  // Existing Codex CLI sessions on Codex's shared daemon (src/codex-daemon.js): off until ticked in Preferences.
+  codexDaemonMessaging: false,
   // Auto-answer rules (src/auto-rules.js). Saved and shown in Lights; nothing
   // answers from them until the hook side evaluates them.
   autoAnswer: { v: 1, sealed: null, rules: [] },
@@ -1412,11 +1414,14 @@ const CodexAppServer=require('./src/codex-app-server');
 const codexBin=CodexAppServer.findCodexBin();
 // Compactor savings: numbers only, no message text (src/compaction-stats.js).
 const CompactionLedger=require('./src/compaction-stats').createLedger({file:path.join(ROOT_DIR,'compaction-stats.json')});
+// Existing Codex CLI sessions on Codex's shared daemon: only after the
+// Preferences opt-in, only while the human runs the daemon (never started here).
+const CodexDaemon=require('./src/codex-daemon').createCodexDaemon({bin:codexBin,enabled:()=>loadConfig().codexDaemonMessaging===true,clientVersion:app.getVersion()});
 const InteractionMain=require('./src/interaction-main').createInteractionMain({
   compaction:Compaction.createSessionCompactor({settings:()=>loadConfig().compaction,ledger:CompactionLedger}),
   context:()=>buddyWin?.overviewContext?.()??null,
   readContext:()=>buddyWin?.overviewReadContext?.()??null,
-  adapters:{codex:Object.assign(CodexAppServer.createCodexAppServer({bin:codexBin,clientVersion:app.getVersion()}),codexBin?{}:{available:false,reason:'Codex CLI not found'})},
+  adapters:{codex:Object.assign(CodexAppServer.createCodexAppServer({bin:codexBin,clientVersion:app.getVersion()}),codexBin?{}:{available:false,reason:'Codex CLI not found'}),'codex-daemon':CodexDaemon},
   // Empty private folder outside Plexiform's data directory.
   workspace:()=>fs.mkdtempSync(path.join(os.tmpdir(),'plexiform-owned-')),
   // The active workspace (My board or a team board) the sidebar shows.
@@ -3000,6 +3005,8 @@ function commitConfig(partial) {
   const next = saveConfig(partial);
   applyConfigEffects(prev, next, (k) => k in partial);
   if ('compaction' in partial) InteractionMain.hub.compactionSettingsChanged().catch(() => {});
+  // Opting out disconnects at once; attached daemon sessions end in Plexiform (they keep running in Codex).
+  if (next.codexDaemonMessaging !== true) CodexDaemon.stop();
   return next;
 }
 

@@ -6,6 +6,9 @@
 //   open({cwd}) -> {target}                      provider session/thread id, never sent to a renderer
 //   send({target, text, clientId, expectedTurnId}) -> {turnId, mode: 'new-turn'|'steer'}
 //   interrupt({target, turnId}), release?({target}), stop(), alive(), on(fn) -> off
+//   Existing sessions (capabilities.existingSessions, startSessions:false, no open()):
+//   discover() -> [{id, title, project, status, updatedAt}]   metadata only, never transcript
+//   attach({target}) -> {target, status}                       subscribe to that exact thread
 //   compact?({target, keep})  optional, with capability compact: true (and
 //     compactKeep when the provider honours keep); see src/compaction.js
 //   events: {kind: 'turn-started'|'delta'|'message'|'input-recorded'|'turn-completed'|'status'|'refused-request'|'closed'|'oversize'|'exit'
@@ -20,12 +23,14 @@
 // Renderers must show delivery `text`, `response`, `error` and `notices`
 // with textContent only: they are provider/model output, never markup.
 const crypto = require('node:crypto');
+const path = require('node:path');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const MAX_TEXT = 4000, MAX_BYTES = 8192, MAX_RESPONSE = 16000, MAX_DELIVERIES = 20, MAX_TURNS = 40, MAX_SESSIONS = 8, MAX_NOTICES = 5;
 const FINAL = ['completed', 'interrupted', 'failed'];
 const NOTICES = {
   approval: 'The provider asked for an approval; Plexiform refused it.',
+  approvalElsewhere: 'Codex is waiting for an approval. Plexiform never answers approvals for sessions it did not start: answer it in a Codex terminal attached to this session, or interrupt this turn if none is open.',
   oversize: 'A provider update was too large to show and was dropped.',
 };
 const object = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -34,15 +39,32 @@ const refuse = (status, error) => ({ ok: false, status, error });
 const ERRORS = {
   invalid: 'Check the selected session and message.',
   forbidden: 'This session belongs to a different Plexiform window.',
+  gone: 'That session is no longer listed. Find sessions again and choose it.',
   stale: 'This session changed. Refresh and select it again.',
   busy: 'A message is being sent or a turn is running. Steer it or wait for it to finish.',
   unavailable: 'The provider did not accept the message.',
+  foreignTurn: 'This turn was started outside Plexiform (in a Codex terminal or another app). Plexiform only steers or interrupts turns it started; wait for it to finish or use that terminal.',
 };
+// What an attached session may do without asking, in words, plus warnings shown on attach.
+const APPROVAL_WORDS = { untrusted: 'asks before most commands', 'on-failure': 'asks when a sandboxed command fails', 'on-request': 'asks when it wants to go beyond its sandbox', never: 'never asks for approval', granular: 'custom approval rules' };
+const SANDBOX_WORDS = { readOnly: 'read-only sandbox', workspaceWrite: 'can edit files in its folder', externalSandbox: 'external sandbox', dangerFullAccess: 'full access to your computer, no sandbox' };
+function disclosure(p) {
+  const approval = APPROVAL_WORDS[p?.approvalPolicy] ? p.approvalPolicy : 'unknown', sandbox = SANDBOX_WORDS[p?.sandbox] ? p.sandbox : 'unknown';
+  const warnings = [];
+  if (approval === 'never') warnings.push('This session never asks for approval: messages you send from Plexiform can run commands and edit files without asking.');
+  if (sandbox === 'dangerFullAccess') warnings.push('This session has full access to your computer (no sandbox): messages you send from Plexiform run with that access.');
+  if (approval === 'unknown' || sandbox === 'unknown') warnings.push('Codex did not report this session\'s permissions. Messages you send run with whatever it is allowed to do.');
+  if (approval !== 'never') warnings.push('Plexiform cannot tell whether a Codex terminal is still attached to this session. If Codex asks for an approval, only that terminal can answer it; Plexiform never does.');
+  return { permissions: `Permissions: ${APPROVAL_WORDS[approval] ?? 'approval policy unknown'} · ${SANDBOX_WORDS[sandbox] ?? 'sandbox unknown'}`, approvalPolicy: approval, sandbox, warnings };
+}
 
 // boardCurrent must be supplied by main; without it every session is refused.
 // compaction: an optional createSessionCompactor() (src/compaction.js).
 function createInteractionHub({ adapters = {}, workspace = () => null, boardCurrent = () => false, onEvent = () => {}, now = Date.now, compaction = null } = {}) {
   const sessions = new Map();
+  // Discovery handles: opaque ids for existing provider threads, valid only
+  // until the same actor discovers that provider again.
+  const handles = new Map(), attaching = new Map();
   const isCurrent = (board) => { try { return boardCurrent(board) === true; } catch { return false; } };
 
   function turnOf(r, turnId) {
@@ -64,17 +86,20 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
   }
   function dto(r) {
     const active = r.activeTurn ? r.turns.get(r.activeTurn) : null;
+    // A turn someone else started on an existing session is shown as working, never as a turn Plexiform can steer or interrupt.
+    const shown = active && (!r.existing || r.own.has(r.activeTurn)) ? active : null;
     return {
       session: r.id, generation: r.generation, provider: { id: r.provider, label: r.adapter.label },
-      ownership: 'plexiform-owned', label: `Started by Plexiform · ${r.adapter.label}`,
-      board: r.board, status: r.ended ? 'ended' : active ? 'working' : compaction?.inFlight(r) ? 'compacting' : 'ready', activeTurn: active?.tag ?? null,
+      ownership: r.existing ? 'existing-unmanaged' : 'plexiform-owned', label: r.existing ? `Unmanaged — started outside Plexiform · ${r.adapter.label}` : `Started by Plexiform · ${r.adapter.label}`,
+      ...(r.existing ? { thread: { ...r.existing, warnings: [...r.existing.warnings] } } : {}),
+      board: r.board, status: r.ended ? 'ended' : active || r.foreignBusy ? 'working' : compaction?.inFlight(r) ? 'compacting' : 'ready', activeTurn: shown?.tag ?? null,
       capabilities: { ...r.adapter.capabilities },
       deliveries: [...r.deliveries.values()].map((d) => publicDelivery(r, d)),
     };
   }
   const emit = (r) => { try { onEvent(r.actor, dto(r)); } catch { /* renderer gone */ } };
 
-  function attach(r) {
+  function subscribe(r) {
     r.off = r.adapter.on((e) => {
       if (r.ended) return;
       if (e.kind === 'exit') { r.ended = true; r.activeTurn = null; emit(r); return; }
@@ -87,15 +112,18 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
       // Another session's (or a replaced target's) event never touches this one.
       if (e.target !== r.target) return;
       if (e.kind === 'closed') { r.ended = true; r.activeTurn = null; emit(r); return; }
+      // An existing thread can be busy with a turn another client started before Plexiform subscribed.
+      if (e.kind === 'status' && r.existing) { r.foreignBusy = e.status === 'active' && !r.activeTurn; emit(r); return; }
       if (compaction?.claims(r, e)) { emit(r); return; }
       if (e.kind === 'usage' || e.kind === 'compacted' || typeof e.turnId !== 'string') return;
       const t = turnOf(r, e.turnId);
-      if (e.kind === 'turn-started') r.activeTurn = e.turnId;
+      if (e.kind === 'turn-started') { r.activeTurn = e.turnId; r.foreignBusy = false; }
       else if (e.kind === 'turn-completed') { t.status = FINAL.includes(e.status) ? e.status : 'failed'; t.error = e.error ? String(e.error).slice(0, 300) : null; t.finishedAt = now(); if (r.activeTurn === e.turnId) { r.activeTurn = null; compaction?.idle(r); } }
       else if (e.kind === 'input-recorded') { if (t.inputs.length < 20) t.inputs.push({ clientId: e.clientId, text: e.text }); }
       else if (e.kind === 'delta') t.response = (t.response + String(e.text)).slice(0, MAX_RESPONSE);
       else if (e.kind === 'message') t.response = String(e.text).slice(0, MAX_RESPONSE);
       else if (e.kind === 'refused-request') notice(t, NOTICES.approval);
+      else if (e.kind === 'approval-elsewhere') notice(t, NOTICES.approvalElsewhere);
       else return;
       emit(r);
     });
@@ -107,7 +135,8 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
     r.ended = true; r.activeTurn = null; r.off?.(); sessions.delete(r.id);
     const compactTurn = compaction?.drop(r);
     if (compactTurn) { try { await r.adapter.interrupt({ target, turnId: compactTurn }); } catch { /* provider gone */ } }
-    if (activeTurn) { try { await r.adapter.interrupt({ target, turnId: activeTurn }); } catch { /* provider gone */ } }
+    // Closing Plexiform's view of a session someone else started leaves its work running.
+    if (activeTurn && !r.existing) { try { await r.adapter.interrupt({ target, turnId: activeTurn }); } catch { /* provider gone */ } }
     try { await r.adapter.release?.({ target }); } catch { /* provider gone */ }
   }
   // Every request names session + generation and arrives with the main-owned
@@ -124,7 +153,10 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
   }
 
   function capabilities() {
-    return Object.entries(adapters).map(([id, a]) => ({ provider: id, label: a.label, available: a.available !== false, reason: a.available === false ? a.reason ?? 'Not installed' : '', ownership: 'plexiform-owned', capabilities: { ...a.capabilities } }));
+    return Object.entries(adapters).map(([id, a]) => {
+      const available = a.available !== false, existing = typeof a.open !== 'function';
+      return { provider: id, label: a.label, available, reason: !available ? a.reason ?? 'Not installed' : '', ownership: existing ? 'existing-unmanaged' : 'plexiform-owned', ...(existing && typeof a.precondition === 'string' ? { precondition: a.precondition } : {}), capabilities: { ...a.capabilities } };
+    });
   }
 
   async function launch(req, actor) {
@@ -132,6 +164,7 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
     const board = req.board ?? null;
     if (!isCurrent(board)) return refuse('stale', ERRORS.stale);
     const adapter = adapters[req.provider];
+    if (typeof adapter.open !== 'function') return refuse('invalid', ERRORS.invalid);
     if (adapter.available === false) return refuse('unavailable', adapter.reason ?? ERRORS.unavailable);
     for (const r of [...sessions.values()]) if (r.ended) sessions.delete(r.id);
     if (sessions.size >= MAX_SESSIONS) return refuse('unavailable', 'Close an owned session first.');
@@ -140,8 +173,68 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
     try { ({ target } = await adapter.open({ cwd: workspace(id) })); } catch { return refuse('unavailable', ERRORS.unavailable); }
     if (typeof target !== 'string' || !target) return refuse('unavailable', ERRORS.unavailable);
     const r = { id, generation: 1, provider: req.provider, adapter, target, actor, board, activeTurn: null, sending: false, ended: false, turns: new Map(), deliveries: new Map() };
-    sessions.set(id, r); attach(r);
+    sessions.set(id, r); subscribe(r);
     return { ok: true, status: 'launched', state: dto(r) };
+  }
+
+  // ── Existing sessions (opt-in providers only). Provider thread ids stay in
+  // main: the renderer gets an opaque handle per discovered thread.
+  const existingAdapter = (id) => (typeof id === 'string' && Object.hasOwn(adapters, id) && adapters[id].capabilities?.existingSessions === true && typeof adapters[id].discover === 'function' && typeof adapters[id].attach === 'function' ? adapters[id] : null);
+  async function discover(req, actor) {
+    if (!closed(req, ['provider']) || typeof actor !== 'string') return refuse('invalid', ERRORS.invalid);
+    const adapter = existingAdapter(req.provider);
+    if (!adapter) return refuse('invalid', ERRORS.invalid);
+    if (adapter.available === false) return refuse('unavailable', adapter.reason ?? ERRORS.unavailable);
+    let found;
+    try { found = await adapter.discover(); } catch { return refuse('unavailable', ERRORS.unavailable); }
+    for (const [h, v] of handles) if (v.actor === actor && v.provider === req.provider) handles.delete(h);
+    const threads = [];
+    for (const t of Array.isArray(found) ? found.slice(0, 50) : []) {
+      if (!object(t) || typeof t.id !== 'string' || !t.id) continue;
+      const handle = crypto.randomUUID();
+      const meta = { title: typeof t.title === 'string' ? t.title.slice(0, 120) : '', project: typeof t.project === 'string' ? path.basename(t.project).slice(0, 120) : '' };
+      handles.set(handle, { actor, provider: req.provider, target: t.id, meta });
+      const open = [...sessions.values()].find((r) => !r.ended && r.actor === actor && r.provider === req.provider && r.target === t.id);
+      threads.push({ handle, ...meta, status: ['idle', 'active', 'notLoaded', 'systemError'].includes(t.status) ? t.status : 'unknown', updatedAt: Number.isSafeInteger(t.updatedAt) ? t.updatedAt : null, open: open ? open.id : null });
+    }
+    return { ok: true, status: 'discovered', threads };
+  }
+  async function attach(req, actor) {
+    if (!closed(req, ['provider', 'handle', 'board']) || typeof req.handle !== 'string' || !UUID.test(req.handle) || (req.board != null && (typeof req.board !== 'string' || req.board.length > 200)) || typeof actor !== 'string') return refuse('invalid', ERRORS.invalid);
+    const adapter = existingAdapter(req.provider);
+    if (!adapter) return refuse('invalid', ERRORS.invalid);
+    const h = handles.get(req.handle);
+    if (!h || h.provider !== req.provider) return refuse('stale', ERRORS.gone);
+    if (h.actor !== actor) return refuse('forbidden', ERRORS.forbidden);
+    const board = req.board ?? null;
+    if (!isCurrent(board)) return refuse('stale', ERRORS.stale);
+    if (adapter.available === false) return refuse('unavailable', adapter.reason ?? ERRORS.unavailable);
+    // Concurrent attaches of one thread by one actor share a single attempt and so a single session.
+    const key = JSON.stringify([actor, req.provider, h.target]);
+    let attempt = attaching.get(key);
+    if (!attempt) {
+      attempt = attachOnce(adapter, req, h, actor, board).finally(() => attaching.delete(key));
+      attaching.set(key, attempt);
+    }
+    const out = await attempt;
+    return out.r ? { ok: true, status: 'attached', state: dto(out.r) } : out;
+  }
+  async function attachOnce(adapter, req, h, actor, board) {
+    const already = [...sessions.values()].find((r) => !r.ended && r.actor === actor && r.provider === req.provider && r.target === h.target);
+    if (already) return { r: already };
+    for (const r of [...sessions.values()]) if (r.ended) sessions.delete(r.id);
+    if (sessions.size >= MAX_SESSIONS) return refuse('unavailable', 'Close a session first.');
+    let result;
+    try { result = await adapter.attach({ target: h.target }); } catch { return refuse('unavailable', ERRORS.unavailable); }
+    // Bound to the exact thread id that was discovered, never to its label or folder.
+    if (result?.target !== h.target || handles.get(req.handle) !== h) {
+      if (result?.target === h.target) { try { await adapter.release?.({ target: h.target }); } catch { /* provider gone */ } }
+      return refuse('stale', ERRORS.stale);
+    }
+    const id = crypto.randomUUID();
+    const r = { id, generation: 1, provider: req.provider, adapter, target: h.target, actor, board, activeTurn: null, foreignBusy: result.status === 'active', existing: { ...h.meta, ...disclosure(result.permissions) }, own: new Set(), sending: false, ended: false, turns: new Map(), deliveries: new Map() };
+    sessions.set(id, r); subscribe(r);
+    return { r };
   }
 
   // `by` (main-only, never from a request): the teammate a shared session's
@@ -159,8 +252,9 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
     let expectedTurnId = null;
     if (req.expectedTurn != null) {
       expectedTurnId = [...r.turns].find(([, t]) => t.tag === req.expectedTurn)?.[0] ?? null;
+      if (r.existing && ((r.activeTurn && !r.own.has(r.activeTurn)) || (expectedTurnId && !r.own.has(expectedTurnId)) || (!r.activeTurn && r.foreignBusy))) return refuse('busy', ERRORS.foreignTurn);
       if (!expectedTurnId || expectedTurnId !== r.activeTurn || !r.adapter.capabilities.steer) return refuse('stale', ERRORS.stale);
-    } else if (r.activeTurn) return refuse('busy', ERRORS.busy);
+    } else if (r.activeTurn || r.foreignBusy) return refuse('busy', ERRORS.busy);
     // A background compaction finishes (bounded) or is abandoned before the
     // message goes out, so the message lands on the compacted context.
     if (compaction?.inFlight(r)) {
@@ -188,6 +282,7 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
     }
     if (typeof ack.turnId !== 'string' || (expectedTurnId && ack.turnId !== expectedTurnId)) { d.state = 'refused'; emit(r); return refuse('stale', ERRORS.stale); }
     d.turnId = ack.turnId; d.mode = ack.mode === 'steer' ? 'steer' : 'new-turn'; d.state = 'acknowledged';
+    if (r.existing && !expectedTurnId) r.own.add(ack.turnId);
     turnOf(r, ack.turnId);
     if (!expectedTurnId && !FINAL.includes(r.turns.get(ack.turnId).status)) r.activeTurn = ack.turnId;
     // The turn can finish before its ack arrives (while sending): check again now.
@@ -201,6 +296,7 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
     const { r, error } = lookup(req, actor, { board: false });
     if (error) return error;
     const active = r.activeTurn ? r.turns.get(r.activeTurn) : null;
+    if (r.existing && ((r.activeTurn && !r.own.has(r.activeTurn)) || (!r.activeTurn && r.foreignBusy) || [...r.turns].some(([id, t]) => t.tag === req.turn && !r.own.has(id)))) return refuse('busy', ERRORS.foreignTurn);
     if (!active || active.tag !== req.turn || !r.adapter.capabilities.interrupt) return refuse('stale', ERRORS.stale);
     try { await r.adapter.interrupt({ target: r.target, turnId: r.activeTurn }); } catch { return refuse('unavailable', ERRORS.unavailable); }
     return { ok: true, status: 'interrupt-requested', state: dto(r) };
@@ -225,11 +321,12 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
   // A document that is gone or replaced can never act again: its sessions
   // and provider threads are ended and their slots freed.
   async function reap(keep) {
+    for (const [h, v] of handles) if (!keep(v.actor)) handles.delete(h);
     await Promise.all([...sessions.values()].filter((r) => !keep(r.actor)).map(end));
   }
   function stopAll() {
     for (const r of sessions.values()) { r.ended = true; r.off?.(); }
-    sessions.clear();
+    sessions.clear(); handles.clear();
     for (const a of Object.values(adapters)) { try { a.stop?.(); } catch { /* gone */ } }
   }
 
@@ -238,7 +335,7 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
   const targetOf = (id) => sessions.get(id)?.target ?? null;
   async function replaceTarget(id) {
     const r = sessions.get(id);
-    if (!r || r.ended) return false;
+    if (!r || r.ended || r.existing) return false;
     const old = { target: r.target, activeTurn: r.activeTurn };
     r.generation++; r.activeTurn = null; r.turns.clear(); r.deliveries.clear(); r.target = null;
     const compactTurn = compaction?.drop(r);
@@ -258,7 +355,7 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
   // of a provider that is now off are stopped.
   const compactionSettingsChanged = () => compaction?.settingsChanged([...sessions.values()]) ?? Promise.resolve();
 
-  return { capabilities, launch, send, interrupt, state, list, close, reap, stopAll, targetOf, replaceTarget, compactionSettingsChanged };
+  return { capabilities, launch, discover, attach, send, interrupt, state, list, close, reap, stopAll, targetOf, replaceTarget, compactionSettingsChanged };
 }
 
 module.exports = { createInteractionHub, ERRORS, NOTICES };
