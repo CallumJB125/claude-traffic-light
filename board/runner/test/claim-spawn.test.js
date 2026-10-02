@@ -33,7 +33,9 @@ test('self-dispatched offer is claimed and spawned; activity < 60 s; complete en
     assert.equal(hello.protocol, 1);
     assert.equal(hello.device_id, 'dev-1');
     assert.equal(hub.lastAuth, 'Bearer bdt_testtoken');
-    assert.deepEqual(hub.of('advertise')[0].repos.map((r) => r.repo_id), [REPO_ID]);
+    const advertised = await waitFor(() => hub.of('advertise')[0], { what: 'initial repo advertisement at the hub' });
+    assert.deepEqual(advertised.repos.map((r) => r.repo_id), [REPO_ID]);
+    await waitFor(() => hub.of('hb').length, { what: 'initial heartbeat at the hub' });
     assert.ok(hub.of('hb').length >= 1, 'first hb right after welcome');
 
     fs.mkdirSync(path.join(repo.checkout, 'src'), { recursive: true });
