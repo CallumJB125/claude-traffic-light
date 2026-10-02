@@ -1,35 +1,51 @@
 'use strict';
-// Savings ledger for the in-app compactor. Stores numbers only: provider,
-// time, context tokens before/after, and where they came from. Never message
-// text, session ids or provider targets.
+// Ledger for the in-app compactor. Stores numbers only: provider, time,
+// context tokens before/after, what the compaction itself cost, and where
+// each number came from. Never message text, session ids or provider targets.
 //
-// source 'provider': before = input tokens the provider reported for the last
-//   turn before compaction; after = input tokens it reported for the first
-//   turn after (which also includes that turn's new message, so the saving is
-//   understated, never overstated). Later turns benefit too; not counted.
-// source 'estimate': Plexiform-held histories, ~4 characters per token.
-// A compaction whose before/after was not reported is counted but adds no
-// tokens: no savings number is shown without a recorded before/after.
+// What is true, and so what is shown:
+//  - reduced = before - after. before = input tokens the provider reported for
+//    the last turn before compaction; after = input tokens it reported for the
+//    first turn after (which also carries that turn's new message, so the
+//    reduction is understated, never overstated). This is a one-time drop in
+//    the context each later turn re-sends, not money saved.
+//  - cost = the compaction turn's own tokens (input + output). A compaction
+//    sends the whole context to a model, so it costs at least `before` input
+//    tokens plus the summary. costSource 'provider' only when the provider
+//    reported it; Codex 0.159 reports 0/0 for the compaction turn, which is
+//    recorded as 'unknown', never as free.
+//  - payback: the reduction pays for the cost only over FUTURE turns, after
+//    about cost / reduced more turns. With an unknown cost the floor (the
+//    context it had to read, `before`) gives "at least" that many turns,
+//    labelled an estimate. No money figure is shown: nothing here records how
+//    many turns followed, so a net saving is never claimed.
+// source 'estimate' (both for reduction and cost): Plexiform-held histories,
+// ~4 characters per token. Kept apart from provider-reported numbers.
 const fs = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { PROVIDERS } = require('./compaction');
 
 const MAX_ENTRIES = 100;
-const VERSION = 1;
-// USD per million input tokens, list price, for a rough estimate only.
-// Cached input is cheaper, so this can overstate the money saved.
-const DEFAULT_PRICES = Object.freeze({ codex: 1.25, claude: 3, gemini: 1.25, local: 0 });
+const VERSION = 2;
 const SOURCES = ['provider', 'estimate'];
+const COST_SOURCES = ['provider', 'estimate', 'unknown'];
+const LOCK_WAIT_MS = 1000, LOCK_STALE_MS = 5000;
 const int = (v) => (Number.isSafeInteger(v) && v >= 0 ? v : null);
+const sint = (v) => (Number.isSafeInteger(v) ? v : 0);
+const TOTAL_KEYS = ['compactions', 'measured', 'providerMeasured', 'reducedTokens', 'estimatedReducedTokens', 'costTokens', 'costReported', 'estimatedCostTokens', 'costUnknown', 'unknownCostFloorTokens'];
+const SIGNED = new Set(['reducedTokens', 'estimatedReducedTokens']);
 
 function emptyTotals() {
-  return Object.fromEntries(PROVIDERS.map((p) => [p, { compactions: 0, measured: 0, savedTokens: 0, estimatedTokens: 0 }]));
+  return Object.fromEntries(PROVIDERS.map((p) => [p, Object.fromEntries(TOTAL_KEYS.map((k) => [k, 0]))]));
 }
 function cleanEntry(e) {
   if (!e || typeof e !== 'object' || !PROVIDERS.includes(e.provider) || !SOURCES.includes(e.source) || !Number.isFinite(e.at)) return null;
   const before = int(e.before), after = int(e.after);
   const measured = before !== null && after !== null;
-  return { at: e.at, provider: e.provider, source: e.source, before: measured ? before : null, after: measured ? after : null, saved: measured ? before - after : null };
+  const cost = int(e.cost);
+  const costSource = cost !== null && COST_SOURCES.includes(e.costSource) && e.costSource !== 'unknown' ? e.costSource : 'unknown';
+  return { at: e.at, provider: e.provider, source: e.source, before: measured ? before : null, after: measured ? after : null, reduced: measured ? before - after : null, cost: costSource === 'unknown' ? null : cost, costSource };
 }
 function cleanTotals(t) {
   const out = emptyTotals();
@@ -37,60 +53,131 @@ function cleanTotals(t) {
   for (const p of PROVIDERS) {
     const v = t[p];
     if (!v || typeof v !== 'object') continue;
-    for (const k of ['compactions', 'measured']) out[p][k] = int(v[k]) ?? 0;
-    for (const k of ['savedTokens', 'estimatedTokens']) out[p][k] = Number.isSafeInteger(v[k]) ? v[k] : 0;
+    for (const k of TOTAL_KEYS) out[p][k] = SIGNED.has(k) ? sint(v[k]) : int(v[k]) ?? 0;
   }
   return out;
 }
+// v1 stored {compactions, measured, savedTokens, estimatedTokens} and entries
+// with `saved`; it never recorded the compaction's own cost, so every v1
+// compaction migrates with an unknown cost.
+function migrateV1(raw) {
+  const totals = emptyTotals();
+  const t = raw.totals && typeof raw.totals === 'object' ? raw.totals : {};
+  for (const p of PROVIDERS) {
+    const v = t[p] && typeof t[p] === 'object' ? t[p] : {};
+    totals[p].compactions = int(v.compactions) ?? 0;
+    totals[p].measured = int(v.measured) ?? 0;
+    totals[p].reducedTokens = sint(v.savedTokens);
+    totals[p].estimatedReducedTokens = sint(v.estimatedTokens);
+    // v1 did not split measured by source; only local entries were estimates.
+    totals[p].providerMeasured = p === 'local' ? 0 : totals[p].measured;
+    totals[p].costUnknown = totals[p].compactions;
+  }
+  const entries = (Array.isArray(raw.entries) ? raw.entries : []).map((e) => cleanEntry({ ...e, cost: null, costSource: 'unknown' })).filter(Boolean).slice(-MAX_ENTRIES);
+  // Only the retained entries know their `before`: a smaller floor is still a floor.
+  for (const e of entries) if (e.source === 'provider' && e.before !== null) totals[e.provider].unknownCostFloorTokens += e.before;
+  return { v: VERSION, totals, entries };
+}
+const empty = () => ({ v: VERSION, totals: emptyTotals(), entries: [] });
 
-function createLedger({ file = null, prices = () => DEFAULT_PRICES, fsImpl = fs } = {}) {
-  let data = { v: VERSION, totals: emptyTotals(), entries: [] };
-  if (file) {
-    try {
-      const raw = JSON.parse(fsImpl.readFileSync(file, 'utf8'));
-      if (raw && raw.v === VERSION) data = { v: VERSION, totals: cleanTotals(raw.totals), entries: (Array.isArray(raw.entries) ? raw.entries : []).map(cleanEntry).filter(Boolean).slice(-MAX_ENTRIES) };
-    } catch { /* none yet, or unreadable: start empty */ }
+// Turns until a one-time reduction has paid for its cost. `atLeast` when the
+// cost is a floor (unknown cost) rather than a recorded number.
+function payback(cost, reduced, basis) {
+  if (!Number.isFinite(reduced)) return { kind: 'unmeasured' };
+  if (reduced <= 0) return { kind: 'never', reduced };
+  if (!Number.isFinite(cost)) return { kind: 'unknown' };
+  return { kind: basis === 'floor' ? 'at-least' : 'about', turns: Math.max(1, Math.ceil(cost / reduced)), basis };
+}
+function entryPayback(e) {
+  if (e.reduced === null) return payback(NaN, NaN);
+  if (e.costSource !== 'unknown') return payback(e.cost, e.reduced, e.costSource);
+  return e.source === 'provider' ? payback(e.before, e.reduced, 'floor') : payback(NaN, e.reduced);
+}
+
+function createLedger({ file = null, fsImpl = fs } = {}) {
+  let data = empty();
+  // Wrong version or unreadable: kept beside the ledger, never discarded.
+  function quarantine() {
+    let dest = `${file}.corrupt`;
+    try { fsImpl.statSync(dest); dest = `${file}.corrupt-${Date.now()}`; } catch { /* free */ }
+    try { fsImpl.renameSync(file, dest); } catch { /* gone already */ }
+  }
+  function load() {
+    if (!file) return data;
+    let text;
+    try { text = fsImpl.readFileSync(file, 'utf8'); } catch (err) { return err.code === 'ENOENT' ? empty() : data; }
+    let raw;
+    try { raw = JSON.parse(text); } catch { raw = null; }
+    if (raw && typeof raw === 'object' && raw.v === VERSION) return { v: VERSION, totals: cleanTotals(raw.totals), entries: (Array.isArray(raw.entries) ? raw.entries : []).map(cleanEntry).filter(Boolean).slice(-MAX_ENTRIES) };
+    if (raw && typeof raw === 'object' && raw.v === 1) return migrateV1(raw);
+    quarantine();
+    return empty();
+  }
+  data = load();
+  const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  // Two app instances may share the file: each write re-reads under a lock
+  // file and merges its entry into what is on disk.
+  function lock() {
+    const lf = `${file}.lock`, end = Date.now() + LOCK_WAIT_MS;
+    for (;;) {
+      try { fsImpl.closeSync(fsImpl.openSync(lf, 'wx', 0o600)); return () => { try { fsImpl.unlinkSync(lf); } catch { /* gone */ } }; } catch (err) { if (err.code !== 'EEXIST') return () => {}; }
+      try { if (Date.now() - fsImpl.statSync(lf).mtimeMs > LOCK_STALE_MS) { fsImpl.unlinkSync(lf); continue; } } catch { continue; }
+      if (Date.now() > end) return () => {};
+      sleep(10);
+    }
   }
   function save() {
-    if (!file) return;
-    fsImpl.mkdirSync(path.dirname(file), { recursive: true });
-    const tmp = `${file}.tmp`;
-    fsImpl.writeFileSync(tmp, JSON.stringify(data));
-    fsImpl.renameSync(tmp, file);
+    const tmp = `${file}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
+    try {
+      fsImpl.writeFileSync(tmp, JSON.stringify(data), { mode: 0o600 });
+      fsImpl.renameSync(tmp, file);
+    } catch (err) { try { fsImpl.unlinkSync(tmp); } catch { /* none */ } throw err; }
+  }
+  function apply(e) {
+    const t = data.totals[e.provider];
+    t.compactions++;
+    if (e.reduced !== null) {
+      t.measured++;
+      if (e.source === 'provider') { t.providerMeasured++; t.reducedTokens += e.reduced; } else t.estimatedReducedTokens += e.reduced;
+    }
+    if (e.costSource === 'provider') { t.costTokens += e.cost; t.costReported++; }
+    else if (e.costSource === 'estimate') t.estimatedCostTokens += e.cost;
+    else {
+      t.costUnknown++;
+      if (e.source === 'provider' && e.before !== null) t.unknownCostFloorTokens += e.before;
+    }
+    data.entries.push(e);
+    if (data.entries.length > MAX_ENTRIES) data.entries.splice(0, data.entries.length - MAX_ENTRIES);
   }
   function record(input) {
     const e = cleanEntry(input);
     if (!e) return null;
-    const t = data.totals[e.provider];
-    t.compactions++;
-    if (e.saved !== null) {
-      t.measured++;
-      if (e.source === 'provider') t.savedTokens += e.saved; else t.estimatedTokens += e.saved;
-    }
-    data.entries.push(e);
-    if (data.entries.length > MAX_ENTRIES) data.entries.splice(0, data.entries.length - MAX_ENTRIES);
-    save();
+    if (!file) { apply(e); return e; }
+    fsImpl.mkdirSync(path.dirname(file), { recursive: true });
+    const unlock = lock();
+    try { data = load(); apply(e); save(); } finally { unlock(); }
     return e;
   }
-  function priceOf(p) {
-    const v = prices()?.[p];
-    return Number.isFinite(v) && v >= 0 ? v : DEFAULT_PRICES[p];
-  }
-  // What Preferences shows. dollars are estimates from the price table.
+  // What Preferences shows. Provider-reported and estimated numbers stay apart.
   function summary() {
+    data = load();
     const providers = {};
-    let compactions = 0, measured = 0, savedTokens = 0, estimatedTokens = 0, dollars = 0;
+    const total = Object.fromEntries(TOTAL_KEYS.map((k) => [k, 0]));
     for (const p of PROVIDERS) {
-      const t = data.totals[p];
-      const d = (t.savedTokens + t.estimatedTokens) * priceOf(p) / 1e6;
-      providers[p] = { ...t, estimatedDollars: d, pricePerMillion: priceOf(p) };
-      compactions += t.compactions; measured += t.measured; savedTokens += t.savedTokens; estimatedTokens += t.estimatedTokens; dollars += d;
+      providers[p] = { ...data.totals[p] };
+      for (const k of TOTAL_KEYS) total[k] += data.totals[p][k];
     }
-    const last = data.entries.length ? { ...data.entries[data.entries.length - 1] } : null;
-    return { providers, total: { compactions, measured, savedTokens, estimatedTokens, estimatedDollars: dollars }, last, dollarsAreEstimates: true };
+    // Provider-measured reductions against every provider compaction's cost.
+    // Any unknown cost makes the answer a floor ("at least").
+    const reduced = total.providerMeasured ? total.reducedTokens : NaN;
+    const costKnown = total.costReported > 0 || total.unknownCostFloorTokens > 0;
+    total.payback = payback(costKnown ? total.costTokens + total.unknownCostFloorTokens : NaN, reduced, total.costUnknown > 0 ? 'floor' : 'provider');
+    const l = data.entries[data.entries.length - 1];
+    const last = l ? { ...l, payback: entryPayback(l) } : null;
+    return { providers, total, last, moneyShown: false };
   }
   const entries = () => data.entries.map((e) => ({ ...e }));
   return { record, summary, entries };
 }
 
-module.exports = { createLedger, DEFAULT_PRICES, MAX_ENTRIES };
+module.exports = { createLedger, MAX_ENTRIES, VERSION };

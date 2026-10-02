@@ -53,7 +53,7 @@ Everything below lives in `~/.claude-traffic-light` on your computer:
 - `requests/`: pending permission requests and your answers.
 - `config.json`: your settings and rules.
 - `stats.json`: per-day and per-project counts, times and costs, keyed by folder name.
-- `compaction-stats.json` (only once the compactor has run): for each compaction, the provider name, the time, and the token counts before and after. No message text, summaries or session identifiers. At most the last 100 compactions plus running totals.
+- `compaction-stats.json` (only once the compactor has run): for each compaction, the provider name, the time, the token counts before and after, and the compaction's own token cost when the provider reports it. Readable only by you (file mode 600); an unreadable or unknown-version file is kept beside it as `compaction-stats.json.corrupt`. No message text, summaries or session identifiers. At most the last 100 compactions plus running totals.
 - `cameos/`, including `cameos/index.json`: photos you add and their names.
 - `characters/`: characters you hatch, one folder each, holding the character's art and the choices you made. They are made from templates on your computer and are never uploaded.
 - `git-signals.json`: recent pull request and build events with their titles and links, the ids of events already shown, your GitHub login, branch names, local folder paths and the logins of reviewers. It holds no passwords or tokens.

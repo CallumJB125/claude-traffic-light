@@ -436,21 +436,38 @@
       const NAMES = { codex: 'Codex', claude: 'Claude Code', gemini: 'Gemini', local: 'Local model' };
       const fmt = (n) => Math.abs(n).toLocaleString();
       const showThreshold = () => { $('threshold-value').textContent = `${$('threshold').value}%`; };
+      const plural = (n, w) => `${n.toLocaleString()} ${w}${n === 1 ? '' : 's'}`;
+      // Payback: turns until the one-time reduction has paid for the compaction itself.
+      const payback = (p) => (!p ? '' : p.kind === 'about' ? `pays back after about ${plural(p.turns, 'more turn')}`
+        : p.kind === 'at-least' ? `pays back after at least ${plural(p.turns, 'more turn')} (estimate: its cost was not reported, so this counts only the context it had to read)`
+        : p.kind === 'never' ? 'never pays back: the context did not get smaller'
+        : p.kind === 'unknown' ? 'payback unknown: its cost was not reported' : '');
       const show = (st) => {
         const saved = $('saved'), last = $('last');
         if (!st) { saved.textContent = 'Not available right now.'; last.textContent = ''; return; }
         const t = st.total;
         if (!t.compactions) saved.textContent = 'Nothing compacted yet.';
-        else if (!t.measured) saved.textContent = `${t.compactions} compaction${t.compactions === 1 ? '' : 's'}, not measured yet: the saving is known after the next turn reports its token count.`;
+        else if (!t.measured) saved.textContent = `${plural(t.compactions, 'compaction')}, not measured yet: the reduction is known after the next turn reports its token count.`;
         else {
           const parts = [];
-          if (t.savedTokens > 0) parts.push(`${fmt(t.savedTokens)} tokens (~$${t.estimatedDollars.toFixed(2)}, estimated at list input prices) — measured from the provider's own token counts, the turn before vs the turn after each compaction`);
-          else if (t.savedTokens < 0) parts.push(`No net saving yet: on short sessions the summary was ${fmt(t.savedTokens)} tokens larger than what it replaced`);
-          if (t.estimatedTokens) parts.push(`${fmt(t.estimatedTokens)} tokens estimated (~4 characters a token) for local models`);
+          if (t.providerMeasured) {
+            parts.push(t.reducedTokens >= 0
+              ? `Context reduced by ${fmt(t.reducedTokens)} tokens a turn across ${plural(t.providerMeasured, 'compaction')} (the provider's own counts, the turn before vs the turn after)`
+              : `Context grew by ${fmt(t.reducedTokens)} tokens: the summaries were larger than what they replaced`);
+            if (t.costReported) parts.push(`The compactions themselves cost ${fmt(t.costTokens)} tokens (reported by the provider)`);
+            if (t.costUnknown) parts.push(`${plural(t.costUnknown, 'compaction')} did not report ${t.costUnknown === 1 ? 'its' : 'their'} own cost${t.unknownCostFloorTokens ? `; ${t.costUnknown === 1 ? 'it' : 'each'} read its whole context, so at least ${fmt(t.unknownCostFloorTokens)} tokens (estimate)` : ''}`);
+            const pb = payback(t.payback);
+            if (pb) parts.push(pb[0].toUpperCase() + pb.slice(1));
+          }
+          if (t.estimatedReducedTokens) parts.push(`Local models: about ${fmt(t.estimatedReducedTokens)} tokens reduced for about ${fmt(t.estimatedCostTokens)} tokens of summarising (estimates, ~4 characters a token)`);
           saved.textContent = parts.length ? `${parts.join('. ')}.` : 'No measured change yet.';
         }
         const l = st.last;
-        last.textContent = !l ? '' : `Last: ${NAMES[l.provider] || l.provider}, ${new Date(l.at).toLocaleString()}, ${l.saved === null ? 'not measured (the provider reported no token counts)' : `context ${fmt(l.before)} → ${fmt(l.after)} tokens (${l.source === 'provider' ? 'reported by the provider' : 'estimated'})`}.`;
+        if (!l) { last.textContent = ''; return; }
+        const src = l.source === 'provider' ? 'reported by the provider' : 'estimated';
+        const what = l.reduced === null ? 'not measured (the provider reported no token counts)'
+          : `context ${fmt(l.before)} → ${fmt(l.after)} tokens (${src}); compaction cost ${l.costSource === 'unknown' ? 'not reported' : `${fmt(l.cost)} tokens (${l.costSource === 'provider' ? 'reported by the provider' : 'estimated'})`}${payback(l.payback) ? `; ${payback(l.payback)}` : ''}`;
+        last.textContent = `Last: ${NAMES[l.provider] || l.provider}, ${new Date(l.at).toLocaleString()}, ${what}.`;
       };
       const st = await window.settingsApi.compactionStats().catch(() => null);
       const s = st?.settings || {};
