@@ -4,8 +4,7 @@
 // kind:
 //   hub     — a page of the board web app, loaded from the hub's own origin
 //             in a sandboxed view (`view` is its ?view=).
-//   window  — an existing app window (Lights, Preferences…) opened as is until
-//             its owner moves it into this window.
+//   window  — an the Widget configuration popup (Rules and Auto-answer).
 //   local   — an app file rendered in its own view with its own preload
 //             (the plug-in point for Tasks and settings pages); `screen`
 //             picks the account page's screen (account.html), `file` +
@@ -26,17 +25,22 @@ const PAGES = [
     ] },
   { id: 'waiting', title: 'Waiting on you', icon: 'bell', kind: 'local', file: 'waiting.html', preload: 'waiting-preload.js', query: { embedded: '1' }, group: 'work' },
   { id: 'myday', title: 'My day', icon: 'sun', kind: 'local', file: 'myday.html', preload: 'myday-preload.js', group: 'work' },
+  { id: 'sessions', title: 'Sessions', icon: 'team', kind: 'local', file: 'sessions.html', preload: 'sessions-preload.js', group: 'work' },
   { id: 'tasks', title: 'Tasks', icon: 'tasks', kind: 'local', file: 'tasks.html', preload: 'tasks-preload.js', query: { embedded: '1' }, group: 'work' },
   // localScreen: the account page's explainer for the local board, which has no integrations of its own.
   { id: 'integrations', title: 'Integrations', icon: 'plug', kind: 'hub', view: 'integrations', localScreen: 'integrations', group: 'team' },
   { id: 'team', title: 'Team', icon: 'team', kind: 'local', screen: 'team', group: 'team' },
-  { id: 'usage', title: 'Usage', icon: 'chart', kind: 'window', window: 'mix', group: 'you' },
+  { id: 'usage', title: 'Usage', icon: 'chart', kind: 'local', file: 'lights.html', preload: 'lights-preload.js', query: { embedded: '1', view: 'mix' }, group: 'you' },
+  { id: 'stats', title: 'Stats', icon: 'chart', kind: 'local', file: 'lights.html', preload: 'lights-preload.js', query: { embedded: '1', view: 'stats' }, group: 'you' },
   { id: 'setups', title: 'Setups', icon: 'layers', kind: 'local', file:'setups.html', preload:'setups-preload.js', pending:true, group: 'you' },
   { id: 'plugins', title: 'Plugins', icon: 'puzzle', kind: 'soon', group: 'you', blurb: 'Find and install Claude Code plugins.' },
   { id: 'thismac', title: 'This Mac', icon: 'laptop', kind: 'local', screen: 'thismac', group: 'you' },
   { id: 'account', title: 'Account', icon: 'user', kind: 'local', screen: 'account', group: 'you' },
-  { id: 'lights', title: 'Lights', icon: 'lights', kind: 'window', window: 'lights', group: 'you' },
-  { id: 'settings', title: 'Settings', icon: 'gear', kind: 'window', window: 'settings', group: 'you' },
+  { id: 'lights', title: 'Widget configuration', icon: 'lights', kind: 'window', window: 'lights', group: 'you' },
+  { id: 'settings', title: 'Preferences', icon: 'gear', kind: 'local', file: 'settings.html', preload: 'settings-preload.js', query: { embedded: '1' }, group: 'you' },
+  { id: 'hatch', title: 'Hatch a character', icon: 'puzzle', kind: 'local', file: 'hatch.html', preload: 'hatch-preload.js', query: { embedded: '1' }, group: 'you' },
+  { id: 'help', title: 'Help', icon: 'info', kind: 'local', file: 'help.html', preload: 'help-preload.js', query: { embedded: '1' }, group: 'you' },
+  { id: 'feedback', title: 'Feedback', icon: 'info', kind: 'local', file: 'feedback.html', preload: 'feedback-preload.js', query: { embedded: '1' }, group: 'you' },
   { id: 'updates', title: 'About & Updates', icon: 'info', kind: 'local', file: 'updates.html', preload: 'updates-preload.js', group: 'you' },
 ];
 

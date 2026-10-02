@@ -51,8 +51,8 @@ test('app menu: every page is there, soon ones disabled, actions open the page',
     if (p.kind === 'soon') { assert.equal(it.enabled, false); assert.match(it.label, /\(soon\)$/); assert.equal(it.click, undefined); }
     else { it.click(); assert.equal(opened.pop(), p.id); }
   }
-  assert.equal(items.find((i) => i.label === 'Open Lights…').accelerator, 'CmdOrCtrl+L');
-  assert.equal(items.find((i) => i.label === 'Open Settings…').accelerator, 'CmdOrCtrl+,');
+  assert.equal(items.find((i) => i.label === 'Open Widget configuration…').accelerator, 'CmdOrCtrl+L');
+  assert.equal(items.find((i) => i.label === 'Open Preferences…').accelerator, 'CmdOrCtrl+,');
   const fb = { label: 'Something\u2019s off / Idea…', click() {} };
   assert.ok(AppMenu.appItems({ pages: PAGES, groups: GROUPS, open() {}, openLabel: 'x', feedback: fb }).includes(fb));
 });

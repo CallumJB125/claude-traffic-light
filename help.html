@@ -86,7 +86,7 @@
   </main>
 
   <div class="actions">
-    <span class="note">Reopen from the <b>?</b> on Claude, or press Esc to close.</span>
+    <span class="note">Reopen from the <b>?</b> on Claude, or open Help in the main app.</span>
     <button id="lights" title="Change what Claude does for each state">Open Lights</button>
     <button class="primary" id="close">Got it</button>
   </div>
@@ -124,8 +124,11 @@
     }
 
     $('lights').addEventListener('click', () => window.helpApi.openLights());
-    $('close').addEventListener('click', () => window.close());
-    window.addEventListener('keydown', (e) => { if (e.key === 'Escape') window.close(); });
+    if (new URLSearchParams(location.search).get('embedded') === '1') $('close').hidden = true;
+    else {
+      $('close').addEventListener('click', () => window.close());
+      window.addEventListener('keydown', (e) => { if (e.key === 'Escape') window.close(); });
+    }
     window.helpApi.onStatusChanged(render);
     render();
   </script>

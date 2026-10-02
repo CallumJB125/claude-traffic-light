@@ -880,6 +880,12 @@
   #auto-why.ok { color: #8fe39a; }
   #auto-form .actions { display: flex; gap: 8px; }
 
+  body.widget-configuration #view-stats, body.widget-configuration #view-mix { display: none; }
+  body.embedded-analytics #titlebar { padding-left: 22px; -webkit-app-region: no-drag; }
+  body.embedded-analytics .view-seg, body.embedded-analytics #titlebar .tools,
+  body.embedded-analytics #footer, body.embedded-analytics #presets { display: none; }
+  body.embedded-analytics #frame { grid-template-rows: 52px 1fr; }
+
   /* Nobody can see the editor: every preview holds its frame. */
   body.motion-paused * { animation-play-state: paused !important; }
 </style>
@@ -896,7 +902,7 @@
     </div>
     <span class="spacer"></span>
     <div class="tools">
-      <button class="btn ghost" id="prefs-btn" title="Timing, sound and notification preferences" aria-label="Preferences (opens a new window)">Preferences…</button>
+      <button class="btn ghost" id="prefs-btn" title="Timing, sound and notification preferences" aria-label="Preferences (opens in the main app)">Preferences…</button>
       <button class="btn" id="presets-btn" aria-haspopup="true" aria-expanded="false" aria-controls="presets">
         Presets
         <svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg>

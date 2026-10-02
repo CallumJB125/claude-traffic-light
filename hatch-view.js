@@ -77,6 +77,7 @@
     $('color').addEventListener('input', () => { state.color = $('color').value; later(); });
     $('surprise').addEventListener('click', async () => { Object.assign(state, await api.surprise()); sync(); refresh(); });
     $('form').addEventListener('submit', (e) => { e.preventDefault(); save(); });
+    $('close').textContent = new URLSearchParams(location.search).get('embedded') === '1' ? 'Back to widget configuration' : 'Close';
     $('close').addEventListener('click', () => api.close());
     await refresh();
     if (!reduce) setInterval(() => { if (document.hidden) return; look = (look + 1) % LOOKS.length; if (token) show(currentId); }, 2600);

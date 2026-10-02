@@ -115,7 +115,7 @@ async function probeHub(origin, partition) {
   });
 }
 
-function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged, devAccountsHub = null, captureEnabled = true } = {}) {
+function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onClosed = () => {}, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged, devAccountsHub = null, captureEnabled = true } = {}) {
   // The dev-only mock accounts hub runs on loopback; that one exact origin is
   // the only non-https hub ever accepted.
   const allowOrigins = devAccountsHub && isDev ? [devAccountsHub] : [];
@@ -386,6 +386,7 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
       v.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#1c1a1f' : '#eceaf0');
       lockLocal(v);
       localViews.set(page.id, v);
+      v.webContents.on('did-finish-load', () => onLocalPage(page, v.webContents));
       v.webContents.loadFile(path.join(DIR, '..', page.file), { query: page.query || {} }).catch(() => {});
     }
     attach(v);
@@ -907,6 +908,7 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
     nativeBoardWorkspaces: () => store.list().filter((w) => w.kind === 'team').map((w) => ({ id: w.id, name: w.name })),
     openWithFragment,
     isOpen: () => !!win,
+    isVisible: () => !!win && !win.isDestroyed() && win.isVisible(),
     select,
     openInvite: (link) => flow.openInvite(link),
     /** App start: runners the member left on come back without opening the window. */
@@ -933,6 +935,14 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
     devPage: (js) => (content === accountView && accountView ? accountView.webContents.executeJavaScript(js) : Promise.resolve(null)),
     // A local page's webContents, for main's sender checks (null if not open).
     pageWebContents: (id) => localViews.get(id)?.webContents ?? null,
+    // Fixed page ids from main only; queued callbacks never jump to a replacement renderer.
+    sendToPage(id, channel, ...args) {
+      const wc = localViews.get(id)?.webContents;
+      if (!wc || wc.isDestroyed()) return false;
+      const send = () => { if (!wc.isDestroyed() && localViews.get(id)?.webContents === wc) wc.send(channel, ...args); };
+      if (wc.isLoading()) wc.once('did-finish-load', send); else send();
+      return true;
+    },
     // Dev hook: capture what's on screen.
     async capture() {
       if (!win) return null;
