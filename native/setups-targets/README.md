@@ -3,7 +3,8 @@
 This reader API is a source library and synthetic acceptance driver. It is not an
 installed helper, app binding or enabled Setups feature. The separate native-only
 writer prototype is described in [WRITER.md](WRITER.md); it shares the reader's
-descriptor/ACL policy through a private implementation bridge. No IPC, process
+descriptor/ACL policy through a private implementation bridge. The additional native snapshot/gate/store and framed fixture source packet is
+described in [INTERFACE.md](INTERFACE.md); no installed helper, production
 launcher or account/provider integration is added. Windows directory operations remain in `native/windows-private-directory`;
 Linux and Windows calls here return `unsupported`.
 

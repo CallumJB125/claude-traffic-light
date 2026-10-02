@@ -1,7 +1,7 @@
 # Darwin observed replacement prototype
 
 This is a native source library with fresh synthetic filesystem fixtures. It is
-not an installed helper, IPC transport, Node mutator, Apply/Undo UI, renderer
+not an installed helper, production IPC binding, Node mutator, Apply/Undo UI, renderer
 capability, account integration or enabled feature. The encrypted app journal
 remains prepared-only. Main must separately bind current actor/account/team/
 device/profile generation, a validated immutable format plan and authenticated
@@ -54,8 +54,9 @@ Records contain no file content, external paths, commands or provider material.
 File `fsync` plus Darwin `F_FULLFSYNC`, directory `fsync` and current-binding
 checks precede the next effect. These records are OS-protected observations and
 incomplete-write detection; their unkeyed checksum is **not authentication**,
-encryption or a replacement for the app journal. There is no reopening/adoption
-or automatic crash recovery mutation API. The in-memory capability rechecks
+encryption or a replacement for the app journal. The additional [interface packet](INTERFACE.md) permits private conditional
+reopening only from an authenticated full anchor and fresh local confirmation;
+records/names alone and automatic recovery never create mutation authority. The in-memory capability rechecks
 its captured exact snapshot/record metadata and hashes before subsequent writes.
 Fresh directory creation is observed through a captured named identity,
 matching opened descriptor, empty-directory check and fresh full metadata/

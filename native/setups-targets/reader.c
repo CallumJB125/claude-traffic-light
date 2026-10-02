@@ -10,6 +10,7 @@
 #include <unistd.h>
 #if defined(__APPLE__)
 #include <membership.h>
+#include <CommonCrypto/CommonDigest.h>
 #include <sys/acl.h>
 #include <sys/mount.h>
 #include <time.h>
@@ -30,8 +31,8 @@ extern void pf_reader_test_barrier(unsigned stage);
 #else
 #define PF_BARRIER(stage) ((void)0)
 #endif
-typedef struct { int fd; char name[PF_COMPONENT_BYTES]; PFStamp identity; } PFNode;
-struct PFRoot { PFNode nodes[PF_READER_MAX_ANCESTORS]; size_t count; };
+typedef struct { int fd; char name[PF_COMPONENT_BYTES]; PFStamp identity; PFNativeBinding binding; } PFNode;
+struct PFRoot { PFNode nodes[PF_READER_MAX_ANCESTORS]; size_t count; unsigned char profile_hash[32]; };
 typedef struct { PFNode nodes[PF_TARGET_DEPTH]; size_t count; int fd; PFStamp stamp; } PFTarget;
 /* This table must match transaction-targets.js. It is not a generic path API. */
 static const char *recipe_path(PFRecipe recipe) {
@@ -126,6 +127,36 @@ static PFResult acl_safe(int fd) {
   if (!identity_equal(&a, &b) || a.ctime_seconds != b.ctime_seconds || a.ctime_nanoseconds != b.ctime_nanoseconds) return PF_CHANGED;
   return PF_OK;
 }
+PFResult pf_native_binding_fd(int fd, PFNativeBinding *out) {
+  if (!out) return PF_INVALID;
+  memset(out, 0, sizeof(*out)); struct stat before, after;
+  if (fstat(fd, &before) != 0) return PF_IO;
+  PFResult r = acl_safe(fd); if (r != PF_OK) return r;
+  errno = 0; acl_t acl = acl_get_fd_np(fd, ACL_TYPE_EXTENDED);
+  if (!acl && errno != ENOENT) return errno == EOPNOTSUPP ? PF_UNSUPPORTED : PF_IO;
+  unsigned char raw[PF_ACL_BYTES]; size_t copied = 0;
+  if (acl) {
+    ssize_t n = acl_size(acl); acl_entry_t first; errno = 0;
+    if (n < 0 || n > (ssize_t)sizeof(raw) || acl_valid(acl) != 0) r = PF_UNSAFE;
+    else if (acl_get_entry(acl, ACL_FIRST_ENTRY, &first) == 0) {
+      ssize_t got = acl_copy_ext_native(raw, acl, n);
+      if (got < 0 || got > n) r = PF_IO; else copied = (size_t)got;
+    } else if (errno != EINVAL) r = PF_IO;
+    if (acl_free(acl) != 0) r = PF_IO;
+  }
+  if (r == PF_OK && fstat(fd, &after) != 0) r = PF_IO;
+  if (r == PF_OK) {
+    PFStamp a = stamp_of(&before), b = stamp_of(&after);
+    if (!content_equal(&a, &b) || before.st_gid != after.st_gid || before.st_flags != after.st_flags) r = PF_CHANGED;
+  }
+  if (r == PF_OK) {
+    out->device = after.st_dev; out->inode = after.st_ino; out->uid = after.st_uid;
+    out->mode = after.st_mode; out->gid = after.st_gid; out->flags = after.st_flags;
+    static const unsigned char empty = 0;
+    (void)CC_SHA256(copied ? raw : &empty, (CC_LONG)copied, out->acl_hash);
+  }
+  memset(raw, 0, sizeof(raw)); return r;
+}
 static PFResult directory(int parent, const char *name, int owned, PFNode *out) {
   struct stat st;
   if (!component(name)) return PF_INVALID;
@@ -134,6 +165,8 @@ static PFResult directory(int parent, const char *name, int owned, PFNode *out) 
   if (fstat(fd, &st) != 0) { close(fd); return PF_IO; }
   if (!S_ISDIR(st.st_mode) || (owned && (st.st_uid != getuid() || (st.st_mode & 0022)))) { close(fd); return PF_UNSAFE; }
   PFResult result = acl_safe(fd); if (result != PF_OK) { close(fd); return result; }
+  result = pf_native_binding_fd(fd, &out->binding);
+  if (result != PF_OK) { close(fd); return result; }
   out->fd = fd; strcpy(out->name, name); out->identity = stamp_of(&st);
   return PF_OK;
 }
@@ -142,7 +175,8 @@ static PFResult node_current(int parent, const PFNode *node) {
   if (fstat(node->fd, &held) != 0 || fstatat(parent, node->name, &link, AT_SYMLINK_NOFOLLOW) != 0) return PF_CHANGED;
   PFStamp a = stamp_of(&held), b = stamp_of(&link);
   if (!S_ISDIR(link.st_mode) || !identity_equal(&node->identity, &a) || !identity_equal(&a, &b)) return PF_CHANGED;
-  return acl_safe(node->fd);
+  PFNativeBinding binding; PFResult r = pf_native_binding_fd(node->fd, &binding);
+  return r == PF_OK && memcmp(&binding, &node->binding, sizeof(binding)) != 0 ? PF_CHANGED : r;
 }
 static PFResult root_current(PFRoot *root) {
   if (!root || root->count < 2 || root->count > PF_READER_MAX_ANCESTORS) return PF_INVALID;
@@ -151,7 +185,8 @@ static PFResult root_current(PFRoot *root) {
   if (fstat(root->nodes[0].fd, &held) != 0) return PF_IO;
   PFStamp first = stamp_of(&held);
   if (!S_ISDIR(held.st_mode) || !identity_equal(&first, &root->nodes[0].identity)) return PF_CHANGED;
-  PFResult result = acl_safe(root->nodes[0].fd); if (result != PF_OK) return result;
+  PFNativeBinding binding; PFResult result = pf_native_binding_fd(root->nodes[0].fd, &binding); if (result != PF_OK) return result;
+  if (memcmp(&binding, &root->nodes[0].binding, sizeof(binding)) != 0) return PF_CHANGED;
   for (size_t i = 1; i < root->count; ++i) {
     PFResult r = node_current(root->nodes[i-1].fd, &root->nodes[i]); if (r != PF_OK) return r;
   }
@@ -178,6 +213,9 @@ PFResult pf_root_open(const char *canonical_profile, const PFStamp *expected, PF
   struct stat top;
   if (fstat(root->nodes[0].fd, &top) != 0) { pf_root_close(root); return PF_IO; }
   root->nodes[0].identity = stamp_of(&top);
+  (void)CC_SHA256(canonical_profile, (CC_LONG)strlen(canonical_profile), root->profile_hash);
+  PFResult capture = pf_native_binding_fd(root->nodes[0].fd, &root->nodes[0].binding);
+  if (capture != PF_OK) { pf_root_close(root); return capture; }
   PFResult first = acl_safe(root->nodes[0].fd);
   if (!S_ISDIR(top.st_mode) || first != PF_OK) { pf_root_close(root); return first == PF_OK ? PF_UNSAFE : first; }
   char *save = NULL;
@@ -302,6 +340,7 @@ PFResult pf_native_parent_open(PFRoot *root, PFRecipe recipe, PFNativeParent **o
   PFNativeParent *p = calloc(1, sizeof(*p)); if (!p) return PF_IO;
   p->node.fd = -1; p->root = calloc(1, sizeof(*p->root));
   if (!p->root) { free(p); return PF_IO; }
+  memcpy(p->root->profile_hash, root->profile_hash, 32);
   for (size_t i = 0; i < root->count; ++i) {
     int fd = fcntl(root->nodes[i].fd, F_DUPFD_CLOEXEC, 0);
     if (fd < 0) { pf_native_parent_close(p); return PF_IO; }
@@ -330,6 +369,37 @@ void pf_native_parent_close(PFNativeParent *p) {
   if (p->node.fd >= 0) close(p->node.fd);
   pf_root_close(p->root); memset(p, 0, sizeof(*p)); free(p);
 }
+PFResult pf_native_root_duplicate(PFRoot *root, PFRoot **out) {
+  if (!out) return PF_INVALID; *out = NULL;
+  PFResult r = root_current(root); if (r != PF_OK) return r;
+  PFRoot *copy = calloc(1, sizeof(*copy)); if (!copy) return PF_IO;
+  memcpy(copy->profile_hash, root->profile_hash, 32);
+  for (size_t i = 0; i < root->count; ++i) {
+    int fd = fcntl(root->nodes[i].fd, F_DUPFD_CLOEXEC, 0);
+    if (fd < 0) { pf_root_close(copy); return PF_IO; }
+    copy->nodes[i] = root->nodes[i]; copy->nodes[i].fd = fd; copy->count++;
+  }
+  r = root_current(copy); if (r != PF_OK) { pf_root_close(copy); return r; }
+  *out = copy; return PF_OK;
+}
+PFResult pf_native_root_current(PFRoot *root) { return root_current(root); }
+int pf_native_root_fd(PFRoot *root) { return root && root->count ? root->nodes[root->count-1].fd : -1; }
+PFResult pf_native_root_bindings(PFRoot *root, PFNativeBinding *out, size_t capacity, size_t *count, unsigned char hash[32]) {
+  if (count) *count = 0; if (hash) memset(hash, 0, 32);
+  if (!out || !count || !hash) return PF_INVALID;
+  PFResult r = root_current(root); if (r != PF_OK) return r;
+  if (root->count > capacity) return PF_TOO_LARGE;
+  for (size_t i = 0; i < root->count; ++i) out[i] = root->nodes[i].binding;
+  memcpy(hash, root->profile_hash, 32); *count = root->count; return PF_OK;
+}
+PFResult pf_native_parent_bindings(PFNativeParent *p, PFNativeBinding *out, size_t capacity, size_t *count, unsigned char hash[32]) {
+  if (count) *count = 0; if (hash) memset(hash, 0, 32);
+  PFResult r = pf_native_parent_current(p); if (r != PF_OK) return r;
+  size_t n = 0; r = pf_native_root_bindings(p->root, out, capacity, &n, hash);
+  if (r != PF_OK) return r;
+  if (n >= capacity) return PF_TOO_LARGE;
+  out[n] = p->node.binding; *count = n+1; return PF_OK;
+}
 PFResult pf_native_acl_safe(int fd) { return acl_safe(fd); }
 #else
 struct PFRoot { int unsupported; };
@@ -346,5 +416,11 @@ int pf_native_profile_fd(PFNativeParent *p) { (void)p; return -1; }
 int pf_native_parent_fd(PFNativeParent *p) { (void)p; return -1; }
 const char *pf_native_leaf(PFNativeParent *p) { (void)p; return NULL; }
 void pf_native_parent_close(PFNativeParent *p) { (void)p; }
+PFResult pf_native_root_duplicate(PFRoot *r, PFRoot **o) { (void)r; if(o)*o=NULL; return PF_UNSUPPORTED; }
+PFResult pf_native_root_current(PFRoot *r) { (void)r; return PF_UNSUPPORTED; }
+int pf_native_root_fd(PFRoot *r) { (void)r; return -1; }
+PFResult pf_native_binding_fd(int f, PFNativeBinding *o) { (void)f; if(o)memset(o,0,sizeof(*o)); return PF_UNSUPPORTED; }
+PFResult pf_native_root_bindings(PFRoot *r, PFNativeBinding *b, size_t c, size_t *n, unsigned char h[32]) { (void)r;(void)b;(void)c;if(n)*n=0;if(h)memset(h,0,32);return PF_UNSUPPORTED; }
+PFResult pf_native_parent_bindings(PFNativeParent *r, PFNativeBinding *b, size_t c, size_t *n, unsigned char h[32]) { (void)r;(void)b;(void)c;if(n)*n=0;if(h)memset(h,0,32);return PF_UNSUPPORTED; }
 PFResult pf_native_acl_safe(int fd) { (void)fd; return PF_UNSUPPORTED; }
 #endif

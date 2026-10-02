@@ -1,6 +1,7 @@
 #define _DARWIN_C_SOURCE
 #include "writer.h"
 #include "reader-private.h"
+#include "writer-private.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <stdlib.h>
@@ -30,25 +31,11 @@ extern int pf_writer_test_fault(unsigned stage);
 #define W_BARRIER(n) ((void)0)
 #define W_FAULT(n) 0
 #endif
-typedef struct {
-  uint64_t present, size;
-  unsigned char hash[32];
-} PFAttributeMeta;
-typedef struct {
-  unsigned char bytes[PF_WRITER_XATTR_BYTES];
-  size_t size;
-  unsigned present;
-} PFAttribute;
 static const char *const attributes[] = {"com.apple.provenance", "com.apple.quarantine"};
-typedef struct {
-  PFStamp stamp;
-  uint64_t gid, flags;
-  unsigned char acl_hash[32], hash[32];
-  PFAttributeMeta attrs[2];
-} PFWriteMeta;
 /* Fixed native observation record: no paths/content/commands. Its checksum
  * detects incomplete writes; it is NOT the authenticated encrypted app journal.
- * No API adopts/reopens these records as a mutation capability after a crash. */
+ * Records alone never create authority; only the private authenticated full
+ * anchor/fresh-confirmation recovery bridge may reopen retained descriptors. */
 typedef struct {
   unsigned char magic[8];
   uint32_t schema, bytes, phase, result, sequence, effect, existed, recipe;
@@ -63,6 +50,7 @@ struct PFWriteTxn {
   PFRecipe recipe;
   int hold_fd;
   PFStamp hold_identity, profile_identity, parent_identity;
+  PFNativeBinding hold_binding;
   char hold_id[PF_WRITER_HOLD_ID_BYTES];
   unsigned char *before, *after;
   size_t before_size, after_size;
@@ -72,7 +60,9 @@ struct PFWriteTxn {
   PFWriteMeta snapshots[2], records[PF_WRITER_RECORD_LIMIT];
   PFWriteReceipt receipt;
   unsigned sequence, apply_attempted, undo_attempted, poisoned;
-  uint64_t start;
+  unsigned production_gate, apply_intent_ready, undo_intent_ready;
+  uint64_t start, production_cutoff;
+  unsigned recovered_undo_ready;
 };
 static PFResult before_current(PFWriteTxn *t);
 static void wipe(void *memory, size_t size) {
@@ -111,7 +101,7 @@ static uint64_t now_ns(void) {
 }
 static PFResult budget(PFWriteTxn *t) {
   uint64_t now = now_ns();
-  return !now || !t->start ? PF_IO : now - t->start >= PF_WRITER_NS ? PF_DEADLINE : PF_OK;
+  return !now || !t->start ? PF_IO : now - t->start >= PF_WRITER_NS || (t->production_cutoff && now >= t->production_cutoff) ? PF_DEADLINE : PF_OK;
 }
 static PFResult io_error(void) {
   if (errno == EEXIST || errno == ENOENT) return PF_CHANGED;
@@ -260,6 +250,10 @@ static PFResult current(PFWriteTxn *t) {
   if (!S_ISDIR(held.st_mode) || held.st_uid != getuid() || (held.st_mode & 07777) != 0700
       || !identity_equal(&t->hold_identity, &a) || !identity_equal(&a, &b)) return PF_CHANGED;
   r = empty_acl(t->hold_fd); if (r != PF_OK) return r;
+  PFNativeBinding permission; r = pf_native_binding_fd(t->hold_fd, &permission); if (r != PF_OK) return r;
+  if (permission.flags != 0) return PF_UNSUPPORTED;
+  if (t->hold_binding.inode && memcmp(&permission, &t->hold_binding, sizeof(permission)) != 0) return PF_CHANGED;
+  if (!t->hold_binding.inode) t->hold_binding = permission;
   W_BARRIER(11);
   if (fstat(t->hold_fd, &held) != 0 || fstatat(pf_native_profile_fd(t->parent), t->hold_id, &named, AT_SYMLINK_NOFOLLOW) != 0) return PF_CHANGED;
   PFStamp fresh = stamp_of(&held), binding = stamp_of(&named);
@@ -404,7 +398,7 @@ static PFResult record(PFWriteTxn *t, PFWritePhase phase, PFResult result, unsig
   PFNativeRecord entry; memset(&entry, 0, sizeof(entry)); memcpy(entry.magic, "PFWRTR01", 8);
   entry.schema = 1; entry.bytes = sizeof(entry); entry.phase = phase; entry.result = result;
   entry.sequence = t->sequence; entry.effect = effect; entry.existed = t->receipt.existed; entry.recipe = t->recipe;
-  entry.before = t->before_meta; entry.stage = t->stage_meta;
+  entry.before = t->before_meta; entry.stage = phase == PF_WRITE_UNDO_INTENT && t->receipt.existed ? t->restored_meta : t->stage_meta;
   if (target) entry.target = *target; if (displaced) entry.displaced = *displaced;
   entry.profile = t->profile_identity; entry.parent = t->parent_identity; entry.hold = t->hold_identity;
   digest(t->before, t->before_size, entry.before_hash); digest(t->after, t->after_size, entry.after_hash);
@@ -454,15 +448,15 @@ void pf_writer_close(PFWriteTxn *t) {
   if (t->after) { wipe(t->after, t->after_size); free(t->after); }
   pf_native_parent_close(t->parent); wipe(t, sizeof(*t)); free(t);
 }
-PFResult pf_writer_prepare(PFRoot *root, PFRecipe recipe, const PFStamp *expected,
+static PFResult writer_prepare_impl(PFRoot *root, PFRecipe recipe, const PFStamp *expected,
                           const unsigned char *before, size_t before_size,
-                          const unsigned char *after, size_t after_size, PFWriteTxn **out) {
+                          const unsigned char *after, size_t after_size, PFWriteTxn **out, PFNativeWriterState *failure, uint64_t cutoff) {
   if (!out) return PF_INVALID;
   *out = NULL;
   if ((!before && before_size) || (!after && after_size) || (!expected && before_size)) return PF_INVALID;
   if (before_size > PF_READER_MAX_BYTES || after_size > PF_READER_MAX_BYTES) return PF_TOO_LARGE;
   PFWriteTxn *t = calloc(1, sizeof(*t)); if (!t) return PF_IO;
-  t->hold_fd = -1; t->recipe = recipe; t->start = now_ns(); t->receipt.existed = expected != NULL;
+  t->hold_fd = -1; t->recipe = recipe; t->start = now_ns(); t->production_cutoff = cutoff; t->production_gate = cutoff != 0; t->receipt.existed = expected != NULL;
   PFResult r = pf_native_parent_open(root, recipe, &t->parent);
   struct stat st;
   if (r == PF_OK && fstat(pf_native_profile_fd(t->parent), &st) == 0) t->profile_identity = stamp_of(&st); else if (r == PF_OK) r = PF_IO;
@@ -490,8 +484,44 @@ PFResult pf_writer_prepare(PFRoot *root, PFRecipe recipe, const PFStamp *expecte
   if (r == PF_OK) r = stage_file(t, "after", t->after, after_size, 1, 0, &t->stage_meta);
   if (r == PF_OK) r = record(t, PF_WRITE_PREPARED, PF_OK, 0, NULL, NULL);
   if (r == PF_OK) { W_BARRIER(2); r = before_current(t); }
-  if (r != PF_OK) { pf_writer_close(t); return r; }
+  if (r != PF_OK) { if (failure) (void)pf_native_writer_state(t, failure); pf_writer_close(t); return r; }
   receipt(t, PF_WRITE_PREPARED, PF_OK, 0, NULL, NULL, NULL); *out = t; return PF_OK;
+}
+PFResult pf_writer_prepare(PFRoot *root, PFRecipe recipe, const PFStamp *expected,
+ const unsigned char *before, size_t before_size, const unsigned char *after, size_t after_size, PFWriteTxn **out) {
+ return writer_prepare_impl(root,recipe,expected,before,before_size,after,after_size,out,NULL,0);
+}
+PFResult pf_native_writer_prepare_observed(PFRoot *root, PFRecipe recipe, const PFStamp *expected, PFByteView before, PFByteView after, uint64_t cutoff, PFWriteTxn **out, PFNativeWriterState *failure) {
+ if(failure)memset(failure,0,sizeof(*failure));
+ PFResult r=writer_prepare_impl(root,recipe,expected,before.data,before.size,after.data,after.size,out,failure,cutoff);
+ if(r==PF_OK)(*out)->production_gate=1;
+ return r;
+}
+PFResult pf_native_writer_state(PFWriteTxn *t, PFNativeWriterState *out) {
+ if(!out)return PF_INVALID;memset(out,0,sizeof(*out));if(!t)return PF_INVALID;
+ out->recipe=t->recipe;out->receipt=t->receipt;
+ if(t->undo_intent_ready&&!t->undo_attempted&&out->receipt.phase==PF_WRITE_APPLIED)out->receipt.phase=PF_WRITE_UNDO_INTENT;out->profile=t->profile_identity;out->parent=t->parent_identity;out->hold=t->hold_identity;out->hold_binding=t->hold_binding;
+ out->before=t->before_meta;out->stage=t->stage_meta;out->accepted_after=t->after_meta;out->restore_stage=t->restored_meta;
+ memcpy(out->snapshots,t->snapshots,sizeof(out->snapshots));memcpy(out->records,t->records,sizeof(out->records));
+ out->record_count=t->sequence;memcpy(out->hold_id,t->hold_id,sizeof(out->hold_id));return PF_OK;
+}
+PFResult pf_native_writer_current(PFWriteTxn *t) { return t ? current(t) : PF_INVALID; }
+PFResult pf_native_writer_restrict_cutoff(PFWriteTxn *t,uint64_t cutoff){if(!t||!t->production_gate||!cutoff||cutoff>t->production_cutoff)return PF_INVALID;t->production_cutoff=cutoff;return budget(t);}
+PFResult pf_native_writer_stamp(PFWriteTxn *t,unsigned role,PFStamp *out) {
+ if(!out)return PF_INVALID;memset(out,0,sizeof(*out));if(!t||role>4)return PF_INVALID;
+ PFResult r=current(t);if(r!=PF_OK)return r;
+ int fd=role? t->hold_fd:pf_native_parent_fd(t->parent);
+ const char *name=role==0?pf_native_leaf(t->parent):role==1?"after":role==2?"undo-stage":role==3?"undo-displaced":"snapshot-before";
+ if(fd<0)return PF_UNAVAILABLE;struct stat st;if(fstatat(fd,name,&st,AT_SYMLINK_NOFOLLOW)!=0)return io_error();*out=stamp_of(&st);return PF_OK;
+}
+PFResult pf_native_writer_snapshot(PFWriteTxn *t,unsigned role,PFSnapshot **out) {
+ if(!out)return PF_INVALID;*out=NULL;if(!t||role>4)return PF_INVALID;
+ PFResult r=current(t);if(r!=PF_OK)return r;
+ const char *name=NULL;int fd=t->hold_fd;
+ if(role==0){fd=pf_native_parent_fd(t->parent);name=pf_native_leaf(t->parent);}
+ else if(role==1)name="after";else if(role==2)name="undo-stage";else if(role==3)name="undo-displaced";else name="snapshot-before";
+ if(fd<0)return PF_UNAVAILABLE;
+ return pf_snapshot_native(t->parent,fd,name,t->recipe,out);
 }
 static PFResult integrity(PFWriteTxn *t) {
   if (!t->sequence) return PF_OK;
@@ -520,13 +550,14 @@ static PFResult before_current(PFWriteTxn *t) {
 PFResult pf_writer_apply(PFWriteTxn *t, PFWriteReceipt *out) {
   if (out) memset(out, 0, sizeof(*out));
   if (!t || !out || t->apply_attempted || t->poisoned) return PF_INVALID;
-  t->apply_attempted = 1; t->start = now_ns();
+  t->apply_attempted = 1; if (!t->production_gate) t->start = now_ns();
+  if (t->production_gate && !t->apply_intent_ready) return PF_INVALID;
   PFResult r = before_current(t);
   if (r == PF_OK && t->receipt.phase == PF_WRITE_NOOP) { *out = t->receipt; return PF_OK; }
   PFWriteMeta stage;
   if (r == PF_OK) r = observe(t, t->hold_fd, "after", &stage, NULL);
   if (r == PF_OK && !full_equal(&stage, &t->stage_meta)) r = PF_CHANGED;
-  if (r == PF_OK) r = record(t, PF_WRITE_APPLY_INTENT, PF_OK, 0, NULL, NULL);
+  if (r == PF_OK && !t->apply_intent_ready) r = record(t, PF_WRITE_APPLY_INTENT, PF_OK, 0, NULL, NULL);
   if (r == PF_OK) r = before_current(t);
   if (r == PF_OK) r = observe(t, t->hold_fd, "after", &stage, NULL);
   if (r == PF_OK && !full_equal(&stage, &t->stage_meta)) r = PF_CHANGED;
@@ -570,14 +601,17 @@ static PFResult after_current(PFWriteTxn *t, PFWriteMeta *target, PFWriteMeta *d
 PFResult pf_writer_undo(PFWriteTxn *t, PFWriteReceipt *out) {
   if (out) memset(out, 0, sizeof(*out));
   if (!t || !out || t->undo_attempted || t->poisoned || (t->receipt.phase != PF_WRITE_APPLIED && t->receipt.phase != PF_WRITE_NOOP)) return PF_INVALID;
-  t->undo_attempted = 1; t->start = now_ns();
+  t->undo_attempted = 1; if (!t->production_gate) t->start = now_ns();
+  if (t->production_gate && !t->undo_intent_ready) return PF_INVALID;
   if (t->receipt.phase == PF_WRITE_NOOP) {
     PFResult r = before_current(t); if (r == PF_OK) *out = t->receipt; return r;
   }
   PFWriteMeta target = {0}, displaced = {0}, undo = {0};
   PFResult r = after_current(t, &target, &displaced);
-  if (r == PF_OK && t->receipt.existed) r = stage_file(t, "undo-stage", t->before, t->before_size, 1, 1, &undo);
-  if (r == PF_OK) r = record(t, PF_WRITE_UNDO_INTENT, PF_OK, 0, &target, &displaced);
+  if (r == PF_OK && t->receipt.existed && !t->undo_intent_ready) r = stage_file(t, "undo-stage", t->before, t->before_size, 1, 1, &undo);
+  if (r == PF_OK && t->receipt.existed && t->undo_intent_ready) undo = t->restored_meta;
+  if (r == PF_OK && t->receipt.existed && !t->undo_intent_ready) t->restored_meta = undo;
+  if (r == PF_OK && !t->undo_intent_ready) r = record(t, PF_WRITE_UNDO_INTENT, PF_OK, 0, &target, &displaced);
   if (r == PF_OK) r = after_current(t, &target, &displaced);
   if (r == PF_OK && t->receipt.existed) {
     PFWriteMeta staged;
@@ -617,10 +651,100 @@ PFResult pf_writer_undo(PFWriteTxn *t, PFWriteReceipt *out) {
   else { t->restored_meta = actual; t->undo_displaced_meta = removed; }
   receipt(t, r == PF_OK ? PF_WRITE_UNDONE : PF_WRITE_CONFLICT, r, 1, &actual, &removed, out); return r;
 }
+static int generated_hold(const char name[PF_WRITER_HOLD_ID_BYTES]) {
+ const size_t prefix=sizeof(PF_HOLD_PREFIX)-1,n=prefix+32;
+ if(memcmp(name,PF_HOLD_PREFIX,prefix)||name[n]!=0)return 0;
+ for(size_t i=prefix;i<n;i++)if(!((name[i]>='0'&&name[i]<='9')||(name[i]>='a'&&name[i]<='f')))return 0;
+ for(size_t i=n+1;i<PF_WRITER_HOLD_ID_BYTES;i++)if(name[i])return 0;
+ return 1;
+}
+/* This constructor is reachable only through an authenticated fresh local
+ * grant. Names/records/checksums alone cannot call it over the transport. */
+PFResult pf_native_writer_recover(PFRoot *root,const PFNativeWriterState *anchor,const PFSnapshot *before,uint64_t cutoff,PFWriteTxn **out) {
+ if(!out)return PF_INVALID;*out=NULL;
+ if(!anchor||!before||anchor->recipe!=before->recipe||anchor->recipe<1||anchor->recipe>3||anchor->record_count<1||anchor->record_count>PF_NATIVE_RECORDS||!generated_hold(anchor->hold_id)||memcmp(anchor->hold_id,anchor->receipt.hold_id,PF_WRITER_HOLD_ID_BYTES)||!anchor->hold.inode||cutoff<=now_ns())return PF_INVALID;
+ if(anchor->receipt.existed!=before->exists||memcmp(&anchor->before,&before->meta,sizeof(anchor->before)))return PF_INVALID;
+ PFWriteTxn *t=calloc(1,sizeof(*t));if(!t)return PF_IO;t->hold_fd=-1;t->start=now_ns();t->production_gate=1;t->production_cutoff=cutoff;t->recipe=anchor->recipe;t->receipt=anchor->receipt;
+ PFResult r=pf_native_parent_open(root,t->recipe,&t->parent);PFBindingSet binding;
+ if(r==PF_OK)r=pf_snapshot_bindings(t->parent,&binding);if(r==PF_OK&&memcmp(&binding,&before->bindings,sizeof(binding)))r=PF_CHANGED;
+ struct stat st;if(r==PF_OK&&fstat(pf_native_profile_fd(t->parent),&st)==0)t->profile_identity=stamp_of(&st);else if(r==PF_OK)r=PF_IO;
+ if(r==PF_OK&&!identity_equal(&t->profile_identity,&anchor->profile))r=PF_CHANGED;
+ if(r==PF_OK&&fstat(pf_native_parent_fd(t->parent),&st)==0)t->parent_identity=stamp_of(&st);else if(r==PF_OK)r=PF_IO;
+ if(r==PF_OK&&!identity_equal(&t->parent_identity,&anchor->parent))r=PF_CHANGED;
+ memcpy(t->hold_id,anchor->hold_id,sizeof(t->hold_id));t->hold_identity=anchor->hold;t->hold_binding=anchor->hold_binding;
+ if(r==PF_OK){t->hold_fd=openat(pf_native_profile_fd(t->parent),t->hold_id,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);if(t->hold_fd<0)r=io_error();}
+ if(r==PF_OK)r=current(t);
+ t->before_meta=before->meta;t->stage_meta=anchor->stage;t->before_size=(size_t)before->meta.stamp.size;t->after_size=(size_t)anchor->stage.stamp.size;
+ if(r==PF_OK){t->before=calloc(t->before_size+1,1);t->after=calloc(t->after_size+1,1);if(!t->before||!t->after)r=PF_IO;else memcpy(t->before,before->bytes,t->before_size);}
+ if(r==PF_OK){t->before_acl=before->acl_tag?acl_copy_int_native(before->acl):acl_init(0);if(!t->before_acl)r=PF_IO;memcpy(t->before_attrs,before->attrs,sizeof(t->before_attrs));}
+ for(unsigned i=0;r==PF_OK&&i<2;i++){
+  PFWriteMeta observed;r=observe(t,t->hold_fd,i?"snapshot-after":"snapshot-before",&observed,NULL);if(r==PF_OK&&!full_equal(&observed,&anchor->snapshots[i]))r=PF_CHANGED;else if(r==PF_OK)t->snapshots[i]=observed;
+ }
+ if(r==PF_OK){PFSnapshot *after=NULL;r=pf_snapshot_native(t->parent,t->hold_fd,"snapshot-after",t->recipe,&after);if(r==PF_OK&&(after->meta.stamp.size!=t->after_size||memcmp(after->meta.hash,anchor->stage.hash,32)))r=PF_CHANGED;if(r==PF_OK)memcpy(t->after,after->bytes,t->after_size);pf_snapshot_close(after);}
+ for(unsigned i=0;r==PF_OK&&i<PF_NATIVE_RECORDS;i++){
+  char name[32];(void)snprintf(name,sizeof(name),"record-%02u.bin",i);PFWriteMeta observed;PFResult found=observe(t,t->hold_fd,name,&observed,NULL);
+  if(found==PF_UNAVAILABLE){if(i<anchor->record_count)r=PF_CHANGED;break;}
+  if(found!=PF_OK){r=found;break;}
+  if((observed.stamp.mode&07777)!=0600||observed.stamp.size!=sizeof(PFNativeRecord)){r=PF_UNSAFE;break;}
+  if(i<anchor->record_count&&!full_equal(&observed,&anchor->records[i])){r=PF_CHANGED;break;}
+  int fd=openat(t->hold_fd,name,O_RDONLY|O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC);if(fd<0){r=io_error();break;}
+  PFNativeRecord record_bytes;r=read_exact(t,fd,(unsigned char *)&record_bytes,sizeof(record_bytes));close(fd);
+  unsigned char checksum[32];digest(&record_bytes,offsetof(PFNativeRecord,checksum),checksum);
+  if(r==PF_OK&&(memcmp(record_bytes.magic,"PFWRTR01",8)||record_bytes.schema!=1||record_bytes.bytes!=sizeof(record_bytes)||record_bytes.recipe!=(unsigned)t->recipe||record_bytes.sequence!=i||record_bytes.phase<PF_WRITE_PREPARED||record_bytes.phase>PF_WRITE_UNKNOWN||record_bytes.result>PF_UNSUPPORTED||memcmp(checksum,record_bytes.checksum,32)||memcmp(record_bytes.hold_id,t->hold_id,sizeof(t->hold_id))))r=PF_UNSAFE;
+  wipe(&record_bytes,sizeof(record_bytes));if(r==PF_OK){t->records[i]=observed;t->sequence=i+1;}
+ }
+ /* Reject unknown names, gaps or unsafe extras without traversing children. */
+ if(r==PF_OK){int fd=openat(t->hold_fd,".",O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);DIR *d=fd<0?NULL:fdopendir(fd);if(!d){if(fd>=0)close(fd);r=PF_IO;}else{struct dirent *e;unsigned count=0;errno=0;while((e=readdir(d))!=NULL){if(!strcmp(e->d_name,".")||!strcmp(e->d_name,".."))continue;if(++count>16){r=PF_TOO_LARGE;break;}int known=!strcmp(e->d_name,"after")||!strcmp(e->d_name,"snapshot-before")||!strcmp(e->d_name,"snapshot-after")||!strcmp(e->d_name,"undo-stage")||!strcmp(e->d_name,"undo-displaced");for(unsigned i=0;!known&&i<t->sequence;i++){char n[32];(void)snprintf(n,sizeof(n),"record-%02u.bin",i);known=!strcmp(n,e->d_name);}if(!known){r=PF_UNSAFE;break;}errno=0;}if(r==PF_OK&&errno)r=PF_IO;closedir(d);}}
+ PFWriteMeta target={0},displaced={0},removed={0};int already_undone=0;
+ if(r==PF_OK){PFResult observed=observe(t,pf_native_parent_fd(t->parent),pf_native_leaf(t->parent),&target,NULL);
+  /* Only authenticated restore-stage identity authorizes this classification;
+   * unsealed tail records never make an Undo stage trusted. */
+  if(anchor->restore_stage.stamp.inode&&before->exists&&observed==PF_OK&&moved_equal(&target,&anchor->restore_stage)){
+   r=observe(t,t->hold_fd,"undo-stage",&removed,NULL);if(r==PF_OK&&!moved_equal(&removed,&anchor->accepted_after))r=PF_CHANGED;already_undone=r==PF_OK;
+  }else if(!before->exists&&observed==PF_UNAVAILABLE&&anchor->receipt.phase>=PF_WRITE_UNDO_INTENT){
+   r=observe(t,t->hold_fd,"undo-displaced",&removed,NULL);if(r==PF_OK&&!moved_equal(&removed,&anchor->accepted_after))r=PF_CHANGED;already_undone=r==PF_OK;
+  }else{
+   r=observed;if(r==PF_OK){if(anchor->accepted_after.stamp.inode){if(!full_equal(&target,&anchor->accepted_after))r=PF_CHANGED;}else if(!moved_equal(&target,&anchor->stage))r=PF_CHANGED;}
+  }
+ }
+ if(r==PF_OK&&before->exists){r=observe(t,t->hold_fd,"after",&displaced,NULL);if(r==PF_OK&&!moved_equal(&displaced,&before->meta))r=PF_CHANGED;}
+ if(r==PF_OK&&!already_undone&&anchor->restore_stage.stamp.inode){
+  PFWriteMeta staged;r=observe(t,t->hold_fd,"undo-stage",&staged,NULL);if(r==PF_OK&&!full_equal(&staged,&anchor->restore_stage))r=PF_CHANGED;
+  if(r==PF_OK){t->restored_meta=staged;t->undo_intent_ready=1;t->recovered_undo_ready=1;}
+ }
+ if(r==PF_OK&&!already_undone&&t->sequence>PF_NATIVE_RECORDS-2)r=PF_TOO_LARGE;
+ if(r==PF_OK){t->after_meta=already_undone?anchor->accepted_after:target;t->apply_attempted=1;
+  if(already_undone){t->restored_meta=target;t->undo_displaced_meta=removed;t->undo_attempted=1;receipt(t,PF_WRITE_UNDONE,PF_OK,1,&target,&removed,NULL);}
+  else receipt(t,PF_WRITE_APPLIED,PF_OK,1,&target,&displaced,NULL);
+  r=current(t);
+ }
+ if(r!=PF_OK){pf_writer_close(t);return r;}*out=t;return PF_OK;
+}
+PFResult pf_native_writer_intent(PFWriteTxn *t,unsigned action,PFNativeWriterState *out) {
+ if(out)memset(out,0,sizeof(*out));if(!t||!out||!t->production_gate||t->poisoned||(action!=1&&action!=2))return PF_INVALID;
+ PFResult r;
+ if(action==1){
+  if(t->apply_attempted||t->apply_intent_ready)return PF_INVALID;
+  r=before_current(t);PFWriteMeta stage;
+  if(r==PF_OK&&t->receipt.phase!=PF_WRITE_NOOP)r=observe(t,t->hold_fd,"after",&stage,NULL);
+  if(r==PF_OK&&t->receipt.phase!=PF_WRITE_NOOP&&!full_equal(&stage,&t->stage_meta))r=PF_CHANGED;
+  if(r==PF_OK&&t->receipt.phase!=PF_WRITE_NOOP)r=record(t,PF_WRITE_APPLY_INTENT,PF_OK,0,NULL,NULL);
+  if(r==PF_OK){t->apply_intent_ready=1;receipt(t,t->receipt.phase==PF_WRITE_NOOP?PF_WRITE_NOOP:PF_WRITE_APPLY_INTENT,PF_OK,0,NULL,NULL,NULL);}
+ }else{
+  if(t->undo_attempted||t->receipt.phase!=PF_WRITE_APPLIED)return PF_INVALID;
+  if(t->undo_intent_ready){if(!t->recovered_undo_ready)return PF_INVALID;t->recovered_undo_ready=0;PFWriteMeta a,b,u;r=after_current(t,&a,&b);if(r==PF_OK&&t->receipt.existed){r=observe(t,t->hold_fd,"undo-stage",&u,NULL);if(r==PF_OK&&!full_equal(&u,&t->restored_meta))r=PF_CHANGED;}if(r!=PF_OK){t->poisoned=1;return r;}return pf_native_writer_state(t,out);}
+  PFWriteMeta target,displaced,undo;r=after_current(t,&target,&displaced);
+  if(r==PF_OK&&t->receipt.existed)r=stage_file(t,"undo-stage",t->before,t->before_size,1,1,&undo);
+  if(r==PF_OK&&t->receipt.existed)t->restored_meta=undo;
+  if(r==PF_OK)r=record(t,PF_WRITE_UNDO_INTENT,PF_OK,0,&target,&displaced);
+  if(r==PF_OK){if(t->receipt.existed)t->restored_meta=undo;t->undo_intent_ready=1;}
+ }
+ if(r!=PF_OK){t->poisoned=1;return r;}return pf_native_writer_state(t,out);
+}
 PFResult pf_writer_check(PFWriteTxn *t, PFWriteReceipt *out) {
   if (out) memset(out, 0, sizeof(*out));
   if (!t || !out) return PF_INVALID;
-  t->start = now_ns(); PFResult r = current(t);
+  if (!t->production_gate) t->start = now_ns(); PFResult r = current(t);
   if (r == PF_OK) r = integrity(t);
   PFWriteMeta target = {0}, displaced = {0};
   if (r == PF_OK && t->receipt.phase == PF_WRITE_APPLIED) r = after_current(t, &target, &displaced);
@@ -647,4 +771,12 @@ PFResult pf_writer_apply(PFWriteTxn *t, PFWriteReceipt *o) { (void)t; if (o) mem
 PFResult pf_writer_undo(PFWriteTxn *t, PFWriteReceipt *o) { (void)t; if (o) memset(o, 0, sizeof(*o)); return PF_UNSUPPORTED; }
 PFResult pf_writer_check(PFWriteTxn *t, PFWriteReceipt *o) { (void)t; if (o) memset(o, 0, sizeof(*o)); return PF_UNSUPPORTED; }
 void pf_writer_close(PFWriteTxn *t) { (void)t; }
+PFResult pf_native_writer_prepare_observed(PFRoot *r,PFRecipe p,const PFStamp *e,PFByteView b,PFByteView a,uint64_t c,PFWriteTxn **o,PFNativeWriterState *s){(void)r;(void)p;(void)e;(void)b;(void)a;(void)c;if(o)*o=NULL;if(s)memset(s,0,sizeof(*s));return PF_UNSUPPORTED;}
+PFResult pf_native_writer_state(PFWriteTxn *t,PFNativeWriterState *s){(void)t;if(s)memset(s,0,sizeof(*s));return PF_UNSUPPORTED;}
+PFResult pf_native_writer_intent(PFWriteTxn *t,unsigned a,PFNativeWriterState *s){(void)t;(void)a;if(s)memset(s,0,sizeof(*s));return PF_UNSUPPORTED;}
+PFResult pf_native_writer_snapshot(PFWriteTxn *t,unsigned r,PFSnapshot **o){(void)t;(void)r;if(o)*o=NULL;return PF_UNSUPPORTED;}
+PFResult pf_native_writer_current(PFWriteTxn *t){(void)t;return PF_UNSUPPORTED;}
+PFResult pf_native_writer_restrict_cutoff(PFWriteTxn *t,uint64_t c){(void)t;(void)c;return PF_UNSUPPORTED;}
+PFResult pf_native_writer_stamp(PFWriteTxn *t,unsigned r,PFStamp *o){(void)t;(void)r;if(o)memset(o,0,sizeof(*o));return PF_UNSUPPORTED;}
+PFResult pf_native_writer_recover(PFRoot *r,const PFNativeWriterState *s,const PFSnapshot *b,uint64_t c,PFWriteTxn **o){(void)r;(void)s;(void)b;(void)c;if(o)*o=NULL;return PF_UNSUPPORTED;}
 #endif
