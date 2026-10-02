@@ -6,13 +6,85 @@
 #include <string.h>
 #include <wchar.h>
 #include <stddef.h>
+#include <winternl.h>
+
+NTSYSAPI NTSTATUS NTAPI NtSetInformationFile(HANDLE,PIO_STATUS_BLOCK,PVOID,ULONG,FILE_INFORMATION_CLASS);
+static BOOL WINAPI fx_flush(HANDLE);
+static NTSTATUS NTAPI fx_rename(HANDLE,PIO_STATUS_BLOCK,PVOID,ULONG,FILE_INFORMATION_CLASS);
+static HANDLE WINAPI fx_pipe(LPCWSTR,DWORD,DWORD,DWORD,DWORD,DWORD,DWORD,LPSECURITY_ATTRIBUTES);
+static DWORD WINAPI fx_security(HANDLE,SE_OBJECT_TYPE,SECURITY_INFORMATION,PSID *,PSID *,PACL *,PACL *,PSECURITY_DESCRIPTOR *);
 
 /* Production is also compiled separately by CI. Only this driver interposes
  * WriteFile; normal calls still reach the real kernel. */
 static BOOL WINAPI fx_write(HANDLE,LPCVOID,DWORD,LPDWORD,LPOVERLAPPED);
 #define WriteFile fx_write
+#define FlushFileBuffers fx_flush
+#define NtSetInformationFile fx_rename
+#define CreateNamedPipeW fx_pipe
+#define GetSecurityInfo fx_security
+/* SDK declarations were loaded above. Only the production module's repeated
+ * NT declaration must bind our local interposer in this driver translation. */
+#pragma push_macro("NTSYSAPI")
+#undef NTSYSAPI
+#define NTSYSAPI
 #include "owned-foundation.c"
+#pragma pop_macro("NTSYSAPI")
 #undef WriteFile
+#undef FlushFileBuffers
+#undef NtSetInformationFile
+#undef CreateNamedPipeW
+#undef GetSecurityInfo
+static BOOL diagnosticActive=FALSE;
+static DWORD diagnosticPhase=0,diagnosticError=0,flushCalls=0,renameCalls=0,pipeCalls=0;
+static NTSTATUS renameStatus=0;
+static void diagnostic_failure(DWORD phase,DWORD error) {
+    if(diagnosticActive && !diagnosticPhase) { diagnosticPhase=phase; diagnosticError=error; }
+}
+static BOOL WINAPI fx_flush(HANDLE file) {
+    BOOL ok=FlushFileBuffers(file);
+    if(diagnosticActive) flushCalls++;
+    if(!ok) diagnostic_failure(10,GetLastError());
+    return ok;
+}
+static NTSTATUS NTAPI fx_rename(HANDLE file,PIO_STATUS_BLOCK io,PVOID info,ULONG size,FILE_INFORMATION_CLASS kind) {
+    NTSTATUS status=NtSetInformationFile(file,io,info,size,kind);
+    if(diagnosticActive) { renameCalls++; renameStatus=status; }
+    if(status<0) diagnostic_failure(20,(DWORD)status);
+    return status;
+}
+static HANDLE WINAPI fx_pipe(LPCWSTR name,DWORD openMode,DWORD mode,DWORD instances,DWORD output,DWORD input,DWORD timeout,LPSECURITY_ATTRIBUTES security) {
+    HANDLE pipe=CreateNamedPipeW(name,openMode,mode,instances,output,input,timeout,security);
+    if(diagnosticActive) pipeCalls++;
+    if(pipe==INVALID_HANDLE_VALUE) diagnostic_failure(30,GetLastError());
+    return pipe;
+}
+static DWORD WINAPI fx_security(HANDLE handle,SE_OBJECT_TYPE type,SECURITY_INFORMATION info,PSID *owner,PSID *group,PACL *acl,PACL *sacl,PSECURITY_DESCRIPTOR *security) {
+    DWORD result=GetSecurityInfo(handle,type,info,owner,group,acl,sacl,security);
+    if(result!=ERROR_SUCCESS) diagnostic_failure(40,result);
+    return result;
+}
+static void diagnostic_reset(void) {
+    diagnosticPhase=0; diagnosticError=0; flushCalls=0; renameCalls=0; pipeCalls=0; renameStatus=0; diagnosticActive=TRUE;
+}
+static void diagnostic_report(DWORD operation,DWORD result,DWORD effect,DWORD savedError) {
+    diagnosticActive=FALSE;
+    printf("# foundation operation=%lu result=%lu effect=%lu phase=%lu status=%lu ntstatus=%08lx flushes=%lu renames=%lu pipes=%lu\n",
+        (unsigned long)operation,(unsigned long)result,(unsigned long)effect,(unsigned long)diagnosticPhase,
+        (unsigned long)diagnosticError,(unsigned long)renameStatus,(unsigned long)flushCalls,(unsigned long)renameCalls,(unsigned long)pipeCalls);
+    SetLastError(savedError);
+}
+static PFOPublication fx_publish(PFOAuthority *a,PFFileRole role,const BYTE *bytes,DWORD length) {
+    PFOPublication receipt; DWORD error;
+    diagnostic_reset(); receipt=pfo_publish(a,role,bytes,length); error=GetLastError();
+    diagnostic_report(1,(DWORD)receipt.result,(DWORD)receipt.effect,error); return receipt;
+}
+static PFOResult fx_control_begin(PFOAuthority *a,HANDLE process,PFOControl **out) {
+    PFOResult result; DWORD error;
+    diagnostic_reset(); result=pfo_control_begin(a,process,out); error=GetLastError();
+    diagnostic_report(2,(DWORD)result,0,error); return result;
+}
+#define pfo_publish fx_publish
+#define pfo_control_begin fx_control_begin
 static DWORD faultMode=0;
 static BOOL faultObserved=FALSE;
 static HANDLE faultRoot=INVALID_HANDLE_VALUE;
