@@ -44,6 +44,15 @@ test('team session sharing discloses history, viewer, provider-account and prese
   assert.match(entry, /short code added when two people/);
 });
 
+test('no disclosure bullet is duplicated, and messaging says team targets are not live', () => {
+  const heads = [...privacy.matchAll(/^- \*\*(.+?)\*\* <!-- flow:/gm)].map((m) => m[1]);
+  const dup = heads.filter((h, i) => heads.indexOf(h) !== i);
+  assert.deepEqual(dup, [], `duplicated bullets: ${dup.join(' | ')}`);
+  const msg = privacy.split('\n').find((l) => l.includes('flow:session-messaging'));
+  assert.match(msg, /team messaging targets are not live yet/);
+  assert.doesNotMatch(privacy, /same account/i);
+});
+
 test('the renderer escapes HTML', () => {
   assert.equal(render('a <script>x</script>'), '<p>a &lt;script&gt;x&lt;/script&gt;</p>');
 });

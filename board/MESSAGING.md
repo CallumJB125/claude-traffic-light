@@ -211,6 +211,10 @@ handed a response.
   The app (`main.js`, via `src/interaction-host-sync.js` `attach`) runs the receiver only while
   the "use sessions on this Mac" hosting preference is on and the host is connected, with a
   token getter (refreshed sign-ins are used), and stops it before hosting is turned off, on
-  sign-out, account switch, revoke (401/403) and quit. A session is team-scoped only while this
-  Mac's team-sharing record (`host.shared()`) shares it with `interact`; otherwise personal.
+  sign-out, account switch, revoke (401/403) and quit, and when the host is replaced or held.
+  A session would be team-scoped only while this Mac's team-sharing record (`host.shared()`)
+  shares it with `interact`; otherwise personal. **In the wired app today every target is
+  personal:** the receiver offers only the remote host's own sessions (those started through
+  hosting), and team sharing applies only to Overview sessions, so no session the receiver
+  offers is ever shared. Team targets are not live until the two are joined.
   Hosting off ⇒ nothing changes.
