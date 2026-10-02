@@ -1,0 +1,55 @@
+'use strict';
+const content = document.getElementById('content'), status = document.getElementById('status');
+const activity = document.getElementById('activity-status');
+let generation = 0;
+const node = (tag, text, className) => { const el = document.createElement(tag); if (text) el.textContent = text; if (className) el.className = className; return el; };
+const age = value => value == null ? 'Age unknown' : value < 60_000 ? `${Math.floor(value / 1000)}s ago` : value < 3_600_000 ? `${Math.floor(value / 60_000)}m ago` : `${Math.floor(value / 3_600_000)}h ago`;
+function render(snapshot) {
+  content.replaceChildren();
+  const a = snapshot.activity;
+  activity.textContent = a?.observed ? `A Codex lifecycle event was received ${age(a.latest_age_ms).toLowerCase()}.`
+    : a?.configured === true ? 'Hooks are configured. No local lifecycle event is visible yet. Review the Plexiform hooks through Codex /hooks, then start a fresh turn.'
+      : a?.configured === false ? 'Codex activity is not configured for this copy of Plexiform. Open Activity settings to configure it, then review the hooks in Codex.'
+        : 'Codex hook configuration is unavailable. Check Activity settings.';
+  for (const item of snapshot.sessions ?? []) {
+    const section = node('section', '', 'session');
+    const heading = node('h2', `${item.provider} · ${item.project}`);
+    heading.append(node('span', item.freshness === 'recent' ? 'Recent' : item.freshness === 'stale' ? 'Stale' : 'Freshness unknown', 'freshness'));
+    section.append(heading, node('p', `${item.status} · ${age(item.age_ms)} · ${item.lifecycle ? 'Lifecycle report' : 'Local report'}`, 'muted'));
+    if (item.children?.length) {
+      const list = node('ul'); list.setAttribute('aria-label', 'Reported agents');
+      for (const child of item.children) list.append(node('li', `${child.label} · ${child.status}`));
+      section.append(list);
+    }
+    content.append(section);
+  }
+  if (!snapshot.sessions?.length) content.append(node('p', snapshot.status === 'unavailable' ? 'Local session reports are unavailable. Try Refresh.' : 'No local sessions are visible. Start activity in a connected tool, then Refresh.', 'muted'));
+  status.textContent = snapshot.status === 'unavailable' ? 'Local activity is unavailable. Try Refresh.'
+    : `Observed ${new Date(snapshot.observed_at).toLocaleTimeString()}. Refreshes every 5 seconds while this page is visible.${snapshot.omitted ? ` ${snapshot.omitted} additional reports exceed the display limit.` : ''}`;
+}
+async function refresh({ clear = false } = {}) {
+  const request = ++generation;
+  if (clear) { content.replaceChildren(); status.textContent = 'Checking local sessions…'; activity.textContent = 'Checking local activity…'; }
+  try {
+    const snapshot = await window.sessionsApi.state();
+    if (request !== generation || document.hidden) return;
+    if (!snapshot) throw new Error('unavailable');
+    render(snapshot);
+  } catch {
+    if (request === generation && !document.hidden) { content.replaceChildren(); activity.textContent = 'Codex activity is unavailable. Check Activity settings.'; status.textContent = 'Local activity is unavailable. Try Refresh.'; }
+  }
+}
+document.getElementById('refresh').addEventListener('click', () => refresh({ clear: true }));
+document.getElementById('settings').addEventListener('click', async event => {
+  event.currentTarget.disabled = true;
+  try { if (!await window.sessionsApi.settings()) status.textContent = 'Activity settings are unavailable. Try again from Preferences.'; }
+  catch { status.textContent = 'Activity settings are unavailable. Try again from Preferences.'; }
+  finally { document.getElementById('settings').disabled = false; }
+});
+document.addEventListener('visibilitychange', () => {
+  // A hidden page must not retain a status that appears current on return.
+  ++generation; content.replaceChildren(); status.textContent = 'Checking local sessions…'; activity.textContent = 'Checking local activity…';
+  if (!document.hidden) void refresh();
+});
+setInterval(() => { if (!document.hidden) void refresh(); }, 5000);
+if (!document.hidden) void refresh();
