@@ -523,11 +523,11 @@ export function createIntegrations({
       const authorize = () => { authority(); bound(); currentActor(first); };
       authorize();
       const via = { connection_id: c.id, member_id: first.id, name: conn.name, action: actName, external_ref, authorize };
-      const call = (body, fn, rules = [], pre = null) => {
+      const call = (body, fn, rules = [], pre = null, validateResult = null) => {
         if (!live()) return Promise.reject(new Error('this act() scope has ended'));
-        return track(callLive(body, fn, rules, pre));
+        return track(callLive(body, fn, rules, pre, validateResult));
       };
-      const callLive = async (body, fn, rules, pre) => {
+      const callLive = async (body, fn, rules, pre, validateResult) => {
         authorize();
         const member = actor(first.id);
         // Required so a handler retried after a timeout replays instead of acting twice (D8).
@@ -539,6 +539,7 @@ export function createIntegrations({
         const hit = hub.cachedResponse(member.id, rid);
         if (hit) {
           if (hit.status >= 400) { const { code, message, ...extra } = hit.body.error; throw new HubError(code, message, extra); }
+          validateResult?.(hit.body);
           return hit.body;
         }
         const cacheError = (e) => {
@@ -561,6 +562,9 @@ export function createIntegrations({
           cacheError(e);
           throw e;
         }
+        // Private observation results need a fresh fence after API awaits,
+        // before exposing/caching bytes. Ordinary call semantics are unchanged.
+        validateResult?.(out);
         hub.cacheResponse(member.id, rid, 200, out);
         return out;
       };
@@ -597,15 +601,33 @@ export function createIntegrations({
         // This primitive context cannot be supplied by HTTP/MCP request JSON.
         observeLink: (cardId, kind, externalId, patch, body = {}) => {
           if (conn.id !== 'sentry' || actName !== observationAction(kind) || subject != null || body.for_agent === true) throw new HubError('POLICY_DENIED', 'this action cannot observe a Sentry link');
+          const observationBody = Object.freeze({ ...body, for_agent: false });
+          const requestId = observationBody.request_id;
           const token = createObservation({ provider: conn.id, action: actName, connection_id: c.id, member_id: first.id,
-            user_id: first.user_id ?? null, card_id: cardId, kind, external_id: externalId, state: patch?.state, request_id: body.request_id });
+            user_id: first.user_id ?? null, card_id: cardId, kind, external_id: externalId, state: patch?.state, request_id: requestId });
           // Pre-cache too: a cached success cannot expose a removed/moved link.
-          writableCard(cardId);
-          const card = cardInOrg(cardId);
-          if (card?.archived_at || !db.get('SELECT 1 AS x FROM external_links WHERE connection_id=? AND card_id=? AND kind=? AND external_id=?', c.id, cardId, kind, externalId)) {
-            throw Object.assign(new HubError('NOT_FOUND', 'this integration has no live matching link'), { cacheable: false });
-          }
-          return call(body, m => api.comment(m, cardId, { ...body, for_agent: false }, { integrationObservation: token }));
+          const currentLink = () => {
+            try {
+              authorize();
+              writableCard(cardId);
+              const card = cardInOrg(cardId);
+              if (card?.archived_at || !db.get('SELECT 1 AS x FROM external_links WHERE connection_id=? AND card_id=? AND kind=? AND external_id=?', c.id, cardId, kind, externalId)) {
+                throw new HubError('NOT_FOUND', 'this integration has no live matching link');
+              }
+            } catch (e) { e.cacheable = false; throw e; }
+          };
+          const validate = out => {
+            currentLink();
+            // D8 and durable046 must both name this exact operation's owned
+            // untrusted non-agent comment on its requested card. A retarget
+            // never moves/replaces the original receipt or its effects.
+            const receipt = db.get('SELECT m.card_id, m.source, m.trusted, m.for_agent FROM integration_comment_requests r JOIN comments m ON m.id=r.comment_id WHERE r.connection_id=? AND r.request_id=? AND r.comment_id=?', c.id, requestId, out?.comment?.id ?? '');
+            if (!receipt || receipt.card_id !== cardId || receipt.source !== 'integration' || receipt.trusted !== 0 || receipt.for_agent !== 0) {
+              throw Object.assign(new HubError('CONFLICT', 'this observation request does not name its owned comment on this card'), { cacheable: false });
+            }
+          };
+          currentLink();
+          return call(observationBody, m => api.comment(m, cardId, observationBody, { integrationObservation: token }), [], null, validate);
         },
         action: (cardId, action, body = {}) => {
           if (!ALLOWED_ACTIONS.has(action)) throw new HubError('POLICY_DENIED', 'an integration may only cancel, stop or approve; a person does the rest from the card');
