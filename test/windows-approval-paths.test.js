@@ -87,3 +87,14 @@ test('missing Windows drive-root leaf resolves the root rather than its per-driv
   const verdict = read('C:/new.txt', { realpath: p => { seen.push(p); if (p.endsWith('/new.txt')) throw Object.assign(Error('missing'), { code: 'ENOENT' }); return p; } });
   assert.equal(verdict.blocked, false); assert.deepEqual(seen, ['C:/new.txt', 'C:/']);
 });
+
+test('implicit Windows Grep directory gets the same resolved credential check as explicit paths', () => {
+  for (const resolved of ['C:/Users/fixture/.ssh', 'C:/Users/fixture/.config/gh', '//?/C:/Users/fixture/.ssh']) {
+    assert.ok(allowListReason({ toolName: 'Grep', toolInput: { pattern: 'synthetic' }, cwd }, { home, realpath: () => resolved }));
+  }
+});
+test('implicit Windows Grep refuses relative UNC and opaque volume resolver results', () => {
+  for (const resolved of ['relative/unbound', '//server/share/project', '//?/Volume{opaque}/project']) {
+    assert.ok(allowListReason({ toolName: 'Grep', toolInput: { pattern: 'synthetic' }, cwd }, { home, realpath: () => resolved }));
+  }
+});

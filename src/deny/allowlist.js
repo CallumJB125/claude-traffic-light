@@ -113,6 +113,7 @@ function expansionReason(e) {
 const driveAbsolute = p => typeof p === 'string' && /^[a-z]:[\\/]/i.test(p);
 const windowsSpelling = p => typeof p === 'string' && /^(?:[a-z]:|\\|\/\/)/i.test(p);
 const windowsForm = p => p.replace(/\\/g, '/');
+const admittedWindowsResolution = p => typeof p === 'string' && (driveAbsolute(p) || /^\/\/\?\/[a-z]:\//i.test(p));
 function windowsPathReason(paths, cwd, home) {
   if (!driveAbsolute(cwd) && !paths.some(windowsSpelling)) return null;
   if (typeof cwd === 'string' && windowsSpelling(cwd) && !driveAbsolute(cwd)) return 'unsupported Windows session directory';
@@ -243,7 +244,7 @@ export function allowListReason({ toolName, toolInput, cwd }, { bashAllow = DEFA
     }
     const candidates = [input.file_path, input.path, input.notebook_path].filter(x => typeof x === 'string' && x);
     const checked = candidates.map(x => resolvedPath(x, dir, realpath));
-    if (windows && checked.some(x => typeof x !== 'string' || !(driveAbsolute(x) || /^\/\/\?\/[a-z]:\//i.test(x)))) return 'Windows path could not be checked';
+    if (windows && checked.some(x => !admittedWindowsResolution(x))) return 'Windows path could not be checked';
     const real = checked.filter(Boolean);
     if (windows && name === 'Grep') {
       const where = typeof input.path === 'string' && input.path ? input.path : '.';
@@ -255,7 +256,8 @@ export function allowListReason({ toolName, toolInput, cwd }, { bashAllow = DEFA
         const h = typeof home === 'string' ? cleanPath(windowsForm(home)).replace(/\/$/, '').toLowerCase() : null;
         return /^[a-z]:$/i.test(cleaned) || CREDENTIAL_PARENT.test(cleaned) || (h && (cleaned === h || h.startsWith(cleaned + '/')));
       };
-      if (!resolved) return 'Windows search path could not be checked';
+      if (!admittedWindowsResolution(resolved)) return 'Windows search path could not be checked';
+      if (isSecret(resolved)) return 'reads credentials through a symlink';
       if (broad(absolute) || broad(resolved)) return 'searches a Windows drive, home or a folder holding credentials';
     }
     return real.some(isSecret) ? 'reads credentials through a symlink' : null;
