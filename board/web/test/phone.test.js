@@ -238,6 +238,12 @@ test('controller: send, steer, busy, interrupt and close carry the session contr
   replies.push(() => 'network');
   assert.equal(await ctl.send('lost?'), false);
   assert.match(ctl.state.notice.text, /may not have been sent/);
+  // The link dropped with the send on the wire: outcome unknown, not "not reachable".
+  replies.push(() => ({ status: 408, body: { error: { code: 'TIMEOUT', message: 'The connection to that device dropped.', reason: 'OUTCOME_UNKNOWN' } } }));
+  assert.equal(await ctl.send('dropped?'), false);
+  assert.match(ctl.state.notice.text, /Outcome unknown/);
+  assert.match(ctl.state.notice.text, /Check the session/);
+  assert.doesNotMatch(ctl.state.notice.text, /not reachable/);
   replies.push(() => ok({ ok: true, status: 'closed' }));
   assert.equal(await ctl.close(), true);
   assert.deepEqual(api.calls.at(-1), { host: 'mac', op: 'close', args: { session: SID, generation: 1 } });

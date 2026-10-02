@@ -159,6 +159,8 @@ export function createController({ api, vault, now = Date.now, online = () => tr
   function failure(r) {
     if (r.status === 401) { signedOut(); return null; }
     const e = errorOf(r);
+    // Sent, then the link to the computer dropped or timed out: it may have happened.
+    if (e?.reason === 'OUTCOME_UNKNOWN') return 'Outcome unknown: your computer may have done this. Check the session before trying again.';
     if (r.status === 404) return 'That computer is not reachable. Check it is awake, signed in and sharing sessions.';
     if (r.status === 403) return msgOf(r, 'This phone is not allowed to use remote sessions.');
     if (r.status === 413) return 'That message is too long to send.';

@@ -58,6 +58,7 @@ const closed = (v, keys) => object(v) && Object.keys(v).every((k) => keys.includ
 const invalid = () => new HubError('VALIDATION', 'invalid interaction request');
 // Offline, foreign, revoked and unknown hosts all look the same: no oracle.
 const noHost = () => new HubError('NOT_FOUND', 'that device is not available');
+const outcomeUnknown = (why) => new HubError('TIMEOUT', `${why} The outcome is unknown: check the session state before trying again.`, { reason: 'OUTCOME_UNKNOWN' });
 const sameSecret = (a, b) => typeof a === 'string' && typeof b === 'string' && a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 
 export class InteractionRelay {
@@ -117,7 +118,9 @@ export class InteractionRelay {
     host.closed = true;
     clearTimeout(host.probing);
     if (this.hosts.get(host.cred.id) === host) this.hosts.delete(host.cred.id);
-    for (const p of host.pending.values()) { clearTimeout(p.timer); p.reject(noHost()); }
+    // A mutating op already on the wire may have happened: say the outcome is
+    // unknown (its request_id stays used). A read just failed: free its id.
+    for (const p of host.pending.values()) { clearTimeout(p.timer); p.lost(); }
     host.pending.clear();
     if (code) { try { host.ws.close(code, reason); } catch { /* gone */ } }
   }
@@ -223,12 +226,15 @@ export class InteractionRelay {
       const timer = setTimeout(() => {
         host.pending.delete(id);
         // A send the device finishes after this is not a failure: say so.
-        reject(MUTATING.has(body.op)
-          ? new HubError('TIMEOUT', 'That device did not answer in time. The outcome is unknown: check the session state before trying again.', { reason: 'OUTCOME_UNKNOWN' })
-          : new HubError('TIMEOUT', 'that device did not answer in time'));
+        reject(MUTATING.has(body.op) ? outcomeUnknown('That device did not answer in time.') : new HubError('TIMEOUT', 'that device did not answer in time'));
       }, this.limits.timeoutMs);
       timer.unref?.();
-      host.pending.set(id, { resolve, reject, timer });
+      const lost = () => {
+        if (MUTATING.has(body.op)) return reject(outcomeUnknown('The connection to that device dropped.'));
+        this.unburn(ident.user.id, body.request_id);
+        reject(noHost());
+      };
+      host.pending.set(id, { resolve, reject, timer, lost });
       try { host.ws.send(JSON.stringify(frame)); } catch { clearTimeout(timer); host.pending.delete(id); this.unburn(ident.user.id, body.request_id); reject(noHost()); }
     });
     // Revoked while the device was answering: the answer is not delivered.
