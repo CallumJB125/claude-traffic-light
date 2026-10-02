@@ -113,8 +113,7 @@ function createSessionMessagingHost({ baseUrl, token, fetch = globalThis.fetch, 
     const prior = seen.get(k1) ?? seen.get(k2);
     if (prior) {
       // Already handled here: repeat what is known, never send again.
-      if (prior === 'delivered') return report(m, 'delivered');
-      if (prior === 'sending') return report(m, 'unknown', { reason: 'duplicate' });
+      // A fresh lease means the hub saw no accepted receipt for it: refuse the copy.
       return report(m, 'rejected', { reason: 'duplicate' });
     }
     const before = local(m);

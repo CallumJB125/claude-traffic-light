@@ -516,7 +516,7 @@ export class Messaging {
           return { state: m.state };
         case 'delivered':
           // A late but real provider acknowledgement replaces an unknown outcome.
-          if (!inflight && m.state !== 'outcome_unknown') throw conflict();
+          if (!((m.state === 'queued' && m.phase === 'accepted') || m.state === 'outcome_unknown')) throw conflict();
           this.update(m, { state: 'delivered', phase: null, reason: null, delivered_at: this.at() });
           return { state: m.state };
         case 'replied': {
