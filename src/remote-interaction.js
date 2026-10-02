@@ -16,6 +16,14 @@
 // device's own desktop token. Every call carries a fresh request_id; the hub
 // refuses a replayed one.
 //
+// Hosting is opt-in per device: enable() sets this device's hub role to
+// 'host' (PUT /api/interaction/v1/role) and keeps one connection up, with
+// exponential backoff + jitter across network blips and hub restarts (4000).
+// It stops for good, and ends every remote session, when the hub refuses the
+// device (401/403, 4401/4403: revoked, signed out, account deleted) or the
+// connection stays down longer than idleReapMs. A 4409 REPLACED close is shown
+// (status().state 'replaced') and not fought over.
+//
 // Nothing here logs message text, responses or ids beyond the op name.
 const crypto = require('node:crypto');
 const { createInteractionHub } = require('./session-interaction');
@@ -23,6 +31,9 @@ const { createInteractionHub } = require('./session-interaction');
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const OPS = ['capabilities', 'list', 'state', 'launch', 'send', 'interrupt', 'close', 'watch'];
 const MAX_FRAME = 64 * 1024, MAX_REPLY = 700 * 1024, MAX_SEEN = 2048, WATCH_MAX_MS = 20_000;
+const MAX_HANDLING = 16, MAX_WATCHES = 8, MAX_TARGETS = 512;
+const RESUME_HEADER = 'x-plexiform-resume';
+const RETRY = { baseMs: 1000, maxMs: 60_000, idleReapMs: 15 * 60_000 };
 const object = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const closed = (v, keys) => object(v) && Object.keys(v).every((k) => keys.includes(k));
 const refuse = (status, error) => ({ ok: false, status, error });
@@ -32,22 +43,33 @@ const REFUSED = {
   replayed: refuse('stale', 'This request was already handled. Refresh and try again.'),
   tooLarge: refuse('unavailable', 'The session is too large to show remotely.'),
   unavailable: refuse('unavailable', 'The provider did not accept the message.'),
+  busy: refuse('unavailable', 'This computer is busy with other requests. Try again shortly.'),
 };
 
 // boardCurrent: remote sessions are not board-bound unless main says so.
-function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent = (b) => b === null, now, log = () => {} }) {
+function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent = (b) => b === null, now, log = () => {}, retry = {}, random = Math.random }) {
   if (typeof userId !== 'string' || !userId) throw new Error('a remote host needs the signed-in user id');
   const actor = `account:${userId}`;
   const versions = new Map(); // session -> change counter
   const watchers = new Set();
   const seen = new Map();     // relay id / (from, rid) -> true, bounded
+  const targets = new Set();  // every provider target seen here, current or replaced, bounded
+  const R = { ...RETRY, ...retry };
+  let handling = 0, watching = 0;
   const hub = createInteractionHub({
     adapters, workspace, boardCurrent, now,
     onEvent(a, state) {
       if (a !== actor) return;
+      remember(state.session);
       bump(state.session);
     },
   });
+  function remember(session) {
+    const t = hub.targetOf(session);
+    if (!t || targets.has(t)) return;
+    targets.add(t);
+    while (targets.size > MAX_TARGETS) targets.delete(targets.values().next().value);
+  }
   function bump(session) {
     versions.set(session, (versions.get(session) ?? 0) + 1);
     for (const w of [...watchers]) w();
@@ -69,8 +91,10 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
     };
     const first = read();
     if (!first.ok || first.version > args.after) return first;
+    if (watching >= MAX_WATCHES) return REFUSED.busy;
+    watching++;
     return new Promise((resolve) => {
-      const done = () => { watchers.delete(check); clearTimeout(timer); resolve(read()); };
+      const done = () => { watchers.delete(check); clearTimeout(timer); watching--; resolve(read()); };
       const check = () => { const v = versions.get(args.session) ?? 0; if (v > args.after || !hub.state({ session: args.session }, actor)) done(); };
       const timer = setTimeout(done, WATCH_MAX_MS);
       timer.unref?.();
@@ -91,9 +115,10 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
   }
 
   // A provider target (thread id) in an answer means a bug upstream: refuse
-  // rather than put it on the wire.
+  // rather than put it on the wire. Replaced targets count too.
   function leaksTarget(text) {
-    for (const s of hub.list(actor)) { const t = hub.targetOf(s.session); if (t && text.includes(t)) return true; }
+    for (const s of hub.list(actor)) remember(s.session);
+    for (const t of targets) if (text.includes(t)) return true;
     return false;
   }
 
@@ -103,53 +128,136 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
       || typeof frame.id !== 'string' || !UUID.test(frame.id) || typeof frame.rid !== 'string' || !UUID.test(frame.rid)
       || typeof frame.from !== 'string' || !frame.from || frame.from.length > 100 || !OPS.includes(frame.op) || !object(frame.args)) return REFUSED.invalid;
     if (frame.user !== userId) return REFUSED.forbidden;
+    if (handling >= MAX_HANDLING) return REFUSED.busy;
     if (!once(`id:${frame.id}`) || !once(`rid:${frame.from}:${frame.rid}`)) return REFUSED.replayed;
+    for (const x of hub.list(actor)) remember(x.session);
     let result;
-    try { result = await run(frame.op, frame.args); } catch { result = REFUSED.unavailable; }
+    handling++;
+    try { result = await run(frame.op, frame.args); } catch { result = REFUSED.unavailable; } finally { handling--; }
     const text = JSON.stringify(result);
     if (Buffer.byteLength(text) > MAX_REPLY) return REFUSED.tooLarge;
     if (leaksTarget(text)) { log(`[remote-interaction] ${frame.op}: answer withheld (provider id)`); return REFUSED.unavailable; }
     return result;
   }
 
+  let state = 'off', notice = null, resume = null, retryTimer = null, idleTimer = null, attempts = 0, running = null;
+  const reapRemote = () => hub.reap(() => false).catch(() => {});
+  function idleFrom() {
+    if (idleTimer || !running) return;
+    idleTimer = setTimeout(() => { idleTimer = null; reapRemote(); }, R.idleReapMs);
+    idleTimer.unref?.();
+  }
+  function stopRunning(next) {
+    running = null; state = next;
+    clearTimeout(retryTimer); retryTimer = null;
+    clearTimeout(idleTimer); idleTimer = null;
+  }
+
   /**
-   * Hosts over the hub's /ws/interaction-host with this device's desktop
-   * token. `WebSocket` is the `ws` constructor (headers are needed). Resolves
-   * once the hub's welcome names this host's own user; rejects otherwise.
+   * One connection over the hub's /ws/interaction-host with this device's
+   * desktop token. `WebSocket` is the `ws` constructor (headers are needed).
+   * Resolves once the hub's welcome names this host's own user; rejects
+   * otherwise (err.status: the hub's HTTP refusal, err.code: its close code).
    */
   function connect({ url, token, WebSocket }) {
     disconnect();
     return new Promise((resolve, reject) => {
-      const ws = new WebSocket(url, { headers: { authorization: `Bearer ${token}` }, maxPayload: MAX_FRAME }); // privacy-flow: remote-interaction
+      const headers = { authorization: `Bearer ${typeof token === 'function' ? token() : token}` };
+      if (resume) headers[RESUME_HEADER] = resume;
+      const ws = new WebSocket(url, { headers, maxPayload: MAX_FRAME }); // privacy-flow: remote-interaction
       socket = ws;
       let welcomed = false;
+      const fail = (msg, extra) => reject(Object.assign(new Error(msg), extra));
       ws.on('message', async (data, isBinary) => {
         let f;
         try { if (isBinary) throw new Error('binary'); f = JSON.parse(String(data)); } catch { ws.close(1008, 'bad frame'); return; }
         if (!welcomed) {
-          if (!closed(f, ['type', 'user', 'device']) || f.type !== 'relay.welcome' || f.user !== userId) { ws.close(1008, 'wrong account'); reject(new Error('The hub named a different account.')); return; }
-          welcomed = true; resolve({ device: f.device }); return;
+          if (!closed(f, ['type', 'user', 'device', 'resume']) || f.type !== 'relay.welcome' || f.user !== userId || typeof f.resume !== 'string') { ws.close(1008, 'wrong account'); fail('The hub named a different account.', { wrongAccount: true }); return; }
+          welcomed = true; resume = f.resume; resolve({ device: f.device }); return;
+        }
+        if (closed(f, ['type', 'kind']) && f.type === 'relay.notice') {
+          if (f.kind === 'replace-refused') { notice = 'Another connection tried to use this computer\'s sign-in and was refused.'; log('[remote-interaction] a second connection for this device was refused'); }
+          return;
         }
         const id = object(f) && typeof f.id === 'string' && UUID.test(f.id) ? f.id : null;
         if (!id) { ws.close(1008, 'bad frame'); return; }
         const result = await handle(f);
         if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'relay.reply', id, result }));
       });
-      ws.on('unexpected-response', (_req, res) => reject(new Error(`The hub refused this device (${res.statusCode}).`)));
+      ws.on('unexpected-response', (req, res) => { fail(`The hub refused this device (${res.statusCode}).`, { status: res.statusCode }); req.destroy?.(); });
       ws.on('close', (code) => {
-        if (socket === ws) socket = null;
-        if (!welcomed) reject(new Error(`The hub closed the connection (${code}).`));
+        if (socket !== ws) return;
+        socket = null;
+        if (!welcomed) fail(`The hub closed the connection (${code}).`, { code });
         // Signed out, revoked or account deleted: remote sessions end with it.
-        if (code === 4401 || code === 4403) hub.reap(() => false).catch(() => {});
+        if (code === 4401 || code === 4403) { reapRemote(); if (running) stopRunning('signed-out'); return; }
+        if (code === 4409) { if (running) { stopRunning('replaced'); log('[remote-interaction] replaced by another connection of this device; not reconnecting'); } return; }
+        if (running) { state = 'retrying'; idleFrom(); schedule(); }
       });
       ws.on('error', () => {});
     });
   }
+
+  function schedule() {
+    if (!running || retryTimer) return;
+    const cap = Math.min(R.maxMs, R.baseMs * 2 ** Math.min(attempts, 16));
+    const wait = Math.round(cap / 2 + random() * cap / 2);
+    attempts++;
+    retryTimer = setTimeout(() => { retryTimer = null; attempt(running); }, wait);
+    retryTimer.unref?.();
+  }
+
+  async function attempt(run) {
+    if (!run || run !== running) return;
+    state = attempts ? 'retrying' : 'connecting';
+    try {
+      await connect(run);
+      if (run !== running) return;
+      attempts = 0; state = 'connected';
+      clearTimeout(idleTimer); idleTimer = null;
+    } catch (e) {
+      if (run !== running) return;
+      if (e.status === 401 || e.status === 403 || e.wrongAccount) { reapRemote(); stopRunning(e.wrongAccount ? 'refused' : 'signed-out'); return; }
+      state = 'retrying'; idleFrom(); schedule();
+    }
+  }
+
+  /**
+   * Opt in and keep hosting: set this device's hub role to 'host', then stay
+   * connected. `token` may be a function (read per attempt, never kept).
+   */
+  async function enable({ baseUrl, url = `${baseUrl.replace(/^http/, 'ws')}/ws/interaction-host`, token, WebSocket, fetch = globalThis.fetch }) { // privacy-flow: remote-interaction
+    stopRunning('connecting');
+    const tok = typeof token === 'function' ? token() : token;
+    let res;
+    try { res = await fetch(`${baseUrl}/api/interaction/v1/role`, { method: 'PUT', headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json', accept: 'application/json' }, body: JSON.stringify({ role: 'host' }) }); } // privacy-flow: remote-interaction
+    catch { res = null; }
+    if (res && (res.status === 401 || res.status === 403)) { reapRemote(); state = 'signed-out'; return status(); }
+    attempts = 0; resume = null; notice = null;
+    running = { url, token, WebSocket };
+    if (!res || !res.ok) { state = 'retrying'; idleFrom(); schedule(); return status(); }
+    await attempt(running);
+    return status();
+  }
+
+  /** Opt out: back to 'client' on the hub, drop the connection, end remote sessions. */
+  async function disable({ baseUrl, token, fetch = globalThis.fetch } = {}) { // privacy-flow: remote-interaction
+    stopRunning('off');
+    disconnect();
+    resume = null;
+    await reapRemote();
+    if (!baseUrl || !token) return;
+    const tok = typeof token === 'function' ? token() : token;
+    if (!tok) return;
+    try { await fetch(`${baseUrl}/api/interaction/v1/role`, { method: 'PUT', headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json', accept: 'application/json' }, body: JSON.stringify({ role: 'client' }) }); } catch { /* the hub drops a stale host anyway */ } // privacy-flow: remote-interaction
+  }
+
+  function status() { return { state, notice, connected: socket?.readyState === 1 }; }
   function disconnect() { const ws = socket; socket = null; try { ws?.close(1000, 'bye'); } catch { /* gone */ } }
-  function close() { disconnect(); for (const w of [...watchers]) w(); hub.stopAll(); }
+  function close() { stopRunning('off'); disconnect(); for (const w of [...watchers]) w(); hub.stopAll(); }
 
   // `hub` is a main-only seam (tests and proof logs), never exposed remotely.
-  return { handle, connect, disconnect, close, hub, actor, connected: () => socket?.readyState === 1 };
+  return { handle, connect, enable, disable, status, disconnect, close, hub, actor, connected: () => socket?.readyState === 1 };
 }
 
 /** The other device's side: list hosts, then call ops on one. */

@@ -1090,7 +1090,10 @@ export function createUpgradeHandler({ hub, config, wss, authenticate }) {
       let auth;
       try { auth = await authenticate(req); } catch { return refuse(socket, 401, 'Unauthorized'); }
       if (auth.cred.kind !== 'device') return refuse(socket, 403, 'Forbidden');
-      return wss.handleUpgrade(req, socket, head, (ws) => hub.interactionRelay.attach(ws, auth));
+      // Host role (opted in on that device) and the live-connection replacement rule.
+      const no = hub.interactionRelay.admit(auth, req.headers);
+      if (no) return refuse(socket, ...no);
+      return wss.handleUpgrade(req, socket, head, (ws) => hub.interactionRelay.attach(ws, auth, req.headers));
     }
     if (pathname === WS_PATHS.runner) {
       const auth = await authenticateRunner(hub, req, { ip: clientIp(req, config) });
