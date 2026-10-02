@@ -232,8 +232,8 @@ int wmain(int argc,WCHAR **argv) {
     WCHAR emptyEnvironment[2]={0,0}; PFDirectory root; PFDirectoryIdentity identity={0},wrong={0};
     PFOAuthority *a=NULL; PFOControl *control=NULL; PFOPublication receipt;
     BYTE grant[PF_GRANT_BYTES],readback[PF_GRANT_BYTES]; DWORD readLength=0; PFFileStamp stamp;
-    HANDLE client=INVALID_HANDLE_VALUE,duplicate=INVALID_HANDLE_VALUE; STARTUPINFOW startup; PROCESS_INFORMATION child;
-    DWORD used=0; BYTE marker=42; BOOL childStarted=FALSE,rootCaptured=FALSE; PFOResult result;
+    HANDLE client=INVALID_HANDLE_VALUE,duplicate=INVALID_HANDLE_VALUE,expectedSelf=NULL; STARTUPINFOW startup; PROCESS_INFORMATION child;
+    DWORD used=0; BYTE marker=42; BOOL childStarted=FALSE,rootCaptured=FALSE,selfDuplicated=FALSE; PFOResult result;
     if(argc==2 && !wcscmp(argv[1],L"--fixture-wait")) { Sleep(3000); return 0; }
     if(argc!=1) return 2;
     puts("TAP version 13"); ZeroMemory(&root,sizeof(root)); ZeroMemory(&child,sizeof(child));
@@ -259,7 +259,11 @@ int wmain(int argc,WCHAR **argv) {
     check(pf_file_read(&root,L"connector.grant",PF_FILE_GRANT,&stamp,readback,PF_GRANT_BYTES,&readLength,&stamp)==PF_FILE_OK &&
         readLength==PF_GRANT_BYTES && !memcmp(readback,grant,readLength),"collision preserves original exact grant stamp and bytes");
     receipt=pfo_publish(a,PF_FILE_TASKS_TOKEN,grant,0); check(receipt.result==PFO_OK && receipt.effect==PFO_PUBLISHED,"zero-length fixed role is valid and private");
-    check(pfo_control_begin(a,GetCurrentProcess(),&control)==PFO_OK && control,"actual private control pipe begins with held process authority");
+    selfDuplicated=DuplicateHandle(GetCurrentProcess(),GetCurrentProcess(),GetCurrentProcess(),&expectedSelf,0,FALSE,DUPLICATE_SAME_ACCESS);
+    check(selfDuplicated && expectedSelf && expectedSelf!=INVALID_HANDLE_VALUE,"fixture duplicates current-process pseudo handle into genuine held process authority");
+    if(!selfDuplicated || !expectedSelf || expectedSelf==INVALID_HANDLE_VALUE) goto done;
+    check(pfo_control_begin(a,GetCurrentProcess(),&control)==PFO_UNAVAILABLE && !control,"current-process pseudo handle cannot satisfy held process authority");
+    check(pfo_control_begin(a,expectedSelf,&control)==PFO_OK && control,"actual private control pipe begins with held process authority");
     if(!control) goto done;
     check(pfo_close(a)==PFO_PENDING,"pending control keeps root authority from being freed");
     check(pfo_control_name(control,pipeName,PFO_PIPE_NAME)==PFO_OK,"native caller receives generated closed pipe name");
@@ -271,7 +275,7 @@ int wmain(int argc,WCHAR **argv) {
     check(client!=INVALID_HANDLE_VALUE && WriteFile(client,&marker,1,&used,NULL) && used==1,"actual client transfers synthetic byte on private pipe");
     if(client!=INVALID_HANDLE_VALUE) { CloseHandle(client); client=INVALID_HANDLE_VALUE; }
     check(close_control(control),"completed control closes only after observed operation completion"); control=NULL;
-    check(pfo_control_begin(a,GetCurrentProcess(),&control)==PFO_OK && control,"fresh control can begin after complete prior close");
+    check(pfo_control_begin(a,expectedSelf,&control)==PFO_OK && control,"fresh control can begin after complete prior close");
     if(control) { check(close_control(control),"unconnected pending control cancellation is observed before resources free"); control=NULL; }
     check(GetModuleFileNameW(NULL,self,MAX_PATH)>0 && swprintf_s(command,MAX_PATH+32,L"\"%s\" --fixture-wait",self)>0,"fixed owned fixture executable identity is available");
     ZeroMemory(&startup,sizeof(startup)); startup.cb=sizeof(startup);
@@ -296,6 +300,7 @@ done:
     if(client!=INVALID_HANDLE_VALUE) CloseHandle(client);
     if(control) check(close_control(control),"final owned control closes");
     if(a) check(pfo_close(a)==PFO_OK,"final authority closes");
+    if(expectedSelf && expectedSelf!=INVALID_HANDLE_VALUE) CloseHandle(expectedSelf);
     if(childStarted) { TerminateProcess(child.hProcess,0); check(WaitForSingleObject(child.hProcess,1000)==WAIT_OBJECT_0,"owned fixture child is reaped"); CloseHandle(child.hThread); CloseHandle(child.hProcess); }
     pf_directory_close(&root);
     if(rootCaptured) check(clean_root(rootPath,&identity),"only fresh identity-verified private fixture files and root are cleaned");
