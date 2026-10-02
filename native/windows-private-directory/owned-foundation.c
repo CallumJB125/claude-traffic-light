@@ -219,7 +219,10 @@ PFOResult pfo_control_poll(PFOControl *c) {
     if(c->pending) {
         if(!GetOverlappedResult(c->pipe,&c->connect,&bytes,FALSE)) {
             error=GetLastError(); if(error==ERROR_IO_INCOMPLETE) return PFO_PENDING;
-            c->pending=FALSE; c->refused=TRUE; return PFO_IO;
+            /* Only the documented completed-cancellation result retires
+             * pending storage. A query failure is not a completion receipt. */
+            if(error==ERROR_OPERATION_ABORTED) c->pending=FALSE;
+            c->refused=TRUE; return PFO_IO;
         }
         c->pending=FALSE; c->connected=TRUE;
     }
@@ -234,7 +237,7 @@ PFOResult pfo_control_close(PFOControl *c) {
         /* Never free/reuse OVERLAPPED storage while the kernel owns it. An
          * external helper deadline must terminate/reap a stuck operation. */
         CancelIoEx(c->pipe,&c->connect);
-        if(!GetOverlappedResult(c->pipe,&c->connect,&bytes,FALSE) && GetLastError()==ERROR_IO_INCOMPLETE) return PFO_PENDING;
+        if(!GetOverlappedResult(c->pipe,&c->connect,&bytes,FALSE) && GetLastError()!=ERROR_OPERATION_ABORTED) return PFO_PENDING;
         c->pending=FALSE;
     }
     CloseHandle(c->pipe); CloseHandle(c->event); CloseHandle(c->process); LocalFree(c->security);
