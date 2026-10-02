@@ -43,13 +43,25 @@ function browserFetch(base, seen) {
   };
 }
 
+// Every test is bounded: a refused host or a stuck poll fails fast, never hangs.
+const T = { timeout: 30_000 };
+
 async function rig() {
   const h = await startAccounts();
-  const mac = await h.signIn('alice@dev.local', { device_name: 'Alice Mac' });
-  assert.equal(mac.status, 200, mac.text);
-  const adapter = createCodexAppServer({ bin: FAKE });
-  const host = createRemoteInteractionHost({ userId: mac.body.user.id, adapters: { codex: adapter }, boardCurrent: (b) => b === null });
-  await host.connect({ url: `${h.base.replace('http', 'ws')}/ws/interaction-host`, token: mac.body.device_token, WebSocket });
+  let host = null;
+  try {
+    const mac = await h.signIn('alice@dev.local', { device_name: 'Alice Mac' });
+    assert.equal(mac.status, 200, mac.text);
+    const adapter = createCodexAppServer({ bin: FAKE });
+    host = createRemoteInteractionHost({ userId: mac.body.user.id, adapters: { codex: adapter }, boardCurrent: (b) => b === null, retry: { baseMs: 50, maxMs: 100 } });
+    // The Mac's explicit opt-in (role 'host'), then its connection: what the app does.
+    const st = await host.enable({ baseUrl: h.base, token: mac.body.device_token, WebSocket, fetch });
+    assert.equal(st.state, 'connected', JSON.stringify(st));
+    return rigOf(h, mac, host);
+  } catch (e) { host?.close(); await h.close(); throw e; }
+}
+
+function rigOf(h, mac, host) {
   const seen = [];
   const api = createApi({ fetch: browserFetch(h.base, seen), uuid: () => crypto.randomUUID(), origin: h.base });
   const vault = memVault();
@@ -57,7 +69,7 @@ async function rig() {
   return { h, mac, host, ctl, vault, seen, async close() { ctl.back(); ctl.back(); host.close(); await h.close(); } };
 }
 
-test('LOCAL PROOF: the hub serves the PWA shell with a strict CSP; the worker is scoped to /phone/', async () => {
+test('LOCAL PROOF: the hub serves the PWA shell with a strict CSP; the worker is scoped to /phone/', T, async () => {
   const h = await startAccounts({ config: { webDir: WEB } });
   try {
     const get = async (p) => { const r = await fetch(`${h.base}${p}`); return { status: r.status, type: r.headers.get('content-type'), csp: r.headers.get('content-security-policy'), text: await r.text() }; };
@@ -84,7 +96,7 @@ test('LOCAL PROOF: the hub serves the PWA shell with a strict CSP; the worker is
   } finally { await h.close(); }
 });
 
-test('LOCAL PROOF: a phone signs in by email code, sees the Mac, sends, reads the reply, steers, interrupts and closes', async () => {
+test('LOCAL PROOF: a phone signs in by email code, sees the Mac, sends, reads the reply, steers, interrupts and closes', T, async () => {
   const r = await rig();
   const { ctl } = r;
   try {
@@ -139,7 +151,7 @@ test('LOCAL PROOF: a phone signs in by email code, sees the Mac, sends, reads th
   } finally { await r.close(); }
 });
 
-test('HOSTILE: revoking the phone from the Mac signs it out on its next poll; a cross-origin page cannot drive the relay', async () => {
+test('HOSTILE: revoking the phone from the Mac signs it out on its next poll; a cross-origin page cannot drive the relay', T, async () => {
   const r = await rig();
   const { ctl } = r;
   try {
