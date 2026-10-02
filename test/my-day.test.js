@@ -85,13 +85,17 @@ test('production desktop source keeps signed-out hubs visibly unavailable and re
   p.launches.current = { ...p.launch }; assert.equal((await p.broker.snapshot()).status, 'changed');
 });
 test('production main My day handlers accept only the exact registered top-level local page', async () => {
-  const source = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8'), body = source.slice(source.indexOf('const MyDay = require('), source.indexOf('\nfunction openBuddy('));
+  const source = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8'), body = source.slice(source.indexOf('const MyDay = require('), source.indexOf('const SessionOverview = require(')) + source.slice(source.indexOf("ipcMain.handle('myday:state'"), source.indexOf('\nfunction openBuddy('));
   const handlers = new Map(), frame = {}, page = { mainFrame: frame };
   const context = { require: name => { assert.equal(name, './src/my-day-service.js'); return { createMyDayService: () => ({ snapshot: () => 'own snapshot', open: id => id === 'allowed-handle' }) }; }, buddyWin: { pageWebContents: id => id === 'myday' ? page : null }, ipcMain: { handle: (name, fn) => handlers.set(name, fn) }, localSessions: v => v, aggregateState: () => ({ sessions: [] }), BusyWatch: { status: () => null } };
   vm.createContext(context); vm.runInContext(body, context);
   assert.equal(handlers.get('myday:state')({ sender: page, senderFrame: frame }), 'own snapshot');
   assert.equal(handlers.get('myday:state')({ sender: page, senderFrame: {} }), null);
+  assert.equal(handlers.get('myday:state')({ sender: null, senderFrame: frame }), null);
   assert.equal(handlers.get('myday:state')({ sender: { mainFrame: frame }, senderFrame: frame }), null);
   assert.equal(handlers.get('myday:open')({ sender: page, senderFrame: frame }, 'allowed-handle'), true);
   assert.equal(handlers.get('myday:open')({ sender: page, senderFrame: frame }, 'https://renderer.example'), false);
+  context.buddyWin = { pageWebContents: () => ({ mainFrame: frame }) };
+  assert.equal(handlers.get('myday:state')({ sender: page, senderFrame: frame }), null);
+  assert.equal(handlers.get('myday:open')({ sender: page, senderFrame: frame }, 'allowed-handle'), false);
 });

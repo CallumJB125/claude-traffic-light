@@ -308,13 +308,20 @@ test('the shipped dependency list is an allow-list', () => {
   }
 });
 
-test('every window turns spellcheck off (it downloads dictionaries from Google on Windows/Linux)', () => {
-  let windows = 0;
+test('every BrowserWindow turns spellcheck off and every embedded session is covered by the offline policy', () => {
+  const windows = new Map();
   for (const f of files) {
     const src = fs.readFileSync(f, 'utf8');
     const n = (src.match(/new BrowserWindow\(/g) || []).length;
-    windows += n;
+    if (n) windows.set(rel(f), n);
     assert.equal((src.match(/spellcheck:\s*false/g) || []).length, n, `${rel(f)}: every new BrowserWindow needs webPreferences.spellcheck: false`);
   }
-  assert.ok(windows >= 6);
+  assert.deepEqual([...windows.entries()].sort(), [['buddy-window/index.js', 1], ['main.js', 4]]);
+  const main = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8');
+  assert.match(main, /require\('\.\/src\/spellcheck\.js'\)\.keepOffline\(\{ app, getDefaultSession: \(\) => require\('electron'\)\.session\.defaultSession \}\)/);
+  const policy = fs.readFileSync(path.join(ROOT, 'src/spellcheck.js'), 'utf8');
+  assert.match(policy, /app\.on\('session-created', off\)/);
+  assert.match(policy, /app\.whenReady\(\)\.then\(\(\) => off\(getDefaultSession\(\)\)\)/);
+  assert.match(policy, /ses\.setSpellCheckerEnabled\(false\)/);
+  assert.match(policy, /ses\.setSpellCheckerDictionaryDownloadURL\(NOWHERE\)/);
 });
