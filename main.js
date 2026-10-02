@@ -1398,12 +1398,12 @@ ipcMain.handle('sessions:state', e => {
   }
 });
 ipcMain.handle('sessions:settings', e => { if (!sessionsSender(e)) return false; createSettingsWindow(); return true; });
+// Overview uses main-owned structured reports/current own-board work only.
 // Teammates' shared sessions come from a team hub directory. Until the real
 // hub's directory client lands, a FAKE in-memory hub (clearly labelled as
 // test data in the page) can be loaded from a fixture file for demos/tests.
 let overviewTeams={host:null,at:0,value:null},overviewTeamHub=null;
 if(process.env.CLAUDE_BUDDY_FAKE_TEAM_HUB){try{overviewTeamHub=require('./src/team-hub-fake').createFakeTeamHub(JSON.parse(fs.readFileSync(process.env.CLAUDE_BUDDY_FAKE_TEAM_HUB,'utf8')));}catch(e){console.warn('[overview] fake team hub not loaded:',e.message);}}
-// Overview uses main-owned structured reports/current own-board work only.
 const OverviewMain=require('./src/overview-main').createOverviewMain({
   buddy:()=>buddyWin,sessions:()=>aggregateState().sessions||[],
   work:()=>buddyWin?.overviewWork()??Promise.resolve({sources:[],capture:[],partial:true}),
