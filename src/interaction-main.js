@@ -13,6 +13,7 @@
 // (as an opaque key, never its hub address), so after a workspace switch the
 // session refuses as stale until the user switches back.
 const crypto = require('node:crypto');
+const path = require('node:path');
 const { createInteractionHub } = require('./session-interaction');
 const { createLocalModels } = require('./local-models');
 
@@ -52,8 +53,16 @@ function createInteractionMain({ context, readContext = context, adapters: given
   const documents = new Map();
   const boardCurrent = (b) => b !== null && b === boardKey(currentBoard());
   const actorFor = (c) => `overview:${c.contents.id}:${c.document}`;
+  // Workspace folder name per owned session, main-only: lets the Overview
+  // directory fold a hook report from that folder into the owned session.
+  const leaves = new Map();
   const hub = createInteractionHub({
-    adapters, workspace, boardCurrent, now, compaction,
+    adapters, boardCurrent, now, compaction,
+    workspace(id) {
+      const dir = typeof workspace === 'function' ? workspace(id) : null;
+      if (typeof dir === 'string' && dir) { leaves.set(id, path.basename(dir)); while (leaves.size > 64) leaves.delete(leaves.keys().next().value); }
+      return dir;
+    },
     onEvent(actor, state) {
       const contents = documents.get(actor), c = readContext();
       // A reloaded document has not been reaped until its first request.
@@ -130,6 +139,8 @@ function createInteractionMain({ context, readContext = context, adapters: given
       for (const actor of documents.keys()) if (owns(session, actor)) return { hub, actor };
       return null;
     },
+    // Session directory: this document's owned sessions (public state + main-only folder name).
+    listOwned() { const out = []; for (const actor of documents.keys()) for (const state of hub.list(actor)) out.push({ state, leaf: leaves.get(state.session) ?? null }); return out; },
     // The Overview document was reloaded, crashed or destroyed: its sessions end now, not on the next request.
     retireDocuments() { documents.clear(); return hub.reap(() => false); },
     register(ipc) {

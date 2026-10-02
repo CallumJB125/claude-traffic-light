@@ -23,6 +23,23 @@ contextBridge.exposeInMainWorld('overviewApi', {
     const text = request.text.trim();
     return text && text.length <= 4000 && Buffer.byteLength(text, 'utf8') <= 8192 ? ipcRenderer.invoke('overview:message', { handle: request.handle, text }) : denied();
   },
+  // My sessions / Team sessions. Main filters team visibility; the team key is opaque.
+  directory: request => {
+    if (closed(request, ['view']) && request.view === 'mine') return ipcRenderer.invoke('overview:directory', { view: 'mine' });
+    if (closed(request, ['view', 'team']) && request.view === 'team' && (request.team === null || typeof request.team === 'string' && /^[0-9a-f]{32}$/.test(request.team))) return ipcRenderer.invoke('overview:directory', { view: 'team', team: request.team });
+    return Promise.resolve(null);
+  },
+  teamMessage: request => {
+    if (!closed(request, ['id', 'text']) || typeof request.id !== 'string' || !/^[0-9a-f]{40}$/.test(request.id)) return denied();
+    const text = messageText(request.text);
+    return text === null ? denied() : ipcRenderer.invoke('overview:team-message', { id: request.id, text });
+  },
+  onDirectoryChanged: callback => {
+    if (typeof callback !== 'function') return () => {};
+    const listener = (_event, ...args) => { if (args.length === 0) callback(); };
+    ipcRenderer.on('overview:directory-changed', listener);
+    return () => ipcRenderer.removeListener('overview:directory-changed', listener);
+  },
   // Sessions Plexiform itself started. The board and the owning document are
   // decided in main; requests here carry only primitive, closed fields.
   interaction: {
