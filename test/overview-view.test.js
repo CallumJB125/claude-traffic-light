@@ -78,6 +78,17 @@ test('changed task identity clears old draft before any send to the replacement 
   try { await tick(); click(f, 'parent:message'); fill(f, 'old-target message'); f.intervals[0](); await tick(); assert.equal(f.document.querySelector('textarea'), null); assert.match(f.document.querySelector('article').textContent, /New task/); click(f, 'parent:send'); assert.equal(sent, 0); }
   finally { f.close(); }
 });
+test('queued-message notice cannot follow a human title edit of the same reported task', async () => {
+  let title = 'Original human task';
+  const f = setup({ state: async () => snapshot({ sessions: [row('parent', { task: { status: 'tracked', title, key: 'same-card' } })] }), message: async () => ({ ok: true, status: 'queued' }) });
+  try {
+    await tick(); click(f, 'parent:message'); fill(f, 'review this original task'); click(f, 'parent:send'); await tick();
+    assert.match(f.document.querySelector('article').textContent, /Message queued/);
+    title = 'Current human edited task'; f.intervals[0](); await tick();
+    assert.match(f.document.querySelector('article h3').textContent, /Current human edited task/);
+    assert.doesNotMatch(f.document.querySelector('article').textContent, /Message queued|Delivery is not yet verified/);
+  } finally { f.close(); }
+});
 test('explicit message validates UTF8 bound, NUL, whitespace and never auto-sends', async () => {
   const sent = []; const f = setup({ state: async () => snapshot(), message: async request => { sent.push(request); return { ok: true, status: 'queued' }; } });
   try {

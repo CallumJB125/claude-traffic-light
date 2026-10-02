@@ -101,7 +101,7 @@
       buttons.append(action);
     }
     wrap.append(buttons);
-    if (notices.has(row.id)) { const notice = node('p', notices.get(row.id), 'reason'); notice.setAttribute('role', 'status'); wrap.append(notice); }
+    if (notices.has(row.id)) { const notice = node('p', notices.get(row.id).text, 'reason'); notice.setAttribute('role', 'status'); wrap.append(notice); }
     return wrap;
   }
   function compose(id) {
@@ -163,7 +163,7 @@
     snapshot = value; rows = new Map();
     for (const parent of snapshot.sessions) for (const row of [parent, ...parent.children]) rows.set(row.id, { row, parent, identity: identity(row, parent) });
     for (const [id, draft] of composers) if (!rows.has(id) || rows.get(id).identity !== draft.identity || capability(rows.get(id).row, 'message').enabled !== true) composers.delete(id);
-    for (const id of notices.keys()) if (!rows.has(id)) notices.delete(id);
+    for (const [id, notice] of notices) if (!rows.has(id) || rows.get(id).identity !== notice.identity) notices.delete(id);
     updateFilters(); renderSummary(); renderConnections(); renderWork();
     const time = new Date(value.observed_at).toLocaleTimeString();
     $('status').textContent = `Checked ${time}. Refreshes every 5 seconds while visible.${value.status === 'partial' ? ' Some activity is unavailable.' : ''}${value.omitted ? ` ${value.omitted} additional reports exceed the display limit.` : ''}`;
@@ -183,10 +183,10 @@
       const result = await api[kind](request);
       if (document.hidden || generation !== viewGeneration || byId(id)?.identity !== captured) return;
       if (result?.ok === true && result.status === (kind === 'open' ? 'opened' : 'queued')) {
-        notices.set(id, resultText[result.status]); if (kind === 'message') composers.delete(id);
-      } else notices.set(id, resultText[result?.status] || resultText.unavailable);
+        notices.set(id, { identity: captured, text: resultText[result.status] }); if (kind === 'message') composers.delete(id);
+      } else notices.set(id, { identity: captured, text: resultText[result?.status] || resultText.unavailable });
     } catch {
-      if (!document.hidden && generation === viewGeneration && byId(id)?.identity === captured) notices.set(id, resultText.unavailable);
+      if (!document.hidden && generation === viewGeneration && byId(id)?.identity === captured) notices.set(id, { identity: captured, text: resultText.unavailable });
     } finally {
       busy.delete(id); if (snapshot && !document.hidden) renderWork();
     }
