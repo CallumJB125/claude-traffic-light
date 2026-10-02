@@ -78,6 +78,7 @@ test('LOCAL PROOF: the hub serves the PWA shell with a strict CSP; the worker is
     assert.match(page.type, /text\/html/);
     assert.match(page.csp, /script-src 'self'/);
     assert.match(page.csp, /default-src 'self'/);
+    assert.match(page.csp, /base-uri 'none'/);
     assert.ok(!/unsafe-inline|unsafe-eval/.test(page.csp));
     assert.ok(!/<script>|\son[a-z]+=|style="/i.test(page.text), 'no inline script, handlers or styles');
     const sw = await get('/phone/sw.js');
