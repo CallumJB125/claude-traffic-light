@@ -81,7 +81,7 @@ function createCodexAppServer({ bin, env = process.env, spawn = childProcess.spa
       else if (item?.type === 'contextCompaction') events.emit('event', { kind: 'compacted', target, turnId: p.turnId });
     } else if (method === 'thread/compacted' && typeof target === 'string') events.emit('event', { kind: 'compacted', target, turnId: p.turnId });
     else if (method === 'thread/tokenUsage/updated' && typeof target === 'string' && Number.isSafeInteger(p.tokenUsage?.last?.inputTokens)) {
-      events.emit('event', { kind: 'usage', target, turnId: p.turnId, inputTokens: p.tokenUsage.last.inputTokens, window: Number.isSafeInteger(p.tokenUsage.modelContextWindow) ? p.tokenUsage.modelContextWindow : null });
+      events.emit('event', { kind: 'usage', target, turnId: p.turnId, inputTokens: p.tokenUsage.last.inputTokens, outputTokens: Number.isSafeInteger(p.tokenUsage.last.outputTokens) ? p.tokenUsage.last.outputTokens : null, window: Number.isSafeInteger(p.tokenUsage.modelContextWindow) ? p.tokenUsage.modelContextWindow : null });
     } else if (method === 'thread/status/changed' && typeof target === 'string' && typeof p.status?.type === 'string') events.emit('event', { kind: 'status', target, status: p.status.type });
     else if (method === 'thread/closed' && typeof target === 'string') events.emit('event', { kind: 'closed', target });
   }
