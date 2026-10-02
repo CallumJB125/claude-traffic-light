@@ -28,13 +28,15 @@ export function rig(t) {
 }
 // Test-only cipher lets schema/fault tests run without an external executable.
 // Acceptance tests separately use real age and fixture recovery identities.
+// It frames output with the age header so the drill's ciphertext check applies.
+export const AGE_HEADER = Buffer.from('age-encryption.org/v1\n');
 export function fixtureCipher() {
   const key = randomBytes(32);
   const all = async input => { const parts = []; for await (const b of input) parts.push(b); return Buffer.concat(parts); };
   return {
     async encrypt(input, target, max) { const iv = randomBytes(12), c = createCipheriv('aes-256-gcm', key, iv), data = await all(input);
-      return consume(Readable.from([Buffer.concat([iv, c.update(data), c.final(), c.getAuthTag()])]), target, { max }); },
-    async decrypt(input, target, max) { const b = await all(input), c = createDecipheriv('aes-256-gcm', key, b.subarray(0,12)); c.setAuthTag(b.subarray(-16));
+      return consume(Readable.from([Buffer.concat([AGE_HEADER, iv, c.update(data), c.final(), c.getAuthTag()])]), target, { max }); },
+    async decrypt(input, target, max) { const raw = await all(input); if (!raw.subarray(0, AGE_HEADER.length).equals(AGE_HEADER)) throw new Error('not fixture ciphertext'); const b = raw.subarray(AGE_HEADER.length), c = createDecipheriv('aes-256-gcm', key, b.subarray(0,12)); c.setAuthTag(b.subarray(-16));
       return consume(Readable.from([Buffer.concat([c.update(b.subarray(12,-16)), c.final()])]), target, { max }); },
   };
 }

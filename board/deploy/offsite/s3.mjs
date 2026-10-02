@@ -28,6 +28,8 @@ function error(e) {
 export class S3Store {
   constructor(config, { testLoopback = false, client = null } = {}) {
     const c = storageConfig(config, { testLoopback }); this.bucket = c.bucket;
+    // Drill receipts may claim real off-site acceptance only for a validated R2 origin.
+    this.kind = client ? 'injected-client' : testLoopback ? 'loopback-fixture' : 'r2';
     this.client = client ?? new S3Client({ ...c, bucket: undefined, region: 'auto', forcePathStyle: true, maxAttempts: 1,
       followRegionRedirects: false, logger: { trace() {}, debug() {}, info() {}, warn() {}, error() {} }, requestChecksumCalculation: 'WHEN_REQUIRED', responseChecksumValidation: 'WHEN_REQUIRED' }); // privacy-flow: paired-offsite
   }

@@ -21,6 +21,10 @@ These exact official versions were independently provisioned by ROOT on 2026-10-
 - Binary SHA-256 `age`: `4012dfc2725883beafb710894af4f599b7a94f8c8e0f51f02cc96ab8df33915e`.
 - Binary SHA-256 `age-keygen`: `c16e229245123d0ad27442317461d63915416cad0294395cd19ca93feb3211ea`.
 
+### Pinned binary hashes (`age-pins.json`)
+
+The drill classes a cipher as genuine age only when the executable's SHA-256 equals the entry in `age-pins.json` for `${process.platform}-${process.arch}`; otherwise it fails with `AGE_UNPINNED`. Only `darwin-arm64` is pinned (the hash above). Before a drill, the human runs `shasum -a 256 <age>` and compares it to both this file and `age-pins.json`. A new platform (e.g. `linux-arm64`, `linux-x64`) is added only after its official archive and `.proof` are verified as above; record its binary hash here and in `age-pins.json` in the same commit.
+
 Production Linux/Pi provisioning must select the correct architecture's official release and verify its corresponding archive/proof separately. These Darwin hashes do not validate a Linux executable. The source does not download or update either runtime.
 
 Official primary references informing the adapter/retention boundaries: [R2 S3 compatibility](https://developers.cloudflare.com/r2/api/s3/api/), [AWS SDK v3 R2 example](https://developers.cloudflare.com/r2/examples/aws/aws-sdk-js-v3/), [S3 conditional writes](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html), [R2 token permissions](https://developers.cloudflare.com/r2/api/tokens/), [R2 bucket locks](https://developers.cloudflare.com/r2/buckets/bucket-locks/), [age source](https://github.com/FiloSottile/age), [age format](https://age-encryption.org/v1). No external calls are made by local tests.
