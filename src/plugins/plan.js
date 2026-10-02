@@ -35,6 +35,16 @@ function createPluginPlanner({snapshot,bundleRoot=path.join(BUILD,'codex-plugins
   async function index(){const raw=await load();return verifyIndex(raw.bytes,raw.signature);}
   const publicPlan=entry=>({ok:true,read_only:true,install_available:false,plan:{id:entry.id,descriptor_id:entry.descriptor.id,name:entry.descriptor.name,version:entry.descriptor.version,source:entry.descriptor.source.attribution,scope:'user',package_hash:entry.source.package_hash,index_hash:entry.indexHash,files:entry.descriptor.files.map(f=>({path:f.path,bytes:f.bytes,sha256:f.sha256})),capabilities:[...entry.descriptor.capabilities],expires_at:entry.expires,limitations:['Installation and Undo are not implemented.','Codex cache is user-level.','Provider connections and tool approval are separate.']}});
   const prune=()=>{for(const [id,p]of plans)if(p.expires<=now()||!live(p.capture,p.generation))plans.delete(id);};
+  async function refresh(entry,token){
+    const before=await capture();if(entry.expires<=now()||!live(entry.capture,token)||!live(before,token)||before.fingerprint!==entry.capture.fingerprint)throw new Error('changed');
+    const verified=await index();if(entry.expires<=now()||!live(entry.capture,token)||verified.status!=='verified'||verified.index_hash!==entry.indexHash)throw new Error('changed');
+    const catalogBytes=await catalog();if(entry.expires<=now()||!live(entry.capture,token)||!Buffer.isBuffer(catalogBytes)||catalogBytes.length>LIMITS.indexBytes||hash(catalogBytes)!==verified.index.catalog_sha256)throw new Error('changed');
+    const descriptor=verified.index.entries.find(d=>d.id===entry.descriptor.id);if(!descriptor||hash(descriptor)!==entry.source.descriptor_hash)throw new Error('changed');
+    const source=verifySource(descriptor,{bundleRoot,fsApi});
+    const after=await capture();if(entry.expires<=now()||!live(entry.capture,token)||!live(after,token)||before.fingerprint!==after.fingerprint||canonical(source)!==canonical(entry.source)||canonical(verifySource(descriptor,{bundleRoot,fsApi}))!==canonical(source))throw new Error('changed');
+    if(entry.expires<=now()||!live(after,token))throw new Error('changed');
+  }
+  const immutable=value=>{if(value&&typeof value==='object'){Object.freeze(value);for(const child of Object.values(value))immutable(child);}return value;};
   return {
     invalidate(){generation++;plans.clear();},
     async plan(descriptorId,opts={scope:'user'}){
@@ -61,14 +71,22 @@ function createPluginPlanner({snapshot,bundleRoot=path.join(BUILD,'codex-plugins
       if(!entry||entry.expires<=now()||!live(entry.capture,token))return unavailable('expired-or-changed');
       if(pending>=LIMITS.concurrency)return unavailable('busy');pending++;
       try{
-        const before=await capture();if(entry.expires<=now()||!live(entry.capture,token)||!live(before,token)||before.fingerprint!==entry.capture.fingerprint)throw new Error('changed');
-        const verified=await index();if(entry.expires<=now()||!live(entry.capture,token)||verified.status!=='verified'||verified.index_hash!==entry.indexHash)throw new Error('changed');
-        const catalogBytes=await catalog();if(entry.expires<=now()||!live(entry.capture,token)||!Buffer.isBuffer(catalogBytes)||catalogBytes.length>LIMITS.indexBytes||hash(catalogBytes)!==verified.index.catalog_sha256)throw new Error('changed');
-        const descriptor=verified.index.entries.find(d=>d.id===entry.descriptor.id);if(!descriptor||hash(descriptor)!==entry.source.descriptor_hash)throw new Error('changed');
-        const source=verifySource(descriptor,{bundleRoot,fsApi});
-        const after=await capture();if(entry.expires<=now()||!live(entry.capture,token)||!live(after,token)||before.fingerprint!==after.fingerprint||canonical(source)!==canonical(entry.source)||canonical(verifySource(descriptor,{bundleRoot,fsApi}))!==canonical(source))throw new Error('changed');
-        if(entry.expires<=now()||!live(after,token))throw new Error('changed');return publicPlan(entry);
+        await refresh(entry,token);return publicPlan(entry);
       }catch{plans.delete(planId);return unavailable('expired-or-changed');}finally{pending--;}
+    },
+    // Private main-only handoff, never preload/IPC. Consumed before awaits;
+    // a descriptor inventory or public read-only DTO cannot mint this source.
+    async takeForTransaction(planId){
+      const entry=typeof planId==='string'?plans.get(planId):null,token=generation;
+      if(entry)plans.delete(planId);
+      if(!entry||entry.expires<=now()||!live(entry.capture,token)||pending>=LIMITS.concurrency)return null;
+      pending++;
+      try{
+        await refresh(entry,token);
+        return Object.freeze({descriptor:immutable(JSON.parse(canonical(entry.descriptor))),source:immutable(JSON.parse(canonical(entry.source))),binding:immutable(JSON.parse(canonical(entry.capture.binding))),index_hash:entry.indexHash,expires_at:entry.expires,
+          current:()=>entry.expires>now()&&live(entry.capture,token),
+          async recheck(){if(pending>=LIMITS.concurrency)return false;pending++;try{await refresh(entry,token);return true;}catch{return false;}finally{pending--;}}});
+      }catch{return null;}finally{pending--;}
     },
   };
 }
