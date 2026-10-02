@@ -7,7 +7,7 @@
   "scripts": {
     "start": "electron .",
     "install-hooks": "node hooks/install.js",
-    "predist": "npm run calendar-helper && npm run voice-helper",
+    "predist": "npm run calendar-helper && npm run voice-helper && npm run setups-helper",
     "dist": "electron-builder -c electron-builder.config.js --mac",
     "test": "node --test test/*.test.js test/adapters/*.test.js && npm run test:remote && node --test site/test/*.test.js",
     "test:remote": "npm --prefix remote test",
@@ -16,7 +16,7 @@
     "cameos": "python3 scripts/build-cameos.py",
     "dist:win": "electron-builder -c electron-builder.config.js --win",
     "dist:linux": "electron-builder -c electron-builder.config.js --linux",
-    "predist:mac": "npm run calendar-helper && npm run voice-helper",
+    "predist:mac": "npm run calendar-helper && npm run voice-helper && npm run setups-helper",
     "dist:mac": "electron-builder -c electron-builder.config.js --mac",
     "smoke": "node scripts/smoke-installed.js",
     "forget-build": "node scripts/forget-local-build.js",
@@ -25,6 +25,8 @@
     "tune": "electron tools/tuning-main.js",
     "calendar-helper": "sh scripts/build-calendar-helper.sh",
     "voice-helper": "node scripts/build-voice-helper.js",
+    "setups-helper": "sh scripts/build-setups-helper.sh",
+    "test:native-darwin": "npm run setups-helper && PLEXIFORM_TEST_HELPER=$PWD/native/setups-build/buddy-setups node --test --test-concurrency=1 test/native-darwin/*.test.js",
     "build:site": "node site/build.js"
   },
   "author": "",
@@ -166,6 +168,11 @@
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
       "extraResources": [
+        {
+          "from": "native/setups-build",
+          "to": "setups",
+          "filter": ["buddy-setups", "helper-manifest.json"]
+        },
         {
           "from": "native/bin",
           "to": "calendar-helper",

@@ -2,9 +2,9 @@
 const test=require('node:test'),assert=require('node:assert/strict');
 const {performance}=require('node:perf_hooks');
 const {spawn}=require('node:child_process');
-const C=require('../src/borrow/native-codec');
-const {createNativeSupervisor}=require('../src/borrow/native-supervisor');
-const {fixture}=require('./helpers/setups-native/runtime');
+const C=require('../../src/borrow/native-codec');
+const {createNativeSupervisor}=require('../../src/borrow/native-supervisor');
+const {fixture}=require('../helpers/setups-native/runtime');
 const helper=process.env.PLEXIFORM_TEST_HELPER;
 const config=f=>({...f.roots(),mode:1,generation:2n,authority_hash:C.hash(Buffer.from('synthetic-only'))});
 test('owned fixed Node channels bootstrap, fragment requests, authenticate and observe close',async t=>{const f=fixture(t,helper),s=await f.sup.open(config(f),performance.now()+8000);const out=await s.request(0x30,new C.Writer().u32(1).finish());assert.equal(out.result,0);assert.equal(typeof s.nativeCutoff,'bigint');assert.equal((await s.close()).status,'closed');assert.equal(s.reapPending,false);await assert.rejects(s.request(0x30));});

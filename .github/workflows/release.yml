@@ -113,6 +113,16 @@ jobs:
         run: |
           node -e "require('fs').writeFileSync('build/release-floor.json', JSON.stringify({ builtAt: new Date().toISOString() }) + '\n')" && cat build/release-floor.json
 
+      - name: Native Setups helper and runtime acceptance (Mac)
+        if: matrix.platform == 'mac'
+        timeout-minutes: 5
+        shell: bash
+        env:
+          TZ: Africa/Johannesburg
+        run: |
+          mkdir -p work/windows-release
+          npm run test:native-darwin 2>&1 | tee work/windows-release/setups-native-darwin.log
+
       # Gates every platform, including beta and dry runs, so a green
       # candidate job cannot hide failing tests. Bounded, so a hung test can't
       # eat the job. The ICS tests assume SAST, and Electron-based tests need
