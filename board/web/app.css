@@ -238,6 +238,11 @@ select.input { appearance: none; padding-right: 28px; background-image: linear-g
 .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .brand-mark { width: 30px; height: 33px; flex: none; }
 .brand-text { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.board-switcher { max-width: 180px; }
+.board-manager-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.board-manager-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.board-archived { margin: 0 24px 12px; }
+@media (max-width: 760px) { .board-switcher { max-width: 125px; } .brand-text { display: none; } .board-manager-row { align-items: flex-start; flex-direction: column; } }
 .brand-board { font-size: var(--text-lg); font-weight: 650; letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .brand-key { color: var(--faint); font-size: var(--text-sm); }
 .topbar-status { margin-right: auto; }
@@ -410,6 +415,12 @@ body.is-card-dragging .board { scroll-snap-type: none; }
 .pal-opt[data-tone="amber"] .pal-icon { color: var(--tone-amber); }
 .pal-opt[data-tone="red"] .pal-icon { color: var(--tone-red); }
 .pal-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pal-opt[data-kind="search"] { padding-block: 8px; }
+.pal-snippet { display: block; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; color: var(--muted); font-size: var(--text-xs); }
+.workflow-step { padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); margin-block: 12px; }
+.workflow-step legend { padding-inline: 6px; font-weight: 600; }
+.workflow-preview li, .workflow-instance { padding-block: 10px; border-bottom: 1px solid var(--line); }
+.workflow-preview p { white-space: pre-wrap; margin-block: 6px; }
 .pal-hit { color: var(--accent); font-weight: 650; }
 .pal-hint { flex: none; color: var(--faint); font-size: var(--text-xs); }
 .pal-empty { padding: 22px 12px; text-align: center; color: var(--muted); }
@@ -1030,6 +1041,7 @@ dialog::backdrop { background: var(--backdrop); transition: opacity 200ms ease; 
 .integ-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .integ-name { font-size: var(--text-md); font-weight: 650; }
 .integ-account { margin-top: 2px; }
+.integ-webhook-url code { overflow-wrap: anywhere; user-select: all; }
 .integ-health { display: inline-flex; align-items: center; gap: 6px; font-size: var(--text-sm); color: var(--muted); text-align: right; }
 .integ-dot { width: 7px; height: 7px; border-radius: 2px; background: var(--tone-grey); flex: none; }
 .integ-health[data-tone="ok"] .integ-dot { background: var(--tone-green); }
@@ -1069,6 +1081,29 @@ dialog::backdrop { background: var(--backdrop); transition: opacity 200ms ease; 
 .team-scope summary { cursor: pointer; width: fit-content; border-radius: var(--radius-sm); }
 .team-scope summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .team-scope p { margin-top: 4px; }
+
+.team-overview { display: flex; flex-direction: column; gap: 12px; }
+.team-overview-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.team-overview-head h2 { font-size: var(--text-md); font-weight: 650; }
+.team-overview-meta, .team-overview-proof { color: var(--muted); font-size: var(--text-sm); overflow-wrap: anywhere; }
+.team-overview-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.team-overview-stat { padding: 12px 14px; display: flex; flex-direction: column; gap: 4px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
+.team-overview-stat strong { font-size: 24px; font-weight: 650; }
+.team-overview-stat span { color: var(--muted); font-size: var(--text-sm); }
+.team-overview-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 12px; align-items: start; }
+.team-overview-panel { padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.team-overview-panel h3 { font-size: var(--text-base); }
+.team-overview-list { list-style: none; display: flex; flex-direction: column; gap: 8px; padding: 0; margin: 0; }
+.team-overview-task { display: flex; flex-direction: column; gap: 4px; padding-bottom: 8px; border-bottom: 1px solid var(--line); min-width: 0; }
+.team-overview-open { appearance: none; border: 0; padding: 4px 0; background: transparent; color: var(--text); text-align: left; cursor: pointer; display: flex; flex-direction: column; gap: 4px; min-width: 0; border-radius: var(--radius-sm); }
+.team-overview-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.team-overview-task-title { display: flex; gap: 8px; align-items: baseline; overflow-wrap: anywhere; }
+.team-overview-task-title .card-key { flex-shrink: 0; }
+.team-overview-proof { font-size: var(--text-xs); }
+.team-overview-more summary, .team-overview-projects summary { cursor: pointer; color: var(--muted); font-size: var(--text-sm); }
+.team-overview-more[open] summary, .team-overview-projects[open] summary { margin-bottom: 10px; }
+.team-overview-board { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+@media (max-width: 560px) { .team-overview-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
 .team-needs { padding: 10px 14px 12px; border: 1px solid color-mix(in oklab, var(--tone-amber) 34%, transparent); border-radius: var(--radius-lg); background: color-mix(in oklab, var(--tone-amber) 9%, var(--panel)); }
 .team-needs-h { display: flex; align-items: center; gap: 6px; font-size: var(--text-base); font-weight: 650; }
@@ -1205,3 +1240,32 @@ dialog::backdrop { background: var(--backdrop); transition: opacity 200ms ease; 
 .localcard-text { flex: 1 1 240px; min-width: 0; }
 .localcard-title { margin: 0; font-size: var(--text-md); font-weight: 650; }
 .localcard-body { margin: 2px 0 0; }
+.planning-view { padding: 16px; overflow: auto; }
+.planner-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+.planner-zone { display: flex; align-items: center; gap: 6px; }
+.planner-zone input { width: 190px; }
+.calendar-grid { display: grid; grid-template-columns: repeat(7, minmax(140px, 1fr)); border-top: 1px solid var(--line); border-left: 1px solid var(--line); min-width: 980px; }
+.calendar-day { min-height: 130px; padding: 8px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--panel); }
+.calendar-day h2 { font-size: var(--text-sm); margin: 0 0 8px; }
+.calendar-day.is-today { box-shadow: inset 0 0 0 2px var(--accent); }
+.calendar-day.outside-month { background: var(--bg); }
+.planner-card { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; padding: 8px; border: 1px solid var(--line); border-radius: var(--radius); }
+.planner-card .card-open, .planner-card .muted { flex-basis: 100%; text-align: left; overflow-wrap: anywhere; }
+.planner-card .card-open::after { content: none; }
+.planner-card .card-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm); }
+.planner-card .card-open[draggable="true"] { -webkit-user-drag: element; user-select: none; }
+.planning-editor { padding: 16px; margin-bottom: 16px; border: 1px solid var(--line-strong); border-radius: var(--radius-lg); background: var(--panel); }
+.planning-editor form { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; }
+.planning-editor label { display: flex; flex-direction: column; gap: 4px; }
+.planning-editor select { min-width: 280px; max-width: 500px; }
+.planning-editor p { flex-basis: 100%; }
+.timeline-scroll { overflow: auto; }
+.timeline-table { width: 100%; min-width: 1350px; border-collapse: collapse; }
+.timeline-table th, .timeline-table td { border: 1px solid var(--line); padding: 6px; text-align: left; }
+.timeline-table th:first-child { width: 320px; min-width: 320px; }
+.timeline-table thead th:not(:first-child) { min-width: 42px; font-size: var(--text-xs); }
+.timeline-bar { background: var(--panel-2); }
+.timeline-table .is-critical .timeline-bar { outline: 2px solid var(--accent); outline-offset: -2px; }
+.timeline-bar button { white-space: nowrap; }
+.planner-unscheduled { margin-top: 20px; }
+.planner-unscheduled h2 { font-size: var(--text-lg); }

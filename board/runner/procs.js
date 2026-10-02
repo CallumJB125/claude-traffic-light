@@ -10,7 +10,11 @@ const PS = process.platform === 'darwin' ? '/bin/ps' : 'ps';
 export function lstartOf(pid) {
   if (!Number.isSafeInteger(pid) || pid <= 0) return null;
   try {
-    const s = execFileSync(PS, ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); // privacy-flow: runner-local
+    // The supervisor, hook and restart reader can have different narrow
+    // environments. A local timezone/locale must not change the identity of
+    // the same PID; missing or mismatched start times still fail closed.
+    const env = { ...process.env, TZ: 'UTC', LC_ALL: 'C', LANG: 'C' };
+    const s = execFileSync(PS, ['-o', 'lstart=', '-p', String(pid)], { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); // privacy-flow: runner-local
     return s || null;
   } catch { return null; }
 }
@@ -33,6 +37,13 @@ export function processTable() {
     if (m) rows.push({ pid: Number(m[1]), ppid: Number(m[2]), pgid: Number(m[3]) });
   }
   return rows;
+}
+
+// Full command lines (for "is that session still open?"); null if ps fails.
+export function commandLines() {
+  try {
+    return execFileSync(PS, ['-axww', '-o', 'command='], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 16 << 20 }).split('\n'); // privacy-flow: runner-local
+  } catch { return null; }
 }
 
 export function descendants(pid, table = processTable()) {

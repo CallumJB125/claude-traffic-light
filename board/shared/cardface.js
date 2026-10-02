@@ -93,9 +93,9 @@ function reasonFor(view, state, live) {
       if (view.queue && view.queue.runner_online === false && view.queue.offline_age_ms != null) {
         return `no runner online for ${view.repo?.short_name ?? 'this repo'} · ${formatAge(view.queue.offline_age_ms)}`;
       }
-      if (view.target?.is_viewer) return 'for your Claude';
+      if (view.target?.is_viewer) return `for your ${view.target.ai_label ?? 'Claude'}`;
       const name = view.target?.name ?? 'your';
-      return `for ${possessive(name)} Claude${view.target?.awaiting_confirm ? ` · awaiting ${name}` : ''}`;
+      return `for ${possessive(name)} ${view.target?.ai_label ?? 'Claude'}${view.target?.awaiting_confirm ? ` · awaiting ${name}` : ''}`;
     }
     case 'claimed': return `${who} · preparing worktree`;
     case 'running': {
@@ -126,7 +126,7 @@ function reasonFor(view, state, live) {
       switch (view.fail_kind) {
         case 'limit': return `usage limit on ${possessive(owner)} account${view.limit_resets_in_ms != null ? ` · resets in ${formatAge(view.limit_resets_in_ms)}` : ''}`;
         case 'network': return 'network';
-        case 'budget': return `budget${view.budget?.cap_usd != null ? ` $${fmtUsd(view.budget.cap_usd)}` : ''} reached`;
+        case 'budget': return view.run?.budget_stop === 'device' ? 'machine budget limit reached' : `budget${view.budget?.cap_usd != null ? ` $${fmtUsd(view.budget.cap_usd)}` : ''} reached`;
         case 'stopped': return `stopped by ${view.stopped_by_name ?? 'someone'}`;
         case 'released': return `released by ${BACKEND_LABEL[view.run?.backend] ?? 'Claude'}${view.fail_reason ? `: ${view.fail_reason}` : ''}`;
         default: return view.fail_reason ?? 'CLI exited';

@@ -7,19 +7,45 @@ import { INTERRUPT_WAIT_MS, STOP_GRACE_MS } from '../../shared/liveness.js';
 import { lstartOf, killTree, processTable, treeGroups, killGroups, isAlive } from '../procs.js';
 import { buildArgv, userMessage, interruptRequest } from '../launch.js';
 import { lineReader } from '../util.js';
+import { detectCli } from './detect.js';
+import path from 'node:path';
 
 /**
  * Normalised events (design §3.2.2):
  *  init {session_id, tools, mcp_servers}
  *  tool_start {id, name, input} · tool_end {id, ok}
  *  assistant {text} · result {subtype, is_error, total_cost_usd, num_turns, terminal_reason, permission_denials, result}
+ *  usage {inputTokens, outputTokens, costUsd} (with each result that reports usage)
  *  rate_limit {info} · control_response {request_id, subtype} · compact {} · exit {code, signal, sawResult}
+ * A spend cap hit (--max-budget-usd) is a result with terminal_reason 'budget'.
  */
 export class ClaudeBackend extends EventEmitter {
-  constructor({ bin, cwd, env, runDir, sessionId, budgetUsd, maxTurns, systemPrompt, model, resume = false, log, boardHome = null,
-    interruptWaitMs = INTERRUPT_WAIT_MS, stopGraceMs = STOP_GRACE_MS }) {
+  static describe() {
+    return {
+      id: 'claude',
+      label: 'Claude Code',
+      startable: true,
+      capabilities: {
+        budget: 'native', budgetUnit: 'usd',      // --max-budget-usd
+        resume: true, interrupt: true, structuredEvents: true,
+        permissions: 'hooks',                     // PreToolUse gate + --permission-prompt-tool
+        systemPrompt: true, model: true, maxTurns: true,
+      },
+    };
+  }
+
+  /** Signed in: an API key in the env, or the CLI's documented credentials file exists (macOS keeps it in the keychain: 'unknown'). */
+  static async detect(opts = {}) {
+    const d = await detectCli('claude', { ...opts, authFiles: (env) => (env.HOME ? [path.join(env.HOME, '.claude', '.credentials.json')] : []) });
+    return d.installed && !d.reason && (opts.env ?? process.env).ANTHROPIC_API_KEY ? { ...d, signedIn: true } : d;
+  }
+
+  // budget {amount, unit:'usd'} (adapter contract §4) or the older budgetUsd; permissionMode defaults to the board profile.
+  constructor({ bin, cwd, env, runDir, sessionId, budgetUsd, budget = null, maxTurns, systemPrompt, model, resume = false, log, boardHome = null,
+    permissionMode = 'acceptEdits', extraDisallowed = [], interruptWaitMs = INTERRUPT_WAIT_MS, stopGraceMs = STOP_GRACE_MS }) {
     super();
-    Object.assign(this, { bin, cwd, env, runDir, sessionId, budgetUsd, maxTurns, systemPrompt, model, resume, log, boardHome, interruptWaitMs, stopGraceMs });
+    if (budgetUsd == null && budget?.unit === 'usd' && Number.isFinite(budget.amount)) budgetUsd = budget.amount;
+    Object.assign(this, { bin, cwd, env, runDir, sessionId, budgetUsd, maxTurns, systemPrompt, model, resume, log, boardHome, permissionMode, extraDisallowed, interruptWaitMs, stopGraceMs });
     this.child = null;
     this.pid = null;
     this.lstart = null;
@@ -33,7 +59,8 @@ export class ClaudeBackend extends EventEmitter {
 
   argv() {
     return buildArgv({ runDir: this.runDir, sessionId: this.sessionId, resume: this.resume, budgetUsd: this.budgetUsd,
-      maxTurns: this.maxTurns, systemPrompt: this.systemPrompt, model: this.model, boardHome: this.boardHome });
+      maxTurns: this.maxTurns, systemPrompt: this.systemPrompt, model: this.model, boardHome: this.boardHome,
+      permissionMode: this.permissionMode, extraDisallowed: this.extraDisallowed });
   }
 
   start(firstPromptText) {
@@ -67,7 +94,7 @@ export class ClaudeBackend extends EventEmitter {
   #onLine(line) {
     let m;
     try { m = JSON.parse(line); } catch { return; }
-    this.emit('raw', m);
+    if (!m || typeof m !== 'object') return;
     switch (m.type) {
       case 'system':
         if (m.subtype === 'init') {
@@ -92,9 +119,13 @@ export class ClaudeBackend extends EventEmitter {
       case 'result':
         this.sawResult = true;
         this.turnActive = false;
+        if (m.usage && typeof m.usage === 'object') {
+          const n = (x) => (Number.isSafeInteger(x) && x >= 0 ? x : 0);
+          this.emit('usage', { inputTokens: n(m.usage.input_tokens), outputTokens: n(m.usage.output_tokens), ...(Number.isFinite(m.total_cost_usd) ? { costUsd: m.total_cost_usd } : {}) });
+        }
         this.emit('result', {
           subtype: m.subtype, is_error: !!m.is_error, total_cost_usd: m.total_cost_usd, num_turns: m.num_turns,
-          terminal_reason: m.terminal_reason ?? null, permission_denials: m.permission_denials ?? [], result: m.result ?? null,
+          terminal_reason: m.subtype === 'error_max_budget_usd' ? 'budget' : (m.terminal_reason ?? null), permission_denials: m.permission_denials ?? [], result: m.result ?? null,
           errors: m.errors ?? null,
         });
         break;

@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import * as text from '../js/account-text.js';
+import { CLIENT_TOKEN_RE } from '../js/client-api.js';
 
 const SRC = readFileSync(new URL('../js/signin.js', import.meta.url), 'utf8').replace(/^import .*$/gm, '');
 const TOKEN = `inv_${'A'.repeat(43)}`;
@@ -24,7 +25,7 @@ function page({ hash = '', routes = {}, now = () => 1_000_000 } = {}) {
     return { ok: out.status < 400, status: out.status, json: async () => out.body };
   };
   const ctx = {
-    ...text, console, URL, URLSearchParams, JSON, Promise, Map, String,
+    ...text, CLIENT_TOKEN_RE, console, URL, URLSearchParams, JSON, Promise, Map, String,
     Date: { now },
     location: { hash, pathname: '/signin', replace: (u) => replaced.push(u), assign: (u) => replaced.push(u) },
     history: { replaceState() {} },
@@ -158,17 +159,17 @@ test('OAuth start carries only strict invitation context and refuses poisoned pr
   assert.match(bad.els['signin-error'].textContent, /Sign-in didn’t finish/);
 });
 
-test('OAuth result obtains fresh normal CSRF and resumes explicit team acceptance; failed provider keeps invite for email retry', async () => {
-  const token = TOKEN;
+test('OAuth result obtains fresh normal CSRF and resumes explicit client acceptance; failed provider keeps invite for email retry', async () => {
+  const token = `clinv_${'B'.repeat(43)}`;
   const p = page({ hash: '#oauth=web', routes: {
-    '/api/account': { status: 200, body: { user: { id: 'member' }, teams: [], csrf_token: 'normal-csrf' } },
-    '/api/auth/oauth/web/result': { status: 200, body: { ok: true, invitation: { kind: 'team', token } } },
-    '/api/invites/accept': { status: 200, body: { team: { id: 'team-1' } } },
+    '/api/account': { status: 200, body: { user: { id: 'guest' }, teams: [], csrf_token: 'normal-csrf', client_workspaces: [] } },
+    '/api/auth/oauth/web/result': { status: 200, body: { ok: true, invitation: { kind: 'client', token } } },
+    '/api/client-invites/accept': { status: 200, body: { workspace: { id: 'client-workspace' } } },
   } });
   await settle(); await settle(); await settle();
-  assert.deepEqual(p.replaced, ['/?org=team-1']);
+  assert.deepEqual(p.replaced, ['/clients?workspace=client-workspace']);
   assert.equal(p.calls.find(c => c.path === '/api/auth/oauth/web/result').headers['X-CSRF-Token'], 'normal-csrf');
-  assert.equal(p.calls.find(c => c.path === '/api/invites/accept').body.t, token);
+  assert.equal(p.calls.find(c => c.path === '/api/client-invites/accept').body.t, token);
   const retry = page({ hash: '#oauth=web', routes: { ...start,
     '/api/account': { status: 401, body: {} },
     '/api/auth/oauth/web/result': { status: 200, body: { ok: false, error: { code: 'PROVIDER_UNAVAILABLE' }, invitation: { kind: 'team', token: TOKEN } } },
@@ -218,4 +219,19 @@ test('invite acceptance failures return to the invite recovery page without pers
     assert.deepEqual(p.replaced, [`/invite#${TOKEN}`]);
     assert.equal(p.calls.some((c) => c.path === '/api/account/setup'), false);
   }
+});
+
+test('email verification and browser OAuth admission pauses show the same truthful fixed message', async () => {
+  const error = { code: 'SIGNUP_PAUSED', message: '/private/board.db private pressure' };
+  const email = page({ routes: { ...start, '/api/auth/email/verify': { status: 503, body: { error } } } });
+  email.els.email.value = 'jo@example.com'; await email.submit('email-form'); email.els.code.value = '123456'; await email.submit('code-form');
+  const oauth = page({ hash: '#oauth=web', routes: {
+    '/api/account': { status: 401, body: {} },
+    '/api/auth/oauth/web/result': { status: 200, body: { ok: false, error, invitation: { kind: 'team', token: TOKEN } } },
+    '/api/auth/methods': { status: 200, body: { email: true, web: { google: true, github: true } } },
+  } });
+  await settle(); await settle(); await settle();
+  for (const p of [email, oauth]) { assert.equal(p.els['signin-error'].textContent, 'New sign-ups are temporarily paused. Try again later.'); assert.deepEqual(p.replaced, []); }
+  assert.equal(oauth.els['email-form'].hidden, false);
+  assert.ok(!oauth.calls.some(c => c.path === '/api/invites/accept' || c.path === '/api/account/setup'));
 });

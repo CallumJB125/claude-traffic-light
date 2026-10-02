@@ -11,11 +11,37 @@ describe (`BOARD_AUTH=access`, `BOARD_ACCESS_*`) is legacy and no longer the pro
 |---|---|
 | `buddy-hub.service` | the hub as `buddyhub`, sandboxed; only `/var/lib/buddy-hub` writable |
 | `hub.env.example` | `/etc/buddy-hub/hub.env` template (accounts mode, placeholders only; dev auth is refused when a public URL is set) |
-| `buddy-hub-backup.{service,timer}` + `backup.mjs` | nightly `VACUUM INTO` snapshot, 14 kept, in `/var/lib/buddy-hub/backups` |
+| `buddy-hub-backup.{service,timer}` + `backup.mjs` | nightly paired DB + deliverable snapshot, 14 verified bundles kept in `/var/lib/buddy-hub/backups` |
 | `add-member.mjs` | legacy (Access mode): seed email-only members on the host before anyone can sign in |
 | `deploy.sh` | ship `board/` at HEAD, `npm ci`, install units, restart, health check |
 
 `BOARD_SECRET` is REQUIRED in accounts mode and must be at least 32 bytes (`openssl rand -base64 48`); the hub refuses to start without it. Keep it with the data: changing it signs everyone out.
+
+**Migration 032 paired recovery:** client deliverable bytes live in
+`DATA_DIR/client-artifacts/`, outside SQLite. The nightly `backup.mjs` now makes a
+consistent live `VACUUM INTO` database snapshot and copies only its referenced
+immutable bytes, checking every size and SHA-256. Private bundles contain
+`board.db`, `client-artifacts/` and a manifest written last. Missing, modified or
+symlink bytes fail the entire backup. Uploads published after the DB snapshot
+are excluded; concurrent deletion can fail the snapshot, so retry or pause the
+hub during a busy deletion. Retention prunes whole verified bundles together.
+Legacy DB-only files and incomplete/corrupt sets are preserved for inspection.
+
+Verify a bundle with `node deploy/pi/backup.mjs --verify /path/to/bundle`.
+Prepare a fresh working copy with
+`node deploy/pi/backup.mjs --stage-restore /path/to/bundle /path/to/new-directory`.
+Preparation never replaces live data. Stop both the hub and Litestream before
+swapping **both** the prepared database and artifact directory into `DATA_DIR`,
+preserving the failed set first. Restore matching code, environment and secret/
+encryption keys, restore service ownership (directories 0700, files 0600), then
+start with `BOARD_RESTORE=1` once. Keep the original backup unchanged.
+`--snapshot /path/to/new-directory` produces a paired set at an exact destination
+for code/environment/data cutovers. All destinations must be new directories.
+
+**Off-site recovery remains a deployment requirement:** Litestream below copies
+only SQLite. Copy whole verified bundles to private off-site storage before
+enabling production uploads. A DB-only restore cannot recover deliverables;
+approval hashes do not replace their original bytes.
 
 ## First deploy
 
@@ -25,7 +51,7 @@ describe (`BOARD_AUTH=access`, `BOARD_ACCESS_*`) is legacy and no longer the pro
    the encryption key file, the SES or OAuth values, the sign-up allowlist), mode 0640 root:buddyhub. The credentials
    live only in this file on the host, never in the repo.
 3. **Back up before every deploy** (a rollback cannot undo a migration): `sudo -u buddyhub node /opt/buddy-hub/board/deploy/pi/backup.mjs`
-   (or let the nightly timer have run); confirm a fresh file in `/var/lib/buddy-hub/backups`.
+   (or let the nightly timer have run); confirm a fresh verified bundle in `/var/lib/buddy-hub/backups`.
 4. From the laptop: `PI="ssh …" board/deploy/pi/deploy.sh`.
 5. Tunnel: install the tunnel token and run cloudflared as a service. **Remove the Cloudflare Access application from
    the hostname at cutover**: an accounts hub has no Access in front of it (an Access login page in front of `/api`
@@ -49,9 +75,11 @@ production data dir). It never touches production's backup timer. Point a separa
 `127.0.0.1:8788`. Any of `UNIT APP_ROOT ENV_FILE DATA_DIR PORT` can be overridden.
 
 Rollback: `deploy.sh` keeps the previous tree at `/opt/buddy-hub/board.prev`; move it back and
-restart. Restore a snapshot by stopping the hub, copying it over `board.db` and starting with
+restart. Restore a verified paired snapshot by stopping the hub and Litestream, preserving the failed data, replacing both `board.db` and `client-artifacts/`, and starting with
 `BOARD_RESTORE=1` once (after a restore the hub bumps every card's fence so nothing that was live before can write over
-the restored state).
+the restored state). After migration 032, restore the paired `client-artifacts/`
+directory before starting the hub; its startup cleanup removes files absent from
+the restored database, so keep the original backup separate from the working copy.
 
 Rollback caveats: (1) migrations are forward-only: the old code cannot run against a newer schema, so a rollback after a
 migration needs the pre-deploy backup restored too (step 3 above). (2) `node hub/admin.js revoke-legacy-devices` (the

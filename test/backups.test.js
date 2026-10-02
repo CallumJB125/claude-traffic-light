@@ -369,9 +369,12 @@ test('the same millisecond twice gets two snapshots', () => {
 test('main wiring: every destructive action snapshots first, every backups IPC checks its sender', () => {
   const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
   for (const channel of ['reset-rules', 'cameos-remove', 'setup-import-apply']) {
-    const at = main.indexOf(`ipcMain.handle('${channel}'`);
+    const at = main.indexOf(`utilityHandle('${channel}', widgetConfigSender,`);
     assert.ok(at > 0, channel);
-    assert.match(main.slice(at, at + 400), /backupFirst\(\)/, `${channel} must take a backup first`);
+    const body = main.slice(at, main.indexOf('\n});', at) + 4);
+    assert.match(body, /backupFirst\(\)/, `${channel} must take a backup first`);
+    const effect = channel === 'reset-rules' ? 'saveConfig(' : channel === 'cameos-remove' ? 'Cameos.removePhoto(' : 'Setup.planImport(';
+    assert.ok(body.indexOf('backupFirst()') < body.indexOf(effect), `${channel}: backup precedes its first destructive effect`);
   }
   const at = main.indexOf('function commitConfig(');
   assert.match(main.slice(at, at + 1200), /__backupReason[\s\S]*Backups\.needsBackup\([\s\S]*backupFirst\(\)[\s\S]*saveConfig\(partial\)/, 'a replaced rules list must back up before saving');
@@ -756,4 +759,27 @@ test('cache (c): a restore verifies for real even with a warm cache', () => {
   f.setConfig({ rules: [{ id: 'new' }] });
   assert.equal(b.restore(s.id).error, undefined);
   assert.ok(counter.reads >= 4, `restore read ${counter.reads} snapshot files`);
+});
+
+test('production destructive utility handlers reject foreign senders and back up before effects', () => {
+  const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  const wrapperAt = main.indexOf('function utilityHandle(');
+  const wrapper = main.slice(wrapperAt, main.indexOf('\n}', wrapperAt) + 2);
+  const handlers = new Map(), owned = {}, effects = [];
+  const context = { ipcMain: { handle: (name, fn) => handlers.set(name, fn) }, widgetConfigSender: e => e.sender === owned,
+    backupFirst: () => effects.push('backup'), saveConfig: () => effects.push('save'), broadcastStatus() {},
+    Rules: { defaultRules: () => [] }, Cameos: { removePhoto: () => effects.push('remove'), loadIndex: () => [] }, CAMEO_DIR: '/fixture', cameosChanged() {},
+    pendingSetup: {}, Setup: { planImport: () => { effects.push('import'); return { remove: [], add: [], partial: {} }; } },
+    loadConfig: () => ({}), readCameoPng() {}, commitConfig() {} };
+  const vm = require('node:vm'); vm.createContext(context); vm.runInContext(wrapper, context);
+  for (const [channel, effect] of [['reset-rules', 'save'], ['cameos-remove', 'remove'], ['setup-import-apply', 'import']]) {
+    const at = main.indexOf(`utilityHandle('${channel}', widgetConfigSender,`);
+    assert.ok(at > 0, channel);
+    vm.runInContext(main.slice(at, main.indexOf('\n});', at) + 4), context);
+    assert.equal(handlers.get(channel)({ sender: {} }, 'replace'), null);
+    assert.deepEqual(effects, [], `${channel}: no effects for foreign renderer`);
+    handlers.get(channel)({ sender: owned }, 'replace');
+    assert.deepEqual(effects, ['backup', effect], `${channel}: backup before its effect`);
+    effects.length = 0;
+  }
 });

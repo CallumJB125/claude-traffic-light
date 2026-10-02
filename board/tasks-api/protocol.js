@@ -18,12 +18,13 @@ export const REQUEST_CACHE_MS = 24 * 60 * 60 * 1000; // createTask requestId mem
 export const ACT_CACHE_MS = 10 * 60 * 1000;      // act requestId memory (board D8)
 export const TAKEOVER_TIMEOUT_MS = 4 * 60 * 1000; // client timeout for act takeover (> T_HANDOVER_MS)
 
-export const SOCKET_NAME = 'runner.sock';
+// Its own socket in the engine's data dir; the runner's control socket stays runner.sock.
+export const SOCKET_NAME = 'tasks.sock';
 export const TOKEN_NAME = 'tasks.token';
 
 export const METHODS = Object.freeze([
   'hello', 'createTask', 'listTasks', 'getTask', 'subscribe', 'unsubscribe', 'act',
-  'detectAIs', 'getLimits', 'setLimits', 'getClaims', 'listMessages',
+  'detectAIs', 'getLimits', 'setLimits', 'getClaims', 'listMessages', 'saveCheckpoint',
 ]);
 
 export const ACTIONS = Object.freeze([

@@ -134,5 +134,5 @@ test('a rule the user repurposed gets a generic line built from its signals', ()
   const { look, fired, owned } = Rules.resolve(custom, [{ ...working('a'), tool: 'Bash' }]);
   const h = Help.explain({ look, fired, owned, firedNames: Rules.firedNames(custom, fired, owned), reason: 'session', sessions: [working('a')] }, custom);
   assert.equal(h.headline, 'Deploying');
-  assert.equal(h.meaning, 'Your rule — it fires when Claude uses a tool.');
+  assert.equal(h.meaning, 'Your rule — it fires when An AI agent uses a tool.');
 });

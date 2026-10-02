@@ -1,0 +1,6 @@
+{
+  "ok": true,
+  "app_id": "A0APP01",
+  "credentials": { "client_id": "1234567890.9876543210", "client_secret": "__RUNTIME__", "verification_token": "__RUNTIME__", "signing_secret": "__RUNTIME__" },
+  "oauth_authorize_url": "https://slack.com/oauth/v2/authorize?client_id=1234567890.9876543210&scope=commands,chat:write"
+}

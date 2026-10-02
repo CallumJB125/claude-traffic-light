@@ -13,6 +13,7 @@ import { oauthProviders, webOauthProviders, signupPolicy } from '../config.js';
 import { EMAIL_ONLY } from '../views.js';
 import { backfillSlugs, PURGE_AFTER_MS } from './teams.js';
 import { BRAND } from '../../shared/brand.js';
+import { storagePaused } from '../storage-watch.js';
 
 export const SESSION_COOKIE = '__Host-buddy_session';
 export const FLOW_COOKIE = '__Host-buddy_flow';
@@ -179,7 +180,7 @@ export class Accounts {
       WHERE m.user_id IS NULL AND m.removed_at IS NULL AND m.email IS NOT NULL AND o.deleted_at IS NULL`).some((m) => canonEmail(m.email) === email);
     if (row) return 'member_row';
     const invites = this.db.all('SELECT * FROM invites WHERE email = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?', email, this.now());
-    return invites.some((inv) => this.hub.invites?.usable(inv)) ? 'invite' : null;
+    return invites.some((inv) => this.hub.invites?.usable(inv)) || this.hub.clients?.admission(email) ? 'invite' : null;
   }
 
   signupAllowed(email, opts) { return this.signupVia(email, opts) != null; }
@@ -188,6 +189,7 @@ export class Accounts {
   requireSignup(email, opts) {
     const via = this.signupVia(email, opts);
     if (!via) throw new HubError('SIGNUP_CLOSED', SIGNUP_CLOSED_TEXT);
+    if (storagePaused(this.hub)) throw new HubError('SIGNUP_PAUSED', 'New accounts are temporarily paused. Try again later.');
     return via;
   }
 
@@ -298,7 +300,9 @@ export class Accounts {
     // address asked recently). A dud never kills the flows the address already has.
     // A new address sign-up may not use (D104) is silenced before mailBudget: it spends no mail token.
     const quiet = !lim.take('auth_start_email', mine).ok || !lim.take('auth_start_email_hour', mine).ok || !lim.take('auth_start_email_all', box).ok
-      ? 'email_rate' : purpose === 'signin' && !this.hasAccount(email) && !this.signupAllowed(email) ? 'signup_closed' : !this.mailBudget(email) ? 'mail_cap' : null;
+      ? 'email_rate' : purpose === 'signin' && !this.hasAccount(email)
+        ? !this.signupAllowed(email) ? 'signup_closed' : storagePaused(this.hub) ? 'signup_paused' : !this.mailBudget(email) ? 'mail_cap' : null
+        : !this.mailBudget(email) ? 'mail_cap' : null;
     // A dud does the same work as a real start (a code and its HMAC, the same
     // statements), so the time a refusal takes doesn't tell it apart; its
     // update matches no row (it kills none of the address's flows) and its
@@ -583,7 +587,7 @@ export class Accounts {
     if (this.db.get('SELECT 1 AS x FROM orgs WHERE slug IS NULL LIMIT 1')) backfillSlugs(this.db);
     const rows = this.db.all(`SELECT o.id, o.name, o.slug, o.plan, m.role, m.id AS member_id FROM members m JOIN orgs o ON o.id = m.org_id
       WHERE m.user_id = ? AND m.removed_at IS NULL AND o.deleted_at IS NULL ORDER BY o.name, o.id`, userId);
-    return rows.map((t) => ({ ...t, boards: this.db.all('SELECT id, name, key_prefix FROM boards WHERE org_id = ? ORDER BY name', t.id) }));
+    return rows.map((t) => ({ ...t, boards: this.hub.boardList(t.id) }));
   }
 
   /** GET /api/account → {user, identities, teams, pending_invites} (invites for the user's verified addresses, P3). */
@@ -594,6 +598,8 @@ export class Accounts {
       identities: this.db.all("SELECT DISTINCT provider FROM identities WHERE user_id = ? AND verified_at IS NOT NULL AND provider IN ('email','google','github') ORDER BY provider", ident.user.id),
       teams: this.teams(ident.user.id),
       pending_invites: this.hub.invites?.pendingFor(ident.user) ?? [],
+      client_workspaces: this.hub.clients?.catalog(ident.user) ?? [],
+      pending_client_invites: this.hub.clients?.pendingFor(ident.user) ?? [],
       ...(ident.cred.kind === 'session' ? { csrf_token: this.csrfFor(ident.cred.id) } : {}),
     };
   }
@@ -718,6 +724,7 @@ export class Accounts {
       this.db.run(`UPDATE invites SET revoked_at = ?, revoke_reason = 'account_deleted'
         WHERE email IN ${inAddresses} AND accepted_at IS NULL AND revoked_at IS NULL`, now, ...addresses);
       this.db.run(`UPDATE invites SET email = 'deleted:' || id WHERE accepted_by_user = ? OR email IN ${inAddresses}`, user.id, ...addresses);
+      this.hub.clients?.deleteUser(user.id, addresses, now);
       this.db.run('DELETE FROM identities WHERE user_id = ?', user.id);
       this.db.run("UPDATE users SET display_name = 'Deleted user', primary_email = NULL, primary_email_verified_at = NULL, avatar_url = NULL, deleted_at = ? WHERE id = ?", now, user.id);
       for (const m of members) this.hub.dropMemberPending(m.id);

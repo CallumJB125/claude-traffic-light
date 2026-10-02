@@ -14,11 +14,12 @@ const { connectorRows } = require('./connectors');
 
 // Screens the page itself may ask for; the rest (`confirm`, `code`, `browser`)
 // are reached only through the flow (e.g. `confirm` after an invite link).
-const PAGE_SCREENS = new Set(['hub', 'email', 'create-team', 'join', 'team', 'thismac', 'account', 'invites', 'integrations']);
+const PAGE_SCREENS = new Set(['hub', 'email', 'create-team', 'join', 'team', 'thismac', 'account', 'invites', 'integrations', 'clients']);
 
 // Argument types per action; the IPC layer refuses anything else before it runs.
 const ACCT_ARGS = {
   state: [], go: ['string'], hub: ['string'], confirm: ['boolean'], email: ['string'], code: ['string'], resend: [], createTeam: ['string'],
+  openClients: [],
   oauth: ['string'], signInWith: ['string'], cancelOAuth: [],
   invite: ['string', 'string', 'string'], resendInvite: ['string', 'string'], emailInvite: ['string', 'string'], revokeInvite: ['string', 'string'], setRole: ['string', 'string', 'string'], removeMember: ['string', 'string'],
   renameTeam: ['string', 'string'], addBoard: ['string', 'string'],
@@ -317,6 +318,7 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
       return;
     }
     if (r.ok && r.pending_invites?.length) { acct.hub = origin; show('invites'); return; }
+    if (r.ok && !r.teams?.length && (r.client_workspaces?.length || r.pending_client_invites?.length)) { acct.hub = origin; show('clients'); return; }
     if (r.ok && !r.teams?.length) {
       const setup = await clientFor(origin).setupAccount();
       if (!current()) return;
@@ -325,6 +327,7 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
         // An invite may have arrived after the account read. The hub's
         // atomic check takes priority over the client's earlier empty list.
         if (setup.pending_invites?.length) { acct.hub = origin; show('invites'); return; }
+        if (!setup.teams?.length && (setup.client_workspaces?.length || setup.pending_client_invites?.length)) { acct.hub = origin; show('clients'); return; }
       } else {
         setupError = setup.error;
       }
@@ -408,6 +411,10 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
       return { ...base, forInvite: !!pendingInvite, email: acct.hub ? (userOf(acct.hub)?.email ?? '') : '', methods: m.ok ? { google: m.google, github: m.github, email: m.email } : null, methodsError: m.ok ? null : m.error };
     }
     if (screen === 'integrations') return { ...base, connectors: connectorRows() };
+    if (screen === 'clients') {
+      const a = accounts.get(acct.hub);
+      return { ...base, workspaces: a?.client_workspaces ?? [], invitations: a?.pending_client_invites ?? [] };
+    }
     if (screen === 'browser') return { ...base, provider: oauthRun?.provider ?? null };
     if (screen === 'code') return { ...base, email: acct.hub ? clientFor(acct.hub).pendingEmail() : null };
     if (screen === 'create-team') {
@@ -478,6 +485,12 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
 
   const ACCT = {
     state: () => screenState(),
+    async openClients() {
+      if (!acct.hub || !signedIn(acct.hub) || !hubTrusted(acct.hub)) return { ok: false, error: 'Sign in to your client hub first.' };
+      if (!ui.openClients) return { ok: false, error: 'Could not open client projects. Please try again.' };
+      await ui.openClients(acct.hub);
+      return { ok: true };
+    },
     go(screen) {
       if (!PAGE_SCREENS.has(screen)) return { ok: false };
       cancelOAuth();

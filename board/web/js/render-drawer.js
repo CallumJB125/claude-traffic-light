@@ -7,21 +7,24 @@ import { renderMarkdown, inline } from './markdown.js';
 import { pill, budgetBar, cardActions, avatar, labelChips } from './render-board.js';
 import { LABEL_COLORS, canArchive } from './labels.js';
 import { formatAge, repoBranch, isHumanOwned, COLUMNS, COLUMN_LABEL, fmtUsd } from './view.js';
+import { packetPanel, messagePanel } from './render-communication.js';
+import { captureBadge } from './render-capture.js';
+import { ownershipPanel } from './render-ownership.js';
 
 const ago = (ms) => (ms == null ? 'never' : `${formatAge(ms)} ago`);
 const add = (ms, e) => (ms == null ? null : ms + e);
 
 export const FEED_LABEL = {
-  dispatched: 'Given to Claude', claimed: 'Runner claimed it', started: 'Claude started', blocked: 'Asked for help',
+  dispatched: 'Assigned to AI', claimed: 'Runner claimed it', started: 'Agent started', blocked: 'Asked for help',
   answered: 'Answered', parked: 'Parked: no agent running', requeued_answered: 'Answered and requeued', suspended: 'Laptop went to sleep',
   recovered: 'Back online', unresponsive: 'Lost signal', orphaned: 'Orphaned', reconnecting: 'Board restarted',
-  failed: 'Run failed', stopped: 'Stopped', released: 'Claude released it', retried: 'Retried', taken_over: 'Taken over',
+  failed: 'Run failed', stopped: 'Stopped', released: 'Agent released it', retried: 'Retried', taken_over: 'Taken over',
   handing_over: 'Handing over', handed_over: 'Handed over', human_on_it: 'A person took it', in_review: 'Sent for review',
   changes_requested: 'Changes requested', merged: 'Merged', approved_done: 'Marked done', cancelled: 'Cancelled',
   declined: 'Declined on the runner', prep_failed: 'Worktree prep failed', requeued_claim_timeout: 'Requeued: runner never started',
   pr_closed_unmerged: 'PR closed without merging', progress: 'Progress', status: 'Status', comment: 'Comment',
   tool_start: 'Tool', tool_end: 'Tool finished', file: 'File', command: 'Command', error: 'Error', git: 'Git', plan: 'Plan',
-  subagent: 'Subagent', message: 'Claude said', compacted: 'Context compacted', cost: 'Cost', session: 'Session', degraded: 'Degraded',
+  subagent: 'Subagent', message: 'Agent said', compacted: 'Context compacted', cost: 'Cost', session: 'Session', degraded: 'Degraded',
   salvage: 'Salvage', withdrawn: 'Request withdrawn', created: 'Created', evidence: 'Evidence', plan_declared: 'Plan declared',
   handover_frozen: 'Handover frozen',
 };
@@ -43,7 +46,7 @@ function feedText(ev) {
 }
 
 function feedItem(ev, elapsed) {
-  const label = FEED_LABEL[ev.kind] ?? String(ev.kind).replace(/[_.]/g, ' ');
+  const label = ev.data?.client_feedback_id ? 'Client feedback' : FEED_LABEL[ev.kind] ?? String(ev.kind).replace(/[_.]/g, ' ');
   const text = feedText(ev);
   return h('li', { key: ev.id, class: 'feed-item', 'data-tone': FEED_TONE[ev.kind] ?? null },
     h('span', { class: 'feed-mark', 'aria-hidden': 'true' }),
@@ -60,7 +63,8 @@ function askBlock(ask, model) {
   const open = ask.state === 'open' || ask.state == null;
   const busy = model.busy?.has(`ask:${ask.id}`);
   const kind = ask.kind ?? 'question';
-  const head = { question: 'Question from Claude', clarify: 'Claude needs a detail', decision: 'Decision needed', plan: 'Plan ready to approve', conflict: 'Merge conflict', loop: 'Looks stuck' }[kind] ?? 'Question';
+  const ai = model.detail?.data?.run?.ai_label ?? 'The agent';
+  const head = { question: `Question from ${ai}`, clarify: `${ai} needs a detail`, decision: 'Decision needed', plan: 'Plan ready to approve', conflict: 'Merge conflict', loop: 'Looks stuck' }[kind] ?? 'Question';
   if (!open) {
     return h('li', { key: `ask-${ask.id}`, class: 'ask is-answered' },
       h('p', { class: 'ask-head' }, icon('check', 'icon-xs'), head),
@@ -138,7 +142,7 @@ export function handoverBody(markdown) {
 }
 
 function tabs(active, counts) {
-  const list = [['activity', 'Activity'], ['handover', 'Handover'], ['comments', `Comments${counts.comments ? ` ${counts.comments}` : ''}`], ['details', 'Details']];
+  const list = [['activity', 'Activity'], ['packet', 'Task context'], ['messages', 'Messages'], ['ownership', 'Coordination'], ['handover', 'Handover'], ['comments', `Comments${counts.comments ? ` ${counts.comments}` : ''}`], ['details', 'Details']];
   return h('div', { class: 'tabs', role: 'tablist', 'aria-label': 'Card sections' },
     list.map(([id, label]) => h('button', {
       type: 'button', role: 'tab', id: `tab-${id}`, class: 'tab', 'aria-selected': String(active === id), 'aria-controls': 'tabpanel',
@@ -148,8 +152,11 @@ function tabs(active, counts) {
 
 function tabPanel(tab, detail, model, elapsed) {
   const d = detail.data;
+  if (tab === 'packet') return packetPanel(detail, model);
+  if (tab === 'messages') return messagePanel(detail, model);
+  if (tab === 'ownership') return ownershipPanel(detail, model, detail.ownership_elapsed_ms ?? 0);
   if (tab === 'handover') {
-    if (!d.handover) return h('p', { class: 'muted' }, 'No handover yet. Claude writes one continuously once a run starts.');
+    if (!d.handover) return h('p', { class: 'muted' }, 'No handover yet. The agent can record progress and next steps during the run.');
     return h('div', null,
       syncStrip(detail, elapsed),
       h('div', { class: 'md handover' }, renderMarkdown(handoverBody(d.handover.markdown))),
@@ -162,6 +169,7 @@ function tabPanel(tab, detail, model, elapsed) {
       list.length ? h('ul', { class: 'comments' }, list.map((c) => h('li', { key: c.id, class: `comment${c.source === 'agent' ? ' is-agent' : ''}` },
         h('div', { class: 'comment-head' },
           h('span', { class: 'comment-author' }, c.author_name ?? (c.source === 'agent' ? 'Claude' : 'Someone')),
+          c.identity_source === 'remote_grant' ? h('span', { class: 'muted small' }, `via ${c.application ?? 'Remote application'} · unverified application`) : null,
           c.for_agent ? h('span', { class: 'label' }, '@claude') : null,
           h('span', { class: 'num muted' }, ago(add(c.created_age_ms, elapsed)))),
         h('p', { class: 'comment-body' }, c.body),
@@ -212,7 +220,7 @@ function evidenceBlock(view, detail) {
     h('ul', { class: 'evidence' },
       pr ? h('li', null, icon('branch', 'icon-xs'), h('a', { href: pr.url, target: '_blank', rel: 'noopener noreferrer' }, `PR #${pr.number}`), h('span', { class: 'muted' }, ` · ${pr.state}`)) : null,
       ev?.tests ? h('li', { 'data-tone': ev.tests === 'pass' ? 'green' : ev.tests === 'fail' ? 'red' : null }, icon(ev.tests === 'pass' ? 'check' : ev.tests === 'fail' ? 'close' : 'dot', 'icon-xs'), ev.tests === 'pass' ? 'Tests pass' : ev.tests === 'fail' ? 'Tests fail' : 'No tests run') : null,
-      ev?.verification ? h('li', null, icon(ev.verification === 'hub_verified' ? 'check' : 'person', 'icon-xs'), ev.verification === 'hub_verified' ? 'Verified by the board against GitHub' : 'Self-reported by Claude') : null,
+      ev?.verification ? h('li', null, icon(ev.verification === 'hub_verified' ? 'check' : 'person', 'icon-xs'), ev.verification === 'hub_verified' ? 'Verified by the board against GitHub' : 'Reported by the agent') : null,
       list.map((e, i) => h('li', { key: e.id ?? i }, icon('dot', 'icon-xs'), `${e.kind ?? 'evidence'}: ${e.summary ?? e.ref ?? ''}`))));
 }
 
@@ -224,7 +232,7 @@ function overlapsBlock(overlaps, elapsed) {
       icon('warn', 'icon-xs'),
       h('div', null,
         h('p', null, h('button', { type: 'button', class: 'link', 'data-action': 'open', 'data-card': o.other_card_id }, o.other_key),
-          o.other_owner ? ` (${o.other_owner}'s Claude)` : '', o.kind === 'adjacent' ? ' is working nearby' : ' is editing the same files'),
+          o.other_owner ? ` (${o.other_owner}'s ${o.other_provider_label ?? 'agent'})` : '', o.kind === 'adjacent' ? ' has related work' : ' has overlapping work'),
         o.paths?.length ? h('p', { class: 'overlap-paths' }, o.paths.slice(0, 4).map((p) => h('code', null, p))) : null,
         h('p', { class: 'muted num' }, `${o.level ?? ''}${o.reasons?.length ? ` · ${o.reasons.join(', ')}` : ''}${o.age_ms != null ? ` · ${ago(add(o.age_ms, elapsed))}` : ''}`))))),
     h('p', { class: 'muted small' }, 'Overlaps never block. Talk to each other, or let one card finish first.'));
@@ -288,11 +296,19 @@ export function drawer(model) {
 
     body.push(
       h('div', { class: 'drawer-status' },
-        pill(face, { size: 'lg' }),
+        view.capture && !view.run ? captureBadge(view, elapsed) : pill(face, { size: 'lg' }),
         face.state === 'running' && face.disagree ? h('p', { class: 'muted small' }, 'Waiting for the board and this browser to agree the run is alive.') : null,
         archived ? h('p', { class: 'archived-note', role: 'note' }, `Archived${view.archived.by_name ? ` by ${view.archived.by_name}` : ''}${view.archived.at_age_ms != null ? ` ${ago(view.archived.at_age_ms + elapsed)}` : ''}. Restore it to change anything.`) : null,
         model.readOnly ? null : h('div', { class: 'drawer-actions' }, archived ? null : cardActions({ ...face, actions: face.actions.filter((a) => !OPENS_DRAWER.has(a)) }, view, model.busy), extra)),
       whoBlock(view, face, model),
+      h('section', { class: 'dsec', 'aria-label': 'Planning' }, h('h3', { class: 'dsec-title' }, 'Planning'),
+        h('p', { class: 'muted' }, `Start: ${view.start_date ?? 'Unscheduled'} · Due: ${view.due_date ?? 'Unscheduled'}`),
+        h('p', { class: 'muted' }, `${view.depends_on?.length ?? 0} predecessors`),
+        model.readOnly || archived ? null : h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'planning-edit', 'data-card': view.id }, 'Edit dates and dependencies')),
+      view.capture ? h('section', { class: 'dsec', 'aria-label': 'AI work report' }, h('h3', { class: 'dsec-title' }, 'AI work report'),
+        h('p', {}, 'This card follows activity reported by a local AI session. Your manual edits take priority.'),
+        h('p', { class: 'muted small' }, 'A finished report requests review; it does not verify completion or start an AI run.')) : null,
+      view.client_feedback ? h('section', { class: 'dsec', 'aria-label': 'Client feedback source' }, h('h3', { class: 'dsec-title' }, 'Client feedback'), h('p', {}, `Feedback from ${view.client_feedback.source_name}`), h('p', {}, `Intake authorized by ${view.client_feedback.intake_name}`), h('p', { class: 'muted small' }, 'Feedback intake creates a task for human triage.')) : null,
       (asks.length || prs.length) ? h('section', { class: 'dsec dsec-asks', id: 'sec-asks' },
         h('h3', { class: 'dsec-title' }, openCount ? `Needs you · ${openCount}` : 'Requests'),
         h('ul', { class: 'asks' }, prs.map((p) => permissionBlock(p, model)), asks.map((a) => askBlock(a, model)))) : null,

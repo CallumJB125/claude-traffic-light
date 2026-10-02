@@ -6,8 +6,8 @@ if (process.argv.includes('--buddy-hook')) require('./src/buddy-hook-runner.js')
 // before any window, lock or data folder is touched (the .deb's prerm runs
 // the same code through hooks/uninstall-hooks.js).
 if (process.argv.includes('--uninstall-hooks')) {
-  require('./hooks/uninstall-hooks.js').main({ mcp: require('./mcp-install.js') });
-  process.exit(0);
+  const results = require('./hooks/uninstall-hooks.js').main({ mcp: require('./mcp-install.js') });
+  process.exit(require('./hooks/uninstall-hooks.js').exitCode(results));
 }
 // `--rename-dry-run`: prints what the first launch after the rename from Claude Buddy
 // would do on this machine, writes nothing and exits, before anything creates
@@ -35,6 +35,7 @@ const HostApp = require('./hostapp.js');
 const Motion = require('./motion.js');
 const Cameos = require('./cameos.js');
 const McpInstall = require('./mcp-install.js');
+const NativeBoard = require('./native-board/service');
 const Setup = require('./setup.js');
 const LeftoverShim = require('./src/leftover-shim.js');
 const Help = require('./help.js');
@@ -973,10 +974,10 @@ ipcMain.handle('budget-notice', (e, msg) => {
   return { ok: false };
 });
 if (IS_DEV_RUN && !app.isPackaged && process.env.CLAUDE_BUDDY_BUDGET_HOOK === '1') global.__budgetInject = handleBudgetEvent;
-ipcMain.handle('busy-status', () => BusyWatch.status());
+utilityHandle('busy-status', e => settingsOnly(e), () => BusyWatch.status());
 // Settings' "Reconnect calendar": macOS forgot an earlier grant, so ask again.
-ipcMain.handle('busy-reconnect-calendar', async () => { await BusyWatch.enableCalendar(); return BusyWatch.status(); });
-ipcMain.handle('busy-open-privacy', () => shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars'));
+utilityHandle('busy-reconnect-calendar', e => settingsOnly(e), async () => { await BusyWatch.enableCalendar(); return BusyWatch.status(); });
+utilityHandle('busy-open-privacy', e => settingsOnly(e), () => shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars'));
 
 // ── Motion gate ────────────────────────────────────────────────────────────
 // backgroundThrottling is off, so Chromium never tells a page nobody can see
@@ -1055,12 +1056,13 @@ function syncEyePoll() {
 }
 
 function createWindow() {
+  if (win && !win.isDestroyed()) return win;
   const saved = readBounds();
   const primary = screen.getPrimaryDisplay().workAreaSize;
   const defaultWidth = 100;
   const defaultHeight = Math.round(defaultWidth / WIDGET_ASPECT);
 
-  win = new BrowserWindow({
+  const w = win = new BrowserWindow({
     width: saved?.width || defaultWidth,
     height: saved?.height || defaultHeight,
     x: saved?.x ?? Math.round(primary.width - defaultWidth - 40),
@@ -1086,114 +1088,85 @@ function createWindow() {
     },
   });
 
-  win.setAlwaysOnTop(true, 'floating', 1);
-  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-  win.setAspectRatio(WIDGET_ASPECT);
-  win.loadFile('index.html');
+  w.setAlwaysOnTop(true, 'floating', 1);
+  w.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  w.setAspectRatio(WIDGET_ASPECT);
+  w.loadFile('index.html');
   // ready-to-show is unreliable for transparent windows on macOS, so show on
   // load, with a fallback in case that never fires either.
-  const reveal = () => { if (win && !win.isVisible() && loadConfig().showWidget) win.showInactive(); };
-  win.webContents.once('did-finish-load', reveal);
+  const current = () => win === w && !w.isDestroyed();
+  const reveal = () => { if (current() && !w.isVisible() && loadConfig().showWidget) w.showInactive(); };
+  w.webContents.once('did-finish-load', reveal);
   setTimeout(reveal, 1500);
 
-  guardRenderer(win, 'widget', () => { win = null; createWindow(); });
+  let recovering = false;
+  guardRenderer(w, 'widget', () => {
+    if (win !== w || recovering) return;
+    recovering = true;
+    try { if (!w.isDestroyed()) w.destroy(); } catch { /* retain the current owner if disposal failed */ }
+    if (!w.isDestroyed()) { recovering = false; return; }
+    if (win === w) win = null;
+    // Let synchronous destroy/crash handlers finish replacing the window first.
+    queueMicrotask(() => { if (!win || win.isDestroyed()) createWindow(); });
+  });
   // A reload loses the widget's state; re-push it as soon as it's back.
-  win.webContents.on('did-finish-load', () => { stateMemo = { at: 0, key: null, value: null }; broadcastStatus(); });
+  w.webContents.on('did-finish-load', () => { if (!current()) return; stateMemo = { at: 0, key: null, value: null }; broadcastStatus(); });
 
-  win.on('resize', saveBounds);
-  win.on('move', () => { if (!glideTimer) saveBounds(); });
+  w.on('resize', () => { if (current()) saveBounds(); });
+  w.on('move', () => { if (current() && !glideTimer) saveBounds(); });
   // Each event re-reads both from the window: a restore can bring back a
   // window that was hidden before it was minimised, with no 'show' at all.
-  const syncVisibility = (visible = win.isVisible()) => {
-    if (!win || win.isDestroyed()) return;
-    setMotionPaused('minimized', win.isMinimized());
-    setMotionPaused('hidden', !visible && !win.isMinimized());
+  const syncVisibility = (visible) => {
+    if (!current()) return;
+    if (visible === undefined) visible = w.isVisible();
+    const minimized = w.isMinimized();
+    setMotionPaused('minimized', minimized);
+    if (!current()) return;
+    setMotionPaused('hidden', !visible && !minimized);
   };
-  win.on('show', () => syncVisibility(true));
-  win.on('hide', () => syncVisibility(false));
-  win.on('restore', () => syncVisibility());
-  win.on('minimize', () => syncVisibility());
+  w.on('show', () => syncVisibility(true));
+  w.on('hide', () => syncVisibility(false));
+  w.on('restore', () => syncVisibility());
+  w.on('minimize', () => syncVisibility());
   // Those only fire on a change; a widget that loads hidden (showWidget off),
   // or reloads while paused, must still start in the right state.
-  win.webContents.on('did-finish-load', () => {
-    if (!win || win.isDestroyed()) return;
+  w.webContents.on('did-finish-load', () => {
+    if (!current()) return;
     syncVisibility();
-    win.webContents.send('motion-paused', widgetMotion.paused);
+    if (!current()) return;
+    w.webContents.send('motion-paused', widgetMotion.paused);
   });
-  win.on('closed', () => {
-    win = null;
+  w.on('closed', () => {
+    if (win === w) win = null;
   });
+  return w;
 }
 
 let settingsWin = null;
 
-function createSettingsWindow() {
-  if (settingsWin) {
-    settingsWin.show();
-    settingsWin.focus();
-    return;
-  }
-  settingsWin = new BrowserWindow({
-    width: 380,
-    height: 820,
-    useContentSize: true,
-    resizable: false,
-    minimizable: false,
-    maximizable: false,
-    title: `${Brand.name} Preferences`,
-    webPreferences: {
-      spellcheck: false,
-      preload: path.join(__dirname, 'settings-preload.js'),
-      contextIsolation: true,
-    },
-  });
-  settingsWin.setMenuBarVisibility(false);
-  settingsWin.loadFile('settings.html');
-  // The macOS Calendar and Focus readers don't exist elsewhere; the ICS feed stays.
-  if (!IS_MAC) settingsWin.webContents.on('dom-ready', () => settingsWin?.webContents.insertCSS('#busy-sources, .field:has(#busyFocusShortcut) { display: none; }').catch(() => {}));
-  showDock();
-  settingsWin.on('closed', () => {
-    settingsWin = null;
-    if (process.platform === 'darwin' && !lightsWin && !updatesWin && !buddyWin?.isOpen() && !hatchWin) app.dock.hide();
-  });
-}
+function createSettingsWindow() { openBuddy('settings'); }
 
 // ── Feedback ("Something's off / Idea") ──────────────────────────────────────
-// One window, opened from the tray, Preferences and the Lights editor. Saved
+// One main app page, opened from the tray and Preferences. Saved
 // reports stay on this computer; nothing is sent unless the person clicks a
 // send option (see src/feedback.js).
 let feedbackWin = null;
 let feedbackShot = null; // the PNG the preview showed: what is saved is what they saw
+let feedbackCaptureEpoch = 0;
 let feedbackLast = null; // { folder, text } of the report just saved
 const FEEDBACK_DIR = path.join(ROOT_DIR, 'feedback');
-const feedbackSenderOk = (e) => !!feedbackWin && e.sender === feedbackWin.webContents;
+const feedbackSenderOk = (e) => fromUtilityPage(e, 'feedback');
 
-function createFeedbackWindow() {
-  if (feedbackWin) { feedbackWin.show(); feedbackWin.focus(); return; }
-  feedbackWin = new BrowserWindow({
-    width: 440, height: 720, useContentSize: true, minimizable: false, maximizable: false,
-    title: 'Send feedback',
-    webPreferences: { spellcheck: false, preload: path.join(__dirname, 'feedback-preload.js'), contextIsolation: true, sandbox: true, nodeIntegration: false },
-  });
-  feedbackWin.setMenuBarVisibility(false);
-  feedbackWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  feedbackWin.webContents.on('will-navigate', (e) => e.preventDefault());
-  feedbackWin.loadFile('feedback.html');
-  showDock();
-  feedbackWin.on('closed', () => {
-    feedbackWin = null; feedbackShot = null; feedbackLast = null;
-    if (IS_MAC && !lightsWin && !settingsWin && !updatesWin && !buddyWin?.isOpen()) app.dock.hide();
-  });
-}
+function createFeedbackWindow() { openBuddy('feedback'); }
 
 // Only Plexiform's own windows, never the screen or another app.
 function feedbackTargets() {
   const all = [
     { id: 'widget', label: 'the widget', w: win },
     { id: 'lights', label: 'Lights', w: lightsWin },
-    { id: 'settings', label: 'Settings', w: settingsWin },
+    { id: 'main', label: 'Main app page', capture: () => buddyWin.captureContent(), visible: buddyWin?.isVisible() },
   ];
-  return all.filter((t) => t.w && !t.w.isDestroyed() && t.w.isVisible());
+  return all.filter((t) => t.capture ? t.visible : t.w && !t.w.isDestroyed() && t.w.isVisible());
 }
 
 function feedbackDraft(d) {
@@ -1213,15 +1186,21 @@ ipcMain.handle('feedback-info', (e) => {
 });
 ipcMain.handle('feedback-screenshot', async (e, id) => {
   if (!feedbackSenderOk(e)) return null;
+  const epoch = ++feedbackCaptureEpoch;
   feedbackShot = null;
   const t = feedbackTargets().find((x) => x.id === id);
   if (!t) return { error: 'That window is not open.' };
-  const img = await t.w.webContents.capturePage();
-  if (img.isEmpty()) return { error: 'Could not capture that window.' };
-  feedbackShot = img.toPNG();
-  return { dataUrl: `data:image/png;base64,${feedbackShot.toString('base64')}`, label: t.label };
+  try {
+    const img = t.capture ? await t.capture() : await t.w.webContents.capturePage();
+    if (!feedbackSenderOk(e) || epoch !== feedbackCaptureEpoch) return null;
+    if (!feedbackTargets().some(x => x.id === id) || !img || img.isEmpty()) return { error: 'Could not capture that window. Try again.' };
+    feedbackShot = img.toPNG();
+    return { dataUrl: `data:image/png;base64,${feedbackShot.toString('base64')}`, label: t.label };
+  } catch {
+    return feedbackSenderOk(e) && epoch === feedbackCaptureEpoch ? { error: 'Could not capture that window. Try again.' } : null;
+  }
 });
-ipcMain.handle('feedback-clear-screenshot', (e) => { if (feedbackSenderOk(e)) feedbackShot = null; });
+ipcMain.handle('feedback-clear-screenshot', (e) => { if (feedbackSenderOk(e)) { feedbackCaptureEpoch++; feedbackShot = null; } });
 ipcMain.handle('feedback-preview', (e, d) => {
   if (!feedbackSenderOk(e)) return null;
   try { return { markdown: feedbackDraft(d).markdown, diagnostics: d.diagnostics ? buildDiagnostics() : '' }; } catch (err) { return { error: err.message === 'empty' ? 'Say what happened first.' : 'Could not read that.' }; }
@@ -1255,37 +1234,9 @@ ipcMain.handle('feedback-github', (e) => {
   return true;
 });
 
-// About & Updates, standalone (the tray opens it; the Buddy window has it as a page).
+// About & Updates always opens the main app page.
 let updatesWin = null;
-function createUpdatesWindow() {
-  if (updatesWin) {
-    updatesWin.show();
-    updatesWin.focus();
-    return;
-  }
-  updatesWin = new BrowserWindow({
-    width: 520,
-    height: 640,
-    useContentSize: true,
-    minimizable: false,
-    maximizable: false,
-    title: 'About & Updates',
-    backgroundColor: '#1c1a1f',
-    webPreferences: { spellcheck: false, preload: path.join(__dirname, 'updates-preload.js'), contextIsolation: true, sandbox: true, nodeIntegration: false },
-  });
-  updatesWin.setMenuBarVisibility(false);
-  // Feed text lives on this page: it never opens a window or leaves updates.html.
-  updatesWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  const stay = stayOnPage('updates.html');
-  updatesWin.webContents.on('will-navigate', stay);
-  updatesWin.webContents.on('will-redirect', stay);
-  updatesWin.loadFile('updates.html');
-  showDock();
-  updatesWin.on('closed', () => {
-    updatesWin = null;
-    if (process.platform === 'darwin' && !lightsWin && !settingsWin && !updatesWin && !buddyWin?.isOpen() && !hatchWin) app.dock.hide();
-  });
-}
+function createUpdatesWindow() { openBuddy('updates'); }
 
 // Hatch: make a character from a few choices (characters/hatch.js), keep it
 // under <data dir>/characters (src/character-store.js). The page only ever
@@ -1298,49 +1249,21 @@ const characterStore = CharacterStore.create({ dir: path.join(ROOT_DIR, 'charact
 let hatchWin = null;
 const hatchResults = new Map();
 function broadcastCharacters() {
+  buddyWin?.sendToPage('hatch', 'characters:changed');
   for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('characters:changed');
 }
-function createHatchWindow() {
-  if (hatchWin) {
-    hatchWin.show();
-    hatchWin.focus();
-    return;
-  }
-  hatchWin = new BrowserWindow({
-    width: 640,
-    height: 480,
-    useContentSize: true,
-    minimizable: false,
-    maximizable: false,
-    title: 'Hatch a character',
-    backgroundColor: '#1c1a1f',
-    webPreferences: { spellcheck: false, preload: path.join(__dirname, 'hatch-preload.js'), contextIsolation: true, sandbox: true, nodeIntegration: false },
-  });
-  hatchWin.setMenuBarVisibility(false);
-  hatchWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  const HATCH_URL = require('url').pathToFileURL(path.join(__dirname, 'hatch.html')).href;
-  const stay = (e, url) => { if (url.split(/[?#]/)[0] !== HATCH_URL) e.preventDefault(); };
-  hatchWin.webContents.on('will-navigate', stay);
-  hatchWin.webContents.on('will-redirect', stay);
-  hatchWin.loadFile('hatch.html');
-  showDock();
-  hatchWin.on('closed', () => {
-    hatchWin = null;
-    hatchResults.clear();
-    if (process.platform === 'darwin' && !lightsWin && !settingsWin && !updatesWin && !buddyWin?.isOpen() && !hatchWin) app.dock.hide();
-  });
-}
-const fromHatch = (e) => !!hatchWin && e.sender === hatchWin.webContents;
-ipcMain.handle('characters:list', () => characterStore.list().map((c) => c.character));
-ipcMain.handle('hatch:open', (e) => { if (lightsWin && e.sender === lightsWin.webContents) createHatchWindow(); });
-ipcMain.handle('hatch:close', (e) => { if (fromHatch(e)) hatchWin.close(); });
+function createHatchWindow() { openBuddy('hatch'); }
+const fromHatch = (e) => fromUtilityPage(e, 'hatch');
+utilityHandle('characters:list', e => widgetOnly(e) || widgetConfigSender(e) || fromHatch(e), () => characterStore.list().map((c) => c.character));
+ipcMain.handle('hatch:open', (e) => { if (widgetConfigSender(e)) createHatchWindow(); });
+ipcMain.handle('hatch:close', (e) => { if (fromHatch(e)) createLightsWindow(); });
 // ai: false until the hand-off engine can run a hidden AI task (the template path is the fallback either way)
 ipcMain.handle('hatch:options', (e) => (fromHatch(e) ? { shapes: Hatch.SHAPES, sizes: Hatch.SIZES, arms: Hatch.ARMS, accessories: Hatch.ACCESSORIES, ai: false } : null));
 ipcMain.handle('hatch:surprise', (e) => (fromHatch(e) ? Hatch.surprise(Date.now()) : null));
 ipcMain.handle('hatch:generate', async (e, params) => {
   if (!fromHatch(e)) return null;
   const r = await Hatch.runHatch({ params });
-  if (!r.character) return null;
+  if (!fromHatch(e) || !r.character) return null;
   const token = require('crypto').randomUUID();
   hatchResults.set(token, { character: r.character, params: r.params, source: r.source });
   while (hatchResults.size > 8) hatchResults.delete(hatchResults.keys().next().value);
@@ -1361,91 +1284,8 @@ ipcMain.handle('hatch:save', (e, token) => {
   }
 });
 ipcMain.handle('hatch:remove', (e, id) => {
-  if (!(lightsWin && e.sender === lightsWin.webContents)) return false;
+  if (!widgetConfigSender(e)) return false;
   try { const ok = characterStore.remove(id); if (ok) broadcastCharacters(); return ok; } catch { return false; }
-});
-
-// The Usage pop-out: a small read-only glance (today, this week, busiest model)
-// next to whatever opened it. The full analytics page stays in the Lights
-// editor's Model mix view, behind the footer link and the sidebar's Usage.
-const USAGE_POP_SIZE = { width: 300, height: 260 };
-const USAGE_POP_REFRESH_MS = 30000;
-let usagePopWin = null;
-let usagePopTimer = null;
-async function usagePopSummary() {
-  return UsagePopView.build(await getUsageTurns(), { mode: Spend.normalize(loadConfig().spend).mode });
-}
-async function pushUsagePop() {
-  const w = usagePopWin;
-  if (!w || w.isDestroyed()) return;
-  try {
-    const summary = await usagePopSummary();
-    if (usagePopWin === w && !w.isDestroyed()) w.webContents.send('usage-pop:update', summary);
-  } catch (err) { console.warn('[usage-pop] refresh failed:', err.message); }
-}
-// Beside the widget when it opened this and is on screen, under (or over) the
-// tray icon otherwise, and by the cursor when neither is there.
-function usagePopBounds(from) {
-  const widgetB = win && !win.isDestroyed() && win.isVisible() ? win.getBounds() : null;
-  const trayB = tray && !tray.isDestroyed() && tray.getBounds().width ? tray.getBounds() : null;
-  const beside = !!widgetB && (from === 'widget' || !trayB);
-  const anchor = beside ? widgetB : trayB || { ...screen.getCursorScreenPoint(), width: 1, height: 1 };
-  const { width, height } = USAGE_POP_SIZE;
-  const wa = screen.getDisplayMatching(anchor).workArea;
-  let x = beside ? anchor.x - width - 8 : Math.round(anchor.x + anchor.width / 2 - width / 2);
-  if (beside && x < wa.x) x = anchor.x + anchor.width + 8;
-  const y = beside ? anchor.y : anchor.y + anchor.height / 2 < wa.y + wa.height / 2 ? anchor.y + anchor.height + 4 : anchor.y - height - 4;
-  return { x: Math.min(Math.max(x, wa.x), wa.x + wa.width - width), y: Math.min(Math.max(y, wa.y), wa.y + wa.height - height), width, height };
-}
-// Forgotten at once, so opening it again while the old one is still closing
-// makes a fresh window instead of re-showing a dying one.
-function closeUsagePop() {
-  const w = usagePopWin;
-  usagePopWin = null;
-  clearInterval(usagePopTimer);
-  usagePopTimer = null;
-  if (w && !w.isDestroyed()) w.close();
-}
-// If the OS refuses it focus (focus-stealing prevention) it could never see a
-// click-away or Esc, so it gives up rather than stay on top for good.
-const USAGE_POP_FOCUS_GRACE_MS = 1500;
-function createUsagePopWindow(from = 'tray') {
-  if (usagePopWin && !usagePopWin.isDestroyed()) { usagePopWin.setBounds(usagePopBounds(from)); usagePopWin.show(); usagePopWin.focus(); pushUsagePop(); return; }
-  const w = new BrowserWindow({
-    ...usagePopBounds(from),
-    frame: false, resizable: false, movable: false, minimizable: false, maximizable: false, fullscreenable: false, skipTaskbar: true,
-    alwaysOnTop: true, show: false, title: 'Usage', backgroundColor: '#1c1a1f',
-    webPreferences: { spellcheck: false, preload: path.join(__dirname, 'usage-pop-preload.js'), contextIsolation: true, sandbox: true, nodeIntegration: false },
-  });
-  usagePopWin = w;
-  w.setAlwaysOnTop(true, 'floating', 1);
-  w.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  const stay = stayOnPage('usage-pop.html');
-  w.webContents.on('will-navigate', stay);
-  w.webContents.on('will-redirect', stay);
-  const done = () => { if (usagePopWin === w) closeUsagePop(); else if (!w.isDestroyed()) w.close(); };
-  // Esc is also handled in the page; this one works before the page has focus.
-  w.webContents.on('before-input-event', (e, input) => { if (input.type === 'keyDown' && input.key === 'Escape') { e.preventDefault(); done(); } });
-  // Click-away closes it, but only once it has really had focus: the menu that
-  // opened it hands focus back as it closes, which is not a click-away.
-  let focused = false;
-  w.on('focus', () => { focused = true; });
-  w.on('blur', () => { if (focused) done(); });
-  w.once('ready-to-show', () => {
-    w.show(); w.focus(); w.moveTop();
-    setTimeout(() => { if (!focused && !w.isDestroyed()) done(); }, USAGE_POP_FOCUS_GRACE_MS);
-  });
-  w.loadFile('usage-pop.html');
-  clearInterval(usagePopTimer);
-  usagePopTimer = setInterval(pushUsagePop, USAGE_POP_REFRESH_MS);
-  w.on('closed', () => { if (usagePopWin === w) closeUsagePop(); });
-}
-ipcMain.handle('usage-pop:get', (e) => (usagePopWin && e.sender === usagePopWin.webContents ? usagePopSummary() : null));
-ipcMain.handle('usage-pop:close', (e) => { if (usagePopWin && e.sender === usagePopWin.webContents) closeUsagePop(); });
-ipcMain.handle('usage-pop:open-full', (e) => {
-  if (!usagePopWin || e.sender !== usagePopWin.webContents) return;
-  closeUsagePop();
-  openLightsMix();
 });
 
 // The updater service (or, in a visual-test run, a fixture stand-in). The tray is rebuilt only when its update items change.
@@ -1472,18 +1312,26 @@ function watchUpdater() {
   });
 }
 
-ipcMain.handle('open-updates', () => createUpdatesWindow());
+ipcMain.handle('open-updates', e => { if (widgetOnly(e) || fromUtilityPage(e, 'updates')) createUpdatesWindow(); });
 
 // The Plexiform main window (board, views, integrations…): buddy-window/.
 const { createBuddyWindow } = require('./buddy-window');
 const BRAND = require('./buddy-window/brand');
 const BuddyPages = require('./buddy-window/pages');
 const AppMenu = require('./src/app-menu.js');
-const UsagePopView = require('./src/usage-pop-view.js');
+const { fromPage } = require('./src/utility-pages.js');
+const fromUtilityPage = (e, id) => fromPage(e, buddyWin?.pageWebContents(id));
+const widgetConfigSender = (e) => fromPage(e, lightsWin?.webContents);
+const analyticsSender = (e) => fromUtilityPage(e, 'usage') || fromUtilityPage(e, 'stats');
+const configReader = (e) => widgetOnly(e) || widgetConfigSender(e) || settingsOnly(e) || analyticsSender(e);
+function utilityHandle(channel, allowed, handler) {
+  ipcMain.handle(channel, (e, ...args) => allowed(e) ? handler(e, ...args) : null);
+}
+
 // plexiform:// and the legacy claudebuddy:// open the same links.
 const DEEP_LINK_RE = new RegExp(`^(${BRAND.SCHEMES.join('|')}):`, 'i');
 let buddyWin = null;
-function openLightsMix() { createLightsWindow(); lightsWin?.webContents.once('did-finish-load', () => lightsWin?.webContents.send('show-view', 'mix')); lightsWin?.webContents.send('show-view', 'mix'); }
+function openLightsMix() { openBuddy('usage'); }
 // Dev only (`--buddy-mock-accounts`): the loopback mock accounts hub. The
 // Buddy window reads its origin once, when created, so nothing may create the
 // window (a deep link, the tray, a second instance) until it is listening.
@@ -1500,19 +1348,57 @@ function getBuddy() {
         else if (which === 'settings') createSettingsWindow();
         else if (which === 'mix') openLightsMix();
       },
-      onClosed: () => { if (IS_MAC && !lightsWin && !settingsWin && !updatesWin) app.dock.hide(); },
+      onLocalPage: (page, wc) => {
+        if (page.id === 'settings' && !IS_MAC) wc.insertCSS('#busy-sources, .field:has(#busyFocusShortcut) { display: none; }').catch(() => {});
+      },
+      onClosed: () => { OverviewMain.invalidate(); hatchResults.clear(); feedbackShot = null; feedbackLast = null; SetupsLocal.invalidate(); if (IS_MAC && !lightsWin) app.dock.hide(); },
       devAccountsHub: app.isPackaged ? null : devAccountsHub,
+      captureEnabled: !DEMO,
     });
     if (typeof buddyWin[BudgetNotice.CONTRACT.subscribeMethod] === 'function') {
       const unsubscribe = buddyWin[BudgetNotice.CONTRACT.subscribeMethod](handleBudgetEvent);
       if (typeof unsubscribe === 'function') app.once('will-quit', unsubscribe);
     }
-    if (typeof buddyWin.onAccountChange === 'function') buddyWin.onAccountChange(() => settingsWin?.webContents.send('account-changed'));
+    if (typeof buddyWin.onAccountChange === 'function') buddyWin.onAccountChange(() => {OverviewMain.invalidate();buddyWin.sendToPage('settings', 'account-changed');});
+    if(typeof buddyWin.onSetupsIdentityChange==='function')buddyWin.onSetupsIdentityChange(()=>{OverviewMain.invalidate();SetupsLocal.invalidate();buddyWin.sendToPage('setups','setups:changed');});
   }
   return buddyWin;
 }
 // Optional, like the work-scope module: only a Plexiform window that offers it says who is signed in.
 const accountSummary = () => { try { return typeof buddyWin?.accountSummary === 'function' ? buddyWin.accountSummary() : null; } catch { return null; } };
+const MyDay = require('./src/my-day-service.js').createMyDayService({
+  work: () => buddyWin?.myDay() ?? Promise.resolve({ status: 'partial', sources: [] }),
+  sessions: () => localSessions(aggregateState().sessions || []),
+  busy: () => BusyWatch.status(),
+  open: handle => buddyWin?.openMyDayCard(handle) ?? false,
+});
+const myDaySender = e => !!e.sender && e.sender === buddyWin?.pageWebContents('myday') && e.senderFrame === e.sender.mainFrame;
+const SessionOverview = require('./src/session-overview.js');
+const ProviderStatus = require('./src/provider-status.js');
+const sessionsSender = e => fromUtilityPage(e, 'sessions');
+ipcMain.handle('sessions:state', e => {
+  if (!sessionsSender(e)) return null;
+  try {
+    const configured = IS_DEV_RUN ? false : Adapters.get('codex').isActivityInstalled({ home: os.homedir(), runtime: HOOK_RUNTIME });
+    return SessionOverview.snapshot({ sessions: localSessions(aggregateState().sessions || []), activity: { configured, available: true }, now: Date.now() });
+  } catch {
+    return SessionOverview.snapshot({ sessions: [], activity: { available: false }, available: false, now: Date.now() });
+  }
+});
+ipcMain.handle('sessions:settings', e => { if (!sessionsSender(e)) return false; createSettingsWindow(); return true; });
+// Overview uses main-owned structured reports/current own-board work only.
+const OverviewMain=require('./src/overview-main').createOverviewMain({
+  buddy:()=>buddyWin,sessions:()=>aggregateState().sessions||[],
+  work:()=>buddyWin?.overviewWork()??Promise.resolve({sources:[],capture:[],partial:true}),
+  managed:()=>{const service=getTasks();service.start();return service.snapshot();},
+  openManaged:async(_id,fresh)=>{if(!fresh())return false;openBuddy('tasks');return true;},
+  messageManaged:(id,text,fresh)=>fresh()?getTasks().act({id,action:'message',payload:{body:text}},0,fresh):Promise.resolve({ok:false}),
+});
+OverviewMain.register(ipcMain);
+app.on('will-quit',()=>OverviewMain.close());
+
+ipcMain.handle('myday:state', e => myDaySender(e) ? MyDay.snapshot() : null);
+ipcMain.handle('myday:open', (e, handle) => myDaySender(e) && typeof handle === 'string' && handle.length <= 100 ? MyDay.open(handle) : false);
 function openBuddy(page = null) {
   if (!devMockReady) return;
   getBuddy();
@@ -1520,10 +1406,40 @@ function openBuddy(page = null) {
   buddyWin.open(page);
 }
 
+const SetupsNative = require('./src/setups-service.js').createSetupsService({
+  sources:()=>buddyWin?.setupSources()??Promise.resolve([]),home:os.homedir(),
+  machine:()=>({user:os.userInfo().username,hostname:os.hostname()}),
+  async confirm(summary) {
+    const answer=await dialog.showMessageBox({type:'warning',title:'Share reviewed setup',message:`Share ${summary.files} reviewed files and ${summary.items} inventory entries with ${summary.team}?`,detail:'All current staff in this team can read this setup. Review filenames, full text, notes and inventory for private information before sharing. This publishes configuration; it does not apply or run it.',buttons:['Cancel','Share reviewed setup'],defaultId:0,cancelId:0,noLink:true});
+    return answer.response===1;
+  },
+  async chooseExport() {
+    const result=await dialog.showSaveDialog({title:'Export your shared setup',defaultPath:'plexiform-setup.json',filters:[{name:'Reviewed setup',extensions:['json']}]});
+    if(result.canceled || !result.filePath) return null;
+    // This chosen path remains in main. Exclusive/no-follow creation protects
+    // existing files and links; no renderer-supplied destination is accepted.
+    return text=>{let fd;try{fd=fs.openSync(result.filePath,fs.constants.O_WRONLY|fs.constants.O_CREAT|fs.constants.O_EXCL|(fs.constants.O_NOFOLLOW??0),0o600);fs.writeFileSync(fd,text,'utf8');fs.fsyncSync(fd);}finally{if(fd!==undefined)fs.closeSync(fd);}};
+  },
+});
+const setupsSender=e=>!!e.sender && e.sender===buddyWin?.pageWebContents('setups') && e.senderFrame===e.sender.mainFrame;
+ipcMain.handle('setups:state',e=>setupsSender(e)?SetupsNative.snapshot():null);
+ipcMain.handle('setups:read',(e,handle)=>setupsSender(e)?SetupsNative.read(handle):null);
+ipcMain.handle('setups:draft',(e,handle,input)=>setupsSender(e)?SetupsNative.draft(handle,input):null);
+ipcMain.handle('setups:edit',(e,handle,input)=>setupsSender(e)?SetupsNative.edit(handle,input):null);
+ipcMain.handle('setups:approve',(e,handle,file,hash)=>setupsSender(e)?SetupsNative.approve(handle,file,hash):null);
+ipcMain.handle('setups:publish',(e,handle,hash)=>setupsSender(e)?SetupsNative.publish(handle,hash):null);
+ipcMain.handle('setups:action',(e,handle,op,input)=>setupsSender(e)?SetupsNative.action(handle,op,input):null);
+ipcMain.handle('setups:export',(e,handle)=>setupsSender(e)?SetupsNative.export(handle):null);
+// The embedded page remains pending until actual packaged Apply/recovery/Undo
+// acceptance. No dev helper or renderer-supplied local authority is a fallback.
+const SetupsLocal=require('./src/setups-main').createSetupsMain({app,buddy:()=>buddyWin,service:SetupsNative,dialog,safeStorage:require('electron').safeStorage,accepted:false});
+SetupsLocal.register(ipcMain);
+app.on('will-quit',()=>SetupsLocal.close());
+
 // Settings → Account & team, and the widget's one-time Team hint. Each
 // handler checks its sender; the page to open is never taken from the renderer.
 const TeamEntry = require('./src/team-entry.js');
-const settingsOnly = (e) => !!settingsWin && e.sender === settingsWin.webContents;
+const settingsOnly = (e) => fromUtilityPage(e, 'settings');
 ipcMain.handle('account-view', (e) => {
   if (!settingsOnly(e)) return null;
   return TeamEntry.settingsView(accountSummary(), new URL(BRAND.DEFAULT_HUB).host);
@@ -1533,7 +1449,7 @@ ipcMain.handle('account-open', (e, which) => {
   openBuddy(['team', 'signin'].includes(which) ? which : 'account');
   return true;
 });
-const widgetOnly = (e) => !!win && e.sender === win.webContents;
+const widgetOnly = (e) => fromPage(e, win?.webContents);
 const teamHint = () => TeamEntry.hintFor(accountSummary(), loadConfig().hints?.teamSeen === true);
 ipcMain.handle('team-hint', (e) => widgetOnly(e) ? teamHint() : null);
 ipcMain.handle('team-hint-done', (e, open) => {
@@ -1547,10 +1463,8 @@ ipcMain.handle('team-hint-done', (e, open) => {
 
 // Preferences scrolled to its Health section, rechecked.
 function showHealth() {
-  const fresh = !settingsWin;
-  createSettingsWindow();
-  if (fresh) settingsWin.webContents.once('did-finish-load', () => settingsWin?.webContents.send('show-section', 'health'));
-  else settingsWin.webContents.send('show-section', 'health');
+  openBuddy('settings');
+  buddyWin?.sendToPage('settings', 'show-section', 'health');
 }
 
 // Invite deep links (plexiform://invite/<token>, plexiform://join?hub=…&t=…, and the same under claudebuddy://).
@@ -1576,33 +1490,90 @@ app.on('web-contents-created', (_e, wc) => Updater.guardNavigation(wc));
 if (app.isPackaged) for (const scheme of BRAND.SCHEMES) app.setAsDefaultProtocolClient(scheme);
 // Open Lights on a view, then hand it one event (a prefill) once it can hear it.
 function showLightsView(view, then = null) {
+  if (view === 'mix' || view === 'stats') { openBuddy(view === 'mix' ? 'usage' : 'stats'); return; }
+  if (!['rules', 'auto'].includes(view)) return;
   const fresh = !lightsWin;
   createLightsWindow();
-  const go = () => { lightsWin?.webContents.send('show-view', view); if (then) lightsWin?.webContents.send(then.event, then.data); };
-  if (fresh || lightsWin?.webContents.isLoading()) lightsWin?.webContents.once('did-finish-load', go); else go();
+  const wc = lightsWin?.webContents;
+  const go = () => { if (!wc || wc.isDestroyed() || lightsWin?.webContents !== wc) return; wc.send('show-view', view); if (then) wc.send(then.event, then.data); };
+  if (fresh || wc?.isLoading()) wc?.once('did-finish-load', go); else go();
 }
 
-// "Waiting on you" on its own (the same page sits in the Plexiform window).
+// Waiting on you always opens in the main app.
 let waitingWin = null;
-function createWaitingWindow() {
-  if (waitingWin) { waitingWin.show(); waitingWin.focus(); return; }
-  waitingWin = new BrowserWindow({
-    width: 560, height: 640, minWidth: 380, minHeight: 320,
-    title: `Waiting on you — ${Brand.name}`,
-    titleBarStyle: 'hiddenInset',
-    backgroundColor: '#1c1a1f',
-    webPreferences: { preload: path.join(__dirname, 'waiting-preload.js'), contextIsolation: true, sandbox: true, spellcheck: false },
+function createWaitingWindow() { openBuddy('waiting'); }
+
+// ── Tasks page ────────────────────────────────────────────────────────────
+// The main app page never touches the supervisor's
+// socket or token: this process does (src/tasks-service.js) and hands it
+// sanitised tasks over the IPC below, every one checked for its sender.
+// Dev runs point at the mock supervisor through an env var, never in a package.
+let tasksWin = null;
+let tasksSvc = null;
+let tasksProcess = null;
+const tasksPages = () => [tasksWin?.webContents, buddyWin?.pageWebContents('tasks')].filter((w) => w && !w.isDestroyed());
+const tasksSenderOk = (e) => !!e.sender && tasksPages().includes(e.sender) && e.senderFrame === e.sender.mainFrame;
+const TASKS_SEEN_FILE = path.join(ROOT_DIR, 'tasks-seen.json');
+function getTasks() {
+  if (tasksSvc) return tasksSvc;
+  const dev = IS_DEV_RUN && !app.isPackaged;
+  const fixtureHome = dev && process.env.CLAUDE_TRAFFIC_LIGHT_TASKS_HOME;
+  const dataDir = fixtureHome || path.join(app.getPath('userData'), 'tasks');
+  if (!fixtureHome) {
+    tasksProcess = require('./src/tasks-process.js').createTasksSupervisor({
+      fork: require('electron').utilityProcess.fork,
+      entry: path.join(__dirname, 'board', 'tasks-engine', 'utility-entry.js'), dataDir,
+    });
+  }
+  tasksSvc = require('./src/tasks-service.js').createTasksService({
+    boardHome: dataDir,
+    ensureSupervisor: () => tasksProcess?.ensure(),
+    homeDir: os.homedir(),
+    copy: (text) => clipboard.writeText(text),
+    onChange: (snap) => { for (const wc of tasksPages()) wc.send('tasks:changed', snap); },
+    onEvent: (wcId, id, event) => { const wc = tasksPages().find((w) => w.id === wcId); if (wc) wc.send('tasks:event', { id, event }); },
+    // The confirmation for the risky actions is main's: a native dialog, Cancel the default, the page's click never counts.
+    confirmDialog: async (info, wcId) => {
+      const wc = tasksPages().find((w) => w.id === wcId);
+      const parent = (wc && BrowserWindow.fromWebContents(wc)) || undefined;
+      const r = await dialog.showMessageBox(parent, {
+        type: 'warning', buttons: ['Cancel', info.label], defaultId: 0, cancelId: 0, noLink: true,
+        message: `${info.label}?`,
+        detail: [`Task: ${info.title}`, info.where ? `Runs in: ${info.where}` : '', info.detail].filter(Boolean).join('\n'),
+      });
+      return r.response === 1;
+    },
+    seen: {
+      load: () => { try { return JSON.parse(fs.readFileSync(TASKS_SEEN_FILE, 'utf8')); } catch { return {}; } },
+      save: (o) => { try { SessionState.writeJsonAtomic(TASKS_SEEN_FILE, o); } catch (err) { console.warn('[tasks] seen not saved:', err.message); } },
+    },
+    log: (...a) => console.log('[tasks]', ...a),
   });
-  waitingWin.setMenuBarVisibility(false);
-  waitingWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  waitingWin.webContents.on('will-navigate', (e) => e.preventDefault());
-  waitingWin.loadFile('waiting.html');
-  showDock();
-  waitingWin.on('closed', () => {
-    waitingWin = null;
-    if (IS_MAC && !lightsWin && !settingsWin && !buddyWin?.isOpen() && !hatchWin) app.dock.hide();
-  });
+  return tasksSvc;
 }
+function createTasksWindow() { openBuddy('tasks'); }
+ipcMain.handle('tasks:state', (e) => { if (!tasksSenderOk(e)) return null; const s = getTasks(); s.start(); return s.snapshot(); });
+ipcMain.handle('tasks:retry', (e) => { if (tasksSenderOk(e)) getTasks().retryNow(); });
+ipcMain.handle('tasks:open', (e, id) => (tasksSenderOk(e) ? getTasks().openTask(id, e.sender.id) : null));
+ipcMain.handle('tasks:close', (e) => { if (tasksSenderOk(e)) return getTasks().closeTask(e.sender.id); return null; });
+ipcMain.handle('tasks:act', (e, req) => (tasksSenderOk(e) ? getTasks().act(req, e.sender.id) : null));
+ipcMain.handle('tasks:checkpoint', (e, req) => (tasksSenderOk(e) ? getTasks().saveCheckpoint(req, e.sender.id) : null));
+ipcMain.handle('tasks:create', (e, draft) => (tasksSenderOk(e) ? getTasks().create(draft) : null));
+ipcMain.handle('tasks:composer', (e) => (tasksSenderOk(e) ? getTasks().composerInfo() : null));
+ipcMain.handle('tasks:copy-takeover', (e, id) => !!tasksSenderOk(e) && typeof id === 'string' && getTasks().copyTakeover(id));
+// The folder comes back as an opaque handle plus a label: the page cannot name a path of its own.
+ipcMain.handle('tasks:pick-folder', async (e) => {
+  if (!tasksSenderOk(e)) return null;
+  let dir = null;
+  if (IS_DEV_RUN && !app.isPackaged && process.env.CLAUDE_TRAFFIC_LIGHT_TASKS_PICK) dir = process.env.CLAUDE_TRAFFIC_LIGHT_TASKS_PICK;
+  else {
+    const r = await dialog.showOpenDialog(BrowserWindow.fromWebContents(e.sender) || undefined, { title: 'Choose the folder the task works in', properties: ['openDirectory', 'createDirectory'] });
+    dir = r.canceled ? null : r.filePaths[0];
+  }
+  try { if (!dir || !path.isAbsolute(dir) || !fs.statSync(dir).isDirectory()) return null; } catch { return null; }
+  return getTasks().registerFolder(dir);
+});
+app.on('will-quit', () => tasksSvc?.stop());
 
 let lightsWin = null;
 
@@ -1618,7 +1589,7 @@ function createLightsWindow() {
     minWidth: 720,
     minHeight: 560,
     useContentSize: true,
-    title: 'Lights',
+    title: 'Widget configuration',
     // Off macOS 'hiddenInset' hides the window controls with the title bar.
     titleBarStyle: IS_MAC ? 'hiddenInset' : 'default',
     backgroundColor: '#1c1a1f',
@@ -1626,12 +1597,18 @@ function createLightsWindow() {
       spellcheck: false,
       preload: path.join(__dirname, 'lights-preload.js'),
       contextIsolation: true,
+      sandbox: true,
+      nodeIntegration: false,
       // The live preview must keep animating when this window sits behind
       // the terminal; macOS occlusion would otherwise freeze it.
       backgroundThrottling: false,
     },
   });
   lightsWin.setMenuBarVisibility(false);
+  lightsWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  const stay = stayOnPage('lights.html');
+  lightsWin.webContents.on('will-navigate', stay);
+  lightsWin.webContents.on('will-redirect', stay);
   const syncLightsVisibility = (visible = lightsWin?.isVisible()) => {
     if (!lightsWin || lightsWin.isDestroyed()) return;
     lightsMotion.set('minimized', lightsWin.isMinimized());
@@ -1656,7 +1633,7 @@ function createLightsWindow() {
   // captures the editor and quits.
   const shotAt = process.argv.indexOf('--shot');
   const arg = (flag) => { const i = process.argv.indexOf(flag); return i > 0 ? process.argv[i + 1] : null; };
-  const query = {};
+  const query = { utility: 'widget' };
   if (arg('--select')) query.select = arg('--select');
   if (arg('--mode')) query.mode = arg('--mode');
   if (arg('--pose')) query.pose = arg('--pose');
@@ -1742,57 +1719,15 @@ function createLightsWindow() {
 // words. Opened from the widget's "?" and the tray; once on first run.
 let helpWin = null;
 
-function createHelpWindow() {
-  if (helpWin) {
-    helpWin.show();
-    helpWin.focus();
-    return;
-  }
-  const W = 340, H = 520;
-  const wb = win?.getBounds();
-  const wa = screen.getDisplayMatching(wb || { x: 0, y: 0, width: 1, height: 1 }).workArea;
-  // Beside the widget, on whichever side has room.
-  const x = wb ? (wb.x - W - 12 >= wa.x ? wb.x - W - 12 : Math.min(wb.x + wb.width + 12, wa.x + wa.width - W)) : wa.x + wa.width - W - 40;
-  const y = wb ? Math.max(wa.y, Math.min(wb.y, wa.y + wa.height - H)) : wa.y + 80;
-  helpWin = new BrowserWindow({
-    width: W,
-    height: H,
-    x: Math.round(x),
-    y: Math.round(y),
-    useContentSize: true,
-    resizable: false,
-    minimizable: false,
-    maximizable: false,
-    fullscreenable: false,
-    title: 'What is Claude doing?',
-    backgroundColor: '#1c1a1f',
-    webPreferences: {
-      spellcheck: false,
-      preload: path.join(__dirname, 'help-preload.js'),
-      contextIsolation: true,
-    },
-  });
-  helpWin.setMenuBarVisibility(false);
-  helpWin.loadFile('help.html');
-  // Dev: `--shot-help out.png` captures the panel and quits.
-  const shotAt = process.argv.indexOf('--shot-help');
-  if (shotAt > 0 && process.argv[shotAt + 1]) {
-    helpWin.webContents.once('did-finish-load', () => setTimeout(async () => {
-      fs.writeFileSync(process.argv[shotAt + 1], (await helpWin.webContents.capturePage()).toPNG());
-      console.log('[shot] help', JSON.stringify(helpState()));
-      app.quit();
-    }, 1500));
-  }
-  helpWin.on('closed', () => { helpWin = null; });
-}
+function createHelpWindow() { openBuddy('help'); }
 
 function helpState() {
   const real = aggregateState({ ignoreTravel: true });
-  return Help.explain(real, loadConfig().rules, { travel: travelLook ? travelLook.name : null, busy: BusyWatch.status() });
+  return Help.explain(real, loadConfig().rules, { travel: travelLook ? travelLook.name : null, busy: BusyWatch.status(), providerStatus: ProviderStatus.snapshot({ sessions: localSessions(real.sessions || []), online }) });
 }
 
-ipcMain.handle('open-help', createHelpWindow);
-ipcMain.handle('get-help', () => helpState());
+ipcMain.handle('open-help', e => { if (widgetOnly(e) || widgetConfigSender(e)) createHelpWindow(); });
+ipcMain.handle('get-help', (e) => fromUtilityPage(e, 'help') ? helpState() : null);
 
 function maybeAutoShowHelp() {
   const marker = path.join(ROOT_DIR, Help.MARKER);
@@ -2392,11 +2327,14 @@ function broadcastStatus() {
   // here, since this loop is the one thing guaranteed to keep running.
   if (win && !win.isDestroyed() && win.webContents.isCrashed()) {
     console.log('[watchdog] widget renderer is dead — recreating');
-    try { win.destroy(); } catch { /* already gone */ }
-    win = null;
+    const crashed = win;
+    try { crashed.destroy(); } catch { /* retain a live owner if disposal failed */ }
+    if (!crashed.isDestroyed()) return;
+    if (win === crashed) win = null;
     createWindow();
   }
   lightsWin?.webContents.send('status-changed');
+  for (const id of ['usage', 'stats', 'help']) buddyWin?.sendToPage(id, 'status-changed');
   helpWin?.webContents.send('status-changed');
   waitingWin?.webContents.send('status-changed');
   try {
@@ -2405,7 +2343,8 @@ function broadcastStatus() {
     // except for its waiting inputs, which it always hears about.
     const asks = askKey(st);
     if (statusPushWanted(widgetMotion.paused, asks, widgetAsksSent)) { widgetAsksSent = asks; win?.webContents.send('status-changed'); }
-    buddyWin?.sessionsChanged(st.sessions);
+    if (!DEMO && devMockReady && localSessions(st.sessions).length) getBuddy().sessionsChanged(localSessions(st.sessions));
+    else buddyWin?.sessionsChanged(localSessions(st.sessions));
     const recap = BusyWatch.observe(st.sessions);
     if (recap) { stateMemo = { at: 0, key: null, value: null }; showAwayRecap(recap); }
     maybeNotify(st);
@@ -2686,7 +2625,7 @@ function createTray() {
   const buildMenu = (from = 'tray') => Menu.buildFromTemplate([
     ...budgetItems(),
     ...scopeItem(),
-    ...AppMenu.appItems({ pages: BuddyPages.PAGES, groups: BuddyPages.GROUPS, open: openBuddy, openLabel: BRAND.OPEN_MENU_LABEL, feedback: { label: "Something's off / Idea…", click: createFeedbackWindow }, popOuts: { usage: () => createUsagePopWindow(from) } }),
+    ...AppMenu.appItems({ pages: BuddyPages.PAGES, groups: BuddyPages.GROUPS, open: openBuddy, openLabel: BRAND.OPEN_MENU_LABEL, feedback: { label: "Something's off / Idea…", click: createFeedbackWindow } }),
     { label: 'Open Claude', click: () => shell.openExternal('https://claude.ai') },
     { label: 'Show Widget Now', click: () => { saveConfig({ showWidget: true }); clearTimeout(snoozeTimer); if (!win) createWindow(); win.showInactive(); createTray(); } },
     { label: 'Reset Widget Position', click: () => { const wa = screen.getPrimaryDisplay().workArea; if (!win) createWindow(); strip = WidgetStrip.NONE; win.setMaximumSize(MAX_WIDTH, Math.round(MAX_WIDTH / WIDGET_ASPECT)); win.setAspectRatio(WIDGET_ASPECT); win.setBounds({ x: wa.x + wa.width - 140, y: wa.y + 46, width: 107, height: 137 }); win.showInactive(); broadcastStatus(); } },
@@ -2906,10 +2845,10 @@ ipcMain.on('resize-window-by', (e, factor) => {
   resizeBy(factor);
 });
 
-ipcMain.handle('get-aggregate-status', () => {
+utilityHandle('get-aggregate-status', e => widgetOnly(e) || widgetConfigSender(e), () => {
   const state = aggregateState();
   const facing = widgetMuzzle()?.facing || 'right';
-  return { ...state, look: { ...state.look, facing } };
+  return { ...state, providerStatus: ProviderStatus.snapshot({ sessions: localSessions(state.sessions || []), online }), look: { ...state.look, facing } };
 });
 
 // Click handler: jump to whichever session needs the user — the ones whose
@@ -2950,9 +2889,9 @@ ipcMain.handle('go-to-needing-session', async () => {
   };
 });
 
-ipcMain.handle('get-config', () => loadConfig());
+utilityHandle('get-config', configReader, () => loadConfig());
 
-ipcMain.handle('save-config', (e, partial) => {
+utilityHandle('save-config', e => settingsOnly(e) || widgetConfigSender(e), (e, partial) => {
   try { return commitConfig(partial); } catch (err) {
     console.warn('[save-config]', err.message);
     return { error: `Could not save: ${err.message}` };
@@ -2981,12 +2920,12 @@ function commitConfig(partial) {
   return next;
 }
 
-ipcMain.handle('get-privacy', () => { try { return fs.readFileSync(path.join(__dirname, 'PRIVACY.md'), 'utf8'); } catch { return null; } });
-ipcMain.handle('show-data-folder', () => { fs.mkdirSync(ROOT_DIR, { recursive: true }); return shell.openPath(ROOT_DIR); });
-ipcMain.handle('get-stats', (_e, days) => Stats.summary(stats, Date.now(), Math.min(60, Math.max(1, Number(days) || 7))));
+utilityHandle('get-privacy', settingsOnly, () => { try { return fs.readFileSync(path.join(__dirname, 'PRIVACY.md'), 'utf8'); } catch { return null; } });
+utilityHandle('show-data-folder', settingsOnly, () => { fs.mkdirSync(ROOT_DIR, { recursive: true }); return shell.openPath(ROOT_DIR); });
+utilityHandle('get-stats', e => analyticsSender(e) || settingsOnly(e), (_e, days) => Stats.summary(stats, Date.now(), Math.min(60, Math.max(1, Number(days) || 7))));
 
 // Export the whole visible range as JSON or CSV, wherever the user points.
-ipcMain.handle('export-stats', async (e, format, days) => {
+utilityHandle('export-stats', e => settingsOnly(e) || analyticsSender(e), async (e, format, days) => {
   const n = Math.min(60, Math.max(1, Number(days) || 7));
   const sum = Stats.summary(stats, Date.now(), n);
   const csv = format === 'csv';
@@ -3122,7 +3061,7 @@ async function computeCosts() {
   costCache = { at: Date.now(), data };
   return data;
 }
-ipcMain.handle('get-costs', () => getCosts());
+utilityHandle('get-costs', e => analyticsSender(e) || settingsOnly(e), () => getCosts());
 
 // ── Usage: per-turn tokens read from the transcripts themselves ───────────
 const USAGE_TTL_MS = 60 * 1000;
@@ -3152,13 +3091,13 @@ function getUsageTurns() {
 // The Model mix card: read-only — which models your turns ran on, what they
 // cost, one recommendation line, and a note if an old router shim is still
 // in a shell rc (never edited from here).
-ipcMain.handle('model-mix', async () => ({ ...Usage.modelMix(await getUsageTurns()), leftoverShim: LeftoverShim.detect({ home: os.homedir(), env: process.env, root: ROOT_DIR }) }));
+utilityHandle('model-mix', e => fromUtilityPage(e, 'usage'), async () => ({ ...Usage.modelMix(await getUsageTurns()), leftoverShim: LeftoverShim.detect({ home: os.homedir(), env: process.env, root: ROOT_DIR }) }));
 
 // The Usage tab and buddy_usage_history read the permanent record from disk.
 // Asking also nudges a fresh fold in, so an open tab stays current.
 // One call gives the tab everything it draws (usage-history.js bundle), read
 // from the cached store; `now` is only honoured in the visual tests.
-ipcMain.handle('usage-bundle', (_e, q = {}) => {
+utilityHandle('usage-bundle', e => fromUtilityPage(e, 'usage'), (_e, q = {}) => {
   if (Date.now() - historyAt > HISTORY_LIVE_MS && spendTurns.turns) historyTick();
   const range = ['7d', '30d', '90d', '1y', 'all'].includes(q.range) ? q.range : '30d';
   const now = DEMO === 'visual' && Number.isFinite(Number(q.now)) ? Number(q.now) : Date.now();
@@ -3334,7 +3273,7 @@ function spendNote(rules, fired, sessions, spend) {
 // process). Interactive sessions never register, so they only ever get the
 // notification and the jump to their terminal.
 const runawayStoppers = new Map();
-ipcMain.handle('get-spend', () => {
+utilityHandle('get-spend', settingsOnly, () => {
   const snap = spendSnapshot(loadConfig());
   return snap ? { ...snap, latch: undefined } : null;
 });
@@ -3381,7 +3320,7 @@ async function runAction(action, st) {
     case 'pet': return { react: { eyes: 'heart', pose: 'nod' }, ms: 2000, feedback: 'purr' };
     case 'feed': return { react: { pose: 'munch', eyes: 'happy' }, ms: 1800, feedback: 'nom' };
     case 'lights': createLightsWindow(); return { feedback: 'Lights' };
-    case 'stats': createLightsWindow(); lightsWin?.webContents.once('did-finish-load', () => lightsWin?.webContents.send('show-view', 'stats')); lightsWin?.webContents.send('show-view', 'stats'); return { feedback: 'Stats' };
+    case 'stats': openBuddy('stats'); return { feedback: 'Stats' };
     case 'finder': if (!cwd) return { feedback: 'no session folder' }; shell.openPath(cwd); return { feedback: `${IS_WIN ? 'Explorer' : 'Finder'} → ${folderHint}` };
     case 'editor': {
       if (!cwd) return { feedback: 'no session folder' };
@@ -3531,7 +3470,7 @@ ipcMain.handle('voice-start', () => {
 });
 ipcMain.handle('voice-enabled', () => listener.available() && Voice.normalizeConfig(loadConfig().voice).longPress);
 ipcMain.handle('voice-stop', () => listener.stop());
-ipcMain.handle('voice-status', () => ({
+utilityHandle('voice-status', settingsOnly, () => ({
   available: listener.available(),
   reason: listener.available() ? null : listener.unavailableReason(),
   hotkeys: Voice.HOTKEYS.map(({ accelerator, label }) => ({ accelerator, label })),
@@ -3586,7 +3525,7 @@ ipcMain.handle('get-inputs', (e) => {
 // (its own window or the Plexiform window's view) or Settings.
 const SCOPE_MODES = new Set(['personal', 'auto']);
 function scopeSenderOk(e) {
-  return inputSenderOk(e) || (!!settingsWin && e.sender === settingsWin.webContents);
+  return inputSenderOk(e) || settingsOnly(e);
 }
 function scopeChanged() { stateMemo = { at: 0, key: null, value: null }; broadcastStatus(); refreshTrayMenu(); }
 if (typeof WorkScope?.setSessionScope === 'function' && typeof WorkScope?.setRepoScope === 'function') {
@@ -3648,7 +3587,7 @@ ipcMain.handle('open-auto-rule', (e, from) => {
   showLightsView('auto', prefill ? { event: 'auto-rule-prefill', data: prefill } : null);
   return !!prefill;
 });
-ipcMain.handle('check-auto-rule', (e, rule) => (lightsWin && e.sender === lightsWin.webContents ? { reason: AutoRules.refusal(rule) } : { reason: 'not allowed' }));
+ipcMain.handle('check-auto-rule', (e, rule) => (widgetConfigSender(e) ? { reason: AutoRules.refusal(rule) } : { reason: 'not allowed' }));
 
 // The attach command a detached session's open returned, by input id. The
 // renderer asks for it to be copied; it never supplies the text.
@@ -3738,16 +3677,16 @@ function applyStrip(asking, away = false, update = false, budget = false) {
   ackStrip();
 }
 
-ipcMain.handle('preview-sound', (e, name) => playSound(name));
+utilityHandle('preview-sound', widgetConfigSender, (e, name) => playSound(name));
 
-ipcMain.handle('export-rules', async (e, rules) => {
+utilityHandle('export-rules', widgetConfigSender, async (e, rules) => {
   const r = await dialog.showSaveDialog(lightsWin || undefined, { title: 'Export rules', defaultPath: path.join(app.getPath('documents'), 'claude-traffic-light-rules.json'), filters: [{ name: 'JSON', extensions: ['json'] }] });
   if (r.canceled || !r.filePath) return null;
   fs.writeFileSync(r.filePath, JSON.stringify(Rules.shareFile(rules || []), null, 2));
   return r.filePath;
 });
 
-ipcMain.handle('import-rules', async () => {
+utilityHandle('import-rules', widgetConfigSender, async () => {
   const r = await dialog.showOpenDialog(lightsWin || undefined, { title: 'Import rules', properties: ['openFile'], filters: [{ name: 'JSON', extensions: ['json'] }] });
   if (r.canceled || !r.filePaths[0]) return null;
   try {
@@ -3766,8 +3705,44 @@ function mcpOpts() {
     entry: McpInstall.launch({ packaged: app.isPackaged, execPath: HOOK_PATHS.execPath || process.execPath, appPath: HOOK_PATHS.mcpAppPath, dir: __dirname, root: process.env.CLAUDE_TRAFFIC_LIGHT_HOME }),
   };
 }
-ipcMain.handle('mcp-status', () => McpInstall.status(mcpOpts()));
-ipcMain.handle('mcp-set-enabled', (_e, on) => {
+let nativeBoardService = null;
+function nativeBoardDir() { return path.join(app.getPath('userData'), 'native-board'); }
+function getNativeBoard() {
+  if (!nativeBoardService) {
+    const storage = require('electron').safeStorage;
+    // A status read with no saved connector records needs no Keychain key.
+    // Ask the OS only when encrypted bytes are actually read or written.
+    const secureStorage = () => {
+      if (!storage.isEncryptionAvailable() || (process.platform === 'linux' && storage.getSelectedStorageBackend?.() === 'basic_text')) throw new Error('Secure account storage is unavailable on this computer.');
+      return storage;
+    };
+    nativeBoardService = NativeBoard.createService({
+      dir: nativeBoardDir(), seal: (s) => secureStorage().encryptString(s), unseal: (b) => secureStorage().decryptString(b),
+      resolveWorkspace: (id) => getBuddy().nativeBoardContext(id), workspaces: () => getBuddy().nativeBoardWorkspaces(),
+      home: IS_DEV_RUN ? path.join(app.getPath('userData'), 'native-board-dev-home') : os.homedir(),
+      launchOptions: { execPath: HOOK_PATHS.execPath || process.execPath, appPath: HOOK_PATHS.mcpAppPath || __dirname },
+    });
+  }
+  return nativeBoardService;
+}
+const fromNativeBoardSettings = settingsOnly;
+const nativeBoardAction = (fn) => async (e, ...args) => {
+  if (!fromNativeBoardSettings(e)) return { ok: false, error: 'Not allowed.' };
+  try { return await fn(getNativeBoard(), ...args); } catch (err) { return { ok: false, error: err.message }; }
+};
+ipcMain.handle('native-board-status', nativeBoardAction((s) => s.status()));
+ipcMain.handle('native-board-boards', nativeBoardAction((s, workspace) => {
+  if (typeof workspace !== 'string' || workspace.length > 350) return { ok: false, error: 'Choose a workspace.' };
+  return s.boards(workspace);
+}));
+ipcMain.handle('native-board-connect', nativeBoardAction((s, input) => {
+  if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some((k) => !['target', 'workspaceId', 'boardIds', 'mode'].includes(k)) || !Array.isArray(input.boardIds) || input.boardIds.length > 32) return { ok: false, error: 'Choose the app, workspace and boards.' };
+  return s.connect(input);
+}));
+ipcMain.handle('native-board-disconnect', nativeBoardAction((s, target) => s.disconnect(target)));
+app.on('will-quit', () => { nativeBoardService?.stop().catch(() => {}); });
+utilityHandle('mcp-status', settingsOnly, () => McpInstall.status(mcpOpts()));
+utilityHandle('mcp-set-enabled', settingsOnly, (_e, on) => {
   try {
     const r = on ? McpInstall.install(mcpOpts()) : McpInstall.uninstall(mcpOpts());
     console.log(`[mcp] ${on ? 'registered' : 'unregistered'} in ${r.path}${r.changed ? '' : ' (no change)'}`);
@@ -3780,17 +3755,22 @@ ipcMain.handle('mcp-set-enabled', (_e, on) => {
 
 // Connect other agents: each adapter writes its own hook config.
 ipcMain.handle('connect-agent', (e, which) => {
-  const adapter = which === 'claude' ? null : Adapters.get(which);
+  if (!fromNativeBoardSettings(e)) return { ok: false, error: 'Not allowed.' };
+  if (typeof which !== 'string' || !['codex', 'cursor', 'gemini'].includes(which)) return { ok: false };
+  const adapter = Adapters.get(which);
   if (!adapter) return { ok: false };
+  if (!app.isPackaged || !AUTO_INSTALL_HOOKS) return { ok: false, error: 'Open the installed app to connect an agent.' };
   try {
-    const r = adapter.install({ home: os.homedir(), runtime: HOOK_RUNTIME });
-    return r.ok ? { ok: true, file: r.file } : { ok: false, file: r.file, error: r.error };
+    const install = which === 'codex' ? adapter.installActivity : adapter.install;
+    const r = install({ home: os.homedir(), runtime: HOOK_RUNTIME });
+    return r.ok ? { ok: true, file: r.file, ...(which === 'codex' ? { reviewRequired: true } : {}) } : { ok: false, file: r.file, error: r.error };
   } catch (err) {
-    return { ok: false, file: adapter.configPath(os.homedir()), error: err.message };
+    const configPath = which === 'codex' ? adapter.lifecycleConfigPath : adapter.configPath;
+    return { ok: false, file: configPath(os.homedir()), error: err.message };
   }
 });
-ipcMain.handle('git-status', () => ({ ...git.status(), enabled: loadConfig().gitSignals !== false }));
-ipcMain.handle('signal-endpoint', () => ({ port: SIGNAL_PORT, emit: EMIT_SCRIPT, token: path.join(ROOT_DIR, 'token') }));
+ipcMain.handle('git-status', (e) => settingsOnly(e) ? ({ ...git.status(), enabled: loadConfig().gitSignals !== false }) : null);
+utilityHandle('signal-endpoint', e => settingsOnly(e) || widgetConfigSender(e), () => ({ port: SIGNAL_PORT, emit: EMIT_SCRIPT, token: path.join(ROOT_DIR, 'token') }));
 // Not the signal server's port: an ssh -R tunnel makes this one reachable to
 // every user of the far host, so it serves only the signed device route.
 // A bad override is reported in Settings, never thrown at startup.
@@ -3805,22 +3785,22 @@ function remoteDevicesView() {
   for (const s of readRemoteSessions(loadConfig())) live[s.device] = (live[s.device] || 0) + 1;
   return { devices: RemoteDevices.list(live), port: REMOTE_PORT, loopback: RemoteDevices.loopbackStatus(), tailnet: { enabled: !!loadConfig().remoteTailscale, ...RemoteDevices.tailnetStatus() } };
 }
-ipcMain.handle('remote-devices', () => remoteDevicesView());
+utilityHandle('remote-devices', settingsOnly, () => remoteDevicesView());
 // The pairing code goes to the window that asked, once; nothing else keeps it.
-ipcMain.handle('remote-pair', (_e, name) => {
+utilityHandle('remote-pair', settingsOnly, (_e, name) => {
   const r = RemoteDevices.pair(String(name || ''));
   return r.error ? { error: r.error } : { ...remoteDevicesView(), paired: r.device, code: r.code };
 });
 // The clipboard forgets the code after a minute, unless something else has
 // been copied since.
-ipcMain.handle('remote-copy-code', (_e, code) => {
+utilityHandle('remote-copy-code', settingsOnly, (_e, code) => {
   const text = String(code || '');
   if (!/^buddy-pair-v1\./.test(text)) return false;
   clipboard.writeText(text);
   setTimeout(() => { if (clipboard.readText() === text) clipboard.writeText(''); }, 60000);
   return true;
 });
-ipcMain.handle('remote-revoke', (_e, id) => {
+utilityHandle('remote-revoke', settingsOnly, (_e, id) => {
   const revoked = RemoteDevices.revoke(String(id || ''));
   return { ...remoteDevicesView(), revoked };
 });
@@ -3841,16 +3821,26 @@ function healthReport() {
     signal: { listening: !!signalServer?.listening, port: SIGNAL_PORT, error: signalServerError },
   });
   // Dev runs share the machine with a real install and never rewrite its hooks.
-  if (IS_DEV_RUN) report.checks = report.checks.map(({ fix, fixLabel, ...c }) => (fix === 'reinstall-hooks' ? c : { ...c, ...(fix ? { fix, fixLabel } : {}) }));
+  report.checks = report.checks.map(({ fix, fixLabel, ...c }) =>
+    ((!AUTO_INSTALL_HOOKS && ['reinstall-hooks', 'connect-codex'].includes(fix)) || (!app.isPackaged && fix === 'connect-codex'))
+      ? c : { ...c, ...(fix ? { fix, fixLabel } : {}) });
   return report;
 }
-ipcMain.handle('health-report', () => healthReport());
-ipcMain.handle('health-fix', (_e, id) => {
+utilityHandle('health-report', settingsOnly, () => healthReport());
+ipcMain.handle('health-fix', (e, id) => {
+  if (!fromNativeBoardSettings(e)) return { error: 'Not allowed.' };
   let error = null;
   try {
     if (id === 'reinstall-hooks') {
       if (!AUTO_INSTALL_HOOKS) error = EPHEMERAL ? 'Buddy is running from a temporary copy or a disk image; move it to Applications first' : 'dev runs never install hooks';
       else { error = installHooks(); createTray(); }
+    } else if (id === 'connect-codex') {
+      if (!fromNativeBoardSettings(e)) error = 'Not allowed.';
+      else if (!app.isPackaged || !AUTO_INSTALL_HOOKS) error = 'Open the installed app to connect Codex.';
+      else {
+        const r = Adapters.get('codex').installActivity({ home: os.homedir(), runtime: HOOK_RUNTIME });
+        if (!r.ok) error = r.error || 'Codex hooks could not be configured.';
+      }
     } else if (id === 'enable-mcp') McpInstall.install(mcpOpts());
     else if (id === 'clear-stale-locks') Health.clearStaleLocks({ root: ROOT_DIR });
     else error = 'unknown fix';
@@ -3859,7 +3849,7 @@ ipcMain.handle('health-fix', (_e, id) => {
   return { error, report: healthReport() };
 });
 // Preferences → Backups. Settings is the only caller.
-const backupsSenderOk = (e) => !!settingsWin && e.sender === settingsWin.webContents;
+const backupsSenderOk = settingsOnly;
 const backupsOff = { error: 'Backups are off in this run.' };
 const safeId = Backups.isSnapshotId;
 ipcMain.handle('backups-list', (e) => {
@@ -3926,13 +3916,13 @@ function buildDiagnostics() {
   });
   return text;
 }
-ipcMain.handle('health-copy-diagnostics', () => {
+utilityHandle('health-copy-diagnostics', settingsOnly, () => {
   const text = buildDiagnostics();
   clipboard.writeText(text);
   return { lines: text.split('\n').length - 1 };
 });
 
-ipcMain.handle('choose-sound-file', async () => {
+utilityHandle('choose-sound-file', widgetConfigSender, async () => {
   const r = await dialog.showOpenDialog(lightsWin || undefined, {
     title: 'Choose a sound',
     properties: ['openFile'],
@@ -3941,8 +3931,8 @@ ipcMain.handle('choose-sound-file', async () => {
   return r.canceled || !r.filePaths[0] ? null : `file:${r.filePaths[0]}`;
 });
 
-ipcMain.handle('cameos-list', () => cameoListing());
-ipcMain.handle('cameos-choose-file', async () => {
+utilityHandle('cameos-list', widgetConfigSender, () => cameoListing());
+utilityHandle('cameos-choose-file', widgetConfigSender, async () => {
   const r = await dialog.showOpenDialog(lightsWin || undefined, {
     title: 'Choose a photo',
     properties: ['openFile'],
@@ -3951,12 +3941,12 @@ ipcMain.handle('cameos-choose-file', async () => {
   if (r.canceled || !r.filePaths[0]) return null;
   try { return Cameos.readSource(nativeImage, r.filePaths[0]); } catch (err) { return { error: err.message }; }
 });
-ipcMain.handle('cameos-add', (_e, p) => {
+utilityHandle('cameos-add', widgetConfigSender, (_e, p) => {
   const res = Cameos.addPhoto({ dir: CAMEO_DIR, nativeImage, source: p?.source, rect: p?.rect, shape: p?.shape, name: p?.name, replace: p?.replace, eyes: p?.eyes, mouth: p?.mouth });
   if (res.error) return { error: res.error };
   return { id: res.id, list: cameosChanged() };
 });
-ipcMain.handle('cameos-remove', (_e, id) => {
+utilityHandle('cameos-remove', widgetConfigSender, (_e, id) => {
   try {
     backupFirst();
     Cameos.removePhoto(CAMEO_DIR, String(id));
@@ -3969,7 +3959,7 @@ ipcMain.handle('cameos-remove', (_e, id) => {
 // here in between.
 const readCameoPng = (id) => fs.readFileSync(path.join(CAMEO_DIR, `${id}.png`));
 let pendingSetup = null;
-ipcMain.handle('setup-export', async (e) => {
+utilityHandle('setup-export', e => settingsOnly(e) || widgetConfigSender(e), async (e) => {
   const r = await dialog.showSaveDialog(BrowserWindow.fromWebContents(e.sender) || undefined, { title: 'Export setup', defaultPath: path.join(app.getPath('documents'), 'plexiform-setup.json'), filters: [{ name: 'JSON', extensions: ['json'] }] });
   if (r.canceled || !r.filePath) return null;
   try {
@@ -3978,7 +3968,7 @@ ipcMain.handle('setup-export', async (e) => {
     return { file: r.filePath, cameos: bundle.cameos.length };
   } catch (err) { return { error: `Could not export: ${err.message}` }; }
 });
-ipcMain.handle('setup-import-pick', async () => {
+utilityHandle('setup-import-pick', widgetConfigSender, async () => {
   const r = await dialog.showOpenDialog(lightsWin || undefined, { title: 'Import setup', properties: ['openFile'], filters: [{ name: 'JSON', extensions: ['json'] }] });
   if (r.canceled || !r.filePaths[0]) return null;
   try {
@@ -3989,7 +3979,7 @@ ipcMain.handle('setup-import-pick', async () => {
     return Setup.summarize(parsed);
   } catch (err) { return { error: `Could not read: ${err.message}` }; }
 });
-ipcMain.handle('setup-import-apply', (_e, mode) => {
+utilityHandle('setup-import-apply', widgetConfigSender, (_e, mode) => {
   if (!pendingSetup) return { error: 'Choose a setup file first.' };
   backupFirst();
   const plan = Setup.planImport(pendingSetup, { config: loadConfig(), cameoIndex: Cameos.loadIndex(CAMEO_DIR), readPng: readCameoPng }, mode === 'replace' ? 'replace' : 'merge');
@@ -4001,7 +3991,7 @@ ipcMain.handle('setup-import-apply', (_e, mode) => {
   return { config: commitConfig(plan.partial), cameos, failed };
 });
 
-ipcMain.handle('reset-rules', () => {
+utilityHandle('reset-rules', widgetConfigSender, () => {
   backupFirst();
   const next = saveConfig({ rules: Rules.defaultRules() });
   broadcastStatus();
@@ -4010,7 +4000,7 @@ ipcMain.handle('reset-rules', () => {
 
 // The Lights editor can push a look onto the real widget for a few seconds so
 // the user sees the rule in place, at size, in the corner it actually lives in.
-ipcMain.handle('preview-on-widget', (e, look, ms = 4000) => {
+utilityHandle('preview-on-widget', widgetConfigSender, (e, look, ms = 4000) => {
   previewLook = { look, expiresAt: Date.now() + ms };
   win?.show();
   broadcastStatus();
@@ -4020,8 +4010,8 @@ ipcMain.handle('preview-on-widget', (e, look, ms = 4000) => {
   }, ms + 50);
 });
 
-ipcMain.handle('open-lights', createLightsWindow);
-ipcMain.handle('open-preferences', createSettingsWindow);
+ipcMain.handle('open-lights', e => { if (widgetOnly(e) || fromUtilityPage(e, 'help')) createLightsWindow(); });
+ipcMain.handle('open-preferences', e => { if (widgetConfigSender(e)) createSettingsWindow(); });
 
 // A subtle system alert sound when the resolved look's sound channel turns on
 // (transition only, not every poll).
@@ -4158,6 +4148,10 @@ app.whenReady().then(() => {
   // An AppImage's copies for older versions go only once this is the one running instance.
   if (gotLock) { try { HookPaths.prune(HOOK_PATHS); } catch (err) { console.warn('[hooks] could not tidy old copies:', err.message); } }
   if (smokeReport) { Smoke.run({ app, installHooks, areHooksInstalled, createWindow, getWindow: () => win, settingsPath: CLAUDE_SETTINGS_PATH, sessionsDir: SESSIONS_DIR, reportPath: smokeReport }); return; }
+  if (fs.existsSync(path.join(nativeBoardDir(), 'connections.bin'))) {
+    try { getNativeBoard().start().catch(() => console.warn('[native-board] saved connections could not start')); }
+    catch { console.warn('[native-board] saved connections require reconnecting in Settings'); }
+  }
   // The rest of the rename migration, once, before the hook check below: a
   // running old copy is asked to quit and every agent config already points
   // here. Its last step (offer to bin the old app) waits on the person.
@@ -4399,10 +4393,11 @@ app.on('before-quit', () => { flushStats(); backups?.flush(); lightsWin?.destroy
 // before we exit, once; a second quit goes straight through.
 let hubStopped = false;
 app.on('before-quit', (e) => {
-  if (hubStopped || !buddyWin) return;
+  if (hubStopped || (!buddyWin && !tasksProcess)) return;
   e.preventDefault();
   hubStopped = true;
-  buddyWin.stop().finally(() => app.quit());
+  tasksSvc?.stop();
+  Promise.allSettled([buddyWin?.stop(), tasksProcess?.stop({ final: true })]).finally(() => app.quit());
 });
 
 app.on('activate', () => { if (!lightsWin && !settingsWin) win?.showInactive(); });

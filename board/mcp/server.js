@@ -33,9 +33,10 @@ function log(level, msg, extra = {}) {
   process.stderr.write(`${JSON.stringify({ t: new Date().toISOString(), level, msg, ...extra })}\n`);
 }
 
-export function createBoardServer({ ipc }) {
+export function createBoardServer({ ipc, allowedTools = null }) {
   const server = new Server({ name: SERVER_NAME, version: SERVER_VERSION }, { capabilities: { tools: {} }, instructions: ipc ? INSTRUCTIONS : OUTSIDE_RUN_INSTRUCTIONS });
-  const list = !ipc ? [] : Object.entries(TOOLS).map(([name, def]) => ({
+  const permitted = (name) => !allowedTools || allowedTools.has(name);
+  const list = !ipc ? [] : Object.entries(TOOLS).filter(([name]) => permitted(name)).map(([name, def]) => ({
     name,
     title: def.title,
     description: def.description,
@@ -43,7 +44,7 @@ export function createBoardServer({ ipc }) {
     ...(def.annotations && { annotations: { title: def.title, ...def.annotations } }),
   }));
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: list }));
-  server.setRequestHandler(CallToolRequestSchema, async (req, extra) => (ipc
+  server.setRequestHandler(CallToolRequestSchema, async (req, extra) => (ipc && permitted(req.params.name)
     ? callTool(ipc, req.params.name, req.params.arguments, { signal: extra.signal })
     : errorResult('VALIDATION', 'not inside a board run')));
   return server;

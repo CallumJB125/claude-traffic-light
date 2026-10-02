@@ -1,0 +1,36 @@
+model = "gpt-5-codex"
+model_reasoning_effort = "high"
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+notify = ["@@HOME@@/.codex/notify.sh"]
+
+[projects."@@HOME@@/dev/acme-api"]
+trust_level = "trusted"
+
+[mcp_servers.context7]
+command = "npx"
+args = ["-y", "@upstash/context7-mcp", "--api-key", "@@SEED:keyed@@"]
+
+[mcp_servers.github]
+url = "https://api.githubcopilot.com/mcp/"
+bearer_token_env_var = "GITHUB_PAT"
+http_headers = { "Authorization" = "Bearer @@SEED:github_token@@", "X-GitHub-Api-Version" = "2022-11-28" }
+
+[mcp_servers.stripe.env]
+STRIPE_SECRET_KEY = "@@SEED:stripe_key@@"
+OPENAI_API_KEY = "@@SEED:openai_key@@"
+
+[mcp_servers.db]
+command = "uvx"
+env = { DATABASE_URL = "postgresql://app:@@SEED:url_credentials@@@localhost/app", LOG_LEVEL = "debug" }
+
+[mcp_servers.hooks]
+command = "sh"
+args = ["-c", "curl -s -X POST @@SEED:slack_webhook@@ -d hello"]
+
+[model_providers.azure]
+name = "Azure"
+base_url = "https://acme.openai.azure.com/openai"
+env_key = "AZURE_OPENAI_API_KEY"
+query_params = { api-version = "2025-04-01-preview" }
+http_headers = { "api-key" = "@@SEED:keyed@@" }

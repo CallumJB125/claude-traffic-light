@@ -16,7 +16,7 @@ promote run, from the GitHub Release's own files.
    - runs the unit tests (each run capped at 20 minutes)
    - builds the installers:
      - Mac: DMG + zip, arm64 and x64
-     - Windows: NSIS .exe, x64
+     - Windows: NSIS .exe and separately named portable .exe, x64
      - Linux: AppImage + .deb, x64
    - smoke-tests each packaged app (`scripts/smoke-installed.js`): launch
      against a throwaway HOME → install the Claude Code hooks → run one →
@@ -34,8 +34,11 @@ To try the build without staging anything: Actions → Release → Run workflow
 
 ## Release checklist
 
-- Windows does not ship yet. The first release is macOS-first: the Windows Unit tests step only reports (Mac and Linux block), and the stage and promote jobs drop every Windows file (`*-win-*`, `latest.yml`, `beta.yml`) unless the repo variable `WINDOWS_RELEASE` is `true`, so no Windows installer is staged, signed, listed in `release.json` or promoted. Installed Windows apps see such a release as "no update".
-- To ship Windows, only once the Windows suite is green on a tag build, do both together: set the repo variable `WINDOWS_RELEASE=true` (Settings → Secrets and variables → Actions → Variables) AND remove `|| matrix.platform == 'win'` from the Unit tests step's `continue-on-error` and the `continue-on-error` line from the Mac/Windows Smoke test step in release.yml. One without the other either ships Windows untested or blocks it for nothing.
+- Every platform's root, remote and board tests block the release job, including dry runs. Windows also requires actual NSIS install → launch/hooks/window/quit → same-version `--updated` reinstall → launch → uninstall, retaining synthetic databases, settings, journals and foreign agent configuration. The lifecycle harness requires GitHub-hosted Windows (`RUNNER_ENVIRONMENT=github-hosted`); it refuses self-hosted or missing runner provenance before touching files or launching processes. A portable launch and hook invocation after its extraction is removed must pass too. The job retains test logs and lifecycle receipts even on failure; an overall run with report-only failures from an older workflow is not Windows acceptance.
+- Windows publication remains disabled until `WINDOWS_RELEASE=true` is set after the exact candidate's mandatory Windows checks pass and its release review is complete. Stage and promote drop every Windows file otherwise. Enabling the variable never bypasses tests.
+- The installer lifecycle is a real same-version upgrade-mode check; it is not proof of a signed version-to-version download/restart, real provider sign-in, DPAPI token persistence or tray/window behavior. Those Windows acceptance checks remain required on the final release candidate.
+- `*-win-x64-portable.exe` is a manual download, separately covered by `SHA256SUMS.txt` and any configured Windows platform code signature. It is excluded from the legacy signed updater manifest and `latest.yml`; NSIS remains the only Windows auto-update target. Portable copies report a verified NSIS update offer with instructions to download and replace the portable executable. They never install NSIS. Hooks and MCP run the original portable launcher against versioned scripts kept outside its transient extraction.
+- With the locked builder 26.16.1, `portable.unpackDirName: true` keeps each launch in its own NSIS `$PLUGINSDIR`. The default and `false` instead select one folder per build, so a hook invoking the launcher while its GUI is open can overwrite files the GUI is using. The source check exercises the actual builder's define generation before its build queue; recheck that behavior when upgrading the builder. This is source evidence only: concurrent hooks and hooks after app exit still need the real Windows lifecycle gate.
 - CI runs Node 22 (`node-version: 22` in release.yml), while development machines may run a newer Node. A suite that passes locally can still fail on CI. Before tagging, run the suites under Node 22 from the checkout, without touching node_modules: `npx -y node@22 --test --test-force-exit test/*.test.js test/adapters/*.test.js` and `npx -y node@22 --test --test-force-exit remote/test/*.test.js`.
 - Run the Playwright visual specs on the release SHA before tagging, one spec at a time on a quiet machine (load under 16): `for s in test-visual/*.spec.js; do timeout 600 npx playwright test "$s" || echo "FAILED: $s"; done`. Neither `npm test` nor CI runs them, so a merge that changes wording without re-shooting a screenshot (as the rename once did for the Settings window and the pairing-code panel) only shows up here. A failed screenshot is either a stale baseline (re-shoot it with `--update-snapshots` for that spec, look at the new image, commit it) or a real regression (fix it); never re-shoot without looking.
 - Lint the workflows after changing them: `actionlint .github/workflows/*.yml` (Homebrew: `brew install actionlint`). GitHub refuses an invalid workflow file outright, which shows as a failed run on every push and blocks every tag and dispatch. test/installers.test.js also parses each file.
@@ -69,6 +72,7 @@ UI asks: restart anyway, or when idle = after 30 s with nothing busy). The
 | platform | what happens |
 |---|---|
 | Windows (NSIS) | electron-updater downloads (only after its feed matches the signed release); install runs the installer silently and starts the new version; nothing installs on quit |
+| Windows portable | verifies the signed update offer, then asks the person to download the portable replacement and quit before replacing it |
 | Linux AppImage | same as Windows |
 | macOS | the app downloads the zip, verifies it, unpacks it (`ditto`) and checks bundle id, version and that no link leaves the bundle; on restart it checks the zip again, unpacks it afresh, and a helper swaps the bundle and relaunches; if the new app hasn't reported in within 90 s the helper puts the old one back |
 | Linux .deb | the verified .deb goes to ~/Downloads; install checks it again and opens it in the software installer (xdg-open) |
@@ -201,7 +205,7 @@ fails without them.
 
 ## Unsigned builds: what people will see
 
-Signing is off until there is a Developer ID. The download page should say:
+macOS Developer ID signing and Windows Authenticode signing are separate from the Ed25519 update-feed signature. No Windows certificate or signing account is configured by this workflow, so a successful build and signed feed do not make its installer a trusted Windows executable. The download page should say:
 - **macOS:** "Plexiform can't be opened because Apple cannot check it for
   malicious software." The fix is right-click → Open, then Open (once).
 - **Windows:** SmartScreen shows "Windows protected your PC". The fix is

@@ -18,6 +18,7 @@ import { redact } from '../log.js';
 import { httpStatus } from '../../shared/protocol.js';
 import { normalizeRemoteUrl, matchRepo } from '../../shared/scope.js';
 import { AUTONOMY, cleanLinkStatus, parseCidr, configKeyOk } from './connector.js';
+import { createObservation, observationAction, sentryStatus } from './sentry/observation.js';
 import { isLoopback } from '../config.js';
 import { BlockList, isIP } from 'node:net'; // privacy-flow: hub-server
 import { prNumberOf } from '../github.js';
@@ -242,6 +243,9 @@ export function createIntegrations({
   // must not repeat the side effects.
   const lateOk = new Map();
 
+  // A hub's rateLimits.integration_card_day_conn wins over every connector's dailyCardCap.
+  const dayLimit = (conn) => (hub.config?.rateLimits?.integration_card_day_conn ? null : { capacity: conn.dailyCardCap, per_ms: 86_400_000 });
+
   const warn = (msg, c, e) => log?.warn?.(msg, { integration: c?.provider ?? c?.id, connection_id: c?.id, err: redact(e?.message ?? e) });
 
   // ── connections ─────────────────────────────────────────────────────────
@@ -251,6 +255,7 @@ export function createIntegrations({
     id: c.id, provider: c.provider, external_id: c.external_id, display_name: c.display_name,
     scopes: safeJson(c.scopes, []), status: c.status, health: safeJson(c.health, null),
     settings: safeJson(c.settings, {}), created_at: c.created_at,
+    target_board_id: c.target_board_id ?? null,
   });
   const consumerName = (c) => `integration:${c.provider}:${c.id}`;
 
@@ -305,6 +310,7 @@ export function createIntegrations({
       db.insert('connections', {
         id, org_id: orgId, provider, external_id: ext, display_name: display_name == null ? null : String(display_name).slice(0, 200),
         scopes: JSON.stringify(Array.isArray(scopes) ? scopes.map(String) : []), status: 'active', settings: JSON.stringify(stored), created_by: memberId, created_at: now(),
+        target_board_id: db.get('SELECT id FROM boards WHERE org_id = ? AND archived_at IS NULL ORDER BY rowid LIMIT 1', orgId)?.id ?? null,
       });
       // Their AAD is `<id>|<kind>|<key_id>` already: they open here and nowhere else.
       for (const r of copied) db.insert('connection_secrets', { connection_id: id, kind: r.kind, key_id: r.key_id, nonce: r.nonce, ciphertext: r.ciphertext, created_at: now() });
@@ -386,6 +392,9 @@ export function createIntegrations({
   function ctxFor(c, signal = null) {
     const conn = connectors.get(c.provider);
     const settings = safeJson(c.settings, {});
+    // A private handler's principal is captured before any connector await.
+    // Re-reading the same member id must never inherit another user's identity.
+    const creator = hub.member(c.created_by);
     const secrets = () => secretsOf(c);
     const fetchOnce = restrictedFetch(conn);
 
@@ -453,6 +462,25 @@ export function createIntegrations({
       return hub.isAdmin(m) ? { ...m, role: 'member' } : m;
     }
 
+    function currentActor(captured) {
+      const current = actor(captured?.id);
+      try { api.currentMember(captured); }
+      catch (e) { e.cacheable = false; throw e; }
+      return current;
+    }
+
+    function currentAuthority(action, captured = creator, subject = null) {
+      if (signal?.aborted) throw handlerEnded();
+      const current = row(c.id);
+      const refusal = (message) => Object.assign(new HubError('FORBIDDEN', message), { cacheable: false });
+      if (!current || current.status !== 'active' || current.org_id !== c.org_id || current.created_by !== c.created_by) throw refusal('current integration cannot act');
+      if (current.settings !== c.settings || current.target_board_id !== c.target_board_id || autonomyOf(action) !== 'auto') throw refusal('integration settings changed; retry delivery');
+      currentActor(creator);
+      const member = currentActor(captured);
+      if (subject != null && linkedMember(subject) !== captured?.id) throw refusal('provider identity changed; retry delivery');
+      return member;
+    }
+
     // The member an integration acts as goes through the same Api methods
     // and D8 replay cache as a browser would (limits per connection); the
     // journal and feed name the integration (D42, §15). `live()` is the
@@ -469,7 +497,7 @@ export function createIntegrations({
       return { ...body, budget_usd: undefined, column: undefined, column_name: undefined, labels };
     };
 
-    function actAs(memberId, { live, action: actName, track, external_ref, subjectKey, subject = null }) {
+    function actAs(memberId, { live, authority, action: actName, track, external_ref, subjectKey, subject = null }) {
       // An act() for a provider user acts only as that user's linked member,
       // never as whoever connected the tool; one without a subject only as
       // the member who connected it, never as some other linked member.
@@ -492,13 +520,15 @@ export function createIntegrations({
       };
       bound();
       const first = actor(memberId);
-      const via = { connection_id: c.id, member_id: first.id, name: conn.name, external_ref };
-      const call = (body, fn, rules = [], pre = null) => {
+      const authorize = () => { authority(); bound(); currentActor(first); };
+      authorize();
+      const via = { connection_id: c.id, member_id: first.id, name: conn.name, action: actName, external_ref, authorize };
+      const call = (body, fn, rules = [], pre = null, validateResult = null) => {
         if (!live()) return Promise.reject(new Error('this act() scope has ended'));
-        return track(callLive(body, fn, rules, pre));
+        return track(callLive(body, fn, rules, pre, validateResult));
       };
-      const callLive = async (body, fn, rules, pre) => {
-        bound();
+      const callLive = async (body, fn, rules, pre, validateResult) => {
+        authorize();
         const member = actor(first.id);
         // Required so a handler retried after a timeout replays instead of acting twice (D8).
         if (typeof body?.request_id !== 'string' || !body.request_id) throw new HubError('VALIDATION', 'request_id required');
@@ -509,21 +539,32 @@ export function createIntegrations({
         const hit = hub.cachedResponse(member.id, rid);
         if (hit) {
           if (hit.status >= 400) { const { code, message, ...extra } = hit.body.error; throw new HubError(code, message, extra); }
+          validateResult?.(hit.body);
           return hit.body;
         }
-        const cacheError = (e) => { if (e instanceof HubError) hub.cacheResponse(member.id, rid, httpStatus(e.code), { error: { code: e.code, message: e.message, ...(e.extra ?? {}) } }); };
+        const cacheError = (e) => {
+          if (e instanceof HubError && e.cacheable !== false && !(e.code === 'QUOTA_EXCEEDED' && e.extra?.resource === 'storage')) {
+            hub.cacheResponse(member.id, rid, httpStatus(e.code), { error: { code: e.code, message: e.message, ...(e.extra ?? {}) } });
+          }
+        };
         try { pre?.(); } catch (e) { cacheError(e); throw e; }
         // The connection's own buckets, never mutate_member: a public source
         // (any Slack user, issues on a public repo) must not 429 the person's own browser.
         limitOrThrow(hub, 'integration_conn', c.id);
-        for (const [rule, key] of typeof rules === 'function' ? rules() : rules) limitOrThrow(hub, rule, key);
+        for (const [rule, key, over] of typeof rules === 'function' ? rules() : rules) limitOrThrow(hub, rule, key, over);
         let out;
         try {
           out = await hub.actVia(via, () => fn(member));
         } catch (e) {
+          // API currentMember may refuse before reaching the private callback.
+          // A stale captured principal is a fresh refusal, never a sticky D8 hit.
+          try { authorize(); } catch (stale) { cacheError(stale); throw stale; }
           cacheError(e);
           throw e;
         }
+        // Private observation results need a fresh fence after API awaits,
+        // before exposing/caching bytes. Ordinary call semantics are unchanged.
+        validateResult?.(out);
         hub.cacheResponse(member.id, rid, 200, out);
         return out;
       };
@@ -531,7 +572,8 @@ export function createIntegrations({
       // before any rate token: probing board ids must not drain the budget.
       // The provider user's bucket first: one past it spends none of the
       // connection's, so a single user can't use up everyone's cards.
-      const cardRules = [...(subjectKey ? [['integration_card_subject', subjectKey]] : []), ['integration_card_conn', c.id]];
+      const cardRules = [...(subjectKey ? [['integration_card_subject', subjectKey]] : []), ['integration_card_conn', c.id],
+        ...(conn.dailyCardCap ? [['integration_card_day_conn', c.id, dayLimit(conn)]] : [])];
       const boardOfOrg = (boardId) => () => {
         if (typeof boardId !== 'string' || hub.board(boardId)?.org_id !== c.org_id) throw new HubError('NOT_FOUND', 'board not found');
       };
@@ -549,7 +591,43 @@ export function createIntegrations({
         }),
         comment: (cardId, body = {}) => {
           if (body.for_agent === true) throw new HubError('POLICY_DENIED', 'an integration never writes to the agent');
-          return call(body, (m) => api.comment(m, cardId, { ...body, for_agent: false }));
+          return call(body, (m) => api.comment(m, cardId, { ...body, for_agent: false })).then((out) => {
+            const comment = db.get('SELECT card_id FROM comments WHERE id=?', out?.comment?.id ?? '');
+            if (!comment || comment.card_id !== cardId || !cardInOrg(cardId)) throw new HubError('CONFLICT', 'this request_id does not name a comment on this card');
+            return out;
+          });
+        },
+        // One private observation is handled in Api.comment's own queue/txn.
+        // This primitive context cannot be supplied by HTTP/MCP request JSON.
+        observeLink: (cardId, kind, externalId, patch, body = {}) => {
+          if (conn.id !== 'sentry' || actName !== observationAction(kind) || subject != null || body.for_agent === true) throw new HubError('POLICY_DENIED', 'this action cannot observe a Sentry link');
+          const observationBody = Object.freeze({ ...body, for_agent: false });
+          const requestId = observationBody.request_id;
+          const token = createObservation({ provider: conn.id, action: actName, connection_id: c.id, member_id: first.id,
+            user_id: first.user_id ?? null, card_id: cardId, kind, external_id: externalId, state: patch?.state, request_id: requestId });
+          // Pre-cache too: a cached success cannot expose a removed/moved link.
+          const currentLink = () => {
+            try {
+              authorize();
+              writableCard(cardId);
+              const card = cardInOrg(cardId);
+              if (card?.archived_at || !db.get('SELECT 1 AS x FROM external_links WHERE connection_id=? AND card_id=? AND kind=? AND external_id=?', c.id, cardId, kind, externalId)) {
+                throw new HubError('NOT_FOUND', 'this integration has no live matching link');
+              }
+            } catch (e) { e.cacheable = false; throw e; }
+          };
+          const validate = out => {
+            currentLink();
+            // D8 and durable046 must both name this exact operation's owned
+            // untrusted non-agent comment on its requested card. A retarget
+            // never moves/replaces the original receipt or its effects.
+            const receipt = db.get('SELECT m.card_id, m.source, m.trusted, m.for_agent FROM integration_comment_requests r JOIN comments m ON m.id=r.comment_id WHERE r.connection_id=? AND r.request_id=? AND r.comment_id=?', c.id, requestId, out?.comment?.id ?? '');
+            if (!receipt || receipt.card_id !== cardId || receipt.source !== 'integration' || receipt.trusted !== 0 || receipt.for_agent !== 0) {
+              throw Object.assign(new HubError('CONFLICT', 'this observation request does not name its owned comment on this card'), { cacheable: false });
+            }
+          };
+          currentLink();
+          return call(observationBody, m => api.comment(m, cardId, observationBody, { integrationObservation: token }), [], null, validate);
         },
         action: (cardId, action, body = {}) => {
           if (!ALLOWED_ACTIONS.has(action)) throw new HubError('POLICY_DENIED', 'an integration may only cancel, stop or approve; a person does the rest from the card');
@@ -601,6 +679,11 @@ export function createIntegrations({
       const card = cardId ? hub.card(cardId) : null;
       return card && hub.board(card.board_id)?.org_id === c.org_id ? card : null;
     };
+    const writableCard = (cardId) => {
+      const card = cardInOrg(cardId);
+      if (!card) throw new HubError('NOT_FOUND', 'card not found');
+      api.writableBoard(card.board_id);
+    };
 
     // The newest link of `kind` this connection has on a card of its org.
     const linkedByCard = (cardId, kind) => (cardInOrg(cardId)
@@ -612,7 +695,12 @@ export function createIntegrations({
     function linkStatusFor(cardId, kind) {
       if (!cardInOrg(cardId)) return null;
       const l = db.get('SELECT external_id, status FROM external_links WHERE connection_id = ? AND card_id = ? AND kind = ? ORDER BY created_at DESC, rowid DESC LIMIT 1', c.id, cardId, String(kind));
-      return l ? { external_id: l.external_id, ...cleanStatus(safeJson(l.status, null)) } : null;
+      if (!l) return null;
+      if (conn.id === 'sentry' && ['issue', 'alert'].includes(kind)) {
+        const { sentry_comment_id, ...status } = sentryStatus(safeJson(l.status, null), kind);
+        return { external_id: l.external_id, ...status };
+      }
+      return { external_id: l.external_id, ...cleanStatus(safeJson(l.status, null)) };
     }
 
     /**
@@ -653,6 +741,7 @@ export function createIntegrations({
     };
 
     function link(cardId, kind, externalId, url = null) {
+      writableCard(cardId);
       if (!cardInOrg(cardId)) throw new HubError('NOT_FOUND', 'card not found');
       // One PR per card per connection: a second one (a decoy from the same
       // branch into another base) must not become a handle on the card.
@@ -673,6 +762,7 @@ export function createIntegrations({
      * kind 'pr_superseded', with its status.
      */
     function relink(cardId, kind, oldExternalId, newExternalId, url = null) {
+      writableCard(cardId);
       if (!cardInOrg(cardId)) throw new HubError('NOT_FOUND', 'card not found');
       if (String(kind) !== 'pr') throw new HubError('VALIDATION', 'only a pr link is relinked');
       const from = String(oldExternalId);
@@ -704,6 +794,7 @@ export function createIntegrations({
     // Partial updates merge: a PR event knows the state, a check suite the
     // checks, a review the review; none may clobber the others.
     function linkStatus(cardId, kind, externalId, patch) {
+      writableCard(cardId);
       if (!cardInOrg(cardId)) throw new HubError('NOT_FOUND', 'card not found');
       const link = db.get('SELECT status FROM external_links WHERE connection_id = ? AND kind = ? AND external_id = ? AND card_id = ?', c.id, String(kind), String(externalId), cardId);
       if (!link) throw new HubError('NOT_FOUND', 'this integration has no such link on that card');
@@ -752,15 +843,26 @@ export function createIntegrations({
       if (mode === 'off') { audit('skipped'); return { done: false, decision: 'skipped' }; }
       if (mode === 'ask') { audit('asked'); return { done: false, decision: 'asked' }; }
       const auditId = audit('attempted');
-      let open = true;
+      const captured = subject == null ? creator : hub.member(linkedMember(subject));
+      let open = true, active = true;
       const live = () => open && !signal?.aborted;
-      const guard = (fn) => (...args) => { if (!live()) throw new Error('this act() scope has ended'); return fn(...args); };
+      const authority = () => {
+        if (!active || signal?.aborted) throw handlerEnded();
+        if (subject != null && !captured) throw new ActorUnavailable('member');
+        currentAuthority(action, captured, subject ?? null);
+      };
+      const guard = (fn) => (...args) => { if (!live()) throw new Error('this act() scope has ended'); authority(); return fn(...args); };
       // Calls run() started without awaiting: settled before the scope closes,
       // so none of them lands on the board after act() returned.
       const pending = new Set();
       const track = (p) => { pending.add(p); return p; };
       const scope = {
-        actAs: guard((memberId) => actAs(memberId, { live, action, track, external_ref: base.external_ref, subjectKey, subject: subject ?? null })), link: guard(link), relink: guard(relink), linkStatus: guard(linkStatus),
+        // Resolve the requested actor's binding first: an arbitrary unlinked
+        // actor is FORBIDDEN, while a removed linked actor stays C2 unavailable.
+        actAs: (memberId) => {
+          if (!live()) throw new Error('this act() scope has ended');
+          return actAs(memberId, { live, authority, action, track, external_ref: base.external_ref, subjectKey, subject: subject ?? null });
+        }, link: guard(link), relink: guard(relink), linkStatus: guard(linkStatus),
       };
       let decision = 'failed';
       let error = 'handler_failed';
@@ -785,6 +887,7 @@ export function createIntegrations({
         throw e;
       } finally {
         open = false;
+        active = false;
         db.run('UPDATE integration_audit SET decision = ?, error = ? WHERE id = ?', decision, error, auditId);
       }
     }
@@ -813,19 +916,23 @@ export function createIntegrations({
       // Bound to the PR the hub verified, like the merge poll: any other PR
       // from the card's branch (another base, a decoy closed unmerged) is not
       // the card's review.
-      if (card.archived_at) { audit('skipped', 'archived'); return { done: false, decision: 'skipped', reason: 'archived' }; }
+      if (card.archived_at || hub.board(card.board_id)?.archived_at) { audit('skipped', 'archived'); return { done: false, decision: 'skipped', reason: 'archived' }; }
       const refusal = () => notVerified(card.id, prN, repo);
       const refused = refusal();
       if (refused) { audit('failed', refused); return { done: false, reason: refused }; }
       if (mode !== 'auto') { audit(mode === 'ask' ? 'asked' : 'skipped'); return { done: false, decision: mode === 'ask' ? 'asked' : 'skipped' }; }
+      currentAuthority(action);
       const via = { connection_id: c.id, member_id: null, name: conn.name };
       // hub.txn (not db.tx): the outermost transaction flushes apply()'s
       // after-commit work (broadcasts, notifies, the bus poke).
       return hub.withBoard(card.board_id, () => hub.actVia(via, () => hub.txn(() => {
+        // Unlike actAs, system facts use apply directly: enforce the same
+        // captured connection/principal/action fence after the queue wait.
+        currentAuthority(action);
         // Evidence may have changed while this waited on the board queue.
         const late = refusal();
         if (late) { audit('failed', late); return { done: false, reason: late }; }
-        if (hub.card(card.id).archived_at) { audit('skipped', 'archived'); return { done: false, decision: 'skipped', reason: 'archived' }; }
+        if (hub.card(card.id).archived_at || hub.board(card.board_id)?.archived_at) { audit('skipped', 'archived'); return { done: false, decision: 'skipped', reason: 'archived' }; }
         const r = hub.apply(card.id, { type, pr: prN, by: byLogin }, { actor: c.id });
         if (!r.ok) return { done: false, reason: r.error.code };
         audit('auto');
@@ -834,7 +941,7 @@ export function createIntegrations({
     }
 
     const ctx = {
-      connection: { id: c.id, org_id: c.org_id, external_id: c.external_id, settings, created_by: c.created_by },
+      connection: { id: c.id, org_id: c.org_id, external_id: c.external_id, settings, created_by: c.created_by, target_board_id: c.target_board_id ?? null },
       system: conn.systemEvents.length ? { event: systemEvent } : null,
       secret: (kind) => secrets()[kind] ?? null,
       fetch: retryingFetch,
@@ -851,15 +958,29 @@ export function createIntegrations({
       linkedByCard,
       linkStatusFor,
       linked: (kind, externalId) => db.get('SELECT card_id FROM external_links WHERE connection_id = ? AND kind = ? AND external_id = ?', c.id, String(kind), String(externalId))?.card_id ?? null,
-      boardIds: () => db.all('SELECT id FROM boards WHERE org_id = ?', c.org_id).map((b) => b.id),
+      // Existing connectors taking boardIds()[0] respect this connection's
+      // selected target. An archived target pauses intake; never reroute it.
+      boardIds: () => {
+        const current = row(c.id);
+        if (!current || current.status !== 'active') return [];
+        const ids = db.all('SELECT id FROM boards WHERE org_id = ? AND archived_at IS NULL ORDER BY rowid', c.org_id).map((b) => b.id);
+        if (current.target_board_id == null) return ids;
+        return ids.includes(current.target_board_id) ? [current.target_board_id, ...ids.filter((id) => id !== current.target_board_id)] : [];
+      },
       // What a chat picker shows: never settings, repos or anything secret.
       boards: () => db.all(`SELECT b.id, b.name FROM boards b JOIN orgs o ON o.id = b.org_id
-        WHERE b.org_id = ? AND o.deleted_at IS NULL ORDER BY b.name, b.id LIMIT ${BOARDS_MAX}`, c.org_id).map((b) => ({ id: b.id, title: b.name })),
+        WHERE b.org_id = ? AND o.deleted_at IS NULL AND b.archived_at IS NULL ORDER BY b.name, b.id LIMIT ${BOARDS_MAX}`, c.org_id).map((b) => ({ id: b.id, title: b.name })),
       // A card's face only: never its body, acceptance, labels or budget,
       // which a connector would otherwise echo into a shared channel.
       card: (cardId) => {
         const card = typeof cardId === 'string' ? cardInOrg(cardId) : null;
         return card ? { id: card.id, key: card.key, title: card.title, board_id: card.board_id, column_name: card.column_name } : null;
+      },
+      // The card of this connection's newest createCard request: one it made, whoever made a card since.
+      lastCreatedCard: () => {
+        const r = db.get('SELECT card_id FROM integration_requests WHERE connection_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1', c.id);
+        const card = r ? cardInOrg(r.card_id) : null;
+        return card ? { id: card.id, board_id: card.board_id, archived: !!card.archived_at } : null;
       },
       log: (msg, extra = {}) => log?.info?.(msg, { integration: c.provider, connection_id: c.id, ...extra }),
     };
@@ -1871,7 +1992,7 @@ export function createIntegrations({
     register,
     /** Hosts a manifest connect form may post to (the web's CSP form-action). */
     formHosts: () => [...new Set([...connectors.values()].filter((c) => c.connect.manifestForm).map((c) => c.connect.formHost))],
-    connectors: () => [...connectors.values()].map((c) => ({ id: c.id, name: c.name, scopes: c.scopes, connect: c.connect.kind, actions: c.actions, prepare: c.connect.prepareInputs ? [...c.connect.prepareInputs] : null, identity: !!c.identity, start: c.connect.startInputs ? [...c.connect.startInputs] : null })),
+    connectors: () => [...connectors.values()].map((c) => ({ id: c.id, name: c.name, scopes: c.scopes, connect: c.connect.kind, actions: c.actions, prepare: c.connect.prepareInputs ? [...c.connect.prepareInputs] : null, identity: !!c.identity, start: c.connect.startInputs ? [...c.connect.startInputs] : null, shows_webhook_url: c.showsWebhookUrl === true })),
     list: (orgId) => db.all("SELECT * FROM connections WHERE org_id = ? AND status != 'revoked' ORDER BY created_at", orgId).map(publicConnection),
     get: (id) => { const c = row(id); return c ? publicConnection(c) : null; },
     orgOf: (id) => row(id)?.org_id ?? livePending(id)?.org_id ?? null,
@@ -1907,10 +2028,11 @@ export function createIntegrations({
     /**
      * PATCH (D42 addendum C1): `autonomy` and `config` merged key by key in one
      * transaction (null deletes); provider and pinned are never reachable. One
-     * journal row names the changed keys, never a value.
+     * journal row names the changed keys, never a value. `target_board_id`
+     * selects an active board of this team outside the provider settings.
      */
     setSettings(id, patch, { memberId = null } = {}) {
-      if (!isPlainObject(patch) || Object.keys(patch).some((k) => k !== 'autonomy' && k !== 'config')) throw new HubError('VALIDATION', 'settings take autonomy and config only');
+      if (!isPlainObject(patch) || Object.keys(patch).some((k) => !['autonomy', 'config', 'target_board_id'].includes(k))) throw new HubError('VALIDATION', 'settings take autonomy, config and target_board_id only');
       if (patch.autonomy !== undefined && !isPlainObject(patch.autonomy)) throw new HubError('VALIDATION', 'autonomy must be an object');
       if (patch.config !== undefined && !isPlainObject(patch.config)) throw new HubError('VALIDATION', 'config must be an object');
       return hub.txn(() => {
@@ -1920,6 +2042,11 @@ export function createIntegrations({
         if (!conn) throw new HubError('NOT_FOUND', 'no such integration');
         const cur = safeJson(c.settings, {}) ?? {};
         const changed = { autonomy: [], config: [] };
+        const target = patch.target_board_id === undefined ? c.target_board_id : patch.target_board_id;
+        if (target !== c.target_board_id) {
+          if (typeof target !== 'string' || !db.get('SELECT 1 AS x FROM boards WHERE id = ? AND org_id = ? AND archived_at IS NULL', target, c.org_id)) throw new HubError('NOT_FOUND', 'active board not found');
+          changed.target_board_id = true;
+        }
         const autonomy = isPlainObject(cur.autonomy) ? { ...cur.autonomy } : {};
         for (const [a, m] of Object.entries(patch.autonomy ?? {})) {
           if (POISON_KEYS.includes(a)) throw new HubError('VALIDATION', `${conn.name} has no such action`);
@@ -1952,9 +2079,9 @@ export function createIntegrations({
           if (JSON.stringify(config[k]) !== JSON.stringify(v)) { config[k] = v; changed.config.push(k); }
         }
         if (patch.config !== undefined && Buffer.byteLength(JSON.stringify(config)) > CONFIG_MAX_BYTES) throw new HubError('VALIDATION', 'config is over 8 KB');
-        if (!changed.autonomy.length && !changed.config.length) return publicConnection(c);
+        if (!changed.autonomy.length && !changed.config.length && !changed.target_board_id) return publicConnection(c);
         const next = { ...cur, ...(changed.autonomy.length ? { autonomy } : {}), ...(changed.config.length ? { config } : {}) };
-        db.run('UPDATE connections SET settings = ? WHERE id = ?', JSON.stringify(next), id);
+        db.run('UPDATE connections SET settings = ?, target_board_id = ? WHERE id = ?', JSON.stringify(next), target, id);
         hub.journal({ board_id: null, actor_kind: memberId ? 'member' : 'system', actor_id: memberId, kind: 'integration.settings', payload: { connection_id: c.id, provider: c.provider, changed } });
         return publicConnection(row(id));
       });

@@ -153,7 +153,14 @@ process.stdin.on('data', (d) => {
   let i;
   while ((i = buf.indexOf('\n')) >= 0) { const l = buf.slice(0, i); buf = buf.slice(i + 1); if (l.trim()) onStdinLine(l); }
 });
-process.stdin.on('end', () => { log({ ev: 'eof' }); if (!scenario.ignore_eof) process.exit(0); });
+process.stdin.on('end', () => {
+  log({ ev: 'eof' });
+  if (!scenario.ignore_eof) process.exit(0);
+  // An unresolved nextInput Promise and signal handlers do not keep Node
+  // alive. Model the ignored EOF with a referenced, bounded fixture lease
+  // so the stop test exercises SIGTERM/SIGKILL after interrupt cleared wait.
+  setTimeout(() => { killGrandchildren(); mcpProc?.kill(); process.exit(1); }, 30_000);
+});
 
 function killGrandchildren() {
   for (const g of grandchildren) { try { process.kill(-g, 'SIGKILL'); } catch { /* gone */ } }
@@ -195,6 +202,11 @@ async function tool(step) {
     out({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: `denied: ${pre.out?.hookSpecificOutput?.permissionDecisionReason ?? 'hook'}`, is_error: true }] } });
     return;
   }
+  if (step.group_child) {
+    const g = spawn('/bin/sleep', ['300'], { stdio: 'ignore' });
+    g.unref();
+    log({ ev: 'group_child', pid: g.pid });
+  }
   if (step.grandchild) {
     const g = spawn('/bin/sleep', ['300'], { detached: true, stdio: 'ignore' });
     g.unref();
@@ -227,7 +239,7 @@ async function runSteps(steps) {
     else if (step.exit != null) { log({ ev: 'exit', code: step.exit }); process.exit(step.exit); }
     else if (step.result) {
       cost += step.cost ?? 0.001;
-      out({ type: 'result', subtype: step.result, is_error: step.result !== 'success', total_cost_usd: cost, num_turns: 1, result: step.text ?? '', terminal_reason: step.terminal_reason ?? null, permission_denials: [] });
+      out({ type: 'result', subtype: step.result, is_error: step.result !== 'success', total_cost_usd: cost, num_turns: 1, result: step.text ?? '', terminal_reason: step.terminal_reason ?? null, permission_denials: [], usage: { input_tokens: 10, output_tokens: 5 } });
       return 'result';
     }
   }

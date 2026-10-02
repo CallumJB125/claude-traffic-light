@@ -137,11 +137,21 @@ function readJson(file) {
 // failure). Everything the hooks and the app's pollers store on the file is
 // carried through, so a bare signal never wipes it; a held signal keeps its
 // tool too.
-function applyBareSignal(prev, { sessionId, host, source, cwd, signal, tool = null, hostApp, fromSubagent = false }, nowIso = new Date().toISOString()) {
+function applyBareSignal(prev, { sessionId, host, source, cwd, signal, tool = null, hostApp, fromSubagent = false, taskId, taskTitle, taskSummary }, nowIso = new Date().toISOString()) {
   const p = prev || {};
   const t = Machine.step(prev, { signal, writer: 'bare', fromSubagent }, nowIso);
+  // Local reported task metadata. This conveys neither a destination nor
+  // execution authority, and the work-capture boundary scrubs text again.
+  const meta = {};
+  if (typeof taskId === 'string' && /^[A-Za-z0-9_.:-]{1,120}$/.test(taskId)) {
+    meta.taskId = taskId;
+    if (taskId !== p.taskId) { meta.taskTitle = null; meta.taskSummary = null; }
+  }
+  if (typeof taskTitle === 'string') meta.taskTitle = taskTitle.slice(0, 400);
+  if (typeof taskSummary === 'string') meta.taskSummary = taskSummary.slice(0, 4000);
   return {
     ...p,
+    ...meta,
     sessionId,
     host,
     source,
@@ -173,6 +183,26 @@ function sessionFileFor(dir, host, source, sessionId) {
 // app's /hook/:adapter route both land here. `decorate(next, prev)` may add
 // fields inside the same lock (reporter mode's pid and sequence number).
 function applyAdapterEvent(dir, { host, source, event, fallbackSession, fallbackCwd, waitMs, decorate = null }) {
+  if (source === 'codex' && event.codexLifecycle === 1) {
+    const file = sessionFileFor(dir, host, source, event.sessionId);
+    // Lifecycle ordering depends on a held lock. Unlike the legacy writer,
+    // never fall through to an unlocked update when the bounded wait ends.
+    const lock = `${file}.lock`; const token = newToken();
+    const deadline = Date.now() + Math.max(0, Math.min(waitMs ?? 250, 250));
+    let held = false;
+    try {
+      while (!(held = tryLock(lock, token)) && Date.now() < deadline) Atomics.wait(sleeper, 0, 0, 5);
+      if (!held) return null;
+      const prev = readJson(file);
+      const next = reduceCodexLifecycle(prev, event);
+      if (next === undefined) return null;
+      if (next === null) { fs.rmSync(file, { force: true }); return file; }
+      next.sessionId = event.sessionId; next.host = host; next.source = source;
+      if (decorate) decorate(next, prev);
+      writeJsonAtomic(file, next);
+      return file;
+    } finally { if (held) release(lock, token); }
+  }
   const sessionId = safeSessionId(event.sessionId || fallbackSession);
   const file = sessionFileFor(dir, host, source, sessionId);
   if (event.signal === 'session-end') { fs.rmSync(file, { force: true }); return file; }
@@ -184,6 +214,75 @@ function applyAdapterEvent(dir, { host, source, event, fallbackSession, fallback
     writeJsonAtomic(file, next);
   }, waitMs);
   return file;
+}
+
+// Typed, metadata-only Codex reduction. Opaque turn IDs cannot prove total
+// ordering. Refuse known retired/noncurrent events and post-stop work; keep
+// bounded child tombstones so an observed stop-before-start cannot reopen it.
+// Only a parent SessionStart or prompt establishes an absent session.
+function reduceCodexLifecycle(prev, event, nowIso = new Date().toISOString()) {
+  const p = prev?.codexLifecycle === 1 ? prev : null;
+  const name = event.codexEvent;
+  if (name === 'SessionEnd') return p ? null : undefined;
+  const isStart = name === 'SessionStart';
+  const prompt = name === 'UserPromptSubmit';
+  const child = !!event.codexAgentId;
+  const inputAfter = (previous, currentTurn) => {
+    if (['UserPromptSubmit', 'Stop', 'Interrupt', 'SubagentStop'].includes(name) || (isStart && event.codexSessionSource !== 'compact')) return [];
+    const requests = Machine.codexInputEntries({ source: 'codex', codexLifecycle: 1, codexTurnId: currentTurn, codexInputRequests: previous });
+    if (!['sync', 'async'].includes(event.codexInputKind) || typeof event.codexToolUseId !== 'string' || !/^[A-Za-z0-9_.:-]{1,120}$/.test(event.codexToolUseId)) return requests;
+    if (name === 'PreToolUse' && !requests.some(r => r.id === event.codexToolUseId) && requests.length < 16)
+      return [...requests, { id: event.codexToolUseId, turnId: currentTurn, kind: event.codexInputKind, askedAt: nowIso }];
+    if (name === 'PostToolUse' && event.codexInputKind === 'sync') return requests.filter(r => r.id !== event.codexToolUseId || r.kind !== 'sync');
+    return requests; // Async PostToolUse acknowledges delivery, never an answer.
+  };
+  if (!p && (child || (!isStart && !prompt))) return undefined;
+  let turn = p?.codexTurnId || null;
+  let closed = p?.codexClosedTurn === true;
+  let retired = Array.isArray(p?.codexRetiredTurns) ? p.codexRetiredTurns.filter((v) => typeof v === 'string').slice(-16) : [];
+  let roster = Array.isArray(p?.codexAgents) ? p.codexAgents.filter((a) => a && typeof a.id === 'string' && ['working', 'waiting', 'done'].includes(a.status)).slice(0, 64).map((a) => ({ ...a })) : [];
+  const retire = () => { if (turn && !retired.includes(turn)) retired = [...retired, turn].slice(-16); };
+  if (isStart && event.codexSessionSource !== 'compact') {
+    retire(); turn = null; closed = false; roster = [];
+  } else if (!isStart && !child) {
+    if (retired.includes(event.codexTurnId)) return undefined;
+    if (prompt) {
+      if (turn === event.codexTurnId && closed) return undefined;
+      if (turn !== event.codexTurnId) retire();
+      turn = event.codexTurnId; closed = false;
+    } else {
+      if (turn && event.codexTurnId !== turn) return undefined;
+      if (closed) return undefined;
+      turn = event.codexTurnId;
+    }
+  }
+  if (child) {
+    const found = roster.find((a) => a.id === event.codexAgentId);
+    if (!found && roster.length >= 64) return undefined;
+    let childRetired = Array.isArray(found?.retiredTurns) ? found.retiredTurns.slice(-8) : [];
+    if (childRetired.includes(event.codexTurnId)) return undefined;
+    if (found && found.turnId !== event.codexTurnId) {
+      if (name !== 'UserPromptSubmit') return undefined;
+      childRetired = [...childRetired, found.turnId].slice(-8);
+    } else if (found?.status === 'done' && name !== 'SubagentStop') return undefined;
+    const entry = { id: event.codexAgentId, turnId: event.codexTurnId, retiredTurns: childRetired,
+      status: name === 'SubagentStop' ? 'done' : name === 'PermissionRequest' ? 'waiting' : 'working',
+      since: found?.turnId === event.codexTurnId ? found.since : nowIso,
+      codexInputRequests: inputAfter(found?.codexInputRequests, event.codexTurnId) };
+    roster = found ? roster.map((a) => a.id === entry.id ? entry : a) : [...roster, entry];
+  }
+  if (!child && (name === 'Stop' || name === 'Interrupt')) closed = true;
+  if (!child && (prompt || name === 'Stop' || name === 'Interrupt')) roster = roster.map(a => ({ ...a, codexInputRequests: [] }));
+  const next = applyBareSignal(prev, { sessionId: event.sessionId, source: 'codex', host: prev?.host,
+    cwd: child && p ? p.cwd : event.cwd,
+    signal: child ? name === 'SubagentStop' ? 'subagent-done' : 'subagent-start' : event.signal, tool: child ? null : event.tool }, nowIso);
+  Object.assign(next, { codexLifecycle: 1, codexHookAt: nowIso, codexEvent: name, codexTurnId: turn, codexClosedTurn: closed,
+    codexRetiredTurns: retired, codexAgents: roster,
+    codexInputRequests: child ? Machine.codexInputEntries(p) : inputAfter(p?.codexInputRequests, turn),
+    agents: roster.map((a) => ({ id: a.id, name: 'Codex subagent', kind: 'subagent', status: a.status, since: a.since })),
+    askKind: child ? p?.askKind ?? null : name === 'PermissionRequest' ? 'request' : null });
+  delete next.claudePid; // Never mistake the short-lived hook process for Codex.
+  return next;
 }
 
 // A session whose Claude process has exited without a SessionEnd (killed
@@ -200,4 +299,4 @@ function processGone(session, host) {
   }
 }
 
-module.exports = { retryTransient, tryLock, safeSessionId, sessionFileFor, applyAdapterEvent, processGone, TURN_END, STALE_LOCK_MS, LOCK_WAIT_MS, TRANSIENT_ASK_MS, withLock, withLockOrSkip, writeJsonAtomic, readJson, userTouched, applyBareSignal };
+module.exports = { retryTransient, tryLock, safeSessionId, sessionFileFor, applyAdapterEvent, reduceCodexLifecycle, processGone, TURN_END, STALE_LOCK_MS, LOCK_WAIT_MS, TRANSIENT_ASK_MS, withLock, withLockOrSkip, writeJsonAtomic, readJson, userTouched, applyBareSignal };

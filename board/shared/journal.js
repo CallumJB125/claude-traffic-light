@@ -12,6 +12,9 @@ export const JOURNAL_KINDS = Object.freeze([
   'permission.create',  // {permission_request_id, tool}
   'permission.answer',  // {permission_request_id, decision, scope}
   'permission.cancel',  // {permission_request_id}
+  'packet.version',      // {packet_id, version, content_hmac}; participant context, no grant
+  'message.create',      // {message_id, thread_id, comment_id, kind, for_agent:false, content_hmac}
+  'message.receipt',     // {message_id, receipt_id, state, source}; current host/agent reports, never work completion
   'handover.version',   // {version, written_by, provenance}
   'evidence.create',    // {evidence_id, kind, ref, verification, result}
   'plan.declare',       // {paths}
@@ -28,6 +31,13 @@ export const JOURNAL_KINDS = Object.freeze([
   'card.archive',       // {request_id, archived_at, archived_by} (D94)
   'card.restore',       // {request_id}
   'device.outbox',      // {reason:'runner_acked'|'gap'|'reset', from, to, outbox_id?}: a device's last_seq_acked moved other than by an ack (board_id NULL)
+  'board.create',       // {name, key_prefix}; team-wide board lifecycle
+  'board.rename',       // {name: [before, after]}; keys and links never change
+  'board.archive',      // {archived_at}; board becomes read-only
+  'board.restore',      // {archived_at: null}
+  'workflow.publish',   // {recipe_id, version, content_hmac}; version content stays in the editable library
+  'workflow.archive',   // {recipe_id, archived}; instantiated tasks remain ordinary cards
+  'workflow.apply',     // {instance_id, recipe_id, version, content_hmac, context_hmac}
 ]);
 
 // The card fields a transition writes (states.CARD_FIELDS + the derived column).

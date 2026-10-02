@@ -1,0 +1,220 @@
+'use strict';
+(() => {
+  const $ = id => document.getElementById(id);
+  const api = window.overviewApi;
+  const filters = ['device', 'board', 'provider', 'status'];
+  const defaults = { device: 'All devices', board: 'All boards', provider: 'All providers', status: 'All statuses' };
+  const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value);
+  const obj = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+  const str = value => typeof value === 'string' && value.length <= 1000;
+  const ageValid = value => value === null || Number.isFinite(value) && value >= 0;
+  const taskValid = task => obj(task) && ['tracked', 'unknown'].includes(task.status) && str(task.title) && (task.key === null || str(task.key));
+  const capValid = cap => obj(cap) && typeof cap.enabled === 'boolean' && str(cap.label) && str(cap.reason);
+  const reportingValid = value => value === undefined || obj(value) && Object.keys(value).length === 2 && value.source === 'self-reported' && Number.isSafeInteger(value.observed_at) && value.observed_at >= 0;
+  const validWork = row => obj(row) && str(row.id) && str(row.label) && str(row.status) && ['recent', 'stale', 'unknown'].includes(row.freshness) && ageValid(row.age_ms) && reportingValid(row.reporting) && taskValid(row.task) && obj(row.capabilities) && capValid(row.capabilities.open) && capValid(row.capabilities.message);
+  function validSnapshot(value) {
+    if (!obj(value) || value.schema !== 1 || !['complete', 'partial', 'unavailable'].includes(value.status) || !Number.isFinite(value.observed_at) || value.observed_at < 0 || !Number.isSafeInteger(value.omitted) || value.omitted < 0 || !Array.isArray(value.sessions) || value.sessions.length > 500) return false;
+    const ids = new Set();
+    for (const row of value.sessions) {
+      if (!validWork(row) || !uuid(row.handle) || !obj(row.provider) || !str(row.provider.id) || !str(row.provider.label) || !['integrated', 'local'].includes(row.provider.kind) || !obj(row.device) || !str(row.device.label) || typeof row.device.local !== 'boolean' || !obj(row.board) || !str(row.board.label) || !['personal', 'team', 'unknown'].includes(row.board.kind) || !str(row.project) || !Array.isArray(row.children) || row.children.length > 64) return false;
+      if (ids.has(row.id)) return false;
+      ids.add(row.id);
+      for (const child of row.children) {
+        if (!validWork(child) || !(child.handle === null || uuid(child.handle)) || ids.has(child.id)) return false;
+        ids.add(child.id);
+      }
+    }
+    return true;
+  }
+  let snapshot = null, readGeneration = 0, viewGeneration = 0;
+  let ready = typeof api.onReady !== 'function';
+  const expanded = new Map(), composers = new Map(), busy = new Set(), notices = new Map();
+  let rows = new Map();
+  const node = (tag, text, className) => { const el = document.createElement(tag); if (text != null) el.textContent = text; if (className) el.className = className; return el; };
+  const ageText = value => value === null ? 'Report time unknown' : value < 60_000 ? `${Math.floor(value / 1000)}s ago` : value < 3_600_000 ? `${Math.floor(value / 60_000)}m ago` : `${Math.floor(value / 3_600_000)}h ago`;
+  const ageNow = row => row.age_ms === null ? null : row.age_ms + Math.max(0, Date.now() - snapshot.observed_at);
+  const freshness = row => row.freshness === 'recent' && (ageNow(row) === null || ageNow(row) > 90_000) ? 'stale' : row.freshness;
+  const identity = (row, parent) => JSON.stringify([row.id, row.task.key, row.task.title, parent.provider.id, parent.device.label, parent.board.kind, parent.board.label]);
+  const byId = id => rows.get(id);
+  function capability(row, action) {
+    if (document.hidden || !snapshot || snapshot.status === 'unavailable') return { enabled: false, reason: 'Current activity is unavailable.' };
+    if (freshness(row) !== 'recent') return { enabled: false, reason: freshness(row) === 'stale' ? 'This report is stale. Refresh before acting.' : 'Current activity has not been reported.' };
+    if (row.capabilities[action].enabled !== true) return row.capabilities[action];
+    if (!uuid(row.handle)) return { enabled: false, reason: 'This agent has no supported action connection.' };
+    return row.capabilities[action];
+  }
+  function button(label, callback, focus) {
+    const el = node('button', label); el.type = 'button';
+    if (focus) el.dataset.focus = focus;
+    el.addEventListener('click', callback); return el;
+  }
+  // An already dispatched action stays fenced until its promise settles,
+  // even when the page/filter invalidates the presentation of its result.
+  function clearInteractions() { viewGeneration++; composers.clear(); notices.clear(); }
+  function clearPage(message) {
+    snapshot = null; rows.clear(); clearInteractions();
+    $('content').replaceChildren(); $('summary').replaceChildren(); $('connections').replaceChildren();
+    $('result-count').textContent = ''; $('status').textContent = message; $('content').setAttribute('aria-busy', 'false');
+  }
+  function empty(title, text) { const el = node('div', '', 'empty'); el.append(node('h3', title), node('p', text)); return el; }
+  const keyFor = (row, filter) => filter === 'provider' ? row.provider.id : filter === 'status' ? row.status : row[filter].label;
+  function updateFilters() {
+    for (const filter of filters) {
+      const select = $(`${filter}-filter`), previous = select.value;
+      const values = new Map();
+      for (const row of snapshot.sessions) values.set(keyFor(row, filter), filter === 'provider' ? `${row.provider.label}${row.provider.kind === 'local' ? ' · local model' : ''}` : keyFor(row, filter));
+      select.replaceChildren(Object.assign(node('option', defaults[filter]), { value: '' }));
+      for (const [value, label] of [...values].sort((a, b) => a[1].localeCompare(b[1]))) select.append(Object.assign(node('option', label), { value }));
+      if (previous && !values.has(previous)) select.append(Object.assign(node('option', `${previous} · no reports`), { value: previous }));
+      select.value = previous;
+    }
+  }
+  function matches(row) { return filters.every(filter => !$(`${filter}-filter`).value || keyFor(row, filter) === $(`${filter}-filter`).value); }
+  function renderSummary() {
+    const all = snapshot.sessions, children = all.flatMap(row => row.children);
+    const recent = row => freshness(row) === 'recent';
+    const metrics = [[all.length, 'Reported sessions'], [all.filter(row => recent(row) && row.status === 'Working').length, 'Working now'], [[...all, ...children].filter(row => recent(row) && row.status === 'Waiting on you').length, 'Waiting on you'], [children.length, 'Reported child agents']];
+    $('summary').replaceChildren(...metrics.map(([value, label]) => { const el = node('div', '', 'metric'); el.append(node('strong', String(value)), node('span', label)); return el; }));
+  }
+  function renderConnections() {
+    const byProvider = new Map();
+    for (const row of snapshot.sessions) {
+      let entry = byProvider.get(row.provider.id);
+      if (!entry) { entry = { provider: row.provider, recent: 0, stale: 0, unknown: 0 }; byProvider.set(row.provider.id, entry); }
+      entry[freshness(row)]++;
+    }
+    $('connections').replaceChildren(...[...byProvider.values()].map(entry => {
+      const el = node('div', '', 'connection');
+      el.append(node('strong', `${entry.provider.label}${entry.provider.kind === 'local' ? ' · local model' : ''}`), node('p', `${entry.recent} recent · ${entry.stale} stale · ${entry.unknown} unknown`, 'muted'));
+      return el;
+    }));
+    if (!byProvider.size) $('connections').append(node('p', 'No provider or local-model activity has been reported yet.', 'muted'));
+  }
+  function actions(row, parent) {
+    const wrap = node('div', '', 'row-footer'), buttons = node('div', '', 'actions');
+    for (const kind of ['open', 'message']) {
+      const cap = capability(row, kind), action = node('div', '', 'action');
+      const label = row.capabilities[kind].label || (kind === 'open' ? 'Open' : 'Message');
+      const b = button(label, () => kind === 'open' ? void act(row.id, 'open') : compose(row.id), `${row.id}:${kind}`);
+      b.disabled = cap.enabled !== true || busy.has(row.id);
+      b.setAttribute('aria-label', `${label}: ${row.label}`);
+      action.append(b);
+      if (cap.enabled !== true) { const why = node('p', cap.reason || 'This connection does not support this action.', 'reason'); action.append(why); b.title = why.textContent; }
+      buttons.append(action);
+    }
+    wrap.append(buttons);
+    if (notices.has(row.id)) { const notice = node('p', notices.get(row.id).text, 'reason'); notice.setAttribute('role', 'status'); wrap.append(notice); }
+    return wrap;
+  }
+  function compose(id) {
+    const entry = byId(id); if (!entry || capability(entry.row, 'message').enabled !== true || busy.has(id)) return;
+    composers.set(id, { identity: entry.identity, text: '', error: '' });
+    renderWork(`${id}:text`);
+  }
+  function composer(row) {
+    const draft = composers.get(row.id); if (!draft) return null;
+    const box = node('div', '', 'composer'), label = node('label', `Message ${row.label}`);
+    const input = node('textarea'); input.id = `message-${row.id}`; label.htmlFor = input.id;
+    input.dataset.focus = `${row.id}:text`; input.value = draft.text; input.disabled = busy.has(row.id);
+    input.placeholder = 'Write a message to this task…';
+    input.addEventListener('input', () => { draft.text = input.value; draft.error = ''; });
+    const note = node('p', draft.error || 'Sends through this task’s supported connection. Maximum 4,000 characters and 8 KB.', 'reason'); note.setAttribute('role', 'status');
+    const buttons = node('div', '', 'actions');
+    const send = button(busy.has(row.id) ? 'Sending…' : 'Send message', () => void act(row.id, 'message'), `${row.id}:send`);
+    send.disabled = busy.has(row.id) || capability(row, 'message').enabled !== true;
+    const cancel = button('Cancel', () => { composers.delete(row.id); renderWork(`${row.id}:message`); }, `${row.id}:cancel`); cancel.disabled = busy.has(row.id);
+    buttons.append(send, cancel); box.append(label, input, note, buttons); return box;
+  }
+  function workRow(row, parent, child = false) {
+    const el = node(child ? 'li' : 'article', '', child ? 'agent' : 'session'); el.dataset.id = row.id;
+    const heading = node('div', '', 'row-heading'), title = node('div');
+    title.append(node('h3', row.task.status === 'tracked' ? row.task.title : row.label));
+    if (row.task.status === 'unknown') title.append(node('p', 'Task not reported', 'muted'));
+    else if (row.label !== row.task.title) title.append(node('p', row.label, 'muted'));
+    const fresh = freshness(row), tone = fresh !== 'recent' ? fresh : row.status === 'Waiting on you' ? 'waiting' : row.status === 'Working' ? 'working' : '';
+    heading.append(title, node('span', fresh === 'recent' ? row.status : `${row.status} · ${fresh === 'stale' ? 'Stale' : 'Freshness unknown'}`, `tag ${tone}`));
+    el.append(heading);
+    if (!child) el.append(node('p', `${parent.provider.label}${parent.provider.kind === 'local' ? ' · local model' : ''} · ${parent.project} · ${parent.device.label}${parent.device.local ? ' (this device)' : ''} · ${parent.board.label}${parent.board.kind === 'unknown' ? ' (board unknown)' : ''}`, 'row-meta'));
+    el.append(node('p', `${ageText(ageNow(row))} · ${row.reporting?.source === 'self-reported' ? 'Self-reported activity' : 'Reported activity'}`, 'muted'), actions(row, parent));
+    const comp = composer(row); if (comp) el.append(comp);
+    if (!child && row.children.length) {
+      const details = node('details', '', 'children'); details.dataset.focus = `${row.id}:agents`;
+      details.open = expanded.get(row.id) ?? true;
+      const summary = node('summary', `${row.children.length} child ${row.children.length === 1 ? 'agent' : 'agents'}`); summary.dataset.focus = `${row.id}:agents`;
+      details.addEventListener('toggle', () => { if (details.isConnected) expanded.set(row.id, details.open); });
+      const list = node('ul', '', 'agent-list'); list.setAttribute('aria-label', `Child agents of ${row.label}`);
+      for (const entry of row.children) list.append(workRow(entry, parent, true));
+      details.append(summary, list); el.append(details);
+    }
+    return el;
+  }
+  function renderWork(focus = null) {
+    const active = document.activeElement, focusKey = focus || active?.dataset?.focus;
+    const selection = active?.tagName === 'TEXTAREA' ? [active.selectionStart, active.selectionEnd] : null;
+    const selected = snapshot.sessions.filter(matches);
+    $('content').replaceChildren(...selected.map(row => workRow(row, row)));
+    $('result-count').textContent = `${selected.length} of ${snapshot.sessions.length} sessions`;
+    if (!selected.length) $('content').append(snapshot.sessions.length ? empty('No work matches these filters', 'Try another device, board, provider or status, or clear the filters.') : empty('No activity reported yet', 'Start work in a connected tool or local model. Supported reports will appear here.'));
+    $('content').setAttribute('aria-busy', 'false');
+    if (focusKey) {
+      const target = [...$('content').querySelectorAll('[data-focus]')].find(el => el.dataset.focus === focusKey && el.tagName !== 'DETAILS');
+      target?.focus(); if (selection && target?.tagName === 'TEXTAREA') target.setSelectionRange(...selection);
+    }
+  }
+  function render(value) {
+    snapshot = value; rows = new Map();
+    for (const parent of snapshot.sessions) for (const row of [parent, ...parent.children]) rows.set(row.id, { row, parent, identity: identity(row, parent) });
+    for (const [id, draft] of composers) if (!rows.has(id) || rows.get(id).identity !== draft.identity || capability(rows.get(id).row, 'message').enabled !== true) composers.delete(id);
+    for (const [id, notice] of notices) if (!rows.has(id) || rows.get(id).identity !== notice.identity) notices.delete(id);
+    updateFilters(); renderSummary(); renderConnections(); renderWork();
+    const time = new Date(value.observed_at).toLocaleTimeString();
+    $('status').textContent = `Checked ${time}. Refreshes every 5 seconds while visible.${value.status === 'partial' ? ' Some activity is unavailable.' : ''}${value.omitted ? ` ${value.omitted} additional reports exceed the display limit.` : ''}`;
+  }
+  const resultText = { opened: 'Opened this task.', queued: 'Message queued by the supported connection. Delivery is not yet verified.', unavailable: 'This action is unavailable. Check the connection and try Refresh.', invalid: 'This request is unavailable. Try Refresh.', stale: 'This task changed before the action completed. Refresh and try again.' };
+  async function act(id, kind) {
+    const entry = byId(id); if (!entry || busy.has(id) || capability(entry.row, kind).enabled !== true) return;
+    const generation = viewGeneration, captured = entry.identity, request = { handle: entry.row.handle };
+    if (kind === 'message') {
+      const draft = composers.get(id); if (!draft || draft.identity !== captured) return;
+      const text = draft.text.trim();
+      if (!text || text.length > 4000 || text.includes('\0') || new Blob([text]).size > 8192) { draft.error = 'Write a message of at most 4,000 characters and 8 KB with no NUL characters.'; renderWork(`${id}:text`); return; }
+      request.text = text;
+    }
+    busy.add(id); notices.delete(id); renderWork();
+    try {
+      const result = await api[kind](request);
+      if (document.hidden || generation !== viewGeneration || byId(id)?.identity !== captured) return;
+      if (result?.ok === true && result.status === (kind === 'open' ? 'opened' : 'queued')) {
+        notices.set(id, { identity: captured, text: resultText[result.status] }); if (kind === 'message') composers.delete(id);
+      } else notices.set(id, { identity: captured, text: resultText[result?.status] || resultText.unavailable });
+    } catch {
+      if (!document.hidden && generation === viewGeneration && byId(id)?.identity === captured) notices.set(id, { identity: captured, text: resultText.unavailable });
+    } finally {
+      busy.delete(id); if (snapshot && !document.hidden) renderWork();
+    }
+  }
+  async function refresh() {
+    const request = ++readGeneration;
+    try {
+      const value = await api.state();
+      if (request !== readGeneration || document.hidden) return;
+      if (!validSnapshot(value) || value.status === 'unavailable') throw new Error('unavailable');
+      render(value);
+    } catch {
+      if (request === readGeneration && !document.hidden) {
+        clearPage('Reported activity is unavailable. Try Refresh.');
+        $('content').append(empty('Activity unavailable', 'Current reports could not be read. Refresh to try again.'));
+      }
+    }
+  }
+  if (typeof api.onReady === 'function') api.onReady(() => {
+    ready = true;
+    if (!document.hidden) void refresh();
+  });
+  $('refresh').addEventListener('click', () => void refresh());
+  for (const filter of filters) $(`${filter}-filter`).addEventListener('change', () => { clearInteractions(); if (snapshot) renderWork(); });
+  $('clear-filters').addEventListener('click', () => { filters.forEach(filter => { $(`${filter}-filter`).value = ''; }); clearInteractions(); if (snapshot) renderWork(); });
+  document.addEventListener('visibilitychange', () => { ++readGeneration; expanded.clear(); clearPage('Checking reported activity…'); if (!document.hidden && ready) void refresh(); });
+  setInterval(() => { if (!document.hidden && ready) { if (snapshot) { renderSummary(); renderConnections(); renderWork(); } void refresh(); } }, 5000);
+  if (!document.hidden && ready) void refresh();
+})();

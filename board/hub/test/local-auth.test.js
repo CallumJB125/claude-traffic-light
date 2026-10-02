@@ -20,7 +20,7 @@ import { fakeClock, fakeGitHub, testConfig, startHub, FakeRunner, FakeBrowser } 
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SERVER = resolve(HERE, '..', 'server.js');
-const PRELOAD = resolve(HERE, 'fixtures', 'fake-parent-port.js');
+const PRELOAD = new URL('./fixtures/fake-parent-port.js', import.meta.url).href;
 const SECRET = 'l'.repeat(64);
 
 async function startLocal({ dataDir } = {}) {

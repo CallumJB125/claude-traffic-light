@@ -61,6 +61,13 @@ function setProp(el, k, v, prev, svg) {
     return;
   }
   if (PROP_KEYS.has(k)) {
+    // An option's empty property initially equals '', but without an explicit
+    // value attribute its eventual label becomes its submitted value.
+    if (k === 'value' && el.tagName === 'OPTION') {
+      if (v == null) el.removeAttribute('value');
+      else el.setAttribute('value', String(v));
+      return;
+    }
     // Controlled only when the render value changes, so re-renders never
     // clobber what someone is typing.
     if (v !== prev && el[k] !== v) el[k] = v ?? (k === 'value' ? '' : false);
@@ -77,6 +84,7 @@ function create(v, svg) {
   const el = isSvg ? document.createElementNS(SVG_NS, v.tag) : document.createElement(v.tag);
   for (const [k, val] of Object.entries(v.props)) setProp(el, k, val, undefined, isSvg);
   for (const c of v.children) el.appendChild(create(c, isSvg && v.tag !== 'foreignObject'));
+  if (v.tag === 'select' && v.props.value != null) el.value = v.props.value;
   return (v.el = el);
 }
 
@@ -97,6 +105,7 @@ function patch(a, b, svg) {
   const keys = new Set([...Object.keys(a.props), ...Object.keys(b.props)]);
   for (const k of keys) if (a.props[k] !== b.props[k] || PROP_KEYS.has(k)) setProp(el, k, b.props[k], a.props[k], isSvg);
   patchChildren(el, a.children, b.children, isSvg && b.tag !== 'foreignObject');
+  if (b.tag === 'select' && b.props.value !== a.props.value && b.props.value != null) el.value = b.props.value;
   return el;
 }
 

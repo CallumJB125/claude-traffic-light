@@ -16,21 +16,21 @@ function shouldAutoShow({ markerExists, devRun }) {
 // Keyed by the default rules' ids. Only used when the rule still listens for
 // the signal it shipped with; a rule the user repurposed gets a generic line.
 const RULE_TEXT = {
-  limit: { signal: 'limit-hit', text: "You've hit your Claude usage limit. Nothing happens until it resets." },
-  permission: { signal: 'permission-ask', text: "Claude has stopped mid-task to ask you something — permission to run a tool, or a question. It won't carry on until you answer in the terminal." },
-  offline: { signal: 'offline', text: "This computer is offline, so Claude can't reach its servers. Sessions pick up again when the network is back." },
-  subagent: { signal: 'tool-use', text: 'Claude handed part of the job to a helper agent.' },
-  ralph: { signal: 'ralph', text: 'A ralph loop keeps re-running Claude until the task checks out. The number is which round it is on.' },
+  limit: { signal: 'limit-hit', text: "You've hit your AI usage limit. Nothing happens until it resets." },
+  permission: { signal: 'permission-ask', text: "The AI agent has stopped mid-task to ask you something — permission to run a tool, or a question. It won't carry on until you answer in the terminal." },
+  offline: { signal: 'offline', text: "This computer is offline, so the AI agent can't reach its servers. Sessions pick up again when the network is back." },
+  subagent: { signal: 'tool-use', text: 'The AI agent handed part of the job to a helper agent.' },
+  ralph: { signal: 'ralph', text: 'A ralph loop keeps re-running the AI agent until the task checks out. The number is which round it is on.' },
   swarm: { signal: 'agents-many', text: 'Three or more agents are working at once; the sign counts them.' },
-  team: { signal: 'team', text: 'Several Claude agents are working together as a team.' },
-  failed: { signal: 'tool-failed', text: 'A tool Claude just ran failed. Claude usually deals with it on its own.' },
-  shell: { signal: 'tool-use', text: 'Claude is running a command in the terminal.' },
-  working: { signal: 'prompt-submit', text: 'Claude is busy reading, writing or running things. Nothing for you to do.' },
+  team: { signal: 'team', text: 'Several AI agents are working together as a team.' },
+  failed: { signal: 'tool-failed', text: 'A tool the AI agent just ran failed. The AI agent usually deals with it on its own.' },
+  shell: { signal: 'tool-use', text: 'The AI agent is running a command in the terminal.' },
+  working: { signal: 'prompt-submit', text: 'The AI agent is busy reading, writing or running things. Nothing for you to do.' },
   'failed-turn': { signal: 'turn-failed', text: 'The last request errored (no network, servers busy, or a rate limit). Retry in the terminal.' },
-  done: { signal: 'stop', text: "Claude finished what you asked. It's your turn — no rush." },
+  done: { signal: 'stop', text: "The AI agent finished what you asked. It's your turn — no rush." },
   ignored: { signal: 'ignored-20', text: 'Something has been waiting on you for 20+ minutes, so he has crossed his arms and grown a beard.' },
-  nudge: { signal: 'idle-nudge', text: 'Claude finished a while ago and is idle until you send the next message. Nothing is blocked.' },
-  idle: { signal: 'idle', text: 'No Claude Code session is running (or they have all gone quiet).' },
+  nudge: { signal: 'idle-nudge', text: 'The AI agent finished a while ago and is idle until you send the next message. Nothing is blocked.' },
+  idle: { signal: 'idle', text: 'No recent AI activity is reported. Sessions may have gone quiet.' },
   // F2 git/ci
   'git-ci-failed': { signal: 'ci-failed', text: 'A GitHub Actions run you started on the branch you are working on just failed. It shows for 10 minutes; Preferences → Git and CI turns these off.' },
   'git-deploy-failed': { signal: 'deploy-failed', text: 'A deploy workflow you started just failed on GitHub Actions. Which workflows count as deploys is set in Preferences → Git and CI.' },
@@ -39,7 +39,7 @@ const RULE_TEXT = {
   'git-deploy-finished': { signal: 'deploy-finished', text: 'A deploy workflow you started finished successfully.' },
   'git-ci-passed': { signal: 'ci-passed', text: 'CI passed on the branch you are working on.' },
   // F1 spend
-  runaway: { signal: 'runaway', text: "A session has spent more than your runaway threshold in the last few minutes (hover Claude for how much, how fast). Check it's doing what you meant — Buddy never stops a session you started; the notification jumps to its terminal." },
+  runaway: { signal: 'runaway', text: "A session has spent more than your runaway threshold in the last few minutes (hover the widget for how much, how fast). Check it's doing what you meant — Buddy never stops a session you started; the notification jumps to its terminal." },
   'budget-exceeded': { signal: 'budget-exceeded', text: "You're over the daily or weekly budget set in Preferences → Spend. Nothing is stopped; this is just so you know." },
   'budget-warning': { signal: 'budget-warning', text: "You're close to the daily or weekly budget set in Preferences → Spend." },
 };
@@ -74,7 +74,7 @@ function ruleText(rule) {
   const known = RULE_TEXT[rule.id];
   const signals = (rule.when && rule.when.signal) || [];
   if (known && signals.includes(known.signal)) return known.text;
-  const labels = signals.map((id) => (Rules.SIGNALS.find((s) => s.id === id) || { label: id }).label).map((l) => (/^Claude/.test(l) ? l : l[0].toLowerCase() + l.slice(1)));
+  const labels = signals.map((id) => (Rules.SIGNALS.find((s) => s.id === id) || { label: id }).label).map((l) => (/^Claude/.test(l) ? l.replace(/^Claude/, 'An AI agent') : l[0].toLowerCase() + l.slice(1)));
   return labels.length ? `Your rule — it fires when ${labels.join(' or ')}.` : 'One of your rules in Lights.';
 }
 
@@ -107,6 +107,15 @@ function explain(state, rules, extra = {}) {
     // but not jump to.
     remote: remoteCounts(state.sessions),
   };
+  const providerStatus = extra.providerStatus;
+  if (providerStatus) {
+    out.providerStatus = providerStatus;
+    if (!['manual', 'preview', 'travel'].includes(state.reason)) {
+      const originalHeadline = out.headline;
+      out.headline = providerStatus.headline;
+      out.why.push({ label: 'Rule', value: `“${originalHeadline}”`, rule: null });
+    }
+  }
   if (state.reason === 'manual') out.meaning = 'You set this colour by hand from the menu-bar icon. It clears itself after 5 minutes, or use Clear override.';
   if (state.reason === 'preview') out.meaning = 'This is a preview from the Lights editor; the real state comes back in a few seconds.';
 
@@ -140,7 +149,7 @@ function explain(state, rules, extra = {}) {
       busy: !!busy.busy,
       until: busy.busy ? busy.until || null : null,
       text: busy.busy
-        ? `You're busy${why}, so amber and green sounds, notifications and knocks are held; red ones (a permission ask, a limit, offline) still come through. The lights keep updating. When you're free, a “While you were away” card under Claude sums up what happened — click a line to jump to that terminal.`
+        ? `You're busy${why}, so amber and green sounds, notifications and knocks are held; red ones (a permission ask, a limit, offline) still come through. The lights keep updating. When you're free, a “While you were away” card under the widget sums up what happened — click a line to jump to that terminal.`
         : 'Busy detection is on. During a calendar event marked busy or a Focus, amber and green pings wait and red ones still come through; afterwards a “While you were away” card sums up what happened. Change which sources count in Preferences → Busy & Focus (macOS Calendar stays off until you tick it there), and per rule in Lights → While you\'re busy.',
     };
   }
@@ -150,7 +159,7 @@ function explain(state, rules, extra = {}) {
   if (minions.length) {
     const n = minions.length;
     out.agents = {
-      text: `The ${n} little chip${n === 1 ? '' : 's'} under Claude ${n === 1 ? 'is a helper agent' : 'are helper agents'} (subagents, teammates or ralph workers) doing part of the job. Green and bobbing = working, amber and flashing = waiting, grey = done. Hover Claude for names; click a chip for its status.`,
+      text: `The ${n} little chip${n === 1 ? '' : 's'} under the widget ${n === 1 ? 'is a helper agent' : 'are helper agents'} (subagents, teammates or ralph workers) doing part of the job. Green and bobbing = working, amber and flashing = waiting, grey = done. Hover the widget for names; click a chip for its status.`,
       list: minions.slice(0, 8).map((a) => ({ name: a.name, status: a.status, kind: a.kind })),
       more: Math.max(0, n - 8),
     };

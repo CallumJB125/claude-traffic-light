@@ -6,6 +6,7 @@ const path = require('path');
 const { test, expect } = require('@playwright/test');
 const { launchApp, signal, windowByFile } = require('./app');
 const states = require('../test/fixtures/updater-states.json').states;
+const { startTasksMock, shortTmp } = require('./tasks-mock');
 
 const GARDEN_RULE = { id: 'csp-garden', name: 'Garden', when: { signal: ['tool-use'] }, then: { lamp: 'green', effect: 'garden' } };
 
@@ -27,9 +28,13 @@ const collect = async (page, label) => { for (const v of await page.evaluate(() 
 let h;
 let widget;
 let lights;
+let tasksMock;
+let tasksWork;
 
 test.beforeAll(async () => {
-  h = await launchApp({ config: { askFromWidget: true } });
+  tasksMock = await startTasksMock();
+  tasksWork = shortTmp();
+  h = await launchApp({ config: { askFromWidget: true }, env: { CLAUDE_TRAFFIC_LIGHT_TASKS_HOME: tasksMock.dir, CLAUDE_TRAFFIC_LIGHT_TASKS_PICK: tasksWork } });
   h.app.process().stdout.on('data', (d) => appLog.push(...String(d).split('\n')));
   widget = await windowByFile(h.app, 'index.html');
   await widget.evaluate(() => window.trafficLight.openLights());
@@ -39,7 +44,7 @@ test.beforeAll(async () => {
   await watch(lights, 'lights');
 });
 
-test.afterAll(async () => { await h?.cleanup(); });
+test.afterAll(async () => { await h?.cleanup(); await tasksMock?.close(); fs.rmSync(tasksWork || '', { recursive: true, force: true }); });
 
 test('the policy is really enforced: an inline handler and a fetch are both refused', async () => {
   const marker = [];
@@ -230,5 +235,32 @@ test('feedback: the form, a screenshot preview and the scrubbed preview run unde
   await form.locator('#save').click();
   await expect(form.locator('#done')).toBeVisible({ timeout: 10000 });
   await collect(form, 'feedback');
+  expect(violations).toEqual([]);
+});
+
+test('tasks: the list, a task with its transcript and thread, and the composer run under the policy; an inline handler and a fetch are refused', async () => {
+  await h.app.evaluate(() => global.__buddyTrayMenu.items.find((i) => i.label === 'Open Tasks…').click());
+  const tasks = await windowByFile(h.app, 'tasks.html');
+  await tasks.waitForLoadState('load');
+  await watch(tasks, 'tasks');
+  await expect(tasks.locator('#list .row')).toHaveCount(5, { timeout: 15000 });
+  await tasks.locator('#list .row', { hasText: 'Add a dark mode toggle' }).click();
+  await expect(tasks.locator('#tx .msg').first()).toBeVisible({ timeout: 10000 });
+  await tasks.locator('#tab-messages').click();
+  await tasks.locator('#tab-details').click();
+  await expect(tasks.locator('#pane-details pre.box').first()).toBeVisible();
+  await tasks.keyboard.press('Alt+Meta+T');
+  await expect(tasks.locator('.composer h2')).toBeVisible();
+  await tasks.locator('#c-folder-btn').click();
+  await expect(tasks.locator('#c-folder')).not.toHaveText(/None chosen/);
+  await tasks.evaluate(() => { const b = document.createElement('b'); b.setAttribute('onclick', 'window.__x = 1'); document.body.append(b); b.click(); fetch('https://example.invalid/').catch(() => {}); });
+  await tasks.waitForTimeout(300);
+  expect(await tasks.evaluate(() => window.__x)).toBeUndefined();
+  const seen = await tasks.evaluate(() => window.__csp);
+  expect(seen.some((x) => x.startsWith('script-src'))).toBe(true);
+  expect(seen.some((x) => x.startsWith('connect-src'))).toBe(true);
+  await tasks.evaluate(() => { window.__csp.length = 0; });
+  violations.length = 0;
+  await collect(tasks, 'tasks');
   expect(violations).toEqual([]);
 });

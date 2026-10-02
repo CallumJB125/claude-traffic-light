@@ -3,6 +3,7 @@
 // a fake clock, and IPC helpers. Nothing touches ~/.claude*, ~/.board or the network.
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import http from 'node:http';
 import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
@@ -20,8 +21,9 @@ export const REPO_ID = 'repo-app';
 export const OWNER = 'm-owner';
 
 // Short paths: AF_UNIX socket paths must stay < 104 bytes on macOS.
+const TEMP_ROOT = process.platform === 'darwin' ? '/tmp' : os.tmpdir();
 export function tmpDir(prefix = 'brt-') {
-  return fs.realpathSync(fs.mkdtempSync(path.join('/tmp', prefix)));
+  return fs.realpathSync(fs.mkdtempSync(path.join(TEMP_ROOT, prefix)));
 }
 
 export function rm(dir) {
@@ -201,11 +203,12 @@ export async function startRunner({ hub, home, repo, scenario, clock, policyExtr
   const bin = scenario ? fakeClaudeBin(home, scenario) : null;
   const sup = new Supervisor({
     home, hubUrl: hub.url, clock, claudeBin: bin, autoTick, confirm, powerMonitor,
-    env: env ?? { HOME: process.env.HOME, USER: process.env.USER, PATH: process.env.PATH, TMPDIR: '/tmp', LANG: 'en_US.UTF-8' },
+    env: env ?? { HOME: process.env.HOME, USER: process.env.USER, PATH: process.env.PATH, TMPDIR: TEMP_ROOT, LANG: 'en_US.UTF-8' },
     log: makeLogger(process.stderr, { quiet: !process.env.BOARD_TEST_LOG }),
     interruptWaitMs: 500, stopGraceMs: 800, limitBackoffMs: 50, gitleaks: null, rand: () => 0, reconnectDelayFn: () => 30,
     keepRunFiles: true,   // tests read fake.log after the run ends
     buddyHome: null,      // never write Buddy launch records into the real home
+    detectAis: async () => null,   // never probe the real claude/codex
     ...opts,
   });
   await sup.start();

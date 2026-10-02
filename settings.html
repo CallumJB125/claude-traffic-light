@@ -18,7 +18,9 @@
   }
   body {
     min-height: 100%;
-    padding: var(--space-5) 22px 0;
+    padding: var(--space-5) 22px 22px;
+    max-width: 900px;
+    margin: 0 auto;
     display: flex;
     flex-direction: column;
     gap: 18px;
@@ -223,7 +225,7 @@
 </style>
 </head>
 <body>
-  <h1>Plexiform</h1>
+  <h1>Preferences</h1>
 
   <h2>Sessions</h2>
 
@@ -330,7 +332,7 @@
     <div id="connect-label" class="group-label">Connect other agents</div>
     <div class="row wrap" role="group" aria-labelledby="connect-label">
       <button type="button" class="secondary" data-agent="cursor">Cursor</button>
-      <button type="button" class="secondary" data-agent="codex">Codex CLI</button>
+      <button type="button" class="secondary" data-agent="codex">Codex desktop and CLI</button>
       <button type="button" class="secondary" data-agent="gemini">Gemini CLI</button>
     </div>
     <div class="hint" id="connect-hint" role="status" aria-live="polite">Writes each tool's hook config so its sessions light the widget too. Anything else can run <code id="emit-path">emit.js</code>, or POST to <code id="endpoint">http://127.0.0.1:47172/signal</code> with an <code>x-buddy-token</code> header set to the contents of <code id="token-path">~/.claude-traffic-light/token</code>.</div>
@@ -340,6 +342,26 @@
   <div class="field">
     <div class="row"><button type="button" class="secondary" id="mcp-toggle">Enable Claude integration</button></div>
     <div class="hint" id="mcp-hint" role="status" aria-live="polite">Adds Buddy as an MCP server for every Claude Code session, so you can ask Claude "why is my buddy amber?" or have it answer a waiting permission prompt. Writes one entry (<code>claude-buddy</code>) to <code>~/.claude.json</code>; restart open sessions to pick it up.</div>
+  </div>
+
+  <h2>Boards in your AI apps</h2>
+  <div class="field">
+    <label for="native-board-app">App</label>
+    <select id="native-board-app">
+      <option value="codex">Codex desktop app and CLI</option>
+      <option value="claude-code">Claude Code, including local Code in Claude</option>
+      <option value="claude-desktop">Claude desktop chat and local Code</option>
+    </select>
+    <label for="native-board-workspace">Team workspace</label>
+    <select id="native-board-workspace"><option value="">Choose a signed-in team</option></select>
+    <div id="native-board-choices" class="stack" role="group" aria-label="Boards to connect"></div>
+    <label for="native-board-mode">Access</label>
+    <select id="native-board-mode"><option value="read">Read tasks and handovers</option><option value="collaborate">Also create tasks, edit text and comment</option></select>
+    <div class="row wrap">
+      <button type="button" class="secondary" id="native-board-connect">Connect boards</button>
+      <button type="button" class="secondary" id="native-board-disconnect" disabled>Remove connection</button>
+    </div>
+    <div class="hint" id="native-board-hint" role="status" aria-live="polite">Choose boards to use in your AI app. Keep Plexiform open and signed in. New local sessions pick up the connection; active sessions may need restarting in their app. Hosted chats require a remote connector.</div>
   </div>
 
   <h2>Git and CI</h2>
@@ -536,5 +558,6 @@
   <script src="privacy-render.js"></script>
   <script src="settings-backups.js"></script>
   <script src="settings.js"></script>
+  <script src="native-board/settings.js"></script>
 </body>
 </html>

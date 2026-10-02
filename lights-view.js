@@ -1,5 +1,17 @@
   const R = window.TrafficLightRules;
   const $ = (id) => document.getElementById(id);
+  const pageQuery = new URLSearchParams(location.search);
+  const embeddedView = pageQuery.get('embedded') === '1' && ['stats', 'mix'].includes(pageQuery.get('view')) ? pageQuery.get('view') : null;
+  const widgetOnly = pageQuery.get('utility') === 'widget';
+  document.body.classList.toggle('embedded-analytics', !!embeddedView);
+  document.body.classList.toggle('widget-configuration', widgetOnly);
+  if (embeddedView) {
+    document.title = embeddedView === 'mix' ? 'Usage' : 'Stats';
+    document.querySelector('#titlebar h1').textContent = document.title;
+  } else if (widgetOnly) {
+    document.title = 'Widget configuration';
+    document.querySelector('#titlebar h1').textContent = document.title;
+  }
 
   const ICON = {
     lock: '<svg class="lock" viewBox="0 0 16 16"><rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5 7V5a3 3 0 0 1 6 0v2"/></svg>',
@@ -914,7 +926,8 @@
     if (previewMode === 'live') renderStage();
   }
   window.lightsApi.onStatusChanged(() => {
-    refreshLive();
+    if (!embeddedView) refreshLive();
+    if (document.hidden) return;
     if ($('main').dataset.view === 'stats') renderStats();
     else if ($('main').dataset.view === 'mix') refreshMixLive();
   });
@@ -1286,6 +1299,9 @@
   // ── Stats view ─────────────────────────────────────────────────────────
   const S = window.TrafficLightStats;
   function setView(v) {
+    if (!['rules', 'stats', 'mix', 'auto'].includes(v)) return;
+    if (embeddedView && v !== embeddedView) return;
+    if (widgetOnly && !['rules', 'auto'].includes(v)) return;
     $('main').dataset.view = v;
     $('frame').dataset.view = v;
     for (const k of ['rules', 'stats', 'mix', 'auto']) {
@@ -1638,7 +1654,7 @@
     document.addEventListener('keydown', (e) => {
       const tab = e.target.closest?.('[role="tab"]');
       if (!tab || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
-      const tabs = [...tab.parentElement.querySelectorAll('[role="tab"]')];
+      const tabs = [...tab.parentElement.querySelectorAll('[role="tab"]')].filter(t => t.getClientRects().length);
       const i = tabs.indexOf(tab);
       const next = e.key === 'Home' ? tabs[0] : e.key === 'End' ? tabs[tabs.length - 1] : tabs[(i + (e.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length];
       e.preventDefault(); next.focus(); next.click();
@@ -1659,14 +1675,17 @@
     const q = new URLSearchParams(location.search);
     selectedId = (q.get('select') && rules.find((r) => r.id === q.get('select'))?.id) || rules[0]?.id || null;
     if (q.get('mode') === 'live') previewMode = 'live';
-    if (['stats', 'mix', 'auto'].includes(q.get('view'))) setView(q.get('view'));
+    if (embeddedView) setView(embeddedView);
+    else if (['stats', 'mix', 'auto'].includes(q.get('view'))) setView(q.get('view'));
     if (q.get('event')) setTimeout(() => stage.playEvent(q.get('event')), 100);
     if (q.get('scroll')) setTimeout(() => { ({ stats: $('stats'), mix: $('mix') }[q.get('view')] || $('editor')).scrollTop = Number(q.get('scroll')); }, q.get('view') === 'mix' ? 3000 : 400);
     setDirty(false);
-    await loadCameos();
-    renderList(); renderEditor(); renderStage();
+    if (!embeddedView) {
+      await loadCameos();
+      renderList(); renderEditor(); renderStage();
+      refreshLive();
+    }
     initA11y();
-    refreshLive();
     // Dev: ?pose=<p> forces the stage into a pose for screenshots.
     if (q.get('pose')) { document.querySelector('#stage .rig-wrap').classList.toggle('wide', q.get('effect') === 'garden'); stage.setLook({ lamp: 'amber', gardenSpeed: Number(q.get('speed') || 30), eyes: q.get('eyes') || 'default', pose: q.get('pose'), text: q.get('text') || null, costume: q.get('costume') || 'none', cameo: q.get('cameo') || 'none', lampFx: q.get('lampfx') || 'none', sign: q.get('sign') || 'h3', lampShape: q.get('shape') || 'square', signFx: q.get('signfx') || 'none', number: q.get('number') ? Number(q.get('number')) : null, body: q.get('body') || 'claude', effect: q.get('effect') || 'none', pet: q.get('pet') || 'none', waitMinutes: 25, smokeCycleMs: Number(q.get('fastSmoke')) || undefined }); stageFire(q.get('pose')); $('caption').textContent = `pose: ${q.get('pose')}${q.get('costume') ? ' · ' + q.get('costume') : ''}${q.get('cameo') ? ' · ' + q.get('cameo') : ''}`; }
   })();

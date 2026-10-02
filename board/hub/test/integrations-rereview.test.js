@@ -87,12 +87,14 @@ test('HIGH-1: approve_done needs an act() action declared ask, switched to auto 
     const conn = reg.createConnection({ orgId: h.ids.org, memberId: h.ids.alice, provider: 'approver', external_id: 'w1' });
     const ctx = reg.ctxFor(conn.id);
     const cardId = await cardInReview(h, ctx);
-    const approve = (action) => ctx.act(action, { card_id: cardId }, (s) => s.actAs(h.ids.alice).action(cardId, 'approve_done', { request_id: randomUUID() }));
+    const approve = (action, current = ctx) => current.act(action, { card_id: cardId }, (s) => s.actAs(h.ids.alice).action(cardId, 'approve_done', { request_id: randomUUID() }));
     await assert.rejects(approve('card.create'), (e) => e.code === 'POLICY_DENIED', 'an auto-by-default action cannot approve');
     assert.deepEqual(await approve('card.approve'), { done: false, decision: 'asked' });
     assert.equal(h.db.get('SELECT column_name FROM cards WHERE id = ?', cardId).column_name, 'in_review');
     reg.setSettings(conn.id, { autonomy: { 'card.approve': 'auto' } });
-    const r = await approve('card.approve');
+    await assert.rejects(approve('card.approve'), (e) => e.code === 'FORBIDDEN' && e.cacheable === false, 'the old delivery cannot acquire changed settings');
+    assert.equal(h.db.get('SELECT column_name FROM cards WHERE id = ?', cardId).column_name, 'in_review');
+    const r = await approve('card.approve', reg.ctxFor(conn.id));
     assert.equal(r.done, true);
     assert.equal(h.db.get('SELECT column_name FROM cards WHERE id = ?', cardId).column_name, 'done');
   } finally { await h.close(); }
@@ -184,7 +186,10 @@ test('M-1: acts only as the connecting member or one linked by external identity
     await ctx.act('card.create', { subject: 'U2' }, async (s) => { assert.equal(s.actAs(h.ids.bob).member.id, h.ids.bob); });
     // What the Api sees is the capped member.
     let seen;
-    const spy = createIntegrations({ hub: h.hub, api: { createCard: async (m) => { seen = m; return { card: { id: 'x' } }; } }, log: null });
+    const spyApi = new Api(h.hub);
+    const createCard = spyApi.createCard.bind(spyApi);
+    spyApi.createCard = async (member, ...args) => { seen = member; return createCard(member, ...args); };
+    const spy = createIntegrations({ hub: h.hub, api: spyApi, log: null });
     spy.register(fake);
     await spy.ctxFor(conn.id).act('card.create', {}, (s) => s.actAs(h.ids.alice).createCard(h.ids.board, { request_id: randomUUID(), title: 't' }));
     assert.equal(seen.role, 'member');

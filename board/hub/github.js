@@ -34,6 +34,7 @@ export function createGitHub({ token = null, api = 'https://api.github.com', fet
         merged_at: p.merged_at ?? null, head_ref: p.head?.ref ?? null, html_url: p.html_url ?? null,
         head_repo_id: p.head?.repo?.id ?? null, head_repo: p.head?.repo?.full_name ?? null,
         base_repo_id: p.base?.repo?.id ?? null, base_ref: p.base?.ref ?? null,
+        head_sha: p.head?.sha ?? null, merge_commit_sha: p.merge_commit_sha ?? null,
       };
     },
     async getCommit(canonical, sha) {
@@ -42,11 +43,20 @@ export function createGitHub({ token = null, api = 'https://api.github.com', fet
       const c = await get(`/repos/${or}/commits/${sha}`);
       return c ? { sha: c.sha } : null;
     },
+    // A single server-captured branch/ref, encoded as one path component.
+    // No client refspec, wildcard, traversal, arbitrary endpoint or fallback.
+    async getBaseCommit(canonical, ref) {
+      const or=ownerRepo(canonical);
+      if(!or || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(or) || typeof ref!=='string' || !ref || ref.length>200 || !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(ref)
+        || ref.includes('..') || ref.includes('//') || ref.endsWith('/') || ref.endsWith('.lock') || ref.includes('@{'))return null;
+      const commit=await get(`/repos/${or}/commits/${encodeURIComponent(ref)}`);
+      return commit && /^[0-9a-f]{40}$/i.test(commit.sha??'') ? {sha:commit.sha.toLowerCase()} : null;
+    },
   };
 }
 
 // A GitHub client that knows nothing: every lookup is null (self_reported).
-export const noGitHub = { enabled: false, async getPull() { return null; }, async getCommit() { return null; } };
+export const noGitHub = { enabled: false, async getPull() { return null; }, async getCommit() { return null; }, async getBaseCommit() { return null; } };
 
 // "123", "#123", ".../pull/123" → 123
 export function prNumberOf(ref) {

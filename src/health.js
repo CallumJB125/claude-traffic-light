@@ -11,6 +11,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const Claude = require('../adapters/claude-code.js');
+const Codex = require('../adapters/codex.js');
 const Runtime = require('../adapters/runtime.js');
 const { scrub, cleanJsonError } = require('./scrub.js');
 const Brand = require('../brand.js');
@@ -27,6 +28,7 @@ const FIXES = {
   'reinstall-hooks': 'Reinstall hooks',
   'enable-mcp': 'Enable Claude integration',
   'clear-stale-locks': 'Clear stale lock',
+  'connect-codex': 'Configure Codex activity',
 };
 // Claude Code reads hooks once, when a session starts.
 const RESTART_SESSIONS = 'Then restart your Claude sessions.';
@@ -124,6 +126,28 @@ function checkVersion(ctx) {
   if (u.state === 'available') return { status: 'warn', detail: `${v}; ${u.version ? `${u.version} is available` : 'an update is available'}.`, next: u.detail || 'Quit Buddy and install the update from the tray.' };
   if (u.state === 'current') return { status: 'ok', detail: `${v}, up to date.` };
   return { status: 'info', detail: `${v}. Updates: ${u.state === 'error' ? `couldn't check (${u.detail || 'unknown error'})` : u.detail || 'not set up yet'}.` };
+}
+
+// Configuration is distinct from Codex's own review/trust decision. Only
+// accepted lifecycle events in our own session store establish observation;
+// never inspect Codex chat history or infer that an open chat is working.
+function checkCodexHooks(ctx) {
+  if (!ctx.fs.existsSync(path.join(ctx.home, '.codex'))) return null;
+  const next = 'Review and trust the Plexiform hooks in Codex, then start a new turn. Check this row again after activity.';
+  if (!Codex.isActivityInstalled({ home: ctx.home, runtime: ctx.runtime, fs: ctx.fs })) {
+    return { status: 'warn', detail: 'Codex session activity is not configured for this copy of Plexiform.', fix: 'connect-codex', next };
+  }
+  let at = 0;
+  try {
+    for (const s of scanSessions(ctx).datas) {
+      const t = Date.parse(s.codexHookAt || '');
+      if (s.source === 'codex' && s.codexLifecycle === 1 && Number.isFinite(t) && t <= ctx.now && t > at) at = t;
+    }
+  } catch { /* Session-file health reports unreadable storage separately. */ }
+  if (!at) return { status: 'info', detail: 'Codex hooks are configured. No lifecycle event has been received yet.', next };
+  const detail = `Codex hooks are configured. Last lifecycle event: ${ago(ctx.now - at)}.`;
+  return ctx.now - at <= 5 * 60000 ? { status: 'ok', detail, at: new Date(at).toISOString() }
+    : { status: 'info', detail, at: new Date(at).toISOString(), next: 'No recent activity is recorded. If Codex is working, check its hook review and start a new turn.' };
 }
 
 function checkMcp(ctx) {
@@ -278,6 +302,7 @@ function checkDisk(ctx) {
 
 const CHECKS = [
   ['hooks', 'Claude Code hooks', checkHooks],
+  ['codex-hooks', 'Codex session activity', checkCodexHooks],
   ['sessions', 'Session files', checkSessions],
   ['last-hook', 'Last hook event', checkLastHook],
   ['signal', "Buddy's local connection", checkSignal],
@@ -296,6 +321,7 @@ function runChecks(ctx = {}) {
   for (const [id, label, fn] of CHECKS) {
     let r;
     try { r = fn(c, checks); } catch (err) { r = { status: 'info', detail: `Couldn't check (${err.message}).` }; }
+    if (!r) continue;
     const out = { id, label, ...r };
     if (out.fix && !out.fixLabel) out.fixLabel = FIXES[out.fix];
     checks.push(out);
@@ -385,5 +411,5 @@ function diagnostics({ report, versions = {}, platform = {}, logText = '', scrub
 module.exports = {
   FIXES, LAST_HOOK_FILE, STALE_LOCK_AGE_MS,
   runChecks, likelyCause, clearStaleLocks, newestHookAt, lastHookEvent, notConfigured, hookPaths, logExcerpt, diagnostics, ago,
-  checkHooks, checkVersion, checkMcp, checkSignal, checkSessions, checkLastHook, checkTranscripts, checkDisk,
+  checkHooks, checkCodexHooks, checkVersion, checkMcp, checkSignal, checkSessions, checkLastHook, checkTranscripts, checkDisk,
 };

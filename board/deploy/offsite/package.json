@@ -1,0 +1,9 @@
+{
+  "name": "plexiform-offsite-recovery",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "dependencies": { "@aws-sdk/client-s3": "3.1144.0" },
+  "scripts": { "test": "node --test --test-concurrency=1 test/*.test.mjs" }
+}

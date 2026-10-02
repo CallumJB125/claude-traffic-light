@@ -16,7 +16,7 @@ const path = require('node:path');
 const http = require('node:http'); // privacy-flow: local-board-hub
 const crypto = require('node:crypto');
 const { pathToFileURL } = require('node:url');
-const { BaseWindow, BrowserWindow, WebContentsView, ipcMain, session, shell, utilityProcess, app, nativeTheme, net, safeStorage } = require('electron'); // privacy-flow: team-hub-account
+const { BaseWindow, BrowserWindow, WebContentsView, ipcMain, session, shell, utilityProcess, app, nativeTheme, net, safeStorage, dialog } = require('electron'); // privacy-flow: team-hub-account
 const { PAGES, GROUPS, pageById, hubPageUrl, fragmentOk, navDecision, openDecision, connectDecision, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl } = require('./pages');
 const { createHubSupervisor } = require('./hub-process');
 const { createWorkspaceStore, normalizeHubUrl, normalizeLinkHub, accessTeamFromLocation, partitionFor: teamPartition, integrationPartitionFor, hubKey, hostOf } = require('./workspaces');
@@ -25,6 +25,9 @@ const { createDeviceController, defaultDeviceName } = require('./device');
 const { createAccountFlow, clearHubSessions, ACCT_ARGS } = require('./account-flow');
 const { createConnectLife } = require('./connect-life');
 const BRAND = require('./brand');
+const { clientArtifactTarget, clientExportTarget, saveClientArtifact, saveClientExport } = require('./client-download');
+const { createWorkCapture } = require('../src/work-capture');
+const { createMyDayBroker } = require('../src/my-day-broker');
 
 const SIDEBAR_W = 216;
 const DIR = __dirname;
@@ -55,13 +58,17 @@ function devLogin(url, secret, login = 'alice') {
 
 // Once per partition: the board needs no OS permissions, devices or downloads.
 const hardened = new Set();
+const clientDownloads = new WeakMap();
 function hardenSession(ses) {
   if (hardened.has(ses)) return;
   hardened.add(ses);
   ses.setPermissionRequestHandler((_wc, _perm, cb) => cb(false));
   ses.setPermissionCheckHandler(() => false);
   ses.setDevicePermissionHandler(() => false);
-  ses.on('will-download', (e) => e.preventDefault());
+  ses.on('will-download', (e, item, wc) => {
+    e.preventDefault();
+    clientDownloads.get(ses)?.(item.getURL(), wc, item.hasUserGesture());
+  });
 }
 
 function dispose(view, win) {
@@ -108,7 +115,7 @@ async function probeHub(origin, partition) {
   });
 }
 
-function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged, devAccountsHub = null } = {}) {
+function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onClosed = () => {}, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged, devAccountsHub = null, captureEnabled = true } = {}) {
   // The dev-only mock accounts hub runs on loopback; that one exact origin is
   // the only non-https hub ever accepted.
   const allowOrigins = devAccountsHub && isDev ? [devAccountsHub] : [];
@@ -168,7 +175,11 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
   let hubView = null;
   let infoView = null;
   let accountView = null;
+  let accountLoad = Promise.resolve();
+  let accountLoadGeneration = 0;
   const localViews = new Map(); // page id → its own view, kept so a page keeps its state
+  const setupIdentityListeners=new Set();let setupIdentityMarkers=[];
+  let setupSourcesGeneration=0,setupLocalGeneration=0,setupCurrentSources=[],setupModalTicket=null;
   let selected = 'board';
   let hubStatus = { state: 'stopped' };
   let hubInfo = null; // {url, origin, accessTeam, partition, team, bearer, org}
@@ -178,6 +189,10 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
   // Local hub, started lazily the first time a board page opens.
   const mode = process.env.BUDDY_BOARD_AUTH === 'dev' && isDev ? 'dev' : 'local';
   const localUrl = () => (hubInfo && !hubInfo.team ? hubInfo.url : null);
+  function retireSetupDocument(){
+    setupLocalGeneration++;
+    for(const listener of setupIdentityListeners)listener();
+  }
   // Before anything that can call forgetHub.
   const connectLife = createConnectLife();
   const supervisor = createHubSupervisor({
@@ -189,6 +204,95 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
     log: (...a) => log('[hub]', ...a),
     onStatus,
   });
+
+  const workCapture = createWorkCapture({
+    file: path.join(userData, 'work-capture.json'), host: os.hostname().split('.')[0],
+    ownedRoots: [path.join(userData, 'runner'), path.join(userData, 'tasks'), path.join(userData, 'plexiform-tasks')],
+    log: (message) => log('[work-capture]', message),
+    onChange() { if (flow.acct.screen === 'thismac' && accountView && !accountView.webContents.isDestroyed()) accountView.webContents.send('buddy:acct:changed'); },
+    async getRoutes() {
+      const hubs = store.hubs().filter(signedIn);
+      const routes = []; let complete = hubs.length <= 8;
+      await Promise.all(hubs.slice(0, 8).map(async (hub) => {
+        const user = userOf(hub)?.id;
+        const response = await clientFor(hub).captureRoutes();
+        if (!response.ok || !user || user !== userOf(hub)?.id || !response.complete || response.truncated || !Array.isArray(response.routes) || response.routes.length > 200) { complete = false; return; }
+        for (const route of response.routes.slice(0, 200)) {
+          if (!route || !['owner','admin','member','viewer'].includes(route.role) || !['team_id','board_id','repo_id'].every(k => /^[A-Za-z0-9_.:-]{1,100}$/.test(route[k] ?? '')) || typeof route.canonical_url !== 'string' || route.canonical_url.length > 300) { complete = false; continue; }
+          routes.push({ ...route, hub, user_id: user, share_summaries: store.sharesSummaries(hub),
+            team_name: route.team_name ?? store.list().find(w => w.kind === 'team' && w.teamId === route.team_id && w.hub === hub)?.name ?? 'Team' });
+        }
+      }));
+      return { routes, complete };
+    },
+    sendLocal: (body) => supervisor.captureWork(body),
+    async sendTeam(destination, body) {
+      if (!signedIn(destination.hub) || userOf(destination.hub)?.id !== destination.user_id) return { ok: false };
+      const report = { ...body }; if (!store.sharesSummaries(destination.hub)) delete report.summary;
+      const result = await clientFor(destination.hub).captureWork(destination.team_id, destination.board_id, report);
+      return userOf(destination.hub)?.id === destination.user_id ? result : { ok: false };
+    },
+  });
+
+  async function setupSources() {
+    const generation=++setupSourcesGeneration;setupCurrentSources=[];
+    const rows=[];rows.partial=store.hubs().length>8;
+    for(const origin of store.hubs().slice(0,8)) {
+      const marker=vault(origin).load(), userId=marker?.user?.id,deviceId=marker?.device_id;
+      const current=()=>generation===setupSourcesGeneration && store.hubs().includes(origin) && vault(origin).load()===marker && userOf(origin)?.id===userId && marker?.device_id===deviceId;
+      if(typeof userId!=='string' || !/^[A-Za-z0-9_.:-]{1,100}$/.test(userId)) continue;
+      let me;try{me=await clientFor(origin).me();}catch{rows.partial=true;continue;}
+      if(!current() || !me?.ok || me.user?.id!==userId || !Array.isArray(me.teams) || me.teams.length>200) {rows.partial=true;continue;}
+      if(me.teams.length>32) rows.partial=true;
+      for(const team of me.teams.slice(0,32)) {
+        if(!team||typeof team!=='object') {rows.partial=true;continue;}
+        if(![team.id,team.member_id].every(id=>typeof id==='string'&&/^[A-Za-z0-9_.:-]{1,100}$/.test(id)) || !['owner','admin','member','viewer'].includes(team.role)) continue;
+        rows.push({name:`${String(team.name??'Team').slice(0,80)} · ${hostOf(origin)}`,userId,deviceId,teamId:team.id,memberId:team.member_id,role:team.role,machine:{emails:typeof me.user.email==='string'?[me.user.email]:[]},current,call:(op,args)=>current()?clientFor(origin).setups(op,team.id,args,userId,team.member_id):Promise.resolve({ok:false})});
+      }
+    }
+    if(generation===setupSourcesGeneration)setupCurrentSources=rows;
+    return rows;
+  }
+
+  async function overviewSources() {
+      const sources = store.hubs().map(origin => {
+        const marker = vault(origin).load(), userId = marker?.user?.id;
+        const knownUser = typeof userId === 'string' && /^[A-Za-z0-9_.:-]{1,100}$/.test(userId);
+        const current = () => store.hubs().includes(origin) && vault(origin).load() === marker && userOf(origin)?.id === userId;
+        return { name: hostOf(origin), key:origin, kind:'team', userId, current, matches:d=>d?.kind==='team'&&d.hub===origin&&d.user_id===userId,
+          send:(row,text,requestId,fresh)=>current()&&fresh()?clientFor(origin).nativeBoard('sendMessage',{team:row.team_id,card:row.card.id,boardIds:[row.board_id]},{request_id:requestId,expected_fence:row.card.fence,kind:'coordination',body:text,recipient_run_ids:[row.card.run.id]}):Promise.resolve({ok:false}), read: () => marker && knownUser ? clientFor(origin).myDay() : Promise.resolve({ ok: false }),
+          async open(row, fresh, beginNavigation=null) {
+            // Team is looked up from the current server-verified membership, not a renderer argument.
+            const target = store.list().find(w => w.kind === 'team' && w.hub === origin && w.teamId === row.team_id);
+            if (!target || !fresh() || beginNavigation&&!beginNavigation()) return false;
+            switchWorkspace(target.id, { show: false }); selected = 'board'; flow.leftAccountPages();
+            const navigationGeneration=setupLocalGeneration;
+            await showHubPage(pageById('board'));
+            if (!fresh() || beginNavigation&&(navigationGeneration!==setupLocalGeneration||selected!=='board') || !hubView || hubInfo?.origin !== origin || hubInfo.org !== target.teamId) return false;
+            const url = new URL(hubPageUrl(origin, pageById('board'), { org: target.teamId }));
+            url.searchParams.set('board', row.board_id); url.hash = `card=${encodeURIComponent(row.card?.id ?? row.card_id)}`;
+            await hubView.webContents.loadURL(url.href); // privacy-flow: team-hub-account
+            pushState(); return fresh()&&(!beginNavigation||navigationGeneration===setupLocalGeneration&&selected==='board');
+          } };
+      });
+      const launch = await supervisor.ensure().catch(() => null);
+      const localCurrent = () => !launch || supervisor.launchCurrent(launch);
+      sources.unshift({ name: 'My board (this Mac)', key:'personal',kind:'personal', current: localCurrent, matches:d=>d?.kind==='local',
+        send:(row,text,requestId,fresh)=>localCurrent()&&fresh()?supervisor.overviewMessage({card:row.card.id,board:row.board_id,fence:row.card.fence,run:row.card.run.id,text,requestId},()=>localCurrent()&&fresh()):Promise.resolve({ok:false}), read: () => launch ? supervisor.myDay() : Promise.resolve({ ok: false }),
+        async open(row, fresh, beginNavigation=null) {
+          if (!fresh() || beginNavigation&&!beginNavigation()) return false;
+          switchWorkspace('local', { show: false }); selected = 'board'; flow.leftAccountPages();
+          const navigationGeneration=setupLocalGeneration;
+          await showHubPage(pageById('board'));
+          if (!fresh() || beginNavigation&&(navigationGeneration!==setupLocalGeneration||selected!=='board') || !hubView || hubInfo?.team || hubInfo?.url !== launch.url) return false;
+          const url = new URL(hubPageUrl(launch.url, pageById('board')));
+          url.searchParams.set('board', row.board_id); url.hash = `card=${encodeURIComponent(row.card?.id ?? row.card_id)}`;
+          await hubView.webContents.loadURL(url.href); // privacy-flow: local-board-hub
+          pushState(); return fresh()&&(!beginNavigation||navigationGeneration===setupLocalGeneration&&selected==='board');
+        } });
+      return sources;
+  }
+  const myDayBroker = createMyDayBroker({sources:overviewSources});
 
   // A page with a localScreen is the account page's explainer while the local board is active, not a hub page.
   const isHubPage = (id) => { const p = pageById(id); return p?.kind === 'hub' && !(p.localScreen && !getTeamHub()); };
@@ -239,6 +343,15 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
   }
 
   function pushState() {
+    const markers=store.hubs().map(origin=>[origin,vault(origin).load()]);
+    if(markers.length!==setupIdentityMarkers.length || markers.some((value,index)=>value[0]!==setupIdentityMarkers[index]?.[0]||value[1]!==setupIdentityMarkers[index]?.[1])) {
+      setupSourcesGeneration++;setupCurrentSources=[];
+      setupIdentityMarkers=markers;
+      for(const listener of setupIdentityListeners) listener();
+      const page=localViews.get('setups')?.webContents;if(page&&!page.isDestroyed())page.send('setups:changed');
+    }
+    const myDayPage = localViews.get('myday')?.webContents;
+    if (myDayPage && !myDayPage.isDestroyed()) myDayPage.send('myday:changed');
     if (!sidebar || sidebar.webContents.isDestroyed()) return;
     const team = getTeamHub();
     sidebar.webContents.send('buddy:state', {
@@ -275,6 +388,15 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
     attach(infoView);
   }
 
+  function notifyOverviewReady(v) {
+    const wc = v?.webContents;
+    if (!win || win.isDestroyed() || !wc || wc.isDestroyed() || selected !== 'overview' || content !== v || localViews.get('overview') !== v || !win.contentView.children.includes(v)) return;
+    const expected = pathToFileURL(path.join(DIR, '..', 'overview.html')).href;
+    if (wc.getURL() !== expected || wc.mainFrame?.url !== expected || wc.isLoading()) return;
+    // Fixed readiness only; state/action IPC still applies its own authority.
+    try { wc.send('overview:ready'); } catch { /* document closed during readiness */ }
+  }
+
   function showLocal(page) {
     if (!win || !page) return;
     let v = localViews.get(page.id);
@@ -284,9 +406,22 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
       v.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#1c1a1f' : '#eceaf0');
       lockLocal(v);
       localViews.set(page.id, v);
+      if(['setups','overview'].includes(page.id)){
+        // A same-URL reload keeps WebContents/mainFrame object identity. Its
+        // document still retires every outstanding native approval and plan.
+        v.webContents.on('did-start-navigation',d=>{if(d.isMainFrame)retireSetupDocument();});
+        v.webContents.on('render-process-gone',retireSetupDocument);
+        v.webContents.once('destroyed',retireSetupDocument);
+      }
+      v.webContents.on('did-finish-load', () => {
+        onLocalPage(page, v.webContents);
+        if (page.id === 'overview') notifyOverviewReady(v);
+      });
+      if (page.id === 'overview') v.webContents.on('did-stop-loading', () => notifyOverviewReady(v));
       v.webContents.loadFile(path.join(DIR, '..', page.file), { query: page.query || {} }).catch(() => {});
     }
     attach(v);
+    if (page.id === 'overview') notifyOverviewReady(v);
   }
 
   // Local pages load our own files only; nothing navigates them anywhere else.
@@ -311,7 +446,14 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
       accountView.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#1c1a1f' : '#eceaf0');
       lockLocal(accountView);
     }
-    accountView.webContents.loadFile(path.join(DIR, 'account.html'), { query: { screen } }).catch(() => {});
+    // Flow changes can arrive while the initial account navigation is still
+    // loading. Serialize loads and skip superseded screens so an earlier
+    // navigation cannot leave its URL/renderer behind the current flow.
+    const view = accountView, generation = ++accountLoadGeneration;
+    accountLoad = accountLoad.catch(() => {}).then(async () => {
+      if (!win || view !== accountView || generation !== accountLoadGeneration || view.webContents.isDestroyed()) return;
+      await view.webContents.loadFile(path.join(DIR, 'account.html'), { query: { screen } });
+    }).catch((e) => log('account page load failed', e.message));
     attach(accountView);
   }
 
@@ -368,6 +510,7 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
     log,
     ui: {
       show: showScreen,
+      openClients: (origin) => showClientPage(origin),
       select: (id) => select(id),
       switchWorkspace: (id, opts) => switchWorkspace(id, opts),
       pushState: () => pushState(),
@@ -400,6 +543,25 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
     // A 401 from the hub (the board web re-checks after its socket closes
     // 4401 on session.revoked): ask the hub once whether we're signed out.
     ses.webRequest.onCompleted({ urls: scope.urls }, (d) => { if (d.statusCode === 401 && scope.matches(d.url)) flow.checkSignedIn(origin); });
+  }
+
+  // A guest's client portal uses the already authenticated hub partition.
+  // It has no ordinary workspace, runner, preload or renderer-held token.
+  async function showClientPage(origin) {
+    if (!win || norm(origin) !== origin || !signedIn(origin)) throw new Error('client hub is not signed in');
+    forgetHub();
+    const current = gen;
+    flow.leftAccountPages();
+    selected = 'flow:clients';
+    installBearer(origin);
+    const h = { url: origin, origin, accessTeam: null, partition: teamPartition(origin), team: true, bearer: true, client: true, org: null };
+    hubInfo = h;
+    const view = makeHubView(h);
+    hubView = view;
+    await view.webContents.loadURL(`${origin}/clients`); // privacy-flow: team-hub-account
+    if (current !== gen || !win || selected !== 'flow:clients' || view !== hubView || !signedIn(origin)) return;
+    attach(view);
+    pushState();
   }
 
   async function resolveHub() {
@@ -440,6 +602,15 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
     });
     view.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#1c1a1f' : '#eceaf0');
     const wc = view.webContents;
+    if (h.client) clientDownloads.set(hubSes, (url, sender, gesture) => {
+      const current = () => !!win && view === hubView && content === view && hubInfo?.client && hubInfo.origin === h.origin && signedIn(h.origin);
+      if (!gesture || sender !== wc || !current()) return;
+      const save = clientArtifactTarget(url, h.origin) ? saveClientArtifact : clientExportTarget(url, h.origin) ? saveClientExport : null;
+      if (!save) return;
+      save({ url, origin: h.origin, tokenFor, current, choose: (opts) => dialog.showSaveDialog(opts) }).then((r) => {
+        if (r.signedOut) flow.checkSignedIn(h.origin).catch(() => {});
+      }).catch((e) => log('client deliverable save failed', e.message));
+    });
     const decide = (url) => navDecision(url, { hubOrigin: h.origin, accessTeam: h.accessTeam });
     let gestureAt = 0;
     wc.on('input-event', (_e, ev) => { if (GESTURES.has(ev.type)) gestureAt = Date.now(); });
@@ -601,9 +772,11 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
     const page = pageById(id);
     if (!page) return;
     if (page.kind === 'window') { openWindow(page.window); return; }
+    setupLocalGeneration++;
     if (page.localScreen && !getTeamHub()) { flow.show(page.localScreen); return; }
     if (page.kind === 'local' && page.screen) { flow.show(page.screen); return; }
     flow.leftAccountPages();
+    if (page.kind === 'hub' && hubInfo?.client) forgetHub();
     selected = id;
     pushState();
     if (page.kind === 'hub') showHubPage(page);
@@ -677,9 +850,21 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
       if (!fromAccount(e)) return { ok: false, error: 'Not allowed.' };
       const types = ACCT_ARGS[op];
       if (args.length !== types.length || args.some((a, i) => typeof a !== types[i] || (typeof a === 'string' && a.length > 2048))) return { ok: false, error: 'Not allowed.' };
-      try { return await fn(...args); } catch (err) { log('account action failed', op, err.message); return { ok: false, error: 'Something went wrong. Try again.' }; }
+      try {
+        const result = await fn(...args);
+        return op === 'state' && result?.screen === 'thismac' ? { ...result, workCapture: { enabled: captureEnabled && workCapture.enabled(), notice: workCapture.notice(), tasks: workCapture.snapshot().slice(-100), choices: workCapture.choices() } } : result;
+      } catch (err) { log('account action failed', op, err.message); return { ok: false, error: 'Something went wrong. Try again.' }; }
     });
   }
+  ipcMain.handle('buddy:acct:captureEnabled', (e, on) => {
+    if (!fromAccount(e) || typeof on !== 'boolean' || !captureEnabled) return { ok: false, error: 'Not allowed.' };
+    return workCapture.setEnabled(on) ? { ok: true } : { ok: false, error: workCapture.notice() || 'Could not save automatic card settings.' };
+  });
+  ipcMain.handle('buddy:acct:captureDefault', async (e, repo, key) => {
+    if (!fromAccount(e) || typeof repo !== 'string' || typeof key !== 'string' || !captureEnabled) return { ok: false, error: 'Not allowed.' };
+    try { return await workCapture.choose(repo, key) ? { ok: true } : { ok: false, error: 'That board is no longer available. Try again.' }; }
+    catch { return { ok: false, error: 'Could not check your team boards. Try again.' }; }
+  });
 
   /**
    * Open a hub page with a URL fragment the page reads itself (the feedback sender hands its saved,
@@ -724,7 +909,9 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
     sidebar.webContents.loadFile(path.join(DIR, 'sidebar.html')).catch(() => {});
     sidebar.webContents.once('did-finish-load', () => { pushState(); win?.show(); });
     win.on('resize', layout);
+    win.on('blur',()=>{if(!setupModalTicket)setupLocalGeneration++;});
     win.on('closed', () => {
+      setupLocalGeneration++;
       // Close every page: detached views otherwise keep running (and the board
       // page keeps its socket). The hub keeps running while the app runs, so
       // reopening is instant; it stops with the app.
@@ -741,8 +928,59 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
 
   return {
     open,
+    myDay: () => myDayBroker.snapshot(),
+    async overviewWork(){return {sources:await overviewSources(),capture:workCapture.overviewSnapshot?.()??[],partial:false};},
+    overviewReadContext(){
+      const v=localViews.get('overview'),wc=v?.webContents;
+      if(!win||win.isDestroyed()||!wc||wc.isDestroyed()||selected!=='overview'||content!==v||!win.contentView.children.includes(v)||!win.isVisible()||win.isMinimized())return null;
+      const expected=pathToFileURL(path.join(DIR,'..','overview.html')).href;
+      if(wc.getURL()!==expected||wc.mainFrame?.url!==expected||wc.isLoading())return null;
+      return {window:win,contents:wc,generation:setupLocalGeneration,foreground:win.isFocused()};
+    },
+    overviewContext(){
+      const v=localViews.get('overview'),wc=v?.webContents;
+      if(!win||win.isDestroyed()||!wc||wc.isDestroyed()||selected!=='overview'||content!==v||!win.contentView.children.includes(v)||!win.isVisible()||win.isMinimized()||!win.isFocused())return null;
+      const expected=pathToFileURL(path.join(DIR,'..','overview.html')).href;
+      if(wc.getURL()!==expected||wc.mainFrame?.url!==expected||wc.isLoading())return null;
+      return {window:win,contents:wc,generation:setupLocalGeneration,foreground:true};
+    },
+    setupSources,
+    // Main-only identities. No renderer receives a sealed marker or window.
+    setupsActorCurrent(actor) {
+      return !!actor && setupCurrentSources.some(s=>s.current() && s.userId===actor.account && s.teamId===actor.team && s.memberId===actor.member && s.deviceId===actor.device);
+    },
+    setupsContext() {
+      const v=localViews.get('setups'),wc=v?.webContents;
+      if(!win || win.isDestroyed() || !wc || wc.isDestroyed() || selected!=='setups' || content!==v || !win.contentView.children.includes(v) || !win.isVisible() || win.isMinimized())return null;
+      const expected=pathToFileURL(path.join(DIR,'..','setups.html')).href;
+      if(wc.getURL()!==expected || wc.mainFrame?.url!==expected || wc.isLoading())return null;
+      return {window:win,contents:wc,generation:setupLocalGeneration,foreground:win.isFocused()};
+    },
+    async setupsConfirm(show) {
+      const before=this.setupsContext();
+      if(typeof show!=='function' || !before?.foreground || setupModalTicket)return null;
+      const ticket={window:before.window,contents:before.contents,generation:before.generation};setupModalTicket=ticket;
+      try {
+        const answer=await show(before.window);
+        const after=this.setupsContext();
+        if(setupModalTicket!==ticket || !after?.foreground || after.window!==ticket.window || after.contents!==ticket.contents || after.generation!==ticket.generation)return null;
+        return answer;
+      }finally{if(setupModalTicket===ticket)setupModalTicket=null;}
+    },
+    onSetupsIdentityChange(listener) {if(typeof listener!=='function')return ()=>{};setupIdentityListeners.add(listener);return ()=>setupIdentityListeners.delete(listener);},
+    openMyDayCard: handle => myDayBroker.open(handle),
+    // Account client stays in main. The broker checks the sealed grant's
+    // owner on every request and never sends this object to a renderer.
+    nativeBoardContext(workspaceId) {
+      const workspace = store.get(workspaceId);
+      if (!workspace || workspace.kind !== 'team' || !signedIn(workspace.hub)) return null;
+      const userId = userOf(workspace.hub)?.id;
+      return typeof userId === 'string' && userId ? { workspace, userId, client: clientFor(workspace.hub) } : null;
+    },
+    nativeBoardWorkspaces: () => store.list().filter((w) => w.kind === 'team').map((w) => ({ id: w.id, name: w.name })),
     openWithFragment,
     isOpen: () => !!win,
+    isVisible: () => !!win && !win.isDestroyed() && win.isVisible(),
     select,
     openInvite: (link) => flow.openInvite(link),
     /** App start: runners the member left on come back without opening the window. */
@@ -750,9 +988,10 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
     /** Subscribe to validated runner events (`run.budget_reached`); returns the unsubscribe function. */
     onRunnerEvent(cb) { if (typeof cb !== 'function') return () => {}; runnerListeners.add(cb); return () => runnerListeners.delete(cb); },
     /** The widget's live sessions changed: hubs sharing presence get the new list. */
-    sessionsChanged: (sessions) => flow.sessionsChanged(sessions),
+    sessionsChanged(sessions) { flow.sessionsChanged(sessions); if (captureEnabled) void workCapture.observe(sessions); },
     async stop() {
       const url = localUrl();
+      await workCapture.stop();
       await Promise.all([supervisor.stop({ final: true }), flow.stopDevices()]);
       // The secret dies with this hub; don't leave it in the cookie store.
       if (url) await session.fromPartition(partitionFor()).cookies.remove(url, 'board_local').catch(() => {}); // privacy-flow: local-board-hub
@@ -768,7 +1007,22 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
     devPage: (js) => (content === accountView && accountView ? accountView.webContents.executeJavaScript(js) : Promise.resolve(null)),
     // A local page's webContents, for main's sender checks (null if not open).
     pageWebContents: (id) => localViews.get(id)?.webContents ?? null,
-    // Dev hook: capture what's on screen.
+    // Fixed page ids from main only; queued callbacks never jump to a replacement renderer.
+    sendToPage(id, channel, ...args) {
+      const wc = localViews.get(id)?.webContents;
+      if (!wc || wc.isDestroyed()) return false;
+      const send = () => { if (!wc.isDestroyed() && localViews.get(id)?.webContents === wc) wc.send(channel, ...args); };
+      if (wc.isLoading()) wc.once('did-finish-load', send); else send();
+      return true;
+    },
+    // Feedback captures just the retained visible content, not both dev views.
+    captureContent() {
+      const owner = win, view = content, wc = view?.webContents;
+      const current = () => !!owner && win === owner && owner.isVisible() && !owner.isDestroyed() && content === view &&
+        view.getBounds().width > 0 && view.getBounds().height > 0;
+      return require('../src/capture-owned-view').captureOwnedView(wc, current);
+    },
+    // Dev hook: capture both app views for visual evidence.
     async capture() {
       if (!win) return null;
       const [side, main] = await Promise.all([sidebar.webContents.capturePage(), content?.webContents.capturePage()]);

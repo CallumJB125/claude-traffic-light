@@ -6,19 +6,35 @@
 
 import { createHash } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
-import { extname, join, normalize, sep } from 'node:path';
+import { readdirSync } from 'node:fs';
+import { extname, join } from 'node:path';
 import { PROTOCOL_VERSION, PROTOCOL_HEADER, httpStatus, WS_CLOSE, WS_PATHS } from '../shared/protocol.js';
 import { HubError } from './db.js';
 import { devCookieValue, parseCookies, parseDevCookie, safeEqual } from './auth.js';
 import { isExposed, isLoopback } from './config.js';
 import { publicMember } from './api.js';
-import { LOCAL_ONLY } from './views.js';
+import { LOCAL_ONLY, selectedContext } from './views.js';
 import { BrowserConn } from './ws-board.js';
 import { RunnerConn, authenticateRunner } from './ws-runner.js';
 import { clientIp, failBucketKey, ipKey, limitOrThrow } from './ratelimit.js';
 import { redact } from './log.js';
 import { appendCookie } from './identity/accounts.js';
 import { BRAND } from '../shared/brand.js';
+import { CLIENT_UPLOAD_BODY_MAX } from './identity/client-artifacts.js';
+import { searchWork } from './search.js';
+import { teamOverview } from './team-overview.js';
+import { Workflows } from './workflows.js';
+import { WorkflowExecutions } from './workflow-executions.js';
+import { TeamCommunication } from './communication.js';
+import { WorkCapture } from './work-capture.js';
+import { Planning } from './planning.js';
+import { Setups } from './setups.js';
+import { SETUP_BODY_MAX } from '../shared/setups.js';
+import { myDay } from './my-day.js';
+import { readOwnership, guardOwnership } from './ownership-view.js';
+import { createRemoteHttp } from './remote/http.js';
+import { strictJson } from './remote/validation.js';
+import { readWorkContext, guardWorkContext, workContextArgs } from './work-context.js';
 
 const MAX_BODY = 1024 * 1024;
 // Every request's ceilings (D105); config.requestLimits overrides them (tests, no env).
@@ -44,7 +60,7 @@ const requestBinding = (route, params, body) => createHash('sha256').update(JSON
 const PREPARE_REPLAY = Object.freeze({ status: 409, body: { error: { code: 'CONFLICT', message: 'This request was already sent. Reload the page.', reason: 'REPLAYED' } } });
 // An invite's answer is its link and code, shown once: the replay entry never holds them.
 const INVITE_REPLAY = Object.freeze({ status: 409, body: { error: { code: 'CONFLICT', message: 'This invite was already made. Resend it to get a new link.', reason: 'REPLAYED' } } });
-const SHARED_BROWSER = new Set(['states', 'liveness', 'fence', 'scope', 'overlap', 'cardface', 'handover', 'protocol', 'brand']);
+const SHARED_BROWSER = new Set(['states', 'liveness', 'fence', 'scope', 'overlap', 'cardface', 'handover', 'protocol', 'brand', 'ai', 'planning', 'workflow-execution', 'workflow-execution-controls', 'packet-text']);
 const CSP = "default-src 'self'; connect-src 'self'; img-src 'self' https://avatars.githubusercontent.com; style-src 'self'; script-src 'self'; frame-ancestors 'none'";
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.md': 'text/markdown; charset=utf-8' };
 
@@ -56,9 +72,17 @@ const LOOPBACK_HOST = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i;
 const devRequestOk = (req) => LOOPBACK_HOST.test(req.headers.host ?? '') && !PROXY_HEADERS.some((h) => req.headers[h] != null);
 // Accounts mode without a public URL or tunnel is a loopback try-out (L-A): the same rule.
 const loopbackOnly = (config) => config.auth === 'dev' || config.auth === 'local' || (config.auth === 'accounts' && !isExposed(config));
+// Current production assets only. Development mock/test/script directories
+// and arbitrary files below web/ are never public. JavaScript lives in the
+// flat production js/ directory; encoded or case aliases are not accepted.
+const WEB_FILES = new Set([
+  'index.html', 'signin.html', 'invite.html', 'clients.html', 'client-invite.html', 'remote-consent.html', 'remote-grants.html',
+  'app.css', 'signin.css', 'clients.css', 'remote.css', 'favicon.svg', 'google-signin.png',
+]);
+const WEB_JS = /^js\/[a-z][a-z0-9-]*\.js$/;
 // Accounts mode: pages served without auth (their JS talks to /api/auth/*;
 // tokens ride in the URL fragment, which never reaches the server).
-const ACCOUNT_PAGES = { '/signin': 'signin.html', '/auth/email': 'signin.html', '/invite': 'invite.html' };
+const ACCOUNT_PAGES = { '/signin': 'signin.html', '/auth/email': 'signin.html', '/invite': 'invite.html', '/clients': 'clients.html', '/client-invite': 'client-invite.html', '/remote-consent': 'remote-consent.html', '/connections': 'remote-grants.html' };
 
 // A cookie-session mutation or WS upgrade in accounts mode (design §4.6): the
 // Origin must be present and be this hub; Sec-Fetch-Site, when sent, same-origin.
@@ -190,7 +214,7 @@ function readRaw(req, deadlineMs, max = MAX_BODY) {
 
 const sizeText = (max) => (max >= MAX_BODY ? `${max / MAX_BODY} MiB` : `${max / 1024} KiB`);
 
-async function readBody(req, { max, deadlineMs }) {
+async function readBody(req, { max, deadlineMs, parser = JSON.parse }) {
   if (Number(req.headers['content-length']) > max) throw new HubError('PAYLOAD_TOO_LARGE', `body over ${sizeText(max)}`);
   const got = await readRaw(req, deadlineMs, max);
   if (got.error === 413) throw new HubError('PAYLOAD_TOO_LARGE', `body over ${sizeText(max)}`);
@@ -198,7 +222,7 @@ async function readBody(req, { max, deadlineMs }) {
   if (got.error) throw new HubError('VALIDATION', 'body not received');
   if (!got.body.length) return {};
   try {
-    const v = JSON.parse(got.body.toString('utf8'));
+    const v = parser(parser === strictJson ? new TextDecoder('utf-8', { fatal: true }).decode(got.body) : got.body.toString('utf8'));
     if (!v || typeof v !== 'object' || Array.isArray(v)) throw new Error('not an object');
     return v;
   } catch {
@@ -222,6 +246,17 @@ function sendConnectPage(res, status, text, kind, headers = {}, next = null) {
 }
 
 export function createHttpHandler({ hub, api, config, integrations = null }) {
+  const workflows = new Workflows(hub);
+  const workflowExecutions = new WorkflowExecutions(api);
+  const workflowExecutor = api.workflowExecutor;
+  const communication = new TeamCommunication(hub);
+  const workCapture = new WorkCapture(hub);
+  const planning = new Planning(api);
+  const remote = createRemoteHttp(hub);
+  const setups = hub.setups = new Setups(api);
+  // This query can only narrow current staff access. Desktop grants derive it
+  // privately in main; remote grants additionally require their own guard.
+  const communicationOptions = (query) => query.has('board_id') ? { boardIds: Object.freeze(query.getAll('board_id')) } : {};
   // Where providers send people back: the public URL, or (dev/local only) this loopback hub.
   const publicBase = (req) => {
     if (config.publicUrl) return config.publicUrl.replace(/\/+$/, '');
@@ -239,6 +274,8 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   };
   const readLimits = { ...WEBHOOK_READS, ...config.webhookReads };
   const limits = { ...REQUEST_LIMITS, ...config.requestLimits };
+  let clientUploads = 0; // reading, decoding or waiting for the board queue
+  let setupUploads = 0;
   const reading = { pair: new Map(), ip: new Map(), conn: new Map() }; // key → webhook body reads in flight
   const verifiedPairs = new Map(); // (connection|/24 or /48) → hub mono ms until which it skips the per-connection cap
   // Never framed (the desktop app's view is a window, not an iframe); HSTS once served over https.
@@ -253,8 +290,16 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   const resourceOrg = (r, params) => {
     const boardOrg = (boardId) => hub.board(boardId)?.org_id ?? null;
     if (params.team_id) return hub.db.get('SELECT id FROM orgs WHERE id = ? AND deleted_at IS NULL', params.team_id)?.id ?? null;
+    if (params.profile_id) return hub.db.get('SELECT p.org_id FROM setup_profiles p JOIN orgs o ON o.id=p.org_id WHERE p.id=? AND o.deleted_at IS NULL', params.profile_id)?.org_id ?? null;
     if (params.board_id) return boardOrg(params.board_id);
     if (params.card_id) { const c = hub.card(params.card_id); return c ? boardOrg(c.board_id) : null; }
+    if (params.workflow_id) return hub.db.get('SELECT r.org_id FROM workflow_recipes r JOIN orgs o ON o.id = r.org_id WHERE r.id = ? AND o.deleted_at IS NULL', params.workflow_id)?.org_id ?? null;
+    if (params.instance_id) return hub.db.get('SELECT b.org_id FROM workflow_instances i JOIN boards b ON b.id=i.board_id JOIN orgs o ON o.id=b.org_id WHERE i.id=? AND o.deleted_at IS NULL',params.instance_id)?.org_id ?? null;
+    if (params.plan_id) return hub.db.get('SELECT p.org_id FROM workflow_execution_plans p JOIN orgs o ON o.id=p.org_id WHERE p.id=? AND o.deleted_at IS NULL',params.plan_id)?.org_id ?? null;
+    if (params.execution_preview_id) return hub.db.get('SELECT p.org_id FROM workflow_control_previews p JOIN orgs o ON o.id=p.org_id WHERE p.id=? AND o.deleted_at IS NULL',params.execution_preview_id)?.org_id ?? null;
+    if (params.execution_id) return hub.db.get('SELECT e.org_id FROM workflow_executions e JOIN orgs o ON o.id=e.org_id WHERE e.id=? AND o.deleted_at IS NULL',params.execution_id)?.org_id ?? null;
+    if (r.pattern.startsWith('/api/client-items/:item_id')) return hub.db.get('SELECT p.workspace_id FROM client_items i JOIN client_projects p ON p.id = i.project_id WHERE i.id = ?', params.item_id)?.workspace_id ?? null;
+    if (r.pattern.startsWith('/api/client-approval-requests/:approval_id')) return hub.db.get('SELECT p.workspace_id FROM client_approval_requests a JOIN client_items i ON i.id = a.item_id JOIN client_projects p ON p.id = i.project_id WHERE a.id = ?', params.approval_id)?.workspace_id ?? null;
     if (r.pattern.startsWith('/api/permission-requests/')) {
       const p = hub.db.get('SELECT card_id FROM permission_requests WHERE id = ?', params.id);
       const c = p && hub.card(p.card_id);
@@ -269,18 +314,28 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   };
 
   const routes = [];
+  const integrationBinds = new WeakMap();
   // Serialize cache-eligible requests sharing an actor and request ID until
   // their response is cached, including collisions across different routes.
   const requestsInFlight = new Map();
-  const route = (method, pattern, handler, { auth = 'member', mutating = method !== 'GET', limit = null, replay = null, maxBody = null, collaboration = false, writeScope = null } = {}) => {
+  const route = (method, pattern, handler, { auth = 'member', mutating = method !== 'GET', limit = null, replay = null, maxBody = null, collaboration = false, writeScope = null, strictBody = false, responseGuard = null, setupIdentity = false, integrationAccess = null } = {}) => {
+    if (integrationAccess != null && !['member', 'admin', 'overview'].includes(integrationAccess)) throw new Error('unknown integration access');
     const keys = [];
     const re = new RegExp(`^${pattern.replace(/:([a-z_]+)/g, (_, k) => { keys.push(k); return '([^/]+)'; })}$`);
-    routes.push({ method, re, keys, handler, auth, mutating, pattern, limit, replay, collaboration, writeScope, maxBody: maxBody ?? (bigBodyRoute(pattern) ? MAX_BODY : limits.smallBodyMax) });
+    routes.push({ method, re, keys, handler, auth, mutating, pattern, limit, replay, collaboration, writeScope, strictBody, responseGuard, setupIdentity, integrationAccess, maxBody: maxBody ?? (bigBodyRoute(pattern) ? MAX_BODY : limits.smallBodyMax) });
   };
 
   // `mail` appears only on a hub that can send mail; it says when a send last failed, and whether
   // sends are failing in a row (email is then off in /api/auth/methods), never to whom or why.
-  route('GET', '/api/health', () => ({ ok: true, protocol: PROTOCOL_VERSION, hub_epoch: hub.epoch, uptime_ms: Math.round(hub.uptime()), auth: config.auth, ...(hub.accounts?.mailer ? { mail: { last_error_at: hub.accounts.mailLastErrorAt, failing: hub.accounts.mailFailing() } } : {}) }), { auth: 'none' });
+  route('GET', '/api/health', ({ req }) => {
+    // A tunnel also connects from loopback: proxy metadata excludes this
+    // local operator field. Never expose sizes, limits, paths or error text.
+    const direct = isLoopback(normalizeAddr(req.socket.remoteAddress)) && !Object.keys(req.headers).some(name =>
+      name === 'forwarded' || name.startsWith('x-forwarded-') || name.startsWith('cf-') || ['x-real-ip', 'true-client-ip', 'via', 'cdn-loop'].includes(name));
+    return { ok: true, protocol: PROTOCOL_VERSION, hub_epoch: hub.epoch, uptime_ms: Math.round(hub.uptime()), auth: config.auth,
+      ...(hub.accounts?.mailer ? { mail: { last_error_at: hub.accounts.mailLastErrorAt, failing: hub.accounts.mailFailing() } } : {}),
+      ...(direct && hub.storage?.enabled ? { storage: { paused: hub.storage.check() } } : {}) };
+  }, { auth: 'none' });
   // Registered only in dev mode (design §9.5): elsewhere it is "no such route".
   if (config.auth === 'dev') route('POST', '/api/dev/login', ({ req, body, res }) => {
     if (!isLoopback(normalizeAddr(req.socket.remoteAddress))) throw new HubError('NOT_FOUND', 'not found');
@@ -292,6 +347,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     return { member: publicMember(m) };
   }, { auth: 'none' });
   if (config.auth === 'accounts') {
+    remote.management(route);
     const acc = hub.accounts;
     route('GET', '/api/auth/methods', ({ ip }) => acc.methods({ ip }), { auth: 'none' });
     route('POST', '/api/auth/email/start', ({ body, ip, ident, req, res }) => acc.start(body, { ip, ident, req, res }), { auth: 'optional' });
@@ -305,6 +361,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     route('POST', '/api/auth/oauth/web/result', (ctx) => { browserOrigin(ctx.req); return hub.oauthWeb.result(ctx.body, ctx); }, { auth: 'optional', replay: false });
     route('POST', '/api/auth/signout', ({ ident, ip, res }) => acc.signout(ident, { ip, res }), { auth: 'user' });
     route('GET', '/api/account', ({ ident }) => acc.account(ident), { auth: 'user' });
+    route('GET', '/api/work-capture/routes', ({ ident }) => workCapture.routes(ident.user.id, ident.cred), { auth: 'user', replay: false });
     route('DELETE', '/api/account', ({ ident, body, ip }) => acc.deleteAccount(ident, body, { ip }), { auth: 'user' });
     route('GET', '/api/account/devices', ({ ident }) => acc.listDevices(ident), { auth: 'user' });
     route('DELETE', '/api/account/devices/:id', ({ ident, params, ip }) => acc.revokeDevice(ident, params.id, { ip }), { auth: 'user' });
@@ -320,12 +377,47 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     // Teams and members (P2, D59–D62). The team comes from the URL; the
     // caller's membership in it is resolved before the handler runs.
     const teams = hub.teams;
-    route('POST', '/api/account/setup', ({ ident, ip }) => teams.setup(ident, { ip }), { auth: 'user' });
+    route('POST', '/api/account/setup', ({ ident, ip }) => teams.setup(ident, { ip }), { auth: 'user', replay: false });
+    const clients = hub.clients;
+    route('POST', '/api/client-workspaces', ({ ident, body, ip }) => clients.create(ident, body, { ip }), { auth: 'user', replay: false });
+    route('GET', '/api/teams/:team_id/client-workspace', ({ member }) => clients.manage(member), { replay: false });
+    route('POST', '/api/teams/:team_id/client-invites', ({ member, body, ip, req }) => clients.invite(member, body, { ip, req }), { replay: false });
+    route('POST', '/api/teams/:team_id/client-invites/:invite_id/resend', ({ member, params, ip, req }) => clients.resend(member, params.invite_id, { ip, req }), { replay: false });
+    route('DELETE', '/api/teams/:team_id/client-invites/:invite_id', ({ member, params, ip }) => clients.revokeInvite(member, params.invite_id, { ip }), { replay: false });
+    route('PATCH', '/api/teams/:team_id/client-guests/:guest_id', ({ member, params, body, ip }) => clients.setGuest(member, params.guest_id, body, { ip }), { replay: false });
+    route('DELETE', '/api/teams/:team_id/client-guests/:guest_id', ({ member, params, ip }) => clients.revokeGuest(member, params.guest_id, { ip }), { replay: false });
+    route('POST', '/api/boards/:board_id/client-project', ({ member, params, body, ip, ident }) => clients.addProject(member, params.board_id, body, { ip, cred: ident.cred }), { replay: false });
+    route('POST', '/api/boards/:board_id/client-items', ({ member, params, body, ip, ident }) => clients.publish(member, params.board_id, body, { ip, cred: ident.cred }), { replay: false });
+    route('DELETE', '/api/client-items/:item_id', ({ member, params, ip, ident }) => clients.unpublish(member, params.item_id, { ip, cred: ident.cred }), { replay: false });
+    route('POST', '/api/client-invites/preview', ({ body, ip }) => clients.preview(body, { ip }), { auth: 'none' });
+    route('POST', '/api/client-invites/accept', ({ ident, body, ip }) => clients.accept(ident, body, { ip }), { auth: 'user', replay: false });
+    route('GET', '/api/client/workspaces', ({ ident }) => ({ workspaces: clients.catalog(ident.user) }), { auth: 'user', replay: false });
+    route('GET', '/api/client/workspaces/:workspace_id/projects', ({ ident, params }) => clients.projects(ident.user, params.workspace_id), { auth: 'user', replay: false });
+    route('GET', '/api/client/projects/:project_id', ({ ident, params }) => clients.project(ident.user, params.project_id), { auth: 'user', replay: false });
+    route('GET', '/api/account/client-export', ({ ident }) => clients.export(ident.user), { auth: 'user', replay: false });
+    const artifacts = hub.clientArtifacts;
+    route('POST', '/api/client-items/:item_id/artifacts', ({ member, params, body, ip, ident }) => artifacts.upload(member, params.item_id, body, { ip, cred: ident.cred }), { replay: false, maxBody: CLIENT_UPLOAD_BODY_MAX });
+    route('POST', '/api/client-items/:item_id/approvals', ({ member, params, body, ip, ident }) => artifacts.request(member, params.item_id, body, { ip, cred: ident.cred }), { replay: false });
+    route('DELETE', '/api/client-approval-requests/:approval_id', ({ member, params, ip, ident }) => artifacts.withdraw(member, params.approval_id, { ip, cred: ident.cred }), { replay: false });
+    route('GET', '/api/client/items/:item_id/artifacts', ({ ident, params }) => artifacts.list(ident.user, params.item_id, ident.cred), { auth: 'user', replay: false });
+    route('GET', '/api/client/items/:item_id/artifacts/:version_id', ({ ident, params }) => artifacts.get(ident.user, params.item_id, params.version_id, ident.cred), { auth: 'user', replay: false });
+    route('GET', '/api/client/items/:item_id/artifacts/:version_id/content', ({ ident, params, res }) => {
+      const file = artifacts.content(ident.user, params.item_id, params.version_id, ident.cred);
+      sendRaw(res, 200, file.mime, file.bytes, { 'content-disposition': file.disposition });
+    }, { auth: 'user', replay: false });
+    route('GET', '/api/client/approvals/:approval_id', ({ ident, params }) => artifacts.approval(ident.user, params.approval_id, ident.cred), { auth: 'user', replay: false });
+    route('POST', '/api/client/approvals/:approval_id/decision', ({ ident, params, body, ip }) => artifacts.decide(ident.user, params.approval_id, body, { ip, cred: ident.cred }), { auth: 'user', replay: false });
+    const feedback = hub.clientFeedback;
+    route('GET', '/api/boards/:board_id/client-feedback-intake', ({ member, params, ident }) => feedback.config(member, params.board_id, ident.cred), { replay: false });
+    route('PATCH', '/api/boards/:board_id/client-feedback-intake', ({ member, params, body, ip, ident }) => feedback.configure(member, params.board_id, body, { ip, cred: ident.cred }), { replay: false });
+    route('GET', '/api/client/items/:item_id/feedback', ({ ident, params }) => feedback.list(ident.user, params.item_id, ident.cred), { auth: 'user', replay: false });
+    route('POST', '/api/client/items/:item_id/feedback', ({ ident, params, body, ip }) => feedback.create(ident.user, params.item_id, body, { ip, cred: ident.cred }), { auth: 'user', replay: false });
     route('POST', '/api/teams', ({ ident, body, ip }) => teams.create(ident, body, { ip }), { auth: 'user' });
     route('GET', '/api/teams/:team_id', ({ member }) => teams.get(member));
     route('PATCH', '/api/teams/:team_id', ({ member, body, ip }) => teams.update(member, body, { ip }));
     route('DELETE', '/api/teams/:team_id', ({ member, body, ip, ident }) => teams.remove(member, body, { ip, cred: ident.cred }));
     route('POST', '/api/teams/:team_id/boards', ({ member, body, ip }) => teams.createBoard(member, body, { ip }));
+    route('GET', '/api/teams/:team_id/boards', ({ member, query }) => api.listBoards(member, { includeArchived: query.get('include_archived') === '1' }));
     route('GET', '/api/teams/:team_id/members', ({ member }) => teams.listMembers(member));
     route('PATCH', '/api/teams/:team_id/members/:member_id', ({ member, params, body, ip }) => teams.setRole(member, params.member_id, body, { ip }));
     route('DELETE', '/api/teams/:team_id/members/:member_id', ({ member, params, ip }) => teams.removeMember(member, params.member_id, { ip }));
@@ -348,7 +440,38 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   } else {
     route('GET', '/api/me', ({ member }) => api.me(member));
   }
-  route('GET', '/api/boards/:board_id', ({ member, params, query }) => api.snapshot(member, params.board_id, { includeArchived: query.get('include_archived') === '1' }));
+  route('GET', '/api/boards', ({ member, query }) => api.listBoards(member, { includeArchived: query.get('include_archived') === '1' }));
+  route('GET', '/api/search', ({ member, query, ident }) => searchWork(hub, member, query, { cred: ident?.cred }), { limit: 'search_member' });
+  route('GET', '/api/team-overview', ({ member, query, ident }) => teamOverview(hub, member, query, { cred: ident?.cred }), { limit: 'overview_member' });
+  route('GET', '/api/workflows', ({ member, ident, query }) => workflows.list(member, ident?.cred, { includeArchived: query.get('include_archived') === '1' }));
+  route('POST', '/api/workflows', ({ member, body, ident }) => workflows.publish(member, null, body, ident?.cred), { replay: false });
+  route('GET', '/api/workflows/:workflow_id', ({ member, params, ident }) => workflows.detail(member, params.workflow_id, ident?.cred));
+  route('POST', '/api/workflows/:workflow_id/versions', ({ member, params, body, ident }) => workflows.publish(member, params.workflow_id, body, ident?.cred), { replay: false });
+  route('POST', '/api/workflows/:workflow_id/archive', ({ member, params, body, ident }) => workflows.archive(member, params.workflow_id, body, ident?.cred), { replay: false });
+  route('POST', '/api/boards/:board_id/workflows/:workflow_id/apply', ({ member, params, body, ident }) => workflows.apply(member, params.workflow_id, params.board_id, body, ident?.cred), { replay: false });
+  if(hub.accounts){
+    const options=query=>{
+      if([...query.keys()].some(key=>!['board_id','org'].includes(key)))throw new HubError('VALIDATION','Unknown workflow preview query.');
+      return communicationOptions(query);
+    };
+    const guarded={replay:false,responseGuard:(_ctx,out)=>workflowExecutions.guard(out)};
+    route('POST','/api/workflow-instances/:instance_id/preview',({member,params,body,ident,query})=>workflowExecutions.preview(member,params.instance_id,body,ident.cred,options(query)),{...guarded,strictBody:true,maxBody:32*1024});
+    route('GET','/api/workflow-plans/:plan_id',({member,params,ident,query})=>workflowExecutions.read(member,params.plan_id,ident.cred,options(query)),{...guarded,limit:'communication_read_member'});
+    const controlGuard={replay:false,responseGuard:(_ctx,out)=>workflowExecutor.guard(out)};
+    route('GET','/api/workflow-instances/:instance_id/execution-context',({member,params,ident,query})=>workflowExecutor.instanceContext(member,params.instance_id,ident.cred,options(query)),{...controlGuard,limit:'communication_read_member'});
+    route('POST','/api/workflow-plans/:plan_id/execution-preview',({member,params,body,ident,query})=>workflowExecutor.preview(member,params.plan_id,body,ident.cred,options(query)),{...controlGuard,strictBody:true,maxBody:32*1024});
+    route('POST','/api/workflow-executions/:execution_id/preview',({member,params,body,ident,query})=>workflowExecutor.controlPreview(member,params.execution_id,body,ident.cred,options(query)),{...controlGuard,strictBody:true,maxBody:32*1024});
+    route('GET','/api/workflow-execution-previews/:execution_preview_id',({member,params,ident,query})=>workflowExecutor.read(member,params.execution_preview_id,ident.cred,options(query)),{...controlGuard,limit:'communication_read_member'});
+    route('POST','/api/workflow-plans/:plan_id/start',({member,params,body,ident,query})=>workflowExecutor.start(member,params.plan_id,body,ident.cred,options(query)),{...controlGuard,strictBody:true,maxBody:32*1024});
+    route('GET','/api/workflow-executions/:execution_id',({member,params,ident,query})=>workflowExecutor.status(member,params.execution_id,ident.cred,options(query)),{...controlGuard,limit:'communication_read_member'});
+    for(const command of ['resume','pause','cancel'])route('POST',`/api/workflow-executions/:execution_id/${command}`,({member,params,body,ident,query})=>workflowExecutor.command(command,member,params.execution_id,body,ident.cred,options(query)),{...controlGuard,strictBody:true,maxBody:32*1024});
+    route('POST','/api/workflow-executions/:execution_id/steps/:position/retry',({member,params,body,ident,query})=>workflowExecutor.command('retry',member,params.execution_id,body,ident.cred,options(query),/^[0-7]$/.test(params.position)?Number(params.position):-1),{...controlGuard,strictBody:true,maxBody:32*1024});
+  }
+  route('POST', '/api/boards', ({ member, body }) => api.createBoard(member, body));
+  route('PATCH', '/api/boards/:board_id', ({ member, params, body }) => api.updateBoard(member, params.board_id, body));
+  route('POST', '/api/boards/:board_id/archive', ({ member, params }) => api.setBoardArchived(member, params.board_id, true));
+  route('POST', '/api/boards/:board_id/restore', ({ member, params }) => api.setBoardArchived(member, params.board_id, false));
+  route('GET', '/api/boards/:board_id', ({ member, params, query }) => selectedContext(hub, api.snapshot(member, params.board_id, { includeArchived: query.get('include_archived') === '1' }), communicationOptions(query).boardIds));
   route('GET', '/api/boards/:board_id/labels', ({ member, params }) => api.listLabels(member, params.board_id));
   route('POST', '/api/boards/:board_id/labels', ({ member, params, body, ident }) => api.createLabel(member, params.board_id, body, { cred: ident?.cred ?? null }), { writeScope: 'board' });
   route('PATCH', '/api/boards/:board_id/labels/:name', ({ member, params, body, ident }) => api.patchLabel(member, params.board_id, params.name, body, { cred: ident?.cred ?? null }), { writeScope: 'label' });
@@ -356,13 +479,35 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   route('GET', '/api/boards/:board_id/alerts', ({ member, params }) => api.alerts(member, params.board_id));
   route('GET', '/api/boards/:board_id/journal', ({ member, params, query }) => api.journalPage(member, params.board_id, { after_seq: query.get('after_seq') ?? 0, limit: query.get('limit') ?? 200 }));
   route('POST', '/api/boards/:board_id/cards', ({ member, params, body, ident }) => api.createCard(member, params.board_id, body, { cred: ident?.cred ?? null }), { collaboration: true });
+  route('POST', '/api/boards/:board_id/work-capture', ({ member, params, body, ident }) => workCapture.observe(member, params.board_id, body, ident?.cred), { replay: false, maxBody: 12 * 1024 });
   route('POST', '/api/boards/:board_id/repos', ({ member, params, body }) => api.addBoardRepo(member, params.board_id, body));
   route('GET', '/api/boards/:board_id/presence', ({ member, params }) => { api.boardFor(member, params.board_id); return hub.presence.view(params.board_id); }, { limit: 'presence_member' });
-  route('GET', '/api/cards/:card_id', ({ member, params }) => api.detail(member, params.card_id));
+  route('GET', '/api/my-day', ({ member, ident }) => myDay(hub, ident ? { userId: ident.user.id, cred: ident.cred } : { member }), { auth: config.auth === 'accounts' ? 'user' : 'member', replay: false });
+  route('GET', '/api/cards/:card_id', ({ member, params, query }) => selectedContext(hub, api.detail(member, params.card_id), communicationOptions(query).boardIds));
+  route('PATCH', '/api/cards/:card_id/planning', ({ member, params, body, ident }) => planning.patch(member, params.card_id, body, ident?.cred ?? null), { replay: false, maxBody: 4096 });
+  if(config.auth === 'accounts') {
+    const guarded = { replay:false, setupIdentity:true, responseGuard:({member,params,ident,req},out)=>setups.guard(member,params,out,ident.cred,req.method) };
+    route('GET','/api/teams/:team_id/setups',({member,params,ident})=>setups.list(member,params.team_id,ident.cred),guarded);
+    route('POST','/api/teams/:team_id/setups',({member,params,body,ident})=>setups.publish(member,params.team_id,body,ident.cred),{...guarded,maxBody:SETUP_BODY_MAX});
+    route('GET','/api/setup-profiles/:profile_id',({member,params,ident})=>setups.read(member,params.profile_id,null,ident.cred),guarded);
+    route('GET','/api/setup-profiles/:profile_id/versions/:version_id',({member,params,ident})=>setups.read(member,params.profile_id,params.version_id,ident.cred),guarded);
+    route('GET','/api/setup-profiles/:profile_id/export',({member,params,ident})=>setups.read(member,params.profile_id,null,ident.cred,true),guarded);
+    route('DELETE','/api/setup-profiles/:profile_id',({member,params,body,ident})=>setups.unpublish(member,params.profile_id,body,ident.cred),guarded);
+    route('GET','/api/setup-profiles/:profile_id/activity',({member,params,ident})=>setups.activity(member,params.profile_id,ident.cred),guarded);
+    route('PUT','/api/teams/:team_id/setup-baseline',({member,params,body,ident})=>setups.baseline(member,params.team_id,body,ident.cred),guarded);
+    route('POST','/api/setup-profiles/:profile_id/borrow-receipts',({member,params,body,ident})=>setups.receipt(member,params.profile_id,body,ident.cred),guarded);
+  }
+  route('POST', '/api/cards/:card_id/work-capture/stop', ({ member, params, body, ident }) => workCapture.stop(member, params.card_id, body, ident?.cred), { replay: false, maxBody: 1024 });
   route('PATCH', '/api/cards/:card_id', ({ member, params, body, ident }) => api.patchCard(member, params.card_id, body, { cred: ident?.cred ?? null }), { collaboration: true });
   route('POST', '/api/cards/:card_id/actions/:action', ({ member, params, body, ident }) => api.action(member, params.card_id, params.action, body, { cred: ident?.cred ?? null }), { writeScope: 'card' });
   route('POST', '/api/cards/:card_id/archive', ({ member, params, body, ident }) => api.archive(member, params.card_id, body, { cred: ident?.cred ?? null }), { writeScope: 'archive' });
   route('POST', '/api/cards/:card_id/restore', ({ member, params, body, ident }) => api.restore(member, params.card_id, body, { cred: ident?.cred ?? null }), { writeScope: 'archive' });
+  route('GET', '/api/cards/:card_id/packet', ({ member, params, query, ident }) => communication.staffReadPacket(member, params.card_id, query.has('version') ? { version: Number(query.get('version')) } : {}, ident?.cred, communicationOptions(query)));
+  route('GET', '/api/cards/:card_id/ownership', ({ member, params, query, ident }) => readOwnership(hub, member, params.card_id, ident?.cred, communicationOptions(query)), { replay: false, responseGuard: (_ctx, out) => guardOwnership(hub, out) });
+  route('GET', '/api/boards/:board_id/work-context', ({ member, params, query, ident }) => readWorkContext(hub,member,ident?.cred,communicationOptions(query).boardIds??[params.board_id],workContextArgs(params.board_id,query)), { replay:false, responseGuard:(_ctx,out)=>guardWorkContext(hub,out) });
+  route('POST', '/api/cards/:card_id/packet', ({ member, params, body, ident, query }) => communication.staffWritePacket(member, params.card_id, body, ident?.cred, communicationOptions(query)), { replay: false });
+  route('GET', '/api/cards/:card_id/messages', ({ member, params, ident, query }) => communication.staffListMessages(member, params.card_id, ident?.cred, communicationOptions(query)), { limit: 'communication_read_member' });
+  route('POST', '/api/cards/:card_id/messages', ({ member, params, body, ident, query }) => communication.staffSendMessage(member, params.card_id, body, ident?.cred, communicationOptions(query)), { replay: false });
   route('POST', '/api/cards/:card_id/comments', ({ member, params, body, ident }) => api.comment(member, params.card_id, body, { cred: ident?.cred ?? null }), { collaboration: true });
   route('GET', '/api/cards/:card_id/handover', ({ member, params, query, res }) => {
     const h = api.handover(member, params.card_id);
@@ -373,7 +518,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     }
     return h;
   });
-  route('GET', '/api/cards/:card_id/overlap-preview', ({ member, params, query }) => api.overlapPreview(member, params.card_id, query.get('target_member_id')));
+  route('GET', '/api/cards/:card_id/overlap-preview', ({ member, params, query }) => api.overlapPreview(member, params.card_id, query.get('target_member_id'), query.get('repo_id')));
   route('POST', '/api/permission-requests/:id/answer', ({ member, params, body, ident }) => api.answerPermission(member, params.id, body, { cred: ident?.cred ?? null }), { writeScope: 'permission' });
   route('GET', '/api/devices', ({ member }) => api.listDevices(member));
   // Accounts mode mints runner credentials only by enrolment (D79, H1); listing and revoking stay for cleanup.
@@ -399,12 +544,22 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     // Members may read what's connected (by design, D42), but a connector's
     // config (channel ids, repo lists, …) is the admins' business.
     const forMember = (member, c) => (hub.isAdmin(member) ? c : { ...c, settings: { autonomy: c.settings?.autonomy ?? {} } });
-    route('GET', '/api/integrations', ({ member }) => ({
+    // G1 (D42 addendum "the Sentry connector"): an admin pastes this into the
+    // provider. Admins only, as tidiness: the id is no secret, verify() is the
+    // gate. No public base is null, never a failed list.
+    const withWebhookUrl = (member, req, c, shown) => {
+      if (!hub.isAdmin(member) || !shown.has(c.provider)) return c;
+      let base = null;
+      try { base = publicBase(req); } catch { base = null; }
+      return { ...c, webhook_url: base ? `${base}/integrations/${c.id}/webhook` : null };
+    };
+    const showsWebhookUrl = () => new Set(integrations.connectors().filter((c) => c.shows_webhook_url).map((c) => c.id));
+    route('GET', '/api/integrations', ({ member, req }) => ({
       available: integrations.connectors(), vault: hub.vault.available,
-      connections: integrations.list(member.org_id).map((c) => ({ ...forMember(member, c), linked: integrations.isLinked(c.id, member.id) })),
+      connections: integrations.list(member.org_id).map((c) => ({ ...withWebhookUrl(member, req, forMember(member, c), showsWebhookUrl()), linked: integrations.isLinked(c.id, member.id) })),
       ...(hub.isAdmin(member) ? { pending: integrations.pendingList(member.org_id) } : {}),
-    }));
-    route('POST', '/api/integrations/:provider/token', async ({ member, params, body }) => {
+    }), { integrationAccess: 'overview' });
+    route('POST', '/api/integrations/:provider/token', async ({ member, params, body, req, integrationCurrent }) => {
       api.requireAdmin(member);
       const conn = integrations.connectors().find((c) => c.id === params.provider);
       if (!conn || conn.connect !== 'token') throw new HubError('NOT_FOUND', 'no such token integration');
@@ -416,27 +571,32 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
         hub.log.warn('integration token check failed', { integration: params.provider, err: redact(e?.message ?? e) });
         throw new HubError('VALIDATION', 'That token was not accepted. Check it and try again.');
       }
+      // Provider verification may wait: captured admin identity and credential
+      // must still be current before any connection or sealed secret is saved.
+      member = integrationCurrent();
       // Named fields only: the id is the hub's to mint, and the connector's settings are provider facts (D42 addendum C1).
       return {
-        connection: integrations.createConnection({
+        connection: withWebhookUrl(member, req, integrations.createConnection({
           external_id: v.external_id, display_name: v.display_name, scopes: v.scopes, secrets: v.secrets, settings: v.settings, orgId: member.org_id, memberId: member.id, provider: params.provider,
-        }),
+        }), showsWebhookUrl()),
       };
-    });
+    }, { integrationAccess: 'admin' });
     // OAuth / app install (D42): the callback needs this cookie back. A
     // browser tab has it already; the desktop app's connect window (its own
     // session) gets `bind` through the window name and sets it itself.
-    const setBind = (res, { name, value, path, secure, max_age_s }) => res.setHeader('set-cookie', `${name}=${value}; HttpOnly; SameSite=Lax; Path=${path}; Max-Age=${max_age_s}${secure ? '; Secure' : ''}`);
+    // Publish the private bind cookie only after the final captured authority
+    // check, together with its successful response (never on a stale denial).
+    const setBind = (res, { name, value, path, secure, max_age_s }) => integrationBinds.set(res, `${name}=${value}; HttpOnly; SameSite=Lax; Path=${path}; Max-Age=${max_age_s}${secure ? '; Secure' : ''}`);
     // body.input (D42 addendum "start inputs") goes to the registry only: never logged or kept.
     route('POST', '/api/integrations/:provider/start', ({ member, params, body, req, res }) => {
       api.requireAdmin(member);
       const out = integrations.oauthStart({ member, provider: params.provider, publicUrl: publicBase(req), input: body.input });
       setBind(res, out.cookie);
       return out.form ? { form: out.form, bind: out.bind } : { url: out.url, bind: out.bind };
-    }, { replay: PREPARE_REPLAY });
+    }, { replay: PREPARE_REPLAY, integrationAccess: 'admin' });
     // Pending connections (D97): a provider starts one, a pending id takes the pasted fields.
     // body.input goes to the registry and nowhere else (no log, no cache, no error text).
-    route('POST', '/api/integrations/:target/prepare', async ({ member, params, body, req, res }) => {
+    route('POST', '/api/integrations/:target/prepare', async ({ member, params, body, req, res, integrationCurrent }) => {
       api.requireAdmin(member);
       const publicUrl = publicBase(req);
       let out;
@@ -449,63 +609,66 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
         hub.log.error('integration prepare failed', { path: '/api/integrations/:target/prepare' });
         throw new HubError('INTERNAL', 'internal error');
       }
+      integrationCurrent();
       if (out.needs) return { pending: out.pending, needs: out.needs };
       setBind(res, out.cookie);
       return { pending: out.pending, url: out.url, bind: out.bind };
-    }, { replay: PREPARE_REPLAY });
+    }, { replay: PREPARE_REPLAY, integrationAccess: 'admin' });
     route('POST', '/api/integrations/:id/authorize', ({ member, params, req, res }) => {
       api.requireAdmin(member);
       const out = integrations.pendingAuthorize({ member, id: params.id, publicUrl: publicBase(req) });
       setBind(res, out.cookie);
       return { url: out.url, bind: out.bind };
-    });
+    }, { integrationAccess: 'admin' });
     route('PATCH', '/api/integrations/:id', ({ member, params, body }) => {
       api.requireAdmin(member);
       own(member, params.id);
       const patch = {};
       if (body.autonomy !== undefined) patch.autonomy = body.autonomy;
       if (body.config !== undefined) patch.config = body.config;
+      if (body.target_board_id !== undefined) patch.target_board_id = body.target_board_id;
       return { connection: integrations.setSettings(params.id, patch, { memberId: member.id }) };
-    });
+    }, { integrationAccess: 'admin' });
     route('DELETE', '/api/integrations/:id', ({ member, params }) => {
       api.requireAdmin(member);
       if (integrations.pendingDelete({ member, id: params.id })) return { ok: true };
       own(member, params.id);
       integrations.revokeConnection(params.id, member.id);
       return { ok: true };
-    });
+    }, { integrationAccess: 'admin' });
     // Identity links (D98): a member links, reads and unlinks only their own;
     // an admin lists and revokes, and never creates one.
-    route('POST', '/api/integrations/:id/identity/start', async ({ member, params, req, res, ident }) => {
+    route('POST', '/api/integrations/:id/identity/start', async ({ member, params, req, res, ident, integrationCurrent }) => {
       const out = await integrations.identityStart({ member, connectionId: params.id, cred: ident?.cred ?? null, publicUrl: publicBase(req) });
+      integrationCurrent();
       setBind(res, out.cookie);
       return { url: out.url, bind: out.bind };
-    });
+    }, { integrationAccess: 'member' });
     route('GET', '/api/integrations/:id/identity', ({ member, params }) => {
       own(member, params.id);
       return integrations.identityStatus(params.id, member.id);
-    });
+    }, { integrationAccess: 'member' });
     route('DELETE', '/api/integrations/:id/identity', ({ member, params }) => {
       own(member, params.id);
       return integrations.identityUnlink({ connectionId: params.id, memberId: member.id, by: 'self', actorId: member.id });
-    });
+    }, { integrationAccess: 'member' });
     route('GET', '/api/integrations/:id/identities', ({ member, params }) => {
       api.requireAdmin(member);
       own(member, params.id);
       return { identities: integrations.identities(params.id) };
-    });
+    }, { integrationAccess: 'admin' });
     route('DELETE', '/api/integrations/:id/identities/:member_id', ({ member, params }) => {
       api.requireAdmin(member);
       own(member, params.id);
       const t = hub.member(params.member_id);
       if (!t || t.org_id !== member.org_id) throw new HubError('NOT_FOUND', 'member not found');
       return integrations.identityUnlink({ connectionId: params.id, memberId: t.id, by: 'admin', actorId: member.id });
-    });
+    }, { integrationAccess: 'admin' });
     route('GET', '/api/integrations/:id/audit', ({ member, params, query }) => {
       api.requireAdmin(member);
       own(member, params.id);
       return { entries: integrations.audit(params.id, { limit: Number(query.get('limit') ?? 100) }) };
-    });
+    }, { integrationAccess: 'admin' });
   }
 
   async function serveFile(req, res, path) {
@@ -534,31 +697,44 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   function staticPath(pathname) {
     if (pathname === '/') return join(config.webDir, 'index.html');
     if (config.auth === 'accounts' && Object.hasOwn(ACCOUNT_PAGES, pathname)) return join(config.webDir, ACCOUNT_PAGES[pathname]);
-    const shared = /^\/shared\/([a-z]+)\.js$/.exec(pathname);
+    const shared = /^\/shared\/([a-z]+(?:-[a-z]+)*)\.js$/.exec(pathname);
     if (shared) return SHARED_BROWSER.has(shared[1]) ? join(config.sharedDir, `${shared[1]}.js`) : null;
     if (pathname.startsWith('/web/')) {
-      let rel;
-      try { rel = decodeURIComponent(pathname.slice(5)); } catch { return null; }
-      const full = normalize(join(config.webDir, rel));
-      return full.startsWith(config.webDir + sep) && !rel.includes('\0') ? full : null;
+      const rel = pathname.slice(5);
+      if (WEB_FILES.has(rel)) return join(config.webDir, rel);
+      return WEB_JS.test(rel) && exactCase(config.webDir, rel) ? join(config.webDir, rel) : null;
     }
     return null;
   }
 
   // The route table, for the tenancy suite's coverage assertion (D63).
-  handle.routes = routes.map(({ method, pattern, auth }) => ({ method, pattern, auth }));
+  handle.routes = [...routes.map(({ method, pattern, auth }) => ({ method, pattern, auth })), ...(remote?.routes ?? [])];
+  handle.remoteState = remote?.state ?? null;
   return handle;
 
   async function handle(req, res) {
     // Pipelined behind a request that was answered with Connection: close.
     if (req.socket?.writableEnded) return req.socket.destroy();
     if (req.socket) req.socket[CURRENT] = req;
-    const url = new URL(req.url, 'http://hub');
     res.setHeader('x-frame-options', 'DENY');
     res.setHeader('content-security-policy', "frame-ancestors 'none'");
     if (hsts) res.setHeader('strict-transport-security', 'max-age=31536000');
+    let url, rawPath;
+    try {
+      url = new URL(req.url, 'http://hub');
+      rawPath = req.url.split('?')[0];
+      // Validate the original path before URL's dot-segment normalization.
+      decodeURIComponent(rawPath);
+    } catch { return sendJson(res, 400, { error: { code: 'VALIDATION', message: 'bad request path' } }); }
     if (loopbackOnly(config) && !devRequestOk(req)) return sendJson(res, 403, { error: { code: 'FORBIDDEN', message: `${config.auth} auth serves direct loopback requests only` } });
     if (config.auth === 'local' && !localCookieOk(hub, req)) return sendJson(res, 401, { error: { code: 'UNAUTHENTICATED', message: 'not signed in' } });
+    try {
+      remote?.guardManagement(req, url);
+      if (remote && await remote.handle(req, res, url)) return undefined;
+    } catch (error) {
+      if (error instanceof HubError) return sendJson(res, httpStatus(error.code), errorBody(error));
+      return sendJson(res, 500, { error: { code: 'INTERNAL', message: 'remote resource unavailable' } });
+    }
     // These two paths bypass Cloudflare Access (providers can't sign in):
     // the signed state and the webhook signature are their only auth.
     const cb = integrations && req.method === 'GET' ? /^\/integrations\/([a-z][a-z0-9-]{1,31})\/callback$/.exec(url.pathname) : null;
@@ -674,6 +850,8 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
         return sendJson(res, 500, { error: { code: 'INTERNAL', message: 'internal error' } });
       }
     }
+    let clientUploadSlot = false;
+    let setupUploadSlot = false;
     try {
       if ((req.method === 'GET' || req.method === 'HEAD') && !url.pathname.startsWith('/api/')) {
         // The invite page's "Download" button (accounts): the configured app download.
@@ -684,7 +862,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
           res.end();
           return undefined;
         }
-        const p = staticPath(url.pathname);
+        const p = staticPath(rawPath);
         if (!p) return sendJson(res, 404, { error: { code: 'NOT_FOUND', message: 'not found' } });
         return await serveFile(req, res, p);
       }
@@ -723,12 +901,37 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
       } else if (r.auth === 'member') {
         member = await authMember(req, pick);
       }
+      if(r.setupIdentity && (req.headers['x-plexiform-account']!==ident?.user.id || req.headers['x-plexiform-member']!==member?.id)) throw new HubError('UNAUTHENTICATED','Setups account or membership changed; refresh your sign-in');
+      if (r.pattern === '/api/client-items/:item_id/artifacts') {
+        hub.clientArtifacts.staff(member, params.item_id, ident.cred, true);
+        if (clientUploads >= 4) throw new HubError('RATE_LIMITED', 'deliverable uploads are busy; try again shortly', { retry_after_s: 1 });
+        clientUploads++; clientUploadSlot = true;
+      }
+      if(r.method === 'POST' && r.pattern === '/api/teams/:team_id/setups') {
+        setups.scope(member,params.team_id,ident.cred,'setups.publish');
+        if(setupUploads>=4) throw new HubError('RATE_LIMITED','Setups uploads are busy; try again shortly',{retry_after_s:1});
+        setupUploads++; setupUploadSlot=true;
+      }
+      // Only designated integration routes use this private captured context.
+      // It is checked before cache replay and again at final result delivery;
+      // a handler cannot refresh away the original user or credential owner.
+      const integrationMember = r.integrationAccess ? Object.freeze({ ...member }) : null;
+      const integrationCurrent = (delivery = false) => {
+        if (!r.integrationAccess) return member;
+        try {
+          const current = api.currentMember(integrationMember, ident?.cred ?? null);
+          if (r.integrationAccess === 'admin' || (delivery && r.integrationAccess === 'overview' && hub.isAdmin(integrationMember))) api.requireAdmin(current);
+          return current;
+        } catch (e) { e.cacheable = false; throw e; }
+      };
+      if (r.integrationAccess) integrationCurrent();
       // Only now, so nobody unauthenticated can make the hub hold a body (D105).
-      let body = r.mutating ? await readBody(req, { max: r.maxBody, deadlineMs: limits.bodyDeadlineMs }) : {};
+      let body = r.mutating ? await readBody(req, { max: r.maxBody, deadlineMs: limits.bodyDeadlineMs, parser: r.strictBody ? strictJson : JSON.parse }) : {};
       // Bind retries to the effective operation, whether strip came from
       // JSON or the existing query option. Equivalent forms remain a retry.
       if (r.method === 'DELETE' && r.pattern === '/api/boards/:board_id/labels/:name') body = { ...body, strip: body.strip === true || url.searchParams.get('strip') === '1' };
       const refreshWrite = () => {
+        if (r.integrationAccess) member = integrationCurrent();
         if (ident && r.mutating && !hub.accounts.credValid(ident.cred)) throw new HubError('UNAUTHENTICATED', 'sign in again');
         if (member && r.auth === 'member' && r.mutating) member = api.currentMember(member, ident?.cred ?? null);
         if (r.writeScope === 'archive') member = api.collaborationScope(member, { cardId: params.card_id, allowArchived: true }, ident?.cred ?? null);
@@ -749,10 +952,14 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
         }
       };
       refreshWrite();
+      const paidAction = DISPATCH_ACTIONS.has(params.action);
       const actor = member?.id ?? (ident && r.auth === 'user' ? `user:${ident.user.id}` : null);
-      // This stable release retains its existing dispatch request-ID/cache
-      // behavior; it does not ship the later provider/budget contract.
-      const rid = r.replay !== false && actor && r.mutating && typeof body.request_id === 'string' ? body.request_id : null;
+      // Client operations always pass through their live grant/role checks.
+      // Workspace creation and acceptance have durable transactional retries;
+      // an old response must not bypass later removal or guest revocation.
+      // Paid dispatches use their durable, choice-bound row instead of a
+      // generic response cache that could replay a different AI/budget.
+      const rid = r.replay !== false && !paidAction && !hub.workflowGuard.resourceOwned(params) && actor && r.mutating && typeof body.request_id === 'string' ? body.request_id : null;
       const binding = rid && (r.collaboration || r.writeScope) ? requestBinding(r, params, body) : null;
       const runRequest = async () => {
         refreshWrite();
@@ -760,7 +967,8 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
           const hit = hub.cachedResponse(actor, rid);
           if (hit) {
             if ((binding != null || hit.binding != null) && binding !== hit.binding) throw new HubError('CONFLICT', 'request_id reused for a different request');
-            return sendJson(res, hit.status, hit.body, { 'board-replayed': '1' });
+            if (r.integrationAccess) integrationCurrent(true);
+            return sendJson(res, hit.status, r.collaboration ? selectedContext(hub, hit.body, communicationOptions(url.searchParams).boardIds) : hit.body, { 'board-replayed': '1' });
           }
         }
         if (actor && r.mutating) {
@@ -770,15 +978,26 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
         if (member && r.limit) limitOrThrow(hub, r.limit, member.id);
         let status = 200;
         let out;
+        let cacheable = true;
         try {
-          out = await r.handler({ req, res, member, params, body, query: url.searchParams, ident, ip });
+          out = await r.handler({ req, res, member, params, body, query: url.searchParams, ident, ip, integrationCurrent });
         } catch (e) {
           if (!(e instanceof HubError)) throw e;
           status = httpStatus(e.code);
           out = errorBody(e);
+          // A storage refusal is transient admission, so the same bound
+          // request can recover without waiting for the response cache TTL.
+          cacheable = !(r.integrationAccess && e.cacheable === false) && !(e.code === 'QUOTA_EXCEEDED' && e.extra?.resource === 'storage');
         }
         if (out === undefined) return undefined;
-        if (rid) hub.cacheResponse(actor, rid, r.replay?.status ?? status, r.replay?.body ?? out, binding);
+        if (status === 200 && r.integrationAccess) integrationCurrent(true);
+        if (r.collaboration) out = selectedContext(hub, out, communicationOptions(url.searchParams).boardIds);
+        if (status === 200 && r.responseGuard) {
+          const guarded = r.responseGuard({ req, res, member, params, body, query: url.searchParams, ident, ip }, out);
+          if (guarded?.then) throw new HubError('INTERNAL', 'response authority must be synchronous');
+        }
+        if (status === 200 && r.integrationAccess && integrationBinds.has(res)) res.setHeader('set-cookie', integrationBinds.get(res));
+        if (rid && cacheable) hub.cacheResponse(actor, rid, r.replay?.status ?? status, r.replay?.body ?? out, binding);
         return sendJson(res, status, out, out?.error?.code === 'RATE_LIMITED' && out.error.retry_after_s ? { 'retry-after': String(out.error.retry_after_s) } : {});
       };
       if (!rid) return await runRequest();
@@ -791,10 +1010,28 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
       return await pending;
     } catch (e) {
       if (e instanceof HubError) return sendJson(res, httpStatus(e.code), errorBody(e), retryHeader(e));
-      hub.log.error('http handler failed', { path: url.pathname, err: e });
+      hub.log.error('http handler failed', { path: logPath(url.pathname), err: e });
       return sendJson(res, 500, { error: { code: 'INTERNAL', message: 'internal error' } });
+    } finally {
+      if (clientUploadSlot) clientUploads--;
+      if (setupUploadSlot) setupUploads--;
     }
   }
+}
+
+// Spell every segment exactly even on case-insensitive desktop filesystems.
+function exactCase(dir, rel) {
+  let at = dir;
+  for (const part of rel.split('/')) {
+    try { if (!readdirSync(at).includes(part)) return false; } catch { return false; }
+    at = join(at, part);
+  }
+  return true;
+}
+
+/** Bounded caller-controlled path text for one structured log record. */
+export function logPath(path) {
+  return String(path ?? '').replace(/[\p{C}\u2028\u2029]/gu, '').slice(0, 100);
 }
 
 function normalizeAddr(a) {
@@ -807,8 +1044,13 @@ function refuse(socket, status, text) {
 
 export function createUpgradeHandler({ hub, config, wss, authenticate }) {
   return async function onUpgrade(req, socket, head) {
-    const { pathname, searchParams } = new URL(req.url, 'http://hub');
     socket.on('error', () => {});
+    let parsed;
+    try {
+      decodeURIComponent(req.url.split('?')[0]);
+      parsed = new URL(req.url, 'http://hub');
+    } catch { return refuse(socket, 400, 'Bad Request'); }
+    const { pathname, searchParams } = parsed;
     if (loopbackOnly(config) && !devRequestOk(req)) return refuse(socket, 403, 'Forbidden');
     // Runners keep device-token auth; every other upgrade needs the local cookie.
     if (config.auth === 'local' && pathname !== WS_PATHS.runner && !localCookieOk(hub, req)) return refuse(socket, 401, 'Unauthorized');

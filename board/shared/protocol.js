@@ -4,6 +4,8 @@
 //
 // Browser-safe, dependency-free.
 
+import { AI_IDS, aiListError } from './ai.js';
+export { AI_IDS, AI_LABELS, BUDGET_MAX_USD } from './ai.js';
 export const PROTOCOL_VERSION = 1;
 export const PROTOCOL_HEADER = 'Board-Protocol';
 
@@ -44,6 +46,7 @@ export const ERRORS = Object.freeze({
   ACCESS_UNAVAILABLE: 503,  // Access signing keys unreachable: retry, the credential may be fine
   PROVIDER_ERROR: 502,      // accounts: the OAuth provider refused the sign-in code (D77)
   PROVIDER_UNAVAILABLE: 503, // accounts: the OAuth provider (or its signing keys) could not be reached (D77)
+  SIGNUP_PAUSED: 503,      // temporary operator storage pressure; existing sign-ins stay available
   // hub-internal guard outcomes (reaper retries later; never sent to clients)
   BOOT_GRACE: 503,
   TUNNEL_DOWN: 503,
@@ -82,16 +85,20 @@ export const OUTBOX_KINDS = Object.freeze([
 export const RPC_METHODS = Object.freeze([
   'board_get_card', 'board_list_cards', 'board_ask_human', 'board_attach_evidence', 'board_complete',
   'board_release', 'board_declare_plan', 'board_check_overlap', 'board_recall', 'approval', 'team_context',
-  'approval_cancel', 'board_create_card', 'board_add_lesson',
+  'approval_cancel', 'board_create_card', 'board_add_lesson', 'runner_plan_status', 'board_read_packet', 'board_write_packet',
+  'board_send_message', 'board_list_messages', 'board_ack_message', 'runner_messages_received',
 ]);
 // RPC methods that are runner plumbing, not board-mcp tools.
-export const RUNNER_ONLY_RPC = Object.freeze(['team_context', 'approval_cancel']);
+export const RUNNER_ONLY_RPC = Object.freeze(['team_context', 'approval_cancel', 'runner_plan_status', 'runner_messages_received']);
+// Only the server may create this permission request after a declared plan.
+export const CODEX_PLAN_PERMISSION = 'Authorize Codex edits for this run';
 
 // board-mcp tools (Phase 1). `approval` is the --permission-prompt-tool target (mcp__board__approval).
 export const MCP_TOOLS = Object.freeze([
   'board_get_card', 'board_list_cards', 'board_update_status', 'board_append_progress', 'board_write_handover',
   'board_ask_human', 'board_comment', 'board_attach_evidence', 'board_complete', 'board_release',
-  'board_declare_plan', 'board_check_overlap', 'board_recall', 'approval', 'board_create_card', 'board_add_lesson',
+  'board_declare_plan', 'board_check_overlap', 'board_recall', 'approval', 'board_create_card', 'board_add_lesson', 'board_read_packet', 'board_write_packet',
+  'board_send_message', 'board_list_messages', 'board_ack_message',
 ]);
 
 // Least-privilege scope of each board-mcp tool (CONTRACT §7.3). Every tool is
@@ -104,9 +111,16 @@ export const TOOL_SCOPES = Object.freeze({
   'card:create_child': "create a todo child card of this run's card on the same board and repo; never dispatched, assigned or budgeted",
   'lesson:suggest': "append a lesson suggestion for this run's repo in the board's org; never read back to agents",
   'permission:ask': "ask this card's approvers for a tool permission; cannot grant one",
+  'message:read': "read this run's exact fenced task inbox and same-team/repository active peer identities; acknowledge only its current server connection's issued delivery",
+  'message:write': "post a bounded message on this run's own card to exact active same-team/repository recipient runs; never trigger dispatch or resume",
 });
 export const MCP_TOOL_SCOPES = Object.freeze({
   board_get_card: 'card:read',
+  board_read_packet: 'card:read',
+  board_write_packet: 'card:write',
+  board_send_message: 'message:write',
+  board_list_messages: 'message:read',
+  board_ack_message: 'message:read',
   board_list_cards: 'repo:read',
   board_update_status: 'card:write',
   board_append_progress: 'card:write',
@@ -201,6 +215,7 @@ export const SHAPES = Object.freeze({
     'card.upsert': { board_id: 'string', card: 'object' },
     'card.remove': { board_id: 'string', card_id: 'string' },
     'board.labels': { board_id: 'string', labels: 'array' },
+    'team.boards': { org_id: 'string', boards: 'array' },
     'lease.tick': { card_id: 'string', live: 'object', state_age_ms: 'int' },
     'event.append': { card_id: 'string', event: 'object' },
     'team.presence': { members: 'array' },
@@ -209,8 +224,8 @@ export const SHAPES = Object.freeze({
   },
   // runner → hub
   'runner→hub': {
-    hello: { protocol: 'int', device_id: 'string', runner_version: 'string', outbox_head_seq: 'int', runs: 'array', form_factor: 'string?', outbox_id: 'string?', outbox_acked_seq: 'int?' },
-    advertise: { repos: 'array' },
+    hello: { protocol: 'int', device_id: 'string', runner_version: 'string', outbox_head_seq: 'int', runs: 'array', form_factor: 'string?', outbox_id: 'string?', outbox_acked_seq: 'int?', ai: 'array?' },
+    advertise: { repos: 'array', ai: 'array?' },
     claim: { id: 'string', card_id: 'string', request_id: 'string', expected_fence: 'int' },
     decline: { card_id: 'string', request_id: 'string', reason: 'string?' },
     hb: { seq_hb: 'int', mono_ms: 'int', wall_ms: 'int', slept_ms: 'int', runs: 'array' },
@@ -312,6 +327,11 @@ export function validate(channel, msg) {
   if (!msg || typeof msg.type !== 'string' || !(msg.type in table)) return { code: 'VALIDATION', message: `unknown type ${msg?.type}` };
   const e = checkShape(table[msg.type], msg);
   if (e) return e;
+  if (channel === 'runner→hub' && ['hello', 'advertise'].includes(msg.type) && Object.hasOwn(msg, 'ai')) {
+    const error = aiListError(msg.ai);
+    if (error) return { code: 'VALIDATION', message: error };
+  }
+  if (channel === 'hub→runner' && msg.type === 'offer' && msg.ai != null && !AI_IDS.includes(msg.ai)) return { code: 'VALIDATION', message: 'unknown offer AI' };
   if (channel === 'runner→hub' && msg.type === 'presence') {
     if (msg.sessions.length > PRESENCE_MAX_SESSIONS) return { code: 'VALIDATION', message: `presence: over ${PRESENCE_MAX_SESSIONS} sessions` };
     for (const s of msg.sessions) {

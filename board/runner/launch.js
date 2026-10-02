@@ -13,6 +13,7 @@ export const BOARD_DIR = path.resolve(HERE, '..');
 export const onDisk = (p) => p.replace(/([\\/])app\.asar([\\/])/, '$1app.asar.unpacked$2');
 export const HOOK_SHIM = onDisk(path.join(HERE, 'hook-shim.js'));
 export const MCP_SERVER = onDisk(path.join(BOARD_DIR, 'mcp', 'server.js'));
+export const CODEX_MCP_SERVER = onDisk(path.join(BOARD_DIR, 'mcp', 'codex-run.js'));
 
 // CLI 2.1.285 has no TodoWrite in -p mode (the init tools list drops it): the
 // task list is TaskCreate/TaskUpdate/TaskList/TaskGet. `Task` is the subagent tool.
@@ -54,7 +55,6 @@ export const DENY_READ = Object.freeze([
 export const CACHE_WRITE = Object.freeze(['~/.npm', '~/.cache', '~/Library/Caches', '~/Library/pnpm', '~/.yarn']);
 
 export const DEFAULT_MAX_TURNS = 200;
-export const DEFAULT_BUDGET_USD = 5;
 
 // No secret is ever in the CLI env (D26): without CLAUDE_CODE_SUBPROCESS_ENV_SCRUB,
 // Bash sees the CLI's env. ANTHROPIC_API_KEY reaches the CLI through apiKeyHelper
@@ -81,27 +81,40 @@ function hookCmd(node, event, electron) {
  * boardHome: the runner's BOARD_HOME when it is not ~/.board (see boardHomeRules).
  * apiKeyFile: set when the member uses an API key; the CLI reads it via apiKeyHelper.
  */
-export function buildSettings({ worktree, tmpdir, node = process.execPath, repo = {}, boardHome = null, apiKeyFile = null, electron = underElectron() }) {
+// Local task permission levels (TASKS-CONTRACT §10). No level = the board profile.
+//   edits: Edit/Write auto-allowed · bash: sandboxed Bash and the git rules auto-allowed
+const LEVELS = Object.freeze({
+  plan: { mode: 'plan', edits: false, bash: false },
+  ask: { mode: 'default', edits: false, bash: false },
+  'auto-edits': { mode: 'acceptEdits', edits: true, bash: false },
+  auto: { mode: 'acceptEdits', edits: true, bash: true },
+});
+const READ_ALLOW = Object.freeze(['Read', 'Glob', 'Grep', ...TASK_TOOLS, 'Task', 'mcp__board']);
+
+export function buildSettings({ worktree, tmpdir, node = process.execPath, repo = {}, boardHome = null, apiKeyFile = null, extraDenyRead = [], extraDenyWrite = [], level = null, cacheWrite = CACHE_WRITE, electron = underElectron() }) {
   const hook = (event, timeout, matcher) => [{ ...(matcher ? { matcher } : {}), hooks: [{ type: 'command', command: hookCmd(node, event, electron), timeout }] }];
+  const lv = level ? LEVELS[level] ?? LEVELS.ask : null;
+  const bashAllow = [...GIT_ALLOW, ...(repo.bash_allow ?? []).map((c) => (c.startsWith('Bash(') ? c : `Bash(${c})`))];
   return {
     ...(apiKeyFile ? { apiKeyHelper: `/bin/cat ${shq(apiKeyFile)}` } : {}),
     permissions: {
-      defaultMode: 'acceptEdits',
+      defaultMode: lv?.mode ?? 'acceptEdits',
       // The worktree root is a working directory by settings, not --add-dir:
       // settings-file directories grant file access only, while --add-dir
       // also loads plugins/marketplaces from the (agent-editable) worktree's
       // .claude/settings.json (docs/waiting-inputs.md).
       additionalDirectories: [worktree],
-      allow: [...TOOL_ALLOW, ...GIT_ALLOW, ...(repo.bash_allow ?? []).map((c) => (c.startsWith('Bash(') ? c : `Bash(${c})`))],
+      allow: lv ? [...(lv.edits ? TOOL_ALLOW : READ_ALLOW), ...(lv.bash ? bashAllow : [])] : [...TOOL_ALLOW, ...bashAllow],
     },
     sandbox: {
       enabled: true,
       failIfUnavailable: true,
-      autoAllowBashIfSandboxed: true,
+      autoAllowBashIfSandboxed: lv ? lv.bash : true,
       allowUnsandboxedCommands: false,
       filesystem: {
-        allowWrite: [worktree, tmpdir, ...CACHE_WRITE, ...(repo.allow_write_extra ?? [])].filter(Boolean),
-        denyRead: [...DENY_READ, ...boardHomeRules(boardHome).denyRead],
+        allowWrite: [worktree, tmpdir, ...cacheWrite, ...(repo.allow_write_extra ?? [])].filter(Boolean),
+        denyRead: [...DENY_READ, ...boardHomeRules(boardHome).denyRead, ...extraDenyRead],
+        ...(extraDenyWrite.length ? { denyWrite: extraDenyWrite } : {}),
       },
       network: { allowedDomains: [...new Set(repo.allowed_domains ?? [])], strictAllowlist: true },
     },
@@ -150,6 +163,16 @@ export function buildEnv(parentEnv, { runDir, socket, supervisorPid, supervisorL
   return env;
 }
 
+/** Subscription auth belongs to the CLI; commands use their own empty env. */
+export function buildCodexEnv(parentEnv, cacheDir) {
+  const env = {};
+  for (const k of ENV_KEEP.concat('CODEX_HOME')) if (parentEnv[k]) env[k] = parentEnv[k];
+  for (const [k, v] of Object.entries(parentEnv)) if (/^LC_[A-Z_]+$/.test(k) && v) env[k] = v;
+  return { ...env, TERM: 'dumb', SHELL: '/bin/sh', TMPDIR: path.join(cacheDir, 'tmp'),
+    npm_config_cache: path.join(cacheDir, 'npm'), XDG_CACHE_HOME: cacheDir,
+    PIP_CACHE_DIR: path.join(cacheDir, 'pip'), UV_CACHE_DIR: path.join(cacheDir, 'uv') };
+}
+
 // Plexiform's home, when Plexiform is installed on this machine.
 export function buddyHomeOf(env) {
   return env.CLAUDE_TRAFFIC_LIGHT_HOME || (env.HOME ? path.join(env.HOME, '.claude-traffic-light') : null);
@@ -179,8 +202,11 @@ export function recordBuddyLaunch(buddyHome, { cwd, now = Date.now(), claimWindo
   }
 }
 
+// Modes a caller may pick; bypassPermissions is never one of them.
+const PERMISSION_MODES = new Set(['acceptEdits', 'default', 'plan']);
+
 /** argv after the binary. Resume keeps every isolation flag (spike 5a). */
-export function buildArgv({ runDir, sessionId, resume = false, budgetUsd, maxTurns, systemPrompt, model, boardHome = null }) {
+export function buildArgv({ runDir, sessionId, resume = false, budgetUsd, maxTurns, systemPrompt, model, boardHome = null, permissionMode = 'acceptEdits', extraDisallowed = [] }) {
   const argv = ['-p',
     '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
     ...(resume ? ['--resume', sessionId] : ['--session-id', sessionId]),
@@ -188,10 +214,11 @@ export function buildArgv({ runDir, sessionId, resume = false, budgetUsd, maxTur
     '--settings', path.join(runDir, 'settings.json'),
     '--strict-mcp-config', '--mcp-config', path.join(runDir, 'mcp.json'),
     '--tools', TOOLS,
-    '--disallowedTools', ...DISALLOWED_TOOLS, ...boardHomeRules(boardHome).disallowed,
-    '--permission-mode', 'acceptEdits',
+    '--disallowedTools', ...DISALLOWED_TOOLS, ...boardHomeRules(boardHome).disallowed, ...extraDisallowed,
+    '--permission-mode', PERMISSION_MODES.has(permissionMode) ? permissionMode : 'acceptEdits',
     '--permission-prompt-tool', 'mcp__board__approval',
-    '--max-budget-usd', String(budgetUsd ?? DEFAULT_BUDGET_USD),
+    // No budget = no flag: a "No budget" run never stops on cost (D-4).
+    ...(Number.isFinite(budgetUsd) && budgetUsd > 0 ? ['--max-budget-usd', String(budgetUsd)] : []),
     '--max-turns', String(maxTurns ?? DEFAULT_MAX_TURNS),
     '--append-system-prompt', systemPrompt ?? '',
   ];
@@ -201,15 +228,34 @@ export function buildArgv({ runDir, sessionId, resume = false, budgetUsd, maxTur
 
 // Trusted repo instructions: CLAUDE.md + .claude/rules/*.md from the member's
 // own checkout (policy local_path), never from the agent-editable worktree.
-export function trustedInstructions(localPath, cap = 20000) {
+// Only regular files that really live inside the checkout: no symlink (file or
+// rules dir), opened O_NOFOLLOW, realpath checked against the checkout's.
+export function trustedInstructions(localPath, cap = 20000, provider = 'claude') {
   if (!localPath) return '';
+  let root;
+  try { root = fs.realpathSync(localPath); } catch { return ''; }
+  const inside = (p) => p.startsWith(`${root}${path.sep}`);
   const parts = [];
   const add = (f) => {
-    try { parts.push(`--- ${path.relative(localPath, f)} ---\n${fs.readFileSync(f, 'utf8')}`); } catch { /* absent */ }
+    let fd;
+    try {
+      const st = fs.lstatSync(f);
+      if (!st.isFile() || !inside(fs.realpathSync(f))) return;
+      fd = fs.openSync(f, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+      if (!fs.fstatSync(fd).isFile()) return;
+      parts.push(`--- ${path.relative(localPath, f)} ---\n${fs.readFileSync(fd, 'utf8').slice(0, cap)}`);
+    } catch { /* absent or refused */ } finally { if (fd != null) fs.closeSync(fd); }
   };
+  if (provider === 'codex') {
+    add(path.join(localPath, 'AGENTS.md'));
+    return parts.join('\n\n').slice(0, cap);
+  }
   add(path.join(localPath, 'CLAUDE.md'));
   const rules = path.join(localPath, '.claude', 'rules');
-  try { for (const f of fs.readdirSync(rules).filter((n) => n.endsWith('.md')).sort()) add(path.join(rules, f)); } catch { /* none */ }
+  try {
+    const dirOk = [path.join(localPath, '.claude'), rules].every((d) => fs.lstatSync(d).isDirectory());
+    if (dirOk) for (const f of fs.readdirSync(rules).filter((n) => n.endsWith('.md')).sort()) add(path.join(rules, f));
+  } catch { /* none */ }
   const s = parts.join('\n\n');
   return s.length > cap ? s.slice(0, cap) : s;
 }

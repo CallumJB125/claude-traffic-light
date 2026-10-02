@@ -172,13 +172,18 @@
 //   // through PATCH (1–32 names, ^[A-Za-z][A-Za-z0-9_-]{0,63}$). Undeclared: any such name.
 //   configKeys: ['default_board_id'],
 //
-//   // PLANNED, built in Sentry slice S-A (CONTRACT D42 addendum "the Sentry
-//   // connector"); defineConnector does not check it yet, so declaring it
-//   // today does nothing. A token connector that takes webhooks: admins (only)
-//   // get the connection's webhook_url in GET /api/integrations and in the
-//   // token connect answer, to paste into the provider. The URL is not a
-//   // secret (members see the connection id); verify() is the gate.
+//   // Optional (CONTRACT D42 addendum "the Sentry connector"), a token
+//   // connector that takes webhooks only: admins (only) get the connection's
+//   // webhook_url in GET /api/integrations and in the token connect answer,
+//   // to paste into the provider. The URL is not a secret (members see the
+//   // connection id); verify() is the gate.
 //   showsWebhookUrl: true,
+//
+//   // Optional, an integer 1–10000 (same addendum): createCard also spends
+//   // integration_card_day_conn, this many new cards per day per connection
+//   // (rateLimits.integration_card_day_conn wins when a hub sets it). Without
+//   // it the rule is never spent.
+//   dailyCardCap: 100,
 //
 //   // PLANNED, built in S-C3 (CONTRACT D99); not checked or honoured yet.
 //   // The kinds s.signal(kind, {card_id}) may raise inside act() (a subset of
@@ -199,6 +204,9 @@
 //   // only; never a member id). actAs for a linked member who can no longer act
 //   // throws { code: 'ACTOR_UNAVAILABLE', scope: 'member' } ('connection' for
 //   // created_by): answer the user with fixed text (D42 addendum C2).
+//   // ctx.lastCreatedCard() → {id, board_id, archived} | null: the card of this
+//   // connection's newest createCard request (integration_requests), so always
+//   // one this connection made; never a person's or another connection's.
 //   // ctx.hubUrl → the hub's https origin (BOARD_PUBLIC_URL, read at boot) | null:
 //   // the only base for a link to the hub (never config, provider.hub_url or a payload).
 //   // ctx.connection.settings.provider → what the provider said at connect time
@@ -215,6 +223,7 @@ const PREPARE_KEY_RE = /^[a-z][a-z0-9_]{0,39}$/;
 const PREPARE_INPUTS_MAX = 8;
 const START_INPUTS_MAX = 4;
 const CONFIG_KEYS_MAX = 32;
+const DAILY_CARD_CAP_MAX = 10_000;
 // A settings.config key an admin may write (D42 addendum C1): never a path, a
 // prototype key or the name of another settings namespace, in any case.
 export const CONFIG_KEY_RE = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
@@ -299,6 +308,12 @@ export function defineConnector(spec) {
     errs.push('ingressCidrs lists CIDR ranges (IPv4 /16 or narrower, IPv6 /32 or narrower), for a connector that takes webhooks');
   }
   if (spec?.workspaceUnique !== undefined && typeof spec.workspaceUnique !== 'boolean') errs.push('workspaceUnique is a boolean');
+  if (spec?.showsWebhookUrl !== undefined && (typeof spec.showsWebhookUrl !== 'boolean' || (spec.showsWebhookUrl && (spec.connect?.kind !== 'token' || !spec.handleWebhook)))) {
+    errs.push('showsWebhookUrl is a boolean, true only for a token connector that takes webhooks');
+  }
+  if (spec?.dailyCardCap !== undefined && !(Number.isInteger(spec.dailyCardCap) && spec.dailyCardCap >= 1 && spec.dailyCardCap <= DAILY_CARD_CAP_MAX)) {
+    errs.push(`dailyCardCap is an integer 1–${DAILY_CARD_CAP_MAX} (new cards per day per connection)`);
+  }
   if (spec?.configKeys !== undefined) {
     const k = spec.configKeys;
     if (!Array.isArray(k) || !k.length || k.length > CONFIG_KEYS_MAX || new Set(k).size !== k.length || !k.every(configKeyOk)) {

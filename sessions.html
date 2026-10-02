@@ -1,0 +1,10 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; base-uri 'none'; form-action 'none'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sessions</title><link rel="stylesheet" href="tokens.css"><link rel="stylesheet" href="sessions.css"></head>
+<body><main><header><div><h1>Sessions</h1><p>AI activity reported on this computer.</p></div><button id="refresh" type="button">Refresh</button></header>
+<section class="activity" aria-labelledby="activity-title"><h2 id="activity-title">Codex activity</h2><p id="activity-status">Checking local activity…</p><button id="settings" type="button">Activity settings</button></section>
+<p id="status" role="status" aria-live="polite">Loading local sessions…</p><div id="content"></div>
+<p class="muted disclosure">Recent means a local report arrived within 90 seconds. Reports do not verify completion, and an idle or silent session may become stale. Cloud sessions need a supported connection to report here. Private chats are not read.</p>
+</main><script src="sessions.js"></script></body></html>

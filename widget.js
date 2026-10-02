@@ -145,7 +145,8 @@ function applyStatus(data) {
     text += ` · ${n}`;
   }
   // Usage history: today against your own usual, when it is clearly above.
-  tooltip.textContent = text + suffix + (data.paceLine ? ` — ${data.paceLine}` : '');
+  const reported = !['manual', 'preview', 'travel'].includes(data.reason) ? data.providerStatus?.headline : null;
+  tooltip.textContent = (reported ? `${reported} · Rule “${text}”` : text) + suffix + (data.paceLine ? ` — ${data.paceLine}` : '');
 }
 
 // In-app update row. Text only (textContent): a hub name is not ours.

@@ -5,7 +5,7 @@ import { alertsForViewer } from './view.js';
 export const CHIPS = [
   { id: 'mine', label: 'Mine', hint: 'Cards you own, run or are assigned' },
   { id: 'needs', label: 'Needs you', hint: 'Cards on your attention strip' },
-  { id: 'working', label: 'Claude working', hint: 'A Claude is running it right now' },
+  { id: 'working', label: 'AI working', hint: 'An AI agent is running it right now' },
   { id: 'blocked', label: 'Blocked', hint: 'Waiting for an answer or approval' },
 ];
 const CHIP_IDS = new Set(CHIPS.map((c) => c.id));

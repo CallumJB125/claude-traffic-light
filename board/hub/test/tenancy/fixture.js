@@ -72,6 +72,9 @@ export async function tenancy({ config = {}, ...opts } = {}) {
   if (cb.status !== 200 || ca.status !== 200) throw new Error(`card create: ${cb.text} ${ca.text}`);
   B.card = cb.body.card.id;
   A.card = ca.body.card.id;
+  const wf = await as(users.ub, 'POST', '/api/workflows', { request_id: randomUUID(), definition: { name: `${MARK} workflow`, description: `${MARK} instructions`, steps: [{ title: `${MARK} step`, body: `${MARK} brief`, acceptance: '', plan_approval: true }] } });
+  if (wf.status !== 200) throw new Error(`workflow: ${wf.text}`);
+  B.workflow = wf.body.workflow.id; B.workflowHash = wf.body.workflow.content_hash;
   await as(users.ub, 'POST', `/api/cards/${B.card}/comments`, { request_id: randomUUID(), body: `${MARK} comment` });
   B.label = `${MARK}-label`;
   const lb = await as(users.ub, 'POST', `/api/boards/${B.board}/labels`, { request_id: randomUUID(), name: B.label, color: 'red' });
@@ -108,6 +111,29 @@ export async function tenancy({ config = {}, ...opts } = {}) {
   B.enrollment = eb.body.enrollment_id;
   B.runnerToken = eb.body.runner_token;
 
+  // The client boundary is separate from all ordinary memberships.
+  await user('bguest', 'client@beta.test');
+  db.insert('client_workspaces', { org_id: B.team, created_by_user: users.ub.id, created_at: now });
+  B.clientProject = randomUUID();
+  db.insert('client_projects', { id: B.clientProject, workspace_id: B.team, board_id: B.board, name: `${MARK} project`, created_at: now });
+  B.clientGuest = randomUUID();
+  db.insert('client_guests', { id: B.clientGuest, workspace_id: B.team, user_id: users.bguest.id, invited_by: B.owner, joined_at: now });
+  db.insert('client_grants', { guest_id: B.clientGuest, project_id: B.clientProject, scopes: JSON.stringify(['status.read']) });
+  B.clientItem = randomUUID();
+  db.insert('client_items', { id: B.clientItem, project_id: B.clientProject, card_id: B.card, title: `${MARK} published`, status: 'todo', published_by: B.owner, published_at: now, updated_at: now });
+  B.clientArtifact = randomUUID();
+  db.insert('client_artifact_versions', { id: B.clientArtifact, item_id: B.clientItem, version_number: 1, name: `${MARK}.txt`, mime: 'text/plain', byte_length: 1, sha256: 'a'.repeat(64), created_by: B.owner, created_at: now, request_id: 'beta-client-artifact' });
+  B.clientApproval = randomUUID();
+  db.insert('client_approval_requests', { id: B.clientApproval, item_id: B.clientItem, artifact_version_id: B.clientArtifact, content_hash: 'a'.repeat(64), requested_by: B.owner, requested_at: now, request_id: 'beta-client-approval' });
+  db.insert('client_approval_recipients', { approval_id: B.clientApproval, guest_id: B.clientGuest });
+  db.insert('client_feedback_intake', { project_id: B.clientProject, enabled: true, delegate_member_id: B.owner, configured_at: now });
+  B.clientFeedback = randomUUID();
+  db.insert('client_feedback', { id: B.clientFeedback, item_id: B.clientItem, guest_id: B.clientGuest, delegate_member_id: B.owner, card_id: B.card, request_id: 'beta-feedback', message: `${MARK} client message`, created_at: now });
+  db.insert('client_delivery_updates', { id: randomUUID(), item_id: B.clientItem, title: `${MARK} published`, summary: `${MARK} shared history`, status: 'todo', created_at: now });
+  const clientInvite = await as(users.ub, 'POST', `/api/teams/${B.team}/client-invites`, { email: 'pending-client@beta.test', grants: [{ project_id: B.clientProject, scopes: ['status.read'] }] });
+  if (clientInvite.status !== 200) throw new Error(`client invite: ${clientInvite.text}`);
+  B.clientInvite = clientInvite.body.invite.id;
+
   /** Everything team B owns, as one string: equal before and after = untouched. */
   function snapshotB() {
     const q = (sql, ...a) => JSON.stringify(db.all(sql, ...a));
@@ -117,6 +143,21 @@ export async function tenancy({ config = {}, ...opts } = {}) {
       q('SELECT id, org_id, role, removed_at, display_name FROM members WHERE org_id = ?', B.team),
       q('SELECT c.* FROM cards c JOIN boards b ON b.id = c.board_id WHERE b.org_id = ?', B.team),
       q('SELECT * FROM comments WHERE card_id = ?', B.card),
+      q('SELECT * FROM workflow_recipes WHERE org_id = ?', B.team),
+      q('SELECT v.* FROM workflow_versions v JOIN workflow_recipes r ON r.id = v.recipe_id WHERE r.org_id = ?', B.team),
+      q('SELECT i.* FROM workflow_instances i JOIN workflow_recipes r ON r.id = i.recipe_id WHERE r.org_id = ?', B.team),
+      q('SELECT s.* FROM workflow_step_cards s JOIN workflow_instances i ON i.id = s.instance_id JOIN workflow_recipes r ON r.id = i.recipe_id WHERE r.org_id = ?', B.team),
+      q('SELECT * FROM workflow_execution_plans WHERE org_id=?',B.team),
+      q('SELECT s.* FROM workflow_execution_plan_steps s JOIN workflow_execution_plans p ON p.id=s.plan_id WHERE p.org_id=?',B.team),
+      q('SELECT * FROM workflow_control_previews WHERE org_id=?',B.team),
+      q('SELECT s.* FROM workflow_control_preview_steps s JOIN workflow_control_previews p ON p.id=s.preview_id WHERE p.org_id=?',B.team),
+      q('SELECT * FROM workflow_executions WHERE org_id=?',B.team),
+      q('SELECT s.* FROM workflow_execution_steps s JOIN workflow_executions e ON e.id=s.execution_id WHERE e.org_id=?',B.team),
+      q('SELECT a.* FROM workflow_execution_authorizations a JOIN workflow_executions e ON e.id=a.execution_id WHERE e.org_id=?',B.team),
+      q('SELECT a.* FROM workflow_execution_attempts a JOIN workflow_executions e ON e.id=a.execution_id WHERE e.org_id=?',B.team),
+      q('SELECT m.* FROM workflow_owned_intents m JOIN cards c ON c.id=m.card_id JOIN boards b ON b.id=c.board_id WHERE b.org_id=?',B.team),
+      q('SELECT r.* FROM workflow_execution_receipts r JOIN workflow_executions e ON e.id=r.execution_id WHERE e.org_id=?',B.team),
+      q('SELECT p.* FROM workflow_execution_proofs p JOIN workflow_execution_attempts a ON a.id=p.attempt_id JOIN workflow_executions e ON e.id=a.execution_id WHERE e.org_id=?',B.team),
       q('SELECT * FROM permission_requests WHERE card_id = ?', B.card),
       q('SELECT * FROM asks WHERE card_id = ?', B.card),
       q('SELECT * FROM devices WHERE member_id IN (SELECT id FROM members WHERE org_id = ?)', B.team),
@@ -128,6 +169,19 @@ export async function tenancy({ config = {}, ...opts } = {}) {
       q('SELECT * FROM external_identities WHERE member_id IN (SELECT id FROM members WHERE org_id = ?)', B.team),
       q('SELECT * FROM runner_enrollments WHERE org_id = ?', B.team),
       q('SELECT * FROM board_labels WHERE board_id = ?', B.board),
+      q('SELECT * FROM client_workspaces WHERE org_id = ?', B.team),
+      q('SELECT * FROM client_projects WHERE workspace_id = ?', B.team),
+      q('SELECT * FROM client_guests WHERE workspace_id = ?', B.team),
+      q('SELECT * FROM client_grants WHERE guest_id IN (SELECT id FROM client_guests WHERE workspace_id = ?)', B.team),
+      q('SELECT * FROM client_invites WHERE workspace_id = ?', B.team),
+      q('SELECT * FROM client_items WHERE project_id = ?', B.clientProject),
+      q('SELECT * FROM client_artifact_versions WHERE item_id = ?', B.clientItem),
+      q('SELECT * FROM client_approval_requests WHERE item_id = ?', B.clientItem),
+      q('SELECT * FROM client_approval_recipients WHERE approval_id = ?', B.clientApproval),
+      q('SELECT * FROM client_approval_decisions WHERE approval_id = ?', B.clientApproval),
+      q('SELECT * FROM client_feedback_intake WHERE project_id = ?', B.clientProject),
+      q('SELECT * FROM client_feedback WHERE item_id = ?', B.clientItem),
+      q('SELECT * FROM client_delivery_updates WHERE item_id = ?', B.clientItem),
     ].join('\n');
   }
 

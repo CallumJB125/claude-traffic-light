@@ -24,19 +24,34 @@ import { Accounts } from './identity/accounts.js';
 import { createMailer } from './identity/mailer.js';
 import { Teams } from './identity/teams.js';
 import { Invites } from './identity/invites.js';
+import { Clients } from './identity/clients.js';
+import { ClientArtifacts } from './identity/client-artifacts.js';
+import { ClientFeedback } from './identity/client-feedback.js';
 import { OAuth } from './identity/oauth.js';
 import { WebOAuth } from './identity/oauth-web.js';
 import { Enrolments } from './identity/enrolments.js';
 import { oauthProviders } from './config.js';
+import { RemoteAuthority } from './remote/authority.js';
+import { StorageWatch } from './storage-watch.js';
 
 export function createApp(config, { clock = defaultClock, log = createLogger({ level: config.logLevel }), github = null, fetchImpl = globalThis.fetch, timers = true, mailer } = {}) { // privacy-flow: hub-server
   const db = openDb(config.dbPath, { now: () => new Date(clock.wall()).toISOString() });
+  try {
+    return buildApp(config, { db, clock, log, github, fetchImpl, timers, mailer });
+  } catch (error) {
+    // Construction never hands the caller an app to close on failure.
+    try { db.close(); } catch { /* Preserve the original startup error. */ }
+    throw error;
+  }
+}
+
+function buildApp(config, { db, clock, log, github, fetchImpl, timers, mailer }) {
   const gh = github ?? (config.githubToken ? createGitHub({ token: config.githubToken, api: config.githubApi, fetchImpl }) : noGitHub);
   if (config.auth !== 'local' && db.meta('local_member')) {
-    db.close();
     throw new Error('this database belongs to the desktop app (BOARD_AUTH=local)');
   }
   const hub = new Hub({ db, config, clock, log, github: gh });
+  hub.storage = new StorageWatch(hub);
   // Dev login needs this per-process secret (header Board-Dev-Secret), printed
   // at startup: a loopback bind alone does not prove who is asking.
   hub.devLoginSecret = config.auth === 'dev' ? (config.devLoginSecret ?? randomBytes(18).toString('base64url')) : null;
@@ -52,9 +67,13 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
   hub.accounts = config.auth === 'accounts' ? new Accounts(hub, { mailer: mailer !== undefined ? mailer : createMailer(config, { fetchImpl, now: () => new Date(clock.wall()) }) }) : null;
   hub.teams = hub.accounts ? new Teams(hub, { accounts: hub.accounts }) : null;
   hub.invites = hub.accounts ? new Invites(hub, { accounts: hub.accounts, teams: hub.teams }) : null;
+  hub.clients = hub.accounts ? new Clients(hub) : null;
+  hub.clientArtifacts = hub.clients ? new ClientArtifacts(hub) : null;
+  hub.clientFeedback = hub.clients ? new ClientFeedback(hub) : null;
   hub.oauth = hub.accounts ? new OAuth(hub, { accounts: hub.accounts, fetchImpl }) : null;
   hub.oauthWeb = hub.oauth ? new WebOAuth(hub) : null;
   hub.enrolments = hub.accounts ? new Enrolments(hub, { accounts: hub.accounts }) : null;
+  hub.remoteAuthority = hub.accounts ? new RemoteAuthority(hub) : null;
   // Deleting an account or a team needs a step-up: an email code (a mailer)
   // or an OAuth re-authentication (a configured provider). Without either,
   // say so, and how an operator erases.
@@ -120,7 +139,7 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
   }
 
   return {
-    hub, api, server, db, config, routes: handler.routes, devLoginSecret: hub.devLoginSecret, integrations, bus,
+    hub, api, server, db, config, routes: handler.routes, remoteState: handler.remoteState, devLoginSecret: hub.devLoginSecret, integrations, bus,
     listen(port = config.port, host = config.bind) {
       return new Promise((resolve, reject) => {
         server.once('error', reject);
@@ -138,6 +157,7 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
     async close({ graceMs = config.shutdownGraceMs ?? 5000 } = {}) {
       if (closed) return;
       closed = true;
+      api.workflowExecutor.close();
       bus.stop();
       for (const i of intervals) clearInterval(i);
       const done = new Promise((resolve) => server.close(() => resolve()));

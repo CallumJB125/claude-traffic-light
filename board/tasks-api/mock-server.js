@@ -975,7 +975,11 @@ export async function startMockServer(opts = {}) {
       createCache.set(requestId, { id: task.id, hash, at: now() });
       return { id: task.id, duplicate: false };
     },
-    listTasks: (p) => [...tasks.values()].filter((t) => p.includeDone !== false || t.state !== 'done').map(view),
+    listTasks: (p) => {
+      const all = [...tasks.values()].filter((t) => p.includeDone !== false || t.state !== 'done');
+      const from = p.after ? all.findIndex((t) => t.id === p.after) + 1 : 0;
+      return all.slice(from, from + (p.limit ?? 200)).map(view);
+    },
     getTask: ({ id }) => {
       const t = tasks.get(id);
       if (!t) throw new ApiError('NOT_FOUND', `no task ${id}`);

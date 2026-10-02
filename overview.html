@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; base-uri 'none'; form-action 'none'">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Overview</title>
+  <link rel="stylesheet" href="tokens.css">
+  <link rel="stylesheet" href="overview.css">
+</head>
+<body>
+<main>
+  <header class="page-header">
+    <div><p class="eyebrow">Your AI work</p><h1>Overview</h1><p class="intro">Sessions, tasks and agents across connected tools and devices.</p></div>
+    <button id="refresh" type="button">Refresh</button>
+  </header>
+  <p id="status" class="snapshot-status" role="status" aria-live="polite">Checking reported activity…</p>
+  <section id="summary" class="summary" aria-label="Reported activity summary"></section>
+  <section class="filters" aria-label="Filter reported work">
+    <label>Device<select id="device-filter"><option value="">All devices</option></select></label>
+    <label>Board<select id="board-filter"><option value="">All boards</option></select></label>
+    <label>Provider<select id="provider-filter"><option value="">All providers</option></select></label>
+    <label>Status<select id="status-filter"><option value="">All statuses</option></select></label>
+    <button id="clear-filters" type="button">Clear filters</button>
+  </section>
+  <section class="work" aria-labelledby="work-title">
+    <div class="section-header"><h2 id="work-title">Reported work</h2><p id="result-count" class="muted"></p></div>
+    <div id="content" aria-busy="true"></div>
+  </section>
+  <section class="connections" aria-labelledby="connections-title"><h2 id="connections-title">Reported providers</h2><div id="connections"></div></section>
+  <p class="disclosure">Activity comes from supported reports. A recent report does not verify that a task succeeded. Silent sessions become stale; missing task or child-agent metadata stays unknown. Private chats are not read.</p>
+</main>
+<script src="overview.js"></script>
+</body>
+</html>

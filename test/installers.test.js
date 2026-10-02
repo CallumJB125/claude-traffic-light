@@ -23,10 +23,14 @@ test('installer names say the brand, and so do productName and appId', () => {
   assert.match(config.dmg.title, new RegExp(`^${Brand.name} `));
 });
 
-test('every platform builds what it can update from, and nothing that cannot', () => {
+test('every platform builds its update target; Windows portable has a distinct manual-download name', () => {
   assert.deepEqual(config.mac.target.map((t) => t.target), ['dmg', 'zip']);
   assert.deepEqual(config.mac.target[0].arch, ['arm64', 'x64']);
-  assert.deepEqual(config.win.target.map((t) => t.target), ['nsis']);
+  assert.deepEqual(config.win.target.map((t) => t.target), ['nsis', 'portable']);
+  assert.ok(config.win.target.every(t => t.arch.length === 1 && t.arch[0] === 'x64'));
+  assert.equal(config.portable.artifactName, `${Brand.name}-\${version}-win-\${arch}-portable.exe`);
+  assert.notEqual(config.portable.artifactName, config.nsis.artifactName);
+  assert.equal(config.nsis.deleteAppDataOnUninstall, false);
   assert.deepEqual(config.linux.target.map((t) => t.target), ['AppImage', 'deb']);
   assert.equal(config.publish[0].provider, 'generic');
   assert.match(config.publish[0].url, /^https:\/\//);
@@ -247,7 +251,7 @@ test('uninstall: NSIS and the .deb take the hooks out before the binary goes, an
   assert.equal(config.nsis.include, 'build/installer.nsh');
   const nsh = fs.readFileSync(path.join(__dirname, '..', config.nsis.include), 'utf8');
   // customUnInstall runs after $INSTDIR is deleted; customRemoveFiles runs before.
-  assert.match(nsh, /!macro customRemoveFiles[\s\S]*\$\{ifNot\} \$\{isUpdated\}\s*[\s\S]*--uninstall-hooks[\s\S]*RMDir \/r \$INSTDIR\s*!macroend/);
+  assert.match(nsh, /!macro customRemoveFiles[\s\S]*\$\{ifNot\} \$\{isUpdated\}\s*[\s\S]*--uninstall-hooks[\s\S]*RMDir \/r \$INSTDIR[\s\S]*!macroend/);
   assert.ok(!/!macro customUnInstall\b/.test(nsh));
   const at = config.deb.fpm.indexOf('--before-remove');
   assert.ok(at >= 0);
@@ -305,12 +309,13 @@ test('release.yml: tags and manual runs only, nothing signed, no branch conditio
   assert.match(jobs.build, /node --test --test-force-exit --test-timeout=120000 test\/\*\.test\.js test\/adapters\/\*\.test\.js/);
   assert.match(jobs.build, /node --test --test-force-exit --test-timeout=120000 remote\/test\//);
   assert.ok(!/npm test/.test(jobs.build));
-  // macOS-first: Windows only reports; Mac and Linux block for tags and candidates
-  const coe = /name: Unit tests\n(?:.*\n)*? {8}continue-on-error: (.*)\n/.exec(jobs.build)[1];
-  assert.equal(coe, "${{ matrix.platform == 'win' }}");
+  // Every platform blocks staging; artifacts/evidence remain for debugging.
+  assert.ok(!/continue-on-error:/.test(jobs.build));
   // No dispatch exception: a dry or beta candidate must not hide a Mac/Linux failure
   assert.deepEqual([...jobs.build.matchAll(/platform: (\w+)/g)].map((m) => m[1]), ['mac', 'win', 'linux']);
-  assert.equal((coe.match(/matrix\.platform == '(\w+)'/g) || []).join(), "matrix.platform == 'win'");
+  assert.match(jobs.build, /name: Windows installer lifecycle/);
+  assert.match(jobs.build, /run: node scripts\/windows-install-smoke\.js/);
+  assert.match(jobs.build, /node --test --test-force-exit --test-timeout=120000 '\*\/test\/\*\*\/\*\.test\.js'/, 'the board authority suite is mandatory too');
   assert.match(jobs.build, /dist\/\*\.yml/, 'beta*.yml as well as latest*.yml');
   // N2: both stage jobs read the repo variable and drop Windows before the checksums and every upload
   for (const j of ['stage', 'stage-beta']) {
@@ -351,9 +356,37 @@ test('promotion input validation accepts an omitted rollback list and rejects ma
   }
 });
 
+// Local reusable workflows come from the same reviewed workflow commit.
+// They must be real, flat files in the fixed workflow directory, callable
+// by a workflow; external actions still require an immutable commit SHA.
+function assertWorkflowUsePinned(use, caller) {
+  const label = `${caller}: ${use}`;
+  if (!use.startsWith('./')) {
+    assert.match(use, /@[0-9a-f]{40}$/, label);
+    return;
+  }
+  assert.match(use, /^\.\/\.github\/workflows\/[A-Za-z0-9][A-Za-z0-9_-]*\.ya?ml$/, label);
+  const relative = use.slice(2);
+  assert.ok(fs.lstatSync(path.join(ROOT, relative)).isFile(), label);
+  const trigger = require('js-yaml').load(readText(relative)).on;
+  assert.ok(trigger && typeof trigger === 'object' && Object.hasOwn(trigger, 'workflow_call'), label);
+}
+
+test('workflow pin policy allows checked local reusable files and refuses paths and mutable external actions', () => {
+  const sha = '34e114876b0b11c390a56381ad16ebd13914f8d5';
+  assertWorkflowUsePinned(`actions/checkout@${sha}`, 'synthetic');
+  assertWorkflowUsePinned('./.github/workflows/windows-native.yml', 'synthetic');
+  for (const use of [
+    'actions/checkout@main', 'actions/checkout@v4', 'actions/checkout',
+    './.github/workflows/../windows-native.yml', './scripts/build.yml',
+    './.github/workflows/windows-native.yml@main', './.github/workflows/missing.yml',
+    './.github/workflows/release-promote.yml', './.github/workflows/release.yml',
+  ]) assert.throws(() => assertWorkflowUsePinned(use, 'synthetic'), undefined, use);
+});
+
 // M4 / #6 (reviews): workflow inputs reach the shell only through env.
 test('workflows: inputs never interpolated into a run script; every action pinned to a commit', () => {
-  for (const f of ['.github/workflows/release.yml', '.github/workflows/release-promote.yml']) {
+  for (const f of ['.github/workflows/release.yml', '.github/workflows/release-promote.yml', '.github/workflows/windows-native.yml']) {
     const yml = readText(f);
     for (const line of yml.split('\n')) {
       if (!/\$\{\{[^}]*inputs\./.test(line)) continue;
@@ -363,20 +396,27 @@ test('workflows: inputs never interpolated into a run script; every action pinne
     for (const [name, body] of Object.entries(jobsOf(yml))) {
       if (/SIGNING_KEY/.test(body)) assert.match(body, /\n {4}environment: release\n/, `${f} ${name}`);
     }
-    for (const m of yml.matchAll(/uses: (\S+)/g)) assert.match(m[1], /@[0-9a-f]{40}$/, `${f}: ${m[1]}`);
+    for (const m of yml.matchAll(/uses: (\S+)/g)) assertWorkflowUsePinned(m[1], f);
   }
 });
 
-// M9 (code review): the copied NSIS block must stay electron-builder's own.
-test('installer.nsh: the copied removal block is exactly electron-builder\'s default for the pinned version', () => {
+// M9: preserve all pinned default commands; isolate only the removal error flag.
+test('installer.nsh: the removal block retains pinned defaults plus exactly one isolated removal error reset', () => {
   const ours = readText('build/installer.nsh');
   const tpl = fs.readFileSync(require.resolve('app-builder-lib/templates/nsis/uninstaller.nsh'), 'utf8');
   const norm = (s) => s.split('\n').map((l) => l.trim()).filter(Boolean).join('\n');
   const def = /!ifmacrodef customRemoveFiles\s*\n\s*!insertmacro customRemoveFiles\s*\n\s*!else\n([\s\S]*?)\n\s*!endif/.exec(tpl);
   assert.ok(def, 'electron-builder still has a default customRemoveFiles block');
-  const copy = /; ---- electron-builder's default block from here ----\n([\s\S]*?)!macroend/.exec(ours);
+  const start = "; ---- electron-builder's default block from here ----";
+  const end = "; ---- electron-builder's default block ends here ----";
+  assert.equal(ours.split(start).length, 2, 'one complete copied block starts');
+  assert.equal(ours.split(end).length, 2, 'one complete copied block ends');
+  const copy = /; ---- electron-builder's default block from here ----\n([\s\S]*?)\n\s*; ---- electron-builder's default block ends here ----/.exec(ours);
   assert.ok(copy);
-  assert.equal(norm(copy[1]), norm(def[1]));
+  const removalBoundary = '  ; Atomic enumeration ends with FindNext EOF setting the error flag.\n  ; The refusal below must observe this removal, not that earlier EOF.\n  ClearErrors\n';
+  assert.equal(copy[1].split(removalBoundary).length, 2, 'one exact removal error reset');
+  assert.ok(copy[1].includes(removalBoundary + '  RMDir /r $INSTDIR'));
+  assert.equal(norm(copy[1].replace(removalBoundary, '')), norm(def[1]));
   assert.match(ours, /nsExec::Exec \/TIMEOUT=\d+ '"\$INSTDIR\\\$\{APP_EXECUTABLE_FILENAME\}" --uninstall-hooks'/);
   assert.ok(!/ExecWait/.test(ours.replace(/^;.*$/gm, '')), 'no unbounded wait');
 });
@@ -510,12 +550,23 @@ test('release.yml passes test files, never a bare directory, to node --test', ()
   assert.match(yml, /remote\/test\/\*\.test\.js/);
 });
 
-// A failing Windows smoke test must not fail the Windows job: stage needs every
-// build job, so it would block the macOS release while Windows doesn't ship.
-test('release.yml: the Mac/Windows smoke test only reports on Windows; Mac and Linux block', () => {
+test('release.yml: every smoke test blocks release staging, with explicit Windows lifecycle evidence', () => {
   const yml = readText('.github/workflows/release.yml');
-  const step = yml.slice(yml.indexOf('- name: Smoke test (Mac, Windows)'), yml.indexOf('- uses: actions/upload-artifact'));
-  assert.match(step, /continue-on-error: \$\{\{ matrix\.platform == 'win' \}\}/);
-  const linux = yml.slice(yml.indexOf('- name: Smoke test (Linux)'), yml.indexOf('- name: Smoke test (Mac, Windows)'));
-  assert.doesNotMatch(linux, /continue-on-error/);
+  const step = yml.slice(yml.indexOf('- name: Smoke test (Linux)'), yml.indexOf('- name: Test and lifecycle evidence'));
+  assert.doesNotMatch(step, /continue-on-error/);
+  assert.match(step, /Windows installer lifecycle[\s\S]*timeout-minutes: 15[\s\S]*windows-install-smoke\.js/);
+});
+
+test('manual native-only diagnostics cannot stage artifacts or omit the native gate', () => {
+  const doc = require('js-yaml').load(readText('.github/workflows/release.yml'));
+  assert.deepEqual(doc.on.workflow_dispatch.inputs.native_only, { description: 'Run native acceptance only; no installers or staging', type: 'boolean', default: false });
+  assert.equal(doc.concurrency.group, "release-${{ github.ref }}${{ inputs.native_only && '-native' || '' }}");
+  assert.equal(doc.concurrency['cancel-in-progress'], false);
+  assert.equal(doc.jobs.build.if, "github.event_name != 'workflow_dispatch' || !inputs.native_only");
+  assert.equal(doc.jobs['native-directory'].if, undefined);
+  assert.equal(doc.jobs['native-directory'].uses, './.github/workflows/windows-native.yml');
+  for (const name of ['stage', 'stage-beta']) {
+    assert.deepEqual(doc.jobs[name].needs, ['build', 'native-directory']);
+    assert.doesNotMatch(doc.jobs[name].if, /always\(|failure\(|cancelled\(/);
+  }
 });

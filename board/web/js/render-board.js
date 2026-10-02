@@ -11,6 +11,7 @@ import { THEMES, BACKGROUNDS } from './themes.js';
 import { cardChips } from './chips.js';
 import { labelColor, labelClass, coverClass, canArchive, VIA_LABEL } from './labels.js';
 import { PILLS } from '../../shared/cardface.js';
+import { captureBadge } from './render-capture.js';
 import {
   COLUMNS, COLUMN_LABEL, ACTION_LABEL, groupColumns, isHumanOwned, repoBranch, clock, initials, hueOf,
   primaryAction, boardLamps, stripGlyph,
@@ -171,13 +172,13 @@ export function card({ view, face, elapsed_ms = 0 }, model) {
     picked ? h('span', { class: 'sr-only' }, 'Selected') : null,
     h('span', { class: 'card-key num' }, view.key),
     archived ? h('span', { class: 'label archived-badge', title: view.archived.by_name ? `Archived by ${view.archived.by_name}` : 'Archived' }, 'Archived') : null,
-    view.agent_suggested ? h('span', { class: 'label agent-suggested', title: 'Created by an agent; a person must give it to Claude' }, 'agent-suggested') : null,
-    via ? h('span', { class: 'label via-integration', title: `Created by the ${via} integration; a person must give it to Claude` }, `via ${via}`) : null,
+    view.agent_suggested ? h('span', { class: 'label agent-suggested', title: 'Created by an agent; a person must assign it to an AI' }, 'agent-suggested') : null,
+    via ? h('span', { class: 'label via-integration', title: `Created by the ${via} integration; a person must assign it to an AI` }, `via ${via}`) : null,
     rb ? h('span', { class: 'card-repo num', title: view.base_ref ? `base ${view.base_ref}` : null }, icon('branch', 'icon-xs'), rb) : null,
     avatarStack(people)),
   h('h3', { class: 'card-title', id: `t-${view.id}` },
     h('button', { type: 'button', class: 'card-open', 'data-action': pending ? null : 'open', 'data-card': view.id, disabled: pending || null, 'aria-describedby': draggable ? 'dnd-help' : null }, view.title)),
-  pill(chips.some((c) => c.id === 'proof') ? { ...face, reason: null } : face),
+  view.capture && !view.run ? captureBadge(view, elapsed_ms) : pill(chips.some((c) => c.id === 'proof') ? { ...face, reason: null } : face),
   (sponsor || req || face.activity_line) ? h('div', { class: 'card-meta' },
     sponsor ? h('span', { class: 'card-sponsor' }, sponsor) : null,
     face.activity_line && face.state !== 'done' ? h('span', { class: 'card-activity' }, face.activity_line) : null,
@@ -187,7 +188,7 @@ export function card({ view, face, elapsed_ms = 0 }, model) {
   labelChips(view, model, labels),
   chipRow(chips),
   archived ? archivedFoot(view, model) : model.readOnly || pending ? null : cardActions(face, view, model.busy),
-  human && !pending && !archived && face.state === 'todo' && !view.target ? h('p', { class: 'card-foot' }, view.repo ? 'on your account' : 'no repo yet · add one to give it to Claude') : null);
+  human && !pending && !archived && face.state === 'todo' && !view.target ? h('p', { class: 'card-foot' }, view.repo ? 'on your account' : 'no repo yet · add one to tackle it with AI') : null);
 }
 
 // An archived card is read-only (D94): its one action is Restore.
@@ -255,7 +256,7 @@ function quickAddRow(qa) {
 
 const EMPTY = {
   todo: 'Nothing waiting. New cards land here.',
-  in_progress: 'No one is working on anything. Give a card to Claude to start.',
+  in_progress: 'No one is working on anything. Tackle a card with AI to start.',
   in_review: 'Nothing to review.',
   done: 'Finished work shows up here.',
 };
@@ -267,7 +268,7 @@ export function localCard(model) {
   return h('section', { class: 'localcard', 'aria-labelledby': 'localcard-title' },
     h('div', { class: 'localcard-text' },
       h('h2', { id: 'localcard-title', class: 'localcard-title' }, 'You’re on your local board'),
-      h('p', { class: 'localcard-body muted small' }, 'Create a team to collaborate: share one board with teammates and their Claude sessions, and connect tools like GitHub. Open Team in the sidebar to sign in. Teams and integrations live on the team hub.')),
+      h('p', { class: 'localcard-body muted small' }, 'Create a team to collaborate: share one board with teammates and their AI sessions, and connect tools like GitHub. Open Team in the sidebar to sign in. Teams and integrations live on the team hub.')),
     h('button', { type: 'button', class: 'btn btn-sm btn-ghost', 'data-action': 'local-card-dismiss' }, 'Dismiss'));
 }
 
@@ -331,12 +332,16 @@ export function topBar(model, lamps) {
       pixelClaude({ lamps, eyes: conn === 'lost' ? 'shut' : 'open', cls: 'brand-mark' }),
       h('div', { class: 'brand-text' },
         h('span', { class: 'brand-board' }, model.board?.name ?? 'Board'),
-        model.board?.key_prefix ? h('span', { class: 'brand-key num' }, model.board.key_prefix) : null)),
+        model.board?.key_prefix ? h('span', { class: 'brand-key num' }, model.board.key_prefix) : null),
+      model.boards?.length ? h('select', { class: 'input input-sm board-switcher', 'aria-label': 'Switch board', 'data-change': 'board' },
+        model.boards.filter((b) => !b.archived_at || b.id === model.board?.id).map((b) => h('option', { key: b.id, value: b.id, selected: b.id === model.board?.id }, `${b.name}${b.archived_at ? ' (Archived)' : ''}`))) : null),
     viewSwitch(model),
     h('div', { class: 'topbar-status', role: 'status', 'aria-live': 'polite' },
       h('span', { class: `conn conn-${conn}` }, h('span', { class: 'conn-dot', 'aria-hidden': 'true' }),
         conn === 'open' ? 'Live' : conn === 'lost' ? 'Offline' : 'Connecting')),
     h('div', { class: 'topbar-actions' },
+      model.accounts ? h('a', { class: 'btn btn-ghost btn-sm', href: '/clients' }, 'Clients') : null,
+      ['owner', 'admin'].includes(m?.role) ? h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-action': 'manage-boards' }, 'Boards') : null,
       themeMenu(model),
       h('button', { type: 'button', class: 'btn btn-ghost btn-sm palette-open', 'data-action': 'palette', 'aria-keyshortcuts': 'Control+K Meta+K', 'aria-label': 'Search and commands' }, icon('search', 'icon-lead'), h('span', { class: 'palette-open-label' }, 'Search'), h('kbd', { class: 'kbd', 'aria-hidden': 'true' }, '⌘K')),
       model.accounts && ['owner', 'admin'].includes(m?.role) && model.view !== 'team' ? h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-action': 'view', 'data-view': 'team' }, icon('person', 'icon-lead'), 'Invite') : null,
@@ -361,13 +366,14 @@ export function boardScreen(model, body = null) {
   return h('div', { class: 'app', 'data-conn': model.conn.status },
     topBar(model, lamps),
     connectionBanner(model.conn),
+    model.board?.archived_at ? h('p', { class: 'board-archived callout', role: 'status' }, 'This board is archived and read-only. An admin can restore it from Boards.') : null,
     alertsStrip(model.alerts, model),
     localCard(model),
     model.view === 'dashboard' ? null : filterBar(model),
     body ?? h('main', { class: 'board', id: 'board', 'aria-label': 'Board columns' },
       COLUMNS.map((c) => column(c, cols[c], model))),
     selectionActions(model),
-    h('p', { id: 'dnd-help', class: 'sr-only' }, 'Cards Claude is not running can be moved. Press Space to pick up, left and right arrows to choose a column, Space to drop, Escape to cancel. Shift-click or Command-click selects several.'),
+    h('p', { id: 'dnd-help', class: 'sr-only' }, 'Cards with no active agent run can be moved. Press Space to pick up, left and right arrows to choose a column, Space to drop, Escape to cancel. Shift-click or Command-click selects several.'),
     h('div', { class: 'sr-only', role: 'status', 'aria-live': 'assertive', 'aria-atomic': 'true' }, model.announce ?? ''));
 }
 
@@ -379,7 +385,7 @@ export function selectionActions(model) {
     h('span', { class: 'selbar-count num' }, bar.text),
     bar.skipped ? h('span', { class: 'selbar-note' }, `${bar.skipped} run-driven won't move`) : null,
     model.readOnly ? null : selectionArchive(sel, model),
-    bar.movable ? h('label', { class: 'selbar-move' },
+    bar.movable && !model.readOnly ? h('label', { class: 'selbar-move' },
       h('span', { class: 'sr-only' }, 'Move selected cards to'),
       h('select', { class: 'input input-sm', 'data-change': 'bulk-move' },
         h('option', { value: '' }, 'Move to…'),

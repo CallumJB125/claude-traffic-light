@@ -157,8 +157,8 @@ test('result requires exact live session and CSRF, refuses cross-origin, revoke,
 
 test('failed sign-in retains only bound encrypted invite context and no secret dumps/logs',async()=>{
  const r=await webRig({signup:'allowlist',signupAllow:''});try{
-  const token=`inv_${RANDOM}`;const s=await r.start('google',{invitation:{kind:'team',token}});const cb=await r.callback(s);
-  const f=await r.finish(cb);assert.equal(f.result.body.error.code,'SIGNUP_CLOSED');assert.deepEqual(f.result.body.invitation,{kind:'team',token});
+  const token=`clinv_${RANDOM}`;const s=await r.start('google',{invitation:{kind:'client',token}});const cb=await r.callback(s);
+  const f=await r.finish(cb);assert.equal(f.result.body.error.code,'SIGNUP_CLOSED');assert.deepEqual(f.result.body.invitation,{kind:'client',token});
   const all=JSON.stringify(dumpDb(r.h.db))+r.logs.join('\n');assert.ok(!all.includes(token));
   for(const v of r.p.issued)assert.ok(!all.includes(v));
   assert.ok(!s.body.url.includes(token));assert.ok(!s.cookies.join('').includes(token));assert.ok(!cb.location.includes(token));
@@ -226,14 +226,4 @@ test('restore during provider network wait refuses credential issuance and same-
   const cb=await ip.callback(s);assert.equal(ip.h.db.get('SELECT COUNT(*) n FROM sessions').n,0);
   assert.equal(ip.h.db.get('SELECT outcome FROM oauth_web_flows').outcome,'INVALID_TOKEN');
  }finally{await ip.h.close();}
-});
-
-
-test('sign-in rollout rejects client-only invitation kinds before creating a flow',async()=>{
- const r=await webRig();try{
-  const before=r.h.db.get('SELECT COUNT(*) n FROM oauth_web_flows').n;
-  const denied=await r.start('google',{invitation:{kind:'client',token:`clinv_${RANDOM}`}});
-  assert.equal(denied.status,400);assert.equal(denied.body.error.code,'VALIDATION');
-  assert.equal(r.h.db.get('SELECT COUNT(*) n FROM oauth_web_flows').n,before);
- }finally{await r.h.close();}
 });

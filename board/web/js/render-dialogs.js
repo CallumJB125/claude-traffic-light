@@ -3,10 +3,12 @@
 // Escape for free; app.js opens them after render.
 import { h } from './h.js';
 import { icon, pixelClaude } from './icons.js';
-import { formatAge } from './view.js';
+import { formatAge, fmtUsd } from './view.js';
 import { paletteDialog } from './render-palette.js';
 import { SENT_TEXT, VIEWER_TEXT } from './feedback-send.js';
 import { LABEL_COLORS, labelClass, managerRows } from './labels.js';
+import { tackleChoices, readinessText } from './tackle.js';
+import { workflowDialog } from './render-workflows.js';
 
 function shell(kind, title, content, { wide = false, describedBy = null } = {}) {
   return h('dialog', { class: `modal${wide ? ' modal-wide' : ''}`, 'data-dialog': kind, 'aria-labelledby': `dlg-${kind}-title`, 'aria-describedby': describedBy },
@@ -35,11 +37,11 @@ function overlapWarning(preview, targetName) {
   return h('div', { class: 'callout callout-warn', role: 'status' },
     h('p', { class: 'callout-title' }, icon('warn', 'icon-xs'), `Overlaps ${list.length} live card${list.length > 1 ? 's' : ''}`),
     h('ul', null, list.slice(0, 4).map((o) => h('li', { key: o.other_card_id },
-      h('strong', null, o.other_key), o.other_owner ? ` (${o.other_owner}'s Claude)` : '',
+      h('strong', null, o.other_key), o.other_owner ? ` (${o.other_owner}'s agent)` : '',
       o.kind === 'adjacent' ? ' is working nearby' : ' is editing',
       o.paths?.length ? [' ', h('code', null, o.paths[0]), o.paths.length > 1 ? ` +${o.paths.length - 1}` : ''] : '',
       o.kind === 'adjacent' ? '' : ', which this card mentions'))),
-    h('p', { class: 'hint' }, `This never blocks. ${targetName ? `${targetName}'s Claude` : 'Claude'} will see the same warning while it works.`));
+    h('p', { class: 'hint' }, `This never blocks. ${targetName ? `${targetName}'s agent` : 'The agent'} will see the same warning while it works.`));
 }
 
 export function giveDialog(dlg, model) {
@@ -52,16 +54,24 @@ export function giveDialog(dlg, model) {
   const isMe = target === meId;
   const repos = dlg.repos ?? [];
   const busy = dlg.busy;
-  const title = dlg.mode === 'redispatch' ? `Give ${view.key} back to Claude` : `Give ${view.key} to Claude`;
+  const title = `Tackle ${view.key} with AI`;
+  const providers = tackleChoices(dlg.preview?.runners);
+  const ai = providers.find((a) => a.id === dlg.ai) ?? providers.find((a) => a.id === 'codex');
+  const uncapped = ai.budget === 'none' || dlg.budget_mode === 'none';
+  const noBudgetAllowed = isMe || dlg.preview?.can_use_no_budget === true;
+  const waiting = !!dlg.preview?.loading;
+  const deviceLimit = dlg.mode === 'retry' && view.run?.budget_stop === 'device';
 
   return shell('give', title, h('form', { class: 'modal-body', 'data-form': 'give', 'data-card': view.id },
     h('p', { class: 'modal-lede' }, view.title),
+    dlg.mode === 'retry' ? h('p', { class: 'hint' }, deviceLimit ? 'The machine owner must change their local limit before retrying. Raising this card budget cannot override it.' : `Spent across this card: ${fmtUsd(view.budget?.spent_usd ?? 0)}. Choose a higher total card budget to continue.`) : null,
+    uncapped && view.budget?.cap_usd != null ? h('p', { class: 'hint' }, `This assignment removes the current ${fmtUsd(view.budget.cap_usd)} card budget.`) : null,
     h('fieldset', { class: 'field runner-pick' },
-      h('legend', null, 'Whose Claude runs it'),
+      h('legend', null, 'Whose machine runs it'),
       members.map((m) => h('label', { key: m.member_id, class: `runner-opt${target === m.member_id ? ' is-picked' : ''}` },
         h('input', { type: 'radio', name: 'target', value: m.member_id, checked: target === m.member_id, 'data-change': 'give-target' }),
-        h('span', { class: 'runner-name' }, m.member_id === meId ? 'Your Claude' : `${m.name}'s Claude`),
-        h('span', { class: 'runner-note' }, m.member_id === meId ? 'Starts right away' : `${m.name} confirms on their machine first`)))),
+        h('span', { class: 'runner-name' }, m.member_id === meId ? 'Your machine' : `${m.name}'s machine`),
+        h('span', { class: 'runner-note' }, m.member_id === meId ? 'Uses your signed-in AI account' : `${m.name} confirms on their machine first`)))),
     h('div', { class: 'field-row' },
       field('give-repo', 'Repo',
         h('select', { id: 'give-repo', name: 'repo_id', class: 'input', required: true, 'data-change': 'give-repo' },
@@ -69,26 +79,33 @@ export function giveDialog(dlg, model) {
           repos.map((r) => h('option', { key: r.id, value: r.id, selected: dlg.repo_id === r.id }, r.short_name ?? r.canonical_url)))),
       field('give-ref', 'Base branch',
         h('input', { id: 'give-ref', name: 'base_ref', class: 'input num', value: dlg.base_ref ?? '', placeholder: 'main', autocomplete: 'off', spellcheck: 'false' }))),
+    field('give-ai', 'AI', h('select', { id: 'give-ai', name: 'ai', class: 'input', 'data-change': 'give-ai', disabled: waiting || null },
+      providers.map((p) => h('option', { value: p.id, selected: p.id === ai.id, disabled: !p.available || null }, `${p.label}${p.available && !dlg.preview?.runners?.length ? '' : p.reason ? ` · ${readinessText(p.reason)}` : ''}`))),
+      !waiting && !dlg.preview?.error && !dlg.preview?.runners?.length ? 'The machine is offline. Work queues until a compatible signed-in runner connects.' : null),
     h('div', { class: 'field-row' },
-      field('give-budget', 'Budget (USD)',
-        h('input', { id: 'give-budget', name: 'budget_usd', class: 'input num', type: 'number', min: '0.5', step: '0.5', value: dlg.budget_usd ?? '', inputmode: 'decimal' }),
-        'The run stops when it reaches this. Soft by one API call.'),
+      ai.budget === 'none'
+        ? h('div', { class: 'field' }, h('p', null, `Dollar and turn caps are unavailable for ${ai.label}.`), h('p', { class: 'hint' }, noBudgetAllowed ? 'Uses the machine owner’s account without a dollar cap. Usage follows their provider plan.' : 'Only the machine owner or a team admin can assign uncapped work.'))
+        : h('fieldset', { class: 'field' }, h('legend', null, 'Budget'),
+          h('label', { class: 'check' }, h('input', { type: 'radio', name: 'budget_mode', value: 'cap', checked: !uncapped, 'data-change': 'give-budget-mode' }), 'Card budget'),
+          h('input', { id: 'give-budget', 'aria-label': 'Card budget in USD', name: 'budget_usd', class: 'input num', type: 'number', min: '0.5', max: '1000', step: '0.5', value: dlg.budget_usd ?? '', disabled: uncapped || null, inputmode: 'decimal', 'data-change': 'give-budget' }),
+          h('label', { class: 'check' }, h('input', { type: 'radio', name: 'budget_mode', value: 'none', checked: uncapped, disabled: !noBudgetAllowed || null, 'data-change': 'give-budget-mode' }), 'No budget'),
+          h('p', { class: 'hint' }, noBudgetAllowed ? 'Counts spend across runs on this card. Claude Code stops at the remaining cap; one step can exceed it. The machine’s own limit still applies.' : 'A budget is required on a teammate’s machine.')),
       h('div', { class: 'field field-check' },
         h('label', { class: 'check' },
           h('input', { type: 'checkbox', name: 'plan_approval', checked: !!dlg.plan_approval }),
           'Ask me to approve the plan first'),
-        h('p', { class: 'hint' }, 'Claude writes a plan and waits for a yes before editing.'))),
+        h('p', { class: 'hint' }, 'The agent writes a plan and waits for approval before editing.'))),
     overlapWarning(dlg.preview, isMe ? null : targetMember?.name),
     h('div', { class: 'sponsor-box', id: 'give-sponsor' },
       pixelClaude({ lamps: { green: true }, cls: 'sponsor-mark' }),
       h('div', null,
-        h('p', { class: 'sponsor-line' }, dlg.preview?.sponsor ?? (isMe ? 'Runs on your machine · your claude account' : `Runs on ${targetMember?.name}'s machine · ${targetMember?.name}'s claude account`)),
+        h('p', { class: 'sponsor-line' }, isMe ? `Runs on your machine · your ${ai.label} account` : `Runs on ${targetMember?.name}'s machine · their ${ai.label} account`),
         h('p', { class: 'hint' }, isMe ? 'Usage comes out of your own plan.' : `This spends ${targetMember?.name}'s plan, so ${targetMember?.name} must confirm before it starts.`))),
     errorLine(dlg),
     h('div', { class: 'modal-foot' },
       h('button', { type: 'button', class: 'btn', 'data-action': 'close-dialog' }, 'Cancel'),
-      h('button', { type: 'submit', class: 'btn btn-claude', disabled: busy || null, 'aria-busy': busy ? 'true' : null, 'aria-describedby': 'give-sponsor' },
-        busy ? 'Giving…' : isMe ? 'Give to Claude' : `Ask ${targetMember?.name}'s Claude`))), { wide: true });
+      h('button', { type: 'submit', class: 'btn btn-claude', disabled: busy || waiting || deviceLimit || (dlg.mode === 'retry' && uncapped) || !ai.available || (uncapped && !noBudgetAllowed) || null, 'aria-busy': busy ? 'true' : null, 'aria-describedby': 'give-sponsor' },
+        busy ? 'Queuing…' : isMe ? 'Tackle with AI' : `Ask ${targetMember?.name}`))), { wide: true });
 }
 
 const CONFIRM = {
@@ -251,6 +268,39 @@ export function dialog(model) {
     case 'palette': return paletteDialog(d, model);
     case 'labels': return labelsDialog(d, model);
     case 'feedback': return feedbackDialog(d, model);
+    case 'boards': return boardsDialog(d, model);
+    case 'workflows': return workflowDialog(d, model);
+    case 'new-board': case 'rename-board': case 'archive-board': return boardDialog(d);
     default: return null;
   }
+}
+
+function boardsDialog(d, model) {
+  const boards = model.boards ?? [];
+  const active = boards.filter((b) => !b.archived_at).length;
+  return shell('boards', 'Boards', h('div', { class: 'modal-body board-manager' },
+    h('p', { class: 'hint' }, 'Everyone on the team can see every board. Archived boards stay read-only until restored.'),
+    h('button', { type: 'button', class: 'btn btn-primary', 'data-action': 'new-board' }, 'New board'),
+    boards.map((b) => h('section', { key: b.id, class: 'board-manager-row', 'data-board': b.id },
+      h('div', null, h('strong', null, b.name), h('span', { class: 'hint num' }, ` · ${b.key_prefix}${b.archived_at ? ' · Archived' : ''}`)),
+      h('div', { class: 'board-manager-actions' },
+        h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'switch-board', 'data-board': b.id }, 'Open'),
+        b.archived_at ? h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'restore-board', 'data-board': b.id, disabled: d.busy || null }, 'Restore')
+          : h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'rename-board', 'data-board': b.id }, 'Rename'),
+        !b.archived_at ? h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'archive-board', 'data-board': b.id, disabled: active <= 1 || null, title: active <= 1 ? 'Keep at least one active board' : null }, 'Archive') : null))),
+    errorLine(d)));
+}
+
+function boardDialog(d) {
+  const archive = d.kind === 'archive-board';
+  const create = d.kind === 'new-board';
+  return shell(d.kind, archive ? `Archive ${d.name}?` : create ? 'New board' : 'Rename board',
+    h('form', { class: 'modal-body', 'data-form': d.kind },
+      archive ? h('p', null, 'The board becomes read-only and leaves the switcher. Its cards and history stay available, and an admin can restore it.')
+        : field('board-name', 'Board name', h('input', { id: 'board-name', name: 'name', class: 'input', value: d.name ?? '', maxlength: '60', required: true, autofocus: true })),
+      create ? field('board-prefix', 'Card key prefix (optional)', h('input', { id: 'board-prefix', name: 'key_prefix', class: 'input num', maxlength: '10', pattern: '[A-Z]{1,10}', placeholder: 'Chosen from the name', autocomplete: 'off' }), 'A unique prefix makes card keys unambiguous within your team.') : null,
+      errorLine(d),
+      h('div', { class: 'modal-foot' },
+        h('button', { type: 'button', class: 'btn', 'data-action': 'close-dialog' }, 'Cancel'),
+        h('button', { type: 'submit', class: 'btn btn-primary', disabled: d.busy || null, 'aria-busy': d.busy ? 'true' : null }, archive ? 'Archive board' : create ? 'Create board' : 'Save name'))));
 }

@@ -139,6 +139,14 @@ function showInvite(inv, team) {
 // ── screens ───────────────────────────────────────────────────────────────
 
 const SCREENS = {
+  clients(s) {
+    return [heading('Your client projects', 'View the project updates shared with you. Invitations need your explicit acceptance.'),
+      ...(s.workspaces ?? []).map((w) => el('p', { class: 'acct-hint' }, w.name)),
+      ...(s.invitations ?? []).map((i) => el('p', { class: 'acct-hint' }, `${i.inviter_first_name} invited you to ${i.workspace_name}.`)),
+      el('button', { type: 'button', class: 'btn btn-primary', onclick: () => act(api.openClients()) }, 'Open client projects'),
+      el('p', { class: 'acct-hint' }, 'Your client access stays scoped to the projects shared with you.'),
+    ];
+  },
   hub(s) {
     return [
       heading(s.forInvite ? 'Where is your team?' : s.brand.copy.signInHeading, s.forInvite ? 'This invite doesn’t say which team hub it’s for. Enter the address your team uses.' : s.brand.copy.signInSub),
@@ -421,7 +429,30 @@ const SCREENS = {
   },
 
   thismac(s) {
-    const out = [heading('This Mac', 'Let your team hand cards to Claude on this Mac. Runs happen here, with your own setup.')];
+    const out = [heading('This Mac', 'Run AI work here with your own setup, and keep its board updated.')];
+    if (s.workCapture) {
+      const sec = el('section', { class: 'acct-section' }, el('h2', {}, 'Automatic work cards'));
+      sec.append(el('div', { class: 'acct-item acct-item-toggle' },
+        el('div', { class: 'acct-who' }, el('span', { class: 'acct-name' }, 'Create cards from reported AI work'),
+          el('span', { class: 'acct-mail' }, 'Work in a linked team repository goes to that team’s board. Other work goes to My board. Only task details and reported progress are sent; transcripts stay private. Finished reports move to Review for you to check.')),
+        toggle(s.workCapture.enabled, 'Create cards automatically from reported AI work', async on => { const r = await api.captureEnabled(on); if (r?.ok) render(); return r; })));
+      if (s.workCapture.notice) sec.append(el('p', { class: 'acct-hint', role: 'status' }, s.workCapture.notice));
+      for (const t of s.workCapture.tasks) {
+        const d = t.destination, destination = d.kind === 'team' ? `${d.team_name || 'Team'} · ${d.board_name || 'Board'}` : 'My board (this Mac)';
+        const status = t.untracked ? 'Tracking stopped' : !t.card_id ? 'Waiting to sync' : `Last report: ${t.status || 'activity'}`;
+        const row = el('div', { class: 'acct-item' }, el('div', { class: 'acct-who' },
+          el('span', { class: 'acct-name' }, t.title), el('span', { class: 'acct-mail' }, `${destination} · ${status}`),
+          d.needs_routing ? el('span', { class: 'acct-mail' }, d.reason === 'team_read_only' ? 'Your team role is read-only, so this card stays personal.' : 'This repository is linked to multiple boards. Choose a default for future tasks; this card stays on My board.') : null));
+        const choices = (s.workCapture.choices || []).filter(c => c.repo === t.repo);
+        if (d.needs_routing && choices.length) row.append(form({
+          fields: field('Board for future tasks in this repository', el('select', { name: 'destination', class: 'input' }, choices.map(c => el('option', { value: c.key }, `${c.team_name} · ${c.board_name}`)))),
+          submit: 'Save default', busy: 'Checking…', fn: async v => { const r = await api.captureDefault(t.repo, v.destination); if (r?.ok) render(); return r; },
+        }));
+        sec.append(row);
+      }
+      if (!s.workCapture.tasks.length) sec.append(el('p', { class: 'acct-hint' }, 'Cards appear when a connected AI reports work.'));
+      out.push(sec);
+    }
     if (!s.hubs.length || s.hubs.every((h) => !h.teams.length)) {
       out.push(el('p', { class: 'acct-hint' }, 'Sign in and join a team to run cards here.'));
       return out;

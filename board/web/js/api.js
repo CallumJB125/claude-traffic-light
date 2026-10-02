@@ -57,6 +57,28 @@ export const api = {
   // Accounts mode (ACCOUNTS-API.md): which sign-ins the hub offers, a first team, joining one.
   methods: () => call('GET', '/api/auth/methods'),
   setupAccount: () => mut('POST', '/api/account/setup'),
+  boards: (includeArchived = false) => call('GET', `/api/boards${includeArchived ? '?include_archived=1' : ''}`),
+  search: (q) => call('GET', `/api/search?${new URLSearchParams({ q })}`),
+  teamOverview: () => call('GET', '/api/team-overview'),
+  workflows: (includeArchived = false) => call('GET', `/api/workflows${includeArchived ? '?include_archived=1' : ''}`),
+  workflow: (id) => call('GET', `/api/workflows/${enc(id)}`),
+  publishWorkflow: (id, body) => mut('POST', id ? `/api/workflows/${enc(id)}/versions` : '/api/workflows', body),
+  archiveWorkflow: (id, archived) => mut('POST', `/api/workflows/${enc(id)}/archive`, { archived }),
+  applyWorkflow: (boardId, id, body) => mut('POST', `/api/boards/${enc(boardId)}/workflows/${enc(id)}/apply`, body),
+  workflowExecutionContext: (id, board) => call('GET', `/api/workflow-instances/${enc(id)}/execution-context?board_id=${enc(board)}`),
+  previewWorkflowPlan: (id, board, body) => mut('POST', `/api/workflow-instances/${enc(id)}/preview?board_id=${enc(board)}`, body),
+  previewWorkflowExecution: (id, board, body) => mut('POST', `/api/workflow-plans/${enc(id)}/execution-preview?board_id=${enc(board)}`, body),
+  previewWorkflowControl: (id, board, body) => mut('POST', `/api/workflow-executions/${enc(id)}/preview?board_id=${enc(board)}`, body),
+  startWorkflow: (id, board, body) => mut('POST', `/api/workflow-plans/${enc(id)}/start?board_id=${enc(board)}`, body),
+  workflowExecution: (id, board) => call('GET', `/api/workflow-executions/${enc(id)}?board_id=${enc(board)}`),
+  controlWorkflow: (id, board, command, body, position = null) => {
+    if (!['pause','cancel','resume','retry'].includes(command) || command === 'retry' && (!Number.isInteger(position) || position < 0 || position > 7)) throw new Error('Unknown workflow control.');
+    return mut('POST', `/api/workflow-executions/${enc(id)}/${command === 'retry' ? `steps/${position}/retry` : command}?board_id=${enc(board)}`, body);
+  },
+  createBoard: (body) => mut('POST', '/api/boards', body),
+  renameBoard: (id, name) => mut('PATCH', `/api/boards/${enc(id)}`, { name }),
+  archiveBoard: (id) => mut('POST', `/api/boards/${enc(id)}/archive`),
+  restoreBoard: (id) => mut('POST', `/api/boards/${enc(id)}/restore`),
   signout: () => mut('POST', '/api/auth/signout'),
   createTeam: (name) => mut('POST', '/api/teams', { name }),
   acceptInvite: (body) => mut('POST', '/api/invites/accept', body),
@@ -74,12 +96,21 @@ export const api = {
   restoreCard: (id) => mut('POST', `/api/cards/${enc(id)}/restore`),
   presence: (boardId) => call('GET', `/api/boards/${enc(boardId)}/presence`),
   card: (id) => call('GET', `/api/cards/${enc(id)}`),
+  packet: (id) => call('GET', `/api/cards/${enc(id)}/packet`),
+  writePacket: (id, body) => mut('POST', `/api/cards/${enc(id)}/packet`, body),
+  messages: (id) => call('GET', `/api/cards/${enc(id)}/messages`),
+  ownership: (id, boardId) => call('GET', `/api/cards/${enc(id)}/ownership${boardId ? `?board_id=${enc(boardId)}` : ''}`),
+  sendMessage: (id, body) => mut('POST', `/api/cards/${enc(id)}/messages`, body),
   createCard: (boardId, body) => mut('POST', `/api/boards/${enc(boardId)}/cards`, body),
   patchCard: (id, body) => mut('PATCH', `/api/cards/${enc(id)}`, body),
+  planCard: (id, body) => mut('PATCH', `/api/cards/${enc(id)}/planning`, body),
   action: (id, action, body) => mut('POST', `/api/cards/${enc(id)}/actions/${enc(action)}`, body),
   answerPermission: (id, decision, scope) => mut('POST', `/api/permission-requests/${enc(id)}/answer`, { decision, ...(scope ? { scope } : {}) }),
   comment: (id, body, for_agent) => mut('POST', `/api/cards/${enc(id)}/comments`, { body, for_agent }),
-  overlapPreview: (id, target) => call('GET', `/api/cards/${enc(id)}/overlap-preview${target ? `?target_member_id=${enc(target)}` : ''}`),
+  overlapPreview: (id, target, repo) => {
+    const q = new URLSearchParams(); if (target) q.set('target_member_id', target); if (repo) q.set('repo_id', repo);
+    return call('GET', `/api/cards/${enc(id)}/overlap-preview${q.size ? `?${q}` : ''}`);
+  },
   repos: () => call('GET', '/api/repos'),
   // Integrations (team-level; admins connect, configure and disconnect).
   integrations: () => call('GET', '/api/integrations'),
@@ -116,6 +147,10 @@ export function errorText(err) {
     case 'ALREADY_ANSWERED': return `Already answered by ${err.extra?.answered_by?.name ?? err.extra?.answered_by ?? 'a teammate'}.`;
     case 'VERSION_CONFLICT': return 'Someone changed this card a moment ago. It has been refreshed; try again.';
     case 'CONFLICT':
+      if (err.extra?.reason === 'PREFIX_TAKEN') return 'This key prefix is already used by another board. Choose a different prefix or leave it blank.';
+      if (err.extra?.reason === 'LAST_ACTIVE_BOARD') return 'Keep at least one active board. Create or restore another board first.';
+      if (err.extra?.reason === 'ACTIVE_RUN') return 'Stop active runs before archiving this board.';
+      if (err.extra?.reason === 'BOARD_ARCHIVED') return 'This board is archived and read-only. Restore it before making changes.';
       if (err.extra?.reason === 'ARCHIVED') return 'This card is archived. Restore it first.';
       if (err.extra?.reason === 'RUN_ACTIVE') return 'Stop, cancel or finish the run before archiving.';
       if (err.extra?.reason === 'TOO_MANY_CARDS') return 'That label is on too many cards to change at once.';

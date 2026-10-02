@@ -6,8 +6,11 @@ import { createHash } from 'node:crypto';
 import { ACTIVE } from '../shared/states.js';
 import { isGreen } from '../shared/liveness.js';
 import { FEED_KINDS } from '../shared/protocol.js';
-import { json } from './db.js';
+import { json, HubError } from './db.js';
 import { cleanLinkStatus } from './integrations/connector.js';
+import { AI_LABELS, aiOfDispatch } from '../shared/ai.js';
+import { workCaptureView } from './work-capture-view.js';
+import { commentIdentity } from './remote/attribution.js';
 
 export const EMAIL_ONLY = 'email:';   // github_login placeholder of an email-only (Access OTP) member
 export const LOCAL_ONLY = 'local:';   // github_login placeholder of the BOARD_AUTH=local owner (D35)
@@ -102,6 +105,15 @@ function deviceKind(hub, runRow) {
   return f === 'laptop' || f === 'desktop' ? f : null;
 }
 
+export function runCost(hub, run) {
+  // A database default of zero is not a cost observation. Codex does not
+  // expose dollar telemetry through this adapter, including older rows.
+  const observed = aiOfDispatch(run) !== 'codex' && (run.cost_cents > 0 ||
+    !!hub.db.get("SELECT 1 x FROM events WHERE run_id = ? AND kind = 'cost' LIMIT 1", run.id));
+  return { cost_usd: observed ? run.cost_cents / 100 : null,
+    cost_source: observed ? 'provider_reported' : 'unavailable' };
+}
+
 export function cardView(hub, row, viewerId) {
   const runRow = hub.run(row.active_run_id) ?? (row.run_state ? hub.latestRun(row.id) : null);
   const repo = hub.repo(row.repo_id);
@@ -114,7 +126,7 @@ export function cardView(hub, row, viewerId) {
   if (d && (row.run_state === 'queued' || row.run_state == null)) {
     const tid = hub.dispatchTarget(d);
     const dev = [...hub.runners.values()].find((c) => c.member_id === tid && c.repos.has(row.repo_id));
-    target = { member_id: tid, name: hub.memberName(tid), is_viewer: tid === viewerId, awaiting_confirm: !!d.needs_confirm, ...(dev ? { device_name: dev.device.name } : {}) };
+    target = { member_id: tid, name: hub.memberName(tid), is_viewer: tid === viewerId, ai: aiOfDispatch(d), ai_label: AI_LABELS[aiOfDispatch(d)], awaiting_confirm: !!d.needs_confirm, ...(dev ? { device_name: dev.device.name } : {}) };
   }
   const h = hub.latestHandover(row.id);
   const doc = h || runRow ? hub.handoverDoc(row.id) : null;
@@ -122,12 +134,19 @@ export function cardView(hub, row, viewerId) {
   const ht = json(row.handover_target, null);
   const budgetCap = row.budget_cents;
   const stateAge = hub.ageOf(row.state_since);
+  const clientFeedback = hub.clientFeedback?.cardProvenance(row.id);
+  const capture = workCaptureView(hub, row.id);
   return {
-    id: row.id, key: row.key, title: row.title, labels, column: row.column_name, version: row.version,
+    id: row.id, board_id: row.board_id, key: row.key, title: row.title, labels, column: row.column_name, version: row.version,
     label_colors: labels.map((l) => colors.get(String(l).toLowerCase()) ?? null),
     cover: row.cover ?? null,
+    start_date: row.start_date ?? null, due_date: row.due_date ?? null,
+    planning_in_scope: !row.archived_at && !hub.board(row.board_id)?.archived_at && (row.repo_id == null || !!hub.db.get('SELECT 1 x FROM board_repos WHERE board_id = ? AND repo_id = ?', row.board_id, row.repo_id)),
+    depends_on: hub.db.all('SELECT depends_on_card_id FROM card_dependencies WHERE card_id = ? ORDER BY depends_on_card_id', row.id).map(d => d.depends_on_card_id),
     archived: row.archived_at ? { at_age_ms: Math.round(hub.ageOf(row.archived_at)), by_name: hub.memberName(row.archived_by) } : null,
     agent_suggested: !!row.created_by_run_id, parent_card_id: row.parent_card_id ?? null,
+    ...(clientFeedback ? { client_feedback: clientFeedback } : {}),
+    ...(capture ? { capture } : {}),
     run_state: row.run_state ?? 'todo',
     blocked_kind: row.blocked_kind, fail_kind: row.fail_kind, fail_reason: row.fail_reason, resume_to: row.resume_to, fence: row.fence,
     repo: repo ? { id: repo.id, short_name: repo.short_name } : null, base_ref: row.base_ref, branch: runRow?.branch ?? null,
@@ -136,6 +155,8 @@ export function cardView(hub, row, viewerId) {
     queue: row.run_state === 'queued' ? (() => { const online = hub.runnerOnline(row.id); return { runner_online: online, offline_age_ms: online ? null : stateAge }; })() : null,
     run: runRow ? {
       id: runRow.id, backend: runRow.backend, device_name: hub.device(runRow.device_id)?.name ?? null,
+      ai: aiOfDispatch(runRow), ai_label: AI_LABELS[aiOfDispatch(runRow)], budget_usd: runRow.budget_cents == null ? null : runRow.budget_cents / 100,
+      budget_stop: runRow.terminal_reason === 'budget_device' ? 'device' : runRow.terminal_reason === 'budget' ? 'card' : null,
       owner: person(hub, runRow.on_behalf_of), dispatched_by: person(hub, runRow.dispatched_by),
     } : null,
     live: leaseView(hub, row),
@@ -161,13 +182,25 @@ export function boardSnapshot(hub, boardId, viewerId, { includeArchived = false 
   const members = hub.db.all('SELECT * FROM members WHERE org_id = ? AND removed_at IS NULL ORDER BY display_name', board.org_id);
   return {
     board_id: boardId,
-    board: { id: board.id, name: board.name, key_prefix: board.key_prefix, settings: json(board.settings, {}), labels: hub.labelRegistry(boardId) },
+    board: { id: board.id, name: board.name, key_prefix: board.key_prefix, archived_at: board.archived_at, settings: json(board.settings, {}), labels: hub.labelRegistry(boardId) },
     cards: cards.map((c) => cardView(hub, c, viewerId)),
     members: members.map((m) => ({ member_id: m.id, name: m.display_name, login: publicLogin(m), avatar_url: m.github_id > 0 ? `https://avatars.githubusercontent.com/u/${m.github_id}` : null })),
   };
 }
 
 export const labelDef = (r) => ({ id: r.id, name: r.name, color: r.color, description: r.description ?? null });
+
+// Private desktop selection may only narrow ordinary staff projections.
+// Keep ordinary cross-board collaboration intact when there is no selection.
+export function selectedContext(hub, result, boardIds) {
+  if (boardIds == null) return result;
+  if (!Array.isArray(boardIds) || boardIds.length < 1 || boardIds.length > 32 || boardIds.some(id => typeof id !== 'string' || !/^[A-Za-z0-9_.:-]{1,100}$/.test(id))) throw new HubError('VALIDATION', 'choose 1–32 boards');
+  const project = view => ({ ...view, ...(view.overlaps ? { overlaps: view.overlaps.filter(peer => {
+    const card = hub.card(peer.other_card_id), board = card && hub.board(card.board_id);
+    return card && board && !card.archived_at && !board.archived_at && boardIds.includes(card.board_id);
+  }) } : {}) });
+  return { ...project(result), ...(result.card ? { card: project(result.card) } : {}), ...(result.cards ? { cards: result.cards.map(project) } : {}) };
+}
 
 export function cardDetail(hub, row, viewerId, feedEventOf) {
   const view = cardView(hub, row, viewerId);
@@ -183,14 +216,14 @@ export function cardDetail(hub, row, viewerId, feedEventOf) {
     acceptance: row.acceptance,
     run: runRow ? {
       ...view.run,
-      id: runRow.id, fence: runRow.fence, status_summary: runRow.status_summary, cost_usd: runRow.cost_cents / 100,
+      id: runRow.id, fence: runRow.fence, status_summary: runRow.status_summary, ...runCost(hub, runRow),
       planned_paths: json(runRow.planned_paths, []), touched_paths: json(runRow.touched_paths, []),
       snapshot: runRow.snapshot_status ? { sha: runRow.last_snapshot_sha, ref: runRow.snapshot_ref, status: runRow.snapshot_status, reason: runRow.snapshot_reason, age_ms: hub.ageOf(runRow.snapshot_at) } : null,
     } : null,
     handover: doc && (doc.version || runRow) ? { doc: doc.doc, ages: doc.ages, markdown: doc.markdown } : null,
     feed,
-    comments: hub.db.all('SELECT * FROM comments WHERE card_id = ? ORDER BY created_at, rowid', row.id).map((c) => ({
-      id: c.id, author_name: c.author_member_id ? hub.memberName(c.author_member_id) : `${hub.memberName(hub.run(c.author_run_id)?.on_behalf_of) ?? '?'}'s Claude`,
+    comments: hub.db.all('SELECT * FROM comments WHERE card_id = ? ORDER BY created_at, rowid', row.id).map((c) => commentIdentity(hub, {
+      id: c.id, author_name: c.author_member_id ? hub.memberName(c.author_member_id) : `${hub.memberName(hub.run(c.author_run_id)?.on_behalf_of) ?? '?'}'s ${AI_LABELS[aiOfDispatch(hub.run(c.author_run_id))]}`,
       source: c.source, trusted: !!c.trusted, body: c.body, for_agent: !!c.for_agent, reply_to: c.reply_to,
       delivered_age_ms: hub.ageOf(c.delivered_at), created_age_ms: hub.ageOf(c.created_at),
     })),

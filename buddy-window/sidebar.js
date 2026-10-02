@@ -57,7 +57,7 @@ function item(p, child = false) {
     'data-kind': p.kind,
   }, child ? null : icon(p.icon), el('span', { class: 'nav-label' }, p.title),
   p.kind === 'window' ? icon('external') : null,
-  p.kind === 'soon' ? el('span', { class: 'nav-soon' }, 'soon') : null);
+  p.kind === 'soon' || p.pending ? el('span', { class: 'nav-soon' }, 'soon') : null);
   if (p.kind === 'window') btn.setAttribute('aria-label', `${p.title} (opens its own window)`);
   btn.addEventListener('click', () => window.buddy.select(p.id));
   buttons.set(p.id, btn);

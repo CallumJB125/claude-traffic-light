@@ -22,8 +22,8 @@ test.describe('tray and Settings', () => {
   test('the tray has Team and Integrations, and they open those pages', async () => {
     await expect.poll(() => trayLabels(h.app).catch(() => []), { timeout: 15000 }).toContain('Open Team…');
     const labels = await trayLabels(h.app);
-    for (const l of ['Open Team…', 'Open Integrations…', 'Open Waiting on you…', 'Open Usage…', 'Open Account…', 'Open Settings…', 'Open Tasks… (soon)']) expect(labels).toContain(l);
-    expect(await h.app.evaluate(() => global.__buddyTrayMenu.items.find((i) => i.label === 'Open Tasks… (soon)').enabled)).toBe(false);
+    for (const l of ['Open Team…', 'Open Integrations…', 'Open Waiting on you…', 'Open Usage…', 'Open Account…', 'Open Settings…', 'Open Tasks…']) expect(labels).toContain(l);
+    expect(await h.app.evaluate(() => global.__buddyTrayMenu.items.find((i) => i.label === 'Open Tasks…').enabled)).not.toBe(false);
     await trayClick(h.app, 'Open Integrations…');
     await shownPage(h.app, 'Integrations');
     await trayClick(h.app, 'Open Team…');
@@ -115,7 +115,7 @@ test.describe('widget right-click', () => {
       await w.evaluate(() => document.getElementById('app').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, shiftKey: true })));
       await expect.poll(() => h.app.evaluate(() => !!global.__buddyWidgetMenu), { timeout: 10000 }).toBe(true);
       const labels = await h.app.evaluate(() => global.__buddyWidgetMenu.items.map((i) => i.label).filter(Boolean));
-      for (const l of ['Open Plexiform…', 'Open Team…', 'Open Integrations…', 'Open Board…', 'Open Tasks… (soon)', 'Open Usage…', 'Open Settings…', 'Open About & Updates…', 'Floating Widget', 'Open at Login', 'Quit']) expect(labels).toContain(l);
+      for (const l of ['Open Plexiform…', 'Open Team…', 'Open Integrations…', 'Open Board…', 'Open Tasks…', 'Open Usage…', 'Open Settings…', 'Open About & Updates…', 'Floating Widget', 'Open at Login', 'Quit']) expect(labels).toContain(l);
       expect(labels).toEqual(await trayLabels(h.app).then((t) => t.filter(Boolean)));
       const lights = h.app.windows().filter((p) => p.url().includes('lights.html'));
       expect(lights).toHaveLength(0);

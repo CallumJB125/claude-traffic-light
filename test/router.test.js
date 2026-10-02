@@ -61,7 +61,7 @@ test('leftover shim: an rc block is found and the exact removal command given; n
   const r = LeftoverShim.detect({ home, env: {}, platform: 'darwin' });
   assert.deepEqual(r.files, [zshrc]);
   assert.equal(r.command, `sed -i '' '/^# claude-buddy router >>>$/,/^# claude-buddy router <<<$/d' '${zshrc}' && rm -f '${path.join(home, '.claude-traffic-light', 'bin', 'claude')}'`);
-  assert.match(r.note, /~\/\.zshrc/);
+  assert.match(r.note, new RegExp(path.join('~', '.zshrc').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   assert.equal(fs.readFileSync(zshrc, 'utf8'), text, 'the rc file is untouched');
   assert.match(LeftoverShim.detect({ home, env: {}, platform: 'linux' }).command, /^sed -i '\/\^# claude/);
   // The command really does remove exactly the block (it is a POSIX sh line: not run on Windows).

@@ -6,9 +6,11 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
+import { randomUUID,createHash } from 'node:crypto';
+import { canonical } from '../../../shared/workflow-execution.js';
 import { tenancy, MARK } from './fixture.js';
 import { sign } from '../../integrations/fake/index.js';
+import { validatePayload } from '../../../shared/setups.js';
 
 // kind:
 //   cross    – names B's resources in the path; expect 404
@@ -22,6 +24,24 @@ import { sign } from '../../integrations/fake/index.js';
 // team with B's sub-resource ids (also 404); `headers(fx)` names team B where
 // the path's id is not a tenant resource (an integration provider).
 const MATRIX = {
+  'GET /.well-known/oauth-protected-resource': { kind: 'public', reason: 'fixed public resource metadata; remote-http.test.js' },
+  'GET /.well-known/oauth-protected-resource/api/mcp': { kind: 'public', reason: 'fixed public resource metadata; remote-http.test.js' },
+  'GET /.well-known/oauth-authorization-server': { kind: 'public', reason: 'fixed public authorization metadata; remote-http.test.js' },
+  'GET /oauth/authorize': { kind: 'public', reason: 'bounded registered public client intent; never issues a grant' },
+  'POST /oauth/register': { kind: 'public', reason: 'bounded public DCR; never issues a grant' },
+  'POST /oauth/token': { kind: 'public', reason: 'one-use PKCE code or rotating family is the credential; remote-http.test.js' },
+  'POST /oauth/revoke': { kind: 'public', reason: 'client-bound token revocation; remote-http.test.js' },
+  'GET /oauth/consent': { kind: 'public', reason: 'browser-bound preview; dedicated SESSION binding tests' },
+  'POST /oauth/consent': { kind: 'public', reason: 'dedicated current SESSION, CSRF and bound-browser consent tests; ordinary bearer refused' },
+  'POST /api/mcp': { kind: 'public', reason: 'distinct audience-bound bearer plus selected-board/current authority; remote-http.test.js' },
+  'GET /api/mcp': { kind: 'public', reason: 'authenticated stateless405; dedicated tests' },
+  'DELETE /api/mcp': { kind: 'public', reason: 'authenticated stateless405; dedicated tests' },
+  'GET /api/integration/v1': {kind:'public',reason:'distinct personal integration bearer audience; remote-integration.test.js'},
+  'POST /api/integration/v1': {kind:'public',reason:'closed ordinary actions, selected boards/current authority/durable receipts; remote-integration.test.js'},
+  'GET /api/teams/:team_id/remote-grants': { kind: 'cross', path: f => `/api/teams/${f.B.team}/remote-grants` },
+  'POST /api/teams/:team_id/remote-grants/gesture': { kind: 'cross', path: f => `/api/teams/${f.B.team}/remote-grants/gesture`, body: { purpose: 'create' } },
+  'POST /api/teams/:team_id/remote-grants': { kind: 'cross', path: f => `/api/teams/${f.B.team}/remote-grants`, body: f => ({ gesture_id: randomUUID(), name: 'pwned', board_ids: [f.B.board], mode: 'read', expires_days: 1 }) },
+  'DELETE /api/teams/:team_id/remote-grants/:grant_id': { kind: 'cross', path: f => `/api/teams/${f.B.team}/remote-grants/${randomUUID()}`, body: { gesture_id: randomUUID() } },
   'GET /api/health': { kind: 'public', reason: 'liveness probe; no team data' },
   'GET /api/auth/methods': { kind: 'public', reason: 'the sign-in page asks before anyone is signed in' },
   'POST /api/auth/email/start': { kind: 'public', reason: 'starts a sign-in' },
@@ -34,16 +54,57 @@ const MATRIX = {
   'POST /api/auth/oauth/web/result': { kind: 'public', reason: 'browser-bound result; success exact live self session plus CSRF, failures no account credential' },
   'POST /api/auth/signout': { kind: 'self' },
   'GET /api/account': { kind: 'self' },
+  'GET /api/work-capture/routes': { kind: 'self' },
+  'GET /api/my-day': { kind: 'self' },
+  'GET /api/teams/:team_id/setups': {kind:'cross',path:fx=>`/api/teams/${fx.B.team}/setups`},
+  'POST /api/teams/:team_id/setups': {kind:'cross',path:fx=>`/api/teams/${fx.B.team}/setups`},
+  'PUT /api/teams/:team_id/setup-baseline': {kind:'cross',path:fx=>`/api/teams/${fx.B.team}/setup-baseline`},
+  'GET /api/setup-profiles/:profile_id': {kind:'cross',path:fx=>`/api/setup-profiles/${fx.B.setupProfile}`},
+  'GET /api/setup-profiles/:profile_id/versions/:version_id': {kind:'cross',path:fx=>`/api/setup-profiles/${fx.B.setupProfile}/versions/${fx.B.setupVersion}`},
+  'GET /api/setup-profiles/:profile_id/export': {kind:'cross',path:fx=>`/api/setup-profiles/${fx.B.setupProfile}/export`},
+  'DELETE /api/setup-profiles/:profile_id': {kind:'cross',path:fx=>`/api/setup-profiles/${fx.B.setupProfile}`},
+  'GET /api/setup-profiles/:profile_id/activity': {kind:'cross',path:fx=>`/api/setup-profiles/${fx.B.setupProfile}/activity`},
+  'POST /api/setup-profiles/:profile_id/borrow-receipts': {kind:'cross',path:fx=>`/api/setup-profiles/${fx.B.setupProfile}/borrow-receipts`},
   'POST /api/account/setup': { kind: 'self' },
   'DELETE /api/account': { kind: 'self' },
   'GET /api/account/devices': { kind: 'self' },
   'DELETE /api/account/devices/:id': { kind: 'cross', path: (fx) => `/api/account/devices/${fx.users.ub.device_id}` },
+  'PATCH /api/cards/:card_id/planning': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/planning`, body: (fx) => ({ request_id: randomUUID(), version: fx.h.hub.card(fx.B.card).version, due_date: '2026-10-02' }) },
   'GET /api/me': { kind: 'team' },
   'POST /api/teams': { kind: 'create' },
+  'POST /api/client-workspaces': { kind: 'create' },
+  'GET /api/teams/:team_id/client-workspace': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/client-workspace` },
+  'POST /api/teams/:team_id/client-invites': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/client-invites`, body: (fx) => ({ email: 'pwned@none.test', grants: [{ project_id: fx.B.clientProject, scopes: ['status.read'] }] }) },
+  'POST /api/teams/:team_id/client-invites/:invite_id/resend': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/client-invites/${fx.B.clientInvite}/resend` },
+  'DELETE /api/teams/:team_id/client-invites/:invite_id': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/client-invites/${fx.B.clientInvite}` },
+  'PATCH /api/teams/:team_id/client-guests/:guest_id': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/client-guests/${fx.B.clientGuest}`, body: (fx) => ({ grants: [{ project_id: fx.B.clientProject, scopes: ['status.read'] }] }) },
+  'DELETE /api/teams/:team_id/client-guests/:guest_id': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/client-guests/${fx.B.clientGuest}` },
+  'POST /api/boards/:board_id/client-project': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/client-project` },
+  'POST /api/boards/:board_id/client-items': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/client-items`, body: (fx) => ({ card_id: fx.B.card, title: 'Pwned', status: 'done' }) },
+  'DELETE /api/client-items/:item_id': { kind: 'cross', path: (fx) => `/api/client-items/${fx.B.clientItem}` },
+  'POST /api/client-invites/preview': { kind: 'public', reason: 'email-bound client invitation preview; fixed names/scopes/expiry only, own adversarial tests' },
+  'POST /api/client-invites/accept': { kind: 'self' },
+  'GET /api/client/workspaces': { kind: 'self' },
+  'GET /api/client/workspaces/:workspace_id/projects': { kind: 'cross', path: (fx) => `/api/client/workspaces/${fx.B.team}/projects` },
+  'GET /api/client/projects/:project_id': { kind: 'cross', path: (fx) => `/api/client/projects/${fx.B.clientProject}` },
+  'GET /api/account/client-export': { kind: 'self' },
+  'POST /api/client-items/:item_id/artifacts': { kind: 'cross', path: (fx) => `/api/client-items/${fx.B.clientItem}/artifacts`, body: { request_id: 'foreign-upload', name: 'pwned.txt', mime: 'text/plain', data_base64: 'aGk=' } },
+  'POST /api/client-items/:item_id/approvals': { kind: 'cross', path: (fx) => `/api/client-items/${fx.B.clientItem}/approvals`, body: (fx) => ({ artifact_version_id: fx.B.clientArtifact, guest_ids: [fx.B.clientGuest] }) },
+  'DELETE /api/client-approval-requests/:approval_id': { kind: 'cross', path: (fx) => `/api/client-approval-requests/${fx.B.clientApproval}` },
+  'GET /api/client/items/:item_id/artifacts': { kind: 'cross', path: (fx) => `/api/client/items/${fx.B.clientItem}/artifacts` },
+  'GET /api/client/items/:item_id/artifacts/:version_id': { kind: 'cross', path: (fx) => `/api/client/items/${fx.B.clientItem}/artifacts/${fx.B.clientArtifact}` },
+  'GET /api/client/items/:item_id/artifacts/:version_id/content': { kind: 'cross', path: (fx) => `/api/client/items/${fx.B.clientItem}/artifacts/${fx.B.clientArtifact}/content` },
+  'GET /api/client/approvals/:approval_id': { kind: 'cross', path: (fx) => `/api/client/approvals/${fx.B.clientApproval}` },
+  'POST /api/client/approvals/:approval_id/decision': { kind: 'cross', path: (fx) => `/api/client/approvals/${fx.B.clientApproval}/decision`, body: (fx) => ({ decision: 'approve', artifact_version_id: fx.B.clientArtifact, sha256: 'a'.repeat(64) }) },
+  'GET /api/boards/:board_id/client-feedback-intake': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/client-feedback-intake` },
+  'PATCH /api/boards/:board_id/client-feedback-intake': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/client-feedback-intake`, body: { enabled: true } },
+  'GET /api/client/items/:item_id/feedback': { kind: 'cross', path: (fx) => `/api/client/items/${fx.B.clientItem}/feedback` },
+  'POST /api/client/items/:item_id/feedback': { kind: 'cross', path: (fx) => `/api/client/items/${fx.B.clientItem}/feedback`, body: { request_id: 'pwned-feedback', message: 'Pwned' } },
   'GET /api/teams/:team_id': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}` },
   'PATCH /api/teams/:team_id': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}`, body: { name: 'pwned' } },
   'DELETE /api/teams/:team_id': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}`, body: { confirm_slug: 'x' } },
   'POST /api/teams/:team_id/boards': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/boards`, body: { name: 'pwned' } },
+  'GET /api/teams/:team_id/boards': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/boards`, alt: (fx) => [`/api/teams/${fx.B.team}/boards?include_archived=1`] },
   'GET /api/teams/:team_id/members': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/members` },
   'PATCH /api/teams/:team_id/members/:member_id': {
     kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/members/${fx.B.s}`, body: { role: 'admin' },
@@ -78,10 +139,36 @@ const MATRIX = {
     alt: (fx) => [`/api/teams/${fx.A.team}/enrolments/${fx.B.enrollment}`],
   },
   'GET /api/boards/:board_id': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}`, alt: (fx) => [`/api/boards/${fx.B.board}?include_archived=1`] },
+  'GET /api/boards': { kind: 'team' },
+  'GET /api/search': { kind: 'cross', path: (fx) => `/api/search?q=secret&board_id=${fx.B.board}`, alt: (fx) => [`/api/search?q=secret&team=${fx.B.team}`] },
+  'GET /api/workflows': { kind: 'team' },
+  'GET /api/team-overview': { kind: 'team' },
+  'POST /api/workflows': { kind: 'team', body: { definition: { name: 'pwned', steps: [{ title: 'pwned', plan_approval: true }] } } },
+  'GET /api/workflows/:workflow_id': { kind: 'cross', path: (fx) => `/api/workflows/${fx.B.workflow}` },
+  'POST /api/workflows/:workflow_id/versions': { kind: 'cross', path: (fx) => `/api/workflows/${fx.B.workflow}/versions`, body: { expected_version: 1, definition: { name: 'pwned', steps: [{ title: 'pwned', plan_approval: true }] } } },
+  'POST /api/workflows/:workflow_id/archive': { kind: 'cross', path: (fx) => `/api/workflows/${fx.B.workflow}/archive`, body: { archived: true } },
+  'POST /api/boards/:board_id/workflows/:workflow_id/apply': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/workflows/${fx.B.workflow}/apply`, alt: (fx) => [`/api/boards/${fx.A.board}/workflows/${fx.B.workflow}/apply`], body: (fx) => ({ version: 1, content_hash: fx.B.workflowHash }) },
+  'POST /api/workflow-instances/:instance_id/preview': {kind:'cross',path:fx=>`/api/workflow-instances/${fx.B.workflowInstance}/preview`,body:fx=>fx.B.workflowPreview},
+  'GET /api/workflow-instances/:instance_id/execution-context': {kind:'cross',path:fx=>`/api/workflow-instances/${fx.B.workflowInstance}/execution-context`},
+  'GET /api/workflow-plans/:plan_id': {kind:'cross',path:fx=>`/api/workflow-plans/${fx.B.workflowPlan}`},
+  'POST /api/workflow-plans/:plan_id/execution-preview': {kind:'cross',path:fx=>`/api/workflow-plans/${fx.B.workflowPlan}/execution-preview`,body:fx=>fx.B.executionPreviewInput},
+  'POST /api/workflow-executions/:execution_id/preview': {kind:'cross',path:fx=>`/api/workflow-executions/${fx.B.execution}/preview`,body:fx=>({...fx.B.executionPreviewInput,source_plan_id:fx.B.workflowPlan,purpose:'resume',expected_revision:0})},
+  'GET /api/workflow-execution-previews/:execution_preview_id': {kind:'cross',path:fx=>`/api/workflow-execution-previews/${fx.B.executionPreview}`},
+  'POST /api/workflow-plans/:plan_id/start': {kind:'cross',path:fx=>`/api/workflow-plans/${fx.B.workflowPlan}/start`,body:fx=>fx.B.workflowStart},
+  'GET /api/workflow-executions/:execution_id': {kind:'cross',path:fx=>`/api/workflow-executions/${fx.B.execution}`},
+  'POST /api/workflow-executions/:execution_id/resume': {kind:'cross',path:fx=>`/api/workflow-executions/${fx.B.execution}/resume`,body:fx=>fx.B.workflowResume},
+  'POST /api/workflow-executions/:execution_id/pause': {kind:'cross',path:fx=>`/api/workflow-executions/${fx.B.execution}/pause`,body:{expected_revision:0}},
+  'POST /api/workflow-executions/:execution_id/cancel': {kind:'cross',path:fx=>`/api/workflow-executions/${fx.B.execution}/cancel`,body:{expected_revision:0}},
+  'POST /api/workflow-executions/:execution_id/steps/:position/retry': {kind:'cross',path:fx=>`/api/workflow-executions/${fx.B.execution}/steps/0/retry`,body:fx=>({...fx.B.workflowResume,previous_attempt_id:randomUUID()})},
+  'POST /api/boards': { kind: 'team', body: { name: 'pwned' } },
+  'PATCH /api/boards/:board_id': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}`, body: { name: 'pwned' } },
+  'POST /api/boards/:board_id/archive': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/archive` },
+  'POST /api/boards/:board_id/restore': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/restore` },
   'GET /api/boards/:board_id/alerts': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/alerts` },
   'GET /api/boards/:board_id/journal': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/journal` },
   'GET /api/boards/:board_id/presence': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/presence` },
   'POST /api/boards/:board_id/cards': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/cards`, body: { title: 'pwned' } },
+  'POST /api/boards/:board_id/work-capture': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/work-capture`, body: (fx) => ({ install_id: randomUUID(), provider: 'codex', session_id: 'foreign-session', repo_id: fx.B.repo, title: 'Foreign capture', status: 'working' }) },
   // Label registry and archive (D91, D94): B's board, label name and card, also named from A's board.
   'GET /api/boards/:board_id/labels': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/labels` },
   'POST /api/boards/:board_id/labels': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/labels`, body: { name: 'pwned', color: 'red' } },
@@ -97,9 +184,16 @@ const MATRIX = {
   'POST /api/cards/:card_id/restore': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/restore` },
   'POST /api/boards/:board_id/repos': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/repos`, body: (fx) => ({ repo_id: fx.B.repo }) },
   'GET /api/cards/:card_id': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}` },
+  'POST /api/cards/:card_id/work-capture/stop': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/work-capture/stop`, body: {} },
   'PATCH /api/cards/:card_id': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}`, body: { title: 'pwned', version: 0 } },
   'POST /api/cards/:card_id/actions/:action': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/actions/stop`, body: {} },
   'POST /api/cards/:card_id/comments': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/comments`, body: { body: 'pwned' } },
+  'GET /api/cards/:card_id/messages': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/messages` },
+  'GET /api/cards/:card_id/ownership': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/ownership` },
+  'GET /api/boards/:board_id/work-context': {kind:'cross',path:fx=>`/api/boards/${fx.B.board}/work-context`},
+  'POST /api/cards/:card_id/messages': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/messages`, body: { expected_fence: 0 } },
+  'GET /api/cards/:card_id/packet': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/packet` },
+  'POST /api/cards/:card_id/packet': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/packet`, body: { expected_fence: 0 } },
   'GET /api/cards/:card_id/handover': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/handover` },
   'GET /api/cards/:card_id/overlap-preview': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/overlap-preview` },
   'POST /api/permission-requests/:id/answer': { kind: 'cross', path: (fx) => `/api/permission-requests/${fx.B.permission}/answer`, body: { decision: 'allow' } },
@@ -117,7 +211,7 @@ const MATRIX = {
     alt: (fx) => [`/api/integrations/${fx.B.pending}/prepare`],
   },
   'POST /api/integrations/:id/authorize': { kind: 'cross', path: (fx) => `/api/integrations/${fx.B.pending}/authorize` },
-  'PATCH /api/integrations/:id': { kind: 'cross', path: (fx) => `/api/integrations/${fx.B.connection}`, body: { autonomy: {} }, alt: (fx) => [`/api/integrations/${fx.B.pending}`] },
+  'PATCH /api/integrations/:id': { kind: 'cross', path: (fx) => `/api/integrations/${fx.B.connection}`, body: (fx) => ({ autonomy: {}, target_board_id: fx.B.board }), alt: (fx) => [`/api/integrations/${fx.B.pending}`] },
   'DELETE /api/integrations/:id': { kind: 'cross', path: (fx) => `/api/integrations/${fx.B.connection}`, alt: (fx) => [`/api/integrations/${fx.B.pending}`] },
   'GET /api/integrations/:id/audit': { kind: 'cross', path: (fx) => `/api/integrations/${fx.B.connection}/audit` },
   // Identity links (D98): B's connection (and B's member) from team A or no team.
@@ -167,6 +261,28 @@ test('T-ROUTES coverage: every hub route is in the tenancy matrix, and the matri
 });
 
 async function sweep(fx, caller) {
+  const applied=await fx.as(fx.users.ub,'POST',`/api/boards/${fx.B.board}/workflows/${fx.B.workflow}/apply`,{request_id:randomUUID(),version:1,content_hash:fx.B.workflowHash});
+  assert.equal(applied.status,200,applied.text);fx.B.workflowInstance=applied.body.instance.id;
+  const step=applied.body.instance.steps[0],card=fx.h.hub.card(step.id);
+  const patched=await fx.as(fx.users.ub,'PATCH',`/api/cards/${card.id}`,{request_id:randomUUID(),version:card.version,repo_id:fx.B.repo});assert.equal(patched.status,200,patched.text);
+  const current=fx.h.hub.card(card.id);
+  fx.B.workflowPreview={request_id:randomUUID(),board_id:fx.B.board,repo_id:fx.B.repo,recipe_version:1,content_hash:fx.B.workflowHash,concurrency:1,
+   steps:[{position:0,card_id:current.id,version:current.version,fence:current.fence,ai:'codex',target_member_id:fx.B.owner,budget_usd:null,plan_approval:true}]};
+  const preview=await fx.as(fx.users.ub,'POST',`/api/workflow-instances/${fx.B.workflowInstance}/preview`,fx.B.workflowPreview);assert.equal(preview.status,200,preview.text);fx.B.workflowPlan=preview.body.plan.id;
+  fx.B.executionPreviewInput={request_id:randomUUID(),plan_hash:preview.body.plan.hash,purpose:'start',declared_paths:[{position:0,paths:[]}]};
+  const control=await fx.as(fx.users.ub,'POST',`/api/workflow-plans/${fx.B.workflowPlan}/execution-preview`,fx.B.executionPreviewInput);assert.equal(control.status,200,control.text);fx.B.executionPreview=control.body.execution_preview.id;
+  fx.B.workflowStart={expected_revision:0,plan_hash:preview.body.plan.hash,execution_preview_id:fx.B.executionPreview,execution_preview_hash:control.body.execution_preview.hash,path_intent_hash:control.body.execution_preview.path_intent_hash,confirm:true};
+  fx.B.workflowResume={...fx.B.workflowStart};delete fx.B.workflowResume.plan_hash;
+  const planSnapshot=JSON.parse(fx.db.get('SELECT snapshot FROM workflow_execution_plans WHERE id=?',fx.B.workflowPlan).snapshot);
+  const fixed={schema:1,content_hash:planSnapshot.options.content_hash,repository_hmac:planSnapshot.repository_hmac,dependencies:planSnapshot.options.dependencies,card_ids:planSnapshot.steps.map(s=>s.card_id)};
+  const digest=v=>createHash('sha256').update(canonical(v)).digest('hex');fx.B.execution=randomUUID();
+  fx.db.insert('workflow_executions',{id:fx.B.execution,org_id:fx.B.team,instance_id:fx.B.workflowInstance,board_id:fx.B.board,repo_id:fx.B.repo,source_plan_id:fx.B.workflowPlan,source_hash:digest(fixed),revision:0,state:'planned',created_epoch:fx.h.hub.epoch,created_ms:fx.h.hub.wallMs(),snapshot:canonical(fixed)});
+  fx.db.insert('workflow_execution_steps',{execution_id:fx.B.execution,position:0,card_id:current.id,source_hash:digest(planSnapshot.steps[0]),version:current.version,fence:current.fence,state:'pending'});
+  const payload={schema:1,files:[{id:randomUUID(),source_id:'git',relative_path:'.gitconfig',format:'gitconfig',content:'[alias]\n st = status\n',note:''}],items:[],note:MARK};
+  const checked=validatePayload(payload);
+  const setup=await fx.as(fx.users.ub,'POST',`/api/teams/${fx.B.team}/setups`,{request_id:randomUUID(),expected_version_id:null,payload,review:{schema:1,approved:true,content_hash:checked.content_hash,file_hashes:checked.file_hashes}},{'x-plexiform-account':fx.users.ub.id,'x-plexiform-member':fx.B.owner});
+  assert.equal(setup.status,200,setup.text);fx.B.setupProfile=setup.body.profile.id;fx.B.setupVersion=setup.body.version.id;
+  const setupsBefore=JSON.stringify(fx.db.all('SELECT * FROM setup_versions WHERE profile_id=?',fx.B.setupProfile));
   const before = fx.snapshotB();
   const leaks = [];
   let calls = 0;
@@ -190,6 +306,7 @@ async function sweep(fx, caller) {
   assert.deepEqual(leaks, []);
   assert.ok(calls >= 30, `only ${calls} cross-team calls made`);
   assert.equal(fx.snapshotB(), before, "team B's rows changed");
+  assert.equal(JSON.stringify(fx.db.all('SELECT * FROM setup_versions WHERE profile_id=?',fx.B.setupProfile)),setupsBefore,'foreign sealed setups are unchanged');
 }
 
 test('T-ROUTES: a team-A owner gets 404 and no B data from every route, with B ids or the B team header', async () => {

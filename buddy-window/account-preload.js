@@ -7,6 +7,7 @@ const str = (v) => String(v ?? '');
 
 contextBridge.exposeInMainWorld('buddyAccount', {
   state: () => call('state'),
+  openClients: () => call('openClients'),
   go: (screen) => call('go', str(screen)),
   hub: (address) => call('hub', str(address)),
   confirm: (yes) => call('confirm', !!yes),
@@ -49,5 +50,7 @@ contextBridge.exposeInMainWorld('buddyAccount', {
   revokeRunner: (team, id) => call('revokeRunner', str(team), str(id)),
   presence: (host, on) => call('presence', str(host), !!on),
   summaries: (host, on) => call('summaries', str(host), !!on),
+  captureEnabled: (on) => call('captureEnabled', !!on),
+  captureDefault: (repo, key) => call('captureDefault', str(repo), str(key)),
   onChanged: (fn) => ipcRenderer.on('buddy:acct:changed', () => fn()),
 });

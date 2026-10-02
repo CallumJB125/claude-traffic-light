@@ -4,6 +4,7 @@
 import { isIP } from 'node:net'; // privacy-flow: local-board-sockets
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseStorageMax, validateStorageMax } from './storage-watch.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -32,6 +33,7 @@ export function loadConfig(env = process.env) {
     port: int(env.BOARD_PORT, 8787),
     dataDir,
     dbPath: env.BOARD_DB ? resolve(env.BOARD_DB) : join(dataDir, 'board.db'),
+    dbSizeMaxMb: parseStorageMax(env.DB_SIZE_MAX_MB),
     auth,
     accessTeam: env.BOARD_ACCESS_TEAM || null,
     accessAud: env.BOARD_ACCESS_AUD || null,
@@ -289,6 +291,7 @@ function validateAccounts(cfg) {
 }
 
 export function validateConfig(cfg) {
+  validateStorageMax(cfg.dbSizeMaxMb);
   if (!['access', 'dev', 'local', 'accounts'].includes(cfg.auth)) throw new Error(`BOARD_AUTH must be access, dev or local (or accounts), got ${cfg.auth}`);
   if (cfg.auth === 'accounts') validateAccounts(cfg);
   // Local = the hub embedded in the desktop app: only its own window may reach it.

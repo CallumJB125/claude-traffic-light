@@ -433,6 +433,20 @@ const euRig = (au, { stallMs, ...over } = {}) => createService({
   platform: 'win32', arch: 'x64', retryDelayMs: 0, log: quiet, ...over,
 });
 
+test('portable copy verifies the signed NSIS offer but cannot download, install or revert into an installed app', async () => {
+  publish(feed, { privateKey, version: '1.2.0', files: [EXE('1.2.0')] });
+  const backend = require('../src/updater/index').backendFor({ app: { isPackaged: true }, platform: 'win32', env: { PORTABLE_EXECUTABLE_FILE: 'C:\\Downloads\\Plexiform-portable.exe' }, dev: false });
+  const svc = createService({ fetch, keyring: keys, feedBase: feed.base, currentVersion: '1.1.0', userData: tmpDir('portable'), backend, platform: 'win32', arch: 'x64', retryDelayMs: 0, log: quiet });
+  assert.deepEqual(await svc.check({ user: true }), { ok: false, error: 'portable' });
+  assert.equal(svc.getState().available.version, '1.2.0');
+  assert.equal(svc.getState().canRevert, false);
+  assert.deepEqual(await svc.download(), { ok: false, error: 'portable' });
+  assert.deepEqual(await svc.install(), { ok: false, error: 'not-ready' });
+  assert.equal(feed.requests.some(r => r.path.endsWith('.exe') || r.path.endsWith('.yml')), false);
+  assert.equal(typeof backend.download, 'undefined');
+  assert.equal(typeof backend.install, 'undefined');
+});
+
 test('electron-updater: a feed whose sha512 differs from the signed release is refused before downloadUpdate', async () => {
   publish(feed, { privateKey, version: '1.2.0', files: [EXE('1.2.0')] });
   const au = fakeUpdater({ info: { version: '1.2.0', files: [{ url: 'Plexiform-1.2.0-win-x64.exe', sha512: sha('evil'), size: 9 }] } });
