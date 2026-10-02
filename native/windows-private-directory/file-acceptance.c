@@ -17,15 +17,28 @@
 static BOOL WINAPI fx_read(HANDLE, LPVOID, DWORD, LPDWORD, LPOVERLAPPED);
 static NTSTATUS NTAPI fx_open(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PIO_STATUS_BLOCK,
     PLARGE_INTEGER, ULONG, ULONG, ULONG, ULONG, PVOID, ULONG);
+static BOOL WINAPI fx_info(HANDLE, FILE_INFO_BY_HANDLE_CLASS, LPVOID, DWORD);
+static BOOL WINAPI fx_volume(HANDLE, LPWSTR, DWORD, LPDWORD, LPDWORD, LPDWORD, LPWSTR, DWORD);
+static DWORD WINAPI fx_security(HANDLE, SE_OBJECT_TYPE, SECURITY_INFORMATION, PSID *, PSID *, PACL *, PACL *, PSECURITY_DESCRIPTOR *);
 #define ReadFile fx_read
 #define NtCreateFile fx_open
+#define GetFileInformationByHandleEx fx_info
+#define GetVolumeInformationByHandleW fx_volume
+#define GetSecurityInfo fx_security
 #include "directory.c"
 #undef ReadFile
 #undef NtCreateFile
+#undef GetFileInformationByHandleEx
+#undef GetVolumeInformationByHandleW
+#undef GetSecurityInfo
 
 typedef enum { FX_NONE, FX_SHARING, FX_PUBLIC_ACL, FX_PRIVATE_ACL, FX_PARENT_PUBLIC, FX_ATTRIBUTES, FX_REPLACE, FX_ZERO, FX_IO_ERROR, FX_NAMED_ERROR } FXMode;
 static DWORD checks = 0, failures = 0, consumed = 0, requested = 0;
 static DWORD readCalls = 0, mutationCalls = 0, fileOpens = 0;
+/* Fixed metadata only: first failed SDK phase, API status and final native
+ * open status. Never print paths, SID, descriptors, handles or private bytes. */
+static DWORD failedPhase = 0, failedStatus = 0;
+static NTSTATUS lastOpenStatus = 0;
 static BOOL mutationOK = FALSE, writeExcluded = FALSE, renameExcluded = FALSE, growExcluded = FALSE;
 static FXMode mode = FX_NONE;
 static WCHAR activePath[PF_ROOT_LIMIT + 1], displacedPath[PF_ROOT_LIMIT + 1];
@@ -37,6 +50,27 @@ static BOOL check(BOOL passed, const char *name) {
     printf("%s %lu - %s\n", passed ? "ok" : "not ok", (unsigned long)checks, name);
     if (!passed) failures++;
     return passed;
+}
+
+static void api_failure(DWORD phase, DWORD status) {
+    if (!failedPhase) { failedPhase = phase; failedStatus = status; }
+}
+static BOOL WINAPI fx_info(HANDLE handle, FILE_INFO_BY_HANDLE_CLASS kind, LPVOID output, DWORD size) {
+    BOOL ok = GetFileInformationByHandleEx(handle, kind, output, size);
+    if (!ok) api_failure(100 + (DWORD)kind, GetLastError());
+    return ok;
+}
+static BOOL WINAPI fx_volume(HANDLE handle, LPWSTR volume, DWORD volumeSize, LPDWORD serial,
+    LPDWORD component, LPDWORD flags, LPWSTR filesystem, DWORD filesystemSize) {
+    BOOL ok = GetVolumeInformationByHandleW(handle, volume, volumeSize, serial, component, flags, filesystem, filesystemSize);
+    if (!ok) api_failure(200, GetLastError());
+    return ok;
+}
+static DWORD WINAPI fx_security(HANDLE handle, SE_OBJECT_TYPE type, SECURITY_INFORMATION info,
+    PSID *owner, PSID *group, PACL *acl, PACL *sacl, PSECURITY_DESCRIPTOR *descriptor) {
+    DWORD result = GetSecurityInfo(handle, type, info, owner, group, acl, sacl, descriptor);
+    if (result != ERROR_SUCCESS) api_failure(300, result);
+    return result;
 }
 
 static BOOL child_path(WCHAR *out, const WCHAR *root, const WCHAR *leaf) {
@@ -155,6 +189,7 @@ static BOOL exact_content(const WCHAR *path, DWORD size) {
 
 static void reset_mode(FXMode next, const WCHAR *path, const WCHAR *displaced) {
     mode = next; consumed = requested = readCalls = mutationCalls = fileOpens = 0;
+    failedPhase = failedStatus = 0; lastOpenStatus = 0;
     mutationOK = writeExcluded = renameExcluded = growExcluded = FALSE;
     activePath[0] = displacedPath[0] = 0;
     if (path) wcscpy_s(activePath, PF_ROOT_LIMIT + 1, path);
@@ -193,13 +228,17 @@ static BOOL WINAPI fx_read(HANDLE handle, LPVOID buffer, DWORD count, LPDWORD ac
 
 static NTSTATUS NTAPI fx_open(PHANDLE handle, ACCESS_MASK access, POBJECT_ATTRIBUTES attributes, PIO_STATUS_BLOCK io,
     PLARGE_INTEGER size, ULONG fileAttributes, ULONG sharing, ULONG disposition, ULONG options, PVOID ea, ULONG eaLength) {
+    NTSTATUS result;
     if (options & FILE_NON_DIRECTORY_FILE) fileOpens++;
     if (mode == FX_NAMED_ERROR && fileOpens == 3) { *handle = INVALID_HANDLE_VALUE; return (NTSTATUS)0xC0000034L; }
     if (mode == FX_REPLACE && (options & FILE_NON_DIRECTORY_FILE) && mutationCalls == 0) {
         mutationCalls++;
         mutationOK = MoveFileW(activePath, displacedPath) && make_file(activePath, NULL, 32);
     }
-    return NtCreateFile(handle, access, attributes, io, size, fileAttributes, sharing, disposition, options, ea, eaLength);
+    result = NtCreateFile(handle, access, attributes, io, size, fileAttributes, sharing, disposition, options, ea, eaLength);
+    lastOpenStatus = result;
+    if (result < 0) api_failure(400, (DWORD)result);
+    return result;
 }
 
 static BOOL zero_output(const BYTE *bytes, DWORD count) {
@@ -210,9 +249,15 @@ static BOOL zero_output(const BYTE *bytes, DWORD count) {
 
 static PFFileResult read_case(const PFDirectory *directory, const WCHAR *component, PFFileRole role,
     const PFFileStamp *expected, BYTE *out, DWORD capacity, DWORD *length, PFFileStamp *stamp) {
+    PFFileResult result;
     memset(out, 0xa5, capacity); *length = 999;
     memset(stamp, 0xa5, sizeof(*stamp));
-    return pf_file_read(directory, component, role, expected, out, capacity, length, stamp);
+    result = pf_file_read(directory, component, role, expected, out, capacity, length, stamp);
+    printf("# reader role=%u result=%s phase=%lu status=%lu ntstatus=%08lx opens=%lu reads=%lu requested=%lu consumed=%lu length=%lu\n",
+        (unsigned)role, pf_file_reason(result), (unsigned long)failedPhase, (unsigned long)failedStatus,
+        (unsigned long)lastOpenStatus, (unsigned long)fileOpens, (unsigned long)readCalls,
+        (unsigned long)requested, (unsigned long)consumed, (unsigned long)*length);
+    return result;
 }
 
 static void refusal(const PFDirectory *directory, const WCHAR *component, PFFileRole role, PFFileResult wanted, const char *name) {
