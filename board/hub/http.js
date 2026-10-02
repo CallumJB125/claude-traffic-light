@@ -25,7 +25,6 @@ import { searchWork } from './search.js';
 import { teamOverview } from './team-overview.js';
 import { Workflows } from './workflows.js';
 import { WorkflowExecutions } from './workflow-executions.js';
-import { WorkflowExecutor } from './workflow-executor.js';
 import { TeamCommunication } from './communication.js';
 import { WorkCapture } from './work-capture.js';
 import { Planning } from './planning.js';
@@ -249,7 +248,7 @@ function sendConnectPage(res, status, text, kind, headers = {}, next = null) {
 export function createHttpHandler({ hub, api, config, integrations = null }) {
   const workflows = new Workflows(hub);
   const workflowExecutions = new WorkflowExecutions(api);
-  const workflowExecutor = new WorkflowExecutor(api);
+  const workflowExecutor = api.workflowExecutor;
   const communication = new TeamCommunication(hub);
   const workCapture = new WorkCapture(hub);
   const planning = new Planning(api);
@@ -452,6 +451,10 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     route('POST','/api/workflow-plans/:plan_id/execution-preview',({member,params,body,ident,query})=>workflowExecutor.preview(member,params.plan_id,body,ident.cred,options(query)),{...controlGuard,strictBody:true,maxBody:32*1024});
     route('POST','/api/workflow-executions/:execution_id/preview',({member,params,body,ident,query})=>workflowExecutor.controlPreview(member,params.execution_id,body,ident.cred,options(query)),{...controlGuard,strictBody:true,maxBody:32*1024});
     route('GET','/api/workflow-execution-previews/:execution_preview_id',({member,params,ident,query})=>workflowExecutor.read(member,params.execution_preview_id,ident.cred,options(query)),{...controlGuard,limit:'communication_read_member'});
+    route('POST','/api/workflow-plans/:plan_id/start',({member,params,body,ident,query})=>workflowExecutor.start(member,params.plan_id,body,ident.cred,options(query)),{...controlGuard,strictBody:true,maxBody:32*1024});
+    route('GET','/api/workflow-executions/:execution_id',({member,params,ident,query})=>workflowExecutor.status(member,params.execution_id,ident.cred,options(query)),{...controlGuard,limit:'communication_read_member'});
+    for(const command of ['resume','pause','cancel'])route('POST',`/api/workflow-executions/:execution_id/${command}`,({member,params,body,ident,query})=>workflowExecutor.command(command,member,params.execution_id,body,ident.cred,options(query)),{...controlGuard,strictBody:true,maxBody:32*1024});
+    route('POST','/api/workflow-executions/:execution_id/steps/:position/retry',({member,params,body,ident,query})=>workflowExecutor.command('retry',member,params.execution_id,body,ident.cred,options(query),/^[0-7]$/.test(params.position)?Number(params.position):-1),{...controlGuard,strictBody:true,maxBody:32*1024});
   }
   route('POST', '/api/boards', ({ member, body }) => api.createBoard(member, body));
   route('PATCH', '/api/boards/:board_id', ({ member, params, body }) => api.updateBoard(member, params.board_id, body));
@@ -914,7 +917,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
       // an old response must not bypass later removal or guest revocation.
       // Paid dispatches use their durable, choice-bound row instead of a
       // generic response cache that could replay a different AI/budget.
-      const rid = r.replay !== false && !paidAction && actor && r.mutating && typeof body.request_id === 'string' ? body.request_id : null;
+      const rid = r.replay !== false && !paidAction && !hub.workflowGuard.resourceOwned(params) && actor && r.mutating && typeof body.request_id === 'string' ? body.request_id : null;
       const binding = rid && (r.collaboration || r.writeScope) ? requestBinding(r, params, body) : null;
       const runRequest = async () => {
         refreshWrite();

@@ -153,6 +153,12 @@ const MATRIX = {
   'POST /api/workflow-plans/:plan_id/execution-preview': {kind:'cross',path:fx=>`/api/workflow-plans/${fx.B.workflowPlan}/execution-preview`,body:fx=>fx.B.executionPreviewInput},
   'POST /api/workflow-executions/:execution_id/preview': {kind:'cross',path:fx=>`/api/workflow-executions/${fx.B.execution}/preview`,body:fx=>({...fx.B.executionPreviewInput,source_plan_id:fx.B.workflowPlan,purpose:'resume',expected_revision:0})},
   'GET /api/workflow-execution-previews/:execution_preview_id': {kind:'cross',path:fx=>`/api/workflow-execution-previews/${fx.B.executionPreview}`},
+  'POST /api/workflow-plans/:plan_id/start': {kind:'cross',path:fx=>`/api/workflow-plans/${fx.B.workflowPlan}/start`,body:fx=>fx.B.workflowStart},
+  'GET /api/workflow-executions/:execution_id': {kind:'cross',path:fx=>`/api/workflow-executions/${fx.B.execution}`},
+  'POST /api/workflow-executions/:execution_id/resume': {kind:'cross',path:fx=>`/api/workflow-executions/${fx.B.execution}/resume`,body:fx=>fx.B.workflowResume},
+  'POST /api/workflow-executions/:execution_id/pause': {kind:'cross',path:fx=>`/api/workflow-executions/${fx.B.execution}/pause`,body:{expected_revision:0}},
+  'POST /api/workflow-executions/:execution_id/cancel': {kind:'cross',path:fx=>`/api/workflow-executions/${fx.B.execution}/cancel`,body:{expected_revision:0}},
+  'POST /api/workflow-executions/:execution_id/steps/:position/retry': {kind:'cross',path:fx=>`/api/workflow-executions/${fx.B.execution}/steps/0/retry`,body:fx=>({...fx.B.workflowResume,previous_attempt_id:randomUUID()})},
   'POST /api/boards': { kind: 'team', body: { name: 'pwned' } },
   'PATCH /api/boards/:board_id': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}`, body: { name: 'pwned' } },
   'POST /api/boards/:board_id/archive': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/archive` },
@@ -264,6 +270,8 @@ async function sweep(fx, caller) {
   const preview=await fx.as(fx.users.ub,'POST',`/api/workflow-instances/${fx.B.workflowInstance}/preview`,fx.B.workflowPreview);assert.equal(preview.status,200,preview.text);fx.B.workflowPlan=preview.body.plan.id;
   fx.B.executionPreviewInput={request_id:randomUUID(),plan_hash:preview.body.plan.hash,purpose:'start',declared_paths:[{position:0,paths:[]}]};
   const control=await fx.as(fx.users.ub,'POST',`/api/workflow-plans/${fx.B.workflowPlan}/execution-preview`,fx.B.executionPreviewInput);assert.equal(control.status,200,control.text);fx.B.executionPreview=control.body.execution_preview.id;
+  fx.B.workflowStart={expected_revision:0,plan_hash:preview.body.plan.hash,execution_preview_id:fx.B.executionPreview,execution_preview_hash:control.body.execution_preview.hash,path_intent_hash:control.body.execution_preview.path_intent_hash,confirm:true};
+  fx.B.workflowResume={...fx.B.workflowStart};delete fx.B.workflowResume.plan_hash;
   const planSnapshot=JSON.parse(fx.db.get('SELECT snapshot FROM workflow_execution_plans WHERE id=?',fx.B.workflowPlan).snapshot);
   const fixed={schema:1,content_hash:planSnapshot.options.content_hash,repository_hmac:planSnapshot.repository_hmac,dependencies:planSnapshot.options.dependencies,card_ids:planSnapshot.steps.map(s=>s.card_id)};
   const digest=v=>createHash('sha256').update(canonical(v)).digest('hex');fx.B.execution=randomUUID();

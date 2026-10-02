@@ -43,8 +43,9 @@ test('actual HTTP path review saves a separate immutable inert snapshot; exact r
  const rows=saved(f);f.h.clock.advance(100);const retry=await f.preview();assert.equal(retry.status,200,retry.text);assert.equal(retry.body.execution_preview.id,p.id);assert.equal(retry.body.execution_preview.hash,p.hash);assert.equal(retry.body.execution_preview.valid_until,p.valid_until);assert.equal(saved(f),rows);assert.equal(business(f),before);
  const read=await f.as(f.users.aviewer,'GET',`/api/workflow-execution-previews/${p.id}`);assert.equal(read.status,200,read.text);
  for(const text of [f.cred.id,f.users.amember.token,'PRIVATE-EXEC-BRIEF','PRIVATE-EXEC-VERIFY'])assert.equal(read.text.includes(text),false);
- for(const command of ['start','resume','retry','pause','cancel'])assert.equal(f.service[command],undefined);
- for(const path of [`/api/workflow-plans/${f.plan.id}/start`,`/api/workflow-executions/${randomUUID()}/resume`,`/api/workflow-executions/${randomUUID()}/cancel`])assert.equal((await f.as(f.users.amember,'POST',path,{})).status,404);
+ assert.equal((await f.as(f.users.amember,'POST',`/api/workflow-plans/${f.plan.id}/start`,{})).status,400,'an inert preview cannot supply the closed triple-hash confirmation');
+ for(const path of [`/api/workflow-executions/${randomUUID()}/resume`,`/api/workflow-executions/${randomUUID()}/cancel`])assert.equal((await f.as(f.users.amember,'POST',path,{})).status,404);
+ assert.equal(business(f),before,'preview reads and refused commands never grant or launch');
 });
 
 test('new control shapes enforce triple Start hashes, canonical bounded paths and fixed closed command names',()=>{
@@ -109,7 +110,7 @@ test('boot/expiry/rollback never revive snapshots, disabled marker cannot be res
  f.h.hub.boot();assert.equal(f.db.get('SELECT state FROM workflow_executions WHERE id=?',execution).state,'paused_boot');assert.equal(f.db.get('SELECT revision FROM workflow_executions WHERE id=?',execution).revision,1);
  const read=await f.as(f.users.amember,'GET',`/api/workflow-execution-previews/${made.body.execution_preview.id}`);assert.equal(read.status,200);assert.equal(read.body.execution_preview.state,'paused_reboot');assert.equal(saved(f),rows);
  f.db.run('DELETE FROM workflow_execution_plans WHERE id=?',f.plan.id);assert.equal(f.db.get('SELECT * FROM workflow_executions WHERE id=?',execution),null);assert.equal(f.db.get('SELECT disabled FROM workflow_owned_intents WHERE request_id=?',intent).disabled,1);
- assert.throws(()=>f.db.run('UPDATE workflow_owned_intents SET disabled=0 WHERE request_id=?',intent),/revived/);assert.throws(()=>f.db.run('DELETE FROM workflow_owned_intents WHERE request_id=?',intent),/retained/);assert.equal(f.db.get('SELECT state FROM dispatches WHERE request_id=?',intent).state,'pending','phase2A only invalidates private metadata; no lifecycle effect');
+ assert.throws(()=>f.db.run('UPDATE workflow_owned_intents SET disabled=0 WHERE request_id=?',intent),/revived/);assert.throws(()=>f.db.run('DELETE FROM workflow_owned_intents WHERE request_id=?',intent),/retained/);assert.equal(f.db.get('SELECT state FROM dispatches WHERE request_id=?',intent).state,'cancelled','045 invalidates only the exact still-unclaimed ordinary intent');
 });
 
 for(const kind of ['issuer','target','team','authorization','control-preview'])test(`actual/direct ${kind} erasure disables owned UUID while private history disappears`,async t=>{

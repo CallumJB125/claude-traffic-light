@@ -28,6 +28,7 @@ import { DEFAULT_LIMITS, RateLimiter } from './ratelimit.js';
 import { isAdmin, canWrite } from './permissions.js';
 import { Presence } from './presence.js';
 import { TaskOwnership } from './ownership.js';
+import { WorkflowExecutionGuard } from './workflow-execution-guard.js';
 
 const TICK_EVERY_MS = 5_000;          // lease.tick heartbeat when nothing changed
 const REQUEST_CACHE_MS = 10 * 60_000; // D8
@@ -78,6 +79,7 @@ export class Hub extends EventEmitter {
     });
     this.presence = new Presence(this);   // D37b, memory only
     this.ownership = new TaskOwnership(this);
+    this.workflowGuard = new WorkflowExecutionGuard(this);
   }
 
   // ── clocks ────────────────────────────────────────────────────────────────
@@ -328,17 +330,21 @@ export class Hub extends EventEmitter {
     if (!row) return { ok: false, error: { code: 'NOT_FOUND', message: 'card not found' } };
     if (this.board(row.board_id)?.archived_at) return { ok: false, error: { code: 'CONFLICT', message: 'this board is archived: restore it first', reason: 'BOARD_ARCHIVED' } };
     const card = fromDb(row);
+    try { this.workflowGuard.before(row,event,{device}); }
+    catch(e) { if(e instanceof HubError)return {ok:false,error:{code:e.code,message:e.message}};throw e; }
     const res = step(card, event, ctx);
     if (!res.ok) return res;
     if (!res.effects.length && res.to === res.from && !pre) return { ...res, row };
     const env = { row, card, res, event, actor, device, extra, runId: row.active_run_id, newRunId: null };
     try {
       this.txn(() => {
+        env.workflow=this.workflowGuard.before(row,event,{device},true);
         pre?.(res);
         this.writeCard(env);
         for (const e of res.effects) this.effect(e, env);
         this.cleanupAsks(env);
         this.journalTransition(env);
+        this.workflowGuard.after(env);
       });
     } catch (e) {
       if (e instanceof HubError) return { ok: false, error: { code: e.code, message: e.message, ...e.extra } };
@@ -399,6 +405,7 @@ export class Hub extends EventEmitter {
   }
 
   effect(e, env) {
+    if(!this.workflowGuard.effectAllowed(e,env))return;
     const { row, event, actor } = env;
     const cardId = row.id;
     const now = this.iso();
@@ -542,7 +549,7 @@ export class Hub extends EventEmitter {
     const seed = json(d.seed, {});
     this.db.insert('runs', {
       id, card_id: row.id, fence, device_id: device.id, on_behalf_of: device.member_id, dispatched_by: d.dispatched_by,
-      dispatch_request_id: d.request_id, backend: d.backend, repo_id: row.repo_id, base_ref: row.base_ref ?? repo.default_branch,
+      dispatch_request_id: d.request_id, backend: d.backend, repo_id: row.repo_id, base_ref: env.workflow?.base_sha ?? row.base_ref ?? repo.default_branch,
       ai: aiOfDispatch(d), budget_cents: this.remainingBudgetCents(row, d),
       branch: branchName(row.key, fence), snapshot_ref: snapshotRef(row.key, fence), started_at: this.iso(),
       seeded_from_handover: seed.handover_version ?? null,
@@ -553,6 +560,7 @@ export class Hub extends EventEmitter {
     this.db.run('UPDATE cards SET active_run_id = ? WHERE id = ?', id, row.id);
     env.newRunId = id;
     env.runId = id;
+    this.workflowGuard.created(env,d,id);
     this.later(() => this.withdrawOffers(row.id, device.id, 'claimed'));
     this.scheduleOverlap(row.repo_id, OVERLAP_DEBOUNCE_MS);
   }
@@ -560,6 +568,7 @@ export class Hub extends EventEmitter {
   // Requeue rows without a dispatch_create (#5, #5b, #11, #24) re-offer the
   // card as a fresh dispatch with the same dispatcher and target (D19).
   ensurePendingDispatch(cardId) {
+    if(!this.workflowGuard.canRequeue(cardId))return;
     if (this.pendingDispatch(cardId)) return;
     const last = this.lastDispatch(cardId);
     if (!last) return;
@@ -571,6 +580,7 @@ export class Hub extends EventEmitter {
   }
 
   writeSeed(cardId, from, env) {
+    if(!this.workflowGuard.canRequeue(cardId))return;
     this.ensurePendingDispatch(cardId);
     const d = this.pendingDispatch(cardId);
     if (!d) return;
@@ -643,6 +653,7 @@ export class Hub extends EventEmitter {
   }
 
   async followUp(cardId, ev, target) {
+    if(!this.workflowGuard.canRequeue(cardId))return;
     return this.withCard(cardId, () => {
       const by = target.by ?? target.member_id ?? null;
       const actor = this.member(by);
@@ -739,6 +750,7 @@ export class Hub extends EventEmitter {
   }
 
   offerFrame(cardId) {
+    if(!this.workflowGuard.offer(cardId))return null;
     const row = this.card(cardId);
     const d = this.pendingDispatch(cardId);
     if (!row || !d || row.run_state !== 'queued' || row.archived_at) return null;
@@ -763,7 +775,7 @@ export class Hub extends EventEmitter {
     if (budgetCents != null && budgetCents < 50) return null;
     return {
       type: 'offer', card_id: row.id, key: row.key, title: row.title, body: row.body, repo_id: row.repo_id,
-      base_ref: row.base_ref ?? this.repo(row.repo_id)?.default_branch ?? 'main', fence: row.fence, request_id: d.request_id,
+      base_ref: this.workflowGuard.base(d.request_id) ?? row.base_ref ?? this.repo(row.repo_id)?.default_branch ?? 'main', fence: row.fence, request_id: d.request_id,
       dispatched_by: { member_id: d.dispatched_by, name: this.memberName(d.dispatched_by) }, needs_confirm: !!d.needs_confirm,
       labels, ...(aiOfDispatch(d) === 'claude' ? {} : { ai: aiOfDispatch(d) }),
       budget_mode: d.budget_mode ?? null, budget_usd: budgetCents == null ? null : budgetCents / 100,
@@ -778,6 +790,7 @@ export class Hub extends EventEmitter {
     const set = this.offered.get(cardId) ?? new Set();
     for (const conn of this.eligibleDevices(cardId)) {
       if (onlyDevice && conn.device_id !== onlyDevice) continue;
+      if(!this.workflowGuard.offer(cardId,conn))continue;
       conn.send(frame);
       set.add(conn.device_id);
     }
@@ -1176,6 +1189,9 @@ export class Hub extends EventEmitter {
       const ev = this.db.get("SELECT * FROM evidence WHERE card_id = ? AND kind = 'pr' AND verification = 'hub_verified' ORDER BY created_at DESC, rowid DESC LIMIT 1", row.id);
       const number = prNumberOf(ev?.ref);
       if (number == null) continue;
+      const owned=this.workflowGuard.runMarker(ev.run_id);
+      let captured=null;
+      if(owned){try{captured=this.workflowGuard.captureMerge(row,ev);}catch{continue;}}
       let pull;
       try { pull = await this.github.getPull(this.repo(row.repo_id)?.canonical_url, number); } catch (e) {
         this.log.warn('merge poll failed', { card_id: row.id, err: e });
@@ -1185,7 +1201,7 @@ export class Hub extends EventEmitter {
       const run = ev.run_id ? this.db.get('SELECT branch, base_ref FROM runs WHERE id = ?', ev.run_id) : null;
       const stored = ev.pr_base_ref == null ? null : { head_repo_id: ev.pr_head_repo_id, base_ref: ev.pr_base_ref };
       const baseRef = run?.base_ref ?? row.base_ref ?? this.repo(row.repo_id)?.default_branch ?? 'main';
-      if (!prBound(pull, { branch: run?.branch, key: row.key, baseRef, stored })) {
+      if (!(owned?this.workflowGuard.exactPull(this.run(ev.run_id),pull,this.db.get('SELECT * FROM workflow_verified_pr WHERE evidence_id=?',ev.id)):prBound(pull, { branch: run?.branch, key: row.key, baseRef, stored }))) {
         if (!this.unboundPrLogged.has(row.id)) {
           this.unboundPrLogged.add(row.id);
           this.log.warn('merge poll: PR not bound to this card (fork, retargeted base or foreign branch); ignoring', { card_id: row.id, pr: number, head_repo_id: pull.head_repo_id, base_repo_id: pull.base_repo_id, base_ref: pull.base_ref });
@@ -1194,9 +1210,20 @@ export class Hub extends EventEmitter {
       }
       await this.withBoard(row.board_id, () => {
         if (this.board(row.board_id)?.archived_at || this.card(row.id)?.archived_at) return;
+        let proof=null;
+        if(owned){try{
+          this.workflowGuard.mergeCurrent(captured,this.card(row.id),ev);
+          if(pull.merged)proof=this.workflowGuard.verifiedMerge(this.card(row.id),ev,pull,this.repo(row.repo_id)?.canonical_url);
+          else {
+            this.workflowGuard.reviewable(owned);
+            const current=this.card(row.id),verified=this.db.get('SELECT * FROM workflow_verified_pr WHERE evidence_id=?',ev.id);
+            if(verified?.repo_hmac!==this.refHash(this.repo(current.repo_id)?.canonical_url))return;
+          }
+        }catch{return;}}
         this.prStatus.set(row.id, { number, url: pull.html_url, state: pull.merged ? 'merged' : pull.state, merged_by: pull.merged_by, merged_at: pull.merged_at });
         if (pull.merged || pull.state === 'closed') {
-          const r = this.apply(row.id, { type: pull.merged ? 'pr_merged' : 'pr_closed', pr: number, by: pull.merged_by ?? null });
+          const apply=()=>this.apply(row.id,{type:pull.merged?'pr_merged':'pr_closed',pr:number,by:pull.merged_by??null});
+          const r = proof?this.workflowGuard.merge(proof,apply):apply();
           if (!r.ok) this.log.warn('merge poll step failed', { card_id: row.id, code: r.error.code });
         } else this.broadcastCard(row.id);
       });

@@ -19,6 +19,7 @@ import { AI_IDS, AI_BACKENDS, aiOfDispatch, BUDGET_MAX_USD, runnerAis, readiness
 import { insertCardRecord } from './card-record.js';
 import { requireRows } from './quotas.js';
 import { remoteScope, remoteMutation } from './remote/context.js';
+import { WorkflowExecutor } from './workflow-executor.js';
 
 const ACTION_EVENTS = {
   dispatch: 'dispatch', cancel: 'cancel', stop: 'stop', retry: 'retry', take_over: 'take_over', hand_over: 'hand_over',
@@ -64,6 +65,7 @@ export class Api {
   constructor(hub) {
     this.hub = hub;
     this.db = hub.db;
+    this.workflowExecutor = new WorkflowExecutor(this);
   }
 
   // ── access ────────────────────────────────────────────────────────────────
@@ -363,6 +365,7 @@ export class Api {
       // as keyed hashes under *_hmac names (replay never reads them as text).
       const external = this.externalCard(cardId);
       this.hub.txn(() => {
+        this.hub.workflowGuard.edit(cardId);
         const fields = {};
         for (const k of Object.keys(set)) {
           if (set[k] === row[k]) continue;
@@ -602,7 +605,7 @@ export class Api {
       const row = this.cardFor(current, cardId);
       if (row.board_id !== row0.board_id) throw new HubError('CONFLICT', 'card moved while waiting');
       this.requireActionRepo(row, action);
-      return this.actionLocked(current, cardId, action, type, body);
+      return this.hub.workflowGuard.human(current,cred,()=>this.actionLocked(current,cardId,action,type,body));
     }, { member, cred });
   }
 
@@ -620,7 +623,7 @@ export class Api {
     const involved = (...ids) => admin || ids.flat().includes(me);
     const ctx = {
       has_repo: !!row.repo_id, can_write: this.hub.canWrite(member), policy_ok: this.policyOk(row),
-      can_cancel: involved(rel.dispatch?.state === 'pending' ? rel.dispatch.dispatched_by : null, rel.assignees),
+      can_cancel: involved(rel.dispatch?.state === 'pending' ? rel.dispatch.dispatched_by : null, rel.assignees) || this.hub.workflowGuard.cleanupCancel(member,row),
       can_stop: involved(rel.dispatcher, rel.owner, rel.assignees),
       can_hand_over: [rel.owner, rel.dispatcher, ...rel.assignees].includes(me),
       confirmed: body.confirm === true,
@@ -743,15 +746,16 @@ export class Api {
         open_asks_remaining: this.hub.openAsks(cardId).length + this.hub.openPermissions(cardId).filter((p) => p.id !== prId).length,
       };
       const state = body.decision === 'allow' ? 'allowed' : 'denied';
-      const res = this.hub.apply(cardId, { type: 'answer', by: member.id }, {
+      const res = this.hub.workflowGuard.human(member,cred,()=>this.hub.apply(cardId, { type: 'answer', by: member.id }, {
         ctx, actor: member.id,
         extra: { answer: { permission_request_id: prId, decision: body.decision, scope, answered_by: { member_id: member.id, name: member.display_name } } },
         pre: () => {
           const r = this.db.run("UPDATE permission_requests SET state = ?, scope = ?, answered_by = ?, answered_at = ? WHERE id = ? AND state IN ('open','parked')", state, scope, member.id, this.hub.iso(), prId);
           if (Number(r.changes) === 0) throw new HubError('ALREADY_ANSWERED', 'another approver answered first');
           this.hub.journal({ card_id: cardId, run_id: pr.run_id, actor_kind: 'member', actor_id: member.id, kind: 'permission.answer', payload: { permission_request_id: prId, decision: body.decision, scope } });
+          if(pr.tool===CODEX_PLAN_PERMISSION)this.hub.workflowGuard.planAnswer(pr.run_id,pr,body.decision);
         },
-      });
+      }));
       if (!res.ok) throw new HubError(res.error.code, res.error.message, stripErr(res.error));
       const after = this.db.get('SELECT * FROM permission_requests WHERE id = ?', prId);
       return {
