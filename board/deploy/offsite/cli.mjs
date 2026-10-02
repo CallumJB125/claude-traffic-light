@@ -4,10 +4,10 @@ import { createPrivateKey, createPublicKey } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { AgeCipher } from './age.mjs';
+import { AgeCipher, genuineAge } from './age.mjs';
 import { S3Store } from './s3.mjs';
 import { prepare, upload, retrieve, forkPrepared, pruneConfirmed } from './offsite-lib.mjs';
-import { drill } from './drill.mjs';
+import { drill, sweepDrills } from './drill.mjs';
 import { fail, keyId, uuid, limits } from './schema.mjs';
 import { open, readJson } from './files.mjs';
 
@@ -47,15 +47,30 @@ async function runDrill([uploaderFile, recoveryFile, bundle, workDir, ...extra],
   const signingKey = signer(u.c, u.trustedKeys);
   if (!r.trustedKeys.get(u.c.signing_key_id)?.equals(createPublicKey(signingKey))) fail('KEY');
   const uploaderStore = storage(u.c), recoveryStore = storage(r.c);
-  const encryptCipher = new AgeCipher({ executable: u.c.age_executable, publicRecipient: u.c.public_recipient });
-  const decryptCipher = new AgeCipher({ executable: r.c.age_executable, identity: r.c.recovery_identity });
+  let encryptCipher, decryptCipher, release;
   try {
+    encryptCipher = new AgeCipher({ executable: u.c.age_executable, publicRecipient: u.c.public_recipient });
+    decryptCipher = new AgeCipher({ executable: r.c.age_executable, identity: r.c.recovery_identity });
+    if (!genuineAge(encryptCipher) || !genuineAge(decryptCipher)) fail('AGE_UNPINNED');
+    release = guardDrill(workDir, [encryptCipher, decryptCipher, uploaderStore, recoveryStore]);
     const { receipt, receiptFile } = await drill({ bundle, workDir, installation: u.c.installation_id, recipientId: keyId(u.c.recipient_id),
       signingKeyId: u.c.signing_key_id, signingKey, trustedKeys: r.trustedKeys, encryptCipher, decryptCipher, uploaderStore, recoveryStore, policy: u.policy });
     const summary = { result: receipt.result, offsite_acceptance: receipt.offsite_acceptance, failed_step: receipt.failed_step, error: receipt.error,
       transport_id: receipt.transport_id, receipt: path.basename(receiptFile) };
     report(summary); if (receipt.result !== 'passed') process.exitCode = 1; return receipt;
-  } finally { uploaderStore.close(); recoveryStore.close(); encryptCipher.close(); decryptCipher.close(); }
+  } finally { release?.(); uploaderStore.close(); recoveryStore.close(); encryptCipher?.close(); decryptCipher?.close(); }
+}
+// Installed before the drill writes any plaintext: on SIGINT/SIGTERM, stop age
+// children and network clients, then remove this process's drill directory.
+export function guardDrill(workDir, closers) {
+  const terminate = signal => {
+    for (const c of closers) { try { c.close(); } catch {} }
+    try { sweepDrills(workDir, { own: true }); } catch {}
+    process.exit(signal === 'SIGINT' ? 130 : 143);
+  };
+  const interrupt = () => terminate('SIGINT'), stop = () => terminate('SIGTERM');
+  process.once('SIGINT', interrupt); process.once('SIGTERM', stop);
+  return () => { process.removeListener('SIGINT', interrupt); process.removeListener('SIGTERM', stop); };
 }
 export async function main(args, report = (value) => process.stdout.write(JSON.stringify(value) + '\n')) {
   if (args[0] === '--drill') return runDrill(args.slice(1), report);

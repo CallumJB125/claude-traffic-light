@@ -1,8 +1,22 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { OffsiteError, fail, recipient } from './schema.mjs';
 import { open, consume } from './files.mjs';
+
+// Pinned official age binaries by `${process.platform}-${process.arch}`. Each
+// entry must match the verified hash recorded in PROVENANCE.md; a platform
+// without an entry can never be classed as genuine age.
+const PINS = JSON.parse(fs.readFileSync(new URL('./age-pins.json', import.meta.url), 'utf8'));
+export function pinnedAgeSha256(platform = `${process.platform}-${process.arch}`) {
+  const v = PINS?.age_sha256?.[platform]; return typeof v === 'string' && /^[0-9a-f]{64}$/.test(v) ? v : null;
+}
+export function genuineAge(cipher) {
+  if (!(cipher instanceof AgeCipher)) return false;
+  const pin = pinnedAgeSha256();
+  return pin !== null && createHash('sha256').update(fs.readFileSync(cipher.executable)).digest('hex') === pin;
+}
 
 export class AgeCipher {
   constructor({ executable, publicRecipient = null, identity = null, timeoutMs = 120_000 }) {

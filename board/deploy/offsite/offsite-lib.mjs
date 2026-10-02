@@ -29,7 +29,7 @@ function estimate(m, policy) {
   const total = m.database.byte_length + m.artifacts.reduce((n, a) => n + a.byte_length, 0);
   return 2 * total + count * 8192 + 3 * policy.maxManifest;
 }
-export async function prepare({ bundle, outbox, installation, recipientId, signingKeyId, signingKey, cipher, policy: over = {}, clock = now }) {
+export async function prepare({ bundle, outbox, installation, recipientId, signingKeyId, signingKey, cipher, policy: over = {}, clock = now, drill = false }) {
   const policy = limits(over); uuid(installation); keyId(recipientId); keyId(signingKeyId);
   if (signingKey?.type !== 'private' || signingKey.asymmetricKeyType !== 'ed25519') fail('KEY');
   return locked(outbox, async () => {
@@ -53,7 +53,7 @@ export async function prepare({ bundle, outbox, installation, recipientId, signi
       const encrypted = await cipher.encrypt((async function* () { yield bytes; })(), path.join(dir, 'manifest.age'), cipherMax(policy.maxManifest));
       const completion = signedCompletion({ format: FORMAT, installation_id: installation, transport_id: transport, snapshot_at: m.created_at,
         created_at: stamp(clock), signing_key_id: signingKeyId, manifest: { name: 'manifest.age', ...encrypted },
-        object_count: objects.length, objects_hash: objectsHash(objects) }, signingKey);
+        object_count: objects.length, objects_hash: objectsHash(objects), ...(drill === true ? { drill: true } : {}) }, signingKey);
       verifyCompletion(completion, { installation, transport, trustedKeys: new Map([[signingKeyId, createPublicKey(signingKey)]]), policy });
       json(path.join(dir, 'completion.json'), completion);
       fs.rmSync(plain, { recursive: true }); syncDir(dir);
@@ -167,7 +167,7 @@ export async function pruneConfirmed({ outbox, transport, installation, trustedK
   });
 }
 
-export async function retrieve({ store, installation, transport, trustedKeys, cipher, destination, policy: over = {}, timeoutMs = 30_000 }) {
+export async function retrieve({ store, installation, transport, trustedKeys, cipher, destination, policy: over = {}, timeoutMs = 30_000, drill = false }) {
   const policy = limits(over), base = prefix(installation, transport);
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) fail('LIMITS');
   directory(path.dirname(destination));
@@ -178,6 +178,7 @@ export async function retrieve({ store, installation, transport, trustedKeys, ci
   try {
     await download(store, base + 'completion.json', path.join(temp, 'completion.json'), { max: MAX_COMPLETION, timeoutMs });
     const completion = readJson(path.join(temp, 'completion.json'), MAX_COMPLETION); verifyCompletion(completion, { installation, transport, trustedKeys, policy });
+    if ((completion.drill === true) !== (drill === true)) fail('DRILL_ARTIFACT');
     await download(store, base + 'manifest.age', path.join(temp, 'manifest.age'), { max: completion.manifest.byte_length, expected: completion.manifest, timeoutMs });
     await cipher.decrypt(source(path.join(temp, 'manifest.age')), path.join(temp, 'manifest.json'), policy.maxManifest);
     const manifest = readJson(path.join(temp, 'manifest.json'), policy.maxManifest), objects = internal(manifest, policy);

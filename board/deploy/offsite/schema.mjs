@@ -72,13 +72,17 @@ export function internal(v, l = DEFAULTS) {
   }
   return objects;
 }
+// A drill backup carries a signed drill:true, so it can never be mistaken for
+// (or restored as) an operational backup. Operational completions omit the key.
 function unsigned(v) {
   return { format: v.format, installation_id: v.installation_id, transport_id: v.transport_id, snapshot_at: v.snapshot_at,
-    created_at: v.created_at, signing_key_id: v.signing_key_id, manifest: v.manifest, object_count: v.object_count, objects_hash: v.objects_hash };
+    created_at: v.created_at, signing_key_id: v.signing_key_id, manifest: v.manifest, object_count: v.object_count, objects_hash: v.objects_hash,
+    ...(v.drill === true ? { drill: true } : {}) };
 }
 export function completionShape(v, l = DEFAULTS) {
-  closed(v, ['format', 'installation_id', 'transport_id', 'snapshot_at', 'created_at', 'signing_key_id', 'manifest', 'object_count', 'objects_hash', 'signature']);
-  if (v.format !== FORMAT || !HASH.test(v.objects_hash) || !integer(v.object_count, 1, MAX_OBJECTS)
+  closed(v, ['format', 'installation_id', 'transport_id', 'snapshot_at', 'created_at', 'signing_key_id', 'manifest', 'object_count', 'objects_hash', 'signature',
+    ...(v && Object.hasOwn(v, 'drill') ? ['drill'] : [])]);
+  if ((Object.hasOwn(v, 'drill') && v.drill !== true) || v.format !== FORMAT || !HASH.test(v.objects_hash) || !integer(v.object_count, 1, MAX_OBJECTS)
     || typeof v.signature !== 'string' || !/^[A-Za-z0-9_-]{86}$/.test(v.signature) || Buffer.from(v.signature, 'base64url').toString('base64url') !== v.signature) fail();
   uuid(v.installation_id); uuid(v.transport_id); stamp(v.snapshot_at); stamp(v.created_at); keyId(v.signing_key_id);
   object(v.manifest, 'manifest.age', cipherMax(l.maxManifest));
