@@ -25,6 +25,7 @@ const LIMITS = Object.freeze({
   historyMessages: 40, historyBytes: 64 * 1024, targets: 16, modelsPerEndpoint: 32, endpoints: 16,
 });
 const KINDS = ['openai', 'ollama'];
+const MAX_ENTRIES = 128;
 // Fixed loopback ports for read-only discovery; nothing on the LAN is scanned.
 const DISCOVERY = Object.freeze([
   { id: 'ollama', label: 'Ollama (this computer)', url: 'http://127.0.0.1:11434', kind: 'ollama' },
@@ -39,7 +40,9 @@ ALLOWED.addAddress('::1', 'ipv6'); ALLOWED.addSubnet('fd7a:115c:a1e0::', 48, 'ip
 // Never reachable, even with opt-in: unspecified, link-local (cloud metadata), multicast.
 const BLOCKED = new net.BlockList();
 for (const [a, p] of [['0.0.0.0', 8], ['169.254.0.0', 16], ['224.0.0.0', 4], ['255.255.255.255', 32]]) BLOCKED.addSubnet(a, p, 'ipv4');
-for (const [a, p] of [['::', 128], ['fe80::', 10], ['ff00::', 8]]) BLOCKED.addSubnet(a, p, 'ipv6');
+for (const [a, p] of [['::', 128], ['fe80::', 10], ['ff00::', 8], ['64:ff9b::', 96], ['2002::', 16], ['::ffff:0:0:0', 96]]) BLOCKED.addSubnet(a, p, 'ipv6');
+// IPv4-compatible ::a.b.c.d (everything in ::/96 except ::1 loopback) can carry a metadata address.
+BLOCKED.addRange('::2', '::ffff:ffff', 'ipv6');
 
 function addressAllowed(address, allowPublic = false) {
   const ip = String(address).replace(/^::ffff:(?=\d+\.\d+\.\d+\.\d+$)/i, '');
@@ -96,9 +99,13 @@ async function openRequest(url, { method = 'GET', headers = {}, body = null, all
   });
 }
 
-async function readCapped(res, max) {
+// `ms` is a deadline over the whole body: a server that sends headers and then drips bytes cannot hold the read open.
+async function readCapped(res, max, ms = 0) {
   let size = 0; const chunks = [];
-  for await (const c of res) { size += c.length; if (size > max) { res.destroy(); throw new Error('Response too large'); } chunks.push(c); }
+  const timer = ms ? setTimeout(() => res.destroy(new Error('Endpoint read timed out')), ms) : null;
+  try {
+    for await (const c of res) { size += c.length; if (size > max) { res.destroy(); throw new Error('Response too large'); } chunks.push(c); }
+  } finally { clearTimeout(timer); }
   return Buffer.concat(chunks).toString('utf8');
 }
 function apiBase(endpoint) {
@@ -116,7 +123,7 @@ async function probeEndpoint(endpoint, { env = process.env, limits = LIMITS, loo
   const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), limits.probeMs);
   try {
     const { res } = await openRequest(url, { headers: { accept: 'application/json', ...authHeaders(endpoint, env) }, allowPublic: endpoint.allowPublic === true, headersMs: limits.probeMs, signal: ctl.signal, lookup });
-    const body = JSON.parse(await readCapped(res, limits.probeBytes));
+    const body = JSON.parse(await readCapped(res, limits.probeBytes, limits.probeMs));
     const raw = endpoint.kind === 'ollama' ? body?.models?.map((m) => m?.name ?? m?.model) : body?.data?.map((m) => m?.id);
     const models = [...new Set((Array.isArray(raw) ? raw : []).filter((m) => typeof m === 'string' && m && m.length <= 200))].slice(0, limits.modelsPerEndpoint);
     return { reachable: true, models, error: null };
@@ -154,6 +161,12 @@ function createLocalModelAdapter({ profile, model, label, env = process.env, now
   function trim(history) {
     const bytes = () => history.reduce((n, m) => n + Buffer.byteLength(m.content), 0);
     while (history.length > limits.historyMessages || (history.length > 2 && bytes() > limits.historyBytes)) history.splice(0, 2);
+    // The last pair is always kept, but one huge reply must not push the replayed history past the byte limit.
+    for (let guard = 0; bytes() > limits.historyBytes && guard < 8; guard++) {
+      const big = history.reduce((a, m) => (Buffer.byteLength(m.content) > Buffer.byteLength(a.content) ? m : a), history[0]);
+      const over = bytes() - limits.historyBytes;
+      big.content = Buffer.from(big.content).subarray(0, Math.max(256, Buffer.byteLength(big.content) - over)).toString('utf8');
+    }
   }
   function release(target, kind = 'closed') {
     const t = targets.get(target);
@@ -268,6 +281,7 @@ function createLocalModelAdapter({ profile, model, label, env = process.env, now
     conversations: () => targets.size,
     on: (fn) => { events.on('event', fn); return () => events.off('event', fn); },
     alive: () => !stopped,
+    idle: () => targets.size === 0,
     lastUsed: () => Math.max(0, ...[...targets.values()].map((t) => t.lastUsed ?? 0)) || null,
   };
   return adapter;
@@ -310,6 +324,7 @@ function createLocalModels({ adapters, configFile = null, config = null, discove
     const ids = new Set(list.map((e) => e.id));
     for (const id of status.keys()) if (!ids.has(id)) status.delete(id);
     for (const entry of entries.values()) entry.listed = false;
+    let added = 0;
     list.forEach((endpoint, i) => {
       const r = results[i];
       status.set(endpoint.id, { endpoint, source: endpoint.source, reachable: r.reachable, error: r.error, checkedAt: now() });
@@ -317,6 +332,9 @@ function createLocalModels({ adapters, configFile = null, config = null, discove
         const id = providerId(endpoint, model);
         let entry = entries.get(id);
         if (!entry) {
+          // A hostile endpoint listing fresh names forever cannot grow the registry without bound.
+          if (entries.size + added >= MAX_ENTRIES) continue;
+          added++;
           const label = `${model} · ${endpoint.label}`.slice(0, 120);
           const adapter = createLocalModelAdapter({ profile: endpoint, model, label, env, now, limits, lookup });
           entry = { adapter, model };
@@ -328,6 +346,11 @@ function createLocalModels({ adapters, configFile = null, config = null, discove
         entry.endpoint = endpoint; entry.adapter.profile = endpoint; entry.listed = true;
       }
     });
+    // Models an endpoint no longer lists are dropped once nothing is using them.
+    for (const [id, entry] of [...entries]) {
+      // Only when the endpoint answered without listing the model; an unreachable endpoint keeps its models, reported unavailable.
+      if (!entry.listed && status.get(entry.endpoint.id)?.reachable === true && entry.adapter.idle()) { entries.delete(id); delete adapters[id]; try { entry.adapter.stop?.(); } catch { /* idle */ } }
+    }
     checkedAt = now();
     return overview();
   }
@@ -340,7 +363,7 @@ function createLocalModels({ adapters, configFile = null, config = null, discove
   function overview() {
     const endpoints = [...status.values()].filter((s) => s.source === 'configured' || s.reachable).map((s) => ({
       id: s.endpoint.id, label: s.endpoint.label, kind: s.endpoint.kind, source: s.source, reachable: s.reachable, error: s.error, checkedAt: s.checkedAt,
-      host: parseEndpointUrl(s.endpoint.url).host, publicOptIn: s.endpoint.allowPublic, keyFromEnv: s.endpoint.apiKeyEnv ? { name: s.endpoint.apiKeyEnv, set: !!env[s.endpoint.apiKeyEnv] } : null,
+      host: parseEndpointUrl(s.endpoint.url).host, publicOptIn: s.endpoint.allowPublic, keyFromEnv: s.endpoint.apiKeyEnv ? { name: s.endpoint.apiKeyEnv, set: !!env[s.endpoint.apiKeyEnv], plainHttp: /^http:/i.test(s.endpoint.url) && !/^http:\/\/(127\.|\[::1\]|localhost)/i.test(s.endpoint.url) } : null,
     }));
     const models = [...entries].filter(([, e]) => status.has(e.endpoint.id)).map(([provider, e]) => ({
       provider, model: e.model, endpoint: e.endpoint.id, endpointLabel: e.endpoint.label, reachable: e.adapter.available, lastUsed: e.adapter.lastUsed(),

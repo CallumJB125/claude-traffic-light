@@ -263,7 +263,7 @@ test('registry: discovery + config register reachable models honestly, no keys i
     assert.match(o.endpoints.find((e) => e.id === 'public').error, /not on this computer/);
     assert.deepEqual(o.models.map((m) => m.model).sort(), ['qwen:0.5b', 'tiny-a', 'tiny-b']);
     assert(!JSON.stringify(o).includes('sk-super-secret'));
-    assert.deepEqual(o.endpoints.find((e) => e.id === 'spark').keyFromEnv, { name: 'FAKE_LITELLM_KEY', set: true });
+    assert.deepEqual(o.endpoints.find((e) => e.id === 'spark').keyFromEnv, { name: 'FAKE_LITELLM_KEY', set: true, plainHttp: false });
     assert.equal(srv.seen[0].headers.authorization, 'Bearer sk-super-secret');
     const hub = createInteractionHub({ adapters, boardCurrent: (b) => b === null });
     const caps = hub.capabilities();
@@ -298,4 +298,50 @@ test('IPC: local-models channel needs the Overview frame and returns the registr
   assert.equal(refreshed, 0);
   assert.deepEqual(await handlers.get(CHANNELS.localModels)({ sender: contents, senderFrame: contents.mainFrame }), { endpoints: [], models: [] });
   main.close();
+});
+
+// ── Review fixes ──
+test('Review: IPv6 translation forms of link-local/metadata are never reachable, even with opt-in; ::1 still is', () => {
+  for (const ip of ['64:ff9b::a9fe:a9fe', '2002:a9fe:a9fe::1', '::a9fe:a9fe', '::ffff:0:a9fe:a9fe', '::ffff:a9fe:a9fe']) assert.equal(addressAllowed(ip, true), false, ip);
+  assert.equal(addressAllowed('::1'), true);
+});
+test('Review: a server that sends headers then drips bytes cannot wedge the probe', async () => {
+  const timers = [];
+  const srv = await fakeServer({ '/v1/models': (_q, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.write('{"data":['); timers.push(setInterval(() => res.write(' '), 200)); } });
+  try {
+    const t0 = Date.now();
+    const r = await probeEndpoint(profile(srv.url), { limits: { ...LIMITS, probeMs: 300 } });
+    assert.equal(r.reachable, false);
+    assert(Date.now() - t0 < 2000, `probe returned in ${Date.now() - t0}ms`);
+  } finally { timers.forEach(clearInterval); await srv.close(); }
+});
+test('Review: the replayed history stays under the byte limit even after one huge reply', async () => {
+  const big = 'x'.repeat(50_000);
+  const srv = await fakeServer(openaiRoutes({ '/v1/chat/completions': (_q, res) => sse(res, [big]) }));
+  const adapter = createLocalModelAdapter({ profile: profile(srv.url), model: 'm', label: 'x', limits: { ...LIMITS, historyBytes: 4096 } });
+  const { hub, s, base } = await hubWith(adapter);
+  try {
+    for (let i = 0; i < 2; i++) {
+      await hub.send({ ...base, text: `m${i}` }, ACTOR);
+      await until(() => hub.state({ session: s.session }, ACTOR).deliveries.filter((x) => x.state === 'completed').length === i + 1);
+    }
+    const replayed = srv.seen.at(-1).body.messages.slice(0, -1).reduce((n, m) => n + Buffer.byteLength(m.content), 0);
+    assert(replayed <= 4096, `replayed ${replayed} bytes`);
+  } finally { hub.stopAll(); await srv.close(); }
+});
+test('Review: models an endpoint stops listing are dropped from the registry once idle, and the registry is capped', async () => {
+  let names = ['a', 'b'];
+  const srv = await fakeServer({ '/v1/models': (_q, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ data: names.map((id) => ({ id })) })); } });
+  const adapters = {};
+  const reg = createLocalModels({ adapters, config: { endpoints: [{ id: 'e', url: `${srv.url}/v1`, kind: 'openai' }] }, discovery: [] });
+  try {
+    await reg.refresh({ force: true });
+    assert.equal(Object.keys(adapters).length, 2);
+    names = ['b', 'c'];
+    const o = await reg.refresh({ force: true });
+    assert.deepEqual(o.models.map((m) => m.model).sort(), ['b', 'c']);
+    assert.equal(Object.keys(adapters).length, 2, 'a was dropped');
+    for (let i = 0; i < 6; i++) { names = Array.from({ length: 32 }, (_x, j) => `r${i}-${j}`); await reg.refresh({ force: true }); }
+    assert(Object.keys(adapters).length <= 128, `${Object.keys(adapters).length} adapters`);
+  } finally { await srv.close(); }
 });
