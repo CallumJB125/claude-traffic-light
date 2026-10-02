@@ -417,6 +417,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
         onLocalPage(page, v.webContents);
         if (page.id === 'overview') notifyOverviewReady(v);
       });
+      if (page.id === 'overview') v.webContents.on('did-stop-loading', () => notifyOverviewReady(v));
       v.webContents.loadFile(path.join(DIR, '..', page.file), { query: page.query || {} }).catch(() => {});
     }
     attach(v);
