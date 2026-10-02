@@ -5,14 +5,16 @@ const crypto = require('node:crypto');
 const { closed, canonical, hash, SHA, strictJSON, descriptorValid, compatible } = require('./index-verify');
 const { findSecrets } = require('../../board/shared/secret-patterns.mjs');
 const MAGIC = 'PFPLUG01', UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const shaValid = value => typeof value === 'string' && SHA.test(value);
+const uuidValid = value => typeof value === 'string' && UUID.test(value);
 const LIMITS = Object.freeze({ manifest: 512 * 1024, record: 2 * 1024 * 1024, total: 8 * 1024 * 1024, events: 32 });
 const fail = () => { throw new Error('Plugin recovery record is unavailable'); };
 const clone = value => JSON.parse(canonical(value));
 function contextValid(c) {
-  if (!closed(c, ['id', 'profile_hash', 'owner_hash', 'plan_hash']) || !UUID.test(c.id ?? '') || ![c.profile_hash, c.owner_hash, c.plan_hash].every(v => SHA.test(v ?? ''))) fail();
+  if (!closed(c, ['id', 'profile_hash', 'owner_hash', 'plan_hash']) || !uuidValid(c.id) || ![c.profile_hash, c.owner_hash, c.plan_hash].every(v => shaValid(v))) fail();
 }
 function metadataValid(m) {
-  if (!closed(m, ['descriptor', 'marketplace', 'enabled']) || !descriptorValid(m.descriptor) || typeof m.enabled !== 'boolean' || m.marketplace !== `plexiform-${m.descriptor.package_sha256.slice(0, 24)}`) fail();
+  if (!closed(m, ['descriptor', 'marketplace', 'enabled']) || !descriptorValid(m.descriptor) || !shaValid(m.descriptor.package_sha256) || !m.descriptor.files.every(f => shaValid(f.sha256)) || typeof m.enabled !== 'boolean' || m.marketplace !== `plexiform-${m.descriptor.package_sha256.slice(0, 24)}`) fail();
   // Only previously verified package metadata may be backed up. Never copy a
   // live provider table, config bytes, argv/output or runtime cache contents.
   // Typed SHA-256 fields intentionally contain 64 hex characters. Scan the
@@ -22,7 +24,7 @@ function metadataValid(m) {
   if (findSecrets([d.id, d.catalog_id, d.name, d.version, d.host_min, d.source.path, d.source.attribution, ...d.files.map(f => f.path)].join('\n'), { docExamples: false }).length) fail();
 }
 function manifestValid(m) {
-  if (!closed(m, ['schema', 'operation', 'created_at', 'index_hash', 'after', 'before']) || m.schema !== 1 || !['install', 'update'].includes(m.operation) || !Number.isSafeInteger(m.created_at) || m.created_at < 0 || !SHA.test(m.index_hash ?? '')) fail();
+  if (!closed(m, ['schema', 'operation', 'created_at', 'index_hash', 'after', 'before']) || m.schema !== 1 || !['install', 'update'].includes(m.operation) || !Number.isSafeInteger(m.created_at) || m.created_at < 0 || !shaValid(m.index_hash)) fail();
   metadataValid(m.after); if (m.after.enabled !== false) fail();
   if (m.before !== null) metadataValid(m.before);
   if ((m.operation === 'update') !== (m.before !== null) || (m.before && m.before.descriptor.name !== m.after.descriptor.name)) fail();
@@ -34,7 +36,7 @@ function manifestValid(m) {
 }
 const phases = Object.freeze({ prepared: ['staged'], staged: ['install_intent'], install_intent: ['observed'], observed: ['verified'], verified: ['undo_intent'], undo_intent: ['undone'], undone: [] });
 function eventValid(event, previousPhase) {
-  if (!closed(event, ['phase', 'receipt_hash']) || !phases[previousPhase]?.includes(event.phase) || !SHA.test(event.receipt_hash ?? '')) fail();
+  if (typeof previousPhase !== 'string' || !Object.hasOwn(phases, previousPhase) || !closed(event, ['phase', 'receipt_hash']) || typeof event.phase !== 'string' || !phases[previousPhase].includes(event.phase) || !shaValid(event.receipt_hash)) fail();
 }
 function base64(text, max) {
   if (typeof text !== 'string' || text.length > Math.ceil(max / 3) * 4 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(text)) fail();
@@ -76,7 +78,8 @@ async function prepare({ context, manifest, wrapping, current }) {
   finally { copy.fill(0); wrapped?.fill(0); }
 }
 function next(s, event) {
-  if (s.closed || !Buffer.isBuffer(s.key) || s.key.length !== 32 || s.sequence > LIMITS.events) fail();
+  if (s.closed || !Buffer.isBuffer(s.key) || s.key.length !== 32 || !shaValid(s.previous) || !Number.isSafeInteger(s.sequence) || s.sequence < 1 || s.sequence > LIMITS.events) fail();
+  contextValid(s.context);
   eventValid(event, s.phase);
   const bytes = Buffer.from(canonical({ magic: MAGIC, id: s.context.id, sequence: s.sequence, previous: s.previous, sealed: seal(s.key, s.context, s.sequence, s.previous, event) }));
   if (bytes.length > LIMITS.record || s.bytes + bytes.length > LIMITS.total) fail();
@@ -84,6 +87,8 @@ function next(s, event) {
 }
 function published(s, bytes, event) {
   if (s.closed || !Buffer.isBuffer(bytes)) fail();
+  contextValid(s.context);
+  if (!shaValid(s.previous) || !Number.isSafeInteger(s.sequence) || s.sequence < 1 || s.sequence > LIMITS.events) fail();
   const outer = strictJSON(bytes, LIMITS.record);
   if (!closed(outer, ['magic', 'id', 'sequence', 'previous', 'sealed']) || outer.magic !== MAGIC || outer.sequence !== s.sequence || outer.previous !== s.previous || outer.id !== s.context.id || bytes.length > LIMITS.record || s.bytes + bytes.length > LIMITS.total) fail();
   const decoded = open(s.key, s.context, outer.sequence, outer.previous, outer.sealed);
@@ -92,7 +97,7 @@ function published(s, bytes, event) {
 }
 function close(s) { if (s) { s.key?.fill(0); s.closed = true; } }
 async function recover({ header, records, id, profile_hash, wrapping, current }) {
-  if (!Buffer.isBuffer(header) || header.length > LIMITS.record || !Array.isArray(records) || records.length > LIMITS.events || typeof current !== 'function' || current() !== true || wrapping?.available() !== true) fail();
+  if (!uuidValid(id) || !shaValid(profile_hash) || !Buffer.isBuffer(header) || header.length > LIMITS.record || !Array.isArray(records) || records.length > LIMITS.events || typeof current !== 'function' || current() !== true || wrapping?.available() !== true) fail();
   const outer = strictJSON(header, LIMITS.record);
   if (!closed(outer, ['magic', 'context', 'wrapped', 'sealed']) || outer.magic !== MAGIC) fail(); contextValid(outer.context);
   if (outer.context.id !== id || outer.context.profile_hash !== profile_hash) fail();
@@ -112,4 +117,4 @@ async function recover({ header, records, id, profile_hash, wrapping, current })
   } catch (error) { close(s); key?.fill(0); throw error; }
   finally { wrapped?.fill(0); }
 }
-module.exports = { MAGIC, UUID, LIMITS, metadataValid, manifestValid, prepare, next, published, recover, close };
+module.exports = { MAGIC, UUID, shaValid, uuidValid, LIMITS, metadataValid, manifestValid, prepare, next, published, recover, close };

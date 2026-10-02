@@ -2,7 +2,7 @@
 // Main-only transaction kernel. No filesystem writer, Codex CLI invocation,
 // renderer authority or provider connection is implemented here.
 const crypto = require('node:crypto'), path = require('node:path');
-const { closed, canonical, hash, SHA, compatible } = require('./index-verify');
+const { closed, canonical, hash, compatible } = require('./index-verify');
 const { readBounded } = require('./source-verify');
 const A = require('./native-adapter-contract'), J = require('./journal-codec');
 const queues = new Map(), unobserved = new Set(), MAX_HANDLES = 32, TTL = 10 * 60 * 1000, BUDGET = 60000, REAP = 250;
@@ -48,7 +48,7 @@ function createPluginTransactions(options = {}) {
   async function native(kind, input, guard, end) {
     if (!guard() || clock() >= end) fail(); const ticket = adapter.begin(kind, input, guard, end); active.add(ticket); unobserved.add(ticket);
     let value, error;
-    try { value = await wait(ticket.result, end); if (!guard() || clock() >= end || !closed(value, ['receipt_hash', 'payload']) || !SHA.test(value.receipt_hash ?? '') || adapter.verifyReceipt(kind, value, input) !== true) fail(); }
+    try { value = await wait(ticket.result, end); if (!guard() || clock() >= end || !closed(value, ['receipt_hash', 'payload']) || !J.shaValid(value.receipt_hash) || adapter.verifyReceipt(kind, value, input) !== true) fail(); }
     catch (e) { error = e; }
     try { ticket.cancel(); } catch { error ??= new Error('Plugin cancellation failed'); }
     try { if (ticket.exited() !== true) await wait(ticket.reaped, Math.min(end, clock() + REAP)); } catch { error ??= new Error('Plugin exit was not observed'); }
@@ -83,7 +83,7 @@ function createPluginTransactions(options = {}) {
   }
   async function readJournal(id, profileHash, guard, end) {
     const result = await native('journal-read', { id, profile_hash: profileHash }, guard, end), p = result.payload;
-    if (!closed(p, ['header', 'records', 'census_hash']) || !Buffer.isBuffer(p.header) || !Array.isArray(p.records) || p.records.length > J.LIMITS.events || !p.records.every(Buffer.isBuffer) || !SHA.test(p.census_hash ?? '') || p.census_hash !== hash({ header: hash(p.header), records: p.records.map(hash) })) fail();
+    if (!closed(p, ['header', 'records', 'census_hash']) || !Buffer.isBuffer(p.header) || !Array.isArray(p.records) || p.records.length > J.LIMITS.events || !p.records.every(Buffer.isBuffer) || !J.shaValid(p.census_hash) || p.census_hash !== hash({ header: hash(p.header), records: p.records.map(hash) })) fail();
     return p;
   }
   async function unwrapJournal(id, capture, guard, end) {
@@ -103,7 +103,7 @@ function createPluginTransactions(options = {}) {
         const end = cutoff(), initialGuard = () => live(capture, token);
         const publicRead = await cryptoWait(planner.plan(descriptorId, { scope: 'user' }), initialGuard, end); if (!live(capture, token) || publicRead?.ok !== true) fail();
         proof = await cryptoWait(planner.takeForTransaction(publicRead.plan.id), initialGuard, end);
-        if (!proof || !live(capture, token, proof) || proof.binding.profile_root !== capture.profile_root || hash(proof.binding.host) !== capture.host_hash || canonical(proof.binding.account) !== canonical(capture.account) || proof.descriptor.components.mcp.length || !proof.descriptor.components.skills.length) fail();
+        if (!proof || !closed(proof, ['descriptor', 'source', 'binding', 'index_hash', 'expires_at', 'current', 'recheck']) || !J.shaValid(proof.index_hash) || !Number.isSafeInteger(proof.expires_at) || typeof proof.current !== 'function' || typeof proof.recheck !== 'function' || !live(capture, token, proof) || proof.binding.profile_root !== capture.profile_root || hash(proof.binding.host) !== capture.host_hash || canonical(proof.binding.account) !== canonical(capture.account) || proof.descriptor.components.mcp.length || !proof.descriptor.components.skills.length || ![proof.binding.config.sha256, proof.binding.cache.sha256, proof.binding.host.binary_sha256, proof.source.package_hash, proof.source.descriptor_hash].every(J.shaValid) || !proof.source.files.every(f => J.shaValid(f.sha256))) fail();
         const guard = () => live(capture, token, proof);
         const result = await serial(capture.profile_root, guard, end, async () => { if (!(await cryptoWait(proof.recheck(), guard, end)) || !guard()) fail(); const items = await inventory(guard, end); const files = reviewFiles(proof); if (!(await cryptoWait(proof.recheck(), guard, end)) || !guard()) fail(); return { items, files }; });
         const sameName = result.items.items.filter(i => i.metadata.descriptor.name === proof.descriptor.name); if (sameName.length > 1) fail();
@@ -118,7 +118,7 @@ function createPluginTransactions(options = {}) {
       } catch { return unavailable('source-authority-or-native-adapter-unavailable'); }
     },
     async apply(handle, request) {
-      const e = typeof handle === 'string' && J.UUID.test(handle) ? plans.get(handle) : null; if (e) plans.delete(handle);
+      const e = typeof handle === 'string' && J.uuidValid(handle) ? plans.get(handle) : null; if (e) plans.delete(handle);
       let id = null, state;
       try {
         observe(); if (!e || e.expires <= now() || !closed(request, ['plan_hash', 'reviewed_files', 'reviewed_config']) || request.plan_hash !== e.plan_hash || request.reviewed_files !== true || request.reviewed_config !== true || !live(e.capture, e.token, e.proof)) fail();
@@ -152,14 +152,14 @@ function createPluginTransactions(options = {}) {
       try {
         const capture = observe(), token = generation, guard = () => live(capture, token), end = cutoff();
         const result = await native('journal-list', { profile_hash: hash(capture.profile_root) }, guard, end), p = result.payload;
-        if (!closed(p, ['ids']) || !Array.isArray(p.ids) || p.ids.length > 1000 || new Set(p.ids).size !== p.ids.length || !p.ids.every(id => J.UUID.test(id))) fail();
+        if (!closed(p, ['ids']) || !Array.isArray(p.ids) || p.ids.length > 1000 || new Set(p.ids).size !== p.ids.length || !p.ids.every(id => J.uuidValid(id))) fail();
         return { ok: true, status: 'locked', transactions: p.ids.map(id => ({ id, status: 'locked', undo_available: false })), fixture: adapter.fixture };
       } catch { return unavailable('native-adapter-or-locked-list-unavailable'); }
     },
     async recover(id) {
       let state;
       try {
-        const capture = observe(), token = generation; prune(); if (!J.UUID.test(id ?? '') || recoveries.size >= MAX_HANDLES) fail();
+        const capture = observe(), token = generation; prune(); if (!J.uuidValid(id) || recoveries.size >= MAX_HANDLES) fail();
         const guard = () => live(capture, token), recoveryHash = hash({ id, profile_hash: hash(capture.profile_root), kind: 'plugin-recovery' });
         await ask('plugin-recovery', recoveryHash, { transaction_id: id, action: 'Inspect encrypted local recovery metadata and current owned targets.' }, guard);
         const end = cutoff(); return await serial(capture.profile_root, guard, end, async () => {
@@ -174,7 +174,7 @@ function createPluginTransactions(options = {}) {
       } catch { return unavailable('recovery-denied-changed-or-native-unavailable'); } finally { J.close(state); }
     },
     async undo(handle, request) {
-      const e = typeof handle === 'string' && J.UUID.test(handle) ? recoveries.get(handle) : null; if (e) recoveries.delete(handle); let state;
+      const e = typeof handle === 'string' && J.uuidValid(handle) ? recoveries.get(handle) : null; if (e) recoveries.delete(handle); let state;
       try {
         observe(); if (!e || e.expires <= now() || !closed(request, ['inspection_hash']) || request.inspection_hash !== e.inspection_hash || !live(e.capture, e.token)) fail();
         const guard = () => live(e.capture, e.token);

@@ -83,6 +83,11 @@ function createPluginPlanner({snapshot,bundleRoot=path.join(BUILD,'codex-plugins
       pending++;
       try{
         await refresh(entry,token);
+        // The private mutation handoff is a stricter primitive contract than
+        // a display DTO. Never let regex coercion mint authority from arrays
+        // or objects supplied by a malformed private observation/verifier.
+        const digests=[entry.indexHash,entry.capture.binding.config.sha256,entry.capture.binding.cache.sha256,entry.capture.binding.host.binary_sha256,entry.source.package_hash,entry.source.descriptor_hash,...entry.source.files.map(f=>f.sha256)];
+        if(!digests.every(value=>typeof value==='string'&&SHA.test(value)))return null;
         return Object.freeze({descriptor:immutable(JSON.parse(canonical(entry.descriptor))),source:immutable(JSON.parse(canonical(entry.source))),binding:immutable(JSON.parse(canonical(entry.capture.binding))),index_hash:entry.indexHash,expires_at:entry.expires,
           current:()=>entry.expires>now()&&live(entry.capture,token),
           async recheck(){if(pending>=LIMITS.concurrency)return false;pending++;try{await refresh(entry,token);return true;}catch{return false;}finally{pending--;}}});
