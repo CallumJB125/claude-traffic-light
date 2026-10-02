@@ -355,7 +355,7 @@ function createTasksService(opts) {
     return { action: req.action, label, title: row.title || 'Untitled task', where: row.where, ai: TV.AI_NAME[row.ai.id] || '', source: row.source, detail };
   }
 
-  async function act(req, wcId = 0) {
+  async function act(req, wcId = 0, current = () => true) {
     if (!connected()) return failure({ code: 'SUPERVISOR_UNREACHABLE' });
     const row = tasks.get(req?.id);
     const ctx = relayed.get(req?.id) || { approvals: new Map(), asks: new Set() };
@@ -372,6 +372,7 @@ function createTasksService(opts) {
       return { ok: false, code: v.code, text: TV.errorText(v.code) };
     }
     try {
+      if(current()!==true)return {ok:false,code:'ILLEGAL_TRANSITION',text:''};
       const r = await client.act(v.id, v.action, v.payload);
       const t = guard.sanitizeTask(r.task, { now: now(), homeDir });
       if (t) { tasks.set(t.id, t); publishSoon(); }

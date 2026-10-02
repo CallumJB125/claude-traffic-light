@@ -86,10 +86,11 @@ module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcast
         const tool = typeof d.tool === 'string' ? d.tool.slice(0, 80) : null;
         // Waits briefly rather than skipping: a dropped signal is a wrong light.
         SessionState.withLock(file, () => {
-          const next = SessionState.applyBareSignal(SessionState.readJson(file), { sessionId: session, host: os.hostname().split('.')[0], source, cwd, signal: d.signal, tool, hostApp });
+          const next = SessionState.applyBareSignal(SessionState.readJson(file), { sessionId: session, host: os.hostname().split('.')[0], source, cwd, signal: d.signal, tool, hostApp, taskId:d.taskId, taskTitle:typeof d.taskTitle==='string'?require('./work-capture').clean(d.taskTitle,200):undefined });
           // A caller may also report its own agents, mode, iteration or tasks.
           if (d.tasks && typeof d.tasks === 'object') next.tasks = d.tasks;
           if (Array.isArray(d.agents)) next.agents = d.agents;
+          if (typeof d.model==='string'&&/^[A-Za-z0-9._:/@+-]{1,80}$/.test(d.model)) next.model=d.model;
           if (typeof d.mode === 'string') next.mode = d.mode;
           if (Number.isFinite(d.iteration)) next.iteration = d.iteration;
           SessionState.writeJsonAtomic(file, next);

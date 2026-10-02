@@ -211,6 +211,8 @@ function createWorkCapture({file,getRoutes,sendLocal,sendTeam,resolveRepo=repoFo
       catalog=fresh;lastCatalogAt=now();changed();return true;
     },
     choices(){return !catalog.complete?[]:(catalog.routes??[]).filter(r=>safeCanonical(r.canonical_url)&&['owner','admin','member'].includes(r.role)).map(r=>({key:routeKey(r),repo:r.canonical_url,team_name:clean(r.team_name??'Team',60),board_name:clean(r.board_name??'Board',60)}));},
+    // Main-only identity join for Overview; never forwarded to a renderer.
+    overviewSnapshot(){return Object.values(state.tasks).map(e=>({provider:e.provider,session_id:e.session_id,task_id:e.task_id,card_id:e.card_id,untracked:!!e.untracked,destination:{...e.destination}}));},
     snapshot(){return Object.entries(state.tasks).map(([key,e])=>({key,repo:e.repo,provider:e.provider,title:e.title,status:e.status,card_id:e.card_id,untracked:!!e.untracked,reason:e.reason??null,destination:{...e.destination}}));},
     async stop(){stopped=true;latest=null;await active;},idle:()=>active??Promise.resolve()};
 }

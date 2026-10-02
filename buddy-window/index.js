@@ -254,42 +254,45 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     return rows;
   }
 
-  const myDayBroker = createMyDayBroker({
-    async sources() {
+  async function overviewSources() {
       const sources = store.hubs().map(origin => {
         const marker = vault(origin).load(), userId = marker?.user?.id;
         const knownUser = typeof userId === 'string' && /^[A-Za-z0-9_.:-]{1,100}$/.test(userId);
         const current = () => store.hubs().includes(origin) && vault(origin).load() === marker && userOf(origin)?.id === userId;
-        return { name: hostOf(origin), userId, current, read: () => marker && knownUser ? clientFor(origin).myDay() : Promise.resolve({ ok: false }),
-          async open(row, fresh) {
+        return { name: hostOf(origin), key:origin, kind:'team', userId, current, matches:d=>d?.kind==='team'&&d.hub===origin&&d.user_id===userId,
+          send:(row,text,requestId,fresh)=>current()&&fresh()?clientFor(origin).nativeBoard('sendMessage',{team:row.team_id,card:row.card.id,boardIds:[row.board_id]},{request_id:requestId,expected_fence:row.card.fence,kind:'coordination',body:text,recipient_run_ids:[row.card.run.id]}):Promise.resolve({ok:false}), read: () => marker && knownUser ? clientFor(origin).myDay() : Promise.resolve({ ok: false }),
+          async open(row, fresh, beginNavigation=null) {
             // Team is looked up from the current server-verified membership, not a renderer argument.
             const target = store.list().find(w => w.kind === 'team' && w.hub === origin && w.teamId === row.team_id);
-            if (!target || !fresh()) return false;
+            if (!target || !fresh() || beginNavigation&&!beginNavigation()) return false;
             switchWorkspace(target.id, { show: false }); selected = 'board'; flow.leftAccountPages();
+            const navigationGeneration=setupLocalGeneration;
             await showHubPage(pageById('board'));
-            if (!fresh() || !hubView || hubInfo?.origin !== origin || hubInfo.org !== target.teamId) return false;
+            if (!fresh() || beginNavigation&&(navigationGeneration!==setupLocalGeneration||selected!=='board') || !hubView || hubInfo?.origin !== origin || hubInfo.org !== target.teamId) return false;
             const url = new URL(hubPageUrl(origin, pageById('board'), { org: target.teamId }));
             url.searchParams.set('board', row.board_id); url.hash = `card=${encodeURIComponent(row.card?.id ?? row.card_id)}`;
             await hubView.webContents.loadURL(url.href); // privacy-flow: team-hub-account
-            pushState(); return fresh();
+            pushState(); return fresh()&&(!beginNavigation||navigationGeneration===setupLocalGeneration&&selected==='board');
           } };
       });
       const launch = await supervisor.ensure().catch(() => null);
       const localCurrent = () => !launch || supervisor.launchCurrent(launch);
-      sources.unshift({ name: 'My board (this Mac)', current: localCurrent, read: () => launch ? supervisor.myDay() : Promise.resolve({ ok: false }),
-        async open(row, fresh) {
-          if (!fresh()) return false;
+      sources.unshift({ name: 'My board (this Mac)', key:'personal',kind:'personal', current: localCurrent, matches:d=>d?.kind==='local',
+        send:(row,text,requestId,fresh)=>localCurrent()&&fresh()?supervisor.overviewMessage({card:row.card.id,board:row.board_id,fence:row.card.fence,run:row.card.run.id,text,requestId},()=>localCurrent()&&fresh()):Promise.resolve({ok:false}), read: () => launch ? supervisor.myDay() : Promise.resolve({ ok: false }),
+        async open(row, fresh, beginNavigation=null) {
+          if (!fresh() || beginNavigation&&!beginNavigation()) return false;
           switchWorkspace('local', { show: false }); selected = 'board'; flow.leftAccountPages();
+          const navigationGeneration=setupLocalGeneration;
           await showHubPage(pageById('board'));
-          if (!fresh() || !hubView || hubInfo?.team || hubInfo?.url !== launch.url) return false;
+          if (!fresh() || beginNavigation&&(navigationGeneration!==setupLocalGeneration||selected!=='board') || !hubView || hubInfo?.team || hubInfo?.url !== launch.url) return false;
           const url = new URL(hubPageUrl(launch.url, pageById('board')));
           url.searchParams.set('board', row.board_id); url.hash = `card=${encodeURIComponent(row.card?.id ?? row.card_id)}`;
           await hubView.webContents.loadURL(url.href); // privacy-flow: local-board-hub
-          pushState(); return fresh();
+          pushState(); return fresh()&&(!beginNavigation||navigationGeneration===setupLocalGeneration&&selected==='board');
         } });
       return sources;
-    },
-  });
+  }
+  const myDayBroker = createMyDayBroker({sources:overviewSources});
 
   // A page with a localScreen is the account page's explainer while the local board is active, not a hub page.
   const isHubPage = (id) => { const p = pageById(id); return p?.kind === 'hub' && !(p.localScreen && !getTeamHub()); };
@@ -394,7 +397,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       v.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#1c1a1f' : '#eceaf0');
       lockLocal(v);
       localViews.set(page.id, v);
-      if(page.id==='setups'){
+      if(['setups','overview'].includes(page.id)){
         // A same-URL reload keeps WebContents/mainFrame object identity. Its
         // document still retires every outstanding native approval and plan.
         v.webContents.on('did-start-navigation',d=>{if(d.isMainFrame)retireSetupDocument();});
@@ -912,6 +915,14 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   return {
     open,
     myDay: () => myDayBroker.snapshot(),
+    async overviewWork(){return {sources:await overviewSources(),capture:workCapture.overviewSnapshot?.()??[],partial:false};},
+    overviewContext(){
+      const v=localViews.get('overview'),wc=v?.webContents;
+      if(!win||win.isDestroyed()||!wc||wc.isDestroyed()||selected!=='overview'||content!==v||!win.contentView.children.includes(v)||!win.isVisible()||win.isMinimized()||!win.isFocused())return null;
+      const expected=pathToFileURL(path.join(DIR,'..','overview.html')).href;
+      if(wc.getURL()!==expected||wc.mainFrame?.url!==expected||wc.isLoading())return null;
+      return {window:win,contents:wc,generation:setupLocalGeneration,foreground:true};
+    },
     setupSources,
     // Main-only identities. No renderer receives a sealed marker or window.
     setupsActorCurrent(actor) {

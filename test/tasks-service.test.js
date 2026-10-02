@@ -82,6 +82,17 @@ test('send a message to a task round-trips into its thread', async () => {
   await svc.closeTask();
 });
 
+test('main-owned current guard refuses a selected message before actual socket enqueue', async () => {
+  const t = await until(() => svc.snapshot().tasks.find(x => x.actions.includes('message')));
+  const opened = await svc.openTask(t.id);
+  assert.ok(opened.ok);
+  const body = 'overview-retired-owner-message';
+  assert.equal((await svc.act({id:t.id,action:'message',payload:{body}},0,()=>false)).ok,false);
+  await new Promise(r=>setTimeout(r,80));
+  assert.equal(events.some(([id,e])=>id===t.id&&e.type==='message'&&e.body===body),false);
+  await svc.closeTask();
+});
+
 test('an action round-trips: stop a task and its row changes', async () => {
   const t = await until(() => svc.snapshot().tasks.find((x) => x.actions.includes('stop') && x.state !== 'running'));
   assert.equal((await svc.act({ id: t.id, action: 'stop' })).code, 'CONFIRM_REQUIRED');

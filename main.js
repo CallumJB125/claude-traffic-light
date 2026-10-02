@@ -1335,7 +1335,7 @@ function getBuddy() {
       onLocalPage: (page, wc) => {
         if (page.id === 'settings' && !IS_MAC) wc.insertCSS('#busy-sources, .field:has(#busyFocusShortcut) { display: none; }').catch(() => {});
       },
-      onClosed: () => { hatchResults.clear(); feedbackShot = null; feedbackLast = null; SetupsLocal.invalidate(); if (IS_MAC && !lightsWin) app.dock.hide(); },
+      onClosed: () => { OverviewMain.invalidate(); hatchResults.clear(); feedbackShot = null; feedbackLast = null; SetupsLocal.invalidate(); if (IS_MAC && !lightsWin) app.dock.hide(); },
       devAccountsHub: app.isPackaged ? null : devAccountsHub,
       captureEnabled: !DEMO,
     });
@@ -1343,8 +1343,8 @@ function getBuddy() {
       const unsubscribe = buddyWin[BudgetNotice.CONTRACT.subscribeMethod](handleBudgetEvent);
       if (typeof unsubscribe === 'function') app.once('will-quit', unsubscribe);
     }
-    if (typeof buddyWin.onAccountChange === 'function') buddyWin.onAccountChange(() => buddyWin.sendToPage('settings', 'account-changed'));
-    if(typeof buddyWin.onSetupsIdentityChange==='function')buddyWin.onSetupsIdentityChange(()=>{SetupsLocal.invalidate();buddyWin.sendToPage('setups','setups:changed');});
+    if (typeof buddyWin.onAccountChange === 'function') buddyWin.onAccountChange(() => {OverviewMain.invalidate();buddyWin.sendToPage('settings', 'account-changed');});
+    if(typeof buddyWin.onSetupsIdentityChange==='function')buddyWin.onSetupsIdentityChange(()=>{OverviewMain.invalidate();SetupsLocal.invalidate();buddyWin.sendToPage('setups','setups:changed');});
   }
   return buddyWin;
 }
@@ -1370,6 +1370,17 @@ ipcMain.handle('sessions:state', e => {
   }
 });
 ipcMain.handle('sessions:settings', e => { if (!sessionsSender(e)) return false; createSettingsWindow(); return true; });
+// Overview uses main-owned structured reports/current own-board work only.
+const OverviewMain=require('./src/overview-main').createOverviewMain({
+  buddy:()=>buddyWin,sessions:()=>aggregateState().sessions||[],
+  work:()=>buddyWin?.overviewWork()??Promise.resolve({sources:[],capture:[],partial:true}),
+  managed:()=>{const service=getTasks();service.start();return service.snapshot();},
+  openManaged:async(_id,fresh)=>{if(!fresh())return false;openBuddy('tasks');return true;},
+  messageManaged:(id,text,fresh)=>fresh()?getTasks().act({id,action:'message',payload:{body:text}},0,fresh):Promise.resolve({ok:false}),
+});
+OverviewMain.register(ipcMain);
+app.on('will-quit',()=>OverviewMain.close());
+
 ipcMain.handle('myday:state', e => myDaySender(e) ? MyDay.snapshot() : null);
 ipcMain.handle('myday:open', (e, handle) => myDaySender(e) && typeof handle === 'string' && handle.length <= 100 ? MyDay.open(handle) : false);
 function openBuddy(page = null) {

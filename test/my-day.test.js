@@ -60,18 +60,18 @@ test('My day aggregate display limits remain bounded across registered hubs', as
 });
 function productionBroker() {
   const source = fs.readFileSync(path.join(__dirname, '../buddy-window/index.js'), 'utf8');
-  const body = source.slice(source.indexOf('  const myDayBroker = createMyDayBroker({'), source.indexOf('  // A page with a localScreen'));
+  const body = source.slice(source.indexOf('  async function overviewSources()'), source.indexOf('  // A page with a localScreen'));
   const origin = 'https://registered.example', markers = new Map([[origin, { user: { id: 'u1' } }]]), launch = { url: 'http://127.0.0.1:43123' }, launches = { current: launch }, urls = [], reads = [];
   const local = { ...fixture(), principal: { member_id: 'local-owner' } };
   const workspaces = [{ id: 'local', kind: 'local' }, { id: 'team-ws', kind: 'team', hub: origin, teamId: 't1' }];
   let active = workspaces[0];
   const { pageById, hubPageUrl } = require('../buddy-window/pages');
-  const context = { createMyDayBroker, store: { hubs: () => [origin], list: () => workspaces }, vault: key => ({ load: () => markers.get(key) }), userOf: key => markers.get(key)?.user, hostOf: url => new URL(url).host,
+  const context = { createMyDayBroker, setupLocalGeneration:0, store: { hubs: () => [origin], list: () => workspaces }, vault: key => ({ load: () => markers.get(key) }), userOf: key => markers.get(key)?.user, hostOf: url => new URL(url).host,
     clientFor: key => ({ myDay: async () => { reads.push(key); return fixture(); } }), supervisor: { ensure: async () => launch, launchCurrent: captured => launches.current === captured, myDay: async () => local },
     switchWorkspace(id) { active = workspaces.find(w => w.id === id); }, selected: 'myday', flow: { leftAccountPages() {} }, pageById, hubPageUrl, URL,
     hubView: { webContents: { loadURL: async url => { urls.push(url); } } }, hubInfo: null, async showHubPage() { context.hubInfo = active.kind === 'team' ? { origin, org: active.teamId, team: true } : { url: launch.url, team: false }; }, pushState() {},
   };
-  vm.createContext(context); vm.runInContext(`${body}\nthis.broker = myDayBroker;`, context);
+  vm.createContext(context); vm.runInContext(`${body}\nthis.broker = myDayBroker;this.overviewSources=overviewSources;`, context);
   return { broker: context.broker, context, markers, origin, launch, launches, urls, reads };
 }
 test('production desktop My day wiring uses registered hubs and fixed local launch, then opens the verified board/card', async () => {
@@ -98,4 +98,19 @@ test('production main My day handlers accept only the exact registered top-level
   context.buddyWin = { pageWebContents: () => ({ mainFrame: frame }) };
   assert.equal(handlers.get('myday:state')({ sender: page, senderFrame: frame }), null);
   assert.equal(handlers.get('myday:open')({ sender: page, senderFrame: frame }, 'allowed-handle'), false);
+});
+
+test('Overview production navigation refuses a changed board document generation after its await',async()=>{
+ const p=productionBroker(),sources=await p.context.overviewSources();let release;
+ p.context.showHubPage=()=>new Promise(r=>release=r);
+ const pending=sources[1].open(fixture().cards[0],()=>true,()=>true);
+ await Promise.resolve();p.context.setupLocalGeneration++;release();
+ assert.equal(await pending,false);assert.equal(p.urls.length,0);
+});
+test('Overview production registered source sends a selected fixed card/run/fence through native account route only',async()=>{
+ const p=productionBroker(),calls=[];p.context.clientFor=()=>({nativeBoard:async(...args)=>{calls.push(args);return{ok:true};},myDay:async()=>fixture()});
+ const sources=await p.context.overviewSources(),row={...fixture().cards[0],card:{...fixture().cards[0].card,fence:7,run:{id:'selected-run'}}};
+ assert.equal((await sources[1].send(row,'Explicit message','selected-request',()=>true)).ok,true);
+ assert.equal(calls.length,1);assert.equal(calls[0][0],'sendMessage');assert.equal(calls[0][1].card,'c1');assert.equal(calls[0][1].team,'t1');assert.deepEqual(Array.from(calls[0][1].boardIds),['b1']);assert.equal(calls[0][2].expected_fence,7);assert.equal(calls[0][2].recipient_run_ids[0],'selected-run');
+ await sources[1].send(row,'No send','another-request',()=>false);assert.equal(calls.length,1);
 });
