@@ -26,14 +26,14 @@ function createTransactionController({observe,roots,readSource,confirm,superviso
  const sourceIdentity=s=>canonical([s.profileId,s.versionId,s.contentHash]);
  function guard(c,s=null,cutoff=Infinity){if(!valid(c)||(s&&!sourceValid(s))||clock()>=cutoff)fail();}
  function config(c){guard(c);const r=roots();if(!C.closed(r,['profile','app'])||r.profile.path!==c.data.profilePath)fail();return {...r,generation:BigInt(c.data.generation)+1n,mode:c.offline?2:1,authority_hash:C.hash(Buffer.from(c.identity+':'+c.epoch))};}
- const pendingReap=()=>{let pending=false;for(const op of active)if(op.reaping){if(op.worker.reapPending===false)active.delete(op);else pending=true;}return pending;};
+ const pendingReap=()=>{let pending=false;for(const op of active){if(op.worker.unavailable===true&&op.worker.reapPending===false)active.delete(op);else if(op.reaping||op.worker.reapPending===true)pending=true;}return pending;};
  function operation(c,s=null){if(pendingReap())fail();const cutoff=clock()+LIMITS.automated,worker=workerFactory(),op={c,s,cutoff,worker};active.add(op);const current=()=>{try{guard(c,s,cutoff);return true;}catch{return false;}};return {...op,current,io:id=>storeFactory({supervisor,config:()=>config(c),current,cutoff,id}),run:(kind,input,io)=>worker.run(kind,input,{io,wrapping,current,cutoff})};}
  async function finish(op){
   const tracked=[...active].find(v=>v.worker===op.worker);
   if(!tracked)return {status:'closed'};
   tracked.reaping=true;let state;
   try{state=op.worker.close();}catch{return {status:'reap_pending'};}
-  const observed=()=>{if(op.worker.reapPending!==false)return false;active.delete(tracked);return true;};
+  const observed=()=>{if(op.worker.unavailable!==true||op.worker.reapPending!==false)return false;active.delete(tracked);return true;};
   if(observed())return {status:'closed'};
   // Termination resolution alone is insufficient: the owned exit event must
   // already have been observed by the worker wrapper. Tracking persists across
@@ -56,7 +56,7 @@ function createTransactionController({observe,roots,readSource,confirm,superviso
  function matchesAfter(receipt,target){const s=receipt.objects[0].snapshot;if(receipt.result!==0||!s?.exists||!C.same(s.content,target.after)||s.recipe!==indexFor(target.recipe))fail();if(target.recipe!=='codex-instructions-v1')jsonObject(new TextDecoder('utf-8',{fatal:true}).decode(s.content));}
  const api={
   get reapPending(){return pendingReap();},
-  invalidate(){epoch++;for(const e of plans.values())C.wipe(e.targets);plans.clear();for(const e of recoveries.values())C.wipe([e.inspections,e.recovered.events]);recoveries.clear();for(const op of active)op.worker.close();supervisor.invalidate();},
+  invalidate(){epoch++;for(const e of plans.values())C.wipe(e.targets);plans.clear();for(const e of recoveries.values())C.wipe([e.inspections,e.recovered.events]);recoveries.clear();for(const op of active){op.reaping=true;try{op.worker.close();}catch{}}supervisor.invalidate();},
   close(){closed=true;api.invalidate();},
   async plan(sourceHandle,requestData){expire();if(plans.size>=LIMITS.handles)return unavailable();let e,op;
    try{C.uuid(sourceHandle);if(!C.closed(requestData,['files','values'])||!Array.isArray(requestData.files)||!requestData.files.length||requestData.files.length>128)fail();const request=clone(requestData),c=capture(),source=checkedSource(await readSource(sourceHandle),c);guard(c,source);const selected=request.files.map(choice=>source.payload.files.find(f=>f.id===choice.id));if(selected.some(f=>!f))fail();op=operation(c,source);const snapshots=[];
