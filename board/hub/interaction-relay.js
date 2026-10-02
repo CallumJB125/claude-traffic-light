@@ -208,24 +208,29 @@ export class InteractionRelay {
     if (!host) throw noHost();
     if (host.pending.size >= this.limits.pendingPerHost) throw new HubError('RATE_LIMITED', 'that device is busy; try again shortly', { retry_after_s: 1 });
     if (this.replayed(ident.user.id, body.request_id)) throw new HubError('CONFLICT', 'This request was already sent. Refresh and try again.', { reason: 'REPLAYED' });
+    const frame = { type: 'relay.request', rid: body.request_id, user: ident.user.id, from: ident.cred.id, op: body.op, args };
+    const result = await this.dispatch(host, frame, () => this.unburn(ident.user.id, body.request_id));
+    // Revoked while the device was answering: the answer is not delivered.
+    if (!this.credValid(ident.cred)) throw new HubError('UNAUTHENTICATED', 'device token unknown or revoked: sign in again');
+    if (!this.liveHost(ident.user.id, hostId)) throw noHost();
+    return { host: hostId, result };
+  }
+
+  /** One frame to a live host → its result. `unsent` runs when it never left the hub. */
+  dispatch(host, frame, unsent = () => {}) {
     const id = randomUUID();
-    const frame = { type: 'relay.request', id, rid: body.request_id, user: ident.user.id, from: ident.cred.id, op: body.op, args };
-    const result = await new Promise((resolve, reject) => {
+    return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         host.pending.delete(id);
         // A send the device finishes after this is not a failure: say so.
-        reject(MUTATING.has(body.op)
+        reject(MUTATING.has(frame.op)
           ? new HubError('TIMEOUT', 'That device did not answer in time. The outcome is unknown: check the session state before trying again.', { reason: 'OUTCOME_UNKNOWN' })
           : new HubError('TIMEOUT', 'that device did not answer in time'));
       }, this.limits.timeoutMs);
       timer.unref?.();
       host.pending.set(id, { resolve, reject, timer });
-      try { host.ws.send(JSON.stringify(frame)); } catch { clearTimeout(timer); host.pending.delete(id); this.unburn(ident.user.id, body.request_id); reject(noHost()); }
+      try { host.ws.send(JSON.stringify({ type: frame.type, id, ...frame })); } catch { clearTimeout(timer); host.pending.delete(id); unsent(); reject(noHost()); }
     });
-    // Revoked while the device was answering: the answer is not delivered.
-    if (!this.credValid(ident.cred)) throw new HubError('UNAUTHENTICATED', 'device token unknown or revoked: sign in again');
-    if (!this.liveHost(ident.user.id, hostId)) throw noHost();
-    return { host: hostId, result };
   }
 
   routes(route) {
