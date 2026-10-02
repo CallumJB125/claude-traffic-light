@@ -1041,6 +1041,7 @@ dialog::backdrop { background: var(--backdrop); transition: opacity 200ms ease; 
 .integ-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .integ-name { font-size: var(--text-md); font-weight: 650; }
 .integ-account { margin-top: 2px; }
+.integ-webhook-url code { overflow-wrap: anywhere; user-select: all; }
 .integ-health { display: inline-flex; align-items: center; gap: 6px; font-size: var(--text-sm); color: var(--muted); text-align: right; }
 .integ-dot { width: 7px; height: 7px; border-radius: 2px; background: var(--tone-grey); flex: none; }
 .integ-health[data-tone="ok"] .integ-dot { background: var(--tone-green); }

@@ -56,6 +56,7 @@ export const DEFAULT_LIMITS = Object.freeze({
   webhook_conn: { capacity: 600, per_ms: 60_000 },          // inbound webhooks, per connection
   integration_conn: { capacity: 120, per_ms: 60_000 },      // actAs calls, per connection (never mutate_member)
   integration_card_conn: { capacity: 20, per_ms: 3_600_000 }, // actAs().createCard, per connection
+  integration_card_day_conn: { capacity: 100, per_ms: 86_400_000 }, // … and per day, only for a connector that declares dailyCardCap (its cap, unless set here)
   integration_card_subject: { capacity: 5, per_ms: 3_600_000 }, // … and per (connection, provider user) when act() names meta.subject
   integration_user_cmd: { capacity: 30, per_ms: 60_000 },   // webhooks per (connection, provider user) a connector's rateSubject names (D42 addendum C3)
   integration_rate_audit_conn: { capacity: 6, per_ms: 60_000 }, // … its refusals audited, per connection
@@ -78,9 +79,9 @@ export class RateLimiter {
     this.buckets = new Map();
   }
 
-  /** → {ok:true} or {ok:false, retry_after_ms}. */
-  take(rule, key) {
-    const lim = this.limits[rule];
+  /** → {ok:true} or {ok:false, retry_after_ms}. `over`: {capacity, per_ms} in place of the rule's own. */
+  take(rule, key, over = null) {
+    const lim = over ?? this.limits[rule];
     if (!lim) throw new Error(`unknown rate limit ${rule}`);
     const now = this.now();
     const k = `${rule}|${key}`;
@@ -186,8 +187,8 @@ export class FailureBudget {
 }
 
 /** Take one token or throw RATE_LIMITED with retry_after_s (HTTP routes and runner RPCs). */
-export function limitOrThrow(hub, rule, key) {
-  const r = hub.limiter.take(rule, key);
+export function limitOrThrow(hub, rule, key, over = null) {
+  const r = hub.limiter.take(rule, key, over);
   if (!r.ok) {
     const s = Math.max(1, Math.ceil(r.retry_after_ms / 1000));
     throw new HubError('RATE_LIMITED', `too many requests; retry in ${s} s`, { retry_after_s: s });

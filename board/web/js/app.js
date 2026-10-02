@@ -246,6 +246,16 @@ async function connectIntegration(provider, kind, input) {
   update();
 }
 
+async function copyText(text) {
+  if (typeof text !== 'string' || !text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    toast('Copied.');
+  } catch {
+    toast('Couldn’t copy. Select the URL and copy it.', 'error');
+  }
+}
+
 async function submitIntegrationToken(form) {
   const provider = form.dataset.provider;
   const token = String(new FormData(form).get('token') ?? '').trim();
@@ -1886,6 +1896,7 @@ function onClick(e) {
       return;
     case 'integ-reload': loadIntegrations(); return;
     case 'integ-connect': connectIntegration(el.dataset.provider, el.dataset.kind); return;
+    case 'integ-copy-url': copyText(el.dataset.url); return;
     case 'integ-token-cancel': state.integ = { ...state.integ, tokenFor: null }; update(); return;
     case 'integ-activity': toggleActivity(el.dataset.conn); return;
     case 'integ-disconnect-ask': state.integ = { ...state.integ, confirmDisconnect: el.dataset.conn }; update(); return;

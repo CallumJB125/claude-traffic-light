@@ -230,6 +230,10 @@ Because the data is on your machine, you can do most of this yourself with the e
 
 `[privacy contact — Callum to fill]`
 
+## Sentry connector preparation
+
+The Sentry connector is implemented for review but is not enabled in the shipped connector catalog pending real provider acceptance. When enabled and explicitly connected, it verifies signed issue webhooks and can create a board card containing a bounded, scrubbed issue summary and Sentry issue link. Including the issue message is optional. The client secret is encrypted in the hub vault; the connector makes no outbound provider request and never starts an AI. Its private retry receipts retain connection, card/comment identifiers and timestamps so provider redelivery does not duplicate work. These follow the underlying project data lifecycle. Real delivery and the remaining incident/status journeys must be accepted before this flow is advertised as available.
+
 ## Changes to this notice
 
 If we add any new flow, we will update this notice before it ships. This page is a draft and will change.

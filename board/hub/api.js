@@ -117,6 +117,16 @@ export class Api {
     }
     const current = this.currentMember(member, cred);
     if (!this.hub.canWrite(current)) throw new HubError('FORBIDDEN', 'current membership cannot change this board');
+    const via = this.hub.viaScope.getStore();
+    if (via) {
+      const connection = this.db.get('SELECT org_id, created_by, status FROM connections WHERE id = ?', via.connection_id);
+      if (!connection || connection.status !== 'active' || connection.org_id !== current.org_id || via.member_id !== current.id) throw Object.assign(new HubError('FORBIDDEN', 'current integration cannot act'), { cacheable: false });
+      // Private registry context, never a request field. It checks the current
+      // action, settings and linked provider identity again after the queue.
+      if (typeof via.authorize === 'function') via.authorize();
+      else if (connection.created_by !== current.id) throw new HubError('FORBIDDEN', 'integration actor unavailable');
+      return this.hub.isAdmin(current) ? { ...current, role: 'member' } : current;
+    }
     return current;
   }
 
@@ -783,19 +793,28 @@ export class Api {
     member = this.currentWriter(member, cred, remote);
     const row0 = this.cardFor(member, cardId);
     const text = str(body.body, 10_000, 'body', { required: true });
+    const via = this.hub.viaScope.getStore();
+    const once = via?.member_id === member.id && typeof body.request_id === 'string' && body.request_id
+      ? { connection_id: via.connection_id, request_id: body.request_id } : null;
     return this.withWritableBoard(row0.board_id, (current) => {
       member = current;
       const row = this.cardFor(member, cardId);
       if (row.board_id !== row0.board_id) throw new HubError('CONFLICT', 'card moved while waiting');
       if (row.archived_at) throw archivedError();
-      let id;
+      let id, replay = false;
       this.hub.txn(() => {
+        const prior = once && this.db.get('SELECT c.* FROM integration_comment_requests r JOIN comments c ON c.id=r.comment_id WHERE r.connection_id=? AND r.request_id=?', once.connection_id, once.request_id);
+        if (prior) {
+          if (prior.card_id !== cardId) throw new HubError('CONFLICT', 'this request_id already commented on another card');
+          id = prior.id; replay = true; return;
+        }
         id = this.insertComment(member, cardId, { body: text, for_agent: body.for_agent === true, reply_to: body.reply_to });
+        if (once) this.db.insert('integration_comment_requests', { ...once, comment_id: id, created_at: this.hub.iso() });
         this.hub.feed(cardId, 'comment', { comment_id: id }, { actor: member.id });
       });
-      if (body.for_agent === true) this.hub.deliverComments(cardId);
+      if (!replay && body.for_agent === true) this.hub.deliverComments(cardId);
       const c = this.db.get('SELECT * FROM comments WHERE id = ?', id);
-      return { comment: { id, author_name: member.display_name, source: c.source, trusted: !!c.trusted, body: c.body, for_agent: !!c.for_agent, reply_to: c.reply_to, created_age_ms: 0 } };
+      return { comment: { id, author_name: this.hub.member(c.author_member_id)?.display_name ?? 'Former member', source: c.source, trusted: !!c.trusted, body: c.body, for_agent: !!c.for_agent, reply_to: c.reply_to, created_age_ms: this.hub.ageOf(c.created_at) } };
     }, { member, cred, remote });
   }
 

@@ -242,6 +242,9 @@ export function createIntegrations({
   // must not repeat the side effects.
   const lateOk = new Map();
 
+  // A hub's rateLimits.integration_card_day_conn wins over every connector's dailyCardCap.
+  const dayLimit = (conn) => (hub.config?.rateLimits?.integration_card_day_conn ? null : { capacity: conn.dailyCardCap, per_ms: 86_400_000 });
+
   const warn = (msg, c, e) => log?.warn?.(msg, { integration: c?.provider ?? c?.id, connection_id: c?.id, err: redact(e?.message ?? e) });
 
   // ── connections ─────────────────────────────────────────────────────────
@@ -471,7 +474,7 @@ export function createIntegrations({
       return { ...body, budget_usd: undefined, column: undefined, column_name: undefined, labels };
     };
 
-    function actAs(memberId, { live, action: actName, track, external_ref, subjectKey, subject = null }) {
+    function actAs(memberId, { live, authority, action: actName, track, external_ref, subjectKey, subject = null }) {
       // An act() for a provider user acts only as that user's linked member,
       // never as whoever connected the tool; one without a subject only as
       // the member who connected it, never as some other linked member.
@@ -494,13 +497,14 @@ export function createIntegrations({
       };
       bound();
       const first = actor(memberId);
-      const via = { connection_id: c.id, member_id: first.id, name: conn.name, external_ref };
+      const authorize = () => { authority(); bound(); actor(first.id); };
+      const via = { connection_id: c.id, member_id: first.id, name: conn.name, external_ref, authorize };
       const call = (body, fn, rules = [], pre = null) => {
         if (!live()) return Promise.reject(new Error('this act() scope has ended'));
         return track(callLive(body, fn, rules, pre));
       };
       const callLive = async (body, fn, rules, pre) => {
-        bound();
+        authorize();
         const member = actor(first.id);
         // Required so a handler retried after a timeout replays instead of acting twice (D8).
         if (typeof body?.request_id !== 'string' || !body.request_id) throw new HubError('VALIDATION', 'request_id required');
@@ -513,12 +517,16 @@ export function createIntegrations({
           if (hit.status >= 400) { const { code, message, ...extra } = hit.body.error; throw new HubError(code, message, extra); }
           return hit.body;
         }
-        const cacheError = (e) => { if (e instanceof HubError) hub.cacheResponse(member.id, rid, httpStatus(e.code), { error: { code: e.code, message: e.message, ...(e.extra ?? {}) } }); };
+        const cacheError = (e) => {
+          if (e instanceof HubError && e.cacheable !== false && !(e.code === 'QUOTA_EXCEEDED' && e.extra?.resource === 'storage')) {
+            hub.cacheResponse(member.id, rid, httpStatus(e.code), { error: { code: e.code, message: e.message, ...(e.extra ?? {}) } });
+          }
+        };
         try { pre?.(); } catch (e) { cacheError(e); throw e; }
         // The connection's own buckets, never mutate_member: a public source
         // (any Slack user, issues on a public repo) must not 429 the person's own browser.
         limitOrThrow(hub, 'integration_conn', c.id);
-        for (const [rule, key] of typeof rules === 'function' ? rules() : rules) limitOrThrow(hub, rule, key);
+        for (const [rule, key, over] of typeof rules === 'function' ? rules() : rules) limitOrThrow(hub, rule, key, over);
         let out;
         try {
           out = await hub.actVia(via, () => fn(member));
@@ -533,7 +541,8 @@ export function createIntegrations({
       // before any rate token: probing board ids must not drain the budget.
       // The provider user's bucket first: one past it spends none of the
       // connection's, so a single user can't use up everyone's cards.
-      const cardRules = [...(subjectKey ? [['integration_card_subject', subjectKey]] : []), ['integration_card_conn', c.id]];
+      const cardRules = [...(subjectKey ? [['integration_card_subject', subjectKey]] : []), ['integration_card_conn', c.id],
+        ...(conn.dailyCardCap ? [['integration_card_day_conn', c.id, dayLimit(conn)]] : [])];
       const boardOfOrg = (boardId) => () => {
         if (typeof boardId !== 'string' || hub.board(boardId)?.org_id !== c.org_id) throw new HubError('NOT_FOUND', 'board not found');
       };
@@ -551,7 +560,11 @@ export function createIntegrations({
         }),
         comment: (cardId, body = {}) => {
           if (body.for_agent === true) throw new HubError('POLICY_DENIED', 'an integration never writes to the agent');
-          return call(body, (m) => api.comment(m, cardId, { ...body, for_agent: false }));
+          return call(body, (m) => api.comment(m, cardId, { ...body, for_agent: false })).then((out) => {
+            const comment = db.get('SELECT card_id FROM comments WHERE id=?', out?.comment?.id ?? '');
+            if (!comment || comment.card_id !== cardId || !cardInOrg(cardId)) throw new HubError('CONFLICT', 'this request_id does not name a comment on this card');
+            return out;
+          });
         },
         action: (cardId, action, body = {}) => {
           if (!ALLOWED_ACTIONS.has(action)) throw new HubError('POLICY_DENIED', 'an integration may only cancel, stop or approve; a person does the rest from the card');
@@ -762,15 +775,26 @@ export function createIntegrations({
       if (mode === 'off') { audit('skipped'); return { done: false, decision: 'skipped' }; }
       if (mode === 'ask') { audit('asked'); return { done: false, decision: 'asked' }; }
       const auditId = audit('attempted');
-      let open = true;
+      let open = true, active = true;
       const live = () => open && !signal?.aborted;
-      const guard = (fn) => (...args) => { if (!live()) throw new Error('this act() scope has ended'); return fn(...args); };
+      const authority = () => {
+        if (!active || signal?.aborted) throw handlerEnded();
+        const current = row(c.id);
+        const refusal = (code, message) => Object.assign(new HubError(code, message), { cacheable: false });
+        if (!current || current.status !== 'active' || current.org_id !== c.org_id || current.created_by !== c.created_by) throw refusal('FORBIDDEN', 'current integration cannot act');
+        if (current.settings !== c.settings || current.target_board_id !== c.target_board_id || autonomyOf(action) !== 'auto') throw refusal('FORBIDDEN', 'integration settings changed; retry delivery');
+        const id = subject == null ? c.created_by : linkedMember(subject);
+        if (subject != null && id == null) throw new ActorUnavailable('member');
+        const member = actor(id);
+        api.currentMember(member);
+      };
+      const guard = (fn) => (...args) => { if (!live()) throw new Error('this act() scope has ended'); authority(); return fn(...args); };
       // Calls run() started without awaiting: settled before the scope closes,
       // so none of them lands on the board after act() returned.
       const pending = new Set();
       const track = (p) => { pending.add(p); return p; };
       const scope = {
-        actAs: guard((memberId) => actAs(memberId, { live, action, track, external_ref: base.external_ref, subjectKey, subject: subject ?? null })), link: guard(link), relink: guard(relink), linkStatus: guard(linkStatus),
+        actAs: guard((memberId) => actAs(memberId, { live, authority, action, track, external_ref: base.external_ref, subjectKey, subject: subject ?? null })), link: guard(link), relink: guard(relink), linkStatus: guard(linkStatus),
       };
       let decision = 'failed';
       let error = 'handler_failed';
@@ -795,6 +819,7 @@ export function createIntegrations({
         throw e;
       } finally {
         open = false;
+        active = false;
         db.run('UPDATE integration_audit SET decision = ?, error = ? WHERE id = ?', decision, error, auditId);
       }
     }
@@ -878,6 +903,12 @@ export function createIntegrations({
       card: (cardId) => {
         const card = typeof cardId === 'string' ? cardInOrg(cardId) : null;
         return card ? { id: card.id, key: card.key, title: card.title, board_id: card.board_id, column_name: card.column_name } : null;
+      },
+      // The card of this connection's newest createCard request: one it made, whoever made a card since.
+      lastCreatedCard: () => {
+        const r = db.get('SELECT card_id FROM integration_requests WHERE connection_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1', c.id);
+        const card = r ? cardInOrg(r.card_id) : null;
+        return card ? { id: card.id, board_id: card.board_id, archived: !!card.archived_at } : null;
       },
       log: (msg, extra = {}) => log?.info?.(msg, { integration: c.provider, connection_id: c.id, ...extra }),
     };
@@ -1889,7 +1920,7 @@ export function createIntegrations({
     register,
     /** Hosts a manifest connect form may post to (the web's CSP form-action). */
     formHosts: () => [...new Set([...connectors.values()].filter((c) => c.connect.manifestForm).map((c) => c.connect.formHost))],
-    connectors: () => [...connectors.values()].map((c) => ({ id: c.id, name: c.name, scopes: c.scopes, connect: c.connect.kind, actions: c.actions, prepare: c.connect.prepareInputs ? [...c.connect.prepareInputs] : null, identity: !!c.identity, start: c.connect.startInputs ? [...c.connect.startInputs] : null })),
+    connectors: () => [...connectors.values()].map((c) => ({ id: c.id, name: c.name, scopes: c.scopes, connect: c.connect.kind, actions: c.actions, prepare: c.connect.prepareInputs ? [...c.connect.prepareInputs] : null, identity: !!c.identity, start: c.connect.startInputs ? [...c.connect.startInputs] : null, shows_webhook_url: c.showsWebhookUrl === true })),
     list: (orgId) => db.all("SELECT * FROM connections WHERE org_id = ? AND status != 'revoked' ORDER BY created_at", orgId).map(publicConnection),
     get: (id) => { const c = row(id); return c ? publicConnection(c) : null; },
     orgOf: (id) => row(id)?.org_id ?? livePending(id)?.org_id ?? null,

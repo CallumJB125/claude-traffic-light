@@ -29,6 +29,9 @@ const ACTION_LABEL = {
   'system.pr_merged': 'Mark a card Done when its PR merges',
   'system.pr_closed': 'Send a card back when its PR is closed',
   'notify.post': 'Post updates to channels',
+  'sentry.card': 'Create cards from new Sentry issues',
+  'sentry.notice': 'Comment when new issues exceed the card limit',
+  'sentry.suppressed': 'Record issues that were not turned into cards',
 };
 export const actionLabel = (id) => ACTION_LABEL[id] ?? id;
 
@@ -100,6 +103,16 @@ function ownerLine(conn, name) {
   return login ? `Created under the ${name} account ${login}` : null;
 }
 
+function webhookUrlSection(conn, name) {
+  return h('section', { class: 'integ-section', 'aria-label': 'Webhook URL' },
+    h('h4', null, 'Webhook URL'),
+    conn.webhook_url
+      ? [h('p', { key: 'p', class: 'small' }, `Paste this URL into ${name} as the integration's Webhook URL:`),
+        h('p', { key: 'u', class: 'integ-webhook-url' }, h('code', { class: 'num' }, conn.webhook_url), ' ',
+          h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'integ-copy-url', 'data-url': conn.webhook_url }, 'Copy'))]
+      : h('p', { class: 'muted small' }, 'This hub has no public address. Ask its administrator to configure one before connecting webhooks.'));
+}
+
 function connectedCard(conn, m) {
   const connector = m.available.find((c) => c.id === conn.provider);
   const hl = health(conn, m.nowMs);
@@ -122,6 +135,7 @@ function connectedCard(conn, m) {
           (m.boards ?? []).filter((b) => !b.archived_at || b.id === conn.target_board_id).map((b) => h('option', { key: b.id, value: b.id, selected: b.id === conn.target_board_id }, `${b.name}${b.archived_at ? ' (Archived — intake paused)' : ''}`)))
           : h('span', null, (m.boards ?? []).find((b) => b.id === conn.target_board_id)?.name ?? 'Team board'))),
     connector?.identity ? identitySection(conn, connector.name ?? conn.provider, m) : null,
+    m.canEdit && Object.hasOwn(conn, 'webhook_url') ? webhookUrlSection(conn, connector?.name ?? conn.provider) : null,
     h('div', { class: 'integ-card-actions' },
       m.canEdit ? h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'integ-activity', 'data-conn': conn.id, 'aria-expanded': open ? 'true' : 'false' }, open ? 'Hide activity' : 'Activity') : null,
       m.canEdit ? (confirming
@@ -264,8 +278,10 @@ function availableCard(c, m) {
       : c.connect === 'token'
         ? (tokenOpen
           ? h('form', { class: 'integ-token', 'data-form': 'integ-token', 'data-provider': c.id },
-            h('label', { class: 'field' }, h('span', null, `${c.name} token`),
+            h('label', { class: 'field' }, h('span', null, c.shows_webhook_url ? `${c.name} client secret` : `${c.name} token`),
               h('input', { class: 'input', name: 'token', type: 'password', autocomplete: 'new-password', ...NO_MANAGER, required: true, autofocus: true, spellcheck: 'false' })),
+            c.shows_webhook_url ? h('p', { class: 'muted small' }, `Plexiform stores this secret encrypted and never displays it again. Rotate the secret in ${c.name} before reconnecting so old signed requests cannot be reused.`) : null,
+            c.shows_webhook_url ? h('p', { class: 'muted small' }, `After connecting, this page shows the webhook URL to paste into ${c.name}.`) : null,
             h('div', { class: 'integ-card-actions' },
               h('button', { type: 'submit', class: 'btn btn-sm btn-primary', disabled: busy || null, 'aria-busy': busy ? 'true' : null }, 'Connect'),
               h('button', { type: 'button', class: 'btn btn-sm btn-ghost', 'data-action': 'integ-token-cancel' }, 'Cancel')))

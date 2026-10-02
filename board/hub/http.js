@@ -542,12 +542,22 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     // Members may read what's connected (by design, D42), but a connector's
     // config (channel ids, repo lists, …) is the admins' business.
     const forMember = (member, c) => (hub.isAdmin(member) ? c : { ...c, settings: { autonomy: c.settings?.autonomy ?? {} } });
-    route('GET', '/api/integrations', ({ member }) => ({
+    // G1 (D42 addendum "the Sentry connector"): an admin pastes this into the
+    // provider. Admins only, as tidiness: the id is no secret, verify() is the
+    // gate. No public base is null, never a failed list.
+    const withWebhookUrl = (member, req, c, shown) => {
+      if (!hub.isAdmin(member) || !shown.has(c.provider)) return c;
+      let base = null;
+      try { base = publicBase(req); } catch { base = null; }
+      return { ...c, webhook_url: base ? `${base}/integrations/${c.id}/webhook` : null };
+    };
+    const showsWebhookUrl = () => new Set(integrations.connectors().filter((c) => c.shows_webhook_url).map((c) => c.id));
+    route('GET', '/api/integrations', ({ member, req }) => ({
       available: integrations.connectors(), vault: hub.vault.available,
-      connections: integrations.list(member.org_id).map((c) => ({ ...forMember(member, c), linked: integrations.isLinked(c.id, member.id) })),
+      connections: integrations.list(member.org_id).map((c) => ({ ...withWebhookUrl(member, req, forMember(member, c), showsWebhookUrl()), linked: integrations.isLinked(c.id, member.id) })),
       ...(hub.isAdmin(member) ? { pending: integrations.pendingList(member.org_id) } : {}),
     }));
-    route('POST', '/api/integrations/:provider/token', async ({ member, params, body }) => {
+    route('POST', '/api/integrations/:provider/token', async ({ member, params, body, req }) => {
       api.requireAdmin(member);
       const conn = integrations.connectors().find((c) => c.id === params.provider);
       if (!conn || conn.connect !== 'token') throw new HubError('NOT_FOUND', 'no such token integration');
@@ -561,9 +571,9 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
       }
       // Named fields only: the id is the hub's to mint, and the connector's settings are provider facts (D42 addendum C1).
       return {
-        connection: integrations.createConnection({
+        connection: withWebhookUrl(member, req, integrations.createConnection({
           external_id: v.external_id, display_name: v.display_name, scopes: v.scopes, secrets: v.secrets, settings: v.settings, orgId: member.org_id, memberId: member.id, provider: params.provider,
-        }),
+        }), showsWebhookUrl()),
       };
     });
     // OAuth / app install (D42): the callback needs this cookie back. A
