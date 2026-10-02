@@ -63,7 +63,7 @@ const PREPARE_REPLAY = Object.freeze({ status: 409, body: { error: { code: 'CONF
 const INVITE_REPLAY = Object.freeze({ status: 409, body: { error: { code: 'CONFLICT', message: 'This invite was already made. Resend it to get a new link.', reason: 'REPLAYED' } } });
 const SHARED_BROWSER = new Set(['states', 'liveness', 'fence', 'scope', 'overlap', 'cardface', 'handover', 'protocol', 'brand', 'ai', 'planning', 'workflow-execution', 'workflow-execution-controls', 'packet-text']);
 const CSP = "default-src 'self'; connect-src 'self'; img-src 'self' https://avatars.githubusercontent.com; style-src 'self'; script-src 'self'; frame-ancestors 'none'";
-const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.md': 'text/markdown; charset=utf-8' };
+const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.md': 'text/markdown; charset=utf-8', '.webmanifest': 'application/manifest+json' };
 
 // Dev auth trusts a loopback peer. A request that passed through a proxy or
 // tunnel still arrives from loopback, so refuse anything that carries proxy
@@ -79,11 +79,14 @@ const loopbackOnly = (config) => config.auth === 'dev' || config.auth === 'local
 const WEB_FILES = new Set([
   'index.html', 'signin.html', 'invite.html', 'clients.html', 'client-invite.html', 'remote-consent.html', 'remote-grants.html',
   'app.css', 'signin.css', 'clients.css', 'remote.css', 'favicon.svg', 'google-signin.png',
+  'phone.css', 'phone-icon-192.png', 'phone-icon-512.png',
 ]);
 const WEB_JS = /^js\/[a-z][a-z0-9-]*\.js$/;
 // Accounts mode: pages served without auth (their JS talks to /api/auth/*;
 // tokens ride in the URL fragment, which never reaches the server).
-const ACCOUNT_PAGES = { '/signin': 'signin.html', '/auth/email': 'signin.html', '/invite': 'invite.html', '/clients': 'clients.html', '/client-invite': 'client-invite.html', '/remote-consent': 'remote-consent.html', '/connections': 'remote-grants.html' };
+const ACCOUNT_PAGES = { '/signin': 'signin.html', '/auth/email': 'signin.html', '/invite': 'invite.html', '/clients': 'clients.html', '/client-invite': 'client-invite.html', '/remote-consent': 'remote-consent.html', '/connections': 'remote-grants.html',
+  // Phone control PWA (PHONE.md): its service worker lives under /phone/ so its scope is /phone/ only.
+  '/phone': 'phone.html', '/phone/': 'phone.html', '/phone/sw.js': 'phone-sw.js', '/phone/manifest.webmanifest': 'phone.webmanifest' };
 
 // A cookie-session mutation or WS upgrade in accounts mode (design §4.6): the
 // Origin must be present and be this hub; Sec-Fetch-Site, when sent, same-origin.
