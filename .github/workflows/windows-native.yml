@@ -52,6 +52,10 @@ jobs:
           cl.exe /nologo /std:c11 /TC /W4 /WX /DUNICODE /D_UNICODE /D_WIN32_WINNT=0x0A00 /Fo:work\windows-native\ /Fe:work\windows-native\acceptance.exe native\windows-private-directory\directory.c native\windows-private-directory\acceptance.c /link advapi32.lib ntdll.lib rpcrt4.lib
           if errorlevel 1 exit /b %errorlevel%
           cl.exe /nologo /std:c11 /TC /W4 /WX /DUNICODE /D_UNICODE /D_WIN32_WINNT=0x0A00 /Fo:work\windows-native\ /Fe:work\windows-native\file-acceptance.exe native\windows-private-directory\file-acceptance.c /link advapi32.lib ntdll.lib rpcrt4.lib
+          if errorlevel 1 exit /b %errorlevel%
+          cl.exe /nologo /std:c11 /TC /W4 /WX /DUNICODE /D_UNICODE /D_WIN32_WINNT=0x0A00 /c /Fo:work\windows-native\owned-foundation-production.obj native\windows-private-directory\owned-foundation.c
+          if errorlevel 1 exit /b %errorlevel%
+          cl.exe /nologo /std:c11 /TC /W4 /WX /DUNICODE /D_UNICODE /D_WIN32_WINNT=0x0A00 /Fo:work\windows-native\ /Fe:work\windows-native\owned-foundation-acceptance.exe native\windows-private-directory\owned-foundation-acceptance.c /link advapi32.lib ntdll.lib bcrypt.lib
           exit /b %errorlevel%
           '@ | Set-Content -LiteralPath work/windows-native/compile.cmd -Encoding ascii
           $pfCompileFile = (Resolve-Path -LiteralPath work/windows-native/compile.cmd).Path
@@ -66,6 +70,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Native Windows acceptance failed; retain original fixture evidence.' }
           & .\work\windows-native\file-acceptance.exe 2>&1 | Tee-Object -FilePath work/windows-native/file-acceptance.log
           if ($LASTEXITCODE -ne 0) { throw 'Native Windows private-file acceptance failed; retain original fixture evidence.' }
+          & .\work\windows-native\owned-foundation-acceptance.exe 2>&1 | Tee-Object -FilePath work/windows-native/owned-foundation-acceptance.log
+          if ($LASTEXITCODE -ne 0) { throw 'Native Windows owned publication/control acceptance failed; retain original fixture evidence.' }
 
       - name: Retain native acceptance evidence
         if: always()
