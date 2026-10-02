@@ -219,7 +219,7 @@ function applyAdapterEvent(dir, { host, source, event, fallbackSession, fallback
 // Typed, metadata-only Codex reduction. Opaque turn IDs cannot prove total
 // ordering. Refuse known retired/noncurrent events and post-stop work; keep
 // bounded child tombstones so an observed stop-before-start cannot reopen it.
-// Only an actual SessionStart or prompt establishes an absent session.
+// Only a parent SessionStart or prompt establishes an absent session.
 function reduceCodexLifecycle(prev, event, nowIso = new Date().toISOString()) {
   const p = prev?.codexLifecycle === 1 ? prev : null;
   const name = event.codexEvent;
@@ -227,7 +227,7 @@ function reduceCodexLifecycle(prev, event, nowIso = new Date().toISOString()) {
   const isStart = name === 'SessionStart';
   const prompt = name === 'UserPromptSubmit';
   const child = !!event.codexAgentId;
-  if (!p && !isStart && !prompt) return undefined;
+  if (!p && (child || (!isStart && !prompt))) return undefined;
   let turn = p?.codexTurnId || null;
   let closed = p?.codexClosedTurn === true;
   let retired = Array.isArray(p?.codexRetiredTurns) ? p.codexRetiredTurns.filter((v) => typeof v === 'string').slice(-16) : [];

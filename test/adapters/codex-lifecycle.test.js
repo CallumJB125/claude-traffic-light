@@ -222,6 +222,40 @@ test('Codex lifecycle SessionEnd removes under lock and late tools cannot recrea
   emit(home, 'SessionStart'); assert.equal(read(home).signal, 'session-start');
 });
 
+test('Codex lifecycle child prompt needs an observed parent before establishing activity', (t) => {
+  const { home } = fixture(t);
+  const child = { agent_id: 'child-1', turn_id: 'child-turn', cwd: '/child/project' };
+  assert.equal(emit(home, 'UserPromptSubmit', child).stdout, '');
+  assert.equal(fs.existsSync(sessionFile(home)), false);
+  emit(home, 'UserPromptSubmit');
+  emit(home, 'UserPromptSubmit', child);
+  assert.deepEqual([read(home).codexTurnId, read(home).cwd, read(home).agents[0].status], ['turn-1', '/synthetic/project', 'working']);
+});
+
+test('Codex lifecycle child prompt cannot resurrect an ended parent before a fresh parent start', (t) => {
+  const { home } = fixture(t);
+  emit(home, 'UserPromptSubmit');
+  emit(home, 'SubagentStart', { agent_id: 'child-1', turn_id: 'child-turn' });
+  emit(home, 'SessionEnd');
+  assert.equal(fs.existsSync(sessionFile(home)), false);
+  emit(home, 'UserPromptSubmit', { agent_id: 'child-1', turn_id: 'child-next', cwd: '/child/project' });
+  assert.equal(fs.existsSync(sessionFile(home)), false);
+  emit(home, 'SessionStart', { source: 'resume' });
+  emit(home, 'UserPromptSubmit', { agent_id: 'child-1', turn_id: 'child-next', cwd: '/child/project' });
+  assert.deepEqual([read(home).codexTurnId, read(home).cwd, read(home).agents[0].status], [null, '/synthetic/project', 'working']);
+});
+
+test('Codex lifecycle child prompt preserves a legacy file until a parent observation', (t) => {
+  const { home } = fixture(t);
+  fs.mkdirSync(path.join(home, 'sessions'));
+  const legacy = '{"sessionId":"session-1","source":"codex","signal":"stop","cwd":"/legacy/project"}\n';
+  fs.writeFileSync(sessionFile(home), legacy);
+  emit(home, 'UserPromptSubmit', { agent_id: 'child-1', turn_id: 'child-turn', cwd: '/child/project' });
+  assert.equal(fs.readFileSync(sessionFile(home), 'utf8'), legacy);
+  emit(home, 'UserPromptSubmit');
+  assert.deepEqual([read(home).codexLifecycle, read(home).codexTurnId, read(home).cwd, read(home).agents.length], [1, 'turn-1', '/synthetic/project', 0]);
+});
+
 test('Codex lifecycle compact preserves active roster but a real session start resets it', (t) => {
   const { home } = fixture(t);
   emit(home, 'UserPromptSubmit'); emit(home, 'SubagentStart', { agent_id: 'child-1' });
