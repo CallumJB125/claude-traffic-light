@@ -1,6 +1,7 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict');
 const {createSetupsMain}=require('../src/setups-main');
+const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const ID='12345678-1234-4234-8234-123456789abc',HASH='a'.repeat(64);
 const choice=()=>({files:[{id:ID,mode:'replace',replace_keys:[],instructions:true,code:true}],values:{NAME:'Synthetic local value'}});
 function fixture(overrides={}){
@@ -48,4 +49,10 @@ test('identity retirement and close preserve one runtime lifetime and stop renew
 });
 test('unsupported and unpackaged builds cannot use alternate helper or credential paths',async()=>{
  for(const overrides of [{platform:'win32'},{app:{isPackaged:false}}]){const f=fixture(overrides);assert.equal((await f.invoke('local-state')).ok,false);assert.equal(f.calls.length,0);}
+});
+test('production main composition registers the real local adapter and retires it on quit',async()=>{
+ const source=fs.readFileSync(path.join(__dirname,'../main.js'),'utf8'),start=source.indexOf('const SetupsLocal='),end=source.indexOf('// Settings → Account & team',start),handlers=new Map(),events=new Map(),frame={},contents={mainFrame:frame,isDestroyed:()=>false},window={isDestroyed:()=>false};let retired=0,crypto=0;
+ assert.ok(start>0&&end>start);const service={invalidate:()=>retired++};
+ const context={require:name=>{if(name==='./src/setups-main')return {createSetupsMain};assert.equal(name,'electron');return {safeStorage:{isEncryptionAvailable:()=>{crypto++;return false;}}};},app:{isPackaged:false,on:(event,fn)=>events.set(event,fn)},buddyWin:{setupsContext:()=>({window,contents,generation:1,foreground:true})},SetupsNative:service,dialog:{},ipcMain:{handle:(name,fn)=>handlers.set(name,fn)}};
+ vm.runInNewContext(source.slice(start,end),context);assert.equal(handlers.size,8);assert.equal(crypto,0);assert.equal((await handlers.get('setups:local-state')({sender:contents,senderFrame:frame})).ok,false);assert.equal(crypto,0);events.get('will-quit')();assert.equal(retired,1);
 });
