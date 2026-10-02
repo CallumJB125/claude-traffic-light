@@ -36,9 +36,18 @@ import { StorageWatch } from './storage-watch.js';
 
 export function createApp(config, { clock = defaultClock, log = createLogger({ level: config.logLevel }), github = null, fetchImpl = globalThis.fetch, timers = true, mailer } = {}) { // privacy-flow: hub-server
   const db = openDb(config.dbPath, { now: () => new Date(clock.wall()).toISOString() });
+  try {
+    return buildApp(config, { db, clock, log, github, fetchImpl, timers, mailer });
+  } catch (error) {
+    // Construction never hands the caller an app to close on failure.
+    try { db.close(); } catch { /* Preserve the original startup error. */ }
+    throw error;
+  }
+}
+
+function buildApp(config, { db, clock, log, github, fetchImpl, timers, mailer }) {
   const gh = github ?? (config.githubToken ? createGitHub({ token: config.githubToken, api: config.githubApi, fetchImpl }) : noGitHub);
   if (config.auth !== 'local' && db.meta('local_member')) {
-    db.close();
     throw new Error('this database belongs to the desktop app (BOARD_AUTH=local)');
   }
   const hub = new Hub({ db, config, clock, log, github: gh });
