@@ -159,6 +159,7 @@ function buildApp(config, { db, clock, log, github, fetchImpl, timers, mailer })
       closed = true;
       api.workflowExecutor.close();
       hub.interactionRelay?.close();
+      hub.messaging?.close();
       bus.stop();
       for (const i of intervals) clearInterval(i);
       const done = new Promise((resolve) => server.close(() => resolve()));

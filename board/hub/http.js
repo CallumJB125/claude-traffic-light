@@ -37,6 +37,7 @@ import { strictJson } from './remote/validation.js';
 import { readWorkContext, guardWorkContext, workContextArgs } from './work-context.js';
 import { InteractionRelay, INTERACTION_WS_PATH } from './interaction-relay.js';
 import { InteractionShares } from './interaction-shares.js';
+import { Messaging } from './messaging.js';
 
 const MAX_BODY = 1024 * 1024;
 // Every request's ceilings (D105); config.requestLimits overrides them (tests, no env).
@@ -357,6 +358,8 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     hub.interactionRelay.routes(route);
     hub.interactionShares ??= new InteractionShares(hub, hub.interactionRelay);
     hub.interactionShares.routes(route);
+    hub.messaging ??= new Messaging(hub, config.messagingLimits);
+    hub.messaging.routes(route);
     const acc = hub.accounts;
     route('GET', '/api/auth/methods', ({ ip }) => acc.methods({ ip }), { auth: 'none' });
     route('POST', '/api/auth/email/start', ({ body, ip, ident, req, res }) => acc.start(body, { ip, ident, req, res }), { auth: 'optional' });
