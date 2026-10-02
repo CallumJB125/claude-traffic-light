@@ -186,7 +186,9 @@ PFOResult pfo_control_begin(PFOAuthority *a,HANDLE expectedProcess,PFOControl **
         !pfo_nonce(c->name,PFO_PIPE_NAME,L"\\\\.\\pipe\\Plexiform-control-v1-",L"") || !pfo_security(&token,&sd,&acl)) goto done;
     ZeroMemory(&sa,sizeof(sa)); sa.nLength=sizeof(sa); sa.lpSecurityDescriptor=&sd; sa.bInheritHandle=FALSE;
     if(!pfo_current(a)) goto done;
-    c->pipe=CreateNamedPipeW(c->name,PIPE_ACCESS_DUPLEX|FILE_FLAG_OVERLAPPED|FILE_FLAG_FIRST_PIPE_INSTANCE|READ_CONTROL,
+    /* Duplex already grants DACL read access. READ_CONTROL is not a valid
+     * CreateNamedPipeW open-mode flag; the explicit private SD still applies. */
+    c->pipe=CreateNamedPipeW(c->name,PIPE_ACCESS_DUPLEX|FILE_FLAG_OVERLAPPED|FILE_FLAG_FIRST_PIPE_INSTANCE,
         PIPE_TYPE_BYTE|PIPE_READMODE_BYTE|PIPE_WAIT|PIPE_REJECT_REMOTE_CLIENTS,1,4096,4096,0,&sa);
     if(c->pipe==INVALID_HANDLE_VALUE || inspect_private_security(c->pipe,FILE_ALL_ACCESS,&c->security)!=PF_OK || !pfo_current(a)) goto done;
     c->event=CreateEventW(NULL,TRUE,FALSE,NULL); if(!c->event) goto done;
