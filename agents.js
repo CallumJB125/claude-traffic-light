@@ -156,6 +156,9 @@ function kindOf(parentMode) {
 // session: { sessionId, cwd, agents }. opts.stateDir / opts.teamsDir exist so the
 // tests can point at fixtures.
 function scanAgents(session, opts = {}) {
+  // Other providers report their own roster through their adapter. Never
+  // inspect Claude/OMC state or transcript metadata for a Codex session.
+  if (session?.source && session.source !== 'claude') return { mode: null, iteration: 0, agents: [] };
   const cwd = (session && session.cwd) || '';
   const id = (session && session.sessionId) || '';
   const stateDir = opts.stateDir || (cwd ? path.join(cwd, '.omc', 'state') : null);
