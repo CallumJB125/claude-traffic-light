@@ -148,6 +148,7 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
     async close({ graceMs = config.shutdownGraceMs ?? 5000 } = {}) {
       if (closed) return;
       closed = true;
+      api.workflowExecutor.close();
       bus.stop();
       for (const i of intervals) clearInterval(i);
       const done = new Promise((resolve) => server.close(() => resolve()));

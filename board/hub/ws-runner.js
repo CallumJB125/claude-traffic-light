@@ -312,6 +312,7 @@ export class RunnerConn {
       if (!row || row.board_id !== row0.board_id) return lost();
       if (!row.repo_id || !hub.db.get('SELECT 1 AS x FROM board_repos WHERE board_id = ? AND repo_id = ?', row.board_id, row.repo_id)) return lost('POLICY_DENIED', 'this repository is no longer enabled on the board');
       const prior = hub.db.get('SELECT * FROM dispatches WHERE request_id = ? AND card_id = ?', msg.request_id, row.id);
+      if(!hub.workflowGuard.claim(msg.request_id,this))return lost('POLICY_DENIED','workflow authorization is no longer current');
       if (prior?.state === 'claimed' && prior.run_id) {
         const run = hub.run(prior.run_id);
         if (run && run.device_id === this.device_id && !run.ended_at && row.active_run_id === run.id) return this.claimOk(msg, run);
@@ -338,6 +339,7 @@ export class RunnerConn {
   }
 
   claimOk(msg, run) {
+    if(!this.hub.workflowGuard.claim(run.dispatch_request_id,this))return this.send({type:'claim.result',re:msg.id,ok:false,error:{code:'POLICY_DENIED',message:'workflow authorization is no longer current'}});
     this.send({
       type: 'claim.result', re: msg.id, ok: true, run_id: run.id, fence: run.fence, branch: run.branch, snapshot_ref: run.snapshot_ref,
       run_token: this.hub.mintRunToken(run), team_context: this.hub.teamContext(run.id),

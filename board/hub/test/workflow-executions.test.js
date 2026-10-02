@@ -50,7 +50,7 @@ test('explicit human preview saves one immutable inert plan atomically, exact re
  const raw=f.db.get('SELECT * FROM workflow_execution_plans WHERE id=?',plan.id);
  for(const value of [f.cred.id,f.users.amember.token,'PRIVATE-PREVIEW-BRIEF',raw.snapshot])assert.equal(read.text.includes(value),false);
  assert.equal(f.service.start,undefined);assert.equal(f.service.cancel,undefined);assert.equal(f.db.get('SELECT count(*) n FROM workflow_execution_plans').n,1);
- assert.equal((await f.as(f.users.amember,'POST',`/api/workflow-plans/${plan.id}/start`,{})).status,404);
+ assert.equal((await f.as(f.users.amember,'POST',`/api/workflow-plans/${plan.id}/start`,{})).status,400,'039 remains inert; separate controls require a reviewed path/base preview and explicit confirmation');assert.equal(business(f),before);
 });
 
 test('new preview request body is closed, acyclic, same-instance and explicitly provider/budget/plan bound before persistence',async t=>{

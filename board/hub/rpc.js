@@ -129,7 +129,8 @@ const METHODS = {
       : [];
     const code = ev.some((e) => (e.kind === 'pr' || e.kind === 'commit') && e.verification === 'hub_verified');
     const tests = ev.some((e) => e.kind === 'test_run' || e.kind === 'no_tests_reason');
-    const res = hub.apply(row.id, { type: 'complete', fence: row.fence }, {
+    if(hub.workflowGuard.runMarker(run.id))hub.workflowGuard.selectedEvidence(run,ids);
+    const res = hub.workflowGuard.completion(run,ids,()=>hub.apply(row.id, { type: 'complete', fence: row.fence }, {
       ctx: { evidence_ok: code && tests },
       pre: () => {
         if (params.summary) {
@@ -137,7 +138,7 @@ const METHODS = {
           hub.feed(row.id, 'progress', { text: clip(params.summary, 500) }, { run });
         }
       },
-    });
+    }));
     if (!res.ok) {
       if (res.error.code === 'EVIDENCE_MISSING') throw new HubError('EVIDENCE_MISSING', 'needs a hub-verified PR or pushed commit and a test_run or no_tests_reason');
       throw new HubError(res.error.code, res.error.message);
@@ -162,6 +163,7 @@ const METHODS = {
     hub.txn(() => {
       hub.ownership.declare(ctx, paths, params.ownership_generation);
       hub.db.run('UPDATE runs SET planned_paths = ? WHERE id = ?', JSON.stringify(paths), run.id);
+      hub.workflowGuard.declared(run,paths);
       hub.journal({ board_id: row.board_id, card_id: row.id, run_id: run.id, actor_kind: 'runner', actor_id: run.device_id, kind: 'plan.declare', payload: { paths } });
       if (params.summary) hub.feed(row.id, 'plan_declared', { summary: clip(params.summary, 500), paths: paths.slice(0, 20) }, { run });
     });
@@ -191,7 +193,7 @@ const METHODS = {
     // reserved request, current fence and a live human approver are required.
     const permission = planPermission(hub, run);
     const member = permission && hub.activeMember(permission.answered_by);
-    const allowed = permission?.state === 'allowed' && currentPlanApprover(hub, run, row, permission.answered_by);
+    const allowed = permission?.state === 'allowed' && currentPlanApprover(hub, run, row, permission.answered_by) && hub.workflowGuard.planAllowed(run,permission);
     return { required: true, decision: allowed ? 'allow' : permission?.state === 'denied' ? 'deny' : 'pending',
       permission_request_id: permission?.id ?? null,
       answered_by: allowed ? { member_id: member.id, name: member.display_name } : null };
@@ -352,6 +354,7 @@ async function attachEvidence(hub, device, msg, connection) {
   if (params.result != null && !['pass', 'fail'].includes(params.result)) throw new HubError('VALIDATION', 'result must be pass|fail');
   const { run, row } = verifyRun(hub, device, msg, connection);
   const canonical = hub.repo(run.repo_id)?.canonical_url;
+  const owned=hub.workflowGuard.runMarker(run.id),sourceHmac=owned?hub.workflowGuard.sourceHmac(row):null;
   let verified = false;
   let binding = null;
   let ref = params.ref;
@@ -359,21 +362,23 @@ async function attachEvidence(hub, device, msg, connection) {
     if (params.kind === 'pr') {
       const n = prNumberOf(params.ref);
       const pull = await hub.github.getPull(canonical, n);
-      verified = prBound(pull, { branch: run.branch, key: row.key, baseRef: run.base_ref });
+      verified = owned?hub.workflowGuard.exactPull(run,pull):prBound(pull, { branch: run.branch, key: row.key, baseRef: run.base_ref });
       if (verified) {
-        binding = { head_repo_id: pull.head_repo_id, base_repo_id: pull.base_repo_id, base_ref: pull.base_ref };
+        binding = { head_repo_id: pull.head_repo_id, base_repo_id: pull.base_repo_id, base_ref: pull.base_ref,head_sha:pull.head_sha??null };
         // The hub checked PR n of the run's repo, whatever else the runner's
         // text named: store that, so nothing downstream reads a runner's URL.
         ref = `https://${canonical}/pull/${n}`;
       }
     } else if (params.kind === 'commit') {
-      verified = !!(await hub.github.getCommit(canonical, params.ref.trim()));
+      const commit=await hub.github.getCommit(canonical,params.ref.trim());verified=!!commit;
+      if(owned){verified=!!commit&&/^[0-9a-f]{40}$/.test(commit.sha??'');if(verified)ref=commit.sha;}
     }
   } catch (e) {
     hub.log.warn('evidence verification failed', { card_id: row.id, err: e });
   }
   return hub.withBoard(row.board_id, () => {
     const again = verifyRun(hub, device, msg, connection);
+    if(owned&&(hub.repo(again.run.repo_id)?.canonical_url!==canonical||hub.workflowGuard.sourceHmac(again.row)!==sourceHmac))throw new HubError('CONFLICT','Workflow evidence source changed while verifying.');
     const id = randomUUID();
     const verification = verified ? 'hub_verified' : 'self_reported';
     hub.txn(() => {
@@ -382,6 +387,7 @@ async function attachEvidence(hub, device, msg, connection) {
         result: params.kind === 'test_run' ? params.result ?? null : null, verification, verified_at: verified ? hub.iso() : null, created_at: hub.iso(),
         pr_head_repo_id: binding?.head_repo_id ?? null, pr_base_repo_id: binding?.base_repo_id ?? null, pr_base_ref: binding?.base_ref ?? null,
       });
+      if(owned&&verified&&params.kind==='pr')hub.db.insert('workflow_verified_pr',{evidence_id:id,run_id:again.run.id,repo_hmac:hub.refHash(canonical),head_sha:binding.head_sha,base_ref:binding.base_ref,head_repo_id:binding.head_repo_id,base_repo_id:binding.base_repo_id});
       hub.feed(row.id, 'evidence', { kind: params.kind, ref, verification, result: params.result ?? null }, { run: again.run });
       hub.journal({ board_id: row.board_id, card_id: row.id, run_id: again.run.id, actor_kind: 'runner', actor_id: device.id, kind: 'evidence.create', payload: { evidence_id: id, kind: params.kind, ref, verification, result: params.result ?? null } });
       hub.later(() => hub.broadcastCard(row.id));
