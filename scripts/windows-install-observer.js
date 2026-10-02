@@ -85,9 +85,13 @@ function scope(payload, { pid: rootPid, started, exe }, canonicalize = fs.realpa
     const child = rows.get(childReceipt.pid);
     if (!child || !owned.has(child.pid) || child.pid === rootPid || child.parentPid !== childReceipt.parentPid || Date.parse(child.created) < childReceipt.started - 1000 || Date.parse(child.created) > childReceipt.started + 1000 || imageIdentity(child.image, canonicalize) !== imageIdentity(childReceipt.exe, canonicalize)) throw new Error('owned child identity changed');
   }
+  // A descendant running the root's own image (a portable hook re-running the
+  // launcher) is told apart from other executables by identity alone: a fixed
+  // label, never its path.
+  const rootImage = imageIdentity(root.image, canonicalize);
   const processes = [...owned].map(([id, depth]) => {
     const row = rows.get(id), name = path.win32.basename(row.image).toLowerCase();
-    const image = id === rootPid ? 'installer' : /^(?:old-uninstaller|uninstaller|uninstall plexiform|plexiform|cmd|powershell|conhost)\.exe$/.test(name) ? name : 'other-executable';
+    const image = id === rootPid ? 'installer' : /^(?:old-uninstaller|uninstaller|uninstall plexiform|plexiform|cmd|powershell|conhost)\.exe$/.test(name) ? name : imageIdentity(row.image, canonicalize) === rootImage ? 'root-image' : 'other-executable';
     return { pid: id, parentPid: row.parentPid, created: row.created, image, depth };
   });
   const windows = payload.windows.map(row => {

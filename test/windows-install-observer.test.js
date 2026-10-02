@@ -19,6 +19,13 @@ test('owned installer graph exposes bounded process/window metadata without fixt
   assert.deepEqual(out.windows, payload().windows);
   assert.equal(JSON.stringify(out).includes('C:'), false);
 });
+test('a descendant re-running the owned root image is labelled root-image by identity, never by path', () => {
+  const p = payload(); p.windows = [];
+  p.processes.push(row(44, 43, 'C:\\Windows\\System32\\cmd.exe', 200), row(45, 44, receipt.exe, 300), row(46, 44, 'C:\\elsewhere\\Plexiform-1.0.1-win-x64.exe', 300));
+  const out = Observer.scope(p, receipt, canonicalize);
+  assert.deepEqual(out.processes.map(x => [x.pid, x.image]), [[42, 'installer'], [43, 'old-uninstaller.exe'], [44, 'cmd.exe'], [45, 'root-image'], [46, 'other-executable']]);
+  assert.equal(JSON.stringify(out).includes('C:'), false);
+});
 test('missing root is incomplete, while PID reuse/image replacement cannot adopt descendants', () => {
   assert.equal(Observer.scope({ ...payload(), processes: [], windows: [] }, receipt, canonicalize).ok, false);
   for (const mutation of [p => p.processes[0].image = 'C:\\unrelated\\Plexiform.exe', p => p.processes[0].created = new Date(started - 2000).toISOString(), p => p.processes[0].created = new Date(started + 11000).toISOString()]) {
