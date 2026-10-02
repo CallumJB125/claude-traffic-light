@@ -14,11 +14,15 @@
 //   resets it with that account's current sign-in.
 // - release() (app quit) resets the role with a short bound, so a Mac that is
 //   off does not leave a host slot open for its token.
+// - attach(host, {origin, userId, token}) → {stop} (optional: session messaging)
+//   runs only once a host has connected with the hub, and is stopped before
+//   that host is disabled or closed. `token` is the identity's getter, so a
+//   refreshed sign-in is picked up.
 
 const RESET = { baseMs: 2000, maxMs: 5 * 60_000, timeoutMs: 5000, quitTimeoutMs: 1500 };
 
 function createInteractionHostSync({
-  want, identity, createHost, connect, resetRole, fetch,
+  want, identity, createHost, connect, resetRole, fetch, attach = null,
   pending: { get: getPending, set: setPending }, log = () => {}, timers = { setTimeout, clearTimeout }, reset = {},
 }) {
   const R = { ...RESET, ...reset };
@@ -54,7 +58,10 @@ function createInteractionHostSync({
     r.timer?.unref?.();
   }
 
+  function detach(c) { const a = c?.attached; if (c) c.attached = null; try { a?.stop(); } catch (e) { log(`[remote-interaction] ${e.message}`); } }
+
   async function stop(prev) {
+    detach(prev);
     const ok = await prev.host.disable({ baseUrl: prev.origin, token: prev.token, fetch, timeoutMs: R.timeoutMs }).catch(() => false);
     prev.host.close();
     if (!ok) owe(prev);
@@ -92,7 +99,10 @@ function createInteractionHostSync({
     chain = chain.then(async () => {
       if (prev) await stop(prev);
       settlePending(id);
-      if (next && current === next) await connect(next.host, { baseUrl: next.origin, token: id.token, fetch });
+      if (next && current === next) {
+        const st = await connect(next.host, { baseUrl: next.origin, token: id.token, fetch });
+        if (attach && current === next && st?.state === 'connected') next.attached = attach(next.host, { origin: next.origin, userId: next.userId, token: id.token });
+      }
     }).catch((e) => log(`[remote-interaction] ${e.message}`));
     return chain;
   }
@@ -103,12 +113,13 @@ function createInteractionHostSync({
     current = null; key = null;
     cancelRetry();
     if (!prev) return;
+    detach(prev);
     const ok = await prev.host.disable({ baseUrl: prev.origin, token: prev.token, fetch, timeoutMs: R.quitTimeoutMs }).catch(() => false);
     prev.host.close();
     if (!ok) setPending({ origin: prev.origin, userId: prev.userId });
   }
 
-  function close() { cancelRetry(); current?.host.close(); current = null; key = null; }
+  function close() { cancelRetry(); detach(current); current?.host.close(); current = null; key = null; }
 
   return { sync, release, close, host: () => current?.host ?? null, active: () => !!current, settled: () => chain };
 }

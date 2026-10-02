@@ -17,14 +17,20 @@
 
 import { randomUUID, randomBytes, createHash, timingSafeEqual } from 'node:crypto';
 import { HubError } from './db.js';
+import { limitOrThrow } from './ratelimit.js';
 import { packetRelativePath } from '../shared/packet-text.js';
 
 export const MESSAGING_LIMITS = Object.freeze({
-  bodyChars: 4000, bodyBytes: 8192, responseChars: 16000, reportChars: 2000, labelChars: 120,
+  // A session receives the body framed (src/session-messaging.js frame()) through an
+  // adapter that takes 4000 chars / 8192 bytes: body + handoff refs stay under this.
+  bodyChars: 4000, bodyBytes: 8192, sessionBodyChars: 3200, sessionBodyBytes: 7168, responseChars: 16000, reportChars: 2000, labelChars: 120,
   ttlDefaultS: 3600, ttlMinS: 10, ttlMaxS: 86400, personTtlMaxS: 7 * 86400,
   perTarget: 32, perSender: 64, perPersonInbox: 200, targetsPerHost: 16,
   leaseMs: 60_000, busyBackoffMs: 5_000, pullWaitMaxMs: 20_000, pullBatch: 8, onlineMs: 60_000,
   maxHops: 3, orgSessionPerHour: 120, cardSessionPerHour: 60, retentionMs: 30 * 86_400_000,
+  // Per target: people other than its owner (together), and the owner's own sends.
+  teammateTurnsPerHour: 20, teammateParallel: 4, ownerTurnsPerHour: 240,
+  registrationsPerHour: 64, parkedPulls: 2, sweepMs: 60_000,
   cardRefs: 8, artifacts: 16,
 });
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -171,16 +177,29 @@ export class Messaging {
     });
   }
 
+  // Per request: lapsed leases and expiry of queued messages only (msg_messages_queued index).
   sweep() {
     const now = this.at();
     this.hub.txn(() => {
       for (const m of this.db.all("SELECT * FROM msg_messages WHERE state = 'queued' AND phase = 'accepted' AND lease_until <= ?", now)) this.finish(m, 'outcome_unknown', 'receiver_lost');
       for (const m of this.db.all("SELECT * FROM msg_messages WHERE state = 'queued' AND expires_at <= ? AND (phase IS NULL OR phase = 'leased')", now)) this.finish(m, 'expired', 'expired');
       this.db.run("UPDATE msg_messages SET phase = NULL WHERE state = 'queued' AND phase = 'leased' AND lease_until <= ?", now);
-      this.db.run('DELETE FROM msg_messages WHERE created_at < ?', this.at(this.nowMs() - this.limits.retentionMs));
+    });
+  }
+
+  // On the hub's timer (app.js), never per request: retention, expired handoffs,
+  // long-retired targets, and anything a deletion left (deletion purges at once).
+  purge() {
+    this.sweep();
+    const now = this.at(), old = this.at(this.nowMs() - this.limits.retentionMs);
+    this.hub.txn(() => {
+      for (const m of this.db.all("SELECT * FROM msg_messages WHERE handoff_state = 'offered' AND expires_at <= ? AND state != 'queued'", now)) this.update(m, { handoff_state: 'expired' });
+      this.db.run('DELETE FROM msg_messages WHERE created_at < ?', old);
+      this.db.run('DELETE FROM msg_targets WHERE retired_at < ?', old);
       this.db.run(`DELETE FROM msg_messages WHERE source_user_id IN (SELECT id FROM users WHERE deleted_at IS NOT NULL)
         OR dest_user_id IN (SELECT id FROM users WHERE deleted_at IS NOT NULL)`);
       this.db.run('DELETE FROM msg_targets WHERE user_id IN (SELECT id FROM users WHERE deleted_at IS NOT NULL)');
+      this.hub.dropDeletedTeamMessages();
     });
   }
 
@@ -198,11 +217,12 @@ export class Messaging {
       to: { kind: m.dest_kind, user_id: m.dest_user_id, name: this.userName(m.dest_user_id), ...(dt ? { target: dt.id, provider: dt.provider } : {}) },
       body: m.body, state: m.state, reason: m.reason ?? null,
       response: see ? m.response ?? null : null, response_source: see && m.response != null ? 'provider_reported' : null,
-      handoff: h ? { brief: m.body, card_refs: h.card_refs, artifacts: h.artifacts, state: m.handoff_state, report: m.handoff_report ?? null } : null,
+      handoff: h ? { brief: m.body, card_refs: h.card_refs, artifacts: h.artifacts, state: this.handoffExpired(m) ? 'expired' : m.handoff_state, report: m.handoff_report ?? null } : null,
       hop: m.hop, authority_version: m.authority_version, created_at: m.created_at, expires_at: m.expires_at,
       delivered_at: m.delivered_at ?? null, replied_at: m.replied_at ?? null, grants_execution: false, approval: false,
     };
   }
+  handoffExpired(m) { return m.handoff_state === 'offered' && m.expires_at <= this.at(); }
   // Re-check a queued message on every read: revocation retires pending effects.
   fresh(m) {
     if (m.state === 'queued' && m.phase !== 'accepted') { const p = this.problem(m); if (p) this.hub.txn(() => this.finish(m, p.state, p.reason)); }
@@ -211,6 +231,7 @@ export class Messaging {
 
   // ── people ────────────────────────────────────────────────────────────────
   targets(ident) {
+    limitOrThrow(this.hub, 'messaging_read_user', ident.user.id);
     this.sweep();
     const uid = ident.user.id, online = this.at(this.nowMs() - this.limits.onlineMs);
     const rows = this.db.all(`SELECT * FROM msg_targets WHERE retired_at IS NULL AND (user_id = ? OR (scope = 'team'
@@ -277,36 +298,55 @@ export class Messaging {
     }
     if (src.target && !this.scopeOk(src.target, t ? { kind: 'session', t } : { kind: 'person', org_id: orgId })) throw missing();
     for (const c of [cardId, ...(handoff?.card_refs ?? [])]) if (c && !this.card(src.user_id, c, orgId)) throw missing();
+    if (t) {
+      const refs = handoff ? [...handoff.card_refs, ...handoff.artifacts.map((a) => a.path)].join(', ') : '';
+      if (text.length + refs.length > L.sessionBodyChars || Buffer.byteLength(text) + Buffer.byteLength(refs) > L.sessionBodyBytes) {
+        throw new HubError('PAYLOAD_TOO_LARGE', 'message too large for a session', { reason: 'SESSION_BODY_LIMIT' });
+      }
+    }
     const ttlMax = t ? L.ttlMaxS : L.personTtlMaxS;
     const ttl = int(body.ttl_s, L.ttlMinS, ttlMax, t ? L.ttlDefaultS : L.personTtlMaxS);
 
     let reply = null, cause = null;
     if (replyTo) {
       reply = this.db.get('SELECT * FROM msg_messages WHERE id = ?', replyTo);
-      if (!reply || (reply.source_user_id !== src.user_id && reply.dest_user_id !== src.user_id)) throw missing();
+      // Only inside the same team (or both personal) and the same conversation.
+      if (!reply || (reply.source_user_id !== src.user_id && reply.dest_user_id !== src.user_id)
+        || (reply.org_id ?? null) !== orgId || (convo && convo !== reply.conversation_id)) throw missing();
     }
     // hop: session-sourced forwards in this chain (a person's message is 0).
+    // Derived from every still-live message this session was handed, never from
+    // the caller: omitting or choosing caused_by cannot restart the count.
     let hop = 0, visited = [];
+    const hour = this.at(this.nowMs() - 3_600_000);
     if (src.target) {
-      hop = 1;
+      const live = "dest_target_id = ? AND state NOT IN ('rejected','expired') AND expires_at > ?", now = this.at();
       if (causedBy) {
-        cause = this.db.get('SELECT * FROM msg_messages WHERE id = ?', causedBy);
-        if (!cause || cause.dest_target_id !== src.target.id) throw missing();
-        hop = cause.hop + 1; visited = parse(cause.visited, []);
+        cause = this.db.get(`SELECT * FROM msg_messages WHERE id = ? AND ${live}`, causedBy, src.target.id, now);
+        if (!cause) throw missing();
       }
+      hop = 1 + (this.db.get(`SELECT MAX(hop) h FROM msg_messages WHERE ${live}`, src.target.id, now)?.h ?? 0);
+      for (const r of this.db.all(`SELECT DISTINCT visited FROM msg_messages WHERE ${live} AND source_kind = 'session'`, src.target.id, now)) visited.push(...parse(r.visited, []));
       visited = [...new Set([...visited, src.target.id])];
       if (t) {
         const policy = this.automation(t);
         if (!policy?.sessions) throw new HubError('FORBIDDEN', 'that session does not accept messages from AI sessions', { reason: 'AUTOMATION_OFF' });
         if (t.id === src.target.id || visited.includes(t.id)) throw new HubError('CONFLICT', 'message loop refused', { reason: 'LOOP' });
         if (hop > Math.min(L.maxHops, policy.max_hops)) throw new HubError('CONFLICT', 'hop limit reached; ask a person before continuing', { reason: 'HOP_LIMIT' });
-        const hour = this.at(this.nowMs() - 3_600_000);
         if (this.db.get("SELECT COUNT(*) n FROM msg_messages WHERE dest_target_id = ? AND source_kind = 'session' AND created_at > ?", t.id, hour).n >= policy.turns_per_hour
           || this.db.get("SELECT COUNT(*) n FROM msg_messages WHERE dest_target_id = ? AND source_kind = 'session' AND state = 'queued'", t.id).n >= policy.parallel) throw new HubError('RATE_LIMITED', 'that session\'s automation limit is reached', { retry_after_s: 60, reason: 'AUTOMATION_LIMIT' });
       }
-      const hour = this.at(this.nowMs() - 3_600_000);
       if ((orgId && this.db.get("SELECT COUNT(*) n FROM msg_messages WHERE org_id = ? AND source_kind = 'session' AND created_at > ?", orgId, hour).n >= L.orgSessionPerHour)
         || (cardId && this.db.get("SELECT COUNT(*) n FROM msg_messages WHERE card_id = ? AND source_kind = 'session' AND created_at > ?", cardId, hour).n >= L.cardSessionPerHour)) throw new HubError('RATE_LIMITED', 'team or task automation limit reached', { retry_after_s: 60, reason: 'AUTOMATION_LIMIT' });
+    }
+    // People: everyone but the target's owner shares one hourly turn and parallel budget per target.
+    if (t && !src.target) {
+      const owner = src.user_id === t.user_id;
+      const who = `dest_target_id = ? AND source_kind = 'person' AND source_user_id ${owner ? '=' : '!='} ?`;
+      if (this.db.get(`SELECT COUNT(*) n FROM msg_messages WHERE ${who} AND created_at > ?`, t.id, t.user_id, hour).n >= (owner ? L.ownerTurnsPerHour : L.teammateTurnsPerHour)
+        || (!owner && this.db.get(`SELECT COUNT(*) n FROM msg_messages WHERE ${who} AND state = 'queued'`, t.id, t.user_id).n >= L.teammateParallel)) {
+        throw new HubError('RATE_LIMITED', 'that session has had enough messages for now', { retry_after_s: 60, reason: 'TURN_LIMIT' });
+      }
     }
     // Bounded, scoped offline queues.
     if (t && this.db.get("SELECT COUNT(*) n FROM msg_messages WHERE dest_target_id = ? AND state = 'queued'", t.id).n >= L.perTarget) throw new HubError('RATE_LIMITED', 'that session has too many waiting messages', { retry_after_s: 30, reason: 'QUEUE_FULL' });
@@ -339,13 +379,14 @@ export class Messaging {
     const m = typeof mid === 'string' && UUID.test(mid) ? this.db.get('SELECT * FROM msg_messages WHERE id = ?', mid) : null;
     const uid = ident.user.id;
     if (!m || (m.source_user_id !== uid && m.dest_user_id !== uid)) throw missing();
-    // A person recipient who left the team no longer sees it.
-    if (m.dest_user_id === uid && m.source_user_id !== uid && m.dest_kind === 'person' && !this.member(uid, m.org_id)) throw missing();
+    // A recipient (person, or owner of a shared session) who left the team no longer sees it.
+    if (m.dest_user_id === uid && m.source_user_id !== uid && m.org_id && !this.member(uid, m.org_id)) throw missing();
     return this.fresh(m);
   }
-  get(ident, mid) { this.sweep(); return { message: this.project(this.mine(ident, mid), ident.user.id) }; }
+  get(ident, mid) { limitOrThrow(this.hub, 'messaging_read_user', ident.user.id); this.sweep(); return { message: this.project(this.mine(ident, mid), ident.user.id) }; }
 
   list(ident, query) {
+    limitOrThrow(this.hub, 'messaging_read_user', ident.user.id);
     this.sweep();
     const box = query?.get?.('box') ?? 'inbox';
     if (!['inbox', 'sent'].includes(box)) throw invalid();
@@ -353,7 +394,7 @@ export class Messaging {
     const uid = ident.user.id;
     const rows = box === 'sent' ? this.db.all('SELECT * FROM msg_messages WHERE source_user_id = ? ORDER BY seq DESC LIMIT ?', uid, limit)
       : this.db.all('SELECT * FROM msg_messages WHERE dest_user_id = ? ORDER BY seq DESC LIMIT ?', uid, limit * 2)
-        .filter((m) => m.dest_kind === 'session' || m.source_user_id === uid || this.member(uid, m.org_id)).slice(0, limit);
+        .filter((m) => !m.org_id || m.source_user_id === uid || this.member(uid, m.org_id)).slice(0, limit);
     return { messages: rows.map((m) => this.project(this.fresh(m), uid)) };
   }
 
@@ -379,7 +420,7 @@ export class Messaging {
   decideHandoff(m, body) {
     if (!['accept', 'decline'].includes(body.decision)) throw invalid();
     const report = this.text(body.report, this.limits.reportChars, null, { optional: true });
-    if (!['queued', 'delivered', 'replied'].includes(m.state) || m.handoff_state !== 'offered' || (m.state === 'queued' && m.phase === 'accepted')) throw new HubError('CONFLICT', 'this handoff can no longer be decided');
+    if (!['queued', 'delivered', 'replied'].includes(m.state) || m.handoff_state !== 'offered' || this.handoffExpired(m) || (m.state === 'queued' && m.phase === 'accepted')) throw new HubError('CONFLICT', 'this handoff can no longer be decided');
     this.hub.txn(() => this.update(m, { handoff_state: body.decision === 'accept' ? 'accepted' : 'declined', handoff_report: report,
       ...(m.state === 'queued' ? { state: 'delivered', delivered_at: this.at(), phase: null } : {}) }));
   }
@@ -415,13 +456,19 @@ export class Messaging {
     });
     if (new Set(wanted.map((w) => w.session)).size !== wanted.length) throw invalid();
     const now = this.at();
+    const same = (t, w) => t && t.user_id === uid && t.generation === w.generation && t.scope === w.scope && t.org_id === w.org_id && t.provider === w.provider;
     return this.hub.txn(() => {
       const live = new Map(this.db.all('SELECT * FROM msg_targets WHERE host_device_id = ? AND retired_at IS NULL', dev).map((t) => [t.session, t]));
+      // Each new generation or scope is a new row: bounded per host per hour.
+      const fresh = wanted.filter((w) => !same(live.get(w.session), w)).length;
+      if (fresh && this.db.get('SELECT COUNT(*) n FROM msg_targets WHERE host_device_id = ? AND registered_at > ?', dev, this.at(this.nowMs() - 3_600_000)).n + fresh > L.registrationsPerHour) {
+        throw new HubError('RATE_LIMITED', 'too many session changes from this device; try again later', { retry_after_s: 300, reason: 'TARGET_CHURN' });
+      }
       const out = [];
       for (const w of wanted) {
         const t = live.get(w.session);
         live.delete(w.session);
-        if (t && t.user_id === uid && t.generation === w.generation && t.scope === w.scope && t.org_id === w.org_id && t.provider === w.provider) {
+        if (same(t, w)) {
           this.db.run('UPDATE msg_targets SET label = ?, card_id = ?, automation = ?, seen_at = ? WHERE id = ?', w.label, w.card_id, w.automation, now, t.id);
           out.push({ session: w.session, generation: w.generation, target: t.id });
           continue;
@@ -443,6 +490,7 @@ export class Messaging {
     const wait = int(body.wait_ms, 0, this.limits.pullWaitMaxMs, 0);
     let out = this.lease(dev);
     if (!out.length && wait) {
+      if ((this.waiters.get(dev)?.size ?? 0) >= this.limits.parkedPulls) throw new HubError('RATE_LIMITED', 'this device is already waiting for messages', { retry_after_s: 5 });
       await this.waitFor(dev, Math.min(wait, this.nextRetryMs(dev) ?? wait));
       // Revoked or turned off while waiting: nothing is handed out.
       if (!this.hub.accounts.credValid(ident.cred)) throw new HubError('UNAUTHENTICATED', 'device token unknown or revoked: sign in again');
@@ -526,11 +574,14 @@ export class Messaging {
           return { state: m.state };
         }
         case 'turn_ended':
-          if (m.state !== 'delivered' || !['interrupted', 'failed', 'completed'].includes(body.turn)) throw conflict();
+          // Once, and only for a turn that did not answer (an answer is `replied`).
+          if (m.state !== 'delivered' || !['interrupted', 'failed'].includes(body.turn) || m.reason != null) throw conflict();
           this.update(m, { reason: `turn_${body.turn}` });
           return { state: m.state };
         case 'handoff':
           if (m.kind !== 'handoff' || !['delivered', 'replied'].includes(m.state)) throw conflict();
+          // The deciding session must still be the one it was handed to, under the same authority.
+          if (this.targetProblem(t) || t.generation !== m.authority_version) throw conflict();
           this.decideHandoff(m, { decision: body.decision, report: body.report });
           return { state: m.state, handoff_state: m.handoff_state };
         default: throw invalid();

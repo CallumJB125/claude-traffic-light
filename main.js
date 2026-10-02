@@ -1436,6 +1436,7 @@ ipcMain.handle('compaction-stats',e=>settingsOnly(e)?{...CompactionLedger.summar
 // Overview's. Signing out, another account, unticking or quitting ends it and
 // its remote sessions (src/interaction-host-sync.js).
 const RemoteInteraction=require('./src/remote-interaction');
+const SessionMessaging=require('./src/session-messaging');
 const hostSync=require('./src/interaction-host-sync').createInteractionHostSync({
   want:()=>loadConfig().remoteInteractionHost===true&&devMockReady,
   identity:()=>devMockReady?getBuddy().interactionHostIdentity?.()??null:null,
@@ -1453,6 +1454,16 @@ const hostSync=require('./src/interaction-host-sync').createInteractionHostSync(
   fetch:(...a)=>net.fetch(...a), // privacy-flow: remote-interaction
   pending:{get:()=>loadConfig().remoteInteractionResetPending??null,set:v=>saveConfig({remoteInteractionResetPending:v})},
   log:m=>console.log(m),
+  // Messages and handoffs (board/MESSAGING.md) into this host's sessions: only
+  // while hosting is on and connected; stopped with it (sign-out, revoke,
+  // unticking, quit). Team scope comes only from this Mac's team-sharing record.
+  attach:(host,id)=>{
+    const recv=SessionMessaging.createSessionMessagingHost({baseUrl:id.origin,token:id.token,fetch:(...a)=>net.fetch(...a),remote:host, // privacy-flow: session-messaging
+      shares:session=>{const sh=host.shared().find(x=>x.session===session&&x.scope==='interact');return sh?{scope:'team',org_id:sh.team.id}:null;},
+      log:m=>console.log(m)});
+    recv.start();
+    return recv;
+  },
 });
 function syncInteractionHost(){hostSync.sync();}
 app.on('will-quit',()=>hostSync.close());

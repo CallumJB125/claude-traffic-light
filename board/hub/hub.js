@@ -285,6 +285,11 @@ export class Hub extends EventEmitter {
   dropDeletedTeamLabels() {
     this.db.run('DELETE FROM board_labels WHERE board_id IN (SELECT b.id FROM boards b JOIN orgs o ON o.id = b.org_id WHERE o.deleted_at IS NOT NULL)');
   }
+  // … and so do its messages, replies and shared-session targets (MESSAGING.md §5).
+  dropDeletedTeamMessages() {
+    this.db.run('DELETE FROM msg_messages WHERE org_id IN (SELECT id FROM orgs WHERE deleted_at IS NOT NULL)');
+    this.db.run('DELETE FROM msg_targets WHERE org_id IN (SELECT id FROM orgs WHERE deleted_at IS NOT NULL)');
+  }
 
   /**
    * An external identifier an integration names (issue id, branch, request

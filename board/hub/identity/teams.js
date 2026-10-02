@@ -242,6 +242,7 @@ export class Teams {
       this.hub.clients?.deleteTeam(o.id, now);
       this.hub.revokeDeletedTeamConnections(now);
       this.hub.dropDeletedTeamLabels();
+      this.hub.dropDeletedTeamMessages();
       this.audit('team.delete', member ?? { org_id: o.id }, { ip, target: o.id, detail: { purge_after: purgeAfter, ...(member ? {} : { by: 'operator' }) } });
       this.hub.later(() => {
         for (const d of devices) {

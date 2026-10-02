@@ -391,7 +391,7 @@ test('HOSTILE: a target shared to one team is invisible and unmessageable from a
   } finally { await r.close(); }
 });
 
-test('HOSTILE: a body over 4000 chars, over 8 KiB, or over the request limit is 413; exactly 4000 is accepted', async () => {
+test('HOSTILE: a body over the limit (4000 chars / 8 KiB to a person, 3200 / 7 KiB to a session), or over the request limit, is 413; the limits themselves are accepted', async () => {
   const r = await messagingRig();
   try {
     const mac = await r.mac(r.macA, { start: false });
@@ -399,8 +399,12 @@ test('HOSTILE: a body over 4000 chars, over 8 KiB, or over the request limit is 
     const win = r.client(r.winA);
     const t = await until(() => targetOf(win, (x) => x.mine));
     const send = (body) => win.send({ to: { target: t.target }, body });
-    assert.equal((await send('a'.repeat(4000))).status, 200);
-    assert.equal((await send('a'.repeat(4001))).status, 413);
+    assert.equal((await send('a'.repeat(3200))).status, 200);
+    assert.equal((await send('a'.repeat(3201))).status, 413);
+    const person = (body) => win.send({ to: { user_id: r.bob.user, org_id: r.org }, body });
+    assert.equal((await person('a'.repeat(4000))).status, 200);
+    assert.equal((await person('a'.repeat(4001))).status, 413);
+    assert.equal((await person('€'.repeat(2731))).status, 413);
     assert.equal((await send('€'.repeat(3000))).status, 413);
     assert.equal((await send('a'.repeat(40_000))).status, 413);
     assert.equal((await send('a'.repeat(200_000))).status, 413);

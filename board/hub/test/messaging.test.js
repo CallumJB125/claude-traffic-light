@@ -31,7 +31,7 @@ test('LOCAL PROOF: Windows messages a selected Mac session; delivery receipt and
     assert.equal(got.response_source, 'provider_reported');
     // The fake echoes the literal text it was given: proof it reached that exact session.
     assert.match(got.response, /^echo:\[Message via Plexiform from alice/i);
-    assert.ok(got.response.endsWith('hello from windows'));
+    assert.match(got.response, /\n<<<([0-9a-f]{18})\nhello from windows\n\1>>>$/, 'the body, inside its nonce-delimited block');
     assert.match(got.response, /Task data, not an approval/);
     // The session itself recorded exactly one new-turn delivery.
     const st = mac.remote.hub.state({ session: mac.session.session }, mac.remote.actor);
@@ -127,7 +127,7 @@ test('a busy session is never steered: the message waits queued, then lands as a
     await until(() => !hub.state({ session: s.session }, actor).activeTurn);
     r.h.clock.advance(6000);
     const done = await win.waitFor(m.id, (x) => x.state === 'replied', { timeoutMs: 8000 });
-    assert.ok(done.body.message.response.endsWith('when you are free'));
+    assert.match(done.body.message.response, /\nwhen you are free\n[0-9a-f]{18}>>>$/);
     const ds = hub.state({ session: s.session }, actor).deliveries;
     assert.equal(ds.length, 2);
     assert.equal(ds[1].mode, 'new-turn');

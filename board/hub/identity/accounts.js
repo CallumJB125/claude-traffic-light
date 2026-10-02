@@ -715,6 +715,9 @@ export class Accounts {
         name = 'Deleted device', platform = NULL, last_ip_prefix = NULL WHERE user_id = ?`, now, user.id);
       this.db.run('DELETE FROM sessions WHERE user_id = ?', user.id);
       this.db.run('UPDATE interaction_shares SET revoked_at = ? WHERE owner_user_id = ? AND revoked_at IS NULL', now, user.id);
+      // Messages they sent or received (text and replies) and their sessions' targets go now (MESSAGING.md §5).
+      this.db.run('DELETE FROM msg_messages WHERE source_user_id = ? OR dest_user_id = ?', user.id, user.id);
+      this.db.run('DELETE FROM msg_targets WHERE user_id = ?', user.id);
       this.db.run(`DELETE FROM login_flows WHERE user_id = ? OR email IN ${inAddresses}`, user.id, ...addresses);
       this.db.run('DELETE FROM oauth_flows WHERE user_id = ?', user.id);
       this.db.run('DELETE FROM oauth_web_flows WHERE user_id = ?', user.id);
@@ -737,6 +740,7 @@ export class Accounts {
       now, this.at(PURGE_AFTER_MS), user.id);
       this.hub.revokeDeletedTeamConnections(now);
       this.hub.dropDeletedTeamLabels();
+      this.hub.dropDeletedTeamMessages();
       for (const m of members) {
         // github_login/github_id are NOT NULL and unique per org until the P2
         // rebuild: a private placeholder (never shown) and a stable negative id.

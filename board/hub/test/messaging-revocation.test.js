@@ -61,7 +61,7 @@ test('BOUNDARY: expiry, replacement and closure while offline — nothing stale 
     await win.waitFor(fresh.id, (x) => x.state === 'replied', { timeoutMs: 8000 });
     const texts = mac.remote.hub.state({ session: mac.session.session }, mac.remote.actor).deliveries.map((d) => d.text);
     assert.equal(texts.length, 1);
-    assert.ok(texts[0].endsWith('for the new generation'));
+    assert.match(texts[0], /\nfor the new generation\n[0-9a-f]{18}>>>$/);
   } finally { await r.close(); }
 });
 

@@ -10,7 +10,7 @@ const { createInteractionHostSync } = require('../src/interaction-host-sync.js')
 const T = { timeout: 10_000 };
 const tick = () => new Promise((r) => setImmediate(r));
 
-function world({ resetAnswers = [] } = {}) {
+function world({ resetAnswers = [], attach = null, enableState } = {}) {
   const log = [];
   const w = {
     want: true,
@@ -24,7 +24,7 @@ function world({ resetAnswers = [] } = {}) {
   const createHost = (id) => {
     const h = {
       user: id.userId, closed: false,
-      async enable(o) { log.push(['enable', id.userId, o.token()]); },
+      async enable(o) { log.push(['enable', id.userId, o.token()]); return enableState === undefined ? undefined : { state: enableState }; },
       async disable(o) { log.push(['disable', id.userId, o.token, o.timeoutMs]); return resetAnswers.length ? resetAnswers.shift() : true; },
       close() { h.closed = true; log.push(['close', id.userId]); },
     };
@@ -41,7 +41,7 @@ function world({ resetAnswers = [] } = {}) {
     resetRole: async (o) => { w.resets.push(o.token); return resetAnswers.length ? resetAnswers.shift() : true; },
     fetch: () => { throw new Error('not used'); },
     pending: { get: () => w.pending, set: (v) => { w.pending = v; } },
-    timers,
+    timers, attach,
   });
   return w;
 }
@@ -145,4 +145,35 @@ test('quit: hosting is turned off within the short bound; if the hub is not told
   await off.sync.release();
   assert.deepEqual(off.pending, { origin: 'https://hub.example', userId: 'alice' });
   assert.equal(off.timers.length, 0, 'no retry timer keeps a quitting app alive');
+});
+
+test('messaging attaches only to a connected host, reads the live token, and stops before that host is disabled (sign-out, untick, quit)', T, async () => {
+  const attached = [];
+  const attach = (host, o) => { const a = { user: o.userId, token: o.token, stopped: false }; attached.push(a); return { stop() { a.stopped = true; host.closed || attached.push(`stop ${o.userId}`); } }; };
+  const off = world({ attach, enableState: 'retrying' });
+  await off.sync.sync();
+  assert.deepEqual(attached, [], 'not while the hub has not taken the host role');
+
+  const w = world({ attach, enableState: 'connected' });
+  await w.sync.sync();
+  assert.equal(attached.length, 1);
+  assert.equal(attached[0].token(), 'bdt_alice');
+  w.id.tok = 'bdt_alice_refreshed';
+  assert.equal(attached[0].token(), 'bdt_alice_refreshed', 'a refreshed sign-in is picked up');
+  w.id = null; // sign-out
+  await w.sync.sync();
+  assert.equal(attached[0].stopped, true);
+  assert.equal(attached[1], 'stop alice', 'stopped before the host was disabled and closed');
+
+  const q = world({ attach, enableState: 'connected' });
+  await q.sync.sync();
+  await q.sync.release();
+  assert.equal(attached.at(-1), 'stop alice');
+  const c = world({ attach, enableState: 'connected' });
+  await c.sync.sync();
+  c.sync.close();
+  assert.equal(attached.at(-1), 'stop alice');
+  const plain = world({ enableState: 'connected' });
+  await plain.sync.sync();
+  assert.equal(plain.sync.active(), true, 'no attach: hosting unchanged');
 });

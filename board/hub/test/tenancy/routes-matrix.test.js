@@ -66,11 +66,13 @@ const MATRIX = {
   'POST /api/interaction/v1/shared/:share_id/call': { kind: 'cross', path: f => `/api/interaction/v1/shared/${f.B.share}/call`, body: f => ({ op: 'state', args: { session: f.B.shareSession } }) },
   // Messaging (MESSAGING.md): a message is visible only to its sender and recipient; B's message ids, targets and team are unknown to A.
   'GET /api/messaging/v1/targets': { kind: 'self' },
-  'POST /api/messaging/v1/messages': { kind: 'cross', path: () => '/api/messaging/v1/messages', body: f => ({ to: { user_id: f.users.ub.id, org_id: f.B.team }, body: MARK, card_id: f.B.card }) },
+  'POST /api/messaging/v1/messages': { kind: 'cross', path: () => '/api/messaging/v1/messages', body: f => ({ to: { user_id: f.users.ub.id, org_id: f.B.team }, body: MARK, card_id: f.B.card }),
+    also: f => [{ to: { target: f.B.msgTarget }, body: MARK }, { to: { user_id: f.users.s.id, org_id: f.B.team }, body: MARK, reply_to: f.B.message }] },
   'GET /api/messaging/v1/messages': { kind: 'self' },
-  'GET /api/messaging/v1/messages/:id': { kind: 'cross', path: () => `/api/messaging/v1/messages/${randomUUID()}` },
-  'POST /api/messaging/v1/messages/:id/receipt': { kind: 'cross', path: () => `/api/messaging/v1/messages/${randomUUID()}/receipt`, bare: true, body: { state: 'delivered' } },
-  'POST /api/messaging/v1/messages/:id/handoff': { kind: 'cross', path: () => `/api/messaging/v1/messages/${randomUUID()}/handoff`, bare: true, body: { decision: 'accept' } },
+  // B's real message (S ← B owner, in team B) and B's real session target, seeded in sweep().
+  'GET /api/messaging/v1/messages/:id': { kind: 'cross', path: f => `/api/messaging/v1/messages/${f.B.message}`, alt: () => [`/api/messaging/v1/messages/${randomUUID()}`] },
+  'POST /api/messaging/v1/messages/:id/receipt': { kind: 'cross', path: f => `/api/messaging/v1/messages/${f.B.message}/receipt`, bare: true, body: { state: 'delivered' } },
+  'POST /api/messaging/v1/messages/:id/handoff': { kind: 'cross', path: f => `/api/messaging/v1/messages/${f.B.handoff}/handoff`, bare: true, body: { decision: 'accept' } },
   // Host routes need a host-role device: the sweep's callers are not hosts, so 403 (messaging tests cover host success and cross-user 404).
   'PUT /api/messaging/v1/host/targets': { kind: 'cross', status: 403, path: () => '/api/messaging/v1/host/targets', body: { targets: [] } },
   'POST /api/messaging/v1/host/pull': { kind: 'cross', status: 403, path: () => '/api/messaging/v1/host/pull', body: {} },
@@ -309,6 +311,17 @@ async function sweep(fx, caller) {
   // A live share of a B member's session with team B.
   fx.B.share = randomUUID(); fx.B.shareSession = randomUUID();
   fx.db.insert('interaction_shares', { id: fx.B.share, owner_user_id: fx.users.ub.id, host_device_id: fx.users.ub.device_id, session_id: fx.B.shareSession, org_id: fx.B.team, scope: 'interact', created_at: fx.h.hub.iso() });
+  // B's messaging: a live session target of B's owner shared with B, a message and a handoff to S (both in B).
+  fx.B.msgTarget = randomUUID();
+  fx.db.run("UPDATE user_devices SET interaction_role = 'host' WHERE id = ?", fx.users.ub.device_id);
+  fx.db.insert('msg_targets', { id: fx.B.msgTarget, user_id: fx.users.ub.id, host_device_id: fx.users.ub.device_id, session: randomUUID(), generation: 1, provider: 'codex', label: `${MARK} session`, scope: 'team', org_id: fx.B.team, registered_at: fx.h.hub.iso(), seen_at: fx.h.hub.iso() });
+  for (const [k, kind] of [['message', 'message'], ['handoff', 'handoff']]) {
+    const sent = await fx.as(fx.users.ub, 'POST', '/api/messaging/v1/messages', { request_id: randomUUID(), to: { user_id: fx.users.s.id, org_id: fx.B.team }, body: `${MARK} ${kind}`, kind });
+    assert.equal(sent.status, 200, sent.text);
+    fx.B[k] = sent.body.message.id;
+  }
+  assert.equal(fx.h.hub.messaging.targetProblem(fx.db.get('SELECT * FROM msg_targets WHERE id = ?', fx.B.msgTarget)), null, "B's target is live: only tenancy hides it");
+  const messagesBefore = JSON.stringify([fx.db.all('SELECT * FROM msg_messages ORDER BY seq'), fx.db.all('SELECT * FROM msg_targets ORDER BY id')]);
   const before = fx.snapshotB();
   const leaks = [];
   let calls = 0;
@@ -324,6 +337,7 @@ async function sweep(fx, caller) {
     if (e.kind === 'cross') {
       await check(key(r), r.method, e.path(fx), body, e.headers?.(fx) ?? {}, e.status, e.bare);
       for (const p of e.alt?.(fx) ?? []) await check(`${key(r)} (alt)`, r.method, p, body);
+      for (const b of e.also?.(fx) ?? []) await check(`${key(r)} (also)`, r.method, e.path(fx), b);
     } else if (e.kind === 'team') {
       await check(key(r), r.method, r.pattern, body, { 'x-board-team': fx.B.team });
       await check(`${key(r)} ?team=`, r.method, `${r.pattern}?team=${fx.B.team}`, body);
@@ -332,6 +346,7 @@ async function sweep(fx, caller) {
   assert.deepEqual(leaks, []);
   assert.ok(calls >= 30, `only ${calls} cross-team calls made`);
   assert.equal(fx.snapshotB(), before, "team B's rows changed");
+  assert.equal(JSON.stringify([fx.db.all('SELECT * FROM msg_messages ORDER BY seq'), fx.db.all('SELECT * FROM msg_targets ORDER BY id')]), messagesBefore, 'no message or target was added or changed');
   assert.equal(JSON.stringify(fx.db.all('SELECT * FROM setup_versions WHERE profile_id=?',fx.B.setupProfile)),setupsBefore,'foreign sealed setups are unchanged');
 }
 

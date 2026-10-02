@@ -117,6 +117,13 @@ function buildApp(config, { db, clock, log, github, fetchImpl, timers, mailer })
       ticking = true;
       try { await hub.tick(); } catch (e) { log.error('reaper tick failed', { err: e }); } finally { ticking = false; }
     }, REAPER_MS));
+    // Messaging retention, expired handoffs and retired targets (MESSAGING.md §5): never per request.
+    if (hub.messaging) {
+      intervals.push(setInterval(() => {
+        if (closed) return;
+        try { hub.messaging.purge(); } catch (e) { log.warn('messaging sweep failed', { err: e }); }
+      }, hub.messaging.limits.sweepMs));
+    }
     if (gh.enabled) {
       intervals.push(setInterval(() => { hub.pollMerges().catch((e) => log.warn('merge poll failed', { err: e })); }, config.githubPollMs));
     }

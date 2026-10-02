@@ -24,6 +24,7 @@ export const DEFAULT_LIMITS = Object.freeze({
   overview_member: { capacity: 30, per_ms: 60_000 },   // bounded selected-team overview
   workflow_member: { capacity: 20, per_ms: 3_600_000 }, // new definitions/versions/task sets
   capture_routes_user: { capacity: 30, per_ms: 60_000 },
+  messaging_read_user: { capacity: 120, per_ms: 60_000 },   // GET /api/messaging/v1/* (MESSAGING.md §4), per user
   capture_report_user: { capacity: 120, per_ms: 60_000 }, // across all of this user's memberships
   label_rewrite_board: { capacity: 10, per_ms: 3_600_000 },  // label rename / delete with strip: each rewrites up to 2,000 cards (D91), per board
   agent_card_member: { capacity: 20, per_ms: 3_600_000 },    // board_create_card, per member the runs are for
