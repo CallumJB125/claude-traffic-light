@@ -251,6 +251,28 @@ static BOOL exact_content(const WCHAR *path, DWORD size) {
     return ok;
 }
 
+/* Independent kernel fixture query, outside all SDK interposers. */
+static BOOL fixture_identity(const WCHAR *path, PFDirectoryIdentity *identity, DWORD *links) {
+    HANDLE file = CreateFileW(path, FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+        FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+    FILE_ID_INFO id; FILE_STANDARD_INFO standard; BOOL ok;
+    if (file == INVALID_HANDLE_VALUE) return FALSE;
+    ok = GetFileInformationByHandleEx(file, FileIdInfo, &id, sizeof(id)) &&
+        GetFileInformationByHandleEx(file, FileStandardInfo, &standard, sizeof(standard)) && !standard.Directory;
+    if (ok) {
+        identity->volume = id.VolumeSerialNumber;
+        memcpy(identity->file, id.FileId.Identifier, sizeof(identity->file));
+        *links = standard.NumberOfLinks;
+    }
+    CloseHandle(file);
+    return ok;
+}
+
+static BOOL same_fixture_identity(const PFDirectoryIdentity *a, const PFDirectoryIdentity *b) {
+    return a->volume == b->volume && memcmp(a->file, b->file, sizeof(a->file)) == 0;
+}
+
 static void reset_mode(FXMode next, const WCHAR *path, const WCHAR *displaced) {
     mode = next; consumed = requested = readCalls = mutationCalls = fileOpens = 0;
     failedPhase = failedStatus = 0; lastOpenStatus = 0;
@@ -478,9 +500,24 @@ int wmain(void) {
         check(remove_file(path), "remove only owned read-control-denied fixture");
     }
 
-    /* An actual second name/hard link violates the one-link contract. */
-    check(child_path(path, root, L"linked") && child_path(other, root, L"second-name") && make_file(path, NULL, 32) &&
-        CreateHardLinkW(other, path, NULL), "create real two-name NTFS file");
+    /* Namespace construction needs its own lease interval: the retained
+     * SDK parent intentionally excludes another write/delete parent opener. */
+    {
+        PFDirectoryIdentity originalRoot, first, second;
+        DWORD firstLinks = 0, secondLinks = 0;
+        if (!check(pf_directory_inspect(&directory, NULL, &originalRoot) == PF_OK,
+            "capture exact root identity before hard-link construction")) goto done;
+        pf_directory_close(&directory); directoryOpened = FALSE;
+        check(child_path(path, root, L"linked") && child_path(other, root, L"second-name") && make_file(path, NULL, 32) &&
+            CreateHardLinkW(other, path, NULL), "create real two-name NTFS file");
+        check(fixture_identity(path, &first, &firstLinks) && fixture_identity(other, &second, &secondLinks) &&
+            firstLinks == 2 && secondLinks == 2 && same_fixture_identity(&first, &second) &&
+            exact_content(path, 32) && exact_content(other, 32),
+            "independent kernel query verifies both hard-link names and exact bytes before SDK admission");
+        if (!check(pf_directory_open_root(root, &originalRoot, &directory) == PF_OK,
+            "reacquire exact same root identity after hard-link construction")) goto done;
+        directoryOpened = TRUE;
+    }
     before = named_security(path);
     reset_mode(FX_NONE, NULL, NULL);
     refusal(&directory, L"linked", PF_FILE_GRANT, PF_FILE_NOT_REGULAR, "actual hard-linked file refuses");
@@ -553,7 +590,24 @@ int wmain(void) {
     check(pf_file_read(&directory, L"replace", PF_FILE_GRANT, &expected, output, 32, &length, &expected) == PF_FILE_OK &&
         length == 32 && memcmp(output, pattern, 32) == 0 && output[32] == 0xa5,
         "valid small output stays bounded and expected/observed stamp may alias");
-    reset_mode(FX_REPLACE, path, other);
+    {
+        PFDirectoryIdentity originalRoot, replacement, displaced;
+        DWORD replacementLinks = 0, displacedLinks = 0;
+        if (!check(pf_directory_inspect(&directory, NULL, &originalRoot) == PF_OK,
+            "capture exact root identity before same-byte namespace replacement")) goto done;
+        pf_directory_close(&directory); directoryOpened = FALSE;
+        reset_mode(FX_NONE, NULL, NULL);
+        mutationCalls++;
+        mutationOK = MoveFileW(path, other) && make_file(path, NULL, 32);
+        check(mutationOK && fixture_identity(path, &replacement, &replacementLinks) &&
+            fixture_identity(other, &displaced, &displacedLinks) && replacementLinks == 1 && displacedLinks == 1 &&
+            !same_fixture_identity(&replacement, &expected.identity) && same_fixture_identity(&displaced, &expected.identity) &&
+            exact_content(path, 32) && exact_content(other, 32),
+            "independent kernel query verifies actual replacement differs from retained old file identity");
+        if (!check(pf_directory_open_root(root, &originalRoot, &directory) == PF_OK,
+            "reacquire exact same root identity before old-stamp refusal")) goto done;
+        directoryOpened = TRUE;
+    }
     result = read_case(&directory, L"replace", PF_FILE_GRANT, &expected, output, (DWORD)sizeof(output), &length, &stamp);
     check(mutationOK && mutationCalls == 1 && result == PF_FILE_IDENTITY_CHANGED && consumed == 0 && length == 0 && zero_output(output, (DWORD)sizeof(output)),
         "late pre-open actual same-byte replacement refuses old expected identity before reads");
