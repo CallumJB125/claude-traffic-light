@@ -60,7 +60,7 @@ const requestBinding = (route, params, body) => createHash('sha256').update(JSON
 const PREPARE_REPLAY = Object.freeze({ status: 409, body: { error: { code: 'CONFLICT', message: 'This request was already sent. Reload the page.', reason: 'REPLAYED' } } });
 // An invite's answer is its link and code, shown once: the replay entry never holds them.
 const INVITE_REPLAY = Object.freeze({ status: 409, body: { error: { code: 'CONFLICT', message: 'This invite was already made. Resend it to get a new link.', reason: 'REPLAYED' } } });
-const SHARED_BROWSER = new Set(['states', 'liveness', 'fence', 'scope', 'overlap', 'cardface', 'handover', 'protocol', 'brand', 'ai', 'planning']);
+const SHARED_BROWSER = new Set(['states', 'liveness', 'fence', 'scope', 'overlap', 'cardface', 'handover', 'protocol', 'brand', 'ai', 'planning', 'workflow-execution', 'workflow-execution-controls', 'packet-text']);
 const CSP = "default-src 'self'; connect-src 'self'; img-src 'self' https://avatars.githubusercontent.com; style-src 'self'; script-src 'self'; frame-ancestors 'none'";
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.md': 'text/markdown; charset=utf-8' };
 
@@ -456,6 +456,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     route('POST','/api/workflow-instances/:instance_id/preview',({member,params,body,ident,query})=>workflowExecutions.preview(member,params.instance_id,body,ident.cred,options(query)),{...guarded,strictBody:true,maxBody:32*1024});
     route('GET','/api/workflow-plans/:plan_id',({member,params,ident,query})=>workflowExecutions.read(member,params.plan_id,ident.cred,options(query)),{...guarded,limit:'communication_read_member'});
     const controlGuard={replay:false,responseGuard:(_ctx,out)=>workflowExecutor.guard(out)};
+    route('GET','/api/workflow-instances/:instance_id/execution-context',({member,params,ident,query})=>workflowExecutor.instanceContext(member,params.instance_id,ident.cred,options(query)),{...controlGuard,limit:'communication_read_member'});
     route('POST','/api/workflow-plans/:plan_id/execution-preview',({member,params,body,ident,query})=>workflowExecutor.preview(member,params.plan_id,body,ident.cred,options(query)),{...controlGuard,strictBody:true,maxBody:32*1024});
     route('POST','/api/workflow-executions/:execution_id/preview',({member,params,body,ident,query})=>workflowExecutor.controlPreview(member,params.execution_id,body,ident.cred,options(query)),{...controlGuard,strictBody:true,maxBody:32*1024});
     route('GET','/api/workflow-execution-previews/:execution_preview_id',({member,params,ident,query})=>workflowExecutor.read(member,params.execution_preview_id,ident.cred,options(query)),{...controlGuard,limit:'communication_read_member'});
@@ -677,7 +678,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   function staticPath(pathname) {
     if (pathname === '/') return join(config.webDir, 'index.html');
     if (config.auth === 'accounts' && Object.hasOwn(ACCOUNT_PAGES, pathname)) return join(config.webDir, ACCOUNT_PAGES[pathname]);
-    const shared = /^\/shared\/([a-z]+)\.js$/.exec(pathname);
+    const shared = /^\/shared\/([a-z]+(?:-[a-z]+)*)\.js$/.exec(pathname);
     if (shared) return SHARED_BROWSER.has(shared[1]) ? join(config.sharedDir, `${shared[1]}.js`) : null;
     if (pathname.startsWith('/web/')) {
       const rel = pathname.slice(5);

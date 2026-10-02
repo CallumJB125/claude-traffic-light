@@ -46,6 +46,9 @@ test('development files, encoded aliases, case aliases and raw traversal never b
       '/web/js/../test/chips.test.js', '/web/test/../js/app.js', '/web/js/../app.css', '/web/js//app.js', '/web//app.css', '/web/js/app.js/',
       '/web/js%2fapp.js', '/web/js/app%2ejs', '/web/app%2Ecss', '/web/js/a%00.js', '/web/..%2fhub/http.js', '/web/%2e%2e/hub/http.js',
       '/shared/migrate.js', '/shared/schema.sql', '/shared/test/states.test.js', '/hub/http.js',
+      '/shared/workflow-executor.js', '/shared/workflow-execution-guard.js', '/shared/workflow-executions.js', '/shared/workflow-execution-controls.sql',
+      '/shared/Workflow-execution.js', '/shared/workflow-Execution-controls.js', '/shared/packet-Text.js', '/shared/workflow--execution.js',
+      '/shared/workflow%2dexecution.js', '/shared/workflow-execution%2ejs', '/shared//workflow-execution.js', '/shared/../hub/workflow-executor.js',
     ];
     for (const path of excluded) {
       const out = await get(h.base, path);
@@ -86,6 +89,13 @@ test('every current page and recursively imported production module loads with s
       }
     }
     for (const file of readdirSync(join(WEB, 'js'))) assert.equal((await get(h.base, `/web/js/${file}`)).status, 200, file);
+    // Exactly the pure closed parsers and their transitive path/scope helper,
+    // never the private server proof/authority implementation.
+    for (const file of ['workflow-execution','workflow-execution-controls','packet-text','scope']) {
+      const out = await get(h.base, `/shared/${file}.js`);
+      assert.equal(out.status, 200, file);
+      assert.equal(out.text, readFileSync(join(WEB, '../shared', `${file}.js`), 'utf8'), file);
+    }
     const head = await get(h.base, '/web/remote.css', {}, 'HEAD');
     assert.equal(head.status, 200);
     assert.equal(head.text, '');

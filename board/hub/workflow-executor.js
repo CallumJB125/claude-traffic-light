@@ -3,7 +3,7 @@
 import { createHash,randomUUID } from 'node:crypto';
 import { WorkflowExecutions } from './workflow-executions.js';
 import { canonical } from '../shared/workflow-execution.js';
-import { validateExecutionPreview,validateControlPreview,validateCommand,EXECUTION_LIMITS as LIMITS,pathOverlap } from '../shared/workflow-execution-controls.js';
+import { validateExecutionPreview,validateControlPreview,validateCommand,declaredPaths,EXECUTION_LIMITS as LIMITS,pathOverlap } from '../shared/workflow-execution-controls.js';
 import { AI_BACKENDS } from '../shared/ai.js';
 import { branchName } from '../shared/fence.js';
 import { redactSecrets } from '../shared/secret-patterns.mjs';
@@ -153,7 +153,32 @@ export class WorkflowExecutor {
  }
  result(bound,id){const out=this.projection(bound,id);proofs.set(out,{service:this,bound,id});return out;}
  guard(out){const proof=proofs.get(out);if(!proof||proof.service!==this)throw new HubError('FORBIDDEN','Execution preview needs a fresh read.');proofs.delete(out);
-  const fresh=proof.execution?this.executionProjection(proof.bound,proof.id):this.projection(proof.bound,proof.id);for(const key of Object.keys(out))delete out[key];Object.assign(out,fresh);}
+  const fresh=proof.context?this.contextProjection(proof.bound,proof.id):proof.execution?this.executionProjection(proof.bound,proof.id):this.projection(proof.bound,proof.id);for(const key of Object.keys(out))delete out[key];Object.assign(out,fresh);}
+ contextProjection(bound,instanceId){
+  const scope=this.plans.scope(bound,instanceId,false),clean=(value,max=200)=>redactSecrets(String(value??'')).replace(/[\x00-\x1f\x7f]/g,' ').slice(0,max);
+  const selected=this.db.all('SELECT position,card_id FROM workflow_step_cards WHERE instance_id=? ORDER BY position',instanceId);
+  if(!selected.length||selected.length>8||selected.length!==scope.version.definition.steps.length)throw changed();
+  const cards=selected.map((step,position)=>{const card=this.hub.card(step.card_id);
+   if(step.position!==position||!card||card.board_id!==scope.board.id||card.archived_at)throw changed();
+   if(card.repo_id&&!this.db.get('SELECT 1 x FROM repos r JOIN board_repos b ON b.repo_id=r.id WHERE r.id=? AND r.org_id=? AND b.board_id=?',card.repo_id,scope.member.org_id,scope.board.id))throw missing();
+   return {position,id:card.id,key:card.key,title:clean(card.title),version:card.version,fence:card.fence,repo_id:card.repo_id,base_ref:clean(card.base_ref),
+    plan_approval:this.hub.labels(card).includes(PLAN_APPROVAL_LABEL),plan_required:scope.version.definition.steps[position].plan_approval};
+  });
+  const repos=this.db.all('SELECT r.* FROM repos r JOIN board_repos b ON b.repo_id=r.id WHERE b.board_id=? AND r.org_id=? ORDER BY r.id LIMIT 101',scope.board.id,scope.member.org_id);
+  const members=this.db.all('SELECT m.id FROM members m JOIN users u ON u.id=m.user_id WHERE m.org_id=? AND m.removed_at IS NULL AND u.deleted_at IS NULL ORDER BY m.id LIMIT 101',scope.member.org_id).map(row=>this.hub.activeMember(row.id));
+  if(repos.length>100||members.length>100)throw new HubError('PAYLOAD_TOO_LARGE','Workflow choices exceed the bounded view. Narrow this board or team.');
+  const executions=[];
+  for(const row of this.db.all('SELECT id FROM workflow_executions WHERE instance_id=? AND org_id=? ORDER BY created_ms DESC,id LIMIT 11',instanceId,scope.member.org_id).slice(0,10)){
+   try{const current=this.executionProjection(bound,row.id).execution;executions.push({id:current.id,state:current.state,revision:current.revision});}catch{/* Unavailable lineage never exports former repository or participant data. */}
+  }
+  const out={execution_context:{instance_id:instanceId,board_id:scope.board.id,recipe:{id:scope.instance.recipe_id,version:scope.instance.recipe_version,content_hash:scope.version.content_hash},
+   cards,repos:repos.map(repo=>({id:repo.id,name:clean(repo.short_name,80),default_branch:clean(repo.default_branch)})),
+   members:members.map(member=>({id:member.id,name:clean(member.display_name,80),can_run:this.hub.canWrite(member)})),can_write:this.hub.canWrite(scope.member),executions,execution_history_limited:true}};
+  if(Buffer.byteLength(JSON.stringify(out))>LIMITS.bytes)throw new HubError('PAYLOAD_TOO_LARGE','Workflow choices exceed 32 KiB. Shorten task titles.');return out;
+ }
+ async instanceContext(member,id,cred,options={}){const bound=this.bound(member,cred,options,false),scope=this.plans.scope(bound,id,false);
+  return this.hub.withBoard(scope.board.id,()=>{const out=this.contextProjection(bound,id);proofs.set(out,{service:this,bound,id,context:true});return out;});
+ }
  async read(member,id,cred,options={}){
   const bound=this.bound(member,cred,options,false),row=this.db.get('SELECT source_plan_id FROM workflow_control_previews WHERE id=?',id);if(!row)throw missing();
   const preview=this.db.get('SELECT snapshot,execution_id FROM workflow_control_previews WHERE id=?',id),current=json(preview.snapshot,{}).lifecycle===2;
@@ -373,8 +398,10 @@ export class WorkflowExecutor {
   const {source,execution}=this.executionSource(bound,id,{reviewPending:true}),row=execution.row,plan=this.currentPlan(source),auth=this.db.get('SELECT * FROM workflow_execution_authorizations WHERE execution_id=? ORDER BY revision DESC LIMIT 1',id),clock=this.plans.time();
   let authorized=false;try{this.authority(id);authorized=true;}catch{}
   const stops=this.db.all('SELECT run_id,fence,requested_ms FROM workflow_stop_requests WHERE execution_id=?',id);
-  const out={execution:{id,source_plan_id:row.source_plan_id,instance_id:row.instance_id,board_id:row.board_id,repository:plan.repository,revision:row.revision,
-   state:row.state==='authorized'&&!authorized?'paused_authority':row.state,authorization_current:authorized,concurrency:source.snapshot.options.concurrency,
+  const reviewed=auth&&json(auth.snapshot,null);
+  if(auth){try{if(!reviewed||hash(reviewed)!==auth.snapshot_hash||canonical(declaredPaths(reviewed.declared_paths))!==canonical(reviewed.declared_paths))throw changed();}catch{throw changed();}}
+  const out={execution:{id,source_plan_id:row.source_plan_id,source_plan_hash:source.row.plan_hash,declared_paths:reviewed?.declared_paths??[],instance_id:row.instance_id,board_id:row.board_id,repository:plan.repository,revision:row.revision,
+   state:row.state==='authorized'&&!authorized?'paused_authority':row.state,authorization_current:authorized,controls_allowed:this.hub.canWrite(source.scope.member),concurrency:source.snapshot.options.concurrency,
    valid_until:auth?new Date(auth.expires_ms).toISOString():null,remaining_ms:auth?Math.max(0,auth.expires_ms-clock.wall):0,
    path_source:'human_declared',advisory:true,global_filesystem_lock:false,automatic_source_transfer:false,
    steps:plan.steps.map((step,i)=>({...step,blocked_reasons:[...step.blocked_reasons,...(source.snapshot.options.dependencies.some(([from,to])=>to===i&&!this.predecessor(id,from))?['PREDECESSOR_REVIEW_REQUIRED']:[])],state:execution.steps[i].state,attempt_count:execution.steps[i].attempt_count,

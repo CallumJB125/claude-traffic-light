@@ -65,6 +65,16 @@ export const api = {
   publishWorkflow: (id, body) => mut('POST', id ? `/api/workflows/${enc(id)}/versions` : '/api/workflows', body),
   archiveWorkflow: (id, archived) => mut('POST', `/api/workflows/${enc(id)}/archive`, { archived }),
   applyWorkflow: (boardId, id, body) => mut('POST', `/api/boards/${enc(boardId)}/workflows/${enc(id)}/apply`, body),
+  workflowExecutionContext: (id, board) => call('GET', `/api/workflow-instances/${enc(id)}/execution-context?board_id=${enc(board)}`),
+  previewWorkflowPlan: (id, board, body) => mut('POST', `/api/workflow-instances/${enc(id)}/preview?board_id=${enc(board)}`, body),
+  previewWorkflowExecution: (id, board, body) => mut('POST', `/api/workflow-plans/${enc(id)}/execution-preview?board_id=${enc(board)}`, body),
+  previewWorkflowControl: (id, board, body) => mut('POST', `/api/workflow-executions/${enc(id)}/preview?board_id=${enc(board)}`, body),
+  startWorkflow: (id, board, body) => mut('POST', `/api/workflow-plans/${enc(id)}/start?board_id=${enc(board)}`, body),
+  workflowExecution: (id, board) => call('GET', `/api/workflow-executions/${enc(id)}?board_id=${enc(board)}`),
+  controlWorkflow: (id, board, command, body, position = null) => {
+    if (!['pause','cancel','resume','retry'].includes(command) || command === 'retry' && (!Number.isInteger(position) || position < 0 || position > 7)) throw new Error('Unknown workflow control.');
+    return mut('POST', `/api/workflow-executions/${enc(id)}/${command === 'retry' ? `steps/${position}/retry` : command}?board_id=${enc(board)}`, body);
+  },
   createBoard: (body) => mut('POST', '/api/boards', body),
   renameBoard: (id, name) => mut('PATCH', `/api/boards/${enc(id)}`, { name }),
   archiveBoard: (id) => mut('POST', `/api/boards/${enc(id)}/archive`),

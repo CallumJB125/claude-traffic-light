@@ -149,6 +149,7 @@ const MATRIX = {
   'POST /api/workflows/:workflow_id/archive': { kind: 'cross', path: (fx) => `/api/workflows/${fx.B.workflow}/archive`, body: { archived: true } },
   'POST /api/boards/:board_id/workflows/:workflow_id/apply': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/workflows/${fx.B.workflow}/apply`, alt: (fx) => [`/api/boards/${fx.A.board}/workflows/${fx.B.workflow}/apply`], body: (fx) => ({ version: 1, content_hash: fx.B.workflowHash }) },
   'POST /api/workflow-instances/:instance_id/preview': {kind:'cross',path:fx=>`/api/workflow-instances/${fx.B.workflowInstance}/preview`,body:fx=>fx.B.workflowPreview},
+  'GET /api/workflow-instances/:instance_id/execution-context': {kind:'cross',path:fx=>`/api/workflow-instances/${fx.B.workflowInstance}/execution-context`},
   'GET /api/workflow-plans/:plan_id': {kind:'cross',path:fx=>`/api/workflow-plans/${fx.B.workflowPlan}`},
   'POST /api/workflow-plans/:plan_id/execution-preview': {kind:'cross',path:fx=>`/api/workflow-plans/${fx.B.workflowPlan}/execution-preview`,body:fx=>fx.B.executionPreviewInput},
   'POST /api/workflow-executions/:execution_id/preview': {kind:'cross',path:fx=>`/api/workflow-executions/${fx.B.execution}/preview`,body:fx=>({...fx.B.executionPreviewInput,source_plan_id:fx.B.workflowPlan,purpose:'resume',expected_revision:0})},

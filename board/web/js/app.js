@@ -13,6 +13,7 @@ import { installDnd, snapshotRects, playFlip } from './dnd-dom.js';
 import { boardScreen, loadingScreen, THEME_NEXT } from './render-board.js';
 import { paletteResults } from './palette.js';
 import { starterWorkflow } from './render-workflows.js';
+import {WorkflowJourney,workflowExecutionSubmit,workflowExecutionChange,workflowExecutionAction} from './workflow-journey.js';
 import { normalizeBg, normalizeTheme } from './themes.js';
 import { tableScreen } from './render-table.js';
 import { planningScreen } from './render-planning.js';
@@ -134,6 +135,9 @@ function movePlan(id, direction, destination = null) {
   void savePlan(id, fields);
 }
 const boardReadOnly = () => state.me?.member?.role === 'viewer' || !!state.board?.archived_at;
+const workflowScope = () => ({boardId:state.boardId,generation:boardGeneration,org:currentOrg(),member:state.me?.member?.id,user:state.me?.user?.id??state.me?.member?.user_id,
+  role:state.me?.member?.role,auth:state.auth,accounts:state.authMode==='accounts',connected:state.conn.status==='open',readOnly:boardReadOnly(),epoch:state.dash?.epoch});
+const workflowJourney=new WorkflowJourney({api,getScope:workflowScope,getDialog:()=>state.dialog,setDialog:d=>{state.dialog=d;},update});
 
 // ── theme ────────────────────────────────────────────────────────────────────
 
@@ -462,6 +466,7 @@ function resetDashboard() {
 function onHubEpoch(epoch) {
   const prev = state.dash.epoch;
   if (prev && epoch && prev !== epoch) {
+    if (state.dialog?.journey) workflowJourney.invalidate('The hub restarted. Reload a current workflow view.');
     if (state.detail) {
       detailRefresh++;
       state.detail = { ...state.detail, ownership: null, ownershipLoaded: false, ownershipRx: null, ownershipError: null };
@@ -528,6 +533,7 @@ function update() {
 // Synchronous render, for callers that measure the DOM right after (FLIP).
 function renderNow() {
   queued = false;
+  if(state.dialog?.journey&&state.dialog.mode!=='execution-unavailable'&&!workflowJourney.current(state.dialog))workflowJourney.invalidate();
   render(root, screen());
   syncDialogs();
 }
@@ -787,6 +793,7 @@ async function signOut() {
 
 function onStatus({ status, retryAt }) {
   const prev = state.conn.status;
+  if (state.dialog?.journey && (status !== 'open' || prev !== 'open')) workflowJourney.invalidate('The connection changed. Reload a current workflow view.');
   if (status === 'signed_out') { socket?.close(); boot(); return; }
   if (state.detail && (status !== 'open' || prev !== 'open')) {
     detailRefresh++;
@@ -1322,6 +1329,7 @@ async function submitGive(form) {
 
 async function submitDialogForm(form, submitter) {
   const kind = form.dataset.form;
+  if(kind.startsWith('workflow-execution-'))return workflowExecutionSubmit(workflowJourney,form);
   if (kind === 'task-packet' || kind === 'task-message') return submitCommunication(form, kind);
   if (kind === 'workflow-publish' || kind === 'workflow-apply') return submitWorkflow(form, kind);
   if (['new-board', 'rename-board', 'archive-board'].includes(kind)) return submitBoardDialog(form);
@@ -1525,8 +1533,8 @@ async function openSearchResult(run) {
 
 function workflowIntent(mode, extra = {}) { return { kind: 'workflows', mode, instance: {}, request_id: crypto.randomUUID(), ...extra }; }
 function workflowGuard(d) {
-  const generation = boardGeneration, memberId = state.me?.member?.id, org = currentOrg();
-  return () => generation === boardGeneration && memberId === state.me?.member?.id && org === currentOrg() && state.dialog?.kind === 'workflows' && state.dialog.instance === d.instance;
+  const generation = boardGeneration, memberId = state.me?.member?.id, user=state.me?.user?.id,role=state.me?.member?.role,org = currentOrg();
+  return () => generation === boardGeneration && state.auth==='ok'&&memberId === state.me?.member?.id&&user===state.me?.user?.id&&role===state.me?.member?.role&&org === currentOrg() && state.dialog?.kind === 'workflows' && state.dialog.instance === d.instance;
 }
 async function openWorkflows(id = null, { includeArchived = false } = {}) {
   const d = workflowIntent(id ? 'detail' : 'library', { loading: true, includeArchived }); state.dialog = d; update();
@@ -1553,7 +1561,13 @@ async function submitWorkflow(form, kind) {
       : await api.applyWorkflow(state.boardId, selected.id, { request_id: d.request_id, version: version.version, content_hash: version.content_hash, context: String(fd.get('context') ?? ''), title_prefix: String(fd.get('title_prefix') ?? '') });
     if (!current()) return;
     if (kind === 'workflow-publish') { toast(`Published workflow version ${result.workflow.version}.`); await openWorkflows(result.workflow.id); }
-    else { state.dialog = null; toast(`Created ${result.instance.steps.length} workflow tasks.`); update(); }
+    else {
+      toast(`Created ${result.instance.steps.length} workflow tasks.`);
+      if(state.authMode==='accounts'){
+        const scope=workflowScope();await openWorkflows(selected.id);
+        if(Object.keys(scope).every(key=>scope[key]===workflowScope()[key])&&state.dialog?.mode==='detail'&&state.dialog.selected?.workflow.id===selected.id)await workflowJourney.open(result.instance.id,state.dialog.selected);
+      }else{state.dialog=null;update();}
+    }
   } catch (error) { if (current()) { state.dialog = { ...state.dialog, busy: false, error: errorText(error) }; update(); } }
 }
 async function archiveWorkflow() {
@@ -1752,6 +1766,7 @@ function onClick(e) {
   if (!el || el.disabled) return;
   const action = el.dataset.action;
   const cardId = el.dataset.card;
+  if(action.startsWith('workflow-execution-')){workflowExecutionAction(workflowJourney,action,el,state.dialog?.selected);return;}
   switch (action) {
     case 'planning-edit': editPlan(cardId); return;
     case 'planning-close': plannerState(); planner.edit = null; planner.draft = null; update(); return;
@@ -1822,7 +1837,7 @@ function onClick(e) {
       if (action === 'workflow-remove-step' && draft.steps.length > 1) draft.steps.splice(Number(el.dataset.position), 1);
       state.dialog = { ...state.dialog, draft }; update(); return;
     }
-    case 'workflow-open-card': closePalette(); openSearchResult({ id: el.dataset.card, boardId: el.dataset.board }); return;
+    case 'workflow-open-card': closePalette(); openSearchResult({ id: el.dataset.card, boardId: el.dataset.board??state.boardId }); return;
     case 'quick-add': openQuickAdd(); return;
     case 'quick-add-submit': commitTitles(parseTitles(root.querySelector('.quickadd-input')?.value), false); return;
     case 'quick-add-cancel': closeQuickAdd(); return;
@@ -1933,6 +1948,7 @@ function onChange(e) {
   const el = e.target.closest('[data-change]');
   if (!el) return;
   const what = el.dataset.change;
+  if(['workflow-execution-confirm','workflow-choice'].includes(what)){workflowExecutionChange(workflowJourney,el);return;}
   if (what === 'planning-period' && ['month', 'week'].includes(el.value)) { plannerState(); planner.period = el.value; savePlanner(); return; }
   if (what === 'workflow-version' && state.dialog?.kind === 'workflows') {
     const fd = new FormData(root.querySelector('[data-form="workflow-apply"]'));
@@ -2123,6 +2139,10 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => up
 setInterval(() => { if (state.auth === 'ok' && state.board) update(); }, 1000);
 setInterval(() => { if (state.view === 'dashboard' && state.board && document.visibilityState === 'visible') loadJournal(); }, DASH_REFRESH_MS);
 setInterval(() => { if (state.view === 'team' && document.visibilityState === 'visible') loadTeamOverview(); }, 15_000);
+setInterval(()=>{
+  const d=state.dialog;
+  if(d?.journey&&d.mode==='execution-status'&&!d.busy&&workflowJourney.current(d)&&document.visibilityState==='visible')void workflowJourney.status(d.execution.id);
+},5000);
 let ownershipPollBusy = false;
 setInterval(async () => {
   if (ownershipPollBusy || state.auth !== 'ok' || state.conn.status !== 'open' || document.visibilityState !== 'visible'

@@ -34,9 +34,9 @@ test('actual reconnect and hub restart handlers withhold cached freshness before
   const onEpoch=source.slice(source.indexOf('function onHubEpoch('),source.indexOf('\nlet dashUpsertTimer'));
   const state={conn:{status:'lost'},dash:{epoch:'before'},view:'team',presence:{},detail:{...detail,tab:'ownership',cardId:'card',ownershipRx:0}};
   const frames=[],requests=[];
-  const handlers=new Function('state','update','refreshDetail','perf','resetDashboard','loadJournal','socket','boot',
+  const handlers=new Function('state','update','refreshDetail','perf','resetDashboard','loadJournal','socket','boot','workflowJourney',
     'let detailRefresh=0;'+onEpoch+'\n'+onStatus+'\nreturn{onStatus,onHubEpoch};')(
-      state,()=>frames.push(textOf(ownershipPanel(state.detail,{conn:state.conn},0))),(...args)=>{requests.push(args);return new Promise(()=>{});},()=>100,()=>{},()=>{},null,()=>{});
+      state,()=>frames.push(textOf(ownershipPanel(state.detail,{conn:state.conn},0))),(...args)=>{requests.push(args);return new Promise(()=>{});},()=>100,()=>{},()=>{},null,()=>{},{invalidate(){}});
   handlers.onStatus({status:'open'});
   assert.equal(state.detail.ownership,null);assert.equal(state.detail.ownershipLoaded,false);
   assert.equal(requests.length,1);assert.equal(frames.some(text=>text.includes('fresh host signal')),false);
