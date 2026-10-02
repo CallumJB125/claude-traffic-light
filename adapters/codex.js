@@ -178,7 +178,7 @@ function normalizeLifecycle(event, d) {
   if (!['SessionStart', 'SessionEnd'].includes(event) && (typeof d.turn_id !== 'string' || !TURN_ID.test(d.turn_id))) return [];
   if ((event.startsWith('Subagent') || d.agent_id !== undefined) && (typeof d.agent_id !== 'string' || !ID.test(d.agent_id))) return [];
   if (d.agent_id !== undefined && !['SubagentStart', 'SubagentStop', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PermissionRequest'].includes(event)) return [];
-  if (event === 'SessionStart' && !['startup', 'resume', 'clear', 'compact'].includes(d.source)) return [];
+  if (event === 'SessionStart' && !['startup', 'resume', 'clear', 'compact', 'fork'].includes(d.source)) return [];
   const tool = ['PreToolUse', 'PostToolUse', 'PermissionRequest'].includes(event)
     ? (new Map([['Bash', 'Bash'], ['exec_command', 'Bash'], ['write_stdin', 'Bash'], ['apply_patch', 'Edit']]).get(d.tool_name) || (typeof d.tool_name === 'string' && /^mcp__/.test(d.tool_name) ? 'MCP tool' : 'Tool')) : null;
   return [{ signal: event === 'SessionStart' && d.source === 'compact' ? 'compact' : SIGNALS[event], sessionId: d.session_id,

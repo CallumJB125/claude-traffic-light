@@ -263,6 +263,21 @@ test('Codex lifecycle compact preserves active roster but a real session start r
   emit(home, 'SessionStart', { source: 'resume' }); assert.deepEqual(read(home).agents, []);
 });
 
+test('Codex lifecycle parent fork start establishes quietly and resets while compact preserves children', (t) => {
+  const { home } = fixture(t);
+  emit(home, 'SubagentStart', { agent_id: 'child-1', turn_id: 'child-fork', source: 'fork', cwd: '/child/project' });
+  assert.equal(fs.existsSync(sessionFile(home)), false, 'a child fork cannot establish the parent');
+  assert.equal(emit(home, 'SessionStart', { source: 'fork' }).stdout, '');
+  assert.equal(fs.existsSync(sessionFile(home)), true, 'a supported parent fork establishes activity');
+  assert.deepEqual([read(home).signal, read(home).cwd, read(home).codexTurnId], ['session-start', '/synthetic/project', null]);
+  emit(home, 'UserPromptSubmit');
+  emit(home, 'SubagentStart', { agent_id: 'child-1', turn_id: 'child-fork' });
+  emit(home, 'SessionStart', { source: 'compact' });
+  assert.equal(read(home).agents[0].status, 'working');
+  emit(home, 'SessionStart', { source: 'fork' });
+  assert.deepEqual([read(home).signal, read(home).codexTurnId, read(home).agents], ['session-start', null, []]);
+});
+
 test('Codex lifecycle input overflow/mismatch/malformed payloads are bounded neutral refusals', (t) => {
   const { home } = fixture(t);
   for (const input of ['{ invalid', JSON.stringify(payload('PreToolUse')), 'x'.repeat(1024 * 1024 + 1)]) {
