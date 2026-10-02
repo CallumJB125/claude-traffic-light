@@ -424,3 +424,41 @@
       };
       for (const el of [hotkey, longPress, askClaude]) el.addEventListener('change', () => save().catch((err) => { hint.textContent = `Save failed — ${err.message}`; }));
     })();
+
+    // ── Compactor ── its own saves. Numbers come only from recorded before/after counts.
+    (async () => {
+      const $ = (id) => document.getElementById(`compact-${id}`);
+      const NAMES = { codex: 'Codex', claude: 'Claude Code', gemini: 'Gemini', local: 'Local model' };
+      const fmt = (n) => Math.abs(n).toLocaleString();
+      const showThreshold = () => { $('threshold-value').textContent = `${$('threshold').value}%`; };
+      const show = (st) => {
+        const saved = $('saved'), last = $('last');
+        if (!st) { saved.textContent = 'Not available right now.'; last.textContent = ''; return; }
+        const t = st.total;
+        if (!t.compactions) saved.textContent = 'Nothing compacted yet.';
+        else if (!t.measured) saved.textContent = `${t.compactions} compaction${t.compactions === 1 ? '' : 's'}, not measured yet: the saving is known after the next turn reports its token count.`;
+        else {
+          const parts = [];
+          if (t.savedTokens > 0) parts.push(`${fmt(t.savedTokens)} tokens (~$${t.estimatedDollars.toFixed(2)}, estimated at list input prices) — measured from the provider's own token counts, the turn before vs the turn after each compaction`);
+          else if (t.savedTokens < 0) parts.push(`No net saving yet: on short sessions the summary was ${fmt(t.savedTokens)} tokens larger than what it replaced`);
+          if (t.estimatedTokens) parts.push(`${fmt(t.estimatedTokens)} tokens estimated (~4 characters a token) for local models`);
+          saved.textContent = parts.length ? `${parts.join('. ')}.` : 'No measured change yet.';
+        }
+        const l = st.last;
+        last.textContent = !l ? '' : `Last: ${NAMES[l.provider] || l.provider}, ${new Date(l.at).toLocaleString()}, ${l.saved === null ? 'not measured (the provider reported no token counts)' : `context ${fmt(l.before)} → ${fmt(l.after)} tokens (${l.source === 'provider' ? 'reported by the provider' : 'estimated'})`}.`;
+      };
+      const st = await window.settingsApi.compactionStats().catch(() => null);
+      const s = st?.settings || {};
+      $('enabled').checked = s.enabled === true;
+      $('codex').checked = s.providers?.codex === true;
+      $('threshold').value = Math.round((s.threshold || 0.55) * 100);
+      showThreshold();
+      show(st);
+      const save = async () => {
+        const cur = (await window.settingsApi.getConfig()).compaction || {};
+        await window.settingsApi.saveConfig({ compaction: { ...cur, enabled: $('enabled').checked, providers: { ...cur.providers, codex: $('codex').checked }, threshold: Number($('threshold').value) / 100 } });
+        show(await window.settingsApi.compactionStats().catch(() => null));
+      };
+      $('threshold').addEventListener('input', showThreshold);
+      for (const el of [$('enabled'), $('codex'), $('threshold')]) el.addEventListener('change', () => save().catch((err) => { $('saved').textContent = `Save failed — ${err.message}`; }));
+    })();

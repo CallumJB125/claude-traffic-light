@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld('settingsApi', {
   busyOpenPrivacy: () => ipcRenderer.invoke('busy-open-privacy'),
   busyReconnectCalendar: () => ipcRenderer.invoke('busy-reconnect-calendar'),
   voiceStatus: () => ipcRenderer.invoke('voice-status'),
+  compactionStats: () => ipcRenderer.invoke('compaction-stats'),
   privacyText: () => ipcRenderer.invoke('get-privacy'),
   exportStats: (format, days) => ipcRenderer.invoke('export-stats', format, days),
   exportSetup: () => ipcRenderer.invoke('setup-export'),

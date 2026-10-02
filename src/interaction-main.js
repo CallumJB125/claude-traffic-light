@@ -14,10 +14,10 @@ const denied = { ok: false, status: 'forbidden', error: 'Focus Plexiform Overvie
 
 // Only one Overview document is current. When it is replaced (reload or new
 // generation) the old actor's sessions are reaped and `documents` holds one entry.
-function createInteractionMain({ context, readContext = context, adapters, workspace, boardCurrent, now }) {
+function createInteractionMain({ context, readContext = context, adapters, workspace, boardCurrent, now, compaction = null }) {
   const documents = new Map();
   const hub = createInteractionHub({
-    adapters, workspace, boardCurrent, now,
+    adapters, workspace, boardCurrent, now, compaction,
     onEvent(actor, state) {
       const contents = documents.get(actor);
       if (contents && !contents.isDestroyed()) contents.send(CHANNELS.event, state);
