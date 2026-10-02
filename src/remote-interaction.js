@@ -22,7 +22,11 @@
 // It stops for good, and ends every remote session, when the hub refuses the
 // device (401/403, 4401/4403: revoked, signed out, account deleted) or the
 // connection stays down longer than idleReapMs. A 4409 REPLACED close is shown
-// (status().state 'replaced') and not fought over.
+// (status().state 'replaced') and not fought over. A 409 at the upgrade means
+// another connection holds this device's host slot without our resume nonce:
+// one retry after heldProbeMs (past the hub's half-open probe, so our own dead
+// socket is cleared), then a second 409 is 'held' (someone else has this
+// device's sign-in) and is shown, never retried.
 //
 // Nothing here logs message text, responses or ids beyond the op name.
 const crypto = require('node:crypto');
@@ -33,7 +37,8 @@ const OPS = ['capabilities', 'list', 'state', 'launch', 'send', 'interrupt', 'cl
 const MAX_FRAME = 64 * 1024, MAX_REPLY = 700 * 1024, MAX_SEEN = 2048, WATCH_MAX_MS = 20_000;
 const MAX_HANDLING = 16, MAX_WATCHES = 8, MAX_TARGETS = 512;
 const RESUME_HEADER = 'x-plexiform-resume';
-const RETRY = { baseMs: 1000, maxMs: 60_000, idleReapMs: 15 * 60_000 };
+const RETRY = { baseMs: 1000, maxMs: 60_000, idleReapMs: 15 * 60_000, heldProbeMs: 6000 };
+const ROLE_RESET_MS = 5000;
 const object = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const closed = (v, keys) => object(v) && Object.keys(v).every((k) => keys.includes(k));
 const refuse = (status, error) => ({ ok: false, status, error });
@@ -140,7 +145,7 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
     return result;
   }
 
-  let state = 'off', notice = null, resume = null, retryTimer = null, idleTimer = null, attempts = 0, running = null;
+  let state = 'off', notice = null, resume = null, retryTimer = null, idleTimer = null, attempts = 0, conflicts = 0, running = null;
   const reapRemote = () => hub.reap(() => false).catch(() => {});
   function idleFrom() {
     if (idleTimer || !running) return;
@@ -198,10 +203,10 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
     });
   }
 
-  function schedule() {
+  function schedule(atLeast = 0) {
     if (!running || retryTimer) return;
     const cap = Math.min(R.maxMs, R.baseMs * 2 ** Math.min(attempts, 16));
-    const wait = Math.round(cap / 2 + random() * cap / 2);
+    const wait = Math.max(atLeast, Math.round(cap / 2 + random() * cap / 2));
     attempts++;
     retryTimer = setTimeout(() => { retryTimer = null; attempt(running); }, wait);
     retryTimer.unref?.();
@@ -213,11 +218,16 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
     try {
       await connect(run);
       if (run !== running) return;
-      attempts = 0; state = 'connected';
+      attempts = 0; conflicts = 0; state = 'connected';
       clearTimeout(idleTimer); idleTimer = null;
     } catch (e) {
       if (run !== running) return;
       if (e.status === 401 || e.status === 403 || e.wrongAccount) { reapRemote(); stopRunning(e.wrongAccount ? 'refused' : 'signed-out'); return; }
+      if (e.status === 409) {
+        if (++conflicts >= 2) { reapRemote(); stopRunning('held'); log('[remote-interaction] another connection holds this device; not reconnecting'); return; }
+        state = 'retrying'; idleFrom(); schedule(R.heldProbeMs); return;
+      }
+      conflicts = 0;
       state = 'retrying'; idleFrom(); schedule();
     }
   }
@@ -233,31 +243,45 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
     try { res = await fetch(`${baseUrl}/api/interaction/v1/role`, { method: 'PUT', headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json', accept: 'application/json' }, body: JSON.stringify({ role: 'host' }) }); } // privacy-flow: remote-interaction
     catch { res = null; }
     if (res && (res.status === 401 || res.status === 403)) { reapRemote(); state = 'signed-out'; return status(); }
-    attempts = 0; resume = null; notice = null;
+    attempts = 0; conflicts = 0; resume = null; notice = null;
     running = { url, token, WebSocket };
     if (!res || !res.ok) { state = 'retrying'; idleFrom(); schedule(); return status(); }
     await attempt(running);
     return status();
   }
 
-  /** Opt out: back to 'client' on the hub, drop the connection, end remote sessions. */
-  async function disable({ baseUrl, token, fetch = globalThis.fetch } = {}) { // privacy-flow: remote-interaction
+  /**
+   * Opt out: drop the connection, end remote sessions, and set the role back
+   * to 'client' on the hub (bounded by timeoutMs). → true when the hub has no
+   * host role for this sign-in any more (200, or 401/403: the token is gone),
+   * false when it could not be told (the caller retries: resetRole).
+   */
+  async function disable({ baseUrl, token, fetch = globalThis.fetch, timeoutMs = ROLE_RESET_MS } = {}) { // privacy-flow: remote-interaction
     stopRunning('off');
     disconnect();
     resume = null;
     await reapRemote();
-    if (!baseUrl || !token) return;
-    const tok = typeof token === 'function' ? token() : token;
-    if (!tok) return;
-    try { await fetch(`${baseUrl}/api/interaction/v1/role`, { method: 'PUT', headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json', accept: 'application/json' }, body: JSON.stringify({ role: 'client' }) }); } catch { /* the hub drops a stale host anyway */ } // privacy-flow: remote-interaction
+    if (!baseUrl || !token) return false;
+    return resetRole({ baseUrl, token, fetch, timeoutMs });
   }
 
   function status() { return { state, notice, connected: socket?.readyState === 1 }; }
+
   function disconnect() { const ws = socket; socket = null; try { ws?.close(1000, 'bye'); } catch { /* gone */ } }
   function close() { stopRunning('off'); disconnect(); for (const w of [...watchers]) w(); hub.stopAll(); }
 
   // `hub` is a main-only seam (tests and proof logs), never exposed remotely.
   return { handle, connect, enable, disable, status, disconnect, close, hub, actor, connected: () => socket?.readyState === 1 };
+}
+
+/** PUT role=client with this token, bounded. → true once the hub has no host role for it. */
+async function resetRole({ baseUrl, token, fetch = globalThis.fetch, timeoutMs = ROLE_RESET_MS }) { // privacy-flow: remote-interaction
+  const tok = typeof token === 'function' ? token() : token;
+  if (!tok) return false;
+  try {
+    const res = await fetch(`${baseUrl}/api/interaction/v1/role`, { method: 'PUT', headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json', accept: 'application/json' }, body: JSON.stringify({ role: 'client' }), signal: AbortSignal.timeout(timeoutMs) }); // privacy-flow: remote-interaction
+    return res.ok || res.status === 401 || res.status === 403;
+  } catch { return false; }
 }
 
 /** The other device's side: list hosts, then call ops on one. */
@@ -277,4 +301,4 @@ function createRemoteInteractionClient({ baseUrl, token, fetch = globalThis.fetc
   return { hosts, call, request };
 }
 
-module.exports = { createRemoteInteractionHost, createRemoteInteractionClient, OPS };
+module.exports = { createRemoteInteractionHost, createRemoteInteractionClient, resetRole, OPS };
