@@ -1136,6 +1136,7 @@ function createSettingsWindow() { openBuddy('settings'); }
 // send option (see src/feedback.js).
 let feedbackWin = null;
 let feedbackShot = null; // the PNG the preview showed: what is saved is what they saw
+let feedbackCaptureEpoch = 0;
 let feedbackLast = null; // { folder, text } of the report just saved
 const FEEDBACK_DIR = path.join(ROOT_DIR, 'feedback');
 const feedbackSenderOk = (e) => fromUtilityPage(e, 'feedback');
@@ -1147,7 +1148,7 @@ function feedbackTargets() {
   const all = [
     { id: 'widget', label: 'the widget', w: win },
     { id: 'lights', label: 'Lights', w: lightsWin },
-    { id: 'main', label: 'Main app page', capture: async () => (await buddyWin.capture())?.content, visible: buddyWin?.isVisible() },
+    { id: 'main', label: 'Main app page', capture: () => buddyWin.captureContent(), visible: buddyWin?.isVisible() },
   ];
   return all.filter((t) => t.capture ? t.visible : t.w && !t.w.isDestroyed() && t.w.isVisible());
 }
@@ -1169,16 +1170,21 @@ ipcMain.handle('feedback-info', (e) => {
 });
 ipcMain.handle('feedback-screenshot', async (e, id) => {
   if (!feedbackSenderOk(e)) return null;
+  const epoch = ++feedbackCaptureEpoch;
   feedbackShot = null;
   const t = feedbackTargets().find((x) => x.id === id);
   if (!t) return { error: 'That window is not open.' };
-  const img = t.capture ? await t.capture() : await t.w.webContents.capturePage();
-  if (!feedbackSenderOk(e)) return null;
-  if (!img || img.isEmpty()) return { error: 'Could not capture that window.' };
-  feedbackShot = img.toPNG();
-  return { dataUrl: `data:image/png;base64,${feedbackShot.toString('base64')}`, label: t.label };
+  try {
+    const img = t.capture ? await t.capture() : await t.w.webContents.capturePage();
+    if (!feedbackSenderOk(e) || epoch !== feedbackCaptureEpoch) return null;
+    if (!feedbackTargets().some(x => x.id === id) || !img || img.isEmpty()) return { error: 'Could not capture that window. Try again.' };
+    feedbackShot = img.toPNG();
+    return { dataUrl: `data:image/png;base64,${feedbackShot.toString('base64')}`, label: t.label };
+  } catch {
+    return feedbackSenderOk(e) && epoch === feedbackCaptureEpoch ? { error: 'Could not capture that window. Try again.' } : null;
+  }
 });
-ipcMain.handle('feedback-clear-screenshot', (e) => { if (feedbackSenderOk(e)) feedbackShot = null; });
+ipcMain.handle('feedback-clear-screenshot', (e) => { if (feedbackSenderOk(e)) { feedbackCaptureEpoch++; feedbackShot = null; } });
 ipcMain.handle('feedback-preview', (e, d) => {
   if (!feedbackSenderOk(e)) return null;
   try { return { markdown: feedbackDraft(d).markdown, diagnostics: d.diagnostics ? buildDiagnostics() : '' }; } catch (err) { return { error: err.message === 'empty' ? 'Say what happened first.' : 'Could not read that.' }; }

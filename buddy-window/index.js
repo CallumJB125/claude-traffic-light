@@ -983,7 +983,14 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       if (wc.isLoading()) wc.once('did-finish-load', send); else send();
       return true;
     },
-    // Dev hook: capture what's on screen.
+    // Feedback captures just the retained visible content, not both dev views.
+    captureContent() {
+      const owner = win, view = content, wc = view?.webContents;
+      const current = () => !!owner && win === owner && owner.isVisible() && !owner.isDestroyed() && content === view &&
+        view.getBounds().width > 0 && view.getBounds().height > 0;
+      return require('../src/capture-owned-view').captureOwnedView(wc, current);
+    },
+    // Dev hook: capture both app views for visual evidence.
     async capture() {
       if (!win) return null;
       const [side, main] = await Promise.all([sidebar.webContents.capturePage(), content?.webContents.capturePage()]);
