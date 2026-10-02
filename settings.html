@@ -443,6 +443,32 @@
     <label class="row"><input type="checkbox" id="spend-notify-budget-exceeded" /> Notify me when spend goes over a budget</label>
   </div>
   <!-- end F1 spend -->
+  <!-- Compactor (src/compaction.js) -->
+  <h2>Compactor</h2>
+  <div class="field">
+    <label class="row"><input type="checkbox" id="compact-enabled" aria-describedby="hint-compact" /> Compact long sessions in the background</label>
+    <div class="hint" id="hint-compact">When a session gets full, the older part of the conversation is summarised while you keep working, and the summary is in place before your next message. Only applies to sessions Plexiform started; sessions you started in a terminal can't be compacted from here.</div>
+    <div id="compact-providers-label" class="group-label">For</div>
+    <div role="group" aria-labelledby="compact-providers-label">
+      <label class="row"><input type="checkbox" id="compact-codex" /> Codex sessions Plexiform started</label>
+      <label class="row"><input type="checkbox" id="compact-claude" disabled /> Claude Code sessions Plexiform started (not available yet)</label>
+      <label class="row"><input type="checkbox" id="compact-local" disabled /> Local models (not available yet)</label>
+    </div>
+  </div>
+  <div class="field">
+    <label for="compact-threshold">Compact when the context is</label>
+    <div class="row">
+      <input type="range" id="compact-threshold" min="30" max="90" step="5" aria-describedby="hint-compact-threshold" />
+      <output id="compact-threshold-value" for="compact-threshold"></output>
+    </div>
+    <div class="hint" id="hint-compact-threshold">full. Nothing is summarised (and no model is asked) until a session passes this.</div>
+  </div>
+  <div class="field">
+    <div class="group-label">Saved so far</div>
+    <div class="hint" id="compact-saved" role="status" aria-live="polite"></div>
+    <div class="hint" id="compact-last"></div>
+    <div class="hint">For sessions you started in a terminal, Claude Code has its own setting: the <code>CLAUDE_AUTOCOMPACT_PCT_OVERRIDE</code> environment variable (for example 55) sets how full the context gets before it compacts itself. Plexiform doesn't change it for you.</div>
+  </div>
   <h2>Busy &amp; Focus</h2>
   <div class="field">
     <label class="row"><input type="checkbox" id="busyHold" /> Hold pings while I'm busy</label>

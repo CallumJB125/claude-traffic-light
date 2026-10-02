@@ -40,7 +40,7 @@ function ownedAdapters({ env = process.env } = {}) {
   };
 }
 
-function createInteractionMain({ context, readContext = context, adapters: given, owned = ownedAdapters, workspace, currentBoard = () => null, now, localModelsFile = null, localModels: givenLocalModels }) {
+function createInteractionMain({ context, readContext = context, adapters: given, owned = ownedAdapters, workspace, currentBoard = () => null, now, localModelsFile = null, localModels: givenLocalModels, compaction = null }) {
   const adapters = { ...(owned ? owned() : {}), ...given };
   // Local models register into `adapters` as they are found.
   const localModels = givenLocalModels !== undefined ? givenLocalModels : createLocalModels({ adapters, configFile: localModelsFile });
@@ -48,7 +48,7 @@ function createInteractionMain({ context, readContext = context, adapters: given
   const boardCurrent = (b) => b !== null && b === boardKey(currentBoard());
   const actorFor = (c) => `overview:${c.contents.id}:${c.document}`;
   const hub = createInteractionHub({
-    adapters, workspace, boardCurrent, now,
+    adapters, workspace, boardCurrent, now, compaction,
     onEvent(actor, state) {
       const contents = documents.get(actor), c = readContext();
       // A reloaded document has not been reaped until its first request.

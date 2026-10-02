@@ -6,7 +6,10 @@
 //   open({cwd}) -> {target}                      provider session/thread id, never sent to a renderer
 //   send({target, text, clientId, expectedTurnId}) -> {turnId, mode: 'new-turn'|'steer'}
 //   interrupt({target, turnId}), release?({target}), stop(), alive(), on(fn) -> off
-//   events: {kind: 'turn-started'|'delta'|'message'|'input-recorded'|'turn-completed'|'status'|'refused-request'|'closed'|'oversize'|'exit', target, turnId, ...}
+//   compact?({target, keep})  optional, with capability compact: true (and
+//     compactKeep when the provider honours keep); see src/compaction.js
+//   events: {kind: 'turn-started'|'delta'|'message'|'input-recorded'|'turn-completed'|'status'|'refused-request'|'closed'|'oversize'|'exit'
+//     |'usage' {inputTokens, window}|'compacted', target, turnId, ...}
 //
 // Delivery is only claimed from the provider's own acknowledgement for the
 // exact target: 'acknowledged' = the provider returned a turn id for a request
@@ -37,7 +40,8 @@ const ERRORS = {
 };
 
 // boardCurrent must be supplied by main; without it every session is refused.
-function createInteractionHub({ adapters = {}, workspace = () => null, boardCurrent = () => false, onEvent = () => {}, now = Date.now } = {}) {
+// compaction: an optional createSessionCompactor() (src/compaction.js).
+function createInteractionHub({ adapters = {}, workspace = () => null, boardCurrent = () => false, onEvent = () => {}, now = Date.now, compaction = null } = {}) {
   const sessions = new Map();
   const isCurrent = (board) => { try { return boardCurrent(board) === true; } catch { return false; } };
 
@@ -63,7 +67,7 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
     return {
       session: r.id, generation: r.generation, provider: { id: r.provider, label: r.adapter.label },
       ownership: 'plexiform-owned', label: `Started by Plexiform · ${r.adapter.label}`,
-      board: r.board, status: r.ended ? 'ended' : active ? 'working' : 'ready', activeTurn: active?.tag ?? null,
+      board: r.board, status: r.ended ? 'ended' : active ? 'working' : compaction?.inFlight(r) ? 'compacting' : 'ready', activeTurn: active?.tag ?? null,
       capabilities: { ...r.adapter.capabilities },
       deliveries: [...r.deliveries.values()].map((d) => publicDelivery(r, d)),
     };
@@ -83,10 +87,11 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
       // Another session's (or a replaced target's) event never touches this one.
       if (e.target !== r.target) return;
       if (e.kind === 'closed') { r.ended = true; r.activeTurn = null; emit(r); return; }
-      if (typeof e.turnId !== 'string') return;
+      if (compaction?.claims(r, e)) { emit(r); return; }
+      if (e.kind === 'usage' || e.kind === 'compacted' || typeof e.turnId !== 'string') return;
       const t = turnOf(r, e.turnId);
       if (e.kind === 'turn-started') r.activeTurn = e.turnId;
-      else if (e.kind === 'turn-completed') { t.status = FINAL.includes(e.status) ? e.status : 'failed'; t.error = e.error ? String(e.error).slice(0, 300) : null; t.finishedAt = now(); if (r.activeTurn === e.turnId) r.activeTurn = null; }
+      else if (e.kind === 'turn-completed') { t.status = FINAL.includes(e.status) ? e.status : 'failed'; t.error = e.error ? String(e.error).slice(0, 300) : null; t.finishedAt = now(); if (r.activeTurn === e.turnId) { r.activeTurn = null; compaction?.idle(r); } }
       else if (e.kind === 'input-recorded') { if (t.inputs.length < 20) t.inputs.push({ clientId: e.clientId, text: e.text }); }
       else if (e.kind === 'delta') t.response = (t.response + String(e.text)).slice(0, MAX_RESPONSE);
       else if (e.kind === 'message') t.response = String(e.text).slice(0, MAX_RESPONSE);
@@ -100,6 +105,8 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
     if (r.ended && !sessions.has(r.id)) return;
     const { target, activeTurn } = r;
     r.ended = true; r.activeTurn = null; r.off?.(); sessions.delete(r.id);
+    const compactTurn = compaction?.drop(r);
+    if (compactTurn) { try { await r.adapter.interrupt({ target, turnId: compactTurn }); } catch { /* provider gone */ } }
     if (activeTurn) { try { await r.adapter.interrupt({ target, turnId: activeTurn }); } catch { /* provider gone */ } }
     try { await r.adapter.release?.({ target }); } catch { /* provider gone */ }
   }
@@ -152,6 +159,15 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
       expectedTurnId = [...r.turns].find(([, t]) => t.tag === req.expectedTurn)?.[0] ?? null;
       if (!expectedTurnId || expectedTurnId !== r.activeTurn || !r.adapter.capabilities.steer) return refuse('stale', ERRORS.stale);
     } else if (r.activeTurn) return refuse('busy', ERRORS.busy);
+    // A background compaction finishes (bounded) or is abandoned before the
+    // message goes out, so the message lands on the compacted context.
+    if (compaction?.inFlight(r)) {
+      const gen = r.generation;
+      r.sending = true;
+      try { await compaction.settle(r); } finally { r.sending = false; }
+      if (r.ended || r.generation !== gen) return refuse('stale', ERRORS.stale);
+      if (r.activeTurn) return refuse('busy', ERRORS.busy);
+    }
     const target = r.target, generation = r.generation;
     const d = { id: crypto.randomUUID(), clientId: crypto.randomUUID(), text, mode: expectedTurnId ? 'steer' : 'new-turn', state: 'sending', turnId: null, sentAt: now() };
     r.deliveries.set(d.id, d);
@@ -172,6 +188,8 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
     d.turnId = ack.turnId; d.mode = ack.mode === 'steer' ? 'steer' : 'new-turn'; d.state = 'acknowledged';
     turnOf(r, ack.turnId);
     if (!expectedTurnId && !FINAL.includes(r.turns.get(ack.turnId).status)) r.activeTurn = ack.turnId;
+    // The turn can finish before its ack arrives (while sending): check again now.
+    else if (!r.activeTurn) queueMicrotask(() => { compaction?.maybeStart(r).catch(() => {}); });
     emit(r);
     return { ok: true, status: 'acknowledged', delivery: publicDelivery(r, d), state: dto(r) };
   }
@@ -221,6 +239,8 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
     if (!r || r.ended) return false;
     const old = { target: r.target, activeTurn: r.activeTurn };
     r.generation++; r.activeTurn = null; r.turns.clear(); r.deliveries.clear(); r.target = null;
+    const compactTurn = compaction?.drop(r);
+    if (compactTurn) { try { await r.adapter.interrupt({ target: old.target, turnId: compactTurn }); } catch { /* provider gone */ } }
     if (old.activeTurn) { try { await r.adapter.interrupt({ target: old.target, turnId: old.activeTurn }); } catch { /* provider gone */ } }
     try { await r.adapter.release?.({ target: old.target }); } catch { /* provider gone */ }
     let target = null;
@@ -232,7 +252,11 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
     return true;
   }
 
-  return { capabilities, launch, send, interrupt, state, list, close, reap, stopAll, targetOf, replaceTarget };
+  // Main calls this when the compactor setting changes: running compactions
+  // of a provider that is now off are stopped.
+  const compactionSettingsChanged = () => compaction?.settingsChanged([...sessions.values()]) ?? Promise.resolve();
+
+  return { capabilities, launch, send, interrupt, state, list, close, reap, stopAll, targetOf, replaceTarget, compactionSettingsChanged };
 }
 
 module.exports = { createInteractionHub, ERRORS, NOTICES };

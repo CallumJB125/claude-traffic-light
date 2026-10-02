@@ -78,6 +78,10 @@ function createCodexAppServer({ bin, env = process.env, spawn = childProcess.spa
       const item = p.item;
       if (item?.type === 'agentMessage' && typeof item.text === 'string') events.emit('event', { kind: 'message', target, turnId: p.turnId, text: item.text });
       else if (item?.type === 'userMessage') events.emit('event', { kind: 'input-recorded', target, turnId: p.turnId, clientId: typeof item.clientId === 'string' ? item.clientId : null, text: inputText(item.content) });
+      else if (item?.type === 'contextCompaction') events.emit('event', { kind: 'compacted', target, turnId: p.turnId });
+    } else if (method === 'thread/compacted' && typeof target === 'string') events.emit('event', { kind: 'compacted', target, turnId: p.turnId });
+    else if (method === 'thread/tokenUsage/updated' && typeof target === 'string' && Number.isSafeInteger(p.tokenUsage?.last?.inputTokens)) {
+      events.emit('event', { kind: 'usage', target, turnId: p.turnId, inputTokens: p.tokenUsage.last.inputTokens, window: Number.isSafeInteger(p.tokenUsage.modelContextWindow) ? p.tokenUsage.modelContextWindow : null });
     } else if (method === 'thread/status/changed' && typeof target === 'string' && typeof p.status?.type === 'string') events.emit('event', { kind: 'status', target, status: p.status.type });
     else if (method === 'thread/closed' && typeof target === 'string') events.emit('event', { kind: 'closed', target });
   }
@@ -159,6 +163,9 @@ function createCodexAppServer({ bin, env = process.env, spawn = childProcess.spa
     return { turnId: result.turn.id, mode: 'new-turn' };
   }
   async function interrupt({ target, turnId }) { await start(); await request('turn/interrupt', { threadId: target, turnId }); return true; }
+  // Codex's supported compaction: it runs as a turn on `target` and reports a
+  // contextCompaction item. Codex decides what it keeps; `keep` is not sent.
+  async function compact({ target }) { await start(); await request('thread/compact/start', { threadId: target }); return true; }
   // Unload a closed session's thread from this server.
   async function release({ target }) { if (!child || exited) return false; await request('thread/unsubscribe', { threadId: target }); return true; }
   function kill(proc) {
@@ -170,8 +177,8 @@ function createCodexAppServer({ bin, env = process.env, spawn = childProcess.spa
 
   return {
     provider: 'codex', label: 'Codex',
-    capabilities: Object.freeze({ newTurn: true, steer: true, interrupt: true, ack: 'turn-id', echo: 'client-message-id', stream: true, existingSessions: false }),
-    open, send, interrupt, release, stop,
+    capabilities: Object.freeze({ newTurn: true, steer: true, interrupt: true, ack: 'turn-id', echo: 'client-message-id', stream: true, existingSessions: false, compact: true, compactKeep: false }),
+    open, send, interrupt, compact, release, stop,
     on: (fn) => { events.on('event', fn); return () => events.off('event', fn); },
     alive: () => !!child && !exited,
   };

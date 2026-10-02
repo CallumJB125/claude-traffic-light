@@ -41,6 +41,7 @@ const LeftoverShim = require('./src/leftover-shim.js');
 const Help = require('./help.js');
 const GitSignals = require('./src/github-signals.js');
 const Voice = require('./src/voice.js');
+const Compaction = require('./src/compaction.js');
 const Health = require('./src/health.js');
 const Backups = require('./src/backups.js');
 const { applyConfigSideEffects } = require('./src/config-effects.js');
@@ -223,6 +224,8 @@ const DEFAULT_CONFIG = {
   busyFocus: process.platform === 'darwin',
   busyFocusShortcut: '',
   voice: { ...Voice.DEFAULTS },
+  // In-app compactor for Plexiform-owned sessions only (src/compaction.js); off until turned on.
+  compaction: Compaction.normalizeSettings(null),
   // Accept paired devices' events on the Tailscale address too (loopback
   // only otherwise, which an ssh -R tunnel reaches).
   remoteTailscale: false,
@@ -264,6 +267,7 @@ function buildConfig() {
   config.notifyStates = { ...DEFAULT_CONFIG.notifyStates, ...(saved.notifyStates && typeof saved.notifyStates === 'object' ? saved.notifyStates : {}) };
   config.spend = Spend.normalize(saved.spend);
   config.voice = Voice.normalizeConfig(saved.voice);
+  config.compaction = Compaction.normalizeSettings(saved.compaction);
   // Rules are stored whole; a config from before rules existed gets the
   // defaults, which reproduce the old fixed behaviour exactly.
   config.rules = (Array.isArray(saved.rules) ? saved.rules : Rules.defaultRules()).map(Rules.normalizeRule);
@@ -1401,7 +1405,10 @@ app.on('will-quit',()=>OverviewMain.close());
 // talks only to those. Existing unmanaged sessions stay observation-only.
 const CodexAppServer=require('./src/codex-app-server');
 const codexBin=CodexAppServer.findCodexBin();
+// Compactor savings: numbers only, no message text (src/compaction-stats.js).
+const CompactionLedger=require('./src/compaction-stats').createLedger({file:path.join(ROOT_DIR,'compaction-stats.json')});
 const InteractionMain=require('./src/interaction-main').createInteractionMain({
+  compaction:Compaction.createSessionCompactor({settings:()=>loadConfig().compaction,ledger:CompactionLedger}),
   context:()=>buddyWin?.overviewContext?.()??null,
   readContext:()=>buddyWin?.overviewReadContext?.()??null,
   adapters:{codex:Object.assign(CodexAppServer.createCodexAppServer({bin:codexBin,clientVersion:app.getVersion()}),codexBin?{}:{available:false,reason:'Codex CLI not found'})},
@@ -1413,6 +1420,7 @@ const InteractionMain=require('./src/interaction-main').createInteractionMain({
 });
 InteractionMain.register(ipcMain);
 app.on('will-quit',()=>InteractionMain.close());
+ipcMain.handle('compaction-stats',e=>settingsOnly(e)?{...CompactionLedger.summary(),settings:loadConfig().compaction}:null);
 
 ipcMain.handle('myday:state', e => myDaySender(e) ? MyDay.snapshot() : null);
 ipcMain.handle('myday:open', (e, handle) => myDaySender(e) && typeof handle === 'string' && handle.length <= 100 ? MyDay.open(handle) : false);
@@ -2934,6 +2942,7 @@ function commitConfig(partial) {
   })) backupFirst();
   const next = saveConfig(partial);
   applyConfigEffects(prev, next, (k) => k in partial);
+  if ('compaction' in partial) InteractionMain.hub.compactionSettingsChanged().catch(() => {});
   return next;
 }
 

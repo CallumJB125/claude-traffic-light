@@ -8,11 +8,14 @@ const threads = new Map();
 let initialized = false;
 const out = (m) => process.stdout.write(`${JSON.stringify(m)}\n`);
 const note = (method, params) => out({ method, params });
+const usage = (n) => ({ totalTokens: n, inputTokens: n, cachedInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0 });
 function finish(threadId, turnId, reply) {
   const t = threads.get(threadId);
   note('item/agentMessage/delta', { threadId, turnId, itemId: 'a', delta: reply.slice(0, 3) });
   note('item/agentMessage/delta', { threadId, turnId, itemId: 'a', delta: reply.slice(3) });
   note('item/completed', { threadId, turnId, completedAtMs: Date.now(), item: { type: 'agentMessage', id: 'a', text: reply } });
+  t.context += 1000 + reply.length;
+  note('thread/tokenUsage/updated', { threadId, turnId, tokenUsage: { last: usage(t.context), total: usage(t.context), modelContextWindow: 10000 } });
   note('turn/completed', { threadId, turn: { id: turnId, status: 'completed', items: [] } });
   t.active = null;
 }
@@ -29,7 +32,7 @@ process.stdin.on('data', (chunk) => {
     if (m.method === 'initialized') { initialized = true; continue; }
     if (!initialized) { out({ id: m.id, error: { code: -32002, message: 'not initialized' } }); continue; }
     if (m.method === 'thread/start') {
-      const id = crypto.randomUUID(); threads.set(id, { active: null, inputs: [] });
+      const id = crypto.randomUUID(); threads.set(id, { active: null, inputs: [], context: 0 });
       out({ id: m.id, result: { thread: { id }, cwd: p.cwd, model: 'fake', modelProvider: 'fake', approvalPolicy: p.approvalPolicy, approvalsReviewer: 'user', sandbox: { type: 'readOnly' } } });
       continue;
     }
@@ -51,9 +54,24 @@ process.stdin.on('data', (chunk) => {
       note('item/completed', { threadId: p.threadId, turnId: t.active, completedAtMs: Date.now(), item: { type: 'userMessage', id: 'u2', clientId: p.clientUserMessageId ?? null, content: p.input } });
       finish(p.threadId, t.active, `steered:${text}`);
     } else if (m.method === 'turn/interrupt') {
+      clearTimeout(t.compacting); t.compacting = null;
       out({ id: m.id, result: {} });
       note('turn/completed', { threadId: p.threadId, turn: { id: p.turnId, status: 'interrupted', items: [] } });
       t.active = null;
+    } else if (m.method === 'thread/compact/start') {
+      // As the real 0.159.2 server: an empty result, then a turn carrying a
+      // contextCompaction item; the compacted context is smaller.
+      if (t.active) { out({ id: m.id, error: { code: -32600, message: 'turn already active' } }); continue; }
+      out({ id: m.id, result: {} });
+      const turnId = crypto.randomUUID(), threadId = p.threadId;
+      t.active = turnId;
+      note('turn/started', { threadId, turn: { id: turnId, status: 'inProgress', items: [] } });
+      t.compacting = setTimeout(() => {
+        t.context = 600; t.active = null; t.compacting = null;
+        note('thread/tokenUsage/updated', { threadId, turnId, tokenUsage: { last: usage(0), total: usage(0), modelContextWindow: 10000 } });
+        note('item/completed', { threadId, turnId, completedAtMs: Date.now(), item: { type: 'contextCompaction', id: 'cc' } });
+        note('turn/completed', { threadId, turn: { id: turnId, status: 'completed', items: [] } });
+      }, 30);
     } else if (m.method === 'thread/unsubscribe') {
       threads.delete(p.threadId); out({ id: m.id, result: { status: 'unsubscribed' } });
     } else out({ id: m.id, error: { code: -32601, message: 'unknown method' } });
