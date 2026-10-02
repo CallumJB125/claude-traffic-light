@@ -23,6 +23,18 @@ function safe(path, content, needles, machine = M) {
   return r;
 }
 const ok = (path, content, needles, machine) => { const r = safe(path, content, needles, machine); assert.equal(r.status, 'ok', r.reason); return r; };
+
+test('HOME followed by a sentence-final period is masked deterministically without accepting dotted continuations', () => {
+  const machine = { home: '/tmp/plexiform-setups-transaction-aaaaaa/profile' };
+  for (const tail of ['.', '.\n', '. Next sentence.']) {
+    const input = `Use ${machine.home}${tail}`;
+    assert.equal(ok('~/.zshrc', input, [machine.home], machine).content, `Use {{HOME}}${tail}`);
+  }
+  for (const tail of ['.other', '.1', '-other', '_other']) {
+    assert.equal(safe('~/.zshrc', `Use ${machine.home}${tail}`, [machine.home], machine).status, 'blocked');
+  }
+  assert.equal(ok('~/.zshrc', `Use ${machine.home}/child`, [machine.home], machine).content, 'Use {{HOME}}/child');
+});
 const isBlocked = (path, content, machine = M) => { const r = scrubFile({ path, content, machine }); assert.equal(r.status, 'blocked', JSON.stringify(r.content)); return r; };
 
 test('H1: a redacted secret never becomes the next placeholder\'s name', () => {

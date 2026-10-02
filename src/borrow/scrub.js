@@ -769,7 +769,7 @@ function templater(machine) {
   const ownEmails = new Set(machine.emails.flatMap(forms).map((e) => e.toLowerCase()));
   const home = machine.home ? machine.home.replace(/\\/g, '/').replace(/\/+$/, '') : null;
   // /Users/x, C:\Users\x and JSON's C:\\Users\\x are all this home.
-  const homeRe = home ? new RegExp(`(?:${forms(home).map((h) => h.split('/').map(escapeRe).join('(?:/|\\\\{1,2})')).join('|')})(?![\\w.-])`, 'gi') : null;
+  const homeRe = home ? new RegExp(`(?:${forms(home).map((h) => h.split('/').map(escapeRe).join('(?:/|\\\\{1,2})')).join('|')})(?:(?![\\w.-])|(?=\\.(?:\\s|$)))`, 'gi') : null;
   const hostShort = machine.hostname && !GENERIC_HOST.test(machine.hostname) ? machine.hostname.split('.')[0] : null;
   const hostRe = hostShort && hostShort.length >= 3 ? new RegExp(`(?<![\\w-])(?:${forms(hostShort).map(escapeRe).join('|')})(?:\\.[\\w-]+)*(?![\\w-])`, 'gi') : null;
   const user = machine.user && machine.user.length >= 3 ? machine.user : null;
