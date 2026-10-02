@@ -16,10 +16,11 @@ const freshness=n=>n===null?'unknown':n<=Session.RECENT_MS?'recent':'stale';
 const capability=(enabled,label,reason)=>({enabled:enabled===true,label,reason:enabled?'':reason});
 const task=card=>card&&typeof card.title==='string'?{status:'tracked',title:clean(card.title,200)||'Untitled task',key:typeof card.key==='string'?clean(card.key,80):null}:{status:'unknown',title:'Task not reported',key:null};
 const provider=(source,model)=>{const known=typeof source==='string'&&Object.hasOwn(PROVIDERS,source);return{id:known?source:'unknown',label:(known?PROVIDERS[source]:'Local AI')+(typeof model==='string'&&/^[A-Za-z0-9._:/@+-]{1,80}$/.test(model)?` · ${clean(model,80)}`:''),kind:LOCAL.has(source)?'local':'integrated'};};
-function createOverviewService({sessions=()=>[],work=async()=>({sources:[],capture:[]}),managed=()=>({conn:{status:'offline'},tasks:[]}),openManaged=null,messageManaged=null,now=Date.now,current=()=>true,navigationCurrent=()=>false}){
+function createOverviewService({sessions=()=>[],work=async()=>({sources:[],capture:[]}),managed=()=>({conn:{status:'offline'},tasks:[]}),openManaged=null,messageManaged=null,now=Date.now,current=()=>true,actionCurrent=current,navigationCurrent=()=>false}){
  let epoch=0,handles=new Map();const secret=crypto.randomBytes(32);
  const stable=parts=>crypto.createHmac('sha256',secret).update(JSON.stringify(parts)).digest('hex');
  const permitted=()=>{try{return current()===true;}catch{return false;}};
+ const actionPermitted=()=>{try{return permitted()&&actionCurrent()===true;}catch{return false;}};
  const sourcesData=async()=>{const registered=await work();const list=Array.isArray(registered?.sources)?registered.sources.slice(0,9):[];
   const sources=await Promise.all(list.map(async source=>{let data;try{if(source.current())data=await source.read();}catch{}return{source,data};}));
   return{sources,capture:Array.isArray(registered?.capture)?registered.capture.slice(0,2000):[],partial:registered?.partial===true||registered?.sources?.length>9};};
@@ -80,13 +81,16 @@ function createOverviewService({sessions=()=>[],work=async()=>({sources:[],captu
    register(dto,{kind:'managed',id:t.id,state:t.state,provider:t.ai?.id},next);rows.push(dto);
   }
   if(generation!==epoch||!permitted())return{schema:1,status:'unavailable',observed_at:now(),omitted:0,sessions:[]};
+  // A passive projection is useful while another app has focus. The private
+  // handle never supplies focus authority: actionPermitted fences each effect.
+  if(!actionPermitted())for(const row of rows)for(const action of ['open','message'])if(row.capabilities[action].enabled)row.capabilities[action]=capability(false,row.capabilities[action].label,'Focus Plexiform and refresh before acting.');
   rows.sort((a,b)=>(a.age_ms??Infinity)-(b.age_ms??Infinity));handles=next;
   return{schema:1,status:partial||omitted?'partial':'complete',observed_at:time,omitted,sessions:rows};
  }
  async function action(request,message=false){
   if(!closed(request,message?['handle','text']:['handle'])||typeof request.handle!=='string'||!UUID.test(request.handle)||message&&(typeof request.text!=='string'||!request.text.trim()||request.text.includes('\0')||request.text.trim().length>4000||Buffer.byteLength(request.text.trim())>8192))return response('invalid');
-  const e=handles.get(request.handle),generation=epoch;if(!e||e.expires<now()||!permitted())return response('stale');
-  let navigating=false;const fresh=()=>generation===epoch&&e.expires>=now()&&(navigating?navigationCurrent()===true:permitted());
+  const e=handles.get(request.handle),generation=epoch;if(!e||e.expires<now()||!actionPermitted())return response('stale');
+  let navigating=false;const fresh=()=>generation===epoch&&e.expires>=now()&&(navigating?navigationCurrent()===true:actionPermitted());
   const beginNavigation=()=>{if(!fresh())return false;navigating=true;return true;};
   if(e.kind==='reported'||(message?!e.canMessage:!e.canOpen))return response('unavailable');
   // Explicit message is one-use before any external wait or effect.

@@ -916,6 +916,13 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     open,
     myDay: () => myDayBroker.snapshot(),
     async overviewWork(){return {sources:await overviewSources(),capture:workCapture.overviewSnapshot?.()??[],partial:false};},
+    overviewReadContext(){
+      const v=localViews.get('overview'),wc=v?.webContents;
+      if(!win||win.isDestroyed()||!wc||wc.isDestroyed()||selected!=='overview'||content!==v||!win.contentView.children.includes(v)||!win.isVisible()||win.isMinimized())return null;
+      const expected=pathToFileURL(path.join(DIR,'..','overview.html')).href;
+      if(wc.getURL()!==expected||wc.mainFrame?.url!==expected||wc.isLoading())return null;
+      return {window:win,contents:wc,generation:setupLocalGeneration,foreground:win.isFocused()};
+    },
     overviewContext(){
       const v=localViews.get('overview'),wc=v?.webContents;
       if(!win||win.isDestroyed()||!wc||wc.isDestroyed()||selected!=='overview'||content!==v||!win.contentView.children.includes(v)||!win.isVisible()||win.isMinimized()||!win.isFocused())return null;
