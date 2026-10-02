@@ -153,7 +153,14 @@ process.stdin.on('data', (d) => {
   let i;
   while ((i = buf.indexOf('\n')) >= 0) { const l = buf.slice(0, i); buf = buf.slice(i + 1); if (l.trim()) onStdinLine(l); }
 });
-process.stdin.on('end', () => { log({ ev: 'eof' }); if (!scenario.ignore_eof) process.exit(0); });
+process.stdin.on('end', () => {
+  log({ ev: 'eof' });
+  if (!scenario.ignore_eof) process.exit(0);
+  // An unresolved nextInput Promise and signal handlers do not keep Node
+  // alive. Model the ignored EOF with a referenced, bounded fixture lease
+  // so the stop test exercises SIGTERM/SIGKILL after interrupt cleared wait.
+  setTimeout(() => { killGrandchildren(); mcpProc?.kill(); process.exit(1); }, 30_000);
+});
 
 function killGrandchildren() {
   for (const g of grandchildren) { try { process.kill(-g, 'SIGKILL'); } catch { /* gone */ } }
