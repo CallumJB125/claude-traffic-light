@@ -10,6 +10,7 @@ const Brand = require('../brand');
 const Smoke = require('./smoke-installed');
 const Uninstall = require('../adapters/uninstall-all');
 const Diagnostics = require('./windows-install-diagnostics');
+const Observer = require('./windows-install-observer');
 
 function allowedRunner(platform = process.platform, env = process.env) {
   return platform === 'win32' && env.GITHUB_ACTIONS === 'true' && env.RUNNER_OS === 'Windows' && env.RUNNER_ENVIRONMENT === 'github-hosted';
@@ -31,15 +32,19 @@ function execute(exe, args, env, options) {
   const timeoutMs = 120000;
   return new Promise((resolve, reject) => {
     const started = Date.now();
-    const child = spawn(exe, args, { ...options, env, shell: false, stdio: 'inherit', windowsHide: true }); // privacy-flow: release-smoke
+    const { observeBeforeTimeout, ...spawnOptions } = options;
+    const child = spawn(exe, args, { ...spawnOptions, env, shell: false, stdio: 'inherit', windowsHide: true }); // privacy-flow: release-smoke
     const result = (code, timedOut, signal = null) => ({ pid: child.pid ?? null, started, elapsedMs: Date.now() - started, code, signal, timedOut });
     const timer = setTimeout(() => {
       let terminationRequested = false;
       try { terminationRequested = child.kill(); } catch { /* Failure remains terminal; no cleanup claims. */ }
       reject(Object.assign(new Error(`${path.basename(exe)} exceeded ${timeoutMs} ms`), { processReceipt: { ...result(null, true), terminationRequested } }));
     }, timeoutMs);
-    child.once('error', error => { clearTimeout(timer); reject(Object.assign(error, { processReceipt: { ...result(null, false), failedToStart: true } })); });
-    child.once('exit', (code, signal) => { clearTimeout(timer); const processReceipt = result(code, false, signal); code === 0 ? resolve(processReceipt) : reject(Object.assign(new Error(`${path.basename(exe)} exited ${code}`), { processReceipt })); });
+    const observationTimer = observeBeforeTimeout ? setTimeout(() => {
+      Promise.resolve().then(() => observeBeforeTimeout({ pid: child.pid ?? null, started, exe, elapsedMs: Date.now() - started })).catch(() => {});
+    }, 90000) : null;
+    child.once('error', error => { clearTimeout(timer); clearTimeout(observationTimer); reject(Object.assign(error, { processReceipt: { ...result(null, false), failedToStart: true } })); });
+    child.once('exit', (code, signal) => { clearTimeout(timer); clearTimeout(observationTimer); const processReceipt = result(code, false, signal); code === 0 ? resolve(processReceipt) : reject(Object.assign(new Error(`${path.basename(exe)} exited ${code}`), { processReceipt })); });
   });
 }
 
@@ -117,7 +122,7 @@ function findAssets(dir, version) {
   return { installer, portable };
 }
 
-async function runLifecycle({ installer, portable, root, actualAppData, env = process.env, run = execute, diagnostics = Diagnostics.collect, smoke = Smoke.runPackagedSmoke, runHook = require('../src/smoke').runHook, receipt }) {
+async function runLifecycle({ installer, portable, root, actualAppData, env = process.env, run = execute, diagnostics = Diagnostics.collect, observe = Observer.collect, smoke = Smoke.runPackagedSmoke, runHook = require('../src/smoke').runHook, receipt }) {
   const installDir = path.join(root, 'installed app with spaces');
   const fixture = Smoke.fixture(path.join(root, 'fixture'));
   const settings = path.join(fixture.home, '.claude', 'settings.json');
@@ -147,7 +152,18 @@ async function runLifecycle({ installer, portable, root, actualAppData, env = pr
   const save = () => fs.writeFileSync(receipt, JSON.stringify({ platform: process.platform, version: require('../package.json').version, stages }, null, 2));
   const mark = name => { stages.push(name); save(); };
   // /D must be the final argument; NSIS treats the rest of the line as its path.
-  const runNsis = (file, operation) => { const spec = nsisLaunch(file, operation, installDir, root); return run(file, spec.args, childEnv, spec.options); };
+  const runNsis = (file, operation) => {
+    const spec = nsisLaunch(file, operation, installDir, root);
+    if (operation === 'update') spec.options.observeBeforeTimeout = async processReceipt => {
+      let observation;
+      try { observation = await observe(processReceipt, { env: childEnv }); }
+      catch { observation = { ok: false, reason: 'owned installer observation failed' }; }
+      const report = { phase: 'update-before-timeout', processReceipt: { pid: processReceipt.pid, started: processReceipt.started, elapsedMs: processReceipt.elapsedMs }, observation };
+      const text = JSON.stringify(report, null, 2);
+      fs.writeFileSync(path.join(root, 'update-before-timeout.json'), Buffer.byteLength(text) <= 32768 ? text : JSON.stringify({ phase: 'update-before-timeout', observation: { ok: false, reason: 'observer report exceeded bound' } }));
+    };
+    return run(file, spec.args, childEnv, spec.options);
+  };
   await runNsis(installer, 'install');
   if (!fs.existsSync(exe)) throw new Error('NSIS did not install the executable');
   mark('installed');

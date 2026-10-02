@@ -338,7 +338,7 @@ test('actual default executor deadline refuses without claiming child terminatio
     if (!third) queueMicrotask(async () => { await f.run(file, args, options.env, options); child.emit('exit', 0, null); });
     else queueMicrotask(() => timerCallback());
     return child;
-  }, (callback, ms) => { assert.equal(ms, 120000); timerCallback = callback; return undefined; });
+  }, (callback, ms) => { if (ms === 90000) return undefined; assert.equal(ms, 120000); timerCallback = callback; return undefined; });
   await assert.rejects(instance.runLifecycle({ ...f, run: undefined }), /exceeded 120000 ms/);
   assert.equal(killed, 1);
   assert.equal(JSON.parse(fs.readFileSync(f.receipt)).stages.length, 4);
@@ -395,5 +395,39 @@ test('failed update retains its original error when scoped diagnostics are unava
     const report = JSON.parse(fs.readFileSync(file)); assert.equal(report.phase, 'update-failed');
     if (oversized) assert.equal(report.truncated, true); else assert.equal(report.diagnostics.ok, false);
     assert.deepEqual(JSON.parse(fs.readFileSync(f.receipt)).stages, ['installed', 'installed-launch-hooks-window-quit']);
+  }
+});
+
+test('update-only pre-timeout observer persists bounded owned metadata without advancing lifecycle stages', async t => {
+  const f = rig(t), original = f.run;
+  let observations = 0;
+  f.observe = async (receipt, options) => { observations++; assert.equal(receipt.pid, 456); assert.equal(options.env.HOME, path.join(f.root, 'fixture', 'home')); return { ok: true, processes: [{ pid: 456, image: 'installer' }], windows: [{ pid: 456, class: '#32770', visible: true }], truncated: false }; };
+  f.run = async (file, args, env, options) => {
+    if (args.includes('--updated')) {
+      assert.equal(typeof options.observeBeforeTimeout, 'function');
+      await options.observeBeforeTimeout({ pid: 456, started: 1000, elapsedMs: 90000, exe: file });
+      assert.equal(JSON.parse(fs.readFileSync(f.receipt)).stages.length, 2);
+    } else assert.equal(options.observeBeforeTimeout, undefined);
+    return original(file, args, env, options);
+  };
+  assert.equal((await Lifecycle.runLifecycle(f)).stages.length, 7);
+  assert.equal(observations, 1);
+  const report = JSON.parse(fs.readFileSync(path.join(f.root, 'update-before-timeout.json')));
+  assert.equal(report.phase, 'update-before-timeout'); assert.deepEqual(report.processReceipt, { pid: 456, started: 1000, elapsedMs: 90000 });
+  assert.equal(report.observation.windows[0].class, '#32770'); assert.ok(fs.statSync(path.join(f.root, 'update-before-timeout.json')).size <= 32768);
+});
+
+test('pre-timeout observer refusal or oversize is explicit and never replaces original update failure', async t => {
+  for (const oversized of [false, true]) {
+    const f = rig(t), original = f.run, failure = new Error('Original update fixture failure');
+    f.observe = async () => { if (oversized) return { ok: true, data: 'x'.repeat(40000) }; throw new Error('private observer details'); };
+    f.run = async (file, args, env, options) => {
+      if (args.includes('--updated')) { await options.observeBeforeTimeout({ pid: 456, started: 1000, elapsedMs: 90000, exe: file }); throw failure; }
+      return original(file, args, env, options);
+    };
+    await assert.rejects(Lifecycle.runLifecycle(f), error => error === failure);
+    const file = path.join(f.root, 'update-before-timeout.json'), text = fs.readFileSync(file, 'utf8');
+    assert.ok(Buffer.byteLength(text) <= 32768); assert.equal(JSON.parse(text).observation.ok, false); assert.doesNotMatch(text, /private observer details/);
+    assert.equal(JSON.parse(fs.readFileSync(f.receipt)).stages.length, 2);
   }
 });
