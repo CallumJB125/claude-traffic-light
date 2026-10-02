@@ -238,8 +238,6 @@ function createCodexDaemon({ bin, enabled = () => false, socketPath = defaultSoc
     precondition: `Start your Codex session in Terminal with \`${COMMAND.attach}\` (without --no-daemon, --profile, --oss or -c overrides, which run without the shared daemon). Codex desktop-app conversations cannot be reached.`,
     capabilities: Object.freeze({ newTurn: true, steer: true, interrupt: true, ack: 'turn-id', echo: 'client-message-id', stream: true, existingSessions: true, startSessions: false, compact: false }),
     discover, attach, send, interrupt, release, stop,
-    // Test seam only (never wired to IPC): the same allowlisted request path the adapter uses.
-    _request: (method, params) => request(method, params),
     on: (fn) => { events.on('event', fn); return () => events.off('event', fn); },
     alive: () => !!ws && open && enabled() === true,
   };

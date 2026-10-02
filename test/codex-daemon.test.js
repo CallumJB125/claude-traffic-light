@@ -366,8 +366,15 @@ test('reap prunes the discovery handles of a gone window', async () => {
 test('the request path refuses any method outside the allowlist, even from main', async () => {
   const r = await rig();
   try {
+    assert.equal('_request' in r.adapter, false, 'no back door around the public adapter calls');
     await r.hub.discover({ provider: 'codex-daemon' }, ACTOR);
-    for (const m of [...TRANSCRIPT_METHODS, 'config/read', 'thread/start']) await assert.rejects(r.adapter._request(m, { threadId: r.A }), /is not used by Plexiform/);
+    const lists = () => r.fake.calls.filter((c) => c.method === 'thread/loaded/list').length;
+    const before = lists();
+    assert.ok(before >= 1);
+    // Take a method off the allowlist: the public path that uses it must no longer reach the daemon.
+    METHODS.delete('thread/loaded/list');
+    try { await r.hub.discover({ provider: 'codex-daemon' }, ACTOR).catch(() => null); } finally { METHODS.add('thread/loaded/list'); }
+    assert.equal(lists(), before, 'a method off the list is never sent');
     noTranscriptCalls(r.fake);
     assert.equal(r.fake.calls.some((c) => c.method === 'config/read' || c.method === 'thread/start'), false);
   } finally { await r.done(); }
