@@ -52,7 +52,8 @@ function handlers() {
     vm.runInNewContext(line, context);
   }
   const sessionStart = source.indexOf("const sessionsSender =");
-  const sessionEnd = source.indexOf("ipcMain.handle('myday:state'", sessionStart);
+  const sessionEnd = source.indexOf('// Overview uses main-owned', sessionStart);
+  assert.ok(sessionStart >= 0 && sessionEnd > sessionStart, 'extract the complete Sessions handlers before the separate Overview registration');
   vm.runInNewContext(source.slice(sessionStart, sessionEnd), context);
   return { registered, pages, widget, popup, observed, opened, context };
 }

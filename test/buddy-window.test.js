@@ -20,7 +20,8 @@ test('every page has a unique id, a title and a known kind', () => {
     if (p.kind === 'window') assert.ok(p.window, p.id);
   }
   for (const want of ['board', 'myday', 'tasks', 'integrations', 'team', 'usage', 'setups', 'plugins', 'settings']) assert.ok(pageById(want), want);
-  assert.equal(PAGES[0].id, 'board');
+  assert.equal(PAGES[0].id, 'overview');
+  assert.ok(PAGES.some(page => page.id === 'board'));
 });
 
 test('local pages name an app file and its preload, and both exist', () => {
