@@ -1,0 +1,1092 @@
+{
+  "schema": 1,
+  "verified": "2026-10-02",
+  "machine": "macOS build Mac (darwin 25.4.0); installed here: claude 2.1.287, codex-cli 0.159.2 (inside ChatGPT.app), hermes 0.21.3, aider 0.86.2; NOT installed: gemini, cursor-agent/agent, copilot, opencode, ollama, lms, llama-server",
+  "statuses": {
+    "built": "Implemented in Plexiform and covered by tests (fake provider fixtures unless a real run is recorded).",
+    "unverified": "Plexiform has the adapter code path (shared and fake-tested) but it has never been accepted against this provider; it stays unavailable.",
+    "supported-not-built": "A primary provider doc or local --help/schema shows a supported channel; Plexiform does not use it yet.",
+    "provider-only": "The provider offers it only to its own apps/accounts; not available to a third-party app like Plexiform.",
+    "unsupported": "No supported channel found in primary docs or local --help/schema.",
+    "not-applicable": "The concept does not exist for this platform."
+  },
+  "columns": [
+    "discovery",
+    "telemetry",
+    "taskReporting",
+    "receive",
+    "reply",
+    "resume",
+    "steer",
+    "interrupt",
+    "remoteControl"
+  ],
+  "platforms": [
+    {
+      "id": "claude",
+      "label": "Claude Code",
+      "aliases": [
+        "claude-code",
+        "Claude"
+      ],
+      "kind": "agent",
+      "advertised": true,
+      "installedHere": "2.1.287",
+      "hosting": "local CLI; Claude Code on the web / --cloud sessions are Anthropic-hosted",
+      "management": "owned: Plexiform-started `claude -p` stream-json child (built); existing terminal/IDE sessions: observe only",
+      "channel": "Owned: `claude -p --input-format stream-json --output-format stream-json --replay-user-messages` (src/claude-code-session.js). Existing: hooks (hooks/set-status.js) for observation only.",
+      "matrix": {
+        "discovery": {
+          "status": "built",
+          "how": "Hooks (SessionStart/UserPromptSubmit/PreToolUse/Stop/SubagentStart/SubagentStop/SessionEnd) report sessions to Plexiform."
+        },
+        "telemetry": {
+          "status": "built",
+          "how": "Hooks: working, waiting on permission, subagents, cost/limits."
+        },
+        "taskReporting": {
+          "status": "built",
+          "how": "Board/MCP self-report (native-board) and work capture; task text is self-reported, never read from transcripts."
+        },
+        "receive": {
+          "status": "built",
+          "how": "Owned sessions only: our stream-json user line with our uuid; ack = command_lifecycle queued/started for that uuid in our --session-id."
+        },
+        "reply": {
+          "status": "built",
+          "how": "Owned: stream_event text_delta + result in our session id."
+        },
+        "resume": {
+          "status": "supported-not-built",
+          "how": "`claude -p --resume <id>` continues a finished session in a NEW process; it is not inbound control of a live terminal session. The board runner (board/runner/backends/claude.js) uses it for managed runs."
+        },
+        "steer": {
+          "status": "unsupported",
+          "how": "No expected-turn precondition: a message sent mid-turn is queued as the next turn."
+        },
+        "interrupt": {
+          "status": "built",
+          "how": "Owned: stream-json control_request {subtype:'interrupt'} with control_response."
+        },
+        "remoteControl": {
+          "status": "provider-only",
+          "how": "Remote Control (`claude --remote-control`) lets claude.ai/code and the Claude apps drive a local session; Pro/Max/Team/Enterprise login, not an API for other apps."
+        }
+      },
+      "handoff": {
+        "midTurn": false,
+        "betweenTurns": true,
+        "channel": "owned stream-json new turn",
+        "ack": "command_lifecycle for our uuid",
+        "existingSessions": "A Stop hook may return decision:block with a reason that continues the turn (documented); Plexiform does not use it: no delivery ack and it only fires when the turn ends."
+      },
+      "prerequisite": "None for owned sessions (Claude Code installed and signed in with its own login). Existing sessions: none possible.",
+      "tos": "Plexiform runs the user's own CLI with its own login; it never reads, copies or proxies Claude credentials. Remote Control is Anthropic's own surface and is not used.",
+      "reasons": {
+        "owned": "",
+        "notInstalled": "unavailable: claude not installed",
+        "existing": "Claude Code terminal sessions have no supported inbound message channel; only sessions Plexiform starts with claude -p stream-json can be driven."
+      },
+      "evidence": [
+        "https://code.claude.com/docs/en/headless",
+        "https://code.claude.com/docs/en/hooks",
+        "https://code.claude.com/docs/en/remote-control",
+        "local: `claude --help` 2.1.287 (--input-format, --replay-user-messages, --remote-control)",
+        "test: test/owned-adapters.test.js (fake stream-json fixture); real run notes plexiform-codex-claude-notes/session-interaction"
+      ]
+    },
+    {
+      "id": "codex",
+      "label": "Codex",
+      "aliases": [
+        "Codex CLI",
+        "Codex Cloud"
+      ],
+      "kind": "agent",
+      "advertised": true,
+      "installedHere": "codex-cli 0.159.2 (/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex)",
+      "hosting": "local app-server; Codex Cloud tasks are OpenAI-hosted",
+      "management": "owned: Plexiform-spawned `codex app-server` stdio threads (built); existing desktop/IDE threads: observe only",
+      "channel": "Owned: app-server JSON-RPC thread/start, turn/start, turn/steer, turn/interrupt (src/codex-app-server.js). Existing: hooks (adapters/codex.js).",
+      "matrix": {
+        "discovery": {
+          "status": "built",
+          "how": "Codex hooks + lifecycle (adapters/codex.js); app-server thread/list and thread/loaded/list exist but only on the server you connect to."
+        },
+        "telemetry": {
+          "status": "built",
+          "how": "Hooks: activity, waiting, completed turns, subagents (observation only)."
+        },
+        "taskReporting": {
+          "status": "built",
+          "how": "Self-report (src/agent-self-report.js, labelled self-reported) and board capture."
+        },
+        "receive": {
+          "status": "built",
+          "how": "Owned threads only: turn/start returns the server turn id; echo = clientUserMessageId in the turn's input."
+        },
+        "reply": {
+          "status": "built",
+          "how": "item/agentMessage/delta and turn/completed for our thread."
+        },
+        "resume": {
+          "status": "supported-not-built",
+          "how": "thread/resume reopens a stored thread on the server you started; desktop-app threads live on that app's private app-server."
+        },
+        "steer": {
+          "status": "built",
+          "how": "turn/steer with expectedTurnId: Codex itself refuses if it is not the active turn."
+        },
+        "interrupt": {
+          "status": "built",
+          "how": "turn/interrupt."
+        },
+        "remoteControl": {
+          "status": "supported-not-built",
+          "how": "`codex app-server daemon` + control socket and `codex app-server proxy` (local --help); CLI sessions must be started on the daemon by the human. Codex Cloud: `codex cloud exec|status|list|apply|diff` submit/inspect tasks; no follow-up into an existing cloud task."
+        }
+      },
+      "handoff": {
+        "midTurn": true,
+        "betweenTurns": true,
+        "channel": "owned turn/steer (mid-turn, precondition) or turn/start",
+        "ack": "server turn id + clientUserMessageId echo",
+        "existingSessions": "none"
+      },
+      "prerequisite": "None for owned threads (Codex installed and signed in, its login stays in CODEX_HOME). Existing desktop-app threads: a provider-published socket; the private ~/.codex/ipc socket is refused. CLI sessions: the human must opt to run them on the app-server daemon (not built).",
+      "tos": "Uses the user's own Codex install and login via the documented app-server; no ChatGPT/Codex app automation, private sockets or chat scraping.",
+      "reasons": {
+        "owned": "",
+        "notInstalled": "Codex CLI not found",
+        "existing": "Plexiform can message sessions it starts itself. This one was started in Codex, which has no supported way for another app to send to it."
+      },
+      "evidence": [
+        "https://learn.chatgpt.com/docs/app-server",
+        "https://learn.chatgpt.com/docs/hooks",
+        "local: `codex app-server --help` (daemon, proxy, generate-json-schema) and `codex cloud --help` (exec/status/list/apply/diff), codex-cli 0.159.2",
+        "test: test/session-interaction.test.js; real run notes plexiform-codex-claude-notes/session-interaction/real-run-final.log"
+      ]
+    },
+    {
+      "id": "cursor",
+      "label": "Cursor",
+      "aliases": [
+        "Cursor CLI",
+        "cursor-agent",
+        "Cursor Cloud Agents"
+      ],
+      "kind": "agent",
+      "advertised": true,
+      "installedHere": null,
+      "hosting": "Cursor IDE and CLI local; Cloud Agents on Cursor-hosted VMs (or self-hosted pools)",
+      "management": "owned: `agent acp` adapter wired but unavailable (not installed, isolation unverified); existing IDE/CLI chats: observe only",
+      "channel": "Existing: ~/.cursor/hooks.json (adapters/cursor.js). Owned: ACP over stdio via the shared ACP client (src/acp-agents.js).",
+      "matrix": {
+        "discovery": {
+          "status": "built",
+          "how": "Hooks beforeSubmitPrompt/beforeShellExecution/beforeMCPExecution/afterFileEdit/stop carry conversation_id."
+        },
+        "telemetry": {
+          "status": "built",
+          "how": "Same hooks; Plexiform replies allow and never gates."
+        },
+        "taskReporting": {
+          "status": "built",
+          "how": "Board capture/self-report via MCP; no transcript reading (transcript_path is ignored)."
+        },
+        "receive": {
+          "status": "unverified",
+          "how": "Owned: ACP session/prompt; ack = first content session/update for our session. Code path shared with Gemini and tested on a fake ACP agent; never run against Cursor."
+        },
+        "reply": {
+          "status": "unverified",
+          "how": "Owned: ACP agent_message_chunk + session/prompt stopReason."
+        },
+        "resume": {
+          "status": "supported-not-built",
+          "how": "ACP session/load is documented; Cloud Agents API POST /v1/agents/{id}/runs sends a follow-up to an existing cloud agent (needs a Cursor API key)."
+        },
+        "steer": {
+          "status": "unsupported",
+          "how": "ACP has no steer; prompts are sequential."
+        },
+        "interrupt": {
+          "status": "unverified",
+          "how": "Owned: ACP session/cancel. Cloud: POST /v1/agents/{id}/runs/{runId}/cancel."
+        },
+        "remoteControl": {
+          "status": "supported-not-built",
+          "how": "Cloud Agents API (Basic/Bearer API key) for Cursor-hosted agents only; no API into existing IDE chats."
+        }
+      },
+      "handoff": {
+        "midTurn": false,
+        "betweenTurns": true,
+        "channel": "owned ACP session/prompt (when verified)",
+        "ack": "first content session/update for our session",
+        "existingSessions": "A stop hook may return followup_message, which Cursor submits as the next user message (documented); Plexiform does not use it: no delivery ack, between turns only."
+      },
+      "prerequisite": "Human: install Cursor CLI (`agent`) and sign in (`agent login` or CURSOR_API_KEY in its own environment), then verify on that install that an owned ACP session can be held to ask/plan mode with no user MCP (.cursor/mcp.json is loaded in ACP mode) before Plexiform enables it. Cloud Agents: a Cursor API key Plexiform would have to hold; not done (Plexiform never stores provider logins).",
+      "tos": "Uses only documented CLI/ACP/hooks/Cloud Agents API. No IDE automation or chat scraping.",
+      "reasons": {
+        "owned": "unavailable: Cursor CLI is installed but Plexiform has not verified on a real install that it can keep your Cursor MCP servers (.cursor/mcp.json) and agent mode out of an owned ACP session; this stays off until that is checked",
+        "notInstalled": "unavailable: Cursor CLI (agent) not installed",
+        "existing": "Cursor editor and CLI chats have no supported inbound channel for other apps; Cursor's stop hook can only queue a follow-up when a turn ends and Plexiform does not use it."
+      },
+      "evidence": [
+        "https://cursor.com/docs/hooks",
+        "https://cursor.com/docs/cli/acp",
+        "https://cursor.com/docs/cli/headless",
+        "https://cursor.com/docs/cli/reference/output-format",
+        "https://cursor.com/docs/background-agent/api/overview",
+        "test: test/provider-capabilities.test.js (ACP client on fake agent as cursor)"
+      ]
+    },
+    {
+      "id": "gemini",
+      "label": "Gemini CLI",
+      "aliases": [
+        "Gemini"
+      ],
+      "kind": "agent",
+      "advertised": true,
+      "installedHere": null,
+      "hosting": "local CLI",
+      "management": "owned: `gemini --acp` adapter built but unavailable (not installed, isolation unverified); existing sessions: observe only (hooks, best effort)",
+      "channel": "Existing: hooks in ~/.gemini/settings.json (adapters/gemini.js). Owned: ACP (src/gemini-acp.js).",
+      "matrix": {
+        "discovery": {
+          "status": "built",
+          "how": "Hooks SessionStart/SessionEnd/BeforeTool/AfterTool/AfterAgent (best effort; Gemini not installed here)."
+        },
+        "telemetry": {
+          "status": "built",
+          "how": "Same hooks."
+        },
+        "taskReporting": {
+          "status": "built",
+          "how": "Board capture/self-report; no transcript reading."
+        },
+        "receive": {
+          "status": "unverified",
+          "how": "Owned: ACP session/prompt, ack = first content session/update for our session (fake ACP fixture only)."
+        },
+        "reply": {
+          "status": "unverified",
+          "how": "ACP agent_message_chunk."
+        },
+        "resume": {
+          "status": "supported-not-built",
+          "how": "ACP loadSession documented."
+        },
+        "steer": {
+          "status": "unsupported",
+          "how": "ACP has no steer."
+        },
+        "interrupt": {
+          "status": "unverified",
+          "how": "ACP session/cancel (fake fixture)."
+        },
+        "remoteControl": {
+          "status": "unsupported",
+          "how": "No documented remote/inbound API for existing sessions."
+        }
+      },
+      "handoff": {
+        "midTurn": false,
+        "betweenTurns": true,
+        "channel": "owned ACP session/prompt (when verified)",
+        "ack": "first content session/update",
+        "existingSessions": "No hook can inject a prompt (AfterAgent can only retry/halt)."
+      },
+      "prerequisite": "Human: install Gemini CLI and sign in, then verify Plexiform can keep user settings (MCP servers, extensions, hooks, approval mode) out of an owned ACP session.",
+      "tos": "Uses the user's own Gemini CLI and login over its documented ACP mode.",
+      "reasons": {
+        "owned": "unavailable: Gemini CLI is installed but Plexiform cannot yet isolate it from your own Gemini settings (MCP servers, extensions, hooks, approval mode); this stays off until that is verified on a real install",
+        "notInstalled": "unavailable: gemini not installed",
+        "existing": "Gemini CLI sessions started outside Plexiform expose no inbound channel; ACP sessions exist only on the agent process that created them."
+      },
+      "evidence": [
+        "https://geminicli.com/docs/cli/acp-mode/",
+        "https://geminicli.com/docs/hooks/",
+        "https://agentclientprotocol.com/protocol/prompt-turn",
+        "test: test/owned-adapters.test.js (fake ACP fixture)"
+      ]
+    },
+    {
+      "id": "hermes",
+      "label": "Hermes Agent",
+      "aliases": [
+        "Hermes"
+      ],
+      "kind": "agent",
+      "advertised": true,
+      "installedHere": "0.21.3 (git install, ~/.hermes/hermes-agent)",
+      "hosting": "local agent; model per the user's Hermes config (here a tailnet vLLM)",
+      "management": "owned: `hermes acp` reachable through the shared ACP client but kept unavailable (tools cannot be turned off); existing sessions: observe only if the user's Hermes posts to Plexiform's local signal endpoint",
+      "channel": "Owned: ACP over stdio (`hermes acp`). Existing: none (Hermes gateway/peer/kanban are Hermes's own messaging surfaces).",
+      "matrix": {
+        "discovery": {
+          "status": "built",
+          "how": "Only via Plexiform's local /signal endpoint or emit.js with source hermes (board presence/work-capture accept 'hermes'); Plexiform installs no Hermes hooks."
+        },
+        "telemetry": {
+          "status": "supported-not-built",
+          "how": "Hermes has shell-script hooks (`hermes hooks`); Plexiform does not install them."
+        },
+        "taskReporting": {
+          "status": "built",
+          "how": "Self-reported via the signal endpoint / board MCP only."
+        },
+        "receive": {
+          "status": "unverified",
+          "how": "Owned ACP initialize + session/new succeeded on the real install; the one real prompt was not acknowledged within 120 s (see realRuns.hermes). Not offered: see reasons.owned."
+        },
+        "reply": {
+          "status": "unverified",
+          "how": "ACP agent_message_chunk; no reply observed in the one real call."
+        },
+        "resume": {
+          "status": "supported-not-built",
+          "how": "Hermes ACP implements load_session/resume_session/list_sessions (acp_adapter/server.py)."
+        },
+        "steer": {
+          "status": "unverified",
+          "how": "A prompt while a turn runs is queued for the next turn; a prompt starting `/steer` is injected into the running turn (acp_adapter/server.py). No ack tied to our message; not used."
+        },
+        "interrupt": {
+          "status": "unverified",
+          "how": "ACP session/cancel."
+        },
+        "remoteControl": {
+          "status": "unsupported",
+          "how": "Hermes gateway/peer are Hermes-to-platform bridges, not an API into a running session for other apps."
+        }
+      },
+      "handoff": {
+        "midTurn": false,
+        "betweenTurns": true,
+        "channel": "owned ACP session/prompt (not offered)",
+        "ack": "first content session/update",
+        "existingSessions": "none"
+      },
+      "prerequisite": "Hermes would need an ACP option to restrict the session toolset (today ACP sessions always get the hermes-acp toolset: terminal, process, file write/patch, execute_code, delegate_task, web/browser, memory, skills) or Plexiform would need an isolated Hermes profile with those tools disabled, verified by a human.",
+      "tos": "User's own local agent and config; no credentials read. Hermes stores ACP sessions in its own state DB.",
+      "reasons": {
+        "owned": "unavailable: Hermes ACP sessions always run Hermes's own tools (terminal, file writes, code execution, web, delegate) with your Hermes config and memory, and ACP gives Plexiform no way to switch them off, so Plexiform does not start one",
+        "notInstalled": "unavailable: hermes not installed",
+        "existing": "Hermes sessions started outside Plexiform have no supported inbound channel for other apps."
+      },
+      "evidence": [
+        "local: ~/.hermes/hermes-agent/website/docs/user-guide/features/acp.md (v0.21.3)",
+        "local: `hermes acp --check` -> 'Hermes ACP check OK'; `hermes --help`",
+        "local: ~/.hermes/hermes-agent/acp_adapter/session.py (_expand_acp_enabled_toolsets: always hermes-acp)",
+        "real: see realRuns.hermes"
+      ]
+    },
+    {
+      "id": "opencode",
+      "label": "OpenCode",
+      "aliases": [],
+      "kind": "agent",
+      "advertised": true,
+      "installedHere": null,
+      "hosting": "local CLI/server",
+      "management": "owned: `opencode acp` adapter wired but unavailable (not installed); existing TUI sessions: not connected",
+      "channel": "Owned: ACP (`opencode acp`). Also documented: `opencode serve` HTTP API (POST /session, /session/:id/message with client messageID, /session/:id/abort, GET /event SSE).",
+      "matrix": {
+        "discovery": {
+          "status": "supported-not-built",
+          "how": "GET /session on an `opencode serve` server; the TUI runs a server on a random port."
+        },
+        "telemetry": {
+          "status": "supported-not-built",
+          "how": "GET /event SSE (session.status, message.updated, message.part.updated); plugins."
+        },
+        "taskReporting": {
+          "status": "built",
+          "how": "Only via Plexiform's signal endpoint / board MCP self-report."
+        },
+        "receive": {
+          "status": "unverified",
+          "how": "Owned ACP session/prompt (shared ACP client, fake fixture only). HTTP alternative carries a client messageID (stronger ack); not built."
+        },
+        "reply": {
+          "status": "unverified",
+          "how": "ACP agent_message_chunk."
+        },
+        "resume": {
+          "status": "supported-not-built",
+          "how": "`opencode run --session <id>` / server session APIs."
+        },
+        "steer": {
+          "status": "unsupported",
+          "how": "No documented steer."
+        },
+        "interrupt": {
+          "status": "unverified",
+          "how": "ACP session/cancel; HTTP POST /session/:id/abort."
+        },
+        "remoteControl": {
+          "status": "supported-not-built",
+          "how": "Documented server can drive a running TUI (/tui endpoint); requires the human to expose and share its port/password. Not built."
+        }
+      },
+      "handoff": {
+        "midTurn": false,
+        "betweenTurns": true,
+        "channel": "owned ACP session/prompt (when verified)",
+        "ack": "first content session/update",
+        "existingSessions": "Possible via a user-started `opencode serve` (not built)."
+      },
+      "prerequisite": "Human: install OpenCode, configure its provider login, then verify an owned session can run with `permission: deny` for all tools before Plexiform enables it.",
+      "tos": "Open-source CLI; user's own provider keys stay in OpenCode.",
+      "reasons": {
+        "owned": "unavailable: OpenCode is installed but Plexiform has not verified on a real install that an owned ACP session runs with every tool denied; this stays off until that is checked",
+        "notInstalled": "unavailable: opencode not installed",
+        "existing": "OpenCode sessions started outside Plexiform are not connected; OpenCode's own server API would need you to share that server with Plexiform, which is not built."
+      },
+      "evidence": [
+        "https://opencode.ai/docs/cli/",
+        "https://opencode.ai/docs/server/",
+        "https://opencode.ai/docs/sdk/",
+        "https://opencode.ai/docs/permissions/"
+      ]
+    },
+    {
+      "id": "copilot",
+      "label": "Copilot CLI",
+      "aliases": [
+        "Copilot",
+        "GitHub Copilot"
+      ],
+      "kind": "agent",
+      "advertised": true,
+      "installedHere": null,
+      "hosting": "local CLI; model calls go to GitHub Copilot (or BYOK provider)",
+      "management": "owned: `copilot --acp --stdio` adapter wired but unavailable (not installed, public preview); existing sessions: not connected",
+      "channel": "Owned: ACP server (public preview).",
+      "matrix": {
+        "discovery": {
+          "status": "unsupported",
+          "how": "No documented session listing for other apps; Plexiform installs no Copilot hooks."
+        },
+        "telemetry": {
+          "status": "supported-not-built",
+          "how": "Copilot CLI hooks run shell commands at session points; not installed by Plexiform."
+        },
+        "taskReporting": {
+          "status": "built",
+          "how": "Only via Plexiform's signal endpoint / board MCP self-report."
+        },
+        "receive": {
+          "status": "unverified",
+          "how": "Owned ACP session/prompt (fake fixture only)."
+        },
+        "reply": {
+          "status": "unverified",
+          "how": "ACP agent_message_chunk."
+        },
+        "resume": {
+          "status": "unsupported",
+          "how": "/resume is not handled over ACP (docs)."
+        },
+        "steer": {
+          "status": "unsupported",
+          "how": "ACP has no steer."
+        },
+        "interrupt": {
+          "status": "unverified",
+          "how": "ACP session/cancel."
+        },
+        "remoteControl": {
+          "status": "unsupported",
+          "how": "ACP TCP mode (--port) serves new sessions only."
+        }
+      },
+      "handoff": {
+        "midTurn": false,
+        "betweenTurns": true,
+        "channel": "owned ACP session/prompt (when verified)",
+        "ack": "first content session/update",
+        "existingSessions": "none"
+      },
+      "prerequisite": "Human: install Copilot CLI and sign in to GitHub (or configure BYOK), then verify `--available-tools`/`--excluded-tools` keep an owned ACP session tool-free before Plexiform enables it.",
+      "tos": "Public preview; user's own GitHub Copilot entitlement.",
+      "reasons": {
+        "owned": "unavailable: Copilot CLI is installed but its ACP server is a public preview and Plexiform has not verified on a real install that an owned session runs with no tools; this stays off until that is checked",
+        "notInstalled": "unavailable: copilot not installed",
+        "existing": "Copilot CLI sessions started outside Plexiform have no supported inbound channel for other apps."
+      },
+      "evidence": [
+        "https://docs.github.com/en/copilot/reference/copilot-cli-reference/acp-server",
+        "https://docs.github.com/en/copilot/how-tos/use-copilot-agents/use-copilot-cli",
+        "https://github.blog/changelog/2026-01-28-acp-support-in-copilot-cli-is-now-in-public-preview/"
+      ]
+    },
+    {
+      "id": "ollama",
+      "label": "Ollama",
+      "aliases": [],
+      "kind": "local-model",
+      "advertised": true,
+      "installedHere": null,
+      "hosting": "local HTTP (127.0.0.1:11434) or LAN/tailnet",
+      "management": "owned: Plexiform-held conversation over the stateless native API (built)",
+      "channel": "POST /api/chat NDJSON stream; GET /api/tags discovery (src/local-models.js).",
+      "matrix": {
+        "discovery": {
+          "status": "built",
+          "how": "Read-only GET /api/tags on fixed loopback port 11434, plus configured endpoints."
+        },
+        "telemetry": {
+          "status": "not-applicable",
+          "how": "Stateless server; Plexiform owns the conversation."
+        },
+        "taskReporting": {
+          "status": "not-applicable",
+          "how": "Plexiform owns the conversation."
+        },
+        "receive": {
+          "status": "built",
+          "how": "HTTP 200 stream for our request = ack (ack: http-stream)."
+        },
+        "reply": {
+          "status": "built",
+          "how": "message.content chunks until done:true."
+        },
+        "resume": {
+          "status": "built",
+          "how": "Plexiform replays bounded history each turn (API is stateless)."
+        },
+        "steer": {
+          "status": "unsupported",
+          "how": "One request per turn."
+        },
+        "interrupt": {
+          "status": "built",
+          "how": "Abort the HTTP request."
+        },
+        "remoteControl": {
+          "status": "not-applicable",
+          "how": "Network policy: loopback/RFC1918/tailnet only unless allowPublic."
+        }
+      },
+      "handoff": {
+        "midTurn": false,
+        "betweenTurns": true,
+        "channel": "next HTTP turn",
+        "ack": "HTTP 200 stream",
+        "existingSessions": "not-applicable (no server-side sessions)"
+      },
+      "prerequisite": "Human: install Ollama and pull a model. Not installed on this Mac (port 11434 closed).",
+      "tos": "Local software; no account.",
+      "reasons": {
+        "owned": "",
+        "notInstalled": "Not reachable",
+        "existing": "Ollama has no server-side conversations; Plexiform can only hold its own."
+      },
+      "evidence": [
+        "https://docs.ollama.com/api/chat",
+        "test: test/local-models.test.js (fake Ollama NDJSON)"
+      ]
+    },
+    {
+      "id": "lmstudio",
+      "label": "LM Studio",
+      "aliases": [],
+      "kind": "local-model",
+      "advertised": true,
+      "installedHere": null,
+      "hosting": "local HTTP (127.0.0.1:1234)",
+      "management": "owned: Plexiform-held conversation over OpenAI-compatible API (built)",
+      "channel": "GET /v1/models, POST /v1/chat/completions stream (src/local-models.js).",
+      "matrix": {
+        "discovery": {
+          "status": "built",
+          "how": "Read-only GET /v1/models on loopback port 1234."
+        },
+        "telemetry": {
+          "status": "not-applicable",
+          "how": "Stateless."
+        },
+        "taskReporting": {
+          "status": "not-applicable",
+          "how": "Plexiform owns the conversation."
+        },
+        "receive": {
+          "status": "built",
+          "how": "HTTP 200 SSE stream for our request."
+        },
+        "reply": {
+          "status": "built",
+          "how": "choices[0].delta.content until [DONE]."
+        },
+        "resume": {
+          "status": "built",
+          "how": "Bounded history replay."
+        },
+        "steer": {
+          "status": "unsupported",
+          "how": "One request per turn."
+        },
+        "interrupt": {
+          "status": "built",
+          "how": "Abort the HTTP request."
+        },
+        "remoteControl": {
+          "status": "not-applicable",
+          "how": "Same network policy as Ollama."
+        }
+      },
+      "handoff": {
+        "midTurn": false,
+        "betweenTurns": true,
+        "channel": "next HTTP turn",
+        "ack": "HTTP 200 stream",
+        "existingSessions": "not-applicable"
+      },
+      "prerequisite": "Human: install LM Studio, load a model, start its server. Not installed on this Mac (port 1234 closed).",
+      "tos": "Local software.",
+      "reasons": {
+        "owned": "",
+        "notInstalled": "Not reachable",
+        "existing": "LM Studio's server has no conversations to join; Plexiform can only hold its own."
+      },
+      "evidence": [
+        "https://lmstudio.ai/docs/developer/openai-compat",
+        "test: test/local-models.test.js (fake OpenAI SSE)"
+      ]
+    },
+    {
+      "id": "openai-compatible",
+      "label": "OpenAI-compatible local server",
+      "aliases": [
+        "local",
+        "Local model",
+        "Local AI",
+        "local-8000",
+        "local-8888",
+        "llama.cpp",
+        "vLLM",
+        "litellm",
+        "OpenAI-compatible",
+        "OpenAI-compatible :8000",
+        "OpenAI-compatible :8888"
+      ],
+      "kind": "local-model",
+      "advertised": true,
+      "installedHere": "none on this Mac; tailnet vLLM at 100.68.66.98:8888 (GLM-5.3-Flash-EXL3) reachable",
+      "hosting": "local, LAN or tailnet HTTP (vLLM, llama.cpp llama-server, litellm proxy, others)",
+      "management": "owned: Plexiform-held conversation (built)",
+      "channel": "GET /v1/models, POST /v1/chat/completions stream; discovery on loopback 8000/8888 or local-models.json endpoints.",
+      "matrix": {
+        "discovery": {
+          "status": "built",
+          "how": "Read-only loopback probes on 8000/8888; tailnet/LAN only when configured in local-models.json."
+        },
+        "telemetry": {
+          "status": "not-applicable",
+          "how": "Stateless."
+        },
+        "taskReporting": {
+          "status": "not-applicable",
+          "how": "Plexiform owns the conversation."
+        },
+        "receive": {
+          "status": "built",
+          "how": "HTTP 200 SSE stream for our request (real run: see realRuns.localModels)."
+        },
+        "reply": {
+          "status": "built",
+          "how": "SSE deltas, or one JSON completion when the server ignores stream."
+        },
+        "resume": {
+          "status": "built",
+          "how": "Bounded history replay."
+        },
+        "steer": {
+          "status": "unsupported",
+          "how": "One request per turn."
+        },
+        "interrupt": {
+          "status": "built",
+          "how": "Abort the HTTP request."
+        },
+        "remoteControl": {
+          "status": "not-applicable",
+          "how": "Public hosts refused unless allowPublic is set per endpoint."
+        }
+      },
+      "handoff": {
+        "midTurn": false,
+        "betweenTurns": true,
+        "channel": "next HTTP turn",
+        "ack": "HTTP 200 stream",
+        "existingSessions": "not-applicable"
+      },
+      "prerequisite": "Human: run a server, or add a tailnet/LAN endpoint to local-models.json (an API key only by env var name). The DGX litellm proxy (:4000) answered HTTP 500 on /v1/models on 2026-10-02.",
+      "tos": "User-operated servers; keys never stored by Plexiform.",
+      "reasons": {
+        "owned": "",
+        "notInstalled": "Not reachable",
+        "existing": "OpenAI-compatible servers have no conversations to join; Plexiform can only hold its own."
+      },
+      "evidence": [
+        "https://docs.vllm.ai/en/stable/serving/openai_compatible_server.html",
+        "https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md",
+        "https://docs.litellm.ai/docs/simple_proxy",
+        "real: see realRuns.localModels"
+      ]
+    },
+    {
+      "id": "claude-apps",
+      "label": "Claude apps (remote MCP connector)",
+      "aliases": [
+        "Claude Desktop",
+        "Claude web",
+        "claude.ai"
+      ],
+      "kind": "chat-app",
+      "advertised": true,
+      "installedHere": "Claude.app present",
+      "hosting": "Anthropic-hosted; connector calls come from Anthropic infrastructure to the user's Plexiform hub",
+      "management": "neither: the Claude app is a client of Plexiform's remote MCP board tools (docs/remote-mcp.md); Plexiform cannot start or message a Claude chat",
+      "channel": "Outgoing only: Streamable HTTP MCP at https://<hub>/api/mcp with OAuth+PKCE grant (read: list/read boards, cards, messages, work context; collaboration: create card, change task text, comment, write packet, send task message).",
+      "matrix": {
+        "discovery": {
+          "status": "unsupported",
+          "how": "Plexiform sees only the MCP grant and the tool calls it makes, not chats."
+        },
+        "telemetry": {
+          "status": "unsupported",
+          "how": "No lifecycle events from Claude apps."
+        },
+        "taskReporting": {
+          "status": "built",
+          "how": "Remote MCP collaboration tools (explicit, grant-scoped, per board)."
+        },
+        "receive": {
+          "status": "provider-only",
+          "how": "Only the human can prompt the chat; it can pull task messages with the list-messages tool when asked."
+        },
+        "reply": {
+          "status": "built",
+          "how": "Pull model: the chat's tool calls (comment/send task message) are its reply; correlation is by card/message reference."
+        },
+        "resume": {
+          "status": "provider-only",
+          "how": "Claude apps' own conversation history."
+        },
+        "steer": {
+          "status": "unsupported",
+          "how": "-"
+        },
+        "interrupt": {
+          "status": "unsupported",
+          "how": "-"
+        },
+        "remoteControl": {
+          "status": "provider-only",
+          "how": "Claude's own apps and Remote Control for Claude Code."
+        }
+      },
+      "handoff": {
+        "midTurn": false,
+        "betweenTurns": false,
+        "channel": "pull only: the chat reads task messages/handovers when its human asks",
+        "ack": "tool call receipt (request_id), not chat delivery",
+        "existingSessions": "none"
+      },
+      "prerequisite": "A deployed HTTPS hub with accounts, a custom connector added by the user (or org owner on Team/Enterprise) and a personal board grant; cloud connector acceptance is a separate human gate (docs/remote-mcp.md).",
+      "tos": "Uses Anthropic's documented custom-connector path with the user's own consent; no chat scraping.",
+      "reasons": {
+        "owned": "unavailable: Claude web and desktop chats cannot be started or messaged by another app; they can only call Plexiform's board tools through a connector you add",
+        "notInstalled": "unavailable: Claude web and desktop chats cannot be started or messaged by another app; they can only call Plexiform's board tools through a connector you add",
+        "existing": "Claude web and desktop chats have no inbound channel for other apps; they can read task messages through the Plexiform connector when you ask them to."
+      },
+      "evidence": [
+        "docs/remote-mcp.md",
+        "https://support.claude.com/en/articles/11725091-when-to-use-desktop-and-web-connectors",
+        "https://code.claude.com/docs/en/remote-control"
+      ]
+    },
+    {
+      "id": "chatgpt",
+      "label": "ChatGPT",
+      "aliases": [
+        "ChatGPT desktop"
+      ],
+      "kind": "chat-app",
+      "advertised": true,
+      "installedHere": "ChatGPT.app present",
+      "hosting": "OpenAI-hosted chat app",
+      "management": "neither: README lets a user's own Shortcut/script POST activity to Plexiform's local endpoint",
+      "channel": "Inbound to Plexiform only: POST 127.0.0.1:47172/signal with the per-install token.",
+      "matrix": {
+        "discovery": {
+          "status": "unsupported",
+          "how": "No documented API exposes ChatGPT app conversations to other apps."
+        },
+        "telemetry": {
+          "status": "built",
+          "how": "Only what the user's own script posts to /signal."
+        },
+        "taskReporting": {
+          "status": "built",
+          "how": "Same, self-reported."
+        },
+        "receive": {
+          "status": "unsupported",
+          "how": "No documented inbound API into ChatGPT conversations; app automation is refused by policy."
+        },
+        "reply": {
+          "status": "unsupported",
+          "how": "-"
+        },
+        "resume": {
+          "status": "unsupported",
+          "how": "-"
+        },
+        "steer": {
+          "status": "unsupported",
+          "how": "-"
+        },
+        "interrupt": {
+          "status": "unsupported",
+          "how": "-"
+        },
+        "remoteControl": {
+          "status": "provider-only",
+          "how": "ChatGPT's own apps."
+        }
+      },
+      "handoff": {
+        "midTurn": false,
+        "betweenTurns": false,
+        "channel": "none (human copy/paste only)",
+        "ack": "none",
+        "existingSessions": "none"
+      },
+      "prerequisite": "A provider-published API for ChatGPT conversations. Codex inside ChatGPT.app is covered by the codex entry.",
+      "tos": "No scraping or UI automation of ChatGPT.",
+      "reasons": {
+        "owned": "unavailable: ChatGPT has no supported way for another app to start or message a conversation",
+        "notInstalled": "unavailable: ChatGPT has no supported way for another app to start or message a conversation",
+        "existing": "ChatGPT conversations have no supported inbound channel for other apps."
+      },
+      "evidence": [
+        "README.md (local signal endpoint)",
+        "https://learn.chatgpt.com/docs/app-server (Codex only; no ChatGPT chat API)"
+      ]
+    },
+    {
+      "id": "windsurf",
+      "label": "Windsurf",
+      "aliases": [
+        "Devin Desktop",
+        "Cascade"
+      ],
+      "kind": "host-app",
+      "advertised": true,
+      "installedHere": null,
+      "hosting": "local IDE",
+      "management": "neither: Plexiform only recognises it as the app hosting a terminal (hostapp.js, set-status.js)",
+      "channel": "None for AI. Cascade hooks exist (pre_user_prompt, post_cascade_response, ...) but Plexiform installs none.",
+      "matrix": {
+        "discovery": {
+          "status": "supported-not-built",
+          "how": "Cascade hooks could report activity; not installed by Plexiform."
+        },
+        "telemetry": {
+          "status": "supported-not-built",
+          "how": "Same."
+        },
+        "taskReporting": {
+          "status": "built",
+          "how": "Only via Plexiform's signal endpoint."
+        },
+        "receive": {
+          "status": "unsupported",
+          "how": "Docs: hooks can block (exit 2) but cannot inject messages; no API/CLI into Cascade conversations."
+        },
+        "reply": {
+          "status": "unsupported",
+          "how": "-"
+        },
+        "resume": {
+          "status": "unsupported",
+          "how": "-"
+        },
+        "steer": {
+          "status": "unsupported",
+          "how": "-"
+        },
+        "interrupt": {
+          "status": "unsupported",
+          "how": "-"
+        },
+        "remoteControl": {
+          "status": "unsupported",
+          "how": "-"
+        }
+      },
+      "handoff": {
+        "midTurn": false,
+        "betweenTurns": false,
+        "channel": "none",
+        "ack": "none",
+        "existingSessions": "none"
+      },
+      "prerequisite": "A Windsurf-published inbound API. Activity hooks would need a new adapter (not built).",
+      "tos": "No IDE automation.",
+      "reasons": {
+        "owned": "unavailable: Windsurf has no supported way for another app to start or message a Cascade conversation",
+        "notInstalled": "unavailable: Windsurf has no supported way for another app to start or message a Cascade conversation",
+        "existing": "Windsurf Cascade conversations have no supported inbound channel for other apps."
+      },
+      "evidence": [
+        "https://docs.devin.ai/desktop/cascade/hooks"
+      ]
+    },
+    {
+      "id": "aider",
+      "label": "Aider",
+      "aliases": [],
+      "kind": "agent",
+      "advertised": false,
+      "installedHere": "0.86.2",
+      "hosting": "local CLI",
+      "management": "neither",
+      "channel": "None suitable: `aider --message` runs one message and exits (plain text); the Python API is explicitly unsupported.",
+      "matrix": {
+        "discovery": {
+          "status": "built",
+          "how": "Only via Plexiform's signal endpoint (`emit.js --source aider`)."
+        },
+        "telemetry": {
+          "status": "built",
+          "how": "Same, self-posted."
+        },
+        "taskReporting": {
+          "status": "built",
+          "how": "Same."
+        },
+        "receive": {
+          "status": "unsupported",
+          "how": "No streaming/structured or server channel; --message gives no ack and no session id."
+        },
+        "reply": {
+          "status": "unsupported",
+          "how": "-"
+        },
+        "resume": {
+          "status": "unsupported",
+          "how": "-"
+        },
+        "steer": {
+          "status": "unsupported",
+          "how": "-"
+        },
+        "interrupt": {
+          "status": "unsupported",
+          "how": "-"
+        },
+        "remoteControl": {
+          "status": "unsupported",
+          "how": "-"
+        }
+      },
+      "handoff": {
+        "midTurn": false,
+        "betweenTurns": false,
+        "channel": "none",
+        "ack": "none",
+        "existingSessions": "none"
+      },
+      "prerequisite": "A documented structured (JSON/ACP) channel from Aider.",
+      "tos": "-",
+      "reasons": {
+        "owned": "unavailable: Aider has no supported structured channel (only one-shot --message text and an unsupported Python API)",
+        "notInstalled": "unavailable: Aider has no supported structured channel (only one-shot --message text and an unsupported Python API)",
+        "existing": "Aider sessions have no supported inbound channel for other apps."
+      },
+      "evidence": [
+        "https://aider.chat/docs/scripting.html",
+        "local: aider 0.86.2"
+      ]
+    },
+    {
+      "id": "custom",
+      "label": "Custom agent (local signal endpoint)",
+      "aliases": [
+        "Custom"
+      ],
+      "kind": "agent",
+      "advertised": true,
+      "installedHere": null,
+      "hosting": "whatever program the user wires up, on this computer",
+      "management": "neither: a user's own script, Shortcut or other agent posts activity to Plexiform",
+      "channel": "Inbound to Plexiform only: POST 127.0.0.1:47172/signal with the per-install token, or `node hooks/emit.js <signal> --source <name>` (README).",
+      "matrix": {
+        "discovery": {
+          "status": "built",
+          "how": "Sessions appear when the program posts signals with a session id."
+        },
+        "telemetry": {
+          "status": "built",
+          "how": "Signals: prompt-submit, tool-use, tool-done, tool-failed, stop, permission-ask, limit-hit, idle-nudge, session-start/end, subagent-start/done."
+        },
+        "taskReporting": {
+          "status": "built",
+          "how": "Self-reported only (board MCP / signals)."
+        },
+        "receive": {
+          "status": "unsupported",
+          "how": "The endpoint is one-way; Plexiform has no channel back into an arbitrary program."
+        },
+        "reply": {
+          "status": "unsupported",
+          "how": "-"
+        },
+        "resume": {
+          "status": "unsupported",
+          "how": "-"
+        },
+        "steer": {
+          "status": "unsupported",
+          "how": "-"
+        },
+        "interrupt": {
+          "status": "unsupported",
+          "how": "-"
+        },
+        "remoteControl": {
+          "status": "unsupported",
+          "how": "-"
+        }
+      },
+      "handoff": {
+        "midTurn": false,
+        "betweenTurns": false,
+        "channel": "none",
+        "ack": "none",
+        "existingSessions": "none"
+      },
+      "prerequisite": "An adapter for that specific program's documented control channel (add a row here first).",
+      "tos": "User-owned programs.",
+      "reasons": {
+        "owned": "unavailable: Plexiform cannot start a custom agent; it only receives the activity that agent posts",
+        "notInstalled": "unavailable: Plexiform cannot start a custom agent; it only receives the activity that agent posts",
+        "existing": "This session only reports activity to Plexiform; the program that posts it has no channel for Plexiform to send back."
+      },
+      "evidence": [
+        "README.md (local signal endpoint, emit.js)"
+      ]
+    }
+  ],
+  "realRuns": {
+    "hermes": "2026-10-02, one call, hermes 0.21.3 via src/gemini-acp.js (provider hermes, args ['acp'], verified forced on in a scratch script only) through createInteractionHub in an empty temp cwd: initialize (protocolVersion 1) and session/new OK -> session launched; session/prompt 'Reply with exactly the word PONG' got no content session/update and no prompt response within 120 s -> hub status 'unavailable', delivery 'refused', adapter sent session/cancel, child reaped (no process left). Hermes's configured model is the shared tailnet vLLM, which was saturated at the time (vllm:num_requests_running 4, waiting 1 for capacity). Not retried (one-call budget).",
+    "localModels": "2026-10-02, one call, src/local-models.js against configured endpoint http://100.68.66.98:8888 (tailnet vLLM, GLM-5.3-Flash-EXL3): discovery listed the model (reachable); loopback discovery found nothing on this Mac (11434/1234/8000/8888 closed; :4000 is a non-model 'amass' listener). send -> 'acknowledged' in 23 ms (HTTP 200 stream) but no bytes for 60 s -> turn 'failed: The model stopped responding' (idleMs 60 s). Same saturated backend (4 running, 1 waiting). Send/ack path proven real; a streamed reply on a real endpoint is still unproven."
+  }
+}

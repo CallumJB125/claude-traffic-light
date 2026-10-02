@@ -29,15 +29,17 @@ const boardKey = (id) => (typeof id === 'string' && id ? `board:${crypto.createH
 
 // Only one Overview document is current. When it is replaced (reload, crash)
 // the old actor's sessions are reaped and `documents` holds one entry.
-// Provider registration point: Plexiform-owned Claude Code (stream-json) and
-// Gemini CLI (ACP) sessions join the adapters main.js passes in. A missing CLI
-// stays listed with available:false and its reason.
+// Provider registration point: Plexiform-owned Claude Code (stream-json),
+// Gemini CLI and the other ACP agents join the adapters main.js passes in. A
+// missing or unverified CLI stays listed with available:false and its reason.
 function ownedAdapters({ env = process.env } = {}) {
-  const Claude = require('./claude-code-session'), Gemini = require('./gemini-acp');
+  const Claude = require('./claude-code-session'), Gemini = require('./gemini-acp'), Acp = require('./acp-agents');
   const claudeBin = Claude.findClaudeBin({ env });
   return {
     claude: Object.assign(Claude.createClaudeCodeSession({ bin: claudeBin, env }), claudeBin ? {} : { available: false, reason: 'unavailable: claude not installed' }),
     gemini: Gemini.createGeminiAcp({ bin: Gemini.findGeminiBin({ env }), env }),
+    // Other documented ACP agents: listed with their exact unavailable reason (src/provider-capabilities.json).
+    ...Object.fromEntries(Object.keys(Acp.ACP_AGENTS).map((id) => [id, Acp.createAcpAgent(id, { env })])),
   };
 }
 

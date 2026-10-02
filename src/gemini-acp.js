@@ -32,7 +32,10 @@ function findGeminiBin({ env = process.env, exists = (p) => { try { fs.accessSyn
   return candidates.find(exists) ?? null;
 }
 
-function createGeminiAcp({ bin, args = ACP_ARGS, env = process.env, spawn = childProcess.spawn, requestMs = REQUEST_MS, verified = false } = {}) {
+// The same ACP client serves other agents that speak ACP over stdio (see
+// src/acp-agents.js); each passes its own provider id, label and reasons.
+function createGeminiAcp({ bin, args = ACP_ARGS, env = process.env, spawn = childProcess.spawn, requestMs = REQUEST_MS, verified = false,
+  provider = 'gemini', label = 'Gemini CLI', notInstalled = NOT_INSTALLED, notVerified = NOT_VERIFIED, existingSessionsReason = EXISTING_SESSIONS_REASON } = {}) {
   const events = new EventEmitter();
   const pending = new Map();
   const sessions = new Map(); // target (ACP sessionId) -> {active, ack}
@@ -95,7 +98,7 @@ function createGeminiAcp({ bin, args = ACP_ARGS, env = process.env, spawn = chil
 
   function start() {
     if (ready && !exited) return ready;
-    if (!bin) return Promise.reject(new Error('Gemini CLI not found'));
+    if (!bin) return Promise.reject(new Error(`${label} not found`));
     exited = false;
     const childEnv = Object.fromEntries(ENV_KEYS.filter((k) => env[k]).map((k) => [k, env[k]]));
     child = spawn(bin, [...args], { env: childEnv, stdio: ['pipe', 'pipe', 'pipe'], detached: true }); // privacy-flow: owned-gemini-session
@@ -183,10 +186,10 @@ function createGeminiAcp({ bin, args = ACP_ARGS, env = process.env, spawn = chil
   }
 
   return {
-    provider: 'gemini', label: 'Gemini CLI',
-    ...(bin && verified ? {} : { available: false, reason: bin ? NOT_VERIFIED : NOT_INSTALLED }),
+    provider, label,
+    ...(bin && verified ? {} : { available: false, reason: bin ? notVerified : notInstalled }),
     capabilities: Object.freeze({ newTurn: true, steer: false, interrupt: true, ack: 'first-session-update', echo: false, stream: true,
-      existingSessions: false, existingSessionsReason: EXISTING_SESSIONS_REASON, steerReason: 'ACP v1 has no steer; one prompt per session at a time.' }),
+      existingSessions: false, existingSessionsReason, steerReason: 'ACP v1 has no steer; one prompt per session at a time.' }),
     open, send, interrupt, release, stop,
     on: (fn) => { events.on('event', fn); return () => events.off('event', fn); },
     alive: () => !!child && !exited,
