@@ -38,7 +38,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ github.ref }}${{ inputs.native_only && '-native' || '' }}
   cancel-in-progress: false
 
 jobs:
