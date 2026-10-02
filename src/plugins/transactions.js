@@ -159,7 +159,8 @@ function createPluginTransactions(options = {}) {
     async recover(id) {
       let state;
       try {
-        const capture = observe(), token = generation; prune(); if (!J.uuidValid(id) || recoveries.size >= MAX_HANDLES) fail();
+        if (!J.uuidValid(id)) fail();
+        const capture = observe(), token = generation; prune(); if (recoveries.size >= MAX_HANDLES) fail();
         const guard = () => live(capture, token), recoveryHash = hash({ id, profile_hash: hash(capture.profile_root), kind: 'plugin-recovery' });
         await ask('plugin-recovery', recoveryHash, { transaction_id: id, action: 'Inspect encrypted local recovery metadata and current owned targets.' }, guard);
         const end = cutoff(); return await serial(capture.profile_root, guard, end, async () => {
