@@ -111,7 +111,7 @@ static BOOL clean_root(const WCHAR *path,const PFDirectoryIdentity *identity) {
 static void publication_faults(void) {
     DWORD mode;
     for(mode=1;mode<=4;mode++) {
-        WCHAR rootPath[MAX_PATH],fixedPath[MAX_PATH]; PFDirectory root; PFDirectoryIdentity identity;
+        WCHAR rootPath[MAX_PATH],fixedPath[MAX_PATH]; PFDirectory root; PFDirectoryIdentity identity={0};
         PFOAuthority *authority=NULL; PFOPublication receipt; BYTE input[333],output[PF_GRANT_BYTES],everyone[SECURITY_MAX_SID_SIZE];
         DWORD size=SECURITY_MAX_SID_SIZE,length=0; PFFileStamp stamp; PSECURITY_DESCRIPTOR original=NULL; PACL originalAcl=NULL;
         BOOL captured=FALSE; DWORD setupFailures=failed;
@@ -157,7 +157,7 @@ finish:
 }
 int wmain(int argc,WCHAR **argv) {
     WCHAR rootPath[MAX_PATH],filePath[MAX_PATH],pipeName[PFO_PIPE_NAME],self[MAX_PATH],command[MAX_PATH+32];
-    WCHAR emptyEnvironment[2]={0,0}; PFDirectory root; PFDirectoryIdentity identity,wrong;
+    WCHAR emptyEnvironment[2]={0,0}; PFDirectory root; PFDirectoryIdentity identity={0},wrong={0};
     PFOAuthority *a=NULL; PFOControl *control=NULL; PFOPublication receipt;
     BYTE grant[PF_GRANT_BYTES],readback[PF_GRANT_BYTES]; DWORD readLength=0; PFFileStamp stamp;
     HANDLE client=INVALID_HANDLE_VALUE,duplicate=INVALID_HANDLE_VALUE; STARTUPINFOW startup; PROCESS_INFORMATION child;
