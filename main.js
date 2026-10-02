@@ -1335,7 +1335,7 @@ function getBuddy() {
       onLocalPage: (page, wc) => {
         if (page.id === 'settings' && !IS_MAC) wc.insertCSS('#busy-sources, .field:has(#busyFocusShortcut) { display: none; }').catch(() => {});
       },
-      onClosed: () => { hatchResults.clear(); feedbackShot = null; feedbackLast = null; if (IS_MAC && !lightsWin) app.dock.hide(); },
+      onClosed: () => { hatchResults.clear(); feedbackShot = null; feedbackLast = null; SetupsLocal.invalidate(); if (IS_MAC && !lightsWin) app.dock.hide(); },
       devAccountsHub: app.isPackaged ? null : devAccountsHub,
       captureEnabled: !DEMO,
     });
@@ -1344,7 +1344,7 @@ function getBuddy() {
       if (typeof unsubscribe === 'function') app.once('will-quit', unsubscribe);
     }
     if (typeof buddyWin.onAccountChange === 'function') buddyWin.onAccountChange(() => buddyWin.sendToPage('settings', 'account-changed'));
-    if(typeof buddyWin.onSetupsIdentityChange==='function')buddyWin.onSetupsIdentityChange(()=>SetupsNative.invalidate());
+    if(typeof buddyWin.onSetupsIdentityChange==='function')buddyWin.onSetupsIdentityChange(()=>{SetupsLocal.invalidate();buddyWin.sendToPage('setups','setups:changed');});
   }
   return buddyWin;
 }
@@ -1403,6 +1403,11 @@ ipcMain.handle('setups:approve',(e,handle,file,hash)=>setupsSender(e)?SetupsNati
 ipcMain.handle('setups:publish',(e,handle,hash)=>setupsSender(e)?SetupsNative.publish(handle,hash):null);
 ipcMain.handle('setups:action',(e,handle,op,input)=>setupsSender(e)?SetupsNative.action(handle,op,input):null);
 ipcMain.handle('setups:export',(e,handle)=>setupsSender(e)?SetupsNative.export(handle):null);
+// The embedded page remains pending until actual packaged Apply/recovery/Undo
+// acceptance. No dev helper or renderer-supplied local authority is a fallback.
+const SetupsLocal=require('./src/setups-main').createSetupsMain({app,buddy:()=>buddyWin,service:SetupsNative,dialog,safeStorage:require('electron').safeStorage});
+SetupsLocal.register(ipcMain);
+app.on('will-quit',()=>SetupsLocal.close());
 
 // Settings → Account & team, and the widget's one-time Team hint. Each
 // handler checks its sender; the page to open is never taken from the renderer.
