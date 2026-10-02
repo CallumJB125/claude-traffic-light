@@ -155,13 +155,30 @@ async function runLifecycle({ installer, portable, root, actualAppData, env = pr
   retain(); mark('installed-launch-hooks-window-quit');
   // Same-version --updated proves the real upgrade removal path. A version
   // transition through the signed updater remains a separate acceptance gate.
-  await runNsis(installer, 'update');
+  const canonicalInstallDir = fs.realpathSync.native(installDir);
+  try {
+    await runNsis(installer, 'update');
+  } catch (error) {
+    // Preserve the first failed stage and owned child receipt. These scoped
+    // observations do not establish which process holds a file or that a
+    // timed-out installer's descendants have exited.
+    try {
+      let observation;
+      try { observation = await diagnostics(installDir, { canonicalInstallDir, env: childEnv }); }
+      catch { observation = { ok: false, error: 'diagnostic collector failed' }; }
+      let files;
+      try { files = remainingFiles(installDir); } catch { files = { error: 'remaining-file inspection failed' }; }
+      const report = { phase: 'update-failed', canonicalInstallDir, processReceipt: error.processReceipt ?? null, diagnostics: observation, files };
+      const text = JSON.stringify(report, null, 2);
+      fs.writeFileSync(path.join(root, 'update-failed.json'), Buffer.byteLength(text) <= 65536 ? text : JSON.stringify({ phase: 'update-failed', processReceipt: error.processReceipt ?? null, error: 'diagnostic report exceeded bound', truncated: true }));
+    } catch { /* Diagnostics never replace the original update failure. */ }
+    throw error;
+  }
   retain(); mark('update-mode-data-retained');
   await smoke({ ...fixture, exe, report: path.join(root, 'updated.json'), extraEnv: childEnv });
   retain(); mark('updated-launch-hooks-window-quit');
   const uninstaller = path.join(installDir, `Uninstall ${Brand.name}.exe`);
   if (!fs.existsSync(uninstaller)) throw new Error('NSIS did not provide its uninstaller');
-  const canonicalInstallDir = fs.realpathSync.native(installDir);
   const copied = verifiedUninstaller(uninstaller, root);
   let processReceipt = null;
   const record = async phase => {

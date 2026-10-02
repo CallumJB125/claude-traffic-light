@@ -365,3 +365,35 @@ test('installer smoke refuses an existing AppData profile without altering its b
   assert.equal(fs.readFileSync(file, 'utf8'), 'Existing profile');
   assert.equal(f.calls.length, 0);
 });
+
+
+for (const kind of ['nonzero', 'timeout']) test(`update ${kind} preserves the direct-child receipt and scoped observations before later lifecycle stages`, async t => {
+  const f = rig(t), run = f.run;
+  const processReceipt = { pid: 321, code: kind === 'nonzero' ? 1 : null, timedOut: kind === 'timeout', terminationRequested: false };
+  const failure = Object.assign(new Error(`Synthetic update ${kind}`), { processReceipt });
+  f.run = async (file, args, env, options) => {
+    if (args.includes('--updated')) { f.calls.push({ file, args, env, options }); throw failure; }
+    return run(file, args, env, options);
+  };
+  await assert.rejects(Lifecycle.runLifecycle(f), error => error === failure);
+  const report = JSON.parse(fs.readFileSync(path.join(f.root, 'update-failed.json')));
+  assert.equal(report.phase, 'update-failed'); assert.deepEqual(report.processReceipt, processReceipt);
+  assert.equal(report.diagnostics.ok, true);
+  assert.ok(report.files.entries.some(entry => entry.name === `${Brand.name}.exe`));
+  assert.deepEqual(JSON.parse(fs.readFileSync(f.receipt)).stages, ['installed', 'installed-launch-hooks-window-quit']);
+  assert.equal(f.calls.length, 2);
+  assert.equal(fs.readFileSync(path.join(f.actualAppData, Brand.name, 'preserved-board.db'), 'utf8'), 'Synthetic retained bytes: preserved-board.db\r\n');
+});
+
+test('failed update retains its original error when scoped diagnostics are unavailable or oversized', async t => {
+  for (const oversized of [false, true]) {
+    const f = rig(t), run = f.run, failure = new Error('Synthetic original update failure');
+    f.run = async (file, args, env, options) => { if (args.includes('--updated')) throw failure; return run(file, args, env, options); };
+    f.diagnostics = async () => { if (oversized) return { ok: true, text: 'x'.repeat(70000) }; throw new Error('Synthetic collector failure'); };
+    await assert.rejects(Lifecycle.runLifecycle(f), error => error === failure);
+    const file = path.join(f.root, 'update-failed.json'); assert.ok(fs.statSync(file).size <= 65536);
+    const report = JSON.parse(fs.readFileSync(file)); assert.equal(report.phase, 'update-failed');
+    if (oversized) assert.equal(report.truncated, true); else assert.equal(report.diagnostics.ok, false);
+    assert.deepEqual(JSON.parse(fs.readFileSync(f.receipt)).stages, ['installed', 'installed-launch-hooks-window-quit']);
+  }
+});
