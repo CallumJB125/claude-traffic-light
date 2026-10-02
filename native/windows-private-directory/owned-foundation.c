@@ -113,7 +113,9 @@ PFOPublication pfo_publish(PFOAuthority *a,PFFileRole role,const BYTE *bytes,DWO
     renameSize=(DWORD)(offsetof(PFONativeRename,name)+wcslen(name)*sizeof(WCHAR));
     rename=(PFONativeRename *)calloc(1,renameSize);
     if(!rename) { receipt.result=PFO_IO; goto done; }
-    rename->root=current_handle(&a->root); rename->bytes=(ULONG)(wcslen(name)*sizeof(WCHAR));
+    /* The exclusive staged handle already belongs to this pinned directory.
+     * A fixed same-directory basename rename requires no target root open. */
+    rename->root=NULL; rename->bytes=(ULONG)(wcslen(name)*sizeof(WCHAR));
     memcpy(rename->name,name,rename->bytes); /* replace remains FALSE. */
     if(!pfo_current(a)) { receipt.result=PFO_UNAVAILABLE; goto done; }
     ZeroMemory(&io,sizeof(io));
