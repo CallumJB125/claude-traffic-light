@@ -39,7 +39,7 @@ function fixture(tmp) {
   return { tmp, home, data, userData: path.join(tmp, 'user-data') };
 }
 
-async function runPackagedSmoke({ exe, home, data, userData, report, extraEnv = {}, timeoutMs = TIMEOUT_MS }) {
+async function runPackagedSmoke({ exe, home, data, userData, report, extraEnv = {}, timeoutMs = TIMEOUT_MS, observeBeforeTimeout }) {
   if (!exe || !fs.existsSync(exe)) throw new Error(`no packaged app found (looked in ${DIST}); pass its path`);
 
   // Its own Electron profile and signal port, so it can never meet a real
@@ -52,10 +52,22 @@ async function runPackagedSmoke({ exe, home, data, userData, report, extraEnv = 
 
   console.log(`smoke: ${exe}`);
   const code = await new Promise((resolve) => {
+    const started = Date.now();
     const child = spawn(exe, args, { env, stdio: 'inherit' });
-    const timer = setTimeout(() => { console.error('smoke: timed out'); child.kill(); resolve(124); }, timeoutMs);
-    child.on('exit', (c) => { clearTimeout(timer); resolve(c ?? 1); });
-    child.on('error', (err) => { clearTimeout(timer); console.error(err.message); resolve(1); });
+    let settled = false, observed = false;
+    const finish = code => { if (settled) return; settled = true; clearTimeout(timer); clearTimeout(observationTimer); resolve(code); };
+    const timer = setTimeout(() => { if (settled) return; console.error('smoke: timed out'); child.kill(); finish(124); }, timeoutMs);
+    // Trusted CI caller only. Capture early enough to see the nested portable
+    // hook launch; observation never extends the smoke or hook deadlines.
+    const observationTimer = typeof observeBeforeTimeout === 'function' ? setTimeout(() => {
+      Promise.resolve().then(() => {
+        if (settled || observed) return;
+        observed = true;
+        return observeBeforeTimeout({ pid: child.pid ?? null, started, exe, elapsedMs: Date.now() - started });
+      }).catch(() => {});
+    }, 55000) : null;
+    child.on('exit', c => finish(c ?? 1));
+    child.on('error', err => { console.error(err.message); finish(1); });
   });
   const result = fs.existsSync(report) ? JSON.parse(fs.readFileSync(report, 'utf8')) : null;
   console.log(JSON.stringify(result, null, 2));

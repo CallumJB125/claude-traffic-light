@@ -223,7 +223,18 @@ async function runLifecycle({ installer, portable, root, actualAppData, env = pr
   const leftovers = require('../adapters').list().filter(adapter => fs.existsSync(adapter.configPath(fixture.home)) && Uninstall.holdsOurs(adapter, adapter.configPath(fixture.home)));
   if (leftovers.length) throw new Error(`Uninstaller left registered hooks: ${leftovers.map(a => a.id).join(', ')}`);
   mark('uninstalled-hooks-removed-data-retained');
-  await smoke({ ...fixture, exe: portable, report: path.join(root, 'portable.json'), extraEnv: childEnv });
+  await smoke({ ...fixture, exe: portable, report: path.join(root, 'portable.json'), extraEnv: childEnv, observeBeforeTimeout: async processReceipt => {
+    // The observer binds this exact launcher PID/start/image before returning
+    // descendant/class/visibility metadata. Never write its raw query output.
+    try {
+      let observation;
+      try { observation = await observe(processReceipt, { env: childEnv }); }
+      catch { observation = { ok: false, reason: 'owned portable observation failed' }; }
+      const report = { phase: 'portable-before-timeout', processReceipt: { pid: processReceipt.pid, started: processReceipt.started, elapsedMs: processReceipt.elapsedMs }, observation };
+      const text = JSON.stringify(report, null, 2);
+      fs.writeFileSync(path.join(root, 'portable-before-timeout.json'), Buffer.byteLength(text) <= 32768 ? text : JSON.stringify({ phase: 'portable-before-timeout', observation: { ok: false, reason: 'observer report exceeded bound' } }));
+    } catch { /* Observation never replaces the original portable result. */ }
+  } });
   retain(); mark('portable-launch-hooks-window-quit');
   const command = require('../src/smoke').firstHookCommand(settings, 'SessionStart');
   if (!command) throw new Error('Portable copy did not register a hook');
