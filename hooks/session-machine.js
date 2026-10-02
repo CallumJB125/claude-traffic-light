@@ -45,7 +45,13 @@
   // as they plausibly are: a long agent can go quiet for well over the
   // working window without having died.
   const AGENT_KEEPALIVE_MS = 6 * 60 * 60 * 1000;
-  const AGENT_STATUSES = ['working', 'waiting', 'done'];
+  // A killed or stopped subagent never fires SubagentStop. A hook subagent
+  // whose own tool hooks (lastAt) have been silent this long reads 'stale':
+  // not known to be working, never claimed done. Longer than Bash's 10-minute
+  // ceiling, so one long command doesn't trip it.
+  const AGENT_QUIET_MS = 15 * 60 * 1000;
+  // 'stopped': the parent's TaskStop for it succeeded. 'stale': gone quiet.
+  const AGENT_STATUSES = ['working', 'waiting', 'done', 'stopped', 'stale'];
   // Legacy session files (pre-rules) wrote a colour instead of a signal.
   const LEGACY_STATE_TO_SIGNAL = { green: 'tool-use', amber: 'permission-ask', red: 'limit-hit', done: 'stop' };
 
@@ -273,6 +279,19 @@
     return Math.max(workingStaleMs - (now - last), keepAlive);
   }
 
+  function withFreshAgents(data, now) {
+    if (!Array.isArray(data.agents)) return data;
+    let changed = false;
+    const agents = data.agents.map((a) => {
+      if (!a || a.source !== 'hook' || a.status !== 'working') return a;
+      const seen = Math.max(Date.parse(a.lastAt || '') || 0, Date.parse(a.since || '') || 0);
+      if (!seen || now - seen <= AGENT_QUIET_MS) return a;
+      changed = true;
+      return { ...a, status: 'stale' };
+    });
+    return changed ? { ...data, agents } : data;
+  }
+
   // The reader's decision, in order; the first that applies wins.
   const PRESENTATION = [
     { id: 'no-signal', shows: 'nothing', why: 'no signal (and no legacy colour) in the file' },
@@ -288,7 +307,8 @@
   // pendingIds (sessions with a blocking PermissionRequest), isGone (a thunk:
   // is its process gone? — the only impure question, asked only if needed),
   // workingStaleMs, waitingStaleMs.
-  function classify(data, { now, pendingIds = [], isGone = () => false, workingStaleMs, waitingStaleMs }) {
+  function classify(stored, { now, pendingIds = [], isGone = () => false, workingStaleMs, waitingStaleMs }) {
+    const data = withFreshAgents(stored, now);
     const signal = sessionSignal(data);
     if (!signal) return { live: false, dropped: 'no-signal', signal: null };
     if (isGone()) return { live: false, dropped: 'gone', signal };
@@ -343,7 +363,7 @@
   }
 
   return {
-    TURN_END, WAITING, WAITING_ON_YOU, QUIET, PROMOTABLE_TURN_END, TRANSIENT_ASK_MS, AGENT_KEEPALIVE_MS, AGENT_STATUSES, LEGACY_STATE_TO_SIGNAL,
+    TURN_END, WAITING, WAITING_ON_YOU, QUIET, PROMOTABLE_TURN_END, TRANSIENT_ASK_MS, AGENT_KEEPALIVE_MS, AGENT_QUIET_MS, AGENT_STATUSES, LEGACY_STATE_TO_SIGNAL,
     STATES, EVENTS, CLOSED, TRANSITIONS, PRESENTATION, EVENT_OF_SIGNAL, EVENT_SIGNAL,
     sessionSignal, stateOf, eventOf, transitionFor, step, userTouched,
     hasWorkingAgent, effectiveSignal, presentSignal, agentsStaleInMs, classify, codexInputEntries, codexInputPending, CODEX_INPUT_MS,

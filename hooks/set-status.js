@@ -251,6 +251,8 @@ function claudePidWindows(cached, fresh) {
 }
 
 const sessionId = (data && (data.session_id || data.sessionId)) || process.env.CLAUDE_SESSION_ID || 'unknown';
+// Where this event happened: a Bash cd moves it, and a subagent's hooks carry
+// the subagent's own cwd under the parent's session id.
 const cwd = (data && data.cwd) || process.cwd();
 const file = path.join(SESSIONS_DIR, `${HOST_TAG}-${sessionId}.json`);
 
@@ -307,15 +309,25 @@ function updateAgents(prevAgents, signal, payload, nowIso) {
     // existed, anything not a plain subagent); the hooks own their own entries
     // whatever kind the scan has since labelled them.
     if (a.source === 'scan' || (a.source !== 'hook' && a.kind && a.kind !== 'subagent')) return true;
-    return a.status === 'done' ? now - t < DONE_KEEP_MS : now - t < AGENT_MAX_MS;
+    return a.status === 'done' || a.status === 'stopped' ? now - t < DONE_KEEP_MS : now - t < AGENT_MAX_MS;
   });
+  const p = payload || {};
+  // A subagent's own tool hook: proof of life for the reader's quiet window.
+  if (/^tool-/.test(signal) && p.agent_id) {
+    agents = agents.map((a) => (a.id === String(p.agent_id) && a.source === 'hook' ? { ...a, lastAt: nowIso } : a));
+  }
+  // A killed subagent never fires SubagentStop; the parent's successful
+  // TaskStop for it (PostToolUse) is the only word that it ended.
+  const stopId = signal === 'tool-done' && p.tool_name === 'TaskStop' && p.tool_input ? p.tool_input.task_id || p.tool_input.shell_id : null;
+  if (stopId) {
+    agents = agents.map((a) => (a.id === String(stopId) && a.source === 'hook' && a.status !== 'done' ? { ...a, status: 'stopped', since: nowIso } : a));
+  }
   // Not on `stop`: a foreground Agent call blocks the turn, so a turn can only
   // end while *background* agents are still running. They end via SubagentStop.
   if (signal === 'session-start') {
     return agents.map((a) => ((a.source === 'hook' || (!a.source && a.kind === 'subagent')) && a.status !== 'done' ? { ...a, status: 'done' } : a));
   }
   if (signal !== 'subagent-start' && signal !== 'subagent-done') return agents;
-  const p = payload || {};
   const id = String(p.agent_id || p.agentId || p.subagent_id || p.task_id || `agent-${now}`);
   // 'oh-my-claudecode:executor' is 'executor' on a 12px chip.
   const name = String(p.agent_type || p.subagent_type || p.agentType || p.agent_name || p.description || 'agent').split(':').pop().slice(0, 40);
@@ -415,7 +427,9 @@ function nextSession(prev, { hostApp, pid, terminal, owned }) {
   // background agents are still running.
   const agents = updateAgents(prev?.agents, resolved === 'compact' ? 'compact' : signal, data, now);
   return {
-    sessionId, host: HOST_TAG, hostApp, claudePid: pid || undefined, cwd, signal: signalOut,
+    // The session's project is where it started (a resume starts afresh), so
+    // neither a cd nor a subagent's events relabel it.
+    sessionId, host: HOST_TAG, hostApp, claudePid: pid || undefined, cwd: (resolved === 'session-start' ? cwd : prev?.cwd) || cwd, signal: signalOut,
     // Where the exact tab is (terminal-id.js): recorded at SessionStart only.
     terminal: terminal || prev?.terminal || undefined,
     tool: signalOut === resolved ? tool : (prev?.tool ?? null),
@@ -569,11 +583,11 @@ if (signal === 'tool-use' && tool === 'AskUserQuestion' && !data?.agent_id && as
 
 // PreToolUse fires many times a second during a busy turn. Skip the write if
 // nothing changed in the last second — the app polls anyway, and this keeps
-// the fs.watch storm down. Subagent events carry bookkeeping it must never drop.
+// the fs.watch storm down. Subagent events and TaskStop carry bookkeeping it must never drop.
 // `workingSince` marks when the current turn began (for the "working over N
 // minutes" signal) and resets on each new prompt.
 // Judged on the unlocked read: skipping is only ever safe, never a lost write.
-if (prevOnEntry && resolved !== 'subagent-start' && resolved !== 'subagent-done') {
+if (prevOnEntry && resolved !== 'subagent-start' && resolved !== 'subagent-done' && tool !== 'TaskStop') {
   const prev = prevOnEntry;
   const agentChurn = fromSubagent && stepOf(prev, new Date().toISOString()).bookkeeping;
   const last = Date.parse(agentChurn ? prev.agentsAt : prev.updatedAt);

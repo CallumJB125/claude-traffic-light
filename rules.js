@@ -145,15 +145,16 @@
 
   // ── Blocked (v9) ──────────────────────────────────────────────────────────
   // Auto mode's classifier refused a call (PermissionDenied). Not a prompt:
-  // the turn carries on, but a person has to decide (run it, switch mode, add
-  // a rule), so it is red like any other "needs your decision". Kept as long
-  // as the bubble shows it: until the next prompt, at most 30 minutes
-  // (src/pending-inputs.js BLOCKED_KEEP_MS).
+  // the harness carries on with other work, so since v10 the stock rule is
+  // off — red means a session needs you now (a real ask) or something broke,
+  // and a denial is neither; the bubble still lists it. Switched on, it stays
+  // red as long as the bubble shows it: until the next prompt, at most 30
+  // minutes (src/pending-inputs.js BLOCKED_KEEP_MS).
   const BLOCKED_KEEP_MS = 30 * 60 * 1000;
   SIGNALS.splice(SIGNALS.findIndex((s) => s.id === 'idle'), 0,
     { id: 'blocked', label: 'A call needs your decision (auto mode refused it)', hook: null, kind: 'virtual' });
   // Lamp only: the bubble carries the words, so no sound, banner or pose.
-  const BLOCKED_RULE = { id: 'blocked', name: 'Needs your decision', enabled: true, when: { signal: ['blocked'] }, then: { lamp: 'red' } };
+  const BLOCKED_RULE = { id: 'blocked', name: 'Needs your decision', enabled: false, when: { signal: ['blocked'] }, then: { lamp: 'red' } };
   function blockedSessions(sessions, now) {
     const out = [];
     for (const s of sessions) {
@@ -186,7 +187,7 @@
   // ── Other agents ──────────────────────────────────────────────────────────
   // A session file may carry `agents` (every subagent / teammate / ralph or
   // ultrawork worker it knows about) and `mode` (the OMC execution mode).
-  // Anything that has finished stops counting as live.
+  // Anything finished, stopped or gone stale stops counting as live.
   const AGENT_KINDS = ['subagent', 'teammate', 'ralph', 'ultrawork'];
   const AGENT_STATUSES = Machine.AGENT_STATUSES;
   const MODES = ['ralph', 'team', 'ultrawork'];
@@ -213,7 +214,7 @@
       if (!Array.isArray(s.agents)) continue;
       s.agents.forEach((a, i) => {
         const n = normalizeAgent(a, i);
-        if (n && n.status !== 'done') out.push({ ...n, cwd: s.cwd || null });
+        if (n && (n.status === 'working' || n.status === 'waiting')) out.push({ ...n, cwd: s.cwd || null });
       });
     }
     return out;
@@ -396,8 +397,8 @@
   }
 
   // The lamp answers one question — do I need to look? Green: working, leave
-  // it. Amber: your turn (finished, waiting, or a failed turn to retry). Red:
-  // blocked until you act (a permission ask, a limit, no network). Off:
+  // it. Amber: your turn (finished or waiting). Red: blocked until you act (a
+  // permission ask, a limit) or broken (a failed turn, no network). Off:
   // nothing running.
   function defaultRules() {
     return placeBlockedRule(placeSpendRules([ // F1 spend
@@ -455,7 +456,7 @@
       {
         id: 'failed-turn', name: 'Turn failed', enabled: true,
         when: { signal: ['turn-failed'] },
-        then: { lamp: 'amber', eyes: 'dizzy', pose: 'banner', text: '{fail}' },
+        then: { lamp: 'red', eyes: 'dizzy', pose: 'banner', text: '{fail}' },
       },
       {
         id: 'done', name: 'Task finished', enabled: true,
@@ -488,7 +489,7 @@
   // Rules added to the defaults after people already had saved configs. Each
   // is slotted in once, keyed by the saved rulesVersion, so deleting one
   // afterwards sticks.
-  const RULES_VERSION = 9;
+  const RULES_VERSION = 10;
   // v4 recoloured four default lamps (see defaultRules). A saved rule that
   // still has the old default colour, and no custom lampColor, follows.
   const V4_LAMPS = { permission: ['amber', 'red'], done: ['green', 'amber'], nudge: ['green', 'amber'], idle: ['amber', 'off'] };
@@ -551,6 +552,16 @@
     if (version < 8) out.splice(0, out.length, ...placeSpendRules(out, SPEND_RULES.map(normalizeRule).map((r) => fitForTemplate(template, r)).filter(Boolean)));
     // v9: a classifier denial ("blocked: needs your decision") is red.
     if (version < 9) out.splice(0, out.length, ...placeBlockedRule(out, fitForTemplate(template, normalizeRule(BLOCKED_RULE))));
+    // v10: red is "needs you now" or "broken". A classifier denial is neither
+    // (the stock blocked rule goes off); a failed turn is broken (amber → red).
+    // Only a rule still as shipped changes.
+    if (version < 10) {
+      for (let i = 0; i < out.length; i += 1) {
+        const r = out[i];
+        if (r.id === 'blocked' && r.enabled && r.then && r.then.lamp === 'red' && !r.then.lampColor) out[i] = { ...r, enabled: false };
+        if (r.id === 'failed-turn' && r.then && r.then.lamp === 'amber' && !r.then.lampColor) out[i] = { ...r, then: { ...r.then, lamp: 'red' } };
+      }
+    }
     // Nothing to add: the caller keeps the very list it gave (callers compare identity).
     return out.length === rules.length && out.every((r, i) => r === rules[i]) ? rules : out;
   }
