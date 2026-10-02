@@ -314,13 +314,15 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   };
 
   const routes = [];
+  const integrationBinds = new WeakMap();
   // Serialize cache-eligible requests sharing an actor and request ID until
   // their response is cached, including collisions across different routes.
   const requestsInFlight = new Map();
-  const route = (method, pattern, handler, { auth = 'member', mutating = method !== 'GET', limit = null, replay = null, maxBody = null, collaboration = false, writeScope = null, strictBody = false, responseGuard = null, setupIdentity = false } = {}) => {
+  const route = (method, pattern, handler, { auth = 'member', mutating = method !== 'GET', limit = null, replay = null, maxBody = null, collaboration = false, writeScope = null, strictBody = false, responseGuard = null, setupIdentity = false, integrationAccess = null } = {}) => {
+    if (integrationAccess != null && !['member', 'admin', 'overview'].includes(integrationAccess)) throw new Error('unknown integration access');
     const keys = [];
     const re = new RegExp(`^${pattern.replace(/:([a-z_]+)/g, (_, k) => { keys.push(k); return '([^/]+)'; })}$`);
-    routes.push({ method, re, keys, handler, auth, mutating, pattern, limit, replay, collaboration, writeScope, strictBody, responseGuard, setupIdentity, maxBody: maxBody ?? (bigBodyRoute(pattern) ? MAX_BODY : limits.smallBodyMax) });
+    routes.push({ method, re, keys, handler, auth, mutating, pattern, limit, replay, collaboration, writeScope, strictBody, responseGuard, setupIdentity, integrationAccess, maxBody: maxBody ?? (bigBodyRoute(pattern) ? MAX_BODY : limits.smallBodyMax) });
   };
 
   // `mail` appears only on a hub that can send mail; it says when a send last failed, and whether
@@ -556,8 +558,8 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
       available: integrations.connectors(), vault: hub.vault.available,
       connections: integrations.list(member.org_id).map((c) => ({ ...withWebhookUrl(member, req, forMember(member, c), showsWebhookUrl()), linked: integrations.isLinked(c.id, member.id) })),
       ...(hub.isAdmin(member) ? { pending: integrations.pendingList(member.org_id) } : {}),
-    }));
-    route('POST', '/api/integrations/:provider/token', async ({ member, params, body, req }) => {
+    }), { integrationAccess: 'overview' });
+    route('POST', '/api/integrations/:provider/token', async ({ member, params, body, req, integrationCurrent }) => {
       api.requireAdmin(member);
       const conn = integrations.connectors().find((c) => c.id === params.provider);
       if (!conn || conn.connect !== 'token') throw new HubError('NOT_FOUND', 'no such token integration');
@@ -569,27 +571,32 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
         hub.log.warn('integration token check failed', { integration: params.provider, err: redact(e?.message ?? e) });
         throw new HubError('VALIDATION', 'That token was not accepted. Check it and try again.');
       }
+      // Provider verification may wait: captured admin identity and credential
+      // must still be current before any connection or sealed secret is saved.
+      member = integrationCurrent();
       // Named fields only: the id is the hub's to mint, and the connector's settings are provider facts (D42 addendum C1).
       return {
         connection: withWebhookUrl(member, req, integrations.createConnection({
           external_id: v.external_id, display_name: v.display_name, scopes: v.scopes, secrets: v.secrets, settings: v.settings, orgId: member.org_id, memberId: member.id, provider: params.provider,
         }), showsWebhookUrl()),
       };
-    });
+    }, { integrationAccess: 'admin' });
     // OAuth / app install (D42): the callback needs this cookie back. A
     // browser tab has it already; the desktop app's connect window (its own
     // session) gets `bind` through the window name and sets it itself.
-    const setBind = (res, { name, value, path, secure, max_age_s }) => res.setHeader('set-cookie', `${name}=${value}; HttpOnly; SameSite=Lax; Path=${path}; Max-Age=${max_age_s}${secure ? '; Secure' : ''}`);
+    // Publish the private bind cookie only after the final captured authority
+    // check, together with its successful response (never on a stale denial).
+    const setBind = (res, { name, value, path, secure, max_age_s }) => integrationBinds.set(res, `${name}=${value}; HttpOnly; SameSite=Lax; Path=${path}; Max-Age=${max_age_s}${secure ? '; Secure' : ''}`);
     // body.input (D42 addendum "start inputs") goes to the registry only: never logged or kept.
     route('POST', '/api/integrations/:provider/start', ({ member, params, body, req, res }) => {
       api.requireAdmin(member);
       const out = integrations.oauthStart({ member, provider: params.provider, publicUrl: publicBase(req), input: body.input });
       setBind(res, out.cookie);
       return out.form ? { form: out.form, bind: out.bind } : { url: out.url, bind: out.bind };
-    }, { replay: PREPARE_REPLAY });
+    }, { replay: PREPARE_REPLAY, integrationAccess: 'admin' });
     // Pending connections (D97): a provider starts one, a pending id takes the pasted fields.
     // body.input goes to the registry and nowhere else (no log, no cache, no error text).
-    route('POST', '/api/integrations/:target/prepare', async ({ member, params, body, req, res }) => {
+    route('POST', '/api/integrations/:target/prepare', async ({ member, params, body, req, res, integrationCurrent }) => {
       api.requireAdmin(member);
       const publicUrl = publicBase(req);
       let out;
@@ -602,16 +609,17 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
         hub.log.error('integration prepare failed', { path: '/api/integrations/:target/prepare' });
         throw new HubError('INTERNAL', 'internal error');
       }
+      integrationCurrent();
       if (out.needs) return { pending: out.pending, needs: out.needs };
       setBind(res, out.cookie);
       return { pending: out.pending, url: out.url, bind: out.bind };
-    }, { replay: PREPARE_REPLAY });
+    }, { replay: PREPARE_REPLAY, integrationAccess: 'admin' });
     route('POST', '/api/integrations/:id/authorize', ({ member, params, req, res }) => {
       api.requireAdmin(member);
       const out = integrations.pendingAuthorize({ member, id: params.id, publicUrl: publicBase(req) });
       setBind(res, out.cookie);
       return { url: out.url, bind: out.bind };
-    });
+    }, { integrationAccess: 'admin' });
     route('PATCH', '/api/integrations/:id', ({ member, params, body }) => {
       api.requireAdmin(member);
       own(member, params.id);
@@ -620,46 +628,47 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
       if (body.config !== undefined) patch.config = body.config;
       if (body.target_board_id !== undefined) patch.target_board_id = body.target_board_id;
       return { connection: integrations.setSettings(params.id, patch, { memberId: member.id }) };
-    });
+    }, { integrationAccess: 'admin' });
     route('DELETE', '/api/integrations/:id', ({ member, params }) => {
       api.requireAdmin(member);
       if (integrations.pendingDelete({ member, id: params.id })) return { ok: true };
       own(member, params.id);
       integrations.revokeConnection(params.id, member.id);
       return { ok: true };
-    });
+    }, { integrationAccess: 'admin' });
     // Identity links (D98): a member links, reads and unlinks only their own;
     // an admin lists and revokes, and never creates one.
-    route('POST', '/api/integrations/:id/identity/start', async ({ member, params, req, res, ident }) => {
+    route('POST', '/api/integrations/:id/identity/start', async ({ member, params, req, res, ident, integrationCurrent }) => {
       const out = await integrations.identityStart({ member, connectionId: params.id, cred: ident?.cred ?? null, publicUrl: publicBase(req) });
+      integrationCurrent();
       setBind(res, out.cookie);
       return { url: out.url, bind: out.bind };
-    });
+    }, { integrationAccess: 'member' });
     route('GET', '/api/integrations/:id/identity', ({ member, params }) => {
       own(member, params.id);
       return integrations.identityStatus(params.id, member.id);
-    });
+    }, { integrationAccess: 'member' });
     route('DELETE', '/api/integrations/:id/identity', ({ member, params }) => {
       own(member, params.id);
       return integrations.identityUnlink({ connectionId: params.id, memberId: member.id, by: 'self', actorId: member.id });
-    });
+    }, { integrationAccess: 'member' });
     route('GET', '/api/integrations/:id/identities', ({ member, params }) => {
       api.requireAdmin(member);
       own(member, params.id);
       return { identities: integrations.identities(params.id) };
-    });
+    }, { integrationAccess: 'admin' });
     route('DELETE', '/api/integrations/:id/identities/:member_id', ({ member, params }) => {
       api.requireAdmin(member);
       own(member, params.id);
       const t = hub.member(params.member_id);
       if (!t || t.org_id !== member.org_id) throw new HubError('NOT_FOUND', 'member not found');
       return integrations.identityUnlink({ connectionId: params.id, memberId: t.id, by: 'admin', actorId: member.id });
-    });
+    }, { integrationAccess: 'admin' });
     route('GET', '/api/integrations/:id/audit', ({ member, params, query }) => {
       api.requireAdmin(member);
       own(member, params.id);
       return { entries: integrations.audit(params.id, { limit: Number(query.get('limit') ?? 100) }) };
-    });
+    }, { integrationAccess: 'admin' });
   }
 
   async function serveFile(req, res, path) {
@@ -903,12 +912,26 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
         if(setupUploads>=4) throw new HubError('RATE_LIMITED','Setups uploads are busy; try again shortly',{retry_after_s:1});
         setupUploads++; setupUploadSlot=true;
       }
+      // Only designated integration routes use this private captured context.
+      // It is checked before cache replay and again at final result delivery;
+      // a handler cannot refresh away the original user or credential owner.
+      const integrationMember = r.integrationAccess ? Object.freeze({ ...member }) : null;
+      const integrationCurrent = (delivery = false) => {
+        if (!r.integrationAccess) return member;
+        try {
+          const current = api.currentMember(integrationMember, ident?.cred ?? null);
+          if (r.integrationAccess === 'admin' || (delivery && r.integrationAccess === 'overview' && hub.isAdmin(integrationMember))) api.requireAdmin(current);
+          return current;
+        } catch (e) { e.cacheable = false; throw e; }
+      };
+      if (r.integrationAccess) integrationCurrent();
       // Only now, so nobody unauthenticated can make the hub hold a body (D105).
       let body = r.mutating ? await readBody(req, { max: r.maxBody, deadlineMs: limits.bodyDeadlineMs, parser: r.strictBody ? strictJson : JSON.parse }) : {};
       // Bind retries to the effective operation, whether strip came from
       // JSON or the existing query option. Equivalent forms remain a retry.
       if (r.method === 'DELETE' && r.pattern === '/api/boards/:board_id/labels/:name') body = { ...body, strip: body.strip === true || url.searchParams.get('strip') === '1' };
       const refreshWrite = () => {
+        if (r.integrationAccess) member = integrationCurrent();
         if (ident && r.mutating && !hub.accounts.credValid(ident.cred)) throw new HubError('UNAUTHENTICATED', 'sign in again');
         if (member && r.auth === 'member' && r.mutating) member = api.currentMember(member, ident?.cred ?? null);
         if (r.writeScope === 'archive') member = api.collaborationScope(member, { cardId: params.card_id, allowArchived: true }, ident?.cred ?? null);
@@ -944,6 +967,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
           const hit = hub.cachedResponse(actor, rid);
           if (hit) {
             if ((binding != null || hit.binding != null) && binding !== hit.binding) throw new HubError('CONFLICT', 'request_id reused for a different request');
+            if (r.integrationAccess) integrationCurrent(true);
             return sendJson(res, hit.status, r.collaboration ? selectedContext(hub, hit.body, communicationOptions(url.searchParams).boardIds) : hit.body, { 'board-replayed': '1' });
           }
         }
@@ -956,21 +980,23 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
         let out;
         let cacheable = true;
         try {
-          out = await r.handler({ req, res, member, params, body, query: url.searchParams, ident, ip });
+          out = await r.handler({ req, res, member, params, body, query: url.searchParams, ident, ip, integrationCurrent });
         } catch (e) {
           if (!(e instanceof HubError)) throw e;
           status = httpStatus(e.code);
           out = errorBody(e);
           // A storage refusal is transient admission, so the same bound
           // request can recover without waiting for the response cache TTL.
-          cacheable = !(e.code === 'QUOTA_EXCEEDED' && e.extra?.resource === 'storage');
+          cacheable = !(r.integrationAccess && e.cacheable === false) && !(e.code === 'QUOTA_EXCEEDED' && e.extra?.resource === 'storage');
         }
         if (out === undefined) return undefined;
+        if (status === 200 && r.integrationAccess) integrationCurrent(true);
         if (r.collaboration) out = selectedContext(hub, out, communicationOptions(url.searchParams).boardIds);
         if (status === 200 && r.responseGuard) {
           const guarded = r.responseGuard({ req, res, member, params, body, query: url.searchParams, ident, ip }, out);
           if (guarded?.then) throw new HubError('INTERNAL', 'response authority must be synchronous');
         }
+        if (status === 200 && r.integrationAccess && integrationBinds.has(res)) res.setHeader('set-cookie', integrationBinds.get(res));
         if (rid && cacheable) hub.cacheResponse(actor, rid, r.replay?.status ?? status, r.replay?.body ?? out, binding);
         return sendJson(res, status, out, out?.error?.code === 'RATE_LIMITED' && out.error.retry_after_s ? { 'retry-after': String(out.error.retry_after_s) } : {});
       };

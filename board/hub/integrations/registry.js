@@ -391,6 +391,9 @@ export function createIntegrations({
   function ctxFor(c, signal = null) {
     const conn = connectors.get(c.provider);
     const settings = safeJson(c.settings, {});
+    // A private handler's principal is captured before any connector await.
+    // Re-reading the same member id must never inherit another user's identity.
+    const creator = hub.member(c.created_by);
     const secrets = () => secretsOf(c);
     const fetchOnce = restrictedFetch(conn);
 
@@ -458,6 +461,25 @@ export function createIntegrations({
       return hub.isAdmin(m) ? { ...m, role: 'member' } : m;
     }
 
+    function currentActor(captured) {
+      const current = actor(captured?.id);
+      try { api.currentMember(captured); }
+      catch (e) { e.cacheable = false; throw e; }
+      return current;
+    }
+
+    function currentAuthority(action, captured = creator, subject = null) {
+      if (signal?.aborted) throw handlerEnded();
+      const current = row(c.id);
+      const refusal = (message) => Object.assign(new HubError('FORBIDDEN', message), { cacheable: false });
+      if (!current || current.status !== 'active' || current.org_id !== c.org_id || current.created_by !== c.created_by) throw refusal('current integration cannot act');
+      if (current.settings !== c.settings || current.target_board_id !== c.target_board_id || autonomyOf(action) !== 'auto') throw refusal('integration settings changed; retry delivery');
+      currentActor(creator);
+      const member = currentActor(captured);
+      if (subject != null && linkedMember(subject) !== captured?.id) throw refusal('provider identity changed; retry delivery');
+      return member;
+    }
+
     // The member an integration acts as goes through the same Api methods
     // and D8 replay cache as a browser would (limits per connection); the
     // journal and feed name the integration (D42, §15). `live()` is the
@@ -497,7 +519,8 @@ export function createIntegrations({
       };
       bound();
       const first = actor(memberId);
-      const authorize = () => { authority(); bound(); actor(first.id); };
+      const authorize = () => { authority(); bound(); currentActor(first); };
+      authorize();
       const via = { connection_id: c.id, member_id: first.id, name: conn.name, external_ref, authorize };
       const call = (body, fn, rules = [], pre = null) => {
         if (!live()) return Promise.reject(new Error('this act() scope has ended'));
@@ -531,6 +554,9 @@ export function createIntegrations({
         try {
           out = await hub.actVia(via, () => fn(member));
         } catch (e) {
+          // API currentMember may refuse before reaching the private callback.
+          // A stale captured principal is a fresh refusal, never a sticky D8 hit.
+          try { authorize(); } catch (stale) { cacheError(stale); throw stale; }
           cacheError(e);
           throw e;
         }
@@ -775,18 +801,13 @@ export function createIntegrations({
       if (mode === 'off') { audit('skipped'); return { done: false, decision: 'skipped' }; }
       if (mode === 'ask') { audit('asked'); return { done: false, decision: 'asked' }; }
       const auditId = audit('attempted');
+      const captured = subject == null ? creator : hub.member(linkedMember(subject));
       let open = true, active = true;
       const live = () => open && !signal?.aborted;
       const authority = () => {
         if (!active || signal?.aborted) throw handlerEnded();
-        const current = row(c.id);
-        const refusal = (code, message) => Object.assign(new HubError(code, message), { cacheable: false });
-        if (!current || current.status !== 'active' || current.org_id !== c.org_id || current.created_by !== c.created_by) throw refusal('FORBIDDEN', 'current integration cannot act');
-        if (current.settings !== c.settings || current.target_board_id !== c.target_board_id || autonomyOf(action) !== 'auto') throw refusal('FORBIDDEN', 'integration settings changed; retry delivery');
-        const id = subject == null ? c.created_by : linkedMember(subject);
-        if (subject != null && id == null) throw new ActorUnavailable('member');
-        const member = actor(id);
-        api.currentMember(member);
+        if (subject != null && !captured) throw new ActorUnavailable('member');
+        currentAuthority(action, captured, subject ?? null);
       };
       const guard = (fn) => (...args) => { if (!live()) throw new Error('this act() scope has ended'); authority(); return fn(...args); };
       // Calls run() started without awaiting: settled before the scope closes,
@@ -794,7 +815,12 @@ export function createIntegrations({
       const pending = new Set();
       const track = (p) => { pending.add(p); return p; };
       const scope = {
-        actAs: guard((memberId) => actAs(memberId, { live, authority, action, track, external_ref: base.external_ref, subjectKey, subject: subject ?? null })), link: guard(link), relink: guard(relink), linkStatus: guard(linkStatus),
+        // Resolve the requested actor's binding first: an arbitrary unlinked
+        // actor is FORBIDDEN, while a removed linked actor stays C2 unavailable.
+        actAs: (memberId) => {
+          if (!live()) throw new Error('this act() scope has ended');
+          return actAs(memberId, { live, authority, action, track, external_ref: base.external_ref, subjectKey, subject: subject ?? null });
+        }, link: guard(link), relink: guard(relink), linkStatus: guard(linkStatus),
       };
       let decision = 'failed';
       let error = 'handler_failed';
@@ -853,10 +879,14 @@ export function createIntegrations({
       const refused = refusal();
       if (refused) { audit('failed', refused); return { done: false, reason: refused }; }
       if (mode !== 'auto') { audit(mode === 'ask' ? 'asked' : 'skipped'); return { done: false, decision: mode === 'ask' ? 'asked' : 'skipped' }; }
+      currentAuthority(action);
       const via = { connection_id: c.id, member_id: null, name: conn.name };
       // hub.txn (not db.tx): the outermost transaction flushes apply()'s
       // after-commit work (broadcasts, notifies, the bus poke).
       return hub.withBoard(card.board_id, () => hub.actVia(via, () => hub.txn(() => {
+        // Unlike actAs, system facts use apply directly: enforce the same
+        // captured connection/principal/action fence after the queue wait.
+        currentAuthority(action);
         // Evidence may have changed while this waited on the board queue.
         const late = refusal();
         if (late) { audit('failed', late); return { done: false, reason: late }; }
