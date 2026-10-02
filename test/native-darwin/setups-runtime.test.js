@@ -1,10 +1,10 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
 const {spawn}=require('node:child_process');
-const {fixture,stamp}=require('./helpers/setups-native/runtime');
-const {createSetupsService}=require('../src/setups-service');
-const {createSetupsRuntime}=require('../src/setups-runtime');
-const {validatePayload,canonical}=require('../src/borrow/payload');
+const {fixture,stamp}=require('../helpers/setups-native/runtime');
+const {createSetupsService}=require('../../src/setups-service');
+const {createSetupsRuntime}=require('../../src/setups-runtime');
+const {validatePayload,canonical}=require('../../src/borrow/payload');
 const helper=process.env.PLEXIFORM_TEST_HELPER;
 const tick=()=>new Promise(r=>setImmediate(r));
 async function setup(t,options={}){

@@ -25,5 +25,5 @@ test('packaging includes only fixed Setups helper resources and Mac runtime acce
  const step=doc.jobs.build.steps.find(s=>s.name==='Native Setups helper and runtime acceptance (Mac)');assert.ok(step);assert.equal(step.if,"matrix.platform == 'mac'");assert.equal(step['timeout-minutes'],5);assert.equal(step['continue-on-error'],undefined);assert.match(step.run,/npm run test:native-darwin/);
  assert.match(pkg.scripts['test:native-darwin'],/test\/native-darwin\/\*\.test\.js/);assert.match(pkg.scripts['test:native-darwin'],/PLEXIFORM_TEST_HELPER=\$PWD\/native\/setups-build\/buddy-setups/);
  const script=fs.readFileSync(path.join(ROOT,'scripts/build-setups-helper.sh'),'utf8');assert.doesNotMatch(script,/-DPF_.*TEST/);assert.match(script,/-Wall -Wextra -Werror -pedantic/);assert.match(script,/for pf_setups_arch in arm64 x86_64/);
- for(const name of ['setups-native-codec','setups-native-supervisor','setups-transaction-journal','setups-transaction-controller'])assert.ok(fs.existsSync(path.join(ROOT,`test/native-darwin/${name}.test.js`)));
+ for(const name of ['setups-native-codec','setups-native-supervisor','setups-transaction-journal','setups-transaction-controller','setups-runtime'])assert.ok(fs.existsSync(path.join(ROOT,`test/native-darwin/${name}.test.js`)));
 });
