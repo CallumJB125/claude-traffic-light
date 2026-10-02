@@ -292,7 +292,7 @@ test('IPC: local-models channel needs the Overview frame and returns the registr
   const contents = { id: 1, isDestroyed: () => false, mainFrame: {}, send() {} };
   const handlers = new Map();
   let refreshed = 0;
-  const main = createInteractionMain({ context: () => ({ contents, generation: 1, foreground: true }), adapters: {}, boardCurrent: (b) => b === null, workspace: () => null, localModels: { refresh: async () => { refreshed++; return { endpoints: [], models: [] }; } } });
+  const main = createInteractionMain({ context: () => ({ contents, generation: 1, document: 1, foreground: true }), adapters: {}, workspace: () => null, localModels: { refresh: async () => { refreshed++; return { endpoints: [], models: [] }; } } });
   main.register({ handle: (ch, fn) => handlers.set(ch, fn) });
   assert.equal(await handlers.get(CHANNELS.localModels)({ sender: {}, senderFrame: {} }), null);
   assert.equal(refreshed, 0);

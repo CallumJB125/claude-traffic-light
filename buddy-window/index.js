@@ -179,7 +179,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   let accountLoadGeneration = 0;
   const localViews = new Map(); // page id → its own view, kept so a page keeps its state
   const setupIdentityListeners=new Set();let setupIdentityMarkers=[];
-  let setupSourcesGeneration=0,setupLocalGeneration=0,setupCurrentSources=[],setupModalTicket=null;
+  let overviewDocument=0,setupSourcesGeneration=0,setupLocalGeneration=0,setupCurrentSources=[],setupModalTicket=null;
   let selected = 'board';
   let hubStatus = { state: 'stopped' };
   let hubInfo = null; // {url, origin, accessTeam, partition, team, bearer, org}
@@ -409,9 +409,11 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       if(['setups','overview'].includes(page.id)){
         // A same-URL reload keeps WebContents/mainFrame object identity. Its
         // document still retires every outstanding native approval and plan.
-        v.webContents.on('did-start-navigation',d=>{if(d.isMainFrame)retireSetupDocument();});
-        v.webContents.on('render-process-gone',retireSetupDocument);
-        v.webContents.once('destroyed',retireSetupDocument);
+        // Overview also counts documents (not focus changes) for session ownership.
+        const retire=page.id==='overview'?()=>{overviewDocument++;retireSetupDocument();}:retireSetupDocument;
+        v.webContents.on('did-start-navigation',d=>{if(d.isMainFrame)retire();});
+        v.webContents.on('render-process-gone',retire);
+        v.webContents.once('destroyed',retire);
       }
       v.webContents.on('did-finish-load', () => {
         onLocalPage(page, v.webContents);
@@ -935,14 +937,14 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       if(!win||win.isDestroyed()||!wc||wc.isDestroyed()||selected!=='overview'||content!==v||!win.contentView.children.includes(v)||!win.isVisible()||win.isMinimized())return null;
       const expected=pathToFileURL(path.join(DIR,'..','overview.html')).href;
       if(wc.getURL()!==expected||wc.mainFrame?.url!==expected||wc.isLoading())return null;
-      return {window:win,contents:wc,generation:setupLocalGeneration,foreground:win.isFocused()};
+      return {window:win,contents:wc,generation:setupLocalGeneration,document:overviewDocument,foreground:win.isFocused()};
     },
     overviewContext(){
       const v=localViews.get('overview'),wc=v?.webContents;
       if(!win||win.isDestroyed()||!wc||wc.isDestroyed()||selected!=='overview'||content!==v||!win.contentView.children.includes(v)||!win.isVisible()||win.isMinimized()||!win.isFocused())return null;
       const expected=pathToFileURL(path.join(DIR,'..','overview.html')).href;
       if(wc.getURL()!==expected||wc.mainFrame?.url!==expected||wc.isLoading())return null;
-      return {window:win,contents:wc,generation:setupLocalGeneration,foreground:true};
+      return {window:win,contents:wc,generation:setupLocalGeneration,document:overviewDocument,foreground:true};
     },
     setupSources,
     // Main-only identities. No renderer receives a sealed marker or window.

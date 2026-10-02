@@ -38,6 +38,8 @@
   const byId = id => rows.get(id);
   function capability(row, action) {
     if (document.hidden || !snapshot || snapshot.status === 'unavailable') return { enabled: false, reason: 'Current activity is unavailable.' };
+    // A connection that can never do this keeps its own exact reason, even when stale.
+    if (row.capabilities[action].enabled !== true) return row.capabilities[action];
     if (freshness(row) !== 'recent') return { enabled: false, reason: freshness(row) === 'stale' ? 'This report is stale. Refresh before acting.' : 'Current activity has not been reported.' };
     if (row.capabilities[action].enabled !== true) return row.capabilities[action];
     if (!uuid(row.handle)) return { enabled: false, reason: 'This agent has no supported action connection.' };
@@ -207,14 +209,174 @@
       }
     }
   }
+  // ── Sessions Plexiform started (owned). Cards are keyed by session and
+  // updated in place so typing, focus and IME composition survive pushes and
+  // automatic checks. Provider text is only ever set through textContent.
+  const ix = obj(api.interaction) ? api.interaction : null;
+  const owned = new Map();
+  let ixRead = 0, codexCap = null, launching = false;
+  const STATUSES = ['ready', 'working', 'ended'];
+  const DELIVERY = { sending: 'Sending…', acknowledged: 'Acknowledged by Codex', recorded: 'Recorded by Codex', responding: 'Responding…', completed: 'Completed', failed: 'Failed', interrupted: 'Interrupted', refused: 'Refused' };
+  const REFUSAL = { invalid: 'Refused: the request was not valid', forbidden: 'Refused: not allowed from this page right now', stale: 'Refused: stale', busy: 'Refused: busy', unavailable: 'Unavailable' };
+  const text = (value, max) => typeof value === 'string' && value.length <= max;
+  const stamp = value => Number.isFinite(value) && value >= 0;
+  const turnRef = value => value === null || uuid(value);
+  const validDelivery = d => obj(d) && uuid(d.id) && text(d.text, 4000) && ['new-turn', 'steer'].includes(d.mode) && Object.hasOwn(DELIVERY, d.state) && typeof d.recorded === 'boolean' && turnRef(d.turn) && text(d.response, 16000) && (d.error === null || text(d.error, 1000)) && Array.isArray(d.notices) && d.notices.length <= 5 && d.notices.every(n => text(n, 300)) && stamp(d.sentAt) && (d.finishedAt === null || stamp(d.finishedAt));
+  const validProvider = p => obj(p) && text(p.id, 40) && text(p.label, 80);
+  const validState = s => obj(s) && uuid(s.session) && Number.isSafeInteger(s.generation) && s.generation >= 0 && validProvider(s.provider) && s.ownership === 'plexiform-owned' && text(s.label, 200) && STATUSES.includes(s.status) && turnRef(s.activeTurn) && obj(s.capabilities) && Array.isArray(s.deliveries) && s.deliveries.length <= 20 && s.deliveries.every(validDelivery);
+  const ownedStatus = message => { $('owned-status').textContent = message; };
+  const statusLabel = status => status === 'working' ? 'Working' : status === 'ended' ? 'Ended' : 'Ready';
+  function deliveryItem(d) {
+    const li = node('li', '', 'delivery'), head = node('div', '', 'delivery-head');
+    head.append(node('strong', d.mode === 'steer' ? 'You (steer)' : 'You'), node('span', DELIVERY[d.state], `tag ${d.state}`));
+    li.append(head, node('p', d.text, 'delivery-text'));
+    if (d.response) { const reply = node('p', d.response, 'delivery-response'); reply.setAttribute('aria-label', 'Codex response'); li.append(reply); }
+    else if (['acknowledged', 'recorded', 'responding'].includes(d.state)) li.append(node('p', 'Waiting for Codex to answer…', 'muted'));
+    if (d.state === 'acknowledged' && !d.recorded) li.append(node('p', 'Codex accepted this turn. It has not yet echoed your exact text.', 'reason'));
+    if (d.error) li.append(node('p', `Codex reported: ${d.error}`, 'reason'));
+    for (const n of d.notices) li.append(node('p', n, 'reason'));
+    if (d.state === 'refused') li.append(node('p', 'Plexiform could not confirm Codex accepted this message.', 'reason'));
+    return li;
+  }
+  function ownedCard(id) {
+    const entry = owned.get(id), el = node('article', '', 'session owned-session'); el.dataset.session = id;
+    const heading = node('div', '', 'row-heading'), title = node('h3'), tag = node('span', '', 'tag');
+    heading.append(title, tag);
+    const meta = node('p', '', 'row-meta'), body = node('div'), notice = node('p', '', 'reason'); notice.setAttribute('role', 'status');
+    el.append(heading, meta, body, notice);
+    entry.el = el; entry.parts = { title, tag, meta, body, notice };
+    return el;
+  }
+  // The composer is built once per session and never detached while live.
+  function composerParts(id) {
+    const entry = owned.get(id), box = node('div', '', 'composer'), label = node('label', 'Message this Codex session');
+    const input = node('textarea'); input.id = `owned-${id}`; label.htmlFor = input.id; input.placeholder = 'Type a message for Codex…';
+    input.value = entry.draft; input.addEventListener('input', () => { entry.draft = input.value; });
+    const note = node('p', '', 'reason'), buttons = node('div', '', 'actions');
+    const send = button('Send', () => void effect(id, 'send')), steer = button('Steer current turn', () => void effect(id, 'steer'));
+    const stop = button('Interrupt', () => void effect(id, 'interrupt')), close = button('Close session', () => void effect(id, 'close'));
+    buttons.append(send, steer, stop, close); box.append(label, input, note, buttons);
+    const list = node('ol', '', 'deliveries');
+    list.setAttribute('aria-label', 'Messages and responses');
+    entry.composer = { box, input, note, send, steer, stop, close, list };
+    entry.parts.body.replaceChildren(list, box);
+  }
+  function updateCard(id) {
+    const entry = owned.get(id); if (!entry) return;
+    if (!entry.el) $('owned').append(ownedCard(id));
+    const { title, tag, meta, body, notice } = entry.parts, s = entry.state;
+    title.textContent = `${s.provider.label} session`;
+    meta.textContent = `${s.label} · private read-only workspace`;
+    notice.textContent = entry.notice;
+    if (entry.missing) {
+      // Kept visible (never silently removed); its last known messages stay readable.
+      tag.textContent = 'Ended'; tag.className = 'tag stale';
+      if (entry.composer) {
+        for (const control of [entry.composer.input, entry.composer.send, entry.composer.steer, entry.composer.stop, entry.composer.close]) control.disabled = true;
+        entry.composer.note.textContent = 'Plexiform no longer holds this session (closed, provider exited or Plexiform restarted). Nothing more can be sent to it.';
+        if (!entry.dismiss) { entry.dismiss = button('Dismiss', () => { owned.delete(id); entry.el.remove(); renderOwnedEmpty(); }); entry.composer.box.append(entry.dismiss); }
+      }
+      return;
+    }
+    tag.textContent = statusLabel(s.status);
+    tag.className = `tag ${s.status === 'working' ? 'working' : s.status === 'ended' ? 'stale' : ''}`;
+    if (!entry.composer) composerParts(id);
+    const c = entry.composer, working = s.status === 'working' && !!s.activeTurn;
+    c.list.replaceChildren(...(s.deliveries.length ? s.deliveries.map(deliveryItem) : [node('li', 'No messages yet.', 'muted')]));
+    c.input.disabled = !!entry.busy || s.status === 'ended';
+    c.send.disabled = !!entry.busy || s.status !== 'ready';
+    c.steer.disabled = !!entry.busy || !working || s.capabilities.steer !== true;
+    c.stop.disabled = !!entry.busy || !working || s.capabilities.interrupt !== true;
+    c.close.disabled = !!entry.busy;
+    c.send.textContent = entry.busy === 'send' ? 'Sending…' : 'Send';
+    c.note.textContent = s.status === 'ended' ? 'This session has ended. Close it to remove it.' : working ? 'A turn is running. Steer adds your text to it; Send is available when it finishes.' : 'Sends your exact text to this session only. Maximum 4,000 characters.';
+  }
+  function applyState(state) {
+    const entry = owned.get(state.session) ?? { draft: '', notice: '', busy: false };
+    if (entry.missing) return;
+    entry.state = state;
+    owned.set(state.session, entry); updateCard(state.session);
+  }
+  function renderOwnedEmpty() {
+    const placeholder = $('owned').querySelector('.empty');
+    if (!owned.size && !placeholder) $('owned').append(empty('No Plexiform sessions', 'Start a Codex session to message it from here. It runs read-only in a private Plexiform folder.'));
+    else if (owned.size) placeholder?.remove();
+  }
+  function startButton() {
+    const b = $('start-codex');
+    b.disabled = launching || !codexCap || codexCap.available !== true;
+    b.textContent = launching ? 'Starting…' : 'Start Codex session';
+    b.title = codexCap && codexCap.available !== true ? codexCap.reason : '';
+  }
+  async function refreshOwned() {
+    if (!ix || document.hidden) return;
+    const request = ++ixRead;
+    try {
+      const [caps, items] = await Promise.all([ix.capabilities(), ix.list()]);
+      if (request !== ixRead || document.hidden) return;
+      if (Array.isArray(caps)) {
+        codexCap = caps.find(c => obj(c) && c.provider === 'codex') ?? { available: false, reason: 'Codex is not available.' };
+        startButton();
+        if (codexCap.available !== true) ownedStatus(`Codex unavailable: ${text(codexCap.reason, 300) ? codexCap.reason : 'not installed'}.`);
+      }
+      if (!Array.isArray(items)) { ownedStatus('Plexiform session state is unavailable right now. Showing the last known state.'); return; }
+      const seen = new Set();
+      for (const item of items) {
+        if (validState(item)) { seen.add(item.session); applyState(item); }
+      }
+      for (const [id, entry] of owned) if (!seen.has(id) && !entry.missing && !entry.busy) { entry.missing = true; updateCard(id); }
+      renderOwnedEmpty();
+    } catch { if (request === ixRead) ownedStatus('Plexiform session state is unavailable right now. Showing the last known state.'); }
+  }
+  async function launchCodex() {
+    if (!ix || launching || codexCap?.available !== true) return;
+    launching = true; startButton(); ownedStatus('Starting a Codex session…');
+    let result;
+    try { result = await ix.launch({ provider: 'codex' }); } catch { result = null; }
+    launching = false; startButton();
+    if (result?.ok === true && validState(result.state)) {
+      ownedStatus('Codex session started. Type a message below.');
+      applyState(result.state); renderOwnedEmpty(); owned.get(result.state.session).composer?.input.focus();
+    } else ownedStatus(`Could not start Codex. ${REFUSAL[result?.status] ?? REFUSAL.unavailable}${text(result?.error, 300) ? `: ${result.error}` : '.'}`);
+  }
+  async function effect(id, kind) {
+    const entry = owned.get(id); if (!entry || entry.busy || entry.missing) return;
+    const s = entry.state, base = { session: s.session, generation: s.generation };
+    let request;
+    if (kind === 'send' || kind === 'steer') {
+      const value = entry.draft.trim();
+      if (!value || value.length > 4000 || value.includes('\0') || new Blob([value]).size > 8192) { entry.notice = 'Write a message of at most 4,000 characters and 8 KB.'; updateCard(id); return; }
+      request = kind === 'steer' ? { ...base, text: value, expectedTurn: s.activeTurn } : { ...base, text: value };
+    } else request = kind === 'interrupt' ? { ...base, turn: s.activeTurn } : base;
+    entry.busy = kind; entry.notice = ''; updateCard(id);
+    let result;
+    try { result = await ix[kind === 'steer' ? 'send' : kind](request); } catch { result = null; }
+    entry.busy = false;
+    if (owned.get(id) !== entry) return;
+    if (result?.ok === true) {
+      if (kind === 'close') { owned.delete(id); entry.el?.remove(); renderOwnedEmpty(); ownedStatus('Session closed.'); return; }
+      if (kind !== 'interrupt') { entry.draft = ''; if (entry.composer) entry.composer.input.value = ''; }
+      entry.notice = kind === 'interrupt' ? 'Interrupt requested. Codex will confirm when the turn stops.' : 'Delivered: Codex acknowledged this message.';
+      if (validState(result.state)) applyState(result.state); else updateCard(id);
+      return;
+    }
+    entry.notice = `${REFUSAL[result?.status] ?? REFUSAL.unavailable}. ${text(result?.error, 300) ? result.error : 'Nothing was sent.'}`;
+    updateCard(id);
+    if (['stale', 'busy', 'forbidden'].includes(result?.status)) void refreshOwned();
+  }
+  if (ix) {
+    $('owned-section').hidden = false;
+    $('start-codex').addEventListener('click', () => void launchCodex());
+    if (typeof ix.onEvent === 'function') ix.onEvent(state => { if (validState(state) && owned.has(state.session)) applyState(state); });
+  }
   if (typeof api.onReady === 'function') api.onReady(() => {
     ready = true;
-    if (!document.hidden) void refresh();
+    if (!document.hidden) { void refresh(); void refreshOwned(); }
   });
   $('refresh').addEventListener('click', () => void refresh());
   for (const filter of filters) $(`${filter}-filter`).addEventListener('change', () => { clearInteractions(); if (snapshot) renderWork(); });
   $('clear-filters').addEventListener('click', () => { filters.forEach(filter => { $(`${filter}-filter`).value = ''; }); clearInteractions(); if (snapshot) renderWork(); });
-  document.addEventListener('visibilitychange', () => { ++readGeneration; expanded.clear(); clearPage('Checking reported activity…'); if (!document.hidden && ready) void refresh(); });
-  setInterval(() => { if (!document.hidden && ready) { if (snapshot) { renderSummary(); renderConnections(); renderWork(); } void refresh(); } }, 5000);
-  if (!document.hidden && ready) void refresh();
+  document.addEventListener('visibilitychange', () => { ++readGeneration; expanded.clear(); clearPage('Checking reported activity…'); if (!document.hidden && ready) { void refresh(); void refreshOwned(); } });
+  setInterval(() => { if (!document.hidden && ready) { if (snapshot) { renderSummary(); renderConnections(); renderWork(); } void refresh(); void refreshOwned(); } }, 5000);
+  if (!document.hidden && ready) { void refresh(); void refreshOwned(); }
 })();

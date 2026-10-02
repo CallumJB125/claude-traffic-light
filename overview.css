@@ -45,6 +45,14 @@ summary { cursor: pointer; min-height: 36px; padding: 6px 0; }
 .composer label { display: block; font-weight: 600; margin-bottom: 7px; }
 textarea { width: 100%; resize: vertical; min-height: 90px; padding: 10px; }
 .composer .actions { margin-top: 8px; }
+.owned { margin-bottom: 24px; }
+.deliveries { list-style: none; padding: 0; margin: 12px 0 0; }
+.delivery { border-top: 1px solid var(--line); padding: 10px 0; }
+.delivery-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; }
+.delivery-text, .delivery-response { white-space: pre-wrap; overflow-wrap: anywhere; margin: 4px 0; }
+.delivery-response { padding: 8px 10px; border-left: 2px solid var(--line-strong); background: var(--panel-2); border-radius: var(--radius); }
+.tag.failed, .tag.refused { color: var(--amber); }
+.tag.completed, .tag.recorded, .tag.acknowledged, .tag.responding { color: var(--green); }
 .empty { border: 1px dashed var(--line-strong); padding: 28px; border-radius: var(--radius-lg); color: var(--muted); }
 .empty h3 { color: var(--text); margin-bottom: 7px; }
 .connections { margin-top: 28px; }

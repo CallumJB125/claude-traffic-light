@@ -1406,8 +1406,8 @@ const InteractionMain=require('./src/interaction-main').createInteractionMain({
   adapters:{codex:Object.assign(CodexAppServer.createCodexAppServer({bin:codexBin,clientVersion:app.getVersion()}),codexBin?{}:{available:false,reason:'Codex CLI not found'})},
   // Empty private folder outside Plexiform's data directory.
   workspace:()=>fs.mkdtempSync(path.join(os.tmpdir(),'plexiform-owned-')),
-  // No board source binds owned sessions yet: only unbound sessions are current.
-  boardCurrent:board=>board===null,
+  // The active workspace (My board or a team board) the sidebar shows.
+  currentBoard:()=>buddyWin?.status?.().workspace??null,
   localModelsFile:path.join(app.getPath('userData'),'local-models.json'),
 });
 InteractionMain.register(ipcMain);
