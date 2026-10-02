@@ -139,6 +139,25 @@ static PFResult acl_copy(int fd, acl_t *out, unsigned char hash[32]) {
   if (copied < 0 || copied > size) { acl_free(acl); return PF_IO; }
   digest(bytes, (size_t)copied, hash); wipe(bytes, sizeof(bytes)); *out = acl; return PF_OK;
 }
+/* Plaintext holds require an actually empty descriptor ACL, not merely the
+ * reader's safe-write ACL policy (which intentionally permits read grants).
+ * Absence with Darwin's documented ENOENT is a positively queried empty ACL.
+ * No existing or newly observed hold ACL is ever rewritten. */
+static PFResult empty_acl(int fd) {
+  if (W_FAULT(38)) return PF_IO;
+  if (W_FAULT(39)) return PF_UNSUPPORTED;
+  errno = 0; acl_t acl = acl_get_fd_np(fd, ACL_TYPE_EXTENDED);
+  if (!acl) return errno == ENOENT ? PF_OK : io_error();
+  ssize_t size = acl_size(acl); PFResult r = PF_OK;
+  if (size < 0 || size > (ssize_t)PF_WRITER_ACL_BYTES || acl_valid(acl) != 0) r = PF_UNSAFE;
+  if (r == PF_OK) {
+    acl_entry_t first; errno = 0;
+    if (acl_get_entry(acl, ACL_FIRST_ENTRY, &first) == 0) r = PF_UNSAFE;
+    else if (errno != EINVAL) r = io_error();
+  }
+  if (acl_free(acl) != 0 && r == PF_OK) r = PF_IO;
+  return r;
+}
 static PFResult attribute_copy(int fd, PFAttributeMeta out[2], PFAttribute saved[2]) {
   char names[128]; ssize_t size = flistxattr(fd, names, sizeof(names), 0);
   if (size < 0) return errno == ERANGE ? PF_TOO_LARGE : PF_IO;
@@ -240,10 +259,11 @@ static PFResult current(PFWriteTxn *t) {
   PFStamp a = stamp_of(&held), b = stamp_of(&named);
   if (!S_ISDIR(held.st_mode) || held.st_uid != getuid() || (held.st_mode & 07777) != 0700
       || !identity_equal(&t->hold_identity, &a) || !identity_equal(&a, &b)) return PF_CHANGED;
-  r = pf_native_acl_safe(t->hold_fd); if (r != PF_OK) return r;
-  acl_t acl = NULL; unsigned char hash[32], empty[32];
-  r = acl_copy(t->hold_fd, &acl, hash); if (acl) acl_free(acl); if (r != PF_OK) return r;
-  digest(NULL, 0, empty); return memcmp(hash, empty, sizeof(hash)) == 0 ? PF_OK : PF_UNSAFE;
+  r = empty_acl(t->hold_fd); if (r != PF_OK) return r;
+  W_BARRIER(11);
+  if (fstat(t->hold_fd, &held) != 0 || fstatat(pf_native_profile_fd(t->parent), t->hold_id, &named, AT_SYMLINK_NOFOLLOW) != 0) return PF_CHANGED;
+  PFStamp fresh = stamp_of(&held), binding = stamp_of(&named);
+  return memcmp(&a, &fresh, sizeof(a)) == 0 && memcmp(&fresh, &binding, sizeof(fresh)) == 0 ? PF_OK : PF_CHANGED;
 }
 static PFResult sync_file(int fd) {
   if (W_FAULT(32)) return PF_IO;
@@ -369,14 +389,10 @@ static PFResult hold_create(PFWriteTxn *t) {
   PFStamp binding = stamp_of(&named); if (memcmp(&binding, &opened, sizeof(binding)) != 0) return PF_CHANGED;
   if (fstat(t->hold_fd, &st) != 0) return PF_IO;
   PFStamp fresh = stamp_of(&st); if (memcmp(&fresh, &opened, sizeof(fresh)) != 0) return PF_CHANGED;
-  /* Only the freshly observed empty generated directory is changed. mkdirat
-   * has no atomic created-inode return: same-UID replacement before first
-   * capture is indistinguishable, as the contract explicitly records.
-   * Do not inherit read ACLs into the private plaintext recovery surface. */
-  acl_t empty = acl_init(0); if (!empty) return PF_IO;
-  int set = acl_set_fd_np(t->hold_fd, empty, ACL_TYPE_EXTENDED); acl_free(empty);
-  if (set != 0 || fstat(t->hold_fd, &st) != 0) return PF_IO;
-  t->hold_identity = stamp_of(&st);
+  /* mkdirat has no atomic created-inode return: an empty same-UID replacement
+   * before first capture remains indistinguishable. Refuse any observed ACL
+   * instead of clearing inherited or foreign metadata to manufacture privacy. */
+  t->hold_identity = fresh;
   r = current(t); if (r != PF_OK) return r;
   r = sync_dir(t->hold_fd); if (r == PF_OK) r = sync_dir(profile);
   return r;

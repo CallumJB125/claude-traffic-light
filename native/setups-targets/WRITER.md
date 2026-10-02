@@ -24,10 +24,12 @@ or a grant to execute the resulting instructions/hooks.
 
 Preparation rechecks exact existing bytes/stamp or an absent leaf, then creates
 an exclusive random directory under the captured profile on the same volume.
-It is 0700 with an empty descriptor ACL; only this newly created owned directory
-has its inherited ACL removed. Existing profile, target parent and target ACLs
-are never weakened. Before/after snapshots and staged bytes are declared private
-plaintext recovery surfaces, separate from encrypted app snapshots. A staged
+It must be currently uid-owned 0700 with a positively queried empty descriptor
+ACL. Any nonempty inherited or foreign ACL, query error or unsupported query
+refuses before plaintext staging; hold ACLs are never rewritten. Existing
+profile, target parent and target ACLs are never weakened. Before/after snapshots
+and staged bytes are declared private plaintext recovery surfaces, separate
+from encrypted app snapshots. A staged
 0644 approved target stays inside that private directory. Mode, group and safe
 extended ACL are preserved for existing targets. Only `com.apple.provenance` and
 `com.apple.quarantine` attributes are supported, each capped at8192bytes and
@@ -57,13 +59,22 @@ or automatic crash recovery mutation API. The in-memory capability rechecks
 its captured exact snapshot/record metadata and hashes before subsequent writes.
 Fresh directory creation is observed through a captured named identity,
 matching opened descriptor, empty-directory check and fresh full metadata/
-current-binding checks before any ACL update. Unexpected contents or a retarget
-after capture refuse without changing the ACL or those contents. POSIX `mkdirat` does not return
+current-binding checks and a positively queried empty descriptor ACL before
+plaintext staging. Descriptor and named metadata are rechecked after the ACL
+query. Unexpected contents, a nonempty ACL or a retarget after capture refuse
+without changing the ACL or those contents. Darwin's supported no-ACL ENOENT
+answer and a valid zero-entry ACL are empty; parse/error/unsupported answers
+refuse. Reader safe-write ACL checks alone are insufficient for this hold,
+because the reader permits read grants. POSIX `mkdirat` does not return
 an inode capability atomically: replacement in the gap before the first identity
 capture cannot be distinguished from the just-created directory. The generated
 random name is never supplied/adopted by a caller; this is an observed filesystem
 boundary, not protection against a malicious same-UID process controlling the
-profile namespace or a claim of immutable permissions.
+profile namespace or a claim of immutable permissions. An indistinguishable
+empty same-UID replacement carrying an empty ACL may still be accepted; no
+created-inode proof is inferred. A foreign read/search or deny-only ACL in that
+gap is preserved and refused, rather than cleared. ACL checks and subsequent
+filesystem writes do not atomically freeze permissions against other processes.
 
 Apply writes durable intent, rechecks the current expected target and uses only
 descriptor-relative `RENAME_EXCL` for an absent leaf or `RENAME_SWAP` for an

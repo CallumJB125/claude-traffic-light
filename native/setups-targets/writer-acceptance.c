@@ -22,6 +22,8 @@ static char base[PATH_MAX], profile[PATH_MAX], folder[PATH_MAX], file[PATH_MAX],
 static const char original[] = "ORIGINAL SYNTHETIC INSTRUCTIONS\r\n";
 static const char desired[] = "ORIGINAL SYNTHETIC INSTRUCTIONS\r\nNEW OWNED BLOCK\r\n";
 static int cases, failures, previous_failures, action, fired, fault, crash_stage, old_fd = -1;
+static unsigned char captured_acl[32768];
+static ssize_t captured_acl_size;
 static void must(int condition) { if (!condition) { perror("writer fixture"); fprintf(stderr, "retained fixture %s\n", base); exit(99); } }
 static void join(char *out, const char *a, const char *b) { char value[PATH_MAX]; int n = snprintf(value, sizeof(value), "%s/%s", a, b); must(n > 0 && n < PATH_MAX); memcpy(out, value, (size_t)n+1); }
 static void check(int condition, const char *label) { printf("%s %d - %s\n", condition ? "ok" : "not ok", ++cases, label); fflush(stdout); if (!condition) ++failures; }
@@ -71,13 +73,35 @@ static unsigned acl_entries(const char *target) {
   unsigned count = 0; acl_entry_t e; while (acl_get_entry(acl, count ? ACL_NEXT_ENTRY : ACL_FIRST_ENTRY, &e) == 0) count++;
   must(acl_free(acl) == 0 && close(fd) == 0); return count;
 }
+static ssize_t acl_bytes(const char *target, unsigned char out[32768]) {
+  int fd = open(target, O_RDONLY | O_NOFOLLOW | O_NONBLOCK); must(fd >= 0);
+  acl_t acl = acl_get_fd_np(fd, ACL_TYPE_EXTENDED); must(acl != NULL);
+  ssize_t size = acl_size(acl); must(size > 0 && size <= 32768);
+  ssize_t count = acl_copy_ext_native(out, acl, size); must(count > 0 && count <= size);
+  must(acl_free(acl) == 0 && close(fd) == 0); return count;
+}
+static int retained_acl(const char *target) {
+  unsigned char actual[32768]; ssize_t size = acl_bytes(target, actual);
+  return size == captured_acl_size && memcmp(actual, captured_acl, (size_t)size) == 0;
+}
+static void find_hold(void) {
+  DIR *dir = opendir(profile); must(dir != NULL); struct dirent *e; hold[0] = 0;
+  while ((e = readdir(dir)) != NULL) if (strncmp(e->d_name, ".plexiform-setups-hold-", sizeof(".plexiform-setups-hold-")-1) == 0) join(hold, profile, e->d_name);
+  must(closedir(dir) == 0 && hold[0]);
+}
 int pf_writer_test_fault(unsigned stage) { return fault == (int)stage; }
 void pf_reader_test_barrier(unsigned stage) { (void)stage; }
 void pf_writer_test_barrier(unsigned stage) {
   if (crash_stage == (int)stage) _exit(40);
   if (!action || fired) return;
   char moved[PATH_MAX], other[PATH_MAX];
-  if (stage == 10 && action >= 22 && action <= 24) {
+  if ((stage == 9 && (action == 25 || action == 27)) || (stage == 11 && action == 26)) {
+    fired = 1; find_hold();
+    if (action != 26) { join(moved, base, "actual-created-empty-hold"); must(rename(hold, moved) == 0 && mkdir(hold, 0700) == 0); }
+    everyone(hold, action == 27 ? "everyone deny delete" : "everyone allow read,search");
+    captured_acl_size = acl_bytes(hold, captured_acl);
+  }
+  else if (stage == 10 && action >= 22 && action <= 24) {
     fired = 1; DIR *dir = opendir(profile); must(dir != NULL); struct dirent *e;
     while ((e = readdir(dir)) != NULL) if (strncmp(e->d_name, ".plexiform-setups-hold-", sizeof(".plexiform-setups-hold-")-1) == 0) join(hold, profile, e->d_name);
     closedir(dir); join(other, hold, action == 24 ? "undo-stage" : "after");
@@ -231,8 +255,27 @@ int main(void) {
   }
   reset(); root = root_open(); txn = prepare(root, 1); char moved_hold[PATH_MAX]; join(moved_hold, profile, "external-hold"); must(rename(hold, moved_hold) == 0 && mkdir(hold, 0700) == 0); join(path, hold, "foreign"); put(path, "FOREIGN-HOLD");
   check(pf_writer_apply(txn, &receipt) == PF_CHANGED && equals(file, original) && equals(path, "FOREIGN-HOLD"), "replacement hold is never adopted or cleaned"); pf_writer_close(txn); pf_root_close(root);
-  reset(); everyone(profile, "everyone allow read,search,file_inherit,directory_inherit"); root = root_open(); txn = prepare(root, 1);
-  check(acl_entries(profile) > 0 && acl_entries(hold) == 0 && pf_writer_apply(txn, &receipt) == PF_OK, "new exclusive private hold strips inherited read grants while existing profile ACL stays intact"); pf_writer_close(txn); pf_root_close(root);
+  reset(); everyone(profile, "everyone allow read,search,file_inherit,directory_inherit"); root = root_open();
+  unsigned char profile_acl[32768]; ssize_t profile_acl_size = acl_bytes(profile, profile_acl);
+  must(pf_inspect_fixed(root, PF_CODEX_INSTRUCTIONS, &stamp) == PF_OK); txn = NULL;
+  PFResult inherited_acl = pf_writer_prepare(root, PF_CODEX_INSTRUCTIONS, &stamp, (const unsigned char *)original, sizeof(original)-1, (const unsigned char *)desired, sizeof(desired)-1, &txn);
+  find_hold(); unsigned char profile_after[32768]; ssize_t profile_after_size = acl_bytes(profile, profile_after);
+  check(inherited_acl == PF_UNSAFE && txn == NULL && equals(file, original) && acl_entries(hold) > 0 && profile_after_size == profile_acl_size && memcmp(profile_after, profile_acl, (size_t)profile_acl_size) == 0 && record_header(hold, 0, PF_WRITE_PREPARED, 0) == 0, "inherited read ACL refuses without stripping hold or existing profile ACL or staging bytes");
+  if (txn) pf_writer_close(txn); pf_root_close(root);
+  for (unsigned variant = 25; variant <= 27; ++variant) {
+    reset(); root = root_open(); must(pf_inspect_fixed(root, PF_CODEX_INSTRUCTIONS, &stamp) == PF_OK); action = (int)variant; txn = NULL;
+    PFResult nonempty_acl = pf_writer_prepare(root, PF_CODEX_INSTRUCTIONS, &stamp, (const unsigned char *)original, sizeof(original)-1, (const unsigned char *)desired, sizeof(desired)-1, &txn);
+    join(path, hold, "snapshot-before");
+    check(fired && nonempty_acl != PF_OK && txn == NULL && equals(file, original) && retained_acl(hold) && access(path, F_OK) != 0, variant == 26 ? "ACL added after empty descriptor query refuses before plaintext staging without ACL mutation" : variant == 25 ? "empty same-UID replacement before first capture preserves foreign read ACL and refuses" : "even a deny-only ACL on pre-firstcapture replacement refuses without foreign ACL mutation");
+    if (txn) pf_writer_close(txn); pf_root_close(root);
+  }
+  for (unsigned query = 38; query <= 39; ++query) {
+    reset(); root = root_open(); must(pf_inspect_fixed(root, PF_CODEX_INSTRUCTIONS, &stamp) == PF_OK); fault = (int)query; txn = NULL;
+    PFResult query_error = pf_writer_prepare(root, PF_CODEX_INSTRUCTIONS, &stamp, (const unsigned char *)original, sizeof(original)-1, (const unsigned char *)desired, sizeof(desired)-1, &txn);
+    find_hold(); join(path, hold, "snapshot-before");
+    check(query_error == (query == 38 ? PF_IO : PF_UNSUPPORTED) && txn == NULL && equals(file, original) && access(path, F_OK) != 0 && acl_entries(hold) == 0, "injected descriptor ACL query error or unsupported result refuses before plaintext staging");
+    if (txn) pf_writer_close(txn); pf_root_close(root);
+  }
   reset(); everyone(file, "everyone allow read,readattr,readsecurity"); root = root_open(); txn = prepare(root, 1);
   check(pf_writer_apply(txn, &receipt) == PF_OK && acl_entries(file) > 0 && pf_writer_undo(txn, &receipt) == PF_OK && acl_entries(file) > 0, "safe existing read ACL is preserved on approved replacement and Undo"); pf_writer_close(txn); pf_root_close(root);
   reset(); root = root_open(); must(pf_inspect_fixed(root, PF_CODEX_INSTRUCTIONS, &stamp) == PF_OK); must(setxattr(file, "com.example.synthetic", "MARKER", 6, 0, 0) == 0);
