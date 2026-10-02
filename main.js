@@ -3943,9 +3943,10 @@ ipcMain.handle('mcp-set-enabled', (_e, on) => {
 // Connect other agents: each adapter writes its own hook config.
 ipcMain.handle('connect-agent', (e, which) => {
   if (!fromNativeBoardSettings(e)) return { ok: false, error: 'Not allowed.' };
-  const adapter = which === 'claude' ? null : Adapters.get(which);
+  if (typeof which !== 'string' || !['codex', 'cursor', 'gemini'].includes(which)) return { ok: false };
+  const adapter = Adapters.get(which);
   if (!adapter) return { ok: false };
-  if (!AUTO_INSTALL_HOOKS) return { ok: false, error: 'Open the installed app to connect an agent.' };
+  if (!app.isPackaged || !AUTO_INSTALL_HOOKS) return { ok: false, error: 'Open the installed app to connect an agent.' };
   try {
     const install = which === 'codex' ? adapter.installActivity : adapter.install;
     const r = install({ home: os.homedir(), runtime: HOOK_RUNTIME });
@@ -4007,7 +4008,9 @@ function healthReport() {
     signal: { listening: !!signalServer?.listening, port: SIGNAL_PORT, error: signalServerError },
   });
   // Dev runs share the machine with a real install and never rewrite its hooks.
-  if (!AUTO_INSTALL_HOOKS) report.checks = report.checks.map(({ fix, fixLabel, ...c }) => (['reinstall-hooks', 'connect-codex'].includes(fix) ? c : { ...c, ...(fix ? { fix, fixLabel } : {}) }));
+  report.checks = report.checks.map(({ fix, fixLabel, ...c }) =>
+    ((!AUTO_INSTALL_HOOKS && ['reinstall-hooks', 'connect-codex'].includes(fix)) || (!app.isPackaged && fix === 'connect-codex'))
+      ? c : { ...c, ...(fix ? { fix, fixLabel } : {}) });
   return report;
 }
 ipcMain.handle('health-report', () => healthReport());
@@ -4019,7 +4022,7 @@ ipcMain.handle('health-fix', (e, id) => {
       else { error = installHooks(); createTray(); }
     } else if (id === 'connect-codex') {
       if (!fromNativeBoardSettings(e)) error = 'Not allowed.';
-      else if (!AUTO_INSTALL_HOOKS) error = 'Open the installed app to connect Codex.';
+      else if (!app.isPackaged || !AUTO_INSTALL_HOOKS) error = 'Open the installed app to connect Codex.';
       else {
         const r = Adapters.get('codex').installActivity({ home: os.homedir(), runtime: HOOK_RUNTIME });
         if (!r.ok) error = r.error || 'Codex hooks could not be configured.';

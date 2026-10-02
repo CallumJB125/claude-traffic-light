@@ -64,7 +64,7 @@ test('Codex health detects moved configuration despite an old recent event', t =
   assert.equal(f.check().at, undefined);
 });
 
-function connectHandler({ allow = true, installed = true, fails = false } = {}) {
+function connectHandler({ allow = true, installed = true, packaged = true, fails = false } = {}) {
   const source = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
   const start = source.indexOf("ipcMain.handle('connect-agent',");
   const end = source.indexOf("ipcMain.handle('git-status',", start);
@@ -80,7 +80,7 @@ function connectHandler({ allow = true, installed = true, fails = false } = {}) 
     ipcMain: { handle: (_name, fn) => { handler = fn; } },
     fromNativeBoardSettings: e => allow && e === 'settings-main',
     Adapters: { get: id => ['codex', 'cursor'].includes(id) ? adapter : null },
-    AUTO_INSTALL_HOOKS: installed, os: { homedir: () => '/synthetic' }, HOOK_RUNTIME: {},
+    AUTO_INSTALL_HOOKS: installed, app: { isPackaged: packaged }, os: { homedir: () => '/synthetic' }, HOOK_RUNTIME: {},
   });
   return { run: (sender = 'settings-main', id = 'codex') => handler(sender, id), calls };
 }
@@ -95,12 +95,20 @@ test('current Settings connect stages lifecycle hooks and explicitly requires Co
 });
 
 test('untrusted sender and dev/temporary app never write agent configuration', () => {
-  for (const f of [connectHandler({ allow: false }), connectHandler({ installed: false })]) {
+  for (const f of [connectHandler({ allow: false }), connectHandler({ installed: false }), connectHandler({ packaged: false })]) {
     assert.equal(f.run().ok, false);
     assert.deepEqual(f.calls, []);
   }
   const f = connectHandler();
   assert.equal(f.run('settings-subframe').ok, false);
+  assert.deepEqual(f.calls, []);
+});
+
+test('boxed or non-string agent IDs cannot select the legacy Codex notify installer', () => {
+  const f = connectHandler();
+  for (const id of [structuredClone(new String('codex')), ['codex'], { id: 'codex' }, null, 1]) {
+    assert.equal(f.run('settings-main', id).ok, false);
+  }
   assert.deepEqual(f.calls, []);
 });
 
@@ -118,21 +126,23 @@ test('Codex health fix requires current Settings and an installed app, and prese
   const start = source.indexOf("ipcMain.handle('health-fix',");
   const end = source.indexOf('// Preferences → Backups.', start);
   assert.ok(start > 0 && end > start);
-  for (const [sender, installed, succeeds, expected] of [
-    ['other', true, true, 'Not allowed.'],
-    ['settings', false, true, 'Open the installed app to connect Codex.'],
-    ['settings', true, false, 'fixture refusal'],
-    ['settings', true, true, null],
+  for (const [sender, installed, packaged, succeeds, expected] of [
+    ['other', true, true, true, 'Not allowed.'],
+    ['settings', false, true, true, 'Open the installed app to connect Codex.'],
+    ['settings', true, false, true, 'Open the installed app to connect Codex.'],
+    ['settings', true, true, false, 'fixture refusal'],
+    ['settings', true, true, true, null],
   ]) {
     let handler; let calls = 0;
     vm.runInNewContext(source.slice(start, end), {
       ipcMain: { handle: (_name, fn) => { handler = fn; } },
       fromNativeBoardSettings: e => e === 'settings', AUTO_INSTALL_HOOKS: installed,
+      app: { isPackaged: packaged },
       Adapters: { get: () => ({ installActivity: () => { calls++; return { ok: succeeds, error: 'fixture refusal' }; } }) },
       os: { homedir: () => '/synthetic' }, HOOK_RUNTIME: {}, healthReport: () => ({ checks: [] }), console: { log() {} },
     });
     assert.equal(handler(sender, 'connect-codex').error, expected);
-    assert.equal(calls, sender === 'settings' && installed ? 1 : 0);
+    assert.equal(calls, sender === 'settings' && installed && packaged ? 1 : 0);
   }
 });
 
