@@ -5,7 +5,7 @@ const test = require('node:test'), assert = require('node:assert/strict');
 const path = require('node:path'), os = require('node:os'), fs = require('node:fs');
 const { createInteractionHub, NOTICES } = require('../src/session-interaction');
 const { createClaudeCodeSession, buildClaudeArgs } = require('../src/claude-code-session');
-const { createGeminiAcp, NOT_INSTALLED } = require('../src/gemini-acp');
+const { createGeminiAcp, NOT_INSTALLED, NOT_VERIFIED } = require('../src/gemini-acp');
 const { ownedAdapters } = require('../src/interaction-main');
 
 const ACTOR = 'overview:1:1';
@@ -23,7 +23,7 @@ function rig(provider, adapter) {
   return { hub, launch, send, state };
 }
 const claude = (over = {}) => rig('claude', createClaudeCodeSession({ bin: FAKE_CLAUDE, env: ENV, ackMs: 800, killGraceMs: 200, ...over }));
-const gemini = (over = {}) => rig('gemini', createGeminiAcp({ bin: FAKE_GEMINI, env: ENV, requestMs: 800, ...over }));
+const gemini = (over = {}) => rig('gemini', createGeminiAcp({ bin: FAKE_GEMINI, env: ENV, requestMs: 800, verified: true, ...over }));
 
 // ── Claude Code ──
 test('FAKE claude: message reaches the selected owned session only, with lifecycle ack, replayed echo and streamed reply', async () => {
@@ -53,7 +53,7 @@ test('FAKE claude: isolation flags and minimal env reach the child; logins and s
     assert.equal(flag('--setting-sources'), ''); assert.equal(flag('--tools'), '');
     assert.equal(flag('--permission-mode'), 'dontAsk'); assert.equal(flag('--permission-prompts'), 'none');
     assert(!argv.includes('--mcp-config') && !argv.includes('--plugin-dir') && !argv.includes('--settings') && !argv.some((a) => /bypass|dangerously/i.test(a)));
-    assert.deepEqual(env.filter((k) => !['HOME', 'PATH', 'TMPDIR', 'CLAUDE_CODE_DISABLE_AUTO_MEMORY', '__CF_USER_TEXT_ENCODING'].includes(k)), []);
+    assert.deepEqual(env.filter((k) => !['HOME', 'PATH', 'TMPDIR', 'CLAUDE_CODE_DISABLE_AUTO_MEMORY', 'DISABLE_TELEMETRY', 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', '__CF_USER_TEXT_ENCODING'].includes(k)), []);
   } finally { x.hub.stopAll(); }
 });
 test('Claude edit tools exist only for a cwd inside an explicit safe root', async () => {
@@ -61,8 +61,11 @@ test('Claude edit tools exist only for a cwd inside an explicit safe root', asyn
   const root = tmp(), calls = [];
   const fakeSpawn = (bin, args) => { calls.push(args); const { EventEmitter } = require('node:events'); const c = new EventEmitter(); c.stdout = new EventEmitter(); c.stdout.setEncoding = () => {}; c.stderr = new EventEmitter(); c.stdin = Object.assign(new EventEmitter(), { write() {} }); c.pid = 999999; c.kill = () => {}; return c; };
   const a = createClaudeCodeSession({ bin: '/x/claude', spawn: fakeSpawn, safeRoot: root });
+  fs.mkdirSync(path.join(root, 'w')); fs.mkdirSync(`${root}-evil`);
+  const outside = tmp(); fs.symlinkSync(outside, path.join(root, 'link'));
   await a.open({ cwd: path.join(root, 'w') }); await a.open({ cwd: tmp() }); await a.open({ cwd: `${root}-evil` });
-  assert.deepEqual(calls.map((c) => c[c.indexOf('--permission-mode') + 1]), ['acceptEdits', 'dontAsk', 'dontAsk']);
+  await a.open({ cwd: path.join(root, 'link') });
+  assert.deepEqual(calls.map((c) => c[c.indexOf('--permission-mode') + 1]), ['acceptEdits', 'dontAsk', 'dontAsk', 'dontAsk'], 'a symlink inside the root that leads outside is not inside it');
   await assert.rejects(a.open({ cwd: 'relative' }));
   a.stop();
 });
@@ -219,4 +222,11 @@ test('Hostile FAKE ACP gemini: malformed/oversized lines dropped with a notice; 
     await x.send(B, 'DIE').catch(() => {});
     await until(() => x.state(A).status === 'ended' && x.state(B).status === 'ended');
   } finally { x.hub.stopAll(); }
+});
+
+test('Review: Gemini found on disk stays unavailable until isolation is verified by a human', async () => {
+  const g = createGeminiAcp({ bin: FAKE_GEMINI, env: ENV });
+  assert.equal(g.available, false); assert.equal(g.reason, NOT_VERIFIED);
+  const verified = createGeminiAcp({ bin: FAKE_GEMINI, env: ENV, verified: true });
+  assert.equal(verified.available, undefined);
 });

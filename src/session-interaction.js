@@ -75,7 +75,8 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
       if (r.ended) return;
       if (e.kind === 'exit') { r.ended = true; r.activeTurn = null; emit(r); return; }
       if (e.kind === 'oversize') {
-        // Not attributable to one thread: every unfinished turn is told.
+        // One shared provider process (Codex) cannot attribute it: every unfinished turn is told. A provider that names the target only touches that session.
+        if (e.target !== undefined && e.target !== r.target) return;
         for (const t of r.turns.values()) if (!FINAL.includes(t.status)) notice(t, NOTICES.oversize);
         emit(r); return;
       }

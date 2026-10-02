@@ -22,6 +22,8 @@ const ACP_ARGS = Object.freeze(['--acp']);
 const MAX_LINE = 4 * 1024 * 1024;
 const REQUEST_MS = 30_000;
 const NOT_INSTALLED = 'unavailable: gemini not installed';
+const NOT_VERIFIED = 'unavailable: Gemini CLI is installed but Plexiform cannot yet isolate it from your own Gemini settings (MCP servers, extensions, hooks, approval mode); this stays off until that is verified on a real install';
+const CONTENT_UPDATES = new Set(['agent_message_chunk', 'agent_thought_chunk', 'tool_call', 'tool_call_update', 'plan']);
 const EXISTING_SESSIONS_REASON = 'Gemini CLI sessions started outside Plexiform expose no inbound channel; ACP sessions exist only on the agent process that created them.';
 const STOP = { end_turn: 'completed', max_tokens: 'completed', max_turn_requests: 'completed', refusal: 'failed', cancelled: 'interrupted' };
 
@@ -30,7 +32,7 @@ function findGeminiBin({ env = process.env, exists = (p) => { try { fs.accessSyn
   return candidates.find(exists) ?? null;
 }
 
-function createGeminiAcp({ bin, args = ACP_ARGS, env = process.env, spawn = childProcess.spawn, requestMs = REQUEST_MS } = {}) {
+function createGeminiAcp({ bin, args = ACP_ARGS, env = process.env, spawn = childProcess.spawn, requestMs = REQUEST_MS, verified = false } = {}) {
   const events = new EventEmitter();
   const pending = new Map();
   const sessions = new Map(); // target (ACP sessionId) -> {active, ack}
@@ -70,8 +72,9 @@ function createGeminiAcp({ bin, args = ACP_ARGS, env = process.env, spawn = chil
     const target = p?.sessionId;
     const s = typeof target === 'string' ? sessions.get(target) : null;
     if (!s || !s.active) return;
-    acked(s, target);
     const u = p.update;
+    // Only real content counts as an acknowledgement; housekeeping updates (e.g. available_commands_update) never do.
+    if (CONTENT_UPDATES.has(u?.sessionUpdate)) acked(s, target);
     if (u?.sessionUpdate === 'agent_message_chunk' && u.content?.type === 'text' && typeof u.content.text === 'string') emit({ kind: 'delta', target, turnId: s.active, text: u.content.text });
   }
   function onLine(line) {
@@ -156,7 +159,12 @@ function createGeminiAcp({ bin, args = ACP_ARGS, env = process.env, spawn = chil
     let timer;
     const err = await Promise.race([ack, new Promise((r) => { timer = setTimeout(r, requestMs, new Error('Gemini acknowledgement timed out')); })]);
     clearTimeout(timer);
-    if (err instanceof Error) { if (s.active === turnId) s.active = null; s.ack = null; throw err; }
+    if (err instanceof Error) {
+      // The prompt may still be running: cancel it and keep the session busy until it resolves, so its late output can never be taken as the next message's.
+      s.ack = null;
+      try { write({ method: 'session/cancel', params: { sessionId: target } }); } catch { /* exited */ }
+      throw err;
+    }
     return { turnId, mode: 'new-turn' };
   }
   async function interrupt({ target, turnId }) {
@@ -176,7 +184,7 @@ function createGeminiAcp({ bin, args = ACP_ARGS, env = process.env, spawn = chil
 
   return {
     provider: 'gemini', label: 'Gemini CLI',
-    ...(bin ? {} : { available: false, reason: NOT_INSTALLED }),
+    ...(bin && verified ? {} : { available: false, reason: bin ? NOT_VERIFIED : NOT_INSTALLED }),
     capabilities: Object.freeze({ newTurn: true, steer: false, interrupt: true, ack: 'first-session-update', echo: false, stream: true,
       existingSessions: false, existingSessionsReason: EXISTING_SESSIONS_REASON, steerReason: 'ACP v1 has no steer; one prompt per session at a time.' }),
     open, send, interrupt, release, stop,
@@ -185,4 +193,4 @@ function createGeminiAcp({ bin, args = ACP_ARGS, env = process.env, spawn = chil
   };
 }
 
-module.exports = { createGeminiAcp, findGeminiBin, ACP_ARGS, NOT_INSTALLED };
+module.exports = { createGeminiAcp, NOT_VERIFIED, findGeminiBin, ACP_ARGS, NOT_INSTALLED };

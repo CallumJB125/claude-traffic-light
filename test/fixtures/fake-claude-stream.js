@@ -29,7 +29,7 @@ process.stdin.on('data', (chunk) => {
     const line = buf.slice(0, nl); buf = buf.slice(nl + 1);
     const m = JSON.parse(line);
     if (m.type === 'control_request' && m.request?.subtype === 'interrupt') {
-      out({ type: 'control_response', response: { subtype: 'success', request_id: m.request_id, response: { still_queued: [] } }, session_id: sid });
+      out({ type: 'control_response', response: { subtype: 'success', request_id: m.request_id, response: { still_queued: [] } } });
       if (holding) { as({ type: 'result', subtype: 'error_during_execution', is_error: true, result: '' }); life(holding, 'completed'); holding = null; }
       continue;
     }

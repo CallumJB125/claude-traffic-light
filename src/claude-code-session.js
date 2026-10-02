@@ -103,6 +103,8 @@ function createClaudeCodeSession({ bin, env = process.env, spawn = childProcess.
     let m;
     try { m = JSON.parse(line); } catch { return; }
     if (!m || typeof m !== 'object' || Array.isArray(m)) return;
+    // A control_response is matched by our own random request id (this child's stdout only); it need not carry a session id.
+    if (m.type === 'control_response' && typeof m.response?.request_id === 'string') { settle(c, `ctl:${m.response.request_id}`, m.response.subtype === 'success'); return; }
     // Only this child's own session id counts; anything else is foreign.
     if (m.session_id !== c.target) {
       if (m.type === 'system' && m.subtype === 'init') close(c, 'Claude Code started a different session');
@@ -124,8 +126,6 @@ function createClaudeCodeSession({ bin, env = process.env, spawn = childProcess.
       if (d?.type === 'text_delta' && typeof d.text === 'string') emit({ kind: 'delta', target, turnId: c.active, text: d.text });
     } else if (m.type === 'result') {
       finish(c, m.is_error ? 'failed' : 'completed', m.is_error ? String(m.errors?.[0] ?? m.subtype ?? 'error').slice(0, 300) : null, typeof m.result === 'string' ? m.result : null);
-    } else if (m.type === 'control_response' && typeof m.response?.request_id === 'string') {
-      settle(c, `ctl:${m.response.request_id}`, m.response.subtype === 'success');
     } else if (m.type === 'system' && m.subtype === 'permission_denied' && c.active) {
       emit({ kind: 'refused-request', target, turnId: c.active, method: 'permission' });
     } else if (m.type === 'system' && m.subtype === 'status' && typeof m.status === 'string') {
@@ -137,8 +137,10 @@ function createClaudeCodeSession({ bin, env = process.env, spawn = childProcess.
     if (!bin) throw new Error('Claude Code CLI not found');
     if (typeof cwd !== 'string' || !path.isAbsolute(cwd)) throw new Error('Owned Claude sessions need an absolute working directory');
     const target = crypto.randomUUID();
-    const writable = !!safeRoot && inside(path.resolve(safeRoot), path.resolve(cwd));
-    const childEnv = { ...Object.fromEntries(ENV_KEYS.filter((k) => env[k]).map((k) => [k, env[k]])), CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' };
+    const real = (p) => { try { return fs.realpathSync(p); } catch { return null; } };
+    const rootReal = safeRoot ? real(safeRoot) : null, cwdReal = real(cwd);
+    const writable = !!rootReal && !!cwdReal && inside(rootReal, cwdReal);
+    const childEnv = { ...Object.fromEntries(ENV_KEYS.filter((k) => env[k]).map((k) => [k, env[k]])), CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1', DISABLE_TELEMETRY: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' };
     const child = spawn(bin, buildClaudeArgs({ sessionId: target, writable, model, systemPrompt, maxBudgetUsd }), // privacy-flow: owned-claude-session
       { cwd, env: childEnv, stdio: ['pipe', 'pipe', 'pipe'], detached: true });
     const c = { target, child, sent: new Set(), done: new Set(), waiters: new Map(), active: null, interrupting: null, closed: false, exited: false };
@@ -181,7 +183,13 @@ function createClaudeCodeSession({ bin, env = process.env, spawn = childProcess.
     c.sent.add(clientId);
     const acked = wait(c, `ack:${clientId}`, ackMs, 'Claude Code acknowledgement');
     write(c, { type: 'user', uuid: clientId, session_id: target, parent_tool_use_id: null, client_composed: true, message: { role: 'user', content: [{ type: 'text', text }] } });
-    const turnId = await acked;
+    let turnId;
+    try { turnId = await acked; } catch (error) {
+      // Timed out: a late lifecycle line for this id must not start a turn, and anything it started is stopped.
+      c.sent.delete(clientId);
+      try { write(c, { type: 'control_request', request_id: `int-${crypto.randomUUID()}`, request: { subtype: 'interrupt' } }); } catch { /* gone */ }
+      throw error;
+    }
     return { turnId, mode: 'new-turn' };
   }
   async function interrupt({ target, turnId }) {
