@@ -909,7 +909,7 @@ test('offline: a virtual signal on every live session, and on its own when nothi
 
 test('a failed turn has its own look; {fail} says why; it waits on you', () => {
   const l = look([{ signal: 'turn-failed', failKind: 'network' }]);
-  assert.deepEqual([l.lamp, l.eyes, l.pose, l.text, l.celebrate, l.ruleId], ['amber', 'dizzy', 'banner', 'NO NETWORK', false, 'failed-turn']);
+  assert.deepEqual([l.lamp, l.eyes, l.pose, l.text, l.celebrate, l.ruleId], ['red', 'dizzy', 'banner', 'NO NETWORK', false, 'failed-turn']);
   assert.equal(look([{ signal: 'turn-failed', failKind: 'limit' }]).text, 'RATE LIMITED');
   assert.equal(look([{ signal: 'turn-failed' }]).text, 'FAILED');
   assert.equal(R.fillText('{fail}!', { failKind: 'network' }), 'NO NETWORK!');
@@ -1055,11 +1055,11 @@ test('ignored-N counts from your last touch: a session working on its own does n
   assert.equal(R.resolve(rules(), [waiting, { ...ralph, touchedAt: ago(2) }], now).look.waitMinutes, 2);
 });
 
-test('lamps: green working, amber your turn, red blocked, off idle', () => {
+test('lamps: green working, amber your turn, red blocked or broken, off idle', () => {
   const lamp = (ss) => look(ss).lamp;
   assert.equal(lamp([{ signal: 'tool-use', tool: 'Bash' }]), 'green');
-  for (const signal of ['stop', 'idle-nudge', 'turn-failed']) assert.equal(lamp([{ signal }]), 'amber', signal);
-  for (const signal of ['permission-ask', 'limit-hit']) assert.equal(lamp([{ signal }]), 'red', signal);
+  for (const signal of ['stop', 'idle-nudge']) assert.equal(lamp([{ signal }]), 'amber', signal);
+  for (const signal of ['permission-ask', 'limit-hit', 'turn-failed']) assert.equal(lamp([{ signal }]), 'red', signal);
   assert.equal(R.resolve(rules(), [{ signal: 'stop' }], Date.now(), { offline: true }).look.lamp, 'red', 'offline');
   assert.equal(lamp([]), 'off');
   assert.equal(lamp([{ signal: 'stop' }, { signal: 'tool-use' }]), 'green', 'one session working still owns the lamp');
@@ -1248,10 +1248,11 @@ test('templates: a rule added by a later migration follows the template it was s
 // ── v9: blocked ("needs your decision") is red ───────────────────────────
 const blockedAt = (min) => ({ sessionId: 'b', signal: 'tool-done', cwd: '/w', updatedAt: new Date().toISOString(), blocked: { tool: 'Bash', summary: 'rm -rf x', reason: 'r', at: new Date(Date.now() - min * 60000).toISOString() } });
 
-test('v9 blocked: a fresh config has the lamp-only red rule under the red block, and it lights red', () => {
-  const d = R.defaultRules();
+test('v9 blocked: a fresh config has the lamp-only red rule under the red block, off by default (v10), red when switched on', () => {
+  const d = R.defaultRules().map((r) => (r.id === 'blocked' ? { ...r, enabled: true } : r));
   const ids = d.map((r) => r.id);
-  assert.equal(R.RULES_VERSION, 9);
+  assert.equal(R.RULES_VERSION, 10);
+  assert.equal(R.defaultRules().find((r) => r.id === 'blocked').enabled, false);
   assert.equal(ids.indexOf('blocked'), ids.indexOf('runaway') + 1);
   assert.ok(ids.indexOf('blocked') < ids.indexOf('working') && ids.indexOf('blocked') < ids.indexOf('done'));
   assert.deepEqual(R.normalizeRule(d.find((r) => r.id === 'blocked')).then.lamp, 'red');
@@ -1270,7 +1271,7 @@ test('v9 blocked: a saved v8 config gains it once, in place; migrating twice add
   assert.deepEqual(R.migrateRules(m, 8), m, 'idempotent');
   assert.equal(R.migrateRules(m, 8).filter((r) => r.id === 'blocked').length, 1);
   const deleted = m.filter((r) => r.id !== 'blocked');
-  assert.equal(R.migrateRules(deleted, 9), deleted, 'deleting it on v9 sticks');
+  assert.equal(R.migrateRules(deleted, 10), deleted, 'deleting it sticks');
 });
 
 test('v9 blocked: a customised config (reordered, disabled, its own blocked rule) is respected', () => {
@@ -1306,4 +1307,41 @@ test('v9 blocked: a set that needs nothing comes back as the very same list', ()
   const d = R.defaultRules().map(R.normalizeRule);
   assert.equal(R.placeBlockedRule(d), d);
   assert.equal(R.migrateRules(d, 8), d);
+});
+
+// ── v10: red means "needs you now" or "something broke" ──────────────────
+test('v10 red: a real ask is red, a failed turn is red, an auto-denial the turn carried on from is not', () => {
+  const now = Date.now();
+  const at = (s) => new Date(now - s * 1000).toISOString();
+  const d = R.defaultRules();
+  const lamp = (ss) => R.resolve(d, ss, now).look.lamp;
+  assert.equal(lamp([{ sessionId: 'a', signal: 'permission-ask', askKind: 'request', cwd: '/w', updatedAt: at(1) }]), 'red', 'a pending permission');
+  assert.equal(lamp([{ sessionId: 'a', signal: 'permission-ask', askKind: 'question', cwd: '/w', updatedAt: at(1) }]), 'red', 'a question');
+  assert.equal(lamp([{ sessionId: 'a', signal: 'turn-failed', failKind: 'error', cwd: '/w', updatedAt: at(1) }]), 'red', 'a failed run');
+  assert.equal(lamp([{ sessionId: 'a', signal: 'stop', cwd: '/w', updatedAt: at(1) }], now), 'amber');
+  const denied = { tool: 'Bash', summary: 'rm -rf x', reason: 'r', at: at(5) };
+  assert.equal(lamp([{ sessionId: 'a', signal: 'tool-use', tool: 'Read', cwd: '/w', updatedAt: at(1), blocked: denied }]), 'green', 'auto-denial, then more tool use');
+  assert.equal(lamp([{ sessionId: 'a', signal: 'permission-denied', tool: 'Bash', cwd: '/w', updatedAt: at(1), blocked: denied }]), 'green', 'the denial itself');
+  assert.equal(lamp([{ sessionId: 'a', signal: 'stop', cwd: '/w', updatedAt: at(1), blocked: denied }]), 'amber', 'a denial, then the turn ended: your turn, not blocked');
+  assert.equal(lamp([{ sessionId: 'a', signal: 'permission-ask', askKind: 'request', cwd: '/w', updatedAt: at(1), blocked: denied }]), 'red', 'a denial followed by a real ask');
+});
+
+test('v10 red: a saved v9 config switches the stock blocked rule off and recolours an untouched failed-turn red, once', () => {
+  const v9 = R.defaultRules().map(R.normalizeRule).map((r) => (r.id === 'blocked' ? { ...r, enabled: true }
+    : r.id === 'failed-turn' ? { ...r, then: { ...r.then, lamp: 'amber' } } : r));
+  const m = R.migrateRules(v9, 9);
+  assert.equal(m.find((r) => r.id === 'blocked').enabled, false);
+  assert.equal(m.find((r) => r.id === 'failed-turn').then.lamp, 'red');
+  assert.deepEqual(m, R.defaultRules().map(R.normalizeRule), 'a v9 default config becomes today\'s defaults');
+  assert.equal(R.migrateRules(m, 10), m);
+  const mine = v9.map((r) => (r.id === 'failed-turn' ? { ...r, then: { ...r.then, lamp: 'green' } } : r.id === 'blocked' ? { ...r, then: { lamp: 'amber' } } : r));
+  const kept = R.migrateRules(mine, 9);
+  assert.equal(kept.find((r) => r.id === 'failed-turn').then.lamp, 'green', 'a colour you chose stays');
+  assert.equal(kept.find((r) => r.id === 'blocked').enabled, true, 'a blocked rule you reshaped stays on');
+});
+
+test('liveAgents: stopped and stale agents are not live, and keep their own status', () => {
+  const s = { cwd: '/w', agents: [{ id: 'a', status: 'working' }, { id: 'b', status: 'stopped' }, { id: 'c', status: 'stale' }, { id: 'd', status: 'done' }] };
+  assert.deepEqual(R.liveAgents([s]).map((a) => a.id), ['a']);
+  assert.equal(R.normalizeAgent({ id: 'c', status: 'stale' }).status, 'stale');
 });

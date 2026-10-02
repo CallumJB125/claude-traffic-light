@@ -253,7 +253,7 @@ test('rules v8: spend rules are slotted in once; deleting them sticks', () => {
     assert.deepEqual(m.map((r) => r.id), R.defaultRules().map((r) => r.id), `from v${from}`);
     assert.deepEqual(R.migrateRules(m, from), m, 'never duplicated');
   }
-  assert.equal(R.RULES_VERSION, 9);
+  assert.equal(R.RULES_VERSION, 10);
 });
 
 test('rules v8: spend rules deleted on v8 stay deleted, one or all', () => {
