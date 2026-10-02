@@ -273,8 +273,10 @@ function euRigBusy({ busy, ...over }) {
 }
 
 // A clock and timers the test moves by hand (no real waiting, so no flakes under load).
+// It starts at the real time because publish() stamps issuedAt with the real
+// clock: a fixed start became "issued in the future" a day after it was written.
 function fakeTime() {
-  const clock = { t: Date.parse('2026-10-01T12:00:00.000Z'), timers: [] };
+  const clock = { t: Date.now(), timers: [] };
   clock.now = () => clock.t;
   clock.setTimer = (fn, ms) => { const h = { fn, at: clock.t + ms }; clock.timers.push(h); return h; };
   clock.clearTimer = (h) => { const i = clock.timers.indexOf(h); if (i >= 0) clock.timers.splice(i, 1); };
