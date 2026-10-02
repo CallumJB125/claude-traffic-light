@@ -101,7 +101,8 @@ Host device (desktop token, host role, only for its own targets):
 
 Report phases (the receiver's receipts):
 `accepted` (passed host checks, about to inject; hub re-validates and answers `proceed`)
-→ `delivered` (provider acknowledged a turn for that exact session/generation)
+→ `delivered` (provider acknowledged a turn for that exact session/generation; also accepted
+late, replacing `outcome_unknown`, since it is the real acknowledgement)
 → `replied` (`response`, provider-reported) or `turn_ended` (`turn`: interrupted/failed).
 `not_sent` (host certifies no side effect, e.g. busy) → back to `queued`.
 `rejected` (refused before any side effect). `unknown` (side effect may have happened).
@@ -141,9 +142,14 @@ its host's `handoff` report) | `expired`.
 Session-sourced messages (`/host/send`) are **opt-in automation** on the destination target:
 `automation: {sessions:true, max_hops:1…3, turns_per_hour:1…30, parallel:1…4}` (else refused).
 Hub-wide caps: 120 session-sourced messages per team per hour, 60 per card per hour. Spend is
-bounded through turns (no provider cost signal exists yet). Loop suppression: `hop` = parent
-(`caused_by`) hop + 1, `visited` = parent's visited + source target; a destination already in
-`visited`, a self-send, or `hop > max_hops` is refused.
+bounded through turns (no provider cost signal exists yet). Loop suppression: `hop` counts
+session-sourced forwards (a person's message is 0, a session's first message 1, then parent
+`caused_by` hop + 1); `visited` = parent's visited + source target; a destination already in
+`visited`, a self-send, or `hop > max_hops` is refused. The receiver defaults `caused_by` to the
+message delivered into the session's current turn, so a session cannot restart the count by
+omitting it there; per-target turns/hour and parallel caps bound anything else.
+A session speaks only inside its own scope: a personal session only to its owner's personal
+sessions; a team session only to that team's shared sessions and members.
 
 ## 7. Revocation
 

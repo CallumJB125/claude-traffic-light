@@ -108,3 +108,65 @@ test('people message people inside a shared team without any model; receipts, re
     assert.equal((await carol.get(m.id)).status, 404);
   } finally { await r.close(); }
 });
+
+test('a busy session is never steered: the message waits queued, then lands as a new turn once the session is idle', async () => {
+  const r = await messagingRig();
+  try {
+    const mac = await r.mac();
+    const { hub, actor } = mac.remote;
+    const s = mac.session;
+    assert.equal((await hub.send({ session: s.session, generation: s.generation, board: null, text: 'HOLD local work' }, actor)).ok, true);
+    const turn = await until(() => hub.state({ session: s.session }, actor).activeTurn);
+    const win = r.client(r.winA);
+    const t = await until(() => targetOf(win, (x) => x.mine));
+    const m = (await win.send({ to: { target: t.target }, body: 'when you are free' })).body.message;
+    await until(() => r.h.db.get('SELECT reason FROM msg_messages WHERE id = ?', m.id).reason === 'busy');
+    assert.equal((await win.get(m.id)).body.message.state, 'queued');
+    assert.equal(hub.state({ session: s.session }, actor).deliveries.length, 1, 'not steered into the busy turn');
+    assert.equal((await hub.interrupt({ session: s.session, generation: s.generation, turn }, actor)).ok, true);
+    await until(() => !hub.state({ session: s.session }, actor).activeTurn);
+    r.h.clock.advance(6000);
+    const done = await win.waitFor(m.id, (x) => x.state === 'replied', { timeoutMs: 8000 });
+    assert.ok(done.body.message.response.endsWith('when you are free'));
+    const ds = hub.state({ session: s.session }, actor).deliveries;
+    assert.equal(ds.length, 2);
+    assert.equal(ds[1].mode, 'new-turn');
+  } finally { await r.close(); }
+});
+
+test('AI-to-AI handoff between opted-in team sessions: delivered, decided by the receiving session, and a loop back is refused', async () => {
+  const r = await messagingRig();
+  try {
+    const policy = { sessions: true, max_hops: 2, turns_per_hour: 5, parallel: 2 };
+    const mac = await r.mac(r.macA, { shares: () => ({ scope: 'team', org_id: r.org, automation: policy }) });
+    const b = await mac.launch();
+    await mac.recv.sync(true);
+    const all = (await r.client(r.bob).targets()).body.targets;
+    assert.equal(all.length, 2);
+    assert.ok(all.every((x) => x.accepts_sessions));
+    const ta = r.h.db.get('SELECT id FROM msg_targets WHERE session = ? AND retired_at IS NULL', mac.session.session).id;
+    const tb = r.h.db.get('SELECT id FROM msg_targets WHERE session = ? AND retired_at IS NULL', b.session).id;
+
+    const sent = await mac.recv.sendFromSession(mac.session.session, { to: { target: tb }, kind: 'handoff', body: 'please take over the parser task',
+      handoff: { artifacts: [{ kind: 'path', path: 'src/parser.js' }] } });
+    assert.equal(sent.status, 200, JSON.stringify(sent.body));
+    const m = sent.body.message;
+    assert.equal(m.source.kind, 'session');
+    assert.equal(m.source.identity_source, 'hub_host_device');
+    assert.equal(m.source.target, ta);
+    assert.equal(m.hop, 1);
+    const alice = r.client(r.winA);
+    const done = await alice.waitFor(m.id, (x) => x.state === 'replied', { timeoutMs: 8000 });
+    assert.match(done.body.message.response, /Handoff via Plexiform/);
+    assert.match(done.body.message.response, /Artifacts: src\/parser\.js/);
+    const lease = r.h.db.get('SELECT lease FROM msg_messages WHERE id = ?', m.id).lease;
+    const decided = await mac.recv.decideHandoff({ id: m.id, lease }, 'accept', 'taking it');
+    assert.equal(decided.body.handoff_state, 'accepted');
+    assert.equal((await alice.get(m.id)).body.message.handoff.state, 'accepted');
+
+    // B answers A: its current-turn cause is the handoff, so A is already in `visited`.
+    const back = await mac.recv.sendFromSession(b.session, { to: { target: ta }, body: 'ack' });
+    assert.equal(back.status, 409);
+    assert.equal(back.body.error.reason, 'LOOP');
+  } finally { await r.close(); }
+});

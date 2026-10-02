@@ -152,7 +152,10 @@ export class Messaging {
       actor_kind: 'system', kind: 'msg.state',
       payload: { message_id: m.id, kind: m.kind, state: m.state, reason: m.reason ?? null, handoff_state: m.handoff_state ?? null, source_kind: m.source_kind, dest_kind: m.dest_kind } });
   }
+  // Ends a queued message once; a copy that is already stale (ended elsewhere in this pass) is left alone.
   finish(m, state, reason) {
+    const now = this.db.get('SELECT state, phase FROM msg_messages WHERE id = ?', m.id);
+    if (!now || now.state !== 'queued') { if (now) Object.assign(m, now); return; }
     const fields = { state, reason, phase: null };
     if (state === 'expired' && m.handoff_state === 'offered') fields.handoff_state = 'expired';
     this.update(m, fields);
@@ -282,8 +285,10 @@ export class Messaging {
       reply = this.db.get('SELECT * FROM msg_messages WHERE id = ?', replyTo);
       if (!reply || (reply.source_user_id !== src.user_id && reply.dest_user_id !== src.user_id)) throw missing();
     }
+    // hop: session-sourced forwards in this chain (a person's message is 0).
     let hop = 0, visited = [];
     if (src.target) {
+      hop = 1;
       if (causedBy) {
         cause = this.db.get('SELECT * FROM msg_messages WHERE id = ?', causedBy);
         if (!cause || cause.dest_target_id !== src.target.id) throw missing();
@@ -294,7 +299,7 @@ export class Messaging {
         const policy = this.automation(t);
         if (!policy?.sessions) throw new HubError('FORBIDDEN', 'that session does not accept messages from AI sessions', { reason: 'AUTOMATION_OFF' });
         if (t.id === src.target.id || visited.includes(t.id)) throw new HubError('CONFLICT', 'message loop refused', { reason: 'LOOP' });
-        if (hop + 1 > Math.min(L.maxHops, policy.max_hops)) throw new HubError('CONFLICT', 'hop limit reached; ask a person before continuing', { reason: 'HOP_LIMIT' });
+        if (hop > Math.min(L.maxHops, policy.max_hops)) throw new HubError('CONFLICT', 'hop limit reached; ask a person before continuing', { reason: 'HOP_LIMIT' });
         const hour = this.at(this.nowMs() - 3_600_000);
         if (this.db.get("SELECT COUNT(*) n FROM msg_messages WHERE dest_target_id = ? AND source_kind = 'session' AND created_at > ?", t.id, hour).n >= policy.turns_per_hour
           || this.db.get("SELECT COUNT(*) n FROM msg_messages WHERE dest_target_id = ? AND source_kind = 'session' AND state = 'queued'", t.id).n >= policy.parallel) throw new HubError('RATE_LIMITED', 'that session\'s automation limit is reached', { retry_after_s: 60, reason: 'AUTOMATION_LIMIT' });
