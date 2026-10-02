@@ -227,6 +227,15 @@ function reduceCodexLifecycle(prev, event, nowIso = new Date().toISOString()) {
   const isStart = name === 'SessionStart';
   const prompt = name === 'UserPromptSubmit';
   const child = !!event.codexAgentId;
+  const inputAfter = (previous, currentTurn) => {
+    if (['UserPromptSubmit', 'Stop', 'Interrupt', 'SubagentStop'].includes(name) || (isStart && event.codexSessionSource !== 'compact')) return [];
+    const requests = Machine.codexInputEntries({ source: 'codex', codexLifecycle: 1, codexTurnId: currentTurn, codexInputRequests: previous });
+    if (!['sync', 'async'].includes(event.codexInputKind) || typeof event.codexToolUseId !== 'string' || !/^[A-Za-z0-9_.:-]{1,120}$/.test(event.codexToolUseId)) return requests;
+    if (name === 'PreToolUse' && !requests.some(r => r.id === event.codexToolUseId) && requests.length < 16)
+      return [...requests, { id: event.codexToolUseId, turnId: currentTurn, kind: event.codexInputKind, askedAt: nowIso }];
+    if (name === 'PostToolUse' && event.codexInputKind === 'sync') return requests.filter(r => r.id !== event.codexToolUseId || r.kind !== 'sync');
+    return requests; // Async PostToolUse acknowledges delivery, never an answer.
+  };
   if (!p && (child || (!isStart && !prompt))) return undefined;
   let turn = p?.codexTurnId || null;
   let closed = p?.codexClosedTurn === true;
@@ -258,15 +267,18 @@ function reduceCodexLifecycle(prev, event, nowIso = new Date().toISOString()) {
     } else if (found?.status === 'done' && name !== 'SubagentStop') return undefined;
     const entry = { id: event.codexAgentId, turnId: event.codexTurnId, retiredTurns: childRetired,
       status: name === 'SubagentStop' ? 'done' : name === 'PermissionRequest' ? 'waiting' : 'working',
-      since: found?.turnId === event.codexTurnId ? found.since : nowIso };
+      since: found?.turnId === event.codexTurnId ? found.since : nowIso,
+      codexInputRequests: inputAfter(found?.codexInputRequests, event.codexTurnId) };
     roster = found ? roster.map((a) => a.id === entry.id ? entry : a) : [...roster, entry];
   }
   if (!child && (name === 'Stop' || name === 'Interrupt')) closed = true;
+  if (!child && (prompt || name === 'Stop' || name === 'Interrupt')) roster = roster.map(a => ({ ...a, codexInputRequests: [] }));
   const next = applyBareSignal(prev, { sessionId: event.sessionId, source: 'codex', host: prev?.host,
     cwd: child && p ? p.cwd : event.cwd,
     signal: child ? name === 'SubagentStop' ? 'subagent-done' : 'subagent-start' : event.signal, tool: child ? null : event.tool }, nowIso);
   Object.assign(next, { codexLifecycle: 1, codexHookAt: nowIso, codexEvent: name, codexTurnId: turn, codexClosedTurn: closed,
     codexRetiredTurns: retired, codexAgents: roster,
+    codexInputRequests: child ? Machine.codexInputEntries(p) : inputAfter(p?.codexInputRequests, turn),
     agents: roster.map((a) => ({ id: a.id, name: 'Codex subagent', kind: 'subagent', status: a.status, since: a.since })),
     askKind: child ? p?.askKind ?? null : name === 'PermissionRequest' ? 'request' : null });
   delete next.claudePid; // Never mistake the short-lived hook process for Codex.

@@ -220,9 +220,33 @@
     return { signal, tool, turnSignal: null };
   }
 
+  // Received hook metadata only. Async delivery is not an answer; later AI
+  // work cannot renew the original clock of a reported input request.
+  const CODEX_INPUT_MS = 90000;
+  function codexInputEntries(session) {
+    if (session?.source !== 'codex' || session.codexLifecycle !== 1 || !Array.isArray(session.codexInputRequests) || session.codexInputRequests.length > 16) return [];
+    return session.codexInputRequests.filter(r => r && typeof r === 'object' && !Array.isArray(r)
+      && Object.keys(r).sort().join(',') === 'askedAt,id,kind,turnId'
+      && typeof r.id === 'string' && /^[A-Za-z0-9_.:-]{1,120}$/.test(r.id)
+      && typeof r.turnId === 'string' && /^[A-Za-z0-9_.:-]{1,120}$/.test(r.turnId) && r.turnId === session.codexTurnId
+      && ['sync', 'async'].includes(r.kind) && typeof r.askedAt === 'string' && r.askedAt.length <= 64
+      && Number.isFinite(Date.parse(r.askedAt))).map(r => ({ id: r.id, turnId: r.turnId, kind: r.kind, askedAt: r.askedAt }));
+  }
+  function codexInputPending(session, now = Date.now()) {
+    if (session?.source !== 'codex' || session.codexLifecycle !== 1 || session.codexClosedTurn !== false || !Number.isFinite(now)) return false;
+    const children = Array.isArray(session.codexAgents) ? session.codexAgents.slice(0, 64).filter(a => a && typeof a === 'object'
+      && typeof a.id === 'string' && /^[A-Za-z0-9_.-]{1,120}$/.test(a.id) && ['working', 'waiting'].includes(a.status)) : [];
+    const entries = [...codexInputEntries(session), ...children.flatMap(a => codexInputEntries({ source: 'codex', codexLifecycle: 1, codexTurnId: a.turnId, codexInputRequests: a.codexInputRequests }))];
+    return entries.some(r => {
+      const age = now - Date.parse(r.askedAt);
+      return age >= 0 && age <= CODEX_INPUT_MS;
+    });
+  }
+
   // The signal the widget should show for a session right now: a young
   // notification ask shows what came before it (hysteresis).
   function presentSignal(session, now = Date.now(), pendingIds = []) {
+    if (codexInputPending(session, now)) return 'permission-ask';
     const signal = sessionSignal(session);
     if (signal !== 'permission-ask') return signal;
     if (session.askKind === 'question' || session.askKind === 'request') return signal;
@@ -271,13 +295,14 @@
     const presented = presentSignal(data, now, pendingIds);
     const held = presented !== signal;
     const eff = effectiveSignal({ ...data, signal: presented });
-    const source = held ? 'hysteresis-held' : eff.turnSignal ? 'promoted-agents' : (data.via || 'hook signal');
+    const input = codexInputPending(data, now);
+    const source = input ? 'reported input request' : held ? 'hysteresis-held' : eff.turnSignal ? 'promoted-agents' : (data.via || 'hook signal');
     if (eff.turnSignal) {
       const staleInMs = agentsStaleInMs(data, now, workingStaleMs);
       const stale = staleInMs < 0;
       return { live: !stale, dropped: stale ? 'stale-agents' : null, rule: stale ? 'stale-agents' : 'promoted', signal, presented: eff.signal, held, source, staleInMs, session: { ...data, ...eff } };
     }
-    const waiting = WAITING_ON_YOU.has(signal);
+    const waiting = WAITING_ON_YOU.has(presented);
     const quiet = QUIET.has(signal);
     const staleInMs = (waiting || quiet ? waitingStaleMs : workingStaleMs) - (now - new Date(data.updatedAt).getTime());
     const stale = staleInMs < 0;
@@ -321,7 +346,7 @@
     TURN_END, WAITING, WAITING_ON_YOU, QUIET, PROMOTABLE_TURN_END, TRANSIENT_ASK_MS, AGENT_KEEPALIVE_MS, AGENT_STATUSES, LEGACY_STATE_TO_SIGNAL,
     STATES, EVENTS, CLOSED, TRANSITIONS, PRESENTATION, EVENT_OF_SIGNAL, EVENT_SIGNAL,
     sessionSignal, stateOf, eventOf, transitionFor, step, userTouched,
-    hasWorkingAgent, effectiveSignal, presentSignal, agentsStaleInMs, classify,
+    hasWorkingAgent, effectiveSignal, presentSignal, agentsStaleInMs, classify, codexInputEntries, codexInputPending, CODEX_INPUT_MS,
     table, mermaid,
   };
 });

@@ -4,6 +4,7 @@
 // it may also contain tool, task, prompt, host or credential information.
 const LIMIT = 100;
 const CHILD_LIMIT = 64;
+const Machine = require('../hooks/session-machine');
 const RECENT_MS = 90_000;
 const PROVIDERS = Object.freeze({ codex: 'Codex', claude: 'Claude Code', 'claude-code': 'Claude Code', cursor: 'Cursor', gemini: 'Gemini', opencode: 'OpenCode', copilot: 'Copilot' });
 const STATUSES = Object.freeze({
@@ -42,12 +43,12 @@ function snapshot({ sessions = [], activity = {}, available = true, now = Date.n
     if (rows.length >= LIMIT) { omitted++; continue; }
     const rawChildren = lifecycle ? row.codexAgents : row.agents;
     const children = Array.isArray(rawChildren) ? rawChildren.filter(child => object(child) && typeof child.status === 'string' && Object.hasOwn(CHILD_STATUSES, child.status)).slice(0, CHILD_LIMIT).map((child, index) => ({
-      label: `${lifecycle ? 'Codex subagent' : 'Agent'} ${index + 1}`, status: CHILD_STATUSES[child.status],
+      label: `${lifecycle ? 'Codex subagent' : 'Agent'} ${index + 1}`, status: lifecycle && row.codexClosedTurn === false && child.status !== 'done' && Machine.codexInputPending({ source: 'codex', codexLifecycle: 1, codexTurnId: child.turnId, codexClosedTurn: false, codexInputRequests: child.codexInputRequests }, time) ? 'Waiting on you' : CHILD_STATUSES[child.status],
     })) : [];
     rows.push({
       provider: typeof row.source === 'string' && Object.hasOwn(PROVIDERS, row.source) ? PROVIDERS[row.source] : 'Local AI',
       project: projectLeaf(row.cwd),
-      status: lifecycle && row.codexClosedTurn === true ? 'Turn stopped' : typeof row.signal === 'string' && Object.hasOwn(STATUSES, row.signal) ? STATUSES[row.signal] : 'Unknown',
+      status: lifecycle && row.codexClosedTurn === true ? 'Turn stopped' : Machine.codexInputPending(row, time) ? 'Waiting on you' : typeof row.signal === 'string' && Object.hasOwn(STATUSES, row.signal) ? STATUSES[row.signal] : 'Unknown',
       freshness: age === null ? 'unknown' : age <= RECENT_MS ? 'recent' : 'stale', age_ms: age, lifecycle, children,
     });
   }

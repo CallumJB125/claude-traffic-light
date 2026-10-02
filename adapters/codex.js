@@ -179,12 +179,18 @@ function normalizeLifecycle(event, d) {
   if ((event.startsWith('Subagent') || d.agent_id !== undefined) && (typeof d.agent_id !== 'string' || !ID.test(d.agent_id))) return [];
   if (d.agent_id !== undefined && !['SubagentStart', 'SubagentStop', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PermissionRequest'].includes(event)) return [];
   if (event === 'SessionStart' && !['startup', 'resume', 'clear', 'compact', 'fork'].includes(d.source)) return [];
+  // Exact local function identities only; never inspect question or reply text.
+  const inputKind = new Map([['request_user_input', 'sync'], ['functions.request_user_input', 'sync'],
+    ['request_user_input_async', 'async'], ['functions.request_user_input_async', 'async']]).get(d.tool_name) || null;
+  const inputId = inputKind && typeof d.tool_use_id === 'string' && TURN_ID.test(d.tool_use_id) ? d.tool_use_id : null;
   const tool = ['PreToolUse', 'PostToolUse', 'PermissionRequest'].includes(event)
     ? (new Map([['Bash', 'Bash'], ['exec_command', 'Bash'], ['write_stdin', 'Bash'], ['apply_patch', 'Edit']]).get(d.tool_name) || (typeof d.tool_name === 'string' && /^mcp__/.test(d.tool_name) ? 'MCP tool' : 'Tool')) : null;
   return [{ signal: event === 'SessionStart' && d.source === 'compact' ? 'compact' : SIGNALS[event], sessionId: d.session_id,
     cwd: d.cwd, tool, pid: null, extra: {}, codexLifecycle: LIFECYCLE_VERSION, codexEvent: event,
     codexTurnId: typeof d.turn_id === 'string' && TURN_ID.test(d.turn_id) ? d.turn_id : null, codexAgentId: d.agent_id || null,
-    codexSessionSource: event === 'SessionStart' ? d.source : null }];
+    codexSessionSource: event === 'SessionStart' ? d.source : null,
+    codexInputKind: ['PreToolUse', 'PostToolUse'].includes(event) && inputId ? inputKind : null,
+    codexToolUseId: ['PreToolUse', 'PostToolUse'].includes(event) ? inputId : null }];
 }
 
 const tomlString = (s) => JSON.stringify(String(s));
