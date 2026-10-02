@@ -135,6 +135,44 @@ test('controller: a 401 anywhere wipes the token and returns to sign-in', async 
   assert.match(ctl.state.notice.text, /signed out/i);
 });
 
+test('controller: a sign-out the hub never heard about says so and keeps a retry', async () => {
+  const vault = memVault('bdt_x');
+  const api = fakeApi(async () => ok({ ok: true, sessions: [], providers: [] }));
+  const seen = [];
+  const answers = ['network', { status: 503, body: { error: { code: 'UNAVAILABLE' } } }, { status: 200, body: { ok: true } }];
+  api.signOut = async () => { seen.push(api.token()); const a = answers.shift(); if (a === 'network') throw new NetworkError(); return a; };
+  const ctl = createController({ api, vault });
+  await ctl.boot();
+  await ctl.signOut();
+  // Local sign-out happened; the claim is the truth, not "no longer has access".
+  assert.equal(ctl.state.view, 'signin');
+  assert.equal(vault.saved(), null);
+  assert.equal(api.token(), null);
+  assert.match(ctl.state.notice.text, /could not be told/);
+  assert.match(ctl.state.notice.text, /another device/);
+  assert.doesNotMatch(ctl.state.notice.text, /no longer has access/);
+  const bar = phoneView(ctl.state, Date.now());
+  assert.ok(findAll(bar, (n) => n.props?.['data-action'] === 'retry-signout').length === 1);
+  ctl.dismissNotice();
+  assert.ok(ctl.state.notice, 'the warning cannot be dismissed while the hub still accepts the sign-in');
+  // Retry with the hub refusing (503): still untold. Then it lands.
+  await ctl.retrySignOut();
+  assert.match(ctl.state.notice.text, /could not be told/);
+  await ctl.retrySignOut();
+  assert.match(ctl.state.notice.text, /no longer has access/);
+  assert.deepEqual(seen, ['bdt_x', 'bdt_x', 'bdt_x']);
+  assert.equal(api.token(), null);
+  ctl.dismissNotice();
+  assert.equal(ctl.state.notice, null);
+  // A 401 from sign-out means the hub already refuses it: that is "no access".
+  const api2 = fakeApi(async () => ok({ ok: true, sessions: [], providers: [] }));
+  api2.signOut = async () => ({ status: 401, body: {} });
+  const ctl2 = createController({ api: api2, vault: memVault('bdt_y') });
+  await ctl2.boot();
+  await ctl2.signOut();
+  assert.match(ctl2.state.notice.text, /no longer has access/);
+});
+
 test('controller: the long-poll goes stale on failure, backs off, and recovers live; a closed session is not shown as live', async () => {
   let now = 1_000_000;
   const script = [];

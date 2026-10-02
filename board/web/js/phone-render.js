@@ -11,7 +11,8 @@ function noticeBar(n) {
   if (!n) return null;
   return h('div', { class: `notice ${n.tone}`, role: n.tone === 'error' ? 'alert' : 'status' },
     h('p', null, n.text),
-    btn('dismiss', 'Dismiss', { kind: 'quiet small' }));
+    n.action ? btn(n.action.action, n.action.label, { kind: 'small' }) : null,
+    n.sticky ? null : btn('dismiss', 'Dismiss', { kind: 'quiet small' }));
 }
 
 function header(title, { backLabel = null, right = null } = {}) {

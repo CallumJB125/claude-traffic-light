@@ -136,6 +136,8 @@ export function createController({ api, vault, now = Date.now, online = () => tr
   let loop = 0;            // bumps to stop the current watch loop
   let wakeFn = null;
   let loopAbort = null;
+  let token = null;        // the sign-in in use (also in the vault)
+  let untold = null;       // a sign-in signed out here that the hub was not told about
 
   function sleep(ms) {
     return new Promise((resolve) => {
@@ -145,12 +147,13 @@ export function createController({ api, vault, now = Date.now, online = () => tr
     });
   }
 
-  async function signedOut(message = 'You were signed out on this phone. Sign in again.') {
+  async function signedOut(message = 'You were signed out on this phone. Sign in again.', notice = { tone: 'warn', text: message }) {
     loop++;
     loopAbort?.abort();
     api.setToken(null);
+    token = null;
     try { await vault.clear(); } catch { /* storage gone */ }
-    set({ view: 'signin', busy: false, host: null, session: null, notice: { tone: 'warn', text: message },
+    set({ view: 'signin', busy: false, host: null, session: null, notice,
       hosts: { items: null, loadedAt: null, error: null }, sessions: { items: null, providers: null, loadedAt: null, error: null },
       auth: { ...state.auth, flowId: null, error: null } });
   }
@@ -170,7 +173,6 @@ export function createController({ api, vault, now = Date.now, online = () => tr
   }
 
   async function boot() {
-    let token = null;
     try { token = await vault.load(); } catch { token = null; }
     if (!token) return set({ view: 'signin' });
     api.setToken(token);
@@ -195,20 +197,48 @@ export function createController({ api, vault, now = Date.now, online = () => tr
     set({ busy: true, auth: { ...state.auth, error: null } });
     let r;
     try { r = await api.verifyEmail(state.auth.flowId, c, state.auth.deviceName); } catch { return set({ busy: false, auth: { ...state.auth, error: 'No connection. Check your network and try again.' } }); }
-    const token = r.body?.device_token;
-    if (r.status !== 200 || typeof token !== 'string') return set({ busy: false, auth: { ...state.auth, error: msgOf(r, 'That code did not work. Ask for a new one.') } });
-    try { await vault.save(token); } catch { return set({ busy: false, auth: { ...state.auth, error: 'This browser cannot store the sign-in. Check private browsing is off.' } }); }
+    const got = r.body?.device_token;
+    if (r.status !== 200 || typeof got !== 'string') return set({ busy: false, auth: { ...state.auth, error: msgOf(r, 'That code did not work. Ask for a new one.') } });
+    try { await vault.save(got); } catch { return set({ busy: false, auth: { ...state.auth, error: 'This browser cannot store the sign-in. Check private browsing is off.' } }); }
+    token = got;
     api.setToken(token);
-    set({ busy: false, view: 'hosts', notice: null, auth: { ...state.auth, flowId: null, error: null } });
+    set({ busy: false, view: 'hosts', notice: untold ? UNTOLD : null, auth: { ...state.auth, flowId: null, error: null } });
     await loadHosts();
   }
 
   function restartSignIn() { set({ auth: { ...state.auth, flowId: null, error: null } }); }
 
+  // Signed out on the hub (200), or the hub already refuses it (401).
+  async function tellHub() {
+    let r = null;
+    try { r = await api.signOut(); } catch { r = null; }
+    return r?.status === 200 || r?.status === 401;
+  }
+  const UNTOLD = {
+    tone: 'error',
+    text: 'Signed out on this phone, but Plexiform could not be told, so this phone\'s sign-in still works until it is removed. Try again, or remove this phone from your account on another device.',
+    action: { action: 'retry-signout', label: 'Try again' }, sticky: true,
+  };
+  const SIGNED_OUT = 'Signed out. This phone no longer has access.';
+
   async function signOut() {
     set({ busy: true });
-    try { await api.signOut(); } catch { /* revoke it from another device if this never reached the hub */ }
-    await signedOut('Signed out. This phone no longer has access.');
+    const held = token;
+    if (await tellHub()) return signedOut(SIGNED_OUT);
+    // Never claim access is gone when the hub still accepts the sign-in:
+    // keep it in memory only (not in the vault) so the retry can tell the hub.
+    untold = held;
+    await signedOut(null, UNTOLD);
+  }
+
+  async function retrySignOut() {
+    if (!untold) return;
+    set({ busy: true });
+    api.setToken(untold);
+    const told = await tellHub();
+    api.setToken(token);
+    if (told) untold = null;
+    set({ busy: false, notice: told ? { tone: 'warn', text: SIGNED_OUT } : UNTOLD });
   }
 
   async function loadHosts() {
@@ -380,7 +410,7 @@ export function createController({ api, vault, now = Date.now, online = () => tr
   return {
     get state() { return state; },
     subscribe(fn) { subs.add(fn); return () => subs.delete(fn); },
-    boot, startSignIn, verifyCode, restartSignIn, signOut, loadHosts, openHost, loadSessions,
-    openSession, launch, back, send, interrupt, close, wake, dismissNotice: () => set({ notice: null }),
+    boot, startSignIn, verifyCode, restartSignIn, signOut, retrySignOut, loadHosts, openHost, loadSessions,
+    openSession, launch, back, send, interrupt, close, wake, dismissNotice: () => { if (!state.notice?.sticky) set({ notice: null }); },
   };
 }
