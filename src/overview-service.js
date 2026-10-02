@@ -26,6 +26,14 @@ function createOverviewService({sessions=()=>[],work=async()=>({sources:[],captu
  const validData=(source,data)=>source.current()&&data?.ok===true&&['complete','partial'].includes(data.status)&&object(data.principal)&&(!source.userId||data.principal.user_id===source.userId)&&Array.isArray(data.cards)&&data.cards.length<=500&&Array.isArray(data.agents)&&data.agents.length<=500;
  const keyOf=row=>[row?.card?.id,row?.board_id,row?.member_id,row?.card?.run?.id??null,row?.card?.fence??null,row?.card?.version??null,row?.card?.title??null];
  const liveOwn=(data,row)=>data.agents.some(a=>a.card_id===row.card.id&&a.board_id===row.board_id&&a.member_id===row.member_id&&a.connection==='accepted'&&a.live?.green===true&&Number.isFinite(a.live.hb_age_ms)&&a.live.hb_age_ms>=0&&a.live.hb_age_ms<=Session.RECENT_MS);
+ const managedStatus=(data,row)=>{
+  const state=row.card.run_state,own=data.agents.find(a=>a.card_id===row.card.id&&a.board_id===row.board_id&&a.member_id===row.member_id);
+  if(['running','quiet','blocked'].includes(state)&&own?.connection!=='accepted')return 'Connection unavailable';
+  if(state==='running')return liveOwn(data,row)?'Working':'No recent activity';
+  if(state==='blocked')return Array.isArray(data.decisions)&&data.decisions.some(d=>d.card_id===row.card.id&&d.board_id===row.board_id&&d.member_id===row.member_id&&['permission','question'].includes(d.kind))?'Waiting on you':'Blocked';
+  const labels={quiet:'Quiet',claimed:'Starting',queued:'Queued',parked:'Parked',suspended:'Suspended',reconnecting:'Reconnecting',unresponsive:'No recent signal',orphaned:'Orphaned',handing_over:'Handing over',handed_over:'Handed over',in_review:'In review',done:'Done',failed:'Stopped'};
+  return typeof state==='string'&&Object.hasOwn(labels,state)?labels[state]:'Unknown';
+ };
  function register(row,entry,next){const handle=crypto.randomUUID();next.set(handle,{...entry,canOpen:row.capabilities.open.enabled===true,canMessage:row.capabilities.message.enabled===true,expires:now()+45000});row.handle=handle;return row;}
  async function snapshot(){
   const generation=++epoch;handles.clear();const time=now();if(!permitted())return{schema:1,status:'unavailable',observed_at:time,omitted:0,sessions:[]};
@@ -59,7 +67,7 @@ function createOverviewService({sessions=()=>[],work=async()=>({sources:[],captu
   for(const {source,data}of good){for(const row of data.cards){const card=row?.card;if(!object(card)||!id(card.id)||!id(row.board_id)||!id(row.member_id)||card.archived||!card.run||!id(card.run.id)||!data.agents.some(a=>a.card_id===card.id&&a.board_id===row.board_id&&a.member_id===row.member_id))continue;
    const identity=stable(['card',source.key,card.id]);if(usedCards.has(identity)||rows.some(r=>r.id===identity))continue;if(rows.length>=200){omitted++;continue;}
    const live=liveOwn(data,row),elapsed=Number.isFinite(card.live?.hb_age_ms)&&card.live.hb_age_ms>=0?card.live.hb_age_ms:null;
-   const dto={id:identity,handle:null,label:'Managed session',provider:provider(card.run.ai,card.run.model),device:{label:clean(card.run.device_name,80)||'Runner device',local:source.kind==='personal'},board:{label:clean(row.board_name,80)||'Board',kind:source.kind},project:clean(card.repo?.short_name,100)||'Project not reported',status:clean(card.run_state,40)||'Unknown',freshness:freshness(elapsed),age_ms:elapsed,task:task(card),children:[],capabilities:{open:capability(true,'Open card',''),message:capability(live&&!!card.repo?.id&&typeof source.send==='function','Message','A current owned runner with messaging is required.')}};
+   const dto={id:identity,handle:null,label:'Managed session',provider:provider(card.run.ai,card.run.model),device:{label:clean(card.run.device_name,80)||'Runner device',local:source.kind==='personal'},board:{label:clean(row.board_name,80)||'Board',kind:source.kind},project:clean(card.repo?.short_name,100)||'Project not reported',status:managedStatus(data,row),freshness:freshness(elapsed),age_ms:elapsed,task:task(card),children:[],capabilities:{open:capability(true,'Open card',''),message:capability(live&&!!card.repo?.id&&typeof source.send==='function','Message','A current owned runner with messaging is required.')}};
    register(dto,{kind:'board',bound:{source,data,row},pin:keyOf(row)},next);rows.push(dto);
   }}
   const local=managed();if(local?.conn?.status==='connected'&&Array.isArray(local.tasks))for(const t of local.tasks.slice(0,200)){
