@@ -3,63 +3,16 @@ const fs=require('node:fs');
 const {randomUUID}=require('node:crypto');
 const {closed,canonical,hash}=require('../plugins/index-verify');
 const {validatePayload,UUID,SHA}=require('./payload');
-const {scrubFile}=require('./scrub');
+const {LOCAL_VALUE_BYTES,localValues,fill,maskedPreview}=require('./transaction-plan');
 const {recipeFor,recipeById,profile,sameProfile,observeTarget,observationEqual,jsonObject,mergeJSON,FILE_BYTES}=require('./transaction-targets');
 
-const CORE_LIMITS=Object.freeze({ttlMs:10*60*1000,handles:32,concurrency:4,filledBytes:8*1024*1024,valuesBytes:16*1024});
+const CORE_LIMITS=Object.freeze({ttlMs:10*60*1000,handles:32,concurrency:4,filledBytes:8*1024*1024,valuesBytes:LOCAL_VALUE_BYTES});
 const ID=/^[A-Za-z0-9_.:-]{1,100}$/;
-const PLACEHOLDER=/\{\{(HOME|USER|HOSTNAME|NAME|EMAIL(?::\d+)?|IP:\d+|HOST:\d+|PRIVATE:\d+|SSH_USER|SECRET:[\w.-]{1,64})\}\}/g;
 const unavailable=()=>({ok:false,status:'unavailable',error:'This setup plan or local recovery is unavailable. Review the current profile and access again.'});
 const refuse=()=>{throw new Error('Setups transaction is unavailable');};
 const actorValid=actor=>closed(actor,['account','team','member','device'])&&Object.values(actor).every(value=>typeof value==='string'&&ID.test(value));
 const textOf=bytes=>new TextDecoder('utf-8',{fatal:true}).decode(bytes);
 const clone=value=>JSON.parse(canonical(value));
-function localValues(payloadFiles,provided,captured) {
-  if(!provided||typeof provided!=='object'||Array.isArray(provided))refuse();
-  const needed=new Set(payloadFiles.flatMap(file=>[...file.content.matchAll(PLACEHOLDER)].map(match=>match[1])));needed.delete('HOME');
-  if(Object.keys(provided).some(key=>!needed.has(key))||[...needed].some(key=>!Object.hasOwn(provided,key)))refuse();
-  let bytes=0;const values=new Map([['HOME',captured.profile.root]]);
-  for(const name of needed){const value=provided[name];if(typeof value!=='string'||value.includes('\0')||Buffer.byteLength(value)>4096)refuse();bytes+=Buffer.byteLength(value);values.set(name,value);}
-  if(bytes>CORE_LIMITS.valuesBytes)refuse();return values;
-}
-function fill(content,format,values) {
-  const replace=text=>text.replace(PLACEHOLDER,(_match,name)=>{if(!values.has(name))refuse();return values.get(name);});
-  if(format==='json') {
-    const value=jsonObject(content);
-    const walk=item=>{
-      if(typeof item==='string')return replace(item);
-      if(Array.isArray(item))return item.map(walk);
-      if(item&&typeof item==='object')return Object.fromEntries(Object.entries(item).map(([key,value])=>{if(/\{\{|\}\}/.test(key))refuse();return [key,walk(value)];}));
-      return item;
-    };
-    const result=JSON.stringify(walk(value),null,2);if(Buffer.byteLength(result)>FILE_BYTES)refuse();return result;
-  }
-  const result=replace(content);if(Buffer.byteLength(result)>FILE_BYTES)refuse();return result;
-}
-function maskedPreview(bytes,recipe,values,captured) {
-  const result=scrubFile({path:'~/'+recipe.relative,format:recipe.format,content:textOf(bytes),machine:{home:captured.profile.root}});
-  if(result.status!=='ok')return {status:'withheld',content:null};
-  let text=result.content;
-  // Explicit local values stay out of UI previews even when they do not match a
-  // known credential pattern. Unknown pre-existing prose still needs review.
-  const ordered=[...values].filter(([,value])=>value).sort((a,b)=>b[1].length-a[1].length);
-  const mask=value=>{for(const [name,local] of ordered)value=value.split(local).join(`{{${name}}}`);return value;};
-  if(recipe.format==='json') {
-    // Mask decoded JSON strings, so quotes/backslashes/Unicode escapes cannot
-    // make a local value evade preview masking. Leave unedited preview bytes
-    // alone when none of the explicit values occur.
-    let changed=false;
-    const walk=value=>{
-      if(typeof value==='string'){const next=mask(value);changed ||= next!==value;return next;}
-      if(Array.isArray(value))return value.map(walk);
-      if(value&&typeof value==='object')return Object.fromEntries(Object.entries(value).map(([key,item])=>{if(mask(key)!==key)refuse();return [key,walk(item)];}));
-      return value;
-    };
-    try{const masked=walk(jsonObject(text));if(changed)text=JSON.stringify(masked,null,2);}catch{return {status:'withheld',content:null};}
-  } else text=mask(text);
-  return {status:'reviewable',content:text};
-}
-
 // Private main-process construction only. observe/readSource/confirm are fixed
 // registered callbacks, never renderer-supplied identity, URLs or file paths.
 // There is no target mutation or tool execution method in this checkpoint.

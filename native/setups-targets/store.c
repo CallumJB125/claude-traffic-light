@@ -314,6 +314,43 @@ PFResult pf_store_list(PFStoreRoot *s,PFUuid *ids,uint32_t cap,uint32_t *count){
   uint64_t bytes;
   return scan_root(s,ids,cap,count,&bytes);
 }
+static int child_entry(const char *name,PFStoreEntry *out){
+ char candidate[48];memset(out,0,sizeof(*out));
+ for(unsigned role=0;role<=PF_STORE_EVENT;role++){
+  unsigned indices=(role>=PF_STORE_BEFORE&&role<=PF_STORE_METADATA)?PF_STORE_MAX_TARGETS:1u;
+  unsigned sequences=role==PF_STORE_EVENT?PF_STORE_MAX_EVENTS:1u;
+  for(unsigned index=0;index<indices;index++)for(unsigned seq=0;seq<sequences;seq++){
+   if(filename((PFStoreRole)role,index,seq,candidate)!=PF_OK)return 0;
+   if(!strcmp(candidate,name)){out->role=role;out->target=index;out->sequence=seq;return 1;}
+  }
+ }return 0;
+}
+PFResult pf_store_inventory(PFStoreRoot *s,PFStoreTxn *t,PFStoreInventory *out){
+ if(!out)return PF_INVALID;memset(out,0,sizeof(*out));
+ if(!s||(t&&t->root!=s))return PF_INVALID;
+ PFResult r=scan_root(s,NULL,0,&out->namespaces,&out->total_bytes);
+ if(r==PF_OK&&t)r=txn_current(t);
+ DIR *dir=NULL;int copy=-1;uint64_t start=pf_packet_now();
+ if(r==PF_OK&&t){copy=openat(t->fd,".",O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);if(copy<0)r=PF_IO;else{dir=fdopendir(copy);if(!dir){close(copy);r=PF_IO;}}}
+ if(dir){struct dirent *entry;errno=0;
+  while((entry=readdir(dir))!=NULL){
+   if(!strcmp(entry->d_name,".")||!strcmp(entry->d_name,".."))continue;
+   if(!start||pf_packet_now()-start>=UINT64_C(1000000000)){r=PF_DEADLINE;break;}
+   if(out->children>=PF_STORE_MAX_CHILDREN){r=PF_TOO_LARGE;break;}
+   PFStoreEntry tuple;if(!child_entry(entry->d_name,&tuple)){r=PF_UNSAFE;break;}
+   for(uint32_t i=0;i<out->children;i++)if(out->entries[i].role==tuple.role&&out->entries[i].target==tuple.target&&out->entries[i].sequence==tuple.sequence){r=PF_CHANGED;break;}
+   if(r!=PF_OK)break;
+   int fd=openat(t->fd,entry->d_name,O_RDONLY|O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC);if(fd<0){r=pf_packet_error();break;}
+   PFStamp stamp;r=private_file(t->fd,entry->d_name,fd,&stamp);close(fd);if(r!=PF_OK)break;
+   if(stamp.size>PF_STORE_TRANSACTION_BYTES-out->transaction_bytes){r=PF_TOO_LARGE;break;}
+   tuple.bytes=stamp.size;out->transaction_bytes+=stamp.size;out->entries[out->children++]=tuple;errno=0;
+  }
+  if(r==PF_OK&&errno)r=PF_IO;closedir(dir);
+ }
+ if(r==PF_OK&&t){uint64_t bytes=0;unsigned children=0;r=scan_children(t->fd,&bytes,&children);if(r==PF_OK&&(bytes!=out->transaction_bytes||children!=out->children))r=PF_CHANGED;if(r==PF_OK)r=txn_current(t);}
+ if(r==PF_OK){uint32_t count=0;uint64_t total=0;r=scan_root(s,NULL,0,&count,&total);if(r==PF_OK&&(count!=out->namespaces||total!=out->total_bytes))r=PF_CHANGED;}
+ if(r!=PF_OK)memset(out,0,sizeof(*out));return r;
+}
 static PFResult open_txn(PFStoreRoot *s,PFUuid id,int create,PFStoreTxn **out){
   if(!out)return PF_INVALID;
   *out=NULL;
@@ -530,6 +567,7 @@ PFResult pf_store_list(PFStoreRoot *r,PFUuid *i,uint32_t c,uint32_t *n){
   if(n)*n=0;
   return PF_UNSUPPORTED;
 }
+PFResult pf_store_inventory(PFStoreRoot *r,PFStoreTxn *t,PFStoreInventory *out){(void)r;(void)t;if(out)memset(out,0,sizeof(*out));return PF_UNSUPPORTED;}
 PFResult pf_store_create_txn(PFStoreRoot *r,PFUuid i,PFStoreTxn **o){
   (void)r;
   (void)i;

@@ -1,0 +1,13 @@
+'use strict';
+const test=require('node:test'),assert=require('node:assert/strict');
+const {performance}=require('node:perf_hooks');
+const {spawn}=require('node:child_process');
+const C=require('../src/borrow/native-codec');
+const {createNativeSupervisor}=require('../src/borrow/native-supervisor');
+const {fixture}=require('./helpers/setups-native/runtime');
+const helper=process.env.PLEXIFORM_TEST_HELPER;
+const config=f=>({...f.roots(),mode:1,generation:2n,authority_hash:C.hash(Buffer.from('synthetic-only'))});
+test('owned fixed Node channels bootstrap, fragment requests, authenticate and observe close',async t=>{const f=fixture(t,helper),s=await f.sup.open(config(f),performance.now()+8000);const out=await s.request(0x30,new C.Writer().u32(1).finish());assert.equal(out.result,0);assert.equal(typeof s.nativeCutoff,'bigint');assert.equal((await s.close()).status,'closed');assert.equal(s.reapPending,false);await assert.rejects(s.request(0x30));});
+test('current authority loss withholds a successful response and captured child is reaped',async t=>{const f=fixture(t,helper),s=await f.sup.open(config(f),performance.now()+8000);f.state.foreground=false;await assert.rejects(s.request(0x30,new C.Writer().u32(1).finish()));assert.equal((await s.close()).status,'closed');assert.ok(f.state.children.every(c=>c.exitCode!==null||c.signalCode!==null));});
+test('bootstrap absolute cutoff kills child that never acknowledges',async t=>{const f=fixture(t,helper),children=[];const sup=createNativeSupervisor({current:()=>true,childMs:200,terminateMs:50,launch:o=>{const c=spawn(process.execPath,['-e','setTimeout(()=>{},30000)'],o);children.push(c);return c;}});const start=performance.now();await assert.rejects(sup.open(config(f),start+200));assert.ok(performance.now()-start<1000);assert.ok(children.every(c=>c.exitCode!==null||c.signalCode!==null));});
+test('malformed and duplicate native operations never renew a session',async t=>{const f=fixture(t,helper),s=await f.sup.open(config(f),performance.now()+8000);const out=await s.request(0x30,Buffer.alloc(0));assert.equal(out.result,1);await assert.rejects(s.request(0x30,new C.Writer().u32(1).finish()));assert.equal((await s.close()).status,'closed');});

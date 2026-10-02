@@ -198,3 +198,15 @@ store, protocol and protocol-transport. The fixture build additionally defines
 PF_PACKET_FIXTURE and PF_WRITER_TEST_HOOKS and links interface-acceptance.c. Separate
 original reader/ACL/writer drivers remain unchanged. Full independent source and
 actual acceptance precede helper/build/MAIN/journal/UI enablement.
+
+## Private runtime follow-up
+
+See RUNTIME-BINDING.md for the new, still uncalled/unpackaged Darwin helper,
+Node22 owned socketpair adapter, worker/controller and schema-2 encrypted journal.
+The inherited FIFO transport and schema-1 prepared-only behavior are unchanged.
+`0x48 Inventory` accepts an empty payload after OpenFixed, optionally OpenTxn,
+and returns u32 namespace count, u64 total logical bytes, u64 held-transaction
+logical bytes, u32 child count and bounded role/index/sequence u32 + size u64
+entries. It is current metadata observation only; refused output is cleared.
+No whole-product/app/real-profile/OS-wrapping/Windows/Linux claim follows from
+private synthetic acceptance.

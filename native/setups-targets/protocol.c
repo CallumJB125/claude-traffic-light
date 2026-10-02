@@ -223,6 +223,7 @@ static uint32_t worst_reply(uint16_t op){
   if(op>=0x32&&op<=0x34)return PF_RECEIPT_BYTES+32;
   if(op==0x44)return PF_STORE_BLOB_BYTES+32;
   if(op==0x41)return 16*16+32;
+  if(op==0x48)return PF_STORE_MAX_CHILDREN*20+24+32;
   return 32;
 }
 static PFResult dispatch(PFProtocol *p,uint16_t op,PFByteView input,unsigned char *out,uint32_t cap,uint32_t *written,uint32_t *effects){
@@ -420,6 +421,17 @@ static PFResult dispatch(PFProtocol *p,uint16_t op,PFByteView input,unsigned cha
     *effects=4;
     return pf_store_open_fixed(p->app_parent,&p->store);
   }
+  if(op==0x48){
+    if(input.size||!p->store)return PF_INVALID;
+    PFStoreInventory *inventory=calloc(1,sizeof(*inventory));if(!inventory)return PF_IO;
+    result=pf_store_inventory(p->store,p->txn,inventory);
+    if(result==PF_OK){PFCodec encoded={out,NULL,cap,0,0};
+      pf_codec_u32(&encoded,&inventory->namespaces);pf_codec_u64(&encoded,&inventory->total_bytes);pf_codec_u64(&encoded,&inventory->transaction_bytes);pf_codec_u32(&encoded,&inventory->children);
+      for(uint32_t i=0;i<inventory->children;i++){PFStoreEntry *e=&inventory->entries[i];pf_codec_u32(&encoded,&e->role);pf_codec_u32(&encoded,&e->target);pf_codec_u32(&encoded,&e->sequence);pf_codec_u64(&encoded,&e->bytes);}
+      if(encoded.failed){pf_packet_wipe(out,cap);result=PF_TOO_LARGE;}else *written=encoded.at;
+    }
+    pf_packet_wipe(inventory,sizeof(*inventory));free(inventory);return result;
+  }
   if(op==0x41){
     if(input.size||!p->store)return PF_INVALID;
     PFUuid ids[16];
@@ -489,7 +501,7 @@ PFResult pf_protocol_process(PFProtocol *p,PFByteView incoming,unsigned char *ou
   const unsigned char *h=incoming.data;
   uint32_t len=read32(h+36),seq=read32(h+28);
   uint16_t op=(uint16_t)(((uint16_t)h[10]<<8)|h[11]);
-  if(memcmp(h,"PFFRME02",8)||h[8]!=0||h[9]!=2||read32(h+32)||len>PF_FRAME_PAYLOAD||len!=incoming.size-PF_FRAME_OVERHEAD||seq!=p->sequence||!nz(h+12,16)||!((op>=0x30&&op<=0x35)||(op>=0x40&&op<=0x47))){
+  if(memcmp(h,"PFFRME02",8)||h[8]!=0||h[9]!=2||read32(h+32)||len>PF_FRAME_PAYLOAD||len!=incoming.size-PF_FRAME_OVERHEAD||seq!=p->sequence||!nz(h+12,16)||!((op>=0x30&&op<=0x35)||(op>=0x40&&op<=0x48))){
     p->dead=1;
     return PF_INVALID;
   }
