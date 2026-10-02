@@ -4,6 +4,7 @@
 // claude CLI. No real `claude`/`codex` is ever spawned.
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { ClaudeBackend } from '../../runner/backends/claude.js';
 import { CodexBackend } from '../../runner/backends/codex.js';
@@ -11,8 +12,9 @@ import { fakeClaudeBin } from '../../runner/test/helpers.js';
 import { connect } from '../../tasks-api/client.js';
 import { makeLogger } from '../../runner/util.js';
 
+const TEMP_ROOT = process.platform === 'darwin' ? '/tmp' : os.tmpdir();
 export function tmpDir(prefix = 'bte-') {
-  return fs.realpathSync(fs.mkdtempSync(path.join('/tmp', prefix)));
+  return fs.realpathSync(fs.mkdtempSync(path.join(TEMP_ROOT, prefix)));
 }
 
 export function rm(dir) {
@@ -50,7 +52,7 @@ export function fakeBackends(dir, scenario, { claudeInstalled = true } = {}) {
   return { claude: FakeClaude, codex: FakeCodex };
 }
 
-export const ENV = { HOME: process.env.HOME, USER: process.env.USER, PATH: process.env.PATH, TMPDIR: '/tmp', LANG: 'en_US.UTF-8' };
+export const ENV = { HOME: process.env.HOME, USER: process.env.USER, PATH: process.env.PATH, TMPDIR: TEMP_ROOT, LANG: 'en_US.UTF-8' };
 
 /** Engine on a temp data dir + a connected client. */
 export async function startEngine({ scenario = { steps: [{ result: 'success' }] }, dir = tmpDir(), engineOpts = {}, backendOpts } = {}) {

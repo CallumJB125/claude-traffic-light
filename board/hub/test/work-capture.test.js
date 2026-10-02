@@ -285,10 +285,11 @@ test('durable mapping and tombstone survive hub restart; old observations never 
 
 test('embedded local owner captures no-repo work through actual private cookie and preserves restart mapping', async (t) => {
   const dataDir = mkdtempSync(join(tmpdir(), 'capture-local-')), cookie = `board_local=${'x'.repeat(64)}`;
-  t.after(() => rmSync(dataDir, { recursive: true, force: true }));
+  const apps = [];
+  t.after(async () => { for (const app of [...apps].reverse()) await app.close(); rmSync(dataDir, { recursive: true, force: true }); });
   const config = testConfig({ auth: 'local', localSecret: 'x'.repeat(64), devLoginSecret: null, dataDir, dbPath: join(dataDir, 'board.db') });
   async function start() {
-    const app = createApp(config, { clock: fakeClock(), log: silentLogger, github: fakeGitHub(), timers: false }); t.after(() => app.close());
+    const app = createApp(config, { clock: fakeClock(), log: silentLogger, github: fakeGitHub(), timers: false }); apps.push(app);
     const addr = await app.listen(0, '127.0.0.1'), base = `http://127.0.0.1:${addr.port}`;
     const call = async (method, url, body, hs = {}) => { const r = await fetch(`${base}${url}`, { method, headers: { cookie, origin: base, 'content-type': 'application/json', ...hs }, ...(body ? { body: JSON.stringify(body) } : {}) }); return { status: r.status, body: await r.json() }; };
     return { app, call, board: app.hub.boardList(app.hub.member(app.hub.localMemberId).org_id)[0].id };

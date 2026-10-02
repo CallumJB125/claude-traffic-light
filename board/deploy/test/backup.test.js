@@ -12,12 +12,12 @@ import { createBackup, snapshot, stageRestore, validateBackup } from '../pi/back
 const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
 function rig(t, { legacy = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plexiform-backup-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  let conn;
+  t.after(() => { conn?.close(); fs.rmSync(root, { recursive: true, force: true }); });
   const dataDir = path.join(root, 'data'); fs.mkdirSync(dataDir, { mode: 0o700 });
-  const db = path.join(dataDir, 'board.db'), conn = new DatabaseSync(db);
+  const db = path.join(dataDir, 'board.db'); conn = new DatabaseSync(db);
   conn.exec('PRAGMA journal_mode=WAL; CREATE TABLE state(value TEXT); INSERT INTO state VALUES (\'before\')');
   if (!legacy) conn.exec('CREATE TABLE client_artifact_versions(id TEXT PRIMARY KEY, sha256 TEXT, byte_length INTEGER); CREATE TABLE decisions(artifact_id TEXT, sha256 TEXT, decision TEXT)');
-  t.after(() => conn.close());
   const add = (text = 'Exact approved deliverable') => {
     const bytes = Buffer.from(text), id = randomUUID();
     fs.mkdirSync(path.join(dataDir, 'client-artifacts'), { mode: 0o700, recursive: true });
