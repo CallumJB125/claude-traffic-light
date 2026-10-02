@@ -12,6 +12,12 @@
 ; of the macro contains that default block, unchanged, from
 ; app-builder-lib/templates/nsis/uninstaller.nsh (electron-builder 26.16.1,
 ; pinned exactly in package.json; test/installers.test.js compares the two).
+; Keep the waiting update installer outside the directory its child removes.
+; The install section selects $INSTDIR again before extracting the new app.
+!macro customInit
+  SetOutPath $TEMP
+!macroend
+
 !macro customRemoveFiles
   ${ifNot} ${isUpdated}
     DetailPrint "Removing Plexiform's hooks from your coding agents"
