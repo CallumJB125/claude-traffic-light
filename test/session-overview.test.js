@@ -68,3 +68,8 @@ test('unavailable local activity and unreadable hook configuration remain distin
   const result = Overview.snapshot({ sessions: [], available: false, activity: { available: false }, now });
   assert.equal(result.status, 'unavailable'); assert.equal(result.activity.configured, null); assert.deepEqual(result.sessions, []);
 });
+test('malformed child statuses cannot make the current valid local session unavailable', () => {
+  const result = Overview.snapshot({ sessions: [codex({ codexAgents: [{ status: { toString: null } }, { status: { toString: [] } }, { status: Object.create(null) }, { status: 'working' }] })], now });
+  assert.equal(result.status, 'complete');
+  assert.deepEqual(result.sessions[0].children, [{ label: 'Codex subagent 1', status: 'Working' }]);
+});

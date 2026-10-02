@@ -41,7 +41,7 @@ function snapshot({ sessions = [], activity = {}, available = true, now = Date.n
     if (lifecycle && age !== null && (latest === null || age < latest)) latest = age;
     if (rows.length >= LIMIT) { omitted++; continue; }
     const rawChildren = lifecycle ? row.codexAgents : row.agents;
-    const children = Array.isArray(rawChildren) ? rawChildren.filter(child => object(child) && Object.hasOwn(CHILD_STATUSES, child.status)).slice(0, CHILD_LIMIT).map((child, index) => ({
+    const children = Array.isArray(rawChildren) ? rawChildren.filter(child => object(child) && typeof child.status === 'string' && Object.hasOwn(CHILD_STATUSES, child.status)).slice(0, CHILD_LIMIT).map((child, index) => ({
       label: `${lifecycle ? 'Codex subagent' : 'Agent'} ${index + 1}`, status: CHILD_STATUSES[child.status],
     })) : [];
     rows.push({
