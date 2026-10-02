@@ -24,9 +24,31 @@
     <button id="clear-filters" type="button">Clear filters</button>
   </section>
   <section id="owned-section" class="owned" aria-labelledby="owned-title" hidden>
-    <div class="section-header"><h2 id="owned-title">Sessions started by Plexiform</h2><button id="start-codex" type="button" disabled>Start Codex session</button></div>
-    <p id="owned-status" class="muted" role="status" aria-live="polite">Plexiform can start its own Codex session and send it your messages. Existing sessions it did not start stay observation-only.</p>
+    <div class="section-header"><h2 id="owned-title">Sessions started by Plexiform</h2></div>
+    <p id="owned-status" class="muted" role="status" aria-live="polite">Plexiform can start its own session with any AI listed below and send it your messages. Existing sessions it did not start stay observation-only.</p>
+    <fieldset class="picker">
+      <legend>Start a session with</legend>
+      <div id="provider-list" class="provider-list"></div>
+      <label class="router-label" for="router-text">What do you want to ask? <span class="muted">Optional, for a suggestion</span></label>
+      <input id="router-text" type="text" maxlength="4000" autocomplete="off" spellcheck="true">
+      <p id="router-hint" class="reason" role="status" aria-live="polite"></p>
+      <div class="actions"><button id="start-session" type="button" disabled>Start session</button><button id="router-use" type="button" hidden></button></div>
+    </fieldset>
     <div id="owned"></div>
+    <section id="ask-all" class="ask-all" aria-labelledby="ask-all-title" hidden>
+      <h3 id="ask-all-title">Ask all</h3>
+      <p class="muted">Send one message to several of your Plexiform sessions at once (up to 6) and compare their answers side by side.</p>
+      <fieldset class="ask-targets"><legend>Ask these sessions</legend><div id="ask-targets"></div></fieldset>
+      <label class="router-label" for="ask-text">Message</label>
+      <div class="actions"><button id="ask-send" type="button" disabled>Ask selected</button><p id="ask-status" class="reason" role="status" aria-live="polite"></p></div>
+      <div id="ask-results" class="ask-results" aria-label="Answers side by side"></div>
+    </section>
+  </section>
+  <section id="local-section" class="local-models" aria-labelledby="local-title" hidden>
+    <div class="section-header"><h2 id="local-title">Integrated local models</h2></div>
+    <p id="local-status" class="muted" role="status" aria-live="polite">Checking for local model endpoints…</p>
+    <div id="local-endpoints"></div>
+    <p class="reason">To add an endpoint, add it to <code>local-models.json</code> in Plexiform's data folder (userData), for example <code>{"endpoints":[{"id":"my-box","label":"My box","url":"http://127.0.0.1:11434","kind":"ollama"}]}</code>. <code>kind</code> is <code>ollama</code> or <code>openai</code>. An API key is never stored there: name an environment variable with <code>apiKeyEnv</code> instead.</p>
   </section>
   <section class="work" aria-labelledby="work-title">
     <div class="section-header"><h2 id="work-title">Reported work</h2><p id="result-count" class="muted"></p></div>
@@ -35,6 +57,7 @@
   <section class="connections" aria-labelledby="connections-title"><h2 id="connections-title">Reported providers</h2><div id="connections"></div></section>
   <p class="disclosure">Activity comes from supported reports. A recent report does not verify that a task succeeded. Silent sessions become stale; missing task or child-agent metadata stays unknown. Private chats are not read.</p>
 </main>
+<script src="src/session-router.js"></script>
 <script src="overview.js"></script>
 </body>
 </html>

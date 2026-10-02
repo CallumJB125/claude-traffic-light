@@ -19,8 +19,9 @@ const { createLocalModels } = require('./local-models');
 const CHANNELS = Object.freeze({
   capabilities: 'interaction:capabilities', list: 'interaction:list', state: 'interaction:state',
   launch: 'interaction:launch', send: 'interaction:send', interrupt: 'interaction:interrupt', close: 'interaction:close',
-  event: 'interaction:event', localModels: 'interaction:local-models',
+  event: 'interaction:event', localModels: 'interaction:local-models', fanout: 'interaction:fanout',
 });
+const MAX_FANOUT = 6;
 const denied = { ok: false, status: 'forbidden', error: 'Focus Plexiform Overview and try again.' };
 const BOARD_STALE = 'This session belongs to another board. Switch back to the board it started on to use it.';
 const object = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -79,6 +80,19 @@ function createInteractionMain({ context, readContext = context, adapters: given
     },
     interrupt: (req, actor) => hub.interrupt(req, actor),
     close: (req, actor) => hub.close(req, actor),
+    // Ask all: each target goes through the same per-session send (and every
+    // guard in it); one refused or stale target never blocks the others.
+    async fanout(req, actor) {
+      const list = object(req) && Object.keys(req).length === 2 && Array.isArray(req.sessions) && typeof req.text === 'string' ? req.sessions : null;
+      const ok = list && list.length >= 1 && list.length <= MAX_FANOUT && list.every((t) => object(t) && Object.keys(t).length === 2 && typeof t.session === 'string' && Number.isSafeInteger(t.generation));
+      if (!ok || new Set(list.map((t) => t.session)).size !== list.length) return { ok: false, status: 'invalid', error: 'Choose between 1 and 6 different sessions.' };
+      const results = await Promise.all(list.map(async ({ session, generation }) => {
+        let result;
+        try { result = await effects.send({ session, generation, text: req.text }, actor); } catch { result = { ok: false, status: 'unavailable', error: 'The provider did not accept the message.' }; }
+        return { session, ...result };
+      }));
+      return { ok: results.some((r) => r.ok === true), status: 'fanned-out', results };
+    },
   };
   const one = (args) => (args.length === 1 ? args[0] : undefined);
   return {
