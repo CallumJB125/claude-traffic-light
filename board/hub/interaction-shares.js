@@ -49,9 +49,14 @@ const closed = (v, keys) => object(v) && Object.keys(v).every((k) => keys.includ
 const invalid = () => new HubError('VALIDATION', 'invalid share request');
 const noShare = () => new HubError('NOT_FOUND', 'that shared session is not available');
 // Deliveries sent before the share was created never leave the hub (the host filters too).
+// A steer after the share joins a turn that may have begun before it: that turn's
+// response carries pre-share output, so it is withheld unless the turn began after.
 function sinceShared(result, since) {
   if (!object(result) || !object(result.state) || !Array.isArray(result.state.deliveries)) return result;
-  const deliveries = result.state.deliveries.filter((d) => object(d) && Number.isFinite(d.sentAt) && d.sentAt >= since);
+  const after = (d) => object(d) && Number.isFinite(d.sentAt) && d.sentAt >= since;
+  const fresh = new Set(result.state.deliveries.filter((d) => after(d) && d.mode === 'new-turn' && d.turn != null).map((d) => d.turn));
+  const deliveries = result.state.deliveries.filter(after)
+    .map((d) => (d.mode === 'new-turn' || fresh.has(d.turn) ? d : { ...d, response: '' }));
   return { ...result, state: { ...result.state, deliveries } };
 }
 const ACTIVE_MEMBER = `SELECT m.id, m.role FROM members m JOIN orgs o ON o.id = m.org_id
@@ -121,7 +126,8 @@ export class InteractionShares {
     const id = randomUUID();
     this.hub.txn(() => {
       this.db.run('UPDATE interaction_shares SET revoked_at = ?, revoked_by = ? WHERE host_device_id = ? AND session_id = ? AND org_id = ? AND revoked_at IS NULL', now, ident.user.id, ident.cred.id, body.session, body.team);
-      const count = this.db.get('SELECT COUNT(*) AS n FROM interaction_shares WHERE host_device_id = ? AND revoked_at IS NULL', ident.cred.id).n;
+      // Expired shares are dead: they never hold a slot.
+      const count = this.db.get('SELECT COUNT(*) AS n FROM interaction_shares WHERE host_device_id = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)', ident.cred.id, now).n;
       if (count >= SHARE_LIMITS.perHost) throw new HubError('QUOTA_EXCEEDED', 'stop sharing another session first');
       this.db.insert('interaction_shares', { id, owner_user_id: ident.user.id, host_device_id: ident.cred.id, session_id: body.session, org_id: body.team, scope: body.scope, created_at: now, expires_at: expires });
     });

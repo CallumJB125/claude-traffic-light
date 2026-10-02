@@ -166,8 +166,14 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
     return t && t.hub && typeof t.actor === 'string' && t.hub.state({ session }, t.actor) ? t : null;
   }
   // A teammate sees the session's messages and responses sent since the share
-  // was created (never earlier history), never the owner's board key.
-  function project(state, sh) { const { board, ...rest } = state; return { ...rest, deliveries: rest.deliveries.filter((d) => d.sentAt >= sh.createdAt) }; }
+  // was created (never earlier history), never the owner's board key. A steer
+  // into a turn that began before the share shows no response: it holds pre-share output.
+  function project(state, sh) {
+    const { board, ...rest } = state;
+    const after = rest.deliveries.filter((d) => d.sentAt >= sh.createdAt);
+    const fresh = new Set(after.filter((d) => d.mode === 'new-turn' && d.turn != null).map((d) => d.turn));
+    return { ...rest, deliveries: after.map((d) => (d.mode === 'new-turn' || fresh.has(d.turn) ? d : { ...d, response: '' })) };
+  }
   function sharedRead(t, sh) {
     const st = t.hub.state({ session: sh.session }, t.actor);
     if (!st) return null;

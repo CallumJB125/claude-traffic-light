@@ -551,3 +551,72 @@ test('HOSTILE: deleting the owner\'s account stops their shares', async () => {
     assert.equal((await r.call(r.bob, share.id, 'state', { session: s.session })).status, 404);
   } finally { await r.close(); }
 });
+
+test('QUOTA: a host holds at most 64 live shares; expired-but-unrevoked shares do not take a slot', async () => {
+  const r = await rig();
+  try {
+    const create = () => r.h.call('POST', '/api/interaction/v1/shares', { token: r.macA.token, body: { session: rid(), team: r.org, scope: 'watch' } });
+    const row = (expires) => r.h.db.insert('interaction_shares', { id: rid(), owner_user_id: r.macA.user, host_device_id: r.macA.device, session_id: rid(), org_id: r.org, scope: 'watch', created_at: r.h.hub.iso(), expires_at: expires });
+    for (let i = 0; i < 62; i++) row(null);
+    const soon = new Date(r.h.clock.wall() + 60_000).toISOString();
+    row(soon);
+    assert.equal((await create()).status, 200, 'the 64th');
+    const full = await create();
+    assert.equal(full.body.error?.code, 'QUOTA_EXCEEDED', full.text);
+    r.h.clock.advance(61_000);
+    assert.equal((await create()).status, 200, 'the expired share no longer counts');
+    assert.equal((await create()).body.error?.code, 'QUOTA_EXCEEDED');
+  } finally { await r.close(); }
+});
+
+test('HOSTILE: the hub forwards a team viewer\'s call to the Mac as watch-only, whatever the share\'s scope', async () => {
+  const r = await rig();
+  try {
+    const s = await r.launch();
+    r.h.db.run("UPDATE members SET role = 'viewer' WHERE id = ?", r.h.ids.bob);
+    const { share } = await r.mac.shareSession({ session: s.session, team: r.org, scope: 'interact' });
+    const relay = r.h.hub.interactionRelay, orig = relay.dispatch, frames = [];
+    relay.dispatch = function (host, frame, ...a) { frames.push(frame); return orig.call(this, host, frame, ...a); };
+    try {
+      assert.equal((await r.call(r.bob, share.id, 'state', { session: s.session })).status, 200);
+      r.h.db.run("UPDATE members SET role = 'member' WHERE id = ?", r.h.ids.bob);
+      assert.equal((await r.call(r.bob, share.id, 'state', { session: s.session })).status, 200);
+    } finally { relay.dispatch = orig; }
+    assert.deepEqual(frames.map((f) => f.share.scope), ['watch', 'interact']);
+  } finally { await r.close(); }
+});
+
+test('HISTORY: a teammate\'s steer into a turn that began before the share does not show that turn\'s response (hub and Mac)', async () => {
+  const r = await rig();
+  try {
+    const s = await r.launch();
+    await r.ownerSend(s, 'HOLD pre-share work');
+    const turn = await until(() => r.mac.hub.state({ session: s.session }, r.mac.actor).activeTurn);
+    r.h.clock.advance(1000);
+    const { share } = await r.mac.shareSession({ session: s.session, team: r.org, scope: 'interact' });
+    const steer = await r.call(r.bob, share.id, 'send', { session: s.session, generation: s.generation, text: 'more', expectedTurn: turn });
+    assert.equal(steer.body.result.delivery?.mode, 'steer', steer.text);
+    await until(() => r.mac.hub.state({ session: s.session }, r.mac.actor).deliveries.find((d) => d.text === 'more' && d.state === 'completed'));
+    assert.ok(r.mac.hub.state({ session: s.session }, r.mac.actor).deliveries.find((d) => d.text === 'more').response, 'the owner still sees it');
+    const seen = (await r.call(r.bob, share.id, 'state', { session: s.session })).body.result.state.deliveries;
+    assert.deepEqual(seen.map((d) => [d.text, d.response]), [['more', '']]);
+    // The Mac withholds it on its own, too.
+    const direct = await r.mac.handle(r.frame('state', { session: s.session }, share, r.bob));
+    assert.deepEqual(direct.state.deliveries.map((d) => d.response), ['']);
+    // …and so does the hub, whatever the Mac answers.
+    const relay = r.h.hub.interactionRelay, orig = relay.dispatch;
+    relay.dispatch = async function (...a) {
+      const res = await orig.apply(this, a);
+      return { ...res, state: { ...res.state, deliveries: res.state.deliveries.map((d) => ({ ...d, response: 'pre-share output' })) } };
+    };
+    try {
+      const got = await r.call(r.bob, share.id, 'state', { session: s.session });
+      assert.ok(!got.text.includes('pre-share output'), got.text);
+    } finally { relay.dispatch = orig; }
+    // A turn a teammate starts after the share shows its response.
+    const fresh = await r.call(r.bob, share.id, 'send', { session: s.session, generation: s.generation, text: 'new turn' });
+    assert.equal(fresh.body.result.status, 'acknowledged', fresh.text);
+    const done = await until(async () => (await r.call(r.bob, share.id, 'state', { session: s.session })).body.result.state.deliveries.find((d) => d.text === 'new turn' && d.state === 'completed'));
+    assert.equal(done.response, 'echo:new turn');
+  } finally { await r.close(); }
+});

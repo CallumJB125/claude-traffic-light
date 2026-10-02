@@ -110,6 +110,29 @@ test('REVIEW 3: retention, expired handoffs and long-retired targets go on the t
   } finally { await r.close(); }
 });
 
+test('REVIEW 3: the timed purge sweeps messages and targets of any account marked deleted that the erase left behind', async () => {
+  const r = await messagingRig();
+  try {
+    await personalMac(r);
+    const win = r.client(r.winA), bob = r.client(r.bob);
+    assert.equal((await win.send({ to: { user_id: r.bob.user, org_id: r.org }, body: 'to bob' })).status, 200);
+    assert.equal((await bob.send({ to: { user_id: r.winA.user, org_id: r.org }, body: 'to alice' })).status, 200);
+    const msgs = () => rows(r, 'SELECT COUNT(*) n FROM msg_messages');
+    const targets = () => rows(r, 'SELECT COUNT(*) n FROM msg_targets WHERE user_id = ?', r.macA.user);
+    assert.equal(msgs(), 2);
+    assert.equal(targets(), 1);
+    r.h.hub.messaging.purge();
+    assert.equal(msgs(), 2, 'live accounts keep theirs');
+    // Marked deleted without the at-once erase (a crash, an older hub): the sweep finishes it.
+    r.h.db.run('UPDATE users SET deleted_at = ? WHERE id = ?', r.h.hub.iso(), r.bob.user);
+    r.h.hub.messaging.purge();
+    assert.equal(msgs(), 0);
+    r.h.db.run('UPDATE users SET deleted_at = ? WHERE id = ?', r.h.hub.iso(), r.macA.user);
+    r.h.hub.messaging.purge();
+    assert.equal(targets(), 0);
+  } finally { await r.close(); }
+});
+
 // ── 4. hops are derived by the hub ──────────────────────────────────────────
 test('REVIEW 4: hop and visited come from what the session was handed; omitting or forging caused_by cannot reset them', async () => {
   const r = await messagingRig();
