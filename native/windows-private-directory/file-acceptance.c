@@ -256,7 +256,7 @@ static BOOL fixture_identity(const WCHAR *path, PFDirectoryIdentity *identity, D
     HANDLE file = CreateFileW(path, FILE_READ_ATTRIBUTES,
         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
         FILE_FLAG_OPEN_REPARSE_POINT, NULL);
-    FILE_ID_INFO id; FILE_STANDARD_INFO standard; BOOL ok;
+    FILE_ID_INFO id = {0}; FILE_STANDARD_INFO standard = {0}; BOOL ok;
     if (file == INVALID_HANDLE_VALUE) return FALSE;
     ok = GetFileInformationByHandleEx(file, FileIdInfo, &id, sizeof(id)) &&
         GetFileInformationByHandleEx(file, FileStandardInfo, &standard, sizeof(standard)) && !standard.Directory;
