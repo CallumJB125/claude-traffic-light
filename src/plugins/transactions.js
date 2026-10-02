@@ -122,7 +122,9 @@ function createPluginTransactions(options = {}) {
       let id = null, state;
       try {
         observe(); if (!e || e.expires <= now() || !closed(request, ['plan_hash', 'reviewed_files', 'reviewed_config']) || request.plan_hash !== e.plan_hash || request.reviewed_files !== true || request.reviewed_config !== true || !live(e.capture, e.token, e.proof)) fail();
-        const guard = () => live(e.capture, e.token, e.proof);
+        // A consumed handle retains its original expiry through confirmation,
+        // queueing, crypto, and every native mutation/receipt observation.
+        const guard = () => e.expires > now() && live(e.capture, e.token, e.proof);
         await ask(e.before ? 'plugin-update' : 'plugin-install', e.plan_hash, e.dto, guard);
         const end = cutoff(); return await serial(e.capture.profile_root, guard, end, async () => {
           if (!(await cryptoWait(e.proof.recheck(), guard, end)) || !guard() || hash(await inventory(guard, end)) !== e.inventory_hash) fail();
@@ -178,7 +180,7 @@ function createPluginTransactions(options = {}) {
       const e = typeof handle === 'string' && J.uuidValid(handle) ? recoveries.get(handle) : null; if (e) recoveries.delete(handle); let state;
       try {
         observe(); if (!e || e.expires <= now() || !closed(request, ['inspection_hash']) || request.inspection_hash !== e.inspection_hash || !live(e.capture, e.token)) fail();
-        const guard = () => live(e.capture, e.token);
+        const guard = () => e.expires > now() && live(e.capture, e.token);
         await ask('plugin-undo', e.inspection_hash, { transaction_id: e.id, ...e.summary, action: 'Conditionally restore only unchanged owned plugin targets, preserving current foreign bytes.' }, guard);
         const end = cutoff(); return await serial(e.capture.profile_root, guard, end, async () => {
           const data = await unwrapJournal(e.id, e.capture, guard, end); state = data.state;

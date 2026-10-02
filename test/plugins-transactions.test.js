@@ -98,3 +98,38 @@ test('synthetic fixture: coerced recovery UUIDs refuse before confirmation, nati
 test('synthetic fixture: coerced native receipt and locked IDs refuse without granting local recovery', async t => { const f = fixture(t), c = f.controller(); f.mutateResult = (_kind, result) => result.receipt_hash = [result.receipt_hash]; assert.equal((await c.listLocked()).ok, false); assert.equal(f.wrapCalls, 0); f.mutateResult = (kind, result) => { if (kind === 'journal-list') result.payload.ids = [[crypto.randomUUID()]]; }; assert.equal((await c.listLocked()).ok, false); assert.equal(f.wrapCalls, 0); assert.equal(f.approvals.length, 0); });
 test('synthetic fixture: coerced journal census refuses before unwrap or Undo grant', async t => { const f = fixture(t), { r } = await apply(f), c = f.controller(), beforeWrap = f.wrapCalls; f.mutateResult = (kind, result) => { if (kind === 'journal-read') result.payload.census_hash = [result.payload.census_hash]; }; assert.equal((await c.recover(r.transaction_id)).ok, false); assert.equal(f.wrapCalls, beforeWrap); assert.equal(f.ledger.size, 1); });
 test('synthetic fixture: private one-use handoff rejects malformed current config/cache/binary/index primitive hashes', async t => { for (const field of ['config', 'cache', 'binary', 'index']) { const f = fixture(t); if (field === 'index') { let held; f.mutateVerified = value => { held ??= [value.index_hash]; value.index_hash = held; }; } else f.mutateSnapshot = value => { if (field === 'binary') value.host = { ...value.host, binary_sha256: [value.host.binary_sha256] }; else value[field].sha256 = [value[field].sha256]; }; const planner = f.planner(), p = await planner.plan('delivery-review'); assert.equal(p.ok, true, field + ':' + JSON.stringify(p)); assert.equal(await planner.takeForTransaction(p.plan.id), null); assert.equal(await planner.takeForTransaction(p.plan.id), null); assert.equal(f.beginCalls, 0); assert.equal(f.wrapCalls, 0); } });
+
+for (const boundary of ['confirmation', 'journal-read-result', 'unwrap-result', 'inspection-result', 'undo-intent', 'restore-guard']) test(`synthetic fixture: Undo handle expires at ${boundary} without restoring owned targets or renewing the consumed handle`, async t => {
+  const f = fixture(t), { r } = await apply(f), c = f.controller(), rec = await c.recover(r.transaction_id);
+  assert.equal(rec.ok, true);
+  const before = fs.readFileSync(f.config), beforeInventory = JSON.stringify(f.inventory()), originalRecords = f.journals.get(r.transaction_id).records.length;
+  if (boundary === 'confirmation') f.onConfirm = request => { if (request.kind === 'plugin-undo') f.advance(600000); };
+  if (boundary === 'journal-read-result' || boundary === 'inspection-result') f.mutateResult = kind => { if (kind === (boundary === 'journal-read-result' ? 'journal-read' : 'inspect')) f.advance(600000); };
+  if (boundary === 'unwrap-result') { const unwrap = f.wrapping.unwrap; f.wrapping.unwrap = async bytes => { const key = await unwrap(bytes); f.advance(600000); return key; }; }
+  if (boundary === 'undo-intent' || boundary === 'restore-guard') f.beforeNative = kind => { if (kind === (boundary === 'undo-intent' ? 'journal-append' : 'restore')) f.advance(600000); };
+  const result = await c.undo(rec.recovery.handle, { inspection_hash: rec.recovery.inspection_hash });
+  assert.equal(result.ok, false); assert.equal(result.status, 'needs_review'); assert.equal(result.retained, true);
+  assert.ok(fs.readFileSync(f.config).equals(before)); assert.equal(JSON.stringify(f.inventory()), beforeInventory);
+  const records = f.journals.get(r.transaction_id).records.length;
+  assert.equal(records, originalRecords + (boundary === 'restore-guard' ? 1 : 0));
+  const begun = f.beginCalls, prompted = f.approvals.length;
+  assert.equal((await c.undo(rec.recovery.handle, { inspection_hash: rec.recovery.inspection_hash })).ok, false);
+  assert.equal(f.beginCalls, begun); assert.equal(f.approvals.length, prompted);
+});
+
+test('synthetic fixture: expiry after an actual restore retains uncertain effects and never reports undone', async t => {
+  const f = fixture(t), { r } = await apply(f), c = f.controller(), rec = await c.recover(r.transaction_id);
+  const before = fs.readFileSync(f.config), records = f.journals.get(r.transaction_id).records.length;
+  f.mutateResult = kind => { if (kind === 'restore') f.advance(600000); };
+  const result = await c.undo(rec.recovery.handle, { inspection_hash: rec.recovery.inspection_hash });
+  assert.equal(result.status, 'needs_review'); assert.equal(result.retained, true);
+  assert.equal(f.ledger.size, 0, 'synthetic physical restore already happened'); assert.ok(!fs.readFileSync(f.config).equals(before));
+  assert.equal(f.journals.get(r.transaction_id).records.length, records + 1, 'undo intent retained; no invented undone receipt');
+});
+
+test('synthetic fixture: Apply original handle expiry remains guarded while OS wrapping awaits', async t => {
+  const f = fixture(t), c = f.controller(), p = await c.plan('delivery-review'), wrap = f.wrapping.wrap, before = fs.readFileSync(f.config);
+  f.wrapping.wrap = async key => { const bytes = await wrap(key); f.advance(600000); return bytes; };
+  const result = await c.apply(p.plan.handle, { plan_hash: p.plan.plan_hash, reviewed_files: true, reviewed_config: true });
+  assert.equal(result.status, 'unavailable'); assert.equal(f.journals.size, 0); assert.equal(f.ledger.size, 0); assert.ok(fs.readFileSync(f.config).equals(before));
+});
