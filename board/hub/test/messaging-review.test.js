@@ -208,17 +208,24 @@ test('REVIEW 5: a session body up to the documented 3200 chars / 7 KiB (with han
     assert.equal((await send('a'.repeat(3201))).status, 413);
     assert.equal((await send('€'.repeat(2400))).status, 413, '7200 bytes > 7168');
     const longPath = `src/${'part/'.repeat(160)}x.js`;
-    assert.equal((await send('x'.repeat(2500), { kind: 'handoff' })).status, 200);
     assert.equal((await send('x'.repeat(2500), { kind: 'handoff', handoff: { artifacts: [{ kind: 'path', path: longPath }] } })).status, 413, 'refs count');
     // People keep 4000.
     assert.equal((await win.send({ to: { user_id: r.bob.user, org_id: r.org }, body: 'a'.repeat(4000) })).status, 200);
 
-    const big = (await send('a'.repeat(3200))).body.message;
-    const wide = (await send('€'.repeat(2389))).body.message;
-    const refs = (await send('h'.repeat(3150), { kind: 'handoff', handoff: { card_refs: [], artifacts: [{ kind: 'path', path: 'src/p.js' }] } })).body.message;
+    // One at a time, each after the last was answered: queued together, a slow
+    // provider leaves the session busy and the hub's busy backoff never ends on
+    // its frozen test clock (the old cause of this case timing out under load).
     mac.recv.start();
-    for (const m of [big, wide, refs]) {
-      const done = await win.waitFor(m.id, (x) => ['replied', 'rejected', 'outcome_unknown'].includes(x.state), { timeoutMs: 10_000 });
+    for (const [body, extra] of [
+      ['x'.repeat(2500), { kind: 'handoff' }],
+      ['a'.repeat(3200)],
+      ['€'.repeat(2389)],
+      ['h'.repeat(3150), { kind: 'handoff', handoff: { card_refs: [], artifacts: [{ kind: 'path', path: 'src/p.js' }] } }],
+    ]) {
+      const sent = await send(body, extra);
+      assert.equal(sent.status, 200, JSON.stringify(sent.body));
+      const m = sent.body.message;
+      const done = await win.waitFor(m.id, (x) => ['replied', 'rejected', 'outcome_unknown'].includes(x.state), { timeoutMs: 10_000, intervalMs: 20 });
       assert.equal(done.body.message.state, 'replied', `${m.id}: ${done.body.message.reason}`);
     }
     assert.equal(delivered(mac, mac.session.session), 4, "the three above and the 2500-char handoff");
