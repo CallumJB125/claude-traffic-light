@@ -16,6 +16,7 @@ const { NAME } = require('./brand');
 const { isPrivateHost } = require('./workspaces');
 
 const PAGES = [
+  { id: 'overview', title: 'Overview', icon: 'layers', kind: 'local', file: 'overview.html', preload: 'overview-preload.js', group: 'work' },
   { id: 'board', title: 'Board', icon: 'board', kind: 'hub', view: 'board', group: 'work',
     children: [
       { id: 'board:table', title: 'Table', kind: 'hub', view: 'table' },
