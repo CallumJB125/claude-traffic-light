@@ -1,5 +1,6 @@
 #define WIN32_LEAN_AND_MEAN
 #include "directory.h"
+#include "file.h"
 #include <winternl.h>
 #include <aclapi.h>
 #include <stddef.h>
@@ -20,6 +21,9 @@
 #ifndef FILE_DIRECTORY_FILE
 #define FILE_DIRECTORY_FILE 0x00000001
 #endif
+#ifndef FILE_NON_DIRECTORY_FILE
+#define FILE_NON_DIRECTORY_FILE 0x00000040
+#endif
 #ifndef FILE_SYNCHRONOUS_IO_NONALERT
 #define FILE_SYNCHRONOUS_IO_NONALERT 0x00000020
 #endif
@@ -32,6 +36,7 @@
 
 #define PF_DIR_READ (FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES | READ_CONTROL | SYNCHRONIZE)
 #define PF_DIR_PARENT (PF_DIR_READ | FILE_ADD_SUBDIRECTORY)
+#define PF_FILE_READ (FILE_READ_DATA | FILE_READ_ATTRIBUTES | READ_CONTROL | SYNCHRONIZE)
 #define PF_NAME_COLLISION ((NTSTATUS)0xC0000035L)
 
 typedef struct {
@@ -196,9 +201,11 @@ refused:
     return result;
 }
 
-PFDirectoryResult pf_directory_inspect(const PFDirectory *directory, const PFDirectoryIdentity *expected, PFDirectoryIdentity *identity) {
-    PFDirectoryIdentity observed;
-    PFDirectoryResult result = directory_details(current_handle(directory), &observed);
+/* One owner/principal/effective-access policy for both directories and files.
+ * Directory callers still request exactly FILE_ALL_ACCESS. A successful file
+ * caller may retain the descriptor for a byte-exact post-read comparison. */
+static PFDirectoryResult inspect_private_security(HANDLE handle, ACCESS_MASK requiredAccess, PSECURITY_DESCRIPTOR *snapshot) {
+    PFDirectoryResult result;
     PFToken token;
     PSECURITY_DESCRIPTOR security = NULL;
     PSID owner = NULL;
@@ -207,11 +214,9 @@ PFDirectoryResult pf_directory_inspect(const PFDirectory *directory, const PFDir
     BOOL access = FALSE;
     GENERIC_MAPPING mapping = { FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_GENERIC_EXECUTE, FILE_ALL_ACCESS };
     union { PRIVILEGE_SET alignment; BYTE bytes[sizeof(PRIVILEGE_SET) + 16 * sizeof(LUID_AND_ATTRIBUTES)]; } privileges;
-    if (result != PF_OK) return result;
-    if (expected && !same_identity(expected, &observed)) return PF_IDENTITY_CHANGED;
     if (!token_open(&token)) return PF_SECURITY_UNAVAILABLE;
     result = PF_SECURITY_UNAVAILABLE;
-    if (GetSecurityInfo(current_handle(directory), SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+    if (GetSecurityInfo(handle, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
         &owner, NULL, &acl, NULL, &security) != ERROR_SUCCESS || !security || !IsValidSecurityDescriptor(security)) goto done;
     result = PF_NOT_PRIVATE;
     if (!owner || !IsValidSid(owner) || !EqualSid(owner, token.user->User.Sid) || !acl || !IsValidAcl(acl)) goto done;
@@ -230,13 +235,24 @@ PFDirectoryResult pf_directory_inspect(const PFDirectory *directory, const PFDir
         if (header->AceType == ACCESS_ALLOWED_ACE_TYPE && !allowed_sid(sid, &token)) goto done;
     }
     privilegeSize = (DWORD)sizeof(privileges);
-    if (!AccessCheck(security, token.accessToken, FILE_ALL_ACCESS, &mapping, (PPRIVILEGE_SET)&privileges,
-        &privilegeSize, &granted, &access) || !access || (granted & FILE_ALL_ACCESS) != FILE_ALL_ACCESS) goto done;
+    if (!AccessCheck(security, token.accessToken, requiredAccess, &mapping, (PPRIVILEGE_SET)&privileges,
+        &privilegeSize, &granted, &access) || !access || (granted & requiredAccess) != requiredAccess) goto done;
     result = PF_OK;
-    if (identity) *identity = observed;
+    if (snapshot) { *snapshot = security; security = NULL; }
 done:
     if (security) LocalFree(security);
     token_close(&token);
+    return result;
+}
+
+
+PFDirectoryResult pf_directory_inspect(const PFDirectory *directory, const PFDirectoryIdentity *expected, PFDirectoryIdentity *identity) {
+    PFDirectoryIdentity observed;
+    PFDirectoryResult result = directory_details(current_handle(directory), &observed);
+    if (result != PF_OK) return result;
+    if (expected && !same_identity(expected, &observed)) return PF_IDENTITY_CHANGED;
+    result = inspect_private_security(current_handle(directory), FILE_ALL_ACCESS, NULL);
+    if (result == PF_OK && identity) *identity = observed;
     return result;
 }
 
@@ -281,5 +297,172 @@ done:
 const char *pf_directory_reason(PFDirectoryResult result) {
     static const char *const reasons[] = { "ok", "bad-component", "unsupported-root", "open-failed", "exists",
         "reparse", "not-directory", "unsupported-volume", "identity-changed", "security-unavailable", "not-private" };
+    return (unsigned)result < sizeof(reasons) / sizeof(reasons[0]) ? reasons[result] : "unavailable";
+}
+
+static PFFileResult file_security_result(PFDirectoryResult result) {
+    if (result == PF_OK) return PF_FILE_OK;
+    return result == PF_NOT_PRIVATE ? PF_FILE_NOT_PRIVATE : PF_FILE_SECURITY_UNAVAILABLE;
+}
+
+static PFFileResult file_details(HANDLE handle, PFFileStamp *stamp) {
+    FILE_ATTRIBUTE_TAG_INFO attributes;
+    FILE_STANDARD_INFO standard;
+    FILE_BASIC_INFO basic;
+    FILE_ID_INFO id;
+    WCHAR filesystem[32];
+    DWORD flags = 0;
+    if (handle == INVALID_HANDLE_VALUE || GetFileType(handle) != FILE_TYPE_DISK) return PF_FILE_NOT_REGULAR;
+    if (!GetFileInformationByHandleEx(handle, FileAttributeTagInfo, &attributes, (DWORD)sizeof(attributes)) ||
+        !GetFileInformationByHandleEx(handle, FileStandardInfo, &standard, (DWORD)sizeof(standard))) return PF_FILE_OPEN_FAILED;
+    if ((attributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) || attributes.ReparseTag != 0) return PF_FILE_REPARSE;
+    if (standard.Directory || standard.NumberOfLinks != 1 || standard.DeletePending ||
+        (attributes.FileAttributes & FILE_ATTRIBUTE_DEVICE) || standard.EndOfFile.QuadPart < 0) return PF_FILE_NOT_REGULAR;
+    if (!GetVolumeInformationByHandleW(handle, NULL, 0, NULL, NULL, &flags, filesystem, (DWORD)(sizeof(filesystem) / sizeof(filesystem[0]))) ||
+        wcscmp(filesystem, L"NTFS") != 0 || !(flags & FILE_PERSISTENT_ACLS)) return PF_FILE_UNSUPPORTED_VOLUME;
+    if (!GetFileInformationByHandleEx(handle, FileIdInfo, &id, (DWORD)sizeof(id)) ||
+        !GetFileInformationByHandleEx(handle, FileBasicInfo, &basic, (DWORD)sizeof(basic))) return PF_FILE_OPEN_FAILED;
+    ZeroMemory(stamp, sizeof(*stamp));
+    stamp->identity.volume = id.VolumeSerialNumber;
+    memcpy(stamp->identity.file, id.FileId.Identifier, sizeof(stamp->identity.file));
+    stamp->bytes = (ULONGLONG)standard.EndOfFile.QuadPart;
+    stamp->creationTime = basic.CreationTime.QuadPart;
+    stamp->lastWriteTime = basic.LastWriteTime.QuadPart;
+    stamp->changeTime = basic.ChangeTime.QuadPart;
+    stamp->attributes = basic.FileAttributes;
+    return PF_FILE_OK;
+}
+
+static BOOL same_file_stamp(const PFFileStamp *a, const PFFileStamp *b) {
+    return same_identity(&a->identity, &b->identity) && a->bytes == b->bytes &&
+        a->creationTime == b->creationTime && a->lastWriteTime == b->lastWriteTime &&
+        a->changeTime == b->changeTime && a->attributes == b->attributes;
+}
+
+static BOOL same_security(PSECURITY_DESCRIPTOR a, PSECURITY_DESCRIPTOR b) {
+    DWORD bytes;
+    if (!a || !b) return FALSE;
+    bytes = GetSecurityDescriptorLength(a);
+    return bytes == GetSecurityDescriptorLength(b) && memcmp(a, b, bytes) == 0;
+}
+
+static PFFileResult open_file_component(HANDLE parent, WCHAR *name, USHORT characters, HANDLE *out) {
+    UNICODE_STRING unicode;
+    OBJECT_ATTRIBUTES attributes;
+    IO_STATUS_BLOCK io;
+    NTSTATUS status;
+    ZeroMemory(&unicode, sizeof(unicode));
+    unicode.Buffer = name;
+    unicode.Length = (USHORT)(characters * sizeof(WCHAR));
+    unicode.MaximumLength = unicode.Length;
+    ZeroMemory(&attributes, sizeof(attributes));
+    attributes.Length = (ULONG)sizeof(attributes);
+    attributes.RootDirectory = parent;
+    attributes.ObjectName = &unicode;
+    attributes.Attributes = OBJ_CASE_INSENSITIVE;
+    ZeroMemory(&io, sizeof(io));
+    *out = INVALID_HANDLE_VALUE;
+    status = NtCreateFile(out, PF_FILE_READ, &attributes, &io, NULL, FILE_ATTRIBUTE_NORMAL,
+        FILE_SHARE_READ, FILE_OPEN, FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_REPARSE_POINT, NULL, 0);
+    if (status < 0) return PF_FILE_OPEN_FAILED;
+    return PF_FILE_OK;
+}
+
+static PFFileResult file_named_binding(HANDLE parent, WCHAR *component, USHORT characters,
+    const PFFileStamp *expected, PSECURITY_DESCRIPTOR expectedSecurity) {
+    HANDLE named = INVALID_HANDLE_VALUE;
+    PFFileStamp stamp;
+    PSECURITY_DESCRIPTOR security = NULL;
+    PFFileResult result = open_file_component(parent, component, characters, &named);
+    if (result != PF_FILE_OK) return result;
+    result = file_details(named, &stamp);
+    if (result != PF_FILE_OK) goto done;
+    if (!same_file_stamp(expected, &stamp)) { result = PF_FILE_IDENTITY_CHANGED; goto done; }
+    result = file_security_result(inspect_private_security(named, PF_FILE_READ, &security));
+    if (result == PF_FILE_OK && !same_security(expectedSecurity, security)) result = PF_FILE_IDENTITY_CHANGED;
+done:
+    if (security) LocalFree(security);
+    CloseHandle(named);
+    return result;
+}
+
+PFFileResult pf_file_read(const PFDirectory *parent, const WCHAR *component,
+    PFFileRole role, const PFFileStamp *expected, BYTE *output, DWORD capacity,
+    DWORD *length, PFFileStamp *observed) {
+    BYTE bytes[PF_GRANT_BYTES], extra = 0;
+    WCHAR name[PF_COMPONENT_LIMIT + 1];
+    DWORD limit, used = 0, count = 0;
+    size_t characters;
+    HANDLE file = INVALID_HANDLE_VALUE;
+    PFDirectoryIdentity parentIdentity;
+    PFFileStamp before, after, capturedExpected;
+    PSECURITY_DESCRIPTOR security = NULL, postSecurity = NULL;
+    PFFileResult result;
+    ZeroMemory(bytes, sizeof(bytes));
+    if (expected) { capturedExpected = *expected; expected = &capturedExpected; }
+    if (length) *length = 0;
+    if (observed) ZeroMemory(observed, sizeof(*observed));
+    /* A trusted caller supplies valid native buffers. Refuse absurd capacities
+     * rather than using them as a memory-clearing or I/O authority. */
+    if (output && capacity && capacity <= PF_GRANT_BYTES) SecureZeroMemory(output, capacity);
+    if (!output || !length || capacity == 0 || capacity > PF_GRANT_BYTES) return PF_FILE_BAD_ARGUMENT;
+    if (role == PF_FILE_GRANT) limit = PF_GRANT_BYTES;
+    else if (role == PF_FILE_TASKS_TOKEN) limit = PF_TOKEN_BYTES;
+    else return PF_FILE_BAD_ROLE;
+    if (capacity > limit) return PF_FILE_BAD_ARGUMENT;
+    if (!component) return PF_FILE_BAD_COMPONENT;
+    characters = wcsnlen_s(component, PF_COMPONENT_LIMIT + 1);
+    if (characters == 0 || characters > PF_COMPONENT_LIMIT) return PF_FILE_BAD_COMPONENT;
+    memcpy(name, component, characters * sizeof(WCHAR)); name[characters] = 0;
+    if (!valid_component(name, characters)) return PF_FILE_BAD_COMPONENT;
+    if (pf_directory_inspect(parent, NULL, &parentIdentity) != PF_OK) return PF_FILE_PARENT_UNAVAILABLE;
+    result = open_file_component(current_handle(parent), name, (USHORT)characters, &file);
+    if (result != PF_FILE_OK) goto done;
+    result = file_details(file, &before);
+    if (result != PF_FILE_OK) goto done;
+    if (before.bytes > limit || before.bytes > capacity) { result = PF_FILE_SIZE_LIMIT; goto done; }
+    if (expected && !same_file_stamp(expected, &before)) { result = PF_FILE_IDENTITY_CHANGED; goto done; }
+    result = file_security_result(inspect_private_security(file, PF_FILE_READ, &security));
+    if (result != PF_FILE_OK) goto done;
+    result = file_named_binding(current_handle(parent), name, (USHORT)characters, &before, security);
+    if (result != PF_FILE_OK) goto done;
+    while ((ULONGLONG)used < before.bytes) {
+        DWORD request = (DWORD)(before.bytes - used);
+        if (request > 1024) request = 1024;
+        if (!ReadFile(file, bytes + used, request, &count, NULL) || count == 0 || count > request) { result = PF_FILE_IO_FAILED; goto done; }
+        used += count;
+    }
+    /* EOF probing may consume one byte only when it fits within the role cap.
+     * At the inclusive cap, the retained share lease and exact pre/post length
+     * checks replace that probe: cap+1 bytes are never requested or consumed. */
+    if (used < limit) {
+        if (!ReadFile(file, &extra, 1, &count, NULL)) { result = PF_FILE_IO_FAILED; goto done; }
+        if (count != 0) { result = PF_FILE_IDENTITY_CHANGED; goto done; }
+    }
+    result = file_details(file, &after);
+    if (result != PF_FILE_OK) goto done;
+    if (!same_file_stamp(&before, &after)) { result = PF_FILE_IDENTITY_CHANGED; goto done; }
+    result = file_security_result(inspect_private_security(file, PF_FILE_READ, &postSecurity));
+    if (result != PF_FILE_OK) goto done;
+    if (!same_security(security, postSecurity)) { result = PF_FILE_IDENTITY_CHANGED; goto done; }
+    if (pf_directory_inspect(parent, &parentIdentity, NULL) != PF_OK) { result = PF_FILE_PARENT_UNAVAILABLE; goto done; }
+    result = file_named_binding(current_handle(parent), name, (USHORT)characters, &before, security);
+    if (result != PF_FILE_OK) goto done;
+    memcpy(output, bytes, used);
+    *length = used;
+    if (observed) *observed = before;
+done:
+    if (postSecurity) LocalFree(postSecurity);
+    if (security) LocalFree(security);
+    if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
+    SecureZeroMemory(bytes, sizeof(bytes));
+    SecureZeroMemory(&extra, sizeof(extra));
+    return result;
+}
+
+const char *pf_file_reason(PFFileResult result) {
+    static const char *const reasons[] = { "ok", "bad-argument", "bad-component", "bad-role", "parent-unavailable",
+        "open-failed", "not-regular", "reparse", "unsupported-volume", "security-unavailable", "not-private",
+        "identity-changed", "size-limit", "io-failed" };
     return (unsigned)result < sizeof(reasons) / sizeof(reasons[0]) ? reasons[result] : "unavailable";
 }

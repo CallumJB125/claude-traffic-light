@@ -1,9 +1,11 @@
-# Windows private directory SDK module
+# Windows private directory and fixed-role file SDK module
 
-This directory contains a source module and real Windows acceptance fixture,
-awaiting independent source review and MSVC/Windows runtime acceptance. It is
-not yet built, packaged, signed, connected to a pipe, or enabled in the runner
-or Setups store. Their current Windows privacy refusals remain in place.
+The original directory module has separately recorded actual Windows
+acceptance (69 assertions). The new fixed-role file reader and its Windows
+fixtures are source only, awaiting independent review and MSVC/Windows
+acceptance. Neither API is packaged, signed, connected to a pipe, or enabled
+in the runner or Setups store. Their current Windows privacy refusals remain
+in place.
 
 `directory.c` derives the current process token SID internally. Inspection
 requires a local fixed NTFS volume, a real directory with no reparse point,
@@ -27,10 +29,44 @@ Exclusive child creation first verifies its opened parent is private. It uses
 `FILE_CREATE`, supplies current-user owner and a protected three-principal
 full-control inheritable DACL at creation, and verifies the opened result.
 Existing names refuse rather than being adopted. No existing ACL setter,
-ownership takeover, ordinary path mkdir fallback, deletion, rename, file read,
-or user-target writer exists in this module. An uncertain post-create result
-retains the new handle for a caller-owned receipt; it never cleans up an
+ownership takeover, ordinary path mkdir fallback, deletion, rename, file
+publication or user-target writer exists in this module. An uncertain
+post-create result retains the new handle for a caller-owned receipt; it never cleans up an
 unexpected namespace automatically.
+
+`file.h` adds an internal regular-file reader beneath an already private
+`PFDirectory` lease. The only roles are a connector grant (8192 bytes) and a
+Tasks token (256 bytes); no arbitrary ceiling or private-target adoption is
+accepted. One strict component is opened by `NtCreateFile` with `FILE_OPEN`,
+`FILE_NON_DIRECTORY_FILE`, `FILE_OPEN_REPARSE_POINT`, fixed data/attribute/
+read-control/synchronize rights and `FILE_SHARE_READ` only. Before reading,
+the opened disk/NTFS file must be a regular non-reparse, non-device file, have
+one link and no pending deletion, fit both its role and output limits, and
+match an optional captured volume/file/size/basic-change stamp. Its exact
+owner/DACL policy is shared with directory inspection; the directory still
+requires full effective control, while this reader requires only its fixed
+read rights. Existing private inherited and read-only files remain unchanged.
+
+The file stays open through fixed chunks, opened metadata/security comparisons,
+reinspection of the private parent and fresh exact named-binding comparisons.
+Private bytes stay in a bounded temporary buffer until all checks pass.
+Refusal clears bounded caller output, length and stamp. An EOF probe is used
+only below the role cap and consumes at most one byte inside that cap. At the
+inclusive 8192/256-byte boundary, exact pre/post length checks and the retained
+share lease replace that probe; no cap-plus-one read is requested. Last-access
+time is excluded from the stamp because reading can change it; creation,
+last-write, change time, attributes and exact security descriptor must agree.
+No file creation, content write, ACL modification, rename or deletion occurs
+in the reader. Root and role dispatch, secure file publication and token/grant
+format validation are separate required application boundaries.
+
+Restrictive sharing excludes new conflicting write, append and delete opens;
+these comparisons are not atomic ACL/content CAS against a privileged or
+current-user process, including an existing writable mapping. They cannot
+prove the absence of a change restored between observations. Synchronous
+filesystem calls also have no universal syscall deadline. Production requires
+a separately gated helper process with a main-owned total deadline, termination,
+reaping and stale-generation refusal before any file adapter is enabled.
 
 The SDK API accepts pointers only from its trusted native caller. It is not a
 renderer or external path endpoint. The shared helper's later main-only
@@ -56,6 +92,21 @@ refusal, held-handle rename exclusion and stale identity after replacement.
 An unavailable fixture fails the run; it is never skipped or replaced by
 POSIX mode assertions. Own cleanup removes only these synthetic fixtures.
 
+`file-acceptance.c` adds actual private/inherited/read-only and inclusive-cap
+files; Everyone/group/null/foreign-owner/unsupported-ACE/read-control denial;
+symlink, intermediate junction, directory, hard-link, ADS/device/traversal
+components; expected-identity replacement, growth, share exclusion, late
+file/parent ACL and basic-attribute changes, capacity, closed parent leases
+and handle cleanup. Security and content
+preservation use independent kernel queries. It interposes two SDK calls in
+its own translation unit to place actual filesystem/ACL mutations at defined
+boundaries; normal calls still reach the real Windows kernel. Three separately
+labelled injected zero-progress, read-error and final-name-open failures check
+refusal/output handling. Those injected failures are not OS failure receipts.
+It includes `directory.c` for that fixture only; the production translation
+unit has no callback, test switch or special mutation path. The original
+`directory.h` API and `acceptance.c` fixture remain byte-identical.
+
 From the repository root in an existing x64 MSVC developer environment, after
 the source gate (keep all build artifacts in ignored `work`):
 
@@ -63,12 +114,14 @@ the source gate (keep all build artifacts in ignored `work`):
 mkdir work\windows-private-directory
 cl.exe /nologo /std:c11 /TC /W4 /WX /DUNICODE /D_UNICODE /D_WIN32_WINNT=0x0A00 /Fo:work\windows-private-directory\ /Fe:work\windows-private-directory\acceptance.exe native\windows-private-directory\directory.c native\windows-private-directory\acceptance.c /link advapi32.lib ntdll.lib rpcrt4.lib
 work\windows-private-directory\acceptance.exe
+cl.exe /nologo /std:c11 /TC /W4 /WX /DUNICODE /D_UNICODE /D_WIN32_WINNT=0x0A00 /Fo:work\windows-private-directory\ /Fe:work\windows-private-directory\file-acceptance.exe native\windows-private-directory\file-acceptance.c /link advapi32.lib ntdll.lib rpcrt4.lib
+work\windows-private-directory\file-acceptance.exe
 ```
 
 The ROOT-owned Windows CI gate must bound execution externally, retain compile
 and TAP output on failure, and require these actual native fixtures to pass.
-No Darwin test run certifies this module. Subsequent main/pipe/package wiring
-also needs missing-helper/deadline/provenance tests and real utilityProcess
+No Darwin test run certifies this Windows reader. Subsequent main/pipe/package
+wiring also needs missing-helper/deadline/provenance tests and real utilityProcess
 runner start/stop, DPAPI enrollment restart and revoked-access removal before
 Windows runner support is reported.
 
