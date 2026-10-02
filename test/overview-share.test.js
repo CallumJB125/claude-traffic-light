@@ -141,11 +141,14 @@ test('Overview Share…: a session started outside Plexiform (codex-daemon) is n
   const s = stack({ extra: { 'codex-daemon': daemon } });
   try {
     await s.ready();
-    const found = await s.api.interaction.discover({ provider: 'codex-daemon' });
-    const attached = await s.api.interaction.attach({ provider: 'codex-daemon', handle: found.threads[0].handle });
-    assert.equal(attached.ok, true);
-    const session = attached.state.session;
-    assert.equal(attached.state.ownership, 'existing-unmanaged');
+    s.doc.getElementById('existing-find').click(); await tick(8);
+    const use = [...s.doc.querySelectorAll('#existing-list button')].find((x) => x.textContent === 'Message this session');
+    assert.ok(use, 'the daemon session is listed');
+    use.click(); await tick(8);
+    assert.ok(s.card(), 'the attached session has a card');
+    const session = s.card().dataset.session;
+    assert.match(s.card().textContent, /started outside Plexiform/);
+    assert.equal(s.btn('Share…'), undefined, 'no Share… control on a session started outside Plexiform');
     assert.equal((await s.api.interaction.shareCreate({ session, team: 'team-1', scope: 'watch', expiresInS: null })).ok, false);
     assert.equal(s.main.sharedTarget(session), null);
     assert.ok(!s.host.calls.some(([k]) => k === 'share'));

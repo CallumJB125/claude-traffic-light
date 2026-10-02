@@ -14,16 +14,46 @@
     <div><p class="eyebrow">Your AI work</p><h1>Overview</h1><p class="intro">Sessions, tasks and agents across connected tools and devices.</p></div>
     <button id="refresh" type="button">Refresh</button>
   </header>
-  <p id="status" class="snapshot-status" role="status" aria-live="polite">Checking reported activity…</p>
-  <section id="summary" class="summary" aria-label="Reported activity summary"></section>
-  <section class="filters" aria-label="Filter reported work">
+  <div id="views" class="views" role="tablist" aria-label="Overview views" hidden>
+    <button id="tab-mine" type="button" role="tab" aria-selected="true" aria-controls="mine-section">My sessions</button>
+    <button id="tab-team" type="button" role="tab" aria-selected="false" aria-controls="team-section" tabindex="-1">Team sessions</button>
+  </div>
+  <section id="mine-section" class="directory" role="tabpanel" aria-labelledby="tab-mine" hidden>
+    <div class="section-header"><h2>My sessions</h2><p id="mine-count" class="muted"></p></div>
+    <p class="muted">Your sessions across connected tools, devices and local models, each counted once. Sessions you share with a team or that run on a team board carry a team badge.</p>
+    <p id="mine-status" class="muted" role="status" aria-live="polite"></p>
+    <div id="mine-summary" class="summary" aria-label="My sessions summary"></div>
+    <ul id="mine-list" class="dir-list" aria-label="My sessions"></ul>
+    <p id="mine-empty" class="empty" hidden>No sessions yet. Start one below, or start work in a connected tool.</p>
+  </section>
+  <section id="team-section" class="directory" role="tabpanel" aria-labelledby="tab-team" hidden>
+    <div class="section-header"><h2>Team sessions</h2><p id="team-count" class="muted"></p></div>
+    <p class="muted">Sessions team members have explicitly shared with the selected team. Members' other sessions stay private.</p>
+    <p id="team-status" class="muted" role="status" aria-live="polite"></p>
+    <section class="filters" aria-label="Choose and filter team sessions">
+      <label>Team<select id="team-pick"></select></label>
+      <label>Group by<select id="team-group"><option value="person">Person</option><option value="task">Task or card</option><option value="platform">Platform</option><option value="device">Device</option><option value="status">Status</option></select></label>
+      <label>Person<select id="team-person-filter"></select></label>
+      <label>Task<select id="team-task-filter"></select></label>
+      <label>Platform<select id="team-platform-filter"></select></label>
+      <label>Device<select id="team-device-filter"></select></label>
+      <label>Status<select id="team-status-filter"></select></label>
+    </section>
+    <p id="team-notice" class="reason" role="status" hidden></p>
+    <div id="team-summary" class="summary" aria-label="Team sessions summary"></div>
+    <div id="team-list"></div>
+    <p id="team-empty" class="empty" hidden>Nothing shared with this team yet.</p>
+  </section>
+  <p id="status" class="snapshot-status" role="status" aria-live="polite" data-view="mine">Checking reported activity…</p>
+  <section id="summary" class="summary" aria-label="Reported activity summary" data-view="mine"></section>
+  <section class="filters" aria-label="Filter reported work" data-view="mine">
     <label>Device<select id="device-filter"><option value="">All devices</option></select></label>
     <label>Board<select id="board-filter"><option value="">All boards</option></select></label>
     <label>Provider<select id="provider-filter"><option value="">All providers</option></select></label>
     <label>Status<select id="status-filter"><option value="">All statuses</option></select></label>
     <button id="clear-filters" type="button">Clear filters</button>
   </section>
-  <section id="owned-section" class="owned" aria-labelledby="owned-title" hidden>
+  <section id="owned-section" data-view="mine" class="owned" aria-labelledby="owned-title" hidden>
     <div class="section-header"><h2 id="owned-title">Sessions started by Plexiform</h2></div>
     <p id="owned-status" class="muted" role="status" aria-live="polite">Plexiform can start its own session with any AI listed below and send it your messages. Existing sessions it did not start stay observation-only.</p>
     <fieldset class="picker">
@@ -51,21 +81,22 @@
       <div id="ask-results" class="ask-results" aria-label="Answers side by side"></div>
     </section>
   </section>
-  <section id="local-section" class="local-models" aria-labelledby="local-title" hidden>
+  <section id="local-section" data-view="mine" class="local-models" aria-labelledby="local-title" hidden>
     <div class="section-header"><h2 id="local-title">Integrated local models</h2></div>
     <p id="local-status" class="muted" role="status" aria-live="polite">Checking for local model endpoints…</p>
     <div id="local-endpoints"></div>
     <p class="reason">To add an endpoint, add it to <code>local-models.json</code> in Plexiform's data folder (userData), for example <code>{"endpoints":[{"id":"my-box","label":"My box","url":"http://127.0.0.1:11434","kind":"ollama"}]}</code>. <code>kind</code> is <code>ollama</code> or <code>openai</code>. An API key is never stored there: name an environment variable with <code>apiKeyEnv</code> instead.</p>
   </section>
-  <section class="work" aria-labelledby="work-title">
+  <section class="work" aria-labelledby="work-title" data-view="mine">
     <div class="section-header"><h2 id="work-title">Reported work</h2><p id="result-count" class="muted"></p></div>
     <div id="content" aria-busy="true"></div>
   </section>
-  <section class="connections" aria-labelledby="connections-title"><h2 id="connections-title">Reported providers</h2><div id="connections"></div></section>
+  <section class="connections" aria-labelledby="connections-title" data-view="mine"><h2 id="connections-title">Reported providers</h2><div id="connections"></div></section>
   <p class="disclosure">Activity comes from supported reports. A recent report does not verify that a task succeeded. Silent sessions become stale; missing task or child-agent metadata stays unknown. Private chats are not read.</p>
 </main>
 <script src="src/session-router.js"></script>
 <script src="overview-share.js"></script>
+<script src="overview-directory.js"></script>
 <script src="overview.js"></script>
 </body>
 </html>

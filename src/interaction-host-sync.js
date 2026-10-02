@@ -121,7 +121,7 @@ function createInteractionHostSync({
 
   function close() { cancelRetry(); detach(current); current?.host.close(); current = null; key = null; }
 
-  return { sync, release, close, host: () => current?.host ?? null, active: () => !!current, settled: () => chain };
+  return { sync, release, close, host: () => current?.host ?? null, origin: () => current?.origin ?? null, active: () => !!current, settled: () => chain };
 }
 
 module.exports = { createInteractionHostSync, RESET };

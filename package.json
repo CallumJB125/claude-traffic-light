@@ -54,6 +54,7 @@
       "overview.css",
       "overview.js",
       "overview-share.js",
+      "overview-directory.js",
       "overview-preload.js",
       "settings.html",
       "settings-backups.js",

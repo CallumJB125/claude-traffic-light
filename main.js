@@ -1398,6 +1398,11 @@ ipcMain.handle('sessions:state', e => {
   }
 });
 ipcMain.handle('sessions:settings', e => { if (!sessionsSender(e)) return false; createSettingsWindow(); return true; });
+// Teammates' shared sessions come from a team hub directory. Until the real
+// hub's directory client lands, a FAKE in-memory hub (clearly labelled as
+// test data in the page) can be loaded from a fixture file for demos/tests.
+let overviewTeams={host:null,at:0,value:null},overviewTeamHub=null;
+if(process.env.CLAUDE_BUDDY_FAKE_TEAM_HUB){try{overviewTeamHub=require('./src/team-hub-fake').createFakeTeamHub(JSON.parse(fs.readFileSync(process.env.CLAUDE_BUDDY_FAKE_TEAM_HUB,'utf8')));}catch(e){console.warn('[overview] fake team hub not loaded:',e.message);}}
 // Overview uses main-owned structured reports/current own-board work only.
 const OverviewMain=require('./src/overview-main').createOverviewMain({
   buddy:()=>buddyWin,sessions:()=>aggregateState().sessions||[],
@@ -1405,8 +1410,16 @@ const OverviewMain=require('./src/overview-main').createOverviewMain({
   managed:()=>{const service=getTasks();service.start();return service.snapshot();},
   openManaged:async(_id,fresh)=>{if(!fresh())return false;openBuddy('tasks');return true;},
   messageManaged:(id,text,fresh)=>fresh()?getTasks().act({id,action:'message',payload:{body:text}},0,fresh):Promise.resolve({ok:false}),
+  // Session directory (My sessions / Team sessions); see src/session-directory.js.
+  owned:()=>InteractionMain.listOwned(),
+  // hostSync (declared below) is only read when Overview asks, after startup.
+  shares:()=>{const h=hostSync.host(),origin=hostSync.origin();return h&&origin?{origin,list:h.shared()}:null;},
+  hubTeams:async()=>{const h=hostSync.host(),origin=hostSync.origin();if(!h||!origin)return null;if(overviewTeams.host===h&&Date.now()-overviewTeams.at<30_000)return overviewTeams.value;
+    const r=await h.listShares().catch(()=>null);overviewTeams={host:h,at:Date.now(),value:r?.ok?{origin,teams:r.teams}:null};return overviewTeams.value;},
+  teamHub:()=>overviewTeamHub,
 });
 OverviewMain.register(ipcMain);
+overviewTeamHub?.onChange(()=>OverviewMain.directoryChanged());
 app.on('will-quit',()=>OverviewMain.close());
 // Owned-session interaction: Plexiform starts its own provider sessions and
 // talks only to those. Existing unmanaged sessions stay observation-only.

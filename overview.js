@@ -287,7 +287,8 @@
     heading.append(title, tag);
     const meta = node('p', '', 'row-meta'), body = node('div'), notice = node('p', '', 'reason'); notice.setAttribute('role', 'status');
     el.append(heading, meta, body, notice);
-    globalThis.OverviewShare?.mount(el, id);
+    // A session started outside Plexiform runs with its own permissions: never offered for team sharing.
+    if (entry.state?.ownership === 'plexiform-owned') globalThis.OverviewShare?.mount(el, id);
     entry.el = el; entry.parts = { title, tag, meta, body, notice };
     return el;
   }
@@ -632,16 +633,29 @@
     // Built only when owned sessions exist, so the reported-work composer stays the page's first textarea.
     const ask = node('textarea'); ask.id = 'ask-text'; ask.maxLength = 4000; $('ask-send').closest('.actions').before(ask);
     $('ask-send').addEventListener('click', () => void askAll());
-    if (typeof ix.onEvent === 'function') ix.onEvent(state => { if (validState(state) && owned.has(state.session)) applyState(state); });
+    if (typeof ix.onEvent === 'function') ix.onEvent(state => { if (validState(state) && owned.has(state.session)) { applyState(state); dir?.soon(); } });
   }
+  // My sessions / Team sessions (overview-directory.js). Its rows reuse this
+  // page's own interaction: the owned-session card and the work composer.
+  const dir = obj(window.OverviewDirectory) ? window.OverviewDirectory : null;
+  dir?.start({
+    focusOwned(session) { const input = owned.get(session)?.composer?.input; if (!input) return; input.scrollIntoView?.({ block: 'center' }); input.focus(); },
+    composeWork(id) {
+      if (!byId(id)) return;
+      if (!matches(byId(id).parent)) { filters.forEach(filter => { $(`${filter}-filter`).value = ''; }); clearInteractions(); renderWork(); }
+      if (capability(byId(id).row, 'message').enabled === true) compose(id);
+      else [...$('content').querySelectorAll('[data-focus]')].find(el => el.dataset.focus === `${id}:open`)?.focus();
+      $('content').querySelector(`[data-id="${id}"]`)?.scrollIntoView?.({ block: 'center' });
+    },
+  });
   if (typeof api.onReady === 'function') api.onReady(() => {
     ready = true;
-    if (!document.hidden) { void refresh(); void refreshOwned(); }
+    if (!document.hidden) { void refresh(); void refreshOwned(); void dir?.refresh(); }
   });
-  $('refresh').addEventListener('click', () => void refresh());
+  $('refresh').addEventListener('click', () => { void refresh(); void dir?.refresh(); });
   for (const filter of filters) $(`${filter}-filter`).addEventListener('change', () => { clearInteractions(); if (snapshot) renderWork(); });
   $('clear-filters').addEventListener('click', () => { filters.forEach(filter => { $(`${filter}-filter`).value = ''; }); clearInteractions(); if (snapshot) renderWork(); });
-  document.addEventListener('visibilitychange', () => { ++readGeneration; expanded.clear(); clearPage('Checking reported activity…'); if (!document.hidden && ready) { void refresh(); void refreshOwned(); } });
-  setInterval(() => { if (!document.hidden && ready) { if (snapshot) { renderSummary(); renderConnections(); renderWork(); } void refresh(); void refreshOwned(); } }, 5000);
-  if (!document.hidden && ready) { void refresh(); void refreshOwned(); }
+  document.addEventListener('visibilitychange', () => { ++readGeneration; expanded.clear(); clearPage('Checking reported activity…'); if (!document.hidden && ready) { void refresh(); void refreshOwned(); void dir?.refresh(); } });
+  setInterval(() => { if (!document.hidden && ready) { if (snapshot) { renderSummary(); renderConnections(); renderWork(); } void refresh(); void refreshOwned(); void dir?.refresh(); } }, 5000);
+  if (!document.hidden && ready) { void refresh(); void refreshOwned(); void dir?.refresh(); }
 })();
