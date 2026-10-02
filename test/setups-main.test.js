@@ -7,7 +7,7 @@ const choice=()=>({files:[{id:ID,mode:'replace',replace_keys:[],instructions:tru
 function fixture(overrides={}){
  const calls=[],handlers=new Map(),frame={},contents={mainFrame:frame,isDestroyed:()=>false},window={isDestroyed:()=>false};let context={window,contents,generation:1,foreground:true},binding,decision={response:1},during=()=>{};
  const service={invalidate:()=>calls.push(['service.invalidate'])},buddy={setupsContext:()=>context,setupsActorCurrent:a=>a.device==='device-current',setupsConfirm:async fn=>fn(context.window)};
- const options={app:{isPackaged:true},buddy:()=>buddy,service,resourcesPath:'/fixed/Plexiform.app/Contents/Resources',platform:'darwin',userInfo:()=>({uid:501,homedir:'/actual/OS/profile'}),realpath:p=>{calls.push(['canonical',p]);return p;},
+ const options={accepted:true,app:{isPackaged:true},buddy:()=>buddy,service,resourcesPath:'/fixed/Plexiform.app/Contents/Resources',platform:'darwin',userInfo:()=>({uid:501,homedir:'/actual/OS/profile'}),realpath:p=>{calls.push(['canonical',p]);return p;},
   safeStorage:{isEncryptionAvailable:()=>{calls.push(['crypto']);return true;},encryptString:s=>Buffer.from(s),decryptString:b=>b.toString()},dialog:{showMessageBox:async(...args)=>{calls.push(['dialog',...args]);during();return decision;}},
   platformFactory:args=>{calls.push(['platform',args]);return {roots:()=>({fixed:true}),launch:opts=>({opts})};},
   runtimeFactory:opts=>{binding=opts;return Object.fromEntries(['localState','plan','check','apply','listLocked','status','recover','confirmUndo','invalidate','close'].map(name=>[name,(...args)=>{calls.push([name,...args]);return {ok:true,method:name};}]));},...overrides};
@@ -58,9 +58,12 @@ test('identity retirement and close preserve one runtime lifetime and stop renew
 test('unsupported and unpackaged builds cannot use alternate helper or credential paths',async()=>{
  for(const overrides of [{platform:'win32'},{app:{isPackaged:false}}]){const f=fixture(overrides);assert.equal((await f.invoke('local-state')).ok,false);assert.equal(f.calls.length,0);}
 });
+test('held composition refuses every local operation before runtime or OS credential access',async()=>{
+ for(const accepted of [false,undefined,1,'true']){const f=fixture({accepted});for(const [channel,args]of [['local-state',[]],['plan',[ID,choice()]],['check',[ID]],['apply',[ID,HASH]],['list-locked',[]],['local-status',[ID]],['recover',[ID]],['confirm-undo',[ID]]])assert.equal((await f.invoke(channel,...args)).ok,false);assert.equal(f.calls.length,0);}
+});
 test('production main composition registers the real local adapter and retires it on quit',async()=>{
  const source=fs.readFileSync(path.join(__dirname,'../main.js'),'utf8'),start=source.indexOf('const SetupsLocal='),end=source.indexOf('// Settings → Account & team',start),handlers=new Map(),events=new Map(),frame={},contents={mainFrame:frame,isDestroyed:()=>false},window={isDestroyed:()=>false};let retired=0,crypto=0;
  assert.ok(start>0&&end>start);const service={invalidate:()=>retired++};
- const context={require:name=>{if(name==='./src/setups-main')return {createSetupsMain};assert.equal(name,'electron');return {safeStorage:{isEncryptionAvailable:()=>{crypto++;return false;}}};},app:{isPackaged:false,on:(event,fn)=>events.set(event,fn)},buddyWin:{setupsContext:()=>({window,contents,generation:1,foreground:true})},SetupsNative:service,dialog:{},ipcMain:{handle:(name,fn)=>handlers.set(name,fn)}};
+ const context={require:name=>{if(name==='./src/setups-main')return {createSetupsMain};assert.equal(name,'electron');return {safeStorage:{isEncryptionAvailable:()=>{crypto++;return false;}}};},app:{isPackaged:true,on:(event,fn)=>events.set(event,fn)},buddyWin:{setupsContext:()=>({window,contents,generation:1,foreground:true})},SetupsNative:service,dialog:{},ipcMain:{handle:(name,fn)=>handlers.set(name,fn)}};
  vm.runInNewContext(source.slice(start,end),context);assert.equal(handlers.size,8);assert.equal(crypto,0);assert.equal((await handlers.get('setups:local-state')({sender:contents,senderFrame:frame})).ok,false);assert.equal(crypto,0);events.get('will-quit')();assert.equal(retired,1);
 });

@@ -15,7 +15,7 @@ function choices(input){
  if(Object.keys(input.values).length>128||Object.entries(input.values).some(([k,v])=>!/^(USER|HOSTNAME|NAME|EMAIL(?::\d+)?|IP:\d+|HOST:\d+|PRIVATE:\d+|SSH_USER|SECRET:[\w.-]{1,64})$/.test(k)||typeof v!=='string'||v.includes('\0')||Buffer.byteLength(v)>4096)||Object.values(input.values).reduce((n,v)=>n+Buffer.byteLength(v),0)>16384)return null;
  return JSON.parse(JSON.stringify(input));
 }
-function createSetupsMain({app,buddy,service,dialog,safeStorage,resourcesPath=process.resourcesPath,platform=process.platform,userInfo=()=>os.userInfo(),realpath=p=>fs.realpathSync(p),runtimeFactory=createSetupsRuntime,platformFactory=createSetupsPlatform}){
+function createSetupsMain({app,buddy,service,dialog,safeStorage,accepted=false,resourcesPath=process.resourcesPath,platform=process.platform,userInfo=()=>os.userInfo(),realpath=p=>fs.realpathSync(p),runtimeFactory=createSetupsRuntime,platformFactory=createSetupsPlatform}){
  let runtime=null,stopped=false,last=null,epoch=0;
  function owner(){
   const b=buddy(),c=b?.setupsContext?.();
@@ -25,7 +25,10 @@ function createSetupsMain({app,buddy,service,dialog,safeStorage,resourcesPath=pr
  }
  function same(before){const after=owner();return !!before&&!!after&&before.buddy===after.buddy&&before.window===after.window&&before.contents===after.contents&&before.frame===after.frame&&before.document===after.document&&before.generation===after.generation;}
  function getRuntime(){
-  if(stopped||platform!=='darwin'||app.isPackaged!==true)throw Error('unavailable');
+  // A navigation badge is not an activation boundary. Only a reviewed main
+  // composition may enable this after real packaged acceptance; there is no
+  // renderer, configuration, environment or development unlock.
+  if(accepted!==true||stopped||platform!=='darwin'||app.isPackaged!==true)throw Error('unavailable');
   if(runtime)return runtime;
   const info=userInfo();if(!Number.isSafeInteger(info.uid)||info.uid<0||typeof info.homedir!=='string')throw Error('unavailable');
   const profile=realpath(info.homedir),local=platformFactory({app,resourcesPath,profilePath:profile,uid:info.uid,platform});

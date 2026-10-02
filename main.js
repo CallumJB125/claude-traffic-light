@@ -1405,7 +1405,7 @@ ipcMain.handle('setups:action',(e,handle,op,input)=>setupsSender(e)?SetupsNative
 ipcMain.handle('setups:export',(e,handle)=>setupsSender(e)?SetupsNative.export(handle):null);
 // The embedded page remains pending until actual packaged Apply/recovery/Undo
 // acceptance. No dev helper or renderer-supplied local authority is a fallback.
-const SetupsLocal=require('./src/setups-main').createSetupsMain({app,buddy:()=>buddyWin,service:SetupsNative,dialog,safeStorage:require('electron').safeStorage});
+const SetupsLocal=require('./src/setups-main').createSetupsMain({app,buddy:()=>buddyWin,service:SetupsNative,dialog,safeStorage:require('electron').safeStorage,accepted:false});
 SetupsLocal.register(ipcMain);
 app.on('will-quit',()=>SetupsLocal.close());
 
