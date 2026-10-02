@@ -9,7 +9,7 @@
 ; This has to be customRemoveFiles, not customUnInstall: electron-builder
 ; inserts customUnInstall after $INSTDIR is already deleted. Defining
 ; customRemoveFiles replaces electron-builder's own file removal, so the rest
-; of the macro contains that default block, unchanged, from
+; of the macro contains that default block, plus an isolated error reset, from
 ; app-builder-lib/templates/nsis/uninstaller.nsh (electron-builder 26.16.1,
 ; pinned exactly in package.json; test/installers.test.js compares the two).
 ; Keep the waiting update installer outside the directory its child removes.
@@ -61,6 +61,9 @@
   # Move out of $INSTDIR so it can be removed
   SetOutPath $TEMP
   # Remove all files (or remaining shallow directories from the block above)
+  ; Atomic enumeration ends with FindNext EOF setting the error flag.
+  ; The refusal below must observe this removal, not that earlier EOF.
+  ClearErrors
   RMDir /r $INSTDIR
   ; ---- electron-builder's default block ends here ----
 

@@ -400,8 +400,8 @@ test('workflows: inputs never interpolated into a run script; every action pinne
   }
 });
 
-// M9 (code review): the copied NSIS block must stay electron-builder's own.
-test('installer.nsh: the copied removal block is exactly electron-builder\'s default for the pinned version', () => {
+// M9: preserve all pinned default commands; isolate only the removal error flag.
+test('installer.nsh: the removal block retains pinned defaults plus exactly one isolated removal error reset', () => {
   const ours = readText('build/installer.nsh');
   const tpl = fs.readFileSync(require.resolve('app-builder-lib/templates/nsis/uninstaller.nsh'), 'utf8');
   const norm = (s) => s.split('\n').map((l) => l.trim()).filter(Boolean).join('\n');
@@ -413,7 +413,10 @@ test('installer.nsh: the copied removal block is exactly electron-builder\'s def
   assert.equal(ours.split(end).length, 2, 'one complete copied block ends');
   const copy = /; ---- electron-builder's default block from here ----\n([\s\S]*?)\n\s*; ---- electron-builder's default block ends here ----/.exec(ours);
   assert.ok(copy);
-  assert.equal(norm(copy[1]), norm(def[1]));
+  const removalBoundary = '  ; Atomic enumeration ends with FindNext EOF setting the error flag.\n  ; The refusal below must observe this removal, not that earlier EOF.\n  ClearErrors\n';
+  assert.equal(copy[1].split(removalBoundary).length, 2, 'one exact removal error reset');
+  assert.ok(copy[1].includes(removalBoundary + '  RMDir /r $INSTDIR'));
+  assert.equal(norm(copy[1].replace(removalBoundary, '')), norm(def[1]));
   assert.match(ours, /nsExec::Exec \/TIMEOUT=\d+ '"\$INSTDIR\\\$\{APP_EXECUTABLE_FILENAME\}" --uninstall-hooks'/);
   assert.ok(!/ExecWait/.test(ours.replace(/^;.*$/gm, '')), 'no unbounded wait');
 });
