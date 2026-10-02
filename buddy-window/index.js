@@ -189,6 +189,10 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   // Local hub, started lazily the first time a board page opens.
   const mode = process.env.BUDDY_BOARD_AUTH === 'dev' && isDev ? 'dev' : 'local';
   const localUrl = () => (hubInfo && !hubInfo.team ? hubInfo.url : null);
+  function retireSetupDocument(){
+    setupLocalGeneration++;
+    for(const listener of setupIdentityListeners)listener();
+  }
   // Before anything that can call forgetHub.
   const connectLife = createConnectLife();
   const supervisor = createHubSupervisor({
@@ -390,6 +394,13 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       v.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#1c1a1f' : '#eceaf0');
       lockLocal(v);
       localViews.set(page.id, v);
+      if(page.id==='setups'){
+        // A same-URL reload keeps WebContents/mainFrame object identity. Its
+        // document still retires every outstanding native approval and plan.
+        v.webContents.on('did-start-navigation',d=>{if(d.isMainFrame)retireSetupDocument();});
+        v.webContents.on('render-process-gone',retireSetupDocument);
+        v.webContents.once('destroyed',retireSetupDocument);
+      }
       v.webContents.on('did-finish-load', () => onLocalPage(page, v.webContents));
       v.webContents.loadFile(path.join(DIR, '..', page.file), { query: page.query || {} }).catch(() => {});
     }

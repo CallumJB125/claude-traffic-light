@@ -14,7 +14,8 @@ function fixture(){
  context.content={webContents:wc};context.localViews.set('setups',context.content);
  const factory=source.slice(source.indexOf('  async function setupSources()'),source.indexOf('  const myDayBroker'));
  const methods=source.slice(source.indexOf('    setupsActorCurrent(actor)'),source.indexOf('    onSetupsIdentityChange(listener)'));
- const code='let setupSourcesGeneration=0,setupLocalGeneration=0,setupCurrentSources=[],setupModalTicket=null;'+factory+'const api={setupSources,'+methods+'};globalThis.api=api;globalThis.blur=()=>{if(!setupModalTicket)setupLocalGeneration++;};globalThis.navigate=()=>{setupLocalGeneration++;selected="other";};';
+ const retire=source.slice(source.indexOf('  function retireSetupDocument()'),source.indexOf('  // Before anything that can call forgetHub.'));
+ const code='let setupSourcesGeneration=0,setupLocalGeneration=0,setupCurrentSources=[],setupModalTicket=null;const setupIdentityListeners=new Set();'+retire+factory+'const api={setupSources,'+methods+'};globalThis.api=api;globalThis.retireDocument=retireSetupDocument;globalThis.blur=()=>{if(!setupModalTicket)setupLocalGeneration++;};globalThis.navigate=()=>{setupLocalGeneration++;selected="other";};';
  vm.runInNewContext(code,context);return {api:context.api,context,state,marker,principal,wc,win};
 }
 test('actual sealed device and marker bind setup actor; token/identity never appear in sharing row',async()=>{
@@ -35,4 +36,8 @@ test('owned context requires exact current top page, attachment, visible active 
 test('only one owned native modal and actual foreground/current view can return approval',async()=>{
  const f=fixture();let release;const pending=f.api.setupsConfirm(w=>{assert.equal(w,f.win);return new Promise(r=>release=r);});assert.equal(await f.api.setupsConfirm(()=>true),null);f.context.blur();release({approved:true});assert.equal((await pending).approved,true);
  for(const mutate of [g=>g.state.focused=false,g=>g.context.navigate(),g=>g.state.visible=false,g=>g.wc.mainFrame.url='https://synthetic.example']){const g=fixture(),pending=g.api.setupsConfirm(()=>new Promise(r=>release=r));mutate(g);release({approved:true});assert.equal(await pending,null);}
+});
+test('same-URL document retirement invalidates pending native approval even with retained mainFrame',async()=>{
+ const f=fixture(),frame=f.wc.mainFrame;let release;const before=f.api.setupsContext().generation,pending=f.api.setupsConfirm(()=>new Promise(r=>release=r));f.context.retireDocument();assert.equal(f.wc.mainFrame,frame);assert.ok(f.api.setupsContext().generation>before);release({approved:true});assert.equal(await pending,null);
+ assert.match(source,/v\.webContents\.on\('did-start-navigation',d=>\{if\(d\.isMainFrame\)retireSetupDocument\(\);\}\)/);
 });
