@@ -179,6 +179,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   let accountLoadGeneration = 0;
   const localViews = new Map(); // page id → its own view, kept so a page keeps its state
   const setupIdentityListeners=new Set();let setupIdentityMarkers=[];
+  let setupSourcesGeneration=0,setupLocalGeneration=0,setupCurrentSources=[],setupModalTicket=null;
   let selected = 'board';
   let hubStatus = { state: 'stopped' };
   let hubInfo = null; // {url, origin, accessTeam, partition, team, bearer, org}
@@ -230,10 +231,11 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   });
 
   async function setupSources() {
+    const generation=++setupSourcesGeneration;setupCurrentSources=[];
     const rows=[];rows.partial=store.hubs().length>8;
     for(const origin of store.hubs().slice(0,8)) {
-      const marker=vault(origin).load(), userId=marker?.user?.id;
-      const current=()=>store.hubs().includes(origin) && vault(origin).load()===marker && userOf(origin)?.id===userId;
+      const marker=vault(origin).load(), userId=marker?.user?.id,deviceId=marker?.device_id;
+      const current=()=>generation===setupSourcesGeneration && store.hubs().includes(origin) && vault(origin).load()===marker && userOf(origin)?.id===userId && marker?.device_id===deviceId;
       if(typeof userId!=='string' || !/^[A-Za-z0-9_.:-]{1,100}$/.test(userId)) continue;
       let me;try{me=await clientFor(origin).me();}catch{rows.partial=true;continue;}
       if(!current() || !me?.ok || me.user?.id!==userId || !Array.isArray(me.teams) || me.teams.length>200) {rows.partial=true;continue;}
@@ -241,9 +243,10 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       for(const team of me.teams.slice(0,32)) {
         if(!team||typeof team!=='object') {rows.partial=true;continue;}
         if(![team.id,team.member_id].every(id=>typeof id==='string'&&/^[A-Za-z0-9_.:-]{1,100}$/.test(id)) || !['owner','admin','member','viewer'].includes(team.role)) continue;
-        rows.push({name:`${String(team.name??'Team').slice(0,80)} · ${hostOf(origin)}`,userId,teamId:team.id,memberId:team.member_id,role:team.role,machine:{emails:typeof me.user.email==='string'?[me.user.email]:[]},current,call:(op,args)=>current()?clientFor(origin).setups(op,team.id,args,userId,team.member_id):Promise.resolve({ok:false})});
+        rows.push({name:`${String(team.name??'Team').slice(0,80)} · ${hostOf(origin)}`,userId,deviceId,teamId:team.id,memberId:team.member_id,role:team.role,machine:{emails:typeof me.user.email==='string'?[me.user.email]:[]},current,call:(op,args)=>current()?clientFor(origin).setups(op,team.id,args,userId,team.member_id):Promise.resolve({ok:false})});
       }
     }
+    if(generation===setupSourcesGeneration)setupCurrentSources=rows;
     return rows;
   }
 
@@ -335,6 +338,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   function pushState() {
     const markers=store.hubs().map(origin=>[origin,vault(origin).load()]);
     if(markers.length!==setupIdentityMarkers.length || markers.some((value,index)=>value[0]!==setupIdentityMarkers[index]?.[0]||value[1]!==setupIdentityMarkers[index]?.[1])) {
+      setupSourcesGeneration++;setupCurrentSources=[];
       setupIdentityMarkers=markers;
       for(const listener of setupIdentityListeners) listener();
       const page=localViews.get('setups')?.webContents;if(page&&!page.isDestroyed())page.send('setups:changed');
@@ -740,6 +744,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     const page = pageById(id);
     if (!page) return;
     if (page.kind === 'window') { openWindow(page.window); return; }
+    setupLocalGeneration++;
     if (page.localScreen && !getTeamHub()) { flow.show(page.localScreen); return; }
     if (page.kind === 'local' && page.screen) { flow.show(page.screen); return; }
     flow.leftAccountPages();
@@ -876,7 +881,9 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     sidebar.webContents.loadFile(path.join(DIR, 'sidebar.html')).catch(() => {});
     sidebar.webContents.once('did-finish-load', () => { pushState(); win?.show(); });
     win.on('resize', layout);
+    win.on('blur',()=>{if(!setupModalTicket)setupLocalGeneration++;});
     win.on('closed', () => {
+      setupLocalGeneration++;
       // Close every page: detached views otherwise keep running (and the board
       // page keeps its socket). The hub keeps running while the app runs, so
       // reopening is instant; it stops with the app.
@@ -895,6 +902,28 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     open,
     myDay: () => myDayBroker.snapshot(),
     setupSources,
+    // Main-only identities. No renderer receives a sealed marker or window.
+    setupsActorCurrent(actor) {
+      return !!actor && setupCurrentSources.some(s=>s.current() && s.userId===actor.account && s.teamId===actor.team && s.memberId===actor.member && s.deviceId===actor.device);
+    },
+    setupsContext() {
+      const v=localViews.get('setups'),wc=v?.webContents;
+      if(!win || win.isDestroyed() || !wc || wc.isDestroyed() || selected!=='setups' || content!==v || !win.isVisible() || win.isMinimized())return null;
+      const expected=pathToFileURL(path.join(DIR,'..','setups.html')).href;
+      if(wc.getURL()!==expected || wc.mainFrame?.url!==expected || wc.isLoading())return null;
+      return {window:win,contents:wc,generation:setupLocalGeneration,foreground:win.isFocused()};
+    },
+    async setupsConfirm(show) {
+      const before=this.setupsContext();
+      if(typeof show!=='function' || !before?.foreground || setupModalTicket)return null;
+      const ticket={window:before.window,contents:before.contents,generation:before.generation};setupModalTicket=ticket;
+      try {
+        const answer=await show(before.window);
+        const after=this.setupsContext();
+        if(setupModalTicket!==ticket || !after?.foreground || after.window!==ticket.window || after.contents!==ticket.contents || after.generation!==ticket.generation)return null;
+        return answer;
+      }finally{if(setupModalTicket===ticket)setupModalTicket=null;}
+    },
     onSetupsIdentityChange(listener) {if(typeof listener!=='function')return ()=>{};setupIdentityListeners.add(listener);return ()=>setupIdentityListeners.delete(listener);},
     openMyDayCard: handle => myDayBroker.open(handle),
     // Account client stays in main. The broker checks the sealed grant's
