@@ -520,6 +520,8 @@
     <label class="row"><input type="checkbox" id="remoteInteractionHost" aria-describedby="interaction-host-status" /> Let my other devices use sessions Plexiform started on this Mac</label>
     <div class="hint">Your other devices signed in to the same Plexiform account can list, message and close sessions they start here, through your team hub. Off by default; see the privacy notice.</div>
     <div class="hint" id="interaction-host-status" role="status" aria-live="polite"></div>
+    <label class="row"><input type="checkbox" id="codexDaemonMessaging" aria-describedby="codex-daemon-hint" /> Let Plexiform message Codex CLI sessions running on the shared Codex daemon</label>
+    <div class="hint" id="codex-daemon-hint">Off by default. Only sessions you start in Terminal with <code>codex</code> (which attaches to Codex's shared daemon, starting it if needed) are listed; Plexiform never starts the daemon and cannot reach Codex desktop-app conversations. Plexiform lists their titles and folders, sends only what you type, shows only replies to your messages and never answers approvals. See the privacy notice.</div>
   </div>
 
   <h2>Privacy</h2>

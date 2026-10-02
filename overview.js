@@ -238,7 +238,7 @@
   const providerId = value => typeof value === 'string' && /^[a-z][a-z0-9-]{0,79}$/.test(value);
   const validDelivery = d => obj(d) && uuid(d.id) && text(d.text, 4000) && ['new-turn', 'steer'].includes(d.mode) && Object.hasOwn(DELIVERY, d.state) && typeof d.recorded === 'boolean' && turnRef(d.turn) && text(d.response, 16000) && (d.error === null || text(d.error, 1000)) && Array.isArray(d.notices) && d.notices.length <= 5 && d.notices.every(n => text(n, 300)) && stamp(d.sentAt) && (d.finishedAt === null || stamp(d.finishedAt));
   const validProvider = p => obj(p) && text(p.id, 80) && text(p.label, 120);
-  const validState = s => obj(s) && uuid(s.session) && Number.isSafeInteger(s.generation) && s.generation >= 0 && validProvider(s.provider) && s.ownership === 'plexiform-owned' && text(s.label, 200) && STATUSES.includes(s.status) && turnRef(s.activeTurn) && obj(s.capabilities) && Array.isArray(s.deliveries) && s.deliveries.length <= 20 && s.deliveries.every(validDelivery);
+  const validState = s => obj(s) && uuid(s.session) && Number.isSafeInteger(s.generation) && s.generation >= 0 && validProvider(s.provider) && ['plexiform-owned', 'existing-unmanaged'].includes(s.ownership) && (s.ownership === 'plexiform-owned' || obj(s.thread) && text(s.thread.title, 120) && text(s.thread.project, 120)) && text(s.label, 200) && STATUSES.includes(s.status) && turnRef(s.activeTurn) && obj(s.capabilities) && Array.isArray(s.deliveries) && s.deliveries.length <= 20 && s.deliveries.every(validDelivery);
   const validCap = c => obj(c) && providerId(c.provider) && text(c.label, 120) && typeof c.available === 'boolean' && text(c.reason, 600) && obj(c.capabilities);
   const ownedStatus = message => { $('owned-status').textContent = message; };
   const statusLabel = status => status === 'working' ? 'Working' : status === 'ended' ? 'Ended' : 'Ready';
@@ -297,7 +297,7 @@
     input.value = entry.draft; input.addEventListener('input', () => { entry.draft = input.value; });
     const note = node('p', '', 'reason'), buttons = node('div', '', 'actions');
     const send = button('Send', () => void effect(id, 'send')), steer = button('Steer current turn', () => void effect(id, 'steer'));
-    const stop = button('Interrupt', () => void effect(id, 'interrupt')), close = button('Close session', () => void effect(id, 'close'));
+    const stop = button('Interrupt', () => void effect(id, 'interrupt')), close = button(entry.state.ownership === 'existing-unmanaged' ? 'Detach (the session keeps running)' : 'Close session', () => void effect(id, 'close'));
     const recheck = button('Check again', () => { markBoard(entry.state.board, false); entry.notice = ''; updateCard(id); renderAsk(); input.focus(); void refreshOwned(); });
     recheck.hidden = true;
     buttons.append(send, steer, stop, recheck, close); box.append(label, input, note, buttons);
@@ -311,7 +311,7 @@
     if (!entry.el) $('owned').append(ownedCard(id));
     const { title, tag, meta, notice } = entry.parts, s = entry.state, label = nameOf(entry);
     set(title, `${label} session`);
-    set(meta, `${s.label} · private read-only workspace`);
+    set(meta, s.ownership === 'existing-unmanaged' ? [s.label, s.thread.title || 'Untitled session', s.thread.project].filter(Boolean).join(' · ') : `${s.label} · private read-only workspace`);
     set(notice, entry.notice);
     if (entry.missing) {
       // Kept visible (never silently removed); its last known messages stay readable.
@@ -367,9 +367,50 @@
     row.append(input, name, tag, reason); $('provider-list').append(row);
     return { row, input, name, tag, reason };
   }
+  // ── Existing sessions on an opt-in provider (Codex CLI on the shared daemon):
+  // never offered as "start", only found and attached, labelled unmanaged.
+  let existingCap = null, finding = false;
+  function renderExisting(cap) {
+    existingCap = cap;
+    $('existing-picker').hidden = false;
+    $('existing-reason').textContent = cap.available ? 'Available. Find the sessions running on the shared daemon, then choose one to message.' : cap.reason || 'Unavailable.';
+    $('existing-precondition').textContent = text(cap.precondition, 600) ? cap.precondition : '';
+    $('existing-find').disabled = finding || !cap.available;
+    if (!cap.available) $('existing-list').replaceChildren();
+  }
+  async function findExisting() {
+    const cap = existingCap;
+    if (!ix || typeof ix.discover !== 'function' || finding || !cap?.available) return;
+    finding = true; $('existing-find').disabled = true; $('existing-find').textContent = 'Finding…';
+    let result;
+    try { result = await ix.discover({ provider: cap.provider }); } catch { result = null; }
+    finding = false; $('existing-find').textContent = 'Find sessions'; $('existing-find').disabled = !existingCap?.available;
+    if (result?.ok !== true || !Array.isArray(result.threads)) { $('existing-reason').textContent = `${REFUSAL[result?.status] ?? REFUSAL.unavailable}${text(result?.error, 600) ? `: ${result.error}` : '.'}`; return; }
+    const rows = result.threads.filter(t => obj(t) && uuid(t.handle) && text(t.title, 120) && text(t.project, 120) && text(t.status, 20)).map(t => {
+      const li = node('li', '', 'provider-option'), name = node('span', `${t.title || 'Untitled session'}${t.project ? ` · ${t.project}` : ''}`, 'provider-name');
+      const tag = node('span', t.status === 'active' ? 'Working' : t.status === 'idle' ? 'Idle' : 'Unknown', 'tag');
+      const use = button(t.open ? 'Already open below' : 'Message this session', () => void attachExisting(cap, t.handle, use));
+      use.disabled = !!t.open;
+      li.append(name, tag, use); return li;
+    });
+    $('existing-list').replaceChildren(...(rows.length ? rows : [node('li', 'No Codex CLI sessions are running on the shared daemon.', 'muted')]));
+    $('existing-reason').textContent = `${rows.length} session${rows.length === 1 ? '' : 's'} found. Unmanaged: started outside Plexiform.`;
+  }
+  async function attachExisting(cap, handle, control) {
+    control.disabled = true;
+    let result;
+    try { result = await ix.attach({ provider: cap.provider, handle }); } catch { result = null; }
+    if (result?.ok === true && validState(result.state)) {
+      control.textContent = 'Already open below';
+      applyState(result.state); renderOwnedEmpty(); markBoard(result.state.board, false);
+      ownedStatus(`Attached to a ${cap.label} session started outside Plexiform. Type a message below.`);
+      owned.get(result.state.session)?.composer?.input.focus();
+    } else { control.disabled = false; $('existing-reason').textContent = `${REFUSAL[result?.status] ?? REFUSAL.unavailable}${text(result?.error, 600) ? `: ${result.error}` : '.'}`; }
+  }
   function renderProviders(caps) {
     const seen = new Set();
     for (const cap of caps) {
+      if (validCap(cap) && cap.ownership === 'existing-unmanaged' && !seen.has(cap.provider)) { seen.add(cap.provider); renderExisting(cap); continue; }
       if (!validCap(cap) || seen.has(cap.provider)) continue;
       seen.add(cap.provider);
       const p = providers.get(cap.provider) ?? { parts: providerRow(cap.provider) };
@@ -429,7 +470,8 @@
     } else { ownedStatus(`Could not start ${label}. ${REFUSAL[result?.status] ?? REFUSAL.unavailable}${text(result?.error, 600) ? `: ${result.error}` : '.'}`); restoreFocus(focused, $('start-session')); }
   }
   // ── Ask all: one message to several owned sessions, answers side by side.
-  const liveEntries = () => [...owned].filter(([, e]) => !e.missing && e.state.status !== 'ended');
+  // Ask all stays with sessions Plexiform started; sessions started elsewhere are messaged one at a time.
+  const liveEntries = () => [...owned].filter(([, e]) => !e.missing && e.state.status !== 'ended' && e.state.ownership === 'plexiform-owned');
   function renderAsk() {
     if (!ix || typeof ix.fanout !== 'function') return;
     const live = liveEntries();
@@ -581,6 +623,7 @@
     $('owned-section').hidden = false;
     if (typeof ix.localModels === 'function') $('local-section').hidden = false;
     $('start-session').addEventListener('click', () => void launch(selectedProvider));
+    $('existing-find').addEventListener('click', () => void findExisting());
     $('router-text').addEventListener('input', renderHint);
     $('router-use').addEventListener('click', () => void launch($('router-use').dataset.provider, $('router-text').value.trim()));
     // Built only when owned sessions exist, so the reported-work composer stays the page's first textarea.

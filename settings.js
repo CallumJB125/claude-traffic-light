@@ -34,6 +34,7 @@
       loadSpend(config.spend || {}); // F1 spend
       document.getElementById('remoteTailscale').checked = !!config.remoteTailscale;
       document.getElementById('remoteInteractionHost').checked = config.remoteInteractionHost === true;
+      document.getElementById('codexDaemonMessaging').checked = config.codexDaemonMessaging === true;
       document.getElementById('busyHold').checked = config.busyHold !== false;
       document.getElementById('busyCalendar').checked = !!config.busyCalendar;
       document.getElementById('busyCalendarTitles').checked = !!config.busyCalendarTitles;
@@ -174,6 +175,7 @@
         busyFocusShortcut: document.getElementById('busyFocusShortcut').value.trim().slice(0, 100),
         remoteTailscale: document.getElementById('remoteTailscale').checked,
         remoteInteractionHost: document.getElementById('remoteInteractionHost').checked,
+        codexDaemonMessaging: document.getElementById('codexDaemonMessaging').checked,
       });
       setTimeout(showInteractionHost, 1500);
       setTimeout(showBusy, 1500);

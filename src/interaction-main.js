@@ -18,7 +18,7 @@ const { createLocalModels } = require('./local-models');
 
 const CHANNELS = Object.freeze({
   capabilities: 'interaction:capabilities', list: 'interaction:list', state: 'interaction:state',
-  launch: 'interaction:launch', send: 'interaction:send', interrupt: 'interaction:interrupt', close: 'interaction:close',
+  launch: 'interaction:launch', discover: 'interaction:discover', attach: 'interaction:attach', send: 'interaction:send', interrupt: 'interaction:interrupt', close: 'interaction:close',
   event: 'interaction:event', localModels: 'interaction:local-models', fanout: 'interaction:fanout',
 });
 const MAX_FANOUT = 6;
@@ -72,6 +72,9 @@ function createInteractionMain({ context, readContext = context, adapters: given
   }
   const effects = {
     launch: (req, actor) => (object(req) && !Object.hasOwn(req, 'board') ? hub.launch({ ...req, board: boardKey(currentBoard()) }, actor) : hub.launch(null, actor)),
+    // Existing sessions on an opt-in provider (codex-daemon): metadata list, then subscribe to one by handle.
+    discover: (req, actor) => hub.discover(req, actor),
+    attach: (req, actor) => (object(req) && !Object.hasOwn(req, 'board') ? hub.attach({ ...req, board: boardKey(currentBoard()) }, actor) : hub.attach(null, actor)),
     async send(req, actor) {
       if (!object(req) || Object.hasOwn(req, 'board')) return hub.send(null, actor);
       const result = await hub.send({ ...req, board: boardKey(currentBoard()) }, actor);
