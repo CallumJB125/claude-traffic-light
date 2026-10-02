@@ -47,12 +47,10 @@ let event = adapterId ? argv[argv.indexOf('--adapter') + 2] : null;
 if (!adapterId && opt('cursor')) { adapterId = 'cursor'; event = opt('cursor'); }
 if (!adapterId && argv.includes('--codex')) adapterId = 'codex';
 
-if (adapterId) {
+function emitAdapter(payload) {
   const adapter = Adapters.get(adapterId);
   if (!adapter) process.exit(0);
-  // Codex passes its JSON as the last argument; everyone else pipes it.
-  const payload = adapterId === 'codex' ? parse(argv[argv.length - 1]) : parse(readStdin());
-  const reply = adapter.reply ? adapter.reply(event, payload) : null;
+  const reply = opt('lifecycle') ? null : adapter.reply ? adapter.reply(event, payload) : null;
   // fs.writeSync, like set-status.js: stdout is an async pipe on macOS and
   // process.exit below would cut the reply short.
   if (reply) {
@@ -73,17 +71,49 @@ if (adapterId) {
   // (the desktop orders events by it), and each event is dispatched.
   const Remote = fs.existsSync(path.join(ROOT_DIR, 'remote.json')) ? require('./remote.js') : null;
   const fallbackSession = process.env.CLAUDE_SESSION_ID || `${adapter.id}-${process.ppid}`;
+  const accepted = [];
   for (const e of events) {
     e.sessionId = SessionState.safeSessionId(e.sessionId || fallbackSession);
     const file = SessionState.sessionFileFor(SESSIONS_DIR, HOST_TAG, adapter.id, e.sessionId);
     const before = Remote ? SessionState.readJson(file) : null;
-    if (Remote && !e.pid) e.pid = Remote.agentPid(before?.claudePid);
+    if (Remote && !e.pid && !e.codexLifecycle) e.pid = Remote.agentPid(before?.claudePid);
     if (Remote && e.signal === 'session-end') e.seq = Remote.nextSeq(before?.remoteSeq);
-    SessionState.applyAdapterEvent(SESSIONS_DIR, { host: HOST_TAG, source: adapter.id, event: e, fallbackSession, fallbackCwd: process.cwd(), decorate: Remote && ((next, prev) => { next.remoteSeq = e.seq = Remote.nextSeq(prev?.remoteSeq); }) });
+    const applied = SessionState.applyAdapterEvent(SESSIONS_DIR, { host: HOST_TAG, source: adapter.id, event: e, fallbackSession, fallbackCwd: process.cwd(), decorate: Remote && ((next, prev) => { next.remoteSeq = e.seq = Remote.nextSeq(prev?.remoteSeq); }) });
+    if (!applied) continue;
     if (Remote && !e.cwd) e.cwd = process.cwd();
+    accepted.push(e);
   }
-  if (Remote) Remote.dispatchThenExit(adapter.id, events);
+  if (Remote) Remote.dispatchThenExit(adapter.id, accepted);
   else process.exit(0);
+}
+
+if (adapterId) {
+  const lifecycle = opt('lifecycle');
+  if (argv.includes('--lifecycle')) {
+    const codex = Adapters.get('codex');
+    if (adapterId !== 'codex' || !codex.LIFECYCLE_EVENTS.includes(lifecycle)) process.exit(0);
+    event = lifecycle;
+    // These two events explicitly require JSON stdout on success. A neutral
+    // object never approves, blocks, continues, or supplies model context,
+    // even when input is malformed, oversized, or never reaches EOF.
+    if (event === 'Stop' || event === 'SubagentStop') fs.writeSync(1, '{}');
+    let bytes = 0; const chunks = [];
+    const timer = setTimeout(() => process.exit(0), 750);
+    process.stdin.on('data', (chunk) => {
+      bytes += chunk.length;
+      if (bytes > 1024 * 1024) process.exit(0);
+      chunks.push(chunk);
+    });
+    process.stdin.on('error', () => process.exit(0));
+    process.stdin.on('end', () => {
+      clearTimeout(timer);
+      emitAdapter(parse(Buffer.concat(chunks, bytes).toString('utf8')));
+    });
+    process.stdin.resume();
+  } else {
+    // Legacy notify JSON remains argv; lifecycle JSON is explicitly stdin.
+    emitAdapter(adapterId === 'codex' ? parse(argv[argv.length - 1]) : parse(readStdin()));
+  }
 }
 
 // The bare-signal form, when no adapter was named (the adapter branch above
