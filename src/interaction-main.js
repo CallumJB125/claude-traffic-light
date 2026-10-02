@@ -14,7 +14,20 @@ const denied = { ok: false, status: 'forbidden', error: 'Focus Plexiform Overvie
 
 // Only one Overview document is current. When it is replaced (reload or new
 // generation) the old actor's sessions are reaped and `documents` holds one entry.
-function createInteractionMain({ context, readContext = context, adapters, workspace, boardCurrent, now }) {
+// Provider registration point: Plexiform-owned Claude Code (stream-json) and
+// Gemini CLI (ACP) sessions join the adapters main.js passes in. A missing CLI
+// stays listed with available:false and its reason.
+function ownedAdapters({ env = process.env } = {}) {
+  const Claude = require('./claude-code-session'), Gemini = require('./gemini-acp');
+  const claudeBin = Claude.findClaudeBin({ env });
+  return {
+    claude: Object.assign(Claude.createClaudeCodeSession({ bin: claudeBin, env }), claudeBin ? {} : { available: false, reason: 'unavailable: claude not installed' }),
+    gemini: Gemini.createGeminiAcp({ bin: Gemini.findGeminiBin({ env }), env }),
+  };
+}
+
+function createInteractionMain({ context, readContext = context, adapters: given, owned = ownedAdapters, workspace, boardCurrent, now }) {
+  const adapters = { ...(owned ? owned() : {}), ...given };
   const documents = new Map();
   const hub = createInteractionHub({
     adapters, workspace, boardCurrent, now,
@@ -54,4 +67,4 @@ function createInteractionMain({ context, readContext = context, adapters, works
   };
 }
 
-module.exports = { createInteractionMain, CHANNELS };
+module.exports = { createInteractionMain, ownedAdapters, CHANNELS };
