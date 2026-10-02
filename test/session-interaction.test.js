@@ -6,6 +6,7 @@ const { createCodexAppServer, APP_SERVER_ARGS } = require('../src/codex-app-serv
 const { createInteractionMain, CHANNELS } = require('../src/interaction-main');
 
 const ACTOR = 'overview:1:1';
+const CURRENT = (b) => b === null;
 const FAKE = path.join(__dirname, 'fixtures', 'fake-codex-app-server.js');
 const until = async (fn, ms = 3000) => { const end = Date.now() + ms; for (;;) { const v = fn(); if (v) return v; if (Date.now() > end) throw new Error('timed out'); await new Promise((r) => setTimeout(r, 10)); } };
 
@@ -23,7 +24,7 @@ function memAdapter() {
 }
 async function memHub(over = {}) {
   const adapter = memAdapter(), events = [];
-  const hub = createInteractionHub({ adapters: { mem: adapter }, onEvent: (actor, s) => events.push({ actor, s }), ...over });
+  const hub = createInteractionHub({ adapters: { mem: adapter }, boardCurrent: CURRENT, onEvent: (actor, s) => events.push({ actor, s }), ...over });
   const a = (await hub.launch({ provider: 'mem' }, ACTOR)).state;
   return { hub, adapter, events, a, msg: (extra = {}) => ({ session: a.session, generation: a.generation, text: 'hello', ...extra }) };
 }
@@ -32,7 +33,7 @@ async function memHub(over = {}) {
 test('FAKE app-server: message reaches the selected owned thread only, with ack, echo and streamed reply', async () => {
   const adapter = createCodexAppServer({ bin: FAKE });
   const events = [];
-  const hub = createInteractionHub({ adapters: { codex: adapter }, onEvent: (_a, s) => events.push(s) });
+  const hub = createInteractionHub({ adapters: { codex: adapter }, boardCurrent: CURRENT, onEvent: (_a, s) => events.push(s) });
   try {
     const A = (await hub.launch({ provider: 'codex' }, ACTOR)).state, B = (await hub.launch({ provider: 'codex' }, ACTOR)).state;
     assert.equal(A.ownership, 'plexiform-owned'); assert.match(A.label, /Started by Plexiform/);
@@ -46,7 +47,7 @@ test('FAKE app-server: message reaches the selected owned thread only, with ack,
   } finally { hub.stopAll(); }
 });
 test('FAKE app-server: steer needs the current turn, new turn while busy is refused, interrupt ends the turn', async () => {
-  const hub = createInteractionHub({ adapters: { codex: createCodexAppServer({ bin: FAKE }) } });
+  const hub = createInteractionHub({ adapters: { codex: createCodexAppServer({ bin: FAKE }) }, boardCurrent: CURRENT });
   try {
     const A = (await hub.launch({ provider: 'codex' }, ACTOR)).state;
     const base = { session: A.session, generation: A.generation };
@@ -102,7 +103,7 @@ test('Hostile: target replacement retires the old generation, including an ack t
   await x.hub.replaceTarget(x.a.session);
   release();
   assert.equal((await pending).status, 'stale');
-  assert.equal(x.hub.state({ session: x.a.session }, ACTOR).deliveries[0].state, 'refused');
+  assert.equal(x.hub.state({ session: x.a.session }, ACTOR).deliveries.length, 0, 'replacement clears the old deliveries');
   x.adapter.gate = null;
   assert.equal((await x.hub.send(x.msg(), ACTOR)).status, 'stale');
   assert.equal((await x.hub.send(x.msg({ generation: 2 }), ACTOR)).status, 'acknowledged');
@@ -187,7 +188,7 @@ function ipcHarness() {
   const contents = { id: 7, isDestroyed: () => false, send: (ch, s) => sent.push({ ch, s }) };
   contents.mainFrame = {};
   let ctx = { contents, generation: 3, foreground: true };
-  const main = createInteractionMain({ context: () => (ctx?.foreground ? ctx : null), readContext: () => ctx, adapters: { mem: memAdapter() }, workspace: () => null });
+  const main = createInteractionMain({ context: () => (ctx?.foreground ? ctx : null), readContext: () => ctx, adapters: { mem: memAdapter() }, workspace: () => null, boardCurrent: CURRENT });
   main.register({ handle: (ch, fn) => handlers.set(ch, fn) });
   const call = (ch, e, ...a) => handlers.get(ch)(e, ...a);
   return { main, call, sent, contents, own: { sender: contents, senderFrame: contents.mainFrame }, setCtx: (v) => { ctx = v; } };
@@ -203,6 +204,77 @@ test('IPC: only the exact foreground Overview frame may launch/send; pushes go o
   assert.equal((await h.call(CHANNELS.send, h.own, { session: a.session, generation: a.generation, text: 'hi' })).status, 'forbidden');
   assert.equal((await h.call(CHANNELS.list, h.own)).length, 1, 'passive read still works while unfocused');
   h.setCtx({ contents: h.contents, generation: 4, foreground: true });
-  assert.equal((await h.call(CHANNELS.send, h.own, { session: a.session, generation: a.generation, text: 'hi' })).status, 'forbidden', 'reloaded document is a different actor');
+  assert.equal((await h.call(CHANNELS.send, h.own, { session: a.session, generation: a.generation, text: 'hi' })).status, 'stale', 'reloaded document: the old actor\'s session is reaped');
+  assert.equal(h.main.documents(), 1);
+  assert.equal((await h.call(CHANNELS.list, h.own)).length, 0);
   h.main.close();
+});
+
+// ── Review fixes: default refusal, in-flight lock, close, reaping, sandbox ──
+test('Review: without a real board check every launch and send is refused', async () => {
+  const adapter = memAdapter(), hub = createInteractionHub({ adapters: { mem: adapter } });
+  assert.equal((await hub.launch({ provider: 'mem' }, ACTOR)).status, 'stale');
+  assert.equal((await hub.launch({ provider: 'mem', board: 'anything' }, ACTOR)).status, 'stale');
+  assert.equal(hub.list(ACTOR).length, 0);
+  const throwing = createInteractionHub({ adapters: { mem: adapter }, boardCurrent: () => { throw new Error('x'); } });
+  assert.equal((await throwing.launch({ provider: 'mem' }, ACTOR)).status, 'stale');
+});
+test('Review: two concurrent new-turn sends — the second is busy and reaches no provider', async () => {
+  const x = await memHub();
+  let release; x.adapter.gate = new Promise((r) => { release = r; });
+  const first = x.hub.send(x.msg({ text: 'one' }), ACTOR);
+  await new Promise((r) => setImmediate(r));
+  assert.equal((await x.hub.send(x.msg({ text: 'two' }), ACTOR)).status, 'busy');
+  release();
+  assert.equal((await first).status, 'acknowledged');
+  assert.equal(x.adapter.calls.length, 1);
+});
+test('Review: close interrupts the active turn and releases the provider thread', async () => {
+  const x = await memHub();
+  const interrupted = [], released = [];
+  x.adapter.interrupt = async (a) => { interrupted.push(a); return true; };
+  x.adapter.release = async (a) => { released.push(a); return true; };
+  await x.hub.send(x.msg(), ACTOR);
+  x.adapter.emit({ kind: 'turn-started', target: 'target-1', turnId: 'turn-1' });
+  assert.equal((await x.hub.close({ session: x.a.session, generation: 1 }, ACTOR)).status, 'closed');
+  assert.deepEqual(interrupted, [{ target: 'target-1', turnId: 'turn-1' }]);
+  assert.deepEqual(released, [{ target: 'target-1' }]);
+  assert.equal(x.hub.list(ACTOR).length, 0);
+});
+test('Review: close during a send never reports the old ack as delivered and stops the turn it started', async () => {
+  const x = await memHub();
+  const interrupted = [];
+  x.adapter.interrupt = async (a) => { interrupted.push(a); return true; };
+  let release; x.adapter.gate = new Promise((r) => { release = r; });
+  const pending = x.hub.send(x.msg(), ACTOR);
+  await new Promise((r) => setImmediate(r));
+  await x.hub.close({ session: x.a.session, generation: 1 }, ACTOR);
+  release();
+  const res = await pending;
+  assert.equal(res.status, 'stale');
+  assert.deepEqual(interrupted, [{ target: 'target-1', turnId: 'turn-1' }]);
+});
+test('Review: a new Overview document reaps the old one\'s sessions and frees their slots', async () => {
+  const h = ipcHarness();
+  const stopped = [];
+  for (let i = 0; i < 8; i++) assert.equal((await h.call(CHANNELS.launch, h.own, { provider: 'mem' })).status, 'launched');
+  assert.equal((await h.call(CHANNELS.launch, h.own, { provider: 'mem' })).status, 'unavailable', 'slots full');
+  h.setCtx({ contents: h.contents, generation: 4, foreground: true });
+  assert.equal((await h.call(CHANNELS.launch, h.own, { provider: 'mem' })).status, 'launched', 'old document reaped, slot free');
+  assert.equal(h.main.documents(), 1);
+  assert.equal((await h.call(CHANNELS.list, h.own)).length, 1);
+  h.main.close(); void stopped;
+});
+test('Review: refused provider approvals are shown to the user as a notice', async () => {
+  const x = await memHub();
+  await x.hub.send(x.msg(), ACTOR);
+  x.adapter.emit({ kind: 'turn-started', target: 'target-1', turnId: 'turn-1' });
+  x.adapter.emit({ kind: 'refused-request', target: 'target-1', turnId: 'turn-1' });
+  const d = x.hub.state({ session: x.a.session }, ACTOR).deliveries[0];
+  assert.equal(d.notices.length, 1); assert.match(d.notices[0], /refused/i);
+});
+test('Review: owned Codex has no shell, exec, file-viewing or user-config reach', () => {
+  const args = APP_SERVER_ARGS.join(' ');
+  for (const f of ['shell_tool', 'unified_exec', 'view_image', 'skill_search', 'shell_snapshot']) assert(args.includes(`--disable ${f}`), f);
+  for (const c of ['model_provider="openai"', 'shell_environment_policy.inherit="none"', 'projects={}', 'plugins={}']) assert(APP_SERVER_ARGS.includes(c), c);
 });

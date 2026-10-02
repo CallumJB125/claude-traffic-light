@@ -1404,7 +1404,10 @@ const InteractionMain=require('./src/interaction-main').createInteractionMain({
   context:()=>buddyWin?.overviewContext?.()??null,
   readContext:()=>buddyWin?.overviewReadContext?.()??null,
   adapters:{codex:Object.assign(CodexAppServer.createCodexAppServer({bin:codexBin,clientVersion:app.getVersion()}),codexBin?{}:{available:false,reason:'Codex CLI not found'})},
-  workspace:id=>{const dir=path.join(app.getPath('userData'),'owned-sessions',id);fs.mkdirSync(dir,{recursive:true,mode:0o700});return dir;},
+  // Empty private folder outside Plexiform's data directory.
+  workspace:()=>fs.mkdtempSync(path.join(os.tmpdir(),'plexiform-owned-')),
+  // No board source binds owned sessions yet: only unbound sessions are current.
+  boardCurrent:board=>board===null,
 });
 InteractionMain.register(ipcMain);
 app.on('will-quit',()=>InteractionMain.close());

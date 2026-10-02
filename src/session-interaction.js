@@ -5,19 +5,26 @@
 //   provider, label, available?, reason?, capabilities {newTurn, steer, interrupt, ack, echo, stream, existingSessions}
 //   open({cwd}) -> {target}                      provider session/thread id, never sent to a renderer
 //   send({target, text, clientId, expectedTurnId}) -> {turnId, mode: 'new-turn'|'steer'}
-//   interrupt({target, turnId}), stop(), alive(), on(fn) -> off
-//   events: {kind: 'turn-started'|'delta'|'message'|'input-recorded'|'turn-completed'|'status'|'refused-request'|'closed'|'exit', target, turnId, ...}
+//   interrupt({target, turnId}), release?({target}), stop(), alive(), on(fn) -> off
+//   events: {kind: 'turn-started'|'delta'|'message'|'input-recorded'|'turn-completed'|'status'|'refused-request'|'closed'|'oversize'|'exit', target, turnId, ...}
 //
 // Delivery is only claimed from the provider's own acknowledgement for the
 // exact target: 'acknowledged' = the provider returned a turn id for a request
 // addressed to this session's target; 'recorded' = the provider echoed our
 // literal text with our client id inside that target and turn. Status changes,
 // foreign turns and other targets never advance a delivery.
+//
+// Renderers must show delivery `text`, `response`, `error` and `notices`
+// with textContent only: they are provider/model output, never markup.
 const crypto = require('node:crypto');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-const MAX_TEXT = 4000, MAX_BYTES = 8192, MAX_RESPONSE = 16000, MAX_DELIVERIES = 20, MAX_TURNS = 40, MAX_SESSIONS = 8;
+const MAX_TEXT = 4000, MAX_BYTES = 8192, MAX_RESPONSE = 16000, MAX_DELIVERIES = 20, MAX_TURNS = 40, MAX_SESSIONS = 8, MAX_NOTICES = 5;
 const FINAL = ['completed', 'interrupted', 'failed'];
+const NOTICES = {
+  approval: 'The provider asked for an approval; Plexiform refused it.',
+  oversize: 'A provider update was too large to show and was dropped.',
+};
 const object = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const closed = (v, keys) => object(v) && Object.keys(v).every((k) => keys.includes(k));
 const refuse = (status, error) => ({ ok: false, status, error });
@@ -25,20 +32,23 @@ const ERRORS = {
   invalid: 'Check the selected session and message.',
   forbidden: 'This session belongs to a different Plexiform window.',
   stale: 'This session changed. Refresh and select it again.',
-  busy: 'A turn is running. Steer it or wait for it to finish.',
+  busy: 'A message is being sent or a turn is running. Steer it or wait for it to finish.',
   unavailable: 'The provider did not accept the message.',
 };
 
-function createInteractionHub({ adapters = {}, workspace = () => null, boardCurrent = () => true, onEvent = () => {}, now = Date.now } = {}) {
+// boardCurrent must be supplied by main; without it every session is refused.
+function createInteractionHub({ adapters = {}, workspace = () => null, boardCurrent = () => false, onEvent = () => {}, now = Date.now } = {}) {
   const sessions = new Map();
+  const isCurrent = (board) => { try { return boardCurrent(board) === true; } catch { return false; } };
 
   function turnOf(r, turnId) {
     if (!r.turns.has(turnId)) {
-      r.turns.set(turnId, { tag: crypto.randomUUID(), status: 'started', error: null, response: '', inputs: [], finishedAt: null });
+      r.turns.set(turnId, { tag: crypto.randomUUID(), status: 'started', error: null, response: '', inputs: [], notices: [], finishedAt: null });
       while (r.turns.size > MAX_TURNS) r.turns.delete(r.turns.keys().next().value);
     }
     return r.turns.get(turnId);
   }
+  const notice = (t, text) => { if (t.notices.length < MAX_NOTICES && !t.notices.includes(text)) t.notices.push(text); };
   // Provider ids (target, turn id, client id) stay in main.
   function publicDelivery(r, d) {
     const t = d.turnId ? r.turns.get(d.turnId) : null;
@@ -46,7 +56,7 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
     let state = d.state;
     if (state === 'acknowledged' && t) state = FINAL.includes(t.status) ? t.status : t.response ? 'responding' : recorded ? 'recorded' : 'acknowledged';
     if (state === 'acknowledged' && r.ended) state = 'failed';
-    return { id: d.id, text: d.text, mode: d.mode, state, recorded, turn: t?.tag ?? null, response: t?.response ?? '', error: t?.error ?? null, sentAt: d.sentAt, finishedAt: t?.finishedAt ?? null };
+    return { id: d.id, text: d.text, mode: d.mode, state, recorded, turn: t?.tag ?? null, response: t?.response ?? '', error: t?.error ?? null, notices: t ? [...t.notices] : [], sentAt: d.sentAt, finishedAt: t?.finishedAt ?? null };
   }
   function dto(r) {
     const active = r.activeTurn ? r.turns.get(r.activeTurn) : null;
@@ -64,6 +74,11 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
     r.off = r.adapter.on((e) => {
       if (r.ended) return;
       if (e.kind === 'exit') { r.ended = true; r.activeTurn = null; emit(r); return; }
+      if (e.kind === 'oversize') {
+        // Not attributable to one thread: every unfinished turn is told.
+        for (const t of r.turns.values()) if (!FINAL.includes(t.status)) notice(t, NOTICES.oversize);
+        emit(r); return;
+      }
       // Another session's (or a replaced target's) event never touches this one.
       if (e.target !== r.target) return;
       if (e.kind === 'closed') { r.ended = true; r.activeTurn = null; emit(r); return; }
@@ -74,9 +89,18 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
       else if (e.kind === 'input-recorded') { if (t.inputs.length < 20) t.inputs.push({ clientId: e.clientId, text: e.text }); }
       else if (e.kind === 'delta') t.response = (t.response + String(e.text)).slice(0, MAX_RESPONSE);
       else if (e.kind === 'message') t.response = String(e.text).slice(0, MAX_RESPONSE);
+      else if (e.kind === 'refused-request') notice(t, NOTICES.approval);
       else return;
       emit(r);
     });
+  }
+  // Ends a session before any await: later acks and events see r.ended.
+  async function end(r) {
+    if (r.ended && !sessions.has(r.id)) return;
+    const { target, activeTurn } = r;
+    r.ended = true; r.activeTurn = null; r.off?.(); sessions.delete(r.id);
+    if (activeTurn) { try { await r.adapter.interrupt({ target, turnId: activeTurn }); } catch { /* provider gone */ } }
+    try { await r.adapter.release?.({ target }); } catch { /* provider gone */ }
   }
   // Every request names session + generation and arrives with the main-owned
   // actor. Replacement of target, session, actor or board is refused.
@@ -86,9 +110,7 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
     if (!r) return { error: refuse('stale', ERRORS.stale) };
     if (typeof actor !== 'string' || actor !== r.actor) return { error: refuse('forbidden', ERRORS.forbidden) };
     if (r.ended || req.generation !== r.generation || !r.adapter.alive()) return { error: refuse('stale', ERRORS.stale) };
-    let current = false;
-    try { current = boardCurrent(r.board) === true; } catch { /* refused */ }
-    if (!current) return { error: refuse('stale', ERRORS.stale) };
+    if (!isCurrent(r.board)) return { error: refuse('stale', ERRORS.stale) };
     return { r };
   }
 
@@ -98,14 +120,17 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
 
   async function launch(req, actor) {
     if (!closed(req, ['provider', 'board']) || typeof req.provider !== 'string' || !Object.hasOwn(adapters, req.provider) || (req.board != null && (typeof req.board !== 'string' || req.board.length > 200)) || typeof actor !== 'string') return refuse('invalid', ERRORS.invalid);
+    const board = req.board ?? null;
+    if (!isCurrent(board)) return refuse('stale', ERRORS.stale);
     const adapter = adapters[req.provider];
     if (adapter.available === false) return refuse('unavailable', adapter.reason ?? ERRORS.unavailable);
+    for (const r of [...sessions.values()]) if (r.ended) sessions.delete(r.id);
     if (sessions.size >= MAX_SESSIONS) return refuse('unavailable', 'Close an owned session first.');
     const id = crypto.randomUUID();
     let target;
     try { ({ target } = await adapter.open({ cwd: workspace(id) })); } catch { return refuse('unavailable', ERRORS.unavailable); }
     if (typeof target !== 'string' || !target) return refuse('unavailable', ERRORS.unavailable);
-    const r = { id, generation: 1, provider: req.provider, adapter, target, actor, board: req.board ?? null, activeTurn: null, ended: false, turns: new Map(), deliveries: new Map() };
+    const r = { id, generation: 1, provider: req.provider, adapter, target, actor, board, activeTurn: null, sending: false, ended: false, turns: new Map(), deliveries: new Map() };
     sessions.set(id, r); attach(r);
     return { ok: true, status: 'launched', state: dto(r) };
   }
@@ -118,6 +143,8 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
     const { r, error } = lookup(req, actor);
     if (error) return error;
     if ((req.board ?? null) !== r.board) return refuse('stale', ERRORS.stale);
+    // One provider request per session at a time.
+    if (r.sending) return refuse('busy', ERRORS.busy);
     let expectedTurnId = null;
     if (req.expectedTurn != null) {
       expectedTurnId = [...r.turns].find(([, t]) => t.tag === req.expectedTurn)?.[0] ?? null;
@@ -127,11 +154,19 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
     const d = { id: crypto.randomUUID(), clientId: crypto.randomUUID(), text, mode: expectedTurnId ? 'steer' : 'new-turn', state: 'sending', turnId: null, sentAt: now() };
     r.deliveries.set(d.id, d);
     while (r.deliveries.size > MAX_DELIVERIES) r.deliveries.delete(r.deliveries.keys().next().value);
+    r.sending = true;
     let ack;
-    try { ack = await r.adapter.send({ target, text, clientId: d.clientId, expectedTurnId }); } catch { d.state = 'refused'; emit(r); return refuse('unavailable', ERRORS.unavailable); }
-    // The session may have been replaced while the provider answered; that
-    // ack belongs only to the target it was sent to, never the replacement.
-    if (r.target !== target || r.generation !== generation || typeof ack?.turnId !== 'string' || (expectedTurnId && ack.turnId !== expectedTurnId)) { d.state = 'refused'; emit(r); return refuse('stale', ERRORS.stale); }
+    try { ack = await r.adapter.send({ target, text, clientId: d.clientId, expectedTurnId }); } catch { ack = null; } finally { r.sending = false; }
+    if (!ack) { d.state = 'refused'; emit(r); return refuse('unavailable', ERRORS.unavailable); }
+    // Closed or replaced while the provider answered: the ack belongs only
+    // to the old target, and a turn it started there is stopped.
+    if (r.ended || r.target !== target || r.generation !== generation) {
+      d.state = 'refused';
+      if (!expectedTurnId && typeof ack.turnId === 'string') { try { await r.adapter.interrupt({ target, turnId: ack.turnId }); } catch { /* provider gone */ } }
+      if (!r.ended) emit(r);
+      return refuse('stale', ERRORS.stale);
+    }
+    if (typeof ack.turnId !== 'string' || (expectedTurnId && ack.turnId !== expectedTurnId)) { d.state = 'refused'; emit(r); return refuse('stale', ERRORS.stale); }
     d.turnId = ack.turnId; d.mode = ack.mode === 'steer' ? 'steer' : 'new-turn'; d.state = 'acknowledged';
     turnOf(r, ack.turnId);
     if (!expectedTurnId && !FINAL.includes(r.turns.get(ack.turnId).status)) r.activeTurn = ack.turnId;
@@ -156,14 +191,19 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
   }
   const list = (actor) => [...sessions.values()].filter((r) => r.actor === actor).map(dto);
 
-  function close(req, actor) {
+  async function close(req, actor) {
     if (!closed(req, ['session', 'generation'])) return refuse('invalid', ERRORS.invalid);
-    const r = sessions.get(req.session);
-    if (r && r.actor === actor && r.ended && req.generation === r.generation) { r.off?.(); sessions.delete(r.id); return { ok: true, status: 'closed' }; }
+    const r = object(req) ? sessions.get(req.session) : null;
+    if (r && r.actor === actor && r.ended && req.generation === r.generation) { await end(r); return { ok: true, status: 'closed' }; }
     const { error } = lookup(req, actor);
     if (error) return error;
-    r.ended = true; r.activeTurn = null; r.off?.(); sessions.delete(r.id);
+    await end(r);
     return { ok: true, status: 'closed' };
+  }
+  // A document that is gone or replaced can never act again: its sessions
+  // and provider threads are ended and their slots freed.
+  async function reap(keep) {
+    await Promise.all([...sessions.values()].filter((r) => !keep(r.actor)).map(end));
   }
   function stopAll() {
     for (const r of sessions.values()) { r.ended = true; r.off?.(); }
@@ -176,13 +216,21 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
   const targetOf = (id) => sessions.get(id)?.target ?? null;
   async function replaceTarget(id) {
     const r = sessions.get(id);
-    if (!r) return false;
-    const { target } = await r.adapter.open({ cwd: workspace(id) });
-    r.target = target; r.generation++; r.activeTurn = null;
+    if (!r || r.ended) return false;
+    const old = { target: r.target, activeTurn: r.activeTurn };
+    r.generation++; r.activeTurn = null; r.turns.clear(); r.deliveries.clear(); r.target = null;
+    if (old.activeTurn) { try { await r.adapter.interrupt({ target: old.target, turnId: old.activeTurn }); } catch { /* provider gone */ } }
+    try { await r.adapter.release?.({ target: old.target }); } catch { /* provider gone */ }
+    let target = null;
+    try { ({ target } = await r.adapter.open({ cwd: workspace(id) })); } catch { /* below */ }
+    if (r.ended) return false;
+    if (typeof target !== 'string' || !target) { await end(r); return false; }
+    r.target = target;
+    emit(r);
     return true;
   }
 
-  return { capabilities, launch, send, interrupt, state, list, close, stopAll, targetOf, replaceTarget };
+  return { capabilities, launch, send, interrupt, state, list, close, reap, stopAll, targetOf, replaceTarget };
 }
 
-module.exports = { createInteractionHub, ERRORS };
+module.exports = { createInteractionHub, ERRORS, NOTICES };

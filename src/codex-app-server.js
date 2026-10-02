@@ -9,17 +9,26 @@ const childProcess = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 
-// Owned threads get no plugins, MCP servers, hooks, browser/computer use,
-// web search, memories, sub-agents, project docs or daemon auto-start.
-const DISABLED_FEATURES = ['apps', 'plugins', 'remote_plugin', 'hooks', 'computer_use', 'browser_use', 'browser_use_external',
+// Owned threads are text-only: no shell/exec, image viewing, skills,
+// plugins, MCP servers, hooks, browser/computer use, web search, memories,
+// sub-agents, project docs or daemon auto-start. Without shell tools the
+// read-only sandbox is not the only thing keeping files off the wire.
+const DISABLED_FEATURES = ['shell_tool', 'unified_exec', 'unified_exec_tty', 'shell_snapshot', 'view_image', 'skill_search',
+  'apps', 'plugins', 'remote_plugin', 'hooks', 'computer_use', 'browser_use', 'browser_use_external',
   'browser_use_full_cdp_access', 'in_app_browser', 'in_app_local_automation', 'chronicle', 'memories', 'multi_agent',
-  'image_generation', 'realtime_conversation', 'tool_suggest', 'skill_mcp_dependency_install', 'code_mode_host', 'daemon_auto_start'];
+  'image_generation', 'realtime_conversation', 'tool_suggest', 'skill_mcp_dependency_install', 'code_mode_host',
+  'workspace_dependencies', 'worktrees', 'goals', 'sleep_tool', 'daemon_auto_start'];
+// Explicit overrides win over the user's ~/.codex/config.toml: the built-in
+// OpenAI provider, no MCP servers/plugins/project trust entries, no notify,
+// no inherited environment for any command.
+const CONFIG_OVERRIDES = ['model_provider="openai"', 'mcp_servers={}', 'plugins={}', 'projects={}', 'hooks={}', 'notify=[]',
+  'web_search="disabled"', 'project_doc_max_bytes=0', 'include_apply_patch_tool=false', 'shell_environment_policy.inherit="none"'];
 const APP_SERVER_ARGS = Object.freeze(['app-server', '--listen', 'stdio://',
-  '-c', 'mcp_servers={}', '-c', 'notify=[]', '-c', 'web_search="disabled"', '-c', 'project_doc_max_bytes=0',
-  ...DISABLED_FEATURES.flatMap((f) => ['--disable', f])]);
+  ...CONFIG_OVERRIDES.flatMap((c) => ['-c', c]), ...DISABLED_FEATURES.flatMap((f) => ['--disable', f])]);
 const ENV_KEYS = ['HOME', 'PATH', 'LANG', 'TMPDIR', 'TZ', 'CODEX_HOME'];
 const MAX_LINE = 4 * 1024 * 1024;
 const REQUEST_MS = 30_000;
+const KILL_MS = 2000;
 
 function findCodexBin({ env = process.env, exists = (p) => { try { fs.accessSync(p, fs.constants.X_OK); return true; } catch { return false; } } } = {}) {
   const candidates = [
@@ -34,7 +43,7 @@ const inputText = (content) => (Array.isArray(content) ? content : []).filter((c
 function createCodexAppServer({ bin, env = process.env, spawn = childProcess.spawn, clientVersion = '0' } = {}) {
   const events = new EventEmitter();
   const pending = new Map();
-  let child = null, ready = null, nextId = 1, exited = false;
+  let child = null, ready = null, nextId = 1, exited = false, skipping = false;
 
   function fail(error) {
     for (const p of pending.values()) { clearTimeout(p.timer); p.reject(error); }
@@ -102,9 +111,15 @@ function createCodexAppServer({ bin, env = process.env, spawn = childProcess.spa
     child.stdout.on('data', (chunk) => {
       if (child !== self) return;
       buffer += chunk;
-      if (buffer.length > MAX_LINE) { buffer = ''; stop(); return; }
       let nl;
-      while ((nl = buffer.indexOf('\n')) >= 0) { const line = buffer.slice(0, nl); buffer = buffer.slice(nl + 1); if (line.trim()) onLine(line); }
+      while ((nl = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, nl); buffer = buffer.slice(nl + 1);
+        if (skipping) { skipping = false; continue; }
+        if (line.trim()) onLine(line);
+      }
+      // An oversized update is dropped (not the process): every session on
+      // this server is told an update was lost.
+      if (buffer.length > MAX_LINE) { buffer = ''; skipping = true; events.emit('event', { kind: 'oversize' }); }
     });
     // stderr can carry account or network detail; it is never kept.
     child.stderr.on('data', () => {});
@@ -112,8 +127,14 @@ function createCodexAppServer({ bin, env = process.env, spawn = childProcess.spa
     const ended = () => { if (child !== self || exited) return; exited = true; fail(new Error('Codex app-server exited')); events.emit('event', { kind: 'exit' }); };
     child.on('error', ended);
     child.on('exit', ended);
-    ready = request('initialize', { clientInfo: { name: 'plexiform', title: 'Plexiform', version: String(clientVersion) } })
-      .then(() => { write({ method: 'initialized' }); });
+    const attempt = request('initialize', { clientInfo: { name: 'plexiform', title: 'Plexiform', version: String(clientVersion) } })
+      .then(() => { write({ method: 'initialized' }); })
+      .catch((error) => {
+        if (ready === attempt) ready = null;
+        if (child === self) { child = null; exited = true; kill(self); }
+        throw error;
+      });
+    ready = attempt;
     return ready;
   }
 
@@ -138,15 +159,22 @@ function createCodexAppServer({ bin, env = process.env, spawn = childProcess.spa
     return { turnId: result.turn.id, mode: 'new-turn' };
   }
   async function interrupt({ target, turnId }) { await start(); await request('turn/interrupt', { threadId: target, turnId }); return true; }
-  function stop() { if (child && !exited) { try { child.kill('SIGTERM'); } catch { /* gone */ } } }
+  // Unload a closed session's thread from this server.
+  async function release({ target }) { if (!child || exited) return false; await request('thread/unsubscribe', { threadId: target }); return true; }
+  function kill(proc) {
+    try { proc.kill('SIGTERM'); } catch { return; }
+    const timer = setTimeout(() => { if (proc.exitCode === null && proc.signalCode === null) { try { proc.kill('SIGKILL'); } catch { /* gone */ } } }, KILL_MS);
+    timer.unref?.();
+  }
+  function stop() { if (child && !exited) kill(child); }
 
   return {
     provider: 'codex', label: 'Codex',
     capabilities: Object.freeze({ newTurn: true, steer: true, interrupt: true, ack: 'turn-id', echo: 'client-message-id', stream: true, existingSessions: false }),
-    open, send, interrupt, stop,
+    open, send, interrupt, release, stop,
     on: (fn) => { events.on('event', fn); return () => events.off('event', fn); },
     alive: () => !!child && !exited,
   };
 }
 
-module.exports = { createCodexAppServer, findCodexBin, APP_SERVER_ARGS };
+module.exports = { createCodexAppServer, findCodexBin, APP_SERVER_ARGS, DISABLED_FEATURES, CONFIG_OVERRIDES };

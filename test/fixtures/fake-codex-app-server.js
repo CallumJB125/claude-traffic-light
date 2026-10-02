@@ -54,6 +54,8 @@ process.stdin.on('data', (chunk) => {
       out({ id: m.id, result: {} });
       note('turn/completed', { threadId: p.threadId, turn: { id: p.turnId, status: 'interrupted', items: [] } });
       t.active = null;
+    } else if (m.method === 'thread/unsubscribe') {
+      threads.delete(p.threadId); out({ id: m.id, result: { status: 'unsubscribed' } });
     } else out({ id: m.id, error: { code: -32601, message: 'unknown method' } });
   }
 });
