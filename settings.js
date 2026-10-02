@@ -455,7 +455,7 @@
               ? `Context reduced by ${fmt(t.reducedTokens)} tokens a turn across ${plural(t.providerMeasured, 'compaction')} (the provider's own counts, the turn before vs the turn after)`
               : `Context grew by ${fmt(t.reducedTokens)} tokens: the summaries were larger than what they replaced`);
             if (t.costReported) parts.push(`The compactions themselves cost ${fmt(t.costTokens)} tokens (reported by the provider)`);
-            if (t.costUnknown) parts.push(`${plural(t.costUnknown, 'compaction')} did not report ${t.costUnknown === 1 ? 'its' : 'their'} own cost${t.unknownCostFloorTokens ? `; each read its whole context, so at least ${fmt(t.unknownCostFloorTokens)} tokens (estimate)` : ''}`);
+            if (t.costUnknown) parts.push(`${plural(t.costUnknown, 'compaction')} did not report ${t.costUnknown === 1 ? 'its' : 'their'} own cost${t.unknownCostFloorTokens ? `; ${t.costUnknown === 1 ? 'it' : 'each'} read its whole context, so at least ${fmt(t.unknownCostFloorTokens)} tokens (estimate)` : ''}`);
             const pb = payback(t.payback);
             if (pb) parts.push(pb[0].toUpperCase() + pb.slice(1));
           }
