@@ -1119,8 +1119,10 @@ function createWindow() {
   const syncVisibility = (visible) => {
     if (!current()) return;
     if (visible === undefined) visible = w.isVisible();
-    setMotionPaused('minimized', w.isMinimized());
-    setMotionPaused('hidden', !visible && !w.isMinimized());
+    const minimized = w.isMinimized();
+    setMotionPaused('minimized', minimized);
+    if (!current()) return;
+    setMotionPaused('hidden', !visible && !minimized);
   };
   w.on('show', () => syncVisibility(true));
   w.on('hide', () => syncVisibility(false));
@@ -1131,6 +1133,7 @@ function createWindow() {
   w.webContents.on('did-finish-load', () => {
     if (!current()) return;
     syncVisibility();
+    if (!current()) return;
     w.webContents.send('motion-paused', widgetMotion.paused);
   });
   w.on('closed', () => {
@@ -2324,8 +2327,10 @@ function broadcastStatus() {
   // here, since this loop is the one thing guaranteed to keep running.
   if (win && !win.isDestroyed() && win.webContents.isCrashed()) {
     console.log('[watchdog] widget renderer is dead — recreating');
-    try { win.destroy(); } catch { /* already gone */ }
-    win = null;
+    const crashed = win;
+    try { crashed.destroy(); } catch { /* retain a live owner if disposal failed */ }
+    if (!crashed.isDestroyed()) return;
+    if (win === crashed) win = null;
     createWindow();
   }
   lightsWin?.webContents.send('status-changed');
