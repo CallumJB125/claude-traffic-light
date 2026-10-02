@@ -223,7 +223,20 @@ async function runLifecycle({ installer, portable, root, actualAppData, env = pr
   const leftovers = require('../adapters').list().filter(adapter => fs.existsSync(adapter.configPath(fixture.home)) && Uninstall.holdsOurs(adapter, adapter.configPath(fixture.home)));
   if (leftovers.length) throw new Error(`Uninstaller left registered hooks: ${leftovers.map(a => a.id).join(', ')}`);
   mark('uninstalled-hooks-removed-data-retained');
-  await smoke({ ...fixture, exe: portable, report: path.join(root, 'portable.json'), extraEnv: childEnv, observeBeforeTimeout: async processReceipt => {
+  await smoke({ ...fixture, exe: portable, report: path.join(root, 'portable.json'), extraEnv: childEnv, observeInnerHook: async processReceipt => {
+    try {
+      if (!processReceipt.current()) return;
+      const roots = Object.keys(childEnv).filter(key => key.toLowerCase() === 'systemroot');
+      if (roots.length !== 1 || !/^[a-z]:\\windows$/i.test(childEnv[roots[0]])) return;
+      const exe = path.win32.join(childEnv[roots[0]], 'System32', 'cmd.exe');
+      const childReceipt = { pid: processReceipt.pid, parentPid: processReceipt.parentPid, started: processReceipt.started, exe };
+      const observation = await observe(processReceipt.launcher, { env: childEnv, childReceipt });
+      if (!processReceipt.current()) return;
+      const report = { phase: 'portable-hook-before-timeout', processReceipt: { pid: processReceipt.pid, parentPid: processReceipt.parentPid, started: processReceipt.started, elapsedMs: processReceipt.elapsedMs, image: 'cmd.exe' }, observation };
+      const text = JSON.stringify(report, null, 2);
+      fs.writeFileSync(path.join(root, 'portable-hook-before-timeout.json'), Buffer.byteLength(text) <= 32768 ? text : JSON.stringify({ phase: 'portable-hook-before-timeout', observation: { ok: false, reason: 'observer report exceeded bound' } }));
+    } catch { /* Original portable result and timers retain authority. */ }
+  }, observeBeforeTimeout: async processReceipt => {
     // The observer binds this exact launcher PID/start/image before returning
     // descendant/class/visibility metadata. Never write its raw query output.
     try {

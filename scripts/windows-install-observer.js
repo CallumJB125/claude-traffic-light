@@ -61,7 +61,7 @@ $rows = @($selected | ForEach-Object { [pscustomobject]@{ pid=[long]$_.ProcessId
 const keys = (value, expected) => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).sort().join(',') === expected;
 const pid = value => Number.isInteger(value) && value > 0 && value <= 0xffffffff;
 const imageIdentity = (image, canonicalize) => windowsPath(path.win32.join(canonicalize(path.win32.dirname(image)), path.win32.basename(image)));
-function scope(payload, { pid: rootPid, started, exe }, canonicalize = fs.realpathSync.native) {
+function scope(payload, { pid: rootPid, started, exe }, canonicalize = fs.realpathSync.native, childReceipt) {
   if (!pid(rootPid) || !Number.isSafeInteger(started) || started <= 0) throw new Error('invalid owned process receipt');
   windowsPath(exe);
   if (!keys(payload, 'processes,truncated,windows') || typeof payload.truncated !== 'boolean' || !Array.isArray(payload.processes) || payload.processes.length > MAX_PROCESSES || !Array.isArray(payload.windows) || payload.windows.length > MAX_WINDOWS) throw new Error('invalid observation');
@@ -80,6 +80,11 @@ function scope(payload, { pid: rootPid, started, exe }, canonicalize = fs.realpa
     if (!owned.has(row.pid) && owned.get(row.parentPid) === depth - 1 && Date.parse(row.created) >= Date.parse(parent.created)) owned.set(row.pid, depth);
   }
   if (owned.size !== rows.size) throw new Error('unbound process metadata');
+  if (childReceipt) {
+    if (!keys(childReceipt, 'exe,parentPid,pid,started') || !pid(childReceipt.pid) || !pid(childReceipt.parentPid) || !Number.isSafeInteger(childReceipt.started) || childReceipt.started <= 0) throw new Error('invalid owned child receipt');
+    const child = rows.get(childReceipt.pid);
+    if (!child || !owned.has(child.pid) || child.pid === rootPid || child.parentPid !== childReceipt.parentPid || Date.parse(child.created) < childReceipt.started - 1000 || Date.parse(child.created) > childReceipt.started + 1000 || imageIdentity(child.image, canonicalize) !== imageIdentity(childReceipt.exe, canonicalize)) throw new Error('owned child identity changed');
+  }
   const processes = [...owned].map(([id, depth]) => {
     const row = rows.get(id), name = path.win32.basename(row.image).toLowerCase();
     const image = id === rootPid ? 'installer' : /^(?:old-uninstaller|uninstaller|uninstall plexiform|plexiform|cmd|powershell|conhost)\.exe$/.test(name) ? name : 'other-executable';
@@ -98,17 +103,18 @@ function query(exe, args, options) {
     timer = setTimeout(() => reject(new Error('observer deadline')), TIMEOUT_MS);
   });
 }
-async function collect(receipt, { env = process.env, platform = process.platform, run = query, canonicalize } = {}) {
+async function collect(receipt, { env = process.env, platform = process.platform, run = query, canonicalize, childReceipt } = {}) {
   if (platform !== 'win32') return { ok: false, reason: 'Windows observer unavailable' };
   try {
     if (!pid(receipt?.pid) || !Number.isSafeInteger(receipt.started)) throw new Error('invalid receipt');
     windowsPath(receipt.exe);
     const roots = Object.keys(env).filter(key => key.toLowerCase() === 'systemroot');
     if (roots.length !== 1 || !/^[a-z]:\\windows$/.test(windowsPath(env[roots[0]]))) throw new Error('invalid Windows directory');
+    if (childReceipt && (!keys(childReceipt, 'exe,parentPid,pid,started') || !pid(childReceipt.pid) || !pid(childReceipt.parentPid) || !Number.isSafeInteger(childReceipt.started) || childReceipt.started <= 0 || windowsPath(childReceipt.exe) !== windowsPath(path.win32.join(env[roots[0]], 'System32', 'cmd.exe')))) throw new Error('invalid owned child receipt');
     const exe = path.win32.join(env[roots[0]], 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
     const output = await run(exe, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', QUERY], { env: { ...env, PLEXIFORM_OBSERVER_PID: String(receipt.pid) }, windowsHide: true, shell: false, encoding: 'utf8', timeout: TIMEOUT_MS, maxBuffer: MAX_OUTPUT });
     if (typeof output !== 'string' || Buffer.byteLength(output) > MAX_OUTPUT) throw new Error('observer output exceeded bound');
-    return scope(JSON.parse(output.replace(/^\uFEFF/, '')), receipt, canonicalize);
+    return scope(JSON.parse(output.replace(/^\uFEFF/, '')), receipt, canonicalize, childReceipt);
   } catch { return { ok: false, reason: 'owned installer observation failed' }; }
 }
 module.exports = { collect, scope, TIMEOUT_MS, MAX_OUTPUT };

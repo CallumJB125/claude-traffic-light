@@ -43,8 +43,9 @@ function firstHookCommand(settingsPath, event) {
   return null;
 }
 
-function runHook(command, payload, { env, timeoutMs = 15000 }) {
+function runHook(command, payload, { env, timeoutMs = 15000, onSpawn }) {
   return new Promise((resolve) => {
+    const started = Date.now();
     const child = spawn(command, { shell: true, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }); // privacy-flow: release-smoke
     let stderr = '';
     child.stderr.on('data', (d) => { stderr += d; });
@@ -52,6 +53,8 @@ function runHook(command, payload, { env, timeoutMs = 15000 }) {
     child.on('error', (err) => { clearTimeout(timer); resolve({ code: null, stderr: err.message }); });
     child.on('exit', (code) => { clearTimeout(timer); resolve({ code, stderr: stderr.slice(-2000) }); });
     child.stdin.end(JSON.stringify(payload));
+    // Trusted disposable smoke observer only; never change input or wait for it.
+    try { if (typeof onSpawn === 'function') onSpawn({ pid: child.pid, parentPid: process.pid, started }); } catch {}
   });
 }
 
@@ -82,9 +85,16 @@ async function run(deps) {
     const command = firstHookCommand(deps.settingsPath, 'SessionStart');
     step('hook-command', !!command, command || 'no SessionStart hook');
     if (command) {
+      const onSpawn = process.platform === 'win32' && process.env.PLEXIFORM_PORTABLE_HOOK_OBSERVE === '1' && path.basename(reportPath) === 'portable.json' ? receipt => {
+        // Fixed metadata only. Actual shell identity is independently bound by
+        // the parent observer to the launcher ancestry and trusted cmd image.
+        if (!Number.isInteger(receipt.pid) || receipt.pid <= 0 || receipt.pid > 0xffffffff || !Number.isInteger(receipt.parentPid) || receipt.parentPid <= 0 || receipt.parentPid > 0xffffffff || !Number.isSafeInteger(receipt.started) || receipt.started <= 0) return;
+        const text = JSON.stringify({ schema: 1, phase: 'portable-hook-start', ...receipt, image: 'cmd.exe' });
+        if (Buffer.byteLength(text) <= 512) fs.writeFileSync(path.join(path.dirname(reportPath), 'portable-hook-start.json'), text, { flag: 'wx', mode: 0o600 });
+      } : undefined;
       const sessionId = `smoke-${process.pid}`;
       const cwd = os.tmpdir();
-      const res = await runHook(command, { session_id: sessionId, hook_event_name: 'SessionStart', cwd, transcript_path: path.join(cwd, `${sessionId}.jsonl`), source: 'startup' }, { env: process.env });
+      const res = await runHook(command, { session_id: sessionId, hook_event_name: 'SessionStart', cwd, transcript_path: path.join(cwd, `${sessionId}.jsonl`), source: 'startup' }, { env: process.env, onSpawn });
       step('hook-ran', res.code === 0, res.code === 0 ? undefined : `exit ${res.code}: ${res.stderr}`);
       const seen = await waitFor(() => fs.readdirSync(deps.sessionsDir).some((f) => f.includes(sessionId)), 10000);
       step('session-reported', seen, seen ? undefined : fs.readdirSync(deps.sessionsDir));
