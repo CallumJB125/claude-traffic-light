@@ -19,6 +19,7 @@ import { validatePayload } from '../../../shared/setups.js';
 //   public   – no auth (health, sign-in, invite preview): proven in their own tests;
 //              `reason` says why no sign-in is needed
 //   (a cross entry may name another expected `status` when 404 isn't the generic answer)
+//   (bare: true – body is sent as given, without the harness's request_id, for strictBody routes that reject it)
 //   create   – makes a new team for the caller (teams.test.js)
 // For cross routes `path(fx)` fills B's ids; `alt` adds calls that mix A's
 // team with B's sub-resource ids (also 404); `headers(fx)` names team B where
@@ -63,6 +64,18 @@ const MATRIX = {
   'DELETE /api/teams/:team_id/interaction-shares/:share_id': { kind: 'cross', path: f => `/api/teams/${f.B.team}/interaction-shares/${f.B.share}` },
   'GET /api/interaction/v1/shared': { kind: 'self' },
   'POST /api/interaction/v1/shared/:share_id/call': { kind: 'cross', path: f => `/api/interaction/v1/shared/${f.B.share}/call`, body: f => ({ op: 'state', args: { session: f.B.shareSession } }) },
+  // Messaging (MESSAGING.md): a message is visible only to its sender and recipient; B's message ids, targets and team are unknown to A.
+  'GET /api/messaging/v1/targets': { kind: 'self' },
+  'POST /api/messaging/v1/messages': { kind: 'cross', path: () => '/api/messaging/v1/messages', body: f => ({ to: { user_id: f.users.ub.id, org_id: f.B.team }, body: MARK, card_id: f.B.card }) },
+  'GET /api/messaging/v1/messages': { kind: 'self' },
+  'GET /api/messaging/v1/messages/:id': { kind: 'cross', path: () => `/api/messaging/v1/messages/${randomUUID()}` },
+  'POST /api/messaging/v1/messages/:id/receipt': { kind: 'cross', path: () => `/api/messaging/v1/messages/${randomUUID()}/receipt`, bare: true, body: { state: 'delivered' } },
+  'POST /api/messaging/v1/messages/:id/handoff': { kind: 'cross', path: () => `/api/messaging/v1/messages/${randomUUID()}/handoff`, bare: true, body: { decision: 'accept' } },
+  // Host routes need a host-role device: the sweep's callers are not hosts, so 403 (messaging tests cover host success and cross-user 404).
+  'PUT /api/messaging/v1/host/targets': { kind: 'cross', status: 403, path: () => '/api/messaging/v1/host/targets', body: { targets: [] } },
+  'POST /api/messaging/v1/host/pull': { kind: 'cross', status: 403, path: () => '/api/messaging/v1/host/pull', body: {} },
+  'POST /api/messaging/v1/host/messages/:id/report': { kind: 'cross', status: 403, path: () => `/api/messaging/v1/host/messages/${randomUUID()}/report`, body: { state: 'delivered' } },
+  'POST /api/messaging/v1/host/send': { kind: 'cross', status: 403, path: f => '/api/messaging/v1/host/send', body: f => ({ from: { session: randomUUID(), generation: 1 }, to: { user_id: f.users.ub.id, org_id: f.B.team }, body: MARK }) },
   'GET /api/account': { kind: 'self' },
   'GET /api/work-capture/routes': { kind: 'self' },
   'GET /api/my-day': { kind: 'self' },
@@ -299,9 +312,9 @@ async function sweep(fx, caller) {
   const before = fx.snapshotB();
   const leaks = [];
   let calls = 0;
-  const check = async (label, method, path, body, headers = {}, status = 404) => {
+  const check = async (label, method, path, body, headers = {}, status = 404, bare = false) => {
     calls++;
-    const r = await fx.as(caller, method, path, method === 'GET' ? undefined : { request_id: randomUUID(), ...body }, headers);
+    const r = await fx.as(caller, method, path, method === 'GET' ? undefined : bare ? body : { request_id: randomUUID(), ...body }, headers);
     if (r.status !== status) leaks.push(`${label} ${path} → ${r.status} ${r.text.slice(0, 120)}`);
     else if (r.text.includes(MARK) || r.text.includes(fx.B.team) || r.text.includes(fx.B.board) || /beta\.test/.test(r.text)) leaks.push(`${label} ${path}: ${status} body mentions B`);
   };
@@ -309,7 +322,7 @@ async function sweep(fx, caller) {
     const e = MATRIX[key(r)];
     const body = typeof e.body === 'function' ? e.body(fx) : e.body ?? {};
     if (e.kind === 'cross') {
-      await check(key(r), r.method, e.path(fx), body, e.headers?.(fx) ?? {}, e.status);
+      await check(key(r), r.method, e.path(fx), body, e.headers?.(fx) ?? {}, e.status, e.bare);
       for (const p of e.alt?.(fx) ?? []) await check(`${key(r)} (alt)`, r.method, p, body);
     } else if (e.kind === 'team') {
       await check(key(r), r.method, r.pattern, body, { 'x-board-team': fx.B.team });
