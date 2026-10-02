@@ -137,10 +137,10 @@ function windowsPathReason(paths, cwd, home) {
 // `p` after symlinks, when the caller supplied a realpath; null if unknown.
 function resolvedPath(p, cwd, realpath) {
   if (typeof realpath !== 'function' || typeof p !== 'string' || !p) return null;
-  const windows = driveAbsolute(p) || driveAbsolute(cwd);
+  const windows = driveAbsolute(cwd) || (typeof cwd !== 'string' && driveAbsolute(p));
   const value = windows ? windowsForm(p) : p;
   const base = typeof cwd === 'string' && (cwd.startsWith('/') || driveAbsolute(cwd)) ? (windows ? windowsForm(cwd) : cwd).replace(/\/+$/, '') : null;
-  const abs = value.startsWith('/') || driveAbsolute(value) ? value : base ? `${base}/${value}` : null;
+  const abs = value.startsWith('/') || (windows && driveAbsolute(value)) ? value : base ? `${base}/${value}` : null;
   if (!abs) return null;
   try { const result = realpath(abs); return windows && typeof result === 'string' ? windowsForm(result) : result; } catch (error) {
     // A Windows access/security failure is not evidence of a missing leaf.

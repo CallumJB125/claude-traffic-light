@@ -98,3 +98,16 @@ test('implicit Windows Grep refuses relative UNC and opaque volume resolver resu
     assert.ok(allowListReason({ toolName: 'Grep', toolInput: { pattern: 'synthetic' }, cwd }, { home, realpath: () => resolved }));
   }
 });
+
+test('POSIX shell drive-looking component stays relative and cannot bypass its actual credential link', () => {
+  const seen = [];
+  const reason = allowListReason({ toolName: 'Bash', toolInput: { command: 'cat C:/link' }, cwd: '/project' }, {
+    home: '/home/fixture', realpath: p => {
+      seen.push(p);
+      if (p === '/project/C:/link') return '/home/fixture/.ssh/key';
+      if (p === '/home/fixture') return p;
+      throw Object.assign(Error('absent synthetic path'), { code: 'ENOENT' });
+    },
+  });
+  assert.match(reason, /credentials/); assert.deepEqual(seen, ['/home/fixture', '/project/C:/link']);
+});
