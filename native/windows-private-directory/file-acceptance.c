@@ -478,8 +478,8 @@ int wmain(void) {
     for (i = 0; i < 3; i++) {
         reset_mode(i == 0 ? FX_ZERO : i == 1 ? FX_IO_ERROR : FX_NAMED_ERROR, NULL, NULL);
         result = read_case(&directory, L"fault", PF_FILE_GRANT, NULL, output, (DWORD)sizeof(output), &length, &stamp);
-        check(result == (i == 2 ? PF_FILE_OPEN_FAILED : PF_FILE_IO_FAILED) && readCalls == (i == 2 ? 2 : 1) &&
-            consumed == (i == 2 ? 32 : 0) && length == 0 && zero_output(output, (DWORD)sizeof(output)),
+        check(result == (i == 2 ? PF_FILE_OPEN_FAILED : PF_FILE_IO_FAILED) && readCalls == (i == 2 ? 2u : 1u) &&
+            consumed == (i == 2 ? 32u : 0u) && length == 0 && zero_output(output, (DWORD)sizeof(output)),
             "labelled injected zero-progress, I/O or final named-binding failure withholds all output");
     }
     reset_mode(FX_NONE, NULL, NULL);
