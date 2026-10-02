@@ -899,3 +899,51 @@ test('completed command result rechecks captured principal before disclosing car
     assert.deepEqual(env.slack.replies().map(r => r.text), [INACTIVE], 'no stale title/card key exposed after completion');
   } finally { release?.(); if (delivery) await delivery; env.h.app.api.createCard = create; await env.h.close(); }
 });
+
+
+test('command reply reflects a current human edit after card commit and before API return', async () => {
+  const env = await hub();
+  const original = env.h.app.api.createCard;
+  let release, delivery;
+  try {
+    let enter;
+    const entered = new Promise(resolve => { enter = resolve; });
+    const held = new Promise(resolve => { release = resolve; });
+    env.h.app.api.createCard = async function (...args) {
+      const out = await original.apply(this, args);
+      enter(); await held; return out;
+    };
+    delivery = env.reg.webhook(env.conn.id, signed(env.secrets.signing_secret, commandBody({ text: 'todo Old command title' })));
+    await delivery; await entered;
+    const card = env.cards()[0];
+    const edit = await env.h.api(env.alice, 'PATCH', `/api/cards/${card.id}`, {
+      request_id: randomUUID(), version: env.h.hub.card(card.id).version, title: 'Human <corrected> & current title',
+    });
+    assert.equal(edit.status, 200, edit.text);
+    release(); await Promise.all([...env.h.hub.inflight]);
+    assert.equal(env.cards()[0].title, 'Human <corrected> & current title');
+    assert.equal(env.slack.replies().at(-1).text, `Already on the board as ${card.key}: Human &lt;corrected&gt; &amp; current title`);
+    assert.equal(env.cards().length, 1);
+  } finally {
+    release?.(); if (delivery) await delivery; await Promise.all([...env.h.hub.inflight]);
+    env.h.app.api.createCard = original; await env.h.close();
+  }
+});
+
+test('fresh command replay returns current edited title without replacing human card content', async () => {
+  const env = await hub();
+  try {
+    const { send } = shim(env);
+    await send(commandBody({ text: 'todo Original command title', trigger_id: '111.222.replay' }));
+    const card = env.cards()[0];
+    const edit = await env.h.api(env.alice, 'PATCH', `/api/cards/${card.id}`, {
+      request_id: randomUUID(), version: env.h.hub.card(card.id).version, title: 'Human maintained title', body: 'Human maintained body',
+    });
+    assert.equal(edit.status, 200, edit.text);
+    await send(commandBody({ text: 'todo A newly requested title', trigger_id: '111.222.replay' }));
+    assert.equal(env.cards().length, 1);
+    assert.equal(env.cards()[0].title, 'Human maintained title');
+    assert.equal(env.cards()[0].body, 'Human maintained body');
+    assert.equal(env.slack.replies().at(-1).text, `Already on the board as ${card.key}: Human maintained title`);
+  } finally { await env.h.close(); }
+});

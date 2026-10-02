@@ -357,7 +357,7 @@ async function onTodo(ctx, install, body, rest) {
   if (r.lost) return lost(ctx, r, body.user_id, (t) => reply(ctx, url, t));
   if (r.refused) return reply(ctx, url, REFUSED);
   if (r.conflict) return reply(ctx, url, 'That card already exists on another board.');
-  return reply(ctx, url, created(install, r.card, title));
+  return reply(ctx, url, outcome(install, r.card, title));
 }
 
 async function onShortcut(ctx, install, body) {
