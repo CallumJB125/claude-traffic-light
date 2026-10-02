@@ -26,6 +26,13 @@ test('signed-resource byte changes, same-byte inode replacement and signature fa
  const f=fixture(t);f.platform.launch(options());const p=f.files.helper,bytes=fs.readFileSync(p);fs.renameSync(p,p+'.original');fs.writeFileSync(p,bytes,{mode:0o700});assert.throws(()=>f.platform.launch(options()));
  const g=fixture(t),p2=createSetupsPlatform({...g.base,verify:()=>{throw Error('signature refused');}});assert.throws(()=>p2.launch(options()));assert.equal(g.calls.length,0);
 });
+test('writable bundle namespaces refuse launch before signature or child access',t=>{
+ for(const role of ['bundle','contents','resources','helper','seal']){const f=fixture(t),p=f[role]||path.dirname(f.files[role]);fs.chmodSync(p,0o777);assert.throws(()=>f.platform.launch(options()));assert.equal(f.calls.length,0);assert.equal(fs.statSync(p).mode&0o777,0o777);}
+ const f=fixture(t);f.platform.launch(options());fs.chmodSync(path.dirname(f.files.helper),0o777);assert.throws(()=>f.platform.launch(options()));assert.equal(f.calls.filter(x=>x[0]==='spawn').length,1);
+});
+test('extended namespace ACLs are refused without editing their permissions',t=>{
+ for(const grant of ['read','write,delete_child,add_file']){const f=fixture(t),p=path.dirname(f.files.helper);cp.execFileSync('/bin/chmod',['+a',`everyone allow ${grant}`,p]);const before=cp.execFileSync('/bin/ls',['-ldne',p],{encoding:'utf8'});assert.throws(()=>f.platform.launch(options()));assert.equal(f.calls.length,0);assert.equal(cp.execFileSync('/bin/ls',['-ldne',p],{encoding:'utf8'}),before);}
+});
 test('unsupported/unpackaged/misbound roots fail before any credential or helper access',t=>{
  const f=fixture(t);for(const opts of [{...f.base,platform:'win32'},{...f.base,app:{...f.base.app,isPackaged:false}},{...f.base,profilePath:'/'},{...f.base,resourcesPath:f.root}])assert.throws(()=>createSetupsPlatform(opts));assert.equal(f.calls.length,0);
 });

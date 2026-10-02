@@ -12,8 +12,22 @@ function createSetupsPlatform({app,resourcesPath,profilePath,uid=process.getuid?
  if(path.basename(resources)!=='Resources'||path.basename(contents)!=='Contents'||path.extname(bundle)!=='.app'||app.getAppPath()!==path.join(resources,'app.asar')||profile==='/'||userData===profile||!userData.startsWith(profile+path.sep))fail();
  const helper=path.join(resources,'setups','buddy-setups'),manifest=path.join(resources,'setups','helper-manifest.json'),parent=path.join(userData,'setups-runtime-v2');
  const anchors=[[path.join(contents,'_CodeSignature','CodeResources'),16*1024*1024],[path.join(resources,'app.asar'),64*1024*1024],[helper,4*1024*1024],[manifest,128*1024]];
+ const namespaces=[bundle,contents,resources,path.dirname(helper),path.dirname(anchors[0][0])];
  let trusted=null;
  function canonical(p){if(fsApi.realpathSync(p)!==p)fail();}
+ function namespace(p){
+  canonical(p);if(/[\r\n]/.test(p))fail();let fd;
+  try{fd=fsApi.openSync(p,fs.constants.O_RDONLY|fs.constants.O_DIRECTORY|fs.constants.O_NOFOLLOW|fs.constants.O_NONBLOCK);const before=fsApi.fstatSync(fd,{bigint:true});
+   if(!before.isDirectory()||(before.uid!==BigInt(uid)&&before.uid!==0n)||(before.mode&0o022n)!==0n)fail();
+   // Darwin mode bits do not describe extended ACL grants. Refuse every ACL
+   // here, including a read-only ACL, instead of guessing which inherited
+   // entry could authorize a pathname replacement. Fixed OS metadata only.
+   const listing=cp.execFileSync('/bin/ls',['-ldne',p],{env:{LC_ALL:'C'},timeout:1000,maxBuffer:16*1024,encoding:'utf8',stdio:['ignore','pipe','pipe']});
+   if(!/^d[rwxstST-]{9}@? [^\r\n]+\n$/.test(listing))fail();
+   const after=fsApi.fstatSync(fd,{bigint:true}),named=fsApi.lstatSync(p,{bigint:true});
+   if(identity(before)!==identity(after)||identity(after)!==identity(named))fail();return identity(after);
+  }finally{if(fd!==undefined)fsApi.closeSync(fd);}
+ }
  function directory(p,create=false){
   if(create){try{fsApi.mkdirSync(p,{mode:0o700});}catch(error){if(error.code!=='EEXIST')fail();}}
   canonical(p);let fd;
@@ -31,9 +45,9 @@ function createSetupsPlatform({app,resourcesPath,profilePath,uid=process.getuid?
   }finally{bytes?.fill(0);if(fd!==undefined)fsApi.closeSync(fd);}
  }
  function integrity(){
-  canonical(bundle);canonical(resources);
-  const before=anchors.map(([p,n])=>anchor(p,n));
-  if(!trusted){verify(bundle);verify(helper);const after=anchors.map(([p,n])=>anchor(p,n));if(JSON.stringify(before)!==JSON.stringify(after))fail();trusted=after;}
+  const snapshot=()=>({namespaces:namespaces.map(namespace),anchors:anchors.map(([p,n])=>anchor(p,n))});
+  const before=snapshot();
+  if(!trusted){verify(bundle);verify(helper);const after=snapshot();if(JSON.stringify(before)!==JSON.stringify(after))fail();trusted=after;}
   if(JSON.stringify(before)!==JSON.stringify(trusted))fail();
  }
  return Object.freeze({
