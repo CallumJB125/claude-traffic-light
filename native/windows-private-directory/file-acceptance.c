@@ -165,6 +165,18 @@ static BOOL change_acl(const WCHAR *path, const WCHAR *extra, BOOL readOnly) {
     return private_sddl(sddl, sizeof(sddl) / sizeof(sddl[0]), extra, readOnly) && set_fixture_acl(path, sddl);
 }
 
+static BOOL restore_owned_control(HANDLE control) {
+    WCHAR sddl[1024]; PSECURITY_DESCRIPTOR security = NULL; PACL acl = NULL;
+    BOOL present = FALSE, defaulted = FALSE, ok = FALSE;
+    if (control == INVALID_HANDLE_VALUE || !private_sddl(sddl, sizeof(sddl) / sizeof(sddl[0]), L"", FALSE) ||
+        !ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, SDDL_REVISION_1, &security, NULL)) return FALSE;
+    if (GetSecurityDescriptorDacl(security, &present, &acl, &defaulted) && present && acl) {
+        ok = SetSecurityInfo(control, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            NULL, NULL, acl, NULL) == ERROR_SUCCESS;
+    }
+    LocalFree(security); return ok;
+}
+
 static PSECURITY_DESCRIPTOR handle_security(HANDLE handle) {
     PSECURITY_DESCRIPTOR security = NULL;
     return GetSecurityInfo(handle, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
@@ -393,7 +405,7 @@ int wmain(void) {
         check(swprintf_s(sddl, sizeof(sddl) / sizeof(sddl[0]),
             L"O:%sD:P(D;;RC;;;OW)(A;;FA;;;%s)(A;;FA;;;SY)(A;;FA;;;BA)", sidText, sidText) > 0 &&
             child_path(path, root, L"denied-control") && make_file(path, NULL, 32), "create fresh file before owner-rights denial");
-        control = CreateFileW(path, READ_CONTROL, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        control = CreateFileW(path, READ_CONTROL | WRITE_DAC, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
             NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
         check(control != INVALID_HANDLE_VALUE && set_fixture_acl(path, sddl), "retain independent control handle and install actual denial");
         before = handle_security(control);
@@ -405,6 +417,9 @@ int wmain(void) {
             "denial preserves actual descriptor and content through independent pre-held control and data-only handles");
         if (before) LocalFree(before);
         if (after) LocalFree(after);
+        /* Only the already-owned fresh fixture is restored, after every
+         * unchanged-denial assertion. A named reopen now lacks READ_CONTROL. */
+        check(restore_owned_control(control), "restore only owned denial fixture through its pre-held control handle");
         if (control != INVALID_HANDLE_VALUE) CloseHandle(control);
         check(remove_file(path), "remove only owned read-control-denied fixture");
     }
@@ -449,10 +464,19 @@ int wmain(void) {
         "construct actual NTFS intermediate-junction fixture");
     {
         PFDirectory unsafeParent;
+        PFDirectoryIdentity originalRoot;
+        if (!check(pf_directory_inspect(&directory, NULL, &originalRoot) == PF_OK,
+            "capture exact root identity before independent junction probe")) goto done;
+        /* The original final root lease has FILE_ADD_SUBDIRECTORY with share
+         * READ only. Release it so this distinct probe reaches the junction. */
+        pf_directory_close(&directory); directoryOpened = FALSE;
         reset_mode(FX_NONE, NULL, NULL);
-        check(pf_directory_open_root(other, NULL, &unsafeParent) == PF_REPARSE && consumed == 0,
+        check(pf_directory_open_root(other, NULL, &unsafeParent) == PF_REPARSE && consumed == 0 && fileOpens == 0,
             "intermediate junction refuses before any file lease or content read");
         pf_directory_close(&unsafeParent);
+        if (!check(pf_directory_open_root(root, &originalRoot, &directory) == PF_OK,
+            "reacquire exact same owned root identity after junction probe")) goto done;
+        directoryOpened = TRUE;
     }
     check(RemoveDirectoryW(path), "remove only owned junction without following its target");
 
