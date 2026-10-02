@@ -23,6 +23,11 @@
     <label>Status<select id="status-filter"><option value="">All statuses</option></select></label>
     <button id="clear-filters" type="button">Clear filters</button>
   </section>
+  <section id="owned-section" class="owned" aria-labelledby="owned-title" hidden>
+    <div class="section-header"><h2 id="owned-title">Sessions started by Plexiform</h2><button id="start-codex" type="button" disabled>Start Codex session</button></div>
+    <p id="owned-status" class="muted" role="status" aria-live="polite">Plexiform can start its own Codex session and send it your messages. Existing sessions it did not start stay observation-only.</p>
+    <div id="owned"></div>
+  </section>
   <section class="work" aria-labelledby="work-title">
     <div class="section-header"><h2 id="work-title">Reported work</h2><p id="result-count" class="muted"></p></div>
     <div id="content" aria-busy="true"></div>

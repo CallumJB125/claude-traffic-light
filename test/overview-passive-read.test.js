@@ -10,7 +10,7 @@ function fixture() {
   const wc = { getURL: () => state.url, mainFrame: { url: expected }, isDestroyed: () => state.destroyed, isLoading: () => state.loading };
   state.url = expected;
   const view = { webContents: wc }, win = { isDestroyed: () => state.destroyed, isVisible: () => state.visible, isFocused: () => state.focused, isMinimized: () => state.minimized, contentView: { children: [view] } };
-  const context = { win, selected: state.selected, content: view, localViews: new Map([['overview', view]]), path, pathToFileURL, DIR: dir, setupLocalGeneration: 1 };
+  const context = { win, selected: state.selected, content: view, localViews: new Map([['overview', view]]), path, pathToFileURL, DIR: dir, setupLocalGeneration: 1, overviewDocument: 1 };
   // Both methods are copied from the actual shipped Buddy factory, not mocks.
   const source = fs.readFileSync(path.join(dir, 'index.js'), 'utf8');
   const methods = source.slice(source.indexOf('    overviewReadContext(){'), source.indexOf('    setupSources,', source.indexOf('    overviewReadContext(){')));
@@ -27,6 +27,9 @@ function fixture() {
 test('actual Buddy passive context preserves visible exact document unfocused; focused context remains unavailable', () => {
   const x = fixture(); assert.equal(x.context.buddy.overviewContext().foreground, true); x.blur();
   const passive = x.context.buddy.overviewReadContext(); assert.equal(passive.foreground, false); assert.equal(passive.window, x.win); assert.equal(passive.contents, x.wc); assert.equal(x.context.buddy.overviewContext(), null);
+  // Focus changes move the generation, never the document that owns sessions.
+  assert.equal(passive.document, 1); assert.notEqual(passive.generation, 1);
+  x.context.overviewDocument++; assert.equal(x.context.buddy.overviewReadContext().document, 2);
 });
 for (const [name, change] of [
   ['hidden', x => x.state.visible = false], ['minimized', x => x.state.minimized = true], ['destroyed', x => x.state.destroyed = true],

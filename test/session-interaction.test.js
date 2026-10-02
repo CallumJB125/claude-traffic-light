@@ -187,11 +187,11 @@ function ipcHarness() {
   const handlers = new Map(), sent = [];
   const contents = { id: 7, isDestroyed: () => false, send: (ch, s) => sent.push({ ch, s }) };
   contents.mainFrame = {};
-  let ctx = { contents, generation: 3, foreground: true };
-  const main = createInteractionMain({ context: () => (ctx?.foreground ? ctx : null), readContext: () => ctx, adapters: { mem: memAdapter() }, workspace: () => null, boardCurrent: CURRENT });
+  let ctx = { contents, generation: 3, document: 1, foreground: true }, board = 'local';
+  const main = createInteractionMain({ context: () => (ctx?.foreground ? ctx : null), readContext: () => ctx, adapters: { mem: memAdapter() }, workspace: () => null, currentBoard: () => board });
   main.register({ handle: (ch, fn) => handlers.set(ch, fn) });
   const call = (ch, e, ...a) => handlers.get(ch)(e, ...a);
-  return { main, call, sent, contents, own: { sender: contents, senderFrame: contents.mainFrame }, setCtx: (v) => { ctx = v; } };
+  return { main, call, sent, contents, own: { sender: contents, senderFrame: contents.mainFrame }, setCtx: (v) => { ctx = v; }, setBoard: (v) => { board = v; } };
 }
 test('IPC: only the exact foreground Overview frame may launch/send; pushes go only to the owner', async () => {
   const h = ipcHarness();
@@ -200,10 +200,10 @@ test('IPC: only the exact foreground Overview frame may launch/send; pushes go o
   const a = (await h.call(CHANNELS.launch, h.own, { provider: 'mem' })).state;
   assert.equal((await h.call(CHANNELS.send, h.own, { session: a.session, generation: a.generation, text: 'hi' })).status, 'acknowledged');
   assert(h.sent.every((m) => m.ch === CHANNELS.event) && h.sent.length > 0);
-  h.setCtx({ contents: h.contents, generation: 3, foreground: false });
+  h.setCtx({ contents: h.contents, generation: 3, document: 1, foreground: false });
   assert.equal((await h.call(CHANNELS.send, h.own, { session: a.session, generation: a.generation, text: 'hi' })).status, 'forbidden');
   assert.equal((await h.call(CHANNELS.list, h.own)).length, 1, 'passive read still works while unfocused');
-  h.setCtx({ contents: h.contents, generation: 4, foreground: true });
+  h.setCtx({ contents: h.contents, generation: 4, document: 2, foreground: true });
   assert.equal((await h.call(CHANNELS.send, h.own, { session: a.session, generation: a.generation, text: 'hi' })).status, 'stale', 'reloaded document: the old actor\'s session is reaped');
   assert.equal(h.main.documents(), 1);
   assert.equal((await h.call(CHANNELS.list, h.own)).length, 0);
@@ -259,7 +259,7 @@ test('Review: a new Overview document reaps the old one\'s sessions and frees th
   const stopped = [];
   for (let i = 0; i < 8; i++) assert.equal((await h.call(CHANNELS.launch, h.own, { provider: 'mem' })).status, 'launched');
   assert.equal((await h.call(CHANNELS.launch, h.own, { provider: 'mem' })).status, 'unavailable', 'slots full');
-  h.setCtx({ contents: h.contents, generation: 4, foreground: true });
+  h.setCtx({ contents: h.contents, generation: 4, document: 2, foreground: true });
   assert.equal((await h.call(CHANNELS.launch, h.own, { provider: 'mem' })).status, 'launched', 'old document reaped, slot free');
   assert.equal(h.main.documents(), 1);
   assert.equal((await h.call(CHANNELS.list, h.own)).length, 1);
