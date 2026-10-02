@@ -47,6 +47,11 @@ export const RESUME_HEADER = 'x-plexiform-resume';
 // Ops whose effect may have happened even when the device's answer is lost.
 const MUTATING = new Set(['launch', 'send', 'interrupt', 'close']);
 const ROLES = ['client', 'host'];
+// Platforms the desktop app reports at sign-in (`${process.platform}-${arch}`,
+// or the bare platform). Only these may host: the phone ('phone-web') and any
+// other client are callers only. Self-declared at sign-in, so this narrows a
+// phone token's reach; it is not proof of a desktop (PHONE.md, host proof-of-possession).
+const HOST_PLATFORM = /^(darwin|win32|linux)(-[a-z0-9_]{1,20})?$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const object = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const closed = (v, keys) => object(v) && Object.keys(v).every((k) => keys.includes(k));
@@ -153,6 +158,10 @@ export class InteractionRelay {
   setRole(ident, body) {
     if (ident?.cred?.kind !== 'device') throw new HubError('FORBIDDEN', 'remote sessions need the desktop app');
     if (!closed(body, ['role']) || !ROLES.includes(body.role)) throw invalid();
+    if (body.role === 'host') {
+      const platform = this.hub.db.get('SELECT platform FROM user_devices WHERE id = ?', ident.cred.id)?.platform;
+      if (typeof platform !== 'string' || !HOST_PLATFORM.test(platform)) throw new HubError('FORBIDDEN', 'only the desktop app can share its sessions');
+    }
     this.hub.db.run('UPDATE user_devices SET interaction_role = ? WHERE id = ? AND revoked_at IS NULL', body.role, ident.cred.id);
     const live = this.hosts.get(ident.cred.id);
     if (body.role !== 'host' && live) this.drop(live, WS_CLOSE.NORMAL, 'hosting turned off');

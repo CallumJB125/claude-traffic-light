@@ -274,6 +274,14 @@ test('HOSTILE: hosting needs the device\'s own opt-in; a host cannot call and a 
     assert.equal((await r.h.call('PUT', '/api/interaction/v1/role', { token: r.winA.token, body: { role: 'host', device: r.macA.device } })).status, 400);
     const web = await r.h.webSignIn('alice@dev.local');
     assert.equal((await r.h.call('PUT', '/api/interaction/v1/role', { cookie: web.cookie, headers: { 'x-csrf-token': web.csrf }, body: { role: 'host' } })).status, 403);
+    // Only a desktop platform may host: a phone, an unknown or a missing platform may not.
+    for (const platform of ['phone-web', 'ios', 'darwin-arm64; x', null]) {
+      r.h.db.run('UPDATE user_devices SET platform = ? WHERE id = ?', platform, r.winB.device);
+      assert.equal((await r.setRole(r.winB, 'host')).status, 403, String(platform));
+    }
+    r.h.db.run("UPDATE user_devices SET platform = 'win32-x64' WHERE id = ?", r.winB.device);
+    assert.equal((await r.setRole(r.winB, 'host')).status, 200);
+    assert.equal((await r.setRole(r.winB, 'client')).status, 200);
     // Turning hosting off drops the live socket and hides the host at once.
     assert.equal((await r.client(r.winA).hosts()).body.hosts.length, 1);
     assert.equal((await r.setRole(r.macA, 'client')).status, 200);

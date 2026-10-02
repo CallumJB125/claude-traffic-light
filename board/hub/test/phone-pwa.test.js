@@ -170,8 +170,15 @@ test('HOSTILE: revoking the phone from the Mac signs it out on its next poll; a 
     const web = await r.h.webSignIn('alice@dev.local');
     assert.equal((await r.h.call('GET', '/api/interaction/v1/hosts', { cookie: web.cookie })).status, 403);
 
+    // The phone's token can never make the phone a host (server-side, by platform).
+    const asHost = await r.h.call('PUT', '/api/interaction/v1/role', { token, headers: { origin: r.h.base }, body: { role: 'host' } });
+    assert.equal(asHost.status, 403, asHost.text);
+    assert.match(asHost.body.error.message, /desktop app/);
+    assert.equal((await r.h.call('PUT', '/api/interaction/v1/role', { token, headers: { origin: r.h.base }, body: { role: 'client' } })).status, 200);
+
     const devs = await r.h.call('GET', '/api/account/devices', { token: r.mac.body.device_token });
     const phone = devs.body.devices.find((d) => d.name === 'Alice iPhone');
+    assert.equal(phone.platform, 'phone-web');
     assert.equal((await r.h.call('DELETE', `/api/account/devices/${phone.id}`, { token: r.mac.body.device_token, body: {} })).status, 200);
     // The watch in flight answers 401 (or the next one does): the phone drops its token.
     await ctl.send('poke').catch(() => {});
