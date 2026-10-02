@@ -5,6 +5,12 @@ const closed = (value, keys) => value !== null && typeof value === 'object' && !
 const denied = () => Promise.resolve({ ok: false, status: 'invalid', error: 'Request unavailable.' });
 contextBridge.exposeInMainWorld('overviewApi', {
   state: () => ipcRenderer.invoke('overview:state'),
+  onReady: callback => {
+    if (typeof callback !== 'function') return () => {};
+    const listener = (_event, ...args) => { if (args.length === 0) callback(); };
+    ipcRenderer.on('overview:ready', listener);
+    return () => ipcRenderer.removeListener('overview:ready', listener);
+  },
   open: request => closed(request, ['handle']) && uuid(request.handle) ? ipcRenderer.invoke('overview:open', { handle: request.handle }) : denied(),
   message: request => {
     if (!closed(request, ['handle', 'text']) || !uuid(request.handle) || typeof request.text !== 'string' || request.text.includes('\0')) return denied();

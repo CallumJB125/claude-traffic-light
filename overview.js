@@ -26,6 +26,7 @@
     return true;
   }
   let snapshot = null, readGeneration = 0, viewGeneration = 0;
+  let ready = typeof api.onReady !== 'function';
   const expanded = new Map(), composers = new Map(), busy = new Set(), notices = new Map();
   let rows = new Map();
   const node = (tag, text, className) => { const el = document.createElement(tag); if (text != null) el.textContent = text; if (className) el.className = className; return el; };
@@ -205,10 +206,14 @@
       }
     }
   }
+  if (typeof api.onReady === 'function') api.onReady(() => {
+    ready = true;
+    if (!document.hidden) void refresh();
+  });
   $('refresh').addEventListener('click', () => void refresh());
   for (const filter of filters) $(`${filter}-filter`).addEventListener('change', () => { clearInteractions(); if (snapshot) renderWork(); });
   $('clear-filters').addEventListener('click', () => { filters.forEach(filter => { $(`${filter}-filter`).value = ''; }); clearInteractions(); if (snapshot) renderWork(); });
-  document.addEventListener('visibilitychange', () => { ++readGeneration; expanded.clear(); clearPage('Checking reported activity…'); if (!document.hidden) void refresh(); });
-  setInterval(() => { if (!document.hidden) { if (snapshot) { renderSummary(); renderConnections(); renderWork(); } void refresh(); } }, 5000);
-  if (!document.hidden) void refresh();
+  document.addEventListener('visibilitychange', () => { ++readGeneration; expanded.clear(); clearPage('Checking reported activity…'); if (!document.hidden && ready) void refresh(); });
+  setInterval(() => { if (!document.hidden && ready) { if (snapshot) { renderSummary(); renderConnections(); renderWork(); } void refresh(); } }, 5000);
+  if (!document.hidden && ready) void refresh();
 })();

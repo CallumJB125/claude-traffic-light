@@ -388,6 +388,15 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     attach(infoView);
   }
 
+  function notifyOverviewReady(v) {
+    const wc = v?.webContents;
+    if (!win || win.isDestroyed() || !wc || wc.isDestroyed() || selected !== 'overview' || content !== v || localViews.get('overview') !== v || !win.contentView.children.includes(v)) return;
+    const expected = pathToFileURL(path.join(DIR, '..', 'overview.html')).href;
+    if (wc.getURL() !== expected || wc.mainFrame?.url !== expected || wc.isLoading()) return;
+    // Fixed readiness only; state/action IPC still applies its own authority.
+    try { wc.send('overview:ready'); } catch { /* document closed during readiness */ }
+  }
+
   function showLocal(page) {
     if (!win || !page) return;
     let v = localViews.get(page.id);
@@ -404,10 +413,14 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
         v.webContents.on('render-process-gone',retireSetupDocument);
         v.webContents.once('destroyed',retireSetupDocument);
       }
-      v.webContents.on('did-finish-load', () => onLocalPage(page, v.webContents));
+      v.webContents.on('did-finish-load', () => {
+        onLocalPage(page, v.webContents);
+        if (page.id === 'overview') notifyOverviewReady(v);
+      });
       v.webContents.loadFile(path.join(DIR, '..', page.file), { query: page.query || {} }).catch(() => {});
     }
     attach(v);
+    if (page.id === 'overview') notifyOverviewReady(v);
   }
 
   // Local pages load our own files only; nothing navigates them anywhere else.
