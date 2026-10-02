@@ -108,15 +108,49 @@ function expansionReason(e) {
   return null;
 }
 
+// Closed Windows lexical checks tighten automatic approval only; they do
+// not grant a root capability or substitute for native owner/DACL inspection.
+const driveAbsolute = p => typeof p === 'string' && /^[a-z]:[\\/]/i.test(p);
+const windowsSpelling = p => typeof p === 'string' && /^(?:[a-z]:|\\|\/\/)/i.test(p);
+const windowsForm = p => p.replace(/\\/g, '/');
+function windowsPathReason(paths, cwd, home) {
+  if (!driveAbsolute(cwd) && !paths.some(windowsSpelling)) return null;
+  if (typeof cwd === 'string' && windowsSpelling(cwd) && !driveAbsolute(cwd)) return 'unsupported Windows session directory';
+  for (const original of paths.concat(typeof cwd === 'string' ? [cwd] : [])) {
+    const p = windowsForm(original);
+    if (p.startsWith('~') || /^\/\//.test(p) || /^\/(?!\/)/.test(p) || (/^[a-z]:/i.test(p) && !driveAbsolute(p))) return 'Windows path namespace needs a person';
+    const tail = driveAbsolute(p) ? p.slice(3) : p;
+    const ambiguousComponent = tail.split('/').some(part => part === '..' ||
+      (/[. ]$/.test(part) && part !== '.') || /^(con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/i.test(part));
+    if (tail.includes(':') || /~[0-9]/.test(tail) || /[\p{Cc}\p{Cf}]/u.test(p) || ambiguousComponent) return 'ambiguous Windows path needs a person';
+  }
+  // A project-less Windows search can otherwise cover the home or a drive.
+  if (driveAbsolute(cwd) && typeof home === 'string') {
+    const dir = cleanPath(windowsForm(cwd)).replace(/\/$/, '').toLowerCase();
+    const h = cleanPath(windowsForm(home)).replace(/\/$/, '').toLowerCase();
+    if (/^[a-z]:$/i.test(dir) || dir === h || h.startsWith(dir + '/')) return 'the Windows session directory is the drive or home directory';
+  }
+  return null;
+}
+
 // `p` after symlinks, when the caller supplied a realpath; null if unknown.
 function resolvedPath(p, cwd, realpath) {
   if (typeof realpath !== 'function' || typeof p !== 'string' || !p) return null;
-  const base = typeof cwd === 'string' && cwd.startsWith('/') ? cwd.replace(/\/+$/, '') : null;
-  const abs = p.startsWith('/') ? p : base ? `${base}/${p}` : null;
+  const windows = driveAbsolute(p) || driveAbsolute(cwd);
+  const value = windows ? windowsForm(p) : p;
+  const base = typeof cwd === 'string' && (cwd.startsWith('/') || driveAbsolute(cwd)) ? (windows ? windowsForm(cwd) : cwd).replace(/\/+$/, '') : null;
+  const abs = value.startsWith('/') || driveAbsolute(value) ? value : base ? `${base}/${value}` : null;
   if (!abs) return null;
-  try { return realpath(abs); } catch { /* not there yet: resolve its directory */ }
+  try { const result = realpath(abs); return windows && typeof result === 'string' ? windowsForm(result) : result; } catch (error) {
+    // A Windows access/security failure is not evidence of a missing leaf.
+    if (windows && error?.code !== 'ENOENT') return null;
+  }
   const k = abs.lastIndexOf('/');
-  try { return `${realpath(abs.slice(0, k) || '/').replace(/\/+$/, '')}/${abs.slice(k + 1)}`; } catch { return null; }
+  try {
+    const parentPath = windows && k === 2 && driveAbsolute(abs) ? abs.slice(0, 3) : abs.slice(0, k) || '/';
+    const parent = realpath(parentPath);
+    return `${(windows ? windowsForm(parent) : parent).replace(/\/+$/, '')}/${abs.slice(k + 1)}`;
+  } catch { return null; }
 }
 
 // Is `dir` the root, the home directory or above it? A relative dir can't be placed, so it counts.
@@ -189,6 +223,15 @@ export function allowListReason({ toolName, toolInput, cwd }, { bashAllow = DEFA
   const dir = typeof cwd === 'string' && cwd.startsWith('/') ? cleanPath(cwd) : cwd;
   const homes = homesOf(home, realpath);
   if (READ_TOOLS.test(name)) {
+    const windows = driveAbsolute(cwd) || windowsSpelling(cwd) || [input.file_path, input.path, input.notebook_path, input.glob, ...(name === 'Glob' ? [input.pattern] : [])].some(windowsSpelling);
+    if (windows && typeof realpath !== 'function') return 'Windows paths need a filesystem check';
+    if (windows && !driveAbsolute(cwd)) return 'Windows paths need a drive-qualified session directory';
+    const paths = [input.file_path, input.path, input.notebook_path, input.glob, ...(name === 'Glob' ? [input.pattern] : [])].filter(x => typeof x === 'string');
+    const windowsReason = windowsPathReason(paths, cwd, home);
+    if (windowsReason) return windowsReason;
+    // A glob can traverse more entries than one realpath check covers. Keep
+    // Windows expansion manual until its native traversal boundary is bound.
+    if (windows && name === 'Glob') return 'Windows glob searches need a person';
     const p = [input.file_path, input.path, input.pattern, input.notebook_path, input.glob].filter((x) => typeof x === 'string');
     if (p.some((x) => secretForms(x, dir) || secretForms(x.replace(/[*?]+/g, ''), dir))) return 'reads credentials';
     if (name === 'Grep') {
@@ -198,10 +241,27 @@ export function allowListReason({ toolName, toolInput, cwd }, { bashAllow = DEFA
       if (!abs) { if (where.startsWith('~') || where.split('/').includes('..')) return 'searches outside the session directory'; }
       else if (broadDir(abs, homes) || CREDENTIAL_PARENT.test(abs)) return 'searches /, home or a folder holding credentials';
     }
-    const real = [input.file_path, input.path, input.notebook_path].map((x) => resolvedPath(x, dir, realpath)).filter(Boolean);
+    const candidates = [input.file_path, input.path, input.notebook_path].filter(x => typeof x === 'string' && x);
+    const checked = candidates.map(x => resolvedPath(x, dir, realpath));
+    if (windows && checked.some(x => typeof x !== 'string' || !(driveAbsolute(x) || /^\/\/\?\/[a-z]:\//i.test(x)))) return 'Windows path could not be checked';
+    const real = checked.filter(Boolean);
+    if (windows && name === 'Grep') {
+      const where = typeof input.path === 'string' && input.path ? input.path : '.';
+      const resolved = resolvedPath(where, dir, realpath);
+      const absolute = driveAbsolute(where) ? windowsForm(where) : driveAbsolute(dir) ? `${windowsForm(dir)}/${windowsForm(where)}` : null;
+      const broad = value => {
+        if (typeof value !== 'string') return false;
+        const cleaned = cleanPath(value.replace(/^\/\/\?\/(?=[a-z]:\/)/i, '')).replace(/\/$/, '').toLowerCase();
+        const h = typeof home === 'string' ? cleanPath(windowsForm(home)).replace(/\/$/, '').toLowerCase() : null;
+        return /^[a-z]:$/i.test(cleaned) || CREDENTIAL_PARENT.test(cleaned) || (h && (cleaned === h || h.startsWith(cleaned + '/')));
+      };
+      if (!resolved) return 'Windows search path could not be checked';
+      if (broad(absolute) || broad(resolved)) return 'searches a Windows drive, home or a folder holding credentials';
+    }
     return real.some(isSecret) ? 'reads credentials through a symlink' : null;
   }
   if (EDIT_TOOLS.test(name)) {
+    if (driveAbsolute(cwd) || windowsSpelling(pathOf(input))) return 'Windows writes need a person';
     const p = pathOf(input);
     if (!p) return 'no file path';
     if (secretForms(p, dir) || runsCodeForms(p, dir)) return 'protected path';
