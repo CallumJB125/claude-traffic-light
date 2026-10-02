@@ -3669,9 +3669,14 @@ function nativeBoardDir() { return path.join(app.getPath('userData'), 'native-bo
 function getNativeBoard() {
   if (!nativeBoardService) {
     const storage = require('electron').safeStorage;
-    if (!storage.isEncryptionAvailable() || (process.platform === 'linux' && storage.getSelectedStorageBackend?.() === 'basic_text')) throw new Error('Secure account storage is unavailable on this computer.');
+    // A status read with no saved connector records needs no Keychain key.
+    // Ask the OS only when encrypted bytes are actually read or written.
+    const secureStorage = () => {
+      if (!storage.isEncryptionAvailable() || (process.platform === 'linux' && storage.getSelectedStorageBackend?.() === 'basic_text')) throw new Error('Secure account storage is unavailable on this computer.');
+      return storage;
+    };
     nativeBoardService = NativeBoard.createService({
-      dir: nativeBoardDir(), seal: (s) => storage.encryptString(s), unseal: (b) => storage.decryptString(b),
+      dir: nativeBoardDir(), seal: (s) => secureStorage().encryptString(s), unseal: (b) => secureStorage().decryptString(b),
       resolveWorkspace: (id) => getBuddy().nativeBoardContext(id), workspaces: () => getBuddy().nativeBoardWorkspaces(),
       home: IS_DEV_RUN ? path.join(app.getPath('userData'), 'native-board-dev-home') : os.homedir(),
       launchOptions: { execPath: HOOK_PATHS.execPath || process.execPath, appPath: HOOK_PATHS.mcpAppPath || __dirname },
