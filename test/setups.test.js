@@ -95,3 +95,38 @@ test('production native main IPC accepts only the exact registered top-level Set
   const context={require:name=>{assert.equal(name,'./src/setups-service.js');return {createSetupsService:()=>service};},buddyWin:{pageWebContents:id=>id==='setups'?page:null},os:{homedir:()=>'/synthetic'},ipcMain:{handle:(name,fn)=>handlers.set(name,fn)}};vm.createContext(context);vm.runInContext(body,context);
   for(const [name,handler] of handlers){assert.notEqual(handler({sender:page,senderFrame:frame}),null,name);assert.equal(handler({sender:page,senderFrame:{}},'x'),null);assert.equal(handler({sender:{mainFrame:frame},senderFrame:frame},'x'),null);}
 });
+
+function planSource(f){
+  const p=sample(),checked=schema.validatePayload(p),pid=randomUUID(),vid=randomUUID();f.source.deviceId='d1';
+  const response=()=>({ok:true,principal:f.principal,profile:{id:pid,owner_user_id:'u1',current_version:{id:vid,content_hash:checked.content_hash}},version:{id:vid,number:1,content_hash:checked.content_hash},payload:p});
+  f.source.call=async op=>op==='list'?{ok:true,principal:f.principal,status:'complete',profiles:[{id:pid,owner_user_id:'u1',current_version:{id:vid,number:1,content_hash:checked.content_hash,sources:['git'],file_count:1,item_count:0}}]}:response();
+  return {p,pid,vid,response};
+}
+test('private readForPlan binds listed exact hash and sealed device, returns deeply immutable source with revocable current closure',async t=>{
+ const f=fixture(t),s=planSource(f),state=await f.service.snapshot(),handle=state.teams[0].profiles[0].handle;
+ const source=await f.service.readForPlan(handle);assert.deepEqual(Object.keys(source).sort(),['contentHash','current','payload','principal','profileId','versionId']);assert.deepEqual(source.principal,{account:'u1',team:'t1',member:'m1',device:'d1'});assert.equal(source.profileId,s.pid);assert.equal(source.current(),true);
+ assert.throws(()=>{source.payload.files[0].content='Changed after captured read';},TypeError);s.p.files[0].content='Changed provider object';assert.notEqual(source.payload.files[0].content,s.p.files[0].content);
+ f.service.invalidate();assert.equal(source.current(),false);assert.equal(await f.service.readForPlan(handle),null);
+});
+test('private readForPlan refuses hash drift or wrong principal or denied access and retires all captured handles',async t=>{
+ for(const change of [r=>({...r,principal:{...r.principal,member_id:'other'}}),r=>({...r,version:{...r.version,content_hash:'f'.repeat(64)}}),r=>({...r,profile:{...r.profile,current_version:{id:randomUUID(),content_hash:r.version.content_hash}}}),()=>({ok:false,code:'FORBIDDEN'})]){
+  const f=fixture(t),s=planSource(f),state=await f.service.snapshot(),handle=state.teams[0].profiles[0].handle,old=await f.service.readForPlan(handle);f.source.call=async()=>change(s.response());assert.equal(await f.service.readForPlan(handle),null);assert.equal(old.current(),false);assert.equal((await f.service.read(handle)).ok,false);
+ }
+});
+test('private readForPlan fences member/device change and expiry after pending source read without trusting provider payload',async t=>{
+ for(const change of [f=>{f.source.deviceId='new-device';},f=>{f.source.memberId='new-member';},f=>{f.setCurrent(false);},f=>{f.advance(600001);}]){
+  const f=fixture(t),s=planSource(f),state=await f.service.snapshot(),handle=state.teams[0].profiles[0].handle;let resolve;f.source.call=()=>new Promise(r=>resolve=r);const pending=f.service.readForPlan(handle);change(f);resolve(s.response());assert.equal(await pending,null);
+ }
+});
+test('late retired private read cannot invalidate newer refreshed sharing handles',async t=>{
+ const f=fixture(t),s=planSource(f),first=await f.service.snapshot();let resolve;const original=f.source.call;f.source.call=()=>new Promise(r=>resolve=r);const pending=f.service.readForPlan(first.teams[0].profiles[0].handle);f.source.call=original;const fresh=await f.service.snapshot();resolve(s.response());assert.equal(await pending,null);assert.equal((await f.service.readForPlan(fresh.teams[0].profiles[0].handle)).current(),true);
+});
+test('sharing remains available without a sealed device but no private plan authority is produced',async t=>{
+ const f=fixture(t);planSource(f);delete f.source.deviceId;const state=await f.service.snapshot(),handle=state.teams[0].profiles[0].handle;assert.equal((await f.service.read(handle)).ok,true);assert.equal(await f.service.readForPlan(handle),null);
+ const preload=fs.readFileSync(path.join(__dirname,'..','setups-preload.js'),'utf8');assert.ok(!preload.includes('readForPlan'));assert.ok(!JSON.stringify(await f.service.read(handle)).includes('device'));
+});
+test('current-version plan handles refuse publication drift while explicitly chosen historical versions remain pinned',async t=>{
+ const f=fixture(t),s=planSource(f),state=await f.service.snapshot(),handle=state.teams[0].profiles[0].handle,newVersion=randomUUID();
+ f.source.call=async()=>({...s.response(),profile:{...s.response().profile,current_version:{id:newVersion,content_hash:s.response().version.content_hash}},versions:[{id:s.vid,number:1,content_hash:s.response().version.content_hash}]});
+ const reviewed=await f.service.read(handle),historical=await f.service.readForPlan(reviewed.versions[0].handle);assert.equal(historical.versionId,s.vid);assert.equal(historical.current(),true);assert.equal(await f.service.readForPlan(handle),null);assert.equal(historical.current(),false);
+});

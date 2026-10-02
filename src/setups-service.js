@@ -13,6 +13,9 @@ const unavailable = () => ({ok:false,status:'unavailable',error:'This setup or a
 // capability. Every handle binds a registered team and captured sealed identity.
 function createSetupsService({ sources, home, machine=()=>({home}), fsApi=fs, scanImpl=scan, now=Date.now, confirm=async()=>false, chooseExport=async()=>null }) {
   let generation=0, handles=new Map(), drafts=new Map();
+  const invalidate = () => { generation++; handles.clear(); drafts.clear(); };
+  const binding = source => ({account:source.userId,team:source.teamId,member:source.memberId,device:source.deviceId});
+  const freeze = value => { if(value && typeof value==='object') {for(const item of Object.values(value))freeze(item);Object.freeze(value);}return value; };
   const current = source => {try{return source?.current?.()===true;}catch{return false;}};
   const valid = (entry,token) => token===generation && entry && entry.expires>now() && current(entry.source);
   const entryFor = handle => typeof handle==='string' && handle.length<=100?handles.get(handle):null;
@@ -27,10 +30,10 @@ function createSetupsService({ sources, home, machine=()=>({home}), fsApi=fs, sc
     }
     return checkedPrincipal(entry.source,result)?result:null;
   }
-  const put = (source,profile=null,version=null) => { if(handles.size>=1000)handles.delete(handles.keys().next().value);const handle=randomUUID(); handles.set(handle,{source,profile,version,expires:now()+10*60_000}); return handle; };
+  const put = (source,profile=null,version=null,contentHash=null,pinCurrent=false) => { if(handles.size>=1000)handles.delete(handles.keys().next().value);const handle=randomUUID(); handles.set(handle,{source,profile,version,contentHash,pinCurrent,principal:binding(source),expires:now()+10*60_000}); return handle; };
   const view = draft => ({ok:true,handle:draft.handle,payload:JSON.parse(schema.canonical(draft.payload)),content_hash:draft.checked?.content_hash??null,file_hashes:draft.checked?.file_hashes??[],approved_files:[...draft.approved],error:draft.error??null,expires_at:draft.expires,scan_summary:draft.scanSummary});
   return {
-    invalidate() { generation++; handles.clear(); drafts.clear(); },
+    invalidate,
     async snapshot() {
       const token=++generation; handles.clear(); drafts.clear();
       let registered; try {registered=await sources();}catch{return {status:'unavailable',teams:[],sources:schema.sources()};}
@@ -48,7 +51,7 @@ function createSetupsService({ sources, home, machine=()=>({home}), fsApi=fs, sc
           const v=profile?.current_version;
           if(count>=500) {partial=true;break;}
           if(typeof profile?.id!=='string' || !schema.UUID.test(profile.id) || typeof v?.id!=='string' || !schema.UUID.test(v.id) || typeof v.content_hash!=='string' || !schema.SHA.test(v.content_hash) || !Number.isSafeInteger(v.number)||v.number<1 || !Array.isArray(v.sources)||v.sources.some(id=>!SOURCES.some(s=>s.id===id)) || !Number.isSafeInteger(v.file_count)||v.file_count<0||v.file_count>schema.SETUP_LIMITS.files||!Number.isSafeInteger(v.item_count)||v.item_count<0||v.item_count>schema.SETUP_LIMITS.items) {partial=true;continue;}
-          profiles.push({handle:put(source,profile.id,v.id),own:profile.owner_user_id===source.userId,version:v.number,files:v.file_count,items:v.item_count,sources:v.sources,created_at:clean(v.created_at)});count++;
+          profiles.push({handle:put(source,profile.id,v.id,v.content_hash,true),own:profile.owner_user_id===source.userId,version:v.number,files:v.file_count,items:v.item_count,sources:v.sources,created_at:clean(v.created_at)});count++;
         }
         teams.push({handle:put(source),name:clean(source.name),role:data.principal.role??source.role,status:data.status,profiles,baseline:data.baseline?{required:data.baseline.required===true,meaning:'reminder_only'}:null});
         partial ||= data.status!=='complete';
@@ -63,9 +66,27 @@ function createSetupsService({ sources, home, machine=()=>({home}), fsApi=fs, sc
       try {
         const checked=schema.validatePayload(data?.payload);
         if(data.profile.id!==entry.profile || data.version.id!==entry.version || checked.content_hash!==data.version.content_hash) return unavailable();
-        const versions=(data.versions??[]).slice(0,50).filter(v=>schema.UUID.test(v.id??'')&&Number.isSafeInteger(v.number)&&v.number>0).map(v=>({handle:put(entry.source,entry.profile,v.id),number:v.number}));
+        const versions=(data.versions??[]).slice(0,50).filter(v=>schema.UUID.test(v.id??'')&&Number.isSafeInteger(v.number)&&v.number>0).map(v=>({handle:put(entry.source,entry.profile,v.id,schema.SHA.test(v.content_hash??'')?v.content_hash:null),number:v.number}));
         return {ok:true,handle,payload:checked.payload,version:data.version.number,versions,own:data.profile.owner_user_id===entry.source.userId};
       }catch{return unavailable();}
+    },
+    // Main-only: never expose this method/result to preload. The function and
+    // principal remain private authority, not a renderer Apply capability.
+    async readForPlan(handle) {
+      const entry=entryFor(handle),token=generation;
+      if(!entry?.profile || !entry.version || !schema.SHA.test(entry.contentHash??'') || !Object.values(entry.principal).every(id=>typeof id==='string'&&ID.test(id)))return null;
+      const stable=()=>valid(entry,token) && handles.get(handle)===entry && schema.canonical(binding(entry.source))===schema.canonical(entry.principal);
+      if(!stable()){if(token===generation)invalidate();return null;}
+      const data=await call(entry,'read',{profile:entry.profile,version:entry.version});
+      try {
+        if(!data?.ok || !stable() || data.profile?.id!==entry.profile || data.version?.id!==entry.version || data.version?.content_hash!==entry.contentHash)throw new Error('changed');
+        // The list's current-version handle must remain current. A separately
+        // selected historical version is explicitly pinned, never auto-updated.
+        if(entry.pinCurrent && (data.profile.current_version?.id!==entry.version || data.profile.current_version?.content_hash!==entry.contentHash))throw new Error('changed');
+        const checked=schema.validatePayload(data.payload);
+        if(checked.content_hash!==entry.contentHash || !stable())throw new Error('changed');
+        return Object.freeze({profileId:entry.profile,versionId:entry.version,contentHash:entry.contentHash,payload:freeze(JSON.parse(schema.canonical(checked.payload))),principal:freeze({...entry.principal}),current:stable});
+      }catch{if(token===generation)invalidate();return null;}
     },
     async draft(handle,request) {
       const entry=entryFor(handle),token=generation;
