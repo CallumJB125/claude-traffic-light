@@ -6,7 +6,7 @@ const {createHash}=require('node:crypto');
 const fail=()=>{throw new Error('Setups local platform is unavailable');};
 const identity=s=>[s.dev,s.ino,s.uid,s.mode,s.nlink,s.size,s.mtimeNs,s.ctimeNs].join(':');
 function stamp(s){return {device:s.dev,inode:s.ino,size:s.size,uid:s.uid,mode:s.mode,links:s.nlink,mtime_seconds:s.mtimeNs/1000000000n,mtime_nanoseconds:s.mtimeNs%1000000000n,ctime_seconds:s.ctimeNs/1000000000n,ctime_nanoseconds:s.ctimeNs%1000000000n};}
-function createSetupsPlatform({app,resourcesPath,profilePath,uid=process.getuid?.(),platform=process.platform,fsApi=fs,spawn=cp.spawn,verify=(p)=>cp.execFileSync('/usr/bin/codesign',['--verify','--deep','--strict',p],{timeout:2500,maxBuffer:64*1024,stdio:['ignore','ignore','pipe']})}){
+function createSetupsPlatform({app,resourcesPath,profilePath,uid=process.getuid?.(),platform=process.platform,fsApi=fs,spawn=cp.spawn,verify=(p)=>cp.execFileSync('/usr/bin/codesign',['--verify','--deep','--strict',p],{timeout:2500,maxBuffer:64*1024,stdio:['ignore','ignore','pipe']})}){ // privacy-flow: setups-fixed-platform
  if(platform!=='darwin'||!app?.isPackaged||!Number.isSafeInteger(uid)||uid<0||typeof resourcesPath!=='string'||typeof profilePath!=='string'||!path.isAbsolute(resourcesPath)||!path.isAbsolute(profilePath))fail();
  const resources=path.resolve(resourcesPath),contents=path.dirname(resources),bundle=path.dirname(contents),profile=path.resolve(profilePath),userData=path.resolve(app.getPath('userData'));
  if(path.basename(resources)!=='Resources'||path.basename(contents)!=='Contents'||path.extname(bundle)!=='.app'||app.getAppPath()!==path.join(resources,'app.asar')||profile==='/'||userData===profile||!userData.startsWith(profile+path.sep))fail();
@@ -22,7 +22,7 @@ function createSetupsPlatform({app,resourcesPath,profilePath,uid=process.getuid?
    // Darwin mode bits do not describe extended ACL grants. Refuse every ACL
    // here, including a read-only ACL, instead of guessing which inherited
    // entry could authorize a pathname replacement. Fixed OS metadata only.
-   const listing=cp.execFileSync('/bin/ls',['-ldne',p],{env:{LC_ALL:'C'},timeout:1000,maxBuffer:16*1024,encoding:'utf8',stdio:['ignore','pipe','pipe']});
+   const listing=cp.execFileSync('/bin/ls',['-ldne',p],{env:{LC_ALL:'C'},timeout:1000,maxBuffer:16*1024,encoding:'utf8',stdio:['ignore','pipe','pipe']}); // privacy-flow: setups-fixed-platform
    if(!/^d[rwxstST-]{9}@? [^\r\n]+\n$/.test(listing))fail();
    const after=fsApi.fstatSync(fd,{bigint:true}),named=fsApi.lstatSync(p,{bigint:true});
    if(identity(before)!==identity(after)||identity(after)!==identity(named))fail();return identity(after);
@@ -57,7 +57,7 @@ function createSetupsPlatform({app,resourcesPath,profilePath,uid=process.getuid?
    // Supervisor's closed fixed descriptor contract. No caller-supplied binary,
    // environment, command, cwd or extra inherited descriptor is accepted.
    if(!options||Object.keys(options).sort().join('|')!=='args|env|shell|stdio'||!Array.isArray(options.args)||options.args.length||!options.env||Object.keys(options.env).length||options.shell!==false||!Array.isArray(options.stdio)||options.stdio.join('|')!=='pipe|pipe|pipe|pipe')fail();
-   integrity();return spawn(helper,[],{env:{},shell:false,stdio:['pipe','pipe','pipe','pipe'],cwd:'/'});
+   integrity();return spawn(helper,[],{env:{},shell:false,stdio:['pipe','pipe','pipe','pipe'],cwd:'/'}); // privacy-flow: setups-fixed-platform
   },
  });
 }

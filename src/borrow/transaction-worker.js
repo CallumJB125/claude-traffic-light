@@ -49,7 +49,7 @@ if(!isMainThread){
   }catch{post(parentPort,{id:m.id,ok:false});}finally{C.wipe(m.input);if(m.kind==='format'||m.kind==='target'||m.kind==='recover')C.wipe(result);active=null;}
  });
 } else {
- function createTransactionWorker({now=()=>performance.now(),create=()=>new Worker(__filename,{env:{},execArgv:[]})}={}){
+ function createTransactionWorker({now=()=>performance.now(),create=()=>new Worker(__filename,{env:{},execArgv:[]})}={}){ // privacy-flow: setups-private-worker
   const worker=create();let seq=0,active=null,retired=false,exited=false,termination=null;const validJob=job=>{try{return job&&!retired&&now()<job.cutoff&&job.current()===true;}catch{return false;}};
   worker.once('exit',()=>{exited=true;retired=true;active?.reject(new Error('Setups private worker is unavailable'));active=null;});
   worker.once('error',()=>{retired=true;active?.reject(new Error('Setups private worker is unavailable'));active=null;});
