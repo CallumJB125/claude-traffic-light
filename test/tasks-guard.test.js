@@ -10,12 +10,13 @@ const api = (f) => import(pathToFileURL(path.join(__dirname, '..', 'board', 'tas
 let G;
 let P;
 test.before(async () => { P = await api('protocol.js'); G = createGuard({ P, taskFace: (await api('face.js')).taskFace }); });
+const HOME = path.resolve(path.sep, 'Users', 'me');
 
 const view = (over = {}) => ({
   id: 't1', title: 'Add dark mode', state: 'running', blockedKind: null, failKind: null, parkReason: null, outcome: null, green: true,
   label: 'Running', tone: 'green', reason: 'Claude is working', actions: ['message', 'pause', 'takeover', 'stop'], confirm: [],
   ai: { id: 'claude', reason: null, model: null }, surface: 'background', permissionLevel: 'auto-edits', planFirst: false, source: 'local', awaitingConfirm: false,
-  repo: { root: '/Users/me/Dev/acme', name: 'acme' }, branch: 'buddy/x', workInPlace: false, cost: { usd: 0.5, budgetUsd: null }, stateAgeMs: 5000, createdAgeMs: 60000, lastSeq: 4, hub: null, live: null, ...over,
+  repo: { root: path.join(HOME, 'Dev', 'acme'), name: 'acme' }, branch: 'buddy/x', workInPlace: false, cost: { usd: 0.5, budgetUsd: null }, stateAgeMs: 5000, createdAgeMs: 60000, lastSeq: 4, hub: null, live: null, ...over,
 });
 
 test('checkpoint requests cannot supply authority or oversized arrays; renderer projection omits authenticated author ids', () => {
@@ -32,10 +33,10 @@ test('checkpoint requests cannot supply authority or oversized arrays; renderer 
 });
 
 test('sanitizeTask keeps the face and drops anything not whitelisted (extra fields, unknown actions, odd tones)', () => {
-  const t = G.sanitizeTask({ ...view({ actions: ['stop', 'rm -rf', 'message'], tone: '<script>' }), token: 'btk_secret', env: { A: 'b' } }, { now: 1_000_000, homeDir: '/Users/me' });
+  const t = G.sanitizeTask({ ...view({ actions: ['stop', 'rm -rf', 'message'], tone: '<script>' }), token: 'btk_secret', env: { A: 'b' } }, { now: 1_000_000, homeDir: HOME });
   assert.deepEqual(t.actions, ['stop', 'message']);
   assert.equal(t.tone, 'grey');
-  assert.equal(t.where, '~/Dev/acme');
+  assert.equal(t.where, path.join('~', 'Dev', 'acme'));
   assert.equal(t.createdAtMs, 940_000);
   assert.equal(t.green, true);
   assert.ok(!('token' in t) && !('env' in t) && !('live' in t));
@@ -72,14 +73,14 @@ test('the green lease: green only while it holds; a dropped connection never lea
 
 test('detail: messages, approvals and choices are sanitised and bounded', () => {
   const d = G.sanitizeDetail({
-    ...view({ state: 'blocked' }), text: 'x'.repeat(30000), worktree: '/Users/me/wt', baseBranch: 'main', handover: { version: 3, markdown: '# h', provenance: 'continuous', syncedAgeMs: 2000 },
+    ...view({ state: 'blocked' }), text: 'x'.repeat(30000), worktree: path.join(HOME, 'wt'), baseBranch: 'main', handover: { version: 3, markdown: '# h', provenance: 'continuous', syncedAgeMs: 2000 },
     evidence: { tests: 'pass', testCommand: 'npm test', testTail: 'secret tail', diffStat: { files: 2, added: 5, removed: 1 }, summary: 'ok' }, pr: null,
     openApprovals: [{ approvalId: 'a1', tool: 'Bash', inputSummary: 'ls', requestedAgeMs: 1 }],
     openAsk: { askId: 'k1', kind: 'limit', text: 'limit', options: null, choices: [{ id: 'c', label: 'Wait', action: 'resume', payload: { when: 'reset' } }, { id: 'z', label: 'Evil', action: 'launchMissiles', payload: {} }], askedAgeMs: 1 },
     messages: [{ id: 'm1', seq: 2, taskId: 't1', direction: 'in', from: { kind: 'task', id: 'task:t2', label: 'Other' }, to: { kind: 'task', id: 'task:t1', label: 'Me' }, body: 'hi', replyTo: null, createdAt: 1, deliveredAt: null, readAt: null, source: null, quarantined: true, flags: ['suspected_injection'] }],
-  }, { now: 10_000, homeDir: '/Users/me' });
+  }, { now: 10_000, homeDir: HOME });
   assert.equal(d.text.length, 20000);
-  assert.equal(d.worktree, '~/wt');
+  assert.equal(d.worktree, path.join('~', 'wt'));
   assert.equal(d.handover.syncedAtMs, 8000);
   assert.ok(!('testTail' in d.evidence));
   assert.deepEqual(d.openAsk.choices.map((c) => c.action), ['resume'], 'a choice naming an unknown action is dropped');
@@ -189,9 +190,10 @@ test('choices relayed with an ask carry a payload rebuilt through the allow-list
 
 test('tilde only replaces a whole home directory prefix', () => {
   const { tilde } = require('../src/tasks-guard.js');
-  assert.equal(tilde('/Users/me', '/Users/me'), '~');
-  assert.equal(tilde('/Users/me/dev', '/Users/me'), '~/dev');
-  assert.equal(tilde('/Users/mel/dev', '/Users/me'), '/Users/mel/dev');
+  assert.equal(tilde(HOME, HOME), '~');
+  assert.equal(tilde(path.join(HOME, 'dev'), HOME), path.join('~', 'dev'));
+  const sibling = path.join(path.dirname(HOME), `${path.basename(HOME)}l`, 'dev');
+  assert.equal(tilde(sibling, HOME), sibling);
 });
 
 test('takeoverCommand: no secret-looking env var, an absolute binary, quoted for a shell; the screen masks the rest', () => {

@@ -32,8 +32,8 @@ const schemaOf = (db, tables = ['comments', 'journal']) => db.prepare(
 
 test('H-1: 008 starts with the `-- migrate: rebuilds` directive, which the runner reads as a comment', () => {
   const m = loadMigrations().find((x) => x.version === 8);
-  assert.equal(m.sql.split('\n')[0], '-- migrate: rebuilds');
-  assert.match(readFileSync(new URL('../../shared/migrations/008_integrations.sql', import.meta.url), 'utf8'), /^-- migrate: rebuilds\n/);
+  assert.equal(m.sql.split(/\r?\n/)[0], '-- migrate: rebuilds');
+  assert.match(readFileSync(new URL('../../shared/migrations/008_integrations.sql', import.meta.url), 'utf8'), /^-- migrate: rebuilds\r?\n/);
 });
 
 test('H-1: 008 keeps every trigger and index journal and comments had at 007 (only the two table definitions change)', () => {

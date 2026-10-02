@@ -11,6 +11,7 @@ const Runtime = require('../adapters/runtime.js');
 const NOW = Date.parse('2026-09-30T12:00:00.000Z');
 const iso = (agoMs) => new Date(NOW - agoMs).toISOString();
 const GB = 1024 ** 3;
+const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // A fake machine: home with ~/.claude, an app binary and its hooks dir, and
 // Buddy's data dir. Everything the checks read lives under one temp folder.
@@ -74,7 +75,7 @@ test('hooks: missing, or settings.json unparsable', () => {
   const broken = Health.runChecks(machine({ hooks: '{ nope' }).ctx);
   assert.equal(byId(broken, 'hooks').status, 'fail');
   assert.equal(byId(broken, 'hooks').fix, undefined, 'no one-click fix: reinstalling would refuse to write over it');
-  assert.match(byId(broken, 'hooks').detail, /^~\/\.claude\/settings\.json can't be read/);
+  assert.match(byId(broken, 'hooks').detail, new RegExp(`^${escapeRegex(path.join('~', '.claude', 'settings.json'))} can't be read`));
 });
 
 test('hooks: pointing at an app that was moved away is a failure', () => {
@@ -95,7 +96,7 @@ test('hooks: registered from a checkout that still exists is a warning naming it
   fs.writeFileSync(Claude.configPath(m.home), JSON.stringify(Claude.apply({}, Runtime.make({ execPath: null, hooksDir: checkout, dataDir: m.root }))));
   const c = byId(Health.runChecks(m.ctx), 'hooks');
   assert.equal(c.status, 'warn');
-  assert.equal(c.detail, 'Pointing at a different copy of Buddy (~/dev/claude-traffic-light/hooks/set-status.js), not this one.');
+  assert.equal(c.detail, `Pointing at a different copy of Buddy (${path.join('~', 'dev', 'claude-traffic-light', 'hooks', 'set-status.js')}), not this one.`);
 });
 
 test('hooks: this copy, but missing an event or out of step with askFromWidget', () => {
@@ -178,7 +179,7 @@ test('transcripts: missing folder warns, present folder opens a file without rea
   const denied = { ...fs, readdirSync: (d, o) => { if (String(d).endsWith('projects')) throw Object.assign(new Error('denied'), { code: 'EACCES' }); return fs.readdirSync(d, o); } };
   const f = byId(Health.runChecks({ ...m.ctx, fs: denied }), 'transcripts');
   assert.equal(f.status, 'fail');
-  assert.equal(f.detail, "~/.claude/projects can't be read (EACCES).");
+  assert.equal(f.detail, `${path.join('~', '.claude', 'projects')} can't be read (EACCES).`);
 });
 
 test('mcp, signal server, disk and update states', () => {
@@ -251,11 +252,11 @@ test('hooks: current, but also registered from another copy, or in an older form
   const m = machine();
   const checkout = path.join(m.home, 'dev', 'buddy', 'hooks');
   const twice = Claude.apply({}, m.runtime);
-  twice.hooks.Stop.push({ matcher: '', hooks: [{ type: 'command', command: `node "${checkout}/set-status.js" stop` }] });
+  twice.hooks.Stop.push({ matcher: '', hooks: [{ type: 'command', command: `node "${path.join(checkout, 'set-status.js')}" stop` }] });
   fs.writeFileSync(Claude.configPath(m.home), JSON.stringify(twice));
   const c = byId(Health.runChecks(m.ctx), 'hooks');
   assert.equal(c.status, 'warn');
-  assert.equal(c.detail, "Installed, but also registered from a copy that isn't there any more (~/dev/buddy/hooks/set-status.js).");
+  assert.equal(c.detail, `Installed, but also registered from a copy that isn't there any more (${path.join('~', 'dev', 'buddy', 'hooks', 'set-status.js')}).`);
   assert.equal(c.fix, 'reinstall-hooks');
   // The same script run by plain node: this app, an older command form.
   const old = Claude.apply({}, Runtime.make({ execPath: null, hooksDir: m.hooksDir, dataDir: m.root }));

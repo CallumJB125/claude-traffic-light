@@ -224,14 +224,14 @@ test('stdio: the server starts, lists eleven tools and answers buddy_status and 
     command: process.execPath,
     args: [path.join(__dirname, '..', 'mcp-server.js')],
     // A port nothing listens on, so the real widget can't answer for the fixture.
-    env: { ...process.env, CLAUDE_TRAFFIC_LIGHT_HOME: root, CLAUDE_TRAFFIC_LIGHT_PORT: '1' },
+    env: { ...process.env, HOME: root, USERPROFILE: root, CLAUDE_TRAFFIC_LIGHT_HOME: root, CLAUDE_TRAFFIC_LIGHT_PORT: '1' },
   });
   const client = new Client({ name: 'test', version: '1.0.0' });
   await client.connect(transport);
   try {
     const { tools } = await client.listTools();
     assert.equal(tools.length, 11);
-    // Read-only against the real home: only its shape is predictable here.
+    // The same synthetic home on every host, without an installed Codex profile.
     const health = JSON.parse((await client.callTool({ name: 'buddy_health', arguments: {} })).content[0].text);
     assert.equal(health.checks.length, 8);
     assert.equal(health.checks.find((c) => c.id === 'signal').status, 'fail');
@@ -394,11 +394,15 @@ test('buddy_health: an app that moved, not running, no hook yet — each with it
 });
 
 test('buddy_health: hookRuntime matches what main.js installs, packaged or not', () => {
-  const dev = M.hookRuntime('/data', '/src/buddy');
+  const data = path.resolve(path.sep, 'data');
+  const source = path.resolve(path.sep, 'src', 'buddy');
+  const resources = path.resolve(path.sep, 'A', 'Claude Buddy.app', 'Contents', 'Resources');
+  const executable = path.resolve(path.sep, 'A', 'Claude Buddy.app', 'Contents', 'MacOS', 'Claude Buddy');
+  const dev = M.hookRuntime(data, source);
   assert.equal(dev.node, true);
-  assert.equal(dev.hooksDir, '/src/buddy/hooks');
-  const app = M.hookRuntime('/data', '/A/Claude Buddy.app/Contents/Resources/app.asar', '/A/Claude Buddy.app/Contents/MacOS/Claude Buddy');
-  assert.equal(app.execPath, '/A/Claude Buddy.app/Contents/MacOS/Claude Buddy');
-  assert.equal(app.hooksDir, '/A/Claude Buddy.app/Contents/Resources/hooks');
-  assert.equal(app.dataDir, '/data');
+  assert.equal(dev.hooksDir, path.join(source, 'hooks'));
+  const app = M.hookRuntime(data, path.join(resources, 'app.asar'), executable);
+  assert.equal(app.execPath, executable);
+  assert.equal(app.hooksDir, path.join(resources, 'hooks'));
+  assert.equal(app.dataDir, data);
 });
