@@ -20,7 +20,10 @@ const CHANNELS = Object.freeze({
   capabilities: 'interaction:capabilities', list: 'interaction:list', state: 'interaction:state',
   launch: 'interaction:launch', send: 'interaction:send', interrupt: 'interaction:interrupt', close: 'interaction:close',
   event: 'interaction:event', localModels: 'interaction:local-models',
+  shareList: 'interaction:share-list', shareCreate: 'interaction:share-create', shareStop: 'interaction:share-stop',
 });
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const noSharing = { ok: false, status: 'unavailable', error: 'To share, turn on "Let my other devices use sessions Plexiform started on this Mac" in Preferences and sign in to your team hub.' };
 const denied = { ok: false, status: 'forbidden', error: 'Focus Plexiform Overview and try again.' };
 const BOARD_STALE = 'This session belongs to another board. Switch back to the board it started on to use it.';
 const object = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -40,7 +43,8 @@ function ownedAdapters({ env = process.env } = {}) {
   };
 }
 
-function createInteractionMain({ context, readContext = context, adapters: given, owned = ownedAdapters, workspace, currentBoard = () => null, now, localModelsFile = null, localModels: givenLocalModels, compaction = null }) {
+// shares: () => the remote interaction host (src/remote-interaction.js) or null; team sharing goes through it.
+function createInteractionMain({ context, readContext = context, adapters: given, owned = ownedAdapters, workspace, currentBoard = () => null, now, localModelsFile = null, localModels: givenLocalModels, compaction = null, shares = () => null }) {
   const adapters = { ...(owned ? owned() : {}), ...given };
   // Local models register into `adapters` as they are found.
   const localModels = givenLocalModels !== undefined ? givenLocalModels : createLocalModels({ adapters, configFile: localModelsFile });
@@ -81,9 +85,37 @@ function createInteractionMain({ context, readContext = context, adapters: given
     close: (req, actor) => hub.close(req, actor),
   };
   const one = (args) => (args.length === 1 ? args[0] : undefined);
+  // Team sharing of this document's sessions: only its own sessions, through the remote host.
+  const owns = (session, actor) => typeof session === 'string' && UUID.test(session) && !!hub.state({ session }, actor);
+  const sharing = {
+    async [CHANNELS.shareList](req, actor) {
+      const host = shares();
+      if (!host) return noSharing;
+      const r = await host.listShares();
+      return r.ok ? { ok: true, teams: r.teams, shares: r.shares.filter((x) => owns(x.session, actor)) } : r;
+    },
+    async [CHANNELS.shareCreate](req, actor) {
+      const host = shares();
+      if (!host) return noSharing;
+      if (!object(req) || !owns(req.session, actor)) return { ok: false, status: 'invalid', error: 'Check the selected session.' };
+      return host.shareSession({ session: req.session, team: req.team, scope: req.scope, expiresInS: req.expiresInS ?? null });
+    },
+    async [CHANNELS.shareStop](req, actor) {
+      const host = shares();
+      if (!host) return noSharing;
+      const sh = object(req) ? host.shared().find((x) => x.id === req.share) : null;
+      if (!sh || !owns(sh.session, actor)) return { ok: false, status: 'stale', error: 'That share has already stopped.' };
+      return host.stopSharing(sh.id);
+    },
+  };
   return {
     hub,
     documents: () => documents.size,
+    // The remote host serves a shared session of the current document from this hub (never through 'list').
+    sharedTarget(session) {
+      for (const actor of documents.keys()) if (owns(session, actor)) return { hub, actor };
+      return null;
+    },
     // The Overview document was reloaded, crashed or destroyed: its sessions end now, not on the next request.
     retireDocuments() { documents.clear(); return hub.reap(() => false); },
     register(ipc) {
@@ -93,6 +125,10 @@ function createInteractionMain({ context, readContext = context, adapters: given
       // Local models register into `adapters` as they are found (read-only loopback probes + configured endpoints).
       ipc.handle(CHANNELS.localModels, async (e) => ((await actorOf(e, false)) && localModels ? localModels.refresh() : null));
       ipc.handle(CHANNELS.state, async (e, ...args) => { const a = await actorOf(e, false); return a ? hub.state(one(args), a) : null; });
+      ipc.handle(CHANNELS.shareList, async (e) => { const a = await actorOf(e, false); return a ? sharing[CHANNELS.shareList](null, a) : null; });
+      for (const ch of [CHANNELS.shareCreate, CHANNELS.shareStop]) {
+        ipc.handle(ch, async (e, ...args) => { const a = await actorOf(e, true); return a ? sharing[ch](one(args), a) : denied; });
+      }
       for (const action of Object.keys(effects)) {
         ipc.handle(CHANNELS[action], async (e, ...args) => {
           const a = await actorOf(e, true);

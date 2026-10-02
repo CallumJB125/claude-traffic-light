@@ -39,6 +39,14 @@ contextBridge.exposeInMainWorld('overviewApi', {
     },
     interrupt: request => closed(request, ['session', 'generation', 'turn']) && uuid(request.session) && generation(request.generation) && uuid(request.turn) ? ipcRenderer.invoke('interaction:interrupt', { session: request.session, generation: request.generation, turn: request.turn }) : denied(),
     close: request => closed(request, ['session', 'generation']) && uuid(request.session) && generation(request.generation) ? ipcRenderer.invoke('interaction:close', { session: request.session, generation: request.generation }) : denied(),
+    // Team sharing of one of this page's sessions (watch, or interact = also send/steer/interrupt).
+    shareList: () => ipcRenderer.invoke('interaction:share-list'),
+    shareCreate: request => {
+      if (!closed(request, ['session', 'team', 'scope', 'expiresInS']) || !uuid(request.session) || typeof request.team !== 'string' || !request.team || request.team.length > 100
+        || !['watch', 'interact'].includes(request.scope) || (request.expiresInS !== null && !(Number.isSafeInteger(request.expiresInS) && request.expiresInS >= 60 && request.expiresInS <= 30 * 86400))) return denied();
+      return ipcRenderer.invoke('interaction:share-create', { session: request.session, team: request.team, scope: request.scope, expiresInS: request.expiresInS });
+    },
+    shareStop: request => closed(request, ['share']) && typeof request.share === 'string' && request.share.length <= 100 ? ipcRenderer.invoke('interaction:share-stop', { share: request.share }) : denied(),
     onEvent: callback => {
       if (typeof callback !== 'function') return () => {};
       const listener = (_event, ...args) => { if (args.length === 1 && args[0] !== null && typeof args[0] === 'object') callback(args[0]); };

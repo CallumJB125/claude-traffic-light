@@ -228,7 +228,7 @@
   const statusLabel = status => status === 'working' ? 'Working' : status === 'ended' ? 'Ended' : 'Ready';
   function deliveryItem(d) {
     const li = node('li', '', 'delivery'), head = node('div', '', 'delivery-head');
-    head.append(node('strong', d.mode === 'steer' ? 'You (steer)' : 'You'), node('span', DELIVERY[d.state], `tag ${d.state}`));
+    head.append(node('strong', `${text(d.by, 80) && d.by ? `Sent by ${d.by}` : 'You'}${d.mode === 'steer' ? ' (steer)' : ''}`), node('span', DELIVERY[d.state], `tag ${d.state}`));
     li.append(head, node('p', d.text, 'delivery-text'));
     if (d.response) { const reply = node('p', d.response, 'delivery-response'); reply.setAttribute('aria-label', 'Codex response'); li.append(reply); }
     else if (['acknowledged', 'recorded', 'responding'].includes(d.state)) li.append(node('p', 'Waiting for Codex to answer…', 'muted'));
@@ -244,6 +244,7 @@
     heading.append(title, tag);
     const meta = node('p', '', 'row-meta'), body = node('div'), notice = node('p', '', 'reason'); notice.setAttribute('role', 'status');
     el.append(heading, meta, body, notice);
+    globalThis.OverviewShare?.mount(el, id);
     entry.el = el; entry.parts = { title, tag, meta, body, notice };
     return el;
   }

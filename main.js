@@ -1420,6 +1420,8 @@ const InteractionMain=require('./src/interaction-main').createInteractionMain({
   // The active workspace (My board or a team board) the sidebar shows.
   currentBoard:()=>buddyWin?.status?.().workspace??null,
   localModelsFile:path.join(app.getPath('userData'),'local-models.json'),
+  // Team sharing of Overview sessions goes through the remote host below (null while it is off).
+  shares:()=>remoteHost,
 });
 InteractionMain.register(ipcMain);
 app.on('will-quit',()=>InteractionMain.close());
@@ -1449,11 +1451,15 @@ function syncInteractionHost(){
     workspace:()=>fs.mkdtempSync(path.join(os.tmpdir(),'plexiform-owned-')),
     boardCurrent:board=>board===null,
     log:m=>console.log(m),
+    // An Overview session is reachable by teammates only while its owner shares it.
+    sharedTarget:session=>InteractionMain.sharedTarget(session),
   });
   remoteHost.identity=id;
   remoteHost.enable({baseUrl:id.origin,token:id.token,WebSocket:require('ws'),fetch:net.fetch}).catch(e=>console.warn('[remote-interaction]',e.message)); // privacy-flow: remote-interaction
 }
 app.on('will-quit',()=>{remoteHost?.close();remoteHost=null;});
+// While anything is shared, refresh who has access (members who joined or left) and drop shares a team admin ended.
+setInterval(()=>{if(remoteHost?.shared().length)remoteHost.listShares().catch(()=>{});},60_000).unref?.();
 const INTERACTION_HOST_LINES={connecting:'Connecting…',connected:'On: your other signed-in devices can use sessions started from them on this Mac.',retrying:'Can\'t reach your team hub; retrying.','signed-out':'Stopped: this Mac is signed out or was removed from your account.',replaced:'Stopped: another connection took over this Mac\'s sign-in. If that wasn\'t you, remove this device in Account and sign in again.',refused:'Stopped: the hub named a different account.'};
 ipcMain.handle('interaction-host-status',e=>{
   if(!settingsOnly(e))return null;
