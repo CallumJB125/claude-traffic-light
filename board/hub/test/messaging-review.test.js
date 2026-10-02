@@ -136,14 +136,42 @@ test('REVIEW 4: hop and visited come from what the session was handed; omitting 
     // A person's message to C does not lower it either.
     assert.equal((await r.client(r.winA).send({ to: { target: tid(C.session) }, body: 'human' })).status, 200);
     assert.equal((await send(C.session, D.session)).status, 409);
-    // caused_by must be a live message addressed to the sender: m1 (to B) is not C's, an expired one is not live.
+    // caused_by must be a message addressed to the sender: m1 (to B) is not C's.
     assert.equal((await send(C.session, D.session, { caused_by: m1.body.message.id })).status, 404);
     r.h.clock.advance(3_601_000);
-    assert.equal((await send(C.session, D.session, { caused_by: m2.body.message.id })).status, 404, 'the cause expired');
-    // Once nothing live was handed to C, it starts at hop 1 again.
-    const fresh = await send(C.session, D.session);
-    assert.equal(fresh.status, 200, JSON.stringify(fresh.body));
-    assert.equal(fresh.body.message.hop, 1);
+    // A cause that aged out of the window is ignored, not refused: the session can still speak.
+    const stale = await send(C.session, D.session, { caused_by: m2.body.message.id });
+    assert.equal(stale.status, 200, JSON.stringify(stale.body));
+    assert.equal(stale.body.message.hop, 1);
+    assert.equal(stale.body.message.caused_by, null);
+  } finally { await r.close(); }
+});
+
+test('REVIEW 4: a sender\'s short ttl_s does not shorten the hop/visited window', async () => {
+  const r = await messagingRig();
+  try {
+    const auto = { sessions: true, max_hops: 1, turns_per_hour: 30, parallel: 4 };
+    const mac = await r.mac(r.macA, { start: false, shares: () => ({ automation: auto }) });
+    const B = await mac.launch(), C = await mac.launch();
+    const sync = await mac.recv.sync(true);
+    const tid = (s) => sync.body.targets.find((x) => x.session === s).target;
+    const A = mac.session.session;
+    const send = (from, to, extra = {}) => mac.recv.sendFromSession(from, { to: { target: tid(to) }, body: 'pass it on', ...extra });
+    const m1 = await send(A, B.session, { ttl_s: 10 });
+    assert.equal(m1.status, 200, JSON.stringify(m1.body));
+    // Lease and deliver it so it is not swept as an undelivered expiry.
+    const [p] = await pull(r);
+    assert.equal(p.id, m1.body.message.id);
+    assert.equal((await r.api(r.macA, 'POST', `/host/messages/${p.id}/report`, { lease: p.lease, phase: 'accepted' })).body.proceed, true);
+    assert.equal((await r.api(r.macA, 'POST', `/host/messages/${p.id}/report`, { lease: p.lease, phase: 'delivered' })).status, 200);
+    r.h.clock.advance(11_000);
+    r.h.hub.messaging.purge();
+    const far = await send(B.session, C.session);
+    assert.equal(far.status, 409, JSON.stringify(far.body));
+    assert.equal(far.body.error.reason, 'HOP_LIMIT');
+    assert.equal((await send(B.session, A)).body.error?.reason, 'LOOP');
+    r.h.clock.advance(3_600_000);
+    assert.equal((await send(B.session, C.session)).status, 200, 'the fixed window has passed');
   } finally { await r.close(); }
 });
 

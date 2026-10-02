@@ -315,18 +315,20 @@ export class Messaging {
         || (reply.org_id ?? null) !== orgId || (convo && convo !== reply.conversation_id)) throw missing();
     }
     // hop: session-sourced forwards in this chain (a person's message is 0).
-    // Derived from every still-live message this session was handed, never from
-    // the caller: omitting or choosing caused_by cannot restart the count.
+    // Derived from every message this session was handed in the last hour, never
+    // from the caller: omitting or choosing caused_by cannot restart the count,
+    // and the window is fixed so a sender's short ttl_s cannot shorten it.
     let hop = 0, visited = [];
     const hour = this.at(this.nowMs() - 3_600_000);
     if (src.target) {
-      const live = "dest_target_id = ? AND state NOT IN ('rejected','expired') AND expires_at > ?", now = this.at();
+      const recent = "dest_target_id = ? AND state NOT IN ('rejected','expired') AND created_at > ?";
       if (causedBy) {
-        cause = this.db.get(`SELECT * FROM msg_messages WHERE id = ? AND ${live}`, causedBy, src.target.id, now);
-        if (!cause) throw missing();
+        // A cause handed to someone else is refused; one that has aged out is just dropped.
+        if (!this.db.get('SELECT 1 FROM msg_messages WHERE id = ? AND dest_target_id = ?', causedBy, src.target.id)) throw missing();
+        cause = this.db.get(`SELECT * FROM msg_messages WHERE id = ? AND ${recent}`, causedBy, src.target.id, hour) ?? null;
       }
-      hop = 1 + (this.db.get(`SELECT MAX(hop) h FROM msg_messages WHERE ${live}`, src.target.id, now)?.h ?? 0);
-      for (const r of this.db.all(`SELECT DISTINCT visited FROM msg_messages WHERE ${live} AND source_kind = 'session'`, src.target.id, now)) visited.push(...parse(r.visited, []));
+      hop = 1 + (this.db.get(`SELECT MAX(hop) h FROM msg_messages WHERE ${recent}`, src.target.id, hour)?.h ?? 0);
+      for (const r of this.db.all(`SELECT DISTINCT visited FROM msg_messages WHERE ${recent} AND source_kind = 'session'`, src.target.id, hour)) visited.push(...parse(r.visited, []));
       visited = [...new Set([...visited, src.target.id])];
       if (t) {
         const policy = this.automation(t);

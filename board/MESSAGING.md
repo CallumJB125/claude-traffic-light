@@ -178,10 +178,12 @@ Session-sourced messages (`/host/send`) are **opt-in automation** on the destina
 Hub-wide caps: 120 session-sourced messages per team per hour, 60 per card per hour. Spend is
 bounded through turns (no provider cost signal exists yet). Loop suppression: `hop` counts
 session-sourced forwards, and the **hub derives it**: a session's message has hop = 1 + the
-highest hop of any still-live message (not rejected/expired, before `expires_at`) addressed to
-that session (a person's message is 0), and `visited` = the union of those messages' `visited`
-+ the source target. Omitting `caused_by`, or naming a lower-hop one, changes neither; a given
-`caused_by` must be one of those live messages (else 404). A destination already in `visited`,
+highest hop of any message (not rejected or expired undelivered) addressed to that session in
+the last hour (a person's message is 0), and `visited` = the union of those messages' `visited`
++ the source target. The one-hour window is fixed: a sender's `ttl_s` does not shorten it.
+Omitting `caused_by`, or naming a lower-hop one, changes neither; a given `caused_by` must be a
+message addressed to that session (else 404), and one older than the window is dropped (stored
+as no cause) rather than refused, so a session can still speak after its cause expired. A destination already in `visited`,
 a self-send, or `hop > max_hops` is refused. The receiver still sends as `caused_by` the last
 session-sourced message or handoff delivered into that session (a person's message does not
 clear it); per-target turns/hour and parallel caps bound anything else.
