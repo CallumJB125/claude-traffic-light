@@ -919,7 +919,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     },
     setupsContext() {
       const v=localViews.get('setups'),wc=v?.webContents;
-      if(!win || win.isDestroyed() || !wc || wc.isDestroyed() || selected!=='setups' || content!==v || !win.isVisible() || win.isMinimized())return null;
+      if(!win || win.isDestroyed() || !wc || wc.isDestroyed() || selected!=='setups' || content!==v || !win.contentView.children.includes(v) || !win.isVisible() || win.isMinimized())return null;
       const expected=pathToFileURL(path.join(DIR,'..','setups.html')).href;
       if(wc.getURL()!==expected || wc.mainFrame?.url!==expected || wc.isLoading())return null;
       return {window:win,contents:wc,generation:setupLocalGeneration,foreground:win.isFocused()};

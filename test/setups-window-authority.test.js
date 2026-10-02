@@ -11,7 +11,7 @@ function fixture(){
  const dir='/synthetic/app/buddy-window',expected=pathToFileURL(path.join(dir,'..','setups.html')).href;
  Object.assign(state,{url:expected,focused:true,visible:true,minimized:false,destroyed:false,loading:false});wc.mainFrame.url=expected;
  const context={path,pathToFileURL,DIR:dir,Promise,store:{hubs:()=>state.hubs},vault:()=>({load:()=>state.marker}),userOf:()=>state.marker?.user,hostOf:()=> 'Synthetic',clientFor:()=>({me:async()=>{if(state.hold)await state.hold();return state.response??{ok:true,user:{id:'account-a'},teams:[team]};},setups:async()=>({ok:true})}),win,selected:'setups',content:null,localViews:new Map(),state,wc};
- context.content={webContents:wc};context.localViews.set('setups',context.content);
+ context.content={webContents:wc};context.localViews.set('setups',context.content);win.contentView={children:[context.content]};
  const factory=source.slice(source.indexOf('  async function setupSources()'),source.indexOf('  const myDayBroker'));
  const methods=source.slice(source.indexOf('    setupsActorCurrent(actor)'),source.indexOf('    onSetupsIdentityChange(listener)'));
  const retire=source.slice(source.indexOf('  function retireSetupDocument()'),source.indexOf('  // Before anything that can call forgetHub.'));
@@ -30,7 +30,7 @@ test('late source result cannot supersede current refreshed identity',async()=>{
  const f=fixture();let release;f.state.hold=()=>new Promise(r=>release=r);const old=f.api.setupSources();await new Promise(r=>setImmediate(r));f.state.hold=null;await f.api.setupSources();release();const oldRows=await old;assert.equal(oldRows.length,0);assert.equal(f.api.setupsActorCurrent(f.principal),true);
 });
 test('owned context requires exact current top page, attachment, visible active window',()=>{
- for(const mutate of [f=>f.state.url+='?path=foreign',f=>f.wc.mainFrame.url='https://synthetic.example',f=>f.state.visible=false,f=>f.state.minimized=true,f=>f.state.loading=true,f=>f.context.selected='other',f=>f.context.content=null]){const f=fixture();assert.equal(f.api.setupsContext().foreground,true);mutate(f);assert.equal(f.api.setupsContext(),null);}
+ for(const mutate of [f=>f.state.url+='?path=foreign',f=>f.wc.mainFrame.url='https://synthetic.example',f=>f.state.visible=false,f=>f.state.minimized=true,f=>f.state.loading=true,f=>f.context.selected='other',f=>f.context.content=null,f=>f.win.contentView.children=[]]){const f=fixture();assert.equal(f.api.setupsContext().foreground,true);mutate(f);assert.equal(f.api.setupsContext(),null);}
  const f=fixture();f.state.focused=false;assert.equal(f.api.setupsContext().foreground,false);const g=f.api.setupsContext().generation;f.context.blur();f.state.focused=true;assert.ok(f.api.setupsContext().generation>g);
 });
 test('only one owned native modal and actual foreground/current view can return approval',async()=>{
