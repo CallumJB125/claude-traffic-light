@@ -1,4 +1,5 @@
 #include "reader.h"
+#include "reader-private.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -292,6 +293,44 @@ PFResult pf_read_fixed(PFRoot *root, PFRecipe recipe, const PFStamp *expected,
   else if (read_bytes) memset(bytes, 0, read_bytes);
   target_close(&target); return r;
 }
+struct PFNativeParent { PFRoot *root; PFNode node; char leaf[PF_COMPONENT_BYTES]; };
+PFResult pf_native_parent_open(PFRoot *root, PFRecipe recipe, PFNativeParent **out) {
+  if (!out) return PF_INVALID;
+  *out = NULL;
+  if (recipe < PF_CODEX_INSTRUCTIONS || recipe > PF_GEMINI_SETTINGS) return PF_UNSUPPORTED;
+  PFResult r = root_current(root); if (r != PF_OK) return r;
+  PFNativeParent *p = calloc(1, sizeof(*p)); if (!p) return PF_IO;
+  p->node.fd = -1; p->root = calloc(1, sizeof(*p->root));
+  if (!p->root) { free(p); return PF_IO; }
+  for (size_t i = 0; i < root->count; ++i) {
+    int fd = fcntl(root->nodes[i].fd, F_DUPFD_CLOEXEC, 0);
+    if (fd < 0) { pf_native_parent_close(p); return PF_IO; }
+    p->root->nodes[i] = root->nodes[i]; p->root->nodes[i].fd = fd; p->root->count++;
+  }
+  char path[PF_COMPONENT_BYTES]; strcpy(path, recipe_path(recipe));
+  char *slash = strchr(path, '/');
+  if (!slash || strchr(slash + 1, '/')) { pf_native_parent_close(p); return PF_INVALID; }
+  *slash = 0; strcpy(p->leaf, slash + 1);
+  r = directory(p->root->nodes[p->root->count-1].fd, path, 1, &p->node);
+  if (r == PF_OK && p->node.identity.device != p->root->nodes[p->root->count-1].identity.device) r = PF_UNSAFE;
+  if (r == PF_OK) r = pf_native_parent_current(p);
+  if (r != PF_OK) { pf_native_parent_close(p); return r; }
+  *out = p; return PF_OK;
+}
+PFResult pf_native_parent_current(PFNativeParent *p) {
+  if (!p) return PF_INVALID;
+  PFResult r = root_current(p->root); if (r != PF_OK) return r;
+  return node_current(p->root->nodes[p->root->count-1].fd, &p->node);
+}
+int pf_native_profile_fd(PFNativeParent *p) { return p ? p->root->nodes[p->root->count-1].fd : -1; }
+int pf_native_parent_fd(PFNativeParent *p) { return p ? p->node.fd : -1; }
+const char *pf_native_leaf(PFNativeParent *p) { return p ? p->leaf : NULL; }
+void pf_native_parent_close(PFNativeParent *p) {
+  if (!p) return;
+  if (p->node.fd >= 0) close(p->node.fd);
+  pf_root_close(p->root); memset(p, 0, sizeof(*p)); free(p);
+}
+PFResult pf_native_acl_safe(int fd) { return acl_safe(fd); }
 #else
 struct PFRoot { int unsupported; };
 PFResult pf_root_open(const char *p, const PFStamp *e, PFRoot **o) { (void)p; (void)e; if (o) *o = NULL; return PF_UNSUPPORTED; }
@@ -301,4 +340,11 @@ PFResult pf_inspect_fixed(PFRoot *r, PFRecipe p, PFStamp *o) { (void)r; (void)p;
 PFResult pf_read_fixed(PFRoot *r, PFRecipe p, const PFStamp *e, unsigned char *b, size_t c, size_t *s, PFStamp *o) {
   (void)r; (void)p; (void)e; (void)b; (void)c; if (s) *s = 0; if (o) memset(o, 0, sizeof(*o)); return PF_UNSUPPORTED;
 }
+PFResult pf_native_parent_open(PFRoot *r, PFRecipe p, PFNativeParent **o) { (void)r; (void)p; if (o) *o = NULL; return PF_UNSUPPORTED; }
+PFResult pf_native_parent_current(PFNativeParent *p) { (void)p; return PF_UNSUPPORTED; }
+int pf_native_profile_fd(PFNativeParent *p) { (void)p; return -1; }
+int pf_native_parent_fd(PFNativeParent *p) { (void)p; return -1; }
+const char *pf_native_leaf(PFNativeParent *p) { (void)p; return NULL; }
+void pf_native_parent_close(PFNativeParent *p) { (void)p; }
+PFResult pf_native_acl_safe(int fd) { (void)fd; return PF_UNSUPPORTED; }
 #endif

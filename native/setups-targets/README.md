@@ -1,9 +1,10 @@
 # Darwin fixed-target reader
 
-This is a source library and synthetic acceptance driver. It is not an installed
-helper, app binding, mutation adapter or enabled Setups feature. No IPC, process
-launcher, target writer, rename, Apply/Undo or account/provider integration is
-added. Windows directory operations remain in `native/windows-private-directory`;
+This reader API is a source library and synthetic acceptance driver. It is not an
+installed helper, app binding or enabled Setups feature. The separate native-only
+writer prototype is described in [WRITER.md](WRITER.md); it shares the reader's
+descriptor/ACL policy through a private implementation bridge. No IPC, process
+launcher or account/provider integration is added. Windows directory operations remain in `native/windows-private-directory`;
 Linux and Windows calls here return `unsupported`.
 
 A trusted native caller passes an already canonical absolute profile root, owned
@@ -106,7 +107,8 @@ never HOME. It preserves foreign file variants, checks read-call absence for
 FIFO/retarget/replacement refusals, bounds the FIFO child with an alarm, and tests
 all eight fixed paths, stale identities, empty/exact/overlimit files, unsafe modes,
 links and root storage bounds. Native source/actual independent acceptance is a
-separate ROOT gate before any writer, app import, signing or package integration.
+separate ROOT gate before app import, signing or package integration. Writer
+source and its actual fixtures have their own exact independent gate.
 
 API semantics were checked against the installed official SDK headers/manuals
 and [Apple's descriptor ACL manual](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man3/acl_get_fd_np.3.html),
