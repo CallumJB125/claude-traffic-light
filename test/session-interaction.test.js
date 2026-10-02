@@ -278,3 +278,51 @@ test('Review: owned Codex has no shell, exec, file-viewing or user-config reach'
   for (const f of ['shell_tool', 'unified_exec', 'view_image', 'skill_search', 'shell_snapshot']) assert(args.includes(`--disable ${f}`), f);
   for (const c of ['model_provider="openai"', 'shell_environment_policy.inherit="none"', 'projects={}', 'plugins={}']) assert(APP_SERVER_ARGS.includes(c), c);
 });
+
+// ── UI review fixes ──
+test('Review: switching boards blocks send but never blocks stopping the session', async () => {
+  let showing = 'board-1';
+  const adapter = memAdapter();
+  const interrupted = [];
+  adapter.interrupt = async (a) => { interrupted.push(a); return true; };
+  const hub = createInteractionHub({ adapters: { mem: adapter }, boardCurrent: (b) => b === showing });
+  const a = (await hub.launch({ provider: 'mem', board: 'board-1' }, ACTOR)).state;
+  const base = { session: a.session, generation: a.generation };
+  await hub.send({ ...base, board: 'board-1', text: 'go' }, ACTOR);
+  adapter.emit({ kind: 'turn-started', target: 'target-1', turnId: 'turn-1' });
+  const turn = hub.state({ session: a.session }, ACTOR).activeTurn;
+  showing = 'board-2';
+  assert.equal((await hub.send({ ...base, board: 'board-1', text: 'more' }, ACTOR)).status, 'stale', 'send is refused on another board');
+  assert.equal((await hub.interrupt({ ...base, turn }, ACTOR)).status, 'interrupt-requested', 'interrupt still works');
+  assert.equal((await hub.close(base, ACTOR)).status, 'closed', 'close still works');
+  assert.equal(interrupted.length >= 1, true);
+  assert.equal((await hub.close(base, 'overview:2:1')).status, 'stale', 'a gone session is gone for everyone');
+});
+test('Review: eager retire ends every session of a reloaded or crashed Overview', async () => {
+  const h = ipcHarness();
+  assert.equal((await h.call(CHANNELS.launch, h.own, { provider: 'mem' })).status, 'launched');
+  assert.equal((await h.call(CHANNELS.list, h.own)).length, 1);
+  await h.main.retireDocuments();
+  assert.equal(h.main.hub.list('overview:7:3').length, 0);
+  h.main.close();
+});
+test('Review: an effect is dropped when the document lost focus while a reap was awaited', async () => {
+  const handlers = new Map();
+  const contents = { id: 9, isDestroyed: () => false, send() {} }; contents.mainFrame = {};
+  let ctx = { contents, generation: 1, document: 1, foreground: true };
+  const adapter = memAdapter();
+  const slow = new Promise((r) => { adapter.releaseGate = r; });
+  adapter.release = () => slow;
+  const main = createInteractionMain({ context: () => (ctx?.foreground ? ctx : null), readContext: () => ctx, adapters: { mem: adapter }, workspace: () => null, currentBoard: () => 'board-x' });
+  main.register({ handle: (ch, fn) => handlers.set(ch, fn) });
+  const own = { sender: contents, senderFrame: contents.mainFrame };
+  assert.equal((await handlers.get(CHANNELS.launch)(own, { provider: 'mem' })).status, 'launched');
+  ctx = { contents, generation: 1, document: 2, foreground: true };
+  const pending = handlers.get(CHANNELS.launch)(own, { provider: 'mem' });
+  await new Promise((r) => setImmediate(r));
+  ctx = { contents, generation: 1, document: 2, foreground: false };
+  adapter.releaseGate();
+  assert.equal((await pending).status, 'forbidden', 'unfocused after the reap: the launch never runs');
+  assert.equal(main.hub.list('overview:9:2').length, 0);
+  main.close();
+});

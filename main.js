@@ -1343,6 +1343,7 @@ function getBuddy() {
   if (!devMockReady) throw new Error('the dev mock accounts hub is still starting');
   if (!buddyWin) {
     buddyWin = createBuddyWindow({
+      onOverviewRetired: () => { InteractionMain.retireDocuments().catch(() => {}); },
       openWindow: (which) => {
         if (which === 'lights') createLightsWindow();
         else if (which === 'settings') createSettingsWindow();

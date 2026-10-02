@@ -115,7 +115,7 @@ async function probeHub(origin, partition) {
   });
 }
 
-function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onClosed = () => {}, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged, devAccountsHub = null, captureEnabled = true } = {}) {
+function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onClosed = () => {}, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged, devAccountsHub = null, captureEnabled = true, onOverviewRetired = () => {} } = {}) {
   // The dev-only mock accounts hub runs on loopback; that one exact origin is
   // the only non-https hub ever accepted.
   const allowOrigins = devAccountsHub && isDev ? [devAccountsHub] : [];
@@ -410,8 +410,9 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
         // A same-URL reload keeps WebContents/mainFrame object identity. Its
         // document still retires every outstanding native approval and plan.
         // Overview also counts documents (not focus changes) for session ownership.
-        const retire=page.id==='overview'?()=>{overviewDocument++;retireSetupDocument();}:retireSetupDocument;
-        v.webContents.on('did-start-navigation',d=>{if(d.isMainFrame)retire();});
+        const retire=page.id==='overview'?()=>{overviewDocument++;retireSetupDocument();try{onOverviewRetired();}catch{/* never blocks retirement */}}:retireSetupDocument;
+        // A same-document navigation (hash/pushState) keeps the document, so it must not end sessions.
+        v.webContents.on('did-start-navigation',d=>{if(d.isMainFrame&&!d.isSameDocument)retire();});
         v.webContents.on('render-process-gone',retire);
         v.webContents.once('destroyed',retire);
       }

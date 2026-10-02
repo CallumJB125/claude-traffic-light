@@ -105,13 +105,14 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
   }
   // Every request names session + generation and arrives with the main-owned
   // actor. Replacement of target, session, actor or board is refused.
-  function lookup(req, actor) {
+  // `board:false` is for stopping a session (interrupt, close): its owner can always stop it, whichever board is showing.
+  function lookup(req, actor, { board = true } = {}) {
     if (!object(req) || typeof req.session !== 'string' || !UUID.test(req.session) || !Number.isSafeInteger(req.generation)) return { error: refuse('invalid', ERRORS.invalid) };
     const r = sessions.get(req.session);
     if (!r) return { error: refuse('stale', ERRORS.stale) };
     if (typeof actor !== 'string' || actor !== r.actor) return { error: refuse('forbidden', ERRORS.forbidden) };
     if (r.ended || req.generation !== r.generation || !r.adapter.alive()) return { error: refuse('stale', ERRORS.stale) };
-    if (!isCurrent(r.board)) return { error: refuse('stale', ERRORS.stale) };
+    if (board && !isCurrent(r.board)) return { error: refuse('stale', ERRORS.stale) };
     return { r };
   }
 
@@ -177,7 +178,7 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
 
   async function interrupt(req, actor) {
     if (!closed(req, ['session', 'generation', 'turn']) || typeof req.turn !== 'string' || !UUID.test(req.turn)) return refuse('invalid', ERRORS.invalid);
-    const { r, error } = lookup(req, actor);
+    const { r, error } = lookup(req, actor, { board: false });
     if (error) return error;
     const active = r.activeTurn ? r.turns.get(r.activeTurn) : null;
     if (!active || active.tag !== req.turn || !r.adapter.capabilities.interrupt) return refuse('stale', ERRORS.stale);
@@ -196,7 +197,7 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
     if (!closed(req, ['session', 'generation'])) return refuse('invalid', ERRORS.invalid);
     const r = object(req) ? sessions.get(req.session) : null;
     if (r && r.actor === actor && r.ended && req.generation === r.generation) { await end(r); return { ok: true, status: 'closed' }; }
-    const { error } = lookup(req, actor);
+    const { error } = lookup(req, actor, { board: false });
     if (error) return error;
     await end(r);
     return { ok: true, status: 'closed' };

@@ -63,6 +63,9 @@ function createInteractionMain({ context, readContext = context, adapters: given
     if (!documents.has(actor)) {
       documents.clear(); documents.set(actor, c.contents);
       await hub.reap((a) => a === actor);
+      // The reap awaited the provider: the document must still be the same one and, for an effect, still focused.
+      const again = effect ? context() : readContext();
+      if (!again || (effect && !again.foreground) || again.contents !== c.contents || again.document !== c.document) return null;
     }
     return actor;
   }
@@ -81,6 +84,8 @@ function createInteractionMain({ context, readContext = context, adapters: given
   return {
     hub,
     documents: () => documents.size,
+    // The Overview document was reloaded, crashed or destroyed: its sessions end now, not on the next request.
+    retireDocuments() { documents.clear(); return hub.reap(() => false); },
     register(ipc) {
       // null (not []) when this document may not read, so the page keeps its last known state.
       ipc.handle(CHANNELS.capabilities, async (e) => ((await actorOf(e, false)) ? hub.capabilities() : null));
