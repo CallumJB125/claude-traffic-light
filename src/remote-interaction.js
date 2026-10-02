@@ -28,6 +28,20 @@
 // socket is cleared), then a second 409 is 'held' (someone else has this
 // device's sign-in) and is shown, never retried.
 //
+// Team sharing (board/hub/interaction-shares.js): the owner may share one
+// session at a time with one team, scope 'watch' (state, watch) or
+// 'interact' (also send, interrupt), with an optional expiry. The share is
+// created here, through this device's own token, and kept here too: a
+// relayed teammate call is served only when this Mac holds a live share with
+// that id, team, session and scope, the expiry has not passed on this Mac's
+// clock, and the caller is one of the members the hub listed for it (a
+// member who joins later gets access at the next refresh). Otherwise it is
+// refused whatever the hub says. A teammate never lists, launches or closes,
+// never sees the owner's other sessions, and their sends are labelled
+// ("Sent by <name>") in the owner's transcript. Stopping a share drops it
+// here first, then tells the hub. Sessions Overview started are reachable
+// only once shared (main passes sharedTarget), never through 'list'.
+//
 // Nothing here logs message text, responses or ids beyond the op name.
 const crypto = require('node:crypto');
 const { createInteractionHub } = require('./session-interaction');
@@ -35,7 +49,8 @@ const { createInteractionHub } = require('./session-interaction');
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const OPS = ['capabilities', 'list', 'state', 'launch', 'send', 'interrupt', 'close', 'watch'];
 const MAX_FRAME = 64 * 1024, MAX_REPLY = 700 * 1024, MAX_SEEN = 2048, WATCH_MAX_MS = 20_000;
-const MAX_HANDLING = 16, MAX_WATCHES = 8, MAX_TARGETS = 512;
+const MAX_HANDLING = 16, MAX_WATCHES = 8, MAX_TARGETS = 512, MAX_SHARES = 64, SHARED_POLL_MS = 200;
+const SCOPE_OPS = { watch: ['state', 'watch'], interact: ['state', 'watch', 'send', 'interrupt'] };
 const RESUME_HEADER = 'x-plexiform-resume';
 const RETRY = { baseMs: 1000, maxMs: 60_000, idleReapMs: 15 * 60_000, heldProbeMs: 6000 };
 const ROLE_RESET_MS = 5000;
@@ -49,10 +64,14 @@ const REFUSED = {
   tooLarge: refuse('unavailable', 'The session is too large to show remotely.'),
   unavailable: refuse('unavailable', 'The provider did not accept the message.'),
   busy: refuse('unavailable', 'This computer is busy with other requests. Try again shortly.'),
+  notShared: refuse('forbidden', 'This session is not shared with you.'),
+  gone: refuse('stale', 'This session is no longer shared.'),
 };
 
 // boardCurrent: remote sessions are not board-bound unless main says so.
-function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent = (b) => b === null, now, log = () => {}, retry = {}, random = Math.random }) {
+// sharedTarget(session) → {hub, actor} | null: another interaction hub's
+// session (Overview) that may be shared; this host's own sessions always may.
+function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent = (b) => b === null, now, log = () => {}, retry = {}, random = Math.random, sharedTarget = () => null }) {
   if (typeof userId !== 'string' || !userId) throw new Error('a remote host needs the signed-in user id');
   const actor = `account:${userId}`;
   const versions = new Map(); // session -> change counter
@@ -61,6 +80,9 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
   const targets = new Set();  // every provider target seen here, current or replaced, bounded
   const R = { ...RETRY, ...retry };
   let handling = 0, watching = 0;
+  const clock = now ?? Date.now;
+  const shares = new Map();   // share id -> {id, session, team, teamName, scope, expiresAt, users: Map(user id -> name)}
+  const prints = new Map();   // shared session -> {text, version}
   const hub = createInteractionHub({
     adapters, workspace, boardCurrent, now,
     onEvent(a, state) {
@@ -69,8 +91,8 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
       bump(state.session);
     },
   });
-  function remember(session) {
-    const t = hub.targetOf(session);
+  function remember(session, from = hub) {
+    const t = from.targetOf(session);
     if (!t || targets.has(t)) return;
     targets.add(t);
     while (targets.size > MAX_TARGETS) targets.delete(targets.values().next().value);
@@ -127,18 +149,153 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
     return false;
   }
 
+  // ── Team sharing ────────────────────────────────────────────────────────
+  function targetFor(session) {
+    if (hub.state({ session }, actor)) return { hub, actor };
+    let t = null;
+    try { t = sharedTarget(session); } catch { t = null; }
+    return t && t.hub && typeof t.actor === 'string' && t.hub.state({ session }, t.actor) ? t : null;
+  }
+  // A teammate sees the session's messages and responses, never the owner's board key.
+  function project(state) { const { board, ...rest } = state; return rest; }
+  function sharedRead(t, session) {
+    const st = t.hub.state({ session }, t.actor);
+    if (!st) return null;
+    const out = project(st), text = JSON.stringify(out);
+    let p = prints.get(session);
+    if (!p) { p = { text, version: 1 }; prints.set(session, p); while (prints.size > MAX_SHARES) prints.delete(prints.keys().next().value); }
+    else if (p.text !== text) { p.text = text; p.version++; }
+    return { ok: true, version: p.version, state: out };
+  }
+  const liveShare = (sh) => !!sh && shares.get(sh.id) === sh && (sh.expiresAt === null || clock() < sh.expiresAt);
+
+  // A relayed teammate call: served only against this Mac's own copy of the share.
+  async function runShared(frame) {
+    const s = frame.share, args = frame.args;
+    if (!closed(s, ['id', 'team', 'user', 'name', 'scope']) || typeof s.id !== 'string' || typeof s.team !== 'string' || typeof s.user !== 'string' || typeof args.session !== 'string') return REFUSED.invalid;
+    const sh = shares.get(s.id);
+    if (!sh || s.user === userId || sh.team !== s.team || !sh.users.has(s.user) || sh.session !== args.session || !SCOPE_OPS[sh.scope].includes(frame.op)) return REFUSED.notShared;
+    if (!liveShare(sh)) { dropShare(sh.id); return REFUSED.gone; }
+    const t = targetFor(sh.session);
+    if (!t) { dropShare(sh.id); return REFUSED.gone; }
+    remember(sh.session, t.hub);
+    if (frame.op === 'state') {
+      if (!closed(args, ['session'])) return REFUSED.invalid;
+      return sharedRead(t, sh.session) ?? REFUSED.gone;
+    }
+    if (frame.op === 'watch') return sharedWatch(sh, t, args);
+    if (frame.op === 'send') {
+      if (!closed(args, ['session', 'generation', 'text', 'expectedTurn'])) return REFUSED.invalid;
+      const st = t.hub.state({ session: sh.session }, t.actor);
+      const req = { session: sh.session, generation: args.generation, board: st.board, text: args.text };
+      if (args.expectedTurn !== undefined) req.expectedTurn = args.expectedTurn;
+      const result = await t.hub.send(req, t.actor, { by: sh.users.get(s.user) });
+      return result.state ? { ...result, state: project(result.state) } : result;
+    }
+    if (!closed(args, ['session', 'generation', 'turn'])) return REFUSED.invalid;
+    const result = await t.hub.interrupt(args, t.actor);
+    return result.state ? { ...result, state: project(result.state) } : result;
+  }
+
+  function sharedWatch(sh, t, args) {
+    if (!closed(args, ['session', 'after']) || !Number.isSafeInteger(args.after) || args.after < 0) return REFUSED.invalid;
+    const read = () => (liveShare(sh) ? sharedRead(t, sh.session) ?? REFUSED.gone : REFUSED.gone);
+    const first = read();
+    if (!first.ok || first.version > args.after) return first;
+    if (watching >= MAX_WATCHES) return REFUSED.busy;
+    watching++;
+    return new Promise((resolve) => {
+      let waited = 0;
+      const tick = setInterval(() => {
+        const r = read();
+        waited += SHARED_POLL_MS;
+        if (!r.ok || r.version > args.after || waited >= WATCH_MAX_MS) { clearInterval(tick); watching--; resolve(r); }
+      }, SHARED_POLL_MS);
+      tick.unref?.();
+    });
+  }
+
+  function dropShare(id, { tellHub = true } = {}) {
+    const sh = shares.get(id);
+    if (!sh) return;
+    shares.delete(id);
+    if (![...shares.values()].some((x) => x.session === sh.session)) prints.delete(sh.session);
+    if (tellHub) hubCall('DELETE', `/api/interaction/v1/shares/${encodeURIComponent(id)}`, {}).catch(() => {});
+  }
+
+  function hubCall(method, path, body) { // privacy-flow: remote-interaction
+    const r = running;
+    if (!r?.baseUrl) return Promise.resolve({ status: 0, body: null });
+    const tok = typeof r.token === 'function' ? r.token() : r.token;
+    const headers = { authorization: `Bearer ${tok}`, accept: 'application/json' };
+    if (body !== undefined) headers['content-type'] = 'application/json';
+    return r.fetch(`${r.baseUrl}${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) }) // privacy-flow: remote-interaction
+      .then(async (res) => { let json = null; try { json = await res.json(); } catch { json = null; } return { status: res.status, body: json }; });
+  }
+
+  const usersOf = (members) => new Map((Array.isArray(members) ? members : []).filter((m) => object(m) && typeof m.id === 'string' && m.id !== userId).map((m) => [m.id, typeof m.name === 'string' && m.name ? m.name.slice(0, 80) : 'Teammate']));
+  const shareView = (sh) => ({ id: sh.id, session: sh.session, team: { id: sh.team, name: sh.teamName }, scope: sh.scope, expiresAt: sh.expiresAt, members: [...sh.users].map(([id, name]) => ({ id, name })) });
+  const hubError = (r, fallback) => refuse('unavailable', (typeof r?.body?.error?.message === 'string' ? r.body.error.message : '') || fallback);
+
+  /** Owner: share one of this Mac's sessions with one team. */
+  async function shareSession({ session, team, scope, expiresInS = null } = {}) {
+    if (typeof session !== 'string' || !UUID.test(session) || typeof team !== 'string' || !team || team.length > 100 || !Object.hasOwn(SCOPE_OPS, scope)
+      || (expiresInS !== null && (!Number.isSafeInteger(expiresInS) || expiresInS < 60 || expiresInS > 30 * 86_400))) return REFUSED.invalid;
+    const t = targetFor(session);
+    if (!t || t.hub.state({ session }, t.actor).status === 'ended') return refuse('stale', 'This session has ended and cannot be shared.');
+    if (state !== 'connected') return refuse('unavailable', 'This Mac is not connected to your team hub.');
+    if (shares.size >= MAX_SHARES) return refuse('unavailable', 'Stop sharing another session first.');
+    let r;
+    try { r = await hubCall('POST', '/api/interaction/v1/shares', { session, team, scope, ...(expiresInS === null ? {} : { expires_in_s: expiresInS }) }); } catch { r = null; }
+    const s = r?.body?.share;
+    if (r?.status !== 200 || !object(s) || typeof s.id !== 'string' || s.session !== session || s.scope !== scope || s.team?.id !== team) return hubError(r, 'The hub did not accept the share.');
+    // The session may have ended while the hub answered.
+    if (!targetFor(session)) { dropShare(s.id); return refuse('stale', 'This session has ended and cannot be shared.'); }
+    for (const x of [...shares.values()]) if (x.session === session && x.team === team) dropShare(x.id, { tellHub: false });
+    const sh = { id: s.id, session, team, teamName: typeof s.team.name === 'string' ? s.team.name.slice(0, 120) : 'Team', scope, expiresAt: expiresInS === null ? null : clock() + expiresInS * 1000, users: usersOf(s.members) };
+    shares.set(sh.id, sh);
+    return { ok: true, share: shareView(sh) };
+  }
+
+  /** Owner: the hub's view of this Mac's shares, reconciled with this Mac's own; and the teams it may share with. */
+  async function listShares() {
+    if (!running?.baseUrl) return refuse('unavailable', 'This Mac is not connected to your team hub.');
+    let r;
+    try { r = await hubCall('GET', '/api/interaction/v1/shares'); } catch { r = null; }
+    if (r?.status !== 200 || !Array.isArray(r.body?.shares)) return hubError(r, 'The hub did not answer.');
+    const onHub = new Map(r.body.shares.filter((x) => object(x) && typeof x.id === 'string').map((x) => [x.id, x]));
+    for (const [id, x] of onHub) {
+      const sh = shares.get(id);
+      // Unknown here (a restart) or for a session that is gone: ended at the hub too.
+      if (!sh || !liveShare(sh) || !targetFor(sh.session)) { if (sh) dropShare(id); else hubCall('DELETE', `/api/interaction/v1/shares/${encodeURIComponent(id)}`, {}).catch(() => {}); continue; }
+      sh.users = usersOf(x.members);
+    }
+    // Revoked by a team admin, expired or deleted at the hub: gone here too.
+    for (const id of [...shares.keys()]) if (!onHub.has(id)) dropShare(id, { tellHub: false });
+    const teams = (Array.isArray(r.body.teams) ? r.body.teams : []).filter((x) => object(x) && typeof x.id === 'string').map((x) => ({ id: x.id, name: typeof x.name === 'string' ? x.name.slice(0, 120) : 'Team' }));
+    return { ok: true, teams, shares: [...shares.values()].map(shareView) };
+  }
+
+  /** Owner: stop sharing now (this Mac refuses at once; the hub is told). */
+  function stopSharing(id) {
+    if (!shares.has(id)) return refuse('stale', 'That share has already stopped.');
+    dropShare(id);
+    return { ok: true };
+  }
+
   /** One relay.request frame (already parsed) → the result object for its relay.reply. */
   async function handle(frame) {
-    if (!closed(frame, ['type', 'id', 'rid', 'user', 'from', 'op', 'args']) || frame.type !== 'relay.request'
+    if (!closed(frame, ['type', 'id', 'rid', 'user', 'from', 'op', 'args', 'share']) || frame.type !== 'relay.request'
       || typeof frame.id !== 'string' || !UUID.test(frame.id) || typeof frame.rid !== 'string' || !UUID.test(frame.rid)
       || typeof frame.from !== 'string' || !frame.from || frame.from.length > 100 || !OPS.includes(frame.op) || !object(frame.args)) return REFUSED.invalid;
     if (frame.user !== userId) return REFUSED.forbidden;
     if (handling >= MAX_HANDLING) return REFUSED.busy;
     if (!once(`id:${frame.id}`) || !once(`rid:${frame.from}:${frame.rid}`)) return REFUSED.replayed;
     for (const x of hub.list(actor)) remember(x.session);
+    const shared = frame.share !== undefined;
     let result;
     handling++;
-    try { result = await run(frame.op, frame.args); } catch { result = REFUSED.unavailable; } finally { handling--; }
+    try { result = await (shared ? runShared(frame) : run(frame.op, frame.args)); } catch { result = REFUSED.unavailable; } finally { handling--; }
     const text = JSON.stringify(result);
     if (Buffer.byteLength(text) > MAX_REPLY) return REFUSED.tooLarge;
     if (leaksTarget(text)) { log(`[remote-interaction] ${frame.op}: answer withheld (provider id)`); return REFUSED.unavailable; }
@@ -152,8 +309,10 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
     idleTimer = setTimeout(() => { idleTimer = null; reapRemote(); }, R.idleReapMs);
     idleTimer.unref?.();
   }
+  // Not hosting any more: every share ends here (the hub drops them with the device or on the next list).
   function stopRunning(next) {
     running = null; state = next;
+    shares.clear(); prints.clear();
     clearTimeout(retryTimer); retryTimer = null;
     clearTimeout(idleTimer); idleTimer = null;
   }
@@ -244,7 +403,7 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
     catch { res = null; }
     if (res && (res.status === 401 || res.status === 403)) { reapRemote(); state = 'signed-out'; return status(); }
     attempts = 0; conflicts = 0; resume = null; notice = null;
-    running = { url, token, WebSocket };
+    running = { url, token, WebSocket, baseUrl, fetch };
     if (!res || !res.ok) { state = 'retrying'; idleFrom(); schedule(); return status(); }
     await attempt(running);
     return status();
@@ -271,7 +430,7 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
   function close() { stopRunning('off'); disconnect(); for (const w of [...watchers]) w(); hub.stopAll(); }
 
   // `hub` is a main-only seam (tests and proof logs), never exposed remotely.
-  return { handle, connect, enable, disable, status, disconnect, close, hub, actor, connected: () => socket?.readyState === 1 };
+  return { handle, connect, enable, disable, status, disconnect, close, hub, actor, connected: () => socket?.readyState === 1, shareSession, listShares, stopSharing, shared: () => [...shares.values()].map(shareView) };
 }
 
 /** PUT role=client with this token, bounded. → true once the hub has no host role for it. */

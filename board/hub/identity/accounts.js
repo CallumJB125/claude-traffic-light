@@ -714,6 +714,7 @@ export class Accounts {
       this.db.run(`UPDATE user_devices SET revoked_at = COALESCE(revoked_at, ?), token_hash = NULL, revoke_reason = COALESCE(revoke_reason, 'account_deleted'),
         name = 'Deleted device', platform = NULL, last_ip_prefix = NULL WHERE user_id = ?`, now, user.id);
       this.db.run('DELETE FROM sessions WHERE user_id = ?', user.id);
+      this.db.run('UPDATE interaction_shares SET revoked_at = ? WHERE owner_user_id = ? AND revoked_at IS NULL', now, user.id);
       this.db.run(`DELETE FROM login_flows WHERE user_id = ? OR email IN ${inAddresses}`, user.id, ...addresses);
       this.db.run('DELETE FROM oauth_flows WHERE user_id = ?', user.id);
       this.db.run('DELETE FROM oauth_web_flows WHERE user_id = ?', user.id);

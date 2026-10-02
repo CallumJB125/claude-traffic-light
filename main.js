@@ -1422,6 +1422,8 @@ const InteractionMain=require('./src/interaction-main').createInteractionMain({
   // The active workspace (My board or a team board) the sidebar shows.
   currentBoard:()=>buddyWin?.status?.().workspace??null,
   localModelsFile:path.join(app.getPath('userData'),'local-models.json'),
+  // Team sharing of Overview sessions goes through the remote host below (null while it is off).
+  shares:()=>hostSync.host(),
 });
 InteractionMain.register(ipcMain);
 app.on('will-quit',()=>InteractionMain.close());
@@ -1443,6 +1445,8 @@ const hostSync=require('./src/interaction-host-sync').createInteractionHostSync(
     workspace:()=>fs.mkdtempSync(path.join(os.tmpdir(),'plexiform-owned-')),
     boardCurrent:board=>board===null,
     log:m=>console.log(m),
+    // An Overview session is reachable by teammates only while its owner shares it.
+    sharedTarget:session=>InteractionMain.sharedTarget(session),
   }),
   connect:(host,o)=>host.enable({...o,WebSocket:require('ws')}), // privacy-flow: remote-interaction
   resetRole:RemoteInteraction.resetRole,
@@ -1452,6 +1456,8 @@ const hostSync=require('./src/interaction-host-sync').createInteractionHostSync(
 });
 function syncInteractionHost(){hostSync.sync();}
 app.on('will-quit',()=>hostSync.close());
+// While anything is shared, refresh who has access (members who joined or left) and drop shares a team admin ended.
+setInterval(()=>{const h=hostSync.host();if(h?.shared().length)h.listShares().catch(()=>{});},60_000).unref?.();
 const INTERACTION_HOST_LINES={connecting:'Connecting…',connected:'On: your other signed-in devices can use sessions started from them on this Mac.',retrying:'Can\'t reach your team hub; retrying.','signed-out':'Stopped: this Mac is signed out or was removed from your account.',replaced:'Stopped: another connection took over this Mac\'s sign-in. If that wasn\'t you, remove this device in Account and sign in again.',refused:'Stopped: the hub named a different account.',held:'Stopped: another connection is using this Mac\'s sign-in, so your devices can\'t reach it. If that wasn\'t you, remove this Mac from your account (Account → Devices) and sign in again.'};
 ipcMain.handle('interaction-host-status',e=>{
   if(!settingsOnly(e))return null;
