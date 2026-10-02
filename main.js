@@ -1403,6 +1403,7 @@ ipcMain.handle('sessions:settings', e => { if (!sessionsSender(e)) return false;
 // hub's directory client lands, a FAKE in-memory hub (clearly labelled as
 // test data in the page) can be loaded from a fixture file for demos/tests.
 let overviewTeams={host:null,at:0,value:null},overviewTeamHub=null;
+const liveTeamHub=require('./src/team-hub-live').createLiveTeamHub({identity:()=>devMockReady?getBuddy().interactionHostIdentity?.()??null:null,fetch:(...a)=>net.fetch(...a)}); // privacy-flow: team-hub-directory
 if(IS_DEV_RUN&&!app.isPackaged&&process.env.CLAUDE_BUDDY_FAKE_TEAM_HUB){try{overviewTeamHub=require('./src/team-hub-fake').createFakeTeamHub(JSON.parse(fs.readFileSync(process.env.CLAUDE_BUDDY_FAKE_TEAM_HUB,'utf8')));}catch(e){console.warn('[overview] fake team hub not loaded:',e.message);}}
 const OverviewMain=require('./src/overview-main').createOverviewMain({
   buddy:()=>buddyWin,sessions:()=>aggregateState().sessions||[],
@@ -1416,7 +1417,7 @@ const OverviewMain=require('./src/overview-main').createOverviewMain({
   shares:()=>{const h=hostSync.host(),origin=hostSync.origin();return h&&origin?{origin,list:h.shared()}:null;},
   hubTeams:async()=>{const h=hostSync.host(),origin=hostSync.origin();if(!h||!origin)return null;if(overviewTeams.host===h&&Date.now()-overviewTeams.at<30_000)return overviewTeams.value;
     const r=await h.listShares().catch(()=>null);overviewTeams={host:h,at:Date.now(),value:r?.ok?{origin,teams:r.teams}:null};return overviewTeams.value;},
-  teamHub:()=>overviewTeamHub,
+  teamHub:()=>overviewTeamHub||liveTeamHub.current(),
 });
 OverviewMain.register(ipcMain);
 overviewTeamHub?.onChange(()=>OverviewMain.directoryChanged());

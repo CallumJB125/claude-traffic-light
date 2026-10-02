@@ -52,7 +52,7 @@ function shareRow(x) {
   };
 }
 
-function createTeamHubClient({ baseUrl, token, fetch = globalThis.fetch, viewer: viewerOpt = null, viewerId = null } = {}, { pollMs, timeoutMs, deadlineMs, now = Date.now } = {}) {
+function createTeamHubClient({ baseUrl, token, fetch = globalThis.fetch, viewer: viewerOpt = null, viewerId = null } = {}, { pollMs, timeoutMs, deadlineMs, now = Date.now } = {}) { // privacy-flow: team-hub-directory
   const base = parseBase(baseUrl);
   if (typeof token !== 'function') throw new Error('a team hub client needs token as a function');
   if (typeof fetch !== 'function') throw new Error('a team hub client needs a fetch function');
@@ -80,7 +80,7 @@ function createTeamHubClient({ baseUrl, token, fetch = globalThis.fetch, viewer:
     const timer = setTimeout(() => ctl.abort(), ms);
     timer.unref?.();
     try {
-      const res = await fetch(url, {
+      const res = await fetch(url, { // privacy-flow: team-hub-directory
         method, redirect: 'error', signal: ctl.signal,
         headers: { authorization: `Bearer ${bearer()}`, accept: 'application/json', ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
         body: body === undefined ? undefined : JSON.stringify(body),
