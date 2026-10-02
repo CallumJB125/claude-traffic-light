@@ -3942,13 +3942,17 @@ ipcMain.handle('mcp-set-enabled', (_e, on) => {
 
 // Connect other agents: each adapter writes its own hook config.
 ipcMain.handle('connect-agent', (e, which) => {
+  if (!fromNativeBoardSettings(e)) return { ok: false, error: 'Not allowed.' };
   const adapter = which === 'claude' ? null : Adapters.get(which);
   if (!adapter) return { ok: false };
+  if (!AUTO_INSTALL_HOOKS) return { ok: false, error: 'Open the installed app to connect an agent.' };
   try {
-    const r = adapter.install({ home: os.homedir(), runtime: HOOK_RUNTIME });
-    return r.ok ? { ok: true, file: r.file } : { ok: false, file: r.file, error: r.error };
+    const install = which === 'codex' ? adapter.installActivity : adapter.install;
+    const r = install({ home: os.homedir(), runtime: HOOK_RUNTIME });
+    return r.ok ? { ok: true, file: r.file, ...(which === 'codex' ? { reviewRequired: true } : {}) } : { ok: false, file: r.file, error: r.error };
   } catch (err) {
-    return { ok: false, file: adapter.configPath(os.homedir()), error: err.message };
+    const configPath = which === 'codex' ? adapter.lifecycleConfigPath : adapter.configPath;
+    return { ok: false, file: configPath(os.homedir()), error: err.message };
   }
 });
 ipcMain.handle('git-status', () => ({ ...git.status(), enabled: loadConfig().gitSignals !== false }));
@@ -4003,16 +4007,23 @@ function healthReport() {
     signal: { listening: !!signalServer?.listening, port: SIGNAL_PORT, error: signalServerError },
   });
   // Dev runs share the machine with a real install and never rewrite its hooks.
-  if (IS_DEV_RUN) report.checks = report.checks.map(({ fix, fixLabel, ...c }) => (fix === 'reinstall-hooks' ? c : { ...c, ...(fix ? { fix, fixLabel } : {}) }));
+  if (!AUTO_INSTALL_HOOKS) report.checks = report.checks.map(({ fix, fixLabel, ...c }) => (['reinstall-hooks', 'connect-codex'].includes(fix) ? c : { ...c, ...(fix ? { fix, fixLabel } : {}) }));
   return report;
 }
 ipcMain.handle('health-report', () => healthReport());
-ipcMain.handle('health-fix', (_e, id) => {
+ipcMain.handle('health-fix', (e, id) => {
   let error = null;
   try {
     if (id === 'reinstall-hooks') {
       if (!AUTO_INSTALL_HOOKS) error = EPHEMERAL ? 'Buddy is running from a temporary copy or a disk image; move it to Applications first' : 'dev runs never install hooks';
       else { error = installHooks(); createTray(); }
+    } else if (id === 'connect-codex') {
+      if (!fromNativeBoardSettings(e)) error = 'Not allowed.';
+      else if (!AUTO_INSTALL_HOOKS) error = 'Open the installed app to connect Codex.';
+      else {
+        const r = Adapters.get('codex').installActivity({ home: os.homedir(), runtime: HOOK_RUNTIME });
+        if (!r.ok) error = r.error || 'Codex hooks could not be configured.';
+      }
     } else if (id === 'enable-mcp') McpInstall.install(mcpOpts());
     else if (id === 'clear-stale-locks') Health.clearStaleLocks({ root: ROOT_DIR });
     else error = 'unknown fix';
