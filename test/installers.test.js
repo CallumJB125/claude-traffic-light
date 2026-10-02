@@ -553,3 +553,15 @@ test('release.yml: every smoke test blocks release staging, with explicit Window
   assert.doesNotMatch(step, /continue-on-error/);
   assert.match(step, /Windows installer lifecycle[\s\S]*timeout-minutes: 15[\s\S]*windows-install-smoke\.js/);
 });
+
+test('manual native-only diagnostics cannot stage artifacts or omit the native gate', () => {
+  const doc = require('js-yaml').load(readText('.github/workflows/release.yml'));
+  assert.deepEqual(doc.on.workflow_dispatch.inputs.native_only, { description: 'Run native acceptance only; no installers or staging', type: 'boolean', default: false });
+  assert.equal(doc.jobs.build.if, "github.event_name != 'workflow_dispatch' || !inputs.native_only");
+  assert.equal(doc.jobs['native-directory'].if, undefined);
+  assert.equal(doc.jobs['native-directory'].uses, './.github/workflows/windows-native.yml');
+  for (const name of ['stage', 'stage-beta']) {
+    assert.deepEqual(doc.jobs[name].needs, ['build', 'native-directory']);
+    assert.doesNotMatch(doc.jobs[name].if, /always\(|failure\(|cancelled\(/);
+  }
+});

@@ -25,6 +25,10 @@ on:
         description: 'Tag or branch to build (a dry run: artifacts only, nothing staged, unless beta)'
         required: true
         default: main
+      native_only:
+        description: 'Run native acceptance only; no installers or staging'
+        type: boolean
+        default: false
       beta:
         description: 'Beta: version it <version>-beta.<run> and stage it to R2 beta/<version>/ and a draft GitHub prerelease'
         type: boolean
@@ -46,6 +50,7 @@ jobs:
       ref: ${{ github.event.inputs.ref || github.ref }}
 
   build:
+    if: github.event_name != 'workflow_dispatch' || !inputs.native_only
     name: build (${{ matrix.platform }})
     strategy:
       fail-fast: false
