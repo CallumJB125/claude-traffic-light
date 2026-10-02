@@ -39,6 +39,11 @@ Plexiform reads these on your computer and never uploads them:
 - Spend: worked out from your Claude Code conversation logs, in a background thread, on your computer. Nothing is sent anywhere.
 - Calendar and focus status (see below), and terminal details: to jump to a session's terminal, Plexiform records in the session file the terminal's identifiers (seven environment values, the terminal device, and the folder at session start).
 - Voice: your speech is turned into text on your device. Audio is never written to disk and the spoken words are never logged.
+- Codex activity, when connected: session and turn identifiers, working folder,
+  bounded subagent identifiers, fixed event/tool labels and local receipt times.
+  The adapter discards prompts, messages, tool arguments/results and transcript
+  paths from hook input. It does not read Codex conversations or provider logins,
+  answer permissions or treat a child finishing as its parent finishing.
 - Copy diagnostics (Preferences → Health): puts a text report on your clipboard only when you click it: the health check results, the app, Electron and OS versions, and recent startup, warning and error lines from `app.log`. Home paths are replaced by `~`; folder, repo, host and user names are hashed or removed; tokens, keys, email and IP addresses are redacted. It never includes prompts, conversation logs or session contents, and nothing is sent anywhere: you choose where to paste it.
 
 Everything below lives in `~/.claude-traffic-light` on your computer:
@@ -67,7 +72,7 @@ Electron (the framework Plexiform is built on) also keeps its own app data in `~
 
 Plexiform changes a few things outside its own folder, and removes them when you uninstall:
 
-- **Hooks.** It adds its hooks to Claude Code's settings file (`~/.claude/settings.json`), and to Cursor's, Codex's or Gemini's own config if you connect them. They call `bin/buddy-hook` in `~/.claude-traffic-light`.
+- **Hooks.** It adds its hooks to Claude Code's settings file (`~/.claude/settings.json`), and to Cursor's or Gemini's own config if you connect them. Hooks run Plexiform's bundled scripts using its application binary or local hook wrapper. Connecting Codex adds lifecycle hooks to `~/.codex/hooks.json`, preserving other hooks and the separate `config.toml` notification command. Codex requires review and trust of new or changed hook definitions before running them. Plexiform does not change that trust or install Codex activity hooks automatically at startup. Configuration alone is not evidence that a session is active.
 - **One permission rule in Claude Code's settings.** The installer adds a single rule under `permissions.deny` in `~/.claude/settings.json`: `Edit(~/.claude-traffic-light/**)`. It stops Claude sessions from editing Plexiform's own data folder, so an agent can't tamper with Plexiform's files. Before the first change, Plexiform keeps a one-time backup of your settings file at `~/.claude/settings.json.buddy-backup`; it is never overwritten. The rule is removed when you uninstall or disconnect Claude Code.
 - **Claude integration (if you turn it on).** One `claude-buddy` entry in `~/.claude.json`.
 - **Open at login** (macOS), if you enable it.

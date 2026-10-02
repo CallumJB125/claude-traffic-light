@@ -166,8 +166,14 @@ agent (**Only agent**). Preferences → **Connect other agents** writes the
 hook config for:
 
 - **Cursor** — `~/.cursor/hooks.json` (prompt, shell, MCP, file edits, stop)
-- **Codex CLI** — `notify` in `~/.codex/config.toml` (turn complete); Codex runs
-  one notify command, so if another tool already set one Buddy leaves it and says so
+- **Codex desktop and CLI** — lifecycle hooks in `~/.codex/hooks.json` for
+  session activity, waiting, completed turns and subagents. Existing hooks and
+  the separate `notify` command in `config.toml` are preserved. Review and trust
+  the Plexiform hook definitions in Codex before starting a new turn (the CLI
+  provides `/hooks`). Preferences → Health distinguishes configured hooks from
+  received activity. Installing hooks cannot reconstruct an already running
+  turn; no private chat history is read. This adapter records activity only and
+  cannot answer permissions. See [Codex hook review](https://learn.chatgpt.com/docs/hooks).
 - **Gemini CLI** — `hooks` in `~/.gemini/settings.json` (best effort)
 
 Claude Code's own hooks always run `set-status.js`. Posting Claude's payload to
