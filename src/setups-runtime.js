@@ -90,9 +90,11 @@ function createSetupsRuntime(options){
   }catch{return unavailable();}finally{release(lease);}
  }
  const api={
-  localState(){let allowed=false,wrapped=false;try{wrapped=wrapping.available()===true;observed();allowed=!closedRuntime&&wrapped;}catch{}
+  // Ordinary metadata must never trigger Keychain or imply encryption ready.
+  // The reviewed controller probes wrapping only after explicit confirmation.
+  localState(){let allowed=false;try{observed();allowed=!closedRuntime;}catch{}
    const pending=controller.reapPending||supervisor.blocked;
-   return {ok:true,status:pending?'reap_pending':allowed?'available':'unavailable',generation,busy:busy!==null,platform:'darwin',supported_recipes:[...RECIPES],wrapped_storage_available:wrapped};
+   return {ok:true,status:pending?'reap_pending':allowed?'review_available':'unavailable',generation,busy:busy!==null,platform:'darwin',supported_recipes:[...RECIPES],wrapped_storage_available:null};
   },
   invalidate(){retire(true);},
   close(){closedRuntime=true;retire(true);controller.close();},
