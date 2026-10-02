@@ -1,6 +1,7 @@
 -- Messaging (board/MESSAGING.md): indexes for the timed sweep (retention,
 -- expired handoffs, long-retired targets) and for the per-target hourly caps
--- and the host's registration cap, so none of them scans the whole table.CREATE INDEX msg_messages_created ON msg_messages(created_at);
+-- and the host's registration cap, so none of them scans the whole table.
+CREATE INDEX msg_messages_created ON msg_messages(created_at);
 CREATE INDEX msg_messages_target_hour ON msg_messages(dest_target_id, created_at);
 CREATE INDEX msg_messages_org_hour ON msg_messages(org_id, created_at) WHERE org_id IS NOT NULL;
 CREATE INDEX msg_messages_card_hour ON msg_messages(card_id, created_at) WHERE card_id IS NOT NULL;

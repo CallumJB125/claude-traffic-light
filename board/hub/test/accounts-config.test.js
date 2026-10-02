@@ -494,3 +494,14 @@ test('BOARD_SECRET and BOARD_SIGNUP_ALLOW leave process.env once read and never 
   assert.equal(env.BOARD_SECRET, secret);
   assert.equal(env.BOARD_SIGNUP_ALLOW, allow);
 });
+
+test('051 creates every index it names (a comment glued to a statement once swallowed one)', () => {
+  const all = loadMigrations();
+  const m = all.find((x) => x.version === 51);
+  const names = [...m.sql.matchAll(/CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)/gi)].map((x) => x[1]);
+  assert.equal(names.length, 8);
+  const db = new DatabaseSync(':memory:');
+  migrate(db, { migrations: all });
+  const have = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all().map((r) => r.name));
+  for (const n of names) assert.ok(have.has(n), `index ${n} missing`);
+});
