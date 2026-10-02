@@ -32,7 +32,7 @@ function fakeHost() {
   return {
     calls, shares,
     async listShares() { calls.push(['list']); return { ok: true, teams: [{ id: 'team-1', name: 'Dev team' }], shares: [...shares.values()] }; },
-    async shareSession(req) { calls.push(['share', req]); const s = { id: `share-${shares.size + 1}`, session: req.session, team: { id: req.team, name: 'Dev team' }, scope: req.scope, expiresAt: req.expiresInS ? Date.now() + req.expiresInS * 1000 : null, members: [{ id: 'u-bob', name: 'Bob' }] }; shares.set(s.id, s); return { ok: true, share: s }; },
+    async shareSession(req) { calls.push(['share', req]); const s = { id: `share-${shares.size + 1}`, session: req.session, team: { id: req.team, name: 'Dev team' }, scope: req.scope, expiresAt: req.expiresInS ? Date.now() + req.expiresInS * 1000 : null, members: [{ id: 'u-bob', name: 'Bob', canSend: req.scope === 'interact' }, { id: 'u-vic', name: 'Vic', canSend: false }] }; shares.set(s.id, s); return { ok: true, share: s }; },
     stopSharing(id) { calls.push(['stop', id]); shares.delete(id); return { ok: true }; },
     shared: () => [...shares.values()],
   };
@@ -76,13 +76,20 @@ test('Overview Share…: off by default; share with a team, see who has access, 
     share.click(); await tick();
     const selects = [...s.card().querySelectorAll('.share-panel select')];
     assert.deepEqual(selects.map((x) => x.options.length), [1, 2, 5]);
+    // Before sharing, the owner is told what teammates get: no earlier history, their sends run on the owner's provider account.
+    const info = s.card().querySelector('.share-panel').textContent;
+    assert.match(info, /from the moment you share it \(not earlier ones\)/);
+    assert.match(info, /runs on your provider account and uses your quota/);
+    assert.match(info, /team viewers can only watch/);
+    assert.match(info, /whether this computer is online/);
     selects[1].value = 'interact'; selects[2].value = '3600';
     s.btn('Share').click(); await tick(8);
     const [, req] = s.host.calls.find(([k]) => k === 'share');
     const session = s.card().dataset.session;
     assert.deepEqual(req, { session, team: 'team-1', scope: 'interact', expiresInS: 3600 });
     assert.match(s.card().textContent, /Shared with Dev team \(Watch and send\)/);
-    assert.match(s.card().textContent, /Bob can watch and send/);
+    // A team viewer is listed as watch-only even on a "Watch and send" share.
+    assert.match(s.card().textContent, /Bob can watch and send; Vic can watch/);
     s.btn('Stop sharing').click(); await tick(8);
     assert.ok(s.host.calls.some(([k]) => k === 'stop'));
     assert.match(s.card().textContent, /Stopped sharing/);

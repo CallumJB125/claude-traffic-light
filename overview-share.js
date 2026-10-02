@@ -2,9 +2,10 @@
 // Team sharing for one Plexiform-owned session card in Overview. Off by
 // default: a session is shared only after its owner picks a team, a scope
 // and an expiry here and presses Share. "Watch only" lets that team's
-// members read the session's messages and responses; "Watch and send" also
-// lets them send, steer and interrupt (their messages show as "Sent by
-// <name>"). Stop sharing ends it at once. Everything goes through
+// members read the session's messages and responses sent from then on (never
+// earlier ones); "Watch and send" also lets members who are not team viewers
+// send, steer and interrupt (their messages show as "Sent by <name>" and run
+// on the owner's provider account). Stop sharing ends it at once. Everything goes through
 // overviewApi.interaction (main → this Mac's remote host → the team hub);
 // hub text is shown with textContent only. overview.js calls mount() once
 // per card.
@@ -26,7 +27,11 @@
     wrap.append(s); return [wrap, s];
   };
   const until = ms => { const d = new Date(ms); return `until ${d.toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}`; };
-  const who = s => s.members.length ? `${s.members.map(m => m.name).join(', ')} can ${s.scope === 'interact' ? 'watch and send' : 'watch'}` : 'No other members in this team yet';
+  const who = s => {
+    if (!s.members.length) return 'No other members in this team yet';
+    const send = s.members.filter(m => m.canSend === true).map(m => m.name), watch = s.members.filter(m => m.canSend !== true).map(m => m.name);
+    return [send.length ? `${send.join(', ')} can watch and send` : '', watch.length ? `${watch.join(', ')} can watch` : ''].filter(Boolean).join('; ');
+  };
 
   function mount(card, session) {
     if (!card || !str(session, 100)) return;
@@ -59,7 +64,7 @@
         const [expL, exp] = select('For how long', EXPIRY);
         const go = button(busy ? 'Sharing…' : 'Share', () => void share(team.value, scope.value, exp.value)); go.disabled = busy;
         const form = el('div', '', 'actions'); form.append(teamL, scopeL, expL, go);
-        parts.push(form, el('p', 'Members of that team see this session\'s messages and Codex\'s replies, through your team hub. "Watch and send" also lets them send, steer and interrupt; their messages show who sent them. Only you can close it.', 'reason'));
+        parts.push(form, el('p', 'Members of that team see this session\'s messages and the provider\'s replies from the moment you share it (not earlier ones), through your team hub, and whether this computer is online. "Watch and send" also lets them send, steer and interrupt (team viewers can only watch); their messages show who sent them. What they send runs on your provider account and uses your quota (the provider sign-in or local model endpoint this session runs on), and you are responsible for it. Only you can close it.', 'reason'));
       } else parts.push(el('p', 'You are not in a team you can share with.', 'reason'));
       panel.replaceChildren(...parts);
     }

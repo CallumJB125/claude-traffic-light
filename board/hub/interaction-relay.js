@@ -41,6 +41,8 @@ export const INTERACTION_WS_PATH = '/ws/interaction-host';
 export const RELAY_OPS = Object.freeze(['capabilities', 'list', 'state', 'launch', 'send', 'interrupt', 'close', 'watch']);
 export const RELAY_LIMITS = Object.freeze({
   argsBytes: 16 * 1024, replyBytes: 768 * 1024, timeoutMs: 25_000, pendingPerHost: 32,
+  // Shared-session calls (interaction-shares.js): all teammates together, and each one.
+  sharedPendingPerHost: 16, pendingPerTeammate: 4,
   replayTtlMs: 10 * 60_000, replayPerUser: 4096, probeMs: 5_000,
 });
 export const RESUME_HEADER = 'x-plexiform-resume';
@@ -243,7 +245,7 @@ export class InteractionRelay {
         unsent();
         reject(noHost());
       };
-      host.pending.set(id, { resolve, reject, timer, lost });
+      host.pending.set(id, { resolve, reject, timer, lost, by: frame.share?.user ?? null });
       try { host.ws.send(JSON.stringify({ type: frame.type, id, ...frame })); } catch { clearTimeout(timer); host.pending.delete(id); unsent(); reject(noHost()); }
     });
   }

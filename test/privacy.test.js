@@ -34,6 +34,16 @@ test('Preferences renders PRIVACY.md itself, so the two cannot drift', () => {
   assert.ok(files.includes('PRIVACY.md') && files.includes('privacy-render.js'), 'both must ship in the package');
 });
 
+test('team session sharing discloses history, viewer, provider-account and presence limits', () => {
+  const entry = privacy.split('\n').find((l) => l.startsWith('- **Sharing one session with a team'));
+  assert.ok(entry, 'missing team sharing entry');
+  assert.match(entry, /messages from before then are never shown to them, also not when you later share the same session with another team/);
+  assert.match(entry, /role is viewer, who can only watch/);
+  assert.match(entry, /runs on your provider account[^.]*quota[^.]*local model endpoint[^.]*you are responsible for it/);
+  assert.match(entry, /whether the computer the session runs on is currently online/);
+  assert.match(entry, /short code added when two people/);
+});
+
 test('the renderer escapes HTML', () => {
   assert.equal(render('a <script>x</script>'), '<p>a &lt;script&gt;x&lt;/script&gt;</p>');
 });

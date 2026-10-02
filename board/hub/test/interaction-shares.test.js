@@ -39,10 +39,16 @@ async function rig() {
   const carol = await signIn('carol@dev.local', 'Carol Windows');
   const adapter = createCodexAppServer({ bin: FAKE });
   // A separate "Overview" hub on the same Mac: its sessions are reachable only once shared.
-  const overview = createInteractionHub({ adapters: { codex: createCodexAppServer({ bin: FAKE }) }, boardCurrent: (b) => b === 'board:x' });
+  const overview = createInteractionHub({ adapters: { codex: createCodexAppServer({ bin: FAKE }) }, boardCurrent: (b) => b === 'board:x', now: () => h.clock.wall() });
+  // More hubs a test may add (actor 'extra:<i>'), reachable only once shared, like Overview's.
+  const extra = [];
   const mac = createRemoteInteractionHost({
     userId: macA.user, adapters: { codex: adapter }, boardCurrent: (b) => b === null, now: () => h.clock.wall(),
-    sharedTarget: (session) => (overview.state({ session }, 'overview:1:1') ? { hub: overview, actor: 'overview:1:1' } : null),
+    sharedTarget: (session) => {
+      if (overview.state({ session }, 'overview:1:1')) return { hub: overview, actor: 'overview:1:1' };
+      for (let i = 0; i < extra.length; i++) if (extra[i].state({ session }, `extra:${i}`)) return { hub: extra[i], actor: `extra:${i}` };
+      return null;
+    },
   });
   const st = await mac.enable({ baseUrl: h.base, token: macA.token, WebSocket });
   assert.equal(st.state, 'connected');
@@ -51,8 +57,15 @@ async function rig() {
   const call = (dev, share, op, args, requestId = rid()) => h.call('POST', `/api/interaction/v1/shared/${share}/call`, { token: dev.token, body: { request_id: requestId, op, args } });
   const shared = (dev) => h.call('GET', '/api/interaction/v1/shared', { token: dev.token });
   const bobName = h.db.get('SELECT display_name AS n FROM users WHERE id = ?', bob.user).n;
+  // Puts a signed-in user straight into a team with a role.
+  let joined = 0;
+  const join = (dev, role = 'member', org = h.ids.org) => h.db.insert('members', { id: crypto.randomUUID(), org_id: org, user_id: dev.user, github_id: -(++joined) - 1000, github_login: `~email:${dev.user}`, email: `${dev.user}@join.local`, display_name: 'Joined', role, created_at: h.hub.iso() });
+  // A relay frame as the hub would forward it for `user` on `share`.
+  const frame = (op, args, share, user, sh = {}) => ({ type: 'relay.request', id: rid(), rid: rid(), user: macA.user, from: 'hub-forwarded', op, args,
+    share: { id: share.id, team: share.team.id, user: user.user, name: 'x', scope: share.scope, ...sh } });
+  const texts = (res) => res.body.result.state.deliveries.map((d) => d.text);
   return {
-    h, lines, macA, winA, bob, carol, mac, overview, launch, ownerSend, call, shared, bobName, org: h.ids.org,
+    h, lines, macA, winA, bob, carol, mac, overview, extra, launch, ownerSend, call, shared, bobName, org: h.ids.org, signIn, join, frame, texts,
     async close() { mac.close(); overview.stopAll(); await h.close(); },
   };
 }
@@ -307,5 +320,234 @@ test('HOSTILE: the Mac enforces the share itself — a malicious hub forwarding 
     r.h.clock.advanceWallOnly(61_000);
     assert.equal((await r.mac.handle(frame('state', { session: s.session }, { id: exp.share.id }))).status, 'stale');
     assert.deepEqual(r.mac.shared(), []);
+  } finally { await r.close(); }
+});
+
+test('HISTORY: a teammate sees only what was sent after the share; a re-share to another team does not open earlier history (hub and Mac both filter)', async () => {
+  const r = await rig();
+  try {
+    const s = await r.launch();
+    const done = (text) => until(() => r.mac.hub.state({ session: s.session }, r.mac.actor).deliveries.find((d) => d.text === text && d.state === 'completed'));
+    await r.ownerSend(s, 'before share secret'); await done('before share secret');
+    r.h.clock.advance(1000);
+    const one = (await r.mac.shareSession({ session: s.session, team: r.org, scope: 'watch' })).share;
+    await r.ownerSend(s, 'after share one'); await done('after share one');
+    r.h.clock.advance(1000);
+    const team = await r.h.call('POST', '/api/teams', { token: r.winA.token, body: { name: 'Second team' } });
+    assert.equal(team.status, 200, team.text);
+    const team2 = team.body.team?.id ?? team.body.id;
+    r.join(r.bob, 'member', team2);
+    const two = (await r.mac.shareSession({ session: s.session, team: team2, scope: 'watch' })).share;
+    assert.ok(two?.id, 'second share');
+    await r.ownerSend(s, 'after share two'); await done('after share two');
+
+    assert.deepEqual(r.texts(await r.call(r.bob, one.id, 'state', { session: s.session })), ['after share one', 'after share two']);
+    assert.deepEqual(r.texts(await r.call(r.bob, two.id, 'state', { session: s.session })), ['after share two']);
+    assert.deepEqual(r.texts(await r.call(r.bob, two.id, 'watch', { session: s.session, after: 0 })), ['after share two']);
+    // The Mac filters on its own…
+    const direct = await r.mac.handle(r.frame('state', { session: s.session }, two, r.bob));
+    assert.deepEqual(direct.state.deliveries.map((d) => d.text), ['after share two']);
+    const owner = r.mac.hub.state({ session: s.session }, r.mac.actor).deliveries.map((d) => d.text);
+    assert.deepEqual(owner, ['before share secret', 'after share one', 'after share two'], 'the owner still sees everything');
+    // …and so does the hub, whatever the Mac answers.
+    const relay = r.h.hub.interactionRelay, orig = relay.dispatch;
+    relay.dispatch = async function (...a) {
+      const res = await orig.apply(this, a);
+      return { ...res, state: { ...res.state, deliveries: [{ id: rid(), text: 'old injected', sentAt: 0 }, ...res.state.deliveries] } };
+    };
+    try {
+      const got = await r.call(r.bob, two.id, 'state', { session: s.session });
+      assert.equal(got.status, 200, got.text);
+      assert.ok(!got.text.includes('old injected'));
+      assert.deepEqual(r.texts(got), ['after share two']);
+    } finally { relay.dispatch = orig; }
+  } finally { await r.close(); }
+});
+
+test('HOSTILE: a team viewer only watches, even on a "Watch and send" share (hub and Mac)', async () => {
+  const r = await rig();
+  try {
+    const s = await r.launch();
+    r.h.db.run("UPDATE members SET role = 'viewer' WHERE id = ?", r.h.ids.bob);
+    const { share } = await r.mac.shareSession({ session: s.session, team: r.org, scope: 'interact' });
+    assert.deepEqual(share.members.map((m) => [m.id, m.canSend]), [[r.bob.user, false]]);
+    assert.equal((await r.shared(r.bob)).body.shared[0].scope, 'watch');
+    assert.equal((await r.call(r.bob, share.id, 'state', { session: s.session })).status, 200);
+    const sent = await r.call(r.bob, share.id, 'send', { session: s.session, generation: s.generation, text: 'viewer send' });
+    assert.equal(sent.status, 403); assert.equal(sent.body.error.reason, 'SCOPE');
+    const intr = await r.call(r.bob, share.id, 'interrupt', { session: s.session, generation: s.generation, turn: rid() });
+    assert.equal(intr.status, 403); assert.equal(intr.body.error.reason, 'SCOPE');
+    // A hub that forwards it anyway: the Mac refuses from its own member list.
+    assert.equal((await r.mac.handle(r.frame('send', { session: s.session, generation: s.generation, text: 'viewer send' }, share, r.bob))).status, 'forbidden');
+    assert.ok(!r.mac.hub.state({ session: s.session }, r.mac.actor).deliveries.some((d) => d.text === 'viewer send'));
+    // Made a member again: both sides let them send (after the Mac's next refresh).
+    r.h.db.run("UPDATE members SET role = 'member' WHERE id = ?", r.h.ids.bob);
+    assert.equal((await r.mac.listShares()).ok, true);
+    const ok = await r.call(r.bob, share.id, 'send', { session: s.session, generation: s.generation, text: 'member send' });
+    assert.equal(ok.body.result.status, 'acknowledged', ok.text);
+  } finally { await r.close(); }
+});
+
+test('HOSTILE: "Sent by" cannot impersonate — a duplicate or owner display name gets a stable member suffix', async () => {
+  const r = await rig();
+  try {
+    const dave = await r.signIn('dave@dev.local', 'Dave Mac');
+    const erin = await r.signIn('erin@dev.local', 'Erin Mac');
+    r.join(dave); r.join(erin);
+    const aliceName = r.h.db.get('SELECT display_name AS n FROM users WHERE id = ?', r.macA.user).n;
+    r.h.db.run('UPDATE users SET display_name = ? WHERE id = ?', r.bobName, dave.user);
+    r.h.db.run('UPDATE users SET display_name = ? WHERE id = ?', ` ${aliceName.toUpperCase()}`, erin.user);
+    const s = await r.launch();
+    const { share } = await r.mac.shareSession({ session: s.session, team: r.org, scope: 'interact' });
+    const by = {};
+    for (const [who, dev] of [['bob', r.bob], ['dave', dave], ['erin', erin]]) {
+      const sent = await r.call(dev, share.id, 'send', { session: s.session, generation: s.generation, text: `from ${who}` });
+      assert.equal(sent.body.result.status, 'acknowledged', sent.text);
+      by[who] = sent.body.result.delivery.by;
+      await until(() => r.mac.hub.state({ session: s.session }, r.mac.actor).deliveries.find((d) => d.text === `from ${who}` && d.state === 'completed'));
+    }
+    assert.match(by.bob, new RegExp(`^${r.bobName} #[0-9a-f]{6}$`));
+    assert.match(by.dave, new RegExp(`^${r.bobName} #[0-9a-f]{6}$`));
+    assert.notEqual(by.bob, by.dave);
+    assert.match(by.erin, /#[0-9a-f]{6}$/);
+    assert.notEqual(by.erin.trim().toLowerCase(), aliceName.toLowerCase());
+    // Stable: the same member keeps the same label after a refresh.
+    await r.mac.listShares();
+    const again = await r.call(r.bob, share.id, 'send', { session: s.session, generation: s.generation, text: 'bob again' });
+    assert.equal(again.body.result.delivery.by, by.bob);
+  } finally { await r.close(); }
+});
+
+test('HOSTILE: teammates cannot take the Mac\'s or the hub\'s capacity from the owner', async () => {
+  const r = await rig();
+  try {
+    const team = [r.bob, r.carol, await r.signIn('dave@dev.local', 'Dave Mac'), await r.signIn('erin@dev.local', 'Erin Mac'), await r.signIn('frank@dev.local', 'Frank Mac')];
+    const [bob, carol, dave, erin, frank] = team;
+    for (const dev of team.slice(1)) r.join(dev);
+    // A session whose provider holds an interrupt until released.
+    let release; const held = new Promise((res) => { release = res; });
+    const adapter = {
+      label: 'Slow', capabilities: { newTurn: true, steer: false, interrupt: true },
+      open: async () => ({ target: 'slow-target' }), send: async () => ({ turnId: 'turn-1', mode: 'new-turn' }),
+      interrupt: () => held, release: async () => true, alive: () => true, stop() {}, on: () => () => {},
+    };
+    const slow = createInteractionHub({ adapters: { slow: adapter }, boardCurrent: (b) => b === null, now: () => r.h.clock.wall() });
+    r.extra.push(slow);
+    const st = (await slow.launch({ provider: 'slow' }, 'extra:0')).state;
+    const turn = (await slow.send({ session: st.session, generation: st.generation, board: null, text: 'go' }, 'extra:0')).state.activeTurn;
+    const { share } = await r.mac.shareSession({ session: st.session, team: r.org, scope: 'interact' });
+    const v = (await r.mac.handle(r.frame('state', { session: st.session }, share, bob))).version;
+    const watch = (dev) => r.mac.handle(r.frame('watch', { session: st.session, after: v }, share, dev));
+    const intr = (dev) => r.mac.handle(r.frame('interrupt', { session: st.session, generation: st.generation, turn }, share, dev));
+    const busy = (res) => res.status === 'unavailable' && /busy/.test(res.error);
+    const pending = [watch(bob), watch(bob)];
+    // Each teammate: at most two calls at once.
+    assert.ok(busy(await r.mac.handle(r.frame('state', { session: st.session }, share, bob))), 'per-teammate cap');
+    // All teammates together: at most four watches…
+    pending.push(watch(carol), watch(carol));
+    assert.ok(busy(await watch(dave)), 'shared watch cap');
+    // …and at most eight calls.
+    pending.push(intr(dave), intr(dave), intr(erin), intr(erin));
+    await new Promise((res) => setImmediate(res));
+    assert.ok(busy(await r.mac.handle(r.frame('state', { session: st.session }, share, frank))), 'shared handling cap');
+    // The owner's own devices still get through.
+    const own = await r.mac.handle({ type: 'relay.request', id: rid(), rid: rid(), user: r.macA.user, from: r.winA.device, op: 'list', args: {} });
+    assert.equal(own.ok, true, JSON.stringify(own));
+    release(true);
+    r.mac.stopSharing(share.id);
+    await Promise.all(pending);
+    assert.equal((await r.mac.handle({ type: 'relay.request', id: rid(), rid: rid(), user: r.macA.user, from: r.winA.device, op: 'list', args: {} })).ok, true);
+
+    // The hub keeps its own per-teammate and all-teammates caps in front of the host.
+    const s = await r.launch();
+    const sh = (await r.mac.shareSession({ session: s.session, team: r.org, scope: 'watch' })).share;
+    const relay = r.h.hub.interactionRelay;
+    relay.limits.pendingPerTeammate = 1; relay.limits.sharedPendingPerHost = 2;
+    const w0 = (await r.call(bob, sh.id, 'state', { session: s.session })).body.result.version;
+    const polls = [r.call(bob, sh.id, 'watch', { session: s.session, after: w0 })];
+    await until(() => [...relay.hosts.get(r.macA.device).pending.values()].length === 1);
+    assert.equal((await r.call(bob, sh.id, 'state', { session: s.session })).status, 429);
+    polls.push(r.call(carol, sh.id, 'watch', { session: s.session, after: w0 }));
+    await until(() => [...relay.hosts.get(r.macA.device).pending.values()].length === 2);
+    assert.equal((await r.call(dave, sh.id, 'state', { session: s.session })).status, 429);
+    const owner = await r.h.call('POST', `/api/interaction/v1/hosts/${r.macA.device}/call`, { token: r.winA.token, body: { request_id: rid(), op: 'state', args: { session: s.session } } });
+    assert.equal(owner.status, 200, owner.text);
+    await r.ownerSend(s, 'wake');
+    for (const p of await Promise.all(polls)) assert.equal(p.status, 200, p.text);
+  } finally { await r.close(); }
+});
+
+test('HOSTILE: the owner leaving the team ends access (authorize and the shared list)', async () => {
+  const r = await rig();
+  try {
+    const s = await r.launch();
+    const { share } = await r.mac.shareSession({ session: s.session, team: r.org, scope: 'watch' });
+    assert.equal((await r.call(r.bob, share.id, 'state', { session: s.session })).status, 200);
+    r.h.db.run("UPDATE members SET role = 'owner' WHERE id = ?", r.h.ids.bob);
+    r.h.db.run('UPDATE members SET removed_at = ? WHERE id = ?', r.h.hub.iso(), r.h.ids.alice);
+    assert.equal((await r.call(r.bob, share.id, 'state', { session: s.session })).status, 404);
+    assert.deepEqual((await r.shared(r.bob)).body.shared, []);
+  } finally { await r.close(); }
+});
+
+test('HOSTILE: an answer from a host connection other than the one asked is withheld', async () => {
+  const r = await rig();
+  try {
+    const s = await r.launch();
+    const { share } = await r.mac.shareSession({ session: s.session, team: r.org, scope: 'watch' });
+    const relay = r.h.hub.interactionRelay, orig = relay.dispatch, live = relay.hosts.get(r.macA.device);
+    // The host's slot changes hands while it answers.
+    relay.dispatch = async function (host, ...a) { const res = await orig.call(this, host, ...a); relay.hosts.set(host.cred.id, { ...host }); return res; };
+    try {
+      const got = await r.call(r.bob, share.id, 'state', { session: s.session });
+      assert.equal(got.status, 404, got.text);
+    } finally { relay.dispatch = orig; relay.hosts.set(r.macA.device, live); }
+    assert.equal((await r.call(r.bob, share.id, 'state', { session: s.session })).status, 200);
+  } finally { await r.close(); }
+});
+
+test('HOSTILE: the per-team rate limit covers all teammates together', async () => {
+  const r = await rig();
+  try {
+    r.join(r.carol);
+    const s = await r.launch();
+    const { share } = await r.mac.shareSession({ session: s.session, team: r.org, scope: 'watch' });
+    r.h.hub.limiter.limits.share_call_team = { capacity: 2, per_ms: 60_000 };
+    const codes = [];
+    for (const dev of [r.bob, r.bob, r.carol]) codes.push((await r.call(dev, share.id, 'state', { session: s.session })).status);
+    assert.deepEqual(codes, [200, 200, 429]);
+  } finally { await r.close(); }
+});
+
+test('BACKSTOP: share rows — host must be the owner\'s device, expiry never extended, a stop is final', async () => {
+  const r = await rig();
+  try {
+    const row = (dev) => ({ id: rid(), owner_user_id: r.macA.user, host_device_id: dev, session_id: rid(), org_id: r.org, scope: 'watch', created_at: r.h.hub.iso(), expires_at: '2026-10-01T00:00:00.000Z' });
+    assert.throws(() => r.h.db.insert('interaction_shares', row(r.bob.device)), /owner's device/);
+    const ok = row(r.macA.device);
+    r.h.db.insert('interaction_shares', ok);
+    const set = (sql, ...a) => () => r.h.db.run(`UPDATE interaction_shares SET ${sql} WHERE id = ?`, ...a, ok.id);
+    assert.throws(set('expires_at = ?', '2026-12-01T00:00:00.000Z'), /cannot be extended/);
+    assert.throws(set('expires_at = NULL'), /cannot be extended/);
+    set('expires_at = ?', '2026-09-30T12:00:00.000Z')();
+    set('revoked_at = ?, revoked_by = ?', r.h.hub.iso(), r.macA.user)();
+    assert.throws(set('revoked_at = NULL'), /stays stopped/);
+    assert.throws(set('revoked_by = NULL'), /stays stopped/);
+    assert.throws(set('revoked_by = ?', r.bob.user), /stays stopped/);
+    assert.throws(set('revoked_at = ?', '2027-01-01T00:00:00.000Z'), /stays stopped/);
+  } finally { await r.close(); }
+});
+
+test('HOSTILE: deleting the owner\'s account stops their shares', async () => {
+  const r = await rig();
+  try {
+    const s = await r.launch();
+    const { share } = await r.mac.shareSession({ session: s.session, team: r.org, scope: 'watch' });
+    r.h.db.run("UPDATE members SET role = 'owner' WHERE id = ?", r.h.ids.bob);
+    const flow = await r.h.stepUp(r.winA.token, 'alice@dev.local');
+    const del = await r.h.call('DELETE', '/api/account', { token: r.winA.token, body: { flow_id: flow } });
+    assert.equal(del.status, 200, del.text);
+    assert.ok(r.h.db.get('SELECT revoked_at FROM interaction_shares WHERE id = ?', share.id).revoked_at);
+    assert.equal((await r.call(r.bob, share.id, 'state', { session: s.session })).status, 404);
   } finally { await r.close(); }
 });

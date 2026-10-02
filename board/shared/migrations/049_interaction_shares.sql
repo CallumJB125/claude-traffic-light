@@ -7,7 +7,8 @@
 -- every call that the caller and the owner are still active members of the
 -- team and that both devices are still valid, so removing a member, leaving
 -- the team, deleting the team or revoking a device cuts access without
--- touching this table. Additive: no table rebuild.
+-- touching this table. Additive: no table rebuild. (Unreleased: the expiry and
+-- revocation guards below were added to this migration before it shipped.)
 
 CREATE TABLE interaction_shares (
   id TEXT PRIMARY KEY,
@@ -32,3 +33,11 @@ CREATE TRIGGER interaction_shares_owner_device BEFORE INSERT ON interaction_shar
   BEGIN SELECT RAISE(ABORT, 'share host is not the owner''s device'); END;
 CREATE TRIGGER interaction_shares_fixed BEFORE UPDATE OF id, owner_user_id, host_device_id, session_id, org_id, scope, created_at ON interaction_shares
   BEGIN SELECT RAISE(ABORT, 'a share is fixed once created'); END;
+-- An expiry can be brought forward, never pushed back or removed; a stop is
+-- final (revoked_at/revoked_by are never cleared or rewritten once set).
+CREATE TRIGGER interaction_shares_expiry BEFORE UPDATE OF expires_at ON interaction_shares
+  WHEN OLD.expires_at IS NOT NULL AND (NEW.expires_at IS NULL OR NEW.expires_at > OLD.expires_at)
+  BEGIN SELECT RAISE(ABORT, 'a share''s expiry cannot be extended'); END;
+CREATE TRIGGER interaction_shares_revoked BEFORE UPDATE OF revoked_at, revoked_by ON interaction_shares
+  WHEN (OLD.revoked_at IS NOT NULL AND NEW.revoked_at IS NOT OLD.revoked_at) OR (OLD.revoked_by IS NOT NULL AND NEW.revoked_by IS NOT OLD.revoked_by)
+  BEGIN SELECT RAISE(ABORT, 'a stopped share stays stopped'); END;

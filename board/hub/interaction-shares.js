@@ -7,7 +7,12 @@
 // a scope and an optional expiry. Members of that team may then, from their
 // own client device:
 //   watch    → 'state', 'watch'   (the session's messages and responses)
-//   interact → also 'send' (new turn or steer) and 'interrupt'
+//   interact → also 'send' (new turn or steer) and 'interrupt', but only for
+//              members whose team role may act (owner, admin, member); a
+//              team 'viewer' gets watch-only whatever the share's scope
+// A teammate sees only what was sent from the moment the share was created
+// (deliveries are filtered here and on the host): sharing never discloses
+// earlier history, also not when the session is shared again with another team.
 // Never 'list', 'launch', 'close' or 'capabilities': a teammate never sees
 // the owner's other sessions, data or devices, and only the owner closes.
 //
@@ -34,12 +39,21 @@ import { limitOrThrow } from './ratelimit.js';
 
 export const SCOPES = Object.freeze({ watch: ['state', 'watch'], interact: ['state', 'watch', 'send', 'interrupt'] });
 export const SHARE_LIMITS = Object.freeze({ perHost: 64, minExpiryS: 60, maxExpiryS: 30 * 86_400 });
+// Team roles that may send/steer/interrupt on an interact share; any other role watches only.
+export const ACTING_ROLES = Object.freeze(['owner', 'admin', 'member']);
+const MUTATING = new Set(['send', 'interrupt']);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const ARGS = { state: ['session'], watch: ['session', 'after'], send: ['session', 'generation', 'text', 'expectedTurn'], interrupt: ['session', 'generation', 'turn'] };
 const object = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const closed = (v, keys) => object(v) && Object.keys(v).every((k) => keys.includes(k));
 const invalid = () => new HubError('VALIDATION', 'invalid share request');
 const noShare = () => new HubError('NOT_FOUND', 'that shared session is not available');
+// Deliveries sent before the share was created never leave the hub (the host filters too).
+function sinceShared(result, since) {
+  if (!object(result) || !object(result.state) || !Array.isArray(result.state.deliveries)) return result;
+  const deliveries = result.state.deliveries.filter((d) => object(d) && Number.isFinite(d.sentAt) && d.sentAt >= since);
+  return { ...result, state: { ...result.state, deliveries } };
+}
 const ACTIVE_MEMBER = `SELECT m.id, m.role FROM members m JOIN orgs o ON o.id = m.org_id
   WHERE m.org_id = ? AND m.user_id = ? AND m.removed_at IS NULL AND o.deleted_at IS NULL`;
 
@@ -68,16 +82,19 @@ export class InteractionShares {
   }
 
   members(orgId) {
-    return this.db.all(`SELECT u.id, u.display_name AS name FROM members m JOIN users u ON u.id = m.user_id
+    return this.db.all(`SELECT u.id, u.display_name AS name, m.role FROM members m JOIN users u ON u.id = m.user_id
       WHERE m.org_id = ? AND m.removed_at IS NULL AND u.deleted_at IS NULL ORDER BY u.display_name, u.id`, orgId);
   }
 
   ownerView(row) {
     const team = this.db.get('SELECT name FROM orgs WHERE id = ?', row.org_id);
+    const owner = this.db.get('SELECT display_name AS name FROM users WHERE id = ?', row.owner_user_id);
     return {
       id: row.id, session: row.session_id, team: { id: row.org_id, name: team?.name ?? 'Team' }, scope: row.scope,
+      // The owner's own label, so the host can keep a teammate's "Sent by" distinct from it.
+      owner: { name: owner?.name ?? '' },
       created_at: row.created_at, expires_at: row.expires_at,
-      // Who has access: the team's active members other than the owner.
+      // Who has access: the team's active members other than the owner, with their role (a viewer only watches).
       members: this.members(row.org_id).filter((m) => m.id !== row.owner_user_id),
     };
   }
@@ -146,8 +163,9 @@ export class InteractionShares {
       WHERE s.revoked_at IS NULL AND s.owner_user_id != ? ORDER BY s.created_at, s.id`, ident.user.id, ident.user.id);
     const out = [];
     for (const r of rows) {
-      if (!this.live(r) || !this.member(r.org_id, r.owner_user_id)) continue;
-      out.push({ id: r.id, session: r.session_id, scope: r.scope, expires_at: r.expires_at, team: { id: r.org_id, name: r.team_name }, owner: { name: r.owner_name },
+      const me = this.member(r.org_id, ident.user.id);
+      if (!this.live(r) || !me || !this.member(r.org_id, r.owner_user_id)) continue;
+      out.push({ id: r.id, session: r.session_id, scope: ACTING_ROLES.includes(me.role) ? r.scope : 'watch', expires_at: r.expires_at, team: { id: r.org_id, name: r.team_name }, owner: { name: r.owner_name },
         online: !!this.relay.liveHost(r.owner_user_id, r.host_device_id) });
     }
     return { shared: out };
@@ -162,34 +180,39 @@ export class InteractionShares {
     if (!this.relay.credValid(ident.cred)) throw new HubError('UNAUTHENTICATED', 'device token unknown or revoked: sign in again');
     this.relay.asClient(ident);
     const row = typeof shareId === 'string' && UUID.test(shareId) ? this.db.get('SELECT * FROM interaction_shares WHERE id = ?', shareId) : null;
-    if (!this.live(row) || row.owner_user_id === ident.user.id || !this.member(row.org_id, ident.user.id) || !this.member(row.org_id, row.owner_user_id)) throw noShare();
+    const me = this.live(row) && row.owner_user_id !== ident.user.id ? this.member(row.org_id, ident.user.id) : null;
+    if (!me || !this.member(row.org_id, row.owner_user_id)) throw noShare();
     const host = this.relay.liveHost(row.owner_user_id, row.host_device_id);
     if (!host) throw noShare();
-    if (!SCOPES[row.scope].includes(op)) throw new HubError('FORBIDDEN', 'this session is shared with you to watch only', { reason: 'SCOPE' });
-    return { row, host };
+    if (!SCOPES[row.scope].includes(op) || (MUTATING.has(op) && !ACTING_ROLES.includes(me.role))) throw new HubError('FORBIDDEN', 'this session is shared with you to watch only', { reason: 'SCOPE' });
+    return { row, host, scope: ACTING_ROLES.includes(me.role) ? row.scope : 'watch' };
   }
 
   async call(ident, shareId, body) {
     if (!closed(body, ['request_id', 'op', 'args']) || typeof body.request_id !== 'string' || !UUID.test(body.request_id)
       || !Object.hasOwn(ARGS, body.op) || !closed(body.args, ARGS[body.op])) throw invalid();
     if (Buffer.byteLength(JSON.stringify(body.args)) > this.relay.limits.argsBytes) throw new HubError('PAYLOAD_TOO_LARGE', 'message too large');
-    const { row, host } = this.authorize(ident, shareId, body.op);
+    const { row, host, scope } = this.authorize(ident, shareId, body.op);
     // A share names one session: any other id is not shared, whatever it is.
     if (body.args.session !== row.session_id) throw noShare();
     limitOrThrow(this.hub, 'share_call_user', ident.user.id);
     limitOrThrow(this.hub, 'share_call_team', row.org_id);
-    if (host.pending.size >= this.relay.limits.pendingPerHost) throw new HubError('RATE_LIMITED', 'that computer is busy; try again shortly', { retry_after_s: 1 });
+    // Teammates never take the whole host: each has a small share, all of them together at most half, so the owner's own devices keep the rest.
+    const lim = this.relay.limits;
+    let teamPending = 0, mine = 0;
+    for (const p of host.pending.values()) { if (p.by) teamPending++; if (p.by === ident.user.id) mine++; }
+    if (host.pending.size >= lim.pendingPerHost || teamPending >= lim.sharedPendingPerHost || mine >= lim.pendingPerTeammate) throw new HubError('RATE_LIMITED', 'that computer is busy; try again shortly', { retry_after_s: 1 });
     if (this.relay.replayed(ident.user.id, body.request_id)) throw new HubError('CONFLICT', 'This request was already sent. Refresh and try again.', { reason: 'REPLAYED' });
     const name = this.db.get('SELECT display_name FROM users WHERE id = ?', ident.user.id)?.display_name ?? 'Teammate';
     const frame = {
       type: 'relay.request', rid: body.request_id, user: row.owner_user_id, from: ident.cred.id, op: body.op, args: body.args,
-      share: { id: row.id, team: row.org_id, user: ident.user.id, name: name.slice(0, 80), scope: row.scope },
+      share: { id: row.id, team: row.org_id, user: ident.user.id, name: name.slice(0, 80), scope },
     };
     const result = await this.relay.dispatch(host, frame, () => this.relay.unburn(ident.user.id, body.request_id));
     // Revoked, removed or expired while the host answered: the answer is withheld.
     const again = this.authorize(ident, shareId, body.op);
     if (again.host !== host) throw noShare();
-    return { share: row.id, result };
+    return { share: row.id, result: sinceShared(result, Date.parse(row.created_at)) };
   }
 
   routes(route) {
