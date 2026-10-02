@@ -35,3 +35,12 @@ test('Overview actual managed run states use closed UI status labels; only eligi
  x.data.agents[0].connection='accepted';x.row.card.run_state='running';x.data.agents[0].live.green=false;r=(await x.svc.snapshot()).sessions[0];assert.equal(r.status,'No recent activity');
  x.row.card.run_state='invented';r=(await x.svc.snapshot()).sessions[0];assert.equal(r.status,'Unknown');
 });
+
+test('Overview actor/principal changes retire bound reported and managed row identity without leaking authority IDs',async()=>{
+ for(const reported of [true,false]){
+  const x=fixture(reported?{}:{sessions:()=>[]}),before=(await x.svc.snapshot()).sessions[0];
+  x.data.principal.user_id='replacement-principal';x.source.userId='replacement-principal';x.row.member_id='replacement-member';x.data.agents[0].member_id='replacement-member';
+  const after=(await x.svc.snapshot()).sessions[0];assert.notEqual(after.id,before.id);assert.equal(after.task.title,before.task.title);assert.equal(after.capabilities.message.enabled,true);
+  assert.equal((await x.svc.message({handle:before.handle,text:'Old actor draft'})).ok,false);assert(!JSON.stringify(after).includes('replacement-principal'));assert(!JSON.stringify(after).includes('replacement-member'));
+ }
+});

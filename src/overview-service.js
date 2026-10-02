@@ -24,6 +24,8 @@ function createOverviewService({sessions=()=>[],work=async()=>({sources:[],captu
   const sources=await Promise.all(list.map(async source=>{let data;try{if(source.current())data=await source.read();}catch{}return{source,data};}));
   return{sources,capture:Array.isArray(registered?.capture)?registered.capture.slice(0,2000):[],partial:registered?.partial===true||registered?.sources?.length>9};};
  const validData=(source,data)=>source.current()&&data?.ok===true&&['complete','partial'].includes(data.status)&&object(data.principal)&&(!source.userId||data.principal.user_id===source.userId)&&Array.isArray(data.cards)&&data.cards.length<=500&&Array.isArray(data.agents)&&data.agents.length<=500;
+ const actorOf=(data,row)=>[data.principal.user_id??null,data.principal.member_id??null,row.member_id,row.board_id,row.team_id??null];
+ const cardIdentity=(source,data,row)=>stable(['card',source.key,actorOf(data,row),row.card.id]);
  const keyOf=row=>[row?.card?.id,row?.board_id,row?.member_id,row?.card?.run?.id??null,row?.card?.fence??null,row?.card?.version??null,row?.card?.title??null];
  const liveOwn=(data,row)=>data.agents.some(a=>a.card_id===row.card.id&&a.board_id===row.board_id&&a.member_id===row.member_id&&a.connection==='accepted'&&a.live?.green===true&&Number.isFinite(a.live.hb_age_ms)&&a.live.hb_age_ms>=0&&a.live.hb_age_ms<=Session.RECENT_MS);
  const managedStatus=(data,row)=>{
@@ -45,11 +47,11 @@ function createOverviewService({sessions=()=>[],work=async()=>({sources:[],captu
    for(const {source,data}of good){if(!source.matches?.(capture.destination))continue;const row=data.cards.find(r=>r.card?.id===capture.card_id&&(!capture.destination.board_id||r.board_id===capture.destination.board_id)&&(!capture.destination.team_id||r.team_id===capture.destination.team_id));if(row&&id(row.card.id)&&id(row.board_id)&&id(row.member_id)&&!row.card.archived)return{source,data,row};}return null;};
   const buildLocal=(raw,parentId=null)=>{
    if(!object(raw)||!id(raw.sessionId))return null;const elapsed=age(raw.source==='codex'&&raw.codexLifecycle===1?raw.codexHookAt:raw.updatedAt,time),fresh=freshness(elapsed),bound=binding(raw),card=bound?.row.card;
-   const identity=stable(['reported',raw.device??'local',raw.source??'unknown',raw.sessionId??null,raw.taskId??'session',card?.id??null,parentId]);
+   const identity=stable(['reported',raw.device??'local',raw.source??'unknown',raw.sessionId??null,raw.taskId??'session',card?.id??null,bound?actorOf(bound.data,bound.row):null,bound?.source.key??null,parentId]);
    const projected=Session.snapshot({sessions:[{...raw,remote:false,device:null}],now:time}).sessions[0];
    let status=projected?.status??'Unknown';if(raw.source==='codex'&&Machine.codexInputPending?.(raw,time))status='Waiting on you';
    const dto={id:identity,handle:null,label:parentId?'Agent':'Session',provider:provider(raw.source,raw.model),device:{label:raw.remote||raw.device?clean(raw.deviceName||'Paired device',80):'This device',local:!raw.remote&&!raw.device},board:{label:bound?clean(bound.row.board_name,80)||'Board':raw.scope?.state==='personal'?'Personal':'Unassigned',kind:bound?bound.source.kind:raw.scope?.state==='personal'?'personal':'unknown'},project:Session.snapshot({sessions:[{cwd:raw.cwd}],now:time}).sessions[0]?.project??'Local project',status,freshness:fresh,age_ms:elapsed,task:task(card??(typeof raw.taskTitle==='string'?{title:raw.taskTitle}:null)),children:[],capabilities:{open:capability(!!bound,'Open card',bound?'':'No current tracked card is available.'),message:capability(!!bound&&liveOwn(bound.data,bound.row)&&fresh==='recent'&&!!card.repo?.id&&typeof bound.source.send==='function','Message','A current owned runner with messaging is required.')}};
-   if(bound){usedCards.add(stable(['card',bound.source.key,card.id]));register(dto,{kind:'board',bound,pin:keyOf(bound.row)},next);}else register(dto,{kind:'reported'},next);
+   if(bound){usedCards.add(cardIdentity(bound.source,bound.data,bound.row));register(dto,{kind:'board',bound,pin:keyOf(bound.row)},next);}else register(dto,{kind:'reported'},next);
    const children=Array.isArray(raw.source==='codex'?raw.codexAgents:raw.agents)?(raw.source==='codex'?raw.codexAgents:raw.agents):[];
    for(const child of children.slice(0,64)){
     if(!object(child)||typeof child.status!=='string'||!['working','waiting','done'].includes(child.status))continue;
@@ -65,7 +67,7 @@ function createOverviewService({sessions=()=>[],work=async()=>({sources:[],captu
   for(const raw of reported.slice(0,500)){if(rows.length>=200){omitted++;continue;}const row=buildLocal(raw);if(row&&!rows.some(r=>r.id===row.id))rows.push(row);}
   if(reported.length>500)omitted+=reported.length-500;
   for(const {source,data}of good){for(const row of data.cards){const card=row?.card;if(!object(card)||!id(card.id)||!id(row.board_id)||!id(row.member_id)||card.archived||!card.run||!id(card.run.id)||!data.agents.some(a=>a.card_id===card.id&&a.board_id===row.board_id&&a.member_id===row.member_id))continue;
-   const identity=stable(['card',source.key,card.id]);if(usedCards.has(identity)||rows.some(r=>r.id===identity))continue;if(rows.length>=200){omitted++;continue;}
+   const identity=cardIdentity(source,data,row);if(usedCards.has(identity)||rows.some(r=>r.id===identity))continue;if(rows.length>=200){omitted++;continue;}
    const live=liveOwn(data,row),elapsed=Number.isFinite(card.live?.hb_age_ms)&&card.live.hb_age_ms>=0?card.live.hb_age_ms:null;
    const dto={id:identity,handle:null,label:'Managed session',provider:provider(card.run.ai,card.run.model),device:{label:clean(card.run.device_name,80)||'Runner device',local:source.kind==='personal'},board:{label:clean(row.board_name,80)||'Board',kind:source.kind},project:clean(card.repo?.short_name,100)||'Project not reported',status:managedStatus(data,row),freshness:freshness(elapsed),age_ms:elapsed,task:task(card),children:[],capabilities:{open:capability(true,'Open card',''),message:capability(live&&!!card.repo?.id&&typeof source.send==='function','Message','A current owned runner with messaging is required.')}};
    register(dto,{kind:'board',bound:{source,data,row},pin:keyOf(row)},next);rows.push(dto);
