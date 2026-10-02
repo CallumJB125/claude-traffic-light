@@ -10,11 +10,13 @@ import {createGitHub} from '../github.js';
 import {HubError} from '../db.js';
 const BASE='a'.repeat(40),HEAD='b'.repeat(40),MERGE='c'.repeat(40);
 const codex={id:'codex',label:'Codex',installed:true,signedIn:true,startable:true,capabilities:{budget:'none',resume:true}};
-async function rig(t,{concurrency=1,dependencies,verified=true,planApproval=false,ai='codex',budget_usd=null}={}){
+async function rig(t,{concurrency=1,dependencies,verified=true,planApproval=false,ai='codex',budget_usd=null,reuse=null}={}){
  const pulls=new Map(),github={enabled:true,async getBaseCommit(){return verified?{sha:BASE}:null;},async getCommit(_repo,sha){return /^[0-9a-f]{40}$/.test(sha)?{sha}:null;},async getPull(_repo,n){return pulls.get(n)??null;}};
- const f=await tenancy();f.h.hub.github=github;t.after(()=>f.h.close());
- const enroll=await f.as(f.users.amember,'POST',`/api/teams/${f.A.team}/enrol`,{});assert.equal(enroll.status,200,enroll.text);
- const r=new FakeRunner(f.h.base,{device_id:'',device_token:enroll.body.runner_token,team:f.A.team});t.after(()=>r.terminate());await r.open();await r.hello();
+ const f=reuse??await tenancy();f.h.hub.github=github;let r=reuse?.r;
+ if(!reuse){t.after(()=>f.h.close());
+  const enroll=await f.as(f.users.amember,'POST',`/api/teams/${f.A.team}/enrol`,{});assert.equal(enroll.status,200,enroll.text);
+  r=new FakeRunner(f.h.base,{device_id:'',device_token:enroll.body.runner_token,team:f.A.team});t.after(()=>r.terminate());await r.open();await r.hello();
+ }
  const provider=ai==='codex'?codex:{...codex,id:'claude',label:'Synthetic Claude capability fixture',capabilities:{budget:'native',resume:true}};
  r.send({type:'advertise',repos:[{repo_id:f.A.repo}],ai:[provider]});await until(()=>f.h.hub.runners.get(r.welcome.device_id)?.ai?.some(a=>a.id===ai&&a.signedIn===true));
  const definition={name:'Bounded delivery',description:'Human controlled',steps:[{title:'Implement',body:'PRIVATE-WORKFLOW-BRIEF',acceptance:'Review',plan_approval:planApproval},{title:'Verify',body:'Second task',acceptance:'Review',plan_approval:planApproval}]};
@@ -356,4 +358,41 @@ test('actual restore bump and runner reconnect retain observed lineage without a
  // welcome, token or offer; it never adopts or restarts the observed child.
  const r=new FakeRunner(f.h.base,{device_id:f.r.welcome.device_id,device_token:f.r.dev.device_token,team:f.A.team});t.after(()=>r.terminate());await r.open();r.send({type:'hello',protocol:1,device_id:r.dev.device_id,runner_version:'test',outbox_head_seq:0,runs:[{run_id:run.run_id,card_id:run.card_id,fence:run.fence}]});
  assert.equal(await r.closed(),4401);assert.equal(r.all('welcome').length,0);assert.equal(r.all('offer').length,0);assert.equal(f.h.hub.offerFrame(run.card_id),null);assert.equal(f.db.get('SELECT count(*) n FROM dispatches').n,count);
+});
+
+async function reviewedSuccessors(t,count=1){
+ const first=await rig(t),fixtures=[first],service=first.h.app.api.workflowExecutor,wake=service.wake.bind(service);
+ for(let i=1;i<count;i++)fixtures.push(await rig(t,{reuse:first}));
+ const ids=[];for(const f of fixtures){const started=await f.start();assert.equal(started.status,200,started.text);ids.push(started.body.execution.id);}
+ await until(()=>!service.draining);service.wake=()=>{};t.after(()=>service.wake=wake);
+ for(const f of fixtures){const {run}=await f.claim(f.options.steps[0].card_id);await f.complete(run);
+  const reviewed=await f.call('POST',`/api/cards/${run.card_id}/actions/approve_done`,{});assert.equal(reviewed.status,200,reviewed.text);
+ }
+ service.wake=wake;return {fixtures,first,service,ids};
+}
+async function heldCoordinator(t,f,id){
+ let release;const held=f.h.hub.withBoard(f.A.board,()=>new Promise(resolve=>release=resolve));
+ await new Promise(resolve=>setImmediate(resolve));t.after(()=>release());f.h.app.api.workflowExecutor.wake(id);
+ await new Promise(resolve=>setImmediate(resolve));assert.equal(f.h.app.api.workflowExecutor.draining,true);
+ return async()=>{release();await held;await until(()=>!f.h.app.api.workflowExecutor.draining);};
+}
+test('two actual reviewed workflows retain a wake received during a held queue and both admit their exact successor once',async t=>{
+ const {first,service,ids}=await reviewedSuccessors(t,2),release=await heldCoordinator(t,first,ids[0]);
+ service.wake(ids[1]);service.wake(ids[1]);await release();
+ assert.deepEqual(ids.map(id=>first.db.get('SELECT count(*) n FROM workflow_execution_attempts WHERE execution_id=?',id).n),[2,2]);
+ assert.equal(service.pending.size,0);assert.equal(first.db.get('SELECT count(*) n FROM workflow_execution_receipts').n,2);
+ for(const id of ids)assert.equal(first.db.get('SELECT count(*) n FROM workflow_owned_intents WHERE execution_id=? AND disabled=0 AND run_id IS NULL',id).n,1);
+});
+test('closing an actual coordinator while its board queue is held performs no later launch or pause effects',async t=>{
+ const {first,service,ids}=await reviewedSuccessors(t),release=await heldCoordinator(t,first,ids[0]),before=effects(first);
+ service.close();await release();service.wake(ids[0]);await settle();
+ assert.equal(effects(first),before);assert.equal(service.pending.size,0);assert.equal(service.draining,false);
+});
+test('a queued observed wake rechecks the original current credential before successor admission',async t=>{
+ const {first,service,ids}=await reviewedSuccessors(t),release=await heldCoordinator(t,first,ids[0]);
+ const dispatches=first.db.get('SELECT count(*) n FROM dispatches').n;
+ first.db.run('UPDATE user_devices SET revoked_at=? WHERE id=?',first.h.hub.iso(),first.users.amember.device_id);
+ await release();assert.equal(first.db.get('SELECT count(*) n FROM workflow_execution_attempts WHERE execution_id=?',ids[0]).n,1);
+ assert.equal(first.db.get('SELECT count(*) n FROM dispatches').n,dispatches);assert.equal(first.db.get('SELECT state FROM workflow_executions WHERE id=?',ids[0]).state,'blocked');
+ assert.equal(service.pending.size,0);
 });

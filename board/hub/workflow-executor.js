@@ -387,13 +387,23 @@ export class WorkflowExecutor {
  wake(id){
   if(this.closed)return;
   this.pending.add(id);if(this.draining)return;this.draining=true;
-  queueMicrotask(async()=>{const batch=[...this.pending].slice(0,16);for(const id of batch)this.pending.delete(id);
-   try{for(const id of batch){if(this.closed)break;const row=this.db.get('SELECT board_id FROM workflow_executions WHERE id=? AND state=\'authorized\'',id);if(!row)continue;
-    try{await this.hub.withBoard(row.board_id,()=>this.hub.txn(()=>{const authority=this.authority(id),auth=this.db.get('SELECT * FROM workflow_execution_authorizations WHERE execution_id=? AND revision=?',id,authority.row.revision);
-     const bound=this.bound(authority.member,{kind:auth.credential_kind,id:auth.credential_id},{boardIds:authority.authorization.selection},false);this.admit(id);this.executionProjection(bound,id);}));}
-    catch{if(!this.closed)await this.hub.withBoard(row.board_id,()=>this.hub.txn(()=>this.core.pause(id,'blocked')));}
-   }}finally{this.draining=false;/* finite batch; later observed events admit another batch */}
-  });
+  queueMicrotask(()=>this.drain());
+ }
+ async drain(){
+  try{while(!this.closed&&this.pending.size){
+   const batch=[...this.pending].slice(0,16);for(const id of batch)this.pending.delete(id);
+   for(const id of batch){if(this.closed)break;let row;
+    try{row=this.db.get('SELECT board_id FROM workflow_executions WHERE id=? AND state=\'authorized\'',id);if(!row)continue;
+     await this.hub.withBoard(row.board_id,()=>{if(this.closed)return;return this.hub.txn(()=>{
+      const authority=this.authority(id),auth=this.db.get('SELECT * FROM workflow_execution_authorizations WHERE execution_id=? AND revision=?',id,authority.row.revision);
+      const bound=this.bound(authority.member,{kind:auth.credential_kind,id:auth.credential_id},{boardIds:authority.authorization.selection},false);this.admit(id);this.executionProjection(bound,id);
+     });});
+    }catch{if(!this.closed&&row)try{await this.hub.withBoard(row.board_id,()=>{if(!this.closed)return this.hub.txn(()=>this.core.pause(id,'blocked'));});}catch{}}
+   }
+   // Only already observed wakes are drained. Yield after each finite batch,
+   // so more than16 or a wake received during a queue await cannot be lost.
+   if(!this.closed&&this.pending.size)await new Promise(resolve=>setImmediate(resolve));
+  }}finally{this.draining=false;if(this.closed)this.pending.clear();}
  }
  close(){this.closed=true;this.pending.clear();}
 }
