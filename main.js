@@ -1056,12 +1056,13 @@ function syncEyePoll() {
 }
 
 function createWindow() {
+  if (win && !win.isDestroyed()) return win;
   const saved = readBounds();
   const primary = screen.getPrimaryDisplay().workAreaSize;
   const defaultWidth = 100;
   const defaultHeight = Math.round(defaultWidth / WIDGET_ASPECT);
 
-  win = new BrowserWindow({
+  const w = win = new BrowserWindow({
     width: saved?.width || defaultWidth,
     height: saved?.height || defaultHeight,
     x: saved?.x ?? Math.round(primary.width - defaultWidth - 40),
@@ -1087,43 +1088,55 @@ function createWindow() {
     },
   });
 
-  win.setAlwaysOnTop(true, 'floating', 1);
-  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-  win.setAspectRatio(WIDGET_ASPECT);
-  win.loadFile('index.html');
+  w.setAlwaysOnTop(true, 'floating', 1);
+  w.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  w.setAspectRatio(WIDGET_ASPECT);
+  w.loadFile('index.html');
   // ready-to-show is unreliable for transparent windows on macOS, so show on
   // load, with a fallback in case that never fires either.
-  const reveal = () => { if (win && !win.isVisible() && loadConfig().showWidget) win.showInactive(); };
-  win.webContents.once('did-finish-load', reveal);
+  const current = () => win === w && !w.isDestroyed();
+  const reveal = () => { if (current() && !w.isVisible() && loadConfig().showWidget) w.showInactive(); };
+  w.webContents.once('did-finish-load', reveal);
   setTimeout(reveal, 1500);
 
-  guardRenderer(win, 'widget', () => { win = null; createWindow(); });
+  let recovering = false;
+  guardRenderer(w, 'widget', () => {
+    if (win !== w || recovering) return;
+    recovering = true;
+    try { if (!w.isDestroyed()) w.destroy(); } catch { /* retain the current owner if disposal failed */ }
+    if (!w.isDestroyed()) { recovering = false; return; }
+    if (win === w) win = null;
+    // Let synchronous destroy/crash handlers finish replacing the window first.
+    queueMicrotask(() => { if (!win || win.isDestroyed()) createWindow(); });
+  });
   // A reload loses the widget's state; re-push it as soon as it's back.
-  win.webContents.on('did-finish-load', () => { stateMemo = { at: 0, key: null, value: null }; broadcastStatus(); });
+  w.webContents.on('did-finish-load', () => { if (!current()) return; stateMemo = { at: 0, key: null, value: null }; broadcastStatus(); });
 
-  win.on('resize', saveBounds);
-  win.on('move', () => { if (!glideTimer) saveBounds(); });
+  w.on('resize', () => { if (current()) saveBounds(); });
+  w.on('move', () => { if (current() && !glideTimer) saveBounds(); });
   // Each event re-reads both from the window: a restore can bring back a
   // window that was hidden before it was minimised, with no 'show' at all.
-  const syncVisibility = (visible = win.isVisible()) => {
-    if (!win || win.isDestroyed()) return;
-    setMotionPaused('minimized', win.isMinimized());
-    setMotionPaused('hidden', !visible && !win.isMinimized());
+  const syncVisibility = (visible) => {
+    if (!current()) return;
+    if (visible === undefined) visible = w.isVisible();
+    setMotionPaused('minimized', w.isMinimized());
+    setMotionPaused('hidden', !visible && !w.isMinimized());
   };
-  win.on('show', () => syncVisibility(true));
-  win.on('hide', () => syncVisibility(false));
-  win.on('restore', () => syncVisibility());
-  win.on('minimize', () => syncVisibility());
+  w.on('show', () => syncVisibility(true));
+  w.on('hide', () => syncVisibility(false));
+  w.on('restore', () => syncVisibility());
+  w.on('minimize', () => syncVisibility());
   // Those only fire on a change; a widget that loads hidden (showWidget off),
   // or reloads while paused, must still start in the right state.
-  win.webContents.on('did-finish-load', () => {
-    if (!win || win.isDestroyed()) return;
+  w.webContents.on('did-finish-load', () => {
+    if (!current()) return;
     syncVisibility();
-    win.webContents.send('motion-paused', widgetMotion.paused);
+    w.webContents.send('motion-paused', widgetMotion.paused);
   });
-  win.on('closed', () => {
-    win = null;
+  w.on('closed', () => {
+    if (win === w) win = null;
   });
+  return w;
 }
 
 let settingsWin = null;
