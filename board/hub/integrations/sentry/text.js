@@ -102,6 +102,27 @@ export function issueLink(issue) {
   return `https://${host}/${m[1] ? `organizations/${m[1]}/` : ''}issues/${id}/`;
 }
 
+/** An exact Sentry alert URL bound to the signed incident identifier. */
+export function incidentLink(alert, raw) {
+  const id = own(alert, 'identifier');
+  if (typeof id !== 'string' || !ISSUE_ID_RE.test(id) || typeof raw !== 'string' || raw.length > 500 || !raw.startsWith('https://') || /[?#@\\\s%]/.test(raw)) return null;
+  let u;
+  try { u = new URL(raw); } catch { return null; }
+  if (u.protocol !== 'https:' || u.port || u.username || u.password || !HOSTS.has(u.hostname)) return null;
+  const match = /^\/organizations\/([a-z0-9-]{1,50})\/alerts\/(\d{1,20})\/$/.exec(u.pathname);
+  return match && match[2] === id ? `https://${u.hostname}/organizations/${match[1]}/alerts/${id}/` : null;
+}
+
+/** Incident templates intentionally omit provider names, query and description. */
+export function incidentText(alert, { projects, start, url }) {
+  const rule = own(own(alert, 'alert_rule'), 'id');
+  const title = `Sentry critical incident · ${projects.join(', ')}`;
+  return { title: cap(title, TITLE_MAX), body: [
+    `Sentry reported a critical metric alert.`, `Projects: ${projects.join(', ')}`, `Alert rule: ${rule}`,
+    `Episode started: ${new Date(start).toISOString()}`, ...(url ? [`Sentry: ${url}`] : []), '', SUGGESTION,
+  ].join('\n').slice(0, BODY_MAX) };
+}
+
 const count = (v) => {
   if (typeof v === 'string' && COUNT_RE.test(v)) return Number(v);
   return Number.isSafeInteger(v) && v >= 0 ? v : null;

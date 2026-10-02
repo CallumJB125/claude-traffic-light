@@ -5,6 +5,7 @@ import { h } from './h.js';
 import { icon } from './icons.js';
 import { formatAge } from './view.js';
 import { CONNECTORS, STATUS_TEXT, connectorStatus } from './connectors.js';
+import { sentryRouting } from './render-sentry.js';
 
 const MODE_LABEL = { auto: 'Automatic', ask: 'Ask first', off: 'Off' };
 const DECISION_LABEL = { attempted: 'In progress', auto: 'Done automatically', failed: 'Failed', asked: 'Waiting for a yes', approved: 'Approved', denied: 'Denied', skipped: 'Skipped (off)' };
@@ -32,6 +33,9 @@ const ACTION_LABEL = {
   'sentry.card': 'Create cards from new Sentry issues',
   'sentry.notice': 'Comment when new issues exceed the card limit',
   'sentry.suppressed': 'Record issues that were not turned into cards',
+  'sentry.status': 'Comment on issue status and regressions',
+  'sentry.incident': 'Create cards from critical metric alerts',
+  'sentry.incident-status': 'Comment on incident status updates',
 };
 export const actionLabel = (id) => ACTION_LABEL[id] ?? id;
 
@@ -129,7 +133,7 @@ function connectedCard(conn, m) {
     h('section', { class: 'integ-section', 'aria-label': 'What it may do on its own' },
       h('h4', null, 'On its own'),
       autonomyRows(conn, connector, m.canEdit, m.busy.has(`integ:${conn.id}`))),
-    h('section', { class: 'integ-section' },
+    conn.provider === 'sentry' ? sentryRouting(conn, m) : h('section', { class: 'integ-section' },
       h('label', { class: 'field' }, h('span', null, 'New cards go to'),
         m.canEdit ? h('select', { class: 'input input-sm', 'aria-label': `Target board for ${connector?.name ?? conn.provider}`, 'data-change': 'integ-board', 'data-conn': conn.id, disabled: m.busy.has(`integ:${conn.id}`) || null },
           (m.boards ?? []).filter((b) => !b.archived_at || b.id === conn.target_board_id).map((b) => h('option', { key: b.id, value: b.id, selected: b.id === conn.target_board_id }, `${b.name}${b.archived_at ? ' (Archived — intake paused)' : ''}`)))
@@ -324,6 +328,7 @@ export function integrationsScreen(model) {
     canWrite: ['owner', 'admin', 'member'].includes(model.me?.member?.role), linked: m.linked ?? {},
     local: !!m.local, nowMs: m.nowMs ?? Date.now(), open: m.open, audit: m.audit ?? {}, tokenFor: m.tokenFor, manifest: m.manifest, confirmDisconnect: m.confirmDisconnect, busy: model.busy,
     meId: model.me?.member?.id, needs: m.needs ?? {}, confirmCancel: m.confirmCancel,
+    sentryErrors: m.sentryErrors ?? {},
   };
   const connected = data.connections ?? [];
   const pending = vm.canEdit ? data.pending ?? [] : [];

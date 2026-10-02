@@ -150,11 +150,40 @@ Slack, the fake) never spends the rule. `ctx.lastCreatedCard()` → `{id, board_
 card of the connection's newest `integration_requests` row: one this connection made, never a person's or
 another connection's (Sentry posts its daily over-the-limit notice there, and only if it is not archived).
 
-**Sentry (built, not enabled).** `sentry/` (slice S-A) is registered by tests only. A hub operator enables
+**Sentry (source prepared, not enabled).** `sentry/` is registered by tests only. A hub operator enables
 it by adding `sentry` to `connectorsFor()` in `index.js`, and only after a real Sentry delivery (an
 `issue.created` from a Sentry org, exact bytes and headers) has been checked against `verify()` over its
 raw bytes under the real secret (the go-live gate; the test fixtures are hand-made bodies signed at test
-time). There is deliberately no flag for it.
+time). Issue resolution, archive/ignore and regression, metric incident/status, routing and retry journeys
+also need provider acceptance. There is deliberately no flag for it.
+
+Signed issue `resolved`, `archived` and `unresolved` deliveries comment only on the issue's existing
+connection-owned card. `unresolved` with `substatus: regressed` records a regression; it does not reopen,
+move or dispatch a card. Last seen is an occurrence time, not a signed status-change sequence. Status is
+therefore the last hub-observed change; out-of-order provider delivery is not corrected or guessed.
+Critical `metric_alert` deliveries make one Todo incident per rule and fixed cooldown interval of their
+signed `date_started` (default 60 minutes, admin 1–1440). Each provider incident id links to that card, so
+warning/resolved/later critical deliveries find it even after routing/cooldown settings change. Metric
+incidents can be long-running; unlike new issue creation, they have no 24-hour age rejection. Their
+durable request/link prevents duplicate creation from the same observed episode. Only bounded numeric
+ids, project slugs, episode time and a validated Sentry alert URL enter the fixed incident template;
+provider title, query, description, actor and stack are omitted.
+
+The Sentry-only `s.actAs(created_by).observeLink(cardId, 'issue'|'alert', externalId, {state},
+{request_id,body})` is available under exactly `sentry.status`/`sentry.incident-status`. It uses a private
+WeakMap-branded immutable primitive context; HTTP/MCP JSON cannot supply this capability or a callback.
+`Api.comment` owns the sole board queue. Inside its existing transaction it rechecks current captured
+actor/action/settings, the live exact link and 046 receipt. A new state writes an ordinary untrusted
+non-agent comment, durable receipt and bounded link status atomically. A same-state update aliases its
+own new receipt to the existing same-card, untrusted non-agent integration comment only if this
+connection already owns a 046 receipt for it. An invalid pointer produces a legitimate new observation,
+never an adopted foreign comment. Coalescing creates no comment/feed/broadcast and spends no comment
+row quota, but new receipt bytes still require available storage. Prior durable receipts remain readable
+under storage pressure and never rewrite later status. `ctx.linkStatusFor` returns only fixed Sentry
+state/hub observation time, never the private comment pointer; PR status and ordinary comments are
+unchanged. The UI saves the explicit default/target board together, plus up to 32 project routes,
+severity, optional redacted issue message and cooldown. Missing/archived default pauses creation; a
+multi-project incident whose routes disagree also pauses instead of guessing.
 
 **Planned interface (not built yet; do not rely on it).** `signals: ['incident']`
 (S-C3, D99): inside `act()`, `s.signal(kind, {card_id})` for a card **this connection created** writes one

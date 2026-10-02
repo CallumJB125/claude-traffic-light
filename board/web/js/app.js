@@ -22,6 +22,7 @@ import { validDay, validZone, todayIn, shiftDay } from '../../shared/planning.js
 import { DEFAULT_SORT, nextSort } from './table.js';
 import { dashboardScreen } from './render-dashboard.js';
 import { integrationsScreen, connectWindowTarget, takeInput } from './render-integrations.js';
+import { saveSentrySettings } from './sentry-settings.js';
 import { teamScreen } from './render-team.js';
 import { emptyFold, pullJournal, windowMetrics, cardMetrics } from './metrics.js';
 import { VIEWS } from './views.js';
@@ -719,6 +720,24 @@ async function setIntegrationBoard(id, target_board_id) {
   }
 }
 
+async function submitSentrySettings(form) {
+  const id = form.dataset.conn, connection = state.integ.data?.connections?.find(c => c.id === id);
+  if (!connection || state.busy.has(`integ:${id}`)) return;
+  const generation = boardGeneration, org = currentOrg(), member = state.me?.member?.id;
+  const current = () => generation === boardGeneration && org === currentOrg() && member === state.me?.member?.id;
+  state.busy.add(`integ:${id}`);
+  try {
+    await saveSentrySettings({ form, connection, boards: state.boards,
+      getScope: () => ({ org: currentOrg(), member: state.me?.member?.id, user: state.me?.user?.id ?? state.me?.member?.user_id, role: state.me?.member?.role, generation: boardGeneration, auth: state.auth }),
+      patch: (conn, body) => api.patchIntegration(conn, body),
+      saved: conn => { state.integ = { ...state.integ, sentryErrors: { ...state.integ.sentryErrors, [id]: null },
+        data: { ...state.integ.data, connections: state.integ.data.connections.map(c => c.id === id ? conn : c) } }; toast('Sentry settings saved.'); },
+    });
+  } catch (error) {
+    if (current()) state.integ = { ...state.integ, sentryErrors: { ...state.integ.sentryErrors, [id]: errorText(error) } };
+  } finally { state.busy.delete(`integ:${id}`); if (current()) update(); }
+}
+
 // ── accounts: a first team ─────────────────────────────────────────────────
 
 async function enterTeam(teamId, done) {
@@ -1344,6 +1363,7 @@ async function submitDialogForm(form, submitter) {
   if (kind === 'workflow-publish' || kind === 'workflow-apply') return submitWorkflow(form, kind);
   if (['new-board', 'rename-board', 'archive-board'].includes(kind)) return submitBoardDialog(form);
   if (kind === 'integ-token') return submitIntegrationToken(form);
+  if (kind === 'sentry-settings') return submitSentrySettings(form);
   if (kind === 'integ-prepare') return submitPrepare(form);
   if (kind === 'integ-start') return connectIntegration(form.dataset.provider, 'app_install', takeInput(form));
   if (kind === 'create-team') {

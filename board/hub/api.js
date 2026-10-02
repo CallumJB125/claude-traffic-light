@@ -20,6 +20,8 @@ import { insertCardRecord } from './card-record.js';
 import { requireRows } from './quotas.js';
 import { remoteScope, remoteMutation } from './remote/context.js';
 import { WorkflowExecutor } from './workflow-executor.js';
+import { requireStorage } from './storage-watch.js';
+import { observationContext, validObservation, sentryStatus } from './integrations/sentry/observation.js';
 
 const ACTION_EVENTS = {
   dispatch: 'dispatch', cancel: 'cancel', stop: 'stop', retry: 'retry', take_over: 'take_over', hand_over: 'hand_over',
@@ -789,11 +791,13 @@ export class Api {
     return id;
   }
 
-  async comment(member, cardId, body, { cred = null, remote = null } = {}) {
+  async comment(member, cardId, body, { cred = null, remote = null, integrationObservation = null } = {}) {
     member = this.currentWriter(member, cred, remote);
     const row0 = this.cardFor(member, cardId);
     const text = str(body.body, 10_000, 'body', { required: true });
     const via = this.hub.viaScope.getStore();
+    const observation = observationContext(integrationObservation);
+    if (integrationObservation != null && !observation) throw new HubError('FORBIDDEN', 'private integration observation required');
     const once = via?.member_id === member.id && typeof body.request_id === 'string' && body.request_id
       ? { connection_id: via.connection_id, request_id: body.request_id } : null;
     return this.withWritableBoard(row0.board_id, (current) => {
@@ -801,20 +805,53 @@ export class Api {
       const row = this.cardFor(member, cardId);
       if (row.board_id !== row0.board_id) throw new HubError('CONFLICT', 'card moved while waiting');
       if (row.archived_at) throw archivedError();
-      let id, replay = false;
+      let id, replay = false, coalesced = false;
       this.hub.txn(() => {
+        let link;
+        if (observation) {
+          // Revalidate current private authority/link inside the same synchronous
+          // queued transaction, before either durable or cached replay effects.
+          member = this.currentWriter(member, cred, remote);
+          const connection = this.db.get('SELECT provider FROM connections WHERE id=?', via?.connection_id);
+          if (!validObservation(observation) || !once || once.request_id !== observation.request_id || connection?.provider !== 'sentry' || typeof via?.authorize !== 'function' || body.for_agent === true
+            || via.connection_id !== observation.connection_id || via.member_id !== observation.member_id || via.action !== observation.action
+            || member.id !== observation.member_id || (member.user_id ?? null) !== observation.user_id || cardId !== observation.card_id) {
+            throw Object.assign(new HubError('FORBIDDEN', 'current Sentry observation unavailable'), { cacheable: false });
+          }
+          link = this.db.get('SELECT status FROM external_links WHERE connection_id=? AND card_id=? AND kind=? AND external_id=?', observation.connection_id, cardId, observation.kind, observation.external_id);
+          if (!link) throw Object.assign(new HubError('NOT_FOUND', 'current Sentry link unavailable'), { cacheable: false });
+        }
         const prior = once && this.db.get('SELECT c.* FROM integration_comment_requests r JOIN comments c ON c.id=r.comment_id WHERE r.connection_id=? AND r.request_id=?', once.connection_id, once.request_id);
         if (prior) {
           if (prior.card_id !== cardId) throw new HubError('CONFLICT', 'this request_id already commented on another card');
+          if (observation && (prior.source !== 'integration' || prior.trusted !== 0 || prior.for_agent !== 0)) throw new HubError('CONFLICT', 'observation receipt is not an integration comment');
           id = prior.id; replay = true; return;
+        }
+        const previous = observation ? sentryStatus(json(link.status, {}), observation.kind) : null;
+        if (observation && previous.sentry_state === observation.state && previous.sentry_comment_id) {
+          const old = this.db.get('SELECT c.id FROM comments c WHERE c.id=? AND c.card_id=? AND c.source=\'integration\' AND c.trusted=0 AND c.for_agent=0 AND EXISTS (SELECT 1 FROM integration_comment_requests r WHERE r.connection_id=? AND r.comment_id=c.id)', previous.sentry_comment_id, cardId, observation.connection_id);
+          if (old) {
+            requireStorage(this.hub);
+            id = old.id; coalesced = true;
+            this.db.insert('integration_comment_requests', { ...once, comment_id: id, created_at: this.hub.iso() });
+            return;
+          }
+          // A missing/tampered pointer cannot adopt somebody else's comment.
+          // Create an ordinary new observation with its own receipt instead.
         }
         id = this.insertComment(member, cardId, { body: text, for_agent: body.for_agent === true, reply_to: body.reply_to });
         if (once) this.db.insert('integration_comment_requests', { ...once, comment_id: id, created_at: this.hub.iso() });
+        if (observation) {
+          const status = JSON.stringify({ sentry_state: observation.state, hub_observed_at: this.hub.iso(), sentry_comment_id: id });
+          if (Buffer.byteLength(status) > 512) throw new HubError('VALIDATION', 'observation status over 512 bytes');
+          this.db.run('UPDATE external_links SET status=? WHERE connection_id=? AND card_id=? AND kind=? AND external_id=?', status, observation.connection_id, cardId, observation.kind, observation.external_id);
+          this.hub.later(() => this.hub.broadcastCard(cardId));
+        }
         this.hub.feed(cardId, 'comment', { comment_id: id }, { actor: member.id });
       });
       if (!replay && body.for_agent === true) this.hub.deliverComments(cardId);
       const c = this.db.get('SELECT * FROM comments WHERE id = ?', id);
-      return { comment: { id, author_name: this.hub.member(c.author_member_id)?.display_name ?? 'Former member', source: c.source, trusted: !!c.trusted, body: c.body, for_agent: !!c.for_agent, reply_to: c.reply_to, created_age_ms: this.hub.ageOf(c.created_at) } };
+      return { comment: { id, author_name: this.hub.member(c.author_member_id)?.display_name ?? 'Former member', source: c.source, trusted: !!c.trusted, body: c.body, for_agent: !!c.for_agent, reply_to: c.reply_to, created_age_ms: this.hub.ageOf(c.created_at) }, ...(observation ? { coalesced, replay } : {}) };
     }, { member, cred, remote });
   }
 

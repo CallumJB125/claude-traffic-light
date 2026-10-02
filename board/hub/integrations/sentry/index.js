@@ -1,8 +1,10 @@
-// Sentry connector, slice S-A (CONTRACT D42 addendum "the Sentry connector"):
+// Sentry connector (CONTRACT D42 addendum "the Sentry connector"):
 // webhook-only. An admin makes a Sentry Internal Integration and pastes its
 // client secret, the webhook signing key and the only credential; a new
-// issue (issue.created) becomes one todo card on the admin's board. It makes
-// no outbound request (hosts: []), moves no card and dispatches nothing.
+// issue (issue.created) becomes one todo card on an explicitly routed board.
+// Signed issue status/regressions become durable coalesced comments. Critical
+// metric alerts create one incident per rule/cooldown bucket; later updates
+// match the incident's own link. No outbound request, card move or dispatch.
 //
 // Go-live gate: not in connectorsFor() on any hub until a real Sentry
 // delivery has been checked against verify() over its raw bytes.
@@ -10,19 +12,20 @@
 // Payload fields read (Sentry docs, integration-platform/webhooks/issues/):
 // action, data.issue.{id, shortId, culprit, level, project.slug, metadata.type,
 // metadata.value, title (only with include_message), count, userCount,
-// firstSeen, web_url}; headers sentry-hook-signature, sentry-hook-resource,
+// firstSeen, web_url}; metric_alert fixed ids/projects/date_started and exact
+// alert URL only. No actor, query, metric description or stack is persisted.
+// Headers sentry-hook-signature, sentry-hook-resource,
 // sentry-hook-timestamp (informational). Request-ID is never read.
 
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { defineConnector } from '../connector.js';
-import { cardText, issueLink, parseIso, own, LEVELS, ISSUE_ID_RE, SLUG_RE } from './text.js';
+import { own } from './text.js';
+import { issueEvent, metricEvent } from './events.js';
 
 const CLIENT_KEY_SHAPE = /^[A-Za-z0-9_-]{16,256}$/;
 const SIG_RE = /^[0-9a-f]{64}$/;
 const HOUR_MS = 3_600_000;
 const DAY_MS = 24 * HOUR_MS;
-const FRESH_MS = DAY_MS;
-const AHEAD_MS = 5 * 60_000;
 const STATE_MAX = 1000;
 export const NOTICE = 'Sentry is sending more new issues than this connection\'s card limit allows. New issues are not turned into cards until the limit refills; they are still in Sentry. The count is in this connection\'s Activity.';
 
@@ -119,7 +122,7 @@ export function createSentryConnector({ now = () => Date.now() } = {}) {
     hosts: [],
     showsWebhookUrl: true,
     dailyCardCap: 100,
-    configKeys: ['default_board_id', 'project_boards', 'min_level', 'include_message'],
+    configKeys: ['default_board_id', 'project_boards', 'min_level', 'include_message', 'cooldown_minutes'],
 
     connect: {
       kind: 'token',
@@ -155,29 +158,33 @@ export function createSentryConnector({ now = () => Date.now() } = {}) {
       const t = now();
       const st = stateOf(ctx.connection.id);
       noteTimestamp(ctx, st, headers, t);
-      if (headers?.['sentry-hook-resource'] !== 'issue' || own(payload, 'action') !== 'created') return;
-      const issue = own(own(payload, 'data'), 'issue');
-      const id = own(issue, 'id');
-      const slug = own(own(issue, 'project'), 'slug');
-      if (typeof id !== 'string' || !ISSUE_ID_RE.test(id) || typeof slug !== 'string' || !SLUG_RE.test(slug)) return;
-      // Replay control: a body captured once can't make a card after its own signed day.
-      const first = parseIso(own(issue, 'firstSeen'));
-      if (first === null || first < t - FRESH_MS || first > t + AHEAD_MS) return;
       const config = own(ctx.connection.settings, 'config') ?? {};
-      const minLevel = LEVELS.includes(own(config, 'min_level')) ? config.min_level : 'error';
-      const level = LEVELS.includes(own(issue, 'level')) ? issue.level : 'error';
-      if (LEVELS.indexOf(level) > LEVELS.indexOf(minLevel)) return;
-      const board = boardFor(ctx, config, slug);
+      const kind = headers?.['sentry-hook-resource'] === 'issue' ? 'issue' : headers?.['sentry-hook-resource'] === 'metric_alert' ? 'alert' : null;
+      const event = kind === 'issue' ? issueEvent(payload, { now: t, config }) : kind === 'alert' ? metricEvent(payload, { now: t, config }) : null;
+      if (!event) return;
+      const card = ctx.linked(kind, event.id);
+      const creating = kind === 'issue' ? event.action === 'created' : event.action === 'critical' && !card;
+      if (!creating) {
+        if (!card) return; // Never adopt a card from a payload id/key.
+        const action = kind === 'issue' ? 'sentry.status' : 'sentry.incident-status';
+        const digest = createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+        const request_id = `sentry-${kind}-status-${event.id}-${digest}`;
+        return ctx.act(action, { card_id: card, external_ref: `sentry-${kind}-${event.id}` }, s => s.actAs(ctx.connection.created_by)
+          .observeLink(card, kind, event.id, { state: event.state }, { request_id, body: kind === 'issue' ? event.body : event.statusBody }));
+      }
+      // Every project must route to the same current active board. A multi-
+      // project incident with conflicting routes is paused, never guessed.
+      const targets = event.projects.map(slug => boardFor(ctx, config, slug));
+      const board = targets.every(id => id && id === targets[0]) ? targets[0] : null;
       if (!board) return suppressed(ctx, st, 'no_board', t);
       // Over a card rule: no act() at all until it refills, so a storm writes no audit row per issue.
       if (st.until > t) return suppressed(ctx, st, 'card_cap', t);
-      const { title, body } = cardText(issue, { includeMessage: own(config, 'include_message') === true });
-      const link = issueLink(issue);
-      const ref = `sentry-issue-${id}`;
+      const { title, body, url } = event;
+      const ref = kind === 'issue' ? `sentry-issue-${event.id}` : event.ref;
       try {
-        await ctx.act('sentry.card', { external_ref: ref }, async (s) => {
-          const out = await s.actAs(ctx.connection.created_by).createCard(board, { request_id: ref, title, body, labels: ['bug'] });
-          s.link(out.card.id, 'issue', id, link);
+        await ctx.act(kind === 'issue' ? 'sentry.card' : 'sentry.incident', { external_ref: ref }, async (s) => {
+          const out = await s.actAs(ctx.connection.created_by).createCard(board, { request_id: ref, title, body, labels: kind === 'issue' ? ['bug'] : ['incident'] });
+          s.link(out.card.id, kind, event.id, url);
         });
       } catch (e) {
         // The issue's card is on another board (project_boards changed): it exists, a retry can't help.
@@ -192,6 +199,9 @@ export function createSentryConnector({ now = () => Date.now() } = {}) {
 
     actions: {
       'sentry.card': { default: 'auto', reversible: true },
+      'sentry.status': { default: 'auto' },
+      'sentry.incident': { default: 'auto', reversible: true },
+      'sentry.incident-status': { default: 'auto' },
       'sentry.notice': { default: 'auto' },
       'sentry.suppressed': { default: 'auto' },
     },

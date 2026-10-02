@@ -18,6 +18,7 @@ import { redact } from '../log.js';
 import { httpStatus } from '../../shared/protocol.js';
 import { normalizeRemoteUrl, matchRepo } from '../../shared/scope.js';
 import { AUTONOMY, cleanLinkStatus, parseCidr, configKeyOk } from './connector.js';
+import { createObservation, observationAction, sentryStatus } from './sentry/observation.js';
 import { isLoopback } from '../config.js';
 import { BlockList, isIP } from 'node:net'; // privacy-flow: hub-server
 import { prNumberOf } from '../github.js';
@@ -521,7 +522,7 @@ export function createIntegrations({
       const first = actor(memberId);
       const authorize = () => { authority(); bound(); currentActor(first); };
       authorize();
-      const via = { connection_id: c.id, member_id: first.id, name: conn.name, external_ref, authorize };
+      const via = { connection_id: c.id, member_id: first.id, name: conn.name, action: actName, external_ref, authorize };
       const call = (body, fn, rules = [], pre = null) => {
         if (!live()) return Promise.reject(new Error('this act() scope has ended'));
         return track(callLive(body, fn, rules, pre));
@@ -592,6 +593,20 @@ export function createIntegrations({
             return out;
           });
         },
+        // One private observation is handled in Api.comment's own queue/txn.
+        // This primitive context cannot be supplied by HTTP/MCP request JSON.
+        observeLink: (cardId, kind, externalId, patch, body = {}) => {
+          if (conn.id !== 'sentry' || actName !== observationAction(kind) || subject != null || body.for_agent === true) throw new HubError('POLICY_DENIED', 'this action cannot observe a Sentry link');
+          const token = createObservation({ provider: conn.id, action: actName, connection_id: c.id, member_id: first.id,
+            user_id: first.user_id ?? null, card_id: cardId, kind, external_id: externalId, state: patch?.state, request_id: body.request_id });
+          // Pre-cache too: a cached success cannot expose a removed/moved link.
+          writableCard(cardId);
+          const card = cardInOrg(cardId);
+          if (card?.archived_at || !db.get('SELECT 1 AS x FROM external_links WHERE connection_id=? AND card_id=? AND kind=? AND external_id=?', c.id, cardId, kind, externalId)) {
+            throw Object.assign(new HubError('NOT_FOUND', 'this integration has no live matching link'), { cacheable: false });
+          }
+          return call(body, m => api.comment(m, cardId, { ...body, for_agent: false }, { integrationObservation: token }));
+        },
         action: (cardId, action, body = {}) => {
           if (!ALLOWED_ACTIONS.has(action)) throw new HubError('POLICY_DENIED', 'an integration may only cancel, stop or approve; a person does the rest from the card');
           if (ASK_GATED_ACTIONS.has(action) && conn.actions[actName]?.default !== 'ask') {
@@ -658,7 +673,12 @@ export function createIntegrations({
     function linkStatusFor(cardId, kind) {
       if (!cardInOrg(cardId)) return null;
       const l = db.get('SELECT external_id, status FROM external_links WHERE connection_id = ? AND card_id = ? AND kind = ? ORDER BY created_at DESC, rowid DESC LIMIT 1', c.id, cardId, String(kind));
-      return l ? { external_id: l.external_id, ...cleanStatus(safeJson(l.status, null)) } : null;
+      if (!l) return null;
+      if (conn.id === 'sentry' && ['issue', 'alert'].includes(kind)) {
+        const { sentry_comment_id, ...status } = sentryStatus(safeJson(l.status, null), kind);
+        return { external_id: l.external_id, ...status };
+      }
+      return { external_id: l.external_id, ...cleanStatus(safeJson(l.status, null)) };
     }
 
     /**
