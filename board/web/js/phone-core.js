@@ -9,6 +9,11 @@
 // (delivery text, response, error, notices) is data: the renderer puts it in
 // text nodes only.
 //
+// Shared with me: sessions a teammate shared with a team this account is in
+// (board/hub/interaction-shares.js). They open through the share, never
+// through the teammate's computer: watch-only shares show no composer;
+// "watch and send" shares send, steer and interrupt but never close.
+//
 // Liveness: a status is "live" only while the long-poll keeps answering. A
 // watch answers within 20 s, so a gap past LIVE_MS (or any failed poll) shows
 // the last known status as not live, never as the current one.
@@ -61,6 +66,8 @@ export function createApi({ fetch, uuid, origin = '' }) {
     hasToken: () => !!token,
     hosts: (o) => request('GET', '/api/interaction/v1/hosts', undefined, o),
     call: (host, op, args = {}, o) => request('POST', `/api/interaction/v1/hosts/${encodeURIComponent(host)}/call`, { request_id: uuid(), op, args }, o),
+    shared: (o) => request('GET', '/api/interaction/v1/shared', undefined, o),
+    sharedCall: (share, op, args = {}, o) => request('POST', `/api/interaction/v1/shared/${encodeURIComponent(share)}/call`, { request_id: uuid(), op, args }, o),
     startEmail: (email, deviceName) => request('POST', '/api/auth/email/start', { email, client: 'buddy_desktop', device_name: deviceName, platform: 'phone-web' }, { auth: false }),
     verifyEmail: (flowId, code, deviceName) => request('POST', '/api/auth/email/verify', { flow_id: flowId, code, device_name: deviceName, platform: 'phone-web' }, { auth: false }),
     signOut: () => request('POST', '/api/auth/signout', {}),
@@ -92,7 +99,7 @@ export function ago(ms) {
  */
 export function sessionView(sess, now) {
   const st = sess?.state ?? null;
-  if (!st) return { live: false, ended: false, status: null, label: 'Loading…', canSend: false, canInterrupt: false, canSteer: false };
+  if (!st) return { live: false, ended: false, status: null, label: 'Loading…', canSend: false, canInterrupt: false, canSteer: false, readOnly: !!sess?.readOnly };
   const ended = st.status === 'ended';
   const fresh = sess.lastOkAt != null && now - sess.lastOkAt < LIVE_MS;
   const live = !ended && sess.link === 'live' && fresh;
@@ -107,12 +114,13 @@ export function sessionView(sess, now) {
   }
   const working = st.status === 'working' && !!st.activeTurn;
   const caps = st.capabilities ?? {};
+  const writable = !sess.readOnly;
   return {
     live, ended, status: live || ended ? st.status : 'unknown', label, detail,
-    canSend: live && !sess.pending,
-    canSteer: live && working && caps.steer !== false,
-    canInterrupt: live && working && caps.interrupt !== false && !sess.pending,
-    working,
+    canSend: writable && live && !sess.pending,
+    canSteer: writable && live && working && caps.steer !== false,
+    canInterrupt: writable && live && working && caps.interrupt !== false && !sess.pending,
+    working, readOnly: !writable,
   };
 }
 
@@ -126,7 +134,9 @@ export function createController({ api, vault, now = Date.now, online = () => tr
     view: 'boot', busy: false, notice: null,
     auth: { email: '', flowId: null, deviceName, error: null },
     hosts: { items: null, loadedAt: null, error: null },
+    shared: { items: null, error: null },
     host: null,
+    share: null,
     sessions: { items: null, providers: null, loadedAt: null, error: null },
     session: null,
   };
@@ -150,7 +160,7 @@ export function createController({ api, vault, now = Date.now, online = () => tr
     loopAbort?.abort();
     api.setToken(null);
     try { await vault.clear(); } catch { /* storage gone */ }
-    set({ view: 'signin', busy: false, host: null, session: null, notice: { tone: 'warn', text: message },
+    set({ view: 'signin', busy: false, host: null, share: null, session: null, notice: { tone: 'warn', text: message }, shared: { items: null, error: null },
       hosts: { items: null, loadedAt: null, error: null }, sessions: { items: null, providers: null, loadedAt: null, error: null },
       auth: { ...state.auth, flowId: null, error: null } });
   }
@@ -159,7 +169,7 @@ export function createController({ api, vault, now = Date.now, online = () => tr
   function failure(r) {
     if (r.status === 401) { signedOut(); return null; }
     const e = errorOf(r);
-    if (r.status === 404) return 'That computer is not reachable. Check it is awake, signed in and sharing sessions.';
+    if (r.status === 404) return state.share ? 'That shared session is no longer available: it was stopped, ended or its computer is offline.' : 'That computer is not reachable. Check it is awake, signed in and sharing sessions.';
     if (r.status === 403) return msgOf(r, 'This phone is not allowed to use remote sessions.');
     if (r.status === 413) return 'That message is too long to send.';
     if (r.status === 429) return msgOf(r, 'Your computer is busy. Try again in a moment.');
@@ -209,7 +219,17 @@ export function createController({ api, vault, now = Date.now, online = () => tr
     await signedOut('Signed out. This phone no longer has access.');
   }
 
+  // Sessions teammates shared with this account; a failure here never hides your own computers.
+  async function loadShared() {
+    if (typeof api.shared !== 'function') return;
+    let r;
+    try { r = await api.shared(); } catch { return set({ shared: { ...state.shared, error: 'Could not check sessions shared with you.' } }); }
+    if (r.status !== 200) { const m = failure(r); if (m) set({ shared: { ...state.shared, error: m } }); return; }
+    set({ shared: { items: Array.isArray(r.body?.shared) ? r.body.shared : [], error: null } });
+  }
+
   async function loadHosts() {
+    loadShared();
     let r;
     try { r = await api.hosts(); } catch {
       return set({ hosts: { ...state.hosts, error: online() ? 'Could not reach Plexiform. Retrying…' : 'You are offline.' } });
@@ -219,11 +239,33 @@ export function createController({ api, vault, now = Date.now, online = () => tr
     set({ hosts: { items, loadedAt: now(), error: null } });
   }
 
+  // Calls for the open session go through its share, or to your own computer.
+  const relay = (op, args, o) => (state.share ? api.sharedCall(state.share.id, op, args, o) : api.call(state.host.id, op, args, o));
+
+  async function openShared(id) {
+    const share = state.shared.items?.find((x) => x.id === id);
+    if (!share) return;
+    loop++;
+    set({ busy: true, notice: null, host: null, share });
+    let r;
+    try { r = await api.sharedCall(share.id, 'state', { session: share.session }); } catch {
+      return set({ busy: false, share: null, notice: { tone: 'error', text: online() ? 'Could not reach that shared session.' : 'You are offline.' } });
+    }
+    set({ busy: false });
+    const res = r.body?.result;
+    if (r.status !== 200 || !res?.ok) {
+      const m = r.status !== 200 ? failure(r) : res?.error ?? 'That shared session is no longer available.';
+      set({ share: null, notice: m ? { tone: 'error', text: m } : null });
+      return loadHosts();
+    }
+    enterSession(res.state, share.scope !== 'interact');
+  }
+
   async function openHost(id) {
     const host = state.hosts.items?.find((x) => x.id === id);
     if (!host) return;
     loop++;
-    set({ view: 'sessions', host, session: null, notice: null, sessions: { items: null, providers: null, loadedAt: null, error: null } });
+    set({ view: 'sessions', host, share: null, session: null, notice: null, sessions: { items: null, providers: null, loadedAt: null, error: null } });
     await loadSessions();
   }
 
@@ -247,13 +289,14 @@ export function createController({ api, vault, now = Date.now, online = () => tr
   function back() {
     loop++;
     loopAbort?.abort();
+    if (state.view === 'session' && state.share) { set({ view: 'hosts', share: null, session: null, notice: null }); loadHosts(); return; }
     if (state.view === 'session') { set({ view: 'sessions', session: null, notice: null }); loadSessions(); return; }
     if (state.view === 'sessions') { set({ view: 'hosts', host: null, notice: null }); loadHosts(); }
   }
 
-  function enterSession(st) {
+  function enterSession(st, readOnly = false) {
     const id = ++loop;
-    set({ view: 'session', notice: null, session: { id: st.session, state: st, version: 0, lastOkAt: now(), link: 'live', failures: 0, pending: false, error: null } });
+    set({ view: 'session', notice: null, session: { id: st.session, state: st, version: 0, lastOkAt: now(), link: 'live', failures: 0, pending: false, error: null, readOnly } });
     watchLoop(id);
   }
 
@@ -293,7 +336,7 @@ export function createController({ api, vault, now = Date.now, online = () => tr
       if (s.state?.status === 'ended') return;
       let r;
       try {
-        r = await api.call(state.host.id, 'watch', { session: s.id, after: s.version }, { timeout: WATCH_TIMEOUT_MS, signal: ctl.signal });
+        r = await relay('watch', { session: s.id, after: s.version }, { timeout: WATCH_TIMEOUT_MS, signal: ctl.signal });
       } catch {
         if (loop !== id) return;
         const failures = s.failures + 1;
@@ -329,7 +372,7 @@ export function createController({ api, vault, now = Date.now, online = () => tr
     setSession({ pending: true });
     set({ notice: null });
     let r;
-    try { r = await api.call(state.host.id, name, args); } catch {
+    try { r = await relay(name, args); } catch {
       setSession({ pending: false });
       set({ notice: { tone: 'error', text: name === 'send'
         ? 'No connection: your message may not have been sent. Check the conversation before sending it again.'
@@ -368,7 +411,8 @@ export function createController({ api, vault, now = Date.now, online = () => tr
 
   function close() {
     const s = state.session;
-    if (!s) return false;
+    // Only the owner closes a shared session.
+    if (!s || state.share) return false;
     return op('close', { session: s.id, generation: s.state.generation });
   }
 
@@ -378,7 +422,7 @@ export function createController({ api, vault, now = Date.now, online = () => tr
   return {
     get state() { return state; },
     subscribe(fn) { subs.add(fn); return () => subs.delete(fn); },
-    boot, startSignIn, verifyCode, restartSignIn, signOut, loadHosts, openHost, loadSessions,
+    boot, startSignIn, verifyCode, restartSignIn, signOut, loadHosts, loadShared, openHost, openShared, loadSessions,
     openSession, launch, back, send, interrupt, close, wake, dismissNotice: () => set({ notice: null }),
   };
 }

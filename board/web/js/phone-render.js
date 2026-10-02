@@ -76,7 +76,23 @@ function hosts(st, now) {
     header('Your computers', { right: btn('signout', 'Sign out', { kind: 'quiet small', disabled: st.busy }) }),
     noticeBar(st.notice),
     freshness(st.hosts.loadedAt, now, st.hosts.error),
-    body);
+    body,
+    sharedWithMe(st));
+}
+
+const SCOPE_LABEL = { watch: 'Read-only', interact: 'Can send' };
+
+// Sessions teammates shared with a team you are in. Read-only vs can-send is always shown.
+function sharedWithMe(st) {
+  const items = st.shared?.items;
+  if (!items?.length && !st.shared?.error) return null;
+  return h('section', { class: 'shared', 'aria-labelledby': 'shared-title' },
+    h('h2', { id: 'shared-title' }, 'Shared with me'),
+    st.shared.error ? h('p', { class: 'muted warn-text' }, st.shared.error) : null,
+    items?.length ? h('ul', { class: 'list', role: 'list' }, items.map((x) => h('li', { key: x.id },
+      h('button', { type: 'button', class: 'row', 'data-action': 'open-shared', 'data-id': x.id, disabled: st.busy || !x.online || null },
+        h('span', { class: 'row-title' }, `${x.owner?.name ?? 'A teammate'}’s session`),
+        h('span', { class: 'row-sub' }, `${x.team?.name ?? 'Team'} · ${SCOPE_LABEL[x.scope] ?? 'Read-only'}${x.online ? '' : ' · Offline'}`))))) : null);
 }
 
 function platformLabel(p) {
@@ -109,14 +125,14 @@ function sessions(st, now) {
       providers.map((p) => btn('launch', `Start a ${p.label ?? p.provider} session`, { id: p.provider, disabled: st.busy }))) : null);
 }
 
-function delivery(d) {
+function delivery(d, owner = null) {
   const reply = d.response
     ? h('p', { class: 'reply-text' }, d.response)
     : ['acknowledged', 'recorded', 'responding', 'sending'].includes(d.state) ? h('p', { class: 'muted' }, 'Waiting for a reply…') : null;
   return h('li', { key: d.id, class: 'turn' },
     h('div', { class: 'bubble mine' },
       h('p', { class: 'msg-text' }, d.text),
-      h('p', { class: 'meta' }, `${d.mode === 'steer' ? 'Steer · ' : ''}${DELIVERY_LABEL[d.state] ?? d.state}`)),
+      h('p', { class: 'meta' }, `${d.by ? `Sent by ${d.by} · ` : owner ? `${owner} · ` : ''}${d.mode === 'steer' ? 'Steer · ' : ''}${DELIVERY_LABEL[d.state] ?? d.state}`)),
     reply || d.error || d.notices?.length ? h('div', { class: 'bubble theirs' },
       reply,
       d.error ? h('p', { class: 'err-text' }, d.error) : null,
@@ -128,16 +144,21 @@ function session(st, now, ui) {
   const v = sessionView(sess, now);
   const s = sess.state;
   const pillTone = v.ended ? 'ended' : !v.live ? 'stale' : v.status;
+  const share = st.share;
+  const owner = share ? share.owner?.name ?? 'Owner' : null;
   return h('main', { class: 'screen session' },
-    header(s.provider?.label ?? 'Session', { backLabel: 'Back to sessions' }),
+    header(share ? `${owner}’s session` : s.provider?.label ?? 'Session', { backLabel: share ? 'Back to your computers' : 'Back to sessions' }),
+    share ? h('p', { class: 'muted small' }, `Shared with ${share.team?.name ?? 'your team'} · ${SCOPE_LABEL[share.scope] ?? 'Read-only'}`) : null,
     h('div', { class: 'status-row', role: 'status', 'aria-live': 'polite' },
       h('span', { class: `pill ${pillTone}` }, v.label),
       v.detail ? h('span', { class: 'muted small' }, v.detail) : null),
     !v.live && !v.ended ? h('p', { class: 'stale-note' }, sess.error ?? 'Not connected to your computer. What you see may be out of date.') : null,
     noticeBar(st.notice),
     h('ol', { class: 'log', role: 'log', 'aria-label': 'Conversation', 'aria-live': 'polite' },
-      s.deliveries.length ? s.deliveries.map(delivery) : h('li', { class: 'muted' }, 'No messages yet.')),
-    v.ended ? h('div', { class: 'ended' },
+      s.deliveries.length ? s.deliveries.map((d) => delivery(d, owner)) : h('li', { class: 'muted' }, 'No messages yet.')),
+    share && v.readOnly ? h('p', { class: 'muted' }, v.ended ? 'This session has ended.' : `Read-only: you can watch this session. Only ${owner} and teammates allowed to send can type here.`)
+    : share && v.ended ? h('p', { class: 'muted' }, 'This session has ended.')
+    : v.ended ? h('div', { class: 'ended' },
       h('p', null, 'This session has ended.'),
       btn('close', ui.confirmClose ? 'Tap again to remove it' : 'Remove session', { kind: 'danger', disabled: !!sess.pending }))
       : h('form', { class: 'composer', 'data-form': 'send' },
@@ -146,7 +167,7 @@ function session(st, now, ui) {
         h('div', { class: 'actions' },
           h('button', { type: 'submit', class: 'btn primary', disabled: !v.canSend || null }, sess.pending ? 'Sending…' : v.canSteer ? 'Steer' : 'Send'),
           v.working ? btn('interrupt', 'Interrupt', { disabled: !v.canInterrupt }) : null,
-          btn('close', ui.confirmClose ? 'Tap again to close' : 'Close session', { kind: 'danger quiet', disabled: !v.live || !!sess.pending }))));
+          share ? null : btn('close', ui.confirmClose ? 'Tap again to close' : 'Close session', { kind: 'danger quiet', disabled: !v.live || !!sess.pending }))));
 }
 
 export function phoneView(st, now, ui = { confirmClose: false }) {

@@ -334,3 +334,36 @@ test('service worker: only the app shell is cached; API, auth and non-GET reques
   assert.equal(await dispatch('https://hub.example/web/js/phone-core.js'), true);
   assert.deepEqual(puts, ['/phone/', '/web/js/phone-core.js']);
 });
+
+test('shared with me: the hosts screen labels read-only vs can-send; a read-only session has no composer and no close; "Sent by" shows who typed', async () => {
+  const shareCalls = [];
+  const api = fakeApi(async () => ok({ ok: true, sessions: [] }), { hosts: { status: 200, body: { hosts: [] } } });
+  const items = [
+    { id: 'sh-1', session: SID, scope: 'watch', expires_at: null, team: { id: 't', name: 'Dev' }, owner: { name: 'Alice' }, online: true },
+    { id: 'sh-2', session: SID, scope: 'interact', expires_at: null, team: { id: 't', name: 'Dev' }, owner: { name: 'Carl' }, online: false },
+  ];
+  api.shared = async () => ({ status: 200, body: { shared: items } });
+  api.sharedCall = async (share, op, args) => { shareCalls.push({ share, op, args }); return op === 'watch' ? new Promise(() => {}) : ok({ ok: true, state: dto({ deliveries: [{ id: TURN, text: 'hi <b>', by: 'Bob', mode: 'new-turn', state: 'completed', recorded: true, turn: null, response: 'yo', error: null, notices: [], sentAt: 1, finishedAt: 2 }, { id: SID, text: 'owner text', by: null, mode: 'new-turn', state: 'completed', recorded: true, turn: null, response: '', error: null, notices: [], sentAt: 1, finishedAt: 2 }] }) }); };
+  const ctl = createController({ api, vault: memVault('bdt_x') });
+  await ctl.boot();
+  await until(() => ctl.state.shared.items);
+  const home = phoneView(ctl.state, Date.now());
+  assert.match(textOf(home), /Shared with me/);
+  assert.match(textOf(home), /Alice’s session/);
+  assert.match(textOf(home), /Dev · Read-only/);
+  assert.match(textOf(home), /Dev · Can send · Offline/);
+  assert.equal(byAttr(home, 'data-id', 'sh-2')[0].props.disabled, true, 'an offline share cannot be opened');
+  await ctl.openShared('sh-1');
+  assert.equal(ctl.state.view, 'session');
+  assert.deepEqual(shareCalls[0], { share: 'sh-1', op: 'state', args: { session: SID } });
+  const view = phoneView(ctl.state, Date.now());
+  assert.equal(findAll(view, (n) => n.tag === 'textarea').length, 0, 'no composer when read-only');
+  assert.equal(byAttr(view, 'data-action', 'close').length, 0, 'only the owner closes');
+  assert.match(textOf(view), /Read-only: you can watch this session/);
+  assert.match(textOf(view), /Sent by Bob · Done/);
+  assert.match(textOf(view), /Alice · Done/);
+  assert.equal(await ctl.send('nope'), false);
+  assert.ok(!shareCalls.some((c) => c.op === 'send'));
+  ctl.back();
+  assert.equal(ctl.state.view, 'hosts');
+});

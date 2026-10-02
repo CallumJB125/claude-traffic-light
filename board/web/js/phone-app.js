@@ -49,6 +49,7 @@ root.addEventListener('click', async (e) => {
     case 'signout': return ctl.signOut();
     case 'refresh': return ctl.state.view === 'hosts' ? ctl.loadHosts() : ctl.loadSessions();
     case 'open-host': return ctl.openHost(id);
+    case 'open-shared': return ctl.openShared(id);
     case 'open-session': return ctl.openSession(id);
     case 'launch': return ctl.launch(id);
     case 'back': return history.back();

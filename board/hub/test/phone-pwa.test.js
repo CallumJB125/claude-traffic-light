@@ -49,7 +49,8 @@ async function rig() {
   assert.equal(mac.status, 200, mac.text);
   const adapter = createCodexAppServer({ bin: FAKE });
   const host = createRemoteInteractionHost({ userId: mac.body.user.id, adapters: { codex: adapter }, boardCurrent: (b) => b === null });
-  await host.connect({ url: `${h.base.replace('http', 'ws')}/ws/interaction-host`, token: mac.body.device_token, WebSocket });
+  // The Mac's explicit opt-in (role 'host', migration 048), then it connects.
+  assert.equal((await host.enable({ baseUrl: h.base, token: mac.body.device_token, WebSocket })).state, 'connected');
   const seen = [];
   const api = createApi({ fetch: browserFetch(h.base, seen), uuid: () => crypto.randomUUID(), origin: h.base });
   const vault = memVault();
@@ -166,4 +167,50 @@ test('HOSTILE: revoking the phone from the Mac signs it out on its next poll; a 
     await until(() => ctl.state.view === 'signin');
     assert.equal(r.vault.saved(), null);
   } finally { await r.close(); }
+});
+
+test('LOCAL PROOF: Bob\'s phone lists a session Alice shared with their team, watches it read-only, then sends once it is "watch and send"', async () => {
+  const r = await rig();
+  const bobCtl = createController({ api: createApi({ fetch: browserFetch(r.h.base, r.seen), uuid: () => crypto.randomUUID(), origin: r.h.base }), vault: memVault(), deviceName: 'Bob Phone' });
+  try {
+    const s = (await r.host.hub.launch({ provider: 'codex' }, r.host.actor)).state;
+    await bobCtl.boot();
+    await bobCtl.startSignIn('bob@dev.local', 'Bob Phone');
+    await bobCtl.verifyCode(r.h.codeFor('bob@dev.local'));
+    await until(() => bobCtl.state.shared.items);
+    assert.deepEqual(bobCtl.state.shared.items, [], 'nothing is shared by default');
+    assert.deepEqual(bobCtl.state.hosts.items, [], 'Bob never sees Alice\'s computers');
+
+    const w = await r.host.shareSession({ session: s.session, team: r.h.ids.org, scope: 'watch' });
+    assert.equal(w.ok, true, JSON.stringify(w));
+    await bobCtl.loadHosts();
+    await until(() => bobCtl.state.shared.items?.length === 1);
+    assert.equal(bobCtl.state.shared.items[0].scope, 'watch');
+    await bobCtl.openShared(w.share.id);
+    assert.equal(bobCtl.state.view, 'session');
+    const v = sessionView(bobCtl.state.session, Date.now());
+    assert.equal(v.readOnly, true); assert.equal(v.canSend, false);
+    assert.equal(await bobCtl.send('sneaky'), false);
+    assert.equal(await bobCtl.close(), false);
+    // Alice types on her Mac; Bob's phone sees it stream in.
+    await r.host.hub.send({ session: s.session, generation: s.generation, text: 'alice on the mac' }, r.host.actor);
+    const seen = await until(() => bobCtl.state.session.state.deliveries.find((d) => d.state === 'completed'));
+    assert.equal(seen.response, 'echo:alice on the mac');
+    bobCtl.back();
+    assert.equal(bobCtl.state.view, 'hosts');
+
+    const i = await r.host.shareSession({ session: s.session, team: r.h.ids.org, scope: 'interact' });
+    await bobCtl.loadHosts();
+    await until(() => bobCtl.state.shared.items?.[0]?.id === i.share.id);
+    await bobCtl.openShared(i.share.id);
+    assert.equal(sessionView(bobCtl.state.session, Date.now()).canSend, true);
+    assert.equal(await bobCtl.send('bob from the phone'), true);
+    const mine = await until(() => r.host.hub.state({ session: s.session }, r.host.actor).deliveries.find((d) => d.text === 'bob from the phone'));
+    assert.ok(mine.by, 'labelled with the sender');
+    // Alice stops sharing: Bob's phone loses it.
+    r.host.stopSharing(i.share.id);
+    await until(() => bobCtl.state.session?.link === 'gone' || bobCtl.state.session?.error);
+    bobCtl.back();
+    await until(async () => { await bobCtl.loadShared(); return bobCtl.state.shared.items?.length === 0; });
+  } finally { bobCtl.back(); await r.close(); }
 });
