@@ -989,6 +989,7 @@ export class Hub extends EventEmitter {
       b.send({ type: 'session.revoked' });
       b.close(WS_CLOSE.UNAUTHENTICATED, reason);
     }
+    this.interactionRelay?.closeCred(cred, reason);
     // Enrolled runners of a signed-out install go with it (D80).
     this.enrolments?.recheck();
   }

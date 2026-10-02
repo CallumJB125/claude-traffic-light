@@ -981,6 +981,15 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       return typeof userId === 'string' && userId ? { workspace, userId, client: clientFor(workspace.hub) } : null;
     },
     nativeBoardWorkspaces: () => store.list().filter((w) => w.kind === 'team').map((w) => ({ id: w.id, name: w.name })),
+    // Main-only (remote interaction host): the active team hub's own device
+    // sign-in. The token is read per use through tokenFor, never kept here or
+    // sent to a renderer; null when signed out.
+    interactionHostIdentity() {
+      const w = getTeamHub();
+      if (!w || !signedIn(w.hub)) return null;
+      const userId = userOf(w.hub)?.id;
+      return typeof userId === 'string' && userId ? { origin: w.hub, userId, token: () => tokenFor(w.hub) } : null;
+    },
     openWithFragment,
     isOpen: () => !!win,
     isVisible: () => !!win && !win.isDestroyed() && win.isVisible(),

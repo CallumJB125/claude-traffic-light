@@ -33,6 +33,7 @@
       document.getElementById('gitDeployWorkflows').value = (config.gitDeployWorkflows || []).join(', ');
       loadSpend(config.spend || {}); // F1 spend
       document.getElementById('remoteTailscale').checked = !!config.remoteTailscale;
+      document.getElementById('remoteInteractionHost').checked = config.remoteInteractionHost === true;
       document.getElementById('busyHold').checked = config.busyHold !== false;
       document.getElementById('busyCalendar').checked = !!config.busyCalendar;
       document.getElementById('busyCalendarTitles').checked = !!config.busyCalendarTitles;
@@ -172,7 +173,9 @@
         busyIcsUrl: document.getElementById('busyIcsUrl').value.trim().slice(0, 2000),
         busyFocusShortcut: document.getElementById('busyFocusShortcut').value.trim().slice(0, 100),
         remoteTailscale: document.getElementById('remoteTailscale').checked,
+        remoteInteractionHost: document.getElementById('remoteInteractionHost').checked,
       });
+      setTimeout(showInteractionHost, 1500);
       setTimeout(showBusy, 1500);
       showRemote(await window.settingsApi.remoteDevices());
       status.className = '';
@@ -285,6 +288,8 @@
     remoteEl('copy').addEventListener('click', async () => { if (await window.settingsApi.remoteCopyCode(remoteEl('code-text').textContent)) remoteEl('pair-status').textContent = 'Code copied; the clipboard forgets it in a minute.'; });
     remoteEl('done').addEventListener('click', () => { remoteEl('code-text').textContent = ''; remoteEl('code').hidden = true; });
     window.settingsApi.remoteDevices().then(showRemote);
+    async function showInteractionHost() { document.getElementById('interaction-host-status').textContent = (await window.settingsApi.interactionHostStatus().catch(() => null)) ?? ''; }
+    showInteractionHost();
     const pvStatus = document.getElementById('privacy-status');
     const pvDone = (r) => { pvStatus.textContent = !r ? '' : r.error ? r.error : (r.file || r.path) ? `Saved ${r.file || r.path}` : typeof r === 'string' && r ? `Could not open the folder: ${r}` : ''; };
     document.getElementById('privacy-export-stats').addEventListener('click', async () => pvDone(await window.settingsApi.exportStats('json', 60)));

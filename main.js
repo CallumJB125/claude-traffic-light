@@ -229,6 +229,8 @@ const DEFAULT_CONFIG = {
   // Accept paired devices' events on the Tailscale address too (loopback
   // only otherwise, which an ssh -R tunnel reaches).
   remoteTailscale: false,
+  // Remote interaction host: off until ticked in Preferences.
+  remoteInteractionHost: false,
   // Auto-answer rules (src/auto-rules.js). Saved and shown in Lights; nothing
   // answers from them until the hook side evaluates them.
   autoAnswer: { v: 1, sealed: null, rules: [] },
@@ -1366,6 +1368,7 @@ function getBuddy() {
     }
     if (typeof buddyWin.onAccountChange === 'function') buddyWin.onAccountChange(() => {OverviewMain.invalidate();buddyWin.sendToPage('settings', 'account-changed');});
     if(typeof buddyWin.onSetupsIdentityChange==='function')buddyWin.onSetupsIdentityChange(()=>{OverviewMain.invalidate();SetupsLocal.invalidate();buddyWin.sendToPage('setups','setups:changed');});
+    if(typeof buddyWin.onSetupsIdentityChange==='function')buddyWin.onSetupsIdentityChange(()=>syncInteractionHost());
   }
   return buddyWin;
 }
@@ -1421,6 +1424,44 @@ const InteractionMain=require('./src/interaction-main').createInteractionMain({
 InteractionMain.register(ipcMain);
 app.on('will-quit',()=>InteractionMain.close());
 ipcMain.handle('compaction-stats',e=>settingsOnly(e)?{...CompactionLedger.summary(),settings:loadConfig().compaction}:null);
+// Remote interaction host (src/remote-interaction.js): OFF unless the
+// "Let my other devices use sessions Plexiform started on this Mac"
+// preference is ticked. Uses the active team hub's own device sign-in (read
+// per connect via buddyWin.interactionHostIdentity, never copied or logged)
+// and its own interaction hub, separate from Overview's. Signing out, another
+// account, or unticking ends it and its remote sessions.
+const RemoteInteraction=require('./src/remote-interaction');
+let remoteHost=null,remoteHostKey=null;
+function syncInteractionHost(){
+  const want=loadConfig().remoteInteractionHost===true&&devMockReady;
+  let id=null;
+  try{id=want?getBuddy().interactionHostIdentity?.()??null:null;}catch{id=null;}
+  const key=id?`${id.origin}\n${id.userId}`:null;
+  if(key===remoteHostKey)return;
+  const prev=remoteHost,prevId=remoteHostKey&&remoteHost?.identity;
+  remoteHost=null;remoteHostKey=key;
+  // Opting out tells the hub (role back to client) while the sign-in still works.
+  if(prev)prev.disable(prevId?{baseUrl:prevId.origin,token:prevId.token,fetch:net.fetch}:{}).catch(()=>{}).finally(()=>prev.close()); // privacy-flow: remote-interaction
+  if(!id)return;
+  remoteHost=RemoteInteraction.createRemoteInteractionHost({
+    userId:id.userId,
+    adapters:{codex:Object.assign(CodexAppServer.createCodexAppServer({bin:codexBin,clientVersion:app.getVersion()}),codexBin?{}:{available:false,reason:'Codex CLI not found'})},
+    workspace:()=>fs.mkdtempSync(path.join(os.tmpdir(),'plexiform-owned-')),
+    boardCurrent:board=>board===null,
+    log:m=>console.log(m),
+  });
+  remoteHost.identity=id;
+  remoteHost.enable({baseUrl:id.origin,token:id.token,WebSocket:require('ws'),fetch:net.fetch}).catch(e=>console.warn('[remote-interaction]',e.message)); // privacy-flow: remote-interaction
+}
+app.on('will-quit',()=>{remoteHost?.close();remoteHost=null;});
+const INTERACTION_HOST_LINES={connecting:'Connecting…',connected:'On: your other signed-in devices can use sessions started from them on this Mac.',retrying:'Can\'t reach your team hub; retrying.','signed-out':'Stopped: this Mac is signed out or was removed from your account.',replaced:'Stopped: another connection took over this Mac\'s sign-in. If that wasn\'t you, remove this device in Account and sign in again.',refused:'Stopped: the hub named a different account.'};
+ipcMain.handle('interaction-host-status',e=>{
+  if(!settingsOnly(e))return null;
+  if(loadConfig().remoteInteractionHost!==true)return 'Off.';
+  if(!remoteHost)return 'Sign in to a team hub to turn this on.';
+  const st=remoteHost.status();
+  return [INTERACTION_HOST_LINES[st.state]??'',st.notice??''].filter(Boolean).join(' ');
+});
 
 ipcMain.handle('myday:state', e => myDaySender(e) ? MyDay.snapshot() : null);
 ipcMain.handle('myday:open', (e, handle) => myDaySender(e) && typeof handle === 'string' && handle.length <= 100 ? MyDay.open(handle) : false);
@@ -2927,7 +2968,7 @@ function applyConfigEffects(prev, next, touched) {
   applyConfigSideEffects(prev, next, {
     installHooks,
     enableCalendar: () => BusyWatch.enableCalendar().catch((err) => console.warn('[busy]', err.message)),
-    applyWidgetVisibility, syncTailnetListener, createTray, applyVoiceHotkey, broadcastStatus,
+    applyWidgetVisibility, syncTailnetListener, createTray, applyVoiceHotkey, broadcastStatus, syncInteractionHost,
   }, touched);
 }
 function commitConfig(partial) {
@@ -4251,6 +4292,7 @@ app.whenReady().then(() => {
     // run shares the Mac with an installed app, so only when asked to.
     const resumeRunners = app.isPackaged ? !IS_DEV_RUN : process.env.BUDDY_RESUME_RUNNERS === '1';
     if (resumeRunners) { try { getBuddy().resumeDevices(); } catch (err) { console.error('[buddy] could not resume runners:', err.message); } }
+    syncInteractionHost();
     // Dev: `electron . --buddy [page] [--buddy-shot out-prefix]` opens the Buddy
     // window (optionally on a page) and can capture both halves, then quit.
     // `--buddy-accounts-walk prefix` (with --buddy-mock-accounts) walks the
