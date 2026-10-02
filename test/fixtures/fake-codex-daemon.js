@@ -30,7 +30,7 @@ async function startFakeDaemon({ socketMode = 0o600 } = {}) {
   const note = (method, params) => all({ method, params });
   const addThread = (over = {}) => {
     const id = over.id ?? crypto.randomUUID();
-    threads.set(id, { id, name: 'Fix the build', cwd: '/Users/me/projects/app', preview: `${SECRET} first prompt`, path: `/Users/me/.codex/sessions/${id}.jsonl`, gitInfo: { branch: 'secret-branch' }, status: { type: 'idle' }, updatedAt: 1700000000, loaded: true, active: null, ...over });
+    threads.set(id, { id, name: 'Fix the build', cwd: '/Users/me/projects/app', preview: `${SECRET} first prompt`, path: `/Users/me/.codex/sessions/${id}.jsonl`, gitInfo: { branch: 'secret-branch' }, source: 'cli', ephemeral: false, status: { type: 'idle' }, updatedAt: 1700000000, loaded: true, active: null, approvalPolicy: 'on-request', sandbox: { type: 'workspaceWrite', writableRoots: ['/Users/me/projects/app'] }, ...over });
     return id;
   };
   function reply(threadId, turnId, itemId, textOut) {
@@ -55,12 +55,12 @@ async function startFakeDaemon({ socketMode = 0o600 } = {}) {
   const handlers = {
     initialize: () => ({ userAgent: 'fake' }),
     'thread/loaded/list': () => ({ data: [...threads.values()].filter((t) => t.loaded).map((t) => t.id), nextCursor: null }),
-    'thread/list': () => ({ data: [...threads.values()].map(({ loaded, active, ...t }) => ({ ...t, turns: [] })), nextCursor: null }),
+    'thread/list': () => ({ data: [...threads.values()].map(({ loaded, active, approvalPolicy, sandbox, ...t }) => ({ ...t, turns: [] })), nextCursor: null }),
     'thread/resume': (p) => {
       const t = threads.get(p.threadId);
       if (!t || !t.loaded) throw new Error('no such thread');
-      const { loaded, active, ...thread } = t;
-      return { thread: { ...thread, turns: [{ id: 'old', items: [{ type: 'userMessage', content: [{ type: 'text', text: `${SECRET} old turn` }] }] }] }, model: 'x', cwd: t.cwd };
+      const { loaded, active, approvalPolicy, sandbox, ...thread } = t;
+      return { thread: { ...thread, turns: [{ id: 'old', items: [{ type: 'userMessage', content: [{ type: 'text', text: `${SECRET} old turn` }] }] }] }, model: 'x', cwd: t.cwd, approvalPolicy, sandbox };
     },
     'turn/start': (p) => {
       const t = threads.get(p.threadId);
@@ -111,7 +111,7 @@ async function startFakeDaemon({ socketMode = 0o600 } = {}) {
   fs.chmodSync(real, socketMode);
   fs.symlinkSync(real, socketPath);
   const fake = {
-    socketPath, calls, responses, threads, addThread, duplicateResponses: false,
+    socketPath, realPath: real, calls, responses, threads, addThread, duplicateResponses: false,
     get connections() { return connections; },
     // The human's own turn in their terminal: other clients see it stream.
     foreignTurn(threadId) {

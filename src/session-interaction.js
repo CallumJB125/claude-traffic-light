@@ -30,7 +30,7 @@ const MAX_TEXT = 4000, MAX_BYTES = 8192, MAX_RESPONSE = 16000, MAX_DELIVERIES = 
 const FINAL = ['completed', 'interrupted', 'failed'];
 const NOTICES = {
   approval: 'The provider asked for an approval; Plexiform refused it.',
-  approvalElsewhere: 'Codex asked for an approval. Answer it in your Codex terminal; Plexiform never answers approvals for sessions it did not start.',
+  approvalElsewhere: 'Codex is waiting for an approval. Plexiform never answers approvals for sessions it did not start: answer it in a Codex terminal attached to this session, or interrupt this turn if none is open.',
   oversize: 'A provider update was too large to show and was dropped.',
 };
 const object = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -43,7 +43,20 @@ const ERRORS = {
   stale: 'This session changed. Refresh and select it again.',
   busy: 'A message is being sent or a turn is running. Steer it or wait for it to finish.',
   unavailable: 'The provider did not accept the message.',
+  foreignTurn: 'This turn was started outside Plexiform (in a Codex terminal or another app). Plexiform only steers or interrupts turns it started; wait for it to finish or use that terminal.',
 };
+// What an attached session may do without asking, in words, plus warnings shown on attach.
+const APPROVAL_WORDS = { untrusted: 'asks before most commands', 'on-failure': 'asks when a sandboxed command fails', 'on-request': 'asks when it wants to go beyond its sandbox', never: 'never asks for approval', granular: 'custom approval rules' };
+const SANDBOX_WORDS = { readOnly: 'read-only sandbox', workspaceWrite: 'can edit files in its folder', externalSandbox: 'external sandbox', dangerFullAccess: 'full access to your computer, no sandbox' };
+function disclosure(p) {
+  const approval = APPROVAL_WORDS[p?.approvalPolicy] ? p.approvalPolicy : 'unknown', sandbox = SANDBOX_WORDS[p?.sandbox] ? p.sandbox : 'unknown';
+  const warnings = [];
+  if (approval === 'never') warnings.push('This session never asks for approval: messages you send from Plexiform can run commands and edit files without asking.');
+  if (sandbox === 'dangerFullAccess') warnings.push('This session has full access to your computer (no sandbox): messages you send from Plexiform run with that access.');
+  if (approval === 'unknown' || sandbox === 'unknown') warnings.push('Codex did not report this session\'s permissions. Messages you send run with whatever it is allowed to do.');
+  if (approval !== 'never') warnings.push('Plexiform cannot tell whether a Codex terminal is still attached to this session. If Codex asks for an approval, only that terminal can answer it; Plexiform never does.');
+  return { permissions: `Permissions: ${APPROVAL_WORDS[approval] ?? 'approval policy unknown'} · ${SANDBOX_WORDS[sandbox] ?? 'sandbox unknown'}`, approvalPolicy: approval, sandbox, warnings };
+}
 
 // boardCurrent must be supplied by main; without it every session is refused.
 // compaction: an optional createSessionCompactor() (src/compaction.js).
@@ -51,7 +64,7 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
   const sessions = new Map();
   // Discovery handles: opaque ids for existing provider threads, valid only
   // until the same actor discovers that provider again.
-  const handles = new Map();
+  const handles = new Map(), attaching = new Map();
   const isCurrent = (board) => { try { return boardCurrent(board) === true; } catch { return false; } };
 
   function turnOf(r, turnId) {
@@ -73,11 +86,13 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
   }
   function dto(r) {
     const active = r.activeTurn ? r.turns.get(r.activeTurn) : null;
+    // A turn someone else started on an existing session is shown as working, never as a turn Plexiform can steer or interrupt.
+    const shown = active && (!r.existing || r.own.has(r.activeTurn)) ? active : null;
     return {
       session: r.id, generation: r.generation, provider: { id: r.provider, label: r.adapter.label },
       ownership: r.existing ? 'existing-unmanaged' : 'plexiform-owned', label: r.existing ? `Unmanaged — started outside Plexiform · ${r.adapter.label}` : `Started by Plexiform · ${r.adapter.label}`,
-      ...(r.existing ? { thread: { ...r.existing } } : {}),
-      board: r.board, status: r.ended ? 'ended' : active || r.foreignBusy ? 'working' : compaction?.inFlight(r) ? 'compacting' : 'ready', activeTurn: active?.tag ?? null,
+      ...(r.existing ? { thread: { ...r.existing, warnings: [...r.existing.warnings] } } : {}),
+      board: r.board, status: r.ended ? 'ended' : active || r.foreignBusy ? 'working' : compaction?.inFlight(r) ? 'compacting' : 'ready', activeTurn: shown?.tag ?? null,
       capabilities: { ...r.adapter.capabilities },
       deliveries: [...r.deliveries.values()].map((d) => publicDelivery(r, d)),
     };
@@ -194,18 +209,32 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
     const board = req.board ?? null;
     if (!isCurrent(board)) return refuse('stale', ERRORS.stale);
     if (adapter.available === false) return refuse('unavailable', adapter.reason ?? ERRORS.unavailable);
+    // Concurrent attaches of one thread by one actor share a single attempt and so a single session.
+    const key = JSON.stringify([actor, req.provider, h.target]);
+    let attempt = attaching.get(key);
+    if (!attempt) {
+      attempt = attachOnce(adapter, req, h, actor, board).finally(() => attaching.delete(key));
+      attaching.set(key, attempt);
+    }
+    const out = await attempt;
+    return out.r ? { ok: true, status: 'attached', state: dto(out.r) } : out;
+  }
+  async function attachOnce(adapter, req, h, actor, board) {
     const already = [...sessions.values()].find((r) => !r.ended && r.actor === actor && r.provider === req.provider && r.target === h.target);
-    if (already) return { ok: true, status: 'attached', state: dto(already) };
+    if (already) return { r: already };
     for (const r of [...sessions.values()]) if (r.ended) sessions.delete(r.id);
     if (sessions.size >= MAX_SESSIONS) return refuse('unavailable', 'Close a session first.');
     let result;
     try { result = await adapter.attach({ target: h.target }); } catch { return refuse('unavailable', ERRORS.unavailable); }
     // Bound to the exact thread id that was discovered, never to its label or folder.
-    if (result?.target !== h.target || handles.get(req.handle) !== h) return refuse('stale', ERRORS.stale);
+    if (result?.target !== h.target || handles.get(req.handle) !== h) {
+      if (result?.target === h.target) { try { await adapter.release?.({ target: h.target }); } catch { /* provider gone */ } }
+      return refuse('stale', ERRORS.stale);
+    }
     const id = crypto.randomUUID();
-    const r = { id, generation: 1, provider: req.provider, adapter, target: h.target, actor, board, activeTurn: null, foreignBusy: result.status === 'active', existing: { ...h.meta }, sending: false, ended: false, turns: new Map(), deliveries: new Map() };
+    const r = { id, generation: 1, provider: req.provider, adapter, target: h.target, actor, board, activeTurn: null, foreignBusy: result.status === 'active', existing: { ...h.meta, ...disclosure(result.permissions) }, own: new Set(), sending: false, ended: false, turns: new Map(), deliveries: new Map() };
     sessions.set(id, r); subscribe(r);
-    return { ok: true, status: 'attached', state: dto(r) };
+    return { r };
   }
 
   async function send(req, actor) {
@@ -221,6 +250,7 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
     let expectedTurnId = null;
     if (req.expectedTurn != null) {
       expectedTurnId = [...r.turns].find(([, t]) => t.tag === req.expectedTurn)?.[0] ?? null;
+      if (r.existing && ((r.activeTurn && !r.own.has(r.activeTurn)) || (expectedTurnId && !r.own.has(expectedTurnId)) || (!r.activeTurn && r.foreignBusy))) return refuse('busy', ERRORS.foreignTurn);
       if (!expectedTurnId || expectedTurnId !== r.activeTurn || !r.adapter.capabilities.steer) return refuse('stale', ERRORS.stale);
     } else if (r.activeTurn || r.foreignBusy) return refuse('busy', ERRORS.busy);
     // A background compaction finishes (bounded) or is abandoned before the
@@ -250,6 +280,7 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
     }
     if (typeof ack.turnId !== 'string' || (expectedTurnId && ack.turnId !== expectedTurnId)) { d.state = 'refused'; emit(r); return refuse('stale', ERRORS.stale); }
     d.turnId = ack.turnId; d.mode = ack.mode === 'steer' ? 'steer' : 'new-turn'; d.state = 'acknowledged';
+    if (r.existing && !expectedTurnId) r.own.add(ack.turnId);
     turnOf(r, ack.turnId);
     if (!expectedTurnId && !FINAL.includes(r.turns.get(ack.turnId).status)) r.activeTurn = ack.turnId;
     // The turn can finish before its ack arrives (while sending): check again now.
@@ -263,6 +294,7 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
     const { r, error } = lookup(req, actor, { board: false });
     if (error) return error;
     const active = r.activeTurn ? r.turns.get(r.activeTurn) : null;
+    if (r.existing && ((r.activeTurn && !r.own.has(r.activeTurn)) || (!r.activeTurn && r.foreignBusy) || [...r.turns].some(([id, t]) => t.tag === req.turn && !r.own.has(id)))) return refuse('busy', ERRORS.foreignTurn);
     if (!active || active.tag !== req.turn || !r.adapter.capabilities.interrupt) return refuse('stale', ERRORS.stale);
     try { await r.adapter.interrupt({ target: r.target, turnId: r.activeTurn }); } catch { return refuse('unavailable', ERRORS.unavailable); }
     return { ok: true, status: 'interrupt-requested', state: dto(r) };
@@ -287,11 +319,12 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
   // A document that is gone or replaced can never act again: its sessions
   // and provider threads are ended and their slots freed.
   async function reap(keep) {
+    for (const [h, v] of handles) if (!keep(v.actor)) handles.delete(h);
     await Promise.all([...sessions.values()].filter((r) => !keep(r.actor)).map(end));
   }
   function stopAll() {
     for (const r of sessions.values()) { r.ended = true; r.off?.(); }
-    sessions.clear();
+    sessions.clear(); handles.clear();
     for (const a of Object.values(adapters)) { try { a.stop?.(); } catch { /* gone */ } }
   }
 

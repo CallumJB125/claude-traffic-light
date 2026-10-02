@@ -311,8 +311,10 @@
     if (!entry.el) $('owned').append(ownedCard(id));
     const { title, tag, meta, notice } = entry.parts, s = entry.state, label = nameOf(entry);
     set(title, `${label} session`);
-    set(meta, s.ownership === 'existing-unmanaged' ? [s.label, s.thread.title || 'Untitled session', s.thread.project].filter(Boolean).join(' · ') : `${s.label} · private read-only workspace`);
-    set(notice, entry.notice);
+    set(meta, s.ownership === 'existing-unmanaged' ? [s.label, s.thread.title || 'Untitled session', s.thread.project, text(s.thread.permissions, 200) ? s.thread.permissions : 'Permissions unknown'].filter(Boolean).join(' · ') : `${s.label} · private read-only workspace`);
+    // The session's own permissions apply to what you send: warnings stay visible while it is attached.
+    const warnings = s.ownership === 'existing-unmanaged' && Array.isArray(s.thread.warnings) ? s.thread.warnings.filter(w => text(w, 300)).slice(0, 5) : [];
+    set(notice, [entry.notice, ...warnings].filter(Boolean).join(' '));
     if (entry.missing) {
       // Kept visible (never silently removed); its last known messages stay readable.
       tag.textContent = 'Ended'; tag.className = 'tag stale';
@@ -341,7 +343,7 @@
     c.recheck.disabled = !!entry.busy;
     c.close.disabled = !!entry.busy;
     set(c.send, entry.busy === 'send' ? 'Sending…' : 'Send');
-    set(c.note, s.status === 'ended' ? 'This session has ended. Close it to remove it.' : off ? 'This session belongs to another board. Switch back to the board it started on, then choose Check again.' : working ? `A turn is running. ${canSteer ? 'Steer adds your text to it; ' : ''}Send is available when it finishes.` : 'Sends your exact text to this session only. Maximum 4,000 characters.');
+    set(c.note, s.status === 'ended' ? 'This session has ended. Close it to remove it.' : off ? 'This session belongs to another board. Switch back to the board it started on, then choose Check again.' : working ? `A turn is running. ${canSteer ? 'Steer adds your text to it; ' : ''}Send is available when it finishes.` : s.status === 'working' && s.ownership === 'existing-unmanaged' ? 'A turn started outside Plexiform is running. Plexiform only steers or interrupts turns it started; Send is available when it finishes.' : 'Sends your exact text to this session only. Maximum 4,000 characters.');
   }
   // Pushes, launches and effect results are newer than any list read that
   // started before them: `touched` orders them against list snapshots.

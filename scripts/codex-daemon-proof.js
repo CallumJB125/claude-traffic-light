@@ -31,7 +31,12 @@ const TEXT = 'Plexiform daemon proof: reply with just the word OK.';
     if (!t) throw new Error('No such session number.');
     const at = await hub.attach({ provider: 'codex-daemon', handle: t.handle, board: null }, ACTOR);
     if (!at.ok) throw new Error(`attach refused: ${at.status} ${at.error}`);
-    console.log(`attached: ${at.state.label}`);
+    console.log(`attached: ${at.state.label}\n${at.state.thread.permissions}`);
+    // The proof message runs with the session's own permissions: only on a session that asks before going beyond its sandbox.
+    if (at.state.thread.approvalPolicy !== 'on-request' || at.state.thread.sandbox === 'dangerFullAccess') {
+      await hub.close({ session: at.state.session, generation: at.state.generation }, ACTOR);
+      throw new Error('Run the proof only against a session with approval policy on-request and a sandbox (Codex's default in a trusted project folder). Nothing was sent.');
+    }
     const sent = await hub.send({ session: at.state.session, generation: at.state.generation, text: TEXT }, ACTOR);
     console.log(`send: ${sent.status}${sent.ok ? '' : ` ${sent.error}`}`);
     if (!sent.ok) return;

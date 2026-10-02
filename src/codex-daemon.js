@@ -12,8 +12,9 @@
 // user message) and other clients' turns stream to every subscriber. Only an
 // allowlist of metadata fields is kept, transcript methods (thread/read,
 // thread/turns/list, thread/items/list) are never called, and text is only
-// passed on for turns Plexiform itself started or steered.
+// passed on for turns Plexiform itself started (a steer only adds to one of those).
 // Approvals belong to the human's terminal: server requests are never answered.
+// Turns Plexiform did not start are never steered or interrupted.
 const { EventEmitter } = require('node:events');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -43,22 +44,31 @@ function defaultSocketPath(env = process.env) {
 }
 
 // The rendezvous path is a symlink to the real socket. Both the socket and the
-// directory holding it must belong to this user and be closed to others.
+// directory holding it must belong to this user and be closed to others
+// (no sticky shared directory, no root-owned one). `id` pins the inode so the
+// socket can be checked again once connected.
 function checkSocket(socketPath, { fsImpl = fs, uid = process.getuid?.() } = {}) {
   let real, st, dir;
   try { real = fsImpl.realpathSync(socketPath); st = fsImpl.statSync(real); dir = fsImpl.statSync(path.dirname(real)); } catch { return { ok: false, reason: 'notRunning' }; }
   if (!st.isSocket()) return { ok: false, reason: 'notRunning' };
-  if (uid !== undefined && (st.uid !== uid || (dir.uid !== uid && dir.uid !== 0))) return { ok: false, reason: 'unsafe' };
-  if ((st.mode & 0o077) !== 0 || ((dir.mode & 0o022) !== 0 && (dir.mode & 0o1000) === 0)) return { ok: false, reason: 'unsafe' };
-  return { ok: true, real };
+  if (typeof uid !== 'number' || st.uid !== uid || dir.uid !== uid) return { ok: false, reason: 'unsafe' };
+  if ((st.mode & 0o077) !== 0 || (dir.mode & 0o077) !== 0) return { ok: false, reason: 'unsafe' };
+  return { ok: true, real, id: `${st.dev}:${st.ino}` };
 }
 
 const clean = (v, max) => (typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, max) : '');
 // Metadata allowlist. `preview`, `path`, `gitInfo`, `turns` and every other field are dropped here.
+// Only interactive CLI threads: sub-agent, exec, app-server, ephemeral and unknown-source threads are never listed or attached.
 function threadMeta(t) {
-  if (!t || typeof t.id !== 'string' || !t.id || t.id.length > 100 || t.parentThreadId || t.ephemeral === true) return null;
+  if (!t || typeof t.id !== 'string' || !t.id || t.id.length > 100 || t.parentThreadId || t.ephemeral !== false || t.source !== 'cli' || t.agentNickname || t.agentRole) return null;
   return { id: t.id, title: clean(t.name, 120), project: clean(path.basename(clean(t.cwd, 1000)), 120), status: clean(t.status?.type, 20) || 'unknown', updatedAt: Number.isSafeInteger(t.updatedAt) ? t.updatedAt : null };
 }
+// The session's own permissions, as Codex reports them on resume (never changed by Plexiform).
+const APPROVAL = ['untrusted', 'on-failure', 'on-request', 'never'], SANDBOX = ['readOnly', 'workspaceWrite', 'externalSandbox', 'dangerFullAccess'];
+const permissionsOf = (r) => ({
+  approvalPolicy: APPROVAL.includes(r?.approvalPolicy) ? r.approvalPolicy : r?.approvalPolicy && typeof r.approvalPolicy === 'object' && r.approvalPolicy.granular ? 'granular' : 'unknown',
+  sandbox: SANDBOX.includes(r?.sandbox?.type) ? r.sandbox.type : 'unknown',
+});
 const inputText = (content) => (Array.isArray(content) ? content : []).filter((c) => c?.type === 'text' && typeof c.text === 'string').map((c) => c.text).join('');
 
 function defaultConnect(realPath) {
@@ -68,9 +78,11 @@ function defaultConnect(realPath) {
 function createCodexDaemon({ bin, enabled = () => false, socketPath = defaultSocketPath(), connect = defaultConnect, fsImpl = fs, uid = process.getuid?.(), clientVersion = '0' } = {}) {
   const events = new EventEmitter();
   const pending = new Map();
-  // Turns Plexiform started (all their agent items are its reply) or steered
-  // (only items that start after the steer was acknowledged).
+  // Turns Plexiform started (turn id -> thread id), marked as the turn/start
+  // response is read. Only these are streamed, steered or interrupted.
   const ours = new Map(), clientIds = new Set();
+  // Subscriptions per thread: several Plexiform sessions (windows) can share one; unsubscribe only when the last detaches.
+  const subs = new Map();
   let ws = null, ready = null, nextId = 1, open = false;
   const REASON = reasons(bin), COMMAND = commands(bin);
 
@@ -98,18 +110,17 @@ function createCodexDaemon({ bin, enabled = () => false, socketPath = defaultSoc
     const target = p.threadId;
     if (typeof target !== 'string') return;
     const turnId = typeof p.turnId === 'string' ? p.turnId : null;
-    const mine = turnId ? ours.get(turnId) : null;
+    const mine = turnId !== null && ours.get(turnId) === target;
     if (method === 'turn/started' && typeof p.turn?.id === 'string') emit({ kind: 'turn-started', target, turnId: p.turn.id });
     else if (method === 'turn/completed' && typeof p.turn?.id === 'string') {
-      const own = ours.has(p.turn.id);
+      const own = ours.get(p.turn.id) === target;
       // Another client's error text is that session's content: only our own turns carry it.
       emit({ kind: 'turn-completed', target, turnId: p.turn.id, status: ['completed', 'interrupted', 'failed'].includes(p.turn.status) ? p.turn.status : 'failed', error: own && typeof p.turn.error?.message === 'string' ? p.turn.error.message : null });
-      ours.delete(p.turn.id);
-    } else if (method === 'item/started' && mine && mine.target === target && p.item?.type === 'agentMessage' && typeof p.item.id === 'string') mine.items.add(p.item.id);
-    else if (method === 'item/agentMessage/delta' && mine && mine.target === target && typeof p.delta === 'string' && (mine.all || mine.items.has(p.itemId))) emit({ kind: 'delta', target, turnId, text: p.delta });
-    else if (method === 'item/completed' && mine && mine.target === target) {
+      if (own) ours.delete(p.turn.id);
+    } else if (method === 'item/agentMessage/delta' && mine && typeof p.delta === 'string') emit({ kind: 'delta', target, turnId, text: p.delta });
+    else if (method === 'item/completed' && mine) {
       const item = p.item;
-      if (item?.type === 'agentMessage' && typeof item.text === 'string' && (mine.all || mine.items.has(item.id))) emit({ kind: 'message', target, turnId, text: item.text });
+      if (item?.type === 'agentMessage' && typeof item.text === 'string') emit({ kind: 'message', target, turnId, text: item.text });
       // Only our own message is echoed back; other clients' input is never passed on.
       else if (item?.type === 'userMessage' && typeof item.clientId === 'string' && clientIds.has(item.clientId)) emit({ kind: 'input-recorded', target, turnId, clientId: item.clientId, text: inputText(item.content) });
     } else if (method === 'thread/status/changed' && typeof p.status?.type === 'string') emit({ kind: 'status', target, status: p.status.type });
@@ -145,7 +156,7 @@ function createCodexDaemon({ bin, enabled = () => false, socketPath = defaultSoc
     ws = self;
     const closedNow = () => {
       if (ws !== self) return;
-      ws = null; ready = null; open = false; ours.clear(); clientIds.clear();
+      ws = null; ready = null; open = false; ours.clear(); clientIds.clear(); subs.clear();
       fail(new Error('Codex daemon connection closed'));
       emit({ kind: 'exit' });
     };
@@ -153,7 +164,8 @@ function createCodexDaemon({ bin, enabled = () => false, socketPath = defaultSoc
     self.on('close', closedNow);
     self.on('error', closedNow);
     const attempt = new Promise((resolve, reject) => {
-      self.once('open', () => { open = true; resolve(); });
+      // The socket is checked again once connected: a swap between the check and the connect is refused.
+      self.once('open', () => { const again = checkSocket(socketPath, { fsImpl, uid }); if (!again.ok || again.real !== s.real || again.id !== s.id) { reject(new Error(REASON.unsafe)); return; } open = true; resolve(); });
       self.once('close', () => reject(new Error('Codex daemon connection closed')));
       self.once('error', () => reject(new Error('Codex daemon connection failed')));
     }).then(() => request('initialize', { clientInfo: { name: 'plexiform', title: 'Plexiform', version: String(clientVersion) } }))
@@ -172,37 +184,51 @@ function createCodexDaemon({ bin, enabled = () => false, socketPath = defaultSoc
     const listed = await request('thread/list', { limit: MAX_THREADS, useStateDbOnly: true });
     const meta = new Map();
     for (const t of Array.isArray(listed?.data) ? listed.data : []) { const m = threadMeta(t); if (m && ids.has(m.id)) meta.set(m.id, m); }
-    return [...ids].map((id) => meta.get(id) ?? { id, title: '', project: '', status: 'unknown', updatedAt: null });
+    return [...ids].filter((id) => meta.has(id)).map((id) => meta.get(id));
   }
   // Subscribe to exactly this thread. It must still be loaded on the daemon;
-  // its turns are excluded and nothing else from the response is kept.
+  // its turns are excluded and only its approval policy and sandbox type are kept.
   async function attach({ target }) {
     await start();
     const loaded = await request('thread/loaded/list', { limit: MAX_THREADS });
     if (!Array.isArray(loaded?.data) || !loaded.data.includes(target)) throw new Error('That Codex session is no longer running on the daemon');
+    // Checked before subscribing: a sub-agent, exec, app-server or ephemeral thread is never resumed.
+    const listed = await request('thread/list', { limit: MAX_THREADS, useStateDbOnly: true });
+    if (!(Array.isArray(listed?.data) ? listed.data : []).some((t) => t?.id === target && threadMeta(t))) throw new Error('Plexiform only messages interactive Codex CLI sessions');
     const result = await request('thread/resume', { threadId: target, excludeTurns: true });
     if (result?.thread?.id !== target) throw new Error('Codex resumed a different thread');
-    return { target, status: clean(result.thread.status?.type, 20) || 'unknown' };
+    subs.set(target, (subs.get(target) ?? 0) + 1);
+    if (!threadMeta(result.thread)) { await release({ target }).catch(() => {}); throw new Error('Plexiform only messages interactive Codex CLI sessions'); }
+    return { target, status: clean(result.thread.status?.type, 20) || 'unknown', permissions: permissionsOf(result) };
   }
   async function send({ target, text, clientId, expectedTurnId = null }) {
     if (!state().ok) throw new Error('Codex daemon messaging is off or unreachable');
     await start();
     const input = [{ type: 'text', text, text_elements: [] }];
-    clientIds.add(clientId);
     if (expectedTurnId) {
-      // Marked as the ack is read, so only reply items that start after it count.
-      const mark = (r) => { if (r?.turnId === expectedTurnId && !ours.has(expectedTurnId)) ours.set(expectedTurnId, { target, all: false, items: new Set() }); };
-      const result = await request('turn/steer', { threadId: target, expectedTurnId, input, clientUserMessageId: clientId }, mark);
+      if (ours.get(expectedTurnId) !== target) throw new Error('Plexiform only steers turns it started');
+      clientIds.add(clientId);
+      const result = await request('turn/steer', { threadId: target, expectedTurnId, input, clientUserMessageId: clientId });
       if (typeof result?.turnId !== 'string') throw new Error('Codex did not acknowledge the steer');
       return { turnId: result.turnId, mode: 'steer' };
     }
-    const result = await request('turn/start', { threadId: target, input, clientUserMessageId: clientId }, (r) => { if (typeof r?.turn?.id === 'string') ours.set(r.turn.id, { target, all: true, items: new Set() }); });
+    clientIds.add(clientId);
+    const result = await request('turn/start', { threadId: target, input, clientUserMessageId: clientId }, (r) => { if (typeof r?.turn?.id === 'string') ours.set(r.turn.id, target); });
     if (typeof result?.turn?.id !== 'string') throw new Error('Codex did not acknowledge the turn');
     return { turnId: result.turn.id, mode: 'new-turn' };
   }
-  async function interrupt({ target, turnId }) { await start(); await request('turn/interrupt', { threadId: target, turnId }); return true; }
-  // Stop receiving this thread's updates. The session itself keeps running.
-  async function release({ target }) { if (!ws || !open) return false; await request('thread/unsubscribe', { threadId: target }); return true; }
+  async function interrupt({ target, turnId }) {
+    if (ours.get(turnId) !== target) throw new Error('Plexiform only interrupts turns it started');
+    await start(); await request('turn/interrupt', { threadId: target, turnId }); return true;
+  }
+  // Stop receiving this thread's updates once no Plexiform session uses it. The session itself keeps running.
+  async function release({ target }) {
+    const n = subs.get(target) ?? 0;
+    if (n > 1) { subs.set(target, n - 1); return false; }
+    subs.delete(target);
+    if (!ws || !open || n === 0) return false;
+    await request('thread/unsubscribe', { threadId: target }); return true;
+  }
   function stop() { const w = ws; if (w) { try { w.close(); } catch { /* gone */ } } }
 
   return {
@@ -212,9 +238,11 @@ function createCodexDaemon({ bin, enabled = () => false, socketPath = defaultSoc
     precondition: `Start your Codex session in Terminal with \`${COMMAND.attach}\` (without --no-daemon, --profile, --oss or -c overrides, which run without the shared daemon). Codex desktop-app conversations cannot be reached.`,
     capabilities: Object.freeze({ newTurn: true, steer: true, interrupt: true, ack: 'turn-id', echo: 'client-message-id', stream: true, existingSessions: true, startSessions: false, compact: false }),
     discover, attach, send, interrupt, release, stop,
+    // Test seam only (never wired to IPC): the same allowlisted request path the adapter uses.
+    _request: (method, params) => request(method, params),
     on: (fn) => { events.on('event', fn); return () => events.off('event', fn); },
     alive: () => !!ws && open && enabled() === true,
   };
 }
 
-module.exports = { createCodexDaemon, defaultSocketPath, checkSocket, threadMeta, commands, reasons, METHODS, REASONS, OPT_IN };
+module.exports = { createCodexDaemon, defaultSocketPath, checkSocket, threadMeta, permissionsOf, commands, reasons, METHODS, REASONS, OPT_IN };
