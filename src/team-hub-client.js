@@ -10,7 +10,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const MAX_SHARED = 300, MAX_TEAMS = 64, MAX_PER_TEAM = 100, FANOUT = 6;
 const MAX_TEXT = 4000, MAX_BYTES = 8192, MAX_BODY = 1_000_000;
 const POLL_MS = 5000, TIMEOUT_MS = 15_000, DEADLINE_MS = 20_000, BACKOFF_MAX_MS = 60_000;
-const DELIVERY_STATES = Object.freeze(['queued', 'sending', 'delivered', 'acknowledged', 'replied', 'refused', 'expired', 'unknown']);
+const DELIVERY_STATES = Object.freeze(['queued', 'sending', 'delivered', 'acknowledged', 'recorded', 'responding', 'completed', 'interrupted', 'failed', 'replied', 'refused', 'expired', 'unknown']);
 const REASONS = Object.freeze({
   stale: 'This session is no longer shared with you.',
   forbidden: 'This session is not shared with you to send.',
@@ -247,7 +247,7 @@ function createTeamHubClient({ baseUrl, token, fetch = globalThis.fetch, viewer:
     };
   }
 
-  return { teams, sessions, send, onChange, viewer };
+  return Object.defineProperty({ teams, sessions, send, onChange, viewer }, 'origin', { value: new URL(base).origin, enumerable: true });
 }
 
 module.exports = { createTeamHubClient };

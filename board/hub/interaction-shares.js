@@ -161,7 +161,7 @@ export class InteractionShares {
 
   /** GET: sessions shared with the caller, across their teams. */
   shared(ident) {
-    this.relay.asClient(ident);
+    this.relay.asSharedClient(ident);
     const rows = this.db.all(`SELECT s.*, o.name AS team_name, u.display_name AS owner_name FROM interaction_shares s
       JOIN members m ON m.org_id = s.org_id AND m.user_id = ? AND m.removed_at IS NULL
       JOIN orgs o ON o.id = s.org_id AND o.deleted_at IS NULL
@@ -171,7 +171,7 @@ export class InteractionShares {
     for (const r of rows) {
       const me = this.member(r.org_id, ident.user.id);
       if (!this.live(r) || !me || !this.member(r.org_id, r.owner_user_id)) continue;
-      out.push({ id: r.id, session: r.session_id, scope: ACTING_ROLES.includes(me.role) ? r.scope : 'watch', expires_at: r.expires_at, team: { id: r.org_id, name: r.team_name }, owner: { name: r.owner_name },
+      out.push({ id: r.id, session: r.session_id, scope: ACTING_ROLES.includes(me.role) ? r.scope : 'watch', expires_at: r.expires_at, team: { id: r.org_id, name: r.team_name }, owner: { id: r.owner_user_id, name: r.owner_name },
         online: !!this.relay.liveHost(r.owner_user_id, r.host_device_id) });
     }
     return { shared: out };
@@ -184,7 +184,7 @@ export class InteractionShares {
    */
   authorize(ident, shareId, op) {
     if (!this.relay.credValid(ident.cred)) throw new HubError('UNAUTHENTICATED', 'device token unknown or revoked: sign in again');
-    this.relay.asClient(ident);
+    this.relay.asSharedClient(ident);
     const row = typeof shareId === 'string' && UUID.test(shareId) ? this.db.get('SELECT * FROM interaction_shares WHERE id = ?', shareId) : null;
     const me = this.live(row) && row.owner_user_id !== ident.user.id ? this.member(row.org_id, ident.user.id) : null;
     if (!me || !this.member(row.org_id, row.owner_user_id)) throw noShare();

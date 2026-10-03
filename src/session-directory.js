@@ -217,7 +217,7 @@ function createSessionDirectory({ now = Date.now, staleMs = STALE_MS, secret = c
         remoteControl: cap(false, 'Only the owner controls their session; teammates can message it when it is shared to send.'),
       }),
       interact: canSend ? { kind: 'team', ref: id } : null,
-      deliveries: (Array.isArray(x.deliveries) ? x.deliveries : []).slice(-10).filter((d) => object(d) && typeof d.id === 'string').map((d) => ({ id: str(d.id, 80), text: str(d.text, 4000), by: str(d.by, 80) || null, state: ['queued', 'delivered', 'acknowledged', 'replied', 'refused', 'expired', 'unknown'].includes(d.state) ? d.state : 'unknown', response: str(d.response, 4000) })),
+      deliveries: (Array.isArray(x.deliveries) ? x.deliveries : []).slice(-10).filter((d) => object(d) && typeof d.id === 'string').map((d) => ({ id: str(d.id, 80), text: str(d.text, 4000), by: str(d.by, 80) || null, state: ['queued', 'delivered', 'acknowledged', 'recorded', 'responding', 'completed', 'interrupted', 'failed', 'replied', 'refused', 'expired', 'unknown'].includes(d.state) ? d.state : 'unknown', response: str(d.response, 4000) })),
       children: [],
     };
     for (const c of (Array.isArray(x.children) ? x.children : []).slice(0, MAX_CHILDREN)) {

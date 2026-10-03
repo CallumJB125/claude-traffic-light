@@ -181,7 +181,9 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
     let p = prints.get(sh.id);
     if (!p) { p = { text, version: 1 }; prints.set(sh.id, p); while (prints.size > MAX_SHARES) prints.delete(prints.keys().next().value); }
     else if (p.text !== text) { p.text = text; p.version++; }
-    return { ok: true, version: p.version, state: out };
+    // Receipt time proves the owner's host answered this authorized state read;
+    // it does not claim new provider activity or refresh child report times.
+    return { ok: true, version: p.version, state: { ...out, observed_at: clock() } };
   }
   const liveShare = (sh) => !!sh && shares.get(sh.id) === sh && (sh.expiresAt === null || clock() < sh.expiresAt);
 

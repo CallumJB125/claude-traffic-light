@@ -159,6 +159,13 @@ export class InteractionRelay {
     if (this.role(ident.cred.id) !== 'client') throw new HubError('FORBIDDEN', 'this device offers its sessions to your other devices; use one of those');
   }
 
+  // A hosting desktop can also use another owner's explicitly shared session.
+  // Own-device remote control retains the stricter asClient role boundary.
+  asSharedClient(ident) {
+    if (ident?.cred?.kind !== 'device') throw new HubError('FORBIDDEN', 'shared sessions need the desktop app');
+    if (!this.credValid(ident.cred)) throw new HubError('UNAUTHENTICATED', 'device token unknown or revoked: sign in again');
+  }
+
   /** PUT role: the calling device's own role, nothing else's. */
   setRole(ident, body) {
     if (ident?.cred?.kind !== 'device') throw new HubError('FORBIDDEN', 'remote sessions need the desktop app');

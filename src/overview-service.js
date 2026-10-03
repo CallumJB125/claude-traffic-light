@@ -154,15 +154,16 @@ function createOverviewService({sessions=()=>[],work=async()=>({sources:[],captu
   if(typeof real?.origin==='string'&&Array.isArray(real.teams))for(const t of real.teams.slice(0,64))if(object(t)&&typeof t.id==='string')add(teamKey(real.origin,t.id),t.name,'hub');
   for(const e of personal)for(const b of e.teams)add(b.key,b.name,'hub');
   const hub=safe(teamHub,null),viewer=viewerOf(hub);let fakeTeams=[];
+  const adapterOrigin=hub?.fake!==true&&typeof hub?.origin==='string'?hub.origin:'adapter:';
   if(hub&&viewer){try{fakeTeams=(await hub.teams(viewer)).filter(t=>object(t)&&typeof t.id==='string').slice(0,64);}catch{fakeTeams=[];}
-   for(const t of fakeTeams)add(teamKey('adapter:',t.id),t.name,hub.fake===true?'fake':'adapter');}
+   for(const t of fakeTeams)add(teamKey(adapterOrigin,t.id),t.name,hub.fake===true?'fake':'adapter');}
   if(!permitted())return unavailableDirectory(view,time);
   const teamList=[...teams.values()].map(t=>({...t,label:t.source==='fake'?clean(hub?.label,80)||'Fake team hub':''}));
   const status=built.partial||built.omitted?'partial':'complete';
   if(view==='mine')return{schema:1,view,status,observed_at:time,teams:teamList,team:null,notice:'',entries:personal,counts:directoryModel.counts(personal)};
   const selected=teams.get(request.team)??teams.values().next().value??null;
   if(!selected)return{schema:1,view,status,observed_at:time,teams:teamList,team:null,notice:'You are not in a team yet, or no team is connected.',entries:[],counts:directoryModel.counts([])};
-  const adapterTeam=selected.source==='fake'||selected.source==='adapter'?fakeTeams.find(t=>teamKey('adapter:',t.id)===selected.key):null;
+  const adapterTeam=fakeTeams.find(t=>teamKey(adapterOrigin,t.id)===selected.key)??null;
   let hubEntries=[];
   if(adapterTeam){try{hubEntries=await hub.sessions(viewer,adapterTeam.id);}catch{hubEntries=[];}}
   if(!permitted())return unavailableDirectory(view,time);

@@ -204,9 +204,9 @@ test('HOSTILE: non-member, cross-team, guessed session id, forged caller, replay
     assert.equal((await r.call(r.bob, share.id, 'send', { session: s.session, generation: s.generation, text: 'old gen' })).body.result.status, 'stale');
     // Oversize.
     assert.equal((await r.call(r.bob, share.id, 'send', { session: s.session, generation: s.generation + 1, text: 'x'.repeat(17000) })).status, 413);
-    // The owner's own devices use their own route, not a share; host-role devices cannot call shares.
+    // The owner's own devices use their own route; sharing never authorizes self-access.
     assert.equal((await r.call(r.winA, share.id, 'state', { session: s.session })).status, 404);
-    assert.equal((await r.call(r.macA, share.id, 'state', { session: s.session })).status, 403);
+    assert.equal((await r.call(r.macA, share.id, 'state', { session: s.session })).status, 404);
     // A cookie session cannot call shares.
     const web = await r.h.webSignIn('bob@dev.local');
     assert.equal((await r.h.call('POST', `/api/interaction/v1/shared/${share.id}/call`, { cookie: web.cookie, headers: { 'x-csrf-token': web.csrf }, body: { request_id: rid(), op: 'state', args: { session: s.session } } })).status, 403);
@@ -619,4 +619,52 @@ test('HISTORY: a teammate\'s steer into a turn that began before the share does 
     const done = await until(async () => (await r.call(r.bob, share.id, 'state', { session: s.session })).body.result.state.deliveries.find((d) => d.text === 'new turn' && d.state === 'completed'));
     assert.equal(done.response, 'echo:new turn');
   } finally { await r.close(); }
+});
+
+
+test('LOCAL PROOF: actual shared endpoint reaches Overview once, with live Message and revocation', async () => {
+  const { createTeamHubClient } = require('../../../src/team-hub-client.js');
+  const { createOverviewService } = require('../../../src/overview-service.js');
+  const r = await rig();
+  let bobHost = null;
+  try {
+    const s = await r.launch();
+    const made = await r.mac.shareSession({ session: s.session, team: r.org, scope: 'interact' });
+    assert.equal(made.ok, true);
+    bobHost = createRemoteInteractionHost({ userId: r.bob.user, adapters: { codex: createCodexAppServer({ bin: FAKE }) }, now: () => r.h.clock.wall() });
+    assert.equal((await bobHost.enable({ baseUrl: r.h.base, token: r.bob.token, WebSocket })).state, 'connected');
+    const bobSession = (await bobHost.hub.launch({ provider: 'codex' }, bobHost.actor)).state;
+    assert.equal((await bobHost.shareSession({ session: bobSession.session, team: r.org, scope: 'interact' })).ok, true);
+    const aliceHub = createTeamHubClient({ baseUrl: r.h.base, token: () => r.macA.token, viewerId: r.macA.user }, { now: () => r.h.clock.wall() });
+    const aliceOverview = createOverviewService({ now: () => r.h.clock.wall(), hubTeams: async () => ({ origin: r.h.base, teams: [{ id: r.org, name: 'Dev team' }] }), teamHub: () => aliceHub });
+    const aliceRows = await aliceOverview.directory({ view: 'team', team: null });
+    assert.equal(aliceRows.entries.length, 1, 'two live hosting desktops can discover each other');
+    assert.equal((await aliceOverview.teamMessage({ id: aliceRows.entries[0].id, text: 'alice into bob session' })).ok, true);
+    assert.ok(bobHost.hub.state({ session: bobSession.session }, bobHost.actor).deliveries.some(d => d.text === 'alice into bob session'));
+    const raw = (await r.shared(r.bob)).body.shared;
+    assert.equal(raw[0].owner.id, r.macA.user, 'server supplies owner identity to main');
+    const hub = createTeamHubClient({ baseUrl: r.h.base, token: () => r.bob.token, viewerId: r.bob.user }, { now: () => r.h.clock.wall() });
+    assert.equal(Object.getOwnPropertyDescriptor(hub, 'origin').writable, false);
+    const overview = createOverviewService({ now: () => r.h.clock.wall(), hubTeams: async () => ({ origin: r.h.base, teams: [{ id: r.org, name: 'Dev team' }] }), teamHub: () => hub });
+    const rows = await overview.directory({ view: 'team', team: null });
+    assert.equal(rows.teams.length, 1, 'signed-in teams and real client use one canonical origin');
+    assert.equal(rows.entries.length, 1, 'genuine endpoint is accepted by client');
+    assert.equal(rows.entries[0].freshness, 'recent', 'authorized owner answer has receiver time');
+    assert.equal(rows.entries[0].capabilities.receive.available, true, 'Message can be rendered');
+    assert.equal(rows.entries[0].observedAt, r.h.clock.wall());
+    assert.equal(JSON.stringify(rows).includes(r.macA.user), false, 'owner account id stays in main');
+    const sent = await overview.teamMessage({ id: rows.entries[0].id, text: 'overview teammate turn' });
+    assert.equal(sent.ok, true, JSON.stringify(sent));
+    assert.ok(r.mac.hub.state({ session: s.session }, r.mac.actor).deliveries.some(d => d.text === 'overview teammate turn'));
+    await until(async () => { const refreshed = await overview.directory({ view: 'team', team: rows.team.key }); return refreshed.entries[0]?.deliveries.some(d => d.text === 'overview teammate turn' && d.state === 'completed' && d.response); });
+    r.h.db.run("UPDATE members SET role = 'viewer' WHERE org_id = ? AND user_id = ?", r.org, r.bob.user);
+    const watch = await overview.directory({ view: 'team', team: rows.team.key });
+    assert.equal(watch.entries[0].capabilities.receive.available, false);
+    assert.equal(watch.entries[0].interact, null);
+    assert.equal((await overview.teamMessage({ id: rows.entries[0].id, text: 'viewer cannot send' })).ok, false);
+    r.h.db.run("UPDATE members SET role = 'member' WHERE org_id = ? AND user_id = ?", r.org, r.bob.user);
+    assert.equal((await r.mac.stopSharing(made.share.id)).ok, true);
+    assert.equal((await overview.teamMessage({ id: rows.entries[0].id, text: 'after revoke' })).ok, false);
+    assert.equal((await overview.directory({ view: 'team', team: rows.team.key })).entries.length, 0);
+  } finally { bobHost?.close(); await r.close(); }
 });
