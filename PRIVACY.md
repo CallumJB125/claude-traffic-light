@@ -8,7 +8,7 @@ Plexiform is a desktop app that watches your AI coding sessions and shows their 
 
 - **On by default:** checking GitHub for pull requests and builds through your own GitHub login (only if you have the `gh` tool signed in), and reading your Focus / Do Not Disturb status on this computer.
 - **Off by default:** calendar, calendar subscription link, voice questions to Claude, answering permission prompts from Plexiform, and remote devices.
-- **Never:** telemetry, analytics or advertising trackers. We don't sell or share your data.
+- **The desktop app:** no advertising trackers or general analytics are added by Plexiform. We do not sell your data. The team and provider features below share the selected content with their stated recipients; the website has separate Cloudflare processing.
 - **Only if you join a team board:** your cards, handovers and run progress go to your team's hub. Today that hub is run by Plexiform at `app.plexiform.dev`. When you sign in (with Google or GitHub, as accounts roll out), your name and email are shared with that hub.
 - **Update checks (Plexiform's servers):** the app asks `download.plexiform.dev` whether a newer version exists, and downloads it from there only when you ask. Like any download, this reveals your IP address and your app version.
 - **The website waitlist:** if you join the waitlist on `plexiform.dev`, we store the email you give us.
@@ -26,10 +26,10 @@ Plexiform is a desktop app that watches your AI coding sessions and shows their 
 
 - **Automatic work-card routing (local lookup).** <!-- flow:work-capture-repository files=src/work-capture.js --> Plexiform reads a reported working folder's local Git origin with a bounded, read-only Git configuration command. It loads its own repository-name normalizer locally; this lookup does not contact GitHub or run project commands. A private file records task identities, their pinned board destinations, remembered repository defaults and whether automatic cards are enabled. It does not read AI transcripts.
 
-Plexiform reads these on your computer and never uploads them:
+Plexiform reads and stores the following information locally. The team-sharing and provider features below can relay selected messages, replies and reported metadata; this is not a promise that all session text stays on this computer:
 
 - Your Claude Code conversation logs (the files in `~/.claude/projects`), read to work out tokens and spend. Only counts and costs are kept, not the text.
-- Your prompts and Claude's replies. Plexiform never stores your prompts. Claude Code (and Cursor, Codex or Gemini if you connected them) tells Plexiform through small add-ons called hooks that a prompt was sent or a tool ran, and that feeds the session state below.
+- Hook reports from Claude Code (and Cursor, Codex or Gemini if you connected them) say that a prompt was sent or a tool ran and feed the session state below. The token/cost reader does not retain full conversation text. Other enabled features retain local task text, pending input details and selected messages or replies as described below; supported team shares and durable board inboxes relay content to the hub.
 - Session state: for each session, the folder it runs in, its state, the current tool name, the model name, task counts, and the labels of agents it started (up to 40 characters of the agent's type or of the description the model wrote). When a turn fails, it also keeps up to 120 characters of the error or of Claude's last reply, which can therefore contain a snippet of Claude's own words.
 - Waiting inputs you answer from the widget, only if you turned on "Answer permission prompts from the widget" (off by default). While Claude Code waits for you, Plexiform briefly holds what it is waiting on, in a request file with the request id, session id, folder, tool name, and a fingerprint (SHA-256) that binds your answer to exactly what was shown. What else the file holds depends on the kind:
   - **Permission:** the full tool input (the whole command, file path, web address or agent instructions) and any "allow for this session" suggestions. A command can contain secrets you typed into it.

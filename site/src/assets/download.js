@@ -1,12 +1,12 @@
 // The download page: detect the system, read the update feeds from the
 // download host, and show what is actually published. Nothing is invented: a
-// platform with no feed says so.
+// failed feed is unverified. Windows remains gated pending runtime acceptance.
 (function () {
   const F = window.PlexiformFeed;
   const card = document.getElementById('dl');
   if (!card || !F) return;
   const base = card.dataset.feed;
-  const fallback = card.dataset.fallback.replace(/\/download$/, '').replace(/\/releases\/latest.*$/, '/releases/latest');
+  const fallback = card.dataset.fallback;
   const os = window.__os || 'other';
   const status = document.getElementById('dl-status');
   const primary = document.getElementById('dl-primary');
@@ -25,8 +25,9 @@
   }
 
   (async () => {
-    const [mac, win, linux] = await Promise.all([read('mac'), read('win'), read('linux')]);
-    const by = { mac, win, linux };
+    const [mac, linux] = await Promise.all([read('mac'), read('linux')]);
+    // Release policy: a feed alone cannot establish Windows runtime acceptance.
+    const by = { mac, win: null, linux };
     // the list of everything published
     for (const row of document.querySelectorAll('#dl-all li')) {
       const k = row.dataset.os;
@@ -34,7 +35,7 @@
       const right = row.lastElementChild;
       right.replaceChildren();
       right.classList.remove('muted');
-      if (!list || !list.length) { right.classList.add('muted'); right.textContent = 'Not published yet'; continue; }
+      if (!list || !list.length) { right.classList.add('muted'); right.textContent = k === 'win' ? 'Unavailable pending runtime acceptance' : 'Could not verify the download feed'; continue; }
       const links = list.map((a) => el('a', { href: a.url, download: '' }, `${a.label}${a.size ? `, ${F.human(a.size)}` : ''}`));
       links.forEach((l, i) => { if (i) right.append(' · '); right.append(l); });
       row.setAttribute('data-version', list[0].version);
@@ -42,8 +43,8 @@
     }
     const mine = by[os];
     if (!mine || !mine.length) {
-      status.textContent = NAME[os] ? `${NAME[os]} builds aren't published yet.` : 'Pick your system below.';
-      primary.replaceChildren(el('a', { class: 'btn', href: fallback }, 'See releases on GitHub'));
+      status.textContent = os === 'win' ? 'Windows is unavailable pending runtime acceptance.' : NAME[os] ? `Could not verify the ${NAME[os]} download feed.` : 'Pick your system below.';
+      primary.replaceChildren(el('a', { class: 'btn', href: fallback }, 'Browse published GitHub releases'));
       return;
     }
     // Apple silicon first; Intel stays one line below. Chromium can say which.

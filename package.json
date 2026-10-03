@@ -1,7 +1,7 @@
 {
   "name": "claude-buddy",
   "productName": "Plexiform",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "A pixel Claude that lives on your desk: a programmable traffic light for every Claude Code (and Cursor, Codex, Gemini\u2026) session \u2014 lights, moods, costumes, pets, a garden, and clicks that do things.",
   "main": "main.js",
   "scripts": {

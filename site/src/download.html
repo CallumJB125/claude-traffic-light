@@ -1,4 +1,4 @@
-<!--page {"title":"Download Plexiform","desc":"Download Plexiform for Mac, Windows or Linux. Private beta: the builds are unsigned for now, so the first open takes one extra step.","nav":"download"}-->
+<!--page {"title":"Download Plexiform","desc":"Download the published Plexiform beta for macOS or Linux. Windows runtime acceptance is pending. Private beta: the builds are unsigned for now, so the first open takes one extra step.","nav":"download"}-->
 <!doctype html>
 <html lang="en">
 <head>
@@ -12,16 +12,17 @@
     <h1>Download {{brand.name}}</h1>
     <p class="lede">The beta is for small teams. You can install it now; joining a team board needs an invite.</p>
 
-    <div class="dl-card" id="dl" data-feed="{{brand.urls.downloads}}" data-fallback="{{brand.urls.updates}}">
+    <div class="dl-card" id="dl" data-feed="{{brand.urls.downloads}}" data-fallback="https://github.com/CallumJB125/claude-traffic-light/releases">
       <p id="dl-status" role="status">Looking for the latest build…</p>
       <div id="dl-primary"></div>
       <p id="dl-meta"></p>
     </div>
 
+    <p class="note" style="margin-top:18px">Published beta installers are currently available for macOS and Linux. Windows is unavailable while its runtime acceptance is pending. The prepared release candidate is not yet a published download. If the feeds cannot be loaded, <a href="https://github.com/CallumJB125/claude-traffic-light/releases">browse published GitHub releases</a>.</p>
     <h2 style="margin-top:56px;font-size:1.5rem">All downloads</h2>
     <ul class="os-list" id="dl-all">
       <li data-os="mac"><span><strong>macOS</strong> · Apple silicon and Intel</span><span class="muted">Checking…</span></li>
-      <li data-os="win"><span><strong>Windows</strong></span><span class="muted">Checking…</span></li>
+      <li data-os="win"><span><strong>Windows</strong></span><span class="muted">Unavailable pending runtime acceptance</span></li>
       <li data-os="linux"><span><strong>Linux</strong> · AppImage and .deb</span><span class="muted">Checking…</span></li>
     </ul>
 
@@ -43,7 +44,7 @@
     {{/notlive}}
 
     <h2 id="first-open" style="margin-top:64px;font-size:1.7rem">Opening it the first time</h2>
-    <p class="prose" style="margin-top:12px">The beta isn't signed with a developer certificate yet, so your system asks you to confirm once. It's a normal step for software that isn't from an app store, and it only happens the first time.</p>
+    <p class="prose" style="margin-top:12px">The published beta builds are unsigned. Your system may ask for confirmation when first opening a build and again after an update. Check the download source and checksum before granting access.</p>
     <div class="grid-2" style="margin-top:28px">
       <div>
         <h3>On a Mac</h3>
@@ -51,19 +52,15 @@
           <li><strong>Open the download</strong> and drag {{brand.name}} into Applications.</li>
           <li><strong>Open it.</strong> macOS says it can't check the app for malware. Choose <strong>Done</strong>.</li>
           <li>Open <strong>System Settings</strong>, then <strong>Privacy &amp; Security</strong>. Scroll to <strong>Security</strong> and choose <strong>Open Anyway</strong> next to {{brand.name}}, then enter your password.</li>
-          <li>Open {{brand.name}} again and choose <strong>Open</strong>. You only do this once.</li>
-          <li>If macOS asks to use the keychain, enter your Mac password and choose <strong>Always Allow</strong>. It may ask again after an update while the beta is unsigned.</li>
+          <li>Open {{brand.name}} again and choose <strong>Open</strong>. Updates may require another confirmation.</li>
+          <li>If macOS asks to use the keychain, verify that the request is from the build you intended to open before granting access. Unsigned updates may ask again; do not approve an unexpected request.</li>
           <li>{{brand.name}} adds its hooks to Claude Code's settings the first time it runs, appending only its own entries, and turns on Open at Login (switch it off from the tray menu and it stays off). <strong>Restart any Claude Code sessions</strong> that were already running.</li>
         </ol>
-        <p class="note">On macOS 14 and earlier, right-click the app and choose <strong>Open</strong> instead. If macOS says the app "is damaged", run <code>xattr -dr com.apple.quarantine /Applications/{{brand.name}}.app</code> in Terminal, then open it.</p>
+        <p class="note">On macOS 14 and earlier, right-click the app and choose <strong>Open</strong> instead. If macOS says the app "is damaged" or reports a signature problem, stop, verify the checksum and re-download from the published release. Contact support if it persists; do not bypass that warning.</p>
       </div>
       <div>
-        <h3>On Windows</h3>
-        <ol class="steps">
-          <li><strong>Run the installer.</strong> If SmartScreen says it protected your PC, choose <strong>More info</strong>.</li>
-          <li>Then choose <strong>Run anyway</strong>.</li>
-          <li>Restart any Claude Code sessions that were already running.</li>
-        </ol>
+        <h3>Windows</h3>
+        <p class="prose">Windows downloads are unavailable while native runner and privacy acceptance are pending. These Mac and Linux instructions do not establish Windows support.</p>
         <h3 style="margin-top:28px">On Linux</h3>
         <ol class="steps"><li>Make the AppImage executable (<code>chmod +x</code>) and run it. On a recent Ubuntu it also needs <code>libfuse2</code>. Or install the .deb with your package manager.</li></ol>
       </div>
@@ -72,7 +69,7 @@
     <h2 style="margin-top:64px;font-size:1.7rem">Got an invite link?</h2>
     <ol class="steps">
       <li><strong>Install and open {{brand.name}}</strong> using the steps above.</li>
-      <li><strong>Sign in with Google</strong> when the app asks.</li>
+      <li><strong>Sign in using a method offered by your team hub</strong> when the app asks. Account and invite acceptance for the prepared candidate is still pending.</li>
       <li><strong>Click your invite link again.</strong> It opens the app and puts you on your team.</li>
     </ol>
 

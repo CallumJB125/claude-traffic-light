@@ -1,4 +1,4 @@
-# Builds the Mac, Windows and Linux installers from a version tag, smoke-tests
+# Builds the approved platform installers from a version tag, smoke-tests
 # each packaged app, and stages the release. Nothing reaches users here, and
 # nothing is signed:
 #   - the GitHub Release is created as a DRAFT
@@ -33,6 +33,10 @@ on:
         description: 'Beta: version it <version>-beta.<run> and stage it to R2 beta/<version>/ and a draft GitHub prerelease'
         type: boolean
         default: false
+      validate_windows:
+        description: 'Also run Windows installer/tests for acceptance; this does not enable Windows publication'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -54,15 +58,13 @@ jobs:
     name: build (${{ matrix.platform }})
     strategy:
       fail-fast: false
+      # The approved first release covers macOS/Linux. Windows joins both the
+      # mandatory installer/test matrix and publication only after its separate
+      # runtime acceptance enables WINDOWS_RELEASE. Native SDK acceptance above
+      # still runs on every dispatch; no assertions are skipped within a build.
+      # validate_windows permits an unpublished acceptance build before that flag.
       matrix:
-        include:
-          # Apple Silicon runner; it builds arm64 and x64 (the native helpers are universal).
-          - os: macos-latest
-            platform: mac
-          - os: windows-latest
-            platform: win
-          - os: ubuntu-latest
-            platform: linux
+        include: ${{ fromJSON((vars.WINDOWS_RELEASE == 'true' || (github.event_name == 'workflow_dispatch' && inputs.validate_windows)) && '[{"os":"macos-latest","platform":"mac"},{"os":"windows-latest","platform":"win"},{"os":"ubuntu-latest","platform":"linux"}]' || '[{"os":"macos-latest","platform":"mac"},{"os":"ubuntu-latest","platform":"linux"}]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     permissions:
