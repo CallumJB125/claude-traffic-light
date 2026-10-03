@@ -208,12 +208,14 @@ test('registry: built-ins are sealed and frozen; installed characters need a u- 
   assert.equal(Characters.isBuiltin('u-test-rev'), false);
 });
 
-test('rules: a rule may name a built-in or an installed (u-) body, nothing else', () => {
-  const norm = (body) => Rules.normalizeRule({ id: 'r', name: 'r', when: { signal: ['tool-use'] }, then: { body } }).then.body;
+test('the global character may be a built-in or an installed (u-) body, nothing else; rules carry no body', () => {
+  const norm = (body) => Rules.normalizeCharacter({ body }).body;
   assert.equal(norm('ghost'), 'ghost');
   assert.equal(norm('u-otter'), 'u-otter');
-  assert.equal(norm('otter'), null);
-  assert.equal(norm('u-Bad Id'), null);
+  assert.equal(norm('otter'), 'claude');
+  assert.equal(norm('u-Bad Id'), 'claude');
+  const rule = Rules.normalizeRule({ id: 'r', name: 'r', when: { signal: ['tool-use'] }, then: { body: 'ghost' } });
+  assert.equal(rule.then.body, null);
 });
 
 test('validator: the result is a fresh object of known fields with sanitised markup', () => {
