@@ -101,6 +101,6 @@ test('release downloads: damaged-app instructions preserve verification and cons
   assert.doesNotMatch(copy, /xattr -dr|only happens the first time|Sign in with Google|Always Allow/i);
   assert.match(copy, /signature problem, stop, verify the checksum and re-download/i);
   assert.match(copy, /do not bypass that warning/i);
-  assert.match(copy, /Unsigned updates may ask again; do not approve an unexpected request/i);
-  assert.match(copy, /method offered by your team hub/i);
+  assert.match(copy, /Ad-hoc signed updates may ask again; do not approve an unexpected request/i);
+  assert.match(copy, /method offered by that team's hub/i);
 });

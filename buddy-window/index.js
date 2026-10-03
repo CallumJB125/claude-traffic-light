@@ -22,6 +22,7 @@ const { createHubSupervisor } = require('./hub-process');
 const { createWorkspaceStore, normalizeHubUrl, normalizeLinkHub, accessTeamFromLocation, partitionFor: teamPartition, integrationPartitionFor, hubKey, hostOf } = require('./workspaces');
 const { createAccountClient, pinnedTransport, bearerScope, bearerHeaders } = require('./accounts');
 const { createDeviceController, defaultDeviceName } = require('./device');
+const { createSecureStorage } = require('./secure-storage');
 const { createAccountFlow, clearHubSessions, ACCT_ARGS } = require('./account-flow');
 const { createConnectLife } = require('./connect-life');
 const BRAND = require('./brand');
@@ -126,6 +127,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   const DEVICES_DIR = path.join(userData, 'buddy-devices');
 
   // ── sealed per-hub device token ────────────────────────────────────────
+  const credentialStorage = createSecureStorage(safeStorage);
   const vaults = new Map();
   function vault(origin) {
     let v = vaults.get(origin);
@@ -136,15 +138,15 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       load() {
         if (cache !== undefined) return cache;
         cache = null;
-        try { if (fs.existsSync(file)) cache = JSON.parse(safeStorage.decryptString(fs.readFileSync(file))); } catch (e) { log('account sign-in unreadable; treated as signed out', e.message); }
+        try { if (fs.existsSync(file)) cache = JSON.parse(credentialStorage.decrypt(fs.readFileSync(file))); } catch (e) { log('account sign-in unreadable; treated as signed out', e.message); }
         if (cache && cache.hub !== origin) cache = null;
         return cache;
       },
       save(obj) {
-        if (!safeStorage.isEncryptionAvailable()) throw new Error('safeStorage unavailable');
+        if (!credentialStorage.available()) throw new Error('Secure account storage unavailable');
         fs.mkdirSync(ACCOUNTS_DIR, { recursive: true, mode: 0o700 });
         const tmp = `${file}.${process.pid}.tmp`;
-        fs.writeFileSync(tmp, safeStorage.encryptString(JSON.stringify(obj)), { mode: 0o600 });
+        fs.writeFileSync(tmp, credentialStorage.encrypt(JSON.stringify(obj)), { mode: 0o600 });
         fs.renameSync(tmp, file);
         cache = obj;
       },
@@ -472,8 +474,8 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     return createDeviceController({
       account: clientFor(ws.hub), teamId: ws.teamId,
       credsFile: deviceFile(ws.hub, ws.teamId),
-      seal: (str) => safeStorage.encryptString(str), unseal: (b) => safeStorage.decryptString(b),
-      canSeal: () => safeStorage.isEncryptionAvailable(),
+      seal: (str) => credentialStorage.encrypt(str), unseal: (b) => credentialStorage.decrypt(b),
+      canSeal: () => credentialStorage.available(),
       fork: (entry, args, opts) => utilityProcess.fork(entry, args, opts), // privacy-flow: team-hub-runner
       runnerEntry: path.join(app.getAppPath(), 'board', 'runner', 'app-entry.js'),
       dataDir: path.join(userData, 'runner', key),

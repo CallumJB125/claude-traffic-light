@@ -9,6 +9,7 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const { storageHelp } = require('./secure-storage');
 const http = require('node:http'); // privacy-flow: team-hub-account
 const https = require('node:https'); // privacy-flow: team-hub-account
 const dns = require('node:dns'); // privacy-flow: team-hub-account
@@ -300,7 +301,7 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
     try {
       store.save({ hub: origin, token: r.device_token, device_id: r.device_id ?? null, user: r.user ?? null });
     } catch {
-      return { ok: false, error: 'This Mac couldn’t store your sign-in securely. Try again.' };
+      return { ok: false, error: `Plexiform couldn’t save your sign-in securely. ${storageHelp()}` };
     }
     return { ok: true, user: r.user ?? null, teams: Array.isArray(r.teams) ? r.teams : [] };
   }

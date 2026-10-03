@@ -1871,6 +1871,15 @@ function helpState() {
 
 ipcMain.handle('open-help', e => { if (widgetOnly(e) || widgetConfigSender(e)) createHelpWindow(); });
 ipcMain.handle('get-help', (e) => fromUtilityPage(e, 'help') ? helpState() : null);
+// Help may navigate only these existing app pages, never a URL or command.
+ipcMain.handle('help:navigate', (e, ...args) => {
+  if (!fromUtilityPage(e, 'help') || args.length !== 1) return false;
+  const destination = args[0];
+  if (typeof destination !== 'string' || !['overview', 'join', 'settings'].includes(destination)) return false;
+  openBuddy(destination);
+  return true;
+});
+
 
 function maybeAutoShowHelp() {
   const marker = path.join(ROOT_DIR, Help.MARKER);

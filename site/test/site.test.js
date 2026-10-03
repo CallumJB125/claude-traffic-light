@@ -192,7 +192,7 @@ test('site: the first-open steps match current macOS, and no page still tells pe
   assert.match(dl, /On macOS 14 and earlier, right-click/);
   assert.doesNotMatch(dl, /xattr -dr com\.apple\.quarantine/);
   assert.match(dl, /verify the checksum and re-download/);
-  assert.match(dl, /libfuse2/);
+  assert.match(dl, /FUSE support/);
   const invite = all.find(([f]) => f === 'invite-preview.html')[1];
   assert.match(invite, /Open Anyway/);
   assert.match(invite, /Four quick steps/);

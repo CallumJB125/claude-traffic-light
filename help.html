@@ -2,13 +2,21 @@
 <html>
 <head>
 <meta charset="utf-8" />
-<title>What are your AI agents doing?</title>
+<title>Welcome to Plexiform</title>
 <link rel="stylesheet" href="tokens.css" />
 <style>
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: var(--text-base)/1.45 var(--font); -webkit-font-smoothing: antialiased; }
   body { display: flex; flex-direction: column; }
   main { flex: 1; overflow-y: auto; padding: var(--space-4) 18px var(--space-3); display: flex; flex-direction: column; gap: var(--space-3); }
+  .welcome { padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
+  .welcome p { max-width: 65ch; }
+  .start-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-3); }
+  .start-actions button { flex: 1 1 150px; min-height: 38px; white-space: normal; }
+  .start-actions button:active { transform: scale(.97); }
+  button:focus-visible { box-shadow: var(--focus); }
+  .start-notice { min-height: 1.45em; margin-top: var(--space-2); font-size: var(--text-xs); color: var(--muted); }
+  .now h2 { font-size: var(--text-xl); color: var(--text); letter-spacing: normal; text-transform: none; margin: 0; }
   .now { display: flex; gap: var(--space-3); align-items: flex-start; }
   .lamp { flex: none; width: 14px; height: 14px; margin-top: 3px; border-radius: 4px; background: var(--line-strong); box-shadow: 0 0 0 2px var(--panel-2); }
   .lamp.green { background: var(--green); } .lamp.amber { background: var(--amber); } .lamp.red { background: var(--red); }
@@ -32,15 +40,27 @@
   button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
   summary:focus-visible { box-shadow: var(--focus); }
   [hidden] { display: none !important; }
-  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } .start-actions button:active { transform: none; } }
 </style>
 </head>
 <body>
-  <main aria-label="What your AI agents are reporting right now">
+  <main aria-label="Get started and see what your AI agents are reporting">
+  <section class="welcome" aria-labelledby="welcome-title">
+    <h1 id="welcome-title">Welcome to Plexiform</h1>
+    <p>Your local board is ready. Open Overview to see your work, then join your team when you want to work together.</p>
+    <div class="start-actions" role="group" aria-label="Get started">
+      <button class="primary" id="start-overview">Open Overview</button>
+      <button id="start-join">Join your team</button>
+      <button id="start-tools">Connect your AI tools</button>
+    </div>
+    <p class="rule">Join through the app’s sign-in flow; it may open your browser. Install and sign in to the AI tools you want to use, then connect them in Preferences.</p>
+    <p class="rule">Start here in the app—there are no Plexiform Terminal setup steps or release checks to complete. Your OS may ask to unlock secure storage when you sign in; you handle that prompt yourself.</p>
+    <p class="start-notice" id="start-notice" role="status" aria-live="polite"></p>
+  </section>
   <div class="now" role="status" aria-live="polite">
     <div class="lamp" id="lamp" aria-hidden="true"></div>
     <div>
-      <h1 id="headline">…</h1>
+      <h2 id="headline">…</h2>
       <div class="sub" id="lampText"></div>
       <p id="meaning"></p>
       <p id="providers" class="rule"></p>
@@ -123,6 +143,14 @@
         $('agent-list').replaceChildren(...h.agents.list.map((a) => li(`<span class="chip ${esc(a.status)}"></span>${esc(a.name)} <span class="rule">${esc(a.kind)} · ${esc(a.status)}</span>`)));
         if (h.agents.more) $('agent-list').append(li(`<span class="rule">+${h.agents.more} more</span>`));
       }
+    }
+
+    for (const [id, destination] of [['start-overview', 'overview'], ['start-join', 'join'], ['start-tools', 'settings']]) {
+      $(id).addEventListener('click', async () => {
+        let opened = false;
+        try { opened = await window.helpApi.navigate(destination); } catch {}
+        $('start-notice').textContent = opened ? '' : 'Could not open this page. Reopen Help and try again.';
+      });
     }
 
     $('lights').addEventListener('click', () => window.helpApi.openLights());

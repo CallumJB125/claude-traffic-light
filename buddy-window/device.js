@@ -10,6 +10,7 @@
 // log line or a plaintext file. The account's device token never reaches the
 // runner.
 'use strict';
+const { storageHelp } = require('./secure-storage');
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -288,7 +289,7 @@ function createDeviceController({ account, teamId, credsFile, seal, unseal, canS
       // No enrolment the hub would list for a runner that can't start here.
       if (!entryExists()) { setRunner('missing', NO_RUNNER); return { ok: false, error: `${NO_RUNNER}.` }; }
       // Nothing the hub would count as enrolled unless we can keep its token sealed.
-      if (!canSeal()) return { ok: false, error: 'This Mac can’t store the runner’s key securely right now, so it can’t run cards.' };
+      if (!canSeal()) return { ok: false, error: `Plexiform can’t save this device’s key securely, so running cards stays off. ${storageHelp()}` };
       busy = true;
       const old = child;
       const asked = epoch;
@@ -323,7 +324,7 @@ function createDeviceController({ account, teamId, credsFile, seal, unseal, canS
           creds = prev;
           await dropLocal();
           await account.unenrol(teamId).catch(() => {});
-          return { ok: false, error: 'This Mac couldn’t store the runner’s key securely. Nothing was turned on.' };
+          return { ok: false, error: `Plexiform couldn’t save this device’s key securely. Nothing was turned on. ${storageHelp()}` };
         }
         wanted = true;
         ended = null;
