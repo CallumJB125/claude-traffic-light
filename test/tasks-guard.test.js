@@ -222,3 +222,8 @@ test('sanitizeAis keeps known AIs only', () => {
   const a = G.sanitizeAis([{ id: 'claude', installed: true, loggedIn: true, health: 'ok', notes: ['n'] }, { id: 'evil', installed: true }, { id: 'codex', installed: false, loggedIn: null, health: 'weird', notes: [] }]);
   assert.deepEqual(a.map((x) => [x.id, x.label, x.installed, x.loggedIn, x.health]), [['claude', 'Claude', true, true, 'ok'], ['codex', 'Codex', false, null, 'warn']]);
 });
+
+test('STATES is the same list as board/shared/states.js', async () => {
+  const shared = await import(pathToFileURL(path.join(__dirname, '..', 'board', 'shared', 'states.js')).href);
+  assert.deepEqual(require('../src/tasks-guard.js').STATES, [...shared.STATES]);
+});

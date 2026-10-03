@@ -1,6 +1,17 @@
 'use strict';
 const crypto=require('node:crypto');
-const {keyId,keysFromPems,DEV_KEY_IDS}=require('./catalog-load');
+// The legacy catalogue dev signing key's id. Never trusted.
+const DEV_KEY_IDS=new Set(['28c56176d52e3aad']);
+const keyId=publicKey=>crypto.createHash('sha256').update(publicKey.export({type:'spki',format:'der'})).digest('hex').slice(0,16);
+function keysFromPems(pems){
+  const out=[];
+  for(const pem of pems){
+    const key=crypto.createPublicKey(pem);
+    if(key.asymmetricKeyType!=='ed25519')throw new Error(`key is ${key.asymmetricKeyType}, not ed25519`);
+    const id=keyId(key);if(!DEV_KEY_IDS.has(id))out.push({keyId:id,key});
+  }
+  return out;
+}
 const LIMITS=Object.freeze({indexBytes:8*1024*1024,signatureBytes:1024,entries:1000,files:1000,fileBytes:4*1024*1024,packageBytes:128*1024*1024,depth:32,nodes:4000,timeoutMs:5000,plans:32,concurrency:4,ttlMs:10*60*1000});
 const SHA=/^[0-9a-f]{64}$/,NAME=/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/,VERSION=/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const FLOOR='2026-10-01T00:00:00.000Z';

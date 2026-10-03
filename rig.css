@@ -549,19 +549,11 @@
 /* Sunglasses sit over the eyes; the eyes' own colour is hidden underneath. */
 .rig.costume-shades .eye-open { opacity: 0; }
 
-/* Cameos: a famous face over Claude's head, independent of costume. They
+/* Cameos: a drawn face over Claude's head, independent of costume. They
    live inside .claude-body so they bob with every pose; hats (costumes) are
    drawn after, so a crown sits on the hair. */
 .rig .cameo { opacity: 0; transition: opacity 150ms ease; }
-.rig.cameo-neo .cameo-neo, .rig.cameo-alfred .cameo-alfred, .rig.cameo-mcafee .cameo-mcafee,
-.rig.cameo-spagni .cameo-spagni, .rig.cameo-powell .cameo-powell, .rig.cameo-baker .cameo-baker,
-.rig.cameo-wizard .cameo-wizard, .rig.cameo-scientist .cameo-scientist, .rig.cameo-pirate .cameo-pirate, .rig.cameo-punk .cameo-punk { opacity: 1; }
-/* Opaque shades (neo) hide only plain eyes. Any other eye state — closed, a
-   mood, or a pose that works the eyes (zyn, line, juice, smoke, grin, dead) —
-   shows through lenses gone smoky, so no pose ever loses its eyes. */
-.rig .cameo-lens { transition: opacity 150ms ease; }
-.rig.cameo-hides-eyes:not(.eyes-closed, .eyes-heart, .eyes-happy, .eyes-angry, .eyes-sad, .eyes-surprised, .eyes-wink, .eyes-star, .eyes-money, .eyes-sleepy, .eyes-suspicious, .eyes-roll, .eyes-googly, .eyes-dizzy, .eyes-x, .eyes-tears, .eyes-laser, .pose-sleep, .pose-dead, .pose-zyn, .pose-line, .pose-juice, .pose-smoke, .pose-grin, .pose-selfie, .lounging, .grumpy) .eye-open { opacity: 0; }
-.rig.cameo-hides-eyes:is(.eyes-closed, .eyes-heart, .eyes-happy, .eyes-angry, .eyes-sad, .eyes-surprised, .eyes-wink, .eyes-star, .eyes-money, .eyes-sleepy, .eyes-suspicious, .eyes-roll, .eyes-googly, .eyes-dizzy, .eyes-x, .eyes-tears, .eyes-laser, .pose-sleep, .pose-dead, .pose-zyn, .pose-line, .pose-juice, .pose-smoke, .pose-grin, .pose-selfie, .lounging, .grumpy) .cameo-lens { opacity: 0.4; }
+.rig.cameo-alfred .cameo-alfred, .rig.cameo-wizard .cameo-wizard, .rig.cameo-scientist .cameo-scientist, .rig.cameo-pirate .cameo-pirate, .rig.cameo-punk .cameo-punk { opacity: 1; }
 /* Mouth poses bring their own mouth: the cameo's lips step aside (moustaches
    and beards stay; the cigarette, pouch or grin is drawn over them). */
 .rig:is(.pose-grin, .pose-selfie, .pose-smoke, .pose-zyn, .pose-munch, .eating, .grumpy, .eyes-surprised) .cameo-lips { opacity: 0; }

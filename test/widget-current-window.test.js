@@ -6,7 +6,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { EventEmitter } = require('node:events');
 const source = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
-const create = source.slice(source.indexOf('function createWindow() {'), source.indexOf('\nlet settingsWin =', source.indexOf('function createWindow() {')));
+const create = source.slice(source.indexOf('function createWindow() {'), source.indexOf('\nfunction createSettingsWindow()', source.indexOf('function createWindow() {')));
 const guard = source.slice(source.indexOf('function guardRenderer(w, name, recreate) {'), source.indexOf('\n// Quitting must', source.indexOf('function guardRenderer(w, name, recreate) {')));
 function fixture() {
   const windows = [], deferred = [], reveals = [], changes = [];

@@ -291,10 +291,10 @@ test('rig: facing left mirrors the gun aim, which is clamped to ±35°', () => {
 });
 
 // ── Cameos ────────────────────────────────────────────────────────────────
-test('rig: a drawn cameo is a class; neo also hides the eyes, others do not', () => {
+test('rig: a drawn cameo is a class', () => {
   const { svg, rig, has } = mount();
-  rig.setLook({ cameo: 'neo' });
-  assert.deepEqual(classesWith(svg, 'cameo-'), ['cameo-neo', 'cameo-hides-eyes']);
+  rig.setLook({ cameo: 'wizard' });
+  assert.deepEqual(classesWith(svg, 'cameo-'), ['cameo-wizard']);
   rig.setLook({ cameo: 'alfred' });
   assert.deepEqual(classesWith(svg, 'cameo-'), ['cameo-alfred']);
   assert.ok(!has('has-photo'));
@@ -339,10 +339,10 @@ test('rig: photo anchors are clamped for a squashed face and default when missin
 
 test('rig: a built-in id with a registered photo shows the photo instead of the drawing', () => {
   const { w, svg, rig, has } = mount();
-  w.rigSetCameoPhotos([{ id: 'neo', rev: 3, src: 'data:image/png;base64,BBBB' }, { id: 'Bad Id', src: 'x' }]);
-  rig.setLook({ cameo: 'neo' });
+  w.rigSetCameoPhotos([{ id: 'alfred', rev: 3, src: 'data:image/png;base64,BBBB' }, { id: 'Bad Id', src: 'x' }]);
+  rig.setLook({ cameo: 'alfred' });
   assert.ok(has('has-photo'));
-  assert.ok(!has('cameo-neo') && !has('cameo-hides-eyes'), 'the photo replaces the drawing and its eye-hiding');
+  assert.ok(!has('cameo-alfred'), 'the photo replaces the drawing');
   assert.equal(svg.querySelector('.cameo-photo-img').getAttribute('href'), 'data:image/png;base64,BBBB');
 });
 

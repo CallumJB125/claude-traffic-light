@@ -222,13 +222,13 @@ test('ignored-N is measured from your last touch of any session, not the oldest 
 
 test('cameo is its own accent channel: layers above the lamp owner, never leaks from below, independent of costume', () => {
   const rs = [
-    { id: 'face', name: 'face', when: { signal: ['tool-use'], tool: 'Agent' }, then: { cameo: 'neo' } },
-    { id: 'hat', name: 'hat', when: { signal: ['tool-use'], tool: 'Agent' }, then: { costume: 'crown', cameo: 'powell' } },
+    { id: 'face', name: 'face', when: { signal: ['tool-use'], tool: 'Agent' }, then: { cameo: 'wizard' } },
+    { id: 'hat', name: 'hat', when: { signal: ['tool-use'], tool: 'Agent' }, then: { costume: 'crown', cameo: 'pirate' } },
     ...rules(),
-    { id: 'below', name: 'below', when: { signal: ['tool-use'] }, then: { cameo: 'baker' } },
+    { id: 'below', name: 'below', when: { signal: ['tool-use'] }, then: { cameo: 'punk' } },
   ];
   const l = look([{ signal: 'tool-use', tool: 'Agent' }], rs);
-  assert.deepEqual([l.cameo, l.costume], ['neo', 'crown']);
+  assert.deepEqual([l.cameo, l.costume], ['wizard', 'crown']);
   assert.equal(look([{ signal: 'tool-use', tool: 'Bash' }], rs).cameo, 'none');
   assert.equal(R.resolve(rs, [{ signal: 'tool-use', tool: 'Agent' }]).owned.cameo, 'face');
   assert.equal(look([], rules()).cameo, 'none');
@@ -237,12 +237,12 @@ test('cameo is its own accent channel: layers above the lamp owner, never leaks 
 test('normalizeRule accepts built-in cameos and photo-cameo ids, nothing else', () => {
   for (const c of R.CAMEOS) assert.equal(R.normalizeRule({ then: { cameo: c } }).then.cameo, c);
   for (const id of ['keanu', 'dad-2', 'x'.repeat(32)]) assert.equal(R.normalizeRule({ then: { cameo: id } }).then.cameo, id);
-  for (const bad of ['Neo', 'has space', 'x'.repeat(33), '../etc', '', 7, null, undefined]) assert.equal(R.normalizeRule({ then: { cameo: bad } }).then.cameo, null);
-  assert.deepEqual(R.CAMEOS, ['none', 'neo', 'alfred', 'mcafee', 'spagni', 'powell', 'baker', 'ellison', 'saylor', 'wizard', 'scientist', 'pirate', 'punk']);
+  for (const bad of ['Wizard', 'has space', 'x'.repeat(33), '../etc', '', 7, null, undefined]) assert.equal(R.normalizeRule({ then: { cameo: bad } }).then.cameo, null);
+  assert.deepEqual(R.CAMEOS, ['none', 'alfred', 'wizard', 'scientist', 'pirate', 'punk']);
 });
 
 test('previewLook shows a rule\'s cameo, none by default', () => {
-  assert.equal(R.previewLook({ then: { cameo: 'spagni', costume: 'wizard' } }).cameo, 'spagni');
+  assert.equal(R.previewLook({ then: { cameo: 'scientist', costume: 'wizard' } }).cameo, 'scientist');
   assert.equal(R.previewLook({ then: { costume: 'wizard' } }).cameo, 'none');
 });
 

@@ -1,6 +1,6 @@
     const workingInput = document.getElementById('workingStaleMinutes');
     const waitingInput = document.getElementById('waitingStaleHours');
-    const soundInput = document.getElementById('soundOnAmber');
+    const soundInput = document.getElementById('sounds');
     const status = document.getElementById('status');
     const NOTIFY_KINDS = ['permission-ask', 'turn-failed', 'offline'];
     const syncNotifyKinds = () => { const on = document.getElementById('notifyOnStates').checked; for (const k of NOTIFY_KINDS) document.getElementById(`notify-${k}`).disabled = !on; };
@@ -10,7 +10,7 @@
       const config = await window.settingsApi.getConfig();
       workingInput.value = config.workingStaleMinutes;
       waitingInput.value = config.waitingStaleHours;
-      soundInput.checked = config.soundOnAmber;
+      soundInput.checked = config.sounds !== false;
       document.getElementById('notifyOnStates').checked = config.notifyOnStates !== false;
       for (const k of NOTIFY_KINDS) document.getElementById(`notify-${k}`).checked = (config.notifyStates || {})[k] !== false;
       syncNotifyKinds();
@@ -145,7 +145,7 @@
       await window.settingsApi.saveConfig({
         workingStaleMinutes: Math.max(1, Math.min(60, Number(workingInput.value) || 6)),
         waitingStaleHours: Math.max(1, Math.min(24, Number(waitingInput.value) || 4)),
-        soundOnAmber: soundInput.checked,
+        sounds: soundInput.checked,
         notifyOnStates: document.getElementById('notifyOnStates').checked,
         notifyStates: Object.fromEntries(NOTIFY_KINDS.map((k) => [k, document.getElementById(`notify-${k}`).checked])),
         showWidget: document.getElementById('showWidget').checked,

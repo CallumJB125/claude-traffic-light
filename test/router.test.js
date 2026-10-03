@@ -1,6 +1,5 @@
-// The model router is gone: what stays is the read-only Model mix card, the
-// note about a leftover shim block, and the (now opt-in, inert) rule signals
-// a routed session used to fire.
+// The model router is gone: what stays is the read-only Model mix card and
+// the (now opt-in, inert) rule signals a routed session used to fire.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
@@ -10,7 +9,6 @@ const { spawnSync } = require('child_process');
 
 const U = require('../usage.js');
 const R = require('../rules.js');
-const LeftoverShim = require('../src/leftover-shim.js');
 
 const SET_STATUS = path.join(__dirname, '..', 'hooks', 'set-status.js');
 const HOST = os.hostname().split('.')[0];
@@ -48,59 +46,6 @@ test('set-status: a leftover CLAUDE_TRAFFIC_LIGHT_ROUTE is ignored; no route, ad
   assert.equal(d.signal, 'tool-use');
   for (const k of ['route', 'escalated', 'delegated', 'delegating', 'routerAdvice', 'adviceKept']) assert.equal(d[k], undefined, k);
   assert.equal(fs.existsSync(path.join(home, 'router')), false, 'nothing under router/');
-});
-
-// ── Leftover shim: detected read-only, never edited ─────────────────────────
-test('leftover shim: an rc block is found and the exact removal command given; nothing is edited', () => {
-  const home = tmp();
-  const zshrc = path.join(home, '.zshrc');
-  const text = `export A=1\n\n${LeftoverShim.BEGIN}\nexport PATH='${home}/.claude-traffic-light/bin'":$PATH"\n${LeftoverShim.END}\n`;
-  fs.writeFileSync(zshrc, text);
-  fs.mkdirSync(path.join(home, '.claude-traffic-light', 'bin'), { recursive: true });
-  fs.writeFileSync(path.join(home, '.claude-traffic-light', 'bin', 'claude'), '#!/bin/sh\n');
-  const r = LeftoverShim.detect({ home, env: {}, platform: 'darwin' });
-  assert.deepEqual(r.files, [zshrc]);
-  assert.equal(r.command, `sed -i '' '/^# claude-buddy router >>>$/,/^# claude-buddy router <<<$/d' '${zshrc}' && rm -f '${path.join(home, '.claude-traffic-light', 'bin', 'claude')}'`);
-  assert.match(r.note, new RegExp(path.join('~', '.zshrc').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-  assert.equal(fs.readFileSync(zshrc, 'utf8'), text, 'the rc file is untouched');
-  assert.match(LeftoverShim.detect({ home, env: {}, platform: 'linux' }).command, /^sed -i '\/\^# claude/);
-  // The command really does remove exactly the block (it is a POSIX sh line: not run on Windows).
-  if (process.platform === 'win32') return;
-  const run = spawnSync('/bin/sh', ['-c', LeftoverShim.detect({ home, env: {} }).command]);
-  assert.equal(run.status, 0, run.stderr.toString());
-  assert.equal(fs.readFileSync(zshrc, 'utf8'), 'export A=1\n\n');
-  assert.equal(LeftoverShim.detect({ home, env: {} }), null);
-});
-
-test('leftover shim: bash, fish (XDG) and a clean home', () => {
-  const home = tmp();
-  assert.equal(LeftoverShim.detect({ home, env: {} }), null);
-  const xdg = path.join(home, 'xdg');
-  fs.mkdirSync(path.join(xdg, 'fish'), { recursive: true });
-  fs.writeFileSync(path.join(xdg, 'fish', 'config.fish'), `${LeftoverShim.BEGIN}\nfish_add_path x\n${LeftoverShim.END}\n`);
-  fs.writeFileSync(path.join(home, '.bashrc'), `# mine\n${LeftoverShim.BEGIN}\nexport PATH=x\n${LeftoverShim.END}\n`);
-  const r = LeftoverShim.detect({ home, env: { XDG_CONFIG_HOME: xdg }, platform: 'linux' });
-  assert.deepEqual(r.files, [path.join(home, '.bashrc'), path.join(xdg, 'fish', 'config.fish')]);
-  assert.equal(r.shim, null);
-  assert.equal(r.command.split(' && ').length, 2);
-});
-
-test('leftover shim: old buddy-reader / buddy-worker agent files are found and listed for removal', () => {
-  const home = tmp();
-  const agents = path.join(home, '.claude', 'agents');
-  fs.mkdirSync(agents, { recursive: true });
-  fs.writeFileSync(path.join(agents, 'buddy-reader.md'), 'x');
-  fs.writeFileSync(path.join(agents, 'buddy-worker.md'), 'x');
-  fs.writeFileSync(path.join(agents, 'mine.md'), 'x');
-  const r = LeftoverShim.detect({ home, env: {}, platform: 'linux' });
-  assert.deepEqual(r.agentFiles, [path.join(agents, 'buddy-reader.md'), path.join(agents, 'buddy-worker.md')]);
-  assert.equal(r.command, `rm -f '${path.join(agents, 'buddy-reader.md')}' && rm -f '${path.join(agents, 'buddy-worker.md')}'`);
-  assert.equal(fs.existsSync(path.join(agents, 'buddy-reader.md')), true, 'detect never deletes');
-  assert.equal(LeftoverShim.detect({ home, env: {}, platform: 'linux' }).files.length, 0);
-  if (process.platform === 'win32') return; // the command is a POSIX sh line: not run on Windows
-  assert.equal(spawnSync('/bin/sh', ['-c', r.command]).status, 0);
-  assert.equal(LeftoverShim.detect({ home, env: {} }), null);
-  assert.equal(fs.existsSync(path.join(agents, 'mine.md')), true);
 });
 
 // ── Model mix ───────────────────────────────────────────────────────────────
