@@ -1609,12 +1609,6 @@
       paintMixWindow('week', mix.week);
       $('mix-rec').textContent = mix.recommendation;
     }
-    const left = mix.leftoverShim;
-    $('mix-leftover').hidden = !left;
-    if (left) {
-      $('mix-leftover-note').textContent = left.note;
-      $('mix-leftover-cmd').textContent = left.command;
-    }
   }
 
   // Follows the hooks, at most every 3 s.

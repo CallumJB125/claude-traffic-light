@@ -305,8 +305,8 @@
   const SCREEN_FX = ['none', 'vignette', 'confetti', 'spotlight'];
   const POSES = ['none', 'think', 'wave', 'thumbs', 'sleep', 'blink', 'nod', 'bounce', 'look', 'spin', 'party', 'guitar', 'ak47', 'sniper', 'banner', 'bubble', 'tap', 'arms', 'run', 'knock', 'munch', 'kickflip', 'selfie', 'grin', 'smoke', 'zyn', 'line', 'juice', 'dead', 'cheer', 'facepalm'];
   const COSTUMES = ['none', 'dog', 'cat', 'unicorn', 'crown', 'partyhat', 'shades', 'halo', 'devil', 'wizard', 'tophat', 'santa', 'pumpkin', 'bunny', 'headphones', 'graduate', 'chef', 'cowboy', 'propeller', 'detective', 'flowercrown', 'beanie'];
-  // Famous faces drawn over Claude's head; independent of costume, so a cameo can wear a hat.
-  const CAMEOS = ['none', 'neo', 'alfred', 'mcafee', 'spagni', 'powell', 'baker', 'ellison', 'saylor', 'wizard', 'scientist', 'pirate', 'punk'];
+  // Faces drawn over Claude's head; independent of costume, so a cameo can wear a hat.
+  const CAMEOS = ['none', 'alfred', 'wizard', 'scientist', 'pirate', 'punk'];
   const CAMEO_ID = /^[a-z0-9-]{1,32}$/;
   // The built-in characters; a rule may also name an installed one (u-…),
   // which the widget shows once it's installed and as Claude until then.

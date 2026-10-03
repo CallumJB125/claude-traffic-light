@@ -102,16 +102,6 @@ test('widget: idle, working, asking, away recap, update row, costume, cameo phot
   expect(violations).toEqual([]);
 });
 
-test('widget: the shipped cameo photos load through the real status path', async () => {
-  const cameo = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'assets', 'cameos', 'built', 'index.json'), 'utf8'));
-  const id = Object.keys(cameo.cameos || cameo)[0];
-  await lights.evaluate((i) => window.lightsApi.previewOnWidget({ lamp: 'green', eyes: 'default', pose: 'none', costume: 'none', cameo: i }, 3000), id);
-  await widget.waitForTimeout(800);
-  expect(await widget.locator('image').count()).toBeGreaterThan(0);
-  await collect(widget, 'widget');
-  expect(violations).toEqual([]);
-});
-
 test('widget: garden', async () => {
   test.setTimeout(60000);
   await lights.evaluate((r) => window.lightsApi.saveConfig({ rules: [r] }), GARDEN_RULE);
@@ -190,26 +180,6 @@ test('settings: Preferences, Health and Backups run under the policy', async () 
   violations.length = 0;
   await settings.locator('#backups > summary').click();
   await collect(settings, 'settings');
-  expect(violations).toEqual([]);
-});
-
-test('usage pop-out: renders under the policy, and an inline handler and a fetch are refused', async () => {
-  await h.app.evaluate(() => global.__buddyTrayMenu.items.find((i) => i.label === 'Open Usage…').click());
-  const pop = await windowByFile(h.app, 'usage-pop.html');
-  await pop.waitForLoadState('load');
-  await h.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((x) => x.getTitle() === 'Usage')?.emit('focus')); // headless: no real focus, and an unfocused pop-out closes itself
-  await watch(pop, 'usage-pop');
-  await expect(pop.locator('#note')).not.toHaveText('', { timeout: 10000 });
-  await pop.evaluate(() => { const b = document.createElement('b'); b.setAttribute('onclick', 'window.__x = 1'); document.body.append(b); b.click(); fetch('https://example.invalid/').catch(() => {}); });
-  await pop.waitForTimeout(300);
-  expect(await pop.evaluate(() => window.__x)).toBeUndefined();
-  const seen = await pop.evaluate(() => window.__csp);
-  expect(seen.some((s) => s.startsWith('script-src'))).toBe(true);
-  expect(seen.some((s) => s.startsWith('connect-src'))).toBe(true);
-  await pop.evaluate(() => { window.__csp.length = 0; });
-  violations.length = 0;
-  await pop.waitForTimeout(200);
-  await collect(pop, 'usage-pop');
   expect(violations).toEqual([]);
 });
 

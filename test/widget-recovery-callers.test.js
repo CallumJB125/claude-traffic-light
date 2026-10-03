@@ -2,7 +2,7 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),{EventEmitter}=require('node:events');
 const source=fs.readFileSync(path.join(__dirname,'..','main.js'),'utf8');
 const cut=(start,end)=>source.slice(source.indexOf(start),source.indexOf(end,source.indexOf(start)));
-const create=cut('function createWindow() {','\nlet settingsWin =');const guard=cut('function guardRenderer(w, name, recreate) {','\n// Quitting must');const broadcast=cut('function broadcastStatus() {','\n// ── Roaming:');
+const create=cut('function createWindow() {','\nfunction createSettingsWindow()');const guard=cut('function guardRenderer(w, name, recreate) {','\n// Quitting must');const broadcast=cut('function broadcastStatus() {','\n// ── Roaming:');
 function fixture(){
 const windows=[],pending=[],effects=[];
 class Window extends EventEmitter{constructor(){super();this.dead=false;this.visible=false;this.minimized=false;this.crashed=false;this.webContents=new EventEmitter();this.webContents.isCrashed=()=>this.crashed;this.webContents.reloadIgnoringCache=()=>{throw Error('dead renderer');};this.webContents.send=()=>{if(this.dead)throw Error('disposed send');effects.push('send');};windows.push(this);}isDestroyed(){return this.dead;}isVisible(){if(this.dead)throw Error('disposed visibility');return this.visible;}isMinimized(){if(this.dead)throw Error('disposed minimized');return this.minimized;}showInactive(){this.visible=true;}setAlwaysOnTop(){}setVisibleOnAllWorkspaces(){}setAspectRatio(){}loadFile(){}destroy(){if(this.fail)throw Error('disposal refused');this.dead=true;this.emit('closed');}}

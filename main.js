@@ -37,7 +37,6 @@ const Cameos = require('./cameos.js');
 const McpInstall = require('./mcp-install.js');
 const NativeBoard = require('./native-board/service');
 const Setup = require('./setup.js');
-const LeftoverShim = require('./src/leftover-shim.js');
 const Help = require('./help.js');
 const GitSignals = require('./src/github-signals.js');
 const Voice = require('./src/voice.js');
@@ -195,7 +194,8 @@ const DEFAULT_CONFIG = {
   character: { body: 'claude', bodyColor: null },
   workingStaleMinutes: 6,
   waitingStaleHours: 4,
-  soundOnAmber: true,
+  // Every sound the app plays: rule sounds and the knock.
+  sounds: true,
   // macOS notifications for the states that matter when the widget is out of sight.
   notifyOnStates: true,
   notifyStates: { ...Help.NOTIFY_DEFAULTS },
@@ -272,6 +272,9 @@ function buildConfig() {
   // Keys of removed features (the router, delegation) are dropped, so an old
   // config neither crashes nor carries them forward on the next save.
   const config = { ...DEFAULT_CONFIG, ...Setup.dropRemovedKeys(saved) };
+  // soundOnAmber was the old name of `sounds` (it always covered every sound).
+  if (typeof saved.sounds !== 'boolean' && typeof saved.soundOnAmber === 'boolean') config.sounds = saved.soundOnAmber;
+  delete config.soundOnAmber;
   config.agentKinds = { ...DEFAULT_CONFIG.agentKinds, ...(saved.agentKinds && typeof saved.agentKinds === 'object' ? saved.agentKinds : {}) };
   config.notifyStates = { ...DEFAULT_CONFIG.notifyStates, ...(saved.notifyStates && typeof saved.notifyStates === 'object' ? saved.notifyStates : {}) };
   config.spend = Spend.normalize(saved.spend);
@@ -782,23 +785,19 @@ function aggregateState(opts = {}) {
 
 // ── Photo cameos (cameos.js) ────────────────────────────────────────────────
 const CAMEO_DIR = path.join(ROOT_DIR, 'cameos');
-// The shipped built-in photos (scripts/build-cameos.py); the user's override them.
-const CAMEO_BUILT_DIR = path.join(__dirname, 'assets', 'cameos', 'built');
 // id → { id, rev, name, shape, eyes, mouth, src (data: URL) }, read once per change.
 let cameoCache = null;
 function cameoPhotos() {
   if (cameoCache) return cameoCache;
   cameoCache = {};
-  for (const dir of [CAMEO_BUILT_DIR, CAMEO_DIR]) {
-    for (const [id, e] of Object.entries(Cameos.loadIndex(dir))) {
-      try { cameoCache[id] = { id, rev: e.addedAt, name: e.name, shape: e.shape, eyes: e.eyes, mouth: e.mouth, src: Cameos.photoDataUrl(dir, id) }; } catch { /* unreadable: the next source, the drawing, or none */ }
-    }
+  for (const [id, e] of Object.entries(Cameos.loadIndex(CAMEO_DIR))) {
+    try { cameoCache[id] = { id, rev: e.addedAt, name: e.name, shape: e.shape, eyes: e.eyes, mouth: e.mouth, src: Cameos.photoDataUrl(CAMEO_DIR, id) }; } catch { /* unreadable: the drawing, or none */ }
   }
   return cameoCache;
 }
 function cameoListing() {
   const photos = cameoPhotos();
-  return Cameos.listing(Cameos.loadIndex(CAMEO_DIR), Cameos.loadIndex(CAMEO_BUILT_DIR)).map((c) => ({ ...c, src: photos[c.id]?.src || null }));
+  return Cameos.listing(Cameos.loadIndex(CAMEO_DIR)).map((c) => ({ ...c, src: photos[c.id]?.src || null }));
 }
 function cameosChanged() {
   backups?.onSave();
@@ -961,6 +960,8 @@ function handleBudgetEvent(ev) {
 function notifyBudget(n) {
   console.log(`[budget] ${n.runId} — ${BudgetNotice.text(n)}`);
   if (IS_DEV_RUN || loadConfig().notifyOnStates === false || !Notification.isSupported()) return;
+  // The widget row and tray item still show it; only the notification waits.
+  if (!pingAllowed(null, { signal: 'budget' })) return;
   const note = new Notification({ title: 'Run reached its budget', body: BudgetNotice.text(n), silent: true });
   liveNotifications.add(note);
   note.on('click', () => { liveNotifications.delete(note); openBudgetNotice(n.runId).then((r) => { if (!r || !r.ok) openBuddy(BudgetNotice.CONTRACT.boardPage); }); });
@@ -1158,15 +1159,12 @@ function createWindow() {
   return w;
 }
 
-let settingsWin = null;
-
 function createSettingsWindow() { openBuddy('settings'); }
 
 // ── Feedback ("Something's off / Idea") ──────────────────────────────────────
 // One main app page, opened from the tray and Preferences. Saved
 // reports stay on this computer; nothing is sent unless the person clicks a
 // send option (see src/feedback.js).
-let feedbackWin = null;
 let feedbackShot = null; // the PNG the preview showed: what is saved is what they saw
 let feedbackCaptureEpoch = 0;
 let feedbackLast = null; // { folder, text } of the report just saved
@@ -1251,7 +1249,6 @@ ipcMain.handle('feedback-github', (e) => {
 });
 
 // About & Updates always opens the main app page.
-let updatesWin = null;
 function createUpdatesWindow() { openBuddy('updates'); }
 
 // Hatch: make a character from a few choices (characters/hatch.js), keep it
@@ -1262,7 +1259,6 @@ function createUpdatesWindow() { openBuddy('updates'); }
 const CharacterStore = require('./src/character-store.js');
 const Hatch = require('./characters/hatch.js');
 const characterStore = CharacterStore.create({ dir: path.join(ROOT_DIR, 'characters'), log: (m) => console.warn(m) });
-let hatchWin = null;
 const hatchResults = new Map();
 function broadcastCharacters() {
   buddyWin?.sendToPage('hatch', 'characters:changed');
@@ -1648,7 +1644,6 @@ function showLightsView(view, then = null) {
 }
 
 // Waiting on you always opens in the main app.
-let waitingWin = null;
 function createWaitingWindow() { openBuddy('waiting'); }
 
 // ── Tasks page ────────────────────────────────────────────────────────────
@@ -1656,10 +1651,9 @@ function createWaitingWindow() { openBuddy('waiting'); }
 // socket or token: this process does (src/tasks-service.js) and hands it
 // sanitised tasks over the IPC below, every one checked for its sender.
 // Dev runs point at the mock supervisor through an env var, never in a package.
-let tasksWin = null;
 let tasksSvc = null;
 let tasksProcess = null;
-const tasksPages = () => [tasksWin?.webContents, buddyWin?.pageWebContents('tasks')].filter((w) => w && !w.isDestroyed());
+const tasksPages = () => [buddyWin?.pageWebContents('tasks')].filter((w) => w && !w.isDestroyed());
 const tasksSenderOk = (e) => !!e.sender && tasksPages().includes(e.sender) && e.senderFrame === e.sender.mainFrame;
 const TASKS_SEEN_FILE = path.join(ROOT_DIR, 'tasks-seen.json');
 function getTasks() {
@@ -1858,15 +1852,13 @@ function createLightsWindow() {
     // The next editor opens shown; only the machine-wide reasons carry over.
     lightsMotion.set('hidden', false);
     lightsMotion.set('minimized', false);
-    if (process.platform === 'darwin' && !settingsWin && !updatesWin && !buddyWin?.isOpen() && !hatchWin) app.dock.hide();
+    if (process.platform === 'darwin' && !buddyWin?.isOpen()) app.dock.hide();
   });
 }
 
 // ── Help: "what am I looking at?" ──────────────────────────────────────────
 // A small panel beside the widget that explains the current state in plain
 // words. Opened from the widget's "?" and the tray; once on first run.
-let helpWin = null;
-
 function createHelpWindow() { openBuddy('help'); }
 
 function helpState() {
@@ -2492,8 +2484,6 @@ function broadcastStatus() {
   }
   lightsWin?.webContents.send('status-changed');
   for (const id of ['usage', 'stats', 'help']) buddyWin?.sendToPage(id, 'status-changed');
-  helpWin?.webContents.send('status-changed');
-  waitingWin?.webContents.send('status-changed');
   try {
     const st = aggregateState();
     // A paused widget catches up when the gate lifts (it broadcasts then),
@@ -2571,8 +2561,8 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // The knock itself: three knocks, each with a hop on the icon and a sound,
 // then "hey!" with the app's name in a speech bubble.
-async function performKnock(appName, target, base) {
-  const knockSound = loadConfig().soundOnAmber ? (base.sound || 'Tink') : null;
+async function performKnock(appName, target, base, mayPing) {
+  const knockSound = loadConfig().sounds && mayPing ? (base.sound || 'Tink') : null;
   for (let i = 0; i < 3; i += 1) {
     travelLook = { ...base, pose: 'knock', facing: 'right', aimAngle: 0, text: 'KNOCK', name: `Knocking on ${appName}` };
     broadcastStatus();
@@ -2641,7 +2631,8 @@ async function roamAndKnock(st, { force = false } = {}) {
     sendLean(runSpeed);
     await tween({ x: home.x, y: home.y }, target, 1400, (pt) => win?.setPosition(pt.x, pt.y));
     sendLean(0);
-    await performKnock(appName, target, base);
+    // A knock you asked for (tray, demo) always sounds; a roaming one is a ping.
+    await performKnock(appName, target, base, force || pingAllowed(st.owned?.sound, { lamp: base.lamp }));
     travelLook = { ...base, pose: 'run', facing: facing === 'left' ? 'right' : 'left', aimAngle: 0, name: 'Running home' };
     broadcastStatus();
     sendLean(-runSpeed);
@@ -2669,6 +2660,9 @@ async function knockNow() {
   return roamAndKnock(st, { force: true });
 }
 
+// Each skip reason is logged once per run: a session waiting for an hour on an
+// app with no Dock icon otherwise wrote the same line every probe.
+const roamSkipsLogged = new Set();
 function maybeRoam(st) {
   const config = loadConfig();
   if (!IS_MAC || !config.roam || reducedMotion || !win || !win.isVisible() || widgetMotion.paused || roamState.busy || previewLook || gardenRun || WidgetStrip.blocksTravel(strip)) return;
@@ -2703,7 +2697,10 @@ function maybeRoam(st) {
     .finally(() => {
       roamState.probing = false;
       roamProbe.probed(result, Date.now());
-      if (result && !result.ok) console.log(`[roam] skipped: ${result.why}${roamProbe.gap > 20000 ? ` (next look in ${Math.round(roamProbe.gap / 1000)} s)` : ''}`);
+      if (result && !result.ok && !roamSkipsLogged.has(result.why)) {
+        roamSkipsLogged.add(result.why);
+        console.log(`[roam] skipped: ${result.why}${roamProbe.gap > 20000 ? ` (next look in ${Math.round(roamProbe.gap / 1000)} s)` : ''}`);
+      }
     });
 }
 
@@ -3251,7 +3248,7 @@ function getUsageTurns() {
 // The Model mix card: read-only — which models your turns ran on, what they
 // cost, one recommendation line, and a note if an old router shim is still
 // in a shell rc (never edited from here).
-utilityHandle('model-mix', e => fromUtilityPage(e, 'usage'), async () => ({ ...Usage.modelMix(await getUsageTurns()), leftoverShim: LeftoverShim.detect({ home: os.homedir(), env: process.env, root: ROOT_DIR }) }));
+utilityHandle('model-mix', e => fromUtilityPage(e, 'usage'), async () => Usage.modelMix(await getUsageTurns()));
 
 // The Usage tab and buddy_usage_history read the permanent record from disk.
 // Asking also nudges a fresh fold in, so an open tab stays current.
@@ -3646,7 +3643,7 @@ utilityHandle('voice-status', settingsOnly, () => ({
 // (its own window, or the Plexiform window's view of it), by webContents.
 function inputSenderOk(e) {
   const wc = e.sender;
-  return !!wc && ((win && wc === win.webContents) || (waitingWin && wc === waitingWin.webContents) || (buddyWin && wc === buddyWin.pageWebContents('waiting')));
+  return !!wc && ((win && wc === win.webContents) || (buddyWin && wc === buddyWin.pageWebContents('waiting')));
 }
 ipcMain.handle('answer-input', (e, id, optionId, more = {}) => {
   if (!inputSenderOk(e)) return { ok: false, error: 'not allowed' };
@@ -4194,7 +4191,7 @@ function maybePlayAlertSound() {
   if (reason === 'preview') return;
   const { key, restored } = GitSignals.soundKey(look, owned, config.rules, config.gitSignals !== false ? git.active() : []);
   // F5: a git rule's sound is held while you're busy like any other rule's.
-  if (config.soundOnAmber && key && key !== lastSoundKey && !restored && pingAllowed(owned.sound, { lamp: look.lamp })) playSound(look.sound);
+  if (config.sounds && key && key !== lastSoundKey && !restored && pingAllowed(owned.sound, { lamp: look.lamp })) playSound(look.sound);
   lastSoundKey = key;
 }
 
@@ -4561,7 +4558,7 @@ function guardRenderer(w, name, recreate) {
 }
 
 // Quitting must not be vetoed by the editor's unsaved-changes prompt.
-app.on('before-quit', () => { flushStats(); backups?.flush(); lightsWin?.destroy(); settingsWin?.destroy(); feedbackWin?.destroy(); });
+app.on('before-quit', () => { flushStats(); backups?.flush(); lightsWin?.destroy(); });
 // The embedded board hub gets SIGTERM and a grace period to close its DB
 // before we exit, once; a second quit goes straight through.
 let hubStopped = false;
@@ -4574,7 +4571,7 @@ app.on('before-quit', (e) => {
   hostSync.release().catch(() => {}).finally(() => Promise.allSettled([buddyWin?.stop(), tasksProcess?.stop({ final: true })]).finally(() => app.quit()));
 });
 
-app.on('activate', () => { if (!lightsWin && !settingsWin) win?.showInactive(); });
+app.on('activate', () => { if (!lightsWin) win?.showInactive(); });
 
 app.on('window-all-closed', () => {
   // Keep running in the tray.

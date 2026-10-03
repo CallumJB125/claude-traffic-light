@@ -607,9 +607,6 @@
   .mix-card .d { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; margin: 3px 0 8px; }
   .mix-rec { font-size: 12px; color: var(--text); line-height: 1.45; padding-top: 10px; border-top: 1px solid var(--line); }
   .mix-card .note { font-size: 11px; color: var(--faint); }
-  .mix-leftover { font-size: 12px; color: var(--muted); line-height: 1.45; }
-  .mix-leftover[hidden] { display: none; }
-  .mix-leftover code { display: block; margin-top: 4px; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-2); color: var(--text); font: 11px ui-monospace, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 
 
   /* ── Usage history charts (usage-view.js) ─────────────────────────────
@@ -1325,7 +1322,6 @@
         <div class="mix-rec" id="mix-rec"></div>
         <div class="note">Estimate — "routine" means a reply under 400 tokens on under 4k new tokens of context. The saving prices those same tokens at Sonnet rates; the low end allows 35% more tokens on the cheaper model. Quality effects aren't counted.</div>
       </div>
-      <div class="mix-leftover" id="mix-leftover" hidden><span id="mix-leftover-note"></span><code id="mix-leftover-cmd"></code></div>
       <div id="usage-history" aria-label="Usage history"></div>
     </section>
   </div>

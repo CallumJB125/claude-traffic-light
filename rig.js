@@ -96,13 +96,6 @@
          glass is front; the photo goes on it) -->
     <g class="char-front"></g>
     <!-- cameos (back layer): hair, facial hair and collar, under the eyes so they stay alive -->
-    <g class="cameo cameo-neo">
-      <path d="M4 52h24l4 6 4-6h24v7H4z" fill="#2a2a33" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" /><path d="M28 52l4 6 4-6z" fill="#0c0c10" /><path d="M4.6 52.8h22.6l3.8 5.6M59.4 52.8H36.8l-3.8 5.6" stroke="#5a5a6a" stroke-width="0.7" fill="none" />
-      <polygon points="14,53 14,47.5 18,47.5 21,53" fill="#2a2a33" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" /><polygon points="50,53 50,47.5 46,47.5 43,53" fill="#2a2a33" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" />
-      <rect x="14.6" y="48.2" width="0.9" height="4.4" fill="#5a5a6a" /><rect x="48.5" y="48.2" width="0.9" height="4.4" fill="#5a5a6a" />
-      <polygon points="15,51 15,38 16,38 16,36 18,36 18,35 46,35 46,36 48,36 48,38 49,38 49,51 46,51 46,43 44.5,43 44.5,41.5 40,41.5 40,40.5 34,40.5 34,42 31.5,42 31.5,40 28,40 28,41.5 23,41.5 23,42 19.5,42 19.5,43 18,43 18,51" fill="#15151b" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" />
-      <rect x="21" y="36" width="8" height="1" fill="#3a3a46" /><rect x="35" y="36.5" width="7" height="0.8" fill="#3a3a46" /><rect x="16" y="40" width="0.8" height="8" fill="#3a3a46" />
-    </g>
     <g class="cameo cameo-alfred">
       <rect x="4" y="52" width="56" height="7" fill="#3a3a42" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" /><path d="M4.6 52.8h21M38.4 52.8h21" stroke="#62626e" stroke-width="0.7" />
       <polygon points="26,52 38,52 35,59 29,59" fill="#f2efe8" />
@@ -116,48 +109,6 @@
       <rect x="20.5" y="41.8" width="3" height="1.1" fill="#e8e5de" /><rect x="23.3" y="41.1" width="3.7" height="1.1" fill="#e8e5de" />
       <rect x="37" y="41.1" width="3.7" height="1.1" fill="#e8e5de" /><rect x="40.5" y="41.8" width="3" height="1.1" fill="#e8e5de" />
       <rect x="27" y="49.1" width="10" height="1.4" fill="#dcd8cf" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" /><rect x="26.2" y="49.9" width="1.4" height="1.2" fill="#dcd8cf" /><rect x="36.4" y="49.9" width="1.4" height="1.2" fill="#dcd8cf" />
-    </g>
-    <g class="cameo cameo-mcafee">
-      <polygon points="24,52 30,52 32,56 28,55.2" fill="#f2efe8" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" /><polygon points="40,52 34,52 32,56 36,55.2" fill="#f2efe8" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" />
-      <polygon points="15,45 15,38.5 12.5,36.5 15.8,35.6 14.6,31.8 19,33.6 18.8,29.4 23,32.4 24.8,27.6 28,32 31,26.6 33.6,31.4 37.2,27.2 38.6,32 42.4,28.8 42.6,33 47.4,31.2 46.2,35 50.4,35 48,38.4 49,38.6 49,45 47,45 47,40.2 44,39.6 20,39.6 17,40.2 17,45" fill="#cfcbc3" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" />
-      <path d="M21 34.5l2 3.5M27.5 31.5l1 5M34 31l0.2 5.5M39.5 32l-1 4.5M44.5 34l-1.8 3.5M16 39.5v4.5M48 39.5v4.5" stroke="#8e8a82" stroke-width="0.9" fill="none" />
-      <rect x="36.8" y="42.8" width="5.9" height="5.9" fill="#f2efe8" />
-      <rect x="20.8" y="41.4" width="6.4" height="1.1" fill="#8e8a82" /><rect x="36.6" y="39.6" width="6.4" height="1.1" fill="#8e8a82" /><rect x="42.2" y="40.4" width="1.2" height="1" fill="#8e8a82" />
-      <g fill="#8e8a82" opacity="0.85"><rect x="20" y="49.5" width="1" height="1" /><rect x="22" y="50.8" width="1" height="1" /><rect x="24" y="49.6" width="1" height="1" /><rect x="25.6" y="51" width="1" height="1" /><rect x="38.4" y="51" width="1" height="1" /><rect x="40" y="49.6" width="1" height="1" /><rect x="42" y="50.8" width="1" height="1" /><rect x="44" y="49.5" width="1" height="1" /></g>
-      <rect x="27.5" y="48.6" width="9" height="1.4" fill="#9a958d" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" />
-      <rect x="29.5" y="50.4" width="5" height="4.6" fill="#9a958d" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" /><rect class="cameo-lips" x="30.3" y="50.4" width="3.4" height="0.7" fill="#211f1c" /><rect x="30.4" y="52.2" width="1" height="2.2" fill="#bdb9b1" /><rect x="32.6" y="52.6" width="1" height="2" fill="#6f6b64" />
-    </g>
-    <g class="cameo cameo-spagni">
-      <rect x="4" y="52" width="56" height="7" fill="#5b5e66" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" />
-      <polygon points="26,52 38,52 34.5,59 29.5,59" fill="#22232a" /><polygon class="cameo-skin" points="29.6,52 34.4,52 32,54.6" fill="var(--body-color, #da7756)" />
-      <path d="M26 52l3.5 7M38 52l-3.5 7" stroke="#44474e" stroke-width="0.8" fill="none" />
-      <circle cx="42" cy="55" r="1.6" fill="#f26822" stroke="#211f1c" stroke-width="0.35" /><rect x="40.6" y="55.4" width="2.8" height="1" fill="#4c4c4c" /><path d="M41 55.4v-1.2l1 0.8l1-0.8v1.2" stroke="#f2efe8" stroke-width="0.35" fill="none" />
-      <rect class="cameo-skin" x="15" y="44.5" width="3" height="7" rx="1.2" fill="var(--body-color, #da7756)" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" /><rect class="cameo-skin" x="46" y="44.5" width="3" height="7" rx="1.2" fill="var(--body-color, #da7756)" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" />
-      <rect class="cameo-skin" x="17" y="45" width="1.4" height="6.2" fill="var(--body-color, #da7756)" /><rect class="cameo-skin" x="45.6" y="45" width="1.4" height="6.2" fill="var(--body-color, #da7756)" />
-      <polygon points="16,44 16,38 17,38 17,35 19,35 19,33.5 22,33.5 22,32.6 24.5,32.6 25.5,30.6 27,32.4 28.5,30.2 30,32.2 31.5,30 33,32.2 35,30.8 36,32.6 41,32.6 41,33.5 45,33.5 45,35 47,35 47,38 48,38 48,44 46.6,44 46.6,40.2 44,39.6 20,39.6 17.4,40.2 17.4,44" fill="#2e2019" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" />
-      <rect x="22" y="34.6" width="10" height="0.8" fill="#4f3a2c" /><rect x="33" y="35.2" width="8" height="0.8" fill="#4f3a2c" /><rect x="26" y="32.8" width="7" height="0.7" fill="#4f3a2c" />
-      <g class="cameo-lips" fill="#211f1c"><rect x="29" y="50.2" width="5.2" height="0.8" /><rect x="34" y="49.5" width="1.4" height="0.8" /></g>
-    </g>
-    <g class="cameo cameo-powell">
-      <rect x="4" y="52" width="56" height="7" fill="#1e2a44" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" />
-      <polygon points="26.5,52 37.5,52 32,59" fill="#f7f5f0" />
-      <polygon points="30.8,52.2 33.2,52.2 32.8,53.9 31.2,53.9" fill="#8f1219" /><polygon points="31.2,53.9 32.8,53.9 33.4,57.6 32,58.8 30.6,57.6" fill="#c8202a" />
-      <path d="M26.5 52l5.5 7M37.5 52l-5.5 7" stroke="#131b2e" stroke-width="0.7" fill="none" />
-      <polygon points="16,44 16,38 17,38 17,36.5 19,36.5 19,35.5 45,35.5 45,36.5 47,36.5 47,38 48,38 48,44 46.5,44 46.5,40.6 44,40.6 26,40.6 26,39.6 24.4,39.6 24.4,40.2 19.5,40.2 17.5,40.6 17.5,44" fill="#eeece6" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" />
-      <rect x="23.8" y="36" width="0.9" height="3.8" fill="#a9a59c" />
-      <rect x="26.5" y="37.2" width="15" height="0.8" fill="#d2cec6" /><rect x="28" y="39" width="13" height="0.7" fill="#d2cec6" /><rect x="16.6" y="40.5" width="0.8" height="3" fill="#c3bfb6" />
-    </g>
-    <g class="cameo cameo-baker">
-      <rect x="4" y="52" width="56" height="7" fill="#b9d3ec" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" />
-      <polygon class="cameo-skin" points="29,52 35,52 32,55.6" fill="var(--body-color, #da7756)" />
-      <polygon points="24.5,52 29,52 32,55.6 28.4,54.9" fill="#dbe8f5" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" /><polygon points="39.5,52 35,52 32,55.6 35.6,54.9" fill="#dbe8f5" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" />
-      <rect x="31.6" y="55.6" width="0.8" height="3.4" fill="#8fb3d9" /><rect x="10" y="52.5" width="0.8" height="6" fill="#8fb3d9" /><rect x="53.2" y="52.5" width="0.8" height="6" fill="#8fb3d9" />
-      <polygon points="16,45 16,38 17,38 17,35.5 19,35.5 19,34 23,34 23,32.8 36,32.8 36,33.5 42,33.5 42,34.6 45,34.6 45,36 47,36 47,38 48,38 48,45 46.4,45 46.4,40 44,39.4 31,39.4 31,40.4 25,40.4 25,39.4 20,39.4 17.6,40 17.6,45" fill="#4a3a2c" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" />
-      <rect x="21" y="35.2" width="9" height="0.8" fill="#6a5646" /><rect x="31" y="34.4" width="8" height="0.8" fill="#6a5646" /><rect x="24" y="37" width="15" height="0.7" fill="#6a5646" />
-      <rect x="16.4" y="38.5" width="1.4" height="6.2" fill="#9a938a" /><rect x="46.2" y="38.5" width="1.4" height="6.2" fill="#9a938a" /><rect x="17.6" y="37" width="2.4" height="1.6" fill="#9a938a" /><rect x="44" y="37" width="2.4" height="1.6" fill="#9a938a" />
-      <g fill="#8a7f73" opacity="0.8"><rect x="19.5" y="49" width="1" height="1" /><rect x="21" y="50.6" width="1" height="1" /><rect x="23" y="49.4" width="1" height="1" /><rect x="25" y="50.8" width="1" height="1" /><rect x="27" y="49.4" width="1" height="1" /><rect x="29" y="50.6" width="1" height="1" /><rect x="31" y="49.2" width="1" height="1" /><rect x="33" y="50.6" width="1" height="1" /><rect x="35" y="49.4" width="1" height="1" /><rect x="37" y="50.8" width="1" height="1" /><rect x="39" y="49.4" width="1" height="1" /><rect x="41" y="50.6" width="1" height="1" /><rect x="43" y="49" width="1" height="1" /></g>
-      <g fill="#c9c2b8" opacity="0.8"><rect x="22" y="49.2" width="1" height="1" /><rect x="26" y="49.9" width="1" height="1" /><rect x="30" y="49.8" width="1" height="1" /><rect x="34" y="49.9" width="1" height="1" /><rect x="38" y="49.9" width="1" height="1" /><rect x="42" y="49.2" width="1" height="1" /></g>
-      <rect class="cameo-lips" x="28.5" y="50.6" width="7" height="0.8" fill="#211f1c" opacity="0.7" />
     </g>
     <!-- generic bearded wizard: long hair, robe collar and a great beard -->
     <g class="cameo cameo-wizard">
@@ -384,16 +335,6 @@
     </g><!-- /eye-anchor -->
     <g class="char-face"></g>
     <!-- cameos (front layer): eyewear, over the eyes -->
-    <g class="cameo cameo-neo">
-      <rect x="18" y="44.4" width="3.2" height="0.7" fill="#0a0a0d" /><rect x="42.8" y="44.4" width="3.2" height="0.7" fill="#0a0a0d" /><rect x="27.2" y="44.6" width="9.6" height="0.8" fill="#0a0a0d" />
-      <g class="cameo-lens">
-        <rect x="20.8" y="43.4" width="6.8" height="4.4" rx="1.8" fill="#0a0a0d" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" /><rect x="36.4" y="43.4" width="6.8" height="4.4" rx="1.8" fill="#0a0a0d" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" />
-        <rect x="22" y="44.2" width="2.2" height="0.8" fill="#7cf29a" opacity="0.75" /><rect x="37.6" y="44.2" width="2.2" height="0.8" fill="#7cf29a" opacity="0.75" />
-      </g>
-    </g>
-    <g class="cameo cameo-powell" fill="none" stroke="#d5dbe0" stroke-width="0.6">
-      <rect x="20.8" y="42.6" width="7" height="6.2" rx="1" /><rect x="36.2" y="42.6" width="7" height="6.2" rx="1" /><path d="M27.8 44.4h8.4M20.8 44.2h-2.6M43.2 44.2h2.6" />
-    </g>
     <!-- pirate eyepatch (front layer): covers the left eye, strap over the brow -->
     <g class="cameo cameo-pirate">
       <path d="M17 43 h11 v3.4 l-11 1.2 z" fill="#141319" stroke="#211f1c" stroke-width="0.4" stroke-linejoin="round" />
@@ -767,11 +708,9 @@
   const EVENTS = ['ufo', 'portal', 'meteor'];
   const LAMP_FX = ['none', 'pulse', 'strobe', 'breathe', 'flicker', 'chase', 'police', 'rainbow', 'all', 'sos'];
   const COSTUMES = ['none', 'dog', 'cat', 'unicorn', 'crown', 'partyhat', 'shades', 'halo', 'devil', 'wizard', 'tophat', 'santa', 'pumpkin', 'bunny', 'headphones', 'graduate', 'chef', 'cowboy', 'propeller', 'detective', 'flowercrown', 'beanie'];
-  // Built-in slots. Most ship a photo (assets/cameos/built, delivered like a
-  // user photo); the drawings below are the fallback, and alfred's the face.
-  const CAMEOS = ['none', 'neo', 'alfred', 'mcafee', 'spagni', 'powell', 'baker', 'ellison', 'saylor', 'wizard', 'scientist', 'pirate', 'punk'];
-  // cameos whose eyewear is opaque: the eyes underneath are hidden, like the shades costume
-  const CAMEOS_HIDE_EYES = new Set(['neo']);
+  // Built-in slots, all drawn. A saved rule naming a cameo that is no longer
+  // here (and has no photo) renders as no cameo.
+  const CAMEOS = ['none', 'alfred', 'wizard', 'scientist', 'pirate', 'punk'];
   // Photo cameos: any id the user added (cameos.js). A built-in id with a
   // photo shows the photo instead of its drawing.
   const CAMEO_ID = /^[a-z0-9-]{1,32}$/;
@@ -1003,7 +942,6 @@
       if (!current || current.cameo !== cameo || current.photoKey !== photoKey) {
         for (const c of CAMEOS) svg.classList.remove(`cameo-${c}`);
         if (!photo && cameo !== 'none') svg.classList.add(`cameo-${cameo}`);
-        svg.classList.toggle('cameo-hides-eyes', !photo && CAMEOS_HIDE_EYES.has(cameo));
         wearPhoto(photo);
       }
       const text = (look.text || DEFAULT_TEXT).toUpperCase().slice(0, 24);

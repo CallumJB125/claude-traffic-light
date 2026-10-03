@@ -61,7 +61,7 @@ const MAX_FILE = 50 * 1024 * 1024;
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 // Plain names for the settings people recognise; anything else shows its key.
 const KEY_LABELS = {
-  rules: 'Your rules', presets: 'Your saved presets', template: 'Rule template', soundOnAmber: 'Sound when a session needs you',
+  rules: 'Your rules', presets: 'Your saved presets', template: 'Rule template', sounds: 'Sounds', soundOnAmber: 'Sound when a session needs you',
   paceTooltip: 'Spend pace in the widget tooltip', roam: 'Buddy roams the screen', randomEvents: 'Random events', seasonal: 'Seasonal looks',
   showTasks: 'Task counts', showAgents: 'Agent chips', agentRoster: 'Agent list', showWidget: 'Show the widget', menuBarMode: 'Menu bar mode',
   askFromWidget: 'Answer from the widget', autoAnswer: 'Auto-answer rules', notifyOnStates: 'Notifications', notifyStates: 'Which states notify',

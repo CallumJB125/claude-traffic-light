@@ -7,11 +7,28 @@ const Rules = require('../rules');
 const Cameos = require('../cameos');
 const S = require('../setup');
 
-const BUILT = path.join(__dirname, '..', 'assets', 'cameos', 'built');
-const photo = (id) => fs.readFileSync(path.join(BUILT, `${id}.png`));
+const zlib = require('zlib');
+// A distinct, valid 256×256 PNG per seed (cameos.js only checks the PNG header and size).
+function photo(seed) {
+  const chunk = (type, data) => {
+    const body = Buffer.concat([Buffer.from(type, 'ascii'), data]);
+    const out = Buffer.alloc(body.length + 8);
+    out.writeUInt32BE(data.length, 0);
+    body.copy(out, 4);
+    out.writeUInt32BE(zlib.crc32(body), body.length + 4);
+    return out;
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(Cameos.SIZE, 0); ihdr.writeUInt32BE(Cameos.SIZE, 4); ihdr[8] = 8; ihdr[9] = 6;
+  const c = zlib.crc32(seed);
+  const row = Buffer.alloc(1 + Cameos.SIZE * 4);
+  for (let x = 0; x < Cameos.SIZE; x += 1) row.writeUInt32BE((c ^ x) >>> 0, 1 + x * 4);
+  const raw = Buffer.concat(Array.from({ length: Cameos.SIZE }, () => row));
+  return Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
+}
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'setup-'));
 
-// A user's cameo dir holding real 256×256 cut-outs (borrowed from the built-ins).
+// A user's cameo dir holding 256×256 PNGs.
 function cameoDir(faces) {
   const dir = tmp();
   for (const [id, from, name, addedAt] of faces) Cameos.importPhoto(dir, { id, png: photo(from), entry: { name, addedAt, shape: 'rounded', eyes: { x: 0.4, y: 0.35 } } });
@@ -53,7 +70,7 @@ const stateOf = (state) => ({ config: state.config, cameoIndex: Cameos.loadIndex
 const imp = (bundle, state, mode) => apply(S.planImport(S.readSetup(JSON.stringify(bundle)), stateOf(state), mode), state);
 
 test('export: a complete, versioned bundle of the setup keys and only the user\'s own faces', () => {
-  const dir = cameoDir([['dad', 'neo', 'Dad', 5], ['neo', 'powell', 'My Neo', 6]]);
+  const dir = cameoDir([['dad', 'p1', 'Dad', 5], ['alfred', 'p2', 'My Alfred', 6]]);
   const b = exportFrom(sampleConfig(), dir);
   assert.equal(b.kind, 'claude-buddy-setup');
   assert.equal(b.v, S.SETUP_VERSION);
@@ -61,22 +78,22 @@ test('export: a complete, versioned bundle of the setup keys and only the user\'
   assert.equal(b.exportedAt, '1970-01-01T00:00:00.000Z');
   assert.deepEqual(Object.keys(b.config).sort(), ['agentChipSize', 'agentKinds', 'agentRoster', 'presets', 'rules', 'showAgents'], 'removed router/delegation keys are not exported');
   assert.deepEqual(b.config.rules, sampleConfig().rules);
-  assert.deepEqual(b.cameos.map((c) => c.id).sort(), ['dad', 'neo'], 'shipped built-ins are not exported, a user replacement is');
+  assert.deepEqual(b.cameos.map((c) => c.id).sort(), ['alfred', 'dad'], 'shipped built-ins are not exported, a user replacement is');
   const dad = b.cameos.find((c) => c.id === 'dad');
-  assert.deepEqual(Buffer.from(dad.png, 'base64'), photo('neo'));
+  assert.deepEqual(Buffer.from(dad.png, 'base64'), photo('p1'));
   assert.equal(dad.name, 'Dad');
   assert.equal(dad.shape, 'rounded');
   assert.deepEqual(JSON.parse(JSON.stringify(b)), b, 'plain JSON');
 });
 
 test('round trip: export then replace-import into a fresh install reproduces the same state', () => {
-  const src = cameoDir([['dad', 'neo', 'Dad', 5], ['mum', 'saylor', 'Mum', 7], ['powell', 'baker', 'Jay', 9]]);
+  const src = cameoDir([['dad', 'p1', 'Dad', 5], ['mum', 'p3', 'Mum', 7], ['alfred', 'p4', 'Jay', 9]]);
   const first = exportFrom(sampleConfig(), src);
   const fresh = { dir: tmp(), config: { rules: Rules.defaultRules(), presets: [] } };
   imp(first, fresh, 'replace');
   assert.deepEqual(exportFrom(fresh.config, fresh.dir), first);
   assert.deepEqual(Cameos.loadIndex(fresh.dir), Cameos.loadIndex(src));
-  for (const id of ['dad', 'mum', 'powell']) assert.deepEqual(fs.readFileSync(path.join(fresh.dir, `${id}.png`)), fs.readFileSync(path.join(src, `${id}.png`)));
+  for (const id of ['dad', 'mum', 'alfred']) assert.deepEqual(fs.readFileSync(path.join(fresh.dir, `${id}.png`)), fs.readFileSync(path.join(src, `${id}.png`)));
 });
 
 test('config migration: an old config with router and delegation keys loads without them, and nothing else changes', () => {
@@ -151,8 +168,8 @@ test('import: a file whose rules all fail to parse leaves the user\'s rules alon
 });
 
 test('import sanitises faces through cameos.js rules: ids, entries, PNG shape, size, count', () => {
-  const good = photo('neo').toString('base64');
-  const big = Buffer.from(photo('neo'));
+  const good = photo('p1').toString('base64');
+  const big = Buffer.from(photo('p1'));
   big.writeUInt32BE(512, 16);
   const p = S.readSetup(JSON.stringify({
     kind: S.KIND, v: 1, config: {},
@@ -177,15 +194,15 @@ test('import sanitises faces through cameos.js rules: ids, entries, PNG shape, s
   assert.equal(many.dropped, 3);
   // and cameos.js refuses the same things if handed them directly
   assert.ok(Cameos.importPhoto(tmp(), { id: 'x', png: Buffer.from('nope'), entry: {} }).error);
-  assert.ok(Cameos.importPhoto(tmp(), { id: 'none', png: photo('neo'), entry: {} }).error);
+  assert.ok(Cameos.importPhoto(tmp(), { id: 'none', png: photo('p1'), entry: {} }).error);
   assert.ok(Cameos.importPhoto(tmp(), { id: 'x', png: big, entry: {} }).error);
 });
 
 test('replace: the file\'s rules, presets, settings and faces become the user\'s', () => {
-  const theirs = exportFrom(sampleConfig({ agentChipSize: 'small' }), cameoDir([['mum', 'saylor', 'Mum', 1]]));
-  const state = { dir: cameoDir([['dad', 'neo', 'Dad', 1], ['neo', 'powell', 'My Neo', 2]]), config: { rules: [{ id: 'mine' }], presets: [{ id: 'q', name: 'Q', rules: [] }], agentChipSize: 'large', roam: true } };
+  const theirs = exportFrom(sampleConfig({ agentChipSize: 'small' }), cameoDir([['mum', 'p3', 'Mum', 1]]));
+  const state = { dir: cameoDir([['dad', 'p1', 'Dad', 1], ['alfred', 'p2', 'My Alfred', 2]]), config: { rules: [{ id: 'mine' }], presets: [{ id: 'q', name: 'Q', rules: [] }], agentChipSize: 'large', roam: true } };
   const plan = S.planImport(S.readSetup(JSON.stringify(theirs)), stateOf(state), 'replace');
-  assert.deepEqual(plan.remove.sort(), ['dad', 'neo']);
+  assert.deepEqual(plan.remove.sort(), ['alfred', 'dad']);
   apply(plan, state);
   assert.deepEqual(Object.keys(Cameos.loadIndex(state.dir)), ['mum']);
   assert.deepEqual(state.config.rules, theirs.config.rules);
@@ -195,7 +212,7 @@ test('replace: the file\'s rules, presets, settings and faces become the user\'s
 });
 
 test('replace with a file that carries no faces keeps the user\'s faces', () => {
-  const state = { dir: cameoDir([['dad', 'neo', 'Dad', 1]]), config: {} };
+  const state = { dir: cameoDir([['dad', 'p1', 'Dad', 1]]), config: {} };
   imp({ v: 1, app: 'claude-traffic-light', rules: Rules.defaultRules() }, state, 'replace');
   assert.deepEqual(Object.keys(Cameos.loadIndex(state.dir)), ['dad']);
 });
@@ -204,7 +221,7 @@ test('merge: adds presets and faces, keeps rules and settings, renames clashes a
   const mineRules = [Rules.normalizeRule({ id: 'mine', name: 'Mine' })];
   const shared = [Rules.normalizeRule({ id: 's', then: { lamp: 'green' } })];
   const state = {
-    dir: cameoDir([['dad', 'neo', 'My dad', 1], ['same', 'baker', 'Same', 2], ['neo', 'powell', 'My Neo', 3]]),
+    dir: cameoDir([['dad', 'p1', 'My dad', 1], ['same', 'p4', 'Same', 2], ['alfred', 'p2', 'My Alfred', 3]]),
     config: { rules: mineRules, agentChipSize: 'large', presets: [{ id: 'p1', name: 'Shared', rules: shared }, { id: 'p2', name: 'Clash', rules: shared }] },
   };
   const theirs = {
@@ -218,10 +235,10 @@ test('merge: adds presets and faces, keeps rules and settings, renames clashes a
       ],
     },
     cameos: [
-      { id: 'dad', name: 'Their dad', png: photo('saylor').toString('base64') },
-      { id: 'same', name: 'Same', png: photo('baker').toString('base64') },
-      { id: 'neo', name: 'Their Neo', png: photo('mcafee').toString('base64') },
-      { id: 'mum', name: 'Mum', png: photo('spagni').toString('base64') },
+      { id: 'dad', name: 'Their dad', png: photo('p3').toString('base64') },
+      { id: 'same', name: 'Same', png: photo('p4').toString('base64') },
+      { id: 'alfred', name: 'Their Alfred', png: photo('p5').toString('base64') },
+      { id: 'mum', name: 'Mum', png: photo('p6').toString('base64') },
     ],
   };
   const plan = S.planImport(S.readSetup(JSON.stringify(theirs)), stateOf(state), 'merge');
@@ -232,10 +249,10 @@ test('merge: adds presets and faces, keeps rules and settings, renames clashes a
   assert.deepEqual(state.config.rules, mineRules);
   assert.equal(state.config.agentChipSize, 'large');
   const idx = Cameos.loadIndex(state.dir);
-  assert.deepEqual(Object.keys(idx).sort(), ['dad', 'dad-2', 'mum', 'neo', 'same']);
+  assert.deepEqual(Object.keys(idx).sort(), ['alfred', 'dad', 'dad-2', 'mum', 'same']);
   assert.equal(idx.dad.name, 'My dad');
   assert.equal(idx['dad-2'].name, 'Their dad');
-  assert.equal(idx.neo.name, 'My Neo');
+  assert.equal(idx.alfred.name, 'My Alfred');
   const ps = state.config.presets;
   assert.deepEqual(ps.map((x) => x.name), ['Shared', 'Clash', 'Clash 2', 'New']);
   assert.equal(new Set(ps.map((x) => x.id)).size, 4);
@@ -289,7 +306,7 @@ test('migration: a setup at an older rulesVersion is upgraded; a deleted default
 });
 
 test('summarize: counts, settings, and every command the file\'s clicks would run', () => {
-  const b = exportFrom(sampleConfig(), cameoDir([['dad', 'neo', 'Dad', 1]]));
+  const b = exportFrom(sampleConfig(), cameoDir([['dad', 'p1', 'Dad', 1]]));
   b.config.presets[0].rules[0].then.clicks = { double: { type: 'shortcut', arg: 'Focus' }, click: { type: 'shell', arg: 'open -a Slack' } };
   const s = S.summarize(S.readSetup(JSON.stringify(b)));
   assert.equal(s.rules, Rules.defaultRules().length);

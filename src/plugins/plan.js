@@ -28,7 +28,7 @@ function normalize(snapshot,fsApi){
 function createPluginPlanner({snapshot,bundleRoot=path.join(BUILD,'codex-plugins/packages'),loadIndex=null,loadCatalog=null,verifyIndex=createIndexVerifier({keys:productionKeys()}),fsApi=fs,now=Date.now}={}){
   if(typeof snapshot!=='function'||typeof verifyIndex!=='function'||typeof bundleRoot!=='string'||!path.isAbsolute(bundleRoot))throw new Error('Private main dependencies are required');
   const load=loadIndex??(()=>({bytes:readBounded(path.join(BUILD,'codex-plugins/install-index.json'),LIMITS.indexBytes,fsApi).bytes,signature:readBounded(path.join(BUILD,'codex-plugins/install-index.json.sig'),LIMITS.signatureBytes,fsApi).bytes}));
-  const catalog=loadCatalog??(()=>readBounded(path.join(BUILD,'plugin-catalog/catalog.json'),LIMITS.indexBytes,fsApi).bytes);
+  const catalog=loadCatalog??(()=>{throw new Error('no bundled catalog');});
   let generation=0,pending=0;const plans=new Map();
   const live=(capture,token)=>{try{return token===generation&&capture.current()===true;}catch{return false;}};
   async function capture(){return normalize(await snapshot(),fsApi);}

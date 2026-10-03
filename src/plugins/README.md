@@ -4,9 +4,8 @@ This slice provides local discovery data, signed Codex descriptor verification,
 exact bundled source checks and private read-only plans. It does not install,
 remove, execute or connect a plugin. There is no renderer or IPC entry point.
 
-The imported legacy catalog is discovery material. Its display instructions and
-the legacy loader's `canInstall` catalog-signature result are not installation
-authority. Only a separately signed closed Codex index can authorize a supported
+The discovery catalog is supplied by the caller (no copy ships in the app) and
+is not installation authority. Only a separately signed closed Codex index can authorize a supported
 descriptor. Unsigned entries, unknown keys and the legacy development key fail
 closed. Production public keys and a signed index are deliberately absent until
 the separately reviewed release signing stage; tests inject ephemeral fixture

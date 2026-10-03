@@ -9,6 +9,8 @@ const fs = require('fs');
 const path = require('path');
 const TV = require('./tasks-view.js');
 
+// A copy of board/shared/states.js STATES (ESM; this file is CommonJS),
+// pinned by test/tasks-guard.test.js.
 const STATES = ['todo', 'queued', 'claimed', 'running', 'quiet', 'blocked', 'parked', 'suspended', 'reconnecting', 'unresponsive', 'orphaned', 'handing_over', 'handed_over', 'in_review', 'done', 'failed'];
 // States with an agent (possibly dead) behind them: shown as "connection lost" when the socket drops.
 const LIVE_STATES = new Set(['queued', 'claimed', 'running', 'quiet', 'blocked', 'handing_over', 'suspended', 'unresponsive', 'orphaned']);
