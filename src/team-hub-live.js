@@ -1,8 +1,24 @@
 const { createTeamHubClient } = require('./team-hub-client');
 
-function createLiveTeamHub({ identity, fetch }) {
-  let cur = null;
-  return {
+const RECHECK_MS = 15_000;
+
+function createLiveTeamHub({ identity, fetch, recheckMs = RECHECK_MS }) {
+  let cur = null, closed = false, timer = null, sub = null, last;
+  const listeners = new Set();
+  const fire = () => { for (const l of [...listeners]) { try { l(); } catch { /* a listener must never break the hub */ } } };
+  const unsub = () => { if (sub) { try { sub.off(); } catch { /* already gone */ } sub = null; } };
+  // Follows the CURRENT client so an account switch or sign-out moves the poll with it.
+  function sync() {
+    const client = live.current();
+    if (client === last) return;
+    const switched = last !== undefined;
+    last = client;
+    unsub();
+    if (client) { try { sub = { off: client.onChange(fire) }; } catch { sub = null; } }
+    if (switched) fire();
+  }
+  const stop = () => { unsub(); last = undefined; if (timer) { clearInterval(timer); timer = null; } };
+  const live = {
     current() {
       let id = null;
       try { id = identity(); } catch { id = null; }
@@ -14,8 +30,17 @@ function createLiveTeamHub({ identity, fetch }) {
       cur = client ? { key, client } : null;
       return client;
     },
-    close() { cur = null; },
+    onChange(cb) {
+      if (typeof cb !== 'function') throw new Error('onChange needs a function');
+      if (closed) return () => {};
+      listeners.add(cb);
+      if (!timer) { timer = setInterval(sync, recheckMs); timer.unref?.(); }
+      sync();
+      return () => { listeners.delete(cb); if (!listeners.size) stop(); };
+    },
+    close() { closed = true; listeners.clear(); stop(); cur = null; },
   };
+  return live;
 }
 
 module.exports = { createLiveTeamHub };
