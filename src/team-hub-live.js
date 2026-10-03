@@ -26,7 +26,9 @@ function createLiveTeamHub({ identity, fetch, recheckMs = RECHECK_MS }) {
       const key = `${id.origin}\n${id.userId}`;
       if (cur?.key === key) return cur.client;
       let client = null;
-      try { client = createTeamHubClient({ baseUrl: id.origin, token: id.token, fetch, viewerId: id.userId }); } catch { client = null; }
+      // An account switch leaves this client alive until the next sync, so it must not borrow the new account's token.
+      const token = () => { let now = null; try { now = identity(); } catch { now = null; } return now && now.origin === id.origin && now.userId === id.userId ? id.token() : ''; };
+      try { client = createTeamHubClient({ baseUrl: id.origin, token, fetch, viewerId: id.userId }); } catch { client = null; }
       cur = client ? { key, client } : null;
       return client;
     },

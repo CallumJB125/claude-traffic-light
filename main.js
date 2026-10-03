@@ -1421,7 +1421,7 @@ const OverviewMain=require('./src/overview-main').createOverviewMain({
 });
 OverviewMain.register(ipcMain);
 overviewTeamHub?.onChange(()=>OverviewMain.directoryChanged());
-liveTeamHub.onChange(()=>OverviewMain.directoryChanged());
+if(!overviewTeamHub)liveTeamHub.onChange(()=>OverviewMain.directoryChanged());
 app.on('will-quit',()=>{liveTeamHub.close();OverviewMain.close();});
 // Owned-session interaction: Plexiform starts its own provider sessions and
 // talks only to those. Existing unmanaged sessions stay observation-only.

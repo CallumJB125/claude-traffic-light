@@ -525,6 +525,7 @@ test('L8: send() maps a stale refusal or a generation race to stale/"changed"; o
     assert.deepEqual([out.ok, out.status, out.reason, out.error], [false, 'stale', 'The session changed; try again.', 'The session changed; try again.']);
   }
   assert.equal((await run({ ok: false })).status, 'unavailable');
+  assert.equal((await run({ ok: false, error: 'image generation unavailable' })).status, 'unavailable');
   for (const status of ['invalid', 'something_new', 'busy']) assert.equal((await run({ ok: false, status })).status, 'unavailable', status);
   assert.equal((await run({ ok: false, status: 'forbidden' })).status, 'forbidden');
 });

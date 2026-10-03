@@ -122,7 +122,7 @@ function createTeamHubClient({ baseUrl, token, fetch = globalThis.fetch, viewer:
   const reasonFor = (status) => REASONS[status] ?? REASONS.unavailable;
   const CHANGED = 'The session changed; try again.';
   // send() only: a generation race or any other named refusal means the session moved on, which is retryable.
-  const movedOn = (res) => res.status === 'stale' || /generation/i.test(`${res.status ?? ''} ${res.error ?? ''} ${res.code ?? ''}`);
+  const movedOn = (res) => res.status === 'stale' || /generation[_ -]?(mismatch|race|changed|stale)/i.test(`${res.status ?? ''} ${res.error ?? ''} ${res.code ?? ''}`);
   function hubResult(r, send = false) {
     if (!object(r) || typeof r.status !== 'number') return failed('unavailable', REASONS.unavailable);
     if (r.status !== 200) return failed(mapStatus(r.status), reasonFor(mapStatus(r.status)));

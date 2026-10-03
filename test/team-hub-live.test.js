@@ -145,3 +145,18 @@ test('push: close() drops listeners and the timer; a listener that throws or a b
   assert.equal(calls.length, atClose, 'a closed hub does not restart');
   off();
 }));
+
+test('after an account switch the old client never sends the new account\'s token', async () => {
+  const seen = [];
+  const fetch = async (url, init) => { seen.push(init?.headers?.authorization ?? null); return { ok: true, status: 200, headers: { get: () => null }, text: async () => '{"shared":[]}' }; };
+  let account = 'u1';
+  const token = () => `tok-${account}`; // like the real identity: the getter answers for the CURRENT account
+  const live = createLiveTeamHub({ identity: () => ({ origin: 'https://hub.example', userId: account, token }), fetch });
+  const oldClient = live.current();
+  await oldClient.teams({ id: 'u1' });
+  assert.deepEqual(seen, ['Bearer tok-u1']);
+  account = 'u2';
+  seen.length = 0;
+  await oldClient.teams({ id: 'u1' }).catch(() => {});
+  assert.ok(!seen.some((h) => String(h).includes('tok-u2')), `leaked: ${seen}`);
+});
