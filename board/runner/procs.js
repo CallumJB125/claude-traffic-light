@@ -28,6 +28,46 @@ export function sameProcess(pid, lstart) {
   return !!lstart && isAlive(pid) && lstartOf(pid) === lstart;
 }
 
+// Stop receipts need positive metadata evidence: ps failure is unknown, not
+// an empty tree. No command lines or provider content are read by this probe.
+function processStatusTable(timeoutMs = 1000) {
+  try {
+    const out = execFileSync(PS, ['-axo', 'pid=,pgid=,stat='], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: timeoutMs }); // privacy-flow: runner-local
+    const rows = [];
+    for (const line of out.trim().split('\n')) {
+      const m = /^\s*(\d+)\s+(\d+)\s+([A-Za-z+<>=NsLl0-9]+)\s*$/.exec(line);
+      if (!m) return null;
+      rows.push({ pid: Number(m[1]), pgid: Number(m[2]), stat: m[3] });
+    }
+    // A successful complete process table always includes this observer.
+    return rows.some((r) => r.pid === process.pid) ? rows : null;
+  } catch { return null; }
+}
+
+// Verification only: kill scope remains with the existing identity-safe stop
+// recipe. A recycled pid/group is conservatively unconfirmed. Zombies cannot
+// perform work; missing/unreadable observations must never authorize a start.
+export async function waitForStopped({ pid, groups = [] }, { timeoutMs = 1000, readTable = processStatusTable,
+  now = Date.now, delay = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
+  if (!Array.isArray(groups)) return false;
+  if (pid == null && groups.length === 0) return true; // Nothing was spawned.
+  if (!Number.isSafeInteger(pid) || pid <= 1
+    || groups.some((g) => !Number.isSafeInteger(g) || g <= 1)) return false;
+  const owned = new Set(groups), end = now() + Math.min(1000, Math.max(0, timeoutMs));
+  for (;;) {
+    // A synchronous probe uses only the remaining deadline. timeoutMs:0
+    // requests a single bounded observation without a poll wait.
+    const probeMs = timeoutMs === 0 ? 1000 : Math.max(1, end - now());
+    let rows; try { rows = readTable(probeMs); } catch { rows = null; }
+    if (Array.isArray(rows) && rows.length && rows.every((r) => r && Number.isSafeInteger(r.pid)
+      && Number.isSafeInteger(r.pgid) && typeof r.stat === 'string' && /^[A-Za-z]/.test(r.stat))
+      && rows.every((r) => (r.pid !== pid && !owned.has(r.pgid)) || r.stat.startsWith('Z'))) return true;
+    const left = end - now();
+    if (left <= 0) return false;
+    await delay(Math.min(20, left));
+  }
+}
+
 export function processTable() {
   let out = '';
   try { out = execFileSync(PS, ['-axo', 'pid=,ppid=,pgid='], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }); } catch { return []; } // privacy-flow: runner-local

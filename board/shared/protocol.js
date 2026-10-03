@@ -266,7 +266,7 @@ export const OUTBOX_SHAPES = Object.freeze({
   facts: { kind: 'string', ...run3, repo_id: 'string', items: 'array' },
   'run.failed': { kind: 'string', ...run3, repo_id: 'string', fail_kind: 'string', reason: 'string?', resets_in_ms: 'int?' },
   'prep.failed': { kind: 'string', ...run3, repo_id: 'string', cause: 'string' },
-  'handover.complete': { kind: 'string', ...run3, repo_id: 'string' },
+  'handover.complete': { kind: 'string', ...run3, repo_id: 'string', stop_confirmed: 'bool?', checkpoint_confirmed: 'bool?', handover_written: 'bool?' },
   snapshot: { kind: 'string', ...run3, repo_id: 'string', status: 'string', sha: 'string?', ref: 'string?', reason: 'string?' },
   'handover.write': { kind: 'string', ...run3, repo_id: 'string', patch: 'object' },
   'progress.append': { kind: 'string', ...run3, repo_id: 'string', text: 'string' },

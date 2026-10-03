@@ -120,7 +120,11 @@ function reasonFor(view, state, live) {
     case 'unresponsive': return `last seen ${formatAge(live?.hb_age_ms ?? view.state_age_ms)} ago${askSuffix(view)}`;
     case 'orphaned': return `take over${view.handover?.synced_age_ms != null ? ` · handover synced ${formatAge(view.handover.synced_age_ms)} ago` : ''}`;
     case 'handing_over': return `waiting for checkpoint · ${formatAge(view.state_age_ms)}`;
-    case 'handed_over': return `to ${view.handover_target_name ?? 'the queue'}${view.handover?.version ? ` · handover v${view.handover.version}` : ''}`;
+    case 'handed_over': return view.handover_hold
+      ? view.handover_provenance === 'checkpoint_complete'
+        ? 'previous AI stopped · read the handover, then choose the next AI'
+        : 'stop/checkpoint not confirmed · replacement AI will not start'
+      : `to ${view.handover_target_name ?? 'the queue'}${view.handover?.version ? ` · handover v${view.handover.version}` : ''}`;
     case 'failed': {
       const owner = view.run?.owner?.name ?? 'the';
       switch (view.fail_kind) {
@@ -165,6 +169,10 @@ export function cardFace(view, { elapsed_ms = 0, connection_lost = false } = {})
   let reason;
   let actions = state === 'blocked' ? [...(BLOCKED_ACTIONS[view.blocked_kind] ?? ['answer'])] : [...(ACTIONS[state] ?? [])];
   if (state === 'failed') actions = view.fail_kind === 'limit' ? ['take_over', 'retry'] : ['retry', 'take_over'];
+  if (view.run && ['running', 'quiet', 'blocked'].includes(state)) actions.push('switch_ai');
+  if (state === 'handed_over' && view.handover_hold) actions = view.handover_provenance === 'checkpoint_complete'
+    ? ['view_handover', 'take_over_with_claude'] : ['view_handover'];
+  if (view.handover_hold && view.handover_provenance !== 'checkpoint_complete' && state !== 'handing_over') actions = ['view_handover'];
 
   if (state === 'running' && !green && !connection_lost) {
     // The hub says running but the predicate no longer holds on the aged view.

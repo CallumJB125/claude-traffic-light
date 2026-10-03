@@ -54,7 +54,8 @@ export function giveDialog(dlg, model) {
   const isMe = target === meId;
   const repos = dlg.repos ?? [];
   const busy = dlg.busy;
-  const title = `Tackle ${view.key} with AI`;
+  const moving = dlg.mode === 'redispatch' && view.handover_hold;
+  const title = moving ? `Continue ${view.key} with another AI` : `Tackle ${view.key} with AI`;
   const providers = tackleChoices(dlg.preview?.runners);
   const ai = providers.find((a) => a.id === dlg.ai) ?? providers.find((a) => a.id === 'codex');
   const uncapped = ai.budget === 'none' || dlg.budget_mode === 'none';
@@ -64,6 +65,7 @@ export function giveDialog(dlg, model) {
 
   return shell('give', title, h('form', { class: 'modal-body', 'data-form': 'give', 'data-card': view.id },
     h('p', { class: 'modal-lede' }, view.title),
+    moving ? h('p', { class: 'hint' }, 'The previous AI confirmed it stopped. The next run receives the card handover and its latest available code snapshot. Check the handover for unsynced files before continuing.') : null,
     dlg.mode === 'retry' ? h('p', { class: 'hint' }, deviceLimit ? 'The machine owner must change their local limit before retrying. Raising this card budget cannot override it.' : `Spent across this card: ${fmtUsd(view.budget?.spent_usd ?? 0)}. Choose a higher total card budget to continue.`) : null,
     uncapped && view.budget?.cap_usd != null ? h('p', { class: 'hint' }, `This assignment removes the current ${fmtUsd(view.budget.cap_usd)} card budget.`) : null,
     h('fieldset', { class: 'field runner-pick' },
@@ -74,11 +76,11 @@ export function giveDialog(dlg, model) {
         h('span', { class: 'runner-note' }, m.member_id === meId ? 'Uses your signed-in AI account' : `${m.name} confirms on their machine first`)))),
     h('div', { class: 'field-row' },
       field('give-repo', 'Repo',
-        h('select', { id: 'give-repo', name: 'repo_id', class: 'input', required: true, 'data-change': 'give-repo' },
+        h('select', { id: 'give-repo', name: 'repo_id', class: 'input', required: true, 'data-change': 'give-repo', disabled: moving || null },
           h('option', { value: '', selected: !dlg.repo_id }, repos.length ? 'Choose a repo' : 'Loading repos…'),
           repos.map((r) => h('option', { key: r.id, value: r.id, selected: dlg.repo_id === r.id }, r.short_name ?? r.canonical_url)))),
       field('give-ref', 'Base branch',
-        h('input', { id: 'give-ref', name: 'base_ref', class: 'input num', value: dlg.base_ref ?? '', placeholder: 'main', autocomplete: 'off', spellcheck: 'false' }))),
+        h('input', { id: 'give-ref', name: 'base_ref', class: 'input num', value: dlg.base_ref ?? '', placeholder: 'main', autocomplete: 'off', spellcheck: 'false', readOnly: moving || null }))),
     field('give-ai', 'AI', h('select', { id: 'give-ai', name: 'ai', class: 'input', 'data-change': 'give-ai', disabled: waiting || null },
       providers.map((p) => h('option', { value: p.id, selected: p.id === ai.id, disabled: !p.available || null }, `${p.label}${p.available && !dlg.preview?.runners?.length ? '' : p.reason ? ` · ${readinessText(p.reason)}` : ''}`))),
       !waiting && !dlg.preview?.error && !dlg.preview?.runners?.length ? 'The machine is offline. Work queues until a compatible signed-in runner connects.' : null),
@@ -105,7 +107,23 @@ export function giveDialog(dlg, model) {
     h('div', { class: 'modal-foot' },
       h('button', { type: 'button', class: 'btn', 'data-action': 'close-dialog' }, 'Cancel'),
       h('button', { type: 'submit', class: 'btn btn-claude', disabled: busy || waiting || deviceLimit || (dlg.mode === 'retry' && uncapped) || !ai.available || (uncapped && !noBudgetAllowed) || null, 'aria-busy': busy ? 'true' : null, 'aria-describedby': 'give-sponsor' },
-        busy ? 'Queuing…' : isMe ? 'Tackle with AI' : `Ask ${targetMember?.name}`))), { wide: true });
+        busy ? 'Queuing…' : isMe ? moving ? `Continue with ${ai.label}` : 'Tackle with AI' : `Ask ${targetMember?.name}`))), { wide: true });
+}
+
+export function switchAiDialog(dlg, model) {
+  const view = model.entries.find((e) => e.view.id === dlg.cardId)?.view;
+  if (!view?.run) return null;
+  return shell('switch-ai', `Move ${view.key} to another AI`, h('form', { class: 'modal-body', 'data-form': 'switch-ai', 'data-card': view.id },
+    h('p', null, `${view.run.ai_label ?? 'The current AI'} gets up to 90 seconds to write its handover, then its runner stops it and checkpoints its code.`),
+    h('ol', null,
+      h('li', null, 'Prepare the handover and stop the current run.'),
+      h('li', null, 'Read the saved handover and check its snapshot and unsynced files.'),
+      h('li', null, 'Choose Claude Code or Codex, a machine and its account, then continue.')),
+    h('p', { class: 'hint' }, 'No replacement starts automatically. If the runner cannot confirm its stop and checkpoint, the switch stays blocked. Personal or observed sessions must be stopped in their original AI app.'),
+    errorLine(dlg),
+    h('div', { class: 'modal-foot' },
+      h('button', { type: 'button', class: 'btn', 'data-action': 'close-dialog' }, 'Keep working'),
+      h('button', { type: 'submit', class: 'btn btn-primary', disabled: dlg.busy || null }, dlg.busy ? 'Requesting handover…' : 'Prepare handover and stop'))));
 }
 
 const CONFIRM = {
@@ -263,6 +281,7 @@ export function dialog(model) {
     case 'give': return giveDialog(d, model);
     case 'confirm': return confirmDialog(d, model);
     case 'handover': return handOverDialog(d, model);
+    case 'switch-ai': return switchAiDialog(d, model);
     case 'changes': return changesDialog(d, model);
     case 'new': return newCardDialog(d, model);
     case 'palette': return paletteDialog(d, model);

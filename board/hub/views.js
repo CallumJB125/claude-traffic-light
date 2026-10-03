@@ -164,6 +164,8 @@ export function cardView(hub, row, viewerId) {
     ask: ['blocked', 'parked'].includes(row.run_state) || row.resume_to === 'blocked' ? askView(hub, row) : null,
     handover: doc && (h || synced.length) ? { version: h?.version ?? 0, synced_age_ms: synced.length ? Math.min(...synced) : null } : null,
     handover_target_name: ht ? (ht.kind === 'queue' ? 'the queue' : hub.memberName(ht.member_id ?? ht.by)) : null,
+    handover_hold: ht?.kind === 'hold',
+    handover_provenance: ['checkpoint_complete', 'checkpoint_incomplete', 'takeover'].includes(row.handover_provenance) ? row.handover_provenance : null,
     stopped_by_name: row.stopped_by ? hub.memberName(row.stopped_by) : null,
     limit_resets_in_ms: limitResetsIn(hub, row),
     device_kind: deviceKind(hub, runRow),

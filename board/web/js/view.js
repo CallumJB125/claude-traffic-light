@@ -25,6 +25,18 @@ export function displayFace(view, { elapsed_ms = 0, connection_lost = false } = 
 // A card with no run is human-owned: its column is whatever a person set.
 // Everything else is derived from run state and never dragged.
 export const isHumanOwned = (view) => (view.run_state ?? 'todo') === 'todo';
+// Captured work already exists outside the board dispatcher. Once a real run
+// is queued/started, keep that run's normal controls and verified liveness.
+export const isObservedWork = (view) => !view.run && isHumanOwned(view) && view.capture?.source === 'local_observation';
+
+export function cardWorkPhase(view, face) {
+  if (isObservedWork(view)) return null;
+  if (face.state === 'in_review' || (isHumanOwned(view) && view.column === 'in_review')) return 'Awaiting human review';
+  if (view.run && face.green === true) return 'AI working';
+  if (view.run && face.state === 'quiet') return 'No recent AI activity';
+  if (view.run && face.state === 'running') return 'AI activity not confirmed';
+  return null;
+}
 
 export function columnFor(view, face) {
   if (isHumanOwned(view) && COLUMNS.includes(view.column)) return view.column;
@@ -111,6 +123,8 @@ export const ACTION_LABEL = {
   cancel: 'Cancel',
   stop: 'Stop',
   watch: 'Watch',
+  switch_ai: 'Move to another AI',
+  view_handover: 'Read handover',
   allow: 'Review request',
   deny: null,
   answer: 'Answer',

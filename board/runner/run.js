@@ -499,10 +499,18 @@ export class Run {
     this.log.info('handover finishing', { run_id: this.run_id, why, mode: h.mode });
     this.ending = true;
     this.endReason = h.mode === 'handover' ? 'handed_over' : 'parked';
-    await this.backend?.stop();
+    const stopped = await this.backend?.stop();
+    // A completed handover is the authority to start a replacement. A failed
+    // stop must never be reported as completion, even after its deadline.
+    if (h.mode === 'handover' && (stopped !== true || this.backend?.alive() !== false)) {
+      this.log.warn('handover stop not confirmed', { run_id: this.run_id });
+      h.resolve(false);
+      return;
+    }
     this.flushFacts();
-    await this.snapshotNow({ push: true, why: 'final handover' });
-    if (h.mode === 'handover') this.emit({ kind: 'handover.complete' });
+    const snapshot = await this.snapshotNow({ push: true, why: 'final handover' });
+    if (h.mode === 'handover') this.emit({ kind: 'handover.complete', stop_confirmed: true,
+      checkpoint_confirmed: snapshot?.status === 'pushed', handover_written: why === 'written' });
     if (h.mode === 'quit') {
       const ok = await this.#releaseForQuit();
       h.resolve(ok);

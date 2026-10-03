@@ -87,34 +87,54 @@ test('LOCAL PROOF: Windows device sends to and reads the reply of an owned sessi
     assert.equal(sent.body.result.status, 'acknowledged');
     assert.equal(sent.body.result.delivery.mode, 'new-turn');
 
-    // Long-poll until the reply has streamed back through the relay.
-    let after = 0, done = null;
-    await until(async () => {
+    // Long-poll actual state changes instead of spending the mutation budget
+    // on repeated POST state reads while a provider notification is pending.
+    let after = 0;
+    const watchUntil = (predicate) => until(async () => {
       const w = await win.call(r.macA.device, 'watch', { session: s.session, after });
-      assert.equal(w.status, 200);
+      assert.equal(w.status, 200, JSON.stringify(w.body));
+      assert.equal(w.body.result.ok, true, JSON.stringify(w.body));
       after = w.body.result.version;
-      done = w.body.result.state.deliveries.find((d) => d.state === 'completed');
-      return done;
+      return predicate(w.body.result.state);
     });
+    const done = await watchUntil((state) => state.deliveries.find((d) => d.id === sent.body.result.delivery.id && d.state === 'completed'));
     assert.equal(done.response, 'echo:hello from windows');
     assert.equal(done.recorded, true);
 
-    // Steer + interrupt carry the same contract.
-    await win.call(r.macA.device, 'send', { session: s.session, generation: s.generation, text: 'HOLD' });
-    const turn = await until(async () => (await win.call(r.macA.device, 'state', { session: s.session })).body.result.state.activeTurn);
+    // A steer receipt is not a completion receipt. Wait for that exact
+    // delivery before starting another turn, then interrupt the new turn.
+    const held = await win.call(r.macA.device, 'send', { session: s.session, generation: s.generation, text: 'HOLD' });
+    assert.equal(held.status, 200, JSON.stringify(held.body));
+    assert.equal(held.body.result.status, 'acknowledged');
+    const turn = held.body.result.state.activeTurn;
+    assert.ok(turn);
+    assert.equal(turn, held.body.result.delivery.turn);
     const busy = await win.call(r.macA.device, 'send', { session: s.session, generation: s.generation, text: 'again' });
     assert.equal(busy.body.result.status, 'busy');
     const steer = await win.call(r.macA.device, 'send', { session: s.session, generation: s.generation, text: 'more', expectedTurn: turn });
+    assert.equal(steer.status, 200, JSON.stringify(steer.body));
+    assert.equal(steer.body.result.status, 'acknowledged');
     assert.equal(steer.body.result.delivery.mode, 'steer');
-    await win.call(r.macA.device, 'send', { session: s.session, generation: s.generation, text: 'HOLD 2' });
-    const turn2 = await until(async () => (await win.call(r.macA.device, 'state', { session: s.session })).body.result.state.activeTurn);
+    const steered = await watchUntil((state) => state.deliveries.find((d) => d.id === steer.body.result.delivery.id && d.state === 'completed'));
+    assert.equal(steered.turn, turn);
+    assert.equal(steered.response, 'steered:more');
+    const held2 = await win.call(r.macA.device, 'send', { session: s.session, generation: s.generation, text: 'HOLD 2' });
+    assert.equal(held2.status, 200, JSON.stringify(held2.body));
+    assert.equal(held2.body.result.status, 'acknowledged');
+    const turn2 = held2.body.result.state.activeTurn;
+    assert.ok(turn2);
+    assert.equal(turn2, held2.body.result.delivery.turn);
+    assert.notEqual(turn2, turn);
     const intr = await win.call(r.macA.device, 'interrupt', { session: s.session, generation: s.generation, turn: turn2 });
     assert.equal(intr.body.result.status, 'interrupt-requested');
-    await until(async () => (await win.call(r.macA.device, 'state', { session: s.session })).body.result.state.deliveries.some((d) => d.state === 'interrupted'));
+    const interrupted = await watchUntil((state) => state.deliveries.find((d) => d.id === held2.body.result.delivery.id && d.state === 'interrupted'));
+    assert.equal(interrupted.turn, turn2);
 
-    // Notices (a refused provider approval) travel with the delivery.
-    await win.call(r.macA.device, 'send', { session: s.session, generation: s.generation, text: 'APPROVAL please' });
-    const noticed = await until(async () => (await win.call(r.macA.device, 'state', { session: s.session })).body.result.state.deliveries.find((d) => d.notices.length));
+    // Notices (a refused provider approval) travel with the exact delivery.
+    const approval = await win.call(r.macA.device, 'send', { session: s.session, generation: s.generation, text: 'APPROVAL please' });
+    assert.equal(approval.status, 200, JSON.stringify(approval.body));
+    assert.equal(approval.body.result.status, 'acknowledged');
+    const noticed = await watchUntil((state) => state.deliveries.find((d) => d.id === approval.body.result.delivery.id && d.notices.length));
     assert.match(noticed.notices[0], /approval/);
 
     // The list is the account's remote sessions; close ends one.

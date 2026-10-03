@@ -527,6 +527,22 @@ export class RunnerConn {
         stepOr({ type: 'prep_failed', cause: clip(m.cause, 500) });
         break;
       case 'handover.complete':
+        if (json(row.handover_target, null)?.kind === 'hold') {
+          const boundary = json(row.handover_target, null);
+          const narrative = hub.latestHandover(row.id);
+          const checkpoint = hub.run(run.id);
+          const snapshotEvent = hub.db.get("SELECT id, payload FROM events WHERE run_id = ? AND kind = 'snapshot' ORDER BY id DESC LIMIT 1", run.id);
+          const snapshotProof = json(snapshotEvent?.payload, null);
+          if (m.stop_confirmed !== true || m.checkpoint_confirmed !== true || m.handover_written !== true
+            || narrative?.run_id !== run.id || narrative?.fence !== row.fence
+            || !Number.isSafeInteger(boundary.narrative_version) || !(narrative.version > boundary.narrative_version)
+            || checkpoint?.snapshot_status !== 'pushed' || !/^[a-f0-9]{40}$/.test(checkpoint?.last_snapshot_sha ?? '')
+            || snapshotProof?.status !== 'pushed' || snapshotProof?.sha !== checkpoint.last_snapshot_sha
+            || snapshotProof?.ref !== checkpoint.snapshot_ref
+            || !Number.isSafeInteger(boundary.snapshot_event_id) || !(snapshotEvent?.id > boundary.snapshot_event_id)) {
+            throw new HubError('CONFLICT', 'Move blocked: the runner must confirm its stop, final handover and pushed checkpoint.');
+          }
+        }
         rec('handover.complete');
         stepOr({ type: 'handover_complete' });
         break;

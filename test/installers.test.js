@@ -367,9 +367,10 @@ test('release.yml: tags and manual runs only, nothing signed, no branch conditio
   for (const j of ['stage', 'stage-beta']) assert.match(jobs[j], /permissions:\n {6}contents: write/, j);
   // the bounded unit tests (a hang on Windows ate the whole job once)
   assert.match(jobs.build, /timeout-minutes: 60/);
+  assert.doesNotMatch(jobs.build, /--test-force-exit/, 'forced exit can silently discard completed child-test verdicts');
   assert.match(jobs.build, /name: Unit tests\n(?:.*\n)*? {8}timeout-minutes: 20\n/);
-  assert.match(jobs.build, /node --test --test-force-exit --test-timeout=120000 test\/\*\.test\.js test\/adapters\/\*\.test\.js/);
-  assert.match(jobs.build, /node --test --test-force-exit --test-timeout=120000 remote\/test\//);
+  assert.match(jobs.build, /node --test --test-timeout=120000 test\/\*\.test\.js test\/adapters\/\*\.test\.js/);
+  assert.match(jobs.build, /node --test --test-timeout=120000 remote\/test\//);
   assert.ok(!/npm test/.test(jobs.build));
   // Every selected platform blocks staging; artifacts/evidence remain for debugging.
   assert.ok(!/continue-on-error:/.test(jobs.build));
@@ -377,7 +378,7 @@ test('release.yml: tags and manual runs only, nothing signed, no branch conditio
   releaseMatrixExpression(yml); // semantics and native/stage gates are exercised above
   assert.match(jobs.build, /name: Windows installer lifecycle/);
   assert.match(jobs.build, /run: node scripts\/windows-install-smoke\.js/);
-  assert.match(jobs.build, /node --test --test-force-exit --test-timeout=120000 '\*\/test\/\*\*\/\*\.test\.js'/, 'the board authority suite is mandatory too');
+  assert.match(jobs.build, /node --test --test-timeout=120000 '\*\/test\/\*\*\/\*\.test\.js'/, 'the board authority suite is mandatory too');
   assert.match(jobs.build, /dist\/\*\.yml/, 'beta*.yml as well as latest*.yml');
   // N2: both stage jobs read the repo variable and drop Windows before the checksums and every upload
   for (const j of ['stage', 'stage-beta']) {

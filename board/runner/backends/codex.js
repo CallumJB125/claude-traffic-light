@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process'; // privacy-flow: runner-codex
 import fs from 'node:fs';
 import path from 'node:path';
 import { detectCli } from './detect.js';
-import { lstartOf, killTree, processTable, treeGroups, killGroups } from '../procs.js';
+import { lstartOf, killTree, processTable, treeGroups, killGroups, waitForStopped } from '../procs.js';
 import { writeFileAtomic } from '../util.js';
 import { CODEX_MCP_SERVER, underElectron } from '../launch.js';
 import { CODEX_BOARD_TOOLS } from '../../mcp/codex-run.js';
@@ -165,8 +165,12 @@ export class CodexBackend extends EventEmitter {
   refreshTree() { if (this.alive()) this.leftovers = [...new Set([...this.leftovers, ...treeGroups(this.pid, processTable()).groups.filter((g) => g !== this.pgid)])]; }
   reap() { killGroups(this.leftovers, 'SIGKILL'); }
   kill() { if (this.pid) killTree(this.pid, this.lstart); this.reap(); }
+  async confirmStopped() {
+    const observed = await waitForStopped({ pid: this.pid, groups: [...new Set([this.pgid, ...this.leftovers].filter((g) => g != null))] });
+    return observed && !this.alive();
+  }
   async stop() {
-    if (!this.alive()) { this.reap(); return true; }
+    if (!this.alive()) { this.reap(); return this.confirmStopped(); }
     this.refreshTree();
     const ended = new Promise((r) => { const t = setTimeout(() => { this.off('exit', done); r(false); }, this.stopGraceMs ?? 3000); const done = () => { clearTimeout(t); r(true); }; this.once('exit', done); });
     try { process.kill(this.pid, 'SIGTERM'); } catch { /* gone */ }
@@ -178,6 +182,6 @@ export class CodexBackend extends EventEmitter {
         this.once('exit', done);
       });
     }
-    this.reap(); return !this.alive();
+    this.reap(); return this.confirmStopped();
   }
 }

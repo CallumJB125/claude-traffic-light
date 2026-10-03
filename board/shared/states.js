@@ -120,6 +120,8 @@ const guardAll = (...checks) => (card, ev, ctx) => {
 };
 const canWrite = guardAll(['can_write', 'FORBIDDEN']);
 const needsRequestId = (card, ev) => (ev.request_id ? null : { code: 'VALIDATION', message: 'request_id required' });
+const holdCheckpointRequired = (c) => c.handover_target?.kind === 'hold' && c.handover_provenance !== 'checkpoint_complete'
+  ? { code: 'CONFLICT', message: 'The previous AI has not confirmed its stop and checkpoint. No replacement will start.' } : null;
 const both = (...gs) => (card, ev, ctx) => {
   for (const g of gs) { const e = g(card, ev, ctx); if (e) return e; }
   return null;
@@ -143,7 +145,7 @@ const ACTIVE_LIST = [...ACTIVE];
  */
 export const TRANSITIONS = Object.freeze([
   { id: '1', from: ['todo'], on: 'dispatch', to: 'queued',
-    guard: both(needsRequestId, guardAll(['has_repo', 'NO_REPO'], ['can_write', 'FORBIDDEN'], ['policy_ok', 'POLICY_DENIED'])),
+    guard: both(needsRequestId, holdCheckpointRequired, guardAll(['has_repo', 'NO_REPO'], ['can_write', 'FORBIDDEN'], ['policy_ok', 'POLICY_DENIED'])),
     effects: (c, ev, ctx) => [{ type: 'dispatch_create', request_id: ev.request_id, target_member_id: ev.target_member_id ?? null, needs_confirm: !!ctx.needs_confirm }, offer, feed('dispatched', { needs_confirm: !!ctx.needs_confirm })] },
   { id: '1a', from: ['queued'], on: 'queue_nudge', to: 'SAME',
     effects: () => [{ type: 'notify', rule: 'queued_no_runner', to: ['dispatcher'] }, { type: 'mark_nudged' }] },
@@ -231,14 +233,14 @@ export const TRANSITIONS = Object.freeze([
   { id: '25', from: L, on: 'release', to: 'failed', fenced: 'event', when: (c, ev) => ev.requeue !== true,
     patch: () => ({ fail_kind: 'released' }),
     effects: (c, ev) => [...endRun('released'), { type: 'handover_freeze' }, notify('failed'), feed('released', { requeue: false, reason: ev.reason ?? null })] },
-  { id: '26', from: ['failed'], on: 'retry', to: 'queued', bump: true, guard: both(needsRequestId, canWrite, guardAll(['policy_ok', 'POLICY_DENIED'])),
+  { id: '26', from: ['failed'], on: 'retry', to: 'queued', bump: true, guard: both(needsRequestId, canWrite, holdCheckpointRequired, guardAll(['policy_ok', 'POLICY_DENIED'])),
     effects: (c, ev, ctx) => [{ type: 'dispatch_create', request_id: ev.request_id, target_member_id: ev.target_member_id ?? null, needs_confirm: !!ctx.needs_confirm }, { type: 'seed', from: ['handover'] }, offer, feed('retried')] },
-  { id: '27', from: ['failed', 'orphaned', 'parked'], on: 'take_over', to: 'handed_over', bump: true, guard: canWrite,
+  { id: '27', from: ['failed', 'orphaned', 'parked'], on: 'take_over', to: 'handed_over', bump: true, guard: both(canWrite, holdCheckpointRequired),
     patch: (c, ev) => ({ handover_target: { kind: 'member', member_id: ev.by ?? null }, handover_provenance: 'takeover' }),
     effects: (c, ev) => [...(c.run_state === 'orphaned' ? [runnerCmd(c, 'stop'), ...endRun('taken_over')] : []), handoffMemory('takeover'), feed('taken_over', { by: ev.by ?? null })] },
   { id: '27a', from: L, on: 'hand_over', to: 'handing_over', guard: both(guardAll(['can_hand_over', 'FORBIDDEN']),
-    (c, ev) => (['queue', 'member', 'self'].includes(ev.target?.kind) ? null : { code: 'VALIDATION', message: 'target.kind must be queue|member|self' })),
-    patch: (c, ev) => ({ handover_target: ev.target }),
+    (c, ev) => (['queue', 'member', 'self', 'hold'].includes(ev.target?.kind) ? null : { code: 'VALIDATION', message: 'target.kind must be queue|member|self|hold' })),
+    patch: (c, ev) => ({ handover_target: ev.target, handover_provenance: null }),
     effects: (c, ev) => [runnerCmd(c, 'handover_begin', { wait_ms: HANDOVER_WAIT_MS }), feed('handing_over', { by: ev.by ?? null })] },
   { id: '27b', from: ['handing_over'], on: 'handover_complete', to: 'handed_over', fenced: 'event', bump: true,
     patch: () => ({ handover_provenance: 'checkpoint_complete' }), effects: (c) => handedOverEffects(c, 'checkpoint_complete') },
@@ -247,19 +249,19 @@ export const TRANSITIONS = Object.freeze([
   { id: '27d', from: ['handing_over'], on: 'hb_timeout', to: 'handed_over', bump: true,
     patch: () => ({ handover_provenance: 'checkpoint_incomplete' }), effects: (c) => handedOverEffects(c, 'checkpoint_incomplete') },
   { id: '28', from: ['unresponsive', 'suspended'], on: 'take_over', to: 'handed_over', bump: true,
-    guard: both(canWrite, guardAll(['confirmed', 'CONFIRM_REQUIRED'])),
+    guard: both(canWrite, holdCheckpointRequired, guardAll(['confirmed', 'CONFIRM_REQUIRED'])),
     patch: (c, ev) => ({ handover_target: { kind: 'member', member_id: ev.by ?? null }, handover_provenance: 'takeover' }),
     effects: (c, ev) => [runnerCmd(c, 'stop'), ...endRun('taken_over'), handoffMemory('takeover'), feed('taken_over', { by: ev.by ?? null })] },
-  { id: '29', from: ['handed_over'], on: 'redispatch', to: 'queued', guard: both(needsRequestId, canWrite),
+  { id: '29', from: ['handed_over'], on: 'redispatch', to: 'queued', guard: both(needsRequestId, canWrite, holdCheckpointRequired),
     patch: () => ({ handover_target: null }),
     effects: (c, ev, ctx) => [{ type: 'dispatch_create', request_id: ev.request_id, target_member_id: ev.target_member_id ?? null, needs_confirm: !!ctx.needs_confirm }, { type: 'seed', from: ['handover'] }, offer, feed('dispatched', { needs_confirm: !!ctx.needs_confirm })] },
-  { id: '30', from: ['handed_over'], on: 'take_myself', to: 'todo', guard: canWrite,
+  { id: '30', from: ['handed_over'], on: 'take_myself', to: 'todo', guard: both(canWrite, holdCheckpointRequired),
     patch: () => ({ handover_target: null }),
     effects: (c, ev) => [{ type: 'assign', member_id: ev.by ?? null, role: 'owner' }, feed('human_on_it', { by: ev.by ?? null })] },
   // Decision D7: board_complete is itself activity, so quiet → in_review is allowed too.
   { id: '31', from: ['running', 'quiet'], on: 'complete', to: 'in_review', fenced: 'event', guard: guardAll(['evidence_ok', 'EVIDENCE_MISSING']),
     effects: () => [...endRun('complete'), feed('in_review')] },
-  { id: '32', from: ['in_review'], on: 'request_changes', to: 'queued', bump: true, guard: both(needsRequestId, canWrite, guardAll(['policy_ok', 'POLICY_DENIED'])),
+  { id: '32', from: ['in_review'], on: 'request_changes', to: 'queued', bump: true, guard: both(needsRequestId, canWrite, holdCheckpointRequired, guardAll(['policy_ok', 'POLICY_DENIED'])),
     effects: (c, ev, ctx) => [{ type: 'dispatch_create', request_id: ev.request_id, target_member_id: ev.target_member_id ?? null, needs_confirm: !!ctx.needs_confirm }, { type: 'seed', from: ['handover', 'review'] }, offer, feed('changes_requested', { by: ev.by ?? null })] },
   { id: '33', from: ['in_review'], on: 'pr_closed', to: 'todo', effects: (c, ev) => [feed('pr_closed_unmerged', { pr: ev.pr ?? null, by: ev.by ?? null })] },
   { id: '34', from: ['in_review'], on: 'pr_merged', to: 'done', effects: (c, ev) => [feed('merged', { pr: ev.pr ?? null, by: ev.by ?? null })] },
@@ -322,6 +324,10 @@ export function step(card, event, ctx = {}) {
   if (to === 'SAME') to = from;
   else if (to === 'RECOVER') to = recoverTo(card);
   else if (typeof to === 'function') to = to(card, event, ctx);
+  // Also cover runner/system recovery and requeue paths, not just HTTP
+  // buttons. An unconfirmed held move cannot create a replacement run.
+  const held = to === 'queued' ? holdCheckpointRequired(card) : null;
+  if (held) return err(held.code, held.message, row.id);
 
   const next = { ...card, run_state: to };
   if (row.dark) next.resume_to = darkResume(card);
@@ -332,7 +338,7 @@ export function step(card, event, ctx = {}) {
   if (to !== 'reconnecting') next.pre_reconnect_state = null;
   if (to !== 'blocked' && to !== 'parked' && !(DARK.has(to) && next.resume_to === 'blocked')) next.blocked_kind = null;
   if (to !== 'failed') next.fail_kind = null;
-  if (to !== 'handing_over' && to !== 'handed_over') { next.handover_target = null; next.handover_provenance = null; }
+  if (to !== 'handing_over' && to !== 'handed_over' && next.handover_target?.kind !== 'hold') { next.handover_target = null; next.handover_provenance = null; }
 
   const effects = [];
   if (row.bump) {

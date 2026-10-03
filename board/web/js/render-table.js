@@ -4,7 +4,7 @@ import { h } from './h.js';
 import { icon } from './icons.js';
 import { pill, avatarStack } from './render-board.js';
 import { TABLE_COLUMNS, tableRows, summary } from './table.js';
-import { fmtUsd, formatAge } from './view.js';
+import { fmtUsd, formatAge, isObservedWork } from './view.js';
 import { labelClass, labelColor } from './labels.js';
 import { captureBadge } from './render-capture.js';
 
@@ -27,7 +27,7 @@ function row(r, model) {
       h('button', { type: 'button', class: 'card-open', 'data-action': 'open', 'data-card': r.id }, r.title),
       v.archived ? h('span', { class: 'label archived-badge' }, 'Archived') : null,
       r.pr?.url ? h('a', { class: 'row-pr num', href: r.pr.url, target: '_blank', rel: 'noopener noreferrer', title: `PR ${r.pr.state}` }, `#${r.pr.number}`) : null),
-    h('td', { class: 'tcol-status' }, v.capture && !v.run ? captureBadge(v, r.entry.elapsed_ms ?? 0) : pill(r.entry.face)),
+    h('td', { class: 'tcol-status' }, isObservedWork(v) ? captureBadge(v, r.entry.elapsed_ms ?? 0, model.conn?.status === 'lost') : pill(r.entry.face)),
     h('td', { class: 'tcol-column' }, r.column_label),
     h('td', { class: 'tcol-people' }, avatarStack(r.people) ?? h('span', { class: 'muted' }, '—')),
     h('td', { class: 'tcol-repo num' }, r.repo ?? h('span', { class: 'muted' }, '—')),

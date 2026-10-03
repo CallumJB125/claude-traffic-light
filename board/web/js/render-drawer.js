@@ -6,7 +6,7 @@ import { icon } from './icons.js';
 import { renderMarkdown, inline } from './markdown.js';
 import { pill, budgetBar, cardActions, avatar, labelChips } from './render-board.js';
 import { LABEL_COLORS, canArchive } from './labels.js';
-import { formatAge, repoBranch, isHumanOwned, COLUMNS, COLUMN_LABEL, fmtUsd } from './view.js';
+import { formatAge, repoBranch, isHumanOwned, isObservedWork, COLUMNS, COLUMN_LABEL, fmtUsd } from './view.js';
 import { packetPanel, messagePanel } from './render-communication.js';
 import { captureBadge } from './render-capture.js';
 import { ownershipPanel } from './render-ownership.js';
@@ -296,7 +296,7 @@ export function drawer(model) {
 
     body.push(
       h('div', { class: 'drawer-status' },
-        view.capture && !view.run ? captureBadge(view, elapsed) : pill(face, { size: 'lg' }),
+        isObservedWork(view) ? captureBadge(view, elapsed, model.conn?.status === 'lost') : pill(face, { size: 'lg' }),
         face.state === 'running' && face.disagree ? h('p', { class: 'muted small' }, 'Waiting for the board and this browser to agree the run is alive.') : null,
         archived ? h('p', { class: 'archived-note', role: 'note' }, `Archived${view.archived.by_name ? ` by ${view.archived.by_name}` : ''}${view.archived.at_age_ms != null ? ` ${ago(view.archived.at_age_ms + elapsed)}` : ''}. Restore it to change anything.`) : null,
         model.readOnly ? null : h('div', { class: 'drawer-actions' }, archived ? null : cardActions({ ...face, actions: face.actions.filter((a) => !OPENS_DRAWER.has(a)) }, view, model.busy), extra)),

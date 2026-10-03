@@ -14,7 +14,7 @@ import { PILLS } from '../../shared/cardface.js';
 import { captureBadge } from './render-capture.js';
 import {
   COLUMNS, COLUMN_LABEL, ACTION_LABEL, groupColumns, isHumanOwned, repoBranch, clock, initials, hueOf,
-  primaryAction, boardLamps, stripGlyph,
+  primaryAction, boardLamps, stripGlyph, isObservedWork, cardWorkPhase,
 } from './view.js';
 
 export function avatar(member, { size = 'sm', dim = false } = {}) {
@@ -84,7 +84,7 @@ function permissionButton(id, view, { primary, busyKeys }) {
 function actionButton(id, view, { primary: wantPrimary = false, busy = false, busyKeys = null } = {}) {
   if (id === 'allow' || id === 'deny') return permissionButton(id, view, { primary: wantPrimary, busyKeys });
   let primary = wantPrimary;
-  const label = ACTION_LABEL[id === 'allow_review' ? 'allow' : id];
+  const label = id === 'take_over_with_claude' && view.handover_hold === true ? 'Choose next AI' : ACTION_LABEL[id === 'allow_review' ? 'allow' : id];
   if (!label) return null;
   if (id === 'open_pr') {
     return view.pr?.url
@@ -105,6 +105,8 @@ function actionButton(id, view, { primary: wantPrimary = false, busy = false, bu
 }
 
 export function cardActions(face, view, busy) {
+  if (isObservedWork(view)) return h('div', { class: 'card-actions' },
+    h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'open', 'data-card': view.id }, 'Show details'));
   const primary = primaryAction(face);
   const buttons = face.actions.map((a) => actionButton(a, view, { primary: a === primary, busy: busy?.has(`${view.id}:${a}`), busyKeys: busy })).filter(Boolean);
   return buttons.length ? h('div', { class: 'card-actions' }, buttons) : null;
@@ -153,6 +155,8 @@ export function card({ view, face, elapsed_ms = 0 }, model) {
   const dragging = model.drag?.mode === 'pointer' && model.drag.ids.includes(view.id);
   const chips = cardChips(view, face, { elapsed_ms });
   const pending = view.pending === true;
+  const observed = isObservedWork(view);
+  const workPhase = cardWorkPhase(view, face);
   const draggable = human && !model.readOnly && !pending && !archived;
   // The cover is decoration: left off while the board's states are stale.
   const cover = model.conn?.status === 'lost' ? '' : coverClass(view.cover);
@@ -178,7 +182,9 @@ export function card({ view, face, elapsed_ms = 0 }, model) {
     avatarStack(people)),
   h('h3', { class: 'card-title', id: `t-${view.id}` },
     h('button', { type: 'button', class: 'card-open', 'data-action': pending ? null : 'open', 'data-card': view.id, disabled: pending || null, 'aria-describedby': draggable ? 'dnd-help' : null }, view.title)),
-  view.capture && !view.run ? captureBadge(view, elapsed_ms) : pill(chips.some((c) => c.id === 'proof') ? { ...face, reason: null } : face),
+  observed ? captureBadge(view, elapsed_ms, model.conn?.status === 'lost') : pill(chips.some((c) => c.id === 'proof') ? { ...face, reason: null } : face),
+  workPhase ? h('p', { class: 'card-work-phase' }, workPhase) : null,
+  observed ? h('p', { class: 'card-foot' }, 'Existing session · details only. Stop it in your AI tool before starting elsewhere.') : null,
   (sponsor || req || face.activity_line) ? h('div', { class: 'card-meta' },
     sponsor ? h('span', { class: 'card-sponsor' }, sponsor) : null,
     face.activity_line && face.state !== 'done' ? h('span', { class: 'card-activity' }, face.activity_line) : null,
@@ -188,7 +194,7 @@ export function card({ view, face, elapsed_ms = 0 }, model) {
   labelChips(view, model, labels),
   chipRow(chips),
   archived ? archivedFoot(view, model) : model.readOnly || pending ? null : cardActions(face, view, model.busy),
-  human && !pending && !archived && face.state === 'todo' && !view.target ? h('p', { class: 'card-foot' }, view.repo ? 'on your account' : 'no repo yet · add one to tackle it with AI') : null);
+  human && !observed && !pending && !archived && face.state === 'todo' && !view.target ? h('p', { class: 'card-foot' }, view.repo ? 'on your account' : 'no repo yet · add one to tackle it with AI') : null);
 }
 
 // An archived card is read-only (D94): its one action is Restore.

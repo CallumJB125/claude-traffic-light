@@ -3,6 +3,7 @@
 // clocks, network and DOM events.
 import { h, render } from './h.js';
 import { tacklePreference, rememberTackle } from './tackle.js';
+import { handoverPin, sameHandover } from './ai-handover.js';
 import { api, errorText, setOrg, currentOrg, setCsrf, requestId } from './api.js';
 import { connectBoard } from './socket.js';
 import { displayFace, alertsForViewer, agedView } from './view.js';
@@ -1265,7 +1266,7 @@ async function openGive(cardId, mode) {
   if (!v) return;
   const preference = tacklePreference(state.me.member.id, undefined, state.board?.settings?.default_budget_usd ?? 5), retry = mode === 'retry';
   state.dialog = {
-    kind: 'give', cardId, mode, instance: {},
+    kind: 'give', cardId, mode, instance: {}, handover_hold: v.handover_hold === true, ...handoverPin(v),
     target: retry ? v.run?.owner?.member_id ?? state.me.member.id : state.me.member.id,
     repo_id: v.repo?.id ?? '',
     base_ref: v.base_ref ?? '',
@@ -1316,8 +1317,12 @@ async function submitGive(form) {
   const v = viewOf(d.cardId);
   const fd = new FormData(form);
   const target = fd.get('target') || state.me.member.id;
-  const repo_id = fd.get('repo_id') || null;
-  const base_ref = String(fd.get('base_ref') ?? '').trim() || null;
+  const moving = d.mode === 'redispatch' && d.handover_hold;
+  if (moving && (!sameHandover(v, d) || !v.handover_hold || v.handover_provenance !== 'checkpoint_complete')) {
+    state.dialog = { ...d, error: 'This handover changed. Reopen the card before choosing the next AI.' }; update(); return;
+  }
+  const repo_id = moving ? d.repo_id : fd.get('repo_id') || null;
+  const base_ref = moving ? d.base_ref : String(fd.get('base_ref') ?? '').trim() || null;
   const budget = Number(fd.get('budget_usd'));
   const ai = fd.get('ai') || d.ai;
   const uncapped = ai === 'codex' || fd.get('budget_mode') === 'none';
@@ -1341,7 +1346,8 @@ async function submitGive(form) {
     if (!current()) return;
     const isMe = target === state.me.member.id;
     const action = d.mode === 'retry' ? 'retry' : d.mode === 'redispatch' ? 'take_over_with_claude' : 'dispatch';
-    const body = { target_member_id: isMe ? null : target, ai, budget_usd: uncapped ? null : budget };
+    const body = { target_member_id: isMe ? null : target, ai, budget_usd: uncapped ? null : budget,
+      ...(moving ? { expected_fence: d.expected_fence, prior_run_id: d.prior_run_id } : {}) };
     const res = await api.action(d.cardId, action, body);
     if (!current()) return;
     rememberTackle(memberId, { ai, budget_mode: uncapped ? 'none' : 'cap', budget_usd: Number.isFinite(budget) && budget >= 0.5 ? budget : d.budget_usd });
@@ -1428,6 +1434,10 @@ async function submitDialogForm(form, submitter) {
     const k = fd.get('kind') ?? 'queue';
     const target = k === 'member' ? { kind: 'member', member_id: fd.get('member_id') } : { kind: k };
     return run(() => api.action(cardId, 'hand_over', { target }), `${keyOf(cardId)} is handing over. Claude is writing its final handover.`);
+  }
+  if (kind === 'switch-ai') {
+    return run(() => api.action(cardId, 'hand_over', { target: { kind: 'hold' },
+      expected_fence: d.expected_fence, prior_run_id: d.prior_run_id }), `${keyOf(cardId)} is preparing its handover. Choose the next AI after its runner confirms the stop.`);
   }
   if (kind === 'changes') {
     return run(() => api.action(cardId, 'request_changes', { comment: String(fd.get('comment') ?? '').trim() }), `Sent ${keyOf(cardId)} back to Claude with your notes.`);
@@ -1823,6 +1833,8 @@ function onClick(e) {
       openDetail(cardId, 'asks'); return;
     case 'give_to_claude': openGive(cardId, 'dispatch'); return;
     case 'take_over_with_claude': openGive(cardId, 'redispatch'); return;
+    case 'switch_ai': state.dialog = { kind: 'switch-ai', cardId, ...handoverPin(viewOf(cardId)) }; update(); return;
+    case 'view_handover': openDetail(cardId, 'handover'); return;
     case 'stop': case 'cancel': case 'take_over_confirm':
       state.dialog = { kind: 'confirm', action, cardId }; update(); return;
     case 'retry':

@@ -630,6 +630,12 @@ export class Api {
     const row = this.hub.card(cardId);
     if (row.archived_at) throw archivedError();
     const rel = this.relations(row);
+    const strictHandover = action === 'hand_over' && body.target?.kind === 'hold'
+      || action === 'take_over_with_claude' && json(row.handover_target, null)?.kind === 'hold';
+    if (strictHandover && (!Number.isSafeInteger(body.expected_fence) || body.expected_fence !== row.fence
+      || typeof body.prior_run_id !== 'string' || body.prior_run_id !== (rel.run?.id ?? this.hub.latestRun(cardId)?.id))) {
+      throw new HubError('CONFLICT', 'This run changed. Reopen the card before moving it to another AI.');
+    }
     const me = member.id;
     const admin = this.hub.isAdmin(member);
     const involved = (...ids) => admin || ids.flat().includes(me);
@@ -690,9 +696,13 @@ export class Api {
       }
       case 'hand_over': {
         const t = body.target;
-        if (!t || !['queue', 'member', 'self'].includes(t.kind)) throw new HubError('VALIDATION', 'target.kind must be queue|member|self');
+        if (!t || !['queue', 'member', 'self', 'hold'].includes(t.kind)) throw new HubError('VALIDATION', 'target.kind must be queue|member|self|hold');
         if (t.kind === 'member') this.orgMember(member, t.member_id);
-        event.target = { kind: t.kind, ...(t.kind === 'member' ? { member_id: t.member_id } : t.kind === 'self' ? { member_id: me } : {}), by: me };
+        event.target = { kind: t.kind, ...(t.kind === 'member' ? { member_id: t.member_id } : t.kind === 'self' ? { member_id: me } : {}), by: me,
+          ...(t.kind === 'hold' ? {
+            narrative_version: this.hub.latestHandover(cardId)?.version ?? 0,
+            snapshot_event_id: this.db.get("SELECT MAX(id) AS id FROM events WHERE run_id = ? AND kind = 'snapshot'", rel.run.id)?.id ?? 0,
+          } : {}) };
         break;
       }
       case 'request_changes': {

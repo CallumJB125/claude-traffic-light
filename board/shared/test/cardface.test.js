@@ -84,12 +84,12 @@ test('connection lost dims every live chip to unknown', () => {
 test('primary actions per §4.2', () => {
   const a = (s, over) => cardFace(view(s, over)).actions;
   assert.deepEqual(a('queued'), ['cancel']);
-  assert.deepEqual(a('running'), ['watch', 'stop']);
-  assert.deepEqual(a('blocked', { blocked_kind: 'permission' }), ['allow', 'deny']);
+  assert.deepEqual(a('running'), ['watch', 'stop', 'switch_ai']);
+  assert.deepEqual(a('blocked', { blocked_kind: 'permission' }), ['allow', 'deny', 'switch_ai']);
   assert.deepEqual(a('blocked', { blocked_kind: 'permission', viewer_can_approve: false }), []);
-  assert.deepEqual(a('blocked', { blocked_kind: 'decision' }), ['answer']);
-  assert.deepEqual(a('blocked', { blocked_kind: 'plan' }), ['approve_plan']);
-  assert.deepEqual(a('blocked', { blocked_kind: 'loop' }), ['continue', 'stop']);
+  assert.deepEqual(a('blocked', { blocked_kind: 'decision' }), ['answer', 'switch_ai']);
+  assert.deepEqual(a('blocked', { blocked_kind: 'plan' }), ['approve_plan', 'switch_ai']);
+  assert.deepEqual(a('blocked', { blocked_kind: 'loop' }), ['continue', 'stop', 'switch_ai']);
   assert.deepEqual(a('orphaned', { resume_to: 'quiet' }), ['take_over']);
   assert.deepEqual(a('suspended', { resume_to: 'quiet' }), ['take_over_confirm']);
   assert.deepEqual(a('handed_over'), ['take_over_with_claude', 'take_over_myself']);

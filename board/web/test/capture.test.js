@@ -10,7 +10,7 @@ const capture = { source: 'local_observation', provider: 'codex', provider_verif
 const observed = extra => view({ run: null, live: null, run_state: 'todo', capture, ...extra });
 test('observed work displays reported status without a verified run or green running label', () => {
  const v=observed(), face=displayFace(v), node=card({view:v,face,elapsed_ms:0},model([]));
- assert.equal(face.green,false);assert.equal(textOf(byClass(node,'capture-report')[0]),'Reported Codex · working');assert.equal(byClass(node,'pill').length,0);
+ assert.equal(face.green,false);assert.equal(textOf(byClass(node,'capture-report')[0]),'Reported Codex · AI working');assert.equal(byClass(node,'pill').length,0);
 });
 test('receipt freshness expires with the browser clock and reboot or stopped tracking never appears current', () => {
  assert.match(captureLabel(observed(),59990),/no recent report/);

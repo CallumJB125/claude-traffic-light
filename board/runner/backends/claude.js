@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import crypto from 'node:crypto';
 import { INTERRUPT_WAIT_MS, STOP_GRACE_MS } from '../../shared/liveness.js';
-import { lstartOf, killTree, processTable, treeGroups, killGroups, isAlive } from '../procs.js';
+import { lstartOf, killTree, processTable, treeGroups, killGroups, isAlive, waitForStopped } from '../procs.js';
 import { buildArgv, userMessage, interruptRequest } from '../launch.js';
 import { lineReader } from '../util.js';
 import { detectCli } from './detect.js';
@@ -208,15 +208,15 @@ export class ClaudeBackend extends EventEmitter {
    * killed too (tool trees reparent to 1 and outlive claude, spike 5b).
    */
   async stop() {
-    if (this.stopping) return this.#waitExit(this.interruptWaitMs + this.stopGraceMs + 5000);
+    if (this.stopping) { await this.#waitExit(this.interruptWaitMs + this.stopGraceMs + 5000); return this.#confirmStopped(); }
     this.stopping = true;
-    if (!this.alive()) { this.#reapLeftovers(); return true; }
+    if (!this.alive()) { this.#reapLeftovers(); return this.#confirmStopped(); }
     if (this.turnActive) {
       await this.interrupt();
       await this.#waitTurnEnd(this.interruptWaitMs);
     }
     const before = treeGroups(this.pid, processTable());
-    this.#leftovers = before.groups.filter((g) => g !== this.pgid);
+    this.#leftovers = [...new Set([...this.#leftovers, ...before.groups.filter((g) => g !== this.pgid)])];
     this.endInput();
     try { process.kill(this.pid, 'SIGTERM'); } catch { /* gone */ }
     const exited = await this.#waitExit(this.stopGraceMs);
@@ -225,7 +225,12 @@ export class ClaudeBackend extends EventEmitter {
       await this.#waitExit(2000);
     }
     this.#reapLeftovers();
-    return true;
+    return this.#confirmStopped();
+  }
+
+  async #confirmStopped() {
+    const observed = await waitForStopped({ pid: this.pid, groups: [...new Set([this.pgid, ...this.#leftovers].filter((g) => g != null))] });
+    return observed && !this.alive();
   }
 
   #leftovers = [];
