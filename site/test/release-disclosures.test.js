@@ -55,10 +55,10 @@ class Element {
   get textContent() { return this.children.map((c) => typeof c === 'string' ? c : c.textContent).join(''); }
   set textContent(value) { this.children = [value]; }
 }
-async function download(os, feeds, windows = false) {
+async function download(os, feeds, windows = false, channel = '') {
   const html = read('download.html');
   const fallback = html.match(/data-fallback="([^"]+)"/)[1];
-  const elements = { dl: new Element({ feed: 'https://download.plexiform.dev', fallback, windows: String(windows) }), 'dl-status': new Element(), 'dl-primary': new Element(), 'dl-meta': new Element() };
+  const elements = { dl: new Element({ feed: 'https://download.plexiform.dev' + (channel === 'beta' ? '/beta' : ''), channel, fallback, windows: String(windows) }), 'dl-status': new Element(), 'dl-primary': new Element(), 'dl-meta': new Element() };
   const rows = ['mac', 'win', 'linux'].map((kind) => { const row = new Element({ os: kind }); row.append(new Element(), new Element()); return row; });
   const calls = [];
   vm.runInNewContext(read('assets/download.js'), {
@@ -80,7 +80,7 @@ test('release downloads: failed feeds use a version-neutral real Releases fallba
   assert.equal(elements['dl-status'].textContent, 'Could not verify the Mac download feed.');
   assert.equal(rows[2].lastElementChild.textContent, 'Could not verify the download feed');
   assert.doesNotMatch(text('download.html'), /Linux.*not published/i);
-  assert.match(text('download.html'), /prepared release candidate is not yet a published download/i);
+  assert.match(text('download.html'), /latest public preview is 1\.0\.2-beta\.52/i);
 });
 
 test('release downloads: Linux follows its published feed and Windows stays gated even with a feed', async () => {
@@ -117,3 +117,9 @@ test('accepted Windows downloads follow the feed; missing or wrong-platform file
     assert.equal(missing.elements['dl-primary'].children[0].textContent, 'Browse published GitHub releases');
   }
 });
+
+ test('public preview uses the beta feed and beta installer URLs', async () => {
+ const r = await download('linux', { 'beta-linux.yml': linuxFeed }, false, 'beta');
+ assert.ok(r.calls.includes('https://download.plexiform.dev/beta/beta-linux.yml'));
+ assert.equal(r.elements['dl-primary'].children[0].attrs.href, 'https://download.plexiform.dev/beta/Plexiform-9.7.3.AppImage');
+ });

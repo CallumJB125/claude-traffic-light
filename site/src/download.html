@@ -12,13 +12,13 @@
     <h1>Download {{brand.name}}</h1>
     <p class="lede">Plexiform is free for you and your team. Your AI providers keep their own subscriptions and usage charges. {{live:publicSignup}}<a href="{{brand.urls.hub}}">Create a free account</a> or sign in to your existing team.{{/live}}{{notlive:publicSignup}}Public registration is being prepared; existing team access still uses invitations.{{/notlive}}</p>
 
-    <div class="dl-card" id="dl" data-windows="{{live:windowsDownloads}}true{{/live}}{{notlive:windowsDownloads}}false{{/notlive}}" data-feed="{{brand.urls.downloads}}" data-fallback="https://github.com/CallumJB125/claude-traffic-light/releases">
-      <p id="dl-status" role="status">Looking for the latest build…</p>
+    <div class="dl-card" id="dl" data-windows="{{live:windowsDownloads}}true{{/live}}{{notlive:windowsDownloads}}false{{/notlive}}" data-feed="{{brand.urls.downloads}}/beta" data-channel="beta" data-fallback="https://github.com/CallumJB125/claude-traffic-light/releases">
+      <p id="dl-status" role="status">Looking for the latest public preview…</p>
       <div id="dl-primary"></div>
       <p id="dl-meta"></p>
     </div>
 
-    <p class="note" style="margin-top:18px">{{live:windowsDownloads}}Published installers are available for macOS, Windows and Linux.{{/live}}{{notlive:windowsDownloads}}Published installers are currently available for macOS and Linux. Windows is unavailable while its runtime acceptance is pending.{{/notlive}} The prepared release candidate is not yet a published download. If the feeds cannot be loaded, <a href="https://github.com/CallumJB125/claude-traffic-light/releases">browse published GitHub releases</a>.</p>
+    <p class="note" style="margin-top:18px">{{live:windowsDownloads}}Published installers are available for macOS, Windows and Linux.{{/live}}{{notlive:windowsDownloads}}Published installers are currently available for macOS and Linux. Windows is unavailable while its runtime acceptance is pending.{{/notlive}} The latest public preview is 1.0.2-beta.52. If the feeds cannot be loaded, <a href="https://github.com/CallumJB125/claude-traffic-light/releases">browse published GitHub releases</a>.</p>
     <h2 style="margin-top:56px;font-size:1.5rem">All downloads</h2>
     <ul class="os-list" id="dl-all">
       <li data-os="mac"><span><strong>macOS</strong> · Apple silicon and Intel</span><span class="muted">Checking…</span></li>
@@ -71,7 +71,7 @@
     </div>
 
     <h2 style="margin-top:64px;font-size:1.7rem">Open the app and connect your work</h2>
-    <p class="prose" style="margin-top:12px">The prepared team-session candidate adds the Overview and sharing setup below; the download buttons above still show the published builds.</p>
+    <p class="prose" style="margin-top:12px">The public preview includes Overview and the sharing setup below. Public account registration is still being prepared.</p>
     <ol class="steps">
       <li><strong>Open Overview</strong> to see reported sessions and start a session with an available provider. Claude Code, Codex and other providers need their own installation and sign-in; installing {{brand.name}} does not install or authenticate them. Existing sessions without a supported connection may be visible without being messageable.</li>
       {{live:publicSignup}}<li><strong>Create a free account</strong> and verify your email to start your own private team. Open an invitation to join someone else's team. Provider sign-in is separate from your Plexiform account.</li>{{/live}}{{notlive:publicSignup}}<li><strong>For a team, open your invite link</strong> and sign in using a method offered by that team's hub. Confirm the team you are joining. Your account and invite are separate from your AI provider account; real account and invite acceptance for the prepared candidate is still pending.</li>{{/notlive}}

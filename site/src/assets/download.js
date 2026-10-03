@@ -20,7 +20,7 @@
     const ctl = new AbortController();
     const t = setTimeout(() => ctl.abort(), 7000);
     try {
-      const r = await fetch(`${base}/${F.FEEDS[kind]}`, { signal: ctl.signal, cache: 'no-cache' });
+      const r = await fetch(`${base}/${card.dataset.channel === 'beta' ? F.FEEDS[kind].replace('latest', 'beta') : F.FEEDS[kind]}`, { signal: ctl.signal, cache: 'no-cache' });
       if (!r.ok) return null;
       return F.installers(F.parseFeed(await r.text()), base).filter((item) => item.os === kind);
     } catch { return null; } finally { clearTimeout(t); }
