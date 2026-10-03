@@ -18,8 +18,8 @@ const REASONS = Object.freeze({
   unreadable: 'The team hub sent an unreadable answer.',
   invalid: 'Check the message and try again.',
 });
-const HIDDEN = /[\u0000-\u001f\u007f-\u009f\u00ad\u061c\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g;
-const LOOSE = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u00ad\u061c\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g;
+const HIDDEN = /[\u0000-\u001f\u007f-\u009f\u00ad\u061c\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff\u2028\u2029\u2060-\u2064\u{e0000}-\u{e007f}]/gu;
+const LOOSE = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u00ad\u061c\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff\u2028\u2029\u2060-\u2064\u{e0000}-\u{e007f}]/gu;
 const object = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const str = (v, max) => (typeof v === 'string' ? [...v.replace(HIDDEN, '')].slice(0, max).join('') : '');
 const prose = (v, max) => (typeof v === 'string' ? [...v.replace(LOOSE, '')].slice(0, max).join('').replace(/\n{3,}/g, '\n\n') : '');
@@ -42,7 +42,7 @@ function shareRow(x) {
   const id = str(x.id, 100), session = str(x.session, 100);
   const scope = x.scope === 'interact' || x.scope === 'watch' ? x.scope : '';
   const team = object(x.team) ? { id: str(x.team.id, 100), name: str(x.team.name, 80) || 'Team' } : null;
-  const ownerId = object(x.owner) && typeof x.owner.id === 'string' ? x.owner.id.trim() : '';
+  const ownerId = object(x.owner) && typeof x.owner.id === 'string' ? x.owner.id.replace(HIDDEN, "").trim() : '';
   if (!UUID.test(id) || !UUID.test(session) || !scope || !team || !team.id || !ownerId || ownerId.length > 100) return null;
   return {
     ref: id, session, scope, team,
@@ -120,12 +120,16 @@ function createTeamHubClient({ baseUrl, token, fetch = globalThis.fetch, viewer:
 
   const mapStatus = (code) => (code === 404 || code === 410 ? 'stale' : code === 401 || code === 403 ? 'forbidden' : 'unavailable');
   const reasonFor = (status) => REASONS[status] ?? REASONS.unavailable;
-  function hubResult(r) {
+  const CHANGED = 'The session changed; try again.';
+  // send() only: a generation race or any other named refusal means the session moved on, which is retryable.
+  const movedOn = (res) => res.status === 'stale' || /generation[_ -]?(mismatch|race|changed|stale)/i.test(`${res.status ?? ''} ${res.error ?? ''} ${res.code ?? ''}`);
+  function hubResult(r, send = false) {
     if (!object(r) || typeof r.status !== 'number') return failed('unavailable', REASONS.unavailable);
     if (r.status !== 200) return failed(mapStatus(r.status), reasonFor(mapStatus(r.status)));
     const res = object(r.body) && object(r.body.result) ? r.body.result : null;
     if (!res) return failed('unavailable', REASONS.unreadable);
     if (res.ok !== true) {
+      if (send && res.status !== 'forbidden' && movedOn(res)) return failed('stale', CHANGED);
       const status = res.status === 'stale' ? 'stale' : res.status === 'forbidden' ? 'forbidden' : 'unavailable';
       return failed(status, reasonFor(status));
     }
@@ -176,7 +180,11 @@ function createTeamHubClient({ baseUrl, token, fetch = globalThis.fetch, viewer:
       for (;;) {
         const i = next++;
         if (settled || i >= rows.length || Date.now() >= deadline) return;
-        try { applyState(out[i], hubResult(await sharedCall(rows[i].ref, crypto.randomUUID(), 'state', { session: rows[i].session }, deadline)), atNow()); }
+        try {
+          const got = hubResult(await sharedCall(rows[i].ref, crypto.randomUUID(), 'state', { session: rows[i].session }, deadline));
+          if (settled) return;
+          applyState(out[i], got, atNow());
+        }
         catch { /* listed without state */ }
       }
     };
@@ -202,7 +210,7 @@ function createTeamHubClient({ baseUrl, token, fetch = globalThis.fetch, viewer:
     if (generation === null) return failed('unavailable', REASONS.unreadable);
     const rid = typeof requestId === 'string' && UUID.test(requestId) ? requestId : crypto.randomUUID();
     let out;
-    try { out = hubResult(await sharedCall(row.ref, rid, 'send', { session: row.session, generation, text: message })); }
+    try { out = hubResult(await sharedCall(row.ref, rid, 'send', { session: row.session, generation, text: message }), true); }
     catch { out = failed('unavailable', REASONS.unavailable); }
     if (!out.ok) return out;
     return { ok: true, status: 'queued', delivery: deliveryOf(out.result.delivery) };
