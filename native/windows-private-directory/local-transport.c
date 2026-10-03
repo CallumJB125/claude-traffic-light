@@ -358,5 +358,5 @@ int main(int argc, char **argv) {
     }
     /* Parent pipe EOF is the lifetime boundary. OS process exit cancels all
      * worker syscalls and closes every pipe, lease and peer process handle. */
-    ExitProcess(0); return 0;
+    ExitProcess(0);
 }
