@@ -7,7 +7,14 @@ const {createTransactionCore}=require('../../src/borrow/transaction-core');
 const {hash}=require('../../src/plugins/index-verify');
 function deferred(){let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});return {promise,resolve,reject};}
 function fixture(t,options={}) {
-  const temp=fs.mkdtempSync(path.join(os.tmpdir(),'plexiform-setups-transaction-'));t.after(()=>fs.rmSync(temp,{recursive:true,force:true}));
+  // This masking fixture needs a known non-secret HOME. macOS TMPDIR ancestry
+  // and mixed-case mkdtemp suffixes can legitimately trip the entropy guard.
+  // Keep that guard unchanged; exclusively create a private lowercase UUID
+  // directory under the canonical POSIX temporary root for this one fixture.
+  const temp=options.lowEntropyPath
+    ?path.join(fs.realpathSync(process.platform==='win32'?os.tmpdir():'/tmp'),'pf-'+crypto.randomUUID())
+    :fs.mkdtempSync(path.join(os.tmpdir(),'plexiform-setups-transaction-'));
+  if(options.lowEntropyPath)fs.mkdirSync(temp,{mode:0o700});t.after(()=>fs.rmSync(temp,{recursive:true,force:true}));
   const home=path.join(temp,'profile'),appData=path.join(temp,'app-data');fs.mkdirSync(home,{mode:0o700});fs.mkdirSync(appData,{mode:0o700});
   const root=path.join(appData,'setups-transactions');
   const file={id:crypto.randomUUID(),source_id:options.source??'codex',relative_path:options.relative??'.codex/AGENTS.md',format:options.format??'text',content:options.content??'Write useful notes.\n',note:''};
