@@ -1,70 +1,27 @@
-# Builds the approved platform installers from a version tag, smoke-tests
-# each packaged app, and stages the release. Nothing reaches users here, and
-# nothing is signed:
-#   - the GitHub Release is created as a DRAFT
-#   - on R2 the files land under <version>/; the feed files the apps read
-#     (latest*.yml / beta*.yml, release.json at the bucket root) are not touched
-#   - a tag whose release was already published, or whose version was already
-#     promoted on R2, fails instead of changing it
-# Making a version live, and signing its release.json, is release-promote.yml
-# (a manual run in the `release` environment, which holds the signing keys).
-#
-# Beta: run this by hand with "beta" ticked. It builds <ref> as
-# <version>-beta.<run>, stages it to R2 beta/<version>/ and a draft GitHub
-# prerelease, and nothing else.
-#
-# Code signing is off until there is a Developer ID (see docs/RELEASING.md).
-name: Release
-
+# Diagnostic copy of the release build job. No staging, signing or publication.
+# Reuse passing Mac/Linux evidence while fixing concrete Windows failures.
+name: Windows acceptance only
 on:
-  push:
-    tags: ['v*.*.*']
   workflow_dispatch:
     inputs:
       ref:
-        description: 'Tag or branch to build (a dry run: artifacts only, nothing staged, unless beta)'
+        description: Exact candidate commit
         required: true
-        default: main
-      native_only:
-        description: 'Run native acceptance only; no installers or staging'
-        type: boolean
-        default: false
-      beta:
-        description: 'Beta: version it <version>-beta.<run> and stage it to R2 beta/<version>/ and a draft GitHub prerelease'
-        type: boolean
-        default: false
-      validate_windows:
-        description: 'Also run Windows installer/tests for acceptance; this does not enable Windows publication'
-        type: boolean
-        default: false
-
+        type: string
 permissions:
   contents: read
-
 concurrency:
-  group: release-${{ github.ref }}${{ inputs.native_only && '-native' || '' }}
+  group: windows-acceptance-${{ github.ref }}
   cancel-in-progress: false
-
 jobs:
-  native-directory:
-    permissions:
-      contents: read
-    uses: ./.github/workflows/windows-native.yml
-    with:
-      ref: ${{ github.event.inputs.ref || github.ref }}
-
   build:
-    if: github.event_name != 'workflow_dispatch' || !inputs.native_only
     name: build (${{ matrix.platform }})
     strategy:
       fail-fast: false
-      # The approved first release covers macOS/Linux. Windows joins both the
-      # mandatory installer/test matrix and publication only after its separate
-      # runtime acceptance enables WINDOWS_RELEASE. Native SDK acceptance above
-      # still runs on every dispatch; no assertions are skipped within a build.
-      # validate_windows permits an unpublished acceptance build before that flag.
       matrix:
-        include: ${{ fromJSON((vars.WINDOWS_RELEASE == 'true' || (github.event_name == 'workflow_dispatch' && inputs.validate_windows)) && '[{"os":"macos-latest","platform":"mac"},{"os":"windows-latest","platform":"win"},{"os":"ubuntu-latest","platform":"linux"}]' || '[{"os":"macos-latest","platform":"mac"},{"os":"ubuntu-latest","platform":"linux"}]') }}
+        include:
+          - os: windows-latest
+            platform: win
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     permissions:
@@ -206,115 +163,3 @@ jobs:
             dist/*.yml
             !dist/builder-debug.yml
 
-  stage:
-    name: stage (draft release + R2)
-    needs: [build, native-directory]
-    if: startsWith(github.ref, 'refs/tags/')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    env:
-      WINDOWS_RELEASE: ${{ vars.WINDOWS_RELEASE }}
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-        with:
-          persist-credentials: false
-
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          pattern: installers-*
-          path: out
-          merge-multiple: true
-
-      # Windows ships only with WINDOWS_RELEASE=true: before the checksums and
-      # every upload, so neither the draft nor R2 holds a Windows file.
-      - name: Drop Windows unless it ships
-        run: node scripts/release-sign.js prune out
-
-      - name: Check the installers and feed files
-        run: node scripts/release-sign.js check out --channel stable --version "${GITHUB_REF_NAME#v}"
-
-      - name: Checksums
-        working-directory: out
-        run: sha256sum -- * > SHA256SUMS.txt && cat SHA256SUMS.txt
-
-      # A published release is never changed by re-running its tag.
-      - name: Draft GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if draft="$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft 2>/dev/null)"; then
-            if [ "$draft" != true ]; then echo "::error::$GITHUB_REF_NAME is already published; bump the version"; exit 1; fi
-          else
-            gh release create "$GITHUB_REF_NAME" --draft --title "Plexiform ${GITHUB_REF_NAME#v}" --notes-file docs/release-notes.md --verify-tag
-          fi
-          gh release upload "$GITHUB_REF_NAME" out/* --clobber
-
-      - name: Upload to R2 (versioned; the live feed is untouched)
-        env:
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-          R2_RELEASES_BUCKET: ${{ secrets.R2_RELEASES_BUCKET }}
-        run: node scripts/release-r2.js stage "${GITHUB_REF_NAME#v}" out
-
-  stage-beta:
-    name: stage beta (R2 beta/<version>/ + draft prerelease)
-    needs: [build, native-directory]
-    if: github.event_name == 'workflow_dispatch' && inputs.beta
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    env:
-      WINDOWS_RELEASE: ${{ vars.WINDOWS_RELEASE }}
-    steps:
-      # The scripts come from this workflow's own commit; only the built
-      # artifacts come from the ref that was built.
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          pattern: installers-*
-          path: out
-          merge-multiple: true
-
-      # Windows ships only with WINDOWS_RELEASE=true: before the checksums and
-      # every upload, so neither the draft nor R2 holds a Windows file.
-      - name: Drop Windows unless it ships
-        run: node scripts/release-sign.js prune out
-
-      - name: Version and check
-        id: v
-        run: |
-          v="$(node scripts/release-sign.js version out)"
-          case "$v" in *-beta.*) ;; *) echo "::error::$v is not a beta version"; exit 1 ;; esac
-          node scripts/release-sign.js check out --channel beta --version "$v"
-          echo "version=$v" >> "$GITHUB_OUTPUT"
-
-      - name: Checksums
-        working-directory: out
-        run: sha256sum -- * > SHA256SUMS.txt && cat SHA256SUMS.txt
-
-      # The promote workflow signs from these assets, not from R2.
-      - name: Draft GitHub prerelease
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.v.outputs.version }}
-          BUILT_REF: ${{ inputs.ref }}
-        run: |
-          sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/$BUILT_REF" --jq .sha)"
-          if gh release view "v$VERSION" >/dev/null 2>&1; then echo "::error::v$VERSION already exists"; exit 1; fi
-          gh release create "v$VERSION" --draft --prerelease --target "$sha" --title "Plexiform $VERSION" --notes-file docs/release-notes.md
-          gh release upload "v$VERSION" out/*
-
-      - name: Upload to R2 beta/ (never the root feed)
-        env:
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-          R2_RELEASES_BUCKET: ${{ secrets.R2_RELEASES_BUCKET }}
-          VERSION: ${{ steps.v.outputs.version }}
-        run: node scripts/release-r2.js stage-beta "$VERSION" out
