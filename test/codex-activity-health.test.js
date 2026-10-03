@@ -85,39 +85,39 @@ function connectHandler({ allow = true, installed = true, packaged = true, fails
   return { run: (sender = 'settings-main', id = 'codex') => handler(sender, id), calls };
 }
 
-test('current Settings connect stages lifecycle hooks and explicitly requires Codex review', () => {
+test('current Settings connect stages lifecycle hooks and explicitly requires Codex review', async () => {
   const f = connectHandler();
-  const r = f.run();
+  const r = await f.run();
   assert.equal(r.ok, true);
   assert.equal(r.reviewRequired, true);
   assert.equal(r.file, 'hooks.json');
   assert.deepEqual(f.calls, ['lifecycle']);
 });
 
-test('untrusted sender and dev/temporary app never write agent configuration', () => {
+test('untrusted sender and dev/temporary app never write agent configuration', async () => {
   for (const f of [connectHandler({ allow: false }), connectHandler({ installed: false }), connectHandler({ packaged: false })]) {
-    assert.equal(f.run().ok, false);
+    assert.equal((await f.run()).ok, false);
     assert.deepEqual(f.calls, []);
   }
   const f = connectHandler();
-  assert.equal(f.run('settings-subframe').ok, false);
+  assert.equal((await f.run('settings-subframe')).ok, false);
   assert.deepEqual(f.calls, []);
 });
 
-test('boxed or non-string agent IDs cannot select the legacy Codex notify installer', () => {
+test('boxed or non-string agent IDs cannot select the legacy Codex notify installer', async () => {
   const f = connectHandler();
   for (const id of [structuredClone(new String('codex')), ['codex'], { id: 'codex' }, null, 1]) {
-    assert.equal(f.run('settings-main', id).ok, false);
+    assert.equal((await f.run('settings-main', id)).ok, false);
   }
   assert.deepEqual(f.calls, []);
 });
 
-test('Codex install refusal points to lifecycle config and other agents retain their installer', () => {
+test('Codex install refusal points to lifecycle config and other agents retain their installer', async () => {
   const f = connectHandler({ fails: true });
-  assert.equal(f.run().file, 'hooks.json');
-  assert.equal(f.run().ok, false);
+  assert.equal((await f.run()).file, 'hooks.json');
+  assert.equal((await f.run()).ok, false);
   const other = connectHandler();
-  assert.equal(other.run('settings-main', 'cursor').reviewRequired, undefined);
+  assert.equal((await other.run('settings-main', 'cursor')).reviewRequired, undefined);
   assert.deepEqual(other.calls, ['notify']);
 });
 

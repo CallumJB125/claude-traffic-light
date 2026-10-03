@@ -36,7 +36,7 @@ test('every platform builds its update target; Windows portable has a distinct m
   assert.equal(config.publish[0].provider, 'generic');
   assert.match(config.publish[0].url, /^https:\/\//);
   // The layered config keeps package.json's file list, so other branches' additions still ship.
-  assert.deepEqual(config.files, pkg.build.files);
+  assert.deepEqual(config.files, [...pkg.build.files, '!board/shared/test-support/**']);
   assert.equal(config.mac.sign, './build/sign.js');
 });
 
