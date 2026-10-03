@@ -215,7 +215,7 @@ test('the global character may be a built-in or an installed (u-) body, nothing 
   assert.equal(norm('otter'), 'claude');
   assert.equal(norm('u-Bad Id'), 'claude');
   const rule = Rules.normalizeRule({ id: 'r', name: 'r', when: { signal: ['tool-use'] }, then: { body: 'ghost' } });
-  assert.equal(rule.then.body, null);
+  assert.equal(rule.then.body, undefined);
 });
 
 test('validator: the result is a fresh object of known fields with sanitised markup', () => {
