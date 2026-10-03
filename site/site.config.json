@@ -1,3 +1,5 @@
 {
-  "phone": false
+  "phone": false,
+  "publicSignup": false,
+  "windowsDownloads": false
 }

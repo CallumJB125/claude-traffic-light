@@ -10,19 +10,19 @@
 <main id="main" class="page">
   <div class="wrap">
     <h1>Download {{brand.name}}</h1>
-    <p class="lede">The beta is for small teams. You can install it now; joining a team board needs an invite.</p>
+    <p class="lede">Plexiform is free for you and your team. Your AI providers keep their own subscriptions and usage charges. {{live:publicSignup}}<a href="{{brand.urls.hub}}">Create a free account</a> or sign in to your existing team.{{/live}}{{notlive:publicSignup}}Public registration is being prepared; existing team access still uses invitations.{{/notlive}}</p>
 
-    <div class="dl-card" id="dl" data-feed="{{brand.urls.downloads}}" data-fallback="https://github.com/CallumJB125/claude-traffic-light/releases">
+    <div class="dl-card" id="dl" data-windows="{{live:windowsDownloads}}true{{/live}}{{notlive:windowsDownloads}}false{{/notlive}}" data-feed="{{brand.urls.downloads}}" data-fallback="https://github.com/CallumJB125/claude-traffic-light/releases">
       <p id="dl-status" role="status">Looking for the latest build…</p>
       <div id="dl-primary"></div>
       <p id="dl-meta"></p>
     </div>
 
-    <p class="note" style="margin-top:18px">Published installers are currently available for macOS and Linux. Windows is unavailable while its runtime acceptance is pending. The prepared release candidate is not yet a published download. If the feeds cannot be loaded, <a href="https://github.com/CallumJB125/claude-traffic-light/releases">browse published GitHub releases</a>.</p>
+    <p class="note" style="margin-top:18px">{{live:windowsDownloads}}Published installers are available for macOS, Windows and Linux.{{/live}}{{notlive:windowsDownloads}}Published installers are currently available for macOS and Linux. Windows is unavailable while its runtime acceptance is pending.{{/notlive}} The prepared release candidate is not yet a published download. If the feeds cannot be loaded, <a href="https://github.com/CallumJB125/claude-traffic-light/releases">browse published GitHub releases</a>.</p>
     <h2 style="margin-top:56px;font-size:1.5rem">All downloads</h2>
     <ul class="os-list" id="dl-all">
       <li data-os="mac"><span><strong>macOS</strong> · Apple silicon and Intel</span><span class="muted">Checking…</span></li>
-      <li data-os="win"><span><strong>Windows</strong></span><span class="muted">Unavailable pending runtime acceptance</span></li>
+      <li data-os="win"><span><strong>Windows</strong></span><span class="muted">{{live:windowsDownloads}}Checking…{{/live}}{{notlive:windowsDownloads}}Unavailable pending runtime acceptance{{/notlive}}</span></li>
       <li data-os="linux"><span><strong>Linux</strong> · AppImage and .deb</span><span class="muted">Checking…</span></li>
     </ul>
 
@@ -60,7 +60,7 @@
       </div>
       <div>
         <h3>Windows</h3>
-        <p class="prose">Windows downloads are unavailable while native runner and privacy acceptance are pending. These Mac and Linux instructions do not establish Windows support.</p>
+        {{live:windowsDownloads}}<ol class="steps"><li><strong>Download the Windows installer above</strong> and open it from Downloads.</li><li><strong>Follow the setup wizard</strong>, then open Plexiform from Start. The portable download runs without installation and needs manual updates.</li><li><strong>Open Preferences → Connect AI tools</strong> to connect supported providers installed on this computer.</li></ol>{{/live}}{{notlive:windowsDownloads}}<p class="prose">Windows downloads are unavailable while native runner and privacy acceptance are pending. These Mac and Linux instructions do not establish Windows support.</p>{{/notlive}}
         <h3 style="margin-top:28px">On Linux</h3>
         <ol class="steps">
           <li><strong>On Ubuntu or Debian, choose the .deb.</strong> Open the download in your Software installer, choose <strong>Install</strong> and authenticate if asked. Then open {{brand.name}} from your applications menu. Your system needs a graphical installer that supports .deb files.</li>
@@ -74,7 +74,7 @@
     <p class="prose" style="margin-top:12px">The prepared team-session candidate adds the Overview and sharing setup below; the download buttons above still show the published builds.</p>
     <ol class="steps">
       <li><strong>Open Overview</strong> to see reported sessions and start a session with an available provider. Claude Code, Codex and other providers need their own installation and sign-in; installing {{brand.name}} does not install or authenticate them. Existing sessions without a supported connection may be visible without being messageable.</li>
-      <li><strong>For a team, open your invite link</strong> and sign in using a method offered by that team's hub. Confirm the team you are joining. Your account and invite are separate from your AI provider account; real account and invite acceptance for the prepared candidate is still pending.</li>
+      {{live:publicSignup}}<li><strong>Create a free account</strong> and verify your email to start your own private team. Open an invitation to join someone else's team. Provider sign-in is separate from your Plexiform account.</li>{{/live}}{{notlive:publicSignup}}<li><strong>For a team, open your invite link</strong> and sign in using a method offered by that team's hub. Confirm the team you are joining. Your account and invite are separate from your AI provider account; real account and invite acceptance for the prepared candidate is still pending.</li>{{/notlive}}
       <li><strong>Open Preferences</strong> to adjust automatic team sharing and other app settings. Supported team-associated sessions can be shared with acting teammates; viewers watch only. Messages use the session owner's provider quota and permissions.</li>
     </ol>
     <p class="note">Connecting an existing Claude terminal is an optional advanced setup with its own provider confirmation. It is not required to install or open {{brand.name}}.</p>

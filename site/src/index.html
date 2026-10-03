@@ -19,10 +19,10 @@
       <p class="lede rv">{{brand.name}} puts a small traffic light on your desktop for supported coding-agent sessions: green while it works, amber when it is your turn, red when it is stuck on you. Claude Code first, with Codex, Cursor and Gemini reporting in through hooks. The team board hands cards to agents and shows where each one got to.</p>
       <div class="hero-cta rv">
         <a class="btn btn-os btn-light" href="/download" data-download-cta data-os-label>Download {{brand.name}}</a>
-        <a class="btn btn-ghost btn-os btn-ghost-light" href="#waitlist">Join the beta waitlist</a>
+        {{live:publicSignup}}<a class="btn btn-ghost btn-os btn-ghost-light" href="{{brand.urls.hub}}">Create a free account</a>{{/live}}{{notlive:publicSignup}}<a class="btn btn-ghost btn-os btn-ghost-light" href="#waitlist">Get public-launch updates</a>{{/notlive}}
         <a class="hero-other" href="/download" data-other-platforms hidden>Other platforms</a>
       </div>
-      <p class="hero-note rv">Private beta for Mac first. The first open takes a few extra clicks: <a href="/download#first-open">here's how</a>.</p>
+      <p class="hero-note rv">Free Plexiform beta. Connect your existing AI tools; their charges and limits still apply. The first open takes a few extra clicks: <a href="/download#first-open">here's how</a>.</p>
     </div>
     <div class="hero-stage" id="hero-stage">
       <div class="frame frame-hero" id="hero-frame" role="img" aria-label="The real Plexiform board, shown with sample data. A card is given to Claude and moves across the board while the widget's lamp goes green, red when an approval is needed, then amber when the work is ready.">
@@ -264,12 +264,12 @@
 <section class="section" id="beta" aria-labelledby="beta-h">
   <div class="wrap grid-2">
     <div>
-      <h2 id="beta-h" class="rv">Private beta, for small teams.</h2>
-      <div class="prose" style="margin-top:22px"><p>The desktop app works on its own. The team board is where the beta needs you: a few small teams, each with an invite, using it for real work for a few weeks.</p><p>Pricing isn't announced yet. The waitlist hears first, before anything is charged.</p></div>
-      <div class="hero-cta" style="margin-top:28px"><a class="btn" href="#waitlist">Join the waitlist</a><a class="btn btn-ghost" href="/download">See the downloads</a></div>
+      <h2 id="beta-h" class="rv">Free for you and your team.</h2>
+      <div class="prose" style="margin-top:22px"><p>The desktop app and team features are free. Connect your own AI tools and accounts; their subscriptions, usage charges and permissions still apply.</p><p>Each team has its own private boards and members. Free teams support up to 25 members and 10 boards, with fair-use storage and signup limits.</p>{{live:publicSignup}}<p>Anyone can create an account, verify their email and start a team. An invitation is only needed to join someone else's team.</p>{{/live}}{{notlive:publicSignup}}<p>Public registration is being prepared. Existing team access still uses invitations.</p>{{/notlive}}</div>
+      <div class="hero-cta" style="margin-top:28px">{{live:publicSignup}}<a class="btn" href="{{brand.urls.hub}}">Create a free account</a>{{/live}}{{notlive:publicSignup}}<a class="btn" href="#waitlist">Get public-launch updates</a>{{/notlive}}<a class="btn btn-ghost" href="/download">See the downloads</a></div>
     </div>
     <ul class="facts">
-      <li>Published beta installers are available for macOS and Linux. Windows is unavailable while its runtime acceptance is pending; check the download page for published builds.</li>
+      <li>{{live:windowsDownloads}}Published installers are available for macOS, Windows and Linux; check the download page for the current version.{{/live}}{{notlive:windowsDownloads}}Published beta installers are available for macOS and Linux. Windows is unavailable while its runtime acceptance is pending; check the download page for published builds.{{/notlive}}</li>
       <li>A phone companion, to approve a permission prompt when you're away from your desk, is coming.</li>
       <li>Every change is written up in the <a href="/changelog">changelog</a>, and the <a href="/docs">docs</a> list what it adds to Claude Code's settings.</li>
     </ul>
@@ -284,19 +284,20 @@
       <details><summary>Does it read my prompts or my code?</summary><p>The usage reader reads Claude Code logs locally and keeps counts and costs. Tasks keeps task text, sent messages, AI activity and replies locally; temporary widget requests may include tool input or questions. Content you send to a team board or supported shared session can be read by its hub operator, and task-inbox messages and replies are stored there. Your chosen AI provider handles prompts and code under its own terms.</p></details>
       <details><summary>What does the app send out?</summary><p>The desktop app sends no telemetry or analytics. Team boards receive the content you share; the release candidate automatically shares supported sessions associated with a signed-in team workspace. The hub operator can read shared messages and replies, and task inboxes retain them. Updates reveal IP address and app version. Website hosting includes an injected Cloudflare Web Analytics beacon. See the <a href="/privacy">privacy notice</a> for the boundaries.</p></details>
       <details><summary>Why does the first open take extra steps?</summary><p>The beta isn't signed with an Apple Developer ID yet, so macOS can ask for confirmation in System Settings, including after updates. <a href="/download#first-open">The steps are on the download page.</a></p></details>
-      <details><summary>Is there a Windows or Linux version?</summary><p>Linux AppImage and .deb beta installers are published. Windows is unavailable while its runtime acceptance is pending. The <a href="/download">download page</a> lists the published builds; it does not mean the prepared release candidate is already downloadable.</p></details>
+      <details><summary>Is there a Windows or Linux version?</summary><p>{{live:windowsDownloads}}Windows installers and Linux AppImage and .deb packages are published.{{/live}}{{notlive:windowsDownloads}}Linux AppImage and .deb beta installers are published. Windows is unavailable while its runtime acceptance is pending.{{/notlive}} The <a href="/download">download page</a> lists the published builds; it does not mean the prepared release candidate is already downloadable.</p></details>
       <details><summary>Who is Buddy?</summary><p>The pixel character who holds up the traffic light.</p></details>
-      <details><summary>How do I get in?</summary><p>You can install the desktop app now. Joining a team board needs an invite: join the waitlist below, and beta spots go to small teams first.</p></details>
+      <details><summary>How do I get in?</summary><p>{{live:publicSignup}}Create a free account, verify your email and create your team, or open an invitation to join an existing team. Download the desktop app to connect supported local AI sessions.{{/live}}{{notlive:publicSignup}}You can install the desktop app now. Public registration is being prepared; existing team access still uses invitations.{{/notlive}}</p></details>
     </div>
   </div>
 </section>
 
+{{notlive:publicSignup}}
 <section class="section" id="waitlist" aria-labelledby="wl-h">
   <div class="wrap">
     <div class="cta-band">
       <div>
-        <h2 id="wl-h" class="rv">Get a place in the beta.</h2>
-        <p class="lede">Tell us where to send your invite. We'll only use your email about the beta.</p>
+        <h2 id="wl-h" class="rv">Hear when public signup opens.</h2>
+        <p class="lede">Get an email when free public registration opens. We'll only use your email about Plexiform's launch.</p>
       </div>
       <form class="form" id="wl-form" action="/api/waitlist" method="post" novalidate>
         <label>Email<input type="email" name="email" autocomplete="email" required placeholder="you@company.com" aria-describedby="wl-msg" /></label>
@@ -304,13 +305,14 @@
           <select name="uses"><option value="">Choose one</option><option>Claude Code</option><option>Codex</option><option>Cursor</option><option>Gemini</option><option>More than one</option></select>
         </label>
         <input class="hp" type="text" name="hp_trap_field" tabindex="-1" autocomplete="off" aria-hidden="true" />
-        <button class="btn" type="submit">Join the waitlist</button>
+        <button class="btn" type="submit">Keep me updated</button>
         <p class="form-msg" id="wl-msg" role="status" aria-live="polite"></p>
       </form>
     </div>
   </div>
 </section>
 
+{{/notlive}}
 </main>
 {{include:footer}}
 <script src="{{asset:assets/site.js}}" defer></script>

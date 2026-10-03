@@ -55,10 +55,10 @@ class Element {
   get textContent() { return this.children.map((c) => typeof c === 'string' ? c : c.textContent).join(''); }
   set textContent(value) { this.children = [value]; }
 }
-async function download(os, feeds) {
+async function download(os, feeds, windows = false) {
   const html = read('download.html');
   const fallback = html.match(/data-fallback="([^"]+)"/)[1];
-  const elements = { dl: new Element({ feed: 'https://download.plexiform.dev', fallback }), 'dl-status': new Element(), 'dl-primary': new Element(), 'dl-meta': new Element() };
+  const elements = { dl: new Element({ feed: 'https://download.plexiform.dev', fallback, windows: String(windows) }), 'dl-status': new Element(), 'dl-primary': new Element(), 'dl-meta': new Element() };
   const rows = ['mac', 'win', 'linux'].map((kind) => { const row = new Element({ os: kind }); row.append(new Element(), new Element()); return row; });
   const calls = [];
   vm.runInNewContext(read('assets/download.js'), {
@@ -103,4 +103,17 @@ test('release downloads: damaged-app instructions preserve verification and cons
   assert.match(copy, /do not bypass that warning/i);
   assert.match(copy, /Ad-hoc signed updates may ask again; do not approve an unexpected request/i);
   assert.match(copy, /method offered by that team's hub/i);
+});
+
+test('accepted Windows downloads follow the feed; missing or wrong-platform files never become a download', async () => {
+  const feeds = { [Feed.FEEDS.win]: 'version: 9.7.3\nfiles:\n  - url: Plexiform-Setup-9.7.3.exe\n    sha512: ABCD\n' };
+  const win = await download('win', feeds, true);
+  assert.equal(win.elements['dl-status'].textContent, 'Version 9.7.3 for Windows');
+  assert.equal(win.elements['dl-primary'].children[0].attrs.href, 'https://download.plexiform.dev/Plexiform-Setup-9.7.3.exe');
+  assert.equal(win.rows[1].attrs['data-version'], '9.7.3');
+  for (const feed of [undefined, linuxFeed]) {
+    const missing = await download('win', { [Feed.FEEDS.win]: feed }, true);
+    assert.equal(missing.elements['dl-status'].textContent, 'Could not verify the Windows download feed.');
+    assert.equal(missing.elements['dl-primary'].children[0].textContent, 'Browse published GitHub releases');
+  }
 });

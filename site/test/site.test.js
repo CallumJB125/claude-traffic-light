@@ -228,3 +228,21 @@ test('waitlist: the honeypot is a field browsers do not autofill, and the page a
   assert.match(js, /hp: form\.hp_trap_field\.value/);
   assert.match(fn, /data\.hp/);
 });
+
+test('public launch: account and Windows copy follows accepted release flags consistently', () => {
+  const { build, DIST } = require('../build');
+  try {
+    build({ live: { publicSignup: true, windowsDownloads: true } });
+    const home = fs.readFileSync(path.join(DIST, 'index.html'), 'utf8');
+    const download = fs.readFileSync(path.join(DIST, 'download.html'), 'utf8');
+    assert.match(home, /Create a free account/);
+    assert.doesNotMatch(home, /id="wl-form"|Windows is unavailable|Pricing isn't announced/);
+    assert.match(download, /data-windows="true"/);
+    assert.doesNotMatch(download, /Windows downloads are unavailable|Unavailable pending runtime acceptance/);
+    build({ live: { publicSignup: false, windowsDownloads: false } });
+    const gated = fs.readFileSync(path.join(DIST, 'index.html'), 'utf8');
+    assert.match(gated, /id="wl-form"/);
+    assert.match(gated, /Windows is unavailable/);
+    assert.doesNotMatch(gated, /Create a free account/);
+  } finally { build(); }
+});
