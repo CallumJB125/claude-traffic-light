@@ -507,7 +507,7 @@ test('F2/F3: bidi, zero-width, line-separator, invisible-format and tag characte
   }
 });
 
-test('L8: send() maps a generation race or any named refusal to stale/"changed"; a bare ok:false stays unavailable', async () => {
+test('L8: send() maps a stale refusal or a generation race to stale/"changed"; other refusals are not retryable', async () => {
   const run = async (sendResult) => {
     const r = rig({ shared: [share()], callBody: { result: { ok: true, state: { session: SESSION, generation: 1, status: 'ready' } } } });
     const base = r.fetch;
@@ -520,10 +520,11 @@ test('L8: send() maps a generation race or any named refusal to stale/"changed";
     await hub.teams({ id: 'u' });
     return hub.send({ id: 'u' }, 't1', SHARED, 'hi');
   };
-  for (const res of [{ ok: false, status: 'generation_mismatch' }, { ok: false, status: 'something_new' }, { ok: false, error: 'generation mismatch' }]) {
+  for (const res of [{ ok: false, status: 'generation_mismatch' }, { ok: false, status: 'stale' }, { ok: false, error: 'generation mismatch' }]) {
     const out = await run(res);
     assert.deepEqual([out.ok, out.status, out.reason, out.error], [false, 'stale', 'The session changed; try again.', 'The session changed; try again.']);
   }
   assert.equal((await run({ ok: false })).status, 'unavailable');
+  for (const status of ['invalid', 'something_new', 'busy']) assert.equal((await run({ ok: false, status })).status, 'unavailable', status);
   assert.equal((await run({ ok: false, status: 'forbidden' })).status, 'forbidden');
 });
