@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import crypto from 'node:crypto';
 import { INTERRUPT_WAIT_MS, STOP_GRACE_MS } from '../../shared/liveness.js';
-import { lstartOf, killTree, processTable, treeGroups, killGroups, isAlive, waitForStopped } from '../procs.js';
+import { lstartOf, killTree, processTable, treeGroups, killGroups, isAlive, waitForStopped, STOP_VERIFY_MS } from '../procs.js';
 import { buildArgv, userMessage, interruptRequest } from '../launch.js';
 import { lineReader } from '../util.js';
 import { detectCli } from './detect.js';
@@ -236,7 +236,7 @@ export class ClaudeBackend extends EventEmitter {
   }
 
   async #confirmStopped() {
-    const observed = await waitForStopped({ pid: this.pid, groups: [...new Set([this.pgid, ...this.#leftovers].filter((g) => g != null))] });
+    const observed = await waitForStopped({ pid: this.pid, groups: [...new Set([this.pgid, ...this.#leftovers].filter((g) => g != null))] }, { timeoutMs: STOP_VERIFY_MS });
     return observed && !this.alive();
   }
 

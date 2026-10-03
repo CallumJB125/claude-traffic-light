@@ -197,3 +197,7 @@ test('invalid or oversized private capture storage pauses safely without resetti
    assert.equal(await paused.choose(R.canonical_url,routeKey(R)),false);assert.deepEqual(fs.readFileSync(r.setup.file),bytes);assert.match(paused.notice(),/identities have been kept/);
  }
 });
+test('a subagent finishing keeps the card working; only the main stop or session end leaves working',()=>{
+ const {phase}=require('../src/work-capture');
+ assert.equal(phase('subagent-done'),'working');assert.equal(phase('stop'),'review');assert.equal(phase('session-end'),'ended');
+});

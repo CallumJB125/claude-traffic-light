@@ -15,8 +15,9 @@ import { feedEvent, isFeedKind } from './hub.js';
 import { can } from './permissions.js';
 import { limitOrThrow } from './ratelimit.js';
 import { quotaFor, teamName, createTeamBoard } from './identity/teams.js';
-import { AI_IDS, AI_BACKENDS, aiOfDispatch, BUDGET_MAX_USD, runnerAis, readiness } from '../shared/ai.js';
+import { AI_IDS, AI_BACKENDS, AI_CAPABILITIES, AI_LABELS, aiOfDispatch, BUDGET_MAX_USD, runnerAis, readiness } from '../shared/ai.js';
 import { insertCardRecord } from './card-record.js';
+import { workCaptureView } from './work-capture-view.js';
 import { requireRows } from './quotas.js';
 import { remoteScope, remoteMutation } from './remote/context.js';
 import { WorkflowExecutor } from './workflow-executor.js';
@@ -366,6 +367,10 @@ export class Api {
       if ('column' in body && body.column !== row.column_name) {
         if (row.run_state != null) throw new HubError('CONFLICT', 'column is driven by the run while a run state exists');
         if (!['todo', 'in_progress', 'in_review', 'done'].includes(body.column)) throw new HubError('VALIDATION', 'bad column');
+        if (body.column === 'done') {
+          const capture = workCaptureView(this.hub, cardId);
+          if (capture?.fresh && capture.status === 'working') throw new HubError('CONFLICT', 'an AI is still working on this card; stop it or wait for it to finish before marking it done', { reason: 'CAPTURE_WORKING' });
+        }
         set.column_name = body.column;
       }
       if ('assignees' in body) {
@@ -636,6 +641,10 @@ export class Api {
       || typeof body.prior_run_id !== 'string' || body.prior_run_id !== (rel.run?.id ?? this.hub.latestRun(cardId)?.id))) {
       throw new HubError('CONFLICT', 'This run changed. Reopen the card before moving it to another AI.');
     }
+    if (action === 'approve_done') {
+      const last = rel.run ?? this.hub.latestRun(cardId);
+      if (last && this.hub.endedChildAlive(last.id)) throw new HubError('CONFLICT', 'the AI process is still finishing; mark it done once it has exited', { reason: 'CHILD_ALIVE' });
+    }
     const me = member.id;
     const admin = this.hub.isAdmin(member);
     const involved = (...ids) => admin || ids.flat().includes(me);
@@ -672,8 +681,9 @@ export class Api {
           if (!(typeof body.budget_usd === 'number' && Number.isFinite(body.budget_usd) && body.budget_usd >= 0.5 && body.budget_usd <= BUDGET_MAX_USD) || (!admin && Number.isFinite(max) && body.budget_usd > max)) throw new HubError('VALIDATION', 'budget must be between $0.50 and the allowed maximum');
           cents = Math.round(body.budget_usd * 100);
         }
+        if (AI_CAPABILITIES[ai].ownMachineOnly && (target ?? me) !== me) throw new HubError('POLICY_DENIED', `${AI_LABELS[ai]} has no sandbox and runs only on your own machine`, { reason: 'OWN_MACHINE_ONLY' });
         if (mode === 'none' && (target ?? me) !== me && !admin) throw new HubError('POLICY_DENIED', 'a budget is required on a teammate’s machine', { reason: 'BUDGET_REQUIRED' });
-        if (ai === 'codex' && mode !== 'none') throw new HubError('POLICY_DENIED', 'Codex does not provide a native spend cap; explicitly choose no budget', { reason: 'BUDGET_UNSUPPORTED' });
+        if (AI_CAPABILITIES[ai].budget === 'none' && mode !== 'none') throw new HubError('POLICY_DENIED', `${AI_LABELS[ai]} does not provide a native spend cap; explicitly choose no budget`, { reason: 'BUDGET_UNSUPPORTED' });
         const oldDefault = this.hub.boardSettings(row.board_id).default_budget_usd;
         const beforeCap = rel.dispatch?.budget_mode === 'none' ? null : row.budget_cents ?? (Number.isFinite(oldDefault) ? Math.round(oldDefault * 100) : null);
         if (supplied && this.hub.cardSpentCents(cardId) > 0 && beforeCap != null && (cents == null || cents > beforeCap) && !involved(rel.dispatcher, rel.owner)) throw new HubError('FORBIDDEN', 'only the runner owner, dispatcher or an admin may raise the budget');
@@ -710,6 +720,7 @@ export class Api {
         if (!body.request_id) throw new HubError('VALIDATION', 'request_id required');
         if (body.target_member_id != null) this.orgMember(member, body.target_member_id);
         const target = body.target_member_id ?? rel.run?.on_behalf_of ?? null;
+        if (AI_CAPABILITIES[aiOfDispatch(rel.dispatch ?? rel.run)]?.ownMachineOnly && (target ?? me) !== me) throw new HubError('POLICY_DENIED', 'this AI has no sandbox and runs only on your own machine', { reason: 'OWN_MACHINE_ONLY' });
         if (rel.dispatch?.budget_mode === 'none' && target !== me && !admin) throw new HubError('POLICY_DENIED', 'only the machine owner or an admin can assign uncapped work');
         ctx.needs_confirm = this.hub.needsConfirm(me, target ?? me, row.repo_id);
         const remaining = this.hub.remainingBudgetCents(row, rel.dispatch);

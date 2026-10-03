@@ -29,9 +29,9 @@ Every tool returns JSON.
 
 | Tool | What it answers |
 | --- | --- |
-| `buddy_status` | The current look (lamp, pose, eyes, costume, effect, pet, cameo), which rule owns each channel, what fired, session and agent counts, current tool, online state, and whether the running app agrees |
+| `buddy_status` | The current look (lamp, pose, eyes, costume, effect, pet, cameo), the single global character (rules never change it), which rule owns each other channel, what fired, session and agent counts, current tool, online state, and whether the running app agrees |
 | `buddy_sessions` | Every session file: raw and presented signal, cwd, tool, agents (kind, status, heartbeat), age, time until stale. Includes the files the widget is ignoring, with the reason |
-| `buddy_why` | `query`: a rule id, a rule name or a channel. Says why that rule is or isn't firing (which `when` clause failed for each session, or which higher rule cut it off), or who owns the channel |
+| `buddy_why` | `query`: a rule id, a rule name or a channel. Says why that rule is or isn't firing (which `when` clause failed for each session, or which higher rule cut it off), or who owns the channel (`character` reports the one global character) |
 | `buddy_rules` | The rules in priority order, with a compact when/then |
 | `buddy_recent_transitions` | Parsed `[state]` lines from `app.log`, newest first (`limit`, `session`) |
 | `buddy_model_mix` | Which models your turns ran on and what they cost (today, last 7 days), plus the read-only Opus→Sonnet recommendation line |

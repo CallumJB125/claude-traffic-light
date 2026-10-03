@@ -22,8 +22,10 @@ const clean = (text,max) => redactSecrets(String(text??'').slice(0,max*2),{docEx
   .replace(/(?:(?<![A-Za-z0-9])[A-Za-z]:[\\/]|\/Users\/|\/home\/|\/private\/|\/tmp\/)[^\s]+/g,'<path>')
   .replace(/\bfile:\/\/[^\s<>"'`]+|(?<![\w.:/-])\/(?!\/)[^\s"'`<>),;\]}]+/g,'<path>')
   .replace(/https?:\/\/[^\s<>"']+/g,v=>{try{const u=new URL(v);u.username='';u.password='';u.search='';u.hash='';return u.href;}catch{return '<url>';}}).trim().slice(0,max);
+// A subagent finishing is not the session finishing: the parent AI keeps
+// working, so only the main turn's stop or session-end leaves 'working'.
 const phase = signal => ['permission-ask','permission-denied','limit-hit','tool-failed','turn-failed'].includes(signal)?'waiting'
-  : ['stop','subagent-done'].includes(signal)?'review':signal==='session-end'?'ended':signal==='idle-nudge'?'idle':'working';
+  : signal==='stop'?'review':signal==='session-end'?'ended':signal==='idle-nudge'?'idle':'working';
 // The shared remote normalizer deliberately accepts broad Git syntax. Capture
 // persists and renders this name, so use a closed identity at this boundary.
 function safeCanonical(value) {

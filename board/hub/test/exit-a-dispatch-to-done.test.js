@@ -114,9 +114,45 @@ test('exit (a): a closed-unmerged PR sends the card back to todo; approve_done n
     const nt2 = await runner.rpc(second, 'board_attach_evidence', { kind: 'no_tests_reason', ref: 'docs only' });
     await runner.rpc(second, 'board_complete', { summary: 's', evidence_ids: [c2.result.evidence_id, nt2.result.evidence_id] });
     assert.equal(h.card(second.card_id).run_state, 'in_review');
+    // board_complete ended the run on the hub, but the runner still reports its CLI alive.
+    const early = await h.action(alice, second.card_id, 'approve_done');
+    assert.equal(early.status, 409, early.text);
+    assert.match(early.text, /CHILD_ALIVE/);
+    assert.equal((await h.api(alice, 'GET', `/api/cards/${second.card_id}`)).body.card.run.child_alive, true);
+    const still = await runner.hb([runHb(second)]);
+    assert.equal(still.runs[0].reason, 'RUN_ENDED');
+    assert.equal((await h.action(alice, second.card_id, 'approve_done')).status, 409, 'a fresh child_alive report keeps it refused');
+    await runner.hb([]); // the runner stopped reporting the run: its CLI exited
+    assert.equal((await h.api(alice, 'GET', `/api/cards/${second.card_id}`)).body.card.run.child_alive, false);
     const ok = await h.action(alice, second.card_id, 'approve_done');
     assert.equal(ok.status, 200);
     assert.equal(h.card(second.card_id).run_state, 'done');
+  } finally {
+    await h.destroy();
+  }
+});
+
+test('after board_complete a child_alive=false report or an aged-out report lets a human mark it done', async () => {
+  const h = await startHub();
+  try {
+    const alice = await h.login('alice');
+    const runner = await h.runner(await h.enroll(alice));
+    const finish = async () => {
+      const run = await h.startRun(alice, runner);
+      h.github.commits.add('abcdef1');
+      const c = await runner.rpc(run, 'board_attach_evidence', { kind: 'commit', ref: 'abcdef1' });
+      const nt = await runner.rpc(run, 'board_attach_evidence', { kind: 'no_tests_reason', ref: 'docs only' });
+      await runner.rpc(run, 'board_complete', { summary: 's', evidence_ids: [c.result.evidence_id, nt.result.evidence_id] });
+      return run;
+    };
+    const a = await finish();
+    assert.equal((await h.action(alice, a.card_id, 'approve_done')).status, 409);
+    await runner.hb([runHb(a, { child_alive: false })]);
+    assert.equal((await h.action(alice, a.card_id, 'approve_done')).status, 200);
+    const b = await finish();
+    assert.equal((await h.action(alice, b.card_id, 'approve_done')).status, 409);
+    h.clock.advance(46_000);
+    assert.equal((await h.action(alice, b.card_id, 'approve_done')).status, 200, 'no report within the lease TTL is not a live child');
   } finally {
     await h.destroy();
   }

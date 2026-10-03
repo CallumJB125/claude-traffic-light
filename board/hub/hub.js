@@ -12,14 +12,14 @@ import { existsSync, unlinkSync } from 'node:fs';
 import { step, fromDb, toDb, ACTIVE, PLAN_APPROVAL_LABEL, EVENTS } from '../shared/states.js';
 import { CARD_STATE } from '../shared/journal.js';
 import {
-  timerEvent, ORPHAN_NOTIFY_MS, OVERLAP_DEBOUNCE_MS, TICK_MAX_RATE_MS,
+  timerEvent, ORPHAN_NOTIFY_MS, OVERLAP_DEBOUNCE_MS, TICK_MAX_RATE_MS, TTL_MS,
 } from '../shared/liveness.js';
 import { branchName, snapshotRef, RESTORE_BUMP } from '../shared/fence.js';
 import { applyPatch, mergeHandover, renderMarkdown, syncAges, handoffMemoryText } from '../shared/handover.js';
 import { computeOverlaps, overlapsFor, teamContextBlock, overlapDelta, kindOf } from '../shared/overlap.js';
 import { applyRestoreBump } from '../shared/migrate.js';
 import { FEED_KINDS, WS_CLOSE } from '../shared/protocol.js';
-import { aiOfDispatch, acceptsAi, AI_LABELS } from '../shared/ai.js';
+import { aiOfDispatch, acceptsAi, AI_LABELS, AI_CAPABILITIES } from '../shared/ai.js';
 import { HubError, json } from './db.js';
 import { mintRunToken } from './auth.js';
 import { noGitHub, prBound, prNumberOf } from './github.js';
@@ -55,6 +55,7 @@ export class Hub extends EventEmitter {
     this.boardScope = new AsyncLocalStorage(); // Set of board ids whose queue the current code runs in
     this.viaScope = new AsyncLocalStorage();   // {connection_id, member_id, name}: an integration acting (D42)
     this.live = new Map();          // run_id → lease memory (hub monotonic)
+    this.endedChildren = new Map(); // run_id → {card_id, device_id, child_alive, hb_mono}: CLI still reported after the run ended
     this.runners = new Map();       // device_id → runner connection (ws-runner.js)
     this.browsers = new Set();      // browser connections (ws-board.js)
     this.offered = new Map();       // card_id → Set(device_id)
@@ -462,6 +463,8 @@ export class Hub extends EventEmitter {
         }
         this.db.run("UPDATE asks SET state = 'cancelled' WHERE run_id = ? AND state = 'open' AND ? != 'parked'", runId, e.reason);
         this.db.run("UPDATE permission_requests SET state = ? WHERE run_id = ? AND state = 'open'", e.reason === 'parked' ? 'parked' : 'cancelled', runId);
+        const lm = this.live.get(runId);
+        if (lm?.child_alive === true && lm.hb_mono != null) this.endedChildren.set(runId, { card_id: cardId, device_id: this.run(runId)?.device_id ?? null, child_alive: true, hb_mono: lm.hb_mono });
         this.live.delete(runId);
         this.ownership.live.delete(runId);
         this.scheduleOverlap(row.repo_id, 0);
@@ -784,7 +787,7 @@ export class Hub extends EventEmitter {
       dispatched_by: { member_id: d.dispatched_by, name: this.memberName(d.dispatched_by) }, needs_confirm: !!d.needs_confirm,
       labels, ...(aiOfDispatch(d) === 'claude' ? {} : { ai: aiOfDispatch(d) }),
       budget_mode: d.budget_mode ?? null, budget_usd: budgetCents == null ? null : budgetCents / 100,
-      max_turns: aiOfDispatch(d) === 'codex' ? null : settings.default_max_turns ?? null,
+      max_turns: AI_CAPABILITIES[aiOfDispatch(d)]?.maxTurns === false ? null : settings.default_max_turns ?? null,
       require_plan_approval: labels.includes(PLAN_APPROVAL_LABEL), seed: out,
     };
   }
@@ -841,6 +844,17 @@ export class Hub extends EventEmitter {
 
   // ── liveness memory ───────────────────────────────────────────────────────
   lease(runId) { return this.live.get(runId) ?? null; }
+
+  // board_complete ends the run on the hub while the runner may still be
+  // finishing the CLI process. Until the runner stops reporting that child
+  // (or its last report ages past the lease TTL) the AI may still be acting.
+  endedChildAlive(runId) {
+    const t = this.endedChildren.get(runId);
+    if (!t) return false;
+    if (t.child_alive && this.mono() - t.hb_mono <= TTL_MS) return true;
+    this.endedChildren.delete(runId);
+    return false;
+  }
 
   noteHeartbeat(runId, rhb, rx) {
     let lm = this.live.get(runId);

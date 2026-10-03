@@ -16,7 +16,7 @@ test('captured existing work shows AI identity, reported activity and last repor
  assert.equal(p.label, 'Reported Codex · AI working'); assert.equal(p.lastReport, 'Last report · 1s ago'); assert.equal(p.fresh, true);
  assert.equal(byClass(n, 'pill').length, 0); assert.equal(n.props['data-tone'], 'none');
  assert.equal(textOf(byAttr(n, 'data-action', 'open').at(-1)), 'Show details');
- assert.equal(byAttr(n, 'data-action', 'give_to_claude').length, 0); assert.doesNotMatch(textOf(n), /Tackle with AI|no repo yet/);
+ assert.equal(byAttr(n, 'data-action', 'give_to_claude').length, 0); assert.doesNotMatch(textOf(n), /Give to AI|no repo yet/);
  assert.match(textOf(n), /Stop it in your AI tool/);
 });
 test('stale, invalid-age, stopped and disconnected capture reports never claim current AI work', () => {
@@ -43,7 +43,7 @@ test('manual tasks retain launch and repo setup; captured cards with a real queu
 });
 test('held transfer actions distinguish choosing another AI from reading its handover', () => {
  const v = view({handover_hold:true}), face = {actions:['take_over_with_claude','view_handover']};const n=cardActions(face,v,new Set());assert.equal(textOf(byAttr(n,'data-action','take_over_with_claude')[0]),'Choose next AI');assert.equal(textOf(byAttr(n,'data-action','view_handover')[0]),'Read handover');
- assert.equal(textOf(byAttr(cardActions(face,view(),new Set()),'data-action','take_over_with_claude')[0]),'Tackle with AI');
+ assert.equal(textOf(byAttr(cardActions(face,view(),new Set()),'data-action','take_over_with_claude')[0]),'Give to AI');
  const move=cardActions({actions:['switch_ai']},view(),new Set());assert.equal(textOf(move),'Move to another AI');
 });
 

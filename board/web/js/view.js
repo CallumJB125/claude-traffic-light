@@ -29,6 +29,10 @@ export const isHumanOwned = (view) => (view.run_state ?? 'todo') === 'todo';
 // is queued/started, keep that run's normal controls and verified liveness.
 export const isObservedWork = (view) => !view.run && isHumanOwned(view) && view.capture?.source === 'local_observation';
 
+// An AI is reporting work on this card right now: it is not done, whatever
+// column a person last chose.
+export const hasLiveCapture = (view) => view.capture?.fresh === true && view.capture?.status === 'working';
+
 export function cardWorkPhase(view, face) {
   if (isObservedWork(view)) return null;
   if (face.state === 'in_review' || (isHumanOwned(view) && view.column === 'in_review')) return 'Awaiting human review';
@@ -39,6 +43,7 @@ export function cardWorkPhase(view, face) {
 }
 
 export function columnFor(view, face) {
+  if (isHumanOwned(view) && hasLiveCapture(view)) return 'in_progress';
   if (isHumanOwned(view) && COLUMNS.includes(view.column)) return view.column;
   return face.column;
 }
@@ -119,7 +124,7 @@ export const isActive = (state) => ACTIVE.has(state);
 
 // Button copy for each cardface action id.
 export const ACTION_LABEL = {
-  give_to_claude: 'Tackle with AI',
+  give_to_claude: 'Give to AI',
   cancel: 'Cancel',
   stop: 'Stop',
   watch: 'Watch',
@@ -133,12 +138,15 @@ export const ACTION_LABEL = {
   continue: 'Review',
   take_over_confirm: 'Take over…',
   take_over: 'Take over',
-  take_over_with_claude: 'Tackle with AI',
+  take_over_with_claude: 'Give to AI',
   take_over_myself: 'Take it myself',
   open_pr: 'Open PR',
   request_changes: 'Request changes',
   retry: 'Retry',
 };
+
+// Rarely needed actions: only in the drawer, behind its Advanced disclosure.
+export const ADVANCED_ACTIONS = new Set(['switch_ai', 'request_changes']);
 
 // Which action id is the primary (filled) button for a face.
 export function primaryAction(face) {

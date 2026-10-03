@@ -232,7 +232,7 @@ export class Accounts {
     limitOrThrow(this.hub, 'auth_methods_ip', ipKey(ip));
     const m = oauthProviders(this.hub.config);
     const w = webOauthProviders(this.hub.config);
-    return { google: m.includes('google'), github: m.includes('github'), email: !!this.mailer && !this.mailFailing(), web: { google: w.includes('google'), github: w.includes('github') } };
+    return { google: m.includes('google'), github: m.includes('github'), email: this.emailSignin() && !this.mailFailing(), web: { google: w.includes('google'), github: w.includes('github') } };
   }
 
   // ── email one-time codes (only with a mailer, D66) ────────────────────────
@@ -252,15 +252,19 @@ export class Accounts {
     return false;
   }
 
-  requireMailer() {
-    if (!this.mailer) throw new HubError('METHOD_DISABLED', 'email sign-in is not enabled on this hub');
+  // Codes that sign someone in need BOARD_EMAIL_SIGNIN=1 as well as a mailer;
+  // a step-up code for a signed-in account needs only the mailer.
+  emailSignin() { return !!this.mailer && !!this.hub.config.emailSignin; }
+
+  requireMailer(purpose = 'signin') {
+    if (!this.mailer || (purpose === 'signin' && !this.emailSignin())) throw new HubError('METHOD_DISABLED', 'email sign-in is not enabled on this hub');
   }
 
   /** POST /api/auth/email/start → {flow_id, expires_in}. Same answer for every address. */
   start(body, { ip, ident = null, req = null, res = null }) {
-    this.requireMailer();
     const purpose = body.purpose ?? 'signin';
     if (!PURPOSES.has(purpose)) throw new HubError('VALIDATION', "purpose must be 'signin', 'delete' or 'delete_team'");
+    this.requireMailer(purpose);
     let email;
     let client;
     let userId = null;
@@ -328,7 +332,7 @@ export class Accounts {
 
   /** POST /api/auth/email/verify. */
   verify(body, { ip, ident = null, req = null, res = null }) {
-    this.requireMailer();
+    this.requireMailer(null);
     limitOrThrow(this.hub, 'auth_verify_ip', ipKey(ip));
     const now = this.now();
     const flowId = typeof body.flow_id === 'string' ? body.flow_id : '';
@@ -337,6 +341,7 @@ export class Accounts {
     const f = flowId ? this.db.get('SELECT * FROM login_flows WHERE id = ?', flowId) : null;
     // A flow_id nobody was given answers like a fresh flow (L-G).
     if (!f) throw invalid(undefined, { attempts_left: MAX_ATTEMPTS });
+    if (f.purpose === 'signin') this.requireMailer('signin');
     if (f.dead_at || f.consumed_at || f.verified_at || f.expires_at <= now) throw invalid();
     // The failure budget (H2): locked means no code is even checked.
     const budget = this.budgetKey(f);

@@ -318,7 +318,8 @@
       "id": "hermes",
       "label": "Hermes Agent",
       "aliases": [
-        "Hermes"
+        "Hermes",
+        "hermes-dgx"
       ],
       "kind": "agent",
       "advertised": true,

@@ -489,13 +489,34 @@
   // Rules added to the defaults after people already had saved configs. Each
   // is slotted in once, keyed by the saved rulesVersion, so deleting one
   // afterwards sticks.
-  const RULES_VERSION = 10;
+  const RULES_VERSION = 11;
   // v4 recoloured four default lamps (see defaultRules). A saved rule that
   // still has the old default colour, and no custom lampColor, follows.
   const V4_LAMPS = { permission: ['amber', 'red'], done: ['green', 'amber'], nudge: ['green', 'amber'], idle: ['amber', 'off'] };
   // v6: the router's signals went with the router.
   const DEAD_SIGNALS = ['routed-cheap', 'escalated', 'delegated-read'];
   const DEAD_DEFAULT_IDS = ['routed', 'delegated'];
+  // One character for everything (v11): rules no longer carry a body. The
+  // global character is the user's most common non-default body, else claude.
+  const normalizeCharacter = (c) => ({
+    body: isBody(c && c.body) ? c.body : 'claude',
+    bodyColor: /^#[0-9a-f]{6}$/i.test((c && c.bodyColor) || '') ? c.bodyColor : null,
+  });
+  function characterFromRules(rawRules) {
+    const counts = new Map();
+    for (const r of Array.isArray(rawRules) ? rawRules : []) {
+      const t = r && r.then;
+      if (t && isBody(t.body) && t.body !== 'claude') {
+        const e = counts.get(t.body) || { n: 0, color: null };
+        e.n += 1;
+        if (!e.color && /^#[0-9a-f]{6}$/i.test(t.bodyColor || '')) e.color = t.bodyColor;
+        counts.set(t.body, e);
+      }
+    }
+    let best = null;
+    for (const [body, e] of counts) if (!best || e.n > best.n) best = { body, n: e.n, color: e.color };
+    return best ? { body: best.body, bodyColor: best.color } : { body: 'claude', bodyColor: null };
+  }
   function migrateRules(rules, version, template) {
     if (version >= RULES_VERSION) return rules;
     const out = rules.slice();
@@ -626,7 +647,7 @@
         const d = defaultRules().map((r) => (r.id === 'failed' || r.id === 'shell' ? { ...r, enabled: true } : r));
         const set = (id, then) => Object.assign(d.find((x) => x.id === id).then, then);
         set('permission', { pose: 'sniper', lampFx: 'strobe', sound: 'Hero', screenFx: 'vignette', eyes: 'laser' });
-        set('limit', { pose: 'ak47', lampFx: 'sos', sound: 'Sosumi', body: 'robot', screenFx: 'vignette' });
+        set('limit', { pose: 'ak47', lampFx: 'sos', sound: 'Sosumi', screenFx: 'vignette' });
         set('working', { pose: 'run', lampFx: 'chase', pet: 'dragon', effect: 'fire' });
         set('done', { pose: 'party', lampFx: 'rainbow', screenFx: 'confetti', costume: 'partyhat', eyes: 'star', sound: 'Glass' });
         set('failed', { eyes: 'dizzy', effect: 'fire', signFx: 'rattle' });
@@ -687,8 +708,6 @@
         // Built-ins, or a photo cameo the user added (cameos.js ids); a photo
         // that has since been removed just renders as no cameo.
         cameo: typeof r.then?.cameo === 'string' && (CAMEOS.includes(r.then.cameo) || CAMEO_ID.test(r.then.cameo)) ? r.then.cameo : null,
-        body: isBody(r.then?.body) ? r.then.body : null,
-        bodyColor: /^#[0-9a-f]{6}$/i.test(r.then?.bodyColor || '') ? r.then.bodyColor : null,
         effect: EFFECTS.includes(r.then?.effect) ? r.then.effect : null,
         pet: PETS.includes(r.then?.pet) ? r.then.pet : null,
         agents: AGENT_STYLES.includes(r.then?.agents) ? r.then.agents : null,
@@ -798,6 +817,9 @@
     const fired = [];
     const look = { lamp: 'off', lampColor: null, lampFx: 'none', sign: 'h3', lampShape: 'square', signFx: 'none', numberOf: null, screenFx: 'none', eyes: 'default', pose: 'none', text: null, costume: 'none', cameo: 'none', body: 'claude', bodyColor: null, effect: 'none', pet: 'none', agents: 'robot', agentsColor: null, sound: null, celebrate: false, name: null, ruleId: null, waitMinutes: waitMinutes(real, now), minions: [], clicks: {} };
     const owned = {};
+    const ch = normalizeCharacter(env && env.character);
+    look.body = ch.body;
+    look.bodyColor = ch.bodyColor;
     for (const rule of list) {
       const matching = live.filter((s) => ruleMatches(rule, s));
       if (!matching.length) continue;
@@ -807,8 +829,6 @@
       if (!owned.pose && t.pose) { look.pose = t.pose; look.text = fillText(t.text, matching[0]); owned.pose = rule.id; }
       if (!owned.costume && t.costume) { look.costume = t.costume; owned.costume = rule.id; }
       if (!owned.cameo && t.cameo) { look.cameo = t.cameo; owned.cameo = rule.id; }
-      if (!owned.body && t.body) { look.body = t.body; owned.body = rule.id; }
-      if (!owned.bodyColor && t.bodyColor) { look.bodyColor = t.bodyColor; owned.bodyColor = rule.id; }
       if (!owned.effect && t.effect) { look.effect = t.effect; owned.effect = rule.id; }
       if (!owned.pet && t.pet) { look.pet = t.pet; owned.pet = rule.id; }
       if (!owned.agents && t.agents) { look.agents = t.agents; owned.agents = rule.id; }
@@ -840,7 +860,7 @@
   }
 
   // The look a single rule would produce on its own — for the editor preview.
-  function previewLook(rule) {
+  function previewLook(rule, character) {
     const r = normalizeRule(rule);
     return {
       lamp: r.then.lamp || 'off',
@@ -857,8 +877,8 @@
       text: r.then.text,
       costume: r.then.costume || 'none',
       cameo: r.then.cameo || 'none',
-      body: r.then.body || 'claude',
-      bodyColor: r.then.bodyColor,
+      body: normalizeCharacter(character).body,
+      bodyColor: normalizeCharacter(character).bodyColor,
       effect: r.then.effect || 'none',
       pet: r.then.pet || 'none',
       agents: r.then.agents || 'robot',
@@ -869,5 +889,5 @@
     };
   }
 
-  return { AGENT_KINDS, AGENT_STATUSES, MODES, normalizeAgent, liveAgents, filterAgentKinds, sessionMode, ralphIteration, fillText, seasonalCostume, seasonalEffect, ACTIONS, GESTURES, DEFAULT_CLICKS, SIGNALS, TOOL_SUGGESTIONS, LAMPS, LAMP_FX, SIGNS, LAMP_SHAPES, SIGN_FX, NUMBERS, SCREEN_FX, POSES, COSTUMES, CAMEOS, CAMEO_ID, BODIES, EYE_MOODS, EFFECTS, PETS, AGENT_STYLES, SOUNDS, WAITING_ON_YOU, TURN_END, effectiveSignal, presentSignal, TRANSIENT_ASK_MS, AGENT_KEEPALIVE_MS: Machine.AGENT_KEEPALIVE_MS, classifySession: Machine.classify, LONG_RUNNING_MS, defaultRules, RULES_VERSION, LEGACY_RULES_VERSION, rulesVersionOf, migrateRules, templatePrefs, shareFile, templates, applyTemplate, normalizeRule, clickCommands, orderedRules, ruleMatches, toolMatches, cwdMatches, folderOf, resolve, firedNames, previewLook, sessionSignal, virtualSessions, uid, GIT_SIGNALS, gitDefaultRules, gitSessions, SPEND_RULES, placeSpendRules, spendSessions, BLOCKED_RULE, BLOCKED_KEEP_MS, placeBlockedRule, ...F5_EXPORTS };
+  return { AGENT_KINDS, AGENT_STATUSES, MODES, normalizeAgent, liveAgents, filterAgentKinds, sessionMode, ralphIteration, fillText, seasonalCostume, seasonalEffect, ACTIONS, GESTURES, DEFAULT_CLICKS, SIGNALS, TOOL_SUGGESTIONS, LAMPS, LAMP_FX, SIGNS, LAMP_SHAPES, SIGN_FX, NUMBERS, SCREEN_FX, POSES, COSTUMES, CAMEOS, CAMEO_ID, BODIES, EYE_MOODS, EFFECTS, PETS, AGENT_STYLES, SOUNDS, WAITING_ON_YOU, TURN_END, effectiveSignal, presentSignal, TRANSIENT_ASK_MS, AGENT_KEEPALIVE_MS: Machine.AGENT_KEEPALIVE_MS, classifySession: Machine.classify, LONG_RUNNING_MS, defaultRules, RULES_VERSION, LEGACY_RULES_VERSION, rulesVersionOf, migrateRules, normalizeCharacter, characterFromRules, templatePrefs, shareFile, templates, applyTemplate, normalizeRule, clickCommands, orderedRules, ruleMatches, toolMatches, cwdMatches, folderOf, resolve, firedNames, previewLook, sessionSignal, virtualSessions, uid, GIT_SIGNALS, gitDefaultRules, gitSessions, SPEND_RULES, placeSpendRules, spendSessions, BLOCKED_RULE, BLOCKED_KEEP_MS, placeBlockedRule, ...F5_EXPORTS };
 });

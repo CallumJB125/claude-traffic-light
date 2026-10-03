@@ -406,3 +406,15 @@ test('buddy_health: hookRuntime matches what main.js installs, packaged or not',
   assert.equal(app.hooksDir, path.join(resources, 'hooks'));
   assert.equal(app.dataDir, data);
 });
+
+test('one character: status and why report the single global character, migrated from old per-rule bodies', async () => {
+  const rules = [{ id: 'a', name: 'a', when: { signal: ['tool-use'] }, then: { lamp: 'green', body: 'octopus' } }];
+  const root = fixture({ sessions: { s1: session('s1') }, config: { ...base, rules, rulesVersion: 10 } });
+  const st = await M.buddyStatus({ root, now: NOW, online: true, live: null });
+  assert.deepEqual(st.character, { body: 'octopus', bodyColor: null });
+  assert.equal(st.look.body, 'octopus');
+  assert.equal(st.channels.body, undefined);
+  const why = M.buddyWhy({ root, now: NOW, online: true, query: 'body' });
+  assert.equal(why.kind, 'character');
+  assert.equal(why.value.body, 'octopus');
+});

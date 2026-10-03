@@ -10,6 +10,7 @@ import path from 'node:path';
 import { waitForStopped, killTree, lstartOf } from '../procs.js';
 import { ClaudeBackend } from '../backends/claude.js';
 import { CodexBackend } from '../backends/codex.js';
+import { HermesBackend } from '../backends/hermes.js';
 
 const other = { pid: 10, pgid: 10, stat: 'S' };
 const subject = { pid: 100, groups: [100, 200] };
@@ -31,7 +32,7 @@ test('unknown, denied, empty and malformed stop observations fail closed', async
   assert.equal(await waitForStopped({ pid: 100, groups: [0] }, { timeoutMs: 0, readTable: () => [other] }), false);
 });
 
-test('stop verification waits for delayed tool death within its one-second maximum', async () => {
+test('stop verification waits for delayed tool death within its five-second maximum', async () => {
   let at = 0, reads = 0, budgets = [];
   assert.equal(await waitForStopped(subject, { timeoutMs: 1000, now: () => at, delay: async (ms) => { at += ms; },
     readTable: (budget) => { budgets.push(budget); reads++; return at < 40 ? [other, row(201, 200)] : [other]; } }), true);
@@ -39,10 +40,10 @@ test('stop verification waits for delayed tool death within its one-second maxim
   assert.deepEqual(budgets, [1000, 980, 960], 'each synchronous lookup consumes only its remaining deadline');
   at = 0;
   assert.equal(await waitForStopped(subject, { timeoutMs: 9000, now: () => at, delay: async (ms) => { at += ms; }, readTable: () => [other, row(201, 200)] }), false);
-  assert.equal(at, 1000, 'caller cannot widen the stop verification limit');
+  assert.equal(at, 5000, 'caller cannot widen the stop verification limit beyond five seconds');
 });
 
-for (const Backend of [ClaudeBackend, CodexBackend]) {
+for (const Backend of [ClaudeBackend, CodexBackend, HermesBackend]) {
   test(`${Backend.name}: stale exited flag cannot confirm an observed live CLI identity`, async () => {
     const b = new Backend({ stopGraceMs: 0, interruptWaitMs: 0 });
     // child=null means the backend will not signal anything. The test observer

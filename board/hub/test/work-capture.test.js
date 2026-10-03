@@ -303,3 +303,19 @@ test('embedded local owner captures no-repo work through actual private cookie a
   const stop = await b.call('POST', `/api/cards/${first.body.card.id}/work-capture/stop`, {}); assert.equal(stop.status, 200); assert.equal(stop.body.capture.tracking, 'stopped');
   assert.ok(!dumpDb(b.app.db).includes(body.session_id));
 });
+
+test('an observed card cannot be set to Done while its AI still reports fresh work; a stale or finished report allows it', async (t) => {
+  const f = await rig(t), body = observation(f.A.repo);
+  const first = await f.as(f.users.amember, 'POST', path(f.A.board), body); assert.equal(first.status, 200, first.text); const id = first.body.card.id;
+  const done = await f.as(f.users.ua, 'PATCH', `/api/cards/${id}`, { request_id: randomUUID(), version: first.body.card.version, column: 'done' });
+  assert.equal(done.status, 409, done.text); assert.match(done.text, /still working/); assert.match(done.text, /CAPTURE_WORKING/);
+  assert.equal(f.h.hub.card(id).column_name, 'in_progress');
+  const review = await f.as(f.users.ua, 'PATCH', `/api/cards/${id}`, { request_id: randomUUID(), version: first.body.card.version, column: 'in_review' });
+  assert.equal(review.status, 200, review.text);
+  f.h.clock.advance(60_001);
+  const later = await f.as(f.users.ua, 'PATCH', `/api/cards/${id}`, { request_id: randomUUID(), version: review.body.card.version, column: 'done' });
+  assert.equal(later.status, 200, later.text); assert.equal(later.body.card.column, 'done');
+  const other = await f.as(f.users.amember, 'POST', path(f.A.board), observation(f.A.repo, { session_id: 'session-2', status: 'ended' })); assert.equal(other.status, 200, other.text);
+  const ended = await f.as(f.users.ua, 'PATCH', `/api/cards/${other.body.card.id}`, { request_id: randomUUID(), version: other.body.card.version, column: 'done' });
+  assert.equal(ended.status, 200, ended.text);
+});

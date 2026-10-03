@@ -2,7 +2,7 @@ import { h } from './h.js';
 
 const REASONS = { awaiting_heartbeat: 'Waiting for a fresh host heartbeat', not_current: 'Previous run', read_only: 'Read only',
   hub_restarted: 'Waiting after board restart', connection_changed: 'Host connection changed', expired: 'Heartbeat expired',
-  idle: 'Agent is idle', waiting: 'Agent is waiting', run_ended: 'Awaiting review' };
+  idle: 'Agent is idle', waiting: 'Agent is waiting', finishing: 'Agent is finishing', run_ended: 'Awaiting review' };
 
 export function ownershipStatus(entry, elapsed = 0, connected = true) {
   if (!connected) return 'Signal unavailable';

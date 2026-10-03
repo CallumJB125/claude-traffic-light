@@ -3,8 +3,9 @@
 // The UI renders what describe()/detect() report; it never hard-codes a list.
 import { ClaudeBackend } from './claude.js';
 import { CodexBackend } from './codex.js';
+import { HermesBackend, HermesDgxBackend } from './hermes.js';
 
-export const BACKENDS = Object.freeze({ claude: ClaudeBackend, codex: CodexBackend });
+export const BACKENDS = Object.freeze({ claude: ClaudeBackend, codex: CodexBackend, hermes: HermesBackend, 'hermes-dgx': HermesDgxBackend });
 
 // Every backend maps its CLI output to these and drops anything else (§4).
 export const NORMALISED_EVENTS = Object.freeze(['init', 'tool_start', 'tool_end', 'assistant', 'usage', 'result', 'rate_limit', 'exit']);

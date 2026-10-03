@@ -30,7 +30,7 @@ const DEFAULTS = {
 // main.js drops a request this old: the hook has long since timed out.
 const REQUEST_MAX_AGE_MS = 90000;
 const OVERRIDE_SIGNALS = { green: 'tool-use', amber: 'idle-nudge', red: 'limit-hit' };
-const CHANNELS = ['lamp', 'lampFx', 'sign', 'lampShape', 'signFx', 'numberOf', 'screenFx', 'eyes', 'pose', 'costume', 'cameo', 'body', 'bodyColor', 'effect', 'pet', 'agents', 'agentsColor', 'sound', 'celebrate'];
+const CHANNELS = ['lamp', 'lampFx', 'sign', 'lampShape', 'signFx', 'numberOf', 'screenFx', 'eyes', 'pose', 'costume', 'cameo', 'effect', 'pet', 'agents', 'agentsColor', 'sound', 'celebrate'];
 // A rule's `then` key → the look channel it fills (only `number` differs).
 const THEN_KEY = { numberOf: 'number' };
 
@@ -55,6 +55,7 @@ function loadConfig(root) {
     config.rules.splice(at < 0 ? config.rules.length : at, 0, Rules.normalizeRule(nudge));
   }
   if (Array.isArray(saved.rules)) config.rules = Rules.migrateRules(config.rules, Number(saved.rulesVersion) || 0);
+  config.character = saved.character ? Rules.normalizeCharacter(saved.character) : Rules.characterFromRules(saved.rules);
   return config;
 }
 
@@ -140,15 +141,15 @@ function computeState({ root, now = Date.now(), online = guessOnline() }) {
   const pending = config.askFromWidget ? requests : [];
   const tasks = config.showTasks ? sumTasks(sessions.filter((s) => !Rules.WAITING_ON_YOU.has(s.signal) && s.signal !== 'idle-nudge')) : null;
   const git = config.gitSignals !== false ? GitSignals.readState(path.join(root, 'git-signals.json'), now) : null;
-  const env = { offline: !online, git: git ? git.active : [] };
+  const env = { character: config.character, offline: !online, git: git ? git.active : [] };
   const base = { config, requests, scanned, sessions, pending, tasks, online, env };
   const override = readManualOverride(root, now);
   if (override) {
-    const { look, fired, owned } = Rules.resolve(config.rules, [{ signal: OVERRIDE_SIGNALS[override.state] || 'idle', cwd: '' }]);
+    const { look, fired, owned } = Rules.resolve(config.rules, [{ signal: OVERRIDE_SIGNALS[override.state] || 'idle', cwd: '' }], now, env);
     return { ...base, look, fired, owned, reason: 'manual', override };
   }
   const { look, fired, owned } = Rules.resolve(config.rules, sessions, now, env);
-  const asked = pending.length ? Rules.resolve(config.rules, [{ signal: 'permission-ask', cwd: pending[0].cwd }]) : null;
+  const asked = pending.length ? Rules.resolve(config.rules, [{ signal: 'permission-ask', cwd: pending[0].cwd }], now, env) : null;
   const shown = asked ? asked.look : look;
   if (config.seasonal) {
     if (shown.costume === 'none') shown.costume = Rules.seasonalCostume() || 'none';
@@ -191,6 +192,7 @@ async function buddyStatus({ root, now = Date.now(), online, live } = {}) {
     look,
     reason: st.reason,
     channels,
+    character: st.config.character,
     lampOwner: st.owned.lamp ? { ruleId: st.owned.lamp, rule: ruleName(rules, st.owned.lamp) } : null,
     fired: st.fired,
     firedNames: Rules.firedNames(rules, st.fired, st.owned),
@@ -283,6 +285,9 @@ function buddyWhy({ root, now = Date.now(), online, query } = {}) {
   const q = String(query || '').trim();
   const ql = q.toLowerCase();
   const channel = CHANNELS.find((c) => c.toLowerCase() === ql);
+  if (['character', 'body', 'bodycolor'].includes(ql)) {
+    return { kind: 'character', channel: 'character', value: st.config.character, owner: null, note: 'One character for every state, set in Settings. Rules never change it.', context: { reason: st.reason } };
+  }
   // What the rules were resolved against: the real sessions plus the virtual
   // signals rules.js derives from them (or 'idle' when there are none).
   const entries = st.reason === 'manual' ? [{ signal: OVERRIDE_SIGNALS[st.override.state] || 'idle', cwd: '' }]

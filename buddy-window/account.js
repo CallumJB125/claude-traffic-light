@@ -185,7 +185,7 @@ const SCREENS = {
       return b;
     });
     if (!providers.length && !m.email) {
-      out.push(el('p', { class: 'acct-hint' }, 'This server has no sign-in method enabled. Ask the admin.'), foot);
+      out.push(el('p', { class: 'acct-hint' }, 'Google and GitHub sign-in aren’t set up on this server yet. Ask its admin.'), foot);
       return out;
     }
     if (providers.length) out.push(el('div', { class: 'acct-providers' }, providers));

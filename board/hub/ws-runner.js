@@ -377,6 +377,13 @@ export class RunnerConn {
       entries.push(await hub.withBoard(row.board_id, () => this.hbRun(r, rx)));
     }
     this.requireAuthorized();
+    // A run this runner no longer reports has finished its CLI process.
+    const reported = new Set(msg.runs.map((r) => r?.run_id));
+    for (const [runId, t] of hub.endedChildren) {
+      if (t.device_id !== this.device_id || reported.has(runId)) continue;
+      hub.endedChildren.delete(runId);
+      hub.broadcastCard(t.card_id);
+    }
     hub.db.run('UPDATE devices SET last_seen_at = ? WHERE id = ?', hub.iso(), this.device_id);
     this.lastHbMono = rx;
     this.send({ type: 'hb.ack', seq_hb: msg.seq_hb, hub_epoch: hub.epoch, runs: entries });
@@ -392,6 +399,7 @@ export class RunnerConn {
       return { run_id: r.run_id, fence: r.fence, current_fence: row.fence, current: false, state: row.run_state ?? 'todo', reason };
     };
     if (!run || run.card_id !== row.id || run.device_id !== this.device_id) return no('RUN_ENDED');
+    if (run.ended_at) this.noteEndedChild(run, r, rx);
     if (row.fence !== r.fence) return no('FENCED');
     if (run.ended_at || row.active_run_id !== run.id) return no('RUN_ENDED');
 
@@ -409,6 +417,14 @@ export class RunnerConn {
     const after = hub.card(row.id);
     if (res.ok) hub.ownership.heartbeat(run, after, this, r, rx);
     return { run_id: run.id, fence: after.fence, current: true, state: after.run_state };
+  }
+
+  noteEndedChild(run, r, rx) {
+    const hub = this.hub;
+    const was = hub.endedChildAlive(run.id);
+    if (r.child_alive === true) hub.endedChildren.set(run.id, { card_id: run.card_id, device_id: this.device_id, child_alive: true, hb_mono: rx });
+    else hub.endedChildren.delete(run.id);
+    if (was !== (r.child_alive === true)) hub.broadcastCard(run.card_id);
   }
 
   async onSuspending(msg) {

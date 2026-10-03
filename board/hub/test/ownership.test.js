@@ -175,6 +175,10 @@ test('ending a run retains review context but releases editing and cannot reauth
   const record = h.db.get('SELECT * FROM task_ownership WHERE run_id=?', a.run.run_id);
   h.db.run('UPDATE runs SET ended_at=? WHERE id=?', h.hub.iso(), a.run.run_id);
   h.db.run("UPDATE cards SET active_run_id=NULL,column_name='in_review',run_state='in_review' WHERE id=?", a.run.card_id);
+  // The run ended on the hub but its CLI still reports alive: not reviewable yet.
+  h.hub.endedChildren.set(a.run.run_id, { card_id: a.run.card_id, device_id: null, child_alive: true, hb_mono: h.hub.mono() });
+  assert.deepEqual([h.hub.ownership.project(record).state, h.hub.ownership.project(record).reason], ['planned', 'finishing']);
+  h.hub.endedChildren.delete(a.run.run_id);
   assert.equal(h.hub.ownership.project(record).state, 'awaiting_review');
   const viewer = h.hub.member(A.viewer);
   const result = await h.hub.ownership.staffRead(viewer, a.run.card_id, { kind: 'device', id: users.aviewer.device_id });

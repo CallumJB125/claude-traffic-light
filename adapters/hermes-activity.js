@@ -12,6 +12,10 @@ const MANIFEST = `name: ${NAME}\nversion: 1.0.0\ndescription: Local session acti
 const configPath = home => path.join(home, '.hermes', 'plugins', NAME, 'plexiform.json');
 const template = () => fs.readFileSync(path.join(__dirname, '..', 'hooks', 'hermes-plugin.py'), 'utf8');
 const manifestFor = text => `${MANIFEST}# plexiform-config-sha256: ${crypto.createHash('sha256').update(text).digest('hex')}\n`;
+// Earlier shipped hooks/hermes-plugin.py bodies: still ours, so connecting
+// again upgrades them in place instead of refusing a "foreign" plugin.
+const PREVIOUS_TEMPLATES = new Set(['d3d84e5f9e481c5d97823abdd7e42b760f4ffa9e905aeb6ca73ab93d5935921d']);
+const ourTemplate = text => text === template() || PREVIOUS_TEMPLATES.has(crypto.createHash('sha256').update(text).digest('hex'));
 const isGeneratedCacheFile = name => /^__init__\.cpython-\d+(?:\.opt-\d+)?\.pyc$/.test(name);
 function findBin(home) {
   return [path.join(home, '.local', 'bin', 'hermes'), '/opt/homebrew/bin/hermes', '/usr/local/bin/hermes'].find(p => {
@@ -29,7 +33,7 @@ function owned(home) {
   if (!fs.existsSync(dir)) return false;
   try {
     const text = fs.readFileSync(file, 'utf8'), c = JSON.parse(text);
-    return c.owner === MARKER && fs.readFileSync(path.join(dir, '__init__.py'), 'utf8') === template()
+    return c.owner === MARKER && ourTemplate(fs.readFileSync(path.join(dir, '__init__.py'), 'utf8'))
       && fs.readFileSync(path.join(dir, 'plugin.yaml'), 'utf8') === manifestFor(text);
   } catch { return false; }
 }
@@ -85,4 +89,6 @@ function uninstall({ home }) {
   try { fs.rmdirSync(dir); } catch {}
   return { id: 'hermes-activity', file, changed: true };
 }
-module.exports = { NAME, MANIFEST, configPath, findBin, install, connect, uninstall };
+// Health discovery: the plugin is ours and unmodified (never throws).
+function isInstalled({ home }) { try { return owned(home); } catch { return false; } }
+module.exports = { NAME, MANIFEST, configPath, findBin, install, connect, uninstall, isInstalled };

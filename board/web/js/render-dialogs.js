@@ -6,7 +6,6 @@ import { icon, pixelClaude } from './icons.js';
 import { formatAge, fmtUsd } from './view.js';
 import { paletteDialog } from './render-palette.js';
 import { SENT_TEXT, VIEWER_TEXT } from './feedback-send.js';
-import { LABEL_COLORS, labelClass, managerRows } from './labels.js';
 import { tackleChoices, readinessText } from './tackle.js';
 import { workflowDialog } from './render-workflows.js';
 
@@ -16,6 +15,11 @@ function shell(kind, title, content, { wide = false, describedBy = null } = {}) 
       h('h2', { id: `dlg-${kind}-title` }, title),
       h('button', { type: 'button', class: 'btn btn-ghost btn-icon', 'data-action': 'close-dialog', 'aria-label': 'Close' }, icon('close'))),
     content);
+}
+
+// Everything beyond the minimal path sits behind one closed disclosure.
+function advanced(...content) {
+  return h('details', { class: 'field advanced' }, h('summary', null, 'Advanced'), content);
 }
 
 function errorLine(dlg) {
@@ -53,38 +57,41 @@ export function giveDialog(dlg, model) {
   const targetMember = model.members.get(target);
   const isMe = target === meId;
   const repos = dlg.repos ?? [];
+  const repoId = dlg.repo_id || (repos.length === 1 ? repos[0].id : '');
   const busy = dlg.busy;
   const moving = dlg.mode === 'redispatch' && view.handover_hold;
-  const title = moving ? `Continue ${view.key} with another AI` : `Tackle ${view.key} with AI`;
+  const title = moving ? `Continue ${view.key} with another AI` : `Give ${view.key} to AI`;
   const providers = tackleChoices(dlg.preview?.runners);
   const ai = providers.find((a) => a.id === dlg.ai) ?? providers.find((a) => a.id === 'codex');
   const uncapped = ai.budget === 'none' || dlg.budget_mode === 'none';
   const noBudgetAllowed = isMe || dlg.preview?.can_use_no_budget === true;
   const waiting = !!dlg.preview?.loading;
   const deviceLimit = dlg.mode === 'retry' && view.run?.budget_stop === 'device';
+  const repoField = field('give-repo', 'Repo',
+    h('select', { id: 'give-repo', name: 'repo_id', class: 'input', required: true, 'data-change': 'give-repo', disabled: moving || null },
+      h('option', { value: '', selected: !repoId }, repos.length ? 'Choose a repo' : 'Loading repos…'),
+      repos.map((r) => h('option', { key: r.id, value: r.id, selected: repoId === r.id }, r.short_name ?? r.canonical_url))));
 
   return shell('give', title, h('form', { class: 'modal-body', 'data-form': 'give', 'data-card': view.id },
     h('p', { class: 'modal-lede' }, view.title),
     moving ? h('p', { class: 'hint' }, 'The previous AI confirmed it stopped. The next run receives the card handover and its latest available code snapshot. Check the handover for unsynced files before continuing.') : null,
     dlg.mode === 'retry' ? h('p', { class: 'hint' }, deviceLimit ? 'The machine owner must change their local limit before retrying. Raising this card budget cannot override it.' : `Spent across this card: ${fmtUsd(view.budget?.spent_usd ?? 0)}. Choose a higher total card budget to continue.`) : null,
     uncapped && view.budget?.cap_usd != null ? h('p', { class: 'hint' }, `This assignment removes the current ${fmtUsd(view.budget.cap_usd)} card budget.`) : null,
-    h('fieldset', { class: 'field runner-pick' },
-      h('legend', null, 'Whose machine runs it'),
-      members.map((m) => h('label', { key: m.member_id, class: `runner-opt${target === m.member_id ? ' is-picked' : ''}` },
-        h('input', { type: 'radio', name: 'target', value: m.member_id, checked: target === m.member_id, 'data-change': 'give-target' }),
-        h('span', { class: 'runner-name' }, m.member_id === meId ? 'Your machine' : `${m.name}'s machine`),
-        h('span', { class: 'runner-note' }, m.member_id === meId ? 'Uses your signed-in AI account' : `${m.name} confirms on their machine first`)))),
-    h('div', { class: 'field-row' },
-      field('give-repo', 'Repo',
-        h('select', { id: 'give-repo', name: 'repo_id', class: 'input', required: true, 'data-change': 'give-repo', disabled: moving || null },
-          h('option', { value: '', selected: !dlg.repo_id }, repos.length ? 'Choose a repo' : 'Loading repos…'),
-          repos.map((r) => h('option', { key: r.id, value: r.id, selected: dlg.repo_id === r.id }, r.short_name ?? r.canonical_url)))),
-      field('give-ref', 'Base branch',
-        h('input', { id: 'give-ref', name: 'base_ref', class: 'input num', value: dlg.base_ref ?? '', placeholder: 'main', autocomplete: 'off', spellcheck: 'false', readOnly: moving || null }))),
     field('give-ai', 'AI', h('select', { id: 'give-ai', name: 'ai', class: 'input', 'data-change': 'give-ai', disabled: waiting || null },
       providers.map((p) => h('option', { value: p.id, selected: p.id === ai.id, disabled: !p.available || null }, `${p.label}${p.available && !dlg.preview?.runners?.length ? '' : p.reason ? ` · ${readinessText(p.reason)}` : ''}`))),
       !waiting && !dlg.preview?.error && !dlg.preview?.runners?.length ? 'The machine is offline. Work queues until a compatible signed-in runner connects.' : null),
-    h('div', { class: 'field-row' },
+    // A required repo with no default stays in view; a chosen one waits in Advanced.
+    repoId ? null : repoField,
+    advanced(
+      h('fieldset', { class: 'field runner-pick' },
+        h('legend', null, 'Whose machine runs it'),
+        members.map((m) => h('label', { key: m.member_id, class: `runner-opt${target === m.member_id ? ' is-picked' : ''}` },
+          h('input', { type: 'radio', name: 'target', value: m.member_id, checked: target === m.member_id, 'data-change': 'give-target' }),
+          h('span', { class: 'runner-name' }, m.member_id === meId ? 'Your machine' : `${m.name}'s machine`),
+          h('span', { class: 'runner-note' }, m.member_id === meId ? 'Uses your signed-in AI account' : `${m.name} confirms on their machine first`)))),
+      repoId ? repoField : null,
+      field('give-ref', 'Base branch',
+        h('input', { id: 'give-ref', name: 'base_ref', class: 'input num', value: dlg.base_ref ?? '', placeholder: 'main', autocomplete: 'off', spellcheck: 'false', readOnly: moving || null })),
       ai.budget === 'none'
         ? h('div', { class: 'field' }, h('p', null, `Dollar and turn caps are unavailable for ${ai.label}.`), h('p', { class: 'hint' }, noBudgetAllowed ? 'Uses the machine owner’s account without a dollar cap. Usage follows their provider plan.' : 'Only the machine owner or a team admin can assign uncapped work.'))
         : h('fieldset', { class: 'field' }, h('legend', null, 'Budget'),
@@ -107,7 +114,7 @@ export function giveDialog(dlg, model) {
     h('div', { class: 'modal-foot' },
       h('button', { type: 'button', class: 'btn', 'data-action': 'close-dialog' }, 'Cancel'),
       h('button', { type: 'submit', class: 'btn btn-claude', disabled: busy || waiting || deviceLimit || (dlg.mode === 'retry' && uncapped) || !ai.available || (uncapped && !noBudgetAllowed) || null, 'aria-busy': busy ? 'true' : null, 'aria-describedby': 'give-sponsor' },
-        busy ? 'Queuing…' : isMe ? moving ? `Continue with ${ai.label}` : 'Tackle with AI' : `Ask ${targetMember?.name}`))), { wide: true });
+        busy ? 'Queuing…' : isMe ? moving ? `Continue with ${ai.label}` : 'Start' : `Ask ${targetMember?.name}`))), { wide: true });
 }
 
 export function switchAiDialog(dlg, model) {
@@ -194,66 +201,20 @@ export function newCardDialog(dlg) {
   return shell('new', 'New card', h('form', { class: 'modal-body', 'data-form': 'new' },
     field('new-title', 'Title', h('input', { id: 'new-title', name: 'title', class: 'input', required: true, maxlength: '200', autocomplete: 'off', placeholder: 'Reject empty submit with a 400', autofocus: true })),
     field('new-body', 'Description', h('textarea', { id: 'new-body', name: 'body', class: 'input', rows: 4, placeholder: 'What and why. Paths you name here count towards overlap warnings.' })),
-    field('new-acceptance', 'Done means', h('textarea', { id: 'new-acceptance', name: 'acceptance', class: 'input', rows: 2, placeholder: 'A regression test covers the empty-body case' })),
-    h('div', { class: 'field-row' },
-      field('new-repo', 'Repo', h('select', { id: 'new-repo', name: 'repo_id', class: 'input' },
-        h('option', { value: '' }, 'No repo (a human task)'),
-        repos.map((r) => h('option', { key: r.id, value: r.id }, r.short_name ?? r.canonical_url)))),
-      field('new-ref', 'Base branch', h('input', { id: 'new-ref', name: 'base_ref', class: 'input num', placeholder: 'main', autocomplete: 'off', spellcheck: 'false' }))),
-    h('div', { class: 'field-row' },
-      field('new-labels', 'Labels', h('input', { id: 'new-labels', name: 'labels', class: 'input', placeholder: 'api, bug', autocomplete: 'off' }), 'Comma separated.'),
-      field('new-budget', 'Budget (USD)', h('input', { id: 'new-budget', name: 'budget_usd', class: 'input num', type: 'number', min: '0.5', step: '0.5', placeholder: '5', inputmode: 'decimal' }))),
+    advanced(
+      h('div', { class: 'field-row' },
+        field('new-repo', 'Repo', h('select', { id: 'new-repo', name: 'repo_id', class: 'input' },
+          h('option', { value: '' }, 'No repo (a human task)'),
+          repos.map((r) => h('option', { key: r.id, value: r.id }, r.short_name ?? r.canonical_url)))),
+        field('new-ref', 'Base branch', h('input', { id: 'new-ref', name: 'base_ref', class: 'input num', placeholder: 'main', autocomplete: 'off', spellcheck: 'false' }))),
+      field('new-acceptance', 'Done means', h('textarea', { id: 'new-acceptance', name: 'acceptance', class: 'input', rows: 2, placeholder: 'A regression test covers the empty-body case' })),
+      h('div', { class: 'field-row' },
+        field('new-labels', 'Labels', h('input', { id: 'new-labels', name: 'labels', class: 'input', placeholder: 'api, bug', autocomplete: 'off' }), 'Comma separated.'),
+        field('new-budget', 'Budget (USD)', h('input', { id: 'new-budget', name: 'budget_usd', class: 'input num', type: 'number', min: '0.5', step: '0.5', placeholder: '5', inputmode: 'decimal' })))),
     errorLine(dlg),
     h('div', { class: 'modal-foot' },
       h('button', { type: 'button', class: 'btn', 'data-action': 'close-dialog' }, 'Cancel'),
       h('button', { type: 'submit', class: 'btn btn-primary', disabled: dlg.busy || null }, dlg.busy ? 'Creating…' : 'Create card'))), { wide: true });
-}
-
-// The board's label registry (D91): members create and recolour, admins and
-// owners rename and delete (with a confirm), viewers only read. Labels already
-// on cards but not coloured are listed after the registry, ready to colour.
-export function labelsDialog(dlg, model) {
-  const role = model.me?.member?.role;
-  const canWrite = !model.readOnly && role !== 'viewer';
-  const canManage = role === 'owner' || role === 'admin';
-  const cardLabels = model.entries.flatMap((e) => e.view.labels ?? []);
-  const rows = managerRows(model.board?.labels, cardLabels);
-  const colorSelect = (row) => h('select', {
-    class: 'input input-sm', 'data-change': 'label-color', 'data-label': row.name, 'data-registered': row.registered ? '1' : null,
-    'aria-label': `Colour of ${row.name}`, disabled: !canWrite || dlg.busy || null,
-  },
-  row.registered ? null : h('option', { value: '', selected: true }, 'No colour'),
-  LABEL_COLORS.map((c) => h('option', { key: c, value: c, selected: row.color === c }, c)));
-  const item = (row) => {
-    const confirming = dlg.confirmDelete === row.name;
-    const renaming = dlg.rename === row.name;
-    return h('li', { key: `${row.registered ? 'r' : 'u'}:${row.name}`, class: 'labels-row' },
-      h('span', { class: labelClass(row.name, row.color) }, row.name),
-      colorSelect(row),
-      canManage && row.registered && !confirming && !renaming ? [
-        h('button', { type: 'button', class: 'btn btn-sm btn-ghost', 'data-action': 'label-rename-ask', 'data-label': row.name }, 'Rename'),
-        h('button', { type: 'button', class: 'btn btn-sm btn-quiet-danger', 'data-action': 'label-delete-ask', 'data-label': row.name }, 'Delete'),
-      ] : null,
-      renaming ? h('form', { class: 'labels-rename', 'data-form': 'label-rename', 'data-label': row.name },
-        h('label', { class: 'sr-only', for: 'label-rename-input' }, `New name for ${row.name}`),
-        h('input', { id: 'label-rename-input', name: 'name', class: 'input input-sm', value: row.name, maxlength: '50', required: true, autocomplete: 'off', autofocus: true }),
-        h('button', { type: 'submit', class: 'btn btn-sm btn-primary', disabled: dlg.busy || null }, 'Rename'),
-        h('button', { type: 'button', class: 'btn btn-sm btn-ghost', 'data-action': 'label-cancel' }, 'Cancel'),
-        h('p', { class: 'hint' }, 'Every card with this label gets the new name.')) : null,
-      confirming ? h('div', { class: 'labels-confirm', role: 'alert' },
-        h('span', null, `Delete ${row.name}?`),
-        h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'label-delete', 'data-label': row.name, disabled: dlg.busy || null }, 'Remove the colour only'),
-        h('button', { type: 'button', class: 'btn btn-sm btn-danger', 'data-action': 'label-delete', 'data-label': row.name, 'data-strip': '1', disabled: dlg.busy || null }, 'Also remove it from every card'),
-        h('button', { type: 'button', class: 'btn btn-sm btn-ghost', 'data-action': 'label-cancel' }, 'Keep it')) : null);
-  };
-  return shell('labels', 'Labels', h('div', { class: 'modal-body' },
-    rows.length ? h('ul', { class: 'labels-list' }, rows.map(item)) : h('p', { class: 'muted' }, 'No labels yet.'),
-    canWrite ? h('form', { class: 'labels-new', 'data-form': 'label-create' },
-      field('label-new-name', 'New label', h('input', { id: 'label-new-name', name: 'name', class: 'input input-sm', maxlength: '50', required: true, autocomplete: 'off', placeholder: 'bug' })),
-      field('label-new-color', 'Colour', h('select', { id: 'label-new-color', name: 'color', class: 'input input-sm' }, LABEL_COLORS.map((c) => h('option', { key: c, value: c }, c)))),
-      h('button', { type: 'submit', class: 'btn btn-sm btn-primary', disabled: dlg.busy || null }, 'Add label')) : null,
-    canWrite && !canManage ? h('p', { class: 'hint' }, 'Admins can rename or delete a label.') : null,
-    errorLine(dlg)));
 }
 
 export function feedbackDialog(dlg, model) {
@@ -285,7 +246,6 @@ export function dialog(model) {
     case 'changes': return changesDialog(d, model);
     case 'new': return newCardDialog(d, model);
     case 'palette': return paletteDialog(d, model);
-    case 'labels': return labelsDialog(d, model);
     case 'feedback': return feedbackDialog(d, model);
     case 'boards': return boardsDialog(d, model);
     case 'workflows': return workflowDialog(d, model);

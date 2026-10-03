@@ -466,6 +466,9 @@
   .swatch.on { border-color: var(--text); }
   .swatch:focus-within { box-shadow: var(--focus); }
   .swatch input[type="color"] { position: absolute; inset: -6px; width: 40px; height: 40px; border: none; padding: 0; background: none; cursor: pointer; opacity: 0; }
+  #character { padding: 8px 12px; border-bottom: 1px solid var(--line, rgba(128,128,128,.25)); }
+  #character .lbl { font-weight: 600; margin-bottom: 6px; }
+  #character .hint { font-weight: 400; opacity: .6; margin-left: 6px; }
   .swatch.custom::after {
     content: '';
     position: absolute; inset: 0;
@@ -914,6 +917,15 @@
     <aside id="rules" aria-label="Rules">
       <header><span>Rules</span><span class="count" id="rule-count"></span></header>
       <div id="now" role="status" aria-live="off" aria-label="What the widget is showing now"><div class="head">Now: …</div><div class="owners"></div></div>
+      <div id="character" aria-label="Character">
+        <div class="lbl">Character <span class="hint">one for every state</span></div>
+        <div class="field">
+          <div class="poses" id="bodies"></div>
+          <label class="swatch custom" id="body-color-swatch" title="Character colour (e.g. a brand colour)">
+            <input type="color" id="body-color" />
+          </label>
+        </div>
+      </div>
       <ul id="rule-list" role="listbox" aria-label="Rules, highest priority first"></ul>
       <footer>
         <button class="btn" id="add-btn">
@@ -1069,16 +1081,6 @@
         <div class="row">
           <div class="lbl">Cameo</div>
           <div class="field"><div class="poses" id="cameos"></div></div>
-        </div>
-
-        <div class="row">
-          <div class="lbl">Body</div>
-          <div class="field">
-            <div class="poses" id="bodies"></div>
-            <label class="swatch custom" id="body-color-swatch" title="Body colour (e.g. a project's brand colour)">
-              <input type="color" id="body-color" />
-            </label>
-          </div>
         </div>
 
         <div class="row">

@@ -299,3 +299,12 @@ test('summarize: counts, settings, and every command the file\'s clicks would ru
   assert.deepEqual(s.commands.sort(), ['Focus', 'open -a Slack']);
   assert.equal(s.dropped, 0);
 });
+
+test('one character: an old bundle with per-rule bodies imports as a global character', () => {
+  const rule = (id, body) => ({ id, name: id, when: { signal: ['idle'] }, then: { lamp: 'off', body } });
+  const text = JSON.stringify({ v: 1, app: 'claude-traffic-light', rulesVersion: 10, rules: [rule('a', 'octopus'), rule('b', 'cyclops'), rule('c', 'cyclops')] });
+  const r = S.readSetup(text);
+  assert.ok(r && !r.error, JSON.stringify(r));
+  assert.equal(r.config.character.body, 'cyclops');
+  assert.ok(r.config.rules.every((x) => x.then.body === undefined));
+});

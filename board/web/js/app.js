@@ -7,7 +7,7 @@ import { handoverPin, sameHandover } from './ai-handover.js';
 import { api, errorText, setOrg, currentOrg, setCsrf, requestId } from './api.js';
 import { connectBoard } from './socket.js';
 import { displayFace, alertsForViewer, agedView } from './view.js';
-import { planMoves, moveSummary, dragModel, toggleSelection, pruneSelection, idsToDrag, kbdStart, kbdKey, announcement } from './dnd.js';
+import { planMoves, moveSummary, dragModel, pruneSelection, idsToDrag, kbdStart, kbdKey, announcement } from './dnd.js';
 import { emptyFilters, isFiltering, parseFilters, writeFilters, toggleIn, applyFilters, filterOptions } from './filters.js';
 import { parseTitles, needsConfirm, pendingCard } from './quickadd.js';
 import { installDnd, snapshotRects, playFlip } from './dnd-dom.js';
@@ -1001,37 +1001,6 @@ async function restoreCards(ids) {
   update();
 }
 
-async function setCover(cardId, token) {
-  const v = viewOf(cardId);
-  if (!v) return;
-  const res = await withBusy(`${cardId}:cover`, () => api.patchCard(cardId, { version: v.version, cover: token || null }));
-  if (res) applyCard(res);
-}
-
-// Registry changes also arrive as board.labels; the answer is applied at once
-// so the manager never waits on the socket.
-async function labelCall(fn) {
-  const d = state.dialog;
-  const generation = boardGeneration, boardId = state.boardId;
-  if (d?.kind === 'labels') { state.dialog = { ...d, busy: true, error: null }; update(); }
-  try {
-    await fn();
-    if (generation !== boardGeneration) return false;
-    const res = await api.labels(boardId);
-    if (generation !== boardGeneration) return false;
-    if (state.board) state.board = { ...state.board, labels: res.labels };
-    if (state.dialog?.kind === 'labels') state.dialog = { kind: 'labels', busy: false, error: null };
-    return true;
-  } catch (err) {
-    if (generation !== boardGeneration) return false;
-    if (state.dialog?.kind === 'labels') state.dialog = { ...state.dialog, busy: false, error: errorText(err) };
-    else toast(errorText(err), 'error');
-    return false;
-  } finally {
-    update();
-  }
-}
-
 let drawerSession = 0;
 let detailRefresh = 0;
 async function openDetail(cardId, section = null) {
@@ -1389,19 +1358,6 @@ async function submitDialogForm(form, submitter) {
     const p = parseJoin(new FormData(form).get('invite'), location.origin);
     if (p.error) { state.onboard = { busy: false, error: p.error, where: 'join' }; update(); return undefined; }
     return joinTeam('join', p);
-  }
-  if (kind === 'label-create') {
-    const fd0 = new FormData(form);
-    const name = String(fd0.get('name') ?? '').trim();
-    if (name && await labelCall(() => api.createLabel(state.boardId, name, String(fd0.get('color') ?? 'grey')))) form.reset();
-    return undefined;
-  }
-  if (kind === 'label-rename') {
-    const to = String(new FormData(form).get('name') ?? '').trim();
-    const from = form.dataset.label;
-    if (!to || to === from) { state.dialog = { ...state.dialog, rename: null }; update(); return undefined; }
-    if (await labelCall(() => api.patchLabel(state.boardId, from, { name: to }))) toast(`Renamed ${from} to ${to} on every card.`);
-    return undefined;
   }
   const d = state.dialog;
   const cardId = form.dataset.card;
@@ -1796,12 +1752,6 @@ function onClick(e) {
     if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) dlg.close();
     return;
   }
-  const picked = (e.shiftKey || e.metaKey || e.ctrlKey) && !e.target.closest?.('a, .card-actions') ? e.target.closest?.('.card[data-card-id]') : null;
-  if (picked) {
-    e.preventDefault();
-    setSelection(toggleSelection(state.selection, picked.dataset.cardId));
-    return;
-  }
   const el = e.target.closest?.('[data-action]');
   if (!el || el.disabled) return;
   const action = el.dataset.action;
@@ -1899,7 +1849,6 @@ function onClick(e) {
       if (state.themeMenu) root.querySelector('.theme-menu [aria-checked="true"]')?.focus();
       return;
     case 'reconnect': socket?.reconnectNow(); return;
-    case 'clear-selection': setSelection(new Set()); return;
     case 'filter-chip': setFilters({ ...state.filters, chips: toggleIn(state.filters.chips, el.dataset.chip) }); return;
     case 'filter-label-off': setFilters({ ...state.filters, labels: state.filters.labels.filter((l) => l !== el.dataset.label) }); return;
     case 'filter-clear': setFilters(emptyFilters()); return;
@@ -1907,19 +1856,6 @@ function onClick(e) {
     case 'toggle-archived': setShowArchived(!state.showArchived); return;
     case 'archive': archiveCards([cardId]); return;
     case 'restore': restoreCards([cardId]); return;
-    case 'bulk-archive': archiveCards([...state.selection].filter((id) => state.cards.has(id))); return;
-    case 'bulk-restore': restoreCards([...state.selection].filter((id) => state.archived?.has(id))); return;
-    case 'set-cover': setCover(cardId, el.dataset.cover); return;
-    case 'labels-open': state.dialog = { kind: 'labels', busy: false, error: null }; update(); return;
-    case 'label-rename-ask': state.dialog = { ...state.dialog, rename: el.dataset.label, confirmDelete: null }; update(); return;
-    case 'label-delete-ask': state.dialog = { ...state.dialog, confirmDelete: el.dataset.label, rename: null }; update(); return;
-    case 'label-cancel': state.dialog = { ...state.dialog, confirmDelete: null, rename: null }; update(); return;
-    case 'label-delete': {
-      const name = el.dataset.label;
-      const strip = el.dataset.strip === '1';
-      labelCall(() => api.deleteLabel(state.boardId, name, strip)).then((ok) => { if (ok) toast(strip ? `Removed ${name} from every card.` : `${name} has no colour now.`); });
-      return;
-    }
     case 'view': setView(el.dataset.view); return;
     case 'local-card-dismiss':
       state.localCardDismissed = true;
@@ -2013,12 +1949,7 @@ function onChange(e) {
   if (what === 'move') moveCards([el.dataset.card], el.value);
   if (what === 'filter-label' && el.value) { setFilters({ ...state.filters, labels: [...state.filters.labels, el.value] }); el.value = ''; }
   if (what === 'filter-assignee') setFilters({ ...state.filters, assignee: el.value || null });
-  if (what === 'bulk-move' && el.value) { moveCards([...state.selection], el.value); el.value = ''; }
   if (what === 'integ-autonomy') setAutonomy(el.dataset.conn, el.dataset.actionId, el.value);
-  if (what === 'label-color' && el.value) {
-    const name = el.dataset.label;
-    labelCall(() => (el.dataset.registered ? api.patchLabel(state.boardId, name, { color: el.value }) : api.createLabel(state.boardId, name, el.value)));
-  }
 }
 
 // Dialog close (Escape, backdrop, close buttons) is the one path back to state.
@@ -2120,8 +2051,6 @@ function onKeydown(e) {
     return;
   }
   if (!typing && !e.metaKey && !e.ctrlKey && !e.altKey && !root.querySelector('dialog[open]')) {
-    const cardEl = e.key === 'x' ? e.target.closest?.('.card-open')?.closest('.card[data-card-id]') : null;
-    if (cardEl) { e.preventDefault(); setSelection(toggleSelection(state.selection, cardEl.dataset.cardId)); return; }
     if (e.key === 'Escape' && state.selection.size) { setSelection(new Set()); return; }
     if (e.key === 'Escape' && state.view !== 'dashboard' && isFiltering(state.filters)) { setFilters(emptyFilters()); return; }
   }

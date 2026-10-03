@@ -36,7 +36,7 @@ async function rig(t,{concurrency=1,dependencies,verified=true,planApproval=fals
   if(pr)pulls.set(1,{number:1,head_ref:run.branch,head_repo_id:100,base_repo_id:100,base_ref:'main',head_sha:HEAD,merged:false,state:'open',html_url:'https://github.com/shared/app/pull/1'});
   const code=await r.rpc(run,'board_attach_evidence',{kind:pr?'pr':'commit',ref:pr?'1':HEAD});assert.equal(code.ok,true,JSON.stringify(code));assert.equal(code.result.verification,'hub_verified');
   const tests=await r.rpc(run,'board_attach_evidence',{kind:'test_run',ref:'synthetic fixture tests',result:'pass'});assert.equal(tests.ok,true,JSON.stringify(tests));
-  const result=await r.rpc(run,'board_complete',{evidence_ids:[code.result.evidence_id,tests.result.evidence_id]});assert.equal(result.ok,true,JSON.stringify(result));return {code:code.result.evidence_id,tests:tests.result.evidence_id};
+  const result=await r.rpc(run,'board_complete',{evidence_ids:[code.result.evidence_id,tests.result.evidence_id]});assert.equal(result.ok,true,JSON.stringify(result));await r.hb([]);/* the CLI exited: Done needs that */return {code:code.result.evidence_id,tests:tests.result.evidence_id};
  };
  return {...f,r,plan,preview,options,paths,startInput,start,call,claim,complete,pulls,github};
 }

@@ -30,8 +30,8 @@ export const PILLS = Object.freeze({
   todo: { icon: '', label: '', tone: 'none' },
 });
 
-const BACKEND_LABEL = { claude_cli: 'Claude', codex_cli: 'Codex', interactive: 'Claude', cloud_ma: 'Claude', cloud_gha: 'Claude' };
-const BACKEND_CLI = { claude_cli: 'claude', codex_cli: 'codex', interactive: 'claude', cloud_ma: 'claude', cloud_gha: 'claude' };
+const BACKEND_LABEL = { claude_cli: 'Claude', codex_cli: 'Codex', hermes_cli: 'Hermes', interactive: 'Claude', cloud_ma: 'Claude', cloud_gha: 'Claude' };
+const BACKEND_CLI = { claude_cli: 'claude', codex_cli: 'codex', hermes_cli: 'hermes', interactive: 'claude', cloud_ma: 'claude', cloud_gha: 'claude' };
 
 export const possessive = (name) => `${name}'s`;
 const basename = (p) => String(p).split('/').pop();

@@ -381,7 +381,7 @@ export class Run {
     }
     // Unexpected death: report before anything slow (exit b: < 1 s).
     this.backend?.reap?.();
-    const provider = this.backend?.oneTurn ? 'Codex' : 'claude';
+    const provider = this.backend?.oneTurn ? this.backend.constructor.describe?.().label ?? 'Codex' : 'claude';
     const why = info.error ? `${provider} failed to start: ${info.error}` : `${provider} exited (code ${info.code ?? '-'}${info.signal ? `, ${info.signal}` : ''})${info.sawResult ? '' : ' without a result'}`;
     this.emit({ kind: 'run.failed', fail_kind: 'error', reason: redact(why, this.worktree) });
     this.endReason = 'failed';
@@ -393,13 +393,27 @@ export class Run {
     if (this.backend?.platform !== 'win32') return true;
     let confirmed = false;
     try { confirmed = await this.backend.confirmStopped(); } catch { /* unknown */ }
-    if (confirmed) return true;
+    return confirmed || this.#quarantine('Windows process stop');
+  }
+
+  // Every platform: stop() must return a positive receipt (true). Anything
+  // else means the old process tree may still be working in the worktree, so
+  // the run, its workspace and its repo are held exactly like an unconfirmed
+  // Windows stop: no snapshot, release, cleanup or redispatch.
+  async #stopConfirmed(stopped) {
+    if (!this.backend) return true;
+    if (this.backend.platform === 'win32') return this.#windowsStopConfirmed();
+    return stopped === true || this.#quarantine('Process stop');
+  }
+
+  // Never throws: a throw here would strand a handover or quit waiting on it.
+  #quarantine(what) {
     this.windowsStopUnconfirmed = true;
     this.ending = true; this.gateOpen = false; this.localState = 'paused_offline';
     this.sup.windowsQuarantinedRepos?.add(this.repo_id);
-    this.sup.saveLedger(this);
-    this.log.warn('Windows process stop is unconfirmed; preserving run and workspace', { run_id: this.run_id });
-    this.sup.notifyLocal({ event: 'paused_offline', run_id: this.run_id, key: this.key, reason: 'Windows process stop is unconfirmed. This run is quarantined for manual recovery.' });
+    try { this.sup.saveLedger?.(this); } catch { /* the in-memory hold still applies */ }
+    this.log.warn(`${what} is unconfirmed; preserving run and workspace`, { run_id: this.run_id });
+    this.sup.notifyLocal?.({ event: 'paused_offline', run_id: this.run_id, key: this.key, reason: `${what} is unconfirmed. This run is quarantined for manual recovery.` });
     return false;
   }
 
@@ -428,8 +442,7 @@ export class Run {
     this.ending = true;
     this.endReason = 'failed';
     this.emit({ kind: 'run.failed', fail_kind: kind, reason: redact(reason, this.worktree), ...extra });
-    await this.backend?.stop();
-    if (this.backend?.platform === 'win32' && !(await this.#windowsStopConfirmed())) return;
+    if (!(await this.#stopConfirmed(await this.backend?.stop()))) return;
     if (!this.ended) await this.#afterExit();
   }
 
@@ -438,8 +451,7 @@ export class Run {
     this.ending = true;
     this.endReason = 'prep_failed';
     this.emit({ kind: 'prep.failed', cause: redact(cause, this.worktree) });
-    await this.backend?.stop();
-    if (this.backend?.platform === 'win32' && !(await this.#windowsStopConfirmed())) return;
+    if (!(await this.#stopConfirmed(await this.backend?.stop()))) return;
     this.#end();
   }
 
@@ -453,7 +465,7 @@ export class Run {
       new Promise((r) => { if (this.backend?.exited) r(true); else this.backend?.once('exit', () => r(true)); }),
       new Promise((r) => setTimeout(() => r(false), this.sup.opts.interruptWaitMs ?? 5000).unref?.()),
     ]);
-    if (!exited) await this.backend?.stop();
+    if (!exited && !(await this.#stopConfirmed(await this.backend?.stop()))) return;
     if (!this.ended) await this.#afterExit();
   }
 
@@ -469,8 +481,7 @@ export class Run {
         if (this.ending) return;
         this.ending = true;
         this.endReason = 'stopped';
-        await this.backend?.stop();
-    if (this.backend?.platform === 'win32' && !(await this.#windowsStopConfirmed())) return;
+        if (!(await this.#stopConfirmed(await this.backend?.stop()))) return;
         await this.#afterExit();
         return;
       case 'park':
@@ -520,7 +531,7 @@ export class Run {
     this.ending = true;
     this.endReason = h.mode === 'handover' ? 'handed_over' : 'parked';
     const stopped = await this.backend?.stop();
-    if (this.backend?.platform === 'win32' && !(await this.#windowsStopConfirmed())) { h.resolve(false); return; }
+    if (!(await this.#stopConfirmed(stopped))) { h.resolve(false); return; }
     // A completed handover is the authority to start a replacement. A failed
     // stop must never be reported as completion, even after its deadline.
     if (h.mode === 'handover' && (stopped !== true || this.backend?.alive() !== false)) {
@@ -594,8 +605,7 @@ export class Run {
     if (this.ending && !this.handover) return;
     this.ending = true;
     this.endReason = 'fenced';
-    await this.backend?.stop();
-    if (this.backend?.platform === 'win32' && !(await this.#windowsStopConfirmed())) return;
+    if (!(await this.#stopConfirmed(await this.backend?.stop()))) return;
     this.flushFacts();
     const snap = await this.snapshotNow({ push: true, ref: salvageRef(this.key, this.fence), why: 'salvage', emitAs: 'none' });
     if (snap?.sha) this.sup.salvage(this, 'snapshot', { status: snap.status, sha: snap.sha, ref: snap.ref, reason: snap.reason });
@@ -960,7 +970,7 @@ export class Run {
   }
 
   initialPrompt(prompt) {
-    if (this.offer.ai !== 'codex') return prompt;
+    if (this.offer.ai == null || this.offer.ai === 'claude') return prompt;
     const context = this.#hookStart({ source: 'startup' }).stdout?.hookSpecificOutput?.additionalContext;
     return [prompt, context, this.offer.require_plan_approval
       ? 'Your native shell is read-only. Declare your plan and end this turn while its recorded human authorization is pending. Answer text cannot authorize edits; the runner starts a later editable turn only after a recorded allow.' : null].filter(Boolean).join('\n\n');

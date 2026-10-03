@@ -121,7 +121,7 @@ test('normalizeRule sanitises junk', () => {
   const r = R.normalizeRule({ name: '', when: { signal: 'stop', tool: '  ' }, then: { lamp: 'purple', lampColor: 'red', eyes: 'blue', pose: 'dab', sound: 'loud', celebrate: 'yes' } });
   assert.equal(r.name, 'Untitled rule');
   assert.deepEqual(r.when, { signal: ['stop'], tool: null, cwd: null, source: null });
-  assert.deepEqual(r.then, { lamp: null, lampColor: null, lampFx: null, sign: null, lampShape: null, signFx: null, number: null, screenFx: null, eyes: null, pose: null, sound: null, celebrate: true, text: null, costume: null, cameo: null, body: null, bodyColor: null, effect: null, pet: null, agents: null, agentsColor: null, clicks: {} });
+  assert.deepEqual(r.then, { lamp: null, lampColor: null, lampFx: null, sign: null, lampShape: null, signFx: null, number: null, screenFx: null, eyes: null, pose: null, sound: null, celebrate: true, text: null, costume: null, cameo: null, effect: null, pet: null, agents: null, agentsColor: null, clicks: {} });
   assert.equal(R.normalizeRule({ then: { sound: 'Glass' } }).then.sound, 'Glass');
   assert.equal(R.normalizeRule({ then: { sound: 'file:/x/y.wav' } }).then.sound, 'file:/x/y.wav');
   assert.equal(R.normalizeRule({ then: { sound: 'airhorn' } }).then.sound, null);
@@ -186,9 +186,9 @@ test('previewLook: agents default to robots with the status colour', () => {
 });
 
 test('project scope: folder name or prefix glob', () => {
-  const rs = [{ id: 'b', name: 'b', when: { signal: ['tool-use'], cwd: 'bondly*' }, then: { bodyColor: '#1155cc' } }, ...rules()];
-  assert.equal(look([{ signal: 'tool-use', cwd: '/x/bondly-cf' }], rs).bodyColor, '#1155cc');
-  assert.equal(look([{ signal: 'tool-use', cwd: '/x/other' }], rs).bodyColor, null);
+  const rs = [{ id: 'b', name: 'b', when: { signal: ['tool-use'], cwd: 'bondly*' }, then: { eyes: '#1155cc' } }, ...rules()];
+  assert.equal(look([{ signal: 'tool-use', cwd: '/x/bondly-cf' }], rs).eyes, '#1155cc');
+  assert.equal(look([{ signal: 'tool-use', cwd: '/x/other' }], rs).eyes, 'default');
   const exact = [{ id: 'b', name: 'b', when: { signal: ['tool-use'], cwd: 'redoubt' }, then: { pet: 'duck' } }, ...rules()];
   assert.equal(look([{ signal: 'tool-use', cwd: '/x/Redoubt' }], exact).pet, 'duck');
   assert.equal(look([{ signal: 'tool-use', cwd: '/x/redoubt-2' }], exact).pet, 'none');
@@ -255,10 +255,10 @@ test('seasonal costumes by date', () => {
   assert.equal(R.seasonalCostume(Date.parse('2026-09-09T12:00:00')), null);
 });
 
-test('body, effect and pet are accent channels', () => {
-  const rs = [{ id: 'g', name: 'g', when: { signal: ['tool-use'], tool: 'Agent' }, then: { body: 'ghost', effect: 'fire', pet: 'blob' } }, ...rules()];
+test('effect and pet are accent channels', () => {
+  const rs = [{ id: 'g', name: 'g', when: { signal: ['tool-use'], tool: 'Agent' }, then: { effect: 'fire', pet: 'blob' } }, ...rules()];
   const l = look([{ signal: 'tool-use', tool: 'Agent' }], rs);
-  assert.deepEqual([l.body, l.effect, l.pet, l.lamp], ['ghost', 'fire', 'blob', 'green']);
+  assert.deepEqual([l.effect, l.pet, l.lamp], ['fire', 'blob', 'green']);
   const p = R.previewLook({ then: { effect: 'beard' } });
   assert.equal(p.waitMinutes, 20, 'preview shows a grown beard');
 });
@@ -1250,7 +1250,7 @@ const blockedAt = (min) => ({ sessionId: 'b', signal: 'tool-done', cwd: '/w', up
 test('v9 blocked: a fresh config has the lamp-only red rule under the red block, off by default (v10), red when switched on', () => {
   const d = R.defaultRules().map((r) => (r.id === 'blocked' ? { ...r, enabled: true } : r));
   const ids = d.map((r) => r.id);
-  assert.equal(R.RULES_VERSION, 10);
+  assert.equal(R.RULES_VERSION, 11);
   assert.equal(R.defaultRules().find((r) => r.id === 'blocked').enabled, false);
   assert.equal(ids.indexOf('blocked'), ids.indexOf('runaway') + 1);
   assert.ok(ids.indexOf('blocked') < ids.indexOf('working') && ids.indexOf('blocked') < ids.indexOf('done'));
@@ -1350,4 +1350,37 @@ test('unknown agent reports do not manufacture working roster or counts', () => 
     assert.equal(R.normalizeAgent({ id: 'unknown', status }).status, 'stale');
     assert.deepEqual(R.liveAgents([{ agents: [{ id: 'unknown', status }] }]), []);
   }
+});
+
+test('one character: a rule\'s then.body never changes look.body', () => {
+  const rs = [{ id: 'g', name: 'g', when: { signal: ['tool-use'] }, then: { body: 'ghost', bodyColor: '#112233', pose: 'wave' } }, ...rules()];
+  const l = look([{ signal: 'tool-use' }], rs);
+  assert.equal(l.pose, 'wave');
+  assert.deepEqual([l.body, l.bodyColor], ['claude', null]);
+  assert.equal(R.normalizeRule(rs[0]).then.body, undefined);
+  assert.equal(R.normalizeRule(rs[0]).then.bodyColor, undefined);
+});
+
+test('one character: the global character applies in every state', () => {
+  const env = { character: { body: 'robot', bodyColor: '#1155cc' } };
+  for (const signal of ['tool-use', 'idle-nudge', 'limit-hit', 'idle', 'permission-ask']) {
+    const l = R.resolve(rules(), [{ signal }], Date.now(), env).look;
+    assert.deepEqual([l.body, l.bodyColor], ['robot', '#1155cc'], signal);
+  }
+  assert.equal(R.resolve(rules(), [], Date.now(), env).look.body, 'robot');
+  assert.equal(R.previewLook({ then: { pose: 'wave' } }, env.character).body, 'robot');
+  assert.equal(R.normalizeCharacter({ body: 'nonsense', bodyColor: 'red' }).body, 'claude');
+});
+
+test('one character: templates no longer set a body', () => {
+  for (const t of R.templates()) for (const r of t.rules) assert.equal(r.then.body, undefined, t.id);
+});
+
+test('one character: migration picks the most common non-default body, else claude', () => {
+  const rule = (body, bodyColor) => ({ id: uid(), name: 'x', when: { signal: ['idle'] }, then: { body, bodyColor } });
+  let n = 0; const uid = () => `r${n++}`;
+  assert.deepEqual(R.characterFromRules([rule('octopus'), rule('cyclops', '#abcdef'), rule('cyclops', '#abcdef'), rule('claude')]), { body: 'cyclops', bodyColor: '#abcdef' });
+  assert.deepEqual(R.characterFromRules([rule('octopus'), rule('claude')]), { body: 'octopus', bodyColor: null });
+  assert.deepEqual(R.characterFromRules([rule('claude'), rule(undefined)]), { body: 'claude', bodyColor: null });
+  assert.deepEqual(R.characterFromRules(undefined), { body: 'claude', bodyColor: null });
 });

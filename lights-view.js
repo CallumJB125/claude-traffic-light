@@ -189,7 +189,6 @@
           ${t.pose && t.pose !== 'none' ? `<span class="chip pose pose-chip" title="${t.pose}">${ICON.pose[t.pose] || ICON.pose.think}</span>` : ''}
           ${t.costume && t.costume !== 'none' ? `<span class="chip pose" title="${t.costume}">${ICON.costume}</span>` : ''}
           ${t.cameo && t.cameo !== 'none' ? `<span class="chip pose" title="cameo: ${t.cameo}">${ICON.cameo}</span>` : ''}
-          ${t.body && t.body !== 'claude' ? `<span class="chip pose" title="body: ${t.body}">${ICON.body}</span>` : ''}
           ${t.effect && t.effect !== 'none' ? `<span class="chip pose" title="effect: ${t.effect}">${ICON.effect}</span>` : ''}
           ${t.pet && t.pet !== 'none' ? `<span class="chip pose" title="pet: ${t.pet}">${ICON.pet}</span>` : ''}
           ${t.sound ? `<span class="chip pose" title="sound: ${escape(t.sound.replace(/^file:/, ''))}">${ICON.sound}</span>` : ''}
@@ -264,7 +263,7 @@
   // ── Now strip ──────────────────────────────────────────────────────────
   // Which rule the lamp belongs to, and which rule owns each accent channel,
   // so a look that mixes several rules can be traced back to them.
-  const NOW_CHANNELS = [['lamp', ['lamp']], ['eyes', ['eyes']], ['pose', ['pose']], ['costume', ['costume']], ['cameo', ['cameo']], ['body', ['body', 'bodyColor']], ['effect', ['effect']], ['pet', ['pet']], ['agents', ['agents', 'agentsColor']], ['sign/number', ['numberOf', 'sign']]];
+  const NOW_CHANNELS = [['lamp', ['lamp']], ['eyes', ['eyes']], ['pose', ['pose']], ['costume', ['costume']], ['cameo', ['cameo']], ['effect', ['effect']], ['pet', ['pet']], ['agents', ['agents', 'agentsColor']], ['sign/number', ['numberOf', 'sign']]];
   function renderNow() {
     const box = $('now');
     const head = box.querySelector('.head');
@@ -310,6 +309,11 @@
   }
 
   // ── Editor ─────────────────────────────────────────────────────────────
+  // The one character is saved straight away, not with the rule edits.
+  async function setCharacter(next) {
+    try { config = await window.lightsApi.saveConfig({ character: R.normalizeCharacter(next) }); } catch (err) { flash(`Save failed: ${err.message}`); return; }
+    renderEditor(); renderStage();
+  }
   function renderEditor() {
     const r = selected();
     const ed = $('editor');
@@ -398,7 +402,7 @@
     // pin on the tile's corner (the cameo row's "remove photo").
     const picker = (container, options, current, lookFor, onPick, opts = {}) => {
       container.innerHTML = '';
-      for (const o of [null, ...options]) {
+      for (const o of (opts.noKeep ? options : [null, ...options])) {
         const b = document.createElement('button');
         b.type = 'button';
         b.className = 'posebtn' + (current === o ? ' on' : '');
@@ -411,7 +415,7 @@
         b.appendChild(lbl);
         mountRig(mini).setLook({ lamp: 'off', eyes: 'default', pose: 'none', ...lookFor(o) });
         if (o === null) mini.style.opacity = '0.35';
-        b.addEventListener('click', () => { onPick(o); touch(); });
+        b.addEventListener('click', () => { onPick(o); if (!opts.noKeep) touch(); });
         const extra = o !== null && opts.extra && opts.extra(o);
         if (extra) {
           const cell = document.createElement('span');
@@ -447,7 +451,9 @@
     });
     $('cameos').appendChild(faceAddBtn());
     const userBodies = window.BuddyCharacters.ids().filter((id) => id.startsWith('u-'));
-    picker($('bodies'), [...R.BODIES, ...userBodies], r.then.body, (o) => ({ body: o || 'claude', bodyColor: r.then.bodyColor }), (o) => { r.then.body = o; }, {
+    const character = R.normalizeCharacter(config.character);
+    picker($('bodies'), [...R.BODIES, ...userBodies], character.body, (o) => ({ body: o, bodyColor: character.bodyColor }), (o) => { setCharacter({ ...character, body: o }); }, {
+      noKeep: true,
       label: (o) => (userBodies.includes(o) ? window.BuddyCharacters.get(o).name : null),
       extra: (o) => (userBodies.includes(o) ? hatchRemoveBtn(o) : null),
     });
@@ -479,10 +485,10 @@
       moods.appendChild(b);
     }
     const bodySw = $('body-color-swatch');
-    bodySw.classList.toggle('has', !!r.then.bodyColor);
-    bodySw.classList.toggle('on', !!r.then.bodyColor);
-    bodySw.style.setProperty('--c', r.then.bodyColor || '');
-    $('body-color').value = r.then.bodyColor || '#da7756';
+    bodySw.classList.toggle('has', !!character.bodyColor);
+    bodySw.classList.toggle('on', !!character.bodyColor);
+    bodySw.style.setProperty('--c', character.bodyColor || '');
+    $('body-color').value = character.bodyColor || '#da7756';
     $('cwd').value = r.when.cwd || '';
     $('source').value = r.when.source || '';
 
@@ -542,7 +548,7 @@
   $('number').addEventListener('change', (e) => { const r = selected(); if (!r) return; r.then.number = e.target.value || null; touch(); });
   $('sound-play').addEventListener('click', () => { const r = selected(); if (r?.then.sound) window.lightsApi.previewSound(r.then.sound); });
   $('sound-file').addEventListener('click', async () => { const r = selected(); if (!r) return; const f = await window.lightsApi.chooseSoundFile(); if (!f) return; r.then.sound = f; touch(); });
-  $('body-color').addEventListener('input', (e) => { const r = selected(); if (!r) return; r.then.bodyColor = e.target.value; touch(); });
+  $('body-color').addEventListener('change', (e) => setCharacter({ ...R.normalizeCharacter(config.character), bodyColor: e.target.value }));
   $('agents-color').addEventListener('input', (e) => { const r = selected(); if (!r) return; r.then.agentsColor = e.target.value; touch(); });
   $('source').addEventListener('change', (e) => { const r = selected(); if (!r) return; r.when.source = e.target.value || null; setDirty(true); });
   $('cwd').addEventListener('input', (e) => { const r = selected(); if (!r) return; r.when.cwd = e.target.value.trim() || null; setDirty(true); renderList(); });
@@ -882,7 +888,7 @@
       // Show only this rule's own look, so what you see is what "Try on
       // widget" sends. The caption still says what the other rules would
       // contribute when this signal is live.
-      const own = R.previewLook(r);
+      const own = R.previewLook(r, config.character);
       own.gardenSpeed = 30;
       if (r.then.agents || r.then.agentsColor) own.minions = SAMPLE_MINIONS;
       stage.setLook(own);
@@ -1040,7 +1046,7 @@
     const set = (id, then) => { const r = d.find((x) => x.id === id); Object.assign(r.then, then); };
     set('done', { pose: 'party', costume: 'partyhat', effect: 'sparkles', eyes: 'heart', lampFx: 'chase' });
     set('working', { pose: 'run', pet: 'duck', lampFx: 'breathe', agents: 'duck' });
-    set('limit', { body: 'ghost', effect: 'rain', eyes: 'x' });
+    set('limit', { effect: 'rain', eyes: 'x' });
     set('permission', { pose: 'wave', costume: 'crown' });
     set('failed', { eyes: 'dizzy', effect: 'fire' });
     d.find((x) => x.id === 'failed').enabled = true;
@@ -1062,7 +1068,7 @@
     const d = R.defaultRules().map((r) => (r.id === 'failed' || r.id === 'shell' ? { ...r, enabled: true } : r));
     const set = (id, then) => { const r = d.find((x) => x.id === id); if (r) Object.assign(r.then, then); };
     set('permission', { pose: 'sniper', lampFx: 'strobe', sound: 'Sosumi', screenFx: 'vignette', eyes: 'laser' });
-    set('limit', { pose: 'ak47', lampFx: 'sos', sound: 'Funk', body: 'robot', screenFx: 'vignette' });
+    set('limit', { pose: 'ak47', lampFx: 'sos', sound: 'Funk', screenFx: 'vignette' });
     set('working', { pose: 'run', lampFx: 'police', pet: 'dragon', effect: 'fire' });
     set('done', { pose: 'party', lampFx: 'rainbow', screenFx: 'confetti', costume: 'partyhat', eyes: 'star', sound: 'Hero' });
     set('failed', { eyes: 'dizzy', effect: 'fire', signFx: 'rattle' });
@@ -1078,7 +1084,7 @@
     set('done', { pose: 'thumbs', effect: 'sparkles', eyes: 'happy', pet: 'bunny' });
     set('nudge', { pose: 'none', effect: 'sun', pet: 'snail' });
     set('permission', { pose: 'wave', effect: 'rain' });
-    set('limit', { pose: 'sleep', body: 'frog', effect: 'rain' });
+    set('limit', { pose: 'sleep', effect: 'rain' });
     return d;
   };
   PRESETS.office = () => {
@@ -1096,12 +1102,12 @@
   PRESETS.night = () => {
     const d = R.defaultRules().filter((r) => !['shell', 'failed'].includes(r.id));
     const set = (id, then) => { const r = d.find((x) => x.id === id); if (r) Object.assign(r.then, then); };
-    set('working', { body: 'ghost', pose: 'blink', effect: 'snow', lampFx: 'breathe', lampColor: '#8b5cf6', lamp: 'green', agents: 'ghost' });
-    set('done', { body: 'ghost', pose: 'nod', eyes: 'sleepy', lampFx: 'breathe', lampColor: '#8b5cf6', lamp: 'amber', celebrate: false });
-    set('nudge', { body: 'ghost', pose: 'sleep', eyes: 'closed', lampFx: 'breathe', lampColor: '#8b5cf6', lamp: 'amber' });
-    set('idle', { body: 'ghost', pose: 'sleep', eyes: 'closed', effect: 'snow', lamp: 'off' });
-    set('permission', { body: 'ghost', pose: 'wave', costume: 'halo', sound: 'Purr', lampFx: 'breathe' });
-    set('limit', { body: 'ghost', pose: 'dead', lampFx: 'sos' });
+    set('working', { pose: 'blink', effect: 'snow', lampFx: 'breathe', lampColor: '#8b5cf6', lamp: 'green', agents: 'ghost' });
+    set('done', { pose: 'nod', eyes: 'sleepy', lampFx: 'breathe', lampColor: '#8b5cf6', lamp: 'amber', celebrate: false });
+    set('nudge', { pose: 'sleep', eyes: 'closed', lampFx: 'breathe', lampColor: '#8b5cf6', lamp: 'amber' });
+    set('idle', { pose: 'sleep', eyes: 'closed', effect: 'snow', lamp: 'off' });
+    set('permission', { pose: 'wave', costume: 'halo', sound: 'Purr', lampFx: 'breathe' });
+    set('limit', { pose: 'dead', lampFx: 'sos' });
     return d;
   };
   PRESETS.swarm = () => {
@@ -1110,13 +1116,13 @@
     // Team eyes sit above the subagent and swarm eye accents so team mode always reads as distinct.
     d.splice(2, 0, d.splice(d.findIndex((x) => x.id === 'team'), 1)[0]);
     d.splice(d.findIndex((x) => x.id === 'swarm') + 1, 0,
-      { id: 'subagents', name: 'Subagents running', enabled: true, when: { signal: ['subagents'] }, then: { body: 'robot', pose: 'banner', text: '{agents} AGENTS', number: 'agents', agents: 'robot' } },
+      { id: 'subagents', name: 'Subagents running', enabled: true, when: { signal: ['subagents'] }, then: { pose: 'banner', text: '{agents} AGENTS', number: 'agents', agents: 'robot' } },
     );
     set('team', { eyes: 'star', costume: 'crown', pet: null });
     set('ralph', { pose: 'banner', text: 'LOOP {iteration}', number: 'ralph', lampFx: 'chase' });
-    set('swarm', { number: 'agents', eyes: '#f2a200', body: 'robot', signFx: 'neon' });
+    set('swarm', { number: 'agents', eyes: '#f2a200', signFx: 'neon' });
     set('permission', { pose: 'knock', lampFx: 'pulse' });
-    set('limit', { body: 'robot', eyes: 'x', lampFx: 'sos' });
+    set('limit', { eyes: 'x', lampFx: 'sos' });
     set('done', { pose: 'thumbs', screenFx: 'confetti' });
     return d;
   };
@@ -1136,14 +1142,14 @@
   PRESETS.retro = () => {
     const d = R.defaultRules().map((r) => (r.id === 'failed' ? { ...r, enabled: true } : r));
     const set = (id, then) => { const r = d.find((x) => x.id === id); if (r) Object.assign(r.then, then); };
-    set('limit', { body: 'robot', pose: 'banner', text: 'GAME OVER', eyes: 'x', lampFx: 'sos' });
-    set('permission', { body: 'robot', pose: 'knock', eyes: 'surprised', lampFx: 'strobe' });
+    set('limit', { pose: 'banner', text: 'GAME OVER', eyes: 'x', lampFx: 'sos' });
+    set('permission', { pose: 'knock', eyes: 'surprised', lampFx: 'strobe' });
     set('ralph', { pose: 'banner', text: 'LEVEL {iteration}' });
     set('failed', { eyes: 'dizzy', signFx: 'rattle' });
-    set('working', { body: 'robot', pose: 'run', lampFx: 'chase', signFx: 'neon' });
-    set('done', { body: 'robot', pose: 'party', eyes: 'star', lampFx: 'rainbow', screenFx: 'confetti', sound: 'beep' });
-    set('nudge', { body: 'robot', pose: 'bubble', text: 'PLAYER 1?' });
-    set('idle', { body: 'robot', pose: 'banner', text: 'INSERT COIN', lampFx: 'chase' });
+    set('working', { pose: 'run', lampFx: 'chase', signFx: 'neon' });
+    set('done', { pose: 'party', eyes: 'star', lampFx: 'rainbow', screenFx: 'confetti', sound: 'beep' });
+    set('nudge', { pose: 'bubble', text: 'PLAYER 1?' });
+    set('idle', { pose: 'banner', text: 'INSERT COIN', lampFx: 'chase' });
     return d;
   };
   $('presets-btn').addEventListener('click', (e) => {

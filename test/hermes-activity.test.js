@@ -154,3 +154,21 @@ print('observer callback lifecycle passed')
   assert.equal(Hermes.uninstall(f).changed, true);
   assert.equal(Hermes.install(f).ok, true, 'reconnect works after a real Python import created bytecode cache');
 });
+
+test('bridge keeps a bounded absolute cwd and drops relative, oversized or control-character paths; an unknown plugin body stays foreign', t => {
+  const f = fixture(t);
+  const apply = data => Bridge.apply({ sessionId: 'cwd-session', ...data }, f.runtime.dataDir);
+  assert.equal(apply({ event: 'start', cwd: '/Users/me/project' }), true);
+  assert.equal(rows(f.runtime.dataDir)[0].cwd, '/Users/me/project');
+  for (const cwd of ['relative/dir', `/${'a'.repeat(1100)}`, '/tmp/x\nforged', 42]) {
+    assert.equal(apply({ event: 'working', turnId: `t${String(cwd).length}`, cwd }), true);
+    assert.equal(rows(f.runtime.dataDir)[0].cwd, '/Users/me/project', 'an invalid cwd never replaces the known one');
+  }
+  Hermes.install(f);
+  const init = path.join(path.dirname(Hermes.configPath(f.home)), '__init__.py');
+  const original = fs.readFileSync(init, 'utf8');
+  fs.writeFileSync(init, 'previous body');
+  assert.throws(() => Hermes.install(f), /occupies/, 'an unknown body is foreign');
+  fs.writeFileSync(init, original);
+  assert.equal(Hermes.isInstalled({ home: f.home }), true);
+});

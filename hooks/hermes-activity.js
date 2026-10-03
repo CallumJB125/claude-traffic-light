@@ -7,6 +7,7 @@ const os = require('node:os');
 const State = require('./session-state');
 const ID = /^[A-Za-z0-9_.-]{1,120}$/;
 const TURN = /^[A-Za-z0-9_.:-]{1,256}$/;
+const cwdOf = (c) => (typeof c === 'string' && c.length <= 1024 && path.isAbsolute(c) && !/[\x00-\x1f\x7f]/.test(c) ? c : '');
 function apply(data, root) {
   if (!data || !ID.test(data.sessionId) || typeof data.sessionId !== 'string' || !['start', 'working', 'stop', 'end'].includes(data.event)) return false;
   if (['working', 'stop'].includes(data.event) && (typeof data.turnId !== 'string' || !TURN.test(data.turnId))) return false;
@@ -29,7 +30,7 @@ function apply(data, root) {
       if (!closed.includes(data.turnId)) closed.push(data.turnId);
     }
     const signal = { start: 'session-start', working: 'tool-use', stop: data.failed ? 'turn-failed' : 'stop' }[data.event];
-    const next = State.applyBareSignal(prev, { sessionId: data.sessionId, host, source: 'hermes', cwd: '', signal });
+    const next = State.applyBareSignal(prev, { sessionId: data.sessionId, host, source: 'hermes', cwd: cwdOf(data.cwd) || prev?.cwd || '', signal });
     next.hermesTurnId = data.turnId || prev?.hermesTurnId || null;
     next.hermesClosedTurns = closed.slice(-32);
     State.writeJsonAtomic(file, next);

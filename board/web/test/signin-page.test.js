@@ -102,12 +102,47 @@ test('resend: a short gap first, then never a fourth code in 15 minutes (the hub
   assert.match(p.els['signin-error'].textContent, /You can ask for a new code in 14 minutes\./);
 });
 
-test('a hub with no mailer: the email form is hidden and the page says to use the app', async () => {
+test('desktop-only providers and no email: the email form stays hidden and the page says to use the app', async () => {
   const p = page({ routes: { '/api/auth/methods': { status: 200, body: { google: true, github: true, email: false } } } });
   await settle();
   await settle();
   assert.equal(p.els['email-form'].hidden, true);
-  assert.equal(p.els['signin-lead'].textContent, text.EMAIL_OFF);
+  assert.equal(p.els['oauth-options'].hidden, true);
+  assert.match(p.els['signin-lead'].textContent, /Google and GitHub sign-in aren’t set up for the browser.*desktop app/);
+});
+
+test('no sign-in method at all: a clear message, never an email fallback', async () => {
+  for (const body of [{ google: false, github: false, email: false, web: { google: false, github: false } }, {}]) {
+    const p = page({ routes: { '/api/auth/methods': { status: 200, body } } });
+    await settle(); await settle();
+    assert.equal(p.els['email-form'].hidden, true);
+    assert.equal(p.els['oauth-options'].hidden, true);
+    assert.equal(p.els['signin-lead'].textContent, 'No sign-in method is set up on this board yet. Ask the board’s owner to set up Google or GitHub sign-in.');
+  }
+});
+
+test('methods unreachable: the email form stays hidden and the page asks for a reload', async () => {
+  const p = page({ routes: { '/api/auth/methods': 'network' } });
+  p.els['email-form'].hidden = true; // as the HTML ships it
+  await settle(); await settle();
+  assert.equal(p.els['email-form'].hidden, true);
+  assert.equal(p.els['signin-error'].textContent, 'We couldn’t load the sign-in options. Reload the page to try again.');
+});
+
+test('Google and GitHub: both buttons, Continue with Google or GitHub, no email form', async () => {
+  const p = page({ routes: { '/api/auth/methods': { status: 200, body: { google: true, github: true, email: false, web: { google: true, github: true } } } } });
+  await settle(); await settle();
+  assert.equal(p.els['email-form'].hidden, true);
+  assert.equal(p.els['google-signin'].hidden, false);
+  assert.equal(p.els['github-signin'].hidden, false);
+  assert.equal(p.els['signin-lead'].textContent, 'Continue with Google or GitHub.');
+});
+
+test('signin.html ships with the email form hidden and no email-code copy (no flash before /api/auth/methods answers)', () => {
+  const html = readFileSync(new URL('../signin.html', import.meta.url), 'utf8');
+  assert.match(html, /<form id="email-form"[^>]*\bhidden\b/);
+  assert.match(html, /<p id="signin-lead">Continue with Google or GitHub\.<\/p>/);
+  assert.doesNotMatch(html, /email you a 6-digit code/i);
 });
 
 test('browser provider availability shows only its own configured buttons, independent of desktop methods', async () => {
@@ -117,7 +152,7 @@ test('browser provider availability shows only its own configured buttons, indep
   assert.equal(p.els['oauth-options'].hidden, false);
   assert.equal(p.els['google-signin'].hidden, false);
   assert.equal(p.els['github-signin'].hidden, true);
-  assert.equal(p.els['signin-lead'].textContent, 'Choose how to sign in.');
+  assert.equal(p.els['signin-lead'].textContent, 'Continue with Google.');
 });
 
 test('delayed methods cannot reopen controls or replace the lead after entering the code phase', async () => {

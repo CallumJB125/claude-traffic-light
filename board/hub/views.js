@@ -8,7 +8,7 @@ import { isGreen } from '../shared/liveness.js';
 import { FEED_KINDS } from '../shared/protocol.js';
 import { json, HubError } from './db.js';
 import { cleanLinkStatus } from './integrations/connector.js';
-import { AI_LABELS, aiOfDispatch } from '../shared/ai.js';
+import { AI_LABELS, AI_CAPABILITIES, aiOfDispatch } from '../shared/ai.js';
 import { workCaptureView } from './work-capture-view.js';
 import { commentIdentity } from './remote/attribution.js';
 
@@ -106,9 +106,9 @@ function deviceKind(hub, runRow) {
 }
 
 export function runCost(hub, run) {
-  // A database default of zero is not a cost observation. Codex does not
-  // expose dollar telemetry through this adapter, including older rows.
-  const observed = aiOfDispatch(run) !== 'codex' && (run.cost_cents > 0 ||
+  // A database default of zero is not a cost observation. Codex and Hermes do
+  // not expose dollar telemetry through their adapters, including older rows.
+  const observed = AI_CAPABILITIES[aiOfDispatch(run)]?.budget !== 'none' && (run.cost_cents > 0 ||
     !!hub.db.get("SELECT 1 x FROM events WHERE run_id = ? AND kind = 'cost' LIMIT 1", run.id));
   return { cost_usd: observed ? run.cost_cents / 100 : null,
     cost_source: observed ? 'provider_reported' : 'unavailable' };
@@ -158,6 +158,8 @@ export function cardView(hub, row, viewerId) {
       ai: aiOfDispatch(runRow), ai_label: AI_LABELS[aiOfDispatch(runRow)], budget_usd: runRow.budget_cents == null ? null : runRow.budget_cents / 100,
       budget_stop: runRow.terminal_reason === 'budget_device' ? 'device' : runRow.terminal_reason === 'budget' ? 'card' : null,
       owner: person(hub, runRow.on_behalf_of), dispatched_by: person(hub, runRow.dispatched_by),
+      // The CLI can outlive its run on the hub (board_complete): still acting.
+      child_alive: runRow.ended_at ? hub.endedChildAlive?.(runRow.id) === true : hub.lease?.(runRow.id)?.child_alive === true,
     } : null,
     live: leaseView(hub, row),
     state_age_ms: stateAge == null ? 0 : Math.round(stateAge),

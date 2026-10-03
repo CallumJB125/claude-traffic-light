@@ -8,6 +8,7 @@ import threading
 from collections import OrderedDict
 
 _ID = re.compile(r"^[A-Za-z0-9_.-]{1,120}$")
+_CWD_MAX = 1024
 _TURN = re.compile(r"^[A-Za-z0-9_.:-]{1,256}$")
 _lock = threading.Lock()
 _closed = OrderedDict()
@@ -20,6 +21,18 @@ def _remember(store, key):
     store.move_to_end(key)
     while len(store) > 2048:
         store.popitem(last=False)
+
+
+def _cwd():
+    # The Hermes process directory (chat --in DIR), so Overview can place the
+    # session; only a bounded absolute path without control characters.
+    try:
+        cwd = os.getcwd()
+    except OSError:
+        return None
+    if not os.path.isabs(cwd) or len(cwd) > _CWD_MAX or any(ord(c) < 32 or ord(c) == 127 for c in cwd):
+        return None
+    return cwd
 
 
 def _report(event, session_id=None, turn_id=None, completed=None, failed=None,
@@ -43,6 +56,10 @@ def _report(event, session_id=None, turn_id=None, completed=None, failed=None,
             payload["turnId"] = turn_id
         if event == "stop":
             payload["failed"] = failed is True
+        if event != "end":
+            cwd = _cwd()
+            if cwd:
+                payload["cwd"] = cwd
         env = {"PATH": "/usr/bin:/bin", "CLAUDE_TRAFFIC_LIGHT_HOME": _config["dataDir"]}
         if _config.get("electron"):
             env["ELECTRON_RUN_AS_NODE"] = "1"

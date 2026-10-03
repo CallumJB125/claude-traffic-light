@@ -50,13 +50,18 @@ function processStatusTable(timeoutMs = 1000) {
 // Verification only: kill scope remains with the existing identity-safe stop
 // recipe. A recycled pid/group is conservatively unconfirmed. Zombies cannot
 // perform work; missing/unreadable observations must never authorize a start.
+// Backends confirm with STOP_VERIFY_MS so the observation outlasts their own
+// post-SIGKILL exit wait (2 s); a slow-dying tool tree is then not reported
+// unconfirmed (and quarantined) while the kernel is still reaping it.
+export const STOP_VERIFY_MS = 3000;
+const STOP_VERIFY_MAX_MS = 5000;
 export async function waitForStopped({ pid, groups = [] }, { timeoutMs = 1000, readTable = processStatusTable,
   now = Date.now, delay = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
   if (!Array.isArray(groups)) return false;
   if (pid == null && groups.length === 0) return true; // Nothing was spawned.
   if (!Number.isSafeInteger(pid) || pid <= 1
     || groups.some((g) => !Number.isSafeInteger(g) || g <= 1)) return false;
-  const owned = new Set(groups), end = now() + Math.min(1000, Math.max(0, timeoutMs));
+  const owned = new Set(groups), end = now() + Math.min(STOP_VERIFY_MAX_MS, Math.max(0, timeoutMs));
   for (;;) {
     // A synchronous probe uses only the remaining deadline. timeoutMs:0
     // requests a single bounded observation without a poll wait.

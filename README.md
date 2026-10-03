@@ -152,6 +152,10 @@ Resolution: rules apply top to bottom; the first rule that lights a lamp is
 the state, and rules above it may layer accents (eyes, pose, sound) on top.
 A rule below the lamp owner never leaks into the look.
 
+There is one character for everything, chosen once in Lights (the Character
+row above the rules). Rules drive pose, eyes, lamp, effects, costume, pet and
+sound, never the body.
+
 ## Share your rules
 
 Presets menu → **Copy share code** puts your whole ruleset on the clipboard

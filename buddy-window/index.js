@@ -577,6 +577,8 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       return { url: team.hub, origin: team.hub, accessTeam: null, partition: teamPartition(team.hub), team: true, bearer: true, org: team.teamId };
     }
     if (team?.kind === 'access') {
+      // In the background: a hub that has left Access drops this entry and goes to its own sign-in.
+      flow.recheckAccess(team).catch((e) => log('access recheck failed', e.message));
       const origin = new URL(team.url).origin;
       return { url: team.url, origin, accessTeam: team.accessTeam ?? null, partition: teamPartition(team.url), team: true };
     }

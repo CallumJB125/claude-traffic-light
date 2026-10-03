@@ -17,6 +17,8 @@ import { resolveBin, safeBinary, detectCli } from '../backends/detect.js';
 import { tmpDir, rm, fakeClaudeBin, readFakeLog, waitFor, alive } from './helpers.js';
 
 const IDS = Object.keys(BACKENDS);
+// A backend may be a mode of another CLI (hermes-dgx runs the hermes binary).
+const cliOf = (id) => BACKENDS[id].cli ?? id;
 const nativeWindows = process.platform === 'win32';
 const cliPath = (dir, name) => path.join(dir, name + (nativeWindows ? '.exe' : ''));
 async function detectFixture(id, options) {
@@ -53,7 +55,7 @@ test('registry: every backend has a stable id, a label, honest capabilities and 
     assert.equal(typeof B.detect, 'function', `${id}.detect`);
     const d = B.describe();
     assert.equal(d.id, id);
-    assert.match(d.id, /^[a-z]+$/);
+    assert.match(d.id, /^[a-z]+(-[a-z]+)?$/);
     assert.equal(typeof d.label, 'string');
     assert.equal(typeof d.startable, 'boolean');
     assert.deepEqual(Object.keys(d.capabilities).sort(), Object.keys(CAPABILITY_VALUES).sort(), `${id} capability keys`);
@@ -77,11 +79,11 @@ for (const id of IDS) {
       assert.deepEqual({ ...none, signedIn: undefined }, { id, installed: false, version: null, signedIn: undefined, bin: null, reason: 'not_found' });
       assert.ok([true, false, 'unknown'].includes(none.signedIn));
 
-      fakeCli(binDir, id);
+      fakeCli(binDir, cliOf(id));
       const d = await detectFixture(id, { env: { HOME: home, PATH: binDir }, knownDirs: [], timeoutMs: 15000 });
       assert.equal(d.installed, true);
       assert.equal(d.version, '1.2.3');
-      assert.equal(d.bin, fs.realpathSync(cliPath(binDir, id)));
+      assert.equal(d.bin, fs.realpathSync(cliPath(binDir, cliOf(id))));
       assert.ok(path.isAbsolute(d.bin));
       assert.ok([true, false, 'unknown'].includes(d.signedIn));
       assert.ok(!('reason' in d) || /^[a-z_]+$/.test(d.reason));
@@ -93,14 +95,14 @@ for (const id of IDS) {
     const binDir = path.join(home, 'bin');
     fs.mkdirSync(binDir);
     try {
-      fakeCli(binDir, id, { mode: 0o777 });
+      fakeCli(binDir, cliOf(id), { mode: 0o777 });
       const d = await detectFixture(id, { env: { HOME: home, PATH: binDir }, knownDirs: [], timeoutMs: 15000 });
       assert.equal(d.installed, false);
       assert.equal(d.bin, null);
       assert.equal(d.reason, 'unsafe_bin');
 
-      fs.rmSync(cliPath(binDir, id));
-      fakeCli(binDir, id, { hang: true });
+      fs.rmSync(cliPath(binDir, cliOf(id)));
+      fakeCli(binDir, cliOf(id), { hang: true });
       const t0 = Date.now();
       const h = await detectFixture(id, { env: { HOME: home, PATH: binDir }, knownDirs: [], timeoutMs: 300 });
       assert.ok(Date.now() - t0 < 2500, 'probe timeout respected');

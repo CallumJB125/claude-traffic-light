@@ -87,7 +87,8 @@ export function probe(bin, args, env, timeoutMs = PROBE_TIMEOUT_MS) {
 }
 
 export function versionOf(stdout) {
-  return /\b(\d+\.\d+\.\d+(?:[-+][\w.]+)?)\b/.exec(stdout ?? '')?.[1] ?? null;
+  // A leading 'v' is allowed: Hermes prints "Hermes Agent v0.21.3 (…)".
+  return /(?:^|[^\w.])v?(\d+\.\d+\.\d+(?:[-+][\w.]+)?)\b/.exec(stdout ?? '')?.[1] ?? null;
 }
 
 const exists = (p) => { try { return fs.statSync(p).isFile(); } catch { return false; } };

@@ -47,6 +47,8 @@ export function loadConfig(env = process.env) {
     sesFromFormat: env.BOARD_SES_FROM_FORMAT || null,
     downloadUrl: env.BOARD_DOWNLOAD_URL || null,
     consoleMailer: flag(env.BOARD_CONSOLE_MAILER),
+    // Email one-time-code sign-in is off unless asked for: a mailer configured for invites never turns it on.
+    emailSignin: flag(env.BOARD_EMAIL_SIGNIN),
     signinMethods: (env.BOARD_SIGNIN_METHODS || '').split(',').map((s) => s.trim()).filter(Boolean),
     signup: env.BOARD_SIGNUP || null,
     googleClientId: env.BOARD_GOOGLE_CLIENT_ID || null,
@@ -240,7 +242,7 @@ export function webOauthProviders(cfg) {
 // BOARD_AUTH=accounts (D51, D66): the hub runs its own sign-in. Exposed, it
 // must be https behind cloudflared (per-IP limits key on CF-Connecting-IP,
 // trusted only from a loopback peer) with at least one sign-in method; the
-// email code is optional (only with a real mailer) and the console mailer is
+// email code is optional (only with a real mailer and BOARD_EMAIL_SIGNIN=1) and the console mailer is
 // never allowed there. Without a public URL it is a loopback try-out, and only
 // with BOARD_ACCOUNTS_DEV=1.
 function validateAccounts(cfg) {
@@ -278,7 +280,7 @@ function validateAccounts(cfg) {
   if (exposed) {
     if (url?.protocol !== 'https:') throw new Error('an exposed BOARD_AUTH=accounts hub (BOARD_PUBLIC_URL off loopback, or BOARD_TUNNEL_PROBE_URL) needs an https BOARD_PUBLIC_URL');
     if (!cfg.trustCfIp) throw new Error('an exposed BOARD_AUTH=accounts hub needs BOARD_TRUST_CF_IP=1 (cloudflared on loopback), so per-IP limits see the client');
-    if (!mailProvider(cfg) && !methods.length && !oauthProviders(cfg).length && !webOauthProviders(cfg).length) throw new Error('an exposed BOARD_AUTH=accounts hub needs a sign-in method: BOARD_GOOGLE_CLIENT_ID/_SECRET, BOARD_GITHUB_CLIENT_ID/_SECRET, BOARD_GOOGLE_WEB_CLIENT_ID/_SECRET, BOARD_GITHUB_WEB_CLIENT_ID/_SECRET, BOARD_SIGNIN_METHODS (google, github) or a mailer (BOARD_RESEND_API_KEY + BOARD_MAIL_FROM, or BOARD_MAIL_PROVIDER=ses with BOARD_SES_*)');
+    if (!(mailProvider(cfg) && cfg.emailSignin) && !methods.length && !oauthProviders(cfg).length && !webOauthProviders(cfg).length) throw new Error('an exposed BOARD_AUTH=accounts hub needs a sign-in method: BOARD_GOOGLE_CLIENT_ID/_SECRET, BOARD_GITHUB_CLIENT_ID/_SECRET, BOARD_GOOGLE_WEB_CLIENT_ID/_SECRET, BOARD_GITHUB_WEB_CLIENT_ID/_SECRET, BOARD_SIGNIN_METHODS (google, github) or BOARD_EMAIL_SIGNIN=1 with a mailer (BOARD_RESEND_API_KEY + BOARD_MAIL_FROM, or BOARD_MAIL_PROVIDER=ses with BOARD_SES_*)');
   }
   if (cfg.devSeed || cfg.bootstrap?.includes(',')) throw new Error('BOARD_AUTH=accounts takes BOARD_BOOTSTRAP=<email> only, and no BOARD_DEV_SEED');
   if (cfg.authFailBudget != null && (!Number.isInteger(cfg.authFailBudget) || cfg.authFailBudget < 1 || cfg.authFailBudget > 100)) throw new Error('BOARD_AUTH_FAIL_BUDGET must be an integer from 1 to 100');

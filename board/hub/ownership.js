@@ -121,7 +121,9 @@ export class TaskOwnership {
     const run = this.hub.run(record.run_id), row = this.hub.card(record.card_id), connection = this.hub.runners.get(record.device_id), lease = this.hub.lease(record.run_id), live = this.live.get(record.run_id);
     if (!run || !row || row.board_id !== record.board_id || row.repo_id !== record.repo_id || this.hub.board(row.board_id)?.org_id !== record.org_id) return null;
     let state = 'planned', reason = 'awaiting_heartbeat';
-    if (row?.column_name === 'in_review' && run?.ended_at) { state = 'awaiting_review'; reason = 'run_ended'; }
+    // The run ended on the hub but its CLI is still running: not yet reviewable.
+    if (row?.column_name === 'in_review' && run?.ended_at && this.hub.endedChildAlive(run.id)) reason = 'finishing';
+    else if (row?.column_name === 'in_review' && run?.ended_at) { state = 'awaiting_review'; reason = 'run_ended'; }
     else {
       let scope;
       try { scope = this.scope({ run, row, connection }); } catch { reason = 'not_current'; }

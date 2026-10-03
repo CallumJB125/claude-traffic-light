@@ -191,6 +191,8 @@ const copied = !!renameCopy?.copied;
 if (copied) RenameMigration.setAsideSealedSecret({ file: path.join(ROOT_DIR, 'approval-secret.json') });
 
 const DEFAULT_CONFIG = {
+  // The one character every rule shows (rules pick pose, eyes and the rest, never the body).
+  character: { body: 'claude', bodyColor: null },
   workingStaleMinutes: 6,
   waitingStaleHours: 4,
   soundOnAmber: true,
@@ -278,6 +280,8 @@ function buildConfig() {
   // Rules are stored whole; a config from before rules existed gets the
   // defaults, which reproduce the old fixed behaviour exactly.
   config.rules = (Array.isArray(saved.rules) ? saved.rules : Rules.defaultRules()).map(Rules.normalizeRule);
+  // Before v11 each rule could pick a body; keep the user's most common one as the single character.
+  config.character = saved.character ? Rules.normalizeCharacter(saved.character) : Rules.characterFromRules(saved.rules);
   // Migration: configs saved before the idle nudge became a waiting signal
   // have no rule for it, and the widget would go dark after a finished turn.
   // Slot the default "Waiting for you" rule in just above "Nothing running".
@@ -299,6 +303,7 @@ function buildConfig() {
 function saveConfig(partial) {
   const next = Setup.dropRemovedKeys({ ...loadConfig(), ...partial });
   if (partial.rules) next.rules = partial.rules.map(Rules.normalizeRule);
+  if (partial.character) next.character = Rules.normalizeCharacter(partial.character);
   // A template only describes the rules it saved them with.
   if (partial.rules && !('template' in partial)) next.template = null;
   // Presets reach here from loadConfig or Lights, so their rules are current.
@@ -821,14 +826,14 @@ function computeState(opts = {}) {
   const override = readManualOverride();
   if (override) {
     const synthetic = [{ signal: OVERRIDE_SIGNALS[override.state] || 'idle', cwd: '' }];
-    const { look, fired, owned } = Rules.resolve(config.rules, synthetic);
+    const { look, fired, owned } = Rules.resolve(config.rules, synthetic, Date.now(), { character: config.character });
     return { look: { ...look, tasks }, reason: 'manual', sessions, fired, owned, firedNames: Rules.firedNames(config.rules, fired, owned), pending, inputs, tasks };
   }
   // A pending permission request is the "Needs your input" state, whatever
   // the session files say (the hook blocks before Notification fires). It
   // replaces the look only; the chips, number and season still apply.
   const spend = spendSnapshot(config);
-  const env = { offline: !online, ...BusyWatch.env(), git: config.gitSignals !== false ? git.active() : [], spend };
+  const env = { character: config.character, offline: !online, ...BusyWatch.env(), git: config.gitSignals !== false ? git.active() : [], spend };
   const { look, fired, owned } = pending.length
     ? Rules.resolve(config.rules, [{ signal: 'permission-ask', cwd: pending[0].cwd }], Date.now(), env)
     : Rules.resolve(config.rules, sessions, Date.now(), env);
@@ -3982,13 +3987,19 @@ function healthReport() {
   });
   // Dev runs share the machine with a real install and never rewrite its hooks.
   report.checks = report.checks.map(({ fix, fixLabel, ...c }) =>
-    ((!AUTO_INSTALL_HOOKS && ['reinstall-hooks', 'connect-codex'].includes(fix)) || (!app.isPackaged && fix === 'connect-codex'))
+    ((!AUTO_INSTALL_HOOKS && ['reinstall-hooks', 'connect-codex', 'connect-hermes'].includes(fix)) || (!app.isPackaged && ['connect-codex', 'connect-hermes'].includes(fix)))
       ? c : { ...c, ...(fix ? { fix, fixLabel } : {}) });
   return report;
 }
 utilityHandle('health-report', settingsOnly, () => healthReport());
 ipcMain.handle('health-fix', (e, id) => {
   if (!fromNativeBoardSettings(e)) return { error: 'Not allowed.' };
+  // Enabling goes through Hermes' own CLI, so this one fix answers asynchronously.
+  if (id === 'connect-hermes' && app.isPackaged && AUTO_INSTALL_HOOKS) {
+    return require('./adapters/hermes-activity').connect({ home: os.homedir(), runtime: HOOK_RUNTIME })
+      .then((r) => r.ok ? null : r.error || 'Hermes activity could not be connected.', (err) => err.message)
+      .then((error) => { console.log(`[health] fix "connect-hermes"${error ? ` failed: ${error}` : ''}`); return { error, report: healthReport() }; });
+  }
   let error = null;
   try {
     if (id === 'reinstall-hooks') {
@@ -4001,7 +4012,8 @@ ipcMain.handle('health-fix', (e, id) => {
         const r = Adapters.get('codex').installActivity({ home: os.homedir(), runtime: HOOK_RUNTIME });
         if (!r.ok) error = r.error || 'Codex hooks could not be configured.';
       }
-    } else if (id === 'enable-mcp') McpInstall.install(mcpOpts());
+    } else if (id === 'connect-hermes') error = 'Open the installed app to connect Hermes.';
+    else if (id === 'enable-mcp') McpInstall.install(mcpOpts());
     else if (id === 'clear-stale-locks') Health.clearStaleLocks({ root: ROOT_DIR });
     else error = 'unknown fix';
   } catch (err) { error = err.message; }

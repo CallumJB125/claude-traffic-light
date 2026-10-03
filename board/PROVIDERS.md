@@ -144,7 +144,8 @@ Input to the handoff contract: which sessions can take a message while a turn ru
 
 ### Hermes Agent
 
-- Ids/aliases: `hermes`, `Hermes`
+- Ids/aliases: `hermes`, `Hermes`, `hermes-dgx`
+- Board runner ("Tackle with AI"): `hermes` (the member's own Hermes provider) and `hermes-dgx` (the same CLI against the first loopback/LAN/tailnet OpenAI-compatible endpoint in local-models.json) run `hermes chat --format stream-json --oneshot` one turn per process. Hermes has no OS sandbox, so the hub offers it only on the dispatcher's own machine and plan-approval runs are refused. Wired and fixture-tested only; a real Hermes or DGX turn has not completed under the runner.
 - Installed here: 0.21.3 (git install, ~/.hermes/hermes-agent). Advertised by Plexiform: yes.
 - Exact supported channel: Owned: ACP over stdio (`hermes acp`). Existing: none (Hermes gateway/peer/kanban are Hermes's own messaging surfaces).
 - Discovery: `built`. Only via Plexiform's local /signal endpoint or emit.js with source hermes (board presence/work-capture accept 'hermes'); Plexiform installs no Hermes hooks.

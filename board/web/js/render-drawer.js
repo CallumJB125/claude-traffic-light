@@ -5,8 +5,8 @@ import { h } from './h.js';
 import { icon } from './icons.js';
 import { renderMarkdown, inline } from './markdown.js';
 import { pill, budgetBar, cardActions, avatar, labelChips } from './render-board.js';
-import { LABEL_COLORS, canArchive } from './labels.js';
-import { formatAge, repoBranch, isHumanOwned, isObservedWork, COLUMNS, COLUMN_LABEL, fmtUsd } from './view.js';
+import { canArchive } from './labels.js';
+import { formatAge, repoBranch, isHumanOwned, isObservedWork, hasLiveCapture, COLUMNS, COLUMN_LABEL, ACTION_LABEL, ADVANCED_ACTIONS, fmtUsd } from './view.js';
 import { packetPanel, messagePanel } from './render-communication.js';
 import { captureBadge } from './render-capture.js';
 import { ownershipPanel } from './render-ownership.js';
@@ -210,14 +210,17 @@ function whoBlock(view, face, model) {
     h('dd', { class: 'who-people' }, assignees.length ? assignees.map((m) => h('span', { class: 'who-person' }, avatar(m), m.name)) : h('span', { class: 'muted' }, 'Unassigned')));
 }
 
-function evidenceBlock(view, detail) {
+// The one place for what the work produced: handover, PR and evidence.
+function resultBlock(view, detail) {
   const ev = view.evidence;
   const pr = view.pr;
   const list = detail.data?.evidence ?? [];
-  if (!ev && !pr && !list.length) return null;
-  return h('section', { class: 'dsec' },
-    h('h3', { class: 'dsec-title' }, 'Evidence'),
+  const handover = view.handover || detail.data?.handover;
+  if (!ev && !pr && !list.length && !handover) return null;
+  return h('section', { class: 'dsec', 'aria-label': 'Result' },
+    h('h3', { class: 'dsec-title' }, 'Result'),
     h('ul', { class: 'evidence' },
+      handover ? h('li', null, icon('dot', 'icon-xs'), h('button', { type: 'button', class: 'link', 'data-action': 'tab', 'data-tab': 'handover' }, 'Read the handover')) : null,
       pr ? h('li', null, icon('branch', 'icon-xs'), h('a', { href: pr.url, target: '_blank', rel: 'noopener noreferrer' }, `PR #${pr.number}`), h('span', { class: 'muted' }, ` · ${pr.state}`)) : null,
       ev?.tests ? h('li', { 'data-tone': ev.tests === 'pass' ? 'green' : ev.tests === 'fail' ? 'red' : null }, icon(ev.tests === 'pass' ? 'check' : ev.tests === 'fail' ? 'close' : 'dot', 'icon-xs'), ev.tests === 'pass' ? 'Tests pass' : ev.tests === 'fail' ? 'Tests fail' : 'No tests run') : null,
       ev?.verification ? h('li', null, icon(ev.verification === 'hub_verified' ? 'check' : 'person', 'icon-xs'), ev.verification === 'hub_verified' ? 'Verified by the board against GitHub' : 'Reported by the agent') : null,
@@ -238,20 +241,6 @@ function overlapsBlock(overlaps, elapsed) {
     h('p', { class: 'muted small' }, 'Overlaps never block. Talk to each other, or let one card finish first.'));
 }
 
-// A colour strip on the card face (D93): one of the label tokens, or none.
-export function coverPicker(view, model) {
-  const busy = model.busy?.has(`${view.id}:cover`);
-  const opt = (token, label) => h('button', {
-    key: token ?? 'none', type: 'button', class: `cover-opt${token ? ` cover-swatch-${token}` : ' cover-none'}`,
-    'data-action': 'set-cover', 'data-card': view.id, 'data-cover': token ?? '', 'aria-pressed': (view.cover ?? null) === token ? 'true' : 'false',
-    'aria-label': label, title: label, disabled: busy || null,
-  }, token ? null : 'None');
-  return h('section', { class: 'dsec' },
-    h('h3', { class: 'dsec-title', id: 'cover-title' }, 'Cover'),
-    h('div', { class: 'cover-picker', role: 'group', 'aria-labelledby': 'cover-title' },
-      opt(null, 'No cover'), LABEL_COLORS.map((c) => opt(c, `Cover ${c}`))));
-}
-
 function archiveButton(view, model) {
   if (model.readOnly) return null;
   if (view.archived) {
@@ -264,6 +253,12 @@ function archiveButton(view, model) {
 const HAND_OVER_FROM = new Set(['running', 'quiet', 'blocked']);
 // On the card these open the drawer; inside it the requests are already on screen.
 const OPENS_DRAWER = new Set(['watch', 'allow', 'deny', 'answer', 'approve_plan', 'resolve_conflict', 'continue']);
+
+// Mark done only once the AI has really stopped: the hub ends the run at
+// board_complete, but the CLI can still be running until the runner reports it.
+export function canMarkDone(view) {
+  return view.run_state === 'in_review' && view.run?.child_alive !== true;
+}
 
 export function drawer(model) {
   const det = model.detail;
@@ -281,9 +276,15 @@ export function drawer(model) {
     const archived = !!view.archived;
     const human = isHumanOwned(view) && !archived;
     const extra = [];
-    if (!model.readOnly && HAND_OVER_FROM.has(view.run_state)) extra.push(h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'hand_over', 'data-card': view.id }, icon('swap', 'icon-lead'), 'Hand over…'));
-    if (!model.readOnly && view.run_state === 'in_review') extra.push(h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'approve_done', 'data-card': view.id }, icon('check', 'icon-lead'), 'Mark done'));
-    if (!model.readOnly && human) {
+    const more = [];
+    if (!model.readOnly && !archived && HAND_OVER_FROM.has(view.run_state)) more.push(h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'hand_over', 'data-card': view.id }, icon('swap', 'icon-lead'), 'Hand over…'));
+    if (!model.readOnly && !archived) {
+      for (const a of face.actions.filter((x) => ADVANCED_ACTIONS.has(x))) more.push(h('button', { type: 'button', class: 'btn btn-sm', 'data-action': a, 'data-card': view.id }, ACTION_LABEL[a]));
+    }
+    if (!model.readOnly && canMarkDone(view)) extra.push(h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'approve_done', 'data-card': view.id }, icon('check', 'icon-lead'), 'Mark done'));
+    if (!model.readOnly && view.run_state === 'in_review' && !canMarkDone(view)) extra.push(h('p', { class: 'muted small', role: 'status' }, 'The AI is still finishing. Mark done appears once it has exited.'));
+    // A person sets a human card's column, except while an AI still reports working on it.
+    if (!model.readOnly && human && !hasLiveCapture(view)) {
       extra.push(h('label', { class: 'move' }, h('span', null, 'Column'),
         h('select', { class: 'input input-sm', 'data-change': 'move', 'data-card': view.id },
           COLUMNS.map((c) => h('option', { value: c, selected: (view.column ?? 'todo') === c }, COLUMN_LABEL[c])))));
@@ -299,12 +300,9 @@ export function drawer(model) {
         isObservedWork(view) ? captureBadge(view, elapsed, model.conn?.status === 'lost') : pill(face, { size: 'lg' }),
         face.state === 'running' && face.disagree ? h('p', { class: 'muted small' }, 'Waiting for the board and this browser to agree the run is alive.') : null,
         archived ? h('p', { class: 'archived-note', role: 'note' }, `Archived${view.archived.by_name ? ` by ${view.archived.by_name}` : ''}${view.archived.at_age_ms != null ? ` ${ago(view.archived.at_age_ms + elapsed)}` : ''}. Restore it to change anything.`) : null,
-        model.readOnly ? null : h('div', { class: 'drawer-actions' }, archived ? null : cardActions({ ...face, actions: face.actions.filter((a) => !OPENS_DRAWER.has(a)) }, view, model.busy), extra)),
+        model.readOnly ? null : h('div', { class: 'drawer-actions' }, archived ? null : cardActions({ ...face, actions: face.actions.filter((a) => !OPENS_DRAWER.has(a) && !ADVANCED_ACTIONS.has(a)) }, view, model.busy), extra)),
       whoBlock(view, face, model),
-      h('section', { class: 'dsec', 'aria-label': 'Planning' }, h('h3', { class: 'dsec-title' }, 'Planning'),
-        h('p', { class: 'muted' }, `Start: ${view.start_date ?? 'Unscheduled'} · Due: ${view.due_date ?? 'Unscheduled'}`),
-        h('p', { class: 'muted' }, `${view.depends_on?.length ?? 0} predecessors`),
-        model.readOnly || archived ? null : h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'planning-edit', 'data-card': view.id }, 'Edit dates and dependencies')),
+      resultBlock(view, det),
       view.capture ? h('section', { class: 'dsec', 'aria-label': 'AI work report' }, h('h3', { class: 'dsec-title' }, 'AI work report'),
         h('p', {}, 'This card follows activity reported by a local AI session. Your manual edits take priority.'),
         h('p', { class: 'muted small' }, 'A finished report requests review; it does not verify completion or start an AI run.')) : null,
@@ -318,9 +316,13 @@ export function drawer(model) {
         det.data?.handover?.ages?.narrative_ms != null ? h('p', { class: 'muted small' }, `Narrative synced ${ago(add(det.data.handover.ages.narrative_ms, elapsed))}`) : null) : null,
       face.budget ? h('section', { class: 'dsec' }, h('h3', { class: 'dsec-title' }, 'Budget'), budgetBar(face.budget),
         view.run ? h('p', { class: 'muted small' }, `Spent on ${face.sponsor ? face.sponsor.replace(/^Runs on [^·]+· /, '') : 'the owner\'s account'}. Soft by one API call.`) : null) : null,
-      model.readOnly || archived ? null : coverPicker(view, model),
-      evidenceBlock(view, det),
       overlapsBlock(det.data?.overlaps ?? view.overlaps, elapsed),
+      h('details', { class: 'dsec drawer-advanced' }, h('summary', { class: 'dsec-title' }, 'Advanced'),
+        more.length ? h('div', { class: 'drawer-actions' }, more) : null,
+        h('section', { 'aria-label': 'Planning' }, h('h3', { class: 'dsec-title' }, 'Planning'),
+          h('p', { class: 'muted' }, `Start: ${view.start_date ?? 'Unscheduled'} · Due: ${view.due_date ?? 'Unscheduled'}`),
+          h('p', { class: 'muted' }, `${view.depends_on?.length ?? 0} predecessors`),
+          model.readOnly || archived ? null : h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'planning-edit', 'data-card': view.id }, 'Edit dates and dependencies'))),
       det.data ? h('section', { class: 'dsec dsec-tabs' },
         tabs(det.tab, { comments: det.data.comments?.length ?? 0 }),
         h('div', { class: 'tabpanel', id: 'tabpanel', role: 'tabpanel', 'aria-labelledby': `tab-${det.tab}`, tabindex: '0' },

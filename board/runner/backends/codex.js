@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { WindowsJob } from '../windows-job.js';
 import { detectCli } from './detect.js';
-import { lstartOf, killTree, processTable, treeGroups, killGroups, waitForStopped } from '../procs.js';
+import { lstartOf, killTree, processTable, treeGroups, killGroups, waitForStopped, STOP_VERIFY_MS } from '../procs.js';
 import { writeFileAtomic } from '../util.js';
 import { CODEX_MCP_SERVER, underElectron } from '../launch.js';
 import { CODEX_BOARD_TOOLS } from '../../mcp/codex-run.js';
@@ -195,7 +195,7 @@ export class CodexBackend extends EventEmitter {
   kill() { if (this.platform === 'win32') { void this.child?.stop(); return; } if (this.pid) killTree(this.pid, this.lstart); this.reap(); }
   async confirmStopped() {
     if (this.platform === 'win32') return this.child ? this.child.neverStarted === true || (this.child.closed && this.child.stopped) : this.pid === null;
-    const observed = await waitForStopped({ pid: this.pid, groups: [...new Set([this.pgid, ...this.leftovers].filter((g) => g != null))] });
+    const observed = await waitForStopped({ pid: this.pid, groups: [...new Set([this.pgid, ...this.leftovers].filter((g) => g != null))] }, { timeoutMs: STOP_VERIFY_MS });
     return observed && !this.alive();
   }
   async stop() {
@@ -203,7 +203,8 @@ export class CodexBackend extends EventEmitter {
     if (!this.alive()) { this.reap(); return this.confirmStopped(); }
     this.refreshTree();
     const ended = new Promise((r) => { const t = setTimeout(() => { this.off('exit', done); r(false); }, this.stopGraceMs ?? 3000); const done = () => { clearTimeout(t); r(true); }; this.once('exit', done); });
-    try { process.kill(this.pid, 'SIGTERM'); } catch { /* gone */ }
+    // The whole group: Codex's own children share it (detached spawn, pgid = pid).
+    try { process.kill(-this.pgid, 'SIGTERM'); } catch { try { process.kill(this.pid, 'SIGTERM'); } catch { /* gone */ } }
     if (!(await ended)) {
       this.kill();
       if (!this.exited) await new Promise((r) => {

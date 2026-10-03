@@ -3,6 +3,7 @@
 import { HubError } from './db.js';
 import { cardView, runCost } from './views.js';
 import { runnerConnectionProblem } from './runner-authority.js';
+import { workCaptureView } from './work-capture-view.js';
 
 const ATTENTION = ['blocked', 'parked', 'failed', 'orphaned', 'unresponsive', 'handed_over'];
 const WORK = ['queued', 'claimed', 'running', 'quiet', 'suspended', 'reconnecting', 'handing_over'];
@@ -24,6 +25,13 @@ export function teamOverview(hub, member, query, { cred = null } = {}) {
   const totals = hub.db.get(`SELECT ${count} FROM cards c JOIN boards b ON b.id = c.board_id WHERE ${scope}`, ...ATTENTION, org.id);
   const boards = hub.db.all(`SELECT b.id, b.name, ${count} FROM boards b LEFT JOIN cards c ON c.board_id = b.id AND c.archived_at IS NULL
     WHERE b.org_id = ? AND b.archived_at IS NULL GROUP BY b.id ORDER BY attention DESC, open DESC, b.name, b.id LIMIT 61`, ...ATTENTION, org.id);
+  // A card an AI is still working on is open, whatever column a person set.
+  const stillWorking = hub.db.all(`SELECT c.id, c.board_id FROM work_capture_cards w JOIN cards c ON c.id = w.card_id JOIN boards b ON b.id = c.board_id
+    WHERE ${scope} AND c.column_name = 'done' AND c.run_state IS NULL AND w.tracking = 'active' AND w.reported_status = 'working'`, org.id)
+    .filter((r) => workCaptureView(hub, r.id)?.fresh);
+  for (const r of stillWorking) {
+    for (const t of [totals, boards.find((b) => b.id === r.board_id)]) if (t) { t.done -= 1; t.open += 1; }
+  }
   const projectCount = hub.db.get('SELECT COUNT(*) AS n FROM boards WHERE org_id = ? AND archived_at IS NULL', org.id).n;
   const rows = (condition, params = []) => hub.db.all(`SELECT c.*, b.name AS board_name FROM cards c JOIN boards b ON b.id = c.board_id
     WHERE ${scope} AND ${condition} ORDER BY c.updated_at DESC, c.id LIMIT 21`, org.id, ...params);

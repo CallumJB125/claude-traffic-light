@@ -62,7 +62,7 @@ export function budgetReachedEvent(run, memberId) {
 }
 
 // The AI an offer asks for (D-7); omitted = Claude.
-export const aiOf = (offer) => (typeof offer?.ai === 'string' && /^[a-z]{1,32}$/.test(offer.ai) ? offer.ai : offer?.ai == null ? 'claude' : null);
+export const aiOf = (offer) => (typeof offer?.ai === 'string' && /^[a-z][a-z-]{0,31}$/.test(offer.ai) ? offer.ai : offer?.ai == null ? 'claude' : null);
 
 export function findOnPath(bin, envPath = process.env.PATH ?? '') {
   if (bin.includes('/')) return bin;
@@ -524,6 +524,11 @@ export class Supervisor extends EventEmitter {
       this.log.info('offer for an AI this machine cannot run; ignored', { card_id: offer.card_id });
       return;
     }
+    // No OS sandbox (Hermes): only work its own member dispatched to this machine.
+    if (BACKENDS[aiOf(offer)]?.describe().capabilities.permissions === 'none' && (!this.memberId || offer.dispatched_by?.member_id !== this.memberId)) {
+      this.log.info('offer for an unsandboxed AI from another member; ignored', { card_id: offer.card_id });
+      return;
+    }
     this.policy = readPolicy(this.l);
     // Default deny: a repo that doesn't scope produces zero bytes (exit f).
     const scope = await this.#scopeForRepo(offer.repo_id);
@@ -590,7 +595,7 @@ export class Supervisor extends EventEmitter {
       if (over()) { this.cleanupRun(run); return run; }
       const s2 = scopeOf(await sessionOf(w.worktree), { allowlist: this.allowlist, opted_in: [offer.repo_id] });
       if (!s2 || s2.repo_id !== offer.repo_id) throw new Error('worktree does not scope to the offered repo');
-      if (aiOf(offer) === 'codex') run.gitAccess = await runGitAccess(w.worktree, run.branch);
+      if (aiOf(offer) !== 'claude') run.gitAccess = await runGitAccess(w.worktree, run.branch);
     } catch (e) {
       this.log.error('prep failed', { card_id: offer.card_id, err: e.message });
       await run.prepFailed(`worktree: ${String(e.stderr || e.message).split('\n')[0]}`);
@@ -619,15 +624,18 @@ export class Supervisor extends EventEmitter {
     if (this.runs.get(run.run_id) !== run || run.ending || run.ended || run.fenced || !run.gateState().open) return null;
     const repo = this.policy.repos[run.repo_id] ?? {};
     const ai = aiOf(run.offer) ?? 'claude';
-    const codex = ai === 'codex';
+    // Codex and Hermes: one CLI turn per process, board tools over the per-run MCP server.
+    const oneTurn = ai !== 'claude';
+    const caps = (BACKENDS[ai] ?? ClaudeBackend).describe().capabilities;
     const budget = runBudget(run.offer.budget_usd, repo.budget_per_run);
-    if (codex && (budget.usd != null || run.offer.max_turns != null)) throw err('NOT_AVAILABLE', 'Codex cannot enforce a native budget or max-turn cap');
-    if (codex && !run.gitAccess) throw err('POLICY_DENIED', 'Codex run Git grant unavailable');
-    const apiKeyFile = !codex && this.env.ANTHROPIC_API_KEY ? path.join(run.runDir, API_KEY_FILE) : null;
+    if (oneTurn && ((budget.usd != null && caps.budget === 'none') || (run.offer.max_turns != null && !caps.maxTurns))) throw err('NOT_AVAILABLE', 'This AI cannot enforce a native budget or max-turn cap');
+    if (oneTurn && !run.gitAccess) throw err('POLICY_DENIED', 'Run Git grant unavailable');
+    if (caps.permissions === 'none' && run.offer.require_plan_approval) throw err('NOT_AVAILABLE', 'This AI has no sandbox for a plan-approval run');
+    const apiKeyFile = !oneTurn && this.env.ANTHROPIC_API_KEY ? path.join(run.runDir, API_KEY_FILE) : null;
     if (apiKeyFile) writeFileAtomic(apiKeyFile, this.env.ANTHROPIC_API_KEY);
     const home = path.resolve(this.l.home);
     const boardHome = home === path.join(this.env.HOME ?? '', '.board') ? null : home;
-    if (!codex) {
+    if (!oneTurn) {
       const settings = buildSettings({ worktree: run.worktree, tmpdir: this.env.TMPDIR || '/tmp', repo, apiKeyFile, boardHome });
       writeJsonAtomic(path.join(run.runDir, 'settings.json'), settings);
       writeJsonAtomic(path.join(run.runDir, 'mcp.json'), buildMcpConfig({ socket: run.socketPath, token: run.run_token, server: this.mcpServer }));
@@ -637,21 +645,21 @@ export class Supervisor extends EventEmitter {
     const buddyHome = this.opts.buddyHome === undefined ? buddyHomeOf(this.env) : this.opts.buddyHome;
     const buddyOwned = recordBuddyLaunch(buddyHome, { cwd: run.worktree });
     const cacheDir = path.join(home, 'cache', run.run_id);
-    if (codex) { ensureDir(cacheDir); ensureDir(path.join(cacheDir, 'tmp')); }
-    const env = codex ? buildCodexEnv(this.env, cacheDir) : buildEnv(this.env, { runDir: run.runDir, socket: run.socketPath, supervisorPid: process.pid, supervisorLstart: this.supervisorLstart, buddyOwned });
-    const systemPrompt = boardBrief({ key: run.key, fence: run.fence, nonce: run.nonce, trusted: trustedInstructions(repo.local_path, 20000, ai) });
+    if (oneTurn) { ensureDir(cacheDir); ensureDir(path.join(cacheDir, 'tmp')); }
+    const env = oneTurn ? buildCodexEnv(this.env, cacheDir) : buildEnv(this.env, { runDir: run.runDir, socket: run.socketPath, supervisorPid: process.pid, supervisorLstart: this.supervisorLstart, buddyOwned });
+    const systemPrompt = boardBrief({ key: run.key, fence: run.fence, nonce: run.nonce, trusted: trustedInstructions(repo.local_path, 20000, oneTurn ? 'codex' : ai) });
     const Backend = this.opts.Backend ?? BACKENDS[ai] ?? ClaudeBackend;
     run.budgetScope = budget.scope;
     run.budgetUsd = budget.usd;
-    run.readOnly = codex && run.offer.require_plan_approval && !editable;
+    run.readOnly = oneTurn && run.offer.require_plan_approval && !editable;
     const backend = new Backend({
       bin: ai === 'claude' ? this.claudeBin : this.ais?.find((a) => a.id === ai)?.bin, cwd: run.worktree, env, runDir: run.runDir, sessionId: run.sessionId, resume,
       budgetUsd: budget.usd, maxTurns: run.offer.max_turns, systemPrompt, model: repo.model,
       log: this.log, boardHome, interruptWaitMs: this.opts.interruptWaitMs ?? INTERRUPT_WAIT_MS, stopGraceMs: this.opts.stopGraceMs ?? STOP_GRACE_MS,
-      ...(codex ? { ...run.gitAccess, cacheDir, boardRunDir: run.runDir, permissionMode: run.readOnly ? 'plan' : 'acceptEdits',
+      ...(oneTurn ? { ...run.gitAccess, cacheDir, boardRunDir: run.runDir, permissionMode: run.readOnly ? 'plan' : 'acceptEdits',
         denyPaths: [repo.local_path, this.l.device, this.l.policy, this.l.ledger, this.l.outboxDir, path.join(home, 'run')], } : {}),
     });
-    if (codex) backend.oneTurn = true;
+    if (oneTurn) backend.oneTurn = true;
     run.attach(backend);
     if (backend.platform === 'win32') this.saveLedger(run);
     await backend.start(prompt ?? (resume ? 'Board connection restored and your run is still current. Continue where you left off.' : run.initialPrompt(firstPrompt({ key: run.key, title: run.offer.title, nonce: run.nonce }))));

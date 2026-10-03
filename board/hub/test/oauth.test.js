@@ -596,3 +596,32 @@ test('L2-L5: multiple audiences need azp = us; redirects are refused and bodies 
     await r.h.close();
   }
 });
+
+test('no account linking yet: a GitHub sign-in on an address another account holds makes a separate account and says so (response notice, warn log, audit)', async () => {
+  const r = await rig();
+  try {
+    const first = await r.signIn('google', { sub: 'g-dup', email: 'dup@gmail.com', name: 'Dup' });
+    assert.equal(first.ex.status, 200, first.ex.text);
+    assert.equal(first.ex.body.notice, undefined, 'a first account has no notice');
+    const gh = await r.signIn('github', ghUser(4242, 'dup@gmail.com'));
+    assert.equal(gh.ex.status, 200, gh.ex.text);
+    assert.notEqual(gh.ex.body.user.id, first.ex.body.user.id, 'still not linked');
+    assert.equal(gh.ex.body.notice.code, 'SEPARATE_ACCOUNT');
+    assert.equal(gh.ex.body.notice.provider, 'github');
+    assert.match(gh.ex.body.notice.message, /new, separate account/);
+    const warn = r.logs.find((l) => /created a separate account/.test(l));
+    assert.ok(warn, 'a warn line for the operator');
+    assert.ok(!warn.includes('dup@gmail.com'), 'the address never reaches the log');
+    const audit = JSON.parse(r.h.db.get("SELECT detail FROM audit WHERE action = 'user.create' AND actor_user_id = ?", gh.ex.body.user.id).detail);
+    assert.deepEqual(audit, { method: 'github', separate_account: true, existing_user: first.ex.body.user.id });
+    // Signing in again with the same GitHub account finds its own account: no new notice.
+    const again = await r.signIn('github', ghUser(4242, 'dup@gmail.com'));
+    assert.equal(again.ex.body.user.id, gh.ex.body.user.id);
+    assert.equal(again.ex.body.notice, undefined);
+    // A GitHub address nobody else holds: no notice.
+    const solo = await r.signIn('github', ghUser(4343, 'solo@example.test'));
+    assert.equal(solo.ex.body.notice, undefined);
+  } finally {
+    await r.h.close();
+  }
+});

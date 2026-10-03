@@ -12,6 +12,7 @@ const os = require('os');
 const path = require('path');
 const Claude = require('../adapters/claude-code.js');
 const Codex = require('../adapters/codex.js');
+const HermesActivity = require('../adapters/hermes-activity.js');
 const Runtime = require('../adapters/runtime.js');
 const { scrub, cleanJsonError } = require('./scrub.js');
 const Brand = require('../brand.js');
@@ -29,6 +30,7 @@ const FIXES = {
   'enable-mcp': 'Enable Claude integration',
   'clear-stale-locks': 'Clear stale lock',
   'connect-codex': 'Configure Codex activity',
+  'connect-hermes': 'Connect Hermes activity',
 };
 // Claude Code reads hooks once, when a session starts.
 const RESTART_SESSIONS = 'Then restart your Claude sessions.';
@@ -118,6 +120,14 @@ function checkHooks(ctx) {
     fix,
     next: RESTART_SESSIONS,
   };
+}
+
+// Found when the Hermes CLI is installed; connecting enables Plexiform's
+// metadata-only observer plugin through Hermes' own CLI (adapters/hermes-activity.js).
+function checkHermesActivity(ctx) {
+  if (process.platform === 'win32' || !ctx.fs.existsSync(path.join(ctx.home, '.hermes')) || !(ctx.findHermes || HermesActivity.findBin)(ctx.home)) return null;
+  if ((ctx.hermesConnected || HermesActivity.isInstalled)({ home: ctx.home })) return { status: 'ok', detail: 'Hermes session activity is connected.' };
+  return { status: 'warn', detail: 'Hermes is installed but its session activity is not connected to Plexiform.', fix: 'connect-hermes', next: 'Start a new Hermes session after connecting.' };
 }
 
 function checkVersion(ctx) {
@@ -303,6 +313,7 @@ function checkDisk(ctx) {
 const CHECKS = [
   ['hooks', 'Claude Code hooks', checkHooks],
   ['codex-hooks', 'Codex session activity', checkCodexHooks],
+  ['hermes-activity', 'Hermes session activity', checkHermesActivity],
   ['sessions', 'Session files', checkSessions],
   ['last-hook', 'Last hook event', checkLastHook],
   ['signal', "Buddy's local connection", checkSignal],

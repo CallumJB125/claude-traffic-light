@@ -196,6 +196,42 @@ test('drawer: the actions that only open the drawer are not repeated inside it',
   assert.equal(byAttr(n, 'data-action', 'hand_over').length, 1, 'Hand over is offered from blocked');
 });
 
+test('drawer: Hand over, Switch AI and Request changes sit behind a closed Advanced disclosure', () => {
+  const v = view({ run_state: 'blocked', blocked_kind: 'question', ask: { kind: 'question', count: 1 } });
+  const n = drawer(drawerModel(v, {}));
+  const adv = byClass(n, 'drawer-advanced');
+  assert.equal(adv.length, 1);
+  assert.equal(adv[0].tag, 'details');
+  assert.equal(adv[0].props.open, undefined);
+  assert.equal(byAttr(adv[0], 'data-action', 'hand_over').length, 1);
+  assert.equal(byAttr(adv[0], 'data-action', 'planning-edit').length, 1);
+  const review = view({ run_state: 'in_review', live: null, run: { ...view().run, child_alive: false } });
+  const r = drawer(drawerModel(review, {}));
+  for (const a of displayFace(review).actions.filter((x) => ['switch_ai', 'request_changes'].includes(x))) {
+    assert.equal(byAttr(r, 'data-action', a).length, 1);
+    assert.equal(byAttr(byClass(r, 'drawer-advanced')[0], 'data-action', a).length, 1, `${a} only in Advanced`);
+  }
+});
+
+test('drawer: Mark done stays hidden while the run ended on the hub but its AI process is still alive', () => {
+  const base = view().run;
+  const finishing = view({ run_state: 'in_review', live: null, run: { ...base, child_alive: true } });
+  const f = drawer(drawerModel(finishing, {}));
+  assert.equal(byAttr(f, 'data-action', 'approve_done').length, 0);
+  assert.match(textOf(f), /The AI is still finishing/);
+  const exited = view({ run_state: 'in_review', live: null, run: { ...base, child_alive: false } });
+  assert.equal(byAttr(drawer(drawerModel(exited, {})), 'data-action', 'approve_done').length, 1);
+});
+
+test('drawer: an observed card with a fresh working capture has no Column picker; once stale it does', () => {
+  const capture = { source: 'local_observation', fresh: true, status: 'working', provider: 'claude' };
+  const live = view({ run_state: 'todo', run: null, live: null, column: 'done', capture });
+  assert.equal(byAttr(drawer(drawerModel(live, {})), 'data-change', 'move').length, 0);
+  assert.equal(columnFor(live, displayFace(live)), 'in_progress', 'renders in In progress, not Done');
+  const stale = view({ run_state: 'todo', run: null, live: null, column: 'in_progress', capture: { ...capture, fresh: false, status: 'unknown' } });
+  assert.equal(byAttr(drawer(drawerModel(stale, {})), 'data-change', 'move').length, 1);
+});
+
 test('drawer: pinned hypothesis and per-layer last synced ages advance client-side', () => {
   const v = view();
   const handover = { doc: { sections: { hypothesis: 'Draft keyed by anon id.' }, layers: { facts: {}, narrative: { version: 4 }, snapshot: { sha: '7f3a2c1d', status: 'pushed' } }, unsynced_paths: ['a.ts'] }, ages: { facts_ms: 10_000, narrative_ms: 60_000, snapshot_ms: 120_000 }, markdown: '# Handover · BDL-1\nState: running\nLast synced: stale\n\n## Goal\nFix it' };
@@ -224,7 +260,15 @@ test('Tackle with AI: own Codex account by default, sponsor and overlaps shown b
     preview: { overlaps: [{ other_card_id: 'c-9', other_key: 'BDL-9', other_owner: 'Bob', kind: 'overlapping', paths: ['backend/routes/applications.js'] }], sponsor: 'Runs on your MacBook Pro · your claude account' } };
   const n = giveDialog(dlg, m);
   const t = textOf(n);
-  assert.match(t, /Tackle BDL-1 with AI/);
+  assert.match(t, /Give BDL-1 to AI/);
+  // Machine, branch, budget and plan approval wait behind one closed Advanced disclosure.
+  const adv = findAll(n, (x) => x.tag === 'details');
+  assert.equal(adv.length, 1);
+  assert.equal(adv[0].props.open, undefined);
+  for (const name of ['target', 'base_ref', 'plan_approval']) assert.ok(findAll(adv[0], (x) => x.props.name === name).length, `${name} is in Advanced`);
+  assert.match(textOf(adv[0]), /Dollar and turn caps are unavailable for Codex/, 'budget is in Advanced');
+  assert.equal(findAll(n, (x) => x.props.name === 'ai').length, 1, 'one AI picker');
+  assert.match(textOf(findAll(n, (x) => x.props.type === 'submit')[0]), /^Start$/);
   assert.match(t, /Overlaps 1 live card/);
   assert.match(t, /BDL-9 \(Bob's agent\) is editing backend\/routes\/applications\.js, which this card mentions/);
   assert.match(t, /Runs on your machine · your Codex account/);

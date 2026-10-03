@@ -5,16 +5,15 @@ import { h } from './h.js';
 import { icon, pixelClaude, PILL_ICON, ALERT_ICON } from './icons.js';
 import { inline } from './markdown.js';
 import { VIEWS } from './views.js';
-import { selectionBar } from './dnd.js';
 import { filterBar } from './render-filters.js';
 import { THEMES, BACKGROUNDS } from './themes.js';
 import { cardChips } from './chips.js';
-import { labelColor, labelClass, coverClass, canArchive, VIA_LABEL } from './labels.js';
+import { labelColor, labelClass, VIA_LABEL } from './labels.js';
 import { PILLS } from '../../shared/cardface.js';
 import { captureBadge } from './render-capture.js';
 import {
   COLUMNS, COLUMN_LABEL, ACTION_LABEL, groupColumns, isHumanOwned, repoBranch, clock, initials, hueOf,
-  primaryAction, boardLamps, stripGlyph, isObservedWork, cardWorkPhase,
+  primaryAction, boardLamps, stripGlyph, isObservedWork, cardWorkPhase, ADVANCED_ACTIONS,
 } from './view.js';
 
 export function avatar(member, { size = 'sm', dim = false } = {}) {
@@ -151,19 +150,16 @@ export function card({ view, face, elapsed_ms = 0 }, model) {
   const via = (view.labels ?? []).find((l) => VIA_LABEL.test(l))?.slice(4) ?? null;
   const labels = (view.labels ?? []).filter((l) => !VIA_LABEL.test(l));
   const archived = !!view.archived;
-  const picked = model.selection?.has(view.id);
   const dragging = model.drag?.mode === 'pointer' && model.drag.ids.includes(view.id);
   const chips = cardChips(view, face, { elapsed_ms });
   const pending = view.pending === true;
   const observed = isObservedWork(view);
   const workPhase = cardWorkPhase(view, face);
   const draggable = human && !model.readOnly && !pending && !archived;
-  // The cover is decoration: left off while the board's states are stale.
-  const cover = model.conn?.status === 'lost' ? '' : coverClass(view.cover);
 
   return h('article', {
     key: view.id,
-    class: `card${cover}${archived ? ' is-archived' : ''}${pending ? ' is-pending' : ''}${selected ? ' is-open' : ''}${human ? ' is-human' : ''}${picked ? ' is-selected' : ''}${dragging ? ' is-dragging' : ''}${model.kbd?.ids.includes(view.id) ? ' is-lifted' : ''}`,
+    class: `card${archived ? ' is-archived' : ''}${pending ? ' is-pending' : ''}${selected ? ' is-open' : ''}${human ? ' is-human' : ''}${dragging ? ' is-dragging' : ''}${model.kbd?.ids.includes(view.id) ? ' is-lifted' : ''}`,
     'data-tone': face.tone,
     'data-state': face.state,
     'data-card-id': view.id,
@@ -172,8 +168,6 @@ export function card({ view, face, elapsed_ms = 0 }, model) {
     'aria-busy': pending ? 'true' : null,
   },
   h('div', { class: 'card-top' },
-    picked ? h('span', { class: 'sel-mark', 'aria-hidden': 'true' }, icon('check', 'icon-xs')) : null,
-    picked ? h('span', { class: 'sr-only' }, 'Selected') : null,
     h('span', { class: 'card-key num' }, view.key),
     archived ? h('span', { class: 'label archived-badge', title: view.archived.by_name ? `Archived by ${view.archived.by_name}` : 'Archived' }, 'Archived') : null,
     view.agent_suggested ? h('span', { class: 'label agent-suggested', title: 'Created by an agent; a person must assign it to an AI' }, 'agent-suggested') : null,
@@ -193,7 +187,7 @@ export function card({ view, face, elapsed_ms = 0 }, model) {
     icon('warn', 'icon-xs'), stripGlyph(face.overlap_chip)) : null,
   labelChips(view, model, labels),
   chipRow(chips),
-  archived ? archivedFoot(view, model) : model.readOnly || pending ? null : cardActions(face, view, model.busy),
+  archived ? archivedFoot(view, model) : model.readOnly || pending ? null : cardActions({ ...face, actions: face.actions.filter((a) => !ADVANCED_ACTIONS.has(a)) }, view, model.busy),
   human && !observed && !pending && !archived && face.state === 'todo' && !view.target ? h('p', { class: 'card-foot' }, view.repo ? 'on your account' : 'no repo yet · add one to tackle it with AI') : null);
 }
 
@@ -341,23 +335,30 @@ export function topBar(model, lamps) {
         model.board?.key_prefix ? h('span', { class: 'brand-key num' }, model.board.key_prefix) : null),
       model.boards?.length ? h('select', { class: 'input input-sm board-switcher', 'aria-label': 'Switch board', 'data-change': 'board' },
         model.boards.filter((b) => !b.archived_at || b.id === model.board?.id).map((b) => h('option', { key: b.id, value: b.id, selected: b.id === model.board?.id }, `${b.name}${b.archived_at ? ' (Archived)' : ''}`))) : null),
-    viewSwitch(model),
+    viewSwitch(model, (v) => !ADVANCED_VIEWS.has(v.id)),
     h('div', { class: 'topbar-status', role: 'status', 'aria-live': 'polite' },
       h('span', { class: `conn conn-${conn}` }, h('span', { class: 'conn-dot', 'aria-hidden': 'true' }),
         conn === 'open' ? 'Live' : conn === 'lost' ? 'Offline' : 'Connecting')),
     h('div', { class: 'topbar-actions' },
-      model.accounts ? h('a', { class: 'btn btn-ghost btn-sm', href: '/clients' }, 'Clients') : null,
-      ['owner', 'admin'].includes(m?.role) ? h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-action': 'manage-boards' }, 'Boards') : null,
-      themeMenu(model),
-      h('button', { type: 'button', class: 'btn btn-ghost btn-sm palette-open', 'data-action': 'palette', 'aria-keyshortcuts': 'Control+K Meta+K', 'aria-label': 'Search and commands' }, icon('search', 'icon-lead'), h('span', { class: 'palette-open-label' }, 'Search'), h('kbd', { class: 'kbd', 'aria-hidden': 'true' }, '⌘K')),
+      h('details', { class: 'menu-wrap topbar-advanced' },
+        h('summary', { class: 'btn btn-ghost btn-sm' }, 'Advanced'),
+        h('div', { class: 'menu topbar-advanced-menu' },
+          viewSwitch(model, (v) => ADVANCED_VIEWS.has(v.id), 'More views'),
+          model.accounts ? h('a', { class: 'btn btn-ghost btn-sm', href: '/clients' }, 'Clients') : null,
+          ['owner', 'admin'].includes(m?.role) ? h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-action': 'manage-boards' }, 'Boards') : null,
+          themeMenu(model),
+          h('button', { type: 'button', class: 'btn btn-ghost btn-sm palette-open', 'data-action': 'palette', 'aria-keyshortcuts': 'Control+K Meta+K', 'aria-label': 'Search and commands' }, icon('search', 'icon-lead'), h('span', { class: 'palette-open-label' }, 'Search'), h('kbd', { class: 'kbd', 'aria-hidden': 'true' }, '⌘K')))),
       model.accounts && ['owner', 'admin'].includes(m?.role) && model.view !== 'team' ? h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-action': 'view', 'data-view': 'team' }, icon('person', 'icon-lead'), 'Invite') : null,
       model.readOnly ? null : h('button', { type: 'button', class: 'btn btn-primary btn-sm', 'data-action': 'new-card', 'aria-keyshortcuts': 'n' }, icon('plus', 'icon-lead'), 'New card'),
       me ? h('span', { class: 'me', title: `${me.name ?? me.login}${me.email ? ` · ${me.email}` : ''}` }, avatar({ ...me, member_id: me.id }), h('span', { class: 'me-name' }, me.name ?? me.login)) : null));
 }
 
-function viewSwitch(model) {
-  return h('nav', { class: 'viewswitch', 'aria-label': 'Board views' },
-    VIEWS.filter((v) => v.switcher !== false).map((v) => h('button', {
+// Board and Table stay in the bar; the planning views sit behind Advanced.
+const ADVANCED_VIEWS = new Set(['calendar', 'timeline', 'dashboard']);
+
+function viewSwitch(model, keep = () => true, label = 'Board views') {
+  return h('nav', { class: 'viewswitch', 'aria-label': label },
+    VIEWS.filter((v) => v.switcher !== false && keep(v)).map((v) => h('button', {
       key: v.id, type: 'button', class: 'viewswitch-btn', 'data-action': 'view', 'data-view': v.id,
       'aria-pressed': model.view === v.id ? 'true' : 'false',
       // The text label is hidden on phones; the name must survive it.
@@ -378,35 +379,8 @@ export function boardScreen(model, body = null) {
     model.view === 'dashboard' ? null : filterBar(model),
     body ?? h('main', { class: 'board', id: 'board', 'aria-label': 'Board columns' },
       COLUMNS.map((c) => column(c, cols[c], model))),
-    selectionActions(model),
-    h('p', { id: 'dnd-help', class: 'sr-only' }, 'Cards with no active agent run can be moved. Press Space to pick up, left and right arrows to choose a column, Space to drop, Escape to cancel. Shift-click or Command-click selects several.'),
+    h('p', { id: 'dnd-help', class: 'sr-only' }, 'Cards with no active agent run can be moved. Press Space to pick up, left and right arrows to choose a column, Space to drop, Escape to cancel.'),
     h('div', { class: 'sr-only', role: 'status', 'aria-live': 'assertive', 'aria-atomic': 'true' }, model.announce ?? ''));
-}
-
-export function selectionActions(model) {
-  const sel = model.selection;
-  if (!sel?.size) return null;
-  const bar = selectionBar(sel, (id) => model.entries.find((e) => e.view.id === id)?.view);
-  return h('div', { class: 'selbar', role: 'region', 'aria-label': 'Selected cards' },
-    h('span', { class: 'selbar-count num' }, bar.text),
-    bar.skipped ? h('span', { class: 'selbar-note' }, `${bar.skipped} run-driven won't move`) : null,
-    model.readOnly ? null : selectionArchive(sel, model),
-    bar.movable && !model.readOnly ? h('label', { class: 'selbar-move' },
-      h('span', { class: 'sr-only' }, 'Move selected cards to'),
-      h('select', { class: 'input input-sm', 'data-change': 'bulk-move' },
-        h('option', { value: '' }, 'Move to…'),
-        COLUMNS.map((c) => h('option', { key: c, value: c }, COLUMN_LABEL[c])))) : null,
-    h('button', { type: 'button', class: 'btn btn-sm btn-ghost', 'data-action': 'clear-selection' }, 'Clear'));
-}
-
-function selectionArchive(sel, model) {
-  const views = [...sel].map((id) => model.entries.find((e) => e.view.id === id)?.view).filter(Boolean);
-  const archivable = views.filter(canArchive).length;
-  const archived = views.filter((v) => v.archived).length;
-  return [
-    archivable ? h('button', { key: 'arch', type: 'button', class: 'btn btn-sm', 'data-action': 'bulk-archive' }, `Archive ${archivable}`) : null,
-    archived ? h('button', { key: 'rest', type: 'button', class: 'btn btn-sm', 'data-action': 'bulk-restore' }, `Restore ${archived}`) : null,
-  ];
 }
 
 export function loadingScreen(text = 'Loading the board…') {

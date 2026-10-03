@@ -1,10 +1,20 @@
 // Closed execution providers and the public part of runner readiness. No
 // paths, authentication files or arbitrary provider labels cross this API.
-export const AI_IDS = Object.freeze(['claude', 'codex']);
-export const AI_LABELS = Object.freeze({ claude: 'Claude Code', codex: 'Codex' });
-export const AI_BACKENDS = Object.freeze({ claude: 'claude_cli', codex: 'codex_cli' });
+export const AI_IDS = Object.freeze(['claude', 'codex', 'hermes', 'hermes-dgx']);
+export const AI_LABELS = Object.freeze({ claude: 'Claude Code', codex: 'Codex', hermes: 'Hermes', 'hermes-dgx': 'Hermes · DGX' });
+export const AI_BACKENDS = Object.freeze({ claude: 'claude_cli', codex: 'codex_cli', hermes: 'hermes_cli', 'hermes-dgx': 'hermes_cli' });
+// Hub-side mirror of each runner backend's describe() capabilities that
+// dispatch depends on (runner/backends/*.js; a test keeps them equal).
+// ownMachineOnly: no OS sandbox, so only the dispatcher's own machine runs it.
+export const AI_CAPABILITIES = Object.freeze({
+  claude: Object.freeze({ budget: 'native', maxTurns: true, ownMachineOnly: false }),
+  codex: Object.freeze({ budget: 'none', maxTurns: false, ownMachineOnly: false }),
+  hermes: Object.freeze({ budget: 'none', maxTurns: true, ownMachineOnly: true }),
+  'hermes-dgx': Object.freeze({ budget: 'none', maxTurns: true, ownMachineOnly: true }),
+});
 export const BUDGET_MAX_USD = 1000;
-export const aiOfDispatch = (d) => d?.ai ?? (d?.backend === 'codex_cli' ? 'codex' : 'claude');
+// Rows written before `ai` existed carry only a backend; the first id per backend wins.
+export const aiOfDispatch = (d) => d?.ai ?? AI_IDS.find((id) => AI_BACKENDS[id] === d?.backend) ?? 'claude';
 
 export function aiListError(list) {
   if (!Array.isArray(list) || list.length > 8) return 'ai must be a list of at most 8 providers';

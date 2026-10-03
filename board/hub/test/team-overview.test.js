@@ -72,3 +72,22 @@ test('overview counts all active tasks but bounds lists and refuses arbitrary se
     assert.equal((await h.api(null, 'GET', '/api/team-overview')).status, 401);
   } finally { await h.close(); }
 });
+
+test('a card an AI still reports working on counts as open, not done, whatever its column', async () => {
+  const f = await tenancy();
+  try {
+    const { h, as, db, A, users } = f;
+    const report = { install_id: randomUUID(), provider: 'codex', session_id: 'session-1', task_id: 'task-1', repo_id: A.repo, title: 'Observed', status: 'working' };
+    const created = await as(users.amember, 'POST', `/api/boards/${A.board}/work-capture`, report);
+    assert.equal(created.status, 200, created.text);
+    const before = (await as(users.ua, 'GET', '/api/team-overview')).body;
+    db.run("UPDATE cards SET column_name = 'done' WHERE id = ?", created.body.card.id);
+    const working = (await as(users.ua, 'GET', '/api/team-overview')).body;
+    assert.deepEqual([working.totals.done, working.totals.open], [before.totals.done, before.totals.open]);
+    assert.deepEqual([working.boards.find((b) => b.id === A.board).done, working.boards.find((b) => b.id === A.board).open],
+      [before.boards.find((b) => b.id === A.board).done, before.boards.find((b) => b.id === A.board).open]);
+    h.clock.advance(60_001);
+    const stale = (await as(users.ua, 'GET', '/api/team-overview')).body;
+    assert.deepEqual([stale.totals.done, stale.totals.open], [before.totals.done + 1, before.totals.open - 1]);
+  } finally { await f.h.close(); }
+});
