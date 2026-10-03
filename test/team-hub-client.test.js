@@ -470,3 +470,60 @@ test('poll: off() then on() during an in-flight poll reschedules exactly once (t
   await wait(180);
   assert.equal(r.state.calls.length, stoppedAt, 'stops when the last listener goes');
 });
+
+test('F1: a late state response that ignores the abort signal never mutates entries already returned', async () => {
+  const r = rig({ shared: [share()] });
+  const base = r.fetch;
+  let release;
+  const gate = new Promise((res) => { release = res; });
+  r.fetch = async (url, init) => {
+    if (String(url).endsWith('/shared')) return base(url, init);
+    await gate;
+    return { status: 200, headers: { get: () => null }, text: async () => JSON.stringify(stateOk()), body: null };
+  };
+  const hub = createTeamHubClient({ baseUrl: 'https://hub.test', token: () => 't', fetch: r.fetch }, { now: () => T0, deadlineMs: 80, timeoutMs: 9_000 });
+  const out = await hub.sessions({ id: 'u' }, 't1');
+  const snapshot = JSON.stringify(out);
+  assert.equal(out[0].state, 'Unknown');
+  release();
+  await wait(40);
+  assert.equal(JSON.stringify(out), snapshot, 'returned entries are not mutated after the deadline');
+});
+
+test('F2/F3: bidi, zero-width, line-separator, invisible-format and tag characters are stripped from prose, names and ids', async () => {
+  const bad = ['‮', '​', '⁦', ' ', ' ', '⁠', '⁢', '⁤', '\u{e0001}', '\u{e0041}', '\u{e007f}'];
+  for (const c of bad) {
+    const { hub } = mk({
+      shared: [share({ owner: { id: `u-${c}bob`, name: `Bo${c}b` }, team: { id: 't1', name: `Te${c}am` } })],
+      callBody: { result: { ok: true, state: { session: SESSION, generation: 1, status: 'ready', deliveries: [{ id: 'd1', text: `a${c}b\nc`, by: 'Ana', state: 'replied', response: `x${c}y` }] } } },
+    });
+    const e = (await hub.sessions({ id: 'u' }, 't1'))[0];
+    const label = `U+${c.codePointAt(0).toString(16)}`;
+    assert.equal(e.deliveries[0].text, 'ab\nc', `text ${label}`);
+    assert.equal(e.deliveries[0].response, 'xy', `response ${label}`);
+    assert.equal(e.owner.name, 'Bob', `name ${label}`);
+    assert.equal(e.owner.id, 'u-bob', `id ${label}`);
+    assert.equal(e.team.name, 'Team', `team ${label}`);
+  }
+});
+
+test('L8: send() maps a generation race or any named refusal to stale/"changed"; a bare ok:false stays unavailable', async () => {
+  const run = async (sendResult) => {
+    const r = rig({ shared: [share()], callBody: { result: { ok: true, state: { session: SESSION, generation: 1, status: 'ready' } } } });
+    const base = r.fetch;
+    r.fetch = async (url, init) => {
+      const out = await base(url, init);
+      if (init?.body && JSON.parse(init.body).op === 'send') return { ...out, text: async () => JSON.stringify({ result: sendResult }) };
+      return out;
+    };
+    const hub = createTeamHubClient({ baseUrl: 'https://hub.test', token: () => 't', fetch: r.fetch }, { now: () => T0 });
+    await hub.teams({ id: 'u' });
+    return hub.send({ id: 'u' }, 't1', SHARED, 'hi');
+  };
+  for (const res of [{ ok: false, status: 'generation_mismatch' }, { ok: false, status: 'something_new' }, { ok: false, error: 'generation mismatch' }]) {
+    const out = await run(res);
+    assert.deepEqual([out.ok, out.status, out.reason, out.error], [false, 'stale', 'The session changed; try again.', 'The session changed; try again.']);
+  }
+  assert.equal((await run({ ok: false })).status, 'unavailable');
+  assert.equal((await run({ ok: false, status: 'forbidden' })).status, 'forbidden');
+});
