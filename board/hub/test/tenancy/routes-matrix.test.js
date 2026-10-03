@@ -168,6 +168,9 @@ const MATRIX = {
   'GET /api/search': { kind: 'cross', path: (fx) => `/api/search?q=secret&board_id=${fx.B.board}`, alt: (fx) => [`/api/search?q=secret&team=${fx.B.team}`] },
   'GET /api/workflows': { kind: 'team' },
   'GET /api/team-overview': { kind: 'team' },
+  // Staff-only directory selects a team by header/query; both selectors must
+  // be swept for foreign callers, even when no eligible run is currently live.
+  'GET /api/team-session-directory': { kind: 'team' },
   'POST /api/workflows': { kind: 'team', body: { definition: { name: 'pwned', steps: [{ title: 'pwned', plan_approval: true }] } } },
   'GET /api/workflows/:workflow_id': { kind: 'cross', path: (fx) => `/api/workflows/${fx.B.workflow}` },
   'POST /api/workflows/:workflow_id/versions': { kind: 'cross', path: (fx) => `/api/workflows/${fx.B.workflow}/versions`, body: { expected_version: 1, definition: { name: 'pwned', steps: [{ title: 'pwned', plan_approval: true }] } } },
@@ -268,6 +271,12 @@ const key = (r) => `${r.method} ${r.pattern}`;
 test('T-ROUTES coverage: every hub route is in the tenancy matrix, and the matrix names no dead route', async () => {
   const fx = await tenancy();
   try {
+    // Positive control: this route is reachable for its actual team owner.
+    // A deny-all implementation must not make cross-team checks vacuous.
+    const ownDirectory = await fx.as(fx.users.ub, 'GET', '/api/team-session-directory', undefined, { 'x-board-team': fx.B.team });
+    assert.equal(ownDirectory.status, 200, ownDirectory.text);
+    assert.equal(ownDirectory.body.team.id, fx.B.team);
+    assert.equal(ownDirectory.body.message_contract, 'task-inbox');
     const live = fx.h.app.routes.map(key);
     const missing = live.filter((k) => !MATRIX[k]);
     assert.deepEqual(missing, [], `routes without a tenancy entry: ${missing.join(', ')}`);

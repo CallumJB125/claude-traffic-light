@@ -3,6 +3,7 @@
 // process, provider credential, transcript or outside network is used.
 const test = require('node:test'), assert = require('node:assert/strict');
 const crypto = require('node:crypto');
+const os = require('node:os');
 const http = require('node:http'), fs = require('node:fs'), path = require('node:path');
 const { createClaudeChannelSession, writeClaudeChannelConfig } = require('../src/claude-channel-session');
 const { run, endpoint } = require('../src/claude-channel-server');
@@ -152,7 +153,9 @@ test('terminal channel server only contacts closed loopback origins', () => {
 
 test('terminal channel: config is private, exclusive and contains no capability in the UI recipe', async t => {
   const f = await fixture(t);
-  const directory = fs.mkdtempSync('/private/tmp/plexiform-channel-config-');
+  const temporaryBase = fs.realpathSync(os.tmpdir());
+  const directory = fs.mkdtempSync(path.join(temporaryBase, 'plexiform-channel-config-'));
+  assert.equal(path.dirname(directory), temporaryBase);
   fs.chmodSync(directory, 0o700); t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const input = { grant: f.grant, directory, command: process.execPath, args: ['/synthetic/channel-server.js'] };
   const recipe = writeClaudeChannelConfig(input), stat = fs.lstatSync(recipe.file);

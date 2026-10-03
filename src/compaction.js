@@ -70,7 +70,13 @@ function cutIndex(history, keep) {
 }
 const SUMMARY_OPEN = '<earlier-conversation-summary>', SUMMARY_CLOSE = '</earlier-conversation-summary>';
 const fingerprint = (items) => crypto.createHash('sha256').update(JSON.stringify(items)).digest('hex');
-const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => { const t = setTimeout(() => rej(new Error('timeout')), ms); t.unref?.(); })]);
+// An awaited deadline must keep the process alive until the operation settles.
+// Clear it on success/failure so fast operations leave no referenced timer.
+async function withTimeout(p, ms) {
+  let timer;
+  try { return await Promise.race([p, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('timeout')), ms); })]); }
+  finally { clearTimeout(timer); }
+}
 
 // Summarise-and-replace for histories Plexiform holds. `summarise(older)`
 // returns the summary text. prepare() builds it in the background; swap()
@@ -139,6 +145,13 @@ function createSessionCompactor({ settings = () => DEFAULTS, ledger = null, now 
   const inFlight = (c) => c?.state === 'running' || c?.state === 'aborting';
   const live = (c) => inFlight(c) || c?.state === 'abandoned';
   const wait = (ms) => new Promise((res) => { const t = setTimeout(res, ms); t.unref?.(); });
+  // Background expiry stays unref'd; sends/stops actively awaiting settlement
+  // own a referenced deadline and release it if provider completion wins.
+  const waitFor = async (done, ms) => {
+    let timer;
+    try { await Promise.race([done, new Promise((resolve) => { timer = setTimeout(resolve, ms); })]); }
+    finally { clearTimeout(timer); }
+  };
   const interrupt = (r, c) => { if (!r.ended) Promise.resolve().then(() => r.adapter.interrupt({ target: c.target, turnId: c.turnId })).catch(() => {}); };
   // The compaction turn's own tokens. A compaction reads the whole context,
   // so 0 input tokens means "not reported" (Codex 0.159), never "free".
@@ -222,7 +235,7 @@ function createSessionCompactor({ settings = () => DEFAULTS, ledger = null, now 
       onChange(r);
       if (c.turnId && !r.ended) { try { await r.adapter.interrupt({ target: c.target, turnId: c.turnId }); } catch { /* provider gone */ } }
     }
-    await Promise.race([c.done, wait(settleMs)]);
+    await waitFor(c.done, settleMs);
     if (r.compaction === c && inFlight(c)) {
       c.state = 'abandoned';
       c.resolve();
@@ -234,7 +247,7 @@ function createSessionCompactor({ settings = () => DEFAULTS, ledger = null, now 
   async function settle(r) {
     const c = r.compaction;
     if (!inFlight(c)) return;
-    await Promise.race([c.done, wait(sendWaitMs)]);
+    await waitFor(c.done, sendWaitMs);
     if (r.compaction === c) await stop(r);
   }
   // Closed session: nothing more is recorded for it. Returns a turn to interrupt.

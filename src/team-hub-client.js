@@ -89,7 +89,7 @@ function createTeamHubClient({ baseUrl, token, fetch = globalThis.fetch, viewer:
     if (!(ms > 0)) throw new Error('the team hub deadline passed');
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), ms);
-    timer.unref?.();
+    // Active requests retain their deadline; finally releases it on settlement.
     try {
       const res = await fetch(url, { // privacy-flow: team-hub-directory
         method, redirect: 'error', signal: ctl.signal,
@@ -303,40 +303,43 @@ function createTeamHubClient({ baseUrl, token, fetch = globalThis.fetch, viewer:
     const deadline = Date.now() + span, out = rows.map(baseEntry);
     const boardPending = boardDirectory ? boardRows(teamId, deadline).catch(partialRows) : Promise.resolve([]);
     let next = 0, settled = false;
-    const cut = new Promise((done) => { const t = setTimeout(done, Math.max(deadline - Date.now(), 0)); t.unref?.(); });
-    const worker = async () => {
-      for (;;) {
-        const i = next++;
-        if (settled || i >= rows.length || Date.now() >= deadline) return;
-        try {
-          const got = hubResult(await sharedCall(rows[i].ref, crypto.randomUUID(), 'state', { session: rows[i].session }, deadline));
-          if (settled) return;
-          applyState(out[i], got, atNow());
+    let cutTimer;
+    const cut = new Promise((done) => { cutTimer = setTimeout(done, Math.max(deadline - Date.now(), 0)); });
+    try {
+      const worker = async () => {
+        for (;;) {
+          const i = next++;
+          if (settled || i >= rows.length || Date.now() >= deadline) return;
+          try {
+            const got = hubResult(await sharedCall(rows[i].ref, crypto.randomUUID(), 'state', { session: rows[i].session }, deadline));
+            if (settled) return;
+            applyState(out[i], got, atNow());
+          }
+          catch { /* listed without state */ }
         }
-        catch { /* listed without state */ }
-      }
-    };
-    await Promise.race([Promise.all(Array.from({ length: Math.min(FANOUT, rows.length) }, worker)), cut]);
-    settled = true;
-    if (!boardDirectory) return out;
-    const boards = await Promise.race([boardPending, cut.then(partialRows)]);
-    // At most six bounded reads; a stalled journal cannot hide the directory.
-    for (const e of boards) e.deliveries = receiptCache.get(e.ref) ?? [];
-    const candidates = boards.filter(e => sentBoardRefs.has(e.ref));
-    // Directory + one rotating journal per five-second cycle stays below the
-    // shared 60/minute member-read budget; retain historical receipts meanwhile.
-    const tracked = candidates.length ? [candidates[journalCursor++ % candidates.length]] : [];
-    let cursor = 0, receiptsClosed = false;
-    await Promise.race([Promise.all(Array.from({ length: Math.min(FANOUT, tracked.length) }, async () => {
-      while (cursor < tracked.length && Date.now() < deadline) {
-        const entry = tracked[cursor++], route = boardRoutes.get(entry.ref);
-        try { const msgs = await boardMessages(route, deadline); if (!receiptsClosed) { entry.deliveries = msgs.map(m => boardDelivery(m, route, msgs)).filter(Boolean).slice(0, 10); receiptCache.set(entry.ref, entry.deliveries); while (receiptCache.size > 50) receiptCache.delete(receiptCache.keys().next().value); } } catch { /* no receipt evidence */ }
-      }
-    })), cut]);
-    receiptsClosed = true;
-    const combined = out.concat(boards).slice(0, MAX_SHARED);
-    if (partial || boards.partial === true || out.length + boards.length > MAX_SHARED || all.length >= MAX_SHARED || rows.length >= MAX_PER_TEAM) combined.partial = true;
-    return combined;
+      };
+      await Promise.race([Promise.all(Array.from({ length: Math.min(FANOUT, rows.length) }, worker)), cut]);
+      settled = true;
+      if (!boardDirectory) return out;
+      const boards = await Promise.race([boardPending, cut.then(partialRows)]);
+      // At most six bounded reads; a stalled journal cannot hide the directory.
+      for (const e of boards) e.deliveries = receiptCache.get(e.ref) ?? [];
+      const candidates = boards.filter(e => sentBoardRefs.has(e.ref));
+      // Directory + one rotating journal per five-second cycle stays below the
+      // shared 60/minute member-read budget; retain historical receipts meanwhile.
+      const tracked = candidates.length ? [candidates[journalCursor++ % candidates.length]] : [];
+      let cursor = 0, receiptsClosed = false;
+      await Promise.race([Promise.all(Array.from({ length: Math.min(FANOUT, tracked.length) }, async () => {
+        while (cursor < tracked.length && Date.now() < deadline) {
+          const entry = tracked[cursor++], route = boardRoutes.get(entry.ref);
+          try { const msgs = await boardMessages(route, deadline); if (!receiptsClosed) { entry.deliveries = msgs.map(m => boardDelivery(m, route, msgs)).filter(Boolean).slice(0, 10); receiptCache.set(entry.ref, entry.deliveries); while (receiptCache.size > 50) receiptCache.delete(receiptCache.keys().next().value); } } catch { /* no receipt evidence */ }
+        }
+      })), cut]);
+      receiptsClosed = true;
+      const combined = out.concat(boards).slice(0, MAX_SHARED);
+      if (partial || boards.partial === true || out.length + boards.length > MAX_SHARED || all.length >= MAX_SHARED || rows.length >= MAX_PER_TEAM) combined.partial = true;
+      return combined;
+    } finally { clearTimeout(cutTimer); }
   }
 
   async function send(viewerArg, teamId, ref, text, requestId) {

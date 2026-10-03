@@ -509,3 +509,44 @@ test('FAKE app-server: Codex adapter compacts via thread/compact/start and the l
     assert.equal(hub.state({ session: A.session }, ACTOR).deliveries.length, 4);
   } finally { hub.stopAll(); }
 });
+
+// Standalone processes have no test-runner/transport handle to rescue an
+// unref'd active deadline. Fast success must also exit without a long timer.
+function compactionDeadlineChild(body, expected) {
+  const { spawnSync } = require('node:child_process');
+  const home = tmp();
+  const script = `const C = require(${JSON.stringify(require.resolve('../src/compaction'))});
+    const settings = { enabled: true, providers: { local: true, codex: true }, threshold: 0.5, minTurns: 1, keepTurns: 2 };
+    const history = Array.from({length: 6}, () => [{role: 'user', text: 'x'.repeat(400)}, {role: 'assistant', text: 'y'.repeat(400)}]).flat();
+    const run = async () => { ${body} }; run().then(value => console.log(JSON.stringify(value)), error => { console.error(error); process.exitCode = 1; });`;
+  try {
+    const result = spawnSync(process.execPath, ['-e', script], { encoding: 'utf8', timeout: 1500, env: { HOME: home, TMPDIR: home, PATH: process.env.PATH, ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}) } });
+    assert.equal(result.error, undefined, 'active operation finishes and releases its referenced deadline');
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), JSON.stringify(expected), 'completion must be reported before standalone process exits');
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+}
+const standaloneCompactor = `const interrupts = [];
+  const sc = C.createSessionCompactor({settings: () => settings, sendWaitMs: 25, settleMs: 25, maxMs: 30000});
+  const r = {provider: 'codex', generation: 1, target: 't', ended: false, sending: false, activeTurn: null, turns: new Map(), usage: {inputTokens: 8000, window: 10000}, turnsSinceCompaction: 5,
+    adapter: {alive: () => true, capabilities: {compact: true}, compact: async () => true, interrupt: async () => { interrupts.push('c'); }} };
+  if (!await sc.maybeStart(r)) throw new Error('fixture compaction did not start'); sc.claims(r, {kind: 'turn-started', turnId: 'c'});`;
+test('standalone deadline: hung history summary times out without another event-loop handle', () => {
+  compactionDeadlineChild(`const h = C.createHistoryCompactor({settings: () => settings, window: () => 2000, timeoutMs: 30, summarise: () => new Promise(() => {})}); return (await h.prepare('s', history)).reason;`, 'summary-failed');
+});
+test('standalone deadline: successful and rejected summaries clear long deadline timers', () => {
+  for (const summarise of ["async () => 'brief'", "async () => { throw new Error('refused'); }"]) {
+    compactionDeadlineChild(`const h = C.createHistoryCompactor({settings: () => settings, window: () => 2000, timeoutMs: 30000, summarise: ${summarise}}); return (await h.prepare('s', history)).reason;`, summarise.includes('throw') ? 'summary-failed' : 'ready');
+  }
+});
+test('standalone deadline: a hung compaction send settles, interrupts and abandons', () => {
+  compactionDeadlineChild(`${standaloneCompactor} await sc.settle(r); return [r.compaction.state, interrupts.length];`, ['abandoned', 1]);
+});
+test('standalone deadline: a hung compaction stop settles and abandons', () => {
+  compactionDeadlineChild(`${standaloneCompactor} await sc.stop(r); return [r.compaction.state, interrupts.length];`, ['abandoned', 1]);
+});
+test('standalone deadline: provider completion clears a long settlement deadline; background expiry stays unref', () => {
+  compactionDeadlineChild(`${standaloneCompactor.replace('sendWaitMs: 25, settleMs: 25', 'sendWaitMs: 30000, settleMs: 30000')}
+    const settling = sc.settle(r); Promise.resolve().then(() => sc.claims(r, {kind: 'turn-completed', turnId: 'c', status: 'failed'}));
+    await settling; return r.compaction;`, null);
+});

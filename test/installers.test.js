@@ -6,6 +6,7 @@ const assert = require('node:assert/strict');
 const os = require('os');
 const fs = require('fs');
 const path = require('path');
+const vm = require('node:vm');
 
 const Brand = require('../brand.js');
 const config = require('../electron-builder.config.js');
@@ -291,6 +292,67 @@ function jobsOf(yml) {
   return out;
 }
 
+// Evaluate only the closed matrix expression that selects accepted platforms.
+// It is workflow configuration, never a value interpolated into shell code.
+function releaseMatrixExpression(yml) {
+  const include = require('js-yaml').load(yml).jobs.build.strategy.matrix.include;
+  assert.equal(typeof include, 'string');
+  const match = /^\$\{\{ (.+) \}\}$/.exec(include);
+  assert.ok(match, 'one expression selects the release matrix');
+  assert.match(match[1], /^fromJSON\(\(vars\.WINDOWS_RELEASE == 'true' \|\| \(github\.event_name == 'workflow_dispatch' && inputs\.validate_windows\)\) && '[^']*' \|\| '[^']*'\)$/);
+  return match[1];
+}
+
+function assertNoShellInputInterpolation(yml, file) {
+  const lines = yml.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const run = /^(\s+)(-\s+)?run:\s*(.*)$/.exec(lines[i]);
+    if (!run) continue;
+    assert.ok(!/\$\{\{[^}]*inputs\./.test(run[3]), `${file}: inline run must use quoted environment variables`);
+    if (!/^[|>]/.test(run[3])) continue;
+    const indent = run[1].length + (run[2]?.length || 0);
+    for (let j = i + 1; j < lines.length; j++) {
+      if (!lines[j].trim()) continue;
+      if (/^\s*/.exec(lines[j])[0].length <= indent) break;
+      assert.ok(!/\$\{\{[^}]*inputs\./.test(lines[j]), `${file}: run block must use quoted environment variables`);
+    }
+  }
+}
+
+test('release scope: macOS/Linux by default; Windows diagnostics cannot enable publication', () => {
+  const yml = readText('.github/workflows/release.yml');
+  const expression = releaseMatrixExpression(yml);
+  for (const [flag, event, diagnostic, wanted] of [
+    [undefined, 'workflow_dispatch', false, ['mac', 'linux']],
+    ['false', 'workflow_dispatch', false, ['mac', 'linux']],
+    ['TRUE', 'workflow_dispatch', false, ['mac', 'win', 'linux']],
+    ['true', 'workflow_dispatch', false, ['mac', 'win', 'linux']],
+    [undefined, 'workflow_dispatch', true, ['mac', 'win', 'linux']],
+    ['false', 'workflow_dispatch', true, ['mac', 'win', 'linux']],
+    [undefined, 'push', true, ['mac', 'linux']],
+    ['true', 'push', false, ['mac', 'win', 'linux']],
+  ]) {
+    const rows = vm.runInNewContext(expression, { vars: { WINDOWS_RELEASE: typeof flag === 'string' ? flag.toLowerCase() : flag }, github: { event_name: event }, inputs: { validate_windows: diagnostic }, fromJSON: JSON.parse });
+    assert.deepEqual(rows.map(row => row.platform), wanted);
+    assert.deepEqual(rows.map(row => row.os), wanted.map(p => ({ mac: 'macos-latest', win: 'windows-latest', linux: 'ubuntu-latest' }[p])));
+  }
+  const jobs = jobsOf(yml);
+  assert.match(jobs['native-directory'], /uses: \.\/\.github\/workflows\/windows-native\.yml/);
+  assert.ok(!/\n {4}if:/.test(jobs['native-directory']), 'native SDK acceptance always runs');
+  for (const name of ['stage', 'stage-beta']) {
+    assert.match(jobs[name], /needs: \[build, native-directory\]/);
+    assert.ok(!/inputs\.validate_windows/.test(jobs[name]), `${name}: diagnostics never grant publication`);
+  }
+});
+
+test('workflow input guard rejects both inline and multiline shell interpolation', () => {
+  for (const source of [
+    '      - run: echo ${{ inputs.version }}\n',
+    '      - run: |\n          INPUT: ${{ inputs.version }}\n',
+  ]) assert.throws(() => assertNoShellInputInterpolation(source, 'hostile fixture'), /environment variables/);
+  assertNoShellInputInterpolation('      - run: |\n          echo safe\n        env:\n          INPUT: ${{ inputs.version }}\n', 'allowed fixture');
+});
+
 // B1 / M1 (reviews): the key must not be reachable from a branch push or a branch-name condition.
 test('release.yml: tags and manual runs only, nothing signed, no branch conditions', () => {
   const yml = readText('.github/workflows/release.yml');
@@ -309,10 +371,10 @@ test('release.yml: tags and manual runs only, nothing signed, no branch conditio
   assert.match(jobs.build, /node --test --test-force-exit --test-timeout=120000 test\/\*\.test\.js test\/adapters\/\*\.test\.js/);
   assert.match(jobs.build, /node --test --test-force-exit --test-timeout=120000 remote\/test\//);
   assert.ok(!/npm test/.test(jobs.build));
-  // Every platform blocks staging; artifacts/evidence remain for debugging.
+  // Every selected platform blocks staging; artifacts/evidence remain for debugging.
   assert.ok(!/continue-on-error:/.test(jobs.build));
   // No dispatch exception: a dry or beta candidate must not hide a Mac/Linux failure
-  assert.deepEqual([...jobs.build.matchAll(/platform: (\w+)/g)].map((m) => m[1]), ['mac', 'win', 'linux']);
+  releaseMatrixExpression(yml); // semantics and native/stage gates are exercised above
   assert.match(jobs.build, /name: Windows installer lifecycle/);
   assert.match(jobs.build, /run: node scripts\/windows-install-smoke\.js/);
   assert.match(jobs.build, /node --test --test-force-exit --test-timeout=120000 '\*\/test\/\*\*\/\*\.test\.js'/, 'the board authority suite is mandatory too');
@@ -388,8 +450,13 @@ test('workflow pin policy allows checked local reusable files and refuses paths 
 test('workflows: inputs never interpolated into a run script; every action pinned to a commit', () => {
   for (const f of ['.github/workflows/release.yml', '.github/workflows/release-promote.yml', '.github/workflows/windows-native.yml']) {
     const yml = readText(f);
+    assertNoShellInputInterpolation(yml, f);
     for (const line of yml.split('\n')) {
       if (!/\$\{\{[^}]*inputs\./.test(line)) continue;
+      if (f === '.github/workflows/release.yml' && line === '        include: ${{ ' + releaseMatrixExpression(yml) + ' }}') {
+        releaseMatrixExpression(yml); // only this closed configuration expression
+        continue;
+      }
       assert.match(line, /^\s+(?:[A-Z_]+|ref|if|group):\s|^\s+if:\s|^\s+ref:\s/, `${f}: ${line.trim()}`);
     }
     // every job that names a signing key runs in the release environment

@@ -529,3 +529,42 @@ test('L8: send() maps a stale refusal or a generation race to stale/"changed"; o
   for (const status of ['invalid', 'something_new', 'busy']) assert.equal((await run({ ok: false, status })).status, 'unavailable', status);
   assert.equal((await run({ ok: false, status: 'forbidden' })).status, 'forbidden');
 });
+
+function hubDeadlineChild(body, expected) {
+  const { spawnSync } = require('node:child_process');
+  const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'plex-hub-deadline-'));
+  const script = `const {createTeamHubClient} = require(${JSON.stringify(require.resolve('../src/team-hub-client'))});
+    const shared = ${JSON.stringify(share())};
+    const json = body => ({status: 200, headers: {get: () => null}, text: async () => JSON.stringify(body), body: null});
+    const run = async () => { ${body} }; run().then(value => console.log(JSON.stringify(value)), error => { console.error(error); process.exitCode = 1; });`;
+  try {
+    const result = spawnSync(process.execPath, ['-e', script], {encoding: 'utf8', timeout: 1500, env: {HOME: home, TMPDIR: home, PATH: process.env.PATH, ...(process.env.SystemRoot ? {SystemRoot: process.env.SystemRoot} : {})}});
+    assert.equal(result.error, undefined, 'active operation finishes and releases its referenced deadline');
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), JSON.stringify(expected), 'completion must be reported before standalone process exits');
+  } finally { fs.rmSync(home, {recursive: true, force: true}); }
+}
+test('standalone deadline: hung request aborts without another event-loop handle', () => {
+  hubDeadlineChild(`const fetch = (url, init) => new Promise((resolve, reject) => init.signal.addEventListener('abort', () => reject(new Error('AbortError'))));
+    const hub = createTeamHubClient({baseUrl: 'https://hub.test', token: () => 'fixture', fetch}, {timeoutMs: 30});
+    try { await hub.teams(); return 'unexpected success'; } catch { return 'aborted'; }`, 'aborted');
+});
+test('standalone deadline: collection returns Unknown even if transport ignores abort', () => {
+  hubDeadlineChild(`const fetch = async url => String(url).endsWith('/shared') ? json({shared: [shared]}) : new Promise(() => {});
+    const hub = createTeamHubClient({baseUrl: 'https://hub.test', token: () => 'fixture', fetch}, {deadlineMs: 30, timeoutMs: 5});
+    return (await hub.sessions({id: 'u'}, 't1')).map(row => [row.state, row.observed_at]);`, [['Unknown', null]]);
+});
+test('standalone deadline: fast success clears both request and collection timers', () => {
+  hubDeadlineChild(`const fetch = async url => String(url).endsWith('/shared') ? json({shared: [shared]}) : json({result: {ok: true, state: {session: shared.session, generation: 1, status: 'ready'}}});
+    const hub = createTeamHubClient({baseUrl: 'https://hub.test', token: () => 'fixture', fetch}, {deadlineMs: 30000, timeoutMs: 30000});
+    return (await hub.sessions({id: 'u'}, 't1')).map(row => row.state);`, ['idle']);
+});
+test('standalone deadline: failed request clears its timer', () => {
+  hubDeadlineChild(`const hub = createTeamHubClient({baseUrl: 'https://hub.test', token: () => 'fixture', fetch: async () => {throw new Error('refused');}}, {timeoutMs: 30000});
+    try {await hub.teams(); return 'unexpected success';} catch {return 'failed';}`, 'failed');
+});
+test('standalone deadline: background poll scheduling does not keep the process alive', () => {
+  hubDeadlineChild(`const hub = createTeamHubClient({baseUrl: 'https://hub.test', token: () => 'fixture', fetch: async () => json({shared: []})}, {pollMs: 30000});
+    hub.onChange(() => {}); return 'listener registered';`, 'listener registered');
+});

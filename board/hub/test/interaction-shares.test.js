@@ -122,6 +122,15 @@ test('LOCAL REPORTING PROOF: real hub shares bounded parent/child/input reports 
     assert.equal(wire.status, 'ended'); assert.equal(wire.input_needed, false); assert.equal(wire.reporting.input.needed, true, 'closed provider preserves the last report, never a current question');
     rows = await hub.sessions(null, r.org); assert.equal(rows[0].state, 'ended'); assert.equal(rows[0].input_needed, false); assert.equal(rows[0].input_reported_needed, true);
     r.mac.stopSharing(made.share.id);
+    assert.equal(r.mac.shared().some(x => x.id === made.share.id), false, 'the local grant is removed immediately');
+    // DELETE is asynchronous: first observe the hub acknowledging removal,
+    // then require the directory to omit it. A pre-revoke listing can safely
+    // contain an Unknown row while the local host already refuses calls.
+    await until(async () => {
+      const listed = await r.shared(r.bob);
+      assert.equal(listed.status, 200, listed.text);
+      return !listed.body.shared.some(x => x.id === made.share.id);
+    });
     assert.deepEqual(await hub.sessions(null, r.org), []);
     // A second main-owned hub can use a slower clock. Even if its DTO calls
     // the old question current, the relaying host must enforce its own TTL.
