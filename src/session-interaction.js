@@ -24,10 +24,12 @@
 // with textContent only: they are provider/model output, never markup.
 const crypto = require('node:crypto');
 const path = require('node:path');
+const { redactSecrets } = require('./secret-patterns');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const MAX_TEXT = 4000, MAX_BYTES = 8192, MAX_RESPONSE = 16000, MAX_DELIVERIES = 20, MAX_TURNS = 40, MAX_SESSIONS = 8, MAX_NOTICES = 5;
 const FINAL = ['completed', 'interrupted', 'failed'];
+const REPORT_RECENT_MS = 90_000;
 const NOTICES = {
   approval: 'The provider asked for an approval; Plexiform refused it.',
   approvalElsewhere: 'Codex is waiting for an approval. Plexiform never answers approvals for sessions it did not start: answer it in a Codex terminal attached to this session, or interrupt this turn if none is open.',
@@ -35,6 +37,20 @@ const NOTICES = {
 };
 const object = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const closed = (v, keys) => object(v) && Object.keys(v).every((k) => keys.includes(k));
+const REPORT_SOURCES = Object.freeze(['human', 'provider', 'self-reported', 'observed']);
+const CHILD_STATES = Object.freeze(['working', 'waiting', 'input', 'idle', 'ended']);
+// Metadata is deliberately smaller than messages. Redact before truncation,
+// so a credential straddling the visible limit cannot leave a partial secret.
+function cleanReportText(v, max = 200) {
+  if (typeof v !== 'string' || v.length > 8192) return '';
+  const tokens = v.replace(/\b(?:bdt|brt|btk|btr|inv|clinv|pfi|pfm|pfr|pfc|pfcode)_[A-Za-z0-9_-]+\b|\b(?:brt1|bmr1)\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '<redacted:token>');
+  return [...redactSecrets(tokens, { docExamples: false })
+    .replace(/(?:https?|file):\/\/[^\s<>"'`]+/gi, '<url>')
+    .replace(/(?:[A-Za-z]:[\\/]|\\\\|~[\\/]|(?<![\w.:/-])\/(?!\/))[^\s<>"'`]+/g, '<path>')
+    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '<email>')
+    .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b|\b[A-Za-z0-9_-]{32,}\b/gi, '<id>')
+    .replace(/[\p{C}\p{Zl}\p{Zp}]/gu, ' ').trim()].slice(0, max).join('');
+}
 const refuse = (status, error) => ({ ok: false, status, error });
 const ERRORS = {
   invalid: 'Check the selected session and message.',
@@ -66,6 +82,44 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
   // until the same actor discovers that provider again.
   const handles = new Map(), attaching = new Map();
   const isCurrent = (board) => { try { return boardCurrent(board) === true; } catch { return false; } };
+  const reporting = () => ({ task: null, input: null, children: new Map() });
+  const stamp = (v, at) => Number.isSafeInteger(v) && v >= 0 && v <= at;
+  const privateText = (r, text, max = 200, childIds = []) => {
+    if (typeof text !== 'string') return '';
+    for (const id of [r.target, ...r.turns.keys(), ...r.reporting.children.keys(), ...childIds]) if (typeof id === 'string' && id) text = text.replaceAll(id, '<id>');
+    return cleanReportText(text, max);
+  };
+
+  // Trusted main/hook seam, never an IPC operation. The caller must already
+  // bind an observed report to this exact owned session and generation. Child
+  // IDs stay in main; each child has its own report and receiver clock.
+  function report(req, actor) {
+    if (!closed(req, ['session', 'generation', 'source', 'taskTitle', 'inputNeeded', 'children', 'observedAt']) || !REPORT_SOURCES.includes(req.source)) return refuse('invalid', ERRORS.invalid);
+    const { r, error } = lookup(req, actor, { board: false });
+    if (error) return error;
+    if (r.existing) return refuse('forbidden', ERRORS.forbidden);
+    const at = now(), observed = req.observedAt === undefined ? at : req.observedAt;
+    if (!stamp(at, at) || !stamp(observed, at) || (req.taskTitle !== undefined && (typeof req.taskTitle !== 'string' || req.taskTitle.length > 8192)) || (req.inputNeeded !== undefined && typeof req.inputNeeded !== 'boolean') || (req.children !== undefined && (!Array.isArray(req.children) || req.children.length > 20))) return refuse('invalid', ERRORS.invalid);
+    const children = [];
+    for (const c of req.children ?? []) {
+      if (!closed(c, ['id', 'name', 'taskTitle', 'state', 'observedAt', 'createdAt']) || typeof c.id !== 'string' || !c.id || c.id.length > 200 || typeof c.name !== 'string' || c.name.length > 8192 || (c.taskTitle !== undefined && (typeof c.taskTitle !== 'string' || c.taskTitle.length > 8192)) || !CHILD_STATES.includes(c.state)) return refuse('invalid', ERRORS.invalid);
+      const childAt = c.observedAt === undefined ? observed : c.observedAt, created = c.createdAt === undefined ? childAt : c.createdAt;
+      if (!stamp(childAt, at) || !stamp(created, childAt)) return refuse('invalid', ERRORS.invalid);
+      children.push({ c, childAt, created });
+    }
+    const meta = r.reporting;
+    const childIds = children.map(({ c }) => c.id);
+    if (req.taskTitle !== undefined && (req.source === 'human' || meta.task?.source !== 'human') && (!meta.task || observed > meta.task.observed_at)) meta.task = { title: privateText(r, req.taskTitle, 200, childIds), source: req.source, observed_at: observed, received_at: at };
+    if (req.inputNeeded !== undefined && (!meta.input || observed > meta.input.observed_at)) meta.input = { needed: req.inputNeeded, source: req.source, observed_at: observed, received_at: at };
+    for (const { c, childAt, created } of children) {
+      const old = meta.children.get(c.id);
+      if (old && childAt <= old.observed_at) continue; // replay never freshens a child
+      if (!old && meta.children.size >= 20) continue;
+      meta.children.set(c.id, { ref: old?.ref ?? crypto.randomUUID(), name: privateText(r, c.name, 80, childIds) || 'Agent', task_title: privateText(r, c.taskTitle ?? '', 200, childIds), state: c.state, source: req.source, observed_at: childAt, received_at: at, created_at: old?.created_at ?? created });
+    }
+    emit(r);
+    return { ok: true, status: 'reported', state: dto(r) };
+  }
 
   function turnOf(r, turnId) {
     if (!r.turns.has(turnId)) {
@@ -86,6 +140,8 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
   }
   function dto(r) {
     const active = r.activeTurn ? r.turns.get(r.activeTurn) : null;
+    const reportAt = r.reporting.input?.observed_at, time = now();
+    const inputCurrent = Number.isSafeInteger(reportAt) && reportAt >= 0 && reportAt <= time && time - reportAt <= REPORT_RECENT_MS;
     // A turn someone else started on an existing session is shown as working, never as a turn Plexiform can steer or interrupt.
     const shown = active && (!r.existing || r.own.has(r.activeTurn)) ? active : null;
     return {
@@ -94,6 +150,8 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
       ...(r.existing ? { thread: { ...r.existing, warnings: [...r.existing.warnings] } } : {}),
       board: r.board, status: r.ended ? 'ended' : active || r.foreignBusy ? 'working' : compaction?.inFlight(r) ? 'compacting' : 'ready', activeTurn: shown?.tag ?? null,
       capabilities: { ...r.adapter.capabilities },
+      reporting: { task: r.reporting.task && { ...r.reporting.task }, input: r.reporting.input && { ...r.reporting.input }, children: [...r.reporting.children.values()].map((c) => ({ ...c })) },
+      task_title: r.reporting.task?.title ?? null, input_needed: !r.ended && r.reporting.input?.needed === true && inputCurrent,
       deliveries: [...r.deliveries.values()].map((d) => publicDelivery(r, d)),
     };
   }
@@ -112,13 +170,19 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
       // Another session's (or a replaced target's) event never touches this one.
       if (e.target !== r.target) return;
       if (e.kind === 'closed') { r.ended = true; r.activeTurn = null; emit(r); return; }
+      if (['task-report', 'child-report', 'input-needed'].includes(e.kind)) {
+        // Only an exact target and its active owned turn may report telemetry.
+        if (r.existing || !r.activeTurn || e.turnId !== r.activeTurn) return;
+        report({ session: r.id, generation: r.generation, source: 'provider', ...(e.kind === 'task-report' ? { taskTitle: e.taskTitle } : e.kind === 'input-needed' ? { inputNeeded: e.needed } : { children: [e.child] }) }, r.actor);
+        return;
+      }
       // An existing thread can be busy with a turn another client started before Plexiform subscribed.
       if (e.kind === 'status' && r.existing) { r.foreignBusy = e.status === 'active' && !r.activeTurn; emit(r); return; }
       if (compaction?.claims(r, e)) { emit(r); return; }
       if (e.kind === 'usage' || e.kind === 'compacted' || typeof e.turnId !== 'string') return;
       const t = turnOf(r, e.turnId);
-      if (e.kind === 'turn-started') { r.activeTurn = e.turnId; r.foreignBusy = false; }
-      else if (e.kind === 'turn-completed') { t.status = FINAL.includes(e.status) ? e.status : 'failed'; t.error = e.error ? String(e.error).slice(0, 300) : null; t.finishedAt = now(); if (r.activeTurn === e.turnId) { r.activeTurn = null; compaction?.idle(r); } }
+      if (e.kind === 'turn-started') { if (!r.existing && r.reportTurn !== e.turnId) { r.reporting = reporting(); r.reportTurn = e.turnId; } r.activeTurn = e.turnId; r.foreignBusy = false; }
+      else if (e.kind === 'turn-completed') { t.status = FINAL.includes(e.status) ? e.status : 'failed'; t.error = e.error ? String(e.error).slice(0, 300) : null; t.finishedAt = now(); if (r.activeTurn === e.turnId) { if (!r.existing) r.reporting.input = { needed: false, source: 'provider', observed_at: t.finishedAt, received_at: t.finishedAt }; r.activeTurn = null; compaction?.idle(r); } }
       else if (e.kind === 'input-recorded') { if (t.inputs.length < 20) t.inputs.push({ clientId: e.clientId, text: e.text }); }
       else if (e.kind === 'delta') t.response = (t.response + String(e.text)).slice(0, MAX_RESPONSE);
       else if (e.kind === 'message') t.response = String(e.text).slice(0, MAX_RESPONSE);
@@ -172,7 +236,7 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
     let target;
     try { ({ target } = await adapter.open({ cwd: workspace(id) })); } catch { return refuse('unavailable', ERRORS.unavailable); }
     if (typeof target !== 'string' || !target) return refuse('unavailable', ERRORS.unavailable);
-    const r = { id, generation: 1, provider: req.provider, adapter, target, actor, board, activeTurn: null, sending: false, ended: false, turns: new Map(), deliveries: new Map() };
+    const r = { id, generation: 1, provider: req.provider, adapter, target, actor, board, activeTurn: null, sending: false, ended: false, turns: new Map(), deliveries: new Map(), reporting: reporting() };
     sessions.set(id, r); subscribe(r);
     return { ok: true, status: 'launched', state: dto(r) };
   }
@@ -232,7 +296,7 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
       return refuse('stale', ERRORS.stale);
     }
     const id = crypto.randomUUID();
-    const r = { id, generation: 1, provider: req.provider, adapter, target: h.target, actor, board, activeTurn: null, foreignBusy: result.status === 'active', existing: { ...h.meta, ...disclosure(result.permissions) }, own: new Set(), sending: false, ended: false, turns: new Map(), deliveries: new Map() };
+    const r = { id, generation: 1, provider: req.provider, adapter, target: h.target, actor, board, activeTurn: null, foreignBusy: result.status === 'active', existing: { ...h.meta, ...disclosure(result.permissions) }, own: new Set(), sending: false, ended: false, turns: new Map(), deliveries: new Map(), reporting: reporting() };
     sessions.set(id, r); subscribe(r);
     return { r };
   }
@@ -269,8 +333,9 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
     r.deliveries.set(d.id, d);
     while (r.deliveries.size > MAX_DELIVERIES) r.deliveries.delete(r.deliveries.keys().next().value);
     r.sending = true;
-    let ack;
-    try { ack = await r.adapter.send({ target, text, clientId: d.clientId, expectedTurnId }); } catch { ack = null; } finally { r.sending = false; }
+    let ack, uncertain = false;
+    try { ack = await r.adapter.send({ target, text, clientId: d.clientId, expectedTurnId }); } catch (e) { ack = null; uncertain = e?.code === 'DELIVERY_UNCONFIRMED'; } finally { r.sending = false; }
+    if (uncertain) { d.state = 'unconfirmed'; emit(r); return refuse('unconfirmed', 'No receipt yet; Claude may still act. Do not resend automatically.'); }
     if (!ack) { d.state = 'refused'; emit(r); return refuse('unavailable', ERRORS.unavailable); }
     // Closed or replaced while the provider answered: the ack belongs only
     // to the old target, and a turn it started there is stopped.
@@ -282,6 +347,10 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
     }
     if (typeof ack.turnId !== 'string' || (expectedTurnId && ack.turnId !== expectedTurnId)) { d.state = 'refused'; emit(r); return refuse('stale', ERRORS.stale); }
     d.turnId = ack.turnId; d.mode = ack.mode === 'steer' ? 'steer' : 'new-turn'; d.state = 'acknowledged';
+    if (!r.existing && d.mode === 'new-turn') {
+      if (r.reportTurn !== ack.turnId) { r.reporting = reporting(); r.reportTurn = ack.turnId; }
+      r.reporting.task = { title: privateText(r, text), source: 'human', observed_at: d.sentAt, received_at: now() };
+    }
     if (r.existing && !expectedTurnId) r.own.add(ack.turnId);
     turnOf(r, ack.turnId);
     if (!expectedTurnId && !FINAL.includes(r.turns.get(ack.turnId).status)) r.activeTurn = ack.turnId;
@@ -333,11 +402,12 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
   // Main-only seams (never over IPC): the provider target for proof logs, and
   // target replacement (provider relaunch), which bumps the generation.
   const targetOf = (id) => sessions.get(id)?.target ?? null;
+  const reportTurnOf = (id) => sessions.get(id)?.reportTurn ?? null;
   async function replaceTarget(id) {
     const r = sessions.get(id);
     if (!r || r.ended || r.existing) return false;
     const old = { target: r.target, activeTurn: r.activeTurn };
-    r.generation++; r.activeTurn = null; r.turns.clear(); r.deliveries.clear(); r.target = null;
+    r.generation++; r.activeTurn = null; r.reportTurn = null; r.turns.clear(); r.deliveries.clear(); r.reporting = reporting(); r.target = null;
     const compactTurn = compaction?.drop(r);
     if (compactTurn) { try { await r.adapter.interrupt({ target: old.target, turnId: compactTurn }); } catch { /* provider gone */ } }
     if (old.activeTurn) { try { await r.adapter.interrupt({ target: old.target, turnId: old.activeTurn }); } catch { /* provider gone */ } }
@@ -355,7 +425,7 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
   // of a provider that is now off are stopped.
   const compactionSettingsChanged = () => compaction?.settingsChanged([...sessions.values()]) ?? Promise.resolve();
 
-  return { capabilities, launch, discover, attach, send, interrupt, state, list, close, reap, stopAll, targetOf, replaceTarget, compactionSettingsChanged };
+  return { capabilities, launch, discover, attach, send, interrupt, state, list, close, reap, stopAll, targetOf, reportTurnOf, replaceTarget, report, compactionSettingsChanged };
 }
 
-module.exports = { createInteractionHub, ERRORS, NOTICES };
+module.exports = { createInteractionHub, ERRORS, NOTICES, cleanReportText, REPORT_SOURCES, CHILD_STATES };

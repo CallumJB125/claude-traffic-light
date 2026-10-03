@@ -15,10 +15,11 @@ function render(snapshot) {
     const section = node('section', '', 'session');
     const heading = node('h2', `${item.provider} · ${item.project}`);
     heading.append(node('span', item.freshness === 'recent' ? 'Recent' : item.freshness === 'stale' ? 'Stale' : 'Freshness unknown', 'freshness'));
-    section.append(heading, node('p', `${item.status} · ${age(item.age_ms)} · ${item.lifecycle ? 'Lifecycle report' : 'Local report'}`, 'muted'));
+    const confidence = item.freshness === 'recent' && snapshot.status !== 'unavailable' ? 'Reported' : 'Last reported';
+    section.append(heading, node('p', `${confidence}: ${item.status} · Last seen ${age(item.age_ms).toLowerCase()} · ${item.lifecycle ? 'Lifecycle report' : 'Local report'}`, 'muted'));
     if (item.children?.length) {
       const list = node('ul'); list.setAttribute('aria-label', 'Reported agents');
-      for (const child of item.children) list.append(node('li', `${child.label} · ${child.status}`));
+      for (const child of item.children) list.append(node('li', `${child.label} · ${confidence}: ${child.status}`));
       section.append(list);
     }
     content.append(section);
@@ -31,7 +32,10 @@ async function refresh({ clear = false } = {}) {
   const request = ++generation;
   if (clear) { content.replaceChildren(); status.textContent = 'Checking local sessions…'; activity.textContent = 'Checking local activity…'; }
   try {
-    const snapshot = await window.sessionsApi.state();
+    let timer;
+    const snapshot = await Promise.race([window.sessionsApi.state(), new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error('unavailable')), 4500);
+    })]).finally(() => clearTimeout(timer));
     if (request !== generation || document.hidden) return;
     if (!snapshot) throw new Error('unavailable');
     render(snapshot);

@@ -54,8 +54,8 @@
     <button id="clear-filters" type="button">Clear filters</button>
   </section>
   <section id="owned-section" data-view="mine" class="owned" aria-labelledby="owned-title" hidden>
-    <div class="section-header"><h2 id="owned-title">Sessions started by Plexiform</h2></div>
-    <p id="owned-status" class="muted" role="status" aria-live="polite">Plexiform can start its own session with any AI listed below and send it your messages. Existing sessions it did not start stay observation-only.</p>
+    <div class="section-header"><h2 id="owned-title">Sessions you can message</h2></div>
+    <p id="owned-status" class="muted" role="status" aria-live="polite">Plexiform can start its own session with any AI listed below and send it your messages. Existing sessions can be messaged through a supported connection you explicitly enable.</p>
     <fieldset class="picker">
       <legend>Start a session with</legend>
       <div id="provider-list" class="provider-list"></div>
@@ -65,11 +65,15 @@
       <div class="actions"><button id="start-session" type="button" disabled>Start session</button><button id="router-use" type="button" hidden></button></div>
     </fieldset>
     <fieldset id="existing-picker" class="picker" hidden>
-      <legend>Codex CLI sessions you started yourself</legend>
+      <legend>Sessions you started yourself</legend>
+      <label>Connection<select id="existing-provider"></select></label>
+      <button id="claude-channel-setup" type="button">Connect a Claude terminal</button>
+      <p id="claude-channel-note" class="reason" role="status" aria-live="polite"></p>
+      <pre id="claude-channel-command" hidden></pre>
       <p id="existing-reason" class="reason" role="status" aria-live="polite"></p>
       <p id="existing-precondition" class="muted"></p>
       <div class="actions"><button id="existing-find" type="button" disabled>Find sessions</button></div>
-      <ul id="existing-list" class="provider-list" aria-label="Codex CLI sessions on the shared daemon"></ul>
+      <ul id="existing-list" class="provider-list" aria-label="Sessions on the selected connection"></ul>
     </fieldset>
     <div id="owned"></div>
     <section id="ask-all" class="ask-all" aria-labelledby="ask-all-title" hidden>

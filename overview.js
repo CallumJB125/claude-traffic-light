@@ -230,7 +230,7 @@
   // Board keys are opaque; a stale-board refusal or a success tells us which sessions share a board.
   function markBoard(board, off) { for (const e of owned.values()) if (e.state && e.state.board === board && !!e.offBoard !== off) { e.offBoard = off; updateCard(e.state.session); } }
   const STATUSES = ['ready', 'working', 'ended'];
-  const DELIVERY = { sending: 'Sending…', acknowledged: 'Acknowledged by %', recorded: 'Recorded by %', responding: 'Responding…', completed: 'Completed', failed: 'Failed', interrupted: 'Interrupted', refused: 'Refused' };
+  const DELIVERY = { sending: 'Sending…', acknowledged: 'Acknowledged by %', recorded: 'Recorded by %', responding: 'Responding…', completed: 'Completed', failed: 'Failed', interrupted: 'Interrupted', refused: 'Refused', unconfirmed: 'Receipt unconfirmed — do not resend' };
   const REFUSAL = { invalid: 'Refused: the request was not valid', forbidden: 'Refused: not allowed from this page right now', stale: 'Refused: stale', busy: 'Refused: busy', unavailable: 'Unavailable' };
   const text = (value, max) => typeof value === 'string' && value.length <= max;
   const stamp = value => Number.isFinite(value) && value >= 0;
@@ -373,11 +373,15 @@
   }
   // ── Existing sessions on an opt-in provider (Codex CLI on the shared daemon):
   // never offered as "start", only found and attached, labelled unmanaged.
-  let existingCap = null, finding = false;
+  let existingCap = null, finding = false; const existingCaps = new Map();
   function renderExisting(cap) {
+    existingCaps.set(cap.provider,cap);
+    const picker=$('existing-provider');
+    if(!Array.from(picker.options).some(o=>o.value===cap.provider)){const option=node('option',cap.label);option.value=cap.provider;picker.append(option);}
+    if(picker.value!==cap.provider)return;
     existingCap = cap;
     $('existing-picker').hidden = false;
-    $('existing-reason').textContent = cap.available ? 'Available. Find the sessions running on the shared daemon, then choose one to message.' : cap.reason || 'Unavailable.';
+    $('existing-reason').textContent = cap.available ? 'Available. Find connected sessions, then choose one to message.' : cap.reason || 'Unavailable.';
     $('existing-precondition').textContent = text(cap.precondition, 600) ? cap.precondition : '';
     $('existing-find').disabled = finding || !cap.available;
     if (!cap.available) $('existing-list').replaceChildren();
@@ -397,7 +401,7 @@
       use.disabled = !!t.open;
       li.append(name, tag, use); return li;
     });
-    $('existing-list').replaceChildren(...(rows.length ? rows : [node('li', 'No Codex CLI sessions are running on the shared daemon.', 'muted')]));
+    $('existing-list').replaceChildren(...(rows.length ? rows : [node('li', 'No sessions are connected on this connection.', 'muted')]));
     $('existing-reason').textContent = `${rows.length} session${rows.length === 1 ? '' : 's'} found. Unmanaged: started outside Plexiform.`;
   }
   async function attachExisting(cap, handle, control) {
@@ -627,6 +631,13 @@
     $('owned-section').hidden = false;
     if (typeof ix.localModels === 'function') $('local-section').hidden = false;
     $('start-session').addEventListener('click', () => void launch(selectedProvider));
+    $('existing-provider').addEventListener('change',()=>{const cap=existingCaps.get($('existing-provider').value);$('existing-list').replaceChildren();if(cap)renderExisting(cap);});
+    $('claude-channel-setup').addEventListener('click',async()=>{
+      const button=$('claude-channel-setup');button.disabled=true;
+      let result;try{result=await ix.channelSetup();}catch{result=null;}finally{button.disabled=false;}
+      $('claude-channel-note').textContent=result?.ok===true?result.note:result?.error||'Could not prepare the terminal connection.';
+      $('claude-channel-command').hidden=result?.ok!==true;$('claude-channel-command').textContent=result?.ok===true?result.command:'';
+    });
     $('existing-find').addEventListener('click', () => void findExisting());
     $('router-text').addEventListener('input', renderHint);
     $('router-use').addEventListener('click', () => void launch($('router-use').dataset.provider, $('router-text').value.trim()));

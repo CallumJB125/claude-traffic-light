@@ -10,7 +10,7 @@ const T0 = 1_800_000_000_000;
 const SESSION = '10000000-0000-4000-8000-000000000001';
 const caps = (message) => ({ open: { enabled: false, label: 'Open', reason: 'No card.' }, message: { enabled: message, label: 'Message', reason: message ? '' : 'A current owned runner with messaging is required.' } });
 const work = (over = {}) => ({ id: 'w-1', handle: null, label: 'Session', provider: { id: 'codex', label: 'Codex', kind: 'integrated' }, device: { label: 'This device', local: true }, board: { label: 'Unassigned', kind: 'unknown' }, project: 'plexiform-owned-AbC123', status: 'Working', freshness: 'recent', age_ms: 2000, task: { status: 'unknown', title: 'Task not reported', key: null }, children: [], capabilities: caps(false), ...over });
-const owned = (over = {}) => ({ state: { session: SESSION, generation: 1, provider: { id: 'codex', label: 'Codex' }, ownership: 'plexiform-owned', status: 'ready', activeTurn: null, capabilities: { steer: true, interrupt: true }, deliveries: [{ text: 'private message' }], board: 'local', ...over }, leaf: 'plexiform-owned-AbC123' });
+const owned = (over = {}) => ({ state: { session: SESSION, generation: 1, provider: { id: 'codex', label: 'Codex' }, ownership: 'plexiform-owned', status: 'ready', activeTurn: null, capabilities: { steer: true, interrupt: true }, deliveries: [{ text: 'private message' }], board: 'local', ...over }, leaf: 'plexiform-owned-AbC123',nativeSessionId:'native-1',nativeTurnId:'turn-1' });
 const TEAM = { key: 'a'.repeat(32), name: 'Dev team', id: 'team-1' };
 const VIEWER = { id: 'u-me', name: 'Me' };
 const hubEntry = (over = {}) => ({ ref: 'r-1', team: { id: 'team-1', name: 'Dev team' }, owner: { id: 'u-bob', name: 'Bob' }, share: { explicit: true, scope: 'interact', expiresAt: null, revoked: false }, provider: { id: 'claude', label: 'Claude Code' }, device: { label: 'Bob’s Windows PC' }, card: { key: 'DEV-1', title: 'Fix login', edited_by: 'automation' }, task_title: 'automated title', state: 'working', observed_at: T0 - 1000, online: true, capabilities: { steer: false, interrupt: true }, children: [], ...over });
@@ -37,7 +37,7 @@ test('mine: an owned session and its own hook report are one entry; a shared own
   const shares = [{ session: SESSION, scope: 'watch', teamKey: TEAM.key, teamName: 'Dev team' }];
   const child = { id: 'c-1', label: 'Agent', status: 'Working', freshness: 'recent', age_ms: 1000, task: { status: 'tracked', title: 'Child work', key: null }, capabilities: caps(false) };
   const other = work({ id: 'w-2', project: 'elsewhere', provider: { id: 'gemini', label: 'Gemini', kind: 'integrated' } });
-  const entries = d.mine({ work: [work({ children: [child] }), other], owned: [owned()], shares });
+  const entries = d.mine({ work: [work({ children: [child] }), other], owned: [owned()], shares,meta:new Map([['w-1',{nativeSessionId:'native-1',nativeTurnId:'turn-1'}]]) });
   assert.equal(entries.length, 2, 'owned + unrelated observed session; the twin report folded in');
   const e = entries.find((x) => x.kind === 'owned');
   assert.deepEqual(e.provenance, ['owned', 'observed']);
@@ -178,4 +178,58 @@ test('viewer roles over real hub rows: watch-only shows no Send, interact keeps 
   assert.deepEqual(interact.interact, { kind: 'team', ref: interact.id });
   assert.equal(interact.capabilities.receive.available, true, 'Send kept for the interact role');
   assert.equal(interact.capabilities.receive.reason, '');
+});
+
+
+test('directory never joins different native sessions or old turns with matching folder names',()=>{
+ const d=createSessionDirectory({now:()=>T0});
+ for(const binding of [{nativeSessionId:'other',nativeTurnId:'turn-1'},{nativeSessionId:'native-1',nativeTurnId:'old-turn'},{}]){
+  const entries=d.mine({owned:[owned()],work:[work({task:{status:'tracked',title:'PRIVATE unrelated task'}})],meta:new Map([['w-1',binding]])});
+  assert.equal(entries.length,2);assert.equal(entries.find(e=>e.kind==='owned').task.title,'Task not reported');
+  assert.equal(JSON.stringify(entries).includes('native-1'),false);assert.equal(JSON.stringify(entries).includes('turn-1'),false);
+ }
+});
+test('owned reporting keeps human task and self-reported child provenance and independent clocks',()=>{
+ const d=createSessionDirectory({now:()=>T0});
+ const [e]=d.mine({owned:[owned({reporting:{task:{title:'Human task',source:'human',observed_at:T0-1000},children:[{ref:'private-child',name:'Reviewer',state:'working',task_title:'Review',source:'self-reported',observed_at:T0-100000}]} })]});
+ assert.equal(e.task.source,'human');assert.equal(e.children[0].freshness,'stale');assert.equal(e.children[0].selfReported.state,'Working');assert.equal(JSON.stringify(e).includes('private-child'),false);
+});
+
+
+test('folding a native-bound observation preserves a human title over reported work',()=>{
+ const d=createSessionDirectory({now:()=>T0}),entries=d.mine({owned:[owned({reporting:{task:{title:'Human title',source:'human',observed_at:T0-1000},children:[]}})],work:[work({task:{status:'tracked',title:'Agent guess'}})],meta:new Map([['w-1',{nativeSessionId:'native-1',nativeTurnId:'turn-1'}]])});
+ assert.equal(entries.length,1);assert.deepEqual(entries[0].task,{title:'Human title',source:'human'});
+});
+
+
+test('stale input reports keep last-reported context without renewed input or freshness',()=>{
+ const d=createSessionDirectory({now:()=>T0});const [e]=d.mine({owned:[owned({input_needed:true,reporting:{input:{needed:true,observed_at:T0-90001,source:'observed'},children:[]}})]});
+ assert.equal(e.input,false);assert.equal(e.state,'Last reported: Needs input');assert.equal(e.freshness,'stale');assert.equal(e.ageMs,90001);
+ const {entries}=d.team({team:TEAM,viewer:VIEWER,member:true,hubEntries:[hubEntry({input_needed:false,input_reported_needed:true,input_observed_at:T0-90001})]});assert.equal(entries[0].input,false);assert.equal(entries[0].freshness,'stale');assert.equal(entries[0].state,'Last reported: Needs input');
+});
+
+
+test('authoritative ended state wins over prior fresh or stale input reports',()=>{
+ const d=createSessionDirectory({now:()=>T0});for(const at of [T0-1000,T0-90001]){
+  const [e]=d.mine({owned:[owned({status:'ended',input_needed:true,reporting:{input:{needed:true,observed_at:at},children:[]}})]});assert.equal(e.state,'Ended');assert.equal(e.input,false);
+  const {entries}=d.team({team:TEAM,viewer:VIEWER,member:true,hubEntries:[hubEntry({state:'ended',input_needed:true,input_reported_needed:true,input_observed_at:at})]});assert.equal(entries[0].state,'Ended');assert.equal(entries[0].input,false);
+ }
+});
+
+test('team board runs include own unbound runs, dedupe exact managed identity and expose inbox semantics without raw routes', () => {
+  const d = createSessionDirectory({ now: () => T0 });
+  const run = '20000000-0000-4000-8000-000000000001';
+  const peer = hubEntry({ kind: 'board-run', boardRunId: run, messageContract: 'task-inbox', owner: { id: VIEWER.id, name: 'Me' } });
+  let model = d.team({ team: TEAM, viewer: VIEWER, member: true, hubEntries: [peer] });
+  assert.equal(model.entries.length, 1);
+  assert.equal(model.entries[0].owner.self, true);
+  assert.equal(model.entries[0].messageContract, 'task-inbox');
+  assert.match(model.entries[0].notice, /Queued does not mean received or acknowledged/);
+  assert.deepEqual(model.entries[0].provenance, ['board']);
+  assert.ok(!JSON.stringify(model.entries).includes(run), 'raw run routes remain main-only');
+  assert.equal(d.team({ team: TEAM, viewer: VIEWER, member: false, hubEntries: [peer] }).entries.length, 0);
+  const personal = d.mine({ work: [work({ board: { label: 'Dev', kind: 'team' }, capabilities: caps(true) })], meta: new Map([['w-1', { kind: 'board', boardRunId: run, teamKey: TEAM.key, teamName: TEAM.name }]]) });
+  model = d.team({ team: TEAM, viewer: VIEWER, member: true, personal, hubEntries: [peer, hubEntry({ ref: 'different', kind: 'board-run', boardRunId: `${run}-other`, messageContract: 'task-inbox', owner: { id: VIEWER.id, name: 'Me' } })] });
+  assert.equal(model.entries.length, 2, 'only exact own managed run is deduplicated');
+  assert.ok(!JSON.stringify(model.entries).includes(run));
 });

@@ -38,14 +38,14 @@ const FIXTURE = {
   ],
 };
 
-function stack({ teamHub = createFakeTeamHub(structuredClone(FIXTURE)), observed = true, shares = [] } = {}) {
+function stack({ teamHub = createFakeTeamHub(structuredClone(FIXTURE)), observed = true, shares = [], channelAdapter = null, prepareChannel = null } = {}) {
   const handlers = new Map(), listeners = new Map(), results = [];
   const win = { isDestroyed: () => false, isVisible: () => true, isMinimized: () => false, isFocused: () => ctx.foreground };
   const contents = { id: 9, isDestroyed: () => false, mainFrame: {}, send: (ch, ...a) => { for (const fn of listeners.get(ch) ?? []) fn({}, ...structuredClone(a)); } };
   const ctx = { window: win, contents, generation: 1, document: 1, foreground: true };
   const buddy = { overviewContext: () => (ctx.foreground ? ctx : null), overviewReadContext: () => ctx };
   const adapter = memAdapter();
-  const interaction = createInteractionMain({ context: () => (ctx.foreground ? ctx : null), readContext: () => ctx, adapters: { codex: adapter }, owned: null, localModels: null, workspace: (id) => `/private/tmp/plexiform-owned-${id.slice(-6)}`, currentBoard: () => 'local' });
+  const interaction = createInteractionMain({ context: () => (ctx.foreground ? ctx : null), readContext: () => ctx, adapters: { codex: adapter,...(channelAdapter?{'claude-channel':channelAdapter}:{}) },prepareChannel, owned: null, localModels: null, workspace: (id) => `/private/tmp/plexiform-owned-${id.slice(-6)}`, currentBoard: () => 'local' });
   interaction.register({ handle: (ch, fn) => handlers.set(ch, fn) });
   const now = () => Date.now();
   const raw = [];
@@ -121,7 +121,8 @@ test('My sessions: a session shared with a team is one row with a team badge; it
     s.$('start-session').click(); await tick();
     const [{ state }] = s.interaction.listOwned();
     shares.push({ session: state.session, team: { id: 't-dev', name: 'Dev team' }, scope: 'interact' });
-    s.raw.push({ sessionId: 'thread-twin', source: 'codex', signal: 'tool-use', updatedAt: new Date().toISOString(), cwd: `/private/tmp/plexiform-owned-${state.session.slice(-6)}` });
+    await s.interaction.hub.send({session:state.session,generation:state.generation,board:state.board,text:'safe task'},'overview:9:1');
+    s.raw.push({ sessionId: 'target-1',codexTurnId:'turn-1', source: 'codex', signal: 'tool-use', updatedAt: new Date().toISOString(), cwd: `/private/tmp/plexiform-owned-${state.session.slice(-6)}` });
     await s.poll();
     const owned = s.row('mine-list', /Started by Plexiform/);
     assert.equal(s.rows('mine-list').length, 2, 'owned (with twin folded) + the unrelated observed session');
@@ -230,5 +231,43 @@ test('Team sessions without a team hub directory: own team work only, with an ho
     assert.match(s.$('team-notice').textContent, /Teammates' shared sessions appear once your team hub's shared-session directory is connected/);
     assert.equal(s.rows('team-list').length, 1);
     assert.match(s.rows('team-list')[0].textContent, /Started by Plexiform/);
+  } finally { s.close(); }
+});
+
+
+test('Overview can prepare an explicit Claude channel and select it without replacing another connection',async()=>{
+ const ee=new EventEmitter();let prepared=0;
+ const channel={label:'Claude Code terminal channel',capabilities:{existingSessions:true,newTurn:true,steer:false,interrupt:false,ack:'channel-accept-tool',echo:'channel-accept-exact-text'},alive:()=>true,discover:async()=>[{id:'private-terminal-target',title:'Synthetic terminal',project:'/tmp/synthetic',status:'idle'}],attach:async({target})=>({target,status:'idle',permissions:{approvalPolicy:'unknown',sandbox:'unknown'}}),release:async()=>true,stop(){},on:f=>{ee.on('e',f);return()=>ee.off('e',f);}};
+ const s=stack({channelAdapter:channel,prepareChannel:async({fresh})=>{prepared++;return {ok:fresh(),status:'prepared',command:"claude --mcp-config '/synthetic/private.json'",note:'Approve Claude channel confirmation yourself.'};}});
+ try{
+  await s.ready();s.$('claude-channel-setup').click();await tick();assert.equal(prepared,1);assert.match(s.$('claude-channel-command').textContent,/private.json/);assert.match(s.$('claude-channel-note').textContent,/yourself/);
+  s.$('existing-provider').value='claude-channel';s.$('existing-provider').dispatchEvent(new (s.$('existing-provider').ownerDocument.defaultView.Event)('change'));s.$('existing-find').click();await tick();
+  assert.match(s.$('existing-list').textContent,/Synthetic terminal/);assert.equal(s.$('existing-list').textContent.includes('private-terminal-target'),false);
+  const use=s.$('existing-list').querySelector('button');assert.ok(use);use.click();await tick();assert.equal(s.interaction.listOwned()[0].state.provider.id,'claude-channel');
+ }finally{s.close();}
+});
+
+test('board-run team composer distinguishes task-inbox queuing from agent acknowledgement', async () => {
+  const base = createFakeTeamHub(structuredClone(FIXTURE));
+  const teamHub = { ...base, sessions: async (...args) => Object.assign((await base.sessions(...args)).map((row) => ({ ...row, kind: 'board-run', messageContract: 'task-inbox' })), { partial: true }) };
+  const s = stack({ teamHub, observed: false });
+  try {
+    await s.ready(); await s.team();
+    const row = s.row('team-list', /Fix login/);
+    assert.ok(row); assert.match(row.textContent, /Queued does not mean received or acknowledged/);
+    assert.match(s.$('team-status').textContent, /Some activity is unavailable/);
+    row.querySelector('.actions button').click(); await tick();
+    assert.match(row.querySelector('.composer').textContent, /Sending does not resume a paused run/);
+    row.querySelector('textarea').value = 'Read this task message';
+    row.querySelector('.composer button').click(); await tick();
+    assert.match(row.querySelector('.composer').textContent, /agent has not acknowledged it yet/);
+    s.teamHub.send = async () => ({ ok: false, status: 'unconfirmed', error: 'The task inbox may have queued this message. Do not resend automatically.' });
+    const current = (await s.api.directory({ view: 'team', team: null })).entries.find((e) => /Fix login/.test(e.task.title));
+    assert.equal((await s.api.teamMessage({ id: current.id, text: 'uncertain delivery' })).status, 'unconfirmed');
+    row.querySelector('textarea').value = 'unknown receipt';
+    row.querySelector('.composer button').click(); await tick();
+    assert.match(row.querySelector('.composer').textContent, /Receipt unconfirmed/);
+    assert.doesNotMatch(row.querySelector('.composer').textContent, /Not sent/);
+    assert.match(row.querySelector('.composer').textContent, /Do not resend automatically/);
   } finally { s.close(); }
 });

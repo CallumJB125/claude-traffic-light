@@ -44,6 +44,7 @@ contextBridge.exposeInMainWorld('overviewApi', {
   // decided in main; requests here carry only primitive, closed fields.
   interaction: {
     capabilities: () => ipcRenderer.invoke('interaction:capabilities'),
+    channelSetup: () => ipcRenderer.invoke('interaction:channel-setup'),
     list: () => ipcRenderer.invoke('interaction:list'),
     state: request => closed(request, ['session']) && uuid(request.session) ? ipcRenderer.invoke('interaction:state', { session: request.session }) : Promise.resolve(null),
     // Any listed provider id (codex, claude, gemini, local-<endpoint>-<hash>); main decides if it exists.

@@ -39,5 +39,15 @@ test('only one owned native modal and actual foreground/current view can return 
 });
 test('same-URL document retirement invalidates pending native approval even with retained mainFrame',async()=>{
  const f=fixture(),frame=f.wc.mainFrame;let release;const before=f.api.setupsContext().generation,pending=f.api.setupsConfirm(()=>new Promise(r=>release=r));f.context.retireDocument();assert.equal(f.wc.mainFrame,frame);assert.ok(f.api.setupsContext().generation>before);release({approved:true});assert.equal(await pending,null);
- assert.match(source,/v\.webContents\.on\('did-start-navigation',d=>\{if\(d\.isMainFrame\)retireSetupDocument\(\);\}\)/);
+ const registration=source.slice(source.indexOf("      if(['setups','overview'].includes(page.id)){"),source.indexOf("      v.webContents.on('did-finish-load'"));
+ for(const pageId of ['setups','overview']){
+  const listeners=new Map();let setupRetired=0,overviewRetired=0;
+  const ctx={page:{id:pageId},v:{webContents:{on:(n,fn)=>listeners.set(n,fn),once:(n,fn)=>listeners.set(n,fn)}},overviewDocument:0,retireSetupDocument:()=>setupRetired++,onOverviewRetired:()=>overviewRetired++};
+  vm.runInNewContext(registration,ctx);
+  const navigation=listeners.get('did-start-navigation');assert.equal(typeof navigation,'function');
+  navigation({isMainFrame:false,isSameDocument:false});navigation({isMainFrame:true,isSameDocument:true});assert.equal(setupRetired,0);
+  navigation({isMainFrame:true,isSameDocument:false});assert.equal(setupRetired,1,'same-URL document replacement retires grants');
+  listeners.get('render-process-gone')();listeners.get('destroyed')();assert.equal(setupRetired,3);
+  assert.equal(overviewRetired,pageId==='overview'?3:0);assert.equal(ctx.overviewDocument,pageId==='overview'?3:0);
+ }
 });

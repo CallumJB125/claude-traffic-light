@@ -31,6 +31,7 @@ import { Planning } from './planning.js';
 import { Setups } from './setups.js';
 import { SETUP_BODY_MAX } from '../shared/setups.js';
 import { myDay } from './my-day.js';
+import { teamSessionDirectory, guardTeamSessionDirectory } from './team-session-directory.js';
 import { readOwnership, guardOwnership } from './ownership-view.js';
 import { createRemoteHttp } from './remote/http.js';
 import { strictJson } from './remote/validation.js';
@@ -495,6 +496,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   route('POST', '/api/boards/:board_id/repos', ({ member, params, body }) => api.addBoardRepo(member, params.board_id, body));
   route('GET', '/api/boards/:board_id/presence', ({ member, params }) => { api.boardFor(member, params.board_id); return hub.presence.view(params.board_id); }, { limit: 'presence_member' });
   route('GET', '/api/my-day', ({ member, ident }) => myDay(hub, ident ? { userId: ident.user.id, cred: ident.cred } : { member }), { auth: config.auth === 'accounts' ? 'user' : 'member', replay: false });
+  route('GET', '/api/team-session-directory', ({ member, ident }) => teamSessionDirectory(hub, member, ident?.cred ?? null), { replay: false, limit: 'communication_read_member', responseGuard: (_ctx, out) => guardTeamSessionDirectory(hub, out) });
   route('GET', '/api/cards/:card_id', ({ member, params, query }) => selectedContext(hub, api.detail(member, params.card_id), communicationOptions(query).boardIds));
   route('PATCH', '/api/cards/:card_id/planning', ({ member, params, body, ident }) => planning.patch(member, params.card_id, body, ident?.cred ?? null), { replay: false, maxBody: 4096 });
   if(config.auth === 'accounts') {

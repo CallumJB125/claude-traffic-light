@@ -231,6 +231,7 @@ const DEFAULT_CONFIG = {
   remoteTailscale: false,
   // Remote interaction host: off until ticked in Preferences.
   remoteInteractionHost: false,
+  teamSessionSharing: true,
   // A role reset the team hub never acknowledged ({origin, userId}; no token): retried at start.
   remoteInteractionResetPending: null,
   // Existing Codex CLI sessions on Codex's shared daemon (src/codex-daemon.js): off until ticked in Preferences.
@@ -1353,7 +1354,7 @@ function getBuddy() {
   if (!devMockReady) throw new Error('the dev mock accounts hub is still starting');
   if (!buddyWin) {
     buddyWin = createBuddyWindow({
-      onOverviewRetired: () => { InteractionMain.retireDocuments().catch(() => {}); },
+      onOverviewRetired: () => { InteractionMain.retireDocuments().catch(() => {}); retireClaudeChannels(); },
       openWindow: (which) => {
         if (which === 'lights') createLightsWindow();
         else if (which === 'settings') createSettingsWindow();
@@ -1412,7 +1413,7 @@ const OverviewMain=require('./src/overview-main').createOverviewMain({
   openManaged:async(_id,fresh)=>{if(!fresh())return false;openBuddy('tasks');return true;},
   messageManaged:(id,text,fresh)=>fresh()?getTasks().act({id,action:'message',payload:{body:text}},0,fresh):Promise.resolve({ok:false}),
   // Session directory (My sessions / Team sessions); see src/session-directory.js.
-  owned:()=>InteractionMain.listOwned(),
+  owned:()=>{InteractionMain.reportHooks(aggregateState().sessions||[]);return InteractionMain.listOwned();},
   // hostSync (declared below) is only read when Overview asks, after startup.
   shares:()=>{const h=hostSync.host(),origin=hostSync.origin();return h&&origin?{origin,list:h.shared()}:null;},
   hubTeams:async()=>{const h=hostSync.host(),origin=hostSync.origin();if(!h||!origin)return null;if(overviewTeams.host===h&&Date.now()-overviewTeams.at<30_000)return overviewTeams.value;
@@ -1432,11 +1433,37 @@ const CompactionLedger=require('./src/compaction-stats').createLedger({file:path
 // Existing Codex CLI sessions on Codex's shared daemon: only after the
 // Preferences opt-in, only while the human runs the daemon (never started here).
 const CodexDaemon=require('./src/codex-daemon').createCodexDaemon({bin:codexBin,enabled:()=>loadConfig().codexDaemonMessaging===true,clientVersion:app.getVersion()});
+const ClaudeChannel=require('./src/claude-channel-session');
+const claudeChannel=ClaudeChannel.createClaudeChannelSession();
+const channelBoards=new Map(),channelFolders=new Set();
+function retireClaudeChannels(){for(const target of channelBoards.keys())claudeChannel.revoke(target);channelBoards.clear();for(const folder of channelFolders)try{fs.rmSync(folder,{recursive:true,force:true});}catch{}channelFolders.clear();}
+const attachClaudeChannel=claudeChannel.attach.bind(claudeChannel);
+claudeChannel.attach=async args=>{
+  if(channelBoards.get(args.target)!==buddyWin?.status?.().workspace)throw new Error('Return to the workspace where this terminal connection was prepared.');
+  return attachClaudeChannel(args);
+};
 const InteractionMain=require('./src/interaction-main').createInteractionMain({
   compaction:Compaction.createSessionCompactor({settings:()=>loadConfig().compaction,ledger:CompactionLedger}),
   context:()=>buddyWin?.overviewContext?.()??null,
   readContext:()=>buddyWin?.overviewReadContext?.()??null,
-  adapters:{codex:Object.assign(CodexAppServer.createCodexAppServer({bin:codexBin,clientVersion:app.getVersion()}),codexBin?{}:{available:false,reason:'Codex CLI not found'}),'codex-daemon':CodexDaemon},
+  adapters:{codex:Object.assign(CodexAppServer.createCodexAppServer({bin:codexBin,clientVersion:app.getVersion()}),codexBin?{}:{available:false,reason:'Codex CLI not found'}),'codex-daemon':CodexDaemon,'claude-channel':claudeChannel},
+  prepareChannel:async({board,fresh})=>{
+    if(process.platform==='win32')return {ok:false,status:'unavailable',error:'Terminal channel setup requires a reviewed Windows private-file publisher.'};
+    const choice=await dialog.showOpenDialog(buddyWin.overviewContext().window,{title:'Choose the Claude terminal project',properties:['openDirectory']});
+    if(choice.canceled||choice.filePaths.length!==1||!fresh())return {ok:false,status:'stale',error:'Setup cancelled or workspace changed.'};
+    const cwd=fs.realpathSync(choice.filePaths[0]);await claudeChannel.start();
+    if(!fresh())return {ok:false,status:'stale',error:'The Overview changed during setup.'};
+    const grant=claudeChannel.createGrant({cwd,title:path.basename(cwd).slice(0,100)||'Claude terminal'});
+    let folder;
+    try{
+      folder=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'plexiform-channel-')));fs.chmodSync(folder,0o700);channelFolders.add(folder);
+      const recipe=ClaudeChannel.writeClaudeChannelConfig({grant,directory:folder,command:process.execPath,args:[path.join(app.getAppPath(),'src','claude-channel-server.js')],electronRunAsNode:true});
+      if(!fresh()){claudeChannel.revoke(grant.target);fs.rmSync(folder,{recursive:true,force:true});channelFolders.delete(folder);return {ok:false,status:'stale',error:'The Overview changed during setup.'};}
+      channelBoards.set(grant.target,board);
+      const quote=value=>"'"+value.replaceAll("'","'\\''")+"'";
+      return {ok:true,status:'prepared',command:'claude '+recipe.claudeArgs.map(quote).join(' '),note:'Run this in the chosen project. Claude shows the channel research-preview confirmation; approve it yourself. Then select Claude terminal channel and Find sessions. To connect prior work, add --resume and choose it in Claude. Messages retain that terminal’s permissions and team messages use your quota.'};
+    }catch{claudeChannel.revoke(grant.target);if(folder){fs.rmSync(folder,{recursive:true,force:true});channelFolders.delete(folder);}return {ok:false,status:'unavailable',error:'Could not prepare a private terminal configuration.'};}
+  },
   // Empty private folder outside Plexiform's data directory.
   workspace:()=>fs.mkdtempSync(path.join(os.tmpdir(),'plexiform-owned-')),
   // The active workspace (My board or a team board) the sidebar shows.
@@ -1447,6 +1474,7 @@ const InteractionMain=require('./src/interaction-main').createInteractionMain({
 });
 InteractionMain.register(ipcMain);
 app.on('will-quit',()=>InteractionMain.close());
+app.on('will-quit',retireClaudeChannels);
 ipcMain.handle('compaction-stats',e=>settingsOnly(e)?{...CompactionLedger.summary(),settings:loadConfig().compaction}:null);
 // Remote interaction host (src/remote-interaction.js): OFF unless the
 // "Let my other devices use sessions Plexiform started on this Mac"
@@ -1458,7 +1486,7 @@ ipcMain.handle('compaction-stats',e=>settingsOnly(e)?{...CompactionLedger.summar
 const RemoteInteraction=require('./src/remote-interaction');
 const SessionMessaging=require('./src/session-messaging');
 const hostSync=require('./src/interaction-host-sync').createInteractionHostSync({
-  want:()=>loadConfig().remoteInteractionHost===true&&devMockReady,
+  want:()=>devMockReady&&(loadConfig().remoteInteractionHost===true||(loadConfig().teamSessionSharing!==false&&getBuddy().nativeBoardWorkspaces().length>0)),
   identity:()=>devMockReady?getBuddy().interactionHostIdentity?.()??null:null,
   createHost:id=>RemoteInteraction.createRemoteInteractionHost({
     userId:id.userId,
@@ -1488,11 +1516,24 @@ const hostSync=require('./src/interaction-host-sync').createInteractionHostSync(
 function syncInteractionHost(){hostSync.sync();}
 app.on('will-quit',()=>hostSync.close());
 // While anything is shared, refresh who has access (members who joined or left) and drop shares a team admin ended.
-setInterval(()=>{const h=hostSync.host();if(h?.shared().length)h.listShares().catch(()=>{});},60_000).unref?.();
+const TeamSessionSharing=require('./src/team-session-sharing').createTeamSessionSharing({
+  host:()=>loadConfig().teamSessionSharing===false?null:hostSync.host(),origin:()=>hostSync.origin(),
+  sessions:()=>InteractionMain.listOwned(),
+  association:key=>{
+    if(typeof key!=='string')return null;
+    for(const w of getBuddy().nativeBoardWorkspaces())if(require('./src/interaction-main').boardKey(w.id)===key){
+      const c=getBuddy().nativeBoardContext(w.id);return c?{origin:c.workspace.hub,team:c.workspace.teamId}:null;
+    }
+    return null;
+  },onChange:()=>OverviewMain.directoryChanged(),
+});
+let manualShareRefresh=null;
+setInterval(()=>{InteractionMain.reportHooks(aggregateState().sessions||[]);if(loadConfig().teamSessionSharing===false){const h=hostSync.host();if(h?.shared().length&&!manualShareRefresh)manualShareRefresh=h.listShares().catch(()=>{}).finally(()=>{manualShareRefresh=null;});}TeamSessionSharing.sync().catch(()=>{});},5000).unref?.();
+app.on('will-quit',()=>TeamSessionSharing.stop());
 const INTERACTION_HOST_LINES={connecting:'Connecting…',connected:'On: your other signed-in devices can use sessions started from them on this Mac.',retrying:'Can\'t reach your team hub; retrying.','signed-out':'Stopped: this Mac is signed out or was removed from your account.',replaced:'Stopped: another connection took over this Mac\'s sign-in. If that wasn\'t you, remove this device in Account and sign in again.',refused:'Stopped: the hub named a different account.',held:'Stopped: another connection is using this Mac\'s sign-in, so your devices can\'t reach it. If that wasn\'t you, remove this Mac from your account (Account → Devices) and sign in again.'};
 ipcMain.handle('interaction-host-status',e=>{
   if(!settingsOnly(e))return null;
-  if(loadConfig().remoteInteractionHost!==true)return 'Off.';
+  if(loadConfig().remoteInteractionHost!==true&&loadConfig().teamSessionSharing===false)return 'Off.';
   const host=hostSync.host();
   if(!host)return 'Sign in to a team hub to turn this on.';
   const st=host.status();

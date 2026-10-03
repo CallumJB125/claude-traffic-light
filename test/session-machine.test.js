@@ -203,7 +203,7 @@ const PRESENT_CASES = [
   ['shown', { signal: 'limit-hit', updatedAt: iso(-100), agents: working(-100) }, {}, 'limit-hit', 'hook signal'],
   ['held', { state: 'amber', updatedAt: iso(-100) }, {}, 'tool-use', 'hysteresis-held'],
   ['shown', { state: 'amber', updatedAt: iso(-5000) }, {}, 'permission-ask', 'hook signal'],
-  ['shown', { signal: 'tool-use' }, {}, 'tool-use', 'hook signal'],
+  ['stale', { signal: 'tool-use' }, {}, 'tool-use', 'hook signal'],
 ];
 
 test('reader: the presentation rules are the ones the doc lists, in order', () => {
@@ -259,4 +259,39 @@ test('reader: a hook subagent quiet past AGENT_QUIET_MS reads stale, not working
 test('docs/state-machine.md is generated from the table (run node scripts/state-machine-doc.js)', () => {
   assert.equal(fs.readFileSync(Doc.OUT, 'utf8'), Doc.render());
   assert.ok(Doc.render().includes(M.mermaid()));
+});
+
+// Regression: invalid clocks and unknown agent states cannot fabricate activity.
+test('reader: unknown or future clocks stay offline until a real fresh event', () => {
+  for (const updatedAt of [undefined, null, 'bad', iso(1), 123]) {
+    const result = M.classify({ signal: 'tool-use', updatedAt, agents: working(0) }, CTX);
+    assert.equal(result.live, false);
+    assert.equal(result.confidence, 'unknown');
+  }
+  assert.equal(M.classify({ signal: 'tool-use', updatedAt: iso(0) }, CTX).live, true);
+});
+test('reader: unknown child states and malformed child heartbeats never promote a stopped turn', () => {
+  for (const status of [undefined, 'unexpected', {}, null]) {
+    assert.equal(M.classify({ signal: 'stop', updatedAt: iso(0), agents: [{ status, since: iso(0) }] }, CTX).presented, 'stop');
+  }
+  for (const since of [undefined, 'bad', iso(1)]) {
+    const result = M.classify({ signal: 'stop', updatedAt: iso(0), agents: [{ source: 'hook', status: 'working', since }] }, CTX);
+    assert.equal(result.presented, 'stop');
+    assert.equal(result.session.agents[0].status, 'stale');
+  }
+});
+test('Claude correlation overflow remains input-needed until an explicit turn boundary', () => {
+  let prev = {};
+  for (let i = 0; i < 17; i++) {
+    const r = M.reduceClaudeInputs(prev, { signal: 'permission-ask', askKind: 'question', toolUseId: `q-${i}`, tool: 'AskUserQuestion' }, iso(0));
+    prev = { claudeInputRequests: r.requests, claudeInputOverflow: r.overflow };
+  }
+  assert.equal(prev.claudeInputRequests.length, 16); assert.equal(M.claudeInputPending(prev), true);
+  for (let i = 0; i < 17; i++) {
+    const r = M.reduceClaudeInputs(prev, { signal: 'tool-done', toolUseId: `q-${i}` }, iso(0));
+    prev = { claudeInputRequests: r.requests, claudeInputOverflow: r.overflow };
+  }
+  assert.equal(M.claudeInputPending(prev), true, 'overflow cannot establish that every ask ended');
+  const ended = M.reduceClaudeInputs(prev, { signal: 'session-end' }, iso(0));
+  assert.deepEqual(ended, { requests: [], overflow: false, answered: false });
 });

@@ -52,6 +52,7 @@ function capabilities(values) {
 
 function createSessionDirectory({ now = Date.now, staleMs = STALE_MS, secret = crypto.randomBytes(32) } = {}) {
   const seen = new Map();
+  const workBoardRuns = new Map(); // exact main-only own run identity; never projected
   const publicId = (parts) => crypto.createHmac('sha256', secret).update(JSON.stringify(parts)).digest('hex').slice(0, 40);
   // Monotonic receiver time per internal key; future times are refused.
   function observe(key, at, time) {
@@ -86,7 +87,7 @@ function createSessionDirectory({ now = Date.now, staleMs = STALE_MS, secret = c
       card: row.task?.status === 'tracked' && kind !== 'reported' ? { key: str(row.task.key, 80) || null, title: str(row.task.title, 200) } : null,
       provider, device: { label: str(row.device?.label, 80) || 'Unknown device', local: row.device?.local === true }, project: str(row.project, 100) || null,
       task: taskOf({ human: m.humanTitle, card: row.task?.status === 'tracked' && kind !== 'reported' ? row.task.title : null, reported: row.task?.status === 'tracked' && kind === 'reported' ? row.task.title : null }),
-      state, input: state === 'Waiting on you', ...t, selfReported: null,
+      state, input: state === 'Waiting on you', ...t, nativeSessionId:m.nativeSessionId,nativeTurnId:m.nativeTurnId,selfReported: null,
       provenance: kind === 'reported' ? ['observed'] : kind === 'board' ? ['board'] : ['plexiform-tasks'],
       capabilities: capabilities({
         discovery: cap(true), telemetry: cap(true),
@@ -118,33 +119,44 @@ function createSessionDirectory({ now = Date.now, staleMs = STALE_MS, secret = c
 
   // owned: interaction hub states for the current Overview document (Plexiform-owned,
   // or an existing codex-daemon session attached there, which is never shared).
-  function fromOwned({ state: s, leaf = null }, shares, time) {
+  function fromOwned({ state: s, leaf = null, nativeSessionId = null, nativeTurnId = null }, shares, time) {
     const existing = s.ownership !== 'plexiform-owned';
-    const mine = existing ? [] : (Array.isArray(shares) ? shares : []).filter((x) => object(x) && x.session === s.session);
+    const mine = existing && s.provider?.id !== 'claude-channel' ? [] : (Array.isArray(shares) ? shares : []).filter((x) => object(x) && x.session === s.session);
     const interact = mine.filter((x) => x.scope === 'interact');
     const label = str(s.provider?.label, 120) || 'AI';
     const status = s.status === 'working' ? 'Working' : s.status === 'ended' ? 'Ended' : s.status === 'compacting' ? 'Compacting' : 'Ready';
     const live = s.status !== 'ended';
+    const inputTime = freshness(stamp(s.reporting?.input?.observed_at),time);
+    const staleInput = live && s.reporting?.input?.needed === true && inputTime.freshness !== 'recent';
     // Main holds the live provider process: this read is the observation.
     const t = timing(`owned:${s.session}`, live ? time : null, time);
-    return {
+    const entry = {
       id: publicId(['owned', s.session]), kind: 'owned', owner: { name: 'You', self: true, initials: 'Y' },
       scope: mine.length ? 'team' : 'personal', teams: teamBadges(mine.map((x) => ({ key: x.teamKey, name: x.teamName }))),
       board: { label: existing ? 'Started outside Plexiform' : 'Started by Plexiform', kind: 'personal' }, card: null,
       provider: { id: str(s.provider?.id, 80) || 'unknown', label, kind: /^local-/.test(String(s.provider?.id)) ? 'local' : 'integrated' },
       device: { label: 'This device', local: true }, project: null,
-      task: taskOf({}), state: status, input: false, ...t, selfReported: null, provenance: ['owned'],
+      task: taskOf({ reported: s.reporting?.task?.title }), state: staleInput ? 'Last reported: Needs input' : live && s.input_needed === true ? 'Needs input' : status, input: live && !staleInput && s.input_needed === true, ...t, selfReported: null, provenance: ['owned'],
       capabilities: capabilities({
         discovery: cap(true), telemetry: cap(true),
-        taskReporting: cap(false, 'Sessions Plexiform starts do not report a board task yet.'),
+        taskReporting: cap(!!s.reporting?.task?.title, 'No task has been reported for this session.'),
         receive: cap(live, 'This session has ended.'), reply: cap(live, 'This session has ended.'),
         resume: cap(false, 'Plexiform does not reattach to a session after it ends or after a restart.'),
         steer: cap(live && s.capabilities?.steer === true, live ? `${label} does not offer steering of a running turn.` : 'This session has ended.'),
         interrupt: cap(live && s.capabilities?.interrupt === true, live ? `${label} does not offer interrupting a turn.` : 'This session has ended.'),
         remoteControl: cap(live && interact.length > 0, existing ? 'A session started outside Plexiform is never shared with a team.' : mine.length ? 'Shared to watch only.' : 'Not shared. Use Share… on its card to let a team watch or send.'),
       }),
-      interact: { kind: 'owned', ref: s.session }, children: [], leaf: typeof leaf === 'string' ? leaf : null,
+      interact: { kind: 'owned', ref: s.session }, children: [], nativeSessionId,nativeTurnId,leaf: typeof leaf === 'string' ? leaf : null,
     };
+    for (const c of (Array.isArray(s.reporting?.children) ? s.reporting.children : []).slice(0, MAX_CHILDREN)) {
+      if (!object(c) || typeof c.ref !== 'string') continue;
+      const ct = timing(`owned-child:${s.session}:${c.ref}`, c.observed_at, time);
+      const childState = Object.hasOwn(TEAM_STATES, c.state) ? TEAM_STATES[c.state] : 'Unknown';
+      entry.children.push({ id: publicId(['owned-child', s.session, c.ref]), parent: entry.id, label: str(c.name,80)||'Agent', state: childState, input: childState==='Needs input', task: taskOf({reported:c.task_title}), ...ct, reporting:{source:str(c.source,40),observedAt:c.observed_at}, selfReported:c.source==='self-reported'?{state:childState,at:c.observed_at}:null,provenance:['owned',...(c.source==='self-reported'?['self-reported']:[])], capabilities: capabilities({ discovery:cap(true), telemetry:cap(true), taskReporting:cap(!!c.task_title,'Task not reported.') }) });
+    }
+    if(s.reporting?.task){entry.reporting={source:str(s.reporting.task.source,40),observedAt:s.reporting.task.observed_at};if(s.reporting.task.source==='human')entry.task.source='human';}
+    if(staleInput)Object.assign(entry,inputTime,{observedAt:Number.isFinite(stamp(s.reporting.input.observed_at))?stamp(s.reporting.input.observed_at):null});
+    return entry;
   }
 
   // An observed hook report from an owned session's own workspace is the same
@@ -152,28 +164,35 @@ function createSessionDirectory({ now = Date.now, staleMs = STALE_MS, secret = c
   function fold(owned, observed) {
     owned.provenance = ['owned', 'observed'];
     if (observed.observedAt !== null && (owned.observedAt === null || observed.observedAt > owned.observedAt)) Object.assign(owned, { observedAt: observed.observedAt, ageMs: observed.ageMs, freshness: observed.freshness });
-    owned.children = observed.children.map((c) => ({ ...c, parent: owned.id }));
-    if (observed.task.source !== 'unknown') owned.task = observed.task;
-    if (observed.input) { owned.input = true; owned.state = observed.state; }
+    if (!owned.children.length) owned.children = observed.children.map((c) => ({ ...c, parent: owned.id }));
+    const rank = { unknown: 0, reported: 1, board: 2, human: 3 };
+    if ((rank[observed.task.source] ?? 0) > (rank[owned.task.source] ?? 0)) owned.task = observed.task;
+    if (observed.input && ['Working','Needs input'].includes(owned.state)) { owned.input = true; owned.state = observed.state; }
   }
 
   function mine({ work = [], meta = new Map(), owned = [], shares = [] } = {}) {
-    const time = now(), out = [], byLeaf = new Map();
+    const time = now(), out = [], byNative = new Map(), ambiguous = new Set();
+    workBoardRuns.clear();
     for (const o of Array.isArray(owned) ? owned : []) {
       if (!object(o) || !object(o.state) || typeof o.state.session !== 'string') continue;
       const e = fromOwned(o, shares, time);
       if (out.some((x) => x.id === e.id)) continue;
-      if (e.leaf) byLeaf.set(e.leaf, e);
+      if (typeof e.nativeSessionId === 'string' && typeof e.nativeTurnId === 'string') {
+        const key=JSON.stringify([e.provider.id,e.nativeSessionId,e.nativeTurnId]);
+        if(byNative.has(key)){byNative.delete(key);ambiguous.add(key);}else if(!ambiguous.has(key))byNative.set(key,e);
+      }
       out.push(e);
     }
     for (const row of Array.isArray(work) ? work : []) {
       if (!object(row) || typeof row.id !== 'string') continue;
       const e = fromWork(row, meta.get(row.id), time);
-      const twin = e.kind === 'observed' && e.project ? byLeaf.get(e.project) : null;
+      const boardRunId = meta.get(row.id)?.boardRunId;
+      if (e.kind === 'board' && typeof boardRunId === 'string') workBoardRuns.set(e.id, boardRunId);
+      const twin = e.kind === 'observed' && typeof e.nativeSessionId === 'string' && typeof e.nativeTurnId === 'string' ? byNative.get(JSON.stringify([e.provider.id,e.nativeSessionId,e.nativeTurnId])) : null;
       if (twin && twin.provider.id === e.provider.id) { fold(twin, e); continue; }
       if (!out.some((x) => x.id === e.id) && out.length < MAX_ENTRIES) out.push(e);
     }
-    for (const e of out) delete e.leaf;
+    for (const e of out) {delete e.leaf;delete e.nativeSessionId;delete e.nativeTurnId;}
     return out;
   }
 
@@ -186,7 +205,9 @@ function createSessionDirectory({ now = Date.now, staleMs = STALE_MS, secret = c
     if (!object(share) || share.explicit !== true || !['watch', 'interact'].includes(share.scope) || share.revoked === true) return null;
     const expires = share.expiresAt == null ? null : stamp(share.expiresAt);
     if (expires !== null && !(expires > time)) return null;
-    if (!object(x.owner) || typeof x.owner.id !== 'string' || !x.owner.id || x.owner.id === viewer.id) return null;
+    if (!object(x.owner) || typeof x.owner.id !== 'string' || !x.owner.id ) return null;
+    const self = x.owner.id === viewer.id;
+    if (self && x.kind !== 'board-run') return null;
     const ownerName = str(x.owner.name, 80) || 'Teammate';
     const t = timing(`team:${team.key}:${x.ref}`, x.observed_at, time);
     const sr = object(x.self_reported) && Object.hasOwn(TEAM_STATES, x.self_reported.state) && Number.isFinite(stamp(x.self_reported.at)) ? { state: TEAM_STATES[x.self_reported.state], at: stamp(x.self_reported.at) } : null;
@@ -197,15 +218,17 @@ function createSessionDirectory({ now = Date.now, staleMs = STALE_MS, secret = c
     const caps = object(x.capabilities) ? x.capabilities : {};
     const id = publicId(['team', team.key, x.ref]);
     const entry = {
-      id, kind: 'shared', owner: { name: ownerName, self: false, initials: initials(ownerName) },
+      id, kind: 'shared', owner: { name: self ? 'You' : ownerName, self, initials: self ? 'Y' : initials(ownerName) },
       scope: 'team', teams: [{ key: team.key, name: team.name }],
       board: { label: str(x.board?.name, 80) || team.name, kind: 'team' },
       card: object(x.card) && str(x.card.title, 200) ? { key: str(x.card.key, 80) || null, title: str(x.card.title, 200) } : null,
       provider: { id: str(x.provider?.id, 40) || 'unknown', label: str(x.provider?.label, 120) || 'AI', kind: x.provider?.kind === 'local' ? 'local' : 'integrated' },
       device: { label: str(x.device?.label, 80) || 'Unknown device', local: false }, project: null,
       task: taskOf({ human: object(x.card) && x.card.edited_by === 'human' ? x.card.title : null, card: object(x.card) ? x.card.title : null, reported: x.task_title }),
-      state, input: state === 'Needs input' || x.input_needed === true, ...t, selfReported: sr,
-      provenance: ['shared', ...(sr ? ['self-reported'] : [])],
+      state, input: live && (state === 'Needs input' || x.input_needed === true), ...t, selfReported: sr,
+      provenance: [x.messageContract === 'task-inbox' ? 'board' : 'shared', ...(sr ? ['self-reported'] : [])],
+      messageContract: x.messageContract === 'task-inbox' ? 'task-inbox' : 'live',
+      notice: x.messageContract === 'task-inbox' ? 'Task inbox: the agent reads this message with its board tools. Queued does not mean received or acknowledged. Sending does not resume a paused run.' : '',
       handoffs: (Array.isArray(x.handoffs) ? x.handoffs : []).slice(0, 10).filter(object).map((h) => ({ direction: h.direction === 'out' ? 'out' : 'in', with: str(h.with, 80) || 'Teammate', state: ['offered', 'accepted', 'declined'].includes(h.state) ? h.state : 'offered', summary: str(h.summary, 200) })),
       capabilities: capabilities({
         discovery: cap(true), telemetry: cap(true),
@@ -217,15 +240,23 @@ function createSessionDirectory({ now = Date.now, staleMs = STALE_MS, secret = c
         remoteControl: cap(false, 'Only the owner controls their session; teammates can message it when it is shared to send.'),
       }),
       interact: canSend ? { kind: 'team', ref: id } : null,
-      deliveries: (Array.isArray(x.deliveries) ? x.deliveries : []).slice(-10).filter((d) => object(d) && typeof d.id === 'string').map((d) => ({ id: str(d.id, 80), text: str(d.text, 4000), by: str(d.by, 80) || null, state: ['queued', 'delivered', 'acknowledged', 'recorded', 'responding', 'completed', 'interrupted', 'failed', 'replied', 'refused', 'expired', 'unknown'].includes(d.state) ? d.state : 'unknown', response: str(d.response, 4000) })),
+      deliveries: (Array.isArray(x.deliveries) ? x.deliveries : []).slice(-10).filter((d) => object(d) && typeof d.id === 'string').map((d) => ({ id: str(d.id, 80), text: str(d.text, 4000), by: str(d.by, 80) || null, state: ['queued', 'delivered', 'acknowledged', 'recorded', 'responding', 'completed', 'interrupted', 'failed', 'replied', 'refused', 'expired', 'unconfirmed', 'unknown'].includes(d.state) ? d.state : 'unknown', response: str(d.response, 4000) })),
       children: [],
     };
+    if (typeof x.task_title === 'string') {
+      entry.reporting = { source: ['human','provider','self-reported','observed'].includes(x.task_source) ? x.task_source : 'unknown', observedAt: x.task_observed_at };
+      if (!entry.card && x.task_source === 'human') entry.task.source = 'human';
+    }
+    if(live && x.input_reported_needed===true && freshness(stamp(x.input_observed_at),time).freshness!=='recent'){
+      entry.state='Last reported: Needs input';entry.input=false;
+      Object.assign(entry,freshness(stamp(x.input_observed_at),time),{observedAt:Number.isFinite(stamp(x.input_observed_at))?stamp(x.input_observed_at):null});
+    }
     for (const c of (Array.isArray(x.children) ? x.children : []).slice(0, MAX_CHILDREN)) {
       if (!object(c) || typeof c.ref !== 'string') continue;
       // Each child keeps its own report time; the parent's activity never refreshes it.
       const ct = timing(`team-child:${team.key}:${x.ref}:${c.ref}`, c.observed_at, time);
       const cstate = Object.hasOwn(TEAM_STATES, c.state) ? TEAM_STATES[c.state] : 'Unknown';
-      entry.children.push({ id: publicId(['team-child', team.key, x.ref, c.ref]), parent: id, label: str(c.name, 80) || 'Agent', state: cstate, input: cstate === 'Needs input', task: taskOf({ reported: c.task_title }), ...ct, selfReported: null, provenance: ['shared'] });
+      entry.children.push({ id: publicId(['team-child', team.key, x.ref, c.ref]), parent: id, label: str(c.name, 80) || 'Agent', state: cstate, input: cstate === 'Needs input', task: taskOf({ reported: c.task_title }), ...ct, reporting:{source:['human','provider','self-reported','observed'].includes(c.source)?c.source:'unknown',observedAt:c.observed_at},selfReported: c.source==='self-reported'?{state:cstate,at:c.observed_at}:null, provenance: ['shared',...(c.source==='self-reported'?['self-reported']:[])] });
     }
     return { entry, ref: x.ref, scope: share.scope };
   }
@@ -239,6 +270,7 @@ function createSessionDirectory({ now = Date.now, staleMs = STALE_MS, secret = c
     // Not a current member: nothing of anyone else's.
     if (member !== true) return { entries, refs };
     for (const x of Array.isArray(hubEntries) ? hubEntries : []) {
+      if (object(x) && x.kind === 'board-run' && x.owner?.id === viewer.id && typeof x.boardRunId === 'string' && entries.some((e) => workBoardRuns.get(e.id) === x.boardRunId)) continue;
       const r = sharedEntry(x, { team: t, viewer, time });
       if (!r || refs.has(r.entry.id) || entries.length >= MAX_ENTRIES) continue;
       refs.set(r.entry.id, { ref: r.ref, scope: r.scope });

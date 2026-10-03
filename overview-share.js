@@ -1,7 +1,6 @@
 'use strict';
-// Team sharing for one Plexiform-owned session card in Overview. Off by
-// default: a session is shared only after its owner picks a team, a scope
-// and an expiry here and presses Share. "Watch only" lets that team's
+// Team sharing controls supplement main-owned automatic sharing for sessions
+// associated with a team workspace. Personal sessions require a team choice. "Watch only" lets that team's
 // members read the session's messages and responses sent from then on (never
 // earlier ones); "Watch and send" also lets members who are not team viewers
 // send, steer and interrupt (their messages show as "Sent by <name>" and run

@@ -342,8 +342,7 @@ test('liveAgents and ralphIteration read the session set', () => {
   ];
   assert.deepEqual(R.liveAgents(sessions).map((a) => [a.name, a.kind, a.status, a.cwd]), [
     ['a1', 'subagent', 'working', '/x/one'],
-    ['b1', 'subagent', 'working', '/x/two'],
-  ], 'defaults fill in for a bare entry');
+  ], 'a bare entry cannot establish activity');
   assert.equal(R.ralphIteration(sessions), 9, 'the furthest loop wins');
   assert.equal(R.ralphIteration([{ mode: 'team' }]), 0);
 });
@@ -868,7 +867,7 @@ test('effectiveSignal: a finished turn with a working subagent reads as that age
   const working = [{ id: 'a', name: 'executor', kind: 'subagent', status: 'working' }];
   const done = [{ id: 'a', name: 'executor', kind: 'subagent', status: 'done' }];
   assert.deepEqual(R.effectiveSignal({ signal: 'stop', agents: working }), { signal: 'tool-use', tool: 'Agent', turnSignal: 'stop' });
-  assert.deepEqual(R.effectiveSignal({ signal: 'idle-nudge', agents: [{ id: 'b' }] }), { signal: 'tool-use', tool: 'Agent', turnSignal: 'idle-nudge' }, 'no status counts as working');
+  assert.deepEqual(R.effectiveSignal({ signal: 'idle-nudge', agents: [{ id: 'b' }] }), { signal: 'idle-nudge', tool: null, turnSignal: null }, 'missing status cannot prove work');
   assert.deepEqual(R.effectiveSignal({ signal: 'stop', agents: done }), { signal: 'stop', tool: null, turnSignal: null });
   assert.deepEqual(R.effectiveSignal({ signal: 'stop', agents: [{ id: 'c', status: 'waiting' }] }).signal, 'stop', 'a waiting agent is not working');
   assert.deepEqual(R.effectiveSignal({ signal: 'permission-ask', tool: 'Bash', agents: working }), { signal: 'permission-ask', tool: 'Bash', turnSignal: null });
@@ -1344,4 +1343,11 @@ test('liveAgents: stopped and stale agents are not live, and keep their own stat
   const s = { cwd: '/w', agents: [{ id: 'a', status: 'working' }, { id: 'b', status: 'stopped' }, { id: 'c', status: 'stale' }, { id: 'd', status: 'done' }] };
   assert.deepEqual(R.liveAgents([s]).map((a) => a.id), ['a']);
   assert.equal(R.normalizeAgent({ id: 'c', status: 'stale' }).status, 'stale');
+});
+
+test('unknown agent reports do not manufacture working roster or counts', () => {
+  for (const status of [undefined, null, 'unexpected', {}]) {
+    assert.equal(R.normalizeAgent({ id: 'unknown', status }).status, 'stale');
+    assert.deepEqual(R.liveAgents([{ agents: [{ id: 'unknown', status }] }]), []);
+  }
 });

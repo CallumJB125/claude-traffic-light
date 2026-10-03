@@ -92,6 +92,7 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
   const clock = now ?? Date.now;
   const shares = new Map();   // share id -> {id, session, team, teamName, scope, createdAt, expiresAt, ownerName, users: Map(user id -> {name, act})}
   const prints = new Map();   // share id -> {text, version}
+  const sharedWaits = new Set(); // exact share watches; revocation releases capacity immediately
   const hub = createInteractionHub({
     adapters, workspace, boardCurrent, now,
     onEvent(a, state) {
@@ -169,10 +170,18 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
   // was created (never earlier history), never the owner's board key. A steer
   // into a turn that began before the share shows no response: it holds pre-share output.
   function project(state, sh) {
-    const { board, ...rest } = state;
+    const { board, reporting, task_title, input_needed, ...rest } = state;
     const after = rest.deliveries.filter((d) => d.sentAt >= sh.createdAt);
     const fresh = new Set(after.filter((d) => d.mode === 'new-turn' && d.turn != null).map((d) => d.turn));
-    return { ...rest, deliveries: after.map((d) => (d.mode === 'new-turn' || fresh.has(d.turn) ? d : { ...d, response: '' })) };
+    // A fresh host receipt or a repeated old hook report cannot expose metadata
+    // from before the share. Child creation is independently gated as well:
+    // an old child's later status must not reveal its private name/task.
+    const at = clock();
+    const visible = (r) => object(r) && Number.isSafeInteger(r.observed_at) && r.observed_at > sh.createdAt && r.observed_at <= at;
+    const task = visible(reporting?.task) ? reporting.task : null;
+    const input = visible(reporting?.input) ? reporting.input : null;
+    const children = (Array.isArray(reporting?.children) ? reporting.children : []).filter((c) => visible(c) && Number.isSafeInteger(c.created_at) && c.created_at > sh.createdAt).slice(0, 20);
+    return { ...rest, task_title: task?.title ?? null, input_needed: input_needed === true && input?.needed === true && input.observed_at >= 0 && at - input.observed_at <= 90_000, reporting: { task, input, children }, deliveries: after.map((d) => (d.mode === 'new-turn' || fresh.has(d.turn) ? d : { ...d, response: '' })) };
   }
   function sharedRead(t, sh) {
     const st = t.hub.state({ session: sh.session }, t.actor);
@@ -224,11 +233,17 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
     if (watching >= MAX_WATCHES || sharedWatching >= MAX_SHARED_WATCHES) return REFUSED.busy;
     watching++; sharedWatching++;
     return new Promise((resolve) => {
-      let waited = 0;
-      const tick = setInterval(() => {
+      let waited = 0, done = false, tick = null;
+      const wait = { share: sh.id, finish(result) {
+        if (done) return;
+        done = true; clearInterval(tick); sharedWaits.delete(wait);
+        watching--; sharedWatching--; resolve(result);
+      } };
+      sharedWaits.add(wait);
+      tick = setInterval(() => {
         const r = read();
         waited += SHARED_POLL_MS;
-        if (!r.ok || r.version > args.after || waited >= WATCH_MAX_MS) { clearInterval(tick); watching--; sharedWatching--; resolve(r); }
+        if (!r.ok || r.version > args.after || waited >= WATCH_MAX_MS) wait.finish(r);
       }, SHARED_POLL_MS);
       tick.unref?.();
     });
@@ -239,6 +254,7 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
     if (!sh) return;
     shares.delete(id);
     prints.delete(id);
+    for (const wait of [...sharedWaits]) if (wait.share === id) wait.finish(REFUSED.gone);
     if (tellHub) hubCall('DELETE', `/api/interaction/v1/shares/${encodeURIComponent(id)}`, {}).catch(() => {});
   }
 
@@ -357,6 +373,7 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
   function stopRunning(next) {
     running = null; state = next;
     shares.clear(); prints.clear();
+    for (const wait of [...sharedWaits]) wait.finish(REFUSED.gone);
     clearTimeout(retryTimer); retryTimer = null;
     clearTimeout(idleTimer); idleTimer = null;
     tell();

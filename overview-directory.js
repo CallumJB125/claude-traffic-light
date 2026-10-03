@@ -29,6 +29,7 @@
     && Array.isArray(e.provenance) && e.provenance.every(p => Object.hasOwn(PROVENANCE, p)) && obj(e.capabilities) && CAPS.every(k => validCap(e.capabilities[k]))
     && (e.interact === null || obj(e.interact) && ['owned', 'work', 'team'].includes(e.interact.kind) && str(e.interact.ref, 200))
     && Array.isArray(e.children) && e.children.length <= 64 && e.children.every(validChild)
+    && (e.notice === undefined || str(e.notice, 600)) && (e.messageContract === undefined || ['live', 'task-inbox'].includes(e.messageContract))
     && (e.deliveries === undefined || Array.isArray(e.deliveries) && e.deliveries.length <= 10 && e.deliveries.every(d => obj(d) && str(d.id, 80) && str(d.text, 4000) && (d.by === null || str(d.by, 80)) && str(d.state, 40) && str(d.response, 4000)))
     && (e.handoffs === undefined || Array.isArray(e.handoffs) && e.handoffs.length <= 10 && e.handoffs.every(h => obj(h) && ['in', 'out'].includes(h.direction) && str(h.with, 80) && str(h.state, 40) && str(h.summary, 400)));
   const valid = d => obj(d) && d.schema === 1 && ['mine', 'team'].includes(d.view) && ['complete', 'partial', 'unavailable'].includes(d.status) && Number.isFinite(d.observed_at) && str(d.notice, 600)
@@ -90,7 +91,7 @@
     v.message.hidden = !canMessage; v.message.disabled = !!v.busy;
     v.message.textContent = e.interact?.kind === 'team' ? 'Message' : e.interact?.kind === 'owned' ? 'Open conversation' : 'Message';
     v.message.setAttribute('aria-label', `${v.message.textContent}: ${v.title.textContent}`);
-    set(v.why, canMessage ? '' : e.capabilities.receive.reason || 'No supported message channel.'); v.why.hidden = canMessage;
+    set(v.why, canMessage ? e.notice || '' : e.capabilities.receive.reason || 'No supported message channel.'); v.why.hidden = canMessage && !e.notice;
     if (v.composer && (!canMessage || e.interact?.kind !== 'team')) { v.composer.box.remove(); v.composer = null; }
   }
   function tombstone(v) {
@@ -113,7 +114,7 @@
     if (v.composer) { v.composer.input.focus(); return; }
     const box = el('div', '', 'composer'), label = el('label', `Message ${e.owner.name}'s session`), input = el('textarea');
     input.id = `team-msg-${e.id}`; label.htmlFor = input.id; input.maxLength = 4000;
-    const note = el('p', 'Sends your exact text through the team hub to this shared session only. Maximum 4,000 characters.', 'reason'); note.setAttribute('role', 'status');
+    const note = el('p', e.notice || 'Sends your exact text through the team hub to this shared session only. Maximum 4,000 characters.', 'reason'); note.setAttribute('role', 'status');
     const send = button('Send', () => void sendTeam(v)), cancel = button('Cancel', () => { box.remove(); v.composer = null; v.message.focus(); });
     const row = el('div', '', 'actions'); row.append(send, cancel); box.append(label, input, note, row);
     v.composer = { box, input, note, send }; v.li.insertBefore(box, v.why); input.focus();
@@ -127,8 +128,8 @@
     v.busy = false;
     if (!v.composer) return;
     c.send.disabled = false; set(c.send, 'Send');
-    if (r?.ok === true) { c.input.value = ''; set(c.note, 'Queued by the team hub. Its acknowledgement and reply appear above when they arrive.'); void refresh(); }
-    else set(c.note, `Not sent. ${str(r?.error, 300) && r.error ? r.error : 'This session is unavailable. Refresh and try again.'}`);
+    if (r?.ok === true) { c.input.value = ''; set(c.note, e.messageContract === 'task-inbox' ? 'Queued in this board run’s task inbox. The agent has not acknowledged it yet. Receipt and reply appear above when reported.' : 'Queued by the team hub. Its acknowledgement and reply appear above when they arrive.'); void refresh(); }
+    else set(c.note, `${r?.status === 'unconfirmed' ? 'Receipt unconfirmed.' : 'Not sent.'} ${str(r?.error, 300) && r.error ? r.error : 'This session is unavailable. Refresh and try again.'}`);
     c.input.focus();
   }
   function renderSummary(data) {

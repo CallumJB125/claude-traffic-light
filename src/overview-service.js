@@ -79,7 +79,7 @@ function createOverviewService({sessions=()=>[],work=async()=>({sources:[],captu
    const projected=Session.snapshot({sessions:[{...raw,remote:false,device:null}],now:time}).sessions[0];
    let status=projected?.status??'Unknown';if(raw.source==='codex'&&Machine.codexInputPending?.(raw,time))status='Waiting on you';
    const dto={id:identity,handle:null,label:parentId?'Agent':'Session',provider:provider(raw.source,raw.model),device:{label:raw.remote||raw.device?clean(raw.deviceName||'Paired device',80):'This device',local:!raw.remote&&!raw.device},board:{label:bound?clean(bound.row.board_name,80)||'Board':raw.scope?.state==='personal'?'Personal':'Unassigned',kind:bound?bound.source.kind:raw.scope?.state==='personal'?'personal':'unknown'},project:Session.snapshot({sessions:[{cwd:raw.cwd}],now:time}).sessions[0]?.project??'Local project',status,freshness:fresh,age_ms:elapsed,task:task(card??(typeof raw.taskTitle==='string'?{title:raw.taskTitle}:null)),children:[],capabilities:{open:capability(!!bound,'Open card',bound?'':'No current tracked card is available.'),message:capability(!!bound&&liveOwn(bound.data,bound.row)&&fresh==='recent'&&!!card.repo?.id&&typeof bound.source.send==='function','Message',(!bound&&unmanaged(raw.source))||'A current owned runner with messaging is required.')}};
-   if(bound){usedCards.add(cardIdentity(bound.source,bound.data,bound.row));register(dto,{kind:'board',bound,pin:keyOf(bound.row)},next);meta.set(identity,{kind:'board',...teamMeta(bound.source,bound.row)});}else{register(dto,{kind:'reported'},next);meta.set(identity,{kind:'reported'});}
+   if(bound){usedCards.add(cardIdentity(bound.source,bound.data,bound.row));register(dto,{kind:'board',bound,pin:keyOf(bound.row)},next);meta.set(identity,{kind:'board',boardRunId:card.run?.id,...teamMeta(bound.source,bound.row)});}else{register(dto,{kind:'reported'},next);meta.set(identity,{kind:'reported',nativeSessionId:raw.sessionId,nativeTurnId:raw.codexTurnId??null});}
    const children=Array.isArray(raw.source==='codex'?raw.codexAgents:raw.agents)?(raw.source==='codex'?raw.codexAgents:raw.agents):[];
    for(const child of children.slice(0,64)){
     if(!object(child)||typeof child.status!=='string'||!['working','waiting','done'].includes(child.status))continue;
@@ -102,7 +102,7 @@ function createOverviewService({sessions=()=>[],work=async()=>({sources:[],captu
    const identity=cardIdentity(source,data,row);if(usedCards.has(identity)||rows.some(r=>r.id===identity))continue;if(rows.length>=200){omitted++;continue;}
    const live=liveOwn(data,row),elapsed=Number.isFinite(card.live?.hb_age_ms)&&card.live.hb_age_ms>=0?card.live.hb_age_ms:null;
    const dto={id:identity,handle:null,label:'Managed session',provider:provider(card.run.ai,card.run.model),device:{label:clean(card.run.device_name,80)||'Runner device',local:source.kind==='personal'},board:{label:clean(row.board_name,80)||'Board',kind:source.kind},project:clean(card.repo?.short_name,100)||'Project not reported',status:managedStatus(data,row),freshness:freshness(elapsed),age_ms:elapsed,task:task(card),children:[],capabilities:{open:capability(true,'Open card',''),message:capability(live&&!!card.repo?.id&&typeof source.send==='function','Message','A current owned runner with messaging is required.')}};
-   register(dto,{kind:'board',bound:{source,data,row},pin:keyOf(row)},next);rows.push(dto);meta.set(identity,{kind:'board',...teamMeta(source,row)});
+   register(dto,{kind:'board',bound:{source,data,row},pin:keyOf(row)},next);rows.push(dto);meta.set(identity,{kind:'board',boardRunId:card.run.id,...teamMeta(source,row)});
   }}
   const local=managed();if(local?.conn?.status==='connected'&&Array.isArray(local.tasks))for(const t of local.tasks.slice(0,200)){
    if(!object(t)||!id(t.id)||t.hub)continue;if(rows.length>=200){omitted++;continue;}
@@ -159,7 +159,7 @@ function createOverviewService({sessions=()=>[],work=async()=>({sources:[],captu
    for(const t of fakeTeams)add(teamKey(adapterOrigin,t.id),t.name,hub.fake===true?'fake':'adapter');}
   if(!permitted())return unavailableDirectory(view,time);
   const teamList=[...teams.values()].map(t=>({...t,label:t.source==='fake'?clean(hub?.label,80)||'Fake team hub':''}));
-  const status=built.partial||built.omitted?'partial':'complete';
+  let status=built.partial||built.omitted?'partial':'complete';
   if(view==='mine')return{schema:1,view,status,observed_at:time,teams:teamList,team:null,notice:'',entries:personal,counts:directoryModel.counts(personal)};
   const selected=teams.get(request.team)??teams.values().next().value??null;
   if(!selected)return{schema:1,view,status,observed_at:time,teams:teamList,team:null,notice:'You are not in a team yet, or no team is connected.',entries:[],counts:directoryModel.counts([])};
@@ -167,6 +167,7 @@ function createOverviewService({sessions=()=>[],work=async()=>({sources:[],captu
   let hubEntries=[];
   if(adapterTeam){try{hubEntries=await hub.sessions(viewer,adapterTeam.id);}catch{hubEntries=[];}}
   if(!permitted())return unavailableDirectory(view,time);
+  if(hubEntries?.partial===true)status='partial';
   const model=directoryModel.team({team:{key:selected.key,name:selected.name,id:adapterTeam?.id??null},viewer:viewer??{id:''},member:!!adapterTeam,personal,hubEntries});
   for(const [entryId,ref] of model.refs)teamRefs.set(entryId,{...ref,team:adapterTeam.id,teamKey:selected.key,hub,expires:time+45000});
   while(teamRefs.size>500)teamRefs.delete(teamRefs.keys().next().value);
@@ -187,7 +188,7 @@ function createOverviewService({sessions=()=>[],work=async()=>({sources:[],captu
   const target=again.entries.find(x=>x.id===request.id);if(target?.capabilities.receive.available!==true)return{ok:false,status:'unavailable',error:target?.capabilities.receive.reason||'Unavailable.'};
   let out;try{out=await hub.send(viewer,e.team,e.ref,request.text.trim(),crypto.randomUUID());}catch{out=null;}
   if(!actionPermitted())return response('stale');
-  return out?.ok===true?response('queued'):{ok:false,status:['forbidden','stale','unavailable'].includes(out?.status)?out.status:'unavailable',error:clean(out?.error,300)||'The team hub did not accept the message.'};
+  return out?.ok===true?response('queued'):{ok:false,status:['forbidden','stale','unavailable','unconfirmed'].includes(out?.status)?out.status:'unavailable',error:clean(out?.error,300)||'The team hub did not accept the message.'};
  }
  return{snapshot,directory,teamMessage,open:r=>action(r),message:r=>action(r,true),invalidate(){epoch++;handles.clear();teamRefs.clear();}};
 }

@@ -195,7 +195,7 @@
   function normalizeAgent(a, i = 0) {
     if (!a || typeof a !== 'object') return null;
     const kind = AGENT_KINDS.includes(a.kind) ? a.kind : 'subagent';
-    const status = AGENT_STATUSES.includes(a.status) ? a.status : 'working';
+    const status = AGENT_STATUSES.includes(a.status) ? a.status : 'stale';
     return {
       id: String(a.id || `${kind}-${i}`).slice(0, 80),
       name: String(a.name || a.id || kind).slice(0, 40),

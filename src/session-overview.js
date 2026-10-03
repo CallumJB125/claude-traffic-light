@@ -9,11 +9,12 @@ const RECENT_MS = 90_000;
 const PROVIDERS = Object.freeze({ codex: 'Codex', claude: 'Claude Code', 'claude-code': 'Claude Code', cursor: 'Cursor', gemini: 'Gemini', opencode: 'OpenCode', copilot: 'Copilot' });
 const STATUSES = Object.freeze({
   'session-start': 'Ready', 'prompt-submit': 'Working', 'tool-use': 'Working', 'tool-done': 'Working',
+  'tool-failed': 'Working', 'permission-denied': 'Working', compact: 'Compacting',
   'permission-ask': 'Waiting on you', 'user-question': 'Waiting on you', 'question-ask': 'Waiting on you',
-  'subagent-start': 'Working', 'subagent-done': 'Ready', 'stop': 'Turn stopped', 'idle': 'Idle',
+  'subagent-start': 'Working', 'subagent-done': 'Working', 'stop': 'Turn stopped', 'idle': 'Idle',
   'idle-nudge': 'Idle', 'turn-failed': 'Turn failed', 'limit-hit': 'Limit reached', 'session-end': 'Ended',
 });
-const CHILD_STATUSES = Object.freeze({ working: 'Working', waiting: 'Waiting on you', done: 'Stopped' });
+const CHILD_STATUSES = Object.freeze({ working: 'Working', waiting: 'Waiting on you', done: 'Stopped', stopped: 'Stopped', stale: 'Status unknown' });
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 function elapsed(value, now) {
   const stamp = typeof value === 'string' ? Date.parse(value) : NaN;
@@ -41,7 +42,8 @@ function snapshot({ sessions = [], activity = {}, available = true, now = Date.n
     const age = elapsed(lifecycle ? row.codexHookAt : row.updatedAt, time);
     if (lifecycle && age !== null && (latest === null || age < latest)) latest = age;
     if (rows.length >= LIMIT) { omitted++; continue; }
-    const rawChildren = lifecycle ? row.codexAgents : row.agents;
+    const rawChildren = lifecycle ? row.codexAgents : Machine.withFreshAgents(row, time).agents;
+    const presented = Machine.effectiveSignal({ ...row, agents: lifecycle ? row.agents : rawChildren, signal: row.signal }).signal;
     const children = Array.isArray(rawChildren) ? rawChildren.filter(child => object(child) && typeof child.status === 'string' && Object.hasOwn(CHILD_STATUSES, child.status)).slice(0, CHILD_LIMIT).map((child, index) => ({
       label: `${lifecycle ? 'Codex subagent' : 'Agent'} ${index + 1}`, status: lifecycle && row.codexClosedTurn === false && child.status !== 'done' && Machine.codexInputPending({ source: 'codex', codexLifecycle: 1, codexTurnId: child.turnId, codexClosedTurn: false, codexInputRequests: child.codexInputRequests }, time) ? 'Waiting on you' : CHILD_STATUSES[child.status],
     })) : [];
@@ -49,8 +51,8 @@ function snapshot({ sessions = [], activity = {}, available = true, now = Date.n
       // Claude Code's own hook (set-status.js) writes no source field.
       provider: row.source == null ? PROVIDERS.claude : typeof row.source === 'string' && Object.hasOwn(PROVIDERS, row.source) ? PROVIDERS[row.source] : 'Local AI',
       project: projectLeaf(row.cwd),
-      status: lifecycle && row.codexClosedTurn === true ? 'Turn stopped' : Machine.codexInputPending(row, time) ? 'Waiting on you' : typeof row.signal === 'string' && Object.hasOwn(STATUSES, row.signal) ? STATUSES[row.signal] : 'Unknown',
-      freshness: age === null ? 'unknown' : age <= RECENT_MS ? 'recent' : 'stale', age_ms: age, lifecycle, children,
+      status: lifecycle && row.codexClosedTurn === true ? 'Turn stopped' : Machine.claudeInputPending(row) || Machine.codexInputPending(row, time) ? 'Waiting on you' : typeof presented === 'string' && Object.hasOwn(STATUSES, presented) ? STATUSES[presented] : 'Unknown',
+      freshness: available === false || age === null ? 'unknown' : age <= RECENT_MS ? 'recent' : 'stale', age_ms: age, lifecycle, children,
     });
   }
   rows.sort((a, b) => (a.age_ms ?? Infinity) - (b.age_ms ?? Infinity));

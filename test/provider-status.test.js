@@ -88,3 +88,17 @@ test('actual widget tooltip quotes original owner while manual state is retained
     if (reason === 'session') assert.match(tooltip.textContent, /Rule “Claude is working”/);
   }
 });
+
+test('compaction reports a concrete provider state and never an undefined headline', () => {
+  const result = snap([row('claude', { signal: 'compact' })]);
+  assert.equal(result.providers[0].state, 'compacting'); assert.equal(result.headline, 'Claude: compacting');
+});
+
+test('provider confidence and last-seen metadata stay bounded and honest offline', () => {
+  const fresh = snap([row('claude')]);
+  assert.equal(fresh.available, true); assert.equal(fresh.online, true); assert.equal(fresh.latest_age_ms, 1000);
+  const offline = Provider.snapshot({ sessions: [row('claude')], online: false, now });
+  assert.equal(offline.online, false); assert.equal(offline.latest_age_ms, 1000);
+  const unavailable = Provider.snapshot({ available: false, now });
+  assert.equal(unavailable.available, false); assert.equal(unavailable.latest_age_ms, null);
+});

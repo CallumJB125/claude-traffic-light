@@ -49,13 +49,21 @@ let refreshSeq = 0;
 async function refresh() {
   const seq = ++refreshSeq;
   try {
-    const data = await window.trafficLight.getAggregateStatus();
-    if (seq !== refreshSeq || !data) return;
+    let timer;
+    const data = await Promise.race([window.trafficLight.getAggregateStatus(), new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error('status unavailable')), 4500);
+    })]).finally(() => clearTimeout(timer));
+    if (seq !== refreshSeq) return;
+    if (!data || !data.look) throw new Error('status unavailable');
     applyStatus(data);
   } catch (err) {
     console.error('[refresh]', err);
     if (seq !== refreshSeq) return;
-    try { rig.setLook({ ...(rig.look || {}), lamp: 'off', pose: 'none' }); } catch (e2) { console.error('[refresh] safe look failed', e2); }
+    try { rig.setLook({ ...(rig.look || {}), lamp: 'off', pose: 'none', minions: 0, agents: [], showRoster: false, celebrate: false }); } catch (e2) { console.error('[refresh] safe look failed', e2); }
+    clearInterval(confettiTimer); confettiTimer = null;
+    sleepSince = null; smokeSince = null; lastRuleId = null;
+    tooltip.textContent = 'AI activity unavailable — last status could not be refreshed';
+    bubble.update([]);
   }
 }
 // Every waiting input, answerable or not (docs/waiting-inputs.md).
@@ -96,8 +104,17 @@ window.addEventListener('resize', reportBubble);
 document.addEventListener('keydown', (e) => { bubble.keydown(e); });
 setInterval(() => { if (!motionPaused) bubble.tick(); }, 15000);
 
-function applyStatus(data) {
+function reportedLook(data) {
   const look = { ...data.look, ...(data.look.pose === 'ak47' || data.look.pose === 'sniper' ? aim : {}), showRoster: hovering && data.look.agentRoster !== false };
+  const reports = data.providerStatus;
+  const stale = Array.isArray(reports?.providers) && reports.providers.length > 0 && reports.providers.every(p => p.recent === 0);
+  if (!['manual', 'preview', 'travel'].includes(data.reason) && (reports?.available === false || reports?.online === false || stale))
+    Object.assign(look, { lamp: 'off', pose: 'none', minions: 0, agents: [], showRoster: false, celebrate: false });
+  return look;
+}
+
+function applyStatus(data) {
+  const look = reportedLook(data);
   sleepSince = look.pose === 'sleep' ? (sleepSince ?? Date.now()) : null;
   look.grumpy = sleepSince !== null && Date.now() - sleepSince > GRUMPY_AFTER_MS;
   smokeSince = look.pose === 'smoke' ? (smokeSince ?? Date.now()) : null;
@@ -146,7 +163,9 @@ function applyStatus(data) {
   }
   // Usage history: today against your own usual, when it is clearly above.
   const reported = !['manual', 'preview', 'travel'].includes(data.reason) ? data.providerStatus?.headline : null;
-  tooltip.textContent = (reported ? `${reported} · Rule “${text}”` : text) + suffix + (data.paceLine ? ` — ${data.paceLine}` : '');
+  const reportAge = data.providerStatus?.latest_age_ms;
+  const seen = reported ? Number.isFinite(reportAge) && reportAge >= 0 ? ` · Last seen ${Math.floor(reportAge / 1000)}s ago` : ' · Last seen unknown' : '';
+  tooltip.textContent = (reported ? `${reported} · Rule “${text}”` : text) + suffix + (data.paceLine ? ` — ${data.paceLine}` : '') + seen;
 }
 
 // In-app update row. Text only (textContent): a hub name is not ours.
@@ -313,6 +332,8 @@ document.getElementById('away-x').addEventListener('click', (e) => { e.stopPropa
 
 refresh();
 window.trafficLight.onStatusChanged(refresh);
+// Poll accepted metadata too: a dropped status push must not freeze the lamp.
+setInterval(refresh, 5000);
 window.trafficLight.onBurst((ms) => rig.burst(ms));
 // Aim updates arrive ~8x/s while a gun pose is live; re-apply the current
 // look with the new facing/angle without waiting for the next poll.

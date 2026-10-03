@@ -125,7 +125,7 @@ test('Overview Share…: with hosting off the card explains how to turn sharing 
     await s.ready();
     await s.start();
     s.btn('Share…').click(); await tick(8);
-    assert.match(s.card().textContent, /Let my other devices use sessions/);
+    assert.match(s.card().textContent, /enable automatic team sharing or device hosting in Preferences/);
   } finally { s.close(); }
 });
 

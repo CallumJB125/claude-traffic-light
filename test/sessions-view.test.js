@@ -10,16 +10,18 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 const state = overrides => ({ status: 'complete', observed_at: Date.now(), omitted: 0, activity: { configured: true, observed: true, latest_age_ms: 1000 }, sessions: [], ...overrides });
 function setup(api) {
   const dom = new JSDOM(html, { runScripts: 'outside-only', pretendToBeVisual: true });
-  let hidden = false; const intervals = [];
+  let hidden = false; const intervals = [], timeouts = [];
   Object.defineProperty(dom.window.document, 'hidden', { get: () => hidden });
   dom.window.setInterval = callback => { intervals.push(callback); return intervals.length; };
+  dom.window.setTimeout = callback => { timeouts.push(callback); return timeouts.length; };
+  dom.window.clearTimeout = () => {};
   dom.window.sessionsApi = api; dom.window.eval(script);
-  return { dom, document: dom.window.document, intervals, hide(value) { hidden = value; dom.window.document.dispatchEvent(new dom.window.Event('visibilitychange')); } };
+  return { dom, document: dom.window.document, intervals, timeouts, hide(value) { hidden = value; dom.window.document.dispatchEvent(new dom.window.Event('visibilitychange')); } };
 }
 test('DOM renders only text metadata, with explicit stale and child reported state', async () => {
   const fixture = setup({ state: async () => state({ sessions: [{ provider: 'Codex', project: '<img src=x onerror=alert(1)>', status: 'Turn stopped', freshness: 'stale', age_ms: 100000, lifecycle: true, children: [{ label: 'Codex subagent 1', status: 'Working' }] }] }) });
   try { await tick(); assert.equal(fixture.document.querySelectorAll('#content img').length, 0); const text = fixture.document.getElementById('content').textContent;
-    assert.match(text, /Stale/); assert.match(text, /Turn stopped/); assert.match(text, /Codex subagent 1 · Working/); assert.match(text, /<img/);
+    assert.match(text, /Stale/); assert.match(text, /Turn stopped/); assert.match(text, /Codex subagent 1 · Last reported: Working/); assert.match(text, /<img/);
   } finally { fixture.dom.window.close(); }
 });
 test('configured without delivery explains the supported hooks handoff instead of claiming activity', async () => {
@@ -53,4 +55,17 @@ test('settings refusal stays truthful and the settings button is restored', asyn
   const fixture = setup({ state: async () => state(), settings: async () => { opened++; return false; } });
   try { await tick(); fixture.document.getElementById('settings').click(); await tick(); assert.equal(opened, 1); assert.equal(fixture.document.getElementById('settings').disabled, false); assert.match(fixture.document.getElementById('status').textContent, /settings are unavailable/); }
   finally { fixture.dom.window.close(); }
+});
+
+test('a hung refresh expires old Working rows and a late reply cannot restore them', async () => {
+  let calls = 0, resolveLate;
+  const fixture = setup({ state: () => ++calls === 1 ? Promise.resolve(state({ sessions: [{ provider: 'Claude Code', project: 'old-working', status: 'Working', freshness: 'recent', age_ms: 0, children: [] }] })) : new Promise(resolve => { resolveLate = resolve; }) });
+  try {
+    await tick(); assert.match(fixture.document.getElementById('content').textContent, /Reported: Working/);
+    fixture.intervals[0](); fixture.timeouts.at(-1)(); await tick();
+    assert.equal(fixture.document.getElementById('content').textContent, '');
+    assert.match(fixture.document.getElementById('status').textContent, /unavailable/);
+    resolveLate(state({ sessions: [{ provider: 'Claude Code', project: 'late', status: 'Working', freshness: 'recent', children: [] }] })); await tick();
+    assert.equal(fixture.document.getElementById('content').textContent, '');
+  } finally { fixture.dom.window.close(); }
 });

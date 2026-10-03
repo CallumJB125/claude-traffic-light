@@ -154,7 +154,7 @@ test('after an account switch the old client never sends the new account\'s toke
   const live = createLiveTeamHub({ identity: () => ({ origin: 'https://hub.example', userId: account, token }), fetch });
   const oldClient = live.current();
   await oldClient.teams({ id: 'u1' });
-  assert.deepEqual(seen, ['Bearer tok-u1']);
+  assert.deepEqual(seen, ['Bearer tok-u1', 'Bearer tok-u1'], 'shared directory and account discovery both use the current account');
   account = 'u2';
   seen.length = 0;
   await oldClient.teams({ id: 'u1' }).catch(() => {});

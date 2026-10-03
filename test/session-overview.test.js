@@ -73,3 +73,12 @@ test('malformed child statuses cannot make the current valid local session unava
   assert.equal(result.status, 'complete');
   assert.deepEqual(result.sessions[0].children, [{ label: 'Codex subagent 1', status: 'Working' }]);
 });
+
+test('Claude overview preserves working turn, compaction and honest child uncertainty', () => {
+  const row = extra => ({ signal: 'tool-use', updatedAt: at(1000), ...extra });
+  const result = Overview.snapshot({ sessions: [row({ signal: 'subagent-done' }), row({ signal: 'compact' }), row({ signal: 'stop', agents: [{ source: 'hook', status: 'working' }, { status: 'stopped' }] })], now });
+  assert.deepEqual(result.sessions.map(r => r.status), ['Working', 'Compacting', 'Turn stopped']);
+  assert.deepEqual(result.sessions[2].children.map(c => c.status), ['Status unknown', 'Stopped']);
+  const offline = Overview.snapshot({ sessions: [row({})], available: false, now });
+  assert.equal(offline.sessions[0].freshness, 'unknown');
+});

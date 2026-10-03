@@ -200,7 +200,7 @@ export class TeamCommunication {
   messageProjection(scope, message) {
     const reply = message.reply_to && this.db.get('SELECT * FROM task_messages WHERE id = ?', message.reply_to);
     const seed = this.db.get('SELECT m.* FROM task_messages m JOIN task_message_threads t ON t.id = m.thread_id WHERE t.id = ? AND m.card_id = t.seed_card_id AND m.reply_to IS NULL ORDER BY m.rowid LIMIT 1', message.thread_id);
-    return { id: message.id, thread_id: seed && this.visibleMessage(scope, seed) ? message.thread_id : null, card_id: message.card_id, card_key: this.hub.card(message.card_id)?.key,
+    return { id: message.id, request_id: message.request_id, thread_id: seed && this.visibleMessage(scope, seed) ? message.thread_id : null, card_id: message.card_id, card_key: this.hub.card(message.card_id)?.key,
       repo_id: message.repo_id, fence: message.fence, kind: message.kind, body: message.body, reply_to: reply && this.visibleMessage(scope, reply) ? message.reply_to : null, depth: message.depth,
       at: message.created_at, author: this.author(message), for_agent: false, auto_resume: false, grants_execution: false,
       deliveries: this.db.all('SELECT * FROM task_message_recipients WHERE message_id = ?', message.id).filter((r) => {

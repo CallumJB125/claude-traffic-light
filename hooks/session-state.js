@@ -77,7 +77,8 @@ function release(lock, token) {
 }
 
 // Runs fn under the session's lock, waiting for it. If it can't be had in
-// LOCK_WAIT_MS, fn runs anyway: a lost update is better than a hung hook.
+// LOCK_WAIT_MS, skip this update: an unlocked writer can erase a newer ask
+// or another agent. The hook still returns promptly; the next event retries.
 function withLock(file, fn, waitMs = LOCK_WAIT_MS) {
   const lock = `${file}.lock`;
   const token = newToken();
@@ -85,8 +86,11 @@ function withLock(file, fn, waitMs = LOCK_WAIT_MS) {
   let held = false;
   try {
     while (!(held = tryLock(lock, token)) && Date.now() < deadline) Atomics.wait(sleeper, 0, 0, 5);
-  } catch { /* the directory is gone or unwritable: run unlocked */ }
-  if (!held) process.stderr.write(`session-state: ${lock} still held after ${waitMs} ms, writing anyway\n`);
+  } catch { /* the directory is gone or unwritable: skip this update */ }
+  if (!held) {
+    process.stderr.write(`session-state: session update skipped after ${waitMs} ms (lock unavailable)\n`);
+    return undefined;
+  }
   try {
     return fn();
   } finally {

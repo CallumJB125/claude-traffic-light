@@ -33,6 +33,7 @@
       document.getElementById('gitDeployWorkflows').value = (config.gitDeployWorkflows || []).join(', ');
       loadSpend(config.spend || {}); // F1 spend
       document.getElementById('remoteTailscale').checked = !!config.remoteTailscale;
+      document.getElementById('teamSessionSharing').checked = config.teamSessionSharing !== false;
       document.getElementById('remoteInteractionHost').checked = config.remoteInteractionHost === true;
       document.getElementById('codexDaemonMessaging').checked = config.codexDaemonMessaging === true;
       document.getElementById('busyHold').checked = config.busyHold !== false;
@@ -174,6 +175,7 @@
         busyIcsUrl: document.getElementById('busyIcsUrl').value.trim().slice(0, 2000),
         busyFocusShortcut: document.getElementById('busyFocusShortcut').value.trim().slice(0, 100),
         remoteTailscale: document.getElementById('remoteTailscale').checked,
+        teamSessionSharing: document.getElementById('teamSessionSharing').checked,
         remoteInteractionHost: document.getElementById('remoteInteractionHost').checked,
         codexDaemonMessaging: document.getElementById('codexDaemonMessaging').checked,
       });

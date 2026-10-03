@@ -211,7 +211,7 @@
   // ── Reader: what a stored session presents right now ────────────────────
   function hasWorkingAgent(session) {
     return Array.isArray(session.agents) && session.agents.some((a) => a && typeof a === 'object'
-      && (AGENT_STATUSES.includes(a.status) ? a.status : 'working') === 'working');
+      && a.status === 'working');
   }
 
   // The signal a session should be read as: a finished turn with a subagent
@@ -229,6 +229,46 @@
   // Received hook metadata only. Async delivery is not an answer; later AI
   // work cannot renew the original clock of a reported input request.
   const CODEX_INPUT_MS = 90000;
+  // Claude's parallel tool hooks carry tool_use_id. A different tool finishing
+  // cannot answer this input. Store only bounded correlation metadata locally;
+  // neither tool input nor prompt text is part of this receipt.
+  const INPUT_ID = /^[A-Za-z0-9_.:-]{1,120}$/;
+  function claudeInputEntries(session) {
+    if (!Array.isArray(session?.claudeInputRequests) || session.claudeInputRequests.length > 16) return [];
+    return session.claudeInputRequests.filter(r => r && typeof r === 'object' && !Array.isArray(r)
+      && Object.keys(r).sort().join(',') === 'agentId,askedAt,id,kind,tool'
+      && typeof r.id === 'string' && INPUT_ID.test(r.id)
+      && (r.agentId === null || typeof r.agentId === 'string' && INPUT_ID.test(r.agentId))
+      && ['question', 'request'].includes(r.kind) && typeof r.tool === 'string' && r.tool.length <= 80
+      && typeof r.askedAt === 'string' && Number.isFinite(Date.parse(r.askedAt)));
+  }
+  function reduceClaudeInputs(prev, { signal, askKind, toolUseId, agentId = null, tool = '' }, nowIso) {
+    let requests = claudeInputEntries(prev).map(r => ({ ...r }));
+    let overflow = prev?.claudeInputOverflow === true;
+    if (['session-start', 'session-end'].includes(signal))
+      return { requests: [], overflow: false, answered: false };
+    // A foreground turn ending does not end background agents or their asks.
+    if (['prompt-submit', 'stop', 'turn-failed'].includes(signal))
+      return { requests: requests.filter(r => r.agentId !== null), overflow, answered: false };
+    const validId = typeof toolUseId === 'string' && INPUT_ID.test(toolUseId);
+    const validOwner = agentId === null || typeof agentId === 'string' && INPUT_ID.test(agentId);
+    const owner = typeof agentId === 'string' && INPUT_ID.test(agentId) ? agentId : null;
+    const same = r => validId && validOwner && r.id === toolUseId && r.agentId === owner;
+    let answered = false;
+    if (['tool-done', 'tool-failed', 'permission-denied'].includes(signal)) {
+      answered = requests.some(same); requests = requests.filter(r => !same(r));
+    } else if (signal === 'subagent-done' && owner !== null) {
+      answered = requests.some(r => r.agentId === owner); requests = requests.filter(r => r.agentId !== owner);
+    }
+    if (signal === 'permission-ask' && ['question', 'request'].includes(askKind) && validId && validOwner && !requests.some(same)) {
+      if (requests.length === 16) overflow = true;
+      else requests.push({ id: toolUseId, agentId: owner, kind: askKind, tool: typeof tool === 'string' ? tool.slice(0, 80) : '', askedAt: nowIso });
+    }
+    return { requests, overflow, answered };
+  }
+  function claudeInputPending(session) {
+    return session?.claudeInputOverflow === true || claudeInputEntries(session).length > 0;
+  }
   function codexInputEntries(session) {
     if (session?.source !== 'codex' || session.codexLifecycle !== 1 || !Array.isArray(session.codexInputRequests) || session.codexInputRequests.length > 16) return [];
     return session.codexInputRequests.filter(r => r && typeof r === 'object' && !Array.isArray(r)
@@ -252,7 +292,7 @@
   // The signal the widget should show for a session right now: a young
   // notification ask shows what came before it (hysteresis).
   function presentSignal(session, now = Date.now(), pendingIds = []) {
-    if (codexInputPending(session, now)) return 'permission-ask';
+    if (claudeInputPending(session) || codexInputPending(session, now)) return 'permission-ask';
     const signal = sessionSignal(session);
     if (signal !== 'permission-ask') return signal;
     if (session.askKind === 'question' || session.askKind === 'request') return signal;
@@ -271,7 +311,7 @@
     let keepAlive = -Infinity;
     (Array.isArray(data.agents) ? data.agents : []).forEach((a) => {
       if (!a || typeof a !== 'object') return;
-      if ((AGENT_STATUSES.includes(a.status) ? a.status : 'working') !== 'working') return;
+      if (a.status !== 'working') return;
       const since = Date.parse(a.since || '') || 0;
       last = Math.max(last, since);
       if (since && now - since < AGENT_KEEPALIVE_MS) keepAlive = Math.max(keepAlive, AGENT_KEEPALIVE_MS - (now - since));
@@ -285,7 +325,7 @@
     const agents = data.agents.map((a) => {
       if (!a || a.source !== 'hook' || a.status !== 'working') return a;
       const seen = Math.max(Date.parse(a.lastAt || '') || 0, Date.parse(a.since || '') || 0);
-      if (!seen || now - seen <= AGENT_QUIET_MS) return a;
+      if (seen > 0 && seen <= now && now - seen <= AGENT_QUIET_MS) return a;
       changed = true;
       return { ...a, status: 'stale' };
     });
@@ -315,8 +355,13 @@
     const presented = presentSignal(data, now, pendingIds);
     const held = presented !== signal;
     const eff = effectiveSignal({ ...data, signal: presented });
-    const input = codexInputPending(data, now);
+    const input = claudeInputPending(data) || codexInputPending(data, now);
     const source = input ? 'reported input request' : held ? 'hysteresis-held' : eff.turnSignal ? 'promoted-agents' : (data.via || 'hook signal');
+    const observedAt = typeof data.updatedAt === 'string' ? Date.parse(data.updatedAt) : NaN;
+    // NaN < 0 is false: missing/corrupt clocks previously became live forever.
+    // A future timestamp is not proof of fresh work either, even with agents.
+    if (!Number.isFinite(now) || !Number.isFinite(observedAt) || observedAt < 0 || observedAt > now)
+      return { live: false, dropped: 'stale', rule: 'stale', signal, presented: eff.signal, held, source, staleInMs: null, confidence: 'unknown', observedAt: null, session: { ...data, ...eff } };
     if (eff.turnSignal) {
       const staleInMs = agentsStaleInMs(data, now, workingStaleMs);
       const stale = staleInMs < 0;
@@ -366,7 +411,8 @@
     TURN_END, WAITING, WAITING_ON_YOU, QUIET, PROMOTABLE_TURN_END, TRANSIENT_ASK_MS, AGENT_KEEPALIVE_MS, AGENT_QUIET_MS, AGENT_STATUSES, LEGACY_STATE_TO_SIGNAL,
     STATES, EVENTS, CLOSED, TRANSITIONS, PRESENTATION, EVENT_OF_SIGNAL, EVENT_SIGNAL,
     sessionSignal, stateOf, eventOf, transitionFor, step, userTouched,
-    hasWorkingAgent, effectiveSignal, presentSignal, agentsStaleInMs, classify, codexInputEntries, codexInputPending, CODEX_INPUT_MS,
+    hasWorkingAgent, effectiveSignal, presentSignal, agentsStaleInMs, withFreshAgents, classify, codexInputEntries, codexInputPending, CODEX_INPUT_MS,
+    claudeInputEntries, claudeInputPending, reduceClaudeInputs,
     table, mermaid,
   };
 });

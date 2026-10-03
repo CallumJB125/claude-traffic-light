@@ -572,7 +572,11 @@ test('withLock: waits for a live lock, breaks a stale one, and never hangs', () 
 
   fs.writeFileSync(lock, '');
   const t0 = Date.now();
-  assert.equal(SessionState.withLock(file, () => 'ran', 100), 'ran', 'a held lock times out into running anyway');
+  fs.writeFileSync(file, 'newer-input');
+  let wrote = false;
+  assert.equal(SessionState.withLock(file, () => { wrote = true; fs.writeFileSync(file, 'lost-input'); }, 100), undefined);
+  assert.equal(wrote, false, 'a timed-out writer cannot erase a newer input');
+  assert.equal(fs.readFileSync(file, 'utf8'), 'newer-input');
   assert.ok(Date.now() - t0 >= 100);
   assert.ok(fs.existsSync(lock), 'someone else\'s lock is not removed by a writer that never held it');
   assert.equal(SessionState.withLockOrSkip(file, () => 'ran'), undefined, 'the app skips instead of waiting');
@@ -773,4 +777,71 @@ test('tryLock: on Windows a lock that cannot be created for EPERM is contention,
     assert.throws(() => SessionState.tryLock(path.join(dir, 'y.lock'), 't', 'darwin'), { code: 'EPERM' });
   } finally { fs.writeFileSync = real; }
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('set-status: unrelated parallel completion preserves the original question and waiting clock', () => {
+  const home = tmpHome(), sid = 'parallel-q';
+  run(home, 'prompt-submit', { session_id: sid });
+  run(home, 'tool-use', { session_id: sid, tool_name: 'AskUserQuestion', tool_use_id: 'q-a', tool_input: { questions: [{ question: 'Which?', options: [{ label: 'A' }, { label: 'B' }] }] } });
+  const original = read(home, sid);
+  run(home, 'tool-done', { session_id: sid, tool_name: 'Read', tool_use_id: 'read-b' });
+  const after = read(home, sid);
+  assert.equal(after.signal, 'permission-ask'); assert.equal(after.updatedAt, original.updatedAt);
+  assert.equal(after.touchedAt, original.touchedAt, 'sibling tool completion is not a human answer');
+  assert.deepEqual(after.ask, original.ask);
+  run(home, 'session-start', { session_id: sid, source: 'compact' });
+  assert.equal(read(home, sid).signal, 'permission-ask', 'compaction cannot answer a question');
+  run(home, 'tool-done', { session_id: sid, tool_name: 'AskUserQuestion', tool_use_id: 'q-a' });
+  assert.equal(read(home, sid).signal, 'tool-done'); assert.deepEqual(read(home, sid).claudeInputRequests, []);
+});
+test('set-status: parallel child questions use both tool and agent identity', () => {
+  const home = tmpHome(), sid = 'parallel-children';
+  run(home, 'prompt-submit', { session_id: sid });
+  for (const agent_id of ['a', 'b']) {
+    run(home, 'subagent-start', { session_id: sid, agent_id });
+    run(home, 'tool-use', { session_id: sid, agent_id, tool_name: 'AskUserQuestion', tool_use_id: 'shared-id' });
+  }
+  assert.deepEqual(read(home, sid).agents.map(a => a.status), ['waiting', 'waiting']);
+  run(home, 'tool-done', { session_id: sid, tool_name: 'AskUserQuestion', tool_use_id: 'shared-id' });
+  assert.equal(read(home, sid).claudeInputRequests.length, 2, 'parent receipt cannot clear either child');
+  run(home, 'tool-done', { session_id: sid, agent_id: 'a', tool_name: 'AskUserQuestion', tool_use_id: 'shared-id' });
+  let result = read(home, sid);
+  assert.equal(result.signal, 'permission-ask'); assert.deepEqual(result.agents.map(a => a.status), ['working', 'waiting']);
+  assert.equal(result.claudeInputRequests[0].agentId, 'b');
+  run(home, 'subagent-done', { session_id: sid, agent_id: 'b' });
+  result = read(home, sid);
+  assert.equal(result.signal, 'tool-done'); assert.equal(result.agents[1].status, 'done');
+  run(home, 'tool-use', { session_id: sid, tool_name: 'AskUserQuestion', tool_use_id: 'q-c' });
+  run(home, 'stop', { session_id: sid });
+  assert.deepEqual(read(home, sid).claudeInputRequests, []); assert.equal(read(home, sid).signal, 'stop');
+});
+
+test('set-status: foreground stop and next prompt preserve a background agent input until that agent ends', () => {
+  const home = tmpHome(), sid = 'background-input';
+  run(home, 'prompt-submit', { session_id: sid });
+  run(home, 'subagent-start', { session_id: sid, agent_id: 'bg' });
+  run(home, 'tool-use', { session_id: sid, agent_id: 'bg', tool_name: 'AskUserQuestion', tool_use_id: 'bg-q' });
+  for (const signal of ['stop', 'prompt-submit']) {
+    run(home, signal, { session_id: sid });
+    assert.equal(read(home, sid).signal, 'permission-ask');
+    assert.equal(read(home, sid).claudeInputRequests[0].agentId, 'bg');
+  }
+  run(home, 'subagent-done', { session_id: sid, agent_id: 'bg' });
+  assert.deepEqual(read(home, sid).claudeInputRequests, []);
+});
+
+test('set-status: a newly asked parallel question refreshes aggregate input evidence while old questions keep their own clocks', () => {
+  const home = tmpHome(), sid = 'old-new-input';
+  run(home, 'prompt-submit', { session_id: sid });
+  run(home, 'tool-use', { session_id: sid, tool_name: 'AskUserQuestion', tool_use_id: 'old-q' });
+  const old = read(home, sid), oldAt = new Date(Date.now() - 300_000).toISOString();
+  old.updatedAt = oldAt; old.claudeInputRequests[0].askedAt = oldAt;
+  fs.writeFileSync(sessionFile(home, sid), JSON.stringify(old));
+  run(home, 'tool-use', { session_id: sid, tool_name: 'AskUserQuestion', tool_use_id: 'fresh-q' });
+  const fresh = read(home, sid);
+  assert.equal(fresh.claudeInputRequests[0].askedAt, oldAt);
+  assert.equal(require('../hooks/session-machine').classify(fresh, { now: Date.now(), waitingStaleMs: 60_000 }).live, true, 'new input is current despite older unanswered input');
+  assert.equal(fresh.updatedAt, fresh.claudeInputRequests[1].askedAt);
+  run(home, 'tool-done', { session_id: sid, tool_name: 'Read', tool_use_id: 'unrelated' });
+  assert.equal(read(home, sid).updatedAt, fresh.updatedAt, 'ordinary work does not refresh the input evidence');
 });

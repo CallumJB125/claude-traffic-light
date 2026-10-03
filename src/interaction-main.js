@@ -22,10 +22,11 @@ const CHANNELS = Object.freeze({
   launch: 'interaction:launch', discover: 'interaction:discover', attach: 'interaction:attach', send: 'interaction:send', interrupt: 'interaction:interrupt', close: 'interaction:close',
   event: 'interaction:event', localModels: 'interaction:local-models', fanout: 'interaction:fanout',
   shareList: 'interaction:share-list', shareCreate: 'interaction:share-create', shareStop: 'interaction:share-stop',
+  channelSetup: 'interaction:channel-setup',
 });
 const MAX_FANOUT = 6;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-const noSharing = { ok: false, status: 'unavailable', error: 'To share, turn on "Let my other devices use sessions Plexiform started on this Mac" in Preferences and sign in to your team hub.' };
+const noSharing = { ok: false, status: 'unavailable', error: 'To share, sign in to your team hub and enable automatic team sharing or device hosting in Preferences.' };
 const denied = { ok: false, status: 'forbidden', error: 'Focus Plexiform Overview and try again.' };
 const BOARD_STALE = 'This session belongs to another board. Switch back to the board it started on to use it.';
 const object = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -48,7 +49,7 @@ function ownedAdapters({ env = process.env } = {}) {
 }
 
 // shares: () => the remote interaction host (src/remote-interaction.js) or null; team sharing goes through it.
-function createInteractionMain({ context, readContext = context, adapters: given, owned = ownedAdapters, workspace, currentBoard = () => null, now, localModelsFile = null, localModels: givenLocalModels, compaction = null, shares = () => null }) {
+function createInteractionMain({ context, readContext = context, adapters: given, owned = ownedAdapters, workspace, currentBoard = () => null, now, localModelsFile = null, localModels: givenLocalModels, compaction = null, shares = () => null, prepareChannel = null }) {
   const adapters = { ...(owned ? owned() : {}), ...given };
   // Local models register into `adapters` as they are found.
   const localModels = givenLocalModels !== undefined ? givenLocalModels : createLocalModels({ adapters, configFile: localModelsFile });
@@ -86,6 +87,12 @@ function createInteractionMain({ context, readContext = context, adapters: given
     return actor;
   }
   const effects = {
+    async channelSetup(req, actor) {
+      if (req !== undefined || !prepareChannel) return { ok: false, status: 'unavailable', error: 'Claude terminal setup is unavailable.' };
+      const board = currentBoard();
+      const fresh = () => { const c = context(); return !!c?.foreground && !c.contents.isDestroyed() && actorFor(c) === actor && currentBoard() === board; };
+      return prepareChannel({ actor, board, fresh });
+    },
     launch: (req, actor) => (object(req) && !Object.hasOwn(req, 'board') ? hub.launch({ ...req, board: boardKey(currentBoard()) }, actor) : hub.launch(null, actor)),
     // Existing sessions on an opt-in provider (codex-daemon): metadata list, then subscribe to one by handle.
     discover: (req, actor) => hub.discover(req, actor),
@@ -116,7 +123,7 @@ function createInteractionMain({ context, readContext = context, adapters: given
   // Team sharing of this document's sessions: only its own sessions, through the remote host.
   const owns = (session, actor) => typeof session === 'string' && UUID.test(session) && !!hub.state({ session }, actor);
   // A session started outside Plexiform (codex-daemon) runs with its own permissions: never shared with a team.
-  const shareable = (session, actor) => owns(session, actor) && hub.state({ session }, actor).ownership === 'plexiform-owned';
+  const shareable = (session, actor) => owns(session, actor) && (hub.state({ session }, actor).ownership === 'plexiform-owned' || hub.state({ session }, actor).provider.id === 'claude-channel');
   const sharing = {
     async [CHANNELS.shareList](req, actor) {
       const host = shares();
@@ -147,7 +154,31 @@ function createInteractionMain({ context, readContext = context, adapters: given
       return null;
     },
     // Session directory: this document's owned sessions (public state + main-only folder name).
-    listOwned() { const out = []; for (const actor of documents.keys()) for (const state of hub.list(actor)) out.push({ state, leaf: leaves.get(state.session) ?? null }); return out; },
+    listOwned() { const out = []; for (const actor of documents.keys()) for (const state of hub.list(actor)) out.push({ state, leaf: leaves.get(state.session) ?? null, nativeSessionId: hub.targetOf(state.session), nativeTurnId: hub.reportTurnOf(state.session) }); return out; },
+    // Match native provider session identity, never a folder/project label.
+    reportHooks(rows) {
+      if(!Array.isArray(rows))return;
+      const Machine = require('../hooks/session-machine'), Reports = require('./agent-self-report');
+      const time = now ? now() : Date.now();
+      for (const actor of documents.keys()) for (const state of hub.list(actor)) {
+        if (state.ownership !== 'plexiform-owned' || state.provider.id !== 'codex' || state.status === 'ended') continue;
+        const native = hub.targetOf(state.session);
+        const matches = rows.filter(r => r?.source === 'codex' && !r.remote && !r.device && r.sessionId === native && r.codexLifecycle === 1);
+        if (matches.length !== 1) continue;
+        const raw = matches[0], at = Date.parse(raw.codexHookAt);
+        const turn = hub.reportTurnOf(state.session);
+        if (!turn || raw.codexTurnId !== turn) continue;
+        if (!Number.isFinite(at) || at < 0 || at > time || time - at > 90_000) continue;
+        hub.report({ session: state.session, generation: state.generation, source: 'observed', observedAt: at, inputNeeded: state.activeTurn !== null && Machine.codexInputPending(raw, time) }, actor);
+        for (const c of (Array.isArray(raw.codexAgents) ? raw.codexAgents : []).slice(0,20)) {
+          if(!object(c))continue;
+          const childAt = Date.parse(c.updatedAt ?? c.since), created = Date.parse(c.createdAt ?? c.since ?? c.updatedAt);
+          if(typeof c.id!=='string'||!['working','waiting','done','stopped'].includes(c.status)||!Number.isFinite(childAt)||childAt>time||!Number.isFinite(created)||created>childAt)continue;
+          hub.report({session:state.session,generation:state.generation,source:'observed',children:[{id:c.id,name:typeof c.name==='string'?c.name:'Agent',taskTitle:typeof c.taskTitle==='string'?c.taskTitle:'',state:['done','stopped'].includes(c.status)?'ended':c.status==='waiting'?'waiting':'working',observedAt:childAt,createdAt:created}]},actor);
+        }
+        for (const c of Reports.project(raw, time).slice(0, 20)) hub.report({ session: state.session, generation: state.generation, source: 'self-reported', children: [{ id: c.id, name: c.name, taskTitle: c.taskTitle, state: c.status === 'done' ? 'ended' : c.status === 'waiting' ? 'waiting' : 'working', observedAt: c.observedAt, createdAt: c.observedAt }] }, actor);
+      }
+    },
     // The Overview document was reloaded, crashed or destroyed: its sessions end now, not on the next request.
     retireDocuments() { documents.clear(); return hub.reap(() => false); },
     register(ipc) {

@@ -19,6 +19,7 @@ const require = createRequire(import.meta.url);
 const { createRemoteInteractionHost } = require('../../../src/remote-interaction.js');
 const { createInteractionHub } = require('../../../src/session-interaction.js');
 const { createCodexAppServer } = require('../../../src/codex-app-server.js');
+const { createTeamHubClient: createReportingTeamHubClient } = require('../../../src/team-hub-client.js');
 const FAKE = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'test', 'fixtures', 'fake-codex-app-server.js');
 
 const until = async (fn, ms = 4000) => { const end = Date.now() + ms; for (;;) { const v = await fn(); if (v) return v; if (Date.now() > end) throw new Error('timed out'); await new Promise((r) => setTimeout(r, 15)); } };
@@ -65,10 +66,81 @@ async function rig() {
     share: { id: share.id, team: share.team.id, user: user.user, name: 'x', scope: share.scope, ...sh } });
   const texts = (res) => res.body.result.state.deliveries.map((d) => d.text);
   return {
-    h, lines, macA, winA, bob, carol, mac, overview, extra, launch, ownerSend, call, shared, bobName, org: h.ids.org, signIn, join, frame, texts,
+    h, lines, macA, winA, bob, carol, mac, adapter, overview, extra, launch, ownerSend, call, shared, bobName, org: h.ids.org, signIn, join, frame, texts,
     async close() { mac.close(); overview.stopAll(); await h.close(); },
   };
 }
+
+test('LOCAL REPORTING PROOF: real hub shares bounded parent/child/input reports with independent clocks and no pre-share history', async () => {
+  const r = await rig();
+  try {
+    const s = await r.launch(), report = (req) => r.mac.hub.report({ session: s.session, generation: s.generation, source: 'self-reported', ...req }, r.mac.actor);
+    const privateAt = r.h.clock.wall();
+    assert.equal(report({ taskTitle: 'Private old task', inputNeeded: true, children: [{ id: 'old-child-private-id', name: 'Private old child', taskTitle: 'Private old child task', state: 'input', observedAt: privateAt, createdAt: privateAt }] }).ok, true);
+    // Metadata was recorded immediately before share in the same wall-clock
+    // millisecond. A >= comparison would leak it despite operation ordering.
+    const made = await r.mac.shareSession({ session: s.session, team: r.org, scope: 'interact' });
+    assert.equal(made.ok, true);
+    const hub = createReportingTeamHubClient({ baseUrl: r.h.base, token: () => r.bob.token, viewerId: r.bob.user }, { now: () => r.h.clock.wall() });
+    let wire = (await r.call(r.bob, made.share.id, 'state', { session: s.session })).body.result.state;
+    assert.equal(wire.task_title, null); assert.equal(wire.input_needed, false); assert.deepEqual(wire.reporting.children, []);
+    assert.ok(!JSON.stringify(wire).includes('Private old'));
+    r.h.clock.advance(1000); const childAt = r.h.clock.wall();
+    assert.equal(report({ taskTitle: 'Public current task', inputNeeded: true, children: [
+      { id: 'old-child-private-id', name: 'Private old child updated', taskTitle: 'Private old child task', state: 'ended', observedAt: childAt, createdAt: childAt },
+      { id: 'new-child-private-id', name: 'Test worker', taskTitle: 'Validate Overview /Users/alice/private ghp_abcdefghijklmnopqrstuv123456789', state: 'input', observedAt: childAt, createdAt: childAt },
+    ] }).ok, true);
+    r.h.clock.advance(1000); const parentAt = r.h.clock.wall();
+    report({ taskTitle: 'Public parent refreshed' });
+    let rows = await hub.sessions(null, r.org);
+    assert.equal(rows.length, 1); assert.equal(rows[0].task_title, 'Public parent refreshed'); assert.equal(rows[0].task_source, 'self-reported');
+    assert.equal(rows[0].input_needed, true); assert.equal(rows[0].state, 'input'); assert.equal(rows[0].children.length, 1);
+    assert.equal(rows[0].children[0].name, 'Test worker'); assert.equal(rows[0].children[0].observed_at, childAt); assert.equal(rows[0].children[0].received_at, childAt);
+    assert.equal(rows[0].task_observed_at, parentAt); assert.equal(rows[0].observed_at, parentAt);
+    assert.ok(!JSON.stringify(rows).includes('new-child-private-id')); assert.ok(!JSON.stringify(rows).includes('/Users/alice')); assert.ok(!JSON.stringify(rows).includes('ghp_abcdefghijklmnopqrstuv123456789'));
+    r.h.clock.advance(1000);
+    rows = await hub.sessions(null, r.org);
+    assert.equal(rows[0].observed_at, r.h.clock.wall()); assert.equal(rows[0].children[0].observed_at, childAt, 'fresh state receipt is not child activity');
+    assert.equal(rows[0].children[0].received_at, childAt);
+    const reportedInputAt = rows[0].input_observed_at;
+    r.h.clock.advance(90_001);
+    wire = (await r.call(r.bob, made.share.id, 'state', { session: s.session })).body.result.state;
+    assert.equal(wire.input_needed, false); assert.equal(wire.reporting.input.needed, true); assert.equal(wire.reporting.input.observed_at, reportedInputAt);
+    rows = await hub.sessions(null, r.org); assert.equal(rows[0].input_needed, false); assert.equal(rows[0].input_reported_needed, true); assert.equal(rows[0].input_observed_at, reportedInputAt);
+    // Viewing and reporting never send a provider instruction or imply delivery.
+    assert.deepEqual(r.mac.hub.state({ session: s.session }, r.mac.actor).deliveries, []);
+    await r.ownerSend(s, 'HOLD reporting proof');
+    const turn = await until(() => r.mac.hub.state({ session: s.session }, r.mac.actor).activeTurn);
+    r.h.clock.advance(1000); report({ inputNeeded: true, source: 'observed' });
+    assert.equal((await hub.sessions(null, r.org))[0].input_needed, true);
+    await r.mac.hub.interrupt({ session: s.session, generation: s.generation, turn }, r.mac.actor);
+    await until(() => r.mac.hub.state({ session: s.session }, r.mac.actor).status === 'ready');
+    rows = await hub.sessions(null, r.org); assert.equal(rows[0].input_needed, false); assert.equal(rows[0].state, 'idle', 'correlated turn completion clears its wait in actual shared state');
+    r.h.clock.advance(1000); report({ inputNeeded: true, source: 'observed' });
+    r.adapter.stop(); await until(() => r.mac.hub.state({ session: s.session }, r.mac.actor).status === 'ended');
+    wire = (await r.call(r.bob, made.share.id, 'state', { session: s.session })).body.result.state;
+    assert.equal(wire.status, 'ended'); assert.equal(wire.input_needed, false); assert.equal(wire.reporting.input.needed, true, 'closed provider preserves the last report, never a current question');
+    rows = await hub.sessions(null, r.org); assert.equal(rows[0].state, 'ended'); assert.equal(rows[0].input_needed, false); assert.equal(rows[0].input_reported_needed, true);
+    r.mac.stopSharing(made.share.id);
+    assert.deepEqual(await hub.sessions(null, r.org), []);
+    // A second main-owned hub can use a slower clock. Even if its DTO calls
+    // the old question current, the relaying host must enforce its own TTL.
+    let ownerTime = r.h.clock.wall();
+    const slower = createInteractionHub({ adapters: { codex: createCodexAppServer({ bin: FAKE }) }, boardCurrent: () => true, now: () => ownerTime });
+    r.extra.push(slower);
+    try {
+      const other = (await slower.launch({ provider: 'codex' }, 'extra:0')).state;
+      const shared = await r.mac.shareSession({ session: other.session, team: r.org, scope: 'watch' }); assert.equal(shared.ok, true);
+      r.h.clock.advance(1000); ownerTime = r.h.clock.wall();
+      slower.report({ session: other.session, generation: other.generation, source: 'observed', inputNeeded: true }, 'extra:0');
+      r.h.clock.advance(90_001);
+      assert.equal(slower.state({ session: other.session }, 'extra:0').input_needed, true, 'owner clock has not advanced');
+      const independent = (await r.call(r.bob, shared.share.id, 'state', { session: other.session })).body.result.state;
+      assert.equal(independent.reporting.input.needed, true); assert.equal(independent.input_needed, false, 'relaying host independently expires an owner claim');
+      r.mac.stopSharing(shared.share.id);
+    } finally { slower.stopAll(); }
+  } finally { await r.close(); }
+});
 
 test('LOCAL PROOF: a teammate watches a shared session; with interact they steer and interrupt, labelled "Sent by"', async () => {
   const r = await rig();
@@ -667,4 +739,32 @@ test('LOCAL PROOF: actual shared endpoint reaches Overview once, with live Messa
     assert.equal((await overview.teamMessage({ id: rows.entries[0].id, text: 'after revoke' })).ok, false);
     assert.equal((await overview.directory({ view: 'team', team: rows.team.key })).entries.length, 0);
   } finally { bobHost?.close(); await r.close(); }
+});
+
+
+test('replacing a share releases its parked watches before a new watch and send consume teammate capacity', async () => {
+  const r = await rig();
+  try {
+    const s = await r.launch();
+    const old = (await r.mac.shareSession({ session: s.session, team: r.org, scope: 'watch' })).share;
+    let oldResult = null;
+    const parked = r.mac.handle(r.frame('watch', { session: s.session, after: 1_000_000 }, old, r.bob)).then((value) => { oldResult = value; return value; });
+    const made = await r.mac.shareSession({ session: s.session, team: r.org, scope: 'interact' });
+    assert.equal(made.ok, true);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.ok(oldResult, 'revoked share watch must settle without waiting for a polling timer');
+    assert.equal(oldResult.status, 'stale');
+    const freshWatch = r.mac.handle(r.frame('watch', { session: s.session, after: 1_000_000 }, made.share, r.bob));
+    const sent = await r.mac.handle(r.frame('send', { session: s.session, generation: s.generation, text: 'replacement-share-send' }, made.share, r.bob));
+    assert.equal(sent.ok, true, JSON.stringify(sent));
+    r.mac.stopSharing(made.share.id);
+    assert.equal((await freshWatch).ok, false);
+    const last = (await r.mac.shareSession({ session: s.session, team: r.org, scope: 'interact' })).share;
+    const stopped = [];
+    for (let n = 0; n < 2; n++) r.mac.handle(r.frame('watch', { session: s.session, after: 1_000_000 }, last, r.bob)).then((value) => stopped.push(value));
+    r.mac.close();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(stopped.length, 2, 'stopping hosting must release parked watches immediately');
+    assert.ok(stopped.every((value) => value.status === 'stale'));
+  } finally { await r.close(); }
 });
