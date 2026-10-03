@@ -3909,9 +3909,14 @@ utilityHandle('mcp-set-enabled', settingsOnly, (_e, on) => {
 });
 
 // Connect other agents: each adapter writes its own hook config.
-ipcMain.handle('connect-agent', (e, which) => {
+ipcMain.handle('connect-agent', async (e, which) => {
   if (!fromNativeBoardSettings(e)) return { ok: false, error: 'Not allowed.' };
-  if (typeof which !== 'string' || !['codex', 'cursor', 'gemini'].includes(which)) return { ok: false };
+  if (typeof which !== 'string' || !['codex', 'cursor', 'gemini', 'hermes'].includes(which)) return { ok: false };
+  if (which === 'hermes') {
+    if (!app.isPackaged || !AUTO_INSTALL_HOOKS) return { ok: false, error: 'Open the installed app to connect an agent.' };
+    try { return await require('./adapters/hermes-activity').connect({ home: os.homedir(), runtime: HOOK_RUNTIME }); }
+    catch { return { ok: false, error: 'Hermes activity connection failed; existing provider settings were not edited by Plexiform.' }; }
+  }
   const adapter = Adapters.get(which);
   if (!adapter) return { ok: false };
   if (!app.isPackaged || !AUTO_INSTALL_HOOKS) return { ok: false, error: 'Open the installed app to connect an agent.' };

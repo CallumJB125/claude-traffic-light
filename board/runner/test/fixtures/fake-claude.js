@@ -11,7 +11,8 @@
 // scenario.mcp_stdio: board tools go through the real board MCP server (stdio).
 import fs from 'node:fs';
 import path from 'node:path';
-import net from 'node:net';
+import net from '../../../shared/local-sockets.cjs';
+import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 
@@ -46,7 +47,10 @@ function runHook(event, payload, matcherTool) {
     // Like CLI 2.1.285 with CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1: credential-named vars never reach hooks.
     const env = { ...process.env };
     if (env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB === '1') for (const k of Object.keys(env)) if (/TOKEN|SECRET|PASSWORD|API_KEY/.test(k)) delete env[k];
-    const child = spawn('/bin/sh', ['-c', cmd], { env, stdio: ['pipe', 'pipe', 'pipe'] });
+    const hookEvents = { SessionStart: 'start', UserPromptSubmit: 'prompt', PreToolUse: 'pre', PostToolUse: 'post', PostToolUseFailure: 'postfail', PreCompact: 'precompact', Stop: 'stop', StopFailure: 'stopfail', SubagentStop: 'substop' };
+    const child = process.platform === 'win32'
+      ? spawn(process.execPath, [fileURLToPath(new URL('../../hook-shim.js', import.meta.url)), hookEvents[event]], { env, stdio: ['pipe', 'pipe', 'pipe'] })
+      : spawn('/bin/sh', ['-c', cmd], { env, stdio: ['pipe', 'pipe', 'pipe'] });
     let so = '';
     let se = '';
     child.stdout.on('data', (d) => { so += d; });
@@ -163,7 +167,7 @@ process.stdin.on('end', () => {
 });
 
 function killGrandchildren() {
-  for (const g of grandchildren) { try { process.kill(-g, 'SIGKILL'); } catch { /* gone */ } }
+  for (const g of grandchildren) { try { process.kill(process.platform === 'win32' ? g : -g, 'SIGKILL'); } catch { /* gone */ } }
 }
 
 process.on('SIGTERM', () => {
@@ -203,12 +207,12 @@ async function tool(step) {
     return;
   }
   if (step.group_child) {
-    const g = spawn('/bin/sleep', ['300'], { stdio: 'ignore' });
+    const g = spawn(process.execPath, ['-e', 'setTimeout(()=>{},300000)'], { stdio: 'ignore' });
     g.unref();
     log({ ev: 'group_child', pid: g.pid });
   }
   if (step.grandchild) {
-    const g = spawn('/bin/sleep', ['300'], { detached: true, stdio: 'ignore' });
+    const g = spawn(process.execPath, ['-e', 'setTimeout(()=>{},300000)'], { detached: process.platform !== 'win32', stdio: 'ignore' });
     g.unref();
     grandchildren.push(g.pid);
     log({ ev: 'grandchild', pid: g.pid });

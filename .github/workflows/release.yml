@@ -125,6 +125,12 @@ jobs:
           mkdir -p work/windows-release
           npm run test:native-darwin 2>&1 | tee work/windows-release/setups-native-darwin.log
 
+      - name: Native private directory helper (Windows)
+        if: matrix.platform == 'win'
+        timeout-minutes: 3
+        shell: pwsh
+        run: ./scripts/build-windows-private-directory.ps1
+
       # Gates every platform, including beta and dry runs, so a green
       # candidate job cannot hide failing tests. Bounded, so a hung test can't
       # eat the job. The ICS tests assume SAST, and Electron-based tests need

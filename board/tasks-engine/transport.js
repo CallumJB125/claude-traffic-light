@@ -5,7 +5,7 @@
 // and the hb green lease push. Local only: no TCP, no network.
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import net from 'node:net'; // privacy-flow: tasks-local
+import net from '../shared/local-sockets.cjs'; // protected Windows local transport; POSIX Unix sockets
 import path from 'node:path';
 import { validate } from '../tasks-api/validate.js';
 import { MAX_FRAME_BYTES, HB_PUSH_MS, BACKPRESSURE_BYTES, SOCKET_NAME, TOKEN_NAME, METHODS } from '../tasks-api/protocol.js';
@@ -46,6 +46,7 @@ async function clearSocketPath(socketPath) {
 
 /** The per-user token: reused when private and well-formed, otherwise replaced (it may have leaked). */
 function ensureToken(tokenPath) {
+  if (process.platform === 'win32') return net.token(path.join(path.dirname(tokenPath), SOCKET_NAME), true);
   let st = null;
   try { st = fs.lstatSync(tokenPath); } catch { /* none yet */ }
   if (st) {
@@ -65,8 +66,8 @@ function ensureToken(tokenPath) {
 export async function startTransport({ engine, dir, log, hbMs = HB_PUSH_MS }) {
   const socketPath = path.join(dir, SOCKET_NAME);
   const tokenPath = path.join(dir, TOKEN_NAME);
-  if (Buffer.byteLength(socketPath) > MAX_SOCKET_PATH) throw new StartError('SOCKET_PATH_TOO_LONG', 'the data folder path is too long for a local socket');
-  await clearSocketPath(socketPath);
+  if (process.platform !== 'win32' && Buffer.byteLength(socketPath) > MAX_SOCKET_PATH) throw new StartError('SOCKET_PATH_TOO_LONG', 'the data folder path is too long for a local socket');
+  if (process.platform !== 'win32') await clearSocketPath(socketPath);
   const token = ensureToken(tokenPath);
   const tokenHash = crypto.createHash('sha256').update(token).digest();
   const relay = relayLookup(dir);
@@ -268,7 +269,7 @@ export async function startTransport({ engine, dir, log, hbMs = HB_PUSH_MS }) {
     server.once('error', () => reject(new StartError('SOCKET_IN_USE', 'the socket could not be opened')));
     server.listen(socketPath, resolve);
   });
-  fs.chmodSync(socketPath, 0o600);
+  if (process.platform !== 'win32') fs.chmodSync(socketPath, 0o600);
 
   // Recheck auth for every push; revoked clients receive no task data.
   const hb = setInterval(() => {
@@ -285,7 +286,7 @@ export async function startTransport({ engine, dir, log, hbMs = HB_PUSH_MS }) {
       clearInterval(hb);
       engine.off('event', onEvent);
       for (const c of conns) { send(c, { push: 'bye', reason: 'shutdown' }); c.destroy(); }
-      server.close(() => { try { fs.unlinkSync(socketPath); } catch { /* gone */ } resolve(); });
+      server.close(() => { try { if (process.platform !== 'win32') fs.unlinkSync(socketPath); } catch { /* gone */ } resolve(); });
     }),
   };
 }

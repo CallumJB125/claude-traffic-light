@@ -20,11 +20,12 @@ import path from 'node:path';
  * A spend cap hit (--max-budget-usd) is a result with terminal_reason 'budget'.
  */
 export class ClaudeBackend extends EventEmitter {
-  static describe() {
+  static describe(platform = process.platform) {
     return {
       id: 'claude',
       label: 'Claude Code',
-      startable: true,
+      startable: platform !== 'win32',
+      ...(platform === 'win32' ? { reason: 'Claude managed tasks require a provider sandbox, which Claude does not support on native Windows.' } : {}),
       capabilities: {
         budget: 'native', budgetUnit: 'usd',      // --max-budget-usd
         resume: true, interrupt: true, structuredEvents: true,
@@ -36,16 +37,17 @@ export class ClaudeBackend extends EventEmitter {
 
   /** Signed in: an API key in the env, or the CLI's documented credentials file exists (macOS keeps it in the keychain: 'unknown'). */
   static async detect(opts = {}) {
+    if ((opts.platform ?? process.platform) === 'win32') return { id: 'claude', installed: false, startable: false, signedIn: 'unknown', reason: 'unsupported_windows_sandbox', detail: 'Claude managed tasks require a provider sandbox. Native Windows is unsupported; external sessions remain visible.' };
     const d = await detectCli('claude', { ...opts, authFiles: (env) => (env.HOME ? [path.join(env.HOME, '.claude', '.credentials.json')] : []) });
     return d.installed && !d.reason && (opts.env ?? process.env).ANTHROPIC_API_KEY ? { ...d, signedIn: true } : d;
   }
 
   // budget {amount, unit:'usd'} (adapter contract §4) or the older budgetUsd; permissionMode defaults to the board profile.
   constructor({ bin, cwd, env, runDir, sessionId, budgetUsd, budget = null, maxTurns, systemPrompt, model, resume = false, log, boardHome = null,
-    permissionMode = 'acceptEdits', extraDisallowed = [], interruptWaitMs = INTERRUPT_WAIT_MS, stopGraceMs = STOP_GRACE_MS }) {
+    platform = process.platform, permissionMode = 'acceptEdits', extraDisallowed = [], interruptWaitMs = INTERRUPT_WAIT_MS, stopGraceMs = STOP_GRACE_MS }) {
     super();
     if (budgetUsd == null && budget?.unit === 'usd' && Number.isFinite(budget.amount)) budgetUsd = budget.amount;
-    Object.assign(this, { bin, cwd, env, runDir, sessionId, budgetUsd, maxTurns, systemPrompt, model, resume, log, boardHome, permissionMode, extraDisallowed, interruptWaitMs, stopGraceMs });
+    Object.assign(this, { bin, cwd, env, runDir, sessionId, budgetUsd, maxTurns, systemPrompt, model, resume, log, boardHome, platform, permissionMode, extraDisallowed, interruptWaitMs, stopGraceMs });
     this.child = null;
     this.pid = null;
     this.lstart = null;
@@ -64,11 +66,18 @@ export class ClaudeBackend extends EventEmitter {
   }
 
   start(firstPromptText) {
+    if (this.platform === 'win32') throw Object.assign(new Error('Claude managed tasks require a provider sandbox, unavailable on native Windows. External sessions remain visible.'), { code: 'NOT_AVAILABLE' });
     const child = spawn(this.bin, this.argv(), { cwd: this.cwd, env: this.env, stdio: ['pipe', 'pipe', 'pipe'], detached: true }); // privacy-flow: runner-claude
     this.child = child;
     this.pid = child.pid;
     this.lstart = lstartOf(child.pid);
     this.pgid = child.pid;   // detached ⇒ own session and process group
+    this.attachChild(child);
+    if (firstPromptText) this.send(firstPromptText);
+    return this;
+  }
+
+  attachChild(child) {
     child.stdin.on('error', () => { /* EPIPE after exit */ });
     child.stdout.setEncoding('utf8');
     child.stdout.on('data', lineReader((l) => this.#onLine(l)));
@@ -79,8 +88,6 @@ export class ClaudeBackend extends EventEmitter {
       if (!this.exited) this.#exit(null, null, err.message);
     });
     child.on('exit', (code, signal) => this.#exit(code, signal));
-    if (firstPromptText) this.send(firstPromptText);
-    return this;
   }
 
   #exit(code, signal, error) {

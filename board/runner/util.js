@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
+import WindowsPrivate from '../shared/windows-private-directory.cjs';
 
 export const RUNNER_VERSION = '0.1.0';
 
@@ -32,7 +33,8 @@ export function ensureDir(dir) {
  * control socket. Refuse a symlink, a directory another uid owns, or one
  * still open to group/other after the chmod (whose failure is fatal here).
  */
-export function ensurePrivateDir(dir) {
+export function ensurePrivateDir(dir, { platform = process.platform, windowsPrivate = WindowsPrivate } = {}) {
+  if (platform === 'win32') { windowsPrivate.ensureDirectory(dir); return dir; }
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const before = fs.lstatSync(dir);
   if (before.isSymbolicLink()) throw new Error('data_dir must not be a symlink');

@@ -4,10 +4,12 @@
 // process group is killed separately.
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
+import { windowsIdentity } from './windows-job.js';
 
 const PS = process.platform === 'darwin' ? '/bin/ps' : 'ps';
 
 export function lstartOf(pid) {
+  if (process.platform === 'win32') return windowsIdentity(pid);
   if (!Number.isSafeInteger(pid) || pid <= 0) return null;
   try {
     // The supervisor, hook and restart reader can have different narrow
@@ -31,6 +33,7 @@ export function sameProcess(pid, lstart) {
 // Stop receipts need positive metadata evidence: ps failure is unknown, not
 // an empty tree. No command lines or provider content are read by this probe.
 function processStatusTable(timeoutMs = 1000) {
+  if (process.platform === 'win32') return null;
   try {
     const out = execFileSync(PS, ['-axo', 'pid=,pgid=,stat='], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: timeoutMs }); // privacy-flow: runner-local
     const rows = [];
@@ -69,6 +72,7 @@ export async function waitForStopped({ pid, groups = [] }, { timeoutMs = 1000, r
 }
 
 export function processTable() {
+  if (process.platform === 'win32') return [];
   let out = '';
   try { out = execFileSync(PS, ['-axo', 'pid=,ppid=,pgid='], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }); } catch { return []; } // privacy-flow: runner-local
   const rows = [];
@@ -81,6 +85,7 @@ export function processTable() {
 
 // Full command lines (for "is that session still open?"); null if ps fails.
 export function commandLines() {
+  if (process.platform === 'win32') return null;
   try {
     return execFileSync(PS, ['-axww', '-o', 'command='], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 16 << 20 }).split('\n'); // privacy-flow: runner-local
   } catch { return null; }
@@ -124,6 +129,7 @@ export function treeGroups(pid, table = processTable()) {
 }
 
 export function killGroups(groups, signal = 'SIGKILL') {
+  if (process.platform === 'win32') return;
   for (const g of groups) {
     try { process.kill(-g, signal); } catch { /* gone */ }
   }
@@ -134,6 +140,9 @@ export function killGroups(groups, signal = 'SIGKILL') {
  * group. Returns the groups/pids it signalled.
  */
 export function killTree(pid, lstart) {
+  // Only a retained WindowsJob can terminate a Windows tree. Historical PIDs
+  // carry no ownership handle, even if the root's creation time still matches.
+  if (process.platform === 'win32') return { groups: [], pids: [] };
   // A recycled pid is someone else's process: touch nothing.
   if (lstart != null && lstartOf(pid) !== lstart) return { groups: [], pids: [] };
   const table = processTable();

@@ -158,7 +158,7 @@ void pf_directory_close(PFDirectory *directory) {
     ZeroMemory(directory, sizeof(*directory));
 }
 
-PFDirectoryResult pf_directory_open_root(const WCHAR *canonicalRoot, const PFDirectoryIdentity *expected, PFDirectory *directory) {
+static PFDirectoryResult open_root_access(const WCHAR *canonicalRoot, const PFDirectoryIdentity *expected, PFDirectory *directory, ACCESS_MASK leafAccess) {
     WCHAR drive[] = L"C:\\", driveNamespace[] = L"\\\\?\\C:\\";
     size_t length, at;
     PFDirectoryResult result;
@@ -186,7 +186,7 @@ PFDirectoryResult pf_directory_open_root(const WCHAR *canonicalRoot, const PFDir
         if (!valid_component(canonicalRoot + at, count) || directory->count == PF_DIRECTORY_DEPTH || end + 1 == length) { result = PF_BAD_COMPONENT; goto refused; }
         memcpy(component, canonicalRoot + at, count * sizeof(WCHAR)); component[count] = 0;
         result = open_component(current_handle(directory), component, (USHORT)count, FILE_OPEN,
-            end == length ? PF_DIR_PARENT : PF_DIR_READ, NULL, &handle);
+            end == length ? leafAccess : PF_DIR_READ, NULL, &handle);
         if (result != PF_OK) goto refused;
         directory->handles[directory->count++] = handle;
         result = directory_details(handle, NULL);
@@ -198,6 +198,16 @@ PFDirectoryResult pf_directory_open_root(const WCHAR *canonicalRoot, const PFDir
     if (result == PF_OK) return PF_OK;
 refused:
     pf_directory_close(directory);
+    return result;
+}
+
+PFDirectoryResult pf_directory_open_root(const WCHAR *root, const PFDirectoryIdentity *expected, PFDirectory *directory) {
+    return open_root_access(root, expected, directory, PF_DIR_PARENT);
+}
+PFDirectoryResult pf_directory_open_read_root(const WCHAR *root, const PFDirectoryIdentity *expected, PFDirectory *directory) {
+    PFDirectoryResult result = open_root_access(root, expected, directory, PF_DIR_READ);
+    if (result == PF_OK) result = pf_directory_inspect(directory, expected, NULL);
+    if (result != PF_OK) pf_directory_close(directory);
     return result;
 }
 

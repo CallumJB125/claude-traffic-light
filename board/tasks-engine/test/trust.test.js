@@ -4,7 +4,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import net from 'node:net';
+import net from '../../shared/local-sockets.cjs';
 import path from 'node:path';
 import { startEngine, makeRepo, waitFor, fakeLog, rm, tmpDir, writePolicy } from './helpers.js';
 import { addRelayToken } from '../relay-tokens.js';

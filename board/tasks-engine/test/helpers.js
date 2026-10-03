@@ -5,8 +5,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { privateFixtureDirectory } from '../../shared/test-support/windows-acl.js';
 import { execFileSync } from 'node:child_process';
 import { ClaudeBackend } from '../../runner/backends/claude.js';
+import { WindowsSyntheticClaude } from '../../runner/test/windows-synthetic-claude.js';
 import { CodexBackend } from '../../runner/backends/codex.js';
 import { fakeClaudeBin } from '../../runner/test/helpers.js';
 import { connect } from '../../tasks-api/client.js';
@@ -14,7 +16,7 @@ import { makeLogger } from '../../runner/util.js';
 
 const TEMP_ROOT = process.platform === 'darwin' ? '/tmp' : os.tmpdir();
 export function tmpDir(prefix = 'bte-') {
-  return fs.realpathSync(fs.mkdtempSync(path.join(TEMP_ROOT, prefix)));
+  return privateFixtureDirectory(path.join(TEMP_ROOT, prefix));
 }
 
 export function rm(dir) {
@@ -39,7 +41,7 @@ export function makeRepo(root) {
 /** {claude, codex} registry: claude = the real backend on a fake CLI; codex = installed but not startable. */
 export function fakeBackends(dir, scenario, { claudeInstalled = true } = {}) {
   const bin = fakeClaudeBin(dir, scenario);
-  class FakeClaude extends ClaudeBackend {
+  class FakeClaude extends (process.platform === 'win32' ? WindowsSyntheticClaude : ClaudeBackend) {
     static async detect() {
       return claudeInstalled ? { id: 'claude', installed: true, version: '9.9.9', signedIn: true, bin } : { id: 'claude', installed: false, version: null, signedIn: 'unknown', bin: null, reason: 'not_found' };
     }
@@ -52,7 +54,7 @@ export function fakeBackends(dir, scenario, { claudeInstalled = true } = {}) {
   return { claude: FakeClaude, codex: FakeCodex };
 }
 
-export const ENV = { HOME: process.env.HOME, USER: process.env.USER, PATH: process.env.PATH, TMPDIR: TEMP_ROOT, LANG: 'en_US.UTF-8' };
+export const ENV = Object.fromEntries(Object.entries({ HOME: process.env.HOME ?? os.homedir(), USER: process.env.USER, PATH: process.env.PATH, TMPDIR: TEMP_ROOT, LANG: 'en_US.UTF-8', ...(process.platform === 'win32' ? { SystemRoot: process.env.SystemRoot, USERPROFILE: process.env.USERPROFILE, LOCALAPPDATA: process.env.LOCALAPPDATA, APPDATA: process.env.APPDATA, TEMP: process.env.TEMP, TMP: process.env.TMP } : {}) }).filter(([, value]) => typeof value === 'string'));
 
 /** Engine on a temp data dir + a connected client. */
 export async function startEngine({ scenario = { steps: [{ result: 'success' }] }, dir = tmpDir(), engineOpts = {}, backendOpts } = {}) {

@@ -6,7 +6,7 @@ const LIMIT = 100;
 const CHILD_LIMIT = 64;
 const Machine = require('../hooks/session-machine');
 const RECENT_MS = 90_000;
-const PROVIDERS = Object.freeze({ codex: 'Codex', claude: 'Claude Code', 'claude-code': 'Claude Code', cursor: 'Cursor', gemini: 'Gemini', opencode: 'OpenCode', copilot: 'Copilot' });
+const PROVIDERS = Object.freeze({ codex: 'Codex', claude: 'Claude Code', 'claude-code': 'Claude Code', cursor: 'Cursor', gemini: 'Gemini', hermes: 'Hermes', opencode: 'OpenCode', copilot: 'Copilot' });
 const STATUSES = Object.freeze({
   'session-start': 'Ready', 'prompt-submit': 'Working', 'tool-use': 'Working', 'tool-done': 'Working',
   'tool-failed': 'Working', 'permission-denied': 'Working', compact: 'Compacting',

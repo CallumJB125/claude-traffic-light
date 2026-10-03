@@ -30,10 +30,11 @@ test('hook paths: an AppImage points at $APPIMAGE and a per-version copy in the 
   assert.equal(r.copyFrom, '/x/resources');
 });
 
-test('Windows portable hook/MCP paths survive extraction cleanup by running the original launcher and stable scripts', () => {
+test('Windows portable hook/MCP paths use the stable runtime without unpacking the launcher per hook', () => {
   const launcher = 'C:\\Downloads\\Plexiform-1.2.3-win-x64-portable.exe';
   const r = HookPaths.choose({ ...base, packaged: true, platform: 'win32', env: { PORTABLE_EXECUTABLE_FILE: launcher } });
-  assert.equal(r.execPath, launcher);
+  assert.equal(r.execPath, path.join(base.rootDir, 'hooks-1.2.3', 'runtime', 'Plexiform'));
+  assert.equal(r.runtimeFrom, path.dirname(base.execPath));
   assert.equal(r.hooksDir, path.join(base.rootDir, 'hooks-1.2.3', 'hooks'));
   assert.equal(r.mcpAppPath, r.stableDir);
   assert.equal(r.copyFrom, base.resourcesPath);
@@ -102,4 +103,39 @@ test('hook paths: a finished copy (.ok) is left alone; a new one is built aside 
   assert.equal(HookPaths.materialize(chosen, fs, 4244), true);
   assert.equal(fs.readFileSync(path.join(chosen.hooksDir, 'set-status.js'), 'utf8'), 'changed');
   fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+
+test('Windows portable caches the complete runtime and upgrades a scripts-only cache before extraction cleanup', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-portable-runtime-'));
+  try {
+    const extraction = path.join(tmp, 'extracted');
+    const resources = path.join(extraction, 'resources');
+    const root = path.join(tmp, 'data');
+    for (const dir of ['hooks', 'adapters']) fs.mkdirSync(path.join(resources, dir), { recursive: true });
+    const files = { 'Plexiform.exe': 'runtime', 'node.dll': 'native dependency', 'resources/app.asar': 'MCP and app code', 'resources/hooks/set-status.js': 'hook code', 'resources/adapters/runtime.js': 'adapter code' };
+    for (const [name, body] of Object.entries(files)) fs.writeFileSync(path.join(extraction, name), body);
+    const opts = { ...base, execPath: path.join(extraction, 'Plexiform.exe'), resourcesPath: resources, rootDir: root, packaged: true, platform: 'win32', env: { PORTABLE_EXECUTABLE_FILE: path.join(tmp, 'portable.exe') } };
+    const chosen = HookPaths.choose(opts);
+    fs.mkdirSync(chosen.stableDir, { recursive: true });
+    fs.writeFileSync(path.join(chosen.stableDir, '.ok'), path.basename(chosen.stableDir));
+    const resolved = HookPaths.resolve(opts);
+    assert.equal(resolved.execPath, path.join(chosen.stableDir, 'runtime', 'Plexiform.exe'));
+    fs.rmSync(extraction, { recursive: true });
+    for (const [name, body] of Object.entries(files)) assert.equal(fs.readFileSync(path.join(chosen.stableDir, 'runtime', name), 'utf8'), body);
+    assert.equal(fs.readFileSync(path.join(resolved.hooksDir, 'set-status.js'), 'utf8'), 'hook code');
+    assert.equal(fs.readFileSync(path.join(resolved.mcpAppPath, 'mcp-server.js'), 'utf8'), HookPaths.MCP_STUB);
+    assert.equal(fs.readFileSync(path.join(chosen.stableDir, '.ok'), 'utf8'), path.basename(chosen.stableDir) + '/windows-runtime-v1');
+    assert.equal(HookPaths.materialize(chosen), false, 'a second launch reuses the completed runtime without needing extraction files');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+});
+
+test('Windows portable never publishes a completed cache after a failed runtime copy', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-portable-failure-'));
+  try {
+    const stableDir = path.join(tmp, 'hooks-1.2.3');
+    const runtimeFrom = path.join(tmp, 'missing-runtime');
+    assert.throws(() => HookPaths.materialize({ stableDir, copyFrom: path.join(runtimeFrom, 'resources'), runtimeFrom }));
+    assert.equal(fs.existsSync(path.join(stableDir, '.ok')), false);
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 });

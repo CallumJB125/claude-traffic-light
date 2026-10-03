@@ -199,7 +199,9 @@
       const hint = document.getElementById('connect-hint');
       try {
         const r = await window.settingsApi.connectAgent(b.dataset.agent);
-        hint.textContent = r && r.ok ? r.reviewRequired
+        hint.textContent = r && r.ok ? r.hermesActivity
+          ? 'Hermes activity enabled for the default profile. Start a new Hermes session anywhere; it appears after its first activity. Restart existing Hermes sessions to load the plugin. Conversation text stays in Hermes; messaging from Plexiform is unavailable.'
+          : r.reviewRequired
           ? `Configured ${b.textContent} in ${r.file}. Review and trust the Plexiform hooks in Codex, then start a new turn. The widget updates when it receives activity; existing chat text is not read.`
           : `Connected ${b.textContent}: wrote ${r.file}. Restart it to pick up the hooks.`
           : r && r.error ? `Did not connect ${b.textContent}: ${r.file ? `in ${r.file}, ` : ''}${r.error}` : 'Could not connect.';

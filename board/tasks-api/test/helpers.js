@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { privateFixtureDirectory } from '../../shared/test-support/windows-acl.js';
 import { startMockServer, SCHEMA } from '../mock-server.js';
 import { connect } from '../client.js';
 import { validate } from '../validate.js';
@@ -9,7 +10,7 @@ export { SCHEMA };
 
 export function tmpDir() {
   // Short base: AF_UNIX paths are capped at 104 bytes on macOS.
-  return fs.mkdtempSync(path.join(os.platform() === 'darwin' ? '/tmp' : os.tmpdir(), 'bt-'));
+  return privateFixtureDirectory(path.join(os.platform() === 'darwin' ? '/tmp' : os.tmpdir(), 'bt-'));
 }
 
 export async function startMock(opts = {}) {
@@ -55,7 +56,7 @@ export async function startTarget(target, opts = {}) {
   }
   const { startTasksEngine } = await import('../../tasks-engine/index.js');
   const { fakeBackends, makeRepo, ENV } = await import('../../tasks-engine/test/helpers.js');
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.platform() === 'darwin' ? '/tmp' : os.tmpdir(), 'bc-')));
+  const root = privateFixtureDirectory(path.join(os.platform() === 'darwin' ? '/tmp' : os.tmpdir(), 'bc-'));
   const repo = makeRepo(root);
   const dir = path.join(root, 'd');
   const srv = await startTasksEngine({

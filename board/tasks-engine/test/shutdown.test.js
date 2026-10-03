@@ -237,3 +237,35 @@ for (const leaveRuns of [false, true]) test(`close preserves ${leaveRuns ? 'leav
     assert.equal(fs.statSync(f.store.eventsFile).size, eventSize);
   } finally { await f.cleanup(); }
 });
+
+test('Windows unconfirmed stop preserves its run and workspace and refuses a stopped handover', async () => {
+  const f = await fixture({ startAllowed: true });
+  try {
+    const { id } = await f.engine.createTask({ requestId: 'windows-stop-task', spec: f.spec });
+    const backend = await bounded(f.started); await turn();
+    backend.platform = 'win32'; backend.confirmStopped = async () => false;
+    const task = f.engine.tasks.get(id), run = f.engine.runs.get(id), worktree = task.worktree;
+    await assert.rejects(f.engine.act({ id, action: 'stop', requestId: 'unconfirmed-stop' }), e => e.code === 'NOT_AVAILABLE' && /unconfirmed/.test(e.message));
+    assert.equal(f.engine.runs.get(id), run); assert.equal(task.windowsStopUnconfirmed, true); assert.match(task.failReason, /quarantined/); assert.ok(fs.existsSync(worktree));
+    await assert.rejects(f.engine.act({ id, action: 'retry', requestId: 'blocked-retry' }), e => e.code === 'ILLEGAL_TRANSITION');
+    assert.equal(f.engine.runs.get(id), run);
+  } finally { for (const b of f.instances) b.confirmStopped = async () => true; await f.cleanup(); }
+});
+
+test('restart quarantines a persisted Windows launch even without a provider PID or surviving root', async () => {
+  const f = await fixture({ startAllowed: true }); let restarted;
+  try {
+    const { id } = await f.engine.createTask({ requestId: 'windows-crash-task', spec: f.spec });
+    await bounded(f.started); await turn();
+    const task = f.engine.tasks.get(id);
+    task.run = { kind: 'windows-job', pid: null, lstart: null, pgid: null };
+    f.store.saveTask(task, f.engine.tasks);
+    await f.engine.close({ leaveRuns: true });
+    restarted = new TasksEngine({ dataDir: f.engine.dataDir, store: new TaskStore(path.join(f.engine.dataDir, 'store')), backends: { codex: f.Backend }, env: f.engine.env, log: { info() {}, warn() {}, error() {} } });
+    await restarted.init();
+    const recovered = restarted.tasks.get(id);
+    assert.equal(recovered.windowsStopUnconfirmed, true); assert.equal(recovered.run.kind, 'windows-job'); assert.ok(fs.existsSync(recovered.worktree));
+    await assert.rejects(restarted.act({ id, action: 'retry', requestId: 'quarantine-retry' }), e => e.code === 'ILLEGAL_TRANSITION');
+    assert.equal(f.instances.length, 1, 'recovery and retry never create another backend');
+  } finally { await restarted?.close(); await f.cleanup(); }
+});

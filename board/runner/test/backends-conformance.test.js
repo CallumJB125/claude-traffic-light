@@ -7,15 +7,37 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
+import { fileURLToPath } from 'node:url';
+import { WindowsSyntheticClaude } from './windows-synthetic-claude.js';
+import { widenFixtureAcl } from '../../shared/test-support/windows-acl.js';
 import { BACKENDS, NORMALISED_EVENTS, INTERNAL_EVENTS, CAPABILITY_VALUES, describeAll } from '../backends/index.js';
 import { buildEnv } from '../launch.js';
-import { resolveBin, safeBinary } from '../backends/detect.js';
+import { resolveBin, safeBinary, detectCli } from '../backends/detect.js';
 import { tmpDir, rm, fakeClaudeBin, readFakeLog, waitFor, alive } from './helpers.js';
 
 const IDS = Object.keys(BACKENDS);
+const nativeWindows = process.platform === 'win32';
+const cliPath = (dir, name) => path.join(dir, name + (nativeWindows ? '.exe' : ''));
+async function detectFixture(id, options) {
+  if (nativeWindows && id === 'claude') {
+    const unavailable = await BACKENDS.claude.detect(options);
+    assert.equal(unavailable.startable, false);
+    assert.equal(unavailable.reason, 'unsupported_windows_sandbox');
+    // Exercise the shared binary detector separately; the provider remains gated.
+    return detectCli(id, options);
+  }
+  return BACKENDS[id].detect(options);
+}
 
 function fakeCli(dir, name, { version = '1.2.3', loginExit = 0, hang = false, mode = 0o755 } = {}) {
-  const bin = path.join(dir, name);
+  const bin = cliPath(dir, name);
+  if (nativeWindows) {
+    fs.copyFileSync(fileURLToPath(new URL('../../../work/windows-test-fixtures/cli-probe.exe', import.meta.url)), bin);
+    fs.writeFileSync(bin + '.fixture', `${version} ${loginExit} ${hang ? 1 : 0}\n`);
+    if (mode & 0o022) widenFixtureAcl(bin, 'Write');
+    return bin;
+  }
   const body = hang
     ? '#!/bin/sh\nexec /bin/sleep 30\n'
     : `#!/bin/sh\nif [ "$1" = "--version" ]; then echo "${name} ${version} (fake)"; exit 0; fi\nif [ "$1" = "login" ] && [ "$2" = "status" ]; then exit ${loginExit}; fi\nexit 3\n`;
@@ -41,7 +63,7 @@ test('registry: every backend has a stable id, a label, honest capabilities and 
   }
   assert.deepEqual(describeAll().map((d) => d.id), IDS);
   assert.equal(BACKENDS.claude.describe().capabilities.budget, 'native');
-  assert.equal(BACKENDS.claude.describe().startable, true);
+  assert.equal(BACKENDS.claude.describe().startable, !nativeWindows);
   assert.equal(BACKENDS.codex.describe().startable, true);
 });
 
@@ -51,15 +73,15 @@ for (const id of IDS) {
     const binDir = path.join(home, 'bin');
     fs.mkdirSync(binDir);
     try {
-      const none = await BACKENDS[id].detect({ env: { HOME: home, PATH: path.join(home, 'nothing-here') }, knownDirs: [] });
+      const none = await detectFixture(id, { env: { HOME: home, PATH: path.join(home, 'nothing-here') }, knownDirs: [] });
       assert.deepEqual({ ...none, signedIn: undefined }, { id, installed: false, version: null, signedIn: undefined, bin: null, reason: 'not_found' });
       assert.ok([true, false, 'unknown'].includes(none.signedIn));
 
       fakeCli(binDir, id);
-      const d = await BACKENDS[id].detect({ env: { HOME: home, PATH: binDir }, knownDirs: [], timeoutMs: 15000 });
+      const d = await detectFixture(id, { env: { HOME: home, PATH: binDir }, knownDirs: [], timeoutMs: 15000 });
       assert.equal(d.installed, true);
       assert.equal(d.version, '1.2.3');
-      assert.equal(d.bin, fs.realpathSync(path.join(binDir, id)));
+      assert.equal(d.bin, fs.realpathSync(cliPath(binDir, id)));
       assert.ok(path.isAbsolute(d.bin));
       assert.ok([true, false, 'unknown'].includes(d.signedIn));
       assert.ok(!('reason' in d) || /^[a-z_]+$/.test(d.reason));
@@ -72,15 +94,15 @@ for (const id of IDS) {
     fs.mkdirSync(binDir);
     try {
       fakeCli(binDir, id, { mode: 0o777 });
-      const d = await BACKENDS[id].detect({ env: { HOME: home, PATH: binDir }, knownDirs: [], timeoutMs: 15000 });
+      const d = await detectFixture(id, { env: { HOME: home, PATH: binDir }, knownDirs: [], timeoutMs: 15000 });
       assert.equal(d.installed, false);
       assert.equal(d.bin, null);
       assert.equal(d.reason, 'unsafe_bin');
 
-      fs.rmSync(path.join(binDir, id));
+      fs.rmSync(cliPath(binDir, id));
       fakeCli(binDir, id, { hang: true });
       const t0 = Date.now();
-      const h = await BACKENDS[id].detect({ env: { HOME: home, PATH: binDir }, knownDirs: [], timeoutMs: 300 });
+      const h = await detectFixture(id, { env: { HOME: home, PATH: binDir }, knownDirs: [], timeoutMs: 300 });
       assert.ok(Date.now() - t0 < 2500, 'probe timeout respected');
       assert.equal(h.installed, true);
       assert.equal(h.version, null);
@@ -95,6 +117,18 @@ test('resolveBin: a group-writable binary or a binary under an other-writable (n
   try {
     const a = path.join(home, 'a');
     fs.mkdirSync(a);
+    if (nativeWindows) {
+      const binary = fakeCli(a, 'claude');
+      assert.equal(resolveBin('claude', { PATH: a }, []).bin, fs.realpathSync(binary));
+      let restore = widenFixtureAcl(binary, 'Write');
+      try { assert.equal(resolveBin('claude', { PATH: a }, []).reason, 'unsafe_bin', 'foreign-write file ACL'); } finally { restore(); }
+      for (const directory of [a, home]) {
+        restore = widenFixtureAcl(directory, 'Write');
+        try { assert.equal(resolveBin('claude', { PATH: a }, []).reason, 'unsafe_bin', 'foreign-write ancestor ACL'); } finally { restore(); }
+      }
+      assert.ok(safeBinary(process.execPath), 'trusted installed Node executable passes');
+      return;
+    }
     fakeCli(a, 'claude', { mode: 0o775 });
     assert.equal(resolveBin('claude', { PATH: a }, []).reason, 'unsafe_bin', 'group-writable file');
     fs.chmodSync(path.join(a, 'claude'), 0o755);
@@ -116,7 +150,7 @@ test('[codex] signed in only when its status command says so (exit 0); otherwise
   try {
     fakeCli(binDir, 'codex', { loginExit: 0 });
     assert.equal((await BACKENDS.codex.detect({ env: { HOME: home, PATH: binDir }, knownDirs: [], timeoutMs: 15000 })).signedIn, true);
-    fs.rmSync(path.join(binDir, 'codex'));
+    fs.rmSync(cliPath(binDir, 'codex'));
     fakeCli(binDir, 'codex', { loginExit: 1 });
     assert.equal((await BACKENDS.codex.detect({ env: { HOME: home, PATH: binDir }, knownDirs: [], timeoutMs: 15000 })).signedIn, 'unknown');
   } finally { rm(home); }
@@ -124,7 +158,7 @@ test('[codex] signed in only when its status command says so (exit 0); otherwise
 
 // ── lifecycle, for every backend that can start a run ───────────────────────
 const POISON = {
-  HOME: process.env.HOME, PATH: process.env.PATH, LANG: 'en_US.UTF-8', TMPDIR: '/tmp',
+  HOME: process.env.HOME ?? os.homedir(), PATH: process.env.PATH, LANG: 'en_US.UTF-8', TMPDIR: os.tmpdir(), ...(nativeWindows ? { SystemRoot: process.env.SystemRoot, USERPROFILE: process.env.USERPROFILE, LOCALAPPDATA: process.env.LOCALAPPDATA, APPDATA: process.env.APPDATA, TEMP: process.env.TEMP, TMP: process.env.TMP } : {}),
   BOARD_DEVICE_TOKEN: 'bdt_supersecretdevicetoken', BOARD_HOME: '/tmp/x', AWS_SECRET_ACCESS_KEY: 'aws-secret', AWS_PROFILE: 'admin',
   HUB_RUNNER_TOKEN: 'brt1.aaaa.bbbb', PLEXIFORM_VAULT_KEY: 'vault', SOMETHING: 'bdt_leak', OTHER: 'brt_leak',
 };
@@ -137,7 +171,8 @@ function spawnBackend(B, dir, scenario, extra = {}) {
   fs.writeFileSync(path.join(runDir, 'settings.json'), '{}');
   fs.writeFileSync(path.join(runDir, 'mcp.json'), '{"mcpServers":{}}');
   const env = buildEnv(POISON, { runDir, socket: path.join(runDir, 'ipc.sock'), supervisorPid: process.pid, supervisorLstart: 'x' });
-  const backend = new B({
+  const LifecycleBackend = nativeWindows && B === BACKENDS.claude ? WindowsSyntheticClaude : B;
+  const backend = new LifecycleBackend({
     bin: fakeClaudeBin(dir, scenario), cwd: dir, env, runDir, sessionId: '00000000-0000-4000-8000-000000000001',
     budget: { amount: 1.5, unit: 'usd' }, maxTurns: 5, systemPrompt: 'sys', interruptWaitMs: 400, stopGraceMs: 600, ...extra,
   });
@@ -147,7 +182,7 @@ function spawnBackend(B, dir, scenario, extra = {}) {
   return { backend, events, runDir };
 }
 
-for (const id of IDS.filter((x) => BACKENDS[x].describe().startable && BACKENDS[x].describe().capabilities.permissions === 'hooks')) {
+for (const id of IDS.filter((x) => BACKENDS[x].describe().capabilities.permissions === 'hooks')) {
   test(`[${id}] lifecycle: argv is an array without the task text, env is allowlisted, events are normalised, budget is native`, async () => {
     const dir = tmpDir('bcf-');
     try {
@@ -156,7 +191,7 @@ for (const id of IDS.filter((x) => BACKENDS[x].describe().startable && BACKENDS[
       });
       const argv = backend.argv();
       assert.ok(Array.isArray(argv) && argv.every((a) => typeof a === 'string'));
-      backend.start(HOSTILE);
+      await backend.start(HOSTILE);
       await waitFor(() => events.some((e) => e.name === 'result'), { what: 'result' });
       const start = readFakeLog(runDir).find((l) => l.ev === 'start');
       assert.deepEqual(start.argv, argv, 'argv passed as an array, unchanged');
@@ -205,7 +240,7 @@ for (const id of IDS.filter((x) => BACKENDS[x].describe().startable && BACKENDS[
     const dir = tmpDir('bcf-');
     try {
       const { backend, events } = spawnBackend(BACKENDS[id], dir, { steps: [{ result: 'error_max_budget_usd', cost: 1.6 }] });
-      backend.start('go');
+      await backend.start('go');
       const r = await waitFor(() => events.find((e) => e.name === 'result')?.data, { what: 'result' });
       assert.equal(r.terminal_reason, 'budget');
       assert.equal(r.is_error, true);
@@ -219,7 +254,7 @@ for (const id of IDS.filter((x) => BACKENDS[x].describe().startable && BACKENDS[
       const { backend, events, runDir } = spawnBackend(BACKENDS[id], dir, {
         ignore_interrupt: true, ignore_term: true, ignore_eof: true, steps: [{ tool: 'Bash', input: { command: 'sleep 300' }, ms: 60000, grandchild: true }],
       });
-      backend.start('go');
+      await backend.start('go');
       const gc = await waitFor(() => readFakeLog(runDir).find((l) => l.ev === 'grandchild')?.pid, { what: 'grandchild' });
       await waitFor(() => events.some((e) => e.name === 'tool_start'), { what: 'tool start' });
       backend.refreshTree?.();
@@ -230,7 +265,8 @@ for (const id of IDS.filter((x) => BACKENDS[x].describe().startable && BACKENDS[
       await waitFor(() => !alive(gc), { what: 'grandchild reaped', timeout: 3000 });
       const log = readFakeLog(runDir);
       assert.ok(log.some((l) => l.ev === 'stdin' && l.msg.type === 'control_request'), 'interrupt sent first');
-      assert.ok(log.some((l) => l.ev === 'signal' && l.sig === 'SIGTERM'), 'then SIGTERM');
+      if (nativeWindows) assert.equal(backend.confirmStopped(), true, 'native Job receipt confirms no surviving descendants');
+      else assert.ok(log.some((l) => l.ev === 'signal' && l.sig === 'SIGTERM'), 'then SIGTERM');
     } finally { rm(dir); }
   });
 }
@@ -240,6 +276,6 @@ for (const id of IDS.filter((x) => !BACKENDS[x].describe().startable)) {
     const b = new BACKENDS[id]({ bin: '/bin/false', cwd: '/tmp', env: {}, runDir: '/tmp', sessionId: 's' });
     assert.throws(() => b.start('anything'), (e) => e.code === 'NOT_AVAILABLE' && !/\//.test(e.message));
     assert.equal(b.pid, null);
-    assert.equal(b.exited, true);
+    assert.equal(b.alive(), false);
   });
 }

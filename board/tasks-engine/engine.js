@@ -230,7 +230,7 @@ export class TasksEngine extends EventEmitter {
       evidence: task.evidence, pr: task.pr, cost: task.cost, baseBranch: task.baseBranch, stoppedBy: task.stoppedBy,
     });
     if (live) live.green = f.green;
-    const actions = f.actions.filter((a) => ENGINE_ACTIONS.has(a) && this.#available(task, a));
+    const actions = task.windowsStopUnconfirmed ? [] : f.actions.filter((a) => ENGINE_ACTIONS.has(a) && this.#available(task, a));
     return { ...f, actions, confirm: f.confirm.filter((a) => actions.includes(a)), live };
   }
 
@@ -433,8 +433,12 @@ export class TasksEngine extends EventEmitter {
   #recover() {
     for (const task of this.tasks.values()) {
       const had = task.run;
+      if (had?.kind === 'windows-job' || String(had?.lstart ?? '').startsWith('win32:') || task.windowsStopUnconfirmed) {
+        this.#quarantineWindows(task);
+        continue;
+      }
       if (had?.pid && sameProcess(had.pid, had.lstart)) killTree(had.pid, had.lstart);
-      else if (Number.isSafeInteger(had?.pgid) && had.pgid > 1 && had.pgid !== process.pid) {
+      else if (process.platform !== 'win32' && Number.isSafeInteger(had?.pgid) && had.pgid > 1 && had.pgid !== process.pid) {
         // The leader is gone but its process group (tool children) may live on.
         try { process.kill(-had.pgid, 'SIGKILL'); } catch { /* no such group */ }
       }
@@ -857,15 +861,27 @@ export class TasksEngine extends EventEmitter {
       else await run.ipc?.close();
       return;
     }
+    if (backend.platform === 'win32') {
+      task.run = { pid: null, lstart: null, pgid: null, kind: 'windows-job' };
+      this.#save(task); // Persist lost-ownership recovery before launching.
+    }
     try {
-      backend.start(prompt ?? (resume ? this.#withPending(task, 'You were resumed. Continue where you left off.') : this.#withPending(task, this.#finalPrompt(task))));
+      await backend.start(prompt ?? (resume ? this.#withPending(task, 'You were resumed. Continue where you left off.') : this.#withPending(task, this.#finalPrompt(task))));
     } catch (e) {
+      if (backend.platform === 'win32' && !(await backend.confirmStopped())) {
+        this.#quarantineWindows(task);
+        throw e;
+      }
       if (this.runs.get(task.id) === run) this.runs.delete(task.id);
       await run.ipc?.close();
       throw e;
     }
+    if (!this.#isLive(task, run)) {
+      if (!(await backend.stop())) throw new Error('Process stop during startup remains unconfirmed');
+      return;
+    }
     task.sessionStarted = true;
-    task.run = { pid: backend.pid ?? null, lstart: backend.lstart ?? null, pgid: backend.pgid ?? null };
+    task.run = { pid: backend.pid ?? null, lstart: backend.lstart ?? null, pgid: backend.pgid ?? null, ...(backend.platform === 'win32' ? { kind: 'windows-job' } : {}) };
     task.lastActivity = this.now();
     this.#audit(task, 'supervisor', resume ? 'resumed' : 'started', `${AI_LABEL[task.ai.id]} session ${resume ? 'resumed' : 'started'}`);
     this.#save(task);
@@ -1014,6 +1030,10 @@ export class TasksEngine extends EventEmitter {
   }
 
   async #cleanupRun(task, run) {
+    if (run.backend?.platform === 'win32' && !(await run.backend.confirmStopped())) {
+      this.#quarantineWindows(task);
+      throw new ApiError('NOT_AVAILABLE', 'The Windows process stop is unconfirmed. Its workspace and run are preserved.');
+    }
     if (this.runs.get(task.id) === run) this.runs.delete(task.id);
     for (const [approvalId, a] of run.approvals) {
       a.resolve({ behavior: 'deny', message: 'The run ended.' });
@@ -1126,7 +1146,13 @@ export class TasksEngine extends EventEmitter {
     for (const a of [...task.openApprovals]) if (a.tool !== 'StartTask') this.#closeApproval(task, a.approvalId, 'expired', null);
   }
 
+  #quarantineWindows(task) {
+    task.windowsStopUnconfirmed = true;
+    this.#setState(task, 'failed', { failKind: 'error', failReason: 'Windows process ownership was lost and stop is unconfirmed. This task is quarantined; its workspace is preserved for manual recovery.' });
+  }
+
   #failTask(task, kind, reason) {
+    if (task.windowsStopUnconfirmed) { this.#quarantineWindows(task); return; }
     this.#expireApprovals(task);
     if (task.openAsk && task.openAsk.kind !== 'plan') this.#closeAsk(task, null);
     this.#writeHandover(task, 'frozen');
@@ -1135,6 +1161,7 @@ export class TasksEngine extends EventEmitter {
   }
 
   #requeue(task, start) {
+    if (task.windowsStopUnconfirmed) throw new ApiError('NOT_AVAILABLE', 'Windows stop remains unconfirmed; automatic retry is blocked.');
     task.pendingStart = start;
     task.limitResetAt = null;
     task.resumeAtReset = false;

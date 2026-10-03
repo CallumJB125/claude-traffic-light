@@ -15,6 +15,7 @@ const { storageHelp } = require('./secure-storage');
 const fs = require('node:fs');
 const path = require('node:path');
 const { RUNNER_SERVICE } = require('./brand');
+const WindowsPrivate = require('../board/shared/windows-private-directory.cjs');
 
 const RESTART_WINDOW_MS = 10 * 60_000;
 const MAX_RESTARTS = 5;
@@ -108,8 +109,9 @@ function hubUrlOk(url) {
  * The runner's data_dir: created 0700, then checked, not trusted: a real
  * directory (not a symlink), ours, and 0700. → null, or why it isn't safe.
  */
-function ensurePrivateDir(dir, { uid = process.getuid?.() } = {}) {
+function ensurePrivateDir(dir, { uid = process.getuid?.(), platform = process.platform, windowsPrivate = WindowsPrivate } = {}) {
   try {
+    if (platform === 'win32') { windowsPrivate.ensureDirectory(dir); return null; }
     // Look before making: mkdir would follow a symlink or trip over a file.
     let st = null;
     try { st = fs.lstatSync(dir); } catch (e) { if (e.code !== 'ENOENT') throw e; }

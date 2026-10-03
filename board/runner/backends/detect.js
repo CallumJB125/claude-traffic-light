@@ -1,7 +1,8 @@
 // AI CLI detection (runner-adapters-contract.md §2): resolve a binary once,
 // probe it with its own --version / status command (3 s, never a shell, never
 // a prompt), never read credential file contents. Pure local.
-import { execFile } from 'node:child_process';
+import { jobHelperPath } from '../windows-job.js';
+import { execFile, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -16,7 +17,7 @@ const KNOWN_DIRS = (home) => [
 // A probe sees only what it needs to find its own config.
 export function probeEnv(env) {
   const out = {};
-  for (const k of ['HOME', 'PATH', 'LANG', 'TMPDIR', 'CODEX_HOME']) if (env[k]) out[k] = env[k];
+  for (const k of ['HOME', 'PATH', 'LANG', 'TMPDIR', 'CODEX_HOME', ...(process.platform === 'win32' ? ['SystemRoot', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP'] : [])]) if (env[k]) out[k] = env[k];
   for (const [k, v] of Object.entries(env)) if (/^LC_[A-Z_]+$/.test(k) && v) out[k] = v;
   return out;
 }
@@ -31,6 +32,12 @@ const ADMIN_GID = 80;   // macOS admin group: its members can already sudo, so i
  * root/wheel or (macOS) admin.
  */
 export function safeBinary(real, uid = process.getuid?.() ?? 0, platform = process.platform) {
+  if (platform === 'win32') {
+    try {
+      execFileSync(jobHelperPath(), ['trusted', real], { timeout: 3000, windowsHide: true, stdio: 'ignore' }); // privacy-flow: ai-detect
+      return true;
+    } catch { return false; }
+  }
   let st;
   try { st = fs.statSync(real); } catch { return false; }
   if (!st.isFile() || (st.mode & 0o111) === 0 || (st.mode & 0o022) !== 0 || (st.uid !== uid && st.uid !== 0)) return false;
@@ -48,17 +55,18 @@ export function safeBinary(real, uid = process.getuid?.() ?? 0, platform = proce
 }
 
 /** Absolute real path of `name` on PATH (then known dirs) that passes safeBinary, or {reason}. */
-export function resolveBin(name, env, knownDirs = KNOWN_DIRS(env.HOME)) {
-  const dirs = [...String(env.PATH ?? '').split(path.delimiter), ...knownDirs].filter((d) => d && path.isAbsolute(d));
+export function resolveBin(name, env, knownDirs = KNOWN_DIRS(env.HOME), platform = process.platform) {
+  const paths = platform === 'win32' ? path.win32 : path;
+  const dirs = [...String(env.PATH ?? '').split(paths.delimiter), ...knownDirs].filter((d) => d && paths.isAbsolute(d));
   let unsafe = false;
   for (const dir of dirs) {
-    const cand = path.join(dir, name);
+    const cand = paths.join(dir, platform === 'win32' ? `${name}.exe` : name);
     let real;
     try { real = fs.realpathSync(cand); } catch { continue; }
     let st;
     try { st = fs.statSync(real); } catch { continue; }
-    if (!st.isFile() || (st.mode & 0o111) === 0) continue;
-    if (!safeBinary(real)) { unsafe = true; continue; }
+    if (!st.isFile() || (platform !== 'win32' && (st.mode & 0o111) === 0)) continue;
+    if (!safeBinary(real, undefined, platform)) { unsafe = true; continue; }
     return { bin: real };
   }
   return { reason: unsafe ? 'unsafe_bin' : 'not_found' };
@@ -69,7 +77,7 @@ export function probe(bin, args, env, timeoutMs = PROBE_TIMEOUT_MS) {
   return new Promise((resolve) => {
     let child;
     try {
-      child = execFile(bin, args, { env: probeEnv(env), timeout: timeoutMs, killSignal: 'SIGKILL', maxBuffer: 64 * 1024, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }, (err, stdout) => { // privacy-flow: ai-detect
+      child = execFile(bin, args, { env: probeEnv(env), windowsHide: true, timeout: timeoutMs, killSignal: 'SIGKILL', maxBuffer: 64 * 1024, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }, (err, stdout) => { // privacy-flow: ai-detect
         if (err && (err.killed || typeof err.code !== 'number')) return resolve(null);
         resolve({ code: err ? err.code : 0, stdout: String(stdout ?? '') });
       });
@@ -88,8 +96,8 @@ const exists = (p) => { try { return fs.statSync(p).isFile(); } catch { return f
  * Shared detect(): {id, installed, version, signedIn, bin, reason?}.
  * knownDirs replaces the extra install dirs searched after PATH ([] = PATH only).
  */
-export async function detectCli(id, { env = process.env, timeoutMs = PROBE_TIMEOUT_MS, which, knownDirs, authFiles = () => [], statusArgs = null } = {}) {
-  const r = which ? which(id, env) : resolveBin(id, env, knownDirs);
+export async function detectCli(id, { env = process.env, timeoutMs = PROBE_TIMEOUT_MS, which, knownDirs, authFiles = () => [], statusArgs = null, platform = process.platform } = {}) {
+  const r = which ? which(id, env) : resolveBin(id, env, knownDirs, platform);
   if (!r.bin) return { id, installed: false, version: null, signedIn: 'unknown', bin: null, reason: r.reason ?? 'not_found' };
   const v = await probe(r.bin, ['--version'], env, timeoutMs);
   if (!v || v.code !== 0) return { id, installed: true, version: null, signedIn: 'unknown', bin: r.bin, reason: 'probe_failed' };

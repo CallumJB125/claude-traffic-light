@@ -5,7 +5,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import net from 'node:net';
+import net from '../../shared/local-sockets.cjs';
+import { widenFixtureAcl } from '../../shared/test-support/windows-acl.js';
 import path from 'node:path';
 import { connect, readToken, TasksError } from '../client.js';
 import { TASKS_PROTOCOL_VERSION, MAX_FRAME_BYTES } from '../protocol.js';
@@ -32,15 +33,22 @@ function rawExchange(socketPath, lines, { waitMs = 400 } = {}) {
 for (const target of TARGETS) {
   const start = (opts = {}) => startTarget(target, { demo: false, ...opts });
 
-  test(`[${target}] socket and token file are 0600 in a 0700 dir; readToken refuses group/other-readable files`, async () => {
+  test(`[${target}] private local transport; token reader rejects access granted to other users`, async () => {
     const m = await start();
     try {
-      assert.equal(fs.statSync(m.srv.socketPath).mode & 0o777, 0o600);
-      assert.equal(fs.statSync(m.srv.tokenPath).mode & 0o777, 0o600);
-      assert.equal(fs.statSync(m.dir).mode & 0o777, 0o700);
-      fs.chmodSync(m.srv.tokenPath, 0o644);
-      assert.throws(() => readToken(m.srv.tokenPath), (e) => e.code === 'FORBIDDEN');
-      fs.chmodSync(m.srv.tokenPath, 0o600);
+      if (process.platform === 'win32') {
+        assert.equal(readToken(m.srv.tokenPath), m.srv.token, 'native reader accepts the private file');
+        const restore = widenFixtureAcl(m.srv.tokenPath);
+        try { assert.throws(() => readToken(m.srv.tokenPath), (e) => e.code === 'FORBIDDEN'); }
+        finally { restore(); }
+      } else {
+        assert.equal(fs.statSync(m.srv.socketPath).mode & 0o777, 0o600);
+        assert.equal(fs.statSync(m.srv.tokenPath).mode & 0o777, 0o600);
+        assert.equal(fs.statSync(m.dir).mode & 0o777, 0o700);
+        fs.chmodSync(m.srv.tokenPath, 0o644);
+        assert.throws(() => readToken(m.srv.tokenPath), (e) => e.code === 'FORBIDDEN');
+        fs.chmodSync(m.srv.tokenPath, 0o600);
+      }
       assert.equal(readToken(m.srv.tokenPath), m.srv.token);
     } finally { await m.close(); }
   });

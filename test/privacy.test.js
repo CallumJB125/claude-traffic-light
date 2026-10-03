@@ -88,7 +88,7 @@ function shipped(dir = ROOT, out = []) {
     if (SKIP_DIRS.has(e.name)) continue;
     const p = path.join(dir, e.name);
     if (e.isDirectory()) shipped(p, out);
-    else if (/\.(js|mjs|cjs|html|css|swift)$/.test(e.name) && e.name !== 'playwright.config.js') {
+    else if (/\.(js|mjs|cjs|html|css|swift|py)$/.test(e.name) && e.name !== 'playwright.config.js') {
       const r = path.relative(ROOT, p);
       if (!BY_PACKAGING.has(r.split(path.sep)[0]) || packaged(PKG, r.split(path.sep).join('/'))) out.push(p);
     }
@@ -126,6 +126,8 @@ const CHANNEL = new RegExp([
   `(?:loadURL|downloadURL)\\(\\s*${NOT_LITERAL}`, '(?:loadURL|downloadURL)\\(\\s*[\'"`]https?:', `openExternal\\(\\s*${NOT_LITERAL}`,
   '@import\\b', 'url\\(\\s*[\'"]?(?:https?:)?//',
   'do shell script',
+  // Bundled Python observer plugins must disclose their process channels too.
+  '\\bsubprocess\\.(?:run|Popen|call|check_call|check_output)\\s*\\(',
   // a shell told to run a network tool, or git talking to a remote
   '\\b(?:sh|zsh|bash|cmd|powershell)[\'"`]\\s*,\\s*\\[[^\\]]*\\b(?:curl|wget|ssh|scp|nc|ncat|ftp|telnet|gh)\\b',
   '[\'"`]git[\'"`]\\s*,\\s*\\[[^\\]]*[\'"`](?:fetch|pull|push|clone|ls-remote|remote\\s+update)[\'"`]',

@@ -40,6 +40,10 @@ typedef struct {
  * dispatch owns closed root/recipe capabilities and the operation deadline. */
 PFDirectoryResult pf_directory_open_root(const WCHAR *canonicalRoot,
     const PFDirectoryIdentity *expected, PFDirectory *directory);
+/* Existing private root, read-only handles so concurrent server/client leases
+ * can coexist. Same namespace/identity/ACL policy; no ACL repair or creation. */
+PFDirectoryResult pf_directory_open_read_root(const WCHAR *canonicalRoot,
+    const PFDirectoryIdentity *expected, PFDirectory *directory);
 PFDirectoryResult pf_directory_inspect(const PFDirectory *directory,
     const PFDirectoryIdentity *expected, PFDirectoryIdentity *identity);
 /* Only an absent leaf beneath a currently private opened parent can be

@@ -8,7 +8,7 @@
 //   c.isGreen(id)                                // the green lease rule (§6.2); never infer it elsewhere
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import net from 'node:net'; // privacy-flow: tasks-local
+import net from '../shared/local-sockets.cjs'; // protected Windows local transport; POSIX Unix sockets
 import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
@@ -30,6 +30,11 @@ export function defaultPaths(env = process.env) {
 
 /** Reads the token, refusing a file other users could read or that another user owns (§9.1). */
 export function readToken(tokenPath) {
+  if (process.platform === 'win32') {
+    if (path.basename(tokenPath) !== TOKEN_NAME) throw new TasksError('FORBIDDEN', 'Unexpected private token name');
+    try { return net.token(path.join(path.dirname(tokenPath), SOCKET_NAME), false); }
+    catch { throw new TasksError('FORBIDDEN', 'Private Tasks token could not be verified'); }
+  }
   const st = fs.statSync(tokenPath);
   if (process.platform !== 'win32') {
     if ((st.mode & 0o077) !== 0) throw new TasksError('FORBIDDEN', `${tokenPath} must be 0600 (is ${(st.mode & 0o777).toString(8)})`);

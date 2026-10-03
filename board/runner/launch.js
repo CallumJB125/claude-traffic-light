@@ -59,6 +59,7 @@ export const DEFAULT_MAX_TURNS = 200;
 // No secret is ever in the CLI env (D26): without CLAUDE_CODE_SUBPROCESS_ENV_SCRUB,
 // Bash sees the CLI's env. ANTHROPIC_API_KEY reaches the CLI through apiKeyHelper
 // (a 0600 file in the run dir) and the run token only through files/mcp.json.
+const WINDOWS_ENV = ['SystemRoot', 'USERPROFILE', 'LOCALAPPDATA', 'APPDATA', 'TEMP', 'TMP', 'COMSPEC', 'PATHEXT'];
 const ENV_KEEP = ['HOME', 'USER', 'LOGNAME', 'PATH', 'TMPDIR', 'LANG', 'TZ',
   'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy', 'NODE_EXTRA_CA_CERTS'];
 export const API_KEY_FILE = 'api.key';
@@ -143,14 +144,13 @@ export function buildMcpConfig({ socket, token, node = process.execPath, server 
 }
 
 /** Allowlisted child env (D15). parentEnv is the supervisor's env. */
-export function buildEnv(parentEnv, { runDir, socket, supervisorPid, supervisorLstart, buddyOwned = null }) {
+export function buildEnv(parentEnv, { runDir, socket, supervisorPid, supervisorLstart, buddyOwned = null, platform = process.platform }) {
   const env = {};
-  for (const k of ENV_KEEP) if (parentEnv[k] != null && parentEnv[k] !== '') env[k] = parentEnv[k];
+  for (const k of ENV_KEEP.concat(platform === 'win32' ? WINDOWS_ENV : [])) if (parentEnv[k] != null && parentEnv[k] !== '') env[k] = parentEnv[k];
   for (const [k, v] of Object.entries(parentEnv)) if (/^LC_[A-Z_]+$/.test(k) && v) env[k] = v;
   Object.assign(env, {
     TERM: 'dumb',
-    SHELL: '/bin/sh',
-    ZDOTDIR: path.join(runDir, 'shell'),
+    ...(platform === 'win32' ? { HOME: env.HOME || env.USERPROFILE } : { SHELL: '/bin/sh', ZDOTDIR: path.join(runDir, 'shell') }),
     CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
     MCP_TOOL_TIMEOUT: '2100000',
     BOARD_RUN_SOCKET: socket,
@@ -164,13 +164,14 @@ export function buildEnv(parentEnv, { runDir, socket, supervisorPid, supervisorL
 }
 
 /** Subscription auth belongs to the CLI; commands use their own empty env. */
-export function buildCodexEnv(parentEnv, cacheDir) {
+export function buildCodexEnv(parentEnv, cacheDir, platform = process.platform) {
+  const paths = platform === 'win32' ? path.win32 : path;
   const env = {};
-  for (const k of ENV_KEEP.concat('CODEX_HOME')) if (parentEnv[k]) env[k] = parentEnv[k];
+  for (const k of ENV_KEEP.concat('CODEX_HOME', platform === 'win32' ? WINDOWS_ENV : [])) if (parentEnv[k]) env[k] = parentEnv[k];
   for (const [k, v] of Object.entries(parentEnv)) if (/^LC_[A-Z_]+$/.test(k) && v) env[k] = v;
-  return { ...env, TERM: 'dumb', SHELL: '/bin/sh', TMPDIR: path.join(cacheDir, 'tmp'),
-    npm_config_cache: path.join(cacheDir, 'npm'), XDG_CACHE_HOME: cacheDir,
-    PIP_CACHE_DIR: path.join(cacheDir, 'pip'), UV_CACHE_DIR: path.join(cacheDir, 'uv') };
+  return { ...env, TERM: 'dumb', ...(platform === 'win32' ? { HOME: env.HOME || env.USERPROFILE, TEMP: paths.join(cacheDir, 'tmp'), TMP: paths.join(cacheDir, 'tmp') } : { SHELL: '/bin/sh' }), TMPDIR: paths.join(cacheDir, 'tmp'),
+    npm_config_cache: paths.join(cacheDir, 'npm'), XDG_CACHE_HOME: cacheDir,
+    PIP_CACHE_DIR: paths.join(cacheDir, 'pip'), UV_CACHE_DIR: paths.join(cacheDir, 'uv') };
 }
 
 // Plexiform's home, when Plexiform is installed on this machine.

@@ -4,6 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { privateFixtureDirectory } from '../../shared/test-support/windows-acl.js';
 import http from 'node:http';
 import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
@@ -12,6 +13,7 @@ import { WebSocketServer } from 'ws';
 import { Supervisor } from '../supervisor.js';
 import { makeLogger } from '../util.js';
 import { ipcRequest } from '../ipc.js';
+import { WindowsSyntheticClaude } from './windows-synthetic-claude.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const FAKE_CLAUDE = path.join(HERE, 'fixtures', 'fake-claude.js');
@@ -23,7 +25,7 @@ export const OWNER = 'm-owner';
 // Short paths: AF_UNIX socket paths must stay < 104 bytes on macOS.
 const TEMP_ROOT = process.platform === 'darwin' ? '/tmp' : os.tmpdir();
 export function tmpDir(prefix = 'brt-') {
-  return fs.realpathSync(fs.mkdtempSync(path.join(TEMP_ROOT, prefix)));
+  return privateFixtureDirectory(path.join(TEMP_ROOT, prefix));
 }
 
 export function rm(dir) {
@@ -55,6 +57,9 @@ export function makeRepo(root, { remoteUrl = REMOTE_URL } = {}) {
 export function fakeClaudeBin(dir, scenario) {
   const sc = path.join(dir, `scenario-${crypto.randomUUID().slice(0, 8)}.json`);
   fs.writeFileSync(sc, JSON.stringify(scenario));
+  // Windows synthetic backends consume the scenario directly and launch the
+  // Node fixture through a Job Object; no shell shim or real Claude bypass.
+  if (process.platform === 'win32') return sc;
   const bin = path.join(dir, `claude-${crypto.randomUUID().slice(0, 8)}`);
   fs.writeFileSync(bin, `#!/bin/sh\nexec '${process.execPath}' '${FAKE_CLAUDE}' '${sc}' "$@"\n`, { mode: 0o755 });
   return bin;
@@ -203,7 +208,8 @@ export async function startRunner({ hub, home, repo, scenario, clock, policyExtr
   const bin = scenario ? fakeClaudeBin(home, scenario) : null;
   const sup = new Supervisor({
     home, hubUrl: hub.url, clock, claudeBin: bin, autoTick, confirm, powerMonitor,
-    env: env ?? { HOME: process.env.HOME, USER: process.env.USER, PATH: process.env.PATH, TMPDIR: TEMP_ROOT, LANG: 'en_US.UTF-8' },
+    ...(process.platform === 'win32' && scenario ? { Backend: WindowsSyntheticClaude } : {}),
+    env: env ?? Object.fromEntries(Object.entries({ HOME: process.env.HOME ?? os.homedir(), USER: process.env.USER, PATH: process.env.PATH, TMPDIR: TEMP_ROOT, LANG: 'en_US.UTF-8', ...(process.platform === 'win32' ? { SystemRoot: process.env.SystemRoot, USERPROFILE: process.env.USERPROFILE, LOCALAPPDATA: process.env.LOCALAPPDATA, APPDATA: process.env.APPDATA, TEMP: process.env.TEMP, TMP: process.env.TMP } : {}) }).filter(([, value]) => typeof value === 'string')),
     log: makeLogger(process.stderr, { quiet: !process.env.BOARD_TEST_LOG }),
     interruptWaitMs: 500, stopGraceMs: 800, limitBackoffMs: 50, gitleaks: null, rand: () => 0, reconnectDelayFn: () => 30,
     keepRunFiles: true,   // tests read fake.log after the run ends

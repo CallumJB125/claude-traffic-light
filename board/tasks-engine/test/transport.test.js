@@ -2,8 +2,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import net from 'node:net';
+import net from '../../shared/local-sockets.cjs';
 import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { widenFixtureAcl } from '../../shared/test-support/windows-acl.js';
 import path from 'node:path';
 import { startTasksEngine } from '../index.js';
 import { connect } from '../../tasks-api/client.js';
@@ -31,13 +33,15 @@ function raw(socketPath, lines, { waitMs = 400 } = {}) {
 
 const quiet = { info() {}, warn() {}, error() {}, debug() {} };
 
-test('data dir 0700, socket 0600, token 0600 btk_; the token survives a restart; a loosened token file is replaced', async () => {
+test('private directory, transport and token; restart preserves token and exposed tokens are refused or rotated', async () => {
   const dir = tmpDir();
   try {
     let m = await startEngine({ dir });
-    assert.equal(fs.statSync(m.dataDir).mode & 0o777, 0o700);
-    assert.equal(fs.statSync(m.eng.socketPath).mode & 0o777, 0o600);
-    assert.equal(fs.statSync(m.eng.tokenPath).mode & 0o777, 0o600);
+    if (process.platform !== 'win32') {
+      assert.equal(fs.statSync(m.dataDir).mode & 0o777, 0o700);
+      assert.equal(fs.statSync(m.eng.socketPath).mode & 0o777, 0o600);
+      assert.equal(fs.statSync(m.eng.tokenPath).mode & 0o777, 0o600);
+    }
     assert.match(m.eng.token, /^btk_[A-Za-z0-9_-]{43}$/);
     assert.equal(path.basename(m.eng.socketPath), 'tasks.sock', 'its own socket, not the runner control socket');
     const tok = m.eng.token;
@@ -45,28 +49,45 @@ test('data dir 0700, socket 0600, token 0600 btk_; the token survives a restart;
     m = await startEngine({ dir });
     assert.equal(m.eng.token, tok, 'same token after a restart');
     await m.close();
-    fs.chmodSync(path.join(dir, 'data', 'tasks.token'), 0o644);
-    m = await startEngine({ dir });
-    assert.notEqual(m.eng.token, tok, 'a token others could read is rotated');
-    assert.equal(fs.statSync(m.eng.tokenPath).mode & 0o777, 0o600);
+    const tokenFile = path.join(dir, 'data', 'tasks.token');
+    if (process.platform === 'win32') {
+      const restore = widenFixtureAcl(tokenFile);
+      try {
+        await assert.rejects(startEngine({ dir }), /private|token|verif|access/i);
+        assert.equal(fs.readFileSync(tokenFile, 'utf8').trim(), tok, 'unsafe existing token is preserved for explicit recovery');
+      } finally { restore(); }
+      m = await startEngine({ dir });
+      assert.equal(m.eng.token, tok, 'restoring private ACL permits the original token');
+    } else {
+      fs.chmodSync(tokenFile, 0o644);
+      m = await startEngine({ dir });
+      assert.notEqual(m.eng.token, tok, 'a token others could read is rotated');
+      assert.equal(fs.statSync(m.eng.tokenPath).mode & 0o777, 0o600);
+    }
     await m.close();
   } finally { rm(dir); }
 });
 
-test('refuses a symlinked data dir, something else at the socket path, a live socket, and a too-long path; replaces a stale socket', async () => {
+test('refuses redirected directories and duplicate listeners; preserves unrelated files and recovers after listener death', async () => {
   const dir = tmpDir();
   const backends = fakeBackends(dir, { steps: [] });
   const start = (dataDir) => startTasksEngine({ dataDir, backends, env: ENV, log: quiet });
   try {
     const real = path.join(dir, 'real');
     fs.mkdirSync(real, { mode: 0o700 });
-    fs.symlinkSync(real, path.join(dir, 'link'));
+    fs.symlinkSync(real, path.join(dir, 'link'), process.platform === 'win32' ? 'junction' : 'dir');
     await assert.rejects(start(path.join(dir, 'link')));
 
     const d1 = path.join(dir, 'd1');
     fs.mkdirSync(d1, { mode: 0o700 });
     fs.writeFileSync(path.join(d1, 'tasks.sock'), 'not a socket');
-    await assert.rejects(start(d1), (e) => e.code === 'SOCKET_IN_USE' && !e.message.includes(dir));
+    if (process.platform === 'win32') {
+      const unrelated = await start(d1); // The endpoint is a protected named pipe, not this file.
+      await unrelated.close();
+      assert.equal(fs.readFileSync(path.join(d1, 'tasks.sock'), 'utf8'), 'not a socket');
+    } else {
+      await assert.rejects(start(d1), (e) => e.code === 'SOCKET_IN_USE' && !e.message.includes(dir));
+    }
 
     const d2 = path.join(dir, 'd2');
     const a = await start(d2);
@@ -77,16 +98,39 @@ test('refuses a symlinked data dir, something else at the socket path, a live so
     const d3 = path.join(dir, 'd3');
     fs.mkdirSync(d3, { mode: 0o700 });
     const sock = path.join(d3, 'tasks.sock');
-    const ghost = spawn(process.execPath, ['-e', `require('net').createServer().listen(${JSON.stringify(sock)}, () => process.stdout.write('up'))`], { stdio: ['ignore', 'pipe', 'ignore'] });
-    await new Promise((r) => ghost.stdout.once('data', r));
+    const transportModule = fileURLToPath(new URL('../../shared/local-sockets.cjs', import.meta.url));
+    const ghost = spawn(process.execPath, ['-e', `require(${JSON.stringify(transportModule)}).createServer().listen(${JSON.stringify(sock)}, () => process.stdout.write('up'))`], { stdio: ['ignore', 'pipe', 'ignore'] });
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { ghost.kill('SIGKILL'); done(new Error('Ghost listener did not become ready')); }, 5000);
+      const exited = () => done(new Error('Ghost listener exited before ready'));
+      const ready = () => done();
+      const failed = (error) => done(error);
+      function done(error) {
+        clearTimeout(timer); ghost.off('error', failed); ghost.off('exit', exited); ghost.stdout.off('data', ready);
+        if (error) reject(error); else resolve();
+      }
+      ghost.once('error', failed); ghost.once('exit', exited); ghost.stdout.once('data', ready);
+    });
+    const ghostExit = new Promise((resolve) => ghost.once('exit', resolve));
     ghost.kill('SIGKILL');
-    await new Promise((r) => ghost.once('exit', r));
-    assert.ok(fs.lstatSync(sock).isSocket(), 'a dead socket file is left behind');
-    const b = await start(d3);
+    await ghostExit;
+    if (process.platform !== 'win32') assert.ok(fs.lstatSync(sock).isSocket(), 'a dead socket file is left behind');
+    let b;
+    // On Windows the native broker observes parent-pipe EOF asynchronously.
+    // Retry only its still-owned namespace, never other startup refusals.
+    await waitFor(async () => {
+      try { b = await start(d3); return true; }
+      catch (error) { if (process.platform === 'win32' && error.code === 'SOCKET_IN_USE') return false; throw error; }
+    }, { timeoutMs: 6000, stepMs: 50, label: 'crashed listener namespace released' });
     await b.close();
 
     const long = path.join(dir, 'x'.repeat(110));
-    await assert.rejects(start(long), (e) => e.code === 'SOCKET_PATH_TOO_LONG' && !e.message.includes('xxxx'));
+    if (process.platform === 'win32') {
+      const longListener = await start(long);
+      await longListener.close();
+    } else {
+      await assert.rejects(start(long), (e) => e.code === 'SOCKET_PATH_TOO_LONG' && !e.message.includes('xxxx'));
+    }
   } finally { rm(dir); }
 });
 

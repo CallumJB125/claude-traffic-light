@@ -138,6 +138,7 @@ export class Run {
 
   // ── gate G ────────────────────────────────────────────────────────────────
   gateState() {
+    if (this.windowsStopUnconfirmed) return { open: false, reason: 'windows_stop_unconfirmed' };
     const age = ackAge({ mono_since_ack_ms: this.clock.mono() - this.ack.mono, wall_since_ack_ms: this.clock.wall() - this.ack.wall });
     const wake = this.wake ? { slept_ms: this.wake.slept_ms, age_ms: this.clock.mono() - this.wake.mono } : null;
     return gateOf({ ack_age_ms: age, fenced: this.fenced, wake });
@@ -364,7 +365,8 @@ export class Run {
     this.fail(kind, clip(text, 180), extra);
   }
 
-  #onExit(info) {
+  async #onExit(info) {
+    if (this.backend?.platform === 'win32' && !(await this.#windowsStopConfirmed())) return;
     this.toolInFlight = null;
     if (this.ended) return;
     if (this.ending) return;   // whoever set `ending` stopped the CLI and finishes the run
@@ -387,7 +389,22 @@ export class Run {
     this.#afterExit();
   }
 
+  async #windowsStopConfirmed() {
+    if (this.backend?.platform !== 'win32') return true;
+    let confirmed = false;
+    try { confirmed = await this.backend.confirmStopped(); } catch { /* unknown */ }
+    if (confirmed) return true;
+    this.windowsStopUnconfirmed = true;
+    this.ending = true; this.gateOpen = false; this.localState = 'paused_offline';
+    this.sup.windowsQuarantinedRepos?.add(this.repo_id);
+    this.sup.saveLedger(this);
+    this.log.warn('Windows process stop is unconfirmed; preserving run and workspace', { run_id: this.run_id });
+    this.sup.notifyLocal({ event: 'paused_offline', run_id: this.run_id, key: this.key, reason: 'Windows process stop is unconfirmed. This run is quarantined for manual recovery.' });
+    return false;
+  }
+
   async #afterExit() {
+    if (this.backend?.platform === 'win32' && !(await this.#windowsStopConfirmed())) return;
     this.flushFacts();
     await this.snapshotNow({ push: true, why: 'final' });
     this.#end();
@@ -412,6 +429,7 @@ export class Run {
     this.endReason = 'failed';
     this.emit({ kind: 'run.failed', fail_kind: kind, reason: redact(reason, this.worktree), ...extra });
     await this.backend?.stop();
+    if (this.backend?.platform === 'win32' && !(await this.#windowsStopConfirmed())) return;
     if (!this.ended) await this.#afterExit();
   }
 
@@ -421,6 +439,7 @@ export class Run {
     this.endReason = 'prep_failed';
     this.emit({ kind: 'prep.failed', cause: redact(cause, this.worktree) });
     await this.backend?.stop();
+    if (this.backend?.platform === 'win32' && !(await this.#windowsStopConfirmed())) return;
     this.#end();
   }
 
@@ -451,6 +470,7 @@ export class Run {
         this.ending = true;
         this.endReason = 'stopped';
         await this.backend?.stop();
+    if (this.backend?.platform === 'win32' && !(await this.#windowsStopConfirmed())) return;
         await this.#afterExit();
         return;
       case 'park':
@@ -500,6 +520,7 @@ export class Run {
     this.ending = true;
     this.endReason = h.mode === 'handover' ? 'handed_over' : 'parked';
     const stopped = await this.backend?.stop();
+    if (this.backend?.platform === 'win32' && !(await this.#windowsStopConfirmed())) { h.resolve(false); return; }
     // A completed handover is the authority to start a replacement. A failed
     // stop must never be reported as completion, even after its deadline.
     if (h.mode === 'handover' && (stopped !== true || this.backend?.alive() !== false)) {
@@ -574,6 +595,7 @@ export class Run {
     this.ending = true;
     this.endReason = 'fenced';
     await this.backend?.stop();
+    if (this.backend?.platform === 'win32' && !(await this.#windowsStopConfirmed())) return;
     this.flushFacts();
     const snap = await this.snapshotNow({ push: true, ref: salvageRef(this.key, this.fence), why: 'salvage', emitAs: 'none' });
     if (snap?.sha) this.sup.salvage(this, 'snapshot', { status: snap.status, sha: snap.sha, ref: snap.ref, reason: snap.reason });
@@ -672,7 +694,9 @@ export class Run {
 
   // ── snapshots ─────────────────────────────────────────────────────────────
   snapshotNow({ push = true, ref = snapshotRef(this.key, this.fence), why = 'checkpoint', emitAs = 'snapshot' } = {}) {
+    if (this.windowsStopUnconfirmed) return Promise.resolve(null);
     const job = this.snapshotChain.then(async () => {
+      if (this.windowsStopUnconfirmed) return null;
       this.lastSnapshotMono = this.clock.mono();
       let res;
       try {
@@ -698,6 +722,7 @@ export class Run {
     const u = this.unpushed;
     if (!u) return;
     this.snapshotChain = this.snapshotChain.then(async () => {
+      if (this.windowsStopUnconfirmed) return;
       const res = await pushRef(this.worktree, u.sha, u.ref);
       if (res.status === 'pushed') {
         this.unpushed = null;

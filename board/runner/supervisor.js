@@ -3,7 +3,7 @@
 // ledger + orphan recovery, and the local control socket for Buddy.
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import net from 'node:net'; // privacy-flow: local-board-sockets
+import net from '../shared/local-sockets.cjs'; // protected Windows local transport; POSIX Unix sockets
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import WebSocket from 'ws'; // privacy-flow: team-hub
@@ -118,6 +118,7 @@ export class Supervisor extends EventEmitter {
     this.seenCmds = new Set();
     this.deferred = new Map();
     this.inFlightOffers = new Set();
+    this.windowsQuarantinedRepos = new Set();
     this.confirms = new Map();
     this.subscribers = new Set();
     this.mcpTools = [...MCP_TOOLS];
@@ -155,7 +156,7 @@ export class Supervisor extends EventEmitter {
     this.ws = null;
     this.connected = false;
     await new Promise((r) => (this.control ? this.control.close(() => r()) : r()));
-    try { fs.unlinkSync(this.l.controlSock); } catch { /* gone */ }
+    try { if (process.platform !== 'win32') fs.unlinkSync(this.l.controlSock); } catch { /* gone */ }
   }
 
   // ── hub connection ────────────────────────────────────────────────────────
@@ -514,6 +515,10 @@ export class Supervisor extends EventEmitter {
   }
 
   async #handleOffer(offer) {
+    if (this.windowsQuarantinedRepos.has(offer.repo_id)) {
+      this.log.warn('Windows process stop is unconfirmed; automatic retry for this repository is blocked', { repo_id: offer.repo_id });
+      return;
+    }
     // An AI this machine can't run: ignore, never decline (a decline cancels the dispatch for every device, D-7).
     if (!this.canRun(aiOf(offer))) {
       this.log.info('offer for an AI this machine cannot run; ignored', { card_id: offer.card_id });
@@ -599,7 +604,7 @@ export class Supervisor extends EventEmitter {
         handler: { hello: () => run.hello(), tool: (n, a, ctx) => run.tool(n, a, ctx), hook: (e, p) => run.hook(e, p), cancel: (re, ctx) => run.cancel(ctx.connId, re) },
       });
       if (over()) { run.ipc.close(); this.cleanupRun(run); return run; }
-      this.#spawn(run, { resume: false });
+      await this.#spawn(run, { resume: false });
       this.sendHbNow();   // the hub learns child_alive now, not at the next 15 s tick
     } catch (e) {
       this.log.error('spawn failed', { err: e.message });
@@ -609,7 +614,8 @@ export class Supervisor extends EventEmitter {
     return run;
   }
 
-  #spawn(run, { resume, prompt = null, editable = false }) {
+  async #spawn(run, { resume, prompt = null, editable = false }) {
+    if (this.windowsQuarantinedRepos.has(run.repo_id)) throw err('NOT_AVAILABLE', 'Previous Windows process stop is unconfirmed; automatic retry is blocked.');
     if (this.runs.get(run.run_id) !== run || run.ending || run.ended || run.fenced || !run.gateState().open) return null;
     const repo = this.policy.repos[run.repo_id] ?? {};
     const ai = aiOf(run.offer) ?? 'claude';
@@ -647,8 +653,13 @@ export class Supervisor extends EventEmitter {
     });
     if (codex) backend.oneTurn = true;
     run.attach(backend);
-    backend.start(prompt ?? (resume ? 'Board connection restored and your run is still current. Continue where you left off.' : run.initialPrompt(firstPrompt({ key: run.key, title: run.offer.title, nonce: run.nonce }))));
+    if (backend.platform === 'win32') this.saveLedger(run);
+    await backend.start(prompt ?? (resume ? 'Board connection restored and your run is still current. Continue where you left off.' : run.initialPrompt(firstPrompt({ key: run.key, title: run.offer.title, nonce: run.nonce }))));
     this.saveLedger(run);
+    if (this.runs.get(run.run_id) !== run || run.ending || run.ended || run.fenced || !run.gateState().open) {
+      if (!(await backend.stop())) throw new Error('Process stop during startup remains unconfirmed');
+      return null;
+    }
     return backend;
   }
 
@@ -695,6 +706,7 @@ export class Supervisor extends EventEmitter {
   // stay in the member's repo (refs are shared by every worktree). A final
   // snapshot that never got pushed keeps the worktree for a manual salvage.
   cleanupRun(run) {
+    if (run.windowsStopUnconfirmed) return;
     if (this.opts.keepRunFiles ?? this.env.BOARD_KEEP_RUN_FILES === '1') return;
     try { fs.rmSync(run.runDir, { recursive: true, force: true }); } catch { /* gone */ }
     const localPath = this.policy.repos?.[run.repo_id]?.local_path;
@@ -712,6 +724,7 @@ export class Supervisor extends EventEmitter {
     ledger.runs[run.run_id] = {
       run_id: run.run_id, card_id: run.card_id, key: run.key, fence: run.fence, repo_id: run.repo_id,
       pid: b?.pid ?? null, lstart: b?.lstart ?? null, pgid: b?.pgid ?? null, worktree: run.worktree,
+      ...(b?.platform === 'win32' ? { kind: 'windows-job' } : {}),
       session_id: run.sessionId, run_dir: run.runDir, scope: run.scope,
       ...(run.gitAccess ? { git_access: run.gitAccess } : {}),
     };
@@ -723,6 +736,12 @@ export class Supervisor extends EventEmitter {
     const ledger = readLedger(this.l);
     const entries = Object.values(ledger.runs ?? {});
     for (const e of entries) {
+      if (e.kind === 'windows-job' || String(e.lstart ?? '').startsWith('win32:')) {
+        this.windowsQuarantinedRepos.add(e.repo_id);
+        this.log.warn('previous Windows Job stop remains unconfirmed; preserving orphan workspace and blocking automatic retry', { run_id: e.run_id });
+        this.notifyLocal({ event: 'paused_offline', run_id: e.run_id, key: e.key, reason: 'Windows process ownership was lost; this run is quarantined for manual recovery.' });
+        continue;
+      }
       if (e.pid && sameProcess(e.pid, e.lstart)) {
         this.log.warn('killing orphaned CLI from a previous supervisor', { run_id: e.run_id, pid: e.pid });
         const before = treeGroups(e.pid, processTable());
@@ -771,9 +790,13 @@ export class Supervisor extends EventEmitter {
 
   async #startControl() {
     const sock = this.l.controlSock;
-    const dir = fs.statSync(path.dirname(sock));
-    if ((dir.mode & 0o077) !== 0) throw new Error('the control socket directory must be a private (0700) directory');
-    try { fs.unlinkSync(sock); } catch { /* none */ }
+    if (process.platform !== 'win32') {
+      const dir = fs.statSync(path.dirname(sock));
+      if ((dir.mode & 0o077) !== 0) throw new Error('the control socket directory must be a private (0700) directory');
+      try { fs.unlinkSync(sock); } catch { /* none */ }
+    }
+    // The native Windows listener independently holds and checks a private
+    // DACL/identity lease before accepting any protected-pipe connection.
     this.control = net.createServer((c) => {
       c.setEncoding('utf8');
       c.on('error', () => {});
@@ -812,6 +835,6 @@ export class Supervisor extends EventEmitter {
       const umask = process.umask(0o177);
       try { this.control.listen(sock, resolve); } finally { process.umask(umask); }
     });
-    fs.chmodSync(sock, 0o600);
+    if (process.platform !== 'win32') fs.chmodSync(sock, 0o600);
   }
 }

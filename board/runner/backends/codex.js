@@ -5,6 +5,7 @@ import { EventEmitter } from 'node:events';
 import { spawn } from 'node:child_process'; // privacy-flow: runner-codex
 import fs from 'node:fs';
 import path from 'node:path';
+import { WindowsJob } from '../windows-job.js';
 import { detectCli } from './detect.js';
 import { lstartOf, killTree, processTable, treeGroups, killGroups, waitForStopped } from '../procs.js';
 import { writeFileAtomic } from '../util.js';
@@ -21,24 +22,25 @@ const ownedRef = (ref) => typeof ref === 'string' && ref.startsWith('refs/heads/
   && ref.split('/').every((p) => p && !p.startsWith('.') && !p.endsWith('.') && !p.endsWith('.lock'));
 
 /** Same profile is used for new, resumed and user-owned terminal turns. */
-export function codexConfig({ cwd, cacheDir, dataDir, gitDir, commonGitDir, gitRef, readOnly = false, env = {}, instructionsFile, denyPaths = [], boardRunDir = null }) {
+export function codexConfig({ cwd, cacheDir, dataDir, gitDir, commonGitDir, gitRef, readOnly = false, env = {}, instructionsFile, denyPaths = [], boardRunDir = null, platform = process.platform }) {
+  const paths = platform === 'win32' ? path.win32 : path;
   const filesystem = { ':minimal': 'read', ':workspace_roots': readOnly ? 'read' : 'write' };
   // OS minimal permissions omit common installed tool runtimes. Grant read
   // only (never their caches/configuration or arbitrary home directories).
-  for (const d of ['/opt/homebrew/bin', '/opt/homebrew/Cellar', '/opt/homebrew/lib', '/opt/homebrew/share', '/usr/local/bin', '/usr/local/lib', '/usr/local/Cellar', '/usr/local/share', '/Library/Developer/CommandLineTools', '/Applications/Xcode.app/Contents/Developer']) filesystem[d] = 'read';
+  for (const d of (platform === 'win32' ? [] : ['/opt/homebrew/bin', '/opt/homebrew/Cellar', '/opt/homebrew/lib', '/opt/homebrew/share', '/usr/local/bin', '/usr/local/lib', '/usr/local/Cellar', '/usr/local/share', '/Library/Developer/CommandLineTools', '/Applications/Xcode.app/Contents/Developer'])) filesystem[d] = 'read';
   if (cacheDir) filesystem[cacheDir] = 'write';
   // Shared Git refs belong to other tasks and user checkouts. Commits need
   // object storage and only this task's authorized branch, never all refs.
   if (commonGitDir) {
     filesystem[commonGitDir] = 'read';
     if (!readOnly) {
-      filesystem[path.join(commonGitDir, 'objects')] = 'write';
+      filesystem[paths.join(commonGitDir, 'objects')] = 'write';
       if (ownedRef(gitRef)) {
-        for (const rel of [gitRef, `${gitRef}.lock`, `logs/${gitRef}`, `logs/${gitRef}.lock`]) filesystem[path.join(commonGitDir, rel)] = 'write';
+        for (const rel of [gitRef, `${gitRef}.lock`, `logs/${gitRef}`, `logs/${gitRef}.lock`]) filesystem[paths.join(commonGitDir, rel)] = 'write';
       }
       if (gitDir === commonGitDir) {
         const localFiles = ['HEAD', 'index', 'logs/HEAD', 'COMMIT_EDITMSG', 'AUTO_MERGE', 'MERGE_HEAD', 'MERGE_MSG', 'MERGE_MODE', 'MERGE_RR', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'SQUASH_MSG', 'ORIG_HEAD'];
-        for (const rel of localFiles.flatMap((n) => [n, `${n}.lock`])) filesystem[path.join(gitDir, rel)] = 'write';
+        for (const rel of localFiles.flatMap((n) => [n, `${n}.lock`])) filesystem[paths.join(gitDir, rel)] = 'write';
       }
     }
   }
@@ -47,16 +49,17 @@ export function codexConfig({ cwd, cacheDir, dataDir, gitDir, commonGitDir, gitR
   // trusted instructions. Nested rules narrow the enclosing writable root.
   for (const d of new Set([cwd, commonGitDir].filter(Boolean))) {
     const names = d === commonGitDir ? ['config', 'hooks'] : ['.git', '.codex', '.claude', '.mcp.json', 'AGENTS.md', 'CLAUDE.md'];
-    for (const n of names) filesystem[path.join(d, n)] = 'read';
+    for (const n of names) filesystem[paths.join(d, n)] = 'read';
   }
-  if (gitDir) for (const n of ['config', 'config.worktree', 'hooks']) filesystem[path.join(gitDir, n)] = 'read';
+  if (gitDir) for (const n of ['config', 'config.worktree', 'hooks']) filesystem[paths.join(gitDir, n)] = 'read';
   if (dataDir) filesystem[dataDir] = 'deny';
   for (const d of denyPaths) filesystem[d] = 'deny';
-  for (const d of [env.CODEX_HOME || (env.HOME && path.join(env.HOME, '.codex')), ...['.ssh', '.aws', '.config/gh', '.claude', '.claude.json', '.claude-traffic-light', 'Library/Keychains'].map((n) => env.HOME && path.join(env.HOME, n))].filter(Boolean)) filesystem[d] = 'deny';
+  for (const d of [env.CODEX_HOME || (env.HOME && paths.join(env.HOME, '.codex')), ...['.ssh', '.aws', '.config/gh', '.claude', '.claude.json', '.claude-traffic-light', 'Library/Keychains'].map((n) => env.HOME && paths.join(env.HOME, n))].filter(Boolean)) filesystem[d] = 'deny';
   const shellEnv = {};
-  for (const k of ['HOME', 'PATH', 'LANG', 'TMPDIR', 'TZ', 'npm_config_cache', 'XDG_CACHE_HOME', 'PIP_CACHE_DIR', 'UV_CACHE_DIR']) if (env[k]) shellEnv[k] = env[k];
+  for (const k of ['HOME', 'PATH', 'LANG', 'TMPDIR', 'TZ', ...(platform === 'win32' ? ['SystemRoot', 'USERPROFILE', 'LOCALAPPDATA', 'APPDATA', 'TEMP', 'TMP', 'COMSPEC', 'PATHEXT'] : []), 'npm_config_cache', 'XDG_CACHE_HOME', 'PIP_CACHE_DIR', 'UV_CACHE_DIR']) if (env[k]) shellEnv[k] = env[k];
   return [
     'approval_policy="never"', 'default_permissions="plexiform"',
+    ...(platform === 'win32' ? ['windows.sandbox="elevated"', 'windows.sandbox_private_desktop=true'] : []),
     `permissions.plexiform.filesystem=${table(filesystem)}`,
     'permissions.plexiform.network.enabled=false',
     'permissions.plexiform.network.dangerously_allow_all_unix_sockets=false',
@@ -90,14 +93,21 @@ export class CodexBackend extends EventEmitter {
         permissions: 'sandbox-flags', systemPrompt: true, model: true, maxTurns: false } };
   }
   static async detect(opts = {}) {
-    const home = opts.env?.HOME ?? process.env.HOME;
-    const knownDirs = opts.knownDirs ?? [home && path.join(home, '.local/bin'), home && path.join(home, '.npm-global/bin'), '/opt/homebrew/bin', '/usr/local/bin', '/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS', '/Applications/Codex.app/Contents/Resources'];
+    const platform = opts.platform ?? process.platform;
+    const env = opts.env ?? process.env;
+    const home = env.HOME ?? env.USERPROFILE;
+    const dirs = platform === 'win32' ? [
+      home && path.win32.join(home, '.local', 'bin'),
+      env.APPDATA && path.win32.join(env.APPDATA, 'npm', 'node_modules', '@openai', 'codex', 'vendor', 'x86_64-pc-windows-msvc', 'codex'),
+      env.APPDATA && path.win32.join(env.APPDATA, 'npm', 'node_modules', '@openai', 'codex', 'node_modules', '@openai', 'codex-win32-x64', 'vendor', 'x86_64-pc-windows-msvc', 'codex'),
+    ] : [home && path.join(home, '.local/bin'), home && path.join(home, '.npm-global/bin'), '/opt/homebrew/bin', '/usr/local/bin', '/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS', '/Applications/Codex.app/Contents/Resources'];
+    const knownDirs = opts.knownDirs ?? dirs;
     const d = await detectCli('codex', { ...opts, knownDirs: knownDirs.filter(Boolean), statusArgs: ['login', 'status'], authFiles: (env) => [env.CODEX_HOME ? path.join(env.CODEX_HOME, 'auth.json') : env.HOME && path.join(env.HOME, '.codex', 'auth.json')].filter(Boolean) });
     const v = /^(\d+)\.(\d+)\.(\d+)/.exec(d.version ?? '');
     return d.installed && d.version && (!v || (Number(v[1]) === 0 && Number(v[2]) < 159)) ? { ...d, reason: 'unsupported_version', startable: false } : d.installed && !d.version ? { ...d, startable: false } : d;
   }
   constructor(opts = {}) {
-    super(); Object.assign(this, opts);
+    super(); Object.assign(this, { platform: process.platform }, opts);
     this.child = null; this.pid = null; this.lstart = null; this.pgid = null; this.exited = true;
     this.turnActive = false; this.sawResult = false; this.lastText = ''; this.leftovers = []; this.error = null;
   }
@@ -115,8 +125,18 @@ export class CodexBackend extends EventEmitter {
     if (this.resume && !UUID.test(this.sessionId ?? '')) throw new NotAvailableError('Codex resume requires the task session UUID');
     writeFileAtomic(path.join(this.runDir, 'codex-instructions.md'), this.systemPrompt ?? 'Work only on the user task in the supplied workspace.');
     this.exited = false; this.sawResult = false; this.turnActive = true;
+    if (this.platform === 'win32') return this.startWindows(prompt);
     const child = spawn(this.bin, this.argv(), { cwd: this.cwd, env: { ...this.env, ...(this.env.CODEX_HOME ? {} : this.env.HOME ? { CODEX_HOME: path.join(this.env.HOME, '.codex') } : {}) }, stdio: ['pipe', 'pipe', 'pipe'], detached: true }); // privacy-flow: runner-codex
     this.child = child; this.pid = child.pid; this.pgid = child.pid; this.lstart = lstartOf(child.pid);
+    this.attachChild(child);
+    if (!child.pid) {
+      this.exited = true; this.turnActive = false;
+      throw new NotAvailableError('Codex could not start');
+    }
+    child.stdin.end(String(prompt ?? ''));
+    return this;
+  }
+  attachChild(child) {
     child.stdin.on('error', () => {});
     let buf = '';
     child.stdout.setEncoding('utf8');
@@ -129,12 +149,20 @@ export class CodexBackend extends EventEmitter {
     child.stderr.on('data', () => {});
     child.on('error', () => { this.error = 'Codex could not start'; this.exit(null, null); });
     child.on('exit', (code, signal) => this.exit(code, signal));
-    if (!child.pid) {
+  }
+  async startWindows(prompt) {
+    try {
+      const child = this.child = new WindowsJob(this.bin, this.argv(), { cwd: this.cwd, env: this.env }, this.windowsJobOptions);
+      this.attachChild(child);
+      await child.ready;
+      this.pid = child.pid; this.lstart = child.lstart; this.pgid = null;
+      if (child.closed) throw new Error('Windows provider exited during startup');
+      child.stdin.end(String(prompt ?? ''));
+      return this;
+    } catch {
       this.exited = true; this.turnActive = false;
-      throw new NotAvailableError('Codex could not start');
+      throw new NotAvailableError('Codex could not start on Windows. Install the native Codex CLI and complete its elevated Windows sandbox setup, then retry.');
     }
-    child.stdin.end(String(prompt ?? ''));
-    return this;
   }
   onEvent(e) {
     if (e.type === 'thread.started' && UUID.test(e.thread_id ?? '')) { this.sessionId = e.thread_id; this.emit('init', { session_id: e.thread_id, tools: [], mcp_servers: [] }); }
@@ -157,19 +185,21 @@ export class CodexBackend extends EventEmitter {
       this.emit('result', { subtype: 'error', is_error: true, result: String(e.error?.message ?? 'Codex turn failed').slice(0, 4000), total_cost_usd: null, num_turns: 1 });
     }
   }
-  exit(code, signal) { if (this.exited) return; this.exited = true; this.turnActive = false; this.emit('exit', { code, signal, error: this.error, sawResult: this.sawResult }); }
+  exit(code, signal) { if (this.exited) return; if (this.platform === 'win32' && code !== 0 && !this.sawResult) this.error = 'Codex could not complete its Windows launch. Check the native CLI installation and elevated sandbox setup; the task restrictions were not relaxed.'; this.exited = true; this.turnActive = false; this.emit('exit', { code, signal, error: this.error, sawResult: this.sawResult }); }
   send() { return false; }
   interrupt() { return Promise.resolve(false); }
   endInput() { this.child?.stdin?.end(); }
   alive() { return !!this.child && !this.exited; }
-  refreshTree() { if (this.alive()) this.leftovers = [...new Set([...this.leftovers, ...treeGroups(this.pid, processTable()).groups.filter((g) => g !== this.pgid)])]; }
-  reap() { killGroups(this.leftovers, 'SIGKILL'); }
-  kill() { if (this.pid) killTree(this.pid, this.lstart); this.reap(); }
+  refreshTree() { if (this.platform === 'win32') return; if (this.alive()) this.leftovers = [...new Set([...this.leftovers, ...treeGroups(this.pid, processTable()).groups.filter((g) => g !== this.pgid)])]; }
+  reap() { if (this.platform === 'win32') return; killGroups(this.leftovers, 'SIGKILL'); }
+  kill() { if (this.platform === 'win32') { void this.child?.stop(); return; } if (this.pid) killTree(this.pid, this.lstart); this.reap(); }
   async confirmStopped() {
+    if (this.platform === 'win32') return this.child ? this.child.neverStarted === true || (this.child.closed && this.child.stopped) : this.pid === null;
     const observed = await waitForStopped({ pid: this.pid, groups: [...new Set([this.pgid, ...this.leftovers].filter((g) => g != null))] });
     return observed && !this.alive();
   }
   async stop() {
+    if (this.platform === 'win32') return this.child ? this.child.stop() : this.pid === null;
     if (!this.alive()) { this.reap(); return this.confirmStopped(); }
     this.refreshTree();
     const ended = new Promise((r) => { const t = setTimeout(() => { this.off('exit', done); r(false); }, this.stopGraceMs ?? 3000); const done = () => { clearTimeout(t); r(true); }; this.once('exit', done); });
