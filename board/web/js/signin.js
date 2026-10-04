@@ -220,6 +220,15 @@ async function oauthFinish() {
   if (r.ok) {
     if (r.data?.invitation?.kind === 'team' && INVITE_TOKEN_RE.test(r.data.invitation.token)) invite = r.data.invitation.token;
     if (r.data?.invitation?.kind === 'client' && CLIENT_TOKEN_RE.test(r.data.invitation.token)) clientInvite = r.data.invitation.token;
+    if (r.data?.ok === true && account.ok && r.data.notice?.code === 'SEPARATE_ACCOUNT' && typeof r.data.notice.message === 'string') {
+      // Signed in, but to a new account: say so before the board opens, not after.
+      enterPhase('notice');
+      $('confirm-text').textContent = r.data.notice.message;
+      $('confirm-yes').textContent = 'Continue';
+      $('confirm').hidden = false;
+      $('confirm-yes').onclick = () => { $('confirm').hidden = true; guarded(() => continueSignedIn(account.data)); };
+      return;
+    }
     if (r.data?.ok === true && account.ok) { await continueSignedIn(account.data); return; }
   }
   showError(oauthError(r.data?.error?.code));

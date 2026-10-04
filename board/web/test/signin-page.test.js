@@ -270,3 +270,19 @@ test('email verification and browser OAuth admission pauses show the same truthf
   assert.equal(oauth.els['email-form'].hidden, false);
   assert.ok(!oauth.calls.some(c => c.path === '/api/invites/accept' || c.path === '/api/account/setup'));
 });
+
+test('a browser OAuth sign-in that made a separate account says so before the board opens', async () => {
+  const message = 'This GitHub sign-in made a new, separate account: another account already uses this email address, and accounts are not linked yet. To reach your existing account, sign in the way you did before.';
+  const p = page({ hash: '#oauth=web', routes: {
+    '/api/account': { status: 200, body: { user: { id: 'u2' }, teams: [], csrf_token: 'csrf' } },
+    '/api/auth/oauth/web/result': { status: 200, body: { ok: true, notice: { code: 'SEPARATE_ACCOUNT', provider: 'github', message }, invitation: null } },
+  } });
+  await settle(); await settle(); await settle();
+  assert.deepEqual(p.replaced, [], 'the board does not open over the notice');
+  assert.equal(p.els.confirm.hidden, false);
+  assert.equal(p.els['confirm-text'].textContent, message);
+  assert.equal(p.els['confirm-yes'].textContent, 'Continue');
+  p.els['confirm-yes'].onclick();
+  await settle(); await settle();
+  assert.deepEqual(p.replaced, ['/']);
+});

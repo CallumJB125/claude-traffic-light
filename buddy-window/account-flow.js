@@ -62,6 +62,7 @@ const behindAccess = (pr) => !!pr.accessTeam || pr.auth === 'access';
 function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLink, probe, makeDevice, hasDeviceFile = () => false, discardDeviceFiles = () => {}, deviceInfo = () => ({}), openBrowser = () => {}, oauthAllowOrigins = [], oauthTimeoutMs, ui, log = () => {}, now = () => Date.now() }) {
   const acct = { screen: null, hub: null, notice: null, alert: null, deleting: false };
   let oauthRun = null; // {hub, provider, run, done}: the one provider sign-in waiting on the browser
+  let noticeAfterSignIn = null; // the hub's SEPARATE_ACCOUNT words, for the first screen after that sign-in
   // The check before a deletion: for the account on a hub with no mailer (Google/GitHub), or for one
   // team (its emailed `delete_team` code, or Google/GitHub without a mailer). `confirmed` is held only
   // here, in memory, and only the run that is still current may set it. A step made for one team (or
@@ -94,7 +95,8 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
   function show(screen, { notice = null, alert = null } = {}) {
     if (delStep?.team && screen !== 'team') dropDeleteStep();
     acct.screen = screen;
-    acct.notice = notice;
+    acct.notice = notice ?? noticeAfterSignIn;
+    noticeAfterSignIn = null;
     acct.alert = alert;
     ui.show(screen);
   }
@@ -180,7 +182,11 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
       oauthRun = null;
       if (r.ok) {
         log('signed in to team hub', { host: hostOf(origin), via: provider });
+        // Signed in, but to a new account: the next screen says so, or the account page when the board opened instead.
+        noticeAfterSignIn = r.notice ?? null;
         await afterSignIn(origin);
+        if (noticeAfterSignIn && signedIn(origin)) { acct.hub = origin; show('account'); }
+        noticeAfterSignIn = null;
       } else if (!r.cancelled) show('email', { alert: r.error });
       return r;
     });

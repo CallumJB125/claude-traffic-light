@@ -73,7 +73,7 @@ function providerEmail(v) {
   const e = canonEmail(v);
   return /^[\x21-\x7e]+@[\x21-\x7e]+$/.test(e) && e.length <= 254 ? e : null;
 }
-const SEPARATE_ACCOUNT_MESSAGE = (provider) => `This ${provider === 'github' ? 'GitHub' : 'Google'} sign-in made a new, separate account: another account already uses this email address, and accounts are not linked yet. To reach your existing account, sign in the way you did before.`;
+export const SEPARATE_ACCOUNT_MESSAGE = (provider) => `This ${provider === 'github' ? 'GitHub' : 'Google'} sign-in made a new, separate account: another account already uses this email address, and accounts are not linked yet. To reach your existing account, sign in the way you did before.`;
 const invalid = () => new HubError('INVALID_TOKEN', 'that sign-in is invalid or has expired: start again');
 const unavailable = () => new HubError('PROVIDER_UNAVAILABLE', 'the sign-in provider could not be reached: try again shortly');
 const refused = () => new HubError('PROVIDER_ERROR', 'the sign-in provider did not accept this sign-in: start again');

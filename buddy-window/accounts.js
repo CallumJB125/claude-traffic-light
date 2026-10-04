@@ -403,7 +403,9 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
       }
       if (!r.ok) return oauthOutcome(r, provider, host);
       const done = signedInWith(r);
-      return done.ok ? { ...done, email: r.user?.email ?? null } : done;
+      // The hub made a second account (another one holds this address; no linking yet): the member must hear it.
+      const notice = r.notice?.code === 'SEPARATE_ACCOUNT' && typeof r.notice.message === 'string' ? { notice: r.notice.message.slice(0, 500) } : {};
+      return done.ok ? { ...done, email: r.user?.email ?? null, ...notice } : done;
     },
 
     pendingEmail: () => (flow?.purpose === 'signin' ? flow.email : null),
