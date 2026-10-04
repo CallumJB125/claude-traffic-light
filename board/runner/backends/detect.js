@@ -73,11 +73,11 @@ export function resolveBin(name, env, knownDirs = KNOWN_DIRS(env.HOME), platform
 }
 
 /** Runs bin with args; resolves {code, stdout} or null on spawn error/timeout. */
-export function probe(bin, args, env, timeoutMs = PROBE_TIMEOUT_MS) {
+export function probe(bin, args, env, timeoutMs = PROBE_TIMEOUT_MS, extraEnv = {}) {
   return new Promise((resolve) => {
     let child;
     try {
-      child = execFile(bin, args, { env: probeEnv(env), windowsHide: true, timeout: timeoutMs, killSignal: 'SIGKILL', maxBuffer: 64 * 1024, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }, (err, stdout) => { // privacy-flow: ai-detect
+      child = execFile(bin, args, { env: { ...probeEnv(env), ...extraEnv }, windowsHide: true, timeout: timeoutMs, killSignal: 'SIGKILL', maxBuffer: 64 * 1024, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }, (err, stdout) => { // privacy-flow: ai-detect
         if (err && (err.killed || typeof err.code !== 'number')) return resolve(null);
         resolve({ code: err ? err.code : 0, stdout: String(stdout ?? '') });
       });
@@ -97,10 +97,10 @@ const exists = (p) => { try { return fs.statSync(p).isFile(); } catch { return f
  * Shared detect(): {id, installed, version, signedIn, bin, reason?}.
  * knownDirs replaces the extra install dirs searched after PATH ([] = PATH only).
  */
-export async function detectCli(id, { env = process.env, timeoutMs = PROBE_TIMEOUT_MS, which, knownDirs, authFiles = () => [], statusArgs = null, platform = process.platform } = {}) {
+export async function detectCli(id, { env = process.env, timeoutMs = PROBE_TIMEOUT_MS, which, knownDirs, authFiles = () => [], statusArgs = null, versionEnv = {}, platform = process.platform } = {}) {
   const r = which ? which(id, env) : resolveBin(id, env, knownDirs, platform);
   if (!r.bin) return { id, installed: false, version: null, signedIn: 'unknown', bin: null, reason: r.reason ?? 'not_found' };
-  const v = await probe(r.bin, ['--version'], env, timeoutMs);
+  const v = await probe(r.bin, ['--version'], env, timeoutMs, versionEnv);
   if (!v || v.code !== 0) return { id, installed: true, version: null, signedIn: 'unknown', bin: r.bin, reason: 'probe_failed' };
   let signedIn = 'unknown';
   if (authFiles(env).some(exists)) signedIn = true;

@@ -16,6 +16,7 @@
 // LAN or tailnet addresses (src/local-models.js addressAllowed), no key.
 import fs from 'node:fs';
 import net from 'node:net'; // privacy-flow: runner-hermes
+import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process'; // privacy-flow: runner-hermes
 import { detectCli } from './detect.js';
@@ -72,6 +73,8 @@ export function hermesConfig({ boardRunDir, systemPrompt = null, model = null, e
     } },
     // No user is present to approve a dangerous command in a -q run.
     approvals: { single_query_mode: 'deny' },
+    // A fresh per-run home has no update cache: every run would call GitHub.
+    updates: { check: false },
     ...(systemPrompt ? { agent: { system_prompt: systemPrompt } } : {}),
   };
 }
@@ -86,8 +89,18 @@ export class HermesBackend extends CodexBackend {
   static async detect(opts = {}) {
     const env = opts.env ?? process.env;
     const home = env.HOME ?? env.USERPROFILE;
-    const d = await detectCli('hermes', { ...opts, knownDirs: (opts.knownDirs ?? [home && path.join(home, '.local', 'bin')]).filter(Boolean),
-      authFiles: (e) => [hermesHome(e) && path.join(hermesHome(e), '.env')].filter(Boolean) });
+    // `hermes --version` runs a synchronous GitHub update check whenever its
+    // daily cache is stale (~20 s offline), which overran the 3 s probe and
+    // marked Hermes unavailable. A throwaway home that opts out keeps it local.
+    const probeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'plexiform-hermes-probe-'));
+    let d;
+    try {
+      fs.writeFileSync(path.join(probeHome, 'config.yaml'), 'updates:\n  check: false\n', { mode: 0o600 });
+      d = await detectCli('hermes', { ...opts, knownDirs: (opts.knownDirs ?? [home && path.join(home, '.local', 'bin')]).filter(Boolean),
+        authFiles: (e) => [hermesHome(e) && path.join(hermesHome(e), '.env')].filter(Boolean), versionEnv: { HERMES_HOME: probeHome } });
+    } finally {
+      fs.rmSync(probeHome, { recursive: true, force: true });
+    }
     // stream-json, --query-file and --source were verified against v0.21.3.
     const v = /^(\d+)\.(\d+)\./.exec(d.version ?? '');
     const old = v && Number(v[1]) === 0 && Number(v[2]) < 21;
@@ -166,7 +179,15 @@ export class HermesBackend extends CodexBackend {
       if (!id) for (const [k, v] of this.openTools) if (v.raw === e.name) { id = k; break; }
       if (!id) return;
       const t = this.openTools.get(id); this.openTools.delete(id);
-      this.emit('tool_end', { id, ok: e.is_error !== true, input: t.input, output: String(e.output ?? '').slice(-16000) });
+      // v0.21.3 wraps terminal results as {"output","exit_code","error"}.
+      let output = String(e.output ?? ''), exitCode;
+      if (t.raw === 'terminal') {
+        try {
+          const r = JSON.parse(output);
+          if (typeof r?.output === 'string') { output = [r.output, r.error].filter(Boolean).join('\n'); if (Number.isInteger(r.exit_code)) exitCode = r.exit_code; }
+        } catch { /* plain text */ }
+      }
+      this.emit('tool_end', { id, ok: e.is_error !== true, input: t.input, output: output.slice(-16000), ...(exitCode != null ? { exit_code: exitCode } : {}) });
     } else if (e.type === 'result') {
       this.flushText();
       this.turnActive = false; this.sawResult = true;

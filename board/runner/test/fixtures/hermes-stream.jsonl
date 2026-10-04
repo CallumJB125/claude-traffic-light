@@ -1,8 +1,9 @@
 {"type": "system", "subtype": "init", "model": "GLM-5.3-Flash-EXL3", "session_id": "20261003_101500_a1b2c3", "timestamp": 1790000000000}
+  ⚠ tirith security scanner enabled but not available — command scanning will use pattern matching only
 {"type": "text", "text": "Looking at ", "timestamp": 1790000000100}
 {"type": "text", "text": "the repo.", "timestamp": 1790000000110}
 {"type": "tool_use", "name": "terminal", "tool_call_id": "call_1", "input": {"command": "git status --short"}, "timestamp": 1790000000200}
-{"type": "tool_result", "name": "terminal", "tool_call_id": "call_1", "output": " M README.md", "duration_ms": 40, "is_error": false, "timestamp": 1790000000240}
+{"type": "tool_result", "name": "terminal", "tool_call_id": "call_1", "output": "{\"output\": \" M README.md\", \"exit_code\": 0, \"error\": null}", "duration_ms": 40, "is_error": false, "timestamp": 1790000000240}
 {"type": "tool_use", "name": "write_file", "tool_call_id": "call_2", "input": {"path": "notes.txt", "content": "hi"}, "timestamp": 1790000000300}
 {"type": "tool_result", "name": "write_file", "tool_call_id": "call_2", "output": "ok", "duration_ms": 3, "is_error": false, "timestamp": 1790000000310}
 {"type": "tool_use", "name": "board_update_status", "input": {"text": "working"}, "timestamp": 1790000000400}

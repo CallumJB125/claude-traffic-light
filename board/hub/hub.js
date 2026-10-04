@@ -1298,6 +1298,12 @@ export function feedEvent(hub, ev) {
     const source = hub.clientFeedback?.cardProvenance(ev.card_id);
     text = source ? `Feedback from ${source.source_name} · intake authorized by ${source.intake_name}` : 'Client feedback received through staff-authorized intake';
   }
+  else if (ev.kind === 'dispatched' && data.ai && data.ai !== 'claude' && AI_LABELS[data.ai]) text = `Given to ${AI_LABELS[data.ai]}`;
+  else if (ev.kind === 'started' && ev.fence != null) {
+    const d = hub.db.get('SELECT d.ai, d.backend FROM runs r JOIN dispatches d ON d.request_id = r.dispatch_request_id WHERE r.card_id = ? AND r.fence = ?', ev.card_id, ev.fence);
+    const ai = d ? aiOfDispatch(d) : 'claude';
+    if (ai !== 'claude') text = `${AI_LABELS[ai]} started`;
+  }
   else if (ev.kind === 'progress') text = data.text;
   else if (ev.kind === 'message') text = data.text;
   else if (ev.kind === 'error') text = data.first_line;

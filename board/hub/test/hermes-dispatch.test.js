@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
-import { startHub } from './helpers.js';
+import { startHub, runMsg } from './helpers.js';
 import { migrate, loadMigrations } from '../../shared/migrate.js';
 
 const hermes = (id = 'hermes') => ({ id, label: id === 'hermes' ? 'Hermes' : 'Hermes · DGX', installed: true, version: '0.21.3', signedIn: true, startable: true,
@@ -29,6 +29,12 @@ for (const id of ['hermes', 'hermes-dgx']) {
     const detail = await h.api(alice, 'GET', `/api/cards/${card.id}`);
     assert.equal(detail.body.card.run.ai_label, id === 'hermes' ? 'Hermes' : 'Hermes · DGX');
     assert.equal(detail.body.run.cost_source, 'unavailable', 'no dollar telemetry is claimed');
+    await runner.out({ kind: 'activity', ...runMsg({ ...claim, card_id: card.id, repo_id: h.ids.repo }), source: 'init' });
+    const label = id === 'hermes' ? 'Hermes' : 'Hermes · DGX';
+    let feed = [];
+    for (let n = 0; n < 100 && !feed.some((e) => e.kind === 'started'); n++) { feed = (await h.api(alice, 'GET', `/api/cards/${card.id}`)).body.feed; await new Promise((r) => setTimeout(r, 10)); }
+    assert.equal(feed.find((e) => e.kind === 'dispatched').text, `Given to ${label}`, 'the feed names the AI actually given the card');
+    assert.equal(feed.find((e) => e.kind === 'started').text, `${label} started`);
   });
 }
 

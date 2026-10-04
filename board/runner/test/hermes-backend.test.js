@@ -51,7 +51,8 @@ test('Hermes turn: prompt only on stdin, isolated HERMES_HOME with the per-run b
     assert.deepEqual(start.config.mcp_servers.board.tools.include, [...CODEX_BOARD_TOOLS]);
     assert.equal(start.config.approvals.single_query_mode, 'deny');
     assert.equal(start.config.agent.system_prompt, 'trusted scope');
-    assert.deepEqual(Object.keys(start.config).sort(), ['agent', 'approvals', 'mcp_servers']);
+    assert.deepEqual(start.config.updates, { check: false }, 'no per-run GitHub update check');
+    assert.deepEqual(Object.keys(start.config).sort(), ['agent', 'approvals', 'mcp_servers', 'updates']);
 
     assert.deepEqual(events.filter((e) => e.n === 'init').map((e) => e.data.session_id), [SESSION]);
     assert.equal(f.backend.sessionId, SESSION);
@@ -60,7 +61,9 @@ test('Hermes turn: prompt only on stdin, isolated HERMES_HOME with the per-run b
     assert.deepEqual(starts.map((s) => [s.name, s.input]), [['Bash', { command: 'git status --short' }], ['Write', { file_path: 'notes.txt' }], ['board_update_status', { text: 'working' }]]);
     const ends = events.filter((e) => e.n === 'tool_end').map((e) => e.data);
     assert.deepEqual(ends.map((e) => [e.id, e.ok]), [['call_1', true], ['call_2', true], [starts[2].id, false]], 'result without tool_call_id pairs by name');
-    assert.equal(ends[0].output, ' M README.md');
+    assert.equal(ends[0].output, ' M README.md', 'terminal JSON result unwrapped');
+    assert.equal(ends[0].exit_code, 0);
+    assert.equal(ends[1].exit_code, undefined);
     assert.deepEqual(events.find((e) => e.n === 'usage').data, { inputTokens: 1200, outputTokens: 80, costUsd: null });
     const r = events.find((e) => e.n === 'result').data;
     assert.deepEqual([r.subtype, r.is_error, r.result, r.total_cost_usd], ['success', false, 'Looking at the repo.Done.', null]);
@@ -134,6 +137,8 @@ test('hermes-dgx: tailnet endpoint from local-models.json, custom provider, no c
     const none = await HermesDgxBackend.detect({ env: { HOME: dir, PATH: bin, PLEXIFORM_LOCAL_MODELS_FILE: models }, knownDirs: [], timeoutMs: 15000 });
     assert.deepEqual([none.startable, none.reason], [false, 'no_local_model']);
     assert.equal((await HermesBackend.detect({ env: { HOME: dir, PATH: bin }, knownDirs: [], timeoutMs: 15000 })).signedIn, true, 'Hermes .env present');
+    const quick = await HermesBackend.detect({ env: { HOME: dir, PATH: bin }, knownDirs: [] });
+    assert.deepEqual([quick.version, quick.reason], ['0.21.3', undefined], 'version probe skips the update check within the default timeout');
   } finally { rm(dir); }
 });
 

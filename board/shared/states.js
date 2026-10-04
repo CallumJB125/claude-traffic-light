@@ -146,7 +146,7 @@ const ACTIVE_LIST = [...ACTIVE];
 export const TRANSITIONS = Object.freeze([
   { id: '1', from: ['todo'], on: 'dispatch', to: 'queued',
     guard: both(needsRequestId, holdCheckpointRequired, guardAll(['has_repo', 'NO_REPO'], ['can_write', 'FORBIDDEN'], ['policy_ok', 'POLICY_DENIED'])),
-    effects: (c, ev, ctx) => [{ type: 'dispatch_create', request_id: ev.request_id, target_member_id: ev.target_member_id ?? null, needs_confirm: !!ctx.needs_confirm }, offer, feed('dispatched', { needs_confirm: !!ctx.needs_confirm })] },
+    effects: (c, ev, ctx) => [{ type: 'dispatch_create', request_id: ev.request_id, target_member_id: ev.target_member_id ?? null, needs_confirm: !!ctx.needs_confirm }, offer, feed('dispatched', { needs_confirm: !!ctx.needs_confirm, ...(ev.ai ? { ai: ev.ai } : {}) })] },
   { id: '1a', from: ['queued'], on: 'queue_nudge', to: 'SAME',
     effects: () => [{ type: 'notify', rule: 'queued_no_runner', to: ['dispatcher'] }, { type: 'mark_nudged' }] },
   { id: '2', from: ['queued'], on: 'cancel', to: 'todo', guard: guardAll(['can_cancel', 'FORBIDDEN']),
@@ -254,7 +254,7 @@ export const TRANSITIONS = Object.freeze([
     effects: (c, ev) => [runnerCmd(c, 'stop'), ...endRun('taken_over'), handoffMemory('takeover'), feed('taken_over', { by: ev.by ?? null })] },
   { id: '29', from: ['handed_over'], on: 'redispatch', to: 'queued', guard: both(needsRequestId, canWrite, holdCheckpointRequired),
     patch: () => ({ handover_target: null }),
-    effects: (c, ev, ctx) => [{ type: 'dispatch_create', request_id: ev.request_id, target_member_id: ev.target_member_id ?? null, needs_confirm: !!ctx.needs_confirm }, { type: 'seed', from: ['handover'] }, offer, feed('dispatched', { needs_confirm: !!ctx.needs_confirm })] },
+    effects: (c, ev, ctx) => [{ type: 'dispatch_create', request_id: ev.request_id, target_member_id: ev.target_member_id ?? null, needs_confirm: !!ctx.needs_confirm }, { type: 'seed', from: ['handover'] }, offer, feed('dispatched', { needs_confirm: !!ctx.needs_confirm, ...(ev.ai ? { ai: ev.ai } : {}) })] },
   { id: '30', from: ['handed_over'], on: 'take_myself', to: 'todo', guard: both(canWrite, holdCheckpointRequired),
     patch: () => ({ handover_target: null }),
     effects: (c, ev) => [{ type: 'assign', member_id: ev.by ?? null, role: 'owner' }, feed('human_on_it', { by: ev.by ?? null })] },
