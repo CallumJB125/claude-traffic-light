@@ -21,8 +21,8 @@ test('design §4.2 examples', () => {
   assert.equal(cardFace(view('blocked', { blocked_kind: 'permission', ask: { summary: 'npm run migrate', count: 1 } })).text, 'Needs you · approval waiting · `npm run migrate`');
   assert.equal(cardFace(view('blocked', { blocked_kind: 'permission', ask: { count: 2 } })).text, 'Needs you · approval waiting · 2 req');
   assert.equal(cardFace(view('running')).text, "Running · Callum's Claude");
-  assert.equal(cardFace(view('suspended', { resume_to: 'quiet' })).text, 'Suspended · laptop asleep 12m');
-  assert.equal(cardFace(view('orphaned', { resume_to: 'quiet' })).text, 'Orphaned · take over');
+  assert.equal(cardFace(view('suspended', { resume_to: 'quiet' })).text, 'Stalled · laptop asleep 12m');
+  assert.equal(cardFace(view('orphaned', { resume_to: 'quiet' })).text, 'Stalled · runner offline · last seen 3s ago');
   assert.equal(cardFace(view('handing_over', { state_age_ms: 40_000 })).text, 'Handing over · waiting for checkpoint · 40s');
   assert.equal(cardFace(view('running', { live: { ...liveOk, tool_in_flight: { name: 'Edit', summary: 'apps/x/submit.ts', age_ms: 1000 } } })).reason, "Callum's Claude · editing submit.ts");
   assert.equal(cardFace(view('running', { live: { ...liveOk, tool_in_flight: { name: 'Bash', summary: 'npm test', age_ms: 2 * MIN } } })).reason, "Callum's Claude · `npm test` 2m");
@@ -39,7 +39,7 @@ test('design §4.2 examples', () => {
   assert.equal(cardFace(view('handed_over', { handover_target_name: 'Sam', handover: { version: 8 } })).reason, 'to Sam · handover v8');
   assert.equal(cardFace(view('reconnecting')).reason, "board restarted · waiting for Callum's runner");
   assert.equal(cardFace(view('parked')).reason, 'waiting for your answer · no agent running');
-  assert.equal(cardFace(view('claimed')).text, "Starting · Callum's Claude · preparing worktree");
+  assert.equal(cardFace(view('claimed', { state_age_ms: 20_000 })).text, "Starting · Callum's Claude · preparing worktree");
 });
 
 test('queued reasons: self, teammate awaiting confirm, no runner online', () => {
@@ -54,11 +54,11 @@ test('P1: green only when the predicate holds, including after client-side agein
   assert.equal(f.green, true);
   const aged = cardFace(view('running'), { elapsed_ms: 60_000 });
   assert.equal(aged.green, false, 'hb is now 63 s old');
-  assert.equal(aged.label, 'No signal');
+  assert.equal(aged.label, 'Stalled');
   assert.notEqual(aged.tone, 'green');
   const stale = cardFace(view('running', { live: { ...liveOk, activity_age_ms: 7 * MIN } }));
-  assert.equal(stale.label, 'Quiet');
-  assert.equal(stale.tone, 'quiet');
+  assert.equal(stale.label, 'Stalled');
+  assert.equal(stale.stalled.reason, 'no_activity');
   const dead = cardFace(view('running', { live: { ...liveOk, child_alive: false } }));
   assert.equal(dead.green, false);
   for (const s of STATES.filter((x) => x !== 'running')) assert.notEqual(cardFace(view(s, { resume_to: 'quiet', blocked_kind: 'question', fail_kind: 'error' })).tone, 'green', s);
@@ -90,8 +90,8 @@ test('primary actions per §4.2', () => {
   assert.deepEqual(a('blocked', { blocked_kind: 'decision' }), ['answer', 'switch_ai']);
   assert.deepEqual(a('blocked', { blocked_kind: 'plan' }), ['approve_plan', 'switch_ai']);
   assert.deepEqual(a('blocked', { blocked_kind: 'loop' }), ['continue', 'stop', 'switch_ai']);
-  assert.deepEqual(a('orphaned', { resume_to: 'quiet' }), ['take_over']);
-  assert.deepEqual(a('suspended', { resume_to: 'quiet' }), ['take_over_confirm']);
+  assert.deepEqual(a('orphaned', { resume_to: 'quiet' }), ['resume', 'handover_ai', 'stop', 'take_over']);
+  assert.deepEqual(a('suspended', { resume_to: 'quiet' }), ['resume', 'handover_ai', 'stop', 'take_over_confirm']);
   assert.deepEqual(a('handed_over'), ['take_over_with_claude', 'take_over_myself']);
   assert.deepEqual(a('failed', { fail_kind: 'limit' }), ['take_over', 'retry']);
   assert.deepEqual(a('failed', { fail_kind: 'network' }), ['retry', 'take_over']);
@@ -139,4 +139,27 @@ test('alerts strip: per viewer, N-rules for orphans, newest first, max 5 + more'
   const capped = alertsFor('m-c', lots);
   assert.equal(capped.items.length, 5);
   assert.equal(capped.more, 3);
+});
+
+test('stalled: derived from the aged view, with a reason, Resume / Hand over / Stop, never green', () => {
+  const dead = cardFace(view('running', { live: { ...liveOk, hb_age_ms: 90_000 } }));
+  assert.equal(dead.label, 'Stalled');
+  assert.equal(dead.stalled.reason, 'runner_offline');
+  assert.equal(dead.reason, 'runner offline · last seen 1m ago');
+  assert.equal(dead.tone, 'red');
+  assert.equal(dead.green, false);
+  assert.deepEqual(dead.actions, ['resume', 'handover_ai', 'stop']);
+  const silent = cardFace(view('quiet', { live: { ...liveOk, activity_age_ms: 8 * MIN } }));
+  assert.equal(silent.stalled.reason, 'no_activity');
+  assert.deepEqual(silent.actions, ['resume', 'switch_ai', 'stop'], 'a reachable runner can take the strict handover');
+  const gone = cardFace(view('running', { live: { ...liveOk, child_alive: false, activity_age_ms: 2 * MIN } }));
+  assert.equal(gone.reason, 'AI process exited · no activity 2m');
+  const unstarted = cardFace(view('claimed', { state_age_ms: 3 * MIN }));
+  assert.equal(unstarted.stalled.reason, 'claim_not_started');
+  assert.equal(cardFace(view('claimed', { state_age_ms: 20_000 })).stalled, null);
+  const unconfirmed = cardFace(view('failed', { fail_kind: 'stopped', live: null, state_age_ms: MIN, run: { ...view('failed').run, child_alive: true } }));
+  assert.equal(unconfirmed.stalled.reason, 'stop_unconfirmed');
+  assert.deepEqual(unconfirmed.actions, ['view_handover']);
+  assert.equal(cardFace(view('blocked', { blocked_kind: 'question', live: { ...liveOk, activity_age_ms: 30 * MIN } })).stalled, null, 'waiting for a person is not stalled');
+  assert.equal(cardFace(dead.stalled ? view('running', { live: { ...liveOk, hb_age_ms: 90_000 } }) : null, { connection_lost: true }).stalled, null, 'a lost board connection says nothing about the run');
 });

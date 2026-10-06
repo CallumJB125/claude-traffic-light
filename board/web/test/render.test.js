@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { textOf, byClass, byAttr, findAll, walk } from '../js/h.js';
 import { displayFace, groupColumns, alertsForViewer, stripGlyph, boardLamps, columnFor } from '../js/view.js';
-import { card, pill, alertsStrip, connectionBanner, boardScreen, cardActions } from '../js/render-board.js';
+import { card, pill, alertsStrip, connectionBanner, boardScreen, cardActions, stalledLane } from '../js/render-board.js';
 import { drawer, handoverBody } from '../js/render-drawer.js';
 import { giveDialog, confirmDialog } from '../js/render-dialogs.js';
 import { signinScreen } from '../js/render-signin.js';
@@ -33,10 +33,10 @@ test('hub says not green, client says green → not green (quiet tone, still Run
 test('hub says green, but ages advanced past the predicate → client wins, not green', () => {
   const f = displayFace(view({ live: live({ green: true, tool_in_flight: null, activity_age_ms: T_QUIET_MS - 10_000 }) }), { elapsed_ms: 20_000 });
   assert.equal(f.green, false);
-  assert.equal(f.label, 'Quiet');
+  assert.equal(f.label, 'Stalled');
   const g = displayFace(view(), { elapsed_ms: TTL_MS });
   assert.equal(g.green, false);
-  assert.equal(g.label, 'No signal');
+  assert.equal(g.label, 'Stalled');
 });
 
 test('connection lost: never green, never marked unresponsive by the browser', () => {
@@ -342,4 +342,51 @@ test('every FeedEvent kind the hub sends has a feed label (CONTRACT §5.3)', asy
   const { FEED_KINDS } = await import('../../shared/protocol.js');
   const { FEED_LABEL } = await import('../js/render-drawer.js');
   assert.deepEqual(FEED_KINDS.filter((k) => !FEED_LABEL[k]), []);
+});
+
+// ── Stalled lane ──────────────────────────────────────────────────────────
+
+test('a run with a dead heartbeat leaves In progress for the Stalled lane and is never drawn green', () => {
+  const dead = view({ id: 'c-dead', key: 'BDL-9', live: live({ hb_age_ms: 120_000, green: false }) });
+  const ok = view({ id: 'c-ok', key: 'BDL-1' });
+  const cols = groupColumns([entry(dead), entry(ok)]);
+  assert.deepEqual(cols.stalled.map((e) => e.view.id), ['c-dead']);
+  assert.deepEqual(cols.in_progress.map((e) => e.view.id), ['c-ok']);
+  assert.equal(columnFor(dead, displayFace(dead)), 'stalled');
+  assert.equal(displayFace(dead).green, false);
+  const screen = boardScreen(model([entry(dead), entry(ok)]));
+  const lane = byClass(screen, 'stalled-lane')[0];
+  assert.match(textOf(lane), /Stalled/);
+  assert.match(textOf(lane), /BDL-9/);
+  assert.deepEqual(byAttr(lane, 'data-card-id', 'c-ok'), []);
+  assert.doesNotMatch(textOf(lane), /AI activity not confirmed|AI working/);
+  const inProgress = byAttr(screen, 'data-column', 'in_progress')[0];
+  assert.doesNotMatch(textOf(inProgress), /BDL-9/);
+});
+
+test('stalled card says why and offers Resume, Hand over to another AI and Stop', () => {
+  const quiet = view({ id: 'c-q', live: live({ activity_age_ms: 8 * 60_000, tool_in_flight: null, green: false }) });
+  const n = card(entry(quiet), model([]));
+  assert.match(textOf(byClass(n, 'pill')[0]), /^Stalled.*no activity 8m/);
+  assert.equal(n.props['data-state'], 'running');
+  assert.equal(n.props['data-tone'], 'red');
+  const labels = byClass(n, 'btn').map((b) => textOf(b));
+  assert.deepEqual(labels, ['Resume', 'Move to another AI', 'Stop']);
+  const offline = card(entry(view({ live: live({ hb_age_ms: 90_000, green: false }) })), model([]));
+  assert.deepEqual(byClass(offline, 'btn').map((b) => textOf(b)), ['Resume', 'Hand over to another AI', 'Stop']);
+});
+
+test('no lane when nothing is stalled; connection loss does not stall anything', () => {
+  assert.equal(stalledLane([], model([])), null);
+  const e = entry(view({ live: live({ hb_age_ms: 120_000, green: false }) }), { connection_lost: true });
+  assert.equal(groupColumns([e]).stalled.length, 0);
+});
+
+test('resume and hand over ask before stopping the stalled run', () => {
+  const v = view({ live: live({ hb_age_ms: 90_000, green: false }) });
+  for (const action of ['resume', 'handover_ai']) {
+    const d = confirmDialog({ kind: 'confirm', action, cardId: v.id }, model([entry(v)]));
+    assert.match(textOf(d), /stalled run is stopped/);
+    assert.equal(byAttr(d, 'data-confirm', action).length, 1);
+  }
 });

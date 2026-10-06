@@ -5,7 +5,7 @@ import { cardFace, alertsFor, sponsorLine } from '../../shared/cardface.js';
 import { formatAge } from '../../shared/liveness.js';
 import { ACTIVE, COLUMNS } from '../../shared/states.js';
 
-export const COLUMN_LABEL = { todo: 'To do', in_progress: 'In progress', in_review: 'Review', done: 'Done' };
+export const COLUMN_LABEL = { todo: 'To do', in_progress: 'In progress', in_review: 'Review', done: 'Done', stalled: 'Stalled' };
 export { COLUMNS, formatAge, sponsorLine };
 
 /**
@@ -34,7 +34,7 @@ export const isObservedWork = (view) => !view.run && isHumanOwned(view) && view.
 export const hasLiveCapture = (view) => view.capture?.fresh === true && view.capture?.status === 'working';
 
 export function cardWorkPhase(view, face) {
-  if (isObservedWork(view)) return null;
+  if (isObservedWork(view) || face.stalled) return null;
   if (face.state === 'in_review' || (isHumanOwned(view) && view.column === 'in_review')) return 'Awaiting human review';
   if (view.run && face.green === true) return 'AI working';
   if (view.run && face.state === 'quiet') return 'No recent AI activity';
@@ -45,17 +45,19 @@ export function cardWorkPhase(view, face) {
 export function columnFor(view, face) {
   if (isHumanOwned(view) && hasLiveCapture(view)) return 'in_progress';
   if (isHumanOwned(view) && COLUMNS.includes(view.column)) return view.column;
-  return face.column;
+  return face.stalled ? 'stalled' : face.column;
 }
 
 // Ordering inside a column: what needs a human first, then live work, then
 // the rest by recency (smallest state age first).
-const RANK = { blocked: 0, orphaned: 1, failed: 1, parked: 1, unresponsive: 2, suspended: 2, handing_over: 3, handed_over: 3, quiet: 4, running: 5, claimed: 5, reconnecting: 5, queued: 6, in_review: 6, todo: 7, done: 8 };
+const RANK = { stalled: 0, blocked: 0, orphaned: 1, failed: 1, parked: 1, unresponsive: 2, suspended: 2, handing_over: 3, handed_over: 3, quiet: 4, running: 5, claimed: 5, reconnecting: 5, queued: 6, in_review: 6, todo: 7, done: 8 };
 
+// Stalled runs leave In progress: they sit in their own lane (cols.stalled),
+// never among the cards that are working.
 export function groupColumns(entries) {
-  const cols = Object.fromEntries(COLUMNS.map((c) => [c, []]));
+  const cols = { ...Object.fromEntries(COLUMNS.map((c) => [c, []])), stalled: [] };
   for (const e of entries) cols[columnFor(e.view, e.face)]?.push(e);
-  for (const c of COLUMNS) {
+  for (const c of [...COLUMNS, 'stalled']) {
     cols[c].sort((a, b) => (RANK[a.face.state] ?? 9) - (RANK[b.face.state] ?? 9)
       || (a.view.state_age_ms ?? Infinity) - (b.view.state_age_ms ?? Infinity)
       || String(a.view.key).localeCompare(String(b.view.key), undefined, { numeric: true }));
@@ -143,6 +145,8 @@ export const ACTION_LABEL = {
   open_pr: 'Open PR',
   request_changes: 'Request changes',
   retry: 'Retry',
+  resume: 'Resume',
+  handover_ai: 'Hand over to another AI',
 };
 
 // Rarely needed actions: only in the drawer, behind its Advanced disclosure.

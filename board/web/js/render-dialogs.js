@@ -150,6 +150,8 @@ export function switchAiDialog(dlg, model) {
 
 const CONFIRM = {
   stop: (v) => ({ title: `Stop ${v.key}?`, body: 'The agent is interrupted and its process tree is killed. The handover and the last code snapshot stay on the card, so you or a teammate can pick it up.', confirm: 'Stop the run', danger: true }),
+  resume: (v) => ({ title: `Resume ${v.key}?`, body: 'The stalled run is stopped. Its handover and last code snapshot are kept, and a new run starts from them with the same AI.', confirm: 'Stop and resume', danger: false }),
+  handover_ai: (v) => ({ title: `Hand over ${v.key}?`, body: 'The stalled run is stopped first. Its handover and last code snapshot are kept, then you choose the next AI.', confirm: 'Stop and choose next AI', danger: false }),
   cancel: (v) => ({ title: `Cancel ${v.key}?`, body: 'It goes back to To do. No runner has started it yet.', confirm: 'Cancel dispatch', danger: false }),
   take_over_confirm: (v) => ({
     title: `Take over ${v.key}?`,

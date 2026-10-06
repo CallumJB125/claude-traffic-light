@@ -1403,6 +1403,17 @@ async function submitDialogForm(form, submitter) {
     }
     update();
   };
+  if (kind === 'confirm' && ['resume', 'handover_ai'].includes(form.dataset.confirm)) {
+    const resume = form.dataset.confirm === 'resume';
+    await run(async () => {
+      const stopped = await api.action(cardId, 'stop', {});
+      if (!resume) return stopped;
+      applyCard(stopped);
+      return api.action(cardId, 'retry', {});
+    }, resume ? `${keyOf(cardId)} was stopped and is queued again from its handover.` : null);
+    if (!resume && !state.dialog) openGive(cardId, 'retry');
+    return undefined;
+  }
   if (kind === 'confirm') {
     const action = form.dataset.confirm;
     const hubAction = action === 'take_over_confirm' ? 'take_over' : action;
@@ -1810,7 +1821,7 @@ function onClick(e) {
     case 'take_over_with_claude': openGive(cardId, 'redispatch'); return;
     case 'switch_ai': state.dialog = { kind: 'switch-ai', cardId, ...handoverPin(viewOf(cardId)) }; update(); return;
     case 'view_handover': openDetail(cardId, 'handover'); return;
-    case 'stop': case 'cancel': case 'take_over_confirm':
+    case 'stop': case 'cancel': case 'take_over_confirm': case 'resume': case 'handover_ai':
       state.dialog = { kind: 'confirm', action, cardId }; update(); return;
     case 'retry':
       if (viewOf(cardId)?.fail_kind === 'budget') openGive(cardId, 'retry');

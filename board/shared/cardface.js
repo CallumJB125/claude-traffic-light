@@ -7,7 +7,7 @@
 //
 // Browser-safe, dependency-free.
 
-import { isGreen, advanceView, toolBound, formatAge, TTL_MS, ORPHAN_NOTIFY_MS } from './liveness.js';
+import { isGreen, advanceView, toolBound, formatAge, deriveStalled, TTL_MS, ORPHAN_NOTIFY_MS } from './liveness.js';
 import { ACTIVE, columnOf } from './states.js';
 
 export const PILLS = Object.freeze({
@@ -25,6 +25,7 @@ export const PILLS = Object.freeze({
   handed_over: { icon: '⇄', label: 'Handed over', tone: 'violet' },
   failed: { icon: '✖', label: 'Failed', tone: 'red' },
   failed_limit: { icon: '✖', label: 'Stopped', tone: 'red' },
+  stalled: { icon: '⚠', label: 'Stalled', tone: 'red' },
   in_review: { icon: '◆', label: 'In review', tone: 'purple' },
   done: { icon: '✓', label: 'Done', tone: 'done' },
   todo: { icon: '', label: '', tone: 'none' },
@@ -84,6 +85,26 @@ const BLOCKED_ACTIONS = {
   permission: ['allow', 'deny'], question: ['answer'], clarify: ['answer'], decision: ['answer'],
   plan: ['approve_plan'], conflict: ['resolve_conflict'], loop: ['continue', 'stop'],
 };
+
+function stalledReason(s, detail) {
+  const age = formatAge(s.since_ms);
+  switch (s.reason) {
+    case 'runner_offline': return detail ?? `runner offline · last seen ${age} ago`;
+    case 'process_gone': return `AI process exited · no activity ${age}`;
+    case 'claim_not_started': return `never started · claimed ${age} ago`;
+    case 'stop_unconfirmed': return 'stop not confirmed · the AI process is still running';
+    default: return detail ?? `no activity ${age}`;
+  }
+}
+
+// Resume stops the stalled run, then retries it. A run whose runner still
+// answers can be moved through the strict hold handover; otherwise the hub
+// stops it first and the next AI is chosen from the saved handover.
+function stalledActions(state, s) {
+  if (s.reason === 'stop_unconfirmed') return ['view_handover'];
+  const reachable = (state === 'running' || state === 'quiet') && (s.reason === 'no_activity' || s.reason === 'process_gone');
+  return ['resume', reachable ? 'switch_ai' : 'handover_ai', 'stop'];
+}
 
 function reasonFor(view, state, live) {
   const who = agentName(view);
@@ -184,6 +205,13 @@ export function cardFace(view, { elapsed_ms = 0, connection_lost = false } = {})
       reason = quietReason(live);
     }
   }
+  const stalled = connection_lost ? null : deriveStalled({ ...aged, live });
+  if (stalled) {
+    const takeOver = state === 'failed' ? [] : actions.filter((a) => a.startsWith('take_over'));
+    key = 'stalled';
+    reason = stalledReason(stalled, state === 'suspended' || state === 'reconnecting' ? reasonFor(aged, state, live) : stalled.reason === 'no_activity' ? quietReason(live) : null);
+    actions = [...stalledActions(state, stalled), ...takeOver];
+  }
   if (reason === undefined) reason = reasonFor(aged, state, live);
 
   const pill = PILLS[key];
@@ -206,7 +234,8 @@ export function cardFace(view, { elapsed_ms = 0, connection_lost = false } = {})
     reason,
     text: pill.label ? `${pill.label} · ${reason}` : reason,
     tone,
-    green,
+    green: green && !stalled,
+    stalled: stalled ? { reason: stalled.reason, since_ms: stalled.since_ms } : null,
     actions,
     sponsor: sponsorLine(view),
     runner_line: runnerLine,

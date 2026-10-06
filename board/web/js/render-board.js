@@ -187,7 +187,7 @@ export function card({ view, face, elapsed_ms = 0 }, model) {
     icon('warn', 'icon-xs'), stripGlyph(face.overlap_chip)) : null,
   labelChips(view, model, labels),
   chipRow(chips),
-  archived ? archivedFoot(view, model) : model.readOnly || pending ? null : cardActions({ ...face, actions: face.actions.filter((a) => !ADVANCED_ACTIONS.has(a)) }, view, model.busy),
+  archived ? archivedFoot(view, model) : model.readOnly || pending ? null : cardActions({ ...face, actions: face.stalled ? face.actions : face.actions.filter((a) => !ADVANCED_ACTIONS.has(a)) }, view, model.busy),
   human && !observed && !pending && !archived && face.state === 'todo' && !view.target ? h('p', { class: 'card-foot' }, view.repo ? 'on your account' : 'no repo yet · add one to tackle it with AI') : null);
 }
 
@@ -216,6 +216,18 @@ export function column(id, entries, model) {
       id === 'todo' && !model.readOnly ? quickAddRow(model.quickAdd) : null,
       isDone && entries.length > 6 ? h('button', { type: 'button', class: 'btn btn-ghost btn-sm column-more', 'data-action': 'toggle-done' },
         model.showAllDone ? 'Show fewer' : `Show ${entries.length - 6} more`) : null));
+}
+
+// Runs the hub still holds in progress while nothing works on them. They are
+// never drawn among live cards: each says why it stalled and offers a way out.
+export function stalledLane(entries, model) {
+  if (!entries.length) return null;
+  return h('section', { class: 'stalled-lane', 'data-column': 'stalled', 'aria-labelledby': 'col-stalled' },
+    h('header', { class: 'column-head' },
+      h('h2', { id: 'col-stalled' }, COLUMN_LABEL.stalled),
+      h('span', { class: 'column-count num', 'aria-label': `${entries.length} cards` }, String(entries.length)),
+      h('span', { class: 'stalled-hint' }, 'Not running. Resume, hand over to another AI, or stop.')),
+    h('div', { class: 'stalled-body' }, entries.map((e) => card(e, model))));
 }
 
 // The drop indicator is an empty keyed node between cards: its line is a
@@ -377,6 +389,7 @@ export function boardScreen(model, body = null) {
     alertsStrip(model.alerts, model),
     localCard(model),
     model.view === 'dashboard' ? null : filterBar(model),
+    body ? null : stalledLane(cols.stalled, model),
     body ?? h('main', { class: 'board', id: 'board', 'aria-label': 'Board columns' },
       COLUMNS.map((c) => column(c, cols[c], model))),
     h('p', { id: 'dnd-help', class: 'sr-only' }, 'Cards with no active agent run can be moved. Press Space to pick up, left and right arrows to choose a column, Space to drop, Escape to cancel.'),

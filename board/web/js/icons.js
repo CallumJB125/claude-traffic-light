@@ -45,7 +45,7 @@ const SHAPES = {
 export const PILL_ICON = {
   queued: 'clock', claimed: 'ring', running: 'lamp', quiet: 'half', blocked: 'hand', parked: 'pause',
   suspended: 'moon', reconnecting: 'sync', unresponsive: 'ring', orphaned: 'cross', handing_over: 'swap',
-  handed_over: 'swap', failed: 'cross', failed_limit: 'cross', in_review: 'diamond', done: 'check',
+  handed_over: 'swap', failed: 'cross', failed_limit: 'cross', stalled: 'warn', in_review: 'diamond', done: 'check',
 };
 
 export const ALERT_ICON = { blocked: 'hand', overlap: 'warn', orphaned: 'cross', failed: 'cross' };

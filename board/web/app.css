@@ -313,6 +313,10 @@ select.input { appearance: none; padding-right: 28px; background-image: linear-g
 .column-empty { color: var(--faint); font-size: var(--text-sm); padding: 14px 12px; border: 1px dashed var(--line); border-radius: var(--radius-lg); }
 .column-more { align-self: flex-start; }
 .column-done .card:not(:focus-within) { opacity: 0.82; }
+.stalled-lane { margin: 10px 20px 0; padding: 8px 10px 12px; border: 1px solid color-mix(in oklab, var(--tone-red) 35%, var(--line)); border-radius: var(--radius-lg); background: color-mix(in oklab, var(--tone-red) 4%, transparent); }
+.stalled-lane .column-head { padding-bottom: 8px; }
+.stalled-hint { color: var(--muted); font-size: var(--text-sm); }
+.stalled-body { display: grid; grid-template-columns: repeat(auto-fill, minmax(264px, 1fr)); gap: 8px; }
 
 /* ── card ─────────────────────────────────────────────────────────────── */
 
