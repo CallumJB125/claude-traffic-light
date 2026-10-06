@@ -45,6 +45,7 @@ const Health = require('./src/health.js');
 const Backups = require('./src/backups.js');
 const { applyConfigSideEffects } = require('./src/config-effects.js');
 const { trayLookAnimated, trayTimerAction } = require('./src/tray-anim.js');
+const { resolveLowPower } = require('./src/low-power.js');
 const { windowAnimStepMs, createPointDedupe, eyePollMs } = require('./src/anim-step.js');
 const { spendMinGap } = require('./src/spend-poll.js');
 const { createStatusGate } = require('./src/status-gate.js');
@@ -205,6 +206,8 @@ const DEFAULT_CONFIG = {
   notifyStates: { ...Help.NOTIFY_DEFAULTS },
   showWidget: true,
   menuBarMode: false,
+  // 'auto' | 'on' | 'off': trims non-essential motion (src/low-power.js).
+  lowPower: 'auto',
   seasonal: true,
   askFromWidget: false,
   showTasks: true,
@@ -1013,6 +1016,15 @@ const widgetMotion = createMotionGate((paused) => {
   // Whatever changed while paused lands the moment it's back.
   if (!paused) broadcastStatus();
 });
+// Low-power mode (src/low-power.js) applies to the desk widget only: the
+// Lights editor's previews exist to show every animation at full rate.
+let lowPowerOn = false;
+function applyLowPower() {
+  let onBattery = false;
+  try { onBattery = powerMonitor.isOnBatteryPower(); } catch { /* no power source info */ }
+  lowPowerOn = resolveLowPower({ mode: loadConfig().lowPower, platform: process.platform, onBattery });
+  if (win && !win.isDestroyed()) win.webContents.send('low-power', lowPowerOn);
+}
 function setMotionPaused(reason, on) { return widgetMotion.set(reason, !!on); }
 
 // The editor's previews run every animation the rules can pick, at full
@@ -1054,6 +1066,8 @@ function syncMachineReconcile() {
 }
 
 function watchPowerForMotion() {
+  powerMonitor.on('on-battery', applyLowPower);
+  powerMonitor.on('on-ac', applyLowPower);
   powerMonitor.on('lock-screen', () => pauseEverywhere('locked', true));
   powerMonitor.on('unlock-screen', () => pauseEverywhere('locked', false));
   powerMonitor.on('suspend', () => pauseEverywhere('suspended', true));
@@ -1141,7 +1155,7 @@ function createWindow() {
     queueMicrotask(() => { if (!win || win.isDestroyed()) createWindow(); });
   });
   // A reload loses the widget's state; re-push it as soon as it's back.
-  w.webContents.on('did-finish-load', () => { if (!current()) return; stateMemo = { at: 0, key: null, value: null }; broadcastStatus(); });
+  w.webContents.on('did-finish-load', () => { if (!current()) return; w.webContents.send('low-power', lowPowerOn); stateMemo = { at: 0, key: null, value: null }; broadcastStatus(); });
 
   w.on('resize', () => { if (current()) saveBounds(); });
   w.on('move', () => { if (current() && !glideTimer) saveBounds(); });
@@ -3096,7 +3110,7 @@ function applyConfigEffects(prev, next, touched) {
   applyConfigSideEffects(prev, next, {
     installHooks,
     enableCalendar: () => BusyWatch.enableCalendar().catch((err) => console.warn('[busy]', err.message)),
-    applyWidgetVisibility, syncTailnetListener, createTray, applyVoiceHotkey, broadcastStatus, syncInteractionHost,
+    applyWidgetVisibility, syncTailnetListener, createTray, applyVoiceHotkey, applyLowPower, broadcastStatus, syncInteractionHost,
   }, touched);
 }
 function commitConfig(partial) {
@@ -4514,6 +4528,7 @@ app.whenReady().then(() => {
   refreshSpend();
   every(SPEND_POLL_MS, awayFeeds.tick, 'feeds');
   syncEyePoll();
+  applyLowPower();
   watchPowerForMotion();
   sweepSessionFiles();
   every(10 * 60 * 1000, sweepSessionFiles, 'session-sweep');
