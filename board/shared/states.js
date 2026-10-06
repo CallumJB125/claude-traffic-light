@@ -193,7 +193,7 @@ export const TRANSITIONS = Object.freeze([
     patch: (c, ev, ctx) => (ctx.open_asks_remaining > 0 ? {} : { resume_to: 'quiet' }),
     effects: () => [feed('withdrawn')] },
   { id: '10', from: ['blocked'], on: 'park_timeout', to: 'parked', bump: true,
-    effects: (c) => [runnerCmd(c, 'park'), ...endRun('parked'), notify('parked'), feed('parked')] },
+    effects: (c) => [runnerCmd(c, 'park'), ...endRun('parked'), { type: 'handover_freeze' }, notify('parked'), feed('parked')] },
   { id: '11', from: ['parked'], on: 'answer', to: 'queued', bump: true, guard: guardAll(['can_answer', 'FORBIDDEN']),
     effects: () => [{ type: 'deliver_answer' }, { type: 'seed', from: ['handover', 'answer'] }, offer, feed('requeued_answered')] },
   { id: '12', from: ['running', 'quiet', 'blocked'], on: 'host_suspending', to: 'suspended', fenced: 'event', dark: true,
@@ -229,7 +229,7 @@ export const TRANSITIONS = Object.freeze([
     effects: (c, ev) => [...(c.run_state === 'parked' ? [] : [runnerCmd(c, 'stop'), ...endRun('stopped')]), { type: 'handover_freeze' }, notify('failed'), feed('stopped', { by: ev.by ?? null })] },
   { id: '24', from: L, on: 'release', to: 'queued', fenced: 'event', bump: true, when: (c, ev) => ev.requeue === true,
     guard: guardAll(['policy_allows_requeue', 'POLICY_DENIED']),
-    effects: (c, ev) => [...endRun('released_requeue'), { type: 'seed', from: ['handover'] }, offer, feed('released', { requeue: true, reason: ev.reason ?? null })] },
+    effects: (c, ev) => [...endRun('released_requeue'), { type: 'handover_freeze' }, { type: 'seed', from: ['handover'] }, offer, feed('released', { requeue: true, reason: ev.reason ?? null })] },
   { id: '25', from: L, on: 'release', to: 'failed', fenced: 'event', when: (c, ev) => ev.requeue !== true,
     patch: () => ({ fail_kind: 'released' }),
     effects: (c, ev) => [...endRun('released'), { type: 'handover_freeze' }, notify('failed'), feed('released', { requeue: false, reason: ev.reason ?? null })] },
@@ -237,7 +237,7 @@ export const TRANSITIONS = Object.freeze([
     effects: (c, ev, ctx) => [{ type: 'dispatch_create', request_id: ev.request_id, target_member_id: ev.target_member_id ?? null, needs_confirm: !!ctx.needs_confirm }, { type: 'seed', from: ['handover'] }, offer, feed('retried')] },
   { id: '27', from: ['failed', 'orphaned', 'parked'], on: 'take_over', to: 'handed_over', bump: true, guard: both(canWrite, holdCheckpointRequired),
     patch: (c, ev) => ({ handover_target: { kind: 'member', member_id: ev.by ?? null }, handover_provenance: 'takeover' }),
-    effects: (c, ev) => [...(c.run_state === 'orphaned' ? [runnerCmd(c, 'stop'), ...endRun('taken_over')] : []), handoffMemory('takeover'), feed('taken_over', { by: ev.by ?? null })] },
+    effects: (c, ev) => [...(c.run_state === 'orphaned' ? [runnerCmd(c, 'stop'), ...endRun('taken_over'), { type: 'handover_freeze' }] : []), handoffMemory('takeover'), feed('taken_over', { by: ev.by ?? null })] },
   { id: '27a', from: L, on: 'hand_over', to: 'handing_over', guard: both(guardAll(['can_hand_over', 'FORBIDDEN']),
     (c, ev) => (['queue', 'member', 'self', 'hold'].includes(ev.target?.kind) ? null : { code: 'VALIDATION', message: 'target.kind must be queue|member|self|hold' })),
     patch: (c, ev) => ({ handover_target: ev.target, handover_provenance: null }),
@@ -251,7 +251,7 @@ export const TRANSITIONS = Object.freeze([
   { id: '28', from: ['unresponsive', 'suspended'], on: 'take_over', to: 'handed_over', bump: true,
     guard: both(canWrite, holdCheckpointRequired, guardAll(['confirmed', 'CONFIRM_REQUIRED'])),
     patch: (c, ev) => ({ handover_target: { kind: 'member', member_id: ev.by ?? null }, handover_provenance: 'takeover' }),
-    effects: (c, ev) => [runnerCmd(c, 'stop'), ...endRun('taken_over'), handoffMemory('takeover'), feed('taken_over', { by: ev.by ?? null })] },
+    effects: (c, ev) => [runnerCmd(c, 'stop'), ...endRun('taken_over'), { type: 'handover_freeze' }, handoffMemory('takeover'), feed('taken_over', { by: ev.by ?? null })] },
   { id: '29', from: ['handed_over'], on: 'redispatch', to: 'queued', guard: both(needsRequestId, canWrite, holdCheckpointRequired),
     patch: () => ({ handover_target: null }),
     effects: (c, ev, ctx) => [{ type: 'dispatch_create', request_id: ev.request_id, target_member_id: ev.target_member_id ?? null, needs_confirm: !!ctx.needs_confirm }, { type: 'seed', from: ['handover'] }, offer, feed('dispatched', { needs_confirm: !!ctx.needs_confirm, ...(ev.ai ? { ai: ev.ai } : {}) })] },
@@ -260,7 +260,7 @@ export const TRANSITIONS = Object.freeze([
     effects: (c, ev) => [{ type: 'assign', member_id: ev.by ?? null, role: 'owner' }, feed('human_on_it', { by: ev.by ?? null })] },
   // Decision D7: board_complete is itself activity, so quiet → in_review is allowed too.
   { id: '31', from: ['running', 'quiet'], on: 'complete', to: 'in_review', fenced: 'event', guard: guardAll(['evidence_ok', 'EVIDENCE_MISSING']),
-    effects: () => [...endRun('complete'), feed('in_review')] },
+    effects: () => [...endRun('complete'), { type: 'handover_freeze' }, feed('in_review')] },
   { id: '32', from: ['in_review'], on: 'request_changes', to: 'queued', bump: true, guard: both(needsRequestId, canWrite, holdCheckpointRequired, guardAll(['policy_ok', 'POLICY_DENIED'])),
     effects: (c, ev, ctx) => [{ type: 'dispatch_create', request_id: ev.request_id, target_member_id: ev.target_member_id ?? null, needs_confirm: !!ctx.needs_confirm }, { type: 'seed', from: ['handover', 'review'] }, offer, feed('changes_requested', { by: ev.by ?? null })] },
   { id: '33', from: ['in_review'], on: 'pr_closed', to: 'todo', effects: (c, ev) => [feed('pr_closed_unmerged', { pr: ev.pr ?? null, by: ev.by ?? null })] },
@@ -282,7 +282,7 @@ function handedOverEffects(card, provenance) {
   const follow = t?.kind === 'queue' ? [{ type: 'follow_up', event: { type: 'redispatch', target_member_id: null } }]
     : t?.kind === 'member' ? [{ type: 'follow_up', event: { type: 'redispatch', target_member_id: t.member_id } }]
       : t?.kind === 'self' ? [{ type: 'follow_up', event: { type: 'take_myself' } }] : [];
-  return [...endRun('handed_over'), ...(provenance === 'checkpoint_incomplete' ? [{ type: 'handover_freeze' }] : []), handoffMemory(provenance), feed('handed_over', { provenance }), ...follow];
+  return [...endRun('handed_over'), { type: 'handover_freeze' }, handoffMemory(provenance), feed('handed_over', { provenance }), ...follow];
 }
 
 const BY_KEY = new Map();

@@ -239,4 +239,4 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
     snapshot(){return Object.entries(state.tasks).map(([key,e])=>({key,repo:e.repo,provider:e.provider,title:e.title,status:e.status,card_id:e.card_id,untracked:!!e.untracked,reason:e.reason??null,destination:{...e.destination}}));},
     async stop(){stopped=true;latest=null;await active;},idle:()=>active??Promise.resolve()};
 }
-module.exports={createWorkCapture,observation,routeFor,repoFor,clean,phase,routeKey};
+module.exports={createWorkCapture,observation,BACKGROUND_TITLE,routeFor,repoFor,clean,phase,routeKey};
