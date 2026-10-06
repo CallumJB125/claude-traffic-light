@@ -44,6 +44,7 @@ const Compaction = require('./src/compaction.js');
 const Health = require('./src/health.js');
 const Backups = require('./src/backups.js');
 const { applyConfigSideEffects } = require('./src/config-effects.js');
+const { windowAnimStepMs, createPointDedupe } = require('./src/anim-step.js');
 const { spendMinGap } = require('./src/spend-poll.js');
 const { createStatusGate } = require('./src/status-gate.js');
 const { createMotionGate, staleMachineReasons, askKey, statusPushWanted } = require('./src/motion-gate.js');
@@ -2550,14 +2551,17 @@ function tween(from, to, ms, onStep, at = null) {
   }
   return new Promise((resolve) => {
     const t0 = Date.now();
+    const moved = createPointDedupe();
     // A tween that outlives its window (quit, crash, reload) must not keep a
     // 60 Hz interval alive forever, and a throwing step must still clear it.
-    const id = every(16, () => {
+    const id = every(windowAnimStepMs(), () => {
       if (!win || win.isDestroyed()) { stopTimer(id); resolve(); return; }
       const p = Math.min(1, (Date.now() - t0) / ms);
       try {
         const pt = pointAt(p);
-        onStep({ x: Math.round(pt.x), y: Math.round(pt.y) });
+        const x = Math.round(pt.x);
+        const y = Math.round(pt.y);
+        if (p >= 1 || moved(x, y)) onStep({ x, y });
       } catch (err) {
         console.log('[tween] step failed:', err.message);
         stopTimer(id); resolve(); return;
@@ -2924,7 +2928,8 @@ function glideFrom(vx, vy) {
   const spring = Motion.springParams(G.response, G.damping);
   const axes = [{ s: { x: b.x, v: v.x }, key: 'x', sides: ['left', 'right'] }, { s: { x: b.y, v: v.y }, key: 'y', sides: ['top', 'bottom'] }];
   let last = Date.now();
-  glideTimer = every(16, () => {
+  const glideMoved = createPointDedupe();
+  glideTimer = every(windowAnimStepMs(), () => {
     if (!win || win.isDestroyed()) { stopGlide(); return; }
     const now = Date.now();
     const dt = (now - last) / 1000;
@@ -2943,7 +2948,9 @@ function glideFrom(vx, vy) {
     }
     const [ax, ay] = axes;
     const done = Motion.springSettled(ax.s, target.x) && Motion.springSettled(ay.s, target.y);
-    try { win.setPosition(Math.round(done ? target.x : ax.s.x), Math.round(done ? target.y : ay.s.x)); } catch { stopGlide(); return; }
+    const gx = Math.round(done ? target.x : ax.s.x);
+    const gy = Math.round(done ? target.y : ay.s.x);
+    try { if (done || glideMoved(gx, gy)) win.setPosition(gx, gy); } catch { stopGlide(); return; }
     if (done) {
       stopGlide();
       saveBounds();
