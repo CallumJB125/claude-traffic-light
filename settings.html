@@ -354,7 +354,7 @@
   <h2>Claude integration</h2>
   <div class="field">
     <div class="row"><button type="button" class="secondary" id="mcp-toggle">Enable Claude integration</button></div>
-    <div class="hint" id="mcp-hint" role="status" aria-live="polite">Adds Buddy as an MCP server for every Claude Code session, so you can ask Claude "why is my buddy amber?" or have it answer a waiting permission prompt. Writes one entry (<code>claude-buddy</code>) to <code>~/.claude.json</code>; restart open sessions to pick it up.</div>
+    <div class="hint" id="mcp-hint" role="status" aria-live="polite">Adds Plexiform as an MCP server for every Claude Code session, so you can ask Claude "why is my buddy amber?" or have it answer a waiting permission prompt. Writes one entry (<code>claude-buddy</code>) to <code>~/.claude.json</code>; restart open sessions to pick it up.</div>
   </div>
 
   <h2>Boards in your AI apps</h2>
@@ -403,7 +403,7 @@
     <div class="row">
       <select id="voice-hotkey" aria-describedby="voice-hint"><option value="">Off — pick a key</option></select>
     </div>
-    <div class="hint" id="voice-hint" role="status" aria-live="polite">Hold the key, ask “What's blocked?”, “What's my Claude doing?”, “How much have I spent today?” or “What happened while I was out?”, and let go. Buddy answers out loud. Speech is turned into text on this Mac; audio is never stored or sent.</div>
+    <div class="hint" id="voice-hint" role="status" aria-live="polite">Hold the key, ask “What's blocked?”, “What's my Claude doing?”, “How much have I spent today?” or “What happened while I was out?”, and let go. Plexiform answers out loud. Speech is turned into text on this Mac; audio is never stored or sent.</div>
     <label class="row"><input type="checkbox" id="voice-longPress" /> Press and hold the widget to ask</label>
     <label class="row"><input type="checkbox" id="voice-askClaude" /> Other questions: ask my own Claude (Haiku)</label>
     <div class="hint">Anything outside the four questions goes to your own <code>claude</code> login, with no tools, settings or MCP servers, capped at 5 cents a question. It sees session states and today's spend, never your code.</div>
@@ -425,7 +425,7 @@
         <option value="subscription">Pro / Max subscription</option>
       </select>
     </div>
-    <div class="hint" id="hint-spend-mode">Every turn is priced from your transcripts at API list prices. On a subscription that's an equivalent, not a bill, and not a share of your usage window: Claude Code doesn't write that anywhere Buddy can read.</div>
+    <div class="hint" id="hint-spend-mode">Every turn is priced from your transcripts at API list prices. On a subscription that's an equivalent, not a bill, and not a share of your usage window: Claude Code doesn't write that anywhere Plexiform can read.</div>
     <div class="hint" id="spend-now" role="status" aria-live="polite"></div>
   </div>
 
@@ -450,7 +450,7 @@
       <label class="row" for="spend-runaway-tokens">or <input type="number" id="spend-runaway-tokens" min="0" step="100" /> k tokens</label>
       <label class="row" for="spend-runaway-minutes">in <input type="number" id="spend-runaway-minutes" min="1" max="240" /> min</label>
     </div>
-    <div class="hint">One session spending this fast turns the light pulsing red (hover Claude for its burn rate) and sends one notification that jumps to its terminal. Buddy never stops or types into a session you started. 0 turns a limit off.</div>
+    <div class="hint">One session spending this fast turns the light pulsing red (hover Claude for its burn rate) and sends one notification that jumps to its terminal. Plexiform never stops or types into a session you started. 0 turns a limit off.</div>
     <label class="row"><input type="checkbox" id="spend-notify-runaway" /> Notify me about a runaway session</label>
     <label class="row"><input type="checkbox" id="spend-notify-budget-warning" /> Notify me when spend nears a budget</label>
     <label class="row"><input type="checkbox" id="spend-notify-budget-exceeded" /> Notify me when spend goes over a budget</label>
@@ -503,13 +503,13 @@
   </div>
   <div class="field">
     <label for="busyFocusShortcut">Focus Shortcut, optional</label>
-    <input type="text" class="wide" id="busyFocusShortcut" placeholder="e.g. Buddy Focus" spellcheck="false" aria-describedby="hint-focus" />
-    <div class="hint" id="hint-focus">macOS only lets Buddy read a Focus you turn on by hand, and only where it can read the Focus files (often it can't without Full Disk Access, which Buddy never asks for). Scheduled Focus isn't visible either. For both, make a Shortcut with the single action <b>Get Current Focus</b> and type its name here.</div>
+    <input type="text" class="wide" id="busyFocusShortcut" placeholder="e.g. Plexiform Focus" spellcheck="false" aria-describedby="hint-focus" />
+    <div class="hint" id="hint-focus">macOS only lets Plexiform read a Focus you turn on by hand, and only where it can read the Focus files (often it can't without Full Disk Access, which Plexiform never asks for). Scheduled Focus isn't visible either. For both, make a Shortcut with the single action <b>Get Current Focus</b> and type its name here.</div>
   </div>
 
   <h2>Remote devices</h2>
   <div class="field" id="remote-devices">
-    <div class="hint">Claude Code on another machine (a server, tmux over SSH) can light this widget: pair the machine here, then run Buddy's hooks there in reporter mode. Its sessions show under the device's name. Buddy never opens their folders or jumps to their terminals.</div>
+    <div class="hint">Claude Code on another machine (a server, tmux over SSH) can light this widget: pair the machine here, then run Plexiform's hooks there in reporter mode. Its sessions show under the device's name. Plexiform never opens their folders or jumps to their terminals.</div>
     <label for="remote-name">Pair a device</label>
     <div class="row">
       <input type="text" id="remote-name" placeholder="devbox" maxlength="40" aria-describedby="remote-pair-status" />

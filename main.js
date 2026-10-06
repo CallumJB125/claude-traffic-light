@@ -4078,7 +4078,7 @@ ipcMain.handle('health-fix', (e, id) => {
   let error = null;
   try {
     if (id === 'reinstall-hooks') {
-      if (!AUTO_INSTALL_HOOKS) error = EPHEMERAL ? 'Buddy is running from a temporary copy or a disk image; move it to Applications first' : 'dev runs never install hooks';
+      if (!AUTO_INSTALL_HOOKS) error = EPHEMERAL ? 'Plexiform is running from a temporary copy or a disk image; move it to Applications first' : 'dev runs never install hooks';
       else { error = installHooks(); createTray(); }
     } else if (id === 'connect-codex') {
       if (!fromNativeBoardSettings(e)) error = 'Not allowed.';

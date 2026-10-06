@@ -39,7 +39,7 @@ const RULE_TEXT = {
   'git-deploy-finished': { signal: 'deploy-finished', text: 'A deploy workflow you started finished successfully.' },
   'git-ci-passed': { signal: 'ci-passed', text: 'CI passed on the branch you are working on.' },
   // F1 spend
-  runaway: { signal: 'runaway', text: "A session has spent more than your runaway threshold in the last few minutes (hover the widget for how much, how fast). Check it's doing what you meant — Buddy never stops a session you started; the notification jumps to its terminal." },
+  runaway: { signal: 'runaway', text: "A session has spent more than your runaway threshold in the last few minutes (hover the widget for how much, how fast). Check it's doing what you meant — Plexiform never stops a session you started; the notification jumps to its terminal." },
   'budget-exceeded': { signal: 'budget-exceeded', text: "You're over the daily or weekly budget set in Preferences → Spend. Nothing is stopped; this is just so you know." },
   'budget-warning': { signal: 'budget-warning', text: "You're close to the daily or weekly budget set in Preferences → Spend." },
 };

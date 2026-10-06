@@ -385,11 +385,11 @@ test('buddy_health: an app that moved, not running, no hook yet — each with it
   assert.equal(h.ok, false);
   assert.equal(by('hooks').status, 'fail');
   assert.equal(by('hooks').fix, 'reinstall-hooks');
-  assert.match(by('hooks').detail, /^Points at a copy of Buddy that was moved or deleted \(\/Applications\/#[0-9a-f]{6} #[0-9a-f]{6}\/Contents\/Resources\/hooks\/set-status\.js\)\.$/);
+  assert.match(by('hooks').detail, /^Points at a copy of Plexiform that was moved or deleted \(\/Applications\/#[0-9a-f]{6} #[0-9a-f]{6}\/Contents\/Resources\/hooks\/set-status\.js\)\.$/);
   assert.equal(by('signal').status, 'fail');
   assert.equal(by('mcp').fix, 'enable-mcp');
   assert.equal(by('last-hook').status, 'warn');
-  assert.match(h.likelyCause, /^Hooks: Points at a copy of Buddy that was moved or deleted/);
+  assert.match(h.likelyCause, /^Hooks: Points at a copy of Plexiform that was moved or deleted/);
   assert.match(h.note, /Nothing here is fixed for you/);
 });
 

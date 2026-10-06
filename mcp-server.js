@@ -433,7 +433,7 @@ async function buddySpend({ root, now = Date.now(), projectsDir } = {}) {
     runaway: snap.runaway,
     runawayThreshold: snap.runawayThreshold,
     transcripts: { files, turns: turns.length, overSizeCap: skipped.length },
-    note: 'Priced per turn at API list prices from ~/.claude/projects transcripts. Budgets and the runaway threshold are set in Buddy Preferences → Spend.',
+    note: 'Priced per turn at API list prices from ~/.claude/projects transcripts. Budgets and the runaway threshold are set in Plexiform Preferences → Spend.',
   };
 }
 
@@ -532,7 +532,7 @@ async function buddyHealth({ root, now = Date.now(), home = os.homedir(), live, 
     ...report,
     checks: report.checks.map((c) => ({ ...c, detail: clean(c.detail), ...(c.next ? { next: clean(c.next) } : {}) })),
     ...(lastHook.status === 'ok' ? {} : { likelyCause: clean(Health.likelyCause(report.checks)) }),
-    note: 'status is ok, warn, fail or info. `fix` names a one-click fix in Buddy Preferences → Health (the tray menu\'s Health…); `next` is what to do by hand. Nothing here is fixed for you.',
+    note: 'status is ok, warn, fail or info. `fix` names a one-click fix in Plexiform Preferences → Health (the tray menu\'s Health…); `next` is what to do by hand. Nothing here is fixed for you.',
   };
 }
 
@@ -544,9 +544,9 @@ const TOOLS = [
   { name: 'buddy_recent_transitions', description: 'The latest session state changes from app.log, parsed: time, session, project, from → to, fail kind, and cause (hook signal, hysteresis-held, promoted-agents, …). Newest first.', input: (z) => ({ limit: z.number().int().min(1).max(500).optional().describe('how many (default 20)'), session: z.string().optional().describe('only this session id (or its first 8 chars)') }), run: (a, c) => buddyRecentTransitions({ ...c, limit: a.limit, session: a.session }) },
   { name: 'buddy_model_mix', description: 'Which models your Claude Code turns ran on and what they cost (today and the last 7 days), plus one read-only recommendation: the share of Opus turns that looked routine and an estimated Sonnet saving range. Reads the Claude Code transcripts, so the first call can take a few seconds.', run: (a, c) => buddyModelMix(c) },
   { name: 'buddy_git_status', description: 'Git and CI signals: which GitHub repos the widget watches (from session folders\' git remotes and Preferences), as which gh login, the PR/CI/deploy events showing now and the last few that fired, the GitHub rate limit left, and when it polls next. Read-only; reads what the app last wrote.', run: (a, c) => buddyGitStatus(c) },
-  { name: 'buddy_spend', description: 'How much you have spent on Claude Code today and this week (priced per turn at API list prices from the transcripts), against the daily/weekly budgets set in Buddy, plus any runaway session burning faster than the threshold (e.g. "$47.20 in 18 min"). Answers "how much have I spent today?".', run: (a, c) => buddySpend(c) },
+  { name: 'buddy_spend', description: 'How much you have spent on Claude Code today and this week (priced per turn at API list prices from the transcripts), against the daily/weekly budgets set in Plexiform, plus any runaway session burning faster than the threshold (e.g. "$47.20 in 18 min"). Answers "how much have I spent today?".', run: (a, c) => buddySpend(c) },
   { name: 'buddy_usage_history', description: 'Spend and token history from the permanent daily record, which reaches back further than the transcripts Claude Code keeps: "how much did I spend on Opus in August?". `range` is today, 7d, 30d, 90d, 1y, all, YYYY-MM, or YYYY-MM-DD..YYYY-MM-DD (at most 400 days). `groupBy` is day, model, family, project or source. Project names are folder names only.', input: (z) => ({ range: z.string().optional().describe('default 30d'), groupBy: z.enum(['day', 'model', 'family', 'project', 'source']).optional().describe('default day') }), run: (a, c) => buddyUsageHistory({ ...c, range: a.range, groupBy: a.groupBy }) },
-  { name: 'buddy_health', description: 'Is Buddy set up right? Checks that the Claude Code hooks are installed and point at this copy of the app (not a moved app or an old checkout), the last hook event and its age, the signal server, this MCP registration, session files and stale locks, transcripts, disk space and the app version. Each problem comes with the one-click fix Buddy offers or the step to take by hand.', run: (a, c) => buddyHealth({ ...c, mcpConnected: true }) },
+  { name: 'buddy_health', description: 'Is Plexiform set up right? Checks that the Claude Code hooks are installed and point at this copy of the app (not a moved app or an old checkout), the last hook event and its age, the signal server, this MCP registration, session files and stale locks, transcripts, disk space and the app version. Each problem comes with the one-click fix Plexiform offers or the step to take by hand.', run: (a, c) => buddyHealth({ ...c, mcpConnected: true }) },
   { name: 'buddy_pending_requests', description: 'Permission requests currently blocked waiting for an answer from the widget (PermissionRequest hook), with how long the hook will keep waiting.', run: (a, c) => buddyPendingRequests(c) },
 ];
 

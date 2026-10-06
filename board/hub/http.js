@@ -246,8 +246,8 @@ function sendConnectPage(res, status, text, kind, headers = {}, next = null) {
   const esc = (x) => String(x).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
   const after = next
     ? `<p><a href="${esc(next.url)}" rel="noopener noreferrer">${esc(next.text)}</a></p>`
-    : '<p>You can close this window and go back to Buddy.</p>';
-  const body = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${CONNECT_TITLE[kind]} · Buddy</title><meta name="viewport" content="width=device-width"></head><body data-connect="${kind}"><h1>${CONNECT_TITLE[kind]}</h1><p>${esc(text)}</p>${after}</body></html>`;
+    : '<p>You can close this window and go back to Plexiform.</p>';
+  const body = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${CONNECT_TITLE[kind]} · Plexiform</title><meta name="viewport" content="width=device-width"></head><body data-connect="${kind}"><h1>${CONNECT_TITLE[kind]}</h1><p>${esc(text)}</p>${after}</body></html>`;
   res.writeHead(status, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-security-policy': "default-src 'none'", 'cross-origin-opener-policy': 'same-origin', 'referrer-policy': 'no-referrer', 'board-protocol': String(PROTOCOL_VERSION), ...headers });
   res.end(body);
 }
@@ -765,7 +765,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
         return sendConnectPage(res, 200, `${out.connection.display_name ?? 'The integration'} is connected.`, 'ok', clear, out.next_url ? { url: out.next_url, text: `Continue on ${out.provider_name}` } : null);
       } catch (e) {
         hub.log.error('integration callback failed', { provider: cb[1], err: redact(e?.message ?? e) });
-        return sendConnectPage(res, 500, 'Something went wrong. Start again from Buddy.', 'error');
+        return sendConnectPage(res, 500, 'Something went wrong. Start again from Plexiform.', 'error');
       }
     }
     // D98: the same signed-state + bind-cookie model, for a member's own link.
@@ -792,7 +792,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
       } catch {
         // Never the error itself: it may carry what the provider sent.
         hub.log.error('integration identity callback failed', { provider: idcb[1] });
-        return sendConnectPage(res, 500, 'Something went wrong. Start again from Buddy.', 'error');
+        return sendConnectPage(res, 500, 'Something went wrong. Start again from Plexiform.', 'error');
       }
     }
     const hook = integrations && req.method === 'POST' ? /^\/integrations\/([0-9a-f-]{36})\/webhook$/.exec(url.pathname) : null;

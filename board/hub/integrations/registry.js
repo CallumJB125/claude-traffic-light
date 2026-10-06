@@ -86,17 +86,17 @@ const CREATE_URL_MAX = 8 * 1024;
 const NOT_ACCEPTED = 'That was not accepted. Check it and try again.';
 // exchange's coded NOT_OWNED (D42 addendum "start inputs"): this text, never the connector's.
 const notOwnedText = (name) => `${name} created this app under a different owner than the organization you named. Delete that app on ${name} and start again.`;
-const SETUP_EXPIRED = 'This setup has expired. Start again from Buddy.';
+const SETUP_EXPIRED = 'This setup has expired. Start again from Plexiform.';
 // Identity links (D98).
 const JWKS_TTL_MS = 3_600_000;
 const JWKS_REFETCH_MS = 60_000;
 const JWKS_TIMEOUT_MS = 5_000;
 const JWKS_MAX = 64 * 1024;
 const ID_TOKEN_MAX = 16 * 1024;
-const LINK_INVALID = 'This link is not valid. Start again from Buddy.';
-const LINK_GONE = 'This link can no longer be used. Start again from Buddy.';
-const LINK_FAILED = 'The provider did not confirm your account. Start again from Buddy.';
-const LINK_UNAVAILABLE = 'The provider could not be reached. Try again in a minute from Buddy.';
+const LINK_INVALID = 'This link is not valid. Start again from Plexiform.';
+const LINK_GONE = 'This link can no longer be used. Start again from Plexiform.';
+const LINK_FAILED = 'The provider did not confirm your account. Start again from Plexiform.';
+const LINK_UNAVAILABLE = 'The provider could not be reached. Try again in a minute from Plexiform.';
 
 const safeJson = (s, fallback) => { try { return JSON.parse(s); } catch { return fallback; } };
 const isPlainObject = (v) => v != null && typeof v === 'object' && !Array.isArray(v);
@@ -1409,13 +1409,13 @@ export function createIntegrations({
     if (!conn || conn.connect.kind === 'token') return { ok: false, error: 'Unknown integration.' };
     const parts = String(query.get('state') ?? '').split('.');
     const [payload, sig] = parts;
-    const invalid = { ok: false, error: 'This link is not valid. Start again from Buddy.' };
+    const invalid = { ok: false, error: 'This link is not valid. Start again from Plexiform.' };
     if (parts.length !== 2 || !payload || !/^[A-Za-z0-9_-]+$/.test(sig ?? '')) return invalid;
     const got = Buffer.from(sig, 'base64url');
     const want = mac(payload);
     if (got.length !== want.length || !timingSafeEqual(got, want)) return invalid;
     const st = safeJson(Buffer.from(payload, 'base64url').toString('utf8'), null);
-    if (!st || st.p !== provider || typeof st.n !== 'string' || typeof st.b !== 'string' || !UUID_RE.test(st.i ?? '') || !(Date.now() <= st.e)) return { ok: false, error: 'This link has expired. Start again from Buddy.' };
+    if (!st || st.p !== provider || typeof st.n !== 'string' || typeof st.b !== 'string' || !UUID_RE.test(st.i ?? '') || !(Date.now() <= st.e)) return { ok: false, error: 'This link has expired. Start again from Plexiform.' };
     // A state from before the connector declared prepare, or minted by /start.
     if (conn.connect.prepare && st.pd !== 1) return invalid;
     const startInput = signedStartInput(conn, st.si);
@@ -1423,7 +1423,7 @@ export function createIntegrations({
     // Before the nonce is spent: a browser without the cookie can't burn the admin's attempt.
     if (typeof bindCookie !== 'string' || !safeEq(sha(bindCookie), st.b)) return { ok: false, error: 'Open this link in the window Plexiform opened. Start again.' };
     const first = db.run("INSERT OR IGNORE INTO inbound_dedupe (provider, dedupe_key, received_at, state) VALUES ('oauth_state', ?, ?, 'done')", st.n, now());
-    if (Number(first.changes) !== 1) return { ok: false, error: 'This link was already used. Start again from Buddy.' };
+    if (Number(first.changes) !== 1) return { ok: false, error: 'This link was already used. Start again from Plexiform.' };
     const member = hub.member(st.m);
     if (!member || member.removed_at || member.org_id !== st.o || !['owner', 'admin'].includes(member.role)) return { ok: false, error: 'Only a team admin can connect this.' };
     if (query.get('error')) return { ok: false, error: 'The connection was cancelled.' };
@@ -1834,11 +1834,11 @@ export function createIntegrations({
     if (got.length !== want.length || !timingSafeEqual(got, want)) return refuse(LINK_INVALID);
     const st = safeJson(Buffer.from(payload, 'base64url').toString('utf8'), null);
     if (!isPlainObject(st) || st.p !== provider || !UUID_RE.test(st.c ?? '') || typeof st.n !== 'string' || typeof st.k !== 'string' || !st.k
-      || typeof st.b !== 'string' || !(hub.wallMs() <= st.e)) return refuse('This link has expired. Start again from Buddy.');
+      || typeof st.b !== 'string' || !(hub.wallMs() <= st.e)) return refuse('This link has expired. Start again from Plexiform.');
     // Before the nonce is spent: a browser without the cookie burns nothing.
     if (typeof bindValue !== 'string' || !safeEq(sha(bindValue), st.b)) return refuse('Open this link in the window Plexiform opened. Start again.');
     const first = db.run("INSERT OR IGNORE INTO inbound_dedupe (provider, dedupe_key, received_at, state) VALUES ('identity_state', ?, ?, 'done')", st.n, now());
-    if (Number(first.changes) !== 1) return refuse('This link was already used. Start again from Buddy.');
+    if (Number(first.changes) !== 1) return refuse('This link was already used. Start again from Plexiform.');
     // The credential that started it still live, and no other one at the callback.
     const credOk = () => {
       if (credInvalid) return false;
@@ -1906,7 +1906,7 @@ export function createIntegrations({
         return { linked: true };
       });
     } catch {
-      return refuse('Could not save the link. Start again from Buddy.', 'write_failed');
+      return refuse('Could not save the link. Start again from Plexiform.', 'write_failed');
     }
     if (out.error) return refuse(out.error);
     return { ok: true, provider_name: conn.name };

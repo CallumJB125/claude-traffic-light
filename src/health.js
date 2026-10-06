@@ -76,12 +76,12 @@ function checkHooks(ctx) {
   // macOS runs an app opened straight from Downloads from a random read-only
   // copy; hooks pinned to that path break at the next launch.
   if (/\/AppTranslocation\//.test(ctx.runtime.execPath || '')) {
-    return { status: 'fail', detail: 'Buddy is running from a temporary copy macOS made of it, so hooks can\'t point at it.', next: `Move ${Brand.name} to Applications (drag it out of Downloads), then open it from there.` };
+    return { status: 'fail', detail: 'Plexiform is running from a temporary copy macOS made of it, so hooks can\'t point at it.', next: `Move ${Brand.name} to Applications (drag it out of Downloads), then open it from there.` };
   }
   const file = Claude.configPath(ctx.home);
   let settings;
   try { settings = Runtime.readJsonConfig(file, ctx.fs); } catch (err) {
-    return { status: 'fail', detail: `${tilde(file, ctx.home)} can't be read: ${cleanJsonError(err.message)}`, next: `Fix or remove the broken JSON in ${tilde(file, ctx.home)}, then reinstall hooks. Buddy never writes over a file it can't parse.` };
+    return { status: 'fail', detail: `${tilde(file, ctx.home)} can't be read: ${cleanJsonError(err.message)}`, next: `Fix or remove the broken JSON in ${tilde(file, ctx.home)}, then reinstall hooks. Plexiform never writes over a file it can't parse.` };
   }
   const ours = [];
   for (const [event, groups] of Object.entries(settings.hooks || {})) {
@@ -101,18 +101,18 @@ function checkHooks(ctx) {
     const where = tilde(other.script || other.exe || 'an unknown path', ctx.home);
     if (current) return { status: 'warn', detail: `Installed, but also registered from ${gone ? 'a copy that isn\'t there any more' : 'another copy'} (${where}).`, fix, next: RESTART_SESSIONS };
     return gone
-      ? { status: 'fail', detail: `Points at a copy of Buddy that was moved or deleted (${where}).`, fix, next: RESTART_SESSIONS }
-      : { status: 'warn', detail: `Pointing at a different copy of Buddy (${where}), not this one.`, fix, next: RESTART_SESSIONS };
+      ? { status: 'fail', detail: `Points at a copy of Plexiform that was moved or deleted (${where}).`, fix, next: RESTART_SESSIONS }
+      : { status: 'warn', detail: `Pointing at a different copy of Plexiform (${where}), not this one.`, fix, next: RESTART_SESSIONS };
   }
   // Same script, another command form (plain node, an older runner).
   if (differ.length) return { status: 'warn', detail: 'Installed in an older form.', fix, next: RESTART_SESSIONS };
-  if (current) return { status: 'ok', detail: 'Installed, and pointing at this copy of Buddy.' };
+  if (current) return { status: 'ok', detail: 'Installed, and pointing at this copy of Plexiform.' };
   if (!wrapperOk) return { status: 'fail', detail: `The hook runner ${tilde(Runtime.wrapperPath(ctx.runtime), ctx.home)} is missing.`, fix, next: RESTART_SESSIONS };
   // Every hook right, only the installer's deny rule (which keeps Claude's
   // file tools out of Buddy's data folder) gone.
   const rules = Claude.denyRulesFor(ctx.home, ctx.runtime);
   const withRules = { ...settings, permissions: { ...(settings.permissions || {}), deny: [...(Array.isArray(settings.permissions?.deny) ? settings.permissions.deny : []), ...rules] } };
-  if (Claude.check(withRules, ctx.runtime, opts)) return { status: 'warn', detail: "Installed, but without the rule that keeps Claude's file tools out of Buddy's data folder.", fix, next: RESTART_SESSIONS };
+  if (Claude.check(withRules, ctx.runtime, opts)) return { status: 'warn', detail: "Installed, but without the rule that keeps Claude's file tools out of Plexiform's data folder.", fix, next: RESTART_SESSIONS };
   const missing = Claude.HOOK_EVENTS.map(([e]) => e).filter((e) => !ours.some((o) => o.event === e && o.command === Claude.commandFor(e, ctx.runtime)));
   return {
     status: 'warn',
@@ -133,7 +133,7 @@ function checkHermesActivity(ctx) {
 function checkVersion(ctx) {
   const u = (ctx.updateStatus || notConfigured)() || notConfigured();
   const v = `Version ${ctx.version || 'unknown'}`;
-  if (u.state === 'available') return { status: 'warn', detail: `${v}; ${u.version ? `${u.version} is available` : 'an update is available'}.`, next: u.detail || 'Quit Buddy and install the update from the tray.' };
+  if (u.state === 'available') return { status: 'warn', detail: `${v}; ${u.version ? `${u.version} is available` : 'an update is available'}.`, next: u.detail || 'Quit Plexiform and install the update from the tray.' };
   if (u.state === 'current') return { status: 'ok', detail: `${v}, up to date.` };
   return { status: 'info', detail: `${v}. Updates: ${u.state === 'error' ? `couldn't check (${u.detail || 'unknown error'})` : u.detail || 'not set up yet'}.` };
 }
@@ -164,10 +164,10 @@ function checkMcp(ctx) {
   const m = ctx.mcp;
   if (!m) return { status: 'info', detail: 'Unknown.' };
   const where = tilde(m.path, ctx.home);
-  if (m.error) return { status: 'fail', detail: `${where} can't be read: ${cleanJsonError(m.error)}`, next: `Buddy never writes over a file it can't parse. Fix the JSON in ${where} (Claude Code rewrites it on its next start).` };
-  if (m.installed && m.current) return { status: 'ok', detail: ctx.mcpConnected ? 'Registered, and this answer came through it.' : `Registered in ${where}; new Claude Code sessions can ask Buddy what it's showing.` };
-  if (m.installed) return { status: 'warn', detail: 'Registered, but pointing at an older copy of Buddy.', fix: 'enable-mcp', next: RESTART_SESSIONS };
-  return { status: 'warn', detail: 'Off: Claude can\'t ask Buddy "why is my light amber?".', fix: 'enable-mcp', next: RESTART_SESSIONS };
+  if (m.error) return { status: 'fail', detail: `${where} can't be read: ${cleanJsonError(m.error)}`, next: `Plexiform never writes over a file it can't parse. Fix the JSON in ${where} (Claude Code rewrites it on its next start).` };
+  if (m.installed && m.current) return { status: 'ok', detail: ctx.mcpConnected ? 'Registered, and this answer came through it.' : `Registered in ${where}; new Claude Code sessions can ask Plexiform what it's showing.` };
+  if (m.installed) return { status: 'warn', detail: 'Registered, but pointing at an older copy of Plexiform.', fix: 'enable-mcp', next: RESTART_SESSIONS };
+  return { status: 'warn', detail: 'Off: Claude can\'t ask Plexiform "why is my light amber?".', fix: 'enable-mcp', next: RESTART_SESSIONS };
 }
 
 // ctx.signal: { listening, port, error } from the app, or { running: false }
@@ -175,12 +175,12 @@ function checkMcp(ctx) {
 function checkSignal(ctx) {
   const s = ctx.signal || {};
   const port = s.port || 47172;
-  if (s.listening) return { status: 'ok', detail: `Other tools on this Mac can reach Buddy (port ${port}).` };
-  if (s.running === false) return { status: 'fail', detail: `Buddy isn't answering on this Mac (port ${port}): it isn't running, or another program holds its port.`, next: `Open ${Brand.name}. If it is open, quit any other copy (Activity Monitor), then quit and reopen it.` };
+  if (s.listening) return { status: 'ok', detail: `Other tools on this Mac can reach Plexiform (port ${port}).` };
+  if (s.running === false) return { status: 'fail', detail: `Plexiform isn't answering on this Mac (port ${port}): it isn't running, or another program holds its port.`, next: `Open ${Brand.name}. If it is open, quit any other copy (Activity Monitor), then quit and reopen it.` };
   // Hooks write session files directly, so the light keeps working; what
   // breaks is /signal, other agents' HTTP hooks and live status for MCP.
   const why = s.error === 'EADDRINUSE' ? `Another program is using its port (${port})` : `It couldn't start (${s.error || 'unknown reason'})`;
-  return { status: 'warn', detail: `${why}, so other tools can't reach Buddy.`, next: 'Claude Code still works. Quit any other copy of Buddy, then reopen this one.' };
+  return { status: 'warn', detail: `${why}, so other tools can't reach Plexiform.`, next: 'Claude Code still works. Quit any other copy of Plexiform, then reopen this one.' };
 }
 
 // A lock, or a lock a waiter renamed aside to break it and then died.
@@ -206,7 +206,7 @@ function checkSessions(ctx) {
   const dir = path.join(ctx.root, 'sessions');
   let scan;
   try { scan = scanSessions(ctx); } catch (err) {
-    return { status: 'fail', detail: `${tilde(dir, ctx.home)} can't be read (${err.code || err.message}).`, next: err.code === 'ENOENT' ? 'Quit and reopen Buddy: it creates the folder when it starts.' : 'Check the folder\'s permissions: every hook writes its session there.' };
+    return { status: 'fail', detail: `${tilde(dir, ctx.home)} can't be read (${err.code || err.message}).`, next: err.code === 'ENOENT' ? 'Quit and reopen Plexiform: it creates the folder when it starts.' : 'Check the folder\'s permissions: every hook writes its session there.' };
   }
   try { ctx.fs.accessSync(dir, fs.constants.W_OK); } catch {
     return { status: 'fail', detail: `${tilde(dir, ctx.home)} isn't writable, so hooks can't record anything.`, next: 'Check the folder\'s permissions (it should belong to you).' };
@@ -316,7 +316,7 @@ const CHECKS = [
   ['hermes-activity', 'Hermes session activity', checkHermesActivity],
   ['sessions', 'Session files', checkSessions],
   ['last-hook', 'Last hook event', checkLastHook],
-  ['signal', "Buddy's local connection", checkSignal],
+  ['signal', "Plexiform's local connection", checkSignal],
   ['mcp', 'Claude integration (MCP)', checkMcp],
   ['transcripts', 'Transcripts', checkTranscripts],
   ['disk', 'Disk space', checkDisk],

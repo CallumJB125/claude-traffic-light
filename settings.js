@@ -59,7 +59,7 @@
       notDetermined: ['Waiting for macOS calendar access. If no prompt appeared, untick and tick this again.', false],
       denied: ['Calendar access is off. Turn on Plexiform in System Settings › Privacy & Security › Calendars.', false],
       restricted: ['Calendar access is blocked on this Mac (a profile or Screen Time).', false],
-      writeOnly: ['Buddy has “Add Events Only” access, which can’t see when you’re busy. Switch it to Full Access in System Settings › Privacy & Security › Calendars.', false],
+      writeOnly: ['Plexiform has “Add Events Only” access, which can’t see when you’re busy. Switch it to Full Access in System Settings › Privacy & Security › Calendars.', false],
       missing: ['Not available in this build (the calendar helper is missing). An ICS feed still works.', false],
     };
     const hhmm = (t) => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -73,7 +73,7 @@
       // macOS dropped a grant it had given (an update signed differently does
       // that): one click asks again, instead of untick-and-tick.
       if (st.calendar.on && st.calendar.reset) {
-        cal.textContent = 'macOS forgot Buddy’s calendar access (this can happen after an update).';
+        cal.textContent = 'macOS forgot Plexiform’s calendar access (this can happen after an update).';
         cal.className = 'busy-state';
         const again = document.createElement('button');
         again.type = 'button';
@@ -215,7 +215,7 @@
       mcpToggle.dataset.on = st.installed ? '1' : '';
       mcpToggle.textContent = st.installed ? 'Disable Claude integration' : 'Enable Claude integration';
       if (st.error) document.getElementById('mcp-hint').textContent = `Could not update ${st.path}: ${st.error}`;
-      else if (st.installed && !st.current) document.getElementById('mcp-hint').textContent = 'Registered, but pointing at an older copy of Buddy. Disable and enable again to update it.';
+      else if (st.installed && !st.current) document.getElementById('mcp-hint').textContent = 'Registered, but pointing at an older copy of Plexiform. Disable and enable again to update it.';
     };
     mcpToggle.addEventListener('click', async () => showMcp(await window.settingsApi.mcpSetEnabled(!mcpToggle.dataset.on)));
     window.settingsApi.mcpStatus().then(showMcp);
@@ -249,7 +249,7 @@
         const meta = document.createElement('span');
         meta.textContent = d.pairing === 'expired' ? 'Code expired unused: revoke and pair again'
           : d.pairing === 'waiting' ? 'Waiting for the device to use its code'
-          : `${d.lastSeenAt ? `seen ${ago(d.lastSeenAt)}` : 'not seen since Buddy started'} · ${d.sessions} live session${d.sessions === 1 ? '' : 's'}`;
+          : `${d.lastSeenAt ? `seen ${ago(d.lastSeenAt)}` : 'not seen since Plexiform started'} · ${d.sessions} live session${d.sessions === 1 ? '' : 's'}`;
         who.append(name, meta);
         const revoke = document.createElement('button');
         revoke.type = 'button'; revoke.className = 'secondary'; revoke.textContent = 'Revoke';

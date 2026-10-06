@@ -14,7 +14,7 @@ const GB = 1024 ** 3;
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // A fake machine: home with ~/.claude, an app binary and its hooks dir, and
-// Buddy's data dir. Everything the checks read lives under one temp folder.
+// Plexiform's data dir. Everything the checks read lives under one temp folder.
 function machine({ hooks = 'current', sessions = {}, locks = {}, transcripts = true, lastHook = null } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-health-'));
   const root = path.join(home, '.claude-traffic-light');
@@ -84,7 +84,7 @@ test('hooks: pointing at an app that was moved away is a failure', () => {
   fs.writeFileSync(Claude.configPath(m.home), JSON.stringify(Claude.apply({}, old)));
   const c = byId(Health.runChecks(m.ctx), 'hooks');
   assert.equal(c.status, 'fail');
-  assert.equal(c.detail, 'Points at a copy of Buddy that was moved or deleted (/Volumes/Old/Claude Buddy.app/Contents/Resources/hooks/set-status.js).');
+  assert.equal(c.detail, 'Points at a copy of Plexiform that was moved or deleted (/Volumes/Old/Claude Buddy.app/Contents/Resources/hooks/set-status.js).');
   assert.equal(c.fix, 'reinstall-hooks');
 });
 
@@ -96,7 +96,7 @@ test('hooks: registered from a checkout that still exists is a warning naming it
   fs.writeFileSync(Claude.configPath(m.home), JSON.stringify(Claude.apply({}, Runtime.make({ execPath: null, hooksDir: checkout, dataDir: m.root }))));
   const c = byId(Health.runChecks(m.ctx), 'hooks');
   assert.equal(c.status, 'warn');
-  assert.equal(c.detail, `Pointing at a different copy of Buddy (${path.join('~', 'dev', 'claude-traffic-light', 'hooks', 'set-status.js')}), not this one.`);
+  assert.equal(c.detail, `Pointing at a different copy of Plexiform (${path.join('~', 'dev', 'claude-traffic-light', 'hooks', 'set-status.js')}), not this one.`);
 });
 
 test('hooks: this copy, but missing an event or out of step with askFromWidget', () => {
@@ -137,7 +137,7 @@ test('sessions: unreadable files are reported; a missing folder fails', () => {
   fs.rmSync(path.join(m.root, 'sessions'), { recursive: true });
   const gone = byId(Health.runChecks(m.ctx), 'sessions');
   assert.equal(gone.status, 'fail');
-  assert.match(gone.next, /reopen Buddy/);
+  assert.match(gone.next, /reopen Plexiform/);
 });
 
 test('last hook: newest of the live session files and the saved stamp', () => {
@@ -186,12 +186,12 @@ test('mcp, signal server, disk and update states', () => {
   const { ctx } = machine();
   const run = (extra, id) => byId(Health.runChecks({ ...ctx, ...extra }), id);
   assert.equal(run({ mcp: { installed: false, path: '/x' } }, 'mcp').fix, 'enable-mcp');
-  assert.equal(run({ mcp: { installed: true, current: false, path: '/x' } }, 'mcp').detail, 'Registered, but pointing at an older copy of Buddy.');
+  assert.equal(run({ mcp: { installed: true, current: false, path: '/x' } }, 'mcp').detail, 'Registered, but pointing at an older copy of Plexiform.');
   assert.equal(run({ mcp: { installed: false, path: '/x', error: 'Unexpected token' } }, 'mcp').status, 'fail');
   assert.equal(run({ mcpConnected: true }, 'mcp').detail, 'Registered, and this answer came through it.');
   const busy = run({ signal: { listening: false, port: 47172, error: 'EADDRINUSE' } }, 'signal');
   assert.equal(busy.status, 'warn');
-  assert.equal(busy.detail, "Another program is using its port (47172), so other tools can't reach Buddy.");
+  assert.equal(busy.detail, "Another program is using its port (47172), so other tools can't reach Plexiform.");
   assert.equal(run({ signal: { running: false, port: 47172 } }, 'signal').status, 'fail');
   assert.equal(run({ statfs: () => ({ bavail: 100, bsize: 1024 * 1024 }) }, 'disk').status, 'fail');
   assert.equal(run({ statfs: () => ({ bavail: 500, bsize: 1024 * 1024 }) }, 'disk').status, 'warn');
@@ -286,7 +286,7 @@ test('last hook: not green when the hooks are broken or it is over a day old', (
 
 test('update available always says what to do', () => {
   const { ctx } = machine();
-  assert.equal(byId(Health.runChecks({ ...ctx, updateStatus: () => ({ state: 'available' }) }), 'version').next, 'Quit Buddy and install the update from the tray.');
+  assert.equal(byId(Health.runChecks({ ...ctx, updateStatus: () => ({ state: 'available' }) }), 'version').next, 'Quit Plexiform and install the update from the tray.');
 });
 
 test('stale-lock clearing also removes old aside files and pluralises', () => {
@@ -335,11 +335,11 @@ test('hooks: P3\'s deny rule — present is fine, missing is a warning, a foreig
   const settings = JSON.parse(fs.readFileSync(Claude.configPath(m.home), 'utf8'));
   assert.deepEqual(settings.permissions.deny, Claude.denyRulesFor(m.home, m.runtime));
   assert.equal(byId(Health.runChecks(m.ctx), 'hooks').status, 'ok');
-  // The person's own deny rules beside Buddy's change nothing.
+  // The person's own deny rules beside Plexiform's change nothing.
   settings.permissions.deny.unshift('Read(~/.ssh/**)');
   fs.writeFileSync(Claude.configPath(m.home), JSON.stringify(settings));
   assert.equal(byId(Health.runChecks(m.ctx), 'hooks').status, 'ok');
-  // Buddy's rule removed by hand.
+  // Plexiform's rule removed by hand.
   settings.permissions.deny = ['Read(~/.ssh/**)'];
   fs.writeFileSync(Claude.configPath(m.home), JSON.stringify(settings));
   const c = byId(Health.runChecks(m.ctx), 'hooks');
@@ -363,7 +363,7 @@ test('hooks: a settings.json the real installer wrote (P3 deny rule, .buddy-back
   assert.ok(fs.readdirSync(path.join(m.home, '.claude')).some((f) => f.includes('buddy-backup')), 'installer left its backup');
   const c = byId(Health.runChecks(m.ctx), 'hooks');
   assert.equal(c.status, 'ok', c.detail);
-  assert.equal(c.detail, 'Installed, and pointing at this copy of Buddy.');
+  assert.equal(c.detail, 'Installed, and pointing at this copy of Plexiform.');
   // Installing twice changes nothing the check cares about.
   Claude.install({ home: m.home, runtime: m.runtime });
   assert.equal(byId(Health.runChecks(m.ctx), 'hooks').status, 'ok');
