@@ -46,7 +46,7 @@ async function startRealHub(dir) {
   let err = '';
   const proc = spawn(process.execPath, [path.join(BOARD, 'hub', 'server.js')], {
     env: {
-      PATH: process.env.PATH, HOME: dir, LANG: 'en_US.UTF-8', BOARD_AUTH: 'accounts', BOARD_SIGNUP: 'open', BOARD_ACCOUNTS_DEV: '1', BOARD_CONSOLE_MAILER: '1',
+      PATH: process.env.PATH, HOME: dir, LANG: 'en_US.UTF-8', BOARD_AUTH: 'accounts', BOARD_SIGNUP: 'open', BOARD_ACCOUNTS_DEV: '1', BOARD_CONSOLE_MAILER: '1', BOARD_EMAIL_SIGNIN: '1',
       BOARD_BIND: '127.0.0.1', BOARD_PORT: String(port), BOARD_DATA_DIR: dir, BOARD_SECRET: crypto.randomBytes(32).toString('hex'), BOARD_LOG_LEVEL: 'warn',
     },
     stdio: ['ignore', 'ignore', 'pipe'],
