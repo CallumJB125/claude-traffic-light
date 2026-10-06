@@ -1584,6 +1584,7 @@ app.on('will-quit',()=>SetupsLocal.close());
 // handler checks its sender; the page to open is never taken from the renderer.
 const TeamEntry = require('./src/team-entry.js');
 const settingsOnly = (e) => fromUtilityPage(e, 'settings');
+const BurstIpc = require('./src/burst-ipc.js').register({ utilityHandle, settingsOnly, isMac: IS_MAC, dialog, shell, scriptDir: path.join(ROOT_DIR, 'burst-scripts'), log: console.log });
 ipcMain.handle('account-view', (e) => {
   if (!settingsOnly(e)) return null;
   return TeamEntry.settingsView(accountSummary(), new URL(BRAND.DEFAULT_HUB).host);
@@ -2779,6 +2780,7 @@ function createTray() {
   const buildMenu = (from = 'tray') => Menu.buildFromTemplate([
     ...budgetItems(),
     ...scopeItem(),
+    ...BurstIpc.trayItems(),
     ...AppMenu.appItems({ pages: BuddyPages.PAGES, groups: BuddyPages.GROUPS, open: openBuddy, openLabel: BRAND.OPEN_MENU_LABEL, feedback: { label: "Something's off / Idea…", click: createFeedbackWindow } }),
     { label: 'Open Claude', click: () => shell.openExternal('https://claude.ai') },
     { label: 'Show Widget Now', click: () => { saveConfig({ showWidget: true }); clearTimeout(snoozeTimer); if (!win) createWindow(); win.showInactive(); createTray(); } },

@@ -58,6 +58,7 @@
       "overview-preload.js",
       "settings.html",
       "settings-backups.js",
+      "settings-burst.js",
       "feedback.html",
       "feedback.js",
       "feedback-preload.js",
