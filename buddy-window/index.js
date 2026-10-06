@@ -1023,6 +1023,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     devPage: (js) => (content === accountView && accountView ? accountView.webContents.executeJavaScript(js) : Promise.resolve(null)),
     // A local page's webContents, for main's sender checks (null if not open).
     pageWebContents: (id) => localViews.get(id)?.webContents ?? null,
+    accountWebContents: () => accountView?.webContents ?? null,
     // Fixed page ids from main only; queued callbacks never jump to a replacement renderer.
     sendToPage(id, channel, ...args) {
       const wc = localViews.get(id)?.webContents;

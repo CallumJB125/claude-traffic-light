@@ -63,6 +63,7 @@ contextBridge.exposeInMainWorld('trafficLight', {
   // listening / thinking / talking / idle / error back for the mic badge and the mouth.
   teamHint: () => ipcRenderer.invoke('team-hint'),
   teamHintDone: (open) => ipcRenderer.invoke('team-hint-done', open === true),
+  burstChip: () => ipcRenderer.invoke('burst:chip'),
   voiceEnabled: () => ipcRenderer.invoke('voice-enabled'),
   voiceStart: () => ipcRenderer.invoke('voice-start'),
   voiceStop: () => ipcRenderer.invoke('voice-stop'),
