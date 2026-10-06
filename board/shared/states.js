@@ -282,7 +282,7 @@ function handedOverEffects(card, provenance) {
   const follow = t?.kind === 'queue' ? [{ type: 'follow_up', event: { type: 'redispatch', target_member_id: null } }]
     : t?.kind === 'member' ? [{ type: 'follow_up', event: { type: 'redispatch', target_member_id: t.member_id } }]
       : t?.kind === 'self' ? [{ type: 'follow_up', event: { type: 'take_myself' } }] : [];
-  return [...endRun('handed_over'), handoffMemory(provenance), feed('handed_over', { provenance }), ...follow];
+  return [...endRun('handed_over'), ...(provenance === 'checkpoint_incomplete' ? [{ type: 'handover_freeze' }] : []), handoffMemory(provenance), feed('handed_over', { provenance }), ...follow];
 }
 
 const BY_KEY = new Map();

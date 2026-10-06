@@ -102,7 +102,7 @@ export function mergeHandover({ card, run = null, facts = null, narrative = null
     run,
     layers: {
       facts: { at_ms: facts?.at_ms ?? null },
-      narrative: { at_ms: nar.at_ms ?? null, version: nar.version ?? 0, written_by: nar.written_by ?? null },
+      narrative: { at_ms: nar.at_ms ?? null, version: nar.version ?? 0, written_by: nar.written_by ?? null, system_note: nar.written_by === 'system' ? nar.system_note ?? null : null },
       snapshot: snapshot ? { ...snapshot } : null,
     },
     unsynced_paths: [...new Set(unsynced)],
@@ -152,6 +152,7 @@ export function renderMarkdown(doc, { now_ms }) {
   out.push(`# Handover · ${c.key ?? '?'} ${c.title ?? ''}`.trimEnd());
   out.push(`State: ${r?.run_state ?? 'no run'}${r ? ` · run r${r.fence} (fence ${r.fence}) · ${r.agent_label ?? 'agent'}` : ''} · repo ${c.repo_id ?? '?'}`);
   out.push(`Last synced: facts ${ago(a.facts_ms)} · narrative ${ago(a.narrative_ms)} · ${snapshotText(doc.layers.snapshot, a.snapshot_ms)}${doc.unsynced_paths.length ? `; ${doc.unsynced_paths.length} file(s) modified after that are NOT synced` : ''}`);
+  if (doc.layers.narrative.system_note) out.push(`Hub-written handover (facts only): ${doc.layers.narrative.system_note}`);
   const sec = (title, body) => { out.push('', `## ${title}`); out.push(body == null || body === '' ? '(none)' : body); };
   sec('Goal', s.goal);
   sec('Done means', s.done_means);

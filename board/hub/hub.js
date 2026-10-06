@@ -12,10 +12,10 @@ import { existsSync, unlinkSync } from 'node:fs';
 import { step, fromDb, toDb, ACTIVE, PLAN_APPROVAL_LABEL, EVENTS } from '../shared/states.js';
 import { CARD_STATE } from '../shared/journal.js';
 import {
-  timerEvent, ORPHAN_NOTIFY_MS, OVERLAP_DEBOUNCE_MS, TICK_MAX_RATE_MS, TTL_MS,
+  timerEvent, deriveStalled, ORPHAN_NOTIFY_MS, OVERLAP_DEBOUNCE_MS, TICK_MAX_RATE_MS, TTL_MS,
 } from '../shared/liveness.js';
 import { branchName, snapshotRef, RESTORE_BUMP } from '../shared/fence.js';
-import { applyPatch, mergeHandover, renderMarkdown, syncAges, handoffMemoryText } from '../shared/handover.js';
+import { applyPatch, emptyNarrative, mergeHandover, renderMarkdown, syncAges, handoffMemoryText } from '../shared/handover.js';
 import { computeOverlaps, overlapsFor, teamContextBlock, overlapDelta, kindOf } from '../shared/overlap.js';
 import { applyRestoreBump } from '../shared/migrate.js';
 import { FEED_KINDS, WS_CLOSE } from '../shared/protocol.js';
@@ -29,6 +29,22 @@ import { isAdmin, canWrite } from './permissions.js';
 import { Presence } from './presence.js';
 import { TaskOwnership } from './ownership.js';
 import { WorkflowExecutionGuard } from './workflow-execution-guard.js';
+
+const STALL_NOTE = {
+  runner_offline: 'the runner stopped answering', process_gone: 'the AI process is gone',
+  claim_not_started: 'the run never started', no_activity: 'the run went quiet',
+};
+// Why the run ended, in the hub-written handover's own words.
+function endNote(event) {
+  switch (event.type) {
+    case 'stop': return 'the run was stopped';
+    case 'run_failed': return event.fail_kind === 'budget' ? 'the run stopped at its budget' : `the run failed (${event.fail_kind})`;
+    case 'release': return 'the AI released the card';
+    case 'orphan_timeout': case 'suspend_timeout': return 'the runner went silent and the run was orphaned';
+    case 'handover_timeout': case 'hb_timeout': return 'the AI did not confirm its handover';
+    default: return 'the run ended';
+  }
+}
 
 const TICK_EVERY_MS = 5_000;          // lease.tick heartbeat when nothing changed
 const REQUEST_CACHE_MS = 10 * 60_000; // D8
@@ -496,8 +512,9 @@ export class Hub extends EventEmitter {
         this.db.run('UPDATE cards SET queued_nudged_at = ? WHERE id = ?', now, cardId);
         break;
       case 'handover_freeze': {
-        const h = this.latestHandover(cardId);
         const run = this.run(env.runId) ?? this.latestRun(cardId);
+        this.writeFactsOnlyHandover(cardId, run, endNote(event));
+        const h = this.latestHandover(cardId);
         this.feed(cardId, 'handover_frozen', { version: h?.version ?? null, snapshot_sha: run?.last_snapshot_sha ?? null }, { run });
         break;
       }
@@ -923,6 +940,8 @@ export class Hub extends EventEmitter {
       if (!r.ok && !['BOOT_GRACE', 'TUNNEL_DOWN'].includes(r.error.code)) this.log.warn('timer step failed', { card_id: cardId, event: ev.type, code: r.error.code });
     }
     const after = this.card(cardId);
+    const stalled = ACTIVE.has(after.run_state) ? deriveStalled({ run_state: after.run_state, state_age_ms: this.ageOf(after.state_since) ?? 0, live: leaseView(this, after) }) : null;
+    if (stalled) this.txn(() => this.writeFactsOnlyHandover(cardId, this.run(after.active_run_id), STALL_NOTE[stalled.reason]));
     if (after.run_state === 'orphaned' && after.orphan_notified_at == null && this.ageOf(after.state_since) >= ORPHAN_NOTIFY_MS) {
       const roles = ['dispatcher', 'assignees'];
       this.txn(() => {
@@ -1065,6 +1084,21 @@ export class Hub extends EventEmitter {
     this.journal({ card_id: cardId, run_id: run?.id ?? null, actor_kind: written_by === 'claude' ? 'runner' : 'member', actor_id: written_by === 'claude' ? run?.device_id ?? null : null, kind: 'handover.version', payload: { version, written_by, provenance } });
     this.later(() => this.broadcastCard(cardId));
     return version;
+  }
+
+  // A run that ends, is stopped or stalls without its AI having written a
+  // narrative still leaves a handover: the hub stamps the facts it holds
+  // (files, commands, branch, snapshot) and labels the document as hub-written.
+  // The AI's own narrative for the run, when there is one, always wins.
+  writeFactsOnlyHandover(cardId, run, note) {
+    if (!run) return;
+    const prev = this.latestHandover(cardId);
+    if (prev?.run_id === run.id) return;
+    const version = (prev?.version ?? 0) + 1;
+    const next = { ...(json(prev?.sections, null) ?? emptyNarrative()), version, written_by: 'system', system_note: `${note}. The AI wrote no narrative for run r${run.fence}; files, commands, branch and snapshot are the last the runner synced.` };
+    this.db.insert('handovers', { card_id: cardId, version, run_id: run.id, fence: run.fence, sections: JSON.stringify(next), written_by: 'system', provenance: 'hub_facts_only', created_at: this.iso() });
+    this.journal({ card_id: cardId, run_id: run.id, actor_kind: 'system', kind: 'handover.version', payload: { version, written_by: 'system', provenance: 'hub_facts_only' } });
+    this.later(() => this.broadcastCard(cardId));
   }
 
   handoverDoc(cardId) {
