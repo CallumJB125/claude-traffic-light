@@ -62,6 +62,7 @@
       <button id="start-tools">Connect your AI tools</button>
       <button id="start-privacy">What leaves your machine</button>
     </div>
+    <p class="rule">Curious what leaves your computer? Preferences → Privacy has a short plain-language list, above the full notice.</p>
     <p class="rule">Join through the app’s sign-in flow; it may open your browser. Install and sign in to the AI tools you want to use, then connect them in Preferences.</p>
     <p class="rule">Start here in the app—there are no Plexiform Terminal setup steps or release checks to complete. Your OS may ask to unlock secure storage when you sign in; you handle that prompt yourself.</p>
     <p class="start-notice" id="start-notice" role="status" aria-live="polite"></p>
@@ -99,6 +100,10 @@
     <ul id="agent-list" style="margin-top:4px"></ul>
   </section>
 
+  <details>
+    <summary>Windows and WSL</summary>
+    <p>Windows support is still pending acceptance, so expect rough edges and no promises about timing. Claude Code sessions running inside WSL have not been tested with Plexiform; treat them as unsupported for now.</p>
+  </details>
   <details>
     <summary>“Needs your input” vs “Waiting for you”</summary>
     <p><b>Needs your input</b> (amber, waving): An AI agent has paused mid-task on a permission prompt or a question. Nothing moves until you answer in the terminal.</p>

@@ -61,6 +61,7 @@
       <div>
         <h3>Windows</h3>
         {{live:windowsDownloads}}<ol class="steps"><li><strong>Download the Windows installer above</strong> and open it from Downloads.</li><li><strong>Follow the setup wizard</strong>, then open Plexiform from Start. The portable download runs without installation and needs manual updates.</li><li><strong>Open Preferences → Connect AI tools</strong> to connect supported providers installed on this computer.</li></ol>{{/live}}{{notlive:windowsDownloads}}<p class="prose">Windows downloads are unavailable while native runner and privacy acceptance are pending. These Mac and Linux instructions do not establish Windows support.</p>{{/notlive}}
+        <p class="note">Windows and WSL, honestly: Windows acceptance is still pending, so expect rough edges and no promises about timing. Claude Code sessions running inside WSL have not been tested with {{brand.name}}; treat them as unsupported for now.</p>
         <h3 style="margin-top:28px">On Linux</h3>
         <ol class="steps">
           <li><strong>On Ubuntu or Debian, choose the .deb.</strong> Open the download in your Software installer, choose <strong>Install</strong> and authenticate if asked. Then open {{brand.name}} from your applications menu. Your system needs a graphical installer that supports .deb files.</li>

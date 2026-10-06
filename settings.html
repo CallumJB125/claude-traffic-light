@@ -532,6 +532,36 @@
   <h2>Privacy</h2>
   <div class="field" id="privacy">
     <div class="hint">Plexiform reads your sessions on this machine. Your prompts, conversation logs and code stay here; the notice below lists exactly what leaves, and when. It is a draft pending legal review.</div>
+    <details id="leaves-machine" class="pv" open>
+      <summary>What leaves your machine, in plain words</summary>
+      <h3 class="pv-h">Stays on this Mac</h3>
+      <ul>
+        <li>Spend and token counts, worked out here from your Claude Code logs. Only counts and costs are kept, not the conversation.</li>
+        <li>Session state: the folder, state, tool and model names, and short snippets of an error or reply.</li>
+        <li>Tackle with AI tasks you run on this Mac: your task text, messages, replies and checkpoints.</li>
+        <li>Your settings, rules and cameo photos. Voice becomes text on this device; audio is not saved.</li>
+        <li>Bug-report diagnostics are only copied to your clipboard when you click Copy diagnostics, with home paths, names, secrets, emails and IP addresses scrubbed first.</li>
+      </ul>
+      <h3 class="pv-h">Goes to your team hub (only if you join a team)</h3>
+      <ul>
+        <li>Card text, handovers, run progress, member names, linked repository identity, and your account name and email.</li>
+        <li>Credential-like strings and home-folder paths pass a redaction filter first. It is not a guarantee, and the hub's operator can read what you send.</li>
+        <li>Shared sessions: sessions started in a signed-in team workspace can be shared with that team. Owners, admins and members can message a shared session, which uses the session owner's AI quota; viewers can only watch. Stop sharing in Overview or turn automatic sharing off here. Anything already stored as team history stays.</li>
+      </ul>
+      <h3 class="pv-h">Goes to your AI provider</h3>
+      <ul>
+        <li>Prompts and task context go to the provider you choose, under that provider's terms, using your existing login.</li>
+      </ul>
+      <h3 class="pv-h">Other requests</h3>
+      <ul>
+        <li>GitHub checks through your own <code>gh</code> login, only if it is signed in. Update checks reveal your IP address and app version.</li>
+      </ul>
+      <h3 class="pv-h">Kept locked down</h3>
+      <ul>
+        <li>Your team sign-in and runner credentials are stored in your system's password store (Keychain on macOS), not in plain files.</li>
+      </ul>
+      <p>The full notice below is the exact list.</p>
+    </details>
     <div class="row wrap">
       <button type="button" class="secondary" id="privacy-export-stats">Export stats</button>
       <button type="button" class="secondary" id="privacy-export-setup">Export setup</button>
