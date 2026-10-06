@@ -4,8 +4,9 @@
 import { ClaudeBackend } from './claude.js';
 import { CodexBackend } from './codex.js';
 import { HermesBackend, HermesDgxBackend } from './hermes.js';
+import { GeminiBackend } from './gemini.js';
 
-export const BACKENDS = Object.freeze({ claude: ClaudeBackend, codex: CodexBackend, hermes: HermesBackend, 'hermes-dgx': HermesDgxBackend });
+export const BACKENDS = Object.freeze({ claude: ClaudeBackend, codex: CodexBackend, hermes: HermesBackend, 'hermes-dgx': HermesDgxBackend, gemini: GeminiBackend });
 
 // Every backend maps its CLI output to these and drops anything else (§4).
 export const NORMALISED_EVENTS = Object.freeze(['init', 'tool_start', 'tool_end', 'assistant', 'usage', 'result', 'rate_limit', 'exit']);

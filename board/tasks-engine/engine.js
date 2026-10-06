@@ -43,6 +43,8 @@ const SLOT = new Set(['claimed', 'running', 'quiet', 'blocked', 'handing_over'])
 // out so `actions` stays the exact list the engine accepts (§5.3).
 const ENGINE_ACTIONS = new Set(['stop', 'pause', 'resume', 'approve', 'deny', 'answer', 'message', 'takeover', 'handback', 'discard', 'retry']);
 const LEVEL_RANK = { plan: 0, ask: 1, 'auto-edits': 2, auto: 3, bypass: 4 };
+// CLIs that run one exec turn per process with no hook/IPC channel.
+const ONE_TURN = new Set(['codex', 'gemini']);
 const MODE_OF = { plan: 'plan', ask: 'default', 'auto-edits': 'acceptEdits', auto: 'acceptEdits' };
 const FILE_TOOLS = new Set(['Read', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Glob', 'Grep']);
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
@@ -123,7 +125,7 @@ export class TasksEngine extends EventEmitter {
     this.closePromise = null;
     const ramGb = Math.round(os.totalmem() / 2 ** 30);
     this.ramGb = ramGb;
-    this.limits = { maxParallel: Math.min(opts.maxParallel ?? defaultMaxParallel(ramGb), 8), maxParallelDefault: defaultMaxParallel(ramGb), perAi: { claude: 4, codex: 2, gemini: 0 } };
+    this.limits = { maxParallel: Math.min(opts.maxParallel ?? defaultMaxParallel(ramGb), 8), maxParallelDefault: defaultMaxParallel(ramGb), perAi: { claude: 4, codex: 2, gemini: 2 } };
     this.messages = new MessageStore(path.join(this.dataDir, 'mesh'));
     const gitBin = resolveGit(this.env);
     this.git = gitBin ? makeGit(gitBin, this.env) : () => Promise.reject(Object.assign(new Error('no git'), { code: 'NO_GIT' }));
@@ -776,7 +778,7 @@ export class TasksEngine extends EventEmitter {
     const socketPath = path.join(runDir, 'ipc.sock');
     // Codex exec has no hooks/MCP channel: don't manufacture an unused
     // per-run socket or hook credential (and its shorter OS path limit).
-    if (task.ai.id !== 'codex' && Buffer.byteLength(socketPath) > MAX_SOCKET_PATH) throw Object.assign(new Error('socket path too long'), { code: 'SOCKET_PATH_TOO_LONG' });
+    if (!ONE_TURN.has(task.ai.id) && Buffer.byteLength(socketPath) > MAX_SOCKET_PATH) throw Object.assign(new Error('socket path too long'), { code: 'SOCKET_PATH_TOO_LONG' });
     return { runDir, socketPath };
   }
 
@@ -798,7 +800,7 @@ export class TasksEngine extends EventEmitter {
     const cacheDir = this.#cacheDir(task);
     ensureDir(cacheDir);
     ensureDir(path.join(cacheDir, 'tmp'));
-    if (task.ai.id === 'codex') return;
+    if (ONE_TURN.has(task.ai.id)) return;
     const protectedWrite = task.workInPlace
       ? ['.git/config', '.git/hooks', '.claude', '.mcp.json', 'CLAUDE.md', 'AGENTS.md'].map((p) => path.join(task.worktree, p)) : [];
     const apiKeyFile = this.env.ANTHROPIC_API_KEY ? path.join(runDir, API_KEY_FILE) : null;
@@ -828,7 +830,7 @@ export class TasksEngine extends EventEmitter {
     };
     run.exited = new Promise((r) => { run.resolveExited = r; });
     this.#writeRunFiles(task, runDir, socketPath, token);
-    if (task.ai.id !== 'codex') run.ipc = await startIpcServer({ socketPath, token, log: this.log, handler: this.#ipcHandler(task, run) });
+    if (!ONE_TURN.has(task.ai.id)) run.ipc = await startIpcServer({ socketPath, token, log: this.log, handler: this.#ipcHandler(task, run) });
     if (this.closing || this.closed) { await run.ipc?.close(); return; }
     this.runs.set(task.id, run);
     const env = buildEnv(this.env, { runDir, socket: socketPath, supervisorPid: process.pid, supervisorLstart: this.lstart });
@@ -847,7 +849,7 @@ export class TasksEngine extends EventEmitter {
     }
     const backend = new B({
       bin: info.bin, cwd: task.worktree, env, runDir, sessionId: task.sessionId, resume,
-      budget: remaining != null ? { amount: remaining, unit: 'usd' } : null, maxTurns: task.ai.id === 'codex' ? undefined : DEFAULT_MAX_TURNS,
+      budget: remaining != null ? { amount: remaining, unit: 'usd' } : null, maxTurns: ONE_TURN.has(task.ai.id) ? undefined : DEFAULT_MAX_TURNS,
       systemPrompt: this.#brief(task), model: task.ai.model ?? undefined, log: this.log, boardHome: null,
       permissionMode: task.planFirst && !task.planApproved ? 'plan' : MODE_OF[task.permissionLevel],
       extraDisallowed: ['Read', 'Edit', 'Write'].map((t) => `${t}(/${dataReal}/**)`),
@@ -1316,7 +1318,7 @@ export class TasksEngine extends EventEmitter {
     const { runDir, socketPath } = this.#runFiles(task);
     const token = crypto.randomBytes(24).toString('base64url');
     this.#writeRunFiles(task, runDir, socketPath, token);
-    if (task.ai.id === 'codex') return { runDir, socketPath };
+    if (ONE_TURN.has(task.ai.id)) return { runDir, socketPath };
     const ipc = await startIpcServer({ socketPath, token, log: this.log, handler: this.#ipcHandler(task, null) });
     const entry = { ipc, runDir, socketPath };
     this.idleIpc.set(task.id, entry);

@@ -1,8 +1,8 @@
 // Closed execution providers and the public part of runner readiness. No
 // paths, authentication files or arbitrary provider labels cross this API.
-export const AI_IDS = Object.freeze(['claude', 'codex', 'hermes', 'hermes-dgx']);
-export const AI_LABELS = Object.freeze({ claude: 'Claude Code', codex: 'Codex', hermes: 'Hermes', 'hermes-dgx': 'Hermes · DGX' });
-export const AI_BACKENDS = Object.freeze({ claude: 'claude_cli', codex: 'codex_cli', hermes: 'hermes_cli', 'hermes-dgx': 'hermes_cli' });
+export const AI_IDS = Object.freeze(['claude', 'codex', 'hermes', 'hermes-dgx', 'gemini']);
+export const AI_LABELS = Object.freeze({ claude: 'Claude Code', codex: 'Codex', hermes: 'Hermes', 'hermes-dgx': 'Hermes · DGX', gemini: 'Gemini' });
+export const AI_BACKENDS = Object.freeze({ claude: 'claude_cli', codex: 'codex_cli', hermes: 'hermes_cli', 'hermes-dgx': 'hermes_cli', gemini: 'gemini_cli' });
 // Hub-side mirror of each runner backend's describe() capabilities that
 // dispatch depends on (runner/backends/*.js; a test keeps them equal).
 // ownMachineOnly: no OS sandbox, so only the dispatcher's own machine runs it.
@@ -11,6 +11,7 @@ export const AI_CAPABILITIES = Object.freeze({
   codex: Object.freeze({ budget: 'none', maxTurns: false, ownMachineOnly: false }),
   hermes: Object.freeze({ budget: 'none', maxTurns: true, ownMachineOnly: true }),
   'hermes-dgx': Object.freeze({ budget: 'none', maxTurns: true, ownMachineOnly: true }),
+  gemini: Object.freeze({ budget: 'none', maxTurns: false, ownMachineOnly: true }),
 });
 export const BUDGET_MAX_USD = 1000;
 // Rows written before `ai` existed carry only a backend; the first id per backend wins.
