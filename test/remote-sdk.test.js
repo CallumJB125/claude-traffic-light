@@ -48,7 +48,7 @@ test('SDK honors cancellation before a request and bounds a real fetch wait with
  const server=http.createServer((req,res)=>{count++;req.resume();});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(()=>new Promise(resolve=>{server.close(resolve);server.closeAllConnections();}));
  const client=createPlexiformClient({origin:`http://127.0.0.1:${server.address().port}`,token,timeoutMs:50});
  const canceled=new AbortController();canceled.abort();await assert.rejects(client.listBoards({signal:canceled.signal}),error=>error.code==='TIMEOUT');assert.equal(count,0);
- const began=performance.now();await assert.rejects(client.addComment({card_id:'task',request_id:'same-uncertain-choice',body:'Reported'}),error=>error.code==='TIMEOUT');assert.ok(performance.now()-began<1000);assert.equal(count,1);
+ const began=performance.now();await assert.rejects(client.addComment({card_id:'task',request_id:'same-uncertain-choice',body:'Reported'}),error=>error.code==='TIMEOUT');assert.ok(performance.now()-began<1000);for(let i=0;i<100&&count<1;i++)await new Promise(r=>setTimeout(r,20));assert.equal(count,1);
 });
 
 // Run stalled injected fetch/standard stream cases in bounded children. The
