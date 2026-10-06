@@ -53,6 +53,8 @@ const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:[\]-]{0,79}$/;
 const REF_RE = /^(?!-)(?!.*\.\.)[A-Za-z0-9._/-]{1,200}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const MAX_SOCKET_PATH = 103;
+const LAUNCH_TIMEOUT_MS = 120_000;      // a launch that hangs must not hold an engine slot forever
+const LAUNCH_TIMED_OUT = Symbol('launch-timed-out');
 const MIN_FREE_BYTES = 256 * 1024 * 1024;
 const MAX_TRANSCRIPT_PER_MESSAGE = 16;      // chunks (1 MiB of text) per assistant message
 const MAX_AUDIT = 500;
@@ -736,10 +738,27 @@ export class TasksEngine extends EventEmitter {
     if (task.state !== 'claimed' || this.closing || this.closed) return;
     const start = task.pendingStart ?? { resume: false, prompt: null };
     task.pendingStart = null;
+    const timeoutMs = this.opts.launchTimeoutMs ?? LAUNCH_TIMEOUT_MS;
+    let timer;
+    const timedOut = new Promise((resolve) => { timer = setTimeout(() => resolve(LAUNCH_TIMED_OUT), timeoutMs); timer.unref?.(); });
     try {
-      await this.#prepareWorkspace(task);
-      if (task.state !== 'claimed' || this.closing || this.closed) return;
-      await this.#spawn(task, start);
+      const work = (async () => {
+        await this.#prepareWorkspace(task);
+        if (task.state !== 'claimed' || this.closing || this.closed) return;
+        await this.#spawn(task, start);
+      })();
+      work.catch(() => {}); // a launch abandoned after the timeout may still reject later
+      if (await Promise.race([work, timedOut]) === LAUNCH_TIMED_OUT) {
+        // The hung launch keeps running unobserved; its late result is ignored because the task is no longer 'claimed'.
+        this.log.warn('task launch timed out', { task_id: task.id, ms: timeoutMs });
+        if (task.state !== 'claimed' || this.closing || this.closed) return;
+        const run = this.runs.get(task.id);
+        if (run) {
+          run.backend?.stop?.().catch(() => {});
+          await this.#cleanupRun(task, run).catch(() => {});
+        }
+        this.#failTask(task, 'error', `the AI did not start within ${Math.round(timeoutMs / 1000)} seconds`);
+      }
     } catch (e) {
       if (this.closing || this.closed) return;
       this.log.warn('task start failed', { task_id: task.id, code: e.code ?? null });
@@ -750,7 +769,7 @@ export class TasksEngine extends EventEmitter {
           : e.code === 'REPO_CONFIG' ? "the repo's own git config defines filters or includes, which could run code; not started"
           : e.code === 'WORKTREE_MISSING' ? 'the worktree was deleted' : 'the task could not start';
       this.#failTask(task, 'error', why);
-    }
+    } finally { clearTimeout(timer); }
   }
 
   async #prepareWorkspace(task) {
