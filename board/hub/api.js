@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { normalizeRemoteUrl } from '../shared/scope.js';
 import { PLAN_APPROVAL_LABEL, isReservedLabel } from '../shared/states.js';
 import { LABEL_COLORS, CODEX_PLAN_PERMISSION } from '../shared/protocol.js';
-import { classifyPair, kindOf } from '../shared/overlap.js';
+import { classifyPair, kindOf, hintPaths } from '../shared/overlap.js';
 import { sponsorLine, alertsFor } from '../shared/cardface.js';
 import { HubError, json } from './db.js';
 import { newDeviceToken, sha256hex } from './auth.js';
@@ -260,27 +260,36 @@ export class Api {
     const tid = targetMemberId || member.id;
     const target = this.orgMember(member, tid);
     const prev = this.hub.latestRun(cardId);
+    const hints = hintPaths(`${row.title}\n${row.body ?? ''}`);
     const self = {
       run_id: 'preview', repo_id: selectedRepo, branch: null, title: row.title, body: row.body,
-      touched_paths: prev ? json(prev.touched_paths, []) : [], planned_paths: prev ? json(prev.planned_paths, []) : [],
+      touched_paths: prev ? json(prev.touched_paths, []) : [], planned_paths: [...(prev ? json(prev.planned_paths, []) : []), ...hints],
     };
     const overlaps = [];
-    if (selectedRepo) {
+    const unknown = [];
+    let others = 0;
+    // Only this org's repos are compared: a live run elsewhere is never read.
+    if (selectedRepo && this.db.get('SELECT 1 AS x FROM repos WHERE id = ? AND org_id = ?', selectedRepo, member.org_id)) {
       for (const other of this.hub.liveRunsInRepo(selectedRepo)) {
         if (other.card_id === row.id) continue;
+        others++;
+        if (!other.touched_paths.length && !other.planned_paths.length && !other.locked_paths.length) unknown.push({ card_key: other.card_key, owner: other.owner_name });
         const sig = classifyPair(self, other);
         if (!sig.length) continue;
         const level = sig.reduce((a, s) => ({ high: 3, medium: 2, low: 1 }[s.level] > { high: 3, medium: 2, low: 1 }[a] ? s.level : a), 'low');
         overlaps.push({ other_card_id: other.card_id, other_key: other.card_key, other_owner: other.owner_name, other_provider_label: other.provider_label ?? 'Agent', level, kind: kindOf(level), reasons: sig.map((s) => s.reason), paths: [...new Set(sig.flatMap((s) => s.paths))], age_ms: 0 });
       }
     }
+    const selfKnown = self.touched_paths.length > 0 || self.planned_paths.length > 0;
+    // 'unknown' = live work exists that this card cannot be compared against: never reported as clear.
+    const check = { status: overlaps.length ? 'overlap' : !others ? 'clear' : !selfKnown || unknown.length ? 'unknown' : 'clear', self_known: selfKnown, unknown_runs: unknown.slice(0, 10) };
     const dev = [...this.hub.runners.values()].find((c) => c.member_id === tid && c.repos.has(selectedRepo));
     const sponsor = sponsorLine({ target: { member_id: tid, name: target.display_name, is_viewer: tid === member.id, device_name: dev?.device.name } }) ?? '';
     const runners = [...this.hub.runners.values()].filter((c) => c.ready && c.member_id === tid && c.repos.has(selectedRepo)).map((c) => ({
       device_name: c.device.name,
       ai: (c.ai ?? runnerAis(undefined)).map((a) => ({ id: a.id, label: a.label, available: [null, 'may_need_sign_in'].includes(readiness(a)), reason: readiness(a), budget: a.capabilities.budget, legacy: a.legacy })),
     }));
-    return { overlaps, sponsor, runners, can_use_no_budget: tid === member.id || this.hub.isAdmin(member) };
+    return { overlaps, check, sponsor, runners, can_use_no_budget: tid === member.id || this.hub.isAdmin(member) };
   }
 
   // ── cards ─────────────────────────────────────────────────────────────────

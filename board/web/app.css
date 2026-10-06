@@ -883,6 +883,7 @@ dialog::backdrop { background: var(--backdrop); transition: opacity 200ms ease; 
 .callout-ok { flex-direction: row; align-items: center; gap: 7px; color: var(--muted); }
 .callout-ok .icon { color: var(--tone-done); }
 .callout-quiet { color: var(--muted); }
+.callout-actions { margin-top: 8px; display: flex; gap: 8px; }
 .callout-warn { background: color-mix(in oklab, var(--tone-amber) 9%, var(--panel-2)); border-color: color-mix(in oklab, var(--tone-amber) 34%, var(--line)); }
 .callout-title { display: flex; align-items: center; gap: 6px; font-weight: 650; }
 .callout-title .icon { color: var(--tone-amber); }

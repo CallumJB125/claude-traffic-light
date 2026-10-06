@@ -33,11 +33,22 @@ function field(id, label, control, hint) {
     hint ? h('p', { class: 'hint', id: `${id}-hint` }, hint) : null);
 }
 
+// Overlap never blocks: 'Tackle anyway' is the dialog's submit button, 'Wait for X' just closes it.
 function overlapWarning(preview, targetName) {
   if (preview?.loading) return h('div', { class: 'callout callout-quiet', role: 'status' }, 'Checking for overlapping work…');
   if (preview?.error) return h('div', { class: 'callout callout-quiet' }, `Couldn't check for overlaps: ${preview.error}`);
   const list = preview?.overlaps ?? [];
-  if (!list.length) return h('div', { class: 'callout callout-ok' }, icon('check', 'icon-xs'), 'No overlapping work on this repo right now.');
+  if (!list.length) {
+    const check = preview?.check;
+    if (check?.status === 'unknown') {
+      const who = (check.unknown_runs ?? []).map((u) => `${u.card_key}${u.owner ? ` (${u.owner})` : ''}`);
+      return h('div', { class: 'callout callout-quiet', role: 'status' }, icon('warn', 'icon-xs'),
+        'No overlap data: ', check.self_known === false ? 'this card names no files yet' : 'a live run has not reported its files yet',
+        who.length ? ` (${who.slice(0, 3).join(', ')})` : '', '. Overlap can’t be ruled out.');
+    }
+    return h('div', { class: 'callout callout-ok' }, icon('check', 'icon-xs'), 'No overlapping work on this repo right now.');
+  }
+  const first = list[0];
   return h('div', { class: 'callout callout-warn', role: 'status' },
     h('p', { class: 'callout-title' }, icon('warn', 'icon-xs'), `Overlaps ${list.length} live card${list.length > 1 ? 's' : ''}`),
     h('ul', null, list.slice(0, 4).map((o) => h('li', { key: o.other_card_id },
@@ -45,7 +56,9 @@ function overlapWarning(preview, targetName) {
       o.kind === 'adjacent' ? ' is working nearby' : ' is editing',
       o.paths?.length ? [' ', h('code', null, o.paths[0]), o.paths.length > 1 ? ` +${o.paths.length - 1}` : ''] : '',
       o.kind === 'adjacent' ? '' : ', which this card mentions'))),
-    h('p', { class: 'hint' }, `This never blocks. ${targetName ? `${targetName}'s agent` : 'The agent'} will see the same warning while it works.`));
+    h('p', { class: 'hint' }, `This never blocks. ${targetName ? `${targetName}'s agent` : 'The agent'} will see the same warning while it works.`),
+    h('div', { class: 'callout-actions' },
+      h('button', { type: 'button', class: 'btn', 'data-action': 'close-dialog' }, `Wait for ${first.other_key}`)));
 }
 
 export function giveDialog(dlg, model) {
@@ -66,6 +79,7 @@ export function giveDialog(dlg, model) {
   const uncapped = ai.budget === 'none' || dlg.budget_mode === 'none';
   const noBudgetAllowed = isMe || dlg.preview?.can_use_no_budget === true;
   const waiting = !!dlg.preview?.loading;
+  const hasOverlap = !waiting && (dlg.preview?.overlaps?.length ?? 0) > 0;
   const deviceLimit = dlg.mode === 'retry' && view.run?.budget_stop === 'device';
   const repoField = field('give-repo', 'Repo',
     h('select', { id: 'give-repo', name: 'repo_id', class: 'input', required: true, 'data-change': 'give-repo', disabled: moving || null },
@@ -115,7 +129,7 @@ export function giveDialog(dlg, model) {
     h('div', { class: 'modal-foot' },
       h('button', { type: 'button', class: 'btn', 'data-action': 'close-dialog' }, 'Cancel'),
       h('button', { type: 'submit', class: 'btn btn-claude', disabled: busy || waiting || deviceLimit || (dlg.mode === 'retry' && uncapped) || !ai.available || (uncapped && !noBudgetAllowed) || null, 'aria-busy': busy ? 'true' : null, 'aria-describedby': 'give-sponsor' },
-        busy ? 'Queuing…' : isMe ? moving ? `Continue with ${ai.label}` : 'Start' : `Ask ${targetMember?.name}`))), { wide: true });
+        busy ? 'Queuing…' : hasOverlap ? (isMe ? 'Tackle anyway' : `Ask ${targetMember?.name} anyway`) : isMe ? moving ? `Continue with ${ai.label}` : 'Start' : `Ask ${targetMember?.name}`))), { wide: true });
 }
 
 const turnLimited = (ai, dlg) => ai.id !== 'codex' && dlg.max_turns != null;

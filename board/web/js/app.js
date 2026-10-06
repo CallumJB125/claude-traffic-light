@@ -1293,7 +1293,7 @@ async function loadPreview() {
   try {
     const res = await api.overlapPreview(d.cardId, target, d.repo_id || null);
     if (state.dialog?.previewToken !== token) return;
-    state.dialog = { ...state.dialog, preview: { overlaps: res.overlaps ?? [], sponsor: res.sponsor ?? null, runners: res.runners ?? [], can_use_no_budget: res.can_use_no_budget === true } };
+    state.dialog = { ...state.dialog, preview: { overlaps: res.overlaps ?? [], check: res.check ?? null, sponsor: res.sponsor ?? null, runners: res.runners ?? [], can_use_no_budget: res.can_use_no_budget === true } };
   } catch (err) {
     if (state.dialog?.previewToken !== token) return;
     state.dialog = { ...state.dialog, preview: { error: errorText(err) } };

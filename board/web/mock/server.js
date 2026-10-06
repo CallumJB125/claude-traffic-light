@@ -523,7 +523,7 @@ export function createMockHub({ login = null, clock = () => Date.now(), history 
       const sponsor = targetId === me.member_id
         ? `Runs on your ${t.device} · your claude account`
         : `Runs on ${t.name}'s ${t.device} · ${t.name}'s claude account · ${t.name} must confirm`;
-      return json(res, 200, { overlaps, sponsor });
+      return json(res, 200, { overlaps, check: { status: overlaps.length ? 'overlap' : 'clear', self_known: true, unknown_runs: [] }, sponsor });
     }
 
     if (!mutating) throw new HttpError('NOT_FOUND', 'not found');
