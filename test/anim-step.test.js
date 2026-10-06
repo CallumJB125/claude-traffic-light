@@ -22,3 +22,11 @@ test('a 600 ms tween issues at most ~19 steps on Windows vs ~38 on macOS', () =>
   assert.ok(steps('win32') <= 19);
   assert.ok(steps('darwin') >= 37);
 });
+
+test('eye poll is fast while the cursor moved recently and 1 s at rest', () => {
+  const { eyePollMs } = require('../src/anim-step.js');
+  const base = { holdMs: 2500, fastMs: 200 };
+  assert.equal(eyePollMs({ ...base, now: 10000, movedAt: 9000 }), 200);
+  assert.equal(eyePollMs({ ...base, now: 10000, movedAt: 7000 }), 1000);
+  assert.equal(eyePollMs({ ...base, now: 10000, movedAt: 0 }), 1000);
+});

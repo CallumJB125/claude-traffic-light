@@ -15,6 +15,8 @@ contextBridge.exposeInMainWorld('trafficLight', {
   onLean: (cb) => ipcRenderer.on('lean', (e, vx) => cb(vx)),
   onEyes: (cb) => ipcRenderer.on('eyes', (e, x, y) => cb(x, y)),
   onMotionPaused: (cb) => ipcRenderer.on('motion-paused', (e, paused) => cb(paused)),
+  // Chromium's own online/offline events; main only re-checks on a slow timer otherwise.
+  netChanged: () => ipcRenderer.send('net-changed'),
   setReducedMotion: (on) => ipcRenderer.send('reduced-motion', on),
   setClickThrough: (ignore) => ipcRenderer.send('set-click-through', ignore),
   // Linux only: main reports the cursor while clicks pass through (src/click-through.js).

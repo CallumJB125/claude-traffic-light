@@ -20,4 +20,12 @@ function createPointDedupe() {
   };
 }
 
-module.exports = { windowAnimStepMs, createPointDedupe, MAC_STEP_MS, COARSE_STEP_MS };
+// The cursor poll runs fast only while the eyes are following or settling
+// back (the cursor moved within holdMs); at rest it is a 1 s heartbeat that
+// notices the next movement.
+const EYE_IDLE_POLL_MS = 1000;
+function eyePollMs({ now, movedAt, holdMs, fastMs, idleMs = EYE_IDLE_POLL_MS }) {
+  return movedAt && now - movedAt < holdMs ? fastMs : Math.max(fastMs, idleMs);
+}
+
+module.exports = { eyePollMs, EYE_IDLE_POLL_MS, windowAnimStepMs, createPointDedupe, MAC_STEP_MS, COARSE_STEP_MS };

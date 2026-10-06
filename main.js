@@ -44,7 +44,8 @@ const Compaction = require('./src/compaction.js');
 const Health = require('./src/health.js');
 const Backups = require('./src/backups.js');
 const { applyConfigSideEffects } = require('./src/config-effects.js');
-const { windowAnimStepMs, createPointDedupe } = require('./src/anim-step.js');
+const { trayLookAnimated, trayTimerAction } = require('./src/tray-anim.js');
+const { windowAnimStepMs, createPointDedupe, eyePollMs } = require('./src/anim-step.js');
 const { spendMinGap } = require('./src/spend-poll.js');
 const { createStatusGate } = require('./src/status-gate.js');
 const { createMotionGate, staleMachineReasons, askKey, statusPushWanted } = require('./src/motion-gate.js');
@@ -1071,8 +1072,18 @@ let eyeTimer = null;
 function syncEyePoll() {
   // The visual tests screenshot a still face; a live cursor would shift it.
   const want = DEMO !== 'visual' && app.isReady() && !widgetMotion.paused;
-  if (want && !eyeTimer) eyeTimer = every(Motion.MOTION.eyes.pollMs, eyeTick, 'eyes');
+  if (want && !eyeTimer) { eyeTimerMs = Motion.MOTION.eyes.pollMs; eyeTimer = every(eyeTimerMs, eyeTick, 'eyes'); }
   else if (!want) eyeTimer = stopTimer(eyeTimer);
+}
+let eyeTimerMs = 0;
+function retuneEyePoll() {
+  if (!eyeTimer) return;
+  const E = Motion.MOTION.eyes;
+  const ms = eyePollMs({ now: Date.now(), movedAt: eyeMovedAt, holdMs: E.holdMs, fastMs: E.pollMs });
+  if (ms === eyeTimerMs) return;
+  eyeTimerMs = ms;
+  stopTimer(eyeTimer);
+  eyeTimer = every(ms, eyeTick, 'eyes');
 }
 
 function createWindow() {
@@ -2149,6 +2160,7 @@ function ensureTrayRenderer() {
   });
   trayRenderWin.webContents.setFrameRate(4);
   trayRenderWin.loadFile('tray.html');
+  trayRenderWin.webContents.once('did-finish-load', () => paintTray(true).catch(() => {}));
   trayRenderWin.on('closed', () => { trayRenderWin = null; });
 }
 
@@ -2157,13 +2169,12 @@ function ensureTrayRenderer() {
 // animated channel needs a new frame — not twice a second forever.
 let trayLookKey = null;
 let trayPainting = false;
-const TRAY_ANIMATED = new Set(['pulse', 'strobe', 'breathe', 'flicker', 'chase', 'police', 'rainbow', 'sos']);
 async function paintTray(force = false) {
   if (trayPainting) return;
   if (!tray || !trayRenderWin || trayRenderWin.isDestroyed() || trayRenderWin.webContents.isLoading()) return;
   const { look } = aggregateState();
   const key = JSON.stringify([look.lamp, look.lampColor, look.lampFx, look.eyes, look.pose, look.costume, look.cameo, look.cameoPhoto?.rev, look.body, look.number]);
-  const animated = TRAY_ANIMATED.has(look.lampFx) || ['blink', 'nod', 'bounce', 'run', 'knock', 'spin', 'party'].includes(look.pose);
+  const animated = trayLookAnimated(look);
   if (!force && !animated && key === trayLookKey) return;
   trayLookKey = key;
   trayPainting = true;
@@ -2180,12 +2191,21 @@ async function paintTray(force = false) {
   }
 }
 
+// The 500 ms repaint clock only runs while the lamp or pose animates; every
+// other change reaches paintTray through broadcastStatus.
+function syncTrayTimer(look) {
+  const action = trayTimerAction({ menuBarMode: !!trayRenderWin, look, running: !!trayTimer });
+  if (action === 'start') trayTimer = every(500, () => paintTray().catch(() => {}), 'tray');
+  else if (action === 'stop') trayTimer = stopTimer(trayTimer);
+}
+
 function updateTrayMode() {
   const on = loadConfig().menuBarMode;
   if (on) {
     ensureTrayRenderer();
     trayLookKey = null;
-    if (!trayTimer) trayTimer = every(500, () => paintTray().catch(() => {}), 'tray');
+    paintTray(true).catch(() => {});
+    syncTrayTimer(aggregateState().look);
   } else {
     trayTimer = stopTimer(trayTimer);
     trayLookKey = null;
@@ -2497,6 +2517,7 @@ function broadcastStatus() {
   try {
     const st = aggregateState();
     statusGate.mark(st);
+    if (trayRenderWin) { paintTray().catch(() => {}); syncTrayTimer(st.look); }
     // A paused widget catches up when the gate lifts (it broadcasts then),
     // except for its waiting inputs, which it always hears about.
     const asks = askKey(st);
@@ -2982,6 +3003,7 @@ function eyeTick() {
   const moved = eyeLast && Math.abs(p.x - eyeLast.x) + Math.abs(p.y - eyeLast.y) > 2;
   eyeLast = p;
   if (moved) eyeMovedAt = now;
+  retuneEyePoll();
   let off = { x: 0, y: 0 };
   if (!reducedMotion && eyeMovedAt && now - eyeMovedAt < E.holdMs) {
     // the eyes sit at (32, 45.75) of the 64×82 rig, inside the 12px padding
@@ -2994,6 +3016,7 @@ function eyeTick() {
   win.webContents.send('eyes', off.x, off.y);
 }
 
+ipcMain.on('net-changed', () => checkOnline());
 ipcMain.on('drag-start', () => stopGlide());
 ipcMain.on('drag-end', (e, vx, vy) => {
   if (glideFrom(Number(vx), Number(vy))) return;
@@ -4495,7 +4518,7 @@ app.whenReady().then(() => {
   sweepSessionFiles();
   every(10 * 60 * 1000, sweepSessionFiles, 'session-sweep');
   checkOnline();
-  every(5000, checkOnline, 'net');
+  every(60000, checkOnline, 'net');
   BusyWatch.start();
   powerMonitor.on('resume', checkOnline);
   initVoice();
