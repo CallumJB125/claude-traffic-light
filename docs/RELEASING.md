@@ -203,6 +203,35 @@ Bucket `plexiform-releases`. Secrets: `R2_ACCESS_KEY_ID`,
 R2 (and says so) without them, so the GitHub Release still stages; promote
 fails without them.
 
+## Mac distribution without a Developer ID
+
+Until the app is notarized, the supported Mac install is the curl installer:
+
+    curl -fsSL https://plexiform.dev/install.sh | sh
+
+(source: `site/src/install.sh`, copied untouched into `site/dist` by
+`site/build.js`). It reads the newest GitHub release of
+`CallumJB125/claude-traffic-light` (pre-releases included; set
+`PLEXIFORM_CHANNEL=stable` for the latest non-pre-release), downloads the zip
+for the Mac's architecture, checks it against that release's `SHA256SUMS.txt`
+(missing or mismatching checksum: nothing is installed), then moves any old
+`Plexiform.app` to `~/.Trash` and copies the new one into `/Applications`
+(`~/Applications` if that is not writable). It never uses sudo.
+
+Why it avoids Gatekeeper: Gatekeeper only assesses files carrying the
+`com.apple.quarantine` attribute, which browsers and other quarantine-aware
+apps set and `curl` does not. The script also clears the attribute defensively.
+
+Limits:
+- A .dmg or .zip downloaded in a browser is quarantined and still shows the
+  "cannot be opened" warning (Open Anyway / right-click Open; see the download
+  page).
+- In-app auto-update downloads the new build itself, so it is unaffected.
+- Release assets must include `SHA256SUMS.txt` and the
+  `Plexiform-<version>-mac-{arm64,x64}.zip` / `-linux-x86_64.AppImage` names
+  the script matches on, or it fails closed.
+- Notarization (a Developer ID) later removes the need for all of this.
+
 ## Unsigned builds: what people will see
 
 macOS Developer ID signing and Windows Authenticode signing are separate from the Ed25519 update-feed signature. No Windows certificate or signing account is configured by this workflow, so a successful build and signed feed do not make its installer a trusted Windows executable. The download page should say:
