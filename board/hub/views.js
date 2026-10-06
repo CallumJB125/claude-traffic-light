@@ -4,7 +4,7 @@
 
 import { createHash } from 'node:crypto';
 import { ACTIVE } from '../shared/states.js';
-import { isGreen } from '../shared/liveness.js';
+import { isGreen, deriveStalled } from '../shared/liveness.js';
 import { FEED_KINDS } from '../shared/protocol.js';
 import { json, HubError } from './db.js';
 import { cleanLinkStatus } from './integrations/connector.js';
@@ -136,6 +136,16 @@ export function cardView(hub, row, viewerId) {
   const stateAge = hub.ageOf(row.state_since);
   const clientFeedback = hub.clientFeedback?.cardProvenance(row.id);
   const capture = workCaptureView(hub, row.id);
+  const live = leaseView(hub, row);
+  const run = runRow ? {
+    id: runRow.id, backend: runRow.backend, device_name: hub.device(runRow.device_id)?.name ?? null,
+    ai: aiOfDispatch(runRow), ai_label: AI_LABELS[aiOfDispatch(runRow)], budget_usd: runRow.budget_cents == null ? null : runRow.budget_cents / 100,
+    budget_stop: runRow.terminal_reason === 'budget_device' ? 'device' : runRow.terminal_reason === 'budget' ? 'card' : null,
+    owner: person(hub, runRow.on_behalf_of), dispatched_by: person(hub, runRow.dispatched_by),
+    // The CLI can outlive its run on the hub (board_complete): still acting.
+    child_alive: runRow.ended_at ? hub.endedChildAlive?.(runRow.id) === true : hub.lease?.(runRow.id)?.child_alive === true,
+  } : null;
+  const stalled = deriveStalled({ run_state: row.run_state, fail_kind: row.fail_kind, state_age_ms: stateAge == null ? 0 : Math.round(stateAge), live, run });
   return {
     id: row.id, board_id: row.board_id, key: row.key, title: row.title, labels, column: row.column_name, version: row.version,
     label_colors: labels.map((l) => colors.get(String(l).toLowerCase()) ?? null),
@@ -153,15 +163,9 @@ export function cardView(hub, row, viewerId) {
     assignee_ids: hub.assignees(row.id), approvers, viewer_can_approve: approvers.includes(viewerId),
     target,
     queue: row.run_state === 'queued' ? (() => { const online = hub.runnerOnline(row.id); return { runner_online: online, offline_age_ms: online ? null : stateAge }; })() : null,
-    run: runRow ? {
-      id: runRow.id, backend: runRow.backend, device_name: hub.device(runRow.device_id)?.name ?? null,
-      ai: aiOfDispatch(runRow), ai_label: AI_LABELS[aiOfDispatch(runRow)], budget_usd: runRow.budget_cents == null ? null : runRow.budget_cents / 100,
-      budget_stop: runRow.terminal_reason === 'budget_device' ? 'device' : runRow.terminal_reason === 'budget' ? 'card' : null,
-      owner: person(hub, runRow.on_behalf_of), dispatched_by: person(hub, runRow.dispatched_by),
-      // The CLI can outlive its run on the hub (board_complete): still acting.
-      child_alive: runRow.ended_at ? hub.endedChildAlive?.(runRow.id) === true : hub.lease?.(runRow.id)?.child_alive === true,
-    } : null,
-    live: leaseView(hub, row),
+    run,
+    stalled: stalled ? { reason: stalled.reason, since_age_ms: Math.round(stalled.since_ms) } : null,
+    live,
     state_age_ms: stateAge == null ? 0 : Math.round(stateAge),
     ask: ['blocked', 'parked'].includes(row.run_state) || row.resume_to === 'blocked' ? askView(hub, row) : null,
     handover: doc && (h || synced.length) ? { version: h?.version ?? 0, synced_age_ms: synced.length ? Math.min(...synced) : null } : null,
