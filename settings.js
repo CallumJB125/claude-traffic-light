@@ -16,6 +16,7 @@
       syncNotifyKinds();
       document.getElementById('showWidget').checked = config.showWidget !== false;
       document.getElementById('menuBarMode').checked = !!config.menuBarMode;
+      document.getElementById('lowPower').value = ['auto', 'on', 'off'].includes(config.lowPower) ? config.lowPower : 'auto';
       document.getElementById('seasonal').checked = config.seasonal !== false;
       document.getElementById('askFromWidget').checked = !!config.askFromWidget;
       document.getElementById('showTasks').checked = config.showTasks !== false;
@@ -150,6 +151,7 @@
         notifyStates: Object.fromEntries(NOTIFY_KINDS.map((k) => [k, document.getElementById(`notify-${k}`).checked])),
         showWidget: document.getElementById('showWidget').checked,
         menuBarMode: document.getElementById('menuBarMode').checked,
+        lowPower: document.getElementById('lowPower').value,
         seasonal: document.getElementById('seasonal').checked,
         askFromWidget: document.getElementById('askFromWidget').checked,
         showTasks: document.getElementById('showTasks').checked,

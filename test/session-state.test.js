@@ -845,3 +845,38 @@ test('set-status: a newly asked parallel question refreshes aggregate input evid
   run(home, 'tool-done', { session_id: sid, tool_name: 'Read', tool_use_id: 'unrelated' });
   assert.equal(read(home, sid).updatedAt, fresh.updatedAt, 'ordinary work does not refresh the input evidence');
 });
+
+// ── agents.js: mtime-gated JSON reads ───────────────────────────────────────
+test('createJsonReader serves an unchanged old file from memory and re-reads a changed one', () => {
+  let reads = 0;
+  const files = { '/a.json': { text: '{"n":1}', mtimeMs: 1000, size: 7 } };
+  const fake = {
+    statSync: (f) => { if (!files[f]) throw new Error('ENOENT'); return files[f]; },
+    readFileSync: (f) => { reads += 1; return files[f].text; },
+  };
+  const read = A.createJsonReader(fake, () => 1_000_000);
+  assert.deepEqual(read('/a.json'), { n: 1 });
+  assert.deepEqual(read('/a.json'), { n: 1 });
+  assert.equal(reads, 1);
+  files['/a.json'] = { text: '{"n":2}', mtimeMs: 2000, size: 7 };
+  assert.deepEqual(read('/a.json'), { n: 2 });
+  assert.equal(reads, 2);
+  delete files['/a.json'];
+  assert.equal(read('/a.json'), null);
+});
+
+test('createJsonReader never caches a file written within the racy window', () => {
+  let reads = 0;
+  const fake = {
+    statSync: () => ({ mtimeMs: 999_500, size: 7 }),
+    readFileSync: () => { reads += 1; return '{"n":1}'; },
+  };
+  const read = A.createJsonReader(fake, () => 1_000_000);
+  read('/b.json'); read('/b.json');
+  assert.equal(reads, 2);
+});
+
+test('createJsonReader returns null for malformed JSON without throwing', () => {
+  const fake = { statSync: () => ({ mtimeMs: 1, size: 3 }), readFileSync: () => '{x' };
+  assert.equal(A.createJsonReader(fake, () => 1_000_000)('/c.json'), null);
+});

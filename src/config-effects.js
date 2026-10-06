@@ -12,6 +12,8 @@ function applyConfigSideEffects(prev, next, d, touched) {
   if (hit('remoteInteractionHost') || hit('teamSessionSharing')) d.syncInteractionHost?.();
   if (hit('menuBarMode') || hit('showWidget')) d.createTray();
   if (hit('voice')) d.applyVoiceHotkey();
+  if (hit('lowPower')) d.applyLowPower?.();
+  if (hit('fastHook')) d.syncFastHook?.();
   d.broadcastStatus();
 }
 

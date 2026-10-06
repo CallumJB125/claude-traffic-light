@@ -22,6 +22,11 @@ window.trafficLight.onImpact((side, strength) => {
 window.trafficLight.onSway((v) => rig.swing(v));
 window.trafficLight.onLean((vx) => rig.lean(vx));
 window.trafficLight.onEyes((x, y) => rig.lookAt(x, y));
+window.addEventListener('online', () => window.trafficLight.netChanged());
+window.addEventListener('offline', () => window.trafficLight.netChanged());
+const setLowPower = (on) => { document.body.classList.toggle('low-power', !!on); rig.setLowPower(!!on); };
+window.trafficLight.onLowPower(setLowPower);
+window.trafficLight.getLowPower().then(setLowPower).catch(() => {});
 let motionPaused = false;
 window.trafficLight.onMotionPaused((paused) => {
   motionPaused = !!paused;

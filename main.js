@@ -44,7 +44,12 @@ const Compaction = require('./src/compaction.js');
 const Health = require('./src/health.js');
 const Backups = require('./src/backups.js');
 const { applyConfigSideEffects } = require('./src/config-effects.js');
-const { createMotionGate, staleMachineReasons, askKey, statusPushWanted } = require('./src/motion-gate.js');
+const { trayLookAnimated, trayTimerAction } = require('./src/tray-anim.js');
+const { resolveLowPower } = require('./src/low-power.js');
+const { windowAnimStepMs, createPointDedupe, eyePollMs } = require('./src/anim-step.js');
+const { spendMinGap } = require('./src/spend-poll.js');
+const { createStatusGate } = require('./src/status-gate.js');
+const { syncBackgroundThrottling, createMotionGate, staleMachineReasons, askKey, statusPushWanted } = require('./src/motion-gate.js');
 const { createAwayFeeds } = require('./src/away-feeds.js');
 const { createProbeBackoff } = require('./src/probe-backoff.js');
 const UpdateView = require('./src/update-view.js');
@@ -201,6 +206,10 @@ const DEFAULT_CONFIG = {
   notifyStates: { ...Help.NOTIFY_DEFAULTS },
   showWidget: true,
   menuBarMode: false,
+  // 'auto' | 'on' | 'off': trims non-essential motion (src/low-power.js).
+  lowPower: 'auto',
+  // Hooks hand frequent events to the running app (src/hook-socket.js). Off by default.
+  fastHook: false,
   seasonal: true,
   askFromWidget: false,
   showTasks: true,
@@ -1004,17 +1013,39 @@ utilityHandle('busy-open-privacy', e => settingsOnly(e), () => shell.openExterna
 // clocks and main stops the cursor poll, the overlay, the garden, roaming and
 // status pushes.
 const widgetMotion = createMotionGate((paused) => {
-  if (win && !win.isDestroyed()) win.webContents.send('motion-paused', paused);
+  if (win && !win.isDestroyed()) { win.webContents.send('motion-paused', paused); syncBackgroundThrottling(win.webContents, paused); }
   syncEyePoll();
   // Whatever changed while paused lands the moment it's back.
   if (!paused) broadcastStatus();
 });
+// Low-power mode (src/low-power.js) applies to the desk widget only: the
+// Lights editor's previews exist to show every animation at full rate.
+let lowPowerOn = false;
+// Fast hook path (hooks/fast-hook.js), off unless `fastHook` is set: hooks hand
+// frequent events to this process instead of doing the work in their own.
+const fastHookSocket = IS_DEV_RUN || DEMO ? null : require('./src/hook-socket.js').create({
+  rootDir: ROOT_DIR,
+  handle: (msg) => require('./src/hook-inprocess.js').runForwarded({ hooksDir: HOOKS_DIR, rootDir: ROOT_DIR, msg }),
+  log: (m) => console.log(m),
+});
+function syncFastHook() {
+  if (!fastHookSocket) return;
+  if (loadConfig().fastHook === true || process.env.PLEXIFORM_FAST_HOOK === '1') fastHookSocket.start();
+  else fastHookSocket.stop();
+}
+app.on('will-quit', () => fastHookSocket?.stop());
+function applyLowPower() {
+  let onBattery = false;
+  try { onBattery = powerMonitor.isOnBatteryPower(); } catch { /* no power source info */ }
+  lowPowerOn = resolveLowPower({ mode: loadConfig().lowPower, platform: process.platform, onBattery });
+  if (win && !win.isDestroyed()) win.webContents.send('low-power', lowPowerOn);
+}
 function setMotionPaused(reason, on) { return widgetMotion.set(reason, !!on); }
 
 // The editor's previews run every animation the rules can pick, at full
 // rate; hidden, minimised or behind a locked screen that is pure waste.
 const lightsMotion = createMotionGate((paused) => {
-  if (lightsWin && !lightsWin.isDestroyed()) lightsWin.webContents.send('motion-paused', paused);
+  if (lightsWin && !lightsWin.isDestroyed()) { lightsWin.webContents.send('motion-paused', paused); syncBackgroundThrottling(lightsWin.webContents, paused); }
 });
 
 // Spend, GitHub and busy/Focus share one tick (src/away-feeds.js) that holds
@@ -1050,6 +1081,8 @@ function syncMachineReconcile() {
 }
 
 function watchPowerForMotion() {
+  powerMonitor.on('on-battery', applyLowPower);
+  powerMonitor.on('on-ac', applyLowPower);
   powerMonitor.on('lock-screen', () => pauseEverywhere('locked', true));
   powerMonitor.on('unlock-screen', () => pauseEverywhere('locked', false));
   powerMonitor.on('suspend', () => pauseEverywhere('suspended', true));
@@ -1068,8 +1101,18 @@ let eyeTimer = null;
 function syncEyePoll() {
   // The visual tests screenshot a still face; a live cursor would shift it.
   const want = DEMO !== 'visual' && app.isReady() && !widgetMotion.paused;
-  if (want && !eyeTimer) eyeTimer = every(Motion.MOTION.eyes.pollMs, eyeTick, 'eyes');
+  if (want && !eyeTimer) { eyeTimerMs = Motion.MOTION.eyes.pollMs; eyeTimer = every(eyeTimerMs, eyeTick, 'eyes'); }
   else if (!want) eyeTimer = stopTimer(eyeTimer);
+}
+let eyeTimerMs = 0;
+function retuneEyePoll() {
+  if (!eyeTimer) return;
+  const E = Motion.MOTION.eyes;
+  const ms = eyePollMs({ now: Date.now(), movedAt: eyeMovedAt, holdMs: E.holdMs, fastMs: E.pollMs });
+  if (ms === eyeTimerMs) return;
+  eyeTimerMs = ms;
+  stopTimer(eyeTimer);
+  eyeTimer = every(ms, eyeTick, 'eyes');
 }
 
 function createWindow() {
@@ -2146,6 +2189,7 @@ function ensureTrayRenderer() {
   });
   trayRenderWin.webContents.setFrameRate(4);
   trayRenderWin.loadFile('tray.html');
+  trayRenderWin.webContents.once('did-finish-load', () => paintTray(true).catch(() => {}));
   trayRenderWin.on('closed', () => { trayRenderWin = null; });
 }
 
@@ -2154,13 +2198,12 @@ function ensureTrayRenderer() {
 // animated channel needs a new frame — not twice a second forever.
 let trayLookKey = null;
 let trayPainting = false;
-const TRAY_ANIMATED = new Set(['pulse', 'strobe', 'breathe', 'flicker', 'chase', 'police', 'rainbow', 'sos']);
 async function paintTray(force = false) {
   if (trayPainting) return;
   if (!tray || !trayRenderWin || trayRenderWin.isDestroyed() || trayRenderWin.webContents.isLoading()) return;
   const { look } = aggregateState();
   const key = JSON.stringify([look.lamp, look.lampColor, look.lampFx, look.eyes, look.pose, look.costume, look.cameo, look.cameoPhoto?.rev, look.body, look.number]);
-  const animated = TRAY_ANIMATED.has(look.lampFx) || ['blink', 'nod', 'bounce', 'run', 'knock', 'spin', 'party'].includes(look.pose);
+  const animated = trayLookAnimated(look);
   if (!force && !animated && key === trayLookKey) return;
   trayLookKey = key;
   trayPainting = true;
@@ -2177,12 +2220,21 @@ async function paintTray(force = false) {
   }
 }
 
+// The 500 ms repaint clock only runs while the lamp or pose animates; every
+// other change reaches paintTray through broadcastStatus.
+function syncTrayTimer(look) {
+  const action = trayTimerAction({ menuBarMode: !!trayRenderWin, look, running: !!trayTimer });
+  if (action === 'start') trayTimer = every(500, () => paintTray().catch(() => {}), 'tray');
+  else if (action === 'stop') trayTimer = stopTimer(trayTimer);
+}
+
 function updateTrayMode() {
   const on = loadConfig().menuBarMode;
   if (on) {
     ensureTrayRenderer();
     trayLookKey = null;
-    if (!trayTimer) trayTimer = every(500, () => paintTray().catch(() => {}), 'tray');
+    paintTray(true).catch(() => {});
+    syncTrayTimer(aggregateState().look);
   } else {
     trayTimer = stopTimer(trayTimer);
     trayLookKey = null;
@@ -2461,6 +2513,13 @@ function updateGarden(st) {
 }
 
 let widgetAsksSent = null;
+const statusGate = createStatusGate();
+// For the hook-write watcher and the poll: skips the fan-out when nothing the
+// broadcast would show has changed (still forced through every few seconds).
+function broadcastStatusIfChanged() {
+  try { if (!statusGate.changed(aggregateState())) return; } catch { /* fall through to a full broadcast */ }
+  broadcastStatus();
+}
 function broadcastStatus() {
   // travelLook is only ever legitimate while the garden or a roam is running.
   // If one of those died (a throw, a crashed renderer, a closed window) the
@@ -2486,6 +2545,8 @@ function broadcastStatus() {
   for (const id of ['usage', 'stats', 'help']) buddyWin?.sendToPage(id, 'status-changed');
   try {
     const st = aggregateState();
+    statusGate.mark(st);
+    if (trayRenderWin) { paintTray().catch(() => {}); syncTrayTimer(st.look); }
     // A paused widget catches up when the gate lifts (it broadcasts then),
     // except for its waiting inputs, which it always hears about.
     const asks = askKey(st);
@@ -2540,14 +2601,17 @@ function tween(from, to, ms, onStep, at = null) {
   }
   return new Promise((resolve) => {
     const t0 = Date.now();
+    const moved = createPointDedupe();
     // A tween that outlives its window (quit, crash, reload) must not keep a
     // 60 Hz interval alive forever, and a throwing step must still clear it.
-    const id = every(16, () => {
+    const id = every(windowAnimStepMs(), () => {
       if (!win || win.isDestroyed()) { stopTimer(id); resolve(); return; }
       const p = Math.min(1, (Date.now() - t0) / ms);
       try {
         const pt = pointAt(p);
-        onStep({ x: Math.round(pt.x), y: Math.round(pt.y) });
+        const x = Math.round(pt.x);
+        const y = Math.round(pt.y);
+        if (p >= 1 || moved(x, y)) onStep({ x, y });
       } catch (err) {
         console.log('[tween] step failed:', err.message);
         stopTimer(id); resolve(); return;
@@ -2914,7 +2978,8 @@ function glideFrom(vx, vy) {
   const spring = Motion.springParams(G.response, G.damping);
   const axes = [{ s: { x: b.x, v: v.x }, key: 'x', sides: ['left', 'right'] }, { s: { x: b.y, v: v.y }, key: 'y', sides: ['top', 'bottom'] }];
   let last = Date.now();
-  glideTimer = every(16, () => {
+  const glideMoved = createPointDedupe();
+  glideTimer = every(windowAnimStepMs(), () => {
     if (!win || win.isDestroyed()) { stopGlide(); return; }
     const now = Date.now();
     const dt = (now - last) / 1000;
@@ -2933,7 +2998,9 @@ function glideFrom(vx, vy) {
     }
     const [ax, ay] = axes;
     const done = Motion.springSettled(ax.s, target.x) && Motion.springSettled(ay.s, target.y);
-    try { win.setPosition(Math.round(done ? target.x : ax.s.x), Math.round(done ? target.y : ay.s.x)); } catch { stopGlide(); return; }
+    const gx = Math.round(done ? target.x : ax.s.x);
+    const gy = Math.round(done ? target.y : ay.s.x);
+    try { if (done || glideMoved(gx, gy)) win.setPosition(gx, gy); } catch { stopGlide(); return; }
     if (done) {
       stopGlide();
       saveBounds();
@@ -2965,6 +3032,7 @@ function eyeTick() {
   const moved = eyeLast && Math.abs(p.x - eyeLast.x) + Math.abs(p.y - eyeLast.y) > 2;
   eyeLast = p;
   if (moved) eyeMovedAt = now;
+  retuneEyePoll();
   let off = { x: 0, y: 0 };
   if (!reducedMotion && eyeMovedAt && now - eyeMovedAt < E.holdMs) {
     // the eyes sit at (32, 45.75) of the 64×82 rig, inside the 12px padding
@@ -2977,6 +3045,8 @@ function eyeTick() {
   win.webContents.send('eyes', off.x, off.y);
 }
 
+ipcMain.handle('get-low-power', () => lowPowerOn);
+ipcMain.on('net-changed', () => checkOnline());
 ipcMain.on('drag-start', () => stopGlide());
 ipcMain.on('drag-end', (e, vx, vy) => {
   if (glideFrom(Number(vx), Number(vy))) return;
@@ -3056,7 +3126,7 @@ function applyConfigEffects(prev, next, touched) {
   applyConfigSideEffects(prev, next, {
     installHooks,
     enableCalendar: () => BusyWatch.enableCalendar().catch((err) => console.warn('[busy]', err.message)),
-    applyWidgetVisibility, syncTailnetListener, createTray, applyVoiceHotkey, broadcastStatus, syncInteractionHost,
+    applyWidgetVisibility, syncTailnetListener, createTray, applyVoiceHotkey, applyLowPower, syncFastHook, broadcastStatus, syncInteractionHost,
   }, touched);
 }
 function commitConfig(partial) {
@@ -3356,8 +3426,12 @@ let spendInFlight = null;
 let spendReadAt = 0;
 const SPEND_POLL_MS = 15000;
 const SPEND_LIVE_MS = 3000;
+function anyWindowVisible() {
+  const lightsShown = !!lightsWin && !lightsWin.isDestroyed() && lightsWin.isVisible() && !lightsMotion.paused;
+  return !widgetMotion.paused || !!buddyWin?.isVisible() || lightsShown;
+}
 function refreshSpend(minGap = SPEND_POLL_MS - 1000) {
-  if (spendInFlight || Date.now() - spendReadAt < minGap) return;
+  if (spendInFlight || Date.now() - spendReadAt < spendMinGap({ minGap, anyVisible: anyWindowVisible() })) return;
   const t0 = Date.now();
   spendInFlight = spendRead(Spend.readSince(loadConfig().spend))
     .then((r) => {
@@ -4354,6 +4428,7 @@ app.whenReady().then(() => {
   watchUpdater();
   createTray();
   signalServer = startSignalServer();
+  syncFastHook();
   signalServer.on('error', (e) => { signalServerError = e.code || e.message; });
   signalServer.on('listening', () => { signalServerError = null; });
   // Rate limits live in the detector (one capture per pane per 15 s, four per scan).
@@ -4430,22 +4505,22 @@ app.whenReady().then(() => {
   else setTimeout(maybeAutoShowHelp, 2500);
 
   // A busy turn writes its session file many times a second and every write
-  // fires this watcher — coalesce them into at most one refresh per 200 ms.
+  // fires this watcher — coalesce them into at most one refresh per 250 ms.
   let watchTimer = null;
   fs.watch(SESSIONS_DIR, { persistent: true }, () => {
     if (watchTimer) return;
     watchTimer = setTimeout(() => {
       watchTimer = null;
-      broadcastStatus();
+      broadcastStatusIfChanged();
       saveLastHook();
       maybePlayAlertSound();
       refreshUsageLive();
       refreshSpend(SPEND_LIVE_MS);
-    }, 200);
+    }, 250);
   });
 
   every(4000, () => {
-    broadcastStatus();
+    broadcastStatusIfChanged();
     maybePlayAlertSound();
     tickStats(readSessions(loadConfig()));
     saveLastHook();
@@ -4470,11 +4545,12 @@ app.whenReady().then(() => {
   refreshSpend();
   every(SPEND_POLL_MS, awayFeeds.tick, 'feeds');
   syncEyePoll();
+  applyLowPower();
   watchPowerForMotion();
   sweepSessionFiles();
   every(10 * 60 * 1000, sweepSessionFiles, 'session-sweep');
   checkOnline();
-  every(5000, checkOnline, 'net');
+  every(60000, checkOnline, 'net');
   BusyWatch.start();
   powerMonitor.on('resume', checkOnline);
   initVoice();

@@ -66,6 +66,20 @@ if (!process.stdin.isTTY) {
   }
 }
 
+// Fast path (hooks/fast-hook.js; the app turns it on with its `fastHook`
+// setting, default off): hand a frequent event to the running app, which runs
+// this same script in-process. Anything but a clear "handled" within a short
+// timeout, and the work below happens here exactly as before.
+const Fast = require('./fast-hook.js');
+// The app's own in-process run sets NO_FAST: it must never forward to itself.
+const fastEndpoint = !process.env.PLEXIFORM_NO_FAST && Fast.eligible(signal, data) ? Fast.readEndpoint(ROOT_DIR) : null;
+if (fastEndpoint) {
+  Fast.forward(Fast.build({ signal, payload, env: process.env, ppid: process.ppid, cwd: process.cwd(), token: fastEndpoint.token }), fastEndpoint)
+    .then((handled) => (handled ? process.exit(0) : fullPath()), () => fullPath());
+} else {
+  fullPath();
+}
+function fullPath() {
 // ── Which app is this session running inside? ──────────────────────────────
 // The widget walks to that app's Dock icon and knocks, so it has to know the
 // real host, not just "some terminal is running". Bundle id and TERM_PROGRAM
@@ -658,3 +672,4 @@ if (starting) {
 }
 writeSession({ hostApp: detectHostApp(starting ? null : prevOnEntry?.hostApp), pid: pidNow, terminal, owned });
 finish();
+}

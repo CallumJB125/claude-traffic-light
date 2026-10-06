@@ -1179,11 +1179,13 @@
         });
       }, M.nextBlinkDelay(Math.random(), B.minMs, B.maxMs));
     }
+    let blinksAsked = false;
     function blinks(on) {
+      blinksAsked = !!on;
       clearTimeout(blinkTimer);
       blinkTimer = null;
       svg.classList.remove('blinking');
-      blinking = !!on && !reduceMotion();
+      blinking = !!on && !reduceMotion() && !lowPower;
       if (blinking) scheduleBlink();
     }
 
@@ -1326,8 +1328,21 @@
     // owns until it's back.
     let blinksWanted = false;
     function setHidden(hidden) {
+      svg.classList.toggle('held', !!hidden);
+      if (hidden) holdFrames();
       if (ambient) ambient.setPaused(!!hidden);
       if (hidden) { blinksWanted = blinksWanted || blinking; blinks(false); } else if (blinksWanted) { blinksWanted = false; blinks(true); }
+    }
+    // Low-power: decorative loops, confetti and idle blinks stop (rig.css does
+    // the loops); status lights and pose animations are untouched.
+    let lowPower = false;
+    function setLowPower(on) {
+      if (!!on === lowPower) return;
+      lowPower = !!on;
+      svg.classList.toggle('low-power', lowPower);
+      const asked = blinksAsked;
+      if (lowPower) blinks(false); else if (asked) blinks(true);
+      blinksAsked = asked;
     }
     let reactTimer = null;
     // Short reaction that temporarily overrides the look (poke, pet, feed).
@@ -1548,6 +1563,12 @@
     // settled.
     const mover = svg.querySelector('.mover');
     const walk = { x: 0, v: 0, target: 0, speed: 1, raf: 0, last: 0 };
+    // Hidden or occluded: no requestAnimationFrame loop keeps running for a
+    // window nobody can see. Each settles at its target; the next move restarts it.
+    function holdFrames() {
+      if (sway.raf) { cancelAnimationFrame(sway.raf); sway.raf = 0; sway.x = sway.target; sway.v = 0; placeSwing(sway.x); }
+      if (walk.raf) { cancelAnimationFrame(walk.raf); walk.raf = 0; walk.x = walk.target; walk.v = 0; placeMover(walk.target); }
+    }
     const placeMover = (x) => { mover.style.transform = x ? `translateX(${x}px)` : ''; };
     function walkFrame(now) {
       const M = window.BuddyMotion;
@@ -1772,6 +1793,7 @@
     }
 
     function celebrate() {
+      if (lowPower) return;
       svg.querySelectorAll('.confetti').forEach((el) => {
         el.classList.remove('burst');
         void el.getBoundingClientRect();
@@ -1802,7 +1824,7 @@
       return false;
     }
 
-    return { svg, solidAt, setLook, celebrate, burst, playEvent, react, flash, pokePet, squash, lean, swing, lookAt, blinks, setHidden, setAmbient, talking, get look() { return current; } };
+    return { svg, solidAt, setLook, celebrate, burst, playEvent, react, flash, pokePet, squash, lean, swing, lookAt, blinks, setHidden, setLowPower, setAmbient, talking, get look() { return current; } };
   }
 
   window.mountRig = mountRig;

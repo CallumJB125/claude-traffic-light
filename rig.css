@@ -6,6 +6,17 @@
 
 /* Out of view (rig.js observes every rig): nothing to draw, so nothing ticks. */
 .rig.offscreen, .rig.offscreen * { animation-play-state: paused !important; }
+/* The window is hidden, minimised, locked or occluded (rig.setHidden): hold every loop. */
+.rig.held, .rig.held * { animation-play-state: paused !important; }
+/* Low-power mode (rig.setLowPower): decorative loops and one-shots stop; the lamp
+   colours, lamp effects and pose animations that carry status keep working, and
+   the lamp's soft glow drops to its plain colour. */
+.rig.low-power.breathes .claude-body { animation: none !important; }
+.rig.low-power :is(.pet-frog, .pet-snail, .pet-dragon, .pet-tail, .pet-bunny, .pet-parrot, .tongue, .wing, .fire,
+  .twinkle, .bubble, .floatheart, .leaf, .petal, .glyph, .firefly, .drop, .rays, .flake, .spk, .flame,
+  .hp-led, .tassel, .propeller, .pom, .dog-tail, .halo, .sparkle, .devil-tail, .fox-tail, .bee-hover, .bee-wing, .axo-tail, .wag, .antenna, .cat-tail) { animation: none !important; }
+.rig.low-power .confetti { display: none; }
+.rig.low-power .lamp.on { filter: none; }
 
 .rig {
   width: 100%;

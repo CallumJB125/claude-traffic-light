@@ -864,3 +864,48 @@ test('characters: a talking no-mouth character is not held by the idle bob', () 
   const breathes = /\.rig\.breathes:not\(\[class\*=" pose-"\]\)[^{]*\{/.exec(css)[0];
   assert.match(breathes, /:not\(\.char-no-mouth\.talking\)/);
 });
+
+// ── Hidden and low-power ──────────────────────────────────────────────────
+test('rig: setHidden holds every loop with a class and cancels the rAF loops', () => {
+  const { w, rig, svg } = mount();
+  const cancelled = [];
+  let n = 0;
+  w.requestAnimationFrame = () => ++n;
+  w.cancelAnimationFrame = (id) => cancelled.push(id);
+  w.BuddyMotion = w.BuddyMotion || undefined;
+  rig.setHidden(true);
+  assert.ok(svg.classList.contains('held'));
+  rig.setHidden(false);
+  assert.ok(!svg.classList.contains('held'));
+  assert.ok(/\.rig\.held, \.rig\.held \* \{ animation-play-state: paused !important; \}/.test(RIG_CSS));
+});
+
+test('rig: low-power stops confetti and blinking, and restores a requested blink on exit', () => {
+  const { w, rig, svg, clock } = mount();
+  w.eval(fs.readFileSync(path.join(ROOT, 'motion.js'), 'utf8'));
+  rig.blinks(true);
+  clock.advance(8000);
+  rig.setLowPower(true);
+  assert.ok(svg.classList.contains('low-power'));
+  rig.celebrate();
+  assert.equal(svg.querySelectorAll('.confetti.burst').length, 0);
+  const before = clock.pending();
+  clock.advance(20000);
+  assert.ok(!svg.classList.contains('blinking'));
+  assert.ok(clock.pending() <= before, 'no new blink timers are scheduled');
+  rig.setLowPower(false);
+  assert.ok(clock.pending() >= 1, 'blinking resumes');
+  rig.celebrate();
+  assert.equal(svg.querySelectorAll('.confetti.burst').length, 6);
+});
+
+test('rig: low-power keeps the lamp colour and effects, and stylesheet drops decorative loops only', () => {
+  const { rig, svg } = mount();
+  rig.setLowPower(true);
+  rig.setLook({ lamp: 'red', lampFx: 'strobe' });
+  assert.deepEqual(onSlots(svg), ['any', 'red', 'red', 'red']);
+  assert.ok(svg.classList.contains('lampfx-strobe'));
+  const rule = /\.rig\.low-power :is\(([^)]*)\)\s*\{ animation: none !important; \}/.exec(RIG_CSS.replace(/\n\s*/g, ' '));
+  assert.ok(rule, 'decorative-loop rule exists');
+  assert.ok(!/\blamp\b|sign-assembly|claude-body/.test(rule[1]), 'lamp and pose animations are not in the list');
+});
