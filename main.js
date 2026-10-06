@@ -16,6 +16,7 @@ if (process.argv.includes('--rename-dry-run')) {
   require('./src/rename-dry-run.js').main();
   process.exit(0);
 }
+const { onQuit } = require('./src/quit-handlers');
 const { app, BrowserWindow, Tray, Menu, shell, ipcMain, screen, clipboard, systemPreferences, nativeImage, dialog, net, powerMonitor, Notification, globalShortcut } = require('electron'); // privacy-flow: ics-feed
 const path = require('path');
 const fs = require('fs');
@@ -1033,7 +1034,7 @@ function syncFastHook() {
   if (loadConfig().fastHook === true || process.env.PLEXIFORM_FAST_HOOK === '1') fastHookSocket.start();
   else fastHookSocket.stop();
 }
-app.on('will-quit', () => fastHookSocket?.stop());
+onQuit(app, () => fastHookSocket?.stop());
 function applyLowPower() {
   let onBattery = false;
   try { onBattery = powerMonitor.isOnBatteryPower(); } catch { /* no power source info */ }
@@ -1413,7 +1414,7 @@ function getBuddy() {
     });
     if (typeof buddyWin[BudgetNotice.CONTRACT.subscribeMethod] === 'function') {
       const unsubscribe = buddyWin[BudgetNotice.CONTRACT.subscribeMethod](handleBudgetEvent);
-      if (typeof unsubscribe === 'function') app.once('will-quit', unsubscribe);
+      if (typeof unsubscribe === 'function') onQuit(app, unsubscribe);
     }
     if (typeof buddyWin.onAccountChange === 'function') buddyWin.onAccountChange(() => {OverviewMain.invalidate();buddyWin.sendToPage('settings', 'account-changed');});
     if(typeof buddyWin.onSetupsIdentityChange==='function')buddyWin.onSetupsIdentityChange(()=>{OverviewMain.invalidate();SetupsLocal.invalidate();buddyWin.sendToPage('setups','setups:changed');});
@@ -1467,7 +1468,7 @@ const OverviewMain=require('./src/overview-main').createOverviewMain({
 OverviewMain.register(ipcMain);
 overviewTeamHub?.onChange(()=>OverviewMain.directoryChanged());
 if(!overviewTeamHub)liveTeamHub.onChange(()=>OverviewMain.directoryChanged());
-app.on('will-quit',()=>{liveTeamHub.close();OverviewMain.close();});
+onQuit(app,()=>{liveTeamHub.close();OverviewMain.close();});
 // Owned-session interaction: Plexiform starts its own provider sessions and
 // talks only to those. Existing unmanaged sessions stay observation-only.
 const CodexAppServer=require('./src/codex-app-server');
@@ -1517,8 +1518,8 @@ const InteractionMain=require('./src/interaction-main').createInteractionMain({
   shares:()=>hostSync.host(),
 });
 InteractionMain.register(ipcMain);
-app.on('will-quit',()=>InteractionMain.close());
-app.on('will-quit',retireClaudeChannels);
+onQuit(app,()=>InteractionMain.close());
+onQuit(app,retireClaudeChannels);
 ipcMain.handle('compaction-stats',e=>settingsOnly(e)?{...CompactionLedger.summary(),settings:loadConfig().compaction}:null);
 // Remote interaction host (src/remote-interaction.js): OFF unless the
 // "Let my other devices use sessions Plexiform started on this Mac"
@@ -1558,7 +1559,7 @@ const hostSync=require('./src/interaction-host-sync').createInteractionHostSync(
   },
 });
 function syncInteractionHost(){hostSync.sync();}
-app.on('will-quit',()=>hostSync.close());
+onQuit(app,()=>hostSync.close());
 // While anything is shared, refresh who has access (members who joined or left) and drop shares a team admin ended.
 const TeamSessionSharing=require('./src/team-session-sharing').createTeamSessionSharing({
   host:()=>loadConfig().teamSessionSharing===false?null:hostSync.host(),origin:()=>hostSync.origin(),
@@ -1573,7 +1574,7 @@ const TeamSessionSharing=require('./src/team-session-sharing').createTeamSession
 });
 let manualShareRefresh=null;
 setInterval(()=>{InteractionMain.reportHooks(aggregateState().sessions||[]);if(loadConfig().teamSessionSharing===false){const h=hostSync.host();if(h?.shared().length&&!manualShareRefresh)manualShareRefresh=h.listShares().catch(()=>{}).finally(()=>{manualShareRefresh=null;});}TeamSessionSharing.sync().catch(()=>{});},5000).unref?.();
-app.on('will-quit',()=>TeamSessionSharing.stop());
+onQuit(app,()=>TeamSessionSharing.stop());
 const INTERACTION_HOST_LINES={connecting:'Connecting…',connected:'On: your other signed-in devices can use sessions started from them on this Mac.',retrying:'Can\'t reach your team hub; retrying.','signed-out':'Stopped: this Mac is signed out or was removed from your account.',replaced:'Stopped: another connection took over this Mac\'s sign-in. If that wasn\'t you, remove this device in Account and sign in again.',refused:'Stopped: the hub named a different account.',held:'Stopped: another connection is using this Mac\'s sign-in, so your devices can\'t reach it. If that wasn\'t you, remove this Mac from your account (Account → Devices) and sign in again.'};
 ipcMain.handle('interaction-host-status',e=>{
   if(!settingsOnly(e))return null;
@@ -1621,7 +1622,7 @@ ipcMain.handle('setups:export',(e,handle)=>setupsSender(e)?SetupsNative.export(h
 // acceptance. No dev helper or renderer-supplied local authority is a fallback.
 const SetupsLocal=require('./src/setups-main').createSetupsMain({app,buddy:()=>buddyWin,service:SetupsNative,dialog,safeStorage:require('electron').safeStorage,accepted:false});
 SetupsLocal.register(ipcMain);
-app.on('will-quit',()=>SetupsLocal.close());
+onQuit(app,()=>SetupsLocal.close());
 
 // Settings → Account & team, and the widget's one-time Team hint. Each
 // handler checks its sender; the page to open is never taken from the renderer.
@@ -1759,7 +1760,7 @@ ipcMain.handle('tasks:pick-folder', async (e) => {
   try { if (!dir || !path.isAbsolute(dir) || !fs.statSync(dir).isDirectory()) return null; } catch { return null; }
   return getTasks().registerFolder(dir);
 });
-app.on('will-quit', () => tasksSvc?.stop());
+onQuit(app, () => tasksSvc?.stop());
 
 let lightsWin = null;
 
@@ -3693,7 +3694,7 @@ function initVoice() {
   powerMonitor.on('unlock-screen', back);
   powerMonitor.on('resume', back);
   applyVoiceHotkey();
-  app.on('will-quit', () => { globalShortcut.unregisterAll(); listener.cancel(); });
+  onQuit(app, () => { globalShortcut.unregisterAll(); listener.cancel(); });
 }
 
 // A long-press where voice can't work (not a Mac, helper not bundled) stays
@@ -3781,7 +3782,7 @@ if (typeof WorkScope?.setSessionScope === 'function' && typeof WorkScope?.setRep
   });
   if (typeof WorkScope.onChange === 'function') {
     const unsubscribe = WorkScope.onChange(scopeChanged);
-    if (typeof unsubscribe === 'function') app.on('will-quit', unsubscribe);
+    if (typeof unsubscribe === 'function') onQuit(app, unsubscribe);
   }
 }
 ipcMain.handle('open-waiting', (e) => { if (!inputSenderOk(e)) return false; createWaitingWindow(); return true; });
@@ -3974,7 +3975,7 @@ ipcMain.handle('native-board-connect', nativeBoardAction((s, input) => {
   return s.connect(input);
 }));
 ipcMain.handle('native-board-disconnect', nativeBoardAction((s, target) => s.disconnect(target)));
-app.on('will-quit', () => { nativeBoardService?.stop().catch(() => {}); });
+onQuit(app, () => { nativeBoardService?.stop().catch(() => {}); });
 utilityHandle('mcp-status', settingsOnly, () => McpInstall.status(mcpOpts()));
 utilityHandle('mcp-set-enabled', settingsOnly, (_e, on) => {
   try {
@@ -4288,7 +4289,7 @@ const DEV_PROFILE = IS_DEV_RUN ? path.join(os.tmpdir(), `plexiform-dev-${process
 if (DEV_PROFILE) {
   app.setPath('userData', DEV_PROFILE);
   const sweep = () => { try { fs.rmSync(DEV_PROFILE, { recursive: true, force: true }); } catch { /* already gone */ } };
-  app.on('will-quit', sweep);
+  onQuit(app, sweep);
   process.on('exit', sweep);
   // Sweep profiles orphaned by a hard kill, so /tmp doesn't fill up.
   try {
@@ -4462,7 +4463,7 @@ app.whenReady().then(() => {
       devAccountsHub = await devMock.listen(); // privacy-flow: local-board-hub
       devMockReady = true;
       console.log('[buddy] mock accounts hub at', devAccountsHub);
-      app.on('will-quit', () => { devMock.close(); });
+      onQuit(app, () => { devMock.close(); });
     }
     // Links that arrived before ready (cold start), then any in our own argv
     // (Windows/Linux pass the link as an argument).

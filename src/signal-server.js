@@ -3,6 +3,7 @@
 // (aggregateState) and re-broadcast (broadcastStatus) without importing the
 // core.
 const fs = require('fs');
+const { onQuit } = require('./quit-handlers');
 const os = require('os');
 const path = require('path');
 const http = require('http'); // privacy-flow: local-server
@@ -133,7 +134,7 @@ module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcast
         fs.renameSync(tmp, portFile);
       } catch {}
       // Only the instance that bound the port owns these files.
-      electronApp.on('will-quit', () => { try { fs.rmSync(portFile, { force: true }); fs.rmSync(tokenFile, { force: true }); } catch {} });
+      onQuit(electronApp, () => { try { fs.rmSync(portFile, { force: true }); fs.rmSync(tokenFile, { force: true }); } catch {} });
     });
     server.listen(port, '127.0.0.1');
     return server;
