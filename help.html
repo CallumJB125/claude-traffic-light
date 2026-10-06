@@ -16,6 +16,14 @@
   .start-actions button:active { transform: scale(.97); }
   button:focus-visible { box-shadow: var(--focus); }
   .start-notice { min-height: 1.45em; margin-top: var(--space-2); font-size: var(--text-xs); color: var(--muted); }
+  .setup { padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
+  .setup summary { color: var(--text); font-weight: 600; }
+  .setup ul { margin-top: var(--space-2); gap: var(--space-2); }
+  .setup li { display: flex; gap: var(--space-2); align-items: flex-start; }
+  .setup .mark { flex: none; width: 18px; text-align: center; color: var(--muted); }
+  .setup li[data-state="done"] .mark { color: var(--green); }
+  .setup li > div { flex: 1; min-width: 0; }
+  .setup li button { margin-top: 4px; }
   .now h2 { font-size: var(--text-xl); color: var(--text); letter-spacing: normal; text-transform: none; margin: 0; }
   .now { display: flex; gap: var(--space-3); align-items: flex-start; }
   .lamp { flex: none; width: 14px; height: 14px; margin-top: 3px; border-radius: 4px; background: var(--line-strong); box-shadow: 0 0 0 2px var(--panel-2); }
@@ -52,11 +60,17 @@
       <button class="primary" id="start-overview">Open Overview</button>
       <button id="start-join">Join your team</button>
       <button id="start-tools">Connect your AI tools</button>
+      <button id="start-privacy">What leaves your machine</button>
     </div>
     <p class="rule">Join through the app’s sign-in flow; it may open your browser. Install and sign in to the AI tools you want to use, then connect them in Preferences.</p>
     <p class="rule">Start here in the app—there are no Plexiform Terminal setup steps or release checks to complete. Your OS may ask to unlock secure storage when you sign in; you handle that prompt yourself.</p>
     <p class="start-notice" id="start-notice" role="status" aria-live="polite"></p>
   </section>
+  <details class="setup" id="setup-box" aria-labelledby="setup-title" hidden>
+    <summary id="setup-title"></summary>
+    <ul id="setup-list"></ul>
+    <p class="rule">Nothing here is required. Skip any step and keep working.</p>
+  </details>
   <div class="now" role="status" aria-live="polite">
     <div class="lamp" id="lamp" aria-hidden="true"></div>
     <div>
@@ -117,10 +131,19 @@
     const li = (html) => { const el = document.createElement('li'); el.innerHTML = html; return el; };
     const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 
+    function renderSetup(setup) {
+      $('setup-box').hidden = !setup;
+      if (!setup) return;
+      $('setup-title').textContent = setup.complete ? 'Set up: all done' : `Get set up: ${setup.done} of ${setup.total} done`;
+      $('setup-box').open = !setup.complete;
+      $('setup-list').replaceChildren(...setup.rows.map((r) => { const row = li(`<span class="mark" aria-hidden="true">${r.state === 'done' ? '✓' : '○'}</span><div><b>${esc(r.title)}</b> <span class="rule">${r.state === 'done' ? '(done)' : '(not done yet)'}</span><div class="rule">${esc(r.detail)}</div>${r.fix ? `<button type="button" data-dest="${esc(r.fix.destination)}">${esc(r.fix.label)}</button>` : ''}</div>`); row.dataset.state = r.state; return row; }));
+    }
+
     async function render() {
       let h;
       try { h = await window.helpApi.getHelp(); } catch (err) { console.error('[help]', err); }
       if (!h) { $('headline').textContent = 'Could not load the status — try reopening this window.'; return; }
+      renderSetup(h.setup);
       $('lamp').className = `lamp ${h.lamp}`;
       $('headline').textContent = h.headline;
       $('lampText').textContent = `${h.lampText}${h.sessions ? ` · ${h.sessions} session${h.sessions === 1 ? '' : 's'}${h.remote ? ` (${h.remote})` : ''}` : ''}`;
@@ -145,7 +168,15 @@
       }
     }
 
-    for (const [id, destination] of [['start-overview', 'overview'], ['start-join', 'join'], ['start-tools', 'settings']]) {
+    $('setup-list').addEventListener('click', async (e) => {
+      const dest = e.target.closest && e.target.closest('button[data-dest]');
+      if (!dest) return;
+      let opened = false;
+      try { opened = await window.helpApi.navigate(dest.dataset.dest); } catch {}
+      $('start-notice').textContent = opened ? '' : 'Could not open this page. Reopen Help and try again.';
+    });
+
+    for (const [id, destination] of [['start-overview', 'overview'], ['start-join', 'join'], ['start-tools', 'settings'], ['start-privacy', 'settings']]) {
       $(id).addEventListener('click', async () => {
         let opened = false;
         try { opened = await window.helpApi.navigate(destination); } catch {}

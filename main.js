@@ -1861,9 +1861,10 @@ function createLightsWindow() {
 // words. Opened from the widget's "?" and the tray; once on first run.
 function createHelpWindow() { openBuddy('help'); }
 
+const setupChecklist = require('./src/setup-checklist.js').createForHelp({ report: () => healthReport(), account: () => accountSummary(), tasks: () => tasksSvc?.snapshot().tasks ?? null });
 function helpState() {
   const real = aggregateState({ ignoreTravel: true });
-  return Help.explain(real, loadConfig().rules, { travel: travelLook ? travelLook.name : null, busy: BusyWatch.status(), providerStatus: ProviderStatus.snapshot({ sessions: localSessions(real.sessions || []), online }) });
+  return { ...Help.explain(real, loadConfig().rules, { travel: travelLook ? travelLook.name : null, busy: BusyWatch.status(), providerStatus: ProviderStatus.snapshot({ sessions: localSessions(real.sessions || []), online }) }), setup: setupChecklist() };
 }
 
 ipcMain.handle('open-help', e => { if (widgetOnly(e) || widgetConfigSender(e)) createHelpWindow(); });

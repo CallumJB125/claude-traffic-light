@@ -161,7 +161,7 @@ const CONFIRM = {
     confirm: 'Take over',
     danger: true,
   }),
-  take_over: (v) => ({ title: `Take over ${v.key}?`, body: 'You become the owner. You can give it to Claude again or work on it yourself.', confirm: 'Take over', danger: false }),
+  take_over: (v) => ({ title: `Take over ${v.key}?`, body: 'You become the owner. You can tackle it with AI again or work on it yourself.', confirm: 'Take over', danger: false }),
 };
 
 export function confirmDialog(dlg, model) {
