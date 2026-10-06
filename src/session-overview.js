@@ -29,7 +29,11 @@ function projectLeaf(value) {
 function isLocal(row) {
   return object(row) && !row.remote && !row.device && !(typeof row.sessionId === 'string' && row.sessionId.startsWith('remote:'));
 }
-function snapshot({ sessions = [], activity = {}, available = true, now = Date.now() } = {}) {
+// Optional per-row additions (Burst compaction and handover); the raw row never leaves.
+function extras(enrich, row) {
+  try { const burst = enrich ? enrich(row) : null; return burst ? { burst } : {}; } catch { return {}; }
+}
+function snapshot({ sessions = [], activity = {}, available = true, now = Date.now(), enrich = null } = {}) {
   const time = Number.isFinite(now) && now >= 0 ? now : Date.now();
   let latest = null, omitted = 0;
   const rows = [];
@@ -53,6 +57,7 @@ function snapshot({ sessions = [], activity = {}, available = true, now = Date.n
       project: projectLeaf(row.cwd),
       status: lifecycle && row.codexClosedTurn === true ? 'Turn stopped' : Machine.claudeInputPending(row) || Machine.codexInputPending(row, time) ? 'Waiting on you' : typeof presented === 'string' && Object.hasOwn(STATUSES, presented) ? STATUSES[presented] : 'Unknown',
       freshness: available === false || age === null ? 'unknown' : age <= RECENT_MS ? 'recent' : 'stale', age_ms: age, lifecycle, children,
+      ...extras(enrich, row),
     });
   }
   rows.sort((a, b) => (a.age_ms ?? Infinity) - (b.age_ms ?? Infinity));

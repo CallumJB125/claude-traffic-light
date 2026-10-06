@@ -10,6 +10,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const http = require('node:http'); // privacy-flow: burst-local
+const Spend = require('./burst-spend.js');
 const { execFile } = require('node:child_process');
 
 const LABEL = 'ninja.andrewbaker.claude-burst';
@@ -24,7 +25,7 @@ const UPGRADE_CACHE_MS = 10 * 60 * 1000;
 // Exact paths, GET only. Query keys are limited per path.
 const GET_ALLOW = Object.freeze({
   '/api/state': [],
-  '/api/usage': ['range', 'repo', 'session'],
+  '/api/usage': ['range', 'repo', 'session', 'limit'],
   '/api/upgrade-status': [],
   '/api/test-connection': [],
   '/api/handover-audit': [],
@@ -156,6 +157,7 @@ function createBurstClient({ home = os.homedir(), platform = process.platform, i
       rejected: Array.isArray(dg.rejected) ? dg.rejected.slice(0, 20).map((r) => ({ model: str(r && r.model), until: str(r && r.until) })) : [],
       primaryFailures: num(ph.failures),
       secondaryReady: s.secondary_ready === true,
+      compaction: Spend.normalizeCompaction(s),
     };
   }
 
@@ -214,8 +216,32 @@ function createBurstClient({ home = os.homedir(), platform = process.platform, i
     return { ok: true };
   }
 
+  const q = (o) => new URLSearchParams(o).toString();
+
+  async function usage({ range = '7d', session = '' } = {}) {
+    const r = ['1h', '24h', '7d', '30d'].includes(range) ? range : '7d';
+    return Spend.normalizeUsage(await request('GET', `/api/usage?${q({ range: r, limit: '200', ...(session ? { session } : {}) })}`));
+  }
+
+  // Overflow USD of one session over the last 30 days; 0 when Burst has none.
+  async function sessionSecondaryUsd(session) {
+    if (!session) return 0;
+    return Spend.secondaryUsdOf(await usage({ range: '30d', session }));
+  }
+
+  async function handoverAudit() {
+    const a = await request('GET', '/api/handover-audit');
+    return (Array.isArray(a) ? a : []).slice(0, 200).filter((e) => e && typeof e.root === 'string' && e.exists === true)
+      .map((e) => ({ root: str(e.root, 1000), modified: str(e.modified, 40), lastWrite: str(e.last_write, 40) }));
+  }
+
+  async function handoverFile(root) {
+    const r = await request('GET', `/api/handover-file?${q({ root })}`);
+    return typeof r.content === 'string' ? r.content.slice(0, 64 * 1024) : '';
+  }
+
   return {
-    detect, request, testConnection, requestUpgrade,
+    detect, request, testConnection, requestUpgrade, usage, sessionSecondaryUsd, handoverAudit, handoverFile,
     binPath,
     adminUrl: () => (addr ? `http://${addr.host === '::1' ? '[::1]' : addr.host}:${addr.port}/` : null),
   };

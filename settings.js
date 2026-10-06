@@ -477,17 +477,18 @@
           : `context ${fmt(l.before)} → ${fmt(l.after)} tokens (${src}); compaction cost ${l.costSource === 'unknown' ? 'not reported' : `${fmt(l.cost)} tokens (${l.costSource === 'provider' ? 'reported by the provider' : 'estimated'})`}${payback(l.payback) ? `; ${payback(l.payback)}` : ''}`;
         last.textContent = `Last: ${NAMES[l.provider] || l.provider}, ${new Date(l.at).toLocaleString()}, ${what}.`;
       };
+      const withNote = (st) => { show(st); if (st?.burstNote) $('saved').textContent = `${st.burstNote}, so Plexiform's own Claude compactor is off. ${$('saved').textContent}`; };
       const st = await window.settingsApi.compactionStats().catch(() => null);
       const s = st?.settings || {};
       $('enabled').checked = s.enabled === true;
       $('codex').checked = s.providers?.codex === true;
       $('threshold').value = Math.round((s.threshold || 0.55) * 100);
       showThreshold();
-      show(st);
+      withNote(st);
       const save = async () => {
         const cur = (await window.settingsApi.getConfig()).compaction || {};
         await window.settingsApi.saveConfig({ compaction: { ...cur, enabled: $('enabled').checked, providers: { ...cur.providers, codex: $('codex').checked }, threshold: Number($('threshold').value) / 100 } });
-        show(await window.settingsApi.compactionStats().catch(() => null));
+        withNote(await window.settingsApi.compactionStats().catch(() => null));
       };
       $('threshold').addEventListener('input', showThreshold);
       for (const el of [$('enabled'), $('codex'), $('threshold')]) el.addEventListener('change', () => save().catch((err) => { $('saved').textContent = `Save failed — ${err.message}`; }));

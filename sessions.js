@@ -4,6 +4,21 @@ const activity = document.getElementById('activity-status');
 let generation = 0;
 const node = (tag, text, className) => { const el = document.createElement(tag); if (text) el.textContent = text; if (className) el.className = className; return el; };
 const age = value => value == null ? 'Age unknown' : value < 60_000 ? `${Math.floor(value / 1000)}s ago` : value < 3_600_000 ? `${Math.floor(value / 60_000)}m ago` : `${Math.floor(value / 3_600_000)}h ago`;
+const usd = v => `$${Math.abs(v).toFixed(2)}`;
+function burstBlock(section, b) {
+  if (b.compaction) {
+    const c = b.compaction, net = c.netUsd >= 0 ? `net saving ${usd(c.netUsd)}` : `net cost ${usd(c.netUsd)}`;
+    section.append(node('p', `Burst compaction: ${c.compactions} compaction${c.compactions === 1 ? '' : 's'} · saved ${usd(c.savedUsd)} · ${net} (API-equivalent)`, 'muted'));
+  }
+  if (!b.handover) return;
+  const h = b.handover, box = node('div', '', 'handover');
+  box.append(node('h3', `Handover (${h.source}${h.date ? `, ${h.date}` : ''})`), node('pre', h.text));
+  const label = node('label'), check = document.createElement('input');
+  check.type = 'checkbox'; check.checked = h.shared;
+  check.addEventListener('change', async () => { check.disabled = true; try { await window.sessionsApi.burstShare(h.repo, check.checked); } finally { check.disabled = false; } });
+  label.append(check, document.createTextNode(' Share Burst handover with team (this repository; scrubbed, off by default)'));
+  box.append(label); section.append(box);
+}
 function render(snapshot) {
   content.replaceChildren();
   const a = snapshot.activity;
@@ -22,6 +37,7 @@ function render(snapshot) {
       for (const child of item.children) list.append(node('li', `${child.label} · ${confidence}: ${child.status}`));
       section.append(list);
     }
+    if (item.burst) burstBlock(section, item.burst);
     content.append(section);
   }
   if (!snapshot.sessions?.length) content.append(node('p', snapshot.status === 'unavailable' ? 'Local session reports are unavailable. Try Refresh.' : 'No local sessions are visible. Start activity in a connected tool, then Refresh.', 'muted'));

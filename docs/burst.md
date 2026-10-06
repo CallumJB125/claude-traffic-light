@@ -19,3 +19,13 @@ Plexiform shows this list, the terms note, and the exact command before every ac
 - Quitting Plexiform leaves Burst as it was.
 
 Plexiform only reads Burst's local admin address (`127.0.0.1`), and only trusts it when it is the gateway started by Burst's own LaunchAgent. Otherwise the card says Untrusted and reads nothing.
+
+## What Plexiform shows from Burst
+
+Read-only, from Burst's local admin address, and only while Burst is trusted.
+
+- **Usage, "Through Burst".** Secondary-provider spend (Burst's API-equivalent prices, source named on the page). It is never added to Plexiform's own Claude figures, which come from the Claude transcripts. Claude-plan traffic through Burst is shown as a request count only.
+- **Board budgets.** While a runner is running cards, Plexiform gives it each session's secondary spend from the last 24 hours. A run's cost then includes overflow, so `run.budget_reached` covers it. Facts older than three minutes are ignored.
+- **Compaction.** Sessions shows Burst's per-session compaction savings. While Burst compaction is on, Plexiform's own Claude compactor is forced off and Preferences says why.
+- **Handover for observed sessions.** For a Claude session Plexiform watches but does not own, the newest dated section of Burst's `HANDOFF.md` for that repository is shown on Sessions. It reaches the team hub only after you tick "Share Burst handover with team" for that repository (default off). It is scrubbed first and sent as a system-written note in the salvage section; the human and agent layers of a handover are never overwritten. The hub send is a no-op until the team hub client provides an append endpoint for it.
+- **Limits.** A run that ends on a plan limit while Burst has no ready secondary shows **Paused: limit** with **Continue with another AI** (a retry on another AI, chosen with the session router, seeded from the handover). When Burst fails over successfully the card keeps running with a **via secondary** badge. No new board state.
