@@ -208,6 +208,8 @@ const DEFAULT_CONFIG = {
   menuBarMode: false,
   // 'auto' | 'on' | 'off': trims non-essential motion (src/low-power.js).
   lowPower: 'auto',
+  // Hooks hand frequent events to the running app (src/hook-socket.js). Off by default.
+  fastHook: false,
   seasonal: true,
   askFromWidget: false,
   showTasks: true,
@@ -1019,6 +1021,19 @@ const widgetMotion = createMotionGate((paused) => {
 // Low-power mode (src/low-power.js) applies to the desk widget only: the
 // Lights editor's previews exist to show every animation at full rate.
 let lowPowerOn = false;
+// Fast hook path (hooks/fast-hook.js), off unless `fastHook` is set: hooks hand
+// frequent events to this process instead of doing the work in their own.
+const fastHookSocket = IS_DEV_RUN || DEMO ? null : require('./src/hook-socket.js').create({
+  rootDir: ROOT_DIR,
+  handle: (msg) => require('./src/hook-inprocess.js').runForwarded({ hooksDir: HOOKS_DIR, rootDir: ROOT_DIR, msg }),
+  log: (m) => console.log(m),
+});
+function syncFastHook() {
+  if (!fastHookSocket) return;
+  if (loadConfig().fastHook === true || process.env.PLEXIFORM_FAST_HOOK === '1') fastHookSocket.start();
+  else fastHookSocket.stop();
+}
+app.on('will-quit', () => fastHookSocket?.stop());
 function applyLowPower() {
   let onBattery = false;
   try { onBattery = powerMonitor.isOnBatteryPower(); } catch { /* no power source info */ }
@@ -3110,7 +3125,7 @@ function applyConfigEffects(prev, next, touched) {
   applyConfigSideEffects(prev, next, {
     installHooks,
     enableCalendar: () => BusyWatch.enableCalendar().catch((err) => console.warn('[busy]', err.message)),
-    applyWidgetVisibility, syncTailnetListener, createTray, applyVoiceHotkey, applyLowPower, broadcastStatus, syncInteractionHost,
+    applyWidgetVisibility, syncTailnetListener, createTray, applyVoiceHotkey, applyLowPower, syncFastHook, broadcastStatus, syncInteractionHost,
   }, touched);
 }
 function commitConfig(partial) {
@@ -4412,6 +4427,7 @@ app.whenReady().then(() => {
   watchUpdater();
   createTray();
   signalServer = startSignalServer();
+  syncFastHook();
   signalServer.on('error', (e) => { signalServerError = e.code || e.message; });
   signalServer.on('listening', () => { signalServerError = null; });
   // Rate limits live in the detector (one capture per pane per 15 s, four per scan).
