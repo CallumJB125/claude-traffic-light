@@ -44,6 +44,7 @@ const Compaction = require('./src/compaction.js');
 const Health = require('./src/health.js');
 const Backups = require('./src/backups.js');
 const { applyConfigSideEffects } = require('./src/config-effects.js');
+const { createStatusGate } = require('./src/status-gate.js');
 const { createMotionGate, staleMachineReasons, askKey, statusPushWanted } = require('./src/motion-gate.js');
 const { createAwayFeeds } = require('./src/away-feeds.js');
 const { createProbeBackoff } = require('./src/probe-backoff.js');
@@ -2461,6 +2462,13 @@ function updateGarden(st) {
 }
 
 let widgetAsksSent = null;
+const statusGate = createStatusGate();
+// For the hook-write watcher and the poll: skips the fan-out when nothing the
+// broadcast would show has changed (still forced through every few seconds).
+function broadcastStatusIfChanged() {
+  try { if (!statusGate.changed(aggregateState())) return; } catch { /* fall through to a full broadcast */ }
+  broadcastStatus();
+}
 function broadcastStatus() {
   // travelLook is only ever legitimate while the garden or a roam is running.
   // If one of those died (a throw, a crashed renderer, a closed window) the
@@ -2486,6 +2494,7 @@ function broadcastStatus() {
   for (const id of ['usage', 'stats', 'help']) buddyWin?.sendToPage(id, 'status-changed');
   try {
     const st = aggregateState();
+    statusGate.mark(st);
     // A paused widget catches up when the gate lifts (it broadcasts then),
     // except for its waiting inputs, which it always hears about.
     const asks = askKey(st);
@@ -4430,22 +4439,22 @@ app.whenReady().then(() => {
   else setTimeout(maybeAutoShowHelp, 2500);
 
   // A busy turn writes its session file many times a second and every write
-  // fires this watcher — coalesce them into at most one refresh per 200 ms.
+  // fires this watcher — coalesce them into at most one refresh per 250 ms.
   let watchTimer = null;
   fs.watch(SESSIONS_DIR, { persistent: true }, () => {
     if (watchTimer) return;
     watchTimer = setTimeout(() => {
       watchTimer = null;
-      broadcastStatus();
+      broadcastStatusIfChanged();
       saveLastHook();
       maybePlayAlertSound();
       refreshUsageLive();
       refreshSpend(SPEND_LIVE_MS);
-    }, 200);
+    }, 250);
   });
 
   every(4000, () => {
-    broadcastStatus();
+    broadcastStatusIfChanged();
     maybePlayAlertSound();
     tickStats(readSessions(loadConfig()));
     saveLastHook();
