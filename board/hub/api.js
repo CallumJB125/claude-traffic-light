@@ -175,10 +175,21 @@ export class Api {
   updateBoard(member, boardId, body) {
     if (!can(member, 'board.rename')) throw new HubError('FORBIDDEN', 'only admins can rename boards');
     this.boardFor(member, boardId);
-    const name = teamName(body.name);
+    const capGiven = body.daily_cap_usd !== undefined;
+    if (capGiven && body.daily_cap_usd !== null && !(typeof body.daily_cap_usd === 'number' && body.daily_cap_usd >= 0.5 && body.daily_cap_usd <= 100000)) throw new HubError('VALIDATION', 'daily_cap_usd must be between 0.5 and 100000, or null');
+    const name = body.name === undefined && capGiven ? this.hub.board(boardId).name : teamName(body.name);
     return this.withWritableBoard(boardId, () => this.hub.txn(() => {
       if (!can(this.hub.activeMember(member.id), 'board.rename')) throw new HubError('FORBIDDEN', 'only admins can rename boards');
       const before = this.hub.board(boardId);
+      if (capGiven) {
+        const settings = { ...json(before.settings, {}) };
+        if (body.daily_cap_usd === null) delete settings.daily_cap_usd; else settings.daily_cap_usd = body.daily_cap_usd;
+        if (JSON.stringify(settings) !== JSON.stringify(json(before.settings, {}))) {
+          this.db.run('UPDATE boards SET settings = ? WHERE id = ?', JSON.stringify(settings), boardId);
+          this.audit(member.id, 'board.daily_cap', boardId);
+          this.hub.journal({ board_id: boardId, actor_kind: 'member', actor_id: member.id, kind: 'board.daily_cap_set', payload: { daily_cap_usd: body.daily_cap_usd } });
+        }
+      }
       if (before.name !== name) {
         this.db.run('UPDATE boards SET name = ? WHERE id = ?', name, boardId);
         this.audit(member.id, 'board.rename', boardId);
@@ -701,6 +712,7 @@ export class Api {
           const effective = cents ?? Math.round((this.hub.boardSettings(row.board_id).default_budget_usd ?? 5) * 100);
           if (effective - this.hub.cardSpentCents(cardId) < 50) ctx.policy_ok = false;
         }
+        if ((this.hub.dailyRemainingCents(row.board_id) ?? 50) < 50) throw new HubError('BUDGET_EXCEEDED', 'the board’s daily spend cap is reached; new runs wait until tomorrow or an admin raises it');
         if (row.fail_kind === 'budget' && rel.run?.terminal_reason === 'budget_device') throw new HubError('POLICY_DENIED', 'the machine owner must change their local limit', { reason: 'DEVICE_LIMIT' });
         if (!existing && row.fail_kind === 'budget' && (!involved(rel.dispatcher, rel.owner) || mode === 'none' || cents == null || cents < Math.max(row.budget_cents ?? 0, this.hub.cardSpentCents(cardId)) + 50)) throw new HubError('POLICY_DENIED', 'increase the budget as its owner before continuing', { reason: 'BUDGET_TOO_LOW' });
         if (existing && (existing.backend !== AI_BACKENDS[ai] || existing.target_member_id !== target || existing.budget_mode !== mode || (mode === 'cap' && existing.budget_cents !== cents))) throw new HubError('CONFLICT', 'request_id already belongs to another dispatch choice');

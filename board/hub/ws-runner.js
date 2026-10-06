@@ -652,6 +652,7 @@ export class RunnerConn {
           break;
         case 'cost':
           hub.db.run('UPDATE runs SET cost_cents = MAX(cost_cents, ?) WHERE id = ?', Math.round(f.cost_usd * 100), run.id);
+          hub.noteDailyCap(run.card_id);
           log('cost', { cost_usd: f.cost_usd, num_turns: f.num_turns ?? null });
           break;
         case 'session': {
