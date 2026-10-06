@@ -7,6 +7,7 @@ import { renderMarkdown, inline } from './markdown.js';
 import { pill, budgetBar, cardActions, avatar, labelChips } from './render-board.js';
 import { canArchive } from './labels.js';
 import { formatAge, repoBranch, isHumanOwned, isObservedWork, hasLiveCapture, COLUMNS, COLUMN_LABEL, ACTION_LABEL, ADVANCED_ACTIONS, fmtUsd } from './view.js';
+import { BUDGET_PRESETS, raisedBudget } from './tackle.js';
 import { packetPanel, messagePanel } from './render-communication.js';
 import { captureBadge } from './render-capture.js';
 import { ownershipPanel } from './render-ownership.js';
@@ -260,6 +261,23 @@ export function canMarkDone(view) {
   return view.run_state === 'in_review' && view.run?.child_alive !== true;
 }
 
+function budgetBanner(view, model) {
+  if (model.readOnly || view.archived || view.fail_kind !== 'budget' || view.run?.budget_stop !== 'card' || model.budgetStopped?.has(view.id)) return null;
+  const spent = view.budget?.spent_usd ?? 0;
+  return h('section', { class: 'dsec dsec-budget', role: 'alert', 'aria-label': 'Budget reached' },
+    h('h3', { class: 'dsec-title' }, 'Budget reached'),
+    h('p', null, `${view.key} stopped at its ${fmtUsd(view.budget?.cap_usd ?? spent)} card budget (${fmtUsd(spent)} spent). It stays stopped until you raise the budget.`),
+    h('div', { class: 'drawer-actions' },
+      h('label', { class: 'move' }, h('span', null, 'Raise by'),
+        h('select', { id: 'budget-preset', class: 'input input-sm' },
+          BUDGET_PRESETS.map((p) => {
+            const next = raisedBudget(view, p.id, model.budgetMax);
+            return h('option', { value: p.id, disabled: next == null || null }, next == null ? `${p.label} (over the board limit)` : `${p.label} (${fmtUsd(next)})`);
+          }))),
+      h('button', { type: 'button', class: 'btn btn-sm btn-claude', 'data-action': 'budget-continue', 'data-card': view.id }, 'Increase & continue'),
+      h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'budget-stop', 'data-card': view.id }, 'Stop')));
+}
+
 export function drawer(model) {
   const det = model.detail;
   if (!det) return null;
@@ -301,6 +319,7 @@ export function drawer(model) {
         face.state === 'running' && face.disagree ? h('p', { class: 'muted small' }, 'Waiting for the board and this browser to agree the run is alive.') : null,
         archived ? h('p', { class: 'archived-note', role: 'note' }, `Archived${view.archived.by_name ? ` by ${view.archived.by_name}` : ''}${view.archived.at_age_ms != null ? ` ${ago(view.archived.at_age_ms + elapsed)}` : ''}. Restore it to change anything.`) : null,
         model.readOnly ? null : h('div', { class: 'drawer-actions' }, archived ? null : cardActions({ ...face, actions: face.actions.filter((a) => !OPENS_DRAWER.has(a) && !ADVANCED_ACTIONS.has(a)) }, view, model.busy), extra)),
+      budgetBanner(view, model),
       whoBlock(view, face, model),
       resultBlock(view, det),
       view.capture ? h('section', { class: 'dsec', 'aria-label': 'AI work report' }, h('h3', { class: 'dsec-title' }, 'AI work report'),

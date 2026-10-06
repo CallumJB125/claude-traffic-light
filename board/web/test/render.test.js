@@ -256,7 +256,7 @@ test('handoverBody drops the hub title and send-time "Last synced" line only', (
 test('Tackle with AI: own Codex account by default, sponsor and overlaps shown before dispatch', () => {
   const v = view({ run_state: 'todo', run: null, live: null, column: 'todo' });
   const m = model([entry(v)]);
-  const dlg = { kind: 'give', cardId: v.id, target: 'm-alice', repos: [{ id: 'r1', short_name: 'bondly' }], repo_id: 'r1', base_ref: 'dev', budget_usd: 5,
+  const dlg = { kind: 'give', cardId: v.id, ai: 'codex', target: 'm-alice', repos: [{ id: 'r1', short_name: 'bondly' }], repo_id: 'r1', base_ref: 'dev', budget_usd: 5,
     preview: { overlaps: [{ other_card_id: 'c-9', other_key: 'BDL-9', other_owner: 'Bob', kind: 'overlapping', paths: ['backend/routes/applications.js'] }], sponsor: 'Runs on your MacBook Pro · your claude account' } };
   const n = giveDialog(dlg, m);
   const t = textOf(n);
@@ -277,6 +277,31 @@ test('Tackle with AI: own Codex account by default, sponsor and overlaps shown b
   const teammate = textOf(giveDialog({ ...dlg, target: 'm-bob', preview: { overlaps: [] } }, m));
   assert.match(teammate, /Bob must confirm before it starts/);
   assert.match(teammate, /Ask Bob/);
+});
+
+test('Tackle with AI defaults to Claude with a visible card budget; uncapped choices need a confirm', () => {
+  const v = view({ run_state: 'todo', run: null, live: null, column: 'todo' });
+  const m = model([entry(v)]);
+  const base = { kind: 'give', cardId: v.id, target: 'm-alice', repos: [], budget_usd: 5, budget_mode: 'cap', preview: { runners: [], can_use_no_budget: true } };
+  const claude = giveDialog(base, m);
+  assert.equal(findAll(claude, (x) => x.props.name === 'ai')[0].children.flat().find((o) => o.props?.selected).props.value, 'claude');
+  assert.match(textOf(claude), /Card budget \$5\. /);
+  assert.equal(findAll(claude, (x) => x.props.name === 'confirm_uncapped').length, 0);
+  const codex = giveDialog({ ...base, ai: 'codex' }, m);
+  assert.match(textOf(codex), /cannot enforce a dollar cap, so this run is uncapped by dollars/);
+  assert.equal(findAll(codex, (x) => x.props.name === 'confirm_uncapped').length, 1);
+  const none = giveDialog({ ...base, budget_mode: 'none' }, m);
+  assert.equal(findAll(none, (x) => x.props.name === 'confirm_uncapped').length, 1);
+  assert.equal(findAll(giveDialog({ ...base, ai: 'codex', max_turns: 40 }, m), (x) => x.props.name === 'confirm_uncapped').length, 1, 'Codex has no turn cap');
+});
+
+test('budget reached banner offers Increase & continue and Stop; Stop hides it', () => {
+  const v = view({ run_state: 'failed', fail_kind: 'budget', run: { budget_stop: 'card', owner: { member_id: 'm-alice' } }, budget: { cap_usd: 5, spent_usd: 5.1, ratio: 1, text: '$5.10 / $5.00' } });
+  const m = (extra) => ({ ...model([entry(v)], { openCardId: v.id, detail: { cardId: v.id, tab: 'activity', data: null } }), ...extra });
+  const t = textOf(drawer(m({ budgetStopped: new Set() })));
+  assert.match(t, /Budget reached/); assert.match(t, /Increase & continue/); assert.match(t, /\+50% \(\$7\.65\)/); assert.match(t, /\+\$5 \(\$10\.10\)/);
+  assert.doesNotMatch(textOf(drawer(m({ budgetStopped: new Set([v.id]) }))), /Increase & continue/);
+  assert.match(textOf(drawer(m({ budgetStopped: new Set(), budgetMax: 5.2 }))), /\+50% \(over the board limit\)/);
 });
 
 test('take over from suspended explains fencing and needs an explicit confirm', () => {

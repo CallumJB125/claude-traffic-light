@@ -276,7 +276,7 @@ function renderBudget(list) {
   };
   document.getElementById('budget-acts').replaceChildren(...(budgetFailed
     ? [budgetButton('Open board', false, () => window.trafficLight.budgetNotice('board', first.runId))]
-    : [budgetButton('Increase budget & continue…', false, open), budgetButton('Stop run…', true, open)]));
+    : [budgetButton('Increase & continue', false, open), budgetButton('Stop', true, open)]));
 }
 document.getElementById('budget-x').addEventListener('mousedown', stop);
 document.getElementById('budget-x').addEventListener('click', (e) => { e.stopPropagation(); if (budgetShown) window.trafficLight.budgetNotice('dismiss', budgetShown); });

@@ -2,11 +2,11 @@
 // loop. Rendering is a pure function of `state` (render-*.js); this file owns
 // clocks, network and DOM events.
 import { h, render } from './h.js';
-import { tacklePreference, rememberTackle } from './tackle.js';
+import { tacklePreference, rememberTackle, raisedBudget, tackleChoices } from './tackle.js';
 import { handoverPin, sameHandover } from './ai-handover.js';
 import { api, errorText, setOrg, currentOrg, setCsrf, requestId } from './api.js';
 import { connectBoard } from './socket.js';
-import { displayFace, alertsForViewer, agedView } from './view.js';
+import { displayFace, alertsForViewer, agedView, fmtUsd } from './view.js';
 import { planMoves, moveSummary, dragModel, pruneSelection, idsToDrag, kbdStart, kbdKey, announcement } from './dnd.js';
 import { emptyFilters, isFiltering, parseFilters, writeFilters, toggleIn, applyFilters, filterOptions } from './filters.js';
 import { parseTitles, needsConfirm, pendingCard } from './quickadd.js';
@@ -59,6 +59,7 @@ const state = {
   detail: null, // {cardId, data, rx, tab, section, error}
   dialog: null,
   busy: new Set(),
+  budgetStopped: new Set(),
   toasts: [],
   theme: 'system',
   bg: 'none', // board background (themes.js), per browser
@@ -417,6 +418,8 @@ function buildModel() {
     quickAdd: state.quickAdd,
     drag: state.drag || state.kbd ? dragModel(state.drag ?? { ids: state.kbd.ids, over: state.kbd.over, mode: 'keyboard' }, entries) : null,
     openCardId: state.detail?.cardId ?? null,
+    budgetStopped: state.budgetStopped,
+    budgetMax: state.board?.settings?.max_budget_usd,
     readOnly: boardReadOnly(),
     view: state.view,
     table: state.table,
@@ -1152,8 +1155,16 @@ async function submitFeedback() {
   if (state.dialog?.kind === 'feedback') { state.dialog = { ...state.dialog, busy: false, result }; update(); }
 }
 
+function budgetFragmentCard(value) {
+  try {
+    const card = JSON.parse(atob((value ?? '').replace(/-/g, '+').replace(/_/g, '/'))).card_id;
+    return typeof card === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(card) ? card : null;
+  } catch { return null; }
+}
+
 function openFromHash() {
-  const query = new URLSearchParams(location.hash.slice(1)), id = query.get('card');
+  const query = new URLSearchParams(location.hash.slice(1));
+  const id = query.get('card') ?? budgetFragmentCard(query.get('plexiform-budget'));
   if (!id) return;
   const section = query.get('section'), generation = boardGeneration;
   const tryOpen = () => {
@@ -1221,6 +1232,16 @@ const DONE_COPY = {
   stop: (k) => `Stopped ${k}.`,
 };
 
+async function continueAfterBudget(cardId, preset) {
+  const v = viewOf(cardId);
+  if (!v || v.fail_kind !== 'budget') return;
+  const budget = raisedBudget(v, preset, state.board?.settings?.max_budget_usd);
+  if (budget == null) { toast('The board’s budget limit leaves no room to raise this card. Ask an admin.', 'error'); return; }
+  const owner = v.run?.owner?.member_id ?? state.me.member.id;
+  const res = await doAction(cardId, 'retry', { target_member_id: owner === state.me.member.id ? null : owner, ai: v.run?.ai ?? 'claude', budget_usd: budget }, `${v.key} continues with a ${fmtUsd(budget)} budget.`);
+  if (res) state.budgetStopped.delete(cardId);
+}
+
 async function loadRepos() {
   if (state.repos) return state.repos;
   try {
@@ -1239,6 +1260,7 @@ async function openGive(cardId, mode) {
     target: retry ? v.run?.owner?.member_id ?? state.me.member.id : state.me.member.id,
     repo_id: v.repo?.id ?? '',
     base_ref: v.base_ref ?? '',
+    max_turns: state.board?.settings?.default_max_turns ?? null,
     ai: retry ? v.run?.ai ?? 'claude' : preference.ai,
     budget_mode: retry || v.budget?.cap_usd != null ? 'cap' : preference.budget_mode,
     budget_usd: retry ? Math.max(v.budget?.cap_usd ?? 0, v.budget?.spent_usd ?? 0) + 0.5 : v.budget?.cap_usd ?? preference.budget_usd,
@@ -1294,9 +1316,10 @@ async function submitGive(form) {
   const base_ref = moving ? d.base_ref : String(fd.get('base_ref') ?? '').trim() || null;
   const budget = Number(fd.get('budget_usd'));
   const ai = fd.get('ai') || d.ai;
-  const uncapped = ai === 'codex' || fd.get('budget_mode') === 'none';
+  const uncapped = tackleChoices(d.preview?.runners).find((a) => a.id === ai)?.budget === 'none' || fd.get('budget_mode') === 'none';
   const wantPlan = fd.get('plan_approval') === 'on';
   if (!repo_id) { state.dialog = { ...d, error: 'Pick a repo first. The agent works inside that repo.' }; update(); return; }
+  if (uncapped && d.mode !== 'retry' && fd.get('confirm_uncapped') !== 'on' && !(ai !== 'codex' && d.max_turns != null)) { state.dialog = { ...d, error: 'Confirm that this run has no dollar limit, or choose a card budget.' }; update(); return; }
   if (!uncapped && (!Number.isFinite(budget) || budget < 0.5 || budget > 1000)) { state.dialog = { ...d, error: 'Choose a card budget between $0.50 and $1,000.' }; update(); return; }
   state.dialog = { ...d, busy: true, error: null };
   update();
@@ -1781,6 +1804,8 @@ function onClick(e) {
     case 'watch': openDetail(cardId, 'activity'); return;
     case 'allow': case 'deny': case 'answer': case 'approve_plan': case 'resolve_conflict': case 'continue':
       openDetail(cardId, 'asks'); return;
+    case 'budget-continue': continueAfterBudget(cardId, root.querySelector('#budget-preset')?.value); return;
+    case 'budget-stop': state.budgetStopped.add(cardId); update(); toast(`${keyOf(cardId)} stays stopped.`); return;
     case 'give_to_claude': openGive(cardId, 'dispatch'); return;
     case 'take_over_with_claude': openGive(cardId, 'redispatch'); return;
     case 'switch_ai': state.dialog = { kind: 'switch-ai', cardId, ...handoverPin(viewOf(cardId)) }; update(); return;

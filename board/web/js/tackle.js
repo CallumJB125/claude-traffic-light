@@ -14,7 +14,7 @@ export function tackleChoices(runners = []) {
 export const readinessText = (reason) => ({ not_installed: 'not installed', signed_out: 'sign in first', unsupported_version: 'update Codex first', may_need_sign_in: 'may need sign-in' }[reason] ?? '');
 
 export function tacklePreference(memberId, storage, defaultBudget = 5) {
-  const defaults = { ai: 'codex', budget_mode: 'cap', budget_usd: Number.isFinite(defaultBudget) && defaultBudget >= 0.5 && defaultBudget <= 1000 ? defaultBudget : 5 };
+  const defaults = { ai: 'claude', budget_mode: 'cap', budget_usd: Number.isFinite(defaultBudget) && defaultBudget >= 0.5 && defaultBudget <= 1000 ? defaultBudget : 5 };
   if (!memberId) return defaults;
   try {
     const value = JSON.parse((storage ?? globalThis.localStorage).getItem(`plexiform-tackle:${memberId}`));
@@ -26,4 +26,16 @@ export function tacklePreference(memberId, storage, defaultBudget = 5) {
 export function rememberTackle(memberId, choice, storage) {
   if (!memberId) return;
   try { (storage ?? globalThis.localStorage).setItem(`plexiform-tackle:${memberId}`, JSON.stringify(choice)); } catch { /* storage off */ }
+}
+
+export const BUDGET_PRESETS = [{ id: 'pct50', label: '+50%' }, { id: 'usd5', label: '+$5' }];
+// The next total card cap for "Increase & continue": a small raise over what
+// is already spent or capped, never above the board's maximum (or $1,000), and
+// at least the $0.50 the hub requires. null when the limit leaves no room.
+export function raisedBudget(view, preset, max) {
+  const base = Math.max(view?.budget?.cap_usd ?? 0, view?.budget?.spent_usd ?? 0);
+  const limit = Math.min(1000, Number.isFinite(max) ? max : 1000);
+  const raised = preset === 'usd5' ? base + 5 : Math.max(base * 1.5, base + 0.5);
+  const next = Math.round(Math.min(raised, limit) * 100) / 100;
+  return next >= base + 0.5 ? next : null;
 }

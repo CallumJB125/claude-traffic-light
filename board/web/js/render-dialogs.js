@@ -62,7 +62,7 @@ export function giveDialog(dlg, model) {
   const moving = dlg.mode === 'redispatch' && view.handover_hold;
   const title = moving ? `Continue ${view.key} with another AI` : `Tackle ${view.key} with AI`;
   const providers = tackleChoices(dlg.preview?.runners);
-  const ai = providers.find((a) => a.id === dlg.ai) ?? providers.find((a) => a.id === 'codex');
+  const ai = providers.find((a) => a.id === dlg.ai) ?? providers.find((a) => a.id === 'claude');
   const uncapped = ai.budget === 'none' || dlg.budget_mode === 'none';
   const noBudgetAllowed = isMe || dlg.preview?.can_use_no_budget === true;
   const waiting = !!dlg.preview?.loading;
@@ -80,6 +80,7 @@ export function giveDialog(dlg, model) {
     field('give-ai', 'AI', h('select', { id: 'give-ai', name: 'ai', class: 'input', 'data-change': 'give-ai', disabled: waiting || null },
       providers.map((p) => h('option', { value: p.id, selected: p.id === ai.id, disabled: !p.available || null }, `${p.label}${p.available && !dlg.preview?.runners?.length ? '' : p.reason ? ` · ${readinessText(p.reason)}` : ''}`))),
       !waiting && !dlg.preview?.error && !dlg.preview?.runners?.length ? 'The machine is offline. Work queues until a compatible signed-in runner connects.' : null),
+    capNotice(ai, dlg, uncapped, view),
     // A required repo with no default stays in view; a chosen one waits in Advanced.
     repoId ? null : repoField,
     advanced(
@@ -115,6 +116,20 @@ export function giveDialog(dlg, model) {
       h('button', { type: 'button', class: 'btn', 'data-action': 'close-dialog' }, 'Cancel'),
       h('button', { type: 'submit', class: 'btn btn-claude', disabled: busy || waiting || deviceLimit || (dlg.mode === 'retry' && uncapped) || !ai.available || (uncapped && !noBudgetAllowed) || null, 'aria-busy': busy ? 'true' : null, 'aria-describedby': 'give-sponsor' },
         busy ? 'Queuing…' : isMe ? moving ? `Continue with ${ai.label}` : 'Start' : `Ask ${targetMember?.name}`))), { wide: true });
+}
+
+const turnLimited = (ai, dlg) => ai.id !== 'codex' && dlg.max_turns != null;
+
+// The cap (or its absence) stays in view outside Advanced. An uncapped run is
+// an explicit choice: it needs a confirm unless the board's turn limit applies.
+function capNotice(ai, dlg, uncapped, view) {
+  if (dlg.mode === 'retry') return null;
+  if (!uncapped) return h('p', { class: 'hint', id: 'give-cap-line' }, `Card budget ${fmtUsd(Number(dlg.budget_usd) || 0)}. ${ai.label} stops at the cap; change it under Advanced.`);
+  return h('div', { class: 'field field-check', id: 'give-cap-line' },
+    h('p', null, ai.budget === 'none' ? `${ai.label} cannot enforce a dollar cap, so this run is uncapped by dollars.` : 'No budget: this run is uncapped by dollars.'),
+    turnLimited(ai, dlg)
+      ? h('p', { class: 'hint' }, `The board's ${dlg.max_turns}-turn limit still applies.`)
+      : h('label', { class: 'check' }, h('input', { type: 'checkbox', name: 'confirm_uncapped', required: true }), 'I understand there is no dollar limit on this run'));
 }
 
 export function switchAiDialog(dlg, model) {
