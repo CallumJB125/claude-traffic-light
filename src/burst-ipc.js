@@ -14,7 +14,7 @@ const POLL_BASE_MS = 5000;
 const POLL_MAX_MS = 60000;
 const TRAY_REFRESH_MS = 30000;
 
-function register({ utilityHandle, settingsOnly, isMac, dialog, shell, scriptDir, home = os.homedir(), launch, client: injected, log = () => {} }) {
+function register({ utilityHandle, settingsOnly, chipAllowed = () => false, accountAllowed = () => false, isMac, dialog, shell, scriptDir, home = os.homedir(), launch, client: injected, log = () => {} }) {
   const platform = isMac ? 'darwin' : 'other';
   const client = isMac ? (injected || require('./burst-client.js').createBurstClient({ home })) : null;
   const backoff = createProbeBackoff({ base: POLL_BASE_MS, max: POLL_MAX_MS });
@@ -74,15 +74,23 @@ function register({ utilityHandle, settingsOnly, isMac, dialog, shell, scriptDir
     return { ok: true };
   }
 
-  utilityHandle('burst:status', (e) => settingsOnly(e), async () => ({ ...(await refresh()), nextPollMs: isMac ? backoff.gap : 0 }));
-  utilityHandle('burst:consent-text', (e) => settingsOnly(e), async (_e, kind, mode) => {
+  const card = (e) => settingsOnly(e) || accountAllowed(e);
+  utilityHandle('burst:status', card, async () => ({ ...(await refresh()), nextPollMs: isMac ? backoff.gap : 0 }));
+  utilityHandle('burst:consent-text', card, async (_e, kind, mode) => {
     if (!isMac) return null;
     try { return await consentFor(kind, mode); } catch { return null; }
   });
-  utilityHandle('burst:action', (e) => settingsOnly(e), async (_e, req) => act(req && req.kind, req && req.mode));
-  utilityHandle('burst:test', (e) => settingsOnly(e), async () => {
+  utilityHandle('burst:action', card, async (_e, req) => act(req && req.kind, req && req.mode));
+  utilityHandle('burst:test', card, async () => {
     if (!isMac || last.kind !== 'present' || !last.capabilities.testConnection) return { ok: false, detail: 'Not available.' };
     try { return await client.testConnection(); } catch { return { ok: false, detail: 'Burst did not answer.' }; }
+  });
+
+  // Widget and Usage header: the chip only, never the card's actions or anything raw. Null on other platforms.
+  utilityHandle('burst:chip', chipAllowed, async () => {
+    if (!isMac) return { chip: null, nextPollMs: 0 };
+    const v = await refresh();
+    return { chip: v.chip, nextPollMs: backoff.gap };
   });
 
   if (isMac) refresh(true);

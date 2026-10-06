@@ -1584,7 +1584,7 @@ app.on('will-quit',()=>SetupsLocal.close());
 // handler checks its sender; the page to open is never taken from the renderer.
 const TeamEntry = require('./src/team-entry.js');
 const settingsOnly = (e) => fromUtilityPage(e, 'settings');
-const BurstIpc = require('./src/burst-ipc.js').register({ utilityHandle, settingsOnly, isMac: IS_MAC, dialog, shell, scriptDir: path.join(ROOT_DIR, 'burst-scripts'), log: console.log });
+const BurstIpc = require('./src/burst-ipc.js').register({ utilityHandle, settingsOnly, chipAllowed: (e) => widgetOnly(e) || fromUtilityPage(e, 'usage'), accountAllowed: (e) => fromPage(e, buddyWin?.accountWebContents?.()), isMac: IS_MAC, dialog, shell, scriptDir: path.join(ROOT_DIR, 'burst-scripts'), log: console.log });
 ipcMain.handle('account-view', (e) => {
   if (!settingsOnly(e)) return null;
   return TeamEntry.settingsView(accountSummary(), new URL(BRAND.DEFAULT_HUB).host);

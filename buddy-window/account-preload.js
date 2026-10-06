@@ -7,6 +7,8 @@ const str = (v) => String(v ?? '');
 
 contextBridge.exposeInMainWorld('buddyAccount', {
   state: () => call('state'),
+  burstStatus: () => ipcRenderer.invoke('burst:status'),
+  burstAction: (kind, mode) => ipcRenderer.invoke('burst:action', { kind: str(kind), mode: str(mode) }),
   openClients: () => call('openClients'),
   go: (screen) => call('go', str(screen)),
   hub: (address) => call('hub', str(address)),

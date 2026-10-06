@@ -150,6 +150,48 @@ test('non-mac: static text, no polling interval, burst-client never loaded', asy
 
 test('main.js wiring is a require+register line and one tray spread', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
-  assert.match(src, /require\('\.\/src\/burst-ipc\.js'\)\.register\(\{ utilityHandle, settingsOnly, isMac: IS_MAC/);
+  assert.match(src, /require\('\.\/src\/burst-ipc\.js'\)\.register\(\{ utilityHandle, settingsOnly, chipAllowed/);
   assert.match(src, /\.\.\.BurstIpc\.trayItems\(\),/);
+});
+
+test('chip: only normalized {tone,label}; null off-mac and when not installed; no raw fields leak', () => {
+  assert.equal(View.statusView({ kind: 'not_installed' }).chip, null);
+  assert.equal(View.statusView({ kind: 'unsupported' }, { platform: 'linux' }).chip, null);
+  const c = View.statusView(present({ route: 'SECONDARY', until: '2026-10-06T09:07:00' })).chip;
+  assert.deepEqual(Object.keys(c).sort(), ['label', 'tone']);
+  assert.deepEqual(c, { tone: 'amber', label: 'Secondary until 09:07' });
+  assert.deepEqual(View.statusView(present()).chip, { tone: 'green', label: 'Primary' });
+  assert.deepEqual(View.statusView({ kind: 'unreachable', installed: true }).chip, { tone: 'grey', label: 'Burst off' });
+  assert.deepEqual(View.statusView({ kind: 'untrusted', reason: 'x' }).chip, { tone: 'red', label: 'Untrusted' });
+});
+
+test('ipc chip channel: widget/usage senders get only the chip; others get null; non-mac hides and stops polling', async () => {
+  const handlers = {};
+  const detect = present({ route: 'SECONDARY', until: '2026-10-06T09:07:00' });
+  Ipc.register({
+    utilityHandle: (ch, allowed, fn) => { handlers[ch] = (e, ...a) => (allowed(e) ? fn(e, ...a) : null); },
+    settingsOnly: () => false, chipAllowed: (e) => e.widget === true, accountAllowed: (e) => e.account === true,
+    isMac: true, client: { detect: async () => detect, adminUrl: () => null }, home: H, scriptDir: '/x', dialog: {}, shell: {},
+  });
+  const r = await handlers['burst:chip']({ widget: true });
+  assert.deepEqual(Object.keys(r).sort(), ['chip', 'nextPollMs']);
+  assert.match(r.chip.label, /^Secondary until/);
+  assert.equal(await handlers['burst:chip']({}), null);
+  assert.equal(await handlers['burst:chip']({ account: true }), null);
+  assert.ok((await handlers['burst:status']({ account: true })).actions.length > 0, 'the This Mac page may use the card channels');
+  assert.equal(await handlers['burst:status']({ widget: true }), null, 'the widget may not');
+  const h2 = {};
+  Ipc.register({ utilityHandle: (c, a, f) => { h2[c] = f; }, settingsOnly: () => true, chipAllowed: () => true, isMac: false, dialog: {}, shell: {}, scriptDir: '/x' });
+  assert.deepEqual(await h2['burst:chip']({}), { chip: null, nextPollMs: 0 });
+});
+
+test('renderer wiring: chip script on widget and Usage page, mirror in This Mac, single-line main.js hooks', () => {
+  const rd = (f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
+  assert.match(rd('index.html'), /<script src="burst-chip\.js">/);
+  assert.match(rd('lights.html'), /<script src="burst-chip\.js">/);
+  assert.match(rd('preload.js'), /burstChip: \(\) => ipcRenderer\.invoke\('burst:chip'\)/);
+  assert.match(rd('lights-preload.js'), /burstChip/);
+  assert.match(rd('buddy-window/account.js'), /out\.push\(burstSection\(\)\)/);
+  assert.match(rd('buddy-window/account-preload.js'), /burstStatus/);
+  assert.match(rd('main.js'), /chipAllowed: \(e\) => widgetOnly\(e\) \|\| fromUtilityPage\(e, 'usage'\)/);
 });

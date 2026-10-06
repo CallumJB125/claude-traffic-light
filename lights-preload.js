@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('lightsApi', {
   resetRules: () => ipcRenderer.invoke('reset-rules'),
   openHatch: () => ipcRenderer.invoke('hatch:open'),
   removeCharacter: (id) => ipcRenderer.invoke('hatch:remove', id),
+  burstChip: () => ipcRenderer.invoke('burst:chip'),
   getAggregateStatus: () => ipcRenderer.invoke('get-aggregate-status'),
   getStats: (days) => ipcRenderer.invoke('get-stats', days),
   exportStats: (format, days) => ipcRenderer.invoke('export-stats', format, days),

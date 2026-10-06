@@ -138,6 +138,45 @@ function showInvite(inv, team) {
 
 // ── screens ───────────────────────────────────────────────────────────────
 
+// Mirror of Settings' Burst card. Main owns detection, consent and commands;
+// this renders the normalized view and polls only while its section is on screen.
+function burstSection() {
+  const detail = el('span', { class: 'acct-mail' });
+  const chip = el('span', { class: 'acct-mail', role: 'status' });
+  const result = el('p', { class: 'acct-hint', role: 'status' });
+  const buttons = el('div', {});
+  const name = el('span', { class: 'acct-name' }, 'Claude Burst');
+  const sec = el('section', { class: 'acct-section' }, el('h2', {}, 'Claude Burst'),
+    el('div', { class: 'acct-item' }, el('div', { class: 'acct-who' }, name, detail, chip)), buttons, result);
+  let timer = null;
+  let seen = false;
+  const poll = async () => {
+    clearTimeout(timer);
+    if (sec.isConnected) seen = true; else if (seen) return;
+    if (document.visibilityState !== 'visible') { timer = setTimeout(poll, 5000); return; }
+    let next = 30000;
+    try {
+      const v = await api.burstStatus();
+      if (v) {
+        detail.textContent = v.detail;
+        chip.textContent = v.chip ? v.chip.label : '';
+        buttons.textContent = '';
+        for (const a of v.actions) {
+          buttons.append(el('button', { type: 'button', class: a.primary ? 'btn btn-primary' : 'btn', onclick: async () => {
+            const r = await api.burstAction(a.kind, a.modes ? 'base-url' : '').catch(() => ({ ok: false, error: 'Something went wrong.' }));
+            result.textContent = r.cancelled ? 'Cancelled. Nothing changed.' : r.ok ? 'Started in Terminal.' : (r.error || '');
+            poll();
+          } }, a.label));
+        }
+        next = v.nextPollMs;
+      }
+    } catch { /* retry */ }
+    if (next) timer = setTimeout(poll, next);
+  };
+  poll();
+  return sec;
+}
+
 const SCREENS = {
   clients(s) {
     return [heading('Your client projects', 'View the project updates shared with you. Invitations need your explicit acceptance.'),
@@ -453,6 +492,7 @@ const SCREENS = {
       if (!s.workCapture.tasks.length) sec.append(el('p', { class: 'acct-hint' }, 'Cards appear when a connected AI reports work.'));
       out.push(sec);
     }
+    out.push(burstSection());
     if (!s.hubs.length || s.hubs.every((h) => !h.teams.length)) {
       out.push(el('p', { class: 'acct-hint' }, 'Sign in and join a team to run cards here.'));
       return out;
