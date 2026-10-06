@@ -1599,9 +1599,11 @@
 
   async function renderMix() {
     renderUsageHistory();
-    const mix = await window.lightsApi.modelMix();
-    if (!mix) return;
+    let mix = null;
+    try { mix = await window.lightsApi.modelMix(); } catch { /* shown as empty below */ }
+    // Loading ends whether or not the read produced data.
     $('mix-loading').hidden = true;
+    if (!mix) { $('mix-empty').hidden = false; $('mix-body').hidden = true; return; }
     $('mix-empty').hidden = mix.week.turns > 0;
     $('mix-body').hidden = !mix.week.turns;
     if (mix.week.turns) {
