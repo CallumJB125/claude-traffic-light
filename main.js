@@ -44,6 +44,7 @@ const Compaction = require('./src/compaction.js');
 const Health = require('./src/health.js');
 const Backups = require('./src/backups.js');
 const { applyConfigSideEffects } = require('./src/config-effects.js');
+const { spendMinGap } = require('./src/spend-poll.js');
 const { createStatusGate } = require('./src/status-gate.js');
 const { createMotionGate, staleMachineReasons, askKey, statusPushWanted } = require('./src/motion-gate.js');
 const { createAwayFeeds } = require('./src/away-feeds.js');
@@ -3365,8 +3366,12 @@ let spendInFlight = null;
 let spendReadAt = 0;
 const SPEND_POLL_MS = 15000;
 const SPEND_LIVE_MS = 3000;
+function anyWindowVisible() {
+  const lightsShown = !!lightsWin && !lightsWin.isDestroyed() && lightsWin.isVisible() && !lightsMotion.paused;
+  return !widgetMotion.paused || !!buddyWin?.isVisible() || lightsShown;
+}
 function refreshSpend(minGap = SPEND_POLL_MS - 1000) {
-  if (spendInFlight || Date.now() - spendReadAt < minGap) return;
+  if (spendInFlight || Date.now() - spendReadAt < spendMinGap({ minGap, anyVisible: anyWindowVisible() })) return;
   const t0 = Date.now();
   spendInFlight = spendRead(Spend.readSince(loadConfig().spend))
     .then((r) => {
