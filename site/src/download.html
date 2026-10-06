@@ -12,14 +12,16 @@
     <h1>Download {{brand.name}}</h1>
     <p class="lede">Plexiform is free for you and your team. Your AI providers keep their own subscriptions and usage charges. {{live:publicSignup}}<a href="{{brand.urls.hub}}">Create a free account</a> or sign in to your existing team.{{/live}}{{notlive:publicSignup}}Public registration is being prepared; existing team access still uses invitations.{{/notlive}}</p>
 
-    <div class="dl-card" id="dl" data-windows="{{live:windowsDownloads}}true{{/live}}{{notlive:windowsDownloads}}false{{/notlive}}" data-feed="{{brand.urls.downloads}}/beta" data-channel="beta" data-fallback="https://github.com/CallumJB125/claude-traffic-light/releases">
-      <p id="dl-status" role="status">Looking for the latest public preview…</p>
-      <div id="dl-primary"></div>
-      <p id="dl-meta"></p>
+    <div class="dl-card" id="dl" data-windows="{{live:windowsDownloads}}true{{/live}}{{notlive:windowsDownloads}}false{{/notlive}}" data-api="https://api.github.com/repos/CallumJB125/claude-traffic-light" data-fallback="https://github.com/CallumJB125/claude-traffic-light/releases">
+      <h2 id="install" style="margin:0;font-size:1.5rem;color:var(--desk-ink)">Install in one line</h2>
+      <p>On a Mac or Linux computer, paste this into Terminal:</p>
+      <p><code id="install-cmd">curl -fsSL https://plexiform.dev/install.sh | sh</code> <button type="button" class="btn" id="copy-install">Copy</button></p>
+      <p>It downloads the newest build from GitHub, checks its SHA-256 against the checksum published with that release, and installs it, with no Apple Developer ID and no "can't be opened" prompt. It never uses sudo. You can <a href="/install.sh">read the script</a> first; it is short. Add <code>PLEXIFORM_CHANNEL=stable</code> before <code>sh</code> to skip pre-releases.</p>
     </div>
 
-    <p class="note" style="margin-top:18px">{{live:windowsDownloads}}Published installers are available for macOS, Windows and Linux.{{/live}}{{notlive:windowsDownloads}}Published installers are currently available for macOS and Linux. Windows is unavailable while its runtime acceptance is pending.{{/notlive}} The latest public preview is 1.0.2-beta.52. If the feeds cannot be loaded, <a href="https://github.com/CallumJB125/claude-traffic-light/releases">browse published GitHub releases</a>.</p>
-    <h2 style="margin-top:56px;font-size:1.5rem">All downloads</h2>
+    <h2 style="margin-top:56px;font-size:1.5rem">Download manually</h2>
+    <p class="prose" style="margin-top:12px" id="dl-status" role="status">Looking for the latest public preview…</p>
+    <p class="note" style="margin-top:12px">{{live:windowsDownloads}}Published installers are available for macOS, Windows and Linux.{{/live}}{{notlive:windowsDownloads}}Published installers are currently available for macOS and Linux. Windows is unavailable while its runtime acceptance is pending.{{/notlive}} If the links cannot be loaded, <a href="https://github.com/CallumJB125/claude-traffic-light/releases">browse published GitHub releases</a>.</p>
     <ul class="os-list" id="dl-all">
       <li data-os="mac"><span><strong>macOS</strong> · Apple silicon and Intel</span><span class="muted">Checking…</span></li>
       <li data-os="win"><span><strong>Windows</strong></span><span class="muted">{{live:windowsDownloads}}Checking…{{/live}}{{notlive:windowsDownloads}}Unavailable pending runtime acceptance{{/notlive}}</span></li>
@@ -44,7 +46,7 @@
     {{/notlive}}
 
     <h2 id="first-open" style="margin-top:64px;font-size:1.7rem">Opening it the first time</h2>
-    <p class="prose" style="margin-top:12px">No Terminal command is needed to install and open {{brand.name}}. The Mac beta uses ad-hoc signing, not Apple Developer ID signing or notarization, so macOS may require confirmation on first open and after an update. Use the download links above; optional checksum verification is below.</p>
+    <p class="prose" style="margin-top:12px">The one-line installer above avoids this: a file fetched by <code>curl</code> is not marked as downloaded from the internet, so macOS does not stop it. If you download the .dmg or .zip in a browser instead, read on. The Mac beta uses ad-hoc signing, not Apple Developer ID signing or notarization, so macOS may require confirmation on first open and after an update.</p>
     <div class="grid-2" style="margin-top:28px">
       <div>
         <h3>On a Mac</h3>
@@ -82,14 +84,13 @@
 
     <details style="margin-top:48px">
       <summary><strong>Advanced: verify your download</strong></summary>
-      <p class="prose" style="margin-top:12px">This optional check uses Terminal. Each published build is listed with a SHA-512 checksum. Replace <code>&lt;file&gt;</code> with your downloaded file and compare the result with the checksum shown above:</p>
-      <p style="margin-top:12px"><code class="mono" style="font:600 0.9rem ui-monospace,Menlo,monospace;background:var(--paper-2);padding:8px 12px;border-radius:8px;display:inline-block;overflow-wrap:anywhere">openssl dgst -sha512 -binary &lt;file&gt; | base64</code></p>
+      <p class="prose" style="margin-top:12px">This optional check uses Terminal. Each release lists SHA-256 checksums in <code>SHA256SUMS.txt</code>. Replace <code>&lt;file&gt;</code> with your downloaded file and compare the result with the matching line there:</p>
+      <p style="margin-top:12px"><code class="mono" style="font:600 0.9rem ui-monospace,Menlo,monospace;background:var(--paper-2);padding:8px 12px;border-radius:8px;display:inline-block;overflow-wrap:anywhere">shasum -a 256 &lt;file&gt;</code></p>
     </details>
   </div>
 </main>
 {{include:footer}}
 <script src="{{asset:assets/site.js}}" defer></script>
-<script src="{{asset:assets/feed.js}}" defer></script>
 <script src="{{asset:assets/download.js}}" defer></script>
 </body>
 </html>
