@@ -4,8 +4,10 @@
 import { cardFace, alertsFor, sponsorLine } from '../../shared/cardface.js';
 import { formatAge } from '../../shared/liveness.js';
 import { ACTIVE, COLUMNS } from '../../shared/states.js';
+import { COLUMN_LABELS, isHumanOwned, isObservedWork, observedLane } from '../../shared/capture-lane.js';
 
-export const COLUMN_LABEL = { todo: 'To do', in_progress: 'In progress', in_review: 'Review', done: 'Done', stalled: 'Stalled' };
+export const COLUMN_LABEL = { ...COLUMN_LABELS, stalled: 'Stalled', idle: 'Idle' };
+export { isHumanOwned, isObservedWork, observedLane };
 export { COLUMNS, formatAge, sponsorLine };
 
 /**
@@ -22,13 +24,6 @@ export function displayFace(view, { elapsed_ms = 0, connection_lost = false } = 
   return { ...face, green, tone, hub_green: hubGreen, client_green: face.green, disagree: face.green !== hubGreen && !!view.live };
 }
 
-// A card with no run is human-owned: its column is whatever a person set.
-// Everything else is derived from run state and never dragged.
-export const isHumanOwned = (view) => (view.run_state ?? 'todo') === 'todo';
-// Captured work already exists outside the board dispatcher. Once a real run
-// is queued/started, keep that run's normal controls and verified liveness.
-export const isObservedWork = (view) => !view.run && isHumanOwned(view) && view.capture?.source === 'local_observation';
-
 // An AI is reporting work on this card right now: it is not done, whatever
 // column a person last chose.
 export const hasLiveCapture = (view) => view.capture?.fresh === true && view.capture?.status === 'working';
@@ -42,7 +37,8 @@ export function cardWorkPhase(view, face) {
   return null;
 }
 
-export function columnFor(view, face) {
+export function columnFor(view, face, elapsed_ms = 0) {
+  if (observedLane(view, elapsed_ms) === 'idle') return 'idle';
   if (isHumanOwned(view) && hasLiveCapture(view)) return 'in_progress';
   if (isHumanOwned(view) && COLUMNS.includes(view.column)) return view.column;
   return face.stalled ? 'stalled' : face.column;
@@ -55,9 +51,9 @@ const RANK = { stalled: 0, blocked: 0, orphaned: 1, failed: 1, parked: 1, unresp
 // Stalled runs leave In progress: they sit in their own lane (cols.stalled),
 // never among the cards that are working.
 export function groupColumns(entries) {
-  const cols = { ...Object.fromEntries(COLUMNS.map((c) => [c, []])), stalled: [] };
-  for (const e of entries) cols[columnFor(e.view, e.face)]?.push(e);
-  for (const c of [...COLUMNS, 'stalled']) {
+  const cols = { ...Object.fromEntries(COLUMNS.map((c) => [c, []])), stalled: [], idle: [] };
+  for (const e of entries) cols[columnFor(e.view, e.face, e.elapsed_ms ?? 0)]?.push(e);
+  for (const c of [...COLUMNS, 'stalled', 'idle']) {
     cols[c].sort((a, b) => (RANK[a.face.state] ?? 9) - (RANK[b.face.state] ?? 9)
       || (a.view.state_age_ms ?? Infinity) - (b.view.state_age_ms ?? Infinity)
       || String(a.view.key).localeCompare(String(b.view.key), undefined, { numeric: true }));

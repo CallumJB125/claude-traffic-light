@@ -231,6 +231,18 @@ export function stalledLane(entries, model) {
     h('div', { class: 'stalled-body' }, entries.map((e) => card(e, model))));
 }
 
+// Reported sessions with no recent report. They keep a card for context but
+// never sit among the work that is actually moving.
+export function idleLane(entries, model) {
+  if (!entries.length) return null;
+  return h('section', { class: 'stalled-lane idle-lane', 'data-column': 'idle', 'aria-labelledby': 'col-idle' },
+    h('header', { class: 'column-head' },
+      h('h2', { id: 'col-idle' }, COLUMN_LABEL.idle),
+      h('span', { class: 'column-count num', 'aria-label': `${entries.length} cards` }, String(entries.length)),
+      h('span', { class: 'stalled-hint' }, 'No report in the last 90 seconds. Hidden after 24 hours; use Show archived to see them.')),
+    h('div', { class: 'stalled-body' }, entries.map((e) => card(e, model))));
+}
+
 // The drop indicator is an empty keyed node between cards: its line is a
 // pseudo-element, so showing it never shifts the layout under the pointer.
 function columnCards(id, shown, model) {
@@ -412,6 +424,7 @@ export function boardScreen(model, body = null) {
     localCard(model),
     model.view === 'dashboard' ? null : filterBar(model),
     body ? null : stalledLane(cols.stalled, model),
+    body ? null : idleLane(cols.idle, model),
     body ?? h('main', { class: 'board', id: 'board', 'aria-label': 'Board columns' },
       COLUMNS.map((c) => column(c, cols[c], model))),
     h('p', { id: 'dnd-help', class: 'sr-only' }, 'Cards with no active agent run can be moved. Press Space to pick up, left and right arrows to choose a column, Space to drop, Escape to cancel.'),

@@ -64,7 +64,7 @@ const requestBinding = (route, params, body) => createHash('sha256').update(JSON
 const PREPARE_REPLAY = Object.freeze({ status: 409, body: { error: { code: 'CONFLICT', message: 'This request was already sent. Reload the page.', reason: 'REPLAYED' } } });
 // An invite's answer is its link and code, shown once: the replay entry never holds them.
 const INVITE_REPLAY = Object.freeze({ status: 409, body: { error: { code: 'CONFLICT', message: 'This invite was already made. Resend it to get a new link.', reason: 'REPLAYED' } } });
-const SHARED_BROWSER = new Set(['states', 'liveness', 'fence', 'scope', 'overlap', 'cardface', 'handover', 'protocol', 'brand', 'ai', 'planning', 'workflow-execution', 'workflow-execution-controls', 'packet-text']);
+const SHARED_BROWSER = new Set(['states', 'liveness', 'fence', 'scope', 'overlap', 'cardface', 'handover', 'protocol', 'brand', 'ai', 'planning', 'workflow-execution', 'workflow-execution-controls', 'packet-text', 'capture-lane']);
 const CSP = "default-src 'self'; connect-src 'self'; img-src 'self' https://avatars.githubusercontent.com; style-src 'self'; script-src 'self'; base-uri 'none'; frame-ancestors 'none'";
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.md': 'text/markdown; charset=utf-8', '.webmanifest': 'application/manifest+json' };
 

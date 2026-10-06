@@ -4,7 +4,7 @@ import { capturePresentation } from '../js/render-capture.js';
 import { drawer } from '../js/render-drawer.js';
 import { tableScreen } from '../js/render-table.js';
 import { card, cardActions } from '../js/render-board.js';
-import { displayFace, cardWorkPhase } from '../js/view.js';
+import { displayFace, cardWorkPhase, observedLane, groupColumns } from '../js/view.js';
 import { textOf, byClass, byAttr } from '../js/h.js';
 import { model, view, live } from './fixtures.js';
 const report = { source: 'local_observation', provider: 'codex', reported_status: 'working', status: 'working', tracking: 'active', fresh: true, age_ms: 1000, received_at: '2026-10-03T12:00:00.000Z' };
@@ -60,4 +60,26 @@ test('drawer and table use the real queued run instead of its historical capture
  const queued=observed({run_state:'queued',target:{member_id:'m-alice',name:'Alice',is_viewer:true}});
  for (const surface of surfaces(queued)) { assert.equal(byClass(surface,'capture-report').length,0); assert.match(textOf(surface),/Queued/); }
  const detail=surfaces(queued)[0]; assert.equal(byAttr(detail,'data-action','cancel').length,1);
+});
+
+test('a report with no live age shows relative time with the exact time on hover, never raw ISO', () => {
+ const received_at = new Date(Date.now() - 3 * 86_400_000).toISOString();
+ const v = observed({ capture: { ...report, age_ms: null, fresh: false, reported_status: 'idle', status: 'unknown', received_at } });
+ const p = capturePresentation(v);
+ assert.equal(p.lastReport, 'Last report: idle · 3 days ago'); assert.doesNotMatch(p.lastReport, /\d{4}-\d{2}-\d{2}T/); assert.ok(p.exact);
+ const n = rendered(v); assert.equal(byClass(n, 'capture-last-report')[0].props.title, `Reported ${p.exact}`);
+ assert.match(capturePresentation(observed({ capture: { ...report, age_ms: null, fresh: false, received_at: new Date(Date.now() - 120_000).toISOString() } })).lastReport, /· 2m ago$/);
+});
+test('stale observed sessions leave In progress for the Idle lane; day-old ones are hidden; manual and finished cards stay', () => {
+ const at = (ms) => new Date(Date.now() - ms).toISOString();
+ const cap = (ms, extra = {}) => ({ ...report, age_ms: null, fresh: false, received_at: at(ms), column: 'in_progress', ...extra });
+ const lane = (c, extra = {}) => observedLane(observed({ column: 'in_progress', capture: c, ...extra }));
+ assert.equal(lane(cap(1000, { fresh: true })), 'active');
+ assert.equal(lane(cap(120_000)), 'idle');
+ assert.equal(lane(cap(120_000, { reported_status: 'review' })), 'active');
+ assert.equal(lane(cap(2 * 86_400_000)), 'archived');
+ assert.equal(lane(cap(2 * 86_400_000, { managed: { column: false } })), 'active');
+ const entry = (c) => { const v = observed({ column: 'in_progress', capture: c }); return { view: v, face: displayFace(v), elapsed_ms: 0 }; };
+ const cols = groupColumns([entry(cap(120_000)), entry(cap(1000, { fresh: true, age_ms: 1000 }))]);
+ assert.equal(cols.idle.length, 1); assert.equal(cols.in_progress.length, 1);
 });

@@ -6,7 +6,7 @@ import { tacklePreference, rememberTackle, raisedBudget, tackleChoices } from '.
 import { handoverPin, sameHandover } from './ai-handover.js';
 import { api, errorText, setOrg, currentOrg, setCsrf, requestId } from './api.js';
 import { connectBoard } from './socket.js';
-import { displayFace, alertsForViewer, needsYou, agedView, fmtUsd } from './view.js';
+import { displayFace, alertsForViewer, needsYou, agedView, fmtUsd, observedLane } from './view.js';
 import { planMoves, moveSummary, dragModel, pruneSelection, idsToDrag, kbdStart, kbdKey, announcement } from './dnd.js';
 import { emptyFilters, isFiltering, parseFilters, writeFilters, toggleIn, applyFilters, filterOptions } from './filters.js';
 import { parseTitles, needsConfirm, pendingCard } from './quickadd.js';
@@ -377,10 +377,11 @@ function buildModel() {
   const lost = state.conn.status === 'lost';
   // While disconnected the board shows states as of the drop; ages freeze.
   const clockNow = lost && state.conn.lostPerf != null ? state.conn.lostPerf : now;
+  // Observed sessions silent for over 24 h leave the default board; Show archived brings them back.
   const entries = [...state.cards.values(), ...(state.showArchived && state.archived ? state.archived.values() : [])].map(({ view, rx }) => {
     const elapsed_ms = Math.max(0, clockNow - rx);
     return { view, elapsed_ms, face: displayFace(view, { elapsed_ms, connection_lost: lost }) };
-  });
+  }).filter((e) => state.showArchived || observedLane(e.view, e.elapsed_ms) !== 'archived');
   let detail = null;
   if (state.detail) {
     const d = state.detail;
