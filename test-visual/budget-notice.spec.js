@@ -77,7 +77,7 @@ test('x dismisses, run.ended clears, and the next notice shows', async () => {
 
 test('the ask bubble wins while it is up', async () => {
   await inject({ ...EVENT, card_key: undefined, run_id: 'run_3' });
-  await expect(widget.locator('#budget-text')).toHaveText('Your Give to Claude run reached its budget ($4.80 of $5.00)');
+  await expect(widget.locator('#budget-text')).toHaveText('Your Tackle with AI run reached its budget ($4.80 of $5.00)');
   const hook = F.blockingHook(h, 'permission-request', { session_id: 'vis-budget', cwd: '/visual/app', tool_name: 'Bash', tool_input: { command: 'git status' } });
   await expect(widget.locator('.ib-item.kind-permission.open')).toBeVisible({ timeout: 10000 });
   await expect(widget.locator('#budget')).toBeHidden();

@@ -1,4 +1,4 @@
-// Modal dialogs: Give to Claude, confirm (destructive), hand over, request
+// Modal dialogs: Tackle with AI, confirm (destructive), hand over, request
 // changes, new card. Native <dialog> + showModal() gives focus trapping and
 // Escape for free; app.js opens them after render.
 import { h } from './h.js';
@@ -60,7 +60,7 @@ export function giveDialog(dlg, model) {
   const repoId = dlg.repo_id || (repos.length === 1 ? repos[0].id : '');
   const busy = dlg.busy;
   const moving = dlg.mode === 'redispatch' && view.handover_hold;
-  const title = moving ? `Continue ${view.key} with another AI` : `Give ${view.key} to AI`;
+  const title = moving ? `Continue ${view.key} with another AI` : `Tackle ${view.key} with AI`;
   const providers = tackleChoices(dlg.preview?.runners);
   const ai = providers.find((a) => a.id === dlg.ai) ?? providers.find((a) => a.id === 'codex');
   const uncapped = ai.budget === 'none' || dlg.budget_mode === 'none';

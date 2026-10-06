@@ -27,7 +27,7 @@ export const MATRIX = Object.freeze({
   'members.emails': ADMINS,      // member emails in the member list
   'card.write': WRITERS,         // create / edit / move cards, labels, assignees
   'comment': WRITERS,
-  'dispatch': WRITERS,           // Give to Claude (own or another member's runner)
+  'dispatch': WRITERS,           // Tackle with AI (own or another member's runner)
   'run.control': WRITERS,        // stop / cancel / retry / take over / hand over / answer / approve
   'device.enrol': WRITERS,       // be a dispatch target / enrol a runner
   'label.write': WRITERS,        // board label registry: create, recolour, describe (D91)

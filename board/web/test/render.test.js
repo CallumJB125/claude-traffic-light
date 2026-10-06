@@ -260,7 +260,7 @@ test('Tackle with AI: own Codex account by default, sponsor and overlaps shown b
     preview: { overlaps: [{ other_card_id: 'c-9', other_key: 'BDL-9', other_owner: 'Bob', kind: 'overlapping', paths: ['backend/routes/applications.js'] }], sponsor: 'Runs on your MacBook Pro · your claude account' } };
   const n = giveDialog(dlg, m);
   const t = textOf(n);
-  assert.match(t, /Give BDL-1 to AI/);
+  assert.match(t, /Tackle BDL-1 with AI/);
   // Machine, branch, budget and plan approval wait behind one closed Advanced disclosure.
   const adv = findAll(n, (x) => x.tag === 'details');
   assert.equal(adv.length, 1);

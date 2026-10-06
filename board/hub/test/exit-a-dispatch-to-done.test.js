@@ -1,4 +1,4 @@
-// Exit (a): Give to Claude → green ≤ 60 s → In review with a hub-verified PR
+// Exit (a): Tackle with AI → green ≤ 60 s → In review with a hub-verified PR
 // + tests → Done on merge, with zero manual column moves.
 
 import { test } from 'node:test';

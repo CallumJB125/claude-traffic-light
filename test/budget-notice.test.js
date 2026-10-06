@@ -56,7 +56,7 @@ test('dismiss, run.resumed and run.ended drop only that run', () => {
 
 test('text names the card when there is a key', () => {
   assert.equal(B.text(B.classify(ev()).notice), 'Your run on PLX-123 reached its budget ($4.80 of $5.00)');
-  assert.equal(B.text(B.classify(ev({ card_key: undefined })).notice), 'Your Give to Claude run reached its budget ($4.80 of $5.00)');
+  assert.equal(B.text(B.classify(ev({ card_key: undefined })).notice), 'Your Tackle with AI run reached its budget ($4.80 of $5.00)');
 });
 
 test('the fragment is base64url JSON {v:1, card_id}', () => {

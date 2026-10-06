@@ -175,7 +175,7 @@ export function renderMarkdown(doc, { now_ms }) {
 export function howToTakeOver(doc) {
   const c = doc.card ?? {};
   const r = doc.run;
-  if (!r) return 'Give to Claude to start a run.';
+  if (!r) return 'Tackle with AI to start a run.';
   const next = r.fence + 1;
   const snap = doc.layers.snapshot;
   const from = snap?.status === 'pushed' && snap.sha

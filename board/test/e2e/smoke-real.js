@@ -4,7 +4,7 @@
 // board-mcp + the member's own `claude --model haiku`, a tiny temp repo whose
 // "GitHub" origin is a local bare repo (insteadOf), and a fake GitHub API that
 // knows exactly the commits pushed to that bare repo (so a pushed commit is
-// hub_verified). One card, "add a function and a test", Give to Claude → it
+// hub_verified). One card, "add a function and a test", Tackle with AI → it
 // must end In review with a pushed commit and a test run as evidence.
 //   node test/e2e/smoke-real.js [--shots <dir>] [--budget 0.15]
 // Uses the member's real HOME for the CLI login; BOARD_HOME, the hub data and

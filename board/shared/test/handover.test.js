@@ -97,7 +97,7 @@ test('how to take over + handoff memory', () => {
   assert.match(how, /new run r4 on board\/BDL-142-r4 from snapshot 7f3a2c1 at refs\/board\/BDL-142\/r3/);
   assert.match(how, /git fetch origin 'refs\/board\/BDL-142\/\*:refs\/board\/BDL-142\/\*'/);
   assert.match(how, /Redo the 2 unsynced edit/);
-  assert.equal(howToTakeOver(mergeHandover({ card: { key: 'K' } })), 'Give to Claude to start a run.');
+  assert.equal(howToTakeOver(mergeHandover({ card: { key: 'K' } })), 'Tackle with AI to start a run.');
   assert.equal(handoffMemoryText({ from_n: 3, to_n: 4, taker: 'Sam', provenance: 'checkpoint_incomplete', hypothesis: 'h', next: 'n' }), 'r3 → r4: Sam took over (checkpoint incomplete); hypothesis h; next n');
   assert.ok(handoffMemoryText({ from_n: 1, hypothesis: 'x'.repeat(5000) }).length <= 1200);
 });

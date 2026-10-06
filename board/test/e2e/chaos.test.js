@@ -37,7 +37,7 @@ function finish(s, timelines) {
   } finally { db.close(); }
 }
 
-test('Give to Claude → green; kill -9 the CLI → failed within ~1 s, never green again', async () => {
+test('Tackle with AI → green; kill -9 the CLI → failed within ~1 s, never green again', async () => {
   const s = await stack();
   try {
     const A = await s.runner('rA', s.alice, WORK());

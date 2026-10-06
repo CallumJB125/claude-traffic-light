@@ -38,7 +38,7 @@ function classify(ev) {
 
 function text(n) {
   const sums = `(${money(n.spent)} of ${money(n.budget)})`;
-  return n.cardKey ? `Your run on ${n.cardKey} reached its budget ${sums}` : `Your Give to Claude run reached its budget ${sums}`;
+  return n.cardKey ? `Your run on ${n.cardKey} reached its budget ${sums}` : `Your Tackle with AI run reached its budget ${sums}`;
 }
 
 function fragment(n) {

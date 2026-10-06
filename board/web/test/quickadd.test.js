@@ -37,7 +37,7 @@ test('pendingCard: a human-owned To do card that renders, and can\'t be opened, 
   const open = byClass(n, 'card-open')[0];
   assert.equal(open.props.disabled, true);
   assert.equal(open.props['data-action'], null);
-  assert.equal(byClass(n, 'card-actions').length, 0, 'no Give to Claude before the hub has the card');
+  assert.equal(byClass(n, 'card-actions').length, 0, 'no Tackle with AI before the hub has the card');
   assert.match(textOf(n), /Write the docs/);
 });
 

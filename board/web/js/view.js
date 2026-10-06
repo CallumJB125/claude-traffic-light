@@ -124,7 +124,7 @@ export const isActive = (state) => ACTIVE.has(state);
 
 // Button copy for each cardface action id.
 export const ACTION_LABEL = {
-  give_to_claude: 'Give to AI',
+  give_to_claude: 'Tackle with AI',
   cancel: 'Cancel',
   stop: 'Stop',
   watch: 'Watch',
@@ -138,7 +138,7 @@ export const ACTION_LABEL = {
   continue: 'Review',
   take_over_confirm: 'Take over…',
   take_over: 'Take over',
-  take_over_with_claude: 'Give to AI',
+  take_over_with_claude: 'Tackle with AI',
   take_over_myself: 'Take it myself',
   open_pr: 'Open PR',
   request_changes: 'Request changes',
