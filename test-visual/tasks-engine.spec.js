@@ -74,7 +74,7 @@ test('Tasks desktop starts its real helper, edits durable checkpoints, restarts 
     // Open the same real engine from the ordinary main window/sidebar.
     await h.app.evaluate(() => global.__buddyTrayMenu.items.find((i) => /Open Plexiform/.test(i.label)).click());
     const shell = await windowByFile(h.app, 'buddy-window/sidebar.html'); await shell.waitForLoadState('load');
-    await shell.locator('[data-page="tasks"]').click();
+    await shell.locator('[data-section="today"]').click(); await shell.locator('[data-page="tasks"]').click();
     await expect.poll(() => h.app.evaluate(({ webContents }) => webContents.getAllWebContents().some((w) => w.getURL().includes('tasks.html?embedded=1')))).toBe(true);
     const noSecret = await page.evaluate(() => !/btk_|btr_/.test(document.body.innerText)); expect(noSecret).toBe(true);
   } finally { client?.close(); await h?.cleanup(); fs.rmSync(dir, { recursive: true, force: true }); }

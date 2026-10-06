@@ -15,7 +15,7 @@ const read = (...p) => fs.readFileSync(path.join(...p), 'utf8');
 
 test('only the connectors enabled on the team hub today are "Available"; the rest are "Coming soon"', () => {
   assert.deepEqual([...LAUNCH_CONNECTORS], ['github']);
-  assert.deepEqual(CONNECTORS.map((c) => c.id), ['github', 'slack', 'sentry', 'linear', 'jira', 'google']);
+  assert.deepEqual(CONNECTORS.map((c) => c.id), ['github', 'slack', 'sentry']);
   for (const c of CONNECTORS) assert.equal(connectorStatus(c.id), c.id === 'github' ? 'available' : 'soon', c.id);
   const rows = connectorRows();
   assert.deepEqual(rows.filter((r) => r.status === 'available').map((r) => r.id), ['github']);
@@ -41,7 +41,7 @@ test('the sidebar lists Team and Integrations whatever the account or hub state'
   assert.equal(pageById('integrations').localScreen, 'integrations');
   assert.ok(PAGES.filter((p) => p.group === 'team').map((p) => p.id).includes('integrations'));
   const sidebar = read(dir, 'sidebar.js');
-  assert.match(sidebar, /const list = pages\.filter\(\(p\) => p\.group === g\.id\);/);
+  assert.match(sidebar, /for \(const s of sections\)/);
   assert.ok(!/signedIn|hub\.mode|workspaces/.test(sidebar.split('function build()')[1].split('function paint()')[0]), 'build() does not look at account state');
 });
 

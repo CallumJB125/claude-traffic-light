@@ -6,7 +6,7 @@ const os = require('node:os');
 const fs = require('node:fs');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
-const { PAGES, flat, pageById, hubPageUrl, navDecision, openDecision, connectDecision, manifestPost, parseConnectName, connectUrlOk, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl } = require('../buddy-window/pages');
+const { PAGES, SECTIONS, sectionOf, flat, pageById, hubPageUrl, navDecision, openDecision, connectDecision, manifestPost, parseConnectName, connectUrlOk, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl } = require('../buddy-window/pages');
 const { createHubSupervisor, hubEnv, MAX_RESTARTS } = require('../buddy-window/hub-process');
 
 // ── pages ──────────────────────────────────────────────────────────────────
@@ -16,12 +16,26 @@ test('every page has a unique id, a title and a known kind', () => {
   assert.equal(new Set(all.map((p) => p.id)).size, all.length);
   for (const p of all) {
     assert.ok(p.title, p.id);
-    assert.ok(['hub', 'window', 'local', 'soon'].includes(p.kind), p.id);
+    assert.ok(['hub', 'window', 'local'].includes(p.kind), `${p.id}: no placeholder pages`);
+    assert.ok(!p.pending, `${p.id}: no soon pill`);
     if (p.kind === 'window') assert.ok(p.window, p.id);
   }
-  for (const want of ['board', 'myday', 'tasks', 'integrations', 'team', 'usage', 'setups', 'plugins', 'settings']) assert.ok(pageById(want), want);
+  for (const want of ['board', 'myday', 'tasks', 'integrations', 'team', 'usage', 'setups', 'settings']) assert.ok(pageById(want), want);
   assert.equal(PAGES[0].id, 'overview');
   assert.ok(PAGES.some(page => page.id === 'board'));
+});
+
+test('the sidebar has five sections that together reach every page exactly once', () => {
+  assert.deepEqual(SECTIONS.map((s) => s.id), ['today', 'board', 'team', 'activity', 'more']);
+  const listed = SECTIONS.flatMap((s) => s.pages);
+  assert.equal(new Set(listed).size, listed.length, 'no page in two sections');
+  assert.deepEqual([...listed].sort(), flat().map((p) => p.id).sort(), 'no page is orphaned');
+  for (const s of SECTIONS) assert.ok(s.pages.includes(s.default) && pageById(s.default), `${s.id} opens a page it holds`);
+  assert.equal(sectionOf('board:calendar'), 'board');
+  assert.equal(sectionOf('waiting'), 'today');
+  assert.equal(sectionOf('integrations'), 'team');
+  assert.equal(sectionOf('nope'), null);
+  assert.equal(pageById('plugins'), null);
 });
 
 test('local pages name an app file and its preload, and both exist', () => {

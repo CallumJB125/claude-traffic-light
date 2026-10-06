@@ -9,7 +9,8 @@
 //             (the plug-in point for Tasks and settings pages); `screen`
 //             picks the account page's screen (account.html), `file` +
 //             `preload` (in the app root) name a page of their own.
-//   soon    — named in the plan but not built yet; says so honestly.
+//   soon    — named in the plan but not built yet; says so honestly. (None today:
+//             a page with no working feature is left out, not shown with a pill.)
 'use strict';
 
 const { NAME } = require('./brand');
@@ -27,14 +28,13 @@ const PAGES = [
   { id: 'waiting', title: 'Waiting on you', icon: 'bell', kind: 'local', file: 'waiting.html', preload: 'waiting-preload.js', query: { embedded: '1' }, group: 'work' },
   { id: 'myday', title: 'My day', icon: 'sun', kind: 'local', file: 'myday.html', preload: 'myday-preload.js', group: 'work' },
   { id: 'sessions', title: 'Sessions', icon: 'team', kind: 'local', file: 'sessions.html', preload: 'sessions-preload.js', group: 'work' },
-  { id: 'tasks', title: 'Tasks', icon: 'tasks', kind: 'local', file: 'tasks.html', preload: 'tasks-preload.js', query: { embedded: '1' }, group: 'work' },
+  { id: 'tasks', title: 'Tackle with AI', icon: 'tasks', kind: 'local', file: 'tasks.html', preload: 'tasks-preload.js', query: { embedded: '1' }, group: 'work' },
   // localScreen: the account page's explainer for the local board, which has no integrations of its own.
   { id: 'integrations', title: 'Integrations', icon: 'plug', kind: 'hub', view: 'integrations', localScreen: 'integrations', group: 'team' },
   { id: 'team', title: 'Team', icon: 'team', kind: 'local', screen: 'team', group: 'team' },
   { id: 'usage', title: 'Usage', icon: 'chart', kind: 'local', file: 'lights.html', preload: 'lights-preload.js', query: { embedded: '1', view: 'mix' }, group: 'you' },
   { id: 'stats', title: 'Stats', icon: 'chart', kind: 'local', file: 'lights.html', preload: 'lights-preload.js', query: { embedded: '1', view: 'stats' }, group: 'you' },
-  { id: 'setups', title: 'Setups', icon: 'layers', kind: 'local', file:'setups.html', preload:'setups-preload.js', pending:true, group: 'you' },
-  { id: 'plugins', title: 'Plugins', icon: 'puzzle', kind: 'soon', group: 'you', blurb: 'Find and install Claude Code plugins.' },
+  { id: 'setups', title: 'Setups', icon: 'layers', kind: 'local', file: 'setups.html', preload: 'setups-preload.js', group: 'you' },
   { id: 'thismac', title: 'This Mac', icon: 'laptop', kind: 'local', screen: 'thismac', group: 'you' },
   { id: 'account', title: 'Account', icon: 'user', kind: 'local', screen: 'account', group: 'you' },
   { id: 'lights', title: 'Widget configuration', icon: 'lights', kind: 'window', window: 'lights', group: 'you' },
@@ -51,10 +51,27 @@ const GROUPS = [
   { id: 'you', title: 'You' },
 ];
 
+// The sidebar shows these five and nothing else; every page above is still a
+// page (deep links, IPC and the app menu address pages, not sections). A
+// section opens `default`; the others are its sub-nav, in this order. Board
+// views are the board page's children, so they are listed by id like the rest.
+const SECTIONS = [
+  { id: 'today', title: 'Today', icon: 'sun', default: 'myday', pages: ['myday', 'waiting', 'tasks', 'sessions', 'overview'] },
+  { id: 'board', title: 'Board', icon: 'board', default: 'board', pages: ['board', 'board:table', 'board:calendar', 'board:timeline', 'board:dashboard'] },
+  { id: 'team', title: 'Team', icon: 'team', default: 'team', pages: ['team', 'integrations', 'account'] },
+  { id: 'activity', title: 'Activity', icon: 'chart', default: 'usage', pages: ['usage', 'stats'] },
+  { id: 'more', title: 'More', icon: 'gear', default: 'settings', pages: ['settings', 'thismac', 'lights', 'hatch', 'setups', 'help', 'feedback', 'updates'] },
+];
+
 function flat(pages = PAGES) {
   const out = [];
   for (const p of pages) { out.push(p); for (const c of p.children ?? []) out.push({ ...c, parent: p.id }); }
   return out;
+}
+
+/** The section a page lives in (a board view lives with the board). */
+function sectionOf(id, sections = SECTIONS) {
+  return sections.find((s) => s.pages.includes(id))?.id ?? null;
 }
 
 function pageById(id, pages = PAGES) {
@@ -302,4 +319,4 @@ function pageForHubUrl(url) {
   return hit?.id ?? 'board';
 }
 
-module.exports = { PAGES, GROUPS, flat, pageById, hubPageUrl, fragmentOk, navDecision, openDecision, connectDecision, manifestPost, parseConnectName, connectUrlOk, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl, GESTURE_MS };
+module.exports = { PAGES, GROUPS, SECTIONS, sectionOf, flat, pageById, hubPageUrl, fragmentOk, navDecision, openDecision, connectDecision, manifestPost, parseConnectName, connectUrlOk, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl, GESTURE_MS };

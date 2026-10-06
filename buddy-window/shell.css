@@ -52,8 +52,9 @@ ul { padding: 0; list-style: none; }
 .nav-item .nav-icon:last-child:not(:first-child) { width: 12px; height: 12px; opacity: 0.6; }
 .nav-sub { display: flex; flex-direction: column; gap: 1px; margin: 1px 0 2px 16px; padding-left: 9px; border-left: 1px solid var(--line); }
 .nav-child { min-height: 26px; font-size: var(--text-sm); }
-.nav-soon { font-size: 10px; font-weight: 600; color: var(--faint); padding: 1px 5px; border: 1px solid var(--line); border-radius: var(--radius-pill); }
-.nav-item[data-kind="soon"] .nav-label { color: color-mix(in oklab, currentColor 80%, transparent); }
+.nav-section[data-active] { color: var(--text); font-weight: 600; }
+.nav-section[data-active] .nav-icon { color: var(--accent); }
+.nav-sub[hidden] { display: none; }
 .sidebar-hub { min-height: 18px; padding: 8px 8px 0; font-size: var(--text-xs); color: var(--faint); display: flex; align-items: center; gap: 6px; }
 .sidebar-hub::before { content: ""; width: 6px; height: 6px; border-radius: 2px; background: var(--line-strong); }
 .sidebar-hub:empty::before { display: none; }
