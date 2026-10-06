@@ -29,7 +29,7 @@ test('the sidebar has five sections that together reach every page exactly once'
   assert.deepEqual(SECTIONS.map((s) => s.id), ['today', 'board', 'team', 'activity', 'more']);
   const listed = SECTIONS.flatMap((s) => s.pages);
   assert.equal(new Set(listed).size, listed.length, 'no page in two sections');
-  assert.deepEqual([...listed].sort(), flat().map((p) => p.id).sort(), 'no page is orphaned');
+  assert.deepEqual([...listed].sort(), flat().filter((p) => !p.hidden).map((p) => p.id).sort(), 'no visible page is orphaned');
   for (const s of SECTIONS) assert.ok(s.pages.includes(s.default) && pageById(s.default), `${s.id} opens a page it holds`);
   assert.equal(sectionOf('board:calendar'), 'board');
   assert.equal(sectionOf('waiting'), 'today');
@@ -2011,4 +2011,11 @@ test('runner events: the window object exposes onRunnerEvent(cb) → unsubscribe
   assert.match(idx, /const runnerListeners = new Set\(\);/);
   assert.match(idx, /onEvent: emitRunnerEvent,/);
   assert.match(idx, /onRunnerEvent\(cb\) \{ if \(typeof cb !== 'function'\) return \(\) => \{\}; runnerListeners\.add\(cb\); return \(\) => runnerListeners\.delete\(cb\); \},/);
+});
+
+test('Setups is hidden from the sidebar until Apply and Undo exist, but its page stays addressable', () => {
+  const { SECTIONS, pageById, sectionOf } = require('../buddy-window/pages');
+  assert.ok(!SECTIONS.some(s => s.pages.includes('setups')));
+  assert.equal(sectionOf('setups'), null);
+  assert.equal(pageById('setups').hidden, true);
 });
