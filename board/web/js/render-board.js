@@ -8,12 +8,13 @@ import { VIEWS } from './views.js';
 import { filterBar } from './render-filters.js';
 import { THEMES, BACKGROUNDS } from './themes.js';
 import { cardChips } from './chips.js';
+import { costText, boardCostRollup, dailyCapText } from './cost.js';
 import { labelColor, labelClass, VIA_LABEL } from './labels.js';
 import { PILLS } from '../../shared/cardface.js';
 import { captureBadge } from './render-capture.js';
 import {
   COLUMNS, COLUMN_LABEL, ACTION_LABEL, groupColumns, isHumanOwned, repoBranch, clock, initials, hueOf,
-  primaryAction, boardLamps, stripGlyph, isObservedWork, cardWorkPhase, ADVANCED_ACTIONS,
+  primaryAction, boardLamps, stripGlyph, isObservedWork, cardWorkPhase, ADVANCED_ACTIONS, formatAge,
 } from './view.js';
 
 export function avatar(member, { size = 'sm', dim = false } = {}) {
@@ -333,6 +334,14 @@ export function themeMenu(model) {
         }, h('span', { class: 'bg-swatch', 'data-bg': b.id, 'aria-hidden': 'true' }), h('span', { class: 'bg-name' }, b.label))))) : null);
 }
 
+function costChip(model) {
+  const total = costText(boardCostRollup((model.entries ?? []).map((e) => e.view)));
+  const daily = dailyCapText(model.board?.daily_cap);
+  if (!total && !daily) return null;
+  return h('span', { class: `topbar-cost num${model.board?.daily_cap?.exceeded ? ' is-over' : ''}`, title: daily ?? 'Spend where the AI reports dollars', 'aria-label': `Board cost ${total ?? 'none'}${daily ? `, ${daily}` : ''}` },
+    total ? `Spent ${total}` : null, daily ? ` · ${daily}` : null);
+}
+
 export function topBar(model, lamps) {
   // /api/me is publicMember ({display_name, github_login}); snapshot members
   // are {name, login}. Normalise so the avatar and label never fall back to "?".
@@ -350,7 +359,7 @@ export function topBar(model, lamps) {
     viewSwitch(model, (v) => !ADVANCED_VIEWS.has(v.id)),
     h('div', { class: 'topbar-status', role: 'status', 'aria-live': 'polite' },
       h('span', { class: `conn conn-${conn}` }, h('span', { class: 'conn-dot', 'aria-hidden': 'true' }),
-        conn === 'open' ? 'Live' : conn === 'lost' ? 'Offline' : 'Connecting')),
+        conn === 'open' ? 'Live' : conn === 'lost' ? 'Offline' : 'Connecting'), costChip(model)),
     h('div', { class: 'topbar-actions' },
       h('details', { class: 'menu-wrap topbar-advanced' },
         h('summary', { class: 'btn btn-ghost btn-sm' }, 'Advanced'),
@@ -378,6 +387,18 @@ function viewSwitch(model, keep = () => true, label = 'Board views') {
     }, icon(v.icon, 'icon-xs'), h('span', { class: 'viewswitch-label' }, v.label))));
 }
 
+export function needsYouSection(items, model) {
+  if (model.conn.status === 'lost' || !items?.length) return null;
+  return h('section', { class: 'needs-you', 'aria-labelledby': 'needs-you-title' },
+    h('h2', { id: 'needs-you-title', class: 'needs-you-title' }, `Needs you · ${items.length}`),
+    h('ol', { class: 'needs-you-list' }, items.slice(0, 8).map((i) => h('li', { key: i.card_id },
+      h('button', { type: 'button', class: 'needs-you-item', 'data-kind': i.kind, 'data-action': 'open', 'data-card': i.card_id, 'data-section': i.kind === 'waiting' ? 'asks' : null },
+        h('span', { class: 'needs-you-key num' }, i.key),
+        h('span', { class: 'needs-you-what' }, i.label),
+        h('span', { class: 'needs-you-wait num' }, i.wait_ms == null ? '' : `waiting ${formatAge(i.wait_ms)}`)))),
+      items.length > 8 ? h('li', { key: 'more', class: 'muted small' }, `+${items.length - 8} more`) : null));
+}
+
 /** `body` replaces the columns for the other views (table, dashboard, …). */
 export function boardScreen(model, body = null) {
   const cols = groupColumns(model.visible ?? model.entries);
@@ -387,6 +408,7 @@ export function boardScreen(model, body = null) {
     connectionBanner(model.conn),
     model.board?.archived_at ? h('p', { class: 'board-archived callout', role: 'status' }, 'This board is archived and read-only. An admin can restore it from Boards.') : null,
     alertsStrip(model.alerts, model),
+    needsYouSection(model.needsYou, model),
     localCard(model),
     model.view === 'dashboard' ? null : filterBar(model),
     body ? null : stalledLane(cols.stalled, model),

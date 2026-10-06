@@ -23,7 +23,7 @@ import { aiOfDispatch, acceptsAi, AI_LABELS, AI_CAPABILITIES } from '../shared/a
 import { HubError, json } from './db.js';
 import { mintRunToken } from './auth.js';
 import { noGitHub, prBound, prNumberOf } from './github.js';
-import { cardView, leaseView, labelDef } from './views.js';
+import { cardView, leaseView, labelDef, boardCost } from './views.js';
 import { DEFAULT_LIMITS, RateLimiter } from './ratelimit.js';
 import { isAdmin, canWrite } from './permissions.js';
 import { Presence } from './presence.js';
@@ -767,11 +767,44 @@ export class Hub extends EventEmitter {
     return [...this.runners.values()].filter((c) => c.ready && c.member_id === target && c.repos.has(row.repo_id) && acceptsAi(c, aiOfDispatch(d), remaining == null ? null : remaining / 100));
   }
 
+  // Per-project soft cap on reported spend since UTC midnight (boards.settings.daily_cap_usd).
+  // Running work is never killed by it; new starts wait, and capped runs are offered only what is left.
+  dailyCapCents(boardId) {
+    const usd = this.boardSettings(boardId).daily_cap_usd;
+    return Number.isFinite(usd) && usd > 0 ? Math.round(usd * 100) : null;
+  }
+  spentTodayCents(boardId) {
+    return Math.round((boardCost(this, boardId, `${this.iso().slice(0, 10)}T00:00:00.000Z`).total_usd ?? 0) * 100);
+  }
+  dailyRemainingCents(boardId) {
+    const cap = this.dailyCapCents(boardId);
+    return cap == null ? null : Math.max(0, cap - this.spentTodayCents(boardId));
+  }
+  dailyCapView(boardId) {
+    const cap = this.dailyCapCents(boardId);
+    if (cap == null) return null;
+    const spent = this.spentTodayCents(boardId);
+    return { cap_usd: cap / 100, spent_usd: spent / 100, exceeded: spent >= cap };
+  }
+  // First cost fact over the cap each UTC day: one journal row and one notification.
+  noteDailyCap(cardId) {
+    const row = this.card(cardId);
+    const cap = row && this.dailyCapCents(row.board_id);
+    if (cap == null) return;
+    const spent = this.spentTodayCents(row.board_id);
+    if (spent < cap) return;
+    if (this.db.get("SELECT 1 AS x FROM journal WHERE board_id = ? AND kind = 'board.daily_cap' AND at_hub >= ? LIMIT 1", row.board_id, `${this.iso().slice(0, 10)}T00:00:00.000Z`)) return;
+    this.journal({ board_id: row.board_id, card_id: cardId, kind: 'board.daily_cap', payload: { cap_cents: cap, spent_cents: spent } });
+    this.later(() => this.notify('daily_cap', cardId, ['dispatcher', 'assignees']));
+  }
+
   remainingBudgetCents(row, dispatch) {
-    if (dispatch?.budget_mode === 'none') return null;
+    const daily = this.dailyRemainingCents(row.board_id);
+    if (dispatch?.budget_mode === 'none') return daily != null && daily < 50 ? 0 : null;
     const settings = this.boardSettings(row.board_id);
     const cap = row.budget_cents ?? (settings.default_budget_usd != null ? Math.round(settings.default_budget_usd * 100) : null);
-    return cap == null ? null : Math.max(0, cap - this.cardSpentCents(row.id));
+    const card = cap == null ? null : Math.max(0, cap - this.cardSpentCents(row.id));
+    return daily == null ? card : card == null ? daily : Math.min(card, daily);
   }
 
   offerFrame(cardId) {

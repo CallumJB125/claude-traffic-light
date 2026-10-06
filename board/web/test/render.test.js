@@ -268,7 +268,8 @@ test('Tackle with AI: own Codex account by default, sponsor and overlaps shown b
   for (const name of ['target', 'base_ref', 'plan_approval']) assert.ok(findAll(adv[0], (x) => x.props.name === name).length, `${name} is in Advanced`);
   assert.match(textOf(adv[0]), /Dollar and turn caps are unavailable for Codex/, 'budget is in Advanced');
   assert.equal(findAll(n, (x) => x.props.name === 'ai').length, 1, 'one AI picker');
-  assert.match(textOf(findAll(n, (x) => x.props.type === 'submit')[0]), /^Start$/);
+  assert.match(textOf(findAll(n, (x) => x.props.type === 'submit')[0]), /^Tackle anyway$/);
+  assert.match(t, /Wait for BDL-9/);
   assert.match(t, /Overlaps 1 live card/);
   assert.match(t, /BDL-9 \(Bob's agent\) is editing backend\/routes\/applications\.js, which this card mentions/);
   assert.match(t, /Runs on your machine · your Codex account/);
@@ -277,6 +278,10 @@ test('Tackle with AI: own Codex account by default, sponsor and overlaps shown b
   const teammate = textOf(giveDialog({ ...dlg, target: 'm-bob', preview: { overlaps: [] } }, m));
   assert.match(teammate, /Bob must confirm before it starts/);
   assert.match(teammate, /Ask Bob/);
+  assert.match(textOf(findAll(giveDialog({ ...dlg, preview: { overlaps: [] } }, m), (x) => x.props.type === 'submit')[0]), /^Start$/);
+  const unknown = textOf(giveDialog({ ...dlg, preview: { overlaps: [], check: { status: 'unknown', self_known: true, unknown_runs: [{ card_key: 'BDL-4', owner: 'Bob' }] } } }, m));
+  assert.match(unknown, /No overlap data: a live run has not reported its files yet \(BDL-4 \(Bob\)\)/);
+  assert.doesNotMatch(unknown, /No overlapping work/);
 });
 
 test('Tackle with AI defaults to Claude with a visible card budget; uncapped choices need a confirm', () => {

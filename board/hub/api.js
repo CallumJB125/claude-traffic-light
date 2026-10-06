@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { normalizeRemoteUrl } from '../shared/scope.js';
 import { PLAN_APPROVAL_LABEL, isReservedLabel } from '../shared/states.js';
 import { LABEL_COLORS, CODEX_PLAN_PERMISSION } from '../shared/protocol.js';
-import { classifyPair, kindOf } from '../shared/overlap.js';
+import { classifyPair, kindOf, hintPaths } from '../shared/overlap.js';
 import { sponsorLine, alertsFor } from '../shared/cardface.js';
 import { HubError, json } from './db.js';
 import { newDeviceToken, sha256hex } from './auth.js';
@@ -175,10 +175,21 @@ export class Api {
   updateBoard(member, boardId, body) {
     if (!can(member, 'board.rename')) throw new HubError('FORBIDDEN', 'only admins can rename boards');
     this.boardFor(member, boardId);
-    const name = teamName(body.name);
+    const capGiven = body.daily_cap_usd !== undefined;
+    if (capGiven && body.daily_cap_usd !== null && !(typeof body.daily_cap_usd === 'number' && body.daily_cap_usd >= 0.5 && body.daily_cap_usd <= 100000)) throw new HubError('VALIDATION', 'daily_cap_usd must be between 0.5 and 100000, or null');
+    const name = body.name === undefined && capGiven ? this.hub.board(boardId).name : teamName(body.name);
     return this.withWritableBoard(boardId, () => this.hub.txn(() => {
       if (!can(this.hub.activeMember(member.id), 'board.rename')) throw new HubError('FORBIDDEN', 'only admins can rename boards');
       const before = this.hub.board(boardId);
+      if (capGiven) {
+        const settings = { ...json(before.settings, {}) };
+        if (body.daily_cap_usd === null) delete settings.daily_cap_usd; else settings.daily_cap_usd = body.daily_cap_usd;
+        if (JSON.stringify(settings) !== JSON.stringify(json(before.settings, {}))) {
+          this.db.run('UPDATE boards SET settings = ? WHERE id = ?', JSON.stringify(settings), boardId);
+          this.audit(member.id, 'board.daily_cap', boardId);
+          this.hub.journal({ board_id: boardId, actor_kind: 'member', actor_id: member.id, kind: 'board.daily_cap_set', payload: { daily_cap_usd: body.daily_cap_usd } });
+        }
+      }
       if (before.name !== name) {
         this.db.run('UPDATE boards SET name = ? WHERE id = ?', name, boardId);
         this.audit(member.id, 'board.rename', boardId);
@@ -260,27 +271,36 @@ export class Api {
     const tid = targetMemberId || member.id;
     const target = this.orgMember(member, tid);
     const prev = this.hub.latestRun(cardId);
+    const hints = hintPaths(`${row.title}\n${row.body ?? ''}`);
     const self = {
       run_id: 'preview', repo_id: selectedRepo, branch: null, title: row.title, body: row.body,
-      touched_paths: prev ? json(prev.touched_paths, []) : [], planned_paths: prev ? json(prev.planned_paths, []) : [],
+      touched_paths: prev ? json(prev.touched_paths, []) : [], planned_paths: [...(prev ? json(prev.planned_paths, []) : []), ...hints],
     };
     const overlaps = [];
-    if (selectedRepo) {
+    const unknown = [];
+    let others = 0;
+    // Only this org's repos are compared: a live run elsewhere is never read.
+    if (selectedRepo && this.db.get('SELECT 1 AS x FROM repos WHERE id = ? AND org_id = ?', selectedRepo, member.org_id)) {
       for (const other of this.hub.liveRunsInRepo(selectedRepo)) {
         if (other.card_id === row.id) continue;
+        others++;
+        if (!other.touched_paths.length && !other.planned_paths.length && !other.locked_paths.length) unknown.push({ card_key: other.card_key, owner: other.owner_name });
         const sig = classifyPair(self, other);
         if (!sig.length) continue;
         const level = sig.reduce((a, s) => ({ high: 3, medium: 2, low: 1 }[s.level] > { high: 3, medium: 2, low: 1 }[a] ? s.level : a), 'low');
         overlaps.push({ other_card_id: other.card_id, other_key: other.card_key, other_owner: other.owner_name, other_provider_label: other.provider_label ?? 'Agent', level, kind: kindOf(level), reasons: sig.map((s) => s.reason), paths: [...new Set(sig.flatMap((s) => s.paths))], age_ms: 0 });
       }
     }
+    const selfKnown = self.touched_paths.length > 0 || self.planned_paths.length > 0;
+    // 'unknown' = live work exists that this card cannot be compared against: never reported as clear.
+    const check = { status: overlaps.length ? 'overlap' : !others ? 'clear' : !selfKnown || unknown.length ? 'unknown' : 'clear', self_known: selfKnown, unknown_runs: unknown.slice(0, 10) };
     const dev = [...this.hub.runners.values()].find((c) => c.member_id === tid && c.repos.has(selectedRepo));
     const sponsor = sponsorLine({ target: { member_id: tid, name: target.display_name, is_viewer: tid === member.id, device_name: dev?.device.name } }) ?? '';
     const runners = [...this.hub.runners.values()].filter((c) => c.ready && c.member_id === tid && c.repos.has(selectedRepo)).map((c) => ({
       device_name: c.device.name,
       ai: (c.ai ?? runnerAis(undefined)).map((a) => ({ id: a.id, label: a.label, available: [null, 'may_need_sign_in'].includes(readiness(a)), reason: readiness(a), budget: a.capabilities.budget, legacy: a.legacy })),
     }));
-    return { overlaps, sponsor, runners, can_use_no_budget: tid === member.id || this.hub.isAdmin(member) };
+    return { overlaps, check, sponsor, runners, can_use_no_budget: tid === member.id || this.hub.isAdmin(member) };
   }
 
   // ── cards ─────────────────────────────────────────────────────────────────
@@ -692,6 +712,7 @@ export class Api {
           const effective = cents ?? Math.round((this.hub.boardSettings(row.board_id).default_budget_usd ?? 5) * 100);
           if (effective - this.hub.cardSpentCents(cardId) < 50) ctx.policy_ok = false;
         }
+        if ((this.hub.dailyRemainingCents(row.board_id) ?? 50) < 50) throw new HubError('BUDGET_EXCEEDED', 'the board’s daily spend cap is reached; new runs wait until tomorrow or an admin raises it');
         if (row.fail_kind === 'budget' && rel.run?.terminal_reason === 'budget_device') throw new HubError('POLICY_DENIED', 'the machine owner must change their local limit', { reason: 'DEVICE_LIMIT' });
         if (!existing && row.fail_kind === 'budget' && (!involved(rel.dispatcher, rel.owner) || mode === 'none' || cents == null || cents < Math.max(row.budget_cents ?? 0, this.hub.cardSpentCents(cardId)) + 50)) throw new HubError('POLICY_DENIED', 'increase the budget as its owner before continuing', { reason: 'BUDGET_TOO_LOW' });
         if (existing && (existing.backend !== AI_BACKENDS[ai] || existing.target_member_id !== target || existing.budget_mode !== mode || (mode === 'cap' && existing.budget_cents !== cents))) throw new HubError('CONFLICT', 'request_id already belongs to another dispatch choice');

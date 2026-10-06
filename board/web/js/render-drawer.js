@@ -4,6 +4,7 @@
 import { h } from './h.js';
 import { icon } from './icons.js';
 import { renderMarkdown, inline } from './markdown.js';
+import { costText } from './cost.js';
 import { pill, budgetBar, cardActions, avatar, labelChips } from './render-board.js';
 import { canArchive } from './labels.js';
 import { formatAge, repoBranch, isHumanOwned, isObservedWork, hasLiveCapture, COLUMNS, COLUMN_LABEL, ACTION_LABEL, ADVANCED_ACTIONS, fmtUsd } from './view.js';
@@ -335,6 +336,9 @@ export function drawer(model) {
         det.data?.handover?.ages?.narrative_ms != null ? h('p', { class: 'muted small' }, `Narrative synced ${ago(add(det.data.handover.ages.narrative_ms, elapsed))}`) : null) : null,
       face.budget ? h('section', { class: 'dsec' }, h('h3', { class: 'dsec-title' }, 'Budget'), budgetBar(face.budget),
         view.run ? h('p', { class: 'muted small' }, `Spent on ${face.sponsor ? face.sponsor.replace(/^Runs on [^·]+· /, '') : 'the owner\'s account'}. Soft by one API call.`) : null) : null,
+      costText(view.cost) ? h('section', { class: 'dsec', 'aria-label': 'Cost' }, h('h3', { class: 'dsec-title' }, 'Cost'),
+        h('p', { class: 'cost-total num' }, costText(view.cost)),
+        view.cost.status !== 'reported' ? h('p', { class: 'muted small' }, 'This AI does not report dollar cost, so it is not counted in totals.') : null) : null,
       overlapsBlock(det.data?.overlaps ?? view.overlaps, elapsed),
       h('details', { class: 'dsec drawer-advanced' }, h('summary', { class: 'dsec-title' }, 'Advanced'),
         more.length ? h('div', { class: 'drawer-actions' }, more) : null,

@@ -6,7 +6,7 @@ import { tacklePreference, rememberTackle, raisedBudget, tackleChoices } from '.
 import { handoverPin, sameHandover } from './ai-handover.js';
 import { api, errorText, setOrg, currentOrg, setCsrf, requestId } from './api.js';
 import { connectBoard } from './socket.js';
-import { displayFace, alertsForViewer, agedView, fmtUsd } from './view.js';
+import { displayFace, alertsForViewer, needsYou, agedView, fmtUsd } from './view.js';
 import { planMoves, moveSummary, dragModel, pruneSelection, idsToDrag, kbdStart, kbdKey, announcement } from './dnd.js';
 import { emptyFilters, isFiltering, parseFilters, writeFilters, toggleIn, applyFilters, filterOptions } from './filters.js';
 import { parseTitles, needsConfirm, pendingCard } from './quickadd.js';
@@ -404,6 +404,7 @@ function buildModel() {
     labelColors,
     showArchived: state.showArchived,
     alerts: alertsForViewer(state.me?.member?.id, live),
+    needsYou: needsYou(state.me?.member?.id, live),
     conn: { ...state.conn, retryInMs: state.conn.retryAt != null ? state.conn.retryAt - Date.now() : null },
     detail,
     dialog: state.dialog,
@@ -1293,7 +1294,7 @@ async function loadPreview() {
   try {
     const res = await api.overlapPreview(d.cardId, target, d.repo_id || null);
     if (state.dialog?.previewToken !== token) return;
-    state.dialog = { ...state.dialog, preview: { overlaps: res.overlaps ?? [], sponsor: res.sponsor ?? null, runners: res.runners ?? [], can_use_no_budget: res.can_use_no_budget === true } };
+    state.dialog = { ...state.dialog, preview: { overlaps: res.overlaps ?? [], check: res.check ?? null, sponsor: res.sponsor ?? null, runners: res.runners ?? [], can_use_no_budget: res.can_use_no_budget === true } };
   } catch (err) {
     if (state.dialog?.previewToken !== token) return;
     state.dialog = { ...state.dialog, preview: { error: errorText(err) } };

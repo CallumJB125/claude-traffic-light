@@ -75,6 +75,29 @@ export function alertsForViewer(viewerId, entries, opts) {
   return { ...res, items: res.items.map((a) => ({ ...a, text: stripGlyph(a.text) })) };
 }
 
+// Cards waiting on a human the viewer is involved with (waiting input, budget
+// reached, stalled, review), longest wait first. Reuses the face's stalled
+// derivation and the hub's state age; never invents a wait.
+const NEEDS_LABEL = { waiting: 'Waiting for your input', budget: 'Budget reached', review: 'Ready for review' };
+export function needsYou(viewerId, entries) {
+  const items = [];
+  for (const { view: v, face, elapsed_ms = 0 } of entries) {
+    if (v.archived) continue;
+    const involved = v.run?.dispatched_by?.member_id === viewerId || v.run?.owner?.member_id === viewerId
+      || (v.assignee_ids ?? []).includes(viewerId) || (v.approvers ?? []).includes(viewerId);
+    if (!involved) continue;
+    const age = v.state_age_ms == null ? null : v.state_age_ms + elapsed_ms;
+    let kind = null, wait = age, label = null;
+    if (face?.stalled) { kind = 'stalled'; wait = face.stalled.since_ms; label = `Stalled · ${face.reason ?? face.stalled.reason}`; }
+    else if (v.run_state === 'blocked') kind = 'waiting';
+    else if (v.run_state === 'failed' && v.fail_kind === 'budget') kind = 'budget';
+    else if (v.run_state === 'in_review') kind = 'review';
+    if (!kind) continue;
+    items.push({ kind, card_id: v.id, key: v.key, title: v.title, label: label ?? NEEDS_LABEL[kind], wait_ms: wait });
+  }
+  return items.sort((a, b) => (b.wait_ms ?? -1) - (a.wait_ms ?? -1) || String(a.key).localeCompare(String(b.key), undefined, { numeric: true }));
+}
+
 // cardface strings lead with a glyph (✋ ⚠ ✖); the web draws its own icon.
 export function stripGlyph(s) {
   return String(s ?? '').replace(/^[←-⯿\u{1F300}-\u{1FAFF}]️?\s*/u, '');

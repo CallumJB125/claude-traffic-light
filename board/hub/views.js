@@ -114,6 +114,20 @@ export function runCost(hub, run) {
     cost_source: observed ? 'provider_reported' : 'unavailable' };
 }
 
+// Sums only runs whose AI reported dollars; the rest are counted as unavailable, never as $0.
+export function costRollup(hub, runs) {
+  let cents = 0, reported = 0, unavailable = 0;
+  for (const r of runs) {
+    if (runCost(hub, r).cost_usd == null) unavailable++;
+    else { reported++; cents += r.cost_cents; }
+  }
+  return { total_usd: reported ? cents / 100 : null, reported_runs: reported, unavailable_runs: unavailable,
+    status: !runs.length ? 'none' : !unavailable ? 'reported' : !reported ? 'unavailable' : 'partial' };
+}
+export const cardCost = (hub, cardId) => costRollup(hub, hub.db.all('SELECT * FROM runs WHERE card_id = ?', cardId));
+export const boardCost = (hub, boardId, since = null) => costRollup(hub, hub.db.all(
+  `SELECT r.* FROM runs r JOIN cards c ON c.id = r.card_id WHERE c.board_id = ?${since ? ' AND r.started_at >= ?' : ''}`, ...(since ? [boardId, since] : [boardId])));
+
 export function cardView(hub, row, viewerId) {
   const runRow = hub.run(row.active_run_id) ?? (row.run_state ? hub.latestRun(row.id) : null);
   const repo = hub.repo(row.repo_id);
@@ -176,6 +190,7 @@ export function cardView(hub, row, viewerId) {
     limit_resets_in_ms: limitResetsIn(hub, row),
     device_kind: deviceKind(hub, runRow),
     overlaps: hub.overlapViews(row),
+    cost: cardCost(hub, row.id),
     budget: budgetCap != null ? { spent_usd: hub.cardSpentCents(row.id) / 100, cap_usd: budgetCap / 100 } : null,
     pr: prView(hub, row),
     pr_link_status: prLinkStatus(hub, row),
@@ -190,7 +205,8 @@ export function boardSnapshot(hub, boardId, viewerId, { includeArchived = false 
   const members = hub.db.all('SELECT * FROM members WHERE org_id = ? AND removed_at IS NULL ORDER BY display_name', board.org_id);
   return {
     board_id: boardId,
-    board: { id: board.id, name: board.name, key_prefix: board.key_prefix, archived_at: board.archived_at, settings: json(board.settings, {}), labels: hub.labelRegistry(boardId) },
+    board: { id: board.id, name: board.name, key_prefix: board.key_prefix, archived_at: board.archived_at, settings: json(board.settings, {}), daily_cap: hub.dailyCapView(boardId), labels: hub.labelRegistry(boardId) },
+    cost: { ...boardCost(hub, boardId), daily: hub.dailyCapView(boardId) },
     cards: cards.map((c) => cardView(hub, c, viewerId)),
     members: members.map((m) => ({ member_id: m.id, name: m.display_name, login: publicLogin(m), avatar_url: m.github_id > 0 ? `https://avatars.githubusercontent.com/u/${m.github_id}` : null })),
   };
