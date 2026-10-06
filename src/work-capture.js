@@ -46,7 +46,7 @@ function compactDestination(d) {
 }
 function compactState(v) {
   const out={v:1,install_id:v.install_id,tasks:{},choices:{}};
-  if(v.enabled===false)out.enabled=false;
+  if(typeof v.enabled==='boolean')out.enabled=v.enabled;
   for(const [key,e]of Object.entries(v.tasks)) {
     const task={destination:compactDestination(e.destination),repo:safeCanonical(e.repo),provider:e.provider,session_id:e.session_id,task_id:e.task_id,
       title:clean(e.title,200),status:['working','waiting','review','ended','idle'].includes(e.status)?e.status:null,card_id:typeof e.card_id==='string'&&ID.test(e.card_id)?e.card_id:null};
@@ -62,8 +62,10 @@ function compactState(v) {
   }
   return out;
 }
-function privateState(file) {
-  let state={v:1,install_id:crypto.randomUUID(),tasks:{},choices:{}};
+function privateState(file,startEnabled=false) {
+  // A fresh install starts OFF: capture turns on only after the user opts in.
+  // An existing file without the key keeps its historical ON behaviour.
+  let state={v:1,install_id:crypto.randomUUID(),tasks:{},choices:{},enabled:startEnabled};
   try {const st=fs.lstatSync(file);if(!st.isFile()||st.isSymbolicLink()||st.size>MAX_STATE_BYTES||(process.platform!=='win32'&&(st.mode&0o077)))throw new Error('private capture state unavailable');
     const v=JSON.parse(fs.readFileSync(file,'utf8'));const record=x=>x!==null&&typeof x==='object'&&!Array.isArray(x);
     if(v.v!==1||!UUID.test(v.install_id)||!record(v.tasks)||!record(v.choices)||Object.keys(v.tasks).length>2000||Object.keys(v.choices).length>2000)throw new Error('invalid capture state');
@@ -92,8 +94,17 @@ async function repoFor(cwd) {
   const {normalizeRemoteUrl}=await import('../board/shared/scope.js'); // privacy-flow: work-capture-repository
   return safeCanonical(normalizeRemoteUrl(raw));
 }
+// Background/internal AI sessions (memory generation, summaries, subagents) are
+// not user work and must never get a card.
+const BACKGROUND_TITLE=/^(?:\w+ · )?(?:memor(?:y|ies)|summar(?:y|ies)|title generation|session summary)$/i;
+const BACKGROUND_DIR=/(?:^|[\\/])\.(?:codex|claude|cursor|gemini|hermes)[\\/](?:memories|memory|summaries)(?:[\\/]|$)/;
+function isBackgroundSession(s) {
+  if(s.subagent||s.isSubagent||s.isSidechain||s.parentSessionId||s.parent_session_id||s.parentId||s.kind==='subagent'||s.kind==='background'||s.background===true)return true;
+  if(typeof s.cwd==='string'&&(BACKGROUND_DIR.test(s.cwd)||/^memor(?:y|ies)$/i.test(path.basename(s.cwd))))return true;
+  return typeof s.taskTitle==='string'&&BACKGROUND_TITLE.test(s.taskTitle.trim());
+}
 function observation(s,{ownedRoots=[],host=null}={}) {
-  if(!s||s.remote||s.demo||s.boardRunId||s.board_run_id||s.owned?.launcher==='board'||s.capture===false||!isId(s.sessionId)||host&&s.host!==host)return null;
+  if(!s||isBackgroundSession(s)||s.remote||s.demo||s.boardRunId||s.board_run_id||s.owned?.launcher==='board'||s.capture===false||!isId(s.sessionId)||host&&s.host!==host)return null;
   if(ownedRoots.some(root=>typeof s.cwd==='string'&&(s.cwd===root||s.cwd.startsWith(root+path.sep))))return null;
   const provider = PROVIDERS.has(s.source)?s.source:PROVIDERS.has(s.via)?s.via:s.source==null&&s.via==null?'claude':null;
   if(!provider)return null;
@@ -110,9 +121,9 @@ function routeFor(repo,routes,choice) {
   return {kind:'local',needs_routing:true};
 }
 const routeKey = r => crypto.createHash('sha256').update(JSON.stringify([r.hub,r.user_id,r.team_id,r.board_id,r.repo_id])).digest('hex');
-function createWorkCapture({file,getRoutes,sendLocal,sendTeam,resolveRepo=repoFor,ownedRoots=[],host=null,now=Date.now,log=()=>{},onChange=()=>{}}) {
+function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam,resolveRepo=repoFor,ownedRoots=[],host=null,now=Date.now,log=()=>{},onChange=()=>{}}) {
   let store;
-  try {store=privateState(file);store.save(store.state);}
+  try {store=privateState(file,startEnabled);store.save(store.state);}
   catch {
     // Preserve unreadable identities for recovery. Resetting the install ID
     // would duplicate existing cards, and capture failure must not close Buddy.
@@ -158,8 +169,18 @@ function createWorkCapture({file,getRoutes,sendLocal,sendTeam,resolveRepo=repoFo
     if(now()-lastCatalogAt>15000||!lastCatalogAt){catalog=await getRoutes();lastCatalogAt=now();}
     const routesByKey=new Map((catalog.routes??[]).map(r=>[routeKey(r),r]));
     const current=new Set();
+    // Repeated sessions with the same provider/cwd/explicit title are one piece of work:
+    // keep the newest report; the older ones go idle through the sweep below.
+    const newest=new Map();
+    for(const raw of sessions.slice(0,50)) {
+      const o=observation(raw,{ownedRoots,host});if(!o)continue;
+      const dup=JSON.stringify(raw.taskTitle?[o.provider,o.cwd??null,o.title]:[o.provider,o.session_id,o.task_id]),at=Date.parse(raw.updatedAt)||0;
+      if(!newest.has(dup)||at>newest.get(dup).at)newest.set(dup,{at,raw});
+    }
+    const keep=new Set([...newest.values()].map(v=>v.raw));
     for(const raw of sessions.slice(0,50)) {
       if(stopped||state.enabled===false)return;
+      if(!keep.has(raw))continue;
       const o=observation(raw,{ownedRoots,host});if(!o)continue;
       const key=crypto.createHash('sha256').update(JSON.stringify([o.provider,o.session_id,o.task_id])).digest('hex');current.add(key);
       let entry=state.tasks[key];

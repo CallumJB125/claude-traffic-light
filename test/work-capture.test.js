@@ -1,5 +1,6 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path');
-const {createWorkCapture,observation,routeFor,repoFor,clean,routeKey}=require('../src/work-capture');
+const {createWorkCapture:createReal,observation,routeFor,repoFor,clean,routeKey}=require('../src/work-capture');
+const createWorkCapture=o=>createReal({startEnabled:true,...o});
 const {execFileSync}=require('node:child_process');
 const crypto=require('node:crypto');
 const R={hub:'https://hub.example.test',user_id:'user-a',team_id:'team-a',board_id:'board-a',repo_id:'repo-a',canonical_url:'github.com/org/app',role:'member'};
@@ -200,4 +201,24 @@ test('invalid or oversized private capture storage pauses safely without resetti
 test('a subagent finishing keeps the card working; only the main stop or session end leaves working',()=>{
  const {phase}=require('../src/work-capture');
  assert.equal(phase('subagent-done'),'working');assert.equal(phase('stop'),'review');assert.equal(phase('session-end'),'ended');
+});
+
+test('background sessions (memories, summaries, subagents) never get cards; user sessions still do',async t=>{
+ for(const bad of [{cwd:'/Users/u/.codex/memories'},{cwd:'/x/memories'},{taskTitle:'Codex · memories'},{taskTitle:'Session summary'},{parentSessionId:'p1'},{isSubagent:true},{kind:'subagent'}])
+  assert.equal(observation(event(bad)),null,JSON.stringify(bad));
+ assert.ok(observation(event({taskTitle:'Fix memory leak'})));
+ const r=rig(t);await r.router.observe([event({sessionId:'m1',cwd:'/Users/u/.codex/memories'}),event({sessionId:'real'})]);
+ assert.equal(r.calls.length,1);assert.equal(r.calls[0].body.session_id,'real');
+});
+test('same provider, cwd and explicit title collapse to the newest session',async t=>{
+ const r=rig(t);await r.router.observe([event({sessionId:'a',taskTitle:'Ship it',updatedAt:new Date(90000).toISOString()}),event({sessionId:'b',taskTitle:'Ship it'})]);
+ assert.deepEqual(r.calls.map(c=>c.body.session_id),['b']);
+});
+test('a fresh install is opted out until the user enables it; an explicit choice persists',async t=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'work-capture-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+ const file=path.join(dir,'c.json'),base={file,getRoutes:async()=>({routes:[],complete:true}),sendLocal:async()=>({ok:true,card:{id:'c'}}),sendTeam:async()=>({ok:true}),resolveRepo:async()=>null,now:()=>100000};
+ const a=createReal(base);assert.equal(a.enabled(),false);a.setEnabled(true);await a.stop();
+ const b=createReal(base);assert.equal(b.enabled(),true);b.setEnabled(false);await b.stop();assert.equal(createReal(base).enabled(),false);
+ const legacy=path.join(dir,'legacy.json'),st=JSON.parse(fs.readFileSync(file));delete st.enabled;fs.writeFileSync(legacy,JSON.stringify(st),{mode:0o600});
+ assert.equal(createReal({...base,file:legacy}).enabled(),true);
 });
