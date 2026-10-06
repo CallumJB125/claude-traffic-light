@@ -262,3 +262,7 @@ Then:
 - if the terminal-jump feature must keep working under the hardened runtime,
   check that `com.apple.security.automation.apple-events` and
   `NSAppleEventsUsageDescription` are present
+
+## Local packaged builds: use a real `node_modules`
+
+Build from a checkout with its own `npm ci` (and `node node_modules/electron/install.js`), never a symlinked `node_modules`: electron-builder's dependency collector then drops transitive packages, and the app dies at launch with `ERR_MODULE_NOT_FOUND` in the embedded hub. After any local build run `node scripts/verify-packaged-deps.js <Plexiform.app>` and install only if it prints "closure complete". Build into a scratch output directory and delete it after installing, so LaunchServices does not accumulate extra "Plexiform" copies.
