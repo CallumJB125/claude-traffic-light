@@ -199,6 +199,8 @@ const DEFAULT_CONFIG = {
   // The one character every rule shows (rules pick pose, eyes and the rest, never the body).
   character: { body: 'claude', bodyColor: null },
   workingStaleMinutes: 6,
+  // Minutes of silence before a working session reads "Stuck?" (0 = off); see hooks/session-machine.js stuckOf.
+  stuckMinutes: 5,
   waitingStaleHours: 4,
   // Every sound the app plays: rule sounds and the knock.
   sounds: true,
@@ -683,6 +685,7 @@ function readSessions(config, pendingIds = []) {
   }
   const workingStaleMs = config.workingStaleMinutes * 60 * 1000;
   const waitingStaleMs = config.waitingStaleHours * 60 * 60 * 1000;
+  const stuckMs = (Number(config.stuckMinutes) || 0) * 60 * 1000;
   const now = Date.now();
   const sessions = [];
   for (const f of files) {
@@ -690,7 +693,7 @@ function readSessions(config, pendingIds = []) {
       const data = readSessionFile(f);
       if (!data) continue;
       // The reader half of the session state machine (hooks/session-machine.js).
-      const c = Rules.classifySession(data, { now, pendingIds, isGone: () => SessionState.processGone(data, LOCAL_HOST), workingStaleMs, waitingStaleMs });
+      const c = Rules.classifySession(data, { now, pendingIds, isGone: () => SessionState.processGone(data, LOCAL_HOST), workingStaleMs, waitingStaleMs, stuckMs });
       if (c.dropped === 'gone') logTransition(data, 'gone', 'process exited', now);
       if (c.held) wakeWhenHoldEnds(data, now);
       if (!c.live) continue;
@@ -819,6 +822,7 @@ function cameosChanged() {
 
 const budgetView = () => budgetNotices.list().map((n) => ({ runId: n.runId, text: BudgetNotice.text(n) }));
 
+const Stuck = require('./src/stuck.js');
 function computeState(opts = {}) {
   const config = loadConfig();
   const requests = readRequests();
@@ -853,7 +857,8 @@ function computeState(opts = {}) {
   }
   const minions = config.showAgents ? Rules.filterAgentKinds(Rules.liveAgents(sessions), config.agentKinds).slice(0, 32) : [];
   const sNote = spendNote(config.rules, fired, sessions, spend);
-  return { look: { ...withNumber(look, sessions, tasks), tasks, minions, agentRoster: config.agentRoster !== false, agentChipSize: config.agentChipSize }, reason: sessions.length ? 'session' : 'idle', sessions, fired, owned, firedNames: Rules.firedNames(config.rules, fired, owned), tool: currentTool(sessions), agentCount, pending, inputs, tasks, minions, spend, spendNote: sNote, paceLine: config.paceTooltip !== false && spend && spend.pace && spend.pace.noteworthy && !sNote ? spend.pace.text : null, away: BusyWatch.recap(), budget: budgetView(), busy: BusyWatch.holding() };
+  const stuck = Stuck.summary(sessions);
+  return { stuck, look: { ...Stuck.applyStuck(withNumber(look, sessions, tasks), stuck), tasks, minions, agentRoster: config.agentRoster !== false, agentChipSize: config.agentChipSize }, reason: sessions.length ? 'session' : 'idle', sessions, fired, owned, firedNames: Rules.firedNames(config.rules, fired, owned), tool: currentTool(sessions), agentCount, pending, inputs, tasks, minions, spend, spendNote: sNote, paceLine: config.paceTooltip !== false && spend && spend.pace && spend.pace.noteworthy && !sNote ? spend.pace.text : null, away: BusyWatch.recap(), budget: budgetView(), busy: BusyWatch.holding() };
 }
 
 // The tool of the most recently updated session that is using one.

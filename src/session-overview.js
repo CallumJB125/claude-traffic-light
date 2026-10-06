@@ -47,11 +47,13 @@ function snapshot({ sessions = [], activity = {}, available = true, now = Date.n
     const children = Array.isArray(rawChildren) ? rawChildren.filter(child => object(child) && typeof child.status === 'string' && Object.hasOwn(CHILD_STATUSES, child.status)).slice(0, CHILD_LIMIT).map((child, index) => ({
       label: `${lifecycle ? 'Codex subagent' : 'Agent'} ${index + 1}`, status: lifecycle && row.codexClosedTurn === false && child.status !== 'done' && Machine.codexInputPending({ source: 'codex', codexLifecycle: 1, codexTurnId: child.turnId, codexClosedTurn: false, codexInputRequests: child.codexInputRequests }, time) ? 'Waiting on you' : CHILD_STATUSES[child.status],
     })) : [];
+    const stuck = object(row.stuck) && Number.isFinite(row.stuck.sinceMs) ? row.stuck : null;
     rows.push({
       // Claude Code's own hook (set-status.js) writes no source field.
       provider: row.source == null ? PROVIDERS.claude : typeof row.source === 'string' && Object.hasOwn(PROVIDERS, row.source) ? PROVIDERS[row.source] : 'Local AI',
       project: projectLeaf(row.cwd),
-      status: lifecycle && row.codexClosedTurn === true ? 'Turn stopped' : Machine.claudeInputPending(row) || Machine.codexInputPending(row, time) ? 'Waiting on you' : typeof presented === 'string' && Object.hasOwn(STATUSES, presented) ? STATUSES[presented] : 'Unknown',
+      status: lifecycle && row.codexClosedTurn === true ? 'Turn stopped' : Machine.claudeInputPending(row) || Machine.codexInputPending(row, time) ? 'Waiting on you' : stuck ? 'Stuck?' : typeof presented === 'string' && Object.hasOwn(STATUSES, presented) ? STATUSES[presented] : 'Unknown',
+      ...(stuck ? { stuck: { tool: stuck.tool || null, since_ms: stuck.sinceMs } } : {}),
       freshness: available === false || age === null ? 'unknown' : age <= RECENT_MS ? 'recent' : 'stale', age_ms: age, lifecycle, children,
     });
   }

@@ -204,10 +204,11 @@ const PRESENT_CASES = [
   ['held', { state: 'amber', updatedAt: iso(-100) }, {}, 'tool-use', 'hysteresis-held'],
   ['shown', { state: 'amber', updatedAt: iso(-5000) }, {}, 'permission-ask', 'hook signal'],
   ['stale', { signal: 'tool-use' }, {}, 'tool-use', 'hook signal'],
+  ['stuck', { signal: 'tool-use', tool: 'Bash', updatedAt: iso(-7 * 60000) }, { stuckMs: 5 * 60000 }, 'tool-use', 'hook signal'],
 ];
 
 test('reader: the presentation rules are the ones the doc lists, in order', () => {
-  assert.deepEqual(M.PRESENTATION.map((p) => p.id), ['no-signal', 'gone', 'held', 'promoted', 'stale-agents', 'stale', 'shown']);
+  assert.deepEqual(M.PRESENTATION.map((p) => p.id), ['no-signal', 'gone', 'held', 'promoted', 'stale-agents', 'stuck', 'stale', 'shown']);
   const covered = new Set(PRESENT_CASES.map((c) => c[0]));
   for (const p of M.PRESENTATION) assert.ok(covered.has(p.id), `no case for ${p.id}`);
 });
@@ -215,7 +216,7 @@ test('reader: the presentation rules are the ones the doc lists, in order', () =
 for (const [outcome, session, over, presented, source] of PRESENT_CASES) {
   test(`reader: ${outcome} — ${JSON.stringify(session).slice(0, 90)}`, () => {
     const c = M.classify(session, { ...CTX, ...over });
-    const live = ['held', 'promoted', 'shown'].includes(outcome);
+    const live = ['held', 'promoted', 'shown', 'stuck'].includes(outcome);
     assert.equal(c.live, live);
     if (['no-signal', 'gone', 'stale-agents', 'stale'].includes(outcome)) assert.equal(c.dropped, outcome);
     else assert.equal(c.rule, outcome);

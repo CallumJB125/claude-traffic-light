@@ -161,6 +161,7 @@ function applyStatus(data) {
   // F1 spend: the spend rule's name carries its burn rate or budget line.
   const note = (n) => (data.spendNote && n === data.spendNote.rule ? `${n} (${data.spendNote.text})` : n);
   let text = note(names[0]) + (data.tool ? ` · ${data.tool}` : '');
+  if (data.stuck && look.stuck) text = `${data.stuck.text} · ${text}`;
   for (const n0 of names.slice(1)) {
     const n = note(n0);
     if (`${text} · ${n} · …`.length + suffix.length > TOOLTIP_MAX) { text += ' · …'; break; }

@@ -239,6 +239,15 @@
   </div>
 
   <div class="field">
+    <label for="stuckMinutes">Show "Stuck?" after</label>
+    <div class="row">
+      <input type="number" id="stuckMinutes" min="0" max="60" aria-describedby="hint-stuck" />
+      <span aria-hidden="true">minutes with no activity (0 = off)</span>
+    </div>
+    <div class="hint" id="hint-stuck">A working session that has sent no hook or activity event for this long turns the light amber and says "Stuck?" with its last tool. It clears the moment the session moves, and never applies to a session that is waiting for you or finished. It is part of the closed-after window above, not a second timer: the session stays listed for the longer of the two.</div>
+  </div>
+
+  <div class="field">
     <label for="waitingStaleHours">Waiting session considered closed after</label>
     <div class="row">
       <input type="number" id="waitingStaleHours" min="1" max="24" aria-describedby="hint-waiting" />

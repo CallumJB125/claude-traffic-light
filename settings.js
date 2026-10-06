@@ -10,6 +10,7 @@
       const config = await window.settingsApi.getConfig();
       workingInput.value = config.workingStaleMinutes;
       waitingInput.value = config.waitingStaleHours;
+      document.getElementById('stuckMinutes').value = config.stuckMinutes ?? 5;
       soundInput.checked = config.sounds !== false;
       document.getElementById('notifyOnStates').checked = config.notifyOnStates !== false;
       for (const k of NOTIFY_KINDS) document.getElementById(`notify-${k}`).checked = (config.notifyStates || {})[k] !== false;
@@ -145,6 +146,7 @@
       try {
       await window.settingsApi.saveConfig({
         workingStaleMinutes: Math.max(1, Math.min(60, Number(workingInput.value) || 6)),
+        stuckMinutes: Math.max(0, Math.min(60, Math.round(Number(document.getElementById('stuckMinutes').value) || 0))),
         waitingStaleHours: Math.max(1, Math.min(24, Number(waitingInput.value) || 4)),
         sounds: soundInput.checked,
         notifyOnStates: document.getElementById('notifyOnStates').checked,
