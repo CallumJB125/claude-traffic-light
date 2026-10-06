@@ -9,7 +9,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const http = require('node:http');
+const http = require('node:http'); // privacy-flow: burst-local
 const { execFile } = require('node:child_process');
 
 const LABEL = 'ninja.andrewbaker.claude-burst';
@@ -65,7 +65,7 @@ function parseAdminAddress(listen) {
 }
 
 const run = (cmd, args) => new Promise((resolve) => {
-  execFile(cmd, args, { timeout: 3000, maxBuffer: 256 * 1024 }, (err, stdout) => resolve(err ? '' : String(stdout)));
+  execFile(cmd, args, { timeout: 3000, maxBuffer: 256 * 1024 }, (err, stdout) => resolve(err ? '' : String(stdout))); // privacy-flow: burst-local
 });
 
 // Who actually runs the gateway, from launchd and the socket table. Injectable
@@ -109,7 +109,7 @@ function createBurstClient({ home = os.homedir(), platform = process.platform, i
       if (header) headers['X-Claude-Burst-Admin'] = '1';
       let done = false;
       const finish = (fn, v) => { if (done) return; done = true; clearTimeout(timer); fn(v); };
-      const req = http.request({ host: addr.host, port: addr.port, method, path: urlPath, headers, agent: false }, (res) => {
+      const req = http.request({ host: addr.host, port: addr.port, method, path: urlPath, headers, agent: false }, (res) => { // privacy-flow: burst-local
         const type = String(res.headers['content-type'] || '');
         if (res.statusCode !== 200) { res.resume(); finish(reject, Object.assign(new Error(`http ${res.statusCode}`), { code: 'http', status: res.statusCode })); req.destroy(); return; }
         if (!/json/i.test(type)) { res.resume(); finish(reject, Object.assign(new Error('not json'), { code: 'not_json' })); req.destroy(); return; }

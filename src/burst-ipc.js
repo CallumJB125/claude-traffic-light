@@ -57,7 +57,7 @@ function register({ utilityHandle, settingsOnly, chipAllowed = () => false, acco
     if (kind === 'open-dashboard') {
       const url = last.kind === 'present' ? client.adminUrl() : null;
       if (!url) return { ok: false, error: 'Burst is not answering.' };
-      await shell.openExternal(url);
+      await shell.openExternal(url); // privacy-flow: burst-dashboard
       return { ok: true };
     }
     if (!Actions.KINDS.includes(kind)) return { ok: false, error: 'Unknown action.' };
