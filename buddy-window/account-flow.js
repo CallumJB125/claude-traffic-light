@@ -960,6 +960,8 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
       lastSessions = Array.isArray(sessions) ? sessions : [];
       for (const e of devices.values()) e.d.setPresence(store.sharesPresence(e.hub), lastSessions, { shareSummaries: store.sharesSummaries(e.hub) });
     },
+    /** Burst facts to every runner that is running cards; false when none is. */
+    burstFacts(facts) { const live = [...devices.values()].filter((e) => e.d.running()); for (const e of live) e.d.sendBurst(facts); return live.length > 0; },
     /** Names of the teams this Mac is running cards for right now. */
     runningTeams: () => [...devices.entries()].filter(([, e]) => e.d.running()).map(([id, e]) => store.get(id)?.name ?? e.name),
     stopDevices: () => { cancelOAuth(); cancelDeleteRun(); return Promise.all([...devices.values()].map((e) => e.d.stop())); },

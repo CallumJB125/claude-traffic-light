@@ -11,6 +11,15 @@ export function tackleChoices(runners = []) {
       budget: (available.length ? available : entries).some((a) => a.budget === 'none') || id === 'codex' ? 'none' : 'native' };
   });
 }
+// The AI to continue with after a plan limit: never the one that hit it. The
+// desktop page may provide PlexiformRouter (src/session-router.js) for its
+// cheapest-capable heuristic; without it the first other available AI is used.
+export function anotherAi(choices, current, text = '', router = globalThis.PlexiformRouter) {
+  const others = choices.filter((c) => c.available && c.id !== current);
+  if (!others.length) return null;
+  const hint = router?.suggest?.(text, others.map((c) => ({ provider: c.id, label: c.label, available: true })));
+  return others.find((c) => c.id === hint?.provider)?.id ?? others[0].id;
+}
 export const readinessText = (reason) => ({ not_installed: 'not installed', signed_out: 'sign in first', unsupported_version: 'update Codex first', may_need_sign_in: 'may need sign-in' }[reason] ?? '');
 
 export function tacklePreference(memberId, storage, defaultBudget = 5) {

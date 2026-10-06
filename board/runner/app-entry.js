@@ -110,6 +110,7 @@ parent.on('message', (e) => {
     start(m).catch((err) => fatal(`runner start failed: ${err.message}`, 1));
     return;
   }
+  if (m?.type === 'runner.burst') { sup?.setBurst(m); return; }
   if (m?.type === 'runner.presence') {
     if (presence) presence.update(m).catch((err) => log.warn('presence update failed', { err: err.message }));
     else pendingPresence = m;

@@ -28,7 +28,7 @@ test('design §4.2 examples', () => {
   assert.equal(cardFace(view('running', { live: { ...liveOk, tool_in_flight: { name: 'Bash', summary: 'npm test', age_ms: 2 * MIN } } })).reason, "Callum's Claude · `npm test` 2m");
   assert.equal(cardFace(view('quiet', { live: { ...liveOk, activity_age_ms: 20 * MIN, tool_in_flight: { name: 'Bash', summary: 'npm test', age_ms: 14 * MIN } } })).reason, '`npm test` 14m, no output');
   assert.equal(cardFace(view('quiet', { live: { ...liveOk, activity_age_ms: 8 * MIN } })).reason, 'no activity 8m');
-  assert.equal(cardFace(view('failed', { fail_kind: 'limit', limit_resets_in_ms: 42 * MIN })).text, "Stopped · usage limit on Callum's account · resets in 42m");
+  assert.equal(cardFace(view('failed', { fail_kind: 'limit', limit_resets_in_ms: 42 * MIN })).text, "Paused: limit · usage limit on Callum's account · resets in 42m");
   assert.equal(cardFace(view('failed', { fail_kind: 'budget', budget: { spent_usd: 5.01, cap_usd: 5 } })).reason, 'budget $5 reached');
   assert.equal(cardFace(view('failed', { fail_kind: 'stopped', stopped_by_name: 'Callum' })).reason, 'stopped by Callum');
   assert.equal(cardFace(view('failed', { fail_kind: 'released', fail_reason: 'needs product decision' })).reason, 'released by Claude: needs product decision');
@@ -93,7 +93,7 @@ test('primary actions per §4.2', () => {
   assert.deepEqual(a('orphaned', { resume_to: 'quiet' }), ['resume', 'handover_ai', 'stop', 'take_over']);
   assert.deepEqual(a('suspended', { resume_to: 'quiet' }), ['resume', 'handover_ai', 'stop', 'take_over_confirm']);
   assert.deepEqual(a('handed_over'), ['take_over_with_claude', 'take_over_myself']);
-  assert.deepEqual(a('failed', { fail_kind: 'limit' }), ['take_over', 'retry']);
+  assert.deepEqual(a('failed', { fail_kind: 'limit' }), ['continue_with_another_ai', 'take_over', 'retry']);
   assert.deepEqual(a('failed', { fail_kind: 'network' }), ['retry', 'take_over']);
   assert.deepEqual(a('in_review'), ['open_pr', 'request_changes']);
   assert.deepEqual(a('todo', { run: null, live: null }), ['give_to_claude']);
@@ -162,4 +162,21 @@ test('stalled: derived from the aged view, with a reason, Resume / Hand over / S
   assert.deepEqual(unconfirmed.actions, ['view_handover']);
   assert.equal(cardFace(view('blocked', { blocked_kind: 'question', live: { ...liveOk, activity_age_ms: 30 * MIN } })).stalled, null, 'waiting for a person is not stalled');
   assert.equal(cardFace(dead.stalled ? view('running', { live: { ...liveOk, hb_age_ms: 90_000 } }) : null, { connection_lost: true }).stalled, null, 'a lost board connection says nothing about the run');
+});
+
+test('plan limit reads "Paused: limit" with continue_with_another_ai; no new state', () => {
+  const f = cardFace(view('failed', { fail_kind: 'limit', limit_resets_in_ms: 5 * MIN }));
+  assert.equal(f.label, 'Paused: limit');
+  assert.equal(f.state, 'failed');
+  assert.equal(f.actions[0], 'continue_with_another_ai');
+  assert.ok(!STATES.includes('paused'));
+  assert.equal(cardFace(view('failed', { fail_kind: 'network' })).label, 'Failed');
+});
+
+test('a run served by Burst\'s secondary keeps running and carries a "via secondary" badge', () => {
+  const f = cardFace(view('running', { live: { ...liveOk, via_secondary: true } }));
+  assert.equal(f.state, 'running');
+  assert.equal(f.badge, 'via secondary');
+  assert.equal(cardFace(view('running')).badge, null);
+  assert.equal(cardFace(view('failed', { fail_kind: 'limit', live: { ...liveOk, via_secondary: true } })).badge, null);
 });

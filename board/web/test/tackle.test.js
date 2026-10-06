@@ -25,3 +25,12 @@ test('raisedBudget: +50% or +$5 over the larger of cap and spend, clamped to the
   assert.equal(raisedBudget(v, 'usd5', 5.3), null);
   assert.equal(raisedBudget({ budget: { cap_usd: 1000, spent_usd: 1000 } }, 'usd5'), null);
 });
+
+test('anotherAi: never the AI that hit the limit; uses the session router when present', async () => {
+  const { anotherAi } = await import('../js/tackle.js');
+  const choices = [{ id: 'claude', label: 'Claude', available: true }, { id: 'codex', label: 'Codex', available: true }, { id: 'gemini', label: 'Gemini', available: false }];
+  assert.equal(anotherAi(choices, 'claude', 'x', null), 'codex');
+  assert.equal(anotherAi([choices[0], choices[2]], 'claude', 'x', null), null);
+  const router = { suggest: (_t, providers) => ({ provider: providers.at(-1).provider }) };
+  assert.equal(anotherAi([...choices.slice(0, 2), { id: 'hermes', label: 'Hermes', available: true }], 'claude', 'x', router), 'hermes');
+});

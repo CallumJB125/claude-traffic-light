@@ -24,7 +24,7 @@ export const PILLS = Object.freeze({
   handing_over: { icon: '⇄', label: 'Handing over', tone: 'violet' },
   handed_over: { icon: '⇄', label: 'Handed over', tone: 'violet' },
   failed: { icon: '✖', label: 'Failed', tone: 'red' },
-  failed_limit: { icon: '✖', label: 'Stopped', tone: 'red' },
+  failed_limit: { icon: '✖', label: 'Paused: limit', tone: 'red' },
   stalled: { icon: '⚠', label: 'Stalled', tone: 'red' },
   in_review: { icon: '◆', label: 'In review', tone: 'purple' },
   done: { icon: '✓', label: 'Done', tone: 'done' },
@@ -189,7 +189,7 @@ export function cardFace(view, { elapsed_ms = 0, connection_lost = false } = {})
   let key = state === 'failed' && view.fail_kind === 'limit' ? 'failed_limit' : state;
   let reason;
   let actions = state === 'blocked' ? [...(BLOCKED_ACTIONS[view.blocked_kind] ?? ['answer'])] : [...(ACTIONS[state] ?? [])];
-  if (state === 'failed') actions = view.fail_kind === 'limit' ? ['take_over', 'retry'] : ['retry', 'take_over'];
+  if (state === 'failed') actions = view.fail_kind === 'limit' ? ['continue_with_another_ai', 'take_over', 'retry'] : ['retry', 'take_over'];
   if (view.run && ['running', 'quiet', 'blocked'].includes(state)) actions.push('switch_ai');
   if (state === 'handed_over' && view.handover_hold) actions = view.handover_provenance === 'checkpoint_complete'
     ? ['view_handover', 'take_over_with_claude'] : ['view_handover'];
@@ -240,6 +240,7 @@ export function cardFace(view, { elapsed_ms = 0, connection_lost = false } = {})
     sponsor: sponsorLine(view),
     runner_line: runnerLine,
     activity_line: view.run && activityAge != null ? `${agentName(view)} · ${formatAge(activityAge)} ago` : null,
+    badge: live?.via_secondary && ['running', 'quiet'].includes(state) ? 'via secondary' : null,
     overlap_chip: top ? `⚠ overlaps ${top.other_key}${top.paths?.[0] ? ` · ${basename(top.paths[0])}` : ''}` : null,
     budget: view.budget && view.budget.cap_usd != null
       ? { text: `$${(view.budget.spent_usd ?? 0).toFixed(2)} / $${fmtUsd(view.budget.cap_usd)}`, ratio: Math.min(1, (view.budget.spent_usd ?? 0) / view.budget.cap_usd) }

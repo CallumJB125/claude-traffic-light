@@ -112,6 +112,7 @@ export class Run {
     this.facts = [];
     this.lastFactFlush = now;
     this.costUsd = 0;
+    this.secondaryUsd = 0;
     this.numTurns = 0;
     this.narrative = null;
     this.lastHandoverMono = now;
@@ -273,6 +274,7 @@ export class Run {
       tool_in_flight: t ? { name: t.name, summary: t.summary, age_ms: Math.round(now - t.mono), ...(t.bash_timeout_ms ? { bash_timeout_ms: t.bash_timeout_ms } : {}) } : null,
       last_activity_age_ms: this.lastActivityMono == null ? null : Math.round(now - this.lastActivityMono),
       cost_usd: this.costUsd,
+      via_secondary: this.sup.viaSecondary?.() === true,
       post_wake_activity: this.postWakeActivity,
       wake_age_ms: this.wake ? Math.round(now - this.wake.mono) : null,
       gate: this.gateOpen ? 'open' : 'closed',
@@ -330,11 +332,17 @@ export class Run {
     this.turnSignals = { complete: false, ask: false, release: false };
     this.toolInFlight = null;
     this.streamTools.clear();
-    if (Number.isFinite(r.total_cost_usd)) this.costUsd = r.total_cost_usd;
+    // Burst overflow runs on a secondary provider the Claude CLI cannot see: add it so budgets cover it.
+    this.secondaryUsd = this.sup.secondaryUsdFor?.(this.sessionId) ?? 0;
+    if (Number.isFinite(r.total_cost_usd)) this.costUsd = r.total_cost_usd + this.secondaryUsd;
     if (Number.isSafeInteger(r.num_turns)) this.numTurns = r.num_turns;
     if (Number.isFinite(this.costUsd)) this.fact('cost', { cost_usd: this.costUsd, num_turns: this.numTurns });
     if (this.ending) return;
     if (this.completed || this.released) { this.finish(this.completed ? 'completed' : 'released'); return; }
+    if (this.secondaryUsd > 0 && this.budgetUsd > 0 && this.costUsd >= this.budgetUsd) {
+      this.sup.onBudgetReached?.(this);
+      return this.fail('budget', 'budget cap reached (including Burst overflow spend)', this.budgetScope ? { budget_scope: this.budgetScope } : {});
+    }
     if (r.subtype === 'success') {
       this.turnSucceeded = true;
       this.limitRetries = 0;
@@ -354,7 +362,10 @@ export class Run {
     }
     const text = [r.result, ...(Array.isArray(r.errors) ? r.errors : []), r.terminal_reason, r.subtype].filter(Boolean).join(' ');
     const kind = this.rateLimited ? 'limit' : failKindOf(text);
-    if (kind === 'limit' && !this.rateLimited && this.limitRetries < RATE_LIMIT_RETRIES) {
+    // With a ready Burst secondary the limit is an overflow, not an end: keep the run going through Burst.
+    const burst = this.sup.burstState?.();
+    const failover = kind === 'limit' && burst?.active === true && burst.secondaryReady === true;
+    if (kind === 'limit' && this.limitRetries < RATE_LIMIT_RETRIES && (!this.rateLimited || failover)) {
       const wait = (this.sup.opts.limitBackoffMs ?? 30000) * 2 ** this.limitRetries++;
       this.log.warn('rate limited, retrying', { run_id: this.run_id, wait });
       setTimeout(() => { if (!this.ending && this.backend?.alive()) this.backend.send('You were rate limited; continue where you left off.'); }, wait).unref?.();
