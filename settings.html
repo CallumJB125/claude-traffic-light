@@ -274,6 +274,30 @@
   </div>
 
   <div class="field">
+    <label class="row"><input type="checkbox" id="quietEnabled" /> Quiet hours</label>
+    <div class="row">
+      <label for="quietStart">From</label> <input type="time" id="quietStart" />
+      <label for="quietEnd">to</label> <input type="time" id="quietEnd" />
+    </div>
+    <div id="quiet-days" class="row" role="group" aria-label="Quiet hours start on">
+      <label class="row"><input type="checkbox" data-day="1" /> Mon</label>
+      <label class="row"><input type="checkbox" data-day="2" /> Tue</label>
+      <label class="row"><input type="checkbox" data-day="3" /> Wed</label>
+      <label class="row"><input type="checkbox" data-day="4" /> Thu</label>
+      <label class="row"><input type="checkbox" data-day="5" /> Fri</label>
+      <label class="row"><input type="checkbox" data-day="6" /> Sat</label>
+      <label class="row"><input type="checkbox" data-day="0" /> Sun</label>
+    </div>
+    <div class="hint">Sounds, notifications and knocks stay quiet in this window; the light keeps showing every state. A session that needs your input still adds a silent count to the app badge. A night that starts on a ticked day runs until the morning. Snooze from the tray or widget menu.</div>
+  </div>
+
+  <div class="field">
+    <label for="mutedProjects">Muted projects</label>
+    <textarea id="mutedProjects" rows="3" aria-describedby="hint-muted" spellcheck="false"></textarea>
+    <div class="hint" id="hint-muted">One per line: a folder path (covers everything under it) or a folder or repo name. Muted projects make no sound and send no notification; their light state still shows. The tray menu can mute the current project in one click.</div>
+  </div>
+
+  <div class="field">
     <label class="row"><input type="checkbox" id="askFromWidget" /> Answer permission prompts from the widget</label>
     <div class="hint">When Claude asks to run a tool, Allow / Deny buttons appear under the widget and the request text above it. If you don't answer within a minute, the normal terminal prompt takes over. Restart open Claude Code sessions after changing this.</div>
   </div>

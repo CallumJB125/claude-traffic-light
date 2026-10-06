@@ -15,6 +15,13 @@
       document.getElementById('notifyOnStates').checked = config.notifyOnStates !== false;
       for (const k of NOTIFY_KINDS) document.getElementById(`notify-${k}`).checked = (config.notifyStates || {})[k] !== false;
       syncNotifyKinds();
+      const q = config.quietHours || {};
+      document.getElementById('quietEnabled').checked = q.enabled === true;
+      document.getElementById('quietStart').value = q.start || '22:00';
+      document.getElementById('quietEnd').value = q.end || '07:00';
+      const qDays = Array.isArray(q.days) ? q.days : [0, 1, 2, 3, 4, 5, 6];
+      for (const box of document.querySelectorAll('#quiet-days input')) box.checked = qDays.includes(Number(box.dataset.day));
+      document.getElementById('mutedProjects').value = (config.mutedProjects || []).join('\n');
       document.getElementById('showWidget').checked = config.showWidget !== false;
       document.getElementById('menuBarMode').checked = !!config.menuBarMode;
       document.getElementById('lowPower').value = ['auto', 'on', 'off'].includes(config.lowPower) ? config.lowPower : 'auto';
@@ -149,6 +156,13 @@
         stuckMinutes: Math.max(0, Math.min(60, Math.round(Number(document.getElementById('stuckMinutes').value) || 0))),
         waitingStaleHours: Math.max(1, Math.min(24, Number(waitingInput.value) || 4)),
         sounds: soundInput.checked,
+        quietHours: {
+          enabled: document.getElementById('quietEnabled').checked,
+          start: document.getElementById('quietStart').value || '22:00',
+          end: document.getElementById('quietEnd').value || '07:00',
+          days: [...document.querySelectorAll('#quiet-days input')].filter((b) => b.checked).map((b) => Number(b.dataset.day)),
+        },
+        mutedProjects: document.getElementById('mutedProjects').value.split('\n').map((x) => x.trim()).filter(Boolean),
         notifyOnStates: document.getElementById('notifyOnStates').checked,
         notifyStates: Object.fromEntries(NOTIFY_KINDS.map((k) => [k, document.getElementById(`notify-${k}`).checked])),
         showWidget: document.getElementById('showWidget').checked,
