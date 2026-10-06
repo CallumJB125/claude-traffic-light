@@ -245,7 +245,9 @@ select.input { appearance: none; padding-right: 28px; background-image: linear-g
 @media (max-width: 760px) { .board-switcher { max-width: 125px; } .brand-text { display: none; } .board-manager-row { align-items: flex-start; flex-direction: column; } }
 .brand-board { font-size: var(--text-lg); font-weight: 650; letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .brand-key { color: var(--faint); font-size: var(--text-sm); }
-.topbar-status { margin-right: auto; }
+.topbar-status { margin-right: auto; display: flex; align-items: center; gap: 12px; }
+.topbar-cost { font-size: 12px; color: var(--muted, inherit); }
+.topbar-cost.is-over { color: var(--tone-amber, inherit); font-weight: 600; }
 .conn { display: inline-flex; align-items: center; gap: 6px; font-size: var(--text-sm); color: var(--muted); }
 .conn-dot { width: 7px; height: 7px; border-radius: 2px; background: var(--tone-grey); }
 .conn-open .conn-dot { background: var(--muted); }
@@ -1288,3 +1290,10 @@ dialog::backdrop { background: var(--backdrop); transition: opacity 200ms ease; 
 .timeline-bar button { white-space: nowrap; }
 .planner-unscheduled { margin-top: 20px; }
 .planner-unscheduled h2 { font-size: var(--text-lg); }
+
+.needs-you { margin: 8px 16px; }
+.needs-you-title { font-size: 13px; margin: 0 0 4px; }
+.needs-you-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.needs-you-item { display: flex; gap: 10px; align-items: baseline; width: 100%; text-align: left; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); color: inherit; cursor: pointer; }
+.needs-you-what { flex: 1; }
+.needs-you-wait { color: var(--muted, inherit); font-size: 12px; }
