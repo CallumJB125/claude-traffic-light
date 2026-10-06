@@ -46,7 +46,7 @@ function el(tag, attrs = {}, ...kids) {
 
 const state = { selected: 'board', hub: { state: 'stopped' } };
 let pages = [];
-let groups = [];
+let sections = [];
 const buttons = new Map();
 
 function item(p, child = false) {
@@ -56,36 +56,40 @@ function item(p, child = false) {
     'data-page': p.id,
     'data-kind': p.kind,
   }, child ? null : icon(p.icon), el('span', { class: 'nav-label' }, p.title),
-  p.kind === 'window' ? icon('external') : null,
-  p.kind === 'soon' || p.pending ? el('span', { class: 'nav-soon' }, 'soon') : null);
+  p.kind === 'window' ? icon('external') : null);
   if (p.kind === 'window') btn.setAttribute('aria-label', `${p.title} (opens its own window)`);
   btn.addEventListener('click', () => window.buddy.select(p.id));
   buttons.set(p.id, btn);
   return btn;
 }
 
+const sectionOf = (id) => sections.find((s) => s.pages.includes(id))?.id ?? null;
+const sectionBtns = new Map();
+const subLists = new Map();
+
+// Five entries; the one holding the open page unfolds its own pages beneath it.
 function build() {
   const nav = document.getElementById('nav');
   nav.textContent = '';
   buttons.clear();
-  for (const g of groups) {
-    const list = pages.filter((p) => p.group === g.id);
-    if (!list.length) continue;
-    const sec = el('section', { class: 'nav-group' });
-    if (g.title) sec.append(el('h2', { class: 'nav-heading' }, g.title));
-    const ul = el('ul', { class: 'nav-list' });
-    for (const p of list) {
-      const li = el('li', {}, item(p));
-      if (p.children?.length) {
-        const sub = el('ul', { class: 'nav-sub', 'aria-label': `${p.title} views` });
-        for (const c of p.children) sub.append(el('li', {}, item(c, true)));
-        li.append(sub);
-      }
-      ul.append(li);
+  sectionBtns.clear();
+  subLists.clear();
+  const byId = new Map();
+  for (const p of pages) { byId.set(p.id, p); for (const c of p.children ?? []) byId.set(c.id, c); }
+  const ul = el('ul', { class: 'nav-list' });
+  for (const s of sections) {
+    const head = el('button', { type: 'button', class: 'nav-item nav-section', 'data-section': s.id }, icon(s.icon), el('span', { class: 'nav-label' }, s.title));
+    head.addEventListener('click', () => { if (sectionOf(state.selected) !== s.id) window.buddy.select(s.default); });
+    sectionBtns.set(s.id, head);
+    const sub = el('ul', { class: 'nav-sub', 'aria-label': `${s.title} pages` });
+    for (const id of s.pages) {
+      const p = byId.get(id);
+      if (p) sub.append(el('li', {}, item(p, true)));
     }
-    sec.append(ul);
-    nav.append(sec);
+    subLists.set(s.id, sub);
+    ul.append(el('li', {}, head, sub));
   }
+  nav.append(el('section', { class: 'nav-group' }, ul));
   paint();
 }
 
@@ -96,6 +100,12 @@ function paint() {
   for (const [id, btn] of buttons) {
     const on = id === state.selected;
     if (on) btn.setAttribute('aria-current', 'page'); else btn.removeAttribute('aria-current');
+  }
+  const open = sectionOf(state.selected);
+  for (const [id, btn] of sectionBtns) {
+    btn.setAttribute('aria-expanded', String(id === open));
+    if (id === open) btn.setAttribute('data-active', ''); else btn.removeAttribute('data-active');
+    subLists.get(id).hidden = id !== open;
   }
   const hub = document.getElementById('hub');
   const s = state.hub?.state;
@@ -108,7 +118,7 @@ function paint() {
 // ↑/↓ move between entries, like a native source list.
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
-  const all = [...buttons.values()];
+  const all = [...document.querySelectorAll('#nav button')].filter((b) => !b.closest('[hidden]'));
   const i = all.indexOf(document.activeElement);
   if (i < 0) return;
   e.preventDefault();
@@ -160,7 +170,7 @@ window.buddy.onState((s) => { Object.assign(state, s); paintWorkspaces(); paint(
 window.buddy.pages().then((r) => {
   if (!r) return;
   pages = r.pages;
-  groups = r.groups;
+  sections = r.sections;
   HUB_TEXT = r.brand.hubText;
   document.title = r.brand.name;
   document.getElementById('brand').textContent = r.brand.name;
