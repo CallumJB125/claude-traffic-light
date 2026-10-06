@@ -49,7 +49,7 @@ const { resolveLowPower } = require('./src/low-power.js');
 const { windowAnimStepMs, createPointDedupe, eyePollMs } = require('./src/anim-step.js');
 const { spendMinGap } = require('./src/spend-poll.js');
 const { createStatusGate } = require('./src/status-gate.js');
-const { createMotionGate, staleMachineReasons, askKey, statusPushWanted } = require('./src/motion-gate.js');
+const { syncBackgroundThrottling, createMotionGate, staleMachineReasons, askKey, statusPushWanted } = require('./src/motion-gate.js');
 const { createAwayFeeds } = require('./src/away-feeds.js');
 const { createProbeBackoff } = require('./src/probe-backoff.js');
 const UpdateView = require('./src/update-view.js');
@@ -1011,7 +1011,7 @@ utilityHandle('busy-open-privacy', e => settingsOnly(e), () => shell.openExterna
 // clocks and main stops the cursor poll, the overlay, the garden, roaming and
 // status pushes.
 const widgetMotion = createMotionGate((paused) => {
-  if (win && !win.isDestroyed()) win.webContents.send('motion-paused', paused);
+  if (win && !win.isDestroyed()) { win.webContents.send('motion-paused', paused); syncBackgroundThrottling(win.webContents, paused); }
   syncEyePoll();
   // Whatever changed while paused lands the moment it's back.
   if (!paused) broadcastStatus();
@@ -1030,7 +1030,7 @@ function setMotionPaused(reason, on) { return widgetMotion.set(reason, !!on); }
 // The editor's previews run every animation the rules can pick, at full
 // rate; hidden, minimised or behind a locked screen that is pure waste.
 const lightsMotion = createMotionGate((paused) => {
-  if (lightsWin && !lightsWin.isDestroyed()) lightsWin.webContents.send('motion-paused', paused);
+  if (lightsWin && !lightsWin.isDestroyed()) { lightsWin.webContents.send('motion-paused', paused); syncBackgroundThrottling(lightsWin.webContents, paused); }
 });
 
 // Spend, GitHub and busy/Focus share one tick (src/away-feeds.js) that holds
