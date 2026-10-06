@@ -1170,7 +1170,7 @@ function createWindow() {
     queueMicrotask(() => { if (!win || win.isDestroyed()) createWindow(); });
   });
   // A reload loses the widget's state; re-push it as soon as it's back.
-  w.webContents.on('did-finish-load', () => { if (!current()) return; w.webContents.send('low-power', lowPowerOn); stateMemo = { at: 0, key: null, value: null }; broadcastStatus(); });
+  w.webContents.on('did-finish-load', () => { if (!current()) return; stateMemo = { at: 0, key: null, value: null }; broadcastStatus(); });
 
   w.on('resize', () => { if (current()) saveBounds(); });
   w.on('move', () => { if (current() && !glideTimer) saveBounds(); });
@@ -3045,6 +3045,7 @@ function eyeTick() {
   win.webContents.send('eyes', off.x, off.y);
 }
 
+ipcMain.handle('get-low-power', () => lowPowerOn);
 ipcMain.on('net-changed', () => checkOnline());
 ipcMain.on('drag-start', () => stopGlide());
 ipcMain.on('drag-end', (e, vx, vy) => {
