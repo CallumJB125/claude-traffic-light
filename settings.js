@@ -27,6 +27,7 @@
       document.getElementById('lowPower').value = ['auto', 'on', 'off'].includes(config.lowPower) ? config.lowPower : 'auto';
       document.getElementById('seasonal').checked = config.seasonal !== false;
       document.getElementById('askFromWidget').checked = !!config.askFromWidget;
+      document.getElementById('oneKeyApprove').checked = config.oneKeyApprove === true;
       document.getElementById('showTasks').checked = config.showTasks !== false;
       document.getElementById('showAgents').checked = config.showAgents !== false;
       document.getElementById('agentRoster').checked = config.agentRoster !== false;
@@ -170,6 +171,7 @@
         lowPower: document.getElementById('lowPower').value,
         seasonal: document.getElementById('seasonal').checked,
         askFromWidget: document.getElementById('askFromWidget').checked,
+        oneKeyApprove: document.getElementById('oneKeyApprove').checked,
         showTasks: document.getElementById('showTasks').checked,
         showAgents: document.getElementById('showAgents').checked,
         agentRoster: document.getElementById('agentRoster').checked,

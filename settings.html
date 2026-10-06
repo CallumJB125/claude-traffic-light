@@ -300,6 +300,11 @@
   <div class="field">
     <label class="row"><input type="checkbox" id="askFromWidget" /> Answer permission prompts from the widget</label>
     <div class="hint">When Claude asks to run a tool, Allow / Deny buttons appear under the widget and the request text above it. If you don't answer within a minute, the normal terminal prompt takes over. Restart open Claude Code sessions after changing this.</div>
+
+  <div class="field">
+    <label class="row"><input type="checkbox" id="oneKeyApprove" /> Allow one-key approval for read-only requests</label>
+    <div class="hint">Off by default. When on, pressing Enter on an open permission request in the Waiting list allows it, but only for reading inside the project (Read, Grep, Glob, LS, and plain ls, pwd, git status or git log). Anything else, writes and edits included, always needs a click on Allow. Nothing is ever approved without a key press, and each one-key approval is recorded in one-key-approvals.jsonl in the data folder. Needs "Answer permission prompts from the widget".</div>
+  </div>
   </div>
 
   <h2>Widget</h2>

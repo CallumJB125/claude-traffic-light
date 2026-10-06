@@ -211,6 +211,8 @@ const DEFAULT_CONFIG = {
   snoozeUntil: 0,
   quietHours: { enabled: false, start: '22:00', end: '07:00', days: [0, 1, 2, 3, 4, 5, 6] },
   mutedProjects: [],
+  // Enter approves a read-only permission request (src/one-key.js). Strictly opt-in.
+  oneKeyApprove: false,
   showWidget: true,
   menuBarMode: false,
   // 'auto' | 'on' | 'off': trims non-essential motion (src/low-power.js).
@@ -493,6 +495,7 @@ const SHOW_RULE_NUDGE = false;
 // flagged AND it is on the allow-list (src/enter-allow.js); the widget still
 // shows Allow either way, Enter just never stands in for that click.
 const EnterAllow = require('./src/enter-allow.js');
+const OneKey = require('./src/one-key.js');
 function withDanger(inputs, requests) {
   const byId = new Map(requests.map((r) => [r.id, r]));
   return inputs.map((i) => {
@@ -501,7 +504,9 @@ function withDanger(inputs, requests) {
     let danger;
     try { danger = AutoRules.danger(req); } catch { danger = 'it could not be checked'; }
     const skip = danger === null ? EnterAllow.enterBlockedReason(req) : null;
-    return { ...i, danger, enterAllow: danger === null && skip === null, enterNote: skip === null ? null : EnterAllow.widgetWording(skip) };
+    const oneKey = danger === null && skip === null ? OneKey.reason(req, { enabled: loadConfig().oneKeyApprove }) : null;
+    const note = skip !== null ? EnterAllow.widgetWording(skip) : oneKey;
+    return { ...i, danger, enterAllow: danger === null && skip === null && oneKey === null, enterNote: note };
   });
 }
 const PaneDialogs = require('./src/pane-dialogs.js');
@@ -3789,12 +3794,24 @@ ipcMain.handle('answer-input', (e, id, optionId, more = {}) => {
   const m = more && typeof more === 'object' ? more : {};
   const answer = PendingInputs.answerFor(req, String(optionId), { answers: m.answers, content: m.content, message: m.message });
   if (!answer) return { ok: false, error: 'not an option for this request' };
+  // Enter is decided again here, from the request file, never from the renderer's say-so.
+  const oneKey = m.oneKey === true;
+  if (oneKey) {
+    let why = String(optionId) === 'allow' ? OneKey.reason(req, { enabled: loadConfig().oneKeyApprove }) : 'only Allow once';
+    try { if (!why && AutoRules.danger(req) !== null) why = 'it needs a careful look'; } catch { why = 'it could not be checked'; }
+    if (!why) why = EnterAllow.enterBlockedReason(req);
+    if (why) return { ok: false, error: `Enter skips this (${why}): click Allow if you mean it.` };
+  }
   // Bound to the request as shown (readRequests drops edited ones): the file
   // must still hash the same when the answer is written.
   const w = AnswerFile.writeAnswer(REQUESTS_DIR, req.id, answer.decision, { by: 'desk', extra: answer.extra, key: keyFor(req.id), decisionHash: req.decisionHash });
   console.log(`[answer] ${req.kind || 'permission'} ${req.tool} ${req.id}: ${optionId} → ${w.ok ? answer.decision : `not sent (${w.error})`}`);
   setTimeout(broadcastStatus, 250);
   if (!w.ok) return { ok: false, error: w.error };
+  if (oneKey) {
+    OneKey.record(path.join(ROOT_DIR, 'one-key-approvals.jsonl'), { tool: req.tool, session: req.sessionId || null, project: Rules.folderOf(req.cwd), request: req.id, summary: PendingInputs.fromRequest(req).headline || null });
+    console.log(`[one-key] approved ${req.tool} ${req.id} in ${Rules.folderOf(req.cwd)}`);
+  }
   // "Allow once" only: a session-wide allow was already a broader choice.
   // The answer is already written: a counter problem must not turn it into an error.
   if (!SHOW_RULE_NUDGE) return { ok: true };
