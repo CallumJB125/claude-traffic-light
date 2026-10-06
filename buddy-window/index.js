@@ -27,6 +27,7 @@ const { createAccountFlow, clearHubSessions, ACCT_ARGS } = require('./account-fl
 const { createConnectLife } = require('./connect-life');
 const BRAND = require('./brand');
 const { clientArtifactTarget, clientExportTarget, saveClientArtifact, saveClientExport } = require('./client-download');
+const { createViewLifecycle } = require('../src/view-lifecycle');
 const { createWorkCapture } = require('../src/work-capture');
 const { createMyDayBroker } = require('../src/my-day-broker');
 
@@ -116,7 +117,7 @@ async function probeHub(origin, partition) {
   });
 }
 
-function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onClosed = () => {}, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged, devAccountsHub = null, captureEnabled = true, onOverviewRetired = () => {} } = {}) {
+function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onClosed = () => {}, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged, devAccountsHub = null, captureEnabled = true, onOverviewRetired = () => {}, isConstrained = () => false } = {}) {
   // The dev-only mock accounts hub runs on loopback; that one exact origin is
   // the only non-https hub ever accepted.
   const allowOrigins = devAccountsHub && isDev ? [devAccountsHub] : [];
@@ -179,7 +180,19 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   let accountView = null;
   let accountLoad = Promise.resolve();
   let accountLoadGeneration = 0;
-  const localViews = new Map(); // page id → its own view, kept so a page keeps its state
+  const localViews = new Map(); // page id → its own view; the lifecycle below keeps only the recent ones alive
+  // Pages with forms, an open dispatch dialog or session ownership are never reclaimed while the window is open.
+  const KEEP_ALIVE = new Set(['setups', 'overview', 'tasks', 'feedback', 'hatch']);
+  const lifecycle = createViewLifecycle({
+    isProtected: (id) => KEEP_ALIVE.has(id),
+    isConstrained: () => { try { return !!isConstrained(); } catch { return false; } },
+    destroy(id) {
+      const v = localViews.get(id);
+      if (!v || v === content) return;
+      localViews.delete(id);
+      dispose(v, win);
+    },
+  });
   const setupIdentityListeners=new Set();let setupIdentityMarkers=[];
   let overviewDocument=0,setupSourcesGeneration=0,setupLocalGeneration=0,setupCurrentSources=[],setupModalTicket=null;
   let selected = 'board';
@@ -342,6 +355,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     content = view;
     if (view) win.contentView.addChildView(view);
     layout();
+    lifecycle.setCurrent([...localViews].find(([, v]) => v === view)?.[0] ?? null);
   }
 
   function pushState() {
@@ -924,6 +938,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       // reopening is instant; it stops with the app.
       for (const v of [sidebar, infoView, hubView, accountView, ...localViews.values()]) dispose(v, null);
       localViews.clear();
+      lifecycle.reset();
       win = null; sidebar = null; content = null; hubView = null; infoView = null; accountView = null;
       onClosed();
     });
