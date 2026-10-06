@@ -39,4 +39,18 @@ function createFakeBurst(routes = {}) {
   })));
 }
 
-module.exports = { createFakeBurst, stateV019, stateV012, upgradeStatus };
+// /api/usage as claude-burst metrics.UsageReport: rows carry api_equivalent_usd, route and slot.
+const usageReport = (over = {}) => ({
+  range: '7d', covered: true, totals: { requests: 6, usd: 7.5, unpriced: 0 },
+  by_provider: [{ key: 'anthropic', requests: 4, errors: 0, tokens: 9000, usd: 6 }, { key: 'together', requests: 2, errors: 0, tokens: 3000, usd: 1.5 }],
+  by_repo: [{ key: 'plexiform', requests: 6, errors: 0, tokens: 12000, usd: 7.5 }],
+  recent: [
+    { time: '2026-10-06T09:00:00Z', session_id: 's-1', route: 'together', slot: 'secondary', provider: 'together', repo: 'plexiform', api_equivalent_usd: 1, result: 'ok' },
+    { time: '2026-10-06T09:01:00Z', session_id: 's-1', route: 'together', slot: 'secondary', provider: 'together', repo: 'plexiform', api_equivalent_usd: 0.5, result: 'ok' },
+    { time: '2026-10-06T08:00:00Z', session_id: 's-1', route: 'anthropic', slot: 'primary', provider: 'anthropic', repo: 'plexiform', api_equivalent_usd: 6, result: 'ok' },
+  ],
+  ...over,
+});
+const compactionState = (sessions = [], enabled = true) => ({ ...stateV019(), context: { applicable: true, compaction: { enabled }, compaction_stats: { sessions } } });
+
+module.exports = { createFakeBurst, stateV019, stateV012, upgradeStatus, usageReport, compactionState };

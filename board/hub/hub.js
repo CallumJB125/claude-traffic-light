@@ -916,6 +916,7 @@ export class Hub extends EventEmitter {
     lm.hb_mono = rx;
     lm.child_alive = rhb.child_alive === true;
     lm.read_only = rhb.read_only === true;
+    lm.via_secondary = rhb.via_secondary === true;
     const t = rhb.tool_in_flight;
     lm.tool = t ? { name: t.name, summary: t.summary ?? null, bash_timeout_ms: t.bash_timeout_ms ?? null, since_mono: rx - (t.age_ms ?? 0) } : null;
     if (Number.isFinite(rhb.last_activity_age_ms)) {

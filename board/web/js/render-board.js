@@ -184,6 +184,7 @@ export function card({ view, face, elapsed_ms = 0 }, model) {
     sponsor ? h('span', { class: 'card-sponsor' }, sponsor) : null,
     face.activity_line && face.state !== 'done' ? h('span', { class: 'card-activity' }, face.activity_line) : null,
     req ? h('span', { class: 'card-req num' }, req) : null) : null,
+  face.badge ? h('span', { class: 'chip chip-secondary' }, face.badge) : null,
   face.overlap_chip ? h('button', { type: 'button', class: 'chip chip-overlap', 'data-action': 'open', 'data-card': view.id, 'data-section': 'overlaps' },
     icon('warn', 'icon-xs'), stripGlyph(face.overlap_chip)) : null,
   labelChips(view, model, labels),

@@ -37,6 +37,7 @@ export function leaseView(hub, row) {
     wake_age_ms: age(wake),
     post_wake_activity: wake == null ? false : (wake === lm.wake_mono && lm.post_wake === true) || (lm.activity_mono != null && lm.activity_mono > wake),
   };
+  if (lm?.via_secondary) v.via_secondary = true;
   v.green = isGreen({ ...v, run_state: row.run_state });
   return v;
 }

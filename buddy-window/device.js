@@ -357,6 +357,8 @@ function createDeviceController({ account, teamId, credsFile, seal, unseal, canS
       if (runner.state !== 'removed') setRunner('off');
     },
     running: () => wanted && RUNNING.has(runner.state),
+    /** Burst's secondary-provider spend and readiness for the runner's budget and limit handling (numbers only, local pipe). */
+    sendBurst(facts) { if (child?.ready) { try { child.postMessage({ type: 'runner.burst', ...facts }); } catch { /* exiting */ } } }, // privacy-flow: team-hub-runner
     /** Share (or stop sharing) the live sessions list; `enabled:false` clears at once. Summaries need both switches. */
     setPresence(enabled, sessions = [], { shareSummaries = false } = {}) {
       const summaries = !!enabled && shareSummaries === true;

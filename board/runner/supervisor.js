@@ -74,6 +74,8 @@ export function findOnPath(bin, envPath = process.env.PATH ?? '') {
   return null;
 }
 
+const BURST_FRESH_MS = 3 * 60_000;
+
 export class Supervisor extends EventEmitter {
   /**
    * opts: home, env (parent env for the CLI allowlist), clock {mono,wall}, log,
@@ -686,6 +688,27 @@ export class Supervisor extends EventEmitter {
     if (!current()) return null;
     this.log.info('resuming run', { run_id: run.run_id });
     return this.#spawn(run, { resume: true, prompt, editable });
+  }
+
+  // Burst facts pushed by the app (src/burst-ipc.js): numbers and flags only. Stale after BURST_FRESH_MS.
+  setBurst(m) {
+    const sessions = {};
+    for (const [k, v] of Object.entries(m?.sessions && typeof m.sessions === 'object' ? m.sessions : {}).slice(0, 500)) if (typeof k === 'string' && k.length <= 80 && Number.isFinite(v) && v >= 0) sessions[k] = v;
+    this.burst = { active: m?.active === true, route: m?.route === 'SECONDARY' ? 'SECONDARY' : 'PRIMARY', secondaryReady: m?.secondaryReady === true, sessions, at: this.clock.wall() };
+  }
+
+  burstState() {
+    return this.burst && this.clock.wall() - this.burst.at <= BURST_FRESH_MS ? this.burst : null;
+  }
+
+  secondaryUsdFor(sessionId) {
+    const b = this.burstState();
+    return b && Object.hasOwn(b.sessions, sessionId) ? b.sessions[sessionId] : 0;
+  }
+
+  viaSecondary() {
+    const b = this.burstState();
+    return !!b && b.active && b.route === 'SECONDARY';
   }
 
   // A run stopped on its budget: tell the app (app-entry posts it), giver's device only.

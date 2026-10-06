@@ -2,7 +2,7 @@
 // loop. Rendering is a pure function of `state` (render-*.js); this file owns
 // clocks, network and DOM events.
 import { h, render } from './h.js';
-import { tacklePreference, rememberTackle, raisedBudget, tackleChoices } from './tackle.js';
+import { tacklePreference, rememberTackle, raisedBudget, tackleChoices, anotherAi } from './tackle.js';
 import { handoverPin, sameHandover } from './ai-handover.js';
 import { api, errorText, setOrg, currentOrg, setCsrf, requestId } from './api.js';
 import { connectBoard } from './socket.js';
@@ -1253,12 +1253,12 @@ async function loadRepos() {
   return state.repos;
 }
 
-async function openGive(cardId, mode) {
+async function openGive(cardId, mode, { another = false } = {}) {
   const v = viewOf(cardId);
   if (!v) return;
   const preference = tacklePreference(state.me.member.id, undefined, state.board?.settings?.default_budget_usd ?? 5), retry = mode === 'retry';
   state.dialog = {
-    kind: 'give', cardId, mode, instance: {}, handover_hold: v.handover_hold === true, ...handoverPin(v),
+    kind: 'give', cardId, mode, another, instance: {}, handover_hold: v.handover_hold === true, ...handoverPin(v),
     target: retry ? v.run?.owner?.member_id ?? state.me.member.id : state.me.member.id,
     repo_id: v.repo?.id ?? '',
     base_ref: v.base_ref ?? '',
@@ -1296,6 +1296,10 @@ async function loadPreview() {
     const res = await api.overlapPreview(d.cardId, target, d.repo_id || null);
     if (state.dialog?.previewToken !== token) return;
     state.dialog = { ...state.dialog, preview: { overlaps: res.overlaps ?? [], check: res.check ?? null, sponsor: res.sponsor ?? null, runners: res.runners ?? [], can_use_no_budget: res.can_use_no_budget === true } };
+    if (state.dialog.another) {
+      const pick = anotherAi(tackleChoices(res.runners ?? []), state.dialog.ai, viewOf(state.dialog.cardId)?.title ?? '');
+      state.dialog = { ...state.dialog, another: false, ...(pick ? { ai: pick } : {}) };
+    }
   } catch (err) {
     if (state.dialog?.previewToken !== token) return;
     state.dialog = { ...state.dialog, preview: { error: errorText(err) } };
@@ -1821,6 +1825,7 @@ function onClick(e) {
     case 'budget-stop': state.budgetStopped.add(cardId); update(); toast(`${keyOf(cardId)} stays stopped.`); return;
     case 'give_to_claude': openGive(cardId, 'dispatch'); return;
     case 'take_over_with_claude': openGive(cardId, 'redispatch'); return;
+    case 'continue_with_another_ai': openGive(cardId, 'retry', { another: true }); return;
     case 'switch_ai': state.dialog = { kind: 'switch-ai', cardId, ...handoverPin(viewOf(cardId)) }; update(); return;
     case 'view_handover': openDetail(cardId, 'handover'); return;
     case 'stop': case 'cancel': case 'take_over_confirm': case 'resume': case 'handover_ai':

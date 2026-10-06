@@ -1018,6 +1018,9 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     resumeDevices: () => flow.resumeDevices(),
     /** Subscribe to validated runner events (`run.budget_reached`); returns the unsubscribe function. */
     onRunnerEvent(cb) { if (typeof cb !== 'function') return () => {}; runnerListeners.add(cb); return () => runnerListeners.delete(cb); },
+    /** Burst facts for the runner (src/burst-ipc.js): only while a runner is running cards. */
+    runnerLive: () => flow.runningTeams().length > 0,
+    burstFacts: (facts) => flow.burstFacts(facts),
     /** The widget's live sessions changed: hubs sharing presence get the new list. */
     sessionsChanged(sessions) { flow.sessionsChanged(sessions); if (captureEnabled) void workCapture.observe(sessions); },
     async stop() {

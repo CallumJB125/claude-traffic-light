@@ -7,14 +7,19 @@
 const path = require('node:path');
 const os = require('node:os');
 const { createProbeBackoff } = require('./probe-backoff.js');
+const fs = require('node:fs');
 const View = require('./burst-view.js');
+const Spend = require('./burst-spend.js');
+const Handover = require('./burst-handover.js');
 const Actions = require('./burst-actions.js');
 
 const POLL_BASE_MS = 5000;
 const POLL_MAX_MS = 60000;
 const TRAY_REFRESH_MS = 30000;
+const HANDOVER_TTL_MS = 60000;
+const BOARD_TICK_MS = 60000;
 
-function register({ utilityHandle, settingsOnly, chipAllowed = () => false, accountAllowed = () => false, isMac, dialog, shell, scriptDir, home = os.homedir(), launch, client: injected, log = () => {} }) {
+function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usageAllowed = () => false, sessionsAllowed = () => false, accountAllowed = () => false, stateFile = null, hubSend = null, runner = null, isMac, dialog, shell, scriptDir, home = os.homedir(), launch, client: injected, log = () => {} }) {
   const platform = isMac ? 'darwin' : 'other';
   const client = isMac ? (injected || require('./burst-client.js').createBurstClient({ home })) : null;
   const backoff = createProbeBackoff({ base: POLL_BASE_MS, max: POLL_MAX_MS });
@@ -93,6 +98,79 @@ function register({ utilityHandle, settingsOnly, chipAllowed = () => false, acco
     return { chip: v.chip, nextPollMs: backoff.gap };
   });
 
+  // Usage page: the "Through Burst" view model only, never a raw response.
+  utilityHandle('burst:usage', usageAllowed, async (_e, range) => {
+    if (!isMac || last.kind !== 'present' || !last.capabilities.usage) return { view: null, nextPollMs: isMac ? backoff.gap : 0 };
+    try { return { view: Spend.throughBurstView(await client.usage({ range })), nextPollMs: backoff.gap }; } catch { return { view: null, nextPollMs: backoff.gap }; }
+  });
+
+  // Sessions page: per-session compaction stats and the handover of observed Claude sessions.
+  let shared = {};
+  try { if (stateFile) shared = JSON.parse(fs.readFileSync(stateFile, 'utf8')).share || {}; } catch { shared = {}; }
+  const handovers = new Map(); // root -> { at, content, sent }
+  let audit = { at: -Infinity, roots: [] };
+  const present = () => isMac && last.kind === 'present' && last.capabilities;
+
+  async function warmHandover(root) {
+    const h = handovers.get(root);
+    if (h && Date.now() - h.at < HANDOVER_TTL_MS) return;
+    handovers.set(root, { at: Date.now(), content: h ? h.content : '', sent: h ? h.sent : '' });
+    try {
+      const content = await client.handoverFile(root);
+      const cur = { at: Date.now(), content, sent: h ? h.sent : '' };
+      handovers.set(root, cur);
+      const date = Handover.newestSection(content).date;
+      if (date !== cur.sent) {
+        const r = await Handover.shareToHub({ root, content, shared, send: hubSend, home });
+        if (r.ok) cur.sent = date;
+      }
+    } catch (e) { log('[burst] handover read failed', e && e.code); }
+  }
+  async function warmAudit() {
+    if (Date.now() - audit.at < HANDOVER_TTL_MS) return;
+    audit = { ...audit, at: Date.now() };
+    try { audit = { at: Date.now(), roots: await client.handoverAudit() }; } catch (e) { log('[burst] handover audit failed', e && e.code); }
+  }
+
+  utilityHandle('burst:handover-share', sessionsAllowed, async (_e, repo, on) => {
+    if (typeof repo !== 'string' || !/^[0-9a-f]{16}$/.test(repo)) return { ok: false };
+    if (on === true) shared = { ...shared, [repo]: true }; else { shared = { ...shared }; delete shared[repo]; }
+    try { if (stateFile) fs.writeFileSync(stateFile, JSON.stringify({ share: shared }), { mode: 0o600 }); } catch (e) { log('[burst] could not save the share choice'); }
+    return { ok: true };
+  });
+
+  // Synchronous, from caches: called once per Sessions snapshot row.
+  function enrichSession(row) {
+    const c = present();
+    if (!c || !row || typeof row.sessionId !== 'string') return null;
+    const out = {};
+    const stat = last.state.compaction.sessions.find((x) => x.session === row.sessionId);
+    if (stat) out.compaction = { compactions: stat.compactions, savedUsd: stat.savedUsd, netUsd: stat.netUsd, savedTokens: stat.savedTokens };
+    const claude = row.source == null && row.ownership !== 'plexiform-owned';
+    if (claude && c.handoverAudit) {
+      warmAudit();
+      const root = Handover.matchRoot(row.cwd, audit.roots);
+      if (root) {
+        warmHandover(root);
+        const h = handovers.get(root);
+        const view = h && Handover.localView(h.content);
+        if (view) out.handover = { ...view, repo: Handover.repoKey(root), shared: shared[Handover.repoKey(root)] === true };
+      }
+    }
+    return Object.keys(out).length ? out : null;
+  }
+
+  // Board runner: secondary spend and readiness, only while a runner is running cards.
+  async function pushBoardFacts() {
+    if (!isMac || !runner || !runner.live()) return;
+    await refresh(true);
+    if (last.kind !== 'present') { runner.send({ active: false, route: 'PRIMARY', secondaryReady: false, sessions: {} }); return; }
+    let sessions = {};
+    if (last.capabilities.usage) { try { sessions = Spend.secondaryBySession(await client.usage({ range: '24h' })); } catch (e) { log('[burst] board usage failed', e && e.code); } }
+    runner.send({ active: last.state.active, route: last.state.route, secondaryReady: last.state.secondaryReady, sessions });
+  }
+  if (isMac && runner) setInterval(() => { pushBoardFacts().catch(() => {}); }, BOARD_TICK_MS).unref();
+
   if (isMac) refresh(true);
 
   return {
@@ -105,6 +183,10 @@ function register({ utilityHandle, settingsOnly, chipAllowed = () => false, acco
       return [{ label: 'Turn Burst off…', click: () => { act('off').then((r) => { if (r && r.error) log('[burst]', r.error); }); } }, { type: 'separator' }];
     },
     status: () => lastView,
+    enrichSession,
+    pushBoardFacts,
+    compactionActive: () => !!(present() && last.state.compaction.active),
+    compactionNote: () => (present() && last.state.compaction.active ? Spend.COMPACTION_NOTE : ''),
   };
 }
 

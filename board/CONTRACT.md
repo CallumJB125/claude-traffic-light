@@ -329,7 +329,7 @@ The web renders handover markdown as **text** (escape everything; only headings,
 | `salvage` | `{run_id, card_id, fence, repo_id, kind:'handover'\|'snapshot'\|'note', payload}` | Append-only, **accepts stale fences**, never changes state (§6.9). Built by `serializeOutbound` under the run scope; `repo_id` ≠ the run's → `FORBIDDEN` |
 | `presence` | `{sessions:[{session_id, agent, repo_id, branch?, state, since, summary?}]}` (≤ 50) | Team presence, desktop-app mode only (D37b). Replaces this device's presence; `[]` clears it at once. Not outboxed, never journaled. `agent` ∈ `claude\|codex\|cursor\|gemini\|hermes`, `state` ∈ `working\|waiting\|idle`, `session_id` hashed by the runner, `since` an ISO-8601 date-time ≤ 40 chars (anything else → `VALIDATION`), `summary` redacted ≤ 120. The hub drops sessions whose `repo_id` is not on a board of the member's org |
 
-`RunHb = {run_id, card_id, fence, child_alive, tool_in_flight:{name, summary, age_ms, bash_timeout_ms?}|null, last_activity_age_ms, cost_usd, post_wake_activity, wake_age_ms, gate:'open'|'closed', local_state}`. Ages are measured by the runner at send time; the hub converts each to its own monotonic clock as `rx_mono − age`.
+`RunHb = {run_id, card_id, fence, child_alive, tool_in_flight:{name, summary, age_ms, bash_timeout_ms?}|null, last_activity_age_ms, cost_usd, via_secondary?, post_wake_activity, wake_age_ms, gate:'open'|'closed', local_state}`. Ages are measured by the runner at send time; the hub converts each to its own monotonic clock as `rx_mono − age`.
 
 ### 6.3 Hub → runner frames (`hub→runner`)
 

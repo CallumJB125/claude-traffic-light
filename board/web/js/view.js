@@ -164,6 +164,7 @@ export const ACTION_LABEL = {
   open_pr: 'Open PR',
   request_changes: 'Request changes',
   retry: 'Retry',
+  continue_with_another_ai: 'Continue with another AI',
   resume: 'Resume',
   handover_ai: 'Hand over to another AI',
 };

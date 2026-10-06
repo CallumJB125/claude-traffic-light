@@ -60,6 +60,7 @@
       "settings-backups.js",
       "settings-burst.js",
       "burst-chip.js",
+      "burst-usage.js",
       "feedback.html",
       "feedback.js",
       "feedback-preload.js",
