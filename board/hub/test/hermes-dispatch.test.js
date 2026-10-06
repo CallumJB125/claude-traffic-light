@@ -75,7 +75,7 @@ test('migration 052 widens provider checks on a populated 051 database and appli
       INSERT INTO dispatches (request_id, card_id, dispatched_by, backend, ai, created_at) VALUES ('d1', 'c', 'm', 'codex_cli', 'codex', 'now');
       INSERT INTO runs (id, card_id, fence, on_behalf_of, dispatched_by, dispatch_request_id, backend, repo_id, base_ref, started_at, ai) VALUES ('run1', 'c', 1, 'm', 'm', 'd1', 'codex_cli', 'r', 'main', 'now', 'codex');`);
     assert.throws(() => db.exec("INSERT INTO dispatches (request_id, card_id, dispatched_by, backend, ai, created_at) VALUES ('x', 'c', 'm', 'hermes_cli', 'hermes', 'now')"), /CHECK/);
-    assert.deepEqual(migrate(db, { migrations: all }), [52]);
+    assert.deepEqual(migrate(db, { migrations: all.filter((m) => m.version <= 52) }), [52]);
     assert.deepEqual(objects(), before, 'every table, index and trigger survives the rebuild');
     assert.equal(db.prepare('PRAGMA foreign_key_check').all().length, 0);
     assert.deepEqual(db.prepare('SELECT id, ai, backend FROM runs').all().map((r) => ({ ...r })), [{ id: 'run1', ai: 'codex', backend: 'codex_cli' }]);
