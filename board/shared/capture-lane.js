@@ -5,6 +5,12 @@ export const OBSERVED_STALE_MS = 90_000;
 export const OBSERVED_ARCHIVE_MS = 24 * 3_600_000;
 export const COLUMN_LABELS = Object.freeze({ todo: 'To do', in_progress: 'In progress', in_review: 'Review', done: 'Done' });
 
+// Titles of background/internal AI sessions (memory generation, summaries). The
+// capture filter (src/work-capture.js) refuses these; cards created before it
+// did are archived here. test/work-capture.test.js keeps the two in step.
+export const BACKGROUND_TITLE = /^(?:\w+ · )?(?:memor(?:y|ies)|summar(?:y|ies)|title generation|session summary)$/i;
+export const isBackgroundTitle = (title) => typeof title === 'string' && BACKGROUND_TITLE.test(title.trim());
+
 export const isHumanOwned = (view) => (view.run_state ?? 'todo') === 'todo';
 export const isObservedWork = (view) => !view.run && isHumanOwned(view) && view.capture?.source === 'local_observation';
 
@@ -20,6 +26,7 @@ export function observedLane(view, elapsed = 0, now = Date.now()) {
   if (!isObservedWork(view)) return null;
   const c = view.capture;
   if (c.managed?.column === false) return 'active';
+  if (isBackgroundTitle(view.title)) return 'archived';
   const age = captureAgeMs(c, elapsed, now);
   if (age != null && age > OBSERVED_ARCHIVE_MS) return 'archived';
   if ((age == null ? c.fresh === true : age < OBSERVED_STALE_MS) && c.tracking !== 'stopped' && c.tracking !== 'deleted') return 'active';

@@ -222,3 +222,13 @@ test('a fresh install is opted out until the user enables it; an explicit choice
  const legacy=path.join(dir,'legacy.json'),st=JSON.parse(fs.readFileSync(file));delete st.enabled;fs.writeFileSync(legacy,JSON.stringify(st),{mode:0o600});
  assert.equal(createReal({...base,file:legacy}).enabled(),true);
 });
+test('board archives leftover background cards with the same title predicate the capture filter uses',async()=>{
+ const {BACKGROUND_TITLE:cap}=require('../src/work-capture');
+ const {BACKGROUND_TITLE:lane,observedLane}=await import('../board/shared/capture-lane.js');
+ assert.equal(cap.source,lane.source);assert.equal(cap.flags,lane.flags);
+ const card=(title,over={})=>({title,run_state:'todo',column:'in_progress',capture:{source:'local_observation',fresh:true,age_ms:1000,...over}});
+ assert.equal(observedLane(card('Codex · memories')),'archived');
+ assert.equal(observedLane(card('Session summary')),'archived');
+ assert.equal(observedLane(card('Fix memory leak')),'active');
+ assert.equal(observedLane(card('Codex · memories',{managed:{column:false}})),'active');
+});
