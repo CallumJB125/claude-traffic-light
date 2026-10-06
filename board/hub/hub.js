@@ -39,9 +39,13 @@ function endNote(event) {
   switch (event.type) {
     case 'stop': return 'the run was stopped';
     case 'run_failed': return event.fail_kind === 'budget' ? 'the run stopped at its budget' : `the run failed (${event.fail_kind})`;
-    case 'release': return 'the AI released the card';
+    case 'release': return event.requeue === true ? 'the AI released the card back to the queue' : 'the AI released the card';
     case 'orphan_timeout': case 'suspend_timeout': return 'the runner went silent and the run was orphaned';
     case 'handover_timeout': case 'hb_timeout': return 'the AI did not confirm its handover';
+    case 'handover_complete': return 'the run was handed over';
+    case 'complete': return 'the run finished';
+    case 'park_timeout': return 'the run was parked waiting for an answer';
+    case 'take_over': return 'the run was taken over';
     default: return 'the run ended';
   }
 }

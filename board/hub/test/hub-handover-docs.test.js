@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { TTL_MS, T_HANDOVER_MS } from '../../shared/liveness.js';
-import { startHub, runMsg, runHb } from './helpers.js';
+import { startHub, runMsg, runHb, until } from './helpers.js';
 
 const rows = (h, cardId) => h.db.all('SELECT * FROM handovers WHERE card_id = ? ORDER BY version', cardId);
 const doc = async (h, cookie, cardId) => (await h.api(cookie, 'GET', `/api/cards/${cardId}/handover`)).body;
@@ -116,5 +116,26 @@ test('strict hold handover: a runner that never confirms leaves the hub-written 
     assert.equal(rows(h, run.card_id).at(-1).written_by, 'system');
     const next = await h.action(alice, run.card_id, 'take_over_with_claude', { expected_fence: c.fence, prior_run_id: run.run_id });
     assert.equal(next.status, 409, 'the next AI cannot start until the stop is confirmed');
+  } finally { await h.destroy(); }
+});
+
+test('requeue release, early take-over of a suspended run, and completion each leave a handover', async () => {
+  const h = await startHub();
+  try {
+    const alice = await h.login('alice');
+    const runner = await h.runner(await h.enroll(alice));
+    const a = await h.startRun(alice, runner);
+    assert.equal((await runner.rpc(a, 'board_release', { requeue: true, reason: 'switching' })).ok, true);
+    assert.equal(rows(h, a.card_id).length, 1, 'a requeued release is not silent');
+    assert.match((await doc(h, alice, a.card_id)).markdown, /released the card back to the queue/);
+
+    const b = await h.startRun(alice, runner);
+    runner.send({ type: 'host.suspending', runs: [{ run_id: b.run_id, card_id: b.card_id, fence: b.fence }] });
+    await until(() => h.card(b.card_id).run_state === 'suspended');
+    assert.equal(rows(h, b.card_id).length, 0, 'a short suspend is not a stall yet');
+    const took = await h.action(alice, b.card_id, 'take_over', { confirm: true });
+    assert.equal(took.status, 200);
+    assert.equal(rows(h, b.card_id).length, 1);
+    assert.match((await doc(h, alice, b.card_id)).markdown, /the run was taken over/);
   } finally { await h.destroy(); }
 });
