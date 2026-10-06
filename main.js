@@ -199,12 +199,20 @@ const DEFAULT_CONFIG = {
   // The one character every rule shows (rules pick pose, eyes and the rest, never the body).
   character: { body: 'claude', bodyColor: null },
   workingStaleMinutes: 6,
+  // Minutes of silence before a working session reads "Stuck?" (0 = off); see hooks/session-machine.js stuckOf.
+  stuckMinutes: 5,
   waitingStaleHours: 4,
   // Every sound the app plays: rule sounds and the knock.
   sounds: true,
   // macOS notifications for the states that matter when the widget is out of sight.
   notifyOnStates: true,
   notifyStates: { ...Help.NOTIFY_DEFAULTS },
+  // Notification controls (src/quiet.js): they hold sounds, notifications and knocks, never the light.
+  snoozeUntil: 0,
+  quietHours: { enabled: false, start: '22:00', end: '07:00', days: [0, 1, 2, 3, 4, 5, 6] },
+  mutedProjects: [],
+  // Enter approves a read-only permission request (src/one-key.js). Strictly opt-in.
+  oneKeyApprove: false,
   showWidget: true,
   menuBarMode: false,
   // 'auto' | 'on' | 'off': trims non-essential motion (src/low-power.js).
@@ -487,6 +495,7 @@ const SHOW_RULE_NUDGE = false;
 // flagged AND it is on the allow-list (src/enter-allow.js); the widget still
 // shows Allow either way, Enter just never stands in for that click.
 const EnterAllow = require('./src/enter-allow.js');
+const OneKey = require('./src/one-key.js');
 function withDanger(inputs, requests) {
   const byId = new Map(requests.map((r) => [r.id, r]));
   return inputs.map((i) => {
@@ -495,7 +504,9 @@ function withDanger(inputs, requests) {
     let danger;
     try { danger = AutoRules.danger(req); } catch { danger = 'it could not be checked'; }
     const skip = danger === null ? EnterAllow.enterBlockedReason(req) : null;
-    return { ...i, danger, enterAllow: danger === null && skip === null, enterNote: skip === null ? null : EnterAllow.widgetWording(skip) };
+    const oneKey = danger === null && skip === null ? OneKey.reason(req, { enabled: loadConfig().oneKeyApprove }) : null;
+    const note = skip !== null ? EnterAllow.widgetWording(skip) : oneKey;
+    return { ...i, danger, enterAllow: danger === null && skip === null && oneKey === null, enterNote: note };
   });
 }
 const PaneDialogs = require('./src/pane-dialogs.js');
@@ -683,6 +694,7 @@ function readSessions(config, pendingIds = []) {
   }
   const workingStaleMs = config.workingStaleMinutes * 60 * 1000;
   const waitingStaleMs = config.waitingStaleHours * 60 * 60 * 1000;
+  const stuckMs = (Number(config.stuckMinutes) || 0) * 60 * 1000;
   const now = Date.now();
   const sessions = [];
   for (const f of files) {
@@ -690,7 +702,7 @@ function readSessions(config, pendingIds = []) {
       const data = readSessionFile(f);
       if (!data) continue;
       // The reader half of the session state machine (hooks/session-machine.js).
-      const c = Rules.classifySession(data, { now, pendingIds, isGone: () => SessionState.processGone(data, LOCAL_HOST), workingStaleMs, waitingStaleMs });
+      const c = Rules.classifySession(data, { now, pendingIds, isGone: () => SessionState.processGone(data, LOCAL_HOST), workingStaleMs, waitingStaleMs, stuckMs });
       if (c.dropped === 'gone') logTransition(data, 'gone', 'process exited', now);
       if (c.held) wakeWhenHoldEnds(data, now);
       if (!c.live) continue;
@@ -819,6 +831,8 @@ function cameosChanged() {
 
 const budgetView = () => budgetNotices.list().map((n) => ({ runId: n.runId, text: BudgetNotice.text(n) }));
 
+const Stuck = require('./src/stuck.js');
+const Quiet = require('./src/quiet.js');
 function computeState(opts = {}) {
   const config = loadConfig();
   const requests = readRequests();
@@ -853,7 +867,8 @@ function computeState(opts = {}) {
   }
   const minions = config.showAgents ? Rules.filterAgentKinds(Rules.liveAgents(sessions), config.agentKinds).slice(0, 32) : [];
   const sNote = spendNote(config.rules, fired, sessions, spend);
-  return { look: { ...withNumber(look, sessions, tasks), tasks, minions, agentRoster: config.agentRoster !== false, agentChipSize: config.agentChipSize }, reason: sessions.length ? 'session' : 'idle', sessions, fired, owned, firedNames: Rules.firedNames(config.rules, fired, owned), tool: currentTool(sessions), agentCount, pending, inputs, tasks, minions, spend, spendNote: sNote, paceLine: config.paceTooltip !== false && spend && spend.pace && spend.pace.noteworthy && !sNote ? spend.pace.text : null, away: BusyWatch.recap(), budget: budgetView(), busy: BusyWatch.holding() };
+  const stuck = Stuck.summary(sessions);
+  return { stuck, look: { ...Stuck.applyStuck(withNumber(look, sessions, tasks), stuck), tasks, minions, agentRoster: config.agentRoster !== false, agentChipSize: config.agentChipSize }, reason: sessions.length ? 'session' : 'idle', sessions, fired, owned, firedNames: Rules.firedNames(config.rules, fired, owned), tool: currentTool(sessions), agentCount, pending, inputs, tasks, minions, spend, spendNote: sNote, paceLine: config.paceTooltip !== false && spend && spend.pace && spend.pace.noteworthy && !sNote ? spend.pace.text : null, away: BusyWatch.recap(), budget: budgetView(), busy: BusyWatch.holding() };
 }
 
 // The tool of the most recently updated session that is using one.
@@ -908,6 +923,7 @@ const BusyWatch = require('./src/busy-watch.js')({
 // Every ping that waits is noted by rule and signal for the recap; any
 // feature with a ping of its own (a budget warning, say) goes through here.
 function pingAllowed(ruleId, opts = {}) {
+  if (quietHolds(null)) return false;
   if (!BusyWatch.holding()) return true;
   const rule = loadConfig().rules.find((r) => r.id === ruleId);
   if (Rules.pingsWhileBusy(rule, opts)) return true;
@@ -923,7 +939,31 @@ function firedSignal(rule) {
 }
 // A notification kind is a signal; the first enabled rule listening for it
 // decides, so "Needs your input" follows that rule's busy setting.
+// Snooze, quiet hours and project mutes (src/quiet.js): why this ping stays
+// quiet, or null. With no cwd, a project mute counts only when every live
+// session is muted.
+function quietHolds(cwd) {
+  const config = loadConfig();
+  const now = Date.now();
+  const why = Quiet.reason(config, { now, cwd });
+  if (why) return why;
+  return !cwd && Quiet.allMuted(config, aggregateState({ ignoreTravel: true }).sessions) ? 'project' : null;
+}
+// The one thing quiet still does: a silent badge count of asks waiting on you.
+function syncQuietBadge(st) {
+  const config = loadConfig();
+  const now = Date.now();
+  const timed = Quiet.reason(config, { now });
+  const asking = new Map();
+  for (const s of st.sessions || []) if (s.signal === 'permission-ask') asking.set(s.sessionId, s.cwd);
+  for (const r of st.pending || []) if (r && r.sessionId) asking.set(r.sessionId, r.cwd);
+  let n = 0;
+  for (const cwd of asking.values()) if (Quiet.badgeFor(timed || Quiet.reason(config, { now, cwd }), 'permission-ask')) n += 1;
+  try { app.setBadgeCount(n); } catch { /* no badge on this platform */ }
+}
 function notificationAllowed(n) {
+  const quiet = quietHolds((n.session && n.session.cwd) || n.cwd || null);
+  if (quiet) { console.log(`[notify] held (${quiet}): ${n.key}`); return false; }
   if (!BusyWatch.holding()) return true;
   const rule = Rules.orderedRules(loadConfig().rules).find((r) => r.enabled && r.when.signal.includes(n.kind));
   const ok = rule ? Rules.pingsWhileBusy(rule, { session: n.session }) : n.kind !== 'turn-failed';
@@ -1944,6 +1984,7 @@ function maybeNotify(st) {
   if (st.reason === 'preview') return;
   const { keys, fire } = Help.notifications(notifyKeys, { sessions: st.sessions, pending: st.pending, offline: !online, spend: st.spend }, loadConfig());
   notifyKeys = keys;
+  syncQuietBadge(st);
   for (const n of fire) {
     if (!notificationAllowed({ ...n, session: st.sessions.find((s) => n.key.endsWith(`:${s.sessionId}`)) || null })) { console.log(`[notify] held while busy: ${n.key}`); continue; }
     console.log(`[notify] ${n.key} — ${n.title}`);
@@ -2844,12 +2885,32 @@ function createTray() {
     const shown = budgetNotices.list().slice(0, BUDGET_TRAY_ITEMS).map((n) => ({ label: `${BudgetNotice.text(n).replace(/ \(\$.*$/, '')}…`, click: () => { openBudgetNotice(n.runId).then((r) => { if (!r || !r.ok) openBuddy(BudgetNotice.CONTRACT.boardPage); }); } }));
     return shown.length ? [...shown, { type: 'separator' }] : [];
   };
+  const quietItems = () => {
+    const config = loadConfig();
+    const now = Date.now();
+    const left = Quiet.snoozeLabel(config.snoozeUntil, now);
+    const setSnooze = (until) => { saveConfig({ snoozeUntil: until }); stateMemo = { at: 0, key: null, value: null }; broadcastStatus(); refreshTrayMenu?.(); };
+    const mine = localSessions(aggregateState().sessions || []).find((x) => x.cwd);
+    const folder = mine ? Rules.folderOf(mine.cwd) : null;
+    const muted = !!mine && Quiet.projectMuted(config.mutedProjects, mine.cwd);
+    return [
+      { label: left || 'Snooze Notifications', submenu: [
+        ...Object.entries(Quiet.SNOOZES).map(([k, text]) => ({ label: text.charAt(0).toUpperCase() + text.slice(1), click: () => setSnooze(Quiet.snoozeEnd(k, Date.now())) })),
+        { label: 'Resume Notifications', enabled: !!left, click: () => setSnooze(0) },
+      ] },
+      ...(folder ? [{ label: `Mute Notifications for ${folder}`, type: 'checkbox', checked: muted, click: () => {
+        const list = (config.mutedProjects || []).filter((x) => x !== mine.cwd && x !== folder);
+        saveConfig({ mutedProjects: muted ? list : [...list, mine.cwd] }); broadcastStatus(); refreshTrayMenu?.();
+      } }] : []),
+    ];
+  };
   const buildMenu = (from = 'tray') => Menu.buildFromTemplate([
     ...budgetItems(),
     ...scopeItem(),
     ...BurstIpc.trayItems(),
     ...AppMenu.appItems({ pages: BuddyPages.PAGES, groups: BuddyPages.GROUPS, open: openBuddy, openLabel: BRAND.OPEN_MENU_LABEL, feedback: { label: "Something's off / Idea…", click: createFeedbackWindow } }),
     { label: 'Open Claude', click: () => shell.openExternal('https://claude.ai') },
+    ...quietItems(),
     { label: 'Show Widget Now', click: () => { saveConfig({ showWidget: true }); clearTimeout(snoozeTimer); if (!win) createWindow(); win.showInactive(); createTray(); } },
     { label: 'Reset Widget Position', click: () => { const wa = screen.getPrimaryDisplay().workArea; if (!win) createWindow(); strip = WidgetStrip.NONE; win.setMaximumSize(MAX_WIDTH, Math.round(MAX_WIDTH / WIDGET_ASPECT)); win.setAspectRatio(WIDGET_ASPECT); win.setBounds({ x: wa.x + wa.width - 140, y: wa.y + 46, width: 107, height: 137 }); win.showInactive(); broadcastStatus(); } },
     {
@@ -3733,12 +3794,24 @@ ipcMain.handle('answer-input', (e, id, optionId, more = {}) => {
   const m = more && typeof more === 'object' ? more : {};
   const answer = PendingInputs.answerFor(req, String(optionId), { answers: m.answers, content: m.content, message: m.message });
   if (!answer) return { ok: false, error: 'not an option for this request' };
+  // Enter is decided again here, from the request file, never from the renderer's say-so.
+  const oneKey = m.oneKey === true;
+  if (oneKey) {
+    let why = String(optionId) === 'allow' ? OneKey.reason(req, { enabled: loadConfig().oneKeyApprove }) : 'only Allow once';
+    try { if (!why && AutoRules.danger(req) !== null) why = 'it needs a careful look'; } catch { why = 'it could not be checked'; }
+    if (!why) why = EnterAllow.enterBlockedReason(req);
+    if (why) return { ok: false, error: `Enter skips this (${why}): click Allow if you mean it.` };
+  }
   // Bound to the request as shown (readRequests drops edited ones): the file
   // must still hash the same when the answer is written.
   const w = AnswerFile.writeAnswer(REQUESTS_DIR, req.id, answer.decision, { by: 'desk', extra: answer.extra, key: keyFor(req.id), decisionHash: req.decisionHash });
   console.log(`[answer] ${req.kind || 'permission'} ${req.tool} ${req.id}: ${optionId} → ${w.ok ? answer.decision : `not sent (${w.error})`}`);
   setTimeout(broadcastStatus, 250);
   if (!w.ok) return { ok: false, error: w.error };
+  if (oneKey) {
+    OneKey.record(path.join(ROOT_DIR, 'one-key-approvals.jsonl'), { tool: req.tool, session: req.sessionId || null, project: Rules.folderOf(req.cwd), request: req.id, summary: PendingInputs.fromRequest(req).headline || null });
+    console.log(`[one-key] approved ${req.tool} ${req.id} in ${Rules.folderOf(req.cwd)}`);
+  }
   // "Allow once" only: a session-wide allow was already a broader choice.
   // The answer is already written: a counter problem must not turn it into an error.
   if (!SHOW_RULE_NUDGE) return { ok: true };

@@ -239,6 +239,15 @@
   </div>
 
   <div class="field">
+    <label for="stuckMinutes">Show "Stuck?" after</label>
+    <div class="row">
+      <input type="number" id="stuckMinutes" min="0" max="60" aria-describedby="hint-stuck" />
+      <span aria-hidden="true">minutes with no activity (0 = off)</span>
+    </div>
+    <div class="hint" id="hint-stuck">A working session that has sent no hook or activity event for this long turns the light amber and says "Stuck?" with its last tool. It clears the moment the session moves, and never applies to a session that is waiting for you or finished. It is part of the closed-after window above, not a second timer: the session stays listed for the longer of the two.</div>
+  </div>
+
+  <div class="field">
     <label for="waitingStaleHours">Waiting session considered closed after</label>
     <div class="row">
       <input type="number" id="waitingStaleHours" min="1" max="24" aria-describedby="hint-waiting" />
@@ -265,8 +274,37 @@
   </div>
 
   <div class="field">
+    <label class="row"><input type="checkbox" id="quietEnabled" /> Quiet hours</label>
+    <div class="row">
+      <label for="quietStart">From</label> <input type="time" id="quietStart" />
+      <label for="quietEnd">to</label> <input type="time" id="quietEnd" />
+    </div>
+    <div id="quiet-days" class="row" role="group" aria-label="Quiet hours start on">
+      <label class="row"><input type="checkbox" data-day="1" /> Mon</label>
+      <label class="row"><input type="checkbox" data-day="2" /> Tue</label>
+      <label class="row"><input type="checkbox" data-day="3" /> Wed</label>
+      <label class="row"><input type="checkbox" data-day="4" /> Thu</label>
+      <label class="row"><input type="checkbox" data-day="5" /> Fri</label>
+      <label class="row"><input type="checkbox" data-day="6" /> Sat</label>
+      <label class="row"><input type="checkbox" data-day="0" /> Sun</label>
+    </div>
+    <div class="hint">Sounds, notifications and knocks stay quiet in this window; the light keeps showing every state. A session that needs your input still adds a silent count to the app badge. A night that starts on a ticked day runs until the morning. Snooze from the tray or widget menu.</div>
+  </div>
+
+  <div class="field">
+    <label for="mutedProjects">Muted projects</label>
+    <textarea id="mutedProjects" rows="3" aria-describedby="hint-muted" spellcheck="false"></textarea>
+    <div class="hint" id="hint-muted">One per line: a folder path (covers everything under it) or a folder or repo name. Muted projects make no sound and send no notification; their light state still shows. The tray menu can mute the current project in one click.</div>
+  </div>
+
+  <div class="field">
     <label class="row"><input type="checkbox" id="askFromWidget" /> Answer permission prompts from the widget</label>
     <div class="hint">When Claude asks to run a tool, Allow / Deny buttons appear under the widget and the request text above it. If you don't answer within a minute, the normal terminal prompt takes over. Restart open Claude Code sessions after changing this.</div>
+
+  <div class="field">
+    <label class="row"><input type="checkbox" id="oneKeyApprove" /> Allow one-key approval for read-only requests</label>
+    <div class="hint">Off by default. When on, pressing Enter on an open permission request in the Waiting list allows it, but only for reading inside the project (Read, Grep, Glob, LS, and plain ls, pwd, git status or git log). Anything else, writes and edits included, always needs a click on Allow. Nothing is ever approved without a key press, and each one-key approval is recorded in one-key-approvals.jsonl in the data folder. Needs "Answer permission prompts from the widget".</div>
+  </div>
   </div>
 
   <h2>Widget</h2>

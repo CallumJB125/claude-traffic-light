@@ -494,7 +494,7 @@
         pill.addEventListener('click', (e) => { e.stopPropagation(); dismissedKey = null; render(); });
         kids.push(pill);
       } else if (list.length) {
-        const { shown, more } = V.visible(list, maxRows, now());
+        const { shown, more } = V.visible(list, maxRows, now(), mode === 'page');
         const openItem = expanded && list.find((i) => i.id === expanded);
         // An expanded input beyond the cap swaps in for the last row.
         const rows = openItem && !shown.includes(openItem) ? [...shown.slice(0, -1), openItem] : shown;
@@ -532,7 +532,7 @@
       // (not right after an answer: the next one waits for a deliberate open).
       if (!expanded && !collapsedByUser && list.length === 1 && mode === 'widget' && !noAutoExpand.has(list[0].id)) expanded = list[0].id;
       if (mode === 'page' && !expanded && list.length && !collapsedByUser) {
-        const first = V.visible(list, 1, now()).shown[0];
+        const first = V.visible(list, 1, now(), true).shown[0];
         if (!noAutoExpand.has(first.id)) expanded = first.id;
       }
       const key = keyOf(list);
@@ -571,8 +571,20 @@
         if (!cur || !settled(cur.id)) return false;
         e.preventDefault();
         const p = V.primary(cur, now());
-        if (!p) { setError(cur.id, cur.kind === 'permission' ? (cur.enterNote ? `Enter skips this (${cur.enterNote}): click Allow if you mean it.` : 'Enter only allows read-only commands and edits inside the project: click Allow if you mean it.') : 'Pick an option.'); return true; }
-        if (p.type === 'open') open(cur); else send(cur, p.id, undefined);
+        if (!p) { setError(cur.id, cur.kind === 'permission' ? (cur.enterNote ? `Enter skips this (${cur.enterNote}): click Allow if you mean it.` : 'Enter only allows read-only requests, and only with one-key approval on in Preferences: click Allow if you mean it.') : 'Pick an option.'); return true; }
+        if (p.type === 'open') open(cur); else send(cur, p.id, { oneKey: true });
+        return true;
+      }
+      // Attention queue: next / previous waiting item, oldest first.
+      const nav = !typing && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && tag !== 'BUTTON' && tag !== 'PRE' ? ({ ArrowDown: 1, j: 1, ArrowUp: -1, k: -1 })[e.key] : 0;
+      if (nav) {
+        const id = V.step(live_(), expanded, nav);
+        if (!id) return false;
+        e.preventDefault();
+        expanded = id; collapsedByUser = false;
+        render();
+        const sec = [...container.querySelectorAll('.ib-item')].find((n) => n.dataset.id === id);
+        if (sec && sec.scrollIntoView) sec.scrollIntoView({ block: 'nearest' });
         return true;
       }
       return false;

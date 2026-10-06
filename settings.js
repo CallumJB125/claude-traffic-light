@@ -10,15 +10,24 @@
       const config = await window.settingsApi.getConfig();
       workingInput.value = config.workingStaleMinutes;
       waitingInput.value = config.waitingStaleHours;
+      document.getElementById('stuckMinutes').value = config.stuckMinutes ?? 5;
       soundInput.checked = config.sounds !== false;
       document.getElementById('notifyOnStates').checked = config.notifyOnStates !== false;
       for (const k of NOTIFY_KINDS) document.getElementById(`notify-${k}`).checked = (config.notifyStates || {})[k] !== false;
       syncNotifyKinds();
+      const q = config.quietHours || {};
+      document.getElementById('quietEnabled').checked = q.enabled === true;
+      document.getElementById('quietStart').value = q.start || '22:00';
+      document.getElementById('quietEnd').value = q.end || '07:00';
+      const qDays = Array.isArray(q.days) ? q.days : [0, 1, 2, 3, 4, 5, 6];
+      for (const box of document.querySelectorAll('#quiet-days input')) box.checked = qDays.includes(Number(box.dataset.day));
+      document.getElementById('mutedProjects').value = (config.mutedProjects || []).join('\n');
       document.getElementById('showWidget').checked = config.showWidget !== false;
       document.getElementById('menuBarMode').checked = !!config.menuBarMode;
       document.getElementById('lowPower').value = ['auto', 'on', 'off'].includes(config.lowPower) ? config.lowPower : 'auto';
       document.getElementById('seasonal').checked = config.seasonal !== false;
       document.getElementById('askFromWidget').checked = !!config.askFromWidget;
+      document.getElementById('oneKeyApprove').checked = config.oneKeyApprove === true;
       document.getElementById('showTasks').checked = config.showTasks !== false;
       document.getElementById('showAgents').checked = config.showAgents !== false;
       document.getElementById('agentRoster').checked = config.agentRoster !== false;
@@ -145,8 +154,16 @@
       try {
       await window.settingsApi.saveConfig({
         workingStaleMinutes: Math.max(1, Math.min(60, Number(workingInput.value) || 6)),
+        stuckMinutes: Math.max(0, Math.min(60, Math.round(Number(document.getElementById('stuckMinutes').value) || 0))),
         waitingStaleHours: Math.max(1, Math.min(24, Number(waitingInput.value) || 4)),
         sounds: soundInput.checked,
+        quietHours: {
+          enabled: document.getElementById('quietEnabled').checked,
+          start: document.getElementById('quietStart').value || '22:00',
+          end: document.getElementById('quietEnd').value || '07:00',
+          days: [...document.querySelectorAll('#quiet-days input')].filter((b) => b.checked).map((b) => Number(b.dataset.day)),
+        },
+        mutedProjects: document.getElementById('mutedProjects').value.split('\n').map((x) => x.trim()).filter(Boolean),
         notifyOnStates: document.getElementById('notifyOnStates').checked,
         notifyStates: Object.fromEntries(NOTIFY_KINDS.map((k) => [k, document.getElementById(`notify-${k}`).checked])),
         showWidget: document.getElementById('showWidget').checked,
@@ -154,6 +171,7 @@
         lowPower: document.getElementById('lowPower').value,
         seasonal: document.getElementById('seasonal').checked,
         askFromWidget: document.getElementById('askFromWidget').checked,
+        oneKeyApprove: document.getElementById('oneKeyApprove').checked,
         showTasks: document.getElementById('showTasks').checked,
         showAgents: document.getElementById('showAgents').checked,
         agentRoster: document.getElementById('agentRoster').checked,

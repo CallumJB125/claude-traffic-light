@@ -50,6 +50,12 @@
   // not known to be working, never claimed done. Longer than Bash's 10-minute
   // ceiling, so one long command doesn't trip it.
   const AGENT_QUIET_MS = 15 * 60 * 1000;
+  // A working session this quiet (no hook or activity event) is 'stuck?': a
+  // question for the person, never a verdict. It stays visible STUCK_VISIBLE_MS
+  // past the threshold before the working window may close it, so the signal
+  // can outlive workingStaleMinutes instead of fighting it.
+  const STUCK_DEFAULT_MINUTES = 5;
+  const STUCK_VISIBLE_MS = 10 * 60 * 1000;
   // 'stopped': the parent's TaskStop for it succeeded. 'stale': gone quiet.
   const AGENT_STATUSES = ['working', 'waiting', 'done', 'stopped', 'stale'];
   // Legacy session files (pre-rules) wrote a colour instead of a signal.
@@ -333,12 +339,23 @@
   }
 
   // The reader's decision, in order; the first that applies wins.
+  // Pure: is this working session quiet for stuckMs or more? Only a signal
+  // that is neither waiting-on-you, quiet nor a closed turn counts; a stuckMs
+  // of 0 (or less) turns it off. Returns { sinceMs, tool } or null.
+  function stuckOf(data, signal, now, stuckMs) {
+    if (!(stuckMs > 0) || !signal || TURN_END.has(signal) || WAITING_ON_YOU.has(signal) || QUIET.has(signal)) return null;
+    const at = typeof data.updatedAt === 'string' ? Date.parse(data.updatedAt) : NaN;
+    if (!Number.isFinite(at) || at > now || now - at < stuckMs) return null;
+    return { sinceMs: now - at, tool: typeof data.tool === 'string' && data.tool ? data.tool : null };
+  }
+
   const PRESENTATION = [
     { id: 'no-signal', shows: 'nothing', why: 'no signal (and no legacy colour) in the file' },
     { id: 'gone', shows: 'nothing', why: 'its local Claude process exited without a SessionEnd' },
     { id: 'held', shows: 'prevSignal (or tool-use)', why: `a notification ask younger than ${TRANSIENT_ASK_MS} ms that no pending request or real ask backs` },
     { id: 'promoted', shows: 'tool-use / Agent', why: 'a finished, idle or just-opened session with a subagent still working' },
     { id: 'stale-agents', shows: 'nothing', why: 'promoted, but its working agents went quiet past the working window and keepalive' },
+    { id: 'stuck', shows: 'the stored signal, flagged stuck?', why: 'a working signal with no hook or activity event for the stuck threshold (default 5 min); live until the working window or the threshold plus 10 min, whichever is later' },
     { id: 'stale', shows: 'nothing', why: 'no update within the working window (or the waiting window for a waiting-on-you or quiet signal)' },
     { id: 'shown', shows: 'the stored signal', why: 'otherwise' },
   ];
@@ -346,8 +363,8 @@
   // One stored session → what the widget does with it. ctx: now (ms),
   // pendingIds (sessions with a blocking PermissionRequest), isGone (a thunk:
   // is its process gone? — the only impure question, asked only if needed),
-  // workingStaleMs, waitingStaleMs.
-  function classify(stored, { now, pendingIds = [], isGone = () => false, workingStaleMs, waitingStaleMs }) {
+  // workingStaleMs, waitingStaleMs, stuckMs (0 = no stuck flag).
+  function classify(stored, { now, pendingIds = [], isGone = () => false, workingStaleMs, waitingStaleMs, stuckMs = 0 }) {
     const data = withFreshAgents(stored, now);
     const signal = sessionSignal(data);
     if (!signal) return { live: false, dropped: 'no-signal', signal: null };
@@ -369,9 +386,11 @@
     }
     const waiting = WAITING_ON_YOU.has(presented);
     const quiet = QUIET.has(signal);
-    const staleInMs = (waiting || quiet ? waitingStaleMs : workingStaleMs) - (now - new Date(data.updatedAt).getTime());
+    const stuck = waiting || quiet ? null : stuckOf(data, presented, now, stuckMs);
+    const windowMs = waiting || quiet ? waitingStaleMs : stuck || stuckMs > 0 ? Math.max(workingStaleMs, stuckMs + STUCK_VISIBLE_MS) : workingStaleMs;
+    const staleInMs = windowMs - (now - new Date(data.updatedAt).getTime());
     const stale = staleInMs < 0;
-    return { live: !stale, dropped: stale ? 'stale' : null, rule: stale ? 'stale' : held ? 'held' : 'shown', waiting, quiet, signal, presented, held, source, staleInMs: Number.isNaN(staleInMs) ? null : staleInMs, session: { ...data, signal: presented } };
+    return { live: !stale, dropped: stale ? 'stale' : null, rule: stale ? 'stale' : stuck ? 'stuck' : held ? 'held' : 'shown', waiting, quiet, signal, presented, held, source, staleInMs: Number.isNaN(staleInMs) ? null : staleInMs, session: { ...data, signal: presented, ...(stuck && !stale ? { stuck } : {}) } };
   }
 
   // ── Diagram ─────────────────────────────────────────────────────────────
@@ -408,7 +427,7 @@
   }
 
   return {
-    TURN_END, WAITING, WAITING_ON_YOU, QUIET, PROMOTABLE_TURN_END, TRANSIENT_ASK_MS, AGENT_KEEPALIVE_MS, AGENT_QUIET_MS, AGENT_STATUSES, LEGACY_STATE_TO_SIGNAL,
+    TURN_END, WAITING, WAITING_ON_YOU, QUIET, PROMOTABLE_TURN_END, TRANSIENT_ASK_MS, AGENT_KEEPALIVE_MS, AGENT_QUIET_MS, STUCK_DEFAULT_MINUTES, STUCK_VISIBLE_MS, stuckOf, AGENT_STATUSES, LEGACY_STATE_TO_SIGNAL,
     STATES, EVENTS, CLOSED, TRANSITIONS, PRESENTATION, EVENT_OF_SIGNAL, EVENT_SIGNAL,
     sessionSignal, stateOf, eventOf, transitionFor, step, userTouched,
     hasWorkingAgent, effectiveSignal, presentSignal, agentsStaleInMs, withFreshAgents, classify, codexInputEntries, codexInputPending, CODEX_INPUT_MS,
