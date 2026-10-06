@@ -37,7 +37,8 @@ For a code+env+data cutover you may instead take an exact-destination paired sna
 Each member row with no linked account is an implicit invite: whoever signs in with that email can claim it, and it passes the signup allowlist. Review and revoke before the hostname is exposed in accounts mode.
 
 ```sh
-$PI 'sudo sqlite3 -readonly /var/lib/buddy-hub/board.db "SELECT email, role, github_login FROM members WHERE user_id IS NULL AND removed_at IS NULL ORDER BY email"'
+# the Pi has no sqlite3 CLI; use node:sqlite (read-only)
+$PI 'sudo node -e "const {DatabaseSync}=require(\"node:sqlite\");const d=new DatabaseSync(\"/var/lib/buddy-hub/board.db\",{readOnly:true});console.log(JSON.stringify(d.prepare(\"SELECT email, role, github_login FROM members WHERE user_id IS NULL AND removed_at IS NULL ORDER BY email\").all()))"'
 ```
 
 If the database predates migration 009 there is no `user_id` column: every active row is unclaimed, and the query errors; use `... WHERE removed_at IS NULL`. Remove rows that should not be able to sign in through the team's normal member-removal path before cutover. The same listing is produced by `scripts/cutover-preflight.mjs --db` (step 4).
