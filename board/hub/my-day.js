@@ -1,6 +1,7 @@
 import { HubError, json } from './db.js';
 import { cardView } from './views.js';
 import { runnerConnectionProblem } from './runner-authority.js';
+import { observedLane, stateKey } from '../shared/capture-lane.js';
 const STAFF = new Set(['owner', 'admin', 'member', 'viewer']);
 export const MY_DAY_MAX = 500;
 // A fixed, bounded read of the current principal's own work and actionable decisions.
@@ -32,7 +33,10 @@ export function myDay(hub, { member = null, userId = null, cred = null } = {}) {
         const assignees = hub.assignees(row.id), run = hub.run(row.active_run_id), dispatch = hub.pendingDispatch(row.id), decisionRun = run ?? (row.run_state === 'parked' ? hub.latestRun(row.id) : null);
         const own = row.created_by === me.id || assignees.includes(me.id) || run?.on_behalf_of === me.id || run?.dispatched_by === me.id || dispatch?.dispatched_by === me.id || dispatch?.target_member_id === me.id;
         const context = { board_id: board.id, board_name: board.name, team_name: board.team_name, team_id: me.org_id, member_id: me.id };
-        if (own && cards.length < MY_DAY_MAX) cards.push({ ...context, card: cardView(hub, row, me.id) }); else if (own) partial = true;
+        const ownView = own ? cardView(hub, row, me.id) : null;
+        // Stale or day-old observed sessions are not today's work; the rest use the board's own state words.
+        if (own && ['idle', 'archived'].includes(observedLane(ownView))) { /* hidden */ }
+        else if (own && cards.length < MY_DAY_MAX) cards.push({ ...context, card: ownView, state: stateKey(ownView) }); else if (own) partial = true;
         if (me.role !== 'viewer') {
           const permissions = hub.db.all("SELECT * FROM permission_requests WHERE card_id = ? AND state IN ('open','parked') ORDER BY created_at LIMIT 501", row.id);
           for (const p of permissions) if (p.run_id === decisionRun?.id && (p.state === 'open' || row.run_state === 'parked') && json(p.approvers, []).includes(me.id)) {

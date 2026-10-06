@@ -114,3 +114,8 @@ test('Overview production registered source sends a selected fixed card/run/fenc
  assert.equal(calls.length,1);assert.equal(calls[0][0],'sendMessage');assert.equal(calls[0][1].card,'c1');assert.equal(calls[0][1].team,'t1');assert.deepEqual(Array.from(calls[0][1].boardIds),['b1']);assert.equal(calls[0][2].expected_fence,7);assert.equal(calls[0][2].recipient_run_ids[0],'selected-run');
  await sources[1].send(row,'No send','another-request',()=>false);assert.equal(calls.length,1);
 });
+test('My day states use the board vocabulary instead of raw run_state', async () => {
+  const value = fixture(); value.cards[0].state = 'in_progress';
+  const service = createMyDayService({ work: async () => ({ status: 'complete', sources: [{ name: 'Hub', status: 'complete', cards: value.cards, decisions: [], agents: [] }] }) });
+  assert.equal((await service.snapshot()).sources[0].cards[0].state, 'In progress');
+});

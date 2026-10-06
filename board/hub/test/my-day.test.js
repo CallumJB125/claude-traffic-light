@@ -58,3 +58,12 @@ test('My day card limits report partial rather than pretending all own work was 
     const response = await fx.as(fx.users.ua, 'GET', '/api/my-day'); assert.equal(response.status, 200, response.text); assert.equal(response.body.status, 'partial'); assert.equal(response.body.cards.length, 500);
   } finally { await fx.h.close(); }
 });
+test('My day maps observed sessions with the board lane rules: idle and day-old sessions are excluded', async () => {
+  const { stateKey, observedLane } = await import('../../shared/capture-lane.js');
+  const at = (ms) => new Date(Date.now() - ms).toISOString();
+  const v = (ms, extra = {}) => ({ run: null, run_state: 'todo', column: 'in_progress', capture: { source: 'local_observation', tracking: 'active', reported_status: 'idle', fresh: false, age_ms: null, received_at: at(ms), ...extra } });
+  assert.equal(stateKey(v(5 * 60_000)), 'idle'); assert.equal(observedLane(v(5 * 60_000)), 'idle');
+  assert.equal(observedLane(v(2 * 86_400_000)), 'archived');
+  assert.equal(stateKey(v(1000, { fresh: true, age_ms: 1000, reported_status: 'working' })), 'in_progress');
+  assert.equal(stateKey({ run: { id: 'r' }, run_state: 'running', column: 'in_progress' }), 'running');
+});
