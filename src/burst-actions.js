@@ -6,10 +6,13 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const http = require('node:http'); // privacy-flow: burst-keep-awake
 const { execFile } = require('node:child_process');
 
 const KINDS = Object.freeze(['install', 'enable', 'off', 'repair', 'update', 'uninstall']);
 const MODES = Object.freeze(['base-url', 'transparent']);
+const KEEP_AWAKE_MODES = Object.freeze(['off', 'ac', 'always']);
+const KEEP_AWAKE_MAX_IDLE = 1440;
 const REPO_URL = 'https://github.com/andrewbakercloudscale/claude-burst.git';
 
 const q = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
@@ -101,4 +104,35 @@ async function runInTerminal(kind, { home, mode, dir, launch = launchTerminal, c
   return { file, display };
 }
 
-module.exports = { buildScript, runInTerminal, findCheckout, KINDS, MODES };
+// The one HTTP mutation here: POST /api/keep-awake to the trusted Burst address (`url` is
+// client.adminUrl(), only given once detection passed). Body is exactly {mode, idle_minutes},
+// the only fields Burst reads; the admin header is required. Loopback only, nothing else.
+function setKeepAwake({ url, mode, idleMinutes = 0, timeoutMs = 20000 } = {}) {
+  return new Promise((resolve, reject) => {
+    const fail = (code, message, extra) => reject(Object.assign(new Error(message), { code }, extra));
+    if (!KEEP_AWAKE_MODES.includes(mode) || !Number.isInteger(idleMinutes) || idleMinutes < 0 || idleMinutes > KEEP_AWAKE_MAX_IDLE) return fail('bad_request', 'bad request');
+    let u;
+    try { u = new URL(url); } catch { return fail('no_address', 'no trusted address'); }
+    if (u.protocol !== 'http:' || (u.hostname !== '127.0.0.1' && u.hostname !== '[::1]')) return fail('no_address', 'no trusted address');
+    const body = JSON.stringify({ mode, idle_minutes: idleMinutes });
+    const headers = { Host: '127.0.0.1', Accept: 'application/json', 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body), 'X-Claude-Burst-Admin': '1' };
+    const req = http.request({ host: u.hostname.replace(/^\[|\]$/g, ''), port: Number(u.port), method: 'POST', path: '/api/keep-awake', headers, agent: false, timeout: timeoutMs }, (res) => { // privacy-flow: burst-keep-awake
+      const parts = [];
+      let n = 0;
+      res.on('data', (c) => { if (n < 4000) { parts.push(c); n += c.length; } });
+      res.on('end', () => {
+        const text = Buffer.concat(parts).toString('utf8').trim();
+        if (res.statusCode !== 200) return fail('http', `http ${res.statusCode}`, { status: res.statusCode, detail: text.slice(0, 300) });
+        let j = {};
+        try { j = JSON.parse(text); } catch { return fail('bad_json', 'bad json'); }
+        resolve({ ok: true, detail: typeof j.detail === 'string' ? j.detail.slice(0, 300) : '', needsPassword: typeof j.script === 'string' });
+      });
+      res.on('error', () => fail('unreachable', 'unreachable'));
+    });
+    req.on('timeout', () => { req.destroy(); fail('timeout', 'timeout'); });
+    req.on('error', () => fail('unreachable', 'unreachable'));
+    req.end(body);
+  });
+}
+
+module.exports = { buildScript, runInTerminal, findCheckout, setKeepAwake, KINDS, MODES, KEEP_AWAKE_MODES };

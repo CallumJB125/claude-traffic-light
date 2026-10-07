@@ -210,6 +210,27 @@ function burstSection() {
   return sec;
 }
 
+// "Keep this Mac awake while AI is working": main decides Burst or the app's own blocker and
+// asks for consent; this only draws the switch and the honest one-line label.
+function keepAwakeSection() {
+  const label = el('span', { class: 'acct-mail' }, '');
+  const sw = el('div', { class: 'acct-item acct-item-toggle' });
+  const sec = el('section', { class: 'acct-section' }, el('h2', {}, 'Keep awake'), sw);
+  const draw = (v) => {
+    label.textContent = v ? v.label : '';
+    sw.textContent = '';
+    sw.append(el('div', { class: 'acct-who' }, el('span', { class: 'acct-name' }, 'Keep this Mac awake while AI is working'), label),
+      toggle(!!(v && v.on), 'Keep this Mac awake while AI is working', async (on) => {
+        const r = await api.keepAwakeSet(on).catch(() => ({ ok: false, error: 'Something went wrong.' }));
+        if (r && r.ok) draw(r.view);
+        else if (r && r.cancelled) return { ok: false };
+        return r;
+      }));
+  };
+  api.keepAwakeGet().then(draw).catch(() => {});
+  return sec;
+}
+
 const SCREENS = {
   clients(s) {
     return [heading('Your client projects', 'View the project updates shared with you. Invitations need your explicit acceptance.'),
@@ -526,6 +547,7 @@ const SCREENS = {
       out.push(sec);
     }
     out.push(burstSection());
+    out.push(keepAwakeSection());
     if (!s.hubs.length || s.hubs.every((h) => !h.teams.length)) {
       out.push(el('p', { class: 'acct-hint' }, 'Sign in and join a team to run cards here.'));
       return out;
