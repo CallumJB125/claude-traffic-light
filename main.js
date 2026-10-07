@@ -1683,7 +1683,7 @@ SetupsLocal.register(ipcMain);
 onQuit(app,()=>SetupsLocal.close());
 
 // Paid-tier packages (src/paid-wiring.js): each registers itself if present; nothing here may block startup.
-try { require('./src/paid-wiring.js').registerAll({ app, ipcMain, rootDir: ROOT_DIR, buddy: () => buddyWin, fromPage: fromUtilityPage, onQuit: (fn) => onQuit(app, fn), log: (m) => console.warn(m), spend: () => spendSnapshot(loadConfig()), runawayStoppers: () => runawayStoppers, usageTurns: () => getUsageTurns(), ownedSessions: { list: () => InteractionMain.listOwned(), target: (s) => InteractionMain.sharedTarget(s) } }); } catch (e) { console.warn('[paid] wiring failed:', e?.message ?? e); }
+try { require('./src/paid-wiring.js').registerAll({ app, ipcMain, rootDir: ROOT_DIR, buddy: () => buddyWin, fromPage: fromUtilityPage, setups: SetupsNative, onQuit: (fn) => onQuit(app, fn), log: (m) => console.warn(m), spend: () => spendSnapshot(loadConfig()), runawayStoppers: () => runawayStoppers, usageTurns: () => getUsageTurns(), ownedSessions: { list: () => InteractionMain.listOwned(), target: (s) => InteractionMain.sharedTarget(s) } }); } catch (e) { console.warn('[paid] wiring failed:', e?.message ?? e); }
 
 // Settings → Account & team, and the widget's one-time Team hint. Each
 // handler checks its sender; the page to open is never taken from the renderer.

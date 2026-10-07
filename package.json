@@ -157,6 +157,7 @@
       "checkpoints.js",
       "checkpoints.css",
       "checkpoints-preload.js",
+      "setups-personal.js",
       "input-bubble.js",
       "widget.js",
       "input-bubble.css",

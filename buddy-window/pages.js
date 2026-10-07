@@ -78,14 +78,17 @@ const SECTIONS = [
 ];
 // Small links under the sections, not a section of their own.
 const FOOTER = ['help', 'feedback', 'updates'];
-// Setups is listed only once it works: its local Apply and Undo are held
-// (main.js passes accepted:false to src/setups-main.js, which refuses every
-// local operation) and personal export/import is not built, so a listed page
-// would offer controls that cannot work. Flip SETUPS_READY when they ship; the
-// entitlement (setups.personal, a free feature) then lists it with no env var.
+// Setups is listed only once it works. Personal export/import and the
+// reviewed Apply with backup and Undo (src/setups-personal.js) are built and
+// tested, cross-platform; the signed native helper path (src/setups-main.js,
+// accepted:false) stays held and its panel hidden. The entitlement
+// (setups.personal, a free feature) lists it with no env var.
 // The page and its deep link remain; PLEXIFORM_SHOW_SETUPS=1 lists it for development.
-const SETUPS_READY = false;
-if (process.env.PLEXIFORM_SHOW_SETUPS === '1' || (SETUPS_READY && require('../src/entitlements').has('setups.personal'))) SECTIONS.find((s) => s.id === 'settings').pages.splice(5, 0, 'setups');
+const SETUPS_READY = true;
+if (process.env.PLEXIFORM_SHOW_SETUPS === '1' || (SETUPS_READY && require('../src/entitlements').has('setups.personal'))) {
+  SECTIONS.find((s) => s.id === 'settings').pages.splice(5, 0, 'setups');
+  PAGES.find((p) => p.id === 'setups').hidden = false;
+}
 
 // Calendar and Timeline are project-planning views and AI runs have no due dates, so they
 // leave the sub-nav; the pages and deep links stay. PLEXIFORM_SHOW_PLANNER=1 restores them.

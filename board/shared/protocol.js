@@ -34,6 +34,7 @@ export const ERRORS = Object.freeze({
   ONE_OPEN_ASK: 409,
   RUN_ENDED: 410,
   TIMEOUT: 408,             // a request body not received in time (D105; the webhook ingress's 408 too)
+  PLAN_REQUIRED: 402,       // a paid team feature on a team without that plan (extra: feature, plan)
   PAYLOAD_TOO_LARGE: 413,
   EVIDENCE_MISSING: 422,
   NO_REPO: 422,

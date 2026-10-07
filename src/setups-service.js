@@ -25,7 +25,7 @@ function createSetupsService({ sources, home, machine=()=>({home}), fsApi=fs, sc
     let result; try {result=await entry.source.call(op,args);}catch{return null;}
     if(!valid(entry,token))return null;
     if(result?.ok===false) {
-      const messages={QUOTA_EXCEEDED:['limit','This setup or team reached its sharing limit. Remove retained shared versions or ask a team owner to review storage.'],FORBIDDEN:['permission','Your current team role does not permit this action. Refresh team access.'],POLICY_DENIED:['unavailable','This sealed setup is unavailable on the hub.'],CONFLICT:['changed','The setup changed. Refresh and review the current version.'],VERSION_CONFLICT:['changed','The setup changed. Refresh and review the current version.'],VALIDATION:['invalid','Choose valid reviewed entries within the sharing limits.']};
+      const messages={QUOTA_EXCEEDED:['limit','This setup or team reached its sharing limit. Remove retained shared versions or ask a team owner to review storage.'],FORBIDDEN:['permission','Your current team role does not permit this action. Refresh team access.'],POLICY_DENIED:['unavailable','This sealed setup is unavailable on the hub.'],CONFLICT:['changed','The setup changed. Refresh and review the current version.'],VERSION_CONFLICT:['changed','The setup changed. Refresh and review the current version.'],VALIDATION:['invalid','Choose valid reviewed entries within the sharing limits.'],PLAN_REQUIRED:['plan','Team setups need the Team plan. Exporting and importing your own setup stays free.']};
       const message=messages[result.code];return message?{ok:false,status:message[0],error:message[1]}:unavailable();
     }
     return checkedPrincipal(entry.source,result)?result:null;

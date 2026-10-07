@@ -19,6 +19,13 @@ export class Setups {
     if(!row || (!unpublished && !row.published)) throw new HubError('NOT_FOUND','setup profile is not available');
     const current=this.scope(member,row.org_id,cred); return {row,current};
   }
+  // Team setups (publish, baseline, receipts, reading a teammate's setup) are
+  // a Team plan feature: orgs.plan 'pro' (Team) or 'self_hosted'. Owners can
+  // always read, export and unpublish their own setup, so nothing is stranded.
+  entitled(org) {
+    const row=this.db.get('SELECT plan FROM orgs WHERE id=? AND deleted_at IS NULL',org);
+    if(!['pro','self_hosted'].includes(row?.plan)) throw new HubError('PLAN_REQUIRED','Team setups need the Team plan',{feature:'setups.team',plan:'team'});
+  }
   principal(member) { return {user_id:member.user_id, member_id:member.id, team_id:member.org_id,role:member.role}; }
   summary(row) {
     const version=row.current_version_id && this.db.get('SELECT * FROM setup_versions WHERE id=? AND profile_id=?',row.current_version_id,row.id);
@@ -44,6 +51,7 @@ export class Setups {
   read(member,id,versionId,cred,own=false) {
     const {row,current}=this.profile(member,id,cred);
     if(own && row.owner_user_id!==current.user_id) throw new HubError('FORBIDDEN','export your own setup only');
+    if(row.owner_user_id!==current.user_id) this.entitled(row.org_id);
     const v=this.db.get('SELECT * FROM setup_versions WHERE profile_id=? AND id=?',id,versionId??row.current_version_id);
     if(!v) throw new HubError('NOT_FOUND','setup version is no longer retained');
     return {principal:this.principal(current),profile:this.summary(row),version:this.versionSummary(v),payload:this.open(row,v),versions:this.db.all('SELECT * FROM setup_versions WHERE profile_id=? ORDER BY number DESC LIMIT 50',id).map(r=>this.versionSummary(r))};
@@ -76,11 +84,13 @@ export class Setups {
   }
   async publish(member,org,body,cred) {
     this.scope(member,org,cred,'setups.publish');
+    this.entitled(org);
     closed(body,['request_id','expected_version_id','payload','review']);
     if(body.expected_version_id!==null && (typeof body.expected_version_id!=='string' || !UUID.test(body.expected_version_id))) invalid('expected version must be a UUID or null');
     let checked; try { checked=validatePayload(body.payload); validateReview(body.review,checked); } catch { invalid('review every exact scrubbed file and profile before publishing'); }
     return this.withTeam(org,()=>this.db.tx(()=>{
       const current=this.scope(member,org,cred,'setups.publish');
+      this.entitled(org);
       if(!this.hub.vault.available) throw new HubError('POLICY_DENIED','Setups needs the hub encryption key');
       let profile=this.db.get('SELECT * FROM setup_profiles WHERE org_id=? AND owner_user_id=?',org,current.user_id);
       const result=this.request(current,body,'publish',org,{expected:body.expected_version_id,hash:checked.content_hash},()=>{
@@ -130,7 +140,7 @@ export class Setups {
     return {principal:this.principal(current),profile_id:id,activity:this.db.all('SELECT kind,version_number,selection_count,created_at,actor_user_id FROM setup_activity WHERE profile_id=? ORDER BY rowid DESC LIMIT 500',id)};
   }
   async baseline(member,org,body,cred) {
-    closed(body,['request_id','profile_id','version_id','selection','required']); this.scope(member,org,cred,'setups.baseline');
+    closed(body,['request_id','profile_id','version_id','selection','required']); this.scope(member,org,cred,'setups.baseline'); this.entitled(org);
     if(typeof body.required!=='boolean') invalid('required is a reminder flag');
     return this.withTeam(org,()=>this.db.tx(()=>{
       const current=this.scope(member,org,cred,'setups.baseline'), {row}=this.profile(current,body.profile_id,cred);
@@ -144,7 +154,7 @@ export class Setups {
     }));
   }
   async receipt(member,id,body,cred) {
-    closed(body,['request_id','version_id','selection','outcome']); this.profile(member,id,cred);
+    closed(body,['request_id','version_id','selection','outcome']); this.entitled(this.profile(member,id,cred).row.org_id);
     if(!['reviewed','reported_applied','reported_undone'].includes(body.outcome)) invalid('unsupported client report');
     return this.withTeam(member.org_id,()=>this.db.tx(()=>{
       const {current}=this.profile(member,id,cred), read=this.read(current,id,body.version_id,cred); let selected; try { selected=selection(body.selection,read.payload); } catch { invalid('select current version entries'); }

@@ -4,7 +4,8 @@
 //
 // Contract for a package: its module exports register(ctx), where ctx is
 //   {app, ipcMain, rootDir, entitlements, buddy: () => buddyWin|null,
-//    fromPage: (e, pageId) => bool, onQuit: (fn) => void, log: (msg) => void}
+//    fromPage: (e, pageId) => bool, onQuit: (fn) => void, log: (msg) => void,
+//    setups: the team Setups service (main-only readForPlan)}
 // register gates its own work with ctx.entitlements.has(feature).
 'use strict';
 
@@ -17,6 +18,7 @@ const PACKAGES = [
   ['memory', () => require.resolve('./memory/search'), () => require('./memory/search')],
   ['morning-report', () => require.resolve('./morning-report'), () => require('./morning-report')],
   ['client-billing', () => require.resolve('./clients'), () => require('./clients')],
+  ['setups-personal', () => require.resolve('./setups-personal'), () => require('./setups-personal')],
 ];
 
 /** Calls every present package's register(ctx). → [{name, status:'absent'|'ok'|'skipped'|'failed'}]. Never throws. */
