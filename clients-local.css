@@ -1,0 +1,29 @@
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: var(--text-base)/1.5 var(--font); }
+main { max-width: 960px; margin: auto; padding: 24px; }
+header { display: flex; justify-content: space-between; align-items: start; gap: 16px; flex-wrap: wrap; }
+h1 { margin: 0; font-size: var(--text-xl); } h2 { margin: 0 0 8px; font-size: var(--text-lg); }
+p { margin: 4px 0; } .muted, #status { color: var(--muted); }
+button { font: inherit; color: inherit; min-height: 44px; padding: 8px 14px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--panel-2); cursor: pointer; }
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+button:disabled { opacity: .55; cursor: default; }
+button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.panel { margin: 16px 0; padding: 16px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-lg); }
+form, .controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: end; margin: 8px 0; }
+label { display: grid; gap: 4px; font-size: var(--text-sm); color: var(--muted); }
+input, select { font: inherit; min-height: 44px; padding: 8px 10px; color: var(--text); background: var(--bg); border: 1px solid var(--line-input); border-radius: var(--radius); }
+.client { margin: 10px 0; padding: 10px; border: 1px solid var(--line); border-radius: var(--radius); }
+.client .top { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+.client ul { margin: 6px 0 0; padding: 0; list-style: none; }
+.client li { display: flex; justify-content: space-between; align-items: center; gap: 8px; overflow-wrap: anywhere; }
+.rates { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.rates input { width: 110px; }
+.basis { display: inline-block; padding: 2px 10px; border: 1px solid var(--amber); color: var(--amber); border-radius: var(--radius-pill); font-size: var(--text-sm); }
+.basis:empty { display: none; }
+.table-wrap { overflow: auto; margin: 10px 0; }
+table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.error { color: var(--danger-text); }
+.disclosure { margin-top: 20px; }

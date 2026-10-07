@@ -40,6 +40,7 @@ const PAGES = [
   // macOnly: shows Claude Burst's dashboard (burst-embed.js), so it stays out of the sidebar elsewhere.
   // burstOnly: and on a Mac it is listed only while Burst is present (the sidebar decides, it is runtime state).
   { id: 'optimiser', title: 'Usage optimiser', icon: 'chart', kind: 'local', file: 'optimiser.html', preload: 'optimiser-preload.js', query: { embedded: '1' }, group: 'you', macOnly: true, burstOnly: true },
+  { id: 'clients', title: 'Client billing', icon: 'chart', kind: 'local', file: 'clients-local.html', preload: 'clients-preload.js', group: 'you' },
   { id: 'setups', title: 'Setups', icon: 'layers', kind: 'local', file: 'setups.html', preload: 'setups-preload.js', group: 'you', hidden: true },
   { id: 'thismac', title: 'This Mac', icon: 'laptop', kind: 'local', screen: 'thismac', group: 'you' },
   { id: 'account', title: 'Account', icon: 'user', kind: 'local', screen: 'account', group: 'you' },
@@ -68,7 +69,7 @@ const SECTIONS = [
   { id: 'home', title: 'Home', icon: 'sun', default: 'home', pages: ['home', 'overview', 'myday', 'waiting', 'sessions'] },
   { id: 'board', title: 'Board', icon: 'board', default: 'board', pages: ['board', 'board:table', 'board:history', 'board:dashboard'] },
   { id: 'tasks', title: 'Tasks', icon: 'tasks', default: 'tasks', pages: ['tasks'] },
-  { id: 'usage', title: 'Usage & cost', icon: 'chart', default: 'usage', pages: ['usage', 'stats', 'optimiser'] },
+  { id: 'usage', title: 'Usage & cost', icon: 'chart', default: 'usage', pages: ['usage', 'stats', 'optimiser', 'clients'] },
   { id: 'team', title: 'Team', icon: 'team', default: 'team', pages: ['team', 'integrations', 'account'] },
   { id: 'settings', title: 'Settings', icon: 'gear', default: 'aitools', pages: ['aitools', 'settings', 'thismac', 'lights', 'hatch'] },
 ];
