@@ -10,7 +10,6 @@
   const FAMILIES = ['opus', 'sonnet', 'haiku', 'fable', 'unpriced', 'legacy'];
   const FAMILY_NAMES = { opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku', fable: 'Fable', unpriced: 'Unpriced', legacy: 'Estimated (cost only)' };
   const TOKEN_KINDS = [['input', 'Input'], ['output', 'Output'], ['cacheRead', 'Cache read'], ['cacheWrite', 'Cache write']];
-  const RANGES = [['7d', '7 days'], ['30d', '30 days'], ['90d', '90 days'], ['1y', 'Year'], ['all', 'All']];
   const W = 640;
   const PAD = { l: 44, r: 8, t: 8, b: 22 };
 
@@ -219,13 +218,12 @@
 
       // header: range, compare, project filter, export
       kids.push(el('div', { class: 'uv-head' },
-        el('div', { class: 'seg', role: 'group', 'aria-label': 'Range' }, ...RANGES.map(([k, l]) => el('button', { type: 'button', class: state.range === k ? 'on' : '', 'aria-pressed': String(state.range === k), text: l, onclick: () => { state.range = k; refresh(); } }))),
         el('label', { class: 'uv-check' }, el('input', { type: 'checkbox', checked: state.compare && state.range !== 'all' ? true : null, disabled: state.range === 'all' ? true : null, onchange: (e) => { state.compare = e.target.checked; refresh(); } }), 'Compare to previous period'),
         state.project ? el('button', { type: 'button', class: 'uv-chip', 'aria-label': `Clear filter: ${base(state.project)}`, onclick: () => { state.project = null; refresh(); } }, `Project: ${base(state.project)} ✕`) : null,
         el('span', { class: 'uv-spacer' }),
         el('button', { type: 'button', class: 'btn ghost', text: 'Export CSV', onclick: () => download('csv') }),
         el('button', { type: 'button', class: 'btn ghost', text: 'Export JSON', onclick: () => download('json') })));
-      if (isSub) kids.push(el('p', { class: 'uv-note', text: 'Dollar figures are API-equivalent: what these tokens would cost at API list prices. On a subscription this is not a bill. Change this in Preferences → Spend.' }));
+      if (isSub) kids.push(el('p', { class: 'uv-note', text: 'Dollar figures are API-equivalent: what these tokens would cost at API list prices. On a subscription this is not a bill. Change this in Preferences, under Spend.' }));
       if (d.progress) kids.push(el('p', { class: 'uv-note', text: `Reading older transcripts into the record… ${d.progress.done} of ${d.progress.of} files.` }));
       const legacy = d.dayFamily.legacyDays;
       if (legacy) kids.push(el('p', { class: 'uv-note', text: `${legacy} early day${legacy === 1 ? '' : 's'} before the record began are cost-only estimates (no turns or tokens).` }));
@@ -233,7 +231,7 @@
       if (t.unpricedTurns) kids.push(el('p', { class: 'uv-note', text: `${num(t.unpricedTurns)} turn${t.unpricedTurns === 1 ? '' : 's'} on models with no price (${d.dayFamily.unpricedModels.join(', ')}) are shown as Unpriced and left out of the cost.` }));
 
       if (!d.first) {
-        kids.push(el('p', { class: 'uv-empty', text: 'Nothing is recorded yet. Plexiform records your usage as you work, and reads the transcripts Claude Code still has the first time it runs.' }));
+        kids.push(el('p', { class: 'uv-empty', text: 'No usage yet. Connect an AI tool and run a session; Plexiform records it as you work. ' }, api.openAiTools ? el('button', { type: 'button', class: 'btn', text: 'Connect AI tools', onclick: () => api.openAiTools() }) : null));
         root.replaceChildren(...kids);
         return;
       }

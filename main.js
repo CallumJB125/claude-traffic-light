@@ -3355,6 +3355,17 @@ utilityHandle('get-privacy', settingsOnly, () => { try { return fs.readFileSync(
 utilityHandle('show-data-folder', settingsOnly, () => { fs.mkdirSync(ROOT_DIR, { recursive: true }); return shell.openPath(ROOT_DIR); });
 utilityHandle('get-stats', e => analyticsSender(e) || settingsOnly(e), (_e, days) => Stats.summary(stats, Date.now(), Math.min(60, Math.max(1, Number(days) || 7))));
 
+// Usage & cost sets the same budget keys as Preferences → Spend, and links to AI tools.
+utilityHandle('save-spend-limits', analyticsSender, (_e, v) => {
+  const n = (x, hi) => Math.min(hi, Math.max(0, Number(x) || 0));
+  try {
+    const cur = loadConfig().spend;
+    commitConfig({ spend: { ...cur, dailyBudget: n(v && v.dailyBudget, 1e6), weeklyBudget: n(v && v.weeklyBudget, 1e6), warnAt: Math.min(1, Math.max(0.1, n(v && v.warnAt, 1) || 0.8)) } });
+    return { ok: true };
+  } catch (err) { return { error: `Could not save: ${err.message}` }; }
+});
+utilityHandle('usage:open-ai-tools', analyticsSender, () => { aiToolsOpen('aitools'); return true; });
+
 // Export the whole visible range as JSON or CSV, wherever the user points.
 utilityHandle('export-stats', e => settingsOnly(e) || analyticsSender(e), async (e, format, days) => {
   const n = Math.min(60, Math.max(1, Number(days) || 7));

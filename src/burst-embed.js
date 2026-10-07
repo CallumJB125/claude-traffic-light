@@ -45,6 +45,8 @@ const MAX_HTML = 200 * 1024;
 // Burst's group headings, in Plexiform's words. Anything else is shown as Burst wrote it, if it passes LABEL_RE.
 const GROUP_LABELS = { Observe: 'Overview', Context: 'Context & compaction', Sessions: 'Sessions & handover' };
 const SPEND_TARGET = 'sec-models';
+// Burst's own names that collide with Plexiform's pages (Overview, This Mac) and tabs (Requests).
+const CLASHING = new Set(['Overview', 'This Mac', 'Requests']);
 
 const decode = (s) => s.replace(/<[^>]*>/g, '').replace(/&amp;/g, '&').replace(/&#39;|&apos;/g, "'").replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
 
@@ -76,7 +78,7 @@ function extractSubnav(html) {
     }
   }
   const out = [];
-  const push = (id, label) => { if (TARGET_RE.test(id) && LABEL_RE.test(label) && !out.some((o) => o.id === id)) out.push({ id, label }); };
+  const push = (id, label) => { if (TARGET_RE.test(id) && LABEL_RE.test(label) && !out.some((o) => o.id === id)) out.push({ id, label: CLASHING.has(label) ? `Burst: ${label}` : label }); };
   for (const g of groups) {
     if (g.skip || !g.links.length) continue;
     push(g.links[0].id, GROUP_LABELS[g.name] || g.name);

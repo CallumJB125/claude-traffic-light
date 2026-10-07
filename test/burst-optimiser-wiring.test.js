@@ -112,9 +112,9 @@ test('sidebar: the optimiser\'s sections unfold under its entry only while it is
   dom.window.eval(read('buddy-window/sidebar.js'));
   return settle().then(() => {
     const d = dom.window.document;
-    onState({ selected: 'optimiser', optimiser: { nav: [{ id: 'cards', label: 'Overview' }, { id: 'sec-models', label: 'Spend' }], active: 'cards' } });
+    onState({ selected: 'optimiser', optimiser: { nav: [{ id: 'cards', label: 'Burst: Overview' }, { id: 'sec-models', label: 'Spend' }], active: 'cards' } });
     const leaves = [...d.querySelectorAll('.nav-leaf')];
-    assert.deepEqual(leaves.map((b) => b.textContent), ['Overview', 'Spend']);
+    assert.deepEqual(leaves.map((b) => b.textContent), ['Burst: Overview', 'Spend']);
     assert.equal(leaves[0].getAttribute('aria-current'), 'location');
     assert.equal(d.querySelector('[data-page="optimiser"]').getAttribute('aria-current'), 'page');
     leaves[1].click();

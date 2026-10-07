@@ -39,9 +39,9 @@ const ASIDE = fs.readFileSync(path.join(__dirname, 'fixtures', 'burst-aside.html
 
 test('sub-nav: read from a trimmed copy of the real aside, one item per group, Codex skipped, Burst\'s own ids', () => {
   const nav = E.extractSubnav(ASIDE);
-  assert.deepEqual(nav.map((n) => n.label), ['Setup', 'Overview', 'Spend', 'Context & compaction', 'Routing', 'Sessions & handover', 'This Mac', 'Health', 'Requests']);
+  assert.deepEqual(nav.map((n) => n.label), ['Setup', 'Burst: Overview', 'Spend', 'Context & compaction', 'Routing', 'Sessions & handover', 'Burst: This Mac', 'Health', 'Burst: Requests']);
   assert.deepEqual(nav.find((n) => n.label === 'Spend'), { id: 'sec-models', label: 'Spend' });
-  assert.deepEqual(nav.find((n) => n.label === 'Overview'), { id: 'cards', label: 'Overview' });
+  assert.deepEqual(nav.find((n) => n.id === 'cards'), { id: 'cards', label: 'Burst: Overview' });
   assert.ok(!nav.some((n) => n.id === 'sec-codex'));
   assert.ok(nav.length <= E.MAX_ITEMS);
 });

@@ -104,19 +104,19 @@
       <dl class="kv" id="route-kv"></dl>
     </section>
     <section class="card" id="route-rejected-card" hidden><h2>Models at their limit</h2><div class="scroll"><table><thead><tr><th>Model</th><th>Resets in</th><th>Falls back to</th></tr></thead><tbody id="route-rejected"></tbody></table></div></section>
-    <section class="card" id="route-chain-card" hidden><h2>Fallback chain</h2><dl class="kv" id="route-chain"></dl></section>
+    <section class="card" id="route-chain-card" hidden><h2>If a model is at its limit</h2><dl class="kv" id="route-chain"></dl></section>
     <p class="muted" id="route-error" hidden></p>
   </main>
   <main class="pane" id="requests-pane" role="tabpanel" aria-labelledby="tab-requests" hidden>
-    <section class="card" id="hist-card"><h2>Daily spend</h2><div class="chart" id="hist-chart" role="img" aria-label="Daily spend, primary and secondary"></div><div class="legend"><span><i class="swatch p"></i>Primary</span><span><i class="swatch s"></i>Secondary</span><span id="hist-total"></span></div></section>
+    <section class="card" id="hist-card"><h2>Daily spend</h2><div class="chart" id="hist-chart" role="img" aria-label="Daily spend, your plan and backup"></div><div class="legend"><span><i class="swatch p"></i>Your plan</span><span><i class="swatch s"></i>Backup</span><span id="hist-total"></span></div></section>
     <section class="card">
       <div class="filters">
-        <label class="muted">Slot <select id="f-slot"><option value="">All</option><option value="primary">Primary</option><option value="secondary">Secondary</option></select></label>
+        <label class="muted">Plan or backup <select id="f-slot"><option value="">All</option><option value="primary">Your plan</option><option value="secondary">Backup</option></select></label>
         <label class="muted">Status <select id="f-status"><option value="">All</option><option value="ok">Succeeded</option><option value="err">Failed</option></select></label>
         <label class="muted">Model <select id="f-model"><option value="">All</option></select></label>
         <label class="muted"><input type="checkbox" id="f-pings"> Show pings</label>
       </div>
-      <div class="scroll"><table><thead><tr><th>Time</th><th>Session</th><th>Slot</th><th>Model</th><th class="num">Status</th><th class="num">Latency</th><th class="num">Tokens in</th><th class="num">Tokens out</th><th class="num">Cost</th><th>Note</th></tr></thead><tbody id="req-rows"></tbody></table></div>
+      <div class="scroll"><table><thead><tr><th>Time</th><th>Session</th><th>Plan or backup</th><th>Model</th><th class="num">Status</th><th class="num">Latency</th><th class="num">Tokens in</th><th class="num">Tokens out</th><th class="num">Cost</th><th>Note</th></tr></thead><tbody id="req-rows"></tbody></table></div>
       <p class="muted" id="req-empty" hidden>No requests yet.</p>
     </section>
     <p class="muted" id="req-error" hidden></p>
