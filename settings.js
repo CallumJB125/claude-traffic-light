@@ -150,7 +150,7 @@
     }).catch(() => {});
     // ── end F1 spend ──
 
-    document.getElementById('save').addEventListener('click', async () => {
+    async function saveAll() {
       try {
       await window.settingsApi.saveConfig({
         workingStaleMinutes: Math.max(1, Math.min(60, Number(workingInput.value) || 6)),
@@ -211,23 +211,30 @@
         status.setAttribute('role', 'alert');
         setTimeout(() => { status.textContent = ''; status.className = ''; status.setAttribute('role', 'status'); }, 6000);
       }
+    }
+
+    // Every control saves when it changes. Voice, Compactor, boards and the
+    // calendar tick keep their own saves; they are left out here.
+    let saving = Promise.resolve();
+    const OWN_SAVE = /^(voice-|compact-|native-board-|remote-name$|busyCalendar$)/;
+    document.addEventListener('change', (e) => {
+      const t = e.target;
+      if (!t.matches || !t.matches('input, select, textarea') || OWN_SAVE.test(t.id || '') || t.closest('#backups, #health, #privacy')) return;
+      saving = saving.then(saveAll);
     });
 
-    document.querySelectorAll('[data-agent]').forEach((b) => b.addEventListener('click', async () => {
-      if (b.disabled) return;
-      b.disabled = true;
-      const hint = document.getElementById('connect-hint');
-      try {
-        const r = await window.settingsApi.connectAgent(b.dataset.agent);
-        hint.textContent = r && r.opened ? `Opened More → AI tools on ${b.textContent}. Review the exact change there and confirm; a copy of the file is kept and Undo restores it.` : r && r.ok ? r.hermesActivity
-          ? 'Hermes activity enabled for the default profile. Start a new Hermes session anywhere; it appears after its first activity. Restart existing Hermes sessions to load the plugin. Conversation text stays in Hermes; messaging from Plexiform is unavailable.'
-          : r.reviewRequired
-          ? `Configured ${b.textContent} in ${r.file}. Review and trust the Plexiform hooks in Codex, then start a new turn. The widget updates when it receives activity; existing chat text is not read.`
-          : `Connected ${b.textContent}: wrote ${r.file}. Restart it to pick up the hooks.`
-          : r && r.error ? `Did not connect ${b.textContent}: ${r.file ? `in ${r.file}, ` : ''}${r.error}` : 'Could not connect.';
-      } catch { hint.textContent = 'Could not connect. Try again from the installed app.'; }
-      finally { b.disabled = false; }
-    }));
+    const SECTIONS = ['general', 'notifications', 'widget', 'privacy', 'advanced'];
+    function showSection(id) {
+      if (!SECTIONS.includes(id)) id = 'general';
+      for (const p of document.querySelectorAll('.pane')) p.hidden = p.dataset.section !== id;
+      for (const b of document.querySelectorAll('#section-nav button')) { if (b.dataset.go === id) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); }
+      try { history.replaceState(null, '', `?${new URLSearchParams({ ...Object.fromEntries(new URLSearchParams(location.search)), section: id })}`); } catch { /* embedded pages may refuse */ }
+    }
+    window.showSettingsSection = showSection;
+    for (const b of document.querySelectorAll('#section-nav button')) b.addEventListener('click', () => showSection(b.dataset.go));
+    showSection(new URLSearchParams(location.search).get('section') || location.hash.slice(1));
+
+
     const mcpToggle = document.getElementById('mcp-toggle');
     const showMcp = (st) => {
       mcpToggle.dataset.on = st.installed ? '1' : '';
@@ -407,25 +414,12 @@
     });
     window.settingsApi.onShowSection((id) => {
       if (id !== 'health') return;
+      showSection('advanced');
       refreshHealth();
       document.getElementById('health').scrollIntoView({ block: 'start' });
     });
     // ── end Health ──
 
-    // ── Account & team ── main reads no auth by itself: the line is neutral unless the Plexiform window can say.
-    const showAccount = async () => {
-      const v = await window.settingsApi.accountView().catch(() => null);
-      if (!v) return;
-      const line = document.getElementById('account-line');
-      line.textContent = v.line;
-      line.title = v.line; // the clamp may hide the tail
-      document.getElementById('account-signin').hidden = !v.signIn;
-    };
-    document.getElementById('account-team').addEventListener('click', () => window.settingsApi.accountOpen('team'));
-    document.getElementById('account-signin').addEventListener('click', () => window.settingsApi.accountOpen('signin'));
-    document.getElementById('account-open').addEventListener('click', () => window.settingsApi.accountOpen('account'));
-    window.settingsApi.onAccountChanged(showAccount);
-    showAccount();
     load();
 
     // ── Voice (F7) ── its own saves, so the Save button's list stays untouched.

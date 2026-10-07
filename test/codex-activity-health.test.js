@@ -123,33 +123,8 @@ test('Codex health fix requires current Settings and an installed app, and prese
   }
 });
 
-test('Settings points at the AI tools page for review without claiming a connection', async t => {
-  const { JSDOM } = require('jsdom');
-  const dom = new JSDOM('<button data-agent="codex">Codex desktop and CLI</button><div id="connect-hint"></div>', { runScripts: 'outside-only' });
-  t.after(() => dom.window.close());
-  let resolve;
-  let calls = 0;
-  dom.window.settingsApi = { connectAgent: () => { calls++; return new Promise(r => { resolve = r; }); } };
-  const source = fs.readFileSync(path.join(__dirname, '..', 'settings.js'), 'utf8');
-  const start = source.indexOf("document.querySelectorAll('[data-agent]')");
-  const end = source.indexOf("const mcpToggle =", start);
-  assert.ok(start > 0 && end > start);
-  dom.window.eval(source.slice(start, end));
-  const button = dom.window.document.querySelector('button');
-  const hint = dom.window.document.getElementById('connect-hint');
-  button.click(); button.click();
-  assert.equal(calls, 1);
-  assert.equal(button.disabled, true);
-  assert.equal(hint.textContent, '');
-  resolve({ ok: true, opened: true });
-  await new Promise(r => setImmediate(r));
-  assert.equal(button.disabled, false);
-  assert.match(hint.textContent, /^Opened More → AI tools on Codex desktop and CLI/);
-  assert.match(hint.textContent, /Review the exact change/);
-  assert.doesNotMatch(hint.textContent, /^Connected|working now|active session/);
-  dom.window.settingsApi.connectAgent = async () => { throw new Error('fixture transport failure'); };
-  button.click();
-  await new Promise(r => setImmediate(r));
-  assert.equal(button.disabled, false);
-  assert.equal(hint.textContent, 'Could not connect. Try again from the installed app.');
+test('Settings no longer carries connect buttons: AI tools is the one place to connect a tool', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'settings.html'), 'utf8');
+  assert.doesNotMatch(html, /data-agent=/);
+  assert.doesNotMatch(fs.readFileSync(path.join(__dirname, '..', 'settings.js'), 'utf8'), /connectAgent/);
 });

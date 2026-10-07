@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; base-uri 'none'; form-action 'none'" />
-<title>Preferences</title>
+<title>Settings</title>
 <link rel="stylesheet" href="tokens.css" />
 <style>
   * { box-sizing: border-box; }
@@ -73,7 +73,12 @@
     letter-spacing: 0.06em;
     text-transform: uppercase;
   }
-  h1 + h2 { border-top: none; margin-top: 0; padding-top: 0; }
+  .pane > h2:first-child { border-top: none; margin-top: 0; padding-top: 0; }
+  .pane { display: flex; flex-direction: column; gap: 18px; }
+  .pane[hidden] { display: none; }
+  #section-nav { display: flex; flex-wrap: wrap; gap: 6px; }
+  #section-nav button { background: var(--panel-2); color: var(--text); border: 1px solid var(--line-input); font-weight: 500; padding: 5px 12px; }
+  #section-nav button[aria-current="page"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
   input[type="text"] {
     width: 100%;
     background: var(--panel-2);
@@ -155,9 +160,6 @@
   #remote-list .revoke-note:empty { display: none; }
   .remote-steps { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
   #remote-code pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-xs); user-select: all; }
-  /* A whole-pixel height, so the Health panel below keeps its place whatever the hint's wrapping. */
-  #account-section { flex: none; display: flow-root; box-sizing: border-box; height: 104px; }
-  #account-line { overflow-wrap: anywhere; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; }
   #health { display: flex; flex-direction: column; gap: 10px; }
   #health h2 { margin-bottom: 0; }
   #health-summary { font-weight: 600; min-height: 18px; }
@@ -225,8 +227,17 @@
 </style>
 </head>
 <body>
-  <h1>Preferences</h1>
+<body>
+  <h1>Settings</h1>
+  <nav id="section-nav" aria-label="Settings sections">
+    <button type="button" data-go="general">General</button>
+    <button type="button" data-go="notifications">Notifications</button>
+    <button type="button" data-go="widget">Widget</button>
+    <button type="button" data-go="privacy">Privacy</button>
+    <button type="button" data-go="advanced">Advanced</button>
+  </nav>
 
+  <div class="pane" id="pane-general" data-section="general">
   <h2>Sessions</h2>
 
   <div class="field">
@@ -256,6 +267,49 @@
     <div class="hint" id="hint-waiting">A session waiting on you only ever gets one event, so this needs to be long enough to cover a real break.</div>
   </div>
 
+  <h2>Spend</h2>
+  <div class="field">
+    <label for="spend-mode">How you pay for Claude Code</label>
+    <div class="row">
+      <select id="spend-mode" aria-describedby="hint-spend-mode">
+        <option value="api">API key (billed per token)</option>
+        <option value="subscription">Pro / Max subscription</option>
+      </select>
+    </div>
+    <div class="hint" id="hint-spend-mode">Every turn is priced from your transcripts at API list prices. On a subscription that's an equivalent, not a bill, and not a share of your usage window: Claude Code doesn't write that anywhere Plexiform can read.</div>
+    <div class="hint" id="spend-now" role="status" aria-live="polite"></div>
+  </div>
+
+  <div class="field">
+    <div id="budget-label" class="group-label">Budget</div>
+    <div class="row wrap" role="group" aria-labelledby="budget-label">
+      <label class="row" for="spend-daily">$ <input type="number" id="spend-daily" min="0" step="1" /> a day</label>
+      <label class="row" for="spend-weekly">$ <input type="number" id="spend-weekly" min="0" step="1" /> a week</label>
+    </div>
+    <div class="row">
+      <label for="spend-warn">Warn at</label>
+      <input type="number" id="spend-warn" min="10" max="100" step="5" aria-describedby="hint-budget" />
+      <span aria-hidden="true">%</span>
+    </div>
+    <div class="hint" id="hint-budget">0 turns a budget off. Weeks start on Monday. Near it, a finished turn shows amber with money eyes; over it, red.</div>
+  </div>
+
+  <!-- ── Voice (F7 push-to-talk questions) ── self-contained: saves on change -->
+  <h2>Voice</h2>
+  <div class="field">
+    <label for="voice-hotkey">Hold to ask a question</label>
+    <div class="row">
+      <select id="voice-hotkey" aria-describedby="voice-hint"><option value="">Off — pick a key</option></select>
+    </div>
+    <div class="hint" id="voice-hint" role="status" aria-live="polite">Hold the key, ask “What's blocked?”, “What's my Claude doing?”, “How much have I spent today?” or “What happened while I was out?”, and let go. Plexiform answers out loud. Speech is turned into text on this Mac; audio is never stored or sent.</div>
+    <label class="row"><input type="checkbox" id="voice-longPress" /> Press and hold the widget to ask</label>
+    <label class="row"><input type="checkbox" id="voice-askClaude" /> Other questions: ask my own Claude (Haiku)</label>
+    <div class="hint">Anything outside the four questions goes to your own <code>claude</code> login, with no tools, settings or MCP servers, capped at 5 cents a question. It sees session states and today's spend, never your code.</div>
+  </div>
+  <!-- ── end Voice ── -->
+  </div>
+
+  <div class="pane" id="pane-notifications" data-section="notifications" hidden>
   <h2>Alerts</h2>
 
   <div class="field">
@@ -300,13 +354,53 @@
   <div class="field">
     <label class="row"><input type="checkbox" id="askFromWidget" /> Answer permission prompts from the widget</label>
     <div class="hint">When Claude asks to run a tool, Allow / Deny buttons appear under the widget and the request text above it. If you don't answer within a minute, the normal terminal prompt takes over. Restart open Claude Code sessions after changing this.</div>
+  </div>
 
   <div class="field">
     <label class="row"><input type="checkbox" id="oneKeyApprove" /> Allow one-key approval for read-only requests</label>
     <div class="hint">Off by default. When on, pressing Enter on an open permission request in the Waiting list allows it, but only for reading inside the project (Read, Grep, Glob, LS, and plain ls, pwd, git status or git log). Anything else, writes and edits included, always needs a click on Allow. Nothing is ever approved without a key press, and each one-key approval is recorded in one-key-approvals.jsonl in the data folder. Needs "Answer permission prompts from the widget".</div>
   </div>
+
+  <h2>Runaway sessions</h2>
+  <div class="field">
+    <div id="runaway-label" class="group-label">Runaway session</div>
+    <div class="row wrap" role="group" aria-labelledby="runaway-label">
+      <label class="row" for="spend-runaway-dollars">$ <input type="number" id="spend-runaway-dollars" min="0" step="1" /></label>
+      <label class="row" for="spend-runaway-tokens">or <input type="number" id="spend-runaway-tokens" min="0" step="100" /> k tokens</label>
+      <label class="row" for="spend-runaway-minutes">in <input type="number" id="spend-runaway-minutes" min="1" max="240" /> min</label>
+    </div>
+    <div class="hint">One session spending this fast turns the light pulsing red (hover Claude for its burn rate) and sends one notification that jumps to its terminal. Plexiform never stops or types into a session you started. 0 turns a limit off.</div>
+    <label class="row"><input type="checkbox" id="spend-notify-runaway" /> Notify me about a runaway session</label>
+    <label class="row"><input type="checkbox" id="spend-notify-budget-warning" /> Notify me when spend nears a budget</label>
+    <label class="row"><input type="checkbox" id="spend-notify-budget-exceeded" /> Notify me when spend goes over a budget</label>
   </div>
 
+  <h2>Busy &amp; Focus</h2>
+  <div class="field">
+    <label class="row"><input type="checkbox" id="busyHold" /> Hold pings while I'm busy</label>
+    <div class="hint">In a meeting or a Focus, amber and green sounds, notifications and knocks wait; red (permission asks, limits, offline) still comes through. The lights keep updating. When you're free a “While you were away” card sums up what happened — click a line to go there. Per rule, change it in Lights → <i>While you're busy</i>; <b>busy</b> and <b>free</b> are also rule conditions.</div>
+    <div id="busy-sources" role="group" aria-label="Busy when">
+      <label class="row"><input type="checkbox" id="busyCalendar" /> A calendar event marked busy (macOS Calendar — ticking this asks macOS for access)</label>
+      <div class="busy-state" id="busy-calendar-state"></div>
+      <label class="row"><input type="checkbox" id="busyCalendarTitles" /> Show the meeting's name in the recap</label>
+      <label class="row"><input type="checkbox" id="busyFocus" /> A Focus or Do Not Disturb is on</label>
+      <div class="busy-state" id="busy-focus-state"></div>
+    </div>
+  </div>
+  <div class="field">
+    <label for="busyIcsUrl">Calendar feed (ICS), optional</label>
+    <input type="url" id="busyIcsUrl" placeholder="https://… or webcal://… .ics" spellcheck="false" aria-describedby="hint-ics" />
+    <div class="busy-state" id="busy-ics-state" style="padding-left:0"></div>
+    <div class="hint" id="hint-ics">For a calendar that isn't in macOS Calendar: paste its secret iCal address (Google: Settings › your calendar › “Secret address in iCal format”). Refreshed every 10 minutes; events marked Free are ignored.</div>
+  </div>
+  <div class="field">
+    <label for="busyFocusShortcut">Focus Shortcut, optional</label>
+    <input type="text" class="wide" id="busyFocusShortcut" placeholder="e.g. Plexiform Focus" spellcheck="false" aria-describedby="hint-focus" />
+    <div class="hint" id="hint-focus">macOS only lets Plexiform read a Focus you turn on by hand, and only where it can read the Focus files (often it can't without Full Disk Access, which Plexiform never asks for). Scheduled Focus isn't visible either. For both, make a Shortcut with the single action <b>Get Current Focus</b> and type its name here.</div>
+  </div>
+  </div>
+
+  <div class="pane" id="pane-widget" data-section="widget" hidden>
   <h2>Widget</h2>
 
   <div class="field">
@@ -362,7 +456,7 @@
     <div role="group" aria-labelledby="which-agents" class="stack">
     <label class="row"><input type="checkbox" id="kind-subagent" /> Subagents</label>
     <label class="row"><input type="checkbox" id="kind-teammate" /> Teammates</label>
-    <label class="row"><input type="checkbox" id="kind-ralph" /> Ralph &amp; ultrawork workers</label>
+    <label class="row"><input type="checkbox" id="kind-ralph" /> Background workers (oh-my-claudecode)</label>
     </div>
   </div>
 
@@ -378,17 +472,59 @@
   </div>
 
   <div class="field">
-    <div id="connect-label" class="group-label">Connect other agents</div>
-    <div class="row wrap" role="group" aria-labelledby="connect-label">
-      <button type="button" class="secondary" data-agent="cursor">Cursor</button>
-      <button type="button" class="secondary" data-agent="codex">Codex desktop and CLI</button>
-      <button type="button" class="secondary" data-agent="gemini">Gemini CLI</button>
-      <button type="button" class="secondary" data-agent="hermes">Connect Hermes activity</button>
-    </div>
-    <div class="hint">Connect Hermes activity installs and enables Plexiform's local observer plugin in your default Hermes profile. New sessions started outside Plexiform then appear automatically after activity. Restart existing Hermes sessions to connect them. Requires Hermes on macOS or Linux.</div>
-    <div class="hint" id="connect-hint" role="status" aria-live="polite">These open More → AI tools, which shows the exact lines it will add to each tool's hook config before anything is written, then lights the widget for its sessions too. Anything else can run <code id="emit-path">emit.js</code>, or POST to <code id="endpoint">http://127.0.0.1:47172/signal</code> with an <code>x-buddy-token</code> header set to the contents of <code id="token-path">~/.claude-traffic-light/token</code>.</div>
+    <div class="group-label">What the lights mean</div>
+    <div class="hint">Which signal lights which lamp, eye colours and poses now live in <b>Lights…</b> in the tray menu (or right-click the widget).</div>
+  </div>
   </div>
 
+  <div class="pane" id="pane-privacy" data-section="privacy" hidden>
+  <h2>Privacy</h2>
+  <div class="field" id="privacy">
+    <div class="hint">Plexiform reads your sessions on this machine. Your prompts, conversation logs and code stay here; the notice below lists exactly what leaves, and when. It is a draft pending legal review.</div>
+    <details id="leaves-machine" class="pv" open>
+      <summary>What leaves your machine, in plain words</summary>
+      <h3 class="pv-h">Stays on this Mac</h3>
+      <ul>
+        <li>Spend and token counts, worked out here from your Claude Code logs. Only counts and costs are kept, not the conversation.</li>
+        <li>Session state: the folder, state, tool and model names, and short snippets of an error or reply.</li>
+        <li>Tackle with AI tasks you run on this Mac: your task text, messages, replies and checkpoints.</li>
+        <li>Your settings, rules and cameo photos. Voice becomes text on this device; audio is not saved.</li>
+        <li>Bug-report diagnostics are only copied to your clipboard when you click Copy diagnostics, with home paths, names, secrets, emails and IP addresses scrubbed first.</li>
+      </ul>
+      <h3 class="pv-h">Goes to your team hub (only if you join a team)</h3>
+      <ul>
+        <li>Card text, handovers, run progress, member names, linked repository identity, and your account name and email.</li>
+        <li>Credential-like strings and home-folder paths pass a redaction filter first. It is not a guarantee, and the hub's operator can read what you send.</li>
+        <li>Shared sessions: sessions started in a signed-in team workspace can be shared with that team. Owners, admins and members can message a shared session, which uses the session owner's AI quota; viewers can only watch. Stop sharing in Overview or turn automatic sharing off here. Anything already stored as team history stays.</li>
+      </ul>
+      <h3 class="pv-h">Goes to your AI provider</h3>
+      <ul>
+        <li>Prompts and task context go to the provider you choose, under that provider's terms, using your existing login.</li>
+      </ul>
+      <h3 class="pv-h">Other requests</h3>
+      <ul>
+        <li>GitHub checks through your own <code>gh</code> login, only if it is signed in. Update checks reveal your IP address and app version.</li>
+      </ul>
+      <h3 class="pv-h">Kept locked down</h3>
+      <ul>
+        <li>Your team sign-in and runner credentials are stored in your system's password store (Keychain on macOS), not in plain files.</li>
+      </ul>
+      <p>The full notice below is the exact list.</p>
+    </details>
+    <div class="row wrap">
+      <button type="button" class="secondary" id="privacy-export-stats">Export stats</button>
+      <button type="button" class="secondary" id="privacy-export-setup">Export setup</button>
+      <button type="button" class="secondary" id="privacy-folder">Show data folder</button>
+    </div>
+    <div class="hint" id="privacy-status" role="status" aria-live="polite"></div>
+    <details id="privacy-notice">
+      <summary>Read the privacy notice</summary>
+      <div id="privacy-body" class="pv"></div>
+    </details>
+  </div>
+  </div>
+
+  <div class="pane" id="pane-advanced" data-section="advanced" hidden>
   <h2>Claude integration</h2>
   <div class="field">
     <div class="row"><button type="button" class="secondary" id="mcp-toggle">Enable Claude integration</button></div>
@@ -434,69 +570,8 @@
     <div class="hint" id="hint-git-deploy">Workflow names that count as a deploy, comma-separated.</div>
   </div>
 
-  <!-- ── Voice (F7 push-to-talk questions) ── self-contained: saves on change -->
-  <h2>Voice</h2>
-  <div class="field">
-    <label for="voice-hotkey">Hold to ask a question</label>
-    <div class="row">
-      <select id="voice-hotkey" aria-describedby="voice-hint"><option value="">Off — pick a key</option></select>
-    </div>
-    <div class="hint" id="voice-hint" role="status" aria-live="polite">Hold the key, ask “What's blocked?”, “What's my Claude doing?”, “How much have I spent today?” or “What happened while I was out?”, and let go. Plexiform answers out loud. Speech is turned into text on this Mac; audio is never stored or sent.</div>
-    <label class="row"><input type="checkbox" id="voice-longPress" /> Press and hold the widget to ask</label>
-    <label class="row"><input type="checkbox" id="voice-askClaude" /> Other questions: ask my own Claude (Haiku)</label>
-    <div class="hint">Anything outside the four questions goes to your own <code>claude</code> login, with no tools, settings or MCP servers, capped at 5 cents a question. It sees session states and today's spend, never your code.</div>
-  </div>
-  <!-- ── end Voice ── -->
-
-  <div class="field">
-    <div class="group-label">What the lights mean</div>
-    <div class="hint">Which signal lights which lamp, eye colours and poses now live in <b>Lights…</b> in the tray menu (or right-click the widget).</div>
-  </div>
-
-  <!-- F1 spend -->
-  <h2>Spend</h2>
-  <div class="field">
-    <label for="spend-mode">How you pay for Claude Code</label>
-    <div class="row">
-      <select id="spend-mode" aria-describedby="hint-spend-mode">
-        <option value="api">API key (billed per token)</option>
-        <option value="subscription">Pro / Max subscription</option>
-      </select>
-    </div>
-    <div class="hint" id="hint-spend-mode">Every turn is priced from your transcripts at API list prices. On a subscription that's an equivalent, not a bill, and not a share of your usage window: Claude Code doesn't write that anywhere Plexiform can read.</div>
-    <div class="hint" id="spend-now" role="status" aria-live="polite"></div>
-  </div>
-
-  <div class="field">
-    <div id="budget-label" class="group-label">Budget</div>
-    <div class="row wrap" role="group" aria-labelledby="budget-label">
-      <label class="row" for="spend-daily">$ <input type="number" id="spend-daily" min="0" step="1" /> a day</label>
-      <label class="row" for="spend-weekly">$ <input type="number" id="spend-weekly" min="0" step="1" /> a week</label>
-    </div>
-    <div class="row">
-      <label for="spend-warn">Warn at</label>
-      <input type="number" id="spend-warn" min="10" max="100" step="5" aria-describedby="hint-budget" />
-      <span aria-hidden="true">%</span>
-    </div>
-    <div class="hint" id="hint-budget">0 turns a budget off. Weeks start on Monday. Near it, a finished turn shows amber with money eyes; over it, red.</div>
-  </div>
-
-  <div class="field">
-    <div id="runaway-label" class="group-label">Runaway session</div>
-    <div class="row wrap" role="group" aria-labelledby="runaway-label">
-      <label class="row" for="spend-runaway-dollars">$ <input type="number" id="spend-runaway-dollars" min="0" step="1" /></label>
-      <label class="row" for="spend-runaway-tokens">or <input type="number" id="spend-runaway-tokens" min="0" step="100" /> k tokens</label>
-      <label class="row" for="spend-runaway-minutes">in <input type="number" id="spend-runaway-minutes" min="1" max="240" /> min</label>
-    </div>
-    <div class="hint">One session spending this fast turns the light pulsing red (hover Claude for its burn rate) and sends one notification that jumps to its terminal. Plexiform never stops or types into a session you started. 0 turns a limit off.</div>
-    <label class="row"><input type="checkbox" id="spend-notify-runaway" /> Notify me about a runaway session</label>
-    <label class="row"><input type="checkbox" id="spend-notify-budget-warning" /> Notify me when spend nears a budget</label>
-    <label class="row"><input type="checkbox" id="spend-notify-budget-exceeded" /> Notify me when spend goes over a budget</label>
-  </div>
-  <!-- end F1 spend -->
   <!-- Compactor (src/compaction.js) -->
   <h2>Compactor</h2>
-  <div class="field pauseless" hidden></div>
   <div class="field">
     <label class="row"><input type="checkbox" id="compact-enabled" aria-describedby="hint-compact" /> Compact long sessions in the background</label>
     <div class="hint" id="hint-compact">When a session gets full, the older part of the conversation is summarised while you keep working, and the summary is in place before your next message. Only applies to sessions Plexiform started; sessions you started in a terminal can't be compacted from here.</div>
@@ -519,29 +594,6 @@
     <div class="hint" id="compact-last"></div>
     <div class="hint">Compacting is not free: it sends the whole context to the model once. A smaller context only pays that back over the turns that follow, so no money saving is shown here.</div>
     <div class="hint">For sessions you started in a terminal, Claude Code has its own setting: the <code>CLAUDE_AUTOCOMPACT_PCT_OVERRIDE</code> environment variable (for example 55) sets how full the context gets before it compacts itself. Plexiform doesn't change it for you.</div>
-  </div>
-  <h2>Busy &amp; Focus</h2>
-  <div class="field">
-    <label class="row"><input type="checkbox" id="busyHold" /> Hold pings while I'm busy</label>
-    <div class="hint">In a meeting or a Focus, amber and green sounds, notifications and knocks wait; red (permission asks, limits, offline) still comes through. The lights keep updating. When you're free a “While you were away” card sums up what happened — click a line to go there. Per rule, change it in Lights → <i>While you're busy</i>; <b>busy</b> and <b>free</b> are also rule conditions.</div>
-    <div id="busy-sources" role="group" aria-label="Busy when">
-      <label class="row"><input type="checkbox" id="busyCalendar" /> A calendar event marked busy (macOS Calendar — ticking this asks macOS for access)</label>
-      <div class="busy-state" id="busy-calendar-state"></div>
-      <label class="row"><input type="checkbox" id="busyCalendarTitles" /> Show the meeting's name in the recap</label>
-      <label class="row"><input type="checkbox" id="busyFocus" /> A Focus or Do Not Disturb is on</label>
-      <div class="busy-state" id="busy-focus-state"></div>
-    </div>
-  </div>
-  <div class="field">
-    <label for="busyIcsUrl">Calendar feed (ICS), optional</label>
-    <input type="url" id="busyIcsUrl" placeholder="https://… or webcal://… .ics" spellcheck="false" aria-describedby="hint-ics" />
-    <div class="busy-state" id="busy-ics-state" style="padding-left:0"></div>
-    <div class="hint" id="hint-ics">For a calendar that isn't in macOS Calendar: paste its secret iCal address (Google: Settings › your calendar › “Secret address in iCal format”). Refreshed every 10 minutes; events marked Free are ignored.</div>
-  </div>
-  <div class="field">
-    <label for="busyFocusShortcut">Focus Shortcut, optional</label>
-    <input type="text" class="wide" id="busyFocusShortcut" placeholder="e.g. Plexiform Focus" spellcheck="false" aria-describedby="hint-focus" />
-    <div class="hint" id="hint-focus">macOS only lets Plexiform read a Focus you turn on by hand, and only where it can read the Focus files (often it can't without Full Disk Access, which Plexiform never asks for). Scheduled Focus isn't visible either. For both, make a Shortcut with the single action <b>Get Current Focus</b> and type its name here.</div>
   </div>
 
   <h2>Remote devices</h2>
@@ -577,74 +629,11 @@
     <div class="hint" id="codex-daemon-hint">Off by default. Only sessions you start in Terminal with <code>codex</code> (which attaches to Codex's shared daemon, starting it if needed) are listed; Plexiform never starts the daemon and cannot reach Codex desktop-app conversations. Plexiform lists their titles and folders (a title may be generated by Codex from the session's first message), sends only what you type, shows only replies to your messages, never answers approvals and never steers or interrupts turns it did not start. Messages you send run with that session's own permissions. If it can run commands or edit files without asking, Plexiform's messages can too. See the privacy notice.</div>
   </div>
 
-  <h2>Claude Burst</h2>
-  <div class="field" id="burst-card">
-    <div class="row"><b id="burst-headline">Claude Burst</b> <span id="burst-chip" class="hint" role="status"></span></div>
-    <div class="hint" id="burst-detail" role="status" aria-live="polite"></div>
-    <div class="row" id="burst-modes" hidden>
-      <label class="row"><input type="radio" name="burst-mode" value="base-url" checked /> Base-URL mode (no root changes)</label>
-      <label class="row"><input type="radio" name="burst-mode" value="transparent" /> Transparent mode (whole Mac, needs your password in Terminal)</label>
-    </div>
-    <div class="pauseless" hidden></div>
-    <div class="row" id="burst-actions"></div>
-    <details id="burst-consent-box" hidden><summary>What this changes on your Mac</summary><div id="burst-consent"></div></details>
-    <div class="hint" id="burst-result" role="status" aria-live="polite"></div>
+  <h2>Other tools</h2>
+  <div class="field">
+    <div class="hint" id="connect-hint">Connect Cursor, Codex, Gemini CLI and Hermes from AI tools in the sidebar. Anything else can run <code id="emit-path">emit.js</code>, or POST to <code id="endpoint">http://127.0.0.1:47172/signal</code> with an <code>x-buddy-token</code> header set to the contents of <code id="token-path">~/.claude-traffic-light/token</code>.</div>
   </div>
-  <h2>Privacy</h2>
-  <div class="field" id="privacy">
-    <div class="hint">Plexiform reads your sessions on this machine. Your prompts, conversation logs and code stay here; the notice below lists exactly what leaves, and when. It is a draft pending legal review.</div>
-    <details id="leaves-machine" class="pv" open>
-      <summary>What leaves your machine, in plain words</summary>
-      <h3 class="pv-h">Stays on this Mac</h3>
-      <ul>
-        <li>Spend and token counts, worked out here from your Claude Code logs. Only counts and costs are kept, not the conversation.</li>
-        <li>Session state: the folder, state, tool and model names, and short snippets of an error or reply.</li>
-        <li>Tackle with AI tasks you run on this Mac: your task text, messages, replies and checkpoints.</li>
-        <li>Your settings, rules and cameo photos. Voice becomes text on this device; audio is not saved.</li>
-        <li>Bug-report diagnostics are only copied to your clipboard when you click Copy diagnostics, with home paths, names, secrets, emails and IP addresses scrubbed first.</li>
-      </ul>
-      <h3 class="pv-h">Goes to your team hub (only if you join a team)</h3>
-      <ul>
-        <li>Card text, handovers, run progress, member names, linked repository identity, and your account name and email.</li>
-        <li>Credential-like strings and home-folder paths pass a redaction filter first. It is not a guarantee, and the hub's operator can read what you send.</li>
-        <li>Shared sessions: sessions started in a signed-in team workspace can be shared with that team. Owners, admins and members can message a shared session, which uses the session owner's AI quota; viewers can only watch. Stop sharing in Overview or turn automatic sharing off here. Anything already stored as team history stays.</li>
-      </ul>
-      <h3 class="pv-h">Goes to your AI provider</h3>
-      <ul>
-        <li>Prompts and task context go to the provider you choose, under that provider's terms, using your existing login.</li>
-      </ul>
-      <h3 class="pv-h">Other requests</h3>
-      <ul>
-        <li>GitHub checks through your own <code>gh</code> login, only if it is signed in. Update checks reveal your IP address and app version.</li>
-      </ul>
-      <h3 class="pv-h">Kept locked down</h3>
-      <ul>
-        <li>Your team sign-in and runner credentials are stored in your system's password store (Keychain on macOS), not in plain files.</li>
-      </ul>
-      <p>The full notice below is the exact list.</p>
-    </details>
-    <div class="row wrap">
-      <button type="button" class="secondary" id="privacy-export-stats">Export stats</button>
-      <button type="button" class="secondary" id="privacy-export-setup">Export setup</button>
-      <button type="button" class="secondary" id="privacy-folder">Show data folder</button>
-    </div>
-    <div class="hint" id="privacy-status" role="status" aria-live="polite"></div>
-    <details id="privacy-notice">
-      <summary>Read the privacy notice</summary>
-      <div id="privacy-body" class="pv"></div>
-    </details>
-  </div>
-  <section id="account-section">
-  <h2>Account &amp; team</h2>
-  <div class="field" id="account">
-    <div class="hint" id="account-line" role="status" aria-live="polite"></div>
-    <div class="row wrap">
-      <button type="button" class="secondary" id="account-team">Open Team…</button>
-      <button type="button" class="secondary" id="account-signin">Sign in…</button>
-      <button type="button" class="secondary" id="account-open">Open Account…</button>
-    </div>
-  </div>
-  </section>
+
   <details id="backups">
     <summary><h2 id="backups-title">Backups</h2><span class="toggle" aria-hidden="true"></span></summary>
     <div id="backups-body">
@@ -675,17 +664,16 @@
     </div>
     <div class="hint" id="health-copy-hint" role="status" aria-live="polite"></div>
   </section>
+  </div>
 
   <div class="actions">
     <button type="button" class="secondary" id="feedback-open" style="margin-right:auto">Something's off / Idea…</button>
     <span id="status" role="status" aria-live="polite"></span>
-    <button id="save">Save</button>
   </div>
 
   <script src="privacy-render.js"></script>
   <script src="settings-backups.js"></script>
   <script src="settings.js"></script>
-  <script src="settings-burst.js"></script>
   <script src="native-board/settings.js"></script>
 </body>
 </html>
