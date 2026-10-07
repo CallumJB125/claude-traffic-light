@@ -403,7 +403,7 @@
         },
         "telemetry": {
           "status": "supported-not-built",
-          "how": "GET /event SSE (session.status, message.updated, message.part.updated); plugins."
+          "how": "GET /event SSE (session.status, message.updated, message.part.updated); plugins. Until then, `plexiform-run <tool> [args]` (More > AI tools > Add a custom tool; adapters/generic.js) shows it as working then done or failed (start and exit only; not a hook, so no prompt or tool detail)."
         },
         "taskReporting": {
           "status": "built",
@@ -475,7 +475,7 @@
         },
         "telemetry": {
           "status": "supported-not-built",
-          "how": "Copilot CLI hooks run shell commands at session points; not installed by Plexiform."
+          "how": "Copilot CLI hooks run shell commands at session points; not installed by Plexiform. Until then, `plexiform-run <tool> [args]` (More > AI tools > Add a custom tool; adapters/generic.js) shows it as working then done or failed (start and exit only; not a hook, so no prompt or tool detail)."
         },
         "taskReporting": {
           "status": "built",
@@ -902,7 +902,7 @@
         },
         "telemetry": {
           "status": "supported-not-built",
-          "how": "Same."
+          "how": "Same. plexiform-run cannot wrap a GUI app, so it does not cover Windsurf."
         },
         "taskReporting": {
           "status": "built",
@@ -964,11 +964,11 @@
       "matrix": {
         "discovery": {
           "status": "built",
-          "how": "Only via Plexiform's signal endpoint (`emit.js --source aider`)."
+          "how": "Via `plexiform-run <tool> [args]` (More > AI tools > Add a custom tool; adapters/generic.js), which reports the start and the exit of the run, or Plexiform's signal endpoint (`emit.js --source aider`)."
         },
         "telemetry": {
           "status": "built",
-          "how": "Same, self-posted."
+          "how": "Working while the run is open, then done or failed from its exit code. Nothing finer: no prompts, tools or answers."
         },
         "taskReporting": {
           "status": "built",
@@ -1033,11 +1033,11 @@
       "matrix": {
         "discovery": {
           "status": "built",
-          "how": "Sessions appear when the program posts signals with a session id."
+          "how": "Sessions appear when the program posts signals with a session id, or when it is launched through `plexiform-run <tool> [args]` (More > AI tools > Add a custom tool; adapters/generic.js)."
         },
         "telemetry": {
           "status": "built",
-          "how": "Signals: prompt-submit, tool-use, tool-done, tool-failed, stop, permission-ask, limit-hit, idle-nudge, session-start/end, subagent-start/done."
+          "how": "Signals: prompt-submit, tool-use, tool-done, tool-failed, stop, permission-ask, limit-hit, idle-nudge, session-start/end, subagent-start/done. Via plexiform-run only working then done/failed (start and exit)."
         },
         "taskReporting": {
           "status": "built",

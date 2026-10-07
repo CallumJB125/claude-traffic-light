@@ -20,7 +20,7 @@ test('every page has a unique id, a title and a known kind', () => {
     assert.ok(!p.pending, `${p.id}: no soon pill`);
     if (p.kind === 'window') assert.ok(p.window, p.id);
   }
-  for (const want of ['board', 'myday', 'tasks', 'integrations', 'team', 'usage', 'setups', 'settings']) assert.ok(pageById(want), want);
+  for (const want of ['board', 'myday', 'tasks', 'integrations', 'team', 'usage', 'setups', 'settings', 'aitools']) assert.ok(pageById(want), want);
   assert.equal(PAGES[0].id, 'overview');
   assert.ok(PAGES.some(page => page.id === 'board'));
 });

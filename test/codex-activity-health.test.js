@@ -64,61 +64,38 @@ test('Codex health detects moved configuration despite an old recent event', t =
   assert.equal(f.check().at, undefined);
 });
 
-function connectHandler({ allow = true, installed = true, packaged = true, fails = false } = {}) {
+function connectHandler({ allow = true } = {}) {
   const source = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
   const start = source.indexOf("ipcMain.handle('connect-agent',");
   const end = source.indexOf("ipcMain.handle('git-status',", start);
   assert.ok(start > 0 && end > start);
   let handler;
-  const calls = [];
-  const adapter = {
-    install: () => { calls.push('notify'); return { ok: true, file: 'config.toml' }; },
-    installActivity: () => { calls.push('lifecycle'); if (fails) throw new Error('fixture refusal'); return { ok: true, file: 'hooks.json' }; },
-    configPath: () => 'config.toml', lifecycleConfigPath: () => 'hooks.json',
-  };
+  const opened = [];
   vm.runInNewContext(source.slice(start, end), {
     ipcMain: { handle: (_name, fn) => { handler = fn; } },
     fromNativeBoardSettings: e => allow && e === 'settings-main',
-    Adapters: { get: id => ['codex', 'cursor'].includes(id) ? adapter : null },
-    AUTO_INSTALL_HOOKS: installed, app: { isPackaged: packaged }, os: { homedir: () => '/synthetic' }, HOOK_RUNTIME: {},
+    aiToolsOpen: (destination) => { opened.push(destination); return true; },
   });
-  return { run: (sender = 'settings-main', id = 'codex') => handler(sender, id), calls };
+  return { run: (sender = 'settings-main', id = 'codex') => handler(sender, id), opened };
 }
 
-test('current Settings connect stages lifecycle hooks and explicitly requires Codex review', async () => {
-  const f = connectHandler();
-  const r = await f.run();
-  assert.equal(r.ok, true);
-  assert.equal(r.reviewRequired, true);
-  assert.equal(r.file, 'hooks.json');
-  assert.deepEqual(f.calls, ['lifecycle']);
-});
-
-test('untrusted sender and dev/temporary app never write agent configuration', async () => {
-  for (const f of [connectHandler({ allow: false }), connectHandler({ installed: false }), connectHandler({ packaged: false })]) {
-    assert.equal((await f.run()).ok, false);
-    assert.deepEqual(f.calls, []);
+test('Settings connect buttons open the AI tools page on that tool and write nothing themselves', async () => {
+  for (const id of ['codex', 'cursor', 'gemini', 'hermes']) {
+    const f = connectHandler();
+    assert.equal(JSON.stringify(await f.run('settings-main', id)), '{"ok":true,"opened":true}');
+    assert.deepEqual(f.opened, [`aitools:${id}`]);
   }
-  const f = connectHandler();
-  assert.equal((await f.run('settings-subframe')).ok, false);
-  assert.deepEqual(f.calls, []);
 });
 
-test('boxed or non-string agent IDs cannot select the legacy Codex notify installer', async () => {
-  const f = connectHandler();
-  for (const id of [structuredClone(new String('codex')), ['codex'], { id: 'codex' }, null, 1]) {
-    assert.equal((await f.run('settings-main', id)).ok, false);
-  }
-  assert.deepEqual(f.calls, []);
-});
-
-test('Codex install refusal points to lifecycle config and other agents retain their installer', async () => {
-  const f = connectHandler({ fails: true });
-  assert.equal((await f.run()).file, 'hooks.json');
+test('an untrusted sender, a subframe or a boxed or unknown agent id opens nothing', async () => {
+  const f = connectHandler({ allow: false });
   assert.equal((await f.run()).ok, false);
-  const other = connectHandler();
-  assert.equal((await other.run('settings-main', 'cursor')).reviewRequired, undefined);
-  assert.deepEqual(other.calls, ['notify']);
+  const g = connectHandler();
+  assert.equal((await g.run('settings-subframe')).ok, false);
+  for (const id of [structuredClone(new String('codex')), ['codex'], { id: 'codex' }, null, 1, 'aitools:all', 'claude']) {
+    assert.equal((await g.run('settings-main', id)).ok, false);
+  }
+  assert.deepEqual([...f.opened, ...g.opened], []);
 });
 
 test('Codex health fix requires current Settings and an installed app, and preserves refusal', () => {
@@ -146,7 +123,7 @@ test('Codex health fix requires current Settings and an installed app, and prese
   }
 });
 
-test('Settings waits for configuration and asks for review without claiming live activity', async t => {
+test('Settings points at the AI tools page for review without claiming a connection', async t => {
   const { JSDOM } = require('jsdom');
   const dom = new JSDOM('<button data-agent="codex">Codex desktop and CLI</button><div id="connect-hint"></div>', { runScripts: 'outside-only' });
   t.after(() => dom.window.close());
@@ -164,12 +141,11 @@ test('Settings waits for configuration and asks for review without claiming live
   assert.equal(calls, 1);
   assert.equal(button.disabled, true);
   assert.equal(hint.textContent, '');
-  resolve({ ok: true, file: 'hooks.json', reviewRequired: true });
+  resolve({ ok: true, opened: true });
   await new Promise(r => setImmediate(r));
   assert.equal(button.disabled, false);
-  assert.match(hint.textContent, /^Configured/);
-  assert.match(hint.textContent, /Review and trust/);
-  assert.match(hint.textContent, /start a new turn/);
+  assert.match(hint.textContent, /^Opened More → AI tools on Codex desktop and CLI/);
+  assert.match(hint.textContent, /Review the exact change/);
   assert.doesNotMatch(hint.textContent, /^Connected|working now|active session/);
   dom.window.settingsApi.connectAgent = async () => { throw new Error('fixture transport failure'); };
   button.click();

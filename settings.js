@@ -219,7 +219,7 @@
       const hint = document.getElementById('connect-hint');
       try {
         const r = await window.settingsApi.connectAgent(b.dataset.agent);
-        hint.textContent = r && r.ok ? r.hermesActivity
+        hint.textContent = r && r.opened ? `Opened More → AI tools on ${b.textContent}. Review the exact change there and confirm; a copy of the file is kept and Undo restores it.` : r && r.ok ? r.hermesActivity
           ? 'Hermes activity enabled for the default profile. Start a new Hermes session anywhere; it appears after its first activity. Restart existing Hermes sessions to load the plugin. Conversation text stays in Hermes; messaging from Plexiform is unavailable.'
           : r.reviewRequired
           ? `Configured ${b.textContent} in ${r.file}. Review and trust the Plexiform hooks in Codex, then start a new turn. The widget updates when it receives activity; existing chat text is not read.`

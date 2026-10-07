@@ -10,7 +10,9 @@
 // normalize() feeds both `emit.js --adapter <id>` and the app's
 // POST /hook/:adapter route.
 const ADAPTERS = [require('./claude-code.js'), require('./cursor.js'), require('./codex.js'), require('./gemini.js')];
-const BY_ID = new Map(ADAPTERS.map((a) => [a.id, a]));
+// generic.js has no config file of ours, so it is reachable by id (emit.js,
+// POST /hook/generic) but is not in list(), which uninstall and the rename walk.
+const BY_ID = new Map([...ADAPTERS, require('./generic.js')].map((a) => [a.id, a]));
 
 const get = (id) => BY_ID.get(String(id || '')) || null;
 const list = () => ADAPTERS.slice();

@@ -1951,7 +1951,7 @@ function createLightsWindow() {
 // words. Opened from the widget's "?" and the tray; once on first run.
 function createHelpWindow() { openBuddy('help'); }
 
-const setupChecklist = require('./src/setup-checklist.js').createForHelp({ report: () => healthReport(), account: () => accountSummary(), tasks: () => tasksSvc?.snapshot().tasks ?? null });
+const setupChecklist = require('./src/setup-checklist.js').createForHelp({ report: () => healthReport(), account: () => accountSummary(), tasks: () => tasksSvc?.snapshot().tasks ?? null, tools: () => AiTools.quick() });
 function helpState() {
   const real = aggregateState({ ignoreTravel: true });
   return { ...Help.explain(real, loadConfig().rules, { travel: travelLook ? travelLook.name : null, busy: BusyWatch.status(), providerStatus: ProviderStatus.snapshot({ sessions: localSessions(real.sessions || []), online }) }), setup: setupChecklist() };
@@ -1963,6 +1963,7 @@ ipcMain.handle('get-help', (e) => fromUtilityPage(e, 'help') ? helpState() : nul
 ipcMain.handle('help:navigate', (e, ...args) => {
   if (!fromUtilityPage(e, 'help') || args.length !== 1) return false;
   const destination = args[0];
+  if (typeof destination === 'string' && /^aitools(:[a-z]{2,12})?$/.test(destination)) return typeof aiToolsOpen === 'function' ? aiToolsOpen(destination) : (openBuddy('aitools'), true);
   if (typeof destination !== 'string' || !['overview', 'join', 'settings'].includes(destination)) return false;
   openBuddy(destination);
   return true;
@@ -2591,7 +2592,7 @@ function broadcastStatus() {
     createWindow();
   }
   lightsWin?.webContents.send('status-changed');
-  for (const id of ['usage', 'stats', 'help']) buddyWin?.sendToPage(id, 'status-changed');
+  for (const id of ['usage', 'stats', 'help', 'aitools']) buddyWin?.sendToPage(id, 'status-changed');
   try {
     const st = aggregateState();
     statusGate.mark(st);
@@ -4067,26 +4068,14 @@ utilityHandle('mcp-set-enabled', settingsOnly, (_e, on) => {
   }
 });
 
-// Connect other agents: each adapter writes its own hook config.
+const AiTools = require('./src/ai-tools-wire.js').wire({ ipcMain, shell, clipboard, home: os.homedir(), runtime: HOOK_RUNTIME, rootDir: ROOT_DIR, fromPage: (e) => fromUtilityPage(e, 'aitools'), askFromWidget: () => !!loadConfig().askFromWidget, ephemeral: EPHEMERAL, openPage: openBuddy });
+const aiToolsOpen = (destination) => AiTools.open(destination);
+// Preferences' "Connect other agents" buttons open the AI tools page on that
+// tool, where the exact change is previewed and confirmed (src/ai-tools.js).
 ipcMain.handle('connect-agent', async (e, which) => {
   if (!fromNativeBoardSettings(e)) return { ok: false, error: 'Not allowed.' };
   if (typeof which !== 'string' || !['codex', 'cursor', 'gemini', 'hermes'].includes(which)) return { ok: false };
-  if (which === 'hermes') {
-    if (!app.isPackaged || !AUTO_INSTALL_HOOKS) return { ok: false, error: 'Open the installed app to connect an agent.' };
-    try { return await require('./adapters/hermes-activity').connect({ home: os.homedir(), runtime: HOOK_RUNTIME }); }
-    catch { return { ok: false, error: 'Hermes activity connection failed; existing provider settings were not edited by Plexiform.' }; }
-  }
-  const adapter = Adapters.get(which);
-  if (!adapter) return { ok: false };
-  if (!app.isPackaged || !AUTO_INSTALL_HOOKS) return { ok: false, error: 'Open the installed app to connect an agent.' };
-  try {
-    const install = which === 'codex' ? adapter.installActivity : adapter.install;
-    const r = install({ home: os.homedir(), runtime: HOOK_RUNTIME });
-    return r.ok ? { ok: true, file: r.file, ...(which === 'codex' ? { reviewRequired: true } : {}) } : { ok: false, file: r.file, error: r.error };
-  } catch (err) {
-    const configPath = which === 'codex' ? adapter.lifecycleConfigPath : adapter.configPath;
-    return { ok: false, file: configPath(os.homedir()), error: err.message };
-  }
+  return { ok: aiToolsOpen(`aitools:${which}`), opened: true };
 });
 ipcMain.handle('git-status', (e) => settingsOnly(e) ? ({ ...git.status(), enabled: loadConfig().gitSignals !== false }) : null);
 utilityHandle('signal-endpoint', e => settingsOnly(e) || widgetConfigSender(e), () => ({ port: SIGNAL_PORT, emit: EMIT_SCRIPT, token: path.join(ROOT_DIR, 'token') }));

@@ -3,7 +3,8 @@
 // The first-run checklist on the Help page. Pure: main passes in what it
 // already knows (the health report, the account summary, the Tackle with AI
 // task list) and gets rows back. Each row says done / todo / unknown; a fix is
-// only ever a destination Help may already open, never a command.
+// only ever a destination Help may already open (the AI tools page included),
+// never a command.
 //
 // `unknown` (no account summary, no task service) counts as not done, so the
 // panel never claims a step that nothing confirmed.
@@ -20,6 +21,27 @@ function hooksRow(report) {
     detail: c ? (c.status === 'ok' ? c.detail : [c.detail, c.next].filter(Boolean).join(' ')) : 'Not checked yet.',
     fix: state === DONE ? null : { label: 'Open Health', destination: 'settings' },
   };
+}
+
+// One row per AI tool found on this Mac, each opening its own row on the AI
+// tools page. `tools` is src/ai-tools.js quick(): only what main already read.
+function toolRow(t) {
+  const done = t.connected;
+  const seen = t.lastEvent && t.lastEvent.at ? `Last event ${t.lastEvent.text}.` : 'No events yet. Start a session in it.';
+  return {
+    id: `tool:${t.id}`, title: `Connect ${t.label}`, state: done ? DONE : TODO,
+    detail: done ? `Connected. ${seen}` : t.detail || 'Found on this Mac, not connected yet.',
+    fix: done ? null : { label: t.state === 'ready' ? 'Connect' : 'Fix', destination: `aitools:${t.id}` },
+  };
+}
+
+// The single first-run question: everything found but not yet connected.
+function promptFor(tools) {
+  const pending = tools.filter((t) => t.installed && !t.connected && t.state !== 'fix');
+  if (!pending.length) return null;
+  const names = pending.map((t) => t.label);
+  const list = names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names[0];
+  return { text: `We found ${list} on this Mac. Connect ${names.length > 1 ? 'them' : 'it'}?`, ids: pending.map((t) => t.id), fix: { label: 'Connect all', destination: 'aitools:all' } };
 }
 
 function signInRow(account) {
@@ -50,23 +72,27 @@ function tackleRow(tasks) {
   };
 }
 
-function build({ report = null, account = null, tasks = null } = {}) {
-  const rows = [hooksRow(report), signInRow(account), teamRow(account), tackleRow(tasks)];
+function build({ report = null, account = null, tasks = null, tools = null } = {}) {
+  const found = Array.isArray(tools) ? tools.filter((t) => t.installed) : [];
+  const toolRows = found.length ? found.map(toolRow) : [hooksRow(report)];
+  const rows = [...toolRows, signInRow(account), teamRow(account), tackleRow(tasks)];
   const done = rows.filter((r) => r.state === DONE).length;
-  return { rows, done, total: rows.length, complete: done === rows.length };
+  return { rows, done, total: rows.length, complete: done === rows.length, prompt: found.length ? promptFor(found) : null };
 }
 
 // Help re-asks on every status change; the health checks read the disk, so
 // the report is reused for a few seconds.
 const REPORT_TTL_MS = 5000;
-function createForHelp({ report, account, tasks, now = Date.now }) {
+function createForHelp({ report, account, tasks, tools = () => null, now = Date.now }) {
   let at = -Infinity, last = null;
   return () => {
     if (now() - at > REPORT_TTL_MS) { try { last = report(); } catch { last = null; } at = now(); }
     let acct = null, list = null;
     try { acct = account(); } catch { /* unknown */ }
     try { list = tasks(); } catch { /* unknown */ }
-    return build({ report: last, account: acct, tasks: list });
+    let found = null;
+    try { found = tools(); } catch { /* unknown */ }
+    return build({ report: last, account: acct, tasks: list, tools: found });
   };
 }
 

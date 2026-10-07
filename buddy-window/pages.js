@@ -39,6 +39,7 @@ const PAGES = [
   { id: 'thismac', title: 'This Mac', icon: 'laptop', kind: 'local', screen: 'thismac', group: 'you' },
   { id: 'account', title: 'Account', icon: 'user', kind: 'local', screen: 'account', group: 'you' },
   { id: 'lights', title: 'Widget configuration', icon: 'lights', kind: 'window', window: 'lights', group: 'you' },
+  { id: 'aitools', title: 'AI tools', icon: 'plug', kind: 'local', file: 'aitools.html', preload: 'aitools-preload.js', group: 'you' },
   { id: 'settings', title: 'Preferences', icon: 'gear', kind: 'local', file: 'settings.html', preload: 'settings-preload.js', query: { embedded: '1' }, group: 'you' },
   { id: 'hatch', title: 'Hatch a character', icon: 'puzzle', kind: 'local', file: 'hatch.html', preload: 'hatch-preload.js', query: { embedded: '1' }, group: 'you' },
   { id: 'help', title: 'Help', icon: 'info', kind: 'local', file: 'help.html', preload: 'help-preload.js', query: { embedded: '1' }, group: 'you' },
@@ -61,11 +62,11 @@ const SECTIONS = [
   { id: 'board', title: 'Board', icon: 'board', default: 'board', pages: ['board', 'board:table', 'board:history', 'board:dashboard'] },
   { id: 'team', title: 'Team', icon: 'team', default: 'team', pages: ['team', 'integrations', 'account'] },
   { id: 'activity', title: 'Activity', icon: 'chart', default: 'usage', pages: ['usage', 'stats'] },
-  { id: 'more', title: 'More', icon: 'gear', default: 'settings', pages: ['settings', 'thismac', 'lights', 'hatch', 'help', 'feedback', 'updates'] },
+  { id: 'more', title: 'More', icon: 'gear', default: 'settings', pages: ['aitools', 'settings', 'thismac', 'lights', 'hatch', 'help', 'feedback', 'updates'] },
 ];
 // Setups has no Apply or Undo yet, so it stays out of the sidebar. The page and
 // its deep link remain; PLEXIFORM_SHOW_SETUPS=1 puts the entry back for development.
-if (process.env.PLEXIFORM_SHOW_SETUPS === '1') SECTIONS.find((s) => s.id === 'more').pages.splice(4, 0, 'setups');
+if (process.env.PLEXIFORM_SHOW_SETUPS === '1') SECTIONS.find((s) => s.id === 'more').pages.splice(5, 0, 'setups');
 
 // Calendar and Timeline are project-planning views and AI runs have no due dates, so they
 // leave the sub-nav; the pages and deep links stay. PLEXIFORM_SHOW_PLANNER=1 restores them.
