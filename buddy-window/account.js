@@ -231,6 +231,35 @@ function keepAwakeSection() {
   return sec;
 }
 
+// "On this Mac": what is keeping it awake right now (works without Burst), and Burst's own readout of
+// the lid setting, hotspot, automask and Remote Control. Read-only; hidden when there is nothing to say.
+function macStatusSection() {
+  const sec = el('section', { class: 'acct-section', hidden: true }, el('h2', {}, 'On this Mac'));
+  const line = (name, text) => el('div', { class: 'acct-item' }, el('div', { class: 'acct-who' }, el('span', { class: 'acct-name' }, name), el('span', { class: 'acct-mail', role: 'status' }, text)));
+  const draw = (v) => {
+    sec.querySelectorAll('.acct-item, .acct-hint, .btn').forEach((n) => n.remove());
+    const b = v && v.burst;
+    if (!v || (!b && !(v.others || []).length)) { sec.hidden = true; return; }
+    sec.hidden = false;
+    if (b && b.keepAwake) {
+      const k = b.keepAwake;
+      sec.append(line('Lid closed', `${k.mode === 'off' ? 'Burst has it off.' : `On in Burst (${k.mode === 'always' ? 'plugged in and on battery' : 'plugged in only'}).`} Now ${k.onAc ? 'on mains power' : 'on battery'}, closing the lid ${k.sleepDisabled ? 'keeps the Mac awake' : 'sleeps the Mac'}.`));
+      if (k.drift) sec.append(el('p', { class: 'acct-hint', role: 'alert' }, k.drift));
+    }
+    if ((v.others || []).length) {
+      sec.append(el('div', { class: 'acct-item' }, el('div', { class: 'acct-who' }, el('span', { class: 'acct-name' }, 'Other programs keeping this Mac awake'),
+        ...v.others.map((o) => el('span', { class: 'acct-mail' }, `${o.for || o.process} (through ${o.process}, pid ${o.pid}). It keeps a closed laptop awake on battery, whatever is set above.`)))));
+    }
+    if (b && b.hotspot) sec.append(line('Hotspot', b.hotspot.ssid ? `Joins ${b.hotspot.ssid} when this Mac is offline. Now ${b.hotspot.online ? 'online' : 'offline'}. Change it in the Burst dashboard.` : 'Not joining a hotspot.'));
+    if (b && b.automask) sec.append(line('Automask', b.automask.enabled ? `On: ${b.automask.rules} ${b.automask.rules === 1 ? 'kind' : 'kinds'} of personal data masked before requests leave this Mac.` : 'Off.'));
+    if (b && b.remote) sec.append(line('Remote Control', b.remote));
+    if (b) sec.append(el('button', { type: 'button', class: 'btn', onclick: () => { api.burstAction('open-dashboard').catch(() => {}); } }, 'Open the Burst dashboard'));
+  };
+  const poll = () => api.macView().then(draw).catch(() => draw(null));
+  poll();
+  return sec;
+}
+
 const SCREENS = {
   clients(s) {
     return [heading('Your client projects', 'View the project updates shared with you. Invitations need your explicit acceptance.'),
@@ -548,6 +577,7 @@ const SCREENS = {
     }
     out.push(burstSection());
     out.push(keepAwakeSection());
+    out.push(macStatusSection());
     if (!s.hubs.length || s.hubs.every((h) => !h.teams.length)) {
       out.push(el('p', { class: 'acct-hint' }, 'Sign in and join a team to run cards here.'));
       return out;

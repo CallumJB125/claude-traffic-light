@@ -7,6 +7,7 @@
 // 'off' | 'app' | 'ac' | 'always'.
 
 const Actions = require('./burst-actions.js');
+const Sleepers = require('./sleep-assertions.js');
 
 const IDLE_MINUTES = 120;
 const APP_LABEL = 'Stops the Mac sleeping on its own while an AI session is working. It does not keep a closed laptop awake or the screen on.';
@@ -27,7 +28,7 @@ function consent(burstMode) {
   };
 }
 
-function register({ utilityHandle, allowed, isMac, burst, keepAwake, dialog, getPref, setPref, log = () => {} }) {
+function register({ utilityHandle, allowed, isMac, burst, keepAwake, dialog, getPref, setPref, listAssertions = Sleepers.listAssertions, log = () => {} }) {
   const present = () => {
     if (!isMac || !burst) return null;
     const s = burst.snapshot();
@@ -69,10 +70,46 @@ function register({ utilityHandle, allowed, isMac, burst, keepAwake, dialog, get
     return { ok: true, view: view() };
   }
 
+  // The This Mac readout. Programs holding the Mac awake come from the operating system and need no
+  // Burst; everything else is Burst's own answer, null when it is absent. Never a hotspot password.
+  async function macView() {
+    if (!isMac) return null;
+    const others = (await listAssertions({ platform: 'darwin' }).catch(() => [])).slice(0, 10).map((a) => ({ pid: a.pid, process: a.process, name: a.name, for: a.for || '' }));
+    const url = present();
+    const read = (name) => (url && burst.read ? burst.read(name).catch(() => null) : Promise.resolve(null));
+    const [mac, automask, settings] = await Promise.all([read('mac'), read('automask'), read('settings')]);
+    const obj = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {});
+    const ka = mac ? obj(mac.keep_awake) : null;
+    const live = ka ? obj(ka.live) : {};
+    const pref = getPref();
+    let drift = '';
+    if (ka) {
+      if (ka.problem) drift = `Burst says its setting is saved but not applied on this Mac: ${String(ka.problem).slice(0, 200)}`;
+      else if ((pref === 'ac' || pref === 'always') && ka.mode !== pref) drift = `Plexiform is set to ${pref === 'always' ? 'plugged in and on battery' : 'plugged in only'}, but Burst has ${ka.mode === 'off' ? 'it off' : String(ka.mode)}.`;
+      else if (pref === 'off' && ka.mode && ka.mode !== 'off') drift = 'Burst is keeping this Mac awake although the switch above is off.';
+      else if (ka.mode && ka.mode !== 'off' && live.sleep_disabled === false) drift = 'Burst has it on, but the Mac is not actually staying awake with the lid shut right now.';
+    }
+    const hs = settings ? obj(settings.hotspot) : null;
+    const am = automask ? { enabled: automask.enabled === true, rules: (Array.isArray(automask.rules) ? automask.rules : []).filter((r) => r && r.on === true).length } : null;
+    const st = (burst.snapshot().d || {}).state;
+    const mode = st && st.mode;
+    const remote = !url || !mode ? null : mode === 'transparent' ? 'Remote Control keeps working: Burst is in transparent mode.' : 'Burst is in base-URL mode, which turns Claude Code\u2019s Remote Control off.';
+    return {
+      others,
+      burst: url ? {
+        keepAwake: ka ? { mode: String(ka.mode || 'off'), idleMinutes: Number(ka.idle_minutes) || 0, onAc: live.on_ac === true, sleepDisabled: live.sleep_disabled === true, drift } : null,
+        hotspot: hs ? { ssid: String(hs.ssid || ''), when: String(hs.when || ''), online: hs.online === true } : null,
+        automask: am,
+        remote,
+      } : null,
+    };
+  }
+
+  utilityHandle('keepawake:mac', allowed, async () => macView());
   utilityHandle('keepawake:get', allowed, async () => view());
   utilityHandle('keepawake:set', allowed, async (_e, req) => set(req));
   apply();
-  return { view, set, sync: (sessions) => keepAwake.sync(sessions) };
+  return { view, set, macView, sync: (sessions) => keepAwake.sync(sessions) };
 }
 
 module.exports = { register, consent, IDLE_MINUTES };

@@ -137,3 +137,22 @@ test('a saved Burst choice is not silently flipped when Burst stops answering', 
   assert.equal(h.saved, 'ac');
   assert.equal(h.ipc.sync(working), false);
 });
+
+test('macView: hidden off macOS; sleepers listed without Burst; Burst parts only when present, never a password', async () => {
+  const sleepers = [{ pid: 9, process: 'caffeinate', type: 'PreventSystemSleep', name: 'x', for: 'make' }];
+  const base = (extra) => Ipc.register({ utilityHandle: () => {}, allowed: () => true, isMac: true, keepAwake: KeepAwake.createKeepAwake({ powerSaveBlocker: fakeBlocker() }), dialog: {}, getPref: () => 'ac', setPref: () => {}, listAssertions: async () => sleepers, ...extra });
+  assert.equal(await base({ isMac: false }).macView(), null);
+  const absent = await base({ burst: { snapshot: () => ({ d: { kind: 'not_installed' }, url: null }) } }).macView();
+  assert.deepEqual(absent, { others: [{ pid: 9, process: 'caffeinate', name: 'x', for: 'make' }], burst: null });
+  const reads = {
+    mac: { keep_awake: { mode: 'off', idle_minutes: 0, live: { on_ac: true, sleep_disabled: false } } },
+    automask: { enabled: true, rules: [{ on: true }, { on: false }, { on: true }] },
+    settings: { hotspot: { ssid: 'Phone', when: 'lid-closed', online: true, password_stored: true, hotspot_password: 'hunter2' } },
+  };
+  const present = await base({ burst: { snapshot: () => ({ d: { kind: 'present', state: { mode: 'transparent' } }, url: 'http://127.0.0.1:1/' }), read: async (n) => reads[n] } }).macView();
+  assert.match(present.burst.keepAwake.drift, /Plexiform is set to plugged in only, but Burst has it off/);
+  assert.deepEqual(present.burst.hotspot, { ssid: 'Phone', when: 'lid-closed', online: true });
+  assert.deepEqual(present.burst.automask, { enabled: true, rules: 2 });
+  assert.match(present.burst.remote, /Remote Control keeps working/);
+  assert.ok(!JSON.stringify(present).includes('hunter2'));
+});
