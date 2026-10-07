@@ -482,6 +482,8 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     route('POST', '/api/teams/:team_id/billing/portal', ({ member }) => billing.portalTeam(member), { replay: false });
     // Encrypted sync across a user's own devices (sync.js): ciphertext, wraps and metadata only.
     hub.sync.routes(route);
+    // Team activity log (activity/): scrubbed WorkRecords, feed, current and SSE stream.
+    hub.activity.routes(route);
   } else {
     route('GET', '/api/me', ({ member }) => api.me(member));
   }
