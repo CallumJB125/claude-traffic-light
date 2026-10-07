@@ -195,7 +195,7 @@ test('the refresh is a paid-wiring package, and the Plan & billing page is regis
   const shown = require('node:child_process').execFileSync(process.execPath, ['-e', "const p=require('./buddy-window/pages');console.log(JSON.stringify([p.pageById('upgrade').hidden,p.sectionOf('upgrade')]))"], { cwd: path.join(__dirname, '..'), env: { ...process.env, PLEXIFORM_SHOW_UPGRADE: '1' }, encoding: 'utf8' });
   assert.deepEqual(JSON.parse(shown), [false, 'team']);
   const files = require('../package.json').build.files;
-  for (const f of ['upgrade.html', 'upgrade.js', 'upgrade-preload.js']) assert.ok(files.includes(f), f);
+  for (const f of ['upgrade.html', 'upgrade.js', 'upgrade-preload.js', 'page.css']) assert.ok(files.includes(f), f);
   const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'entitlement-refresh.js'), 'utf8');
   assert.match(src, /privacy-flow: entitlement-check/);
   assert.match(src, /fromPage\(e, 'upgrade'\)/);

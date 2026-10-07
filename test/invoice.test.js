@@ -71,6 +71,18 @@ test('subscription mode says API-equivalent estimate in the CSV and the PDF page
   assert.match(Invoice.toCsv(api), /Actual API usage/);
 });
 
+test('the invoice says Actual API usage only when Preferences says API; unset or missing config is an estimate', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plex-mode-'));
+  try {
+    assert.equal(Clients.modeOf(root), 'subscription', 'no config.json');
+    fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ spend: { dailyBudget: 5 } }));
+    assert.equal(Clients.modeOf(root), 'subscription', 'spend.mode unset');
+    fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ spend: { mode: 'api' } }));
+    assert.equal(Clients.modeOf(root), 'api');
+    assert.equal(Invoice.basisOf(Clients.modeOf(root)), 'Actual API usage');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test('CSV cells are formula-safe and quoted', () => {
   const evil = Clients.normalize({ clients: [{ id: 'x', name: '=HYPERLINK("http://x")' }, { id: 'y', name: '+1,2' }], mappings: [{ path: '/work/acme', clientId: 'x' }, { path: '/work/other', clientId: 'y' }] });
   const t = [turn({ project: '@cmd', cwd: '/work/acme/q' }), turn({ cwd: '/work/other/z', sessionId: 'zz' })];

@@ -17,10 +17,11 @@
     $('banner').hidden = !s.banner;
     $('banner').textContent = s.banner || '';
     $('detail').textContent = s.plan === 'free'
-      ? (s.signedIn ? 'Upgrade to Plus for unlimited checkpoints, full search history, phone control and more.' : 'Sign in to your team hub (Account) to upgrade.')
+      ? (s.signedIn ? 'Upgrade to Plus for unlimited checkpoints, full search history, phone control and more.' : 'Sign in to your Plexiform account to upgrade.')
       : s.inGrace ? `Paid period ended ${day(s.periodEnd)}; ${s.daysLeft} day${s.daysLeft === 1 ? '' : 's'} left to confirm it.`
         : s.periodEnd ? `Paid through ${day(s.periodEnd)}.` : '';
     const paid = s.plan !== 'free';
+    $('sign-in').hidden = s.signedIn;
     $('upgrade-month').hidden = paid || !s.signedIn;
     $('upgrade-year').hidden = paid || !s.signedIn;
     $('manage').hidden = !paid || !s.signedIn;
@@ -37,12 +38,13 @@
   async function act(fn, note) {
     $('note').textContent = note;
     const r = await fn().catch(() => null);
-    if (r && r.ok === false && r.reason === 'signed-out') $('note').textContent = 'Sign in to your team hub first.';
+    if (r && r.ok === false && r.reason === 'signed-out') $('note').textContent = 'Sign in to your Plexiform account first.';
     else if (r && r.ok === false) $('note').textContent = "Couldn't reach your team hub. Try again later.";
     else $('note').textContent = '';
   }
 
   if (!api) return;
+  $('sign-in').addEventListener('click', () => api.signIn());
   $('upgrade-month').addEventListener('click', () => act(() => api.upgrade('month'), 'Opening checkout in your browser…'));
   $('upgrade-year').addEventListener('click', () => act(() => api.upgrade('year'), 'Opening checkout in your browser…'));
   $('manage').addEventListener('click', () => act(() => api.manage(), 'Opening billing in your browser…'));

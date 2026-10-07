@@ -7,13 +7,14 @@
   <title>Home</title>
   <link rel="stylesheet" href="tokens.css">
   <link rel="stylesheet" href="home.css">
+  <link rel="stylesheet" href="page.css">
 </head>
 <body>
-<main>
-  <header>
+<main class="page">
+  <header class="page-head"><div>
     <h1>Home</h1>
-    <p class="muted">What's running, what needs you, and today's spend.</p>
-  </header>
+    <p>What's running, what needs you, and today's spend.</p>
+  </div></header>
   <div id="banner" class="banner" role="region" aria-label="Connect your AI tools" hidden></div>
   <section id="morning" aria-labelledby="morning-title" hidden><div class="section-header"><h2 id="morning-title">While you were away</h2><p id="morning-count" class="muted"></p></div><div class="body"></div></section>
   <section id="needs" aria-labelledby="needs-title"><div class="section-header"><h2 id="needs-title">Needs you</h2><p id="needs-count" class="muted"></p></div><div class="body"></div></section>

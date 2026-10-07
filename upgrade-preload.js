@@ -6,4 +6,5 @@ contextBridge.exposeInMainWorld('plan', {
   refresh: () => ipcRenderer.invoke('entitlement:refresh'),
   upgrade: (interval) => ipcRenderer.invoke('entitlement:open', 'checkout', interval === 'year' ? 'year' : 'month'),
   manage: () => ipcRenderer.invoke('entitlement:open', 'portal'),
+  signIn: () => ipcRenderer.invoke('entitlement:sign-in'),
 });

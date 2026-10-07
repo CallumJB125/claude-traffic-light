@@ -152,6 +152,7 @@ test('register: a free install gets the upsell and makes no request; IPC answers
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sync-reg-'));
   const handlers = new Map();
   const quits = [];
+  const opened = [];
   const realFetch = globalThis.fetch;
   let fetched = 0;
   globalThis.fetch = async () => { fetched++; throw new Error('no network in tests'); };
@@ -159,11 +160,15 @@ test('register: a free install gets the upsell and makes no request; IPC answers
     const out = Sync.register({
       ipcMain: { handle: (ch, fn) => handlers.set(ch, fn) }, rootDir: root,
       entitlements: { has: () => false, plan: () => 'free' }, fromPage: (e, id) => e === 'page' && id === 'sync',
-      buddy: () => ({ interactionHostIdentity: () => ({ origin: 'https://hub.example', userId: 'u1', token: () => 't' }) }),
+      buddy: () => ({ interactionHostIdentity: () => ({ origin: 'https://hub.example', userId: 'u1', token: () => 't' }), open: (id) => opened.push(id) }),
       onQuit: (fn) => quits.push(fn),
     });
     assert.ok(out);
-    assert.deepEqual([...handlers.keys()].sort(), ['sync:approve', 'sync:disable', 'sync:enable', 'sync:new-code', 'sync:now', 'sync:recover', 'sync:revoke', 'sync:state']);
+    assert.deepEqual([...handlers.keys()].sort(), ['sync:approve', 'sync:disable', 'sync:enable', 'sync:new-code', 'sync:now', 'sync:open', 'sync:recover', 'sync:revoke', 'sync:state']);
+    await handlers.get('sync:open')('other-page', 'upgrade');
+    await handlers.get('sync:open')('page', 'upgrade');
+    await handlers.get('sync:open')('page', 'settings');
+    assert.deepEqual(opened, ['upgrade', 'account'], 'only the Sync page navigates, and only to Plan & billing or Account');
     assert.equal(await handlers.get('sync:state')('other-page'), null);
     const st = await handlers.get('sync:state')('page');
     assert.deepEqual([st.entitled, st.enabled, st.signedIn, st.hub], [false, false, true, null]);

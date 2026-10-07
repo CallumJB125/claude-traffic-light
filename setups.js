@@ -31,7 +31,7 @@ async function refresh(){
   status.textContent='Loading current team access…';
   let state;try{state=await api.state();}catch{state={status:'unavailable',teams:[],sources:[]};}
   if(token!==generation)return;
-  sources=state?.sources??[];status.textContent=state?.status==='complete'?'Current team access loaded.':state?.teams?.length?'Some team setups are unavailable.':state?.status==='partial'||state?.status==='unavailable'?'Current team access is unavailable. Refresh after signing in or reconnecting.':'Sign in and join a team to share or review setups.';
+  sources=state?.sources??[];status.textContent=state?.status==='complete'&&state?.teams?.length?'Current team access loaded.':state?.status==='complete'?'Join a team to share or review setups with it.':state?.teams?.length?'Some team setups are unavailable.':state?.status==='partial'||state?.status==='unavailable'?'Current team access is unavailable. Refresh after signing in or reconnecting.':'Sign in and join a team to share or review setups.';
   for(const team of state?.teams??[]){
     const section=el('section');section.append(el('h2',team.name),el('p',team.status==='complete'?`${team.role} · ${team.profiles.length} shared setups`:'Setups unavailable or incomplete. Refresh to retry.'));
     if(team.baseline)section.append(el('p',team.baseline.required?'Team baseline is a required reminder. It does not enforce installation.':'Team baseline is an optional reminder.'));
@@ -230,4 +230,7 @@ function renderLocalPlan(selection){
 }
 
 document.getElementById('refresh').onclick=refresh;
-api.changed(()=>{clearAll();status.textContent='Your account changed. Refresh to load current team access.';});void refresh();
+// With team setups or a review on screen, an account change wipes them and asks
+// for a Refresh. With none (no account or team yet) there is nothing to retire,
+// so the page simply reloads its access.
+api.changed(()=>{const shown=teams.childElementCount>0||review.childElementCount>0;clearAll();if(shown)status.textContent='Your account changed. Refresh to load current team access.';else void refresh();});void refresh();

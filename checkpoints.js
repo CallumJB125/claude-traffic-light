@@ -105,7 +105,11 @@ function renderState(s) {
   }
   current = s.sessions.some(x => x.id === keep) ? keep : s.sessions[0]?.id ?? null;
   if (current) select.value = current;
-  if (!s.sessions.length) status.textContent = s.enabled ? 'No sessions yet. Checkpoints appear after the next AI turn in a git repository.' : 'Switch on checkpoints to start saving them.';
+  if (!s.sessions.length) {
+    const o = node('option', 'No sessions yet'); o.value = ''; o.disabled = true; o.selected = true; select.append(o);
+    status.textContent = s.enabled ? 'No sessions yet. Checkpoints appear after the next AI turn in a git repository.' : 'No sessions yet. Switch on checkpoints above, and each AI turn in a git repository will show up here.';
+  }
+  select.disabled = !s.sessions.length;
   const model = $('review-model');
   model.replaceChildren(...s.models.map(m => { const o = node('option', m); o.value = m; return o; }));
   model.value = s.review.model;

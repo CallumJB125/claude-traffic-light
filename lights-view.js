@@ -1382,7 +1382,7 @@
       const r = await window.lightsApi.saveSpendLimits({ dailyBudget: Number($('budget-daily').value), weeklyBudget: Number($('budget-weekly').value), warnAt: (Number($('budget-warn').value) || 80) / 100 });
       note.textContent = r && r.ok ? 'Saved.' : 'Could not save. Try again.';
     } catch { note.textContent = 'Could not save. Try again.'; }
-    setTimeout(() => { note.textContent = '0 turns a limit off.'; }, 2500);
+    setTimeout(() => { note.textContent = 'Set a limit to turn on alerts (0 = no limit).'; }, 2500);
   });
   if (embeddedView) loadBudget();
   $('export-json').addEventListener('click', () => window.lightsApi.exportStats('json', rangeDays));

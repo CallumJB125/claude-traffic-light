@@ -12,6 +12,8 @@ const say = (el, text, bad) => { el.textContent = text; el.classList.toggle('err
 async function persist(store) { snap = await api.save(store); render(); }
 
 function option(select, value, text) { const o = node('option', text); o.value = value; select.append(o); }
+function placeholder(select, text) { option(select, '', text); select.lastChild.disabled = true; }
+function syncMapButton() { $('map-submit').disabled = !$('map-folder').value || !$('map-client').value; }
 
 function render() {
   const { store } = snap;
@@ -43,15 +45,20 @@ function render() {
     if (!snap.rateCards) el.append(node('p', 'Rate cards are part of the paid plan; the export shows cost with no markup.', 'muted'));
     box.append(el);
   }
-  const mc = $('map-client'), fc = $('f-client'), prev = fc.value;
+  const mc = $('map-client'), fc = $('f-client'), prev = fc.value, prevClient = mc.value;
   mc.replaceChildren(); fc.replaceChildren();
+  placeholder(mc, store.clients.length ? 'Choose a client' : 'Add a client first');
   option(fc, '', 'All clients, with Unmapped');
   for (const c of store.clients) { option(mc, c.id, c.name); option(fc, c.id, c.name); }
   option(fc, UNMAPPED, 'Unmapped only');
   if ([...fc.options].some((o) => o.value === prev)) fc.value = prev;
-  const mf = $('map-folder');
+  mc.value = store.clients.some((c) => c.id === prevClient) ? prevClient : store.clients.length === 1 ? store.clients[0].id : '';
+  const mf = $('map-folder'), prevFolder = mf.value;
   mf.replaceChildren();
+  placeholder(mf, folders.length ? 'Choose a folder' : 'No folders found yet');
   for (const f of folders) option(mf, f, f);
+  mf.value = folders.includes(prevFolder) ? prevFolder : '';
+  syncMapButton();
   $('pdf').disabled = !snap.pdf;
   $('pdf').title = snap.pdf ? '' : 'PDF export is part of the paid plan';
   say($('plan-note'), snap.months ? `Your plan covers the current month only (CSV). Full history, PDF and rate cards are on the paid plan.` : '');
@@ -63,7 +70,8 @@ async function preview() {
   const p = await api.preview(request());
   if (!p) return;
   say($('basis'), p.basis);
-  $('basis').textContent = p.basis === 'API-equivalent estimate' ? `${p.basis}: you are on a subscription, so this is not what anyone was charged` : p.basis;
+  $('basis').textContent = p.basis === 'API-equivalent estimate' ? `${p.basis}: priced at API list prices, not what anyone was charged` : p.basis;
+  $('basis').title = p.basis === 'API-equivalent estimate' ? 'If you pay per token with an API key, choose API under Preferences, Spend.' : '';
   const sum = $('summary');
   sum.replaceChildren(node('p', `${p.lineCount} line${p.lineCount === 1 ? '' : 's'} · cost ${usd(p.totals.cost)} · billed ${usd(p.totals.billed)}${p.clamped ? ' · range trimmed to the current month' : ''}${p.unpricedTurns ? ` · ${p.unpricedTurns} turn(s) on unpriced models left out` : ''}`));
   for (const b of p.byClient) sum.append(node('p', `${b.name}: cost ${usd(b.cost)}, billed ${usd(b.billed)}`, 'muted'));
@@ -100,8 +108,10 @@ $('map-form').addEventListener('submit', (e) => {
 });
 $('map-pick').addEventListener('click', async () => {
   const p = await api.pickFolder();
-  if (p) { if (!folders.includes(p)) folders.unshift(p); render(); $('map-folder').value = p; }
+  if (p) { if (!folders.includes(p)) folders.unshift(p); render(); $('map-folder').value = p; syncMapButton(); }
 });
+$('map-folder').addEventListener('change', syncMapButton);
+$('map-client').addEventListener('change', syncMapButton);
 $('refresh').addEventListener('click', preview);
 $('f-client').addEventListener('change', preview);
 $('csv').addEventListener('click', () => exportAs('csv'));

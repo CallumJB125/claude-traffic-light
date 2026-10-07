@@ -1,8 +1,5 @@
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--text); font: var(--text-base)/1.5 var(--font); }
-main { max-width: 1100px; margin: auto; padding: 24px; }
-header { display: flex; justify-content: space-between; align-items: start; gap: 16px; }
-h1 { margin: 0; font-size: var(--text-xl); }
 h2 { margin: 0; font-size: var(--text-lg); overflow-wrap: anywhere; }
 p { margin: 4px 0; } .muted, #status { color: var(--muted); }
 button { font: inherit; color: inherit; min-height: 44px; padding: 8px 12px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--panel-2); cursor: pointer; }
@@ -32,4 +29,4 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 .index summary { cursor: pointer; font-weight: 600; }
 .check { display: flex; gap: 8px; align-items: start; margin: 8px 0; }
 [hidden] { display: none !important; }
-@media (max-width: 600px) { main { padding: 14px; } .hit, .index { padding: 12px; } }
+@media (max-width: 600px) { .hit, .index { padding: 12px; } }

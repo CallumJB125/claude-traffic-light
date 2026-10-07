@@ -635,6 +635,7 @@
   .uv-check { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
   .uv-chip { font: inherit; font-size: 12px; color: var(--text); background: var(--panel-2); border: 1px solid var(--line-strong); border-radius: 999px; padding: 3px 10px; cursor: pointer; }
   .uv-note { font-size: 12px; color: var(--muted); line-height: 1.45; margin: 0; max-width: 72ch; }
+  #mix:has(#mix-empty:not([hidden])) .uv-empty { display: none; }
   .uv-empty { font-size: 13px; color: var(--muted); line-height: 1.5; margin: 6px 0; max-width: 60ch; }
   .uv-callouts { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
   .uv-callouts li { font-size: 13px; color: var(--text); padding: 7px 10px; border-left: 3px solid var(--uv-s1); background: var(--panel); border-radius: 0 6px 6px 0; }
@@ -1326,10 +1327,10 @@
         <label for="budget-weekly">$ <input type="number" id="budget-weekly" min="0" step="1" /> a week</label>
         <label for="budget-warn">Warn at <input type="number" id="budget-warn" min="10" max="100" step="5" /> %</label>
         <button type="button" class="btn" id="budget-save">Set limit</button>
-        <span class="budget-state" id="budget-state" role="status" aria-live="polite">0 turns a limit off.</span>
+        <span class="budget-state" id="budget-state" role="status" aria-live="polite">Set a limit to turn on alerts (0 = no limit).</span>
       </div>
       <div class="stats-sub" id="mix-loading">Reading transcripts…</div>
-      <div class="stats-sub" id="mix-empty" hidden>No AI activity in the last 7 days. <button type="button" class="btn ghost uv-cta" id="mix-connect">Connect AI tools</button></div>
+      <div class="stats-sub" id="mix-empty" hidden>No AI activity in the last 7 days. <button type="button" class="btn uv-cta" id="mix-connect">Connect AI tools</button></div>
       <div class="mix-card" id="mix-body" hidden>
         <div class="mix-cols">
           <div>

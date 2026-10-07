@@ -126,6 +126,8 @@ function register(ctx) {
   ipcMain.handle('sync:revoke', wrap(async (id) => client.revoke(String(id ?? ''))));
   ipcMain.handle('sync:new-code', wrap(async () => client.newRecoveryCode()));
   ipcMain.handle('sync:now', wrap(async () => round()));
+  // The page's Sign in and See plans buttons: only these two pages, as phone:upgrade does.
+  ipcMain.handle('sync:open', wrap(async (page) => { ctx.buddy?.()?.open?.(page === 'upgrade' ? 'upgrade' : 'account'); return null; }));
   return { client, round, collect: (lg) => collect(rootDir, lg) };
 }
 

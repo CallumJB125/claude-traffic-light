@@ -56,14 +56,17 @@
     current = s;
     const hub = s.hub && !s.hub.error ? s.hub : null;
     $('upsell').hidden = s.entitled || (s.enabled && hub && hub.mode === 'read_only');
+    // One blocker at a time: the plan first; sign-in only once the plan allows sync.
+    $('status').hidden = !$('upsell').hidden && !s.enabled;
     $('banner').hidden = !(hub && hub.mode === 'read_only');
     $('banner').textContent = hub && hub.mode === 'read_only'
       ? `Your plan has ended, so sync is read-only. Your synced data is deleted from the server on ${new Date(hub.read_only_until).toLocaleDateString()} unless you renew.` : '';
     const on = s.enabled && s.signedIn;
     $('headline').textContent = !s.signedIn ? 'Sign in to sync' : on ? (s.local.hasKeys ? 'On' : 'Waiting for a key') : 'Off';
-    $('detail').textContent = !s.signedIn ? 'Sign in to your team hub (Account) to sync this computer.'
+    $('detail').textContent = !s.signedIn ? 'Sign in to your Plexiform account to sync this computer.'
       : on && hub ? `Last sync ${s.local.lastSync ? new Date(s.local.lastSync).toLocaleString() : 'not yet'} · ${gb(hub.bytes_used || 0)} of ${gb(hub.limits.bytes)} · ${hub.devices.filter((d) => !d.revoked).length} of ${hub.limits.devices} computers`
         : s.hub && s.hub.error ? (s.hub.message || "Couldn't reach your team hub.") : '';
+    $('sign-in').hidden = s.signedIn;
     $('enable').hidden = !s.entitled || !s.signedIn || (on && s.local.hasKeys);
     $('now').hidden = !on || !s.local.hasKeys;
     $('disable').hidden = !s.enabled;
@@ -83,6 +86,8 @@
   async function refresh() { show(await api.state().catch(() => null)); }
 
   if (!api) return;
+  $('sign-in').addEventListener('click', () => api.open('account'));
+  $('see-plans').addEventListener('click', () => api.open('upgrade'));
   $('enable').addEventListener('click', async () => {
     $('note').textContent = 'Turning on…';
     const r = await api.enable().catch(() => null);

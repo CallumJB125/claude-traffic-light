@@ -90,8 +90,12 @@ function allowedRange({ from, to }, { months, now = Date.now() }) {
   return { from: f, to: t, clamped };
 }
 
+// Nothing in a transcript says whether a turn was billed per token, so the
+// invoice says "Actual API usage" only when the user chose "API" under
+// Preferences > Spend. Unset (the default) is labelled an estimate: the same
+// list-price numbers, without claiming anyone was charged them.
 function modeOf(root) {
-  try { return require('../spend.js').normalize(JSON.parse(fs.readFileSync(path.join(root, 'config.json'), 'utf8')).spend).mode; } catch { return 'api'; }
+  try { return JSON.parse(fs.readFileSync(path.join(root, 'config.json'), 'utf8'))?.spend?.mode === 'api' ? 'api' : 'subscription'; } catch { return 'subscription'; }
 }
 
 /** The invoice for a request, shaped by what the entitlements allow. */
@@ -159,4 +163,4 @@ function register(ctx) {
   });
 }
 
-module.exports = { register, normalize, load, save, clientResolver, allowedRange, invoiceFor, norm, FILE };
+module.exports = { register, normalize, load, save, clientResolver, allowedRange, invoiceFor, modeOf, norm, FILE };

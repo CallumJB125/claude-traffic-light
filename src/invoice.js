@@ -94,7 +94,7 @@ function renderHtml(inv, template, { title = 'Client invoice' } = {}) {
   const clients = inv.byClient.map((b) => `<tr><td>${esc(b.name)}</td><td class="n">${b.cost.toFixed(2)}</td><td class="n">${b.billed.toFixed(2)}</td></tr>`).join('\n');
   const estimate = inv.mode === 'subscription';
   const note = estimate
-    ? 'This is an API-equivalent estimate. The work ran on a subscription, which is not billed per token, so the cost column is what the same tokens would cost at list API prices. It is not an amount anyone was charged.'
+    ? 'This is an API-equivalent estimate: the cost column is what these tokens would cost at list API prices. A subscription is not billed per token, so it is not an amount anyone was charged.'
     : 'Cost is the recorded token counts priced at list API rates. Check it against your provider invoice before sending.';
   const extra = inv.unpricedTurns ? ` ${inv.unpricedTurns} turn(s) on a model Plexiform cannot price are left out.` : '';
   const map = { TITLE: esc(title), PERIOD: esc(dayRange(inv)), BASIS: esc(inv.basis), NOTE: esc(note + extra + ' Tax is not included.'), ROWS: rows, CLIENTS: clients, COST: usd(inv.totals.cost), BILLED: usd(inv.totals.billed), GENERATED: esc(new Date(inv.generatedAt).toISOString().slice(0, 10)) };

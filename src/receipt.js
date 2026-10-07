@@ -83,13 +83,15 @@ async function build({ now = Date.now(), turns = [], log = [], burst = null, ful
   const could = couldSaveOf(turns, m.from, m.to);
   const b = await burstSaved(burst, m.days);
   const burstLine = b.available ? `Claude Burst saved ${money(b.savedUsd)} by compaction (Burst's figure, not Plexiform's)` : null;
+  const inMonth = (ms) => ms >= m.from && ms <= m.to;
+  const active = (Array.isArray(turns) ? turns : []).some((t) => t && inMonth(t.ts)) || (Array.isArray(log) ? log : []).some((e) => e && inMonth(e.at));
   if (!full) {
-    const headline = could.high > 0
+    const headline = !active ? 'No activity yet this month' : could.high > 0
       ? `About ${rangeText(could.low, could.high)} of your Opus spend in ${m.label} looked routine enough for Sonnet`
       : `No routine Opus spend found in ${m.label}`;
     return { teaser: true, month: m.label, range: { from: m.from, to: m.to }, headline, source: SOURCES.transcripts, burst: b.available ? { savedUsd: b.savedUsd, source: b.source, line: burstLine } : null };
   }
-  const headline = saved.high > 0
+  const headline = !active && !(saved.high > 0) ? 'No activity yet this month' : saved.high > 0
     ? `Plexiform saved you about ${rangeText(saved.low, saved.high)} in ${m.label}`
     : `Plexiform hasn't had to stop any spend in ${m.label}`;
   return {

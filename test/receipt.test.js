@@ -67,7 +67,10 @@ test('free teaser: the headline and its source only, no breakdown', async () => 
   assert.equal(r.couldSave, undefined);
   assert.equal(r.burst.source, Receipt.SOURCES.burst);
   const none = await Receipt.build({ now: NOW, turns: [], log: [], full: false });
-  assert.match(none.headline, /No routine Opus spend/);
+  assert.equal(none.headline, 'No activity yet this month');
+  const notRoutine = await Receipt.build({ now: NOW, turns: turns.slice(3), log: [], full: false });
+  assert.match(notRoutine.headline, /No routine Opus spend/);
+  assert.equal((await Receipt.build({ now: NOW, turns: [], log: [], full: true })).headline, 'No activity yet this month');
 });
 
 test('nothing stopped this month says so instead of claiming a saving', async () => {

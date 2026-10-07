@@ -2,17 +2,17 @@
 <html lang="en"><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; base-uri 'none'; form-action 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Client billing</title><link rel="stylesheet" href="tokens.css"><link rel="stylesheet" href="clients-local.css"></head>
-<body><main>
-<header><div><h1>Client billing</h1><p>Match your project folders to clients, then export what each client's sessions cost.</p></div></header>
+<title>Client billing</title><link rel="stylesheet" href="tokens.css"><link rel="stylesheet" href="clients-local.css"><link rel="stylesheet" href="page.css"></head>
+<body><main class="page">
+<header class="page-head"><div><h1>Client billing</h1><p>Match your project folders to clients, then export what each client's sessions cost.</p></div></header>
 <p id="status" role="status" aria-live="polite">Loading…</p>
 <section class="panel" aria-labelledby="clients-title">
 <h2 id="clients-title">Clients and folders</h2>
 <form id="client-form" autocomplete="off"><label>New client<input id="client-name" maxlength="80" placeholder="Acme Ltd" required></label><button type="submit">Add client</button></form>
 <div id="clients"></div>
-<form id="map-form" autocomplete="off"><label>Folder<select id="map-folder"></select></label>
-<label>Client<select id="map-client"></select></label>
-<button type="submit">Map folder</button><button id="map-pick" type="button">Choose another folder…</button></form>
+<form id="map-form" autocomplete="off"><label>Folder<select id="map-folder"><option value="" disabled selected>Choose a folder</option></select></label>
+<label>Client<select id="map-client"><option value="" disabled selected>Add a client first</option></select></label>
+<button id="map-submit" type="submit" disabled>Map folder</button><button id="map-pick" type="button">Choose another folder…</button></form>
 <p class="muted">A folder includes everything inside it. Sessions in a folder you have not mapped are listed as Unmapped.</p>
 </section>
 <section class="panel" aria-labelledby="range-title">

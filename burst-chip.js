@@ -17,6 +17,7 @@
   chip.style.cssText = widget
     ? 'position:fixed;left:50%;bottom:2px;transform:translateX(-50%);font:600 9px system-ui,sans-serif;padding:1px 6px;border-radius:8px;background:rgba(20,20,24,.82);color:#eee;white-space:nowrap;pointer-events:none;z-index:5'
     : 'display:inline-block;margin-top:4px;font:600 12px system-ui,sans-serif;padding:2px 9px;border-radius:10px;background:rgba(128,128,140,.18)';
+  chip.style.display = 'none';
   const dot = document.createElement('span');
   dot.style.cssText = 'display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px;vertical-align:baseline';
   const text = document.createElement('span');
@@ -33,7 +34,9 @@
     try {
       const r = await api.burstChip();
       const c = r && r.chip;
-      chip.hidden = !c;
+      // The inline display would beat [hidden], so the style is toggled too.
+      chip.hidden = !c || !c.label;
+      chip.style.display = chip.hidden ? 'none' : widget ? '' : 'inline-block';
       if (c) { text.textContent = c.label; chip.title = c.tag ? `Claude Burst \u00b7 ${c.tag}` : 'Claude Burst'; dot.style.background = COLORS[c.tone] || COLORS.grey; }
       next = r && r.nextPollMs;
       if (!next) { stopped = true; return; }

@@ -5,11 +5,11 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self'" />
 <title>Sync</title>
 <link rel="stylesheet" href="tokens.css" />
+<link rel="stylesheet" href="page.css" />
 <style>
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: var(--text-base)/1.45 var(--font); -webkit-font-smoothing: antialiased; }
-  main { max-width: 560px; margin: 0 auto; padding: var(--space-6) var(--space-5); display: flex; flex-direction: column; gap: var(--space-4); }
-  h1 { font-size: var(--text-xl); margin: 0; font-weight: 600; }
+  main { display: flex; flex-direction: column; gap: var(--space-4); }
   h2 { font-size: var(--text-xs); margin: 0 0 var(--space-2); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--accent); }
   .muted { color: var(--muted); font-size: var(--text-sm); }
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-3); }
@@ -33,17 +33,19 @@
 </style>
 </head>
 <body>
-  <main>
-    <h1>Sync</h1>
+  <main class="page">
+    <header class="page-head"><div><h1>Sync <span class="badge-plus">Plus</span></h1><p>Keep your search history, checkpoint summaries and handovers on all your computers, end-to-end encrypted.</p></div></header>
     <div class="msg" id="banner" role="alert" hidden></div>
     <section class="card" id="upsell" hidden>
       <div class="plan">Sync needs Plus</div>
-      <div class="muted">Keep your search history, checkpoint summaries and handovers on all your computers, end-to-end encrypted. Up to 3 computers and 5 GB. Get Plus on the Plan &amp; billing page.</div>
+      <div class="muted">Sync comes with Plexiform Plus: up to 3 computers and 5 GB.</div>
+      <div class="buttons"><button class="primary" id="see-plans">See plans</button></div>
     </section>
     <section class="card" id="status" aria-live="polite">
       <div class="plan" id="headline">Off</div>
       <div class="muted" id="detail"></div>
       <div class="buttons">
+        <button class="primary" id="sign-in" hidden>Sign in</button>
         <button class="primary" id="enable" hidden>Turn on sync</button>
         <button id="now" hidden>Sync now</button>
         <button id="disable" hidden>Turn off on this computer</button>
@@ -68,7 +70,7 @@
       <ul class="devices" id="devices"></ul>
       <div class="buttons"><button id="new-code">Make a new recovery code</button></div>
     </section>
-    <p class="muted">Only ciphertext leaves this computer: your team hub stores encrypted data, its size and when it was sent. Raw AI transcripts are never synced. Removing a computer changes the key, so it can't read anything synced afterwards.</p>
+    <p class="muted">Only ciphertext leaves this computer: the sync server stores encrypted data, its size and when it was sent. Raw AI transcripts are never synced. Removing a computer changes the key, so it can't read anything synced afterwards.</p>
   </main>
   <script src="sync.js"></script>
 </body>

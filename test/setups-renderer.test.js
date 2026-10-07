@@ -40,7 +40,14 @@ for(const operation of ['read','draft','edit','approve','publish','activity','ba
   assert.equal(f.review().textContent,'');assert.equal(f.dom.window.document.getElementById('teams').textContent,'');assert.equal(f.status(),'Your account changed. Refresh to load current team access.');assert.equal(f.stateCalls(),1);
 });
 test('native identity notification retires pending state success',async t=>{
-  let release;const f=fixture(t,{state:()=>new Promise(r=>release=r)});f.changed();release(state);await tick();assert.equal(f.dom.window.document.getElementById('teams').textContent,'');assert.equal(f.status(),'Your account changed. Refresh to load current team access.');
+  const releases=[];const f=fixture(t,{state:()=>new Promise(r=>releases.push(r))});f.changed();assert.equal(releases.length,2,'nothing was on screen, so the page reloads its access');
+  releases[0]({...state,teams:[{...state.teams[0],name:'Retired team'}]});await tick();assert.equal(f.dom.window.document.getElementById('teams').textContent,'');assert.equal(f.status(),'Loading current team access…');
+  releases[1](state);await tick();const text=f.dom.window.document.getElementById('teams').textContent;assert.ok(text.includes('Synthetic team'));assert.ok(!text.includes('Retired team'));
+});
+test('a fresh profile with no account shows no account-changed message and no empty box',async t=>{
+  const f=fixture(t,{state:async()=>({status:'none',teams:[],sources:[]})});await tick();f.changed();await tick();
+  assert.equal(f.status(),'Sign in and join a team to share or review setups.');assert.equal(f.review().childElementCount,0);
+  assert.match(fs.readFileSync(path.join(__dirname,'../setups.css'),'utf8'),/section:empty\{display:none\}/);
 });
 test('later refresh wins over older state replies without resurrecting old handles',async t=>{
   const releases=[];const f=fixture(t,{state:()=>new Promise(r=>releases.push(r))});f.dom.window.document.getElementById('refresh').click();assert.equal(releases.length,2);

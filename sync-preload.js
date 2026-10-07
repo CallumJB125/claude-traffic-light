@@ -10,4 +10,5 @@ contextBridge.exposeInMainWorld('sync', {
   revoke: (id) => ipcRenderer.invoke('sync:revoke', String(id ?? '')),
   newCode: () => ipcRenderer.invoke('sync:new-code'),
   now: () => ipcRenderer.invoke('sync:now'),
+  open: (page) => ipcRenderer.invoke('sync:open', page === 'upgrade' ? 'upgrade' : 'account'),
 });

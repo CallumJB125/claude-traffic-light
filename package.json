@@ -84,6 +84,7 @@
       "characters/**/*",
       "rig.css",
       "tokens.css",
+      "page.css",
       "motion.js",
       "rules.js",
       "brand.js",
