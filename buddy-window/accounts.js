@@ -66,6 +66,10 @@ const ROUTES = {
   setupsBaseline: ['PUT','/api/teams/:team/setup-baseline'],
   setupsReceipt: ['POST','/api/setup-profiles/:profile/borrow-receipts'],
   captureWork: ['POST', '/api/boards/:board/work-capture'],
+  repos: ['GET', '/api/repos'],
+  createRepo: ['POST', '/api/repos'],
+  addBoardRepo: ['POST', '/api/boards/:board/repos'],
+  salvageHandover: ['POST', '/api/cards/:card/handover/salvage'],
 };
 
 const ROLES = ['owner', 'admin', 'member', 'viewer'];
@@ -426,6 +430,11 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
       return call(name,{params:{team,profile,version},body:ROUTES[name][0]==='GET'?undefined:body,accountOwner:owner,memberOwner});
     },
     captureWork: (team, board, body) => call('captureWork', { params: { team, board }, body }),
+    // Linking a repo to a board (owners and admins; the hub answers 403 otherwise) and the opt-in handover share.
+    listRepos: (team) => call('repos', { params: { team } }),
+    createRepo: (team, url) => call('createRepo', { params: { team }, body: { request_id: crypto.randomUUID(), url } }),
+    addBoardRepo: (team, board, repoId) => call('addBoardRepo', { params: { team, board }, body: { repo_id: repoId } }),
+    salvageHandover: (team, card, body) => call('salvageHandover', { params: { team, card }, body }),
     // Main-only board broker: fixed routes and team header; never an arbitrary
     // URL or bearer credential supplied by an MCP client.
     nativeBoard(operation, params, body) {

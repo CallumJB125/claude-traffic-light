@@ -242,6 +242,16 @@ function createHubSupervisor(opts) {
       const value = await result.json().catch(() => null);
       return result.ok ? { ok: true, ...value } : { ok: false };
     },
+    // Main-only: the few fixed personal-board routes Sessions needs to link a repo and find a card.
+    // The path is checked against a closed list; a renderer never names one.
+    async localRequest(method, pathname, body) {
+      if (mode !== 'local' || disposed || !['GET', 'POST'].includes(method) || !/^\/api\/(?:me|repos|boards\/[A-Za-z0-9_.:-]{1,100}(?:\/repos)?)$/.test(pathname)) return { ok: false };
+      const current = await this.ensure();
+      const headers = { Accept: 'application/json', Cookie: `board_local=${current.localSecret}`, Origin: current.url, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) };
+      const result = await fetchImpl(`${current.url}${pathname}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(5000), redirect: 'manual' }); // privacy-flow: local-board-hub
+      const value = await result.json().catch(() => null);
+      return info === current && !disposed ? { ok: result.ok, status: result.status, ...(value && typeof value === 'object' ? value : {}) } : { ok: false };
+    },
     ensure() {
       if (disposed) return Promise.reject(new Error('the app is quitting'));
       stopping = false;
