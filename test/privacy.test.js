@@ -256,9 +256,14 @@ test('the website (site/) stays out of the app package, so its fetches are not a
   for (const f of ['site/src/assets/site.js', 'site/build.js', 'site/functions/api/waitlist.js']) assert.ok(!packaged(pkg, f), `${f} is being packaged: tag its network lines with privacy-flow and document them in PRIVACY.md`);
   assert.ok(packaged({ build: { files: ['**/*'] } }, 'site/src/assets/site.js'), 'self-check: a catch-all glob covers site/');
 });
-test('the phone relay (remote/) stays out of the app package until it is documented', () => {
+// Phone approvals (W2-B, src/remote-approvals-main.js) ship the security core:
+// remote/src is packaged, so the tripwire above scans it like src/. Its tests,
+// threat model and anything else under remote/ stay out.
+test('only the phone security core (remote/src) is packaged from remote/, and so it is scanned', () => {
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
-  for (const f of ['remote/src/relay.js', 'remote/package.json', 'remote']) assert.ok(!packaged(pkg, f), `${f} is being packaged: remove remote from SKIP_DIRS and document its flows`);
+  for (const f of ['remote/src/approvals.js', 'remote/src/node/file-store.js', 'remote/package.json']) assert.ok(packaged(pkg, f), `${f} must ship with src/remote-approvals-main.js`);
+  for (const f of ['remote/test/helpers.js', 'remote/THREAT_MODEL.md', 'remote']) assert.ok(!packaged(pkg, f), `${f} is being packaged`);
+  assert.ok(files.some((f) => rel(f) === 'remote/src/approvals.js'), 'the tripwire scans the packaged security core');
   assert.ok(packaged({ build: { files: ['**/*'] } }, 'remote/src/relay.js'), 'self-check: a catch-all glob covers remote/');
   assert.ok(packaged({ build: { mac: { extraResources: [{ from: 'remote', to: 'r' }] } } }, 'remote/src/relay.js'), 'self-check: per-OS extraResources');
   assert.ok(!packaged({ build: { files: ['**/*', '!remote/**'] } }, 'remote/src/relay.js'), 'self-check: negation');

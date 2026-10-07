@@ -5,7 +5,9 @@
 // Contract for a package: its module exports register(ctx), where ctx is
 //   {app, ipcMain, rootDir, entitlements, buddy: () => buddyWin|null,
 //    fromPage: (e, pageId) => bool, onQuit: (fn) => void, log: (msg) => void,
-//    setups: the team Setups service (main-only readForPlan)}
+//    setups: the team Setups service (main-only readForPlan),
+//    keyFor, requestsDir, interactionHost: () => host|null,
+//    setInteractionHostExtras: (fn) => void (phone approvals: {e2e, extra} for the remote host)}
 // register gates its own work with ctx.entitlements.has(feature).
 'use strict';
 
@@ -20,6 +22,7 @@ const PACKAGES = [
   ['client-billing', () => require.resolve('./clients'), () => require('./clients')],
   ['setups-personal', () => require.resolve('./setups-personal'), () => require('./setups-personal')],
   ['entitlement-refresh', () => require.resolve('./entitlement-refresh'), () => require('./entitlement-refresh')],
+  ['phone-approvals', () => require.resolve('./remote-approvals-main'), () => require('./remote-approvals-main')],
 ];
 
 /** Calls every present package's register(ctx). → [{name, status:'absent'|'ok'|'skipped'|'failed'}]. Never throws. */

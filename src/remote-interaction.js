@@ -57,7 +57,16 @@
 // (the default once e2e is given) a plain own-device call is refused: a hub
 // cannot read sessions by asking in plaintext. Teammate (shared) calls stay
 // plain: they are not paired with this computer (see the threat model).
-// Without `e2e` nothing changes (plain relay, as before).
+// Without `e2e` nothing changes (plain relay, as before). `e2e` may also be a
+// function returning that config or null (W2-B: the desktop identity loads
+// after the host is built, and phone approvals switch `required` on or off);
+// it is read on every frame.
+//
+// Extra ops (W2-B, src/remote-approvals-main.js): `extra.ops` are served only
+// sealed, from a paired device, through extra.run(op, args, {dev, run}) where
+// run(op, args) is this host's own session ops (for 'tasks.start');
+// `extra.plainOps` (pairing: protected by the QR secret and signatures, see
+// remote/src/pairing.js) are served plain, from own devices only.
 //
 // Nothing here logs message text, responses or ids beyond the op name.
 const crypto = require('node:crypto');
@@ -97,10 +106,24 @@ const E2E_OF = new Map([[REFUSED.invalid, 'malformed'], [REFUSED.forbidden, 'mal
 // session (Overview) that may be shared; this host's own sessions always may.
 // e2e: {did, privateKey, peer(dev) → ECDH public (base64url) | null, required = true}
 // (see createDesktopChannel in src/e2e/relay-envelope.js).
-function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent = (b) => b === null, now, log = () => {}, retry = {}, random = Math.random, sharedTarget = () => null, e2e = null }) {
+function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent = (b) => b === null, now, log = () => {}, retry = {}, random = Math.random, sharedTarget = () => null, e2e = null, extra = null }) {
   if (typeof userId !== 'string' || !userId) throw new Error('a remote host needs the signed-in user id');
-  const channel = e2e ? Envelope.createDesktopChannel({ did: e2e.did, privateKey: e2e.privateKey, peer: e2e.peer, now: now ?? Date.now }) : null;
-  const e2eRequired = !!e2e && e2e.required !== false;
+  const e2eConfig = () => { try { return (typeof e2e === 'function' ? e2e() : e2e) || null; } catch { return null; } };
+  let channel = null, channelFor = null;
+  // One channel per desktop identity: sessions survive config reads, not an identity change.
+  const currentChannel = () => {
+    const cfg = e2eConfig();
+    if (!cfg) return null;
+    if (channelFor !== cfg.did || !channel) {
+      channel?.close();
+      channel = Envelope.createDesktopChannel({ did: cfg.did, privateKey: cfg.privateKey, peer: cfg.peer, now: now ?? Date.now });
+      channelFor = cfg.did;
+    }
+    return channel;
+  };
+  const e2eRequired = () => { const cfg = e2eConfig(); return !!cfg && cfg.required !== false; };
+  const extraOps = Array.isArray(extra?.ops) ? extra.ops : [];
+  const plainOps = Array.isArray(extra?.plainOps) ? extra.plainOps : [];
   const actor = `account:${userId}`;
   const versions = new Map(); // session -> change counter
   const watchers = new Set();
@@ -364,14 +387,16 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
   async function handlePlain(frame, sealed) {
     if (!closed(frame, ['type', 'id', 'rid', 'user', 'from', 'op', 'args', 'enc', 'share']) || frame.type !== 'relay.request'
       || typeof frame.id !== 'string' || !UUID.test(frame.id) || typeof frame.rid !== 'string' || !UUID.test(frame.rid)
-      || typeof frame.from !== 'string' || !frame.from || frame.from.length > 100 || !(OPS.includes(frame.op) || (sealed && frame.op === 'hello'))
+      || typeof frame.from !== 'string' || !frame.from || frame.from.length > 100
+      || !(OPS.includes(frame.op) || (sealed && (frame.op === 'hello' || extraOps.includes(frame.op))) || (!sealed && plainOps.includes(frame.op)))
       || (sealed ? frame.args !== undefined : !object(frame.args))) return REFUSED.invalid;
     if (frame.user !== userId) return REFUSED.forbidden;
     const shared = frame.share !== undefined;
     const by = shared ? frame.share?.user : null;
-    if (shared && (typeof by !== 'string' || sealed)) return REFUSED.invalid;
+    if (shared && (typeof by !== 'string' || sealed || !OPS.includes(frame.op))) return REFUSED.invalid;
+    const channel = sealed ? currentChannel() : null;
     // A plain own-device call when end-to-end is required: refused, whatever the hub says.
-    if (!shared && !sealed && e2eRequired) return e2eRefusal('required');
+    if (!shared && !sealed && !plainOps.includes(frame.op) && e2eRequired()) return e2eRefusal('required');
     if (sealed && !channel) return e2eRefusal('unsupported');
     if (handling >= MAX_HANDLING || (shared && (sharedHandling >= MAX_SHARED_HANDLING || (byTeammate.get(by) ?? 0) >= MAX_PER_TEAMMATE))) return REFUSED.busy;
     if (!once(`id:${frame.id}`) || !once(`rid:${frame.from}:${frame.rid}`)) return REFUSED.replayed;
@@ -386,7 +411,12 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
         if (!object(opened.args)) return await sealedAnswer(opened, REFUSED.invalid);
       }
       for (const x of hub.list(actor)) remember(x.session);
-      try { result = await (shared ? runShared(frame) : run(frame.op, sealed ? opened.args : frame.args)); } catch { result = REFUSED.unavailable; }
+      const isExtra = extraOps.includes(frame.op) || plainOps.includes(frame.op);
+      try {
+        result = await (shared ? runShared(frame)
+          : isExtra ? extra.run(frame.op, sealed ? opened.args : frame.args, { dev: sealed ? opened.dev : null, run: (op, args) => run(op, args) })
+            : run(frame.op, sealed ? opened.args : frame.args));
+      } catch { result = REFUSED.unavailable; }
     } finally {
       handling--;
       if (shared) { sharedHandling--; const n = byTeammate.get(by) - 1; if (n) byTeammate.set(by, n); else byTeammate.delete(by); }
@@ -404,7 +434,7 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
     return { enc };
   }
 
-  let state = 'off', notice = null, resume = null, retryTimer = null, idleTimer = null, attempts = 0, conflicts = 0, running = null;
+  let state = 'off', notice = null, hostDevice = null, resume = null, retryTimer = null, idleTimer = null, attempts = 0, conflicts = 0, running = null;
   // Told when hosting connects or stops (session messaging follows it).
   const stateListeners = new Set();
   function tell() { for (const fn of [...stateListeners]) { try { fn(state); } catch (e) { log(`[remote-interaction] ${e.message}`); } } }
@@ -444,7 +474,7 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
         try { if (isBinary) throw new Error('binary'); f = JSON.parse(String(data)); } catch { ws.close(1008, 'bad frame'); return; }
         if (!welcomed) {
           if (!closed(f, ['type', 'user', 'device', 'resume']) || f.type !== 'relay.welcome' || f.user !== userId || typeof f.resume !== 'string') { ws.close(1008, 'wrong account'); fail('The hub named a different account.', { wrongAccount: true }); return; }
-          welcomed = true; resume = f.resume; resolve({ device: f.device }); return;
+          welcomed = true; resume = f.resume; hostDevice = typeof f.device === 'string' ? f.device : null; resolve({ device: f.device }); return;
         }
         if (closed(f, ['type', 'kind']) && f.type === 'relay.notice') {
           if (f.kind === 'replace-refused') { notice = 'Another connection tried to use this computer\'s sign-in and was refused.'; log('[remote-interaction] a second connection for this device was refused'); }
@@ -532,10 +562,11 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
     return resetRole({ baseUrl, token, fetch, timeoutMs });
   }
 
-  function status() { return { state, notice, connected: socket?.readyState === 1 }; }
+  // device: this computer's device id on the hub (from its welcome), for the phone pairing link.
+  function status() { return { state, notice, connected: socket?.readyState === 1, device: hostDevice }; }
 
   function disconnect() { const ws = socket; socket = null; try { ws?.close(1000, 'bye'); } catch { /* gone */ } }
-  function close() { stopRunning('off'); disconnect(); for (const w of [...watchers]) w(); channel?.close(); hub.stopAll(); }
+  function close() { stopRunning('off'); disconnect(); for (const w of [...watchers]) w(); channel?.close(); channel = null; hub.stopAll(); }
 
   // `hub` is a main-only seam (tests and proof logs), never exposed remotely.
   const onState = (fn) => { stateListeners.add(fn); return () => stateListeners.delete(fn); };

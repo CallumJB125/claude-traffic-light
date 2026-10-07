@@ -8,7 +8,7 @@ export { RemoteApprovals, makeOwnerPolicy, ownerOnly, GENESIS_HASH } from './app
 export { DEFAULT_RULES, DESK_MESSAGE, MAX_REMOTE_INPUT_CHARS, compileRules, evaluateDenyList, gitForcePushViolation, shellFinding } from './denylist.js';
 export { DEFAULT_BASH_ALLOW, TEST_COMMAND_ALLOW, allowListReason, remoteVerdict } from './allowlist.js';
 export { tokenize, parseShell } from './shell.js';
-export { verifyAssertion, webauthnChallengeFor, derToRaw } from './webauthn.js';
+export { verifyAssertion, webauthnChallengeFor, derToRaw, passkeyRegistrationChallenge, verifyRegistration, passkeyFactor } from './webauthn.js';
 export { ReplayCache } from './replay.js';
 export { MemoryPendingStore } from './pending.js';
 export { InMemoryHub, createDesktopHandler, sendDecision } from './relay.js';

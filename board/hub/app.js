@@ -31,6 +31,7 @@ import { OAuth } from './identity/oauth.js';
 import { WebOAuth } from './identity/oauth-web.js';
 import { Enrolments } from './identity/enrolments.js';
 import { Billing } from './billing/entitlements.js';
+import { PushService } from './push.js';
 import { oauthProviders } from './config.js';
 import { RemoteAuthority } from './remote/authority.js';
 import { StorageWatch } from './storage-watch.js';
@@ -75,6 +76,8 @@ function buildApp(config, { db, clock, log, github, fetchImpl, timers, mailer })
   hub.oauthWeb = hub.oauth ? new WebOAuth(hub) : null;
   hub.enrolments = hub.accounts ? new Enrolments(hub, { accounts: hub.accounts }) : null;
   hub.billing = hub.accounts ? new Billing(hub, { fetchImpl }) : null;
+  // Phone push (push.js): content-free pings; off without the operator's VAPID keys.
+  hub.push = hub.accounts ? new PushService(hub, { fetchImpl, ...(config.pushHosts ? { hosts: config.pushHosts } : {}), allowHttp: config.pushAllowHttp === true }) : null;
   hub.remoteAuthority = hub.accounts ? new RemoteAuthority(hub) : null;
   // Deleting an account or a team needs a step-up: an email code (a mailer)
   // or an OAuth re-authentication (a configured provider). Without either,

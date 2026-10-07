@@ -1585,6 +1585,8 @@ ipcMain.handle('compaction-stats',e=>settingsOnly(e)?{...CompactionLedger.summar
 // never written or logged) and its own interaction hub, separate from
 // Overview's. Signing out, another account, unticking or quitting ends it and
 // its remote sessions (src/interaction-host-sync.js).
+// Phone approvals (src/remote-approvals-main.js, via paid-wiring) add {e2e, extra} here; null until registered.
+let interactionHostExtras=null;
 const RemoteInteraction=require('./src/remote-interaction');
 const SessionMessaging=require('./src/session-messaging');
 const hostSync=require('./src/interaction-host-sync').createInteractionHostSync({
@@ -1598,6 +1600,7 @@ const hostSync=require('./src/interaction-host-sync').createInteractionHostSync(
     log:m=>console.log(m),
     // An Overview session is reachable by teammates only while its owner shares it.
     sharedTarget:session=>InteractionMain.sharedTarget(session),
+    ...(interactionHostExtras?.()??{}),
   }),
   connect:(host,o)=>host.enable({...o,WebSocket:require('ws')}), // privacy-flow: remote-interaction
   resetRole:RemoteInteraction.resetRole,
@@ -1683,7 +1686,7 @@ SetupsLocal.register(ipcMain);
 onQuit(app,()=>SetupsLocal.close());
 
 // Paid-tier packages (src/paid-wiring.js): each registers itself if present; nothing here may block startup.
-try { require('./src/paid-wiring.js').registerAll({ app, ipcMain, rootDir: ROOT_DIR, buddy: () => buddyWin, fromPage: fromUtilityPage, setups: SetupsNative, onQuit: (fn) => onQuit(app, fn), log: (m) => console.warn(m), spend: () => spendSnapshot(loadConfig()), runawayStoppers: () => runawayStoppers, usageTurns: () => getUsageTurns(), ownedSessions: { list: () => InteractionMain.listOwned(), target: (s) => InteractionMain.sharedTarget(s) } }); } catch (e) { console.warn('[paid] wiring failed:', e?.message ?? e); }
+try { require('./src/paid-wiring.js').registerAll({ app, ipcMain, rootDir: ROOT_DIR, buddy: () => buddyWin, fromPage: fromUtilityPage, setups: SetupsNative, onQuit: (fn) => onQuit(app, fn), log: (m) => console.warn(m), spend: () => spendSnapshot(loadConfig()), runawayStoppers: () => runawayStoppers, usageTurns: () => getUsageTurns(), ownedSessions: { list: () => InteractionMain.listOwned(), target: (s) => InteractionMain.sharedTarget(s) }, keyFor, requestsDir: REQUESTS_DIR, interactionHost: () => hostSync.host(), setInteractionHostExtras: (fn) => { interactionHostExtras = fn; } }); } catch (e) { console.warn('[paid] wiring failed:', e?.message ?? e); }
 
 // Settings → Account & team, and the widget's one-time Team hint. Each
 // handler checks its sender; the page to open is never taken from the renderer.

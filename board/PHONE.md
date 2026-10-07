@@ -95,8 +95,18 @@ See `docs/relay-e2e-threat-model.md`. A `phone-web` sign-in (or one asking
 `hub/http.js` accepts it only on the relay call/list routes, the shared-call
 routes and sign-out (403 elsewhere, no WebSocket). Calls to a computer the
 phone is paired with go as sealed `enc` envelopes the hub cannot read; the
-pairing screen that creates those records is W2-B, so until then calls stay
-plain. Open question 1 below is answered by this.
+pairing screen that creates those records is W2-B (below). Open question 1
+below is answered by this.
+
+## Phone approvals, push and tasks (W2-B, built — REQUIRES INDEPENDENT SECURITY REVIEW)
+
+See `docs/PHONE-RUNBOOK.md`. Plus only. Settings → Phone on the computer
+shows a QR / link; the phone pairs (typed code), adds a platform passkey, and
+can then answer that computer's permission requests (each answer signed,
+passkey-confirmed, ≤ 120 s, bound to the request and its input hash; "desk
+only" requests can only be denied) and start a task by text or voice. All of
+it travels sealed through `POST /api/approvals/v1/hosts/:id/call`; the hub
+also sends an empty Web Push when a computer pings it.
 
 ## Follow-up: host proof-of-possession (designed, not built)
 

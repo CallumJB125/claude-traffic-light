@@ -3,6 +3,8 @@ import {
   InMemoryHub, createDesktopHandler, RemoteApprovals, MemoryPendingStore,
 } from '../src/index.js';
 
+import { b64url, utf8, concatBytes, fromB64url as fromB64urlLocal } from '../src/encoding.js';
+
 export const HUB_URL = 'https://hub.example.ts.net';
 
 // A fake clock the tests can move.
@@ -52,3 +54,47 @@ export function bashRequest(overrides = {}) {
     ...overrides,
   };
 }
+
+const sha256 = async (b) => new Uint8Array(await crypto.subtle.digest('SHA-256', b));
+
+function rawToDer(raw) {
+  const int = (b) => {
+    let i = 0;
+    while (i < b.length - 1 && b[i] === 0) i++;
+    let v = b.slice(i);
+    if (v[0] & 0x80) v = concatBytes(new Uint8Array([0]), v);
+    return concatBytes(new Uint8Array([0x02, v.length]), v);
+  };
+  const body = concatBytes(int(raw.slice(0, 32)), int(raw.slice(32)));
+  return concatBytes(new Uint8Array([0x30, body.length]), body);
+}
+
+// A virtual platform authenticator (W2-B tests): one ES256 credential, UP+UV,
+// counter 0 (like Apple passkeys) unless told otherwise.
+export async function virtualAuthenticator({ rpId, origin, flags = 0x05 }) {
+  const kp = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+  const spki = new Uint8Array(await crypto.subtle.exportKey('spki', kp.publicKey));
+  const credentialId = b64url(crypto.getRandomValues(new Uint8Array(32)));
+  const authData = async (f, count) => concatBytes(await sha256(utf8(rpId)), new Uint8Array([f, 0, 0, 0, count]));
+  return {
+    credentialId,
+    async register(challenge, o = {}) {
+      const cd = utf8(JSON.stringify({ type: o.type ?? 'webauthn.create', challenge: b64url(challenge), origin: o.origin ?? origin }));
+      // Attested credential data: aaguid ‖ id length ‖ id ‖ COSE EC2 key (canonical CBOR).
+      const jwk = await crypto.subtle.exportKey('jwk', kp.publicKey);
+      const id = fromB64urlLocal(o.credentialId ?? credentialId);
+      const x = fromB64urlLocal(jwk.x), y = fromB64urlLocal(jwk.y);
+      const cose = concatBytes(new Uint8Array([0xa5, 0x01, 0x02, 0x03, 0x26, 0x20, 0x01, 0x21, 0x58, 0x20]), x, new Uint8Array([0x22, 0x58, 0x20]), y);
+      const att = o.noAttested ? new Uint8Array(0) : concatBytes(new Uint8Array(16), new Uint8Array([id.length >> 8, id.length & 255]), id, cose);
+      const ad = concatBytes(await authData((o.flags ?? flags) | (o.noAttested ? 0 : 0x40), 0), att);
+      return { credentialId, publicKey: b64url(o.spki ?? spki), algorithm: -7, authenticatorData: b64url(ad), clientDataJSON: b64url(cd) };
+    },
+    async assert(challenge, o = {}) {
+      const cd = utf8(JSON.stringify({ type: 'webauthn.get', challenge: b64url(challenge), origin: o.origin ?? origin }));
+      const ad = await authData(o.flags ?? flags, o.count ?? 0);
+      const raw = new Uint8Array(await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, kp.privateKey, concatBytes(ad, await sha256(cd))));
+      return { authenticatorData: b64url(ad), clientDataJSON: b64url(cd), signature: b64url(rawToDer(raw)) };
+    },
+  };
+}
+

@@ -258,7 +258,7 @@ const E2E_TEXT = {
 };
 export const E2E_CODES = Object.freeze(Object.keys(E2E_TEXT));
 // Ops whose effect may already have happened: never repeated automatically.
-const MUTATING = new Set(['launch', 'send', 'interrupt', 'close']);
+const MUTATING = new Set(['launch', 'send', 'interrupt', 'close', 'approvals.decide', 'approvals.passkey', 'tasks.start']);
 const e2eFailure = (code) => ({ status: 502, body: { error: { code: 'E2E', reason: code, message: E2E_TEXT[code] ?? E2E_TEXT.malformed } } });
 
 /**

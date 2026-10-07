@@ -88,7 +88,10 @@ test('every current page and recursively imported production module loads with s
         }
       }
     }
-    for (const file of readdirSync(join(WEB, 'js'))) assert.equal((await get(h.base, `/web/js/${file}`)).status, 200, file);
+    for (const file of readdirSync(join(WEB, 'js')).filter((f) => f.endsWith('.js'))) assert.equal((await get(h.base, `/web/js/${file}`)).status, 200, file);
+    // The phone's copies of the approval security core (W2-B): served one level down, nothing else from there.
+    for (const file of readdirSync(join(WEB, 'js', 'remote'))) assert.equal((await get(h.base, `/web/js/remote/${file}`)).status, 200, `remote/${file}`);
+    for (const path of ['/web/js/remote/', '/web/js/remote/approvals.js', '/web/js/remote/Keys.js', '/web/js/remote/../app.js']) assert.equal((await get(h.base, path)).status, 404, path);
     // Exactly the pure closed parsers and their transitive path/scope helper,
     // never the private server proof/authority implementation.
     for (const file of ['workflow-execution','workflow-execution-controls','packet-text','scope']) {

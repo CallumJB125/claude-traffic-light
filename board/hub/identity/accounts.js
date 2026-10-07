@@ -632,6 +632,7 @@ export class Accounts {
     if (!d) throw new HubError('NOT_FOUND', 'device not found');
     this.hub.txn(() => {
       this.db.run('UPDATE user_devices SET revoked_at = ?, token_hash = NULL, revoke_reason = ? WHERE id = ?', this.now(), reason, id);
+      this.db.run('DELETE FROM push_subscriptions WHERE device_id = ?', id);
       this.hub.enrolments?.revokeForUserDevice(id, reason);
       this.audit(reason === 'signout' ? 'auth.signout' : 'device.revoke', { user: ident.user.id, target: id, detail: { kind: 'device' }, ip });
       this.hub.later(() => this.hub.closeCredSockets({ kind: 'device', id }, reason === 'signout' ? 'signed out' : 'device revoked'));
@@ -727,6 +728,7 @@ export class Accounts {
       this.db.run(`UPDATE user_devices SET revoked_at = COALESCE(revoked_at, ?), token_hash = NULL, revoke_reason = COALESCE(revoke_reason, 'account_deleted'),
         name = 'Deleted device', platform = NULL, last_ip_prefix = NULL WHERE user_id = ?`, now, user.id);
       this.db.run('DELETE FROM sessions WHERE user_id = ?', user.id);
+      this.db.run('DELETE FROM push_subscriptions WHERE user_id = ?', user.id);
       this.db.run('UPDATE interaction_shares SET revoked_at = ? WHERE owner_user_id = ? AND revoked_at IS NULL', now, user.id);
       // Messages they sent or received (text and replies) and their sessions' targets go now (MESSAGING.md §5).
       this.db.run('DELETE FROM msg_messages WHERE source_user_id = ? OR dest_user_id = ?', user.id, user.id);

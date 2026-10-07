@@ -78,6 +78,8 @@ function hosts(st, now) {
     noticeBar(st.notice),
     freshness(st.hosts.loadedAt, now, st.hosts.error),
     body,
+    // Phone approvals and tasks (phone-approvals.js): pairing, passkey, waiting requests.
+    btn('open-approvals', 'Approvals, pairing and new tasks', { kind: 'small' }),
     sharedWithMe(st));
 }
 
