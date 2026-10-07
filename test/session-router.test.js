@@ -15,17 +15,16 @@ test('Router: short questions go to the free local model and say why', () => {
 test('Router: code/reasoning questions skip free and pick the cheap tier; big coding tasks need standard', () => {
   assert.equal(suggest('explain this regex: ^a+$', all).provider, 'claude');
   assert.equal(suggest('x'.repeat(600), all).provider, 'claude');
-  assert.equal(suggest('Refactor the auth module across the codebase', all).provider, 'claude', 'Claude Code handles big coding tasks, so it is not rated below them');
-  assert.equal(suggest('y'.repeat(1600), all).provider, 'claude');
-  assert.equal(DEFAULT_TABLE.claude, 'standard');
+  assert.equal(suggest('Refactor the auth module across the codebase', all).provider, 'codex');
+  assert.equal(suggest('y'.repeat(1600), all).provider, 'codex');
   assert.equal(suggest('Refactor the auth module', all).cheaper, false, 'nothing cheaper was capable');
 });
 
 test('Router: unavailable providers are never suggested; with nothing capable it picks the most capable available', () => {
   assert.equal(suggest('hi', [P('gemini', 'Gemini', false)]), null);
   assert.equal(suggest('hi', []), null); assert.equal(suggest('hi', null), null);
-  const s = suggest('debug this failing test', [P('local-x-1', 'Tiny'), P('gemini', 'Gemini CLI')]);
-  assert.equal(s.provider, 'gemini'); assert.match(s.reason, /most capable option/);
+  const s = suggest('debug this failing test', [P('local-x-1', 'Tiny'), P('claude', 'Claude Code')]);
+  assert.equal(s.provider, 'claude'); assert.match(s.reason, /most capable option/);
   assert.equal(suggest('hi', all.filter((p) => p.provider !== 'local-ollama-abc')).provider, 'claude');
 });
 
@@ -43,13 +42,14 @@ const view = (over) => ({ kind: 'on', route: 'PRIMARY', chip: { tone: 'green', l
 
 test('Router: Burst limit pressure lowers Claude\'s rank without making it incapable', () => {
   const noLocal = all.filter((p) => p.provider !== 'local-ollama-abc');
-  assert.equal(suggest('Refactor the auth module', noLocal).provider, 'claude');
-  assert.equal(suggest('Refactor the auth module', noLocal, { burst: view() }).provider, 'claude', 'healthy Burst changes nothing');
+  const table = { ...DEFAULT_TABLE, claude: 'standard' };
+  assert.equal(suggest('Refactor the auth module', noLocal, { table }).provider, 'claude');
+  assert.equal(suggest('Refactor the auth module', noLocal, { table, burst: view() }).provider, 'claude', 'healthy Burst changes nothing');
   const near = view({ chip: { tone: 'amber', label: 'Limit near' } });
-  const s = suggest('Refactor the auth module', noLocal, { burst: near });
+  const s = suggest('Refactor the auth module', noLocal, { table, burst: near });
   assert.equal(s.provider, 'codex'); assert.match(s.reason, /Claude is close to its limit/);
-  assert.equal(suggest('Refactor the auth module', noLocal, { burst: view({ route: 'SECONDARY', chip: { tone: 'amber', label: 'Secondary until 14:00' } }) }).provider, 'codex');
+  assert.equal(suggest('Refactor the auth module', noLocal, { table, burst: view({ route: 'SECONDARY', chip: { tone: 'amber', label: 'Secondary until 14:00' } }) }).provider, 'codex');
   assert.equal(suggest('hi', [P('claude', 'Claude Code')], { burst: near }).provider, 'claude', 'still suggested when it is the only option');
-  assert.equal(suggest('Refactor the auth module', noLocal, { burst: { kind: 'off', chip: { tone: 'grey', label: 'Burst off' } } }).provider, 'claude', 'Burst off is not pressure');
-  assert.equal(suggest('Refactor the auth module', noLocal, { burst: null }).provider, 'claude');
+  assert.equal(suggest('Refactor the auth module', noLocal, { table, burst: { kind: 'off', chip: { tone: 'grey', label: 'Burst off' } } }).provider, 'claude', 'Burst off is not pressure');
+  assert.equal(suggest('Refactor the auth module', noLocal, { table, burst: null }).provider, 'claude');
 });

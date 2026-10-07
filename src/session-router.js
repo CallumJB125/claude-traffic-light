@@ -11,7 +11,7 @@
     standard: { rank: 2, label: 'standard', ability: 3 },
     premium: { rank: 3, label: 'premium', ability: 3 },
   });
-  const DEFAULT_TABLE = Object.freeze({ codex: 'standard', claude: 'standard', gemini: 'cheap' });
+  const DEFAULT_TABLE = Object.freeze({ codex: 'standard', claude: 'cheap', gemini: 'cheap' });
   const HEAVY = /\b(refactor|implement|architect\w*|debug\w*|migrat\w*|multi-?file|codebase|repo(sitory)?|stack ?trace|failing tests?|write (the )?tests?|security|review (this|the|my) (code|pr|diff))\b/i;
   const MEDIUM = /```|\b(code|function|script|regex|sql|bug|error|explain|summari[sz]e|translate|json|class|compile)\b/i;
 
