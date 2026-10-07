@@ -31,7 +31,7 @@ function tokenMatches(sent) {
 // `rootDir`, `sessionsDir`, `requestsDir` are the same paths main.js computes;
 // `aggregateState` and `broadcastStatus` are the live core callbacks; tests
 // pass their own port, retry timing and app.
-module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcastStatus, port = SIGNAL_PORT, retries = 20, retryMs = 500, app: electronApp = app }) => {
+module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcastStatus, teamActivity = null, port = SIGNAL_PORT, retries = 20, retryMs = 500, app: electronApp = app }) => {
   // Per-request answer keys from the blocking hooks: memory only, never on
   // disk, so nothing that can write requests/ can also sign an answer.
   const requestKeys = Answer.requestKeys();
@@ -75,7 +75,7 @@ module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcast
           : done(400, { error: 'nonce must be 64 hex chars' })));
       }
       const hookRoute = /^\/hook\/([\w-]+)(?:\?event=([\w-]*))?$/.exec(req.url || '');
-      if (req.method !== 'POST' || (req.url !== '/signal' && req.url !== '/request-key' && req.url !== '/metadata/agents' && !hookRoute)) return done(404, { error: 'POST /signal, POST /hook/:adapter or GET /status' });
+      if (req.method !== 'POST' || (req.url !== '/signal' && req.url !== '/request-key' && req.url !== '/metadata/agents' && req.url !== '/team/activity' && !hookRoute)) return done(404, { error: 'POST /signal, POST /hook/:adapter or GET /status' });
       if (!tokenMatches(req.headers[SIGNAL_TOKEN_HEADER])) return done(401, { error: `send header ${SIGNAL_TOKEN_HEADER} with the contents of ${tokenFile}` });
       if (req.url === '/metadata/agents') { // privacy-flow: agent-self-report
         let bytes = 0; const chunks = [];
@@ -90,6 +90,11 @@ module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcast
           done(result.ok ? 200 : result.status === 'invalid' ? 400 : 409,result);
         });
         return;
+      }
+      // Team brief and team_* MCP tools (src/team-activity.js): main holds the hub sign-in.
+      if (req.url === '/team/activity') { // privacy-flow: team-brief
+        if (!teamActivity) return done(404, { error: 'team activity is not available' });
+        return readBody(req, done, (d) => Promise.resolve(teamActivity(String(d.op || ''), d.args && typeof d.args === 'object' ? d.args : {})).then((r) => done(200, r), () => done(200, { available: false, reason: 'offline' })));
       }
       if (hookRoute) return readBody(req, done, (d) => hookEvent(hookRoute[1], hookRoute[2] || d.hook_event_name || '', d, done));
       if (req.url === '/request-key') return readBody(req, done, (d) => (requestKeys.register(d.id, d.key) ? done(200, { ok: true }) : done(409, { error: 'bad or duplicate request key' }))); // privacy-flow: request-key

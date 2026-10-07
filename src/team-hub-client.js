@@ -418,4 +418,4 @@ function createTeamHubClient({ baseUrl, token, fetch = globalThis.fetch, viewer:
   return Object.defineProperty({ teams, sessions, send, onChange, viewer }, 'origin', { value: new URL(base).origin, enumerable: true });
 }
 
-module.exports = { createTeamHubClient };
+module.exports = { createTeamHubClient, parseBase };
