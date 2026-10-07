@@ -326,6 +326,7 @@ module.exports = function busyWatch(deps) {
     stop() { clearInterval(timer); timer = null; },
     tick,
     enableCalendar,
+    helperAvailable: () => !isDevRun && !!exists(helperPath),
     observe,
     // Only while pings are actually being held does the rest of the app act busy.
     holding: () => combined.busy === true && loadConfig().busyHold !== false,

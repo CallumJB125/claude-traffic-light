@@ -95,6 +95,8 @@ test('production main My day handlers accept only the exact registered top-level
   assert.equal(handlers.get('myday:state')({ sender: { mainFrame: frame }, senderFrame: frame }), null);
   assert.equal(handlers.get('myday:open')({ sender: page, senderFrame: frame }, 'allowed-handle'), true);
   assert.equal(handlers.get('myday:open')({ sender: page, senderFrame: frame }, 'https://renderer.example'), false);
+  assert.equal(typeof handlers.get('myday:show-meetings'), 'function');
+  assert.equal(handlers.get('myday:show-meetings')({ sender: page, senderFrame: {} }), false, 'only the registered page can ask');
   context.buddyWin = { pageWebContents: () => ({ mainFrame: frame }) };
   assert.equal(handlers.get('myday:state')({ sender: page, senderFrame: frame }), null);
   assert.equal(handlers.get('myday:open')({ sender: page, senderFrame: frame }, 'allowed-handle'), false);
@@ -118,4 +120,37 @@ test('My day states use the board vocabulary instead of raw run_state', async ()
   const value = fixture(); value.cards[0].state = 'in_progress';
   const service = createMyDayService({ work: async () => ({ status: 'complete', sources: [{ name: 'Hub', status: 'complete', cards: value.cards, decisions: [], agents: [] }] }) });
   assert.equal((await service.snapshot()).sources[0].cards[0].state, 'In progress');
+});
+
+test('calendar opt-in: offered only with the helper and only while off; the click alone enables it', async () => {
+  let enabled = 0, helper = true;
+  const service = createMyDayService({ work: async () => ({ status: 'complete', sources: [] }), open: async () => false, busy: () => ({ busy: false, calendar: { on: false }, focus: { on: false } }), calendarHelper: () => helper, enableCalendar: () => { enabled++; } });
+  assert.equal((await service.snapshot()).availability.can_enable, true);
+  assert.equal(enabled, 0, 'a snapshot never asks for permission');
+  assert.equal(await service.showMeetings(), true); assert.equal(enabled, 1);
+  helper = false;
+  assert.equal((await service.snapshot()).availability.can_enable, false);
+  assert.equal(await service.showMeetings(), false); assert.equal(enabled, 1);
+  const on = createMyDayService({ work: async () => ({ status: 'complete', sources: [] }), open: async () => false, busy: () => ({ busy: false, calendar: { on: true, status: 'fullAccess' }, focus: { on: false } }), calendarHelper: () => true });
+  assert.equal((await on.snapshot()).availability.can_enable, false, 'nothing to offer once on');
+});
+test('My day page: no availability block; a plain sentence when known; the button only when offered', async () => {
+  const body = fs.readFileSync(path.join(__dirname, '../myday.js'), 'utf8');
+  const el = tag => ({ tag, children: [], className: '', textContent: '', listeners: {}, append(...c) { this.children.push(...c); }, replaceChildren(...c) { this.children = c; }, addEventListener(t, f) { this.listeners[t] = f; } });
+  const text = n => `${n.textContent ?? ''}${(n.children ?? []).map(text).join('')}`;
+  const buttons = n => [...(n.tag === 'button' ? [n] : []), ...(n.children ?? []).flatMap(buttons)];
+  const run = async availability => {
+    const content = el('div'), status = el('p'); let asked = 0;
+    const context = { document: { getElementById: id => id === 'content' ? content : id === 'status' ? status : el('button'), createElement: el, addEventListener() {}, hidden: false }, window: { myDayApi: { state: async () => ({ status: 'complete', sources: [], reported: [], availability, observed_at: 0 }), showMeetings: async () => { asked++; return true; }, open: async () => true, changed: () => {} } }, setInterval: () => 0, clearInterval: () => {}, console };
+    vm.createContext(context); vm.runInContext(body, context); await new Promise(r => setImmediate(r)); return { content, asked: () => asked };
+  };
+  const off = await run({ state: 'unknown', calendar: 'off', focus: 'off', can_enable: false });
+  assert.doesNotMatch(text(off.content), /Availability|Calendar|focus/i);
+  assert.equal(buttons(off.content).length, 0);
+  const busy = await run({ state: 'busy', calendar: 'available', focus: 'off', can_enable: false });
+  assert.match(text(busy.content), /You are busy right now\./);
+  const offer = await run({ state: 'unknown', calendar: 'off', focus: 'off', can_enable: true });
+  const ask = buttons(offer.content).find(b => b.textContent === 'Show my meetings');
+  assert.ok(ask); assert.equal(offer.asked(), 0, 'rendering never asks');
+  await ask.listeners.click(); assert.equal(offer.asked(), 1);
 });

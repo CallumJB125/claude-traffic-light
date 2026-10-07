@@ -49,7 +49,7 @@ test('actual main My day opens own work and Calendar/Timeline persist real plans
     const myday = await windowByFile(app, 'myday.html');
     await expect(myday.getByRole('button', { name: `${own.body.card.key} · Synthetic own planner work` })).toBeVisible();
     await expect(myday.locator('body')).not.toContainText('B-SECRET');
-    await expect(myday.locator('body')).toContainText('Availability unknown');
+    await expect(myday.locator('body')).not.toContainText('Availability');
     // A real connection failure must remove the previous snapshot, then recover.
     const handlers = f.h.app.server.listeners('request');
     const unavailable = (request, response) => {

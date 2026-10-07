@@ -6,15 +6,15 @@ const age = (value, now) => {
   return Number.isFinite(time) && time <= now + 30_000 ? Math.max(0, now - time) : null;
 };
 const date = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : null;
-function availability(raw) {
+function availability(raw, canEnable = false) {
   const permission = ['fullAccess', 'denied', 'restricted', 'notDetermined'].includes(raw?.calendar?.status) ? raw.calendar.status : 'unknown';
   const calendar = raw?.calendar?.on === true && permission === 'fullAccess' && !raw.calendar.error;
   const focus = raw?.focus?.on === true && ['assertions', 'shortcut'].includes(raw.focus.via) && !raw.focus.error && typeof raw.focus.focused === 'boolean';
-  return { calendar: raw?.calendar?.on !== true ? 'off' : calendar ? 'available' : permission,
+  return { can_enable: canEnable && raw?.calendar?.on !== true, calendar: raw?.calendar?.on !== true ? 'off' : calendar ? 'available' : permission,
     focus: raw?.focus?.on !== true ? 'off' : focus ? (raw.focus.focused ? 'on' : 'off') : 'unknown',
     state: (raw?.calendar?.on === true && !calendar) || (raw?.focus?.on === true && !focus) || raw?.ics?.on === true ? 'unknown' : calendar || focus ? (raw?.busy === true ? 'busy' : 'free') : 'unknown' };
 }
-function createMyDayService({ work, sessions = () => [], busy = () => null, open, now = Date.now }) {
+function createMyDayService({ work, sessions = () => [], busy = () => null, calendarHelper = () => false, enableCalendar = () => {}, open, now = Date.now }) {
   return {
     async snapshot() {
       const result = await work(), time = now();
@@ -31,8 +31,10 @@ function createMyDayService({ work, sessions = () => [], busy = () => null, open
         const elapsed = age(row.updatedAt, time);
         return { name: text(row.ai ?? row.agent ?? row.provider ?? 'Local AI', 50), label: text(row.projectName ?? row.label ?? 'Local session'), signal: text(row.signal, 40), age_ms: elapsed, freshness: elapsed == null ? 'unknown' : elapsed > 90_000 ? 'stale' : 'recent', source: 'reported' };
       });
-      return { status: truncated ? 'partial' : result?.status ?? 'partial', sources, reported, availability: availability(busy()), observed_at: time };
+      return { status: truncated ? 'partial' : result?.status ?? 'partial', sources, reported, availability: availability(busy(), calendarHelper() === true), observed_at: time };
     },
+    // Only a click reaches here, and only where the helper that asks macOS exists.
+    async showMeetings() { if (calendarHelper() !== true) return false; await enableCalendar(); return true; },
     open(handle) { return typeof handle === 'string' && handle.length <= 100 ? open(handle) : false; },
   };
 }

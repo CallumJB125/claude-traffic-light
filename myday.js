@@ -28,7 +28,13 @@ function render(snapshot) {
   }
   content.append(section('Waiting on you', decisions, 'No current requests you can answer in the available boards.'), section('Your cards', cards, 'No own cards in the available boards.'), section('Your agents', agents, 'No own runs or reported local agents observed.'));
   const a = snapshot.availability;
-  content.append(section('Calendar and focus availability', [node('li', a ? `Availability ${a.state}. Calendar ${a.calendar}; focus ${a.focus}.` : 'Availability unknown.')], ''), node('p', 'Availability uses permissions already granted on this Mac. Event details and external calendar accounts are not loaded here.', 'muted'));
+  if (a?.state === 'busy' || a?.state === 'free') content.append(node('p', a.state === 'busy' ? 'You are busy right now.' : 'You are free right now.', 'muted'));
+  if (a?.can_enable) {
+    const ask = node('p', 'My day can tell when you are in a meeting. It reads busy or free only, never event details. ', 'muted'), button = node('button', 'Show my meetings');
+    button.type = 'button';
+    button.addEventListener('click', async () => { button.disabled = true; try { await window.myDayApi.showMeetings(); } finally { refresh(); } });
+    ask.append(button); content.append(ask);
+  }
   status.textContent = snapshot.status === 'complete' ? `Observed ${new Date(snapshot.observed_at).toLocaleTimeString()}. Refreshes every 15 seconds.` : snapshot.status === 'changed' ? 'The current account or board context changed. Refreshing…' : 'Some sources are unavailable or exceed the display limit. The work shown is current.';
 }
 async function refresh({ clear = false } = {}) {
