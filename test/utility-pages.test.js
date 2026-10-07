@@ -40,6 +40,7 @@ function handlers() {
     loadConfig: () => ({ fixture: 'config' }), Stats: { summary: () => ({ fixture: 'stats' }) }, stats: {},
     BurstIpc: { enrichSession: () => null },
     clipboard: { writeText: () => {} },
+    CollisionAlerts: require('../src/collision-alerts.js'), collisionAlerts: require('../src/collision-alerts.js').createCollisions(),
     SessionOverview: { snapshot: input => { observed.push(input); return { status: input.available === false ? 'unavailable' : 'complete' }; } },
     localSessions: sessions => sessions, aggregateState: () => ({ sessions: [{ fixture: 'metadata' }] }),
     IS_DEV_RUN: false, Adapters: { get: () => ({ isActivityInstalled: () => true }) }, os: { homedir: () => '/synthetic' }, HOOK_RUNTIME: {},
