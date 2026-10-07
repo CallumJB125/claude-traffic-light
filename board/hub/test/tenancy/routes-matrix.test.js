@@ -215,6 +215,7 @@ const MATRIX = {
   'POST /api/cards/:card_id/work-capture/stop': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/work-capture/stop`, body: {} },
   'PATCH /api/cards/:card_id': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}`, body: { title: 'pwned', version: 0 } },
   'POST /api/cards/:card_id/actions/:action': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/actions/stop`, body: {} },
+  'POST /api/cards/:card_id/handover/salvage': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/handover/salvage`, body: { text: 'pwned' } },
   'POST /api/cards/:card_id/comments': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/comments`, body: { body: 'pwned' } },
   'GET /api/cards/:card_id/messages': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/messages` },
   'GET /api/cards/:card_id/ownership': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/ownership` },

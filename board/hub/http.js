@@ -523,6 +523,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   route('GET', '/api/cards/:card_id/messages', ({ member, params, ident, query }) => communication.staffListMessages(member, params.card_id, ident?.cred, communicationOptions(query)), { limit: 'communication_read_member' });
   route('POST', '/api/cards/:card_id/messages', ({ member, params, body, ident, query }) => communication.staffSendMessage(member, params.card_id, body, ident?.cred, communicationOptions(query)), { replay: false });
   route('POST', '/api/cards/:card_id/comments', ({ member, params, body, ident }) => api.comment(member, params.card_id, body, { cred: ident?.cred ?? null }), { collaboration: true });
+  route('POST', '/api/cards/:card_id/handover/salvage', ({ member, params, body, ident }) => api.appendSalvage(member, params.card_id, body, { cred: ident?.cred ?? null }), { collaboration: true, limit: 'handover_salvage_member', maxBody: 16_384 });
   route('GET', '/api/cards/:card_id/handover', ({ member, params, query, res }) => {
     const h = api.handover(member, params.card_id);
     if (query.get('format') === 'md') {
