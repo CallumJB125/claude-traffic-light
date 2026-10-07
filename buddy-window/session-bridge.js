@@ -7,6 +7,7 @@
 const path = require('node:path');
 const { execFile } = require('node:child_process');
 const { toolEnv } = require('../src/tool-path');
+const { withDeadline, GRACE_MS } = require('../src/bounded-io');
 const { repoFor, routeKey } = require('../src/work-capture');
 const Links = require('../src/session-links');
 const Share = require('../src/handover-share');
@@ -17,8 +18,8 @@ const { createSessionBoards } = require('./session-boards');
 // The git work tree a folder belongs to, or null.
 function gitRoot(cwd) {
   if (typeof cwd !== 'string' || !path.isAbsolute(cwd) || cwd.length > 2000 || cwd.includes('\0')) return Promise.resolve(null);
-  return new Promise((resolve) => execFile('git', ['-C', cwd, 'rev-parse', '--show-toplevel'],
-    { timeout: 2000, maxBuffer: 4096, env: toolEnv({ GIT_OPTIONAL_LOCKS: '0' }) }, (err, out) => resolve(err ? null : String(out).trim() || null)));
+  return withDeadline((done) => execFile('git', ['-C', cwd, 'rev-parse', '--show-toplevel'],
+    { timeout: 2000, maxBuffer: 4096, env: toolEnv({ GIT_OPTIONAL_LOCKS: '0' }) }, (err, out) => done(err ? null : String(out).trim() || null)), 2000 + GRACE_MS);
 }
 
 function createSessionBridge({ userData, hubs, clientFor, userOf, signedIn, supervisor, workCapture, handoverWriter = () => null, currentHub = () => null, home = null, log = () => {} }) {

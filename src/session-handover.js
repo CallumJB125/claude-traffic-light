@@ -17,6 +17,7 @@ const Tap = require('../hooks/handover-tap.js');
 const Transcripts = require('./handover-transcripts.js');
 const { redactSecretsPass, scrub } = require('./scrub.js');
 const BurstHandover = require('./burst-handover.js');
+const { withDeadline, GRACE_MS } = require('./bounded-io.js');
 
 const MARKER = '<!-- plexiform-session-handover v1 -->';
 const MAX_DOC_BYTES = 24 * 1024;
@@ -44,18 +45,18 @@ const safe = (s) => String(s || 'default').replace(/[^\w.-]/g, '_').slice(0, 120
 const keyOf = (adapter, sessionId) => `${safe(adapter)}-${safe(sessionId)}`;
 const dirs = (rootDir) => ({ docs: Tap.dirOf(rootDir), facts: path.join(Tap.dirOf(rootDir), '.facts') });
 
+const GIT_MS = 3000;
+
 function runGit(cwd, args) {
-  return new Promise((resolve) => {
-    execFile('git', ['--no-optional-locks', '-c', 'core.fsmonitor=false', '-C', cwd, ...args], { // privacy-flow: session-handover-git
-      timeout: 3000, maxBuffer: 128 * 1024, windowsHide: true, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' },
-    }, (err, out) => resolve(err ? null : String(out)));
-  });
+  return withDeadline((done) => execFile('git', ['--no-optional-locks', '-c', 'core.fsmonitor=false', '-C', cwd, ...args], { // privacy-flow: session-handover-git
+    timeout: GIT_MS, maxBuffer: 128 * 1024, windowsHide: true, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' },
+  }, (err, out) => done(err ? null : String(out))), GIT_MS + GRACE_MS);
 }
 
-// Bounded and read-only. repo:false when the folder is not a git work tree.
+// Bounded and read-only. repo:false when the folder is not a git work tree
+// (git itself says so: the folder is never touched from this thread).
 async function gitFacts(cwd, run = runGit) {
   if (typeof cwd !== 'string' || !path.isAbsolute(cwd)) return { repo: false };
-  try { if (!fs.statSync(cwd).isDirectory()) return { repo: false }; } catch { return { repo: false }; }
   const branch = await run(cwd, ['rev-parse', '--abbrev-ref', 'HEAD']);
   if (branch === null) return { repo: false };
   const [stat, status] = await Promise.all([run(cwd, ['diff', '--stat', 'HEAD']), run(cwd, ['status', '--short'])]);
