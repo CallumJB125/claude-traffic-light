@@ -7,7 +7,7 @@ const Usage = require('../usage.js');
 const Clients = require('../src/clients.js');
 const Invoice = require('../src/invoice.js');
 const E = require('../src/entitlements');
-const { registerAll } = require('../src/paid-wiring');
+const { registerAll, PACKAGES } = require('../src/paid-wiring');
 
 const NOW = new Date(2026, 9, 15, 12, 0, 0).getTime();
 const MIN = 60000;
@@ -142,7 +142,8 @@ test('the mapping persists locally, is validated, and register() gates IPC by pa
 });
 
 test('paid wiring finds the module and registers it', () => {
-  const res = registerAll({ ipcMain: { handle() {} }, rootDir: os.tmpdir(), fromPage: () => false, log() {} });
+  const only = PACKAGES.filter((p) => p[0] === 'client-billing');
+  const res = registerAll({ ipcMain: { handle() {} }, rootDir: os.tmpdir(), fromPage: () => false, log() {} }, only);
   assert.equal(res.find((r) => r.name === 'client-billing').status, 'ok');
 });
 
