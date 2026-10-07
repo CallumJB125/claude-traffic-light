@@ -47,6 +47,8 @@ const PAGES = [
   { id: 'setups', title: 'Setups', icon: 'layers', kind: 'local', file: 'setups.html', preload: 'setups-preload.js', group: 'you', hidden: true },
   { id: 'thismac', title: 'This Mac', icon: 'laptop', kind: 'local', screen: 'thismac', group: 'you' },
   { id: 'account', title: 'Account', icon: 'user', kind: 'local', screen: 'account', group: 'you' },
+  // Paid plan (src/entitlement-refresh.js serves its IPC): plan, limits, grace days, Upgrade / Manage billing.
+  { id: 'upgrade', title: 'Plan & billing', icon: 'user', kind: 'local', file: 'upgrade.html', preload: 'upgrade-preload.js', group: 'you', hidden: true },
   { id: 'lights', title: 'Widget configuration', icon: 'lights', kind: 'window', window: 'lights', group: 'you' },
   { id: 'aitools', title: 'AI tools', icon: 'plug', kind: 'local', file: 'aitools.html', preload: 'aitools-preload.js', group: 'you' },
   { id: 'settings', title: 'Preferences', icon: 'gear', kind: 'local', file: 'settings.html', preload: 'settings-preload.js', query: { embedded: '1' }, group: 'you' },
@@ -88,6 +90,14 @@ const SETUPS_READY = true;
 if (process.env.PLEXIFORM_SHOW_SETUPS === '1' || (SETUPS_READY && require('../src/entitlements').has('setups.personal'))) {
   SECTIONS.find((s) => s.id === 'settings').pages.splice(5, 0, 'setups');
   PAGES.find((p) => p.id === 'setups').hidden = false;
+}
+// Plan & billing is listed once paid plans can work: a hub key pinned in
+// src/entitlement-keys.js (until then no token verifies and Upgrade could not
+// unlock anything). PLEXIFORM_SHOW_UPGRADE=1 lists it for testing.
+const UPGRADE_READY = (() => { try { return require('../src/entitlement-keys').ENTITLEMENT_KEYS.length > 0; } catch { return false; } })();
+if (process.env.PLEXIFORM_SHOW_UPGRADE === '1' || UPGRADE_READY) {
+  PAGES.find((p) => p.id === 'upgrade').hidden = false;
+  SECTIONS.find((s) => s.id === 'team').pages.push('upgrade');
 }
 
 // Calendar and Timeline are project-planning views and AI runs have no due dates, so they

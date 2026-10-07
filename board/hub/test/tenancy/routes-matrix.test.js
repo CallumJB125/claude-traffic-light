@@ -158,6 +158,13 @@ const MATRIX = {
   // Runner enrolment (P4, D79–D81): an install as a runner in the team in the URL.
   'POST /api/teams/:team_id/enrol': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/enrol` },
   'DELETE /api/teams/:team_id/enrol': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/enrol` },
+  'GET /api/billing': { kind: 'self' },
+  'POST /api/billing/checkout': { kind: 'self' },
+  'POST /api/billing/portal': { kind: 'self' },
+  'GET /api/entitlement': { kind: 'self' },
+  'GET /api/teams/:team_id/billing': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/billing` },
+  'POST /api/teams/:team_id/billing/checkout': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/billing/checkout`, body: { seats: 5, interval: 'month' } },
+  'POST /api/teams/:team_id/billing/portal': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/billing/portal` },
   'GET /api/teams/:team_id/enrolments': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/enrolments` },
   'DELETE /api/teams/:team_id/enrolments/:enrollment_id': {
     kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/enrolments/${fx.B.enrollment}`,
@@ -264,6 +271,7 @@ const REFUSED = {
 // app.routes, so listed here with why they need no sign-in.
 const PRE_ROUTE = {
   'POST /integrations/:id/webhook': 'the provider signs every delivery; the signature (the connection\'s own secret) is the auth',
+  'POST /api/billing/webhook': 'the payment provider signs every delivery (HMAC over timestamp and body with the hub\'s webhook secret); billing.test.js',
   'GET /integrations/:provider/callback': 'the provider redirects here; the signed OAuth state plus the bind cookie are the auth',
   'GET /integrations/:provider/identity/callback': 'the provider redirects a linking member here (D98); the signed identity state plus the bind cookie are the auth, and the member and credential it names are re-checked',
 };

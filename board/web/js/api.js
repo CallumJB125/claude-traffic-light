@@ -57,6 +57,12 @@ export const api = {
   // Accounts mode (ACCOUNTS-API.md): which sign-ins the hub offers, a first team, joining one.
   methods: () => call('GET', '/api/auth/methods'),
   setupAccount: () => mut('POST', '/api/account/setup'),
+  // Paid plans (billing.html): hosted Checkout / portal links come back as {url}.
+  billing: () => call('GET', '/api/billing'),
+  billingCheckout: (interval) => mut('POST', '/api/billing/checkout', { interval }),
+  billingPortal: () => mut('POST', '/api/billing/portal'),
+  teamCheckout: (teamId, seats, interval) => mut('POST', `/api/teams/${enc(teamId)}/billing/checkout`, { seats, interval }),
+  teamPortal: (teamId) => mut('POST', `/api/teams/${enc(teamId)}/billing/portal`),
   boards: (includeArchived = false) => call('GET', `/api/boards${includeArchived ? '?include_archived=1' : ''}`),
   search: (q) => call('GET', `/api/search?${new URLSearchParams({ q })}`),
   teamOverview: () => call('GET', '/api/team-overview'),

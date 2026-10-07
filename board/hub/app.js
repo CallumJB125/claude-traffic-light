@@ -30,6 +30,7 @@ import { ClientFeedback } from './identity/client-feedback.js';
 import { OAuth } from './identity/oauth.js';
 import { WebOAuth } from './identity/oauth-web.js';
 import { Enrolments } from './identity/enrolments.js';
+import { Billing } from './billing/entitlements.js';
 import { oauthProviders } from './config.js';
 import { RemoteAuthority } from './remote/authority.js';
 import { StorageWatch } from './storage-watch.js';
@@ -73,6 +74,7 @@ function buildApp(config, { db, clock, log, github, fetchImpl, timers, mailer })
   hub.oauth = hub.accounts ? new OAuth(hub, { accounts: hub.accounts, fetchImpl }) : null;
   hub.oauthWeb = hub.oauth ? new WebOAuth(hub) : null;
   hub.enrolments = hub.accounts ? new Enrolments(hub, { accounts: hub.accounts }) : null;
+  hub.billing = hub.accounts ? new Billing(hub, { fetchImpl }) : null;
   hub.remoteAuthority = hub.accounts ? new RemoteAuthority(hub) : null;
   // Deleting an account or a team needs a step-up: an email code (a mailer)
   // or an OAuth re-authentication (a configured provider). Without either,

@@ -19,6 +19,7 @@ const PACKAGES = [
   ['morning-report', () => require.resolve('./morning-report'), () => require('./morning-report')],
   ['client-billing', () => require.resolve('./clients'), () => require('./clients')],
   ['setups-personal', () => require.resolve('./setups-personal'), () => require('./setups-personal')],
+  ['entitlement-refresh', () => require.resolve('./entitlement-refresh'), () => require('./entitlement-refresh')],
 ];
 
 /** Calls every present package's register(ctx). → [{name, status:'absent'|'ok'|'skipped'|'failed'}]. Never throws. */
