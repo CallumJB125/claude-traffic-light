@@ -1,4 +1,4 @@
-// Modal dialogs: Tackle with AI, confirm (destructive), hand over, request
+// Modal dialogs: Send to AI, confirm (destructive), hand over, request
 // changes, new card. Native <dialog> + showModal() gives focus trapping and
 // Escape for free; app.js opens them after render.
 import { h } from './h.js';
@@ -33,7 +33,7 @@ function field(id, label, control, hint) {
     hint ? h('p', { class: 'hint', id: `${id}-hint` }, hint) : null);
 }
 
-// Overlap never blocks: 'Tackle anyway' is the dialog's submit button, 'Wait for X' just closes it.
+// Overlap never blocks: 'Send anyway' is the dialog's submit button, 'Wait for X' just closes it.
 function overlapWarning(preview, targetName) {
   if (preview?.loading) return h('div', { class: 'callout callout-quiet', role: 'status' }, 'Checking for overlapping work…');
   if (preview?.error) return h('div', { class: 'callout callout-quiet' }, `Couldn't check for overlaps: ${preview.error}`);
@@ -73,7 +73,7 @@ export function giveDialog(dlg, model) {
   const repoId = dlg.repo_id || (repos.length === 1 ? repos[0].id : '');
   const busy = dlg.busy;
   const moving = dlg.mode === 'redispatch' && view.handover_hold;
-  const title = moving ? `Continue ${view.key} with another AI` : `Tackle ${view.key} with AI`;
+  const title = moving ? `Continue ${view.key} with another AI` : `Send ${view.key} to AI`;
   const providers = tackleChoices(dlg.preview?.runners);
   const ai = providers.find((a) => a.id === dlg.ai) ?? providers.find((a) => a.id === 'claude');
   const uncapped = ai.budget === 'none' || dlg.budget_mode === 'none';
@@ -129,7 +129,7 @@ export function giveDialog(dlg, model) {
     h('div', { class: 'modal-foot' },
       h('button', { type: 'button', class: 'btn', 'data-action': 'close-dialog' }, 'Cancel'),
       h('button', { type: 'submit', class: 'btn btn-claude', disabled: busy || waiting || deviceLimit || (dlg.mode === 'retry' && uncapped) || !ai.available || (uncapped && !noBudgetAllowed) || null, 'aria-busy': busy ? 'true' : null, 'aria-describedby': 'give-sponsor' },
-        busy ? 'Queuing…' : hasOverlap ? (isMe ? 'Tackle anyway' : `Ask ${targetMember?.name} anyway`) : isMe ? moving ? `Continue with ${ai.label}` : 'Start' : `Ask ${targetMember?.name}`))), { wide: true });
+        busy ? 'Queuing…' : hasOverlap ? (isMe ? 'Send anyway' : `Ask ${targetMember?.name} anyway`) : isMe ? moving ? `Continue with ${ai.label}` : 'Start' : `Ask ${targetMember?.name}`))), { wide: true });
 }
 
 const turnLimited = (ai, dlg) => ai.id !== 'codex' && dlg.max_turns != null;
@@ -155,7 +155,7 @@ export function switchAiDialog(dlg, model) {
       h('li', null, 'Prepare the handover and stop the current run.'),
       h('li', null, 'Read the saved handover and check its snapshot and unsynced files.'),
       h('li', null, 'Choose Claude Code or Codex, a machine and its account, then continue.')),
-    h('p', { class: 'hint' }, 'No replacement starts automatically. If the runner cannot confirm its stop and checkpoint, the switch stays blocked. Personal or observed sessions must be stopped in their original AI app.'),
+    h('p', { class: 'hint' }, 'No replacement starts automatically. If the runner cannot confirm its stop and checkpoint, the switch stays blocked. This session runs in your own terminal; stop it there.'),
     errorLine(dlg),
     h('div', { class: 'modal-foot' },
       h('button', { type: 'button', class: 'btn', 'data-action': 'close-dialog' }, 'Keep working'),

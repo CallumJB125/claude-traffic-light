@@ -23,12 +23,12 @@ test('design §4.2 examples', () => {
   assert.equal(cardFace(view('running')).text, "Running · Callum's Claude");
   assert.equal(cardFace(view('suspended', { resume_to: 'quiet' })).text, 'Stalled · laptop asleep 12m');
   assert.equal(cardFace(view('orphaned', { resume_to: 'quiet' })).text, 'Stalled · runner offline · last seen 3s ago');
-  assert.equal(cardFace(view('handing_over', { state_age_ms: 40_000 })).text, 'Handing over · waiting for checkpoint · 40s');
+  assert.equal(cardFace(view('handing_over', { state_age_ms: 40_000 })).text, 'Moving to another AI · waiting for checkpoint · 40s');
   assert.equal(cardFace(view('running', { live: { ...liveOk, tool_in_flight: { name: 'Edit', summary: 'apps/x/submit.ts', age_ms: 1000 } } })).reason, "Callum's Claude · editing submit.ts");
   assert.equal(cardFace(view('running', { live: { ...liveOk, tool_in_flight: { name: 'Bash', summary: 'npm test', age_ms: 2 * MIN } } })).reason, "Callum's Claude · `npm test` 2m");
   assert.equal(cardFace(view('quiet', { live: { ...liveOk, activity_age_ms: 20 * MIN, tool_in_flight: { name: 'Bash', summary: 'npm test', age_ms: 14 * MIN } } })).reason, '`npm test` 14m, no output');
   assert.equal(cardFace(view('quiet', { live: { ...liveOk, activity_age_ms: 8 * MIN } })).reason, 'no activity 8m');
-  assert.equal(cardFace(view('failed', { fail_kind: 'limit', limit_resets_in_ms: 42 * MIN })).text, "Paused: limit · usage limit on Callum's account · resets in 42m");
+  assert.equal(cardFace(view('failed', { fail_kind: 'limit', limit_resets_in_ms: 42 * MIN })).text, "Plan limit reached · usage limit on Callum's account · resets in 42m");
   assert.equal(cardFace(view('failed', { fail_kind: 'budget', budget: { spent_usd: 5.01, cap_usd: 5 } })).reason, 'budget $5 reached');
   assert.equal(cardFace(view('failed', { fail_kind: 'stopped', stopped_by_name: 'Callum' })).reason, 'stopped by Callum');
   assert.equal(cardFace(view('failed', { fail_kind: 'released', fail_reason: 'needs product decision' })).reason, 'released by Claude: needs product decision');
@@ -164,9 +164,9 @@ test('stalled: derived from the aged view, with a reason, Resume / Hand over / S
   assert.equal(cardFace(dead.stalled ? view('running', { live: { ...liveOk, hb_age_ms: 90_000 } }) : null, { connection_lost: true }).stalled, null, 'a lost board connection says nothing about the run');
 });
 
-test('plan limit reads "Paused: limit" with continue_with_another_ai; no new state', () => {
+test('plan limit reads "Plan limit reached" with continue_with_another_ai; no new state', () => {
   const f = cardFace(view('failed', { fail_kind: 'limit', limit_resets_in_ms: 5 * MIN }));
-  assert.equal(f.label, 'Paused: limit');
+  assert.equal(f.label, 'Plan limit reached');
   assert.equal(f.state, 'failed');
   assert.equal(f.actions[0], 'continue_with_another_ai');
   assert.ok(!STATES.includes('paused'));

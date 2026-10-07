@@ -260,7 +260,7 @@ test('Tackle with AI: own Codex account by default, sponsor and overlaps shown b
     preview: { overlaps: [{ other_card_id: 'c-9', other_key: 'BDL-9', other_owner: 'Bob', kind: 'overlapping', paths: ['backend/routes/applications.js'] }], sponsor: 'Runs on your MacBook Pro · your claude account' } };
   const n = giveDialog(dlg, m);
   const t = textOf(n);
-  assert.match(t, /Tackle BDL-1 with AI/);
+  assert.match(t, /Send BDL-1 to AI/);
   // Machine, branch, budget and plan approval wait behind one closed Advanced disclosure.
   const adv = findAll(n, (x) => x.tag === 'details');
   assert.equal(adv.length, 1);
@@ -268,7 +268,7 @@ test('Tackle with AI: own Codex account by default, sponsor and overlaps shown b
   for (const name of ['target', 'base_ref', 'plan_approval']) assert.ok(findAll(adv[0], (x) => x.props.name === name).length, `${name} is in Advanced`);
   assert.match(textOf(adv[0]), /Dollar and turn caps are unavailable for Codex/, 'budget is in Advanced');
   assert.equal(findAll(n, (x) => x.props.name === 'ai').length, 1, 'one AI picker');
-  assert.match(textOf(findAll(n, (x) => x.props.type === 'submit')[0]), /^Tackle anyway$/);
+  assert.match(textOf(findAll(n, (x) => x.props.type === 'submit')[0]), /^Send anyway$/);
   assert.match(t, /Wait for BDL-9/);
   assert.match(t, /Overlaps 1 live card/);
   assert.match(t, /BDL-9 \(Bob's agent\) is editing backend\/routes\/applications\.js, which this card mentions/);

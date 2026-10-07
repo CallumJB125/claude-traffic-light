@@ -23,7 +23,7 @@ test('L9: runners resume at launch only in a packaged app, or a dev run that opt
   assert.match(src, /const resumeRunners = app\.isPackaged \? !IS_DEV_RUN : process\.env\.BUDDY_RESUME_RUNNERS === '1';\n\s+if \(resumeRunners\) \{ try \{ getBuddy\(\)\.resumeDevices\(\);/);
   const side = fs.readFileSync(path.join(__dirname, '..', 'buddy-window', 'sidebar.js'), 'utf8');
   assert.match(side, /HUB_TEXT\.running \?\? ''\)\.replace\('\{teams\}', runners\.join\(', '\)\)/);
-  assert.equal(require('../buddy-window/brand').HUB_TEXT.running, 'This Mac is running cards for {teams}');
+  assert.equal(require('../buddy-window/brand').HUB_TEXT.running, 'Running team tasks for {teams}');
 });
 
 test('deep links: main registers plexiform:// and claudebuddy:// and routes both; the bundle lists both schemes', () => {

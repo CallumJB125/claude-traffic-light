@@ -930,7 +930,7 @@ test('sign-in methods: GET /api/auth/methods decides the buttons; each combinati
   assert.equal(s.methods, null);
   assert.match(s.methodsError, /Couldn’t reach/);
   const page = fs.readFileSync(path.join(__dirname, '..', 'buddy-window', 'account.js'), 'utf8');
-  for (const t of ['Continue with Google', 'Continue with GitHub', 'Use an email code instead', 'Google and GitHub sign-in aren’t set up on this server yet. Ask its admin.', 'Try again']) assert.ok(page.includes(t), t);
+  for (const t of ['Continue with Google', 'Continue with GitHub', 'Use an email code instead', 'Google and GitHub sign-in aren’t set up at this address yet. Ask your team’s admin.', 'Try again']) assert.ok(page.includes(t), t);
   const { ROUTES } = require('../buddy-window/accounts');
   assert.deepEqual([ROUTES.authMethods, ROUTES.oauthStart, ROUTES.oauthExchange], [['GET', '/api/auth/methods'], ['POST', '/api/auth/oauth/start'], ['POST', '/api/auth/oauth/exchange']]);
 }));
@@ -1674,7 +1674,7 @@ for (const code of [4403, 4401]) {
     const row = await macRow(h, ws);
     assert.deepEqual([row.enabled, row.ended], [false, code]);
     const page = fs.readFileSync(path.join(__dirname, '..', 'buddy-window', 'account.js'), 'utf8');
-    assert.ok(page.includes('This Mac isn’t sharing sessions with ${t.name} any more.') && /link\('Turn on again', \(\) => act\(api\.runner\(t\.id, true\)\)\)/.test(page));
+    assert.ok(page.includes('This Mac no longer runs ${t.name} cards.') && /link\('Turn on again', \(\) => act\(api\.runner\(t\.id, true\)\)\)/.test(page));
     // A 4401 asks the hub; it still answers 200 here, so nobody is signed out.
     assert.deepEqual(h.signedOutHubs, []);
     assert.equal((await h.A.runner(ws.id, true)).ok, true, 'Turn on again enrols afresh');

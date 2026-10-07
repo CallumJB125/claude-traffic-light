@@ -6,7 +6,7 @@ const DAY = 86_400_000;
 
 export const LANES = [
   { id: 'claude', label: 'Claude' }, { id: 'codex', label: 'Codex' }, { id: 'gemini', label: 'Gemini' },
-  { id: 'hermes', label: 'Hermes' }, { id: 'observed', label: 'Observed' },
+  { id: 'hermes', label: 'Hermes' }, { id: 'observed', label: 'From your terminal' },
 ];
 
 // Outcome: label, icon and tone token (never colour alone: the icon and label travel with every bar).
@@ -18,7 +18,7 @@ export const OUTCOMES = {
   stalled: { label: 'Stalled', icon: 'warn', tone: 'amber' },
   budget: { label: 'Hit budget', icon: 'warn', tone: 'amber' },
   limit: { label: 'Hit limit', icon: 'clock', tone: 'violet' },
-  observed: { label: 'Observed', icon: 'eye', tone: 'quiet' },
+  observed: { label: 'From your terminal', icon: 'eye', tone: 'quiet' },
 };
 
 /** The window for a range, anchored on `now` (local days; Today runs from midnight to the hour after next). */

@@ -18,7 +18,7 @@ test('local mode: the card says you are on the local board, to create a team, an
   assert.match(t, /You’re on your local board/);
   assert.match(t, /Create a team to collaborate/);
   assert.match(t, /Open Team in the sidebar/);
-  assert.match(t, /team hub/);
+  assert.match(t, /team’s address/);
   assert.equal(byAttr(c, 'data-action', 'local-card-dismiss').length, 1, 'dismissible');
 });
 

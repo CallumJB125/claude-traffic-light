@@ -131,6 +131,12 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
     log('automatic cards unavailable: private storage');
     return {observe:()=>Promise.resolve(),captureOnce:async()=>({ok:false,reason:'storage'}),routes:async()=>({routes:[],complete:false}),enabled:()=>false,setEnabled:()=>false,choose:async()=>false,choices:()=>[],snapshot:()=>[],notice:()=>notice,stop:async()=>{},idle:()=>Promise.resolve()};
   }
+  const STALE_MS=7*24*3600*1000;
+  for(const [key,e]of Object.entries(store.state.tasks)){
+    const seen=Math.max(e.last_seen??0,e.sent_at??0);
+    if((e.status==='ended'||e.status==='idle')&&seen&&now()-seen>STALE_MS)delete store.state.tasks[key];
+  }
+  try{store.save(store.state);}catch{/* pruning is best effort */}
   let state=store.state,latest=[],active=null,stopped=false,lastCatalogAt=0,catalog={routes:[],complete:true},notice=null;
   const changed=()=>{try{onChange();}catch{/* UI updates do not affect capture */}};
   function commit(mutate,reserve=0) {
@@ -266,7 +272,20 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
     choices(){return !catalog.complete?[]:(catalog.routes??[]).filter(r=>safeCanonical(r.canonical_url)&&['owner','admin','member'].includes(r.role)).map(r=>({key:routeKey(r),repo:r.canonical_url,team_name:clean(r.team_name??'Team',60),board_name:clean(r.board_name??'Board',60)}));},
     // Main-only identity join for Overview; never forwarded to a renderer.
     overviewSnapshot(){return Object.values(state.tasks).map(e=>({provider:e.provider,session_id:e.session_id,task_id:e.task_id,card_id:e.card_id,untracked:!!e.untracked,destination:{...e.destination}}));},
-    snapshot(){return Object.entries(state.tasks).map(([key,e])=>({key,repo:e.repo,provider:e.provider,title:e.title,status:e.status,card_id:e.card_id,untracked:!!e.untracked,reason:e.reason??null,destination:{...e.destination}}));},
+    // The This Mac list: background entries saved before capture filtered them are hidden,
+    // and repeats of one piece of work collapse to a single row with a count.
+    snapshot(){
+      const rows=new Map();
+      for(const [key,e]of Object.entries(state.tasks)){
+        if(BACKGROUND_TITLE.test(String(e.title??'').trim()))continue;
+        const row={key,repo:e.repo,provider:e.provider,title:e.title,status:e.status,card_id:e.card_id,untracked:!!e.untracked,reason:e.reason??null,destination:{...e.destination},count:1};
+        const group=JSON.stringify([e.provider,e.title,e.destination]);
+        const prev=rows.get(group);
+        if(prev){row.count=prev.count+1;}
+        rows.set(group,row);
+      }
+      return [...rows.values()].map(r=>r.count>1?{...r,title:`${r.title} (${r.count})`}:r);
+    },
     async stop(){stopped=true;latest=null;await active;},idle:()=>active??Promise.resolve()};
 }
 module.exports={createWorkCapture,observation,BACKGROUND_TITLE,routeFor,repoFor,clean,phase,routeKey};
