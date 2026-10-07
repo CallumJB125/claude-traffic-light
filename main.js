@@ -164,6 +164,7 @@ function resizeBy(factor) {
 }
 
 const ROOT_DIR = process.env.CLAUDE_TRAFFIC_LIGHT_HOME || path.join(os.homedir(), '.claude-traffic-light');
+const SPEND_FIXTURE = DEMO === 'visual' ? path.join(ROOT_DIR, 'spend-snapshot.json') : null;
 const SESSIONS_DIR = path.join(ROOT_DIR, 'sessions');
 const BOUNDS_FILE = path.join(ROOT_DIR, 'window-bounds.json');
 const MANUAL_OVERRIDE_FILE = path.join(ROOT_DIR, 'manual-override.json');
@@ -3548,7 +3549,6 @@ function refreshSpend(minGap = SPEND_POLL_MS - 1000) {
 const spendTracker = Spend.tracker();
 // The visual tests hand in a snapshot they priced against a fixed clock, so a
 // baseline never waits on the refresh or on how many minutes have passed.
-const SPEND_FIXTURE = DEMO === 'visual' ? path.join(ROOT_DIR, 'spend-snapshot.json') : null;
 function spendSnapshot(config) {
   if (SPEND_FIXTURE && fs.existsSync(SPEND_FIXTURE)) return JSON.parse(fs.readFileSync(SPEND_FIXTURE, 'utf8'));
   if (!spendTurns.turns) return null;
