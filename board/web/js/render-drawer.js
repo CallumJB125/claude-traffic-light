@@ -174,7 +174,7 @@ function tabPanel(tab, detail, model, elapsed) {
   if (tab === 'messages') return messagePanel(detail, model);
   if (tab === 'ownership') return ownershipPanel(detail, model, detail.ownership_elapsed_ms ?? 0);
   if (tab === 'handover') {
-    if (!d.handover) return h('div', null, h('p', { class: 'muted' }, handoverReason(d)), localHandover(d.local_handover));
+    if (!d.handover) return h('div', null, d.local_handover?.markdown ? null : h('p', { class: 'muted' }, handoverReason(d)), localHandover(d.local_handover));
     const nar = d.handover.doc?.layers?.narrative;
     return h('div', null,
       nar && !nar.version ? h('p', { class: 'muted small' }, 'Facts only: the agent has not written a narrative for this run, so this lists what the runner synced.') : null,

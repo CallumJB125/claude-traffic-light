@@ -35,3 +35,37 @@ export function captureBadge(view, elapsed = 0, connectionLost = false) {
     h('span', { class: 'label capture-report', 'data-status': p.status, title: 'Reported local activity; not a verified board runner or permission to start another session.' }, p.label),
     h('span', { class: 'capture-last-report', title: p.exact ? `Reported ${p.exact}` : null }, p.lastReport)) : null;
 }
+
+// A captured card's body as written by src/work-record.js cardBody():
+// "Goal: …", the summary, "Files: a, b (+N more)". Any other text is summary.
+export function recordParts(text) {
+  const out = { goal: null, summary: null, files: [], more: 0 };
+  if (typeof text !== 'string' || !text.trim()) return out;
+  const blocks = text.split(/\n{2,}/).map((b) => b.trim()).filter(Boolean);
+  if (blocks[0]?.startsWith('Goal: ')) out.goal = blocks.shift().slice(6).trim() || null;
+  const last = blocks.at(-1);
+  if (last?.startsWith('Files: ') && !last.includes('\n')) {
+    blocks.pop();
+    const m = /^(.*?)(?: \(\+(\d+) more\))?$/.exec(last.slice(7));
+    out.files = m[1].split(', ').map((f) => f.trim()).filter(Boolean);
+    out.more = Number(m[2] ?? 0);
+  }
+  out.summary = blocks.join('\n\n') || null;
+  return out;
+}
+
+const SUMMARY_CHARS = 240;
+// The WorkRecord on the card face: what the session set out to do, where it got to, the files it changed.
+export function captureRecord(view) {
+  if (view?.capture?.source !== 'local_observation') return null;
+  const r = recordParts(view.capture.summary);
+  if (!r.goal && !r.summary && !r.files.length) return null;
+  const summary = r.summary && r.summary.length > SUMMARY_CHARS ? `${r.summary.slice(0, SUMMARY_CHARS - 1).trimEnd()}…` : r.summary;
+  const shown = r.files.slice(0, 3), hidden = r.files.length - shown.length + r.more;
+  return h('div', { class: 'capture-record' },
+    r.goal ? h('p', { class: 'capture-goal', title: r.goal }, h('span', { class: 'capture-record-label' }, 'Goal '), r.goal) : null,
+    summary ? h('p', { class: 'capture-summary', title: r.summary }, summary) : null,
+    shown.length ? h('ul', { class: 'capture-files', 'aria-label': 'Files changed' },
+      shown.map((f) => h('li', { key: f, class: 'capture-file num', title: f }, f)),
+      hidden > 0 ? h('li', { key: 'more', class: 'capture-file-more' }, `+${hidden} more`) : null) : null);
+}

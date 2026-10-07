@@ -109,6 +109,7 @@ function claudeFacts(lines, f) {
     if (!d || typeof d !== 'object' || d.isSidechain) continue;
     const at = isoOf(d.timestamp) || f.lastActive || new Date(0).toISOString();
     if (str(d.cwd)) f.cwd = d.cwd.slice(0, 500);
+    if (str(d.gitBranch) && d.gitBranch !== 'HEAD') f.branch = d.gitBranch.slice(0, 200);
     if (isoOf(d.timestamp) && !f.startedAt) f.startedAt = at;
     const m = d.message && typeof d.message === 'object' ? d.message : null;
     if (d.type === 'user' && m && !d.isMeta) {
@@ -154,6 +155,7 @@ function codexFacts(lines, f) {
     if (isoOf(d.timestamp) && !f.startedAt) f.startedAt = at;
     if ((d.type === 'session_meta' || d.type === 'turn_context') && str(p.cwd)) f.cwd = unfile(p.cwd).slice(0, 500);
     if (d.type === 'session_meta' && isoOf(p.timestamp)) f.startedAt = isoOf(p.timestamp);
+    if (d.type === 'session_meta' && p.git && str(p.git.branch)) f.branch = p.git.branch.slice(0, 200);
     if (d.type === 'response_item') {
       if (p.type === 'message' && p.role === 'user') { const t = promptText(textOf(p.content, ['input_text', 'text'])); if (t) Tap.mutate(f, 'prompt-submit', { prompt: t }, at); }
       else if (p.type === 'message' && p.role === 'assistant') { const t = textOf(p.content, ['output_text', 'text']); if (str(t)) { lastText = t; f.lastActive = at; } }

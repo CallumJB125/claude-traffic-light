@@ -11,7 +11,7 @@ import { cardChips } from './chips.js';
 import { costText, boardCostRollup, dailyCapText } from './cost.js';
 import { labelColor, labelClass, VIA_LABEL } from './labels.js';
 import { PILLS } from '../../shared/cardface.js';
-import { captureBadge } from './render-capture.js';
+import { captureBadge, captureRecord } from './render-capture.js';
 import {
   COLUMNS, COLUMN_LABEL, ACTION_LABEL, groupColumns, isHumanOwned, repoBranch, clock, initials, hueOf,
   primaryAction, boardLamps, stripGlyph, isObservedWork, cardWorkPhase, ADVANCED_ACTIONS, formatAge,
@@ -106,7 +106,8 @@ function actionButton(id, view, { primary: wantPrimary = false, busy = false, bu
 
 export function cardActions(face, view, busy) {
   if (isObservedWork(view)) return h('div', { class: 'card-actions' },
-    h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'open', 'data-card': view.id }, 'Show details'));
+    h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'open', 'data-card': view.id }, 'Show details'),
+    h('button', { type: 'button', class: 'btn btn-sm btn-ghost', 'data-action': 'open', 'data-section': 'handover', 'data-card': view.id, title: 'The handover Plexiform keeps for this session on this computer' }, 'Handover'));
   const primary = primaryAction(face);
   const buttons = face.actions.map((a) => actionButton(a, view, { primary: a === primary, busy: busy?.has(`${view.id}:${a}`), busyKeys: busy })).filter(Boolean);
   return buttons.length ? h('div', { class: 'card-actions' }, buttons) : null;
@@ -179,6 +180,7 @@ export function card({ view, face, elapsed_ms = 0 }, model) {
     h('button', { type: 'button', class: 'card-open', 'data-action': pending ? null : 'open', 'data-card': view.id, disabled: pending || null, 'aria-describedby': draggable ? 'dnd-help' : null }, view.title)),
   observed ? captureBadge(view, elapsed_ms, model.conn?.status === 'lost') : pill(chips.some((c) => c.id === 'proof') ? { ...face, reason: null } : face),
   workPhase ? h('p', { class: 'card-work-phase' }, workPhase) : null,
+  observed ? captureRecord(view) : null,
   observed ? h('p', { class: 'card-foot' }, 'Existing session · details only. Stop it in your AI tool before starting elsewhere.') : null,
   (sponsor || req || face.activity_line) ? h('div', { class: 'card-meta' },
     sponsor ? h('span', { class: 'card-sponsor' }, sponsor) : null,

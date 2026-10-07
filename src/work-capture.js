@@ -8,6 +8,7 @@ const { execFile } = require('node:child_process');
 const { toolEnv } = require('./tool-path');
 const { redactSecrets } = require('./secret-patterns');
 const { withDeadline, GRACE_MS } = require('./bounded-io');
+const WorkRecord = require('./work-record');
 const PROVIDERS = new Set(['codex','cursor','gemini','hermes','claude']);
 const ID = /^[A-Za-z0-9_.:-]{1,120}$/;
 const isId = value => typeof value==='string'&&ID.test(value);
@@ -122,7 +123,10 @@ function routeFor(repo,routes,choice) {
   return {kind:'local',needs_routing:true};
 }
 const routeKey = r => crypto.createHash('sha256').update(JSON.stringify([r.hub,r.user_id,r.team_id,r.board_id,r.repo_id])).digest('hex');
-function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam,resolveRepo=repoFor,ownedRoots=[],host=null,now=Date.now,log=()=>{},onChange=()=>{}}) {
+// factsFor(o): merged hook + transcript facts for one observation (the handover writer's facts), or null.
+// handoverFor(o): {available, written_at} for its local handover, or null. spendFor(o): {cost_usd, route}, or null.
+function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam,resolveRepo=repoFor,ownedRoots=[],host=null,now=Date.now,log=()=>{},onChange=()=>{},
+  factsFor=null,handoverFor=null,spendFor=null,home=null,recordsFile=path.join(path.dirname(file),'work-records.json')}) {
   let store;
   try {store=privateState(file,startEnabled);store.save(store.state);}
   catch {
@@ -139,6 +143,12 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
   }
   try{store.save(store.state);}catch{/* pruning is best effort */}
   let state=store.state,latest=[],active=null,stopped=false,lastCatalogAt=0,catalog={routes:[],complete:true},notice=null;
+  const records=WorkRecord.createWorkRecords({file:recordsFile,now,log});
+  const factsOf=WorkRecord.factsCache(factsFor,now);
+  const shareSalt=()=>crypto.createHash('sha256').update(`work-record:${state.install_id}`).digest('hex').slice(0,16);
+  const call=(fn,o)=>{try{return typeof fn==='function'?fn(o)??null:null;}catch{return null;}};
+  const recordFor=(o,raw,entry=null)=>WorkRecord.build({install_id:state.install_id,o,raw,facts:factsOf(o),repo_id:entry?.destination.kind==='team'?entry.destination.repo_id:null,
+    handover:entry?call(handoverFor,o):null,spend:entry?call(spendFor,o):null,home});
   const changed=()=>{try{onChange();}catch{/* UI updates do not affect capture */}};
   function commit(mutate,reserve=0) {
     // Publish memory only after the bounded private file commits. In particular
@@ -183,7 +193,11 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
     const newest=new Map();
     for(const raw of sessions.slice(0,50)) {
       const o=observation(raw,{ownedRoots,host});if(!o)continue;
-      const dup=JSON.stringify(raw.taskTitle?[o.provider,o.cwd??null,o.title]:[o.provider,o.session_id,o.task_id]),at=Date.parse(raw.updatedAt)||0;
+      // Background work seen only through its facts (a memories run titled by its prompt) gets no card,
+      // and a session restarted on the same request (resume, retry) is the same work.
+      const draft=fresh(raw)?recordFor(o,raw):null;if(draft&&BACKGROUND_TITLE.test(draft.title))continue;
+      const goal=draft?.goal??'';
+      const dup=JSON.stringify(raw.taskTitle?[o.provider,o.cwd??null,o.title]:goal.length>=20?[o.provider,o.cwd??null,goal]:[o.provider,o.session_id,o.task_id]),at=Date.parse(raw.updatedAt)||0;
       if(!newest.has(dup)||at>newest.get(dup).at)newest.set(dup,{at,raw});
     }
     const keep=new Set([...newest.values()].map(v=>v.raw));
@@ -211,21 +225,32 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
         if(!commit(next=>{next.tasks[key]={destination,repo,provider:o.provider,session_id:o.session_id,task_id:o.task_id,title:o.title,status:null,card_id:null,last_seen:now()};},ACK_RESERVE_BYTES))continue;
         entry=state.tasks[key];changed();}
       const currentRoute=routesByKey.get(routeKey(entry.destination));
-      const summary=entry.destination.kind==='local'||currentRoute?.share_summaries===true?o.summary:null;
-      const body={install_id:state.install_id,provider:o.provider,session_id:o.session_id,task_id:o.task_id,repo_id:entry.destination.repo_id??null,title:o.title,status:o.status,...(summary!==null?{summary}: {})};
+      const {title,summary}=cardText(o,raw,entry,currentRoute);
+      const body={install_id:state.install_id,provider:o.provider,session_id:o.session_id,task_id:o.task_id,repo_id:entry.destination.repo_id??null,title,status:o.status,...(summary!==null?{summary}: {})};
       // A repeated UI poll is not a new activity report. The hook's bounded
       // change marker detects new observations, never verified liveness.
       const marker=typeof raw.updatedAt==='string'?raw.updatedAt.slice(0,100):null;
       const fingerprint=crypto.createHash('sha256').update(JSON.stringify([body,marker])).digest('hex');
       if(entry.fingerprint===fingerprint)continue;
-      await send(key,body,{fingerprint,title:o.title,raw});
+      await send(key,body,{fingerprint,title,raw});
     }
     for(const [key,entry]of Object.entries(state.tasks)) {
       if(stopped||state.enabled===false)return;
       if(current.has(key)||entry.untracked||!entry.card_id||entry.status==='idle'||now()-entry.last_seen<30000)continue;
       const body={install_id:state.install_id,provider:entry.provider,session_id:entry.session_id,task_id:entry.task_id,repo_id:entry.destination.repo_id??null,title:entry.title,status:'idle'};
+      records.setStatus(`${state.install_id}:${entry.provider}:${entry.session_id}`,'idle');
       await send(key,body);
     }
+  }
+  // Title and card body from the WorkRecord. Local cards always get the body
+  // (it stays on this Mac); a team card only with share_summaries, scrubbed,
+  // with file paths only when the route also has share_files.
+  function cardText(o,raw,entry,route){
+    const stored=records.upsert(recordFor(o,raw,entry));
+    if(entry.destination.kind==='local')return {title:stored.title,summary:WorkRecord.cardBody(stored)};
+    const shared=WorkRecord.forShare(stored,route,{salt:shareSalt(),home});
+    // Without share_summaries a team title stays the reported task title or provider · folder: a prompt never leaves.
+    return {title:raw.taskTitle||!shared?o.title:shared.title,summary:shared?WorkRecord.cardBody(shared):null};
   }
   async function drain() {while(latest&&!stopped){const next=latest;latest=null;await pass(next);}}
   return {observe(sessions){if(stopped||state.enabled===false)return;latest=Array.isArray(sessions)?sessions:[];
@@ -252,12 +277,31 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
         entry=state.tasks[key];changed();
       }
       const route=entry.destination.kind==='team'?(catalog.routes??[]).find(r=>routeKey(r)===routeKey(entry.destination)):null;
-      const summary=entry.destination.kind==='local'||route?.share_summaries===true?o.summary:null;
-      await send(key,{install_id:state.install_id,provider:o.provider,session_id:o.session_id,task_id:o.task_id,repo_id:entry.destination.repo_id??null,title:o.title,status:o.status,...(summary!==null?{summary}:{})},{title:o.title,force:true});
+      const {title,summary}=cardText(o,raw,entry,route);
+      await send(key,{install_id:state.install_id,provider:o.provider,session_id:o.session_id,task_id:o.task_id,repo_id:entry.destination.repo_id??null,title,status:o.status,...(summary!==null?{summary}:{})},{title,force:true});
       const done=state.tasks[key];
       return done?.card_id?{ok:true,card_id:done.card_id,destination:{...done.destination}}:{ok:false,reason:done?.untracked?(done.reason||'untracked'):'send_failed'};
     },
     routes:()=>getRoutes(),
+    // For the team publisher: WorkRecords that may leave this Mac, each with its team destination.
+    // Only repos whose current route has share_summaries (files only with share_files), never
+    // personal, local, read-only or stopped work; text fully scrubbed (WorkRecord.forShare).
+    async shareableRecords(){
+      if(stopped)return [];
+      if(now()-lastCatalogAt>15000||!lastCatalogAt){catalog=await getRoutes();lastCatalogAt=now();}
+      const routesByKey=new Map((catalog.routes??[]).map(r=>[routeKey(r),r]));
+      const out=[];
+      for(const e of Object.values(state.tasks)){
+        if(e.untracked||e.destination.kind!=='team')continue;
+        const route=routesByKey.get(routeKey(e.destination));
+        if(!route||!['owner','admin','member'].includes(route.role))continue;
+        const record=WorkRecord.forShare(records.get(`${state.install_id}:${e.provider}:${e.session_id}`),route,{salt:shareSalt(),home});
+        if(record)out.push({destination:{hub:e.destination.hub,user_id:e.destination.user_id,team_id:e.destination.team_id,board_id:e.destination.board_id,repo_id:e.destination.repo_id},record});
+      }
+      return out;
+    },
+    // Main-only: this Mac's own WorkRecords (local data, never sent by this call).
+    localRecords:()=>records.list(),
     enabled:()=>state.enabled!==false,
     notice:()=>notice,
     setEnabled(on){if(!commit(next=>{next.enabled=!!on;}))return false;if(!on)latest=null;changed();return true;},

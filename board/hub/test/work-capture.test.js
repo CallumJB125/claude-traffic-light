@@ -302,6 +302,9 @@ test('embedded local owner captures no-repo work through actual private cookie a
   assert.equal(repeat.status, 200); assert.equal(repeat.body.card.id, first.body.card.id); assert.equal(b.app.db.get('SELECT COUNT(*) AS n FROM work_capture_cards').n, 1);
   const stop = await b.call('POST', `/api/cards/${first.body.card.id}/work-capture/stop`, {}); assert.equal(stop.status, 200); assert.equal(stop.body.capture.tracking, 'stopped');
   assert.ok(!dumpDb(b.app.db).includes(body.session_id));
+  const record = 'Goal: ship the retry\n\nHalf done\n\nFiles: src/webhook.js';
+  const withRecord = await b.call('POST', path(b.board), observation(null, { session_id: 'session-record', summary: record }));
+  assert.equal(withRecord.status, 200); assert.equal(withRecord.body.capture.summary, record);
 });
 
 test('an observed card cannot be set to Done while its AI still reports fresh work; a stale or finished report allows it', async (t) => {

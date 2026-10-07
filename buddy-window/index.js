@@ -247,6 +247,12 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     file: path.join(userData, 'work-capture.json'), host: os.hostname().split('.')[0],
     ownedRoots: [path.join(userData, 'runner'), path.join(userData, 'tasks'), path.join(userData, 'plexiform-tasks')],
     log: (message) => log('[work-capture]', message),
+    home: os.homedir(),
+    factsFor: (o) => handoverWriter()?.facts?.(o.provider === 'claude' ? 'claude-code' : o.provider, o.session_id) ?? null,
+    handoverFor(o) {
+      const i = handoverWriter()?.info?.({ source: o.provider, sessionId: o.session_id, cwd: o.cwd });
+      return i ? { available: i.state === 'ready', written_at: i.state === 'ready' ? i.updatedMs : null } : null;
+    },
     onChange() { if (flow.acct.screen === 'thismac' && accountView && !accountView.webContents.isDestroyed()) accountView.webContents.send('buddy:acct:changed'); },
     async getRoutes() {
       const hubs = store.hubs().filter(signedIn);

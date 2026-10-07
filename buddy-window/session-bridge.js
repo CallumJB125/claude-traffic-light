@@ -49,6 +49,11 @@ function createSessionBridge({ userData, hubs, clientFor, userOf, signedIn, supe
       const hub = currentHub();
       if (!writer || hub === undefined) return null;
       const allowed = await Share.rowsForHub({ rows: rows(), sessions: latest, hub, shared: links.shared(), rootOf: gitRoot });
+      const doc = Handover.forCard(writer, cardId, allowed);
+      if (doc || typeof writer.refresh !== 'function') return doc;
+      // A card's Handover action before the writer's next pass: the Sessions page's "Write now".
+      const row = allowed.find((c) => c && c.card_id === cardId && typeof c.session_id === 'string');
+      if (!row || !(await writer.refresh(Handover.keyOf(Handover.adapterOf(row.provider), row.session_id)))?.ok) return null;
       return Handover.forCard(writer, cardId, allowed);
     },
     repoKey: BurstHandover.repoKey,
