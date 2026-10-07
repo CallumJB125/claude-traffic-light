@@ -143,6 +143,7 @@
       "setups.js",
       "setups.css",
       "setups-preload.js",
+      "setups-personal.js",
       "input-bubble.js",
       "widget.js",
       "input-bubble.css",

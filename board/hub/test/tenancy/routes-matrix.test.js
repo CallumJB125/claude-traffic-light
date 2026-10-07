@@ -314,10 +314,11 @@ async function sweep(fx, caller) {
   const digest=v=>createHash('sha256').update(canonical(v)).digest('hex');fx.B.execution=randomUUID();
   fx.db.insert('workflow_executions',{id:fx.B.execution,org_id:fx.B.team,instance_id:fx.B.workflowInstance,board_id:fx.B.board,repo_id:fx.B.repo,source_plan_id:fx.B.workflowPlan,source_hash:digest(fixed),revision:0,state:'planned',created_epoch:fx.h.hub.epoch,created_ms:fx.h.hub.wallMs(),snapshot:canonical(fixed)});
   fx.db.insert('workflow_execution_steps',{execution_id:fx.B.execution,position:0,card_id:current.id,source_hash:digest(planSnapshot.steps[0]),version:current.version,fence:current.fence,state:'pending'});
+  const planBefore=fx.db.get('SELECT plan FROM orgs WHERE id=?',fx.B.team).plan;fx.db.run("UPDATE orgs SET plan='pro' WHERE id=?",fx.B.team); // Team setups need the Team plan
   const payload={schema:1,files:[{id:randomUUID(),source_id:'git',relative_path:'.gitconfig',format:'gitconfig',content:'[alias]\n st = status\n',note:''}],items:[],note:MARK};
   const checked=validatePayload(payload);
   const setup=await fx.as(fx.users.ub,'POST',`/api/teams/${fx.B.team}/setups`,{request_id:randomUUID(),expected_version_id:null,payload,review:{schema:1,approved:true,content_hash:checked.content_hash,file_hashes:checked.file_hashes}},{'x-plexiform-account':fx.users.ub.id,'x-plexiform-member':fx.B.owner});
-  assert.equal(setup.status,200,setup.text);fx.B.setupProfile=setup.body.profile.id;fx.B.setupVersion=setup.body.version.id;
+  assert.equal(setup.status,200,setup.text);fx.B.setupProfile=setup.body.profile.id;fx.B.setupVersion=setup.body.version.id;fx.db.run('UPDATE orgs SET plan=? WHERE id=?',planBefore,fx.B.team);
   const setupsBefore=JSON.stringify(fx.db.all('SELECT * FROM setup_versions WHERE profile_id=?',fx.B.setupProfile));
   // A live share of a B member's session with team B.
   fx.B.share = randomUUID(); fx.B.shareSession = randomUUID();

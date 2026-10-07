@@ -2020,11 +2020,11 @@ test('runner events: the window object exposes onRunnerEvent(cb) → unsubscribe
   assert.match(idx, /onRunnerEvent\(cb\) \{ if \(typeof cb !== 'function'\) return \(\) => \{\}; runnerListeners\.add\(cb\); return \(\) => runnerListeners\.delete\(cb\); \},/);
 });
 
-test('Setups is hidden from the sidebar until Apply and Undo exist, but its page stays addressable', () => {
+test('Setups is listed under Settings now that personal export/import, Apply and Undo exist (free entitlement)', () => {
   const { SECTIONS, pageById, sectionOf } = require('../buddy-window/pages');
-  assert.ok(!SECTIONS.some(s => s.pages.includes('setups')));
-  assert.equal(sectionOf('setups'), null);
-  assert.equal(pageById('setups').hidden, true);
+  assert.ok(SECTIONS.find(s => s.id === 'settings').pages.includes('setups'));
+  assert.equal(sectionOf('setups'), 'settings');
+  assert.equal(pageById('setups').file, 'setups.html');
 });
 
 test('Calendar and Timeline leave the sidebar but stay addressable; PLEXIFORM_SHOW_PLANNER=1 restores them', () => {

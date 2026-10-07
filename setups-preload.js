@@ -11,7 +11,27 @@ function localPlan(handle,input){
   if(Object.keys(input.values).length>128||Object.entries(input.values).some(([k,v])=>!/^(USER|HOSTNAME|NAME|EMAIL(?::\d+)?|IP:\d+|HOST:\d+|PRIVATE:\d+|SSH_USER|SECRET:[\w.-]{1,64})$/.test(k)||typeof v!=='string'||v.includes('\0')||bytes(v)>4096)||Object.values(input.values).reduce((n,v)=>n+bytes(v),0)>16384)return refuse();
   return ipcRenderer.invoke('setups:plan',handle,JSON.parse(JSON.stringify(input)));
 }
+// Personal export/import and Apply with backup (src/setups-personal.js). Ids
+// and choices are copied and bounded here; file paths are only ever chosen in
+// main's own dialogs.
+const ids=(x,max)=>Array.isArray(x)&&x.length<=max&&x.every(v=>typeof v==='string'&&v.length>0&&v.length<=200);
+function personalApply(handle,input){
+  if(!uuid(handle)||!closed(input,['selected','confirmed','values'])||!ids(input.selected,512)||!input.selected.length||!ids(input.confirmed,512)||!input.values||typeof input.values!=='object'||Array.isArray(input.values))return refuse();
+  const entries=Object.entries(input.values);
+  if(entries.length>128||entries.some(([k,v])=>k.length>100||typeof v!=='string'||v.length>4096))return refuse();
+  return ipcRenderer.invoke('setups:personal-apply',handle,JSON.parse(JSON.stringify({selected:input.selected,confirmed:input.confirmed,values:input.values})));
+}
+const personal={
+  collect:()=>ipcRenderer.invoke('setups:personal-collect'),
+  exportFile:(handle,excluded)=>uuid(handle)&&ids(excluded,256)&&excluded.every(uuid)?ipcRenderer.invoke('setups:personal-export',handle,[...excluded]):refuse(),
+  importFile:()=>ipcRenderer.invoke('setups:personal-import'),
+  teamPlan:handle=>uuid(handle)?ipcRenderer.invoke('setups:team-plan',handle):refuse(),
+  apply:personalApply,
+  backups:()=>ipcRenderer.invoke('setups:personal-backups'),
+  undo:id=>opaque('setups:personal-undo',id),
+};
 contextBridge.exposeInMainWorld('setupsApi',{
+  personal,
   state:()=>ipcRenderer.invoke('setups:state'),read:handle=>ipcRenderer.invoke('setups:read',handle),
   draft:(handle,input)=>ipcRenderer.invoke('setups:draft',handle,input),edit:(handle,input)=>ipcRenderer.invoke('setups:edit',handle,input),
   approve:(handle,file,hash)=>ipcRenderer.invoke('setups:approve',handle,file,hash),publish:(handle,hash)=>ipcRenderer.invoke('setups:publish',handle,hash),

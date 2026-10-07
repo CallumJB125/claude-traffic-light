@@ -8,7 +8,8 @@ import {Setups} from '../setups.js';
 const content='[alias]\n st = status\n[user]\n name = {{NAME}}\n email = {{EMAIL}}\n';
 const payload=()=>({schema:1,files:[{id:randomUUID(),source_id:'git',relative_path:'.gitconfig',format:'gitconfig',content,note:''}],items:[],note:'Reviewed team setup'});
 const body=(p=payload(),expected=null)=>{const c=validatePayload(p);return {request_id:randomUUID(),expected_version_id:expected,payload:p,review:{schema:1,approved:true,content_hash:c.content_hash,file_hashes:c.file_hashes}};};
-async function fixture(t){const fx=await tenancy();t.after(()=>fx.h.close());const call=fx.as;fx.as=(u,method,path,body,headers={})=>call(u,method,path,body,{'x-plexiform-account':u.id,'x-plexiform-member':fx.db.get('SELECT id FROM members WHERE user_id=? AND org_id=? AND removed_at IS NULL',u.id,fx.A.team)?.id??'missing',...headers});return fx;}
+// Team setups are a Team plan feature (orgs.plan 'pro'); PLAN_REQUIRED tests pass plan 'free'.
+async function fixture(t,plan='pro'){const fx=await tenancy();t.after(()=>fx.h.close());fx.db.run('UPDATE orgs SET plan=? WHERE id=?',plan,fx.A.team);const call=fx.as;fx.as=(u,method,path,body,headers={})=>call(u,method,path,body,{'x-plexiform-account':u.id,'x-plexiform-member':fx.db.get('SELECT id FROM members WHERE user_id=? AND org_id=? AND removed_at IS NULL',u.id,fx.A.team)?.id??'missing',...headers});return fx;}
 const path=fx=>`/api/teams/${fx.A.team}/setups`;
 async function publish(fx,b=body(),user=fx.users.ua){const r=await fx.as(user,'POST',path(fx),b);assert.equal(r.status,200,r.text);return r.body;}
 const until=async fn=>{for(let n=0;n<100&&!fn();n++)await new Promise(resolve=>setImmediate(resolve));assert.ok(fn(),'request reached actual held queue');};
@@ -153,4 +154,27 @@ test('keyless current list withholds an existing baseline and every profile',asy
   const fx=await fixture(t),p=await publish(fx);assert.equal((await fx.as(fx.users.ua,'PUT',`/api/teams/${fx.A.team}/setup-baseline`,{request_id:randomUUID(),profile_id:p.profile.id,version_id:p.version.id,selection:[p.payload.files[0].id],required:true})).status,200);
   fx.h.hub.vaultKey=null;fx.h.hub._vaultFor=undefined;
   const result=await fx.as(fx.users.ua,'GET',path(fx));assert.equal(result.status,200,result.text);assert.equal(result.body.status,'unavailable');assert.equal(result.body.baseline,null);assert.deepEqual(result.body.profiles,[]);
+});
+
+test('Team plan required: free teams get PLAN_REQUIRED for publish, teammate reads, baseline and receipts; owners keep their own data',async t=>{
+  const fx=await fixture(t,'free');
+  const denied=await fx.as(fx.users.ua,'POST',path(fx),body());
+  assert.equal(denied.status,402,denied.text);assert.equal(denied.body.error.code,'PLAN_REQUIRED');assert.equal(denied.body.error.feature,'setups.team');assert.equal(denied.body.error.plan,'team');
+  assert.equal(fx.db.get('SELECT COUNT(*) n FROM setup_versions').n,0);
+  assert.equal((await fx.as(fx.users.ua,'GET',path(fx))).status,200,'listing stays available');
+  // Shared while on Team, then the plan lapsed.
+  fx.db.run("UPDATE orgs SET plan='pro' WHERE id=?",fx.A.team);const p=await publish(fx);fx.db.run("UPDATE orgs SET plan='free' WHERE id=?",fx.A.team);
+  const endpoint=`/api/setup-profiles/${p.profile.id}`;
+  const teammate=await fx.as(fx.users.amember,'GET',endpoint);assert.equal(teammate.status,402);assert.ok(!teammate.text.includes(content));
+  assert.equal((await fx.as(fx.users.amember,'POST',`${endpoint}/borrow-receipts`,{request_id:randomUUID(),version_id:p.version.id,selection:[p.payload.files[0].id],outcome:'reviewed'})).status,402);
+  assert.equal((await fx.as(fx.users.aadmin,'PUT',`/api/teams/${fx.A.team}/setup-baseline`,{request_id:randomUUID(),profile_id:p.profile.id,version_id:p.version.id,selection:[p.payload.files[0].id],required:true})).status,402);
+  assert.equal((await fx.as(fx.users.ua,'POST',path(fx),body(payload(),p.version.id))).status,402);
+  assert.equal((await fx.as(fx.users.ua,'GET',endpoint)).status,200,'owner reads own');
+  assert.equal((await fx.as(fx.users.ua,'GET',`${endpoint}/export`)).status,200,'owner exports own');
+  assert.equal((await fx.as(fx.users.ua,'DELETE',endpoint,{request_id:randomUUID(),expected_version_id:p.version.id})).status,200,'owner can always unpublish');
+});
+test('Team plan does not widen roles: viewers still cannot publish and self_hosted teams are entitled',async t=>{
+  const fx=await fixture(t,'self_hosted');
+  assert.equal((await fx.as(fx.users.aviewer,'POST',path(fx),body())).status,403);
+  const p=await publish(fx);assert.equal((await fx.as(fx.users.amember,'GET',`/api/setup-profiles/${p.profile.id}`)).status,200);
 });

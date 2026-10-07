@@ -128,7 +128,17 @@ async function openProfile(profile,team){
       await action('unpublish',{},refresh);
     }));
   }
-  renderLocalPlan(selection);
+  if(window.SetupsPersonal&&api.personal){
+    // Same reviewed Apply-with-backup as an imported file; the hub enforces the Team plan.
+    const holder=el('div'),line=el('p');line.setAttribute('role','status');
+    review.append(el('h3','Use this setup on this computer'),button('Preview applying this setup here',async()=>{
+      if(chosen!==selection)return;const plan=await api.personal.teamPlan(profile.handle);
+      if(chosen!==selection||!holder.isConnected)return;
+      if(!plan?.ok){line.textContent=plan?.error??'This team setup is unavailable. Refresh current team access.';return;}
+      window.SetupsPersonal.renderPlan(holder,plan,line,()=>chosen===selection&&holder.isConnected);
+    }),line,holder);
+  }
+  if(api.nativeLocal)renderLocalPlan(selection);
   review.scrollIntoView({block:'start'});
 }
 // Local capability is checked only by an explicit click. Merely loading a
@@ -140,6 +150,9 @@ function localButton(text,fn,allowed=()=>true){
 }
 function clearLocal(){
  localGeneration++;localSequence++;localCapability=null;localBusy=null;
+ // The signed native helper path stays held until packaged acceptance; the
+ // cross-platform Apply/Undo in setups-personal.js is the one people use.
+ local.hidden=!api.nativeLocal;if(!api.nativeLocal){local.replaceChildren();return;}
  const message=el('p','Check local capability before planning changes. Locked history lists metadata without unlocking contents.'),history=el('div');message.setAttribute('role','status');message.setAttribute('aria-live','polite');history.className='local-history';
  local.replaceChildren(el('h2','Local changes and recovery'),message);
  local.append(localButton('Check local capability',async()=>{

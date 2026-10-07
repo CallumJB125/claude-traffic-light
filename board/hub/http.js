@@ -925,6 +925,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
       }
       if(r.method === 'POST' && r.pattern === '/api/teams/:team_id/setups') {
         setups.scope(member,params.team_id,ident.cred,'setups.publish');
+        setups.entitled(params.team_id);
         if(setupUploads>=4) throw new HubError('RATE_LIMITED','Setups uploads are busy; try again shortly',{retry_after_s:1});
         setupUploads++; setupUploadSlot=true;
       }

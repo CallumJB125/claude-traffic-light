@@ -590,6 +590,7 @@ Codes and HTTP statuses: `protocol.ERRORS`.
 | `FORBIDDEN` | 403 | Authenticated but not allowed (viewer, not an approver, cross-origin) |
 | `POLICY_DENIED` | 403 | Hub or runner policy refuses (never_auto, budget, requeue, plan kind) |
 | `QUOTA_EXCEEDED` | 403 | Accounts: a plan limit (teams per user, members or boards per team, pending invites, cards or comments per team); `resource`, `limit` (D62). New-item admission can also be temporarily refused for configured storage pressure (`resource: 'storage'`); edits, reads, deletion and accepted runner outcomes remain available. |
+| `PLAN_REQUIRED` | 402 | Accounts: a paid team feature on a team whose plan lacks it (today Team setups: publish, baseline, receipts and reading a teammate's setup need `pro` or `self_hosted`); `feature`, `plan`. Owners can still read, export and unpublish their own setup. |
 | `EMAIL_UNVERIFIED` | 403 | Accounts: creating a team or inviting needs a verified email (D59) |
 | `WRONG_ACCOUNT` | 403 | Accounts: a valid invite token held by a signed-in user whose verified email isn't the invite's; names no address (D64) |
 | `SIGNUP_CLOSED` | 403 | Accounts: a new account the sign-up control does not admit; the fixed invite-only text, never the list (D104) |
