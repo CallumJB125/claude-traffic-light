@@ -15,4 +15,8 @@ contextBridge.exposeInMainWorld('sessionsApi', {
   share: (handle, on) => ipcRenderer.invoke('sessions:share', handle, on),
   connect: () => ipcRenderer.invoke('sessions:connect'),
   burstShare: (repo, on) => ipcRenderer.invoke('burst:handover-share', repo, on),
+  burstView: (name, args) => ipcRenderer.invoke('burst:view', name, args),
+  burstAction: (id, args) => ipcRenderer.invoke('burst-action', id, args),
+  contextBreakdown: (session) => ipcRenderer.invoke('burst:context-breakdown', session),
+  messageOwned: (session, text) => ipcRenderer.invoke('sessions:message', session, text),
 });

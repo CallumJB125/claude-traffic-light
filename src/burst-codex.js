@@ -49,6 +49,12 @@ function codexView(codex) {
 
 const shortId = (id) => str(id, 80).slice(0, 8);
 
+const strs = (v, max, n) => (Array.isArray(v) ? v : []).slice(0, max).map((x) => str(x, n)).filter(Boolean);
+const ISSUE_KINDS = ['error', 'stopped'];
+const COUNTS = ['shared', 'refused', 'taken', 'passed', 'asked', 'inherited', 'held', 'stopped', 'errors', 'released'];
+
+// /api/coordination: who masters which file, plus the metrics window (days) and its
+// issues (hook errors, sessions that stopped with uncommitted files they master).
 function normalizeCoordination(raw) {
   const r = obj(raw);
   const st = r && obj(r.status);
@@ -57,22 +63,44 @@ function normalizeCoordination(raw) {
     id: str(s.id, 80),
     name: str(s.name || s.label, 120),
     task: str(s.task, 200),
-    masterOf: (Array.isArray(s.master_of) ? s.master_of : []).slice(0, 50).map((p) => str(p, 300)).filter(Boolean),
+    masterOf: strs(s.master_of, 50, 300),
   })).filter((s) => s.id);
   const files = (Array.isArray(st.files) ? st.files : []).slice(0, 200).filter(obj).map((f) => ({
-    path: str(f.path, 300), master: str(f.master_name || f.master_label, 120),
-    contributors: (Array.isArray(f.contributor_names) ? f.contributor_names : Array.isArray(f.contributors) ? f.contributors : []).slice(0, 10).map((c) => str(c, 120)).filter(Boolean),
+    path: str(f.path, 300), master: str(f.master_name || f.master_label, 120), masterId: str(f.master, 80),
+    contributors: strs(Array.isArray(f.contributor_names) ? f.contributor_names : f.contributors, 10, 120),
+    contributorIds: strs(f.contributors, 10, 80),
+    takeOver: f.take_over === true, wanted: str(f.wanted, 120),
   })).filter((f) => f.path);
-  return r.config && obj(r.config) && r.config.enabled === false ? null : { sessions, files };
+  const m = obj(r.metrics);
+  const totals = obj(m && m.totals);
+  const issues = (m && Array.isArray(m.issues) ? m.issues : []).slice(-100).filter(obj).map((i) => ({
+    at: str(i.at, 40), kind: ISSUE_KINDS.includes(i.kind) ? i.kind : 'error', text: str(i.text, 300), session: str(i.session, 80),
+    files: strs(i.files, 20, 300), pending: strs(i.pending, 20, 300), resolved: i.resolved === true,
+  })).reverse();
+  const metrics = m ? {
+    days: [1, 7, 14].includes(m.days) ? m.days : 1,
+    totals: Object.fromEntries(COUNTS.map((k) => [k, num(totals && totals[k])])),
+    unresolved: num(m.unresolved),
+    issues,
+  } : null;
+  return r.config && obj(r.config) && r.config.enabled === false ? null : { sessions, files, metrics };
 }
 
-// What one Sessions row shows: the files this session is master of, or null.
+const sameId = (a, b) => !!a && !!b && (a === b || shortId(a) === shortId(b));
+
+// What one Sessions row shows: the files this session masters (and whether other sessions
+// changed them too), the files it changed that another session masters, or null when
+// coordination does not know the session.
 function coordinationFor(coord, sessionId) {
   if (!coord || typeof sessionId !== 'string' || !sessionId) return null;
-  const s = coord.sessions.find((x) => x.id === sessionId || shortId(x.id) === shortId(sessionId));
-  if (!s || !s.masterOf.length) return null;
+  const s = coord.sessions.find((x) => sameId(x.id, sessionId));
+  if (!s) return null;
+  const fileOf = (p) => coord.files.find((f) => f.path === p);
   const shared = coord.files.filter((f) => s.masterOf.includes(f.path) && f.contributors.length).length;
-  return { masterOf: s.masterOf.slice(0, 5), more: Math.max(0, s.masterOf.length - 5), shared };
+  const files = s.masterOf.slice(0, 5).map((p) => { const f = fileOf(p); return { path: p, master: true, others: f ? f.contributors.slice(0, 3) : [] }; });
+  const contributes = coord.files.filter((f) => !s.masterOf.includes(f.path) && f.contributorIds.some((c) => sameId(c, sessionId)))
+    .slice(0, 5).map((f) => ({ path: f.path, master: false, masterName: f.master }));
+  return { masterOf: s.masterOf.slice(0, 5), more: Math.max(0, s.masterOf.length - 5), shared, files: [...files, ...contributes] };
 }
 
 // Per-session context fill from /api/state context.sessions: tokens in context over
