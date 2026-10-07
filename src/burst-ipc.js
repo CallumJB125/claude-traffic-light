@@ -91,6 +91,25 @@ function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usag
     try { return await client.testConnection(); } catch { return { ok: false, detail: 'Burst did not answer.' }; }
   });
 
+  // Pauseless compaction switch. Turning it on needs the renderer's inline confirm (`confirmed`),
+  // which is re-checked here; turning it off or changing mode never does.
+  utilityHandle('burst:set-compaction', card, async (_e, req) => {
+    if (!isMac) return { ok: false, error: View.MAC_ONLY };
+    const r = req && typeof req === 'object' ? req : {};
+    const cur = last.kind === 'present' && last.state.compaction.pauseless;
+    if (!cur) return { ok: false, error: 'Burst is not answering with a compaction setting.' };
+    if (typeof r.enabled !== 'boolean' || (r.mode !== undefined && r.mode !== 'fixed' && r.mode !== 'intelligent')) return { ok: false, error: 'Bad request.' };
+    if (r.enabled && !cur.enabled && r.confirmed !== true) return { ok: false, needsConfirm: true, text: View.COMPACTION_ON_CONFIRM };
+    try { await client.setCompaction({ enabled: r.enabled, mode: r.mode }); } catch (e) {
+      log('[burst] set compaction failed', e && e.code);
+      const why = e.code === 'http' && e.detail ? `Burst refused it: ${e.detail}` : e.code === 'timeout' ? 'Burst did not answer in time.' : e.code === 'bad_config' ? `${e.message}. Nothing was changed.` : 'Could not change Burst\'s compaction setting. Nothing was changed.';
+      return { ok: false, error: why };
+    }
+    backoff.reset();
+    const view = await refresh(true);
+    return { ok: true, view, note: r.enabled ? View.COMPACTION_OWN_OFF : '' };
+  });
+
   // Widget and Usage header: the chip only, never the card's actions or anything raw. Null on other platforms.
   utilityHandle('burst:chip', chipAllowed, async () => {
     if (!isMac) return { chip: null, nextPollMs: 0 };

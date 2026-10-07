@@ -47,7 +47,7 @@ test('client.usage and compaction stats come from the fake Burst, GET only, norm
   try {
     const d = await client.detect();
     assert.equal(d.kind, 'present');
-    assert.deepEqual(d.state.compaction, { active: true, sessions: [{ session: 's-1', compactions: 2, requests: 9, savedTokens: 5000, savedUsd: 1.25, netUsd: 0.75 }] });
+    assert.deepEqual(d.state.compaction, { active: true, pauseless: { available: true, enabled: true, mode: 'fixed', thresholdLabel: 'Static', savedUsd: 0, compactions: 0, tokensNotResent: 0 }, sessions: [{ session: 's-1', compactions: 2, requests: 9, savedTokens: 5000, savedUsd: 1.25, netUsd: 0.75 }] });
     assert.equal(await client.sessionSecondaryUsd('s-1'), 1.5);
     const u = await client.usage({ range: 'bogus' });
     assert.equal(u.byProvider.length, 2);

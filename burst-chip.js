@@ -34,7 +34,7 @@
       const r = await api.burstChip();
       const c = r && r.chip;
       chip.hidden = !c;
-      if (c) { text.textContent = c.label; dot.style.background = COLORS[c.tone] || COLORS.grey; }
+      if (c) { text.textContent = c.label; chip.title = c.tag ? `Claude Burst \u00b7 ${c.tag}` : 'Claude Burst'; dot.style.background = COLORS[c.tone] || COLORS.grey; }
       next = r && r.nextPollMs;
       if (!next) { stopped = true; return; }
     } catch { /* retry at the slow interval */ }

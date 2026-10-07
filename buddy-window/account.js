@@ -145,9 +145,41 @@ function burstSection() {
   const chip = el('span', { class: 'acct-mail', role: 'status' });
   const result = el('p', { class: 'acct-hint', role: 'status' });
   const buttons = el('div', {});
+  const pl = el('div', { hidden: true });
+  const plState = el('p', { class: 'acct-hint', role: 'status' });
+  const plStats = el('p', { class: 'acct-hint', role: 'status' });
+  const plResult = el('p', { class: 'acct-hint', role: 'status' });
+  const plConfirm = el('div', { hidden: true });
+  const plConfirmText = el('p', { class: 'acct-hint' });
+  const plSet = async (req) => {
+    plResult.textContent = '';
+    const r = await api.burstSetCompaction(req).catch(() => ({ ok: false, error: 'Something went wrong.' }));
+    if (r && r.needsConfirm) { plConfirmText.textContent = r.text; plConfirm.hidden = false; return; }
+    plConfirm.hidden = true;
+    plResult.textContent = r && r.ok ? (r.note || '') : ((r && r.error) || 'Something went wrong.');
+    poll();
+  };
+  const plBtn = (label, req, primary) => el('button', { type: 'button', class: primary ? 'btn btn-primary' : 'btn', onclick: () => plSet(req) }, label);
+  const plDraw = (c) => {
+    pl.hidden = !c;
+    if (!c) return;
+    const tok = (n) => (n >= 1e6 ? `${+(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n));
+    plState.textContent = `${c.enabled ? 'On' : 'Off'}, ${c.thresholdLabel}.${c.enabled ? ' Plexiform\u2019s own Claude compactor is off while this is on.' : ''}`;
+    plStats.textContent = c.compactions ? `${c.compactions} ${c.compactions === 1 ? 'compaction' : 'compactions'} \u00b7 saved ~$${c.savedUsd.toFixed(2)} \u00b7 ${tok(c.tokensNotResent)} tokens not resent` : 'No compactions yet.';
+    plActions.textContent = '';
+    plActions.append(c.enabled ? plBtn('Turn off', { enabled: false }, false) : plBtn('Turn on', { enabled: true }, true),
+      plBtn(c.mode === 'fixed' ? 'Static (current)' : 'Static', { enabled: c.enabled, mode: 'fixed' }, false),
+      plBtn(c.mode === 'intelligent' ? 'Smart (current)' : 'Smart', { enabled: c.enabled, mode: 'intelligent' }, false));
+  };
+  const plActions = el('div', {});
+  pl.append(el('h3', {}, 'Pauseless compaction'),
+    el('p', { class: 'acct-hint' }, 'Keeps long Claude Code sessions going without the pause: Burst summarises the old part in the background and swaps it in. It can raise cost slightly when a summary is made; savings shown below.'),
+    plState, plStats, plActions, plConfirm, plResult);
+  plConfirm.append(plConfirmText, el('button', { type: 'button', class: 'btn btn-primary', onclick: () => plSet({ enabled: true, confirmed: true }) }, 'Turn on'),
+    el('button', { type: 'button', class: 'btn', onclick: () => { plConfirm.hidden = true; } }, 'Cancel'));
   const name = el('span', { class: 'acct-name' }, 'Claude Burst');
   const sec = el('section', { class: 'acct-section' }, el('h2', {}, 'Claude Burst'),
-    el('div', { class: 'acct-item' }, el('div', { class: 'acct-who' }, name, detail, chip)), buttons, result);
+    el('div', { class: 'acct-item' }, el('div', { class: 'acct-who' }, name, detail, chip)), buttons, pl, result);
   let timer = null;
   let seen = false;
   const poll = async () => {
@@ -160,6 +192,7 @@ function burstSection() {
       if (v) {
         detail.textContent = v.detail;
         chip.textContent = v.chip ? v.chip.label : '';
+        plDraw(v.compaction);
         buttons.textContent = '';
         for (const a of v.actions) {
           buttons.append(el('button', { type: 'button', class: a.primary ? 'btn btn-primary' : 'btn', onclick: async () => {

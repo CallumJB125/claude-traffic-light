@@ -83,11 +83,32 @@ function secondaryBySession(usage) {
   return out;
 }
 
+const tokensLabel = (n) => (n >= 1e6 ? `${+(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n));
+
+// What the Pauseless compaction section draws: the setting plus Burst's own savings figures.
+function pauselessView(cfg, stats) {
+  const st = stats && typeof stats === 'object' ? stats : {};
+  const mode = cfg.mode === 'intelligent' ? 'intelligent' : 'fixed';
+  const at = mode === 'intelligent' ? num(cfg.floor_tokens) : num(cfg.compact_at_tokens);
+  const name = mode === 'intelligent' ? 'Smart' : 'Static';
+  return {
+    available: true,
+    enabled: cfg.enabled === true,
+    mode,
+    thresholdLabel: at ? `${name}, from ${tokensLabel(at)} tokens` : name,
+    savedUsd: num(st.saved_usd),
+    compactions: num(st.compactions),
+    tokensNotResent: num(st.tokens_not_resent),
+  };
+}
+
 function normalizeCompaction(state) {
   const c = state && state.context && typeof state.context === 'object' ? state.context : {};
   const sessions = c.compaction_stats && Array.isArray(c.compaction_stats.sessions) ? c.compaction_stats.sessions : [];
+  const cfg = c.compaction && typeof c.compaction === 'object' && !Array.isArray(c.compaction) ? c.compaction : null;
   return {
     active: !!(c.compaction && c.compaction.enabled === true),
+    ...(cfg ? { pauseless: pauselessView(cfg, c.compaction_stats) } : {}),
     sessions: sessions.slice(0, 100).map((s) => ({
       session: str(s && s.session, 80), compactions: num(s && s.compactions), requests: num(s && s.requests),
       savedTokens: num(s && s.saved_tokens), savedUsd: num(s && s.saved_usd), netUsd: Number.isFinite(s && s.net_usd) ? s.net_usd : 0,
@@ -103,4 +124,4 @@ function withBurstCompaction(settings, burstActive) {
   return { ...settings, providers: { ...(settings.providers || {}), claude: false } };
 }
 
-module.exports = { normalizeUsage, throughBurstView, secondaryUsdOf, secondaryBySession, normalizeCompaction, withBurstCompaction, isSecondaryRoute, SOURCE, COMPACTION_NOTE, MAX_ROWS };
+module.exports = { tokensLabel, normalizeUsage, throughBurstView, secondaryUsdOf, secondaryBySession, normalizeCompaction, withBurstCompaction, isSecondaryRoute, SOURCE, COMPACTION_NOTE, MAX_ROWS };

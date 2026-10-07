@@ -496,6 +496,7 @@
   <!-- end F1 spend -->
   <!-- Compactor (src/compaction.js) -->
   <h2>Compactor</h2>
+  <div class="field pauseless" hidden></div>
   <div class="field">
     <label class="row"><input type="checkbox" id="compact-enabled" aria-describedby="hint-compact" /> Compact long sessions in the background</label>
     <div class="hint" id="hint-compact">When a session gets full, the older part of the conversation is summarised while you keep working, and the summary is in place before your next message. Only applies to sessions Plexiform started; sessions you started in a terminal can't be compacted from here.</div>
@@ -586,6 +587,7 @@
       <label class="row"><input type="radio" name="burst-mode" value="base-url" checked /> Base-URL mode (no root changes)</label>
       <label class="row"><input type="radio" name="burst-mode" value="transparent" /> Transparent mode (whole Mac, needs your password in Terminal)</label>
     </div>
+    <div class="pauseless" hidden></div>
     <div class="row" id="burst-actions"></div>
     <details id="burst-consent-box" hidden><summary>What this changes on your Mac</summary><div id="burst-consent"></div></details>
     <div class="hint" id="burst-result" role="status" aria-live="polite"></div>

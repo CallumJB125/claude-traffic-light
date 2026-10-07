@@ -47,6 +47,7 @@ contextBridge.exposeInMainWorld('settingsApi', {
   burstConsent: (kind, mode) => ipcRenderer.invoke('burst:consent-text', kind, mode),
   burstAction: (req) => ipcRenderer.invoke('burst:action', req),
   burstTest: () => ipcRenderer.invoke('burst:test'),
+  burstSetCompaction: (req) => ipcRenderer.invoke('burst:set-compaction', req),
   openFeedback: () => ipcRenderer.invoke('open-feedback'),
   onShowSection: (cb) => ipcRenderer.on('show-section', (e, id) => cb(id)),
 });
