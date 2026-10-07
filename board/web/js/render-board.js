@@ -392,7 +392,7 @@ const ADVANCED_VIEWS = new Set(['calendar', 'timeline', 'dashboard']);
 
 function viewSwitch(model, keep = () => true, label = 'Board views') {
   return h('nav', { class: 'viewswitch', 'aria-label': label },
-    VIEWS.filter((v) => v.switcher !== false && keep(v)).map((v) => h('button', {
+    VIEWS.filter((v) => v.switcher !== false && (!v.planner || model.showPlanner) && keep(v)).map((v) => h('button', {
       key: v.id, type: 'button', class: 'viewswitch-btn', 'data-action': 'view', 'data-view': v.id,
       'aria-pressed': model.view === v.id ? 'true' : 'false',
       // The text label is hidden on phones; the name must survive it.

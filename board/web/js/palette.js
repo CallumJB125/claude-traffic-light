@@ -66,9 +66,9 @@ function giveFor(e) {
 
 const cmd = (id, title, run, extra = {}) => ({ id: `cmd:${id}`, kind: 'command', title, run, keywords: '', ...extra });
 
-export function commandItems({ view, readOnly, filters, hasGive }) {
+export function commandItems({ view, readOnly, filters, hasGive, showPlanner = false }) {
   const items = [];
-  for (const v of VIEWS) items.push(cmd(`view-${v.id}`, `Go to ${v.label}`, { type: 'view', view: v.id }, { hint: v.id === view ? 'current' : null, keywords: `switch view ${v.id}`, icon: v.icon }));
+  for (const v of VIEWS.filter((x) => !x.planner || showPlanner)) items.push(cmd(`view-${v.id}`, `Go to ${v.label}`, { type: 'view', view: v.id }, { hint: v.id === view ? 'current' : null, keywords: `switch view ${v.id}`, icon: v.icon }));
   items.push(cmd('search', 'Search all boards…', { type: 'scope-search' }, { keywords: 'project search comments handover artifacts', icon: 'search' }));
   items.push(cmd('workflows', 'Reusable workflows…', { type: 'workflows' }, { keywords: 'templates recipes delivery repeat steps', icon: 'queue' }));
   items.push(cmd('theme', 'Toggle theme', { type: 'theme-next' }, { keywords: 'dark light system appearance', icon: 'auto' }));
@@ -117,7 +117,7 @@ export function rankItems(items, query, { limit = 14 } = {}) {
 const NEEDS = { red: 0, amber: 1 };
 
 /** Everything the palette can show for the current board, in default order. */
-export function paletteResults(dlg, { entries, view, readOnly, filters }) {
+export function paletteResults(dlg, { entries, view, readOnly, filters, showPlanner }) {
   if (dlg.scope === 'search') return (dlg.search?.results ?? []).map((hit) => ({ item: {
     id: hit.id, kind: 'search', title: `${hit.card.key} ${hit.card.title}`, hint: `${hit.board.name} · ${hit.kind}`,
     snippet: hit.snippet, run: { type: 'open-search', id: hit.card.id, boardId: hit.board.id, section: hit.section },
@@ -125,7 +125,7 @@ export function paletteResults(dlg, { entries, view, readOnly, filters }) {
   if (dlg.scope === 'give') return rankItems(giveItems(entries), dlg.query);
   const ordered = [...entries].sort((a, b) => (NEEDS[a.face.tone] ?? 2) - (NEEDS[b.face.tone] ?? 2));
   const hasGive = entries.some((e) => giveFor(e));
-  const commands = commandItems({ view, readOnly, filters, hasGive });
+  const commands = commandItems({ view, readOnly, filters, hasGive, showPlanner });
   const cards = cardItems(ordered);
   // With nothing typed, show a short command list and the top cards, not 40 of each.
   if (!String(dlg.query ?? '').trim()) return [...commands.slice(0, 8), ...cards.slice(0, 4)].map((item) => ({ item, indices: [] }));

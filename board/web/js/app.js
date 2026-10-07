@@ -26,7 +26,7 @@ import { integrationsScreen, connectWindowTarget, takeInput } from './render-int
 import { saveSentrySettings } from './sentry-settings.js';
 import { teamScreen } from './render-team.js';
 import { emptyFold, pullJournal, windowMetrics, cardMetrics } from './metrics.js';
-import { VIEWS } from './views.js';
+import { VIEWS, plannerEnabled } from './views.js';
 import { drawer } from './render-drawer.js';
 import { colorMap } from './labels.js';
 import { dialog } from './render-dialogs.js';
@@ -181,6 +181,10 @@ function closeThemeMenu({ refocus = false } = {}) {
 // last one this browser used.
 
 function loadView() {
+  let storedPlanner = null;
+  try { storedPlanner = localStorage.getItem('board-planner'); } catch { /* private mode */ }
+  state.showPlanner = plannerEnabled(location.search, storedPlanner);
+  try { localStorage.setItem('board-planner', state.showPlanner ? '1' : '0'); } catch { /* private mode */ }
   const want = new URLSearchParams(location.search).get('view');
   let saved = null;
   try { saved = localStorage.getItem('board-view'); } catch { /* private mode */ }
@@ -424,6 +428,7 @@ function buildModel() {
     budgetMax: state.board?.settings?.max_budget_usd,
     readOnly: boardReadOnly(),
     view: state.view,
+    showPlanner: state.showPlanner,
     table: state.table,
     planner: plannerState(),
     dashboard: state.view === 'dashboard' ? dashboardModel(live) : null,
@@ -1505,7 +1510,7 @@ function closePalette() {
 
 function paletteNow() {
   const m = buildModel();
-  return paletteResults(state.dialog, { entries: m.entries, view: state.view, readOnly: m.readOnly, filters: state.filters });
+  return paletteResults(state.dialog, { entries: m.entries, view: state.view, readOnly: m.readOnly, filters: state.filters, showPlanner: state.showPlanner });
 }
 
 function runPalette(item, { give = false } = {}) {
