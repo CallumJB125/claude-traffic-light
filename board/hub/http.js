@@ -491,6 +491,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   route('DELETE', '/api/boards/:board_id/labels/:name', ({ member, params, body, query, ident }) => api.deleteLabel(member, params.board_id, params.name, { ...body, strip: body.strip === true || query.get('strip') === '1' }, { cred: ident?.cred ?? null }), { writeScope: 'labelManage' });
   route('GET', '/api/boards/:board_id/alerts', ({ member, params }) => api.alerts(member, params.board_id));
   route('GET', '/api/boards/:board_id/journal', ({ member, params, query }) => api.journalPage(member, params.board_id, { after_seq: query.get('after_seq') ?? 0, limit: query.get('limit') ?? 200 }));
+  route('GET', '/api/boards/:board_id/runs', ({ member, params, query }) => api.runsInRange(member, params.board_id, { from: query.get('from'), to: query.get('to') }));
   route('POST', '/api/boards/:board_id/cards', ({ member, params, body, ident }) => api.createCard(member, params.board_id, body, { cred: ident?.cred ?? null }), { collaboration: true });
   route('POST', '/api/boards/:board_id/work-capture', ({ member, params, body, ident }) => workCapture.observe(member, params.board_id, body, ident?.cred), { replay: false, maxBody: 12 * 1024 });
   route('POST', '/api/boards/:board_id/repos', ({ member, params, body }) => api.addBoardRepo(member, params.board_id, body));
