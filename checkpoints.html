@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; base-uri 'none'; form-action 'none'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>What changed</title><link rel="stylesheet" href="tokens.css"><link rel="stylesheet" href="checkpoints.css"></head>
+<body><main>
+<header><div><h1>What changed</h1><p class="muted">What did this session change? Plexiform saves your project's files at the start and end of every AI turn, so you can see each turn's changes and put files back.</p></div><button id="refresh" type="button">Refresh</button></header>
+<section id="setup" aria-labelledby="setup-title"><h2 id="setup-title">Checkpoints</h2>
+<label class="toggle"><input id="enabled" type="checkbox"> Save a checkpoint every AI turn</label>
+<p class="muted" id="limits"></p>
+<p class="muted">Checkpoints are kept inside each project's own <code>.git</code> folder under <code>refs/plexiform/cp/</code>. They stay on this computer: Plexiform never pushes them, and a normal <code>git push</code> doesn't send them. Your staged changes, branches and commits are never changed. Folders that are not git repositories are skipped. Untracked files that aren't ignored are saved too, so add secret files to <code>.gitignore</code>.</p>
+</section>
+<section id="sessions-box" aria-labelledby="sessions-title"><h2 id="sessions-title">Sessions</h2><label for="session">Session</label> <select id="session"></select><p id="status" role="status" aria-live="polite">Loading…</p><div id="turns"></div></section>
+<section id="review-box" aria-labelledby="review-title"><h2 id="review-title">Second opinion <span class="pill">Plus</span></h2>
+<p class="muted">After each turn, send that turn's changes to your own Claude Code CLI for a short review. It uses your Claude login and quota, never runs tools, and each review is capped at the budget below. Off by default.</p>
+<label class="toggle"><input id="review-enabled" type="checkbox"> Review each turn</label>
+<div class="row"><label for="review-model">Model</label> <select id="review-model"></select> <span class="muted" id="review-cap"></span></div>
+<p class="muted" id="review-note"></p>
+</section>
+</main><script src="checkpoints.js"></script></body></html>
