@@ -129,7 +129,7 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
     // would duplicate existing cards, and capture failure must not close Buddy.
     const notice='Automatic cards are paused because private capture storage is unavailable. Your saved identities have been kept.';
     log('automatic cards unavailable: private storage');
-    return {observe:()=>Promise.resolve(),enabled:()=>false,setEnabled:()=>false,choose:async()=>false,choices:()=>[],snapshot:()=>[],notice:()=>notice,stop:async()=>{},idle:()=>Promise.resolve()};
+    return {observe:()=>Promise.resolve(),captureOnce:async()=>({ok:false,reason:'storage'}),routes:async()=>({routes:[],complete:false}),enabled:()=>false,setEnabled:()=>false,choose:async()=>false,choices:()=>[],snapshot:()=>[],notice:()=>notice,stop:async()=>{},idle:()=>Promise.resolve()};
   }
   let state=store.state,latest=[],active=null,stopped=false,lastCatalogAt=0,catalog={routes:[],complete:true},notice=null;
   const changed=()=>{try{onChange();}catch{/* UI updates do not affect capture */}};
@@ -145,12 +145,14 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
     }
   }
   const fresh=raw=>typeof raw.updatedAt==='string'&&Number.isFinite(Date.parse(raw.updatedAt))&&Math.abs(now()-Date.parse(raw.updatedAt))<=60000;
-  async function send(key,body,{fingerprint=null,title=body.title,raw=null}={}) {
+  async function send(key,body,{fingerprint=null,title=body.title,raw=null,force=false}={}) {
     const entry=state.tasks[key];
-    if(!entry||entry.untracked||now()<(entry.retry_at??0)||raw&&!fresh(raw)||stopped||state.enabled===false)return;
+    // force: a person's one-off "Make a card" works with the automatic toggle off and for a quiet session.
+    const live=()=>!stopped&&(force||state.enabled!==false);
+    if(!entry||entry.untracked||!force&&now()<(entry.retry_at??0)||!force&&raw&&!fresh(raw)||!live())return;
     if(!commit(next=>{const e=next.tasks[key];e.retry_at=now()+RETRY_MS;e.attempt_at=now();
       if(fingerprint){e.attempt_fingerprint=fingerprint;e.last_seen=now();}},ACK_RESERVE_BYTES))return;
-    if(stopped||state.enabled===false||raw&&!fresh(raw))return;
+    if(!live()||!force&&raw&&!fresh(raw))return;
     let result;
     try {result=entry.destination.kind==='team'?await sendTeam(entry.destination,body):await sendLocal(body);}
     catch {log('automatic card update deferred');return;}
@@ -221,6 +223,34 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
   async function drain() {while(latest&&!stopped){const next=latest;latest=null;await pass(next);}}
   return {observe(sessions){if(stopped||state.enabled===false)return;latest=Array.isArray(sessions)?sessions:[];
       if(!active){active=drain().catch(()=>log('automatic cards unavailable')).finally(()=>{active=null;if(latest&&!stopped)this.observe(latest);});}return active;},
+    // One-off card for one session, whatever the automatic toggle says. Same identity and
+    // routing as the automatic path, so a session that already has a card never gets a second.
+    async captureOnce(raw,boardKey=null){
+      if(stopped)return {ok:false,reason:'stopped'};
+      const o=observation(raw,{ownedRoots,host});if(!o)return {ok:false,reason:'not_trackable'};
+      const key=crypto.createHash('sha256').update(JSON.stringify([o.provider,o.session_id,o.task_id])).digest('hex');
+      let entry=state.tasks[key];
+      if(entry?.card_id)return {ok:true,existing:true,card_id:entry.card_id,destination:{...entry.destination}};
+      if(entry?.untracked)return {ok:false,reason:entry.reason||'untracked'};
+      if(!entry){
+        const repo=safeCanonical(await resolveRepo(o.cwd));
+        let destination={kind:'local'};
+        if(boardKey&&boardKey!=='local'){
+          const fresh=await getRoutes();
+          const route=fresh.complete&&(fresh.routes??[]).find(r=>r.canonical_url===repo&&routeKey(r)===boardKey&&['owner','admin','member'].includes(r.role));
+          if(!route)return {ok:false,reason:'repo_not_linked'};
+          destination={kind:'team',...route};
+        }
+        if(!commit(next=>{next.tasks[key]={destination:compactDestination(destination),repo,provider:o.provider,session_id:o.session_id,task_id:o.task_id,title:o.title,status:null,card_id:null,last_seen:now()};},ACK_RESERVE_BYTES))return {ok:false,reason:'storage'};
+        entry=state.tasks[key];changed();
+      }
+      const route=entry.destination.kind==='team'?(catalog.routes??[]).find(r=>routeKey(r)===routeKey(entry.destination)):null;
+      const summary=entry.destination.kind==='local'||route?.share_summaries===true?o.summary:null;
+      await send(key,{install_id:state.install_id,provider:o.provider,session_id:o.session_id,task_id:o.task_id,repo_id:entry.destination.repo_id??null,title:o.title,status:o.status,...(summary!==null?{summary}:{})},{title:o.title,force:true});
+      const done=state.tasks[key];
+      return done?.card_id?{ok:true,card_id:done.card_id,destination:{...done.destination}}:{ok:false,reason:done?.untracked?(done.reason||'untracked'):'send_failed'};
+    },
+    routes:()=>getRoutes(),
     enabled:()=>state.enabled!==false,
     notice:()=>notice,
     setEnabled(on){if(!commit(next=>{next.enabled=!!on;}))return false;if(!on)latest=null;changed();return true;},

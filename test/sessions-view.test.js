@@ -69,3 +69,55 @@ test('a hung refresh expires old Working rows and a late reply cannot restore th
     assert.equal(fixture.document.getElementById('content').textContent, '');
   } finally { fixture.dom.window.close(); }
 });
+const withActions = (extra = {}) => ({ provider: 'Codex', project: 'app', status: 'Working', freshness: 'recent', age_ms: 1000, children: [], actions: { handle: 'h1', card: null, share: { on: false } }, ...extra });
+const SETUP = { boards: [{ key: 'b1', label: 'My board (stays on this computer)', kind: 'local' }], repos: [{ handle: 'f1', label: 'app', remote: 'github.com/o/app' }], ais: [{ id: 'claude', label: 'Claude', ready: true, note: '' }], scopeRule: 'RULE SENTENCE', sessionCount: 1 };
+const click = (fixture, el) => el.dispatchEvent(new fixture.dom.window.Event('click', { bubbles: true }));
+const byText = (fixture, text) => [...fixture.document.querySelectorAll('button')].find(b => b.textContent === text);
+
+test('empty state explains how sessions get in with the three actions; the Add panel is open, and folds once sessions exist', async () => {
+  const empty = setup({ state: async () => state() });
+  try { await tick(); const c = empty.document.getElementById('content').textContent;
+    assert.match(c, /Connect the tool → sessions appear here and on your widget → link the repo to share with your team → make a card to track it\./);
+    assert.equal(empty.document.getElementById('add').open, true);
+    assert.ok(byText(empty, 'Connect a tool') && byText(empty, 'Link a repo to a board') && byText(empty, 'Start a session here'));
+  } finally { empty.dom.window.close(); }
+  const full = setup({ state: async () => state({ sessions: [withActions()] }) });
+  try { await tick(); assert.equal(full.document.getElementById('add').open, false); assert.doesNotMatch(full.document.getElementById('content').textContent, /How sessions get in/); } finally { full.dom.window.close(); }
+});
+test('Add panel: connect opens the AI tools page; link shows the sharing rule and links the chosen repo and board; start passes AI and prompt', async () => {
+  const calls = [];
+  const fixture = setup({ state: async () => state(), setup: async () => SETUP, connect: async () => { calls.push(['connect']); return { ok: true }; },
+    linkRepo: async (f, b) => { calls.push(['link', f, b]); return { ok: true, text: 'Linked github.com/o/app. RULE SENTENCE' }; }, start: async (f, ai, p) => { calls.push(['start', f, ai, p]); return { ok: true, text: 'Started' }; } });
+  try {
+    await tick(); const d = fixture.document;
+    click(fixture, d.getElementById('add-connect')); await tick(); assert.deepEqual(calls[0], ['connect']);
+    click(fixture, d.getElementById('add-link')); await tick(); await tick();
+    assert.match(d.getElementById('panel-link').textContent, /RULE SENTENCE/);
+    click(fixture, [...d.querySelectorAll('#panel-link button')].find(b => b.textContent === 'Link repo')); await tick();
+    assert.deepEqual(calls[1], ['link', 'f1', 'b1']); assert.match(d.getElementById('panel-link').textContent, /Linked github.com\/o\/app/);
+    click(fixture, d.getElementById('add-start')); await tick(); await tick();
+    d.querySelector('#panel-start textarea').value = 'fix it';
+    click(fixture, [...d.querySelectorAll('#panel-start button')].find(b => b.textContent === 'Start')); await tick();
+    assert.deepEqual(calls[2], ['start', 'f1', 'claude', 'fix it']);
+  } finally { fixture.dom.window.close(); }
+});
+test('session rows offer Make a card, Attach to card and Link repo; an open panel survives the 5 second refresh', async () => {
+  const calls = [];
+  const fixture = setup({ state: async () => state({ sessions: [withActions({ actions: { handle: 'h1', card: { label: 'APP-1 Fix it', how: 'attached' }, share: { on: false } } })] }), setup: async () => SETUP,
+    makeCard: async (h, b) => { calls.push(['card', h, b]); return { ok: true, text: 'Card made from this session.' }; },
+    searchCards: async () => [{ ref: 'r1', card_key: 'APP-2', title: 'Other', board: 'My board' }], attach: async (h, r) => { calls.push(['attach', h, r]); return { ok: true, text: 'Attached' }; },
+    linkFromSession: async () => ({ folder: 'f1', label: 'app' }), share: async (h, on) => { calls.push(['share', h, on]); return { ok: true }; } });
+  try {
+    await tick(); const d = fixture.document, c = d.getElementById('content');
+    assert.match(c.textContent, /Attached to APP-1 Fix it \(saved on this computer only\)/);
+    assert.ok(byText(fixture, 'Make a card') && byText(fixture, 'Attach to card…') && byText(fixture, 'Link repo to board'));
+    click(fixture, byText(fixture, 'Make a card')); await tick(); await tick();
+    fixture.intervals[0](); await tick(); assert.ok(c.querySelector('.row-panel'), 'refresh does not wipe an open panel');
+    click(fixture, byText(fixture, 'Make card')); await tick(); assert.deepEqual(calls[0], ['card', 'h1', 'b1']);
+    click(fixture, byText(fixture, 'Attach to card…')); await tick(); await tick();
+    click(fixture, byText(fixture, 'Search')); await tick(); await tick();
+    click(fixture, byText(fixture, 'APP-2 Other (My board)')); await tick(); assert.deepEqual(calls[1], ['attach', 'h1', 'r1']);
+    const box = c.querySelector('.row-actions input[type=checkbox]'); box.checked = true; box.dispatchEvent(new fixture.dom.window.Event('change')); await tick(); assert.deepEqual(calls[2], ['share', 'h1', true]);
+    click(fixture, byText(fixture, 'Link repo to board')); await tick(); await tick(); await tick(); assert.match(c.textContent, /RULE SENTENCE/);
+  } finally { fixture.dom.window.close(); }
+});

@@ -30,6 +30,7 @@ const { clientArtifactTarget, clientExportTarget, saveClientArtifact, saveClient
 const { createViewLifecycle } = require('../src/view-lifecycle');
 const { createWorkCapture } = require('../src/work-capture');
 const { createMyDayBroker } = require('../src/my-day-broker');
+const { createSessionBridge } = require('./session-bridge');
 
 const SIDEBAR_W = 216;
 const DIR = __dirname;
@@ -117,7 +118,7 @@ async function probeHub(origin, partition) {
   });
 }
 
-function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onClosed = () => {}, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged, devAccountsHub = null, captureEnabled = true, onOverviewRetired = () => {}, isConstrained = () => false } = {}) {
+function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onClosed = () => {}, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged, devAccountsHub = null, captureEnabled = true, onOverviewRetired = () => {}, isConstrained = () => false, handoverWriter = () => null } = {}) {
   // The dev-only mock accounts hub runs on loopback; that one exact origin is
   // the only non-https hub ever accepted.
   const allowOrigins = devAccountsHub && isDev ? [devAccountsHub] : [];
@@ -247,6 +248,12 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       const result = await clientFor(destination.hub).captureWork(destination.team_id, destination.board_id, report);
       return userOf(destination.hub)?.id === destination.user_id ? result : { ok: false };
     },
+  });
+
+  const sessionBridge = createSessionBridge({
+    userData, hubs: () => store.hubs().filter(signedIn), clientFor, userOf, signedIn, supervisor, workCapture, handoverWriter, home: os.homedir(), log: (m) => log(m),
+    // null: the personal board; an origin: that team hub; undefined: no hub page is showing.
+    currentHub: () => (hubInfo && content === hubView ? (hubInfo.team ? hubInfo.origin : null) : undefined),
   });
 
   async function setupSources() {
@@ -619,7 +626,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     // The board web names a connect window with the bind only when it sees this token.
     hubSes.setUserAgent(appUserAgent(hubSes.getUserAgent(), app.getVersion()));
     const view = new WebContentsView({
-      webPreferences: { partition: h.partition, sandbox: true, contextIsolation: true, nodeIntegration: false, webviewTag: false, spellcheck: true },
+      webPreferences: { partition: h.partition, sandbox: true, contextIsolation: true, nodeIntegration: false, webviewTag: false, spellcheck: true, preload: path.join(DIR, 'hub-preload.js') },
     });
     view.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#1c1a1f' : '#eceaf0');
     const wc = view.webContents;
@@ -877,6 +884,10 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       } catch (err) { log('account action failed', op, err.message); return { ok: false, error: 'Something went wrong. Try again.' }; }
     });
   }
+  ipcMain.handle('buddy:local-handover', async (e, cardId) => {
+    if (!hubView || e.sender !== hubView.webContents || !hubInfo || e.senderFrame?.origin !== hubInfo.origin) return null;
+    try { return await sessionBridge.localHandover(cardId); } catch { return null; }
+  });
   ipcMain.handle('buddy:acct:captureEnabled', (e, on) => {
     if (!fromAccount(e) || typeof on !== 'boolean' || !captureEnabled) return { ok: false, error: 'Not allowed.' };
     return workCapture.setEnabled(on) ? { ok: true } : { ok: false, error: workCapture.notice() || 'Could not save automatic card settings.' };
@@ -1022,7 +1033,8 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     runnerLive: () => flow.runningTeams().length > 0,
     burstFacts: (facts) => flow.burstFacts(facts),
     /** The widget's live sessions changed: hubs sharing presence get the new list. */
-    sessionsChanged(sessions) { flow.sessionsChanged(sessions); if (captureEnabled) void workCapture.observe(sessions); },
+    sessionsChanged(sessions) { flow.sessionsChanged(sessions); if (captureEnabled) { void workCapture.observe(sessions); sessionBridge.sessionsChanged(sessions); } },
+    sessionBridge, captureOnce: (row, key) => workCapture.captureOnce(row, key),
     async stop() {
       const url = localUrl();
       await workCapture.stop();

@@ -232,3 +232,11 @@ test('board archives leftover background cards with the same title predicate the
  assert.equal(observedLane(card('Fix memory leak')),'active');
  assert.equal(observedLane(card('Codex · memories',{managed:{column:false}})),'active');
 });
+test('captureOnce makes one card with the automatic toggle off, dedupes, and honours the chosen board',async t=>{
+ const r=rig(t,{startEnabled:false});assert.equal(r.router.enabled(),false);
+ const a=await r.router.captureOnce(event(),'local');assert.equal(a.ok,true);assert.equal(r.calls.length,1);assert.equal(r.calls[0].kind,'local');
+ const again=await r.router.captureOnce(event(),'local');assert.equal(again.existing,true);assert.equal(r.calls.length,1);
+ const team=await r.router.captureOnce(event({sessionId:'thread-2'}),routeKey(R));assert.equal(team.ok,true);assert.equal(r.calls.at(-1).kind,'team');assert.equal(r.calls.at(-1).body.repo_id,R.repo_id);
+ const bad=await r.router.captureOnce(event({sessionId:'thread-3'}),'f'.repeat(64));assert.equal(bad.reason,'repo_not_linked');assert.equal(r.calls.length,2);
+ await r.router.observe([event({sessionId:'thread-4'})]);assert.equal(r.calls.length,2,'automatic path stays off');
+});
