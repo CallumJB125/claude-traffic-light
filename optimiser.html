@@ -33,6 +33,36 @@
   .empty p { margin: 0; color: var(--muted); max-width: 62ch; user-select: text; }
   .actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-4); }
   .note { min-height: 1.45em; margin-top: var(--space-3); font-size: var(--text-xs); color: var(--muted); }
+  .tabs { display: flex; gap: 2px; margin-left: var(--space-3); }
+  .tabs[hidden] { display: none; }
+  .tab { background: none; border-color: transparent; color: var(--muted); font-weight: 600; min-height: 28px; padding: 0 12px; }
+  .tab:hover:not(:disabled) { color: var(--text); border-color: transparent; }
+  .tab[aria-selected="true"] { background: var(--panel-2); border-color: var(--line); color: var(--text); }
+  .tab:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  main.pane { display: block; padding: var(--space-5); }
+  .card { border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); padding: var(--space-4); margin: 0 auto var(--space-4); max-width: 920px; user-select: text; }
+  .card h2 { margin: 0 0 var(--space-2); font-size: var(--text-lg); font-weight: 650; }
+  .card p { margin: 0 0 var(--space-2); color: var(--muted); }
+  .head { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
+  .head h2 { margin: 0; }
+  .kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px var(--space-4); margin: var(--space-2) 0 0; }
+  .kv dt { color: var(--faint); }
+  .kv dd { margin: 0; color: var(--text); }
+  table { width: 100%; border-collapse: collapse; font-size: var(--text-sm, 13px); }
+  th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { color: var(--faint); font-weight: 600; font-size: var(--text-xs); }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.note { white-space: normal; color: var(--muted); max-width: 280px; }
+  .scroll { overflow-x: auto; }
+  .filters { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-3); }
+  select { font: inherit; color: var(--text); background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius); min-height: 28px; padding: 0 8px; }
+  .chart { display: flex; align-items: flex-end; gap: 3px; height: 72px; margin-top: var(--space-2); }
+  .bar-col { flex: 1; min-width: 4px; display: flex; flex-direction: column; justify-content: flex-end; height: 100%; }
+  .bar-col i { display: block; width: 100%; }
+  .bar-col .p { background: var(--accent); }
+  .bar-col .s { background: var(--amber); }
+  .legend { display: flex; gap: var(--space-4); margin-top: var(--space-2); font-size: var(--text-xs); color: var(--muted); }
+  .muted { color: var(--muted); }
   .loading { color: var(--faint); margin-top: var(--space-6); }
   [hidden] { display: none !important; }
 </style>
@@ -40,6 +70,11 @@
 <body>
   <header class="bar">
     <h1>Usage optimiser</h1>
+    <div class="tabs" id="tabs" role="tablist" aria-label="Usage optimiser views" hidden>
+      <button type="button" class="tab" role="tab" id="tab-dashboard" data-tab="dashboard" aria-selected="true">Dashboard</button>
+      <button type="button" class="tab" role="tab" id="tab-route" data-tab="route" aria-selected="false" tabindex="-1">Route</button>
+      <button type="button" class="tab" role="tab" id="tab-requests" data-tab="requests" aria-selected="false" tabindex="-1">Requests</button>
+    </div>
     <span class="chip" id="chip" role="status" hidden><i aria-hidden="true"></i><span id="chip-text"></span></span>
     <span class="spacer"></span>
     <button type="button" class="link" id="browser" hidden>Open in browser</button>
@@ -54,6 +89,30 @@
       <div class="actions"><button type="button" class="link" id="docs">What is Claude Burst? Read the docs</button></div>
       <p class="note" id="note" role="status"></p>
     </section>
+  </main>
+  <main class="pane" id="route-pane" role="tabpanel" aria-labelledby="tab-route" hidden>
+    <section class="card" id="route-card" aria-live="polite">
+      <div class="head"><h2 id="route-head">Route</h2><span class="chip" id="route-chip" data-tone=""><i aria-hidden="true"></i><span id="route-chip-text"></span></span><span class="spacer"></span><button type="button" class="primary" id="route-reset" hidden>Back to Claude now</button></div>
+      <p id="route-reason"></p>
+      <p class="note" id="route-note" role="status"></p>
+      <dl class="kv" id="route-kv"></dl>
+    </section>
+    <section class="card" id="route-rejected-card" hidden><h2>Models at their limit</h2><div class="scroll"><table><thead><tr><th>Model</th><th>Resets in</th><th>Falls back to</th></tr></thead><tbody id="route-rejected"></tbody></table></div></section>
+    <section class="card" id="route-chain-card" hidden><h2>Fallback chain</h2><dl class="kv" id="route-chain"></dl></section>
+    <p class="muted" id="route-error" hidden></p>
+  </main>
+  <main class="pane" id="requests-pane" role="tabpanel" aria-labelledby="tab-requests" hidden>
+    <section class="card" id="hist-card"><h2>Daily spend</h2><div class="chart" id="hist-chart" role="img" aria-label="Daily spend, primary and secondary"></div><div class="legend"><span>Primary</span><span>Secondary</span><span id="hist-total"></span></div></section>
+    <section class="card">
+      <div class="filters">
+        <label class="muted">Slot <select id="f-slot"><option value="">All</option><option value="primary">Primary</option><option value="secondary">Secondary</option></select></label>
+        <label class="muted">Status <select id="f-status"><option value="">All</option><option value="ok">Succeeded</option><option value="err">Failed</option></select></label>
+        <label class="muted">Model <select id="f-model"><option value="">All</option></select></label>
+      </div>
+      <div class="scroll"><table><thead><tr><th>Time</th><th>Session</th><th>Slot</th><th>Model</th><th class="num">Status</th><th class="num">Latency</th><th class="num">Tokens in</th><th class="num">Tokens out</th><th class="num">Cost</th><th>Note</th></tr></thead><tbody id="req-rows"></tbody></table></div>
+      <p class="muted" id="req-empty" hidden>No requests yet.</p>
+    </section>
+    <p class="muted" id="req-error" hidden></p>
   </main>
   <script src="optimiser.js"></script>
 </body>

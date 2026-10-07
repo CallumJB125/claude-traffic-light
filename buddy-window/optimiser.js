@@ -13,6 +13,7 @@ const Embed = require('../src/burst-embed');
 const BAR_H = 48; // the native top bar (optimiser.html) above the dashboard
 const PARTITION = 'persist:burst-dashboard';
 const POLL_MS = 5000;
+const TABS = Object.freeze(['dashboard', 'route', 'requests']);
 const FILTER = { urls: ['http://*/*', 'https://*/*', 'ws://*/*', 'wss://*/*'] };
 
 function createOptimiser({
@@ -25,6 +26,7 @@ function createOptimiser({
   let last = null; // the page state main last sent
   let nav = [];
   let active = null;
+  let tab = 'dashboard'; // the native tab strip: the embedded dashboard is only shown on 'dashboard'
   let sig = '';
   let gen = 0;
   let failures = 0;
@@ -106,7 +108,7 @@ function createOptimiser({
     const w = win();
     const wc = wcOf();
     if (!w || !view || !wc) return;
-    const show = !!last && last.mode === 'ready' && isContent();
+    const show = !!last && last.mode === 'ready' && isContent() && tab === 'dashboard';
     const attached = w.contentView.children.includes(view);
     if (show && !attached) w.contentView.addChildView(view);
     if (!show && attached) w.contentView.removeChildView(view);
@@ -130,7 +132,7 @@ function createOptimiser({
     }
     last = st;
     sig = signature(snap);
-    if (st.mode === 'ready') ensure(o, snap.d.pid, reload); else drop();
+    if (st.mode === 'ready') ensure(o, snap.d.pid, reload); else { tab = 'dashboard'; drop(); }
     sendState();
     sync();
   }
@@ -169,11 +171,18 @@ function createOptimiser({
       const js = Embed.sectionScript(id);
       if (!wc || !js || !nav.some((n) => n.id === id)) return false;
       active = id;
+      if (tab !== 'dashboard') { tab = 'dashboard'; sync(); sendState(); }
       wc.executeJavaScript(js).catch(() => {});
       navChanged();
       return true;
     },
     async act(kind) {
+      if (typeof kind === 'string' && kind.startsWith('tab:')) {
+        const t = kind.slice(4);
+        if (!TABS.includes(t) || !last || last.mode !== 'ready') return { ok: false };
+        tab = t; sync(); sendState();
+        return { ok: true };
+      }
       if (!Embed.PAGE_ACTIONS.includes(kind)) return { ok: false, error: 'Unknown action.' };
       const b = burst();
       if (!b) return { ok: false, error: 'Burst is not available.' };
@@ -183,7 +192,8 @@ function createOptimiser({
       const b = burst();
       return b ? b.act('open-browser') : { ok: false };
     },
-    payload: () => (last ? { ...last, canBrowser: last.mode === 'ready' } : { mode: 'loading', headline: 'Usage optimiser', detail: '', chip: null, actions: [], docs: false }),
+    tab: () => tab,
+    payload: () => (last ? { ...last, canBrowser: last.mode === 'ready', tab } : { mode: 'loading', headline: 'Usage optimiser', detail: '', chip: null, actions: [], docs: false }),
   };
 }
 

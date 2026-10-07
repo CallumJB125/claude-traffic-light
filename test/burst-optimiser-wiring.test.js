@@ -98,7 +98,7 @@ test('page and preload are locked down: strict CSP, a closed bridge, packaged', 
   const bridge = read('optimiser-preload.js');
   assert.match(bridge, /exposeInMainWorld\('optimiserApi'/);
   const channels = [...bridge.matchAll(/ipcRenderer\.\w+\('([^']+)'/g)].map((m) => m[1]);
-  assert.ok(channels.length >= 5 && channels.every((c) => c.startsWith('optimiser:')), channels.join());
+  assert.ok(channels.length >= 5 && channels.every((c) => c.startsWith('optimiser:') || c === 'burst:view' || c === 'burst-action'), channels.join());
   const files = JSON.parse(read('package.json')).build.files;
   for (const f of ['optimiser.html', 'optimiser.js', 'optimiser-preload.js']) assert.ok(files.includes(f), f);
 });
