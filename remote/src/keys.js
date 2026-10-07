@@ -5,6 +5,7 @@
 // which is what WebCrypto produces on both sides.
 import { b64url, fromB64url, utf8 } from './encoding.js';
 import { canonicalize } from './canonical.js';
+import { generateAgreementKey, exportAgreementPublic, importAgreementPrivateJwk } from './envelope.js';
 
 const ALG = { name: 'ECDSA', namedCurve: 'P-256' };
 const SIGN = { name: 'ECDSA', hash: 'SHA-256' };
@@ -83,14 +84,24 @@ export function parseCanonical(text) {
 }
 
 // The desktop's long-term identity: { privateKey, publicKey, publicRaw,
-// desktopId, jwk }. `jwk` is what node/file-store.js persists (0600).
+// desktopId, jwk } for signing, and { agreePrivateKey, agreePublicRaw,
+// agreeJwk }: its static ECDH key for the end-to-end relay (envelope.js),
+// sent to the phone at pairing. `jwk` and `agreeJwk` are what
+// node/file-store.js persists (0600).
 export async function createIdentity() {
   const kp = await generateSigningKey({ extractable: true });
-  return identityFromJwk(await exportPrivateJwk(kp.privateKey));
+  const ag = await generateAgreementKey({ extractable: true });
+  return identityFromJwk(await exportPrivateJwk(kp.privateKey), await crypto.subtle.exportKey('jwk', ag.privateKey));
 }
 
-export async function identityFromJwk(jwk) {
+// Without `agreeJwk` (an identity saved before end-to-end) a new agreement key is made: persist identity.agreeJwk.
+export async function identityFromJwk(jwk, agreeJwk = null) {
   const { privateKey, publicKey } = await importKeyPairJwk(jwk);
   const publicRaw = await exportPublicRaw(publicKey);
-  return { privateKey, publicKey, publicRaw, desktopId: await fingerprint(publicRaw), jwk };
+  const agree = agreeJwk ?? await crypto.subtle.exportKey('jwk', (await generateAgreementKey({ extractable: true })).privateKey);
+  const ag = await importAgreementPrivateJwk(agree);
+  return {
+    privateKey, publicKey, publicRaw, desktopId: await fingerprint(publicRaw), jwk,
+    agreePrivateKey: ag.privateKey, agreePublicRaw: await exportAgreementPublic(ag.publicKey), agreeJwk: agree,
+  };
 }

@@ -4,6 +4,14 @@
 // dumps and backups of browser data; it does NOT stop script running on this
 // origin (it could use the key): that is what the CSP and the text-only
 // renderer are for. See PHONE.md "Threat model".
+//
+// It also keeps the phone's end-to-end relay keys (phone-e2e.js,
+// docs/relay-e2e-threat-model.md): one static ECDH P-256 key, generated here
+// non-extractable (the private half is a CryptoKey that never leaves this
+// browser as bytes), and the computers it is paired with ({did, dev,
+// desktopAgree} per host device id: public values only). Signing out wipes
+// both, so a new sign-in must pair again.
+import { generateAgreementKey, exportAgreementPublic, importAgreementPublic } from './phone-e2e.js';
 
 const DB = 'plexiform-phone';
 const STORE = 'vault';
@@ -33,6 +41,8 @@ export function idbKv(indexedDB = globalThis.indexedDB) {
     del: (k) => run('readwrite', (s) => s.delete(k)),
   };
 }
+
+const ID = /^[A-Za-z0-9_-]{1,64}$/;
 
 export function createVault({ kv, subtle = globalThis.crypto.subtle, getRandomValues = (a) => globalThis.crypto.getRandomValues(a) }) {
   const enc = new TextEncoder();
@@ -68,6 +78,36 @@ export function createVault({ kv, subtle = globalThis.crypto.subtle, getRandomVa
     async clear() {
       await kv.del('token');
       await kv.del('key');
+      await kv.del('agree');
+      await kv.del('pairings');
+    },
+    /** This phone's static ECDH key pair, made on first use: {privateKey (non-extractable), publicKey, publicRaw}. */
+    async agreementKey() {
+      let k = await kv.get('agree');
+      if (!k?.privateKey || k.privateKey.extractable !== false) {
+        const pair = await generateAgreementKey({ extractable: false });
+        k = { privateKey: pair.privateKey, publicKey: pair.publicKey };
+        await kv.set('agree', k);
+      }
+      return { ...k, publicRaw: await exportAgreementPublic(k.publicKey) };
+    },
+    /** host device id -> {did, dev, desktopAgree}: the computers this phone is paired with. */
+    async pairings() {
+      const p = await kv.get('pairings');
+      return p && typeof p === 'object' ? { ...p } : {};
+    },
+    /** After a pairing (W2-B): the desktop's id, this phone's id there, and the desktop's ECDH public key. */
+    async savePairing(hostId, { did, dev, desktopAgree }) {
+      if (typeof hostId !== 'string' || !hostId || !ID.test(did) || !ID.test(dev)) throw new TypeError('bad pairing');
+      await importAgreementPublic(desktopAgree);
+      const all = await this.pairings();
+      all[hostId] = { did, dev, desktopAgree };
+      await kv.set('pairings', all);
+    },
+    async forgetPairing(hostId) {
+      const all = await this.pairings();
+      delete all[hostId];
+      await kv.set('pairings', all);
     },
   };
 }

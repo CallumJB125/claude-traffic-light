@@ -4,10 +4,10 @@
 // a GET, or any other path: those go straight to the network, uncached.
 // Shell files are network-first (the hub serves them no-cache + ETag), so a
 // deploy is picked up on the next online load.
-const CACHE = 'plexiform-phone-v1';
+const CACHE = 'plexiform-phone-v2';
 const SHELL = [
   '/phone/', '/phone/manifest.webmanifest', '/web/phone.css', '/web/phone-icon-192.png', '/web/phone-icon-512.png',
-  '/web/js/phone-app.js', '/web/js/phone-core.js', '/web/js/phone-render.js', '/web/js/phone-vault.js', '/web/js/h.js',
+  '/web/js/phone-app.js', '/web/js/phone-core.js', '/web/js/phone-render.js', '/web/js/phone-vault.js', '/web/js/phone-e2e.js', '/web/js/h.js',
 ];
 
 function shellPath(request) {

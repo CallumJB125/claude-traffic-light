@@ -12,3 +12,4 @@ export { verifyAssertion, webauthnChallengeFor, derToRaw } from './webauthn.js';
 export { ReplayCache } from './replay.js';
 export { MemoryPendingStore } from './pending.js';
 export { InMemoryHub, createDesktopHandler, sendDecision } from './relay.js';
+export { RELAY_E2E, E2EError, E2E_CODES, generateAgreementKey, exportAgreementPublic, importAgreementPublic, importAgreementPrivateJwk, createDesktopChannel, createDeviceChannel, seal, open, checkShape } from './envelope.js';

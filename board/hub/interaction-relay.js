@@ -16,6 +16,18 @@
 // memory and are never logged or cached (the generic request_id response
 // cache is off for these routes; replays are refused instead).
 //
+// End-to-end (W2-A, docs/relay-e2e-threat-model.md): a call may carry an
+// opaque `enc` envelope instead of `args`. The hub checks only its shape and
+// size and forwards it as is; the host's answer for it is `{enc}` too. The
+// hub then sees routing metadata only: which device calls which host, the op
+// name, the envelope's device/session ids and sequence number, sizes and
+// timing. It cannot read, alter (AAD + GCM tag), reorder into another
+// request or replay (per-session sequence numbers) what the envelope carries.
+//
+// A phone's sign-in is scoped (user_devices.scope = 'relay', migration 056):
+// http.js refuses it everywhere except the call routes here, the shared-call
+// routes, and signing out. It can never host.
+//
 // Roles (user_devices.interaction_role, migration 048): a device is either a
 // 'client' (default) or a 'host', set only by the device itself through PUT
 // /api/interaction/v1/role after an explicit opt-in in its app. Only a host
@@ -38,13 +50,28 @@ import { HubError } from './db.js';
 import { WS_CLOSE } from '../shared/protocol.js';
 
 export const INTERACTION_WS_PATH = '/ws/interaction-host';
-export const RELAY_OPS = Object.freeze(['capabilities', 'list', 'state', 'launch', 'send', 'interrupt', 'close', 'watch']);
+// 'hello' opens an end-to-end session (only ever as an `enc` call).
+export const RELAY_OPS = Object.freeze(['capabilities', 'list', 'state', 'launch', 'send', 'interrupt', 'close', 'watch', 'hello']);
 export const RELAY_LIMITS = Object.freeze({
   argsBytes: 16 * 1024, replyBytes: 768 * 1024, timeoutMs: 25_000, pendingPerHost: 32,
   // Shared-session calls (interaction-shares.js): all teammates together, and each one.
   sharedPendingPerHost: 16, pendingPerTeammate: 4,
   replayTtlMs: 10 * 60_000, replayPerUser: 4096, probeMs: 5_000,
 });
+// An `enc` envelope's ciphertext: the args limit in base64url, plus the GCM tag and JSON framing.
+const ENC_CT_MAX = Math.ceil((RELAY_LIMITS.argsBytes + 64) * 4 / 3);
+const ENC_KEYS = ['v', 'dev', 'sid', 'seq', 'salt', 'iv', 'ct'];
+const B64 = /^[A-Za-z0-9_-]+$/;
+/** The envelope's shape only (src/e2e/relay-envelope.js checkShape): the hub never opens it. */
+export function encShapeOk(enc, ctMax = ENC_CT_MAX) {
+  return closed(enc, ENC_KEYS) && Object.keys(enc).length === ENC_KEYS.length && enc.v === 1
+    && typeof enc.dev === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(enc.dev)
+    && typeof enc.sid === 'string' && (enc.sid === '' || (enc.sid.length === 22 && B64.test(enc.sid)))
+    && Number.isSafeInteger(enc.seq) && enc.seq >= 0 && enc.seq <= 2 ** 31 - 1 && (enc.sid === '') === (enc.seq === 0)
+    && typeof enc.salt === 'string' && enc.salt.length === 43 && B64.test(enc.salt)
+    && typeof enc.iv === 'string' && enc.iv.length === 16 && B64.test(enc.iv)
+    && typeof enc.ct === 'string' && enc.ct.length >= 22 && enc.ct.length <= ctMax && B64.test(enc.ct);
+}
 export const RESUME_HEADER = 'x-plexiform-resume';
 // Ops whose effect may have happened even when the device's answer is lost.
 const MUTATING = new Set(['launch', 'send', 'interrupt', 'close']);
@@ -170,6 +197,8 @@ export class InteractionRelay {
   setRole(ident, body) {
     if (ident?.cred?.kind !== 'device') throw new HubError('FORBIDDEN', 'remote sessions need the desktop app');
     if (!closed(body, ['role']) || !ROLES.includes(body.role)) throw invalid();
+    // A phone's relay-scoped sign-in may only (re)state that it is a client.
+    if (body.role === 'host' && ident.cred.scope === 'relay') throw new HubError('FORBIDDEN', 'only the desktop app can share its sessions');
     if (body.role === 'host') {
       const platform = this.hub.db.get('SELECT platform FROM user_devices WHERE id = ?', ident.cred.id)?.platform;
       if (typeof platform !== 'string' || !HOST_PLATFORM.test(platform)) throw new HubError('FORBIDDEN', 'only the desktop app can share its sessions');
@@ -221,15 +250,19 @@ export class InteractionRelay {
 
   async call(ident, hostId, body) {
     this.asClient(ident);
-    if (!closed(body, ['request_id', 'op', 'args']) || typeof body.request_id !== 'string' || !UUID.test(body.request_id)
+    if (!closed(body, ['request_id', 'op', 'args', 'enc']) || typeof body.request_id !== 'string' || !UUID.test(body.request_id)
       || !RELAY_OPS.includes(body.op) || (body.args !== undefined && !object(body.args))) throw invalid();
+    // Sealed (enc, opaque here) or plain (args), never both; 'hello' only sealed.
+    const sealed = body.enc !== undefined;
+    if (sealed && (body.args !== undefined || !encShapeOk(body.enc, Math.ceil((this.limits.argsBytes + 64) * 4 / 3)))) throw invalid();
+    if (!sealed && body.op === 'hello') throw invalid();
     const args = body.args ?? {};
-    if (Buffer.byteLength(JSON.stringify(args)) > this.limits.argsBytes) throw new HubError('PAYLOAD_TOO_LARGE', 'message too large');
+    if (!sealed && Buffer.byteLength(JSON.stringify(args)) > this.limits.argsBytes) throw new HubError('PAYLOAD_TOO_LARGE', 'message too large');
     const host = this.liveHost(ident.user.id, hostId);
     if (!host) throw noHost();
     if (host.pending.size >= this.limits.pendingPerHost) throw new HubError('RATE_LIMITED', 'that device is busy; try again shortly', { retry_after_s: 1 });
     if (this.replayed(ident.user.id, body.request_id)) throw new HubError('CONFLICT', 'This request was already sent. Refresh and try again.', { reason: 'REPLAYED' });
-    const frame = { type: 'relay.request', rid: body.request_id, user: ident.user.id, from: ident.cred.id, op: body.op, args };
+    const frame = { type: 'relay.request', rid: body.request_id, user: ident.user.id, from: ident.cred.id, op: body.op, ...(sealed ? { enc: body.enc } : { args }) };
     const result = await this.dispatch(host, frame, () => this.unburn(ident.user.id, body.request_id));
     // Revoked while the device was answering: the answer is not delivered.
     if (!this.credValid(ident.cred)) throw new HubError('UNAUTHENTICATED', 'device token unknown or revoked: sign in again');
@@ -260,7 +293,7 @@ export class InteractionRelay {
   routes(route) {
     route('PUT', '/api/interaction/v1/role', ({ ident, body }) => this.setRole(ident, body), { auth: 'user', replay: false, strictBody: true });
     route('GET', '/api/interaction/v1/hosts', ({ ident }) => this.hostsFor(ident), { auth: 'user', replay: false });
-    route('POST', '/api/interaction/v1/hosts/:host_id/call', ({ ident, params, body }) => this.call(ident, params.host_id, body), { auth: 'user', replay: false, strictBody: true, maxBody: this.limits.argsBytes + 1024 });
+    route('POST', '/api/interaction/v1/hosts/:host_id/call', ({ ident, params, body }) => this.call(ident, params.host_id, body), { auth: 'user', replay: false, strictBody: true, maxBody: Math.ceil((this.limits.argsBytes + 64) * 4 / 3) + 1024 });
   }
 
   close() {

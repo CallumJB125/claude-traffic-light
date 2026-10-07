@@ -3,6 +3,7 @@
 // node/file-store.js fileStorage() for the real 0600 JSON file. A revoked
 // device keeps its record (for the audit trail) but can never act again.
 import { importPublicRaw, fingerprint } from './keys.js';
+import { importAgreementPublic } from './envelope.js';
 
 export function memoryStorage(initial = null) {
   let data = initial ? structuredClone(initial) : null;
@@ -42,16 +43,18 @@ export class DeviceRegistry {
     return this.data;
   }
 
-  add({ publicKey, name, ownerId }) {
+  // agreeKey: the device's static ECDH public key for the end-to-end relay (envelope.js), from pairing.
+  add({ publicKey, agreeKey = null, name, ownerId }) {
     return this.#serial(async () => {
       if (typeof ownerId !== 'string' || !ownerId) throw new TypeError('ownerId required');
       await importPublicRaw(publicKey);
+      if (agreeKey !== null) await importAgreementPublic(agreeKey);
       const deviceId = await fingerprint(publicKey);
       const d = await this.#load();
       // A revoked key stays revoked: re-pairing must use a fresh key.
       if (d.devices[deviceId]?.revokedAt) throw new Error('this device key was revoked; pair again with a new key');
       const now = this.clock();
-      const rec = { deviceId, publicKey, name: cleanName(name), ownerId, createdAt: now, lastUsedAt: null, revokedAt: null };
+      const rec = { deviceId, publicKey, agreeKey, name: cleanName(name), ownerId, createdAt: now, lastUsedAt: null, revokedAt: null };
       d.devices[deviceId] = rec;
       await this.storage.save(d);
       this.keys.delete(deviceId);
@@ -78,6 +81,12 @@ export class DeviceRegistry {
     if (!rec || rec.revokedAt) return null;
     if (!this.keys.has(deviceId)) this.keys.set(deviceId, await importPublicRaw(rec.publicKey));
     return { record: rec, key: this.keys.get(deviceId) };
+  }
+
+  // The relay's peer(dev) for createDesktopChannel: an active device's ECDH public key, or null (unknown, revoked, or paired before end-to-end).
+  async activeAgreeKey(deviceId) {
+    const rec = await this.get(deviceId);
+    return rec && !rec.revokedAt && typeof rec.agreeKey === 'string' ? rec.agreeKey : null;
   }
 
   touch(deviceId) {
