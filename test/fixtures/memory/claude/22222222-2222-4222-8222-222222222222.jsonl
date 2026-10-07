@@ -1,0 +1,2 @@
+{"type":"user","sessionId":"22222222-2222-4222-8222-222222222222","cwd":"/Users/dev/secret-client/portal","gitBranch":"main","timestamp":"2026-10-02T10:00:00.000Z","message":{"role":"user","content":"Muted project prompt about invoice rounding too"}}
+{"type":"assistant","sessionId":"22222222-2222-4222-8222-222222222222","cwd":"/Users/dev/secret-client/portal","timestamp":"2026-10-02T10:00:03.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Muted reply."}]}}
