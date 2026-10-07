@@ -27,6 +27,7 @@
     CONFIRM_REQUIRED: 'That needs your confirmation first.',
     RATE_LIMITED: 'Too many messages too quickly. Wait a minute and try again.',
     INTERNAL: 'The background helper hit a problem. Try again in a moment.',
+    PLAN_REQUIRED: 'Run tonight is part of Plus. Pick "Start now" or "When my limit resets" instead.',
     HUB_UNREACHABLE: 'The team board is not reachable right now, so this board card cannot be changed from here.',
     UNKNOWN_METHOD: 'The background helper does not understand that request. Update it and try again.',
     AI_UNAVAILABLE: 'That AI is not installed or not logged in on this Mac.',

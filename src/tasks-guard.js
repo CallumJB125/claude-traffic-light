@@ -231,13 +231,20 @@ function createGuard({ P, taskFace }) {
   const SURFACES_UI = ['background', 'tmux', 'tab'];
   const PERMS_UI = ['plan', 'ask', 'auto-edits'];
   /** draft = {text, ai, surface, permissionLevel, planFirst}; cwd is resolved by main from a folder handle, never taken from the page. */
-  function validateCreate(draft, cwd) {
+  function validateCreate(draft, cwd, { canSchedule = false } = {}) {
     if (!draft || typeof draft !== 'object') return fail('VALIDATION');
     if (typeof cwd !== 'string' || !cwd) return fail('VALIDATION');
     if (!text(draft.text, TV.LIMITS.taskText)) return fail('VALIDATION');
     const spec = { text: draft.text.trim(), cwd, source: 'local', ai: pick(draft.ai, P.AI_CHOICES, 'auto'), surface: pick(draft.surface, SURFACES_UI, 'background') };
     if (PERMS_UI.includes(draft.permissionLevel)) spec.permissionLevel = draft.permissionLevel;
     if (draft.planFirst === true) spec.planFirst = true;
+    // Schedules your own CLI run for later on this Mac. 'reset' is free; the overnight window is Plus.
+    if (draft.when === 'reset') spec.afterReset = true;
+    else if (draft.when === 'tonight') {
+      if (!canSchedule) return fail('PLAN_REQUIRED');
+      spec.window = { from: '22:00', to: '07:00' };
+      spec.afterReset = true;
+    }
     return { ok: true, spec };
   }
 

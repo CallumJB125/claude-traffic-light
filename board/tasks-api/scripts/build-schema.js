@@ -75,6 +75,9 @@ const taskSpec = optional({
   budgetUsd: num(),
   baseBranch: str(),
   workInPlace: bool,
+  startAfter: int(),
+  window: obj({ from: str({ maxLength: 5 }), to: str({ maxLength: 5 }) }),
+  afterReset: bool,
   source: en(SOURCES),
   sourceMeta: optional({
     userId: str(), displayName: str(), channel: str(), messageId: str(),

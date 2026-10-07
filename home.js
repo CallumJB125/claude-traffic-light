@@ -31,6 +31,26 @@
     el.replaceChildren(node('p', b.text), goButton(b.action.label, b.action.destination, 'banner', true));
   }
 
+  const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+  function renderMorning(m) {
+    const section = $('morning'), out = body('morning');
+    section.hidden = !m;
+    if (!m) { $('morning-count').textContent = ''; return out.replaceChildren(); }
+    $('morning-count').textContent = m.count ? `${plural(m.count, 'task')} · ${money(m.costUsd)}` : '';
+    const list = node('ul'); list.setAttribute('aria-label', 'Tasks finished while you were away');
+    m.items.forEach(i => {
+      const bits = [i.branch, i.commits ? plural(i.commits, 'commit') : null, i.files ? `${plural(i.files, 'file')} +${i.added} -${i.removed}` : null, i.costUsd ? money(i.costUsd) : null, i.tests && i.tests !== 'none' ? `tests ${i.tests}` : null, i.pr ? 'PR open' : null].filter(Boolean);
+      const li = item(i.title, bits.join(' · ') || i.summary, i.ask ? 'Has a question' : i.state === 'failed' ? 'Failed' : null, i.ask || i.state === 'failed' ? 'waiting' : '');
+      list.append(li);
+    });
+    out.replaceChildren(list);
+    if (m.more) out.append(node('p', `And ${m.more} more.`, 'muted'));
+    m.asks.forEach(a => out.append(node('p', `${a.title}: ${a.ask}`, 'muted')));
+    const actions = node('div', '', 'actions');
+    actions.append(goButton('Open Tasks', 'tasks', 'morning:tasks', true), button('Got it', async () => { await api.morningSeen(); void refresh(); }, 'morning:seen'));
+    out.append(actions);
+  }
+
   function renderNeeds(n) {
     const out = body('needs');
     $('needs-count').textContent = n?.total ? `${n.total} waiting` : '';
@@ -110,7 +130,7 @@
 
   function render(s) {
     const focus = document.activeElement?.dataset?.focus;
-    renderBanner(s.banner); renderNeeds(s.needs); renderRunning(s.running, s.banner); renderToday(s.today, s.running); renderCards(s.team);
+    renderBanner(s.banner); renderMorning(s.morning); renderNeeds(s.needs); renderRunning(s.running, s.banner); renderToday(s.today, s.running); renderCards(s.team);
     if (focus) [...document.querySelectorAll('[data-focus]')].find(el => el.dataset.focus === focus)?.focus();
     $('status').textContent = `Updated ${new Date(s.observed_at).toLocaleTimeString()}. Refreshes every 5 seconds.`;
   }

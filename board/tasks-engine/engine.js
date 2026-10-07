@@ -58,6 +58,25 @@ const LAUNCH_TIMED_OUT = Symbol('launch-timed-out');
 const MIN_FREE_BYTES = 256 * 1024 * 1024;
 const MAX_TRANSCRIPT_PER_MESSAGE = 16;      // chunks (1 MiB of text) per assistant message
 const MAX_AUDIT = 500;
+const HHMM = /^([01]\d|2[0-3]):([0-5]\d)$/;
+
+// Why a queued task may not start yet, or null. spec.startAfter (epoch ms), spec.window {from,to} in local
+// 'HH:MM' (a window that crosses midnight is fine), spec.afterReset (wait for this AI's usage limit to reset).
+// This only schedules the user's own CLI runs; it never touches anyone's limits but their own.
+function startGate(task, now, resetAt) {
+  const spec = task.spec;
+  if (Number.isFinite(spec.startAfter) && now < spec.startAfter) return `Scheduled · starts at ${new Date(spec.startAfter).toLocaleString('en-GB', { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' })}`;
+  const w = spec.window;
+  const from = HHMM.exec(w?.from ?? ''), to = HHMM.exec(w?.to ?? '');
+  if (from && to) {
+    const d = new Date(now), at = d.getHours() * 60 + d.getMinutes();
+    const a = +from[1] * 60 + +from[2], b = +to[1] * 60 + +to[2];
+    const inside = a === b ? true : a < b ? at >= a && at < b : at >= a || at < b;
+    if (!inside) return `Scheduled · starts at ${w.from}`;
+  }
+  if (spec.afterReset === true && resetAt != null && now < resetAt) return 'Waiting for your usage limit to reset · starts then';
+  return null;
+}
 const MAX_TOUCHED = 500;
 const ADDITIONAL_CONTEXT_MAX = 9000;
 const DETECT_EVERY_MS = 24 * 60 * 60 * 1000;
@@ -718,7 +737,14 @@ export class TasksEngine extends EventEmitter {
   #schedule() {
     if (this.closing || this.closed) return;
     const queued = [...this.tasks.values()].filter((t) => t.state === 'queued' && !t.awaitingConfirm && !t.resumeAtReset && !t.launching).sort((a, b) => a.createdAt - b.createdAt);
+    const now = this.now();
     for (const t of queued) {
+      const resetAt = Math.max(-1, ...[...this.tasks.values()].filter((o) => o.ai.id === t.ai.id && o.state === 'parked' && o.parkReason === 'limit' && o.limitResetAt != null).map((o) => o.limitResetAt));
+      const gate = startGate(t, now, resetAt >= 0 ? resetAt : null);
+      if (gate) {
+        if (t.queueReason !== gate) { t.queueReason = gate; this.#save(t); this.#stateEvent(t, 'queued'); }
+        continue;
+      }
       const slots = this.#slots();
       const perAi = slots.filter((s) => s.ai.id === t.ai.id).length;
       let reason = null;
@@ -1684,6 +1710,7 @@ export class TasksEngine extends EventEmitter {
       const task = this.tasks.get(id);
       if (task && run.tools.size) run.backend.refreshTree?.();
     }
+    if ([...this.tasks.values()].some((t) => t.state === 'queued' && (t.spec.startAfter != null || t.spec.window || t.spec.afterReset))) this.#schedule();
     for (const task of this.tasks.values()) {
       if (!LEASED.has(task.state)) continue;
       if (task.state === 'running' && task.lastActivity != null && now - task.lastActivity > T_QUIET_MS && !this.runs.get(task.id)?.toolInFlight) {

@@ -109,7 +109,7 @@ function register({ utilityHandle, allowed, isMac, burst, keepAwake, dialog, get
   utilityHandle('keepawake:get', allowed, async () => view());
   utilityHandle('keepawake:set', allowed, async (_e, req) => set(req));
   apply();
-  return { view, set, macView, sync: (sessions) => keepAwake.sync(sessions) };
+  return { view, set, macView, sync: (sessions) => keepAwake.sync(sessions), hold: (on) => keepAwake.setHold(on) };
 }
 
 module.exports = { register, consent, IDLE_MINUTES };

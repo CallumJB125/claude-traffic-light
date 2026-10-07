@@ -7,7 +7,7 @@ const InputView = require('./input-view.js');
 const SessionOverview = require('./session-overview.js');
 
 const LOCAL_BOARD = 'My board (this Mac)';
-const PAGES = new Set(['waiting', 'sessions', 'board', 'usage', 'settings', 'team', 'myday', 'overview']);
+const PAGES = new Set(['waiting', 'sessions', 'board', 'usage', 'settings', 'team', 'myday', 'overview', 'tasks']);
 const AITOOLS = /^aitools(?::[a-z]{2,12})?$/;
 const LIST_MAX = 20;
 const TEAM_TTL_MS = 15000;
@@ -67,7 +67,10 @@ function cards(snapshot) {
   };
 }
 
-function register({ ipcMain, allowed, state, localSessions, tools, myDay, openPage, openAiTools, now = Date.now }) {
+// Tasks finished while you were away (Plus). Null when there is nothing, or the plan lacks it.
+const morningReport = () => require('./morning-report.js').current();
+
+function register({ ipcMain, allowed, state, localSessions, tools, myDay, openPage, openAiTools, morning = morningReport, now = Date.now }) {
   let toolsMemo = { at: -Infinity, value: null };
   let teamMemo = { at: -Infinity, value: null };
   const part = (fn) => { try { return fn(); } catch { return null; } };
@@ -88,6 +91,7 @@ function register({ ipcMain, allowed, state, localSessions, tools, myDay, openPa
       running: st ? part(() => running(localSessions(st.sessions || []), time)) : null,
       today: st ? part(() => today(st.spend, inputs, time)) : null,
       team: teamMemo.value,
+      morning: part(() => morning()?.state() ?? null),
     };
   }
   ipcMain.handle('home:state', (e) => (allowed(e) ? snapshot() : null));
@@ -98,6 +102,7 @@ function register({ ipcMain, allowed, state, localSessions, tools, myDay, openPa
     openPage(destination);
     return true;
   });
+  ipcMain.handle('home:morning-seen', (e) => (allowed(e) ? !!morning()?.markSeen() : false));
   ipcMain.handle('home:open-card', async (e, handle) => (allowed(e) && typeof handle === 'string' && handle.length <= 100 ? !!await myDay.open(handle) : false));
 }
 
