@@ -73,7 +73,7 @@ export function commandItems({ view, readOnly, filters, hasGive, showPlanner = f
   items.push(cmd('workflows', 'Reusable workflows…', { type: 'workflows' }, { keywords: 'templates recipes delivery repeat steps', icon: 'queue' }));
   items.push(cmd('theme', 'Toggle theme', { type: 'theme-next' }, { keywords: 'dark light system appearance', icon: 'auto' }));
   if (!readOnly) items.push(cmd('new', 'New card', { type: 'new-card' }, { hint: 'n', keywords: 'create add', icon: 'plus' }));
-  if (!readOnly && hasGive) items.push(cmd('give', 'Tackle with AI…', { type: 'scope-give' }, { keywords: 'dispatch run assign codex ai', icon: 'person' }));
+  if (!readOnly && hasGive) items.push(cmd('give', 'Send to AI…', { type: 'scope-give' }, { keywords: 'dispatch run assign codex ai', icon: 'person' }));
   for (const c of CHIPS) items.push(cmd(`filter-${c.id}`, `Show only: ${c.label}`, { type: 'filter', chip: c.id }, { keywords: `filter ${c.id}`, icon: 'queue' }));
   if (isFiltering(filters)) items.push(cmd('filter-clear', 'Clear filters', { type: 'filter-clear' }, { hint: 'Esc', keywords: 'reset remove', icon: 'close' }));
   return items;
@@ -86,7 +86,7 @@ export function cardItems(entries) {
   }));
 }
 
-/** Cards you could hand to Claude right now (the "Tackle with AI…" second step). */
+/** Cards you could hand to Claude right now (the "Send to AI…" second step). */
 export function giveItems(entries) {
   return entries.map((e) => ({ e, give: giveFor(e) })).filter((x) => x.give).map(({ e, give }) => ({
     id: `give:${e.view.id}`, kind: 'card', title: `${e.view.key} ${e.view.title}`, keyLen: String(e.view.key).length,

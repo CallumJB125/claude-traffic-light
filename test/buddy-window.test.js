@@ -1318,7 +1318,7 @@ test('runner.stopped: parked_pending is read and shown as runs being handed over
   c.emit('message', { type: 'runner.stopped', parked: 0, parked_pending: -2 });
   assert.equal(d.status().parkedPending, 0);
   const page = fs.readFileSync(path.join(__dirname, '..', 'buddy-window', 'account.js'), 'utf8');
-  assert.match(page, /being handed over/);
+  assert.match(page, /being moved to another AI/);
 });
 
 test('runner.config: data_dir is made 0700, ours and not a symlink, else the runner does not start', async () => {

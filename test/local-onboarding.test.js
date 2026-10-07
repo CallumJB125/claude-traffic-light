@@ -71,7 +71,7 @@ test('the sign-in buttons use the account page bridge: one new composed action, 
 test('signed-out Team and Integrations copy: plain, names the hub from the brand, status is words', () => {
   const acct = read(dir, 'account.js');
   assert.match(acct, /Sign in to create a team or join one: invite teammates, see their agents live\./);
-  assert.match(acct, /Teams and integrations live on the team hub \(\$\{s\.brand\.defaultHost\}\)/);
+  assert.match(acct, /Teams and integrations live on your team’s address \(\$\{s\.brand\.defaultHost\}\)/);
   assert.ok(!/app\.plexiform\.dev/.test(acct), 'the host comes from the brand, not the page');
   assert.match(acct, /el\('p', \{ class: 'acct-connector-status' \}, c\.statusText\)/);
   assert.match(acct, /el\('ul', \{ class: 'acct-connectors', 'aria-label'/);

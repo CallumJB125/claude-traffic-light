@@ -190,7 +190,7 @@ export function card({ view, face, elapsed_ms = 0 }, model) {
   labelChips(view, model, labels),
   chipRow(chips),
   archived ? archivedFoot(view, model) : model.readOnly || pending ? null : cardActions({ ...face, actions: face.stalled ? face.actions : face.actions.filter((a) => !ADVANCED_ACTIONS.has(a)) }, view, model.busy),
-  human && !observed && !pending && !archived && face.state === 'todo' && !view.target ? h('p', { class: 'card-foot' }, view.repo ? 'on your account' : 'no repo yet · add one to tackle it with AI') : null);
+  human && !observed && !pending && !archived && face.state === 'todo' && !view.target ? h('p', { class: 'card-foot' }, view.repo ? 'on your account' : 'no repo yet · add one to send it to an AI') : null);
 }
 
 // An archived card is read-only (D94): its one action is Restore.
@@ -228,7 +228,7 @@ export function stalledLane(entries, model) {
     h('header', { class: 'column-head' },
       h('h2', { id: 'col-stalled' }, COLUMN_LABEL.stalled),
       h('span', { class: 'column-count num', 'aria-label': `${entries.length} cards` }, String(entries.length)),
-      h('span', { class: 'stalled-hint' }, 'Not running. Resume, hand over to another AI, or stop.')),
+      h('span', { class: 'stalled-hint' }, 'Stopped unexpectedly. Resume it, give it to another AI, or end it.')),
     h('div', { class: 'stalled-body' }, entries.map((e) => card(e, model))));
 }
 
@@ -240,7 +240,7 @@ export function idleLane(entries, model) {
     h('header', { class: 'column-head' },
       h('h2', { id: 'col-idle' }, COLUMN_LABEL.idle),
       h('span', { class: 'column-count num', 'aria-label': `${entries.length} cards` }, String(entries.length)),
-      h('span', { class: 'stalled-hint' }, 'No report in the last 90 seconds. Hidden after 24 hours; use Show archived to see them.')),
+      h('span', { class: 'stalled-hint' }, 'Quiet: no update for a few minutes. Hidden after a day; use Show archived to see them.')),
     h('div', { class: 'stalled-body' }, entries.map((e) => card(e, model))));
 }
 
@@ -282,7 +282,7 @@ function quickAddRow(qa) {
 
 const EMPTY = {
   todo: 'Nothing waiting. New cards land here.',
-  in_progress: 'No one is working on anything. Tackle a card with AI to start.',
+  in_progress: 'No one is working on anything. Send a card to an AI to start.',
   in_review: 'Nothing to review.',
   done: 'Finished work shows up here.',
 };
@@ -294,7 +294,7 @@ export function localCard(model) {
   return h('section', { class: 'localcard', 'aria-labelledby': 'localcard-title' },
     h('div', { class: 'localcard-text' },
       h('h2', { id: 'localcard-title', class: 'localcard-title' }, 'You’re on your local board'),
-      h('p', { class: 'localcard-body muted small' }, 'Create a team to collaborate: share one board with teammates and their AI sessions, and connect tools like GitHub. Open Team in the sidebar to sign in. Teams and integrations live on the team hub.')),
+      h('p', { class: 'localcard-body muted small' }, 'Create a team to collaborate: share one board with teammates and their AI sessions, and connect tools like GitHub. Open Team in the sidebar to sign in. Teams and integrations live on your team’s address.')),
     h('button', { type: 'button', class: 'btn btn-sm btn-ghost', 'data-action': 'local-card-dismiss' }, 'Dismiss'));
 }
 

@@ -197,7 +197,7 @@ test('renderer wiring: chip script on widget and Usage page, mirror in This Mac,
   assert.match(rd('lights.html'), /<script src="burst-chip\.js">/);
   assert.match(rd('preload.js'), /burstChip: \(\) => ipcRenderer\.invoke\('burst:chip'\)/);
   assert.match(rd('lights-preload.js'), /burstChip/);
-  assert.match(rd('buddy-window/account.js'), /out\.push\(burstSection\(\)\)/);
+  assert.match(rd('buddy-window/account.js'), /out\.push\(keepAwakeSection\(\), burstSection\(\), macStatusSection\(\)\)/);
   assert.match(rd('buddy-window/account-preload.js'), /burstStatus/);
   assert.match(rd('main.js'), /chipAllowed: \(e\) => widgetOnly\(e\) \|\| fromUtilityPage\(e, 'usage'\)/);
 });

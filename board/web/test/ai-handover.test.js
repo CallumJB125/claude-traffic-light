@@ -20,5 +20,5 @@ test('managed switch and held state distinguish stop preparation, blocked and re
   assert.deepEqual(cardFace({ ...held, handover_provenance: 'checkpoint_complete' }).actions, ['view_handover', 'take_over_with_claude']);
   const model = { entries: [{ view }], members: new Map(), me: { member: { id: 'me' } } };
   assert.match(text(switchAiDialog({ cardId: view.id }, model)), /No replacement starts automatically/);
-  assert.match(text(switchAiDialog({ cardId: view.id }, model)), /Personal or observed sessions must be stopped/);
+  assert.match(text(switchAiDialog({ cardId: view.id }, model)), /This session runs in your own terminal; stop it there/);
 });

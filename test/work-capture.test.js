@@ -166,7 +166,7 @@ test('byte quota refuses new pinned work before sending and preserves a readable
  let i=0;
  for(;;) {
    const entry={destination:{kind:'local'},repo:null,provider:'codex',session_id:'s'.repeat(114)+String(i++).padStart(6,'0'),task_id:'t'.repeat(120),
-     title:'界'.repeat(200),status:'working',card_id:crypto.randomUUID(),untracked:true,reason:'stopped'};
+     title:'界'.repeat(194)+String(i).padStart(6,'0'),status:'working',card_id:crypto.randomUUID(),untracked:true,reason:'stopped'};
    const key=crypto.createHash('sha256').update(JSON.stringify([entry.provider,entry.session_id,entry.task_id])).digest('hex');
    v.tasks[key]=entry;
    if(Buffer.byteLength(JSON.stringify(v),'utf8')>ceiling-400){delete v.tasks[key];break;}
@@ -239,4 +239,17 @@ test('captureOnce makes one card with the automatic toggle off, dedupes, and hon
  const team=await r.router.captureOnce(event({sessionId:'thread-2'}),routeKey(R));assert.equal(team.ok,true);assert.equal(r.calls.at(-1).kind,'team');assert.equal(r.calls.at(-1).body.repo_id,R.repo_id);
  const bad=await r.router.captureOnce(event({sessionId:'thread-3'}),'f'.repeat(64));assert.equal(bad.reason,'repo_not_linked');assert.equal(r.calls.length,2);
  await r.router.observe([event({sessionId:'thread-4'})]);assert.equal(r.calls.length,2,'automatic path stays off');
+});
+test('This Mac list hides stored background entries, groups repeats and prunes old finished ones on start',async t=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'work-capture-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+ const file=path.join(dir,'capture.json'),NOW=10*86400000,tasks={};
+ const add=(id,title,status,seen)=>{tasks[crypto.createHash('sha256').update(id).digest('hex')]={destination:{kind:'local'},repo:null,provider:'codex',session_id:id,task_id:'session',title,status,card_id:'c',last_seen:seen};};
+ for(let i=0;i<40;i++)add(`mem-${i}`,'Codex · memories','idle',NOW-1000);
+ for(let i=0;i<3;i++)add(`app-${i}`,'Codex · app','working',NOW-1000);
+ add('old','Codex · old','idle',NOW-8*86400000);add('recent','Codex · recent','idle',NOW-86400000);
+ fs.writeFileSync(file,JSON.stringify({v:1,install_id:crypto.randomUUID(),enabled:true,tasks,choices:{}}),{mode:0o600});
+ const router=createWorkCapture({file,getRoutes:async()=>({routes:[],complete:true}),sendLocal:async()=>({ok:true}),sendTeam:async()=>({ok:true}),now:()=>NOW});t.after(()=>router.stop());
+ const titles=router.snapshot().map(r=>r.title).sort();
+ assert.deepEqual(titles,['Codex · app (3)','Codex · recent']);
+ assert.ok(!Object.values(JSON.parse(fs.readFileSync(file,'utf8')).tasks).some(e=>e.title==='Codex · old'));
 });

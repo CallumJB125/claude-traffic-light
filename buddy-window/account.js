@@ -260,6 +260,8 @@ function macStatusSection() {
   return sec;
 }
 
+const STATUS = { working: 'Working', waiting: 'Needs you', review: 'Finished, ready to review', ended: 'Finished', idle: 'Quiet for a while' };
+
 const SCREENS = {
   clients(s) {
     return [heading('Your client projects', 'View the project updates shared with you. Invitations need your explicit acceptance.'),
@@ -271,9 +273,9 @@ const SCREENS = {
   },
   hub(s) {
     return [
-      heading(s.forInvite ? 'Where is your team?' : s.brand.copy.signInHeading, s.forInvite ? 'This invite doesn’t say which team hub it’s for. Enter the address your team uses.' : s.brand.copy.signInSub),
+      heading(s.forInvite ? 'Where is your team?' : s.brand.copy.signInHeading, s.forInvite ? 'This invite doesn’t say where your team is. Enter the address your team uses.' : s.brand.copy.signInSub),
       form({
-        fields: field('Team hub address', input({ name: 'url', type: 'text', inputmode: 'url', autocomplete: 'url', placeholder: s.brand.defaultHost, value: s.lastHub ?? '', required: true, autofocus: true })),
+        fields: field('Team address', input({ name: 'url', type: 'text', inputmode: 'url', autocomplete: 'url', placeholder: s.brand.defaultHost, value: s.lastHub ?? '', required: true, autofocus: true })),
         submit: 'Continue', busy: 'Checking…',
         fn: (v) => api.hub(v.url),
       }),
@@ -283,9 +285,9 @@ const SCREENS = {
 
   confirm(s) {
     return [
-      el('h1', {}, 'Join a team on this server?'),
+      el('h1', {}, 'Join a team at this address?'),
       el('p', { class: 'acct-host', title: s.host }, s.host),
-      el('p', { class: 'acct-sub' }, 'The invite link sent you here, and you haven’t used this server before. Only continue if you trust it.'),
+      el('p', { class: 'acct-sub' }, 'The invite link sent you here, and you haven’t used this address before. Only continue if you trust it.'),
       el('div', { class: 'acct-actions' },
         el('button', { type: 'button', class: 'btn btn-primary', onclick: () => api.confirm(true) }, 'Continue'),
         el('button', { type: 'button', class: 'btn', onclick: () => api.confirm(false) }, 'Cancel')),
@@ -294,9 +296,9 @@ const SCREENS = {
 
   email(s) {
     const out = [heading('Sign in', null), el('p', { class: 'acct-sub' }, 'to ', hostTag(s.host), s.forInvite ? ' to accept your invite.' : '.')];
-    const foot = el('p', { class: 'acct-foot' }, link('Use a different team hub', () => api.go('hub')));
+    const foot = el('p', { class: 'acct-foot' }, link('Use a different team address', () => api.go('hub')));
     if (!s.methods) {
-      out.push(el('p', { class: 'acct-error', role: 'alert' }, `Couldn’t check how to sign in to ${s.host ?? 'this server'}. ${s.methodsError ?? ''}`.trim()),
+      out.push(el('p', { class: 'acct-error', role: 'alert' }, `Couldn’t check how to sign in to ${s.host ?? 'this address'}. ${s.methodsError ?? ''}`.trim()),
         el('div', { class: 'acct-actions' }, el('button', { type: 'button', class: 'btn btn-primary', onclick: () => render() }, 'Try again')), foot);
       return out;
     }
@@ -307,7 +309,7 @@ const SCREENS = {
       return b;
     });
     if (!providers.length && !m.email) {
-      out.push(el('p', { class: 'acct-hint' }, 'Google and GitHub sign-in aren’t set up on this server yet. Ask its admin.'), foot);
+      out.push(el('p', { class: 'acct-hint' }, 'Google and GitHub sign-in aren’t set up at this address yet. Ask your team’s admin.'), foot);
       return out;
     }
     if (providers.length) out.push(el('div', { class: 'acct-providers' }, providers));
@@ -358,7 +360,7 @@ const SCREENS = {
 
   'create-team'(s) {
     if (!s.host) {
-      return [heading('Create a team', 'Sign in to your team hub first. Your team lives there.'),
+      return [heading('Create a team', 'Sign in to your team first. Your team lives there.'),
         el('div', { class: 'acct-actions' }, el('button', { type: 'button', class: 'btn btn-primary', onclick: () => api.go('hub') }, 'Sign in'))];
     }
     // Right after a first sign-in this is the whole choice: start a team, or join the one that invited you.
@@ -378,7 +380,7 @@ const SCREENS = {
 
   integrations(s) {
     return [
-      heading('Integrations', `Connect the tools your team already uses. Integrations live on your team hub (${s.brand.defaultHost}), so you need a team first.`),
+      heading('Integrations', `Connect the tools your team already uses. Integrations live on your team’s address (${s.brand.defaultHost}), so you need a team first.`),
       el('ul', { class: 'acct-connectors', 'aria-label': 'Tools you can connect' }, s.connectors.map((c) => el('li', { class: `acct-connector acct-connector-${c.status}` },
         el('h2', {}, c.name),
         el('p', { class: 'acct-hint' }, c.value),
@@ -393,7 +395,7 @@ const SCREENS = {
     if (!s.team && !s.signedInHubs.length) {
       return [
         heading('Team', 'Sign in to create a team or join one: invite teammates, see their agents live.'),
-        el('p', { class: 'acct-hint' }, `Teams and integrations live on the team hub (${s.brand.defaultHost}). Your board on this Mac stays local until you do.`),
+        el('p', { class: 'acct-hint' }, `Teams and integrations live on your team’s address (${s.brand.defaultHost}). Your board on this Mac stays local until you do.`),
         signedOutActions(),
       ];
     }
@@ -436,7 +438,7 @@ const SCREENS = {
     });
     out.push(el('section', { class: 'acct-section' }, el('h2', {}, `Members (${s.members.length})`), el('ul', { class: 'acct-list' }, rows)));
 
-    if (s.runners) out.push(el('section', { class: 'acct-section' }, el('h2', {}, 'Runners'), runnerRows(s)));
+    if (s.runners) out.push(el('section', { class: 'acct-section' }, el('h2', {}, 'Macs that run this team’s cards'), runnerRows(s)));
 
     if (s.canManage) {
       const rename = form({ fields: el('div', { class: 'acct-row-form' }, input({ name: 'name', type: 'text', maxlength: '60', value: s.team.name, required: true, 'aria-label': 'Team name' })), submit: 'Rename', busy: 'Saving…', fn: (v) => act(api.renameTeam(team, v.name)) });
@@ -465,7 +467,7 @@ const SCREENS = {
         heading('Join with an invite', 'Paste the invite link you were sent.'),
         s.error ? el('p', { class: 'acct-error', role: 'alert' }, s.error) : null,
         form({
-          fields: field('Invite link or code', input({ name: 'code', type: 'text', autocomplete: 'off', placeholder: 'https://… or inv_…', required: true, autofocus: true })),
+          fields: field('Invite link or code', input({ name: 'code', type: 'text', autocomplete: 'off', placeholder: 'Paste the invite link or 8-letter code (ABCD-EFGH)', required: true, autofocus: true })),
           submit: 'Continue', busy: 'Checking…',
           fn: (v) => api.joinCode(v.code),
         }),
@@ -516,7 +518,7 @@ const SCREENS = {
 
   account(s) {
     if (!s.accounts.length) {
-      return [heading('Account', 'You’re not signed in to a team hub.'), el('div', { class: 'acct-actions' }, el('button', { type: 'button', class: 'btn btn-primary', onclick: () => api.go('hub') }, 'Sign in'))];
+      return [heading('Account', 'You’re not signed in to a team.'), el('div', { class: 'acct-actions' }, el('button', { type: 'button', class: 'btn btn-primary', onclick: () => api.go('hub') }, 'Sign in'))];
     }
     const out = [heading('Account', null)];
     for (const a of s.accounts) {
@@ -546,12 +548,16 @@ const SCREENS = {
       }
       out.push(card);
     }
-    out.push(el('p', { class: 'acct-foot' }, link('Sign in to another team hub', () => api.go('hub'))));
+    out.push(el('p', { class: 'acct-foot' }, link('Sign in to another team address', () => api.go('hub'))));
     return out;
   },
 
   thismac(s) {
-    const out = [heading('This Mac', 'Run AI work here with your own setup, and keep its board updated.')];
+    const out = [heading('This Mac', 'Keep this Mac awake and see how it takes part in your team.')];
+    const solo = !s.hubs.length || s.hubs.every((h) => !h.teams.length);
+    if (solo) out.push(el('p', { class: 'acct-hint' }, 'Join a team to let this Mac run your team’s tasks. ',
+      el('button', { type: 'button', class: 'btn btn-quiet', onclick: () => api.go('team') }, 'Join')));
+    out.push(keepAwakeSection(), burstSection(), macStatusSection());
     if (s.workCapture) {
       const sec = el('section', { class: 'acct-section' }, el('h2', {}, 'Automatic work cards'));
       sec.append(el('div', { class: 'acct-item acct-item-toggle' },
@@ -561,7 +567,7 @@ const SCREENS = {
       if (s.workCapture.notice) sec.append(el('p', { class: 'acct-hint', role: 'status' }, s.workCapture.notice));
       for (const t of s.workCapture.tasks) {
         const d = t.destination, destination = d.kind === 'team' ? `${d.team_name || 'Team'} · ${d.board_name || 'Board'}` : 'My board (this Mac)';
-        const status = t.untracked ? 'Tracking stopped' : !t.card_id ? 'Waiting to sync' : `Last report: ${t.status || 'activity'}`;
+        const status = t.untracked ? 'Tracking stopped' : !t.card_id ? 'Waiting to sync' : (STATUS[t.status] ?? 'Active');
         const row = el('div', { class: 'acct-item' }, el('div', { class: 'acct-who' },
           el('span', { class: 'acct-name' }, t.title), el('span', { class: 'acct-mail' }, `${destination} · ${status}`),
           d.needs_routing ? el('span', { class: 'acct-mail' }, d.reason === 'team_read_only' ? 'Your team role is read-only, so this card stays personal.' : 'This repository is linked to multiple boards. Choose a default for future tasks; this card stays on My board.') : null));
@@ -575,13 +581,7 @@ const SCREENS = {
       if (!s.workCapture.tasks.length) sec.append(el('p', { class: 'acct-hint' }, 'Cards appear when a connected AI reports work.'));
       out.push(sec);
     }
-    out.push(burstSection());
-    out.push(keepAwakeSection());
-    out.push(macStatusSection());
-    if (!s.hubs.length || s.hubs.every((h) => !h.teams.length)) {
-      out.push(el('p', { class: 'acct-hint' }, 'Sign in and join a team to run cards here.'));
-      return out;
-    }
+    if (solo) return out;
     for (const h of s.hubs) {
       const sec = el('section', { class: 'acct-section' }, el('h2', {}, h.host));
       const sums = toggle(h.summaries && h.share, `Include one-line summaries for every team on ${h.host}`, (on) => api.summaries(h.host, on), { disabled: !h.share });
@@ -596,7 +596,7 @@ const SCREENS = {
         const ended = t.state === 'removed';
         const again = ended && !viewer ? link('Turn on again', () => act(api.runner(t.id, true))) : null;
         sec.append(el('div', { class: 'acct-item acct-item-toggle' },
-          el('div', { class: 'acct-who' }, el('span', { class: 'acct-name' }, `Run ${t.name} cards`), el('span', { class: 'acct-mail', 'data-state': t.state }, viewer ? 'Viewers can’t run cards.' : ended ? `This Mac isn’t sharing sessions with ${t.name} any more.` : runnerText(t)), again),
+          el('div', { class: 'acct-who' }, el('span', { class: 'acct-name' }, `Run ${t.name} cards`), el('span', { class: 'acct-mail', 'data-state': t.state }, viewer ? 'Viewers can’t run cards.' : ended ? `This Mac no longer runs ${t.name} cards.` : runnerText(t)), again),
           toggle(t.enabled, `Run ${t.name} cards on this Mac`, (on) => act(api.runner(t.id, on)), { disabled: viewer })));
       }
       out.push(sec);
@@ -613,7 +613,7 @@ const cancelLink = () => link('Cancel', async () => { await api.cancelDelete(); 
 // then Delete team while the check lasts. It is only ever for the team on screen.
 function teamDelete(s) {
   const d = s.team.deleteStep;
-  const warn = `Everyone loses ${s.team.name}, its boards and its cards at once, and runners stop. This can’t be undone from the app.`;
+  const warn = `Everyone loses ${s.team.name}, its boards and its cards at once, and this team’s Macs stop running its cards. This can’t be undone from the app.`;
   if (!d) {
     const f = form({
       fields: field(`Type ${s.team.slug} to confirm`, input({ name: 'slug', type: 'text', autocomplete: 'off', required: true, placeholder: s.team.slug })),
@@ -689,7 +689,7 @@ function runnerRows(s) {
     el('div', { class: 'acct-who' },
       el('span', { class: 'acct-name' }, r.name || 'A Mac', r.current ? el('span', { class: 'chip' }, 'this Mac') : null),
       el('span', { class: 'acct-mail' }, [r.person, r.online ? 'Online' : lastSeen(r.lastSeenAt)].filter(Boolean).join(' · '))),
-    r.canRevoke ? el('button', { type: 'button', class: 'btn btn-quiet', 'aria-label': `Remove ${r.name || 'this runner'}`, onclick: (e) => {
+    r.canRevoke ? el('button', { type: 'button', class: 'btn btn-quiet', 'aria-label': `Remove ${r.name || 'this Mac'}`, onclick: (e) => {
       const b = e.currentTarget;
       if (b.dataset.armed) { act(api.revokeRunner(team, r.id)); return; }
       b.dataset.armed = '1';
@@ -711,13 +711,13 @@ function lastSeen(iso) {
 
 const RUNNER = {
   off: 'Off', starting: 'Starting…', connecting: 'Connecting…', connected: 'Running', backoff: 'Reconnecting…', restarting: 'Restarting…',
-  unavailable: 'Can’t reach the team hub right now.', stopping: 'Stopping…',
+  unavailable: 'Can’t reach your team right now.', stopping: 'Stopping…',
 };
 function runnerText(t) {
   const base = !t.enabled && t.state === 'off' ? 'Off' : (['missing', 'failed'].includes(t.state) ? (t.detail ?? 'Stopped') : (RUNNER[t.state] ?? t.state));
   const parts = [base];
-  if (t.parked > 0) parts.push(`Parked ${t.parked} run${t.parked === 1 ? '' : 's'}`);
-  if (t.parkedPending > 0) parts.push(`${t.parkedPending} run${t.parkedPending === 1 ? ' is' : 's are'} being handed over`);
+  if (t.parked > 0) parts.push(`Paused ${t.parked} run${t.parked === 1 ? '' : 's'}`);
+  if (t.parkedPending > 0) parts.push(`${t.parkedPending} run${t.parkedPending === 1 ? ' is' : 's are'} being moved to another AI`);
   return parts.join(' · ');
 }
 
