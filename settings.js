@@ -413,6 +413,7 @@
       } catch (err) { hint.textContent = `Couldn't copy: ${err.message}`; }
     });
     window.settingsApi.onShowSection((id) => {
+      if (id === 'widget') { showSection('widget'); return; }
       if (id !== 'health') return;
       showSection('advanced');
       refreshHealth();
@@ -421,6 +422,8 @@
     // ── end Health ──
 
     load();
+    // The Widget page and the tray change some of these keys too: re-read on return so a later save keeps them.
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) load().catch(() => {}); });
 
     // ── Voice (F7) ── its own saves, so the Save button's list stays untouched.
     (async () => {

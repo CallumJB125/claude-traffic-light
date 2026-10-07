@@ -12,4 +12,9 @@ contextBridge.exposeInMainWorld('optimiserApi', {
   view: (name, args) => ipcRenderer.invoke('burst:view', String(name), args && typeof args === 'object' ? args : {}),
   burstAction: (id) => ipcRenderer.invoke('burst-action', String(id), {}),
   openDocs: () => ipcRenderer.send('optimiser:docs'),
+  tools: () => ipcRenderer.invoke('burst:tools'),
+  waste: () => ipcRenderer.invoke('cost-guard:report'),
+  setCompaction: (req) => ipcRenderer.invoke('burst:set-compaction', { enabled: !!(req && req.enabled), confirmed: !!(req && req.confirmed === true) }),
+  openLink: (id) => ipcRenderer.send('optimiser:link', String(id)),
+  openPage: (id) => ipcRenderer.send('optimiser:open-page', String(id)),
 });

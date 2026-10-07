@@ -98,7 +98,7 @@ test('page and preload are locked down: strict CSP, a closed bridge, packaged', 
   const bridge = read('optimiser-preload.js');
   assert.match(bridge, /exposeInMainWorld\('optimiserApi'/);
   const channels = [...bridge.matchAll(/ipcRenderer\.\w+\('([^']+)'/g)].map((m) => m[1]);
-  assert.ok(channels.length >= 5 && channels.every((c) => c.startsWith('optimiser:') || c === 'burst:view' || c === 'burst-action'), channels.join());
+  assert.ok(channels.length >= 5 && channels.every((c) => c.startsWith('optimiser:') || ['burst:view', 'burst-action', 'burst:tools', 'burst:set-compaction', 'cost-guard:report'].includes(c)), channels.join());
   const files = JSON.parse(read('package.json')).build.files;
   for (const f of ['optimiser.html', 'optimiser.js', 'optimiser-preload.js']) assert.ok(files.includes(f), f);
 });
@@ -122,11 +122,9 @@ test('sidebar: the optimiser\'s sections unfold under its entry only while it is
     onState({ selected: 'usage', optimiser: null });
     assert.equal(d.querySelectorAll('.nav-leaf').length, 0);
     const li = d.querySelector('[data-page="optimiser"]').parentElement;
-    assert.equal(li.hidden, true, 'hidden while Burst is absent');
+    assert.equal(li.hidden, false, 'listed without Burst too: the tool hub is for everyone');
     onState({ selected: 'usage', burst: true });
-    assert.equal(li.hidden, false, 'listed while Burst is present');
-    onState({ selected: 'optimiser', burst: false });
-    assert.equal(li.hidden, false, 'never hidden while open');
+    assert.equal(li.hidden, false);
     dom.window.close();
   });
 });

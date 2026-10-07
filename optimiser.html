@@ -27,12 +27,26 @@
   button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
   button.link { background: none; border-color: transparent; color: var(--muted); padding: 0 8px; }
   button.link:hover:not(:disabled) { color: var(--text); border-color: transparent; text-decoration: underline; }
-  main { flex: 1; min-height: 0; overflow-y: auto; display: flex; align-items: flex-start; justify-content: center; padding: 56px var(--space-5) var(--space-6); }
-  .empty { max-width: 520px; width: 100%; padding: var(--space-5); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); }
-  .empty h2 { margin: 0 0 var(--space-2); font-size: var(--text-xl); font-weight: 650; }
-  .empty p { margin: 0; color: var(--muted); max-width: 62ch; user-select: text; }
-  .actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-4); }
-  .note { min-height: 1.45em; margin-top: var(--space-3); font-size: var(--text-xs); color: var(--muted); }
+  main { flex: 1; min-height: 0; overflow-y: auto; padding: var(--space-6) var(--space-5); }
+  .hub { max-width: 920px; margin: 0 auto; display: flex; flex-direction: column; gap: var(--space-3); }
+  .intro h2 { margin: 0 0 var(--space-1); font-size: var(--text-xl); font-weight: 650; letter-spacing: -0.01em; }
+  .intro p { margin: 0; color: var(--muted); max-width: 72ch; user-select: text; }
+  .group-title { margin: var(--space-4) 0 0; font-size: var(--text-xs); font-weight: 650; text-transform: uppercase; letter-spacing: 0.06em; color: var(--faint); }
+  #tools { display: flex; flex-direction: column; gap: var(--space-3); }
+  .tool, .empty { padding: var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); }
+  .tool-head { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+  .tool-head h3, .empty h3 { margin: 0; font-size: var(--text-lg); font-weight: 650; }
+  .by { color: var(--faint); font-size: var(--text-xs); }
+  .empty h2 { margin: var(--space-2) 0 0; font-size: var(--text-base); font-weight: 600; }
+  .empty p, .tool p { margin: var(--space-1) 0 0; color: var(--muted); max-width: 72ch; user-select: text; }
+  .saves { margin-top: var(--space-2); padding: var(--space-2) var(--space-3); border-radius: var(--radius); background: var(--panel-2); color: var(--text); user-select: text; }
+  .saves small { display: block; color: var(--faint); font-size: var(--text-xs); }
+  .actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-3); }
+  .actions:empty { display: none; }
+  .note { min-height: 0; margin-top: var(--space-2); font-size: var(--text-xs); color: var(--muted); }
+  .note:empty { display: none; }
+  .confirm { margin-top: var(--space-2); padding: var(--space-2) var(--space-3); border: 1px solid var(--line-strong); border-radius: var(--radius); font-size: var(--text-sm); color: var(--text); white-space: pre-wrap; }
+  .tool[data-available="false"] { opacity: 0.72; }
   .tabs { display: flex; gap: 2px; margin-left: var(--space-3); }
   .tabs[hidden] { display: none; }
   .tab { background: none; border-color: transparent; color: var(--muted); font-weight: 600; min-height: 28px; padding: 0 12px; }
@@ -80,21 +94,31 @@
       <button type="button" class="tab" role="tab" id="tab-dashboard" data-tab="dashboard" aria-selected="true">Dashboard</button>
       <button type="button" class="tab" role="tab" id="tab-route" data-tab="route" aria-selected="false" tabindex="-1">Route</button>
       <button type="button" class="tab" role="tab" id="tab-requests" data-tab="requests" aria-selected="false" tabindex="-1">Requests</button>
+      <button type="button" class="tab" role="tab" id="tab-tools" data-tab="tools" aria-selected="false" tabindex="-1">Tools</button>
     </div>
     <span class="chip" id="chip" role="status" hidden><i aria-hidden="true"></i><span id="chip-text"></span></span>
     <span class="spacer"></span>
     <button type="button" class="link" id="browser" hidden>Open in browser</button>
     <button type="button" id="refresh">Refresh</button>
   </header>
-  <main>
-    <p class="loading" id="loading">Loading Claude Burst…</p>
-    <section class="empty" id="empty" hidden aria-live="polite">
-      <h2 id="headline"></h2>
-      <p id="detail"></p>
-      <div class="actions" id="actions"></div>
-      <div class="actions"><button type="button" class="link" id="docs">What is Claude Burst? Read the docs</button></div>
-      <p class="note" id="note" role="status"></p>
-    </section>
+  <main id="hub" aria-labelledby="hub-title">
+    <div class="hub">
+      <section class="intro">
+        <h2 id="hub-title">Spend less on AI coding</h2>
+        <p>Tools that cut what your AI coding costs: Andrew Baker's Claude Burst and its add-ons, and what Plexiform has built in. Each one says whether it is on here and what it has saved, using only figures the tool reported itself. Turning one on always asks you first.</p>
+      </section>
+      <p class="loading" id="loading">Loading Claude Burst…</p>
+      <h3 class="group-title" id="burst-group-title" hidden>Claude Burst and its tools · Andrew Baker</h3>
+      <section class="empty" id="empty" hidden aria-live="polite">
+        <div class="tool-head"><h3>Claude Burst</h3><span class="by">Andrew Baker</span></div>
+        <h2 id="headline"></h2>
+        <p id="detail"></p>
+        <div class="actions" id="actions"></div>
+        <div class="actions"><button type="button" class="link" id="docs">What is Claude Burst? Read the docs</button></div>
+        <p class="note" id="note" role="status"></p>
+      </section>
+      <div id="tools"></div>
+    </div>
   </main>
   <main class="pane" id="route-pane" role="tabpanel" aria-labelledby="tab-route" hidden>
     <section class="card" id="route-card" aria-live="polite">
@@ -121,6 +145,7 @@
     </section>
     <p class="muted" id="req-error" hidden></p>
   </main>
+  <script src="src/optimiser-tools.js"></script>
   <script src="optimiser.js"></script>
 </body>
 </html>

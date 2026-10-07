@@ -40,9 +40,9 @@ const PAGES = [
   { id: 'team', title: 'Team', icon: 'team', kind: 'local', screen: 'team', group: 'team' },
   { id: 'usage', title: 'Usage', icon: 'chart', kind: 'local', file: 'lights.html', preload: 'lights-preload.js', query: { embedded: '1', view: 'mix' }, group: 'you' },
   { id: 'stats', title: 'Stats', icon: 'chart', kind: 'local', file: 'lights.html', preload: 'lights-preload.js', query: { embedded: '1', view: 'stats' }, group: 'you' },
-  // macOnly: shows Claude Burst's dashboard (burst-embed.js), so it stays out of the sidebar elsewhere.
-  // burstOnly: and on a Mac it is listed only while Burst is present (the sidebar decides, it is runtime state).
-  { id: 'optimiser', title: 'Usage optimiser', icon: 'chart', kind: 'local', file: 'optimiser.html', preload: 'optimiser-preload.js', query: { embedded: '1' }, group: 'you', macOnly: true, burstOnly: true },
+  // Every user's cost-tool hub (src/optimiser-tools.js); with a trusted Burst on a Mac it also embeds Burst's dashboard (burst-embed.js).
+  // A page may still be macOnly (left out of the sidebar elsewhere) or burstOnly (listed only while Burst is present).
+  { id: 'optimiser', title: 'Usage optimiser', icon: 'chart', kind: 'local', file: 'optimiser.html', preload: 'optimiser-preload.js', query: { embedded: '1' }, group: 'you' },
   { id: 'clients', title: 'Client billing', icon: 'chart', kind: 'local', file: 'clients-local.html', preload: 'clients-preload.js', group: 'you' },
   { id: 'setups', title: 'Setups', icon: 'layers', kind: 'local', file: 'setups.html', preload: 'setups-preload.js', group: 'you', hidden: true },
   { id: 'thismac', title: 'This Mac', icon: 'laptop', kind: 'local', screen: 'thismac', group: 'you' },
@@ -53,6 +53,8 @@ const PAGES = [
   { id: 'upgrade', title: 'Plan & billing', icon: 'user', kind: 'local', file: 'upgrade.html', preload: 'upgrade-preload.js', group: 'you', hidden: true },
   // Encrypted sync across your own computers (src/sync/index.js serves its IPC; Plus/Team, upsell otherwise).
   { id: 'sync', title: 'Sync', icon: 'layers', kind: 'local', file: 'sync.html', preload: 'sync-preload.js', group: 'you', hidden: true },
+  // The floating widget: live preview, show/hide, size, corner and what it shows (src/widget-page.js serves its IPC).
+  { id: 'widget', title: 'Widget', icon: 'lights', kind: 'local', file: 'widget-page.html', preload: 'widget-page-preload.js', group: 'you' },
   { id: 'lights', title: 'Widget configuration', icon: 'lights', kind: 'window', window: 'lights', group: 'you' },
   { id: 'aitools', title: 'AI tools', icon: 'plug', kind: 'local', file: 'aitools.html', preload: 'aitools-preload.js', group: 'you' },
   { id: 'settings', title: 'Preferences', icon: 'gear', kind: 'local', file: 'settings.html', preload: 'settings-preload.js', query: { embedded: '1' }, group: 'you' },
@@ -68,7 +70,7 @@ const GROUPS = [
   { id: 'you', title: 'You' },
 ];
 
-// The sidebar shows these six and nothing else; every page above is still a
+// The sidebar shows these seven and nothing else; every page above is still a
 // page (deep links, IPC and the app menu address pages, not sections). A
 // section opens `default`; the others are its sub-nav, in this order. Board
 // views are the board page's children, so they are listed by id like the rest.
@@ -80,7 +82,8 @@ const SECTIONS = [
   { id: 'tasks', title: 'Tasks', icon: 'tasks', default: 'tasks', pages: ['tasks'] },
   { id: 'usage', title: 'Usage & cost', icon: 'chart', default: 'usage', pages: ['usage', 'stats', 'optimiser', 'clients'] },
   { id: 'team', title: 'Team', icon: 'team', default: 'team', pages: ['team', 'integrations', 'account'] },
-  { id: 'settings', title: 'Settings', icon: 'gear', default: 'aitools', pages: ['aitools', 'settings', 'thismac', 'phone', 'lights', 'hatch'] },
+  { id: 'widget', title: 'Widget', icon: 'lights', default: 'widget', pages: ['widget', 'lights'] },
+  { id: 'settings', title: 'Settings', icon: 'gear', default: 'aitools', pages: ['aitools', 'settings', 'thismac', 'phone', 'hatch'] },
 ];
 // Small links under the sections, not a section of their own.
 const FOOTER = ['help', 'feedback', 'updates'];

@@ -300,19 +300,18 @@ test('without Burst wiring (or off macOS) the page is still a native state, neve
   assert.equal(r.o.payload().mode, 'loading', 'before the first check there is a loading payload');
 });
 
-test('page registry: Usage optimiser is a local, macOS-only page after Stats in the Usage & cost section', () => {
+test('page registry: Usage optimiser is a local page after Stats in the Usage & cost section, listed for every user', () => {
   const p = pageById('optimiser');
   assert.equal(p.title, 'Usage optimiser');
   assert.equal(p.kind, 'local');
-  assert.equal(p.macOnly, true);
-  assert.equal(p.burstOnly, true);
+  assert.ok(!p.macOnly && !p.burstOnly, 'the tool hub is for everyone; Burst-only parts say so inside the page');
   assert.ok(fs.existsSync(path.join(__dirname, '..', p.file)) && fs.existsSync(path.join(__dirname, '..', p.preload)));
   assert.deepEqual(SECTIONS.find((s) => s.id === 'usage').pages, ['usage', 'stats', 'optimiser', 'clients']);
   assert.equal(sectionOf('optimiser'), 'usage');
   assert.deepEqual(sectionsFor('darwin').find((s) => s.id === 'usage').pages, ['usage', 'stats', 'optimiser', 'clients']);
-  assert.deepEqual(sectionsFor('win32').find((s) => s.id === 'usage').pages, ['usage', 'stats', 'clients']);
-  assert.deepEqual(sectionsFor('linux').flatMap((s) => s.pages).filter((id) => pageById(id).macOnly), []);
-  assert.ok(PAGES.filter((x) => x.macOnly).every((x) => x.id === 'optimiser'));
+  assert.deepEqual(sectionsFor('win32').find((s) => s.id === 'usage').pages, ['usage', 'stats', 'optimiser', 'clients']);
+  assert.deepEqual(sectionsFor('linux').find((s) => s.id === 'usage').pages, ['usage', 'stats', 'optimiser', 'clients']);
+  assert.deepEqual(PAGES.filter((x) => x.macOnly || x.burstOnly), []);
 });
 
 test('tab strip: the embedded view is hidden on Route and Requests and restored on Dashboard', async () => {
