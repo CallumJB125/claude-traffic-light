@@ -84,8 +84,13 @@ function emitAdapter(payload) {
     if (Remote && !e.cwd) e.cwd = process.cwd();
     accepted.push(e);
   }
-  if (Remote) Remote.dispatchThenExit(adapter.id, accepted);
-  else process.exit(0);
+  const exit = () => { if (Remote) Remote.dispatchThenExit(adapter.id, accepted); else process.exit(0); };
+  // Opt-in team brief as SessionStart context (hooks/team-brief.js), for the
+  // adapters whose SessionStart output reaches the model.
+  if (event === 'SessionStart' && (adapter.id === 'gemini' || (adapter.id === 'codex' && opt('lifecycle')))) {
+    const Brief = require('./team-brief.js');
+    Brief.run({ adapter: adapter.id, payload, root: ROOT_DIR }).then((out) => { Brief.print(out); exit(); }, exit);
+  } else exit();
 }
 
 if (adapterId) {

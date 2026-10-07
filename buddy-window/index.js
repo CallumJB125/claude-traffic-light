@@ -31,7 +31,7 @@ const { createViewLifecycle } = require('../src/view-lifecycle');
 const { createOptimiser } = require('./optimiser');
 const { createThemeInjector } = require('./burst-theme');
 const BurstEmbed = require('../src/burst-embed');
-const { createWorkCapture } = require('../src/work-capture');
+const { createWorkCapture, repoFor } = require('../src/work-capture');
 const { createMyDayBroker } = require('../src/my-day-broker');
 const { createSessionBridge } = require('./session-bridge');
 
@@ -1055,6 +1055,14 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       if (!w || !signedIn(w.hub)) return null;
       const userId = userOf(w.hub)?.id;
       return typeof userId === 'string' && userId ? { origin: w.hub, userId, token: () => tokenFor(w.hub) } : null;
+    },
+    // Main-only (src/team-activity.js): the linked team route for a folder (or a
+    // named repo_id / repository), with that hub's token read per use.
+    async teamActivityLink({ cwd, repo }) {
+      const canonical = typeof cwd === 'string' ? await repoFor(cwd) : null;
+      const { routes } = await workCapture.routes();
+      const route = (routes || []).find((r) => (repo ? r.repo_id === repo || r.canonical_url === repo : !!canonical && r.canonical_url === canonical) && signedIn(r.hub) && userOf(r.hub)?.id === r.user_id);
+      return route ? { repo: route.canonical_url, route, token: () => tokenFor(route.hub) } : null;
     },
     openWithFragment,
     isOpen: () => !!win,

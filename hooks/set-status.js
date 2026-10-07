@@ -679,5 +679,8 @@ if (starting) {
   }
 }
 writeSession({ hostApp: detectHostApp(starting ? null : prevOnEntry?.hostApp), pid: pidNow, terminal, owned });
-finish();
+// Opt-in team brief (hooks/team-brief.js): the session is already recorded, and
+// it gives up after 800 ms, so the light never waits on the hub.
+if (resolved === 'session-start') require('./team-brief.js').run({ adapter: 'claude', payload: data, root: ROOT_DIR }).then((out) => { hookOutput = out; finish(); }, finish);
+else finish();
 }

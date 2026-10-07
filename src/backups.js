@@ -66,7 +66,7 @@ const KEY_LABELS = {
   showTasks: 'Task counts', showAgents: 'Agent chips', agentRoster: 'Agent list', showWidget: 'Show the widget', menuBarMode: 'Menu bar mode', lowPower: 'Low-power mode',
   askFromWidget: 'Answer from the widget', autoAnswer: 'Auto-answer rules', notifyOnStates: 'Notifications', notifyStates: 'Which states notify',
   spend: 'Spend alerts', voice: 'Voice', gitSignals: 'Git and CI signals', gitRepos: 'Watched repos', busyHold: 'Hold pings when busy',
-  remoteTailscale: 'Devices over Tailscale', remoteInteractionHost: 'Sessions for your other devices', hints: 'One-time tips already shown',
+  remoteTailscale: 'Devices over Tailscale', remoteInteractionHost: 'Sessions for your other devices', teamBrief: 'Team brief for your AI', hints: 'One-time tips already shown',
 };
 const keyLabel = (k) => KEY_LABELS[k] || k;
 const allowed = (name) => typeof name === 'string' && !name.includes('..') && SOURCES.some((s) => s.match.test(name));

@@ -263,6 +263,8 @@ const DEFAULT_CONFIG = {
   // Remote interaction host: off until ticked in Preferences.
   remoteInteractionHost: false,
   teamSessionSharing: true,
+  // Session-start team brief and team_* MCP tools (src/team-activity.js): off until ticked.
+  teamBrief: false,
   // A role reset the team hub never acknowledged ({origin, userId}; no token): retried at start.
   remoteInteractionResetPending: null,
   // Existing Codex CLI sessions on Codex's shared daemon (src/codex-daemon.js): off until ticked in Preferences.
@@ -464,6 +466,7 @@ const { SIGNAL_PORT, startSignalServer, readRequests, answerRequest, keyFor } = 
   requestsDir: REQUESTS_DIR,
   aggregateState: (...a) => aggregateState(...a),
   broadcastStatus: (...a) => broadcastStatus(...a),
+  teamActivity: (op, args) => TeamActivity.call(op, args),
 });
 // A remote session's folder names a directory on another machine: it is
 // shown, never opened, copied as a path, knocked on or used to find a
@@ -1506,6 +1509,8 @@ ipcMain.handle('sessions:settings', e => { if (!sessionsSender(e)) return false;
 // hub's directory client lands, a FAKE in-memory hub (clearly labelled as
 // test data in the page) can be loaded from a fixture file for demos/tests.
 let overviewTeams={host:null,at:0,value:null},overviewTeamHub=null;
+// Team brief + team_* MCP tools (src/team-activity.js), opt-in via teamBrief.
+const TeamActivity=require('./src/team-activity').createTeamActivity({enabled:()=>loadConfig().teamBrief===true,resolve:async(a)=>(devMockReady?(await getBuddy().teamActivityLink?.(a))??null:null),fetch:(...a)=>net.fetch(...a),log:m=>console.log(m)}); // privacy-flow: team-activity
 const liveTeamHub=require('./src/team-hub-live').createLiveTeamHub({identity:()=>devMockReady?getBuddy().interactionHostIdentity?.()??null:null,fetch:(...a)=>net.fetch(...a)}); // privacy-flow: team-hub-directory
 if(IS_DEV_RUN&&!app.isPackaged&&process.env.CLAUDE_BUDDY_FAKE_TEAM_HUB){try{overviewTeamHub=require('./src/team-hub-fake').createFakeTeamHub(JSON.parse(fs.readFileSync(process.env.CLAUDE_BUDDY_FAKE_TEAM_HUB,'utf8')));}catch(e){console.warn('[overview] fake team hub not loaded:',e.message);}}
 const OverviewMain=require('./src/overview-main').createOverviewMain({
