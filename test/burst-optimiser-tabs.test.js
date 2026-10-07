@@ -21,6 +21,7 @@ function page(t) {
     route: { route: 'SECONDARY', overflow: false, reason: 'Claude hit its limit', claim: 'five_hour', until: 'x', untilInMs: 90 * 60 * 1000, rejected: [{ model: 'claude-opus-5', until: 'x', fallsBackTo: 'claude-sonnet-5', resetInMs: 300000 }], chain: { 'claude-opus-5': ['claude-sonnet-5', 'claude-haiku-5'] }, primaryFailures: 2, primary: { provider: 'anthropic', model: '' }, secondary: { provider: 'together', model: 'glm-5', ready: true }, meteredFailover: null },
     requests: { rows: [
       { time: '2026-10-07T09:00:00Z', session: 'abcdef123456', agent: '', slot: 'secondary', route: 'SECONDARY', host: 'h', model: 'glm-5', status: 200, latencyMs: 10, tokensIn: 5, tokensOut: 6, usd: 0.5, note: '<b>x</b>' },
+      { time: '2026-10-07T09:30:00Z', session: 's3', agent: '', slot: 'primary', route: 'PRIMARY', host: 'h', model: '', status: 200, latencyMs: 5, tokensIn: 0, tokensOut: 0, usd: 0, note: '' },
       { time: '2026-10-07T08:00:00Z', session: 's2', agent: '', slot: 'primary', route: 'PRIMARY', host: 'h', model: 'claude-opus-5', status: 529, latencyMs: 20, tokensIn: 7, tokensOut: 8, usd: 0, note: '' },
     ] },
     history: { days: [{ day: '2026-10-06', primaryUsd: 1, secondaryUsd: 0.5, requests: 3 }], repos: [] },
@@ -97,6 +98,16 @@ test('Requests tab: rows, filters, history chart; text only', async (t) => {
   assert.equal(d.querySelectorAll('#req-rows tr').length, 2);
   assert.equal(d.querySelector('#req-rows td.note').children.length, 0, 'notes are never parsed as HTML');
   assert.equal(d.querySelectorAll('#hist-chart .bar-col').length, 1);
+  assert.equal(d.querySelector('#hist-chart .day').textContent, '10-06');
+  assert.match(d.querySelector('#hist-chart .bar-col').title, /Primary \$1\.00, Secondary \$0\.50/);
+  assert.equal(d.querySelectorAll('.legend .swatch').length, 2);
+  d.getElementById('f-pings').checked = true;
+  d.getElementById('f-pings').dispatchEvent(new p.dom.window.Event('change'));
+  assert.equal(d.querySelectorAll('#req-rows tr').length, 3, 'pings show on request');
+  assert.match(d.querySelectorAll('#req-rows tr')[1].textContent, /\u2014/);
+  assert.ok(!/\$0\.00/.test(d.querySelectorAll('#req-rows tr')[1].textContent));
+  d.getElementById('f-pings').checked = false;
+  d.getElementById('f-pings').dispatchEvent(new p.dom.window.Event('change'));
   d.getElementById('f-slot').value = 'primary';
   d.getElementById('f-slot').dispatchEvent(new p.dom.window.Event('change'));
   assert.equal(d.querySelectorAll('#req-rows tr').length, 1);

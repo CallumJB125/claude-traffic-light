@@ -26,6 +26,11 @@ test('row fields', () => {
   assert.equal(normalizeRequest(ev({ slot: 'weird' })).slot, '');
 });
 
+test('model falls back to requested_model when Burst omits model', () => {
+  assert.equal(normalizeRequest(ev({ model: undefined, requested_model: 'claude-opus-5' })).model, 'claude-opus-5');
+  assert.equal(normalizeRequest(ev({ model: undefined })).model, '');
+});
+
 test('requestsView: newest first, capped at the limit, junk dropped', () => {
   const raw = [ev({ time: '2026-10-07T08:00:00Z' }), null, ev({ time: '2026-10-07T10:00:00Z' }), ev({ time: '2026-10-07T09:00:00Z' })];
   const v = requestsView(raw, { limit: 2 });

@@ -55,12 +55,13 @@ const GROUPS = [
   { id: 'you', title: 'You' },
 ];
 
-// The sidebar shows these five and nothing else; every page above is still a
+// The sidebar shows these six and nothing else; every page above is still a
 // page (deep links, IPC and the app menu address pages, not sections). A
 // section opens `default`; the others are its sub-nav, in this order. Board
 // views are the board page's children, so they are listed by id like the rest.
 const SECTIONS = [
-  { id: 'today', title: 'Today', icon: 'sun', default: 'myday', pages: ['myday', 'waiting', 'tasks', 'sessions', 'overview'] },
+  { id: 'today', title: 'Today', icon: 'sun', default: 'myday', pages: ['myday', 'waiting', 'tasks', 'overview'] },
+  { id: 'sessions', title: 'Sessions', icon: 'team', default: 'sessions', pages: ['sessions'] },
   { id: 'board', title: 'Board', icon: 'board', default: 'board', pages: ['board', 'board:table', 'board:history', 'board:dashboard'] },
   { id: 'team', title: 'Team', icon: 'team', default: 'team', pages: ['team', 'integrations', 'account'] },
   { id: 'activity', title: 'Activity', icon: 'chart', default: 'usage', pages: ['usage', 'stats', 'optimiser'] },

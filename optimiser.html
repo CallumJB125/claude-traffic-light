@@ -56,8 +56,14 @@
   .scroll { overflow-x: auto; }
   .filters { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-3); }
   select { font: inherit; color: var(--text); background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius); min-height: 28px; padding: 0 8px; }
-  .chart { display: flex; align-items: flex-end; gap: 3px; height: 72px; margin-top: var(--space-2); }
-  .bar-col { flex: 1; min-width: 4px; display: flex; flex-direction: column; justify-content: flex-end; height: 100%; }
+  .chart { display: flex; align-items: flex-end; gap: 3px; margin-top: var(--space-2); }
+  .bar-col { flex: 1; min-width: 4px; display: flex; flex-direction: column; }
+  .bar-col .bars { display: flex; flex-direction: column; justify-content: flex-end; height: 72px; }
+  .bar-col .day { font-size: 9px; line-height: 1.4; color: var(--muted); text-align: center; margin-top: 2px; white-space: nowrap; overflow: hidden; }
+  .swatch { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+  .swatch.p { background: var(--accent); }
+  .swatch.s { background: var(--amber); }
+  td.dim { color: var(--faint); }
   .bar-col i { display: block; width: 100%; }
   .bar-col .p { background: var(--accent); }
   .bar-col .s { background: var(--amber); }
@@ -102,12 +108,13 @@
     <p class="muted" id="route-error" hidden></p>
   </main>
   <main class="pane" id="requests-pane" role="tabpanel" aria-labelledby="tab-requests" hidden>
-    <section class="card" id="hist-card"><h2>Daily spend</h2><div class="chart" id="hist-chart" role="img" aria-label="Daily spend, primary and secondary"></div><div class="legend"><span>Primary</span><span>Secondary</span><span id="hist-total"></span></div></section>
+    <section class="card" id="hist-card"><h2>Daily spend</h2><div class="chart" id="hist-chart" role="img" aria-label="Daily spend, primary and secondary"></div><div class="legend"><span><i class="swatch p"></i>Primary</span><span><i class="swatch s"></i>Secondary</span><span id="hist-total"></span></div></section>
     <section class="card">
       <div class="filters">
         <label class="muted">Slot <select id="f-slot"><option value="">All</option><option value="primary">Primary</option><option value="secondary">Secondary</option></select></label>
         <label class="muted">Status <select id="f-status"><option value="">All</option><option value="ok">Succeeded</option><option value="err">Failed</option></select></label>
         <label class="muted">Model <select id="f-model"><option value="">All</option></select></label>
+        <label class="muted"><input type="checkbox" id="f-pings"> Show pings</label>
       </div>
       <div class="scroll"><table><thead><tr><th>Time</th><th>Session</th><th>Slot</th><th>Model</th><th class="num">Status</th><th class="num">Latency</th><th class="num">Tokens in</th><th class="num">Tokens out</th><th class="num">Cost</th><th>Note</th></tr></thead><tbody id="req-rows"></tbody></table></div>
       <p class="muted" id="req-empty" hidden>No requests yet.</p>
