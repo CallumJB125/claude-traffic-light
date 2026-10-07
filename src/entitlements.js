@@ -57,9 +57,12 @@ const LIMITS = Object.freeze({
   team: Object.freeze({ 'checkpoints.turns': Infinity, 'checkpoints.days': 7, 'memory.days': Infinity, devices: 3, 'sync.bytes': 5 * GB, 'billing.months': Infinity, receipt: 'full' }),
 });
 
-// The hub's Ed25519 public keys (PEM), pinned in the app. None until billing
-// ships (W3-A), so until then every token is refused and every install is free.
-const PINNED_KEYS = Object.freeze([]);
+// The hub's Ed25519 public keys (PEM), pinned in the app at build time
+// (src/entitlement-keys.js). Empty until the owner pins the hub's key, so until
+// then every token is refused and every install is free.
+const PINNED_KEYS = (() => {
+  try { return Object.freeze(require('./entitlement-keys').ENTITLEMENT_KEYS.filter((k) => typeof k === 'string' && k.includes('PUBLIC KEY'))); } catch { return Object.freeze([]); }
+})();
 
 const TOKEN_FILE = 'entitlement.json';
 const CLOCK_FILE = 'entitlement-clock.json';
@@ -147,6 +150,21 @@ function verifyToken(token, keys) {
   return null;
 }
 
+/**
+ * The claims of a token this install would accept right now as a paid plan
+ * (pinned signature, known plan, exp after iat), or null. The refresh calls it
+ * before writing a token file; it never reads the clock, so it can't extend
+ * anything: status() still applies the clock to whatever is on disk.
+ */
+function verify(token) {
+  try {
+    const claims = verifyToken(token, conf().publicKeys);
+    if (!claims || (claims.plan !== 'plus' && claims.plan !== 'team')) return null;
+    if (!Number.isFinite(claims.exp) || !Number.isFinite(claims.iat) || claims.exp <= claims.iat) return null;
+    return claims;
+  } catch { return null; }
+}
+
 const FREE = (reason) => Object.freeze({ plan: 'free', source: 'default', reason, features: Object.freeze([]), expiresAt: null, periodEnd: null, inGrace: false });
 
 /**
@@ -199,4 +217,4 @@ function limits() {
 
 const plan = () => status().plan;
 
-module.exports = { has, limits, plan, status, configure, PLANS, FEATURES, LIMITS, TOKEN_FILE, CLOCK_FILE };
+module.exports = { has, limits, plan, status, verify, configure, root: () => conf().root, PLANS, FEATURES, LIMITS, TOKEN_FILE, CLOCK_FILE };

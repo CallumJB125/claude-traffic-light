@@ -1,0 +1,53 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self'" />
+<title>Plan &amp; billing</title>
+<link rel="stylesheet" href="tokens.css" />
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: var(--text-base)/1.45 var(--font); -webkit-font-smoothing: antialiased; }
+  main { max-width: 560px; margin: 0 auto; padding: var(--space-6) var(--space-5); display: flex; flex-direction: column; gap: var(--space-4); }
+  h1 { font-size: var(--text-xl); margin: 0; font-weight: 600; }
+  h2 { font-size: var(--text-xs); margin: 0 0 var(--space-2); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--accent); }
+  .muted { color: var(--muted); font-size: var(--text-sm); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-3); }
+  .plan { font-size: var(--text-lg); font-weight: 600; }
+  .buttons { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+  button { background: var(--panel-2); border: 1px solid var(--line-input); color: inherit; font: inherit; padding: 5px var(--space-3); border-radius: var(--radius); cursor: pointer; transition: border-color var(--t), background var(--t); }
+  button:hover:not(:disabled) { border-color: var(--faint); }
+  button:disabled { opacity: .5; cursor: default; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+  .msg { border-radius: var(--radius); padding: var(--space-2) var(--space-3); background: var(--panel-2); border-left: 3px solid var(--amber); }
+  dl { display: grid; grid-template-columns: auto 1fr; gap: var(--space-1) var(--space-4); margin: 0; }
+  dt { color: var(--muted); }
+  dd { margin: 0; }
+  [hidden] { display: none !important; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+  <main>
+    <h1>Plan &amp; billing</h1>
+    <div class="msg" id="banner" role="alert" hidden></div>
+    <section class="card" aria-live="polite">
+      <div class="plan" id="plan">Free</div>
+      <div class="muted" id="detail"></div>
+      <div class="buttons">
+        <button class="primary" id="upgrade-month" hidden>Get Plus · $5 / month</button>
+        <button id="upgrade-year" hidden>Get Plus · $48 / year</button>
+        <button id="manage" hidden>Manage billing</button>
+        <button id="refresh">Check again</button>
+      </div>
+      <div class="muted" id="note"></div>
+    </section>
+    <section class="card">
+      <h2>What your plan includes</h2>
+      <dl id="limits"></dl>
+    </section>
+    <p class="muted">Payment happens on our payment provider's page in your browser. Plexiform never sees or stores your card details. Paid features turn off if a plan ends; nothing you made is deleted.</p>
+  </main>
+  <script src="upgrade.js"></script>
+</body>
+</html>

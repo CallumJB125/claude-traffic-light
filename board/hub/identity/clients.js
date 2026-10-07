@@ -47,7 +47,7 @@ export class Clients {
   pendingCount(id) { return this.db.get('SELECT COUNT(*) AS n FROM client_invites WHERE workspace_id = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?', id, this.now()).n; }
   quota(id, replacing = null) {
     const w = this.workspace(id); if (!w) throw missing();
-    const limit = quotaFor(w.plan, 'members');
+    const limit = this.hub.billing?.memberLimit({ id: w.org_id, plan: w.plan }) ?? quotaFor(w.plan, 'members');
     const pending = this.pendingCount(id) + this.hub.invites.pendingCount(id) - (replacing ? 1 : 0);
     if (this.hub.teams.activeMembers(id) + this.activeGuestCount(id) + pending >= limit) throw new HubError('QUOTA_EXCEEDED', 'client workspace seat limit reached', { resource: 'members', limit });
     const cap = quotaFor(w.plan, 'pending_invites');

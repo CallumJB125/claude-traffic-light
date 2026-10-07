@@ -169,7 +169,9 @@ test('a token written later is picked up without a restart', (t) => {
 
 test('the module opens no network or process channel', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'entitlements.js'), 'utf8');
-  for (const m of src.matchAll(/require\(\s*['"]([^'"]+)['"]\s*\)/g)) assert.ok(['fs', 'os', 'path', 'crypto'].includes(m[1]), m[1]);
+  // ./entitlement-keys is the build-time list of pinned public keys: data only, no requires of its own.
+  for (const m of src.matchAll(/require\(\s*['"]([^'"]+)['"]\s*\)/g)) assert.ok(['fs', 'os', 'path', 'crypto', './entitlement-keys'].includes(m[1]), m[1]);
+  assert.doesNotMatch(fs.readFileSync(path.join(__dirname, '..', 'src', 'entitlement-keys.js'), 'utf8'), /require\(|import\(/);
   assert.doesNotMatch(src, /\bfetch\(|child_process|https?\.|\bnet\b|WebSocket|privacy-flow/);
 });
 

@@ -77,6 +77,13 @@ export function loadConfig(env = process.env) {
     logLevel: env.BOARD_LOG_LEVEL || 'info',
     shutdownGraceMs: int(env.BOARD_SHUTDOWN_GRACE_MS, 5_000),
     ...(env.BOARD_WEBHOOK_READ_MS ? { webhookReads: { deadlineMs: int(env.BOARD_WEBHOOK_READ_MS, 3_000) } } : {}),
+    // Paid plans (board/hub/billing/): off unless a provider is named; price ids are public, the keys below are hidden.
+    billingProvider: env.BOARD_BILLING_PROVIDER || null,
+    billingPrices: {
+      'plus:month': env.BOARD_BILLING_PRICE_PLUS_MONTH || null, 'plus:year': env.BOARD_BILLING_PRICE_PLUS_YEAR || null,
+      'team:month': env.BOARD_BILLING_PRICE_TEAM_MONTH || null, 'team:year': env.BOARD_BILLING_PRICE_TEAM_YEAR || null,
+    },
+    entitlementKeyFile: env.BOARD_ENTITLEMENT_KEY_FILE ? resolve(env.BOARD_ENTITLEMENT_KEY_FILE) : null,
   };
   // Non-enumerable, so JSON.stringify, util.inspect and spreads of the config never carry them.
   const hidden = (value) => ({ value, enumerable: false, writable: false, configurable: false });
@@ -89,6 +96,8 @@ export function loadConfig(env = process.env) {
     secret: hidden(env.BOARD_SECRET || null),
     // Who may sign up is the operator's business: never in a log line or a dump of the config.
     signupAllow: hidden(env.BOARD_SIGNUP_ALLOW || null),
+    billingApiKey: hidden(env.BOARD_BILLING_API_KEY || null),
+    billingWebhookSecret: hidden(env.BOARD_BILLING_WEBHOOK_SECRET || null),
   });
   // Only from the real environment (nothing started later inherits them); a test's env object stays as given.
   if (env === process.env) {
@@ -103,6 +112,8 @@ export function loadConfig(env = process.env) {
   delete env.BOARD_GITHUB_CLIENT_SECRET;
   delete env.BOARD_GOOGLE_WEB_CLIENT_SECRET;
   delete env.BOARD_GITHUB_WEB_CLIENT_SECRET;
+  delete env.BOARD_BILLING_API_KEY;
+  delete env.BOARD_BILLING_WEBHOOK_SECRET;
   validateConfig(cfg);
   return cfg;
 }
@@ -192,6 +203,7 @@ const SECRET_VARS = Object.freeze([
   ['BOARD_RESEND_API_KEY', 'resendApiKey'], ['BOARD_GOOGLE_CLIENT_SECRET', 'googleClientSecret'], ['BOARD_GITHUB_CLIENT_SECRET', 'githubClientSecret'],
   ['BOARD_GITHUB_TOKEN', 'githubToken'],
   ['BOARD_GOOGLE_WEB_CLIENT_SECRET', 'googleWebClientSecret'], ['BOARD_GITHUB_WEB_CLIENT_SECRET', 'githubWebClientSecret'],
+  ['BOARD_BILLING_API_KEY', 'billingApiKey'], ['BOARD_BILLING_WEBHOOK_SECRET', 'billingWebhookSecret'],
 ]);
 
 export const SIGNUP_MODES = Object.freeze(['open', 'allowlist']);
@@ -296,6 +308,11 @@ export function validateConfig(cfg) {
   validateStorageMax(cfg.dbSizeMaxMb);
   if (!['access', 'dev', 'local', 'accounts'].includes(cfg.auth)) throw new Error(`BOARD_AUTH must be access, dev or local (or accounts), got ${cfg.auth}`);
   if (cfg.auth === 'accounts') validateAccounts(cfg);
+  if (cfg.billingProvider != null) {
+    if (cfg.billingProvider !== 'stripe') throw new Error(`BOARD_BILLING_PROVIDER must be stripe, got ${cfg.billingProvider}`);
+    if (cfg.auth !== 'accounts') throw new Error('BOARD_BILLING_PROVIDER needs BOARD_AUTH=accounts');
+    if (!cfg.billingApiKey || !cfg.billingWebhookSecret) throw new Error('BOARD_BILLING_PROVIDER needs BOARD_BILLING_API_KEY and BOARD_BILLING_WEBHOOK_SECRET');
+  }
   // Local = the hub embedded in the desktop app: only its own window may reach it.
   if (cfg.auth === 'local') {
     if (!LOCAL_BINDS.has(cfg.bind)) throw new Error(`BOARD_AUTH=local needs BOARD_BIND=127.0.0.1, ::1 or localhost (got ${cfg.bind})`);

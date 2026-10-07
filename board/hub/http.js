@@ -39,8 +39,11 @@ import { readWorkContext, guardWorkContext, workContextArgs } from './work-conte
 import { InteractionRelay, INTERACTION_WS_PATH } from './interaction-relay.js';
 import { InteractionShares } from './interaction-shares.js';
 import { Messaging } from './messaging.js';
+import { handleWebhook as billingWebhook } from './billing/webhook.js';
 
 const MAX_BODY = 1024 * 1024;
+// A payment-provider event is a few KiB; unverified reads in flight are capped like connector webhooks.
+const BILLING_WEBHOOK = Object.freeze({ max: 256 * 1024, inFlight: 16 });
 // Every request's ceilings (D105); config.requestLimits overrides them (tests, no env).
 // The body deadline runs from when the API starts reading and ends before the
 // server's own request timeout, so a slow body gets the hub's 408 and a cut socket.
@@ -80,14 +83,14 @@ const loopbackOnly = (config) => config.auth === 'dev' || config.auth === 'local
 // and arbitrary files below web/ are never public. JavaScript lives in the
 // flat production js/ directory; encoded or case aliases are not accepted.
 const WEB_FILES = new Set([
-  'index.html', 'signin.html', 'invite.html', 'clients.html', 'client-invite.html', 'remote-consent.html', 'remote-grants.html',
+  'index.html', 'signin.html', 'invite.html', 'clients.html', 'client-invite.html', 'remote-consent.html', 'remote-grants.html', 'billing.html',
   'app.css', 'signin.css', 'clients.css', 'remote.css', 'favicon.svg', 'google-signin.png',
   'phone.css', 'phone-icon-192.png', 'phone-icon-512.png',
 ]);
 const WEB_JS = /^js\/[a-z][a-z0-9-]*\.js$/;
 // Accounts mode: pages served without auth (their JS talks to /api/auth/*;
 // tokens ride in the URL fragment, which never reaches the server).
-const ACCOUNT_PAGES = { '/signin': 'signin.html', '/auth/email': 'signin.html', '/invite': 'invite.html', '/clients': 'clients.html', '/client-invite': 'client-invite.html', '/remote-consent': 'remote-consent.html', '/connections': 'remote-grants.html',
+const ACCOUNT_PAGES = { '/signin': 'signin.html', '/auth/email': 'signin.html', '/invite': 'invite.html', '/clients': 'clients.html', '/client-invite': 'client-invite.html', '/remote-consent': 'remote-consent.html', '/connections': 'remote-grants.html', '/billing': 'billing.html',
   // Phone control PWA (PHONE.md): its service worker lives under /phone/ so its scope is /phone/ only.
   '/phone': 'phone.html', '/phone/': 'phone.html', '/phone/sw.js': 'phone-sw.js', '/phone/manifest.webmanifest': 'phone.webmanifest' };
 
@@ -283,6 +286,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   const limits = { ...REQUEST_LIMITS, ...config.requestLimits };
   let clientUploads = 0; // reading, decoding or waiting for the board queue
   let setupUploads = 0;
+  let billingReads = 0; // billing webhook bodies being read before their signature is checked
   const reading = { pair: new Map(), ip: new Map(), conn: new Map() }; // key → webhook body reads in flight
   const verifiedPairs = new Map(); // (connection|/24 or /48) → hub mono ms until which it skips the per-connection cap
   // Never framed (the desktop app's view is a window, not an iframe); HSTS once served over https.
@@ -450,6 +454,16 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     route('DELETE', '/api/teams/:team_id/enrol', ({ member, ident, ip }) => enr.unenrol(member, ident, { ip }));
     route('GET', '/api/teams/:team_id/enrolments', ({ member, ident }) => enr.list(member, ident));
     route('DELETE', '/api/teams/:team_id/enrolments/:enrollment_id', ({ member, params, ip }) => enr.revoke(member, params.enrollment_id, { ip }));
+    // Paid plans (billing/): the caller's plan, hosted Checkout and portal links, and the signed
+    // entitlement token the desktop app verifies offline. The provider's webhook is handled before the route table.
+    const billing = hub.billing;
+    route('GET', '/api/billing', ({ ident }) => billing.summary(ident), { auth: 'user', replay: false });
+    route('POST', '/api/billing/checkout', ({ ident, body }) => billing.checkoutPlus(ident, body), { auth: 'user', replay: false });
+    route('POST', '/api/billing/portal', ({ ident }) => billing.portalPlus(ident), { auth: 'user', replay: false });
+    route('GET', '/api/entitlement', ({ ident }) => billing.token(ident), { auth: 'user', replay: false });
+    route('GET', '/api/teams/:team_id/billing', ({ member }) => billing.team(member), { replay: false });
+    route('POST', '/api/teams/:team_id/billing/checkout', ({ member, ident, body }) => billing.checkoutTeam(member, ident, body), { replay: false });
+    route('POST', '/api/teams/:team_id/billing/portal', ({ member }) => billing.portalTeam(member), { replay: false });
   } else {
     route('GET', '/api/me', ({ member }) => api.me(member));
   }
@@ -863,6 +877,27 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
       } catch (e) {
         if (e instanceof HubError) return sendJson(res, httpStatus(e.code), errorBody(e), retryHeader(e));
         hub.log.error('integration webhook failed', { connection_id: hook[1], err: redact(e?.message ?? e) });
+        return sendJson(res, 500, { error: { code: 'INTERNAL', message: 'internal error' } });
+      }
+    }
+    // The payment provider's events: raw body, signature checked in billing/webhook.js (the secret is the auth).
+    if (req.method === 'POST' && url.pathname === '/api/billing/webhook' && hub.billing?.provider) {
+      const cut = () => cutIfUnread(req, res);
+      if (Number(req.headers['content-length']) > BILLING_WEBHOOK.max) { cut(); return sendJson(res, 413, { error: { code: 'PAYLOAD_TOO_LARGE', message: 'body too large' } }); }
+      if (billingReads >= BILLING_WEBHOOK.inFlight) { cut(); return sendJson(res, 503, { error: { code: 'UNAVAILABLE', message: 'too many deliveries in flight; retry' } }, { 'retry-after': '1' }); }
+      billingReads++;
+      let got;
+      try { got = await readRaw(req, readLimits.deadlineMs, BILLING_WEBHOOK.max); } finally { billingReads--; }
+      if (got.error) cut();
+      if (got.error === 413) return sendJson(res, 413, { error: { code: 'PAYLOAD_TOO_LARGE', message: 'body too large' } });
+      if (got.error === 408) return sendJson(res, 408, { error: { code: 'TIMEOUT', message: 'body not received in time' } });
+      if (got.error) return undefined;
+      try {
+        const out = billingWebhook(hub, hub.billing, { headers: req.headers, rawBody: got.body });
+        return sendJson(res, out.status, out.body);
+      } catch (e) {
+        // Never the payload: only that an apply failed (the provider retries).
+        hub.log.error('billing webhook failed', { err: redact(e?.message ?? e) });
         return sendJson(res, 500, { error: { code: 'INTERNAL', message: 'internal error' } });
       }
     }
