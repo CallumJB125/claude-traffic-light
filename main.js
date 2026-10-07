@@ -442,6 +442,10 @@ const RemoteDevices = require('./src/remote-devices.js')({
   log: (m) => console.log(m),
 });
 const Smoke = require('./src/smoke.js');
+const WindowLaunch = require('./src/window-launch.js');
+const STARTED_AT = Date.now();
+// One place for the inputs, so launch, activate and second-instance decide alike.
+const windowLaunchInput = (event) => ({ event, devRun: IS_DEV_RUN, atLogin: WindowLaunch.launchedAtLogin({ app }), hookLaunch: process.argv.includes('--buddy-hook'), windowVisible: !!buddyWin?.isVisible(), sinceLaunchMs: Date.now() - STARTED_AT });
 const Updater = require('./src/updater/index.js');
 const { SIGNAL_PORT, startSignalServer, readRequests, answerRequest, keyFor } = require('./src/signal-server.js')({
   rootDir: ROOT_DIR,
@@ -4463,6 +4467,7 @@ if (!gotLock) {
       if (link) handleDeepLink(link);
       else if (argv.includes('--lights')) createLightsWindow();
       else if (argv.includes('--buddy')) openBuddy();
+      else if (WindowLaunch.shouldOpenWindowOnLaunch({ ...windowLaunchInput('second-instance'), atLogin: false })) { console.error('[startup] second-instance: opening window'); openBuddy(); }
       else win?.show();
     } catch (err) {
       console.error('[second-instance] could not surface a window:', err.message);
@@ -4595,6 +4600,7 @@ app.whenReady().then(() => {
     const resumeRunners = app.isPackaged ? !IS_DEV_RUN : process.env.BUDDY_RESUME_RUNNERS === '1';
     if (resumeRunners) { try { getBuddy().resumeDevices(); } catch (err) { console.error('[buddy] could not resume runners:', err.message); } }
     syncInteractionHost();
+    if (WindowLaunch.shouldOpenWindowOnLaunch(windowLaunchInput('launch'))) { console.error('[startup] opening window'); openBuddy(); }
     // Dev: `electron . --buddy [page] [--buddy-shot out-prefix]` opens the Buddy
     // window (optionally on a page) and can capture both halves, then quit.
     // `--buddy-accounts-walk prefix` (with --buddy-mock-accounts) walks the
@@ -4772,7 +4778,10 @@ app.on('before-quit', (e) => {
   hostSync.release().catch(() => {}).finally(() => Promise.allSettled([buddyWin?.stop(), tasksProcess?.stop({ final: true })]).finally(() => app.quit()));
 });
 
-app.on('activate', () => { if (!lightsWin) win?.showInactive(); });
+app.on('activate', () => {
+  if (WindowLaunch.shouldOpenWindowOnLaunch(windowLaunchInput('activate'))) { console.error('[startup] activate: opening window'); openBuddy(); return; }
+  if (!lightsWin) win?.showInactive();
+});
 
 app.on('window-all-closed', () => {
   // Keep running in the tray.
