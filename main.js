@@ -1493,6 +1493,11 @@ ipcMain.handle('sessions:state', e => {
   }
 });
 const SessionActionsMain = require('./src/session-actions-main.js').register({ ipcMain, sessionsAllowed: sessionsSender, sessions: () => localSessions(aggregateState().sessions || []), bridge: () => buddyWin?.sessionBridge, capture: () => buddyWin, tasks: () => { const t = getTasks(); t.start(); return t; }, clipboard, openPage: (id) => openBuddy(id), pageExists: (id) => !!BuddyPages.pageById(id), pickFolder: async () => { const r = await dialog.showOpenDialog(BrowserWindow.fromWebContents(buddyWin?.pageWebContents('sessions')) || undefined, { title: 'Choose the folder', properties: ['openDirectory'] }); return r.canceled ? null : r.filePaths[0]; } });
+ipcMain.handle('sessions:message', (e, session, text) => {
+  if (!sessionsSender(e)) return { ok: false, error: 'Not allowed.' };
+  if (typeof session !== 'string' || typeof text !== 'string' || !text.trim() || text.length > 500) return { ok: false, error: 'Write a message first.' };
+  return { ok: false, error: 'Messaging a session Plexiform started is not available from this page yet. Use its card in the Overview.' };
+});
 ipcMain.handle('sessions:settings', e => { if (!sessionsSender(e)) return false; createSettingsWindow(); return true; });
 // Overview uses main-owned structured reports/current own-board work only.
 // Teammates' shared sessions come from a team hub directory. Until the real
