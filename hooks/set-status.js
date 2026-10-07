@@ -306,6 +306,7 @@ function modelOf(payload) {
 const Claude = require('../adapters/claude-code.js');
 const { resolved, askKind, via, tool } = Claude.resolveSignal(signal, data);
 if (!resolved) process.exit(0);
+try { require('./handover-tap.js').record({ rootDir: ROOT_DIR, adapter: 'claude-code', signal: resolved, sessionId, cwd, data }); } catch { /* the handover is best effort */ }
 
 // ── Other agents ────────────────────────────────────────────────────────────
 // SubagentStart/Stop carry the agent's id and type; every one Claude spawns

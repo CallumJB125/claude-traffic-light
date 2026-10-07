@@ -11,6 +11,7 @@ const crypto = require('crypto');
 const { app } = require('electron');
 const Rules = require('../rules.js');
 const SessionState = require('../hooks/session-state.js');
+const HandoverTap = require('../hooks/handover-tap.js');
 const Adapters = require('../adapters/index.js');
 const Answer = require('../hooks/answer-file.js');
 const AgentReports = require('./agent-self-report');
@@ -52,6 +53,7 @@ module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcast
     if (!adapter) return done(404, { error: 'unknown adapter', known: Adapters.list().map((a) => a.id) });
     const events = adapter.normalize(event, payload).filter((e) => KNOWN_SIGNALS.has(e.signal));
     const host = os.hostname().split('.')[0];
+    for (const e of events) HandoverTap.record({ rootDir, adapter: adapter.id, signal: e.signal, sessionId: SessionState.safeSessionId(e.sessionId || 'default'), cwd: e.cwd, data: payload });
     for (const e of events) SessionState.applyAdapterEvent(sessionsDir, { host, source: adapter.id, event: e, fallbackSession: 'default', waitMs: 250 });
     if (events.length) broadcastStatus();
     const reply = adapter.reply ? adapter.reply(event, payload) : null;
@@ -96,6 +98,7 @@ module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcast
         const source = String(d.source || 'custom').replace(/[^\w.-]/g, '').slice(0, 24) || 'custom';
         const session = String(d.session || 'default').replace(/[^\w.-]/g, '').slice(0, 80) || 'default';
         const file = path.join(sessionsDir, `${os.hostname().split('.')[0]}-${source}-${session}.json`);
+        HandoverTap.record({ rootDir, adapter: source, signal: d.signal, sessionId: session, cwd: typeof d.cwd === 'string' ? d.cwd.slice(0, 500) : '', data: {} });
         if (d.signal === 'session-end') { fs.rmSync(file, { force: true }); broadcastStatus(); return done(200, { ok: true }); }
         const hostApp = typeof d.hostApp === 'string' ? d.hostApp : undefined;
         const cwd = typeof d.cwd === 'string' ? d.cwd.slice(0, 500) : '';
