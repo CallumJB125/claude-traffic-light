@@ -379,3 +379,60 @@ test('Burst trust check: macOS with Burst installed only; untrusted offers the c
   assert.equal(bad.status, 'fail'); assert.equal(bad.fix, 'open-burst-console'); assert.equal(bad.fixLabel, 'Open Burst console');
   assert.equal(run(require('../src/burst-view.js').statusView({ kind: 'unreachable' }, { platform: 'darwin' })).status, 'info');
 });
+
+test('Burst rows: macOS with Burst installed only; each has a fixture state producing ok, warn or fail', () => {
+  const run = (burstFacts, platform = 'darwin') => Health.runChecks({ ...machine().ctx, platform, burstFacts }).checks.filter((c) => c.id.startsWith('burst-'));
+  const by = (rows, id) => rows.find((c) => c.id === id);
+  const state = (o = {}) => ({ version: '1.2.0', mode: 'transparent', active: true, inactiveReason: '', caTrusted: true, configError: '', clientTls: { rejecting: false }, pfHeal: { installed: true }, selfHeal: { installed: true }, secondary: { provider: 'together', keyPresent: true }, ...o });
+  const present = (o, upgrade = null) => ({ detection: { kind: 'present', state: state(o), upgrade }, console: { kind: 'present', status: { checks: [], configError: '' } }, audit: [] });
+
+  assert.deepEqual(run(undefined), []);
+  assert.deepEqual(run({ detection: { kind: 'not_installed' } }), []);
+  assert.deepEqual(run(present(), 'win32'), []);
+  assert.deepEqual(run(present(), 'linux'), []);
+
+  const good = run(present());
+  for (const id of ['burst-intercept', 'burst-ca', 'burst-guards', 'burst-secondary', 'burst-version']) assert.equal(by(good, id).status, 'ok', id);
+  assert.equal(by(good, 'burst-trace').fix, 'burst-trace');
+  assert.equal(by(good, 'burst-trace').fixLabel, 'Send test message');
+  assert.equal(by(good, 'burst-gateway'), undefined);
+
+  const off = by(run(present({ active: false, inactiveReason: 'ANTHROPIC_BASE_URL was removed' })), 'burst-intercept');
+  assert.equal(off.status, 'warn'); assert.equal(off.detail, 'ANTHROPIC_BASE_URL was removed'); assert.equal(off.fix, 'burst-console-restart');
+  assert.equal(by(run(present({ active: false })), 'burst-intercept').status, 'warn');
+
+  assert.equal(by(run(present({ caTrusted: false })), 'burst-ca').status, 'warn');
+  const rej = by(run(present({ clientTls: { rejecting: true, lastClass: 'unknown authority' } })), 'burst-ca');
+  assert.equal(rej.status, 'fail'); assert.match(rej.detail, /unknown authority/);
+  assert.equal(by(run(present({ mode: 'base-url', caTrusted: false })), 'burst-ca'), undefined);
+
+  assert.equal(by(run(present({ pfHeal: null })), 'burst-guards').status, 'info');
+
+  const cfg = by(run({ detection: { kind: 'broken', state: state({ configError: 'bad toml line 3' }) }, console: null, audit: [] }), 'burst-config');
+  assert.equal(cfg.status, 'fail'); assert.equal(cfg.fix, 'open-burst-console'); assert.match(cfg.detail, /bad toml/);
+
+  const nokey = by(run(present({ secondary: { provider: 'together', keyPresent: false } })), 'burst-secondary');
+  assert.equal(nokey.status, 'warn'); assert.doesNotMatch(JSON.stringify(nokey), /base_url|sk-/);
+
+  const behind = by(run(present({}, { canUpgrade: true, upToDate: false, latestVersion: '1.3.0' })), 'burst-version');
+  assert.equal(behind.status, 'info'); assert.match(behind.detail, /1\.3\.0/);
+});
+
+test('Burst gateway down: the console names the failing part and offers a restart; no console, no fix', () => {
+  const run = (console) => Health.runChecks({ ...machine().ctx, platform: 'darwin', burstFacts: { detection: { kind: 'unreachable' }, console, audit: [] } }).checks.find((c) => c.id === 'burst-gateway');
+  const named = run({ kind: 'present', status: { checks: [{ name: 'launchd', ok: true }, { name: 'pf redirect', ok: false, detail: 'no rdr rule' }] } });
+  assert.equal(named.status, 'fail'); assert.match(named.detail, /pf redirect is failing/); assert.equal(named.fix, 'burst-console-restart');
+  const dead = run({ kind: 'unreachable' });
+  assert.equal(dead.status, 'fail'); assert.equal(dead.fix, undefined);
+  assert.equal(run(null).status, 'fail');
+});
+
+test('Burst activity lists the audit, capped at 50; traceView keeps only whitelisted hop fields', () => {
+  const audit = Array.from({ length: 60 }, (_, i) => ({ at: i, kind: 'failover', severity: i === 0 ? 'error' : 'info', title: `t${i}`, detail: '', source: 'alert' }));
+  const facts = { detection: { kind: 'present', state: { mode: 'base-url', active: true, secondary: {} } }, console: null, audit };
+  const row = Health.runChecks({ ...machine().ctx, platform: 'darwin', burstFacts: facts }).checks.find((c) => c.id === 'burst-activity');
+  assert.equal(row.list.length, 50); assert.match(row.detail, /50 recent events, 1 of them errors/);
+  const v = Health.traceView({ state: 'fail', verdict: 'TLS rejected', hops: [{ name: 'TLS', state: 'fail', summary: 'untrusted', duration_ms: 12, secret: 'x', legs: [1] }] });
+  assert.deepEqual(v, { state: 'fail', verdict: 'TLS rejected', hops: [{ name: 'TLS', state: 'fail', summary: 'untrusted', ms: 12 }] });
+  assert.deepEqual(Health.traceView(null), { state: '', verdict: '', hops: [] });
+});
