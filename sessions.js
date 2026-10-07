@@ -265,6 +265,11 @@ function render(snapshot) {
       section.append(list);
     }
     if (item.sharedTree) section.append(node('p', `Shares its working tree with another live session (${item.sharedTree})`, 'warn'));
+    for (const c of item.collisions ?? []) {
+      const line = node('p', `Collision: ${c.text}. `, 'warn');
+      line.append(button('Open the other session', async () => { const r = await api.openRecord(c.other).catch(() => null); if (!r?.ok) status.textContent = 'That session could not be opened. The collision may have ended.'; }));
+      section.append(line);
+    }
     if (item.burst) burstBlock(section, item.burst);
     if (item.handover) handoverRow(section, item.handover);
     sessionTools(section, item);

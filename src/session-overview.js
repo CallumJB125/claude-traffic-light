@@ -41,6 +41,13 @@ function handoverOf(fn, row) {
 function actionsOf(fn, row) {
   try { const a = fn ? fn(row) : null; return a ? { actions: { handle: String(a.handle), card: a.card ? { label: String(a.card.label).slice(0, 160), how: a.card.how === 'made' ? 'made' : 'attached' } : null, share: a.share ? { on: a.share.on === true } : null } } : {}; } catch { return {}; }
 }
+// Open hub collisions on the row's files (src/collision-alerts.js): text, path and the other record id.
+function collisionsOf(fn, row) {
+  try {
+    const list = fn ? fn(row) : null;
+    return Array.isArray(list) && list.length ? { collisions: list.slice(0, 5).map(c => ({ text: String(c.text).slice(0, 240), path: String(c.path).slice(0, 400), other: String(c.other).slice(0, 300) })) } : {};
+  } catch { return {}; }
+}
 // The session id goes to the page only where a row action needs it: the context drawer
 // (Claude Code, or a session Burst reports on) and Message (owned, or Burst coordination).
 const SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
@@ -62,7 +69,7 @@ function sharedOf(fn, rows) {
     }));
   } catch { return []; }
 }
-function snapshot({ sessions = [], activity = {}, available = true, now = Date.now(), enrich = null, handover = null, info = null, sharedTrees = null } = {}) {
+function snapshot({ sessions = [], activity = {}, available = true, now = Date.now(), enrich = null, handover = null, info = null, sharedTrees = null, collisions = null } = {}) {
   const time = Number.isFinite(now) && now >= 0 ? now : Date.now();
   let latest = null, omitted = 0;
   const rows = [];
@@ -96,6 +103,7 @@ function snapshot({ sessions = [], activity = {}, available = true, now = Date.n
       ...(tree && !more.burst?.coordination ? { sharedTree: tree.project } : {}),
       ...handoverOf(handover, row),
       ...actionsOf(info, row),
+      ...collisionsOf(collisions, row),
     });
   }
   rows.sort((a, b) => (a.age_ms ?? Infinity) - (b.age_ms ?? Infinity));

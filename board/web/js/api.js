@@ -117,6 +117,8 @@ export const api = {
     const q = new URLSearchParams(); if (target) q.set('target_member_id', target); if (repo) q.set('repo_id', repo);
     return call('GET', `/api/cards/${enc(id)}/overlap-preview${q.size ? `?${q}` : ''}`);
   },
+  continueSeed: (id, recordId) => call('GET', `/api/cards/${enc(id)}/continue-seed${recordId ? `?${new URLSearchParams({ record_id: recordId })}` : ''}`),
+  handoffRecord: (teamId, recordId, body) => mut('POST', `/api/teams/${enc(teamId)}/activity/v1/records/${enc(recordId)}/handoff`, body),
   repos: () => call('GET', '/api/repos'),
   // Integrations (team-level; admins connect, configure and disconnect).
   integrations: () => call('GET', '/api/integrations'),

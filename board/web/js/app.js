@@ -1343,7 +1343,10 @@ async function loadPreview() {
     if (state.dialog?.previewToken !== token) return;
     state.dialog = { ...state.dialog, preview: { overlaps: res.overlaps ?? [], check: res.check ?? null, sponsor: res.sponsor ?? null, runners: res.runners ?? [], can_use_no_budget: res.can_use_no_budget === true } };
     if (state.dialog.another) {
-      const pick = anotherAi(tackleChoices(res.runners ?? []), state.dialog.ai, viewOf(state.dialog.cardId)?.title ?? '');
+      const v = viewOf(state.dialog.cardId);
+      const seed = v?.record_id ? await api.continueSeed(v.id, v.record_id).catch(() => null) : null;
+      if (state.dialog?.previewToken !== token) return;
+      const pick = anotherAi(tackleChoices(res.runners ?? []), state.dialog.ai, seed?.record ? { record: seed.record, handover: seed.handover } : v?.title ?? '');
       state.dialog = { ...state.dialog, another: false, ...(pick ? { ai: pick } : {}) };
     }
   } catch (err) {
@@ -1480,6 +1483,10 @@ async function submitDialogForm(form, submitter) {
   if (kind === 'switch-ai') {
     return run(() => api.action(cardId, 'hand_over', { target: { kind: 'hold' },
       expected_fence: d.expected_fence, prior_run_id: d.prior_run_id }), `${keyOf(cardId)} is preparing its handover. Choose the next AI after its runner confirms the stop.`);
+  }
+  if (kind === 'hand-to-teammate') {
+    const to = String(fd.get('member_id') ?? ''), note = String(fd.get('note') ?? '').trim();
+    return run(() => api.handoffRecord(state.me?.org?.id, d.recordId, { to_member_id: to, ...(note ? { note } : {}) }), `${keyOf(cardId)} is handed to ${state.members?.get?.(to)?.name ?? 'your teammate'}. It shows in their session brief.`);
   }
   if (kind === 'changes') {
     return run(() => api.action(cardId, 'request_changes', { comment: String(fd.get('comment') ?? '').trim() }), `Sent ${keyOf(cardId)} back to Claude with your notes.`);
@@ -1872,6 +1879,7 @@ function onClick(e) {
     case 'give_to_claude': openGive(cardId, 'dispatch'); return;
     case 'take_over_with_claude': openGive(cardId, 'redispatch'); return;
     case 'continue_with_another_ai': openGive(cardId, 'retry', { another: true }); return;
+    case 'hand_to_teammate': { const v = viewOf(cardId); if (v?.record_id) { state.dialog = { kind: 'hand-to-teammate', cardId, recordId: v.record_id }; update(); } return; }
     case 'switch_ai': state.dialog = { kind: 'switch-ai', cardId, ...handoverPin(viewOf(cardId)) }; update(); return;
     case 'view_handover': openDetail(cardId, 'handover'); return;
     case 'stop': case 'cancel': case 'take_over_confirm': case 'resume': case 'handover_ai':

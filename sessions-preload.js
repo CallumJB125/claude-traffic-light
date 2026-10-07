@@ -19,4 +19,5 @@ contextBridge.exposeInMainWorld('sessionsApi', {
   burstAction: (id, args) => ipcRenderer.invoke('burst-action', id, args),
   contextBreakdown: (session) => ipcRenderer.invoke('burst:context-breakdown', session),
   messageOwned: (session, text) => ipcRenderer.invoke('sessions:message', session, text),
+  openRecord: (recordId) => ipcRenderer.invoke('sessions:open-record', recordId),
 });

@@ -53,3 +53,23 @@ test('Router: Burst limit pressure lowers Claude\'s rank without making it incap
   assert.equal(suggest('Refactor the auth module', noLocal, { table, burst: { kind: 'off', chip: { tone: 'grey', label: 'Burst off' } } }).provider, 'claude', 'Burst off is not pressure');
   assert.equal(suggest('Refactor the auth module', noLocal, { table, burst: null }).provider, 'claude');
 });
+
+const record = { v: 1, record_id: 'inst-a:claude:s1', adapter: 'claude', folder: 'app', title: 'Fix the login redirect', goal: 'Users land on /home after sign-in', summary: 'Found the bug in auth.js; tests not written yet.', status: 'paused_limit', branch: 'fix/login', files: { edited: ['src/auth.js'], read: [] } };
+
+test('Router: a WorkRecord plus its shared handover seed the next session, never on the AI that stopped', () => {
+  const s = suggest({ record, handover: '## Next\nWrite the redirect test.' }, all);
+  assert.notEqual(s.provider, 'claude');
+  assert.equal(s.from, record.record_id);
+  for (const want of ['Fix the login redirect', 'Users land on /home', 'paused at a plan limit on branch fix/login', 'src/auth.js', 'Write the redirect test.']) assert.ok(s.seed.includes(want), want);
+  assert.ok(s.seed.length <= 8000);
+  assert.equal(suggest({ record }, [P('claude', 'Claude Code')]).provider, 'claude', 'the same AI only when nothing else is usable');
+  assert.equal(suggest('hi', all).seed, undefined, 'plain text gets no seed');
+});
+
+test('Router: seed bounds the handover and ignores malformed records', () => {
+  const { seed } = require('../src/session-router');
+  const long = seed(record, 'x'.repeat(20_000));
+  assert.ok(long.length <= 8000 && long.includes('…'));
+  assert.equal(seed(null), '');
+  assert.equal(suggest({ record: { record_id: 'x' } }, all).seed, undefined, 'not a v1 record');
+});
