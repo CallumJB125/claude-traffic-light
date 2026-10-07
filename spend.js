@@ -15,7 +15,7 @@ const MODES = ['api', 'subscription'];
 // (fixed 20-min buckets per session over 42 days / 233 sessions: p99 $35.24,
 // p99.9 $55; see the F1 commit). $40 fired on 4 sessions in those 42 days.
 const DEFAULTS = {
-  mode: 'api',
+  mode: 'subscription',
   dailyBudget: 0,
   weeklyBudget: 0,
   warnAt: 0.8,
