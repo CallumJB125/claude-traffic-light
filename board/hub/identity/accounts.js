@@ -727,6 +727,8 @@ export class Accounts {
       this.db.run(`UPDATE user_devices SET revoked_at = COALESCE(revoked_at, ?), token_hash = NULL, revoke_reason = COALESCE(revoke_reason, 'account_deleted'),
         name = 'Deleted device', platform = NULL, last_ip_prefix = NULL WHERE user_id = ?`, now, user.id);
       this.db.run('DELETE FROM sessions WHERE user_id = ?', user.id);
+      // Synced ciphertext: every object and row goes at the next sync sweep (sync.js), without a notice.
+      this.hub.sync?.forgetUser(user.id);
       this.db.run('UPDATE interaction_shares SET revoked_at = ? WHERE owner_user_id = ? AND revoked_at IS NULL', now, user.id);
       // Messages they sent or received (text and replies) and their sessions' targets go now (MESSAGING.md §5).
       this.db.run('DELETE FROM msg_messages WHERE source_user_id = ? OR dest_user_id = ?', user.id, user.id);

@@ -217,7 +217,7 @@ test('migration 056 adds the scope column and narrows existing phone sign-ins in
       INSERT INTO user_devices (id, user_id, name, client, platform, token_hash, created_at, last_seen_at) VALUES
         ('mac', 'u', 'Mac', 'buddy_desktop', 'darwin-arm64', 'h1', '${NOW}', '${NOW}'),
         ('ph', 'u', 'iPhone', 'buddy_desktop', 'phone-web', 'h2', '${NOW}', '${NOW}');`);
-    assert.deepEqual(migrate(db, { migrations: all }), [56]);
+    assert.deepEqual(migrate(db, { migrations: all.filter((m) => m.version <= 56) }), [56]);
     assert.deepEqual(db.prepare('SELECT id, scope FROM user_devices ORDER BY id').all().map((r) => [r.id, r.scope]), [['mac', 'full'], ['ph', 'relay']]);
     assert.throws(() => db.exec("UPDATE user_devices SET scope = 'admin' WHERE id = 'mac'"), /CHECK/);
     assert.equal(db.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');

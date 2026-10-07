@@ -1,0 +1,75 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self'" />
+<title>Sync</title>
+<link rel="stylesheet" href="tokens.css" />
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: var(--text-base)/1.45 var(--font); -webkit-font-smoothing: antialiased; }
+  main { max-width: 560px; margin: 0 auto; padding: var(--space-6) var(--space-5); display: flex; flex-direction: column; gap: var(--space-4); }
+  h1 { font-size: var(--text-xl); margin: 0; font-weight: 600; }
+  h2 { font-size: var(--text-xs); margin: 0 0 var(--space-2); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--accent); }
+  .muted { color: var(--muted); font-size: var(--text-sm); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-3); }
+  .plan { font-size: var(--text-lg); font-weight: 600; }
+  .buttons { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+  button { background: var(--panel-2); border: 1px solid var(--line-input); color: inherit; font: inherit; padding: 5px var(--space-3); border-radius: var(--radius); cursor: pointer; transition: border-color var(--t), background var(--t); }
+  button:hover:not(:disabled) { border-color: var(--faint); }
+  button:disabled { opacity: .5; cursor: default; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+  .msg { border-radius: var(--radius); padding: var(--space-2) var(--space-3); background: var(--panel-2); border-left: 3px solid var(--amber); }
+  dl { display: grid; grid-template-columns: auto 1fr; gap: var(--space-1) var(--space-4); margin: 0; }
+  dt { color: var(--muted); }
+  dd { margin: 0; }
+  [hidden] { display: none !important; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+  .code { font: 600 var(--text-lg)/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .04em; user-select: all; word-break: break-all; }
+  input[type=text] { background: var(--panel-2); border: 1px solid var(--line-input); color: inherit; font: inherit; padding: 5px var(--space-2); border-radius: var(--radius); width: 100%; }
+  ul.devices { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+  ul.devices li { display: flex; align-items: center; gap: var(--space-3); justify-content: space-between; flex-wrap: wrap; }
+  .fp { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: var(--text-sm); color: var(--muted); }
+</style>
+</head>
+<body>
+  <main>
+    <h1>Sync</h1>
+    <div class="msg" id="banner" role="alert" hidden></div>
+    <section class="card" id="upsell" hidden>
+      <div class="plan">Sync needs Plus</div>
+      <div class="muted">Keep your search history, checkpoint summaries and handovers on all your computers, end-to-end encrypted. Up to 3 computers and 5 GB. Get Plus on the Plan &amp; billing page.</div>
+    </section>
+    <section class="card" id="status" aria-live="polite">
+      <div class="plan" id="headline">Off</div>
+      <div class="muted" id="detail"></div>
+      <div class="buttons">
+        <button class="primary" id="enable" hidden>Turn on sync</button>
+        <button id="now" hidden>Sync now</button>
+        <button id="disable" hidden>Turn off on this computer</button>
+      </div>
+      <div class="muted" id="note"></div>
+    </section>
+    <section class="card" id="code-card" hidden>
+      <h2>Your recovery code</h2>
+      <div class="code" id="code"></div>
+      <div class="muted">Write this down and keep it somewhere safe. It is shown once. It is the only way to open your synced data on a new computer if you lose this one: Plexiform can't recover it for you.</div>
+      <div class="buttons"><button id="code-done">I've saved it</button></div>
+    </section>
+    <section class="card" id="restore" hidden>
+      <h2>Restore on this computer</h2>
+      <div class="muted">Approve this computer on one you already sync (compare the code below), or type your recovery code.</div>
+      <div>This computer: <span class="fp" id="my-fp"></span></div>
+      <input type="text" id="code-input" autocomplete="off" spellcheck="false" placeholder="XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX" aria-label="Recovery code" />
+      <div class="buttons"><button id="recover">Restore with recovery code</button></div>
+    </section>
+    <section class="card" id="devices-card" hidden>
+      <h2>Your computers</h2>
+      <ul class="devices" id="devices"></ul>
+      <div class="buttons"><button id="new-code">Make a new recovery code</button></div>
+    </section>
+    <p class="muted">Only ciphertext leaves this computer: your team hub stores encrypted data, its size and when it was sent. Raw AI transcripts are never synced. Removing a computer changes the key, so it can't read anything synced afterwards.</p>
+  </main>
+  <script src="sync.js"></script>
+</body>
+</html>
