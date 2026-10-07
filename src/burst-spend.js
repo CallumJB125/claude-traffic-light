@@ -118,10 +118,4 @@ function normalizeCompaction(state) {
 
 const COMPACTION_NOTE = 'Burst is compacting Claude sessions';
 
-// Plexiform's own Claude compactor is forced off while Burst compaction is on.
-function withBurstCompaction(settings, burstActive) {
-  if (!burstActive || !settings || typeof settings !== 'object') return settings;
-  return { ...settings, providers: { ...(settings.providers || {}), claude: false } };
-}
-
-module.exports = { tokensLabel, normalizeUsage, throughBurstView, secondaryUsdOf, secondaryBySession, normalizeCompaction, withBurstCompaction, isSecondaryRoute, SOURCE, COMPACTION_NOTE, MAX_ROWS };
+module.exports = { tokensLabel, normalizeUsage, throughBurstView, secondaryUsdOf, secondaryBySession, normalizeCompaction, isSecondaryRoute, SOURCE, COMPACTION_NOTE, MAX_ROWS };

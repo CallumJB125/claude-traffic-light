@@ -15,18 +15,14 @@
 //    runs the compaction as a turn on the thread, reports a `contextCompaction`
 //    item, and reports usage with `thread/tokenUsage/updated`. Codex chooses
 //    what it keeps (`keep` is advisory: capability compactKeep: false).
-//  - Claude Code (owned headless session, lane P1, to wire): send the literal
-//    `/compact` command as a user message on the owned stream-json session,
-//    and/or start the owned child with CLAUDE_AUTOCOMPACT_PCT_OVERRIDE in ITS
-//    env only. Before/after from the `usage` of the result messages.
 //  - Gemini CLI (to verify): ACP exposes no compaction method today; leave
 //    `compact` false until one is documented.
 //  - Local models (lane P2, Plexiform-held history): createHistoryCompactor
 //    below with the model's own summarise function.
 const crypto = require('node:crypto');
 
-const PROVIDERS = ['codex', 'claude', 'gemini', 'local'];
-const DEFAULTS = Object.freeze({ enabled: false, providers: Object.freeze({ codex: false, claude: false, gemini: false, local: false }), threshold: 0.55, minTurns: 3, keepTurns: 4 });
+const PROVIDERS = ['codex', 'gemini', 'local'];
+const DEFAULTS = Object.freeze({ enabled: false, providers: Object.freeze({ codex: false, gemini: false, local: false }), threshold: 0.55, minTurns: 3, keepTurns: 4 });
 const SEND_WAIT_MS = 15_000, SETTLE_MS = 5_000, COMPACT_MS = 120_000;
 // Preferences offers 30–90%. Tests and proofs pass their own range explicitly.
 const UI_THRESHOLD = Object.freeze([0.3, 0.9]);

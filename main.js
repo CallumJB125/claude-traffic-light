@@ -1534,7 +1534,7 @@ claudeChannel.attach=async args=>{
   return attachClaudeChannel(args);
 };
 const InteractionMain=require('./src/interaction-main').createInteractionMain({
-  compaction:Compaction.createSessionCompactor({settings:()=>require('./src/burst-spend.js').withBurstCompaction(loadConfig().compaction,BurstIpc.compactionActive()),ledger:CompactionLedger}),
+  compaction:Compaction.createSessionCompactor({settings:()=>loadConfig().compaction,ledger:CompactionLedger}),
   context:()=>buddyWin?.overviewContext?.()??null,
   readContext:()=>buddyWin?.overviewReadContext?.()??null,
   adapters:{codex:Object.assign(CodexAppServer.createCodexAppServer({bin:codexBin,clientVersion:app.getVersion()}),codexBin?{}:{available:false,reason:'Codex CLI not found'}),'codex-daemon':CodexDaemon,'claude-channel':claudeChannel},

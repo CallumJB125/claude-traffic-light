@@ -59,7 +59,7 @@ async function setup({ settings = ON, adapterOpts, compactorOpts = {} } = {}) {
 // ── Policy ──
 test('Policy: settings default OFF and are clamped', () => {
   const d = C.normalizeSettings(undefined);
-  assert.equal(d.enabled, false); assert.deepEqual(Object.values(d.providers), [false, false, false, false]);
+  assert.equal(d.enabled, false); assert.deepEqual(Object.values(d.providers), [false, false, false]);
   assert.equal(d.threshold, 0.55);
   // Clamped to what Preferences offers (30–90%), so what runs is what is shown.
   assert.equal(C.normalizeSettings({ threshold: 5 }).threshold, 0.9);

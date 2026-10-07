@@ -57,18 +57,6 @@ test('client.usage and compaction stats come from the fake Burst, GET only, norm
   } finally { await fake.close(); fs.rmSync(home, { recursive: true, force: true }); }
 });
 
-test('Burst compaction forces Plexiform\'s own Claude compactor off, others untouched', () => {
-  const Compaction = require('../src/compaction.js');
-  const on = Compaction.normalizeSettings({ enabled: true, providers: { claude: true, codex: true } });
-  const forced = Spend.withBurstCompaction(on, true);
-  assert.equal(forced.providers.claude, false);
-  assert.equal(forced.providers.codex, true);
-  assert.equal(Compaction.shouldCompact({ settings: forced, provider: 'claude', contextTokens: 9000, window: 10000, turns: 5 }).reason, 'off');
-  assert.equal(Compaction.shouldCompact({ settings: on, provider: 'claude', contextTokens: 9000, window: 10000, turns: 5 }).go, true);
-  assert.equal(Spend.withBurstCompaction(on, false), on);
-  assert.equal(Spend.COMPACTION_NOTE, 'Burst is compacting Claude sessions');
-});
-
 test('normalizeCompaction: not active when Burst compaction is off', () => {
   assert.equal(Spend.normalizeCompaction(compactionState([], false)).active, false);
   assert.deepEqual(Spend.normalizeCompaction({}), { active: false, sessions: [] });
