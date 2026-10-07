@@ -1677,7 +1677,23 @@ onQuit(app,()=>SetupsLocal.close());
 // handler checks its sender; the page to open is never taken from the renderer.
 const TeamEntry = require('./src/team-entry.js');
 const settingsOnly = (e) => fromUtilityPage(e, 'settings');
-const BurstIpc = require('./src/burst-ipc.js').register({ utilityHandle, settingsOnly, chipAllowed: (e) => widgetOnly(e) || fromUtilityPage(e, 'usage'), usageAllowed: (e) => fromUtilityPage(e, 'usage'), sessionsAllowed: sessionsSender, stateFile: path.join(ROOT_DIR, 'burst-handover.json'), runner: { live: () => !!buddyWin?.runnerLive?.(), send: (m) => buddyWin?.burstFacts?.(m) }, accountAllowed: (e) => fromPage(e, buddyWin?.accountWebContents?.()), isMac: IS_MAC, dialog, shell, scriptDir: path.join(ROOT_DIR, 'burst-scripts'), log: console.log });
+const BurstEventsLib = require('./src/burst-events.js');
+const BurstEvents = BurstEventsLib.createBurstEvents();
+// Quiet hours, snooze and mutes hold these like any other ping (src/quiet.js).
+function notifyBurstEvents(events) {
+  if (!events.length) return;
+  const { send, held, why } = BurstEventsLib.gate(events, loadConfig(), Date.now());
+  for (const ev of held) console.log(`[notify] held (${why}): ${ev.key}`);
+  if (IS_DEV_RUN || loadConfig().notifyOnStates === false || !Notification.isSupported()) return;
+  for (const ev of send) {
+    const note = new Notification({ title: ev.title, body: ev.body, silent: true });
+    liveNotifications.add(note);
+    note.on('click', () => { liveNotifications.delete(note); openBuddy('optimiser'); });
+    note.on('close', () => liveNotifications.delete(note));
+    note.show();
+  }
+}
+const BurstIpc = require('./src/burst-ipc.js').register({ utilityHandle, settingsOnly, chipAllowed: (e) => widgetOnly(e) || fromUtilityPage(e, 'usage'), usageAllowed: (e) => fromUtilityPage(e, 'usage'), sessionsAllowed: sessionsSender, stateFile: path.join(ROOT_DIR, 'burst-handover.json'), runner: { live: () => !!buddyWin?.runnerLive?.(), send: (m) => buddyWin?.burstFacts?.(m) }, accountAllowed: (e) => fromPage(e, buddyWin?.accountWebContents?.()), isMac: IS_MAC, dialog, shell, scriptDir: path.join(ROOT_DIR, 'burst-scripts'), onView: (view) => notifyBurstEvents(BurstEvents.observe(view, Date.now())), log: console.log });
 BurstIpc.setOpener(() => openBuddy('optimiser'));
 keepAwakeMain = require('./src/keep-awake-ipc.js').register({ utilityHandle, allowed: (e) => fromPage(e, buddyWin?.accountWebContents?.()), isMac: IS_MAC, burst: BurstIpc, keepAwake: require('./src/keep-awake.js').createKeepAwake({ powerSaveBlocker }), dialog, getPref: () => { const v = loadConfig().keepAwake; return ['app', 'ac', 'always'].includes(v) ? v : 'off'; }, setPref: (v) => saveConfig({ keepAwake: v }), log: console.log });
 const SessionHandoverMain = require('./src/session-handover-main.js').register({ ipcMain, rootDir: ROOT_DIR, isExcluded: (cwd) => Quiet.projectMuted(loadConfig().mutedProjects, cwd), burstFor: (row) => { const h = BurstIpc.enrichSession({ sessionId: row.sessionId, cwd: row.cwd, source: row.adapter === 'claude-code' ? null : row.adapter }); return h && h.handover ? h.handover.text : null; }, home: os.homedir(), sessionsAllowed: sessionsSender, clipboard, shell, log: console.log });
@@ -4136,6 +4152,7 @@ function healthReport() {
     updateStatus,
     mcp: McpInstall.status(mcpOpts()),
     signal: { listening: !!signalServer?.listening, port: SIGNAL_PORT, error: signalServerError },
+    burst: BurstIpc.status(),
   });
   // Dev runs share the machine with a real install and never rewrite its hooks.
   report.checks = report.checks.map(({ fix, fixLabel, ...c }) =>
@@ -4167,6 +4184,7 @@ ipcMain.handle('health-fix', (e, id) => {
     } else if (id === 'connect-hermes') error = 'Open the installed app to connect Hermes.';
     else if (id === 'enable-mcp') McpInstall.install(mcpOpts());
     else if (id === 'clear-stale-locks') Health.clearStaleLocks({ root: ROOT_DIR });
+    else if (id === 'open-burst-console') BurstIpc.openConsole().catch((err) => console.log(`[health] burst console: ${err.message}`));
     else error = 'unknown fix';
   } catch (err) { error = err.message; }
   console.log(`[health] fix ${JSON.stringify(id)}${error ? ` failed: ${error}` : ''}`);

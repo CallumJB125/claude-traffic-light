@@ -31,6 +31,7 @@ const FIXES = {
   'clear-stale-locks': 'Clear stale lock',
   'connect-codex': 'Configure Codex activity',
   'connect-hermes': 'Connect Hermes activity',
+  'open-burst-console': 'Open Burst console',
 };
 // Claude Code reads hooks once, when a session starts.
 const RESTART_SESSIONS = 'Then restart your Claude sessions.';
@@ -310,6 +311,17 @@ function checkDisk(ctx) {
   return { status: 'ok', detail };
 }
 
+// ctx.burst is the Burst status view model (burst-view.js statusView); only
+// macOS with Burst installed gets a row. Trust is the version+pid handshake
+// burst-client does before it reads anything.
+function checkBurst(ctx) {
+  const v = ctx.burst;
+  if ((ctx.platform || process.platform) !== 'darwin' || !v || v.kind === 'unsupported' || v.kind === 'not_installed') return null;
+  if (v.kind === 'untrusted') return { status: 'fail', detail: 'Whatever answers on Burst\'s port is not your Burst install, so Plexiform reads nothing from it.', next: 'Open the Burst console to check it, or turn Burst off.', fix: 'open-burst-console' };
+  if (v.kind === 'off' && !v.version) return { status: 'info', detail: 'Burst is installed but not answering, so its trust can\'t be checked.' };
+  return { status: 'ok', detail: 'Burst answered and is your install.' };
+}
+
 const CHECKS = [
   ['hooks', 'Claude Code hooks', checkHooks],
   ['codex-hooks', 'Codex session activity', checkCodexHooks],
@@ -320,6 +332,7 @@ const CHECKS = [
   ['mcp', 'Claude integration (MCP)', checkMcp],
   ['transcripts', 'Transcripts', checkTranscripts],
   ['disk', 'Disk space', checkDisk],
+  ['burst', 'Burst trusted', checkBurst],
   ['version', 'App version', checkVersion],
 ];
 
