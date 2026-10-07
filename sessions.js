@@ -36,6 +36,16 @@ function handoverRow(section, h) {
       row.append(document.createTextNode(' · '), b);
     }
   }
+  if (h.canWrite) {
+    const b = node('button', 'Write now', 'link'); b.type = 'button';
+    b.addEventListener('click', async () => {
+      b.disabled = true; b.textContent = 'Writing…';
+      let r = null; try { r = await window.sessionsApi.handover('write', h.key); } catch { r = null; }
+      b.textContent = r?.ok ? 'Written' : r?.error || 'Could not write it';
+      setTimeout(() => { b.textContent = 'Write now'; b.disabled = false; if (r?.ok) void refresh(); }, 1500);
+    });
+    row.append(document.createTextNode(' · '), b);
+  }
   section.append(row);
 }
 

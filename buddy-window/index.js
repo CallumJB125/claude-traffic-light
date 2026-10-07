@@ -998,6 +998,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     open,
     myDay: () => myDayBroker.snapshot(),
     async overviewWork(){return {sources:await overviewSources(),capture:workCapture.overviewSnapshot?.()??[],partial:false};},
+    handoverSessions: () => workCapture.handoverRows(),
     overviewReadContext(){
       const v=localViews.get('overview'),wc=v?.webContents;
       if(!win||win.isDestroyed()||!wc||wc.isDestroyed()||selected!=='overview'||content!==v||!win.contentView.children.includes(v)||!win.isVisible()||win.isMinimized())return null;

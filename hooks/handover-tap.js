@@ -98,4 +98,5 @@ function record({ rootDir, adapter, signal, sessionId, cwd, data, mutedProjects,
   } catch { return false; }
 }
 
-module.exports = { record, factsFile, dirOf, excluded, CAP };
+// mutate and clip are also how src/handover-transcripts.js builds facts from a transcript.
+module.exports = { record, factsFile, dirOf, excluded, mutate, clip, CAP };

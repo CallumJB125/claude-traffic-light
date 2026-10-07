@@ -133,12 +133,12 @@ test('writer: excluding a project deletes its handover and facts; ring keeps the
 
 test('view: specific reasons when absent, and age + limited note when present', async () => {
   const root = tmp(); const w = writer(root);
-  assert.deepEqual([w.view({ sessionId: 'zz', cwd: '/w' }).note, w.view({ sessionId: 'zz', cwd: '/w' }).ready], ['no events yet', false]);
+  assert.deepEqual([w.view({ sessionId: 'zz', cwd: '/w' }).note, w.view({ sessionId: 'zz', cwd: '/w' }).ready, w.view({ sessionId: 'zz', cwd: '/w' }).updated], ['written at the next refresh', false, 'Handover: not written yet']);
   ev(root, { signal: 'prompt-submit', data: { prompt: 'x' } });
   assert.equal(w.view({ sessionId: 's1', cwd: '/work/app' }).note, 'handover is being written');
   await w.tick();
   const v = w.view({ sessionId: 's1', cwd: '/work/app' });
-  assert.equal(v.ready, true); assert.match(v.updated, /^Handover updated (just now|\d+m ago)$/); assert.equal(v.note, 'cwd not a git repo — facts limited');
+  assert.equal(v.ready, true); assert.match(v.updated, /^Handover: updated (just now|\d+m ago)$/); assert.equal(v.note, 'cwd not a git repo — facts limited');
 });
 
 test('copy as prompt wraps the doc for any AI; only keys of files this module wrote resolve', async () => {

@@ -272,6 +272,8 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
     choices(){return !catalog.complete?[]:(catalog.routes??[]).filter(r=>safeCanonical(r.canonical_url)&&['owner','admin','member'].includes(r.role)).map(r=>({key:routeKey(r),repo:r.canonical_url,team_name:clean(r.team_name??'Team',60),board_name:clean(r.board_name??'Board',60)}));},
     // Main-only identity join for Overview; never forwarded to a renderer.
     overviewSnapshot(){return Object.values(state.tasks).map(e=>({provider:e.provider,session_id:e.session_id,task_id:e.task_id,card_id:e.card_id,untracked:!!e.untracked,destination:{...e.destination}}));},
+    // Main-only: the listed sessions a local handover is kept for (src/session-handover-main.js).
+    handoverRows(){return Object.values(state.tasks).filter(e=>!BACKGROUND_TITLE.test(String(e.title??'').trim())).map(e=>({provider:e.provider,session_id:e.session_id,title:e.title,last_seen:e.last_seen??null}));},
     // The This Mac list: background entries saved before capture filtered them are hidden,
     // and repeats of one piece of work collapse to a single row with a count.
     snapshot(){
@@ -288,4 +290,4 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
     },
     async stop(){stopped=true;latest=null;await active;},idle:()=>active??Promise.resolve()};
 }
-module.exports={createWorkCapture,observation,BACKGROUND_TITLE,routeFor,repoFor,clean,phase,routeKey};
+module.exports={createWorkCapture,observation,isBackgroundSession,BACKGROUND_TITLE,routeFor,repoFor,clean,phase,routeKey};

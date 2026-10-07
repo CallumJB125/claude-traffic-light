@@ -232,3 +232,19 @@ test('shared working tree banner and row note', async () => {
     assert.equal(fixture.document.getElementById('coord').hidden, true);
   } finally { fixture.dom.window.close(); }
 });
+
+test('handover row shows its status and Write now asks main for that session only', async () => {
+  const calls = [];
+  const row = (handover) => ({ provider: 'Codex', project: 'app', status: 'Turn stopped', freshness: 'stale', age_ms: 100000, children: [], handover });
+  const fixture = setup({ state: async () => state({ sessions: [row({ key: 'codex-t1', updated: 'Handover: not written yet', note: 'written at the next refresh', ready: false, canWrite: true }), row({ key: 'codex-t2', updated: 'Handover: not written yet', note: 'session excluded', ready: false, canWrite: false })] }), handover: async (action, key) => { calls.push([action, key]); return { ok: true }; } });
+  try {
+    await tick();
+    const rows = fixture.document.querySelectorAll('.handover-row');
+    assert.match(rows[0].textContent, /Handover: not written yet \(written at the next refresh\)/);
+    const buttons = [...fixture.document.querySelectorAll('.handover-row button')].filter(b => b.textContent === 'Write now');
+    assert.equal(buttons.length, 1, 'no Write now for an excluded session');
+    buttons[0].click(); await tick();
+    assert.deepEqual(calls, [['write', 'codex-t1']]);
+    assert.equal(buttons[0].textContent, 'Written');
+  } finally { fixture.dom.window.close(); }
+});

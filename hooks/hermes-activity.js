@@ -17,7 +17,8 @@ function apply(data, root) {
   const file = State.sessionFileFor(dir, host, 'hermes', data.sessionId);
   return State.withLock(file, () => {
     const prev = State.readJson(file);
-    if (data.event === 'end') { fs.rmSync(file, { force: true }); return true; }
+    const tap = (signal) => { try { require('./handover-tap.js').record({ rootDir: root, adapter: 'hermes', signal, sessionId: data.sessionId, cwd: cwdOf(data.cwd) || prev?.cwd || '', data: {} }); } catch { /* the handover is best effort */ } };
+    if (data.event === 'end') { fs.rmSync(file, { force: true }); tap('session-end'); return true; }
     if (data.event === 'start' && prev) return false;
     const closed = Array.isArray(prev?.hermesClosedTurns) ? prev.hermesClosedTurns.slice(-32) : [];
     if (data.event === 'working' && closed.includes(data.turnId)) return false;
@@ -34,6 +35,7 @@ function apply(data, root) {
     next.hermesTurnId = data.turnId || prev?.hermesTurnId || null;
     next.hermesClosedTurns = closed.slice(-32);
     State.writeJsonAtomic(file, next);
+    tap(signal);
     return true;
   }, 200);
 }
