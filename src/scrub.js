@@ -127,6 +127,57 @@ const Shared = require('./secret-patterns.js');
 // wrapped as {{GH:…}} is found without any help from us.
 const redactShared = (s) => Shared.redactSecrets(s, { classes: ['credential', 'likely'], docExamples: false, replace: () => R });
 
+// Personal numbers, each a pattern plus a check so that random digits in logs and hashes survive:
+// a bank card (Luhn and a known issuer prefix), a South African ID (a real date and Luhn), an IBAN
+// (mod 97), a US SSN, a UK National Insurance number and a passport machine-readable line (check
+// digits). Every pattern is bounded, so reading is linear.
+const luhn = (d) => {
+  let sum = 0;
+  for (let i = 0; i < d.length; i++) {
+    let n = d.charCodeAt(d.length - 1 - i) - 48;
+    if (i % 2) { n *= 2; if (n > 9) n -= 9; }
+    sum += n;
+  }
+  return sum % 10 === 0;
+};
+const CARD_PREFIX = /^(?:4|5[1-5]|2(?:2[2-9][1-9]|2[3-9]\d|[3-6]\d\d|7[01]\d|720)|3[47]|6011|65|3[68]|35)/;
+const validDate = (yy, mm, dd) => [1900, 2000].some((c) => { const d = new Date(Date.UTC(c + yy, mm - 1, dd)); return d.getUTCMonth() === mm - 1 && d.getUTCDate() === dd; });
+const ibanOk = (raw) => {
+  const v = raw.replace(/ /g, '');
+  if (v.length < 15 || v.length > 34) return false;
+  let rem = 0;
+  for (const ch of v.slice(4) + v.slice(0, 4)) {
+    const n = /\d/.test(ch) ? ch : String(ch.charCodeAt(0) - 55);
+    for (const c of n) rem = (rem * 10 + (c.charCodeAt(0) - 48)) % 97;
+  }
+  return rem === 1;
+};
+const mrzDigit = (s) => {
+  let sum = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    const v = c === '<' ? 0 : /\d/.test(c) ? c.charCodeAt(0) - 48 : c.charCodeAt(0) - 55;
+    sum += v * [7, 3, 1][i % 3];
+  }
+  return sum % 10;
+};
+const NINO_BAD = new Set(['BG', 'GB', 'NK', 'KN', 'TN', 'NT', 'ZZ']);
+const PII_RULES = [
+  [/(?<![A-Z0-9<])[A-Z0-9<]{9}\d[A-Z]{3}\d{6}\d[MF<]\d{6}\d/g, (m) => mrzDigit(m.slice(0, 9)) === +m[9] && mrzDigit(m.slice(13, 19)) === +m[19] && mrzDigit(m.slice(21, 27)) === +m[27], '[passport]'],
+  [/(?<![A-Za-z0-9])[A-Z]{2}\d{2}[A-Z0-9]{11,30}(?![A-Za-z0-9])/g, ibanOk, '[iban]'],
+  [/(?<![A-Za-z0-9])[A-Z]{2}\d{2}(?: [A-Z0-9]{4}){2,7}(?: [A-Z0-9]{1,4})?(?![A-Za-z0-9])/g, ibanOk, '[iban]'],
+  [/(?<![\w-])(\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])\d{4}[01][89]\d(?![\w-])/g, (m) => validDate(+m.slice(0, 2), +m.slice(2, 4), +m.slice(4, 6)) && luhn(m), '[sa-id]'],
+  [/(?<![\w.-])(?:\d[ -]?){12,18}\d(?![\w-])/g, (m) => { const d = m.replace(/[ -]/g, ''); return d.length >= 13 && d.length <= 19 && CARD_PREFIX.test(d) && luhn(d); }, '[card]'],
+  [/(?<![\w-])(?!000|666|9\d\d)\d{3}-(?!00)\d{2}-(?!0000)\d{4}(?![\w-])/g, () => true, '[ssn]'],
+  [/(?<![A-Za-z0-9])[A-CEGHJ-PR-TW-Z]{2}[ ]?\d{2}[ ]?\d{2}[ ]?\d{2}[ ]?[A-D](?![A-Za-z0-9])/g, (m) => !NINO_BAD.has(m.slice(0, 2)), '[nino]'],
+];
+
+function maskPii(text) {
+  let out = String(text == null ? '' : text);
+  for (const [re, ok, tag] of PII_RULES) out = out.replace(re, (m) => (ok(m) ? tag : m));
+  return out;
+}
+
 function redactSecretsPass(text) {
   let out = redactShared(String(text == null ? '' : text));
   for (const re of EXTRA_SECRETS) {
@@ -144,7 +195,7 @@ function redactSecretsPass(text) {
       return `${head}${R}${tail}`;
     });
   }
-  return out;
+  return maskPii(out);
 }
 
 // For a JSON.parse error shown to the person or logged: newer Node quotes
@@ -255,4 +306,4 @@ function scrub(text, { home = null, user = null, hostname = null, names = [], sa
   return out.replace(/\u0001(\d+)\u0002/g, (m, i) => parked[Number(i)]);
 }
 
-module.exports = { scrub, redactSecretsPass, hashName, cleanJsonError, PATTERNS, MAX_LINE };
+module.exports = { scrub, redactSecretsPass, maskPii, hashName, cleanJsonError, PATTERNS, MAX_LINE };

@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('buddyAccount', {
   burstAction: (kind, mode) => ipcRenderer.invoke('burst:action', { kind: str(kind), mode: str(mode) }),
   burstSetCompaction: (req) => ipcRenderer.invoke('burst:set-compaction', { enabled: !!(req && req.enabled), confirmed: !!(req && req.confirmed), ...(req && req.mode ? { mode: str(req.mode) } : {}) }),
   keepAwakeGet: () => ipcRenderer.invoke('keepawake:get'),
+  macView: () => ipcRenderer.invoke('keepawake:mac'),
   keepAwakeSet: (enabled, mode) => ipcRenderer.invoke('keepawake:set', { enabled: !!enabled, ...(mode ? { mode: str(mode) } : {}) }),
   openClients: () => call('openClients'),
   go: (screen) => call('go', str(screen)),
