@@ -55,7 +55,7 @@
   function clearInteractions() { viewGeneration++; composers.clear(); notices.clear(); }
   function clearPage(message) {
     snapshot = null; rows.clear(); clearInteractions();
-    $('content').replaceChildren(); $('summary').replaceChildren(); $('connections').replaceChildren();
+    $('content').replaceChildren(); $('connections').replaceChildren();
     $('result-count').textContent = ''; $('status').textContent = message; $('content').setAttribute('aria-busy', 'false');
   }
   function empty(title, text) { const el = node('div', '', 'empty'); el.append(node('h3', title), node('p', text)); return el; }
@@ -72,12 +72,6 @@
     }
   }
   function matches(row) { return filters.every(filter => !$(`${filter}-filter`).value || keyFor(row, filter) === $(`${filter}-filter`).value); }
-  function renderSummary() {
-    const all = snapshot.sessions, children = all.flatMap(row => row.children);
-    const recent = row => freshness(row) === 'recent';
-    const metrics = [[all.length, 'Reported sessions'], [all.filter(row => recent(row) && row.status === 'Working').length, 'Working now'], [[...all, ...children].filter(row => recent(row) && row.status === 'Waiting on you').length, 'Waiting on you'], [children.length, 'Reported child agents']];
-    $('summary').replaceChildren(...metrics.map(([value, label]) => { const el = node('div', '', 'metric'); el.append(node('strong', String(value)), node('span', label)); return el; }));
-  }
   function renderConnections() {
     const byProvider = new Map();
     for (const row of snapshot.sessions) {
@@ -168,7 +162,7 @@
     for (const parent of snapshot.sessions) for (const row of [parent, ...parent.children]) rows.set(row.id, { row, parent, identity: identity(row, parent) });
     for (const [id, draft] of composers) if (!rows.has(id) || rows.get(id).identity !== draft.identity || capability(rows.get(id).row, 'message').enabled !== true) composers.delete(id);
     for (const [id, notice] of notices) if (!rows.has(id) || rows.get(id).identity !== notice.identity) notices.delete(id);
-    updateFilters(); renderSummary(); renderConnections(); renderWork();
+    updateFilters(); renderConnections(); renderWork();
     const time = new Date(value.observed_at).toLocaleTimeString();
     $('status').textContent = `Checked ${time}. Refreshes every 5 seconds while visible.${value.status === 'partial' ? ' Some activity is unavailable.' : ''}${value.omitted ? ` ${value.omitted} additional reports exceed the display limit.` : ''}`;
   }
@@ -667,6 +661,6 @@
   for (const filter of filters) $(`${filter}-filter`).addEventListener('change', () => { clearInteractions(); if (snapshot) renderWork(); });
   $('clear-filters').addEventListener('click', () => { filters.forEach(filter => { $(`${filter}-filter`).value = ''; }); clearInteractions(); if (snapshot) renderWork(); });
   document.addEventListener('visibilitychange', () => { ++readGeneration; expanded.clear(); clearPage('Checking reported activity…'); if (!document.hidden && ready) { void refresh(); void refreshOwned(); void dir?.refresh(); } });
-  setInterval(() => { if (!document.hidden && ready) { if (snapshot) { renderSummary(); renderConnections(); renderWork(); } void refresh(); void refreshOwned(); void dir?.refresh(); } }, 5000);
+  setInterval(() => { if (!document.hidden && ready) { if (snapshot) { renderConnections(); renderWork(); } void refresh(); void refreshOwned(); void dir?.refresh(); } }, 5000);
   if (!document.hidden && ready) { void refresh(); void refreshOwned(); void dir?.refresh(); }
 })();

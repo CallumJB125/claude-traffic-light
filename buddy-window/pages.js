@@ -18,6 +18,8 @@ const { isPrivateHost } = require('./workspaces');
 
 const PAGES = [
   { id: 'overview', title: 'Overview', icon: 'layers', kind: 'local', file: 'overview.html', preload: 'overview-preload.js', group: 'work' },
+  // hidden until the sidebar lists it (and makes it the default) as its own section.
+  { id: 'home', title: 'Home', icon: 'sun', kind: 'local', file: 'home.html', preload: 'home-preload.js', group: 'work', hidden: true },
   { id: 'board', title: 'Board', icon: 'board', kind: 'hub', view: 'board', group: 'work',
     children: [
       { id: 'board:table', title: 'Table', kind: 'hub', view: 'table' },

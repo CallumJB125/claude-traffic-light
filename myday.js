@@ -2,7 +2,7 @@
 const content = document.getElementById('content'), status = document.getElementById('status');
 let generation = 0;
 const node = (tag, text, className) => { const el = document.createElement(tag); if (text) el.textContent = text; if (className) el.className = className; return el; };
-const age = value => value == null ? 'freshness unknown' : value < 60000 ? `${Math.floor(value / 1000)}s ago` : `${Math.floor(value / 60000)}m ago`;
+const age = value => value == null ? 'a while ago' : value < 60000 ? 'just now' : `${Math.floor(value / 60000)} min ago`;
 function row(item, description) {
   const el = node('li');
   const open = node('button', `${item.key ?? item.name} · ${item.title ?? item.state ?? ''}`, 'work-link');
@@ -21,12 +21,12 @@ function render(snapshot) {
     if (source.status !== 'complete') content.append(node('p', `${source.name}: ${source.status === 'partial' ? 'Some work was omitted by the display limit.' : 'Current work is unavailable. Check your connection and sign-in.'}`, 'source-note'));
     for (const item of source.cards ?? []) cards.push(row(item, `${item.team} · ${item.board} · ${item.state}${item.due_date ? ` · Due ${item.due_date}` : ' · No due date'}${item.start_date ? ` · Starts ${item.start_date}` : ''}`));
     for (const item of source.decisions ?? []) decisions.push(row(item, `${item.kind} · ${item.summary} · ${item.board}`));
-    for (const item of source.agents ?? []) agents.push(row(item, `${item.name} · ${item.live ? 'Verified live at observation' : 'Live activity unverified'} · heartbeat ${age(item.observed)} at observation`));
+    for (const item of source.agents ?? []) agents.push(row(item, `${item.name} · ${item.live ? 'Live' : `Last seen ${age(item.observed)}`}`));
   }
   for (const item of snapshot.reported ?? []) {
-    const el = node('li'); el.append(node('strong', `${item.name} · ${item.label}`), node('p', `Reported ${item.signal || 'activity'} · ${item.freshness} · ${age(item.age_ms)}. This report does not verify completion.`, 'muted')); agents.push(el);
+    const el = node('li'); el.append(node('strong', `${item.name} · ${item.label}`), node('p', `${item.freshness === 'recent' ? 'Live' : `Last seen ${age(item.age_ms)}`}${item.signal ? ` · ${item.signal}` : ''}`, 'muted')); agents.push(el);
   }
-  content.append(section('Waiting on you', decisions, 'No current requests you can answer in the available boards.'), section('Your cards', cards, 'No own cards in the available boards.'), section('Your agents', agents, 'No own runs or reported local agents observed.'));
+  content.append(section('Team decisions', decisions, 'No team decisions waiting for you.'), section('Your cards', cards, 'No cards assigned to you.'), section('Your agents', agents, 'No agents running for you.'));
   const a = snapshot.availability;
   if (a?.state === 'busy' || a?.state === 'free') content.append(node('p', a.state === 'busy' ? 'You are busy right now.' : 'You are free right now.', 'muted'));
   if (a?.can_enable) {
@@ -35,7 +35,7 @@ function render(snapshot) {
     button.addEventListener('click', async () => { button.disabled = true; try { await window.myDayApi.showMeetings(); } finally { refresh(); } });
     ask.append(button); content.append(ask);
   }
-  status.textContent = snapshot.status === 'complete' ? `Observed ${new Date(snapshot.observed_at).toLocaleTimeString()}. Refreshes every 15 seconds.` : snapshot.status === 'changed' ? 'The current account or board context changed. Refreshing…' : 'Some sources are unavailable or exceed the display limit. The work shown is current.';
+  status.textContent = snapshot.status === 'complete' ? `Updated ${new Date(snapshot.observed_at).toLocaleTimeString()}. Refreshes every 15 seconds.` : snapshot.status === 'changed' ? 'The current account or board context changed. Refreshing…' : 'Some sources are unavailable or exceed the display limit. The work shown is current.';
 }
 async function refresh({ clear = false } = {}) {
   const request = ++generation;
