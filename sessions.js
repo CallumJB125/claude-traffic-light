@@ -234,19 +234,10 @@ function rowActions(section, item) {
   }
   section.append(row);
 }
-function openRoute(which) {
-  const add = document.getElementById('add'); add.open = true; addTouched = true;
-  if (which === 'connect') return document.getElementById('add-connect').click();
-  const panel = document.getElementById(which === 'link' ? 'panel-link' : 'panel-start');
-  if (panel.hidden) document.getElementById(which === 'link' ? 'add-link' : 'add-start').click();
-  add.scrollIntoView?.({ block: 'start' });
-}
 function emptyState() {
   const box = node('div', '', 'how');
   box.append(node('h2', 'How sessions get in'), node('p', 'Connect the tool → sessions appear here and on your widget → link the repo to share with your team → make a card to track it.'));
-  const row = node('div', '', 'row-actions');
-  row.append(button('Connect a tool', () => openRoute('connect')), button('Link a repo to a board', () => openRoute('link')), button('Start a session here', () => openRoute('start')));
-  box.append(row); return box;
+  return box;
 }
 function togglePanel(id, fill) {
   const host = document.getElementById(id); host.hidden = !host.hidden;
