@@ -73,11 +73,14 @@ function chipFor(d) {
 
 const A = (kind, label, extra = {}) => ({ kind, label, ...extra });
 
+const COMPACTION_ON_CONFIRM = 'Burst will use your Claude subscription tokens to write summaries in the background, which counts against your plan limits and can raise cost slightly when a summary is made.';
+const COMPACTION_OWN_OFF = 'While this is on, Plexiform\'s own Claude compactor is off, so the two never compete.';
+
 function statusView(d, { platform = process.platform } = {}) {
   if (platform !== 'darwin' || d.kind === 'unsupported') {
-    return { kind: 'unsupported', headline: 'Claude Burst', detail: MAC_ONLY, chip: null, actions: [], version: '', mode: '', route: '', updateAvailable: false };
+    return { kind: 'unsupported', headline: 'Claude Burst', detail: MAC_ONLY, chip: null, actions: [], version: '', mode: '', route: '', updateAvailable: false, compaction: null };
   }
-  const base = { kind: d.kind, chip: chipFor(d), version: '', mode: '', route: '', updateAvailable: false, actions: [], headline: 'Claude Burst', detail: '' };
+  const base = { kind: d.kind, compaction: null, chip: chipFor(d), version: '', mode: '', route: '', updateAvailable: false, actions: [], headline: 'Claude Burst', detail: '' };
   switch (d.kind) {
     case 'not_installed':
       return { ...base, kind: 'not_installed', detail: 'Not installed. Burst keeps Claude Code working through limits by sending overflow to a provider you pay for.', actions: [A('install', 'Turn on Burst…', { primary: true, modes: ['base-url', 'transparent'] })] };
@@ -90,7 +93,9 @@ function statusView(d, { platform = process.platform } = {}) {
     case 'present': {
       const s = d.state;
       const updateAvailable = !!(d.upgrade && d.upgrade.canUpgrade && !d.upgrade.upToDate);
-      const out = { ...base, version: s.version, mode: s.mode, route: s.route, updateAvailable, canOpenDashboard: true };
+      const pl = s.compaction && s.compaction.pauseless;
+      const out = { ...base, version: s.version, mode: s.mode, route: s.route, updateAvailable, canOpenDashboard: true, compaction: pl || null };
+      if (pl && pl.enabled && out.chip) out.chip = { ...out.chip, tag: 'Compaction on' };
       if (s.active) {
         out.kind = 'on';
         out.detail = `On, ${s.mode} mode, version ${s.version}. Route: ${s.route === 'SECONDARY' ? 'secondary' : 'primary'}.`;
@@ -107,4 +112,4 @@ function statusView(d, { platform = process.platform } = {}) {
   }
 }
 
-module.exports = { statusView, consent, chipFor, MAC_ONLY, TERMS_URL, CHANGES_ALWAYS, CHANGES_TRANSPARENT, TERMS };
+module.exports = { COMPACTION_ON_CONFIRM, COMPACTION_OWN_OFF, statusView, consent, chipFor, MAC_ONLY, TERMS_URL, CHANGES_ALWAYS, CHANGES_TRANSPARENT, TERMS };

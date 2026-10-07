@@ -19,10 +19,15 @@ const upgradeStatus = (over = {}) => ({ running_version: '0.19.0', latest_versio
 function createFakeBurst(routes = {}) {
   const requests = [];
   const server = http.createServer((req, res) => {
-    requests.push({ method: req.method, url: req.url, headers: req.headers });
+    const chunks = [];
+    req.on('data', (c) => chunks.push(c));
+    req.on('end', () => handle(req, res, Buffer.concat(chunks).toString('utf8')));
+  });
+  const handle = (req, res, body) => {
+    requests.push({ method: req.method, url: req.url, headers: req.headers, body });
     const path = req.url.split('?')[0];
     let r = routes[path];
-    if (typeof r === 'function') r = r(req);
+    if (typeof r === 'function') r = r(req, body);
     if (!r) { res.statusCode = 404; res.end('not found'); return; }
     const send = () => {
       res.statusCode = r.status || 200;
@@ -31,7 +36,7 @@ function createFakeBurst(routes = {}) {
       res.end(Buffer.isBuffer(b) || typeof b === 'string' ? b : JSON.stringify(b));
     };
     if (r.delay) setTimeout(send, r.delay); else send();
-  });
+  };
   return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve({
     port: server.address().port,
     requests,
@@ -53,4 +58,20 @@ const usageReport = (over = {}) => ({
 });
 const compactionState = (sessions = [], enabled = true) => ({ ...stateV019(), context: { applicable: true, compaction: { enabled }, compaction_stats: { sessions } } });
 
-module.exports = { createFakeBurst, stateV019, stateV012, upgradeStatus, usageReport, compactionState };
+// Stateful /api/state + POST /api/compaction: replaces the whole config like Burst does, or answers `reject` as 400 text.
+const pauselessConfig = (over = {}) => ({ enabled: false, compact_at_tokens: 150000, warn_at_percent: 80, window_minutes: 60, mid_turn: true, mode: 'fixed', floor_tokens: 80000, buffer_percent: 15, future_field: { nested: [1, 2.5, 'x'] }, ...over });
+function pauselessRoutes({ config = pauselessConfig(), stats = { compactions: 9, summary_usd: 0.4, rewrite_usd: 0.1, compacted_requests: 40, tokens_not_resent: 3700000, saved_usd: 12.34 }, reject = null } = {}) {
+  const h = { config, posts: [], reject };
+  h.routes = {
+    '/api/state': () => ({ body: { ...stateV019(), context: { applicable: true, compaction: h.config, compaction_stats: stats } } }),
+    '/api/compaction': (req, body) => {
+      h.posts.push({ headers: req.headers, body });
+      if (h.reject) return { status: 400, type: 'text/plain', body: h.reject };
+      h.config = JSON.parse(body);
+      return { body: { ok: 'compaction updated' } };
+    },
+  };
+  return h;
+}
+
+module.exports = { pauselessConfig, pauselessRoutes, createFakeBurst, stateV019, stateV012, upgradeStatus, usageReport, compactionState };

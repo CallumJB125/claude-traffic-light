@@ -19,6 +19,7 @@ const MAX_BYTES = 512 * 1024;
 const TIMEOUT_MS = 2000;
 const TEST_TIMEOUT_MS = 5000;
 const MODES = new Set(['transparent', 'base-url']);
+const COMPACTION_MODES = new Set(['fixed', 'intelligent']);
 const SEMVER = /^v?(\d+)\.(\d+)\.(\d+)(?:[-+][0-9A-Za-z.-]+)?$/;
 const UPGRADE_CACHE_MS = 10 * 60 * 1000;
 
@@ -112,7 +113,14 @@ function createBurstClient({ home = os.homedir(), platform = process.platform, i
       const finish = (fn, v) => { if (done) return; done = true; clearTimeout(timer); fn(v); };
       const req = http.request({ host: addr.host, port: addr.port, method, path: urlPath, headers, agent: false }, (res) => { // privacy-flow: burst-local
         const type = String(res.headers['content-type'] || '');
-        if (res.statusCode !== 200) { res.resume(); finish(reject, Object.assign(new Error(`http ${res.statusCode}`), { code: 'http', status: res.statusCode })); req.destroy(); return; }
+        if (res.statusCode !== 200) {
+          const parts = [];
+          let n = 0;
+          res.on('data', (c) => { if (n < 2000) { parts.push(c); n += c.length; } });
+          res.on('end', () => { finish(reject, Object.assign(new Error(`http ${res.statusCode}`), { code: 'http', status: res.statusCode, detail: Buffer.concat(parts).toString('utf8').slice(0, 300).trim() })); req.destroy(); });
+          res.on('error', (e) => finish(reject, Object.assign(e, { code: 'unreachable' })));
+          return;
+        }
         if (!/json/i.test(type)) { res.resume(); finish(reject, Object.assign(new Error('not json'), { code: 'not_json' })); req.destroy(); return; }
         const chunks = [];
         let size = 0;
@@ -216,6 +224,24 @@ function createBurstClient({ home = os.homedir(), platform = process.platform, i
     return { ok: true };
   }
 
+  // The one narrow mutation besides upgrade: POST /api/compaction replaces Burst's whole
+  // compaction config, so this re-reads it through the full trust check and changes only
+  // `enabled` (and `mode`). An unexpected shape fails closed with nothing sent.
+  async function setCompaction({ enabled, mode } = {}) {
+    const bad = (msg) => Object.assign(new Error(msg), { code: 'bad_config' });
+    if (typeof enabled !== 'boolean' || (mode !== undefined && !COMPACTION_MODES.has(mode))) throw Object.assign(new Error('bad request'), { code: 'bad_request' });
+    const d = await detect();
+    if (d.kind !== 'present') throw Object.assign(new Error('Burst is not trusted right now'), { code: 'not_present' });
+    const raw = await send('GET', '/api/state');
+    const cfg = raw && raw.pid === d.pid && raw.context && raw.context.compaction;
+    if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg) || typeof cfg.enabled !== 'boolean') throw bad('Burst did not report a compaction setting');
+    if ('mode' in cfg && !COMPACTION_MODES.has(cfg.mode)) throw bad('Burst reported a compaction mode Plexiform does not know');
+    if (mode !== undefined && !('mode' in cfg)) throw bad('This Burst has no compaction modes');
+    const r = await send('POST', '/api/compaction', { body: JSON.stringify({ ...cfg, enabled, ...(mode !== undefined ? { mode } : {}) }), header: true, timeout: Math.max(timeoutMs, TEST_TIMEOUT_MS) });
+    if (!r || typeof r.ok !== 'string') throw Object.assign(new Error('Burst did not confirm'), { code: 'bad_json' });
+    return { ok: true };
+  }
+
   const q = (o) => new URLSearchParams(o).toString();
 
   async function usage({ range = '7d', session = '' } = {}) {
@@ -241,7 +267,7 @@ function createBurstClient({ home = os.homedir(), platform = process.platform, i
   }
 
   return {
-    detect, request, testConnection, requestUpgrade, usage, sessionSecondaryUsd, handoverAudit, handoverFile,
+    detect, request, testConnection, requestUpgrade, setCompaction, usage, sessionSecondaryUsd, handoverAudit, handoverFile,
     binPath,
     adminUrl: () => (addr ? `http://${addr.host === '::1' ? '[::1]' : addr.host}:${addr.port}/` : null),
   };
