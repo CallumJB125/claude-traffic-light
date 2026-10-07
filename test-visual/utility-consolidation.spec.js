@@ -62,9 +62,8 @@ test('ordinary utilities stay in the main app and Widget configuration contains 
       }
     }
     await select('settings');
-    await inspect('settings.html', 'document.querySelector("#workingStaleMinutes").value = "42"; document.querySelector("#workingStaleMinutes").dispatchEvent(new Event("change")); true');
-    // Explicit form save proves settings mutations use the embedded owner.
-    await inspect('settings.html', 'document.querySelector("#save").click(); true');
+    await inspect('settings.html', 'document.querySelector("#workingStaleMinutes").value = "42"; document.querySelector("#workingStaleMinutes").dispatchEvent(new Event("change", { bubbles: true })); true');
+    // The change autosaves, which proves settings mutations use the embedded owner.
     await expect.poll(() => JSON.parse(fs.readFileSync(path.join(h.home, 'config.json'), 'utf8')).workingStaleMinutes).toBe(42);
     expect(errors).toEqual([]);
     if (evidence) {

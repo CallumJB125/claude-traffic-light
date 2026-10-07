@@ -142,5 +142,5 @@
 
   $('backups').addEventListener('toggle', () => { if ($('backups').open) refresh(); });
   $('feedback-open').addEventListener('click', () => api.openFeedback());
-  api.onShowSection((id) => { if (id === 'backups') { $('backups').open = true; $('backups').scrollIntoView({ block: 'start' }); } });
+  api.onShowSection((id) => { if (id === 'backups') { if (window.showSettingsSection) window.showSettingsSection('advanced'); $('backups').open = true; $('backups').scrollIntoView({ block: 'start' }); } });
 })();
