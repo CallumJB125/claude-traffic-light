@@ -607,6 +607,11 @@
   .mix-card .d { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; margin: 3px 0 8px; }
   .mix-rec { font-size: 12px; color: var(--text); line-height: 1.45; padding-top: 10px; border-top: 1px solid var(--line); }
   .mix-card .note { font-size: 11px; color: var(--faint); }
+  /* cost guard callouts (usage-waste-view.js) */
+  .cg { display: flex; flex-direction: column; gap: 12px; }
+  .cg[hidden] { display: none; }
+  .cg-row { font-size: 12px; display: block; }
+  .cg-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
 
 
   /* ── Usage history charts (usage-view.js) ─────────────────────────────
@@ -1343,6 +1348,7 @@
         <div class="mix-rec" id="mix-rec"></div>
         <div class="note">Estimate — "routine" means a reply under 400 tokens on under 4k new tokens of context. The saving prices those same tokens at Sonnet rates; the low end allows 35% more tokens on the cheaper model. Quality effects aren't counted.</div>
       </div>
+      <div id="usage-waste" class="cg" aria-label="Cost guard" hidden></div>
       <div id="usage-history" aria-label="Usage history"></div>
     </section>
   </div>
@@ -1468,6 +1474,7 @@
 <script src="stats.js"></script>
 <script src="usage-insights.js"></script>
 <script src="usage-view.js"></script>
+<script src="usage-waste-view.js"></script>
 <script src="lights-view.js"></script>
 <script src="lights-auto.js"></script>
 <script src="burst-chip.js"></script>

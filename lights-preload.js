@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld('lightsApi', {
   showAutoAnswer: process.env.PLEXIFORM_SHOW_AUTOANSWER === '1',
   modelMix: () => ipcRenderer.invoke('model-mix'),
   usageBundle: (q) => ipcRenderer.invoke('usage-bundle', q),
+  costGuard: { report: () => ipcRenderer.invoke('cost-guard:report'), set: (v) => ipcRenderer.invoke('cost-guard:set', v) },
   previewSound: (name) => ipcRenderer.invoke('preview-sound', name),
   chooseSoundFile: () => ipcRenderer.invoke('choose-sound-file'),
   exportRules: (rules) => ipcRenderer.invoke('export-rules', rules),

@@ -1683,7 +1683,7 @@ SetupsLocal.register(ipcMain);
 onQuit(app,()=>SetupsLocal.close());
 
 // Paid-tier packages (src/paid-wiring.js): each registers itself if present; nothing here may block startup.
-try { require('./src/paid-wiring.js').registerAll({ app, ipcMain, rootDir: ROOT_DIR, buddy: () => buddyWin, fromPage: fromUtilityPage, onQuit: (fn) => onQuit(app, fn), log: (m) => console.warn(m) }); } catch (e) { console.warn('[paid] wiring failed:', e?.message ?? e); }
+try { require('./src/paid-wiring.js').registerAll({ app, ipcMain, rootDir: ROOT_DIR, buddy: () => buddyWin, fromPage: fromUtilityPage, onQuit: (fn) => onQuit(app, fn), log: (m) => console.warn(m), spend: () => spendSnapshot(loadConfig()), runawayStoppers: () => runawayStoppers, usageTurns: () => getUsageTurns(), ownedSessions: { list: () => InteractionMain.listOwned(), target: (s) => InteractionMain.sharedTarget(s) } }); } catch (e) { console.warn('[paid] wiring failed:', e?.message ?? e); }
 
 // Settings → Account & team, and the widget's one-time Team hint. Each
 // handler checks its sender; the page to open is never taken from the renderer.
@@ -3713,7 +3713,8 @@ function spendNote(rules, fired, sessions, spend) {
 // Hook point for the board runner (later): a runner that spawned a session
 // registers `sessionId → stop()` here, and that session's runaway
 // notification gets a Stop button that calls it (killing the supervised
-// process). Interactive sessions never register, so they only ever get the
+// process); src/spend-enforce.js registers Plexiform-owned Claude sessions'
+// interrupt. Interactive sessions never register, so they only ever get the
 // notification and the jump to their terminal.
 const runawayStoppers = new Map();
 utilityHandle('get-spend', settingsOnly, () => {
