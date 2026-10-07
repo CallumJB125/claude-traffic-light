@@ -74,9 +74,14 @@ const SECTIONS = [
 ];
 // Small links under the sections, not a section of their own.
 const FOOTER = ['help', 'feedback', 'updates'];
-// Setups has no Apply or Undo yet, so it stays out of the sidebar. The page and
-// its deep link remain; PLEXIFORM_SHOW_SETUPS=1 puts the entry back for development.
-if (process.env.PLEXIFORM_SHOW_SETUPS === '1') SECTIONS.find((s) => s.id === 'settings').pages.splice(5, 0, 'setups');
+// Setups is listed only once it works: its local Apply and Undo are held
+// (main.js passes accepted:false to src/setups-main.js, which refuses every
+// local operation) and personal export/import is not built, so a listed page
+// would offer controls that cannot work. Flip SETUPS_READY when they ship; the
+// entitlement (setups.personal, a free feature) then lists it with no env var.
+// The page and its deep link remain; PLEXIFORM_SHOW_SETUPS=1 lists it for development.
+const SETUPS_READY = false;
+if (process.env.PLEXIFORM_SHOW_SETUPS === '1' || (SETUPS_READY && require('../src/entitlements').has('setups.personal'))) SECTIONS.find((s) => s.id === 'settings').pages.splice(5, 0, 'setups');
 
 // Calendar and Timeline are project-planning views and AI runs have no due dates, so they
 // leave the sub-nav; the pages and deep links stay. PLEXIFORM_SHOW_PLANNER=1 restores them.
