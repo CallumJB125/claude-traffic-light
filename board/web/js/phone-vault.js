@@ -11,6 +11,11 @@
 // browser as bytes), and the computers it is paired with ({did, dev,
 // desktopAgree} per host device id: public values only). Signing out wipes
 // both, so a new sign-in must pair again.
+//
+// Phone approvals (W2-B, phone-approvals.js) add, per pairing: the desktop's
+// signing key (dpk, public), this phone's own ECDSA signing key for that
+// pairing (generated non-extractable, fresh per pairing, so a phone whose
+// earlier key was revoked can pair again) and the id of its passkey there.
 import { generateAgreementKey, exportAgreementPublic, importAgreementPublic } from './phone-e2e.js';
 
 const DB = 'plexiform-phone';
@@ -96,12 +101,25 @@ export function createVault({ kv, subtle = globalThis.crypto.subtle, getRandomVa
       const p = await kv.get('pairings');
       return p && typeof p === 'object' ? { ...p } : {};
     },
-    /** After a pairing (W2-B): the desktop's id, this phone's id there, and the desktop's ECDH public key. */
-    async savePairing(hostId, { did, dev, desktopAgree }) {
+    /** After a pairing (W2-B): the desktop's id, this phone's id there, and the desktop's ECDH public key; for approvals also its signing key (dpk) and this phone's signing key pair there. */
+    async savePairing(hostId, { did, dev, desktopAgree, dpk = null, sign = null }) {
       if (typeof hostId !== 'string' || !hostId || !ID.test(did) || !ID.test(dev)) throw new TypeError('bad pairing');
       await importAgreementPublic(desktopAgree);
+      if (dpk !== null && (typeof dpk !== 'string' || !/^[A-Za-z0-9_-]{80,100}$/.test(dpk))) throw new TypeError('bad pairing');
+      if (sign !== null && (sign.privateKey?.extractable !== false || !sign.publicKey)) throw new TypeError('bad pairing');
       const all = await this.pairings();
-      all[hostId] = { did, dev, desktopAgree };
+      all[hostId] = { did, dev, desktopAgree, ...(dpk ? { dpk } : {}), ...(sign ? { sign: { privateKey: sign.privateKey, publicKey: sign.publicKey } } : {}) };
+      await kv.set('pairings', all);
+    },
+    /** A new non-extractable ECDSA P-256 key pair for one pairing (kept only once savePairing stores it). */
+    newSigningKey() {
+      return subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign', 'verify']);
+    },
+    /** The passkey this phone registered with that computer (its credential id, public). */
+    async savePasskey(hostId, credentialId) {
+      const all = await this.pairings();
+      if (!all[hostId] || typeof credentialId !== 'string' || !/^[A-Za-z0-9_-]{16,1366}$/.test(credentialId)) throw new TypeError('bad passkey');
+      all[hostId] = { ...all[hostId], credentialId };
       await kv.set('pairings', all);
     },
     async forgetPairing(hostId) {

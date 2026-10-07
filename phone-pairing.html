@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; base-uri 'none'; form-action 'none'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Phone</title><link rel="stylesheet" href="tokens.css"><link rel="stylesheet" href="checkpoints.css"><link rel="stylesheet" href="phone-pairing.css"></head>
+<body><main>
+<header><div><h1>Phone <span class="pill">Plus</span></h1><p class="muted">Answer this computer’s permission requests from your phone, and start tasks from it. Every answer needs your phone’s passkey (Face ID, Touch ID or fingerprint). Your team hub only passes along encrypted messages, and a notification only says that something needs you.</p></div></header>
+<section id="plan" hidden aria-labelledby="plan-title"><h2 id="plan-title">Part of Plexiform Plus</h2><p class="muted">Phone approvals and tasks come with Plus. Everything else on your phone stays as it is.</p><button id="upgrade" type="button">See plans</button></section>
+<section id="setup" aria-labelledby="setup-title"><h2 id="setup-title">Phone approvals</h2>
+<label class="toggle"><input id="enabled" type="checkbox"> Let my paired phones answer requests and start tasks on this computer</label>
+<p id="status" role="status" aria-live="polite">Loading…</p>
+<p class="muted">Some requests can never be approved from a phone, for example dangerous shell commands, running a downloaded script, touching credentials or agent settings, or anything in a repository you marked as production: your phone shows them as “desk only” and can only deny them. A phone’s answer expires after 90 seconds and only counts for the exact request it was shown.</p>
+</section>
+<section id="pair-box" aria-labelledby="pair-title"><h2 id="pair-title">Pair a phone</h2>
+<p class="muted">On your phone, open your team hub’s <code>/phone/</code> page, sign in, and scan this code with the phone’s camera, or copy the link to the phone. The link holds a one-time secret: show it only to your own phone.</p>
+<div id="pairing"></div>
+<button id="pair" type="button">Show a pairing code</button>
+</section>
+<section id="devices-box" aria-labelledby="devices-title"><h2 id="devices-title">Paired phones</h2><div id="devices"></div></section>
+</main><script src="src/qr.js"></script><script src="src/remote-pairing-view.js"></script></body></html>

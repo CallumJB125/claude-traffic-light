@@ -356,8 +356,8 @@ otherwise `unknown` ("not applied — check at your desk").
 ## 10. Open items
 
 - **O1** Teammate device certificates (§12.1). Not built; teammates off.
-- **O2** Build the PWA per §11 (separate origin, CSP/SRI, passkey), then wire
-  `verifyAssertion` into `handleDecision` as a required second factor.
+- **O2** PWA built and passkey wired as a required second factor (W2-B);
+  the separate origin with CSP/SRI is still to do (owner-gated, `docs/PHONE-RUNBOOK.md`).
 - **O3** E2E encryption of request notices (§12.2).
 - **O4** Verify P-256 WebCrypto, non-extractable `CryptoKey` in IndexedDB, and
   platform passkeys (UV) on a real iOS 16.4+ home-screen PWA.
@@ -384,8 +384,12 @@ Decided after the first review (2026-09-30):
    and (2) even if it runs, it needs a fresh user verification per decision
    and the OS prompt is tied to the pinned origin, so no silent batch signing.
 
-Not yet wired into `handleDecision` (the PWA registration flow comes with the
-PWA); until it is, R1/R2 stay open.
+W2-B wires (2): `RemoteApprovals` takes a `secondFactor` (`passkeyFactor` in
+`webauthn.js`), the PWA registers a passkey right after pairing
+(`verifyRegistration`, one per pairing, within 10 minutes) and every decision
+carries an assertion (`src/remote-approvals-main.js`, `docs/PHONE-RUNBOOK.md`).
+(1), the separate origin, is owner-gated and still open: until it exists the
+hub serves the PWA and the passkey origin pinned is the hub's own.
 
 ## 12. Future designs (specified, not built)
 

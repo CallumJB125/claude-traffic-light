@@ -100,6 +100,8 @@ export function createApi({ fetch, uuid, origin = '', e2e = null }) {
   return {
     setToken(t) { token = t; if (!t) e2e?.reset(); },
     hasToken: () => !!token,
+    // Phone approvals (phone-approvals.js) use the same authenticated requests on their own routes.
+    request,
     hosts: (o) => request('GET', '/api/interaction/v1/hosts', undefined, o),
     call,
     shared: (o) => request('GET', '/api/interaction/v1/shared', undefined, o),

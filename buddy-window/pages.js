@@ -46,6 +46,8 @@ const PAGES = [
   { id: 'clients', title: 'Client billing', icon: 'chart', kind: 'local', file: 'clients-local.html', preload: 'clients-preload.js', group: 'you' },
   { id: 'setups', title: 'Setups', icon: 'layers', kind: 'local', file: 'setups.html', preload: 'setups-preload.js', group: 'you', hidden: true },
   { id: 'thismac', title: 'This Mac', icon: 'laptop', kind: 'local', screen: 'thismac', group: 'you' },
+  // Phone approvals and pairing (src/remote-approvals-main.js serves its IPC; Plus shows an upsell otherwise).
+  { id: 'phone', title: 'Phone', icon: 'bell', kind: 'local', file: 'phone-pairing.html', preload: 'phone-pairing-preload.js', group: 'you' },
   { id: 'account', title: 'Account', icon: 'user', kind: 'local', screen: 'account', group: 'you' },
   // Paid plan (src/entitlement-refresh.js serves its IPC): plan, limits, grace days, Upgrade / Manage billing.
   { id: 'upgrade', title: 'Plan & billing', icon: 'user', kind: 'local', file: 'upgrade.html', preload: 'upgrade-preload.js', group: 'you', hidden: true },
@@ -76,7 +78,7 @@ const SECTIONS = [
   { id: 'tasks', title: 'Tasks', icon: 'tasks', default: 'tasks', pages: ['tasks'] },
   { id: 'usage', title: 'Usage & cost', icon: 'chart', default: 'usage', pages: ['usage', 'stats', 'optimiser', 'clients'] },
   { id: 'team', title: 'Team', icon: 'team', default: 'team', pages: ['team', 'integrations', 'account'] },
-  { id: 'settings', title: 'Settings', icon: 'gear', default: 'aitools', pages: ['aitools', 'settings', 'thismac', 'lights', 'hatch'] },
+  { id: 'settings', title: 'Settings', icon: 'gear', default: 'aitools', pages: ['aitools', 'settings', 'thismac', 'phone', 'lights', 'hatch'] },
 ];
 // Small links under the sections, not a section of their own.
 const FOOTER = ['help', 'feedback', 'updates'];
@@ -88,7 +90,7 @@ const FOOTER = ['help', 'feedback', 'updates'];
 // The page and its deep link remain; PLEXIFORM_SHOW_SETUPS=1 lists it for development.
 const SETUPS_READY = true;
 if (process.env.PLEXIFORM_SHOW_SETUPS === '1' || (SETUPS_READY && require('../src/entitlements').has('setups.personal'))) {
-  SECTIONS.find((s) => s.id === 'settings').pages.splice(5, 0, 'setups');
+  SECTIONS.find((s) => s.id === 'settings').pages.splice(6, 0, 'setups');
   PAGES.find((p) => p.id === 'setups').hidden = false;
 }
 // Plan & billing is listed once paid plans can work: a hub key pinned in

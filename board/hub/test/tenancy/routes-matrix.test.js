@@ -63,6 +63,12 @@ const MATRIX = {
   'DELETE /api/interaction/v1/shares/:share_id': { kind: 'cross', path: f => `/api/interaction/v1/shares/${f.B.share}` },
   'DELETE /api/teams/:team_id/interaction-shares/:share_id': { kind: 'cross', path: f => `/api/teams/${f.B.team}/interaction-shares/${f.B.share}` },
   'GET /api/interaction/v1/shared': { kind: 'self' },
+  // Phone approvals (W2-B): a foreign computer is "not available"; ping and push are the caller's own.
+  'POST /api/approvals/v1/hosts/:host_id/call': { kind: 'cross', path: f => `/api/approvals/v1/hosts/${f.users.ub.device_id}/call`, body: { op: 'pair.poll', args: { pid: 'x' } } },
+  'POST /api/approvals/v1/ping': { kind: 'self' },
+  'GET /api/push/v1/key': { kind: 'self' },
+  'PUT /api/push/v1/subscription': { kind: 'self' },
+  'DELETE /api/push/v1/subscription': { kind: 'self' },
   'POST /api/interaction/v1/shared/:share_id/call': { kind: 'cross', path: f => `/api/interaction/v1/shared/${f.B.share}/call`, body: f => ({ op: 'state', args: { session: f.B.shareSession } }) },
   // Messaging (MESSAGING.md): a message is visible only to its sender and recipient; B's message ids, targets and team are unknown to A.
   'GET /api/messaging/v1/targets': { kind: 'self' },

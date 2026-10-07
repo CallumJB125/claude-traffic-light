@@ -84,6 +84,9 @@ export function loadConfig(env = process.env) {
       'team:month': env.BOARD_BILLING_PRICE_TEAM_MONTH || null, 'team:year': env.BOARD_BILLING_PRICE_TEAM_YEAR || null,
     },
     entitlementKeyFile: env.BOARD_ENTITLEMENT_KEY_FILE ? resolve(env.BOARD_ENTITLEMENT_KEY_FILE) : null,
+    // Phone push (board/hub/push.js): off unless the operator sets a VAPID key pair (docs/PHONE-RUNBOOK.md).
+    pushVapidPublicKey: env.BOARD_PUSH_VAPID_PUBLIC_KEY || null,
+    pushVapidSubject: env.BOARD_PUSH_VAPID_SUBJECT || null,
   };
   // Non-enumerable, so JSON.stringify, util.inspect and spreads of the config never carry them.
   const hidden = (value) => ({ value, enumerable: false, writable: false, configurable: false });
@@ -98,6 +101,7 @@ export function loadConfig(env = process.env) {
     signupAllow: hidden(env.BOARD_SIGNUP_ALLOW || null),
     billingApiKey: hidden(env.BOARD_BILLING_API_KEY || null),
     billingWebhookSecret: hidden(env.BOARD_BILLING_WEBHOOK_SECRET || null),
+    pushVapidPrivateKey: hidden(env.BOARD_PUSH_VAPID_PRIVATE_KEY || null),
   });
   // Only from the real environment (nothing started later inherits them); a test's env object stays as given.
   if (env === process.env) {
@@ -114,6 +118,7 @@ export function loadConfig(env = process.env) {
   delete env.BOARD_GITHUB_WEB_CLIENT_SECRET;
   delete env.BOARD_BILLING_API_KEY;
   delete env.BOARD_BILLING_WEBHOOK_SECRET;
+  delete env.BOARD_PUSH_VAPID_PRIVATE_KEY;
   validateConfig(cfg);
   return cfg;
 }
@@ -204,6 +209,7 @@ const SECRET_VARS = Object.freeze([
   ['BOARD_GITHUB_TOKEN', 'githubToken'],
   ['BOARD_GOOGLE_WEB_CLIENT_SECRET', 'googleWebClientSecret'], ['BOARD_GITHUB_WEB_CLIENT_SECRET', 'githubWebClientSecret'],
   ['BOARD_BILLING_API_KEY', 'billingApiKey'], ['BOARD_BILLING_WEBHOOK_SECRET', 'billingWebhookSecret'],
+  ['BOARD_PUSH_VAPID_PRIVATE_KEY', 'pushVapidPrivateKey'],
 ]);
 
 export const SIGNUP_MODES = Object.freeze(['open', 'allowlist']);
@@ -312,6 +318,12 @@ export function validateConfig(cfg) {
     if (cfg.billingProvider !== 'stripe') throw new Error(`BOARD_BILLING_PROVIDER must be stripe, got ${cfg.billingProvider}`);
     if (cfg.auth !== 'accounts') throw new Error('BOARD_BILLING_PROVIDER needs BOARD_AUTH=accounts');
     if (!cfg.billingApiKey || !cfg.billingWebhookSecret) throw new Error('BOARD_BILLING_PROVIDER needs BOARD_BILLING_API_KEY and BOARD_BILLING_WEBHOOK_SECRET');
+  }
+  const push = [cfg.pushVapidPublicKey, cfg.pushVapidPrivateKey, cfg.pushVapidSubject];
+  if (push.some(Boolean)) {
+    if (!push.every(Boolean)) throw new Error('phone push needs BOARD_PUSH_VAPID_PUBLIC_KEY, BOARD_PUSH_VAPID_PRIVATE_KEY and BOARD_PUSH_VAPID_SUBJECT together');
+    if (cfg.auth !== 'accounts') throw new Error('phone push needs BOARD_AUTH=accounts');
+    if (!/^(mailto:[^\s@]+@[^\s@]+|https:\/\/\S+)$/.test(cfg.pushVapidSubject)) throw new Error('BOARD_PUSH_VAPID_SUBJECT must be a mailto: or https: address');
   }
   // Local = the hub embedded in the desktop app: only its own window may reach it.
   if (cfg.auth === 'local') {

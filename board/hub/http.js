@@ -37,6 +37,7 @@ import { createRemoteHttp } from './remote/http.js';
 import { strictJson } from './remote/validation.js';
 import { readWorkContext, guardWorkContext, workContextArgs } from './work-context.js';
 import { InteractionRelay, INTERACTION_WS_PATH } from './interaction-relay.js';
+import { ApprovalRelay } from './approval-relay.js';
 import { InteractionShares } from './interaction-shares.js';
 import { Messaging } from './messaging.js';
 import { handleWebhook as billingWebhook } from './billing/webhook.js';
@@ -88,11 +89,16 @@ const WEB_FILES = new Set([
   'phone.css', 'phone-icon-192.png', 'phone-icon-512.png',
 ]);
 const WEB_JS = /^js\/[a-z][a-z0-9-]*\.js$/;
+// The phone's copies of the approval security core (byte-identical to remote/src and src/deny, drift-tested).
+const WEB_REMOTE = /^js\/remote\/(?:encoding|canonical|envelope|keys|registry|decision|pairing)\.js$/;
 // The only routes a relay-scoped (phone) sign-in may use; everything else is 403.
 export const RELAY_SCOPE_ROUTES = new Set([
   'GET /api/interaction/v1/hosts', 'POST /api/interaction/v1/hosts/:host_id/call',
   'GET /api/interaction/v1/shared', 'POST /api/interaction/v1/shared/:share_id/call',
   'PUT /api/interaction/v1/role', // client only (interaction-relay.js setRole)
+  // Phone approvals (approval-relay.js: sealed only, pairing plain) and its push subscription (push.js).
+  'POST /api/approvals/v1/hosts/:host_id/call',
+  'GET /api/push/v1/key', 'PUT /api/push/v1/subscription', 'DELETE /api/push/v1/subscription',
   'POST /api/auth/signout',
 ]);
 // Accounts mode: pages served without auth (their JS talks to /api/auth/*;
@@ -370,6 +376,9 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     hub.interactionRelay.routes(route);
     hub.interactionShares ??= new InteractionShares(hub, hub.interactionRelay);
     hub.interactionShares.routes(route);
+    hub.push?.routes(route);
+    hub.approvalRelay ??= new ApprovalRelay(hub, hub.interactionRelay, hub.push, config.approvalLimits);
+    hub.approvalRelay.routes(route);
     hub.messaging ??= new Messaging(hub, config.messagingLimits);
     hub.messaging.routes(route);
     const acc = hub.accounts;
@@ -739,7 +748,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     if (pathname.startsWith('/web/')) {
       const rel = pathname.slice(5);
       if (WEB_FILES.has(rel)) return join(config.webDir, rel);
-      return WEB_JS.test(rel) && exactCase(config.webDir, rel) ? join(config.webDir, rel) : null;
+      return (WEB_JS.test(rel) || WEB_REMOTE.test(rel)) && exactCase(config.webDir, rel) ? join(config.webDir, rel) : null;
     }
     return null;
   }

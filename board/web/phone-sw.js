@@ -4,10 +4,17 @@
 // a GET, or any other path: those go straight to the network, uncached.
 // Shell files are network-first (the hub serves them no-cache + ETag), so a
 // deploy is picked up on the next online load.
-const CACHE = 'plexiform-phone-v2';
+//
+// Push (W2-B, board/hub/push.js): the hub sends an EMPTY push. This worker
+// never reads a payload: it shows a fixed "needs you" notification, and a
+// tap opens the approvals screen, which fetches what is waiting through the
+// end-to-end relay. Nothing about the request is in the push.
+const CACHE = 'plexiform-phone-v3';
 const SHELL = [
   '/phone/', '/phone/manifest.webmanifest', '/web/phone.css', '/web/phone-icon-192.png', '/web/phone-icon-512.png',
   '/web/js/phone-app.js', '/web/js/phone-core.js', '/web/js/phone-render.js', '/web/js/phone-vault.js', '/web/js/phone-e2e.js', '/web/js/h.js',
+  '/web/js/phone-approvals.js', '/web/js/remote/encoding.js', '/web/js/remote/canonical.js', '/web/js/remote/envelope.js',
+  '/web/js/remote/keys.js', '/web/js/remote/registry.js', '/web/js/remote/decision.js', '/web/js/remote/pairing.js',
 ];
 
 function shellPath(request) {
@@ -43,5 +50,23 @@ self.addEventListener('fetch', (e) => {
       if (hit) return hit;
       throw new Error('offline');
     }
+  })());
+});
+
+// Content-free: whatever a push carries is ignored.
+self.addEventListener('push', (e) => {
+  e.waitUntil(self.registration.showNotification('Plexiform', {
+    body: 'Something on your computer needs you.', tag: 'plexiform-needs-you', renotify: true,
+    icon: '/web/phone-icon-192.png', badge: '/web/phone-icon-192.png',
+  }));
+});
+
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  e.waitUntil((async () => {
+    const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    const open = wins.find((w) => new URL(w.url).pathname.startsWith('/phone/'));
+    if (open) { open.postMessage({ type: 'plexiform-open-approvals' }); return open.focus(); }
+    return self.clients.openWindow('/phone/#approvals');
   })());
 });

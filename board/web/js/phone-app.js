@@ -4,6 +4,7 @@ import { render } from './h.js';
 import { createApi, createController, createE2E } from './phone-core.js';
 import { createVault, idbKv } from './phone-vault.js';
 import { phoneView } from './phone-render.js';
+import { createApprovals, approvalsView } from './phone-approvals.js';
 
 const root = document.getElementById('app');
 const guessName = () => {
@@ -15,13 +16,35 @@ const guessName = () => {
 };
 
 const vault = createVault({ kv: idbKv() });
-const api = createApi({ fetch: (...a) => fetch(...a), uuid: () => crypto.randomUUID(), e2e: createE2E({ store: vault }) }); // privacy-flow: phone-control
+const e2e = createE2E({ store: vault });
+const api = createApi({ fetch: (...a) => fetch(...a), uuid: () => crypto.randomUUID(), e2e }); // privacy-flow: phone-control
 const ctl = createController({ api, vault, online: () => navigator.onLine, deviceName: guessName() });
 const ui = { confirmClose: false };
+
+// Phone approvals (phone-approvals.js). A pairing link's fragment is read once
+// and removed from the address bar; it never reaches a server.
+const swReg = 'serviceWorker' in navigator ? navigator.serviceWorker.register('/phone/sw.js', { scope: '/phone/' }).catch(() => null) : Promise.resolve(null);
+const pushAdapter = 'PushManager' in globalThis ? {
+  state: () => (globalThis.Notification?.permission === 'denied' ? 'denied' : 'off'),
+  async subscribe(key) {
+    const reg = await swReg;
+    if (!reg) throw new Error('no service worker');
+    return reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key }); // privacy-flow: phone-push
+  },
+} : null;
+const appr = createApprovals({ api, e2e, vault, credentials: navigator.credentials, push: pushAdapter, origin: location.origin, rpId: location.hostname, uuid: () => crypto.randomUUID(), deviceName: guessName() });
+let pendingPair = location.hash.startsWith('#pair=') ? location.hash.slice(1) : '';
+let wantApprovals = !!pendingPair || location.hash === '#approvals';
+if (location.hash) history.replaceState(null, '', '/phone/');
+const signedIn = () => !['boot', 'signin'].includes(ctl.state.view);
+function openApprovals() { wantApprovals = false; const text = pendingPair; pendingPair = ''; appr.open(text); }
+appr.subscribe(() => paint());
 const DEPTH = { sessions: 1, session: 2 };
 let lastView = null;
 
 function paint() {
+  if (appr.state.open && signedIn()) { render(root, approvalsView(appr.state, Date.now())); return; }
+  if (wantApprovals && signedIn()) { openApprovals(); return; }
   const st = ctl.state;
   if (st.view !== lastView) {
     // Going deeper adds a history entry, so the system back gesture works.
@@ -45,6 +68,15 @@ root.addEventListener('click', async (e) => {
   const action = b.getAttribute('data-action');
   if (action !== 'close') ui.confirmClose = false;
   switch (action) {
+    case 'open-approvals': return openApprovals();
+    case 'approvals-back': appr.close(); lastView = null; return paint();
+    case 'approvals-refresh': return appr.load();
+    case 'approve': case 'deny': {
+      const [host, requestId] = String(id).split('|');
+      return appr.decide(host, requestId, action === 'approve' ? 'allow' : 'deny');
+    }
+    case 'push-on': return appr.enablePush();
+    case 'task-voice': return listen();
     case 'dismiss': return ctl.dismissNotice();
     case 'restart-signin': return ctl.restartSignIn();
     case 'signout': return ctl.signOut();
@@ -70,6 +102,8 @@ root.addEventListener('submit', async (e) => {
   const f = e.target;
   const form = f.getAttribute('data-form');
   if (form === 'email') return ctl.startSignIn(f.elements.email.value, f.elements.device_name.value);
+  if (form === 'pair') return appr.pair(f.elements.link.value);
+  if (form === 'task') return appr.startTask(f.elements.host.value, f.elements.provider.value, f.elements.text.value);
   if (form === 'code') return ctl.verifyCode(f.elements.code.value);
   if (form === 'send') {
     const box = f.elements.text;
@@ -99,5 +133,18 @@ setInterval(() => {
   else if (ctl.state.view === 'sessions') ctl.loadSessions();
 }, 15_000);
 
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('/phone/sw.js', { scope: '/phone/' }).catch(() => {});
+// Voice for "Start a task": the browser's own speech recognition, into the text box.
+function listen() {
+  const SR = globalThis.SpeechRecognition || globalThis.webkitSpeechRecognition;
+  const box = document.getElementById('task-text');
+  if (!SR || !box) return;
+  const rec = new SR();
+  rec.lang = navigator.language || 'en-US';
+  rec.interimResults = false;
+  rec.onresult = (ev) => { const t = Array.from(ev.results).map((r) => r[0]?.transcript ?? '').join(' ').trim(); if (t) box.value = box.value ? `${box.value} ${t}` : t; };
+  rec.start(); // privacy-flow: phone-voice
+}
+
+// A notification tap while the app is open.
+navigator.serviceWorker?.addEventListener?.('message', (e) => { if (e.data?.type === 'plexiform-open-approvals') { if (signedIn()) openApprovals(); else wantApprovals = true; } });
 ctl.boot();

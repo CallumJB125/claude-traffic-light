@@ -109,9 +109,11 @@ devices, account deletion step-ups, runners or hosting.
 
 ## Residual risks (open)
 
-1. **Not wired yet.** `main.js` does not pass `e2e` to the host and the PWA
-   has no pairing screen (both W2-B). Until then every phone call is the old
-   plaintext relay, and PRIVACY.md says so. The guarantee is dormant.
+1. **Wired by W2-B, for Plus only.** `src/remote-approvals-main.js` gives the
+   host `e2e` (required while phone approvals are on) and Settings → Phone
+   pairs a phone (`docs/PHONE-RUNBOOK.md`). Without Plus, or with phone
+   approvals off, an unpaired phone's calls stay the old plaintext relay, as
+   PRIVACY.md says.
 2. **Same-origin script (R1).** The PWA is still served from the hub origin.
    A hub that serves malicious JS can *use* the non-extractable key (decrypt
    and send as the phone) — E2E protects against a passive or relaying hub,

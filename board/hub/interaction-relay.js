@@ -74,7 +74,8 @@ export function encShapeOk(enc, ctMax = ENC_CT_MAX) {
 }
 export const RESUME_HEADER = 'x-plexiform-resume';
 // Ops whose effect may have happened even when the device's answer is lost.
-const MUTATING = new Set(['launch', 'send', 'interrupt', 'close']);
+// (approval-relay.js ops too: a decision, a passkey, a started task, a pairing step.)
+const MUTATING = new Set(['launch', 'send', 'interrupt', 'close', 'approvals.decide', 'approvals.passkey', 'tasks.start', 'pair.init', 'pair.reveal']);
 const ROLES = ['client', 'host'];
 // Platforms the desktop app reports at sign-in (`${process.platform}-${arch}`,
 // or the bare platform). Only these may host: the phone ('phone-web') and any
@@ -258,12 +259,17 @@ export class InteractionRelay {
     if (!sealed && body.op === 'hello') throw invalid();
     const args = body.args ?? {};
     if (!sealed && Buffer.byteLength(JSON.stringify(args)) > this.limits.argsBytes) throw new HubError('PAYLOAD_TOO_LARGE', 'message too large');
+    return this.forward(ident, hostId, body.request_id, body.op, sealed ? { enc: body.enc } : { args });
+  }
+
+  /** A checked call (this file's or approval-relay.js's) → a live host of the caller's own user → its result. */
+  async forward(ident, hostId, rid, op, payload) {
     const host = this.liveHost(ident.user.id, hostId);
     if (!host) throw noHost();
     if (host.pending.size >= this.limits.pendingPerHost) throw new HubError('RATE_LIMITED', 'that device is busy; try again shortly', { retry_after_s: 1 });
-    if (this.replayed(ident.user.id, body.request_id)) throw new HubError('CONFLICT', 'This request was already sent. Refresh and try again.', { reason: 'REPLAYED' });
-    const frame = { type: 'relay.request', rid: body.request_id, user: ident.user.id, from: ident.cred.id, op: body.op, ...(sealed ? { enc: body.enc } : { args }) };
-    const result = await this.dispatch(host, frame, () => this.unburn(ident.user.id, body.request_id));
+    if (this.replayed(ident.user.id, rid)) throw new HubError('CONFLICT', 'This request was already sent. Refresh and try again.', { reason: 'REPLAYED' });
+    const frame = { type: 'relay.request', rid, user: ident.user.id, from: ident.cred.id, op, ...payload };
+    const result = await this.dispatch(host, frame, () => this.unburn(ident.user.id, rid));
     // Revoked while the device was answering: the answer is not delivered.
     if (!this.credValid(ident.cred)) throw new HubError('UNAUTHENTICATED', 'device token unknown or revoked: sign in again');
     if (!this.liveHost(ident.user.id, hostId)) throw noHost();
