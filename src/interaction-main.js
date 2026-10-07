@@ -153,6 +153,20 @@ function createInteractionMain({ context, readContext = context, adapters: given
       for (const actor of documents.keys()) if (shareable(session, actor)) return { hub, actor };
       return null;
     },
+    // Sessions page Message: only a session Plexiform started, sent as its owning
+    // document through the same guarded send (board, generation, busy turn).
+    async sendLocal(session, text) {
+      if (typeof session !== 'string' || !UUID.test(session) || typeof text !== 'string' || !text.trim() || text.length > 500) return { ok: false, status: 'invalid', error: 'Write a message first.' };
+      for (const actor of documents.keys()) {
+        const state = hub.state({ session }, actor);
+        if (!state) continue;
+        if (state.ownership !== 'plexiform-owned') break;
+        let result;
+        try { result = await effects.send({ session, generation: state.generation, text }, actor); } catch { result = { ok: false, status: 'unavailable', error: 'The provider did not accept the message.' }; }
+        return { ok: result?.ok === true, status: result?.status ?? 'unavailable', error: result?.ok === true ? null : result?.error ?? 'Could not send it.' };
+      }
+      return { ok: false, status: 'stale', error: 'Plexiform is not running that session any more. Refresh and try again.' };
+    },
     // Session directory: this document's owned sessions (public state + main-only folder name).
     listOwned() { const out = []; for (const actor of documents.keys()) for (const state of hub.list(actor)) out.push({ state, leaf: leaves.get(state.session) ?? null, nativeSessionId: hub.targetOf(state.session), nativeTurnId: hub.reportTurnOf(state.session) }); return out; },
     // Match native provider session identity, never a folder/project label.

@@ -32,7 +32,7 @@ test('all ordinary utility menu routes target main pages except Widget configura
 function handlers() {
   const registered = new Map();
   const pages = Object.fromEntries(['usage', 'stats', 'settings', 'sessions', 'hatch', 'help', 'feedback'].map(id => [id, wc()]));
-  const widget = wc(); const popup = wc(); const observed = []; const opened = [];
+  const widget = wc(); const popup = wc(); const observed = []; const opened = []; const messaged = [];
   const context = {
     require: p => p === './src/utility-pages.js' ? { fromPage } : require(path.join(__dirname, '..', p)),
     buddyWin: { pageWebContents: id => pages[id] }, win: { webContents: widget }, lightsWin: { webContents: popup },
@@ -44,6 +44,7 @@ function handlers() {
     localSessions: sessions => sessions, aggregateState: () => ({ sessions: [{ fixture: 'metadata' }] }),
     IS_DEV_RUN: false, Adapters: { get: () => ({ isActivityInstalled: () => true }) }, os: { homedir: () => '/synthetic' }, HOOK_RUNTIME: {},
     createSettingsWindow: () => opened.push('settings'), Date,
+    InteractionMain: { sendLocal: async (session, text) => { messaged.push([session, text]); return { ok: true, status: 'acknowledged', error: null }; } },
   };
   const start = source.indexOf("const { fromPage } =");
   const end = source.indexOf('// plexiform://', start);
@@ -57,7 +58,7 @@ function handlers() {
   const sessionEnd = source.indexOf('// Overview uses main-owned', sessionStart);
   assert.ok(sessionStart >= 0 && sessionEnd > sessionStart, 'extract the complete Sessions handlers before the separate Overview registration');
   vm.runInNewContext(source.slice(sessionStart, sessionEnd), context);
-  return { registered, pages, widget, popup, observed, opened, context };
+  return { registered, pages, widget, popup, observed, opened, messaged, context };
 }
 
 test('actual main IPC allows analytics reads but refuses unrelated page and subframe requests', () => {
@@ -87,6 +88,21 @@ test('actual Sessions refresh and Preferences IPC require current main-frame Ses
   assert.equal(refresh(event(old)), null);
   f.pages.sessions.isDestroyed = () => true;
   assert.equal(refresh(event(f.pages.sessions)), null);
+});
+
+test('actual Sessions Message IPC requires the Sessions owner and bounded text before the owned-session send', async () => {
+  const f = handlers();
+  const message = f.registered.get('sessions:message');
+  const id = '10000000-0000-4000-8000-000000000001';
+  for (const e of [event(f.widget), event(f.popup), event(f.pages.settings), { sender: f.pages.sessions, senderFrame: {} }, {}]) {
+    assert.deepEqual({ ...(await message(e, id, 'hi')) }, { ok: false, error: 'Not allowed.' });
+  }
+  for (const [session, text] of [[7, 'hi'], [null, 'hi'], [id, ''], [id, '  '], [id, 'a'.repeat(501)], [id, 7]]) {
+    assert.equal((await message(event(f.pages.sessions), session, text)).ok, false);
+  }
+  assert.equal(f.messaged.length, 0);
+  assert.deepEqual(await message(event(f.pages.sessions), id, 'hi'), { ok: true, status: 'acknowledged', error: null });
+  assert.deepEqual(f.messaged, [[id, 'hi']]);
 });
 
 test('Sessions observation failure stays unavailable and never returns the exception', () => {

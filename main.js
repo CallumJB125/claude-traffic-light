@@ -1496,7 +1496,7 @@ const SessionActionsMain = require('./src/session-actions-main.js').register({ i
 ipcMain.handle('sessions:message', (e, session, text) => {
   if (!sessionsSender(e)) return { ok: false, error: 'Not allowed.' };
   if (typeof session !== 'string' || typeof text !== 'string' || !text.trim() || text.length > 500) return { ok: false, error: 'Write a message first.' };
-  return { ok: false, error: 'Messaging a session Plexiform started is not available from this page yet. Use its card in the Overview.' };
+  return InteractionMain.sendLocal(session, text);
 });
 ipcMain.handle('sessions:settings', e => { if (!sessionsSender(e)) return false; createSettingsWindow(); return true; });
 // Overview uses main-owned structured reports/current own-board work only.
