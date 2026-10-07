@@ -1484,6 +1484,7 @@ const MyDay = require('./src/my-day-service.js').createMyDayService({
   open: handle => buddyWin?.openMyDayCard(handle) ?? false,
 });
 const myDaySender = e => !!e.sender && e.sender === buddyWin?.pageWebContents('myday') && e.senderFrame === e.sender.mainFrame;
+const SessionOverview = require('./src/session-overview.js');
 // ── Collision alerts (src/collision-alerts.js) ─────────────────────────────
 // The hub's activity stream (src/activity-stream.js) flags two live sessions
 // editing one file. One notification per collision; Sessions and Home mark the
@@ -1522,7 +1523,6 @@ app.whenReady().then(() => {
   if (stream && !CollisionAlerts.attach(stream, handleActivityEvent)) console.warn('[collision] activity stream offers no subscription');
 });
 if (IS_DEV_RUN && !app.isPackaged && process.env.CLAUDE_BUDDY_COLLISION_HOOK === '1') global.__collisionInject = handleActivityEvent;
-const SessionOverview = require('./src/session-overview.js');
 const ProviderStatus = require('./src/provider-status.js');
 const sessionsSender = e => fromUtilityPage(e, 'sessions');
 const WorktreeShare = require('./src/worktree-share.js').createWorktreeShare({ log: console.log });
