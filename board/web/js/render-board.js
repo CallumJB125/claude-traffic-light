@@ -246,6 +246,17 @@ export function idleLane(entries, model) {
     h('div', { class: 'stalled-body' }, entries.map((e) => card(e, model))));
 }
 
+// Idle sits between In progress and Review like any other column but is
+// derived (a reported session gone quiet), so it is never a drop target.
+export function idleColumn(entries, model) {
+  const count = entries.length;
+  return h('section', { key: 'idle', class: 'column column-idle', 'data-column': 'idle', 'aria-labelledby': 'col-idle' },
+    h('header', { class: 'column-head' },
+      h('h2', { id: 'col-idle', title: 'No update for a few minutes. Hidden after a day; use Show archived to see them.' }, COLUMN_LABEL.idle),
+      h('span', { class: 'column-count num', 'aria-label': `${count} cards` }, String(count))),
+    h('div', { class: 'column-body' }, count ? entries.map((e) => card(e, model)) : [h('p', { key: 'empty', class: 'column-empty' }, EMPTY.idle)]));
+}
+
 // The drop indicator is an empty keyed node between cards: its line is a
 // pseudo-element, so showing it never shifts the layout under the pointer.
 function columnCards(id, shown, model) {
@@ -287,6 +298,7 @@ const EMPTY = {
   in_progress: 'No one is working on anything. Send a card to an AI to start.',
   in_review: 'Nothing to review.',
   done: 'Finished work shows up here.',
+  idle: 'Quiet sessions with no recent update show up here.',
 };
 
 // Local mode only: the board works alone, and a team is where it is shared. The app's
@@ -427,9 +439,8 @@ export function boardScreen(model, body = null) {
     localCard(model),
     model.view === 'dashboard' ? null : filterBar(model),
     body ? null : stalledLane(cols.stalled, model),
-    body ? null : idleLane(cols.idle, model),
-    body ?? h('main', { class: 'board', id: 'board', 'aria-label': 'Board columns' },
-      COLUMNS.map((c) => column(c, cols[c], model))),
+    body ?? h('main', { class: 'board board-with-idle', id: 'board', 'aria-label': 'Board columns' },
+      COLUMNS.flatMap((c) => (c === 'in_review' ? [idleColumn(cols.idle, model), column(c, cols[c], model)] : [column(c, cols[c], model)]))),
     h('p', { id: 'dnd-help', class: 'sr-only' }, 'Cards with no active agent run can be moved. Press Space to pick up, left and right arrows to choose a column, Space to drop, Escape to cancel.'),
     h('div', { class: 'sr-only', role: 'status', 'aria-live': 'assertive', 'aria-atomic': 'true' }, model.announce ?? ''));
 }
