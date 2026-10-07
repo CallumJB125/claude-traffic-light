@@ -10,5 +10,8 @@ export function workCaptureView(hub, cardId) {
     reported_status: row.reported_status, status: fresh ? row.reported_status : 'unknown', fresh,
     received_at: row.received_at, age_ms: age == null ? null : Math.max(0, Math.round(age)), tracking: row.tracking,
     managed: { title: !!row.title_managed, body: !!row.body_managed, column: !!row.column_managed },
+    // On the personal board only (its data never leaves the Mac): the last reported body
+    // (src/work-record.js cardBody) for the card face. A team hub's view never echoes it.
+    ...(hub.config?.auth === 'local' && typeof row.managed_body === 'string' && row.managed_body ? { summary: row.managed_body.slice(0, 2000) } : {}),
     grants_execution: false, verified_run: false };
 }

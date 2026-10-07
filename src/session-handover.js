@@ -350,6 +350,12 @@ function create({ rootDir, isExcluded = () => false, burstFor = () => null, git 
 
   return {
     tick, backfill, refresh, info, view, text, forCwd, pathOf: resolveKey, promptOf: (key) => { const t = text(key); return t ? asPrompt(t) : null; },
+    // The same merged facts a handover is written from, for src/work-record.js. Unscrubbed: main only.
+    facts(adapter, sessionId) {
+      if (typeof adapter !== 'string' || typeof sessionId !== 'string' || !KEY.test(sessionId)) return null;
+      const key = keyOf(adapter, sessionId);
+      return mergeFacts(readFacts(factsPath(key)), transcriptFor(key, adapter, sessionId));
+    },
     // The event-driven tick every debounceMs; one backfill pass shortly after
     // start, then one every backfillMs (each only for missing or stale docs).
     start(ms = debounceMs) {

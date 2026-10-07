@@ -15,7 +15,8 @@ test('captured existing work shows AI identity, reported activity and last repor
  const v = observed(), n = rendered(v), p = capturePresentation(v);
  assert.equal(p.label, 'Reported Codex · AI working'); assert.equal(p.lastReport, 'Last report · 1s ago'); assert.equal(p.fresh, true);
  assert.equal(byClass(n, 'pill').length, 0); assert.equal(n.props['data-tone'], 'none');
- assert.equal(textOf(byAttr(n, 'data-action', 'open').at(-1)), 'Show details');
+ const opens = byAttr(n, 'data-action', 'open');
+ assert.equal(textOf(opens.at(-2)), 'Show details'); assert.equal(textOf(opens.at(-1)), 'Handover'); assert.equal(opens.at(-1).props['data-section'], 'handover');
  assert.equal(byAttr(n, 'data-action', 'give_to_claude').length, 0); assert.doesNotMatch(textOf(n), /Send to AI|no repo yet/);
  assert.match(textOf(n), /Stop it in your AI tool/);
 });
