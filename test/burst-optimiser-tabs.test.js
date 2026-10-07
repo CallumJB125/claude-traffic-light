@@ -63,7 +63,7 @@ test('Route tab: countdown, rejected rows, chain, secondary label; Back to Claud
   p.push({ tab: 'route' });
   await settle();
   const d = p.d;
-  assert.equal(d.getElementById('route-head').textContent, 'Using your secondary provider');
+  assert.equal(d.getElementById('route-head').textContent, 'Using your backup provider');
   assert.match(d.getElementById('route-reason').textContent, /Claude hit its limit.*five_hour.*1h 30m/);
   assert.match(d.getElementById('route-kv').textContent, /together \/ glm-5/);
   assert.match(d.getElementById('route-rejected').textContent, /claude-opus-5.*5m 0s.*claude-sonnet-5/);
@@ -99,7 +99,7 @@ test('Requests tab: rows, filters, history chart; text only', async (t) => {
   assert.equal(d.querySelector('#req-rows td.note').children.length, 0, 'notes are never parsed as HTML');
   assert.equal(d.querySelectorAll('#hist-chart .bar-col').length, 1);
   assert.equal(d.querySelector('#hist-chart .day').textContent, '10-06');
-  assert.match(d.querySelector('#hist-chart .bar-col').title, /Primary \$1\.00, Secondary \$0\.50/);
+  assert.match(d.querySelector('#hist-chart .bar-col').title, /Your plan \$1\.00, Backup \$0\.50/);
   assert.equal(d.querySelectorAll('.legend .swatch').length, 2);
   d.getElementById('f-pings').checked = true;
   d.getElementById('f-pings').dispatchEvent(new p.dom.window.Event('change'));

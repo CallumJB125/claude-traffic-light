@@ -6,7 +6,7 @@
   document.body.classList.toggle('embedded-analytics', !!embeddedView);
   document.body.classList.toggle('widget-configuration', widgetOnly);
   if (embeddedView) {
-    document.title = embeddedView === 'mix' ? 'Usage' : 'Stats';
+    document.title = 'Usage & cost';
     document.querySelector('#titlebar h1').textContent = document.title;
   } else if (widgetOnly) {
     document.title = 'Widget configuration';
@@ -1306,7 +1306,8 @@
   const S = window.TrafficLightStats;
   function setView(v) {
     if (!['rules', 'stats', 'mix', 'auto'].includes(v)) return;
-    if (embeddedView && v !== embeddedView) return;
+    if (embeddedView && !['mix', 'stats'].includes(v)) return;
+    if (v === 'auto' && !window.lightsApi.showAutoAnswer) return;
     if (widgetOnly && !['rules', 'auto'].includes(v)) return;
     $('main').dataset.view = v;
     $('frame').dataset.view = v;
@@ -1314,9 +1315,16 @@
       $(`view-${k}`).classList.toggle('on', v === k);
       $(`view-${k}`).setAttribute('aria-selected', v === k);
     }
+    for (const k of ['mix', 'stats']) {
+      $(`ut-${k}`).classList.toggle('on', v === k);
+      $(`ut-${k}`).setAttribute('aria-selected', v === k);
+    }
     if (v === 'stats') renderStats();
     if (v === 'mix') { renderMix(); renderUsageHistory(true); }
   }
+  $('ut-mix').addEventListener('click', () => setView('mix'));
+  $('ut-stats').addEventListener('click', () => setView('stats'));
+  $('view-auto').hidden = !window.lightsApi.showAutoAnswer;
   $('view-rules').addEventListener('click', () => setView('rules'));
   window.lightsApi.onShowView((v) => setView(v));
   window.lightsApi.onMotionPaused((paused) => {
@@ -1327,7 +1335,10 @@
   $('view-mix').addEventListener('click', () => setView('mix'));
   $('view-auto').addEventListener('click', () => setView('auto'));
 
-  let rangeDays = 7;
+  // One range for Overview and Time. Time keeps at most 60 days of working time.
+  let usageRange = '30d';
+  const rangeToDays = (r) => ({ '7d': 7, '30d': 30 })[r] || 60;
+  let rangeDays = rangeToDays(usageRange);
   let projectFilter = null;
   const NS = 'http://www.w3.org/2000/svg';
   const svgEl = (tag, attrs, text) => { const e = document.createElementNS(NS, tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); if (text != null) e.textContent = text; return e; };
@@ -1345,13 +1356,35 @@
     node.addEventListener('mouseleave', () => { tip.hidden = true; });
   }
 
-  $('range').addEventListener('click', (e) => {
-    const b = e.target.closest('button[data-days]');
+  $('ut-range').addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-range]');
     if (!b) return;
-    rangeDays = Number(b.dataset.days);
-    Array.from($('range').children).forEach((x) => x.classList.toggle('on', x === b));
-    renderStats();
+    usageRange = b.dataset.range;
+    rangeDays = rangeToDays(usageRange);
+    Array.from($('ut-range').children).forEach((x) => x.classList.toggle('on', x === b));
+    if (usageView) { usageView.state.range = usageRange; }
+    if ($('main').dataset.view === 'stats') renderStats(); else renderUsageHistory(true);
   });
+  $('mix-connect').addEventListener('click', () => window.lightsApi.openAiTools());
+
+  // The daily and weekly limit, written to the same spend settings as Preferences.
+  async function loadBudget() {
+    try {
+      const sp = (await window.lightsApi.getConfig()).spend || {};
+      $('budget-daily').value = sp.dailyBudget || 0;
+      $('budget-weekly').value = sp.weeklyBudget || 0;
+      $('budget-warn').value = Math.round((sp.warnAt || 0.8) * 100);
+    } catch { /* leave the fields blank */ }
+  }
+  $('budget-save').addEventListener('click', async () => {
+    const note = $('budget-state');
+    try {
+      const r = await window.lightsApi.saveSpendLimits({ dailyBudget: Number($('budget-daily').value), weeklyBudget: Number($('budget-weekly').value), warnAt: (Number($('budget-warn').value) || 80) / 100 });
+      note.textContent = r && r.ok ? 'Saved.' : 'Could not save. Try again.';
+    } catch { note.textContent = 'Could not save. Try again.'; }
+    setTimeout(() => { note.textContent = '0 turns a limit off.'; }, 2500);
+  });
+  if (embeddedView) loadBudget();
   $('export-json').addEventListener('click', () => window.lightsApi.exportStats('json', rangeDays));
   $('export-csv').addEventListener('click', () => window.lightsApi.exportStats('csv', rangeDays));
   $('filter-note').addEventListener('click', (e) => { if (e.target.tagName === 'BUTTON') { projectFilter = null; renderStats(); } });
@@ -1385,9 +1418,8 @@
     // ── Today strip
     setHero('today-working', S.fmt(sum.today.working.value), sum.today.working, S.fmt, true, 60000);
     setHero('today-waiting', S.fmt(sum.today.waiting.value), sum.today.waiting, S.fmt, false, 60000);
-    setHero('today-cost', usd(sum.today.cost.value), sum.today.cost, usd, false, 0.005);
 
-    $('stats-range-title').textContent = `Last ${rangeDays} days`;
+    $('stats-range-title').textContent = `Last ${rangeDays} days${['90d', '1y', 'all'].includes(usageRange) ? ' (the most Time keeps)' : ''}`;
     const note = $('filter-note');
     note.hidden = !projectFilter;
     if (projectFilter) note.innerHTML = `Bars filtered to ${escape(projectFilter)}<button type="button">clear</button>`;
@@ -1545,14 +1577,13 @@
     if (!costs) {
       // still loading — leave whatever the last pass showed
     } else if (!costs.available) {
-      $('cost-totals').textContent = 'No Claude Code transcripts found, and ccusage isn\'t installed (npm i -g ccusage) — spend shows up here once either is available.';
+      $('cost-totals').textContent = 'No usage yet. Connect an AI tool and run a session.';
       $('cost-projects').innerHTML = ''; $('cost-sessions').querySelector('tbody').innerHTML = '';
     } else {
       const todayKey = days[days.length - 1].key;
-      const today = costs.days[todayKey]?.cost || 0;
-      const week = Object.values(costs.days).reduce((a, d) => a + d.cost, 0);
+            const week = Object.values(costs.days).reduce((a, d) => a + d.cost, 0);
       const models = [...new Set(Object.values(costs.days).flatMap((d) => d.models))].slice(0, 3).join(', ');
-      $('cost-totals').textContent = `${usd(today)} today · ${usd(week)} this week${models ? ' · ' + models : ''}`;
+      $('cost-totals').textContent = `${usd(week)} this week${models ? ' · ' + models : ''}`;
       const cl = $('cost-projects');
       cl.innerHTML = costs.projects.length ? '' : '<li class="empty-small">No session costs in the last week.</li>';
       const maxC = costs.projects[0]?.cost || 1;
@@ -1594,6 +1625,7 @@
     usageAt = Date.now();
     const q = new URLSearchParams(location.search).get('now');
     if (!usageView) usageView = window.UsageView.mount($('usage-history'), { api: window.lightsApi, ...(q ? { now: () => Number(q) } : {}) });
+    usageView.state.range = usageRange;
     usageView.refresh();
   }
 

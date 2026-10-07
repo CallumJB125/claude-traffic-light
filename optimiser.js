@@ -79,9 +79,9 @@
     if (!on) { $('route-rejected-card').hidden = true; $('route-chain-card').hidden = true; return; }
     err.hidden = true;
     const secondary = route.route === 'SECONDARY';
-    $('route-head').textContent = secondary ? 'Using your secondary provider' : 'Using Claude';
+    $('route-head').textContent = secondary ? 'Using your backup provider' : 'Using your Claude plan';
     $('route-chip').dataset.tone = secondary ? 'amber' : 'green';
-    $('route-chip-text').textContent = route.route === 'SECONDARY' ? 'Secondary' : 'Primary';
+    $('route-chip-text').textContent = route.route === 'SECONDARY' ? 'Backup' : 'Your plan';
     const left = route.untilInMs === null ? null : Math.max(0, route.untilInMs - (Date.now() - routeAt));
     const why = [route.reason, route.claim ? `Limit: ${route.claim}` : '', left !== null && secondary ? `Claude returns in ${countdown(left)}` : ''].filter(Boolean).join('. ');
     $('route-reason').textContent = why || (secondary ? '' : 'Requests go to Claude.');
@@ -90,11 +90,11 @@
     const kv = $('route-kv');
     kv.textContent = '';
     const add = (k, v) => { kv.append(el('dt', k), el('dd', v)); };
-    add('Primary', [route.primary.provider, route.primary.model].filter(Boolean).join(' / ') || 'Claude');
-    add('Secondary', [route.secondary.provider, route.secondary.model].filter(Boolean).join(' / ') + (route.secondary.ready ? '' : ' (not ready)') || 'Not set up');
-    add('Primary failures', String(route.primaryFailures));
-    if (route.overflow) add('Overflow', 'Active');
-    if (route.meteredFailover && route.meteredFailover.minFailures) add('Fails over after', `${route.meteredFailover.minFailures} failures in ${route.meteredFailover.windowSeconds}s`);
+    add('Your Claude plan', [route.primary.provider, route.primary.model].filter(Boolean).join(' / ') || 'Claude');
+    add('Backup provider', [route.secondary.provider, route.secondary.model].filter(Boolean).join(' / ') + (route.secondary.ready ? '' : ' (not ready)') || 'Not set up');
+    add('Plan failures', String(route.primaryFailures));
+    if (route.overflow) add('Using backup', 'Active');
+    if (route.meteredFailover && route.meteredFailover.minFailures) add('Switches after', `${route.meteredFailover.minFailures} failures in ${route.meteredFailover.windowSeconds}s`);
 
     const rej = $('route-rejected');
     rej.textContent = '';
@@ -130,7 +130,7 @@
     const max = Math.max(0.0001, ...h.days.map((d) => d.primaryUsd + d.secondaryUsd));
     for (const d of h.days) {
       const col = el('div', undefined, 'bar-col');
-      col.title = `${d.day}: ${usd(d.primaryUsd + d.secondaryUsd)} (Primary ${usd(d.primaryUsd)}, Secondary ${usd(d.secondaryUsd)}), ${d.requests} requests`;
+      col.title = `${d.day}: ${usd(d.primaryUsd + d.secondaryUsd)} (Your plan ${usd(d.primaryUsd)}, Backup ${usd(d.secondaryUsd)}), ${d.requests} requests`;
       const bars = el('div', undefined, 'bars');
       const sec = el('i', undefined, 's');
       sec.style.height = `${(d.secondaryUsd / max) * 100}%`;
@@ -162,7 +162,7 @@
       n++;
       const tr = document.createElement('tr');
       const tok = (v) => (empty ? el('td', '\u2014', 'num dim') : el('td', String(v), 'num'));
-      tr.append(el('td', clock12(r.time)), el('td', short(r.session)), el('td', r.slot || r.route), r.model ? el('td', r.model) : el('td', '\u2014', 'dim'), el('td', String(r.status), 'num'), el('td', `${r.latencyMs} ms`, 'num'), tok(r.tokensIn), tok(r.tokensOut), empty && !r.usd ? el('td', '\u2014', 'num dim') : el('td', usd(r.usd), 'num'), el('td', r.note, 'note'));
+      tr.append(el('td', clock12(r.time)), el('td', short(r.session)), el('td', ({ primary: 'Your plan', secondary: 'Backup' })[String(r.slot || r.route).toLowerCase()] || r.slot || r.route), r.model ? el('td', r.model) : el('td', '\u2014', 'dim'), el('td', String(r.status), 'num'), el('td', `${r.latencyMs} ms`, 'num'), tok(r.tokensIn), tok(r.tokensOut), empty && !r.usd ? el('td', '\u2014', 'num dim') : el('td', usd(r.usd), 'num'), el('td', r.note, 'note'));
       body.append(tr);
     }
     $('req-empty').hidden = n > 0;

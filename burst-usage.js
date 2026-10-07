@@ -21,7 +21,7 @@
     sec.replaceChildren(el('h3', 'Through Burst'), el('div', `Source: ${v.source}`, 'note'));
     if (v.empty) sec.append(el('div', `No secondary-provider spend in the last ${v.range || '7d'}.`, 'note'));
     else {
-      sec.append(el('div', `Secondary providers: ${usd(v.secondaryUsd)}${v.unpriced ? '+' : ''} across ${reqs(v.secondaryRequests)}`));
+      sec.append(el('div', `Backup providers: ${usd(v.secondaryUsd)}${v.unpriced ? '+' : ''} across ${reqs(v.secondaryRequests)}`));
       const list = el('ul');
       for (const p of v.providers) list.append(el('li', `${p.key}: ${usd(p.usd)}${p.unpriced ? '+' : ''} · ${reqs(p.requests)}`));
       sec.append(list);

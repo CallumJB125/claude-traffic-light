@@ -154,7 +154,7 @@ test('sub-nav is read from the page at load, shown natively, and a section click
   wc.emit('dom-ready');
   await settle();
   const labels = r.o.nav().map((n) => n.label);
-  assert.ok(labels.includes('Overview') && labels.includes('Spend') && labels.includes('Routing'), labels.join());
+  assert.ok(labels.includes('Burst: Overview') && labels.includes('Spend') && labels.includes('Routing'), labels.join());
   assert.ok(r.o.nav().length <= 10);
   assert.ok(r.navPings >= 1);
   assert.equal(r.o.section('sec-models'), true);
