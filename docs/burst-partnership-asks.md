@@ -55,6 +55,14 @@ Plexiform now shows your dashboard inside its own window (a Usage optimiser page
 3. **Deep links.** `/#sec-models` (hash) and a `postMessage({ type: 'burst:goto', section: 'sec-models' })` listener, plus a read-only `postMessage` reply listing the sections (id, label, group), so an embedder does not parse your markup.
 4. **Permission to be embedded by us.** A documented way to be loaded in a first-party webview: for example `Cross-Origin-Embedder-Policy`/frame policy that allows a named embedder, or an `embed=1`-only relaxation (`frame-ancestors` limited to a registered origin). Until then Plexiform keeps loading it top-level and refuses everything but your origin.
 
+## 9. Avoiding duplicate work between us
+
+1. **Plan utilisation (5h / 7d) in `/api/state` or `/api/v1/status`**, with the reset time, so we do not read the last replies' rate-limit headers from `/api/responses`.
+2. **Who shows a notice.** A per-notice `shown_by` (`band`, `overlay`, `none`) in `notices.json`, or a client-claim call, so Plexiform and your overlay never both show the same event.
+3. **Coordination status per repo.** "Active for repo X" in `/api/coordination`, so we can hide our own same-working-tree warning when yours is enforcing.
+4. **Spend alerts.** `alert_daily_spend_usd` readable through `/api/settings`, and an option to defer spend alerts to an external budget owner.
+5. **SessionStart briefings.** A machine-readable marker that context was already injected (or a shared size budget), so several SessionStart hooks do not stack briefings.
+
 ## What we promise in return
 
 The embedded dashboard runs with no preload and no access to Plexiform's data, and can reach nothing but Burst's own address. Only GET requests from an allow-list (plus `POST /api/upgrade` on an explicit Update click). We never proxy `/api/secondary-key`, never expose raw admin access to a renderer or any remote, and show your README's "What it changes on your Mac" text before every action.

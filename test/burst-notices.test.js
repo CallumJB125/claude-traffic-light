@@ -78,7 +78,7 @@ test('not macOS: never active and never reads', async () => {
 });
 
 test('spend kinds are held back once Plexiform has a budget of its own', async () => {
-  const r = rig({ config: () => ({ spendBudget: 50 }) });
+  const r = rig({ config: () => ({ spend: { dailyBudget: 50 } }) });
   r.write([ev('1', { kind: 'spend' }), ev('2')]);
   await r.n.check();
   assert.deepEqual(r.sent.map((e) => e.key), ['burst:2']);

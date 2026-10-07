@@ -66,7 +66,7 @@ function normalizeAudit(raw) {
 }
 
 // A spend notice is Burst's own; once Plexiform has a budget of its own the two would double up.
-const hasBudget = (cfg) => !!(cfg && (cfg.spendBudget || cfg.budget || cfg.budgets));
+const hasBudget = (cfg) => { const s = cfg && cfg.spend; return !!(s && (s.dailyBudget > 0 || s.weeklyBudget > 0)); };
 
 // onEvents([{ key: 'burst:'+id, title, body, severity, session }]) for new events; onResolve(key) closes one.
 // config() is Plexiform's config (budgets, quiet hours); burst() returns the BurstIpc object (read('modStatus') etc.).

@@ -93,7 +93,7 @@ function snapshot({ sessions = [], activity = {}, available = true, now = Date.n
       freshness: available === false || age === null ? 'unknown' : age <= RECENT_MS ? 'recent' : 'stale', age_ms: age, lifecycle, children,
       ...more,
       ...sessionTools(row, more),
-      ...(tree ? { sharedTree: tree.project } : {}),
+      ...(tree && !more.burst?.coordination ? { sharedTree: tree.project } : {}),
       ...handoverOf(handover, row),
       ...actionsOf(info, row),
     });
