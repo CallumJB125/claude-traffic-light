@@ -130,12 +130,14 @@
     const max = Math.max(0.0001, ...h.days.map((d) => d.primaryUsd + d.secondaryUsd));
     for (const d of h.days) {
       const col = el('div', undefined, 'bar-col');
-      col.title = `${d.day}: ${usd(d.primaryUsd + d.secondaryUsd)}, ${d.requests} requests`;
+      col.title = `${d.day}: ${usd(d.primaryUsd + d.secondaryUsd)} (Primary ${usd(d.primaryUsd)}, Secondary ${usd(d.secondaryUsd)}), ${d.requests} requests`;
+      const bars = el('div', undefined, 'bars');
       const sec = el('i', undefined, 's');
       sec.style.height = `${(d.secondaryUsd / max) * 100}%`;
       const pri = el('i', undefined, 'p');
       pri.style.height = `${(d.primaryUsd / max) * 100}%`;
-      col.append(sec, pri);
+      bars.append(sec, pri);
+      col.append(bars, el('span', d.day.slice(5), 'day'));
       box.append(col);
     }
     $('hist-card').hidden = h.days.length === 0;
@@ -146,6 +148,7 @@
     const slot = $('f-slot').value;
     const st = $('f-status').value;
     const model = $('f-model').value;
+    const pings = $('f-pings').checked;
     const body = $('req-rows');
     body.textContent = '';
     let n = 0;
@@ -154,9 +157,12 @@
       if (st === 'ok' && !(r.status >= 200 && r.status < 400)) continue;
       if (st === 'err' && r.status >= 200 && r.status < 400) continue;
       if (model && r.model !== model) continue;
+      const empty = r.tokensIn === 0 && r.tokensOut === 0;
+      if (empty && !pings && r.status >= 200 && r.status < 400) continue;
       n++;
       const tr = document.createElement('tr');
-      tr.append(el('td', clock12(r.time)), el('td', short(r.session)), el('td', r.slot || r.route), el('td', r.model), el('td', String(r.status), 'num'), el('td', `${r.latencyMs} ms`, 'num'), el('td', String(r.tokensIn), 'num'), el('td', String(r.tokensOut), 'num'), el('td', usd(r.usd), 'num'), el('td', r.note, 'note'));
+      const tok = (v) => (empty ? el('td', '\u2014', 'num dim') : el('td', String(v), 'num'));
+      tr.append(el('td', clock12(r.time)), el('td', short(r.session)), el('td', r.slot || r.route), r.model ? el('td', r.model) : el('td', '\u2014', 'dim'), el('td', String(r.status), 'num'), el('td', `${r.latencyMs} ms`, 'num'), tok(r.tokensIn), tok(r.tokensOut), empty && !r.usd ? el('td', '\u2014', 'num dim') : el('td', usd(r.usd), 'num'), el('td', r.note, 'note'));
       body.append(tr);
     }
     $('req-empty').hidden = n > 0;
@@ -216,7 +222,7 @@
       api.act(`tab:${order[i]}`).then(() => $(`tab-${order[i]}`).focus()).catch(() => {});
     });
   }
-  for (const id of ['f-slot', 'f-status', 'f-model']) $(id).addEventListener('change', renderRows);
+  for (const id of ['f-slot', 'f-status', 'f-model', 'f-pings']) $(id).addEventListener('change', renderRows);
   $('route-reset').addEventListener('click', async () => {
     const r = await api.burstAction('reset').catch(() => ({ ok: false, error: 'Something went wrong.' }));
     $('route-note').textContent = r && r.cancelled ? 'Cancelled. Nothing changed.' : r && r.ok ? 'Sent. Burst is routing back to Claude.' : (r && r.error) || '';

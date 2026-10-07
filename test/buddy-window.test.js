@@ -25,8 +25,8 @@ test('every page has a unique id, a title and a known kind', () => {
   assert.ok(PAGES.some(page => page.id === 'board'));
 });
 
-test('the sidebar has five sections that together reach every page exactly once', () => {
-  assert.deepEqual(SECTIONS.map((s) => s.id), ['today', 'board', 'team', 'activity', 'more']);
+test('the sidebar has six sections that together reach every page exactly once', () => {
+  assert.deepEqual(SECTIONS.map((s) => s.id), ['today', 'sessions', 'board', 'team', 'activity', 'more']);
   const listed = SECTIONS.flatMap((s) => s.pages);
   assert.equal(new Set(listed).size, listed.length, 'no page in two sections');
   assert.deepEqual([...listed].sort(), flat().filter((p) => !p.hidden).map((p) => p.id).sort(), 'no visible page is orphaned');

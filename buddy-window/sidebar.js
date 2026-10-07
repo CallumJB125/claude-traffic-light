@@ -67,7 +67,7 @@ const sectionOf = (id) => sections.find((s) => s.pages.includes(id))?.id ?? null
 const sectionBtns = new Map();
 const subLists = new Map();
 
-// Five entries; the one holding the open page unfolds its own pages beneath it.
+// One entry per section; the one holding the open page unfolds its own pages beneath it.
 function build() {
   const nav = document.getElementById('nav');
   nav.textContent = '';
@@ -83,7 +83,7 @@ function build() {
     head.addEventListener('click', () => { if (sectionOf(state.selected) !== s.id) window.buddy.select(s.default); });
     sectionBtns.set(s.id, head);
     const sub = el('ul', { class: 'nav-sub', 'aria-label': `${s.title} pages` });
-    for (const id of s.pages) {
+    for (const id of s.pages.length > 1 ? s.pages : []) {
       const p = byId.get(id);
       if (p) sub.append(el('li', {}, item(p, true)));
     }

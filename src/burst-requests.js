@@ -21,7 +21,7 @@ function normalizeRequest(ev) {
     slot: ev.slot === 'primary' || ev.slot === 'secondary' ? ev.slot : '',
     route: str(ev.route, 40),
     host: hostOf(ev.destination),
-    model: str(ev.model, 100),
+    model: str(ev.model, 100) || str(ev.requested_model, 100),
     status: num(ev.http_status),
     latencyMs: num(ev.duration_ms),
     tokensIn: num(ev.input_tokens) + num(ev.cache_read_tokens) + num(ev.cache_write_tokens),
