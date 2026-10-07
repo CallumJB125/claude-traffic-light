@@ -4,6 +4,8 @@ Claude Burst is a separate, open-source local gateway for Claude Code on a Mac. 
 
 macOS only. On Windows and Linux the card says so and does nothing.
 
+The Usage optimiser page is listed for every user: its tool list (Tools tab once Burst is on) shows Burst, its routing, Pauseless compaction, the burst-band mod and the usage panel, plus Plexiform's own session router and waste finder, each with its status here, the savings that tool reported (never estimated by Plexiform) and its one-click action through the same consent flows. On Windows and Linux the Burst rows say macOS only.
+
 ## What it changes on your Mac
 
 - Entries in `~/.claude/settings.json`: hooks for the features you switch on, and `ANTHROPIC_BASE_URL` in base-url mode.

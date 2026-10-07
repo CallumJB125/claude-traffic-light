@@ -217,8 +217,10 @@ function register(ctx) {
   timer.unref?.();
   ctx.onQuit?.(() => { clearInterval(timer); enforcer.close(); });
   const fromUsage = (e) => { try { return !!fromPage(e, 'usage'); } catch { return false; } };
+  // The Usage optimiser's tool list reads the same report for the waste finder's totals.
+  const fromOptimiser = (e) => { try { return !!fromPage(e, 'optimiser'); } catch { return false; } };
   ipcMain.handle('cost-guard:report', async (e) => {
-    if (!fromUsage(e)) return null;
+    if (!fromUsage(e) && !fromOptimiser(e)) return null;
     try { return await report(); } catch (err) { log(`[cost-guard] report: ${err?.message ?? err}`); return null; }
   });
   ipcMain.handle('cost-guard:set', (e, v) => {

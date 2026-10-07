@@ -19,6 +19,7 @@ const Requests = require('./burst-requests.js');
 const Inspect = require('./burst-inspect.js');
 const Snapshot = require('./burst-snapshot.js');
 const ContextBreakdown = require('./context-breakdown.js');
+const Tools = require('./optimiser-tools.js');
 
 const POLL_BASE_MS = 5000;
 const POLL_MAX_MS = 60000;
@@ -125,7 +126,7 @@ function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usag
 
   // Pauseless compaction switch. Turning it on needs the renderer's inline confirm (`confirmed`),
   // which is re-checked here; turning it off or changing mode never does.
-  utilityHandle('burst:set-compaction', card, async (_e, req) => {
+  utilityHandle('burst:set-compaction', (e) => card(e) || optimiserAllowed(e), async (_e, req) => {
     if (!isMac) return { ok: false, error: View.MAC_ONLY };
     const r = req && typeof req === 'object' ? req : {};
     const cur = last.kind === 'present' && last.state.compaction.pauseless;
@@ -140,6 +141,15 @@ function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usag
     backoff.reset();
     const view = await refresh(true);
     return { ok: true, view, note: r.enabled ? View.COMPACTION_OWN_OFF : '' };
+  });
+
+  // Usage optimiser tool list: status facts only, never the card's actions or anything raw.
+  utilityHandle('burst:tools', optimiserAllowed, async () => {
+    if (!isMac) return { kind: 'unsupported' };
+    const v = await refresh();
+    let band = null;
+    if (present()) { try { band = Tools.bandStatus(await fresh('modStatus', () => client.modStatus())); } catch { band = null; } }
+    return { kind: v.kind, detected: last.kind, version: v.version, route: v.route, updateAvailable: v.updateAvailable, compaction: v.compaction, secondaryReady: present() ? last.state.secondaryReady === true : null, band };
   });
 
   // Widget and Usage header: the chip only, never the card's actions or anything raw. Null on other platforms.

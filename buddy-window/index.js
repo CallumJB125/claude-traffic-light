@@ -31,6 +31,7 @@ const { createViewLifecycle } = require('../src/view-lifecycle');
 const { createOptimiser } = require('./optimiser');
 const { createThemeInjector } = require('./burst-theme');
 const BurstEmbed = require('../src/burst-embed');
+const OptimiserTools = require('../src/optimiser-tools');
 const { createWorkCapture, repoFor } = require('../src/work-capture');
 const { createMyDayBroker } = require('../src/my-day-broker');
 const { createSessionBridge } = require('./session-bridge');
@@ -910,6 +911,8 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   ipcMain.handle('optimiser:act', (e, kind) => (fromOptimiser(e) ? optimiser.act(kind) : { ok: false }));
   ipcMain.handle('optimiser:open-browser', (e) => (fromOptimiser(e) ? optimiser.openBrowser() : { ok: false }));
   ipcMain.on('optimiser:docs', (e) => { if (fromOptimiser(e)) shell.openExternal(BurstEmbed.DOCS_URL); }); // privacy-flow: burst-dashboard-links
+  ipcMain.on('optimiser:link', (e, id) => { const url = Object.hasOwn(OptimiserTools.LINKS, id) ? OptimiserTools.LINKS[id] : null; if (fromOptimiser(e) && url) shell.openExternal(url); }); // privacy-flow: burst-dashboard-links
+  ipcMain.on('optimiser:open-page', (e, id) => { if (fromOptimiser(e) && OptimiserTools.PAGES.includes(id) && pageById(id)) select(id); });
   ipcMain.on('buddy:optimiser-section', (e, id) => { if (fromSidebar(e) && typeof id === 'string') optimiser.section(id); });
   ipcMain.handle('buddy:pages', (e) => (fromSidebar(e) ? { pages: PAGES, groups: GROUPS, sections: sectionsFor(), footer: FOOTER, brand: { name: BRAND.NAME, hubText: BRAND.HUB_TEXT } } : null));
   for (const [op, fn] of Object.entries(flow.ACCT)) {

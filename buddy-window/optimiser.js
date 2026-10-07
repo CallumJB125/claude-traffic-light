@@ -13,7 +13,7 @@ const Embed = require('../src/burst-embed');
 const BAR_H = 48; // the native top bar (optimiser.html) above the dashboard
 const PARTITION = 'persist:burst-dashboard';
 const POLL_MS = 5000;
-const TABS = Object.freeze(['dashboard', 'route', 'requests']);
+const TABS = Object.freeze(['dashboard', 'route', 'requests', 'tools']);
 const FILTER = { urls: ['http://*/*', 'https://*/*', 'ws://*/*', 'wss://*/*'] };
 
 function createOptimiser({

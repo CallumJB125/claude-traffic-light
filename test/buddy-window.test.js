@@ -25,9 +25,9 @@ test('every page has a unique id, a title and a known kind', () => {
   assert.ok(PAGES.some(page => page.id === 'board'));
 });
 
-test('the sidebar has six sections that together reach every page exactly once', () => {
-  assert.deepEqual(SECTIONS.map((s) => s.id), ['home', 'board', 'tasks', 'usage', 'team', 'settings']);
-  assert.deepEqual(SECTIONS.map((s) => s.title), ['Home', 'Board', 'Tasks', 'Usage & cost', 'Team', 'Settings']);
+test('the sidebar has seven sections that together reach every page exactly once', () => {
+  assert.deepEqual(SECTIONS.map((s) => s.id), ['home', 'board', 'tasks', 'usage', 'team', 'widget', 'settings']);
+  assert.deepEqual(SECTIONS.map((s) => s.title), ['Home', 'Board', 'Tasks', 'Usage & cost', 'Team', 'Widget', 'Settings']);
   assert.deepEqual(FOOTER, ['help', 'feedback', 'updates']);
   const listed = [...SECTIONS.flatMap((s) => s.pages), ...FOOTER];
   assert.equal(new Set(listed).size, listed.length, 'no page in two sections');
@@ -41,6 +41,8 @@ test('the sidebar has six sections that together reach every page exactly once',
   assert.equal(SECTIONS.find((s) => s.id === 'settings').default, 'aitools');
   assert.equal(sectionOf('help'), null, 'footer links are not in a section');
   assert.equal(sectionOf('integrations'), 'team');
+  assert.deepEqual(SECTIONS.find((s) => s.id === 'widget').pages, ['widget', 'lights'], 'Widget configuration moved from Settings to the Widget section');
+  assert.equal(sectionOf('lights'), 'widget');
   assert.equal(sectionOf('nope'), null);
   assert.equal(pageById('plugins'), null);
 });
