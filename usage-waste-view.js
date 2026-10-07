@@ -37,7 +37,6 @@
       if (r.couldSave.line) card.append(el('div', 'mix-rec', r.couldSave.line), el('div', 'note', `Source: ${r.couldSave.source}. ${r.couldSave.method}`));
     }
     if (r.burst) card.append(el('div', 'mix-rec', r.burst.line), el('div', 'note', `Source: ${r.burst.source}.`));
-    if (r.teaser) card.append(el('div', 'note', 'The full receipt, waste callouts and enforced caps come with Plexiform Plus.'));
     return card;
   }
 

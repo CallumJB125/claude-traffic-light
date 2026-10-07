@@ -78,7 +78,8 @@ function rowEl(row) {
   if (row.kind === 'custom') { const rm = node('button', 'Remove'); rm.type = 'button'; rm.addEventListener('click', () => act(async () => { await api.removeCustom(row.label); await refresh(); })); acts.append(rm); }
   top.append(name, acts);
   el.append(top);
-  el.append(node('p', row.state === 'missing' ? 'Not installed' : row.detail, row.error ? 'error' : 'muted'));
+  if (row.state === 'missing') { el.classList.add('compact'); return el; }
+  el.append(node('p', row.detail, row.error ? 'error' : 'muted'));
   if (row.installed) el.append(node('p', `Last event: ${row.lastEvent.text}`, 'muted'));
   if (row.note) el.append(node('p', row.note, 'muted'));
   if (row.chips.length) { const ul = node('ul', '', 'chips'); ul.setAttribute('aria-label', 'What Plexiform shows for this tool'); for (const c of row.chips) ul.append(node('li', c)); el.append(ul); }
@@ -91,7 +92,7 @@ function rowEl(row) {
 
 function draw() {
   if (!snap) return;
-  list.replaceChildren(...snap.rows.map(rowEl));
+  list.replaceChildren(...[...snap.rows].sort((a, b) => (a.state === 'missing') - (b.state === 'missing')).map(rowEl));
   const found = snap.rows.filter((r) => r.kind === 'tool' && r.installed);
   const names = found.map((r) => r.label);
   allBtn.hidden = !snap.pending.length;
