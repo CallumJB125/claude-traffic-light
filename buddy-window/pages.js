@@ -28,15 +28,16 @@ const PAGES = [
     ] },
   { id: 'waiting', title: 'Waiting on you', icon: 'bell', kind: 'local', file: 'waiting.html', preload: 'waiting-preload.js', query: { embedded: '1' }, group: 'work' },
   { id: 'myday', title: 'My day', icon: 'sun', kind: 'local', file: 'myday.html', preload: 'myday-preload.js', group: 'work' },
-  { id: 'sessions', title: 'Sessions', icon: 'team', kind: 'local', file: 'sessions.html', preload: 'sessions-preload.js', group: 'work' },
-  { id: 'tasks', title: 'Tackle with AI', icon: 'tasks', kind: 'local', file: 'tasks.html', preload: 'tasks-preload.js', query: { embedded: '1' }, group: 'work' },
+  { id: 'sessions', title: 'Running now', icon: 'team', kind: 'local', file: 'sessions.html', preload: 'sessions-preload.js', group: 'work' },
+  { id: 'tasks', title: 'Tasks', icon: 'tasks', kind: 'local', file: 'tasks.html', preload: 'tasks-preload.js', query: { embedded: '1' }, group: 'work' },
   // localScreen: the account page's explainer for the local board, which has no integrations of its own.
   { id: 'integrations', title: 'Integrations', icon: 'plug', kind: 'hub', view: 'integrations', localScreen: 'integrations', group: 'team' },
   { id: 'team', title: 'Team', icon: 'team', kind: 'local', screen: 'team', group: 'team' },
   { id: 'usage', title: 'Usage', icon: 'chart', kind: 'local', file: 'lights.html', preload: 'lights-preload.js', query: { embedded: '1', view: 'mix' }, group: 'you' },
   { id: 'stats', title: 'Stats', icon: 'chart', kind: 'local', file: 'lights.html', preload: 'lights-preload.js', query: { embedded: '1', view: 'stats' }, group: 'you' },
   // macOnly: shows Claude Burst's dashboard (burst-embed.js), so it stays out of the sidebar elsewhere.
-  { id: 'optimiser', title: 'Usage optimiser', icon: 'chart', kind: 'local', file: 'optimiser.html', preload: 'optimiser-preload.js', query: { embedded: '1' }, group: 'you', macOnly: true },
+  // burstOnly: and on a Mac it is listed only while Burst is present (the sidebar decides, it is runtime state).
+  { id: 'optimiser', title: 'Usage optimiser', icon: 'chart', kind: 'local', file: 'optimiser.html', preload: 'optimiser-preload.js', query: { embedded: '1' }, group: 'you', macOnly: true, burstOnly: true },
   { id: 'setups', title: 'Setups', icon: 'layers', kind: 'local', file: 'setups.html', preload: 'setups-preload.js', group: 'you', hidden: true },
   { id: 'thismac', title: 'This Mac', icon: 'laptop', kind: 'local', screen: 'thismac', group: 'you' },
   { id: 'account', title: 'Account', icon: 'user', kind: 'local', screen: 'account', group: 'you' },
@@ -46,7 +47,7 @@ const PAGES = [
   { id: 'hatch', title: 'Hatch a character', icon: 'puzzle', kind: 'local', file: 'hatch.html', preload: 'hatch-preload.js', query: { embedded: '1' }, group: 'you' },
   { id: 'help', title: 'Help', icon: 'info', kind: 'local', file: 'help.html', preload: 'help-preload.js', query: { embedded: '1' }, group: 'you' },
   { id: 'feedback', title: 'Feedback', icon: 'info', kind: 'local', file: 'feedback.html', preload: 'feedback-preload.js', query: { embedded: '1' }, group: 'you' },
-  { id: 'updates', title: 'About & Updates', icon: 'info', kind: 'local', file: 'updates.html', preload: 'updates-preload.js', group: 'you' },
+  { id: 'updates', title: "What's new", icon: 'info', kind: 'local', file: 'updates.html', preload: 'updates-preload.js', group: 'you' },
 ];
 
 const GROUPS = [
@@ -59,17 +60,21 @@ const GROUPS = [
 // page (deep links, IPC and the app menu address pages, not sections). A
 // section opens `default`; the others are its sub-nav, in this order. Board
 // views are the board page's children, so they are listed by id like the rest.
+// Home opens Overview until the Home page is registered (then `home` leads it);
+// Sessions lives under it as "Running now".
 const SECTIONS = [
-  { id: 'today', title: 'Today', icon: 'sun', default: 'myday', pages: ['myday', 'waiting', 'tasks', 'overview'] },
-  { id: 'sessions', title: 'Sessions', icon: 'team', default: 'sessions', pages: ['sessions'] },
+  { id: 'home', title: 'Home', icon: 'sun', default: 'overview', pages: ['overview', 'myday', 'waiting', 'sessions'] },
   { id: 'board', title: 'Board', icon: 'board', default: 'board', pages: ['board', 'board:table', 'board:history', 'board:dashboard'] },
+  { id: 'tasks', title: 'Tasks', icon: 'tasks', default: 'tasks', pages: ['tasks'] },
+  { id: 'usage', title: 'Usage & cost', icon: 'chart', default: 'usage', pages: ['usage', 'stats', 'optimiser'] },
   { id: 'team', title: 'Team', icon: 'team', default: 'team', pages: ['team', 'integrations', 'account'] },
-  { id: 'activity', title: 'Activity', icon: 'chart', default: 'usage', pages: ['usage', 'stats', 'optimiser'] },
-  { id: 'more', title: 'More', icon: 'gear', default: 'settings', pages: ['aitools', 'settings', 'thismac', 'lights', 'hatch', 'help', 'feedback', 'updates'] },
+  { id: 'settings', title: 'Settings', icon: 'gear', default: 'aitools', pages: ['aitools', 'settings', 'thismac', 'lights', 'hatch'] },
 ];
+// Small links under the sections, not a section of their own.
+const FOOTER = ['help', 'feedback', 'updates'];
 // Setups has no Apply or Undo yet, so it stays out of the sidebar. The page and
 // its deep link remain; PLEXIFORM_SHOW_SETUPS=1 puts the entry back for development.
-if (process.env.PLEXIFORM_SHOW_SETUPS === '1') SECTIONS.find((s) => s.id === 'more').pages.splice(5, 0, 'setups');
+if (process.env.PLEXIFORM_SHOW_SETUPS === '1') SECTIONS.find((s) => s.id === 'settings').pages.splice(5, 0, 'setups');
 
 // Calendar and Timeline are project-planning views and AI runs have no due dates, so they
 // leave the sub-nav; the pages and deep links stay. PLEXIFORM_SHOW_PLANNER=1 restores them.
@@ -337,4 +342,4 @@ function pageForHubUrl(url) {
   return hit?.id ?? 'board';
 }
 
-module.exports = { PAGES, GROUPS, SECTIONS, sectionsFor, sectionOf, flat, pageById, hubPageUrl, fragmentOk, navDecision, openDecision, connectDecision, manifestPost, parseConnectName, connectUrlOk, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl, GESTURE_MS };
+module.exports = { PAGES, GROUPS, SECTIONS, FOOTER, sectionsFor, sectionOf, flat, pageById, hubPageUrl, fragmentOk, navDecision, openDecision, connectDecision, manifestPost, parseConnectName, connectUrlOk, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl, GESTURE_MS };

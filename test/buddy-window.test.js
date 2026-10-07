@@ -6,7 +6,7 @@ const os = require('node:os');
 const fs = require('node:fs');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
-const { PAGES, SECTIONS, sectionOf, flat, pageById, hubPageUrl, navDecision, openDecision, connectDecision, manifestPost, parseConnectName, connectUrlOk, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl } = require('../buddy-window/pages');
+const { PAGES, SECTIONS, FOOTER, sectionOf, flat, pageById, hubPageUrl, navDecision, openDecision, connectDecision, manifestPost, parseConnectName, connectUrlOk, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl } = require('../buddy-window/pages');
 const { createHubSupervisor, hubEnv, MAX_RESTARTS } = require('../buddy-window/hub-process');
 
 // ── pages ──────────────────────────────────────────────────────────────────
@@ -26,13 +26,20 @@ test('every page has a unique id, a title and a known kind', () => {
 });
 
 test('the sidebar has six sections that together reach every page exactly once', () => {
-  assert.deepEqual(SECTIONS.map((s) => s.id), ['today', 'sessions', 'board', 'team', 'activity', 'more']);
-  const listed = SECTIONS.flatMap((s) => s.pages);
+  assert.deepEqual(SECTIONS.map((s) => s.id), ['home', 'board', 'tasks', 'usage', 'team', 'settings']);
+  assert.deepEqual(SECTIONS.map((s) => s.title), ['Home', 'Board', 'Tasks', 'Usage & cost', 'Team', 'Settings']);
+  assert.deepEqual(FOOTER, ['help', 'feedback', 'updates']);
+  const listed = [...SECTIONS.flatMap((s) => s.pages), ...FOOTER];
   assert.equal(new Set(listed).size, listed.length, 'no page in two sections');
   assert.deepEqual([...listed].sort(), flat().filter((p) => !p.hidden).map((p) => p.id).sort(), 'no visible page is orphaned');
   for (const s of SECTIONS) assert.ok(s.pages.includes(s.default) && pageById(s.default), `${s.id} opens a page it holds`);
   assert.equal(sectionOf('board:calendar'), 'board');
-  assert.equal(sectionOf('waiting'), 'today');
+  assert.equal(sectionOf('waiting'), 'home');
+  assert.equal(sectionOf('sessions'), 'home');
+  assert.equal(pageById('sessions').title, 'Running now');
+  assert.equal(pageById('tasks').title, 'Tasks');
+  assert.equal(SECTIONS.find((s) => s.id === 'settings').default, 'aitools');
+  assert.equal(sectionOf('help'), null, 'footer links are not in a section');
   assert.equal(sectionOf('integrations'), 'team');
   assert.equal(sectionOf('nope'), null);
   assert.equal(pageById('plugins'), null);
