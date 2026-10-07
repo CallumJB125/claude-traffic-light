@@ -55,7 +55,7 @@ async function setup({ billing = true } = {}) {
   const nowS = () => Math.floor(fx.h.hub.wallMs() / 1000);
   // A fixture event, signed as the provider signs it.
   let seq = 0;
-  const event = (type, object, { id = `evt_${++seq}_${randomUUID().slice(0, 8)}`, created = nowS() } = {}) => ({ id, object: 'event', type, created, data: { object } });
+  const event = (type, object, { id = `evt_${++seq}_${randomUUID().replace(/[0-9]/g, "x").slice(0, 8)}`, created = nowS() } = {}) => ({ id, object: 'event', type, created, data: { object } });
   const deliver = async (evt, { secret = SECRET, t = nowS(), raw = JSON.stringify(evt), header } = {}) => {
     const sig = createHmac('sha256', secret).update(`${t}.${raw}`).digest('hex');
     const res = await fetch(`${fx.h.base}/api/billing/webhook`, { method: 'POST', headers: { 'content-type': 'application/json; charset=utf-8', 'stripe-signature': header ?? `t=${t},v1=${sig}` }, body: raw });
@@ -72,7 +72,7 @@ const session = (subject, plan, extra = {}) => ({ id: 'cs_test_1', object: 'chec
 const subscription = (subject, plan, { status = 'active', periodEnd, cancel = false, quantity = 1, sub = 'sub_A', price = plan === 'team' ? 'price_team_m' : 'price_plus_m' } = {}) => ({
   id: sub, object: 'subscription', customer: 'cus_A', status, cancel_at_period_end: cancel, current_period_end: periodEnd,
   items: { data: [{ price: { id: price }, quantity }] }, metadata: { subject_type: subject.type, subject_id: subject.id, plan, interval: 'month' }, default_payment_method: CARD });
-const invoice = (subject, periodEnd, { sub = 'sub_A' } = {}) => ({ id: `in_${randomUUID().slice(0, 6)}`, object: 'invoice', customer: 'cus_A', subscription: sub, status: 'paid',
+const invoice = (subject, periodEnd, { sub = 'sub_A' } = {}) => ({ id: `in_${randomUUID().replace(/[0-9]/g, "x").slice(0, 6)}`, object: 'invoice', customer: 'cus_A', subscription: sub, status: 'paid',
   lines: { data: [{ period: { start: periodEnd - 30 * DAY, end: periodEnd } }] }, subscription_details: { metadata: { subject_type: subject.type, subject_id: subject.id, plan: 'plus' } }, charge: CARD, customer_address: { country: 'ZA' } });
 
 function decode(token) {
