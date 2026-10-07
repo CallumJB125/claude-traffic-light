@@ -11,10 +11,14 @@
     standard: { rank: 2, label: 'standard', ability: 3 },
     premium: { rank: 3, label: 'premium', ability: 3 },
   });
-  const DEFAULT_TABLE = Object.freeze({ codex: 'standard', claude: 'cheap', gemini: 'cheap' });
+  const DEFAULT_TABLE = Object.freeze({ codex: 'standard', claude: 'standard', gemini: 'cheap' });
   const HEAVY = /\b(refactor|implement|architect\w*|debug\w*|migrat\w*|multi-?file|codebase|repo(sitory)?|stack ?trace|failing tests?|write (the )?tests?|security|review (this|the|my) (code|pr|diff))\b/i;
   const MEDIUM = /```|\b(code|function|script|regex|sql|bug|error|explain|summari[sz]e|translate|json|class|compile)\b/i;
 
+  const TIER_ORDER = ['free', 'cheap', 'standard', 'premium'];
+  // Claude is under pressure when Burst reports it on and either failed over to
+  // the paid secondary route or seeing refused windows ("Limit near").
+  const burstPressure = (v) => !!v && v.kind === 'on' && (v.route === 'SECONDARY' || (!!v.chip && v.chip.label === 'Limit near'));
   const tierOf = (provider, table) => {
     const t = Object.hasOwn(table, provider) ? table[provider] : /^local-/.test(provider) ? 'free' : 'standard';
     return Object.hasOwn(TIERS, t) ? t : 'standard';
@@ -28,20 +32,22 @@
 
   // providers: [{ provider, label, available }] as interaction:capabilities lists them.
   // Returns null when nothing available can be suggested.
-  function suggest(message, providers, { table = DEFAULT_TABLE } = {}) {
+  function suggest(message, providers, { table = DEFAULT_TABLE, burst = null } = {}) {
     const usable = (Array.isArray(providers) ? providers : []).filter((p) => p && typeof p.provider === 'string' && typeof p.label === 'string' && p.available === true);
     if (!usable.length) return null;
     const n = need(message);
-    const ranked = usable.map((p) => { const tier = tierOf(p.provider, table); return { provider: p.provider, label: p.label, tier, rank: TIERS[tier].rank, capable: TIERS[tier].ability >= n.ability }; })
+    const pressed = burstPressure(burst);
+    const ranked = usable.map((p) => { let tier = tierOf(p.provider, table); if (pressed && p.provider === 'claude') tier = TIER_ORDER[Math.min(TIER_ORDER.indexOf(tier) + 1, TIER_ORDER.length - 1)]; return { provider: p.provider, label: p.label, tier, rank: TIERS[tier].rank, capable: TIERS[tier].ability >= n.ability }; })
       .sort((a, b) => (b.capable - a.capable) || (a.capable ? a.rank - b.rank : b.rank - a.rank) || a.label.localeCompare(b.label));
     const best = ranked[0];
-    const reason = best.capable
+    let reason = best.capable
       ? `Looks like ${n.why}; ${best.label} is the cheapest available option that should handle it.`
       : `Looks like ${n.why}; nothing available is rated for it, so ${best.label} is the most capable option you have.`;
+    if (pressed && best.provider !== 'claude' && usable.some((p) => p.provider === 'claude')) reason += ' Claude is close to its limit.';
     return { provider: best.provider, label: best.label, tier: best.tier, cheaper: best.capable && ranked.some((r) => r.rank > best.rank), reason, ranked: ranked.map(({ provider, tier, capable }) => ({ provider, tier, capable })) };
   }
 
-  const api = { suggest, need, tierOf, TIERS, DEFAULT_TABLE };
+  const api = { suggest, need, tierOf, burstPressure, TIERS, DEFAULT_TABLE };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.PlexiformRouter = Object.freeze(api);
 })(typeof globalThis !== 'undefined' ? globalThis : this);

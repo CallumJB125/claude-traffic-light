@@ -368,3 +368,14 @@ test('hooks: a settings.json the real installer wrote (P3 deny rule, .buddy-back
   Claude.install({ home: m.home, runtime: m.runtime });
   assert.equal(byId(Health.runChecks(m.ctx), 'hooks').status, 'ok');
 });
+
+test('Burst trust check: macOS with Burst installed only; untrusted offers the console fix', () => {
+  const run = (burst, platform = 'darwin') => Health.runChecks({ ...machine().ctx, burst, platform }).checks.find((c) => c.id === 'burst');
+  assert.equal(run(undefined), undefined);
+  assert.equal(run({ kind: 'not_installed' }), undefined);
+  assert.equal(run({ kind: 'on', version: '1' }, 'win32'), undefined);
+  assert.equal(run({ kind: 'on', version: '1' }).status, 'ok');
+  const bad = run({ kind: 'untrusted' });
+  assert.equal(bad.status, 'fail'); assert.equal(bad.fix, 'open-burst-console'); assert.equal(bad.fixLabel, 'Open Burst console');
+  assert.equal(run(require('../src/burst-view.js').statusView({ kind: 'unreachable' }, { platform: 'darwin' })).status, 'info');
+});

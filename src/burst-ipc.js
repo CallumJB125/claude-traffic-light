@@ -19,7 +19,7 @@ const TRAY_REFRESH_MS = 30000;
 const HANDOVER_TTL_MS = 60000;
 const BOARD_TICK_MS = 60000;
 
-function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usageAllowed = () => false, sessionsAllowed = () => false, accountAllowed = () => false, stateFile = null, hubSend = null, runner = null, isMac, dialog, shell, scriptDir, home = os.homedir(), launch, client: injected, log = () => {} }) {
+function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usageAllowed = () => false, sessionsAllowed = () => false, accountAllowed = () => false, stateFile = null, hubSend = null, runner = null, isMac, dialog, shell, scriptDir, home = os.homedir(), launch, client: injected, onView = () => {}, log = () => {} }) {
   const platform = isMac ? 'darwin' : 'other';
   const client = isMac ? (injected || require('./burst-client.js').createBurstClient({ home })) : null;
   const backoff = createProbeBackoff({ base: POLL_BASE_MS, max: POLL_MAX_MS });
@@ -35,6 +35,7 @@ function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usag
     inflight = inflight || client.detect().then((d) => {
       last = d;
       lastView = View.statusView(d, { platform });
+      try { onView(lastView); } catch (e) { log('[burst] onView failed', e && e.message); }
       backoff.probed({ ok: d.kind === 'present' || d.kind === 'not_installed', why: d.kind }, Date.now());
       return lastView;
     }).catch((e) => { log('[burst] detect failed', e && e.code); return lastView; }).finally(() => { inflight = null; });
@@ -209,6 +210,8 @@ function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usag
     snapshot: () => ({ d: last, url: isMac && last.kind === 'present' ? client.adminUrl() : null }),
     refresh,
     act,
+    // Health fix: the support console's fixed loopback address, usable even when Burst is untrusted.
+    async openConsole() { if (!isMac) return { ok: false, error: View.MAC_ONLY }; await shell.openExternal('http://127.0.0.1:7789/'); /* privacy-flow: burst-dashboard */ return { ok: true }; },
     setOpener(fn) { opener = typeof fn === 'function' ? fn : null; },
     enrichSession,
     pushBoardFacts,
