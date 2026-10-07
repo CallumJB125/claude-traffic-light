@@ -1073,7 +1073,8 @@ test('main.js: only the ready path waits (5 s) for the old app; once it exits th
   assert.match(fn, /quitOldInstance\(\{ \.\.\.quitOldOpts, waitMs \}\)/);
   assert.match(fn, /function quitOldAppIfInstalled\(waitMs = 0\)/);
   assert.match(fn, /RenameMigration\.whenGone\(asked, \(\) => \{ if \(claudeAutoConnect\(\) && !areHooksInstalled\(\)\) installHooks\(\{ narrow: true \}\); \}\)/);
-  const follow = src.slice(src.indexOf('function renameFollowUp()'), src.indexOf('app.whenReady()'));
+  const followAt = src.indexOf('function renameFollowUp()');
+  const follow = src.slice(followAt, src.indexOf('app.whenReady()', followAt));
   assert.match(follow, /quitOldAppIfInstalled\(5000\);/);
   assert.match(src, /RenameMigration\.watchOldApp\(\{ check: quitOldAppIfInstalled, powerMonitor \}\)/);
   assert.doesNotMatch(src, /powerMonitor\.on\('(resume|unlock-screen)', quitOldAppIfInstalled\)/);
