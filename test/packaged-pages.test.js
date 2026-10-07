@@ -26,8 +26,8 @@ test('every page, preload and local asset main.js uses is packaged', () => {
   for (const id of ['sessions', 'settings', 'usage', 'stats', 'help', 'hatch', 'feedback', 'updates', 'tasks', 'waiting', 'myday', 'setups', 'aitools']) assert.ok(registry.some(p => p.id === id && p.file && p.preload), `${id}: registered embedded file and preload`);
   const pages = [...main.matchAll(/loadFile\('([^']+\.html)'/g)].map((m) => m[1]);
   const preloads = [...main.matchAll(/preload: path\.join\(__dirname, '([^']+\.js)'\)/g)].map((m) => m[1]);
-  assert.deepEqual([...new Set(pages)].sort(), ['index.html', 'lights.html', 'overlay.html', 'tray.html']);
-  assert.deepEqual([...new Set(preloads)].sort(), ['lights-preload.js', 'overlay-preload.js', 'preload.js', 'tray-preload.js']);
+  assert.deepEqual([...new Set(pages)].sort(), ['index.html', 'lights.html', 'onboarding.html', 'overlay.html', 'tray.html']);
+  assert.deepEqual([...new Set(preloads)].sort(), ['lights-preload.js', 'onboarding-preload.js', 'overlay-preload.js', 'preload.js', 'tray-preload.js']);
   pages.push(...registry.map(p => p.file), ...shellPages);
   preloads.push(...registry.map(p => p.preload), ...shellPreloads);
   const assets = pages.flatMap((p) => {

@@ -4,11 +4,13 @@ const Help = require('../help.js');
 const Rules = require('../rules.js');
 
 // ── First run ──────────────────────────────────────────────────────────────
-test('help auto-shows only on a real run with no marker yet', () => {
-  assert.equal(Help.shouldAutoShow({ markerExists: false, devRun: false }), true);
-  assert.equal(Help.shouldAutoShow({ markerExists: true, devRun: false }), false);
-  assert.equal(Help.shouldAutoShow({ markerExists: false, devRun: true }), false);
+test('setup auto-shows only on a real run of a brand-new install', () => {
+  assert.equal(Help.shouldOnboard({ onboarded: false, helpShown: false, devRun: false }), true);
+  assert.equal(Help.shouldOnboard({ onboarded: true, helpShown: false, devRun: false }), false);
+  assert.equal(Help.shouldOnboard({ onboarded: false, helpShown: true, devRun: false }), false, 'an install that already saw Help is not re-onboarded');
+  assert.equal(Help.shouldOnboard({ onboarded: false, helpShown: false, devRun: true }), false);
   assert.equal(Help.MARKER, '.help-shown');
+  assert.equal(Help.ONBOARDED_MARKER, '.onboarded');
 });
 
 // ── Notification config ────────────────────────────────────────────────────

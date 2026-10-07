@@ -419,6 +419,9 @@ function installHooks({ narrow = RENAME_MIGRATES && RenameMigration.pending(app.
 // to either break, so none are written (Health says why).
 const EPHEMERAL = RenameMigration.EPHEMERAL_PATH.test(process.execPath);
 const AUTO_INSTALL_HOOKS = !IS_DEV_RUN && !EPHEMERAL;
+// Claude Code connects by itself at start and every 10 minutes after; the setup
+// window says so, and its Undo sets claudeAutoConnect false to stop the re-connect.
+const claudeAutoConnect = () => AUTO_INSTALL_HOOKS && loadConfig().claudeAutoConnect !== false;
 
 fs.mkdirSync(SESSIONS_DIR, { recursive: true });
 fs.mkdirSync(REQUESTS_DIR, { recursive: true });
@@ -1854,6 +1857,7 @@ ipcMain.handle('tasks:pick-folder', async (e) => {
 onQuit(app, () => tasksSvc?.stop());
 
 let lightsWin = null;
+let onboardingWin = null; // the first-run setup window (createOnboardingWindow)
 
 function createLightsWindow() {
   if (lightsWin) {
@@ -2005,25 +2009,102 @@ function helpState() {
 
 ipcMain.handle('open-help', e => { if (widgetOnly(e) || widgetConfigSender(e)) createHelpWindow(); });
 ipcMain.handle('get-help', (e) => fromUtilityPage(e, 'help') ? helpState() : null);
-// Help may navigate only these existing app pages, never a URL or command.
+// Help may navigate only these existing app pages (or rerun setup), never a URL or command.
 ipcMain.handle('help:navigate', (e, ...args) => {
   if (!fromUtilityPage(e, 'help') || args.length !== 1) return false;
   const destination = args[0];
   if (typeof destination === 'string' && /^aitools(:[a-z]{2,12})?$/.test(destination)) return typeof aiToolsOpen === 'function' ? aiToolsOpen(destination) : (openBuddy('aitools'), true);
-  if (typeof destination !== 'string' || !['overview', 'join', 'settings'].includes(destination)) return false;
+  if (destination === 'onboarding') { createOnboardingWindow(); return true; }
+  if (typeof destination !== 'string' || !['overview', 'board', 'join', 'settings'].includes(destination)) return false;
   openBuddy(destination);
   return true;
 });
 
+// ── First-run setup (onboarding.html) ─────────────────────────────────────
+// Connect the AI tools found here in one click (the click is the consent; the
+// diff, backups and Undo are src/ai-tools.js's own), wait for the first
+// session, then an optional daily alert and team. Its own small window, so the
+// sidebar's page registry is untouched; Help reopens it ("Run setup again").
+function createOnboardingWindow() {
+  if (onboardingWin) { onboardingWin.show(); onboardingWin.focus(); return; }
+  onboardingWin = new BrowserWindow({
+    width: 560, height: 680, minWidth: 460, minHeight: 520, useContentSize: true,
+    title: `Set up ${BRAND.NAME}`, backgroundColor: '#1c1a1f', show: false,
+    webPreferences: { spellcheck: false, preload: path.join(__dirname, 'onboarding-preload.js'), contextIsolation: true, sandbox: true, nodeIntegration: false },
+  });
+  onboardingWin.setMenuBarVisibility(false);
+  onboardingWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  const stay = stayOnPage('onboarding.html');
+  onboardingWin.webContents.on('will-navigate', stay);
+  onboardingWin.webContents.on('will-redirect', stay);
+  onboardingWin.once('ready-to-show', () => { onboardingWin?.show(); console.log('[onboarding] shown'); });
+  onboardingWin.on('closed', () => {
+    onboardingWin = null;
+    if (process.platform === 'darwin' && !buddyWin?.isOpen() && !lightsWin) app.dock.hide();
+  });
+  onboardingWin.loadFile('onboarding.html');
+  showDock();
+}
+const onboardingOnly = (e) => fromPage(e, onboardingWin?.webContents);
+const ONBOARDING_TOOLS = new Set(require('./src/ai-tools.js').TOOLS.map((t) => t.id));
+// Home once that page exists; until then the first section's page.
+const homePage = () => (BuddyPages.pageById('home') ? 'home' : BuddyPages.SECTIONS[0].default);
+function onboardingState() {
+  const view = require('./src/setup-checklist.js').onboardingView({ tools: AiTools.quick(), sessions: localSessions(aggregateState({ ignoreTravel: true }).sessions || []), loginItem: LoginItem.get(), claudeAuto: claudeAutoConnect() });
+  return { ...view, dailyBudget: loadConfig().spend.dailyBudget, onTeam: !!accountSummary()?.teamName };
+}
+ipcMain.handle('onboarding:state', (e) => (onboardingOnly(e) ? onboardingState() : null));
+ipcMain.handle('onboarding:preview', (e, id) => (onboardingOnly(e) && ONBOARDING_TOOLS.has(id) ? AiTools.tools.preview(id) : null));
+ipcMain.handle('onboarding:connect', async (e, ids) => {
+  if (!onboardingOnly(e) || !Array.isArray(ids) || ids.length > ONBOARDING_TOOLS.size || !ids.every((id) => ONBOARDING_TOOLS.has(id))) return null;
+  const results = [];
+  for (const id of new Set(ids)) {
+    const r = await AiTools.tools.connect(id);
+    // Connecting Claude by hand is consent again: the 10-minute re-connect resumes.
+    if (r.ok && id === 'claude' && loadConfig().claudeAutoConnect === false) saveConfig({ claudeAutoConnect: true });
+    results.push(r);
+  }
+  broadcastStatus();
+  return { ok: results.every((r) => r.ok), results };
+});
+// Claude's automatic connection has no backup of its own: Undo removes only
+// Plexiform's entries (a copy is kept first) and stops the re-connect.
+ipcMain.handle('onboarding:undo', (e, id) => {
+  if (!onboardingOnly(e) || !ONBOARDING_TOOLS.has(id)) return null;
+  if (id !== 'claude') return AiTools.tools.undo(id);
+  const saved = AiTools.quick().find((t) => t.id === 'claude')?.canUndo;
+  const r = saved ? AiTools.tools.undo('claude') : AiTools.tools.disconnect('claude');
+  if (r.ok) saveConfig({ claudeAutoConnect: false });
+  return r;
+});
+ipcMain.handle('onboarding:login-item', (e, on) => {
+  if (!onboardingOnly(e) || typeof on !== 'boolean') return null;
+  LoginItem.set(on);
+  return LoginItem.get();
+});
+ipcMain.handle('onboarding:budget', (e, dollars) => {
+  if (!onboardingOnly(e) || typeof dollars !== 'number' || !Number.isFinite(dollars) || dollars < 0 || dollars > 1e6) return null;
+  return commitConfig({ spend: { ...loadConfig().spend, dailyBudget: dollars } }).spend.dailyBudget;
+});
+// The pages setup may open: Home (which also ends setup), AI tools and the two team flows.
+ipcMain.handle('onboarding:navigate', (e, ...args) => {
+  if (!onboardingOnly(e) || args.length !== 1 || typeof args[0] !== 'string') return false;
+  const d = args[0];
+  if (/^aitools(:[a-z]{2,12})?$/.test(d)) return aiToolsOpen(d);
+  if (!['home', 'join', 'create-team'].includes(d)) return false;
+  openBuddy(d === 'home' ? homePage() : d);
+  if (d === 'home') onboardingWin?.close();
+  return true;
+});
 
 function maybeAutoShowHelp() {
-  const marker = path.join(ROOT_DIR, Help.MARKER);
-  if (!Help.shouldAutoShow({ markerExists: fs.existsSync(marker), devRun: IS_DEV_RUN })) return;
+  const marker = path.join(ROOT_DIR, Help.ONBOARDED_MARKER);
+  if (!Help.shouldOnboard({ onboarded: fs.existsSync(marker), helpShown: fs.existsSync(path.join(ROOT_DIR, Help.MARKER)), devRun: IS_DEV_RUN })) return;
   try {
     fs.mkdirSync(ROOT_DIR, { recursive: true });
     fs.writeFileSync(marker, new Date().toISOString());
-  } catch (e) { console.warn('[help] could not write the first-run marker:', e.message); }
-  createHelpWindow();
+  } catch (e) { console.warn('[onboarding] could not write the first-run marker:', e.message); }
+  createOnboardingWindow();
 }
 
 // ── Notifications for states that need you ─────────────────────────────────
@@ -2639,6 +2720,7 @@ function broadcastStatus() {
   }
   try { keepAwakeMain?.sync(aggregateState().sessions); } catch { /* the blocker is best-effort */ }
   lightsWin?.webContents.send('status-changed');
+  onboardingWin?.webContents.send('status-changed');
   for (const id of ['usage', 'stats', 'help', 'aitools']) buddyWin?.sendToPage(id, 'status-changed');
   try {
     const st = aggregateState();
@@ -2957,59 +3039,62 @@ function createTray() {
       ...SessionHandoverMain.menuItems(mine),
     ];
   };
-  const buildMenu = (from = 'tray') => Menu.buildFromTemplate([
-    ...budgetItems(),
-    ...scopeItem(),
-    ...BurstIpc.trayItems(),
-    ...AppMenu.appItems({ pages: BuddyPages.PAGES, groups: BuddyPages.GROUPS, open: openBuddy, openLabel: BRAND.OPEN_MENU_LABEL, feedback: { label: "Something's off / Idea…", click: createFeedbackWindow } }),
-    { label: 'Open Claude', click: () => shell.openExternal('https://claude.ai') },
-    ...quietItems(),
-    { label: 'Show Widget Now', click: () => { saveConfig({ showWidget: true }); clearTimeout(snoozeTimer); if (!win) createWindow(); win.showInactive(); createTray(); } },
-    { label: 'Reset Widget Position', click: () => { const wa = screen.getPrimaryDisplay().workArea; if (!win) createWindow(); strip = WidgetStrip.NONE; win.setMaximumSize(MAX_WIDTH, Math.round(MAX_WIDTH / WIDGET_ASPECT)); win.setAspectRatio(WIDGET_ASPECT); win.setBounds({ x: wa.x + wa.width - 140, y: wa.y + 46, width: 107, height: 137 }); win.showInactive(); broadcastStatus(); } },
-    {
-      label: 'Floating Widget',
-      type: 'checkbox',
-      checked: loadConfig().showWidget,
-      click: (item) => { saveConfig({ showWidget: item.checked }); applyWidgetVisibility(); broadcastStatus(); },
-    },
-    {
-      label: 'Claude in the Menu Bar',
-      type: 'checkbox',
-      checked: loadConfig().menuBarMode,
-      click: (item) => { saveConfig({ menuBarMode: item.checked }); updateTrayMode(); },
-    },
-    { type: 'separator' },
-    { label: 'What does this mean?…', click: createHelpWindow },
-    { label: 'Health…', click: showHealth },
-    { label: 'Knock now', enabled: IS_MAC, click: () => { knockNow().then((r) => console.log('[knock now]', JSON.stringify(r))); } },
-    { type: 'separator' },
-    { label: 'Bigger', click: () => resizeBy(1.25) },
-    { label: 'Smaller', click: () => resizeBy(0.8) },
-    { type: 'separator' },
-    {
-      label: hooksLabel,
-      click: () => {
-        installHooks();
-        createTray();
+  // The default menu is the everyday handful (the app's sections, not every
+  // page). Debug and resize controls show in dev runs and in the widget's
+  // Option/Shift-right-click menu only.
+  const sectionItems = () => BuddyPages.sectionsFor().map((sec) => ({ id: sec.default, title: sec.title, group: 'sections', kind: 'local' }));
+  const buildMenu = (from = 'tray') => {
+    const advanced = IS_DEV_RUN || from === 'widget';
+    return Menu.buildFromTemplate([
+      ...budgetItems(),
+      ...scopeItem(),
+      ...BurstIpc.trayItems(),
+      ...AppMenu.appItems({ pages: sectionItems(), groups: [{ id: 'sections' }], open: openBuddy, openLabel: BRAND.OPEN_MENU_LABEL, feedback: { label: "Something's off / Idea…", click: createFeedbackWindow } }),
+      { label: 'Open Claude', click: () => shell.openExternal('https://claude.ai') },
+      ...quietItems(),
+      ...(advanced ? [{ label: 'Show Widget Now', click: () => { saveConfig({ showWidget: true }); clearTimeout(snoozeTimer); if (!win) createWindow(); win.showInactive(); createTray(); } }] : []),
+      { label: 'Reset Widget Position', click: () => { const wa = screen.getPrimaryDisplay().workArea; if (!win) createWindow(); strip = WidgetStrip.NONE; win.setMaximumSize(MAX_WIDTH, Math.round(MAX_WIDTH / WIDGET_ASPECT)); win.setAspectRatio(WIDGET_ASPECT); win.setBounds({ x: wa.x + wa.width - 140, y: wa.y + 46, width: 107, height: 137 }); win.showInactive(); broadcastStatus(); } },
+      {
+        label: 'Floating Widget',
+        type: 'checkbox',
+        checked: loadConfig().showWidget,
+        click: (item) => { saveConfig({ showWidget: item.checked }); applyWidgetVisibility(); broadcastStatus(); },
       },
-    },
-    { type: 'separator' },
-    { label: 'Override: Green (5 min)', click: () => setManual('green') },
-    { label: 'Override: Amber (5 min)', click: () => setManual('amber') },
-    { label: 'Override: Red (5 min)', click: () => setManual('red') },
-    { label: 'Clear override', click: clearManual },
-    { type: 'separator' },
-    {
-      label: 'Open at Login',
-      type: 'checkbox',
-      checked: LoginItem.get(),
-      click: (item) => LoginItem.set(item.checked),
-    },
-    { type: 'separator' },
-    ...updaterTrayItems(),
-    { type: 'separator' },
-    { label: 'Quit', click: () => app.quit() },
-  ]);
+      {
+        label: 'Claude in the Menu Bar',
+        type: 'checkbox',
+        checked: loadConfig().menuBarMode,
+        click: (item) => { saveConfig({ menuBarMode: item.checked }); updateTrayMode(); },
+      },
+      { type: 'separator' },
+      { label: 'What does this mean?…', click: createHelpWindow },
+      ...(advanced ? [
+        { label: 'Health…', click: showHealth },
+        { label: 'Knock now', enabled: IS_MAC, click: () => { knockNow().then((r) => console.log('[knock now]', JSON.stringify(r))); } },
+        { type: 'separator' },
+        { label: 'Bigger', click: () => resizeBy(1.25) },
+        { label: 'Smaller', click: () => resizeBy(0.8) },
+        { type: 'separator' },
+        { label: hooksLabel, click: () => { installHooks(); createTray(); } },
+        { type: 'separator' },
+        { label: 'Override: Green (5 min)', click: () => setManual('green') },
+        { label: 'Override: Amber (5 min)', click: () => setManual('amber') },
+        { label: 'Override: Red (5 min)', click: () => setManual('red') },
+        { label: 'Clear override', click: clearManual },
+      ] : []),
+      { type: 'separator' },
+      {
+        label: 'Open at Login',
+        type: 'checkbox',
+        checked: LoginItem.get(),
+        click: (item) => LoginItem.set(item.checked),
+      },
+      { type: 'separator' },
+      ...updaterTrayItems(),
+      { type: 'separator' },
+      { label: 'Quit', click: () => app.quit() },
+    ]);
+  };
   // Rebuilt in place (never by recreating the tray) when the update items change;
   // trayMenu is also what the widget pops up on Linux, where there may be no tray.
   const mine = tray;
@@ -4483,7 +4568,7 @@ if (!gotLock) {
 function quitOldAppIfInstalled(waitMs = 0) {
   if (!RenameMigration.oldAppInstalled({ platform: process.platform, home: os.homedir() })) return;
   const { asked } = RenameMigration.quitOldInstance({ ...quitOldOpts, waitMs });
-  if (asked.length) RenameMigration.whenGone(asked, () => { if (AUTO_INSTALL_HOOKS && !areHooksInstalled()) installHooks({ narrow: true }); });
+  if (asked.length) RenameMigration.whenGone(asked, () => { if (claudeAutoConnect() && !areHooksInstalled()) installHooks({ narrow: true }); });
   if (asked.length && Notification.isSupported()) new Notification({ title: `${RenameMigration.OLD.productName} was running`, body: `It is ${Brand.name} now, so the old app was asked to quit. Remove it, or turn off its Open at Login.`, silent: true }).show();
 }
 
@@ -4534,7 +4619,7 @@ app.whenReady().then(() => {
   }
   // Dev runs share the machine with a real install: they must not rewrite the
   // user's hooks or claim Open at Login out from under it.
-  if (AUTO_INSTALL_HOOKS && !areHooksInstalled()) installHooks();
+  if (claudeAutoConnect() && !areHooksInstalled()) installHooks();
 
   const autoLaunchMarker = path.join(ROOT_DIR, '.auto-launch-configured');
   if (!IS_DEV_RUN && !fs.existsSync(autoLaunchMarker)) {
@@ -4633,7 +4718,7 @@ app.whenReady().then(() => {
   })();
   // After the widget has had time to appear, so the panel can sit beside it.
   if (process.argv.includes('--help-window') || process.argv.includes('--shot-help')) setTimeout(createHelpWindow, 1200);
-  else setTimeout(maybeAutoShowHelp, 2500);
+  else setTimeout(maybeAutoShowHelp, 1500);
 
   // A busy turn writes its session file many times a second and every write
   // fires this watcher — coalesce them into at most one refresh per 250 ms.
@@ -4688,7 +4773,7 @@ app.whenReady().then(() => {
   // Other agents live on disk, not in hooks: poll for them.
   if (!DEMO) { syncAgents(); every(OMC_POLL_MS, syncAgents, 'omc-agents'); }
 
-  if (AUTO_INSTALL_HOOKS) every(10 * 60 * 1000, () => { if (!areHooksInstalled()) installHooks(); }, 'hooks');
+  if (AUTO_INSTALL_HOOKS) every(10 * 60 * 1000, () => { if (claudeAutoConnect() && !areHooksInstalled()) installHooks(); }, 'hooks');
   if (DIAG) startDiag();
   if (DEMO === 'knock') {
     // A session that is waiting on you, running in whatever terminal launched

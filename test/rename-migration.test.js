@@ -589,7 +589,7 @@ test('main.js copies userData before the instance lock and anything else that op
   // The follow-up runs before the startup hook check, and never for a smoke run.
   const follow = src.indexOf('if (RENAME_MIGRATES && gotLock) {\n    renameFollowUp()');
   assert.ok(follow > 0);
-  assert.ok(follow > src.indexOf('if (smokeReport) {') && follow < src.indexOf('if (AUTO_INSTALL_HOOKS && !areHooksInstalled()) installHooks();'));
+  assert.ok(follow > src.indexOf('if (smokeReport) {') && follow < src.indexOf('if (claudeAutoConnect() && !areHooksInstalled()) installHooks();'));
 });
 
 // ── round 2: races, retries, never deleting ────────────────────────────────
@@ -1072,7 +1072,7 @@ test('main.js: only the ready path waits (5 s) for the old app; once it exits th
   const fn = src.slice(src.indexOf('function quitOldAppIfInstalled('), src.indexOf('function renameFollowUp()'));
   assert.match(fn, /quitOldInstance\(\{ \.\.\.quitOldOpts, waitMs \}\)/);
   assert.match(fn, /function quitOldAppIfInstalled\(waitMs = 0\)/);
-  assert.match(fn, /RenameMigration\.whenGone\(asked, \(\) => \{ if \(AUTO_INSTALL_HOOKS && !areHooksInstalled\(\)\) installHooks\(\{ narrow: true \}\); \}\)/);
+  assert.match(fn, /RenameMigration\.whenGone\(asked, \(\) => \{ if \(claudeAutoConnect\(\) && !areHooksInstalled\(\)\) installHooks\(\{ narrow: true \}\); \}\)/);
   const follow = src.slice(src.indexOf('function renameFollowUp()'), src.indexOf('app.whenReady()'));
   assert.match(follow, /quitOldAppIfInstalled\(5000\);/);
   assert.match(src, /RenameMigration\.watchOldApp\(\{ check: quitOldAppIfInstalled, powerMonitor \}\)/);

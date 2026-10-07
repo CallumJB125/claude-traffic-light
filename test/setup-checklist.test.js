@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { build, createForHelp } = require('../src/setup-checklist');
+const { build, createForHelp, onboardingView, firstSession } = require('../src/setup-checklist');
 
 const okReport = { checks: [{ id: 'hooks', status: 'ok', detail: 'Installed.' }] };
 
@@ -10,7 +10,8 @@ test('a fresh install shows four steps, each with a fix that Help may open', () 
   assert.deepEqual(c.rows.map((r) => r.id), ['hooks', 'signin', 'team', 'tackle']);
   assert.deepEqual(c.rows.map((r) => r.state), ['todo', 'todo', 'todo', 'todo']);
   assert.equal(c.done, 0);
-  assert.ok(c.rows.every((r) => ['overview', 'join', 'settings'].includes(r.fix.destination)));
+  assert.ok(c.rows.every((r) => ['board', 'join', 'settings'].includes(r.fix.destination)));
+  assert.deepEqual(c.rows[3].fix, { label: 'Open the board', destination: 'board' }, 'the card step opens the board, not Overview');
   assert.equal(c.prompt, null);
   assert.match(c.rows[0].detail, /No hooks\. Reinstall\./);
 });
@@ -76,4 +77,52 @@ test('createForHelp passes the live tool list through', () => {
   assert.equal(get().rows[0].id, 'tool:codex');
   const broken = createForHelp({ report: () => okReport, account: () => null, tasks: () => null, tools: () => { throw new Error('x'); } });
   assert.equal(broken().rows[0].id, 'hooks');
+});
+
+// ── First-run setup window ─────────────────────────────────────────────────
+test('setup lists detected tools first, pre-selects the unconnected ones and collapses the rest', () => {
+  const v = onboardingView({ claudeAuto: true, loginItem: true, tools: [
+    tool('claude', 'Claude Code', { connected: true, state: 'connected' }),
+    tool('codex', 'Codex'),
+    tool('gemini', 'Gemini CLI', { state: 'fix', detail: 'settings.json is not valid JSON.' }),
+    tool('cursor', 'Cursor', { installed: false, state: 'missing' }),
+    tool('hermes', 'Hermes Agent', { installed: false, state: 'missing' }),
+  ] });
+  assert.deepEqual(v.rows.map((r) => r.id), ['claude', 'codex', 'gemini']);
+  assert.deepEqual(v.pending, ['codex'], 'a tool that needs a fix is not ticked for one-click connect');
+  assert.deepEqual(v.missing.map((m) => m.id), ['cursor', 'hermes']);
+  const claude = v.rows[0];
+  assert.equal(claude.auto, true);
+  assert.equal(claude.canUndo, true, 'the automatic Claude connection is disclosed with an Undo');
+  assert.equal(claude.status, 'Connected automatically');
+  assert.match(v.rows[2].detail, /not valid JSON/);
+  assert.equal(v.loginItem, true);
+  assert.equal(v.session, null);
+});
+
+test('a Claude connection the person made is not called automatic, and Undo needs a saved backup', () => {
+  const v = onboardingView({ claudeAuto: false, tools: [tool('claude', 'Claude Code', { connected: true, state: 'connected', canUndo: false }), tool('codex', 'Codex', { connected: true, state: 'connected', canUndo: true })] });
+  assert.deepEqual(v.rows.map((r) => [r.id, r.auto, r.canUndo, r.status]), [['claude', false, false, 'Connected'], ['codex', false, true, 'Connected']]);
+  assert.deepEqual(v.pending, []);
+});
+
+test('zero tools found gives no rows and every tool under not installed', () => {
+  const v = onboardingView({ tools: [tool('claude', 'Claude Code', { installed: false }), tool('codex', 'Codex', { installed: false })] });
+  assert.deepEqual(v.rows, []);
+  assert.equal(v.missing.length, 2);
+});
+
+test('the first session signal reads as "<Tool> is working in <folder>"', () => {
+  const tools = [tool('claude', 'Claude Code'), tool('codex', 'Codex')];
+  assert.equal(firstSession([], tools), null);
+  assert.equal(firstSession([{ sessionId: 'r', remote: true, deviceName: 'box', cwd: '/x/y', updatedAt: '2026-10-07T10:00:00Z' }], tools), null, 'another machine\'s session is not this Mac connecting');
+  const s = firstSession([
+    { sessionId: 'a', cwd: '/Users/me/plexiform-release', updatedAt: '2026-10-07T10:00:00Z' },
+    { sessionId: 'b', source: 'codex', cwd: '/Users/me/api/', updatedAt: '2026-10-07T10:05:00Z' },
+  ], tools);
+  assert.deepEqual(s, { tool: 'codex', label: 'Codex', folder: 'api', text: 'Codex is working in api.' });
+  assert.equal(firstSession([{ sessionId: 'a', cwd: '/Users/me/plexiform-release' }], tools).text, 'Claude Code is working in plexiform-release.');
+  assert.equal(firstSession([{ sessionId: 'a', source: 'opencode' }], tools).text, 'Opencode is working.');
+  const v = onboardingView({ tools, sessions: [{ sessionId: 'a', source: 'claude-code', cwd: 'C:\\work\\site' }] });
+  assert.equal(v.session.text, 'Claude Code is working in site.');
 });

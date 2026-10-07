@@ -55,16 +55,11 @@
   <main aria-label="Get started and see what your AI agents are reporting">
   <section class="welcome" aria-labelledby="welcome-title">
     <h1 id="welcome-title">Welcome to Plexiform</h1>
-    <p>Your local board is ready. Open Overview to see your work, then join your team when you want to work together.</p>
+    <p>Connect your AI tools and Plexiform shows what they're doing, what needs you, and what it costs.</p>
     <div class="start-actions" role="group" aria-label="Get started">
-      <button class="primary" id="start-overview">Open Overview</button>
-      <button id="start-join">Join your team</button>
-      <button id="start-tools">Connect your AI tools</button>
+      <button class="primary" id="start-setup">Run setup again</button>
       <button id="start-privacy">What leaves your machine</button>
     </div>
-    <p class="rule">Curious what leaves your computer? Preferences → Privacy has a short plain-language list, above the full notice.</p>
-    <p class="rule">Join through the app’s sign-in flow; it may open your browser. Install and sign in to the AI tools you want to use, then connect them from More → AI tools.</p>
-    <p class="rule">Start here in the app—there are no Plexiform Terminal setup steps or release checks to complete. Your OS may ask to unlock secure storage when you sign in; you handle that prompt yourself.</p>
     <p class="start-notice" id="start-notice" role="status" aria-live="polite"></p>
   </section>
   <details class="setup" id="setup-box" aria-labelledby="setup-title" hidden>
@@ -186,7 +181,7 @@
     $('setup-list').addEventListener('click', openDest);
     $('tools-prompt').addEventListener('click', openDest);
 
-    for (const [id, destination] of [['start-overview', 'overview'], ['start-join', 'join'], ['start-tools', 'aitools'], ['start-privacy', 'settings']]) {
+    for (const [id, destination] of [['start-setup', 'onboarding'], ['start-privacy', 'settings']]) {
       $(id).addEventListener('click', async () => {
         let opened = false;
         try { opened = await window.helpApi.navigate(destination); } catch {}

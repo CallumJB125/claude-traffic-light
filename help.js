@@ -4,12 +4,14 @@ const Rules = require('./rules.js');
 const Brand = require('./brand.js');
 
 // ── First run ───────────────────────────────────────────────────────────────
-// The help panel opens by itself once per install, the first time the app
-// runs for real. Dev runs (demos, shots) never show it and never write the
-// marker, so they can't use up the real user's one showing.
+// Setup (onboarding.html) opens by itself once per install, the first time the
+// app runs for real. An install that already saw the old auto-shown Help
+// (MARKER) is not new, so it is never onboarded. Dev runs (demos, shots) never
+// show it and never write the marker, so they can't use up the real one.
 const MARKER = '.help-shown';
-function shouldAutoShow({ markerExists, devRun }) {
-  return !markerExists && !devRun;
+const ONBOARDED_MARKER = '.onboarded';
+function shouldOnboard({ onboarded, helpShown, devRun }) {
+  return !onboarded && !helpShown && !devRun;
 }
 
 // ── What's on screen, in words ──────────────────────────────────────────────
@@ -271,4 +273,4 @@ function notifications(prevKeys, next, config) {
   return { keys, fire };
 }
 
-module.exports = { MARKER, shouldAutoShow, explain, NOTIFY_KINDS, NOTIFY_DEFAULTS, notifyConfig, notifications };
+module.exports = { MARKER, ONBOARDED_MARKER, shouldOnboard, explain, NOTIFY_KINDS, NOTIFY_DEFAULTS, notifyConfig, notifications };

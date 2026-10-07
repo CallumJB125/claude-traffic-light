@@ -66,9 +66,9 @@ function tackleRow(tasks) {
   const n = Array.isArray(tasks) ? tasks.length : null;
   const state = n === null ? UNKNOWN : n > 0 ? DONE : TODO;
   return {
-    id: 'tackle', title: 'Tackle your first card with AI', state,
-    detail: state === DONE ? 'You have run a card.' : 'Open a card on your board and choose Tackle with AI.',
-    fix: state === DONE ? null : { label: 'Open Overview', destination: 'overview' },
+    id: 'tackle', title: 'Give your first card to AI', state,
+    detail: state === DONE ? 'You have run a card.' : 'Open a card on your board and send it to AI.',
+    fix: state === DONE ? null : { label: 'Open the board', destination: 'board' },
   };
 }
 
@@ -96,4 +96,41 @@ function createForHelp({ report, account, tasks, tools = () => null, now = Date.
   };
 }
 
-module.exports = { build, createForHelp };
+// ── First-run setup (onboarding.html) ───────────────────────────────────────
+// What the setup window shows, from what main already knows: `tools` is
+// src/ai-tools.js quick(), `sessions` the live local sessions. `claudeAuto`:
+// Claude Code's hooks are written by Plexiform at start, so its row says so
+// and offers Undo instead of a checkbox.
+const SOURCE_TOOL = { 'claude-code': 'claude', 'cursor-agent': 'cursor' };
+const toolOf = (s) => { const src = String(s?.source || 'claude'); return SOURCE_TOOL[src] || src; };
+const folderOf = (cwd) => String(cwd || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop() || '';
+
+// The session most recently heard from, in words: "Codex is working in api."
+function firstSession(sessions, tools) {
+  const live = (Array.isArray(sessions) ? sessions : []).filter((s) => s && !s.remote);
+  if (!live.length) return null;
+  const at = (s) => Date.parse(s.updatedAt) || 0;
+  const s = live.reduce((a, b) => (at(b) > at(a) ? b : a));
+  const id = toolOf(s);
+  const label = tools.find((t) => t.id === id)?.label || id.charAt(0).toUpperCase() + id.slice(1);
+  const folder = folderOf(s.cwd);
+  return { tool: id, label, folder, text: folder ? `${label} is working in ${folder}.` : `${label} is working.` };
+}
+
+function onboardingView({ tools = [], sessions = [], loginItem = null, claudeAuto = false } = {}) {
+  const list = Array.isArray(tools) ? tools : [];
+  const rows = list.filter((t) => t.installed).map((t) => {
+    const auto = t.id === 'claude' && t.connected && claudeAuto;
+    const selectable = !t.connected && t.state !== 'fix';
+    return {
+      id: t.id, label: t.label, connected: !!t.connected, auto, selectable,
+      canUndo: auto || (!!t.connected && !!t.canUndo),
+      status: auto ? 'Connected automatically' : t.connected ? 'Connected' : t.state === 'fix' ? 'Needs a fix' : 'Found',
+      detail: auto ? 'Plexiform connects Claude Code each time it starts. Undo turns that off.' : t.state === 'fix' || t.state === 'reconnect' ? t.detail : '',
+    };
+  });
+  const missing = list.filter((t) => !t.installed).map((t) => ({ id: t.id, label: t.label }));
+  return { rows, missing, pending: rows.filter((r) => r.selectable).map((r) => r.id), loginItem, session: firstSession(sessions, list) };
+}
+
+module.exports = { build, createForHelp, onboardingView, firstSession };
