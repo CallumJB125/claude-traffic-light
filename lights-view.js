@@ -458,6 +458,7 @@
       extra: (o) => (userBodies.includes(o) ? hatchRemoveBtn(o) : null),
     });
     $('bodies').appendChild(hatchAddBtn());
+    $('character-now').textContent = userBodies.includes(character.body) ? window.BuddyCharacters.get(character.body).name : character.body;
     picker($('effects'), R.EFFECTS, r.then.effect, (o) => ({ effect: o || 'none', waitMinutes: 20 }), (o) => { r.then.effect = o; });
     picker($('pets'), R.PETS, r.then.pet, (o) => ({ pet: o || 'none' }), (o) => { r.then.pet = o; });
     picker($('agents'), R.AGENT_STYLES, r.then.agents, (o) => ({ agents: o || 'robot', agentsColor: r.then.agentsColor, minions: SAMPLE_MINIONS }), (o) => { r.then.agents = o; });

@@ -467,7 +467,13 @@
   .swatch:focus-within { box-shadow: var(--focus); }
   .swatch input[type="color"] { position: absolute; inset: -6px; width: 40px; height: 40px; border: none; padding: 0; background: none; cursor: pointer; opacity: 0; }
   #character { padding: 8px 12px; border-bottom: 1px solid var(--line, rgba(128,128,128,.25)); }
-  #character .lbl { font-weight: 600; margin-bottom: 6px; }
+  #character > summary { font-weight: 600; cursor: pointer; list-style: none; display: flex; align-items: center; gap: 6px; }
+  #character > summary::-webkit-details-marker { display: none; }
+  #character > summary::before { content: '▸'; font-size: 10px; opacity: .6; }
+  #character[open] > summary::before { content: '▾'; }
+  #character[open] > summary { margin-bottom: 8px; }
+  #character .posebtn { height: 56px; }
+  #character .field { max-height: 34vh; overflow-y: auto; }
   #character .hint { font-weight: 400; opacity: .6; margin-left: 6px; }
   .swatch.custom::after {
     content: '';
@@ -939,15 +945,15 @@
     <aside id="rules" aria-label="Rules">
       <header><span>Rules</span><span class="count" id="rule-count"></span></header>
       <div id="now" role="status" aria-live="off" aria-label="What the widget is showing now"><div class="head">Now: …</div><div class="owners"></div></div>
-      <div id="character" aria-label="Character">
-        <div class="lbl">Character <span class="hint">one for every state</span></div>
+      <details id="character" aria-label="Character">
+        <summary class="lbl">Character <span class="hint" id="character-now">one for every state</span></summary>
         <div class="field">
           <div class="poses" id="bodies"></div>
           <label class="swatch custom" id="body-color-swatch" title="Character colour (e.g. a brand colour)">
             <input type="color" id="body-color" />
           </label>
         </div>
-      </div>
+      </details>
       <ul id="rule-list" role="listbox" aria-label="Rules, highest priority first"></ul>
       <footer>
         <button class="btn" id="add-btn">
