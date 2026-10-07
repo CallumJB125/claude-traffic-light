@@ -19,7 +19,7 @@ const { isPrivateHost } = require('./workspaces');
 const PAGES = [
   { id: 'overview', title: 'Overview', icon: 'layers', kind: 'local', file: 'overview.html', preload: 'overview-preload.js', group: 'work' },
   // hidden until the sidebar lists it (and makes it the default) as its own section.
-  { id: 'home', title: 'Home', icon: 'sun', kind: 'local', file: 'home.html', preload: 'home-preload.js', group: 'work', hidden: true },
+  { id: 'home', title: 'Home', icon: 'sun', kind: 'local', file: 'home.html', preload: 'home-preload.js', group: 'work' },
   { id: 'board', title: 'Board', icon: 'board', kind: 'hub', view: 'board', group: 'work',
     children: [
       { id: 'board:table', title: 'Table', kind: 'hub', view: 'table' },
@@ -65,7 +65,7 @@ const GROUPS = [
 // Home opens Overview until the Home page is registered (then `home` leads it);
 // Sessions lives under it as "Running now".
 const SECTIONS = [
-  { id: 'home', title: 'Home', icon: 'sun', default: 'overview', pages: ['overview', 'myday', 'waiting', 'sessions'] },
+  { id: 'home', title: 'Home', icon: 'sun', default: 'home', pages: ['home', 'overview', 'myday', 'waiting', 'sessions'] },
   { id: 'board', title: 'Board', icon: 'board', default: 'board', pages: ['board', 'board:table', 'board:history', 'board:dashboard'] },
   { id: 'tasks', title: 'Tasks', icon: 'tasks', default: 'tasks', pages: ['tasks'] },
   { id: 'usage', title: 'Usage & cost', icon: 'chart', default: 'usage', pages: ['usage', 'stats', 'optimiser'] },
