@@ -84,6 +84,12 @@ const MATRIX = {
   'POST /api/messaging/v1/host/pull': { kind: 'cross', status: 403, path: () => '/api/messaging/v1/host/pull', body: {} },
   'POST /api/messaging/v1/host/messages/:id/report': { kind: 'cross', status: 403, path: () => `/api/messaging/v1/host/messages/${randomUUID()}/report`, body: { state: 'delivered' } },
   'POST /api/messaging/v1/host/send': { kind: 'cross', status: 403, path: f => '/api/messaging/v1/host/send', body: f => ({ from: { session: randomUUID(), generation: 1 }, to: { user_id: f.users.ub.id, org_id: f.B.team }, body: MARK }) },
+  // Team activity (activity/): a foreign repo is rejected per record (200, nothing stored); reads naming it are 404.
+  'POST /api/activity/v1/events': { kind: 'cross', status: 200, bare: true, path: () => '/api/activity/v1/events', body: (fx) => { const install = randomUUID(); const at = fx.h.hub.iso();
+    return { install_id: install, records: [{ v: 1, record_id: `${install}:claude:s1`, adapter: 'claude', session_id: 's1', install_id: install, repo_id: fx.B.repo, title: 'x', status: 'working', started_at: at, updated_at: at, rev: 1 }] }; } },
+  'GET /api/activity/v1/feed': { kind: 'cross', path: (fx) => `/api/activity/v1/feed?repo_id=${fx.B.repo}` },
+  'GET /api/activity/v1/current': { kind: 'cross', path: (fx) => `/api/activity/v1/current?repo_id=${fx.B.repo}` },
+  'GET /api/activity/v1/stream': { kind: 'cross', path: (fx) => `/api/activity/v1/stream?repo_id=${fx.B.repo}` },
   'GET /api/account': { kind: 'self' },
   'GET /api/work-capture/routes': { kind: 'self' },
   'GET /api/my-day': { kind: 'self' },

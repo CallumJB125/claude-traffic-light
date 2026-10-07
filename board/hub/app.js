@@ -33,6 +33,7 @@ import { Enrolments } from './identity/enrolments.js';
 import { Billing } from './billing/entitlements.js';
 import { PushService } from './push.js';
 import { Sync } from './sync.js';
+import { Activity } from './activity/index.js';
 import { oauthProviders } from './config.js';
 import { RemoteAuthority } from './remote/authority.js';
 import { StorageWatch } from './storage-watch.js';
@@ -83,6 +84,7 @@ function buildApp(config, { db, clock, log, github, fetchImpl, timers, mailer })
   // Phone push (push.js): content-free pings; off without the operator's VAPID keys.
   hub.push = hub.accounts ? new PushService(hub, { fetchImpl, ...(config.pushHosts ? { hosts: config.pushHosts } : {}), allowHttp: config.pushAllowHttp === true }) : null;
   hub.sync = hub.accounts ? new Sync(hub) : null;
+  hub.activity = hub.accounts ? new Activity(hub) : null;
   hub.remoteAuthority = hub.accounts ? new RemoteAuthority(hub) : null;
   // Deleting an account or a team needs a step-up: an email code (a mailer)
   // or an OAuth re-authentication (a configured provider). Without either,
@@ -141,6 +143,12 @@ function buildApp(config, { db, clock, log, github, fetchImpl, timers, mailer })
         hub.sync.sweep().catch((e) => log.warn('sync sweep failed', { err: e }));
       }, SYNC_SWEEP_MS));
     }
+    if (hub.activity) {
+      intervals.push(setInterval(() => {
+        if (closed) return;
+        try { hub.activity.sweep(); } catch (e) { log.warn('activity sweep failed', { err: e }); }
+      }, SYNC_SWEEP_MS));
+    }
     if (gh.enabled) {
       intervals.push(setInterval(() => { hub.pollMerges().catch((e) => log.warn('merge poll failed', { err: e })); }, config.githubPollMs));
     }
@@ -184,6 +192,7 @@ function buildApp(config, { db, clock, log, github, fetchImpl, timers, mailer })
       api.workflowExecutor.close();
       hub.interactionRelay?.close();
       hub.messaging?.close();
+      hub.activity?.close();
       bus.stop();
       for (const i of intervals) clearInterval(i);
       const done = new Promise((resolve) => server.close(() => resolve()));
