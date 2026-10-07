@@ -49,7 +49,7 @@ test('transient 429: three backoff retries via stdin, then failed{limit}', () =>
 }));
 
 test('network error text → failed{network}; plain error → failed{error}', async () => {
-  await withRunner({ steps: [{ result: 'error_during_execution', text: 'fetch failed: ECONNRESET' }] }, async ({ hub, sup }) => {
+  await withRunner({ steps: [{ result: 'error_during_execution', text: 'fetch failed: ECONNRESET' }], on_input: { 'network dropped': [{ result: 'error_during_execution', text: 'fetch failed: ECONNRESET' }] } }, async ({ hub, sup }) => {
     await claimRun(sup, hub, offerFor({ key: 'T-4' }));
     assert.equal((await waitFor(() => hub.outs('run.failed')[0], { what: 'failed' })).fail_kind, 'network');
   });

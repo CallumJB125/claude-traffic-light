@@ -170,7 +170,7 @@ test('plan limit reads "Paused: limit" with continue_with_another_ai; no new sta
   assert.equal(f.state, 'failed');
   assert.equal(f.actions[0], 'continue_with_another_ai');
   assert.ok(!STATES.includes('paused'));
-  assert.equal(cardFace(view('failed', { fail_kind: 'network' })).label, 'Failed');
+  assert.equal(cardFace(view('failed', { fail_kind: 'network' })).label, 'Waiting for network');
 });
 
 test('a run served by Burst\'s secondary keeps running and carries a "via secondary" badge', () => {

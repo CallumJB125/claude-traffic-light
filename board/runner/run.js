@@ -18,6 +18,8 @@ export const ACTIVITY_THROTTLE_MS = 5000;
 export const FACT_FLUSH_MS = 2000;
 export const SNAPSHOT_EVERY_MS = 10 * 60 * 1000;
 export const RATE_LIMIT_RETRIES = 3;
+export const NETWORK_RETRIES = 5;
+const NETWORK_BACKOFF_CAP_MS = 5 * 60_000;
 
 const FILE_TOOLS = new Set(['Read', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Glob', 'Grep']);
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
@@ -41,7 +43,7 @@ function err(code, message) {
 
 /** Failure kind from result text, reusing hooks/set-status.js failureOf() regexes. */
 export function failKindOf(text) {
-  if (/network|ECONN|ENOTFOUND|ETIMEDOUT|fetch failed|connection|offline|socket/i.test(text)) return 'network';
+  if (/broken pipe|EPIPE|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|fetch failed|timeout awaiting response headers|network (error|is unreachable)|offline/i.test(text)) return 'network';
   if (/rate[ _-]?limit|overloaded|\b529\b|\b429\b|usage limit/i.test(text)) return 'limit';
   return 'error';
 }
@@ -134,6 +136,7 @@ export class Run {
     this.expectInterrupt = false;
     this.rateLimited = null;
     this.limitRetries = 0;
+    this.networkRetries = 0;
     this.done = new Promise((resolve) => { this.resolveDone = resolve; });
   }
 
@@ -346,6 +349,7 @@ export class Run {
     if (r.subtype === 'success') {
       this.turnSucceeded = true;
       this.limitRetries = 0;
+      this.networkRetries = 0;
       if (this.gateOpen && this.pending.length) this.#flushIdle();
       return;
     }
@@ -369,6 +373,13 @@ export class Run {
       const wait = (this.sup.opts.limitBackoffMs ?? 30000) * 2 ** this.limitRetries++;
       this.log.warn('rate limited, retrying', { run_id: this.run_id, wait });
       setTimeout(() => { if (!this.ending && this.backend?.alive()) this.backend.send('You were rate limited; continue where you left off.'); }, wait).unref?.();
+      return;
+    }
+    // A dropped connection is not a limit: its own retries and backoff, and it never spends a limit retry.
+    if (kind === 'network' && this.networkRetries < NETWORK_RETRIES) {
+      const wait = Math.min((this.sup.opts.networkBackoffMs ?? 15000) * 2 ** this.networkRetries++, NETWORK_BACKOFF_CAP_MS);
+      this.log.warn('network error, retrying', { run_id: this.run_id, wait });
+      setTimeout(() => { if (!this.ending && this.backend?.alive()) this.backend.send('The network dropped; continue where you left off.'); }, wait).unref?.();
       return;
     }
     const resetsAt = this.rateLimited?.resetsAt ? this.rateLimited.resetsAt * 1000 : null;

@@ -150,7 +150,7 @@ function reasonFor(view, state, live) {
       const owner = view.run?.owner?.name ?? 'the';
       switch (view.fail_kind) {
         case 'limit': return `usage limit on ${possessive(owner)} account${view.limit_resets_in_ms != null ? ` · resets in ${formatAge(view.limit_resets_in_ms)}` : ''}`;
-        case 'network': return 'network';
+        case 'network': return 'connection lost · retry when you are back online';
         case 'budget': return view.run?.budget_stop === 'device' ? 'machine budget limit reached' : `budget${view.budget?.cap_usd != null ? ` $${fmtUsd(view.budget.cap_usd)}` : ''} reached`;
         case 'stopped': return `stopped by ${view.stopped_by_name ?? 'someone'}`;
         case 'released': return `released by ${BACKEND_LABEL[view.run?.backend] ?? 'Claude'}${view.fail_reason ? `: ${view.fail_reason}` : ''}`;
@@ -214,7 +214,8 @@ export function cardFace(view, { elapsed_ms = 0, connection_lost = false } = {})
   }
   if (reason === undefined) reason = reasonFor(aged, state, live);
 
-  const pill = PILLS[key];
+  // Reuses the failed pill key (icon, column) so the hub and web need no new state.
+  const pill = key === 'failed' && view.fail_kind === 'network' ? { ...PILLS.failed, label: 'Waiting for network', tone: 'grey' } : PILLS[key];
   let tone = pill.tone;
   if (state === 'running' && !green) tone = connection_lost ? 'unknown' : pill.tone === 'green' ? 'quiet' : pill.tone;
   if (connection_lost && ACTIVE.has(state)) tone = 'unknown';
