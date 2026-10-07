@@ -59,3 +59,11 @@ test('quiet hours, snooze and project mute hold events through src/quiet.js', ()
   assert.equal(gate(ev, { snoozeUntil: now + 1000 }, now).why, 'snooze');
   assert.equal(gate(ev, { snoozeUntil: now - 1 }, now).why, null);
 });
+
+test('muted (notices.json live) returns nothing but keeps the baseline, so unmuting does not replay an edge', () => {
+  const t = createBurstEvents();
+  t.observe(on(), 0);
+  assert.deepEqual(t.observe(sec, 1, { muted: true }), []);
+  assert.deepEqual(t.observe(sec, 2), [], 'secondary was already the baseline');
+  assert.deepEqual(kinds(t.observe(off, 3)), ['bypass'], 'a later edge still fires, with its cooldown untouched');
+});

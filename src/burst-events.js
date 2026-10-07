@@ -1,6 +1,7 @@
 'use strict';
-// Burst has no event stream yet, so alerts are derived by diffing successive
-// polled status view models (src/burst-view.js statusView). Pure: the clock
+// Fallback for when Burst's notices.json is not being watched (src/burst-notices.js):
+// alerts are derived by diffing successive polled status view models
+// (src/burst-view.js statusView). Pure: the clock
 // and the quiet config are passed in. Quiet hours, snooze and project mutes
 // (src/quiet.js) decide whether an event may notify; they never change the view.
 const Quiet = require('./quiet.js');
@@ -26,12 +27,14 @@ function createBurstEvents() {
 
   // Returns the events this poll adds, at most one per transition and never
   // the same kind twice within COOLDOWN_MS. The first view is only a baseline.
-  function observe(view, now) {
+  // { muted: true } (notices.json is live and says it better) keeps the baseline
+  // current and cooldowns untouched, and returns nothing.
+  function observe(view, now, { muted = false } = {}) {
     if (!view || view.kind === 'unsupported') return [];
     const cur = { kind: view.kind, level: levelOf(view) };
     const before = prev;
     prev = cur;
-    if (!before) return [];
+    if (!before || muted) return [];
     const out = [];
     if (cur.level === 'secondary' && before.level !== 'secondary') out.push('failover');
     else if (cur.level === 'near' && before.level === null) out.push('limit-near');
