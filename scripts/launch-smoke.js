@@ -9,7 +9,9 @@ const path = require('node:path');
 const exe = process.argv[2] || path.join(__dirname, '..', 'node_modules', 'electron', 'dist', 'Electron.app', 'Contents', 'MacOS', 'Electron');
 const args = process.argv[2] ? [] : [path.join(__dirname, '..')];
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'plex-smoke-'));
-const env = { ...process.env, CLAUDE_TRAFFIC_LIGHT_HOME: path.join(home, 'home') };
+// HOME is isolated too: a first run connects Claude Code by editing ~/.claude/settings.json, which must never be the real one.
+fs.mkdirSync(path.join(home, 'userhome'), { recursive: true });
+const env = { ...process.env, HOME: path.join(home, 'userhome'), CLAUDE_TRAFFIC_LIGHT_HOME: path.join(home, 'home') };
 const child = spawn(exe, [...args, `--user-data-dir=${path.join(home, 'ud')}`], { env, stdio: ['ignore', 'pipe', 'pipe'] });
 let out = '';
 child.stdout.on('data', (d) => { out += d; });
