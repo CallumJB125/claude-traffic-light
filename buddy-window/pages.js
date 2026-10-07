@@ -54,7 +54,7 @@ const PAGES = [
   // Encrypted sync across your own computers (src/sync/index.js serves its IPC; Plus/Team, upsell otherwise).
   { id: 'sync', title: 'Sync', icon: 'layers', kind: 'local', file: 'sync.html', preload: 'sync-preload.js', group: 'you', hidden: true },
   // The floating widget: live preview, show/hide, size, corner and what it shows (src/widget-page.js serves its IPC).
-  { id: 'widget', title: 'Widget', icon: 'lights', kind: 'local', file: 'widget-page.html', preload: 'widget-page-preload.js', group: 'you' },
+  { id: 'widget', title: 'Look and position', icon: 'lights', kind: 'local', file: 'widget-page.html', preload: 'widget-page-preload.js', group: 'you' },
   { id: 'lights', title: 'Widget configuration', icon: 'lights', kind: 'window', window: 'lights', group: 'you' },
   { id: 'aitools', title: 'AI tools', icon: 'plug', kind: 'local', file: 'aitools.html', preload: 'aitools-preload.js', group: 'you' },
   { id: 'settings', title: 'Preferences', icon: 'gear', kind: 'local', file: 'settings.html', preload: 'settings-preload.js', query: { embedded: '1' }, group: 'you' },
