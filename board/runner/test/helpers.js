@@ -211,7 +211,7 @@ export async function startRunner({ hub, home, repo, scenario, clock, policyExtr
     ...(process.platform === 'win32' && scenario ? { Backend: WindowsSyntheticClaude } : {}),
     env: env ?? Object.fromEntries(Object.entries({ HOME: process.env.HOME ?? os.homedir(), USER: process.env.USER, PATH: process.env.PATH, TMPDIR: TEMP_ROOT, LANG: 'en_US.UTF-8', ...(process.platform === 'win32' ? { SystemRoot: process.env.SystemRoot, USERPROFILE: process.env.USERPROFILE, LOCALAPPDATA: process.env.LOCALAPPDATA, APPDATA: process.env.APPDATA, TEMP: process.env.TEMP, TMP: process.env.TMP } : {}) }).filter(([, value]) => typeof value === 'string')),
     log: makeLogger(process.stderr, { quiet: !process.env.BOARD_TEST_LOG }),
-    interruptWaitMs: 500, stopGraceMs: 800, limitBackoffMs: 50, gitleaks: null, rand: () => 0, reconnectDelayFn: () => 30,
+    interruptWaitMs: 500, stopGraceMs: 800, limitBackoffMs: 50, networkBackoffMs: 50, gitleaks: null, rand: () => 0, reconnectDelayFn: () => 30,
     keepRunFiles: true,   // tests read fake.log after the run ends
     buddyHome: null,      // never write Buddy launch records into the real home
     detectAis: async () => null,   // never probe the real claude/codex

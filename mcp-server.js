@@ -17,6 +17,7 @@ const http = require('http'); // privacy-flow: local-mcp
 const Rules = require('./rules.js');
 const SessionState = require('./hooks/session-state.js');
 const GitSignals = require('./src/github-signals.js');
+const BurstSnapshot = require('./src/burst-snapshot.js');
 
 const DEFAULTS = {
   workingStaleMinutes: 6,
@@ -536,6 +537,41 @@ async function buddyHealth({ root, now = Date.now(), home = os.homedir(), live, 
   };
 }
 
+// Burst tools read the whitelisted snapshot main writes (src/burst-snapshot.js); a
+// missing or stale file means Burst is not there, and nothing here calls Burst.
+const BURST_ABSENT = { present: false, message: 'Burst not present' };
+const readBurst = ({ root, now }) => BurstSnapshot.readSnapshot(BurstSnapshot.snapshotPath(root), { now });
+
+function buddyBurstStatus({ root, now = Date.now() }) {
+  const s = readBurst({ root, now });
+  if (!s || !s.present) return BURST_ABSENT;
+  return {
+    present: true, version: s.version, route: s.route, active: s.active, overflow: s.overflow, reason: s.reason, claim: s.claim, until: s.until,
+    secondaryReady: s.secondary_ready, primary: s.primary, secondary: s.secondary, primaryFailures: s.primaryFailures, limits: s.limits,
+    snapshotAgeSeconds: Math.round((now - s.at) / 1000),
+  };
+}
+
+function buddyBurstCoordination({ root, now = Date.now(), path: p }) {
+  const s = readBurst({ root, now });
+  if (!s || !s.present) return BURST_ABSENT;
+  if (!s.coordination) return { present: true, coordination: false, message: 'Burst coordination is off or has no sessions' };
+  const files = s.coordination.files;
+  const q = typeof p === 'string' ? p.trim() : '';
+  if (!q) return { present: true, coordination: true, sessions: s.coordination.sessions, files };
+  const hits = files.filter((f) => f.path === q || f.path.endsWith(q) || q.endsWith(f.path));
+  return { present: true, coordination: true, path: q, masters: hits.map((f) => ({ path: f.path, master: f.master, contributors: f.contributors })), message: hits.length ? undefined : `No session masters ${q}` };
+}
+
+function buddyBurstRequests({ root, now = Date.now(), session, limit }) {
+  const s = readBurst({ root, now });
+  if (!s || !s.present) return BURST_ABSENT;
+  const n = Math.min(50, Math.max(1, Number.isInteger(limit) ? limit : 20));
+  const sid = typeof session === 'string' ? session.trim() : '';
+  const rows = (s.requests || []).filter((r) => !sid || r.session === sid || (sid.length >= 4 && r.session.startsWith(sid))).slice(0, n);
+  return { present: true, count: rows.length, requests: rows, note: 'Metadata only: no prompts, paths or response bodies. The last 50 requests Burst saw.' };
+}
+
 const TOOLS = [
   { name: 'buddy_status', description: 'What the Plexiform widget is showing right now and why: lamp, pose, eyes, costume, effect, pet, cameo; which rule owns each channel; session/agent counts; current tool; online state; and whether the running app agrees.', run: (a, c) => buddyStatus(c) },
   { name: 'buddy_sessions', description: 'Every session file the widget sees: signal (raw and as presented), cwd, tool, agents with kind/status/heartbeat, age, and how long until it goes stale — including the ones the widget is ignoring and why.', run: (a, c) => buddySessions(c) },
@@ -548,6 +584,9 @@ const TOOLS = [
   { name: 'buddy_usage_history', description: 'Spend and token history from the permanent daily record, which reaches back further than the transcripts Claude Code keeps: "how much did I spend on Opus in August?". `range` is today, 7d, 30d, 90d, 1y, all, YYYY-MM, or YYYY-MM-DD..YYYY-MM-DD (at most 400 days). `groupBy` is day, model, family, project or source. Project names are folder names only.', input: (z) => ({ range: z.string().optional().describe('default 30d'), groupBy: z.enum(['day', 'model', 'family', 'project', 'source']).optional().describe('default day') }), run: (a, c) => buddyUsageHistory({ ...c, range: a.range, groupBy: a.groupBy }) },
   { name: 'buddy_health', description: 'Is Plexiform set up right? Checks that the Claude Code hooks are installed and point at this copy of the app (not a moved app or an old checkout), the last hook event and its age, the signal server, this MCP registration, session files and stale locks, transcripts, disk space and the app version. Each problem comes with the one-click fix Plexiform offers or the step to take by hand.', run: (a, c) => buddyHealth({ ...c, mcpConnected: true }) },
   { name: 'buddy_pending_requests', description: 'Permission requests currently blocked waiting for an answer from the widget (PermissionRequest hook), with how long the hook will keep waiting.', run: (a, c) => buddyPendingRequests(c) },
+  { name: 'buddy_burst_status', description: 'Claude Burst, if installed and running: which route requests take (primary or secondary), whether the secondary is ready, rate-limited models and when they come back, and primary failures. Says "Burst not present" when Burst is not running. Read-only; reads a snapshot the app wrote.', run: (a, c) => buddyBurstStatus(c) },
+  { name: 'buddy_burst_coordination', description: 'Burst session coordination: which session masters which file ("who masters path X?"). `path` is a file path or its tail; omit it for every session and the files it masters. Says "Burst not present" when Burst is not running.', input: (z) => ({ path: z.string().optional().describe('file path (or its tail) to look up') }), run: (a, c) => buddyBurstCoordination({ ...c, path: a.path }) },
+  { name: 'buddy_burst_requests', description: 'The last requests Burst routed: time, session, route, destination host, model, status, latency, tokens, API-equivalent USD. Metadata only. `session` filters by session id (or its first characters); `limit` is at most 50.', input: (z) => ({ session: z.string().optional().describe('session id or its first characters'), limit: z.number().int().min(1).max(50).optional().describe('how many (default 20)') }), run: (a, c) => buddyBurstRequests({ ...c, session: a.session, limit: a.limit }) },
 ];
 
 async function main() {
@@ -572,7 +611,7 @@ async function main() {
   await server.connect(new StdioServerTransport());
 }
 
-module.exports = { TOOLS, CHANNELS, rootDir, loadConfig, readRequests, classifySession, scanSessions, computeState, parseTransition, buddyStatus, buddySessions, buddyWhy, buddyRules, buddyRecentTransitions, buddyModelMix, buddyPendingRequests, buddyGitStatus, buddySpend, buddyUsageHistory, buddyHealth, hookRuntime };
+module.exports = { TOOLS, CHANNELS, rootDir, loadConfig, readRequests, classifySession, scanSessions, computeState, parseTransition, buddyStatus, buddySessions, buddyWhy, buddyRules, buddyRecentTransitions, buddyModelMix, buddyPendingRequests, buddyGitStatus, buddySpend, buddyUsageHistory, buddyHealth, buddyBurstStatus, buddyBurstCoordination, buddyBurstRequests, hookRuntime };
 
 if (require.main === module) {
   main().catch((err) => { process.stderr.write(`plexiform mcp: ${err.stack || err}\n`); process.exit(1); });

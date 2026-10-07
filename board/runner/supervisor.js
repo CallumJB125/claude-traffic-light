@@ -81,7 +81,7 @@ export class Supervisor extends EventEmitter {
    * opts: home, env (parent env for the CLI allowlist), clock {mono,wall}, log,
    * autoTick (default true), WebSocketImpl, confirm(offerSummary) → Promise<bool>,
    * powerMonitor {on(event, fn)}, claudeBin, mcpServer, controlSocket (default true),
-   * interruptWaitMs, stopGraceMs, claimBudgetMs, limitBackoffMs, gitleaks, rand, hubUrl
+   * interruptWaitMs, stopGraceMs, claimBudgetMs, limitBackoffMs, networkBackoffMs, gitleaks, rand, hubUrl
    */
   constructor(opts = {}) {
     super();
