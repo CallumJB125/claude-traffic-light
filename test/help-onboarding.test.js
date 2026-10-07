@@ -17,11 +17,11 @@ function wiring(){
   });
   return {handler:registered.get('help:navigate'),opened,pages};
 }
-test('Help navigation opens only the three existing destinations with one closed argument',()=>{
+test('Help navigation opens only the four existing destinations with one closed argument',()=>{
   const f=wiring(),e=event(f.pages.help);
-  for(const destination of ['overview','join','settings'])assert.equal(f.handler(e,destination),true);
-  assert.deepEqual(f.opened,['overview','join','settings']);f.opened.length=0;
-  for(const args of [[],['overview','extra'],[null],[{}],[['overview']],[new String('overview')],['https://example.com'],['file:///private/data'],['command'],['setups'],['team'],['signin'],['Overview']])assert.equal(f.handler(e,...args),false);
+  for(const destination of ['overview','join','settings','aitools','aitools:codex','aitools:all'])assert.equal(f.handler(e,destination),true);
+  assert.deepEqual(f.opened,['overview','join','settings','aitools','aitools','aitools']);f.opened.length=0;
+  for(const args of [[],['overview','extra'],[null],[{}],[['overview']],[new String('overview')],['https://example.com'],['file:///private/data'],['command'],['setups'],['aitools:../x'],['aitools:'],['aitoolsx'],['team'],['signin'],['Overview']])assert.equal(f.handler(e,...args),false);
   assert.deepEqual(f.opened,[]);
 });
 test('Help navigation rejects foreign, subframe, retired, destroyed and missing owners',()=>{
@@ -46,8 +46,8 @@ test('real Help preload and welcome buttons reach restricted main navigation whi
   assert.equal(els.get('headline').textContent,'Fixture status');
   assert.ok(html.indexOf('id="welcome-title"')<html.indexOf('id="headline"'));
   for(const id of ['start-overview','start-join','start-tools'])await els.get(id).listeners.click();
-  assert.deepEqual(f.opened,['overview','join','settings']);
-  assert.deepEqual(calls.filter(c=>c[0]==='help:navigate'),[['help:navigate','overview'],['help:navigate','join'],['help:navigate','settings']]);
+  assert.deepEqual(f.opened,['overview','join','aitools']);
+  assert.deepEqual(calls.filter(c=>c[0]==='help:navigate'),[['help:navigate','overview'],['help:navigate','join'],['help:navigate','aitools']]);
   f.pages.help=null;await els.get('start-overview').listeners.click();
   assert.match(els.get('start-notice').textContent,/Reopen Help/);
   assert.equal(els.get('headline').textContent,'Fixture status');
