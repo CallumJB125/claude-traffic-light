@@ -1482,11 +1482,12 @@ const myDaySender = e => !!e.sender && e.sender === buddyWin?.pageWebContents('m
 const SessionOverview = require('./src/session-overview.js');
 const ProviderStatus = require('./src/provider-status.js');
 const sessionsSender = e => fromUtilityPage(e, 'sessions');
+const WorktreeShare = require('./src/worktree-share.js').createWorktreeShare({ log: console.log });
 ipcMain.handle('sessions:state', e => {
   if (!sessionsSender(e)) return null;
   try {
     const configured = IS_DEV_RUN ? false : Adapters.get('codex').isActivityInstalled({ home: os.homedir(), runtime: HOOK_RUNTIME });
-    return SessionOverview.snapshot({ sessions: localSessions(aggregateState().sessions || []), activity: { configured, available: true }, now: Date.now(), enrich: BurstIpc.enrichSession, info: (row) => SessionActionsMain.rowInfo(row), handover: (row) => SessionHandoverMain.view(row) });
+    return SessionOverview.snapshot({ sessions: localSessions(aggregateState().sessions || []), activity: { configured, available: true }, now: Date.now(), enrich: BurstIpc.enrichSession, info: (row) => SessionActionsMain.rowInfo(row), handover: (row) => SessionHandoverMain.view(row), sharedTrees: (rows) => WorktreeShare.shared(rows) });
   } catch {
     return SessionOverview.snapshot({ sessions: [], activity: { available: false }, available: false, now: Date.now() });
   }
@@ -1680,6 +1681,7 @@ const TeamEntry = require('./src/team-entry.js');
 const settingsOnly = (e) => fromUtilityPage(e, 'settings');
 const BurstEventsLib = require('./src/burst-events.js');
 const BurstEvents = BurstEventsLib.createBurstEvents();
+const burstNotes = new Map(); // event key -> shown Notification, so a resolving Burst notice can close it
 // Quiet hours, snooze and mutes hold these like any other ping (src/quiet.js).
 function notifyBurstEvents(events) {
   if (!events.length) return;
@@ -1689,13 +1691,23 @@ function notifyBurstEvents(events) {
   for (const ev of send) {
     const note = new Notification({ title: ev.title, body: ev.body, silent: true });
     liveNotifications.add(note);
-    note.on('click', () => { liveNotifications.delete(note); openBuddy('optimiser'); });
-    note.on('close', () => liveNotifications.delete(note));
+    burstNotes.set(ev.key, note);
+    const drop = () => { liveNotifications.delete(note); if (burstNotes.get(ev.key) === note) burstNotes.delete(ev.key); };
+    note.on('click', () => { drop(); openBuddy('optimiser'); });
+    note.on('close', drop);
     note.show();
   }
 }
-const BurstIpc = require('./src/burst-ipc.js').register({ utilityHandle, settingsOnly, chipAllowed: (e) => widgetOnly(e) || fromUtilityPage(e, 'usage'), usageAllowed: (e) => fromUtilityPage(e, 'usage'), sessionsAllowed: sessionsSender, stateFile: path.join(ROOT_DIR, 'burst-handover.json'), runner: { live: () => !!buddyWin?.runnerLive?.(), send: (m) => buddyWin?.burstFacts?.(m) }, accountAllowed: (e) => fromPage(e, buddyWin?.accountWebContents?.()), isMac: IS_MAC, dialog, shell, scriptDir: path.join(ROOT_DIR, 'burst-scripts'), onView: (view) => notifyBurstEvents(BurstEvents.observe(view, Date.now())), log: console.log });
+function closeBurstNote(key) {
+  const note = burstNotes.get(key);
+  if (note) { burstNotes.delete(key); liveNotifications.delete(note); note.close(); }
+}
+// Burst's own event file (notices.json); while it is watched the poll-diff events below stay quiet.
+const BurstNotices = require('./src/burst-notices.js').createBurstNotices({ isMac: IS_MAC, onEvents: (events) => notifyBurstEvents(events), onResolve: closeBurstNote, config: () => loadConfig(), burst: () => BurstIpc, log: console.log });
+const BurstIpc = require('./src/burst-ipc.js').register({ utilityHandle, settingsOnly, chipAllowed: (e) => widgetOnly(e) || fromUtilityPage(e, 'usage'), usageAllowed: (e) => fromUtilityPage(e, 'usage'), sessionsAllowed: sessionsSender, stateFile: path.join(ROOT_DIR, 'burst-handover.json'), runner: { live: () => !!buddyWin?.runnerLive?.(), send: (m) => buddyWin?.burstFacts?.(m) }, accountAllowed: (e) => fromPage(e, buddyWin?.accountWebContents?.()), isMac: IS_MAC, dialog, shell, scriptDir: path.join(ROOT_DIR, 'burst-scripts'), optimiserAllowed: (e) => fromUtilityPage(e, 'optimiser'), snapshotFile: require('./src/burst-snapshot.js').snapshotPath(ROOT_DIR), transcriptFor: (id) => transcriptIndex().get(id) || null, onView: (view) => { const events = BurstEvents.observe(view, Date.now()); if (!BurstNotices.active()) notifyBurstEvents(events); }, log: console.log });
 BurstIpc.setOpener(() => openBuddy('optimiser'));
+if (IS_MAC) BurstNotices.start();
+onQuit(app, () => BurstNotices.stop());
 let keepAwakeMain = null;
 keepAwakeMain = require('./src/keep-awake-ipc.js').register({ utilityHandle, allowed: (e) => fromPage(e, buddyWin?.accountWebContents?.()), isMac: IS_MAC, burst: BurstIpc, keepAwake: require('./src/keep-awake.js').createKeepAwake({ powerSaveBlocker }), dialog, getPref: () => { const v = loadConfig().keepAwake; return ['app', 'ac', 'always'].includes(v) ? v : 'off'; }, setPref: (v) => saveConfig({ keepAwake: v }), log: console.log });
 const SessionHandoverMain = require('./src/session-handover-main.js').register({ ipcMain, rootDir: ROOT_DIR, isExcluded: (cwd) => Quiet.projectMuted(loadConfig().mutedProjects, cwd), burstFor: (row) => { const h = BurstIpc.enrichSession({ sessionId: row.sessionId, cwd: row.cwd, source: row.adapter === 'claude-code' ? null : row.adapter }); return h && h.handover ? h.handover.text : null; }, home: os.homedir(), sessionsAllowed: sessionsSender, clipboard, shell, log: console.log });
@@ -4153,6 +4165,7 @@ function healthReport() {
     mcp: McpInstall.status(mcpOpts()),
     signal: { listening: !!signalServer?.listening, port: SIGNAL_PORT, error: signalServerError },
     burst: BurstIpc.status(),
+    burstFacts: BurstIpc.healthFacts(),
   });
   // Dev runs share the machine with a real install and never rewrite its hooks.
   report.checks = report.checks.map(({ fix, fixLabel, ...c }) =>
@@ -4168,6 +4181,14 @@ ipcMain.handle('health-fix', (e, id) => {
     return require('./adapters/hermes-activity').connect({ home: os.homedir(), runtime: HOOK_RUNTIME })
       .then((r) => r.ok ? null : r.error || 'Hermes activity could not be connected.', (err) => err.message)
       .then((error) => { console.log(`[health] fix "connect-hermes"${error ? ` failed: ${error}` : ''}`); return { error, report: healthReport() }; });
+  }
+  // burst-<action>: an allow-listed Burst mutation (src/burst-ipc.js), behind its own consent dialog.
+  if (typeof id === 'string' && id.startsWith('burst-')) {
+    return BurstIpc.runAction(id.slice('burst-'.length)).then((r) => {
+      const error = r.ok || r.cancelled ? null : r.error;
+      console.log(`[health] fix ${JSON.stringify(id)}${error ? ` failed: ${error}` : r.cancelled ? ' cancelled' : ''}`);
+      return { error, data: r.ok ? r.data : null, cancelled: r.cancelled === true, report: healthReport() };
+    });
   }
   let error = null;
   try {

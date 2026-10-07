@@ -13,14 +13,40 @@ const Spend = require('./burst-spend.js');
 const Handover = require('./burst-handover.js');
 const Actions = require('./burst-actions.js');
 const Codex = require('./burst-codex.js');
+const Notices = require('./burst-notices.js');
+const Route = require('./burst-route.js');
+const Requests = require('./burst-requests.js');
+const Inspect = require('./burst-inspect.js');
+const Snapshot = require('./burst-snapshot.js');
+const ContextBreakdown = require('./context-breakdown.js');
 
 const POLL_BASE_MS = 5000;
 const POLL_MAX_MS = 60000;
 const TRAY_REFRESH_MS = 30000;
 const HANDOVER_TTL_MS = 60000;
 const BOARD_TICK_MS = 60000;
+const SNAPSHOT_TICK_MS = 30000;
+const EXTRA_TTL_MS = 30000;
 
-function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usageAllowed = () => false, sessionsAllowed = () => false, accountAllowed = () => false, stateFile = null, hubSend = null, runner = null, isMac, dialog, shell, scriptDir, home = os.homedir(), launch, client: injected, onView = () => {}, log = () => {} }) {
+const short = (s) => String(s).slice(0, 8);
+// Consent text for every allow-listed mutation, fixed here in main. Args reach it only
+// after burst-client has validated them; the renderer never supplies any wording.
+const ACTIONS = Object.freeze({
+  reset: { consent: () => ({ title: 'Back to Claude now', detail: 'Burst stops sending requests to your secondary provider and sends the next one to Claude (your primary). If Claude is still at its limit, Burst may move to the secondary again.' }) },
+  'compaction-drop': { consent: (a) => ({ title: 'Send full history again', detail: `Burst stops using its summary for session ${short(a.session)}. That session's next request sends the whole conversation again, which uses more tokens.` }) },
+  'inspect-remove': {
+    consent: (a) => (a.restore === true
+      ? { title: 'Put item back', detail: `This item goes back into session ${short(a.session)}'s next request.` }
+      : { title: 'Leave item out', detail: `Session ${short(a.session)}'s next request leaves this item out, with a one-line note in its place. You can put it back later.` }),
+  },
+  'coord-message': { consent: (a) => ({ title: 'Send message', detail: `Burst queues this message for session ${short(a.session)}, which sees it at its next tool call or prompt:\n\n${a.message}` }) },
+  'coord-release': { consent: (a) => ({ title: 'Hand on', detail: `${a.release}\n\nThe session that most recently changed this file now commits it, or it is free.` }) },
+  trace: { consent: () => ({ title: 'Send test message', detail: 'Burst sends one tiny real request through each step (DNS, redirect, TLS, credential, route) and reports where it stops. It uses a very small part of your Claude subscription.' }) },
+  'console-restart': { console: true, consent: () => ({ title: 'Restart Burst', detail: 'Burst\'s support console restarts its gateway through launchd, or starts it if it is stopped; if Burst was turned off, this turns it back on. A request in flight may fail once.' }) },
+  'console-diagnose': { console: true, consent: () => ({ title: 'Diagnose Burst', detail: 'Burst\'s support console opens a Terminal window and writes a diagnose report you can copy.' }) },
+});
+
+function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usageAllowed = () => false, sessionsAllowed = () => false, accountAllowed = () => false, optimiserAllowed = () => false, stateFile = null, snapshotFile = null, transcriptFor = () => null, hubSend = null, runner = null, isMac, dialog, shell, scriptDir, home = os.homedir(), launch, client: injected, onView = () => {}, log = () => {} }) {
   const platform = isMac ? 'darwin' : 'other';
   const client = isMac ? (injected || require('./burst-client.js').createBurstClient({ home })) : null;
   const backoff = createProbeBackoff({ base: POLL_BASE_MS, max: POLL_MAX_MS });
@@ -37,6 +63,7 @@ function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usag
       last = d;
       lastView = View.statusView(d, { platform });
       try { onView(lastView); } catch (e) { log('[burst] onView failed', e && e.message); }
+      writeSnapshot().catch((e) => log('[burst] snapshot failed', e && (e.code || e.message)));
       backoff.probed({ ok: d.kind === 'present' || d.kind === 'not_installed', why: d.kind }, Date.now());
       return lastView;
     }).catch((e) => { log('[burst] detect failed', e && e.code); return lastView; }).finally(() => { inflight = null; });
@@ -165,6 +192,93 @@ function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usag
     try { coord = { at: Date.now(), data: await client.coordination() }; } catch { coord = { at: Date.now(), data: null }; }
   }
 
+  // Cached extras: the support console (answers when the gateway is down), the audit,
+  // settings and request metadata. Each is refreshed in the background at most every 30 s.
+  const extras = new Map(); // name -> { at, value }
+  function cached(name, load) {
+    const c = extras.get(name);
+    if (!c || Date.now() - c.at >= EXTRA_TTL_MS) {
+      extras.set(name, { at: Date.now(), value: c ? c.value : null });
+      Promise.resolve().then(load).then((value) => extras.set(name, { at: Date.now(), value }), (e) => { log(`[burst] ${name} failed`, e && e.code); extras.set(name, { at: Date.now(), value: null }); });
+    }
+    return c ? c.value : null;
+  }
+  async function fresh(name, load) {
+    const c = extras.get(name);
+    if (c && c.value !== null && Date.now() - c.at < EXTRA_TTL_MS) return c.value;
+    const value = await load();
+    extras.set(name, { at: Date.now(), value });
+    return value;
+  }
+
+  let lastSnapshot = null;
+  async function writeSnapshot() {
+    if (!isMac || !snapshotFile) return;
+    let requests = null;
+    if (present()) { try { requests = await fresh('requests50', () => client.requests({ limit: 50 })); } catch { requests = null; } }
+    if (present()) warmCoord();
+    lastSnapshot = Snapshot.buildSnapshot({ detection: last, coordination: present() ? coord.data : null, requests, now: Date.now() });
+    Snapshot.writeSnapshot(snapshotFile, lastSnapshot);
+  }
+  if (isMac && snapshotFile) setInterval(() => { refresh().catch(() => {}); }, SNAPSHOT_TICK_MS).unref();
+
+  // Allow-listed mutations: one native consent dialog each, then exactly one POST through burst-client.
+  const actions = new Map();
+  function registerAction(id, { consent, run, console: viaConsole = false }) {
+    if (typeof id !== 'string' || typeof consent !== 'function' || typeof run !== 'function') throw new Error('bad action');
+    actions.set(id, { consent, run, viaConsole });
+  }
+  for (const [id, a] of Object.entries(ACTIONS)) registerAction(id, { consent: a.consent, console: a.console === true, run: (args) => client.mutate(id, args) });
+
+  async function runAction(id, args) {
+    if (!isMac) return { ok: false, error: View.MAC_ONLY };
+    const a = typeof id === 'string' ? actions.get(id) : null;
+    if (!a) return { ok: false, error: 'Unknown action.' };
+    const input = args && typeof args === 'object' && !Array.isArray(args) ? args : {};
+    const spec = require('./burst-client.js').MUTATE_ALLOW[id];
+    if (spec) { try { spec.body(input); } catch { return { ok: false, error: 'Bad request.' }; } }
+    if (!a.viaConsole && !present()) return { ok: false, error: 'Burst is not answering.' };
+    const c = a.consent(input);
+    const r = await dialog.showMessageBox({ type: 'warning', title: c.title, message: c.title, detail: c.detail, buttons: ['Cancel', c.title], defaultId: 0, cancelId: 0, noLink: true });
+    if (r.response !== 1) return { ok: false, cancelled: true };
+    try {
+      const out = await a.run(input);
+      backoff.reset();
+      refresh(true);
+      return { ok: true, data: out && out.data !== undefined ? out.data : null };
+    } catch (e) {
+      log('[burst] action failed', id, e && e.code);
+      return { ok: false, error: e.code === 'http' && e.detail ? `Burst refused it: ${e.detail}` : e.code === 'timeout' ? 'Burst did not answer in time.' : e.code === 'pid_changed' ? 'Burst restarted; nothing was sent. Try again.' : 'Burst did not do that. Nothing was changed.' };
+    }
+  }
+  const anyPage = (e) => card(e) || usageAllowed(e) || sessionsAllowed(e) || optimiserAllowed(e);
+  utilityHandle('burst-action', anyPage, async (_e, id, args) => runAction(id, args));
+
+  // Read-only views for the Usage optimiser and Sessions pages. Each name has its own senders.
+  const optimiserOrUsage = (e) => optimiserAllowed(e) || usageAllowed(e);
+  const int = (v, d) => (Number.isInteger(v) ? v : d);
+  const VIEWS = {
+    route: { allowed: optimiserOrUsage, get: async () => Route.routeView(last.state, await fresh('settings', () => client.settings()).catch(() => null), { now: Date.now() }) },
+    requests: { allowed: (e) => optimiserOrUsage(e) || sessionsAllowed(e), get: async (a) => Requests.requestsView(await client.requests({ limit: int(a.limit, 200) }), { limit: int(a.limit, 200) }) },
+    history: { allowed: optimiserOrUsage, get: async (a) => Requests.historyView(await client.history({ days: int(a.days, 14) })) },
+    inspect: { allowed: sessionsAllowed, get: async (a) => Inspect.inspectView(await client.inspect({ session: a.session, engine: a.engine }), { engine: a.engine === 'codex' ? 'codex' : 'claude' }) },
+    coordination: { allowed: sessionsAllowed, get: async (a) => client.coordination({ days: int(a.days, 1) }) },
+  };
+  utilityHandle('burst:view', (e) => anyPage(e), async (e, name, args) => {
+    const v = typeof name === 'string' && Object.prototype.hasOwnProperty.call(VIEWS, name) ? VIEWS[name] : null;
+    if (!v || !v.allowed(e)) return { view: null, error: 'Not available.' };
+    if (!present()) return { view: null, error: 'Burst is not answering.' };
+    try { return { view: await v.get(args && typeof args === 'object' ? args : {}) }; } catch (err) { log('[burst] view failed', name, err && err.code); return { view: null, error: 'Burst did not answer.' }; }
+  });
+
+  // Standalone (any platform, no Burst): the transcript breakdown of one Claude Code session.
+  utilityHandle('burst:context-breakdown', sessionsAllowed, async (_e, sessionId) => {
+    if (typeof sessionId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(sessionId)) return { view: null };
+    const file = transcriptFor(sessionId);
+    if (!file) return { view: null };
+    try { return { view: await ContextBreakdown.breakdownFile(file) }; } catch { return { view: null }; }
+  });
+
   utilityHandle('burst:handover-share', sessionsAllowed, async (_e, repo, on) => {
     if (typeof repo !== 'string' || !/^[0-9a-f]{16}$/.test(repo)) return { ok: false };
     if (on === true) shared = { ...shared, [repo]: true }; else { shared = { ...shared }; delete shared[repo]; }
@@ -205,7 +319,7 @@ function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usag
     if (last.kind !== 'present') { runner.send({ active: false, route: 'PRIMARY', secondaryReady: false, sessions: {} }); return; }
     let sessions = {};
     if (last.capabilities.usage) { try { sessions = Spend.secondaryBySession(await client.usage({ range: '24h' })); } catch (e) { log('[burst] board usage failed', e && e.code); } }
-    runner.send({ active: last.state.active, route: last.state.route, secondaryReady: last.state.secondaryReady, sessions });
+    runner.send({ ...Snapshot.boardFacts(lastSnapshot), active: last.state.active, route: last.state.route, secondaryReady: last.state.secondaryReady, sessions });
   }
   if (isMac && runner) setInterval(() => { pushBoardFacts().catch(() => {}); }, BOARD_TICK_MS).unref();
 
@@ -230,6 +344,22 @@ function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usag
     setOpener(fn) { opener = typeof fn === 'function' ? fn : null; },
     enrichSession,
     pushBoardFacts,
+    registerAction,
+    runAction,
+    // Health (synchronous, from caches warmed in the background): the last detection, the
+    // support console's status and Burst's audit, normalized.
+    healthFacts() {
+      if (!isMac || last.kind === 'unsupported' || last.kind === 'not_installed') return { detection: last, console: null, audit: [] };
+      const con = cached('console', () => client.consoleDetect());
+      const audit = present() ? cached('audit', async () => Notices.normalizeAudit(await client.audit({ limit: 50 }))) : null;
+      return { detection: last, console: con, audit: audit || [] };
+    },
+    // This Mac and notices: scrubbed raw reads for their own normalizers; null when Burst is not present.
+    async read(name) {
+      const READS = { mac: () => client.mac(), automask: () => client.automask(), settings: () => client.settings(), modStatus: () => client.modStatus(), intelligentCompaction: () => client.intelligentCompaction() };
+      if (!present() || !Object.prototype.hasOwnProperty.call(READS, name)) return null;
+      try { return await fresh(name, READS[name]); } catch (e) { log('[burst] read failed', name, e && e.code); return null; }
+    },
     compactionActive: () => !!(present() && last.state.compaction.active),
     compactionNote: () => (present() && last.state.compaction.active ? Spend.COMPACTION_NOTE : ''),
   };
