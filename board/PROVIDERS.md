@@ -325,8 +325,8 @@ Input to the handoff contract: which sessions can take a message while a turn ru
 - Ids/aliases: `aider`
 - Installed here: 0.86.2. Advertised by Plexiform: no (recorded because it is installed here).
 - Exact supported channel: None suitable: `aider --message` runs one message and exits (plain text); the Python API is explicitly unsupported.
-- Discovery: `built`. Only via Plexiform's signal endpoint (`emit.js --source aider`).
-- Telemetry/hooks: `built`. Same, self-posted.
+- Discovery: `built`. Via `plexiform-run <tool> [args]` (More > AI tools > Add a custom tool; adapters/generic.js), which reports the start and the exit of the run, or Plexiform's signal endpoint (`emit.js --source aider`).
+- Telemetry/hooks: `built`. Working while the run is open, then done or failed from its exit code. Nothing finer: no prompts, tools or answers.
 - Task reporting: `built`. Same.
 - Receive message: `none`. No streaming/structured or server channel; --message gives no ack and no session id.
 - Reply: `none`. -
@@ -345,8 +345,8 @@ Input to the handoff contract: which sessions can take a message while a turn ru
 - Ids/aliases: `custom`, `Custom`
 - Installed here: no. Advertised by Plexiform: yes.
 - Exact supported channel: Inbound to Plexiform only: POST 127.0.0.1:47172/signal with the per-install token, or `node hooks/emit.js <signal> --source <name>` (README).
-- Discovery: `built`. Sessions appear when the program posts signals with a session id.
-- Telemetry/hooks: `built`. Signals: prompt-submit, tool-use, tool-done, tool-failed, stop, permission-ask, limit-hit, idle-nudge, session-start/end, subagent-start/done.
+- Discovery: `built`. Sessions appear when the program posts signals with a session id, or when it is launched through `plexiform-run <tool> [args]` (More > AI tools > Add a custom tool; adapters/generic.js).
+- Telemetry/hooks: `built`. Signals: prompt-submit, tool-use, tool-done, tool-failed, stop, permission-ask, limit-hit, idle-nudge, session-start/end, subagent-start/done. Via plexiform-run only working then done/failed (start and exit).
 - Task reporting: `built`. Self-reported only (board MCP / signals).
 - Receive message: `none`. The endpoint is one-way; Plexiform has no channel back into an arbitrary program.
 - Reply: `none`. -
