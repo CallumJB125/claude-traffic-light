@@ -32,9 +32,13 @@ import { WebOAuth } from './identity/oauth-web.js';
 import { Enrolments } from './identity/enrolments.js';
 import { Billing } from './billing/entitlements.js';
 import { PushService } from './push.js';
+import { Sync } from './sync.js';
 import { oauthProviders } from './config.js';
 import { RemoteAuthority } from './remote/authority.js';
 import { StorageWatch } from './storage-watch.js';
+
+// Sync lapse notices and purges run hourly (sync.js sweep).
+const SYNC_SWEEP_MS = 60 * 60_000;
 
 export function createApp(config, { clock = defaultClock, log = createLogger({ level: config.logLevel }), github = null, fetchImpl = globalThis.fetch, timers = true, mailer } = {}) { // privacy-flow: hub-server
   const db = openDb(config.dbPath, { now: () => new Date(clock.wall()).toISOString() });
@@ -78,6 +82,7 @@ function buildApp(config, { db, clock, log, github, fetchImpl, timers, mailer })
   hub.billing = hub.accounts ? new Billing(hub, { fetchImpl }) : null;
   // Phone push (push.js): content-free pings; off without the operator's VAPID keys.
   hub.push = hub.accounts ? new PushService(hub, { fetchImpl, ...(config.pushHosts ? { hosts: config.pushHosts } : {}), allowHttp: config.pushAllowHttp === true }) : null;
+  hub.sync = hub.accounts ? new Sync(hub) : null;
   hub.remoteAuthority = hub.accounts ? new RemoteAuthority(hub) : null;
   // Deleting an account or a team needs a step-up: an email code (a mailer)
   // or an OAuth re-authentication (a configured provider). Without either,
@@ -128,6 +133,13 @@ function buildApp(config, { db, clock, log, github, fetchImpl, timers, mailer })
         if (closed) return;
         try { hub.messaging.purge(); } catch (e) { log.warn('messaging sweep failed', { err: e }); }
       }, hub.messaging.limits.sweepMs));
+    }
+    // Sync lapse notices and purges (sync.js): hourly, never per request.
+    if (hub.sync?.enabled) {
+      intervals.push(setInterval(() => {
+        if (closed) return;
+        hub.sync.sweep().catch((e) => log.warn('sync sweep failed', { err: e }));
+      }, SYNC_SWEEP_MS));
     }
     if (gh.enabled) {
       intervals.push(setInterval(() => { hub.pollMerges().catch((e) => log.warn('merge poll failed', { err: e })); }, config.githubPollMs));

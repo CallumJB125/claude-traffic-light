@@ -5,6 +5,7 @@ import { isIP } from 'node:net'; // privacy-flow: local-board-sockets
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseStorageMax, validateStorageMax } from './storage-watch.js';
+import { r2Config } from './sync-store.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -87,6 +88,9 @@ export function loadConfig(env = process.env) {
     // Phone push (board/hub/push.js): off unless the operator sets a VAPID key pair (docs/PHONE-RUNBOOK.md).
     pushVapidPublicKey: env.BOARD_PUSH_VAPID_PUBLIC_KEY || null,
     pushVapidSubject: env.BOARD_PUSH_VAPID_SUBJECT || null,
+    // Encrypted sync (sync.js): off unless an R2 bucket is named; the object keys below are hidden.
+    syncR2Endpoint: env.BOARD_SYNC_R2_ENDPOINT || null,
+    syncR2Bucket: env.BOARD_SYNC_R2_BUCKET || null,
   };
   // Non-enumerable, so JSON.stringify, util.inspect and spreads of the config never carry them.
   const hidden = (value) => ({ value, enumerable: false, writable: false, configurable: false });
@@ -102,6 +106,8 @@ export function loadConfig(env = process.env) {
     billingApiKey: hidden(env.BOARD_BILLING_API_KEY || null),
     billingWebhookSecret: hidden(env.BOARD_BILLING_WEBHOOK_SECRET || null),
     pushVapidPrivateKey: hidden(env.BOARD_PUSH_VAPID_PRIVATE_KEY || null),
+    syncR2AccessKeyId: hidden(env.BOARD_SYNC_R2_ACCESS_KEY_ID || null),
+    syncR2SecretAccessKey: hidden(env.BOARD_SYNC_R2_SECRET_ACCESS_KEY || null),
   });
   // Only from the real environment (nothing started later inherits them); a test's env object stays as given.
   if (env === process.env) {
@@ -119,6 +125,8 @@ export function loadConfig(env = process.env) {
   delete env.BOARD_BILLING_API_KEY;
   delete env.BOARD_BILLING_WEBHOOK_SECRET;
   delete env.BOARD_PUSH_VAPID_PRIVATE_KEY;
+  delete env.BOARD_SYNC_R2_ACCESS_KEY_ID;
+  delete env.BOARD_SYNC_R2_SECRET_ACCESS_KEY;
   validateConfig(cfg);
   return cfg;
 }
@@ -210,6 +218,7 @@ const SECRET_VARS = Object.freeze([
   ['BOARD_GOOGLE_WEB_CLIENT_SECRET', 'googleWebClientSecret'], ['BOARD_GITHUB_WEB_CLIENT_SECRET', 'githubWebClientSecret'],
   ['BOARD_BILLING_API_KEY', 'billingApiKey'], ['BOARD_BILLING_WEBHOOK_SECRET', 'billingWebhookSecret'],
   ['BOARD_PUSH_VAPID_PRIVATE_KEY', 'pushVapidPrivateKey'],
+  ['BOARD_SYNC_R2_ACCESS_KEY_ID', 'syncR2AccessKeyId'], ['BOARD_SYNC_R2_SECRET_ACCESS_KEY', 'syncR2SecretAccessKey'],
 ]);
 
 export const SIGNUP_MODES = Object.freeze(['open', 'allowlist']);
@@ -324,6 +333,11 @@ export function validateConfig(cfg) {
     if (!push.every(Boolean)) throw new Error('phone push needs BOARD_PUSH_VAPID_PUBLIC_KEY, BOARD_PUSH_VAPID_PRIVATE_KEY and BOARD_PUSH_VAPID_SUBJECT together');
     if (cfg.auth !== 'accounts') throw new Error('phone push needs BOARD_AUTH=accounts');
     if (!/^(mailto:[^\s@]+@[^\s@]+|https:\/\/\S+)$/.test(cfg.pushVapidSubject)) throw new Error('BOARD_PUSH_VAPID_SUBJECT must be a mailto: or https: address');
+  }
+  if (cfg.syncR2Bucket != null) {
+    if (cfg.auth !== 'accounts') throw new Error('BOARD_SYNC_R2_BUCKET needs BOARD_AUTH=accounts');
+    if (!cfg.syncR2Endpoint || !cfg.syncR2AccessKeyId || !cfg.syncR2SecretAccessKey) throw new Error('BOARD_SYNC_R2_BUCKET needs BOARD_SYNC_R2_ENDPOINT, BOARD_SYNC_R2_ACCESS_KEY_ID and BOARD_SYNC_R2_SECRET_ACCESS_KEY');
+    r2Config({ endpoint: cfg.syncR2Endpoint, bucket: cfg.syncR2Bucket, accessKeyId: cfg.syncR2AccessKeyId, secretAccessKey: cfg.syncR2SecretAccessKey });
   }
   // Local = the hub embedded in the desktop app: only its own window may reach it.
   if (cfg.auth === 'local') {

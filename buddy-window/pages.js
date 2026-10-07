@@ -51,6 +51,8 @@ const PAGES = [
   { id: 'account', title: 'Account', icon: 'user', kind: 'local', screen: 'account', group: 'you' },
   // Paid plan (src/entitlement-refresh.js serves its IPC): plan, limits, grace days, Upgrade / Manage billing.
   { id: 'upgrade', title: 'Plan & billing', icon: 'user', kind: 'local', file: 'upgrade.html', preload: 'upgrade-preload.js', group: 'you', hidden: true },
+  // Encrypted sync across your own computers (src/sync/index.js serves its IPC; Plus/Team, upsell otherwise).
+  { id: 'sync', title: 'Sync', icon: 'layers', kind: 'local', file: 'sync.html', preload: 'sync-preload.js', group: 'you', hidden: true },
   { id: 'lights', title: 'Widget configuration', icon: 'lights', kind: 'window', window: 'lights', group: 'you' },
   { id: 'aitools', title: 'AI tools', icon: 'plug', kind: 'local', file: 'aitools.html', preload: 'aitools-preload.js', group: 'you' },
   { id: 'settings', title: 'Preferences', icon: 'gear', kind: 'local', file: 'settings.html', preload: 'settings-preload.js', query: { embedded: '1' }, group: 'you' },
@@ -100,6 +102,13 @@ const UPGRADE_READY = (() => { try { return require('../src/entitlement-keys').E
 if (process.env.PLEXIFORM_SHOW_UPGRADE === '1' || UPGRADE_READY) {
   PAGES.find((p) => p.id === 'upgrade').hidden = false;
   SECTIONS.find((s) => s.id === 'team').pages.push('upgrade');
+}
+// Sync sits under Settings once paid plans can work (the same pinned key):
+// before that it could only show an upsell to a plan nobody can buy.
+// PLEXIFORM_SHOW_SYNC=1 lists it for testing.
+if (process.env.PLEXIFORM_SHOW_SYNC === '1' || UPGRADE_READY) {
+  PAGES.find((p) => p.id === 'sync').hidden = false;
+  SECTIONS.find((s) => s.id === 'settings').pages.push('sync');
 }
 
 // Calendar and Timeline are project-planning views and AI runs have no due dates, so they

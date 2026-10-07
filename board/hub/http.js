@@ -480,6 +480,8 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     route('GET', '/api/teams/:team_id/billing', ({ member }) => billing.team(member), { replay: false });
     route('POST', '/api/teams/:team_id/billing/checkout', ({ member, ident, body }) => billing.checkoutTeam(member, ident, body), { replay: false });
     route('POST', '/api/teams/:team_id/billing/portal', ({ member }) => billing.portalTeam(member), { replay: false });
+    // Encrypted sync across a user's own devices (sync.js): ciphertext, wraps and metadata only.
+    hub.sync.routes(route);
   } else {
     route('GET', '/api/me', ({ member }) => api.me(member));
   }

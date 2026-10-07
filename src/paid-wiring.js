@@ -23,6 +23,7 @@ const PACKAGES = [
   ['setups-personal', () => require.resolve('./setups-personal'), () => require('./setups-personal')],
   ['entitlement-refresh', () => require.resolve('./entitlement-refresh'), () => require('./entitlement-refresh')],
   ['phone-approvals', () => require.resolve('./remote-approvals-main'), () => require('./remote-approvals-main')],
+  ['sync', () => require.resolve('./sync'), () => require('./sync')],
 ];
 
 /** Calls every present package's register(ctx). → [{name, status:'absent'|'ok'|'skipped'|'failed'}]. Never throws. */
