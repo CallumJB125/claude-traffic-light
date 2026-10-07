@@ -22,7 +22,7 @@ test('every page, preload and local asset main.js uses is packaged', () => {
   const shellPages = [...buddy.matchAll(/loadFile\(path\.join\(DIR, '([^']+\.html)'\)/g)].map(m => `buddy-window/${m[1]}`);
   const shellPreloads = [...buddy.matchAll(/preload: path\.join\(DIR, '([^']+\.js)'\)/g)].map(m => `buddy-window/${m[1]}`);
   assert.deepEqual([...new Set(shellPages)].sort(), ['buddy-window/account.html', 'buddy-window/info.html', 'buddy-window/sidebar.html']);
-  assert.deepEqual([...new Set(shellPreloads)].sort(), ['buddy-window/account-preload.js', 'buddy-window/info-preload.js', 'buddy-window/sidebar-preload.js']);
+  assert.deepEqual([...new Set(shellPreloads)].sort(), ['buddy-window/account-preload.js', 'buddy-window/hub-preload.js', 'buddy-window/info-preload.js', 'buddy-window/sidebar-preload.js']);
   for (const id of ['sessions', 'settings', 'usage', 'stats', 'help', 'hatch', 'feedback', 'updates', 'tasks', 'waiting', 'myday', 'setups', 'aitools']) assert.ok(registry.some(p => p.id === id && p.file && p.preload), `${id}: registered embedded file and preload`);
   const pages = [...main.matchAll(/loadFile\('([^']+\.html)'/g)].map((m) => m[1]);
   const preloads = [...main.matchAll(/preload: path\.join\(__dirname, '([^']+\.js)'\)/g)].map((m) => m[1]);

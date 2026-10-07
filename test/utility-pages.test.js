@@ -39,6 +39,7 @@ function handlers() {
     ipcMain: { handle: (channel, fn) => registered.set(channel, fn) },
     loadConfig: () => ({ fixture: 'config' }), Stats: { summary: () => ({ fixture: 'stats' }) }, stats: {},
     BurstIpc: { enrichSession: () => null },
+    clipboard: { writeText: () => {} },
     SessionOverview: { snapshot: input => { observed.push(input); return { status: input.available === false ? 'unavailable' : 'complete' }; } },
     localSessions: sessions => sessions, aggregateState: () => ({ sessions: [{ fixture: 'metadata' }] }),
     IS_DEV_RUN: false, Adapters: { get: () => ({ isActivityInstalled: () => true }) }, os: { homedir: () => '/synthetic' }, HOOK_RUNTIME: {},
