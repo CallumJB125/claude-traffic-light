@@ -4212,6 +4212,7 @@ utilityHandle('mcp-set-enabled', settingsOnly, (_e, on) => {
 
 const AiTools = require('./src/ai-tools-wire.js').wire({ ipcMain, shell, clipboard, home: os.homedir(), runtime: HOOK_RUNTIME, rootDir: ROOT_DIR, fromPage: (e) => fromUtilityPage(e, 'aitools'), askFromWidget: () => !!loadConfig().askFromWidget, ephemeral: EPHEMERAL, openPage: openBuddy });
 const aiToolsOpen = (destination) => AiTools.open(destination);
+require('./src/home-main.js').register({ ipcMain, allowed: (e) => fromUtilityPage(e, 'home'), state: () => aggregateState(), localSessions, tools: () => AiTools.quick(), myDay: MyDay, openPage: openBuddy, openAiTools: aiToolsOpen });
 // Preferences' "Connect other agents" buttons open the AI tools page on that
 // tool, where the exact change is previewed and confirmed (src/ai-tools.js).
 ipcMain.handle('connect-agent', async (e, which) => {

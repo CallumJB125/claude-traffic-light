@@ -257,7 +257,7 @@ function render(snapshot) {
     const heading = node('h2', `${item.provider} · ${item.project}`);
     heading.append(node('span', item.freshness === 'recent' ? 'Recent' : item.freshness === 'stale' ? 'Stale' : 'Freshness unknown', 'freshness'));
     const confidence = item.freshness === 'recent' && snapshot.status !== 'unavailable' ? 'Reported' : 'Last reported';
-    section.append(heading, node('p', `${confidence}: ${item.status}${item.stuck ? ` (${item.stuck.tool ? `last tool ${item.stuck.tool}, ` : ''}since ${Math.max(1, Math.round(item.stuck.since_ms / 60000))}m)` : ''} · Last seen ${age(item.age_ms).toLowerCase()} · ${item.lifecycle ? 'Lifecycle report' : 'Local report'}`, 'muted'));
+    section.append(heading, node('p', `${confidence}: ${item.status}${item.stuck ? ` (${item.stuck.tool ? `last tool ${item.stuck.tool}, ` : ''}since ${Math.max(1, Math.round(item.stuck.since_ms / 60000))}m)` : ''} · Last seen ${age(item.age_ms).toLowerCase()} · Reported by ${item.provider}`, 'muted'));
     if (item.children?.length) {
       const list = node('ul'); list.setAttribute('aria-label', 'Reported agents');
       for (const child of item.children) list.append(node('li', `${child.label} · ${confidence}: ${child.status}`));
@@ -277,7 +277,7 @@ function render(snapshot) {
   // The Add sessions panel stays open while there is nothing to show and folds once sessions exist, unless the person chose.
   if (!addTouched) document.getElementById('add').open = !snapshot.sessions?.length;
   status.textContent = snapshot.status === 'unavailable' ? 'Local activity is unavailable. Try Refresh.'
-    : `Observed ${new Date(snapshot.observed_at).toLocaleTimeString()}. Refreshes every 5 seconds while this page is visible.${snapshot.omitted ? ` ${snapshot.omitted} additional reports exceed the display limit.` : ''}`;
+    : `Updated ${new Date(snapshot.observed_at).toLocaleTimeString()}. Refreshes every 5 seconds while this page is visible.${snapshot.omitted ? ` ${snapshot.omitted} additional reports exceed the display limit.` : ''}`;
 }
 async function refresh({ clear = false } = {}) {
   const request = ++generation;
