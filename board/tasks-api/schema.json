@@ -67,6 +67,31 @@
         "workInPlace": {
           "type": "boolean"
         },
+        "startAfter": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "window": {
+          "type": "object",
+          "properties": {
+            "from": {
+              "type": "string",
+              "maxLength": 5
+            },
+            "to": {
+              "type": "string",
+              "maxLength": 5
+            }
+          },
+          "required": [
+            "from",
+            "to"
+          ],
+          "additionalProperties": false
+        },
+        "afterReset": {
+          "type": "boolean"
+        },
         "source": {
           "enum": [
             "local",

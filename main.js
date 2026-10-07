@@ -1809,7 +1809,10 @@ function getTasks() {
     ensureSupervisor: () => tasksProcess?.ensure(),
     homeDir: os.homedir(),
     copy: (text) => clipboard.writeText(text),
-    onChange: (snap) => { for (const wc of tasksPages()) wc.send('tasks:changed', snap); },
+    onChange: (snap) => {
+      for (const wc of tasksPages()) wc.send('tasks:changed', snap);
+      try { keepAwakeMain?.hold(require('./src/morning-report.js').queueActive(snap)); } catch { /* the blocker is best-effort */ }
+    },
     onEvent: (wcId, id, event) => { const wc = tasksPages().find((w) => w.id === wcId); if (wc) wc.send('tasks:event', { id, event }); },
     // The confirmation for the risky actions is main's: a native dialog, Cancel the default, the page's click never counts.
     confirmDialog: async (info, wcId) => {

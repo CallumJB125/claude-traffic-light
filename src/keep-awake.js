@@ -11,16 +11,25 @@ const workingCount = (sessions) => (Array.isArray(sessions) ? sessions.filter((s
 
 function createKeepAwake({ powerSaveBlocker, platform = process.platform } = {}) {
   let wanted = false;
+  let hold = false;
   let id = null;
   const held = () => id !== null && !!powerSaveBlocker && powerSaveBlocker.isStarted(id);
   const release = () => { if (id !== null) { try { powerSaveBlocker.stop(id); } catch { /* already stopped */ } id = null; } };
   return {
     platform,
-    setWanted(on) { wanted = !!on; if (!wanted) release(); },
+    setWanted(on) { wanted = !!on; if (!wanted && !hold) release(); },
+    // The Tasks queue still has work (queued, running or waiting for a limit reset): stay awake until it drains,
+    // whether or not a session is working this second. Idle sleep only; a closed lid still sleeps without Burst.
+    setHold(on) {
+      hold = !!on;
+      if (!powerSaveBlocker) return false;
+      if (hold) { if (!held()) id = powerSaveBlocker.start('prevent-app-suspension'); } else if (!wanted) release();
+      return held();
+    },
     // Called with the live sessions after every status change.
     sync(sessions) {
       if (!powerSaveBlocker) return false;
-      if (wanted && workingCount(sessions) > 0) { if (!held()) { id = powerSaveBlocker.start('prevent-app-suspension'); } } else release();
+      if ((wanted && workingCount(sessions) > 0) || hold) { if (!held()) { id = powerSaveBlocker.start('prevent-app-suspension'); } } else release();
       return held();
     },
     held,

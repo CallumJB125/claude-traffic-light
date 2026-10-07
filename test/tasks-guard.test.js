@@ -227,3 +227,12 @@ test('STATES is the same list as board/shared/states.js', async () => {
   const shared = await import(pathToFileURL(path.join(__dirname, '..', 'board', 'shared', 'states.js')).href);
   assert.deepEqual(require('../src/tasks-guard.js').STATES, [...shared.STATES]);
 });
+
+test('validateCreate: "when reset" is free; "tonight" needs the Plus window feature', () => {
+  const base = { text: 'go', ai: 'auto' };
+  assert.equal(G.validateCreate({ ...base, when: 'reset' }, '/tmp/x').spec.afterReset, true);
+  assert.equal(G.validateCreate({ ...base, when: 'tonight' }, '/tmp/x').code, 'PLAN_REQUIRED');
+  const ok = G.validateCreate({ ...base, when: 'tonight' }, '/tmp/x', { canSchedule: true }).spec;
+  assert.deepEqual(ok.window, { from: '22:00', to: '07:00' });
+  assert.equal(G.validateCreate(base, '/tmp/x').spec.window, undefined);
+});

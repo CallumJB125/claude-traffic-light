@@ -64,6 +64,7 @@ function createTasksService(opts) {
   const slots = new Map();         // webContents id → { id, sub, gen }: one open task per page
   let gen = 0;
   const isDir = opts.isDir || isDirDefault;
+  const canSchedule = () => { try { return opts.canSchedule ? opts.canSchedule() === true : require('./entitlements.js').has('queue.windows'); } catch { return false; } };
   let ais = null;
   let lastJson = '';
   let publishTimer = null;
@@ -401,7 +402,8 @@ function createTasksService(opts) {
   async function create(draft) {
     if (!connected()) return failure({ code: 'SUPERVISOR_UNREACHABLE' });
     const cwd = folders.get(typeof draft?.folder === 'string' ? draft.folder : '');
-    const v = guard.validateCreate(draft, cwd);
+    const v = guard.validateCreate(draft, cwd, { canSchedule: canSchedule() });
+    if (!v.ok && v.code === 'PLAN_REQUIRED') return { ok: false, code: 'PLAN_REQUIRED', text: TV.errorText('PLAN_REQUIRED') };
     if (!v.ok || !isDir(cwd)) return { ok: false, code: 'VALIDATION', text: TV.errorText('VALIDATION') };
     try {
       const r = await client.createTask(v.spec, { requestId: typeof draft.requestId === 'string' && /^[\w-]{8,128}$/.test(draft.requestId) ? draft.requestId : undefined });
@@ -424,7 +426,7 @@ function createTasksService(opts) {
       recent.push(registerFolder(root));
       if (recent.length >= 5) break;
     }
-    return { ais: ais || [], recent };
+    return { ais: ais || [], recent, canSchedule: canSchedule() };
   }
 
   // Folder choices are handed to the page as opaque handles with a display label.

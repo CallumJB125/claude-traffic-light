@@ -482,12 +482,12 @@
     view = 'composer';
     d && api.close();
     d = null;
-    comp = { folder: null, recent: [], ais: [], ai: 'auto', surface: 'background', perm: 'auto-edits', planFirst: false, busy: false, error: '' };
+    comp = { folder: null, recent: [], ais: [], ai: 'auto', surface: 'background', perm: 'auto-edits', planFirst: false, when: 'now', canSchedule: false, busy: false, error: '' };
     renderList();
     renderComposer();
     const info = await api.composer();
     if (view !== 'composer' || !comp) return;
-    if (info) { comp.ais = info.ais; comp.recent = info.recent; renderComposer(true); }
+    if (info) { comp.ais = info.ais; comp.recent = info.recent; comp.canSchedule = info.canSchedule === true; renderComposer(true); }
   }
 
   function closeComposer() {
@@ -563,12 +563,20 @@
     pf.append(cb, ' Show me its plan first and wait for my go-ahead');
     permF.append(permL, perm, el('div', 'sub', codex ? 'Network access is blocked for commands. Codex runs without interactive command approvals in this sandbox. Plan review only widens a task that already has edit permission; a plan-only task stays read only.' : ''), pf);
 
+    const whenF = el('div', 'field');
+    const whenL = el('label', null, 'When should it start?'); whenL.htmlFor = 'c-when';
+    const when = el('select'); when.id = 'c-when';
+    for (const [v, label, off] of [['now', 'Start now'], ['reset', 'When my usage limit resets'], ['tonight', comp.canSchedule ? 'Run tonight (10 pm to 7 am)' : 'Run tonight (Plus)', !comp.canSchedule]]) { const o = el('option', null, label); o.value = v; o.disabled = !!off; when.append(o); }
+    when.value = comp.when;
+    when.addEventListener('change', () => { comp.when = when.value; renderComposer(true); });
+    whenF.append(whenL, when, el('div', 'sub', comp.when === 'now' ? 'It schedules your own work for when your limit resets or overnight, under your own login on this Mac.' : comp.when === 'reset' ? 'It schedules your own work for when your limit resets. If you have not hit a limit it starts straight away.' : 'It schedules your own work for tonight and keeps this Mac awake (lid open) while the queue has work. It runs only while this Mac is awake.'));
+
     const foot = el('div', 'foot');
     const go = btn('Start task', 'primary'); go.type = 'submit'; go.id = 'c-go'; go.disabled = !connected() || comp.busy;
     const cancel = btn('Cancel', '', closeComposer);
     const err = el('span', 'err', comp.error); err.id = 'c-err'; err.setAttribute('role', 'alert');
     foot.append(go, cancel, err);
-    root.append(words, where, aiF, surf, permF, foot);
+    root.append(words, where, aiF, surf, permF, whenF, foot);
     main.append(root);
     updateCount();
     if (!keepFocus || hadFocus || !text) ta.focus();
@@ -585,7 +593,7 @@
     const v = TV.validateDraft({ text, hasFolder: !!comp.folder });
     if (!v.ok) { comp.error = v.error; $('c-err').textContent = v.error; return; }
     comp.busy = true; $('c-go').disabled = true; $('c-err').textContent = '';
-    const r = await api.create({ text, folder: comp.folder.handle, ai: comp.ai, surface: comp.surface, permissionLevel: comp.perm, planFirst: comp.planFirst });
+    const r = await api.create({ text, folder: comp.folder.handle, ai: comp.ai, surface: comp.surface, permissionLevel: comp.perm, planFirst: comp.planFirst, when: comp.when });
     if (!comp) return;
     comp.busy = false;
     if (!r || !r.ok) { comp.error = r?.text || TV.errorText('INTERNAL'); renderComposer(true); return; }
