@@ -57,7 +57,9 @@ ul { padding: 0; list-style: none; }
 .nav-leaf[aria-current="location"] { background: var(--panel-2); color: var(--text); font-weight: 600; }
 .nav-section[data-active] { color: var(--text); font-weight: 600; }
 .nav-section[data-active] .nav-icon { color: var(--accent); }
-.nav-sub[hidden] { display: none; }
+.nav-sub[hidden], #nav li[hidden] { display: none; }
+.nav-foot { flex: none; display: flex; flex-direction: column; gap: 1px; padding-top: 8px; border-top: 1px solid var(--line); }
+.nav-foot .nav-item { min-height: 26px; font-size: var(--text-sm); color: var(--muted); }
 .sidebar-hub { min-height: 18px; padding: 8px 8px 0; font-size: var(--text-xs); color: var(--faint); display: flex; align-items: center; gap: 6px; }
 .sidebar-hub::before { content: ""; width: 6px; height: 6px; border-radius: 2px; background: var(--line-strong); }
 .sidebar-hub:empty::before { display: none; }

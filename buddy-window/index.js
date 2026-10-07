@@ -17,7 +17,7 @@ const http = require('node:http'); // privacy-flow: local-board-hub
 const crypto = require('node:crypto');
 const { pathToFileURL } = require('node:url');
 const { BaseWindow, BrowserWindow, WebContentsView, ipcMain, session, shell, utilityProcess, app, nativeTheme, net, safeStorage, dialog } = require('electron'); // privacy-flow: team-hub-account
-const { PAGES, GROUPS, SECTIONS, sectionsFor, pageById, hubPageUrl, fragmentOk, navDecision, openDecision, connectDecision, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl } = require('./pages');
+const { PAGES, GROUPS, SECTIONS, FOOTER, sectionsFor, pageById, hubPageUrl, fragmentOk, navDecision, openDecision, connectDecision, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl } = require('./pages');
 const { createHubSupervisor } = require('./hub-process');
 const { createWorkspaceStore, normalizeHubUrl, normalizeLinkHub, accessTeamFromLocation, partitionFor: teamPartition, integrationPartitionFor, hubKey, hostOf } = require('./workspaces');
 const { createAccountClient, pinnedTransport, bearerScope, bearerHeaders } = require('./accounts');
@@ -405,6 +405,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       selected,
       workspaces: store.list().map(({ id, name, kind, group }) => ({ id, name, kind, group: group ?? null })),
       active: store.active().id,
+      burst: (() => { try { return burstApi?.snapshot().d.kind === 'present'; } catch { return false; } })(),
       optimiser: selected === 'optimiser' ? { nav: optimiser.nav(), active: optimiser.active() } : null,
       signedIn: store.hubs().some(signedIn),
       runners: flow.runningTeams(),
@@ -904,7 +905,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   ipcMain.handle('optimiser:open-browser', (e) => (fromOptimiser(e) ? optimiser.openBrowser() : { ok: false }));
   ipcMain.on('optimiser:docs', (e) => { if (fromOptimiser(e)) shell.openExternal(BurstEmbed.DOCS_URL); }); // privacy-flow: burst-dashboard-links
   ipcMain.on('buddy:optimiser-section', (e, id) => { if (fromSidebar(e) && typeof id === 'string') optimiser.section(id); });
-  ipcMain.handle('buddy:pages', (e) => (fromSidebar(e) ? { pages: PAGES, groups: GROUPS, sections: sectionsFor(), brand: { name: BRAND.NAME, hubText: BRAND.HUB_TEXT } } : null));
+  ipcMain.handle('buddy:pages', (e) => (fromSidebar(e) ? { pages: PAGES, groups: GROUPS, sections: sectionsFor(), footer: FOOTER, brand: { name: BRAND.NAME, hubText: BRAND.HUB_TEXT } } : null));
   for (const [op, fn] of Object.entries(flow.ACCT)) {
     ipcMain.handle(`buddy:acct:${op}`, async (e, ...args) => {
       if (!fromAccount(e)) return { ok: false, error: 'Not allowed.' };

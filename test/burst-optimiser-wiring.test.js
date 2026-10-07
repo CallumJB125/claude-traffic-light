@@ -107,8 +107,8 @@ test('sidebar: the optimiser\'s sections unfold under its entry only while it is
   const dom = new JSDOM(read('buddy-window/sidebar.html').replace(/<script[^>]*><\/script>/g, '').replace(/<link[^>]*>/g, ''), { runScripts: 'outside-only', url: 'file:///synthetic/sidebar.html' });
   const clicks = [];
   let onState;
-  const { PAGES, SECTIONS, GROUPS } = require('../buddy-window/pages.js');
-  dom.window.buddy = { onState: (cb) => { onState = cb; }, pages: async () => ({ pages: PAGES, groups: GROUPS, sections: SECTIONS, brand: { name: 'Plexiform', hubText: {} } }), select: () => {}, optimiserSection: (id) => clicks.push(id), workspace: () => {}, signOut: () => {}, retry: () => {} };
+  const { PAGES, SECTIONS, GROUPS, FOOTER } = require('../buddy-window/pages.js');
+  dom.window.buddy = { onState: (cb) => { onState = cb; }, pages: async () => ({ pages: PAGES, groups: GROUPS, sections: SECTIONS, footer: FOOTER, brand: { name: 'Plexiform', hubText: {} } }), select: () => {}, optimiserSection: (id) => clicks.push(id), workspace: () => {}, signOut: () => {}, retry: () => {} };
   dom.window.eval(read('buddy-window/sidebar.js'));
   return settle().then(() => {
     const d = dom.window.document;
@@ -121,6 +121,12 @@ test('sidebar: the optimiser\'s sections unfold under its entry only while it is
     assert.deepEqual(clicks, ['sec-models']);
     onState({ selected: 'usage', optimiser: null });
     assert.equal(d.querySelectorAll('.nav-leaf').length, 0);
+    const li = d.querySelector('[data-page="optimiser"]').parentElement;
+    assert.equal(li.hidden, true, 'hidden while Burst is absent');
+    onState({ selected: 'usage', burst: true });
+    assert.equal(li.hidden, false, 'listed while Burst is present');
+    onState({ selected: 'optimiser', burst: false });
+    assert.equal(li.hidden, false, 'never hidden while open');
     dom.window.close();
   });
 });

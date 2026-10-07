@@ -47,6 +47,7 @@ function el(tag, attrs = {}, ...kids) {
 const state = { selected: 'board', hub: { state: 'stopped' } };
 let pages = [];
 let sections = [];
+let footer = [];
 const buttons = new Map();
 
 function item(p, child = false) {
@@ -91,6 +92,9 @@ function build() {
     ul.append(el('li', {}, head, sub));
   }
   nav.append(el('section', { class: 'nav-group' }, ul));
+  const foot = document.getElementById('nav-foot');
+  foot.textContent = '';
+  for (const id of footer) { const p = byId.get(id); if (p) foot.append(item(p, true)); }
   paint();
 }
 
@@ -130,6 +134,8 @@ function paint() {
     if (id === open) btn.setAttribute('data-active', ''); else btn.removeAttribute('data-active');
     subLists.get(id).hidden = id !== open;
   }
+  // Burst-only pages are listed while Burst is present, or while open so the selection never vanishes.
+  for (const p of pages) if (p.burstOnly) { const li = buttons.get(p.id)?.parentElement; if (li) li.hidden = !(state.burst || state.selected === p.id); }
   paintOptimiserNav();
   const hub = document.getElementById('hub');
   const s = state.hub?.state;
@@ -142,7 +148,7 @@ function paint() {
 // ↑/↓ move between entries, like a native source list.
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
-  const all = [...document.querySelectorAll('#nav button')].filter((b) => !b.closest('[hidden]'));
+  const all = [...document.querySelectorAll('#nav button, #nav-foot button')].filter((b) => !b.closest('[hidden]'));
   const i = all.indexOf(document.activeElement);
   if (i < 0) return;
   e.preventDefault();
@@ -195,6 +201,7 @@ window.buddy.pages().then((r) => {
   if (!r) return;
   pages = r.pages;
   sections = r.sections;
+  footer = r.footer ?? [];
   HUB_TEXT = r.brand.hubText;
   document.title = r.brand.name;
   document.getElementById('brand').textContent = r.brand.name;
