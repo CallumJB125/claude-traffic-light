@@ -10,7 +10,7 @@ import { classifyPair, kindOf, hintPaths } from '../shared/overlap.js';
 import { sponsorLine, alertsFor } from '../shared/cardface.js';
 import { HubError, json } from './db.js';
 import { newDeviceToken, sha256hex } from './auth.js';
-import { cardView, cardDetail, boardSnapshot, publicLogin, labelDef, EMAIL_ONLY, LOCAL_ONLY, emailOnlyIdentity } from './views.js';
+import { runCost, cardView, cardDetail, boardSnapshot, publicLogin, labelDef, EMAIL_ONLY, LOCAL_ONLY, emailOnlyIdentity } from './views.js';
 import { feedEvent, isFeedKind } from './hub.js';
 import { can } from './permissions.js';
 import { limitOrThrow } from './ratelimit.js';
@@ -65,6 +65,19 @@ export const LABEL_REWRITE_MAX = 2000;
 
 const SALVAGE_MAX = 8_000;
 const archivedError = () => new HubError('CONFLICT', 'this card is archived: restore it first', { reason: 'ARCHIVED' });
+
+const HISTORY_MAX_WINDOW_MS = 31 * 86_400_000, HISTORY_MAX_ROWS = 500;
+const STOPPED = new Set(['stopped', 'released', 'released_requeue', 'taken_over', 'parked']);
+// How a run ended, in the History view's six words (plus 'running').
+function runOutcome(r) {
+  if (!r.ended_at) return r.card_run_state === 'unresponsive' || r.card_run_state === 'orphaned' ? 'stalled' : 'running';
+  const why = r.end_reason ?? '';
+  if (r.terminal_reason || why === 'failed:budget') return 'budget';
+  if (why === 'failed:limit') return 'limit';
+  if (why === 'complete' || why === 'handed_over') return 'finished';
+  if (STOPPED.has(why)) return 'stopped';
+  return 'failed';
+}
 
 export class Api {
   constructor(hub) {
@@ -256,6 +269,33 @@ export class Api {
     const rows = this.db.all('SELECT * FROM journal WHERE board_id = ? AND seq > ? ORDER BY seq LIMIT ?', boardId, after, n)
       .map((j) => ({ ...j, payload: json(j.payload, {}) }));
     return { rows, next_after_seq: rows.length ? rows.at(-1).seq : after };
+  }
+
+  // GET /api/boards/:id/runs?from=&to= — runs overlapping a bounded window, read-only,
+  // for the History view. Costs are provider-reported or null (never $0 by default).
+  runsInRange(member, boardId, { from, to } = {}) {
+    this.boardFor(member, boardId);
+    const t1 = to == null || to === '' ? Date.now() : Date.parse(to), t0 = from == null || from === '' ? t1 - 86_400_000 : Date.parse(from);
+    if (!Number.isFinite(t0) || !Number.isFinite(t1) || t1 <= t0) throw new HubError('VALIDATION', 'from and to must be ISO times with from before to');
+    if (t1 - t0 > HISTORY_MAX_WINDOW_MS) throw new HubError('VALIDATION', 'the window is at most 31 days');
+    const lo = new Date(t0).toISOString(), hi = new Date(t1).toISOString();
+    const runs = this.db.all(`SELECT r.*, c.key AS card_key, c.title AS card_title, c.run_state AS card_run_state FROM runs r JOIN cards c ON c.id = r.card_id
+      WHERE c.board_id = ? AND r.started_at < ? AND (r.ended_at IS NULL OR r.ended_at >= ?) ORDER BY r.started_at DESC LIMIT ?`, boardId, hi, lo, HISTORY_MAX_ROWS + 1);
+    const truncated = runs.length > HISTORY_MAX_ROWS;
+    const observed = this.db.all(`SELECT w.card_id, w.provider, w.reported_status, w.tracking, w.created_at, w.received_at, c.key AS card_key, c.title AS card_title
+      FROM work_capture_cards w JOIN cards c ON c.id = w.card_id
+      WHERE w.board_id = ? AND w.tracking != 'deleted' AND w.created_at < ? AND w.received_at >= ? ORDER BY w.created_at DESC LIMIT ?`, boardId, hi, lo, HISTORY_MAX_ROWS);
+    return {
+      from: lo, to: hi, now: new Date().toISOString(), truncated,
+      runs: runs.slice(0, HISTORY_MAX_ROWS).map((r) => {
+        const ai = aiOfDispatch(r), cost = runCost(this.hub, r);
+        return { id: r.id, card_id: r.card_id, key: r.card_key, title: r.card_title, ai, ai_label: AI_LABELS[ai] ?? ai,
+          started_at: r.started_at, ended_at: r.ended_at ?? null, outcome: runOutcome(r), end_reason: r.end_reason ?? null,
+          cost_usd: cost.cost_usd, has_handover: !!this.hub.latestHandover(r.card_id) };
+      }),
+      observed: observed.map((o) => ({ card_id: o.card_id, key: o.card_key, title: o.card_title, provider: o.provider, started_at: o.created_at,
+        ended_at: o.reported_status === 'ended' || o.tracking !== 'active' ? o.received_at : null, last_seen_at: o.received_at, status: o.reported_status })),
+    };
   }
 
   alerts(member, boardId) {

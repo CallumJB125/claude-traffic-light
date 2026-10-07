@@ -1469,6 +1469,8 @@ const MyDay = require('./src/my-day-service.js').createMyDayService({
   work: () => buddyWin?.myDay() ?? Promise.resolve({ status: 'partial', sources: [] }),
   sessions: () => localSessions(aggregateState().sessions || []),
   busy: () => BusyWatch.status(),
+  calendarHelper: () => BusyWatch.helperAvailable(),
+  enableCalendar: () => commitConfig({ busyCalendar: true }),
   open: handle => buddyWin?.openMyDayCard(handle) ?? false,
 });
 const myDaySender = e => !!e.sender && e.sender === buddyWin?.pageWebContents('myday') && e.senderFrame === e.sender.mainFrame;
@@ -1627,6 +1629,7 @@ ipcMain.handle('interaction-host-status',e=>{
 });
 
 ipcMain.handle('myday:state', e => myDaySender(e) ? MyDay.snapshot() : null);
+ipcMain.handle('myday:show-meetings', e => myDaySender(e) ? MyDay.showMeetings() : false);
 ipcMain.handle('myday:open', (e, handle) => myDaySender(e) && typeof handle === 'string' && handle.length <= 100 ? MyDay.open(handle) : false);
 function openBuddy(page = null) {
   if (!devMockReady) return;

@@ -18,6 +18,8 @@ import {WorkflowJourney,workflowExecutionSubmit,workflowExecutionChange,workflow
 import { normalizeBg, normalizeTheme } from './themes.js';
 import { tableScreen } from './render-table.js';
 import { planningScreen } from './render-planning.js';
+import { historyScreen } from './render-history.js';
+import { rangeWindow, buildHistory, neighborBar } from './history.js';
 import { nextAnchor, movedDates, scheduledOn } from './calendar.js';
 import { validDay, validZone, todayIn, shiftDay } from '../../shared/planning.js';
 import { DEFAULT_SORT, nextSort } from './table.js';
@@ -26,7 +28,7 @@ import { integrationsScreen, connectWindowTarget, takeInput } from './render-int
 import { saveSentrySettings } from './sentry-settings.js';
 import { teamScreen } from './render-team.js';
 import { emptyFold, pullJournal, windowMetrics, cardMetrics } from './metrics.js';
-import { VIEWS } from './views.js';
+import { VIEWS, plannerEnabled } from './views.js';
 import { drawer } from './render-drawer.js';
 import { colorMap } from './labels.js';
 import { dialog } from './render-dialogs.js';
@@ -181,6 +183,10 @@ function closeThemeMenu({ refocus = false } = {}) {
 // last one this browser used.
 
 function loadView() {
+  let storedPlanner = null;
+  try { storedPlanner = localStorage.getItem('board-planner'); } catch { /* private mode */ }
+  state.showPlanner = plannerEnabled(location.search, storedPlanner);
+  try { localStorage.setItem('board-planner', state.showPlanner ? '1' : '0'); } catch { /* private mode */ }
   const want = new URLSearchParams(location.search).get('view');
   let saved = null;
   try { saved = localStorage.getItem('board-view'); } catch { /* private mode */ }
@@ -190,6 +196,7 @@ function setView(v) {
   if (!VIEWS.some((x) => x.id === v) || state.view === v) return;
   state.view = v;
   if (v === 'dashboard') loadJournal();
+  if (v === 'history') loadHistory();
   if (v === 'integrations') loadIntegrations();
   if (v === 'team' && state.board) { presenceFallbackSoon(); loadTeamOverview(); }
   // Team pages are opened from the app sidebar; only board views are remembered.
@@ -424,6 +431,8 @@ function buildModel() {
     budgetMax: state.board?.settings?.max_budget_usd,
     readOnly: boardReadOnly(),
     view: state.view,
+    history: state.view === 'history' ? { ...state.history, now: Date.now() } : null,
+    showPlanner: state.showPlanner,
     table: state.table,
     planner: plannerState(),
     dashboard: state.view === 'dashboard' ? dashboardModel(live) : null,
@@ -453,6 +462,29 @@ let dashToken = 0;
 
 const freshDash = () => ({ status: 'idle', fold: emptyFold(), offset: 0, error: null, updatedAt: null, epoch: null });
 state.dash = freshDash();
+state.history = { range: 'today', status: 'idle', error: null, data: null, from: 0, to: 0, now: 0, selected: null, updated_at: null };
+let historyToken = 0;
+
+async function loadHistory(range = state.history.range) {
+  if (!state.boardId) return;
+  const token = ++historyToken, boardId = state.boardId, now = Date.now(), win = rangeWindow(range, now);
+  state.history = { ...state.history, range, status: 'loading', from: win.from, to: win.to, now };
+  if (state.history.data && state.history.data.range !== range) state.history.data = null;
+  update();
+  try {
+    const data = await api.runs(boardId, new Date(win.from).toISOString(), new Date(win.to).toISOString());
+    if (token !== historyToken) return;
+    state.history = { ...state.history, status: 'ok', error: null, data: { ...data, range }, now: Date.now(), updated_at: Date.now() };
+  } catch (err) {
+    if (token !== historyToken) return;
+    state.history = { ...state.history, status: 'error', error: errorText(err) };
+  }
+  update();
+}
+function historyBars() {
+  const hs = state.history;
+  return hs.data ? buildHistory({ data: hs.data, from: hs.from, to: hs.to, now: hs.now }).lanes : [];
+}
 
 async function loadJournal() {
   if (!state.boardId || state.dash.status === 'loading') return;
@@ -474,6 +506,8 @@ async function loadJournal() {
 function resetDashboard() {
   dashToken++;
   state.dash = freshDash();
+  historyToken++;
+  state.history = { ...state.history, status: 'idle', data: null, selected: null };
   winMemo = null;
   cardMemo = null;
 }
@@ -537,7 +571,7 @@ function screen() {
   if (state.conn.status === 'upgrade') return loadingScreen('This page is older than the board. Reload to get the new version.');
   if (!state.board) return h('div', { class: 'app-shell' }, loadingScreen(state.conn.status === 'connecting' && state.conn.retryAt ? 'Can’t reach the board yet. Retrying…' : 'Loading the board…'), toasts());
   const model = buildModel();
-  const body = model.view === 'calendar' || model.view === 'timeline' ? planningScreen(model) : model.view === 'table' ? tableScreen(model) : model.view === 'dashboard' ? dashboardScreen(model) : model.view === 'integrations' ? integrationsScreen(model) : model.view === 'team' ? teamScreen(model) : null;
+  const body = model.view === 'calendar' || model.view === 'timeline' ? planningScreen(model) : model.view === 'table' ? tableScreen(model) : model.view === 'dashboard' ? dashboardScreen(model) : model.view === 'history' ? historyScreen(model) : model.view === 'integrations' ? integrationsScreen(model) : model.view === 'team' ? teamScreen(model) : null;
   return h('div', { class: 'app-shell' }, boardScreen(model, body), drawer(model), dialog(model), toasts());
 }
 
@@ -869,6 +903,7 @@ function onMessage(msg) {
       if (state.showArchived) loadArchived();
       if (state.detail) refreshDetail(state.detail.cardId);
       if (state.view === 'dashboard' && state.dash.status === 'idle') loadJournal();
+      if (state.view === 'history' && state.history.status === 'idle') loadHistory();
       if (state.view === 'integrations' && state.integ.status === 'idle') loadIntegrations();
       presenceFallbackSoon();
       if (state.view === 'team' && state.overview.status === 'idle') loadTeamOverview();
@@ -1505,7 +1540,7 @@ function closePalette() {
 
 function paletteNow() {
   const m = buildModel();
-  return paletteResults(state.dialog, { entries: m.entries, view: state.view, readOnly: m.readOnly, filters: state.filters });
+  return paletteResults(state.dialog, { entries: m.entries, view: state.view, readOnly: m.readOnly, filters: state.filters, showPlanner: state.showPlanner });
 }
 
 function runPalette(item, { give = false } = {}) {
@@ -1900,6 +1935,9 @@ function onClick(e) {
     case 'archive': archiveCards([cardId]); return;
     case 'restore': restoreCards([cardId]); return;
     case 'view': setView(el.dataset.view); return;
+    case 'history-range': if (el.dataset.range !== state.history.range) { state.history.selected = null; loadHistory(el.dataset.range); } return;
+    case 'history-refresh': if (state.history.status !== 'loading') loadHistory(); return;
+    case 'history-open': state.history.selected = el.dataset.run; update(); openDetail(cardId); return;
     case 'local-card-dismiss':
       state.localCardDismissed = true;
       try { localStorage.setItem('board-local-card', 'dismissed'); } catch { /* private mode */ }
@@ -2064,6 +2102,13 @@ function themeMenuKey(e) {
 }
 
 function onKeydown(e) {
+  const hbar = e.target.closest?.('[data-history-bar]');
+  if (hbar && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key) && !e.altKey && !e.ctrlKey && !e.metaKey) {
+    const next = neighborBar(historyBars(), hbar.dataset.run, e.key);
+    e.preventDefault();
+    if (next) root.querySelector(`[data-history-bar][data-run="${CSS.escape(next)}"]`)?.focus();
+    return;
+  }
   const planned = e.target.closest?.('[data-planning-card]');
   if (planned && e.altKey && !e.ctrlKey && !e.metaKey && ['ArrowLeft', 'ArrowRight'].includes(e.key)) {
     e.preventDefault(); movePlan(planned.dataset.planningCard, e.key === 'ArrowLeft' ? -1 : 1); return;
@@ -2152,6 +2197,7 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => up
 
 // Ages advance between pushes (§5.1): re-derive every face once a second.
 setInterval(() => { if (state.auth === 'ok' && state.board) update(); }, 1000);
+setInterval(() => { if (state.view === 'history' && state.board && document.visibilityState === 'visible' && state.history.status === 'ok') loadHistory(); }, 30_000);
 setInterval(() => { if (state.view === 'dashboard' && state.board && document.visibilityState === 'visible') loadJournal(); }, DASH_REFRESH_MS);
 setInterval(() => { if (state.view === 'team' && document.visibilityState === 'visible') loadTeamOverview(); }, 15_000);
 setInterval(()=>{

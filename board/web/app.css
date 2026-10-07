@@ -1297,3 +1297,39 @@ dialog::backdrop { background: var(--backdrop); transition: opacity 200ms ease; 
 .needs-you-item { display: flex; gap: 10px; align-items: baseline; width: 100%; text-align: left; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); color: inherit; cursor: pointer; }
 .needs-you-what { flex: 1; }
 .needs-you-wait { color: var(--muted, inherit); font-size: 12px; }
+
+/* History: swimlanes of real runs on a time axis. Outcome = tone + icon + label, never colour alone. */
+.hist-tiles { margin: 0; }
+.hist-selected { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin: 0; padding: 10px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-lg); font-size: var(--text-sm); }
+.hchart { position: relative; display: flex; flex-direction: column; gap: 2px; padding: 10px 12px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-lg); }
+.haxis, .hlane { display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 0 10px; align-items: start; }
+.haxis-track { position: relative; height: 18px; border-bottom: 1px solid var(--line); }
+.haxis-tick { position: absolute; top: 0; padding-left: 4px; border-left: 1px solid var(--line); color: var(--muted); font-size: var(--text-sm); line-height: 16px; white-space: nowrap; }
+.hlane { border-bottom: 1px solid var(--line); }
+.hlane:last-child { border-bottom: 0; }
+.hlane-label { display: flex; justify-content: space-between; gap: 6px; padding-top: 8px; color: var(--text); font-size: var(--text-sm); font-weight: 600; }
+.hlane.is-empty .hlane-label { color: var(--muted); font-weight: 500; }
+.hlane-count { color: var(--muted); font-weight: 400; }
+.hlane-track { position: relative; min-width: 0; }
+.hnow { position: absolute; top: 0; bottom: 0; width: 0; border-left: 2px solid var(--tone-red); z-index: 2; pointer-events: none; }
+.hbar { --c: var(--tone-grey); position: absolute; height: 24px; min-width: 22px; padding: 0; display: block; color: var(--text); background: color-mix(in oklab, var(--c) 24%, var(--panel)); border: 1px solid var(--c); border-radius: 6px; cursor: pointer; font: inherit; font-size: var(--text-sm); }
+.hbar-green { --c: var(--tone-green); } .hbar-done { --c: var(--tone-done); } .hbar-grey { --c: var(--tone-grey); } .hbar-red { --c: var(--tone-red); }
+.hbar-amber { --c: var(--tone-amber); } .hbar-violet { --c: var(--tone-violet); } .hbar-quiet { --c: var(--tone-quiet); }
+.hbar.is-running { border-right-style: dashed; }
+.hbar.is-selected, .hbar:focus-visible { outline: 2px solid var(--text); outline-offset: 1px; z-index: 3; }
+.hbar-body { display: flex; align-items: center; gap: 4px; height: 100%; padding: 0 5px; overflow: hidden; white-space: nowrap; }
+.hbar-body .icon { flex: none; color: var(--c); }
+.hbar-tip { display: none; position: absolute; left: 0; top: 28px; z-index: 5; flex-direction: column; gap: 2px; width: max-content; max-width: min(320px, 70vw); padding: 7px 10px; background: var(--panel-2); color: var(--text); border: 1px solid var(--line-strong); border-radius: var(--radius); box-shadow: 0 6px 20px oklch(0 0 0 / 0.25); white-space: normal; text-align: left; pointer-events: none; }
+.hbar-tip.is-right { left: auto; right: 0; }
+.hbar:hover .hbar-tip, .hbar:focus-visible .hbar-tip { display: flex; }
+.hlegend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0; padding: 0; list-style: none; color: var(--muted); font-size: var(--text-sm); }
+.hlegend-item { --c: var(--tone-grey); display: inline-flex; align-items: center; gap: 5px; }
+.hlegend-item .icon { color: var(--c); }
+.histview .viewswitch-label { display: inline; }
+@media (max-width: 640px) {
+  .haxis, .hlane { grid-template-columns: minmax(0, 1fr); }
+  .haxis-gap { display: none; }
+  .hlane-label { padding: 6px 0 0; }
+  .hbar-key { display: none; }
+  .hbar-tip { max-width: 55vw; }
+}
