@@ -37,7 +37,11 @@ function extras(enrich, row) {
 function handoverOf(fn, row) {
   try { const h = fn ? fn(row) : null; return h ? { handover: h } : {}; } catch { return {}; }
 }
-function snapshot({ sessions = [], activity = {}, available = true, now = Date.now(), enrich = null, handover = null } = {}) {
+// Opaque handle plus the attached/made card label and the repo share state (src/session-actions.js rowInfo).
+function actionsOf(fn, row) {
+  try { const a = fn ? fn(row) : null; return a ? { actions: { handle: String(a.handle), card: a.card ? { label: String(a.card.label).slice(0, 160), how: a.card.how === 'made' ? 'made' : 'attached' } : null, share: a.share ? { on: a.share.on === true } : null } } : {}; } catch { return {}; }
+}
+function snapshot({ sessions = [], activity = {}, available = true, now = Date.now(), enrich = null, handover = null, info = null } = {}) {
   const time = Number.isFinite(now) && now >= 0 ? now : Date.now();
   let latest = null, omitted = 0;
   const rows = [];
@@ -65,6 +69,7 @@ function snapshot({ sessions = [], activity = {}, available = true, now = Date.n
       freshness: available === false || age === null ? 'unknown' : age <= RECENT_MS ? 'recent' : 'stale', age_ms: age, lifecycle, children,
       ...extras(enrich, row),
       ...handoverOf(handover, row),
+      ...actionsOf(info, row),
     });
   }
   rows.sort((a, b) => (a.age_ms ?? Infinity) - (b.age_ms ?? Infinity));

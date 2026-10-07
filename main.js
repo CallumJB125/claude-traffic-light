@@ -1452,6 +1452,7 @@ function getBuddy() {
       onClosed: () => { OverviewMain.invalidate(); hatchResults.clear(); feedbackShot = null; feedbackLast = null; SetupsLocal.invalidate(); if (IS_MAC && !lightsWin) app.dock.hide(); },
       devAccountsHub: app.isPackaged ? null : devAccountsHub,
       captureEnabled: !DEMO,
+      handoverWriter: () => { try { return SessionHandoverMain.writer; } catch { return null; } },
     });
     if (typeof buddyWin[BudgetNotice.CONTRACT.subscribeMethod] === 'function') {
       const unsubscribe = buddyWin[BudgetNotice.CONTRACT.subscribeMethod](handleBudgetEvent);
@@ -1481,11 +1482,12 @@ ipcMain.handle('sessions:state', e => {
   if (!sessionsSender(e)) return null;
   try {
     const configured = IS_DEV_RUN ? false : Adapters.get('codex').isActivityInstalled({ home: os.homedir(), runtime: HOOK_RUNTIME });
-    return SessionOverview.snapshot({ sessions: localSessions(aggregateState().sessions || []), activity: { configured, available: true }, now: Date.now(), enrich: BurstIpc.enrichSession, handover: (row) => SessionHandoverMain.view(row) });
+    return SessionOverview.snapshot({ sessions: localSessions(aggregateState().sessions || []), activity: { configured, available: true }, now: Date.now(), enrich: BurstIpc.enrichSession, info: (row) => SessionActionsMain.rowInfo(row), handover: (row) => SessionHandoverMain.view(row) });
   } catch {
     return SessionOverview.snapshot({ sessions: [], activity: { available: false }, available: false, now: Date.now() });
   }
 });
+const SessionActionsMain = require('./src/session-actions-main.js').register({ ipcMain, sessionsAllowed: sessionsSender, sessions: () => localSessions(aggregateState().sessions || []), bridge: () => buddyWin?.sessionBridge, capture: () => buddyWin, tasks: () => { const t = getTasks(); t.start(); return t; }, clipboard, openPage: (id) => openBuddy(id), pageExists: (id) => !!BuddyPages.pageById(id), pickFolder: async () => { const r = await dialog.showOpenDialog(BrowserWindow.fromWebContents(buddyWin?.pageWebContents('sessions')) || undefined, { title: 'Choose the folder', properties: ['openDirectory'] }); return r.canceled ? null : r.filePaths[0]; } });
 ipcMain.handle('sessions:settings', e => { if (!sessionsSender(e)) return false; createSettingsWindow(); return true; });
 // Overview uses main-owned structured reports/current own-board work only.
 // Teammates' shared sessions come from a team hub directory. Until the real

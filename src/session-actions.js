@@ -21,7 +21,7 @@ const providerOf = (row) => (row.source == null || row.source === 'claude' || ro
 const isLocal = (r) => r && typeof r === 'object' && !r.remote && !r.device && typeof r.sessionId === 'string' && !r.sessionId.startsWith('remote:');
 const leaf = (p) => path.basename(String(p || '')).slice(0, 80) || 'folder';
 
-function create({ sessions, repoOf, rootOf, boards, capture, links, captured = () => [], tasks, clipboard, pickFolder, openPage, pageExists = () => false }) {
+function create({ sessions, repoOf, rootOf, boards, capture, links, captured = () => [], tasks, clipboard, pickFolder, openPage, pageExists = () => false, wait = 800 }) {
   const salt = crypto.randomBytes(8).toString('hex');
   const handleOf = (row) => crypto.createHash('sha256').update(`${salt}|${providerOf(row)}|${row.sessionId}`).digest('hex').slice(0, 20);
   const folders = new Map(); // handle -> absolute path
@@ -63,7 +63,11 @@ function create({ sessions, repoOf, rootOf, boards, capture, links, captured = (
       if (!seen.has(base)) seen.set(base, { handle: folder(base), label: leaf(base), canonical: root ? await repoOf(base).catch(() => null) : null });
     }
     let ais = [];
-    try { ais = (await tasks().composerInfo()).ais; } catch { ais = []; }
+    // The launcher connects in the background the first time; one short wait before saying nothing is ready.
+    for (let i = 0; i < 2 && !ais.length; i++) {
+      if (i) await new Promise((r) => setTimeout(r, wait));
+      try { ais = (await tasks().composerInfo()).ais; } catch { ais = []; }
+    }
     return {
       boards: await boards.boards().catch(() => []),
       repos: [...seen.values()].map((v) => ({ handle: v.handle, label: v.label, remote: v.canonical })).slice(0, 20),

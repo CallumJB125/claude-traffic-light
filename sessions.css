@@ -16,3 +16,18 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (max-width: 600px) { main { padding: 14px; } .session, .activity { padding: 12px; } }
 .handover-row { color: var(--muted); font-size: 13px; }
 .handover-row .link { background: none; border: 0; padding: 0; color: inherit; text-decoration: underline; cursor: pointer; font: inherit; }
+.add { margin: 20px 0; padding: 16px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-lg); }
+.add summary { cursor: pointer; } .add summary h2 { display: inline; margin: 0; }
+.routes { list-style: none; padding: 0; margin: 12px 0 0; display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+.routes li { border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; } .routes h3 { margin: 0 0 4px; font-size: var(--text-base); }
+.routes button, .row-actions button { margin-top: 8px; }
+.panel, .row-panel { margin-top: 10px; padding: 10px; border-top: 1px solid var(--line); display: grid; gap: 8px; }
+.panel[hidden] { display: none; }
+.panel label, .row-panel label { display: grid; gap: 2px; font-size: var(--text-sm); color: var(--muted); }
+.panel select, .panel textarea, .panel input, .row-panel select, .row-panel input { font: inherit; color: inherit; background: var(--panel-2); border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 8px; min-height: 44px; }
+.panel textarea { min-height: 72px; }
+.route-status, .result { color: var(--muted); font-size: var(--text-sm); margin: 4px 0 0; }
+.row-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; } .row-actions label { font-size: var(--text-sm); color: var(--muted); }
+.card-line { font-size: var(--text-sm); color: var(--muted); }
+.how { padding: 12px; border: 1px dashed var(--line-strong); border-radius: var(--radius); } .how .row-actions { margin-top: 4px; }
+.found { list-style: none; padding: 0; margin: 0; } .found li { border: 0; padding: 2px 0; }
