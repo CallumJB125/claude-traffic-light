@@ -121,3 +121,114 @@ test('session rows offer Make a card, Attach to card and Link repo; an open pane
     click(fixture, byText(fixture, 'Link repo to board')); await tick(); await tick(); await tick(); assert.match(c.textContent, /RULE SENTENCE/);
   } finally { fixture.dom.window.close(); }
 });
+
+// WP3: What's in context, Files, Message and the shared-worktree banner.
+const SID = '0f6e3c1a-2b4d-4e5f-8a9b-0c1d2e3f4a5b';
+const PREVIEW = 'PREVIEW-CONVERSATION-TEXT';
+const ctxRow = (extra = {}) => ({ provider: 'Claude Code', project: 'app', status: 'Working', freshness: 'recent', age_ms: 1000, children: [], session: SID, context: { engine: 'claude' }, ...extra });
+const inspected = () => ({ session: SID, engine: 'claude', totalTokens: 30000, reportedTokens: 30000, estimate: false, groups: [
+  { group: 'Tool results', tokens: 30000, more: 0, items: [{ id: 'a1b2c3d4e5f60718', name: 'Read src/a.js', turn: 2, tokens: 20000, flags: ['large and 1 prompts old'], removable: true, removed: false, preview: PREVIEW },
+    { id: '0123456789abcdef', name: 'Read src/b.js', turn: 1, tokens: 10000, flags: [], removable: true, removed: true }] }] });
+const plain = v => JSON.parse(JSON.stringify(v));
+const settle = async () => { for (let i = 0; i < 6; i++) await tick(); };
+
+test('What\'s in context from Burst: names and sizes, never a preview; each action is one burst-action call, cancel says nothing changed', async () => {
+  const calls = [];
+  let answer = { ok: false, cancelled: true };
+  const fixture = setup({ state: async () => state({ sessions: [ctxRow({ burst: { compaction: { compactions: 2, savedUsd: 1, netUsd: 1, savedTokens: 9 } } })] }),
+    burstView: async (name, args) => { calls.push(['view', name, args]); return { view: inspected() }; },
+    contextBreakdown: async () => { calls.push(['breakdown']); return { view: null }; },
+    burstAction: async (id, args) => { calls.push(['action', id, args]); return answer; } });
+  try {
+    await tick(); click(fixture, byText(fixture, 'What’s in context')); await settle();
+    const c = fixture.document.getElementById('content');
+    assert.match(c.textContent, /From Burst: 30k tokens/);
+    assert.match(c.textContent, /Read src\/a\.js · 20k · prompt 2/);
+    assert.match(c.textContent, /large and 1 prompts old/);
+    assert.ok(!fixture.document.body.innerHTML.includes(PREVIEW), 'a preview never reaches the page');
+    assert.deepEqual(plain(calls[0]), ['view', 'inspect', { session: SID, engine: 'claude' }]);
+    assert.equal(calls.filter(x => x[0] === 'breakdown').length, 0);
+
+    click(fixture, byText(fixture, 'Leave out')); await settle();
+    assert.deepEqual(plain(calls.filter(x => x[0] === 'action')), [['action', 'inspect-remove', { session: SID, id: 'a1b2c3d4e5f60718', engine: 'claude' }]]);
+    assert.match(c.textContent, /Cancelled\. Nothing was changed\./);
+    assert.equal(calls.filter(x => x[0] === 'view').length, 1, 'a cancelled action does not reload');
+
+    answer = { ok: true, data: null };
+    click(fixture, byText(fixture, 'Put back')); await settle();
+    assert.deepEqual(plain(calls.filter(x => x[0] === 'action').at(-1)), ['action', 'inspect-remove', { session: SID, id: '0123456789abcdef', engine: 'claude', restore: true }]);
+    assert.equal(calls.filter(x => x[0] === 'view').length, 2, 'a confirmed action reloads the drawer');
+
+    click(fixture, byText(fixture, 'Send full history again')); await settle();
+    assert.deepEqual(plain(calls.filter(x => x[0] === 'action').at(-1)), ['action', 'compaction-drop', { session: SID }]);
+    assert.equal(calls.filter(x => x[0] === 'action').length, 3);
+    fixture.intervals[0](); await tick(); assert.ok(c.querySelector('.row-panel.context'), 'refresh keeps the drawer open');
+  } finally { fixture.dom.window.close(); }
+});
+
+test('without Burst a Claude Code session falls back to its transcript breakdown, with no actions', async () => {
+  const fixture = setup({ state: async () => state({ sessions: [ctxRow()] }),
+    burstView: async () => ({ view: null, error: 'Burst is not answering.' }),
+    contextBreakdown: async (s) => (s === SID ? { view: { total: { bytes: 8000, tokens: 12000 }, reportedInputTokens: 12000, estimate: false, groups: [{ group: 'Tool results', bytes: 8000, tokens: 2000 }, { group: 'System prompt, tools and instruction files', bytes: 0, tokens: 10000 }] } } : { view: null }),
+    burstAction: async () => { throw new Error('no actions here'); } });
+  try {
+    await tick(); click(fixture, byText(fixture, 'What’s in context')); await settle();
+    const t = fixture.document.getElementById('content').textContent;
+    assert.match(t, /Estimated from this session’s transcript on this computer: 12k tokens/);
+    assert.match(t, /Tool results · 2k tokens/);
+    assert.ok(!byText(fixture, 'Leave out') && !byText(fixture, 'Send full history again'));
+  } finally { fixture.dom.window.close(); }
+});
+
+test('Files: master and shared files; Hand on is one coord-release call; Message routes owned sessions locally and others to Burst', async () => {
+  const calls = [];
+  const coordination = { masterOf: ['/r/a.js'], more: 0, shared: 1, files: [{ path: '/r/a.js', master: true, others: ['Docs'] }, { path: '/r/c.js', master: false, masterName: 'Fix login' }] };
+  const fixture = setup({ state: async () => state({ sessions: [ctxRow({ context: null, message: 'burst', burst: { coordination } }), ctxRow({ project: 'mine', context: null, session: 'owned-1', message: 'owned' })] }),
+    burstView: async () => ({ view: null }),
+    burstAction: async (id, args) => { calls.push([id, args]); return { ok: true }; },
+    messageOwned: async (s, t) => { calls.push(['owned', s, t]); return { ok: true }; } });
+  try {
+    await tick(); const d = fixture.document, c = d.getElementById('content');
+    assert.match(c.textContent, /\/r\/a\.jsMaster · also changed by Docs/);
+    assert.match(c.textContent, /\/r\/c\.jsShared · Fix login is master/);
+    assert.equal(d.getElementById('coord').hidden, false);
+    click(fixture, byText(fixture, 'Hand on')); await settle();
+    assert.deepEqual(plain(calls), [['coord-release', { release: '/r/a.js' }]]);
+
+    const [burstSection, ownedSection] = c.querySelectorAll('section.session');
+    click(fixture, [...burstSection.querySelectorAll('button')].find(b => b.textContent === 'Message')); await tick();
+    burstSection.querySelector('textarea').value = '  please commit  ';
+    click(fixture, [...burstSection.querySelectorAll('button')].find(b => b.textContent === 'Send')); await settle();
+    assert.deepEqual(plain(calls.at(-1)), ['coord-message', { session: SID, message: 'please commit' }]);
+
+    click(fixture, [...ownedSection.querySelectorAll('button')].find(b => b.textContent === 'Message')); await tick();
+    ownedSection.querySelector('textarea').value = 'hello';
+    click(fixture, [...ownedSection.querySelectorAll('button')].find(b => b.textContent === 'Send')); await settle();
+    assert.deepEqual(plain(calls.at(-1)), ['owned', 'owned-1', 'hello']);
+    assert.equal(calls.length, 3);
+  } finally { fixture.dom.window.close(); }
+});
+
+test('coordination tile reads the chosen window and lists unresolved issues', async () => {
+  const asked = [];
+  const fixture = setup({ state: async () => state({ sessions: [ctxRow({ context: null, burst: { coordination: { masterOf: [], more: 0, shared: 0, files: [] } } })] }),
+    burstView: async (name, args) => { asked.push([name, args]); return { view: { sessions: [], files: [], metrics: { days: args.days, totals: { shared: 3, refused: 1, held: 0, stopped: 1, errors: 0 }, unresolved: 1, issues: [{ at: '2026-10-07 09:00:00', kind: 'stopped', text: 'x', pending: ['/r/c.js'], files: [], resolved: false }] } } }; } });
+  try {
+    await tick(); const d = fixture.document, tile = d.getElementById('coord');
+    assert.equal(tile.hidden, false);
+    d.getElementById('coord-days').value = '7'; d.getElementById('coord-days').dispatchEvent(new fixture.dom.window.Event('change')); await settle();
+    assert.deepEqual(plain(asked), [['coordination', { days: 7 }]]);
+    assert.match(d.getElementById('coord-body').textContent, /3 shared · 1 refused/);
+    assert.match(d.getElementById('coord-body').textContent, /Stopped with uncommitted files: \/r\/c\.js/);
+  } finally { fixture.dom.window.close(); }
+});
+
+test('shared working tree banner and row note', async () => {
+  const fixture = setup({ state: async () => state({ shared: [{ project: 'app', sessions: 2, dirty: 3 }], sessions: [ctxRow({ context: null, session: undefined, sharedTree: 'app' })] }) });
+  try {
+    await tick(); const t = fixture.document.getElementById('content').textContent;
+    assert.match(t, /2 sessions share this working tree: app, with 3 uncommitted files\./);
+    assert.match(t, /Shares its working tree with another live session \(app\)/);
+    assert.equal(fixture.document.getElementById('coord').hidden, true);
+  } finally { fixture.dom.window.close(); }
+});

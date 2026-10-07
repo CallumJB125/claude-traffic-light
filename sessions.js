@@ -5,19 +5,17 @@ let generation = 0;
 const node = (tag, text, className) => { const el = document.createElement(tag); if (text) el.textContent = text; if (className) el.className = className; return el; };
 const age = value => value == null ? 'Age unknown' : value < 60_000 ? `${Math.floor(value / 1000)}s ago` : value < 3_600_000 ? `${Math.floor(value / 60_000)}m ago` : `${Math.floor(value / 3_600_000)}h ago`;
 const usd = v => `$${Math.abs(v).toFixed(2)}`;
+const tok = n => (n >= 1e6 ? `${+(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n));
 function burstBlock(section, b) {
   if (b.compaction) {
     const c = b.compaction, net = c.netUsd >= 0 ? `net saving ${usd(c.netUsd)}` : `net cost ${usd(c.netUsd)}`;
     section.append(node('p', `Burst compaction: ${c.compactions} compaction${c.compactions === 1 ? '' : 's'} · saved ${usd(c.savedUsd)} · ${net} (API-equivalent)`, 'muted'));
   }
   if (b.context) {
-    const c = b.context, k = (n) => (n >= 1e6 ? `${+(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n));
-    section.append(node('p', `Context: ${k(c.tokens)} tokens${c.pct == null ? '' : ` · ${c.pct}% of the ${k(c.limit)} compaction limit`}`, 'muted'));
+    const c = b.context;
+    section.append(node('p', `Context: ${tok(c.tokens)} tokens${c.pct == null ? '' : ` · ${c.pct}% of the ${tok(c.limit)} compaction limit`}`, 'muted'));
   }
-  if (b.coordination) {
-    const c = b.coordination;
-    section.append(node('p', `Master of ${c.masterOf.join(', ')}${c.more ? ` and ${c.more} more` : ''}${c.shared ? ` · ${c.shared} shared with other sessions` : ''}`, 'muted'));
-  }
+  if (b.coordination?.files?.length) filesBlock(section, b.coordination);
   if (!b.handover) return;
   const h = b.handover, box = node('div', '', 'handover');
   box.append(node('h3', `Handover (${h.source}${h.date ? `, ${h.date}` : ''})`), node('pre', h.text));
@@ -43,6 +41,103 @@ function handoverRow(section, h) {
 
 // ── Add sessions panel and per-row actions (src/session-actions.js) ──────────
 const api = window.sessionsApi;
+
+// ── Context drawer, coordination files and messages (Burst, or standalone) ────
+// Every change goes through main's burst-action, which shows the native consent dialog.
+const done = (out, r, ok) => say(out, r?.ok ? ok : r?.cancelled ? 'Cancelled. Nothing was changed.' : r?.error || 'That did not work. Nothing was changed.', r?.ok);
+async function act(btn, out, id, args, ok, after) {
+  btn.disabled = true;
+  try { const r = await api.burstAction(id, args); done(out, r, ok); if (r?.ok && after) after(); }
+  catch { done(out, null); }
+  finally { btn.disabled = false; }
+}
+function filesBlock(section, c) {
+  const box = node('div', '', 'files'), out = node('p', '', 'result'); out.setAttribute('role', 'status');
+  box.append(node('h3', 'Files'));
+  const list = node('ul');
+  for (const f of c.files) {
+    const li = node('li');
+    li.append(node('span', f.path, 'path'), node('span', f.master ? (f.others.length ? `Master · also changed by ${f.others.join(', ')}` : 'Master') : `Shared · ${f.masterName || 'another session'} is master`, 'tag'));
+    if (f.master) { const b = button('Hand on', () => act(b, out, 'coord-release', { release: f.path }, 'Handed on.')); b.className = 'small'; li.append(b); }
+    list.append(li);
+  }
+  box.append(list);
+  if (c.more) box.append(node('p', `And ${c.more} more file${c.more === 1 ? '' : 's'} this session masters.`, 'muted'));
+  box.append(out); section.append(box);
+}
+function contextGroups(host, view, item, reload) {
+  const out = node('p', '', 'result'); out.setAttribute('role', 'status');
+  for (const g of view.groups) {
+    const d = document.createElement('details'), sum = node('summary', `${g.group} · ${tok(g.tokens)} tokens`);
+    d.append(sum);
+    if (g.items) {
+      const list = node('ul');
+      for (const it of g.items) {
+        const li = node('li', `${it.name} · ${tok(it.tokens)}${it.turn ? ` · prompt ${it.turn}` : ''}${it.removed ? ' · left out' : ''}`);
+        if (it.flags?.length) li.append(node('span', it.flags.join('; '), 'tag'));
+        if (it.removable && it.id) {
+          const b = button(it.removed ? 'Put back' : 'Leave out', () => act(b, out, 'inspect-remove', { session: item.session, id: it.id, engine: view.engine, ...(it.removed ? { restore: true } : {}) }, it.removed ? 'Put back for the next request.' : 'Left out of the next request.', reload));
+          b.className = 'small'; li.append(b);
+        }
+        list.append(li);
+      }
+      if (g.more) list.append(node('li', `And ${g.more} smaller item${g.more === 1 ? '' : 's'}`, 'muted'));
+      d.append(list);
+    }
+    host.append(d);
+  }
+  host.append(out);
+  return out;
+}
+async function contextDrawer(section, item) {
+  section.querySelector('.row-panel')?.remove();
+  const host = node('div', '', 'row-panel context'), body = node('div');
+  const close = button('Close', () => { host.remove(); editing = false; });
+  host.append(node('h3', 'What’s in context'), body, close);
+  editing = true; section.append(host);
+  const load = async () => {
+    body.replaceChildren(node('p', 'Reading…', 'muted'));
+    const c = item.context;
+    let view = null, from = null;
+    try { const r = await api.burstView('inspect', { session: item.session, engine: c.engine }); if (r?.view) { view = r.view; from = 'burst'; } } catch { view = null; }
+    if (!view && c.engine === 'claude') { try { const r = await api.contextBreakdown(item.session); if (r?.view?.groups?.length) { view = r.view; from = 'transcript'; } } catch { view = null; } }
+    body.replaceChildren();
+    if (!view) return body.append(node('p', c.engine === 'claude' ? 'Nothing to show yet: Burst has no request from this session and its transcript was not found on this computer.' : 'Nothing to show yet: Burst has no request from this session since it started.', 'muted'));
+    if (from === 'burst') {
+      body.append(node('p', `From Burst: ${tok(view.totalTokens)} tokens${view.estimate ? ' (estimated)' : ''} in this session’s latest request. Names and sizes only.`, 'muted'));
+      const out = contextGroups(body, view, item, load);
+      if (item.burst?.compaction) {
+        const b = button('Send full history again', () => act(b, out, 'compaction-drop', { session: item.session }, 'The next request sends the whole conversation.'));
+        body.append(b);
+      }
+    } else {
+      body.append(node('p', `Estimated from this session’s transcript on this computer: ${tok(view.total.tokens)} tokens${view.estimate ? ' (about 4 bytes a token)' : ', scaled to the size Claude last reported'}. Items can be left out only when the session runs through Burst.`, 'muted'));
+      contextGroups(body, view, item, load);
+    }
+  };
+  await load();
+}
+function messagePanel(section, item) {
+  section.querySelector('.row-panel')?.remove();
+  const host = node('div', '', 'row-panel'), text = document.createElement('textarea'); text.maxLength = 500;
+  const out = node('p', '', 'result'); out.setAttribute('role', 'status');
+  const close = button('Close', () => { host.remove(); editing = false; });
+  const go = button('Send', async () => {
+    const t = text.value.trim(); if (!t) return say(out, 'Write a message first.', false);
+    if (item.message === 'burst') return act(go, out, 'coord-message', { session: item.session, message: t }, 'Queued. The session sees it at its next tool call or prompt.');
+    go.disabled = true;
+    try { const r = await api.messageOwned(item.session, t); say(out, r?.ok ? 'Sent.' : r?.error || 'Could not send it.', r?.ok); } catch { say(out, 'Could not send it.', false); } finally { go.disabled = false; }
+  });
+  host.append(field(item.message === 'burst' ? 'Message (Burst passes it on; up to 500 characters)' : 'Message (up to 500 characters)', text), go, out, close);
+  editing = true; section.append(host);
+}
+function sessionTools(section, item) {
+  if (!item.context && !item.message) return;
+  const row = node('div', '', 'row-actions');
+  if (item.context) row.append(button('What’s in context', () => contextDrawer(section, item)));
+  if (item.message) row.append(button('Message', () => messagePanel(section, item)));
+  section.append(row);
+}
 let setupData = null, editing = false, addTouched = false;
 const field = (text, control) => { const l = node('label', text); l.append(control); return l; };
 const select = (options, empty) => { const s = document.createElement('select'); if (!options.length) s.append(new Option(empty, '')); for (const o of options) { const op = new Option(o.label, o.value); op.disabled = !!o.disabled; s.append(op); } return s; };
@@ -155,6 +250,8 @@ function render(snapshot) {
     : a?.configured === true ? 'Hooks are configured. No local lifecycle event is visible yet. Review the Plexiform hooks through Codex /hooks, then start a fresh turn.'
       : a?.configured === false ? 'Codex activity is not configured for this copy of Plexiform. Open Activity settings to configure it, then review the hooks in Codex.'
         : 'Codex hook configuration is unavailable. Check Activity settings.';
+  for (const t of snapshot.shared ?? []) content.append(node('p', `${t.sessions} sessions share this working tree: ${t.project}, with ${t.dirty} uncommitted file${t.dirty === 1 ? '' : 's'}. Commit, or give one session its own worktree, before they overwrite each other.`, 'banner'));
+  document.getElementById('coord').hidden = !(snapshot.sessions ?? []).some(i => i.burst?.coordination);
   for (const item of snapshot.sessions ?? []) {
     const section = node('section', '', 'session');
     const heading = node('h2', `${item.provider} · ${item.project}`);
@@ -166,8 +263,10 @@ function render(snapshot) {
       for (const child of item.children) list.append(node('li', `${child.label} · ${confidence}: ${child.status}`));
       section.append(list);
     }
+    if (item.sharedTree) section.append(node('p', `Shares its working tree with another live session (${item.sharedTree})`, 'warn'));
     if (item.burst) burstBlock(section, item.burst);
     if (item.handover) handoverRow(section, item.handover);
+    sessionTools(section, item);
     rowActions(section, item);
     content.append(section);
   }
@@ -196,6 +295,25 @@ async function refresh({ clear = false } = {}) {
     if (request === generation && !document.hidden) { content.replaceChildren(); activity.textContent = 'Codex activity is unavailable. Check Activity settings.'; status.textContent = 'Local activity is unavailable. Try Refresh.'; }
   }
 }
+const COORD_LABELS = { shared: 'shared', refused: 'refused', held: 'held for a commit', stopped: 'stopped with uncommitted files', errors: 'hook errors' };
+async function loadCoordination() {
+  const host = document.getElementById('coord-body'), days = Number(document.getElementById('coord-days').value) || 1;
+  host.replaceChildren(node('p', 'Reading…', 'muted'));
+  let c = null;
+  try { const r = await api.burstView('coordination', { days }); c = r?.view ?? null; } catch { c = null; }
+  host.replaceChildren();
+  const m = c?.metrics;
+  if (!m) return host.append(node('p', 'Burst is not answering with coordination figures.', 'muted'));
+  host.append(node('p', Object.entries(COORD_LABELS).map(([k, label]) => `${m.totals[k] ?? 0} ${label}`).join(' · '), 'muted'));
+  const open = m.issues.filter(i => !i.resolved);
+  host.append(node('p', open.length ? `${m.unresolved || open.length} unresolved` : 'No unresolved issues.', open.length ? 'warn' : 'muted'));
+  if (!open.length) return;
+  const list = node('ul');
+  for (const i of open.slice(0, 10)) list.append(node('li', `${i.at} · ${i.kind === 'stopped' ? 'Stopped with uncommitted files' : 'Hook error'}${i.pending.length ? `: ${i.pending.join(', ')}` : i.text ? `: ${i.text}` : ''}`));
+  host.append(list);
+}
+document.getElementById('coord').addEventListener('toggle', e => { if (e.currentTarget.open) void loadCoordination(); });
+document.getElementById('coord-days').addEventListener('change', () => { void loadCoordination(); });
 document.getElementById('refresh').addEventListener('click', () => { editing = false; refresh({ clear: true }); });
 document.getElementById('add').addEventListener('toggle', () => { addTouched = true; });
 document.getElementById('add-connect').addEventListener('click', async () => {

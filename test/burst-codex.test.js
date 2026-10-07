@@ -34,7 +34,8 @@ test('normalizeCodex: tolerant of shapes, bounded, null when unrecognisable', ()
 test('coordination: who masters what, matched by full or short id; off or errored is absent', () => {
   const raw = { config: { enabled: true }, status: { sessions: [{ id: 'abcdef12-0000', name: 'Fix', masterOf: [], master_of: ['/r/a.js', '/r/b.js'] }], files: [{ path: '/r/a.js', master_name: 'Fix', contributor_names: ['Other'] }, { path: '/r/b.js', master_name: 'Fix' }] } };
   const co = Codex.normalizeCoordination(raw);
-  assert.deepEqual(Codex.coordinationFor(co, 'abcdef12-0000'), { masterOf: ['/r/a.js', '/r/b.js'], more: 0, shared: 1 });
+  assert.deepEqual(Codex.coordinationFor(co, 'abcdef12-0000'), { masterOf: ['/r/a.js', '/r/b.js'], more: 0, shared: 1,
+    files: [{ path: '/r/a.js', master: true, others: ['Other'] }, { path: '/r/b.js', master: true, others: [] }] });
   assert.equal(Codex.coordinationFor(co, 'abcdef12').shared, 1);
   assert.equal(Codex.coordinationFor(co, 'zzzzzzzz'), null);
   assert.equal(Codex.coordinationFor(null, 'abcdef12'), null);
@@ -87,4 +88,80 @@ test('client.codex / coordination read the GET endpoints; a 404 from an old Burs
   const b = api.enrichSession({ sessionId: 's-1', cwd: '/x' });
   assert.deepEqual(b.context, { tokens: 100000, limit: 200000, pct: 50 });
   assert.equal(b.coordination, undefined);
+});
+
+// WP3: coordination metrics and the Sessions Files column.
+const COORD = {
+  config: { enabled: true }, installed: true,
+  status: {
+    sessions: [{ id: 'aaaaaaaa-1111', label: 'A', name: 'Fix login', cwd: '/r', master_of: ['/r/a.js'] }, { id: 'bbbbbbbb-2222', label: 'B', cwd: '/r' }],
+    files: [{ path: '/r/a.js', master: 'aaaaaaaa-1111', master_label: 'A', master_name: 'Fix login', contributors: ['bbbbbbbb-2222'], contributor_names: ['Docs'], take_over: true, wanted: 'B' }],
+  },
+  activity: ['2026-10-07 10:00:00 share /r/a.js'],
+  metrics: { days: 7, totals: { shared: 3, refused: 1, held: 2, stopped: 1, errors: 1, bogus: 9 }, unresolved: 1, per_day: [],
+    issues: [{ at: '2026-10-06 09:00:00', kind: 'error', text: 'ERROR in pre-tool hook', resolved: true }, { at: '2026-10-07 09:00:00', kind: 'stopped', text: 'B stopped with uncommitted /r/c.js', session: 'bbbbbbbb-2222', files: ['/r/c.js'], pending: ['/r/c.js'], resolved: false }] },
+};
+
+test('coordination metrics: window, fixed counters, issues newest first; a contributor sees the file as shared', () => {
+  const co = Codex.normalizeCoordination(COORD);
+  assert.equal(co.metrics.days, 7);
+  assert.deepEqual(co.metrics.totals, { shared: 3, refused: 1, taken: 0, passed: 0, asked: 0, inherited: 0, held: 2, stopped: 1, errors: 1, released: 0 });
+  assert.equal(co.metrics.unresolved, 1);
+  assert.deepEqual(co.metrics.issues.map((i) => [i.kind, i.resolved, i.pending]), [['stopped', false, ['/r/c.js']], ['error', true, []]]);
+  assert.equal(co.files[0].masterId, 'aaaaaaaa-1111');
+  assert.equal(co.files[0].takeOver, true);
+  assert.ok(!JSON.stringify(co).includes('activity'), 'the raw coord.log tail is not passed on');
+  assert.deepEqual(Codex.coordinationFor(co, 'bbbbbbbb-2222'), { masterOf: [], more: 0, shared: 0, files: [{ path: '/r/a.js', master: false, masterName: 'Fix login' }] });
+  assert.equal(Codex.normalizeCoordination({ status: { sessions: [], files: [] } }).metrics, null);
+});
+
+async function actionHarness(answer) {
+  const fake = await createFakeBurst({ '/api/state': { body: stateV019() }, '/api/upgrade-status': { body: {} }, '/api/coordination-act': { body: { ok: 'done' } }, '/api/requests': { body: [] }, '/api/coordination': { body: COORD } });
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'burst-coord-'));
+  const bin = path.join(home, '.local', 'bin', 'claude-burst');
+  fs.mkdirSync(path.dirname(bin), { recursive: true });
+  fs.writeFileSync(bin, '#!/bin/sh\n', { mode: 0o755 });
+  fs.mkdirSync(path.join(home, '.config', 'claude-burst'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.config', 'claude-burst', 'config.json'), JSON.stringify({ admin_listen: `127.0.0.1:${fake.port}` }));
+  const client = createBurstClient({ home, platform: 'darwin', inspect: { launchdPid: async () => process.pid, listenerPid: async () => process.pid, exePath: async () => bin } });
+  const handlers = {}, dialogs = [];
+  const api = Ipc.register({
+    utilityHandle: (c, allowed, f) => { handlers[c] = (e, ...a) => (allowed(e) ? f(e, ...a) : null); },
+    settingsOnly: () => false, sessionsAllowed: (e) => e.from === 'sessions', isMac: true, client, home, shell: {}, scriptDir: '/x',
+    dialog: { showMessageBox: async (o) => { dialogs.push(o); return { response: answer }; } },
+  });
+  await api.refresh(true);
+  const posts = () => fake.requests.filter((r) => r.method === 'POST');
+  return { handlers, dialogs, posts, done: async () => { await fake.close(); fs.rmSync(home, { recursive: true, force: true }); } };
+}
+const SESSIONS = { from: 'sessions' };
+
+test('Files column actions: Message and Hand on, cancel sends nothing, confirm sends exactly one allow-listed POST', async () => {
+  for (const [id, args, body] of [
+    ['coord-message', { session: 'bbbbbbbb-2222', message: 'please commit a.js' }, { session: 'bbbbbbbb-2222', message: 'please commit a.js' }],
+    ['coord-release', { release: '/r/a.js', session: 'ignored' }, { release: '/r/a.js' }],
+  ]) {
+    const no = await actionHarness(0);
+    assert.deepEqual(await no.handlers['burst-action'](SESSIONS, id, args), { ok: false, cancelled: true });
+    assert.equal(no.dialogs.length, 1);
+    assert.equal(no.posts().length, 0, `${id} cancel`);
+    await no.done();
+    const yes = await actionHarness(1);
+    assert.equal((await yes.handlers['burst-action'](SESSIONS, id, args)).ok, true);
+    assert.equal(yes.posts().length, 1, `${id} confirm`);
+    assert.equal(yes.posts()[0].url, '/api/coordination-act');
+    assert.deepEqual(JSON.parse(yes.posts()[0].body), body);
+    await yes.done();
+  }
+});
+
+test('coordination view for the Sessions page is the normalized one, and only Sessions may read it', async () => {
+  const h = await actionHarness(1);
+  try {
+    const r = await h.handlers['burst:view'](SESSIONS, 'coordination', { days: 7 });
+    assert.equal(r.view.metrics.days, 7);
+    assert.ok(Array.isArray(r.view.metrics.issues));
+    assert.equal(await h.handlers['burst:view']({ from: 'widget' }, 'coordination', { days: 7 }), null);
+    assert.equal(h.posts().length, 0);
+  } finally { await h.done(); }
 });

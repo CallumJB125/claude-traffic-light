@@ -41,11 +41,33 @@ function handoverOf(fn, row) {
 function actionsOf(fn, row) {
   try { const a = fn ? fn(row) : null; return a ? { actions: { handle: String(a.handle), card: a.card ? { label: String(a.card.label).slice(0, 160), how: a.card.how === 'made' ? 'made' : 'attached' } : null, share: a.share ? { on: a.share.on === true } : null } } : {}; } catch { return {}; }
 }
-function snapshot({ sessions = [], activity = {}, available = true, now = Date.now(), enrich = null, handover = null, info = null } = {}) {
+// The session id goes to the page only where a row action needs it: the context drawer
+// (Claude Code, or a session Burst reports on) and Message (owned, or Burst coordination).
+const SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
+function sessionTools(row, more) {
+  if (typeof row.sessionId !== 'string' || !SESSION_ID.test(row.sessionId)) return {};
+  const claude = row.source == null || row.source === 'claude-code';
+  const owned = row.ownership === 'plexiform-owned';
+  const message = owned ? 'owned' : more.burst?.coordination ? 'burst' : null;
+  const context = claude ? { engine: 'claude' } : row.source === 'codex' && more.burst ? { engine: 'codex' } : null;
+  if (!message && !context) return {};
+  return { session: row.sessionId, ...(context ? { context } : {}), ...(message ? { message } : {}) };
+}
+// Working trees two or more live sessions share while they hold uncommitted work (src/worktree-share.js).
+function sharedOf(fn, rows) {
+  try {
+    const list = fn ? fn(rows) : [];
+    return (Array.isArray(list) ? list : []).filter(t => object(t) && Array.isArray(t.sessions) && t.sessions.length > 1).slice(0, 20).map(t => ({
+      project: projectLeaf(t.toplevel), sessions: t.sessions.length, dirty: Number.isSafeInteger(t.dirty) && t.dirty > 0 ? t.dirty : 0, ids: new Set(t.sessions),
+    }));
+  } catch { return []; }
+}
+function snapshot({ sessions = [], activity = {}, available = true, now = Date.now(), enrich = null, handover = null, info = null, sharedTrees = null } = {}) {
   const time = Number.isFinite(now) && now >= 0 ? now : Date.now();
   let latest = null, omitted = 0;
   const rows = [];
   const input = Array.isArray(sessions) ? sessions : [];
+  const trees = sharedOf(sharedTrees, input.filter(isLocal));
   // The app's bounded session store is the source; no provider chats or
   // private provider state is consulted here, including for freshness.
   for (const row of input) {
@@ -60,6 +82,8 @@ function snapshot({ sessions = [], activity = {}, available = true, now = Date.n
       label: `${lifecycle ? 'Codex subagent' : 'Agent'} ${index + 1}`, status: lifecycle && row.codexClosedTurn === false && child.status !== 'done' && Machine.codexInputPending({ source: 'codex', codexLifecycle: 1, codexTurnId: child.turnId, codexClosedTurn: false, codexInputRequests: child.codexInputRequests }, time) ? 'Waiting on you' : CHILD_STATUSES[child.status],
     })) : [];
     const stuck = object(row.stuck) && Number.isFinite(row.stuck.sinceMs) ? row.stuck : null;
+    const more = extras(enrich, row);
+    const tree = trees.find(t => t.ids.has(row.sessionId));
     rows.push({
       // Claude Code's own hook (set-status.js) writes no source field.
       provider: row.source == null ? PROVIDERS.claude : typeof row.source === 'string' && Object.hasOwn(PROVIDERS, row.source) ? PROVIDERS[row.source] : 'Local AI',
@@ -67,7 +91,9 @@ function snapshot({ sessions = [], activity = {}, available = true, now = Date.n
       status: lifecycle && row.codexClosedTurn === true ? 'Turn stopped' : Machine.claudeInputPending(row) || Machine.codexInputPending(row, time) ? 'Waiting on you' : stuck ? 'Stuck?' : typeof presented === 'string' && Object.hasOwn(STATUSES, presented) ? STATUSES[presented] : 'Unknown',
       ...(stuck ? { stuck: { tool: stuck.tool || null, since_ms: stuck.sinceMs } } : {}),
       freshness: available === false || age === null ? 'unknown' : age <= RECENT_MS ? 'recent' : 'stale', age_ms: age, lifecycle, children,
-      ...extras(enrich, row),
+      ...more,
+      ...sessionTools(row, more),
+      ...(tree ? { sharedTree: tree.project } : {}),
       ...handoverOf(handover, row),
       ...actionsOf(info, row),
     });
@@ -78,6 +104,7 @@ function snapshot({ sessions = [], activity = {}, available = true, now = Date.n
     status: available === false || !Array.isArray(sessions) ? 'unavailable' : omitted ? 'partial' : 'complete', omitted,
     activity: { configured: activity.available === false ? null : typeof activity.configured === 'boolean' ? activity.configured : null,
       observed: latest !== null, latest_age_ms: latest }, sessions: rows,
+    ...(trees.length ? { shared: trees.map(({ project, sessions: n, dirty }) => ({ project, sessions: n, dirty })) } : {}),
   };
 }
 module.exports = { snapshot, RECENT_MS, LIMIT, CHILD_LIMIT };

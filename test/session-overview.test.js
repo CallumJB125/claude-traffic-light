@@ -82,3 +82,40 @@ test('Claude overview preserves working turn, compaction and honest child uncert
   const offline = Overview.snapshot({ sessions: [row({})], available: false, now });
   assert.equal(offline.sessions[0].freshness, 'unknown');
 });
+
+// WP3: the session id reaches the page only for a row action that needs it.
+test('session tools: Claude Code gets the context drawer; Message routes owned sessions locally and others through Burst coordination', () => {
+  const claude = { sessionId: 'c1-claude', cwd: '/w/app', signal: 'tool-use', updatedAt: at(1000) };
+  const enrich = r => (r.sessionId === 'c3-coord' ? { coordination: { masterOf: [], more: 0, shared: 0, files: [] } } : r.sessionId === 'x4-codex' ? { context: { tokens: 5, limit: 0, pct: null } } : null);
+  const result = Overview.snapshot({ now, enrich, sessions: [
+    claude,
+    { ...claude, sessionId: 'c2-owned', ownership: 'plexiform-owned', updatedAt: at(2000) },
+    { ...claude, sessionId: 'c3-coord', source: 'claude-code', updatedAt: at(3000) },
+    codex({ sessionId: 'x4-codex', codexHookAt: at(4000) }),
+    codex({ sessionId: 'x5-plain', codexHookAt: at(5000) }),
+    { ...claude, sessionId: '../bad id', updatedAt: at(6000) },
+  ] });
+  const tools = result.sessions.map(r => [r.session ?? null, r.context?.engine ?? null, r.message ?? null]);
+  assert.deepEqual(tools, [
+    ['c1-claude', 'claude', null],
+    ['c2-owned', 'claude', 'owned'],
+    ['c3-coord', 'claude', 'burst'],
+    ['x4-codex', 'codex', null],
+    [null, null, null],
+    [null, null, null],
+  ]);
+  assert.equal(JSON.stringify(result).includes('x5-plain'), false);
+  assert.equal(JSON.stringify(result).includes('/w/app'), false);
+});
+
+test('shared working trees: a banner entry by project leaf, and the rows that share it are marked', () => {
+  const rows = [codex({ sessionId: 'a1', cwd: '/w/app' }), codex({ sessionId: 'b2', cwd: '/w/app/sub' }), codex({ sessionId: 'c3', cwd: '/w/other' })];
+  let seen = null;
+  const result = Overview.snapshot({ sessions: [...rows, codex({ sessionId: 'remote:z', cwd: '/w/app' })], now, sharedTrees: list => { seen = list.map(r => r.sessionId); return [{ toplevel: '/w/app', sessions: ['a1', 'b2'], dirty: 3 }, { toplevel: '/w/solo', sessions: ['c3'], dirty: 1 }]; } });
+  assert.deepEqual(seen, ['a1', 'b2', 'c3'], 'remote rows are never passed to git');
+  assert.deepEqual(result.shared, [{ project: 'app', sessions: 2, dirty: 3 }]);
+  assert.deepEqual(result.sessions.map(r => r.sharedTree ?? null), ['app', 'app', null]);
+  assert.equal(JSON.stringify(result).includes('/w/'), false);
+  assert.equal(Overview.snapshot({ sessions: rows, now, sharedTrees: () => { throw new Error('git'); } }).shared, undefined);
+  assert.equal(Overview.snapshot({ sessions: rows, now }).shared, undefined);
+});
