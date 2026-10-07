@@ -172,6 +172,14 @@ const CONFIG_FILE = path.join(ROOT_DIR, 'config.json');
 const CLAUDE_SETTINGS_PATH = path.join(os.homedir(), '.claude', 'settings.json');
 
 require('./src/logging.js').installFileLogging({ rootDir: ROOT_DIR, isDevRun: IS_DEV_RUN });
+// Anything that escapes a promise or a callback, from here on: log it (to
+// app.log too) instead of letting it kill a listener silently.
+process.on('unhandledRejection', (e) => console.error('[unhandled rejection]', (e && e.stack) || e));
+process.on('uncaughtException', (e) => console.error('[uncaught]', (e && e.stack) || e));
+// Logs to app.log when the main thread stops answering (src/main-watchdog.js); same runs as the log.
+const Watchdog = IS_DEV_RUN ? { step() {}, stop() {} } : require('./src/main-watchdog.js').startMainWatchdog({
+  createWorker: () => new Worker(path.join(__dirname, 'src', 'main-watchdog-worker.js'), { workerData: { logFile: path.join(ROOT_DIR, 'app.log') } }), // privacy-flow: local-worker
+});
 
 // First launch after the rename from Claude Buddy: copy the old userData
 // across before anything opens it (the instance lock, safeStorage, the
@@ -749,29 +757,16 @@ function readRemoteSessions(config) {
 // so the session file stays the one schema everything downstream reads.
 const OMC_POLL_MS = 2000;
 
-function syncAgents() {
-  let files = [];
-  try {
-    files = fs.readdirSync(SESSIONS_DIR).filter((f) => f.endsWith('.json'));
-  } catch {
-    return;
-  }
-  for (const f of files) {
-    const file = path.join(SESSIONS_DIR, f);
-    let readAt;
-    try { readAt = fs.statSync(file).mtimeMs; } catch { continue; }
-    const s = Agents.readJson(file);
-    if (!s || !s.sessionId) continue;
-    const found = Agents.scanAgents(s);
-    const next = { ...s, agents: Agents.mergeAgents(s.agents, found.agents), mode: found.mode, iteration: found.iteration };
-    if (JSON.stringify(next) === JSON.stringify(s)) continue;
-    try {
-      writeJsonAtomic(file, next, readAt);
-    } catch {
-      // the session ended (file removed) mid-poll; the next poll picks it up
-    }
-  }
-}
+// The scan reads inside each session's project folder, so it runs in a worker:
+// under ~/Desktop or ~/Documents macOS can hold a read for as long as its
+// privacy prompt is up, which on this thread froze launch (src/agents-sync.js).
+const AgentsSync = require('./src/agents-sync.js');
+const agentsSync = AgentsSync.createAgentsSync({
+  startWorker: () => new Worker(path.join(__dirname, 'src', 'agents-worker.js'), { workerData: { sessionsDir: SESSIONS_DIR } }), // privacy-flow: local-worker
+  runInline: () => AgentsSync.syncAgentFiles({ sessionsDir: SESSIONS_DIR, Agents, writeMerged: writeJsonAtomic }),
+  log: (m) => console.warn(m),
+});
+function syncAgents() { agentsSync.tick(); }
 
 // A tray override is a synthetic session carrying the signal that the
 // default rules map to that colour, so it flows through the user's rules.
@@ -4611,6 +4606,7 @@ function renameFollowUp() {
 }
 
 app.whenReady().then(() => {
+  Watchdog.step('ready');
   if (DEMO || DIAG) console.error('[startup] ready');
   if (process.platform === 'darwin') app.dock.hide();
   // Release CI: start, install hooks, run one, open the window, quit (src/smoke.js).
@@ -4640,6 +4636,7 @@ app.whenReady().then(() => {
     fs.writeFileSync(autoLaunchMarker, new Date().toISOString());
   }
 
+  Watchdog.step('widget');
   createWindow();
   // In-app updates on every platform, each checked against the signed release
   // (src/updater/). A dev run gets the IPC but never installs; the visual tests
@@ -4653,6 +4650,7 @@ app.whenReady().then(() => {
     Updater.markLaunched({ app });
   }
   watchUpdater();
+  Watchdog.step('tray+signal-server');
   createTray();
   signalServer = startSignalServer();
   syncFastHook();
@@ -4697,7 +4695,14 @@ app.whenReady().then(() => {
     const resumeRunners = app.isPackaged ? !IS_DEV_RUN : process.env.BUDDY_RESUME_RUNNERS === '1';
     if (resumeRunners) { try { getBuddy().resumeDevices(); } catch (err) { console.error('[buddy] could not resume runners:', err.message); } }
     syncInteractionHost();
-    if (WindowLaunch.shouldOpenWindowOnLaunch(windowLaunchInput('launch'))) { console.error('[startup] opening window'); openBuddy(); }
+    // After the rest of startup (listeners, polls), and never able to stop it.
+    if (WindowLaunch.shouldOpenWindowOnLaunch(windowLaunchInput('launch'))) {
+      setImmediate(() => {
+        Watchdog.step('window');
+        console.error('[startup] opening window');
+        try { openBuddy(); } catch (err) { console.error('[startup] could not open the window:', err.stack || err.message); }
+      });
+    }
     // Dev: `electron . --buddy [page] [--buddy-shot out-prefix]` opens the Buddy
     // window (optionally on a page) and can capture both halves, then quit.
     // `--buddy-accounts-walk prefix` (with --buddy-mock-accounts) walks the
@@ -4783,7 +4788,7 @@ app.whenReady().then(() => {
   powerMonitor.on('resume', checkOnline);
   initVoice();
   // Other agents live on disk, not in hooks: poll for them.
-  if (!DEMO) { syncAgents(); every(OMC_POLL_MS, syncAgents, 'omc-agents'); }
+  if (!DEMO) { syncAgents(); every(OMC_POLL_MS, syncAgents, 'omc-agents'); onQuit(app, () => agentsSync.stop()); }
 
   if (AUTO_INSTALL_HOOKS) every(10 * 60 * 1000, () => { if (claudeAutoConnect() && !areHooksInstalled()) installHooks(); }, 'hooks');
   if (DIAG) startDiag();
@@ -4811,16 +4816,13 @@ app.whenReady().then(() => {
       setTimeout(() => app.quit(), 2500);
     }, 2000);
   }
+  Watchdog.step('up');
+  console.error(`[startup] up in ${Date.now() - STARTED_AT} ms`);
 }).catch((e) => {
   // Without this the app can come up half-initialised and simply sit there —
   // no widget, no tray, no polling, and nothing in the log to say why.
   console.error('[startup] failed:', e.stack || e.message);
 });
-
-// Same for anything that escapes a promise anywhere else: log it instead of
-// letting it kill a listener silently.
-process.on('unhandledRejection', (e) => console.error('[unhandled rejection]', (e && e.stack) || e));
-process.on('uncaughtException', (e) => console.error('[uncaught]', (e && e.stack) || e));
 
 // ── --diag: what the app is actually costing, once a second ────────────────
 function startDiag() {
