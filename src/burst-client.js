@@ -11,6 +11,7 @@ const os = require('node:os');
 const path = require('node:path');
 const http = require('node:http'); // privacy-flow: burst-local
 const Spend = require('./burst-spend.js');
+const Codex = require('./burst-codex.js');
 const { execFile } = require('node:child_process');
 
 const LABEL = 'ninja.andrewbaker.claude-burst';
@@ -32,6 +33,8 @@ const GET_ALLOW = Object.freeze({
   '/api/handover-audit': [],
   '/api/handover-file': ['root'],
   '/api/intelligent-compaction': [],
+  '/api/codex': [],
+  '/api/coordination': ['days'],
 });
 
 function isAllowed(method, urlPath) {
@@ -166,6 +169,7 @@ function createBurstClient({ home = os.homedir(), platform = process.platform, i
       primaryFailures: num(ph.failures),
       secondaryReady: s.secondary_ready === true,
       compaction: Spend.normalizeCompaction(s),
+      contextFill: Codex.normalizeContextFill(s),
     };
   }
 
@@ -255,6 +259,10 @@ function createBurstClient({ home = os.homedir(), platform = process.platform, i
     return Spend.secondaryUsdOf(await usage({ range: '30d', session }));
   }
 
+  // Both are best-effort extras: an older Burst answers 404 and callers treat any failure as absent.
+  async function codex() { return Codex.normalizeCodex(await request('GET', '/api/codex')); }
+  async function coordination() { return Codex.normalizeCoordination(await request('GET', '/api/coordination?days=1')); }
+
   async function handoverAudit() {
     const a = await request('GET', '/api/handover-audit');
     return (Array.isArray(a) ? a : []).slice(0, 200).filter((e) => e && typeof e.root === 'string' && e.exists === true)
@@ -267,7 +275,7 @@ function createBurstClient({ home = os.homedir(), platform = process.platform, i
   }
 
   return {
-    detect, request, testConnection, requestUpgrade, setCompaction, usage, sessionSecondaryUsd, handoverAudit, handoverFile,
+    detect, request, testConnection, requestUpgrade, setCompaction, usage, sessionSecondaryUsd, codex, coordination, handoverAudit, handoverFile,
     binPath,
     adminUrl: () => (addr ? `http://${addr.host === '::1' ? '[::1]' : addr.host}:${addr.port}/` : null),
   };

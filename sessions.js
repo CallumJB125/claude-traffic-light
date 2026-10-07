@@ -10,6 +10,14 @@ function burstBlock(section, b) {
     const c = b.compaction, net = c.netUsd >= 0 ? `net saving ${usd(c.netUsd)}` : `net cost ${usd(c.netUsd)}`;
     section.append(node('p', `Burst compaction: ${c.compactions} compaction${c.compactions === 1 ? '' : 's'} · saved ${usd(c.savedUsd)} · ${net} (API-equivalent)`, 'muted'));
   }
+  if (b.context) {
+    const c = b.context, k = (n) => (n >= 1e6 ? `${+(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n));
+    section.append(node('p', `Context: ${k(c.tokens)} tokens${c.pct == null ? '' : ` · ${c.pct}% of the ${k(c.limit)} compaction limit`}`, 'muted'));
+  }
+  if (b.coordination) {
+    const c = b.coordination;
+    section.append(node('p', `Master of ${c.masterOf.join(', ')}${c.more ? ` and ${c.more} more` : ''}${c.shared ? ` · ${c.shared} shared with other sessions` : ''}`, 'muted'));
+  }
   if (!b.handover) return;
   const h = b.handover, box = node('div', '', 'handover');
   box.append(node('h3', `Handover (${h.source}${h.date ? `, ${h.date}` : ''})`), node('pre', h.text));

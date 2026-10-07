@@ -12,6 +12,7 @@ const View = require('./burst-view.js');
 const Spend = require('./burst-spend.js');
 const Handover = require('./burst-handover.js');
 const Actions = require('./burst-actions.js');
+const Codex = require('./burst-codex.js');
 
 const POLL_BASE_MS = 5000;
 const POLL_MAX_MS = 60000;
@@ -123,7 +124,9 @@ function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usag
   // Usage page: the "Through Burst" view model only, never a raw response.
   utilityHandle('burst:usage', usageAllowed, async (_e, range) => {
     if (!isMac || last.kind !== 'present' || !last.capabilities.usage) return { view: null, nextPollMs: isMac ? backoff.gap : 0 };
-    try { return { view: Spend.throughBurstView(await client.usage({ range })), nextPollMs: backoff.gap }; } catch { return { view: null, nextPollMs: backoff.gap }; }
+    let codex = null;
+    if (client.codex) { try { codex = Codex.codexView(await client.codex()); } catch { codex = null; } }
+    try { return { view: Spend.throughBurstView(await client.usage({ range })), codex, nextPollMs: backoff.gap }; } catch { return { view: null, nextPollMs: backoff.gap }; }
   });
 
   // Sessions page: per-session compaction stats and the handover of observed Claude sessions.
@@ -154,6 +157,13 @@ function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usag
     try { audit = { at: Date.now(), roots: await client.handoverAudit() }; } catch (e) { log('[burst] handover audit failed', e && e.code); }
   }
 
+  let coord = { at: -Infinity, data: null };
+  async function warmCoord() {
+    if (!client.coordination || Date.now() - coord.at < HANDOVER_TTL_MS) return;
+    coord = { ...coord, at: Date.now() };
+    try { coord = { at: Date.now(), data: await client.coordination() }; } catch { coord = { at: Date.now(), data: null }; }
+  }
+
   utilityHandle('burst:handover-share', sessionsAllowed, async (_e, repo, on) => {
     if (typeof repo !== 'string' || !/^[0-9a-f]{16}$/.test(repo)) return { ok: false };
     if (on === true) shared = { ...shared, [repo]: true }; else { shared = { ...shared }; delete shared[repo]; }
@@ -168,6 +178,11 @@ function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usag
     const out = {};
     const stat = last.state.compaction.sessions.find((x) => x.session === row.sessionId);
     if (stat) out.compaction = { compactions: stat.compactions, savedUsd: stat.savedUsd, netUsd: stat.netUsd, savedTokens: stat.savedTokens };
+    const ctx = Codex.contextFor(last.state.contextFill, row.sessionId);
+    if (ctx) out.context = ctx;
+    warmCoord();
+    const co = Codex.coordinationFor(coord.data, row.sessionId);
+    if (co) out.coordination = co;
     const claude = row.source == null && row.ownership !== 'plexiform-owned';
     if (claude && c.handoverAudit) {
       warmAudit();
