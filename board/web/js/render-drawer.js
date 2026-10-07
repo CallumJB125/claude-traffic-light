@@ -152,16 +152,36 @@ function tabs(active, counts) {
     }, label)));
 }
 
+// Why there is no handover, from what the hub knows about the card.
+function handoverReason(d) {
+  if (!d.run) return 'No handover yet: no run has started on this card. One appears once an agent works on it.';
+  return 'No handover yet: the agent has not written one for this run.';
+}
+
+// A handover the desktop wrote locally for an observed session attached to this
+// card (src/session-handover.js). Present only when the desktop supplies it.
+function localHandover(lh) {
+  if (!lh?.markdown) return null;
+  return h('section', { class: 'local-handover' },
+    h('h4', null, 'Local session handover (not from the hub)'),
+    h('p', { class: 'muted small' }, 'Written on this computer by Plexiform from hook events, not by the AI.'),
+    h('div', { class: 'md handover' }, renderMarkdown(lh.markdown)));
+}
+
 function tabPanel(tab, detail, model, elapsed) {
   const d = detail.data;
   if (tab === 'packet') return packetPanel(detail, model);
   if (tab === 'messages') return messagePanel(detail, model);
   if (tab === 'ownership') return ownershipPanel(detail, model, detail.ownership_elapsed_ms ?? 0);
   if (tab === 'handover') {
-    if (!d.handover) return h('p', { class: 'muted' }, 'No handover yet. The agent can record progress and next steps during the run.');
+    if (!d.handover) return h('div', null, h('p', { class: 'muted' }, handoverReason(d)), localHandover(d.local_handover));
+    const nar = d.handover.doc?.layers?.narrative;
     return h('div', null,
+      nar && !nar.version ? h('p', { class: 'muted small' }, 'Facts only: the agent has not written a narrative for this run, so this lists what the runner synced.') : null,
+      nar?.written_by === 'system' ? h('p', { class: 'muted small' }, nar.system_note ?? 'Facts only: written by the hub, not by the agent.') : null,
       syncStrip(detail, elapsed),
       h('div', { class: 'md handover' }, renderMarkdown(handoverBody(d.handover.markdown))),
+      localHandover(d.local_handover),
       h('a', { class: 'btn btn-ghost btn-sm', href: `/api/cards/${encodeURIComponent(d.card.id)}/handover?format=md`, download: `${d.card.key}-handover.md` }, 'Download as Markdown'));
   }
   if (tab === 'comments') {

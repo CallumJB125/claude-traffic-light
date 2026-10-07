@@ -33,7 +33,11 @@ function isLocal(row) {
 function extras(enrich, row) {
   try { const burst = enrich ? enrich(row) : null; return burst ? { burst } : {}; } catch { return {}; }
 }
-function snapshot({ sessions = [], activity = {}, available = true, now = Date.now(), enrich = null } = {}) {
+// The local handover document's status for the row (src/session-handover.js).
+function handoverOf(fn, row) {
+  try { const h = fn ? fn(row) : null; return h ? { handover: h } : {}; } catch { return {}; }
+}
+function snapshot({ sessions = [], activity = {}, available = true, now = Date.now(), enrich = null, handover = null } = {}) {
   const time = Number.isFinite(now) && now >= 0 ? now : Date.now();
   let latest = null, omitted = 0;
   const rows = [];
@@ -60,6 +64,7 @@ function snapshot({ sessions = [], activity = {}, available = true, now = Date.n
       ...(stuck ? { stuck: { tool: stuck.tool || null, since_ms: stuck.sinceMs } } : {}),
       freshness: available === false || age === null ? 'unknown' : age <= RECENT_MS ? 'recent' : 'stale', age_ms: age, lifecycle, children,
       ...extras(enrich, row),
+      ...handoverOf(handover, row),
     });
   }
   rows.sort((a, b) => (a.age_ms ?? Infinity) - (b.age_ms ?? Infinity));
