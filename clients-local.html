@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; base-uri 'none'; form-action 'none'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Client billing</title><link rel="stylesheet" href="tokens.css"><link rel="stylesheet" href="clients-local.css"></head>
+<body><main>
+<header><div><h1>Client billing</h1><p>Match your project folders to clients, then export what each client's sessions cost.</p></div></header>
+<p id="status" role="status" aria-live="polite">Loading…</p>
+<section class="panel" aria-labelledby="clients-title">
+<h2 id="clients-title">Clients and folders</h2>
+<form id="client-form" autocomplete="off"><label>New client<input id="client-name" maxlength="80" placeholder="Acme Ltd" required></label><button type="submit">Add client</button></form>
+<div id="clients"></div>
+<form id="map-form" autocomplete="off"><label>Folder<select id="map-folder"></select></label>
+<label>Client<select id="map-client"></select></label>
+<button type="submit">Map folder</button><button id="map-pick" type="button">Choose another folder…</button></form>
+<p class="muted">A folder includes everything inside it. Sessions in a folder you have not mapped are listed as Unmapped.</p>
+</section>
+<section class="panel" aria-labelledby="range-title">
+<h2 id="range-title">Invoice</h2>
+<div class="controls"><label>Client<select id="f-client"></select></label>
+<label>From<input id="f-from" type="date"></label><label>To<input id="f-to" type="date"></label>
+<button id="refresh" type="button">Preview</button></div>
+<p id="plan-note" class="muted"></p>
+<p id="basis" class="basis" role="note"></p>
+<div id="summary"></div>
+<div class="table-wrap"><table id="lines" hidden><thead><tr><th>Date</th><th>Client</th><th>Project</th><th>Line</th><th class="n">Tokens</th><th class="n">Cost</th><th class="n">Billed</th></tr></thead><tbody></tbody></table></div>
+<div class="actions"><button id="csv" type="button" class="primary">Export CSV…</button><button id="pdf" type="button">Export PDF…</button></div>
+<p id="export-status" role="status" aria-live="polite" class="muted"></p>
+</section>
+<p class="muted disclosure">Everything is worked out on this computer from your Claude Code session files, and PDFs are made offline. Tax is not included. Amounts in USD.</p>
+</main><script src="clients-local.js"></script></body></html>

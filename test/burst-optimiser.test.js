@@ -307,10 +307,10 @@ test('page registry: Usage optimiser is a local, macOS-only page after Stats in 
   assert.equal(p.macOnly, true);
   assert.equal(p.burstOnly, true);
   assert.ok(fs.existsSync(path.join(__dirname, '..', p.file)) && fs.existsSync(path.join(__dirname, '..', p.preload)));
-  assert.deepEqual(SECTIONS.find((s) => s.id === 'usage').pages, ['usage', 'stats', 'optimiser']);
+  assert.deepEqual(SECTIONS.find((s) => s.id === 'usage').pages, ['usage', 'stats', 'optimiser', 'clients']);
   assert.equal(sectionOf('optimiser'), 'usage');
-  assert.deepEqual(sectionsFor('darwin').find((s) => s.id === 'usage').pages, ['usage', 'stats', 'optimiser']);
-  assert.deepEqual(sectionsFor('win32').find((s) => s.id === 'usage').pages, ['usage', 'stats']);
+  assert.deepEqual(sectionsFor('darwin').find((s) => s.id === 'usage').pages, ['usage', 'stats', 'optimiser', 'clients']);
+  assert.deepEqual(sectionsFor('win32').find((s) => s.id === 'usage').pages, ['usage', 'stats', 'clients']);
   assert.deepEqual(sectionsFor('linux').flatMap((s) => s.pages).filter((id) => pageById(id).macOnly), []);
   assert.ok(PAGES.filter((x) => x.macOnly).every((x) => x.id === 'optimiser'));
 });
