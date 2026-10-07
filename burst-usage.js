@@ -15,7 +15,7 @@
   const usd = (v) => `$${v >= 100 ? Math.round(v) : v.toFixed(2)}`;
   const reqs = (n) => `${n.toLocaleString('en-US')} request${n === 1 ? '' : 's'}`;
 
-  function draw(v) {
+  function draw(v, codex) {
     sec.hidden = !v;
     if (!v) return;
     sec.replaceChildren(el('h3', 'Through Burst'), el('div', `Source: ${v.source}`, 'note'));
@@ -34,6 +34,15 @@
     }
     if (v.planRequests) sec.append(el('div', `${reqs(v.planRequests)} on your Claude plan went through Burst. They are counted in the Claude figures above, not here.`, 'note'));
     sec.append(el('div', v.note, 'note'));
+    if (codex) {
+      sec.append(el('h4', 'Codex'), el('div', `${reqs(codex.requests)}${codex.tokens ? ` · ${codex.tokens.toLocaleString('en-US')} tokens` : ''}${codex.usd ? ` · ${usd(codex.usd)}` : ''}`));
+      if (codex.groups.length) {
+        const cl = el('ul');
+        for (const g of codex.groups) cl.append(el('li', `${g.key}: ${reqs(g.requests)}${g.usd ? ` · ${usd(g.usd)}` : ''}`));
+        sec.append(cl);
+      }
+      sec.append(el('div', codex.note, 'note'));
+    }
   }
 
   let timer = null;
@@ -43,7 +52,7 @@
     let next = 30000;
     try {
       const r = await api.burstUsage('7d');
-      draw(r && r.view);
+      draw(r && r.view, r && r.codex);
       next = r && r.nextPollMs;
       if (!next) return;
     } catch { /* retry slowly */ }
