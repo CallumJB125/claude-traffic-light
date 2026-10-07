@@ -13,5 +13,11 @@
     "expect": [{ "signal": "session-start", "sessionId": "gem-5c1", "cwd": "/w/g", "tool": null }] },
   { "name": "SessionEnd", "event": "SessionEnd",
     "payload": { "session_id": "gem-5c1", "cwd": "/w/g", "hook_event_name": "SessionEnd", "reason": "exit" },
-    "expect": [{ "signal": "session-end", "sessionId": "gem-5c1", "cwd": "/w/g", "tool": null }] }
+    "expect": [{ "signal": "session-end", "sessionId": "gem-5c1", "cwd": "/w/g", "tool": null }] },
+  { "name": "Notification ToolPermission", "event": "Notification",
+    "payload": { "session_id": "gem-5c1", "cwd": "/w/g", "hook_event_name": "Notification", "notification_type": "ToolPermission", "message": "Tool permission required", "details": { "tool_name": "run_shell_command" } },
+    "expect": [{ "signal": "permission-ask", "sessionId": "gem-5c1", "cwd": "/w/g", "tool": null, "extra": { "askKind": "request" } }] },
+  { "name": "Notification of another type", "event": "Notification",
+    "payload": { "session_id": "gem-5c1", "cwd": "/w/g", "hook_event_name": "Notification", "notification_type": "Other", "message": "x" },
+    "expect": [] }
 ]

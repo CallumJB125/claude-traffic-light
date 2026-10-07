@@ -1,5 +1,4 @@
-"""Plexiform metadata-only Hermes observers. No conversation/tool hooks; approval
-observers report only that a person is being asked, never what."""
+"""Plexiform metadata-only Hermes observers. No conversation/tool hooks."""
 import json
 import os
 from pathlib import Path
@@ -41,19 +40,19 @@ def _report(event, session_id=None, turn_id=None, completed=None, failed=None,
     # Ignore unknown/additive fields rather than serializing Hermes' event object.
     if not isinstance(session_id, str) or not _ID.fullmatch(session_id):
         return
-    if event in ("working", "stop", "ask", "answered") and (not isinstance(turn_id, str) or not _TURN.fullmatch(turn_id)):
+    if event in ("working", "stop") and (not isinstance(turn_id, str) or not _TURN.fullmatch(turn_id)):
         return
     if event == "stop" and not any(v is True for v in (completed, failed, interrupted)):
         return
     with _lock:
-        if session_id in _ended or (event in ("working", "ask", "answered") and (session_id, turn_id) in _closed):
+        if session_id in _ended or (event == "working" and (session_id, turn_id) in _closed):
             return
         if event == "stop":
             _remember(_closed, (session_id, turn_id))
         if event == "end":
             _remember(_ended, session_id)
         payload = {"event": event, "sessionId": session_id}
-        if event in ("working", "stop", "ask", "answered"):
+        if event in ("working", "stop"):
             payload["turnId"] = turn_id
         if event == "stop":
             payload["failed"] = failed is True
@@ -82,17 +81,6 @@ def register(ctx):
         def callback(session_id=None, turn_id=None, completed=None, failed=None, interrupted=None, **_ignored):
             return _report(event, session_id, turn_id, completed, failed, interrupted)
         return callback
-    # Approval observers: surface "smart" is decided by Hermes' auxiliary model,
-    # so only cli/gateway prompts mean a person is being asked. The command,
-    # description and pattern keys are never read.
-    def approval(event):
-        def callback(session_id=None, turn_id=None, surface=None, **_ignored):
-            if surface == "smart":
-                return None
-            return _report(event, session_id, turn_id)
-        return callback
     for name, event in (("on_session_start", "start"), ("on_stream_start", "working"),
                         ("on_session_end", "stop"), ("on_session_finalize", "end")):
         ctx.register_hook(name, observer(event))
-    for name, event in (("pre_approval_request", "ask"), ("post_approval_response", "answered")):
-        ctx.register_hook(name, approval(event))

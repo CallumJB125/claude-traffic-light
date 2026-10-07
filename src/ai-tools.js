@@ -118,7 +118,7 @@ function create({
   // older copy, another checkout, a moved app.
   function holdsOurs(t) {
     try {
-      if (t.id === 'hermes') return Hermes.isInstalled({ home });
+      if (t.id === 'hermes') return Hermes.holdsOurs({ home });
       const a = adapterOf(t);
       const [file] = filesOf(t);
       if (!exists(file)) return false;

@@ -133,13 +133,23 @@ hooks = {}
 class Context:
     def register_hook(self, name, callback): hooks[name] = callback
 m.register(Context())
-assert set(hooks) == {'on_session_start','on_stream_start','on_session_end','on_session_finalize'}
+assert set(hooks) == {'on_session_start','on_stream_start','on_session_end','on_session_finalize','pre_approval_request','post_approval_response'}
 extra = {'session_id': 'python-session', 'turn_id': 'session:task:turn', 'user_message': 'PRIVATE-PROMPT', 'conversation_history': ['PRIVATE-HISTORY'], 'tool_args': {'secret': 'PRIVATE-KEY'}}
 assert hooks['on_session_start'](**extra) is None
 hooks['on_stream_start'](**extra)
+root = pathlib.Path(sys.argv[2]) / 'sessions'
+approval = {'session_id': 'python-session', 'turn_id': 'session:task:turn', 'command': 'PRIVATE-COMMAND', 'description': 'PRIVATE-REASON', 'pattern_key': 'rm_rf', 'pattern_keys': ['rm_rf'], 'session_key': 'PRIVATE-ROUTE', 'tool_call_id': 'call-1'}
+assert hooks['pre_approval_request'](**approval, surface='smart') is None
+assert json.loads(next(root.glob('*.json')).read_text())['signal'] == 'tool-use'
+assert hooks['pre_approval_request'](**approval, surface='cli') is None
+row = json.loads(next(root.glob('*.json')).read_text())
+assert row['signal'] == 'permission-ask' and row['askKind'] == 'request'
+assert 'PRIVATE-' not in json.dumps(row)
+hooks['post_approval_response'](**approval, surface='cli', choice='once')
+assert json.loads(next(root.glob('*.json')).read_text())['signal'] == 'tool-use'
 hooks['on_session_end'](**extra, completed=True)
 hooks['on_stream_start'](**extra)
-root = pathlib.Path(sys.argv[2]) / 'sessions'
+hooks['pre_approval_request'](**approval, surface='cli')
 row = json.loads(next(root.glob('*.json')).read_text())
 assert row['signal'] == 'stop'
 assert 'PRIVATE-' not in json.dumps(row)
@@ -171,4 +181,37 @@ test('bridge keeps a bounded absolute cwd and drops relative, oversized or contr
   assert.throws(() => Hermes.install(f), /occupies/, 'an unknown body is foreign');
   fs.writeFileSync(init, original);
   assert.equal(Hermes.isInstalled({ home: f.home }), true);
+});
+
+test('Hermes approval prompts show Waiting on you for the turn in progress only', t => {
+  const { runtime: { dataDir } } = fixture(t);
+  const apply = data => Bridge.apply({ sessionId: 'approval-session', ...data }, dataDir);
+  const status = () => Overview.snapshot({ sessions: rows(dataDir) }).sessions[0].status;
+  assert.equal(apply({ event: 'ask', turnId: 'turn1' }), false, 'no session to attach the ask to');
+  assert.equal(apply({ event: 'start' }), true);
+  assert.equal(apply({ event: 'working', turnId: 'turn1' }), true);
+  assert.equal(apply({ event: 'ask', turnId: 'turn1', command: 'PRIVATE-COMMAND' }), true);
+  assert.equal(status(), 'Waiting on you');
+  assert.equal(rows(dataDir)[0].askKind, 'request');
+  assert.equal(apply({ event: 'ask', turnId: 'other-turn' }), false, 'a different turn still in progress');
+  assert.equal(apply({ event: 'answered', turnId: 'turn1' }), true);
+  assert.equal(status(), 'Working');
+  assert.equal(apply({ event: 'stop', turnId: 'turn1', failed: false }), true);
+  assert.equal(apply({ event: 'ask', turnId: 'turn1' }), false, 'a closed turn never reopens');
+  assert.equal(apply({ event: 'ask', turnId: 'turn2' }), true, 'a new non-streaming turn may ask first');
+  assert.equal(status(), 'Waiting on you');
+  assert.equal(apply({ event: 'ask', turnId: '../bad' }), false);
+  assert.doesNotMatch(JSON.stringify(rows(dataDir)), /PRIVATE-/);
+});
+
+test('an earlier shipped plugin is ours to upgrade but not reported as connected', t => {
+  const f = fixture(t), installed = Hermes.install(f), dir = path.dirname(installed.file);
+  const sha = require('node:crypto').createHash('sha256').update(fs.readFileSync(installed.file, 'utf8')).digest('hex');
+  fs.copyFileSync(path.join(__dirname, 'fixtures', 'hermes-plugin-1.0.0.py'), path.join(dir, '__init__.py'));
+  fs.writeFileSync(path.join(dir, 'plugin.yaml'), `name: plexiform-activity\nversion: 1.0.0\ndescription: Local session activity for Plexiform; no conversation content\nprovides_hooks:\n  - on_session_start\n  - on_stream_start\n  - on_session_end\n  - on_session_finalize\n# plexiform-config-sha256: ${sha}\n`);
+  assert.equal(Hermes.isInstalled({ home: f.home }), false);
+  assert.equal(Hermes.holdsOurs({ home: f.home }), true);
+  assert.equal(Hermes.install(f).ok, true);
+  assert.equal(Hermes.isInstalled({ home: f.home }), true);
+  assert.match(fs.readFileSync(path.join(dir, 'plugin.yaml'), 'utf8'), /pre_approval_request\n {2}- post_approval_response/);
 });

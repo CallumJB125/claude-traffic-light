@@ -8,13 +8,14 @@ const { execFile } = require('node:child_process');
 const Runtime = require('./runtime');
 const NAME = 'plexiform-activity';
 const MARKER = 'plexiform-hermes-activity-v1';
-const MANIFEST = `name: ${NAME}\nversion: 1.0.0\ndescription: Local session activity for Plexiform; no conversation content\nprovides_hooks:\n  - on_session_start\n  - on_stream_start\n  - on_session_end\n  - on_session_finalize\n`;
+const MANIFEST = `name: ${NAME}\nversion: 1.1.0\ndescription: Local session activity for Plexiform; no conversation content\nprovides_hooks:\n  - on_session_start\n  - on_stream_start\n  - on_session_end\n  - on_session_finalize\n  - pre_approval_request\n  - post_approval_response\n`;
+const PREVIOUS_MANIFESTS = [`name: ${NAME}\nversion: 1.0.0\ndescription: Local session activity for Plexiform; no conversation content\nprovides_hooks:\n  - on_session_start\n  - on_stream_start\n  - on_session_end\n  - on_session_finalize\n`];
 const configPath = home => path.join(home, '.hermes', 'plugins', NAME, 'plexiform.json');
 const template = () => fs.readFileSync(path.join(__dirname, '..', 'hooks', 'hermes-plugin.py'), 'utf8');
-const manifestFor = text => `${MANIFEST}# plexiform-config-sha256: ${crypto.createHash('sha256').update(text).digest('hex')}\n`;
+const manifestFor = (text, manifest = MANIFEST) => `${manifest}# plexiform-config-sha256: ${crypto.createHash('sha256').update(text).digest('hex')}\n`;
 // Earlier shipped hooks/hermes-plugin.py bodies: still ours, so connecting
 // again upgrades them in place instead of refusing a "foreign" plugin.
-const PREVIOUS_TEMPLATES = new Set(['d3d84e5f9e481c5d97823abdd7e42b760f4ffa9e905aeb6ca73ab93d5935921d']);
+const PREVIOUS_TEMPLATES = new Set(['d3d84e5f9e481c5d97823abdd7e42b760f4ffa9e905aeb6ca73ab93d5935921d', '10ddfcbfa3edd43d7577ab6a81e3c34ac95b5fd762d08f50e8de4468ca050f5c']);
 const ourTemplate = text => text === template() || PREVIOUS_TEMPLATES.has(crypto.createHash('sha256').update(text).digest('hex'));
 const isGeneratedCacheFile = name => /^__init__\.cpython-\d+(?:\.opt-\d+)?\.pyc$/.test(name);
 function findBin(home) {
@@ -22,7 +23,7 @@ function findBin(home) {
     try { fs.accessSync(p, fs.constants.X_OK); return fs.statSync(p).isFile(); } catch { return false; }
   }) || null;
 }
-function owned(home) {
+function owned(home, current = false) {
   const file = configPath(home), dir = path.dirname(file);
   // Do not follow a plugin-directory or owned-file symlink during replacement/removal.
   for (const p of [path.join(home, '.hermes'), path.dirname(dir), dir, file, path.join(dir, '__init__.py'), path.join(dir, 'plugin.yaml')]) {
@@ -33,8 +34,9 @@ function owned(home) {
   if (!fs.existsSync(dir)) return false;
   try {
     const text = fs.readFileSync(file, 'utf8'), c = JSON.parse(text);
-    return c.owner === MARKER && ourTemplate(fs.readFileSync(path.join(dir, '__init__.py'), 'utf8'))
-      && fs.readFileSync(path.join(dir, 'plugin.yaml'), 'utf8') === manifestFor(text);
+    const body = fs.readFileSync(path.join(dir, '__init__.py'), 'utf8'), manifest = fs.readFileSync(path.join(dir, 'plugin.yaml'), 'utf8');
+    if (current) return c.owner === MARKER && body === template() && manifest === manifestFor(text);
+    return c.owner === MARKER && ourTemplate(body) && [MANIFEST, ...PREVIOUS_MANIFESTS].some(m => manifest === manifestFor(text, m));
   } catch { return false; }
 }
 function install({ home, runtime }) {
@@ -89,6 +91,8 @@ function uninstall({ home }) {
   try { fs.rmdirSync(dir); } catch {}
   return { id: 'hermes-activity', file, changed: true };
 }
-// Health discovery: the plugin is ours and unmodified (never throws).
-function isInstalled({ home }) { try { return owned(home); } catch { return false; } }
-module.exports = { NAME, MANIFEST, configPath, findBin, install, connect, uninstall, isInstalled };
+// Health discovery: this build's plugin, unmodified (never throws).
+function isInstalled({ home }) { try { return owned(home, true); } catch { return false; } }
+// An earlier shipped copy of ours: Reconnect upgrades it.
+function holdsOurs({ home }) { try { return owned(home); } catch { return false; } }
+module.exports = { NAME, MANIFEST, configPath, findBin, install, connect, uninstall, isInstalled, holdsOurs };

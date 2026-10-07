@@ -214,6 +214,8 @@ function applyAdapterEvent(dir, { host, source, event, fallbackSession, fallback
     const prev = readJson(file);
     const next = applyBareSignal(prev, { sessionId, host, source, cwd: (typeof event.cwd === 'string' && event.cwd.slice(0, 500)) || prev?.cwd || fallbackCwd || '', signal: event.signal, tool: typeof event.tool === 'string' ? event.tool.slice(0, 80) : null });
     if (Number.isInteger(event.pid) && event.pid > 1) next.claudePid = event.pid;
+    // A blocking ask is never sat out as transient (Machine.presentSignal).
+    if (event.signal === 'permission-ask' && next.signal === 'permission-ask') next.askKind = ['request', 'question', 'notification'].includes(event.extra?.askKind) ? event.extra.askKind : null;
     if (decorate) decorate(next, prev);
     writeJsonAtomic(file, next);
   }, waitMs);

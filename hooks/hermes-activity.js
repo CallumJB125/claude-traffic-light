@@ -9,8 +9,8 @@ const ID = /^[A-Za-z0-9_.-]{1,120}$/;
 const TURN = /^[A-Za-z0-9_.:-]{1,256}$/;
 const cwdOf = (c) => (typeof c === 'string' && c.length <= 1024 && path.isAbsolute(c) && !/[\x00-\x1f\x7f]/.test(c) ? c : '');
 function apply(data, root) {
-  if (!data || !ID.test(data.sessionId) || typeof data.sessionId !== 'string' || !['start', 'working', 'stop', 'end'].includes(data.event)) return false;
-  if (['working', 'stop'].includes(data.event) && (typeof data.turnId !== 'string' || !TURN.test(data.turnId))) return false;
+  if (!data || !ID.test(data.sessionId) || typeof data.sessionId !== 'string' || !['start', 'working', 'stop', 'end', 'ask', 'answered'].includes(data.event)) return false;
+  if (['working', 'stop', 'ask', 'answered'].includes(data.event) && (typeof data.turnId !== 'string' || !TURN.test(data.turnId))) return false;
   if (data.event === 'stop' && typeof data.failed !== 'boolean') return false;
   const dir = path.join(root, 'sessions'), host = os.hostname().split('.')[0];
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -21,7 +21,9 @@ function apply(data, root) {
     if (data.event === 'end') { fs.rmSync(file, { force: true }); tap('session-end'); return true; }
     if (data.event === 'start' && prev) return false;
     const closed = Array.isArray(prev?.hermesClosedTurns) ? prev.hermesClosedTurns.slice(-32) : [];
-    if (data.event === 'working' && closed.includes(data.turnId)) return false;
+    if (['working', 'ask', 'answered'].includes(data.event) && closed.includes(data.turnId)) return false;
+    // An approval needs a known session and never lands on a different turn still in progress.
+    if (['ask', 'answered'].includes(data.event) && (!prev || (prev.hermesTurnId && prev.hermesTurnId !== data.turnId && !closed.includes(prev.hermesTurnId)))) return false;
     if (data.event === 'stop') {
       if (closed.includes(data.turnId)) return false;
       // A non-streaming turn has no working event. Accept its final outcome
@@ -30,8 +32,9 @@ function apply(data, root) {
       if (prev?.hermesTurnId && prev.hermesTurnId !== data.turnId && !closed.includes(prev.hermesTurnId)) return false;
       if (!closed.includes(data.turnId)) closed.push(data.turnId);
     }
-    const signal = { start: 'session-start', working: 'tool-use', stop: data.failed ? 'turn-failed' : 'stop' }[data.event];
+    const signal = { start: 'session-start', working: 'tool-use', ask: 'permission-ask', answered: 'tool-use', stop: data.failed ? 'turn-failed' : 'stop' }[data.event];
     const next = State.applyBareSignal(prev, { sessionId: data.sessionId, host, source: 'hermes', cwd: cwdOf(data.cwd) || prev?.cwd || '', signal });
+    if (signal === 'permission-ask' && next.signal === 'permission-ask') next.askKind = 'request';
     next.hermesTurnId = data.turnId || prev?.hermesTurnId || null;
     next.hermesClosedTurns = closed.slice(-32);
     State.writeJsonAtomic(file, next);

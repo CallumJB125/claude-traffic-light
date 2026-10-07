@@ -1,10 +1,12 @@
 // Gemini CLI: ~/.gemini/settings.json, best effort. Mirrors the Claude hook
 // shape it documents (hooks: {Event: [{matcher, hooks:[{type, command}]}]});
-// the payload arrives on stdin (session_id, cwd, tool_name).
+// the payload arrives on stdin (session_id, cwd, tool_name). Notification
+// fires when Gemini shows its tool-permission dialog (notification_type
+// "ToolPermission", geminicli.com/docs/hooks/reference); it is observe-only.
 const path = require('path');
 const Runtime = require('./runtime.js');
 
-const EVENTS = [['BeforeTool', 'tool-use'], ['AfterTool', 'tool-done'], ['AfterAgent', 'stop'], ['SessionStart', 'session-start'], ['SessionEnd', 'session-end']];
+const EVENTS = [['BeforeTool', 'tool-use'], ['AfterTool', 'tool-done'], ['AfterAgent', 'stop'], ['SessionStart', 'session-start'], ['SessionEnd', 'session-end'], ['Notification', 'permission-ask']];
 const SIGNAL_OF = Object.fromEntries(EVENTS);
 
 // Old `node "…/emit.js" <signal> --source gemini` and the current `--adapter gemini`.
@@ -18,7 +20,8 @@ function normalize(event, payload) {
   const d = payload && typeof payload === 'object' ? payload : {};
   const signal = SIGNAL_OF[event] || SIGNAL_OF[d.hook_event_name] || null;
   if (!signal) return [];
-  return [{ signal, sessionId: d.session_id || d.sessionId || null, cwd: d.cwd || null, tool: /^tool-/.test(signal) ? (d.tool_name || null) : null, pid: null, extra: {} }];
+  if (signal === 'permission-ask' && d.notification_type !== 'ToolPermission') return [];
+  return [{ signal, sessionId: d.session_id || d.sessionId || null, cwd: d.cwd || null, tool: /^tool-/.test(signal) ? (d.tool_name || null) : null, pid: null, extra: signal === 'permission-ask' ? { askKind: 'request' } : {} }];
 }
 
 // opts.strip: which of ours are replaced, where they stand (the rename's
@@ -51,7 +54,7 @@ const configPath = (home) => path.join(home, '.gemini', 'settings.json');
 module.exports = {
   id: 'gemini',
   label: 'Gemini CLI',
-  capabilities: { working: true, yourTurn: true, blocked: false, answer: false, subagents: false, limits: false, cost: false },
+  capabilities: { working: true, yourTurn: true, blocked: true, answer: false, subagents: false, limits: false, cost: false },
   transport: 'command',
   EVENTS,
   configPath,
