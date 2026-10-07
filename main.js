@@ -1479,7 +1479,7 @@ ipcMain.handle('sessions:state', e => {
   if (!sessionsSender(e)) return null;
   try {
     const configured = IS_DEV_RUN ? false : Adapters.get('codex').isActivityInstalled({ home: os.homedir(), runtime: HOOK_RUNTIME });
-    return SessionOverview.snapshot({ sessions: localSessions(aggregateState().sessions || []), activity: { configured, available: true }, now: Date.now(), enrich: BurstIpc.enrichSession });
+    return SessionOverview.snapshot({ sessions: localSessions(aggregateState().sessions || []), activity: { configured, available: true }, now: Date.now(), enrich: BurstIpc.enrichSession, handover: (row) => SessionHandoverMain.view(row) });
   } catch {
     return SessionOverview.snapshot({ sessions: [], activity: { available: false }, available: false, now: Date.now() });
   }
@@ -1670,6 +1670,7 @@ onQuit(app,()=>SetupsLocal.close());
 const TeamEntry = require('./src/team-entry.js');
 const settingsOnly = (e) => fromUtilityPage(e, 'settings');
 const BurstIpc = require('./src/burst-ipc.js').register({ utilityHandle, settingsOnly, chipAllowed: (e) => widgetOnly(e) || fromUtilityPage(e, 'usage'), usageAllowed: (e) => fromUtilityPage(e, 'usage'), sessionsAllowed: sessionsSender, stateFile: path.join(ROOT_DIR, 'burst-handover.json'), runner: { live: () => !!buddyWin?.runnerLive?.(), send: (m) => buddyWin?.burstFacts?.(m) }, accountAllowed: (e) => fromPage(e, buddyWin?.accountWebContents?.()), isMac: IS_MAC, dialog, shell, scriptDir: path.join(ROOT_DIR, 'burst-scripts'), log: console.log });
+const SessionHandoverMain = require('./src/session-handover-main.js').register({ ipcMain, rootDir: ROOT_DIR, isExcluded: (cwd) => Quiet.projectMuted(loadConfig().mutedProjects, cwd), burstFor: (row) => { const h = BurstIpc.enrichSession({ sessionId: row.sessionId, cwd: row.cwd, source: row.adapter === 'claude-code' ? null : row.adapter }); return h && h.handover ? h.handover.text : null; }, home: os.homedir(), sessionsAllowed: sessionsSender, clipboard, shell, log: console.log });
 ipcMain.handle('account-view', (e) => {
   if (!settingsOnly(e)) return null;
   return TeamEntry.settingsView(accountSummary(), new URL(BRAND.DEFAULT_HUB).host);
@@ -2902,6 +2903,7 @@ function createTray() {
         const list = (config.mutedProjects || []).filter((x) => x !== mine.cwd && x !== folder);
         saveConfig({ mutedProjects: muted ? list : [...list, mine.cwd] }); broadcastStatus(); refreshTrayMenu?.();
       } }] : []),
+      ...SessionHandoverMain.menuItems(mine),
     ];
   };
   const buildMenu = (from = 'tray') => Menu.buildFromTemplate([

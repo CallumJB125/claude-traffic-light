@@ -17,6 +17,7 @@ export const DEFAULT_LIMITS = Object.freeze({
   mutate_member: { capacity: 120, per_ms: 60_000 },
   dispatch_member: { capacity: 30, per_ms: 60_000 },   // dispatch, retry, take_over_with_claude
   presence_member: { capacity: 60, per_ms: 60_000 },   // GET /api/boards/:id/presence (D37b)
+  handover_salvage_member: { capacity: 30, per_ms: 3_600_000 }, // POST /api/cards/:id/handover/salvage (opt-in local session handover share)
   communication_write_member: { capacity: 60, per_ms: 3_600_000 },
   communication_read_member: { capacity: 60, per_ms: 60_000 },
   ownership_read_member: { capacity: 60, per_ms: 60_000 }, // staff/runner projections, including declaration responses

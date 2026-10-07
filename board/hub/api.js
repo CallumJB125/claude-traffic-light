@@ -19,6 +19,7 @@ import { AI_IDS, AI_BACKENDS, AI_CAPABILITIES, AI_LABELS, aiOfDispatch, BUDGET_M
 import { insertCardRecord } from './card-record.js';
 import { workCaptureView } from './work-capture-view.js';
 import { requireRows } from './quotas.js';
+import { redactSecrets } from '../shared/secret-patterns.mjs';
 import { remoteScope, remoteMutation } from './remote/context.js';
 import { WorkflowExecutor } from './workflow-executor.js';
 import { requireStorage } from './storage-watch.js';
@@ -62,6 +63,7 @@ function labelName(v) {
 // past this many it is refused before anything is written (D91).
 export const LABEL_REWRITE_MAX = 2000;
 
+const SALVAGE_MAX = 8_000;
 const archivedError = () => new HubError('CONFLICT', 'this card is archived: restore it first', { reason: 'ARCHIVED' });
 
 export class Api {
@@ -816,6 +818,27 @@ export class Api {
         permission_request: { id: after.id, tool: after.tool, input_summary: after.input_summary, state: after.state, scope: after.scope, approvers: json(after.approvers, []), answered_by_name: member.display_name },
         card: cardView(this.hub, this.hub.card(cardId), member.id),
       };
+    }, { member, cred });
+  }
+
+  // POST /api/cards/:card_id/handover/salvage: the desktop's opt-in "Share handover with team".
+  // Append-only: one 'salvage' feed row written_by 'system', so the human and
+  // agent layers of the handover are never touched. Same authority as a
+  // comment (a viewer, a removed member or another team's card is refused),
+  // size capped, and secrets are removed here as well as on the desktop.
+  async appendSalvage(member, cardId, body, { cred = null } = {}) {
+    member = this.currentWriter(member, cred);
+    const row0 = this.cardFor(member, cardId);
+    const raw = str(body.text, SALVAGE_MAX, 'text', { required: true });
+    const date = str(body.date, 10, 'date');
+    const text = redactSecrets(raw, { classes: ['credential', 'likely'], docExamples: false, replace: () => '[redacted]' }).slice(0, SALVAGE_MAX);
+    return this.withWritableBoard(row0.board_id, (current) => {
+      member = current;
+      const row = this.cardFor(member, cardId);
+      if (row.board_id !== row0.board_id) throw new HubError('CONFLICT', 'card moved while waiting');
+      if (row.archived_at) throw archivedError();
+      this.hub.feed(cardId, 'salvage', { kind: 'local_session', written_by: 'system', text: `Local session handover (written by Plexiform from hook events, not by the AI)${date ? `, ${date}` : ''}:\n${text}`, ref: null }, { actor: member.id });
+      return { ok: true };
     }, { member, cred });
   }
 

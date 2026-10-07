@@ -80,6 +80,7 @@ function emitAdapter(payload) {
     if (Remote && e.signal === 'session-end') e.seq = Remote.nextSeq(before?.remoteSeq);
     const applied = SessionState.applyAdapterEvent(SESSIONS_DIR, { host: HOST_TAG, source: adapter.id, event: e, fallbackSession, fallbackCwd: process.cwd(), decorate: Remote && ((next, prev) => { next.remoteSeq = e.seq = Remote.nextSeq(prev?.remoteSeq); }) });
     if (!applied) continue;
+    try { require('./handover-tap.js').record({ rootDir: ROOT_DIR, adapter: adapter.id, signal: e.signal, sessionId: e.sessionId, cwd: e.cwd || process.cwd(), data: payload }); } catch { /* best effort */ }
     if (Remote && !e.cwd) e.cwd = process.cwd();
     accepted.push(e);
   }
@@ -127,6 +128,7 @@ if (!adapterId) {
   const sessionId = SessionState.safeSessionId(opt('session') || process.env.CLAUDE_SESSION_ID || `${source}-${process.ppid}`);
   const file = SessionState.sessionFileFor(SESSIONS_DIR, HOST_TAG, source, sessionId);
   let cwd = '';
+  try { require('./handover-tap.js').record({ rootDir: ROOT_DIR, adapter: source, signal, sessionId, cwd: opt('cwd') || process.cwd(), data: {} }); } catch { /* best effort */ }
   let seq = null;
   const Remote = fs.existsSync(path.join(ROOT_DIR, 'remote.json')) ? require('./remote.js') : null;
   if (signal === 'session-end') { if (Remote) seq = Remote.nextSeq(SessionState.readJson(file)?.remoteSeq); fs.rmSync(file, { force: true }); }

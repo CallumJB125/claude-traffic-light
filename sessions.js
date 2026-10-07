@@ -19,6 +19,19 @@ function burstBlock(section, b) {
   label.append(check, document.createTextNode(' Share Burst handover with team (this repository; scrubbed, off by default)'));
   box.append(label); section.append(box);
 }
+// Local handover document (src/session-handover.js): age and actions, or the reason there is none.
+function handoverRow(section, h) {
+  const row = node('p', '', 'handover-row');
+  row.append(document.createTextNode(`${h.updated}${h.note ? ` (${h.note})` : ''}`));
+  if (h.ready) {
+    for (const [label, action] of [['View', 'view'], ['Copy path', 'copy-path'], ['Copy as prompt', 'copy-prompt']]) {
+      const b = node('button', label, 'link'); b.type = 'button';
+      b.addEventListener('click', async () => { b.disabled = true; try { const ok = await window.sessionsApi.handover(action, h.key); b.textContent = ok ? (action === 'view' ? 'Opened' : 'Copied') : 'Unavailable'; } catch { b.textContent = 'Unavailable'; } setTimeout(() => { b.textContent = label; b.disabled = false; }, 1500); });
+      row.append(document.createTextNode(' · '), b);
+    }
+  }
+  section.append(row);
+}
 function render(snapshot) {
   content.replaceChildren();
   const a = snapshot.activity;
@@ -38,6 +51,7 @@ function render(snapshot) {
       section.append(list);
     }
     if (item.burst) burstBlock(section, item.burst);
+    if (item.handover) handoverRow(section, item.handover);
     content.append(section);
   }
   if (!snapshot.sessions?.length) content.append(node('p', snapshot.status === 'unavailable' ? 'Local session reports are unavailable. Try Refresh.' : 'No local sessions are visible. Start activity in a connected tool, then Refresh.', 'muted'));
