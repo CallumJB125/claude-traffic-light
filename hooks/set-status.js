@@ -680,7 +680,9 @@ if (starting) {
 }
 writeSession({ hostApp: detectHostApp(starting ? null : prevOnEntry?.hostApp), pid: pidNow, terminal, owned });
 // Opt-in team brief (hooks/team-brief.js): the session is already recorded, and
-// it gives up after 800 ms, so the light never waits on the hub.
-if (resolved === 'session-start') require('./team-brief.js').run({ adapter: 'claude', payload: data, root: ROOT_DIR }).then((out) => { hookOutput = out; finish(); }, finish);
+// it gives up after 800 ms, so the light never waits on the hub. With it off
+// the hook stays synchronous and exits here, as every other event does.
+const TeamBrief = resolved === 'session-start' ? require('./team-brief.js') : null;
+if (TeamBrief && TeamBrief.enabled(ROOT_DIR)) TeamBrief.run({ adapter: 'claude', payload: data, root: ROOT_DIR }).then((out) => { hookOutput = out; finish(); }, finish);
 else finish();
 }
