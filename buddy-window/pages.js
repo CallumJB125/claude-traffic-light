@@ -21,6 +21,7 @@ const PAGES = [
   { id: 'board', title: 'Board', icon: 'board', kind: 'hub', view: 'board', group: 'work',
     children: [
       { id: 'board:table', title: 'Table', kind: 'hub', view: 'table' },
+      { id: 'board:history', title: 'History', kind: 'hub', view: 'history' },
       { id: 'board:dashboard', title: 'Dashboard', kind: 'hub', view: 'dashboard' },
       { id: 'board:calendar', title: 'Calendar', kind: 'hub', view: 'calendar', hidden: true },
       { id: 'board:timeline', title: 'Timeline', kind: 'hub', view: 'timeline', hidden: true },
@@ -57,7 +58,7 @@ const GROUPS = [
 // views are the board page's children, so they are listed by id like the rest.
 const SECTIONS = [
   { id: 'today', title: 'Today', icon: 'sun', default: 'myday', pages: ['myday', 'waiting', 'tasks', 'sessions', 'overview'] },
-  { id: 'board', title: 'Board', icon: 'board', default: 'board', pages: ['board', 'board:table', 'board:dashboard'] },
+  { id: 'board', title: 'Board', icon: 'board', default: 'board', pages: ['board', 'board:table', 'board:history', 'board:dashboard'] },
   { id: 'team', title: 'Team', icon: 'team', default: 'team', pages: ['team', 'integrations', 'account'] },
   { id: 'activity', title: 'Activity', icon: 'chart', default: 'usage', pages: ['usage', 'stats'] },
   { id: 'more', title: 'More', icon: 'gear', default: 'settings', pages: ['settings', 'thismac', 'lights', 'hatch', 'help', 'feedback', 'updates'] },
@@ -68,7 +69,7 @@ if (process.env.PLEXIFORM_SHOW_SETUPS === '1') SECTIONS.find((s) => s.id === 'mo
 
 // Calendar and Timeline are project-planning views and AI runs have no due dates, so they
 // leave the sub-nav; the pages and deep links stay. PLEXIFORM_SHOW_PLANNER=1 restores them.
-if (process.env.PLEXIFORM_SHOW_PLANNER === '1') SECTIONS.find((s) => s.id === 'board').pages.splice(2, 0, 'board:calendar', 'board:timeline');
+if (process.env.PLEXIFORM_SHOW_PLANNER === '1') SECTIONS.find((s) => s.id === 'board').pages.splice(3, 0, 'board:calendar', 'board:timeline');
 
 function flat(pages = PAGES) {
   const out = [];

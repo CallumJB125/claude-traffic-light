@@ -2026,5 +2026,5 @@ test('Calendar and Timeline leave the sidebar but stay addressable; PLEXIFORM_SH
   assert.equal(pageById('board:calendar').view, 'calendar');
   assert.equal(pageById('board:timeline').view, 'timeline');
   const out = require('node:child_process').execFileSync(process.execPath, ['-e', "console.log(JSON.stringify(require('./buddy-window/pages').SECTIONS.find((s) => s.id === 'board').pages))"], { cwd: path.join(__dirname, '..'), env: { ...process.env, PLEXIFORM_SHOW_PLANNER: '1' } });
-  assert.deepEqual(JSON.parse(out), ['board', 'board:table', 'board:calendar', 'board:timeline', 'board:dashboard']);
+  assert.deepEqual(JSON.parse(out), ['board', 'board:table', 'board:history', 'board:calendar', 'board:timeline', 'board:dashboard']);
 });

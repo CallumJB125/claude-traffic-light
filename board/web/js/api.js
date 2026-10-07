@@ -128,6 +128,8 @@ export const api = {
   unlinkIdentity: (id) => mut('DELETE', `/api/integrations/${enc(id)}/identity`),
   linkedMembers: (id) => call('GET', `/api/integrations/${enc(id)}/identities`),
   revokeIdentity: (id, memberId) => mut('DELETE', `/api/integrations/${enc(id)}/identities/${enc(memberId)}`),
+  // Runs overlapping [from, to] (ISO times, at most 31 days), for the History view.
+  runs: (boardId, from, to) => call('GET', `/api/boards/${enc(boardId)}/runs?from=${enc(from)}&to=${enc(to)}`, undefined, { signal: AbortSignal.timeout(30_000) }),
   // Also returns offset_ms (hub clock − ours, from the Date header): journal
   // times are hub times. A page gets 30 s before it counts as unreachable.
   journal: async (boardId, afterSeq = 0, limit = 1000) => {

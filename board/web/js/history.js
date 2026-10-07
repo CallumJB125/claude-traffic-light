@@ -21,11 +21,14 @@ export const OUTCOMES = {
   observed: { label: 'Observed', icon: 'eye', tone: 'quiet' },
 };
 
-/** The window for a range, anchored on `now` (local days: Today is midnight to midnight). */
+/** The window for a range, anchored on `now` (local days; Today runs from midnight to the hour after next). */
 export function rangeWindow(range, now) {
   const d = new Date(now);
   const days = range === '30d' ? 30 : range === '7d' ? 7 : 1;
-  return { from: new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1 - days).getTime(), to: new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime() };
+  const from = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1 - days).getTime(), midnight = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime();
+  // Today stops an hour past now so a morning of work is not squeezed into a sliver of a 24 h axis.
+  const to = range === 'today' ? Math.min(midnight, new Date(d.getFullYear(), d.getMonth(), d.getDate(), d.getHours() + 2).getTime()) : midnight;
+  return { from, to };
 }
 
 /** Time to a 0..1 position in the window (clamped). */
@@ -47,7 +50,7 @@ export function packRows(bars, gap = 0) {
 }
 
 const laneOfAi = (ai) => (ai === 'hermes-dgx' ? 'hermes' : LANES.some((l) => l.id === ai) ? ai : 'claude');
-const MIN_W = 0.008;
+const MIN_W = 0.025;
 
 /** Hub reply + window -> lanes of positioned bars, a summary strip, axis ticks and the now marker. */
 export function buildHistory({ data, from, to, now }) {
@@ -95,10 +98,10 @@ export function unionMs(bars, from, to) {
   return cur ? total + cur[1] - cur[0] : total;
 }
 
-/** Axis ticks: every 3 hours for Today, each day for 7 days, about every 5 days for 30. */
+/** Axis ticks: every 1 to 3 hours for Today, each day for 7 days, about every 5 days for 30. */
 export function axisTicks(range, from, to) {
   const out = [];
-  const step = range === 'today' ? 3 * 3_600_000 : range === '7d' ? DAY : 5 * DAY;
+  const step = range === 'today' ? (to - from > 12 * 3_600_000 ? 3 : to - from > 6 * 3_600_000 ? 2 : 1) * 3_600_000 : range === '7d' ? DAY : 5 * DAY;
   for (let t = from; t < to; t += step) {
     const d = new Date(t);
     out.push({ x: timeToX(t, from, to), label: range === 'today' ? `${String(d.getHours()).padStart(2, '0')}:00` : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) });

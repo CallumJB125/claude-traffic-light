@@ -3,6 +3,7 @@
 export const VIEWS = [
   { id: 'board', label: 'Board', icon: 'columns' },
   { id: 'table', label: 'Table', icon: 'rows' },
+  { id: 'history', label: 'History', icon: 'clock' },
   // Project-planning views: AI runs carry no due dates or dependencies, so they are
   // off the switcher and palette unless the planner is on. Routes and deep links stay.
   { id: 'calendar', label: 'Calendar', icon: 'calendar', planner: true },

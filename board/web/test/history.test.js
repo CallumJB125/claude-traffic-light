@@ -11,8 +11,9 @@ test('rangeWindow: Today is local midnight to midnight; 7 and 30 days end at tom
   const now = new Date(2026, 9, 7, 15, 30).getTime();
   const t = rangeWindow('today', now), w = rangeWindow('7d', now), m = rangeWindow('30d', now);
   assert.equal(t.from, new Date(2026, 9, 7).getTime());
-  assert.equal(t.to, new Date(2026, 9, 8).getTime());
-  assert.equal(w.to, t.to); assert.equal(m.to, t.to);
+  assert.equal(t.to, new Date(2026, 9, 7, 17).getTime(), 'two hours past the current hour');
+  assert.equal(rangeWindow('today', new Date(2026, 9, 7, 23, 30).getTime()).to, new Date(2026, 9, 8).getTime(), 'never past midnight');
+  assert.equal(w.to, new Date(2026, 9, 8).getTime()); assert.equal(m.to, w.to);
   assert.equal(new Date(w.from).getDate(), 1);
   assert.ok(m.to - m.from <= 31 * 86_400_000);
 });
@@ -70,6 +71,7 @@ test('empty data is flagged; runs clipped to the window keep a visible minimum w
 test('axisTicks and keyboard neighbours', () => {
   const ticks = axisTicks('today', new Date(2026, 9, 7).getTime(), new Date(2026, 9, 8).getTime());
   assert.equal(ticks.length, 8); assert.equal(ticks[0].label, '00:00');
+  assert.equal(axisTicks('today', new Date(2026, 9, 7).getTime(), new Date(2026, 9, 7, 5).getTime()).length, 5, 'hourly on a short window');
   const out = buildHistory({ data: { runs: [run('1', 'claude', 0, 1), run('2', 'claude', 2, 3), run('3', 'codex', 2.2, 3), run('4', 'hermes', 5, 6)] }, from: T0, to: T0 + 10 * H, now: T0 });
   assert.equal(neighborBar(out.lanes, '1', 'ArrowRight'), '2');
   assert.equal(neighborBar(out.lanes, '1', 'ArrowLeft'), null);
