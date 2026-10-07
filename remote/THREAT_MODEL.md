@@ -284,7 +284,9 @@ otherwise `unknown` ("not applied — check at your desk").
   revoked. Closed by per-approval WebAuthn user verification (§11).
 - **R3 — Hub sees request content.** Commands and `Write` contents can contain
   secrets. Next step specified in §12.2 (E2E encryption). Until then keep the
-  hub Tailscale-only (ground rule).
+  hub Tailscale-only (ground rule). For the interaction relay (phone control)
+  the envelope is built (W2-A, `docs/relay-e2e-threat-model.md`, review
+  pending); approval notices reuse it in W2-B.
 - **R4 — Shell judgement is heuristic.** The allow-list makes the default
   "desk" and admits only read-only programs; the tokeniser handles quoting,
   wrappers, `sh -c`, `$(…)` and backticks. Remaining: `git diff/log/show` can

@@ -1,7 +1,7 @@
 // /phone/ entry: wires the controller (phone-core.js), the vault and the
 // renderer to the page. Event delegation only (no inline handlers: CSP).
 import { render } from './h.js';
-import { createApi, createController } from './phone-core.js';
+import { createApi, createController, createE2E } from './phone-core.js';
 import { createVault, idbKv } from './phone-vault.js';
 import { phoneView } from './phone-render.js';
 
@@ -14,8 +14,9 @@ const guessName = () => {
   return 'Phone';
 };
 
-const api = createApi({ fetch: (...a) => fetch(...a), uuid: () => crypto.randomUUID() }); // privacy-flow: phone-control
-const ctl = createController({ api, vault: createVault({ kv: idbKv() }), online: () => navigator.onLine, deviceName: guessName() });
+const vault = createVault({ kv: idbKv() });
+const api = createApi({ fetch: (...a) => fetch(...a), uuid: () => crypto.randomUUID(), e2e: createE2E({ store: vault }) }); // privacy-flow: phone-control
+const ctl = createController({ api, vault, online: () => navigator.onLine, deviceName: guessName() });
 const ui = { confirmClose: false };
 const DEPTH = { sessions: 1, session: 2 };
 let lastView = null;

@@ -85,6 +85,13 @@ const WEB_FILES = new Set([
   'phone.css', 'phone-icon-192.png', 'phone-icon-512.png',
 ]);
 const WEB_JS = /^js\/[a-z][a-z0-9-]*\.js$/;
+// The only routes a relay-scoped (phone) sign-in may use; everything else is 403.
+export const RELAY_SCOPE_ROUTES = new Set([
+  'GET /api/interaction/v1/hosts', 'POST /api/interaction/v1/hosts/:host_id/call',
+  'GET /api/interaction/v1/shared', 'POST /api/interaction/v1/shared/:share_id/call',
+  'PUT /api/interaction/v1/role', // client only (interaction-relay.js setRole)
+  'POST /api/auth/signout',
+]);
 // Accounts mode: pages served without auth (their JS talks to /api/auth/*;
 // tokens ride in the URL fragment, which never reaches the server).
 const ACCOUNT_PAGES = { '/signin': 'signin.html', '/auth/email': 'signin.html', '/invite': 'invite.html', '/clients': 'clients.html', '/client-invite': 'client-invite.html', '/remote-consent': 'remote-consent.html', '/connections': 'remote-grants.html',
@@ -784,6 +791,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
         if (config.auth === 'accounts') {
           try {
             const ident = hub.accounts.authenticate(req, { ip, rotate: false });
+            if (ident?.cred.scope === 'relay') throw new HubError('FORBIDDEN', 'phone sign-in');
             cred = ident ? { user_id: ident.user.id, kind: ident.cred.kind, id: ident.cred.id } : null;
           } catch { credInvalid = true; }
         }
@@ -905,6 +913,8 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
         if (r.auth !== 'none') {
           try { ident = hub.accounts.authenticate(req, { ip }); } catch (e) { if (r.auth !== 'optional') throw e; }
           if (!ident && r.auth !== 'optional') throw new HubError('UNAUTHENTICATED', 'not signed in');
+          // A phone's relay-scoped sign-in works only on the relay and sign-out (migration 056).
+          if (ident?.cred.scope === 'relay' && !RELAY_SCOPE_ROUTES.has(`${r.method} ${r.pattern}`)) throw new HubError('FORBIDDEN', 'this phone sign-in can only use remote sessions');
         }
         if (ident?.setCookie) appendCookie(res, ident.setCookie);
         // Bearer (desktop) requests carry no ambient credential: no CSRF token.
@@ -1131,6 +1141,8 @@ export function makeAuthenticate({ hub, config }) {
       // No rotation here: an upgrade response can't carry the new cookie.
       const ident = hub.accounts.authenticate(req, { ip: clientIp(req, config), rotate: false });
       if (!ident) throw new HubError('UNAUTHENTICATED', 'not signed in');
+      // No socket (board or host) for a phone's relay-scoped sign-in.
+      if (ident.cred.scope === 'relay') throw new HubError('FORBIDDEN', 'this phone sign-in can only use remote sessions');
       return { candidates: userMembers(hub, ident.user.id), exp_ms: null, user: ident.user, cred: ident.cred };
     }
     if (config.auth === 'local') {

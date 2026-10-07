@@ -17,6 +17,14 @@
 // Liveness: a status is "live" only while the long-poll keeps answering. A
 // watch answers within 20 s, so a gap past LIVE_MS (or any failed poll) shows
 // the last known status as not live, never as the current one.
+//
+// End-to-end (phone-e2e.js, docs/relay-e2e-threat-model.md): calls to a
+// computer this phone is paired with go as {request_id, op, enc}; the args
+// and the answer are sealed with keys only the phone and that computer hold,
+// so the hub routes ciphertext. An answer that does not open is never shown.
+// Without a pairing the call is plain, as before (the computer may refuse it).
+
+import { createDeviceChannel } from './phone-e2e.js';
 
 export const LIVE_MS = 30_000;
 export const LIST_STALE_MS = 30_000;
@@ -35,7 +43,29 @@ export function backoffMs(failures, rand = Math.random) {
   return Math.round(base / 2 + rand() * (base / 2));
 }
 
-export function createApi({ fetch, uuid, origin = '' }) {
+/**
+ * The paired computers' channels. `store`: the vault ({agreementKey,
+ * pairings}). channelFor(hostId) → a device channel, or null (not paired).
+ */
+export function createE2E({ store }) {
+  const channels = new Map(); // host id -> {rec, ch}
+  return {
+    async channelFor(hostId) {
+      if (typeof store?.pairings !== 'function') return null;
+      const rec = (await store.pairings())[hostId];
+      if (!rec) { channels.delete(hostId); return null; }
+      const have = channels.get(hostId);
+      if (have && have.rec.did === rec.did && have.rec.dev === rec.dev && have.rec.desktopAgree === rec.desktopAgree) return have.ch;
+      const { privateKey } = await store.agreementKey();
+      const ch = createDeviceChannel({ did: rec.did, dev: rec.dev, privateKey, peerPublic: rec.desktopAgree });
+      channels.set(hostId, { rec, ch });
+      return ch;
+    },
+    reset() { channels.clear(); },
+  };
+}
+
+export function createApi({ fetch, uuid, origin = '', e2e = null }) {
   let token = null;
   async function request(method, path, body, { timeout = CALL_TIMEOUT_MS, signal = null, auth = true } = {}) {
     const headers = { accept: 'application/json' };
@@ -61,15 +91,22 @@ export function createApi({ fetch, uuid, origin = '' }) {
     try { json = await res.json(); } catch { json = null; }
     return { status: res.status, body: json };
   }
+  async function call(host, op, args = {}, o) {
+    const path = `/api/interaction/v1/hosts/${encodeURIComponent(host)}/call`;
+    const ch = e2e ? await e2e.channelFor(host) : null;
+    if (!ch) return request('POST', path, { request_id: uuid(), op, args }, o);
+    return ch.call(op, args, (rid, name, enc) => request('POST', path, { request_id: rid, op: name, enc }, o), uuid);
+  }
   return {
-    setToken(t) { token = t; },
+    setToken(t) { token = t; if (!t) e2e?.reset(); },
     hasToken: () => !!token,
     hosts: (o) => request('GET', '/api/interaction/v1/hosts', undefined, o),
-    call: (host, op, args = {}, o) => request('POST', `/api/interaction/v1/hosts/${encodeURIComponent(host)}/call`, { request_id: uuid(), op, args }, o),
+    call,
     shared: (o) => request('GET', '/api/interaction/v1/shared', undefined, o),
     sharedCall: (share, op, args = {}, o) => request('POST', `/api/interaction/v1/shared/${encodeURIComponent(share)}/call`, { request_id: uuid(), op, args }, o),
     startEmail: (email, deviceName) => request('POST', '/api/auth/email/start', { email, client: 'buddy_desktop', device_name: deviceName, platform: 'phone-web' }, { auth: false }),
-    verifyEmail: (flowId, code, deviceName) => request('POST', '/api/auth/email/verify', { flow_id: flowId, code, device_name: deviceName, platform: 'phone-web' }, { auth: false }),
+    // scope 'relay': the hub accepts this sign-in only for remote sessions and signing out (PHONE.md).
+    verifyEmail: (flowId, code, deviceName) => request('POST', '/api/auth/email/verify', { flow_id: flowId, code, device_name: deviceName, platform: 'phone-web', scope: 'relay' }, { auth: false }),
     signOut: () => request('POST', '/api/auth/signout', {}),
   };
 }

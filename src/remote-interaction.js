@@ -48,9 +48,21 @@
 // here first, then tells the hub. Sessions Overview started are reachable
 // only once shared (main passes sharedTarget), never through 'list'.
 //
+// End-to-end (W2-A, src/e2e/relay-envelope.js, docs/relay-e2e-threat-model.md):
+// with `e2e` set, a relayed call from a paired device arrives as an opaque
+// `enc` envelope; it is opened here (pair keys exchanged at pairing, AAD bound
+// to this desktop, the device, the session, the sequence number, the relay
+// request id and the op; each (session, seq) accepted once) and the answer
+// goes back sealed, so the hub sees routing metadata only. With e2e.required
+// (the default once e2e is given) a plain own-device call is refused: a hub
+// cannot read sessions by asking in plaintext. Teammate (shared) calls stay
+// plain: they are not paired with this computer (see the threat model).
+// Without `e2e` nothing changes (plain relay, as before).
+//
 // Nothing here logs message text, responses or ids beyond the op name.
 const crypto = require('node:crypto');
 const { createInteractionHub } = require('./session-interaction');
+const Envelope = require('./e2e/relay-envelope.js');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const OPS = ['capabilities', 'list', 'state', 'launch', 'send', 'interrupt', 'close', 'watch'];
@@ -75,12 +87,20 @@ const REFUSED = {
   notShared: refuse('forbidden', 'This session is not shared with you.'),
   gone: refuse('stale', 'This session is no longer shared.'),
 };
+// Plain refusals to a sealed call (made before it could be opened): fixed
+// text and a code the device's channel maps to its own wording.
+const e2eRefusal = (code) => ({ ok: false, status: 'e2e', error: code === 'required' ? 'This computer only accepts end-to-end encrypted requests. Pair this device with it first.' : 'This computer refused the end-to-end request.', e2e: code });
+const E2E_OF = new Map([[REFUSED.invalid, 'malformed'], [REFUSED.forbidden, 'malformed'], [REFUSED.replayed, 'replayed'], [REFUSED.busy, 'busy']]);
 
 // boardCurrent: remote sessions are not board-bound unless main says so.
 // sharedTarget(session) → {hub, actor} | null: another interaction hub's
 // session (Overview) that may be shared; this host's own sessions always may.
-function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent = (b) => b === null, now, log = () => {}, retry = {}, random = Math.random, sharedTarget = () => null }) {
+// e2e: {did, privateKey, peer(dev) → ECDH public (base64url) | null, required = true}
+// (see createDesktopChannel in src/e2e/relay-envelope.js).
+function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent = (b) => b === null, now, log = () => {}, retry = {}, random = Math.random, sharedTarget = () => null, e2e = null }) {
   if (typeof userId !== 'string' || !userId) throw new Error('a remote host needs the signed-in user id');
+  const channel = e2e ? Envelope.createDesktopChannel({ did: e2e.did, privateKey: e2e.privateKey, peer: e2e.peer, now: now ?? Date.now }) : null;
+  const e2eRequired = !!e2e && e2e.required !== false;
   const actor = `account:${userId}`;
   const versions = new Map(); // session -> change counter
   const watchers = new Set();
@@ -336,27 +356,52 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
 
   /** One relay.request frame (already parsed) → the result object for its relay.reply. */
   async function handle(frame) {
-    if (!closed(frame, ['type', 'id', 'rid', 'user', 'from', 'op', 'args', 'share']) || frame.type !== 'relay.request'
+    const sealed = object(frame) && frame.enc !== undefined;
+    const r = await handlePlain(frame, sealed);
+    return sealed && !object(r?.enc) && r?.ok === false && !r.e2e ? e2eRefusal(E2E_OF.get(r) ?? 'malformed') : r;
+  }
+
+  async function handlePlain(frame, sealed) {
+    if (!closed(frame, ['type', 'id', 'rid', 'user', 'from', 'op', 'args', 'enc', 'share']) || frame.type !== 'relay.request'
       || typeof frame.id !== 'string' || !UUID.test(frame.id) || typeof frame.rid !== 'string' || !UUID.test(frame.rid)
-      || typeof frame.from !== 'string' || !frame.from || frame.from.length > 100 || !OPS.includes(frame.op) || !object(frame.args)) return REFUSED.invalid;
+      || typeof frame.from !== 'string' || !frame.from || frame.from.length > 100 || !(OPS.includes(frame.op) || (sealed && frame.op === 'hello'))
+      || (sealed ? frame.args !== undefined : !object(frame.args))) return REFUSED.invalid;
     if (frame.user !== userId) return REFUSED.forbidden;
     const shared = frame.share !== undefined;
     const by = shared ? frame.share?.user : null;
-    if (shared && typeof by !== 'string') return REFUSED.invalid;
+    if (shared && (typeof by !== 'string' || sealed)) return REFUSED.invalid;
+    // A plain own-device call when end-to-end is required: refused, whatever the hub says.
+    if (!shared && !sealed && e2eRequired) return e2eRefusal('required');
+    if (sealed && !channel) return e2eRefusal('unsupported');
     if (handling >= MAX_HANDLING || (shared && (sharedHandling >= MAX_SHARED_HANDLING || (byTeammate.get(by) ?? 0) >= MAX_PER_TEAMMATE))) return REFUSED.busy;
     if (!once(`id:${frame.id}`) || !once(`rid:${frame.from}:${frame.rid}`)) return REFUSED.replayed;
-    for (const x of hub.list(actor)) remember(x.session);
-    let result;
+    let result, opened = null;
     handling++;
     if (shared) { sharedHandling++; byTeammate.set(by, (byTeammate.get(by) ?? 0) + 1); }
-    try { result = await (shared ? runShared(frame) : run(frame.op, frame.args)); } catch { result = REFUSED.unavailable; } finally {
+    try {
+      if (sealed) {
+        opened = await channel.open({ rid: frame.rid, op: frame.op, enc: frame.enc });
+        if (!opened.ok) return e2eRefusal(opened.code);
+        if (opened.hello) return { enc: opened.reply };
+        if (!object(opened.args)) return await sealedAnswer(opened, REFUSED.invalid);
+      }
+      for (const x of hub.list(actor)) remember(x.session);
+      try { result = await (shared ? runShared(frame) : run(frame.op, sealed ? opened.args : frame.args)); } catch { result = REFUSED.unavailable; }
+    } finally {
       handling--;
       if (shared) { sharedHandling--; const n = byTeammate.get(by) - 1; if (n) byTeammate.set(by, n); else byTeammate.delete(by); }
     }
     const text = JSON.stringify(result);
-    if (Buffer.byteLength(text) > MAX_REPLY) return REFUSED.tooLarge;
-    if (leaksTarget(text)) { log(`[remote-interaction] ${frame.op}: answer withheld (provider id)`); return REFUSED.unavailable; }
-    return result;
+    if (Buffer.byteLength(text) > MAX_REPLY) result = REFUSED.tooLarge;
+    else if (leaksTarget(text)) { log(`[remote-interaction] ${frame.op}: answer withheld (provider id)`); result = REFUSED.unavailable; }
+    return sealed ? sealedAnswer(opened, result) : result;
+  }
+
+  // The answer to an opened call, sealed for that device and request only.
+  async function sealedAnswer(opened, result) {
+    let enc = await opened.seal(result);
+    if (Buffer.byteLength(JSON.stringify(enc)) > MAX_REPLY) enc = await opened.seal(REFUSED.tooLarge);
+    return { enc };
   }
 
   let state = 'off', notice = null, resume = null, retryTimer = null, idleTimer = null, attempts = 0, conflicts = 0, running = null;
@@ -490,11 +535,12 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
   function status() { return { state, notice, connected: socket?.readyState === 1 }; }
 
   function disconnect() { const ws = socket; socket = null; try { ws?.close(1000, 'bye'); } catch { /* gone */ } }
-  function close() { stopRunning('off'); disconnect(); for (const w of [...watchers]) w(); hub.stopAll(); }
+  function close() { stopRunning('off'); disconnect(); for (const w of [...watchers]) w(); channel?.close(); hub.stopAll(); }
 
   // `hub` is a main-only seam (tests and proof logs), never exposed remotely.
   const onState = (fn) => { stateListeners.add(fn); return () => stateListeners.delete(fn); };
-  return { handle, connect, enable, disable, status, disconnect, close, onState, hub, actor, connected: () => socket?.readyState === 1, shareSession, listShares, stopSharing, shared: () => [...shares.values()].map(shareView) };
+  // forgetDevice(dev): drop a revoked device's end-to-end sessions now (its peer() should already return null).
+  return { handle, connect, enable, disable, status, disconnect, close, onState, hub, actor, connected: () => socket?.readyState === 1, shareSession, listShares, stopSharing, shared: () => [...shares.values()].map(shareView), forgetDevice: (dev) => channel?.forget(dev) };
 }
 
 /** PUT role=client with this token, bounded. → true once the hub has no host role for it. */
@@ -507,8 +553,12 @@ async function resetRole({ baseUrl, token, fetch = globalThis.fetch, timeoutMs =
   } catch { return false; }
 }
 
-/** The other device's side: list hosts, then call ops on one. */
-function createRemoteInteractionClient({ baseUrl, token, fetch = globalThis.fetch }) { // privacy-flow: remote-interaction
+/**
+ * The other device's side: list hosts, then call ops on one. `e2e`: a device
+ * channel (Envelope.createDeviceChannel) for a host this device is paired
+ * with; calls then go sealed and answers are opened (see relay-envelope.js).
+ */
+function createRemoteInteractionClient({ baseUrl, token, fetch = globalThis.fetch, e2e = null }) { // privacy-flow: remote-interaction
   async function request(method, path, body) {
     const headers = { accept: 'application/json', authorization: `Bearer ${token}` };
     if (body !== undefined) headers['content-type'] = 'application/json';
@@ -519,8 +569,11 @@ function createRemoteInteractionClient({ baseUrl, token, fetch = globalThis.fetc
   }
   const hosts = () => request('GET', '/api/interaction/v1/hosts');
   // → {status, body:{host, result}} or {status, body:{error}}. requestId only for replay tests.
-  const call = (host, op, args = {}, requestId = crypto.randomUUID()) =>
-    request('POST', `/api/interaction/v1/hosts/${encodeURIComponent(host)}/call`, { request_id: requestId, op, args });
+  const call = (host, op, args = {}, requestId = crypto.randomUUID()) => {
+    const path = `/api/interaction/v1/hosts/${encodeURIComponent(host)}/call`;
+    if (!e2e) return request('POST', path, { request_id: requestId, op, args });
+    return e2e.call(op, args, (rid, name, enc) => request('POST', path, { request_id: rid, op: name, enc }), () => crypto.randomUUID());
+  };
   return { hosts, call, request };
 }
 

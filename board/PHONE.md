@@ -17,10 +17,10 @@ It is a client of the interaction relay (`hub/interaction-relay.js`,
 | `/phone/sw.js` | `web/phone-sw.js` | scope `/phone/`; never served under `/web/` |
 | `/phone/manifest.webmanifest` | `web/phone.webmanifest` | `application/manifest+json` |
 | `/web/phone.css`, `/web/phone-icon-{192,512}.png` | `web/` | icons from `build/icons/` |
-| `/web/js/phone-*.js` | `phone-core.js` (API client + state machine), `phone-render.js` (vnode screens via `h.js`), `phone-vault.js` (token at rest), `phone-app.js` (DOM wiring) | plain ES modules, no build |
+| `/web/js/phone-*.js` | `phone-core.js` (API client + state machine), `phone-render.js` (vnode screens via `h.js`), `phone-vault.js` (token, ECDH key and pairings at rest), `phone-e2e.js` (end-to-end envelope, byte-identical to `src/e2e/relay-envelope.js`), `phone-app.js` (DOM wiring) | plain ES modules, no build |
 
 The only hub change is that static allowlist (`hub/http.js`: `TYPES`,
-`WEB_FILES`, `ACCOUNT_PAGES`). No new route, credential kind or table.
+`WEB_FILES`, `ACCOUNT_PAGES`); W2-A later added the `scope` column (below). No new route.
 
 ## Sign-in (enrolment)
 
@@ -88,14 +88,15 @@ and `node web/scripts/phone-smoke.mjs <outDir>` (headless Chrome at 390 px,
 dark + light, offline reload). Not tested on a real phone, a deployed hub or
 a real provider.
 
-## Before general release (blocker)
+## Scoped phone token and end-to-end (W2-A, built — REQUIRES INDEPENDENT SECURITY REVIEW)
 
-**Scoped phone token.** Open question 1 below is a release blocker, not a
-nice-to-have: until the phone holds a token accepted only on the relay,
-sign-out and its own device entry, an XSS on the hub origin or a lost
-unlocked phone exposes a full account device credential. Needs an accounts
-design decision (a `client`/scope column checked in `authenticate`, and how
-a phone enrols into it); deliberately not built in the relay lanes.
+See `docs/relay-e2e-threat-model.md`. A `phone-web` sign-in (or one asking
+`scope:'relay'`) gets `user_devices.scope = 'relay'` (migration 056):
+`hub/http.js` accepts it only on the relay call/list routes, the shared-call
+routes and sign-out (403 elsewhere, no WebSocket). Calls to a computer the
+phone is paired with go as sealed `enc` envelopes the hub cannot read; the
+pairing screen that creates those records is W2-B, so until then calls stay
+plain. Open question 1 below is answered by this.
 
 ## Follow-up: host proof-of-possession (designed, not built)
 

@@ -37,6 +37,7 @@ export const STEP_UP_PURPOSES = Object.freeze(['delete', 'delete_team']);
 const PURPOSES = new Set(['signin', ...STEP_UP_PURPOSES]);
 const CLIENTS = new Set(['buddy_desktop', 'web']);
 const FORM_FACTORS = new Set(['laptop', 'desktop']);
+const DEVICE_SCOPES = new Set(['full', 'relay']);
 const LOOPBACK_HOST = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i;
 
 const b64url = (buf) => Buffer.from(buf).toString('base64url');
@@ -382,6 +383,9 @@ export class Accounts {
         form_factor: body.form_factor ?? null,
       };
       if (device.form_factor != null && !FORM_FACTORS.has(device.form_factor)) throw new HubError('VALIDATION', "form_factor must be 'laptop' or 'desktop'");
+      if (body.scope != null && !DEVICE_SCOPES.has(body.scope)) throw new HubError('VALIDATION', "scope must be 'full' or 'relay'");
+      // A phone only ever gets the relay scope, whatever it asks for (migration 056).
+      device.scope = body.scope === 'relay' || device.platform === 'phone-web' ? 'relay' : 'full';
     }
     if (!this.hasAccount(f.email)) limitOrThrow(this.hub, 'signup_ip', ipKey(ip));
     let out;
@@ -422,13 +426,16 @@ export class Accounts {
   /** A desktop device token (`bdt_…`, shown once, stored as sha256) for a user who just signed in, inside the caller's transaction. */
   issueDevice(userId, device, { ip, method, subjectRef = null }) {
     const now = this.now();
+    // Any route in (email code, OAuth): a phone sign-in is relay-scoped.
+    const scope = device.scope === 'relay' || device.platform === 'phone-web' ? 'relay' : 'full';
     const token = newDeviceToken();
     const id = randomUUID();
     this.db.insert('user_devices', {
       id, user_id: userId, name: device.name, client: 'buddy_desktop', platform: device.platform, form_factor: device.form_factor,
       token_hash: sha256hex(token), created_at: now, last_seen_at: now, last_ip_prefix: ipPrefix(ip), session_epoch: this.epoch(),
+      scope,
     });
-    this.audit('auth.signin', { user: userId, target: id, detail: { method, client: 'buddy_desktop', ...(subjectRef ? { subject_ref: subjectRef } : {}) }, ip });
+    this.audit('auth.signin', { user: userId, target: id, detail: { method, client: 'buddy_desktop', ...(scope === 'relay' ? { scope } : {}), ...(subjectRef ? { subject_ref: subjectRef } : {}) }, ip });
     return { id, token };
   }
 
@@ -549,7 +556,8 @@ export class Accounts {
       if (this.hub.ageOf(d.last_seen_at) == null || this.hub.ageOf(d.last_seen_at) >= TOUCH_MS) {
         this.db.run('UPDATE user_devices SET last_seen_at = ?, last_ip_prefix = COALESCE(?, last_ip_prefix) WHERE id = ?', this.now(), ipPrefix(ip), d.id);
       }
-      return { user, cred: { kind: 'device', id: d.id } };
+      // A scoped (phone) sign-in says so; http.js refuses it outside the relay.
+      return { user, cred: d.scope === 'relay' ? { kind: 'device', id: d.id, scope: 'relay' } : { kind: 'device', id: d.id } };
     }
     let value = null;
     try { value = parseCookies(req.headers.cookie)[SESSION_COOKIE] ?? null; } catch { value = null; }
