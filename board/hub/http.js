@@ -41,6 +41,7 @@ import { ApprovalRelay } from './approval-relay.js';
 import { InteractionShares } from './interaction-shares.js';
 import { Messaging } from './messaging.js';
 import { handleWebhook as billingWebhook } from './billing/webhook.js';
+import { registerHandoffRoutes } from './activity-handoff.js';
 
 const MAX_BODY = 1024 * 1024;
 // A payment-provider event is a few KiB; unverified reads in flight are capped like connector webhooks.
@@ -546,6 +547,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   }
   route('POST', '/api/cards/:card_id/work-capture/stop', ({ member, params, body, ident }) => workCapture.stop(member, params.card_id, body, ident?.cred), { replay: false, maxBody: 1024 });
   route('PATCH', '/api/cards/:card_id', ({ member, params, body, ident }) => api.patchCard(member, params.card_id, body, { cred: ident?.cred ?? null }), { collaboration: true });
+  registerHandoffRoutes(route, { hub, api, getLog: () => hub.activityLog ?? null });
   route('POST', '/api/cards/:card_id/actions/:action', ({ member, params, body, ident }) => api.action(member, params.card_id, params.action, body, { cred: ident?.cred ?? null }), { writeScope: 'card' });
   route('POST', '/api/cards/:card_id/archive', ({ member, params, body, ident }) => api.archive(member, params.card_id, body, { cred: ident?.cred ?? null }), { writeScope: 'archive' });
   route('POST', '/api/cards/:card_id/restore', ({ member, params, body, ident }) => api.restore(member, params.card_id, body, { cred: ident?.cred ?? null }), { writeScope: 'archive' });

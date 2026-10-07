@@ -1481,6 +1481,44 @@ const MyDay = require('./src/my-day-service.js').createMyDayService({
   open: handle => buddyWin?.openMyDayCard(handle) ?? false,
 });
 const myDaySender = e => !!e.sender && e.sender === buddyWin?.pageWebContents('myday') && e.senderFrame === e.sender.mainFrame;
+// ── Collision alerts (src/collision-alerts.js) ─────────────────────────────
+// The hub's activity stream (src/activity-stream.js) flags two live sessions
+// editing one file. One notification per collision; Sessions and Home mark the
+// row; the link opens the other record on the board page. No hub call here.
+const CollisionAlerts = require('./src/collision-alerts.js');
+const collisionAlerts = CollisionAlerts.createCollisions();
+function handleActivityEvent(ev) {
+  const r = collisionAlerts.handle(ev, CollisionAlerts.mineFrom(localSessions(aggregateState().sessions || [])));
+  if (r.notify) notifyCollision(r.collision);
+}
+function notifyCollision(c) {
+  console.log(`[collision] ${c.repo_id} · ${c.path}`);
+  if (IS_DEV_RUN || loadConfig().notifyOnStates === false || !Notification.isSupported()) return;
+  if (!pingAllowed(null, { signal: 'collision' })) return;
+  const note = new Notification({ title: 'Two sessions are editing the same file', body: CollisionAlerts.text(c), silent: true });
+  liveNotifications.add(note);
+  note.on('click', () => { liveNotifications.delete(note); void openCollisionRecord(c.other.record_id); });
+  note.on('close', () => liveNotifications.delete(note));
+  note.show();
+}
+async function openCollisionRecord(recordId) {
+  const c = collisionAlerts.list().find((x) => x.other.record_id === recordId || x.mine.record_id === recordId);
+  if (!c || !devMockReady) return { ok: false };
+  const target = c.other.record_id === recordId ? c : { ...c, other: c.mine };
+  try {
+    const open = getBuddy()[BudgetNotice.CONTRACT.openMethod]?.bind(getBuddy());
+    if (typeof open !== 'function') { openBuddy(CollisionAlerts.CONTRACT.boardPage); return { ok: true }; }
+    showDock();
+    const r = await open(CollisionAlerts.CONTRACT.boardPage, CollisionAlerts.fragment(target));
+    return { ok: !(r && r.ok === false) };
+  } catch (err) { console.warn('[collision] open failed:', err.message); return { ok: false }; }
+}
+app.whenReady().then(() => {
+  let stream = null;
+  try { stream = require('./src/activity-stream.js'); } catch (e) { if (!(e.code === 'MODULE_NOT_FOUND' && /activity-stream\.js'/.test(e.message))) console.warn('[collision] activity stream:', e.message); }
+  if (stream && !CollisionAlerts.attach(stream, handleActivityEvent)) console.warn('[collision] activity stream offers no subscription');
+});
+if (IS_DEV_RUN && !app.isPackaged && process.env.CLAUDE_BUDDY_COLLISION_HOOK === '1') global.__collisionInject = handleActivityEvent;
 const SessionOverview = require('./src/session-overview.js');
 const ProviderStatus = require('./src/provider-status.js');
 const sessionsSender = e => fromUtilityPage(e, 'sessions');
@@ -1489,12 +1527,13 @@ ipcMain.handle('sessions:state', e => {
   if (!sessionsSender(e)) return null;
   try {
     const configured = IS_DEV_RUN ? false : Adapters.get('codex').isActivityInstalled({ home: os.homedir(), runtime: HOOK_RUNTIME });
-    return SessionOverview.snapshot({ sessions: localSessions(aggregateState().sessions || []), activity: { configured, available: true }, now: Date.now(), enrich: BurstIpc.enrichSession, info: (row) => SessionActionsMain.rowInfo(row), handover: (row) => SessionHandoverMain.view(row), sharedTrees: (rows) => WorktreeShare.shared(rows) });
+    return SessionOverview.snapshot({ sessions: localSessions(aggregateState().sessions || []), activity: { configured, available: true }, now: Date.now(), enrich: BurstIpc.enrichSession, info: (row) => SessionActionsMain.rowInfo(row), handover: (row) => SessionHandoverMain.view(row), sharedTrees: (rows) => WorktreeShare.shared(rows), collisions: CollisionAlerts.rowCollisions(collisionAlerts) });
   } catch {
     return SessionOverview.snapshot({ sessions: [], activity: { available: false }, available: false, now: Date.now() });
   }
 });
 const SessionActionsMain = require('./src/session-actions-main.js').register({ ipcMain, sessionsAllowed: sessionsSender, sessions: () => localSessions(aggregateState().sessions || []), bridge: () => buddyWin?.sessionBridge, capture: () => buddyWin, tasks: () => { const t = getTasks(); t.start(); return t; }, clipboard, openPage: (id) => openBuddy(id), pageExists: (id) => !!BuddyPages.pageById(id), pickFolder: async () => { const r = await dialog.showOpenDialog(BrowserWindow.fromWebContents(buddyWin?.pageWebContents('sessions')) || undefined, { title: 'Choose the folder', properties: ['openDirectory'] }); return r.canceled ? null : r.filePaths[0]; } });
+ipcMain.handle('sessions:open-record', (e, recordId) => (sessionsSender(e) && typeof recordId === 'string' ? openCollisionRecord(recordId) : { ok: false }));
 ipcMain.handle('sessions:message', (e, session, text) => {
   if (!sessionsSender(e)) return { ok: false, error: 'Not allowed.' };
   if (typeof session !== 'string' || typeof text !== 'string' || !text.trim() || text.length > 500) return { ok: false, error: 'Write a message first.' };
@@ -4217,7 +4256,7 @@ utilityHandle('mcp-set-enabled', settingsOnly, (_e, on) => {
 
 const AiTools = require('./src/ai-tools-wire.js').wire({ ipcMain, shell, clipboard, home: os.homedir(), runtime: HOOK_RUNTIME, rootDir: ROOT_DIR, fromPage: (e) => fromUtilityPage(e, 'aitools'), askFromWidget: () => !!loadConfig().askFromWidget, ephemeral: EPHEMERAL, openPage: openBuddy });
 const aiToolsOpen = (destination) => AiTools.open(destination);
-require('./src/home-main.js').register({ ipcMain, allowed: (e) => fromUtilityPage(e, 'home'), state: () => aggregateState(), localSessions, tools: () => AiTools.quick(), myDay: MyDay, openPage: openBuddy, openAiTools: aiToolsOpen });
+require('./src/home-main.js').register({ ipcMain, allowed: (e) => fromUtilityPage(e, 'home'), state: () => aggregateState(), localSessions, tools: () => AiTools.quick(), myDay: MyDay, openPage: openBuddy, openAiTools: aiToolsOpen, collisions: CollisionAlerts.rowCollisions(collisionAlerts) });
 // Preferences' "Connect other agents" buttons open the AI tools page on that
 // tool, where the exact change is previewed and confirmed (src/ai-tools.js).
 ipcMain.handle('connect-agent', async (e, which) => {

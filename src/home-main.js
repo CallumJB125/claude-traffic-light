@@ -39,11 +39,11 @@ function needs(inputs, now) {
 }
 
 // Live = reported in the last 90 s and not ended; the rest are only counted.
-function running(sessions, now) {
-  const snap = SessionOverview.snapshot({ sessions, now });
+function running(sessions, now, collisions = null) {
+  const snap = SessionOverview.snapshot({ sessions, now, collisions });
   const open = snap.sessions.filter((s) => s.status !== 'Ended');
   const live = open.filter((s) => s.freshness === 'recent');
-  return { quiet: open.length - live.length, items: live.slice(0, LIST_MAX).map((s) => ({ provider: s.provider, project: s.project, status: s.status, age_ms: s.age_ms })) };
+  return { quiet: open.length - live.length, items: live.slice(0, LIST_MAX).map((s) => ({ provider: s.provider, project: s.project, status: s.status, age_ms: s.age_ms, ...(s.collisions ? { collision: s.collisions[0].text } : {}) })) };
 }
 
 function today(spend, inputs, now) {
@@ -70,7 +70,7 @@ function cards(snapshot) {
 // Tasks finished while you were away (Plus). Null when there is nothing, or the plan lacks it.
 const morningReport = () => require('./morning-report.js').current();
 
-function register({ ipcMain, allowed, state, localSessions, tools, myDay, openPage, openAiTools, morning = morningReport, now = Date.now }) {
+function register({ ipcMain, allowed, state, localSessions, tools, myDay, openPage, openAiTools, morning = morningReport, now = Date.now, collisions = null }) {
   let toolsMemo = { at: -Infinity, value: null };
   let teamMemo = { at: -Infinity, value: null };
   const part = (fn) => { try { return fn(); } catch { return null; } };
@@ -88,7 +88,7 @@ function register({ ipcMain, allowed, state, localSessions, tools, myDay, openPa
       observed_at: time,
       banner: toolsMemo.value,
       needs: st ? part(() => needs(inputs, time)) : null,
-      running: st ? part(() => running(localSessions(st.sessions || []), time)) : null,
+      running: st ? part(() => running(localSessions(st.sessions || []), time, collisions)) : null,
       today: st ? part(() => today(st.spend, inputs, time)) : null,
       team: teamMemo.value,
       morning: part(() => morning()?.state() ?? null),

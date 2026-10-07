@@ -190,6 +190,8 @@ export function cardFace(view, { elapsed_ms = 0, connection_lost = false } = {})
   let reason;
   let actions = state === 'blocked' ? [...(BLOCKED_ACTIONS[view.blocked_kind] ?? ['answer'])] : [...(ACTIONS[state] ?? [])];
   if (state === 'failed') actions = view.fail_kind === 'limit' ? ['continue_with_another_ai', 'take_over', 'retry'] : ['retry', 'take_over'];
+  // A card carrying its WorkRecord can also go to a teammate (TEAM-CONTEXT-CONTRACT.md, Handoff).
+  if (view.record_id && !view.handoff_requested && actions.includes('continue_with_another_ai')) actions.splice(actions.indexOf('continue_with_another_ai') + 1, 0, 'hand_to_teammate');
   if (view.run && ['running', 'quiet', 'blocked'].includes(state)) actions.push('switch_ai');
   if (state === 'handed_over' && view.handover_hold) actions = view.handover_provenance === 'checkpoint_complete'
     ? ['view_handover', 'take_over_with_claude'] : ['view_handover'];

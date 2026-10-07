@@ -173,6 +173,14 @@ test('plan limit reads "Plan limit reached" with continue_with_another_ai; no ne
   assert.equal(cardFace(view('failed', { fail_kind: 'network' })).label, 'Waiting for network');
 });
 
+test('a card carrying its WorkRecord offers Hand to teammate beside continue_with_another_ai, until handed', () => {
+  const limit = { fail_kind: 'limit', limit_resets_in_ms: 5 * MIN };
+  assert.deepEqual(cardFace(view('failed', { ...limit, record_id: 'inst:claude:s1' })).actions, ['continue_with_another_ai', 'hand_to_teammate', 'take_over', 'retry']);
+  assert.deepEqual(cardFace(view('failed', { ...limit, record_id: 'inst:claude:s1', handoff_requested: true })).actions, ['continue_with_another_ai', 'take_over', 'retry']);
+  assert.deepEqual(cardFace(view('failed', limit)).actions, ['continue_with_another_ai', 'take_over', 'retry'], 'no record, no handoff');
+  assert.ok(!cardFace(view('failed', { fail_kind: 'network', record_id: 'inst:claude:s1' })).actions.includes('hand_to_teammate'));
+});
+
 test('a run served by Burst\'s secondary keeps running and carries a "via secondary" badge', () => {
   const f = cardFace(view('running', { live: { ...liveOk, via_secondary: true } }));
   assert.equal(f.state, 'running');

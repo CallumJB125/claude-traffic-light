@@ -165,6 +165,7 @@ export const ACTION_LABEL = {
   request_changes: 'Request changes',
   retry: 'Retry',
   continue_with_another_ai: 'Continue with another AI',
+  hand_to_teammate: 'Hand to teammate…',
   resume: 'Resume',
   handover_ai: 'Hand over to another AI',
 };

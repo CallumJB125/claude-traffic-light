@@ -214,6 +214,22 @@ export function handOverDialog(dlg, model) {
       h('button', { type: 'submit', class: 'btn btn-primary', disabled: dlg.busy || null }, dlg.busy ? 'Handing over…' : 'Hand over'))));
 }
 
+export function handToTeammateDialog(dlg, model) {
+  const view = model.entries.find((e) => e.view.id === dlg.cardId)?.view;
+  if (!view) return null;
+  const meId = model.me?.member?.id;
+  const others = [...model.members.values()].filter((m) => m.member_id !== meId);
+  return shell('hand-to-teammate', `Hand ${view.key} to a teammate`, h('form', { class: 'modal-body', 'data-form': 'hand-to-teammate', 'data-card': view.id },
+    h('p', null, 'Their next session brief lists it with your shared handover, and they can continue it with any AI. Nothing stops or starts here.'),
+    others.length ? field('htt-member', 'Teammate', h('select', { id: 'htt-member', name: 'member_id', class: 'input', required: true },
+      others.map((m) => h('option', { key: m.member_id, value: m.member_id }, m.name)))) : h('p', { class: 'hint' }, 'Invite a teammate first.'),
+    field('htt-note', 'Note (optional)', h('textarea', { id: 'htt-note', name: 'note', class: 'input', rows: 3, maxlength: 500 })),
+    errorLine(dlg),
+    h('div', { class: 'modal-foot' },
+      h('button', { type: 'button', class: 'btn', 'data-action': 'close-dialog' }, 'Cancel'),
+      h('button', { type: 'submit', class: 'btn btn-primary', disabled: dlg.busy || !others.length || null }, dlg.busy ? 'Handing over…' : 'Hand to teammate'))));
+}
+
 export function changesDialog(dlg, model) {
   const view = model.entries.find((e) => e.view.id === dlg.cardId)?.view;
   if (!view) return null;
@@ -273,6 +289,7 @@ export function dialog(model) {
     case 'give': return giveDialog(d, model);
     case 'confirm': return confirmDialog(d, model);
     case 'handover': return handOverDialog(d, model);
+    case 'hand-to-teammate': return handToTeammateDialog(d, model);
     case 'switch-ai': return switchAiDialog(d, model);
     case 'changes': return changesDialog(d, model);
     case 'new': return newCardDialog(d, model);

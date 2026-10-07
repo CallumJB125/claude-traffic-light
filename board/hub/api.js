@@ -24,6 +24,7 @@ import { remoteScope, remoteMutation } from './remote/context.js';
 import { WorkflowExecutor } from './workflow-executor.js';
 import { requireStorage } from './storage-watch.js';
 import { observationContext, validObservation, sentryStatus } from './integrations/sentry/observation.js';
+import { cardSeed } from './activity-handoff.js';
 
 const ACTION_EVENTS = {
   dispatch: 'dispatch', cancel: 'cancel', stop: 'stop', retry: 'retry', take_over: 'take_over', hand_over: 'hand_over',
@@ -253,6 +254,11 @@ export class Api {
   detail(member, cardId) {
     const row = this.cardFor(member, cardId);
     return cardDetail(this.hub, row, member.id, (e) => (isFeedKind(e.kind) ? feedEvent(this.hub, e) : null));
+  }
+
+  // continue_with_another_ai: what the new session starts from (activity-handoff.js).
+  continueSeed(member, cardId, recordId = null, log = null) {
+    return cardSeed({ hub: this.hub, log }, member, this.cardFor(member, cardId), recordId || null);
   }
 
   handover(member, cardId) {
