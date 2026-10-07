@@ -1060,7 +1060,18 @@ async function refreshDetail(cardId, { communication = false, ownership = false 
   try {
     const data = await api.card(cardId);
     if (!current()) return;
+    if (state.detail.localHandover) data.local_handover = state.detail.localHandover;
     state.detail = { ...state.detail, data, rx: perf(), error: null };
+    // Only the desktop app can answer: the handover it wrote locally for a session attached to this card.
+    if (typeof globalThis.plexiformDesktop?.localHandover === 'function') {
+      Promise.resolve(globalThis.plexiformDesktop.localHandover(cardId)).then((r) => {
+        const markdown = r?.markdown ?? null;
+        if (!current() || !markdown || state.detail.localHandover?.markdown === markdown) return;
+        const local_handover = { markdown };
+        state.detail = { ...state.detail, localHandover: local_handover, data: { ...state.detail.data, local_handover } };
+        update();
+      }, () => {});
+    }
     if (state.detail.tab === 'ownership' && !data.card.archived
       && (ownership || !state.detail.ownershipLoaded || perf() - (state.detail.ownershipRx ?? 0) >= 5000)) {
       try {

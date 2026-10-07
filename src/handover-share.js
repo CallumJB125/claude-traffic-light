@@ -56,4 +56,19 @@ function create({ writer, links, rows, rootOf, getRoute, send, home = null, user
   return { pump };
 }
 
-module.exports = { create, GAP_MS, PER_HOUR };
+// Which attached/captured session rows the board page of one hub may see the local handover of.
+// The personal board is on this computer, so all of its rows. A team hub is a remote page: only rows
+// whose repository the person opted in to share, i.e. what that hub may receive anyway.
+async function rowsForHub({ rows, sessions, hub, shared, rootOf }) {
+  const out = [];
+  for (const r of Array.isArray(rows) ? rows : []) {
+    if (!hub) { if (r.destination?.kind === 'local') out.push(r); continue; }
+    if (r.destination?.kind !== 'team' || r.destination.hub !== hub) continue;
+    const s = (Array.isArray(sessions) ? sessions : []).find((x) => x && x.sessionId === r.session_id && (Handover.adapterOf(x.source) === 'claude-code' ? 'claude' : Handover.adapterOf(x.source)) === r.provider);
+    const root = s && typeof s.cwd === 'string' ? await rootOf(s.cwd) : null;
+    if (root && shared[BurstHandover.repoKey(root)] === true) out.push(r);
+  }
+  return out;
+}
+
+module.exports = { create, rowsForHub, GAP_MS, PER_HOUR };

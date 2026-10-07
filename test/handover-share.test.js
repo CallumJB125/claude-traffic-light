@@ -60,3 +60,11 @@ test('links store: attach validates, survives a restart, shares are 16-hex repo 
   assert.equal(Handover.forCard({ text: () => DOC }, 'c1', again.rows()).markdown.includes('Session handover'), true);
   assert.equal(fs.statSync(path.join(r.dir, 'links.json')).mode & 0o077, 0);
 });
+test('the board page of a team hub sees local handovers only for opted-in repos; the personal board sees its own', async () => {
+  const rows = [{ provider: 'codex', session_id: 's1', destination: DEST }, { provider: 'codex', session_id: 's2', destination: { kind: 'local' } }];
+  const args = { rows, sessions: [session, { ...session, sessionId: 's2' }], rootOf: async () => '/Users/me/work/app' };
+  assert.deepEqual((await Share.rowsForHub({ ...args, hub: DEST.hub, shared: {} })).length, 0);
+  assert.deepEqual((await Share.rowsForHub({ ...args, hub: DEST.hub, shared: { [key]: true } })).map((r) => r.session_id), ['s1']);
+  assert.deepEqual((await Share.rowsForHub({ ...args, hub: null, shared: {} })).map((r) => r.session_id), ['s2']);
+  assert.equal((await Share.rowsForHub({ ...args, hub: 'https://other.test', shared: { [key]: true } })).length, 0);
+});

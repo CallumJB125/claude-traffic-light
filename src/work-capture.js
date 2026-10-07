@@ -129,7 +129,7 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
     // would duplicate existing cards, and capture failure must not close Buddy.
     const notice='Automatic cards are paused because private capture storage is unavailable. Your saved identities have been kept.';
     log('automatic cards unavailable: private storage');
-    return {observe:()=>Promise.resolve(),captureOnce:async()=>({ok:false,reason:'storage'}),enabled:()=>false,setEnabled:()=>false,choose:async()=>false,choices:()=>[],snapshot:()=>[],notice:()=>notice,stop:async()=>{},idle:()=>Promise.resolve()};
+    return {observe:()=>Promise.resolve(),captureOnce:async()=>({ok:false,reason:'storage'}),routes:async()=>({routes:[],complete:false}),enabled:()=>false,setEnabled:()=>false,choose:async()=>false,choices:()=>[],snapshot:()=>[],notice:()=>notice,stop:async()=>{},idle:()=>Promise.resolve()};
   }
   let state=store.state,latest=[],active=null,stopped=false,lastCatalogAt=0,catalog={routes:[],complete:true},notice=null;
   const changed=()=>{try{onChange();}catch{/* UI updates do not affect capture */}};
@@ -250,6 +250,7 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
       const done=state.tasks[key];
       return done?.card_id?{ok:true,card_id:done.card_id,destination:{...done.destination}}:{ok:false,reason:done?.untracked?(done.reason||'untracked'):'send_failed'};
     },
+    routes:()=>getRoutes(),
     enabled:()=>state.enabled!==false,
     notice:()=>notice,
     setEnabled(on){if(!commit(next=>{next.enabled=!!on;}))return false;if(!on)latest=null;changed();return true;},
