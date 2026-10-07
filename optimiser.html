@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; base-uri 'none'; form-action 'none'" />
+<title>Usage optimiser</title>
+<link rel="stylesheet" href="tokens.css" />
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: var(--text-base)/1.45 var(--font); -webkit-font-smoothing: antialiased; }
+  @media (prefers-color-scheme: light) {
+    :root { color-scheme: light; --bg: #eceaf0; --panel: #fbfafc; --panel-2: #f3f1f6; --line: #dedae4; --line-strong: #c8c3d1; --text: #1d1a22; --muted: #5b5566; --faint: #6b6577; --accent: #b4532f; --accent-ink: #ffffff; }
+  }
+  body { display: flex; flex-direction: column; user-select: none; cursor: default; }
+  .bar { flex: none; height: 48px; display: flex; align-items: center; gap: var(--space-3); padding: 0 var(--space-5); border-bottom: 1px solid var(--line); background: var(--bg); }
+  .bar h1 { margin: 0; font-size: var(--text-lg); font-weight: 650; letter-spacing: -0.01em; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: var(--radius-pill); border: 1px solid var(--line); background: var(--panel); color: var(--muted); font-size: var(--text-xs); font-weight: 600; }
+  .chip[hidden] { display: none; }
+  .chip i { width: 7px; height: 7px; border-radius: 50%; background: var(--idle); }
+  .chip[data-tone="green"] i { background: var(--green); }
+  .chip[data-tone="amber"] i { background: var(--amber); }
+  .chip[data-tone="red"] i { background: var(--red); }
+  .spacer { flex: 1; }
+  button { font: inherit; color: var(--text); background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius); min-height: 28px; padding: 0 12px; }
+  button:hover:not(:disabled) { border-color: var(--line-strong); }
+  button:disabled { opacity: 0.5; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+  button.link { background: none; border-color: transparent; color: var(--muted); padding: 0 8px; }
+  button.link:hover:not(:disabled) { color: var(--text); border-color: transparent; text-decoration: underline; }
+  main { flex: 1; min-height: 0; overflow-y: auto; display: flex; align-items: flex-start; justify-content: center; padding: 56px var(--space-5) var(--space-6); }
+  .empty { max-width: 520px; width: 100%; padding: var(--space-5); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); }
+  .empty h2 { margin: 0 0 var(--space-2); font-size: var(--text-xl); font-weight: 650; }
+  .empty p { margin: 0; color: var(--muted); max-width: 62ch; user-select: text; }
+  .actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-4); }
+  .note { min-height: 1.45em; margin-top: var(--space-3); font-size: var(--text-xs); color: var(--muted); }
+  .loading { color: var(--faint); margin-top: var(--space-6); }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+  <header class="bar">
+    <h1>Usage optimiser</h1>
+    <span class="chip" id="chip" role="status" hidden><i aria-hidden="true"></i><span id="chip-text"></span></span>
+    <span class="spacer"></span>
+    <button type="button" class="link" id="browser" hidden>Open in browser</button>
+    <button type="button" id="refresh">Refresh</button>
+  </header>
+  <main>
+    <p class="loading" id="loading">Loading Claude Burst…</p>
+    <section class="empty" id="empty" hidden aria-live="polite">
+      <h2 id="headline"></h2>
+      <p id="detail"></p>
+      <div class="actions" id="actions"></div>
+      <div class="actions"><button type="button" class="link" id="docs">What is Claude Burst? Read the docs</button></div>
+      <p class="note" id="note" role="status"></p>
+    </section>
+  </main>
+  <script src="optimiser.js"></script>
+</body>
+</html>

@@ -99,11 +99,11 @@ function statusView(d, { platform = process.platform } = {}) {
       if (s.active) {
         out.kind = 'on';
         out.detail = `On, ${s.mode} mode, version ${s.version}. Route: ${s.route === 'SECONDARY' ? 'secondary' : 'primary'}.`;
-        out.actions = [A('off', 'Turn Burst off', { primary: true }), ...(updateAvailable ? [A('update', 'Update')] : []), A('open-dashboard', 'Open dashboard'), A('uninstall', 'Uninstall…')];
+        out.actions = [A('off', 'Turn Burst off', { primary: true }), ...(updateAvailable ? [A('update', 'Update')] : []), A('open-dashboard', 'Open dashboard'), A('open-browser', 'Open in browser'), A('uninstall', 'Uninstall…')];
       } else {
         out.kind = 'off';
         out.detail = s.inactiveReason || 'Installed, and not in Claude Code\'s path.';
-        out.actions = [A('enable', 'Turn on', { primary: true }), ...(updateAvailable ? [A('update', 'Update')] : []), A('open-dashboard', 'Open dashboard'), A('uninstall', 'Uninstall…')];
+        out.actions = [A('enable', 'Turn on', { primary: true }), ...(updateAvailable ? [A('update', 'Update')] : []), A('open-dashboard', 'Open dashboard'), A('open-browser', 'Open in browser'), A('uninstall', 'Uninstall…')];
       }
       return out;
     }

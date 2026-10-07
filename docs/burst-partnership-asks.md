@@ -46,6 +46,15 @@ Include the repo you already resolve internally (`repos.go`) in `/api/v1/usage` 
 { "session": "abc123", "repo": "plexiform", "provider": "together", "usd": 0.42 }
 ```
 
+## 8. An embeddable dashboard
+
+Plexiform now shows your dashboard inside its own window (a Usage optimiser page), loaded top-level in a sandboxed view of its own, because `X-Frame-Options: DENY` and `frame-ancestors 'none'` rule out an iframe. It works today by injecting CSS and reading the menu from the page, which is brittle. In rough priority order:
+
+1. **`?embed=1`.** A mode that hides the `<header>` and `<aside class="side">` and drops the outer padding, so we do not hide them from outside.
+2. **A stable, documented contract for theming.** A list of the CSS custom properties we may override (today: `--bg --panel --panel-2 --border --text --muted --faint --accent --ok --ok-bg --pass --pass-bg --warn --warn-bg --bad --bad-bg --mono --radius --head-bg --thead-bg --shadow --pc-a --pc-b --pc-c --pcs-saved --pcs-cost --grid`) and of the section ids the menu points at (`data-target` values such as `cards`, `sec-models`, `sec-compaction`), with a promise to rename them only with a deprecation note.
+3. **Deep links.** `/#sec-models` (hash) and a `postMessage({ type: 'burst:goto', section: 'sec-models' })` listener, plus a read-only `postMessage` reply listing the sections (id, label, group), so an embedder does not parse your markup.
+4. **Permission to be embedded by us.** A documented way to be loaded in a first-party webview: for example `Cross-Origin-Embedder-Policy`/frame policy that allows a named embedder, or an `embed=1`-only relaxation (`frame-ancestors` limited to a registered origin). Until then Plexiform keeps loading it top-level and refuses everything but your origin.
+
 ## What we promise in return
 
-Only GET requests from an allow-list (plus `POST /api/upgrade` on an explicit Update click). We never proxy `/api/secondary-key`, never expose raw admin access to a renderer or any remote, and show your README's "What it changes on your Mac" text before every action.
+The embedded dashboard runs with no preload and no access to Plexiform's data, and can reach nothing but Burst's own address. Only GET requests from an allow-list (plus `POST /api/upgrade` on an explicit Update click). We never proxy `/api/secondary-key`, never expose raw admin access to a renderer or any remote, and show your README's "What it changes on your Mac" text before every action.

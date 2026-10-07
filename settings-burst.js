@@ -8,6 +8,7 @@
   let timer = null;
   let visible = false;
   let view = null;
+  const NO_CONSENT = new Set(['open-dashboard', 'open-browser']);
 
   const EXPLAIN = 'Keeps long Claude Code sessions going without the pause: Burst summarises the old part in the background and swaps it in. It can raise cost slightly when a summary is made; savings shown below.';
   const fmtTokens = (n) => (n >= 1e6 ? `${+(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n));
@@ -129,10 +130,10 @@
       b.type = 'button';
       b.textContent = a.label;
       if (!a.primary) b.className = 'secondary';
-      if (a.kind !== 'open-dashboard') b.addEventListener('mouseenter', () => showConsent(a.kind));
-      b.addEventListener('focus', () => { if (a.kind !== 'open-dashboard') showConsent(a.kind); });
+      if (!NO_CONSENT.has(a.kind)) b.addEventListener('mouseenter', () => showConsent(a.kind));
+      b.addEventListener('focus', () => { if (!NO_CONSENT.has(a.kind)) showConsent(a.kind); });
       b.addEventListener('click', async () => {
-        if (a.kind !== 'open-dashboard') await showConsent(a.kind);
+        if (!NO_CONSENT.has(a.kind)) await showConsent(a.kind);
         const r = await window.settingsApi.burstAction({ kind: a.kind, mode: mode() }).catch(() => ({ ok: false, error: 'Something went wrong.' }));
         $('burst-result').textContent = r.cancelled ? 'Cancelled. Nothing changed.' : r.ok ? 'Started in Terminal. This card updates when Burst answers.' : (r.error || '');
         poll();

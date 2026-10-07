@@ -17,7 +17,7 @@ const http = require('node:http'); // privacy-flow: local-board-hub
 const crypto = require('node:crypto');
 const { pathToFileURL } = require('node:url');
 const { BaseWindow, BrowserWindow, WebContentsView, ipcMain, session, shell, utilityProcess, app, nativeTheme, net, safeStorage, dialog } = require('electron'); // privacy-flow: team-hub-account
-const { PAGES, GROUPS, SECTIONS, pageById, hubPageUrl, fragmentOk, navDecision, openDecision, connectDecision, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl } = require('./pages');
+const { PAGES, GROUPS, SECTIONS, sectionsFor, pageById, hubPageUrl, fragmentOk, navDecision, openDecision, connectDecision, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl } = require('./pages');
 const { createHubSupervisor } = require('./hub-process');
 const { createWorkspaceStore, normalizeHubUrl, normalizeLinkHub, accessTeamFromLocation, partitionFor: teamPartition, integrationPartitionFor, hubKey, hostOf } = require('./workspaces');
 const { createAccountClient, pinnedTransport, bearerScope, bearerHeaders } = require('./accounts');
@@ -28,6 +28,9 @@ const { createConnectLife } = require('./connect-life');
 const BRAND = require('./brand');
 const { clientArtifactTarget, clientExportTarget, saveClientArtifact, saveClientExport } = require('./client-download');
 const { createViewLifecycle } = require('../src/view-lifecycle');
+const { createOptimiser } = require('./optimiser');
+const { createThemeInjector } = require('./burst-theme');
+const BurstEmbed = require('../src/burst-embed');
 const { createWorkCapture } = require('../src/work-capture');
 const { createMyDayBroker } = require('../src/my-day-broker');
 const { createSessionBridge } = require('./session-bridge');
@@ -192,6 +195,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       if (!v || v === content) return;
       localViews.delete(id);
       dispose(v, win);
+      if (id === 'optimiser') optimiser.drop();
     },
   });
   const setupIdentityListeners=new Set();let setupIdentityMarkers=[];
@@ -201,6 +205,24 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   let hubInfo = null; // {url, origin, accessTeam, partition, team, bearer, org}
   let viewError = null; // the hub is fine but its page failed to load
   let hubLoading = null;
+
+  // Usage optimiser: Burst's dashboard in its own locked view above the native page (see optimiser.js).
+  let burstApi = null;
+  const optimiser = createOptimiser({
+    newView: (o) => new WebContentsView(o),
+    harden: hardenSession,
+    dispose: (v) => dispose(v, win),
+    openExternal: (u) => shell.openExternal(u), // privacy-flow: burst-dashboard-links
+    burst: () => burstApi,
+    win: () => win,
+    isContent: () => !!content && content === localViews.get('optimiser'),
+    isSelected: () => selected === 'optimiser',
+    bounds: () => { const { width, height } = win.getContentBounds(); return { x: SIDEBAR_W, width: Math.max(0, width - SIDEBAR_W), height }; },
+    sendState: () => { const wc = localViews.get('optimiser')?.webContents; if (wc && !wc.isDestroyed()) wc.send('optimiser:state', optimiser.payload()); },
+    navChanged: () => pushState(),
+    injector: createThemeInjector(),
+    background: (v) => v.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#1c1a1f' : '#eceaf0'),
+  });
 
   // Local hub, started lazily the first time a board page opens.
   const mode = process.env.BUDDY_BOARD_AUTH === 'dev' && isDev ? 'dev' : 'local';
@@ -354,6 +376,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     const { width, height } = win.getContentBounds();
     sidebar?.setBounds({ x: 0, y: 0, width: SIDEBAR_W, height });
     content?.setBounds({ x: SIDEBAR_W, y: 0, width: Math.max(0, width - SIDEBAR_W), height });
+    optimiser.layout();
   }
 
   function attach(view) {
@@ -363,6 +386,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     if (view) win.contentView.addChildView(view);
     layout();
     lifecycle.setCurrent([...localViews].find(([, v]) => v === view)?.[0] ?? null);
+    optimiser.sync();
   }
 
   function pushState() {
@@ -381,6 +405,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       selected,
       workspaces: store.list().map(({ id, name, kind, group }) => ({ id, name, kind, group: group ?? null })),
       active: store.active().id,
+      optimiser: selected === 'optimiser' ? { nav: optimiser.nav(), active: optimiser.active() } : null,
       signedIn: store.hubs().some(signedIn),
       runners: flow.runningTeams(),
       hub: team
@@ -808,7 +833,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     selected = id;
     pushState();
     if (page.kind === 'hub') showHubPage(page);
-    else if (page.kind === 'local' && page.file) showLocal(page);
+    else if (page.kind === 'local' && page.file) { showLocal(page); if (id === 'optimiser') optimiser.open(); }
     else showInfo(page);
   }
 
@@ -872,7 +897,14 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   ipcMain.on('buddy:signout', onSignOut);
   ipcMain.on('buddy:select', onSelect);
   ipcMain.on('buddy:retry', onRetry);
-  ipcMain.handle('buddy:pages', (e) => (fromSidebar(e) ? { pages: PAGES, groups: GROUPS, sections: SECTIONS, brand: { name: BRAND.NAME, hubText: BRAND.HUB_TEXT } } : null));
+  const fromOptimiser = (e) => { const wc = localViews.get('optimiser')?.webContents; return !!wc && e.sender === wc && isLocalPage(e.senderFrame?.url ?? ''); };
+  ipcMain.on('optimiser:ready', (e) => { if (fromOptimiser(e)) e.sender.send('optimiser:state', optimiser.payload()); });
+  ipcMain.on('optimiser:refresh', (e) => { if (fromOptimiser(e)) optimiser.refresh({ reload: true }); });
+  ipcMain.handle('optimiser:act', (e, kind) => (fromOptimiser(e) ? optimiser.act(kind) : { ok: false }));
+  ipcMain.handle('optimiser:open-browser', (e) => (fromOptimiser(e) ? optimiser.openBrowser() : { ok: false }));
+  ipcMain.on('optimiser:docs', (e) => { if (fromOptimiser(e)) shell.openExternal(BurstEmbed.DOCS_URL); }); // privacy-flow: burst-dashboard-links
+  ipcMain.on('buddy:optimiser-section', (e, id) => { if (fromSidebar(e) && typeof id === 'string') optimiser.section(id); });
+  ipcMain.handle('buddy:pages', (e) => (fromSidebar(e) ? { pages: PAGES, groups: GROUPS, sections: sectionsFor(), brand: { name: BRAND.NAME, hubText: BRAND.HUB_TEXT } } : null));
   for (const [op, fn] of Object.entries(flow.ACCT)) {
     ipcMain.handle(`buddy:acct:${op}`, async (e, ...args) => {
       if (!fromAccount(e)) return { ok: false, error: 'Not allowed.' };
@@ -948,6 +980,8 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       // page keeps its socket). The hub keeps running while the app runs, so
       // reopening is instant; it stops with the app.
       for (const v of [sidebar, infoView, hubView, accountView, ...localViews.values()]) dispose(v, null);
+      optimiser.drop();
+      optimiser.stop();
       localViews.clear();
       lifecycle.reset();
       win = null; sidebar = null; content = null; hubView = null; infoView = null; accountView = null;
@@ -1052,6 +1086,8 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     // Dev only: drive the account page as a person would (fills and clicks in the page).
     devPage: (js) => (content === accountView && accountView ? accountView.webContents.executeJavaScript(js) : Promise.resolve(null)),
     // A local page's webContents, for main's sender checks (null if not open).
+    // main.js hands over the Burst wiring (a thunk, so creation order does not matter).
+    attachBurst: (get) => { burstApi = { snapshot: () => get().snapshot(), refresh: (f) => get().refresh(f), act: (k) => get().act(k) }; },
     pageWebContents: (id) => localViews.get(id)?.webContents ?? null,
     accountWebContents: () => accountView?.webContents ?? null,
     // Fixed page ids from main only; queued callbacks never jump to a replacement renderer.

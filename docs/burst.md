@@ -1,6 +1,6 @@
 # Claude Burst in Plexiform
 
-Claude Burst is a separate, open-source local gateway for Claude Code on a Mac. It keeps you working through usage limits: when your plan's limit is reached it tries other Claude models on your plan, then makes a separate, paid request through a provider you chose and pay for. Plexiform does not bundle or modify Burst. Settings has a Claude Burst card that shows whether Burst is on and lets you turn it on or off.
+Claude Burst is a separate, open-source local gateway for Claude Code on a Mac. It keeps you working through usage limits: when your plan's limit is reached it tries other Claude models on your plan, then makes a separate, paid request through a provider you chose and pay for. Plexiform does not bundle or modify Burst. Settings has a Claude Burst card that shows whether Burst is on and lets you turn it on or off, and the **Usage optimiser** page (Activity, after Stats) shows Burst's own dashboard inside Plexiform.
 
 macOS only. On Windows and Linux the card says so and does nothing.
 
@@ -19,6 +19,19 @@ Plexiform shows this list, the terms note, and the exact command before every ac
 - Quitting Plexiform leaves Burst as it was.
 
 Plexiform only reads Burst's local admin address (`127.0.0.1`), and only trusts it when it is the gateway started by Burst's own LaunchAgent. Otherwise the card says Untrusted and reads nothing.
+
+## Usage optimiser (Burst's dashboard inside Plexiform)
+
+Burst's dashboard is a web page on its local admin address. It refuses to be framed (`X-Frame-Options: DENY`), so Plexiform loads it as its own page in a separate view, in its own storage (`persist:burst-dashboard`), sandboxed, with no preload and no access to Plexiform's data or APIs.
+
+- **When it loads.** Only after Plexiform has confirmed that the program answering is your Burst install (the same version and process check as the card), and again on every reload. If Burst is absent, untrusted, too old (before 0.19) or not answering, the page shows a native Plexiform message instead, with the same consent-gated actions as Settings (Turn on, Repair, Update, Turn Burst off), and a link to these docs. It is never blank.
+- **What it may do.** The view can only go to Burst's exact address. Links to Anthropic's documentation sites and GitHub open in your browser (https only); every other link, pop-up, permission request and download is refused, and the page cannot make network requests anywhere but Burst's own address.
+- **How it looks.** Plexiform overrides Burst's colour variables and typography with its own, in light and dark. Burst's own header and menu are hidden. Its sections (Overview, Spend, Context & compaction, Routing, Sessions & handover, This Mac and so on) appear as sub-items under Usage optimiser in the sidebar, read from the page when it loads (at most ten); clicking one activates that section. If Burst renames things, the page still works, just less styled.
+- **Top bar.** The page has Plexiform's own bar: the Burst status chip, **Open in browser** (the same dashboard at `127.0.0.1` in your browser, for power users) and **Refresh**.
+- **Resources.** Like any page it is closed when you have been away from it for a minute, and rebuilt when you come back.
+- **Hidden controls.** Burst's own header (for example its Reinstall and revert buttons) is hidden here. Turn Burst off and Repair stay available from Plexiform (Settings, the menu bar menu and this page's messages), and **Open in browser** shows the untouched dashboard.
+
+The card's **Open dashboard** opens this page; **Open in browser** is the secondary way in.
 
 ## What Plexiform shows from Burst
 

@@ -74,6 +74,7 @@ function build() {
   buttons.clear();
   sectionBtns.clear();
   subLists.clear();
+  optKey = '';
   const byId = new Map();
   for (const p of pages) { byId.set(p.id, p); for (const c of p.children ?? []) byId.set(c.id, c); }
   const ul = el('ul', { class: 'nav-list' });
@@ -93,6 +94,28 @@ function build() {
   paint();
 }
 
+// The Usage optimiser's own sections (read from Burst's dashboard by main) unfold under its entry while it is open.
+let optKey = '';
+function paintOptimiserNav() {
+  const li = buttons.get('optimiser')?.parentElement;
+  if (!li) return;
+  const nav = state.selected === 'optimiser' && state.optimiser ? state.optimiser.nav : [];
+  const active = state.optimiser ? state.optimiser.active : null;
+  const key = JSON.stringify([nav, active]);
+  if (key === optKey) return;
+  optKey = key;
+  li.querySelector('.nav-sub-leaf')?.remove();
+  if (!nav.length) return;
+  const ul = el('ul', { class: 'nav-sub nav-sub-leaf', 'aria-label': 'Usage optimiser sections' });
+  for (const n of nav) {
+    const b = el('button', { type: 'button', class: 'nav-item nav-child nav-leaf', 'data-section-id': n.id }, el('span', { class: 'nav-label' }, n.label));
+    if (n.id === active) b.setAttribute('aria-current', 'location');
+    b.addEventListener('click', () => window.buddy.optimiserSection(n.id));
+    ul.append(el('li', {}, b));
+  }
+  li.append(ul);
+}
+
 // From main (brand.js), with the page list.
 let HUB_TEXT = {};
 
@@ -107,6 +130,7 @@ function paint() {
     if (id === open) btn.setAttribute('data-active', ''); else btn.removeAttribute('data-active');
     subLists.get(id).hidden = id !== open;
   }
+  paintOptimiserNav();
   const hub = document.getElementById('hub');
   const s = state.hub?.state;
   const runners = s === 'failed' ? [] : state.runners ?? [];

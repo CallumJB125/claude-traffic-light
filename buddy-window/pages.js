@@ -35,6 +35,8 @@ const PAGES = [
   { id: 'team', title: 'Team', icon: 'team', kind: 'local', screen: 'team', group: 'team' },
   { id: 'usage', title: 'Usage', icon: 'chart', kind: 'local', file: 'lights.html', preload: 'lights-preload.js', query: { embedded: '1', view: 'mix' }, group: 'you' },
   { id: 'stats', title: 'Stats', icon: 'chart', kind: 'local', file: 'lights.html', preload: 'lights-preload.js', query: { embedded: '1', view: 'stats' }, group: 'you' },
+  // macOnly: shows Claude Burst's dashboard (burst-embed.js), so it stays out of the sidebar elsewhere.
+  { id: 'optimiser', title: 'Usage optimiser', icon: 'chart', kind: 'local', file: 'optimiser.html', preload: 'optimiser-preload.js', query: { embedded: '1' }, group: 'you', macOnly: true },
   { id: 'setups', title: 'Setups', icon: 'layers', kind: 'local', file: 'setups.html', preload: 'setups-preload.js', group: 'you', hidden: true },
   { id: 'thismac', title: 'This Mac', icon: 'laptop', kind: 'local', screen: 'thismac', group: 'you' },
   { id: 'account', title: 'Account', icon: 'user', kind: 'local', screen: 'account', group: 'you' },
@@ -61,7 +63,7 @@ const SECTIONS = [
   { id: 'today', title: 'Today', icon: 'sun', default: 'myday', pages: ['myday', 'waiting', 'tasks', 'sessions', 'overview'] },
   { id: 'board', title: 'Board', icon: 'board', default: 'board', pages: ['board', 'board:table', 'board:history', 'board:dashboard'] },
   { id: 'team', title: 'Team', icon: 'team', default: 'team', pages: ['team', 'integrations', 'account'] },
-  { id: 'activity', title: 'Activity', icon: 'chart', default: 'usage', pages: ['usage', 'stats'] },
+  { id: 'activity', title: 'Activity', icon: 'chart', default: 'usage', pages: ['usage', 'stats', 'optimiser'] },
   { id: 'more', title: 'More', icon: 'gear', default: 'settings', pages: ['aitools', 'settings', 'thismac', 'lights', 'hatch', 'help', 'feedback', 'updates'] },
 ];
 // Setups has no Apply or Undo yet, so it stays out of the sidebar. The page and
@@ -71,6 +73,11 @@ if (process.env.PLEXIFORM_SHOW_SETUPS === '1') SECTIONS.find((s) => s.id === 'mo
 // Calendar and Timeline are project-planning views and AI runs have no due dates, so they
 // leave the sub-nav; the pages and deep links stay. PLEXIFORM_SHOW_PLANNER=1 restores them.
 if (process.env.PLEXIFORM_SHOW_PLANNER === '1') SECTIONS.find((s) => s.id === 'board').pages.splice(3, 0, 'board:calendar', 'board:timeline');
+
+/** The sections as this platform shows them: macOnly pages are left out elsewhere. */
+function sectionsFor(platform = process.platform, sections = SECTIONS) {
+  return sections.map((s) => ({ ...s, pages: s.pages.filter((id) => platform === 'darwin' || !pageById(id)?.macOnly) }));
+}
 
 function flat(pages = PAGES) {
   const out = [];
@@ -329,4 +336,4 @@ function pageForHubUrl(url) {
   return hit?.id ?? 'board';
 }
 
-module.exports = { PAGES, GROUPS, SECTIONS, sectionOf, flat, pageById, hubPageUrl, fragmentOk, navDecision, openDecision, connectDecision, manifestPost, parseConnectName, connectUrlOk, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl, GESTURE_MS };
+module.exports = { PAGES, GROUPS, SECTIONS, sectionsFor, sectionOf, flat, pageById, hubPageUrl, fragmentOk, navDecision, openDecision, connectDecision, manifestPost, parseConnectName, connectUrlOk, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl, GESTURE_MS };

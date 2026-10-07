@@ -27,6 +27,7 @@ function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usag
   let lastView = View.statusView(last, { platform });
   let inflight = null;
   let trayAt = -Infinity;
+  let opener = null;
 
   async function refresh(force = false) {
     if (!isMac) return lastView;
@@ -59,7 +60,9 @@ function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usag
 
   async function act(kind, mode) {
     if (!isMac) return { ok: false, error: View.MAC_ONLY };
-    if (kind === 'open-dashboard') {
+    // The dashboard lives in Plexiform's Usage optimiser page; the browser is the secondary way in.
+    if (kind === 'open-dashboard' && opener) { opener(); return { ok: true }; }
+    if (kind === 'open-dashboard' || kind === 'open-browser') {
       const url = last.kind === 'present' ? client.adminUrl() : null;
       if (!url) return { ok: false, error: 'Burst is not answering.' };
       await shell.openExternal(url); // privacy-flow: burst-dashboard
@@ -202,6 +205,11 @@ function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usag
       return [{ label: 'Turn Burst off…', click: () => { act('off').then((r) => { if (r && r.error) log('[burst]', r.error); }); } }, { type: 'separator' }];
     },
     status: () => lastView,
+    // For the Usage optimiser page: the last detection (version+pid handshake result) and the trusted address.
+    snapshot: () => ({ d: last, url: isMac && last.kind === 'present' ? client.adminUrl() : null }),
+    refresh,
+    act,
+    setOpener(fn) { opener = typeof fn === 'function' ? fn : null; },
     enrichSession,
     pushBoardFacts,
     compactionActive: () => !!(present() && last.state.compaction.active),
