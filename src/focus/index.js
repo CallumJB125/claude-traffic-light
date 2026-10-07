@@ -9,6 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
 const Ids = require('./ids.js');
+const { isDirWithin } = require('../bounded-io.js');
 
 // tmux first: inside tmux the outer terminal's ids describe the tab the tmux
 // server was started from, not this pane.
@@ -50,9 +51,8 @@ function which(paths) {
   return null;
 }
 
-function isDir(p) {
-  try { return fs.statSync(p).isDirectory(); } catch { return false; }
-}
+// The session's own folder, so never a synchronous stat (src/bounded-io.js).
+const isDir = (p) => isDirWithin(p);
 
 // The socket named in a session file is only talked to if it is really this
 // user's tmux: a socket we own, in a directory we own that nobody else can

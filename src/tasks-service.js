@@ -8,7 +8,6 @@
 const crypto = require('crypto');
 const path = require('path');
 const { pathToFileURL } = require('url');
-const fs = require('fs');
 const { createGuard, takeoverCommand, tilde } = require('./tasks-guard.js');
 const TV = require('./tasks-view.js');
 
@@ -20,7 +19,7 @@ const REPLAY_KEEP = 2500;
 const TAKEOVER_TTL_MS = 10 * 60 * 1000;
 const UNREAD_SCAN_MIN_MS = 4000;
 const LOCAL_SOURCES = ['local', 'cli'];
-const isDirDefault = (p) => { try { return path.isAbsolute(p) && fs.statSync(p).isDirectory(); } catch { return false; } };
+const { isDirWithin: isDirDefault } = require('./bounded-io.js');
 
 async function loadApi() {
   const [client, protocol, face] = await Promise.all(['client.js', 'protocol.js', 'face.js'].map((f) => import(pathToFileURL(path.join(API_DIR, f)).href))); // privacy-flow: tasks-local
@@ -38,7 +37,7 @@ const OFFLINE = Object.freeze({
 
 /**
  * opts: boardHome, homeDir, loadApi (tests), onChange(snapshot), onEvent(wcId, taskId, event), copy(text), seen {load(), save(obj)},
- * confirmDialog(info, wcId) → Promise<boolean> (a native dialog; the page's own confirmation never counts for it), isDir(path), resolveBin, now, log
+ * confirmDialog(info, wcId) → Promise<boolean> (a native dialog; the page's own confirmation never counts for it), isDir(path) → boolean or a Promise of one, resolveBin, now, log
  */
 function createTasksService(opts) {
   const now = opts.now || Date.now;
@@ -404,7 +403,7 @@ function createTasksService(opts) {
     const cwd = folders.get(typeof draft?.folder === 'string' ? draft.folder : '');
     const v = guard.validateCreate(draft, cwd, { canSchedule: canSchedule() });
     if (!v.ok && v.code === 'PLAN_REQUIRED') return { ok: false, code: 'PLAN_REQUIRED', text: TV.errorText('PLAN_REQUIRED') };
-    if (!v.ok || !isDir(cwd)) return { ok: false, code: 'VALIDATION', text: TV.errorText('VALIDATION') };
+    if (!v.ok || !(await isDir(cwd))) return { ok: false, code: 'VALIDATION', text: TV.errorText('VALIDATION') };
     try {
       const r = await client.createTask(v.spec, { requestId: typeof draft.requestId === 'string' && /^[\w-]{8,128}$/.test(draft.requestId) ? draft.requestId : undefined });
       refresh().catch(() => {});
@@ -421,7 +420,7 @@ function createTasksService(opts) {
     const recent = [];
     for (const t of [...tasks.values()].sort((a, b) => b.createdAtMs - a.createdAtMs)) {
       const root = roots.get(t.id);
-      if (t.hub || !LOCAL_SOURCES.includes(t.source) || !root || seenRoots.has(root) || !isDir(root)) continue;
+      if (t.hub || !LOCAL_SOURCES.includes(t.source) || !root || seenRoots.has(root) || !(await isDir(root))) continue;
       seenRoots.add(root);
       recent.push(registerFolder(root));
       if (recent.length >= 5) break;

@@ -7,6 +7,7 @@ const crypto = require('node:crypto');
 const { execFile } = require('node:child_process');
 const { toolEnv } = require('./tool-path');
 const { redactSecrets } = require('./secret-patterns');
+const { withDeadline, GRACE_MS } = require('./bounded-io');
 const PROVIDERS = new Set(['codex','cursor','gemini','hermes','claude']);
 const ID = /^[A-Za-z0-9_.:-]{1,120}$/;
 const isId = value => typeof value==='string'&&ID.test(value);
@@ -83,8 +84,8 @@ function privateState(file,startEnabled=false) {
 }
 async function repoFor(cwd) {
   if(typeof cwd!=='string'||!path.isAbsolute(cwd)||cwd.length>2000||cwd.includes('\0'))return null;
-  const raw=await new Promise(resolve=>execFile('git',['-C',cwd,'config','--local','--get','remote.origin.url'],
-    {timeout:2000,maxBuffer:4096,env:toolEnv({GIT_OPTIONAL_LOCKS:'0',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:process.platform==='win32'?'NUL':'/dev/null'})},(err,out)=>resolve(err?null:String(out).trim())));
+  const raw=await withDeadline(done=>execFile('git',['-C',cwd,'config','--local','--get','remote.origin.url'],
+    {timeout:2000,maxBuffer:4096,env:toolEnv({GIT_OPTIONAL_LOCKS:'0',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:process.platform==='win32'?'NUL':'/dev/null'})},(err,out)=>done(err?null:String(out).trim())),2000+GRACE_MS);
   if(!raw||/[?#\u0000-\u001f\u007f]/.test(raw))return null;
   if(/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) {
     // Do not let the permissive shared normalizer reinterpret malformed URL

@@ -33,6 +33,7 @@ const fs = require('fs');
 const path = require('path');
 const { toolEnv } = require('./tool-path.js');
 const { execFile } = require('child_process');
+const { withDeadline, GRACE_MS } = require('./bounded-io.js');
 
 const SIGNALS = ['pr-review-requested', 'pr-changes-requested', 'ci-failed', 'ci-passed', 'deploy-finished', 'deploy-failed'];
 const ACTIVE_MS = 90 * 1000;
@@ -45,6 +46,7 @@ const LOW_RATE = 100;
 const MAX_OWN_PRS = 5;
 const PULLS_PAGE = 100;
 const REPO_SKIP_MS = 30 * 60 * 1000;
+const FOLDER_MS = 15 * 1000;
 // The state file is rewritten when something in it changes, or this often.
 const SAVE_HEARTBEAT_MS = 10 * 60 * 1000;
 const HOLD_MS = {
@@ -193,10 +195,10 @@ function defaultRunGh(args) {
   });
 }
 
+// A folder that never answers (src/bounded-io.js) counts as no repo, so one
+// stuck session folder can't hold every later poll behind it.
 function defaultGit(cwd, args) {
-  return new Promise((resolve) => {
-    execFile('git', ['-C', cwd, ...args], { timeout: 5000, env: toolEnv({ GIT_OPTIONAL_LOCKS: '0' }) }, (err, stdout) => resolve(err ? null : String(stdout).trim()));
-  });
+  return withDeadline((done) => execFile('git', ['-C', cwd, ...args], { timeout: 5000, env: toolEnv({ GIT_OPTIONAL_LOCKS: '0' }) }, (err, stdout) => done(err ? null : String(stdout).trim())), 5000 + GRACE_MS);
 }
 
 // The GitHub repo and current branch a folder is on, or null.
@@ -211,7 +213,7 @@ async function folderRepo(cwd, git = defaultGit) {
   return { repo: normalizeRemote(pick[1]), branch: branch || null };
 }
 
-function create({ stateFile, runGh = defaultRunGh, git = defaultGit, now = Date.now, log = () => {} } = {}) {
+function create({ stateFile, runGh = defaultRunGh, git = defaultGit, now = Date.now, log = () => {}, folderMs = FOLDER_MS } = {}) {
   const etags = new Map();
   let st = { state: 'starting', login: null, loginAt: 0, repos: {}, events: [], seen: {}, rate: null, failures: 0, lastPollAt: 0, nextPollAt: 0, error: null };
   try {
@@ -283,7 +285,7 @@ function create({ stateFile, runGh = defaultRunGh, git = defaultGit, now = Date.
   async function discover(sessions, manual) {
     const t = now();
     const cwds = [...new Set((sessions || []).map((s) => s && s.cwd).filter(Boolean))];
-    const found = await Promise.all(cwds.map(async (cwd) => ({ cwd, info: await folderRepo(cwd, git) })));
+    const found = await Promise.all(cwds.map(async (cwd) => ({ cwd, info: await withDeadline((done) => { folderRepo(cwd, git).then(done, () => done(null)); }, folderMs, null) })));
     const fresh = {};
     for (const { cwd, info } of found) {
       if (!info) continue;

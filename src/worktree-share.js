@@ -7,14 +7,15 @@
 
 const path = require('node:path');
 const { execFile } = require('node:child_process');
+const { withDeadline, GRACE_MS } = require('./bounded-io');
 
 const LIVE_MS = 30 * 60_000;
 const MAX_CWDS = 200;
 
+// git -C, not a spawn cwd: the spawn would wait on the child's chdir into a
+// folder macOS may be holding behind a privacy prompt (src/bounded-io.js).
 function runGit(args, cwd) {
-  return new Promise((resolve) => {
-    execFile('git', args, { cwd, timeout: 5000, maxBuffer: 4 * 1024 * 1024, windowsHide: true }, (err, out) => resolve(err ? null : String(out)));
-  });
+  return withDeadline((done) => execFile('git', ['-C', cwd, ...args], { timeout: 5000, maxBuffer: 4 * 1024 * 1024, windowsHide: true }, (err, out) => done(err ? null : String(out))), 5000 + GRACE_MS);
 }
 
 // sessions: Sessions rows ({ sessionId, cwd, ... }) -> [{ toplevel, sessions: [sessionId], dirty: n }]

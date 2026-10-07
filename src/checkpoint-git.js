@@ -11,8 +11,10 @@
 
 const childProcess = require('node:child_process');
 const fs = require('node:fs');
+const fsp = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
+const { withDeadline, GRACE_MS } = require('./bounded-io');
 
 const REF_ROOT = 'refs/plexiform/cp/';
 const DEV_NULL = process.platform === 'win32' ? 'NUL' : '/dev/null';
@@ -46,12 +48,17 @@ function createGit({ bin = findGit(), env = process.env, tmpdir = os.tmpdir() } 
   function run(cwd, args, { index = null, global = false, input = null, timeoutMs = 60000, maxBuffer = 64 << 20 } = {}) {
     if (!bin) return Promise.reject(Object.assign(new Error('git not found'), { code: 'NOGIT', stderr: '' }));
     const childEnv = { ...base, ...(global ? {} : { GIT_CONFIG_GLOBAL: DEV_NULL }), ...(index ? { GIT_INDEX_FILE: index } : {}) };
-    return new Promise((resolve, reject) => {
-      const child = childProcess.execFile(bin, [...SAFE_GIT, ...args], { cwd, env: childEnv, timeout: timeoutMs, killSignal: 'SIGKILL', maxBuffer, encoding: 'utf8', windowsHide: true }, (err, stdout, stderr) => { // privacy-flow: checkpoint-git
-        if (err) { err.stderr = stderr; reject(err); } else resolve(stdout);
-      });
-      if (input != null) child.stdin.end(input); else child.stdin.end();
-    });
+    // -C, not a spawn cwd, and a deadline: see src/bounded-io.js.
+    const stuck = Object.assign(new Error('git did not finish'), { code: 'ETIMEDOUT', stderr: '' });
+    return withDeadline((done) => {
+      try {
+        const child = childProcess.execFile(bin, ['-C', cwd, ...SAFE_GIT, ...args], { env: childEnv, timeout: timeoutMs, killSignal: 'SIGKILL', maxBuffer, encoding: 'utf8', windowsHide: true }, (err, stdout, stderr) => { // privacy-flow: checkpoint-git
+          if (err) { err.stderr = stderr; done({ err }); } else done({ stdout });
+        });
+        if (input != null) child.stdin.end(input); else child.stdin.end();
+        return child;
+      } catch (err) { done({ err }); return null; }
+    }, timeoutMs + GRACE_MS, { err: stuck }).then((r) => (r.err ? Promise.reject(r.err) : r.stdout));
   }
 
   // The user's global ignore file still applies, though the rest of their global config does not.
@@ -66,7 +73,6 @@ function createGit({ bin = findGit(), env = process.env, tmpdir = os.tmpdir() } 
   async function repoOf(cwd) {
     if (!bin) return { skip: 'no-git' };
     if (typeof cwd !== 'string' || !path.isAbsolute(cwd)) return { skip: 'not-git' };
-    try { if (!fs.statSync(cwd).isDirectory()) return { skip: 'not-git' }; } catch { return { skip: 'not-git' }; }
     let out;
     try { out = await run(cwd, ['rev-parse', '--is-bare-repository', '--show-toplevel', '--absolute-git-dir'], { timeoutMs: 5000 }); } catch { return { skip: 'not-git' }; }
     const [bare, top, gitDir] = out.split('\n');
@@ -89,7 +95,7 @@ function createGit({ bin = findGit(), env = process.env, tmpdir = os.tmpdir() } 
     const extra = excl ? ['-c', `core.excludesFile=${excl}`] : [];
     return withTempIndex(async (index) => {
       // Start from the user's index for its stat cache, falling back to HEAD when it can't be used as-is.
-      try { fs.copyFileSync(path.join(gitDir, 'index'), index); } catch { /* none yet */ }
+      try { await fsp.copyFile(path.join(gitDir, 'index'), index); } catch { /* none yet */ }
       try { await run(top, [...extra, 'add', '-A', '--', '.'], { index }); } catch {
         fs.rmSync(index, { force: true });
         try { await run(top, ['read-tree', 'HEAD'], { index }); } catch { /* unborn branch */ }
@@ -148,13 +154,13 @@ function createGit({ bin = findGit(), env = process.env, tmpdir = os.tmpdir() } 
       if (st === 'D' || st === 'T') remove.push(p);
       if (st !== 'D') write.push(p);
     }
-    const root = fs.realpathSync(top);
+    const root = await fsp.realpath(top);
     for (const p of remove) {
       const abs = path.join(root, p);
       if (!inside(root, abs) || p.split('/').includes('.git')) continue;
-      try { const dir = fs.realpathSync(path.dirname(abs)); if (dir !== root && !inside(root, dir)) continue; } catch { continue; }
-      try { const st = fs.lstatSync(abs); if (!st.isDirectory()) fs.unlinkSync(abs); } catch { continue; }
-      for (let d = path.dirname(abs); d !== root && inside(root, d); d = path.dirname(d)) { try { fs.rmdirSync(d); } catch { break; } }
+      try { const dir = await fsp.realpath(path.dirname(abs)); if (dir !== root && !inside(root, dir)) continue; } catch { continue; }
+      try { const st = await fsp.lstat(abs); if (!st.isDirectory()) await fsp.unlink(abs); } catch { continue; }
+      for (let d = path.dirname(abs); d !== root && inside(root, d); d = path.dirname(d)) { try { await fsp.rmdir(d); } catch { break; } }
     }
     if (write.length) {
       await withTempIndex(async (index) => {
