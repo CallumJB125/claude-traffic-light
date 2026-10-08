@@ -185,6 +185,18 @@ unchanged. The UI saves the explicit default/target board together, plus up to 3
 severity, optional redacted issue message and cooldown. Missing/archived default pauses creation; a
 multi-project incident whose routes disagree also pauses instead of guessing.
 
+**Linear and Jira (source prepared, not enabled).** `linear/` and `jira/` follow Sentry's shape: token
+connectors that take webhooks only (`hosts: []`, `showsWebhookUrl`, `dailyCardCap: 100`). The pasted
+secret is the webhook signing key (Linear: `Linear-Signature`, hex HMAC-SHA256; Jira Cloud:
+`X-Hub-Signature: sha256=<hex>`), and `verify()` also enforces a window (24 h back, 5 min ahead) on the
+signed body timestamp (`webhookTimestamp` / `timestamp`). A created or updated issue that is not already
+done becomes one Todo card on the connection's target board (`request_id` `linear-issue-<id>` /
+`jira-issue-<id>`, linked as kind `issue`); a status change of a linked issue is one ordinary untrusted,
+non-agent comment (request id from the new state, or Jira's changelog id, so a retry with new bytes is
+still one comment). No card moves, no dispatch, no description, assignee or actor text. Neither is in
+`connectorsFor()` until a real delivery has been checked against `verify()`; see
+`docs/LINEAR-RUNBOOK.md` and `docs/JIRA-RUNBOOK.md`.
+
 **One app, many installations (GitHub App, step 4).** A connector whose provider lets one operator-owned app
 be installed by many accounts declares `app: {verify, route, installUrl, install, repositories, installationOf}`
 (`connector.js`; GitHub: `github/index.js` `withApp`, configured from `GITHUB_APP_*`, `docs/GITHUB-APP-RUNBOOK.md`).
