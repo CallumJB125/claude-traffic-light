@@ -31,12 +31,13 @@ async function open(url = 'file:///app/settings.html', config = {}) {
 }
 const visible = (doc) => [...doc.querySelectorAll('.pane')].filter((p) => !p.hidden).map((p) => p.dataset.section);
 
-test('five sections, General first, the first screen is at most ten controls', async () => {
+test('six sections, General first, the first screen is at most eight controls', async () => {
   const { doc } = await open();
-  assert.deepEqual([...doc.querySelectorAll('#section-nav button')].map((b) => b.dataset.go), ['general', 'notifications', 'widget', 'privacy', 'advanced']);
+  assert.deepEqual([...doc.querySelectorAll('#section-nav button')].map((b) => b.dataset.go), ['general', 'notifications', 'spend', 'widget', 'privacy', 'advanced']);
+  assert.deepEqual([...doc.querySelectorAll('#section-nav button')].map((b) => b.textContent), ['General', 'Notifications', 'Spend and limits', 'Widget', 'Privacy and data', 'Advanced']);
   assert.deepEqual(visible(doc), ['general']);
   const controls = doc.querySelectorAll('#pane-general input, #pane-general select, #pane-general textarea');
-  assert.ok(controls.length <= 10, `${controls.length} controls on the first screen`);
+  assert.ok(controls.length <= 8, `${controls.length} controls on the first screen`);
 });
 
 test('?section= and the nav pick a section; unknown names fall back to General', async () => {
@@ -92,4 +93,49 @@ test('every config key the old page saved is still saved', async () => {
   await tick(); await tick();
   const keys = Object.keys(saves[0]);
   for (const k of ['workingStaleMinutes', 'stuckMinutes', 'waitingStaleHours', 'sounds', 'quietHours', 'mutedProjects', 'notifyOnStates', 'notifyStates', 'showWidget', 'menuBarMode', 'lowPower', 'seasonal', 'askFromWidget', 'oneKeyApprove', 'showTasks', 'showAgents', 'agentRoster', 'agentKinds', 'agentChipSize', 'roam', 'randomEvents', 'gitSignals', 'gitRepos', 'gitDeployWorkflows', 'spend', 'busyHold', 'busyCalendar', 'busyCalendarTitles', 'busyFocus', 'busyIcsUrl', 'busyFocusShortcut', 'remoteTailscale', 'teamSessionSharing', 'remoteInteractionHost', 'codexDaemonMessaging']) assert.ok(keys.includes(k), k);
+});
+
+const OLD_IDS = ['section-nav', 'pane-general', 'workingStaleMinutes', 'hint-working', 'stuckMinutes', 'hint-stuck', 'waitingStaleHours', 'hint-waiting', 'spend-mode', 'hint-spend-mode', 'spend-now', 'budget-label', 'spend-daily', 'spend-weekly', 'spend-warn', 'hint-budget', 'voice-hotkey', 'voice-hint', 'voice-longPress', 'voice-askClaude', 'pane-notifications', 'sounds', 'notifyOnStates', 'notify-kinds', 'notify-permission-ask', 'notify-turn-failed', 'notify-offline', 'quietEnabled', 'quietStart', 'quietEnd', 'quiet-days', 'mutedProjects', 'hint-muted', 'askFromWidget', 'oneKeyApprove', 'runaway-label', 'spend-runaway-dollars', 'spend-runaway-tokens', 'spend-runaway-minutes', 'spend-notify-runaway', 'spend-notify-budget-warning', 'spend-notify-budget-exceeded', 'busyHold', 'busy-sources', 'busyCalendar', 'busy-calendar-state', 'busyCalendarTitles', 'busyFocus', 'busy-focus-state', 'busyIcsUrl', 'busy-ics-state', 'hint-ics', 'busyFocusShortcut', 'hint-focus', 'pane-widget', 'showWidget', 'menuBarMode', 'lowPower', 'seasonal', 'showTasks', 'roam', 'randomEvents', 'showAgents', 'agentRoster', 'which-agents', 'kind-subagent', 'kind-teammate', 'kind-ralph', 'agentChipSize', 'pane-privacy', 'privacy', 'leaves-machine', 'privacy-export-stats', 'privacy-export-setup', 'privacy-folder', 'privacy-status', 'privacy-notice', 'privacy-body', 'crash-reports', 'crash-opt-in', 'crash-view', 'crash-payload', 'crash-export', 'crash-status', 'pane-advanced', 'native-board-app', 'native-board-workspace', 'native-board-choices', 'native-board-mode', 'native-board-connect', 'native-board-disconnect', 'native-board-hint', 'gitSignals', 'git-status', 'gitRepos', 'hint-git-repos', 'gitDeployWorkflows', 'hint-git-deploy', 'compact-enabled', 'hint-compact', 'compact-providers-label', 'compact-codex', 'compact-threshold', 'compact-threshold-value', 'hint-compact-threshold', 'compact-saved', 'compact-last', 'compact-burst-learned', 'remote-devices', 'remote-name', 'remote-pair', 'remote-pair-status', 'remote-code', 'remote-code-name', 'remote-code-host', 'remote-code-where', 'remote-code-text', 'remote-copy', 'remote-done', 'remote-list', 'remote-listener', 'remoteTailscale', 'remote-tailnet', 'teamSessionSharing', 'teamBrief', 'team-brief-hint', 'remoteInteractionHost', 'interaction-host-status', 'codexDaemonMessaging', 'codex-daemon-hint', 'connect-hint', 'emit-path', 'endpoint', 'token-path', 'backups', 'backups-title', 'backups-body', 'backups-summary', 'backups-now', 'backups-recheck', 'backups-folder', 'backups-status', 'backups-list', 'backups-more', 'health', 'health-title', 'health-summary', 'health-checks', 'health-fine', 'health-fine-count', 'health-fine-checks', 'health-recheck', 'health-copy', 'health-copy-hint', 'feedback-open', 'status'];
+
+test('every id the one-page Settings had is still there exactly once', () => {
+  const d = new JSDOM(html).window.document;
+  for (const id of OLD_IDS) assert.equal(d.querySelectorAll(`[id="${id}"]`).length, 1, id);
+  assert.equal(d.querySelectorAll('#quiet-days input[data-day]').length, 7);
+});
+
+test('each old section moved to its sub-page, and no heading says just Agents', () => {
+  const d = new JSDOM(html).window.document;
+  const home = (id) => d.getElementById(id).closest('.pane').dataset.section;
+  const where = {
+    general: ['workingStaleMinutes', 'stuckMinutes', 'waitingStaleHours', 'voice-hotkey', 'voice-longPress', 'voice-askClaude'],
+    notifications: ['sounds', 'notifyOnStates', 'quietEnabled', 'mutedProjects', 'askFromWidget', 'oneKeyApprove', 'busyHold', 'busyIcsUrl', 'busyFocusShortcut'],
+    spend: ['spend-mode', 'spend-daily', 'spend-weekly', 'spend-warn', 'spend-runaway-dollars', 'spend-notify-runaway', 'spend-notify-budget-exceeded'],
+    widget: ['showWidget', 'menuBarMode', 'lowPower', 'showAgents', 'kind-ralph', 'agentChipSize'],
+    privacy: ['privacy', 'crash-reports', 'crash-opt-in', 'backups', 'teamSessionSharing', 'teamBrief', 'remoteInteractionHost', 'codexDaemonMessaging'],
+    advanced: ['native-board-app', 'gitSignals', 'compact-enabled', 'remote-devices', 'remote-name', 'remoteTailscale', 'connect-hint', 'health'],
+  };
+  for (const [section, ids] of Object.entries(where)) for (const id of ids) assert.equal(home(id), section, id);
+  assert.ok(![...d.querySelectorAll('h2')].some((h) => /^agents$/i.test(h.textContent.trim())));
+  assert.equal(d.querySelector('#which-agents').textContent, 'Which Claude Code helpers');
+  assert.match(d.getElementById('remote-devices').textContent, /Phone in the sidebar/);
+  assert.match(d.getElementById('sharing').textContent, /Phone approvals in the sidebar/);
+});
+
+test('controls with their own save also say Saved', async () => {
+  for (const id of ['busyCalendar', 'compact-enabled']) {
+    const { doc, saves } = await open('file:///app/settings.html', { compaction: {} });
+    doc.getElementById(id).dispatchEvent(new doc.defaultView.Event('change', { bubbles: true }));
+    for (let i = 0; i < 6; i++) await tick();
+    assert.ok(saves.length >= 1, id);
+    assert.equal(doc.getElementById('status').textContent, 'Saved', id);
+  }
+});
+
+test('a failed save says so instead of Saved', async () => {
+  const { w, doc } = await open();
+  w.settingsApi.saveConfig = async () => { throw new Error('disk full'); };
+  doc.getElementById('sounds').dispatchEvent(new w.Event('change', { bubbles: true }));
+  await tick(); await tick();
+  assert.equal(doc.getElementById('status').textContent, 'Save failed — disk full');
+  assert.equal(doc.getElementById('status').className, 'err');
 });

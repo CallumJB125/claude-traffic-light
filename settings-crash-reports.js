@@ -1,4 +1,4 @@
-// Preferences → Privacy → Crash reports. A file of its own so the block can
+// Settings → Privacy and data → Crash reports. A file of its own so the block can
 // move with the Settings split; text goes in with textContent only.
 (function () {
   const api = window.settingsApi;
@@ -19,6 +19,7 @@
     e.stopPropagation();
     const r = await api.crashReportsSetOptIn(toggle.checked).catch(() => null);
     toggle.checked = !!(r && r.optedIn);
+    if (r && window.showSaved) window.showSaved();
     say(toggle.checked ? 'Allowed. Reports are only saved on this Mac for now.' : 'Off. Reports are only saved on this Mac.');
   });
   $('crash-view').addEventListener('toggle', () => { if ($('crash-view').open) refresh(); });
