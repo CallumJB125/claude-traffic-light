@@ -223,7 +223,7 @@ function tabPanel(tab, detail, model, elapsed) {
 function whoBlock(view, face, model) {
   const rows = [];
   if (face.sponsor) rows.push(['Account', face.sponsor]);
-  if (view.run) rows.push(['Runner', `${face.runner_line}${view.run.device_name ? ` on ${view.run.device_name}` : ''}`]);
+  if (view.run) rows.push(['Runner', `${face.runner_line}${view.run.device_name ? ` on ${view.run.device_name}` : ''}${view.run.hosted ? ' (cloud runner)' : ''}`]);
   if (view.run?.dispatched_by) rows.push(['Given by', view.run.dispatched_by.name]);
   const assignees = (view.assignee_ids ?? []).map((id) => model.members.get(id)).filter(Boolean);
   return h('dl', { class: 'who' },

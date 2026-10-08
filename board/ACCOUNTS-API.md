@@ -507,6 +507,18 @@ Any member: admins and owners see the team's enrolments, others their own. → `
 
 An admin or owner, or the enrolment's own user. `{}` → `{ok:true}`; its socket closes `4403`. Unknown, revoked or another team's → `404`; someone else's as a member → `403`.
 
+### Cloud runners (migration 067, docs/CLOUD-RUNNER-RUNBOOK.md)
+
+A cloud (hosted) runner is an enrolment with `hosted: true`, run as `buddy-runner.service` on a server. It belongs to the admin who made it and does **not** end when the install that made it signs out (it still ends on revoke, removal from the team, demotion, account deletion, team deletion and a restore, like any enrolment). It claims only `"placement": "hosted"` dispatches, and a hosted dispatch is never offered to a desktop runner.
+
+- `POST /api/teams/:id/hosted-runners` `{name?}`: an admin or owner, from the desktop app (device Bearer; a cookie session or relay device gets `403`). → `{enrollment_id, team_id, runner_token}`, shown once; it counts against the per-person runner quota. Revoke it with `DELETE /api/teams/:id/enrolments/:enrollment_id`.
+- `GET /api/teams/:id/hosted-runners`: any member. → `{runners:[{id, name, owner, mine, online, last_seen_at, active_runs, ai:[…]}], mine, online, recent_runs:[{run_id, card_key, ai, cost_usd|null, started_at, ended_at, end_reason}], providers:[…]}`; `recent_runs` are the caller's own cloud runs (`cost_usd` null where the provider reports no cost).
+- `GET /api/teams/:id/provider-configs`: any member. → `{encryption, providers:[{provider, label, has_key, base_url, model, updated_at}]}`. Never a key.
+- `PUT /api/teams/:id/provider-configs/:provider` `{api_key?, base_url?, model?}`: admins; `provider` ∈ `claude | codex | hermes-dgx` (others `404`). A field left out is unchanged, `null` clears it. The key is sealed with the hub's encryption key (`POLICY_DENIED` without one). `base_url` only for `hermes-dgx`, a literal IP origin. → the list above.
+- `DELETE /api/teams/:id/provider-configs/:provider`: admins. → the list.
+- Dispatch: `POST /api/cards/:id/actions/dispatch|retry` take `placement: "hosted" | null` (retry keeps the previous placement when it is left out). Hosted means the caller's own cloud runner: a `target_member_id` other than the caller → `403 {reason:'HOSTED_SELF_ONLY'}`. `GET /api/cards/:id/overlap-preview` adds `hosted: {enrolled, online, runners:[…, serves_repo], recent_runs}` for the caller's own target; its `runners` list no longer includes cloud runners.
+- The key reaches the runner only through the runner RPC `runner_provider_config` (CONTRACT §6.6), for the run's own AI, and only on a hosted enrolment's socket.
+
 ### The runner socket
 
 `/ws/runner` with `Authorization: Bearer brt_…` and `Board-Team: <team_id>`, one socket per enrolled team:

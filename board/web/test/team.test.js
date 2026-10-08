@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { textOf, byClass, byAttr } from '../js/h.js';
 import { displayFace } from '../js/view.js';
-import { teamRows, teamScreen, overviewPanel, SCOPE_RULE } from '../js/render-team.js';
+import { teamRows, teamScreen, overviewPanel, cloudPanel, SCOPE_RULE } from '../js/render-team.js';
 import { view, model, ALICE, BOB } from './fixtures.js';
 
 const NOW = Date.parse('2026-10-01T12:00:00Z');
@@ -155,4 +155,22 @@ test('team overview keeps verification, reported tests and unavailable costs dis
   assert.match(textOf(overviewPanel({ teamOverview: { status: 'ok', data, stale: true } })), /Last snapshot: Idle/);
   const pending = overviewPanel({ teamOverview: { status: 'loading', data: null } });
   assert.equal(byClass(pending, 'team-overview-stat').length, 0);
+});
+
+test('Cloud runner panel: admins only; status, the new token once, and provider keys without the keys', () => {
+  const base = { accounts: true, me: { member: { role: 'admin' } } };
+  assert.equal(cloudPanel({ ...base, me: { member: { role: 'member' } } }), null);
+  assert.equal(cloudPanel({ ...base, accounts: false }), null);
+  const empty = textOf(cloudPanel({ ...base, cloud: { status: 'ok', data: { runners: [], providers: [], encryption: true } } }));
+  assert.match(empty, /No cloud runner yet\./);
+  assert.match(empty, /None stored: cloud runs use the server CLI's own sign-in\./);
+  const seen = new Date(Date.now() - 2 * 3_600_000).toISOString();
+  const t = textOf(cloudPanel({ ...base, cloud: { status: 'ok', made: { runner_token: 'brt_once', team_id: 'team-1' },
+    data: { encryption: true, runners: [{ id: 'e1', name: 'Pi 5', owner: { name: 'Alice' }, online: false, last_seen_at: seen }],
+      providers: [{ provider: 'claude', label: 'Claude Code', has_key: true, model: 'claude-sonnet-4-5' }] } } }));
+  assert.match(t, /Pi 5 · Alice · offline, last seen 2h ago/);
+  assert.match(t, /brt_once/);
+  assert.match(t, /BUDDY_RUNNER_TEAM: team-1/);
+  assert.match(t, /Claude Code · key stored · claude-sonnet-4-5/);
+  assert.match(textOf(cloudPanel({ ...base, cloud: { status: 'ok', data: { runners: [], providers: [], encryption: false } } })), /no encryption key/);
 });

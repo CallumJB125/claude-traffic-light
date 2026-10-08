@@ -30,6 +30,7 @@ import { ClientFeedback } from './identity/client-feedback.js';
 import { OAuth } from './identity/oauth.js';
 import { WebOAuth } from './identity/oauth-web.js';
 import { Enrolments } from './identity/enrolments.js';
+import { HostedRunners } from './hosted-runners.js';
 import { Billing } from './billing/entitlements.js';
 import { PushService } from './push.js';
 import { Sync } from './sync.js';
@@ -80,6 +81,7 @@ function buildApp(config, { db, clock, log, github, fetchImpl, timers, mailer })
   hub.oauth = hub.accounts ? new OAuth(hub, { accounts: hub.accounts, fetchImpl }) : null;
   hub.oauthWeb = hub.oauth ? new WebOAuth(hub) : null;
   hub.enrolments = hub.accounts ? new Enrolments(hub, { accounts: hub.accounts }) : null;
+  hub.hostedRunners = hub.enrolments ? new HostedRunners(hub, { accounts: hub.accounts, enrolments: hub.enrolments }) : null;
   hub.billing = hub.accounts ? new Billing(hub, { fetchImpl }) : null;
   // Phone push (push.js): content-free pings; off without the operator's VAPID keys.
   hub.push = hub.accounts ? new PushService(hub, { fetchImpl, ...(config.pushHosts ? { hosts: config.pushHosts } : {}), allowHttp: config.pushAllowHttp === true }) : null;

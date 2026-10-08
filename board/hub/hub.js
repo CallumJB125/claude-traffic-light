@@ -4,7 +4,7 @@
 // liveness (D11), overlap recompute, notifications (N-rules) and the GitHub
 // merge poll. Transports (HTTP, /ws/board, /ws/runner) call into this class.
 
-import { createVault } from './vault.js';
+import { createVault, providerConfigAad } from './vault.js';
 import { EventEmitter } from 'node:events';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHmac, randomBytes, randomUUID } from 'node:crypto';
@@ -151,6 +151,13 @@ export class Hub extends EventEmitter {
         this.db.run('UPDATE integration_pending_secrets SET key_id = ?, nonce = ?, ciphertext = ? WHERE pending_id = ? AND kind = ? AND key_id = ?', s.key_id, s.nonce, s.ciphertext, r.pending_id, r.kind, r.key_id);
         resealed += 1;
       }
+      for (const r of this.db.all('SELECT org_id, provider, key_id, nonce, ciphertext FROM team_provider_configs WHERE key_id IS NOT NULL AND key_id != ?', v.keyId)) {
+        let plain;
+        try { plain = v.open(providerConfigAad(r.org_id), r.provider, r); } catch { unopened += 1; continue; }
+        const s = v.seal(providerConfigAad(r.org_id), r.provider, plain);
+        this.db.run('UPDATE team_provider_configs SET key_id = ?, nonce = ?, ciphertext = ? WHERE org_id = ? AND provider = ? AND key_id = ?', s.key_id, s.nonce, s.ciphertext, r.org_id, r.provider, r.key_id);
+        resealed += 1;
+      }
     });
     this.log.info('vault re-sealed under the current key', { resealed, unopened });
     return { resealed, unopened };
@@ -291,6 +298,7 @@ export class Hub extends EventEmitter {
     this.db.run('DELETE FROM connection_secrets WHERE connection_id IN (SELECT c.id FROM connections c JOIN orgs o ON o.id = c.org_id WHERE o.deleted_at IS NOT NULL)');
     this.db.run("UPDATE connections SET status = 'revoked', revoked_at = ? WHERE status != 'revoked' AND org_id IN (SELECT id FROM orgs WHERE deleted_at IS NOT NULL)", now);
     this.db.run('DELETE FROM integration_pending WHERE org_id IN (SELECT id FROM orgs WHERE deleted_at IS NOT NULL)');
+    this.db.run('DELETE FROM team_provider_configs WHERE org_id IN (SELECT id FROM orgs WHERE deleted_at IS NOT NULL)');
     this.remoteAuthority?.cleanupDeleted(now);
   }
   // Only its creator, still an owner/admin, can finish a pending connection
@@ -446,7 +454,7 @@ export class Hub extends EventEmitter {
         this.db.insert('dispatches', {
           request_id: e.request_id, card_id: cardId, dispatched_by: actor, target_member_id: e.target_member_id,
           backend: event.backend ?? 'claude_cli', ai: event.ai ?? null, budget_mode: event.budget_mode ?? null, budget_cents: event.budget_cents ?? null,
-          needs_confirm: e.needs_confirm ? 1 : 0, seed: '{}', state: 'pending', created_at: now,
+          placement: event.placement ?? null, needs_confirm: e.needs_confirm ? 1 : 0, seed: '{}', state: 'pending', created_at: now,
         });
         break;
       }
@@ -603,7 +611,7 @@ export class Hub extends EventEmitter {
     if (!last) return;
     this.db.insert('dispatches', {
       request_id: randomUUID(), card_id: cardId, dispatched_by: last.dispatched_by, target_member_id: last.target_member_id,
-      backend: last.backend, ai: last.ai, budget_mode: last.budget_mode, budget_cents: last.budget_cents,
+      backend: last.backend, ai: last.ai, budget_mode: last.budget_mode, budget_cents: last.budget_cents, placement: last.placement,
       needs_confirm: last.needs_confirm, seed: '{}', state: 'pending', created_at: this.iso(),
     });
   }
@@ -768,7 +776,9 @@ export class Hub extends EventEmitter {
     const target = this.dispatchTarget(d);
     const remaining = this.remainingBudgetCents(row, d);
     if (remaining != null && remaining < 50) return [];
-    return [...this.runners.values()].filter((c) => c.ready && c.member_id === target && c.repos.has(row.repo_id) && acceptsAi(c, aiOfDispatch(d), remaining == null ? null : remaining / 100));
+    // "Run in the cloud" goes only to a hosted runner; any other dispatch never does.
+    const hosted = d.placement === 'hosted';
+    return [...this.runners.values()].filter((c) => c.ready && c.member_id === target && c.hosted === hosted && c.repos.has(row.repo_id) && acceptsAi(c, aiOfDispatch(d), remaining == null ? null : remaining / 100));
   }
 
   // Per-project soft cap on reported spend since UTC midnight (boards.settings.daily_cap_usd).

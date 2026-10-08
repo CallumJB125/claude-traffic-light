@@ -31,7 +31,7 @@ import { emptyFold, pullJournal, windowMetrics, cardMetrics } from './metrics.js
 import { VIEWS, plannerEnabled } from './views.js';
 import { drawer } from './render-drawer.js';
 import { colorMap } from './labels.js';
-import { dialog } from './render-dialogs.js';
+import { dialog, CLOUD } from './render-dialogs.js';
 import { decodeFeedback, sendFeedback, canSend, ARM_MS, FRAGMENT_PREFIX } from './feedback-send.js';
 import { signinScreen, noTeamScreen } from './render-signin.js';
 import { accountErrorText, parseJoin } from './account-text.js';
@@ -49,6 +49,7 @@ const state = {
   methods: null, // accounts: GET /api/auth/methods, for the signed-out screen
   onboard: { busy: false, error: null, where: null }, // the no-team screen's forms
   invite: { busy: false, error: null, made: null }, // Team view: the invite just made (its link and code, shown once)
+  cloud: { status: 'idle', data: null, error: null, busy: false, made: null }, // Team view: cloud runner status; a new runner token, shown once
   localCardDismissed: false,
   email: null,
   me: null,
@@ -198,7 +199,7 @@ function setView(v) {
   if (v === 'dashboard') loadJournal();
   if (v === 'history') loadHistory();
   if (v === 'integrations') loadIntegrations();
-  if (v === 'team' && state.board) { presenceFallbackSoon(); loadTeamOverview(); }
+  if (v === 'team' && state.board) { presenceFallbackSoon(); loadTeamOverview(); loadCloud(); }
   // Team pages are opened from the app sidebar; only board views are remembered.
   if (VIEWS.find((x) => x.id === v)?.switcher !== false) { try { localStorage.setItem('board-view', v); } catch { /* private mode */ } }
   try {
@@ -439,6 +440,7 @@ function buildModel() {
     localCard: state.authMode === 'local' && !state.localCardDismissed,
     accounts: state.authMode === 'accounts',
     invite: state.invite,
+    cloud: state.cloud,
     integrations: state.view === 'integrations' ? { ...state.integ, nowMs: Date.now(), local: state.authMode === 'local' } : null,
     presence: { ...state.presence, stale: state.presence.stale || lost },
     teamOverview: { ...state.overview, stale: lost || !!state.overview.error || (state.overview.updatedAt != null && Date.now() - state.overview.updatedAt > 45_000), ageMs: state.overview.updatedAt == null ? null : Date.now() - state.overview.updatedAt },
@@ -847,6 +849,36 @@ async function resendInvite() {
     state.invite = { busy: false, error: accountErrorText(err, 'invite'), made: null };
   }
   update();
+}
+
+const cloudAdmin = () => state.authMode === 'accounts' && ['owner', 'admin'].includes(state.me?.member?.role);
+async function loadCloud() {
+  const teamId = state.me?.org?.id;
+  if (!teamId || !cloudAdmin()) return;
+  state.cloud = { ...state.cloud, status: 'loading', error: null }; update();
+  try {
+    const data = await api.hostedRunners(teamId);
+    if (state.me?.org?.id === teamId) state.cloud = { ...state.cloud, status: 'ok', data };
+  } catch (err) { state.cloud = { ...state.cloud, status: 'error', error: errorText(err) }; }
+  update();
+}
+
+async function cloudCall(fn, { made = false } = {}) {
+  const teamId = state.me?.org?.id;
+  if (!teamId || state.cloud.busy) return;
+  state.cloud = { ...state.cloud, busy: true, error: null, made: null }; update();
+  try {
+    const r = await fn(teamId);
+    state.cloud = { ...state.cloud, busy: false, status: 'ok', made: made ? { runner_token: String(r.runner_token ?? ''), team_id: String(r.team_id ?? '') } : null };
+  } catch (err) { state.cloud = { ...state.cloud, busy: false, status: 'error', error: accountErrorText(err) }; }
+  update();
+  if (state.cloud.status === 'ok') loadCloud();
+}
+
+async function copyCloudToken() {
+  const v = state.cloud.made?.runner_token;
+  if (!v) return;
+  try { await navigator.clipboard.writeText(v); toast('Token copied.'); } catch { toast('Couldn’t copy. Select it and copy it yourself.', 'error'); }
 }
 
 async function copyInvite(what) {
@@ -1305,7 +1337,7 @@ async function openGive(cardId, mode, { another = false } = {}) {
   const preference = tacklePreference(state.me.member.id, undefined, state.board?.settings?.default_budget_usd ?? 5), retry = mode === 'retry';
   state.dialog = {
     kind: 'give', cardId, mode, another, instance: {}, handover_hold: v.handover_hold === true, ...handoverPin(v),
-    target: retry ? v.run?.owner?.member_id ?? state.me.member.id : state.me.member.id,
+    target: retry ? (v.run?.hosted ? CLOUD : v.run?.owner?.member_id ?? state.me.member.id) : state.me.member.id,
     repo_id: v.repo?.id ?? '',
     base_ref: v.base_ref ?? '',
     max_turns: state.board?.settings?.default_max_turns ?? null,
@@ -1333,7 +1365,7 @@ const PLAN_LABEL = PLAN_APPROVAL_LABEL;
 async function loadPreview() {
   const d = state.dialog;
   if (d?.kind !== 'give') return;
-  const target = d.target === state.me.member.id ? null : d.target;
+  const target = d.target === state.me.member.id || d.target === CLOUD ? null : d.target;
   const token = {};
   d.previewToken = token;
   state.dialog = { ...d, preview: { loading: true }, previewToken: token };
@@ -1341,7 +1373,7 @@ async function loadPreview() {
   try {
     const res = await api.overlapPreview(d.cardId, target, d.repo_id || null);
     if (state.dialog?.previewToken !== token) return;
-    state.dialog = { ...state.dialog, preview: { overlaps: res.overlaps ?? [], check: res.check ?? null, sponsor: res.sponsor ?? null, runners: res.runners ?? [], can_use_no_budget: res.can_use_no_budget === true } };
+    state.dialog = { ...state.dialog, preview: { overlaps: res.overlaps ?? [], check: res.check ?? null, sponsor: res.sponsor ?? null, runners: res.runners ?? [], can_use_no_budget: res.can_use_no_budget === true, hosted: res.hosted ?? null } };
     if (state.dialog.another) {
       const v = viewOf(state.dialog.cardId);
       const seed = v?.record_id ? await api.continueSeed(v.id, v.record_id).catch(() => null) : null;
@@ -1362,7 +1394,8 @@ async function submitGive(form) {
   const current = () => generation === boardGeneration && state.me?.member?.id === memberId && state.dialog?.instance === d.instance;
   const v = viewOf(d.cardId);
   const fd = new FormData(form);
-  const target = fd.get('target') || state.me.member.id;
+  const cloud = d.target === CLOUD;
+  const target = cloud ? state.me.member.id : fd.get('target') || state.me.member.id;
   const moving = d.mode === 'redispatch' && d.handover_hold;
   if (moving && (!sameHandover(v, d) || !v.handover_hold || v.handover_provenance !== 'checkpoint_complete')) {
     state.dialog = { ...d, error: 'This handover changed. Reopen the card before choosing the next AI.' }; update(); return;
@@ -1371,7 +1404,7 @@ async function submitGive(form) {
   const base_ref = moving ? d.base_ref : String(fd.get('base_ref') ?? '').trim() || null;
   const budget = Number(fd.get('budget_usd'));
   const ai = fd.get('ai') || d.ai;
-  const uncapped = tackleChoices(d.preview?.runners).find((a) => a.id === ai)?.budget === 'none' || fd.get('budget_mode') === 'none';
+  const uncapped = tackleChoices(cloud ? (d.preview?.hosted?.runners ?? []).filter((r) => r.online) : d.preview?.runners).find((a) => a.id === ai)?.budget === 'none' || fd.get('budget_mode') === 'none';
   const wantPlan = fd.get('plan_approval') === 'on';
   if (!repo_id) { state.dialog = { ...d, error: 'Pick a repo first. The agent works inside that repo.' }; update(); return; }
   if (uncapped && d.mode !== 'retry' && fd.get('confirm_uncapped') !== 'on' && !(ai !== 'codex' && d.max_turns != null)) { state.dialog = { ...d, error: 'Confirm that this run has no dollar limit, or choose a card budget.' }; update(); return; }
@@ -1393,7 +1426,7 @@ async function submitGive(form) {
     if (!current()) return;
     const isMe = target === state.me.member.id;
     const action = d.mode === 'retry' ? 'retry' : d.mode === 'redispatch' ? 'take_over_with_claude' : 'dispatch';
-    const body = { target_member_id: isMe ? null : target, ai, budget_usd: uncapped ? null : budget,
+    const body = { target_member_id: isMe ? null : target, ai, budget_usd: uncapped ? null : budget, placement: cloud ? 'hosted' : null,
       ...(moving ? { expected_fence: d.expected_fence, prior_run_id: d.prior_run_id } : {}) };
     const res = await api.action(d.cardId, action, body);
     if (!current()) return;
@@ -1401,7 +1434,7 @@ async function submitGive(form) {
     applyCard(res);
     state.dialog = null;
     const name = state.members.get(target)?.name;
-    toast(isMe ? `${v.key} is queued for ${ai === 'codex' ? 'Codex' : 'Claude Code'}.` : `Asked ${name}. They confirm before work starts.`);
+    toast(cloud ? `${v.key} is queued for the cloud runner.` : isMe ? `${v.key} is queued for ${ai === 'codex' ? 'Codex' : 'Claude Code'}.` : `Asked ${name}. They confirm before work starts.`);
   } catch (err) {
     if (!current()) return;
     state.dialog = { ...state.dialog, busy: false, error: errorText(err) };
@@ -1423,6 +1456,20 @@ async function submitDialogForm(form, submitter) {
     const name = String(new FormData(form).get('name') ?? '').trim();
     if (!name) return undefined;
     return createFirstTeam(name);
+  }
+  if (kind === 'cloud-runner-add') {
+    const name = String(new FormData(form).get('name') ?? '').trim();
+    await cloudCall((teamId) => api.createHostedRunner(teamId, name || null), { made: true });
+    return undefined;
+  }
+  if (kind === 'cloud-provider-save') {
+    const fd = new FormData(form);
+    const provider = String(fd.get('provider') ?? '');
+    const body = {};
+    for (const k of ['api_key', 'base_url', 'model']) { const v = String(fd.get(k) ?? '').trim(); if (v) body[k] = v; }
+    await cloudCall((teamId) => api.setProviderConfig(teamId, provider, body));
+    if (state.cloud.status === 'ok') form.reset();
+    return undefined;
   }
   if (kind === 'team-invite') {
     const fd = new FormData(form);
@@ -1985,6 +2032,8 @@ function onClick(e) {
     case 'accept-invite': joinTeam('invites', { invite_id: el.dataset.invite }); return;
     case 'signout': signOut(); return;
     case 'copy-invite': copyInvite(el.dataset.what); return;
+    case 'copy-cloud-token': copyCloudToken(); return;
+    case 'cloud-provider-remove': cloudCall((teamId) => api.removeProviderConfig(teamId, el.dataset.provider)); return;
     case 'resend-invite': resendInvite(); return;
     default:
   }
@@ -2036,6 +2085,11 @@ function onChange(e) {
   if (what === 'board') { switchBoard(el.value); return; }
   if (what === 'integ-board') { setIntegrationBoard(el.dataset.conn, el.value); return; }
   if (what === 'give-target' && state.dialog?.kind === 'give') { state.dialog = { ...state.dialog, target: el.value }; loadPreview(); }
+  if (what === 'give-cloud' && state.dialog?.kind === 'give') {
+    const was = state.dialog.target;
+    state.dialog = { ...state.dialog, target: el.checked ? CLOUD : state.me.member.id };
+    if (was !== state.me.member.id && was !== CLOUD) loadPreview(); else update();
+  }
   if (what === 'give-ai' && state.dialog?.kind === 'give') { state.dialog = { ...state.dialog, ai: el.value }; update(); }
   if (what === 'give-budget-mode' && state.dialog?.kind === 'give') { state.dialog = { ...state.dialog, budget_mode: el.value }; update(); }
   if (what === 'give-budget' && state.dialog?.kind === 'give') state.dialog = { ...state.dialog, budget_usd: el.value };

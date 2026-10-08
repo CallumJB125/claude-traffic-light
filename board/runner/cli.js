@@ -3,6 +3,8 @@
 //   enroll --hub <url> --device <id> --token <tok> [--cf-client-id … --cf-client-secret …]
 //   start [--foreground]          detached by default (Buddy later spawns `start` itself)
 //   status | stop-all | opt-in <repo_id> --path <local checkout> | confirm <request_id> yes|no
+//   hosted                        the always-on cloud runner (systemd buddy-runner.service; config from env)
+//   hosted-check                  what the cloud runner would use here: sandbox, AI CLIs, hub (no secrets printed)
 // BOARD_HOME overrides ~/.board.
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -10,6 +12,10 @@ import net from '../shared/local-sockets.cjs'; // protected Windows local transp
 import { fileURLToPath } from 'node:url';
 import { boardHome, initHome, writeDevice, readPolicy, writePolicy } from './config.js';
 import { Supervisor } from './supervisor.js';
+import { HostedMode, hostedConfig } from './hosted/index.js';
+import { detectCgroup } from './hosted/cgroup.js';
+import { BACKENDS } from './backends/index.js';
+import { makeLogger } from './util.js';
 
 function flags(argv) {
   const out = { _: [] };
@@ -38,6 +44,8 @@ function control(l, msg) {
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
   const f = flags(rest);
+  if (cmd === 'hosted') return startHosted();
+  if (cmd === 'hosted-check') return hostedCheck();
   const l = initHome(boardHome());
   switch (cmd) {
     case 'enroll': {
@@ -88,6 +96,47 @@ async function main() {
       process.stdout.write('usage: board-runner enroll|start|status|stop-all|opt-in|confirm (see runner/cli.js)\n');
       process.exitCode = cmd ? 1 : 0;
   }
+}
+
+// systemd runs this in the foreground; SIGTERM parks live runs like the desktop app's quit.
+async function startHosted() {
+  const log = makeLogger();
+  const hosted = new HostedMode({ config: hostedConfig(process.env), log });
+  const env = hosted.childEnv(process.env);
+  delete env.CREDENTIALS_DIRECTORY;
+  const sup = await new Supervisor({ home: hosted.boardHome, device: hosted.device, enabledAis: hosted.config.ais, hosted, env, log, controlSocket: true, buddyHome: null }).start();
+  log.info('hosted runner started', { ais: hosted.config.ais, repos: hosted.config.repos.length, sandbox: hosted.cgroup.ok ? 'cgroup' : 'off' });
+  let stopping = false;
+  const bye = async (signal) => {
+    if (stopping) return;
+    stopping = true;
+    log.info('hosted runner stopping', { signal });
+    sup.quitting = true;
+    const live = [...sup.runs.values()].filter((r) => !r.ended && !r.hubHandoverPending);
+    await Promise.race([Promise.all(live.map((r) => r.parkForQuit(10_000).catch(() => false))), new Promise((r) => setTimeout(r, 25_000))]);
+    await sup.shutdown({ stopRuns: false });
+    hosted.close();
+    process.exit(0);
+  };
+  process.on('SIGTERM', () => bye('SIGTERM'));
+  process.on('SIGINT', () => bye('SIGINT'));
+}
+
+async function hostedCheck() {
+  const out = {};
+  try {
+    const c = hostedConfig(process.env);
+    out.config = { hub: c.hub, team: c.team, home: c.home, repos: c.repos, ais: c.ais, sandbox: c.sandbox, caps: c.caps, runner_token: 'present' };
+  } catch (e) { out.config = { error: e.message }; }
+  out.cgroup = detectCgroup();
+  out.ai = {};
+  for (const [id, B] of Object.entries(BACKENDS)) {
+    const d = await B.detect({ env: process.env }).catch((e) => ({ installed: false, reason: e.message }));
+    out.ai[id] = { installed: d.installed, version: d.version ?? null, signedIn: d.signedIn ?? 'unknown', ...(d.reason ? { reason: d.reason } : {}) };
+  }
+  out.bubblewrap = ['/usr/bin/bwrap', '/bin/bwrap'].some((p) => fs.existsSync(p));
+  process.stdout.write(`${JSON.stringify(out, null, 2)}\n`);
+  process.exitCode = out.config.error || (out.config.sandbox === 'cgroup' && !out.cgroup.ok) ? 1 : 0;
 }
 
 main().catch((e) => { process.stderr.write(`${e.message}\n`); process.exit(1); });

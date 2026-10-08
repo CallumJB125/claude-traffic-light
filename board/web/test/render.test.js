@@ -284,6 +284,32 @@ test('Tackle with AI: own Codex account by default, sponsor and overlaps shown b
   assert.doesNotMatch(unknown, /No overlapping work/);
 });
 
+test('Run in the cloud: honest when no cloud runner is set up or it is offline; online shows its AIs and recent run cost', () => {
+  const v = view({ run_state: 'todo', run: null, live: null, column: 'todo' });
+  const m = model([entry(v)]);
+  const base = { kind: 'give', cardId: v.id, ai: 'claude', target: 'm-alice', repos: [{ id: 'r1', short_name: 'bondly' }], repo_id: 'r1', budget_usd: 5 };
+  const box = (n) => findAll(n, (x) => x.props.name === 'cloud')[0];
+  assert.equal(box(giveDialog({ ...base, preview: { overlaps: [] } }, m)), undefined, 'no cloud choice outside accounts mode');
+  const none = giveDialog({ ...base, preview: { overlaps: [], hosted: { enrolled: false, online: false, runners: [], recent_runs: [] } } }, m);
+  assert.equal(box(none).props.disabled, true);
+  assert.match(textOf(none), /No cloud runner is set up for this team/);
+  const seen = new Date(Date.now() - 3 * 3_600_000).toISOString();
+  const offline = textOf(giveDialog({ ...base, target: 'cloud', preview: { overlaps: [], hosted: { enrolled: true, online: false, runners: [{ name: 'Pi 5', online: false, last_seen_at: seen, ai: [] }], recent_runs: [] } } }, m));
+  assert.match(offline, /Pi 5 is offline \(last seen 3h ago\)\. Work waits in the queue until it reconnects\./);
+  const hosted = { enrolled: true, online: true, runners: [{ name: 'Pi 5', online: true, active_runs: 1, serves_repo: true, ai: [{ id: 'claude', available: true, reason: null, budget: 'native' }, { id: 'codex', available: false, reason: 'signed_out', budget: 'none' }] }],
+    recent_runs: [{ card_key: 'BDL-7', cost_usd: 0.42 }, { card_key: 'BDL-6', cost_usd: null }] };
+  const n = giveDialog({ ...base, target: 'cloud', preview: { overlaps: [], runners: [{ ai: [{ id: 'codex', available: true, reason: null, budget: 'none' }] }], hosted } }, m);
+  const t = textOf(n);
+  assert.equal(box(n).props.checked, true);
+  assert.match(t, /Pi 5 is online · 1 running\. Keeps working while your computer is closed\./);
+  assert.match(t, /Recent cloud runs: BDL-7 \$0\.42 · BDL-6 cost not reported/);
+  assert.match(t, /Runs on the team's cloud runner · Claude Code/);
+  assert.match(textOf(findAll(n, (x) => x.props.type === 'submit')[0]), /^Run in the cloud$/);
+  const codex = findAll(n, (x) => x.tag === 'option' && x.props.value === 'codex')[0];
+  assert.equal(codex.props.disabled, true, 'AIs come from the cloud runner, not the laptop');
+  assert.ok(!findAll(n, (x) => x.tag === 'input' && x.props.type === 'radio' && x.props.name === 'target').some((r) => r.props.checked), 'no machine radio is picked');
+});
+
 test('Tackle with AI defaults to Claude with a visible card budget; uncapped choices need a confirm', () => {
   const v = view({ run_state: 'todo', run: null, live: null, column: 'todo' });
   const m = model([entry(v)]);

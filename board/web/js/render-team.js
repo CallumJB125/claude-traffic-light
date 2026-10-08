@@ -150,6 +150,54 @@ export function invitePanel(model) {
 
 const ACTIVITY = { working: 'Working', waiting: 'Waiting for a person', quiet: 'Quiet', idle: 'Idle · task still open', disconnected: 'Runner disconnected', no_live_run: 'No active AI run' };
 const TASK_STATE = { todo: 'To do', queued: 'Queued', claimed: 'Starting', running: 'In progress', quiet: 'In progress', blocked: 'Blocked', parked: 'Waiting', suspended: 'Paused', reconnecting: 'Reconnecting', unresponsive: 'Not responding', orphaned: 'Run lost', handing_over: 'Handing over', handed_over: 'Handed over', in_review: 'In review', done: 'Done', failed: 'Failed' };
+// The team's cloud runner (docs/CLOUD-RUNNER-RUNBOOK.md): admins add one (its
+// token is shown once, for the server) and store the provider keys hosted runs
+// use. Keys go in and never come back: the hub answers only "has a key".
+const HOSTED_PROVIDERS = [['claude', 'Claude Code'], ['codex', 'Codex'], ['hermes-dgx', 'Hermes · DGX (tailnet model)']];
+
+export function cloudPanel(model) {
+  if (!model.accounts || !CAN_INVITE.has(model.me?.member?.role)) return null;
+  const c = model.cloud ?? {};
+  const data = c.data;
+  const runners = data?.runners ?? [];
+  return h('section', { class: 'team-invite', 'aria-labelledby': 'team-cloud-h' },
+    h('h2', { class: 'team-needs-h', id: 'team-cloud-h' }, icon('sync', 'icon-xs'), 'Cloud runner'),
+    h('p', { class: 'hint' }, 'An always-on runner on your own server keeps cards working while laptops are closed. Choose "Run in the cloud" when you send a card to an AI.'),
+    c.status === 'loading' && !data ? h('p', { class: 'hint', role: 'status' }, 'Checking…') : null,
+    c.status === 'error' ? h('p', { class: 'form-error', role: 'alert' }, c.error) : null,
+    data ? (runners.length
+      ? h('ul', { class: 'team-cloud-list' }, runners.map((r) => h('li', { key: r.id },
+        h('strong', null, r.name), ` · ${r.owner?.name ?? ''} · `,
+        r.online ? `online${r.active_runs ? `, ${r.active_runs} running` : ''}` : r.last_seen_at ? `offline, last seen ${formatAge(Date.now() - Date.parse(r.last_seen_at))} ago` : 'never connected')))
+      : h('p', { class: 'hint' }, 'No cloud runner yet.')) : null,
+    h('form', { class: 'signin-row', 'data-form': 'cloud-runner-add' },
+      h('label', { class: 'sr-only', for: 'cloud-name' }, 'Cloud runner name'),
+      h('input', { id: 'cloud-name', name: 'name', class: 'input', placeholder: 'Pi 5', maxlength: '100', autocomplete: 'off' }),
+      h('button', { type: 'submit', class: 'btn btn-primary', disabled: c.busy || null }, 'Add cloud runner')),
+    c.made ? h('div', { class: 'team-invite-made', role: 'status' },
+      h('p', null, 'Runner token for the server. It shows only this once: put it in /etc/buddy-runner/runner.token (root, 0600) as the runbook says, then forget it here.'),
+      h('div', { class: 'signin-row' },
+        h('code', { class: 'team-invite-code num', 'aria-label': 'Runner token' }, c.made.runner_token),
+        h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'copy-cloud-token' }, 'Copy token')),
+      h('p', { class: 'hint' }, `Team id for BUDDY_RUNNER_TEAM: ${c.made.team_id}`)) : null,
+    h('h3', { class: 'team-needs-h' }, 'Provider keys for cloud runs'),
+    data && !data.providers?.length ? h('p', { class: 'hint' }, 'None stored: cloud runs use the server CLI\'s own sign-in.') : null,
+    data?.providers?.length ? h('ul', { class: 'team-cloud-list' }, data.providers.map((p) => h('li', { key: p.provider },
+      h('strong', null, p.label ?? p.provider), p.has_key ? ' · key stored' : ' · no key', p.model ? ` · ${p.model}` : '', p.base_url ? ` · ${p.base_url}` : '', ' ',
+      h('button', { type: 'button', class: 'btn btn-sm btn-ghost', 'data-action': 'cloud-provider-remove', 'data-provider': p.provider, disabled: c.busy || null }, 'Remove')))) : null,
+    h('form', { class: 'signin-row', 'data-form': 'cloud-provider-save' },
+      h('label', { class: 'sr-only', for: 'cloud-provider' }, 'Provider'),
+      h('select', { id: 'cloud-provider', name: 'provider', class: 'input' }, HOSTED_PROVIDERS.map(([v, label]) => h('option', { key: v, value: v }, label))),
+      h('label', { class: 'sr-only', for: 'cloud-key' }, 'API key'),
+      h('input', { id: 'cloud-key', name: 'api_key', type: 'password', class: 'input', placeholder: 'API key (kept sealed on the hub)', autocomplete: 'off' }),
+      h('label', { class: 'sr-only', for: 'cloud-url' }, 'Model server URL'),
+      h('input', { id: 'cloud-url', name: 'base_url', class: 'input', placeholder: 'Hermes only: model server URL (tailnet IP)', autocomplete: 'off', spellcheck: 'false' }),
+      h('label', { class: 'sr-only', for: 'cloud-model' }, 'Model'),
+      h('input', { id: 'cloud-model', name: 'model', class: 'input', placeholder: 'Model (optional)', autocomplete: 'off', spellcheck: 'false' }),
+      h('button', { type: 'submit', class: 'btn', disabled: c.busy || null }, 'Save')),
+    data && !data.encryption ? h('p', { class: 'hint' }, 'This hub has no encryption key, so it cannot store provider keys.') : null);
+}
+
 function overviewTask(item, stale) {
   const change = item.evidence?.verification === 'hub_verified' ? 'Change verified' : item.evidence ? 'Change self-reported' : 'No change evidence';
   const tests = item.evidence?.tests ? ` · Tests reported: ${item.evidence.tests}` : '';
@@ -212,6 +260,7 @@ export function teamScreen(model) {
         h('p', null, SCOPE_RULE))),
     overviewPanel(model),
     invitePanel(model),
+    cloudPanel(model),
     h('h2', { class: 'team-needs-h' }, `On ${model.board?.name ?? 'this board'}`),
     h('p', { class: 'teamview-line' }, 'Live sessions in repos linked to this board. Only members who turned on sharing appear. Read-only sessions never show.'),
     p.loaded ? needsYou(rows, model) : null,

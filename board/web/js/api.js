@@ -89,6 +89,11 @@ export const api = {
   createTeam: (name) => mut('POST', '/api/teams', { name }),
   acceptInvite: (body) => mut('POST', '/api/invites/accept', body),
   createInvite: (teamId, email, role) => mut('POST', `/api/teams/${enc(teamId)}/invites`, { email, role }),
+  // Cloud runner (067): status, a new runner token (shown once), and the team's sealed provider keys.
+  hostedRunners: (teamId) => call('GET', `/api/teams/${enc(teamId)}/hosted-runners`),
+  createHostedRunner: (teamId, name) => mut('POST', `/api/teams/${enc(teamId)}/hosted-runners`, { name }),
+  setProviderConfig: (teamId, provider, body) => mut('PUT', `/api/teams/${enc(teamId)}/provider-configs/${enc(provider)}`, body),
+  removeProviderConfig: (teamId, provider) => mut('DELETE', `/api/teams/${enc(teamId)}/provider-configs/${enc(provider)}`),
   listInvites: (teamId) => call('GET', `/api/teams/${enc(teamId)}/invites`),
   resendInvite: (teamId, id) => mut('POST', `/api/teams/${enc(teamId)}/invites/${enc(id)}/resend`),
   // The hub prints a per-process dev secret at startup (never behind a proxy/tunnel).

@@ -28,6 +28,16 @@ export function tmpDir(prefix = 'brt-') {
   return privateFixtureDirectory(path.join(TEMP_ROOT, prefix));
 }
 
+/** Every file under dir whose bytes contain needle (secrets must never reach disk). */
+export function filesHolding(dir, needle, out = []) {
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) filesHolding(p, needle, out);
+    else if (e.isFile() && fs.readFileSync(p).includes(needle)) out.push(p);
+  }
+  return out;
+}
+
 export function rm(dir) {
   try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
 }

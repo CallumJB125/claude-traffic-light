@@ -10,6 +10,7 @@ import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { startAccounts } from '../accounts-helpers.js';
 import { emailOnlyIdentity } from '../../views.js';
 import fake from '../../integrations/fake/index.js';
+import { providerConfigAad } from '../../vault.js';
 
 export const MARK = 'B-SECRET';
 
@@ -110,6 +111,9 @@ export async function tenancy({ config = {}, ...opts } = {}) {
   if (eb.status !== 200) throw new Error(`enrol: ${eb.text}`);
   B.enrollment = eb.body.enrollment_id;
   B.runnerToken = eb.body.runner_token;
+  // B's sealed provider key for hosted runs (067).
+  const sealed = h.hub.vault.seal(providerConfigAad(B.team), 'claude', `${MARK}-api-key`);
+  db.insert('team_provider_configs', { org_id: B.team, provider: 'claude', model: `${MARK}-model`, ...sealed, updated_by: B.owner, created_at: now, updated_at: now });
 
   // The client boundary is separate from all ordinary memberships.
   await user('bguest', 'client@beta.test');
@@ -168,6 +172,7 @@ export async function tenancy({ config = {}, ...opts } = {}) {
       q('SELECT * FROM integration_pending WHERE org_id = ?', B.team),
       q('SELECT * FROM external_identities WHERE member_id IN (SELECT id FROM members WHERE org_id = ?)', B.team),
       q('SELECT * FROM runner_enrollments WHERE org_id = ?', B.team),
+      q('SELECT * FROM team_provider_configs WHERE org_id = ?', B.team),
       q('SELECT * FROM board_labels WHERE board_id = ?', B.board),
       q('SELECT * FROM client_workspaces WHERE org_id = ?', B.team),
       q('SELECT * FROM client_projects WHERE workspace_id = ?', B.team),

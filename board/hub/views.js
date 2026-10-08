@@ -140,8 +140,9 @@ export function cardView(hub, row, viewerId) {
   let target = null;
   if (d && (row.run_state === 'queued' || row.run_state == null)) {
     const tid = hub.dispatchTarget(d);
-    const dev = [...hub.runners.values()].find((c) => c.member_id === tid && c.repos.has(row.repo_id));
-    target = { member_id: tid, name: hub.memberName(tid), is_viewer: tid === viewerId, ai: aiOfDispatch(d), ai_label: AI_LABELS[aiOfDispatch(d)], awaiting_confirm: !!d.needs_confirm, ...(dev ? { device_name: dev.device.name } : {}) };
+    const cloud = d.placement === 'hosted';
+    const dev = [...hub.runners.values()].find((c) => c.member_id === tid && c.hosted === cloud && c.repos.has(row.repo_id));
+    target = { member_id: tid, name: hub.memberName(tid), is_viewer: tid === viewerId, ai: aiOfDispatch(d), ai_label: AI_LABELS[aiOfDispatch(d)], awaiting_confirm: !!d.needs_confirm, ...(dev ? { device_name: dev.device.name } : {}), ...(cloud ? { hosted: true } : {}) };
   }
   const h = hub.latestHandover(row.id);
   const doc = h || runRow ? hub.handoverDoc(row.id) : null;
@@ -159,6 +160,7 @@ export function cardView(hub, row, viewerId) {
     owner: person(hub, runRow.on_behalf_of), dispatched_by: person(hub, runRow.dispatched_by),
     // The CLI can outlive its run on the hub (board_complete): still acting.
     child_alive: runRow.ended_at ? hub.endedChildAlive?.(runRow.id) === true : hub.lease?.(runRow.id)?.child_alive === true,
+    ...(runRow.device_id && hub.db.get('SELECT 1 AS x FROM runner_enrollments WHERE device_id = ? AND hosted = 1 LIMIT 1', runRow.device_id) ? { hosted: true } : {}),
   } : null;
   const stalled = deriveStalled({ run_state: row.run_state, fail_kind: row.fail_kind, state_age_ms: stateAge == null ? 0 : Math.round(stateAge), live, run });
   return {
