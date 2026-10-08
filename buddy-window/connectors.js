@@ -14,6 +14,8 @@ const CONNECTORS = Object.freeze([
   { id: 'github', name: 'GitHub', value: 'Cards update when pull requests merge; open the PR from the card.' },
   { id: 'slack', name: 'Slack', value: 'Turn messages into cards and get updates in a channel.' },
   { id: 'sentry', name: 'Sentry', value: 'New errors become cards, deduplicated.' },
+  { id: 'linear', name: 'Linear', value: 'New Linear issues become cards; status changes show on the card.' },
+  { id: 'jira', name: 'Jira', value: 'New Jira issues become cards; status changes show on the card.' },
 ]);
 
 const STATUS_TEXT = Object.freeze({ available: 'Available after you join a team', soon: 'Coming soon' });

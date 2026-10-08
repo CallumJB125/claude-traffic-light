@@ -7,6 +7,7 @@ import { formatAge } from './view.js';
 import { CONNECTORS, STATUS_TEXT, connectorStatus } from './connectors.js';
 import { sentryRouting } from './render-sentry.js';
 import { slackChannel } from './render-slack.js';
+import { trackerIntake } from './render-tracker.js';
 
 const MODE_LABEL = { auto: 'Automatic', ask: 'Ask first', off: 'Off' };
 const DECISION_LABEL = { attempted: 'In progress', auto: 'Done automatically', failed: 'Failed', asked: 'Waiting for a yes', approved: 'Approved', denied: 'Denied', skipped: 'Skipped (off)' };
@@ -37,6 +38,10 @@ const ACTION_LABEL = {
   'sentry.status': 'Comment on issue status and regressions',
   'sentry.incident': 'Create cards from critical metric alerts',
   'sentry.incident-status': 'Comment on incident status updates',
+  'linear.card': 'Create cards from new and updated Linear issues',
+  'linear.status': 'Comment when a Linear issue changes status',
+  'jira.card': 'Create cards from new and updated Jira issues',
+  'jira.status': 'Comment when a Jira issue changes status',
   'pr.link': 'Link a card’s pull request',
   'pr.status': 'Show checks and review on the card',
   'pr.comment_notice': 'Note new PR comments on the card',
@@ -163,6 +168,7 @@ function connectedCard(conn, m) {
           (m.boards ?? []).filter((b) => !b.archived_at || b.id === conn.target_board_id).map((b) => h('option', { key: b.id, value: b.id, selected: b.id === conn.target_board_id }, `${b.name}${b.archived_at ? ' (Archived — intake paused)' : ''}`)))
           : h('span', null, (m.boards ?? []).find((b) => b.id === conn.target_board_id)?.name ?? 'Team board'))),
     conn.provider === 'slack' ? slackChannel(conn, m) : null,
+    conn.provider === 'linear' || conn.provider === 'jira' ? trackerIntake(conn, m, connector?.name ?? conn.provider) : null,
     connector?.identity ? identitySection(conn, connector.name ?? conn.provider, m) : null,
     m.canEdit && Object.hasOwn(conn, 'webhook_url') ? webhookUrlSection(conn, connector?.name ?? conn.provider) : null,
     m.canEdit && conn.settings?.provider?.mode === 'app' ? reposSection(conn, m) : null,
@@ -311,7 +317,7 @@ function availableCard(c, m) {
       : c.connect === 'token'
         ? (tokenOpen
           ? h('form', { class: 'integ-token', 'data-form': 'integ-token', 'data-provider': c.id },
-            h('label', { class: 'field' }, h('span', null, c.shows_webhook_url ? `${c.name} client secret` : `${c.name} token`),
+            h('label', { class: 'field' }, h('span', null, c.shows_webhook_url ? `${c.name} ${c.id === 'sentry' ? 'client secret' : 'webhook signing secret'}` : `${c.name} token`),
               h('input', { class: 'input', name: 'token', type: 'password', autocomplete: 'new-password', ...NO_MANAGER, required: true, autofocus: true, spellcheck: 'false' })),
             c.shows_webhook_url ? h('p', { class: 'muted small' }, `Plexiform stores this secret encrypted and never displays it again. Rotate the secret in ${c.name} before reconnecting so old signed requests cannot be reused.`) : null,
             c.shows_webhook_url ? h('p', { class: 'muted small' }, `After connecting, this page shows the webhook URL to paste into ${c.name}.`) : null,

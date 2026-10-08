@@ -1,0 +1,24 @@
+{
+  "action": "update",
+  "type": "Issue",
+  "createdAt": "2026-10-01T10:00:00.000Z",
+  "data": {
+    "id": "2174add1-f7c8-44e3-bbf3-2d60b5ea8bc9",
+    "createdAt": "2026-10-01T09:00:00.000Z",
+    "updatedAt": "2026-10-01T10:00:00.000Z",
+    "number": 123,
+    "title": "Checkout button does nothing on Safari",
+    "priority": 2,
+    "identifier": "ENG-123",
+    "url": "https://linear.app/acme/issue/ENG-123/checkout-button-does-nothing-on-safari",
+    "teamId": "72b2a2dc-6f4f-4423-9d34-24b5bd10634a",
+    "stateId": "f0c1d2e3-5d1c-4b33-8a8c-222222222222",
+    "state": { "id": "f0c1d2e3-5d1c-4b33-8a8c-222222222222", "color": "#f2c94c", "name": "In Progress", "type": "started" },
+    "team": { "id": "72b2a2dc-6f4f-4423-9d34-24b5bd10634a", "key": "ENG", "name": "Engineering" }
+  },
+  "updatedFrom": { "updatedAt": "2026-10-01T09:00:00.000Z", "stateId": "e6b8a3a0-5d1c-4b33-8a8c-111111111111" },
+  "url": "https://linear.app/acme/issue/ENG-123/checkout-button-does-nothing-on-safari",
+  "organizationId": "b1a2c3d4-0000-4000-8000-00000000abcd",
+  "webhookTimestamp": 1759312800000,
+  "webhookId": "000042e3-d123-4980-b49f-8e140eef9329"
+}
