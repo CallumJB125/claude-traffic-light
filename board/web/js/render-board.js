@@ -419,9 +419,10 @@ export function needsYouSection(items, model) {
   return h('section', { class: 'needs-you', 'aria-labelledby': 'needs-you-title' },
     h('h2', { id: 'needs-you-title', class: 'needs-you-title' }, `Needs you · ${items.length}`),
     h('ol', { class: 'needs-you-list' }, items.slice(0, 8).map((i) => h('li', { key: i.card_id },
-      h('button', { type: 'button', class: 'needs-you-item', 'data-kind': i.kind, 'data-action': 'open', 'data-card': i.card_id, 'data-section': i.kind === 'waiting' ? 'asks' : null },
+      h('button', { type: 'button', class: 'needs-you-item', 'data-kind': i.kind, 'data-action': 'open', 'data-card': i.card_id, 'data-section': i.kind === 'waiting' ? 'asks' : i.kind === 'review_changes' ? 'review' : null },
         h('span', { class: 'needs-you-key num' }, i.key),
         h('span', { class: 'needs-you-what' }, i.label),
+        i.chip ? h('span', { class: 'needs-you-chip', 'data-tone': i.chip.tone, title: i.chip.by ? `Reviewed by ${i.chip.by}` : null }, i.chip.text) : null,
         h('span', { class: 'needs-you-wait num' }, i.wait_ms == null ? '' : `waiting ${formatAge(i.wait_ms)}`)))),
       items.length > 8 ? h('li', { key: 'more', class: 'muted small' }, `+${items.length - 8} more`) : null));
 }

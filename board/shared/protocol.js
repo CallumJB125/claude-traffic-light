@@ -5,6 +5,7 @@
 // Browser-safe, dependency-free.
 
 import { AI_IDS, aiListError } from './ai.js';
+import { REVIEW_PROVIDERS, REVIEW_OUTPUT_MAX, REVIEW_FILES_MAX, REVIEW_SIGNALS_MAX } from './review.js';
 export { AI_IDS, AI_LABELS, BUDGET_MAX_USD } from './ai.js';
 export const PROTOCOL_VERSION = 1;
 export const PROTOCOL_HEADER = 'Board-Protocol';
@@ -227,7 +228,7 @@ export const SHAPES = Object.freeze({
   // runner → hub
   'runner→hub': {
     hello: { protocol: 'int', device_id: 'string', runner_version: 'string', outbox_head_seq: 'int', runs: 'array', form_factor: 'string?', outbox_id: 'string?', outbox_acked_seq: 'int?', ai: 'array?' },
-    advertise: { repos: 'array', ai: 'array?' },
+    advertise: { repos: 'array', ai: 'array?', review: 'bool?' },
     claim: { id: 'string', card_id: 'string', request_id: 'string', expected_fence: 'int' },
     decline: { card_id: 'string', request_id: 'string', reason: 'string?' },
     hb: { seq_hb: 'int', mono_ms: 'int', wall_ms: 'int', slept_ms: 'int', runs: 'array' },
@@ -236,6 +237,8 @@ export const SHAPES = Object.freeze({
     rpc: { id: 'string', method: 'string', ...run3, repo_id: 'string', run_token: 'string', params: 'object' },
     salvage: { ...run3, repo_id: 'string', kind: 'string', payload: 'object' },
     presence: { sessions: 'array' },
+    // A finished review run (board/runner/review.js): the reviewer's raw reply, bounded; the hub parses it.
+    'review.result': { review_id: 'string', card_id: 'string', repo_id: 'string', ok: 'bool', output: 'string?', cost_usd: 'number?', files: 'array?', signals: 'array?', truncated: 'bool?', model: 'string?', error: 'string?' },
   },
   // hub → runner
   'hub→runner': {
@@ -251,6 +254,8 @@ export const SHAPES = Object.freeze({
     'context.update': { ...run3, team_context: 'object' },
     fenced: { run_id: 'string', card_id: 'string', held_fence: 'int', current_fence: 'int' },
     'rpc.result': { re: 'string', ok: 'bool' },
+    // The review run kind: no claim, lease or fence; it reads a finished run's diff and never edits.
+    'review.offer': { review_id: 'string', card_id: 'string', repo_id: 'string', key: 'string', ai: 'string', model: 'string?', budget_usd: 'number?', base_ref: 'string', heads: 'array', goal: 'string', acceptance: 'string', tests: 'string?', author_ai: 'string' },
     error: { code: 'string', message: 'string' },
   },
   // board-mcp / hook shim → runner (local IPC, NDJSON)
@@ -334,6 +339,11 @@ export function validate(channel, msg) {
     if (error) return { code: 'VALIDATION', message: error };
   }
   if (channel === 'hub→runner' && msg.type === 'offer' && msg.ai != null && !AI_IDS.includes(msg.ai)) return { code: 'VALIDATION', message: 'unknown offer AI' };
+  if (channel === 'hub→runner' && msg.type === 'review.offer' && !REVIEW_PROVIDERS.includes(msg.ai)) return { code: 'VALIDATION', message: 'unknown reviewer AI' };
+  if (channel === 'runner→hub' && msg.type === 'review.result') {
+    if ((msg.output?.length ?? 0) > REVIEW_OUTPUT_MAX || (msg.files?.length ?? 0) > REVIEW_FILES_MAX || (msg.signals?.length ?? 0) > REVIEW_SIGNALS_MAX) return { code: 'VALIDATION', message: 'review.result over its bounds' };
+    if ((msg.files ?? []).some((f) => typeof f !== 'string' || f.length > 500)) return { code: 'VALIDATION', message: 'review.result files must be paths' };
+  }
   if (channel === 'runner→hub' && msg.type === 'presence') {
     if (msg.sessions.length > PRESENCE_MAX_SESSIONS) return { code: 'VALIDATION', message: `presence: over ${PRESENCE_MAX_SESSIONS} sessions` };
     for (const s of msg.sessions) {

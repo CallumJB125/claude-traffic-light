@@ -38,6 +38,10 @@ export const JOURNAL_KINDS = Object.freeze([
   'workflow.publish',   // {recipe_id, version, content_hmac}; version content stays in the editable library
   'workflow.archive',   // {recipe_id, archived}; instantiated tasks remain ordinary cards
   'workflow.apply',     // {instance_id, recipe_id, version, content_hmac, context_hmac}
+  'card_review.request', // {review_id, provider, independence}: AI review before Review (066)
+  'card_review.result',  // {review_id, status, verdict, findings, cost_cents}: counts only, never findings text
+  'card_review.action',  // {review_id, action:'fix'|'approve'|'dismiss', finding?}
+  'board.ai_review',     // {enabled, provider, model, spend_cap_usd, allow_uncapped, disclosure_ack}
 ]);
 
 // The card fields a transition writes (states.CARD_FIELDS + the derived column).

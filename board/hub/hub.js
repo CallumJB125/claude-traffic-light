@@ -29,6 +29,7 @@ import { isAdmin, canWrite } from './permissions.js';
 import { Presence } from './presence.js';
 import { TaskOwnership } from './ownership.js';
 import { WorkflowExecutionGuard } from './workflow-execution-guard.js';
+import { CardReviews } from './reviews.js';
 
 const STALL_NOTE = {
   runner_offline: 'the runner stopped answering', process_gone: 'the AI process is gone',
@@ -101,6 +102,7 @@ export class Hub extends EventEmitter {
     this.presence = new Presence(this);   // D37b, memory only
     this.ownership = new TaskOwnership(this);
     this.workflowGuard = new WorkflowExecutionGuard(this);
+    this.reviews = new CardReviews(this);
   }
 
   // ── clocks ────────────────────────────────────────────────────────────────
@@ -563,6 +565,9 @@ export class Hub extends EventEmitter {
       case 'assign':
         if (e.member_id) this.db.run('INSERT INTO card_assignees (card_id, member_id, role) VALUES (?, ?, ?) ON CONFLICT(card_id, member_id) DO UPDATE SET role = excluded.role', cardId, e.member_id, e.role);
         break;
+      case 'review_request':
+        this.reviews.request(env);
+        break;
       case 'feed': {
         const { type, kind, ...data } = e;
         this.feed(cardId, kind, data, { actor, run: this.run(env.newRunId ?? env.runId) });
@@ -788,7 +793,8 @@ export class Hub extends EventEmitter {
     return Number.isFinite(usd) && usd > 0 ? Math.round(usd * 100) : null;
   }
   spentTodayCents(boardId) {
-    return Math.round((boardCost(this, boardId, `${this.iso().slice(0, 10)}T00:00:00.000Z`).total_usd ?? 0) * 100);
+    const since = `${this.iso().slice(0, 10)}T00:00:00.000Z`;
+    return Math.round((boardCost(this, boardId, since).total_usd ?? 0) * 100) + this.reviews.spentCents(boardId, since);
   }
   dailyRemainingCents(boardId) {
     const cap = this.dailyCapCents(boardId);
@@ -1027,6 +1033,7 @@ export class Hub extends EventEmitter {
     this.enrolments?.recheck();
     this.oauth?.sweep();
     this.sweepIntegrationsPending?.();
+    this.reviews.sweep();
     this.presence.sweep();
     await this.idle();
   }

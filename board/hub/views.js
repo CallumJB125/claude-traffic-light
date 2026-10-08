@@ -198,6 +198,7 @@ export function cardView(hub, row, viewerId) {
     pr: prView(hub, row),
     pr_link_status: prLinkStatus(hub, row),
     evidence: evidenceSummary(hub, row.id, runRow?.id),
+    review: hub.reviews?.summary(row) ?? null,
   };
 }
 
@@ -269,5 +270,6 @@ export function cardDetail(hub, row, viewerId, feedEventOf) {
     memories: hub.db.all("SELECT * FROM memories WHERE card_id = ? AND kind = 'handoff' ORDER BY created_at DESC", row.id).map((m) => ({
       id: m.id, kind: m.kind, body: m.body, status: m.status, created_age_ms: hub.ageOf(m.created_at),
     })),
+    reviews: hub.reviews?.list(row.id) ?? [],
   };
 }

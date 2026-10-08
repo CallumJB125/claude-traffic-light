@@ -322,6 +322,7 @@ export function dialog(model) {
     case 'boards': return boardsDialog(d, model);
     case 'workflows': return workflowDialog(d, model);
     case 'new-board': case 'rename-board': case 'archive-board': return boardDialog(d);
+    case 'review-settings': return reviewSettingsDialog(d);
     default: return null;
   }
 }
@@ -338,8 +339,38 @@ function boardsDialog(d, model) {
         h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'switch-board', 'data-board': b.id }, 'Open'),
         b.archived_at ? h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'restore-board', 'data-board': b.id, disabled: d.busy || null }, 'Restore')
           : h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'rename-board', 'data-board': b.id }, 'Rename'),
+        !b.archived_at ? h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'review-settings', 'data-board': b.id }, 'AI review') : null,
         !b.archived_at ? h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'archive-board', 'data-board': b.id, disabled: active <= 1 || null, title: active <= 1 ? 'Keep at least one active board' : null }, 'Archive') : null))),
     errorLine(d)));
+}
+
+// Per-board "AI review before Review": off by default; turning it on needs the disclosure ticked.
+export function reviewSettingsDialog(d) {
+  if (d.loading) return shell('review-settings', `AI review · ${d.name}`, h('div', { class: 'modal-body' }, h('p', { role: 'status' }, 'Loading…')));
+  const s = d.settings ?? {};
+  const edit = d.can_edit === true;
+  const off = !edit || d.busy || null;
+  return shell('review-settings', `AI review · ${d.name}`,
+    h('form', { class: 'modal-body review-settings', 'data-form': 'review-settings' },
+      h('p', { class: 'hint' }, 'Before finished work reaches Review, a second AI reads its changes and leaves a verdict and findings on the card. It never moves the card: a person still approves.'),
+      h('label', { class: 'check' }, h('input', { type: 'checkbox', name: 'enabled', checked: s.enabled || null, disabled: off }), 'AI review before Review'),
+      field('review-provider', 'Reviewer', h('select', { id: 'review-provider', name: 'provider', class: 'input', disabled: off },
+        h('option', { value: 'auto', selected: s.provider === 'auto' || null }, 'Automatic: a different AI from the author when one is available'),
+        (d.providers ?? []).map((p) => h('option', { value: p.id, selected: s.provider === p.id || null }, `${p.label}${p.spend_cap ? '' : ' (no spend cap)'}`))),
+        'Runs on the machine of whoever’s AI did the work, under their account.'),
+      field('review-model', 'Claude model', h('select', { id: 'review-model', name: 'model', class: 'input', disabled: off },
+        (d.models ?? []).map((m) => h('option', { value: m, selected: s.model === m || null }, m)))),
+      field('review-cap', 'Spend cap per review (USD)', h('input', { id: 'review-cap', name: 'spend_cap_usd', type: 'number', class: 'input num', step: '0.01', min: String(d.cap_min_usd ?? 0.01), max: String(d.cap_max_usd ?? 0.5), value: String(s.spend_cap_usd ?? 0.1), required: true, disabled: off }),
+        `At most ${fmtUsd(d.cap_max_usd ?? 0.5)}. Reviews also count toward the board’s daily cap.`),
+      h('label', { class: 'check' }, h('input', { type: 'checkbox', name: 'allow_uncapped', checked: s.allow_uncapped || null, disabled: off }), 'Allow reviewers without a spend cap (Codex): bounded only by size and time'),
+      h('div', { class: 'callout review-disclosure', role: 'note' },
+        h('p', null, h('strong', null, 'What is sent: '), d.disclosure ?? ''),
+        h('label', { class: 'check' }, h('input', { type: 'checkbox', name: 'acknowledge_disclosure', disabled: off }), 'I understand that each finished card’s diff is sent to the chosen AI provider')),
+      edit ? null : h('p', { class: 'hint' }, 'Only an admin can change this.'),
+      errorLine(d),
+      h('div', { class: 'modal-foot' },
+        h('button', { type: 'button', class: 'btn', 'data-action': 'close-dialog' }, edit ? 'Cancel' : 'Close'),
+        edit ? h('button', { type: 'submit', class: 'btn btn-primary', disabled: d.busy || null, 'aria-busy': d.busy ? 'true' : null }, 'Save') : null)));
 }
 
 function boardDialog(d) {

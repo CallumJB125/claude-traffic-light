@@ -1,0 +1,12 @@
+diff --git a/README.md b/README.md
+index 7777777..8888888 100644
+--- a/README.md
++++ b/README.md
+@@ -10,3 +10,7 @@ Run the tests with `npm test`.
+ ## Configuration
+
+ Settings live in `config.json`.
++
++## Troubleshooting
++
++If the server does not start, check that port 3000 is free.

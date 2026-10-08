@@ -74,7 +74,7 @@ export function alertsForViewer(viewerId, entries, opts) {
 // Cards waiting on a human the viewer is involved with (waiting input, budget
 // reached, stalled, review), longest wait first. Reuses the face's stalled
 // derivation and the hub's state age; never invents a wait.
-const NEEDS_LABEL = { waiting: 'Waiting for your input', budget: 'Budget reached', review: 'Ready for review' };
+const NEEDS_LABEL = { waiting: 'Waiting for your input', budget: 'Budget reached', review: 'Ready for review', review_changes: 'Ready for review' };
 export function needsYou(viewerId, entries) {
   const items = [];
   for (const { view: v, face, elapsed_ms = 0 } of entries) {
@@ -87,9 +87,11 @@ export function needsYou(viewerId, entries) {
     if (face?.stalled) { kind = 'stalled'; wait = face.stalled.since_ms; label = `Stalled · ${face.reason ?? face.stalled.reason}`; }
     else if (v.run_state === 'blocked') kind = 'waiting';
     else if (v.run_state === 'failed' && v.fail_kind === 'budget') kind = 'budget';
-    else if (v.run_state === 'in_review') kind = 'review';
+    else if (v.run_state === 'in_review') kind = v.review?.status === 'done' && v.review.verdict === 'changes_requested' && !v.review.human_action ? 'review_changes' : 'review';
     if (!kind) continue;
-    items.push({ kind, card_id: v.id, key: v.key, title: v.title, label: label ?? NEEDS_LABEL[kind], wait_ms: wait });
+    // The AI review's verdict rides along as a chip when it asked for changes.
+    const chip = kind === 'review_changes' ? { text: `AI review: changes requested${v.review.open_findings ? ` · ${v.review.open_findings}` : ''}`, tone: 'amber', by: v.review.provider_label ?? null } : null;
+    items.push({ kind, card_id: v.id, key: v.key, title: v.title, label: label ?? NEEDS_LABEL[kind], wait_ms: wait, ...(chip ? { chip } : {}) });
   }
   return items.sort((a, b) => (b.wait_ms ?? -1) - (a.wait_ms ?? -1) || String(a.key).localeCompare(String(b.key), undefined, { numeric: true }));
 }

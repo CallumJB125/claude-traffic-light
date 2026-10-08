@@ -21,12 +21,15 @@ import { buildSettings, buildMcpConfig, buildEnv, buildCodexEnv, boardBrief, fir
 import { createWorktree, sessionOf, runGitAccess, snapshot as gitSnapshot, git } from './git.js';
 import { decideOffer, advertisable, answererAllowed } from './policy.js';
 import { lstartOf, sameProcess, treeGroups, processTable, killGroups, killTree, detectFormFactor } from './procs.js';
+import { runReview } from './review.js';
+import { REVIEW_PROVIDERS } from '../shared/review.js';
 import { makeLogger, realClock, ensureDir, writeJsonAtomic, writeFileAtomic, RUNNER_VERSION, lineReader } from './util.js';
 
 // Device-level frames carry no repo_id; they still pass the serializer guard
 // (no local paths, no credential shapes).
 const DEVICE_SCOPE = Object.freeze({ repo_id: '__device__', toplevel: null });
 const SEEN_CMDS_MAX = 1000;   // cmd_id dedupe window (the hub re-sends a cmd at most on reconnect)
+const REVIEWS_SEEN_MAX = 200; // review_id dedupe window (the hub re-offers a pending review on every advertise)
 
 function err(code, message) {
   return Object.assign(new Error(message), { code });
@@ -120,6 +123,7 @@ export class Supervisor extends EventEmitter {
     this.seenCmds = new Set();
     this.deferred = new Map();
     this.inFlightOffers = new Set();
+    this.reviewsSeen = new Set();
     this.windowsQuarantinedRepos = new Set();
     this.confirms = new Map();
     this.subscribers = new Set();
@@ -260,6 +264,11 @@ export class Supervisor extends EventEmitter {
     return !!this.ais?.some((a) => a.id === id && a.installed && a.startable !== false && a.signedIn !== false);
   }
 
+  // review: this machine runs the review run kind unless policy.json sets "reviews": false.
+  #advertiseFrame() {
+    return { type: 'advertise', repos: advertisable(this.policy, this.allowlist), ...this.#aiFrame(), review: this.policy.reviews !== false };
+  }
+
   #sendHello() {
     this.#sendDevice({
       type: 'hello', protocol: PROTOCOL_VERSION, device_id: this.enrolled ? '' : this.device.device_id, runner_version: RUNNER_VERSION,
@@ -300,6 +309,7 @@ export class Supervisor extends EventEmitter {
       case 'context.update': { const r = this.#runFor(m); if (r) r.onContextUpdate(m); return; }
       case 'fenced': { const r = this.runs.get(m.run_id); if (r) r.onFenced('fenced'); return; }
       case 'rpc.result': { const p = this.pendingRpc.get(m.re); if (p) { this.pendingRpc.delete(m.re); p.resolve(m); } return; }
+      case 'review.offer': return this.handleReviewOffer(m).catch((e) => this.log.error('review failed', { err: e.message }));
       case 'error': this.log.warn('hub error', { code: m.code, message: m.message }); return;
       default: return;
     }
@@ -323,7 +333,7 @@ export class Supervisor extends EventEmitter {
     // one heartbeat: only those never move a card (D3).
     const now = this.clock.mono();
     for (const e of this.outbox.pendingAfter(m.last_seq_acked)) this.sendRaw(Outbox.frame(e, e.offline || e.at == null || now - e.at > HB_MS));
-    this.#sendDevice({ type: 'advertise', repos: advertisable(this.policy, this.allowlist), ...this.#aiFrame() });
+    this.#sendDevice(this.#advertiseFrame());
     this.connected = true;
     this.sendHbNow();
     for (const s of this.salvageQueue.splice(0)) this.sendRaw(s);
@@ -556,6 +566,35 @@ export class Supervisor extends EventEmitter {
       if (!ok) return this.#decline(offer, 'owner declined');
     }
     return this.claim(offer, scope);
+  }
+
+  // ── the review run kind (board/runner/review.js) ──────────────────────────
+  async handleReviewOffer(m) {
+    if (this.quitting || this.reviewsSeen.has(m.review_id)) return;
+    this.reviewsSeen.add(m.review_id);
+    if (this.reviewsSeen.size > REVIEWS_SEEN_MAX) this.reviewsSeen.delete(this.reviewsSeen.values().next().value);
+    this.policy = readPolicy(this.l);
+    const repo = this.policy.repos?.[m.repo_id];
+    const reply = (body) => this.#sendReviewResult(m, body, repo?.local_path ?? null);
+    if (this.policy.reviews === false) return reply({ ok: false, error: 'reviews are off on this machine' });
+    if (!repo?.opt_in || !repo.local_path) return reply({ ok: false, error: 'this repository is not opted in on this machine' });
+    if (!REVIEW_PROVIDERS.includes(m.ai) || !this.canRun(m.ai)) return reply({ ok: false, error: `${m.ai} cannot run on this machine` });
+    const scope = await this.#scopeForRepo(m.repo_id);
+    if (!scope || scope.repo_id !== m.repo_id) return reply({ ok: false, error: 'the repository does not match this board on this machine' });
+    const bin = m.ai === 'claude' ? this.claudeBin : this.ais?.find((a) => a.id === m.ai)?.bin;
+    const body = await (this.opts.runReview ?? runReview)(m, { localPath: repo.local_path, home: this.env.HOME ?? null, bin, env: this.env });
+    return reply(body);
+  }
+
+  #sendReviewResult(m, body, toplevel) {
+    const frame = { type: 'review.result', review_id: m.review_id, card_id: m.card_id, repo_id: m.repo_id, ...body };
+    const scope = { repo_id: m.repo_id, toplevel };
+    let bytes;
+    try { bytes = serializeOutbound(frame, scope, { requireRepoId: true }); } catch (e) {
+      this.log.warn('review result dropped at the serializer', { reason: e.reason ?? e.message });
+      bytes = serializeOutbound({ type: 'review.result', review_id: m.review_id, card_id: m.card_id, repo_id: m.repo_id, ok: false, error: 'the review named a local path or a credential, so it was not sent' }, scope, { requireRepoId: true });
+    }
+    return this.sendRaw(bytes);
   }
 
   #offerSummary(o) {
@@ -867,7 +906,7 @@ export class Supervisor extends EventEmitter {
               p.repos[m.repo_id] = { ...(p.repos[m.repo_id] ?? {}), opt_in: m.opt_in !== false, ...(m.local_path ? { local_path: m.local_path } : {}) };
               writePolicy(this.l, p);
               this.policy = p;
-              if (this.connected) this.#sendDevice({ type: 'advertise', repos: advertisable(this.policy, this.allowlist), ...this.#aiFrame() });
+              if (this.connected) this.#sendDevice(this.#advertiseFrame());
               return reply({ ok: true });
             }
             case 'confirm_offer': { const p = this.confirms.get(m.request_id); if (p) p.resolve(!!m.accept); return reply({ ok: !!p }); }
