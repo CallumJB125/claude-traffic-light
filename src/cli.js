@@ -10,7 +10,6 @@ const os = require('os');
 const path = require('path');
 const Mcp = require('../mcp-server.js');
 const Rules = require('../rules.js');
-const Machine = require('../hooks/session-machine.js');
 const Tap = require('../hooks/handover-tap.js');
 
 const EXIT = { OK: 0, NOT_RUNNING: 1, ERROR: 2 };
@@ -21,7 +20,7 @@ const COMMANDS = {
   sessions: { flags: ['all'], about: 'running sessions (--all includes the ones the widget ignores)' },
   spend: { flags: ['today', 'week', 'short'], about: 'spend today and this week (--today or --week for one)' },
   handover: { flags: ['force'], values: ['out'], about: 'print a session\'s handover doc, or write it with --out <file>' },
-  waiting: { flags: ['short'], about: 'permission prompts and questions waiting on you' },
+  waiting: { flags: ['short'], about: 'permission prompts, plan approvals and questions waiting on you' },
   doctor: { flags: [], about: 'is the app running, is the hook connected' },
   help: { flags: [], about: 'this help' },
 };
@@ -101,12 +100,16 @@ function slimSession(s) {
 }
 
 const NEEDS = {
-  'permission-ask': (s) => (s.askKind === 'question' ? 'asking you a question' : 'waiting for permission'),
+  'permission-ask': (s) => (s.askKind === 'question' ? 'asking you a question' : s.askKind === 'plan' ? 'waiting for plan approval' : 'waiting for permission'),
   'limit-hit': () => 'hit a usage limit',
-  'idle-nudge': () => 'idle, waiting for you',
+  'idle-nudge': () => 'idle since its turn',
   stop: () => 'finished its turn',
   'turn-failed': () => 'turn failed',
 };
+// Home's "Needs you" card and the widget's waiting list: permission prompts,
+// plan approvals and questions still open. A finished turn is ready for
+// review, not waiting on you.
+const READY_FOR_REVIEW = new Set(['stop', 'idle-nudge', 'turn-failed']);
 const needLabel = (s) => (NEEDS[s.signal] ? NEEDS[s.signal](s) : s.signal);
 const sessionLine = (s) => `  ${(s.project || '(no folder)').padEnd(22)} ${needLabel(s).padEnd(24)} ${String(s.source || '').padEnd(8)} ${String(s.sessionId || '').slice(0, 8)}  ${ago(s.ageMs)} ago`;
 
@@ -125,12 +128,20 @@ async function liveSessions(ctx) {
   return Mcp.buddySessions({ root: ctx.root, now: ctx.now }).sessions;
 }
 
+function waitingOn(ctx, live) {
+  const pending = Mcp.buddyPendingRequests({ root: ctx.root, now: ctx.now });
+  const all = live.filter((s) => s.live).map(slimSession);
+  const sessions = all.filter((s) => s.signal === 'permission-ask');
+  const requests = pending.requests.filter((r) => !r.answered).map((r) => ({ id: r.id, sessionId: r.sessionId, project: Rules.folderOf(r.cwd) || null, cwd: r.cwd, tool: r.tool, summary: r.summary, ageMs: r.ageMs, hookWaitsMsMore: r.hookWaitsMsMore }));
+  const asking = new Set(sessions.map((s) => s.sessionId));
+  const count = sessions.length + requests.filter((r) => !asking.has(r.sessionId)).length;
+  return { count, sessions, requests, readyForReview: all.filter((s) => READY_FOR_REVIEW.has(s.signal)).length, askFromWidget: pending.askFromWidget };
+}
+
 async function cmdStatus(args, ctx) {
   const live = await ctx.fetchLive(ctx.port);
   const st = await Mcp.buddyStatus({ root: ctx.root, now: ctx.now, live });
-  const sessions = (await liveSessions(ctx)).filter((s) => s.live).map(slimSession);
-  const needsYou = sessions.filter((s) => Machine.WAITING_ON_YOU.has(s.signal));
-  const requests = Mcp.readRequests(ctx.root, ctx.now);
+  const w = waitingOn(ctx, await liveSessions(ctx));
   const look = st.app.running ? st.app.look : st.look;
   const data = {
     light: look ? look.lamp : 'off',
@@ -140,22 +151,22 @@ async function cmdStatus(args, ctx) {
     sessionCount: st.sessionCount,
     agentCount: st.agentCount,
     currentTool: st.currentTool,
-    needsYou,
-    pendingRequests: requests.length,
+    waiting: { count: w.count, sessions: w.sessions, requests: w.requests },
+    readyForReview: w.readyForReview,
     spend: st.spend,
   };
   const human = () => {
     const head = `${ctx.paint(data.light)} ${data.light}${data.rule ? ` · ${data.rule}` : ''}`;
     if (args.flags.short) {
       const bits = [head, `${data.sessionCount} session${data.sessionCount === 1 ? '' : 's'}`];
-      if (needsYou.length) bits.push(`${needsYou.length} need${needsYou.length === 1 ? 's' : ''} you`);
+      if (w.count) bits.push(`${w.count} need${w.count === 1 ? 's' : ''} you`);
+      if (w.readyForReview) bits.push(`${w.readyForReview} ready for review`);
       if (!live) bits.push('app not running');
       return [bits.join(' · ')];
     }
     const lines = [head, `${data.sessionCount} session${data.sessionCount === 1 ? '' : 's'}, ${data.agentCount} agent${data.agentCount === 1 ? '' : 's'}${data.currentTool ? ` · now: ${data.currentTool}` : ''}`];
-    if (needsYou.length) lines.push('Needs you:', ...needsYou.map(sessionLine));
-    else lines.push('Nothing needs you.');
-    if (requests.length) lines.push(`${requests.length} permission request${requests.length === 1 ? '' : 's'} waiting (plexiform waiting)`);
+    lines.push(...waitingLines(w));
+    if (w.readyForReview) lines.push(`${w.readyForReview} session${w.readyForReview === 1 ? '' : 's'} finished ${w.readyForReview === 1 ? 'its turn' : 'their turns'} without needing anything: ready for review.`);
     if (!live) lines.push(notRunningNote(ctx.root, ctx.home));
     return lines;
   };
@@ -179,19 +190,21 @@ async function cmdSessions(args, ctx) {
   return { live, data, human };
 }
 
+function waitingLines(w) {
+  const lines = [];
+  if (w.sessions.length) lines.push('Needs you:', ...w.sessions.map(sessionLine));
+  if (w.requests.length) lines.push('Permission requests:', ...w.requests.map((r) => `  ${(r.project || '(no folder)').padEnd(22)} ${String(r.tool || '').padEnd(10)} ${r.summary || ''}  (${ago(r.ageMs)} ago)`));
+  if (!w.count) lines.push('Nothing needs you.');
+  return lines;
+}
+
 async function cmdWaiting(args, ctx) {
   const live = await ctx.fetchLive(ctx.port);
-  const pending = Mcp.buddyPendingRequests({ root: ctx.root, now: ctx.now });
-  const sessions = (await liveSessions(ctx)).filter((s) => s.live).map(slimSession).filter((s) => Machine.WAITING.has(s.signal));
-  const requests = pending.requests.filter((r) => !r.answered).map((r) => ({ id: r.id, sessionId: r.sessionId, project: Rules.folderOf(r.cwd) || null, cwd: r.cwd, tool: r.tool, summary: r.summary, ageMs: r.ageMs, hookWaitsMsMore: r.hookWaitsMsMore }));
-  const count = sessions.length + requests.length;
-  const data = { source: live ? 'app' : 'disk', count, sessions, requests, askFromWidget: pending.askFromWidget };
+  const w = waitingOn(ctx, await liveSessions(ctx));
+  const data = { source: live ? 'app' : 'disk', count: w.count, sessions: w.sessions, requests: w.requests, readyForReview: w.readyForReview, askFromWidget: w.askFromWidget };
   const human = () => {
-    if (args.flags.short) return [count ? `${count} waiting on you${live ? '' : ' · app not running'}` : `Nothing waiting${live ? '' : ' · app not running'}`];
-    const lines = [];
-    if (sessions.length) lines.push('Sessions waiting on you:', ...sessions.map(sessionLine));
-    if (requests.length) lines.push('Permission requests:', ...requests.map((r) => `  ${(r.project || '(no folder)').padEnd(22)} ${String(r.tool || '').padEnd(10)} ${r.summary || ''}  (${ago(r.ageMs)} ago)`));
-    if (!count) lines.push('Nothing is waiting on you.');
+    if (args.flags.short) return [`${w.count ? `${w.count} need${w.count === 1 ? 's' : ''} you` : 'Nothing needs you'}${live ? '' : ' · app not running'}`];
+    const lines = waitingLines(w);
     if (!live) lines.push(notRunningNote(ctx.root, ctx.home));
     return lines;
   };

@@ -81,10 +81,11 @@ test('status --json: shape, what needs you, and app running', async () => {
   assert.equal(j.source, 'app');
   assert.equal(j.light, 'green');
   assert.equal(j.sessionCount, 2);
-  assert.equal(j.needsYou.length, 1);
-  assert.deepEqual(Object.keys(j.needsYou[0]).sort(), ['ageMs', 'askKind', 'cwd', 'project', 'sessionId', 'signal', 'source', 'tool', 'updatedAt']);
-  assert.equal(j.needsYou[0].sessionId, 'b');
-  assert.equal(j.needsYou[0].project, 'proj-b');
+  assert.equal(j.waiting.count, 1);
+  assert.deepEqual(Object.keys(j.waiting.sessions[0]).sort(), ['ageMs', 'askKind', 'cwd', 'project', 'sessionId', 'signal', 'source', 'tool', 'updatedAt']);
+  assert.equal(j.waiting.sessions[0].sessionId, 'b');
+  assert.equal(j.waiting.sessions[0].project, 'proj-b');
+  assert.equal(j.readyForReview, 0);
   assert.equal(j.note, undefined);
 });
 
@@ -100,9 +101,9 @@ test('not running: status, sessions, waiting and doctor answer from disk and exi
   }
   const human = await cli(['status'], { home, live: null });
   assert.equal(human.code, 1);
-  assert.match(human.out, /Needs you:\n {2}a +finished its turn/);
+  assert.match(human.out, /Nothing needs you\.\n1 session finished its turn without needing anything: ready for review\./);
   assert.match(human.out, /Plexiform is not running: read from ~\/\.claude-traffic-light on disk\./);
-  assert.match((await cli(['status', '--short'], { home })).out, / · 1 session · 1 needs you · app not running\n$/);
+  assert.match((await cli(['status', '--short'], { home })).out, / · 1 session · 1 ready for review · app not running\n$/);
 });
 
 test('not running with no data folder says so', async () => {
@@ -129,10 +130,46 @@ test('waiting: permission requests and asking sessions', async () => {
     requests: [{ id: 'r1', sessionId: 'q', cwd: '/w/q', tool: 'Bash', summary: 'rm -rf build', createdAt: iso(5000) }],
   });
   const j = (await cli(['waiting', '--json'], { home, live: LIVE })).json();
-  assert.equal(j.count, 2);
+  assert.equal(j.count, 1, 'the request belongs to the asking session: counted once');
+  assert.equal(j.requests.length, 1);
   assert.equal(j.sessions[0].sessionId, 'q');
   assert.deepEqual(Object.keys(j.requests[0]).sort(), ['ageMs', 'cwd', 'hookWaitsMsMore', 'id', 'project', 'sessionId', 'summary', 'tool']);
-  assert.equal((await cli(['waiting', '--short'], { home, live: LIVE })).out, '2 waiting on you\n');
+  assert.equal((await cli(['waiting', '--short'], { home, live: LIVE })).out, '1 needs you\n');
+});
+
+test('status and waiting agree on what needs you; finished turns are ready for review', async () => {
+  const { home } = fixture({
+    sessions: {
+      ask: session('ask', { signal: 'permission-ask', askKind: 'permission' }),
+      q: session('q', { signal: 'permission-ask', askKind: 'question' }),
+      done: session('done', { signal: 'stop', updatedAt: iso(3 * 3600000) }),
+      nudged: session('nudged', { signal: 'idle-nudge' }),
+      busy: session('busy'),
+    },
+    requests: [
+      { id: 'r1', sessionId: 'ask', cwd: '/w/ask', tool: 'Bash', summary: 'npm test', createdAt: iso(5000) },
+      { id: 'r2', sessionId: 'elsewhere', cwd: '/w/x', tool: 'Edit', summary: 'edit a file', createdAt: iso(5000) },
+    ],
+  });
+  const st = (await cli(['status', '--json'], { home, live: LIVE })).json();
+  const wt = (await cli(['waiting', '--json'], { home, live: LIVE })).json();
+  assert.equal(st.waiting.count, 3);
+  assert.equal(wt.count, st.waiting.count);
+  assert.deepEqual(wt.sessions, st.waiting.sessions);
+  assert.deepEqual(wt.requests, st.waiting.requests);
+  assert.deepEqual(st.waiting.sessions.map((s) => s.sessionId).sort(), ['ask', 'q']);
+  assert.equal(st.readyForReview, 2);
+  assert.equal(wt.readyForReview, 2);
+  const short = (await cli(['status', '--short'], { home, live: LIVE })).out;
+  assert.match(short, / · 3 need you · 2 ready for review\n$/);
+  assert.equal((await cli(['waiting', '--short'], { home, live: LIVE })).out, '3 need you\n');
+  const human = (await cli(['status'], { home, live: LIVE })).out;
+  assert.doesNotMatch(human, /Needs you:[^]*finished its turn/);
+  assert.match(human, /2 sessions finished their turns without needing anything: ready for review\./);
+
+  const calm = fixture({ sessions: { done: session('done', { signal: 'stop' }) } });
+  assert.match((await cli(['status', '--short'], { home: calm.home, live: LIVE })).out, / · 1 ready for review\n$/);
+  assert.equal((await cli(['waiting', '--short'], { home: calm.home, live: LIVE })).out, 'Nothing needs you\n');
 });
 
 test('spend --today: JSON has today only and needs no app', async () => {
