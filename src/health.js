@@ -33,6 +33,7 @@ const FIXES = {
   'connect-hermes': 'Connect Hermes activity',
   'open-burst-console': 'Open Burst console',
   'burst-console-restart': 'Restart Burst',
+  'burst-console-diagnose': 'Diagnose Burst',
 };
 // Claude Code reads hooks once, when a session starts.
 const RESTART_SESSIONS = 'Then restart your Claude sessions.';
@@ -340,8 +341,8 @@ function checkBurstGateway(ctx) {
   const con = b.con;
   if (con && con.kind === 'present') {
     const bad = (con.status.checks || []).filter((c) => !c.ok);
-    const why = bad.length ? `${bad.map((c) => c.name).join(', ')} ${bad.length === 1 ? 'is' : 'are'} failing` : 'its console reports every check passing';
-    return { status: 'fail', detail: `Burst's gateway is not answering; ${why}.`, next: bad[0] && bad[0].detail ? bad[0].detail : 'Restart it from Burst\'s console.', fix: 'burst-console-restart' };
+    if (!bad.length) return { status: 'fail', detail: 'Burst\'s gateway is not answering, yet its console reports every check passing.', next: 'Burst\'s diagnose report says why; restart Burst from its console if that does not help.', fix: 'burst-console-diagnose' };
+    return { status: 'fail', detail: `Burst's gateway is not answering; ${bad.map((c) => c.name).join(', ')} ${bad.length === 1 ? 'is' : 'are'} failing.`, next: bad[0].detail || 'Restart it from Burst\'s console.', fix: 'burst-console-restart' };
   }
   if (con && con.kind === 'unreachable') return { status: 'fail', detail: 'Neither Burst\'s gateway nor its support console is answering.', next: 'If Claude Code is failing, take Burst out of its path from the Burst card, then repair it.' };
   return { status: 'fail', detail: 'Burst\'s gateway is not answering, and its console isn\'t available to say why.', next: 'If Claude Code is failing, take Burst out of its path from the Burst card.' };

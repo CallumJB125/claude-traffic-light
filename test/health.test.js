@@ -420,10 +420,12 @@ test('Burst rows: macOS with Burst installed only; each has a fixture state prod
   assert.equal(behind.status, 'info'); assert.match(behind.detail, /1\.3\.0/);
 });
 
-test('Burst gateway down: the console names the failing part and offers a restart; no console, no fix', () => {
+test('Burst gateway down: the console names the failing part and offers a restart, or a diagnose when nothing fails; no console, no fix', () => {
   const run = (console) => Health.runChecks({ ...machine().ctx, platform: 'darwin', burstFacts: { detection: { kind: 'unreachable' }, console } }).checks.find((c) => c.id === 'burst-gateway');
   const named = run({ kind: 'present', status: { checks: [{ name: 'launchd', ok: true }, { name: 'pf redirect', ok: false, detail: 'no rdr rule' }] } });
   assert.equal(named.status, 'fail'); assert.match(named.detail, /pf redirect is failing/); assert.equal(named.fix, 'burst-console-restart');
+  const quiet = run({ kind: 'present', status: { checks: [{ name: 'launchd', ok: true }] } });
+  assert.equal(quiet.status, 'fail'); assert.equal(quiet.fix, 'burst-console-diagnose'); assert.equal(quiet.fixLabel, 'Diagnose Burst');
   const dead = run({ kind: 'unreachable' });
   assert.equal(dead.status, 'fail'); assert.equal(dead.fix, undefined);
   assert.equal(run(null).status, 'fail');
