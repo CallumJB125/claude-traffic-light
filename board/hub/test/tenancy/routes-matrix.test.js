@@ -259,6 +259,13 @@ const MATRIX = {
   'POST /api/cards/:card_id/packet': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/packet`, body: { expected_fence: 0 } },
   'GET /api/cards/:card_id/handover': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/handover` },
   'GET /api/cards/:card_id/overlap-preview': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/overlap-preview` },
+  // AI review (066): B's review through B's card, and B's review id under A's own card.
+  'GET /api/cards/:card_id/reviews': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/reviews` },
+  'POST /api/cards/:card_id/reviews/:review_id/fix': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/reviews/${fx.B.review}/fix`, alt: (fx) => [`/api/cards/${fx.A.card}/reviews/${fx.B.review}/fix`] },
+  'POST /api/cards/:card_id/reviews/:review_id/approve': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/reviews/${fx.B.review}/approve`, alt: (fx) => [`/api/cards/${fx.A.card}/reviews/${fx.B.review}/approve`] },
+  'POST /api/cards/:card_id/reviews/:review_id/findings/:index/dismiss': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/reviews/${fx.B.review}/findings/0/dismiss`, alt: (fx) => [`/api/cards/${fx.A.card}/reviews/${fx.B.review}/findings/0/dismiss`] },
+  'GET /api/boards/:board_id/review-settings': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/review-settings` },
+  'PATCH /api/boards/:board_id/review-settings': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/review-settings`, body: { enabled: true, acknowledge_disclosure: true } },
   'POST /api/permission-requests/:id/answer': { kind: 'cross', path: (fx) => `/api/permission-requests/${fx.B.permission}/answer`, body: { decision: 'allow' } },
   'GET /api/devices': { kind: 'team' },
   'DELETE /api/devices/:id': { kind: 'cross', path: (fx) => `/api/devices/${fx.B.device}` },

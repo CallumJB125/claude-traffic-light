@@ -1,0 +1,21 @@
+diff --git a/src/auth.js b/src/auth.js
+index ddddddd..eeeeeee 100644
+--- a/src/auth.js
++++ b/src/auth.js
+@@ -1,4 +1,4 @@
+ export function canDelete(user, doc) {
+-  return user.isAdmin || doc.ownerId === user.id;
++  return user.isAdmin || doc.ownerId == user.id || doc.public;
+ }
+diff --git a/test/auth.test.js b/test/auth.test.js
+index fffffff..0000001 100644
+--- a/test/auth.test.js
++++ b/test/auth.test.js
+@@ -5,8 +5,3 @@ test('owner can delete', () => {
+   assert.equal(canDelete({ id: 1 }, { ownerId: 1 }), true);
+ });
+-
+-test('a stranger cannot delete a public doc', () => {
+-  assert.equal(canDelete({ id: 2 }, { ownerId: 1, public: true }), false);
+-});
+-

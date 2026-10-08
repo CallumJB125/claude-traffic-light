@@ -23,7 +23,7 @@ function createMyDayService({ work, sessions = () => [], busy = () => null, cale
         let cut = false;
         const take = key => { const rows = source[key] ?? [], chosen = rows.slice(0, remaining[key]); if (chosen.length !== rows.length) { cut = true; truncated = true; } remaining[key] -= chosen.length; return chosen; };
         const cards = take('cards').map(row => ({ handle: row.handle, key: text(row.card.key, 100), title: text(row.card.title), board: text(row.board_name), team: text(row.team_name), start_date: date(row.card.start_date), due_date: date(row.card.due_date), state: STATE_LABELS[row.state] ?? text(row.state ?? row.card.run_state, 30) }));
-        const decisions = take('decisions').map(row => ({ handle: row.handle, key: text(row.key, 100), title: text(row.title), board: text(row.board_name), kind: row.kind === 'permission' ? 'Permission request' : 'Question', summary: text(row.summary, 500) }));
+        const decisions = take('decisions').map(row => ({ handle: row.handle, key: text(row.key, 100), title: text(row.title), board: text(row.board_name), kind: row.kind === 'permission' ? 'Permission request' : row.kind === 'review' ? 'AI review: changes requested' : 'Question', summary: text(row.summary, 500) }));
         const agents = take('agents').map(row => ({ handle: row.handle, key: text(row.key, 100), name: text(row.ai_label, 50), state: text(row.run_state, 30), observed: row.connection === 'accepted' && Number.isFinite(row.live?.hb_age_ms) ? row.live.hb_age_ms : null, live: row.connection === 'accepted' && row.live?.green === true }));
         return { name: text(source.name), status: cut ? 'partial' : source.status, cards, decisions, agents };
       });

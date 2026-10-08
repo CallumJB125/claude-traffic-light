@@ -9,6 +9,7 @@
 
 import { isGreen, advanceView, toolBound, formatAge, deriveStalled, TTL_MS, ORPHAN_NOTIFY_MS } from './liveness.js';
 import { ACTIVE, columnOf } from './states.js';
+import { reviewChip } from './review.js';
 
 export const PILLS = Object.freeze({
   queued: { icon: '⏳', label: 'Queued', tone: 'grey' },
@@ -178,7 +179,7 @@ function fmtUsd(n) {
 /**
  * view: CardView (CONTRACT.md §5.3). opts: {elapsed_ms, connection_lost}.
  * Returns {state, column, icon, label, reason, text, tone, green, actions,
- *          sponsor, runner_line, activity_line, overlap_chip, budget}.
+ *          sponsor, runner_line, activity_line, overlap_chip, budget, review}.
  */
 export function cardFace(view, { elapsed_ms = 0, connection_lost = false } = {}) {
   const state = view.run_state ?? 'todo';
@@ -248,6 +249,8 @@ export function cardFace(view, { elapsed_ms = 0, connection_lost = false } = {})
     budget: view.budget && view.budget.cap_usd != null
       ? { text: `$${(view.budget.spent_usd ?? 0).toFixed(2)} / $${fmtUsd(view.budget.cap_usd)}`, ratio: Math.min(1, (view.budget.spent_usd ?? 0) / view.budget.cap_usd) }
       : null,
+    // The latest AI review (shared/review.js), while the work waits for a person.
+    review: state === 'in_review' ? reviewChip(view.review) : null,
   };
 }
 

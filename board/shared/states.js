@@ -260,7 +260,7 @@ export const TRANSITIONS = Object.freeze([
     effects: (c, ev) => [{ type: 'assign', member_id: ev.by ?? null, role: 'owner' }, feed('human_on_it', { by: ev.by ?? null })] },
   // Decision D7: board_complete is itself activity, so quiet → in_review is allowed too.
   { id: '31', from: ['running', 'quiet'], on: 'complete', to: 'in_review', fenced: 'event', guard: guardAll(['evidence_ok', 'EVIDENCE_MISSING']),
-    effects: () => [...endRun('complete'), { type: 'handover_freeze' }, feed('in_review')] },
+    effects: () => [...endRun('complete'), { type: 'handover_freeze' }, feed('in_review'), { type: 'review_request' }] },
   { id: '32', from: ['in_review'], on: 'request_changes', to: 'queued', bump: true, guard: both(needsRequestId, canWrite, holdCheckpointRequired, guardAll(['policy_ok', 'POLICY_DENIED'])),
     effects: (c, ev, ctx) => [{ type: 'dispatch_create', request_id: ev.request_id, target_member_id: ev.target_member_id ?? null, needs_confirm: !!ctx.needs_confirm }, { type: 'seed', from: ['handover', 'review'] }, offer, feed('changes_requested', { by: ev.by ?? null })] },
   { id: '33', from: ['in_review'], on: 'pr_closed', to: 'todo', effects: (c, ev) => [feed('pr_closed_unmerged', { pr: ev.pr ?? null, by: ev.by ?? null })] },

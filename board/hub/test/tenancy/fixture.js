@@ -95,6 +95,10 @@ export async function tenancy({ config = {}, ...opts } = {}) {
   B.inviteToken = ib.body.link.split('#')[1];
   B.ask = randomUUID();
   db.insert('asks', { id: B.ask, run_id: B.run, card_id: B.card, kind: 'question', text: `${MARK} ask`, state: 'open', created_at: now });
+  // B: a finished AI review of that run (066).
+  B.review = randomUUID();
+  db.insert('card_reviews', { id: B.review, card_id: B.card, board_id: B.board, run_id: B.run, status: 'done', provider: 'codex', author_ai: 'claude', independence: 'other_provider', device_id: B.device,
+    verdict: 'changes_requested', summary: `${MARK} summary`, findings: JSON.stringify([{ file: 'src/b.js', line: 1, severity: 'high', rationale: `${MARK} finding` }]), flags: '[]', cap_cents: 10, created_at: now, completed_at: now });
   h.hub.setVaultKey(randomBytes(32));
   h.app.integrations.register(fake);
   const v = await fake.connect.verifyToken({ token: 'fake_abcdef123456' });
@@ -160,6 +164,7 @@ export async function tenancy({ config = {}, ...opts } = {}) {
       q('SELECT p.* FROM workflow_execution_proofs p JOIN workflow_execution_attempts a ON a.id=p.attempt_id JOIN workflow_executions e ON e.id=a.execution_id WHERE e.org_id=?',B.team),
       q('SELECT * FROM permission_requests WHERE card_id = ?', B.card),
       q('SELECT * FROM asks WHERE card_id = ?', B.card),
+      q('SELECT * FROM card_reviews WHERE board_id = ?', B.board),
       q('SELECT * FROM devices WHERE member_id IN (SELECT id FROM members WHERE org_id = ?)', B.team),
       q('SELECT * FROM repos WHERE org_id = ?', B.team),
       q('SELECT * FROM invites WHERE org_id = ?', B.team),
@@ -214,6 +219,8 @@ export const INVARIANTS = {
   invites: `SELECT i.id FROM invites i JOIN members c ON c.id = i.created_by LEFT JOIN members m ON m.id = i.member_id WHERE c.org_id != i.org_id OR m.org_id != i.org_id`,
   board_labels: `SELECT l.id FROM board_labels l JOIN boards b ON b.id = l.board_id JOIN members m ON m.id = l.created_by WHERE m.org_id != b.org_id`,
   card_archiver: `SELECT c.id FROM cards c JOIN boards b ON b.id = c.board_id JOIN members m ON m.id = c.archived_by WHERE m.org_id != b.org_id`,
+  card_reviews: `SELECT v.id FROM card_reviews v JOIN cards c ON c.id = v.card_id LEFT JOIN runs r ON r.id = v.run_id LEFT JOIN devices d ON d.id = v.device_id LEFT JOIN members dm ON dm.id = d.member_id
+    LEFT JOIN members h ON h.id = v.human_action_by JOIN boards b ON b.id = c.board_id WHERE v.board_id != c.board_id OR r.card_id != v.card_id OR dm.org_id != b.org_id OR h.org_id != b.org_id`,
   runner_enrollments: `SELECT e.id FROM runner_enrollments e JOIN members m ON m.id = e.member_id JOIN devices d ON d.id = e.device_id JOIN members dm ON dm.id = d.member_id
     WHERE m.org_id != e.org_id OR dm.org_id != e.org_id OR m.user_id != e.user_id`,
 };

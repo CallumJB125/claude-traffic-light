@@ -25,8 +25,9 @@ export function myDay(hub, { member = null, userId = null, cred = null } = {}) {
           OR EXISTS(SELECT 1 FROM runs r WHERE r.id = c.active_run_id AND (r.on_behalf_of = ? OR r.dispatched_by = ?))
           OR EXISTS(SELECT 1 FROM dispatches d WHERE d.card_id = c.id AND d.state = 'pending' AND (d.dispatched_by = ? OR d.target_member_id = ?))
           OR EXISTS(SELECT 1 FROM permission_requests p WHERE p.card_id = c.id AND ((p.run_id = c.active_run_id AND p.state = 'open') OR (c.run_state = 'parked' AND p.state = 'parked')))
-          OR EXISTS(SELECT 1 FROM asks a WHERE a.card_id = c.id AND (a.run_id = c.active_run_id OR c.run_state = 'parked') AND a.state = 'open'))
-        ORDER BY COALESCE(c.due_date, '9999-12-31'), c.key LIMIT ?`, board.id, me.org_id, ...Array(6).fill(me.id), Math.min(MY_DAY_MAX + 1, 2001 - inspected));
+          OR EXISTS(SELECT 1 FROM asks a WHERE a.card_id = c.id AND (a.run_id = c.active_run_id OR c.run_state = 'parked') AND a.state = 'open')
+          OR (c.run_state = 'in_review' AND EXISTS(SELECT 1 FROM card_reviews v JOIN runs r ON r.id = v.run_id WHERE v.card_id = c.id AND v.verdict = 'changes_requested' AND (r.on_behalf_of = ? OR r.dispatched_by = ?))))
+        ORDER BY COALESCE(c.due_date, '9999-12-31'), c.key LIMIT ?`, board.id, me.org_id, ...Array(8).fill(me.id), Math.min(MY_DAY_MAX + 1, 2001 - inspected));
       if (rows.length > MY_DAY_MAX || inspected + rows.length > 2000) partial = true;
       for (const row of rows.slice(0, Math.min(MY_DAY_MAX, 2000 - inspected))) {
         inspected++;
@@ -45,6 +46,12 @@ export function myDay(hub, { member = null, userId = null, cred = null } = {}) {
           const canAnswer = hub.isAdmin(me) || [decisionRun?.on_behalf_of, decisionRun?.dispatched_by, dispatch?.dispatched_by, ...assignees].includes(me.id);
           if (canAnswer) for (const ask of hub.openAsks(row.id)) if (ask.run_id === decisionRun?.id) {
             if (decisions.length < MY_DAY_MAX) decisions.push({ ...context, card_id: row.id, key: row.key, title: row.title, kind: 'question', id: ask.id, summary: ask.text.slice(0, 500) }); else partial = true;
+          }
+          // An AI review asked for changes on finished work: a person decides (fix, dismiss or approve).
+          const review = row.run_state === 'in_review' ? hub.reviews.summary(row) : null;
+          const last = review && hub.latestRun(row.id);
+          if (review?.verdict === 'changes_requested' && !review.human_action && (hub.isAdmin(me) || row.created_by === me.id || [last?.on_behalf_of, last?.dispatched_by, ...assignees].includes(me.id))) {
+            if (decisions.length < MY_DAY_MAX) decisions.push({ ...context, card_id: row.id, key: row.key, title: row.title, kind: 'review', id: review.id, summary: `${review.provider_label ?? 'A second AI'} asked for changes · ${review.open_findings} open finding${review.open_findings === 1 ? '' : 's'}` }); else partial = true;
           }
         }
         if (run?.on_behalf_of === me.id && !run.ended_at && agents.length < MY_DAY_MAX) {

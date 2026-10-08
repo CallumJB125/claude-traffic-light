@@ -60,6 +60,17 @@ function costChip(view, face) {
   };
 }
 
+// The verdict of the second AI's review (cardface review), with who reviewed.
+function reviewChipOf(view, face) {
+  const r = face.review;
+  if (!r) return null;
+  const who = view.review?.provider_label;
+  return {
+    id: 'review', text: r.text, tone: r.tone, icon: r.verdict === 'approve' ? 'check' : r.verdict ? 'warn' : 'dot',
+    title: `${who ? `Reviewed by ${who}${view.review?.independence === 'same_provider' ? ' (the same AI as the author)' : ''}` : 'AI review'}${view.review?.cost_usd != null ? ` · ${fmtUsd(view.review.cost_usd)}` : ''}. Open the card to see the findings.`,
+  };
+}
+
 export function cardChips(view, face, { elapsed_ms = 0 } = {}) {
-  return [proofChip(view, face), handoverChip(view, face, elapsed_ms), costChip(view, face)].filter(Boolean);
+  return [proofChip(view, face), reviewChipOf(view, face), handoverChip(view, face, elapsed_ms), costChip(view, face)].filter(Boolean);
 }

@@ -84,6 +84,13 @@ export const api = {
   createBoard: (body) => mut('POST', '/api/boards', body),
   renameBoard: (id, name) => mut('PATCH', `/api/boards/${enc(id)}`, { name }),
   archiveBoard: (id) => mut('POST', `/api/boards/${enc(id)}/archive`),
+  // AI review before Review (CONTRACT "AI review before Review (066)").
+  reviews: (cardId) => call('GET', `/api/cards/${enc(cardId)}/reviews`),
+  reviewFix: (cardId, reviewId) => mut('POST', `/api/cards/${enc(cardId)}/reviews/${enc(reviewId)}/fix`),
+  reviewApprove: (cardId, reviewId) => mut('POST', `/api/cards/${enc(cardId)}/reviews/${enc(reviewId)}/approve`),
+  reviewDismiss: (cardId, reviewId, index) => mut('POST', `/api/cards/${enc(cardId)}/reviews/${enc(reviewId)}/findings/${enc(String(index))}/dismiss`),
+  reviewSettings: (boardId) => call('GET', `/api/boards/${enc(boardId)}/review-settings`),
+  saveReviewSettings: (boardId, body) => mut('PATCH', `/api/boards/${enc(boardId)}/review-settings`, body),
   restoreBoard: (id) => mut('POST', `/api/boards/${enc(id)}/restore`),
   signout: () => mut('POST', '/api/auth/signout'),
   createTeam: (name) => mut('POST', '/api/teams', { name }),

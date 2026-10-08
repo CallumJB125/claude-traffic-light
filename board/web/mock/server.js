@@ -35,7 +35,7 @@ import { buildJournal, historyCards } from './journal.js';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const WEB = path.resolve(HERE, '..');
 const SHARED = path.resolve(HERE, '../../shared');
-const SHARED_OK = new Set(['states', 'liveness', 'fence', 'scope', 'overlap', 'cardface', 'handover', 'protocol', 'brand', 'ai', 'planning', 'workflow-execution', 'workflow-execution-controls', 'packet-text', 'capture-lane']);
+const SHARED_OK = new Set(['states', 'liveness', 'fence', 'scope', 'overlap', 'cardface', 'handover', 'protocol', 'brand', 'ai', 'planning', 'workflow-execution', 'workflow-execution-controls', 'packet-text', 'capture-lane', 'review']);
 const CSP = "default-src 'self'; connect-src 'self'; img-src 'self' https://avatars.githubusercontent.com; style-src 'self'; script-src 'self'";
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.json': 'application/json' };
 const PLAN_LABEL = PLAN_APPROVAL_LABEL;
@@ -140,6 +140,7 @@ export function createMockHub({ login = null, clock = () => Date.now(), history 
       budget: c.budget ?? null,
       pr: c.pr ? { number: c.pr.number, url: c.pr.url, state: c.pr.state, ...(c.pr.merged_by ? { merged_by: c.pr.merged_by } : {}), ...(c.pr.merged_at ? { merged_age_ms: now - c.pr.merged_at } : {}) } : null,
       evidence: c.evidence ?? null,
+      review: c.review ?? null,
     };
   }
 
@@ -162,6 +163,7 @@ export function createMockHub({ login = null, clock = () => Date.now(), history 
       evidence: d.evidence ?? [],
       overlaps: toView(c, viewerId, now).overlaps,
       memories: d.memories ?? [],
+      reviews: d.reviews ?? [],
     };
   }
 

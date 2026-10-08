@@ -249,6 +249,66 @@ function resultBlock(view, detail) {
       list.map((e, i) => h('li', { key: e.id ?? i }, icon('dot', 'icon-xs'), `${e.kind ?? 'evidence'}: ${e.summary ?? e.ref ?? ''}`))));
 }
 
+const SEVERITY_LABEL = { high: 'High', medium: 'Medium', low: 'Low' };
+const VERDICT_LABEL = { approve: 'Approved', changes_requested: 'Changes requested', needs_human: 'Needs a person' };
+const FLAG_NOTE = {
+  injection_suspected: 'Text in this change speaks to AI reviewers. Read it yourself before accepting.',
+  truncated: 'The change was too large: the reviewer saw only its first part.',
+  unparseable: 'The reviewer’s reply could not be read.',
+  over_cap: 'The reviewer spent more than the review cap (caps are soft by one request).',
+  tests_failed: 'The agent reported failing tests.',
+};
+
+function reviewWho(r) {
+  if (!r.provider_label) return 'Waiting for a runner that can review';
+  const same = r.independence === 'same_provider';
+  return `Reviewed by ${r.provider_label}${r.model ? ` (${r.model})` : ''}${r.device_name ? ` on ${r.device_name}` : ''} · ${same ? `the same AI as the author: no other AI was available` : `a different AI from the author${r.author_label ? ` (${r.author_label})` : ''}`}`;
+}
+
+function reviewCost(r) {
+  if (r.cost_usd != null) return `Cost ${fmtUsd(r.cost_usd)}${r.cap_usd != null ? ` of a ${fmtUsd(r.cap_usd)} cap` : ''}`;
+  if (r.status !== 'done') return r.cap_usd != null ? `Cap ${fmtUsd(r.cap_usd)}` : null;
+  return `${r.provider_label ?? 'This AI'} does not report dollar cost${r.cap_usd != null && r.provider !== 'codex' ? `; cap ${fmtUsd(r.cap_usd)}` : ''}`;
+}
+
+function findingItem(f, r, view, model) {
+  const busy = model.busy?.has(`review:${r.id}:${f.index}`);
+  return h('li', { key: `f-${f.index}`, class: `review-finding${f.dismissed ? ' is-dismissed' : ''}`, 'data-severity': f.severity },
+    h('span', { class: 'review-sev', 'data-severity': f.severity }, SEVERITY_LABEL[f.severity] ?? f.severity),
+    h('div', { class: 'review-finding-body' },
+      h('p', { class: 'review-where' }, h('code', null, `${f.file}${f.line ? `:${f.line}` : ''}`)),
+      h('p', { class: 'review-why' }, f.rationale),
+      f.dismissed ? h('p', { class: 'muted small' }, `Dismissed by ${f.dismissed.by_name ?? 'a teammate'}`) : null),
+    !f.dismissed && !model.readOnly && !view.archived ? h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-action': 'review-dismiss', 'data-card': view.id, 'data-review': r.id, 'data-index': String(f.index), disabled: busy || null }, 'Dismiss') : null);
+}
+
+// The second AI's review of the run (CardDetail.reviews, newest first).
+export function reviewBlock(view, detail, model) {
+  const r = detail.data?.reviews?.[0];
+  if (!r) return null;
+  const elapsed = detail.elapsed_ms ?? 0;
+  const waiting = view.run_state === 'in_review' && !view.archived && !model.readOnly;
+  const busy = (a) => model.busy?.has(`review:${r.id}:${a}`) || null;
+  const open = r.findings.filter((f) => !f.dismissed).length;
+  const verdict = r.status === 'done' ? VERDICT_LABEL[r.verdict] : r.status === 'pending' ? 'Running' : 'Unavailable';
+  const actions = [];
+  if (waiting && r.status === 'done' && r.verdict !== 'approve' && !r.human_action) actions.push(h('button', { type: 'button', class: 'btn btn-sm btn-claude', 'data-action': 'review-fix', 'data-card': view.id, 'data-review': r.id, disabled: busy('fix') }, `Ask ${view.run?.ai_label ?? 'the author'} to fix${open ? ` (${open})` : ''}`));
+  if (waiting && canMarkDone(view)) actions.push(h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'review-approve', 'data-card': view.id, 'data-review': r.id, disabled: busy('approve') }, icon('check', 'icon-lead'), 'Approve'));
+  return h('section', { class: 'dsec dsec-review', id: 'sec-review', 'aria-label': 'Review', 'data-verdict': r.status === 'done' ? r.verdict : r.status },
+    h('h3', { class: 'dsec-title' }, `Review · ${verdict}`),
+    h('p', { class: 'muted small' }, reviewWho(r)),
+    r.status === 'pending' ? h('p', { role: 'status' }, 'A second AI is reading the change. This card can still be marked done meanwhile.') : null,
+    r.status !== 'done' && r.status !== 'pending' && r.error ? h('p', { class: 'muted' }, r.error) : null,
+    r.summary ? h('p', { class: 'review-summary' }, r.summary) : null,
+    (r.flags ?? []).filter((f) => FLAG_NOTE[f]).map((f) => h('p', { key: f, class: 'review-flag', role: 'note' }, icon('warn', 'icon-xs'), FLAG_NOTE[f])),
+    r.findings.length ? h('ol', { class: 'review-findings', 'aria-label': 'Findings' }, r.findings.map((f) => findingItem(f, r, view, model)))
+      : r.status === 'done' ? h('p', { class: 'muted' }, 'No findings.') : null,
+    h('p', { class: 'muted small num' }, [reviewCost(r), r.completed_age_ms != null ? ago(add(r.completed_age_ms, elapsed)) : null].filter(Boolean).join(' · ')),
+    r.human_action ? h('p', { class: 'muted small' }, `${r.human_action === 'approved' ? 'Approved' : 'Sent back to the author'} by ${r.human_action_by_name ?? 'a teammate'}`) : null,
+    actions.length ? h('div', { class: 'drawer-actions' }, actions) : null,
+    h('p', { class: 'muted small' }, 'The review is advice from an AI. Approve marks the card done; only a person can do that.'));
+}
+
 function overlapsBlock(overlaps, elapsed) {
   if (!overlaps?.length) return null;
   return h('section', { class: 'dsec', id: 'sec-overlaps' },
@@ -343,6 +403,7 @@ export function drawer(model) {
       budgetBanner(view, model),
       whoBlock(view, face, model),
       resultBlock(view, det),
+      reviewBlock(view, det, model),
       view.capture ? h('section', { class: 'dsec', 'aria-label': 'AI work report' }, h('h3', { class: 'dsec-title' }, 'AI work report'),
         h('p', {}, 'This card follows activity reported by a local AI session. Your manual edits take priority.'),
         h('p', { class: 'muted small' }, 'A finished report requests review; it does not verify completion or start an AI run.')) : null,

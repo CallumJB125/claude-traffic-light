@@ -162,6 +162,7 @@ export class RunnerConn {
       case 'rpc': return this.onRpc(msg);
       case 'salvage': return this.onSalvage(msg);
       case 'presence': return this.hub.presence.update(this, msg);
+      case 'review.result': return this.hub.reviews.onResult(this, msg);
       default: return undefined;
     }
   }
@@ -289,7 +290,9 @@ export class RunnerConn {
     });
     this.repos = next;
     if (Object.hasOwn(msg, 'ai')) this.ai = runnerAis(msg.ai);
+    this.review = msg.review === true;
     hub.sendOffersForDevice(this.device_id);
+    hub.reviews.offerPending(this.device_id);
   }
 
   // Frames that name a card must stay inside the device member's org.

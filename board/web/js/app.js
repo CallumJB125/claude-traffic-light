@@ -1047,7 +1047,7 @@ async function openDetail(cardId, section = null) {
   if (!state.cards.has(cardId) && !state.archived?.has(cardId)) return;
   const same = state.detail?.cardId === cardId;
   const tab = ['handover', 'comments', 'packet', 'messages', 'ownership'].includes(section) ? section : (same ? state.detail.tab : 'activity');
-  state.detail = { ...(same ? state.detail : {}), intent: ++drawerSession, cardId, data: same ? state.detail.data : null, rx: same ? state.detail.rx : null, tab, scrollTo: ['asks', 'overlaps'].includes(section) ? section : null, error: null };
+  state.detail = { ...(same ? state.detail : {}), intent: ++drawerSession, cardId, data: same ? state.detail.data : null, rx: same ? state.detail.rx : null, tab, scrollTo: ['asks', 'overlaps', 'review'].includes(section) ? section : null, error: null };
   try { history.replaceState(null, '', `#card=${encodeURIComponent(cardId)}`); } catch { /* sandboxed */ }
   update();
   await refreshDetail(cardId);
@@ -1280,6 +1280,48 @@ const DONE_COPY = {
   stop: (k) => `Stopped ${k}.`,
 };
 
+// AI review: fix (request_changes to the author's AI), approve (done, a person only), dismiss one finding.
+async function reviewAction(cardId, action, reviewId, index) {
+  const key = `review:${reviewId}:${action === 'review-dismiss' ? index : action.slice(7)}`;
+  const res = await withBusy(key, () => (action === 'review-fix' ? api.reviewFix(cardId, reviewId)
+    : action === 'review-approve' ? api.reviewApprove(cardId, reviewId) : api.reviewDismiss(cardId, reviewId, Number(index))));
+  if (!res) return;
+  if (res.card) applyCard(res);
+  toast(action === 'review-fix' ? `${keyOf(cardId)} went back to its AI with the review.` : action === 'review-approve' ? `${keyOf(cardId)} is done.` : 'Finding dismissed.');
+  if (state.detail?.cardId === cardId) refreshDetailSoon(cardId);
+}
+
+async function openReviewSettings(boardId) {
+  const b = state.boards.find((x) => x.id === boardId);
+  if (!b) return;
+  state.dialog = { kind: 'review-settings', id: b.id, name: b.name, loading: true }; update();
+  try {
+    const res = await api.reviewSettings(b.id);
+    if (state.dialog?.kind === 'review-settings' && state.dialog.id === b.id) { state.dialog = { ...state.dialog, loading: false, ...res }; update(); }
+  } catch (err) {
+    if (state.dialog?.kind === 'review-settings') { state.dialog = { ...state.dialog, loading: false, error: errorText(err) }; update(); }
+  }
+}
+
+async function submitReviewSettings(form) {
+  const d = state.dialog;
+  if (!d || d.busy || d.kind !== 'review-settings') return;
+  const fd = new FormData(form);
+  const body = {
+    enabled: fd.get('enabled') === 'on', provider: String(fd.get('provider') ?? 'auto'), model: String(fd.get('model') ?? 'sonnet'),
+    spend_cap_usd: Number(fd.get('spend_cap_usd')), allow_uncapped: fd.get('allow_uncapped') === 'on', acknowledge_disclosure: fd.get('acknowledge_disclosure') === 'on',
+  };
+  state.dialog = { ...d, busy: true, error: null }; update();
+  try {
+    const res = await api.saveReviewSettings(d.id, body);
+    if (state.board?.id === d.id) state.board = { ...state.board, settings: { ...(state.board.settings ?? {}), ai_review: res.settings } };
+    state.dialog = null; update();
+    toast(res.settings.enabled ? 'AI review is on for this board.' : 'AI review is off for this board.');
+  } catch (err) {
+    if (state.dialog?.kind === 'review-settings') { state.dialog = { ...state.dialog, busy: false, error: errorText(err) }; update(); }
+  }
+}
+
 async function continueAfterBudget(cardId, preset) {
   const v = viewOf(cardId);
   if (!v || v.fail_kind !== 'budget') return;
@@ -1415,6 +1457,7 @@ async function submitDialogForm(form, submitter) {
   if (kind === 'task-packet' || kind === 'task-message') return submitCommunication(form, kind);
   if (kind === 'workflow-publish' || kind === 'workflow-apply') return submitWorkflow(form, kind);
   if (['new-board', 'rename-board', 'archive-board'].includes(kind)) return submitBoardDialog(form);
+  if (kind === 'review-settings') return submitReviewSettings(form);
   if (kind === 'integ-token') return submitIntegrationToken(form);
   if (kind === 'sentry-settings') return submitSentrySettings(form);
   if (kind === 'integ-prepare') return submitPrepare(form);
@@ -1891,6 +1934,8 @@ function onClick(e) {
     case 'take_over': case 'take_over_myself': case 'approve_done':
       doAction(cardId, action, {}, DONE_COPY[action]?.(keyOf(cardId))); return;
     case 'request_changes': state.dialog = { kind: 'changes', cardId }; update(); return;
+    case 'review-fix': case 'review-approve': case 'review-dismiss': reviewAction(cardId, action, el.dataset.review, el.dataset.index); return;
+    case 'review-settings': openReviewSettings(el.dataset.board); return;
     case 'hand_over': state.dialog = { kind: 'handover', cardId, kind_: 'queue' }; update(); return;
     case 'permission': {
       const prId = el.dataset.pr;
