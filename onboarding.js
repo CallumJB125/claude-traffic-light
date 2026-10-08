@@ -72,6 +72,8 @@ function draw() {
   $('loading').hidden = true;
   const found = view.rows.length > 0;
   $('connect-body').hidden = !found;
+  const names = view.rows.map((r) => r.label);
+  $('connect-body').textContent = `We found ${names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names[0]} on this Mac. Plexiform only sees when a session starts, works, waits or finishes; it never reads your chats.`;
   $('tools').replaceChildren(...view.rows.map(toolRow));
   $('none').hidden = found;
   $('see-changes').parentElement.hidden = !found;

@@ -13,6 +13,12 @@ test('setup auto-shows only on a real run of a brand-new install', () => {
   assert.equal(Help.ONBOARDED_MARKER, '.onboarded');
 });
 
+test('a brand-new install holds Claude Code\'s hooks and Open at Login until setup\'s Connect', () => {
+  assert.deepEqual(Help.firstRunStart({ firstRun: true, claudeAutoConnect: undefined }), { holdClaude: true, setLoginItem: false });
+  assert.deepEqual(Help.firstRunStart({ firstRun: true, claudeAutoConnect: true }), { holdClaude: false, setLoginItem: false }, 'a choice already made is kept');
+  assert.deepEqual(Help.firstRunStart({ firstRun: false, claudeAutoConnect: undefined }), { holdClaude: false, setLoginItem: true }, 'existing installs are unchanged');
+});
+
 // ── Notification config ────────────────────────────────────────────────────
 test('notifications default to on for every state, and a saved partial breakdown keeps the rest on', () => {
   assert.deepEqual(Help.notifyConfig(undefined), { on: true, kinds: { 'permission-ask': true, 'turn-failed': true, offline: true } });

@@ -13,6 +13,12 @@ const ONBOARDED_MARKER = '.onboarded';
 function shouldOnboard({ onboarded, helpShown, devRun }) {
   return !onboarded && !helpShown && !devRun;
 }
+// A brand-new install changes nothing outside Plexiform before setup's Connect:
+// Claude Code's hooks (and their 10-minute re-connect) and Open at Login wait
+// for consent. An install that already chose (claudeAutoConnect set) keeps it.
+function firstRunStart({ firstRun, claudeAutoConnect }) {
+  return { holdClaude: !!firstRun && claudeAutoConnect === undefined, setLoginItem: !firstRun };
+}
 
 // ── What's on screen, in words ──────────────────────────────────────────────
 // Keyed by the default rules' ids. Only used when the rule still listens for
@@ -273,4 +279,4 @@ function notifications(prevKeys, next, config) {
   return { keys, fire };
 }
 
-module.exports = { MARKER, ONBOARDED_MARKER, shouldOnboard, explain, NOTIFY_KINDS, NOTIFY_DEFAULTS, notifyConfig, notifications };
+module.exports = { MARKER, ONBOARDED_MARKER, shouldOnboard, firstRunStart, explain, NOTIFY_KINDS, NOTIFY_DEFAULTS, notifyConfig, notifications };
