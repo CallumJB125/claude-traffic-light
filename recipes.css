@@ -1,0 +1,25 @@
+.recipes-entry { display: grid; gap: 4px; padding: 10px 14px 14px; border-top: 1px solid var(--line); color: var(--muted); font-size: var(--text-xs); }
+.recipes-entry .btn { justify-self: start; }
+.recipes { grid-column: 2; grid-row: 1; min-width: 0; min-height: 0; overflow-y: auto; padding: 18px 22px 28px; background: var(--bg); }
+.recipes[hidden] { display: none; }
+body.recipes-open .main { display: none; }
+body.standalone .recipes { padding-top: 38px; }
+.recipes-head { display: flex; justify-content: space-between; align-items: start; gap: var(--space-4); }
+.recipes-head h2 { margin: 0 0 4px; font-size: var(--text-xl); font-weight: 650; letter-spacing: -0.01em; }
+.recipes-head p { margin: 0; max-width: 68ch; color: var(--muted); }
+.recipes-where { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-top: 14px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
+.recipes-share { display: flex; gap: 6px; margin-left: auto; }
+.recipes-status { min-height: 1.4em; margin: 8px 0 0; color: var(--muted); font-size: var(--text-sm); }
+.recipes-sub { margin: 16px 0 6px; font-size: var(--text-base); font-weight: 650; }
+.recipe-grid { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+.recipe { display: flex; flex-direction: column; gap: 6px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); }
+.recipe h3 { margin: 0; font-size: var(--text-base); font-weight: 650; }
+.recipe p { margin: 0; }
+.recipe-what { color: var(--text); font-size: var(--text-sm); }
+.recipe-cost { color: var(--muted); font-size: var(--text-xs); }
+.recipe-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+.rtag { padding: 1px 7px; border: 1px solid var(--line-strong); border-radius: var(--radius-pill); color: var(--muted); font-size: var(--text-xs); }
+.rtag.edits { border-color: color-mix(in oklab, var(--amber) 60%, transparent); color: var(--amber); }
+.recipe-prompt summary { color: var(--muted); font-size: var(--text-xs); cursor: default; }
+.recipe-prompt pre { margin: 6px 0 0; max-height: 220px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-xs); color: var(--muted); }
+.recipe-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: auto; padding-top: 4px; }

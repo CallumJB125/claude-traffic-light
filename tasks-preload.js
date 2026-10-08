@@ -17,3 +17,12 @@ contextBridge.exposeInMainWorld('tasksApi', {
   onChanged: (cb) => ipcRenderer.on('tasks:changed', (_e, snap) => cb(snap)),
   onEvent: (cb) => ipcRenderer.on('tasks:event', (_e, m) => cb(m)),
 });
+contextBridge.exposeInMainWorld('recipesApi', {
+  list: () => ipcRenderer.invoke('recipes:list'),
+  run: (id, folder, when) => ipcRenderer.invoke('recipes:run', String(id), String(folder), when === 'tonight' ? 'tonight' : 'now'),
+  saveMine: (id) => ipcRenderer.invoke('recipes:save-mine', String(id)),
+  deleteMine: (id) => ipcRenderer.invoke('recipes:delete-mine', String(id)),
+  exportMine: () => ipcRenderer.invoke('recipes:export'),
+  importFile: () => ipcRenderer.invoke('recipes:import'),
+  pickFolder: () => ipcRenderer.invoke('tasks:pick-folder'),
+});

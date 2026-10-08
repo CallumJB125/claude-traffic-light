@@ -1,0 +1,9 @@
+{
+  "id": "review-open-pr",
+  "title": "Review my open PR",
+  "what": "Finds the pull request for the current branch and reviews the diff for bugs, missing tests and unclear code, like a careful teammate would.",
+  "prompt": "Review the open pull request for the current branch.\n\n1. Find it with `gh pr view --json number,title,body,baseRefName` if the GitHub CLI is available; otherwise compare against the default branch with `git diff $(git merge-base HEAD origin/HEAD)...HEAD`.\n2. Read the whole diff and the files around each change.\n3. Report, most important first: real bugs, missing or weak tests, security or data-loss risks, confusing names or logic. For each, give the file and line and a concrete suggestion.\n4. End with a one-line verdict: ready to merge, merge after small fixes, or needs more work.\n\nDo not change any files and do not post anything to GitHub.",
+  "tool": "claude",
+  "edits": false,
+  "cost": "Medium: reads the diff and nearby files. Larger PRs cost more."
+}

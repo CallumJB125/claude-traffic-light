@@ -1955,6 +1955,15 @@ ipcMain.handle('tasks:pick-folder', async (e) => {
   return getTasks().registerFolder(dir);
 });
 onQuit(app, () => tasksSvc?.stop());
+// Recipes on the Tasks page (src/recipes.js): built from the recipe file in main, asked with a native dialog, run by the Tasks engine.
+require('./src/recipes.js').register({
+  ipcMain, allowed: tasksSenderOk, tasks: getTasks, home: os.homedir(),
+  recipes: require('./src/recipes.js').create({ builtInDir: path.join(__dirname, 'recipes'), dataDir: path.join(ROOT_DIR, 'recipes'), home: os.homedir() }),
+  confirm: async (info, e) => (await dialog.showMessageBox(BrowserWindow.fromWebContents(e.sender) || undefined, { type: 'question', buttons: ['Cancel', info.action], defaultId: 0, cancelId: 0, noLink: true, message: `${info.action}: ${info.title}?`, detail: info.detail })).response === 1,
+  pickSave: async (e) => { const r = await dialog.showSaveDialog(BrowserWindow.fromWebContents(e.sender) || undefined, { title: 'Share my recipes', defaultPath: 'my-plexiform-recipes.json', filters: [{ name: 'Plexiform setup', extensions: ['json'] }] }); return r.canceled ? null : r.filePath || null; },
+  pickOpen: async (e) => { const r = await dialog.showOpenDialog(BrowserWindow.fromWebContents(e.sender) || undefined, { title: 'Import recipes', properties: ['openFile'], filters: [{ name: 'Plexiform setup', extensions: ['json'] }] }); return r.canceled ? null : r.filePaths?.[0] || null; },
+  readFile: (f) => require('./src/setups-personal.js').readChosen(f), writeFile: (f, t) => require('./src/setups-personal.js').writeChosen(f, t),
+});
 
 let lightsWin = null;
 let onboardingWin = null; // the first-run setup window (createOnboardingWindow)

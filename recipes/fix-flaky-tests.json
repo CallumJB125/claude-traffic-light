@@ -1,0 +1,9 @@
+{
+  "id": "fix-flaky-tests",
+  "title": "Find and fix flaky tests",
+  "what": "Runs the test suite a few times, finds tests that pass and fail at random, and fixes the cause (timing, shared state, order) in its own branch.",
+  "prompt": "Find and fix flaky tests in this repository.\n\n1. Work out how to run the tests (package.json scripts, Makefile, pytest, go test and so on).\n2. Run the suite three times and note every test whose result changes between runs. If the suite is slow, run the most likely suspects (tests using timers, network, the clock, random data or shared files) repeatedly instead.\n3. For each flaky test, find the root cause: timing assumptions, shared global state, test order, real time or network use, leftover temp files.\n4. Fix the cause in the test or the code. Never just add retries or longer sleeps, and never delete a test.\n5. Run each fixed test at least five times to show it is stable, then commit with a message per fix explaining the cause.\n\nSummarise what was flaky, why, and what you changed.",
+  "tool": "auto",
+  "edits": true,
+  "cost": "Medium to high: runs the test suite several times. Cost grows with suite size."
+}
