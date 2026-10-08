@@ -28,5 +28,9 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 .index { margin: 20px 0; padding: 16px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-lg); }
 .index summary { cursor: pointer; font-weight: 600; }
 .check { display: flex; gap: 8px; align-items: start; margin: 8px 0; }
+.source-head { margin: 20px 0 4px; font-size: var(--text-base); text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.team-memory { margin-top: 8px; }
+.hit.team { border-left: 4px solid var(--accent); }
+.source { display: inline-block; font-size: var(--text-sm); font-weight: 600; color: var(--accent); }
 [hidden] { display: none !important; }
 @media (max-width: 600px) { .hit, .index { padding: 12px; } }

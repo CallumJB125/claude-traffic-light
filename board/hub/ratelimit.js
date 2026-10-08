@@ -30,6 +30,7 @@ export const DEFAULT_LIMITS = Object.freeze({
   activity_write_user: { capacity: 120, per_ms: 60_000 },  // POST /api/activity/v1/events, per user
   activity_read_user: { capacity: 120, per_ms: 60_000 },   // GET /api/activity/v1/feed and /current, per user
   activity_stream_user: { capacity: 20, per_ms: 60_000 },  // GET /api/activity/v1/stream opens, per user
+  memory_read_user: { capacity: 60, per_ms: 60_000 },      // GET /api/teams/:id/memory/v1/*, per user, including invalid queries
   label_rewrite_board: { capacity: 10, per_ms: 3_600_000 },  // label rename / delete with strip: each rewrites up to 2,000 cards (D91), per board
   agent_card_member: { capacity: 20, per_ms: 3_600_000 },    // board_create_card, per member the runs are for
   agent_lesson_member: { capacity: 30, per_ms: 3_600_000 },  // board_add_lesson, per member the runs are for

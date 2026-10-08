@@ -1077,6 +1077,11 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       const route = (routes || []).find((r) => (repo ? r.repo_id === repo || r.canonical_url === repo : !!canonical && r.canonical_url === canonical) && signedIn(r.hub) && userOf(r.hub)?.id === r.user_id);
       return route ? { repo: route.canonical_url, route, token: () => tokenFor(route.hub) } : null;
     },
+    // Main-only (src/team-activity.js memoryPage): every linked team route this computer is signed in for.
+    async teamMemoryLinks() {
+      const { routes } = await workCapture.routes();
+      return (routes || []).filter((r) => signedIn(r.hub) && userOf(r.hub)?.id === r.user_id).map((route) => ({ repo: route.canonical_url, route, token: () => tokenFor(route.hub) }));
+    },
     openWithFragment,
     isOpen: () => !!win,
     isVisible: () => !!win && !win.isDestroyed() && win.isVisible(),

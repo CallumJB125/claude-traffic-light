@@ -192,6 +192,13 @@ function register(ctx = {}) {
     return { ok: true, ...out, days: Number.isFinite(days()) ? days() : null };
   });
   handle('memory:facets', async () => ({ ok: true, ...(await client.call('facets', { days: days() })) }));
+  // Team memory: what teammates shared with the hub, asked of the hub by main (never the worker), shown apart from local hits.
+  handle('memory:team-search', async (_e, req) => {
+    if (typeof ctx.teamMemory !== 'function') return { ok: true, available: false, reason: 'signed_out', message: 'Team memory is not available in this build.' };
+    const r = req && typeof req === 'object' ? req : {};
+    const out = await ctx.teamMemory({ q: typeof r.q === 'string' ? r.q.slice(0, 200) : '', since: Number.isFinite(r.from) ? new Date(r.from).toISOString() : null, limit: 20 });
+    return { ok: true, ...out };
+  });
   handle('memory:reindex', async () => { pass(); return { ok: true }; });
   handle('memory:clear', async () => { await client.call('clear'); lastPass = 0; return { ok: true }; });
   handle('memory:settings', async (_e, s) => { saveSettings({ experimental: !!(s && s.experimental === true) }); pass(); return { ok: true, experimental: settings().experimental }; });

@@ -1549,7 +1549,7 @@ ipcMain.handle('sessions:settings', e => { if (!sessionsSender(e)) return false;
 // test data in the page) can be loaded from a fixture file for demos/tests.
 let overviewTeams={host:null,at:0,value:null},overviewTeamHub=null;
 // Team brief + team_* MCP tools (src/team-activity.js), opt-in via teamBrief.
-const TeamActivity=require('./src/team-activity').createTeamActivity({enabled:()=>loadConfig().teamBrief===true,resolve:async(a)=>(devMockReady?(await getBuddy().teamActivityLink?.(a))??null:null),fetch:(...a)=>net.fetch(...a),log:m=>console.log(m)}); // privacy-flow: team-brief
+const TeamActivity=require('./src/team-activity').createTeamActivity({enabled:()=>loadConfig().teamBrief===true,resolve:async(a)=>(devMockReady?(await getBuddy().teamActivityLink?.(a))??null:null),teams:async()=>(devMockReady?(await getBuddy().teamMemoryLinks?.())??[]:[]),fetch:(...a)=>net.fetch(...a),log:m=>console.log(m)}); // privacy-flow: team-brief
 const liveTeamHub=require('./src/team-hub-live').createLiveTeamHub({identity:()=>devMockReady?getBuddy().interactionHostIdentity?.()??null:null,fetch:(...a)=>net.fetch(...a)}); // privacy-flow: team-hub-directory
 if(IS_DEV_RUN&&!app.isPackaged&&process.env.CLAUDE_BUDDY_FAKE_TEAM_HUB){try{overviewTeamHub=require('./src/team-hub-fake').createFakeTeamHub(JSON.parse(fs.readFileSync(process.env.CLAUDE_BUDDY_FAKE_TEAM_HUB,'utf8')));}catch(e){console.warn('[overview] fake team hub not loaded:',e.message);}}
 const OverviewMain=require('./src/overview-main').createOverviewMain({
@@ -1730,7 +1730,7 @@ SetupsLocal.register(ipcMain);
 onQuit(app,()=>SetupsLocal.close());
 
 // Paid-tier packages (src/paid-wiring.js): each registers itself if present; nothing here may block startup.
-try { require('./src/paid-wiring.js').registerAll({ app, ipcMain, rootDir: ROOT_DIR, buddy: () => buddyWin, fromPage: fromUtilityPage, setups: SetupsNative, onQuit: (fn) => onQuit(app, fn), log: (m) => console.warn(m), spend: () => spendSnapshot(loadConfig()), runawayStoppers: () => runawayStoppers, usageTurns: () => getUsageTurns(), ownedSessions: { list: () => InteractionMain.listOwned(), target: (s) => InteractionMain.sharedTarget(s) }, keyFor, requestsDir: REQUESTS_DIR, interactionHost: () => hostSync.host(), setInteractionHostExtras: (fn) => { interactionHostExtras = fn; } }); } catch (e) { console.warn('[paid] wiring failed:', e?.message ?? e); }
+try { require('./src/paid-wiring.js').registerAll({ app, ipcMain, rootDir: ROOT_DIR, buddy: () => buddyWin, fromPage: fromUtilityPage, setups: SetupsNative, onQuit: (fn) => onQuit(app, fn), log: (m) => console.warn(m), spend: () => spendSnapshot(loadConfig()), runawayStoppers: () => runawayStoppers, usageTurns: () => getUsageTurns(), ownedSessions: { list: () => InteractionMain.listOwned(), target: (s) => InteractionMain.sharedTarget(s) }, keyFor, requestsDir: REQUESTS_DIR, interactionHost: () => hostSync.host(), setInteractionHostExtras: (fn) => { interactionHostExtras = fn; }, teamMemory: (req) => TeamActivity.memoryPage(req) }); } catch (e) { console.warn('[paid] wiring failed:', e?.message ?? e); } // privacy-flow: team-memory
 
 // Settings → Account & team, and the widget's one-time Team hint. Each
 // handler checks its sender; the page to open is never taken from the renderer.

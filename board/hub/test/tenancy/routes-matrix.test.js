@@ -93,6 +93,10 @@ const MATRIX = {
   'POST /api/teams/:team_id/activity/v1/records/:record_id/continue': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/activity/v1/records/${encodeURIComponent('x:claude:y')}/continue`, body: {} },
   'GET /api/cards/:card_id/continue-seed': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/continue-seed?record_id=${encodeURIComponent('x:claude:y')}` },
   'GET /api/activity/v1/stream': { kind: 'cross', path: (fx) => `/api/activity/v1/stream?repo_id=${fx.B.repo}` },
+  // Team memory (activity/memory.js): B's team is unknown to A, and A's team cannot name B's repo.
+  'GET /api/teams/:team_id/memory/v1/search': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/memory/v1/search?q=secret`,
+    alt: (fx) => [`/api/teams/${fx.A.team}/memory/v1/search?q=secret&repo_id=${fx.B.repo}`] },
+  'GET /api/teams/:team_id/memory/v1/records/:record_id': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/memory/v1/records/${encodeURIComponent('x:claude:y')}` },
   'GET /api/account': { kind: 'self' },
   'GET /api/work-capture/routes': { kind: 'self' },
   'GET /api/my-day': { kind: 'self' },

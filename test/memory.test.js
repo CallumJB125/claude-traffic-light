@@ -331,7 +331,7 @@ test('register(ctx): every handler checks the memory page sender; nothing regist
   const reg = Search.register({ ipcMain, rootDir: r.root, entitlements: { has: () => true, limits: () => ({ 'memory.days': 7 }), plan: () => 'free' },
     home: r.home, fromPage: (e, id) => id === 'memory' && e.sender === page, onQuit: (fn) => quits.push(fn), electron: { clipboard: clip(), shell: { openPath: async () => '' } } });
   try {
-    assert.deepEqual([...handlers.keys()].sort(), ['memory:clear', 'memory:end', 'memory:facets', 'memory:hand', 'memory:handover', 'memory:reindex', 'memory:reply', 'memory:search', 'memory:settings', 'memory:status']);
+    assert.deepEqual([...handlers.keys()].sort(), ['memory:clear', 'memory:end', 'memory:facets', 'memory:hand', 'memory:handover', 'memory:reindex', 'memory:reply', 'memory:search', 'memory:settings', 'memory:status', 'memory:team-search']);
     const stranger = { sender: { id: 'other' } };
     for (const [ch, fn] of handlers) assert.deepEqual(await fn(stranger, {}), { ok: false, error: 'Not allowed.' }, ch);
     page = { isDestroyed: () => false, send() {} };
@@ -340,5 +340,24 @@ test('register(ctx): every handler checks the memory page sender; nothing regist
     assert.equal(status.ok, true); assert.equal(status.days, 7); assert.equal(status.canLaunch, true);
     assert.equal((await handlers.get('memory:handover')(e, 'open', { tool: 'claude', sid: '../../etc' })).ok, false);
     assert.equal((await handlers.get('memory:hand')(e, { tool: 'nope', sid: 'x' }, 'codex')).ok, false);
+    assert.equal((await handlers.get('memory:team-search')(e, { q: 'csv' })).available, false, 'no team memory wired: off, not an error');
   } finally { for (const fn of quits) fn(); void reg; r.done(); }
+});
+
+test('register(ctx): the team-search handler hands main only the words and date, bounded', async () => {
+  const handlers = new Map();
+  const asked = [];
+  const r = rig();
+  r.ix.close();
+  const quits = [];
+  const page = { isDestroyed: () => false, send() {} };
+  Search.register({ ipcMain: { handle: (ch, fn) => handlers.set(ch, fn) }, rootDir: r.root, entitlements: { has: () => true, limits: () => ({}), plan: () => 'plus' },
+    home: r.home, fromPage: (e, id) => id === 'memory' && e.sender === page, onQuit: (fn) => quits.push(fn), electron: { clipboard: clip(), shell: { openPath: async () => '' } },
+    teamMemory: async (req) => { asked.push(req); return { available: true, results: [{ record_id: 'i:claude:s', title: 'CSV export' }], teams: [{ team: 'Core', ok: true }] }; } });
+  try {
+    const out = await handlers.get('memory:team-search')({ sender: page }, { q: `csv ${'x'.repeat(300)}`, from: Date.UTC(2026, 8, 1), tool: 'claude', repo: '/Users/me/app' });
+    assert.equal(out.ok, true); assert.equal(out.results[0].title, 'CSV export');
+    assert.deepEqual(Object.keys(asked[0]).sort(), ['limit', 'q', 'since']);
+    assert.equal(asked[0].q.length, 200); assert.equal(asked[0].since, '2026-09-01T00:00:00.000Z');
+  } finally { for (const fn of quits) fn(); r.done(); }
 });

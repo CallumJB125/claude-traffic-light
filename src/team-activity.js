@@ -11,6 +11,11 @@ const API = '/api/activity/v1';
 // Not in contract v1, which names team_handover but no route for it. One
 // constant, so the real hub route replaces it in one place.
 const HANDOVER_PATH = (id) => `${API}/records/${encodeURIComponent(id)}/handover`;
+const MEMORY_PATH = (teamId) => `/api/teams/${encodeURIComponent(teamId)}/memory/v1`;
+const MEMORY_MAX = 50;
+const MEMORY_TEAMS_MAX = 5;
+const MARK_OPEN = '\u0002', MARK_CLOSE = '\u0003';
+const ISO_OR_DAY = /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2}))?$/;
 const BRIEF_MAX = 1500;
 const BRIEF_DEADLINE_MS = 700;
 const TOOL_DEADLINE_MS = 5000;
@@ -24,6 +29,8 @@ const REASONS = Object.freeze({
   off: '"Give my AI the team brief" is off in Plexiform Preferences.',
   unlinked: 'This folder is not a repository linked to one of your team boards.',
   sharing_off: 'Sharing summaries with this team is off, so nothing is read back either.',
+  signed_out: 'Sign in to a team in Plexiform to search what your teammates shared.',
+  not_found: 'No record with that id in your team memory.',
   offline: 'The team hub did not answer in time.',
   unreadable: 'The team hub sent an unreadable answer.',
   invalid: 'Check the arguments and try again.',
@@ -70,6 +77,28 @@ function event(x) {
   return r ? { seq: x.seq, type: x.type, created_at: typeof x.created_at === 'string' ? x.created_at.slice(0, 40) : null, record: r } : null;
 }
 
+// A hub snippet keeps its match markers; every other character is cleaned like any teammate text.
+function snippet(v) {
+  if (typeof v !== 'string' || !v) return null;
+  let out = '', open = false;
+  for (const part of v.slice(0, 2000).split(/([\u0002\u0003])/)) {
+    if (part === MARK_OPEN) { if (!open) { out += MARK_OPEN; open = true; } continue; }
+    if (part === MARK_CLOSE) { if (open) { out += MARK_CLOSE; open = false; } continue; }
+    out += clean(part, 400);
+  }
+  return (open ? `${out}${MARK_CLOSE}` : out).slice(0, 600) || null;
+}
+
+function memoryHit(x) {
+  const r = record(x);
+  if (!r || !object(x)) return null;
+  return { ...r, team_id: typeof x.team_id === 'string' ? x.team_id.slice(0, 60) : null, repo_id: typeof x.repo_id === 'string' ? x.repo_id.slice(0, 60) : null,
+    repo: text(x.repo, 80) || null, author: text(x.author, 60) || 'Teammate', handover: x.handover_shared === true,
+    snippet: snippet(x.snippet), score: Number.isFinite(x.score) ? x.score : null };
+}
+
+const plainSnippet = (s) => (s ? s.replace(/[\u0002\u0003]/g, '') : s);
+
 function createActivityClient({ baseUrl, token, fetch }) {
   const base = parseBase(baseUrl);
   if (typeof token !== 'function' || typeof fetch !== 'function') throw new Error('an activity client needs token and fetch functions');
@@ -102,6 +131,23 @@ function createActivityClient({ baseUrl, token, fetch }) {
       if (r.status !== 200 || !object(r.body) || !Array.isArray(r.body.events)) return { ok: false, reason: r.status === 0 ? 'offline' : 'unreadable' };
       const next = Number.isSafeInteger(r.body.next_seq) && r.body.next_seq >= 0 ? r.body.next_seq : after;
       return { ok: true, events: r.body.events.slice(0, 200).map(event).filter(Boolean), next_seq: next };
+    },
+    async memorySearch(teamId, { q, repoId = null, since = null, limit = 20 }, deadline) { // privacy-flow: team-memory
+      const qs = new URLSearchParams({ q, limit: String(limit) });
+      if (repoId) qs.set('repo_id', repoId);
+      if (since) qs.set('since', since);
+      const r = await get(`${MEMORY_PATH(teamId)}/search?${qs}`, deadline);
+      if (r.status === 404) return { ok: false, reason: 'unlinked' };
+      if (r.status !== 200 || !object(r.body) || !Array.isArray(r.body.results)) return { ok: false, reason: r.status === 0 ? 'offline' : 'unreadable' };
+      return { ok: true, results: r.body.results.slice(0, MEMORY_MAX).map(memoryHit).filter(Boolean) };
+    },
+    async memoryRecord(teamId, recordId, deadline) {
+      const r = await get(`${MEMORY_PATH(teamId)}/records/${encodeURIComponent(recordId)}`, deadline);
+      if (r.status === 404) return { ok: true, record: null };
+      const hit = r.status === 200 && object(r.body) ? memoryHit(r.body.record) : null;
+      if (!hit) return { ok: false, reason: r.status === 0 ? 'offline' : 'unreadable' };
+      const doc = typeof r.body.record.handover === 'string' ? r.body.record.handover.split('\n').slice(0, 400).map((l) => clean(l, 500)).join('\n').replace(/\n{3,}/g, '\n\n').slice(0, 8000) : null;
+      return { ok: true, record: { ...hit, handover_text: doc || null } };
     },
     async handover(recordId, deadline) {
       const r = await get(HANDOVER_PATH(recordId), deadline);
@@ -155,7 +201,8 @@ function briefText(repoName, records, { sessionId = null, max = BRIEF_MAX } = {}
 // enabled(): the "Give my AI the team brief" setting. resolve({cwd, repo}) →
 // {repo, route, token} for a linked repository, or null; route carries hub,
 // repo_id, team_name and share_summaries (src/work-capture.js routes).
-function createTeamActivity({ enabled, resolve, fetch, now = Date.now, log = () => {} }) {
+// teams() → every signed-in route as {route, token} (the page's team memory mode).
+function createTeamActivity({ enabled, resolve, teams = async () => [], fetch, now = Date.now, log = () => {} }) {
   const cache = new Map();
   async function link({ cwd, repo }) {
     const key = JSON.stringify([cwd ?? null, repo ?? null]);
@@ -175,7 +222,7 @@ function createTeamActivity({ enabled, resolve, fetch, now = Date.now, log = () 
     let client;
     try { client = createActivityClient({ baseUrl: l.route.hub, token: l.token, fetch }); } catch { return { fail: unavailable('unlinked') }; }
     const name = text(String(l.repo || '').split('/').slice(-2).join('/'), 80) || 'this repository';
-    return { client, repoId: l.route.repo_id, name, team: text(l.route.team_name, 60) || 'Team', deadline: Date.now() + ms };
+    return { client, repoId: l.route.repo_id, teamId: l.route.team_id, name, team: text(l.route.team_name, 60) || 'Team', deadline: Date.now() + ms };
   }
   const ok = (o, extra) => ({ available: true, team: o.team, repo: o.name, note: NOTE, ...extra });
 
@@ -224,9 +271,69 @@ function createTeamActivity({ enabled, resolve, fetch, now = Date.now, log = () 
     const b = await brief({ cwd });
     return b.available ? { ...b, brief: b.brief || 'Nobody else on the team has reported work in this repository.' } : b;
   }
-  const OPS = { brief, team_activity: activity, who_touched: whoTouched, team_handover: handover, team_brief: teamBrief };
+  const memoryArgs = ({ query, since, limit }) => {
+    const q = typeof query === 'string' ? query.trim() : '';
+    if (q.length < 2 || q.length > 200) return null;
+    if (since !== undefined && since !== null && (typeof since !== 'string' || !ISO_OR_DAY.test(since))) return null;
+    if (limit !== undefined && !(Number.isSafeInteger(limit) && limit >= 1 && limit <= MEMORY_MAX)) return null;
+    return { q, since: since || null, limit: limit ?? 10 };
+  };
+  // "Has anyone in the team already done or decided X?": the whole team by default, one repo when `repo` names it or `here` is set.
+  async function memorySearch({ cwd, query, repo, here, since, limit } = {}) {
+    const a = memoryArgs({ query, since, limit });
+    if (!a || (repo !== undefined && typeof repo !== 'string')) return unavailable('invalid');
+    const o = await open({ cwd, repo }, TOOL_DEADLINE_MS);
+    if (o.fail) return o.fail;
+    const res = await o.client.memorySearch(o.teamId, { ...a, repoId: repo || here === true ? o.repoId : null }, o.deadline);
+    if (!res.ok) return unavailable(res.reason);
+    return ok(o, { query: a.q, scope: repo || here === true ? o.name : 'the whole team', results: res.results.map((r) => ({ ...r, snippet: plainSnippet(r.snippet) })),
+      ...(res.results.length ? { next: 'team_memory_get with a record_id returns the whole record and any handover its author shared.' } : { message: 'Nobody on the team has shared work that matches.' }) });
+  }
+  async function memoryGet({ cwd, record_id: id } = {}) {
+    if (typeof id !== 'string' || !/^[A-Za-z0-9_.:-]{1,300}$/.test(id)) return unavailable('invalid');
+    const o = await open({ cwd }, TOOL_DEADLINE_MS);
+    if (o.fail) return o.fail;
+    const res = await o.client.memoryRecord(o.teamId, id, o.deadline);
+    if (!res.ok) return unavailable(res.reason);
+    if (!res.record) return ok(o, { record_id: id, found: false, message: REASONS.not_found });
+    const { handover_text: doc, ...rec } = res.record;
+    delete rec.snippet; delete rec.score;
+    return ok(o, { found: true, record: rec, handover: doc, ...(doc ? {} : { message: `${rec.author} has not shared a handover for this work.` }) });
+  }
+  const OPS = { brief, team_activity: activity, who_touched: whoTouched, team_handover: handover, team_brief: teamBrief, team_memory_search: memorySearch, team_memory_get: memoryGet };
+
+  // The Search everything page's "Team memory" mode: every signed-in team that
+  // shares summaries, searched together; labelled by team, never mixed with local hits.
+  async function memoryPage({ q, since = null, limit = 20 } = {}) {
+    const a = memoryArgs({ query: q, since: since ?? undefined, limit });
+    if (!a) return unavailable('invalid');
+    let links = [];
+    try { links = (await teams()) || []; } catch { links = []; }
+    if (!links.length) return unavailable('signed_out');
+    const by = new Map();
+    for (const l of links) {
+      if (!l || !object(l.route) || typeof l.route.team_id !== 'string') continue;
+      const key = `${l.route.hub}|${l.route.team_id}`;
+      const t = by.get(key) || { link: l, sharing: false };
+      if (l.route.share_summaries === true) t.sharing = true;
+      by.set(key, t);
+    }
+    const shared = [...by.values()].filter((t) => t.sharing).slice(0, MEMORY_TEAMS_MAX);
+    if (!shared.length) return unavailable(by.size ? 'sharing_off' : 'signed_out');
+    const deadline = Date.now() + TOOL_DEADLINE_MS;
+    const out = await Promise.all(shared.map(async ({ link: l }) => {
+      const team = text(l.route.team_name, 60) || 'Team';
+      let client;
+      try { client = createActivityClient({ baseUrl: l.route.hub, token: l.token, fetch }); } catch { return { team, ok: false, reason: 'unlinked' }; }
+      const res = await client.memorySearch(l.route.team_id, a, deadline);
+      return res.ok ? { team, ok: true, results: res.results.map((r) => ({ ...r, team })) } : { team, ok: false, reason: res.reason };
+    }));
+    const results = out.flatMap((t) => (t.ok ? t.results : [])).sort((x, y) => (y.score ?? 0) - (x.score ?? 0)).slice(0, a.limit);
+    return { available: true, note: NOTE, teams: out.map((t) => ({ team: t.team, ok: t.ok, ...(t.ok ? {} : { message: REASONS[t.reason] || REASONS.offline }) })), results };
+  }
   return {
     ...OPS,
+    memoryPage: (req) => memoryPage(object(req) ? req : {}).catch(() => unavailable('offline')),
     async call(op, args) {
       const fn = Object.hasOwn(OPS, op) ? OPS[op] : null;
       if (!fn || !object(args)) return unavailable('invalid');
@@ -236,4 +343,4 @@ function createTeamActivity({ enabled, resolve, fetch, now = Date.now, log = () 
   };
 }
 
-module.exports = { createTeamActivity, createActivityClient, briefText, collisions, record, event, REASONS, BRIEF_MAX, HANDOVER_PATH };
+module.exports = { createTeamActivity, createActivityClient, briefText, collisions, record, event, memoryHit, snippet, REASONS, BRIEF_MAX, HANDOVER_PATH, MEMORY_PATH };

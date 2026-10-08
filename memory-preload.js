@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('memoryApi', {
   status: () => ipcRenderer.invoke('memory:status'),
   search: (req) => ipcRenderer.invoke('memory:search', { q: String(req.q ?? ''), tool: req.tool || null, repo: req.repo || null, from: Number.isFinite(req.from) ? req.from : null }),
   facets: () => ipcRenderer.invoke('memory:facets'),
+  teamSearch: (req) => ipcRenderer.invoke('memory:team-search', { q: String(req.q ?? ''), from: Number.isFinite(req.from) ? req.from : null }),
   reindex: () => ipcRenderer.invoke('memory:reindex'),
   clear: () => ipcRenderer.invoke('memory:clear'),
   setExperimental: (on) => ipcRenderer.invoke('memory:settings', { experimental: on === true }),

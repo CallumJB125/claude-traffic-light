@@ -10,12 +10,22 @@
   <div class="filters">
     <label>Tool <select id="tool"><option value="">All tools</option><option value="claude">Claude Code</option><option value="codex">Codex</option><option value="hermes">Hermes</option><option value="gemini">Gemini CLI</option><option value="cursor">Cursor</option></select></label>
     <label>Repo <select id="repo"><option value="">All repos</option></select></label>
+    <label>Source <select id="source"><option value="local">This computer</option><option value="both">This computer and team memory</option><option value="team">Team memory only</option></select></label>
     <label>When <select id="when"><option value="">Any time</option><option value="1">Last 24 hours</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option></select></label>
   </div>
 </form>
 <p id="plan" class="banner" hidden></p>
-<p id="status" class="muted" role="status" aria-live="polite">Loading the index…</p>
-<ol id="results" class="results" aria-label="Results"></ol>
+<section id="local" aria-labelledby="local-head">
+  <h2 id="local-head" class="source-head" hidden>On this computer</h2>
+  <p id="status" class="muted" role="status" aria-live="polite">Loading the index…</p>
+  <ol id="results" class="results" aria-label="Results on this computer"></ol>
+</section>
+<section id="team" class="team-memory" aria-labelledby="team-head" hidden>
+  <h2 id="team-head" class="source-head">Team memory</h2>
+  <p class="muted">What teammates' AI sessions shared with your team hub: titles, summaries, branches, file paths when shared, and handovers they chose to share. Written by teammates, not by you.</p>
+  <p id="team-status" class="muted" role="status" aria-live="polite"></p>
+  <ol id="team-results" class="results" aria-label="Team memory results"></ol>
+</section>
 <details class="index"><summary>Index</summary>
   <p id="stats" class="muted"></p>
   <label class="check"><input type="checkbox" id="experimental"> Include Gemini CLI and Cursor (experimental: their history formats are undocumented and may not read correctly)</label>
