@@ -11,7 +11,7 @@ if (process.argv.includes('--uninstall-hooks')) {
 }
 // `--rename-dry-run`: prints what the first launch after the rename from Claude Buddy
 // would do on this machine, writes nothing and exits, before anything creates
-// the userData folder (Electron is never asked for it; no crash reporter, log file or lock).
+// the userData folder (Electron is never asked for it; no crash ring, log file or lock).
 if (process.argv.includes('--rename-dry-run')) {
   require('./src/rename-dry-run.js').main();
   process.exit(0);
@@ -174,8 +174,19 @@ const CLAUDE_SETTINGS_PATH = path.join(os.homedir(), '.claude', 'settings.json')
 require('./src/logging.js').installFileLogging({ rootDir: ROOT_DIR, isDevRun: IS_DEV_RUN });
 // Anything that escapes a promise or a callback, from here on: log it (to
 // app.log too) instead of letting it kill a listener silently.
-process.on('unhandledRejection', (e) => console.error('[unhandled rejection]', (e && e.stack) || e));
-process.on('uncaughtException', (e) => console.error('[uncaught]', (e && e.stack) || e));
+// A scrubbed copy also goes to the local crash ring (src/crash-reports.js); nothing is sent.
+const CrashReports = require('./src/crash-reports.js').create({
+  dir: path.join(ROOT_DIR, 'crash-reports'),
+  app: { version: app.getVersion(), os: process.platform, osVersion: os.release(), arch: process.arch },
+  scrubWith: () => {
+    const names = [];
+    try { names.push(...(loadConfig().gitRepos || []), ...aggregateState().sessions.map((x) => String(x.cwd || '').split('/').filter(Boolean).pop() || '')); } catch { /* too early in startup: home and user still go */ }
+    return { home: os.homedir(), user: os.userInfo().username, hostname: os.hostname(), names };
+  },
+});
+process.on('unhandledRejection', (e) => { console.error('[unhandled rejection]', (e && e.stack) || e); CrashReports.record('unhandledRejection', e); });
+process.on('uncaughtException', (e) => { console.error('[uncaught]', (e && e.stack) || e); CrashReports.record('uncaughtException', e); });
+app.on('render-process-gone', (_e, _wc, details) => { if (details && details.reason !== 'clean-exit') CrashReports.record('renderer-gone', details); });
 // Logs to app.log when the main thread stops answering (src/main-watchdog.js); same runs as the log.
 const Watchdog = IS_DEV_RUN ? { step() {}, stop() {} } : require('./src/main-watchdog.js').startMainWatchdog({
   createWorker: () => new Worker(path.join(__dirname, 'src', 'main-watchdog-worker.js'), { workerData: { logFile: path.join(ROOT_DIR, 'app.log') } }), // privacy-flow: local-worker
@@ -3430,6 +3441,18 @@ function commitConfig(partial) {
 }
 
 utilityHandle('get-privacy', settingsOnly, () => { try { return fs.readFileSync(path.join(__dirname, 'PRIVACY.md'), 'utf8'); } catch { return null; } });
+utilityHandle('crash-reports:state', settingsOnly, () => ({ optedIn: CrashReports.isOptedIn(), count: CrashReports.list().length, latest: CrashReports.payload() }));
+utilityHandle('crash-reports:set-opt-in', settingsOnly, (_e, on) => ({ optedIn: CrashReports.setOptIn(on === true) }));
+utilityHandle('crash-reports:export', settingsOnly, async (e) => {
+  const r = await dialog.showSaveDialog(BrowserWindow.fromWebContents(e.sender) || undefined, {
+    title: 'Export diagnostics',
+    defaultPath: path.join(app.getPath('documents'), `plexiform-diagnostics-${new Date().toISOString().slice(0, 10)}.json`),
+    filters: [{ name: 'JSON', extensions: ['json'] }],
+  });
+  if (r.canceled || !r.filePath) return { ok: false };
+  fs.writeFileSync(r.filePath, CrashReports.bundle(), { mode: 0o600 });
+  return { ok: true, path: r.filePath };
+});
 utilityHandle('show-data-folder', settingsOnly, () => { fs.mkdirSync(ROOT_DIR, { recursive: true }); return shell.openPath(ROOT_DIR); });
 utilityHandle('get-stats', e => analyticsSender(e) || settingsOnly(e), (_e, days) => Stats.summary(stats, Date.now(), Math.min(60, Math.max(1, Number(days) || 7))));
 
