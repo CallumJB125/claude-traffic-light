@@ -237,7 +237,7 @@ test('the Waiting page sits in the Plexiform window as a local page', async () =
     await expect(page.locator('[data-option="allow"]')).toBeVisible();
     expect(await page.evaluate(() => document.body.classList.contains('standalone'))).toBe(false);
     const sidebar = await windowByFile(hh.app, 'sidebar.html');
-    await expect(sidebar.locator('[aria-current="page"]')).toContainText('Waiting on you', { timeout: 10000 });
+    await expect(sidebar.locator('.nav-section[data-active]')).toContainText('Home', { timeout: 10000 });
     await page.waitForTimeout(900);
     await expect(page).toHaveScreenshot('waiting-embedded.png', SHOT);
   } finally { await hh.cleanup(); }

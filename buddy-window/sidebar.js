@@ -87,7 +87,7 @@ function build() {
     const sub = el('ul', { class: 'nav-sub', 'aria-label': `${s.title} pages` });
     for (const id of s.pages.length > 1 ? s.pages : []) {
       const p = byId.get(id);
-      if (p) sub.append(el('li', {}, item(p, true)));
+      if (p && !p.unlisted) sub.append(el('li', {}, item(p, true)));
     }
     subLists.set(s.id, sub);
     ul.append(el('li', {}, head, sub));

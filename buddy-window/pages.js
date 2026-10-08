@@ -28,8 +28,9 @@ const PAGES = [
       { id: 'board:calendar', title: 'Calendar', kind: 'hub', view: 'calendar', hidden: true },
       { id: 'board:timeline', title: 'Timeline', kind: 'hub', view: 'timeline', hidden: true },
     ] },
-  { id: 'waiting', title: 'Waiting on you', icon: 'bell', kind: 'local', file: 'waiting.html', preload: 'waiting-preload.js', query: { embedded: '1' }, group: 'work' },
-  { id: 'myday', title: 'My day', icon: 'sun', kind: 'local', file: 'myday.html', preload: 'myday-preload.js', group: 'work' },
+  // Home's "Needs you" and "Your cards" carry these; the pages stay for notifications and deep links.
+  { id: 'waiting', title: 'Waiting on you', icon: 'bell', kind: 'local', file: 'waiting.html', preload: 'waiting-preload.js', query: { embedded: '1' }, group: 'work', unlisted: true },
+  { id: 'myday', title: 'My day', icon: 'sun', kind: 'local', file: 'myday.html', preload: 'myday-preload.js', group: 'work', unlisted: true },
   { id: 'sessions', title: 'Running now', icon: 'team', kind: 'local', file: 'sessions.html', preload: 'sessions-preload.js', group: 'work' },
   { id: 'checkpoints', title: 'What changed', icon: 'layers', kind: 'local', file: 'checkpoints.html', preload: 'checkpoints-preload.js', group: 'work' },
   // Search across every AI tool's local history (src/memory/search.js registers its IPC).
@@ -74,8 +75,8 @@ const GROUPS = [
 // page (deep links, IPC and the app menu address pages, not sections). A
 // section opens `default`; the others are its sub-nav, in this order. Board
 // views are the board page's children, so they are listed by id like the rest.
-// Home opens Overview until the Home page is registered (then `home` leads it);
-// Sessions lives under it as "Running now".
+// An `unlisted` page belongs to its section (so the section lights up while it
+// is open) but has no sub-nav entry of its own.
 const SECTIONS = [
   { id: 'home', title: 'Home', icon: 'sun', default: 'home', pages: ['home', 'overview', 'myday', 'waiting'] },
   { id: 'board', title: 'Board', icon: 'board', default: 'board', pages: ['board', 'board:table', 'board:history', 'board:dashboard'] },
@@ -88,9 +89,9 @@ const SECTIONS = [
   { id: 'clients', title: 'Client billing', icon: 'chart', default: 'clients', menu: false, pages: ['clients'] },
   { id: 'team', title: 'Team', icon: 'team', default: 'team', heading: 'Team', pages: ['team', 'integrations', 'account'] },
   { id: 'aitools', title: 'AI tools', icon: 'plug', default: 'aitools', menu: false, heading: 'You', pages: ['aitools'] },
-  { id: 'widget', title: 'Widget', icon: 'lights', default: 'widget', pages: ['widget', 'lights'] },
+  { id: 'widget', title: 'Widget', icon: 'lights', default: 'widget', pages: ['widget', 'lights', 'hatch'] },
   { id: 'phone', title: 'Phone', icon: 'bell', default: 'phone', menu: false, pages: ['phone'] },
-  { id: 'settings', title: 'Settings', icon: 'gear', default: 'settings', pages: ['settings', 'thismac', 'hatch'] },
+  { id: 'settings', title: 'Settings', icon: 'gear', default: 'settings', pages: ['settings', 'thismac'] },
 ];
 // Small links under the sections, not a section of their own.
 const FOOTER = ['help', 'feedback', 'updates'];
