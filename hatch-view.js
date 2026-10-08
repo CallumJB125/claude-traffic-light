@@ -69,10 +69,35 @@
     $('save').disabled = false;
   }
 
+  async function describe() {
+    const description = $('desc').value.trim();
+    if (!description) { status('Write a short description first.'); $('desc').focus(); return; }
+    $('describe').disabled = true;
+    status(`Hatching with ${aiLabel}… this can take a minute.`);
+    let r;
+    try { r = await api.describe({ ...state, description }); } catch { r = { error: 'Could not hatch it.' }; }
+    $('describe').disabled = false;
+    if (!r || !r.character) { status((r && r.error) || 'Could not hatch it.'); return; }
+    seq += 1;
+    token = r.token;
+    try { C.register(r.character); } catch { /* a saved character with this id shadows it in this window only */ }
+    currentId = r.character.id;
+    show(currentId);
+    status(`${aiLabel} hatched it. Save to keep it; changing a choice below swaps it back to a drawn one.`, true);
+  }
+
+  let aiLabel = 'the AI';
   async function start() {
     const o = await api.options();
     segmented('shape', o.shapes); segmented('size', o.sizes); segmented('arms', o.arms); segmented('accessory', o.accessories);
-    if (o.ai) { $('desc').disabled = false; $('desc-hint').hidden = true; }
+    if (o.ai) {
+      aiLabel = o.aiLabel || aiLabel;
+      $('desc').disabled = false;
+      $('desc-hint').textContent = `Sent to ${aiLabel} on this computer when you press the button. You are asked first.`;
+      $('describe').textContent = `Describe it to ${aiLabel}`;
+      $('describe-row').hidden = false;
+      $('describe').addEventListener('click', describe);
+    } else if (o.aiReason) $('desc-hint').textContent = o.aiReason;
     $('name').addEventListener('input', () => { state.name = $('name').value; later(); });
     $('color').addEventListener('input', () => { state.color = $('color').value; later(); });
     $('surprise').addEventListener('click', async () => { Object.assign(state, await api.surprise()); sync(); refresh(); });

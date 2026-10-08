@@ -1361,8 +1361,37 @@ const fromHatch = (e) => fromUtilityPage(e, 'hatch');
 utilityHandle('characters:list', e => widgetOnly(e) || widgetConfigSender(e) || fromHatch(e), () => characterStore.list().map((c) => c.character));
 ipcMain.handle('hatch:open', (e) => { if (widgetConfigSender(e)) createHatchWindow(); });
 ipcMain.handle('hatch:close', (e) => { if (fromHatch(e)) createLightsWindow(); });
-// ai: false until the hand-off engine can run a hidden AI task (the template path is the fallback either way)
-ipcMain.handle('hatch:options', (e) => (fromHatch(e) ? { shapes: Hatch.SHAPES, sizes: Hatch.SIZES, arms: Hatch.ARMS, accessories: Hatch.ACCESSORIES, ai: false } : null));
+const HatchAi = require('./src/hatch-ai.js');
+const hatchAiBin = () => require('./src/claude-code-session.js').findClaudeBin();
+let hatchDescribing = false;
+ipcMain.handle('hatch:options', (e) => {
+  if (!fromHatch(e)) return null;
+  const a = HatchAi.availability({ bin: hatchAiBin(), tools: AiTools.quick() });
+  return { shapes: Hatch.SHAPES, sizes: Hatch.SIZES, arms: Hatch.ARMS, accessories: Hatch.ACCESSORIES, ai: a.ai, aiLabel: a.label || null, aiReason: a.reason || null };
+});
+ipcMain.handle('hatch:describe', async (e, params) => {
+  if (!fromHatch(e)) return null;
+  if (hatchDescribing) return { error: 'Already hatching one. Wait for it to finish.' };
+  hatchDescribing = true;
+  try {
+    const parent = BrowserWindow.fromWebContents(e.sender) || undefined;
+    const r = await HatchAi.describe({
+      params, bin: hatchAiBin(),
+      consented: () => loadConfig().hatchAiConsent === HatchAi.TOOL.id,
+      askConsent: async (opts) => {
+        const yes = (await dialog.showMessageBox(parent, opts)).response === 1;
+        if (yes) saveConfig({ hatchAiConsent: HatchAi.TOOL.id });
+        return yes;
+      },
+    });
+    if (!r.ok) return { error: r.error };
+    if (!fromHatch(e)) return null;
+    const token = require('crypto').randomUUID();
+    hatchResults.set(token, { character: r.character, params: r.params, source: 'ai' });
+    while (hatchResults.size > 8) hatchResults.delete(hatchResults.keys().next().value);
+    return { token, character: r.character, source: 'ai' };
+  } finally { hatchDescribing = false; }
+});
 ipcMain.handle('hatch:surprise', (e) => (fromHatch(e) ? Hatch.surprise(Date.now()) : null));
 ipcMain.handle('hatch:generate', async (e, params) => {
   if (!fromHatch(e)) return null;

@@ -6,6 +6,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('hatch', {
   options: () => ipcRenderer.invoke('hatch:options'),
   generate: (params) => ipcRenderer.invoke('hatch:generate', params),
+  describe: (params) => ipcRenderer.invoke('hatch:describe', params),
   surprise: () => ipcRenderer.invoke('hatch:surprise'),
   save: (token) => ipcRenderer.invoke('hatch:save', token),
   close: () => ipcRenderer.invoke('hatch:close'),
