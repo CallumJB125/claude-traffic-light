@@ -120,10 +120,11 @@ function pageState(d, { platform = process.platform } = {}) {
     case 'broken':
       return { ...base, reason: 'down', headline: 'Burst needs repair', detail: 'Burst\'s configuration could not be read, so it is not working.', actions: [act('repair', 'Repair', true), act('off', 'Turn Burst off')] };
     case 'untrusted':
-      return { ...base, headline: 'Plexiform will not open this', detail: `${d.reason} Plexiform read nothing from it and loaded nothing.`, actions: [act('off', 'Turn Burst off')], docs: true };
+      return { ...base, headline: 'Plexiform will not open this', detail: `${d.reason} Plexiform read nothing from it and loaded nothing. This usually means Burst was installed somewhere other than ~/.local/bin/claude-burst, or another program is using Burst\'s port.`, actions: [act('off', 'Turn Burst off')], docs: true };
     case 'present': {
       if (!atLeast(d.state.version, MIN_VERSION)) {
-        return { ...base, reason: 'old', headline: 'This Burst is too old for the dashboard here', detail: `Burst ${d.state.version} is older than ${MIN_VERSION.join('.')}. Update it and the dashboard appears in this page.`, actions: [act('update', 'Update Burst', true)] };
+        const can = !d.upgrade || d.upgrade.canUpgrade !== false;
+        return { ...base, reason: 'old', headline: 'This Burst is too old for the dashboard here', detail: `Burst ${d.state.version} is older than ${MIN_VERSION.join('.')}. ${can ? 'Update it and the dashboard appears in this page.' : 'Burst can\'t update itself here (it found no copy of its source next to it), so update it the way you installed it.'}`, actions: can ? [act('update', 'Update Burst', true)] : [] };
       }
       return { ...base, mode: 'ready', reason: 'present', headline: 'Usage optimiser', detail: '', docs: false };
     }

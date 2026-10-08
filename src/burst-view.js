@@ -94,7 +94,7 @@ function statusView(d, { platform = process.platform } = {}) {
         ? { ...base, kind: 'off', detail: 'Not responding: Burst is installed but its gateway did not answer just now. A busy or restarting gateway usually answers on the next check.', actions: [A('retry', 'Check again', { primary: true })] }
         : { ...base, kind: 'off', detail: 'Not responding: Burst is installed but its gateway has not answered several checks in a row. If Claude Code is failing, take Burst out of its path.', actions: [A('retry', 'Check again'), A('enable', 'Turn on', { primary: true }), A('repair', 'Repair'), A('off', 'Turn Burst off'), A('uninstall', 'Uninstall…')] };
     case 'untrusted':
-      return { ...base, detail: `${d.reason} Plexiform read nothing from it.`, actions: [A('off', 'Turn Burst off'), A('uninstall', 'Uninstall…')] };
+      return { ...base, detail: `${d.reason} Plexiform read nothing from it. This usually means Burst was installed somewhere other than ~/.local/bin/claude-burst, or another program is using Burst\'s port.`, actions: [A('off', 'Turn Burst off'), A('uninstall', 'Uninstall…')] };
     case 'broken':
       return { ...base, kind: 'broken', version: d.state.version, detail: 'Burst\'s configuration could not be read, so it is not working.', actions: [A('repair', 'Repair', { primary: true }), A('off', 'Turn Burst off'), A('uninstall', 'Uninstall…')] };
     case 'present': {
@@ -106,11 +106,11 @@ function statusView(d, { platform = process.platform } = {}) {
       if (s.active) {
         out.kind = 'on';
         out.detail = `On, ${s.mode} mode, version ${s.version}. Route: ${s.route === 'SECONDARY' ? 'secondary' : 'primary'}.`;
-        out.actions = [A('off', 'Turn Burst off', { primary: true }), ...(updateAvailable ? [A('update', 'Update')] : []), A('open-dashboard', 'Open dashboard'), A('open-browser', 'Open in browser'), A('uninstall', 'Uninstall…')];
+        out.actions = [A('off', 'Turn Burst off', { primary: true }), ...(updateAvailable ? [A('update', 'Update')] : []), A('open-dashboard', 'Open dashboard'), A('open-browser', 'Open dashboard in browser'), A('uninstall', 'Uninstall…')];
       } else {
         out.kind = 'off';
         out.detail = s.inactiveReason || 'Installed, and not in Claude Code\'s path.';
-        out.actions = [A('enable', 'Turn on', { primary: true }), ...(updateAvailable ? [A('update', 'Update')] : []), A('open-dashboard', 'Open dashboard'), A('open-browser', 'Open in browser'), A('uninstall', 'Uninstall…')];
+        out.actions = [A('enable', 'Turn on', { primary: true }), ...(updateAvailable ? [A('update', 'Update')] : []), A('open-dashboard', 'Open dashboard'), A('open-browser', 'Open dashboard in browser'), A('uninstall', 'Uninstall…')];
       }
       return out;
     }

@@ -250,9 +250,9 @@ function macStatusSection() {
     }
     if ((v.others || []).length) {
       sec.append(el('div', { class: 'acct-item' }, el('div', { class: 'acct-who' }, el('span', { class: 'acct-name' }, 'Other programs keeping this Mac awake'),
-        ...v.others.map((o) => el('span', { class: 'acct-mail' }, `${o.for || o.process} (through ${o.process}, pid ${o.pid}). It keeps a closed laptop awake on battery, whatever is set above.`)))));
+        ...v.others.map((o) => el('span', { class: 'acct-mail' }, `${o.label || o.process}. It keeps a closed laptop awake on battery, whatever is set above.`)))));
     }
-    if (b && b.hotspot) sec.append(line('Hotspot', b.hotspot.ssid ? `Joins ${b.hotspot.ssid} when this Mac is offline. Now ${b.hotspot.online ? 'online' : 'offline'}. Change it in the Burst dashboard.` : 'Not joining a hotspot.'));
+    if (b && b.hotspot) sec.append(line('Hotspot', b.hotspot.ssid ? `Joins ${b.hotspot.ssid} when this Mac is offline. Now ${b.hotspot.online ? 'online' : 'offline'}. Change it in the Burst dashboard.` : 'Off: Burst joins no phone hotspot when this Mac goes offline. Set one up in the Burst dashboard.'));
     if (b && b.automask) sec.append(line('Automask', b.automask.enabled ? `On: ${b.automask.rules} ${b.automask.rules === 1 ? 'kind' : 'kinds'} of personal data masked before requests leave this Mac.` : 'Off.'));
     if (b && b.remote) sec.append(line('Remote Control', b.remote));
     if (b) sec.append(el('button', { type: 'button', class: 'btn', onclick: () => { api.burstAction('open-dashboard').catch(() => {}); } }, 'Open the Burst dashboard'));

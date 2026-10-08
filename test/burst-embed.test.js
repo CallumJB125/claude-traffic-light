@@ -151,3 +151,13 @@ test('absent, broken and non-macOS states are never a blank view', () => {
     for (const a of s.actions) assert.ok(E.PAGE_ACTIONS.includes(a.kind) || a.kind === 'retry', a.kind);
   }
 });
+
+test('too old and Burst cannot update itself: no Update button that cannot work; untrusted names the likely cause', () => {
+  const old = (upgrade) => E.pageState({ kind: 'present', state: { version: '0.18.9' }, upgrade }, { platform: 'darwin' });
+  assert.deepEqual(old({ canUpgrade: true }).actions.map((a) => a.kind), ['update']);
+  const stuck = old({ canUpgrade: false, upToDate: false });
+  assert.deepEqual(stuck.actions, []);
+  assert.match(stuck.detail, /can't update itself here/);
+  const u = E.pageState({ kind: 'untrusted', reason: 'The program answering is not Burst.' }, { platform: 'darwin' });
+  assert.match(u.detail, /installed somewhere other than ~\/\.local\/bin\/claude-burst/);
+});

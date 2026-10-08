@@ -394,6 +394,7 @@ function checkBurstVersion(ctx) {
   const b = burstState(ctx);
   if (!b || b.d.kind !== 'present' || !b.state) return null;
   const u = b.d.upgrade;
+  if (u && !u.canUpgrade && !u.upToDate) return { status: 'info', detail: `Burst ${b.state.version || ''} can't check for updates${u.error ? `: ${u.error}` : ''}.`.replace('  ', ' '), next: 'Burst looks for a copy of its source next to itself; update it the way you installed it.' };
   if (u && u.canUpgrade && !u.upToDate) return { status: 'info', detail: `Burst ${b.state.version || ''} is behind${u.latestVersion ? `; ${u.latestVersion} is available` : ''}.`.replace('  ', ' '), next: 'Use Update from the Burst card.' };
   return { status: 'ok', detail: `Burst ${b.state.version || ''} is up to date.`.replace('  ', ' ') };
 }

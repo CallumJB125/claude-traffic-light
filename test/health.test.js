@@ -441,3 +441,11 @@ test('Burst console row: only with Burst and its console present; no activity or
   for (const r of rows) assert.ok(!['burst-trace', 'burst-activity'].includes(r.id), r.id);
   assert.equal(Health.traceView, undefined);
 });
+
+test('Burst version: cannot-check-for-updates when Burst has no checkout, never up to date', () => {
+  const det = { kind: 'present', state: { version: '0.19.0', mode: 'transparent', active: true, secondary: {} }, upgrade: { canUpgrade: false, upToDate: false, error: 'no checkout of the claude-burst repo found next to it' } };
+  const row = Health.runChecks({ ...machine().ctx, platform: 'darwin', burstFacts: { detection: det, console: null } }).checks.find((c) => c.id === 'burst-version');
+  assert.equal(row.status, 'info');
+  assert.match(row.detail, /can't check for updates: no checkout/);
+  assert.doesNotMatch(row.detail, /up to date/);
+});

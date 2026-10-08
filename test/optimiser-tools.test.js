@@ -205,3 +205,12 @@ test('the optimiser page loads the tool list script, and both are packaged', () 
   const files = JSON.parse(read('package.json')).build.files;
   assert.ok(files.includes('src/**/*'));
 });
+
+test('band card: Burst on but its mod status unknown says so, not "comes with Burst"', () => {
+  const T2 = require('../src/optimiser-tools.js');
+  const band = T2.toolsView({ burst: { kind: 'on', detected: 'present', version: '0.19.0', route: 'PRIMARY', band: null } }).groups[0].tools.find((t) => t.id === 'band');
+  assert.equal(band.status.label, 'Unknown');
+  const off = T2.toolsView({ burst: { kind: 'on', detected: 'present', band: { supported: true, installed: false } } }).groups[0].tools.find((t) => t.id === 'band');
+  assert.equal(off.status.label, 'Not installed');
+  assert.match(off.note, /nothing runs until you confirm/);
+});

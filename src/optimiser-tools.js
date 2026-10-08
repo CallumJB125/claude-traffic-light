@@ -67,7 +67,8 @@
   function bandTool(b) {
     const base = { id: 'band', name: 'burst-band', by: BY_BURST, what: 'A Claude Code mod that shows Burst\'s route, the context it really sends and its alerts inside the session, above the prompt.', saves: null, actions: [], link: 'burst' };
     if (b.kind === 'unsupported') return { ...base, status: st('', MAC_ONLY), available: false };
-    if (b.kind !== 'on' || !b.band) return { ...base, status: st('', 'Comes with Claude Burst'), note: 'Burst\'s installer adds it.' };
+    if (b.kind !== 'on') return { ...base, status: st('', 'Comes with Claude Burst'), note: 'Burst\'s installer adds it.' };
+    if (!b.band) return { ...base, status: st('', 'Unknown'), note: 'Burst did not say whether it is installed. Refresh to ask again.' };
     const m = b.band;
     if (!m.supported) return { ...base, status: st('', 'Needs a newer Claude Code') };
     if (!m.installed) return { ...base, status: st('', 'Not installed'), note: 'Repair Burst installs it: Terminal opens with the command, and nothing runs until you confirm.', actions: [act('burst:repair', 'Repair Burst…')] };

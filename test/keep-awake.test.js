@@ -143,7 +143,9 @@ test('macView: hidden off macOS; sleepers listed without Burst; Burst parts only
   const base = (extra) => Ipc.register({ utilityHandle: () => {}, allowed: () => true, isMac: true, keepAwake: KeepAwake.createKeepAwake({ powerSaveBlocker: fakeBlocker() }), dialog: {}, getPref: () => 'ac', setPref: () => {}, listAssertions: async () => sleepers, ...extra });
   assert.equal(await base({ isMac: false }).macView(), null);
   const absent = await base({ burst: { snapshot: () => ({ d: { kind: 'not_installed' }, url: null }) } }).macView();
-  assert.deepEqual(absent, { others: [{ pid: 9, process: 'caffeinate', name: 'x', for: 'make' }], burst: null });
+  assert.deepEqual(absent, { others: [{ pid: 9, process: 'caffeinate', name: 'x', for: 'make', label: 'make (through caffeinate)' }], burst: null });
+  const self = await base({ listAssertions: async () => [{ pid: 50307, process: 'caffeinate', name: 'x', for: 'caffeinate' }], burst: { snapshot: () => ({ d: { kind: 'not_installed' }, url: null }) } }).macView();
+  assert.equal(self.others[0].label, 'caffeinate', 'no repeated name, no pid');
   const reads = {
     mac: { keep_awake: { mode: 'off', idle_minutes: 0, live: { on_ac: true, sleep_disabled: false } } },
     automask: { enabled: true, rules: [{ on: true }, { on: false }, { on: true }] },

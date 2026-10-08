@@ -74,7 +74,7 @@ function register({ utilityHandle, allowed, isMac, burst, keepAwake, dialog, get
   // Burst; everything else is Burst's own answer, null when it is absent. Never a hotspot password.
   async function macView() {
     if (!isMac) return null;
-    const others = (await listAssertions({ platform: 'darwin' }).catch(() => [])).slice(0, 10).map((a) => ({ pid: a.pid, process: a.process, name: a.name, for: a.for || '' }));
+    const others = (await listAssertions({ platform: 'darwin' }).catch(() => [])).slice(0, 10).map((a) => ({ pid: a.pid, process: a.process, name: a.name, for: a.for || '', label: a.for && a.for !== a.process ? `${a.for} (through ${a.process})` : a.process }));
     const url = present();
     const read = (name) => (url && burst.read ? burst.read(name).catch(() => null) : Promise.resolve(null));
     const [mac, automask, settings] = await Promise.all([read('mac'), read('automask'), read('settings')]);

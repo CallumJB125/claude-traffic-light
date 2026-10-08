@@ -41,7 +41,7 @@ test('v0.19 answering as the LaunchAgent: present, whitelisted snapshot, full ca
   assert.equal(d.state.active, true);
   assert.equal(d.state.mode, 'base-url');
   assert.deepEqual(d.capabilities, { state: true, usage: true, upgradeStatus: true, handoverAudit: true, handoverFile: true, testConnection: true });
-  assert.deepEqual(d.upgrade, { canUpgrade: true, upToDate: false, latestVersion: '0.20.0', behind: 3 });
+  assert.deepEqual(d.upgrade, { canUpgrade: true, upToDate: false, latestVersion: '0.20.0', behind: 3, error: '' });
   assert.ok(!JSON.stringify(d).includes('"secret"'));
   for (const r of t.fake.requests) { assert.equal(r.method, 'GET'); assert.equal(r.headers.host, '127.0.0.1'); assert.equal(r.headers['x-claude-burst-admin'], undefined); }
   await t.done();

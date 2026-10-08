@@ -302,7 +302,7 @@ function createBurstClient({ home = os.homedir(), platform = process.platform, i
       else {
         try {
           const u = await request('GET', '/api/upgrade-status');
-          upgrade = { canUpgrade: u.can_upgrade === true, upToDate: u.up_to_date === true, latestVersion: str(u.latest_version), behind: num(u.behind) };
+          upgrade = { canUpgrade: u.can_upgrade === true, upToDate: u.up_to_date === true, latestVersion: str(u.latest_version), behind: num(u.behind), error: str(u.error).slice(0, 160) };
         } catch (e) { if (e.code === 'http' && e.status === 404) capabilities.upgradeStatus = false; }
         upgradeCache = { at: now(), value: upgrade };
       }
