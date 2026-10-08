@@ -149,7 +149,7 @@ export function invitePanel(model) {
 }
 
 const ACTIVITY = { working: 'Working', waiting: 'Waiting for a person', quiet: 'Quiet', idle: 'Idle · task still open', disconnected: 'Runner disconnected', no_live_run: 'No active AI run' };
-const TASK_STATE = { todo: 'To do', queued: 'Queued', claimed: 'Starting', running: 'In progress', quiet: 'In progress', blocked: 'Blocked', parked: 'Waiting', suspended: 'Paused', reconnecting: 'Reconnecting', unresponsive: 'Not responding', orphaned: 'Run lost', handing_over: 'Handing over', handed_over: 'Handed over', in_review: 'In review', done: 'Done', failed: 'Failed' };
+const TASK_STATE = { todo: 'To do', queued: 'Queued', claimed: 'Starting', running: 'In progress', quiet: 'In progress', blocked: 'Blocked', parked: 'Waiting', suspended: 'Paused', reconnecting: 'Reconnecting', unresponsive: 'Not responding', orphaned: 'Run lost', handing_over: 'Moving to another AI', handed_over: 'Moved to another AI', in_review: 'In review', done: 'Done', failed: 'Failed' };
 // The team's cloud runner (docs/CLOUD-RUNNER-RUNBOOK.md): admins add one (its
 // token is shown once, for the server) and store the provider keys hosted runs
 // use. Keys go in and never come back: the hub answers only "has a key".

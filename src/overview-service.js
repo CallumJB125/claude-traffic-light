@@ -47,7 +47,7 @@ function createOverviewService({sessions=()=>[],work=async()=>({sources:[],captu
   if(['running','quiet','blocked'].includes(state)&&own?.connection!=='accepted')return 'Connection unavailable';
   if(state==='running')return liveOwn(data,row)?'Working':'No recent activity';
   if(state==='blocked')return Array.isArray(data.decisions)&&data.decisions.some(d=>d.card_id===row.card.id&&d.board_id===row.board_id&&d.member_id===row.member_id&&['permission','question'].includes(d.kind))?'Waiting on you':'Blocked';
-  const labels={quiet:'Quiet',claimed:'Starting',queued:'Queued',parked:'Parked',suspended:'Suspended',reconnecting:'Reconnecting',unresponsive:'No recent signal',orphaned:'Orphaned',handing_over:'Handing over',handed_over:'Handed over',in_review:'In review',done:'Done',failed:'Stopped'};
+  const labels={quiet:'Quiet',claimed:'Starting',queued:'Queued',parked:'Parked',suspended:'Suspended',reconnecting:'Reconnecting',unresponsive:'No recent signal',orphaned:'Orphaned',handing_over:'Moving to another AI',handed_over:'Moved to another AI',in_review:'In review',done:'Done',failed:'Stopped'};
   return typeof state==='string'&&Object.hasOwn(labels,state)?labels[state]:'Unknown';
  };
  function register(row,entry,next){const handle=crypto.randomUUID();next.set(handle,{...entry,canOpen:row.capabilities.open.enabled===true,canMessage:row.capabilities.message.enabled===true,expires:now()+45000});row.handle=handle;return row;}

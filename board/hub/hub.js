@@ -1374,7 +1374,7 @@ const FEED_TEXT = {
   declined: 'Dispatch declined', blocked: 'Needs you', answered: 'Answered', parked: 'Parked: no agent running',
   requeued_answered: 'Requeued with the answer', suspended: 'Laptop asleep', unresponsive: 'No signal', orphaned: 'Orphaned',
   recovered: 'Runner back', reconnecting: 'Board restarted', failed: 'Failed', stopped: 'Stopped', released: 'Released',
-  retried: 'Retried', taken_over: 'Taken over', handing_over: 'Handing over', handed_over: 'Handed over',
+  retried: 'Retried', taken_over: 'Taken over', handing_over: 'Moving to another AI', handed_over: 'Moved to another AI',
   human_on_it: 'A human took it', in_review: 'In review', changes_requested: 'Changes requested', pr_closed_unmerged: 'PR closed without merge',
   merged: 'Merged', approved_done: 'Approved as done', prep_failed: 'Preparation failed', requeued_claim_timeout: 'Requeued: runner never started',
   handover_frozen: 'Handover frozen', salvage: 'Salvage attached', withdrawn: 'Request withdrawn', created: 'Created',

@@ -222,7 +222,7 @@ export function handOverDialog(dlg, model) {
   const kind = dlg.kind_ ?? 'queue';
   const others = [...model.members.values()].filter((m) => m.member_id !== view.run?.owner?.member_id);
   return shell('handover', `Hand over ${view.key}`, h('form', { class: 'modal-body', 'data-form': 'handover', 'data-card': view.id },
-    h('p', null, `Claude gets up to 90 seconds to write a final handover and push a snapshot, then stops. The card shows “Handing over · waiting for checkpoint” until it's done.`),
+    h('p', null, `Claude gets up to 90 seconds to write a final handover and push a snapshot, then stops. The card shows “Moving to another AI · waiting for checkpoint” until it's done.`),
     h('fieldset', { class: 'field runner-pick' },
       h('legend', null, 'Who picks it up'),
       [['queue', 'Anyone’s Claude', 'The first runner with this repo claims it'], ['member', 'A teammate’s Claude', 'They confirm on their machine'], ['self', 'Me, by hand', 'It comes back to you in To do']]

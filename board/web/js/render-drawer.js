@@ -21,7 +21,7 @@ export const FEED_LABEL = {
   answered: 'Answered', parked: 'Parked: no agent running', requeued_answered: 'Answered and requeued', suspended: 'Laptop went to sleep',
   recovered: 'Back online', unresponsive: 'Lost signal', orphaned: 'Orphaned', reconnecting: 'Board restarted',
   failed: 'Run failed', stopped: 'Stopped', released: 'Agent released it', retried: 'Retried', taken_over: 'Taken over',
-  handing_over: 'Handing over', handed_over: 'Handed over', human_on_it: 'A person took it', in_review: 'Sent for review',
+  handing_over: 'Moving to another AI', handed_over: 'Moved to another AI', human_on_it: 'A person took it', in_review: 'Sent for review',
   changes_requested: 'Changes requested', merged: 'Merged', approved_done: 'Marked done', cancelled: 'Cancelled',
   declined: 'Declined on the runner', prep_failed: 'Worktree prep failed', requeued_claim_timeout: 'Requeued: runner never started',
   pr_closed_unmerged: 'PR closed without merging', progress: 'Progress', status: 'Status', comment: 'Comment',
