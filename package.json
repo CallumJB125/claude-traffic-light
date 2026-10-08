@@ -67,6 +67,7 @@
       "settings.html",
       "settings-backups.js",
       "settings-crash-reports.js",
+      "settings-data.js",
       "burst-chip.js",
       "burst-usage.js",
       "feedback.html",
