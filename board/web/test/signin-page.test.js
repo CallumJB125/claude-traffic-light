@@ -12,11 +12,12 @@ const SRC = readFileSync(new URL('../js/signin.js', import.meta.url), 'utf8').re
 const TOKEN = `inv_${'A'.repeat(43)}`;
 const settle = () => new Promise((r) => setImmediate(r));
 
-function page({ hash = '', routes = {}, now = () => 1_000_000 } = {}) {
+function page({ hash = '', routes = {}, now = () => 1_000_000, window = {} } = {}) {
   const els = {};
   const el = (id) => (els[id] ??= { id, textContent: '', hidden: ['code-form', 'code-foot', 'confirm', 'signin-error'].includes(id), value: '', on: {}, focus() {}, addEventListener(type, fn) { this.on[type] = fn; } });
   const calls = [];
   const replaced = [];
+  const scripts = [];
   const fetch = async (path, opts) => {
     calls.push({ path, method: opts.method, headers: opts.headers, body: opts.body ? JSON.parse(opts.body) : undefined });
     const r = routes[path];
@@ -29,13 +30,14 @@ function page({ hash = '', routes = {}, now = () => 1_000_000 } = {}) {
     Date: { now },
     location: { hash, pathname: '/signin', replace: (u) => replaced.push(u), assign: (u) => replaced.push(u) },
     history: { replaceState() {} },
-    document: { getElementById: el },
+    document: { getElementById: el, createElement: () => ({}), head: { append: (x) => scripts.push(x) } },
+    window,
     fetch,
   };
   vm.runInNewContext(SRC, ctx);
   const submit = async (id) => { els[id].on.submit({ preventDefault() {} }); await settle(); await settle(); };
   const click = async (id) => { els[id].on.click(); await settle(); await settle(); };
-  return { els: new Proxy(els, { get: (t, k) => el(k) }), calls, replaced, submit, click };
+  return { els: new Proxy(els, { get: (t, k) => el(k) }), calls, replaced, submit, click, scripts };
 }
 
 const start = { '/api/auth/email/start': { status: 200, body: { flow_id: 'f'.repeat(24), expires_in: 600 } } };
@@ -285,4 +287,50 @@ test('a browser OAuth sign-in that made a separate account says so before the bo
   p.els['confirm-yes'].onclick();
   await settle(); await settle();
   assert.deepEqual(p.replaced, ['/']);
+});
+
+test('Turnstile: no site key loads nothing and sends no token; a site key loads the widget, spends one token per start and explains a failed check', async () => {
+  const plain = page({ routes: { ...start, '/api/auth/methods': { status: 200, body: { email: true, web: {} } } } });
+  await settle();
+  assert.equal(plain.scripts.length, 0);
+  plain.els.email.value = 'jo@example.com';
+  await plain.submit('email-form');
+  assert.deepEqual(plain.calls.find((c) => c.path === '/api/auth/email/start').body, { email: 'jo@example.com', client: 'web' });
+
+  const resets = [];
+  let opts = null;
+  const turnstile = { render: (sel, o) => { opts = o; return 'w1'; }, reset: (id) => resets.push(id) };
+  const lastStart = (pg) => pg.calls.filter((c) => c.path === '/api/auth/email/start').at(-1);
+  let answer = { status: 403, body: { error: { code: 'FORBIDDEN', message: 'the human check did not pass: try it again', reason: 'human_check' } } };
+  const p = page({ window: { turnstile }, routes: { '/api/auth/email/start': () => answer, '/api/auth/methods': { status: 200, body: { email: true, web: {}, turnstile_site_key: 'sk' } } } });
+  await settle();
+  assert.equal(p.scripts.length, 1);
+  assert.equal(p.scripts[0].src, 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit');
+  p.els.email.value = 'jo@example.com';
+  await p.submit('email-form');
+  assert.equal(p.els['signin-error'].textContent, 'Finish the check that you’re a person, then try again.');
+  assert.equal(p.calls.filter((c) => c.path === '/api/auth/email/start').length, 0);
+  p.scripts[0].onload();
+  assert.equal(p.els.turnstile.hidden, false);
+  assert.equal(opts.sitekey, 'sk');
+  assert.equal(opts.action, 'email-signin');
+  opts.callback('tok1');
+  await p.submit('email-form');
+  assert.equal(lastStart(p).body.turnstile_token, 'tok1');
+  assert.deepEqual(resets, ['w1']);
+  assert.equal(p.els['signin-error'].textContent, 'The check that you’re a person didn’t pass. Try it again.');
+  answer = { status: 200, body: { flow_id: 'f'.repeat(24), expires_in: 600 } };
+  opts.callback('tok2');
+  await p.submit('email-form');
+  assert.equal(lastStart(p).body.turnstile_token, 'tok2');
+  assert.equal(p.els['code-form'].hidden, false);
+});
+
+test('Turnstile: a blocked Cloudflare script lets the start go without a token', async () => {
+  const p = page({ routes: { ...start, '/api/auth/methods': { status: 200, body: { email: true, web: {}, turnstile_site_key: 'sk' } } } });
+  await settle();
+  p.scripts[0].onerror();
+  p.els.email.value = 'jo@example.com';
+  await p.submit('email-form');
+  assert.deepEqual(p.calls.filter((c) => c.path === '/api/auth/email/start').at(-1).body, { email: 'jo@example.com', client: 'web' });
 });
