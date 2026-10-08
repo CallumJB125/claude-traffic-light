@@ -1132,6 +1132,15 @@ async function restoreCards(ids) {
 
 let drawerSession = 0;
 let detailRefresh = 0;
+// The desktop app shows the tool menu and does the hand-off; this page only reports how it went.
+async function continueIn(cardId) {
+  let r = null;
+  try { r = await globalThis.plexiformDesktop?.continueIn?.(cardId); } catch { r = null; }
+  if (!r) return;
+  if (!r.ok) { if (r.error) toast(r.error, 'error'); return; }
+  toast(r.note || (r.mode === 'launched' ? `${r.label} started. Its replies are on Running now.` : 'Copied.'));
+}
+
 async function openDetail(cardId, section = null) {
   if (!state.cards.has(cardId) && !state.archived?.has(cardId)) return;
   const same = state.detail?.cardId === cardId;
@@ -2017,6 +2026,7 @@ function onClick(e) {
     case 'restore-board': restoreBoard(el.dataset.board); return;
     case 'switch-board': switchBoard(el.dataset.board); return;
     case 'open': e.preventDefault(); openDetail(cardId, el.dataset.section ?? null); return;
+    case 'continue-in': continueIn(cardId); return;
     case 'team-overview-refresh': loadTeamOverview(); return;
     case 'team-open-card': openSearchResult({ id: cardId, boardId: el.dataset.board }); return;
     case 'watch': openDetail(cardId, 'activity'); return;

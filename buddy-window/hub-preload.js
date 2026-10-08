@@ -5,4 +5,5 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('plexiformDesktop', Object.freeze({
   localHandover: (cardId) => ipcRenderer.invoke('buddy:local-handover', String(cardId).slice(0, 100)),
   openTeam: () => ipcRenderer.send('buddy:open-team'),
+  continueIn: (cardId) => ipcRenderer.invoke('buddy:continue-in', String(cardId).slice(0, 100)),
 }));

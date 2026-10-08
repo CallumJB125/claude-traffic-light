@@ -2,7 +2,7 @@
 <html lang="en"><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; base-uri 'none'; form-action 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Search everything</title><link rel="stylesheet" href="tokens.css"><link rel="stylesheet" href="memory.css"><link rel="stylesheet" href="page.css"></head>
+<title>Search everything</title><link rel="stylesheet" href="tokens.css"><link rel="stylesheet" href="memory.css"><link rel="stylesheet" href="page.css"><link rel="stylesheet" href="continue-menu.css"></head>
 <body><main class="page">
 <header class="page-head"><div><h1>Search everything</h1><p>Every prompt and reply from your AI tools on this computer, in one place. The index stays on this computer.</p></div></header>
 <form id="form" class="search" role="search" autocomplete="off">
@@ -32,4 +32,4 @@
   <div class="row-actions"><button id="reindex" type="button" class="small">Update now</button><button id="clear" type="button" class="small">Clear the index</button></div>
   <p class="muted">What is kept: your prompts and the AI's text replies (secrets removed), and the names of the tools and files they used. Tool output is never read. Projects you muted are skipped. Clearing the index deletes it; it is rebuilt from the transcripts still on this computer.</p>
 </details>
-</main><script src="memory.js"></script></body></html>
+</main><script src="continue-menu.js"></script><script src="memory.js"></script></body></html>

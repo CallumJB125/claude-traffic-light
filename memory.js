@@ -86,12 +86,18 @@
       const row = el('div', 'row-actions');
       row.append(button('Open handover', 'small', () => act(note, () => api.openHandover(k))));
       row.append(button('Copy handover', 'small', async () => { const r = await act(note, () => api.copyHandover(k)); if (r.ok) note.textContent = 'Copied as a prompt. Paste it into any AI tool.'; }));
-      for (const to of ['codex', 'claude']) {
-        row.append(button(`Hand to ${TARGET[to]}`, 'small', async () => {
-          const r = await act(note, () => api.hand(k, to));
-          if (r.ok && r.mode === 'launched') { note.textContent = ''; handoffPanel(r, panel); }
-        }));
-      }
+      row.append(window.ContinueMenu.button({
+        menu: () => api.continueMenu(),
+        pick: async (c) => {
+          if (c.mode === 'launch') {
+            const r = await act(note, () => api.hand(k, c.id));
+            if (r.ok && r.mode === 'launched') { note.textContent = ''; handoffPanel(r, panel); }
+            return;
+          }
+          const r = await act(note, () => api.copyHandover(k));
+          if (r.ok) note.textContent = c.id === 'copy' ? 'Copied as a prompt. Paste it into any AI tool.' : `Copied as a prompt. Paste it into ${c.label}.`;
+        },
+      }));
       li.append(row, note, panel);
       list.append(li);
     }

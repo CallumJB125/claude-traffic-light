@@ -50,6 +50,8 @@
       "sessions.css",
       "sessions.js",
       "sessions-preload.js",
+      "continue-menu.js",
+      "continue-menu.css",
       "memory.html",
       "memory.css",
       "memory.js",

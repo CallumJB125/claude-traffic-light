@@ -1504,6 +1504,7 @@ function getBuddy() {
       handoverWriter: () => { try { return SessionHandoverMain.writer; } catch { return null; } },
       onCaptureChange: () => refreshTrayMenu(),
       spendFor: (o) => { if (!usageMemo.turns) getUsageTurns().catch(() => {}); return WorkCost.sessionSpend(usageMemo.turns, o); },
+      continueIn: (o) => ContinueIn.popup({ Menu, continueIn, onEvent: continueToSessions, ...o }),
     });
     refreshTrayMenu();
     if (typeof buddyWin[BudgetNotice.CONTRACT.subscribeMethod] === 'function') {
@@ -1814,6 +1815,11 @@ onQuit(app, () => BurstNotices.stop());
 let keepAwakeMain = null;
 keepAwakeMain = require('./src/keep-awake-ipc.js').register({ utilityHandle, allowed: (e) => fromPage(e, buddyWin?.accountWebContents?.()), isMac: IS_MAC, burst: BurstIpc, keepAwake: require('./src/keep-awake.js').createKeepAwake({ powerSaveBlocker }), dialog, getPref: () => { const v = loadConfig().keepAwake; return ['app', 'ac', 'always'].includes(v) ? v : 'off'; }, setPref: (v) => saveConfig({ keepAwake: v }), log: console.log });
 const SessionHandoverMain = require('./src/session-handover-main.js').register({ ipcMain, rootDir: ROOT_DIR, isExcluded: (cwd) => Quiet.projectMuted(loadConfig().mutedProjects, cwd), burstFor: (row) => { const h = BurstIpc.enrichSession({ sessionId: row.sessionId, cwd: row.cwd, source: row.adapter === 'claude-code' ? null : row.adapter }); return h && h.handover ? h.handover.text : null; }, home: os.homedir(), sessionsAllowed: sessionsSender, clipboard, shell, sessions: () => ({ live: localSessions(aggregateState().sessions || []), capture: buddyWin?.handoverSessions?.() ?? [] }), log: console.log });
+const ContinueIn = require('./src/continue-in.js');
+const continueIn = ContinueIn.create({ entitlements: require('./src/entitlements.js'), clipboard, tools: () => AiTools.quick(), log: console.log });
+const continueToSessions = (ev) => buddyWin?.sendToPage('sessions', 'continue:event', ev);
+ContinueIn.register({ ipcMain, allowed: fromUtilityPage, continueIn, writer: () => SessionHandoverMain.writer, sendToSessions: continueToSessions });
+onQuit(app, () => continueIn.stop());
 ipcMain.handle('account-view', (e) => {
   if (!settingsOnly(e)) return null;
   return TeamEntry.settingsView(accountSummary(), new URL(BRAND.DEFAULT_HUB).host);

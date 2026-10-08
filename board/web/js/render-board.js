@@ -107,7 +107,8 @@ function actionButton(id, view, { primary: wantPrimary = false, busy = false, bu
 export function cardActions(face, view, busy) {
   if (isObservedWork(view)) return h('div', { class: 'card-actions' },
     h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'open', 'data-card': view.id }, 'Show details'),
-    h('button', { type: 'button', class: 'btn btn-sm btn-ghost', 'data-action': 'open', 'data-section': 'handover', 'data-card': view.id, title: 'The handover Plexiform keeps for this session on this computer' }, 'Handover'));
+    h('button', { type: 'button', class: 'btn btn-sm btn-ghost', 'data-action': 'open', 'data-section': 'handover', 'data-card': view.id, title: 'The handover Plexiform keeps for this session on this computer' }, 'Handover'),
+    typeof globalThis.plexiformDesktop?.continueIn === 'function' ? h('button', { type: 'button', class: 'btn btn-sm btn-ghost', 'data-action': 'continue-in', 'data-card': view.id, 'aria-haspopup': 'menu', title: 'Carry on in another AI tool on this computer, starting from this handover' }, 'Continue in…') : null);
   const primary = primaryAction(face);
   const buttons = face.actions.map((a) => actionButton(a, view, { primary: a === primary, busy: busy?.has(`${view.id}:${a}`), busyKeys: busy })).filter(Boolean);
   return buttons.length ? h('div', { class: 'card-actions' }, buttons) : null;

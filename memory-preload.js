@@ -16,5 +16,6 @@ contextBridge.exposeInMainWorld('memoryApi', {
   hand: (k, to) => ipcRenderer.invoke('memory:hand', key(k), to === 'claude' ? 'claude' : 'codex'),
   reply: (id, text) => ipcRenderer.invoke('memory:reply', String(id), String(text)),
   end: (id) => ipcRenderer.invoke('memory:end', String(id)),
+  continueMenu: () => ipcRenderer.invoke('continue:menu'),
   onHandoff: (cb) => ipcRenderer.on('memory:handoff-event', (_e, ev) => cb(ev)),
 });

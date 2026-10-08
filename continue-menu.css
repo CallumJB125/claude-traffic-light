@@ -1,0 +1,12 @@
+.continue-wrap { position: relative; display: inline-block; }
+.continue-menu { position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; min-width: 240px; padding: 4px; display: grid; gap: 2px; background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--radius); box-shadow: 0 8px 24px rgb(0 0 0 / .28); }
+.continue-item { all: unset; box-sizing: border-box; display: grid; gap: 1px; padding: 6px 10px; border-radius: var(--radius); cursor: pointer; }
+.continue-item:hover, .continue-item:focus-visible { background: var(--panel-2); outline: none; }
+.continue-label { font-weight: 600; }
+.continue-hint { color: var(--muted); font-size: var(--text-xs, 12px); }
+.continue-panel { margin-top: 8px; padding: 10px; border-top: 1px solid var(--line); display: grid; gap: 8px; }
+.continue-reply { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; max-height: 360px; overflow: auto; }
+.continue-note { color: var(--muted); font-size: var(--text-sm); margin: 0; }
+.continue-form { display: grid; gap: 6px; }
+.continue-form[hidden] { display: none; }
+.continue-form textarea { font: inherit; color: inherit; background: var(--panel-2); border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 8px; min-height: 64px; resize: vertical; }
