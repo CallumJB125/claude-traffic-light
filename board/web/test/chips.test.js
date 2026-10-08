@@ -96,3 +96,25 @@ test('card face: chips render in one row; the in-review pill drops its reason be
   assert.match(textOf(byClass(r, 'pill')[0]), /editing deals\.ts/, 'the live step stays in the pill');
   assert.match(textOf(byClass(r, 'card-chips')[0]), /handover 1m/);
 });
+
+test('cost: observed local work shows what its session cost, flagged when some requests had no price', () => {
+  const observed = (cost, extra = {}) => view({ run_state: null, run: null, live: null, budget: null, capture: { source: 'local_observation', provider: 'claude', status: 'ended', fresh: false, cost }, ...extra });
+  const c = chipsOf(observed({ usd: 3.4, unpriced: 0 })).find((x) => x.id === 'cost');
+  assert.deepEqual([c.text, c.tone, c.ratio], ['$3.40', 'quiet', undefined]);
+  assert.match(c.title, /API-price equivalent/);
+  assert.doesNotMatch(c.title, /could not be priced/);
+  const under = chipsOf(observed({ usd: 3.4, unpriced: 2 }, { pr: { number: 7, url: 'https://github.com/o/r/pull/7', state: 'open' } })).find((x) => x.id === 'cost');
+  assert.deepEqual([under.text, under.tone], ['$3.40+', 'amber']);
+  assert.match(under.title, /2 requests could not be priced/);
+  assert.match(under.title, /PR #7/);
+  assert.equal(chipsOf(observed({ usd: 0, unpriced: 0 })).find((x) => x.id === 'cost'), undefined, 'nothing spent, no chip');
+  assert.equal(chipsOf(observed(undefined)).find((x) => x.id === 'cost'), undefined, 'no cost reported (a team card), no chip');
+  assert.equal(chipsOf(observed({ usd: 0, unpriced: 1 })).find((x) => x.id === 'cost').text, '$0+');
+  const v = observed({ usd: 1.25, unpriced: 0 });
+  assert.match(textOf(byClass(card({ view: v, face: displayFace(v), elapsed_ms: 0 }, model([])), 'card-chips')[0]), /\$1\.25/);
+});
+
+test('cost: a run budget still wins over an observed cost', () => {
+  const c = chipsOf(view({ budget: { spent_usd: 1.2, cap_usd: 5 }, capture: { cost: { usd: 9, unpriced: 0 } } })).find((x) => x.id === 'cost');
+  assert.equal(c.text, '$1.20/$5');
+});

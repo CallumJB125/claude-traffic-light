@@ -336,3 +336,26 @@ test('an observed card cannot be set to Done while its AI still reports fresh wo
   const ended = await f.as(f.users.ua, 'PATCH', `/api/cards/${other.body.card.id}`, { request_id: randomUUID(), version: other.body.card.version, column: 'done' });
   assert.equal(ended.status, 200, ended.text);
 });
+
+test('a session cost is kept and shown on the personal board only; a team hub ignores it; a malformed cost is refused', async (t) => {
+  const f = await rig(t), body = observation(f.A.repo);
+  const team = await f.as(f.users.amember, 'POST', path(f.A.board), { ...body, cost: { usd: 4.5, unpriced: 1 } });
+  assert.equal(team.status, 200, team.text); assert.equal(team.body.capture.cost, undefined);
+  assert.equal(f.db.get('SELECT cost_usd FROM work_capture_cards').cost_usd, null);
+  for (const cost of [{ usd: -1 }, { usd: 'x' }, { usd: 1, unpriced: 1.5 }, { usd: 1, extra: 1 }, [1], null]) {
+    assert.equal((await f.as(f.users.amember, 'POST', path(f.A.board), { ...body, cost })).status, 400, JSON.stringify(cost));
+  }
+  const dataDir = mkdtempSync(join(tmpdir(), 'capture-cost-')), cookie = `board_local=${'x'.repeat(64)}`;
+  const config = testConfig({ auth: 'local', localSecret: 'x'.repeat(64), devLoginSecret: null, dataDir, dbPath: join(dataDir, 'board.db') });
+  const app = createApp(config, { clock: fakeClock(), log: silentLogger, github: fakeGitHub(), timers: false });
+  t.after(async () => { await app.close(); rmSync(dataDir, { recursive: true, force: true }); });
+  const addr = await app.listen(0, '127.0.0.1'), base = `http://127.0.0.1:${addr.port}`;
+  const call = async (b) => { const r = await fetch(`${base}${path(board)}`, { method: 'POST', headers: { cookie, origin: base, 'content-type': 'application/json' }, body: JSON.stringify(b) }); return { status: r.status, body: await r.json() }; };
+  const board = app.hub.boardList(app.hub.member(app.hub.localMemberId).org_id)[0].id, local = observation(null, { provider: 'claude' });
+  const first = await call({ ...local, cost: { usd: 1.234, unpriced: 0 } });
+  assert.equal(first.status, 200, JSON.stringify(first.body)); assert.deepEqual(first.body.capture.cost, { usd: 1.23, unpriced: 0 });
+  const later = await call({ ...local, status: 'ended', cost: { usd: 2.5, unpriced: 3 } });
+  assert.deepEqual(later.body.capture.cost, { usd: 2.5, unpriced: 3 });
+  const idle = await call({ ...local, status: 'idle' });
+  assert.deepEqual(idle.body.capture.cost, { usd: 2.5, unpriced: 3 }, 'a report without a cost keeps the last one');
+});
