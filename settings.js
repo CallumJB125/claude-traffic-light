@@ -485,7 +485,22 @@
           : `context ${fmt(l.before)} → ${fmt(l.after)} tokens (${src}); compaction cost ${l.costSource === 'unknown' ? 'not reported' : `${fmt(l.cost)} tokens (${l.costSource === 'provider' ? 'reported by the provider' : 'estimated'})`}${payback(l.payback) ? `; ${payback(l.payback)}` : ''}`;
         last.textContent = `Last: ${NAMES[l.provider] || l.provider}, ${new Date(l.at).toLocaleString()}, ${what}.`;
       };
-      const withNote = (st) => { show(st); if (st?.burstNote) $('saved').textContent = `${st.burstNote}, so Plexiform's own Claude compactor is off. ${$('saved').textContent}`; };
+      const SOURCES = { learned: 'learned', override: 'your own setting', fixed: 'the one setting', off: 'never compacted' };
+      const showLearned = (l) => {
+        const box = $('burst-learned');
+        box.replaceChildren();
+        box.hidden = !l || !l.repos.length;
+        if (box.hidden) return;
+        box.append(document.createTextNode(l.intelligent ? `Burst's learned Compact at per repository (from the last ${plural(l.windowDays, 'day')}; change it in the Burst dashboard):` : 'Burst\'s Compact at per repository (change it in the Burst dashboard):'));
+        const ul = document.createElement('ul');
+        for (const r of l.repos) {
+          const li = document.createElement('li');
+          li.textContent = `${r.name}: ${r.source === 'off' || !r.inForce ? 'never compacted' : `${fmt(r.inForce)} tokens (${SOURCES[r.source]})`}`;
+          ul.append(li);
+        }
+        box.append(ul);
+      };
+      const withNote = (st) => { show(st); showLearned(st?.burstLearned); if (st?.burstNote) $('saved').textContent = `${st.burstNote}, so Plexiform's own Claude compactor is off. ${$('saved').textContent}`; };
       const st = await window.settingsApi.compactionStats().catch(() => null);
       const s = st?.settings || {};
       $('enabled').checked = s.enabled === true;

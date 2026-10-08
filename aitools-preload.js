@@ -15,5 +15,7 @@ contextBridge.exposeInMainWorld('aiToolsApi', {
   openInstall: (id) => ipcRenderer.invoke('aitools:open-install', id),
   mcpStatus: () => ipcRenderer.invoke('mcp-status'),
   mcpSetEnabled: (on) => ipcRenderer.invoke('mcp-set-enabled', on),
+  burstCodex: () => ipcRenderer.invoke('burst:codex-routing'),
+  burstAction: (id) => ipcRenderer.invoke('burst-action', id, {}),
   onChanged: (cb) => ipcRenderer.on('status-changed', () => cb()),
 });

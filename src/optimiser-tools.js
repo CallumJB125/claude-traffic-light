@@ -24,11 +24,14 @@
     const base = { id: 'burst', name: 'Claude Burst', by: BY_BURST, what: 'A local gateway for Claude Code. When your plan hits its limit it tries other Claude models on your plan, then a provider you choose and pay for, so work keeps going.', saves: null, actions: [], link: 'burst' };
     switch (b.kind) {
       case 'unsupported': return { ...base, status: st('', MAC_ONLY), available: false };
+      case 'checking': return { ...base, status: st('', 'Checking…') };
       case 'not_installed': return { ...base, status: st('', 'Not installed'), actions: [act('burst:install', 'Turn on Burst…', true)] };
       case 'on': return { ...base, status: st('green', b.version ? `On, version ${b.version}` : 'On'), actions: [act('tab:dashboard', 'Open dashboard', true), ...(b.updateAvailable ? [act('burst:update', 'Update')] : []), act('burst:off', 'Turn Burst off')] };
       case 'off': return b.detected === 'present'
-        ? { ...base, status: st('amber', 'Installed, off'), actions: [act('burst:enable', 'Turn on', true), ...(b.updateAvailable ? [act('burst:update', 'Update')] : [])] }
-        : { ...base, status: st('red', 'Installed, not answering'), actions: [act('burst:repair', 'Repair', true), act('burst:enable', 'Turn on'), act('burst:off', 'Turn Burst off')] };
+        ? { ...base, status: st('amber', 'Off'), actions: [act('burst:enable', 'Turn on', true), ...(b.updateAvailable ? [act('burst:update', 'Update')] : [])] }
+        : (b.misses || 0) < 3
+          ? { ...base, status: st('amber', 'Not responding'), note: 'Its gateway did not answer just now. This page checks again on its own.' }
+          : { ...base, status: st('red', 'Not responding'), actions: [act('burst:repair', 'Repair', true), act('burst:enable', 'Turn on'), act('burst:off', 'Turn Burst off')] };
       case 'broken': return { ...base, status: st('red', 'Needs repair'), actions: [act('burst:repair', 'Repair', true), act('burst:off', 'Turn Burst off')] };
       default: return { ...base, status: st('red', 'Untrusted, nothing read'), actions: [act('burst:off', 'Turn Burst off')] };
     }
@@ -38,9 +41,9 @@
     const base = { id: 'routing', name: 'Routing and failover', by: BY_BURST, what: 'Part of Burst. Watches each model\'s limit, falls back along a chain (for example Opus to Sonnet), and sends overflow to your backup provider only when your plan is out.', saves: null, actions: [] };
     if (b.kind === 'unsupported') return { ...base, status: st('', MAC_ONLY), available: false };
     if (b.kind !== 'on') return { ...base, status: st('', 'Needs Claude Burst'), note: 'Turn on Claude Burst above to use it.' };
-    if (b.route === 'SECONDARY') return { ...base, status: st('amber', 'Using your backup now'), actions: [act('tab:dashboard', 'See routing in dashboard', true)] };
-    if (b.secondaryReady === false) return { ...base, status: st('amber', 'On, no backup provider'), note: 'Without a backup provider Burst only falls back between Claude models. Add one in the Burst dashboard.', actions: [act('tab:dashboard', 'Set up in dashboard', true)] };
-    return { ...base, status: st('green', 'On, using your plan'), actions: [act('tab:dashboard', 'Open dashboard', true)] };
+    if (b.route === 'SECONDARY') return { ...base, status: st('amber', 'Using your backup now'), actions: [act('section:sec-config', 'See routing in dashboard', true)] };
+    if (b.secondaryReady === false) return { ...base, status: st('amber', 'On, no backup ready'), note: 'No backup provider is ready (none is set up, or its key or sign-in is missing), so Burst only falls back between Claude models.', actions: [act('section:secondarySection', 'Add a backup provider in dashboard', true)] };
+    return { ...base, status: st('green', 'On, using your plan'), actions: [act('section:sec-config', 'See routing in dashboard', true)] };
   }
 
   function compactionTool(b) {
@@ -49,19 +52,26 @@
     const c = b.kind === 'on' ? b.compaction : null;
     if (!c) return { ...base, status: st('', b.kind === 'on' ? 'Not offered by this Burst' : 'Needs Claude Burst'), ...(b.kind === 'on' ? {} : { note: 'Turn on Claude Burst above to use it.' }) };
     const n = num(c.compactions);
-    const saves = n > 0 ? { text: `Saved about ${usd(num(c.savedUsd))} over ${n} compaction${n === 1 ? '' : 's'}, ${tokens(num(c.tokensNotResent))} tokens not resent.`, source: 'Reported by Claude Burst' } : null;
+    const losing = typeof c.netUsd === 'number' && c.netUsd < 0;
+    const money = typeof c.moneyText === 'string' && c.moneyText ? c.moneyText : `About ${usd(num(c.savedUsd))} of tokens not resent, before the cost of writing the summaries.`;
+    const saves = n > 0 ? { text: `${n} compaction${n === 1 ? '' : 's'}, ${tokens(num(c.tokensNotResent))} tokens not resent. ${money}`, source: 'Reported by Claude Burst, API-equivalent prices' } : null;
+    const verdict = typeof b.compactionVerdict === 'string' && b.compactionVerdict ? `Burst's own verdict: ${b.compactionVerdict}.` : '';
+    const smart = losing && c.mode !== 'intelligent' ? 'Smart mode learns per repository whether compaction pays and backs off where it does not.' : '';
+    const note = [verdict, smart].filter(Boolean).join(' ') || undefined;
+    const see = act('section:sec-compaction', 'See compaction in dashboard');
     return c.enabled
-      ? { ...base, status: st('green', `On, ${c.thresholdLabel || 'Static'}`), saves, actions: [act('compaction:off', 'Turn off')] }
-      : { ...base, status: st('', 'Off'), saves, actions: [act('compaction:on', 'Turn on', true)] };
+      ? { ...base, status: st(losing ? 'amber' : 'green', `On, ${c.thresholdLabel || 'Static'}`), saves, ...(note ? { note } : {}), actions: [act('compaction:off', 'Turn off'), see] }
+      : { ...base, status: st('', 'Off'), saves, ...(note ? { note } : {}), actions: [act('compaction:on', 'Turn on', true), see] };
   }
 
   function bandTool(b) {
     const base = { id: 'band', name: 'burst-band', by: BY_BURST, what: 'A Claude Code mod that shows Burst\'s route, the context it really sends and its alerts inside the session, above the prompt.', saves: null, actions: [], link: 'burst' };
     if (b.kind === 'unsupported') return { ...base, status: st('', MAC_ONLY), available: false };
-    if (b.kind !== 'on' || !b.band) return { ...base, status: st('', 'Comes with Claude Burst'), note: 'Burst\'s installer adds it.' };
+    if (b.kind !== 'on') return { ...base, status: st('', 'Comes with Claude Burst'), note: 'Burst\'s installer adds it.' };
+    if (!b.band) return { ...base, status: st('', 'Unknown'), note: 'Burst did not say whether it is installed. Refresh to ask again.' };
     const m = b.band;
     if (!m.supported) return { ...base, status: st('', 'Needs a newer Claude Code') };
-    if (!m.installed) return { ...base, status: st('', 'Not installed'), note: 'Repair Burst to install it again.', actions: [act('burst:repair', 'Repair Burst')] };
+    if (!m.installed) return { ...base, status: st('', 'Not installed'), note: 'Repair Burst installs it: Terminal opens with the command, and nothing runs until you confirm.', actions: [act('burst:repair', 'Repair Burst…')] };
     if (!m.current) return { ...base, status: st('amber', 'Installed, out of date'), actions: [act('burst:update', 'Update Burst')] };
     return { ...base, status: st('green', m.toasts ? 'On, with alerts' : 'On') };
   }
@@ -79,7 +89,7 @@
   // w: the cost-guard report's waste (null when the plan lacks it).
   function wasteTool(w) {
     const base = { id: 'waste', name: 'Waste finder', by: BY_US, what: 'Reads your Claude Code transcripts on this computer for the same file read again and again, the same failing call repeated, and Opus doing routine work Sonnet could do.', saves: null, actions: [act('open:usage', 'See findings')] };
-    if (!w) return { ...base, status: st('', 'Not on your plan'), note: "The waste finder isn't part of your current plan." };
+    if (!w) return { ...base, status: st('', 'Not on your plan'), note: "The waste finder isn't part of your current plan.", actions: [] };
     const t = w.totals || {};
     const o = t.overkill || {};
     const days = num(w.days) || 7;
@@ -105,8 +115,10 @@
   // The only pages "Learn more" opens, by id; main never takes a URL from the page.
   const LINKS = Object.freeze({ burst: 'https://github.com/andrewbakercloudscale/claude-burst', panel: 'https://github.com/andrewbakercloudscale/claude-code-cost-sidebar' });
   const PAGES = Object.freeze(['overview', 'usage']);
+  // Burst dashboard sections a card may jump to (claude-burst admin dashboard, v0.19 `.navlink` targets).
+  const SECTIONS = Object.freeze(['sec-config', 'secondarySection', 'sec-compaction']);
 
-  const api = { toolsView, bandStatus, MAC_ONLY, LINKS, PAGES };
+  const api = { toolsView, bandStatus, MAC_ONLY, LINKS, PAGES, SECTIONS };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.PlexiformOptimiserTools = Object.freeze(api);
 })(typeof globalThis !== 'undefined' ? globalThis : this);

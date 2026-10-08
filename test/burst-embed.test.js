@@ -121,8 +121,19 @@ test('fake Burst down (nothing listening): "Burst isn\'t answering" with Repair 
   const s = E.pageState(d, { platform: 'darwin' });
   assert.equal(s.mode, 'empty');
   assert.equal(s.reason, 'down');
-  assert.equal(s.headline, "Burst isn't answering");
-  assert.equal(s.actions[0].kind, 'repair');
+  assert.equal(s.headline, 'Not responding');
+  assert.deepEqual(s.actions.map((a) => a.kind), ['retry'], 'one miss: only Check again');
+  const many = E.pageState({ ...d, misses: 3 }, { platform: 'darwin' });
+  assert.deepEqual(many.actions.map((a) => a.kind), ['retry', 'repair', 'enable', 'off']);
+  assert.equal(many.actions.find((a) => a.primary).kind, 'repair');
+});
+
+test('checking: before the first detection the page is a loading state with nothing to click', () => {
+  const s = E.pageState({ kind: 'checking' }, { platform: 'darwin' });
+  assert.equal(s.mode, 'loading');
+  assert.equal(s.headline, 'Checking Burst…');
+  assert.deepEqual(s.actions, []);
+  assert.deepEqual(s.chip, { tone: 'grey', label: 'Checking…' });
 });
 
 test('absent, broken and non-macOS states are never a blank view', () => {
@@ -137,6 +148,16 @@ test('absent, broken and non-macOS states are never a blank view', () => {
   for (const kind of ['not_installed', 'unreachable', 'broken', 'untrusted', 'surprise']) {
     const s = E.pageState({ kind, state: { version: '0.19.0' }, reason: 'why.' }, { platform: 'darwin' });
     assert.ok(s.mode === 'empty' && s.headline && s.detail, kind);
-    for (const a of s.actions) assert.ok(E.PAGE_ACTIONS.includes(a.kind), a.kind);
+    for (const a of s.actions) assert.ok(E.PAGE_ACTIONS.includes(a.kind) || a.kind === 'retry', a.kind);
   }
+});
+
+test('too old and Burst cannot update itself: no Update button that cannot work; untrusted names the likely cause', () => {
+  const old = (upgrade) => E.pageState({ kind: 'present', state: { version: '0.18.9' }, upgrade }, { platform: 'darwin' });
+  assert.deepEqual(old({ canUpgrade: true }).actions.map((a) => a.kind), ['update']);
+  const stuck = old({ canUpgrade: false, upToDate: false });
+  assert.deepEqual(stuck.actions, []);
+  assert.match(stuck.detail, /can't update itself here/);
+  const u = E.pageState({ kind: 'untrusted', reason: 'The program answering is not Burst.' }, { platform: 'darwin' });
+  assert.match(u.detail, /installed somewhere other than ~\/\.local\/bin\/claude-burst/);
 });

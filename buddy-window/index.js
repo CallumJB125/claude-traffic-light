@@ -1136,8 +1136,8 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     // Dev hook: capture both app views for visual evidence.
     async capture() {
       if (!win) return null;
-      const [side, main] = await Promise.all([sidebar.webContents.capturePage(), content?.webContents.capturePage()]);
-      return { sidebar: side, content: main ?? null };
+      const [side, main, burst] = await Promise.all([sidebar.webContents.capturePage(), content?.webContents.capturePage(), selected === 'optimiser' ? optimiser.capture() : null]);
+      return { sidebar: side, content: main ?? null, burst: burst ?? null };
     },
   };
 }

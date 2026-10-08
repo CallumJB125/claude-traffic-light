@@ -3,7 +3,7 @@ const api = window.aiToolsApi;
 const $ = (id) => document.getElementById(id);
 const list = $('list'), status = $('status'), allBox = $('all-preview'), allBtn = $('connect-all');
 const node = (tag, text, className) => { const el = document.createElement(tag); if (text) el.textContent = text; if (className) el.className = className; return el; };
-let snap = null, focusId = null, scrolled = false, busy = false;
+let snap = null, focusId = null, scrolled = false, busy = false, burstCodex = null;
 const results = new Map();     // row id -> { ok, text }
 const previews = new Map();    // row id -> preview payload
 
@@ -62,6 +62,24 @@ async function confirm(row) {
   await refresh();
 }
 
+// Only when Claude Burst is present on this Mac; main shows the consent dialog and Burst edits config.toml.
+function burstCodexBlock(b) {
+  const box = node('div', '', 'row-actions');
+  box.append(node('span', b.enabled ? 'Through Claude Burst: on for new Codex sessions.' : 'Through Claude Burst: off.', 'muted'));
+  const go = node('button', b.enabled ? 'Stop routing through Burst' : 'Route through Burst'); go.type = 'button';
+  go.disabled = !b.enabled && !!b.problem;
+  go.addEventListener('click', () => act(async () => {
+    const r = await api.burstAction(b.enabled ? 'codex-disable' : 'codex-enable');
+    if (!r?.cancelled) results.set('codex', { ok: !!r?.ok, text: r?.ok ? (b.enabled ? 'New Codex sessions talk to OpenAI directly.' : 'New Codex sessions go through Burst.') : r?.error || 'Burst did not do that.' });
+    await refresh();
+  }));
+  box.append(go);
+  const wrap = node('div');
+  wrap.append(box);
+  if (b.problem) wrap.append(node('p', b.problem, 'error'));
+  return wrap;
+}
+
 function rowEl(row) {
   const el = node('section', '', `tool${row.id === focusId ? ' focus' : ''}`);
   el.id = `tool-${row.id.replace(/[^a-z0-9-]/gi, '_')}`;
@@ -83,6 +101,7 @@ function rowEl(row) {
   if (row.installed) el.append(node('p', `Last event: ${row.lastEvent.text}`, 'muted'));
   if (row.note) el.append(node('p', row.note, 'muted'));
   if (row.chips.length) { const ul = node('ul', '', 'chips'); ul.setAttribute('aria-label', 'What Plexiform shows for this tool'); for (const c of row.chips) ul.append(node('li', c)); el.append(ul); }
+  if (row.id === 'codex' && row.installed && burstCodex) el.append(burstCodexBlock(burstCodex));
   const p = previews.get(row.id);
   if (p) el.append(previewBlock(row, p, () => act(() => confirm(row)), () => { previews.delete(row.id); row.state === 'fix' ? act(refresh) : draw(); }, row.state === 'reconnect' ? 'Confirm and reconnect' : undefined));
   if (row.id === 'claude' && row.installed) el.append(mcpBlock());
@@ -116,7 +135,11 @@ function draw() {
   if (focusId && !scrolled) { scrolled = true; document.getElementById(`tool-${focusId}`)?.scrollIntoView({ block: 'center' }); }
 }
 
-async function refresh() { [snap, mcp] = await Promise.all([api.scan(), api.mcpStatus().catch(() => null)]); draw(); }
+async function refresh() {
+  [snap, mcp] = await Promise.all([api.scan(), api.mcpStatus().catch(() => null)]);
+  burstCodex = api.burstCodex ? (await api.burstCodex().catch(() => null))?.view ?? null : null;
+  draw();
+}
 
 allBtn.addEventListener('click', () => act(async () => {
   const boxes = [];

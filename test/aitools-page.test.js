@@ -104,3 +104,26 @@ test('Claude Code\'s row carries the Claude integration (MCP) switch; Settings n
   const main = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8');
   assert.match(main, /utilityHandle\('mcp-set-enabled', \(e\) => fromUtilityPage\(e, 'aitools'\)/);
 });
+
+test('Codex row: Burst routing switch only when Burst answers; the click goes to main, which asks first', async () => {
+  const codex = () => row({ id: 'codex', label: 'Codex CLI', connected: true, state: 'connected', primary: { action: 'disconnect', label: 'Disconnect' } });
+  const none = await open([codex()]);
+  assert.doesNotMatch(none.doc.body.textContent, /Claude Burst/);
+  const absent = await open([codex()], { burstCodex: async () => ({ view: null }) });
+  assert.doesNotMatch(absent.doc.body.textContent, /Claude Burst/);
+
+  const acts = [];
+  let view = { installed: true, enabled: false, problem: '' };
+  const on = await open([codex()], { burstCodex: async () => ({ view }), burstAction: async (id) => { acts.push(id); view = { ...view, enabled: true }; return { ok: true }; } });
+  const btn = [...on.doc.querySelectorAll('button')].find((b) => b.textContent === 'Route through Burst');
+  assert.ok(btn && !btn.disabled && !btn.classList.contains('primary'));
+  btn.click();
+  await tick(); await tick();
+  assert.deepEqual(acts, ['codex-enable']);
+  assert.match(on.doc.body.textContent, /New Codex sessions go through Burst\./);
+  assert.ok([...on.doc.querySelectorAll('button')].some((b) => b.textContent === 'Stop routing through Burst'));
+
+  const stuck = await open([codex()], { burstCodex: async () => ({ view: { installed: true, enabled: false, problem: 'Codex\'s config.toml does not parse: x' } }), burstAction: async () => ({ ok: false, cancelled: true }) });
+  assert.ok([...stuck.doc.querySelectorAll('button')].find((b) => b.textContent === 'Route through Burst').disabled);
+  assert.match(stuck.doc.body.textContent, /does not parse/);
+});

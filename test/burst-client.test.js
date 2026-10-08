@@ -29,7 +29,7 @@ const trustedInspect = (home, port) => ({ launchdPid: async () => process.pid, l
 async function setup(routes, opts = {}) {
   const fake = await createFakeBurst(routes);
   const home = makeHome({ adminListen: `127.0.0.1:${fake.port}`, ...opts.home });
-  const client = createBurstClient({ home, platform: 'darwin', inspect: opts.inspect || trustedInspect(home, fake.port), timeoutMs: opts.timeoutMs || 2000 });
+  const client = createBurstClient({ home, platform: 'darwin', inspect: opts.inspect || trustedInspect(home, fake.port), timeoutMs: opts.timeoutMs || 2000, ...(opts.stateTimeoutMs ? { stateTimeoutMs: opts.stateTimeoutMs, stateRetryMs: 10 } : {}) });
   return { fake, home, client, done: async () => { await fake.close(); fs.rmSync(home, { recursive: true, force: true }); } };
 }
 
@@ -41,7 +41,7 @@ test('v0.19 answering as the LaunchAgent: present, whitelisted snapshot, full ca
   assert.equal(d.state.active, true);
   assert.equal(d.state.mode, 'base-url');
   assert.deepEqual(d.capabilities, { state: true, usage: true, upgradeStatus: true, handoverAudit: true, handoverFile: true, testConnection: true });
-  assert.deepEqual(d.upgrade, { canUpgrade: true, upToDate: false, latestVersion: '0.20.0', behind: 3 });
+  assert.deepEqual(d.upgrade, { canUpgrade: true, upToDate: false, latestVersion: '0.20.0', behind: 3, error: '' });
   assert.ok(!JSON.stringify(d).includes('"secret"'));
   for (const r of t.fake.requests) { assert.equal(r.method, 'GET'); assert.equal(r.headers.host, '127.0.0.1'); assert.equal(r.headers['x-claude-burst-admin'], undefined); }
   await t.done();
@@ -131,10 +131,24 @@ test('a 404 on /api/state is untrusted, not a crash', async () => {
   await t.done();
 });
 
-test('a slow response times out as unreachable', async () => {
-  const t = await setup({ '/api/state': { body: stateV019(), delay: 400 } }, { timeoutMs: 100 });
+test('a slow response times out as unreachable, after one retry', async () => {
+  const t = await setup({ '/api/state': { body: stateV019(), delay: 400 } }, { timeoutMs: 100, stateTimeoutMs: 100 });
   const d = await t.client.detect();
   assert.equal(d.kind, 'unreachable');
+  assert.equal(t.fake.requests.filter((r) => r.url === '/api/state').length, 2);
+  await t.done();
+});
+
+test('/api/state gets a longer timeout than other reads: a 2.5 s answer is still present', async () => {
+  const t = await setup({ '/api/state': { body: stateV019(), delay: 2500 }, '/api/upgrade-status': { body: upgradeStatus() } });
+  assert.equal((await t.client.detect()).kind, 'present');
+  await t.done();
+});
+
+test('one dropped /api/state (gateway restarting) is retried before unreachable', async () => {
+  let n = 0;
+  const t = await setup({ '/api/state': () => (n++ === 0 ? { body: stateV019(), delay: 400 } : { body: stateV019() }), '/api/upgrade-status': { body: upgradeStatus() } }, { timeoutMs: 100, stateTimeoutMs: 150 });
+  assert.equal((await t.client.detect()).kind, 'present');
   await t.done();
 });
 
@@ -218,6 +232,8 @@ const VALID_ARGS = {
   'coord-message': { session: SID, message: 'please commit src/a.js' },
   'coord-release': { release: '/Users/me/src/app/a.js' },
   trace: {},
+  'codex-enable': {},
+  'codex-disable': {},
 };
 const GATEWAY_KINDS = Object.keys(VALID_ARGS);
 const okRoutes = () => Object.fromEntries(Object.values(MUTATE_ALLOW).filter((m) => !m.target).map((m) => [m.path, { body: { ok: 'done' } }]));

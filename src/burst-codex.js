@@ -20,11 +20,19 @@ function codexGroup(g) {
   };
 }
 
+// Burst v0.19's /api/codex keeps its figures in `history` (metrics.History): `window` is an
+// untagged Go struct (Requests, InputTokens, ...) and `models` is the per-model split.
+function windowTotals(w) {
+  return { requests: w.Requests, tokens: num(w.InputTokens) + num(w.OutputTokens), usd: w.APIEquivalentUSD };
+}
+
 function normalizeCodex(raw) {
   const r = obj(raw);
   if (!r) return null;
-  const t = obj(r.totals) || r;
-  const list = [r.by_model, r.models, r.sessions, r.by_session].find(Array.isArray) || [];
+  const h = obj(r.history);
+  const w = h && obj(h.window);
+  const t = obj(r.totals) || (w ? windowTotals(w) : r);
+  const list = [r.by_model, h && h.models, r.models, r.sessions, r.by_session].find(Array.isArray) || [];
   const groups = list.slice(0, MAX_GROUPS).filter(obj).map(codexGroup).filter((g) => g.key);
   const out = {
     requests: num(pick(t, 'requests', 'count', 'turns')),
@@ -33,6 +41,18 @@ function normalizeCodex(raw) {
     groups,
   };
   return out.requests || out.tokens || out.usd || groups.length ? out : null;
+}
+
+// /api/codex `status` (Burst's reading of ~/.codex/config.toml) -> whether Codex goes through Burst.
+// Never the config path or base URL.
+function codexRouting(raw) {
+  const r = obj(raw);
+  const st = r && obj(r.status);
+  if (!st || typeof st.enabled !== 'boolean') return null;
+  const problem = st.invalid ? `Codex's config.toml does not parse: ${str(st.invalid, 160)}`
+    : st.conflict ? `Your config.toml sets model_provider = "${str(st.conflict, 60)}" itself, so Burst can't add its own.`
+    : !st.enabled && r.listening === false ? `Burst's Codex gateway is not running${r.listen_error ? `: ${str(r.listen_error, 160)}` : ''}.` : '';
+  return { installed: st.installed === true, enabled: st.enabled, problem };
 }
 
 function codexView(codex) {
@@ -119,4 +139,4 @@ function contextFor(fills, sessionId) {
   return { tokens: f.tokens, limit: f.limit, pct: f.limit ? Math.min(100, Math.round((f.tokens / f.limit) * 100)) : null };
 }
 
-module.exports = { normalizeCodex, codexView, normalizeCoordination, coordinationFor, normalizeContextFill, contextFor };
+module.exports = { codexRouting, normalizeCodex, codexView, normalizeCoordination, coordinationFor, normalizeContextFill, contextFor };

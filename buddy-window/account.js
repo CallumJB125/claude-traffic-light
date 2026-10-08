@@ -165,16 +165,18 @@ function burstSection() {
     if (!c) return;
     const tok = (n) => (n >= 1e6 ? `${+(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n));
     plState.textContent = `${c.enabled ? 'On' : 'Off'}, ${c.thresholdLabel}.${c.enabled ? ' Plexiform\u2019s own Claude compactor is off while this is on.' : ''}`;
-    plStats.textContent = c.compactions ? `${c.compactions} ${c.compactions === 1 ? 'compaction' : 'compactions'} \u00b7 saved ~$${c.savedUsd.toFixed(2)} \u00b7 ${tok(c.tokensNotResent)} tokens not resent` : 'No compactions yet.';
+    plStats.textContent = c.compactions ? `${c.compactions} ${c.compactions === 1 ? 'compaction' : 'compactions'} \u00b7 ${tok(c.tokensNotResent)} tokens not resent. ${c.moneyText || ''}`.trim() : 'No compactions yet.';
     plActions.textContent = '';
     plActions.append(c.enabled ? plBtn('Turn off', { enabled: false }, false) : plBtn('Turn on', { enabled: true }, true),
       plBtn(c.mode === 'fixed' ? 'Static (current)' : 'Static', { enabled: c.enabled, mode: 'fixed' }, false),
       plBtn(c.mode === 'intelligent' ? 'Smart (current)' : 'Smart', { enabled: c.enabled, mode: 'intelligent' }, false));
+    plModes.textContent = 'Static compacts every session once its context passes one fixed size. Smart learns, per repository, the size at which compaction pays for itself, and stops compacting where it does not.';
   };
+  const plModes = el('p', { class: 'acct-hint' });
   const plActions = el('div', {});
   pl.append(el('h3', {}, 'Pauseless compaction'),
     el('p', { class: 'acct-hint' }, 'Keeps long Claude Code sessions going without the pause: Burst summarises the old part in the background and swaps it in. It can raise cost slightly when a summary is made; savings shown below.'),
-    plState, plStats, plActions, plConfirm, plResult);
+    plState, plStats, plActions, plModes, plConfirm, plResult);
   plConfirm.append(plConfirmText, el('button', { type: 'button', class: 'btn btn-primary', onclick: () => plSet({ enabled: true, confirmed: true }) }, 'Turn on'),
     el('button', { type: 'button', class: 'btn', onclick: () => { plConfirm.hidden = true; } }, 'Cancel'));
   const name = el('span', { class: 'acct-name' }, 'Claude Burst');
@@ -197,7 +199,7 @@ function burstSection() {
         for (const a of v.actions) {
           buttons.append(el('button', { type: 'button', class: a.primary ? 'btn btn-primary' : 'btn', onclick: async () => {
             const r = await api.burstAction(a.kind, a.modes ? 'base-url' : '').catch(() => ({ ok: false, error: 'Something went wrong.' }));
-            result.textContent = r.cancelled ? 'Cancelled. Nothing changed.' : r.ok ? 'Started in Terminal.' : (r.error || '');
+            result.textContent = r.cancelled ? 'Cancelled. Nothing changed.' : r.retried ? '' : r.ok ? 'Started in Terminal.' : (r.error || '');
             poll();
           } }, a.label));
         }
@@ -248,9 +250,9 @@ function macStatusSection() {
     }
     if ((v.others || []).length) {
       sec.append(el('div', { class: 'acct-item' }, el('div', { class: 'acct-who' }, el('span', { class: 'acct-name' }, 'Other programs keeping this Mac awake'),
-        ...v.others.map((o) => el('span', { class: 'acct-mail' }, `${o.for || o.process} (through ${o.process}, pid ${o.pid}). It keeps a closed laptop awake on battery, whatever is set above.`)))));
+        ...v.others.map((o) => el('span', { class: 'acct-mail' }, `${o.label || o.process}. It keeps a closed laptop awake on battery, whatever is set above.`)))));
     }
-    if (b && b.hotspot) sec.append(line('Hotspot', b.hotspot.ssid ? `Joins ${b.hotspot.ssid} when this Mac is offline. Now ${b.hotspot.online ? 'online' : 'offline'}. Change it in the Burst dashboard.` : 'Not joining a hotspot.'));
+    if (b && b.hotspot) sec.append(line('Hotspot', b.hotspot.ssid ? `Joins ${b.hotspot.ssid} when this Mac is offline. Now ${b.hotspot.online ? 'online' : 'offline'}. Change it in the Burst dashboard.` : 'Off: Burst joins no phone hotspot when this Mac goes offline. Set one up in the Burst dashboard.'));
     if (b && b.automask) sec.append(line('Automask', b.automask.enabled ? `On: ${b.automask.rules} ${b.automask.rules === 1 ? 'kind' : 'kinds'} of personal data masked before requests leave this Mac.` : 'Off.'));
     if (b && b.remote) sec.append(line('Remote Control', b.remote));
     if (b) sec.append(el('button', { type: 'button', class: 'btn', onclick: () => { api.burstAction('open-dashboard').catch(() => {}); } }, 'Open the Burst dashboard'));

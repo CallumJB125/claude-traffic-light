@@ -1621,7 +1621,7 @@ const InteractionMain=require('./src/interaction-main').createInteractionMain({
 InteractionMain.register(ipcMain);
 onQuit(app,()=>InteractionMain.close());
 onQuit(app,retireClaudeChannels);
-ipcMain.handle('compaction-stats',e=>settingsOnly(e)?{...CompactionLedger.summary(),settings:loadConfig().compaction,burstNote:BurstIpc.compactionNote()}:null);
+ipcMain.handle('compaction-stats',async e=>settingsOnly(e)?{...CompactionLedger.summary(),settings:loadConfig().compaction,burstNote:BurstIpc.compactionNote(),burstLearned:BurstSpend.learnedThresholds(await BurstIpc.read('intelligentCompaction'))}:null);
 // Remote interaction host (src/remote-interaction.js): OFF unless the
 // "Let my other devices use sessions Plexiform started on this Mac"
 // preference is ticked. Uses the active team hub's own device sign-in (via
@@ -1737,6 +1737,7 @@ try { require('./src/paid-wiring.js').registerAll({ app, ipcMain, rootDir: ROOT_
 const TeamEntry = require('./src/team-entry.js');
 const settingsOnly = (e) => fromUtilityPage(e, 'settings');
 const BurstEventsLib = require('./src/burst-events.js');
+const BurstSpend = require('./src/burst-spend.js');
 const BurstEvents = BurstEventsLib.createBurstEvents();
 const burstNotes = new Map(); // event key -> shown Notification, so a resolving Burst notice can close it
 // Quiet hours, snooze and mutes hold these like any other ping (src/quiet.js).
@@ -1761,7 +1762,7 @@ function closeBurstNote(key) {
 }
 // Burst's own event file (notices.json); while it is watched the poll-diff events below stay quiet.
 const BurstNotices = require('./src/burst-notices.js').createBurstNotices({ isMac: IS_MAC, onEvents: (events) => notifyBurstEvents(events), onResolve: closeBurstNote, config: () => loadConfig(), burst: () => BurstIpc, isGhostty: (sid) => (aggregateState().sessions || []).some((x) => x.sessionId === sid && /ghostty/i.test(x.hostApp || '')), log: console.log });
-const BurstIpc = require('./src/burst-ipc.js').register({ utilityHandle, settingsOnly, chipAllowed: (e) => widgetOnly(e) || fromUtilityPage(e, 'usage'), usageAllowed: (e) => fromUtilityPage(e, 'usage'), sessionsAllowed: sessionsSender, stateFile: path.join(ROOT_DIR, 'burst-handover.json'), runner: { live: () => !!buddyWin?.runnerLive?.(), send: (m) => buddyWin?.burstFacts?.(m) }, accountAllowed: (e) => fromPage(e, buddyWin?.accountWebContents?.()), isMac: IS_MAC, dialog, shell, scriptDir: path.join(ROOT_DIR, 'burst-scripts'), optimiserAllowed: (e) => fromUtilityPage(e, 'optimiser'), snapshotFile: require('./src/burst-snapshot.js').snapshotPath(ROOT_DIR), transcriptFor: (id) => transcriptIndex().get(id) || null, onView: (view) => { const events = BurstEvents.observe(view, Date.now()); if (!BurstNotices.active()) notifyBurstEvents(events); }, log: console.log });
+const BurstIpc = require('./src/burst-ipc.js').register({ utilityHandle, settingsOnly, chipAllowed: (e) => widgetOnly(e) || fromUtilityPage(e, 'usage'), usageAllowed: (e) => fromUtilityPage(e, 'usage'), sessionsAllowed: sessionsSender, stateFile: path.join(ROOT_DIR, 'burst-handover.json'), runner: { live: () => !!buddyWin?.runnerLive?.(), send: (m) => buddyWin?.burstFacts?.(m) }, accountAllowed: (e) => fromPage(e, buddyWin?.accountWebContents?.()), isMac: IS_MAC, dialog, shell, scriptDir: path.join(ROOT_DIR, 'burst-scripts'), optimiserAllowed: (e) => fromUtilityPage(e, 'optimiser'), aitoolsAllowed: (e) => fromUtilityPage(e, 'aitools'), snapshotFile: require('./src/burst-snapshot.js').snapshotPath(ROOT_DIR), transcriptFor: (id) => transcriptIndex().get(id) || null, onView: (view) => { const events = BurstEvents.observe(view, Date.now()); if (!BurstNotices.active()) notifyBurstEvents(events); }, log: console.log });
 BurstIpc.setOpener(() => openBuddy('optimiser'));
 if (IS_MAC) BurstNotices.start();
 onQuit(app, () => BurstNotices.stop());
@@ -4787,6 +4788,7 @@ app.whenReady().then(() => {
         const prefix = process.argv[shotAt + 1];
         fs.writeFileSync(`${prefix}-sidebar.png`, shots.sidebar.toPNG());
         if (shots.content) fs.writeFileSync(`${prefix}-content.png`, shots.content.toPNG());
+        if (shots.burst) fs.writeFileSync(`${prefix}-burst.png`, shots.burst.toPNG());
         console.log('[buddy-shot]', JSON.stringify(buddyWin.status()));
         app.quit();
       }, Number(process.env.BUDDY_SHOT_DELAY_MS ?? 6000));

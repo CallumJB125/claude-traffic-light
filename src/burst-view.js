@@ -60,12 +60,15 @@ function hhmm(iso) {
   return Number.isNaN(d.getTime()) ? '' : `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+// One vocabulary everywhere: Checking… / Not installed / Not responding / Off.
+const RETRY_BEFORE_REPAIR = 3;
 function chipFor(d) {
+  if (d.kind === 'checking') return { tone: 'grey', label: 'Checking…' };
   if (d.kind === 'untrusted') return { tone: 'red', label: 'Untrusted' };
   if (d.kind === 'broken') return { tone: 'red', label: 'Burst needs repair' };
-  if (d.kind !== 'present') return d.kind === 'unreachable' ? { tone: 'grey', label: 'Burst off' } : null;
+  if (d.kind !== 'present') return d.kind === 'unreachable' ? { tone: 'amber', label: 'Not responding' } : null;
   const s = d.state;
-  if (!s.active) return { tone: 'grey', label: 'Burst off' };
+  if (!s.active) return { tone: 'grey', label: 'Off' };
   if (s.route === 'SECONDARY') { const t = hhmm(s.until); return { tone: 'amber', label: t ? `Secondary until ${t}` : 'Secondary' }; }
   if (s.rejected.length || s.primaryFailures > 0) return { tone: 'amber', label: 'Limit near' };
   return { tone: 'green', label: 'Primary' };
@@ -84,10 +87,14 @@ function statusView(d, { platform = process.platform } = {}) {
   switch (d.kind) {
     case 'not_installed':
       return { ...base, kind: 'not_installed', detail: 'Not installed. Burst keeps Claude Code working through limits by sending overflow to a provider you pay for.', actions: [A('install', 'Turn on Burst…', { primary: true, modes: ['base-url', 'transparent'] })] };
+    case 'checking':
+      return { ...base, kind: 'checking', detail: 'Checking whether Claude Burst is running…' };
     case 'unreachable':
-      return { ...base, kind: 'off', detail: 'Installed, but its gateway is not answering. If Claude Code is failing, take Burst out of its path.', actions: [A('enable', 'Turn on', { primary: true }), A('repair', 'Repair'), A('off', 'Turn Burst off'), A('uninstall', 'Uninstall…')] };
+      return (d.misses || 0) < RETRY_BEFORE_REPAIR
+        ? { ...base, kind: 'off', detail: 'Not responding: Burst is installed but its gateway did not answer just now. A busy or restarting gateway usually answers on the next check.', actions: [A('retry', 'Check again', { primary: true })] }
+        : { ...base, kind: 'off', detail: 'Not responding: Burst is installed but its gateway has not answered several checks in a row. If Claude Code is failing, take Burst out of its path.', actions: [A('retry', 'Check again'), A('enable', 'Turn on', { primary: true }), A('repair', 'Repair'), A('off', 'Turn Burst off'), A('uninstall', 'Uninstall…')] };
     case 'untrusted':
-      return { ...base, detail: `${d.reason} Plexiform read nothing from it.`, actions: [A('off', 'Turn Burst off'), A('uninstall', 'Uninstall…')] };
+      return { ...base, detail: `${d.reason} Plexiform read nothing from it. This usually means Burst was installed somewhere other than ~/.local/bin/claude-burst, or another program is using Burst\'s port.`, actions: [A('off', 'Turn Burst off'), A('uninstall', 'Uninstall…')] };
     case 'broken':
       return { ...base, kind: 'broken', version: d.state.version, detail: 'Burst\'s configuration could not be read, so it is not working.', actions: [A('repair', 'Repair', { primary: true }), A('off', 'Turn Burst off'), A('uninstall', 'Uninstall…')] };
     case 'present': {
@@ -99,11 +106,11 @@ function statusView(d, { platform = process.platform } = {}) {
       if (s.active) {
         out.kind = 'on';
         out.detail = `On, ${s.mode} mode, version ${s.version}. Route: ${s.route === 'SECONDARY' ? 'secondary' : 'primary'}.`;
-        out.actions = [A('off', 'Turn Burst off', { primary: true }), ...(updateAvailable ? [A('update', 'Update')] : []), A('open-dashboard', 'Open dashboard'), A('open-browser', 'Open in browser'), A('uninstall', 'Uninstall…')];
+        out.actions = [A('off', 'Turn Burst off', { primary: true }), ...(updateAvailable ? [A('update', 'Update')] : []), A('open-dashboard', 'Open dashboard'), A('open-browser', 'Open dashboard in browser'), A('uninstall', 'Uninstall…')];
       } else {
         out.kind = 'off';
         out.detail = s.inactiveReason || 'Installed, and not in Claude Code\'s path.';
-        out.actions = [A('enable', 'Turn on', { primary: true }), ...(updateAvailable ? [A('update', 'Update')] : []), A('open-dashboard', 'Open dashboard'), A('open-browser', 'Open in browser'), A('uninstall', 'Uninstall…')];
+        out.actions = [A('enable', 'Turn on', { primary: true }), ...(updateAvailable ? [A('update', 'Update')] : []), A('open-dashboard', 'Open dashboard'), A('open-browser', 'Open dashboard in browser'), A('uninstall', 'Uninstall…')];
       }
       return out;
     }
@@ -112,4 +119,4 @@ function statusView(d, { platform = process.platform } = {}) {
   }
 }
 
-module.exports = { COMPACTION_ON_CONFIRM, COMPACTION_OWN_OFF, statusView, consent, chipFor, MAC_ONLY, TERMS_URL, CHANGES_ALWAYS, CHANGES_TRANSPARENT, TERMS };
+module.exports = { RETRY_BEFORE_REPAIR, COMPACTION_ON_CONFIRM, COMPACTION_OWN_OFF, statusView, consent, chipFor, MAC_ONLY, TERMS_URL, CHANGES_ALWAYS, CHANGES_TRANSPARENT, TERMS };

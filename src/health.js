@@ -33,6 +33,7 @@ const FIXES = {
   'connect-hermes': 'Connect Hermes activity',
   'open-burst-console': 'Open Burst console',
   'burst-console-restart': 'Restart Burst',
+  'burst-console-diagnose': 'Diagnose Burst',
 };
 // Claude Code reads hooks once, when a session starts.
 const RESTART_SESSIONS = 'Then restart your Claude sessions.';
@@ -317,7 +318,7 @@ function checkDisk(ctx) {
 // burst-client does before it reads anything.
 function checkBurst(ctx) {
   const v = ctx.burst;
-  if ((ctx.platform || process.platform) !== 'darwin' || !v || v.kind === 'unsupported' || v.kind === 'not_installed') return null;
+  if ((ctx.platform || process.platform) !== 'darwin' || !v || v.kind === 'unsupported' || v.kind === 'not_installed' || v.kind === 'checking') return null;
   if (v.kind === 'untrusted') return { status: 'fail', detail: 'Whatever answers on Burst\'s port is not your Burst install, so Plexiform reads nothing from it.', next: 'Open the Burst console to check it, or turn Burst off.', fix: 'open-burst-console' };
   if (v.kind === 'off' && !v.version) return { status: 'info', detail: 'Burst is installed but not answering, so its trust can\'t be checked.' };
   return { status: 'ok', detail: 'Burst answered and is your install.' };
@@ -329,7 +330,7 @@ function burstState(ctx) {
   const f = ctx.burstFacts;
   if ((ctx.platform || process.platform) !== 'darwin' || !f || !f.detection) return null;
   const d = f.detection;
-  if (d.kind === 'unsupported' || d.kind === 'not_installed') return null;
+  if (d.kind === 'unsupported' || d.kind === 'not_installed' || d.kind === 'checking') return null;
   return { d, state: d.state || null, con: f.console || null };
 }
 
@@ -340,8 +341,8 @@ function checkBurstGateway(ctx) {
   const con = b.con;
   if (con && con.kind === 'present') {
     const bad = (con.status.checks || []).filter((c) => !c.ok);
-    const why = bad.length ? `${bad.map((c) => c.name).join(', ')} ${bad.length === 1 ? 'is' : 'are'} failing` : 'its console reports every check passing';
-    return { status: 'fail', detail: `Burst's gateway is not answering; ${why}.`, next: bad[0] && bad[0].detail ? bad[0].detail : 'Restart it from Burst\'s console.', fix: 'burst-console-restart' };
+    if (!bad.length) return { status: 'fail', detail: 'Burst\'s gateway is not answering, yet its console reports every check passing.', next: 'Burst\'s diagnose report says why; restart Burst from its console if that does not help.', fix: 'burst-console-diagnose' };
+    return { status: 'fail', detail: `Burst's gateway is not answering; ${bad.map((c) => c.name).join(', ')} ${bad.length === 1 ? 'is' : 'are'} failing.`, next: bad[0].detail || 'Restart it from Burst\'s console.', fix: 'burst-console-restart' };
   }
   if (con && con.kind === 'unreachable') return { status: 'fail', detail: 'Neither Burst\'s gateway nor its support console is answering.', next: 'If Claude Code is failing, take Burst out of its path from the Burst card, then repair it.' };
   return { status: 'fail', detail: 'Burst\'s gateway is not answering, and its console isn\'t available to say why.', next: 'If Claude Code is failing, take Burst out of its path from the Burst card.' };
@@ -386,13 +387,14 @@ function checkBurstSecondary(ctx) {
   const s = b.state.secondary;
   if (!s || !s.provider) return null;
   if (s.keyPresent) return { status: 'ok', detail: `A secondary provider (${s.provider}) is set up with its key.` };
-  return { status: 'warn', detail: `A secondary provider (${s.provider}) is set up but its key is missing, so Burst can't fail over to it.`, next: 'Open the Burst dashboard and add the key.' };
+  return { status: 'warn', detail: `A secondary provider (${s.provider}) is set up, but Burst can't load its key or sign-in, so it can't fail over to it.`, next: 'In the Usage optimiser, open the Routing card\'s "Add a backup provider in dashboard" and add the credential there.' };
 }
 
 function checkBurstVersion(ctx) {
   const b = burstState(ctx);
   if (!b || b.d.kind !== 'present' || !b.state) return null;
   const u = b.d.upgrade;
+  if (u && !u.canUpgrade && !u.upToDate) return { status: 'info', detail: `Burst ${b.state.version || ''} can't check for updates${u.error ? `: ${u.error}` : ''}.`.replace('  ', ' '), next: 'Burst looks for a copy of its source next to itself; update it the way you installed it.' };
   if (u && u.canUpgrade && !u.upToDate) return { status: 'info', detail: `Burst ${b.state.version || ''} is behind${u.latestVersion ? `; ${u.latestVersion} is available` : ''}.`.replace('  ', ' '), next: 'Use Update from the Burst card.' };
   return { status: 'ok', detail: `Burst ${b.state.version || ''} is up to date.`.replace('  ', ' ') };
 }

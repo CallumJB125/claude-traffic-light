@@ -103,7 +103,7 @@
     const [verb, arg] = kind.split(':');
     if (verb === 'compaction') return compaction(id, arg === 'on');
     if (verb === 'open') { if (api.openPage) api.openPage(arg); return undefined; }
-    if (verb === 'tab') { api.act(kind).catch(() => {}); return undefined; }
+    if (verb === 'tab' || verb === 'section') { api.act(kind).catch(() => {}); return undefined; }
     const r = await api.act(arg).catch(() => ({ ok: false, error: 'Something went wrong.' }));
     notes.set(id, { text: r && r.ok ? 'Started in Terminal. This page updates when Burst answers.' : said(r) });
     renderTools();
@@ -133,6 +133,8 @@
     $('tabs').hidden = !ready;
     const empty = s.mode === 'empty';
     $('loading').hidden = s.mode !== 'loading';
+    if (s.mode === 'loading') $('loading').textContent = s.headline && s.headline !== 'Usage optimiser' ? s.headline : 'Checking Burst…';
+    if (s.mode !== 'empty') $('note').textContent = '';
     $('empty').hidden = !empty;
     $('chip').hidden = !s.chip;
     if (s.chip) { $('chip').dataset.tone = s.chip.tone; $('chip-text').textContent = s.chip.label; }
@@ -152,6 +154,7 @@
       b.textContent = a.label;
       if (a.primary) b.className = 'primary';
       b.addEventListener('click', async () => {
+        if (a.kind === 'retry') { $('note').textContent = 'Checking again…'; api.refresh(); return; }
         const r = await api.act(a.kind).catch(() => ({ ok: false, error: 'Something went wrong.' }));
         $('note').textContent = r && r.cancelled ? 'Cancelled. Nothing changed.' : r && r.ok ? 'Started in Terminal. This page updates when Burst answers.' : (r && r.error) || '';
       });

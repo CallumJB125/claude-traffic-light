@@ -14,6 +14,7 @@ const BAR_H = 48; // the native top bar (optimiser.html) above the dashboard
 const PARTITION = 'persist:burst-dashboard';
 const POLL_MS = 5000;
 const TABS = Object.freeze(['dashboard', 'tools']);
+const { SECTIONS: TOOL_SECTIONS } = require('../src/optimiser-tools');
 const FILTER = { urls: ['http://*/*', 'https://*/*', 'ws://*/*', 'wss://*/*'] };
 
 function createOptimiser({
@@ -38,9 +39,9 @@ function createOptimiser({
 
   function snapshot() {
     const b = burst();
-    return b ? b.snapshot() : { d: { kind: platform === 'darwin' ? 'unreachable' : 'unsupported' }, url: null };
+    return b ? b.snapshot() : { d: { kind: platform === 'darwin' ? 'checking' : 'unsupported' }, url: null };
   }
-  const signature = ({ d }) => `${d.kind}|${d.state ? d.state.version : ''}|${d.pid ?? ''}`;
+  const signature = ({ d }) => `${d.kind}|${d.state ? d.state.version : ''}|${d.pid ?? ''}|${(d.misses || 0) >= 3}`;
 
   function drop() {
     const v = view;
@@ -86,7 +87,7 @@ function createOptimiser({
     wc.on('did-fail-load', (_e, code, _desc, _url, isMain) => {
       if (!isMain || code === -3) return; // -3: aborted by our own navigation
       if (++failures > 1) {
-        last = { ...Embed.pageState({ kind: 'unreachable' }, { platform }), detail: 'The dashboard did not load. Repair Burst, or try again.' };
+        last = { ...Embed.pageState({ kind: 'unreachable', misses: 99 }, { platform }), detail: 'The dashboard did not load twice in a row. Check again, or repair Burst.' };
         drop(); sendState(); sync();
       } else refresh({ reload: true });
     });
@@ -166,6 +167,8 @@ function createOptimiser({
     nav: () => nav.slice(),
     active: () => active,
     hasView: () => !!view,
+    // Dev shots: the embedded dashboard is its own view, so the page capture never includes it.
+    capture: () => { const wc = wcOf(); return wc && view && (win()?.contentView.children || []).includes(view) ? wc.capturePage() : Promise.resolve(null); },
     section(id) {
       const wc = wcOf();
       const js = Embed.sectionScript(id);
@@ -181,6 +184,18 @@ function createOptimiser({
         const t = kind.slice(4);
         if (!TABS.includes(t) || !last || last.mode !== 'ready') return { ok: false };
         tab = t; sync(); sendState();
+        return { ok: true };
+      }
+      // A tool card's "in dashboard" button: that section when Burst's page lists it, else just the Dashboard tab.
+      if (typeof kind === 'string' && kind.startsWith('section:')) {
+        const id = kind.slice(8);
+        if (!TOOL_SECTIONS.includes(id) || !last || last.mode !== 'ready') return { ok: false };
+        if (tab !== 'dashboard') { tab = 'dashboard'; sync(); sendState(); }
+        const wc = wcOf();
+        if (wc) {
+          wc.executeJavaScript(Embed.sectionScript(id)).catch(() => {});
+          if (nav.some((n) => n.id === id)) { active = id; navChanged(); }
+        }
         return { ok: true };
       }
       if (!Embed.PAGE_ACTIONS.includes(kind)) return { ok: false, error: 'Unknown action.' };

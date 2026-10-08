@@ -420,10 +420,12 @@ test('Burst rows: macOS with Burst installed only; each has a fixture state prod
   assert.equal(behind.status, 'info'); assert.match(behind.detail, /1\.3\.0/);
 });
 
-test('Burst gateway down: the console names the failing part and offers a restart; no console, no fix', () => {
+test('Burst gateway down: the console names the failing part and offers a restart, or a diagnose when nothing fails; no console, no fix', () => {
   const run = (console) => Health.runChecks({ ...machine().ctx, platform: 'darwin', burstFacts: { detection: { kind: 'unreachable' }, console } }).checks.find((c) => c.id === 'burst-gateway');
   const named = run({ kind: 'present', status: { checks: [{ name: 'launchd', ok: true }, { name: 'pf redirect', ok: false, detail: 'no rdr rule' }] } });
   assert.equal(named.status, 'fail'); assert.match(named.detail, /pf redirect is failing/); assert.equal(named.fix, 'burst-console-restart');
+  const quiet = run({ kind: 'present', status: { checks: [{ name: 'launchd', ok: true }] } });
+  assert.equal(quiet.status, 'fail'); assert.equal(quiet.fix, 'burst-console-diagnose'); assert.equal(quiet.fixLabel, 'Diagnose Burst');
   const dead = run({ kind: 'unreachable' });
   assert.equal(dead.status, 'fail'); assert.equal(dead.fix, undefined);
   assert.equal(run(null).status, 'fail');
@@ -438,4 +440,12 @@ test('Burst console row: only with Burst and its console present; no activity or
   assert.equal(run({ detection: { kind: 'unreachable' }, console: { kind: 'present', status: { checks: [] } } }).find((c) => c.id === 'burst-console'), undefined);
   for (const r of rows) assert.ok(!['burst-trace', 'burst-activity'].includes(r.id), r.id);
   assert.equal(Health.traceView, undefined);
+});
+
+test('Burst version: cannot-check-for-updates when Burst has no checkout, never up to date', () => {
+  const det = { kind: 'present', state: { version: '0.19.0', mode: 'transparent', active: true, secondary: {} }, upgrade: { canUpgrade: false, upToDate: false, error: 'no checkout of the claude-burst repo found next to it' } };
+  const row = Health.runChecks({ ...machine().ctx, platform: 'darwin', burstFacts: { detection: det, console: null } }).checks.find((c) => c.id === 'burst-version');
+  assert.equal(row.status, 'info');
+  assert.match(row.detail, /can't check for updates: no checkout/);
+  assert.doesNotMatch(row.detail, /up to date/);
 });

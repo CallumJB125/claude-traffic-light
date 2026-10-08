@@ -23,6 +23,9 @@ const DEFAULT_CONSOLE = '127.0.0.1:7789';
 const CONSOLE_TIMEOUT_MS = 8000;
 const MAX_BYTES = 512 * 1024;
 const TIMEOUT_MS = 2000;
+// /api/state is ~40 KB and a busy or restarting gateway can take seconds; one retry before `unreachable`.
+const STATE_TIMEOUT_MS = 5000;
+const STATE_RETRY_MS = 300;
 const TEST_TIMEOUT_MS = 5000;
 const MODES = new Set(['transparent', 'base-url']);
 const COMPACTION_MODES = new Set(['fixed', 'intelligent']);
@@ -92,6 +95,9 @@ const MUTATE_ALLOW = Object.freeze({
   trace: { path: '/api/trace', body: () => ({}), timeoutMs: 60000 },
   'console-restart': { target: 'console', path: '/api/console/restart', body: () => ({}), timeoutMs: 25000 },
   'console-diagnose': { target: 'console', path: '/api/console/diagnose', body: () => ({}), timeoutMs: 10000 },
+  // Burst writes or removes its own block in ~/.codex/config.toml, backing the file up first.
+  'codex-enable': { path: '/api/codex/enable', body: () => ({}) },
+  'codex-disable': { path: '/api/codex/disable', body: () => ({}) },
 });
 
 function isAllowed(method, urlPath) {
@@ -148,7 +154,7 @@ const systemInspect = {
   },
 };
 
-function createBurstClient({ home = os.homedir(), platform = process.platform, inspect = systemInspect, now = Date.now, timeoutMs = TIMEOUT_MS } = {}) {
+function createBurstClient({ home = os.homedir(), platform = process.platform, inspect = systemInspect, now = Date.now, timeoutMs = TIMEOUT_MS, stateTimeoutMs = Math.max(timeoutMs, STATE_TIMEOUT_MS), stateRetryMs = STATE_RETRY_MS } = {}) {
   const binPath = path.join(home, '.local', 'bin', 'claude-burst');
   const configPath = path.join(home, '.config', 'claude-burst', 'config.json');
   let addr = null;
@@ -269,7 +275,14 @@ function createBurstClient({ home = os.homedir(), platform = process.platform, i
     addr = parseAdminAddress(readAdminListen());
     if (!addr) return { kind: 'untrusted', installed: true, reason: 'The admin address in Burst\'s config is not on this Mac\'s loopback.' };
     let raw;
-    try { raw = await send('GET', '/api/state'); } catch (e) {
+    const readState = () => send('GET', '/api/state', { timeout: stateTimeoutMs });
+    try {
+      raw = await readState().catch(async (e) => {
+        if (e.code !== 'unreachable' && e.code !== 'timeout') throw e;
+        await new Promise((r) => setTimeout(r, stateRetryMs));
+        return readState();
+      });
+    } catch (e) {
       if (e.code === 'unreachable' || e.code === 'timeout') return { kind: 'unreachable', installed: true, reason: e.code };
       return { kind: 'untrusted', installed: true, reason: `Something on the admin port did not answer like Burst (${e.code || 'error'}).` };
     }
@@ -289,7 +302,7 @@ function createBurstClient({ home = os.homedir(), platform = process.platform, i
       else {
         try {
           const u = await request('GET', '/api/upgrade-status');
-          upgrade = { canUpgrade: u.can_upgrade === true, upToDate: u.up_to_date === true, latestVersion: str(u.latest_version), behind: num(u.behind) };
+          upgrade = { canUpgrade: u.can_upgrade === true, upToDate: u.up_to_date === true, latestVersion: str(u.latest_version), behind: num(u.behind), error: str(u.error).slice(0, 160) };
         } catch (e) { if (e.code === 'http' && e.status === 404) capabilities.upgradeStatus = false; }
         upgradeCache = { at: now(), value: upgrade };
       }
@@ -341,6 +354,7 @@ function createBurstClient({ home = os.homedir(), platform = process.platform, i
 
   // Both are best-effort extras: an older Burst answers 404 and callers treat any failure as absent.
   async function codex() { return Codex.normalizeCodex(await request('GET', '/api/codex')); }
+  async function codexRouting() { return Codex.codexRouting(await request('GET', '/api/codex')); }
   async function coordination({ days = 1 } = {}) { return Codex.normalizeCoordination(await request('GET', `/api/coordination?days=${[1, 7, 14].includes(days) ? days : 1}`)); }
 
   // Scrubbed raw answers for the normalizers in burst-route/-requests/-inspect/-notices and This Mac.
@@ -421,7 +435,7 @@ function createBurstClient({ home = os.homedir(), platform = process.platform, i
   }
 
   return {
-    detect, request, testConnection, requestUpgrade, setCompaction, usage, sessionSecondaryUsd, codex, coordination, handoverAudit, handoverFile,
+    detect, request, testConnection, requestUpgrade, setCompaction, usage, sessionSecondaryUsd, codex, codexRouting, coordination, handoverAudit, handoverFile,
     requests, history, inspect: inspectContext, audit, automask, mac, settings, modStatus, intelligentCompaction, consoleDetect, mutate,
     binPath,
     adminUrl: () => (addr ? `http://${addr.host === '::1' ? '[::1]' : addr.host}:${addr.port}/` : null),

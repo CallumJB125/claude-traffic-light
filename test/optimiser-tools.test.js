@@ -41,20 +41,30 @@ test('Burst states map to honest statuses and only allow-listed one-click action
   const kinds = (b) => tools(T.toolsView({ burst: b })).burst.actions.map((a) => a.kind);
   assert.deepEqual(kinds({ kind: 'not_installed' }), ['burst:install']);
   assert.deepEqual(kinds({ kind: 'off', detected: 'present' }), ['burst:enable']);
-  assert.deepEqual(kinds({ kind: 'off', detected: 'unreachable' }), ['burst:repair', 'burst:enable', 'burst:off']);
+  assert.deepEqual(kinds({ kind: 'off', detected: 'unreachable' }), [], 'one miss: nothing alarming to click');
+  assert.equal(tools(T.toolsView({ burst: { kind: 'off', detected: 'unreachable' } })).burst.status.label, 'Not responding');
+  assert.deepEqual(kinds({ kind: 'off', detected: 'unreachable', misses: 3 }), ['burst:repair', 'burst:enable', 'burst:off']);
+  assert.deepEqual(kinds({ kind: 'checking' }), []);
+  assert.equal(tools(T.toolsView({ burst: { kind: 'checking' } })).burst.status.label, 'Checking…');
+  assert.equal(tools(T.toolsView({ burst: { kind: 'off', detected: 'present' } })).burst.status.label, 'Off');
   assert.deepEqual(kinds({ ...ON, updateAvailable: true }), ['tab:dashboard', 'burst:update', 'burst:off']);
   assert.deepEqual(kinds({ kind: 'untrusted' }), ['burst:off']);
   const all = [{ kind: 'not_installed' }, { kind: 'off' }, ON, { kind: 'broken' }, { kind: 'untrusted' }].flatMap((b) => T.toolsView({ burst: b }).groups.flatMap((g) => g.tools).flatMap((t) => t.actions.map((a) => a.kind)));
   const Embed = require('../src/burst-embed.js');
   for (const k of all) {
     const [verb, arg] = k.split(':');
-    assert.ok((verb === 'burst' && Embed.PAGE_ACTIONS.includes(arg)) || (verb === 'tab' && ['dashboard', 'route'].includes(arg)) || (verb === 'compaction' && ['on', 'off'].includes(arg)) || (verb === 'open' && T.PAGES.includes(arg)), k);
+    assert.ok((verb === 'burst' && Embed.PAGE_ACTIONS.includes(arg)) || (verb === 'tab' && ['dashboard', 'route'].includes(arg)) || (verb === 'compaction' && ['on', 'off'].includes(arg)) || (verb === 'open' && T.PAGES.includes(arg)) || (verb === 'section' && T.SECTIONS.includes(arg)), k);
   }
 });
 
 test('savings are only figures the tool reported: Burst compaction stats and the waste finder totals', () => {
   const t = tools(T.toolsView({ burst: ON, waste: { days: 7, files: 12, totals: { reread: 2, failloop: 1, overkill: { turns: 30, low: 1.2, high: 3.45 } } } }));
-  assert.equal(t.compaction.saves.text, 'Saved about $12.34 over 9 compactions, 3.7M tokens not resent.');
+  assert.equal(t.compaction.saves.text, '9 compactions, 3.7M tokens not resent. About $12.34 of tokens not resent, before the cost of writing the summaries.');
+  const losing = tools(T.toolsView({ burst: { ...ON, compactionVerdict: '5 of 5 compactions lost money: back to the fixed Compact at', compaction: { ...ON.compaction, enabled: true, netUsd: -1.63, moneyText: 'Cost about $1.63 more than it saved: x.' } } })).compaction;
+  assert.match(losing.saves.text, /Cost about \$1\.63 more than it saved/);
+  assert.equal(losing.status.tone, 'amber');
+  assert.match(losing.note, /Burst's own verdict: 5 of 5 compactions lost money/);
+  assert.match(losing.note, /Smart mode/);
   assert.match(t.compaction.saves.source, /Claude Burst/);
   assert.equal(t.waste.saves.text, 'Last 7 days: $1.20 to $3.45 of Opus turns could have run on Sonnet (30 routine turns); 2 repeated file reads; 1 failing loop.');
   assert.match(t.waste.saves.source, /12 transcripts/);
@@ -64,15 +74,16 @@ test('savings are only figures the tool reported: Burst compaction stats and the
   assert.equal(none.waste.saves, null);
   assert.equal(none.waste.status.label, 'On, nothing found');
   assert.equal(tools(T.toolsView({ burst: ON })).waste.status.label, 'Not on your plan', 'no report: the plan gate, not a zero');
+  assert.deepEqual(tools(T.toolsView({ burst: ON })).waste.actions, [], 'nothing to open when it is not on the plan');
 });
 
 test('compaction and routing follow Burst: on/off switch, backup route, missing backup, band versions', () => {
   const t = tools(T.toolsView({ burst: ON }));
-  assert.deepEqual(t.compaction.actions.map((a) => a.kind), ['compaction:on']);
-  assert.deepEqual(tools(T.toolsView({ burst: { ...ON, compaction: { ...ON.compaction, enabled: true } } })).compaction.actions.map((a) => a.kind), ['compaction:off']);
+  assert.deepEqual(t.compaction.actions.map((a) => a.kind), ['compaction:on', 'section:sec-compaction']);
+  assert.deepEqual(tools(T.toolsView({ burst: { ...ON, compaction: { ...ON.compaction, enabled: true } } })).compaction.actions.map((a) => a.kind), ['compaction:off', 'section:sec-compaction']);
   assert.equal(tools(T.toolsView({ burst: { ...ON, compaction: null } })).compaction.status.label, 'Not offered by this Burst');
   assert.equal(tools(T.toolsView({ burst: { ...ON, route: 'SECONDARY' } })).routing.status.label, 'Using your backup now');
-  assert.equal(tools(T.toolsView({ burst: { ...ON, secondaryReady: false } })).routing.status.label, 'On, no backup provider');
+  assert.equal(tools(T.toolsView({ burst: { ...ON, secondaryReady: false } })).routing.status.label, 'On, no backup ready');
   assert.equal(tools(T.toolsView({ burst: { kind: 'not_installed' } })).routing.status.label, 'Needs Claude Burst');
   assert.equal(t.band.status.label, 'On');
   assert.equal(tools(T.toolsView({ burst: { ...ON, band: { supported: true, installed: true, current: false } } })).band.status.label, 'Installed, out of date');
@@ -193,4 +204,13 @@ test('the optimiser page loads the tool list script, and both are packaged', () 
   assert.match(read('optimiser.html'), /<script src="src\/optimiser-tools\.js"><\/script>\s*<script src="optimiser\.js">/);
   const files = JSON.parse(read('package.json')).build.files;
   assert.ok(files.includes('src/**/*'));
+});
+
+test('band card: Burst on but its mod status unknown says so, not "comes with Burst"', () => {
+  const T2 = require('../src/optimiser-tools.js');
+  const band = T2.toolsView({ burst: { kind: 'on', detected: 'present', version: '0.19.0', route: 'PRIMARY', band: null } }).groups[0].tools.find((t) => t.id === 'band');
+  assert.equal(band.status.label, 'Unknown');
+  const off = T2.toolsView({ burst: { kind: 'on', detected: 'present', band: { supported: true, installed: false } } }).groups[0].tools.find((t) => t.id === 'band');
+  assert.equal(off.status.label, 'Not installed');
+  assert.match(off.note, /nothing runs until you confirm/);
 });

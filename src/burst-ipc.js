@@ -43,14 +43,17 @@ const ACTIONS = Object.freeze({
   'coord-release': { consent: (a) => ({ title: 'Hand on', detail: `${a.release}\n\nThe session that most recently changed this file now commits it, or it is free.` }) },
   trace: { consent: () => ({ title: 'Send test message', detail: 'Burst sends one tiny real request through each step (DNS, redirect, TLS, credential, route) and reports where it stops. It uses a very small part of your Claude subscription.' }) },
   'console-restart': { console: true, consent: () => ({ title: 'Restart Burst', detail: 'Burst\'s support console restarts its gateway through launchd, or starts it if it is stopped; if Burst was turned off, this turns it back on. A request in flight may fail once.' }) },
+  'codex-enable': { consent: () => ({ title: 'Route Codex through Burst', detail: 'Burst adds its own block to ~/.codex/config.toml, after saving a copy of the file, so Codex sessions you start from now on send their requests through Burst. Running Codex sessions are not changed.' }) },
+  'codex-disable': { consent: () => ({ title: 'Stop routing Codex through Burst', detail: 'Burst removes its block from ~/.codex/config.toml, after saving a copy of the file. Codex sessions you start from now on talk to OpenAI directly again.' }) },
   'console-diagnose': { console: true, consent: () => ({ title: 'Diagnose Burst', detail: 'Burst\'s support console opens a Terminal window and writes a diagnose report you can copy.' }) },
 });
 
-function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usageAllowed = () => false, sessionsAllowed = () => false, accountAllowed = () => false, optimiserAllowed = () => false, stateFile = null, snapshotFile = null, transcriptFor = () => null, hubSend = null, runner = null, isMac, dialog, shell, scriptDir, home = os.homedir(), launch, client: injected, onView = () => {}, log = () => {} }) {
+function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usageAllowed = () => false, sessionsAllowed = () => false, accountAllowed = () => false, optimiserAllowed = () => false, aitoolsAllowed = () => false, stateFile = null, snapshotFile = null, transcriptFor = () => null, hubSend = null, runner = null, isMac, dialog, shell, scriptDir, home = os.homedir(), launch, client: injected, onView = () => {}, log = () => {} }) {
   const platform = isMac ? 'darwin' : 'other';
   const client = isMac ? (injected || require('./burst-client.js').createBurstClient({ home })) : null;
   const backoff = createProbeBackoff({ base: POLL_BASE_MS, max: POLL_MAX_MS });
-  let last = { kind: isMac ? 'unreachable' : 'unsupported' };
+  let last = { kind: isMac ? 'checking' : 'unsupported' };
+  let misses = 0;
   let lastView = View.statusView(last, { platform });
   let inflight = null;
   let trayAt = -Infinity;
@@ -60,8 +63,9 @@ function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usag
     if (!isMac) return lastView;
     if (!force && !backoff.due(Date.now())) return lastView;
     inflight = inflight || client.detect().then((d) => {
-      last = d;
-      lastView = View.statusView(d, { platform });
+      misses = d.kind === 'unreachable' ? misses + 1 : 0;
+      last = d.kind === 'unreachable' ? { ...d, misses } : d;
+      lastView = View.statusView(last, { platform });
       try { onView(lastView); } catch (e) { log('[burst] onView failed', e && e.message); }
       writeSnapshot().catch((e) => log('[burst] snapshot failed', e && (e.code || e.message)));
       backoff.probed({ ok: d.kind === 'present' || d.kind === 'not_installed', why: d.kind }, Date.now());
@@ -90,6 +94,7 @@ function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usag
   async function act(kind, mode) {
     if (!isMac) return { ok: false, error: View.MAC_ONLY };
     // The dashboard lives in Plexiform's Usage optimiser page; the browser is the secondary way in.
+    if (kind === 'retry') { backoff.reset(); await refresh(true); return { ok: true, retried: true }; }
     if (kind === 'open-dashboard' && opener) { opener(); return { ok: true }; }
     if (kind === 'open-dashboard' || kind === 'open-browser') {
       const url = last.kind === 'present' ? client.adminUrl() : null;
@@ -147,8 +152,12 @@ function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usag
     if (!isMac) return { kind: 'unsupported' };
     const v = await refresh();
     let band = null;
-    if (present()) { try { band = Tools.bandStatus(await fresh('modStatus', () => client.modStatus())); } catch { band = null; } }
-    return { kind: v.kind, detected: last.kind, version: v.version, route: v.route, updateAvailable: v.updateAvailable, compaction: v.compaction, secondaryReady: present() ? last.state.secondaryReady === true : null, band };
+    let compactionVerdict = '';
+    if (present()) {
+      try { band = Tools.bandStatus(await fresh('modStatus', () => client.modStatus())); } catch { band = null; }
+      try { const l = Spend.learnedThresholds(await fresh('intelligentCompaction', () => client.intelligentCompaction())); compactionVerdict = (l && l.repos.find((r) => r.reason) || {}).reason || ''; } catch { compactionVerdict = ''; }
+    }
+    return { compactionVerdict, kind: v.kind, detected: last.kind, misses: last.misses || 0, version: v.version, route: v.route, updateAvailable: v.updateAvailable, compaction: v.compaction, secondaryReady: present() ? last.state.secondaryReady === true : null, band };
   });
 
   // Widget and Usage header: the chip only, never the card's actions or anything raw. Null on other platforms.
@@ -163,7 +172,9 @@ function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usag
     if (!isMac || last.kind !== 'present' || !last.capabilities.usage) return { view: null, nextPollMs: isMac ? backoff.gap : 0 };
     let codex = null;
     if (client.codex) { try { codex = Codex.codexView(await client.codex()); } catch { codex = null; } }
-    try { return { view: Spend.throughBurstView(await client.usage({ range })), codex, nextPollMs: backoff.gap }; } catch { return { view: null, nextPollMs: backoff.gap }; }
+    let history = null;
+    if (client.history) { try { history = Requests.historyView(await fresh('history', () => client.history({ days: 14 }))); } catch { history = null; } }
+    try { return { view: Spend.throughBurstView(await client.usage({ range })), codex, history, nextPollMs: backoff.gap }; } catch { return { view: null, nextPollMs: backoff.gap }; }
   });
 
   // Sessions page: per-session compaction stats and the handover of observed Claude sessions.
@@ -261,7 +272,14 @@ function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usag
     }
   }
   const anyPage = (e) => card(e) || usageAllowed(e) || sessionsAllowed(e) || optimiserAllowed(e);
-  utilityHandle('burst-action', anyPage, async (_e, id, args) => runAction(id, args));
+  const CODEX_ACTIONS = new Set(['codex-enable', 'codex-disable']);
+  utilityHandle('burst-action', (e) => anyPage(e) || aitoolsAllowed(e), async (e, id, args) => (anyPage(e) || CODEX_ACTIONS.has(id) ? runAction(id, args) : { ok: false, error: 'Not available.' }));
+
+  // AI tools page, Codex row: whether Codex goes through Burst. Null whenever Burst is not present.
+  utilityHandle('burst:codex-routing', aitoolsAllowed, async () => {
+    if (!present()) return { view: null };
+    try { return { view: await client.codexRouting() }; } catch (err) { log('[burst] codex routing failed', err && err.code); return { view: null }; }
+  });
 
   // Read-only views for the Usage optimiser and Sessions pages. Each name has its own senders.
   const optimiserOrUsage = (e) => optimiserAllowed(e) || usageAllowed(e);

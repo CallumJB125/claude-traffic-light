@@ -63,6 +63,8 @@ function throughBurstView(usage) {
     unpriced: secondary.some((g) => g.unpriced),
     providers: secondary.map(({ key, requests, usd, unpriced }) => ({ key, requests, usd, unpriced })),
     planRequests: plan.reduce((n, g) => n + g.requests, 0),
+    totalRequests: u.totals.requests,
+    unpricedRequests: Math.min(u.totals.unpriced, u.totals.requests || u.totals.unpriced),
     repos: [...repos].map(([key, usd]) => ({ key, usd })).sort((a, b) => b.usd - a.usd).slice(0, 10),
     reposNote: u.recent.length >= MAX_ROWS ? `Repositories are summed from the latest ${MAX_ROWS} requests.` : '',
     note: 'Secondary-provider spend only. It is not part of the Claude figures on this page, and is never added to them.',
@@ -91,15 +93,29 @@ function pauselessView(cfg, stats) {
   const mode = cfg.mode === 'intelligent' ? 'intelligent' : 'fixed';
   const at = mode === 'intelligent' ? num(cfg.floor_tokens) : num(cfg.compact_at_tokens);
   const name = mode === 'intelligent' ? 'Smart' : 'Static';
-  return {
+  const out = {
     available: true,
     enabled: cfg.enabled === true,
     mode,
     thresholdLabel: at ? `${name}, from ${tokensLabel(at)} tokens` : name,
     savedUsd: num(st.saved_usd),
+    netUsd: Number.isFinite(st.net_usd) ? st.net_usd : null,
+    costUsd: num(st.summary_usd) + num(st.rewrite_usd),
     compactions: num(st.compactions),
     tokensNotResent: num(st.tokens_not_resent),
   };
+  out.moneyText = compactionMoneyText(out);
+  return out;
+}
+
+const dollars = (v) => `$${v >= 100 ? Math.round(v) : v.toFixed(2)}`;
+// One sentence for every page that shows Burst's compaction money: net of the summaries' own
+// cost when Burst reports it (it can be negative), never a bare gross figure as "saved".
+function compactionMoneyText(p) {
+  if (!p || !p.compactions) return '';
+  if (p.netUsd === null || p.netUsd === undefined) return `About ${dollars(p.savedUsd)} of tokens not resent, before the cost of writing the summaries.`;
+  if (p.netUsd >= 0) return `Saved about ${dollars(p.netUsd)} after the cost of its summaries (${dollars(p.savedUsd)} not resent, ${dollars(p.costUsd)} for summaries).`;
+  return `Cost about ${dollars(-p.netUsd)} more than it saved: ${dollars(p.savedUsd)} of tokens not resent, ${dollars(p.costUsd)} to write the summaries.`;
 }
 
 function normalizeCompaction(state) {
@@ -118,4 +134,22 @@ function normalizeCompaction(state) {
 
 const COMPACTION_NOTE = 'Burst is compacting Claude sessions';
 
-module.exports = { tokensLabel, normalizeUsage, throughBurstView, secondaryUsdOf, secondaryBySession, normalizeCompaction, isSecondaryRoute, SOURCE, COMPACTION_NOTE, MAX_ROWS };
+const LEARNED_SOURCES = new Set(['learned', 'override', 'fixed', 'off']);
+// scrubbed GET /api/intelligent-compaction -> the Compact at in force per repository, read-only.
+// Names only: repository roots (local paths) and the learner's cost inputs stay in Burst.
+function learnedThresholds(raw) {
+  if (!raw || typeof raw !== 'object' || !Array.isArray(raw.repos)) return null;
+  return {
+    intelligent: raw.mode === 'intelligent' && raw.enabled === true,
+    windowDays: num(raw.window_days),
+    repos: raw.repos.slice(0, 50).map((r) => ({
+      name: str(r && r.name, 100),
+      inForce: num(r && r.in_force),
+      source: LEARNED_SOURCES.has(r && r.source) ? r.source : 'fixed',
+      compactions: num(r && r.compactions),
+      reason: str(r && r.reason, 160),
+    })).filter((r) => r.name),
+  };
+}
+
+module.exports = { compactionMoneyText, learnedThresholds, tokensLabel, normalizeUsage, throughBurstView, secondaryUsdOf, secondaryBySession, normalizeCompaction, isSecondaryRoute, SOURCE, COMPACTION_NOTE, MAX_ROWS };
