@@ -1473,6 +1473,7 @@ const { createBuddyWindow } = require('./buddy-window');
 const BRAND = require('./buddy-window/brand');
 const BuddyPages = require('./buddy-window/pages');
 const AppMenu = require('./src/app-menu.js');
+const UsagePopOut = require('./src/usage-popout.js');
 const { fromPage } = require('./src/utility-pages.js');
 const fromUtilityPage = (e, id) => fromPage(e, buddyWin?.pageWebContents(id));
 const widgetConfigSender = (e) => fromPage(e, lightsWin?.webContents);
@@ -3178,13 +3179,18 @@ function createTray() {
     if (pausedHere) return [{ label: 'Resume automatic cards', sublabel: 'Automatic cards are paused', click: () => { if (buddyWin.setCapture(true)) saveConfig({ autoCardsPausedFromTray: false }); refreshTrayMenu(); } }];
     return [{ label: 'Turn on automatic cards…', sublabel: 'Automatic cards are off', click: () => openBuddy('thismac') }];
   };
+  const usageToday = () => {
+    if (!usageMemo.turns) { getUsageTurns().catch(() => {}); return null; }
+    return Usage.modelMix(usageMemo.turns).today;
+  };
   const buildMenu = (from = 'tray') => {
     const advanced = IS_DEV_RUN || from === 'widget';
     return Menu.buildFromTemplate([
       ...budgetItems(),
       ...scopeItem(),
       ...BurstIpc.trayItems(),
-      ...AppMenu.appItems({ pages: sectionItems(), groups: [{ id: 'sections' }, { id: 'more', submenu: 'More' }], open: openBuddy, openLabel: BRAND.OPEN_MENU_LABEL, feedback: { label: "Something's off / Idea…", click: createFeedbackWindow } }),
+      ...UsagePopOut.items(usageToday(), () => openBuddy('usage')),
+      ...AppMenu.appItems({ pages: sectionItems(), groups: [{ id: 'sections' }, { id: 'more', submenu: 'More' }], open: openBuddy, openLabel: BRAND.OPEN_MENU_LABEL, feedback: { label: "Something's off / Idea…", click: createFeedbackWindow }, popOuts: { usage: () => openBuddy('usage') } }),
       { label: 'Open Claude', click: () => shell.openExternal('https://claude.ai') },
       ...quietItems(),
       ...captureItems(),

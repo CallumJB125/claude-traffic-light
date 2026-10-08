@@ -71,3 +71,26 @@ test('the Plexiform window\'s account summary is optional and feature-checked', 
   assert.match(main, /typeof buddyWin\?\.accountSummary === 'function'/);
   assert.match(main, /typeof buddyWin\.onAccountChange === 'function'/);
 });
+
+test('usage pop-out: tray lines show today\'s spend and busiest model, click opens Usage', () => {
+  const UsagePopOut = require('../src/usage-popout');
+  const opened = [];
+  const today = { cost: 12.345, models: [{ name: 'opus', turns: 3, cost: 10, share: 0.75 }, { name: 'sonnet', turns: 1, cost: 2.345, share: 0.25 }] };
+  const lines = UsagePopOut.items(today, () => opened.push('usage'));
+  assert.deepEqual(lines.map((l) => l.label || l.type), ['Spent today: $12.35', 'Busiest model: opus (75% of turns)', 'separator']);
+  lines[0].click(); lines[1].click();
+  assert.deepEqual(opened, ['usage', 'usage']);
+  assert.deepEqual(UsagePopOut.items({ cost: 0, models: [] }, () => {}), []);
+  assert.deepEqual(UsagePopOut.items(null, () => {}), []);
+  assert.equal(UsagePopOut.money(120.4), '$120');
+});
+
+test('app menu: popOuts replace the page opener', () => {
+  const { PAGES, GROUPS } = require('../buddy-window/pages');
+  const calls = [];
+  const items = AppMenu.appItems({ pages: PAGES, groups: GROUPS, open: (id) => calls.push(`open:${id}`), openLabel: 'x', popOuts: { usage: () => calls.push('popout') } });
+  items.find((i) => i.label === 'Open Usage…').click();
+  assert.deepEqual(calls, ['popout']);
+  assert.match(main, /UsagePopOut\.items\(usageToday\(\)/);
+  assert.match(main, /popOuts: \{ usage: \(\) => openBuddy\('usage'\) \}/);
+});
