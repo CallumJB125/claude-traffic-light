@@ -1574,7 +1574,7 @@ ipcMain.handle('sessions:state', e => {
   if (!sessionsSender(e)) return null;
   try {
     const configured = IS_DEV_RUN ? false : Adapters.get('codex').isActivityInstalled({ home: os.homedir(), runtime: HOOK_RUNTIME });
-    return SessionOverview.snapshot({ sessions: localSessions(aggregateState().sessions || []), activity: { configured, available: true }, now: Date.now(), enrich: BurstIpc.enrichSession, info: (row) => SessionActionsMain.rowInfo(row), handover: (row) => SessionHandoverMain.view(row), sharedTrees: (rows) => WorktreeShare.shared(rows), collisions: CollisionAlerts.rowCollisions(collisionAlerts) });
+    return SessionOverview.snapshot({ sessions: localSessions(aggregateState().sessions || []), activity: { configured, available: true }, now: Date.now(), enrich: BurstIpc.enrichSession, info: (row) => SessionActionsMain.rowInfo(row), handover: (row) => SessionHandoverMain.view(row), sharedTrees: (rows) => WorktreeShare.shared(rows), collisions: CollisionAlerts.rowCollisions(collisionAlerts), policy: (row) => require('./src/policy.js').rowInfo(row, ROOT_DIR) });
   } catch {
     return SessionOverview.snapshot({ sessions: [], activity: { available: false }, available: false, now: Date.now() });
   }

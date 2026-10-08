@@ -70,6 +70,7 @@
       "settings.html",
       "settings-backups.js",
       "settings-crash-reports.js",
+      "settings-policies.js",
       "burst-chip.js",
       "burst-usage.js",
       "feedback.html",

@@ -560,6 +560,33 @@
     <div class="hint" id="crash-status" role="status" aria-live="polite"></div>
   </div>
 
+  <!-- Policies: self-contained; its script is settings-policies.js. -->
+  <div class="field" id="policies">
+    <h3 class="pv-h">Policies</h3>
+    <div class="hint">A policy says what AI sessions may do in a repo: tools they may not use, paths they may not edit, a daily spend cap, and whether prompts with secrets or personal numbers are refused. Claude Code sessions are checked by Plexiform's hooks on this Mac; nothing is sent anywhere. A repo's <code>.plexiform/policy.json</code> wins over your default. A file that can't be read is ignored with a warning, never enforced.</div>
+    <label for="policy-repo">Apply to</label>
+    <div class="row wrap">
+      <select id="policy-repo"><option value="default">Default for every repo without its own policy</option></select>
+      <button type="button" class="secondary" id="policy-pick">Choose a repo…</button>
+    </div>
+    <div class="hint" id="policy-current" role="status" aria-live="polite"></div>
+    <label for="policy-pack">Pack</label>
+    <select id="policy-pack"></select>
+    <div class="hint" id="policy-desc"></div>
+    <div class="row wrap">
+      <button type="button" class="secondary" id="policy-review">Review the file</button>
+    </div>
+    <div id="policy-confirm" hidden>
+      <div class="hint" id="policy-path"></div>
+      <pre id="policy-content" style="margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-xs); max-height: 240px; overflow: auto;"></pre>
+      <div class="row wrap">
+        <button type="button" id="policy-write">Write this file</button>
+        <button type="button" class="secondary" id="policy-cancel">Cancel</button>
+      </div>
+    </div>
+    <div class="hint" id="policy-status" role="status" aria-live="polite"></div>
+  </div>
+
   <details id="backups">
     <summary><h2 id="backups-title">Backups</h2><span class="toggle" aria-hidden="true"></span></summary>
     <div id="backups-body">
@@ -707,6 +734,7 @@
   <script src="privacy-render.js"></script>
   <script src="settings-backups.js"></script>
   <script src="settings-crash-reports.js"></script>
+  <script src="settings-policies.js"></script>
   <script src="settings.js"></script>
   <script src="native-board/settings.js"></script>
 </body>
