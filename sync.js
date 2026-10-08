@@ -56,6 +56,7 @@
     current = s;
     const hub = s.hub && !s.hub.error ? s.hub : null;
     $('upsell').hidden = s.entitled || (s.enabled && hub && hub.mode === 'read_only');
+    $('plan-badge').hidden = !!s.entitled;
     // One blocker at a time: the plan first; sign-in only once the plan allows sync.
     $('status').hidden = !$('upsell').hidden && !s.enabled;
     $('banner').hidden = !(hub && hub.mode === 'read_only');

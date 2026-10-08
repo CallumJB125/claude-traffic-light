@@ -25,6 +25,7 @@ const TIMEOUT_MS = 15_000;
 const MAX_BODY = 32 * 1024;
 
 const PLAN_NAMES = Object.freeze({ free: 'Free', plus: 'Plus', team: 'Team' });
+const BETA_NOTE = "Every feature is on while Plexiform is in beta. Paid plans aren't on sale yet.";
 
 function baseOf(origin) {
   try {
@@ -47,7 +48,8 @@ function describe(ent = Entitlements, now = Date.now()) {
   else if (s.inGrace) banner = `Plexiform couldn't confirm your plan with your team hub. It stays on for ${daysLeft} more day${daysLeft === 1 ? '' : 's'}; connect to the internet while signed in to renew it.`;
   // Infinity does not survive structured clone as JSON: say "unlimited" instead.
   const shown = Object.fromEntries(Object.entries(limits).map(([k, v]) => [k, v === Infinity ? 'unlimited' : v]));
-  return { plan: s.plan, planName: PLAN_NAMES[s.plan] ?? 'Free', reason: s.reason, periodEnd: s.periodEnd ?? null, expiresAt: s.expiresAt ?? null, inGrace: !!s.inGrace, daysLeft, banner, limits: shown };
+  const beta = s.source === 'beta';
+  return { plan: s.plan, planName: beta ? 'Beta' : PLAN_NAMES[s.plan] ?? 'Free', beta, betaNote: beta ? BETA_NOTE : null, reason: s.reason, periodEnd: s.periodEnd ?? null, expiresAt: s.expiresAt ?? null, inGrace: !!s.inGrace, daysLeft, banner, limits: shown };
 }
 
 /**

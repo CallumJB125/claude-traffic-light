@@ -16,16 +16,16 @@
     $('plan').textContent = s.planName;
     $('banner').hidden = !s.banner;
     $('banner').textContent = s.banner || '';
-    $('detail').textContent = s.plan === 'free'
+    $('detail').textContent = s.beta ? s.betaNote : s.plan === 'free'
       ? (s.signedIn ? 'Upgrade to Plus for unlimited checkpoints, full search history, phone control and more.' : 'Sign in to your Plexiform account to upgrade.')
       : s.inGrace ? `Paid period ended ${day(s.periodEnd)}; ${s.daysLeft} day${s.daysLeft === 1 ? '' : 's'} left to confirm it.`
         : s.periodEnd ? `Paid through ${day(s.periodEnd)}.` : '';
     const paid = s.plan !== 'free';
-    $('sign-in').hidden = s.signedIn;
+    $('sign-in').hidden = s.signedIn || !!s.beta;
     $('upgrade-month').hidden = paid || !s.signedIn;
     $('upgrade-year').hidden = paid || !s.signedIn;
-    $('manage').hidden = !paid || !s.signedIn;
-    $('refresh').hidden = !s.signedIn;
+    $('manage').hidden = !paid || !s.signedIn || !!s.beta;
+    $('refresh').hidden = !s.signedIn || !!s.beta;
     const list = $('limits');
     list.replaceChildren();
     for (const [k, v] of Object.entries(s.limits || {})) {

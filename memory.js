@@ -117,8 +117,8 @@
     $('experimental').checked = info.experimental;
     if (info.days) {
       $('plan').hidden = false;
-      $('plan').textContent = `Free plan: search covers the last ${info.days} days. Plus searches your full history and hands sessions to Codex or Claude in one click (the free plan copies the handover for you to paste).`;
-      for (const o of $('when').options) if (Number(o.value) > info.days && !o.disabled) { o.disabled = true; o.textContent += ' (Plus)'; }
+      $('plan').textContent = `Your plan's search covers the last ${info.days} days and copies a handover for you to paste; full history and one-click hand-off to Codex or Claude aren't part of it.`;
+      for (const o of $('when').options) if (Number(o.value) > info.days && !o.disabled) { o.disabled = true; o.textContent += ' (not on your plan)'; }
     }
     const f = await api.facets().catch(() => null);
     if (f && f.ok) {

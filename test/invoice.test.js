@@ -141,7 +141,7 @@ test('the mapping persists locally, is validated, and register() gates IPC by pa
   assert.deepEqual(back.clients[0].rate, { markupPct: 0, hourlyRate: 0, sessionFee: 0 });
   assert.equal(back.mappings.length, 1);
   assert.equal(fs.statSync(path.join(root, Clients.FILE)).mode & 0o077, 0);
-  E.configure({ root });
+  E.configure({ root, beta: false });
   const handlers = new Map();
   const ctx = { ipcMain: { handle: (c, f) => handlers.set(c, f) }, rootDir: root, entitlements: E, fromPage: (e, id) => e.page === id, log() {} };
   Clients.register(ctx);

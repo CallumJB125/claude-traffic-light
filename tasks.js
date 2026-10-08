@@ -566,7 +566,7 @@
     const whenF = el('div', 'field');
     const whenL = el('label', null, 'When should it start?'); whenL.htmlFor = 'c-when';
     const when = el('select'); when.id = 'c-when';
-    for (const [v, label, off] of [['now', 'Start now'], ['reset', 'When my usage limit resets'], ['tonight', comp.canSchedule ? 'Run tonight (10 pm to 7 am)' : 'Run tonight (Plus)', !comp.canSchedule]]) { const o = el('option', null, label); o.value = v; o.disabled = !!off; when.append(o); }
+    for (const [v, label, off] of [['now', 'Start now'], ['reset', 'When my usage limit resets'], ['tonight', comp.canSchedule ? 'Run tonight (10 pm to 7 am)' : 'Run tonight (not on your plan)', !comp.canSchedule]]) { const o = el('option', null, label); o.value = v; o.disabled = !!off; when.append(o); }
     when.value = comp.when;
     when.addEventListener('change', () => { comp.when = when.value; renderComposer(true); });
     whenF.append(whenL, when, el('div', 'sub', comp.when === 'now' ? 'It schedules your own work for when your limit resets or overnight, under your own login on this Mac.' : comp.when === 'reset' ? 'It schedules your own work for when your limit resets. If you have not hit a limit it starts straight away.' : 'It schedules your own work for tonight and keeps this Mac awake (lid open) while the queue has work. It runs only while this Mac is awake.'));

@@ -200,3 +200,15 @@ test('the refresh is a paid-wiring package, and the Plan & billing page is regis
   assert.match(src, /privacy-flow: entitlement-check/);
   assert.match(src, /fromPage\(e, 'upgrade'\)/);
 });
+
+test('the Upgrade page in the beta: the top plan named Beta, no plan for sale', () => {
+  const beta = { status: () => ({ plan: 'team', source: 'beta', reason: 'beta', expiresAt: null, periodEnd: null, inGrace: false }), limits: () => Ent.LIMITS.team };
+  const d = describe(beta, 0);
+  assert.equal(d.beta, true);
+  assert.equal(d.planName, 'Beta');
+  assert.match(d.betaNote, /in beta/);
+  assert.equal(d.limits['memory.days'], 'unlimited');
+  const paid = describe({ status: () => ({ plan: 'plus', source: 'token', reason: 'ok', expiresAt: null, periodEnd: null, inGrace: false }), limits: () => Ent.LIMITS.plus }, 0);
+  assert.equal(paid.beta, false);
+  assert.equal(paid.planName, 'Plus');
+});

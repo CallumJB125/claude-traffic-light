@@ -171,7 +171,7 @@ test('register: Usage page only; free gets the receipt teaser and no waste or en
   assert.equal(r.enforce.available, false);
   assert.equal(r.waste, null);
   assert.equal(r.receipt.teaser, true);
-  assert.match((await set({ page: 'usage' }, { enforceCaps: true })).error, /Plus/);
+  assert.match((await set({ page: 'usage' }, { enforceCaps: true })).error, /aren't part of your current plan/);
   assert.equal(Enforce.readSettings(root).enforceCaps, false);
   assert.equal(await set({ page: 'widget' }, { enforceCaps: true }), null);
 });
