@@ -14,6 +14,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { scrub, redactSecretsPass } = require('./scrub.js');
+const { untag } = require('../hooks/handover-tap.js');
 
 const ADAPTERS = new Set(['claude', 'codex', 'gemini', 'hermes', 'cursor']);
 const STATUSES = new Set(['working', 'waiting', 'review', 'ended', 'idle', 'paused_limit']);
@@ -62,8 +63,9 @@ function build({ install_id, o, raw = {}, facts = null, repo_id = null, handover
   const f = facts && typeof facts === 'object' ? facts : {};
   const cwd = str(o.cwd) || str(f.cwd) || '';
   const folder = cwd ? path.basename(cwd) : '';
-  const prompt = str(f.lastPrompt) || str(f.firstPrompt);
-  const title = str(raw.taskTitle) ? localText(raw.taskTitle, CAP.title, home)
+  const first = untag(f.firstPrompt), prompt = untag(f.lastPrompt) || first;
+  const told = untag(raw.taskTitle);
+  const title = told ? localText(told, CAP.title, home)
     : prompt ? localText(prompt, CAP.title, home)
       : `${PROVIDER_LABEL[o.provider]} · ${folder || 'Work'}`;
   const status = raw.signal === 'limit-hit' ? 'paused_limit' : STATUSES.has(o.status) ? o.status : 'working';
@@ -73,7 +75,7 @@ function build({ install_id, o, raw = {}, facts = null, repo_id = null, handover
     v: 1, record_id: `${install_id}:${o.provider}:${o.session_id}`, adapter: o.provider, session_id: o.session_id, install_id,
     repo_id: typeof repo_id === 'string' && repo_id ? repo_id : null,
     folder: localText(folder, 120, null), title,
-    goal: str(f.firstPrompt) ? localText(f.firstPrompt, CAP.goal, home) : '',
+    goal: first ? localText(first, CAP.goal, home) : '',
     summary: str(raw.taskSummary) ? localText(raw.taskSummary, CAP.summary, home) : str(f.lastAssistant) ? localText(f.lastAssistant, CAP.summary, home) : '',
     status, files: filesOf(f.files, cwd),
     branch: branch ? localText(branch, CAP.branch, null) : null,
