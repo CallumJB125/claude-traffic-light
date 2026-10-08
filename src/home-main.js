@@ -5,6 +5,7 @@
 // opaque card handle, never a path, URL or command.
 const InputView = require('./input-view.js');
 const SessionOverview = require('./session-overview.js');
+const { finding } = require('../usage-waste-view.js');
 
 const LOCAL_BOARD = 'My board (this Mac)';
 const PAGES = new Set(['waiting', 'sessions', 'board', 'usage', 'settings', 'team', 'myday', 'overview', 'tasks']);
@@ -12,6 +13,7 @@ const AITOOLS = /^aitools(?::[a-z]{2,12})?$/;
 const LIST_MAX = 20;
 const TEAM_TTL_MS = 15000;
 const TOOLS_TTL_MS = 15000;
+const COSTS_TTL_MS = 60000;
 const text = (v, n = 200) => (typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, n) : '');
 const join = (names) => (names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names[0]);
 
@@ -67,11 +69,29 @@ function cards(snapshot) {
   };
 }
 
+// The cost guard report (src/spend-enforce.js) cut to one card: the receipt's headline, whether the limit is enforced, and the top waste finding.
+function costs(report) {
+  if (!report || typeof report !== 'object') return null;
+  const r = report.receipt, e = report.enforce, w = report.waste;
+  const out = {
+    receipt: r && typeof r.headline === 'string' ? { month: text(r.month, 40), headline: text(r.headline) } : null,
+    enforce: e && e.available ? {
+      on: !!e.settings?.enforceCaps,
+      status: text(e.capActive ? 'Your limit is spent: tool calls are being refused.'
+        : e.sessionsStopped ? `${e.sessionsStopped} runaway session${e.sessionsStopped === 1 ? ' is' : 's are'} being held.`
+          : e.settings?.enforceCaps ? 'Your limit is enforced. Nothing is being refused right now.' : 'Your limit is not enforced.'),
+    } : null,
+    waste: w && Array.isArray(w.findings) ? { days: w.days, count: w.findings.length, top: w.findings.length ? text(finding(w.findings[0]), 300) : null, files: w.files || 0 } : null,
+  };
+  return out.receipt || out.enforce || out.waste ? out : null;
+}
+
 // Tasks finished while you were away (Plus). Null when there is nothing, or the plan lacks it.
 const morningReport = () => require('./morning-report.js').current();
 
-function register({ ipcMain, allowed, state, localSessions, tools, myDay, openPage, openAiTools, morning = morningReport, now = Date.now, collisions = null }) {
+function register({ ipcMain, allowed, state, localSessions, tools, myDay, openPage, openAiTools, morning = morningReport, now = Date.now, collisions = null, costGuard = () => null }) {
   let toolsMemo = { at: -Infinity, value: null };
+  let costsMemo = { at: -Infinity, value: null };
   let teamMemo = { at: -Infinity, value: null, none: false };
   const part = (fn) => { try { return fn(); } catch { return null; } };
   async function snapshot() {
@@ -84,6 +104,11 @@ function register({ ipcMain, allowed, state, localSessions, tools, myDay, openPa
       try { team = cards(await myDay.snapshot()); none = team === null; } catch { team = null; }
       teamMemo = { at: time, value: team, none };
     }
+    // The first waste scan can take seconds, so Home shows the card from the next refresh rather than waiting.
+    if (time - costsMemo.at > COSTS_TTL_MS) {
+      costsMemo.at = time;
+      Promise.resolve().then(costGuard).then((report) => { costsMemo.value = costs(report); }, () => { costsMemo.value = null; });
+    }
     return {
       observed_at: time,
       banner: toolsMemo.value,
@@ -93,6 +118,7 @@ function register({ ipcMain, allowed, state, localSessions, tools, myDay, openPa
       team: teamMemo.value,
       teamless: teamMemo.none,
       morning: part(() => morning()?.state() ?? null),
+      costs: costsMemo.value,
     };
   }
   ipcMain.handle('home:state', (e) => (allowed(e) ? snapshot() : null));
@@ -107,4 +133,4 @@ function register({ ipcMain, allowed, state, localSessions, tools, myDay, openPa
   ipcMain.handle('home:open-card', async (e, handle) => (allowed(e) && typeof handle === 'string' && handle.length <= 100 ? !!await myDay.open(handle) : false));
 }
 
-module.exports = { register, banner, needs, running, today, cards, LOCAL_BOARD };
+module.exports = { register, banner, needs, running, today, cards, costs, LOCAL_BOARD };

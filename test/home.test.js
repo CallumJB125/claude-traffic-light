@@ -195,3 +195,63 @@ test('teamless is true only when the board list was read and holds no team board
   assert.equal((await reg({ snapshot: async () => ({ sources: [{ name: 'Core', cards: [], decisions: [] }] }) })).teamless, false);
   assert.equal((await reg({ snapshot: async () => { throw new Error('x'); } })).teamless, false, 'unknown is not teamless');
 });
+
+test('costs: the cost guard report becomes one card of receipt headline, cap status and top waste finding', () => {
+  assert.equal(Home.costs(null), null);
+  assert.equal(Home.costs({ enforce: { available: false }, waste: null, receipt: null }), null, 'nothing on this plan: no card');
+  const c = Home.costs({
+    receipt: { month: 'October 2026', headline: 'Saved about $12 this month', teaser: false },
+    enforce: { available: true, settings: { enforceCaps: true, stopRunaways: false }, capActive: false, sessionsStopped: 0 },
+    waste: { days: 7, files: 3, findings: [{ kind: 'reread', path: '/a/b/app.js', count: 5, approxTokens: 1200, evidence: [] }, { kind: 'failloop', tool: 'Bash', count: 3, evidence: [] }] },
+  });
+  assert.deepEqual(c.receipt, { month: 'October 2026', headline: 'Saved about $12 this month' });
+  assert.deepEqual(c.enforce, { on: true, status: 'Your limit is enforced. Nothing is being refused right now.' });
+  assert.equal(c.waste.top, 'app.js was read 5 times with no edit in between (about 1,200 tokens re-sent)', 'the same sentence Usage & cost shows');
+  assert.equal(c.waste.count, 2);
+  assert.equal(Home.costs({ enforce: { available: true, settings: { enforceCaps: true }, capActive: true } }).enforce.status, 'Your limit is spent: tool calls are being refused.');
+  assert.equal(Home.costs({ enforce: { available: true, settings: { enforceCaps: false } } }).enforce.on, false);
+});
+
+test('Home reads the cost guard without waiting on it, and a failing report hides the card', async () => {
+  const handlers = new Map();
+  let t = NOW, report = { receipt: { month: 'October 2026', headline: 'No activity yet this month' } };
+  const reg = (costGuard) => { handlers.clear(); Home.register({ ipcMain: { handle: (c, f) => handlers.set(c, f) }, allowed: () => true, state: () => null, localSessions: () => [], tools: () => [], myDay: { snapshot: async () => ({ sources: [] }) }, openPage() {}, openAiTools() {}, morning: () => null, now: () => t, costGuard }); return handlers.get('home:state'); };
+  const state = reg(async () => report);
+  assert.equal((await state({})).costs, null, 'the first read does not wait for the scan');
+  await new Promise(setImmediate);
+  assert.equal((await state({})).costs.receipt.headline, 'No activity yet this month');
+  const failing = reg(async () => { throw new Error('x'); });
+  await failing({}); await new Promise(setImmediate);
+  assert.equal((await failing({})).costs, null);
+});
+
+test('the cost card links to Usage & cost and hides when there is nothing to show', async () => {
+  const calls = [];
+  const costs = { receipt: { month: 'October 2026', headline: 'Saved about $12 this month' }, enforce: { on: false, status: 'Your limit is not enforced.' }, waste: { days: 7, count: 0, top: null, files: 2 } };
+  const f = setup([{ ...fresh, banner: null, costs }], calls);
+  try {
+    await tick();
+    const sec = f.section('costs');
+    assert.equal(sec.hidden, false);
+    assert.equal(sec.querySelectorAll('li').length, 3);
+    assert.match(sec.textContent, /Saved about \$12 this month/);
+    assert.match(sec.textContent, /Not enforced/);
+    assert.match(sec.textContent, /Nothing wasteful found in 2 transcripts/);
+    sec.querySelector('.actions button').click();
+    assert.deepEqual(calls.at(-1), ['navigate', 'usage']);
+  } finally { f.close(); }
+  const g = setup([{ ...fresh, costs: null }]);
+  try { await tick(); assert.equal(g.section('costs').hidden, true); } finally { g.close(); }
+});
+
+test('the cost guard hands its report to main for Home', () => {
+  const main = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8');
+  assert.match(main, /setCostGuardReport: \(fn\) => \{ costGuardReport = fn; \}/);
+  assert.match(main, /costGuard: \(\) => \(costGuardReport \? costGuardReport\(\) : null\)/);
+  let handed = null;
+  const os = require('node:os');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cg-'));
+  const reg = require('../src/spend-enforce.js').register({ rootDir: dir, entitlements: { has: () => false, limits: () => ({}) }, ipcMain: { handle() {} }, fromPage: () => false, onQuit: (fn) => fn(), setCostGuardReport: (fn) => { handed = fn; } });
+  assert.equal(handed, reg.report);
+  fs.rmSync(dir, { recursive: true, force: true });
+});

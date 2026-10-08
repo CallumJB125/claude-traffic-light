@@ -4,6 +4,7 @@
 // project names are user data, so everything is textContent, never innerHTML.
 //
 //   UsageWasteView.render(container, api, { force })
+//   finding(f) → one waste finding as a sentence (Home's cost card requires it too)
 (function () {
   const REFRESH_MS = 60000;
   const MAX_SHOWN = 8;
@@ -99,5 +100,6 @@
     container.hidden = !parts.length;
   }
 
-  window.UsageWasteView = { render };
+  if (typeof window !== 'undefined') window.UsageWasteView = { render, finding };
+  if (typeof module === 'object' && module.exports) module.exports = { finding };
 })();
