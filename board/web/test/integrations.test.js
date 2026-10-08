@@ -152,19 +152,19 @@ test('local hub (no accounts): a plain note says where to connect, and no connec
 test('local hub: a grid of the six tools with a one-line value and a status in words; only GitHub is "Available after you join a team"', () => {
   const v = integrationsScreen(m({ local: true }));
   const cards = findAll(v, (n) => n.props?.['data-connector']);
-  assert.deepEqual(cards.map((c) => c.props['data-connector']), ['github', 'slack', 'sentry', 'linear', 'jira', 'google']);
+  assert.deepEqual(cards.map((c) => c.props['data-connector']), ['github', 'slack', 'sentry']);
   const status = (id) => textOf(findAll(cards.find((c) => c.props['data-connector'] === id), (n) => n.props?.class === 'integ-status small')[0]);
   assert.equal(status('github'), 'Available after you join a team');
-  for (const id of ['slack', 'sentry', 'linear', 'jira', 'google']) assert.equal(status(id), 'Coming soon', id);
+  for (const id of ['slack', 'sentry']) assert.equal(status(id), 'Coming soon', id);
   assert.match(textOf(cards[0]), /Cards update when pull requests merge/);
-  assert.deepEqual(findAll(byAttr(v, 'data-grid', 'local-connectors')[0], (n) => n.tag === 'h3').map(textOf), ['GitHub', 'Slack', 'Sentry', 'Linear', 'Jira', 'Google'], 'tool names are headings');
+  assert.deepEqual(findAll(byAttr(v, 'data-grid', 'local-connectors')[0], (n) => n.tag === 'h3').map(textOf), ['GitHub', 'Slack', 'Sentry'], 'tool names are headings');
   assert.equal(byAttr(integrationsScreen(m()), 'data-grid', 'local-connectors').length, 0, 'a team hub shows no local grid');
 });
 
 test('the web list of tools: only the launch connectors are available', async () => {
   const { LAUNCH_CONNECTORS, connectorStatus } = await import('../js/connectors.js');
   assert.deepEqual([...LAUNCH_CONNECTORS], ['github']);
-  assert.deepEqual(['github', 'slack', 'sentry', 'linear', 'jira', 'google', 'x'].map(connectorStatus), ['available', 'soon', 'soon', 'soon', 'soon', 'soon', 'soon']);
+  assert.deepEqual(['github', 'slack', 'sentry', 'x'].map(connectorStatus), ['available', 'soon', 'soon', 'soon']);
 });
 
 test('the app tells the Integrations page it is on the local hub from /api/health’s auth', async () => {
@@ -338,4 +338,52 @@ test('start input: the typed org leaves the form at once and never enters state 
   assert.match(app, /api\.startConnect\(provider, input\)/);
   assert.match(app, /manifest: \{ provider, \.\.\.res\.form, target: connectWindowTarget\(provider, res\.bind, navigator\.userAgent\) \}/);
   assert.match(api, /startConnect: \(provider, input\) => mut\('POST', `\/api\/integrations\/\$\{enc\(provider\)\}\/start`, input && Object\.keys\(input\)\.length \? \{ input \} : undefined\),/);
+});
+
+// ── Sentry slice S-A: the webhook URL (G1) and the secret note ────────────
+
+const sentry = { id: 'sentry', name: 'Sentry', scopes: ['event:read'], connect: 'token', shows_webhook_url: true, actions: { 'sentry.card': { default: 'auto' }, 'sentry.notice': { default: 'auto' }, 'sentry.suppressed': { default: 'auto' } } };
+const sentryConn = (over = {}) => ({ id: 's1', provider: 'sentry', display_name: 'Sentry', status: 'active', health: null, settings: { autonomy: {} }, ...over });
+const URL_S1 = 'https://hub.example/integrations/s1/webhook';
+
+test('Sentry: admins see the connection\'s webhook URL as plain text with a Copy button; members never do', () => {
+  const v = integrationsScreen(m({ data: { available: [sentry], connections: [sentryConn({ webhook_url: URL_S1 })], vault: true } }));
+  const t = textOf(v);
+  assert.match(t, /Paste this URL into Sentry as the integration's Webhook URL/);
+  assert.ok(t.includes(URL_S1));
+  const [copy] = byAttr(v, 'data-action', 'integ-copy-url');
+  assert.equal(copy.tag, 'button');
+  assert.equal(copy.props['data-url'], URL_S1);
+  assert.equal(findAll(v, (n) => n.tag === 'a' && String(n.props?.href ?? '').includes('/webhook')).length, 0, 'text, not a link');
+  // A member's list has no webhook_url; even if one slipped in, it is not shown to them.
+  const mv = integrationsScreen(m({ data: { available: [sentry], connections: [sentryConn({ webhook_url: URL_S1 })], vault: true } }, 'member'));
+  assert.ok(!textOf(mv).includes(URL_S1));
+  assert.equal(byAttr(mv, 'data-action', 'integ-copy-url').length, 0);
+  // No public URL on the hub: says how to get one, no button.
+  const nv = integrationsScreen(m({ data: { available: [sentry], connections: [sentryConn({ webhook_url: null })], vault: true } }));
+  assert.match(textOf(nv), /Ask its administrator to configure one before connecting webhooks/);
+  assert.equal(byAttr(nv, 'data-action', 'integ-copy-url').length, 0);
+  // A connector without it shows nothing of the kind.
+  assert.equal(byAttr(integrationsScreen(m()), 'data-action', 'integ-copy-url').length, 0);
+});
+
+test('Sentry: the token form says the secret is never shown again and to rotate it in Sentry before reconnecting', () => {
+  const v = integrationsScreen(m({ tokenFor: 'sentry', data: { available: [sentry], connections: [], vault: true } }));
+  const [form] = byAttr(v, 'data-form', 'integ-token');
+  const t = textOf(form);
+  assert.match(t, /Sentry client secret/);
+  assert.match(t, /Plexiform stores this secret encrypted and never displays it again\./);
+  assert.match(t, /Rotate the secret in Sentry before reconnecting so old signed requests cannot be reused\./);
+  assert.equal(findAll(form, (n) => n.tag === 'input')[0].props.type, 'password');
+  // The fake token connector keeps its plain form.
+  assert.doesNotMatch(textOf(integrationsScreen(m({ tokenFor: 'fake' }))), /never shows it again/);
+});
+
+test('Sentry: its actions have plain names, and the copy button writes only the URL from the button', async () => {
+  assert.equal(actionLabel('sentry.card'), 'Create cards from new Sentry issues');
+  assert.equal(actionLabel('sentry.notice'), 'Comment when new issues exceed the card limit');
+  assert.equal(actionLabel('sentry.suppressed'), 'Record issues that were not turned into cards');
+  const { readFileSync } = await import('node:fs');
+  const app = readFileSync(new URL('../js/app.js', import.meta.url), 'utf8');
+  assert.match(app, /case 'integ-copy-url': copyText\(el\.dataset\.url\); return;/);
 });

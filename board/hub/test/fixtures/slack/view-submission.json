@@ -1,0 +1,27 @@
+{
+  "type": "view_submission",
+  "token": "fixtureVerificationTokenNotASecret",
+  "trigger_id": "13345224611.8534564802.f0e1d2c3b4a5968778695a4b3c2d1e0f",
+  "api_app_id": "A0APP01",
+  "team": { "id": "T0TEAM1", "domain": "acme" },
+  "user": { "id": "U0ALICE", "username": "alice", "name": "alice", "team_id": "T0TEAM1" },
+  "view": {
+    "id": "V0VIEW01",
+    "team_id": "T0TEAM1",
+    "type": "modal",
+    "callback_id": "plex_create_card_modal",
+    "private_metadata": "__RUNTIME__",
+    "app_id": "A0APP01",
+    "bot_id": "B0BOT01",
+    "hash": "1759312801.abcdEFGH",
+    "state": {
+      "values": {
+        "title_block": { "title": { "type": "plain_text_input", "value": "Fix the <flaky> login test" } },
+        "board_block": { "board": { "type": "static_select", "selected_option": { "text": { "type": "plain_text", "text": "Main" }, "value": "__BOARD__" } } }
+      }
+    }
+  },
+  "response_urls": [],
+  "is_enterprise_install": false,
+  "enterprise": null
+}

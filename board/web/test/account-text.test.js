@@ -63,3 +63,11 @@ test('sign-up control (D104): SIGNUP_CLOSED is the fixed invite-only sentence at
     assert.equal(accountErrorText({ status: 403, code: 'SIGNUP_CLOSED', extra: { message: 'hub words' } }, step), 'Sign-up is invite-only right now. Ask a team owner for an invite.');
   }
 });
+
+test('temporary signup and storage refusals explain the admission pause without plan or provider details', () => {
+  const extra = { resource: 'storage', message: '/private/board.db is over a private configured limit' };
+  for (const step of ['start', 'verify', 'team', 'invite']) {
+    assert.equal(accountErrorText({ status: 503, code: 'SIGNUP_PAUSED', extra }, step), 'New sign-ups are temporarily paused. Try again later.');
+    assert.equal(accountErrorText({ status: 403, code: 'QUOTA_EXCEEDED', extra }, step), 'The board is temporarily unable to add new items. Try again later.');
+  }
+});

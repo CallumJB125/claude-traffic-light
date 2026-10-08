@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('buddy', {
   select: (id) => ipcRenderer.send('buddy:select', String(id)),
   retry: () => ipcRenderer.send('buddy:retry'),
   workspace: (id) => ipcRenderer.send('buddy:workspace', String(id)),
+  optimiserSection: (id) => ipcRenderer.send('buddy:optimiser-section', String(id)),
   signOut: (id) => ipcRenderer.send('buddy:signout', String(id)),
   onState: (fn) => ipcRenderer.on('buddy:state', (_e, s) => fn(s)),
 });

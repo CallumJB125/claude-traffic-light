@@ -121,7 +121,7 @@ test('normalizeRule sanitises junk', () => {
   const r = R.normalizeRule({ name: '', when: { signal: 'stop', tool: '  ' }, then: { lamp: 'purple', lampColor: 'red', eyes: 'blue', pose: 'dab', sound: 'loud', celebrate: 'yes' } });
   assert.equal(r.name, 'Untitled rule');
   assert.deepEqual(r.when, { signal: ['stop'], tool: null, cwd: null, source: null });
-  assert.deepEqual(r.then, { lamp: null, lampColor: null, lampFx: null, sign: null, lampShape: null, signFx: null, number: null, screenFx: null, eyes: null, pose: null, sound: null, celebrate: true, text: null, costume: null, cameo: null, body: null, bodyColor: null, effect: null, pet: null, agents: null, agentsColor: null, clicks: {} });
+  assert.deepEqual(r.then, { lamp: null, lampColor: null, lampFx: null, sign: null, lampShape: null, signFx: null, number: null, screenFx: null, eyes: null, pose: null, sound: null, celebrate: true, text: null, costume: null, cameo: null, effect: null, pet: null, agents: null, agentsColor: null, clicks: {} });
   assert.equal(R.normalizeRule({ then: { sound: 'Glass' } }).then.sound, 'Glass');
   assert.equal(R.normalizeRule({ then: { sound: 'file:/x/y.wav' } }).then.sound, 'file:/x/y.wav');
   assert.equal(R.normalizeRule({ then: { sound: 'airhorn' } }).then.sound, null);
@@ -186,9 +186,9 @@ test('previewLook: agents default to robots with the status colour', () => {
 });
 
 test('project scope: folder name or prefix glob', () => {
-  const rs = [{ id: 'b', name: 'b', when: { signal: ['tool-use'], cwd: 'bondly*' }, then: { bodyColor: '#1155cc' } }, ...rules()];
-  assert.equal(look([{ signal: 'tool-use', cwd: '/x/bondly-cf' }], rs).bodyColor, '#1155cc');
-  assert.equal(look([{ signal: 'tool-use', cwd: '/x/other' }], rs).bodyColor, null);
+  const rs = [{ id: 'b', name: 'b', when: { signal: ['tool-use'], cwd: 'bondly*' }, then: { eyes: '#1155cc' } }, ...rules()];
+  assert.equal(look([{ signal: 'tool-use', cwd: '/x/bondly-cf' }], rs).eyes, '#1155cc');
+  assert.equal(look([{ signal: 'tool-use', cwd: '/x/other' }], rs).eyes, 'default');
   const exact = [{ id: 'b', name: 'b', when: { signal: ['tool-use'], cwd: 'redoubt' }, then: { pet: 'duck' } }, ...rules()];
   assert.equal(look([{ signal: 'tool-use', cwd: '/x/Redoubt' }], exact).pet, 'duck');
   assert.equal(look([{ signal: 'tool-use', cwd: '/x/redoubt-2' }], exact).pet, 'none');
@@ -222,13 +222,13 @@ test('ignored-N is measured from your last touch of any session, not the oldest 
 
 test('cameo is its own accent channel: layers above the lamp owner, never leaks from below, independent of costume', () => {
   const rs = [
-    { id: 'face', name: 'face', when: { signal: ['tool-use'], tool: 'Agent' }, then: { cameo: 'neo' } },
-    { id: 'hat', name: 'hat', when: { signal: ['tool-use'], tool: 'Agent' }, then: { costume: 'crown', cameo: 'powell' } },
+    { id: 'face', name: 'face', when: { signal: ['tool-use'], tool: 'Agent' }, then: { cameo: 'wizard' } },
+    { id: 'hat', name: 'hat', when: { signal: ['tool-use'], tool: 'Agent' }, then: { costume: 'crown', cameo: 'pirate' } },
     ...rules(),
-    { id: 'below', name: 'below', when: { signal: ['tool-use'] }, then: { cameo: 'baker' } },
+    { id: 'below', name: 'below', when: { signal: ['tool-use'] }, then: { cameo: 'punk' } },
   ];
   const l = look([{ signal: 'tool-use', tool: 'Agent' }], rs);
-  assert.deepEqual([l.cameo, l.costume], ['neo', 'crown']);
+  assert.deepEqual([l.cameo, l.costume], ['wizard', 'crown']);
   assert.equal(look([{ signal: 'tool-use', tool: 'Bash' }], rs).cameo, 'none');
   assert.equal(R.resolve(rs, [{ signal: 'tool-use', tool: 'Agent' }]).owned.cameo, 'face');
   assert.equal(look([], rules()).cameo, 'none');
@@ -237,12 +237,12 @@ test('cameo is its own accent channel: layers above the lamp owner, never leaks 
 test('normalizeRule accepts built-in cameos and photo-cameo ids, nothing else', () => {
   for (const c of R.CAMEOS) assert.equal(R.normalizeRule({ then: { cameo: c } }).then.cameo, c);
   for (const id of ['keanu', 'dad-2', 'x'.repeat(32)]) assert.equal(R.normalizeRule({ then: { cameo: id } }).then.cameo, id);
-  for (const bad of ['Neo', 'has space', 'x'.repeat(33), '../etc', '', 7, null, undefined]) assert.equal(R.normalizeRule({ then: { cameo: bad } }).then.cameo, null);
-  assert.deepEqual(R.CAMEOS, ['none', 'neo', 'alfred', 'mcafee', 'spagni', 'powell', 'baker', 'ellison', 'saylor', 'wizard', 'scientist', 'pirate', 'punk']);
+  for (const bad of ['Wizard', 'has space', 'x'.repeat(33), '../etc', '', 7, null, undefined]) assert.equal(R.normalizeRule({ then: { cameo: bad } }).then.cameo, null);
+  assert.deepEqual(R.CAMEOS, ['none', 'alfred', 'wizard', 'scientist', 'pirate', 'punk']);
 });
 
 test('previewLook shows a rule\'s cameo, none by default', () => {
-  assert.equal(R.previewLook({ then: { cameo: 'spagni', costume: 'wizard' } }).cameo, 'spagni');
+  assert.equal(R.previewLook({ then: { cameo: 'scientist', costume: 'wizard' } }).cameo, 'scientist');
   assert.equal(R.previewLook({ then: { costume: 'wizard' } }).cameo, 'none');
 });
 
@@ -255,10 +255,10 @@ test('seasonal costumes by date', () => {
   assert.equal(R.seasonalCostume(Date.parse('2026-09-09T12:00:00')), null);
 });
 
-test('body, effect and pet are accent channels', () => {
-  const rs = [{ id: 'g', name: 'g', when: { signal: ['tool-use'], tool: 'Agent' }, then: { body: 'ghost', effect: 'fire', pet: 'blob' } }, ...rules()];
+test('effect and pet are accent channels', () => {
+  const rs = [{ id: 'g', name: 'g', when: { signal: ['tool-use'], tool: 'Agent' }, then: { effect: 'fire', pet: 'blob' } }, ...rules()];
   const l = look([{ signal: 'tool-use', tool: 'Agent' }], rs);
-  assert.deepEqual([l.body, l.effect, l.pet, l.lamp], ['ghost', 'fire', 'blob', 'green']);
+  assert.deepEqual([l.effect, l.pet, l.lamp], ['fire', 'blob', 'green']);
   const p = R.previewLook({ then: { effect: 'beard' } });
   assert.equal(p.waitMinutes, 20, 'preview shows a grown beard');
 });
@@ -342,8 +342,7 @@ test('liveAgents and ralphIteration read the session set', () => {
   ];
   assert.deepEqual(R.liveAgents(sessions).map((a) => [a.name, a.kind, a.status, a.cwd]), [
     ['a1', 'subagent', 'working', '/x/one'],
-    ['b1', 'subagent', 'working', '/x/two'],
-  ], 'defaults fill in for a bare entry');
+  ], 'a bare entry cannot establish activity');
   assert.equal(R.ralphIteration(sessions), 9, 'the furthest loop wins');
   assert.equal(R.ralphIteration([{ mode: 'team' }]), 0);
 });
@@ -868,7 +867,7 @@ test('effectiveSignal: a finished turn with a working subagent reads as that age
   const working = [{ id: 'a', name: 'executor', kind: 'subagent', status: 'working' }];
   const done = [{ id: 'a', name: 'executor', kind: 'subagent', status: 'done' }];
   assert.deepEqual(R.effectiveSignal({ signal: 'stop', agents: working }), { signal: 'tool-use', tool: 'Agent', turnSignal: 'stop' });
-  assert.deepEqual(R.effectiveSignal({ signal: 'idle-nudge', agents: [{ id: 'b' }] }), { signal: 'tool-use', tool: 'Agent', turnSignal: 'idle-nudge' }, 'no status counts as working');
+  assert.deepEqual(R.effectiveSignal({ signal: 'idle-nudge', agents: [{ id: 'b' }] }), { signal: 'idle-nudge', tool: null, turnSignal: null }, 'missing status cannot prove work');
   assert.deepEqual(R.effectiveSignal({ signal: 'stop', agents: done }), { signal: 'stop', tool: null, turnSignal: null });
   assert.deepEqual(R.effectiveSignal({ signal: 'stop', agents: [{ id: 'c', status: 'waiting' }] }).signal, 'stop', 'a waiting agent is not working');
   assert.deepEqual(R.effectiveSignal({ signal: 'permission-ask', tool: 'Bash', agents: working }), { signal: 'permission-ask', tool: 'Bash', turnSignal: null });
@@ -909,7 +908,7 @@ test('offline: a virtual signal on every live session, and on its own when nothi
 
 test('a failed turn has its own look; {fail} says why; it waits on you', () => {
   const l = look([{ signal: 'turn-failed', failKind: 'network' }]);
-  assert.deepEqual([l.lamp, l.eyes, l.pose, l.text, l.celebrate, l.ruleId], ['amber', 'dizzy', 'banner', 'NO NETWORK', false, 'failed-turn']);
+  assert.deepEqual([l.lamp, l.eyes, l.pose, l.text, l.celebrate, l.ruleId], ['red', 'dizzy', 'banner', 'NO NETWORK', false, 'failed-turn']);
   assert.equal(look([{ signal: 'turn-failed', failKind: 'limit' }]).text, 'RATE LIMITED');
   assert.equal(look([{ signal: 'turn-failed' }]).text, 'FAILED');
   assert.equal(R.fillText('{fail}!', { failKind: 'network' }), 'NO NETWORK!');
@@ -1055,11 +1054,11 @@ test('ignored-N counts from your last touch: a session working on its own does n
   assert.equal(R.resolve(rules(), [waiting, { ...ralph, touchedAt: ago(2) }], now).look.waitMinutes, 2);
 });
 
-test('lamps: green working, amber your turn, red blocked, off idle', () => {
+test('lamps: green working, amber your turn, red blocked or broken, off idle', () => {
   const lamp = (ss) => look(ss).lamp;
   assert.equal(lamp([{ signal: 'tool-use', tool: 'Bash' }]), 'green');
-  for (const signal of ['stop', 'idle-nudge', 'turn-failed']) assert.equal(lamp([{ signal }]), 'amber', signal);
-  for (const signal of ['permission-ask', 'limit-hit']) assert.equal(lamp([{ signal }]), 'red', signal);
+  for (const signal of ['stop', 'idle-nudge']) assert.equal(lamp([{ signal }]), 'amber', signal);
+  for (const signal of ['permission-ask', 'limit-hit', 'turn-failed']) assert.equal(lamp([{ signal }]), 'red', signal);
   assert.equal(R.resolve(rules(), [{ signal: 'stop' }], Date.now(), { offline: true }).look.lamp, 'red', 'offline');
   assert.equal(lamp([]), 'off');
   assert.equal(lamp([{ signal: 'stop' }, { signal: 'tool-use' }]), 'green', 'one session working still owns the lamp');
@@ -1248,10 +1247,11 @@ test('templates: a rule added by a later migration follows the template it was s
 // ── v9: blocked ("needs your decision") is red ───────────────────────────
 const blockedAt = (min) => ({ sessionId: 'b', signal: 'tool-done', cwd: '/w', updatedAt: new Date().toISOString(), blocked: { tool: 'Bash', summary: 'rm -rf x', reason: 'r', at: new Date(Date.now() - min * 60000).toISOString() } });
 
-test('v9 blocked: a fresh config has the lamp-only red rule under the red block, and it lights red', () => {
-  const d = R.defaultRules();
+test('v9 blocked: a fresh config has the lamp-only red rule under the red block, off by default (v10), red when switched on', () => {
+  const d = R.defaultRules().map((r) => (r.id === 'blocked' ? { ...r, enabled: true } : r));
   const ids = d.map((r) => r.id);
-  assert.equal(R.RULES_VERSION, 9);
+  assert.equal(R.RULES_VERSION, 11);
+  assert.equal(R.defaultRules().find((r) => r.id === 'blocked').enabled, false);
   assert.equal(ids.indexOf('blocked'), ids.indexOf('runaway') + 1);
   assert.ok(ids.indexOf('blocked') < ids.indexOf('working') && ids.indexOf('blocked') < ids.indexOf('done'));
   assert.deepEqual(R.normalizeRule(d.find((r) => r.id === 'blocked')).then.lamp, 'red');
@@ -1270,7 +1270,7 @@ test('v9 blocked: a saved v8 config gains it once, in place; migrating twice add
   assert.deepEqual(R.migrateRules(m, 8), m, 'idempotent');
   assert.equal(R.migrateRules(m, 8).filter((r) => r.id === 'blocked').length, 1);
   const deleted = m.filter((r) => r.id !== 'blocked');
-  assert.equal(R.migrateRules(deleted, 9), deleted, 'deleting it on v9 sticks');
+  assert.equal(R.migrateRules(deleted, 10), deleted, 'deleting it sticks');
 });
 
 test('v9 blocked: a customised config (reordered, disabled, its own blocked rule) is respected', () => {
@@ -1306,4 +1306,81 @@ test('v9 blocked: a set that needs nothing comes back as the very same list', ()
   const d = R.defaultRules().map(R.normalizeRule);
   assert.equal(R.placeBlockedRule(d), d);
   assert.equal(R.migrateRules(d, 8), d);
+});
+
+// ── v10: red means "needs you now" or "something broke" ──────────────────
+test('v10 red: a real ask is red, a failed turn is red, an auto-denial the turn carried on from is not', () => {
+  const now = Date.now();
+  const at = (s) => new Date(now - s * 1000).toISOString();
+  const d = R.defaultRules();
+  const lamp = (ss) => R.resolve(d, ss, now).look.lamp;
+  assert.equal(lamp([{ sessionId: 'a', signal: 'permission-ask', askKind: 'request', cwd: '/w', updatedAt: at(1) }]), 'red', 'a pending permission');
+  assert.equal(lamp([{ sessionId: 'a', signal: 'permission-ask', askKind: 'question', cwd: '/w', updatedAt: at(1) }]), 'red', 'a question');
+  assert.equal(lamp([{ sessionId: 'a', signal: 'turn-failed', failKind: 'error', cwd: '/w', updatedAt: at(1) }]), 'red', 'a failed run');
+  assert.equal(lamp([{ sessionId: 'a', signal: 'stop', cwd: '/w', updatedAt: at(1) }], now), 'amber');
+  const denied = { tool: 'Bash', summary: 'rm -rf x', reason: 'r', at: at(5) };
+  assert.equal(lamp([{ sessionId: 'a', signal: 'tool-use', tool: 'Read', cwd: '/w', updatedAt: at(1), blocked: denied }]), 'green', 'auto-denial, then more tool use');
+  assert.equal(lamp([{ sessionId: 'a', signal: 'permission-denied', tool: 'Bash', cwd: '/w', updatedAt: at(1), blocked: denied }]), 'green', 'the denial itself');
+  assert.equal(lamp([{ sessionId: 'a', signal: 'stop', cwd: '/w', updatedAt: at(1), blocked: denied }]), 'amber', 'a denial, then the turn ended: your turn, not blocked');
+  assert.equal(lamp([{ sessionId: 'a', signal: 'permission-ask', askKind: 'request', cwd: '/w', updatedAt: at(1), blocked: denied }]), 'red', 'a denial followed by a real ask');
+});
+
+test('v10 red: a saved v9 config switches the stock blocked rule off and recolours an untouched failed-turn red, once', () => {
+  const v9 = R.defaultRules().map(R.normalizeRule).map((r) => (r.id === 'blocked' ? { ...r, enabled: true }
+    : r.id === 'failed-turn' ? { ...r, then: { ...r.then, lamp: 'amber' } } : r));
+  const m = R.migrateRules(v9, 9);
+  assert.equal(m.find((r) => r.id === 'blocked').enabled, false);
+  assert.equal(m.find((r) => r.id === 'failed-turn').then.lamp, 'red');
+  assert.deepEqual(m, R.defaultRules().map(R.normalizeRule), 'a v9 default config becomes today\'s defaults');
+  assert.equal(R.migrateRules(m, 10), m);
+  const mine = v9.map((r) => (r.id === 'failed-turn' ? { ...r, then: { ...r.then, lamp: 'green' } } : r.id === 'blocked' ? { ...r, then: { lamp: 'amber' } } : r));
+  const kept = R.migrateRules(mine, 9);
+  assert.equal(kept.find((r) => r.id === 'failed-turn').then.lamp, 'green', 'a colour you chose stays');
+  assert.equal(kept.find((r) => r.id === 'blocked').enabled, true, 'a blocked rule you reshaped stays on');
+});
+
+test('liveAgents: stopped and stale agents are not live, and keep their own status', () => {
+  const s = { cwd: '/w', agents: [{ id: 'a', status: 'working' }, { id: 'b', status: 'stopped' }, { id: 'c', status: 'stale' }, { id: 'd', status: 'done' }] };
+  assert.deepEqual(R.liveAgents([s]).map((a) => a.id), ['a']);
+  assert.equal(R.normalizeAgent({ id: 'c', status: 'stale' }).status, 'stale');
+});
+
+test('unknown agent reports do not manufacture working roster or counts', () => {
+  for (const status of [undefined, null, 'unexpected', {}]) {
+    assert.equal(R.normalizeAgent({ id: 'unknown', status }).status, 'stale');
+    assert.deepEqual(R.liveAgents([{ agents: [{ id: 'unknown', status }] }]), []);
+  }
+});
+
+test('one character: a rule\'s then.body never changes look.body', () => {
+  const rs = [{ id: 'g', name: 'g', when: { signal: ['tool-use'] }, then: { body: 'ghost', bodyColor: '#112233', pose: 'wave' } }, ...rules()];
+  const l = look([{ signal: 'tool-use' }], rs);
+  assert.equal(l.pose, 'wave');
+  assert.deepEqual([l.body, l.bodyColor], ['claude', null]);
+  assert.equal(R.normalizeRule(rs[0]).then.body, undefined);
+  assert.equal(R.normalizeRule(rs[0]).then.bodyColor, undefined);
+});
+
+test('one character: the global character applies in every state', () => {
+  const env = { character: { body: 'robot', bodyColor: '#1155cc' } };
+  for (const signal of ['tool-use', 'idle-nudge', 'limit-hit', 'idle', 'permission-ask']) {
+    const l = R.resolve(rules(), [{ signal }], Date.now(), env).look;
+    assert.deepEqual([l.body, l.bodyColor], ['robot', '#1155cc'], signal);
+  }
+  assert.equal(R.resolve(rules(), [], Date.now(), env).look.body, 'robot');
+  assert.equal(R.previewLook({ then: { pose: 'wave' } }, env.character).body, 'robot');
+  assert.equal(R.normalizeCharacter({ body: 'nonsense', bodyColor: 'red' }).body, 'claude');
+});
+
+test('one character: templates no longer set a body', () => {
+  for (const t of R.templates()) for (const r of t.rules) assert.equal(r.then.body, undefined, t.id);
+});
+
+test('one character: migration picks the most common non-default body, else claude', () => {
+  const rule = (body, bodyColor) => ({ id: uid(), name: 'x', when: { signal: ['idle'] }, then: { body, bodyColor } });
+  let n = 0; const uid = () => `r${n++}`;
+  assert.deepEqual(R.characterFromRules([rule('octopus'), rule('cyclops', '#abcdef'), rule('cyclops', '#abcdef'), rule('claude')]), { body: 'cyclops', bodyColor: '#abcdef' });
+  assert.deepEqual(R.characterFromRules([rule('octopus'), rule('claude')]), { body: 'octopus', bodyColor: null });
+  assert.deepEqual(R.characterFromRules([rule('claude'), rule(undefined)]), { body: 'claude', bodyColor: null });
+  assert.deepEqual(R.characterFromRules(undefined), { body: 'claude', bodyColor: null });
 });

@@ -46,7 +46,8 @@ function el(tag, attrs = {}, ...kids) {
 
 const state = { selected: 'board', hub: { state: 'stopped' } };
 let pages = [];
-let groups = [];
+let sections = [];
+let footer = [];
 const buttons = new Map();
 
 function item(p, child = false) {
@@ -56,37 +57,68 @@ function item(p, child = false) {
     'data-page': p.id,
     'data-kind': p.kind,
   }, child ? null : icon(p.icon), el('span', { class: 'nav-label' }, p.title),
-  p.kind === 'window' ? icon('external') : null,
-  p.kind === 'soon' ? el('span', { class: 'nav-soon' }, 'soon') : null);
+  p.kind === 'window' ? icon('external') : null);
   if (p.kind === 'window') btn.setAttribute('aria-label', `${p.title} (opens its own window)`);
   btn.addEventListener('click', () => window.buddy.select(p.id));
   buttons.set(p.id, btn);
   return btn;
 }
 
+const sectionOf = (id) => sections.find((s) => s.pages.includes(id))?.id ?? null;
+const sectionBtns = new Map();
+const subLists = new Map();
+
+// One entry per section; the one holding the open page unfolds its own pages beneath it.
 function build() {
   const nav = document.getElementById('nav');
   nav.textContent = '';
   buttons.clear();
-  for (const g of groups) {
-    const list = pages.filter((p) => p.group === g.id);
-    if (!list.length) continue;
-    const sec = el('section', { class: 'nav-group' });
-    if (g.title) sec.append(el('h2', { class: 'nav-heading' }, g.title));
-    const ul = el('ul', { class: 'nav-list' });
-    for (const p of list) {
-      const li = el('li', {}, item(p));
-      if (p.children?.length) {
-        const sub = el('ul', { class: 'nav-sub', 'aria-label': `${p.title} views` });
-        for (const c of p.children) sub.append(el('li', {}, item(c, true)));
-        li.append(sub);
-      }
-      ul.append(li);
+  sectionBtns.clear();
+  subLists.clear();
+  optKey = '';
+  const byId = new Map();
+  for (const p of pages) { byId.set(p.id, p); for (const c of p.children ?? []) byId.set(c.id, c); }
+  const ul = el('ul', { class: 'nav-list' });
+  for (const s of sections) {
+    if (s.heading) ul.append(el('li', { class: 'nav-heading', 'aria-hidden': 'true' }, s.heading));
+    const head = el('button', { type: 'button', class: 'nav-item nav-section', 'data-section': s.id }, icon(s.icon), el('span', { class: 'nav-label' }, s.title));
+    head.addEventListener('click', () => { if (sectionOf(state.selected) !== s.id) window.buddy.select(s.default); });
+    sectionBtns.set(s.id, head);
+    const sub = el('ul', { class: 'nav-sub', 'aria-label': `${s.title} pages` });
+    for (const id of s.pages.length > 1 ? s.pages : []) {
+      const p = byId.get(id);
+      if (p) sub.append(el('li', {}, item(p, true)));
     }
-    sec.append(ul);
-    nav.append(sec);
+    subLists.set(s.id, sub);
+    ul.append(el('li', {}, head, sub));
   }
+  nav.append(el('section', { class: 'nav-group' }, ul));
+  const foot = document.getElementById('nav-foot');
+  foot.textContent = '';
+  for (const id of footer) { const p = byId.get(id); if (p) foot.append(item(p, true)); }
   paint();
+}
+
+// The Usage optimiser's own sections (read from Burst's dashboard by main) unfold under its entry while it is open.
+let optKey = '';
+function paintOptimiserNav() {
+  const li = (buttons.get('optimiser') || sectionBtns.get('optimiser'))?.parentElement;
+  if (!li) return;
+  const nav = state.selected === 'optimiser' && state.optimiser ? state.optimiser.nav : [];
+  const active = state.optimiser ? state.optimiser.active : null;
+  const key = JSON.stringify([nav, active]);
+  if (key === optKey) return;
+  optKey = key;
+  li.querySelector('.nav-sub-leaf')?.remove();
+  if (!nav.length) return;
+  const ul = el('ul', { class: 'nav-sub nav-sub-leaf', 'aria-label': 'Usage optimiser sections' });
+  for (const n of nav) {
+    const b = el('button', { type: 'button', class: 'nav-item nav-child nav-leaf', 'data-section-id': n.id }, el('span', { class: 'nav-label' }, n.label));
+    if (n.id === active) b.setAttribute('aria-current', 'location');
+    b.addEventListener('click', () => window.buddy.optimiserSection(n.id));
+    ul.append(el('li', {}, b));
+  }
+  li.append(ul);
 }
 
 // From main (brand.js), with the page list.
@@ -97,6 +129,15 @@ function paint() {
     const on = id === state.selected;
     if (on) btn.setAttribute('aria-current', 'page'); else btn.removeAttribute('aria-current');
   }
+  const open = sectionOf(state.selected);
+  for (const [id, btn] of sectionBtns) {
+    btn.setAttribute('aria-expanded', String(id === open));
+    if (id === open) btn.setAttribute('data-active', ''); else btn.removeAttribute('data-active');
+    subLists.get(id).hidden = id !== open;
+  }
+  // Burst-only pages are listed while Burst is present, or while open so the selection never vanishes.
+  for (const p of pages) if (p.burstOnly) { const li = buttons.get(p.id)?.parentElement; if (li) li.hidden = !(state.burst || state.selected === p.id); }
+  paintOptimiserNav();
   const hub = document.getElementById('hub');
   const s = state.hub?.state;
   const runners = s === 'failed' ? [] : state.runners ?? [];
@@ -108,7 +149,7 @@ function paint() {
 // ↑/↓ move between entries, like a native source list.
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
-  const all = [...buttons.values()];
+  const all = [...document.querySelectorAll('#nav button, #nav-foot button')].filter((b) => !b.closest('[hidden]'));
   const i = all.indexOf(document.activeElement);
   if (i < 0) return;
   e.preventDefault();
@@ -160,7 +201,8 @@ window.buddy.onState((s) => { Object.assign(state, s); paintWorkspaces(); paint(
 window.buddy.pages().then((r) => {
   if (!r) return;
   pages = r.pages;
-  groups = r.groups;
+  sections = r.sections;
+  footer = r.footer ?? [];
   HUB_TEXT = r.brand.hubText;
   document.title = r.brand.name;
   document.getElementById('brand').textContent = r.brand.name;

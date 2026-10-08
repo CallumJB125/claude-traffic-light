@@ -181,8 +181,9 @@ front of the rules engine.
 | 3 | `held` | prevSignal (or tool-use) | a notification ask younger than 1200 ms that no pending request or real ask backs |
 | 4 | `promoted` | tool-use / Agent | a finished, idle or just-opened session with a subagent still working |
 | 5 | `stale-agents` | nothing | promoted, but its working agents went quiet past the working window and keepalive |
-| 6 | `stale` | nothing | no update within the working window (or the waiting window for a waiting-on-you or quiet signal) |
-| 7 | `shown` | the stored signal | otherwise |
+| 6 | `stuck` | the stored signal, flagged stuck? | a working signal with no hook or activity event for the stuck threshold (default 5 min); live until the working window or the threshold plus 10 min, whichever is later |
+| 7 | `stale` | nothing | no update within the working window (or the waiting window for a waiting-on-you or quiet signal) |
+| 8 | `shown` | the stored signal | otherwise |
 
 ```mermaid
 stateDiagram-v2
@@ -202,3 +203,16 @@ Stale windows: `workingStaleMinutes` for a working signal,
 or a quiet one (`session-start`: open, no prompt yet);
 a promoted session lives while any working agent is younger than
 6 h or anything moved within the working window.
+
+### Stuck?
+
+A working signal (never a waiting-on-you, quiet or closed-turn one) whose file
+has not been touched by any hook or activity event for `stuckMinutes`
+(Preferences, default 5, 0 = off) is shown as before but carries
+`stuck: { sinceMs, tool }`; the widget lamp turns amber ("Stuck?") unless
+something redder is already showing, and Sessions lists the last tool and
+"since 7m". Any hook write moves `updatedAt` and clears it. It shares the
+working window rather than adding a second clock: while the flag is on, the
+session stays live for the later of `workingStaleMinutes` and
+`stuckMinutes` + 10 min, so a 5 min threshold is not cut short by the
+6 min working window.

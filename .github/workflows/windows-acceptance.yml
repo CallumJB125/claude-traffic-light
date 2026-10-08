@@ -1,0 +1,165 @@
+# Diagnostic copy of the release build job. No staging, signing or publication.
+# Reuse passing Mac/Linux evidence while fixing concrete Windows failures.
+name: Windows acceptance only
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Exact candidate commit
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: windows-acceptance-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  build:
+    name: build (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: win
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            board/package-lock.json
+
+      - name: Tag matches package.json version
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          want="v$(node -p "require('./package.json').version")"
+          if [ "$want" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match package.json version ($want)"
+            exit 1
+          fi
+
+      - run: npm ci
+
+      - name: Install locked board dependencies
+        run: npm --prefix board ci
+
+      # A beta build gets a prerelease version, so it follows the beta feed
+      # (its updater picks the channel from the version).
+      - name: Beta version
+        if: github.event_name == 'workflow_dispatch' && inputs.beta
+        shell: bash
+        run: |
+          v="$(node -p "require('./package.json').version")-beta.${GITHUB_RUN_NUMBER}"
+          npm version --no-git-tag-version "$v"
+          echo "beta version $v"
+
+      # The app refuses any release.json signed before this moment, even on a
+      # fresh install (src/updater/index.js loadBuiltAt).
+      - name: Release floor
+        shell: bash
+        run: |
+          node -e "require('fs').writeFileSync('build/release-floor.json', JSON.stringify({ builtAt: new Date().toISOString() }) + '\n')" && cat build/release-floor.json
+
+      - name: Native Setups helper and runtime acceptance (Mac)
+        if: matrix.platform == 'mac'
+        timeout-minutes: 5
+        shell: bash
+        env:
+          TZ: Africa/Johannesburg
+        run: |
+          mkdir -p work/windows-release
+          npm run test:native-darwin 2>&1 | tee work/windows-release/setups-native-darwin.log
+
+      - name: Native private directory helper (Windows)
+        if: matrix.platform == 'win'
+        timeout-minutes: 3
+        shell: pwsh
+        run: ./scripts/build-windows-private-directory.ps1
+
+      # Gates every platform, including beta and dry runs, so a green
+      # candidate job cannot hide failing tests. Bounded, so a hung test can't
+      # eat the job. The ICS tests assume SAST, and Electron-based tests need
+      # a display and no sandbox on Linux runners.
+      # WINDOWS_RELEASE still controls publication, never test success.
+      - name: Unit tests
+        id: units
+        shell: bash
+        timeout-minutes: 20
+        env:
+          TZ: Africa/Johannesburg
+          ELECTRON_DISABLE_SANDBOX: '1'
+        run: |
+          run() { if [ "$RUNNER_OS" = Linux ]; then xvfb-run --auto-servernum "$@"; else "$@"; fi; }
+          status=0
+          mkdir -p work/windows-release
+          run node --test --test-timeout=120000 test/*.test.js test/adapters/*.test.js 2>&1 | tee work/windows-release/root-tests.log || status=1
+          node --test --test-timeout=120000 remote/test/*.test.js 2>&1 | tee work/windows-release/remote-tests.log || status=1
+          (cd board && node --test --test-timeout=120000 '*/test/**/*.test.js') 2>&1 | tee work/windows-release/board-tests.log || status=1
+          exit $status
+
+      - name: Native helpers (Mac)
+        if: matrix.platform == 'mac'
+        run: npm run calendar-helper && npm run voice-helper
+
+      - name: Build installers
+        id: installers
+        # Retain installer diagnostics even when Windows unit checks fail.
+        # The failed units still fail the job and prevent stage/promotion.
+        if: success() || (matrix.platform == 'win' && failure() && steps.units.outcome == 'failure')
+        shell: bash
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          PLATFORM: ${{ matrix.platform }}
+        run: npx electron-builder -c electron-builder.config.js "--$PLATFORM" --publish never
+
+      - name: Smoke test (Linux)
+        if: matrix.platform == 'linux'
+        run: xvfb-run --auto-servernum node scripts/smoke-installed.js
+
+      - name: Smoke test (Mac)
+        if: matrix.platform == 'mac'
+        run: node scripts/smoke-installed.js
+
+      - name: Windows installer lifecycle
+        if: always() && matrix.platform == 'win' && steps.installers.outcome == 'success'
+        timeout-minutes: 15
+        run: node scripts/windows-install-smoke.js
+
+      - name: Test and lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-evidence-${{ matrix.platform }}
+          if-no-files-found: error
+          retention-days: 14
+          path: work/windows-release
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always() && steps.installers.outcome == 'success'
+        with:
+          name: installers-${{ matrix.platform }}
+          if-no-files-found: error
+          retention-days: 14
+          # *.yml: latest*.yml for a release, beta*.yml for a -beta version
+          path: |
+            dist/*.dmg
+            dist/*.zip
+            dist/*.exe
+            dist/*.AppImage
+            dist/*.deb
+            dist/*.blockmap
+            dist/*.yml
+            !dist/builder-debug.yml
+

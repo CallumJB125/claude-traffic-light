@@ -1,0 +1,75 @@
+<aside class="side">
+  <div class="brand">
+    <span class="mark">&#9889;</span>
+    <span><span class="name">Claude Burst</span><span class="ver" id="ver"></span></span>
+  </div>
+
+  <div class="byline">
+    <div class="byline-title">Written and Designed by</div>
+    <div class="byline-name">Andrew Baker</div>
+    <a class="byline-link" href="https://andrewbaker.ninja" target="_blank" rel="noopener noreferrer">andrewbaker.ninja &#8599;</a>
+  </div>
+
+  <div class="tabs" id="tabs" role="tablist">
+    <button type="button" class="tab" data-tab="claude" role="tab" title="Claude Code">Claude</button>
+    <button type="button" class="tab" data-tab="codex" role="tab">Codex</button>
+    <button type="button" class="tab" data-tab="general" role="tab">General</button>
+  </div>
+
+  <div class="navgroup" data-tab="codex">Codex</div>
+  <a class="navlink" data-target="sec-codex"><span class="nd" id="nd-codex"></span><span class="label">Overview</span></a>
+  <a class="navlink" data-target="sec-codex-context"><span class="nd" id="nd-codex-context"></span><span class="label">Context</span><span class="count" id="nc-codex-context"></span></a>
+  <a class="navlink" data-target="sec-codex-inspect"><span class="nd" id="nd-cx-inspect"></span><span class="label">Context inspector</span></a>
+  <a class="navlink" data-target="sec-codex-requests"><span class="nd"></span><span class="label">Requests</span><span class="count" id="nc-codex-requests"></span></a>
+
+  <div class="navgroup">Setup</div>
+  <a class="navlink" data-target="installSection"><span class="nd" id="nd-install"></span><span class="label">Install &amp; test</span></a>
+
+  <div class="navgroup">Observe</div>
+  <a class="navlink" data-target="cards"><span class="nd" id="nd-overview"></span><span class="label">Overview</span><span class="count" id="nc-overview"></span></a>
+  <a class="navlink" data-target="sec-activity"><span class="nd" id="nd-activity"></span><span class="label">Activity</span><span class="count" id="nc-activity"></span></a>
+  <a class="navlink" data-target="sec-analytics"><span class="nd"></span><span class="label">Analytics</span></a>
+  <a class="navlink" data-target="sec-savings"><span class="nd"></span><span class="label">Compaction savings</span></a>
+  <a class="navlink" data-target="sec-models"><span class="nd"></span><span class="label">Spend by model</span></a>
+  <a class="navlink" data-target="sec-repos"><span class="nd"></span><span class="label">Spend by repository</span></a>
+  <a class="navlink" data-target="sec-usage"><span class="nd"></span><span class="label">Usage</span></a>
+
+  <div class="navgroup">Context</div>
+  <a class="navlink nav-pc" data-target="sec-compaction"><span class="nd" id="nd-compaction"></span><span class="label">Pauseless Compaction</span></a>
+  <a class="navlink" data-target="sec-context"><span class="nd" id="nd-context"></span><span class="label">Context &amp; cache</span></a>
+  <a class="navlink" data-target="sec-automask"><span class="nd" id="nd-automask"></span><span class="label">Automask</span></a>
+
+  <div class="navgroup">Routing</div>
+  <a class="navlink" data-target="sec-config"><span class="nd" id="nd-config"></span><span class="label">Routing</span></a>
+  <a class="navlink" data-target="secondarySection"><span class="nd" id="nd-secondary"></span><span class="label">Secondary (optional)</span></a>
+  <a class="navlink" data-target="sec-failover"><span class="nd" id="nd-failover"></span><span class="label">Failover &amp; pricing</span></a>
+
+  <div class="navgroup">Sessions</div>
+  <a class="navlink" data-target="handoverSection"><span class="nd" id="nd-handover"></span><span class="label">Session handover</span></a>
+  <a class="navlink" data-target="sec-coord"><span class="nd" id="nd-coord"></span><span class="label">Session coordination</span></a>
+  <a class="navlink" data-target="sec-sessions"><span class="nd" id="nd-sessions"></span><span class="label">Session options</span></a>
+  <a class="navlink" data-target="sec-panel"><span class="nd" id="nd-panel"></span><span class="label">Usage panel</span></a>
+  <a class="navlink" data-target="sec-band"><span class="nd" id="nd-band"></span><span class="label">In-session band</span></a>
+  <a class="navlink" data-target="sec-inspect"><span class="nd" id="nd-inspect"></span><span class="label">Context inspector</span></a>
+  <a class="navlink" data-target="sec-finder"><span class="nd" id="nd-finder"></span><span class="label">Finder shortcuts</span></a>
+
+  <div class="navgroup">This Mac</div>
+  <a class="navlink" data-target="sec-mac"><span class="nd" id="nd-mac"></span><span class="label">Lid &amp; hotspot</span></a>
+  <a class="navlink" data-target="sec-notify"><span class="nd" id="nd-notify"></span><span class="label">Notifications</span></a>
+  <a class="navlink" data-target="sec-permissions"><span class="nd" id="nd-permissions"></span><span class="label">Permissions</span></a>
+
+  <div class="navgroup">Health</div>
+  <a class="navlink" data-target="guardsSection"><span class="nd" id="nd-guards"></span><span class="label">Guards</span><span class="count" id="nc-guards"></span></a>
+  <a class="navlink" data-target="sec-actions"><span class="nd"></span><span class="label">Actions</span></a>
+  <a class="navlink" data-target="sec-audit"><span class="nd"></span><span class="label">Audit</span></a>
+  <a class="navlink" data-target="sec-advanced"><span class="nd"></span><span class="label">Advanced</span></a>
+
+  <div class="navgroup">Requests</div>
+  <a class="navlink" data-target="sec-responses"><span class="nd" id="nd-responses"></span><span class="label">Responses</span><span class="count" id="nc-responses"></span></a>
+  <a class="navlink" data-target="sec-requests"><span class="nd" id="nd-requests"></span><span class="label">Requests</span><span class="count" id="nc-requests"></span></a>
+
+  <div class="sidefoot">
+    <span id="gatewayAddr"></span>
+    <span class="updated" id="updated"></span>
+  </div>
+</aside>

@@ -33,7 +33,7 @@ test('settings view: neutral, signed out, signed in', () => {
 });
 
 test('tray and widget right-click are built from the same template', () => {
-  assert.match(main, /\.\.\.AppMenu\.appItems\(\{ pages: BuddyPages\.PAGES, groups: BuddyPages\.GROUPS, open: openBuddy/);
+  assert.match(main, /\.\.\.AppMenu\.appItems\(\{ pages: sectionItems\(\), groups: \[\{ id: 'sections' \}\], open: openBuddy/);
   assert.match(main, /buildWidgetMenu = buildMenu;\n\s+trayMenu = buildMenu\(\);/);
   assert.match(main, /const menu = buildWidgetMenu\('widget'\);/);
   assert.match(main, /ipcMain\.handle\('widget-menu', \(e, opts\) => \{\n\s+if \(!win \|\| win\.isDestroyed\(\) \|\| e\.sender !== win\.webContents\) return;\n\s+if \(!\(opts && opts\.menu === true\)\) \{ openBuddy\(\); return; \}/);
@@ -51,8 +51,8 @@ test('app menu: every page is there, soon ones disabled, actions open the page',
     if (p.kind === 'soon') { assert.equal(it.enabled, false); assert.match(it.label, /\(soon\)$/); assert.equal(it.click, undefined); }
     else { it.click(); assert.equal(opened.pop(), p.id); }
   }
-  assert.equal(items.find((i) => i.label === 'Open Lights…').accelerator, 'CmdOrCtrl+L');
-  assert.equal(items.find((i) => i.label === 'Open Settings…').accelerator, 'CmdOrCtrl+,');
+  assert.equal(items.find((i) => i.label === 'Open Widget configuration…').accelerator, 'CmdOrCtrl+L');
+  assert.equal(items.find((i) => i.label === 'Open Preferences…').accelerator, 'CmdOrCtrl+,');
   const fb = { label: 'Something\u2019s off / Idea…', click() {} };
   assert.ok(AppMenu.appItems({ pages: PAGES, groups: GROUPS, open() {}, openLabel: 'x', feedback: fb }).includes(fb));
 });

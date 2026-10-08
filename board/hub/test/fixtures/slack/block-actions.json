@@ -1,0 +1,9 @@
+{
+  "type": "block_actions",
+  "api_app_id": "A0APP01",
+  "team": { "id": "T0TEAM1", "domain": "acme" },
+  "user": { "id": "U0ALICE", "username": "alice", "team_id": "T0TEAM1" },
+  "trigger_id": "13345224612.8534564803.00112233445566778899aabbccddeeff",
+  "response_url": "https://hooks.slack.com/actions/T0TEAM1/1524000000/xyzXYZ0123",
+  "actions": [{ "type": "button", "action_id": "noop", "block_id": "b1", "value": "slackfixture-marker-action-22d0", "action_ts": "1759312900.000100" }]
+}

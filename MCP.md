@@ -29,13 +29,18 @@ Every tool returns JSON.
 
 | Tool | What it answers |
 | --- | --- |
-| `buddy_status` | The current look (lamp, pose, eyes, costume, effect, pet, cameo), which rule owns each channel, what fired, session and agent counts, current tool, online state, and whether the running app agrees |
+| `buddy_status` | The current look (lamp, pose, eyes, costume, effect, pet, cameo), the single global character (rules never change it), which rule owns each other channel, what fired, session and agent counts, current tool, online state, and whether the running app agrees |
 | `buddy_sessions` | Every session file: raw and presented signal, cwd, tool, agents (kind, status, heartbeat), age, time until stale. Includes the files the widget is ignoring, with the reason |
-| `buddy_why` | `query`: a rule id, a rule name or a channel. Says why that rule is or isn't firing (which `when` clause failed for each session, or which higher rule cut it off), or who owns the channel |
+| `buddy_why` | `query`: a rule id, a rule name or a channel. Says why that rule is or isn't firing (which `when` clause failed for each session, or which higher rule cut it off), or who owns the channel (`character` reports the one global character) |
 | `buddy_rules` | The rules in priority order, with a compact when/then |
 | `buddy_recent_transitions` | Parsed `[state]` lines from `app.log`, newest first (`limit`, `session`) |
 | `buddy_model_mix` | Which models your turns ran on and what they cost (today, last 7 days), plus the read-only Opus→Sonnet recommendation line |
 | `buddy_pending_requests` | Permission requests waiting on the widget's Allow/Deny |
+| `buddy_burst_status` | Claude Burst's route (primary or secondary), secondary readiness, rate-limited models and when they return. Answers "Burst not present" when Burst isn't running |
+| `buddy_burst_coordination` | Which session masters which file (`path`: a file path or its tail; omit for all). "Burst not present" without Burst |
+| `buddy_burst_requests` | The last requests Burst routed, metadata only (`session`, `limit` up to 50) |
+
+The three Burst tools read a snapshot the running app writes (`burst-snapshot.json`, mode 0600, whitelisted fields, no prompts or paths). The server never contacts Burst; a missing snapshot or one older than two minutes means "Burst not present".
 
 Every tool is read-only. There is deliberately no tool that answers a permission request: a session that is waiting on a prompt can't call tools, so such a tool could only ever approve *another* session's tool call, and the server can't tell which session is calling it. Answer at the widget (or, later, from a paired phone).
 

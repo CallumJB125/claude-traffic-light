@@ -1,4 +1,4 @@
-<!--page {"title":"Plexiform: the control plane for your coding agents","desc":"A desktop app where a small pixel character holds up a traffic light for every Claude Code, Codex, Cursor and Gemini session you run, and a team board that hands work to agents and keeps it honest.","nav":"home"}-->
+<!--page {"title":"Plexiform: the control plane for your coding agents","desc":"A desktop app where a small pixel character holds up a traffic light for supported Claude Code, Codex, Cursor and Gemini activity, and a team board that hands work to agents and keeps it honest.","nav":"home"}-->
 <!doctype html>
 <html lang="en">
 <head>
@@ -16,13 +16,13 @@
   <div class="wrap hero-grid">
     <div class="hero-copy">
       <h1 class="lines" aria-label="Know which coding agent needs you."><span class="ln" aria-hidden="true"><span>Know which</span></span><span class="ln" aria-hidden="true"><span>coding agent</span></span><span class="ln" aria-hidden="true"><span>needs you.</span></span></h1>
-      <p class="lede rv">{{brand.name}} puts a small traffic light on your desktop for every coding-agent session you run: green while it works, amber when it is your turn, red when it is stuck on you. Claude Code first, with Codex, Cursor and Gemini reporting in through hooks. The team board hands cards to agents and shows where each one got to.</p>
+      <p class="lede rv">{{brand.name}} puts a small traffic light on your desktop for supported coding-agent sessions: green while it works, amber when it is your turn, red when it is stuck on you. Claude Code first, with Codex, Cursor and Gemini reporting in through hooks. The team board hands cards to agents and shows where each one got to.</p>
       <div class="hero-cta rv">
         <a class="btn btn-os btn-light" href="/download" data-download-cta data-os-label>Download {{brand.name}}</a>
-        <a class="btn btn-ghost btn-os btn-ghost-light" href="#waitlist">Join the beta waitlist</a>
+        {{live:publicSignup}}<a class="btn btn-ghost btn-os btn-ghost-light" href="{{brand.urls.hub}}">Create a free account</a>{{/live}}{{notlive:publicSignup}}<a class="btn btn-ghost btn-os btn-ghost-light" href="#waitlist">Get public-launch updates</a>{{/notlive}}
         <a class="hero-other" href="/download" data-other-platforms hidden>Other platforms</a>
       </div>
-      <p class="hero-note rv">Private beta for Mac first. The first open takes a few extra clicks: <a href="/download#first-open">here's how</a>.</p>
+      <p class="hero-note rv">Free Plexiform beta. Connect your existing AI tools; their charges and limits still apply. The first open takes a few extra clicks: <a href="/download#first-open">here's how</a>.</p>
     </div>
     <div class="hero-stage" id="hero-stage">
       <div class="frame frame-hero" id="hero-frame" role="img" aria-label="The real Plexiform board, shown with sample data. A card is given to Claude and moves across the board while the widget's lamp goes green, red when an approval is needed, then amber when the work is ready.">
@@ -59,9 +59,9 @@
       <div class="story-copy">
         <h2 id="story-h">Give a card to an agent and watch it happen.</h2>
         <ol class="story-steps" id="story-steps">
-          <li class="on"><strong>Press Give to Claude</strong><span>On any card on your team's board. It runs on your machine, in your repo.</span></li>
+          <li class="on"><strong>Press Tackle with AI</strong><span>On any card on your team's board. It runs on your machine, in your repo.</span></li>
           <li><strong>Watch the card move</strong><span>It goes to In progress the moment the agent starts, and and the card stays in step with the agent.</span></li>
-          <li><strong>A question never hides in a terminal</strong><span>When the agent needs you, the card says so, and the widget turns red.</span></li>
+          <li><strong>Supported input requests are visible</strong><span>When a configured agent reports a current input request, its card and widget show that it needs you.</span></li>
           <li><strong>Amber means your turn</strong><span>When it finishes there's a pull request to review and a handover with what it did.</span></li>
         </ol>
       </div>
@@ -95,7 +95,7 @@
 <section class="section" id="features" aria-labelledby="lamps-h">
   <div class="wrap">
     <div class="section-head">
-      <h2 id="lamps-h" class="rv">Three lamps tell you what every agent is doing.</h2>
+      <h2 id="lamps-h" class="rv">Three lamps show reported agent activity.</h2>
       <p class="lede rv">You shouldn't have to tab through terminals to find the one that's waiting. Press a lamp to see what the character does.</p>
     </div>
     <div class="lamps">
@@ -140,9 +140,9 @@
     </div>
     <p class="caption">The real board, with sample data for an imaginary shop.</p>
     <ul class="facts grid-2" style="margin-top:36px">
-      <li>Cards run on the assignee's own Mac, in their own repo, with their own Claude or Codex login. Agent runs never go through our servers; the board syncs through your team's hub.</li>
+      <li>Cards run on the assignee's own Mac, in their own repo, with their own Claude or Codex login. AI execution uses the assignee's provider login; cards, run metadata and selected task messages sync through your team's hub.</li>
       <li>Every run keeps a handover: a short narrative, recent actions, and the files and branch involved.</li>
-      <li>A permission prompt never hides in a terminal. Once you turn it on, you can approve or deny it from the widget.</li>
+      <li>Supported permission requests can appear in the widget. Answering is off by default and must be enabled.</li>
       <li>Text passes a filter for credential-like strings and home-folder paths before it leaves your machine.</li>
     </ul>
   </div>
@@ -200,8 +200,8 @@
 <section class="section" aria-labelledby="agents-h">
   <div class="wrap grid-2">
     <div>
-      <h2 id="agents-h" class="rv">One desk for every agent, not just one vendor's.</h2>
-      <div class="prose" style="margin-top:22px"><p>Claude Code has the deepest support today. Codex, Cursor and Gemini report their state through hooks, and {{brand.name}} turns all of them into the same lamps, so a Codex run and a Claude run look the same from across the room.</p><p>It works with the logins you already have. There is no shared key and no account to swap into.</p></div>
+      <h2 id="agents-h" class="rv">One desk for supported agents.</h2>
+      <div class="prose" style="margin-top:22px"><p>Claude Code has the deepest support today. Configured hooks can report Codex, Cursor and Gemini activity to the same lamps. Activity visibility does not make every provider messageable; supported runners and explicitly configured channels have separate capabilities.</p><p>It works with the logins you already have. There is no shared key and no account to swap into.</p></div>
       <div class="chips" aria-label="Agents"><span class="chip">Claude Code</span><span class="chip">Codex</span><span class="chip">Cursor</span><span class="chip">Gemini</span></div>
     </div>
     <div class="lamp-stage agents-stage" id="agents-stage" data-lamp="working">
@@ -248,8 +248,8 @@
 <section class="section" id="privacy" aria-labelledby="priv-h">
   <div class="wrap grid-2">
     <div>
-      <h2 id="priv-h" class="rv">Almost everything stays on your computer.</h2>
-      <div class="prose" style="margin-top:22px"><p>The app sends no telemetry and no analytics, and the widget needs no account. Your prompts and Claude's replies are never stored by {{brand.name}}, and the conversation logs it reads to count tokens and cost never leave your computer.</p><p>Data leaves when you join a team board: your team's hub (run by {{brand.name}} at app.plexiform.dev today) then receives your cards, handovers and run progress, with credential-like text and home-folder paths filtered out first, and signing in to a hub shares your account name and email with it. Sharing what you're working on with teammates is a separate opt-in. Once in-app updates ship, the app also asks download.plexiform.dev for new versions, which, like any download, reveals your IP address and app version. Cloudflare passes our traffic through as our processor.</p><p class="muted">This summary follows the beta's privacy notice, which is a draft pending legal review. Hub hosting, retention and deletion terms are being written.</p></div>
+      <h2 id="priv-h" class="rv">Where your data is stored and shared.</h2>
+      <div class="prose" style="margin-top:22px"><p>The desktop app sends no telemetry or analytics, and the widget needs no account. Its usage reader calculates tokens and cost locally without copying full conversations. Local Tasks does keep task text, messages, AI activity and replies; pending widget requests and session reports can also contain bounded content.</p><p>Your team's hub receives cards, handovers, run progress and signed-in account details. In the release candidate, supported sessions in signed-in team workspaces are automatically shared to watch and send; personal sessions stay separate. Viewers can watch, and members with write access can message. Processing a message uses the session owner's provider quota and permissions. You can stop a private-session share or disable automatic sharing.</p><p>Live session messages and replies are readable by the hub operator while relayed. Board task-inbox messages, receipts and replies are stored durably as team history; queuing does not prove agent acknowledgement or resume a run. Update and download requests reveal your IP address and app version. Cloudflare serves this website; a recent check found a Web Analytics beacon in the served privacy and download pages.</p><p class="muted">This draft summary describes prepared release-candidate sharing behavior, not a claim that the candidate is already published. Legal review, hosting analytics verification and release acceptance are pending.</p></div>
       <p style="margin-top:22px"><a class="btn btn-ghost" href="/privacy">Read the privacy notice</a></p>
     </div>
     <ul class="facts">
@@ -264,12 +264,12 @@
 <section class="section" id="beta" aria-labelledby="beta-h">
   <div class="wrap grid-2">
     <div>
-      <h2 id="beta-h" class="rv">Private beta, for small teams.</h2>
-      <div class="prose" style="margin-top:22px"><p>The desktop app works on its own. The team board is where the beta needs you: a few small teams, each with an invite, using it for real work for a few weeks.</p><p>Pricing isn't announced yet. The waitlist hears first, before anything is charged.</p></div>
-      <div class="hero-cta" style="margin-top:28px"><a class="btn" href="#waitlist">Join the waitlist</a><a class="btn btn-ghost" href="/download">See the downloads</a></div>
+      <h2 id="beta-h" class="rv">Free for you and your team.</h2>
+      <div class="prose" style="margin-top:22px"><p>The desktop app and team features are free. Connect your own AI tools and accounts; their subscriptions, usage charges and permissions still apply.</p><p>Each team has its own private boards and members. Free teams support up to 25 members and 10 boards, with fair-use storage and signup limits.</p>{{live:publicSignup}}<p>Anyone can create an account, verify their email and start a team. An invitation is only needed to join someone else's team.</p>{{/live}}{{notlive:publicSignup}}<p>Public registration is being prepared. Existing team access still uses invitations.</p>{{/notlive}}</div>
+      <div class="hero-cta" style="margin-top:28px">{{live:publicSignup}}<a class="btn" href="{{brand.urls.hub}}">Create a free account</a>{{/live}}{{notlive:publicSignup}}<a class="btn" href="#waitlist">Get public-launch updates</a>{{/notlive}}<a class="btn btn-ghost" href="/download">See the downloads</a></div>
     </div>
     <ul class="facts">
-      <li>Install it today on a Mac. Windows and Linux builds appear on the download page as they're published.</li>
+      <li>{{live:windowsDownloads}}Published installers are available for macOS, Windows and Linux; check the download page for the current version.{{/live}}{{notlive:windowsDownloads}}Published beta installers are available for macOS and Linux. Windows is unavailable while its runtime acceptance is pending; check the download page for published builds.{{/notlive}}</li>
       <li>A phone companion, to approve a permission prompt when you're away from your desk, is coming.</li>
       <li>Every change is written up in the <a href="/changelog">changelog</a>, and the <a href="/docs">docs</a> list what it adds to Claude Code's settings.</li>
     </ul>
@@ -280,23 +280,24 @@
   <div class="wrap">
     <h2 id="faq-h" class="rv" style="margin-bottom:28px">Questions people ask first</h2>
     <div class="faq">
-      <details><summary>Which agents does it work with?</summary><p>Claude Code, Codex, Cursor and Gemini report their state through hooks, and {{brand.name}} turns each into the same lamps. Claude Code has the deepest support today.</p></details>
-      <details><summary>Does it read my prompts or my code?</summary><p>It never stores prompts. It reads Claude Code's conversation logs on your Mac only to count tokens and cost, and keeps the numbers. Code stays in your repo.</p></details>
-      <details><summary>What does the app send out?</summary><p>No telemetry and no analytics. If you join a team board, your team's hub (run by {{brand.name}}) receives what the board needs and your account name and email. Update checks will ask our download server for new versions. Both are described in the <a href="/privacy">privacy notice</a>.</p></details>
-      <details><summary>Why does the first open take extra steps?</summary><p>The beta isn't signed with an Apple Developer ID yet, so macOS asks you to allow it once in System Settings. <a href="/download#first-open">The steps are on the download page.</a></p></details>
-      <details><summary>Is there a Windows or Linux version?</summary><p>Builds are being prepared. The <a href="/download">download page</a> lists whatever is published right now.</p></details>
+      <details><summary>Which agents does it work with?</summary><p>Claude Code has the deepest support. Configured hooks can report Codex, Cursor and Gemini activity. Messaging requires a supported current runner or an explicitly configured session channel; hooks alone do not provide it for every provider.</p></details>
+      <details><summary>Does it read my prompts or my code?</summary><p>The usage reader reads Claude Code logs locally and keeps counts and costs. Tasks keeps task text, sent messages, AI activity and replies locally; temporary widget requests may include tool input or questions. Content you send to a team board or supported shared session can be read by its hub operator, and task-inbox messages and replies are stored there. Your chosen AI provider handles prompts and code under its own terms.</p></details>
+      <details><summary>What does the app send out?</summary><p>The desktop app sends no telemetry or analytics. Team boards receive the content you share; the release candidate automatically shares supported sessions associated with a signed-in team workspace. The hub operator can read shared messages and replies, and task inboxes retain them. Updates reveal IP address and app version. Website hosting includes an injected Cloudflare Web Analytics beacon. See the <a href="/privacy">privacy notice</a> for the boundaries.</p></details>
+      <details><summary>Why does the first open take extra steps?</summary><p>The beta isn't signed with an Apple Developer ID yet, so macOS can ask for confirmation in System Settings, including after updates. <a href="/download#first-open">The steps are on the download page.</a></p></details>
+      <details><summary>Is there a Windows or Linux version?</summary><p>{{live:windowsDownloads}}Windows installers and Linux AppImage and .deb packages are published.{{/live}}{{notlive:windowsDownloads}}Linux AppImage and .deb beta installers are published. Windows is unavailable while its runtime acceptance is pending.{{/notlive}} The <a href="/download">download page</a> lists the published builds; it does not mean the prepared release candidate is already downloadable.</p></details>
       <details><summary>Who is Buddy?</summary><p>The pixel character who holds up the traffic light.</p></details>
-      <details><summary>How do I get in?</summary><p>You can install the desktop app now. Joining a team board needs an invite: join the waitlist below, and beta spots go to small teams first.</p></details>
+      <details><summary>How do I get in?</summary><p>{{live:publicSignup}}Create a free account, verify your email and create your team, or open an invitation to join an existing team. Download the desktop app to connect supported local AI sessions.{{/live}}{{notlive:publicSignup}}You can install the desktop app now. Public registration is being prepared; existing team access still uses invitations.{{/notlive}}</p></details>
     </div>
   </div>
 </section>
 
+{{notlive:publicSignup}}
 <section class="section" id="waitlist" aria-labelledby="wl-h">
   <div class="wrap">
     <div class="cta-band">
       <div>
-        <h2 id="wl-h" class="rv">Get a place in the beta.</h2>
-        <p class="lede">Tell us where to send your invite. We'll only use your email about the beta.</p>
+        <h2 id="wl-h" class="rv">Hear when public signup opens.</h2>
+        <p class="lede">Get an email when free public registration opens. We'll only use your email about Plexiform's launch.</p>
       </div>
       <form class="form" id="wl-form" action="/api/waitlist" method="post" novalidate>
         <label>Email<input type="email" name="email" autocomplete="email" required placeholder="you@company.com" aria-describedby="wl-msg" /></label>
@@ -304,13 +305,14 @@
           <select name="uses"><option value="">Choose one</option><option>Claude Code</option><option>Codex</option><option>Cursor</option><option>Gemini</option><option>More than one</option></select>
         </label>
         <input class="hp" type="text" name="hp_trap_field" tabindex="-1" autocomplete="off" aria-hidden="true" />
-        <button class="btn" type="submit">Join the waitlist</button>
+        <button class="btn" type="submit">Keep me updated</button>
         <p class="form-msg" id="wl-msg" role="status" aria-live="polite"></p>
       </form>
     </div>
   </div>
 </section>
 
+{{/notlive}}
 </main>
 {{include:footer}}
 <script src="{{asset:assets/site.js}}" defer></script>

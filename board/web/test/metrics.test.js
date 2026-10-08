@@ -378,3 +378,16 @@ test('pullJournal: rows from many hub epochs (one per boot) are just rows, never
   assert.equal(res.fold.lastSeq, rows.length);
   assert.deepEqual(windowMetrics(res.fold, NOW), windowMetrics(foldRows(emptyFold(), rows), NOW));
 });
+
+test('a card a person moved to Done while its AI still reports fresh work does not count as finished', () => {
+  const j = journal();
+  j.create('a', 3 * DAY); j.move('a', 2 * DAY, 'todo', 'in_progress'); j.move('a', DAY, 'in_progress', 'done');
+  j.create('b', 3 * DAY); j.move('b', 2 * DAY, 'todo', 'in_progress'); j.move('b', DAY, 'in_progress', 'done');
+  const capture = { source: 'local_observation', fresh: true, status: 'working' };
+  const cards = [view({ id: 'a', run_state: 'todo', run: null, live: null, column: 'done', capture }), view({ id: 'b', run_state: 'todo', run: null, live: null, column: 'done' })];
+  const m = dashboardMetrics({ rows: j.rows, cards, now: NOW });
+  assert.equal(m.throughput.total, 1);
+  assert.deepEqual(m.cycle.items.map((i) => i.card_id), ['b']);
+  const stale = dashboardMetrics({ rows: j.rows, cards: [{ ...cards[0], capture: { ...capture, fresh: false, status: 'unknown' } }, cards[1]], now: NOW });
+  assert.equal(stale.throughput.total, 2);
+});

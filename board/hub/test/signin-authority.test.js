@@ -73,10 +73,13 @@ for (const op of ['label-rename','label-delete']) test(`${op} cannot retain admi
  assert.equal(r.status,403,r.text);
 });
 
-test('stable paid dispatch retains one-effect retry, checks payload and current authority', async t => {
+test('durable paid dispatch retains one-effect retry, checks payload and current authority', async t => {
  const fx = await rig(t), {A,users} = fx, path = `/api/cards/${A.card}/actions/dispatch`, body = {request_id:randomUUID(),budget_usd:5};
  const first = await fx.as(users.amember,'POST',path,body); assert.equal(first.status,200,first.text);
- const before = snapshot(fx); const second = await fx.as(users.amember,'POST',path,body); assert.equal(second.status,200,second.text); assert.equal(second.headers.get('board-replayed'),'1');
+ const originalDispatches = fx.db.all('SELECT * FROM dispatches'), originalCard = fx.h.hub.card(A.card);
+ const second = await fx.as(users.amember,'POST',path,body); assert.equal(second.status,200,second.text); assert.equal(second.headers.get('board-replayed'),null,'paid retries use their durable choice-bound dispatch row');
+ assert.deepEqual(fx.db.all('SELECT * FROM dispatches'),originalDispatches,'the durable retry creates no second paid dispatch'); assert.deepEqual(fx.h.hub.card(A.card),originalCard,'the durable retry preserves the task and its budget');
+ const before = snapshot(fx);
  assert.equal((await fx.as(users.amember,'POST',path,{...body,budget_usd:10})).status,409); assert.equal(snapshot(fx),before);
  fx.h.hub.requestCache.clear(); const dispatches = fx.db.all('SELECT * FROM dispatches'), card = fx.h.hub.card(A.card);
  const durable = await fx.as(users.amember,'POST',path,body); assert.equal(durable.status,200,durable.text);

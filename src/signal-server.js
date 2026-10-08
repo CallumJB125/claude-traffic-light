@@ -3,6 +3,7 @@
 // (aggregateState) and re-broadcast (broadcastStatus) without importing the
 // core.
 const fs = require('fs');
+const { onQuit } = require('./quit-handlers');
 const os = require('os');
 const path = require('path');
 const http = require('http'); // privacy-flow: local-server
@@ -10,8 +11,10 @@ const crypto = require('crypto');
 const { app } = require('electron');
 const Rules = require('../rules.js');
 const SessionState = require('../hooks/session-state.js');
+const HandoverTap = require('../hooks/handover-tap.js');
 const Adapters = require('../adapters/index.js');
 const Answer = require('../hooks/answer-file.js');
+const AgentReports = require('./agent-self-report');
 const { describeRequest } = require('./request-view.js');
 
 const SIGNAL_PORT = Number(process.env.CLAUDE_TRAFFIC_LIGHT_PORT || 47172);
@@ -28,7 +31,7 @@ function tokenMatches(sent) {
 // `rootDir`, `sessionsDir`, `requestsDir` are the same paths main.js computes;
 // `aggregateState` and `broadcastStatus` are the live core callbacks; tests
 // pass their own port, retry timing and app.
-module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcastStatus, port = SIGNAL_PORT, retries = 20, retryMs = 500, app: electronApp = app }) => {
+module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcastStatus, teamActivity = null, port = SIGNAL_PORT, retries = 20, retryMs = 500, app: electronApp = app }) => {
   // Per-request answer keys from the blocking hooks: memory only, never on
   // disk, so nothing that can write requests/ can also sign an answer.
   const requestKeys = Answer.requestKeys();
@@ -50,6 +53,7 @@ module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcast
     if (!adapter) return done(404, { error: 'unknown adapter', known: Adapters.list().map((a) => a.id) });
     const events = adapter.normalize(event, payload).filter((e) => KNOWN_SIGNALS.has(e.signal));
     const host = os.hostname().split('.')[0];
+    for (const e of events) HandoverTap.record({ rootDir, adapter: adapter.id, signal: e.signal, sessionId: SessionState.safeSessionId(e.sessionId || 'default'), cwd: e.cwd, data: payload });
     for (const e of events) SessionState.applyAdapterEvent(sessionsDir, { host, source: adapter.id, event: e, fallbackSession: 'default', waitMs: 250 });
     if (events.length) broadcastStatus();
     const reply = adapter.reply ? adapter.reply(event, payload) : null;
@@ -71,8 +75,27 @@ module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcast
           : done(400, { error: 'nonce must be 64 hex chars' })));
       }
       const hookRoute = /^\/hook\/([\w-]+)(?:\?event=([\w-]*))?$/.exec(req.url || '');
-      if (req.method !== 'POST' || (req.url !== '/signal' && req.url !== '/request-key' && !hookRoute)) return done(404, { error: 'POST /signal, POST /hook/:adapter or GET /status' });
+      if (req.method !== 'POST' || (req.url !== '/signal' && req.url !== '/request-key' && req.url !== '/metadata/agents' && req.url !== '/team/activity' && !hookRoute)) return done(404, { error: 'POST /signal, POST /hook/:adapter or GET /status' });
       if (!tokenMatches(req.headers[SIGNAL_TOKEN_HEADER])) return done(401, { error: `send header ${SIGNAL_TOKEN_HEADER} with the contents of ${tokenFile}` });
+      if (req.url === '/metadata/agents') { // privacy-flow: agent-self-report
+        let bytes = 0; const chunks = [];
+        const bodyDeadline = setTimeout(() => req.destroy(),1500);
+        req.once('close', () => clearTimeout(bodyDeadline));
+        req.on('data', chunk => { bytes += chunk.length; if (bytes > 4096) req.destroy(); else chunks.push(chunk); });
+        req.on('end', () => {
+          clearTimeout(bodyDeadline);
+          let request; try { request = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { return done(400,{ok:false,status:'invalid'}); }
+          let result; try { result = AgentReports.apply({sessionsDir,host:os.hostname().split('.')[0],request}); } catch { result = {ok:false,status:'unavailable'}; }
+          if (result.ok) broadcastStatus();
+          done(result.ok ? 200 : result.status === 'invalid' ? 400 : 409,result);
+        });
+        return;
+      }
+      // Team brief and team_* MCP tools (src/team-activity.js): main holds the hub sign-in.
+      if (req.url === '/team/activity') { // privacy-flow: team-brief
+        if (!teamActivity) return done(404, { error: 'team activity is not available' });
+        return readBody(req, done, (d) => Promise.resolve(teamActivity(String(d.op || ''), d.args && typeof d.args === 'object' ? d.args : {})).then((r) => done(200, r), () => done(200, { available: false, reason: 'offline' })));
+      }
       if (hookRoute) return readBody(req, done, (d) => hookEvent(hookRoute[1], hookRoute[2] || d.hook_event_name || '', d, done));
       if (req.url === '/request-key') return readBody(req, done, (d) => (requestKeys.register(d.id, d.key) ? done(200, { ok: true }) : done(409, { error: 'bad or duplicate request key' }))); // privacy-flow: request-key
       readBody(req, done, (d) => {
@@ -80,16 +103,18 @@ module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcast
         const source = String(d.source || 'custom').replace(/[^\w.-]/g, '').slice(0, 24) || 'custom';
         const session = String(d.session || 'default').replace(/[^\w.-]/g, '').slice(0, 80) || 'default';
         const file = path.join(sessionsDir, `${os.hostname().split('.')[0]}-${source}-${session}.json`);
+        HandoverTap.record({ rootDir, adapter: source, signal: d.signal, sessionId: session, cwd: typeof d.cwd === 'string' ? d.cwd.slice(0, 500) : '', data: {} });
         if (d.signal === 'session-end') { fs.rmSync(file, { force: true }); broadcastStatus(); return done(200, { ok: true }); }
         const hostApp = typeof d.hostApp === 'string' ? d.hostApp : undefined;
         const cwd = typeof d.cwd === 'string' ? d.cwd.slice(0, 500) : '';
         const tool = typeof d.tool === 'string' ? d.tool.slice(0, 80) : null;
         // Waits briefly rather than skipping: a dropped signal is a wrong light.
         SessionState.withLock(file, () => {
-          const next = SessionState.applyBareSignal(SessionState.readJson(file), { sessionId: session, host: os.hostname().split('.')[0], source, cwd, signal: d.signal, tool, hostApp });
+          const next = SessionState.applyBareSignal(SessionState.readJson(file), { sessionId: session, host: os.hostname().split('.')[0], source, cwd, signal: d.signal, tool, hostApp, taskId:d.taskId, taskTitle:typeof d.taskTitle==='string'?require('./work-capture').clean(d.taskTitle,200):undefined });
           // A caller may also report its own agents, mode, iteration or tasks.
           if (d.tasks && typeof d.tasks === 'object') next.tasks = d.tasks;
           if (Array.isArray(d.agents)) next.agents = d.agents;
+          if (typeof d.model==='string'&&/^[A-Za-z0-9._:/@+-]{1,80}$/.test(d.model)) next.model=d.model;
           if (typeof d.mode === 'string') next.mode = d.mode;
           if (Number.isFinite(d.iteration)) next.iteration = d.iteration;
           SessionState.writeJsonAtomic(file, next);
@@ -117,7 +142,7 @@ module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcast
         fs.renameSync(tmp, portFile);
       } catch {}
       // Only the instance that bound the port owns these files.
-      electronApp.on('will-quit', () => { try { fs.rmSync(portFile, { force: true }); fs.rmSync(tokenFile, { force: true }); } catch {} });
+      onQuit(electronApp, () => { try { fs.rmSync(portFile, { force: true }); fs.rmSync(tokenFile, { force: true }); } catch {} });
     });
     server.listen(port, '127.0.0.1');
     return server;

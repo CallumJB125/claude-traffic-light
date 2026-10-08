@@ -58,6 +58,14 @@ const pathMatches = (re, p) => re.test(p) || re.test(cleanPath(p));
 export function pathForms(p, dir) {
   const out = [p, cleanPath(p)];
   if (!p.startsWith('/') && typeof dir === 'string' && dir.startsWith('/')) out.push(cleanPath(`${dir}/${p}`));
+  // Windows spelling is an additional refusal form only. Keep original
+  // POSIX forms and signed tool input byte-identical. Backslashes can name
+  // literal POSIX characters, so this conservative form may only deny more.
+  if (p.includes('\\') || /^[a-z]:/i.test(p) || (typeof dir === 'string' && /^[a-z]:[\\/]/i.test(dir))) {
+    const windows = p.replace(/\\/g, '/');
+    out.push(windows, cleanPath(windows));
+    if (!/^(?:[a-z]:|\/)/i.test(windows) && typeof dir === 'string' && /^[a-z]:[\\/]/i.test(dir)) out.push(cleanPath(`${dir.replace(/\\/g, '/')}/${windows}`));
+  }
   return out;
 }
 
@@ -538,8 +546,8 @@ function pathTexts(toolName, input, texts, cwd) {
     const fields = ['file_path', 'notebook_path', 'path', 'glob', ...(/^glob$/i.test(toolName) ? ['pattern'] : [])];
     vals = fields.map((f) => input[f]).filter((x) => typeof x === 'string');
   }
-  if (vals?.length) return vals.flatMap((t) => [t, cleanPath(t)]);
-  return [...texts.flatMap((t) => [t, cleanPath(t)]), ...texts.flatMap(patchPaths).flatMap((p) => pathForms(p, cwd))];
+  if (vals?.length) return vals.flatMap((t) => pathForms(t, cwd));
+  return [...texts.flatMap((t) => pathForms(t, cwd)), ...texts.flatMap(patchPaths).flatMap((p) => pathForms(p, cwd))];
 }
 
 const desk = (ruleId, reason) => ({ blocked: true, ruleId, reason, message: DESK_MESSAGE });

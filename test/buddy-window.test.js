@@ -6,7 +6,7 @@ const os = require('node:os');
 const fs = require('node:fs');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
-const { PAGES, flat, pageById, hubPageUrl, navDecision, openDecision, connectDecision, manifestPost, parseConnectName, connectUrlOk, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl } = require('../buddy-window/pages');
+const { PAGES, SECTIONS, FOOTER, sectionOf, flat, pageById, hubPageUrl, navDecision, openDecision, connectDecision, manifestPost, parseConnectName, connectUrlOk, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl } = require('../buddy-window/pages');
 const { createHubSupervisor, hubEnv, MAX_RESTARTS } = require('../buddy-window/hub-process');
 
 // ── pages ──────────────────────────────────────────────────────────────────
@@ -16,11 +16,36 @@ test('every page has a unique id, a title and a known kind', () => {
   assert.equal(new Set(all.map((p) => p.id)).size, all.length);
   for (const p of all) {
     assert.ok(p.title, p.id);
-    assert.ok(['hub', 'window', 'local', 'soon'].includes(p.kind), p.id);
+    assert.ok(['hub', 'window', 'local'].includes(p.kind), `${p.id}: no placeholder pages`);
+    assert.ok(!p.pending, `${p.id}: no soon pill`);
     if (p.kind === 'window') assert.ok(p.window, p.id);
   }
-  for (const want of ['board', 'myday', 'tasks', 'integrations', 'team', 'usage', 'setups', 'plugins', 'settings']) assert.ok(pageById(want), want);
-  assert.equal(PAGES[0].id, 'board');
+  for (const want of ['board', 'myday', 'tasks', 'integrations', 'team', 'usage', 'setups', 'settings', 'aitools']) assert.ok(pageById(want), want);
+  assert.equal(PAGES[0].id, 'overview');
+  assert.ok(PAGES.some(page => page.id === 'board'));
+});
+
+test('the sidebar lists every main feature as its own section and reaches every page exactly once', () => {
+  assert.deepEqual(SECTIONS.map((s) => s.id), ['home', 'board', 'tasks', 'sessions', 'checkpoints', 'memory', 'usage', 'optimiser', 'clients', 'team', 'aitools', 'widget', 'phone', 'settings']);
+  assert.deepEqual(SECTIONS.map((s) => s.title), ['Home', 'Board', 'Tasks', 'Running now', 'What changed', 'Search everything', 'Usage & cost', 'Usage optimiser', 'Client billing', 'Team', 'AI tools', 'Widget', 'Phone', 'Settings']);
+  assert.deepEqual(FOOTER, ['help', 'feedback', 'updates']);
+  const listed = [...SECTIONS.flatMap((s) => s.pages), ...FOOTER];
+  assert.equal(new Set(listed).size, listed.length, 'no page in two sections');
+  assert.deepEqual([...listed].sort(), flat().filter((p) => !p.hidden).map((p) => p.id).sort(), 'no visible page is orphaned');
+  for (const s of SECTIONS) assert.ok(s.pages.includes(s.default) && pageById(s.default), `${s.id} opens a page it holds`);
+  assert.equal(sectionOf('board:calendar'), 'board');
+  assert.equal(sectionOf('waiting'), 'home');
+  assert.equal(sectionOf('sessions'), 'sessions');
+  assert.equal(sectionOf('optimiser'), 'optimiser', 'Usage optimiser is a section of its own');
+  assert.equal(pageById('sessions').title, 'Running now');
+  assert.equal(pageById('tasks').title, 'Tasks');
+  assert.equal(SECTIONS.find((s) => s.id === 'aitools').default, 'aitools');
+  assert.equal(sectionOf('help'), null, 'footer links are not in a section');
+  assert.equal(sectionOf('integrations'), 'team');
+  assert.deepEqual(SECTIONS.find((s) => s.id === 'widget').pages, ['widget', 'lights'], 'Widget configuration moved from Settings to the Widget section');
+  assert.equal(sectionOf('lights'), 'widget');
+  assert.equal(sectionOf('nope'), null);
+  assert.equal(pageById('plugins'), null);
 });
 
 test('local pages name an app file and its preload, and both exist', () => {
@@ -1296,7 +1321,7 @@ test('runner.stopped: parked_pending is read and shown as runs being handed over
   c.emit('message', { type: 'runner.stopped', parked: 0, parked_pending: -2 });
   assert.equal(d.status().parkedPending, 0);
   const page = fs.readFileSync(path.join(__dirname, '..', 'buddy-window', 'account.js'), 'utf8');
-  assert.match(page, /being handed over/);
+  assert.match(page, /being moved to another AI/);
 });
 
 test('runner.config: data_dir is made 0700, ours and not a symlink, else the runner does not start', async () => {
@@ -1387,7 +1412,7 @@ async function signIn(hub, origin, email, extra = {}) {
 
 test('ROUTES: every endpoint is one [method, path] row', () => {
   for (const [name, [method, p]] of Object.entries(ROUTES)) {
-    assert.ok(['GET', 'POST', 'PATCH', 'DELETE'].includes(method), name);
+    assert.ok(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(method), name);
     assert.match(p, /^\/api\//, name);
   }
 });
@@ -1996,4 +2021,20 @@ test('runner events: the window object exposes onRunnerEvent(cb) → unsubscribe
   assert.match(idx, /const runnerListeners = new Set\(\);/);
   assert.match(idx, /onEvent: emitRunnerEvent,/);
   assert.match(idx, /onRunnerEvent\(cb\) \{ if \(typeof cb !== 'function'\) return \(\) => \{\}; runnerListeners\.add\(cb\); return \(\) => runnerListeners\.delete\(cb\); \},/);
+});
+
+test('Setups is listed under Settings now that personal export/import, Apply and Undo exist (free entitlement)', () => {
+  const { SECTIONS, pageById, sectionOf } = require('../buddy-window/pages');
+  assert.ok(SECTIONS.find(s => s.id === 'settings').pages.includes('setups'));
+  assert.equal(sectionOf('setups'), 'settings');
+  assert.equal(pageById('setups').file, 'setups.html');
+});
+
+test('Calendar and Timeline leave the sidebar but stay addressable; PLEXIFORM_SHOW_PLANNER=1 restores them', () => {
+  const board = SECTIONS.find((s) => s.id === 'board');
+  assert.ok(!board.pages.includes('board:calendar') && !board.pages.includes('board:timeline'));
+  assert.equal(pageById('board:calendar').view, 'calendar');
+  assert.equal(pageById('board:timeline').view, 'timeline');
+  const out = require('node:child_process').execFileSync(process.execPath, ['-e', "console.log(JSON.stringify(require('./buddy-window/pages').SECTIONS.find((s) => s.id === 'board').pages))"], { cwd: path.join(__dirname, '..'), env: { ...process.env, PLEXIFORM_SHOW_PLANNER: '1' } });
+  assert.deepEqual(JSON.parse(out), ['board', 'board:table', 'board:history', 'board:calendar', 'board:timeline', 'board:dashboard']);
 });

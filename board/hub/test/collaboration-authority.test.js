@@ -18,7 +18,7 @@ const losses = {
   membership: [403, ({ db, A, h }) => db.run('UPDATE members SET removed_at = ? WHERE id = ?', h.hub.iso(), A.member)],
   user: [401, ({ db, users, h }) => db.run('UPDATE users SET deleted_at = ? WHERE id = ?', h.hub.iso(), users.amember.id)],
   team: [403, ({ db, A, h }) => db.run('UPDATE orgs SET deleted_at = ? WHERE id = ?', h.hub.iso(), A.team)],
-  board: [409, ({ db, A, h }) => { db.run('ALTER TABLE boards ADD COLUMN archived_at TEXT'); db.run('UPDATE boards SET archived_at = ? WHERE id = ?', h.hub.iso(), A.board); }],
+  board: [409, ({ db, A, h }) => db.run('UPDATE boards SET archived_at = ? WHERE id = ?', h.hub.iso(), A.board)],
 };
 
 // Hold the actual hub queue until authentication and initial scope validation
@@ -174,9 +174,6 @@ test('cached collaboration response cannot satisfy another card/route or a newly
     const otherRoute = await fx.as(fx.users.amember, 'POST', `/api/cards/${fx.A.card}/archive`, { request_id: body.request_id, version: fx.h.hub.card(fx.A.card).version });
     assert.equal(otherRoute.status, 409, otherRoute.text);
     assert.equal(content(fx), before);
-    // The stable release has no board lifecycle; exercise its optional guard
-    // without shipping the unrelated029 lifecycle migration.
-    fx.db.run('ALTER TABLE boards ADD COLUMN archived_at TEXT');
     fx.db.run('UPDATE boards SET archived_at = ? WHERE id = ?', fx.h.hub.iso(), fx.A.board);
     const denied = await fx.as(fx.users.amember, 'POST', path, body);
     assert.equal(denied.status, 409, denied.text);

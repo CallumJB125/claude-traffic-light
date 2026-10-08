@@ -88,14 +88,16 @@ function extractFn(name) {
   }
   throw new Error(`unbalanced ${name}`);
 }
-const MAIN_PIPELINE = new Function('fs', 'path', 'Rules', 'Agents', 'SessionState', 'SESSIONS_DIR', 'Date', 'process', `
+const MAIN_PIPELINE = new Function('fs', 'path', 'Rules', 'Agents', 'SessionState', 'SESSIONS_DIR', 'Date', 'process', 'AgentsSync', `
   const sessionFileCache = new Map();
   const WAITING_SIGNALS = Rules.WAITING_ON_YOU;
   ${/const AGENT_KEEPALIVE_MS = [^;]+;/.exec(MAIN_SRC)[0]}
   const LOCAL_HOST = ${JSON.stringify(HOST)};
   function logTransition() {}
   function wakeWhenHoldEnds() {}
-  ${['readSessionFile', 'writeJsonAtomic', 'readSessions', 'syncAgents'].map(extractFn).join('\n')}
+  ${['readSessionFile', 'writeJsonAtomic', 'readSessions'].map(extractFn).join('\n')}
+  // main.js runs this pass in a worker (src/agents-sync.js); the fuzzer runs it inline, as the fallback does.
+  const syncAgents = () => AgentsSync.syncAgentFiles({ sessionsDir: SESSIONS_DIR, Agents, writeMerged: writeJsonAtomic });
   return { readSessions, syncAgents, sessionFileCache };
 `);
 
@@ -142,7 +144,7 @@ function runSequence(seed) {
   const FDate = fakeDate(clock);
   const transcripts = new Map();
   const agentsShim = { ...Agents, scanAgents: (s) => Agents.scanAgents(s, { teamsDir, projectsDir, stateDir, now: clock.now, transcripts }) };
-  const main = MAIN_PIPELINE(fs, path, Rules, agentsShim, require('../hooks/session-state.js'), sessionsDir, FDate, process);
+  const main = MAIN_PIPELINE(fs, path, Rules, agentsShim, require('../hooks/session-state.js'), sessionsDir, FDate, process, require('../src/agents-sync.js'));
   const rules = Rules.defaultRules();
 
   const sessions = Array.from({ length: between(1, 4) }, (_, k) => ({

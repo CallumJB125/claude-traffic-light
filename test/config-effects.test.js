@@ -37,3 +37,8 @@ test('a save that names a key applies its effect even when the value is the same
   applyConfigSideEffects({ showWidget: true }, { showWidget: true }, d, (k) => k === 'showWidget');
   assert.ok(names().includes('applyWidgetVisibility'));
 });
+
+
+test('automatic team sharing setting applies the hosting side effect',()=>{
+ let calls=0;applyConfigSideEffects({teamSessionSharing:true},{teamSessionSharing:false},{syncInteractionHost:()=>calls++,broadcastStatus(){}});assert.equal(calls,1);
+});

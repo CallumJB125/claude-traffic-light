@@ -398,9 +398,10 @@ test('config: SES validation fails with fixed texts that never repeat a value', 
   assert.doesNotThrow(() => validateConfig(sesBase({ sesSessionToken: randomBytes(600).toString('base64'), sesFromFormat: 'bare' })));
 });
 
-test('config: SES counts as a mailer for an exposed hub; the console mailer is still refused there', () => {
-  const exposed = (over = {}) => sesBase({ publicUrl: 'https://buddy.acme.test', trustCfIp: true, signinMethods: [], accountsDev: false, ...over });
-  assert.doesNotThrow(() => validateConfig(exposed()), 'SES alone is a sign-in method');
+test('config: SES counts as a sign-in method for an exposed hub only with BOARD_EMAIL_SIGNIN; the console mailer is still refused there', () => {
+  const exposed = (over = {}) => sesBase({ publicUrl: 'https://buddy.acme.test', trustCfIp: true, signinMethods: [], accountsDev: false, emailSignin: true, ...over });
+  assert.doesNotThrow(() => validateConfig(exposed()), 'SES with BOARD_EMAIL_SIGNIN=1 is a sign-in method');
+  assert.throws(() => validateConfig(exposed({ emailSignin: false })), /needs a sign-in method/, 'a mailer alone (invites) is not a sign-in method');
   assert.equal(createMailer(exposed(), { fetchImpl: async () => new Response('{}') }).kind, 'ses');
   assert.throws(() => validateConfig(exposed({ mailProvider: null, sesRegion: null, sesAccessKeyId: null, sesSecretAccessKey: null })), /needs a sign-in method/);
   assert.throws(() => validateConfig(exposed({ consoleMailer: true })), /BOARD_CONSOLE_MAILER is for a loopback hub that is not exposed/);
@@ -411,7 +412,7 @@ test('configured SES: createApp builds it from config, /api/auth/methods says em
   const c = creds();
   const calls = [];
   const fetchImpl = async (url, init) => { calls.push({ url, init }); return new Response(JSON.stringify({ MessageId: 'm-1' }), { status: 200 }); };
-  const cfg = testConfig({ auth: 'accounts', devLoginSecret: null, accountsDev: true, signup: 'open', mailProvider: 'ses', sesRegion: 'me-south-1', sesAccessKeyId: c.accessKeyId, sesSecretAccessKey: c.secretAccessKey, mailFrom: FROM });
+  const cfg = testConfig({ auth: 'accounts', devLoginSecret: null, accountsDev: true, signup: 'open', emailSignin: true, mailProvider: 'ses', sesRegion: 'me-south-1', sesAccessKeyId: c.accessKeyId, sesSecretAccessKey: c.secretAccessKey, mailFrom: FROM });
   const clock = fakeClock();
   const app = createApp(cfg, { clock, log: silentLogger, github: fakeGitHub(), timers: false, fetchImpl });
   seedDev(app.hub);

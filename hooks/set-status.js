@@ -66,6 +66,26 @@ if (!process.stdin.isTTY) {
   }
 }
 
+// Cost guard (hooks/spend-gate.js): a PreToolUse the app's enforced spend cap
+// refuses. Fail-open: no gate, a stale one, or any error allows the call. A
+// refused call takes the full path so this process prints the decision.
+let gateDeny = null;
+if (signal === 'tool-use') { try { gateDeny = require('./spend-gate.js').decide({ rootDir: ROOT_DIR, sessionId: data?.session_id, tool: data?.tool_name }); } catch { gateDeny = null; } }
+
+// Fast path (hooks/fast-hook.js; the app turns it on with its `fastHook`
+// setting, default off): hand a frequent event to the running app, which runs
+// this same script in-process. Anything but a clear "handled" within a short
+// timeout, and the work below happens here exactly as before.
+const Fast = require('./fast-hook.js');
+// The app's own in-process run sets NO_FAST: it must never forward to itself.
+const fastEndpoint = !gateDeny && !process.env.PLEXIFORM_NO_FAST && Fast.eligible(signal, data) ? Fast.readEndpoint(ROOT_DIR) : null;
+if (fastEndpoint) {
+  Fast.forward(Fast.build({ signal, payload, env: process.env, ppid: process.ppid, cwd: process.cwd(), token: fastEndpoint.token }), fastEndpoint)
+    .then((handled) => (handled ? process.exit(0) : fullPath()), () => fullPath());
+} else {
+  fullPath();
+}
+function fullPath() {
 // ── Which app is this session running inside? ──────────────────────────────
 // The widget walks to that app's Dock icon and knocks, so it has to know the
 // real host, not just "some terminal is running". Bundle id and TERM_PROGRAM
@@ -251,6 +271,8 @@ function claudePidWindows(cached, fresh) {
 }
 
 const sessionId = (data && (data.session_id || data.sessionId)) || process.env.CLAUDE_SESSION_ID || 'unknown';
+// Where this event happened: a Bash cd moves it, and a subagent's hooks carry
+// the subagent's own cwd under the parent's session id.
 const cwd = (data && data.cwd) || process.cwd();
 const file = path.join(SESSIONS_DIR, `${HOST_TAG}-${sessionId}.json`);
 
@@ -259,8 +281,9 @@ if (signal === 'session-end') {
   process.exit(0);
 }
 
-// What this hook prints for Claude Code (the PermissionRequest decision).
-let hookOutput = null;
+// What this hook prints for Claude Code (the PermissionRequest decision, or
+// the cost guard's PreToolUse deny).
+let hookOutput = gateDeny;
 
 // fs.writeSync rather than process.stdout.write: stdout is a pipe, which is
 // asynchronous on macOS, and process.exit would cut a large reply short.
@@ -290,6 +313,7 @@ function modelOf(payload) {
 const Claude = require('../adapters/claude-code.js');
 const { resolved, askKind, via, tool } = Claude.resolveSignal(signal, data);
 if (!resolved) process.exit(0);
+try { require('./handover-tap.js').record({ rootDir: ROOT_DIR, adapter: 'claude-code', signal: resolved, sessionId, cwd, data }); } catch { /* the handover is best effort */ }
 
 // ── Other agents ────────────────────────────────────────────────────────────
 // SubagentStart/Stop carry the agent's id and type; every one Claude spawns
@@ -307,15 +331,25 @@ function updateAgents(prevAgents, signal, payload, nowIso) {
     // existed, anything not a plain subagent); the hooks own their own entries
     // whatever kind the scan has since labelled them.
     if (a.source === 'scan' || (a.source !== 'hook' && a.kind && a.kind !== 'subagent')) return true;
-    return a.status === 'done' ? now - t < DONE_KEEP_MS : now - t < AGENT_MAX_MS;
+    return a.status === 'done' || a.status === 'stopped' ? now - t < DONE_KEEP_MS : now - t < AGENT_MAX_MS;
   });
+  const p = payload || {};
+  // A subagent's own tool hook: proof of life for the reader's quiet window.
+  if (/^tool-/.test(signal) && p.agent_id) {
+    agents = agents.map((a) => (a.id === String(p.agent_id) && a.source === 'hook' ? { ...a, lastAt: nowIso } : a));
+  }
+  // A killed subagent never fires SubagentStop; the parent's successful
+  // TaskStop for it (PostToolUse) is the only word that it ended.
+  const stopId = signal === 'tool-done' && p.tool_name === 'TaskStop' && p.tool_input ? p.tool_input.task_id || p.tool_input.shell_id : null;
+  if (stopId) {
+    agents = agents.map((a) => (a.id === String(stopId) && a.source === 'hook' && a.status !== 'done' ? { ...a, status: 'stopped', since: nowIso } : a));
+  }
   // Not on `stop`: a foreground Agent call blocks the turn, so a turn can only
   // end while *background* agents are still running. They end via SubagentStop.
   if (signal === 'session-start') {
     return agents.map((a) => ((a.source === 'hook' || (!a.source && a.kind === 'subagent')) && a.status !== 'done' ? { ...a, status: 'done' } : a));
   }
   if (signal !== 'subagent-start' && signal !== 'subagent-done') return agents;
-  const p = payload || {};
   const id = String(p.agent_id || p.agentId || p.subagent_id || p.task_id || `agent-${now}`);
   // 'oh-my-claudecode:executor' is 'executor' on a 12px chip.
   const name = String(p.agent_type || p.subagent_type || p.agentType || p.agent_name || p.description || 'agent').split(':').pop().slice(0, 40);
@@ -352,7 +386,22 @@ const fromSubagent = (/^tool-/.test(resolved) || resolved === 'permission-denied
 // and a background agent after the turn ended are bookkeeping, and the idle
 // nudge after a failed turn keeps the failure.
 function stepOf(prev, now) {
-  return Machine.step(prev, { signal: resolved, fromSubagent, writer: 'hook', sessionSource: data?.source }, now);
+  const inputs = inputState(prev, now);
+  const pending = inputs.requests.length > 0 || inputs.overflow;
+  const resume = inputs.answered && !pending && prev?.signal === 'permission-ask';
+  const nextSignal = pending ? 'permission-ask' : resume && resolved === 'subagent-done' ? 'tool-done' : resolved;
+  const step = Machine.step(prev, { signal: nextSignal, fromSubagent: pending || resume ? false : fromSubagent, writer: 'hook', sessionSource: data?.source }, now);
+  // Unrelated tool activity must not renew the original input's waiting clock.
+  if (pending && inputs.requests.length) {
+    step.updatedAt = inputs.requests.reduce((latest, r) => Date.parse(r.askedAt) > Date.parse(latest) ? r.askedAt : latest, inputs.requests[0].askedAt);
+    if (resolved !== 'prompt-submit') step.touchedAt = prev?.touchedAt ?? null;
+  }
+  return step;
+}
+
+function inputState(prev, now) {
+  return Machine.reduceClaudeInputs(prev, { signal: resolved, askKind, toolUseId: data?.tool_use_id,
+    agentId: data?.agent_id ?? null, tool }, now);
 }
 
 // StopFailure carries error (rate_limit, server_error, unknown, …),
@@ -398,6 +447,10 @@ function blockedOf(prev, nowIso) {
 function nextSession(prev, { hostApp, pid, terminal, owned }) {
   const now = new Date().toISOString();
   const t = stepOf(prev, now);
+  const inputs = inputState(prev, now);
+  const activeInput = inputs.requests[0];
+  const inputKey = activeInput ? JSON.stringify([activeInput.agentId, activeInput.id]) : null;
+  const currentInput = activeInput && activeInput.id === data?.tool_use_id && activeInput.agentId === (data?.agent_id ?? null) && resolved === 'permission-ask';
   // Task progress for the current turn: created/done counts, reset per prompt.
   let tasks = resolved === 'prompt-submit' ? { created: 0, done: 0 } : (prev?.tasks || { created: 0, done: 0 });
   if (resolved === 'task-created') tasks = { ...tasks, created: tasks.created + 1 };
@@ -413,15 +466,22 @@ function nextSession(prev, { hostApp, pid, terminal, owned }) {
     : askKind === 'notification' && (prev?.signal === 'stop' || prev?.signal === 'idle-nudge') ? `${via} after-stop` : via;
   // A compaction's SessionStart is the same session carrying on, so its
   // background agents are still running.
-  const agents = updateAgents(prev?.agents, resolved === 'compact' ? 'compact' : signal, data, now);
+  const agents = updateAgents(prev?.agents, resolved === 'compact' ? 'compact' : signal, data, now).map(a => {
+    if (a.source !== 'hook' || ['done', 'stopped'].includes(a.status)) return a;
+    if (inputs.requests.some(r => r.agentId === a.id)) return { ...a, status: 'waiting', lastAt: now };
+    if (a.status === 'waiting' && data?.agent_id === a.id && inputs.answered) return { ...a, status: 'working', lastAt: now };
+    return a;
+  });
   return {
-    sessionId, host: HOST_TAG, hostApp, claudePid: pid || undefined, cwd, signal: signalOut,
+    // The session's project is where it started (a resume starts afresh), so
+    // neither a cd nor a subagent's events relabel it.
+    sessionId, host: HOST_TAG, hostApp, claudePid: pid || undefined, cwd: (resolved === 'session-start' ? cwd : prev?.cwd) || cwd, signal: signalOut,
     // Where the exact tab is (terminal-id.js): recorded at SessionStart only.
     terminal: terminal || prev?.terminal || undefined,
-    tool: signalOut === resolved ? tool : (prev?.tool ?? null),
+    tool: activeInput ? activeInput.tool : signalOut === resolved ? tool : (prev?.tool ?? null),
     prevSignal: t.prevSignal,
     signalSince: t.signalSince,
-    askKind: t.held ? (prev?.askKind ?? null) : askKind,
+    askKind: activeInput ? activeInput.kind : t.held ? (prev?.askKind ?? null) : askKind,
     via: viaOut,
     ...failure,
     workingSince: t.workingSince, tasks, agents,
@@ -437,7 +497,12 @@ function nextSession(prev, { hostApp, pid, terminal, owned }) {
     agentsAt: t.agentsAt,
     touchedAt: t.touchedAt,
     // The ask as the widget can show it (see askOf); gone once it's over.
-    ask: signalOut !== 'permission-ask' ? undefined : t.held || signalOut !== resolved ? prev?.ask : (askOf(now) || prev?.ask),
+    ask: signalOut !== 'permission-ask' ? undefined : activeInput
+      ? currentInput ? askOf(activeInput.askedAt) : prev?.claudeInputKey === inputKey ? prev?.ask : { kind: activeInput.kind, tool: activeInput.tool, at: activeInput.askedAt }
+      : t.held || signalOut !== resolved ? prev?.ask : (askOf(now) || prev?.ask),
+    claudeInputRequests: inputs.requests,
+    claudeInputOverflow: inputs.overflow,
+    claudeInputKey: inputKey,
     blocked: blockedOf(prev, now),
     // Buddy launched this session (owned.js): decided at SessionStart only.
     owned: owned !== undefined ? (owned || undefined) : prev?.owned,
@@ -569,11 +634,12 @@ if (signal === 'tool-use' && tool === 'AskUserQuestion' && !data?.agent_id && as
 
 // PreToolUse fires many times a second during a busy turn. Skip the write if
 // nothing changed in the last second — the app polls anyway, and this keeps
-// the fs.watch storm down. Subagent events carry bookkeeping it must never drop.
+// the fs.watch storm down. Subagent events and TaskStop carry bookkeeping it must never drop.
 // `workingSince` marks when the current turn began (for the "working over N
 // minutes" signal) and resets on each new prompt.
 // Judged on the unlocked read: skipping is only ever safe, never a lost write.
-if (prevOnEntry && resolved !== 'subagent-start' && resolved !== 'subagent-done') {
+if (prevOnEntry && resolved !== 'subagent-start' && resolved !== 'subagent-done' && tool !== 'TaskStop'
+    && !Machine.claudeInputPending(prevOnEntry) && !(resolved === 'permission-ask' && typeof data?.tool_use_id === 'string')) {
   const prev = prevOnEntry;
   const agentChurn = fromSubagent && stepOf(prev, new Date().toISOString()).bookkeeping;
   const last = Date.parse(agentChurn ? prev.agentsAt : prev.updatedAt);
@@ -613,4 +679,10 @@ if (starting) {
   }
 }
 writeSession({ hostApp: detectHostApp(starting ? null : prevOnEntry?.hostApp), pid: pidNow, terminal, owned });
-finish();
+// Opt-in team brief (hooks/team-brief.js): the session is already recorded, and
+// it gives up after 800 ms, so the light never waits on the hub. With it off
+// the hook stays synchronous and exits here, as every other event does.
+const TeamBrief = resolved === 'session-start' ? require('./team-brief.js') : null;
+if (TeamBrief && TeamBrief.enabled(ROOT_DIR)) TeamBrief.run({ adapter: 'claude', payload: data, root: ROOT_DIR }).then((out) => { hookOutput = out; finish(); }, finish);
+else finish();
+}

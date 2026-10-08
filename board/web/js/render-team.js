@@ -148,6 +148,53 @@ export function invitePanel(model) {
         h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'copy-invite', 'data-what': 'code' }, 'Copy code'))) : null);
 }
 
+const ACTIVITY = { working: 'Working', waiting: 'Waiting for a person', quiet: 'Quiet', idle: 'Idle · task still open', disconnected: 'Runner disconnected', no_live_run: 'No active AI run' };
+const TASK_STATE = { todo: 'To do', queued: 'Queued', claimed: 'Starting', running: 'In progress', quiet: 'In progress', blocked: 'Blocked', parked: 'Waiting', suspended: 'Paused', reconnecting: 'Reconnecting', unresponsive: 'Not responding', orphaned: 'Run lost', handing_over: 'Handing over', handed_over: 'Handed over', in_review: 'In review', done: 'Done', failed: 'Failed' };
+function overviewTask(item, stale) {
+  const change = item.evidence?.verification === 'hub_verified' ? 'Change verified' : item.evidence ? 'Change self-reported' : 'No change evidence';
+  const tests = item.evidence?.tests ? ` · Tests reported: ${item.evidence.tests}` : '';
+  return h('li', { key: item.id, class: 'team-overview-task' },
+    h('button', { type: 'button', class: 'team-overview-open', 'data-action': 'team-open-card', 'data-card': item.id, 'data-board': item.board.id },
+      h('span', { class: 'team-overview-task-title' }, h('span', { class: 'card-key num' }, item.key), item.title),
+      h('span', { class: 'team-overview-meta' }, item.board.name, ' · ', item.owner ? `${item.owner.name}’s ${item.ai_label ?? 'AI'}` : item.assignees?.length ? `Assigned to ${item.assignees.map((m) => m.name).join(', ')}` : item.ai_label ?? 'Unassigned',
+        ' · ', stale ? `Last snapshot: ${ACTIVITY[item.activity] ?? item.state}` : ACTIVITY[item.activity] ?? item.state)),
+    h('span', { class: 'team-overview-meta' }, TASK_STATE[item.state] ?? item.column ?? '', item.attention?.kind ? ` · ${item.attention.kind}` : '', item.attention?.can_approve ? ' · Your approval is needed' : ''),
+    h('span', { class: 'team-overview-proof' }, change, tests, item.cost ? item.cost.cost_usd == null ? ' · Cost unavailable' : ` · $${item.cost.cost_usd.toFixed(2)} reported` : ''),
+    item.attention?.summary ? h('p', { class: 'team-overview-meta' }, item.attention.summary) : null,
+    item.overlap_count ? h('span', { class: 'team-overview-meta' }, `${item.overlap_count} overlapping path ${item.overlap_count === 1 ? 'claim' : 'claims'}`) : null);
+}
+
+function overviewList(label, data, stale, empty) {
+  const items = data.items;
+  return h('section', { class: 'team-overview-panel', 'aria-label': label },
+    h('h3', null, label),
+    items.length ? h('ul', { class: 'team-overview-list' }, items.slice(0, 6).map((item) => overviewTask(item, stale))) : h('p', { class: 'team-empty' }, empty),
+    items.length > 6 ? h('details', { class: 'team-overview-more' }, h('summary', null, `Show ${items.length - 6} more`), h('ul', { class: 'team-overview-list' }, items.slice(6).map((item) => overviewTask(item, stale)))) : null,
+    data.truncated ? h('p', { class: 'team-overview-meta' }, 'Showing the latest 20. Search all boards to find older tasks.') : null);
+}
+
+export function overviewPanel(model) {
+  const overview = model.teamOverview;
+  if (!overview) return null;
+  const data = overview.data;
+  return h('section', { class: 'team-overview', 'aria-labelledby': 'team-overview-h' },
+    h('header', { class: 'team-overview-head' },
+      h('div', null, h('h2', { id: 'team-overview-h' }, 'Across the team'), h('p', { class: 'team-overview-meta' }, data ? `${data.team.name} · ${data.board_count} active ${data.board_count === 1 ? 'board' : 'boards'}` : 'Checking work across your team’s active boards…')),
+      h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'team-overview-refresh', disabled: overview.status === 'loading' || null }, overview.status === 'loading' ? 'Refreshing…' : 'Refresh')),
+    overview.error ? h('p', { class: 'form-error', role: 'alert' }, overview.error) : null,
+    overview.stale && data ? h('p', { class: 'teamview-stale', role: 'status' }, 'Overview may be out of date. Refresh to check current activity.') : null,
+    data ? [
+      h('div', { class: 'team-overview-stats' }, [['Open tasks', data.totals.open], ['Need attention', data.totals.attention], ['Ready for review', data.totals.review], ['Done', data.totals.done]].map(([label, n]) => h('div', { key: label, class: 'team-overview-stat' }, h('strong', { class: 'num' }, String(n)), h('span', null, label)))),
+      h('p', { class: 'team-overview-meta' }, 'Live activity comes from current connected runners. Change verification checks the attached commit or pull request; test results remain the AI’s report.'),
+      h('div', { class: 'team-overview-columns' },
+        overviewList('Needs attention', data.attention, overview.stale, 'No blocked or failed tasks in this snapshot.'),
+        overviewList('AI tasks', data.work, overview.stale, 'No queued or active AI tasks in this snapshot.'),
+        overviewList('Ready for review', data.review, overview.stale, 'Nothing waiting for review in this snapshot.')),
+      h('details', { class: 'team-overview-projects' }, h('summary', null, 'Board overview'), h('ul', { class: 'team-overview-list' }, data.boards.map((board) => h('li', { key: board.id, class: 'team-overview-board' }, h('strong', null, board.name), h('span', { class: 'team-overview-meta' }, `${board.open} open · ${board.attention} need attention · ${board.review} in review · ${board.done} done`)))), data.boards_truncated ? h('p', { class: 'team-overview-meta' }, 'Showing the first 60 active boards; totals include all active boards.') : null),
+      h('details', { class: 'team-overview-projects' }, h('summary', null, 'Recently changed tasks'), h('ul', { class: 'team-overview-list' }, data.recent.items.map((item) => overviewTask(item, overview.stale))))
+    ] : null);
+}
+
 export function teamScreen(model) {
   const p = model.presence ?? { members: [], loaded: false, stale: false };
   const rows = teamRows(model);
@@ -158,11 +205,15 @@ export function teamScreen(model) {
         h('h1', { class: 'teamview-h' }, 'Team'),
         h('span', { class: 'teamview-count num', role: 'status' }, p.loaded ? `${online} online` : 'Checking…'),
         p.stale ? h('span', { class: 'teamview-stale' }, icon('sync', 'icon-xs'), 'Presence may be out of date') : null),
-      h('p', { class: 'teamview-line' }, 'Live sessions in repos linked to this board. Only members who turned on sharing appear. Read-only sessions never show.'),
+      h('p', { class: 'teamview-line' }, 'Work, blockers and reviews across your team. Shared live sessions below count for the current board.'),
+      model.accounts ? h('a', { href: '/connections', target: '_blank', rel: 'noopener noreferrer', class: 'btn btn-sm' }, 'Your connections') : null,
       h('details', { class: 'team-scope' },
         h('summary', null, 'How sessions are counted'),
         h('p', null, SCOPE_RULE))),
+    overviewPanel(model),
     invitePanel(model),
+    h('h2', { class: 'team-needs-h' }, `On ${model.board?.name ?? 'this board'}`),
+    h('p', { class: 'teamview-line' }, 'Live sessions in repos linked to this board. Only members who turned on sharing appear. Read-only sessions never show.'),
     p.loaded ? needsYou(rows, model) : null,
     h('div', { class: 'team-grid' }, rows.map((m) => memberCard(m, model, p.loaded))));
 }

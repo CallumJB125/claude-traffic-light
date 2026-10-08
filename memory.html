@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; base-uri 'none'; form-action 'none'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Search everything</title><link rel="stylesheet" href="tokens.css"><link rel="stylesheet" href="memory.css"><link rel="stylesheet" href="page.css"></head>
+<body><main class="page">
+<header class="page-head"><div><h1>Search everything</h1><p>Every prompt and reply from your AI tools on this computer, in one place. The index stays on this computer.</p></div></header>
+<form id="form" class="search" role="search" autocomplete="off">
+  <input id="q" type="search" placeholder="Search prompts, replies and file names" aria-label="Search" maxlength="500" autofocus>
+  <div class="filters">
+    <label>Tool <select id="tool"><option value="">All tools</option><option value="claude">Claude Code</option><option value="codex">Codex</option><option value="hermes">Hermes</option><option value="gemini">Gemini CLI</option><option value="cursor">Cursor</option></select></label>
+    <label>Repo <select id="repo"><option value="">All repos</option></select></label>
+    <label>When <select id="when"><option value="">Any time</option><option value="1">Last 24 hours</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option></select></label>
+  </div>
+</form>
+<p id="plan" class="banner" hidden></p>
+<p id="status" class="muted" role="status" aria-live="polite">Loading the index…</p>
+<ol id="results" class="results" aria-label="Results"></ol>
+<details class="index"><summary>Index</summary>
+  <p id="stats" class="muted"></p>
+  <label class="check"><input type="checkbox" id="experimental"> Include Gemini CLI and Cursor (experimental: their history formats are undocumented and may not read correctly)</label>
+  <div class="row-actions"><button id="reindex" type="button" class="small">Update now</button><button id="clear" type="button" class="small">Clear the index</button></div>
+  <p class="muted">What is kept: your prompts and the AI's text replies (secrets removed), and the names of the tools and files they used. Tool output is never read. Projects you muted are skipped. Clearing the index deletes it; it is rebuilt from the transcripts still on this computer.</p>
+</details>
+</main><script src="memory.js"></script></body></html>

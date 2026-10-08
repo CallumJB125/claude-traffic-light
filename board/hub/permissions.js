@@ -20,16 +20,21 @@ const OWNER = ['owner'];
 // checks every row for every role).
 export const MATRIX = Object.freeze({
   'team.read': ALL,              // team, its boards, the member list (names)
+  'setups.read': ALL,
+  'setups.publish': WRITERS,
+  'setups.baseline': ADMINS,
   'board.read': ALL,             // board, cards, card detail, handover, feed, journal
   'members.emails': ADMINS,      // member emails in the member list
   'card.write': WRITERS,         // create / edit / move cards, labels, assignees
   'comment': WRITERS,
-  'dispatch': WRITERS,           // Give to Claude (own or another member's runner)
+  'dispatch': WRITERS,           // Tackle with AI (own or another member's runner)
   'run.control': WRITERS,        // stop / cancel / retry / take over / hand over / answer / approve
   'device.enrol': WRITERS,       // be a dispatch target / enrol a runner
   'label.write': WRITERS,        // board label registry: create, recolour, describe (D91)
   'label.manage': ADMINS,        // … rename and delete: both rewrite cards across the board
   'board.create': ADMINS,
+  'board.rename': ADMINS,
+  'board.archive': ADMINS,
   'repo.manage': ADMINS,
   'team.settings': ADMINS,       // rename
   'invite.create': ADMINS,

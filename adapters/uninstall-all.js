@@ -43,6 +43,19 @@ function run({ home, mcp = null }) {
       results.push({ id: adapter.id, file, changed: false, error: err.message });
     }
   }
+  // Codex's additive lifecycle file is independent of the legacy notify
+  // entry, including when a foreign notify prevents any TOML cleanup.
+  const codex = Adapters.get('codex');
+  const hermes = require('./hermes-activity');
+  if (fs.existsSync(hermes.configPath(home))) {
+    try { results.push(hermes.uninstall({ home })); }
+    catch (err) { results.push({ id: 'hermes-activity', file: hermes.configPath(home), changed: false, error: err.message }); }
+  }
+  const activity = codex.lifecycleConfigPath(home);
+  if (fs.existsSync(activity)) {
+    const r = codex.uninstallActivity({ home });
+    results.push({ id: 'codex-activity', file: activity, changed: !!r.changed, ...(r.error ? { error: r.error } : {}) });
+  }
   if (mcp) {
     const file = mcp.configPath(home);
     try {

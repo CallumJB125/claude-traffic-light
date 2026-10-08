@@ -273,6 +273,50 @@ test('set-status: auto-compaction leaves background agents working; a real sessi
   assert.deepEqual(read(home, 'ca').agents.map((a) => [a.id, a.status]), [['bg-1', 'done']]);
 });
 
+test('set-status: the session keeps the cwd it started in; a cd or a subagent\'s cwd never relabels it', () => {
+  const home = tmpHome();
+  run(home, 'session-start', { session_id: 'cw', source: 'startup', cwd: '/proj' });
+  run(home, 'prompt-submit', { session_id: 'cw', cwd: '/proj' });
+  run(home, 'tool-use', { session_id: 'cw', tool_name: 'Bash', cwd: '/proj/memory' });
+  assert.equal(read(home, 'cw').cwd, '/proj', 'a Bash cd on the main thread');
+  run(home, 'subagent-start', { session_id: 'cw', agent_id: 'ag-1', agent_type: 'executor', cwd: '/wt/lane-a' });
+  run(home, 'tool-done', { session_id: 'cw', tool_name: 'Read', agent_id: 'ag-1', cwd: '/wt/lane-a' });
+  run(home, 'subagent-done', { session_id: 'cw', agent_id: 'ag-1', cwd: '/wt/lane-a' });
+  assert.equal(read(home, 'cw').cwd, '/proj', 'a subagent\'s events carry its own cwd');
+  run(home, 'session-start', { session_id: 'cw', source: 'compact', cwd: '/proj/memory' });
+  assert.equal(read(home, 'cw').cwd, '/proj', 'a compaction is the same session');
+  run(home, 'session-start', { session_id: 'cw', source: 'resume', cwd: '/elsewhere' });
+  assert.equal(read(home, 'cw').cwd, '/elsewhere', 'a resume starts afresh where it was opened');
+  run(home, 'prompt-submit', { session_id: 'first', cwd: '/first' });
+  assert.equal(read(home, 'first').cwd, '/first', 'no session-start seen: the first event\'s cwd');
+});
+
+test('set-status: a subagent the parent stopped (TaskStop) is retired as stopped, never done', () => {
+  const home = tmpHome();
+  run(home, 'prompt-submit', { session_id: 'ts' });
+  run(home, 'subagent-start', { session_id: 'ts', agent_id: 'ag-1', agent_type: 'executor' });
+  run(home, 'subagent-start', { session_id: 'ts', agent_id: 'ag-2', agent_type: 'executor' });
+  run(home, 'tool-use', { session_id: 'ts', tool_name: 'TaskStop', tool_input: { task_id: 'ag-1' } });
+  assert.equal(read(home, 'ts').agents.find((a) => a.id === 'ag-1').status, 'working', 'asking to stop is not stopped');
+  run(home, 'tool-done', { session_id: 'ts', tool_name: 'TaskStop', tool_input: { task_id: 'ag-1' } });
+  assert.deepEqual(read(home, 'ts').agents.map((a) => [a.id, a.status]), [['ag-1', 'stopped'], ['ag-2', 'working']]);
+  run(home, 'stop', { session_id: 'ts' });
+  run(home, 'tool-done', { session_id: 'ts', tool_name: 'TaskStop', tool_input: { task_id: 'ag-2' } });
+  assert.deepEqual(read(home, 'ts').agents.map((a) => [a.id, a.status]), [['ag-1', 'stopped'], ['ag-2', 'stopped']], 'after the turn too');
+});
+
+test('set-status: a subagent\'s own tool events stamp its lastAt', () => {
+  const home = tmpHome();
+  run(home, 'prompt-submit', { session_id: 'la' });
+  run(home, 'subagent-start', { session_id: 'la', agent_id: 'ag-1', agent_type: 'executor' });
+  const started = read(home, 'la').agents[0];
+  assert.equal(started.lastAt, undefined);
+  run(home, 'tool-use', { session_id: 'la', tool_name: 'Bash', agent_id: 'ag-1' });
+  const a = read(home, 'la').agents[0];
+  assert.ok(Date.parse(a.lastAt) >= Date.parse(started.since));
+  assert.equal(a.status, 'working');
+});
+
 test('set-status: a permission denial mid-turn keeps the turn, its clock and the ignored timer', () => {
   const home = tmpHome();
   run(home, 'prompt-submit', { session_id: 'pd' });
@@ -528,7 +572,11 @@ test('withLock: waits for a live lock, breaks a stale one, and never hangs', () 
 
   fs.writeFileSync(lock, '');
   const t0 = Date.now();
-  assert.equal(SessionState.withLock(file, () => 'ran', 100), 'ran', 'a held lock times out into running anyway');
+  fs.writeFileSync(file, 'newer-input');
+  let wrote = false;
+  assert.equal(SessionState.withLock(file, () => { wrote = true; fs.writeFileSync(file, 'lost-input'); }, 100), undefined);
+  assert.equal(wrote, false, 'a timed-out writer cannot erase a newer input');
+  assert.equal(fs.readFileSync(file, 'utf8'), 'newer-input');
   assert.ok(Date.now() - t0 >= 100);
   assert.ok(fs.existsSync(lock), 'someone else\'s lock is not removed by a writer that never held it');
   assert.equal(SessionState.withLockOrSkip(file, () => 'ran'), undefined, 'the app skips instead of waiting');
@@ -554,6 +602,33 @@ test('emit.js: a bare signal keeps agents, mode and cwd, and a failed turn ends 
   emit('turn-failed', '--source', 'cursor', '--session', 'c1');
   const d = JSON.parse(fs.readFileSync(file, 'utf8'));
   assert.deepEqual([d.signal, d.workingSince, d.mode, d.iteration, d.agents.length, d.cwd, d.touchedAt], ['turn-failed', null, 'team', 3, 1, '/w/proj', d0.touchedAt]);
+});
+
+test('emit.js: reported work metadata persists across progress, resets for a new task and never chooses a board', () => {
+  const home = tmpHome();
+  const emit = (...args) => {
+    const r = spawnSync(process.execPath, [EMIT, ...args, '--source', 'codex', '--session', 'work'], { env: { ...process.env, CLAUDE_TRAFFIC_LIGHT_HOME: home }, input: '' });
+    assert.equal(r.status, 0, r.stderr.toString());
+  };
+  const file = path.join(home, 'sessions', `${HOST}-codex-work.json`);
+  const state = () => JSON.parse(fs.readFileSync(file, 'utf8'));
+  emit('tool-use', '--cwd', '/work/app', '--task', 'build', '--title', 'Build app', '--summary', 'Updating routing');
+  assert.deepEqual([state().taskId, state().taskTitle, state().taskSummary], ['build', 'Build app', 'Updating routing']);
+  emit('stop');
+  assert.equal(state().taskSummary, 'Updating routing');
+  emit('tool-use', '--task', 'next', '--board', 'arbitrary-board', '--run', 'arbitrary-run');
+  assert.deepEqual([state().taskId, state().taskTitle, state().taskSummary], ['next', null, null]);
+  assert.equal(state().board_id, undefined); assert.equal(state().run_id, undefined);
+  emit('tool-use', '--task', '../bad'); assert.equal(state().taskId, 'next');
+});
+
+test('emit.js: bare source and session cannot select a file outside the sessions directory', () => {
+  const home = tmpHome();
+  const r = spawnSync(process.execPath, [EMIT, 'tool-use', '--source', 'codex/../../escape', '--session', '../../../outside'], { env: { ...process.env, CLAUDE_TRAFFIC_LIGHT_HOME: home }, input: '' });
+  assert.equal(r.status, 0, r.stderr.toString());
+  const files = fs.readdirSync(path.join(home, 'sessions'));
+  assert.equal(files.length, 1); assert.ok(files[0].startsWith(`${HOST}-custom-`));
+  assert.ok(!fs.existsSync(path.join(home, 'outside.json')));
 });
 
 test('emit.js: bare signals get the same guards — a late subagent-done keeps "finished", the idle nudge keeps a failure', () => {
@@ -702,4 +777,106 @@ test('tryLock: on Windows a lock that cannot be created for EPERM is contention,
     assert.throws(() => SessionState.tryLock(path.join(dir, 'y.lock'), 't', 'darwin'), { code: 'EPERM' });
   } finally { fs.writeFileSync = real; }
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('set-status: unrelated parallel completion preserves the original question and waiting clock', () => {
+  const home = tmpHome(), sid = 'parallel-q';
+  run(home, 'prompt-submit', { session_id: sid });
+  run(home, 'tool-use', { session_id: sid, tool_name: 'AskUserQuestion', tool_use_id: 'q-a', tool_input: { questions: [{ question: 'Which?', options: [{ label: 'A' }, { label: 'B' }] }] } });
+  const original = read(home, sid);
+  run(home, 'tool-done', { session_id: sid, tool_name: 'Read', tool_use_id: 'read-b' });
+  const after = read(home, sid);
+  assert.equal(after.signal, 'permission-ask'); assert.equal(after.updatedAt, original.updatedAt);
+  assert.equal(after.touchedAt, original.touchedAt, 'sibling tool completion is not a human answer');
+  assert.deepEqual(after.ask, original.ask);
+  run(home, 'session-start', { session_id: sid, source: 'compact' });
+  assert.equal(read(home, sid).signal, 'permission-ask', 'compaction cannot answer a question');
+  run(home, 'tool-done', { session_id: sid, tool_name: 'AskUserQuestion', tool_use_id: 'q-a' });
+  assert.equal(read(home, sid).signal, 'tool-done'); assert.deepEqual(read(home, sid).claudeInputRequests, []);
+});
+test('set-status: parallel child questions use both tool and agent identity', () => {
+  const home = tmpHome(), sid = 'parallel-children';
+  run(home, 'prompt-submit', { session_id: sid });
+  for (const agent_id of ['a', 'b']) {
+    run(home, 'subagent-start', { session_id: sid, agent_id });
+    run(home, 'tool-use', { session_id: sid, agent_id, tool_name: 'AskUserQuestion', tool_use_id: 'shared-id' });
+  }
+  assert.deepEqual(read(home, sid).agents.map(a => a.status), ['waiting', 'waiting']);
+  run(home, 'tool-done', { session_id: sid, tool_name: 'AskUserQuestion', tool_use_id: 'shared-id' });
+  assert.equal(read(home, sid).claudeInputRequests.length, 2, 'parent receipt cannot clear either child');
+  run(home, 'tool-done', { session_id: sid, agent_id: 'a', tool_name: 'AskUserQuestion', tool_use_id: 'shared-id' });
+  let result = read(home, sid);
+  assert.equal(result.signal, 'permission-ask'); assert.deepEqual(result.agents.map(a => a.status), ['working', 'waiting']);
+  assert.equal(result.claudeInputRequests[0].agentId, 'b');
+  run(home, 'subagent-done', { session_id: sid, agent_id: 'b' });
+  result = read(home, sid);
+  assert.equal(result.signal, 'tool-done'); assert.equal(result.agents[1].status, 'done');
+  run(home, 'tool-use', { session_id: sid, tool_name: 'AskUserQuestion', tool_use_id: 'q-c' });
+  run(home, 'stop', { session_id: sid });
+  assert.deepEqual(read(home, sid).claudeInputRequests, []); assert.equal(read(home, sid).signal, 'stop');
+});
+
+test('set-status: foreground stop and next prompt preserve a background agent input until that agent ends', () => {
+  const home = tmpHome(), sid = 'background-input';
+  run(home, 'prompt-submit', { session_id: sid });
+  run(home, 'subagent-start', { session_id: sid, agent_id: 'bg' });
+  run(home, 'tool-use', { session_id: sid, agent_id: 'bg', tool_name: 'AskUserQuestion', tool_use_id: 'bg-q' });
+  for (const signal of ['stop', 'prompt-submit']) {
+    run(home, signal, { session_id: sid });
+    assert.equal(read(home, sid).signal, 'permission-ask');
+    assert.equal(read(home, sid).claudeInputRequests[0].agentId, 'bg');
+  }
+  run(home, 'subagent-done', { session_id: sid, agent_id: 'bg' });
+  assert.deepEqual(read(home, sid).claudeInputRequests, []);
+});
+
+test('set-status: a newly asked parallel question refreshes aggregate input evidence while old questions keep their own clocks', () => {
+  const home = tmpHome(), sid = 'old-new-input';
+  run(home, 'prompt-submit', { session_id: sid });
+  run(home, 'tool-use', { session_id: sid, tool_name: 'AskUserQuestion', tool_use_id: 'old-q' });
+  const old = read(home, sid), oldAt = new Date(Date.now() - 300_000).toISOString();
+  old.updatedAt = oldAt; old.claudeInputRequests[0].askedAt = oldAt;
+  fs.writeFileSync(sessionFile(home, sid), JSON.stringify(old));
+  run(home, 'tool-use', { session_id: sid, tool_name: 'AskUserQuestion', tool_use_id: 'fresh-q' });
+  const fresh = read(home, sid);
+  assert.equal(fresh.claudeInputRequests[0].askedAt, oldAt);
+  assert.equal(require('../hooks/session-machine').classify(fresh, { now: Date.now(), waitingStaleMs: 60_000 }).live, true, 'new input is current despite older unanswered input');
+  assert.equal(fresh.updatedAt, fresh.claudeInputRequests[1].askedAt);
+  run(home, 'tool-done', { session_id: sid, tool_name: 'Read', tool_use_id: 'unrelated' });
+  assert.equal(read(home, sid).updatedAt, fresh.updatedAt, 'ordinary work does not refresh the input evidence');
+});
+
+// ── agents.js: mtime-gated JSON reads ───────────────────────────────────────
+test('createJsonReader serves an unchanged old file from memory and re-reads a changed one', () => {
+  let reads = 0;
+  const files = { '/a.json': { text: '{"n":1}', mtimeMs: 1000, size: 7 } };
+  const fake = {
+    statSync: (f) => { if (!files[f]) throw new Error('ENOENT'); return files[f]; },
+    readFileSync: (f) => { reads += 1; return files[f].text; },
+  };
+  const read = A.createJsonReader(fake, () => 1_000_000);
+  assert.deepEqual(read('/a.json'), { n: 1 });
+  assert.deepEqual(read('/a.json'), { n: 1 });
+  assert.equal(reads, 1);
+  files['/a.json'] = { text: '{"n":2}', mtimeMs: 2000, size: 7 };
+  assert.deepEqual(read('/a.json'), { n: 2 });
+  assert.equal(reads, 2);
+  delete files['/a.json'];
+  assert.equal(read('/a.json'), null);
+});
+
+test('createJsonReader never caches a file written within the racy window', () => {
+  let reads = 0;
+  const fake = {
+    statSync: () => ({ mtimeMs: 999_500, size: 7 }),
+    readFileSync: () => { reads += 1; return '{"n":1}'; },
+  };
+  const read = A.createJsonReader(fake, () => 1_000_000);
+  read('/b.json'); read('/b.json');
+  assert.equal(reads, 2);
+});
+
+test('createJsonReader returns null for malformed JSON without throwing', () => {
+  const fake = { statSync: () => ({ mtimeMs: 1, size: 3 }), readFileSync: () => '{x' };
+  assert.equal(A.createJsonReader(fake, () => 1_000_000)('/c.json'), null);
 });

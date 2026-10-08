@@ -1,4 +1,4 @@
-<!--page {"title":"Download Plexiform","desc":"Download Plexiform for Mac, Windows or Linux. Private beta: the builds are unsigned for now, so the first open takes one extra step.","nav":"download"}-->
+<!--page {"title":"Download Plexiform","desc":"Download the published Plexiform beta for macOS or Linux. Windows runtime acceptance is pending. The Mac beta is not Apple Developer ID signed or notarized, so macOS may require a first-open confirmation.","nav":"download"}-->
 <!doctype html>
 <html lang="en">
 <head>
@@ -10,18 +10,21 @@
 <main id="main" class="page">
   <div class="wrap">
     <h1>Download {{brand.name}}</h1>
-    <p class="lede">The beta is for small teams. You can install it now; joining a team board needs an invite.</p>
+    <p class="lede">Plexiform is free for you and your team. Your AI providers keep their own subscriptions and usage charges. {{live:publicSignup}}<a href="{{brand.urls.hub}}">Create a free account</a> or sign in to your existing team.{{/live}}{{notlive:publicSignup}}Public registration is being prepared; existing team access still uses invitations.{{/notlive}}</p>
 
-    <div class="dl-card" id="dl" data-feed="{{brand.urls.downloads}}" data-fallback="{{brand.urls.updates}}">
-      <p id="dl-status" role="status">Looking for the latest build…</p>
-      <div id="dl-primary"></div>
-      <p id="dl-meta"></p>
+    <div class="dl-card" id="dl" data-windows="{{live:windowsDownloads}}true{{/live}}{{notlive:windowsDownloads}}false{{/notlive}}" data-api="https://api.github.com/repos/CallumJB125/claude-traffic-light" data-fallback="https://github.com/CallumJB125/claude-traffic-light/releases">
+      <h2 id="install" style="margin:0;font-size:1.5rem;color:var(--desk-ink)">Install in one line</h2>
+      <p>On a Mac or Linux computer, paste this into Terminal:</p>
+      <p><code id="install-cmd">curl -fsSL https://plexiform.dev/install.sh | sh</code> <button type="button" class="btn" id="copy-install">Copy</button></p>
+      <p>It downloads the newest build from GitHub, checks its SHA-256 against the checksum published with that release, and installs it, with no Apple Developer ID and no "can't be opened" prompt. It never uses sudo. You can <a href="/install.sh">read the script</a> first; it is short. Add <code>PLEXIFORM_CHANNEL=stable</code> before <code>sh</code> to skip pre-releases.</p>
     </div>
 
-    <h2 style="margin-top:56px;font-size:1.5rem">All downloads</h2>
+    <h2 style="margin-top:56px;font-size:1.5rem">Download manually</h2>
+    <p class="prose" style="margin-top:12px" id="dl-status" role="status">Looking for the latest public preview…</p>
+    <p class="note" style="margin-top:12px">{{live:windowsDownloads}}Published installers are available for macOS, Windows and Linux.{{/live}}{{notlive:windowsDownloads}}Published installers are currently available for macOS and Linux. Windows is unavailable while its runtime acceptance is pending.{{/notlive}} If the links cannot be loaded, <a href="https://github.com/CallumJB125/claude-traffic-light/releases">browse published GitHub releases</a>.</p>
     <ul class="os-list" id="dl-all">
       <li data-os="mac"><span><strong>macOS</strong> · Apple silicon and Intel</span><span class="muted">Checking…</span></li>
-      <li data-os="win"><span><strong>Windows</strong></span><span class="muted">Checking…</span></li>
+      <li data-os="win"><span><strong>Windows</strong></span><span class="muted">{{live:windowsDownloads}}Checking…{{/live}}{{notlive:windowsDownloads}}Unavailable pending runtime acceptance{{/notlive}}</span></li>
       <li data-os="linux"><span><strong>Linux</strong> · AppImage and .deb</span><span class="muted">Checking…</span></li>
     </ul>
 
@@ -43,47 +46,51 @@
     {{/notlive}}
 
     <h2 id="first-open" style="margin-top:64px;font-size:1.7rem">Opening it the first time</h2>
-    <p class="prose" style="margin-top:12px">The beta isn't signed with a developer certificate yet, so your system asks you to confirm once. It's a normal step for software that isn't from an app store, and it only happens the first time.</p>
+    <p class="prose" style="margin-top:12px">The one-line installer above avoids this: a file fetched by <code>curl</code> is not marked as downloaded from the internet, so macOS does not stop it. If you download the .dmg or .zip in a browser instead, read on. The Mac beta uses ad-hoc signing, not Apple Developer ID signing or notarization, so macOS may require confirmation on first open and after an update.</p>
     <div class="grid-2" style="margin-top:28px">
       <div>
         <h3>On a Mac</h3>
         <ol class="steps">
-          <li><strong>Open the download</strong> and drag {{brand.name}} into Applications.</li>
-          <li><strong>Open it.</strong> macOS says it can't check the app for malware. Choose <strong>Done</strong>.</li>
-          <li>Open <strong>System Settings</strong>, then <strong>Privacy &amp; Security</strong>. Scroll to <strong>Security</strong> and choose <strong>Open Anyway</strong> next to {{brand.name}}, then enter your password.</li>
-          <li>Open {{brand.name}} again and choose <strong>Open</strong>. You only do this once.</li>
-          <li>If macOS asks to use the keychain, enter your Mac password and choose <strong>Always Allow</strong>. It may ask again after an update while the beta is unsigned.</li>
+          <li><strong>Open the .dmg download</strong> and drag {{brand.name}} into Applications. If you downloaded a .zip, open it in Finder first, then move the app into Applications.</li>
+          <li><strong>Open {{brand.name}} from Applications.</strong> If macOS says it can't check the app for malware, choose <strong>Done</strong>.</li>
+          <li>If opening was blocked, open <strong>System Settings → Privacy &amp; Security</strong>. Under <strong>Security</strong>, choose <strong>Open Anyway</strong> for {{brand.name}} and confirm when asked.</li>
+          <li>Choose <strong>Open</strong> when macOS asks again. After that, open the app normally from Applications.</li>
+          <li>If macOS asks to use the keychain, verify that the request is from the build you intended to open before granting access. Ad-hoc signed updates may ask again; do not approve an unexpected request.</li>
           <li>{{brand.name}} adds its hooks to Claude Code's settings the first time it runs, appending only its own entries, and turns on Open at Login (switch it off from the tray menu and it stays off). <strong>Restart any Claude Code sessions</strong> that were already running.</li>
         </ol>
-        <p class="note">On macOS 14 and earlier, right-click the app and choose <strong>Open</strong> instead. If macOS says the app "is damaged", run <code>xattr -dr com.apple.quarantine /Applications/{{brand.name}}.app</code> in Terminal, then open it.</p>
+        <p class="note">On macOS 14 and earlier, right-click the app and choose <strong>Open</strong> instead. If macOS says the app "is damaged" or reports a signature problem, stop, verify the checksum and re-download from the published release. Contact support if it persists; do not bypass that warning.</p>
       </div>
       <div>
-        <h3>On Windows</h3>
-        <ol class="steps">
-          <li><strong>Run the installer.</strong> If SmartScreen says it protected your PC, choose <strong>More info</strong>.</li>
-          <li>Then choose <strong>Run anyway</strong>.</li>
-          <li>Restart any Claude Code sessions that were already running.</li>
-        </ol>
+        <h3>Windows</h3>
+        {{live:windowsDownloads}}<ol class="steps"><li><strong>Download the Windows installer above</strong> and open it from Downloads.</li><li><strong>Follow the setup wizard</strong>, then open Plexiform from Start. The portable download runs without installation and needs manual updates.</li><li><strong>Open Preferences → Connect AI tools</strong> to connect supported providers installed on this computer.</li></ol>{{/live}}{{notlive:windowsDownloads}}<p class="prose">Windows downloads are unavailable while native runner and privacy acceptance are pending. These Mac and Linux instructions do not establish Windows support.</p>{{/notlive}}
+        <p class="note">Windows and WSL, honestly: Windows acceptance is still pending, so expect rough edges and no promises about timing. Claude Code sessions running inside WSL have not been tested with {{brand.name}}; treat them as unsupported for now.</p>
         <h3 style="margin-top:28px">On Linux</h3>
-        <ol class="steps"><li>Make the AppImage executable (<code>chmod +x</code>) and run it. On a recent Ubuntu it also needs <code>libfuse2</code>. Or install the .deb with your package manager.</li></ol>
+        <ol class="steps">
+          <li><strong>On Ubuntu or Debian, choose the .deb.</strong> Open the download in your Software installer, choose <strong>Install</strong> and authenticate if asked. Then open {{brand.name}} from your applications menu. Your system needs a graphical installer that supports .deb files.</li>
+          <li><strong>For AppImage,</strong> use your file manager's <strong>Properties → Permissions</strong> to allow executing the file, where that option is available, then open it.</li>
+        </ol>
+        <p class="note">AppImage may need FUSE support or additional system setup. If it will not open, use the .deb on a compatible system or contact support for your distribution. Do not disable the app's sandbox to get past a launch error.</p>
       </div>
     </div>
 
-    <h2 style="margin-top:64px;font-size:1.7rem">Got an invite link?</h2>
+    <h2 style="margin-top:64px;font-size:1.7rem">Open the app and connect your work</h2>
+    <p class="prose" style="margin-top:12px">The public preview includes Overview and the sharing setup below. Public account registration is still being prepared.</p>
     <ol class="steps">
-      <li><strong>Install and open {{brand.name}}</strong> using the steps above.</li>
-      <li><strong>Sign in with Google</strong> when the app asks.</li>
-      <li><strong>Click your invite link again.</strong> It opens the app and puts you on your team.</li>
+      <li><strong>Open Overview</strong> to see reported sessions and start a session with an available provider. Claude Code, Codex and other providers need their own installation and sign-in; installing {{brand.name}} does not install or authenticate them. Existing sessions without a supported connection may be visible without being messageable.</li>
+      {{live:publicSignup}}<li><strong>Create a free account</strong> and verify your email to start your own private team. Open an invitation to join someone else's team. Provider sign-in is separate from your Plexiform account.</li>{{/live}}{{notlive:publicSignup}}<li><strong>For a team, open your invite link</strong> and sign in using a method offered by that team's hub. Confirm the team you are joining. Your account and invite are separate from your AI provider account; real account and invite acceptance for the prepared candidate is still pending.</li>{{/notlive}}
+      <li><strong>Open Preferences</strong> to adjust automatic team sharing and other app settings. Supported team-associated sessions can be shared with acting teammates; viewers watch only. Messages use the session owner's provider quota and permissions.</li>
     </ol>
+    <p class="note">Connecting an existing Claude terminal is an optional advanced setup with its own provider confirmation. It is not required to install or open {{brand.name}}.</p>
 
-    <h2 style="margin-top:64px;font-size:1.7rem">Check your download</h2>
-    <p class="prose" style="margin-top:12px">Each build is listed with a SHA-512 checksum. To compare it on a Mac or Linux, run this and check it matches:</p>
-    <p style="margin-top:12px"><code class="mono" style="font:600 0.9rem ui-monospace,Menlo,monospace;background:var(--paper-2);padding:8px 12px;border-radius:8px;display:inline-block;overflow-wrap:anywhere">openssl dgst -sha512 -binary &lt;file&gt; | base64</code></p>
+    <details style="margin-top:48px">
+      <summary><strong>Advanced: verify your download</strong></summary>
+      <p class="prose" style="margin-top:12px">This optional check uses Terminal. Each release lists SHA-256 checksums in <code>SHA256SUMS.txt</code>. Replace <code>&lt;file&gt;</code> with your downloaded file and compare the result with the matching line there:</p>
+      <p style="margin-top:12px"><code class="mono" style="font:600 0.9rem ui-monospace,Menlo,monospace;background:var(--paper-2);padding:8px 12px;border-radius:8px;display:inline-block;overflow-wrap:anywhere">shasum -a 256 &lt;file&gt;</code></p>
+    </details>
   </div>
 </main>
 {{include:footer}}
 <script src="{{asset:assets/site.js}}" defer></script>
-<script src="{{asset:assets/feed.js}}" defer></script>
 <script src="{{asset:assets/download.js}}" defer></script>
 </body>
 </html>

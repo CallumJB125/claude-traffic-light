@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import * as text from '../js/account-text.js';
+import { CLIENT_TOKEN_RE } from '../js/client-api.js';
 
 const SRC = readFileSync(new URL('../js/signin.js', import.meta.url), 'utf8').replace(/^import .*$/gm, '');
 const TOKEN = `inv_${'A'.repeat(43)}`;
@@ -24,7 +25,7 @@ function page({ hash = '', routes = {}, now = () => 1_000_000 } = {}) {
     return { ok: out.status < 400, status: out.status, json: async () => out.body };
   };
   const ctx = {
-    ...text, console, URL, URLSearchParams, JSON, Promise, Map, String,
+    ...text, CLIENT_TOKEN_RE, console, URL, URLSearchParams, JSON, Promise, Map, String,
     Date: { now },
     location: { hash, pathname: '/signin', replace: (u) => replaced.push(u), assign: (u) => replaced.push(u) },
     history: { replaceState() {} },
@@ -101,12 +102,47 @@ test('resend: a short gap first, then never a fourth code in 15 minutes (the hub
   assert.match(p.els['signin-error'].textContent, /You can ask for a new code in 14 minutes\./);
 });
 
-test('a hub with no mailer: the email form is hidden and the page says to use the app', async () => {
+test('desktop-only providers and no email: the email form stays hidden and the page says to use the app', async () => {
   const p = page({ routes: { '/api/auth/methods': { status: 200, body: { google: true, github: true, email: false } } } });
   await settle();
   await settle();
   assert.equal(p.els['email-form'].hidden, true);
-  assert.equal(p.els['signin-lead'].textContent, text.EMAIL_OFF);
+  assert.equal(p.els['oauth-options'].hidden, true);
+  assert.match(p.els['signin-lead'].textContent, /Google and GitHub sign-in aren’t set up for the browser.*desktop app/);
+});
+
+test('no sign-in method at all: a clear message, never an email fallback', async () => {
+  for (const body of [{ google: false, github: false, email: false, web: { google: false, github: false } }, {}]) {
+    const p = page({ routes: { '/api/auth/methods': { status: 200, body } } });
+    await settle(); await settle();
+    assert.equal(p.els['email-form'].hidden, true);
+    assert.equal(p.els['oauth-options'].hidden, true);
+    assert.equal(p.els['signin-lead'].textContent, 'No sign-in method is set up on this board yet. Ask the board’s owner to set up Google or GitHub sign-in.');
+  }
+});
+
+test('methods unreachable: the email form stays hidden and the page asks for a reload', async () => {
+  const p = page({ routes: { '/api/auth/methods': 'network' } });
+  p.els['email-form'].hidden = true; // as the HTML ships it
+  await settle(); await settle();
+  assert.equal(p.els['email-form'].hidden, true);
+  assert.equal(p.els['signin-error'].textContent, 'We couldn’t load the sign-in options. Reload the page to try again.');
+});
+
+test('Google and GitHub: both buttons, Continue with Google or GitHub, no email form', async () => {
+  const p = page({ routes: { '/api/auth/methods': { status: 200, body: { google: true, github: true, email: false, web: { google: true, github: true } } } } });
+  await settle(); await settle();
+  assert.equal(p.els['email-form'].hidden, true);
+  assert.equal(p.els['google-signin'].hidden, false);
+  assert.equal(p.els['github-signin'].hidden, false);
+  assert.equal(p.els['signin-lead'].textContent, 'Continue with Google or GitHub.');
+});
+
+test('signin.html ships with the email form hidden and no email-code copy (no flash before /api/auth/methods answers)', () => {
+  const html = readFileSync(new URL('../signin.html', import.meta.url), 'utf8');
+  assert.match(html, /<form id="email-form"[^>]*\bhidden\b/);
+  assert.match(html, /<p id="signin-lead">Continue with Google or GitHub\.<\/p>/);
+  assert.doesNotMatch(html, /email you a 6-digit code/i);
 });
 
 test('browser provider availability shows only its own configured buttons, independent of desktop methods', async () => {
@@ -116,7 +152,7 @@ test('browser provider availability shows only its own configured buttons, indep
   assert.equal(p.els['oauth-options'].hidden, false);
   assert.equal(p.els['google-signin'].hidden, false);
   assert.equal(p.els['github-signin'].hidden, true);
-  assert.equal(p.els['signin-lead'].textContent, 'Choose how to sign in.');
+  assert.equal(p.els['signin-lead'].textContent, 'Continue with Google.');
 });
 
 test('delayed methods cannot reopen controls or replace the lead after entering the code phase', async () => {
@@ -158,17 +194,17 @@ test('OAuth start carries only strict invitation context and refuses poisoned pr
   assert.match(bad.els['signin-error'].textContent, /Sign-in didn’t finish/);
 });
 
-test('OAuth result obtains fresh normal CSRF and resumes explicit team acceptance; failed provider keeps invite for email retry', async () => {
-  const token = TOKEN;
+test('OAuth result obtains fresh normal CSRF and resumes explicit client acceptance; failed provider keeps invite for email retry', async () => {
+  const token = `clinv_${'B'.repeat(43)}`;
   const p = page({ hash: '#oauth=web', routes: {
-    '/api/account': { status: 200, body: { user: { id: 'member' }, teams: [], csrf_token: 'normal-csrf' } },
-    '/api/auth/oauth/web/result': { status: 200, body: { ok: true, invitation: { kind: 'team', token } } },
-    '/api/invites/accept': { status: 200, body: { team: { id: 'team-1' } } },
+    '/api/account': { status: 200, body: { user: { id: 'guest' }, teams: [], csrf_token: 'normal-csrf', client_workspaces: [] } },
+    '/api/auth/oauth/web/result': { status: 200, body: { ok: true, invitation: { kind: 'client', token } } },
+    '/api/client-invites/accept': { status: 200, body: { workspace: { id: 'client-workspace' } } },
   } });
   await settle(); await settle(); await settle();
-  assert.deepEqual(p.replaced, ['/?org=team-1']);
+  assert.deepEqual(p.replaced, ['/clients?workspace=client-workspace']);
   assert.equal(p.calls.find(c => c.path === '/api/auth/oauth/web/result').headers['X-CSRF-Token'], 'normal-csrf');
-  assert.equal(p.calls.find(c => c.path === '/api/invites/accept').body.t, token);
+  assert.equal(p.calls.find(c => c.path === '/api/client-invites/accept').body.t, token);
   const retry = page({ hash: '#oauth=web', routes: { ...start,
     '/api/account': { status: 401, body: {} },
     '/api/auth/oauth/web/result': { status: 200, body: { ok: false, error: { code: 'PROVIDER_UNAVAILABLE' }, invitation: { kind: 'team', token: TOKEN } } },
@@ -218,4 +254,35 @@ test('invite acceptance failures return to the invite recovery page without pers
     assert.deepEqual(p.replaced, [`/invite#${TOKEN}`]);
     assert.equal(p.calls.some((c) => c.path === '/api/account/setup'), false);
   }
+});
+
+test('email verification and browser OAuth admission pauses show the same truthful fixed message', async () => {
+  const error = { code: 'SIGNUP_PAUSED', message: '/private/board.db private pressure' };
+  const email = page({ routes: { ...start, '/api/auth/email/verify': { status: 503, body: { error } } } });
+  email.els.email.value = 'jo@example.com'; await email.submit('email-form'); email.els.code.value = '123456'; await email.submit('code-form');
+  const oauth = page({ hash: '#oauth=web', routes: {
+    '/api/account': { status: 401, body: {} },
+    '/api/auth/oauth/web/result': { status: 200, body: { ok: false, error, invitation: { kind: 'team', token: TOKEN } } },
+    '/api/auth/methods': { status: 200, body: { email: true, web: { google: true, github: true } } },
+  } });
+  await settle(); await settle(); await settle();
+  for (const p of [email, oauth]) { assert.equal(p.els['signin-error'].textContent, 'New sign-ups are temporarily paused. Try again later.'); assert.deepEqual(p.replaced, []); }
+  assert.equal(oauth.els['email-form'].hidden, false);
+  assert.ok(!oauth.calls.some(c => c.path === '/api/invites/accept' || c.path === '/api/account/setup'));
+});
+
+test('a browser OAuth sign-in that made a separate account says so before the board opens', async () => {
+  const message = 'This GitHub sign-in made a new, separate account: another account already uses this email address, and accounts are not linked yet. To reach your existing account, sign in the way you did before.';
+  const p = page({ hash: '#oauth=web', routes: {
+    '/api/account': { status: 200, body: { user: { id: 'u2' }, teams: [], csrf_token: 'csrf' } },
+    '/api/auth/oauth/web/result': { status: 200, body: { ok: true, notice: { code: 'SEPARATE_ACCOUNT', provider: 'github', message }, invitation: null } },
+  } });
+  await settle(); await settle(); await settle();
+  assert.deepEqual(p.replaced, [], 'the board does not open over the notice');
+  assert.equal(p.els.confirm.hidden, false);
+  assert.equal(p.els['confirm-text'].textContent, message);
+  assert.equal(p.els['confirm-yes'].textContent, 'Continue');
+  p.els['confirm-yes'].onclick();
+  await settle(); await settle();
+  assert.deepEqual(p.replaced, ['/']);
 });

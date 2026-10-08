@@ -1,0 +1,83 @@
+name: Windows native directory and private-file acceptance
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Exact reviewed commit to compile and test
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  directory:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Require disposable official Windows runner
+        shell: pwsh
+        run: |
+          if ($env:RUNNER_ENVIRONMENT -ne 'github-hosted' -or $env:RUNNER_OS -ne 'Windows') {
+            throw 'Native acceptance requires an official disposable Windows runner.'
+          }
+
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - name: Compile reviewed SDK source
+        shell: pwsh
+        timeout-minutes: 3
+        run: |
+          $pfVsWhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          if (!(Test-Path -LiteralPath $pfVsWhere -PathType Leaf)) { throw 'Existing VS discovery tool unavailable.' }
+          $pfVsRoots = @(& $pfVsWhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath)
+          if ($LASTEXITCODE -ne 0 -or $pfVsRoots.Count -ne 1) { throw 'One existing x64 MSVC installation is required.' }
+          $pfVsDev = Join-Path $pfVsRoots[0] 'Common7\Tools\VsDevCmd.bat'
+          if (!(Test-Path -LiteralPath $pfVsDev -PathType Leaf)) { throw 'Existing MSVC environment unavailable.' }
+          New-Item -ItemType Directory -Path work/windows-native -Force | Out-Null
+          $env:PF_NATIVE_VS_DEV = $pfVsDev
+          @'
+          @echo off
+          call "%PF_NATIVE_VS_DEV%" -arch=x64 -host_arch=x64
+          if errorlevel 1 exit /b %errorlevel%
+          cl.exe /nologo /std:c11 /TC /W4 /WX /DUNICODE /D_UNICODE /D_WIN32_WINNT=0x0A00 /Fo:work\windows-native\ /Fe:work\windows-native\acceptance.exe native\windows-private-directory\directory.c native\windows-private-directory\acceptance.c /link advapi32.lib ntdll.lib rpcrt4.lib
+          if errorlevel 1 exit /b %errorlevel%
+          cl.exe /nologo /std:c11 /TC /W4 /WX /DUNICODE /D_UNICODE /D_WIN32_WINNT=0x0A00 /Fo:work\windows-native\ /Fe:work\windows-native\file-acceptance.exe native\windows-private-directory\file-acceptance.c /link advapi32.lib ntdll.lib rpcrt4.lib
+          if errorlevel 1 exit /b %errorlevel%
+          cl.exe /nologo /std:c11 /TC /W4 /WX /DUNICODE /D_UNICODE /D_WIN32_WINNT=0x0A00 /c /Fo:work\windows-native\owned-foundation-production.obj native\windows-private-directory\owned-foundation.c
+          if errorlevel 1 exit /b %errorlevel%
+          cl.exe /nologo /std:c11 /TC /W4 /WX /DUNICODE /D_UNICODE /D_WIN32_WINNT=0x0A00 /Fo:work\windows-native\ /Fe:work\windows-native\owned-foundation-acceptance.exe native\windows-private-directory\owned-foundation-acceptance.c /link advapi32.lib ntdll.lib bcrypt.lib
+          exit /b %errorlevel%
+          '@ | Set-Content -LiteralPath work/windows-native/compile.cmd -Encoding ascii
+          $pfCompileFile = (Resolve-Path -LiteralPath work/windows-native/compile.cmd).Path
+          & $pfCompileFile 2>&1 | Tee-Object -FilePath work/windows-native/compile.log
+          if ($LASTEXITCODE -ne 0) { throw 'Native SDK compilation failed; retain compiler evidence.' }
+
+      - name: Run actual native ACL and namespace fixtures
+        shell: pwsh
+        timeout-minutes: 3
+        run: |
+          & .\work\windows-native\acceptance.exe 2>&1 | Tee-Object -FilePath work/windows-native/acceptance.log
+          if ($LASTEXITCODE -ne 0) { throw 'Native Windows acceptance failed; retain original fixture evidence.' }
+          & .\work\windows-native\file-acceptance.exe 2>&1 | Tee-Object -FilePath work/windows-native/file-acceptance.log
+          if ($LASTEXITCODE -ne 0) { throw 'Native Windows private-file acceptance failed; retain original fixture evidence.' }
+          & .\work\windows-native\owned-foundation-acceptance.exe 2>&1 | Tee-Object -FilePath work/windows-native/owned-foundation-acceptance.log
+          if ($LASTEXITCODE -ne 0) { throw 'Native Windows owned publication/control acceptance failed; retain original fixture evidence.' }
+
+      - name: Retain native acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-native-directory-evidence
+          retention-days: 14
+          if-no-files-found: warn
+          path: work/windows-native

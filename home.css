@@ -1,0 +1,29 @@
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: var(--text-base)/1.5 var(--font); -webkit-font-smoothing: antialiased; }
+h2 { margin: 0; font-size: var(--text-lg); }
+p { margin: 4px 0; }
+.muted, #status { color: var(--muted); }
+section, .banner { margin-top: 16px; padding: 16px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-lg); }
+.banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; border-left: 3px solid var(--accent); }
+.section-header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+ul { margin: 8px 0 0; padding: 0; list-style: none; }
+li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }
+li > div { min-width: 0; }
+.title { overflow-wrap: anywhere; }
+.empty { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-top: 8px; }
+.strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-top: 8px; }
+.metric { border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 14px; background: var(--panel-2); }
+.metric strong { display: block; font-size: var(--text-lg); font-variant-numeric: tabular-nums; }
+.metric span { color: var(--muted); font-size: var(--text-sm); }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+h3 { margin: 16px 0 0; font-size: var(--text-base); }
+.tag { flex: none; border: 1px solid var(--line-strong); border-radius: var(--radius-pill); padding: 2px 9px; font-size: var(--text-sm); white-space: nowrap; }
+.tag.waiting, .warning { color: var(--amber); }
+.tag.working { color: var(--green); }
+.exceeded { color: var(--red); }
+button { font: inherit; color: inherit; min-height: 36px; padding: 6px 12px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--panel-2); cursor: pointer; }
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+button.row-link { text-align: left; border: 0; background: none; padding: 0; min-height: 0; }
+button.row-link:hover .title { text-decoration: underline; }
+button:focus-visible { outline: 2px solid var(--focus, var(--accent)); outline-offset: 2px; }
+@media (max-width: 600px) { section, .banner { padding: 12px; } }

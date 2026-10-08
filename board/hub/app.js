@@ -24,19 +24,41 @@ import { Accounts } from './identity/accounts.js';
 import { createMailer } from './identity/mailer.js';
 import { Teams } from './identity/teams.js';
 import { Invites } from './identity/invites.js';
+import { Clients } from './identity/clients.js';
+import { ClientArtifacts } from './identity/client-artifacts.js';
+import { ClientFeedback } from './identity/client-feedback.js';
 import { OAuth } from './identity/oauth.js';
 import { WebOAuth } from './identity/oauth-web.js';
 import { Enrolments } from './identity/enrolments.js';
+import { Billing } from './billing/entitlements.js';
+import { PushService } from './push.js';
+import { Sync } from './sync.js';
+import { Activity } from './activity/index.js';
 import { oauthProviders } from './config.js';
+import { RemoteAuthority } from './remote/authority.js';
+import { StorageWatch } from './storage-watch.js';
+
+// Sync lapse notices and purges run hourly (sync.js sweep).
+const SYNC_SWEEP_MS = 60 * 60_000;
 
 export function createApp(config, { clock = defaultClock, log = createLogger({ level: config.logLevel }), github = null, fetchImpl = globalThis.fetch, timers = true, mailer } = {}) { // privacy-flow: hub-server
   const db = openDb(config.dbPath, { now: () => new Date(clock.wall()).toISOString() });
+  try {
+    return buildApp(config, { db, clock, log, github, fetchImpl, timers, mailer });
+  } catch (error) {
+    // Construction never hands the caller an app to close on failure.
+    try { db.close(); } catch { /* Preserve the original startup error. */ }
+    throw error;
+  }
+}
+
+function buildApp(config, { db, clock, log, github, fetchImpl, timers, mailer }) {
   const gh = github ?? (config.githubToken ? createGitHub({ token: config.githubToken, api: config.githubApi, fetchImpl }) : noGitHub);
   if (config.auth !== 'local' && db.meta('local_member')) {
-    db.close();
     throw new Error('this database belongs to the desktop app (BOARD_AUTH=local)');
   }
   const hub = new Hub({ db, config, clock, log, github: gh });
+  hub.storage = new StorageWatch(hub);
   // Dev login needs this per-process secret (header Board-Dev-Secret), printed
   // at startup: a loopback bind alone does not prove who is asking.
   hub.devLoginSecret = config.auth === 'dev' ? (config.devLoginSecret ?? randomBytes(18).toString('base64url')) : null;
@@ -52,9 +74,18 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
   hub.accounts = config.auth === 'accounts' ? new Accounts(hub, { mailer: mailer !== undefined ? mailer : createMailer(config, { fetchImpl, now: () => new Date(clock.wall()) }) }) : null;
   hub.teams = hub.accounts ? new Teams(hub, { accounts: hub.accounts }) : null;
   hub.invites = hub.accounts ? new Invites(hub, { accounts: hub.accounts, teams: hub.teams }) : null;
+  hub.clients = hub.accounts ? new Clients(hub) : null;
+  hub.clientArtifacts = hub.clients ? new ClientArtifacts(hub) : null;
+  hub.clientFeedback = hub.clients ? new ClientFeedback(hub) : null;
   hub.oauth = hub.accounts ? new OAuth(hub, { accounts: hub.accounts, fetchImpl }) : null;
   hub.oauthWeb = hub.oauth ? new WebOAuth(hub) : null;
   hub.enrolments = hub.accounts ? new Enrolments(hub, { accounts: hub.accounts }) : null;
+  hub.billing = hub.accounts ? new Billing(hub, { fetchImpl }) : null;
+  // Phone push (push.js): content-free pings; off without the operator's VAPID keys.
+  hub.push = hub.accounts ? new PushService(hub, { fetchImpl, ...(config.pushHosts ? { hosts: config.pushHosts } : {}), allowHttp: config.pushAllowHttp === true }) : null;
+  hub.sync = hub.accounts ? new Sync(hub) : null;
+  hub.activity = hub.accounts ? new Activity(hub) : null;
+  hub.remoteAuthority = hub.accounts ? new RemoteAuthority(hub) : null;
   // Deleting an account or a team needs a step-up: an email code (a mailer)
   // or an OAuth re-authentication (a configured provider). Without either,
   // say so, and how an operator erases.
@@ -98,6 +129,26 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
       ticking = true;
       try { await hub.tick(); } catch (e) { log.error('reaper tick failed', { err: e }); } finally { ticking = false; }
     }, REAPER_MS));
+    // Messaging retention, expired handoffs and retired targets (MESSAGING.md §5): never per request.
+    if (hub.messaging) {
+      intervals.push(setInterval(() => {
+        if (closed) return;
+        try { hub.messaging.purge(); } catch (e) { log.warn('messaging sweep failed', { err: e }); }
+      }, hub.messaging.limits.sweepMs));
+    }
+    // Sync lapse notices and purges (sync.js): hourly, never per request.
+    if (hub.sync?.enabled) {
+      intervals.push(setInterval(() => {
+        if (closed) return;
+        hub.sync.sweep().catch((e) => log.warn('sync sweep failed', { err: e }));
+      }, SYNC_SWEEP_MS));
+    }
+    if (hub.activity) {
+      intervals.push(setInterval(() => {
+        if (closed) return;
+        try { hub.activity.sweep(); } catch (e) { log.warn('activity sweep failed', { err: e }); }
+      }, SYNC_SWEEP_MS));
+    }
     if (gh.enabled) {
       intervals.push(setInterval(() => { hub.pollMerges().catch((e) => log.warn('merge poll failed', { err: e })); }, config.githubPollMs));
     }
@@ -120,7 +171,7 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
   }
 
   return {
-    hub, api, server, db, config, routes: handler.routes, devLoginSecret: hub.devLoginSecret, integrations, bus,
+    hub, api, server, db, config, routes: handler.routes, remoteState: handler.remoteState, devLoginSecret: hub.devLoginSecret, integrations, bus,
     listen(port = config.port, host = config.bind) {
       return new Promise((resolve, reject) => {
         server.once('error', reject);
@@ -138,6 +189,10 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
     async close({ graceMs = config.shutdownGraceMs ?? 5000 } = {}) {
       if (closed) return;
       closed = true;
+      api.workflowExecutor.close();
+      hub.interactionRelay?.close();
+      hub.messaging?.close();
+      hub.activity?.close();
       bus.stop();
       for (const i of intervals) clearInterval(i);
       const done = new Promise((resolve) => server.close(() => resolve()));

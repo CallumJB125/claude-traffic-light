@@ -1,4 +1,4 @@
-# Builds the Mac, Windows and Linux installers from a version tag, smoke-tests
+# Builds the approved platform installers from a version tag, smoke-tests
 # each packaged app, and stages the release. Nothing reaches users here, and
 # nothing is signed:
 #   - the GitHub Release is created as a DRAFT
@@ -25,8 +25,16 @@ on:
         description: 'Tag or branch to build (a dry run: artifacts only, nothing staged, unless beta)'
         required: true
         default: main
+      native_only:
+        description: 'Run native acceptance only; no installers or staging'
+        type: boolean
+        default: false
       beta:
         description: 'Beta: version it <version>-beta.<run> and stage it to R2 beta/<version>/ and a draft GitHub prerelease'
+        type: boolean
+        default: false
+      validate_windows:
+        description: 'Also run Windows installer/tests for acceptance; this does not enable Windows publication'
         type: boolean
         default: false
 
@@ -34,23 +42,29 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ github.ref }}${{ inputs.native_only && '-native' || '' }}
   cancel-in-progress: false
 
 jobs:
+  native-directory:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/windows-native.yml
+    with:
+      ref: ${{ github.event.inputs.ref || github.ref }}
+
   build:
+    if: github.event_name != 'workflow_dispatch' || !inputs.native_only
     name: build (${{ matrix.platform }})
     strategy:
       fail-fast: false
+      # The approved first release covers macOS/Linux. Windows joins both the
+      # mandatory installer/test matrix and publication only after its separate
+      # runtime acceptance enables WINDOWS_RELEASE. Native SDK acceptance above
+      # still runs on every dispatch; no assertions are skipped within a build.
+      # validate_windows permits an unpublished acceptance build before that flag.
       matrix:
-        include:
-          # Apple Silicon runner; it builds arm64 and x64 (the native helpers are universal).
-          - os: macos-latest
-            platform: mac
-          - os: windows-latest
-            platform: win
-          - os: ubuntu-latest
-            platform: linux
+        include: ${{ fromJSON((vars.WINDOWS_RELEASE == 'true' || (github.event_name == 'workflow_dispatch' && inputs.validate_windows)) && '[{"os":"macos-latest","platform":"mac"},{"os":"windows-latest","platform":"win"},{"os":"ubuntu-latest","platform":"linux"}]' || '[{"os":"macos-latest","platform":"mac"},{"os":"ubuntu-latest","platform":"linux"}]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     permissions:
@@ -65,6 +79,9 @@ jobs:
         with:
           node-version: 22
           cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            board/package-lock.json
 
       - name: Tag matches package.json version
         if: startsWith(github.ref, 'refs/tags/')
@@ -77,6 +94,9 @@ jobs:
           fi
 
       - run: npm ci
+
+      - name: Install locked board dependencies
+        run: npm --prefix board ci
 
       # A beta build gets a prerelease version, so it follows the beta feed
       # (its updater picks the channel from the version).
@@ -95,17 +115,29 @@ jobs:
         run: |
           node -e "require('fs').writeFileSync('build/release-floor.json', JSON.stringify({ builtAt: new Date().toISOString() }) + '\n')" && cat build/release-floor.json
 
-      # Gates Mac and Linux builds, including beta and dry runs, so a green
+      - name: Native Setups helper and runtime acceptance (Mac)
+        if: matrix.platform == 'mac'
+        timeout-minutes: 5
+        shell: bash
+        env:
+          TZ: Africa/Johannesburg
+        run: |
+          mkdir -p work/windows-release
+          npm run test:native-darwin 2>&1 | tee work/windows-release/setups-native-darwin.log
+
+      - name: Native private directory helper (Windows)
+        if: matrix.platform == 'win'
+        timeout-minutes: 3
+        shell: pwsh
+        run: ./scripts/build-windows-private-directory.ps1
+
+      # Gates every platform, including beta and dry runs, so a green
       # candidate job cannot hide failing tests. Bounded, so a hung test can't
       # eat the job. The ICS tests assume SAST, and Electron-based tests need
       # a display and no sandbox on Linux runners.
-      # The first release is macOS-first: the Windows suite only reports, and
-      # the stage and promote jobs drop every Windows file unless the repo
-      # variable WINDOWS_RELEASE is 'true' (scripts/release-sign.js). To ship
-      # Windows, once its suite is green, do both together: set
-      # WINDOWS_RELEASE=true AND remove `|| matrix.platform == 'win'` below
-      # (docs/RELEASING.md).
+      # WINDOWS_RELEASE still controls publication, never test success.
       - name: Unit tests
+        id: units
         shell: bash
         timeout-minutes: 20
         env:
@@ -114,16 +146,21 @@ jobs:
         run: |
           run() { if [ "$RUNNER_OS" = Linux ]; then xvfb-run --auto-servernum "$@"; else "$@"; fi; }
           status=0
-          run node --test --test-force-exit --test-timeout=120000 test/*.test.js test/adapters/*.test.js || status=1
-          node --test --test-force-exit --test-timeout=120000 remote/test/*.test.js || status=1
+          mkdir -p work/windows-release
+          run node --test --test-timeout=120000 test/*.test.js test/adapters/*.test.js 2>&1 | tee work/windows-release/root-tests.log || status=1
+          node --test --test-timeout=120000 remote/test/*.test.js 2>&1 | tee work/windows-release/remote-tests.log || status=1
+          (cd board && node --test --test-timeout=120000 '*/test/**/*.test.js') 2>&1 | tee work/windows-release/board-tests.log || status=1
           exit $status
-        continue-on-error: ${{ matrix.platform == 'win' }}
 
       - name: Native helpers (Mac)
         if: matrix.platform == 'mac'
         run: npm run calendar-helper && npm run voice-helper
 
       - name: Build installers
+        id: installers
+        # Retain installer diagnostics even when Windows unit checks fail.
+        # The failed units still fail the job and prevent stage/promotion.
+        if: success() || (matrix.platform == 'win' && failure() && steps.units.outcome == 'failure')
         shell: bash
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
@@ -134,15 +171,26 @@ jobs:
         if: matrix.platform == 'linux'
         run: xvfb-run --auto-servernum node scripts/smoke-installed.js
 
-      # Windows only reports, like its Unit tests: a failing Windows job would
-      # otherwise skip stage (needs: build) and block the macOS release.
-      # Remove together with the Unit tests one when WINDOWS_RELEASE flips.
-      - name: Smoke test (Mac, Windows)
-        if: matrix.platform != 'linux'
+      - name: Smoke test (Mac)
+        if: matrix.platform == 'mac'
         run: node scripts/smoke-installed.js
-        continue-on-error: ${{ matrix.platform == 'win' }}
+
+      - name: Windows installer lifecycle
+        if: always() && matrix.platform == 'win' && steps.installers.outcome == 'success'
+        timeout-minutes: 15
+        run: node scripts/windows-install-smoke.js
+
+      - name: Test and lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-evidence-${{ matrix.platform }}
+          if-no-files-found: error
+          retention-days: 14
+          path: work/windows-release
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always() && steps.installers.outcome == 'success'
         with:
           name: installers-${{ matrix.platform }}
           if-no-files-found: error
@@ -160,7 +208,7 @@ jobs:
 
   stage:
     name: stage (draft release + R2)
-    needs: build
+    needs: [build, native-directory]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
@@ -188,7 +236,7 @@ jobs:
 
       - name: Checksums
         working-directory: out
-        run: sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+        run: sha256sum -- * > SHA256SUMS.txt && cat SHA256SUMS.txt
 
       # A published release is never changed by re-running its tag.
       - name: Draft GitHub Release
@@ -212,7 +260,7 @@ jobs:
 
   stage-beta:
     name: stage beta (R2 beta/<version>/ + draft prerelease)
-    needs: build
+    needs: [build, native-directory]
     if: github.event_name == 'workflow_dispatch' && inputs.beta
     runs-on: ubuntu-latest
     permissions:
@@ -248,7 +296,7 @@ jobs:
 
       - name: Checksums
         working-directory: out
-        run: sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+        run: sha256sum -- * > SHA256SUMS.txt && cat SHA256SUMS.txt
 
       # The promote workflow signs from these assets, not from R2.
       - name: Draft GitHub prerelease

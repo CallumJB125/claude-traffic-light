@@ -11,6 +11,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const Claude = require('../adapters/claude-code.js');
+const Codex = require('../adapters/codex.js');
+const HermesActivity = require('../adapters/hermes-activity.js');
 const Runtime = require('../adapters/runtime.js');
 const { scrub, cleanJsonError } = require('./scrub.js');
 const Brand = require('../brand.js');
@@ -27,6 +29,11 @@ const FIXES = {
   'reinstall-hooks': 'Reinstall hooks',
   'enable-mcp': 'Enable Claude integration',
   'clear-stale-locks': 'Clear stale lock',
+  'connect-codex': 'Configure Codex activity',
+  'connect-hermes': 'Connect Hermes activity',
+  'open-burst-console': 'Open Burst console',
+  'burst-console-restart': 'Restart Burst',
+  'burst-trace': 'Send test message',
 };
 // Claude Code reads hooks once, when a session starts.
 const RESTART_SESSIONS = 'Then restart your Claude sessions.';
@@ -72,12 +79,12 @@ function checkHooks(ctx) {
   // macOS runs an app opened straight from Downloads from a random read-only
   // copy; hooks pinned to that path break at the next launch.
   if (/\/AppTranslocation\//.test(ctx.runtime.execPath || '')) {
-    return { status: 'fail', detail: 'Buddy is running from a temporary copy macOS made of it, so hooks can\'t point at it.', next: `Move ${Brand.name} to Applications (drag it out of Downloads), then open it from there.` };
+    return { status: 'fail', detail: 'Plexiform is running from a temporary copy macOS made of it, so hooks can\'t point at it.', next: `Move ${Brand.name} to Applications (drag it out of Downloads), then open it from there.` };
   }
   const file = Claude.configPath(ctx.home);
   let settings;
   try { settings = Runtime.readJsonConfig(file, ctx.fs); } catch (err) {
-    return { status: 'fail', detail: `${tilde(file, ctx.home)} can't be read: ${cleanJsonError(err.message)}`, next: `Fix or remove the broken JSON in ${tilde(file, ctx.home)}, then reinstall hooks. Buddy never writes over a file it can't parse.` };
+    return { status: 'fail', detail: `${tilde(file, ctx.home)} can't be read: ${cleanJsonError(err.message)}`, next: `Fix or remove the broken JSON in ${tilde(file, ctx.home)}, then reinstall hooks. Plexiform never writes over a file it can't parse.` };
   }
   const ours = [];
   for (const [event, groups] of Object.entries(settings.hooks || {})) {
@@ -97,18 +104,18 @@ function checkHooks(ctx) {
     const where = tilde(other.script || other.exe || 'an unknown path', ctx.home);
     if (current) return { status: 'warn', detail: `Installed, but also registered from ${gone ? 'a copy that isn\'t there any more' : 'another copy'} (${where}).`, fix, next: RESTART_SESSIONS };
     return gone
-      ? { status: 'fail', detail: `Points at a copy of Buddy that was moved or deleted (${where}).`, fix, next: RESTART_SESSIONS }
-      : { status: 'warn', detail: `Pointing at a different copy of Buddy (${where}), not this one.`, fix, next: RESTART_SESSIONS };
+      ? { status: 'fail', detail: `Points at a copy of Plexiform that was moved or deleted (${where}).`, fix, next: RESTART_SESSIONS }
+      : { status: 'warn', detail: `Pointing at a different copy of Plexiform (${where}), not this one.`, fix, next: RESTART_SESSIONS };
   }
   // Same script, another command form (plain node, an older runner).
   if (differ.length) return { status: 'warn', detail: 'Installed in an older form.', fix, next: RESTART_SESSIONS };
-  if (current) return { status: 'ok', detail: 'Installed, and pointing at this copy of Buddy.' };
+  if (current) return { status: 'ok', detail: 'Installed, and pointing at this copy of Plexiform.' };
   if (!wrapperOk) return { status: 'fail', detail: `The hook runner ${tilde(Runtime.wrapperPath(ctx.runtime), ctx.home)} is missing.`, fix, next: RESTART_SESSIONS };
   // Every hook right, only the installer's deny rule (which keeps Claude's
   // file tools out of Buddy's data folder) gone.
   const rules = Claude.denyRulesFor(ctx.home, ctx.runtime);
   const withRules = { ...settings, permissions: { ...(settings.permissions || {}), deny: [...(Array.isArray(settings.permissions?.deny) ? settings.permissions.deny : []), ...rules] } };
-  if (Claude.check(withRules, ctx.runtime, opts)) return { status: 'warn', detail: "Installed, but without the rule that keeps Claude's file tools out of Buddy's data folder.", fix, next: RESTART_SESSIONS };
+  if (Claude.check(withRules, ctx.runtime, opts)) return { status: 'warn', detail: "Installed, but without the rule that keeps Claude's file tools out of Plexiform's data folder.", fix, next: RESTART_SESSIONS };
   const missing = Claude.HOOK_EVENTS.map(([e]) => e).filter((e) => !ours.some((o) => o.event === e && o.command === Claude.commandFor(e, ctx.runtime)));
   return {
     status: 'warn',
@@ -118,22 +125,52 @@ function checkHooks(ctx) {
   };
 }
 
+// Found when the Hermes CLI is installed; connecting enables Plexiform's
+// metadata-only observer plugin through Hermes' own CLI (adapters/hermes-activity.js).
+function checkHermesActivity(ctx) {
+  if (process.platform === 'win32' || !ctx.fs.existsSync(path.join(ctx.home, '.hermes')) || !(ctx.findHermes || HermesActivity.findBin)(ctx.home)) return null;
+  if ((ctx.hermesConnected || HermesActivity.isInstalled)({ home: ctx.home })) return { status: 'ok', detail: 'Hermes session activity is connected.' };
+  return { status: 'warn', detail: 'Hermes is installed but its session activity is not connected to Plexiform.', fix: 'connect-hermes', next: 'Start a new Hermes session after connecting.' };
+}
+
 function checkVersion(ctx) {
   const u = (ctx.updateStatus || notConfigured)() || notConfigured();
   const v = `Version ${ctx.version || 'unknown'}`;
-  if (u.state === 'available') return { status: 'warn', detail: `${v}; ${u.version ? `${u.version} is available` : 'an update is available'}.`, next: u.detail || 'Quit Buddy and install the update from the tray.' };
+  if (u.state === 'available') return { status: 'warn', detail: `${v}; ${u.version ? `${u.version} is available` : 'an update is available'}.`, next: u.detail || 'Quit Plexiform and install the update from the tray.' };
   if (u.state === 'current') return { status: 'ok', detail: `${v}, up to date.` };
   return { status: 'info', detail: `${v}. Updates: ${u.state === 'error' ? `couldn't check (${u.detail || 'unknown error'})` : u.detail || 'not set up yet'}.` };
+}
+
+// Configuration is distinct from Codex's own review/trust decision. Only
+// accepted lifecycle events in our own session store establish observation;
+// never inspect Codex chat history or infer that an open chat is working.
+function checkCodexHooks(ctx) {
+  if (!ctx.fs.existsSync(path.join(ctx.home, '.codex'))) return null;
+  const next = 'Review and trust the Plexiform hooks in Codex, then start a new turn. Check this row again after activity.';
+  if (!Codex.isActivityInstalled({ home: ctx.home, runtime: ctx.runtime, fs: ctx.fs })) {
+    return { status: 'warn', detail: 'Codex session activity is not configured for this copy of Plexiform.', fix: 'connect-codex', next };
+  }
+  let at = 0;
+  try {
+    for (const s of scanSessions(ctx).datas) {
+      const t = Date.parse(s.codexHookAt || '');
+      if (s.source === 'codex' && s.codexLifecycle === 1 && Number.isFinite(t) && t <= ctx.now && t > at) at = t;
+    }
+  } catch { /* Session-file health reports unreadable storage separately. */ }
+  if (!at) return { status: 'info', detail: 'Codex hooks are configured. No lifecycle event has been received yet.', next };
+  const detail = `Codex hooks are configured. Last lifecycle event: ${ago(ctx.now - at)}.`;
+  return ctx.now - at <= 5 * 60000 ? { status: 'ok', detail, at: new Date(at).toISOString() }
+    : { status: 'info', detail, at: new Date(at).toISOString(), next: 'No recent activity is recorded. If Codex is working, check its hook review and start a new turn.' };
 }
 
 function checkMcp(ctx) {
   const m = ctx.mcp;
   if (!m) return { status: 'info', detail: 'Unknown.' };
   const where = tilde(m.path, ctx.home);
-  if (m.error) return { status: 'fail', detail: `${where} can't be read: ${cleanJsonError(m.error)}`, next: `Buddy never writes over a file it can't parse. Fix the JSON in ${where} (Claude Code rewrites it on its next start).` };
-  if (m.installed && m.current) return { status: 'ok', detail: ctx.mcpConnected ? 'Registered, and this answer came through it.' : `Registered in ${where}; new Claude Code sessions can ask Buddy what it's showing.` };
-  if (m.installed) return { status: 'warn', detail: 'Registered, but pointing at an older copy of Buddy.', fix: 'enable-mcp', next: RESTART_SESSIONS };
-  return { status: 'warn', detail: 'Off: Claude can\'t ask Buddy "why is my light amber?".', fix: 'enable-mcp', next: RESTART_SESSIONS };
+  if (m.error) return { status: 'fail', detail: `${where} can't be read: ${cleanJsonError(m.error)}`, next: `Plexiform never writes over a file it can't parse. Fix the JSON in ${where} (Claude Code rewrites it on its next start).` };
+  if (m.installed && m.current) return { status: 'ok', detail: ctx.mcpConnected ? 'Registered, and this answer came through it.' : `Registered in ${where}; new Claude Code sessions can ask Plexiform what it's showing.` };
+  if (m.installed) return { status: 'warn', detail: 'Registered, but pointing at an older copy of Plexiform.', fix: 'enable-mcp', next: RESTART_SESSIONS };
+  return { status: 'warn', detail: 'Off: Claude can\'t ask Plexiform "why is my light amber?".', fix: 'enable-mcp', next: RESTART_SESSIONS };
 }
 
 // ctx.signal: { listening, port, error } from the app, or { running: false }
@@ -141,12 +178,12 @@ function checkMcp(ctx) {
 function checkSignal(ctx) {
   const s = ctx.signal || {};
   const port = s.port || 47172;
-  if (s.listening) return { status: 'ok', detail: `Other tools on this Mac can reach Buddy (port ${port}).` };
-  if (s.running === false) return { status: 'fail', detail: `Buddy isn't answering on this Mac (port ${port}): it isn't running, or another program holds its port.`, next: `Open ${Brand.name}. If it is open, quit any other copy (Activity Monitor), then quit and reopen it.` };
+  if (s.listening) return { status: 'ok', detail: `Other tools on this Mac can reach Plexiform (port ${port}).` };
+  if (s.running === false) return { status: 'fail', detail: `Plexiform isn't answering on this Mac (port ${port}): it isn't running, or another program holds its port.`, next: `Open ${Brand.name}. If it is open, quit any other copy (Activity Monitor), then quit and reopen it.` };
   // Hooks write session files directly, so the light keeps working; what
   // breaks is /signal, other agents' HTTP hooks and live status for MCP.
   const why = s.error === 'EADDRINUSE' ? `Another program is using its port (${port})` : `It couldn't start (${s.error || 'unknown reason'})`;
-  return { status: 'warn', detail: `${why}, so other tools can't reach Buddy.`, next: 'Claude Code still works. Quit any other copy of Buddy, then reopen this one.' };
+  return { status: 'warn', detail: `${why}, so other tools can't reach Plexiform.`, next: 'Claude Code still works. Quit any other copy of Plexiform, then reopen this one.' };
 }
 
 // A lock, or a lock a waiter renamed aside to break it and then died.
@@ -172,7 +209,7 @@ function checkSessions(ctx) {
   const dir = path.join(ctx.root, 'sessions');
   let scan;
   try { scan = scanSessions(ctx); } catch (err) {
-    return { status: 'fail', detail: `${tilde(dir, ctx.home)} can't be read (${err.code || err.message}).`, next: err.code === 'ENOENT' ? 'Quit and reopen Buddy: it creates the folder when it starts.' : 'Check the folder\'s permissions: every hook writes its session there.' };
+    return { status: 'fail', detail: `${tilde(dir, ctx.home)} can't be read (${err.code || err.message}).`, next: err.code === 'ENOENT' ? 'Quit and reopen Plexiform: it creates the folder when it starts.' : 'Check the folder\'s permissions: every hook writes its session there.' };
   }
   try { ctx.fs.accessSync(dir, fs.constants.W_OK); } catch {
     return { status: 'fail', detail: `${tilde(dir, ctx.home)} isn't writable, so hooks can't record anything.`, next: 'Check the folder\'s permissions (it should belong to you).' };
@@ -276,14 +313,135 @@ function checkDisk(ctx) {
   return { status: 'ok', detail };
 }
 
+// ctx.burst is the Burst status view model (burst-view.js statusView); only
+// macOS with Burst installed gets a row. Trust is the version+pid handshake
+// burst-client does before it reads anything.
+function checkBurst(ctx) {
+  const v = ctx.burst;
+  if ((ctx.platform || process.platform) !== 'darwin' || !v || v.kind === 'unsupported' || v.kind === 'not_installed') return null;
+  if (v.kind === 'untrusted') return { status: 'fail', detail: 'Whatever answers on Burst\'s port is not your Burst install, so Plexiform reads nothing from it.', next: 'Open the Burst console to check it, or turn Burst off.', fix: 'open-burst-console' };
+  if (v.kind === 'off' && !v.version) return { status: 'info', detail: 'Burst is installed but not answering, so its trust can\'t be checked.' };
+  return { status: 'ok', detail: 'Burst answered and is your install.' };
+}
+
+// ── Burst rows (ctx.burstFacts from BurstIpc.healthFacts(): { detection, console, audit }) ──
+// macOS with Burst installed only. Each answers from caches, never from a request.
+function burstState(ctx) {
+  const f = ctx.burstFacts;
+  if ((ctx.platform || process.platform) !== 'darwin' || !f || !f.detection) return null;
+  const d = f.detection;
+  if (d.kind === 'unsupported' || d.kind === 'not_installed') return null;
+  return { d, state: d.state || null, con: f.console || null, audit: Array.isArray(f.audit) ? f.audit : [] };
+}
+
+// Gateway not answering: the console answers when it is down, so it names the part that failed.
+function checkBurstGateway(ctx) {
+  const b = burstState(ctx);
+  if (!b || b.d.kind !== 'unreachable') return null;
+  const con = b.con;
+  if (con && con.kind === 'present') {
+    const bad = (con.status.checks || []).filter((c) => !c.ok);
+    const why = bad.length ? `${bad.map((c) => c.name).join(', ')} ${bad.length === 1 ? 'is' : 'are'} failing` : 'its console reports every check passing';
+    return { status: 'fail', detail: `Burst's gateway is not answering; ${why}.`, next: bad[0] && bad[0].detail ? bad[0].detail : 'Restart it from Burst\'s console.', fix: 'burst-console-restart' };
+  }
+  if (con && con.kind === 'unreachable') return { status: 'fail', detail: 'Neither Burst\'s gateway nor its support console is answering.', next: 'If Claude Code is failing, take Burst out of its path from the Burst card, then repair it.' };
+  return { status: 'fail', detail: 'Burst\'s gateway is not answering, and its console isn\'t available to say why.', next: 'If Claude Code is failing, take Burst out of its path from the Burst card.' };
+}
+
+function checkBurstConfig(ctx) {
+  const b = burstState(ctx);
+  if (!b) return null;
+  const err = b.d.kind === 'broken' ? (b.state && b.state.configError) || 'unreadable' : (b.con && b.con.kind === 'present' && b.con.status.configError) || '';
+  if (!err) return null;
+  return { status: 'fail', detail: `Burst's configuration has an error: ${String(err).slice(0, 200)}`, next: 'Open the Burst console and use Repair.', fix: 'open-burst-console' };
+}
+
+function checkBurstIntercept(ctx) {
+  const b = burstState(ctx);
+  if (!b || b.d.kind !== 'present' || !b.state) return null;
+  if (b.state.active) return { status: 'ok', detail: `Claude Code's traffic goes through Burst (${b.state.mode || 'unknown'} mode).` };
+  const con = b.con && b.con.kind === 'present';
+  return { status: 'warn', detail: b.state.inactiveReason || 'Burst is installed but not in Claude Code\'s path.', next: con ? 'Restarting Burst puts it back in the path.' : 'Use Turn on or Repair from the Burst card.', ...(con ? { fix: 'burst-console-restart' } : {}) };
+}
+
+function checkBurstCa(ctx) {
+  const b = burstState(ctx);
+  if (!b || b.d.kind !== 'present' || !b.state || b.state.mode !== 'transparent') return null;
+  const t = b.state.clientTls;
+  if (t && t.rejecting) return { status: 'fail', detail: `Programs on this Mac are rejecting Burst's certificate${t.lastClass ? ` (${t.lastClass})` : ''}.`, next: 'Claude Code may be failing to connect. Repair Burst from its console, which renews the certificate.', fix: 'open-burst-console' };
+  if (!b.state.caTrusted) return { status: 'warn', detail: 'Burst\'s certificate is not trusted by this Mac.', next: 'Repair Burst from its console.', fix: 'open-burst-console' };
+  return { status: 'ok', detail: 'Burst\'s certificate is trusted.' };
+}
+
+function checkBurstGuards(ctx) {
+  const b = burstState(ctx);
+  if (!b || b.d.kind !== 'present' || !b.state || b.state.mode !== 'transparent') return null;
+  const missing = [['redirect guard', b.state.pfHeal], ['settings guard', b.state.selfHeal]].filter(([, h]) => !h || !h.installed).map(([n]) => n);
+  if (!missing.length) return { status: 'ok', detail: 'Burst\'s redirect and settings guards are installed.' };
+  return { status: 'info', detail: `Burst's ${missing.join(' and ')} ${missing.length === 1 ? 'is' : 'are'} not installed, so a macOS update or another tool can quietly take Burst out of the path.`, next: 'Install them from Burst\'s dashboard.' };
+}
+
+function checkBurstSecondary(ctx) {
+  const b = burstState(ctx);
+  if (!b || b.d.kind !== 'present' || !b.state) return null;
+  const s = b.state.secondary;
+  if (!s || !s.provider) return null;
+  if (s.keyPresent) return { status: 'ok', detail: `A secondary provider (${s.provider}) is set up with its key.` };
+  return { status: 'warn', detail: `A secondary provider (${s.provider}) is set up but its key is missing, so Burst can't fail over to it.`, next: 'Open the Burst dashboard and add the key.' };
+}
+
+function checkBurstVersion(ctx) {
+  const b = burstState(ctx);
+  if (!b || b.d.kind !== 'present' || !b.state) return null;
+  const u = b.d.upgrade;
+  if (u && u.canUpgrade && !u.upToDate) return { status: 'info', detail: `Burst ${b.state.version || ''} is behind${u.latestVersion ? `; ${u.latestVersion} is available` : ''}.`.replace('  ', ' '), next: 'Use Update from the Burst card.' };
+  return { status: 'ok', detail: `Burst ${b.state.version || ''} is up to date.`.replace('  ', ' ') };
+}
+
+function checkBurstTrace(ctx) {
+  const b = burstState(ctx);
+  if (!b || b.d.kind !== 'present') return null;
+  return { status: 'info', detail: 'Checks every step from Claude Code to Anthropic (DNS, redirect, certificate, route). Uses a very small part of your Claude subscription.', fix: 'burst-trace' };
+}
+
+// What a Trace route fix returns (data from POST /api/trace) as rows to render.
+function traceView(data) {
+  const o = data && typeof data === 'object' ? data : {};
+  const word = (v) => (typeof v === 'string' ? v.slice(0, 300) : '');
+  const hops = (Array.isArray(o.hops) ? o.hops : []).slice(0, 20).map((h) => ({
+    name: word(h && h.name), state: word(h && h.state), summary: word(h && h.summary), ms: Number.isFinite(h && h.duration_ms) ? h.duration_ms : null,
+  }));
+  return { state: word(o.state), verdict: word(o.verdict), hops };
+}
+
+function checkBurstActivity(ctx) {
+  const b = burstState(ctx);
+  if (!b || b.d.kind === 'unreachable' && !b.audit.length) return null;
+  const list = b.audit.slice(0, 50);
+  const bad = list.filter((e) => e.severity === 'error').length;
+  return { status: 'info', detail: list.length ? `${plural(list.length, 'recent event')}${bad ? `, ${bad} of them errors` : ''}.` : 'Nothing recorded yet.', list };
+}
+
 const CHECKS = [
   ['hooks', 'Claude Code hooks', checkHooks],
+  ['codex-hooks', 'Codex session activity', checkCodexHooks],
+  ['hermes-activity', 'Hermes session activity', checkHermesActivity],
   ['sessions', 'Session files', checkSessions],
   ['last-hook', 'Last hook event', checkLastHook],
-  ['signal', "Buddy's local connection", checkSignal],
+  ['signal', "Plexiform's local connection", checkSignal],
   ['mcp', 'Claude integration (MCP)', checkMcp],
   ['transcripts', 'Transcripts', checkTranscripts],
   ['disk', 'Disk space', checkDisk],
+  ['burst', 'Burst trusted', checkBurst],
+  ['burst-gateway', 'Burst gateway', checkBurstGateway],
+  ['burst-config', 'Burst configuration', checkBurstConfig],
+  ['burst-intercept', 'Burst in Claude Code\'s path', checkBurstIntercept],
+  ['burst-ca', 'Burst certificate', checkBurstCa],
+  ['burst-guards', 'Burst self-heal guards', checkBurstGuards],
+  ['burst-secondary', 'Burst secondary provider', checkBurstSecondary],
+  ['burst-version', 'Burst version', checkBurstVersion],
+  ['burst-trace', 'Trace route', checkBurstTrace],
+  ['burst-activity', 'Burst activity', checkBurstActivity],
   ['version', 'App version', checkVersion],
 ];
 
@@ -296,6 +454,7 @@ function runChecks(ctx = {}) {
   for (const [id, label, fn] of CHECKS) {
     let r;
     try { r = fn(c, checks); } catch (err) { r = { status: 'info', detail: `Couldn't check (${err.message}).` }; }
+    if (!r) continue;
     const out = { id, label, ...r };
     if (out.fix && !out.fixLabel) out.fixLabel = FIXES[out.fix];
     checks.push(out);
@@ -384,6 +543,6 @@ function diagnostics({ report, versions = {}, platform = {}, logText = '', scrub
 
 module.exports = {
   FIXES, LAST_HOOK_FILE, STALE_LOCK_AGE_MS,
-  runChecks, likelyCause, clearStaleLocks, newestHookAt, lastHookEvent, notConfigured, hookPaths, logExcerpt, diagnostics, ago,
-  checkHooks, checkVersion, checkMcp, checkSignal, checkSessions, checkLastHook, checkTranscripts, checkDisk,
+  runChecks, traceView, likelyCause, clearStaleLocks, newestHookAt, lastHookEvent, notConfigured, hookPaths, logExcerpt, diagnostics, ago,
+  checkHooks, checkCodexHooks, checkVersion, checkMcp, checkSignal, checkSessions, checkLastHook, checkTranscripts, checkDisk,
 };

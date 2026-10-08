@@ -2,13 +2,29 @@
 <html>
 <head>
 <meta charset="utf-8" />
-<title>What is Claude doing?</title>
+<title>Welcome to Plexiform</title>
 <link rel="stylesheet" href="tokens.css" />
 <style>
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: var(--text-base)/1.45 var(--font); -webkit-font-smoothing: antialiased; }
   body { display: flex; flex-direction: column; }
   main { flex: 1; overflow-y: auto; padding: var(--space-4) 18px var(--space-3); display: flex; flex-direction: column; gap: var(--space-3); }
+  .welcome { padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
+  .welcome p { max-width: 65ch; }
+  .start-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-3); }
+  .start-actions button { flex: 1 1 150px; min-height: 38px; white-space: normal; }
+  .start-actions button:active { transform: scale(.97); }
+  button:focus-visible { box-shadow: var(--focus); }
+  .start-notice { min-height: 1.45em; margin-top: var(--space-2); font-size: var(--text-xs); color: var(--muted); }
+  .setup { padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
+  .setup summary { color: var(--text); font-weight: 600; }
+  .setup ul { margin-top: var(--space-2); gap: var(--space-2); }
+  .setup li { display: flex; gap: var(--space-2); align-items: flex-start; }
+  .setup .mark { flex: none; width: 18px; text-align: center; color: var(--muted); }
+  .setup li[data-state="done"] .mark { color: var(--green); }
+  .setup li > div { flex: 1; min-width: 0; }
+  .setup li button { margin-top: 4px; }
+  .now h2 { font-size: var(--text-xl); color: var(--text); letter-spacing: normal; text-transform: none; margin: 0; }
   .now { display: flex; gap: var(--space-3); align-items: flex-start; }
   .lamp { flex: none; width: 14px; height: 14px; margin-top: 3px; border-radius: 4px; background: var(--line-strong); box-shadow: 0 0 0 2px var(--panel-2); }
   .lamp.green { background: var(--green); } .lamp.amber { background: var(--amber); } .lamp.red { background: var(--red); }
@@ -32,17 +48,33 @@
   button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
   summary:focus-visible { box-shadow: var(--focus); }
   [hidden] { display: none !important; }
-  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } .start-actions button:active { transform: none; } }
 </style>
 </head>
 <body>
-  <main aria-label="What Claude is doing right now">
+  <main aria-label="Get started and see what your AI agents are reporting">
+  <section class="welcome" aria-labelledby="welcome-title">
+    <h1 id="welcome-title">Welcome to Plexiform</h1>
+    <p>Connect your AI tools and Plexiform shows what they're doing, what needs you, and what it costs.</p>
+    <div class="start-actions" role="group" aria-label="Get started">
+      <button class="primary" id="start-setup">Run setup again</button>
+      <button id="start-privacy">What leaves your machine</button>
+    </div>
+    <p class="start-notice" id="start-notice" role="status" aria-live="polite"></p>
+  </section>
+  <details class="setup" id="setup-box" aria-labelledby="setup-title" hidden>
+    <summary id="setup-title"></summary>
+    <p class="tools-prompt" id="tools-prompt" hidden><span id="tools-prompt-text"></span> <button type="button" id="tools-prompt-go" class="primary">Connect all</button></p>
+    <ul id="setup-list"></ul>
+    <p class="rule">Nothing here is required. Skip any step and keep working.</p>
+  </details>
   <div class="now" role="status" aria-live="polite">
     <div class="lamp" id="lamp" aria-hidden="true"></div>
     <div>
-      <h1 id="headline">…</h1>
+      <h2 id="headline">…</h2>
       <div class="sub" id="lampText"></div>
       <p id="meaning"></p>
+      <p id="providers" class="rule"></p>
     </div>
   </div>
 
@@ -65,29 +97,33 @@
   </section>
 
   <details>
+    <summary>Windows and WSL</summary>
+    <p>Windows support is still pending acceptance, so expect rough edges and no promises about timing. Claude Code sessions running inside WSL have not been tested with Plexiform; treat them as unsupported for now.</p>
+  </details>
+  <details>
     <summary>“Needs your input” vs “Waiting for you”</summary>
-    <p><b>Needs your input</b> (amber, waving): Claude is stuck mid-task on a permission prompt or a question. Nothing moves until you answer in the terminal.</p>
-    <p><b>Waiting for you</b>: Claude finished its turn. It's simply your turn to type — nothing is stuck.</p>
+    <p><b>Needs your input</b> (amber, waving): An AI agent has paused mid-task on a permission prompt or a question. Nothing moves until you answer in the terminal.</p>
+    <p><b>Waiting for you</b>: An AI agent finished its turn. It's simply your turn to type — nothing is stuck.</p>
   </details>
   <details>
     <summary>What the colours usually mean</summary>
-    <p><b>Green</b>: working, or just finished. <b>Amber</b>: needs you, a failed turn, or nothing running. <b>Red</b>: out of tokens, offline, a runaway session, or over budget. Every colour is programmable in Lights, so yours may differ.</p>
+    <p><b>Green</b>: working, or just finished. <b>Amber</b>: needs you, a failed turn, or nothing running. <b>Red</b>: out of tokens, offline, a runaway session, or over budget. Every colour is programmable in Widget configuration, so yours may differ.</p>
   </details>
   <details>
     <summary>Spend: budgets and runaway sessions</summary>
-    <p>Buddy prices every turn from your Claude Code transcripts at API list prices. Set a daily or weekly budget in <b>Preferences → Spend</b>: near it (80% by default) the light goes amber with money eyes when a turn ends; over it, red with money eyes.</p>
-    <p><b>Runaway session</b> (pulsing red, wide eyes; hover Claude for the burn rate, like “$47.20 in 18 min”): one session spent more than your threshold ($40 in 20 minutes by default) and is still working. You get one notification; click it to jump to that terminal. Buddy never types into or stops a session you started.</p>
+    <p>Plexiform prices every turn from your Claude Code transcripts at API list prices. Set a daily or weekly budget in <b>Preferences → Spend</b>: near it (80% by default) the light goes amber with money eyes when a turn ends; over it, red with money eyes.</p>
+    <p><b>Runaway session</b> (pulsing red, wide eyes; hover the widget for the burn rate, like “$47.20 in 18 min”): one session spent more than your threshold ($40 in 20 minutes by default) and is still working. You get one notification; click it to jump to that terminal. Plexiform never types into or stops a session you started.</p>
     <p>On a Pro or Max plan you aren't billed per token, so these are API-price equivalents, not a share of your usage window.</p>
   </details>
   <details>
     <summary>Ask him out loud</summary>
-    <p>Press and hold Claude (or hold the key you picked in Preferences → Voice), ask, and let go. He answers “What's blocked?”, “What's my Claude doing?”, “How much have I spent today?” and “What happened while I was out?”. The red mic badge shows whenever he's listening; speech becomes text on this Mac and audio is never kept. A teammate's Claude needs the team board.</p>
+    <p>Press and hold the widget (or hold the key you picked in Preferences → Voice), ask, and let go. He answers “What's blocked?”, “What are my sessions doing?”, “How much have I spent today?” and “What happened while I was out?”. The red mic badge shows whenever he's listening; speech becomes text on this Mac and audio is never kept. A teammate’s AI activity needs the team board.</p>
   </details>
   </main>
 
   <div class="actions">
-    <span class="note">Reopen from the <b>?</b> on Claude, or press Esc to close.</span>
-    <button id="lights" title="Change what Claude does for each state">Open Lights</button>
+    <span class="note">Reopen from the <b>?</b> on the widget, or open Help in the main app.</span>
+    <button id="lights" title="Change what the widget does for each state">Widget configuration</button>
     <button class="primary" id="close">Got it</button>
   </div>
 
@@ -96,14 +132,26 @@
     const li = (html) => { const el = document.createElement('li'); el.innerHTML = html; return el; };
     const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 
+    function renderSetup(setup) {
+      $('setup-box').hidden = !setup;
+      if (!setup) return;
+      $('setup-title').textContent = setup.complete ? 'Set up: all done' : `Get set up: ${setup.done} of ${setup.total} done`;
+      $('setup-box').open = !setup.complete;
+      $('tools-prompt').hidden = !setup.prompt;
+      if (setup.prompt) { $('tools-prompt-text').textContent = setup.prompt.text; $('tools-prompt-go').dataset.dest = setup.prompt.fix.destination; }
+      $('setup-list').replaceChildren(...setup.rows.map((r) => { const row = li(`<span class="mark" aria-hidden="true">${r.state === 'done' ? '✓' : '○'}</span><div><b>${esc(r.title)}</b> <span class="rule">${r.state === 'done' ? '(done)' : '(not done yet)'}</span><div class="rule">${esc(r.detail)}</div>${r.fix ? `<button type="button" data-dest="${esc(r.fix.destination)}">${esc(r.fix.label)}</button>` : ''}</div>`); row.dataset.state = r.state; return row; }));
+    }
+
     async function render() {
       let h;
       try { h = await window.helpApi.getHelp(); } catch (err) { console.error('[help]', err); }
       if (!h) { $('headline').textContent = 'Could not load the status — try reopening this window.'; return; }
+      renderSetup(h.setup);
       $('lamp').className = `lamp ${h.lamp}`;
       $('headline').textContent = h.headline;
       $('lampText').textContent = `${h.lampText}${h.sessions ? ` · ${h.sessions} session${h.sessions === 1 ? '' : 's'}${h.remote ? ` (${h.remote})` : ''}` : ''}`;
       $('meaning').textContent = h.meaning || '';
+      $('providers').textContent = h.providerStatus ? h.providerStatus.detail + (h.providerStatus.omitted ? ` ${h.providerStatus.omitted} additional reports omitted.` : '') : '';
       $('activity-box').hidden = !h.activity;
       $('activity').textContent = h.activity || '';
       const why = $('why');
@@ -123,9 +171,30 @@
       }
     }
 
+    const openDest = async (e) => {
+      const dest = e.target.closest && e.target.closest('button[data-dest]');
+      if (!dest) return;
+      let opened = false;
+      try { opened = await window.helpApi.navigate(dest.dataset.dest); } catch {}
+      $('start-notice').textContent = opened ? '' : 'Could not open this page. Reopen Help and try again.';
+    };
+    $('setup-list').addEventListener('click', openDest);
+    $('tools-prompt').addEventListener('click', openDest);
+
+    for (const [id, destination] of [['start-setup', 'onboarding'], ['start-privacy', 'settings']]) {
+      $(id).addEventListener('click', async () => {
+        let opened = false;
+        try { opened = await window.helpApi.navigate(destination); } catch {}
+        $('start-notice').textContent = opened ? '' : 'Could not open this page. Reopen Help and try again.';
+      });
+    }
+
     $('lights').addEventListener('click', () => window.helpApi.openLights());
-    $('close').addEventListener('click', () => window.close());
-    window.addEventListener('keydown', (e) => { if (e.key === 'Escape') window.close(); });
+    if (new URLSearchParams(location.search).get('embedded') === '1') $('close').hidden = true;
+    else {
+      $('close').addEventListener('click', () => window.close());
+      window.addEventListener('keydown', (e) => { if (e.key === 'Escape') window.close(); });
+    }
     window.helpApi.onStatusChanged(render);
     render();
   </script>

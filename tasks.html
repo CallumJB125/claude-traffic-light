@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; base-uri 'none'; form-action 'none'">
+<title>Tasks</title>
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="tasks.css">
+</head>
+<body>
+  <div class="app">
+    <aside class="side" aria-label="Tasks">
+      <header class="side-top">
+        <h1>Tasks</h1>
+        <button type="button" class="btn primary" id="new-task" title="New task (⌥⌘T)">New task</button>
+      </header>
+      <p id="conn-note" class="conn-note" role="status" aria-live="polite" hidden></p>
+      <ul id="list" class="list"></ul>
+      <p id="list-empty" class="list-empty" hidden></p>
+    </aside>
+    <main class="main" id="main" aria-live="off"></main>
+  </div>
+  <script src="src/tasks-view.js"></script>
+  <script src="tasks.js"></script>
+</body>
+</html>

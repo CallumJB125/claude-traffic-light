@@ -46,7 +46,7 @@ async function startRealHub(dir) {
   let err = '';
   const proc = spawn(process.execPath, [path.join(BOARD, 'hub', 'server.js')], {
     env: {
-      PATH: process.env.PATH, HOME: dir, LANG: 'en_US.UTF-8', BOARD_AUTH: 'accounts', BOARD_SIGNUP: 'open', BOARD_ACCOUNTS_DEV: '1', BOARD_CONSOLE_MAILER: '1',
+      PATH: process.env.PATH, HOME: dir, LANG: 'en_US.UTF-8', BOARD_AUTH: 'accounts', BOARD_SIGNUP: 'open', BOARD_ACCOUNTS_DEV: '1', BOARD_CONSOLE_MAILER: '1', BOARD_EMAIL_SIGNIN: '1',
       BOARD_BIND: '127.0.0.1', BOARD_PORT: String(port), BOARD_DATA_DIR: dir, BOARD_SECRET: crypto.randomBytes(32).toString('hex'), BOARD_LOG_LEVEL: 'warn',
     },
     stdio: ['ignore', 'ignore', 'pipe'],
@@ -91,6 +91,7 @@ function install(hub, root, name) {
   const store = createWorkspaceStore(path.join(dir, 'ws.json'), { allowOrigins, signedIn });
   const client = createAccountClient({ origin: hub.origin, store: vault, onSignedOut: () => {} });
   const children = [];
+  const opened = [];
   const deviceFile = (ws) => path.join(devDir, `${hubKey(ws.hub)}-${ws.teamId}.bin`);
   const flow = createAccountFlow({
     store, clientFor: () => client, signedIn, userOf: () => vault.load()?.user ?? null,
@@ -105,7 +106,8 @@ function install(hub, root, name) {
     hasDeviceFile: (ws) => fs.existsSync(deviceFile(ws)),
     discardDeviceFiles: () => {},
     deviceInfo: () => ({ deviceName: `${name} Mac`, platform: 'darwin-arm64' }),
-    ui: { show() {}, select() {}, switchWorkspace: (id) => { if (id) store.setActive(id); }, pushState() {}, forgetHub() {}, hubSignedOut: async () => {}, isOpen: () => true, onHubPage: () => false, devicesChanged() {}, openMail() {} },
+    openBrowser: async (url) => { opened.push(url); },
+    ui: { show() {}, select() {}, openClients: async (origin) => { opened.push(`${origin}/clients`); }, switchWorkspace: (id) => { if (id) store.setActive(id); }, pushState() {}, forgetHub() {}, hubSignedOut: async () => {}, isOpen: () => true, onHubPage: () => false, devicesChanged() {}, openMail() {} },
   });
   const A = flow.ACCT;
   const signIn = async (email) => {
@@ -115,8 +117,36 @@ function install(hub, root, name) {
     const r = await A.code(await hub.nextCode(email, seen));
     assert.equal(r.ok, true, r.error);
   };
-  return { flow, A, store, client, children, deviceFile, signIn, token: () => vault.load()?.token ?? null };
+  return { flow, A, store, client, children, opened, deviceFile, signIn, token: () => vault.load()?.token ?? null };
 }
+
+test('desktop real hub: pending and accepted client-only access stays outside staff teams and runners', { skip: (!ready || !WebSocket) && 'board dependencies not installed' }, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-clienthub-'));
+  let hub;
+  try {
+    hub = await startRealHub(path.join(root, 'hub'));
+    const owner = install(hub, root, 'staff'); await owner.A.hub(hub.origin); await owner.signIn('staff@clients.test');
+    const call = async (token, method, url, body) => {
+      const res = await fetch(`${hub.origin}${url}`, { method, headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
+      const data = await res.json(); assert.equal(res.status, 200, JSON.stringify(data)); return data;
+    };
+    const made = await call(owner.token(), 'POST', '/api/client-workspaces', { name: 'Delivery', request_id: crypto.randomUUID() });
+    const invite = await call(owner.token(), 'POST', `/api/teams/${made.workspace.id}/client-invites`, { email: 'client@clients.test', grants: [{ project_id: made.projects[0].id, scopes: ['status.read'] }] });
+    const guest = install(hub, root, 'guest'); await guest.A.hub(hub.origin); await guest.signIn('client@clients.test');
+    assert.equal(guest.flow.acct.screen, 'clients');
+    assert.equal((await guest.A.state()).invitations.length, 1);
+    assert.equal(guest.store.list().filter((w) => w.kind === 'team').length, 0);
+    assert.equal(guest.children.length, 0, 'guest admission never enrols or starts a runner');
+    assert.equal((await guest.A.openClients()).ok, true);
+    assert.deepEqual(guest.opened, [`${hub.origin}/clients`], 'derived-origin client view continuation carries no desktop token');
+    await call(guest.token(), 'POST', '/api/client-invites/accept', { t: invite.link.split('#')[1] });
+    const returning = install(hub, root, 'returning'); await returning.A.hub(hub.origin); await returning.signIn('client@clients.test');
+    assert.equal(returning.flow.acct.screen, 'clients');
+    assert.deepEqual((await returning.A.state()).workspaces.map((w) => w.id), [made.workspace.id]);
+    assert.equal(returning.store.list().filter((w) => w.kind === 'team').length, 0);
+    assert.equal(returning.children.length, 0);
+  } finally { await hub?.stop(); fs.rmSync(root, { recursive: true, force: true }); }
+});
 
 test('desktop on the real hub: automatic first team → This Mac runs it; invited sign-in joins directly, code join and returning owner', { skip: (!ready || !WebSocket) && 'board dependencies not installed' }, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-realhub-'));

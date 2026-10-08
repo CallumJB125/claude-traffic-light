@@ -106,13 +106,33 @@ function normalizeRule(r) {
 
 const expandHome = (p, home) => (p === '~' ? home : p.startsWith('~/') ? path.join(home, p.slice(2)) : p);
 // The fixed part of a glob, before its first wildcard, as a directory.
+// Rule validation uses the supplied fully qualified home's syntax, not the
+// host's current drive. This is lexical refusal only; the effect matcher below
+// keeps its existing namespace and physical-resolution requirements.
+const homePathModel = home => typeof home !== 'string' ? null : /^[A-Za-z]:[\\/]/.test(home) ? path.win32 : home.startsWith('/') && !home.startsWith('//') ? path.posix : null;
+const validationPath = (glob, home, model) => {
+  const expanded = glob.startsWith('~/') ? model.join(home, glob.slice(2)) : glob === '~' ? home : glob;
+  return model === path.win32 ? expanded.replace(/\\/g, '/') : expanded;
+};
+// Retain conservative host-path refusals: this repair may only narrow the
+// eligible rules, including formerly overbroad same-drive Windows refusals.
+function hostHomeCoverage(glob, home) {
+  const g = expandHome(glob, home), i = g.search(/[*?[\]{}]/), head = i < 0 ? g : g.slice(0, i);
+  const dir = i < 0 ? path.dirname(path.resolve(head)) : path.resolve(head.slice(0, head.lastIndexOf('/') + 1) || '/');
+  return home === dir || home.startsWith(dir.endsWith(path.sep) ? dir : dir + path.sep);
+}
 function staticDir(glob, home) {
-  const g = expandHome(glob, home);
+  const model = homePathModel(home);
+  const g = model.normalize(validationPath(glob, home, model));
   const i = g.search(/[*?[\]{}]/);
   const head = i < 0 ? g : g.slice(0, i);
-  return i < 0 ? path.dirname(path.resolve(head)) : path.resolve(head.slice(0, head.lastIndexOf('/') + 1) || '/');
+  return i < 0 ? model.dirname(model.resolve(home, head)) : model.resolve(home, head.slice(0, head.lastIndexOf(model.sep) + 1) || model.sep);
 }
-const within = (child, parent) => child === parent || child.startsWith(parent.endsWith(path.sep) ? parent : parent + path.sep);
+const within = (child, parent, model) => {
+  const key = value => { const resolved = model.resolve(value); return model === path.win32 ? resolved.toLowerCase() : resolved; };
+  const c = key(child), p = key(parent);
+  return c === p || c.startsWith(p.endsWith(model.sep) ? p : p + model.sep);
+};
 
 function pathRefusal(glob, tools, home) {
   if (!glob) return 'Give a path, e.g. ~/Development/my-app/**';
@@ -121,10 +141,12 @@ function pathRefusal(glob, tools, home) {
   if (/[\p{Cc}\p{Cf}]/u.test(glob)) return 'The path contains invisible characters.';
   if (glob.includes('**/**')) return 'Use one ** for “any depth”.';
   if ((glob.match(/\*\*|\*|\?/g) || []).length > 4) return 'Too many wildcards: at most four in a path.';
+  const model = homePathModel(home);
+  if (!model) return 'A fully qualified home folder is required to review this rule.';
   const dir = staticDir(glob, home);
-  if (within(home, dir)) return 'Too broad: that covers your whole home folder (and your keys and settings in it). Pick a project folder.';
-  if (CREDENTIAL_PATHS.test(expandHome(glob, home))) return 'That path holds credentials or agent settings: always ask a person.';
-  if ([...tools].some((t) => WRITE_TOOLS.has(t)) && RUNS_CODE_LATER.test(expandHome(glob, home))) return 'Writing there sets up code that runs later (shell profiles, git hooks, CI, package.json): always ask a person.';
+  if (hostHomeCoverage(glob, home) || within(home, dir, model)) return 'Too broad: that covers your whole home folder (and your keys and settings in it). Pick a project folder.';
+  if (CREDENTIAL_PATHS.test(validationPath(glob, home, model))) return 'That path holds credentials or agent settings: always ask a person.';
+  if ([...tools].some((t) => WRITE_TOOLS.has(t)) && RUNS_CODE_LATER.test(validationPath(glob, home, model))) return 'Writing there sets up code that runs later (shell profiles, git hooks, CI, package.json): always ask a person.';
   if (/(^|\/)\.[^/*]*\*|\/\.\*/.test(glob)) return 'A wildcard over hidden files could reach keys and config: name the folder instead.';
   return null;
 }

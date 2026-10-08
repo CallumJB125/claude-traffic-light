@@ -466,6 +466,15 @@
   .swatch.on { border-color: var(--text); }
   .swatch:focus-within { box-shadow: var(--focus); }
   .swatch input[type="color"] { position: absolute; inset: -6px; width: 40px; height: 40px; border: none; padding: 0; background: none; cursor: pointer; opacity: 0; }
+  #character { padding: 8px 12px; border-bottom: 1px solid var(--line, rgba(128,128,128,.25)); }
+  #character > summary { font-weight: 600; cursor: pointer; list-style: none; display: flex; align-items: center; gap: 6px; }
+  #character > summary::-webkit-details-marker { display: none; }
+  #character > summary::before { content: '▸'; font-size: 10px; opacity: .6; }
+  #character[open] > summary::before { content: '▾'; }
+  #character[open] > summary { margin-bottom: 8px; }
+  #character .posebtn { height: 56px; }
+  #character .field { max-height: 34vh; overflow-y: auto; }
+  #character .hint { font-weight: 400; opacity: .6; margin-left: 6px; }
   .swatch.custom::after {
     content: '';
     position: absolute; inset: 0;
@@ -538,7 +547,7 @@
 
   /* Today strip: three hero numbers with a delta against the daily average */
   .today {
-    display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px;
+    display: grid; grid-template-columns: repeat(2, 1fr); gap: 1px;
     background: var(--line); border: 1px solid var(--line); border-radius: 8px; overflow: hidden;
   }
   .today .cell { background: var(--panel); padding: 10px 12px 11px; }
@@ -604,9 +613,11 @@
   .mix-card .d { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; margin: 3px 0 8px; }
   .mix-rec { font-size: 12px; color: var(--text); line-height: 1.45; padding-top: 10px; border-top: 1px solid var(--line); }
   .mix-card .note { font-size: 11px; color: var(--faint); }
-  .mix-leftover { font-size: 12px; color: var(--muted); line-height: 1.45; }
-  .mix-leftover[hidden] { display: none; }
-  .mix-leftover code { display: block; margin-top: 4px; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-2); color: var(--text); font: 11px ui-monospace, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+  /* cost guard callouts (usage-waste-view.js) */
+  .cg { display: flex; flex-direction: column; gap: 12px; }
+  .cg[hidden] { display: none; }
+  .cg-row { font-size: 12px; display: block; }
+  .cg-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
 
 
   /* ── Usage history charts (usage-view.js) ─────────────────────────────
@@ -630,6 +641,7 @@
   .uv-check { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
   .uv-chip { font: inherit; font-size: 12px; color: var(--text); background: var(--panel-2); border: 1px solid var(--line-strong); border-radius: 999px; padding: 3px 10px; cursor: pointer; }
   .uv-note { font-size: 12px; color: var(--muted); line-height: 1.45; margin: 0; max-width: 72ch; }
+  #mix:has(#mix-empty:not([hidden])) .uv-empty { display: none; }
   .uv-empty { font-size: 13px; color: var(--muted); line-height: 1.5; margin: 6px 0; max-width: 60ch; }
   .uv-callouts { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
   .uv-callouts li { font-size: 13px; color: var(--text); padding: 7px 10px; border-left: 3px solid var(--uv-s1); background: var(--panel); border-radius: 0 6px 6px 0; }
@@ -880,6 +892,20 @@
   #auto-why.ok { color: #8fe39a; }
   #auto-form .actions { display: flex; gap: 8px; }
 
+  body.widget-configuration #view-stats, body.widget-configuration #view-mix { display: none; }
+  body.embedded-analytics #titlebar { padding-left: 22px; -webkit-app-region: no-drag; }
+  .ut-only { display: none; }
+  body.embedded-analytics .ut-only { display: inline-flex; }
+  .budget-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; font-size: 12px; color: var(--muted); }
+  .budget-bar .k { font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--faint); }
+  .budget-bar label { display: inline-flex; align-items: center; gap: 5px; }
+  .budget-bar input[type="number"] { width: 64px; }
+  .budget-bar .budget-state { color: var(--faint); min-width: 4em; }
+  .uv-cta { margin: 0; }
+  body.embedded-analytics .view-seg, body.embedded-analytics #titlebar .tools,
+  body.embedded-analytics #footer, body.embedded-analytics #presets { display: none; }
+  body.embedded-analytics #frame { grid-template-rows: 52px 1fr; }
+
   /* Nobody can see the editor: every preview holds its frame. */
   body.motion-paused * { animation-play-state: paused !important; }
 </style>
@@ -892,11 +918,22 @@
       <button id="view-rules" class="on" role="tab" aria-controls="rules right">Rules</button>
       <button id="view-stats" role="tab" aria-controls="stats">Stats</button>
       <button id="view-mix" role="tab" aria-controls="mix">Usage</button>
-      <button id="view-auto" role="tab" aria-controls="auto">Auto-answer</button>
+      <button id="view-auto" role="tab" aria-controls="auto" hidden>Auto-answer</button>
+    </div>
+    <div class="seg ut-only" id="ut-tabs" role="tablist" aria-label="Usage and cost">
+      <button id="ut-mix" role="tab" aria-controls="mix">Overview</button>
+      <button id="ut-stats" role="tab" aria-controls="stats">Time</button>
     </div>
     <span class="spacer"></span>
+    <div class="seg ut-only" id="ut-range" role="group" aria-label="Range">
+      <button type="button" data-range="7d">7 days</button>
+      <button type="button" data-range="30d" class="on">30 days</button>
+      <button type="button" data-range="90d">90 days</button>
+      <button type="button" data-range="1y">Year</button>
+      <button type="button" data-range="all">All</button>
+    </div>
     <div class="tools">
-      <button class="btn ghost" id="prefs-btn" title="Timing, sound and notification preferences" aria-label="Preferences (opens a new window)">Preferences…</button>
+      <button class="btn ghost" id="prefs-btn" title="Timing, sound and notification preferences" aria-label="Preferences (opens in the main app)">Preferences…</button>
       <button class="btn" id="presets-btn" aria-haspopup="true" aria-expanded="false" aria-controls="presets">
         Presets
         <svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg>
@@ -908,6 +945,15 @@
     <aside id="rules" aria-label="Rules">
       <header><span>Rules</span><span class="count" id="rule-count"></span></header>
       <div id="now" role="status" aria-live="off" aria-label="What the widget is showing now"><div class="head">Now: …</div><div class="owners"></div></div>
+      <details id="character" aria-label="Character">
+        <summary class="lbl">Character <span class="hint" id="character-now">one for every state</span></summary>
+        <div class="field">
+          <div class="poses" id="bodies"></div>
+          <label class="swatch custom" id="body-color-swatch" title="Character colour (e.g. a brand colour)">
+            <input type="color" id="body-color" />
+          </label>
+        </div>
+      </details>
       <ul id="rule-list" role="listbox" aria-label="Rules, highest priority first"></ul>
       <footer>
         <button class="btn" id="add-btn">
@@ -1066,16 +1112,6 @@
         </div>
 
         <div class="row">
-          <div class="lbl">Body</div>
-          <div class="field">
-            <div class="poses" id="bodies"></div>
-            <label class="swatch custom" id="body-color-swatch" title="Body colour (e.g. a project's brand colour)">
-              <input type="color" id="body-color" />
-            </label>
-          </div>
-        </div>
-
-        <div class="row">
           <div class="lbl">Effect</div>
           <div class="field"><div class="poses" id="effects"></div></div>
         </div>
@@ -1148,15 +1184,9 @@
       <div class="today" id="today-strip">
         <div class="cell"><div class="k">Working today</div><div class="v" id="today-working">—</div><div class="d" id="today-working-d"></div></div>
         <div class="cell"><div class="k">Waiting on you</div><div class="v" id="today-waiting">—</div><div class="d" id="today-waiting-d"></div></div>
-        <div class="cell"><div class="k">Cost today</div><div class="v" id="today-cost">—</div><div class="d" id="today-cost-d"></div></div>
       </div>
 
       <div class="stats-bar">
-        <div class="seg" id="range" role="tablist" aria-label="Range">
-          <button data-days="7" class="on" role="tab">7d</button>
-          <button data-days="30" role="tab">30d</button>
-          <button data-days="60" role="tab">60d</button>
-        </div>
         <span class="filter-note" id="filter-note" hidden></span>
         <span class="spacer"></span>
         <button class="btn ghost" id="export-json">Export JSON</button>
@@ -1214,7 +1244,7 @@
 
       <div class="stats-cols">
         <div>
-          <div class="stats-title small">Spend — from your Claude Code transcripts</div>
+          <div class="stats-title small">Spend this week</div>
           <div class="stats-sub" id="cost-totals">Loading…</div>
           <ol id="cost-projects" class="projects" style="margin-top:8px"></ol>
         </div>
@@ -1294,11 +1324,19 @@
 
     <section id="mix" role="tabpanel" aria-labelledby="view-mix">
       <div>
-        <div class="stats-title">Usage</div>
-        <div class="stats-sub">Overview: which models your Claude Code turns ran on and what they cost, at API prices. Read-only — Buddy never changes your model. The history below is kept by Buddy, so it reaches back past the transcripts Claude Code deletes.</div>
+        <div class="stats-title">Usage and cost</div>
+        <div class="stats-sub">Which models your Claude Code turns ran on and what they cost, at API prices. Read-only — Plexiform never changes your model. The history below is kept by Plexiform, so it reaches back past the transcripts Claude Code deletes.</div>
+      </div>
+      <div class="budget-bar" id="budget-bar" role="group" aria-label="Spending limit">
+        <span class="k">Limit</span>
+        <label for="budget-daily">$ <input type="number" id="budget-daily" min="0" step="1" /> a day</label>
+        <label for="budget-weekly">$ <input type="number" id="budget-weekly" min="0" step="1" /> a week</label>
+        <label for="budget-warn">Warn at <input type="number" id="budget-warn" min="10" max="100" step="5" /> %</label>
+        <button type="button" class="btn" id="budget-save">Set limit</button>
+        <span class="budget-state" id="budget-state" role="status" aria-live="polite">Set a limit to turn on alerts (0 = no limit).</span>
       </div>
       <div class="stats-sub" id="mix-loading">Reading transcripts…</div>
-      <div class="stats-sub" id="mix-empty" hidden>No Claude Code turns in the last 7 days yet.</div>
+      <div class="stats-sub" id="mix-empty" hidden>No AI activity in the last 7 days. <button type="button" class="btn uv-cta" id="mix-connect">Connect AI tools</button></div>
       <div class="mix-card" id="mix-body" hidden>
         <div class="mix-cols">
           <div>
@@ -1317,7 +1355,7 @@
         <div class="mix-rec" id="mix-rec"></div>
         <div class="note">Estimate — "routine" means a reply under 400 tokens on under 4k new tokens of context. The saving prices those same tokens at Sonnet rates; the low end allows 35% more tokens on the cheaper model. Quality effects aren't counted.</div>
       </div>
-      <div class="mix-leftover" id="mix-leftover" hidden><span id="mix-leftover-note"></span><code id="mix-leftover-cmd"></code></div>
+      <div id="usage-waste" class="cg" aria-label="Cost guard" hidden></div>
       <div id="usage-history" aria-label="Usage history"></div>
     </section>
   </div>
@@ -1443,7 +1481,10 @@
 <script src="stats.js"></script>
 <script src="usage-insights.js"></script>
 <script src="usage-view.js"></script>
+<script src="usage-waste-view.js"></script>
 <script src="lights-view.js"></script>
 <script src="lights-auto.js"></script>
+<script src="burst-chip.js"></script>
+<script src="burst-usage.js"></script>
 </body>
 </html>

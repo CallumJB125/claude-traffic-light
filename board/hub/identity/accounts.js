@@ -13,6 +13,7 @@ import { oauthProviders, webOauthProviders, signupPolicy } from '../config.js';
 import { EMAIL_ONLY } from '../views.js';
 import { backfillSlugs, PURGE_AFTER_MS } from './teams.js';
 import { BRAND } from '../../shared/brand.js';
+import { storagePaused } from '../storage-watch.js';
 
 export const SESSION_COOKIE = '__Host-buddy_session';
 export const FLOW_COOKIE = '__Host-buddy_flow';
@@ -36,6 +37,7 @@ export const STEP_UP_PURPOSES = Object.freeze(['delete', 'delete_team']);
 const PURPOSES = new Set(['signin', ...STEP_UP_PURPOSES]);
 const CLIENTS = new Set(['buddy_desktop', 'web']);
 const FORM_FACTORS = new Set(['laptop', 'desktop']);
+const DEVICE_SCOPES = new Set(['full', 'relay']);
 const LOOPBACK_HOST = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i;
 
 const b64url = (buf) => Buffer.from(buf).toString('base64url');
@@ -179,7 +181,7 @@ export class Accounts {
       WHERE m.user_id IS NULL AND m.removed_at IS NULL AND m.email IS NOT NULL AND o.deleted_at IS NULL`).some((m) => canonEmail(m.email) === email);
     if (row) return 'member_row';
     const invites = this.db.all('SELECT * FROM invites WHERE email = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?', email, this.now());
-    return invites.some((inv) => this.hub.invites?.usable(inv)) ? 'invite' : null;
+    return invites.some((inv) => this.hub.invites?.usable(inv)) || this.hub.clients?.admission(email) ? 'invite' : null;
   }
 
   signupAllowed(email, opts) { return this.signupVia(email, opts) != null; }
@@ -188,6 +190,7 @@ export class Accounts {
   requireSignup(email, opts) {
     const via = this.signupVia(email, opts);
     if (!via) throw new HubError('SIGNUP_CLOSED', SIGNUP_CLOSED_TEXT);
+    if (storagePaused(this.hub)) throw new HubError('SIGNUP_PAUSED', 'New accounts are temporarily paused. Try again later.');
     return via;
   }
 
@@ -230,7 +233,7 @@ export class Accounts {
     limitOrThrow(this.hub, 'auth_methods_ip', ipKey(ip));
     const m = oauthProviders(this.hub.config);
     const w = webOauthProviders(this.hub.config);
-    return { google: m.includes('google'), github: m.includes('github'), email: !!this.mailer && !this.mailFailing(), web: { google: w.includes('google'), github: w.includes('github') } };
+    return { google: m.includes('google'), github: m.includes('github'), email: this.emailSignin() && !this.mailFailing(), web: { google: w.includes('google'), github: w.includes('github') } };
   }
 
   // ── email one-time codes (only with a mailer, D66) ────────────────────────
@@ -250,15 +253,19 @@ export class Accounts {
     return false;
   }
 
-  requireMailer() {
-    if (!this.mailer) throw new HubError('METHOD_DISABLED', 'email sign-in is not enabled on this hub');
+  // Codes that sign someone in need BOARD_EMAIL_SIGNIN=1 as well as a mailer;
+  // a step-up code for a signed-in account needs only the mailer.
+  emailSignin() { return !!this.mailer && !!this.hub.config.emailSignin; }
+
+  requireMailer(purpose = 'signin') {
+    if (!this.mailer || (purpose === 'signin' && !this.emailSignin())) throw new HubError('METHOD_DISABLED', 'email sign-in is not enabled on this hub');
   }
 
   /** POST /api/auth/email/start → {flow_id, expires_in}. Same answer for every address. */
   start(body, { ip, ident = null, req = null, res = null }) {
-    this.requireMailer();
     const purpose = body.purpose ?? 'signin';
     if (!PURPOSES.has(purpose)) throw new HubError('VALIDATION', "purpose must be 'signin', 'delete' or 'delete_team'");
+    this.requireMailer(purpose);
     let email;
     let client;
     let userId = null;
@@ -298,7 +305,9 @@ export class Accounts {
     // address asked recently). A dud never kills the flows the address already has.
     // A new address sign-up may not use (D104) is silenced before mailBudget: it spends no mail token.
     const quiet = !lim.take('auth_start_email', mine).ok || !lim.take('auth_start_email_hour', mine).ok || !lim.take('auth_start_email_all', box).ok
-      ? 'email_rate' : purpose === 'signin' && !this.hasAccount(email) && !this.signupAllowed(email) ? 'signup_closed' : !this.mailBudget(email) ? 'mail_cap' : null;
+      ? 'email_rate' : purpose === 'signin' && !this.hasAccount(email)
+        ? !this.signupAllowed(email) ? 'signup_closed' : storagePaused(this.hub) ? 'signup_paused' : !this.mailBudget(email) ? 'mail_cap' : null
+        : !this.mailBudget(email) ? 'mail_cap' : null;
     // A dud does the same work as a real start (a code and its HMAC, the same
     // statements), so the time a refusal takes doesn't tell it apart; its
     // update matches no row (it kills none of the address's flows) and its
@@ -324,7 +333,7 @@ export class Accounts {
 
   /** POST /api/auth/email/verify. */
   verify(body, { ip, ident = null, req = null, res = null }) {
-    this.requireMailer();
+    this.requireMailer(null);
     limitOrThrow(this.hub, 'auth_verify_ip', ipKey(ip));
     const now = this.now();
     const flowId = typeof body.flow_id === 'string' ? body.flow_id : '';
@@ -333,6 +342,7 @@ export class Accounts {
     const f = flowId ? this.db.get('SELECT * FROM login_flows WHERE id = ?', flowId) : null;
     // A flow_id nobody was given answers like a fresh flow (L-G).
     if (!f) throw invalid(undefined, { attempts_left: MAX_ATTEMPTS });
+    if (f.purpose === 'signin') this.requireMailer('signin');
     if (f.dead_at || f.consumed_at || f.verified_at || f.expires_at <= now) throw invalid();
     // The failure budget (H2): locked means no code is even checked.
     const budget = this.budgetKey(f);
@@ -373,6 +383,9 @@ export class Accounts {
         form_factor: body.form_factor ?? null,
       };
       if (device.form_factor != null && !FORM_FACTORS.has(device.form_factor)) throw new HubError('VALIDATION', "form_factor must be 'laptop' or 'desktop'");
+      if (body.scope != null && !DEVICE_SCOPES.has(body.scope)) throw new HubError('VALIDATION', "scope must be 'full' or 'relay'");
+      // A phone only ever gets the relay scope, whatever it asks for (migration 056).
+      device.scope = body.scope === 'relay' || device.platform === 'phone-web' ? 'relay' : 'full';
     }
     if (!this.hasAccount(f.email)) limitOrThrow(this.hub, 'signup_ip', ipKey(ip));
     let out;
@@ -413,13 +426,16 @@ export class Accounts {
   /** A desktop device token (`bdt_…`, shown once, stored as sha256) for a user who just signed in, inside the caller's transaction. */
   issueDevice(userId, device, { ip, method, subjectRef = null }) {
     const now = this.now();
+    // Any route in (email code, OAuth): a phone sign-in is relay-scoped.
+    const scope = device.scope === 'relay' || device.platform === 'phone-web' ? 'relay' : 'full';
     const token = newDeviceToken();
     const id = randomUUID();
     this.db.insert('user_devices', {
       id, user_id: userId, name: device.name, client: 'buddy_desktop', platform: device.platform, form_factor: device.form_factor,
       token_hash: sha256hex(token), created_at: now, last_seen_at: now, last_ip_prefix: ipPrefix(ip), session_epoch: this.epoch(),
+      scope,
     });
-    this.audit('auth.signin', { user: userId, target: id, detail: { method, client: 'buddy_desktop', ...(subjectRef ? { subject_ref: subjectRef } : {}) }, ip });
+    this.audit('auth.signin', { user: userId, target: id, detail: { method, client: 'buddy_desktop', ...(scope === 'relay' ? { scope } : {}), ...(subjectRef ? { subject_ref: subjectRef } : {}) }, ip });
     return { id, token };
   }
 
@@ -540,7 +556,8 @@ export class Accounts {
       if (this.hub.ageOf(d.last_seen_at) == null || this.hub.ageOf(d.last_seen_at) >= TOUCH_MS) {
         this.db.run('UPDATE user_devices SET last_seen_at = ?, last_ip_prefix = COALESCE(?, last_ip_prefix) WHERE id = ?', this.now(), ipPrefix(ip), d.id);
       }
-      return { user, cred: { kind: 'device', id: d.id } };
+      // A scoped (phone) sign-in says so; http.js refuses it outside the relay.
+      return { user, cred: d.scope === 'relay' ? { kind: 'device', id: d.id, scope: 'relay' } : { kind: 'device', id: d.id } };
     }
     let value = null;
     try { value = parseCookies(req.headers.cookie)[SESSION_COOKIE] ?? null; } catch { value = null; }
@@ -583,7 +600,7 @@ export class Accounts {
     if (this.db.get('SELECT 1 AS x FROM orgs WHERE slug IS NULL LIMIT 1')) backfillSlugs(this.db);
     const rows = this.db.all(`SELECT o.id, o.name, o.slug, o.plan, m.role, m.id AS member_id FROM members m JOIN orgs o ON o.id = m.org_id
       WHERE m.user_id = ? AND m.removed_at IS NULL AND o.deleted_at IS NULL ORDER BY o.name, o.id`, userId);
-    return rows.map((t) => ({ ...t, boards: this.db.all('SELECT id, name, key_prefix FROM boards WHERE org_id = ? ORDER BY name', t.id) }));
+    return rows.map((t) => ({ ...t, boards: this.hub.boardList(t.id) }));
   }
 
   /** GET /api/account → {user, identities, teams, pending_invites} (invites for the user's verified addresses, P3). */
@@ -594,6 +611,8 @@ export class Accounts {
       identities: this.db.all("SELECT DISTINCT provider FROM identities WHERE user_id = ? AND verified_at IS NOT NULL AND provider IN ('email','google','github') ORDER BY provider", ident.user.id),
       teams: this.teams(ident.user.id),
       pending_invites: this.hub.invites?.pendingFor(ident.user) ?? [],
+      client_workspaces: this.hub.clients?.catalog(ident.user) ?? [],
+      pending_client_invites: this.hub.clients?.pendingFor(ident.user) ?? [],
       ...(ident.cred.kind === 'session' ? { csrf_token: this.csrfFor(ident.cred.id) } : {}),
     };
   }
@@ -613,6 +632,7 @@ export class Accounts {
     if (!d) throw new HubError('NOT_FOUND', 'device not found');
     this.hub.txn(() => {
       this.db.run('UPDATE user_devices SET revoked_at = ?, token_hash = NULL, revoke_reason = ? WHERE id = ?', this.now(), reason, id);
+      this.db.run('DELETE FROM push_subscriptions WHERE device_id = ?', id);
       this.hub.enrolments?.revokeForUserDevice(id, reason);
       this.audit(reason === 'signout' ? 'auth.signout' : 'device.revoke', { user: ident.user.id, target: id, detail: { kind: 'device' }, ip });
       this.hub.later(() => this.hub.closeCredSockets({ kind: 'device', id }, reason === 'signout' ? 'signed out' : 'device revoked'));
@@ -708,6 +728,14 @@ export class Accounts {
       this.db.run(`UPDATE user_devices SET revoked_at = COALESCE(revoked_at, ?), token_hash = NULL, revoke_reason = COALESCE(revoke_reason, 'account_deleted'),
         name = 'Deleted device', platform = NULL, last_ip_prefix = NULL WHERE user_id = ?`, now, user.id);
       this.db.run('DELETE FROM sessions WHERE user_id = ?', user.id);
+      this.db.run('DELETE FROM push_subscriptions WHERE user_id = ?', user.id);
+      // Synced ciphertext: every object and row goes at the next sync sweep (sync.js), without a notice.
+      this.hub.sync?.forgetUser(user.id);
+      this.hub.activity?.forgetUser(user.id);
+      this.db.run('UPDATE interaction_shares SET revoked_at = ? WHERE owner_user_id = ? AND revoked_at IS NULL', now, user.id);
+      // Messages they sent or received (text and replies) and their sessions' targets go now (MESSAGING.md §5).
+      this.db.run('DELETE FROM msg_messages WHERE source_user_id = ? OR dest_user_id = ?', user.id, user.id);
+      this.db.run('DELETE FROM msg_targets WHERE user_id = ?', user.id);
       this.db.run(`DELETE FROM login_flows WHERE user_id = ? OR email IN ${inAddresses}`, user.id, ...addresses);
       this.db.run('DELETE FROM oauth_flows WHERE user_id = ?', user.id);
       this.db.run('DELETE FROM oauth_web_flows WHERE user_id = ?', user.id);
@@ -718,6 +746,7 @@ export class Accounts {
       this.db.run(`UPDATE invites SET revoked_at = ?, revoke_reason = 'account_deleted'
         WHERE email IN ${inAddresses} AND accepted_at IS NULL AND revoked_at IS NULL`, now, ...addresses);
       this.db.run(`UPDATE invites SET email = 'deleted:' || id WHERE accepted_by_user = ? OR email IN ${inAddresses}`, user.id, ...addresses);
+      this.hub.clients?.deleteUser(user.id, addresses, now);
       this.db.run('DELETE FROM identities WHERE user_id = ?', user.id);
       this.db.run("UPDATE users SET display_name = 'Deleted user', primary_email = NULL, primary_email_verified_at = NULL, avatar_url = NULL, deleted_at = ? WHERE id = ?", now, user.id);
       for (const m of members) this.hub.dropMemberPending(m.id);
@@ -729,6 +758,7 @@ export class Accounts {
       now, this.at(PURGE_AFTER_MS), user.id);
       this.hub.revokeDeletedTeamConnections(now);
       this.hub.dropDeletedTeamLabels();
+      this.hub.dropDeletedTeamMessages();
       for (const m of members) {
         // github_login/github_id are NOT NULL and unique per org until the P2
         // rebuild: a private placeholder (never shown) and a stable negative id.

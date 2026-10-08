@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { textOf, byClass, byAttr, findAll, walk } from '../js/h.js';
 import { displayFace, groupColumns, alertsForViewer, stripGlyph, boardLamps, columnFor } from '../js/view.js';
-import { card, pill, alertsStrip, connectionBanner, boardScreen, cardActions } from '../js/render-board.js';
+import { card, pill, alertsStrip, connectionBanner, boardScreen, cardActions, stalledLane } from '../js/render-board.js';
 import { drawer, handoverBody } from '../js/render-drawer.js';
 import { giveDialog, confirmDialog } from '../js/render-dialogs.js';
 import { signinScreen } from '../js/render-signin.js';
@@ -33,10 +33,10 @@ test('hub says not green, client says green → not green (quiet tone, still Run
 test('hub says green, but ages advanced past the predicate → client wins, not green', () => {
   const f = displayFace(view({ live: live({ green: true, tool_in_flight: null, activity_age_ms: T_QUIET_MS - 10_000 }) }), { elapsed_ms: 20_000 });
   assert.equal(f.green, false);
-  assert.equal(f.label, 'Quiet');
+  assert.equal(f.label, 'Stalled');
   const g = displayFace(view(), { elapsed_ms: TTL_MS });
   assert.equal(g.green, false);
-  assert.equal(g.label, 'No signal');
+  assert.equal(g.label, 'Stalled');
 });
 
 test('connection lost: never green, never marked unresponsive by the browser', () => {
@@ -196,6 +196,42 @@ test('drawer: the actions that only open the drawer are not repeated inside it',
   assert.equal(byAttr(n, 'data-action', 'hand_over').length, 1, 'Hand over is offered from blocked');
 });
 
+test('drawer: Hand over, Switch AI and Request changes sit behind a closed Advanced disclosure', () => {
+  const v = view({ run_state: 'blocked', blocked_kind: 'question', ask: { kind: 'question', count: 1 } });
+  const n = drawer(drawerModel(v, {}));
+  const adv = byClass(n, 'drawer-advanced');
+  assert.equal(adv.length, 1);
+  assert.equal(adv[0].tag, 'details');
+  assert.equal(adv[0].props.open, undefined);
+  assert.equal(byAttr(adv[0], 'data-action', 'hand_over').length, 1);
+  assert.equal(byAttr(adv[0], 'data-action', 'planning-edit').length, 1);
+  const review = view({ run_state: 'in_review', live: null, run: { ...view().run, child_alive: false } });
+  const r = drawer(drawerModel(review, {}));
+  for (const a of displayFace(review).actions.filter((x) => ['switch_ai', 'request_changes'].includes(x))) {
+    assert.equal(byAttr(r, 'data-action', a).length, 1);
+    assert.equal(byAttr(byClass(r, 'drawer-advanced')[0], 'data-action', a).length, 1, `${a} only in Advanced`);
+  }
+});
+
+test('drawer: Mark done stays hidden while the run ended on the hub but its AI process is still alive', () => {
+  const base = view().run;
+  const finishing = view({ run_state: 'in_review', live: null, run: { ...base, child_alive: true } });
+  const f = drawer(drawerModel(finishing, {}));
+  assert.equal(byAttr(f, 'data-action', 'approve_done').length, 0);
+  assert.match(textOf(f), /The AI is still finishing/);
+  const exited = view({ run_state: 'in_review', live: null, run: { ...base, child_alive: false } });
+  assert.equal(byAttr(drawer(drawerModel(exited, {})), 'data-action', 'approve_done').length, 1);
+});
+
+test('drawer: an observed card with a fresh working capture has no Column picker; once stale it does', () => {
+  const capture = { source: 'local_observation', fresh: true, status: 'working', provider: 'claude' };
+  const live = view({ run_state: 'todo', run: null, live: null, column: 'done', capture });
+  assert.equal(byAttr(drawer(drawerModel(live, {})), 'data-change', 'move').length, 0);
+  assert.equal(columnFor(live, displayFace(live)), 'in_progress', 'renders in In progress, not Done');
+  const stale = view({ run_state: 'todo', run: null, live: null, column: 'in_progress', capture: { ...capture, fresh: false, status: 'unknown' } });
+  assert.equal(byAttr(drawer(drawerModel(stale, {})), 'data-change', 'move').length, 1);
+});
+
 test('drawer: pinned hypothesis and per-layer last synced ages advance client-side', () => {
   const v = view();
   const handover = { doc: { sections: { hypothesis: 'Draft keyed by anon id.' }, layers: { facts: {}, narrative: { version: 4 }, snapshot: { sha: '7f3a2c1d', status: 'pushed' } }, unsynced_paths: ['a.ts'] }, ages: { facts_ms: 10_000, narrative_ms: 60_000, snapshot_ms: 120_000 }, markdown: '# Handover · BDL-1\nState: running\nLast synced: stale\n\n## Goal\nFix it' };
@@ -217,22 +253,60 @@ test('handoverBody drops the hub title and send-time "Last synced" line only', (
 
 // ── dialogs ────────────────────────────────────────────────────────────────
 
-test('Give to Claude: own runner by default, sponsor shown, overlap warned before dispatch', () => {
+test('Tackle with AI: own Codex account by default, sponsor and overlaps shown before dispatch', () => {
   const v = view({ run_state: 'todo', run: null, live: null, column: 'todo' });
   const m = model([entry(v)]);
-  const dlg = { kind: 'give', cardId: v.id, target: 'm-alice', repos: [{ id: 'r1', short_name: 'bondly' }], repo_id: 'r1', base_ref: 'dev', budget_usd: 5,
+  const dlg = { kind: 'give', cardId: v.id, ai: 'codex', target: 'm-alice', repos: [{ id: 'r1', short_name: 'bondly' }], repo_id: 'r1', base_ref: 'dev', budget_usd: 5,
     preview: { overlaps: [{ other_card_id: 'c-9', other_key: 'BDL-9', other_owner: 'Bob', kind: 'overlapping', paths: ['backend/routes/applications.js'] }], sponsor: 'Runs on your MacBook Pro · your claude account' } };
   const n = giveDialog(dlg, m);
   const t = textOf(n);
-  assert.match(t, /Give BDL-1 to Claude/);
+  assert.match(t, /Send BDL-1 to AI/);
+  // Machine, branch, budget and plan approval wait behind one closed Advanced disclosure.
+  const adv = findAll(n, (x) => x.tag === 'details');
+  assert.equal(adv.length, 1);
+  assert.equal(adv[0].props.open, undefined);
+  for (const name of ['target', 'base_ref', 'plan_approval']) assert.ok(findAll(adv[0], (x) => x.props.name === name).length, `${name} is in Advanced`);
+  assert.match(textOf(adv[0]), /Dollar and turn caps are unavailable for Codex/, 'budget is in Advanced');
+  assert.equal(findAll(n, (x) => x.props.name === 'ai').length, 1, 'one AI picker');
+  assert.match(textOf(findAll(n, (x) => x.props.type === 'submit')[0]), /^Send anyway$/);
+  assert.match(t, /Wait for BDL-9/);
   assert.match(t, /Overlaps 1 live card/);
-  assert.match(t, /BDL-9 \(Bob's Claude\) is editing backend\/routes\/applications\.js, which this card mentions/);
-  assert.match(t, /Runs on your MacBook Pro · your claude account/);
+  assert.match(t, /BDL-9 \(Bob's agent\) is editing backend\/routes\/applications\.js, which this card mentions/);
+  assert.match(t, /Runs on your machine · your Codex account/);
   const radios = findAll(n, (x) => x.tag === 'input' && x.props.type === 'radio');
   assert.equal(radios.find((r) => r.props.checked).props.value, 'm-alice');
   const teammate = textOf(giveDialog({ ...dlg, target: 'm-bob', preview: { overlaps: [] } }, m));
   assert.match(teammate, /Bob must confirm before it starts/);
-  assert.match(teammate, /Ask Bob's Claude/);
+  assert.match(teammate, /Ask Bob/);
+  assert.match(textOf(findAll(giveDialog({ ...dlg, preview: { overlaps: [] } }, m), (x) => x.props.type === 'submit')[0]), /^Start$/);
+  const unknown = textOf(giveDialog({ ...dlg, preview: { overlaps: [], check: { status: 'unknown', self_known: true, unknown_runs: [{ card_key: 'BDL-4', owner: 'Bob' }] } } }, m));
+  assert.match(unknown, /No overlap data: a live run has not reported its files yet \(BDL-4 \(Bob\)\)/);
+  assert.doesNotMatch(unknown, /No overlapping work/);
+});
+
+test('Tackle with AI defaults to Claude with a visible card budget; uncapped choices need a confirm', () => {
+  const v = view({ run_state: 'todo', run: null, live: null, column: 'todo' });
+  const m = model([entry(v)]);
+  const base = { kind: 'give', cardId: v.id, target: 'm-alice', repos: [], budget_usd: 5, budget_mode: 'cap', preview: { runners: [], can_use_no_budget: true } };
+  const claude = giveDialog(base, m);
+  assert.equal(findAll(claude, (x) => x.props.name === 'ai')[0].children.flat().find((o) => o.props?.selected).props.value, 'claude');
+  assert.match(textOf(claude), /Card budget \$5\. /);
+  assert.equal(findAll(claude, (x) => x.props.name === 'confirm_uncapped').length, 0);
+  const codex = giveDialog({ ...base, ai: 'codex' }, m);
+  assert.match(textOf(codex), /cannot enforce a dollar cap, so this run is uncapped by dollars/);
+  assert.equal(findAll(codex, (x) => x.props.name === 'confirm_uncapped').length, 1);
+  const none = giveDialog({ ...base, budget_mode: 'none' }, m);
+  assert.equal(findAll(none, (x) => x.props.name === 'confirm_uncapped').length, 1);
+  assert.equal(findAll(giveDialog({ ...base, ai: 'codex', max_turns: 40 }, m), (x) => x.props.name === 'confirm_uncapped').length, 1, 'Codex has no turn cap');
+});
+
+test('budget reached banner offers Increase & continue and Stop; Stop hides it', () => {
+  const v = view({ run_state: 'failed', fail_kind: 'budget', run: { budget_stop: 'card', owner: { member_id: 'm-alice' } }, budget: { cap_usd: 5, spent_usd: 5.1, ratio: 1, text: '$5.10 / $5.00' } });
+  const m = (extra) => ({ ...model([entry(v)], { openCardId: v.id, detail: { cardId: v.id, tab: 'activity', data: null } }), ...extra });
+  const t = textOf(drawer(m({ budgetStopped: new Set() })));
+  assert.match(t, /Budget reached/); assert.match(t, /Increase & continue/); assert.match(t, /\+50% \(\$7\.65\)/); assert.match(t, /\+\$5 \(\$10\.10\)/);
+  assert.doesNotMatch(textOf(drawer(m({ budgetStopped: new Set([v.id]) }))), /Increase & continue/);
+  assert.match(textOf(drawer(m({ budgetStopped: new Set(), budgetMax: 5.2 }))), /\+50% \(over the board limit\)/);
 });
 
 test('take over from suspended explains fencing and needs an explicit confirm', () => {
@@ -273,4 +347,51 @@ test('every FeedEvent kind the hub sends has a feed label (CONTRACT §5.3)', asy
   const { FEED_KINDS } = await import('../../shared/protocol.js');
   const { FEED_LABEL } = await import('../js/render-drawer.js');
   assert.deepEqual(FEED_KINDS.filter((k) => !FEED_LABEL[k]), []);
+});
+
+// ── Stalled lane ──────────────────────────────────────────────────────────
+
+test('a run with a dead heartbeat leaves In progress for the Stalled lane and is never drawn green', () => {
+  const dead = view({ id: 'c-dead', key: 'BDL-9', live: live({ hb_age_ms: 120_000, green: false }) });
+  const ok = view({ id: 'c-ok', key: 'BDL-1' });
+  const cols = groupColumns([entry(dead), entry(ok)]);
+  assert.deepEqual(cols.stalled.map((e) => e.view.id), ['c-dead']);
+  assert.deepEqual(cols.in_progress.map((e) => e.view.id), ['c-ok']);
+  assert.equal(columnFor(dead, displayFace(dead)), 'stalled');
+  assert.equal(displayFace(dead).green, false);
+  const screen = boardScreen(model([entry(dead), entry(ok)]));
+  const lane = byClass(screen, 'stalled-lane')[0];
+  assert.match(textOf(lane), /Stalled/);
+  assert.match(textOf(lane), /BDL-9/);
+  assert.deepEqual(byAttr(lane, 'data-card-id', 'c-ok'), []);
+  assert.doesNotMatch(textOf(lane), /AI activity not confirmed|AI working/);
+  const inProgress = byAttr(screen, 'data-column', 'in_progress')[0];
+  assert.doesNotMatch(textOf(inProgress), /BDL-9/);
+});
+
+test('stalled card says why and offers Resume, Hand over to another AI and Stop', () => {
+  const quiet = view({ id: 'c-q', live: live({ activity_age_ms: 8 * 60_000, tool_in_flight: null, green: false }) });
+  const n = card(entry(quiet), model([]));
+  assert.match(textOf(byClass(n, 'pill')[0]), /^Stalled.*no activity 8m/);
+  assert.equal(n.props['data-state'], 'running');
+  assert.equal(n.props['data-tone'], 'red');
+  const labels = byClass(n, 'btn').map((b) => textOf(b));
+  assert.deepEqual(labels, ['Resume', 'Move to another AI', 'Stop']);
+  const offline = card(entry(view({ live: live({ hb_age_ms: 90_000, green: false }) })), model([]));
+  assert.deepEqual(byClass(offline, 'btn').map((b) => textOf(b)), ['Resume', 'Hand over to another AI', 'Stop']);
+});
+
+test('no lane when nothing is stalled; connection loss does not stall anything', () => {
+  assert.equal(stalledLane([], model([])), null);
+  const e = entry(view({ live: live({ hb_age_ms: 120_000, green: false }) }), { connection_lost: true });
+  assert.equal(groupColumns([e]).stalled.length, 0);
+});
+
+test('resume and hand over ask before stopping the stalled run', () => {
+  const v = view({ live: live({ hb_age_ms: 90_000, green: false }) });
+  for (const action of ['resume', 'handover_ai']) {
+    const d = confirmDialog({ kind: 'confirm', action, cardId: v.id }, model([entry(v)]));
+    assert.match(textOf(d), /stalled run is stopped/);
+    assert.equal(byAttr(d, 'data-confirm', action).length, 1);
+  }
 });

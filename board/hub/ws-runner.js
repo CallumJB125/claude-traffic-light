@@ -12,6 +12,7 @@ import { bearer, sha256hex } from './auth.js';
 import { handleRpc, relPath } from './rpc.js';
 import { BAD_RUNNER_TOKEN, isRunnerToken } from './identity/enrolments.js';
 import { HANDOVER_WAIT_MS } from '../shared/liveness.js';
+import { runnerAis, aiOfDispatch, acceptsAi } from '../shared/ai.js';
 import { runnerConnectionProblem } from './runner-authority.js';
 
 const clip = (s, n) => {
@@ -53,6 +54,7 @@ export class RunnerConn {
     this.ws = ws;
     this.device = device;
     this.enrollmentId = enrollmentId;   // accounts: the runner enrolment this socket authenticated with (D80)
+    this.generation = randomUUID();     // server-issued host connection identity, never from hello/HB data
     this.device_id = device.id;
     this.member_id = device.member_id;
     this.member = hub.member(device.member_id);
@@ -146,7 +148,8 @@ export class RunnerConn {
       this.error('VALIDATION', 'hello must be the first frame');
       return;
     }
-    // RPC checks inside its queue and after provider continuations.
+    // RPC reports its bounded failure before closing; its handler checks
+    // this same authority inside the queue and after network continuations.
     if (msg.type !== 'hello' && msg.type !== 'rpc') this.requireAuthorized();
     switch (msg.type) {
       case 'hello': return this.onHello(msg);
@@ -192,6 +195,7 @@ export class RunnerConn {
     const old = hub.runners.get(this.device_id);
     if (old && old !== this) old.close(WS_CLOSE.REPLACED, 'replaced by a newer connection');
     hub.runners.set(this.device_id, this);
+    this.ai = runnerAis(msg.ai);
     this.syncOutbox(msg);
     this.outSeen = false;
     this.repos = new Map(hub.db.all('SELECT repo_id FROM runner_repos WHERE device_id = ?', this.device_id).map((r) => [r.repo_id, { approvals_from: [], auto_accept_from: [] }]));
@@ -284,6 +288,7 @@ export class RunnerConn {
       for (const repoId of next.keys()) hub.db.insert('runner_repos', { device_id: this.device_id, repo_id: repoId, advertised_at: hub.iso() });
     });
     this.repos = next;
+    if (Object.hasOwn(msg, 'ai')) this.ai = runnerAis(msg.ai);
     hub.sendOffersForDevice(this.device_id);
   }
 
@@ -307,6 +312,7 @@ export class RunnerConn {
       if (!row || row.board_id !== row0.board_id) return lost();
       if (!row.repo_id || !hub.db.get('SELECT 1 AS x FROM board_repos WHERE board_id = ? AND repo_id = ?', row.board_id, row.repo_id)) return lost('POLICY_DENIED', 'this repository is no longer enabled on the board');
       const prior = hub.db.get('SELECT * FROM dispatches WHERE request_id = ? AND card_id = ?', msg.request_id, row.id);
+      if(!hub.workflowGuard.claim(msg.request_id,this))return lost('POLICY_DENIED','workflow authorization is no longer current');
       if (prior?.state === 'claimed' && prior.run_id) {
         const run = hub.run(prior.run_id);
         if (run && run.device_id === this.device_id && !run.ended_at && row.active_run_id === run.id) return this.claimOk(msg, run);
@@ -315,6 +321,8 @@ export class RunnerConn {
       const d = hub.pendingDispatch(row.id);
       if (!d || d.request_id !== msg.request_id) return lost();
       if (hub.dispatchTarget(d) !== this.member_id) return lost('POLICY_DENIED', 'this dispatch is for another member');
+      const frame = hub.offerFrame(row.id);
+      if (!frame || !acceptsAi(this, aiOfDispatch(d), frame.budget_usd)) return lost('POLICY_DENIED', 'this device cannot run the selected AI and budget');
       const ctx = {
         repo_advertised: !!hub.db.get('SELECT 1 AS x FROM runner_repos WHERE device_id = ? AND repo_id = ?', this.device_id, row.repo_id),
         runner_accepts: true,
@@ -331,6 +339,7 @@ export class RunnerConn {
   }
 
   claimOk(msg, run) {
+    if(!this.hub.workflowGuard.claim(run.dispatch_request_id,this))return this.send({type:'claim.result',re:msg.id,ok:false,error:{code:'POLICY_DENIED',message:'workflow authorization is no longer current'}});
     this.send({
       type: 'claim.result', re: msg.id, ok: true, run_id: run.id, fence: run.fence, branch: run.branch, snapshot_ref: run.snapshot_ref,
       run_token: this.hub.mintRunToken(run), team_context: this.hub.teamContext(run.id),
@@ -368,6 +377,13 @@ export class RunnerConn {
       entries.push(await hub.withBoard(row.board_id, () => this.hbRun(r, rx)));
     }
     this.requireAuthorized();
+    // A run this runner no longer reports has finished its CLI process.
+    const reported = new Set(msg.runs.map((r) => r?.run_id));
+    for (const [runId, t] of hub.endedChildren) {
+      if (t.device_id !== this.device_id || reported.has(runId)) continue;
+      hub.endedChildren.delete(runId);
+      hub.broadcastCard(t.card_id);
+    }
     hub.db.run('UPDATE devices SET last_seen_at = ? WHERE id = ?', hub.iso(), this.device_id);
     this.lastHbMono = rx;
     this.send({ type: 'hb.ack', seq_hb: msg.seq_hb, hub_epoch: hub.epoch, runs: entries });
@@ -383,10 +399,12 @@ export class RunnerConn {
       return { run_id: r.run_id, fence: r.fence, current_fence: row.fence, current: false, state: row.run_state ?? 'todo', reason };
     };
     if (!run || run.card_id !== row.id || run.device_id !== this.device_id) return no('RUN_ENDED');
+    if (run.ended_at) this.noteEndedChild(run, r, rx);
     if (row.fence !== r.fence) return no('FENCED');
     if (run.ended_at || row.active_run_id !== run.id) return no('RUN_ENDED');
 
     hub.noteHeartbeat(run.id, r, rx);
+    hub.lease(run.id).hb_connection_generation = this.generation;
     const t = r.tool_in_flight;
     hub.db.run('UPDATE leases SET last_hb_at = ?, hub_epoch = ?, child_alive = ?, tool_in_flight = ?, tool_bound_ms = ? WHERE card_id = ?',
       hub.iso(), hub.epoch, r.child_alive === true, t ? JSON.stringify({ name: t.name, summary: t.summary ?? null, bash_timeout_ms: t.bash_timeout_ms ?? null }) : null, null, row.id);
@@ -397,7 +415,16 @@ export class RunnerConn {
     const res = hub.apply(row.id, { type: 'hb', fence: r.fence }, { device: hub.device(this.device_id) });
     if (!res.ok && res.error.code === 'FENCED') return no('FENCED');
     const after = hub.card(row.id);
+    if (res.ok) hub.ownership.heartbeat(run, after, this, r, rx);
     return { run_id: run.id, fence: after.fence, current: true, state: after.run_state };
+  }
+
+  noteEndedChild(run, r, rx) {
+    const hub = this.hub;
+    const was = hub.endedChildAlive(run.id);
+    if (r.child_alive === true) hub.endedChildren.set(run.id, { card_id: run.card_id, device_id: this.device_id, child_alive: true, hb_mono: rx });
+    else hub.endedChildren.delete(run.id);
+    if (was !== (r.child_alive === true)) hub.broadcastCard(run.card_id);
   }
 
   async onSuspending(msg) {
@@ -509,13 +536,29 @@ export class RunnerConn {
         break;
       case 'run.failed':
         rec('run.failed', { fail_kind: m.fail_kind, ...(Number.isSafeInteger(m.resets_in_ms) && m.resets_in_ms >= 0 ? { resets_in_ms: m.resets_in_ms } : {}) });
-        stepOr({ type: 'run_failed', fail_kind: m.fail_kind, reason: m.reason == null ? null : clip(m.reason, 500) });
+        stepOr({ type: 'run_failed', fail_kind: m.fail_kind, reason: m.reason == null ? null : clip(m.reason, 500), budget_scope: m.budget_scope === 'device' ? 'device' : 'card' });
         break;
       case 'prep.failed':
         rec('prep.failed', { cause: clip(m.cause, 500) });
         stepOr({ type: 'prep_failed', cause: clip(m.cause, 500) });
         break;
       case 'handover.complete':
+        if (json(row.handover_target, null)?.kind === 'hold') {
+          const boundary = json(row.handover_target, null);
+          const narrative = hub.latestHandover(row.id);
+          const checkpoint = hub.run(run.id);
+          const snapshotEvent = hub.db.get("SELECT id, payload FROM events WHERE run_id = ? AND kind = 'snapshot' ORDER BY id DESC LIMIT 1", run.id);
+          const snapshotProof = json(snapshotEvent?.payload, null);
+          if (m.stop_confirmed !== true || m.checkpoint_confirmed !== true || m.handover_written !== true
+            || narrative?.run_id !== run.id || narrative?.fence !== row.fence
+            || !Number.isSafeInteger(boundary.narrative_version) || !(narrative.version > boundary.narrative_version)
+            || checkpoint?.snapshot_status !== 'pushed' || !/^[a-f0-9]{40}$/.test(checkpoint?.last_snapshot_sha ?? '')
+            || snapshotProof?.status !== 'pushed' || snapshotProof?.sha !== checkpoint.last_snapshot_sha
+            || snapshotProof?.ref !== checkpoint.snapshot_ref
+            || !Number.isSafeInteger(boundary.snapshot_event_id) || !(snapshotEvent?.id > boundary.snapshot_event_id)) {
+            throw new HubError('CONFLICT', 'Move blocked: the runner must confirm its stop, final handover and pushed checkpoint.');
+          }
+        }
         rec('handover.complete');
         stepOr({ type: 'handover_complete' });
         break;
@@ -609,6 +652,7 @@ export class RunnerConn {
           break;
         case 'cost':
           hub.db.run('UPDATE runs SET cost_cents = MAX(cost_cents, ?) WHERE id = ?', Math.round(f.cost_usd * 100), run.id);
+          hub.noteDailyCap(run.card_id);
           log('cost', { cost_usd: f.cost_usd, num_turns: f.num_turns ?? null });
           break;
         case 'session': {

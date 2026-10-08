@@ -62,7 +62,8 @@ test('accounts refuses to start without a secret, a public URL (loopback try-out
 test('H1/D66: an exposed accounts hub needs https, BOARD_TRUST_CF_IP and a sign-in method, never the console mailer; no Resend key needed', () => {
   const exposed = (over = {}) => base({ publicUrl: 'https://buddy.acme.test', trustCfIp: true, signinMethods: ['google'], accountsDev: false, ...over });
   assert.doesNotThrow(() => validateConfig(exposed()), 'Google only, no mailer');
-  assert.doesNotThrow(() => validateConfig(exposed({ signinMethods: [], resendApiKey: 're_x', mailFrom: 'a@b.co' })), 'a mailer is a sign-in method');
+  assert.doesNotThrow(() => validateConfig(exposed({ signinMethods: [], resendApiKey: 're_x', mailFrom: 'a@b.co', emailSignin: true })), 'a mailer with BOARD_EMAIL_SIGNIN=1 is a sign-in method');
+  assert.throws(() => validateConfig(exposed({ signinMethods: [], resendApiKey: 're_x', mailFrom: 'a@b.co' })), /needs a sign-in method/, 'a mailer alone (invites) never signs anyone in');
   // D76: a configured OAuth provider (client id AND secret) is a sign-in method: BOARD_SIGNIN_METHODS becomes optional.
   assert.doesNotThrow(() => validateConfig(exposed({ signinMethods: [], githubClientId: 'gh-id', githubClientSecret: ['s', 'x'].join('') })), 'GitHub configured');
   assert.throws(() => validateConfig(exposed({ signinMethods: [], githubClientId: 'gh-id' })), /needs a sign-in method/, 'an id without its secret is not a method');
@@ -209,7 +210,7 @@ test('007–012 in order: a fresh DB and a populated 006 DB end with every xteam
 
   const fresh = new DatabaseSync(':memory:');
   migrate(fresh, { migrations: all });
-  assert.deepEqual(fresh.prepare('SELECT version FROM schema_migrations WHERE version >= 7 ORDER BY version').all().map((r) => r.version), [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 22, 23, 25, 26, 28, 36]);
+  assert.deepEqual(fresh.prepare('SELECT version FROM schema_migrations WHERE version >= 7 ORDER BY version').all().map((r) => r.version), [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 22, 23, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 44, 45, 46, 48, 49, 50, 51, 52, 53, 56, 60, 61, 62, 63]);
   assert.deepEqual(triggers(fresh), want);
   fresh.close();
 
@@ -224,17 +225,17 @@ test('007–012 in order: a fresh DB and a populated 006 DB end with every xteam
     INSERT INTO comments (id, card_id, author_member_id, source, trusted, body, created_at) VALUES ('k1','c1','m1','web',1,'hi','${NOW}');
     INSERT INTO journal (board_id, card_id, at_hub, actor_kind, actor_id, kind) VALUES ('b1','c1','${NOW}','member','m1','card.create');
   `);
-  assert.deepEqual(migrate(old, { migrations: all }), [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 22, 23, 25, 26, 28, 36]);
+  assert.deepEqual(migrate(old, { migrations: all }), [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 22, 23, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 44, 45, 46, 48, 49, 50, 51, 52, 53, 56, 60, 61, 62, 63]);
   assert.deepEqual(triggers(old), want);
   assert.equal(old.prepare('SELECT COUNT(*) AS n FROM comments').get().n, 1);
   assert.equal(old.prepare('SELECT COUNT(*) AS n FROM journal').get().n, 1);
   old.close();
 
   // Accounts first (a DB that skipped the integrations merge): the rebuild in 008 must not run.
-  // 017, 022, 023, 025 and 026 need 008's tables, so that DB skips them (018 and 019 don't).
+  // 017, 022, 023, 025, 026 and 029 need 008's tables, so that DB skips them (018 and 019 don't).
   const skipped = new DatabaseSync(':memory:');
-  migrate(skipped, { migrations: all.filter((m) => m.version !== 7 && m.version !== 8 && m.version !== 17 && m.version !== 22 && m.version !== 23 && m.version !== 25 && m.version !== 26) });
-  assert.throws(() => migrate(skipped, { migrations: all }), /008_integrations rebuilds tables and cannot be applied after version 36/);
+  migrate(skipped, { migrations: all.filter((m) => m.version !== 7 && m.version !== 8 && m.version !== 17 && m.version !== 22 && m.version !== 23 && m.version !== 25 && m.version !== 26 && m.version !== 29) });
+  assert.throws(() => migrate(skipped, { migrations: all }), /008_integrations rebuilds tables and cannot be applied after version 63/);
   assert.equal(skipped.prepare('SELECT COUNT(*) AS n FROM schema_migrations WHERE version = 8').get().n, 0);
   const from017 = [17, 22].flatMap((v) => [...all.find((m) => m.version === v).sql.matchAll(/CREATE TRIGGER (xteam_\w+)/g)].map((x) => x[1]));
   assert.deepEqual(triggers(skipped), want.filter((t) => !from017.includes(t)));
@@ -295,7 +296,7 @@ test('018/019 apply on a populated DB at 017 and on a fresh DB; labels, covers a
     INSERT INTO boards (id, org_id, name, key_prefix) VALUES ('ba','oa','A','AAA'), ('bb','ob','B','BBB');
     INSERT INTO cards (id, board_id, key, title, labels, created_by, created_at, updated_at) VALUES ('ca','ba','AAA-1','a','["bug"]','ma','${NOW}','${NOW}');
   `);
-  assert.deepEqual(migrate(at17, { migrations: all }), [18, 19, 22, 23, 25, 26, 28, 36]);
+  assert.deepEqual(migrate(at17, { migrations: all }), [18, 19, 22, 23, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 44, 45, 46, 48, 49, 50, 51, 52, 53, 56, 60, 61, 62, 63]);
   assert.deepEqual({ ...at17.prepare('SELECT labels, cover, archived_at, archived_by FROM cards').get() }, { labels: '["bug"]', cover: null, archived_at: null, archived_by: null }, 'existing cards untouched');
   assert.deepEqual(at17.prepare('PRAGMA foreign_key_check').all(), []);
   const fresh = new DatabaseSync(':memory:');
@@ -324,7 +325,7 @@ test('018/019 apply on a populated DB at 017 and on a fresh DB; labels, covers a
 
 test('022 applies at 019 with 020/021 absent (an intentional gap, reserved for S2b/S2c); a later 020/021 still applies after it', () => {
   const all = loadMigrations();
-  assert.deepEqual(all.filter((m) => m.version > 19).map((m) => m.version), [22, 23, 25, 26, 28, 36], '020, 021, 024 and 027 are reserved, not shipped here');
+  assert.deepEqual(all.filter((m) => m.version > 19).map((m) => m.version), [22, 23, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 44, 45, 46, 48, 49, 50, 51, 52, 53, 56, 60, 61, 62, 63], '020, 021, 024 are reserved;027 adds quota lookup indexes');
   const NOW = '2026-09-30T10:00:00.000Z';
   const db = new DatabaseSync(':memory:');
   migrate(db, { migrations: all.filter((m) => m.version <= 19) });
@@ -333,7 +334,7 @@ test('022 applies at 019 with 020/021 absent (an intentional gap, reserved for S
     INSERT INTO members (id, org_id, github_id, github_login, email, display_name, role, created_at) VALUES ('ma','oa',1,'a','a@x.io','A','owner','${NOW}'), ('mb','ob',2,'b','b@x.io','B','owner','${NOW}');
     INSERT INTO connections (id, org_id, provider, external_id, created_by, created_at, settings) VALUES ('ka','oa','slack','T1','ma','${NOW}','{"pinned":{"app_id":"A1"}}');
   `);
-  assert.deepEqual(migrate(db, { migrations: all }), [22, 23, 25, 26, 28, 36]);
+  assert.deepEqual(migrate(db, { migrations: all }), [22, 23, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 44, 45, 46, 48, 49, 50, 51, 52, 53, 56, 60, 61, 62, 63]);
   assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), []);
   const pend = (id, org = 'oa', member = 'ma') => db.prepare("INSERT INTO integration_pending (id, org_id, provider, created_by, created_at, expires_at) VALUES (?, ?, 'slack', ?, ?, ?)").run(id, org, member, NOW, '2026-09-30T11:00:00.000Z');
   assert.throws(() => pend('p0', 'oa', 'mb'), /cross-team reference/);
@@ -493,4 +494,15 @@ test('BOARD_SECRET and BOARD_SIGNUP_ALLOW leave process.env once read and never 
   assert.equal(loadConfig(env).secret, secret);
   assert.equal(env.BOARD_SECRET, secret);
   assert.equal(env.BOARD_SIGNUP_ALLOW, allow);
+});
+
+test('051 creates every index it names (a comment glued to a statement once swallowed one)', () => {
+  const all = loadMigrations();
+  const m = all.find((x) => x.version === 51);
+  const names = [...m.sql.matchAll(/CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)/gi)].map((x) => x[1]);
+  assert.equal(names.length, 8);
+  const db = new DatabaseSync(':memory:');
+  migrate(db, { migrations: all });
+  const have = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all().map((r) => r.name));
+  for (const n of names) assert.ok(have.has(n), `index ${n} missing`);
 });

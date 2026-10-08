@@ -211,12 +211,12 @@ test('buddy_spend: today, this week and runaways from the transcripts, with the 
   assert.match(r.summary, /1 turn this week unpriced/);
 });
 
-test('the server exposes exactly the eleven buddy_ tools, all read-only', () => {
-  assert.deepEqual(M.TOOLS.map((t) => t.name), ['buddy_status', 'buddy_sessions', 'buddy_why', 'buddy_rules', 'buddy_recent_transitions', 'buddy_model_mix', 'buddy_git_status', 'buddy_spend', 'buddy_usage_history', 'buddy_health', 'buddy_pending_requests']);
+test('the server exposes fourteen buddy_ tools and four team_ tools, all read-only', () => {
+  assert.deepEqual(M.TOOLS.map((t) => t.name), ['buddy_status', 'buddy_sessions', 'buddy_why', 'buddy_rules', 'buddy_recent_transitions', 'buddy_model_mix', 'buddy_git_status', 'buddy_spend', 'buddy_usage_history', 'buddy_health', 'buddy_pending_requests', 'buddy_burst_status', 'buddy_burst_coordination', 'buddy_burst_requests', 'team_activity', 'who_touched', 'team_handover', 'team_brief']);
   assert.deepEqual(M.TOOLS.filter((t) => t.readOnly === false).map((t) => t.name), []);
 });
 
-test('stdio: the server starts, lists eleven tools and answers buddy_status and buddy_health end to end', async () => {
+test('stdio: the server starts, lists eighteen tools and answers buddy_status and buddy_health end to end', async () => {
   const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
   const { StdioClientTransport } = require('@modelcontextprotocol/sdk/client/stdio.js');
   const root = fixture({ config: base, sessions: { a: session('a', { updatedAt: new Date().toISOString() }) } });
@@ -224,14 +224,14 @@ test('stdio: the server starts, lists eleven tools and answers buddy_status and 
     command: process.execPath,
     args: [path.join(__dirname, '..', 'mcp-server.js')],
     // A port nothing listens on, so the real widget can't answer for the fixture.
-    env: { ...process.env, CLAUDE_TRAFFIC_LIGHT_HOME: root, CLAUDE_TRAFFIC_LIGHT_PORT: '1' },
+    env: { ...process.env, HOME: root, USERPROFILE: root, CLAUDE_TRAFFIC_LIGHT_HOME: root, CLAUDE_TRAFFIC_LIGHT_PORT: '1' },
   });
   const client = new Client({ name: 'test', version: '1.0.0' });
   await client.connect(transport);
   try {
     const { tools } = await client.listTools();
-    assert.equal(tools.length, 11);
-    // Read-only against the real home: only its shape is predictable here.
+    assert.equal(tools.length, 18);
+    // The same synthetic home on every host, without an installed Codex profile.
     const health = JSON.parse((await client.callTool({ name: 'buddy_health', arguments: {} })).content[0].text);
     assert.equal(health.checks.length, 8);
     assert.equal(health.checks.find((c) => c.id === 'signal').status, 'fail');
@@ -385,20 +385,36 @@ test('buddy_health: an app that moved, not running, no hook yet — each with it
   assert.equal(h.ok, false);
   assert.equal(by('hooks').status, 'fail');
   assert.equal(by('hooks').fix, 'reinstall-hooks');
-  assert.match(by('hooks').detail, /^Points at a copy of Buddy that was moved or deleted \(\/Applications\/#[0-9a-f]{6} #[0-9a-f]{6}\/Contents\/Resources\/hooks\/set-status\.js\)\.$/);
+  assert.match(by('hooks').detail, /^Points at a copy of Plexiform that was moved or deleted \(\/Applications\/#[0-9a-f]{6} #[0-9a-f]{6}\/Contents\/Resources\/hooks\/set-status\.js\)\.$/);
   assert.equal(by('signal').status, 'fail');
   assert.equal(by('mcp').fix, 'enable-mcp');
   assert.equal(by('last-hook').status, 'warn');
-  assert.match(h.likelyCause, /^Hooks: Points at a copy of Buddy that was moved or deleted/);
+  assert.match(h.likelyCause, /^Hooks: Points at a copy of Plexiform that was moved or deleted/);
   assert.match(h.note, /Nothing here is fixed for you/);
 });
 
 test('buddy_health: hookRuntime matches what main.js installs, packaged or not', () => {
-  const dev = M.hookRuntime('/data', '/src/buddy');
+  const data = path.resolve(path.sep, 'data');
+  const source = path.resolve(path.sep, 'src', 'buddy');
+  const resources = path.resolve(path.sep, 'A', 'Claude Buddy.app', 'Contents', 'Resources');
+  const executable = path.resolve(path.sep, 'A', 'Claude Buddy.app', 'Contents', 'MacOS', 'Claude Buddy');
+  const dev = M.hookRuntime(data, source);
   assert.equal(dev.node, true);
-  assert.equal(dev.hooksDir, '/src/buddy/hooks');
-  const app = M.hookRuntime('/data', '/A/Claude Buddy.app/Contents/Resources/app.asar', '/A/Claude Buddy.app/Contents/MacOS/Claude Buddy');
-  assert.equal(app.execPath, '/A/Claude Buddy.app/Contents/MacOS/Claude Buddy');
-  assert.equal(app.hooksDir, '/A/Claude Buddy.app/Contents/Resources/hooks');
-  assert.equal(app.dataDir, '/data');
+  assert.equal(dev.hooksDir, path.join(source, 'hooks'));
+  const app = M.hookRuntime(data, path.join(resources, 'app.asar'), executable);
+  assert.equal(app.execPath, executable);
+  assert.equal(app.hooksDir, path.join(resources, 'hooks'));
+  assert.equal(app.dataDir, data);
+});
+
+test('one character: status and why report the single global character, migrated from old per-rule bodies', async () => {
+  const rules = [{ id: 'a', name: 'a', when: { signal: ['tool-use'] }, then: { lamp: 'green', body: 'octopus' } }];
+  const root = fixture({ sessions: { s1: session('s1') }, config: { ...base, rules, rulesVersion: 10 } });
+  const st = await M.buddyStatus({ root, now: NOW, online: true, live: null });
+  assert.deepEqual(st.character, { body: 'octopus', bodyColor: null });
+  assert.equal(st.look.body, 'octopus');
+  assert.equal(st.channels.body, undefined);
+  const why = M.buddyWhy({ root, now: NOW, online: true, query: 'body' });
+  assert.equal(why.kind, 'character');
+  assert.equal(why.value.body, 'octopus');
 });

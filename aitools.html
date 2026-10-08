@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; base-uri 'none'; form-action 'none'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI tools</title><link rel="stylesheet" href="tokens.css"><link rel="stylesheet" href="aitools.css"></head>
+<body><main>
+<header><div><h1>AI tools</h1><p>Plug in the tools you use. Each one shows up in the widget and on your board.</p></div>
+<div class="actions"><button id="connect-all" type="button" class="primary" hidden>Connect all detected</button><button id="refresh" type="button">Check again</button></div></header>
+<p id="status" role="status" aria-live="polite">Looking for your AI tools…</p>
+<section id="all-preview" class="panel" hidden aria-label="Connect all detected tools"></section>
+<div id="list"></div>
+<section class="panel" aria-labelledby="custom-title">
+<h2 id="custom-title">Add a custom tool</h2>
+<p class="muted">For anything without hooks of its own (Aider, OpenCode, Copilot CLI, Amp…). Run it as <code>plexiform-run &lt;command&gt;</code> and it appears in the widget as working, then done or failed. That is all it can report: it cannot answer prompts or show what the tool is doing.</p>
+<form id="custom-form" autocomplete="off"><label>Name<input id="custom-name" maxlength="40" placeholder="Aider" required></label>
+<label>Command you run<input id="custom-command" maxlength="200" placeholder="aider --model sonnet" required></label>
+<button type="submit">Add custom tool</button></form>
+<p id="custom-status" role="status" aria-live="polite" class="muted"></p>
+</section>
+<p class="muted">Claude Code can also be given Plexiform's MCP server, and your team boards can be offered inside AI apps: both are in Settings → Advanced.</p>
+<p class="muted disclosure">Connecting edits only the tool's own hook settings, never its chats or logins. A copy of the file is kept next to it first (<code>.plexiform-backup-…</code>) and Undo puts it back. Plexiform reads no conversation text; it sees that a session started, worked, or finished.</p>
+</main><script src="aitools.js"></script></body></html>

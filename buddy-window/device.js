@@ -10,10 +10,12 @@
 // log line or a plaintext file. The account's device token never reaches the
 // runner.
 'use strict';
+const { storageHelp } = require('./secure-storage');
 
 const fs = require('node:fs');
 const path = require('node:path');
 const { RUNNER_SERVICE } = require('./brand');
+const WindowsPrivate = require('../board/shared/windows-private-directory.cjs');
 
 const RESTART_WINDOW_MS = 10 * 60_000;
 const MAX_RESTARTS = 5;
@@ -107,8 +109,9 @@ function hubUrlOk(url) {
  * The runner's data_dir: created 0700, then checked, not trusted: a real
  * directory (not a symlink), ours, and 0700. → null, or why it isn't safe.
  */
-function ensurePrivateDir(dir, { uid = process.getuid?.() } = {}) {
+function ensurePrivateDir(dir, { uid = process.getuid?.(), platform = process.platform, windowsPrivate = WindowsPrivate } = {}) {
   try {
+    if (platform === 'win32') { windowsPrivate.ensureDirectory(dir); return null; }
     // Look before making: mkdir would follow a symlink or trip over a file.
     let st = null;
     try { st = fs.lstatSync(dir); } catch (e) { if (e.code !== 'ENOENT') throw e; }
@@ -288,7 +291,7 @@ function createDeviceController({ account, teamId, credsFile, seal, unseal, canS
       // No enrolment the hub would list for a runner that can't start here.
       if (!entryExists()) { setRunner('missing', NO_RUNNER); return { ok: false, error: `${NO_RUNNER}.` }; }
       // Nothing the hub would count as enrolled unless we can keep its token sealed.
-      if (!canSeal()) return { ok: false, error: 'This Mac can’t store the runner’s key securely right now, so it can’t run cards.' };
+      if (!canSeal()) return { ok: false, error: `Plexiform can’t save this device’s key securely, so running cards stays off. ${storageHelp()}` };
       busy = true;
       const old = child;
       const asked = epoch;
@@ -323,7 +326,7 @@ function createDeviceController({ account, teamId, credsFile, seal, unseal, canS
           creds = prev;
           await dropLocal();
           await account.unenrol(teamId).catch(() => {});
-          return { ok: false, error: 'This Mac couldn’t store the runner’s key securely. Nothing was turned on.' };
+          return { ok: false, error: `Plexiform couldn’t save this device’s key securely. Nothing was turned on. ${storageHelp()}` };
         }
         wanted = true;
         ended = null;
@@ -354,6 +357,8 @@ function createDeviceController({ account, teamId, credsFile, seal, unseal, canS
       if (runner.state !== 'removed') setRunner('off');
     },
     running: () => wanted && RUNNING.has(runner.state),
+    /** Burst's secondary-provider spend and readiness for the runner's budget and limit handling (numbers only, local pipe). */
+    sendBurst(facts) { if (child?.ready) { try { child.postMessage({ type: 'runner.burst', ...facts }); } catch { /* exiting */ } } }, // privacy-flow: team-hub-runner
     /** Share (or stop sharing) the live sessions list; `enabled:false` clears at once. Summaries need both switches. */
     setPresence(enabled, sessions = [], { shareSummaries = false } = {}) {
       const summaries = !!enabled && shareSummaries === true;

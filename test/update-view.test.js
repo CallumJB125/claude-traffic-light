@@ -98,6 +98,14 @@ test('idle, checking, available, downloading', () => {
   assert.deepEqual(dl.buttons, []);
 });
 
+test('portable update UI gives replacement instructions without an install or download action', () => {
+  const vm = V.view({ ...states['idle-up-to-date'], status: 'error', error: { code: 'portable' }, installKind: 'portable', available: { version: '1.2.0', notes: '' }, canRevert: false });
+  assert.match(vm.message.text, /latest portable copy/);
+  assert.match(vm.message.text, /https:\/\/plexiform\.dev\/download/);
+  assert.ok(!vm.buttons.some(b => b.id.startsWith('install') || b.id === 'download'));
+  assert.equal(vm.revert, null);
+});
+
 test('ready: buttons follow the install kind', () => {
   assert.deepEqual(labels(view('ready-restart')), ['Restart now', `Restart ${LATER}`]);
   assert.deepEqual(ids(view('ready-restart')), ['install-now', 'install-idle']);

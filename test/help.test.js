@@ -4,11 +4,13 @@ const Help = require('../help.js');
 const Rules = require('../rules.js');
 
 // ── First run ──────────────────────────────────────────────────────────────
-test('help auto-shows only on a real run with no marker yet', () => {
-  assert.equal(Help.shouldAutoShow({ markerExists: false, devRun: false }), true);
-  assert.equal(Help.shouldAutoShow({ markerExists: true, devRun: false }), false);
-  assert.equal(Help.shouldAutoShow({ markerExists: false, devRun: true }), false);
+test('setup auto-shows only on a real run of a brand-new install', () => {
+  assert.equal(Help.shouldOnboard({ onboarded: false, helpShown: false, devRun: false }), true);
+  assert.equal(Help.shouldOnboard({ onboarded: true, helpShown: false, devRun: false }), false);
+  assert.equal(Help.shouldOnboard({ onboarded: false, helpShown: true, devRun: false }), false, 'an install that already saw Help is not re-onboarded');
+  assert.equal(Help.shouldOnboard({ onboarded: false, helpShown: false, devRun: true }), false);
   assert.equal(Help.MARKER, '.help-shown');
+  assert.equal(Help.ONBOARDED_MARKER, '.onboarded');
 });
 
 // ── Notification config ────────────────────────────────────────────────────
@@ -134,5 +136,5 @@ test('a rule the user repurposed gets a generic line built from its signals', ()
   const { look, fired, owned } = Rules.resolve(custom, [{ ...working('a'), tool: 'Bash' }]);
   const h = Help.explain({ look, fired, owned, firedNames: Rules.firedNames(custom, fired, owned), reason: 'session', sessions: [working('a')] }, custom);
   assert.equal(h.headline, 'Deploying');
-  assert.equal(h.meaning, 'Your rule — it fires when Claude uses a tool.');
+  assert.equal(h.meaning, 'Your rule — it fires when An AI agent uses a tool.');
 });

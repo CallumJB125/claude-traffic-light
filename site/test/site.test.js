@@ -190,8 +190,9 @@ test('site: the first-open steps match current macOS, and no page still tells pe
   assert.match(dl, /Privacy &amp; Security/);
   assert.match(dl, /Open Anyway/);
   assert.match(dl, /On macOS 14 and earlier, right-click/);
-  assert.match(dl, /xattr -dr com\.apple\.quarantine/);
-  assert.match(dl, /libfuse2/);
+  assert.doesNotMatch(dl, /xattr -dr com\.apple\.quarantine/);
+  assert.match(dl, /verify the checksum and re-download/);
+  assert.match(dl, /FUSE support/);
   const invite = all.find(([f]) => f === 'invite-preview.html')[1];
   assert.match(invite, /Open Anyway/);
   assert.match(invite, /Four quick steps/);
@@ -226,4 +227,22 @@ test('waitlist: the honeypot is a field browsers do not autofill, and the page a
   assert.ok(!/name="(company|website|url|name|phone)"/.test(html.match(/<form[\s\S]*?<\/form>/)[0]));
   assert.match(js, /hp: form\.hp_trap_field\.value/);
   assert.match(fn, /data\.hp/);
+});
+
+test('public launch: account and Windows copy follows accepted release flags consistently', () => {
+  const { build, DIST } = require('../build');
+  try {
+    build({ live: { publicSignup: true, windowsDownloads: true } });
+    const home = fs.readFileSync(path.join(DIST, 'index.html'), 'utf8');
+    const download = fs.readFileSync(path.join(DIST, 'download.html'), 'utf8');
+    assert.match(home, /Create a free account/);
+    assert.doesNotMatch(home, /id="wl-form"|Windows is unavailable|Pricing isn't announced/);
+    assert.match(download, /data-windows="true"/);
+    assert.doesNotMatch(download, /Windows downloads are unavailable|Unavailable pending runtime acceptance/);
+    build({ live: { publicSignup: false, windowsDownloads: false } });
+    const gated = fs.readFileSync(path.join(DIST, 'index.html'), 'utf8');
+    assert.match(gated, /id="wl-form"/);
+    assert.match(gated, /Windows is unavailable/);
+    assert.doesNotMatch(gated, /Create a free account/);
+  } finally { build(); }
 });

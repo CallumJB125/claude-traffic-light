@@ -12,20 +12,43 @@ import { existsSync, unlinkSync } from 'node:fs';
 import { step, fromDb, toDb, ACTIVE, PLAN_APPROVAL_LABEL, EVENTS } from '../shared/states.js';
 import { CARD_STATE } from '../shared/journal.js';
 import {
-  timerEvent, ORPHAN_NOTIFY_MS, OVERLAP_DEBOUNCE_MS, TICK_MAX_RATE_MS,
+  timerEvent, deriveStalled, ORPHAN_NOTIFY_MS, OVERLAP_DEBOUNCE_MS, TICK_MAX_RATE_MS, TTL_MS,
 } from '../shared/liveness.js';
 import { branchName, snapshotRef, RESTORE_BUMP } from '../shared/fence.js';
-import { applyPatch, mergeHandover, renderMarkdown, syncAges, handoffMemoryText } from '../shared/handover.js';
+import { applyPatch, emptyNarrative, mergeHandover, renderMarkdown, syncAges, handoffMemoryText } from '../shared/handover.js';
 import { computeOverlaps, overlapsFor, teamContextBlock, overlapDelta, kindOf } from '../shared/overlap.js';
 import { applyRestoreBump } from '../shared/migrate.js';
 import { FEED_KINDS, WS_CLOSE } from '../shared/protocol.js';
+import { aiOfDispatch, acceptsAi, AI_LABELS, AI_CAPABILITIES } from '../shared/ai.js';
 import { HubError, json } from './db.js';
 import { mintRunToken } from './auth.js';
 import { noGitHub, prBound, prNumberOf } from './github.js';
-import { cardView, leaseView, labelDef } from './views.js';
+import { cardView, leaseView, labelDef, boardCost } from './views.js';
 import { DEFAULT_LIMITS, RateLimiter } from './ratelimit.js';
 import { isAdmin, canWrite } from './permissions.js';
 import { Presence } from './presence.js';
+import { TaskOwnership } from './ownership.js';
+import { WorkflowExecutionGuard } from './workflow-execution-guard.js';
+
+const STALL_NOTE = {
+  runner_offline: 'the runner stopped answering', process_gone: 'the AI process is gone',
+  claim_not_started: 'the run never started', no_activity: 'the run went quiet',
+};
+// Why the run ended, in the hub-written handover's own words.
+function endNote(event) {
+  switch (event.type) {
+    case 'stop': return 'the run was stopped';
+    case 'run_failed': return event.fail_kind === 'budget' ? 'the run stopped at its budget' : `the run failed (${event.fail_kind})`;
+    case 'release': return event.requeue === true ? 'the AI released the card back to the queue' : 'the AI released the card';
+    case 'orphan_timeout': case 'suspend_timeout': return 'the runner went silent and the run was orphaned';
+    case 'handover_timeout': case 'hb_timeout': return 'the AI did not confirm its handover';
+    case 'handover_complete': return 'the run was handed over';
+    case 'complete': return 'the run finished';
+    case 'park_timeout': return 'the run was parked waiting for an answer';
+    case 'take_over': return 'the run was taken over';
+    default: return 'the run ended';
+  }
+}
 
 const TICK_EVERY_MS = 5_000;          // lease.tick heartbeat when nothing changed
 const REQUEST_CACHE_MS = 10 * 60_000; // D8
@@ -52,6 +75,7 @@ export class Hub extends EventEmitter {
     this.boardScope = new AsyncLocalStorage(); // Set of board ids whose queue the current code runs in
     this.viaScope = new AsyncLocalStorage();   // {connection_id, member_id, name}: an integration acting (D42)
     this.live = new Map();          // run_id → lease memory (hub monotonic)
+    this.endedChildren = new Map(); // run_id → {card_id, device_id, child_alive, hb_mono}: CLI still reported after the run ended
     this.runners = new Map();       // device_id → runner connection (ws-runner.js)
     this.browsers = new Set();      // browser connections (ws-board.js)
     this.offered = new Map();       // card_id → Set(device_id)
@@ -75,6 +99,8 @@ export class Hub extends EventEmitter {
       },
     });
     this.presence = new Presence(this);   // D37b, memory only
+    this.ownership = new TaskOwnership(this);
+    this.workflowGuard = new WorkflowExecutionGuard(this);
   }
 
   // ── clocks ────────────────────────────────────────────────────────────────
@@ -240,6 +266,10 @@ export class Hub extends EventEmitter {
   activeMember(id) { return id ? this.db.get('SELECT * FROM members WHERE id = ? AND removed_at IS NULL', id) : null; }
   memberName(id) { return this.member(id)?.display_name ?? null; }
   board(id) { return this.db.get('SELECT * FROM boards WHERE id = ?', id); }
+
+  boardList(orgId, { includeArchived = false } = {}) {
+    return this.db.all(`SELECT id, name, key_prefix, archived_at FROM boards WHERE org_id = ? ${includeArchived ? '' : 'AND archived_at IS NULL'} ORDER BY name, id`, orgId);
+  }
   repo(id) { return id ? this.db.get('SELECT * FROM repos WHERE id = ?', id) : null; }
   device(id) { return id ? this.db.get('SELECT * FROM devices WHERE id = ?', id) : null; }
   pendingDispatch(cardId) { return this.db.get("SELECT * FROM dispatches WHERE card_id = ? AND state = 'pending'", cardId); }
@@ -261,6 +291,7 @@ export class Hub extends EventEmitter {
     this.db.run('DELETE FROM connection_secrets WHERE connection_id IN (SELECT c.id FROM connections c JOIN orgs o ON o.id = c.org_id WHERE o.deleted_at IS NOT NULL)');
     this.db.run("UPDATE connections SET status = 'revoked', revoked_at = ? WHERE status != 'revoked' AND org_id IN (SELECT id FROM orgs WHERE deleted_at IS NOT NULL)", now);
     this.db.run('DELETE FROM integration_pending WHERE org_id IN (SELECT id FROM orgs WHERE deleted_at IS NOT NULL)');
+    this.remoteAuthority?.cleanupDeleted(now);
   }
   // Only its creator, still an owner/admin, can finish a pending connection
   // (D97): one who is removed, demoted or deleted loses it at once, with its
@@ -274,6 +305,11 @@ export class Hub extends EventEmitter {
   // … and its label registry goes at once (member-written names; nothing reads it again). Cards wait for the P5 purge.
   dropDeletedTeamLabels() {
     this.db.run('DELETE FROM board_labels WHERE board_id IN (SELECT b.id FROM boards b JOIN orgs o ON o.id = b.org_id WHERE o.deleted_at IS NOT NULL)');
+  }
+  // … and so do its messages, replies and shared-session targets (MESSAGING.md §5).
+  dropDeletedTeamMessages() {
+    this.db.run('DELETE FROM msg_messages WHERE org_id IN (SELECT id FROM orgs WHERE deleted_at IS NOT NULL)');
+    this.db.run('DELETE FROM msg_targets WHERE org_id IN (SELECT id FROM orgs WHERE deleted_at IS NOT NULL)');
   }
 
   /**
@@ -318,18 +354,23 @@ export class Hub extends EventEmitter {
   apply(cardId, event, { ctx = {}, actor = null, device = null, pre = null, extra = {} } = {}) {
     const row = this.card(cardId);
     if (!row) return { ok: false, error: { code: 'NOT_FOUND', message: 'card not found' } };
+    if (this.board(row.board_id)?.archived_at) return { ok: false, error: { code: 'CONFLICT', message: 'this board is archived: restore it first', reason: 'BOARD_ARCHIVED' } };
     const card = fromDb(row);
+    try { this.workflowGuard.before(row,event,{device}); }
+    catch(e) { if(e instanceof HubError)return {ok:false,error:{code:e.code,message:e.message}};throw e; }
     const res = step(card, event, ctx);
     if (!res.ok) return res;
     if (!res.effects.length && res.to === res.from && !pre) return { ...res, row };
     const env = { row, card, res, event, actor, device, extra, runId: row.active_run_id, newRunId: null };
     try {
       this.txn(() => {
+        env.workflow=this.workflowGuard.before(row,event,{device},true);
         pre?.(res);
         this.writeCard(env);
         for (const e of res.effects) this.effect(e, env);
         this.cleanupAsks(env);
         this.journalTransition(env);
+        this.workflowGuard.after(env);
       });
     } catch (e) {
       if (e instanceof HubError) return { ok: false, error: { code: e.code, message: e.message, ...e.extra } };
@@ -390,6 +431,7 @@ export class Hub extends EventEmitter {
   }
 
   effect(e, env) {
+    if(!this.workflowGuard.effectAllowed(e,env))return;
     const { row, event, actor } = env;
     const cardId = row.id;
     const now = this.iso();
@@ -403,7 +445,8 @@ export class Hub extends EventEmitter {
         this.db.run("UPDATE dispatches SET state = 'superseded' WHERE card_id = ? AND state = 'pending'", cardId);
         this.db.insert('dispatches', {
           request_id: e.request_id, card_id: cardId, dispatched_by: actor, target_member_id: e.target_member_id,
-          backend: event.backend ?? 'claude_cli', needs_confirm: e.needs_confirm ? 1 : 0, seed: '{}', state: 'pending', created_at: now,
+          backend: event.backend ?? 'claude_cli', ai: event.ai ?? null, budget_mode: event.budget_mode ?? null, budget_cents: event.budget_cents ?? null,
+          needs_confirm: e.needs_confirm ? 1 : 0, seed: '{}', state: 'pending', created_at: now,
         });
         break;
       }
@@ -433,9 +476,17 @@ export class Hub extends EventEmitter {
         const runId = env.runId;
         if (!runId) break;
         this.db.run('UPDATE runs SET ended_at = ?, end_reason = ? WHERE id = ? AND ended_at IS NULL', now, e.reason, runId);
+        if (e.reason === 'failed:budget') {
+          const scope = event.budget_scope === 'device' ? 'device' : 'card';
+          this.db.run('UPDATE runs SET terminal_reason = ? WHERE id = ?', scope === 'device' ? 'budget_device' : 'budget', runId);
+          this.journal({ board_id: row.board_id, card_id: cardId, run_id: runId, actor_kind: 'runner', actor_id: env.device?.id ?? null, kind: 'run.budget', payload: { scope, spent_cents: this.cardSpentCents(cardId), cap_cents: row.budget_cents, offered_cents: this.run(runId).budget_cents } });
+        }
         this.db.run("UPDATE asks SET state = 'cancelled' WHERE run_id = ? AND state = 'open' AND ? != 'parked'", runId, e.reason);
         this.db.run("UPDATE permission_requests SET state = ? WHERE run_id = ? AND state = 'open'", e.reason === 'parked' ? 'parked' : 'cancelled', runId);
+        const lm = this.live.get(runId);
+        if (lm?.child_alive === true && lm.hb_mono != null) this.endedChildren.set(runId, { card_id: cardId, device_id: this.run(runId)?.device_id ?? null, child_alive: true, hb_mono: lm.hb_mono });
         this.live.delete(runId);
+        this.ownership.live.delete(runId);
         this.scheduleOverlap(row.repo_id, 0);
         break;
       }
@@ -465,8 +516,9 @@ export class Hub extends EventEmitter {
         this.db.run('UPDATE cards SET queued_nudged_at = ? WHERE id = ?', now, cardId);
         break;
       case 'handover_freeze': {
-        const h = this.latestHandover(cardId);
         const run = this.run(env.runId) ?? this.latestRun(cardId);
+        this.writeFactsOnlyHandover(cardId, run, endNote(event));
+        const h = this.latestHandover(cardId);
         this.feed(cardId, 'handover_frozen', { version: h?.version ?? null, snapshot_sha: run?.last_snapshot_sha ?? null }, { run });
         break;
       }
@@ -526,15 +578,18 @@ export class Hub extends EventEmitter {
     const seed = json(d.seed, {});
     this.db.insert('runs', {
       id, card_id: row.id, fence, device_id: device.id, on_behalf_of: device.member_id, dispatched_by: d.dispatched_by,
-      dispatch_request_id: d.request_id, backend: d.backend, repo_id: row.repo_id, base_ref: row.base_ref ?? repo.default_branch,
+      dispatch_request_id: d.request_id, backend: d.backend, repo_id: row.repo_id, base_ref: env.workflow?.base_sha ?? row.base_ref ?? repo.default_branch,
+      ai: aiOfDispatch(d), budget_cents: this.remainingBudgetCents(row, d),
       branch: branchName(row.key, fence), snapshot_ref: snapshotRef(row.key, fence), started_at: this.iso(),
       seeded_from_handover: seed.handover_version ?? null,
     });
+    this.ownership.register(this.run(id), row, { known: true });
     this.db.run("UPDATE dispatches SET state = 'claimed', run_id = ? WHERE request_id = ?", id, d.request_id);
-    this.journal({ board_id: row.board_id, card_id: row.id, run_id: id, actor_kind: 'runner', actor_id: device.id, kind: 'run.create', payload: { fence, device_id: device.id, branch: branchName(row.key, fence), snapshot_ref: snapshotRef(row.key, fence), dispatch_request_id: d.request_id } });
+    this.journal({ board_id: row.board_id, card_id: row.id, run_id: id, actor_kind: 'runner', actor_id: device.id, kind: 'run.create', payload: { fence, device_id: device.id, branch: branchName(row.key, fence), snapshot_ref: snapshotRef(row.key, fence), dispatch_request_id: d.request_id, ai: aiOfDispatch(d), budget_cents: this.run(id).budget_cents } });
     this.db.run('UPDATE cards SET active_run_id = ? WHERE id = ?', id, row.id);
     env.newRunId = id;
     env.runId = id;
+    this.workflowGuard.created(env,d,id);
     this.later(() => this.withdrawOffers(row.id, device.id, 'claimed'));
     this.scheduleOverlap(row.repo_id, OVERLAP_DEBOUNCE_MS);
   }
@@ -542,16 +597,19 @@ export class Hub extends EventEmitter {
   // Requeue rows without a dispatch_create (#5, #5b, #11, #24) re-offer the
   // card as a fresh dispatch with the same dispatcher and target (D19).
   ensurePendingDispatch(cardId) {
+    if(!this.workflowGuard.canRequeue(cardId))return;
     if (this.pendingDispatch(cardId)) return;
     const last = this.lastDispatch(cardId);
     if (!last) return;
     this.db.insert('dispatches', {
       request_id: randomUUID(), card_id: cardId, dispatched_by: last.dispatched_by, target_member_id: last.target_member_id,
-      backend: last.backend, needs_confirm: last.needs_confirm, seed: '{}', state: 'pending', created_at: this.iso(),
+      backend: last.backend, ai: last.ai, budget_mode: last.budget_mode, budget_cents: last.budget_cents,
+      needs_confirm: last.needs_confirm, seed: '{}', state: 'pending', created_at: this.iso(),
     });
   }
 
   writeSeed(cardId, from, env) {
+    if(!this.workflowGuard.canRequeue(cardId))return;
     this.ensurePendingDispatch(cardId);
     const d = this.pendingDispatch(cardId);
     if (!d) return;
@@ -624,6 +682,7 @@ export class Hub extends EventEmitter {
   }
 
   async followUp(cardId, ev, target) {
+    if(!this.workflowGuard.canRequeue(cardId))return;
     return this.withCard(cardId, () => {
       const by = target.by ?? target.member_id ?? null;
       const actor = this.member(by);
@@ -707,10 +766,53 @@ export class Hub extends EventEmitter {
     const d = this.pendingDispatch(cardId);
     if (!row || !d) return [];
     const target = this.dispatchTarget(d);
-    return [...this.runners.values()].filter((c) => c.ready && c.member_id === target && c.repos.has(row.repo_id));
+    const remaining = this.remainingBudgetCents(row, d);
+    if (remaining != null && remaining < 50) return [];
+    return [...this.runners.values()].filter((c) => c.ready && c.member_id === target && c.repos.has(row.repo_id) && acceptsAi(c, aiOfDispatch(d), remaining == null ? null : remaining / 100));
+  }
+
+  // Per-project soft cap on reported spend since UTC midnight (boards.settings.daily_cap_usd).
+  // Running work is never killed by it; new starts wait, and capped runs are offered only what is left.
+  dailyCapCents(boardId) {
+    const usd = this.boardSettings(boardId).daily_cap_usd;
+    return Number.isFinite(usd) && usd > 0 ? Math.round(usd * 100) : null;
+  }
+  spentTodayCents(boardId) {
+    return Math.round((boardCost(this, boardId, `${this.iso().slice(0, 10)}T00:00:00.000Z`).total_usd ?? 0) * 100);
+  }
+  dailyRemainingCents(boardId) {
+    const cap = this.dailyCapCents(boardId);
+    return cap == null ? null : Math.max(0, cap - this.spentTodayCents(boardId));
+  }
+  dailyCapView(boardId) {
+    const cap = this.dailyCapCents(boardId);
+    if (cap == null) return null;
+    const spent = this.spentTodayCents(boardId);
+    return { cap_usd: cap / 100, spent_usd: spent / 100, exceeded: spent >= cap };
+  }
+  // First cost fact over the cap each UTC day: one journal row and one notification.
+  noteDailyCap(cardId) {
+    const row = this.card(cardId);
+    const cap = row && this.dailyCapCents(row.board_id);
+    if (cap == null) return;
+    const spent = this.spentTodayCents(row.board_id);
+    if (spent < cap) return;
+    if (this.db.get("SELECT 1 AS x FROM journal WHERE board_id = ? AND kind = 'board.daily_cap' AND at_hub >= ? LIMIT 1", row.board_id, `${this.iso().slice(0, 10)}T00:00:00.000Z`)) return;
+    this.journal({ board_id: row.board_id, card_id: cardId, kind: 'board.daily_cap', payload: { cap_cents: cap, spent_cents: spent } });
+    this.later(() => this.notify('daily_cap', cardId, ['dispatcher', 'assignees']));
+  }
+
+  remainingBudgetCents(row, dispatch) {
+    const daily = this.dailyRemainingCents(row.board_id);
+    if (dispatch?.budget_mode === 'none') return daily != null && daily < 50 ? 0 : null;
+    const settings = this.boardSettings(row.board_id);
+    const cap = row.budget_cents ?? (settings.default_budget_usd != null ? Math.round(settings.default_budget_usd * 100) : null);
+    const card = cap == null ? null : Math.max(0, cap - this.cardSpentCents(row.id));
+    return daily == null ? card : card == null ? daily : Math.min(card, daily);
   }
 
   offerFrame(cardId) {
+    if(!this.workflowGuard.offer(cardId))return null;
     const row = this.card(cardId);
     const d = this.pendingDispatch(cardId);
     if (!row || !d || row.run_state !== 'queued' || row.archived_at) return null;
@@ -731,12 +833,15 @@ export class Hub extends EventEmitter {
     }
     const comments = this.db.all("SELECT id, author_member_id, body, created_at FROM comments WHERE card_id = ? AND for_agent = 1 AND trusted = 1 AND delivered_at IS NULL AND source != 'agent' ORDER BY created_at", cardId);
     if (comments.length) out.comments = comments.map((c) => ({ comment_id: c.id, author_name: this.memberName(c.author_member_id), body: c.body, created_age_ms: this.ageOf(c.created_at) }));
-    const budgetCents = row.budget_cents ?? (settings.default_budget_usd != null ? Math.round(settings.default_budget_usd * 100) : null);
+    const budgetCents = this.remainingBudgetCents(row, d);
+    if (budgetCents != null && budgetCents < 50) return null;
     return {
       type: 'offer', card_id: row.id, key: row.key, title: row.title, body: row.body, repo_id: row.repo_id,
-      base_ref: row.base_ref ?? this.repo(row.repo_id)?.default_branch ?? 'main', fence: row.fence, request_id: d.request_id,
+      base_ref: this.workflowGuard.base(d.request_id) ?? row.base_ref ?? this.repo(row.repo_id)?.default_branch ?? 'main', fence: row.fence, request_id: d.request_id,
       dispatched_by: { member_id: d.dispatched_by, name: this.memberName(d.dispatched_by) }, needs_confirm: !!d.needs_confirm,
-      labels, budget_usd: budgetCents == null ? null : budgetCents / 100, max_turns: settings.default_max_turns ?? null,
+      labels, ...(aiOfDispatch(d) === 'claude' ? {} : { ai: aiOfDispatch(d) }),
+      budget_mode: d.budget_mode ?? null, budget_usd: budgetCents == null ? null : budgetCents / 100,
+      max_turns: AI_CAPABILITIES[aiOfDispatch(d)]?.maxTurns === false ? null : settings.default_max_turns ?? null,
       require_plan_approval: labels.includes(PLAN_APPROVAL_LABEL), seed: out,
     };
   }
@@ -747,6 +852,7 @@ export class Hub extends EventEmitter {
     const set = this.offered.get(cardId) ?? new Set();
     for (const conn of this.eligibleDevices(cardId)) {
       if (onlyDevice && conn.device_id !== onlyDevice) continue;
+      if(!this.workflowGuard.offer(cardId,conn))continue;
       conn.send(frame);
       set.add(conn.device_id);
     }
@@ -793,11 +899,24 @@ export class Hub extends EventEmitter {
   // ── liveness memory ───────────────────────────────────────────────────────
   lease(runId) { return this.live.get(runId) ?? null; }
 
+  // board_complete ends the run on the hub while the runner may still be
+  // finishing the CLI process. Until the runner stops reporting that child
+  // (or its last report ages past the lease TTL) the AI may still be acting.
+  endedChildAlive(runId) {
+    const t = this.endedChildren.get(runId);
+    if (!t) return false;
+    if (t.child_alive && this.mono() - t.hb_mono <= TTL_MS) return true;
+    this.endedChildren.delete(runId);
+    return false;
+  }
+
   noteHeartbeat(runId, rhb, rx) {
     let lm = this.live.get(runId);
     if (!lm) { lm = { hb_mono: null, child_alive: null, tool: null, activity_mono: null, wake_mono: null, runner_wake_mono: null }; this.live.set(runId, lm); }
     lm.hb_mono = rx;
     lm.child_alive = rhb.child_alive === true;
+    lm.read_only = rhb.read_only === true;
+    lm.via_secondary = rhb.via_secondary === true;
     const t = rhb.tool_in_flight;
     lm.tool = t ? { name: t.name, summary: t.summary ?? null, bash_timeout_ms: t.bash_timeout_ms ?? null, since_mono: rx - (t.age_ms ?? 0) } : null;
     if (Number.isFinite(rhb.last_activity_age_ms)) {
@@ -859,6 +978,8 @@ export class Hub extends EventEmitter {
       if (!r.ok && !['BOOT_GRACE', 'TUNNEL_DOWN'].includes(r.error.code)) this.log.warn('timer step failed', { card_id: cardId, event: ev.type, code: r.error.code });
     }
     const after = this.card(cardId);
+    const stalled = ACTIVE.has(after.run_state) ? deriveStalled({ run_state: after.run_state, state_age_ms: this.ageOf(after.state_since) ?? 0, live: leaseView(this, after) }) : null;
+    if (stalled) this.txn(() => this.writeFactsOnlyHandover(cardId, this.run(after.active_run_id), STALL_NOTE[stalled.reason]));
     if (after.run_state === 'orphaned' && after.orphan_notified_at == null && this.ageOf(after.state_since) >= ORPHAN_NOTIFY_MS) {
       const roles = ['dispatcher', 'assignees'];
       this.txn(() => {
@@ -891,6 +1012,7 @@ export class Hub extends EventEmitter {
     this.sweepRequestCache();
     this.sweepPendingCmds();
     this.limiter.sweep();
+    this.storage?.check();
     this.recheckBrowsers();
     this.enrolments?.recheck();
     this.oauth?.sweep();
@@ -943,6 +1065,7 @@ export class Hub extends EventEmitter {
       b.send({ type: 'session.revoked' });
       b.close(WS_CLOSE.UNAUTHENTICATED, reason);
     }
+    this.interactionRelay?.closeCred(cred, reason);
     // Enrolled runners of a signed-out install go with it (D80).
     this.enrolments?.recheck();
   }
@@ -967,6 +1090,16 @@ export class Hub extends EventEmitter {
     for (const b of this.browsers) if (b.boardId === boardId) b.send({ type: 'board.labels', board_id: boardId, labels });
   }
 
+  broadcastBoards(orgId) {
+    const boards = this.boardList(orgId, { includeArchived: true });
+    for (const browser of this.browsers) {
+      browser.recheck();
+      if (browser.ws.readyState === 1 && browser.liveCandidates().some((m) => m.org_id === orgId)) {
+        browser.send({ type: 'team.boards', org_id: orgId, boards });
+      }
+    }
+  }
+
   broadcastEvent(cardId, eventId) {
     const row = this.card(cardId);
     const ev = this.db.get('SELECT * FROM events WHERE id = ?', eventId);
@@ -989,6 +1122,21 @@ export class Hub extends EventEmitter {
     this.journal({ card_id: cardId, run_id: run?.id ?? null, actor_kind: written_by === 'claude' ? 'runner' : 'member', actor_id: written_by === 'claude' ? run?.device_id ?? null : null, kind: 'handover.version', payload: { version, written_by, provenance } });
     this.later(() => this.broadcastCard(cardId));
     return version;
+  }
+
+  // A run that ends, is stopped or stalls without its AI having written a
+  // narrative still leaves a handover: the hub stamps the facts it holds
+  // (files, commands, branch, snapshot) and labels the document as hub-written.
+  // The AI's own narrative for the run, when there is one, always wins.
+  writeFactsOnlyHandover(cardId, run, note) {
+    if (!run) return;
+    const prev = this.latestHandover(cardId);
+    if (prev?.run_id === run.id) return;
+    const version = (prev?.version ?? 0) + 1;
+    const next = { ...(json(prev?.sections, null) ?? emptyNarrative()), version, written_by: 'system', system_note: `${note}. The AI wrote no narrative for run r${run.fence}; files, commands, branch and snapshot are the last the runner synced.` };
+    this.db.insert('handovers', { card_id: cardId, version, run_id: run.id, fence: run.fence, sections: JSON.stringify(next), written_by: 'system', provenance: 'hub_facts_only', created_at: this.iso() });
+    this.journal({ card_id: cardId, run_id: run.id, actor_kind: 'system', kind: 'handover.version', payload: { version, written_by: 'system', provenance: 'hub_facts_only' } });
+    this.later(() => this.broadcastCard(cardId));
   }
 
   handoverDoc(cardId) {
@@ -1026,7 +1174,8 @@ export class Hub extends EventEmitter {
     const rows = this.db.all(`SELECT r.*, c.key AS card_key, c.title AS card_title, c.body AS card_body FROM runs r JOIN cards c ON c.active_run_id = r.id
       WHERE r.repo_id = ? AND r.ended_at IS NULL`, repoId);
     return rows.map((r) => ({
-      run_id: r.id, card_id: r.card_id, card_key: r.card_key, owner_label: `${this.memberName(r.on_behalf_of) ?? '?'}'s Claude`,
+      run_id: r.id, card_id: r.card_id, card_key: r.card_key, owner_label: `${this.memberName(r.on_behalf_of) ?? '?'}'s ${AI_LABELS[aiOfDispatch(r)] ?? 'agent'}`,
+      provider_label: AI_LABELS[aiOfDispatch(r)] ?? 'Agent',
       owner_name: this.memberName(r.on_behalf_of), repo_id: r.repo_id, branch: r.branch, fence: r.fence, device_id: r.device_id,
       touched_paths: json(r.touched_paths, []), planned_paths: json(r.planned_paths, []),
       locked_paths: this.db.all('SELECT path FROM path_locks WHERE run_id = ?', r.id).map((x) => x.path),
@@ -1114,6 +1263,7 @@ export class Hub extends EventEmitter {
       const first = raw.filter((x) => x.run_a === o.other.run_id || x.run_b === o.other.run_id).map((x) => this.ageOf(x.first_seen));
       return {
         other_card_id: o.other.card_id ?? null, other_key: o.other.card_key ?? null, other_owner: o.other.owner_name ?? null,
+        other_provider_label: o.other.provider_label ?? 'Agent',
         level: o.level, kind: o.kind, reasons: o.reasons, paths: o.paths, age_ms: first.length ? Math.max(...first) : 0,
       };
     });
@@ -1127,11 +1277,14 @@ export class Hub extends EventEmitter {
   }
 
   async #pollMerges() {
-    const rows = this.db.all("SELECT * FROM cards WHERE run_state = 'in_review' AND archived_at IS NULL");
+    const rows = this.db.all("SELECT * FROM cards WHERE run_state = 'in_review' AND archived_at IS NULL AND board_id IN (SELECT id FROM boards WHERE archived_at IS NULL)");
     for (const row of rows) {
       const ev = this.db.get("SELECT * FROM evidence WHERE card_id = ? AND kind = 'pr' AND verification = 'hub_verified' ORDER BY created_at DESC, rowid DESC LIMIT 1", row.id);
       const number = prNumberOf(ev?.ref);
       if (number == null) continue;
+      const owned=this.workflowGuard.runMarker(ev.run_id);
+      let captured=null;
+      if(owned){try{captured=this.workflowGuard.captureMerge(row,ev);}catch{continue;}}
       let pull;
       try { pull = await this.github.getPull(this.repo(row.repo_id)?.canonical_url, number); } catch (e) {
         this.log.warn('merge poll failed', { card_id: row.id, err: e });
@@ -1141,22 +1294,32 @@ export class Hub extends EventEmitter {
       const run = ev.run_id ? this.db.get('SELECT branch, base_ref FROM runs WHERE id = ?', ev.run_id) : null;
       const stored = ev.pr_base_ref == null ? null : { head_repo_id: ev.pr_head_repo_id, base_ref: ev.pr_base_ref };
       const baseRef = run?.base_ref ?? row.base_ref ?? this.repo(row.repo_id)?.default_branch ?? 'main';
-      if (!prBound(pull, { branch: run?.branch, key: row.key, baseRef, stored })) {
+      if (!(owned?this.workflowGuard.exactPull(this.run(ev.run_id),pull,this.db.get('SELECT * FROM workflow_verified_pr WHERE evidence_id=?',ev.id)):prBound(pull, { branch: run?.branch, key: row.key, baseRef, stored }))) {
         if (!this.unboundPrLogged.has(row.id)) {
           this.unboundPrLogged.add(row.id);
           this.log.warn('merge poll: PR not bound to this card (fork, retargeted base or foreign branch); ignoring', { card_id: row.id, pr: number, head_repo_id: pull.head_repo_id, base_repo_id: pull.base_repo_id, base_ref: pull.base_ref });
         }
         continue;
       }
-      this.prStatus.set(row.id, { number, url: pull.html_url, state: pull.merged ? 'merged' : pull.state, merged_by: pull.merged_by, merged_at: pull.merged_at });
-      if (pull.merged || pull.state === 'closed') {
-        await this.withBoard(row.board_id, () => {
-          const r = this.apply(row.id, { type: pull.merged ? 'pr_merged' : 'pr_closed', pr: number, by: pull.merged_by ?? null });
+      await this.withBoard(row.board_id, () => {
+        if (this.board(row.board_id)?.archived_at || this.card(row.id)?.archived_at) return;
+        let proof=null;
+        if(owned){try{
+          this.workflowGuard.mergeCurrent(captured,this.card(row.id),ev);
+          if(pull.merged)proof=this.workflowGuard.verifiedMerge(this.card(row.id),ev,pull,this.repo(row.repo_id)?.canonical_url);
+          else {
+            this.workflowGuard.reviewable(owned);
+            const current=this.card(row.id),verified=this.db.get('SELECT * FROM workflow_verified_pr WHERE evidence_id=?',ev.id);
+            if(verified?.repo_hmac!==this.refHash(this.repo(current.repo_id)?.canonical_url))return;
+          }
+        }catch{return;}}
+        this.prStatus.set(row.id, { number, url: pull.html_url, state: pull.merged ? 'merged' : pull.state, merged_by: pull.merged_by, merged_at: pull.merged_at });
+        if (pull.merged || pull.state === 'closed') {
+          const apply=()=>this.apply(row.id,{type:pull.merged?'pr_merged':'pr_closed',pr:number,by:pull.merged_by??null});
+          const r = proof?this.workflowGuard.merge(proof,apply):apply();
           if (!r.ok) this.log.warn('merge poll step failed', { card_id: row.id, code: r.error.code });
-        });
-      } else {
-        this.broadcastCard(row.id);
-      }
+        } else this.broadcastCard(row.id);
+      });
     }
   }
 
@@ -1203,7 +1366,17 @@ const FEED_TEXT = {
 export function feedEvent(hub, ev) {
   const data = json(ev.payload, {});
   let text = FEED_TEXT[ev.kind] ?? null;
-  if (ev.kind === 'progress') text = data.text;
+  if (ev.kind === 'created' && data.client_feedback_id) {
+    const source = hub.clientFeedback?.cardProvenance(ev.card_id);
+    text = source ? `Feedback from ${source.source_name} · intake authorized by ${source.intake_name}` : 'Client feedback received through staff-authorized intake';
+  }
+  else if (ev.kind === 'dispatched' && data.ai && data.ai !== 'claude' && AI_LABELS[data.ai]) text = `Given to ${AI_LABELS[data.ai]}`;
+  else if (ev.kind === 'started' && ev.fence != null) {
+    const d = hub.db.get('SELECT d.ai, d.backend FROM runs r JOIN dispatches d ON d.request_id = r.dispatch_request_id WHERE r.card_id = ? AND r.fence = ?', ev.card_id, ev.fence);
+    const ai = d ? aiOfDispatch(d) : 'claude';
+    if (ai !== 'claude') text = `${AI_LABELS[ai]} started`;
+  }
+  else if (ev.kind === 'progress') text = data.text;
   else if (ev.kind === 'message') text = data.text;
   else if (ev.kind === 'error') text = data.first_line;
   else if (ev.kind === 'subagent') text = data.summary;

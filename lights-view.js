@@ -1,5 +1,17 @@
   const R = window.TrafficLightRules;
   const $ = (id) => document.getElementById(id);
+  const pageQuery = new URLSearchParams(location.search);
+  const embeddedView = pageQuery.get('embedded') === '1' && ['stats', 'mix'].includes(pageQuery.get('view')) ? pageQuery.get('view') : null;
+  const widgetOnly = pageQuery.get('utility') === 'widget';
+  document.body.classList.toggle('embedded-analytics', !!embeddedView);
+  document.body.classList.toggle('widget-configuration', widgetOnly);
+  if (embeddedView) {
+    document.title = 'Usage & cost';
+    document.querySelector('#titlebar h1').textContent = document.title;
+  } else if (widgetOnly) {
+    document.title = 'Widget configuration';
+    document.querySelector('#titlebar h1').textContent = document.title;
+  }
 
   const ICON = {
     lock: '<svg class="lock" viewBox="0 0 16 16"><rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5 7V5a3 3 0 0 1 6 0v2"/></svg>',
@@ -177,7 +189,6 @@
           ${t.pose && t.pose !== 'none' ? `<span class="chip pose pose-chip" title="${t.pose}">${ICON.pose[t.pose] || ICON.pose.think}</span>` : ''}
           ${t.costume && t.costume !== 'none' ? `<span class="chip pose" title="${t.costume}">${ICON.costume}</span>` : ''}
           ${t.cameo && t.cameo !== 'none' ? `<span class="chip pose" title="cameo: ${t.cameo}">${ICON.cameo}</span>` : ''}
-          ${t.body && t.body !== 'claude' ? `<span class="chip pose" title="body: ${t.body}">${ICON.body}</span>` : ''}
           ${t.effect && t.effect !== 'none' ? `<span class="chip pose" title="effect: ${t.effect}">${ICON.effect}</span>` : ''}
           ${t.pet && t.pet !== 'none' ? `<span class="chip pose" title="pet: ${t.pet}">${ICON.pet}</span>` : ''}
           ${t.sound ? `<span class="chip pose" title="sound: ${escape(t.sound.replace(/^file:/, ''))}">${ICON.sound}</span>` : ''}
@@ -252,7 +263,7 @@
   // ── Now strip ──────────────────────────────────────────────────────────
   // Which rule the lamp belongs to, and which rule owns each accent channel,
   // so a look that mixes several rules can be traced back to them.
-  const NOW_CHANNELS = [['lamp', ['lamp']], ['eyes', ['eyes']], ['pose', ['pose']], ['costume', ['costume']], ['cameo', ['cameo']], ['body', ['body', 'bodyColor']], ['effect', ['effect']], ['pet', ['pet']], ['agents', ['agents', 'agentsColor']], ['sign/number', ['numberOf', 'sign']]];
+  const NOW_CHANNELS = [['lamp', ['lamp']], ['eyes', ['eyes']], ['pose', ['pose']], ['costume', ['costume']], ['cameo', ['cameo']], ['effect', ['effect']], ['pet', ['pet']], ['agents', ['agents', 'agentsColor']], ['sign/number', ['numberOf', 'sign']]];
   function renderNow() {
     const box = $('now');
     const head = box.querySelector('.head');
@@ -298,6 +309,11 @@
   }
 
   // ── Editor ─────────────────────────────────────────────────────────────
+  // The one character is saved straight away, not with the rule edits.
+  async function setCharacter(next) {
+    try { config = await window.lightsApi.saveConfig({ character: R.normalizeCharacter(next) }); } catch (err) { flash(`Save failed: ${err.message}`); return; }
+    renderEditor(); renderStage();
+  }
   function renderEditor() {
     const r = selected();
     const ed = $('editor');
@@ -386,7 +402,7 @@
     // pin on the tile's corner (the cameo row's "remove photo").
     const picker = (container, options, current, lookFor, onPick, opts = {}) => {
       container.innerHTML = '';
-      for (const o of [null, ...options]) {
+      for (const o of (opts.noKeep ? options : [null, ...options])) {
         const b = document.createElement('button');
         b.type = 'button';
         b.className = 'posebtn' + (current === o ? ' on' : '');
@@ -399,7 +415,7 @@
         b.appendChild(lbl);
         mountRig(mini).setLook({ lamp: 'off', eyes: 'default', pose: 'none', ...lookFor(o) });
         if (o === null) mini.style.opacity = '0.35';
-        b.addEventListener('click', () => { onPick(o); touch(); });
+        b.addEventListener('click', () => { onPick(o); if (!opts.noKeep) touch(); });
         const extra = o !== null && opts.extra && opts.extra(o);
         if (extra) {
           const cell = document.createElement('span');
@@ -435,11 +451,14 @@
     });
     $('cameos').appendChild(faceAddBtn());
     const userBodies = window.BuddyCharacters.ids().filter((id) => id.startsWith('u-'));
-    picker($('bodies'), [...R.BODIES, ...userBodies], r.then.body, (o) => ({ body: o || 'claude', bodyColor: r.then.bodyColor }), (o) => { r.then.body = o; }, {
+    const character = R.normalizeCharacter(config.character);
+    picker($('bodies'), [...R.BODIES, ...userBodies], character.body, (o) => ({ body: o, bodyColor: character.bodyColor }), (o) => { setCharacter({ ...character, body: o }); }, {
+      noKeep: true,
       label: (o) => (userBodies.includes(o) ? window.BuddyCharacters.get(o).name : null),
       extra: (o) => (userBodies.includes(o) ? hatchRemoveBtn(o) : null),
     });
     $('bodies').appendChild(hatchAddBtn());
+    $('character-now').textContent = userBodies.includes(character.body) ? window.BuddyCharacters.get(character.body).name : character.body;
     picker($('effects'), R.EFFECTS, r.then.effect, (o) => ({ effect: o || 'none', waitMinutes: 20 }), (o) => { r.then.effect = o; });
     picker($('pets'), R.PETS, r.then.pet, (o) => ({ pet: o || 'none' }), (o) => { r.then.pet = o; });
     picker($('agents'), R.AGENT_STYLES, r.then.agents, (o) => ({ agents: o || 'robot', agentsColor: r.then.agentsColor, minions: SAMPLE_MINIONS }), (o) => { r.then.agents = o; });
@@ -467,10 +486,10 @@
       moods.appendChild(b);
     }
     const bodySw = $('body-color-swatch');
-    bodySw.classList.toggle('has', !!r.then.bodyColor);
-    bodySw.classList.toggle('on', !!r.then.bodyColor);
-    bodySw.style.setProperty('--c', r.then.bodyColor || '');
-    $('body-color').value = r.then.bodyColor || '#da7756';
+    bodySw.classList.toggle('has', !!character.bodyColor);
+    bodySw.classList.toggle('on', !!character.bodyColor);
+    bodySw.style.setProperty('--c', character.bodyColor || '');
+    $('body-color').value = character.bodyColor || '#da7756';
     $('cwd').value = r.when.cwd || '';
     $('source').value = r.when.source || '';
 
@@ -530,7 +549,7 @@
   $('number').addEventListener('change', (e) => { const r = selected(); if (!r) return; r.then.number = e.target.value || null; touch(); });
   $('sound-play').addEventListener('click', () => { const r = selected(); if (r?.then.sound) window.lightsApi.previewSound(r.then.sound); });
   $('sound-file').addEventListener('click', async () => { const r = selected(); if (!r) return; const f = await window.lightsApi.chooseSoundFile(); if (!f) return; r.then.sound = f; touch(); });
-  $('body-color').addEventListener('input', (e) => { const r = selected(); if (!r) return; r.then.bodyColor = e.target.value; touch(); });
+  $('body-color').addEventListener('change', (e) => setCharacter({ ...R.normalizeCharacter(config.character), bodyColor: e.target.value }));
   $('agents-color').addEventListener('input', (e) => { const r = selected(); if (!r) return; r.then.agentsColor = e.target.value; touch(); });
   $('source').addEventListener('change', (e) => { const r = selected(); if (!r) return; r.when.source = e.target.value || null; setDirty(true); });
   $('cwd').addEventListener('input', (e) => { const r = selected(); if (!r) return; r.when.cwd = e.target.value.trim() || null; setDirty(true); renderList(); });
@@ -870,7 +889,7 @@
       // Show only this rule's own look, so what you see is what "Try on
       // widget" sends. The caption still says what the other rules would
       // contribute when this signal is live.
-      const own = R.previewLook(r);
+      const own = R.previewLook(r, config.character);
       own.gardenSpeed = 30;
       if (r.then.agents || r.then.agentsColor) own.minions = SAMPLE_MINIONS;
       stage.setLook(own);
@@ -914,7 +933,8 @@
     if (previewMode === 'live') renderStage();
   }
   window.lightsApi.onStatusChanged(() => {
-    refreshLive();
+    if (!embeddedView) refreshLive();
+    if (document.hidden) return;
     if ($('main').dataset.view === 'stats') renderStats();
     else if ($('main').dataset.view === 'mix') refreshMixLive();
   });
@@ -1027,7 +1047,7 @@
     const set = (id, then) => { const r = d.find((x) => x.id === id); Object.assign(r.then, then); };
     set('done', { pose: 'party', costume: 'partyhat', effect: 'sparkles', eyes: 'heart', lampFx: 'chase' });
     set('working', { pose: 'run', pet: 'duck', lampFx: 'breathe', agents: 'duck' });
-    set('limit', { body: 'ghost', effect: 'rain', eyes: 'x' });
+    set('limit', { effect: 'rain', eyes: 'x' });
     set('permission', { pose: 'wave', costume: 'crown' });
     set('failed', { eyes: 'dizzy', effect: 'fire' });
     d.find((x) => x.id === 'failed').enabled = true;
@@ -1049,7 +1069,7 @@
     const d = R.defaultRules().map((r) => (r.id === 'failed' || r.id === 'shell' ? { ...r, enabled: true } : r));
     const set = (id, then) => { const r = d.find((x) => x.id === id); if (r) Object.assign(r.then, then); };
     set('permission', { pose: 'sniper', lampFx: 'strobe', sound: 'Sosumi', screenFx: 'vignette', eyes: 'laser' });
-    set('limit', { pose: 'ak47', lampFx: 'sos', sound: 'Funk', body: 'robot', screenFx: 'vignette' });
+    set('limit', { pose: 'ak47', lampFx: 'sos', sound: 'Funk', screenFx: 'vignette' });
     set('working', { pose: 'run', lampFx: 'police', pet: 'dragon', effect: 'fire' });
     set('done', { pose: 'party', lampFx: 'rainbow', screenFx: 'confetti', costume: 'partyhat', eyes: 'star', sound: 'Hero' });
     set('failed', { eyes: 'dizzy', effect: 'fire', signFx: 'rattle' });
@@ -1065,7 +1085,7 @@
     set('done', { pose: 'thumbs', effect: 'sparkles', eyes: 'happy', pet: 'bunny' });
     set('nudge', { pose: 'none', effect: 'sun', pet: 'snail' });
     set('permission', { pose: 'wave', effect: 'rain' });
-    set('limit', { pose: 'sleep', body: 'frog', effect: 'rain' });
+    set('limit', { pose: 'sleep', effect: 'rain' });
     return d;
   };
   PRESETS.office = () => {
@@ -1083,12 +1103,12 @@
   PRESETS.night = () => {
     const d = R.defaultRules().filter((r) => !['shell', 'failed'].includes(r.id));
     const set = (id, then) => { const r = d.find((x) => x.id === id); if (r) Object.assign(r.then, then); };
-    set('working', { body: 'ghost', pose: 'blink', effect: 'snow', lampFx: 'breathe', lampColor: '#8b5cf6', lamp: 'green', agents: 'ghost' });
-    set('done', { body: 'ghost', pose: 'nod', eyes: 'sleepy', lampFx: 'breathe', lampColor: '#8b5cf6', lamp: 'amber', celebrate: false });
-    set('nudge', { body: 'ghost', pose: 'sleep', eyes: 'closed', lampFx: 'breathe', lampColor: '#8b5cf6', lamp: 'amber' });
-    set('idle', { body: 'ghost', pose: 'sleep', eyes: 'closed', effect: 'snow', lamp: 'off' });
-    set('permission', { body: 'ghost', pose: 'wave', costume: 'halo', sound: 'Purr', lampFx: 'breathe' });
-    set('limit', { body: 'ghost', pose: 'dead', lampFx: 'sos' });
+    set('working', { pose: 'blink', effect: 'snow', lampFx: 'breathe', lampColor: '#8b5cf6', lamp: 'green', agents: 'ghost' });
+    set('done', { pose: 'nod', eyes: 'sleepy', lampFx: 'breathe', lampColor: '#8b5cf6', lamp: 'amber', celebrate: false });
+    set('nudge', { pose: 'sleep', eyes: 'closed', lampFx: 'breathe', lampColor: '#8b5cf6', lamp: 'amber' });
+    set('idle', { pose: 'sleep', eyes: 'closed', effect: 'snow', lamp: 'off' });
+    set('permission', { pose: 'wave', costume: 'halo', sound: 'Purr', lampFx: 'breathe' });
+    set('limit', { pose: 'dead', lampFx: 'sos' });
     return d;
   };
   PRESETS.swarm = () => {
@@ -1097,13 +1117,13 @@
     // Team eyes sit above the subagent and swarm eye accents so team mode always reads as distinct.
     d.splice(2, 0, d.splice(d.findIndex((x) => x.id === 'team'), 1)[0]);
     d.splice(d.findIndex((x) => x.id === 'swarm') + 1, 0,
-      { id: 'subagents', name: 'Subagents running', enabled: true, when: { signal: ['subagents'] }, then: { body: 'robot', pose: 'banner', text: '{agents} AGENTS', number: 'agents', agents: 'robot' } },
+      { id: 'subagents', name: 'Subagents running', enabled: true, when: { signal: ['subagents'] }, then: { pose: 'banner', text: '{agents} AGENTS', number: 'agents', agents: 'robot' } },
     );
     set('team', { eyes: 'star', costume: 'crown', pet: null });
     set('ralph', { pose: 'banner', text: 'LOOP {iteration}', number: 'ralph', lampFx: 'chase' });
-    set('swarm', { number: 'agents', eyes: '#f2a200', body: 'robot', signFx: 'neon' });
+    set('swarm', { number: 'agents', eyes: '#f2a200', signFx: 'neon' });
     set('permission', { pose: 'knock', lampFx: 'pulse' });
-    set('limit', { body: 'robot', eyes: 'x', lampFx: 'sos' });
+    set('limit', { eyes: 'x', lampFx: 'sos' });
     set('done', { pose: 'thumbs', screenFx: 'confetti' });
     return d;
   };
@@ -1123,14 +1143,14 @@
   PRESETS.retro = () => {
     const d = R.defaultRules().map((r) => (r.id === 'failed' ? { ...r, enabled: true } : r));
     const set = (id, then) => { const r = d.find((x) => x.id === id); if (r) Object.assign(r.then, then); };
-    set('limit', { body: 'robot', pose: 'banner', text: 'GAME OVER', eyes: 'x', lampFx: 'sos' });
-    set('permission', { body: 'robot', pose: 'knock', eyes: 'surprised', lampFx: 'strobe' });
+    set('limit', { pose: 'banner', text: 'GAME OVER', eyes: 'x', lampFx: 'sos' });
+    set('permission', { pose: 'knock', eyes: 'surprised', lampFx: 'strobe' });
     set('ralph', { pose: 'banner', text: 'LEVEL {iteration}' });
     set('failed', { eyes: 'dizzy', signFx: 'rattle' });
-    set('working', { body: 'robot', pose: 'run', lampFx: 'chase', signFx: 'neon' });
-    set('done', { body: 'robot', pose: 'party', eyes: 'star', lampFx: 'rainbow', screenFx: 'confetti', sound: 'beep' });
-    set('nudge', { body: 'robot', pose: 'bubble', text: 'PLAYER 1?' });
-    set('idle', { body: 'robot', pose: 'banner', text: 'INSERT COIN', lampFx: 'chase' });
+    set('working', { pose: 'run', lampFx: 'chase', signFx: 'neon' });
+    set('done', { pose: 'party', eyes: 'star', lampFx: 'rainbow', screenFx: 'confetti', sound: 'beep' });
+    set('nudge', { pose: 'bubble', text: 'PLAYER 1?' });
+    set('idle', { pose: 'banner', text: 'INSERT COIN', lampFx: 'chase' });
     return d;
   };
   $('presets-btn').addEventListener('click', (e) => {
@@ -1286,15 +1306,26 @@
   // ── Stats view ─────────────────────────────────────────────────────────
   const S = window.TrafficLightStats;
   function setView(v) {
+    if (!['rules', 'stats', 'mix', 'auto'].includes(v)) return;
+    if (embeddedView && !['mix', 'stats'].includes(v)) return;
+    if (v === 'auto' && !window.lightsApi.showAutoAnswer) return;
+    if (widgetOnly && !['rules', 'auto'].includes(v)) return;
     $('main').dataset.view = v;
     $('frame').dataset.view = v;
     for (const k of ['rules', 'stats', 'mix', 'auto']) {
       $(`view-${k}`).classList.toggle('on', v === k);
       $(`view-${k}`).setAttribute('aria-selected', v === k);
     }
+    for (const k of ['mix', 'stats']) {
+      $(`ut-${k}`).classList.toggle('on', v === k);
+      $(`ut-${k}`).setAttribute('aria-selected', v === k);
+    }
     if (v === 'stats') renderStats();
     if (v === 'mix') { renderMix(); renderUsageHistory(true); }
   }
+  $('ut-mix').addEventListener('click', () => setView('mix'));
+  $('ut-stats').addEventListener('click', () => setView('stats'));
+  $('view-auto').hidden = !window.lightsApi.showAutoAnswer;
   $('view-rules').addEventListener('click', () => setView('rules'));
   window.lightsApi.onShowView((v) => setView(v));
   window.lightsApi.onMotionPaused((paused) => {
@@ -1305,7 +1336,10 @@
   $('view-mix').addEventListener('click', () => setView('mix'));
   $('view-auto').addEventListener('click', () => setView('auto'));
 
-  let rangeDays = 7;
+  // One range for Overview and Time. Time keeps at most 60 days of working time.
+  let usageRange = '30d';
+  const rangeToDays = (r) => ({ '7d': 7, '30d': 30 })[r] || 60;
+  let rangeDays = rangeToDays(usageRange);
   let projectFilter = null;
   const NS = 'http://www.w3.org/2000/svg';
   const svgEl = (tag, attrs, text) => { const e = document.createElementNS(NS, tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); if (text != null) e.textContent = text; return e; };
@@ -1323,13 +1357,35 @@
     node.addEventListener('mouseleave', () => { tip.hidden = true; });
   }
 
-  $('range').addEventListener('click', (e) => {
-    const b = e.target.closest('button[data-days]');
+  $('ut-range').addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-range]');
     if (!b) return;
-    rangeDays = Number(b.dataset.days);
-    Array.from($('range').children).forEach((x) => x.classList.toggle('on', x === b));
-    renderStats();
+    usageRange = b.dataset.range;
+    rangeDays = rangeToDays(usageRange);
+    Array.from($('ut-range').children).forEach((x) => x.classList.toggle('on', x === b));
+    if (usageView) { usageView.state.range = usageRange; }
+    if ($('main').dataset.view === 'stats') renderStats(); else renderUsageHistory(true);
   });
+  $('mix-connect').addEventListener('click', () => window.lightsApi.openAiTools());
+
+  // The daily and weekly limit, written to the same spend settings as Preferences.
+  async function loadBudget() {
+    try {
+      const sp = (await window.lightsApi.getConfig()).spend || {};
+      $('budget-daily').value = sp.dailyBudget || 0;
+      $('budget-weekly').value = sp.weeklyBudget || 0;
+      $('budget-warn').value = Math.round((sp.warnAt || 0.8) * 100);
+    } catch { /* leave the fields blank */ }
+  }
+  $('budget-save').addEventListener('click', async () => {
+    const note = $('budget-state');
+    try {
+      const r = await window.lightsApi.saveSpendLimits({ dailyBudget: Number($('budget-daily').value), weeklyBudget: Number($('budget-weekly').value), warnAt: (Number($('budget-warn').value) || 80) / 100 });
+      note.textContent = r && r.ok ? 'Saved.' : 'Could not save. Try again.';
+    } catch { note.textContent = 'Could not save. Try again.'; }
+    setTimeout(() => { note.textContent = 'Set a limit to turn on alerts (0 = no limit).'; }, 2500);
+  });
+  if (embeddedView) loadBudget();
   $('export-json').addEventListener('click', () => window.lightsApi.exportStats('json', rangeDays));
   $('export-csv').addEventListener('click', () => window.lightsApi.exportStats('csv', rangeDays));
   $('filter-note').addEventListener('click', (e) => { if (e.target.tagName === 'BUTTON') { projectFilter = null; renderStats(); } });
@@ -1363,9 +1419,8 @@
     // ── Today strip
     setHero('today-working', S.fmt(sum.today.working.value), sum.today.working, S.fmt, true, 60000);
     setHero('today-waiting', S.fmt(sum.today.waiting.value), sum.today.waiting, S.fmt, false, 60000);
-    setHero('today-cost', usd(sum.today.cost.value), sum.today.cost, usd, false, 0.005);
 
-    $('stats-range-title').textContent = `Last ${rangeDays} days`;
+    $('stats-range-title').textContent = `Last ${rangeDays} days${['90d', '1y', 'all'].includes(usageRange) ? ' (the most Time keeps)' : ''}`;
     const note = $('filter-note');
     note.hidden = !projectFilter;
     if (projectFilter) note.innerHTML = `Bars filtered to ${escape(projectFilter)}<button type="button">clear</button>`;
@@ -1523,14 +1578,13 @@
     if (!costs) {
       // still loading — leave whatever the last pass showed
     } else if (!costs.available) {
-      $('cost-totals').textContent = 'No Claude Code transcripts found, and ccusage isn\'t installed (npm i -g ccusage) — spend shows up here once either is available.';
+      $('cost-totals').textContent = 'No usage yet. Connect an AI tool and run a session.';
       $('cost-projects').innerHTML = ''; $('cost-sessions').querySelector('tbody').innerHTML = '';
     } else {
       const todayKey = days[days.length - 1].key;
-      const today = costs.days[todayKey]?.cost || 0;
-      const week = Object.values(costs.days).reduce((a, d) => a + d.cost, 0);
+            const week = Object.values(costs.days).reduce((a, d) => a + d.cost, 0);
       const models = [...new Set(Object.values(costs.days).flatMap((d) => d.models))].slice(0, 3).join(', ');
-      $('cost-totals').textContent = `${usd(today)} today · ${usd(week)} this week${models ? ' · ' + models : ''}`;
+      $('cost-totals').textContent = `${usd(week)} this week${models ? ' · ' + models : ''}`;
       const cl = $('cost-projects');
       cl.innerHTML = costs.projects.length ? '' : '<li class="empty-small">No session costs in the last week.</li>';
       const maxC = costs.projects[0]?.cost || 1;
@@ -1572,26 +1626,24 @@
     usageAt = Date.now();
     const q = new URLSearchParams(location.search).get('now');
     if (!usageView) usageView = window.UsageView.mount($('usage-history'), { api: window.lightsApi, ...(q ? { now: () => Number(q) } : {}) });
+    usageView.state.range = usageRange;
     usageView.refresh();
   }
 
   async function renderMix() {
     renderUsageHistory();
-    const mix = await window.lightsApi.modelMix();
-    if (!mix) return;
+    if (window.UsageWasteView) window.UsageWasteView.render($('usage-waste'), window.lightsApi);
+    let mix = null;
+    try { mix = await window.lightsApi.modelMix(); } catch { /* shown as empty below */ }
+    // Loading ends whether or not the read produced data.
     $('mix-loading').hidden = true;
+    if (!mix) { $('mix-empty').hidden = false; $('mix-body').hidden = true; return; }
     $('mix-empty').hidden = mix.week.turns > 0;
     $('mix-body').hidden = !mix.week.turns;
     if (mix.week.turns) {
       paintMixWindow('today', mix.today);
       paintMixWindow('week', mix.week);
       $('mix-rec').textContent = mix.recommendation;
-    }
-    const left = mix.leftoverShim;
-    $('mix-leftover').hidden = !left;
-    if (left) {
-      $('mix-leftover-note').textContent = left.note;
-      $('mix-leftover-cmd').textContent = left.command;
     }
   }
 
@@ -1638,7 +1690,7 @@
     document.addEventListener('keydown', (e) => {
       const tab = e.target.closest?.('[role="tab"]');
       if (!tab || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
-      const tabs = [...tab.parentElement.querySelectorAll('[role="tab"]')];
+      const tabs = [...tab.parentElement.querySelectorAll('[role="tab"]')].filter(t => t.getClientRects().length);
       const i = tabs.indexOf(tab);
       const next = e.key === 'Home' ? tabs[0] : e.key === 'End' ? tabs[tabs.length - 1] : tabs[(i + (e.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length];
       e.preventDefault(); next.focus(); next.click();
@@ -1659,14 +1711,17 @@
     const q = new URLSearchParams(location.search);
     selectedId = (q.get('select') && rules.find((r) => r.id === q.get('select'))?.id) || rules[0]?.id || null;
     if (q.get('mode') === 'live') previewMode = 'live';
-    if (['stats', 'mix', 'auto'].includes(q.get('view'))) setView(q.get('view'));
+    if (embeddedView) setView(embeddedView);
+    else if (['stats', 'mix', 'auto'].includes(q.get('view'))) setView(q.get('view'));
     if (q.get('event')) setTimeout(() => stage.playEvent(q.get('event')), 100);
     if (q.get('scroll')) setTimeout(() => { ({ stats: $('stats'), mix: $('mix') }[q.get('view')] || $('editor')).scrollTop = Number(q.get('scroll')); }, q.get('view') === 'mix' ? 3000 : 400);
     setDirty(false);
-    await loadCameos();
-    renderList(); renderEditor(); renderStage();
+    if (!embeddedView) {
+      await loadCameos();
+      renderList(); renderEditor(); renderStage();
+      refreshLive();
+    }
     initA11y();
-    refreshLive();
     // Dev: ?pose=<p> forces the stage into a pose for screenshots.
     if (q.get('pose')) { document.querySelector('#stage .rig-wrap').classList.toggle('wide', q.get('effect') === 'garden'); stage.setLook({ lamp: 'amber', gardenSpeed: Number(q.get('speed') || 30), eyes: q.get('eyes') || 'default', pose: q.get('pose'), text: q.get('text') || null, costume: q.get('costume') || 'none', cameo: q.get('cameo') || 'none', lampFx: q.get('lampfx') || 'none', sign: q.get('sign') || 'h3', lampShape: q.get('shape') || 'square', signFx: q.get('signfx') || 'none', number: q.get('number') ? Number(q.get('number')) : null, body: q.get('body') || 'claude', effect: q.get('effect') || 'none', pet: q.get('pet') || 'none', waitMinutes: 25, smokeCycleMs: Number(q.get('fastSmoke')) || undefined }); stageFire(q.get('pose')); $('caption').textContent = `pose: ${q.get('pose')}${q.get('costume') ? ' · ' + q.get('costume') : ''}${q.get('cameo') ? ' · ' + q.get('cameo') : ''}`; }
   })();

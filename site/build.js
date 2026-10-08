@@ -41,6 +41,7 @@ function build({ live } = {}) {
     fs.mkdirSync(path.dirname(to), { recursive: true });
     fs.copyFileSync(path.join(ROOT, f), to);
   }
+  fs.copyFileSync(path.join(SRC, 'install.sh'), path.join(DIST, 'install.sh'));
   const partials = {};
   for (const f of fs.readdirSync(path.join(SRC, 'partials'))) partials[f.replace(/\.html$/, '')] = fs.readFileSync(path.join(SRC, 'partials', f), 'utf8');
 
@@ -86,7 +87,10 @@ function build({ live } = {}) {
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
   Permissions-Policy: camera=(), microphone=(), geolocation=()
-  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' ${Brand.urls.downloads} ${Brand.urls.updates.split('/').slice(0, 3).join('/')}; frame-ancestors 'none'; base-uri 'self'; form-action 'self'
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://api.github.com ${Brand.urls.downloads} ${Brand.urls.updates.split('/').slice(0, 3).join('/')}; frame-ancestors 'none'; base-uri 'self'; form-action 'self'
+/install.sh
+  Content-Type: text/plain; charset=utf-8
+  Cache-Control: public, max-age=300
 /assets/*
   Cache-Control: public, max-age=31536000, immutable
 /*.html

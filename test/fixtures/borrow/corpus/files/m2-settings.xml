@@ -1,0 +1,17 @@
+<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0">
+  <localRepository>@@HOME@@/.m2/repository</localRepository>
+  <servers>
+    <server>
+      <id>github</id>
+      <username>@@USER@@</username>
+      <password>@@SEED:xml_secret@@</password>
+    </server>
+  </servers>
+  <mirrors>
+    <mirror>
+      <id>central-mirror</id>
+      <url>https://repo.maven.apache.org/maven2</url>
+      <mirrorOf>central</mirrorOf>
+    </mirror>
+  </mirrors>
+</settings>

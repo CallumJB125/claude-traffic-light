@@ -27,6 +27,69 @@ async function withRun(key, fn) {
   }
 }
 
+test('shared packet narrative, author names, reported paths and evidence return as untrusted data; own nonce never leaves', async () => {
+  await withRun('APP-93', async (run, hub) => {
+    const data = { brief: EVIL[0], decisions: [EVIL[1]], progress: EVIL[2], nextAction: EVIL[0], artifacts: [{ kind: 'path', path: 'src/a.js' }], reportedChecks: [EVIL[1]] };
+    hub.rpcReply = () => ({ ok: true, result: { packet: { version: 1, author: { name: EVIL[2] }, data,
+      evidence: [{ id: 'e1', summary: EVIL[0], ref: EVIL[1], verification: 'self_reported' }] } } });
+    const r = await run.tool('board_read_packet');
+    const strings = [r.packet.author.name, r.packet.data.brief, ...r.packet.data.decisions, r.packet.data.progress, r.packet.data.nextAction,
+      r.packet.data.artifacts[0].path, ...r.packet.data.reportedChecks, r.packet.evidence[0].summary, r.packet.evidence[0].ref];
+    for (const s of strings) { assert.ok(s.startsWith(`<untrusted_board_content_${run.nonce} `)); assert.equal(closes(s), 1); }
+    await run.tool('board_write_packet', { request_id: '00000000-0000-4000-8000-000000000001', expected_version: 0,
+      data: { ...data, brief: run.nonce, artifacts: [{ kind: 'path', path: `src/${run.nonce}.js` }] } });
+    const sent = hub.of('rpc').find((f) => f.method === 'board_write_packet'); assert.ok(!JSON.stringify(sent.params).includes(run.nonce));
+  });
+});
+
+test('message reads report host receipt only after the response, wrap participant text and leave agent acknowledgement explicit', async () => {
+  await withRun('APP-94', async (run, hub) => {
+    const message = { id: 'message-1', body: EVIL[0], author: { name: EVIL[1] }, delivery: { receipt_id: '00000000-0000-4000-8000-000000000001', receipt_token: `bmr1.00000000-0000-4000-8000-000000000001.${'A'.repeat(43)}`, state: 'pending' } };
+    hub.rpcReply = (f) => ({ ok: true, result: f.method === 'board_list_messages' ? { inbox: [message], history: [], peers: [{ run_id: 'peer-1', name: EVIL[2], title: EVIL[0] }] } : { receipts: [{ message_id: message.id, state: 'received' }] } });
+    const r = await run.tool('board_list_messages');
+    assert.deepEqual(hub.of('rpc').map((f) => f.method), ['board_list_messages', 'runner_messages_received']);
+    assert.equal(r.inbox[0].delivery.state, 'received'); assert.equal(r.inbox[0].delivery.receipt_token, message.delivery.receipt_token);
+    for (const s of [r.inbox[0].body, r.inbox[0].author.name, r.peers[0].name, r.peers[0].title]) { assert.ok(s.startsWith(`<untrusted_board_content_${run.nonce} `)); assert.equal(closes(s), 1); }
+    assert.deepEqual(hub.of('rpc')[1].params, { receipts: [{ receipt_id: message.delivery.receipt_id, receipt_token: message.delivery.receipt_token }] });
+    assert.equal(hub.of('rpc').filter((f) => f.method === 'board_ack_message').length, 0);
+    hub.rpcReply = (f) => f.method === 'runner_messages_received' ? { ok: false, error: { code: 'FENCED', message: 'old connection' } }
+      : { ok: true, result: { inbox: [message], history: [], peers: [] } };
+    await assert.rejects(run.tool('board_list_messages'), (e) => e.code === 'FENCED');
+  });
+});
+
+test('receipt capabilities cannot escape through ordinary tools, outbox narratives or facts; explicit acknowledgement stays exact', async () => {
+  await withRun('APP-97', async (run, hub) => {
+    const receipt_id = '00000000-0000-4000-8000-000000000002';
+    const receipt_token = `bmr1.${receipt_id}.${'A'.repeat(42)}-`;
+    const copied = `copied ${receipt_token}`;
+    hub.rpcReply = () => ({ ok: true, result: {} });
+    await run.tool('board_update_status', { summary: copied });
+    await run.tool('board_append_progress', { text: copied });
+    await run.tool('board_comment', { text: copied });
+    await run.tool('board_write_handover', { patch: { hypothesis: copied, next: copied, done: [copied] } });
+    await run.tool('board_attach_evidence', { kind: 'test_run', ref: copied, summary: copied });
+    await run.tool('board_ask_human', { kind: 'question', text: copied, options: [copied] });
+    const tool_input = { command: `node --test # ${receipt_token}` };
+    await run.hook('pre', { tool_name: 'Bash', tool_input });
+    await run.hook('post', { tool_name: 'Bash', tool_input, tool_response: { stdout: copied } });
+    await run.hook('post', { tool_name: 'TodoWrite', tool_input: { todos: [{ content: copied, status: 'pending' }] } });
+    await run.hook('stop', { last_assistant_message: copied });
+    run.flushFacts();
+    for (let i = 0; i < 100 && !hub.facts('message').length; i++) await new Promise((r) => setTimeout(r, 20));
+    for (const kind of ['status.update', 'progress.append', 'comment.create', 'handover.write']) {
+      const out = hub.outs(kind).find((m) => JSON.stringify(m).includes('<redacted:message_receipt>'));
+      assert.ok(out, `sanitized ${kind} actually sent`);
+    }
+    for (const kind of ['tool_start', 'command', 'plan', 'message']) assert.ok(hub.facts(kind).some((f) => JSON.stringify(f).includes('<redacted:message_receipt>')), `sanitized ${kind} fact actually sent`);
+    assert.ok(!JSON.stringify(hub.frames).includes(receipt_token), 'no ordinary frame exports the capability');
+    await run.tool('board_ack_message', { receipt_id, receipt_token });
+    assert.deepEqual(hub.of('rpc').find((f) => f.method === 'board_ack_message').params, { receipt_id, receipt_token });
+    const ordinary = hub.frames.filter((f) => !(f.type === 'rpc' && f.method === 'board_ack_message'));
+    assert.ok(!JSON.stringify(ordinary).includes(receipt_token));
+  });
+});
+
 test('board_get_card: a card an integration created says so in its envelope source', async () => {
   await withRun('APP-91', async (run, hub) => {
     hub.rpcReply = (f) => (f.method === 'board_get_card' ? { ok: true, result: {
@@ -126,6 +189,28 @@ test('board_declare_plan / board_check_overlap: paths, reasons and other_owner c
       }
       assert.deepEqual([o.other_key, o.level, o.kind, o.age_ms], ['APP-7', 'warn', 'adjacent', 3], 'ids and enums untouched');
     }
+  });
+});
+
+test('ownership revisions use fresh server generation and envelope peer claims; host read-only heartbeat cannot claim editing', async () => {
+  await withRun('APP-98', async (run, hub) => {
+    const ownership = { generation: 'server-generation', state: 'planned', paths: [EVIL[0]], author: { name: EVIL[1], identity_source: 'hub_run' } };
+    hub.rpcReply = () => ({ ok: true, result: { ownership, ownership_intents: [ownership], ownership_overlaps: [{ card_id: 'peer', paths: [EVIL[2]], state: 'planned' }] } });
+    const result = await run.tool('board_declare_plan', { paths: ['src/api.js'], ownership_generation: 'model-claim' });
+    assert.deepEqual(hub.of('rpc').map((f) => f.method), ['board_check_overlap', 'board_declare_plan']);
+    assert.equal(hub.of('rpc')[1].params.ownership_generation, 'server-generation');
+    assert.ok(!JSON.stringify(hub.of('rpc')).includes('model-claim'));
+    for (const value of [result.ownership.author.name, result.ownership.paths[0], result.ownership_intents[0].author.name,
+      result.ownership_intents[0].paths[0], result.ownership_overlaps[0].paths[0]]) {
+      assert.ok(value.startsWith(`<untrusted_board_content_${run.nonce} `)); assert.equal(closes(value), 1);
+    }
+    assert.equal(result.ownership.generation, 'server-generation'); assert.equal(result.ownership.state, 'planned');
+    run.readOnly = true; assert.equal(run.hb().read_only, true);
+    run.readOnly = false; assert.equal(run.hb().read_only, false);
+    hub.rpcReply = (f) => f.method === 'board_check_overlap' ? { ok: false, error: { code: 'FENCED', message: 'stale run' } } : { ok: true, result: {} };
+    const writes = hub.of('rpc').filter((f) => f.method === 'board_declare_plan').length;
+    await assert.rejects(run.tool('board_declare_plan', { paths: [] }), (e) => e.code === 'FENCED');
+    assert.equal(hub.of('rpc').filter((f) => f.method === 'board_declare_plan').length, writes);
   });
 });
 

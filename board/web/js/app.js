@@ -2,23 +2,33 @@
 // loop. Rendering is a pure function of `state` (render-*.js); this file owns
 // clocks, network and DOM events.
 import { h, render } from './h.js';
-import { api, errorText, setOrg, currentOrg, setCsrf } from './api.js';
+import { tacklePreference, rememberTackle, raisedBudget, tackleChoices, anotherAi } from './tackle.js';
+import { handoverPin, sameHandover } from './ai-handover.js';
+import { api, errorText, setOrg, currentOrg, setCsrf, requestId } from './api.js';
 import { connectBoard } from './socket.js';
-import { displayFace, alertsForViewer, agedView } from './view.js';
-import { planMoves, moveSummary, dragModel, toggleSelection, pruneSelection, idsToDrag, kbdStart, kbdKey, announcement } from './dnd.js';
+import { displayFace, alertsForViewer, needsYou, agedView, fmtUsd, observedLane } from './view.js';
+import { planMoves, moveSummary, dragModel, pruneSelection, idsToDrag, kbdStart, kbdKey, announcement } from './dnd.js';
 import { emptyFilters, isFiltering, parseFilters, writeFilters, toggleIn, applyFilters, filterOptions } from './filters.js';
 import { parseTitles, needsConfirm, pendingCard } from './quickadd.js';
 import { installDnd, snapshotRects, playFlip } from './dnd-dom.js';
 import { boardScreen, loadingScreen, THEME_NEXT } from './render-board.js';
 import { paletteResults } from './palette.js';
+import { starterWorkflow } from './render-workflows.js';
+import {WorkflowJourney,workflowExecutionSubmit,workflowExecutionChange,workflowExecutionAction} from './workflow-journey.js';
 import { normalizeBg, normalizeTheme } from './themes.js';
 import { tableScreen } from './render-table.js';
+import { planningScreen } from './render-planning.js';
+import { historyScreen } from './render-history.js';
+import { rangeWindow, buildHistory, neighborBar } from './history.js';
+import { nextAnchor, movedDates, scheduledOn } from './calendar.js';
+import { validDay, validZone, todayIn, shiftDay } from '../../shared/planning.js';
 import { DEFAULT_SORT, nextSort } from './table.js';
 import { dashboardScreen } from './render-dashboard.js';
 import { integrationsScreen, connectWindowTarget, takeInput } from './render-integrations.js';
+import { saveSentrySettings } from './sentry-settings.js';
 import { teamScreen } from './render-team.js';
 import { emptyFold, pullJournal, windowMetrics, cardMetrics } from './metrics.js';
-import { VIEWS } from './views.js';
+import { VIEWS, plannerEnabled } from './views.js';
 import { drawer } from './render-drawer.js';
 import { colorMap } from './labels.js';
 import { dialog } from './render-dialogs.js';
@@ -44,12 +54,14 @@ const state = {
   me: null,
   boardId: null,
   board: null,
+  boards: [],
   members: new Map(),
   cards: new Map(), // id → {view, rx}
   conn: { status: 'connecting', lostAt: null, lostPerf: null, retryAt: null },
   detail: null, // {cardId, data, rx, tab, section, error}
   dialog: null,
   busy: new Set(),
+  budgetStopped: new Set(),
   toasts: [],
   theme: 'system',
   bg: 'none', // board background (themes.js), per browser
@@ -72,9 +84,65 @@ const state = {
   archived: null, // id → {view, rx} while showArchived
   // team.presence (D37b). `stale` from a socket drop until the next frame.
   presence: { members: [], loaded: false, stale: false },
+  overview: { status: 'idle', data: null, error: null, updatedAt: null },
 };
 
 let socket = null;
+let boardGeneration = 0;
+let plannerKey = null;
+let planner = null;
+function plannerState() {
+  const key = `board-planning:${state.me?.member?.id}:${state.boardId}`;
+  if (plannerKey !== key) {
+    let saved = null; try { saved = JSON.parse(localStorage.getItem(key)); } catch { /* unavailable */ }
+    const zone = validZone(saved?.zone) ? saved.zone : Intl.DateTimeFormat().resolvedOptions().timeZone ?? 'UTC';
+    planner = { anchor: validDay(saved?.anchor) ? saved.anchor : todayIn(zone), zone, period: saved?.period === 'week' ? 'week' : 'month', edit: null, busy: false, error: null, draft: null };
+    plannerKey = key;
+  }
+  return planner;
+}
+function savePlanner() {
+  const p = plannerState();
+  try { localStorage.setItem(plannerKey, JSON.stringify({ anchor: p.anchor, zone: p.zone, period: p.period })); } catch { /* unavailable */ }
+  update();
+}
+function editPlan(id) {
+  if (boardReadOnly() || viewOf(id)?.archived || viewOf(id)?.planning_in_scope === false) return;
+  plannerState(); planner.edit = id; planner.draft = null; planner.error = null;
+  if (state.detail) closeDrawer();
+  if (state.view !== 'calendar' && state.view !== 'timeline') setView('calendar');
+  update(); queueMicrotask(() => root.querySelector('.planning-editor input')?.focus());
+}
+async function savePlan(id, fields) {
+  const card = viewOf(id), generation = boardGeneration, member = state.me?.member?.id, p = plannerState();
+  if (!card || card.archived || card.planning_in_scope === false || boardReadOnly() || p.busy) return;
+  const current = () => generation === boardGeneration && member === state.me?.member?.id && planner === p;
+  const choice = JSON.stringify({ id, fields });
+  if (p.pending?.choice !== choice) p.pending = { choice, body: { request_id: requestId(), version: card.version, ...fields } };
+  p.busy = true; p.error = null; update();
+  try {
+    const result = await api.planCard(id, p.pending.body);
+    if (!current()) return;
+    applyCard(result); p.pending = null; p.draft = null; p.edit = null; say(`Saved ${card.key} planning dates and dependencies.`);
+  } catch (err) {
+    if (!current()) return;
+    p.error = errorText(err); toast(p.error, 'error');
+    if (err.code !== 'NETWORK') p.pending = null;
+    if (err.code === 'VERSION_CONFLICT') { try { const fresh = await api.card(id); if (current()) applyCard(fresh); } catch { /* next refresh can retry */ } }
+    if (err.code === 'UNAUTHENTICATED') boot();
+  } finally { if (current()) { p.busy = false; update(); } }
+}
+function movePlan(id, direction, destination = null) {
+  const card = viewOf(id); if (!card) return;
+  const date = destination ?? shiftDay(scheduledOn(card), direction);
+  const fields = movedDates(card, date);
+  if (!fields) { toast('That move exceeds the supported calendar dates.', 'error'); return; }
+  void savePlan(id, fields);
+}
+const boardReadOnly = () => state.me?.member?.role === 'viewer' || !!state.board?.archived_at;
+const workflowScope = () => ({boardId:state.boardId,generation:boardGeneration,org:currentOrg(),member:state.me?.member?.id,user:state.me?.user?.id??state.me?.member?.user_id,
+  role:state.me?.member?.role,auth:state.auth,accounts:state.authMode==='accounts',connected:state.conn.status==='open',readOnly:boardReadOnly(),epoch:state.dash?.epoch});
+const workflowJourney=new WorkflowJourney({api,getScope:workflowScope,getDialog:()=>state.dialog,setDialog:d=>{state.dialog=d;},update});
 
 // ── theme ────────────────────────────────────────────────────────────────────
 
@@ -115,6 +183,10 @@ function closeThemeMenu({ refocus = false } = {}) {
 // last one this browser used.
 
 function loadView() {
+  let storedPlanner = null;
+  try { storedPlanner = localStorage.getItem('board-planner'); } catch { /* private mode */ }
+  state.showPlanner = plannerEnabled(location.search, storedPlanner);
+  try { localStorage.setItem('board-planner', state.showPlanner ? '1' : '0'); } catch { /* private mode */ }
   const want = new URLSearchParams(location.search).get('view');
   let saved = null;
   try { saved = localStorage.getItem('board-view'); } catch { /* private mode */ }
@@ -124,8 +196,9 @@ function setView(v) {
   if (!VIEWS.some((x) => x.id === v) || state.view === v) return;
   state.view = v;
   if (v === 'dashboard') loadJournal();
+  if (v === 'history') loadHistory();
   if (v === 'integrations') loadIntegrations();
-  if (v === 'team' && state.board) presenceFallbackSoon();
+  if (v === 'team' && state.board) { presenceFallbackSoon(); loadTeamOverview(); }
   // Team pages are opened from the app sidebar; only board views are remembered.
   if (VIEWS.find((x) => x.id === v)?.switcher !== false) { try { localStorage.setItem('board-view', v); } catch { /* private mode */ } }
   try {
@@ -181,6 +254,16 @@ async function connectIntegration(provider, kind, input) {
   if (!res?.url || !res.bind) return;
   window.open(res.url, connectWindowTarget(provider, res.bind, navigator.userAgent), 'noopener');
   update();
+}
+
+async function copyText(text) {
+  if (typeof text !== 'string' || !text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    toast('Copied.');
+  } catch {
+    toast('Couldn’t copy. Select the URL and copy it.', 'error');
+  }
 }
 
 async function submitIntegrationToken(form) {
@@ -301,16 +384,17 @@ function buildModel() {
   const lost = state.conn.status === 'lost';
   // While disconnected the board shows states as of the drop; ages freeze.
   const clockNow = lost && state.conn.lostPerf != null ? state.conn.lostPerf : now;
+  // Observed sessions silent for over 24 h leave the default board; Show archived brings them back.
   const entries = [...state.cards.values(), ...(state.showArchived && state.archived ? state.archived.values() : [])].map(({ view, rx }) => {
     const elapsed_ms = Math.max(0, clockNow - rx);
     return { view, elapsed_ms, face: displayFace(view, { elapsed_ms, connection_lost: lost }) };
-  });
+  }).filter((e) => state.showArchived || observedLane(e.view, e.elapsed_ms) !== 'archived');
   let detail = null;
   if (state.detail) {
     const d = state.detail;
     const elapsed_ms = d.rx != null ? Math.max(0, clockNow - d.rx) : 0;
     const data = d.data ? { ...d.data, feed: (d.data.feed ?? []).map((ev) => ({ ...ev, at_age_ms: ev.at_age_ms == null ? null : ev.at_age_ms + Math.max(0, clockNow - (ev._rx ?? d.rx)) })) } : null;
-    detail = { ...d, data, elapsed_ms };
+    detail = { ...d, data, elapsed_ms, ownership_elapsed_ms: d.ownershipRx == null ? 0 : Math.max(0, now - d.ownershipRx) };
   }
   const labelColors = Array.isArray(state.board?.labels) ? colorMap(state.board.labels) : null;
   const fctx = { viewerId: state.me?.member?.id, members: state.members, labelColors };
@@ -319,6 +403,7 @@ function buildModel() {
   return {
     me: state.me,
     board: state.board,
+    boards: state.boards,
     members: state.members,
     entries,
     visible: filtered.entries,
@@ -327,6 +412,7 @@ function buildModel() {
     labelColors,
     showArchived: state.showArchived,
     alerts: alertsForViewer(state.me?.member?.id, live),
+    needsYou: needsYou(state.me?.member?.id, live),
     conn: { ...state.conn, retryInMs: state.conn.retryAt != null ? state.conn.retryAt - Date.now() : null },
     detail,
     dialog: state.dialog,
@@ -341,15 +427,21 @@ function buildModel() {
     quickAdd: state.quickAdd,
     drag: state.drag || state.kbd ? dragModel(state.drag ?? { ids: state.kbd.ids, over: state.kbd.over, mode: 'keyboard' }, entries) : null,
     openCardId: state.detail?.cardId ?? null,
-    readOnly: state.me?.member?.role === 'viewer',
+    budgetStopped: state.budgetStopped,
+    budgetMax: state.board?.settings?.max_budget_usd,
+    readOnly: boardReadOnly(),
     view: state.view,
+    history: state.view === 'history' ? { ...state.history, now: Date.now() } : null,
+    showPlanner: state.showPlanner,
     table: state.table,
+    planner: plannerState(),
     dashboard: state.view === 'dashboard' ? dashboardModel(live) : null,
     localCard: state.authMode === 'local' && !state.localCardDismissed,
     accounts: state.authMode === 'accounts',
     invite: state.invite,
     integrations: state.view === 'integrations' ? { ...state.integ, nowMs: Date.now(), local: state.authMode === 'local' } : null,
     presence: { ...state.presence, stale: state.presence.stale || lost },
+    teamOverview: { ...state.overview, stale: lost || !!state.overview.error || (state.overview.updatedAt != null && Date.now() - state.overview.updatedAt > 45_000), ageMs: state.overview.updatedAt == null ? null : Date.now() - state.overview.updatedAt },
     // Presence ages freeze at the drop, like card ages.
     nowMs: lost && state.conn.lostAt ? state.conn.lostAt.getTime() : Date.now(),
   };
@@ -370,6 +462,29 @@ let dashToken = 0;
 
 const freshDash = () => ({ status: 'idle', fold: emptyFold(), offset: 0, error: null, updatedAt: null, epoch: null });
 state.dash = freshDash();
+state.history = { range: 'today', status: 'idle', error: null, data: null, from: 0, to: 0, now: 0, selected: null, updated_at: null };
+let historyToken = 0;
+
+async function loadHistory(range = state.history.range) {
+  if (!state.boardId) return;
+  const token = ++historyToken, boardId = state.boardId, now = Date.now(), win = rangeWindow(range, now);
+  state.history = { ...state.history, range, status: 'loading', from: win.from, to: win.to, now };
+  if (state.history.data && state.history.data.range !== range) state.history.data = null;
+  update();
+  try {
+    const data = await api.runs(boardId, new Date(win.from).toISOString(), new Date(win.to).toISOString());
+    if (token !== historyToken) return;
+    state.history = { ...state.history, status: 'ok', error: null, data: { ...data, range }, now: Date.now(), updated_at: Date.now() };
+  } catch (err) {
+    if (token !== historyToken) return;
+    state.history = { ...state.history, status: 'error', error: errorText(err) };
+  }
+  update();
+}
+function historyBars() {
+  const hs = state.history;
+  return hs.data ? buildHistory({ data: hs.data, from: hs.from, to: hs.to, now: hs.now }).lanes : [];
+}
 
 async function loadJournal() {
   if (!state.boardId || state.dash.status === 'loading') return;
@@ -391,6 +506,8 @@ async function loadJournal() {
 function resetDashboard() {
   dashToken++;
   state.dash = freshDash();
+  historyToken++;
+  state.history = { ...state.history, status: 'idle', data: null, selected: null };
   winMemo = null;
   cardMemo = null;
 }
@@ -400,6 +517,13 @@ function resetDashboard() {
 function onHubEpoch(epoch) {
   const prev = state.dash.epoch;
   if (prev && epoch && prev !== epoch) {
+    if (state.dialog?.journey) workflowJourney.invalidate('The hub restarted. Reload a current workflow view.');
+    if (state.detail) {
+      detailRefresh++;
+      state.detail = { ...state.detail, ownership: null, ownershipLoaded: false, ownershipRx: null, ownershipError: null };
+      update();
+      if (state.detail.tab === 'ownership' && state.conn.status === 'open') refreshDetail(state.detail.cardId, { ownership: true });
+    }
     resetDashboard();
     if (state.view === 'dashboard') loadJournal();
   }
@@ -447,7 +571,7 @@ function screen() {
   if (state.conn.status === 'upgrade') return loadingScreen('This page is older than the board. Reload to get the new version.');
   if (!state.board) return h('div', { class: 'app-shell' }, loadingScreen(state.conn.status === 'connecting' && state.conn.retryAt ? 'Can’t reach the board yet. Retrying…' : 'Loading the board…'), toasts());
   const model = buildModel();
-  const body = model.view === 'table' ? tableScreen(model) : model.view === 'dashboard' ? dashboardScreen(model) : model.view === 'integrations' ? integrationsScreen(model) : model.view === 'team' ? teamScreen(model) : null;
+  const body = model.view === 'calendar' || model.view === 'timeline' ? planningScreen(model) : model.view === 'table' ? tableScreen(model) : model.view === 'dashboard' ? dashboardScreen(model) : model.view === 'history' ? historyScreen(model) : model.view === 'integrations' ? integrationsScreen(model) : model.view === 'team' ? teamScreen(model) : null;
   return h('div', { class: 'app-shell' }, boardScreen(model, body), drawer(model), dialog(model), toasts());
 }
 
@@ -460,6 +584,7 @@ function update() {
 // Synchronous render, for callers that measure the DOM right after (FLIP).
 function renderNow() {
   queued = false;
+  if(state.dialog?.journey&&state.dialog.mode!=='execution-unavailable'&&!workflowJourney.current(state.dialog))workflowJourney.invalidate();
   render(root, screen());
   syncDialogs();
 }
@@ -483,6 +608,8 @@ function syncDialogs() {
 // ── auth + boot ──────────────────────────────────────────────────────────────
 
 async function boot() {
+  const generation = ++boardGeneration;
+  const current = () => generation === boardGeneration;
   state.auth = 'loading';
   update();
   // /api/health says whether this hub offers dev login (BOARD_AUTH=dev) or Access.
@@ -490,8 +617,11 @@ async function boot() {
     try { state.authMode = (await api.health()).auth ?? 'access'; } catch { state.authMode = 'access'; }
   }
   try {
-    state.me = await api.me();
+    const me = await api.me();
+    if (!current()) return;
+    state.me = me;
   } catch (err) {
+    if (!current()) return;
     // A sign-in in several orgs: the hub lists them; take ?org= or the first.
     if (err.code === 'CONFLICT' && Array.isArray(err.extra?.orgs) && err.extra.orgs.length && !currentOrg()) {
       const want = new URLSearchParams(location.search).get('org');
@@ -507,29 +637,145 @@ async function boot() {
   }
   state.auth = 'ok';
   setCsrf(state.me.csrf_token);
+  if (state.authMode === 'accounts' && !state.me.member && !state.me.pending_invites?.length && (state.me.client_workspaces?.length || state.me.pending_client_invites?.length)) {
+    location.replace('/clients'); return;
+  }
   if (state.authMode === 'accounts' && !state.me.member && !(state.me.pending_invites?.length)) {
     try {
       const setup = await api.setupAccount();
+      if (!current()) return;
       if (setup.teams?.length) { setOrg(setup.teams[0].id); return boot(); }
       state.me.pending_invites = setup.pending_invites ?? [];
+      if (!state.me.pending_invites.length && (setup.client_workspaces?.length || setup.pending_client_invites?.length)) { location.replace('/clients'); return; }
     } catch (err) {
+      if (!current()) return;
       // Preserve the existing create-or-join forms when a rate limit,
       // quota or admission rule prevents automatic setup.
       state.onboard = { busy: false, error: accountErrorText(err, 'team'), where: 'create' };
     }
   }
+  try { const result = await api.boards(true); if (!current()) return; state.boards = result.boards; }
+  catch { if (!current()) return; state.boards = state.me.boards ?? []; }
+  if (!current()) return;
   const wanted = new URLSearchParams(location.search).get('board');
-  const boards = state.me.boards ?? [];
-  state.boardId = boards.find((b) => b.id === wanted)?.id ?? boards[0]?.id ?? null;
+  const boards = state.boards;
+  let remembered = null;
+  try { remembered = localStorage.getItem(lastBoardKey()); } catch { /* storage off */ }
+  state.boardId = boards.find((b) => b.id === wanted)?.id ?? boards.find((b) => b.id === remembered && !b.archived_at)?.id ?? boards.find((b) => !b.archived_at)?.id ?? null;
   // A new account has no team: offer to create or join one, not "not a member".
   if (!state.boardId) { state.auth = state.authMode === 'accounts' && !state.me.member ? 'no_team' : 'forbidden'; update(); return; }
+  state.board = { ...boards.find((b) => b.id === state.boardId), settings: {}, labels: [] };
   document.title = `${boards.find((b) => b.id === state.boardId)?.name ?? 'Board'} · ${BRAND.name}`;
+  rememberBoard();
   resetDashboard();
   state.presence = { members: [], loaded: false, stale: false };
+  state.overview = { status: 'idle', data: null, error: null, updatedAt: null };
   socket?.close();
-  socket = connectBoard({ boardId: state.boardId, org: currentOrg(), onMessage, onStatus });
+  socket = connectBoard({ boardId: state.boardId, org: currentOrg(), onMessage: (m) => { if (current()) onMessage(m); }, onStatus: (...args) => { if (current()) onStatus(...args); } });
   update();
   openFromHash();
+}
+
+function lastBoardKey() {
+  return `board-last:${state.me?.org?.id ?? currentOrg()}:${state.me?.user?.id ?? state.me?.member?.id}`;
+}
+
+function rememberBoard() {
+  if (!state.boards.find((b) => b.id === state.boardId)?.archived_at) {
+    try { localStorage.setItem(lastBoardKey(), state.boardId); } catch { /* storage off */ }
+  }
+}
+
+async function switchBoard(id, { openCard = null, section = null } = {}) {
+  if (!state.boards.some((b) => b.id === id)) return;
+  socket?.close(); socket = null;
+  state.board = null;
+  state.cards = new Map(); state.archived = null; state.members = new Map();
+  state.cardsRev += 1;
+  state.detail = null; state.dialog = null; state.selection = new Set();
+  state.drag = null; state.kbd = null; state.quickAdd = null;
+  state.showArchived = false; state.repos = null; state.themeMenu = false;
+  state.filters = emptyFilters();
+  try { sessionStorage.removeItem('board-filters'); } catch { /* storage off */ }
+  const query = new URLSearchParams(location.search);
+  query.set('board', id); query.delete('q'); query.delete('f');
+  const fragment = openCard ? `#${new URLSearchParams({ card: openCard, ...(section ? { section } : {}) })}` : '';
+  history.replaceState(null, '', `${location.pathname}?${query}${fragment}`);
+  state.conn = { status: 'connecting', lostAt: null, lostPerf: null, retryAt: null };
+  await boot();
+}
+
+async function manageBoards() {
+  state.dialog = { kind: 'boards' }; update();
+  const generation = boardGeneration;
+  try {
+    const result = await api.boards(true);
+    if (generation === boardGeneration) { state.boards = result.boards; update(); }
+  } catch (err) {
+    if (generation === boardGeneration && state.dialog?.kind === 'boards') { state.dialog = { ...state.dialog, error: errorText(err) }; update(); }
+  }
+}
+
+async function submitBoardDialog(form) {
+  const d = state.dialog;
+  if (!d || d.busy || d.kind !== form.dataset.form) return;
+  state.dialog = { ...d, busy: true }; update();
+  const generation = boardGeneration;
+  try {
+    const fd = new FormData(form);
+    let result;
+    if (d.kind === 'new-board') {
+      const key_prefix = String(fd.get('key_prefix') ?? '').trim();
+      result = await api.createBoard({ name: String(fd.get('name') ?? '').trim(), ...(key_prefix ? { key_prefix } : {}) });
+    } else if (d.kind === 'rename-board') result = await api.renameBoard(d.id, String(fd.get('name') ?? '').trim());
+    else result = await api.archiveBoard(d.id);
+    if (generation !== boardGeneration) return;
+    state.boards = (await api.boards(true)).boards;
+    if (generation !== boardGeneration) return;
+    state.dialog = null;
+    if (d.kind === 'new-board') await switchBoard(result.board.id);
+    else if (d.kind === 'archive-board' && state.boardId === d.id) await switchBoard(state.boards.find((b) => !b.archived_at).id);
+    else { if (state.board?.id === result.board.id) state.board = { ...state.board, ...result.board }; update(); }
+  } catch (err) {
+    if (generation === boardGeneration && state.dialog?.kind === d.kind) { state.dialog = { ...d, busy: false, error: errorText(err) }; update(); }
+  }
+}
+
+async function restoreBoard(id) {
+  const generation = boardGeneration;
+  const result = await withBusy(`board:${id}`, () => api.restoreBoard(id));
+  if (!result) return;
+  const boards = (await api.boards(true)).boards;
+  if (generation !== boardGeneration) return;
+  state.boards = boards;
+  if (state.board?.id === id) state.board = { ...state.board, ...result.board };
+  update();
+}
+
+async function setIntegrationBoard(id, target_board_id) {
+  const result = await withBusy(`integ:${id}`, () => api.patchIntegration(id, { target_board_id }));
+  if (result?.connection) {
+    state.integ = { ...state.integ, data: { ...state.integ.data, connections: state.integ.data.connections.map((c) => c.id === id ? result.connection : c) } };
+    update();
+  }
+}
+
+async function submitSentrySettings(form) {
+  const id = form.dataset.conn, connection = state.integ.data?.connections?.find(c => c.id === id);
+  if (!connection || state.busy.has(`integ:${id}`)) return;
+  const generation = boardGeneration, org = currentOrg(), member = state.me?.member?.id;
+  const current = () => generation === boardGeneration && org === currentOrg() && member === state.me?.member?.id;
+  state.busy.add(`integ:${id}`);
+  try {
+    await saveSentrySettings({ form, connection, boards: state.boards,
+      getScope: () => ({ org: currentOrg(), member: state.me?.member?.id, user: state.me?.user?.id ?? state.me?.member?.user_id, role: state.me?.member?.role, generation: boardGeneration, auth: state.auth }),
+      patch: (conn, body) => api.patchIntegration(conn, body),
+      saved: conn => { state.integ = { ...state.integ, sentryErrors: { ...state.integ.sentryErrors, [id]: null },
+        data: { ...state.integ.data, connections: state.integ.data.connections.map(c => c.id === id ? conn : c) } }; toast('Sentry settings saved.'); },
+    });
+  } catch (error) {
+    if (current()) state.integ = { ...state.integ, sentryErrors: { ...state.integ.sentryErrors, [id]: errorText(error) } };
+  } finally { state.busy.delete(`integ:${id}`); if (current()) update(); }
 }
 
 // ── accounts: a first team ─────────────────────────────────────────────────
@@ -616,7 +862,12 @@ async function signOut() {
 
 function onStatus({ status, retryAt }) {
   const prev = state.conn.status;
+  if (state.dialog?.journey && (status !== 'open' || prev !== 'open')) workflowJourney.invalidate('The connection changed. Reload a current workflow view.');
   if (status === 'signed_out') { socket?.close(); boot(); return; }
+  if (state.detail && (status !== 'open' || prev !== 'open')) {
+    detailRefresh++;
+    state.detail = { ...state.detail, ownership: null, ownershipLoaded: false, ownershipRx: null, ownershipError: null };
+  }
   if (status === 'lost' && prev !== 'lost') {
     state.conn.lostAt = new Date();
     state.conn.lostPerf = perf();
@@ -626,11 +877,20 @@ function onStatus({ status, retryAt }) {
   state.conn.status = status;
   state.conn.retryAt = retryAt ?? null;
   update();
+  if (status === 'open' && prev !== 'open' && state.detail?.tab === 'ownership') refreshDetail(state.detail.cardId, { ownership: true });
 }
 
 function onMessage(msg) {
   const now = perf();
   switch (msg.type) {
+    case 'team.boards': {
+      if (msg.org_id !== state.me?.org?.id) return;
+      state.boards = msg.boards;
+      state.me = { ...state.me, boards: msg.boards.filter((b) => !b.archived_at) };
+      const board = msg.boards.find((b) => b.id === state.boardId);
+      if (board && state.board) { state.board = { ...state.board, ...board }; document.title = `${board.name} · ${BRAND.name}`; }
+      break;
+    }
     case 'welcome': onHubEpoch(msg.hub_epoch); break;
     case 'snapshot': {
       if (msg.board_id !== state.boardId) return;
@@ -643,8 +903,10 @@ function onMessage(msg) {
       if (state.showArchived) loadArchived();
       if (state.detail) refreshDetail(state.detail.cardId);
       if (state.view === 'dashboard' && state.dash.status === 'idle') loadJournal();
+      if (state.view === 'history' && state.history.status === 'idle') loadHistory();
       if (state.view === 'integrations' && state.integ.status === 'idle') loadIntegrations();
       presenceFallbackSoon();
+      if (state.view === 'team' && state.overview.status === 'idle') loadTeamOverview();
       break;
     }
     case 'team.presence':
@@ -696,6 +958,20 @@ function onMessage(msg) {
 // The socket sends presence right after every snapshot; this is only the
 // fallback for a frame that never comes (the endpoint is rate limited), tried
 // once per board, never on a timer.
+let overviewIntent = null;
+async function loadTeamOverview() {
+  if (state.auth !== 'ok' || !state.me?.member || state.overview.status === 'loading') return;
+  const intent = overviewIntent = {}, generation = boardGeneration, memberId = state.me.member.id, org = currentOrg();
+  const current = () => intent === overviewIntent && generation === boardGeneration && memberId === state.me?.member?.id && org === currentOrg();
+  state.overview = { ...state.overview, status: 'loading', error: null }; update();
+  try {
+    const data = await api.teamOverview();
+    if (current()) { state.overview = { status: 'ok', data, error: null, updatedAt: Date.now() }; update(); }
+  } catch (error) {
+    if (current()) { state.overview = { ...state.overview, status: 'error', error: errorText(error) }; update(); }
+  }
+}
+
 let presenceFallbackFor = null;
 function presenceFallbackSoon() {
   if (state.view !== 'team' || presenceFallbackFor === state.boardId) return;
@@ -722,6 +998,7 @@ async function loadArchived() {
     const rx = perf();
     state.archived = new Map(snap.cards.filter((c) => c.archived && !state.cards.has(c.id)).map((c) => [c.id, { view: c, rx }]));
   } catch (err) {
+    if (state.boardId !== boardId) return;
     toast(errorText(err), 'error');
   }
   update();
@@ -764,52 +1041,101 @@ async function restoreCards(ids) {
   update();
 }
 
-async function setCover(cardId, token) {
-  const v = viewOf(cardId);
-  if (!v) return;
-  const res = await withBusy(`${cardId}:cover`, () => api.patchCard(cardId, { version: v.version, cover: token || null }));
-  if (res) applyCard(res);
-}
-
-// Registry changes also arrive as board.labels; the answer is applied at once
-// so the manager never waits on the socket.
-async function labelCall(fn) {
-  const d = state.dialog;
-  if (d?.kind === 'labels') { state.dialog = { ...d, busy: true, error: null }; update(); }
-  try {
-    await fn();
-    const res = await api.labels(state.boardId);
-    if (state.board) state.board = { ...state.board, labels: res.labels };
-    if (state.dialog?.kind === 'labels') state.dialog = { kind: 'labels', busy: false, error: null };
-    return true;
-  } catch (err) {
-    if (state.dialog?.kind === 'labels') state.dialog = { ...state.dialog, busy: false, error: errorText(err) };
-    else toast(errorText(err), 'error');
-    return false;
-  } finally {
-    update();
-  }
-}
-
+let drawerSession = 0;
+let detailRefresh = 0;
 async function openDetail(cardId, section = null) {
   if (!state.cards.has(cardId) && !state.archived?.has(cardId)) return;
-  const tab = section === 'handover' || section === 'comments' ? section : (state.detail?.cardId === cardId ? state.detail.tab : 'activity');
-  state.detail = { cardId, data: state.detail?.cardId === cardId ? state.detail.data : null, rx: state.detail?.rx ?? null, tab, scrollTo: ['asks', 'overlaps'].includes(section) ? section : null, error: null };
+  const same = state.detail?.cardId === cardId;
+  const tab = ['handover', 'comments', 'packet', 'messages', 'ownership'].includes(section) ? section : (same ? state.detail.tab : 'activity');
+  state.detail = { ...(same ? state.detail : {}), intent: ++drawerSession, cardId, data: same ? state.detail.data : null, rx: same ? state.detail.rx : null, tab, scrollTo: ['asks', 'overlaps'].includes(section) ? section : null, error: null };
   try { history.replaceState(null, '', `#card=${encodeURIComponent(cardId)}`); } catch { /* sandboxed */ }
   update();
   await refreshDetail(cardId);
 }
 
-async function refreshDetail(cardId) {
+async function refreshDetail(cardId, { communication = false, ownership = false } = {}) {
+  if (!cardId || state.detail?.cardId !== cardId) return;
+  const generation = boardGeneration, intent = state.detail.intent, request = ++detailRefresh;
+  const current = () => generation === boardGeneration && state.detail?.cardId === cardId && state.detail.intent === intent && request === detailRefresh;
   try {
     const data = await api.card(cardId);
-    if (state.detail?.cardId !== cardId) return;
+    if (!current()) return;
+    if (state.detail.localHandover) data.local_handover = state.detail.localHandover;
     state.detail = { ...state.detail, data, rx: perf(), error: null };
+    // Only the desktop app can answer: the handover it wrote locally for a session attached to this card.
+    if (typeof globalThis.plexiformDesktop?.localHandover === 'function') {
+      Promise.resolve(globalThis.plexiformDesktop.localHandover(cardId)).then((r) => {
+        const markdown = r?.markdown ?? null;
+        if (!current() || !markdown || state.detail.localHandover?.markdown === markdown) return;
+        const local_handover = { markdown };
+        state.detail = { ...state.detail, localHandover: local_handover, data: { ...state.detail.data, local_handover } };
+        update();
+      }, () => {});
+    }
+    if (state.detail.tab === 'ownership' && !data.card.archived
+      && (ownership || !state.detail.ownershipLoaded || perf() - (state.detail.ownershipRx ?? 0) >= 5000)) {
+      try {
+        const requestStarted = perf();
+        const result = await api.ownership(cardId, state.boardId);
+        if (!current()) return;
+        state.detail = { ...state.detail, ownershipLoaded: true, ownershipRx: requestStarted, ownership: result, ownershipError: null };
+      } catch (err) {
+        if (!current()) return;
+        state.detail = { ...state.detail, ownershipLoaded: true, ownership: null, ownershipError: errorText(err) };
+      }
+    }
+    if (['packet', 'messages'].includes(state.detail.tab) && !data.card.archived
+      && (communication || !state.detail.packetLoaded || perf() - (state.detail.communicationRx ?? 0) >= 5000)) {
+      const [packet, messages] = await Promise.allSettled([api.packet(cardId), api.messages(cardId)]);
+      if (!current()) return;
+      state.detail = { ...state.detail, packetLoaded: true, messagesLoaded: true, communicationRx: perf(),
+        packet: packet.status === 'fulfilled' ? packet.value.packet : null,
+        packetError: packet.status === 'rejected' ? errorText(packet.reason) : null,
+        messages: messages.status === 'fulfilled' ? messages.value : null,
+        messagesError: messages.status === 'rejected' ? errorText(messages.reason) : null };
+    }
   } catch (err) {
-    if (state.detail?.cardId !== cardId) return;
-    state.detail = { ...state.detail, error: errorText(err) };
+    if (!current()) return;
+    state.detail = { ...state.detail, error: errorText(err), ...(state.detail.tab === 'ownership'
+      ? { ownershipLoaded: true, ownership: null, ownershipError: errorText(err) } : {}) };
   }
   update();
+}
+
+function communicationDraft(form, kind) {
+  const fd = new FormData(form), previous = kind === 'task-packet' ? state.detail?.packetDraft : state.detail?.messageDraft;
+  if (kind === 'task-packet') return { ...Object.fromEntries(['brief', 'decisions', 'progress', 'nextAction', 'paths', 'reportedChecks'].map((k) => [k, String(fd.get(k) ?? '')])),
+    expected_version: Number(fd.get('expected_version')), expected_fence: Number(fd.get('expected_fence')),
+    evidence: previous?.evidence ?? (state.detail?.packet?.data?.artifacts ?? []).filter((a) => a.kind === 'evidence'), request_id: crypto.randomUUID() };
+  return { recipient: String(fd.get('recipient') ?? ''), kind: String(fd.get('kind') ?? 'coordination'), body: String(fd.get('body') ?? ''),
+    expected_fence: previous?.expected_fence ?? state.detail?.data?.card.fence, request_id: crypto.randomUUID() };
+}
+
+async function submitCommunication(form, kind) {
+  const detail = state.detail, cardId = form.dataset.card, generation = boardGeneration;
+  if (!detail || detail.cardId !== cardId || boardReadOnly()) return;
+  const packet = kind === 'task-packet', key = packet ? 'packetDraft' : 'messageDraft', errorKey = packet ? 'packetSaveError' : 'messageSaveError';
+  const draft = detail[key] ?? communicationDraft(form, kind), intent = detail.intent;
+  state.detail = { ...detail, [key]: draft, [errorKey]: null };
+  const current = () => generation === boardGeneration && state.detail?.intent === intent && state.detail.cardId === cardId;
+  const lines = (v) => v.split('\n').map((s) => s.trim()).filter(Boolean);
+  await withBusy(`${packet ? 'packet' : 'message'}:${cardId}`, async () => {
+    try {
+      const body = { request_id: draft.request_id, expected_fence: draft.expected_fence };
+      const result = packet ? await api.writePacket(cardId, { ...body, expected_version: draft.expected_version,
+        data: { brief: draft.brief, decisions: lines(draft.decisions), progress: draft.progress, nextAction: draft.nextAction,
+          artifacts: [...draft.evidence, ...lines(draft.paths).map((path) => ({ kind: 'path', path }))], reportedChecks: lines(draft.reportedChecks) } })
+        : await api.sendMessage(cardId, { ...body, kind: draft.kind, body: draft.body, recipient_run_ids: [draft.recipient] });
+      if (!current()) return;
+      if (state.detail[key]?.request_id === draft.request_id) state.detail = { ...state.detail, [key]: null, [errorKey]: null };
+      if (packet) state.detail = { ...state.detail, packet: result.packet };
+      toast(packet ? 'Task context saved.' : 'Task message sent.');
+      await refreshDetail(cardId, { communication: true });
+    } catch (err) {
+      if (current()) state.detail = { ...state.detail, [errorKey]: errorText(err) };
+      throw err;
+    }
+  });
 }
 
 let detailTimer = null;
@@ -877,11 +1203,23 @@ async function submitFeedback() {
   if (state.dialog?.kind === 'feedback') { state.dialog = { ...state.dialog, busy: false, result }; update(); }
 }
 
+function budgetFragmentCard(value) {
+  try {
+    const card = JSON.parse(atob((value ?? '').replace(/-/g, '+').replace(/_/g, '/'))).card_id;
+    return typeof card === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(card) ? card : null;
+  } catch { return null; }
+}
+
 function openFromHash() {
-  const m = location.hash.match(/^#card=(.+)$/);
-  if (!m) return;
-  const id = decodeURIComponent(m[1]);
-  const tryOpen = () => { if (state.cards.has(id)) openDetail(id); else if (state.conn.status !== 'open') setTimeout(tryOpen, 200); };
+  const query = new URLSearchParams(location.hash.slice(1));
+  const id = query.get('card') ?? budgetFragmentCard(query.get('plexiform-budget'));
+  if (!id) return;
+  const section = query.get('section'), generation = boardGeneration;
+  const tryOpen = () => {
+    if (generation !== boardGeneration) return;
+    if (state.cards.has(id)) openDetail(id, section);
+    else if (state.conn.status !== 'open') setTimeout(tryOpen, 200);
+  };
   tryOpen();
 }
 
@@ -890,10 +1228,13 @@ function openFromHash() {
 async function withBusy(key, fn) {
   if (state.busy.has(key)) return undefined;
   state.busy.add(key);
+  const generation = boardGeneration;
   update();
   try {
-    return await fn();
+    const result = await fn();
+    return generation === boardGeneration ? result : undefined;
   } catch (err) {
+    if (generation !== boardGeneration) return undefined;
     toast(errorText(err), 'error');
     if (err.code === 'VERSION_CONFLICT' || err.code === 'ILLEGAL_TRANSITION') refreshBoardCard(err);
     if (err.code === 'ALREADY_ANSWERED' && state.detail) refreshDetail(state.detail.cardId);
@@ -911,6 +1252,7 @@ function refreshBoardCard() {
 
 function applyCard(res) {
   if (!res?.card) return;
+  if (res.card.board_id && res.card.board_id !== state.boardId) return;
   if (res.card.archived) state.archived?.set(res.card.id, { view: res.card, rx: perf() });
   else state.cards.set(res.card.id, { view: res.card, rx: perf() });
   state.cardsRev += 1;
@@ -938,6 +1280,16 @@ const DONE_COPY = {
   stop: (k) => `Stopped ${k}.`,
 };
 
+async function continueAfterBudget(cardId, preset) {
+  const v = viewOf(cardId);
+  if (!v || v.fail_kind !== 'budget') return;
+  const budget = raisedBudget(v, preset, state.board?.settings?.max_budget_usd);
+  if (budget == null) { toast('The board’s budget limit leaves no room to raise this card. Ask an admin.', 'error'); return; }
+  const owner = v.run?.owner?.member_id ?? state.me.member.id;
+  const res = await doAction(cardId, 'retry', { target_member_id: owner === state.me.member.id ? null : owner, ai: v.run?.ai ?? 'claude', budget_usd: budget }, `${v.key} continues with a ${fmtUsd(budget)} budget.`);
+  if (res) state.budgetStopped.delete(cardId);
+}
+
 async function loadRepos() {
   if (state.repos) return state.repos;
   try {
@@ -947,15 +1299,19 @@ async function loadRepos() {
   return state.repos;
 }
 
-async function openGive(cardId, mode) {
+async function openGive(cardId, mode, { another = false } = {}) {
   const v = viewOf(cardId);
   if (!v) return;
+  const preference = tacklePreference(state.me.member.id, undefined, state.board?.settings?.default_budget_usd ?? 5), retry = mode === 'retry';
   state.dialog = {
-    kind: 'give', cardId, mode,
-    target: state.me.member.id,
+    kind: 'give', cardId, mode, another, instance: {}, handover_hold: v.handover_hold === true, ...handoverPin(v),
+    target: retry ? v.run?.owner?.member_id ?? state.me.member.id : state.me.member.id,
     repo_id: v.repo?.id ?? '',
     base_ref: v.base_ref ?? '',
-    budget_usd: v.budget?.cap_usd ?? 5,
+    max_turns: state.board?.settings?.default_max_turns ?? null,
+    ai: retry ? v.run?.ai ?? 'claude' : preference.ai,
+    budget_mode: retry || v.budget?.cap_usd != null ? 'cap' : preference.budget_mode,
+    budget_usd: retry ? Math.max(v.budget?.cap_usd ?? 0, v.budget?.spent_usd ?? 0) + 0.5 : v.budget?.cap_usd ?? preference.budget_usd,
     plan_approval: (v.labels ?? []).includes(PLAN_LABEL),
     repos: state.repos,
     preview: { loading: true },
@@ -983,9 +1339,16 @@ async function loadPreview() {
   state.dialog = { ...d, preview: { loading: true }, previewToken: token };
   update();
   try {
-    const res = await api.overlapPreview(d.cardId, target);
+    const res = await api.overlapPreview(d.cardId, target, d.repo_id || null);
     if (state.dialog?.previewToken !== token) return;
-    state.dialog = { ...state.dialog, preview: { overlaps: res.overlaps ?? [], sponsor: res.sponsor ?? null } };
+    state.dialog = { ...state.dialog, preview: { overlaps: res.overlaps ?? [], check: res.check ?? null, sponsor: res.sponsor ?? null, runners: res.runners ?? [], can_use_no_budget: res.can_use_no_budget === true } };
+    if (state.dialog.another) {
+      const v = viewOf(state.dialog.cardId);
+      const seed = v?.record_id ? await api.continueSeed(v.id, v.record_id).catch(() => null) : null;
+      if (state.dialog?.previewToken !== token) return;
+      const pick = anotherAi(tackleChoices(res.runners ?? []), state.dialog.ai, seed?.record ? { record: seed.record, handover: seed.handover } : v?.title ?? '');
+      state.dialog = { ...state.dialog, another: false, ...(pick ? { ai: pick } : {}) };
+    }
   } catch (err) {
     if (state.dialog?.previewToken !== token) return;
     state.dialog = { ...state.dialog, preview: { error: errorText(err) } };
@@ -995,14 +1358,24 @@ async function loadPreview() {
 
 async function submitGive(form) {
   const d = state.dialog;
+  const generation = boardGeneration, memberId = state.me?.member?.id;
+  const current = () => generation === boardGeneration && state.me?.member?.id === memberId && state.dialog?.instance === d.instance;
   const v = viewOf(d.cardId);
   const fd = new FormData(form);
   const target = fd.get('target') || state.me.member.id;
-  const repo_id = fd.get('repo_id') || null;
-  const base_ref = String(fd.get('base_ref') ?? '').trim() || null;
+  const moving = d.mode === 'redispatch' && d.handover_hold;
+  if (moving && (!sameHandover(v, d) || !v.handover_hold || v.handover_provenance !== 'checkpoint_complete')) {
+    state.dialog = { ...d, error: 'This handover changed. Reopen the card before choosing the next AI.' }; update(); return;
+  }
+  const repo_id = moving ? d.repo_id : fd.get('repo_id') || null;
+  const base_ref = moving ? d.base_ref : String(fd.get('base_ref') ?? '').trim() || null;
   const budget = Number(fd.get('budget_usd'));
+  const ai = fd.get('ai') || d.ai;
+  const uncapped = tackleChoices(d.preview?.runners).find((a) => a.id === ai)?.budget === 'none' || fd.get('budget_mode') === 'none';
   const wantPlan = fd.get('plan_approval') === 'on';
-  if (!repo_id) { state.dialog = { ...d, error: 'Pick a repo first. Claude only works inside a repo.' }; update(); return; }
+  if (!repo_id) { state.dialog = { ...d, error: 'Pick a repo first. The agent works inside that repo.' }; update(); return; }
+  if (uncapped && d.mode !== 'retry' && fd.get('confirm_uncapped') !== 'on' && !(ai !== 'codex' && d.max_turns != null)) { state.dialog = { ...d, error: 'Confirm that this run has no dollar limit, or choose a card budget.' }; update(); return; }
+  if (!uncapped && (!Number.isFinite(budget) || budget < 0.5 || budget > 1000)) { state.dialog = { ...d, error: 'Choose a card budget between $0.50 and $1,000.' }; update(); return; }
   state.dialog = { ...d, busy: true, error: null };
   update();
   try {
@@ -1012,19 +1385,25 @@ async function submitGive(form) {
     if (repo_id !== (v.repo?.id ?? null)) patch.repo_id = repo_id;
     if (base_ref !== (v.base_ref ?? null)) patch.base_ref = base_ref;
     if (labels.size !== (v.labels ?? []).length || [...labels].some((l) => !(v.labels ?? []).includes(l))) patch.labels = [...labels];
-    if (Object.keys(patch).length) applyCard(await api.patchCard(d.cardId, { version: v.version, ...patch }));
+    if (Object.keys(patch).length) {
+      const changed = await api.patchCard(d.cardId, { version: v.version, ...patch });
+      if (!current()) return;
+      applyCard(changed);
+    }
+    if (!current()) return;
     const isMe = target === state.me.member.id;
-    const action = d.mode === 'redispatch' ? 'take_over_with_claude' : 'dispatch';
-    const body = { target_member_id: isMe ? null : target };
-    if (d.mode !== 'redispatch') body.backend = 'claude_cli';
-    // Additive field (CONTRACT §9): the hub ignores it until it accepts a per-dispatch budget.
-    if (Number.isFinite(budget) && budget > 0) body.budget_usd = budget;
+    const action = d.mode === 'retry' ? 'retry' : d.mode === 'redispatch' ? 'take_over_with_claude' : 'dispatch';
+    const body = { target_member_id: isMe ? null : target, ai, budget_usd: uncapped ? null : budget,
+      ...(moving ? { expected_fence: d.expected_fence, prior_run_id: d.prior_run_id } : {}) };
     const res = await api.action(d.cardId, action, body);
+    if (!current()) return;
+    rememberTackle(memberId, { ai, budget_mode: uncapped ? 'none' : 'cap', budget_usd: Number.isFinite(budget) && budget >= 0.5 ? budget : d.budget_usd });
     applyCard(res);
     state.dialog = null;
     const name = state.members.get(target)?.name;
-    toast(isMe ? `${v.key} is queued for your Claude.` : `Asked ${name}'s Claude. ${name} confirms before it starts.`);
+    toast(isMe ? `${v.key} is queued for ${ai === 'codex' ? 'Codex' : 'Claude Code'}.` : `Asked ${name}. They confirm before work starts.`);
   } catch (err) {
+    if (!current()) return;
     state.dialog = { ...state.dialog, busy: false, error: errorText(err) };
   }
   update();
@@ -1032,7 +1411,12 @@ async function submitGive(form) {
 
 async function submitDialogForm(form, submitter) {
   const kind = form.dataset.form;
+  if(kind.startsWith('workflow-execution-'))return workflowExecutionSubmit(workflowJourney,form);
+  if (kind === 'task-packet' || kind === 'task-message') return submitCommunication(form, kind);
+  if (kind === 'workflow-publish' || kind === 'workflow-apply') return submitWorkflow(form, kind);
+  if (['new-board', 'rename-board', 'archive-board'].includes(kind)) return submitBoardDialog(form);
   if (kind === 'integ-token') return submitIntegrationToken(form);
+  if (kind === 'sentry-settings') return submitSentrySettings(form);
   if (kind === 'integ-prepare') return submitPrepare(form);
   if (kind === 'integ-start') return connectIntegration(form.dataset.provider, 'app_install', takeInput(form));
   if (kind === 'create-team') {
@@ -1053,35 +1437,38 @@ async function submitDialogForm(form, submitter) {
     if (p.error) { state.onboard = { busy: false, error: p.error, where: 'join' }; update(); return undefined; }
     return joinTeam('join', p);
   }
-  if (kind === 'label-create') {
-    const fd0 = new FormData(form);
-    const name = String(fd0.get('name') ?? '').trim();
-    if (name && await labelCall(() => api.createLabel(state.boardId, name, String(fd0.get('color') ?? 'grey')))) form.reset();
-    return undefined;
-  }
-  if (kind === 'label-rename') {
-    const to = String(new FormData(form).get('name') ?? '').trim();
-    const from = form.dataset.label;
-    if (!to || to === from) { state.dialog = { ...state.dialog, rename: null }; update(); return undefined; }
-    if (await labelCall(() => api.patchLabel(state.boardId, from, { name: to }))) toast(`Renamed ${from} to ${to} on every card.`);
-    return undefined;
-  }
   const d = state.dialog;
   const cardId = form.dataset.card;
   const fd = new FormData(form);
   const run = async (fn, doneText) => {
-    state.dialog = { ...d, busy: true, error: null };
+    const generation = boardGeneration;
+    const submitted = { ...d, busy: true, error: null };
+    state.dialog = submitted;
     update();
     try {
-      applyCard(await fn());
-      state.dialog = null;
+      const res = await fn();
+      if (generation !== boardGeneration) return;
+      applyCard(res);
+      if (state.dialog === submitted) state.dialog = null;
       if (doneText) toast(doneText);
-      if (state.detail?.cardId === cardId) refreshDetailSoon(cardId);
+      if (cardId && state.detail?.cardId === cardId) refreshDetailSoon(cardId);
     } catch (err) {
-      state.dialog = state.dialog ? { ...state.dialog, busy: false, error: errorText(err) } : null;
+      if (generation !== boardGeneration) return;
+      if (state.dialog === submitted) state.dialog = { ...submitted, busy: false, error: errorText(err) };
     }
     update();
   };
+  if (kind === 'confirm' && ['resume', 'handover_ai'].includes(form.dataset.confirm)) {
+    const resume = form.dataset.confirm === 'resume';
+    await run(async () => {
+      const stopped = await api.action(cardId, 'stop', {});
+      if (!resume) return stopped;
+      applyCard(stopped);
+      return api.action(cardId, 'retry', {});
+    }, resume ? `${keyOf(cardId)} was stopped and is queued again from its handover.` : null);
+    if (!resume && !state.dialog) openGive(cardId, 'retry');
+    return undefined;
+  }
   if (kind === 'confirm') {
     const action = form.dataset.confirm;
     const hubAction = action === 'take_over_confirm' ? 'take_over' : action;
@@ -1092,6 +1479,14 @@ async function submitDialogForm(form, submitter) {
     const k = fd.get('kind') ?? 'queue';
     const target = k === 'member' ? { kind: 'member', member_id: fd.get('member_id') } : { kind: k };
     return run(() => api.action(cardId, 'hand_over', { target }), `${keyOf(cardId)} is handing over. Claude is writing its final handover.`);
+  }
+  if (kind === 'switch-ai') {
+    return run(() => api.action(cardId, 'hand_over', { target: { kind: 'hold' },
+      expected_fence: d.expected_fence, prior_run_id: d.prior_run_id }), `${keyOf(cardId)} is preparing its handover. Choose the next AI after its runner confirms the stop.`);
+  }
+  if (kind === 'hand-to-teammate') {
+    const to = String(fd.get('member_id') ?? ''), note = String(fd.get('note') ?? '').trim();
+    return run(() => api.handoffRecord(state.me?.org?.id, d.recordId, { to_member_id: to, ...(note ? { note } : {}) }), `${keyOf(cardId)} is handed to ${state.members?.get?.(to)?.name ?? 'your teammate'}. It shows in their session brief.`);
   }
   if (kind === 'changes') {
     return run(() => api.action(cardId, 'request_changes', { comment: String(fd.get('comment') ?? '').trim() }), `Sent ${keyOf(cardId)} back to Claude with your notes.`);
@@ -1151,27 +1546,31 @@ function togglePalette() {
   if (state.auth !== 'ok' || !state.board) return;
   if (state.dialog?.kind === 'palette') { closePalette(); return; }
   if (root.querySelector('dialog[open]:not([data-dialog="drawer"])')) return;
-  state.dialog = { kind: 'palette', query: '', index: 0, scope: null };
+  state.dialog = { kind: 'palette', query: '', index: 0, scope: null, instance: {} };
   renderNow();
 }
 
 function closePalette() {
+  clearTimeout(searchTimer);
   state.dialog = null;
   renderNow();
 }
 
 function paletteNow() {
   const m = buildModel();
-  return paletteResults(state.dialog, { entries: m.entries, view: state.view, readOnly: m.readOnly, filters: state.filters });
+  return paletteResults(state.dialog, { entries: m.entries, view: state.view, readOnly: m.readOnly, filters: state.filters, showPlanner: state.showPlanner });
 }
 
 function runPalette(item, { give = false } = {}) {
   const run = give ? { type: 'give', ...item.give } : item.run;
   if (!run) return;
   if (run.type === 'scope-give') { state.dialog = { ...state.dialog, scope: 'give', query: '', index: 0 }; renderNow(); return; }
+  if (run.type === 'scope-search') { state.dialog = { ...state.dialog, scope: 'search', query: '', index: 0, instance: {}, search: null }; renderNow(); return; }
   closePalette();
   switch (run.type) {
     case 'open-card': openDetail(run.id); break;
+    case 'open-search': openSearchResult(run); break;
+    case 'workflows': openWorkflows(); break;
     case 'view': setView(run.view); break;
     case 'theme-next': setTheme(THEME_NEXT[state.theme]); break;
     case 'new-card': openNewCard(); break;
@@ -1185,9 +1584,92 @@ function runPalette(item, { give = false } = {}) {
   }
 }
 
+let searchTimer = null;
+function searchSoon() {
+  clearTimeout(searchTimer);
+  const d = state.dialog, generation = boardGeneration, memberId = state.me?.member?.id, org = currentOrg();
+  const current = () => generation === boardGeneration && state.me?.member?.id === memberId && currentOrg() === org
+    && state.dialog?.kind === 'palette' && state.dialog.scope === 'search' && state.dialog.instance === d.instance && state.dialog.query === d.query;
+  state.dialog = { ...d, search: null, searchError: null, searchLoading: d.query.trim().length >= 2 };
+  if (!state.dialog.searchLoading) return;
+  searchTimer = setTimeout(async () => {
+    if (!current()) return;
+    try {
+      const result = await api.search(d.query);
+      if (current()) { state.dialog = { ...state.dialog, search: result, searchLoading: false, index: 0 }; update(); }
+    } catch (error) {
+      if (current()) { state.dialog = { ...state.dialog, searchError: errorText(error), searchLoading: false }; update(); }
+    }
+  }, 150);
+}
+
+async function openSearchResult(run) {
+  const generation = boardGeneration, memberId = state.me?.member?.id, org = currentOrg();
+  const current = () => generation === boardGeneration && state.me?.member?.id === memberId && currentOrg() === org;
+  try {
+    // Search is a snapshot; opening still checks the current resource access.
+    const data = await api.card(run.id);
+    if (!current()) return;
+    if (data.card.archived || data.card.board_id !== run.boardId) { toast('This work has changed. Search again.'); return; }
+    if (run.boardId === state.boardId) { openDetail(run.id, run.section); return; }
+    const result = await api.boards();
+    if (!current()) return;
+    if (!result.boards.some((board) => board.id === run.boardId && !board.archived_at)) { toast('This board is no longer available.'); return; }
+    state.boards = result.boards;
+    await switchBoard(run.boardId, { openCard: run.id, section: run.section });
+  } catch (error) { if (current()) toast(errorText(error)); }
+}
+
+function workflowIntent(mode, extra = {}) { return { kind: 'workflows', mode, instance: {}, request_id: crypto.randomUUID(), ...extra }; }
+function workflowGuard(d) {
+  const generation = boardGeneration, memberId = state.me?.member?.id, user=state.me?.user?.id,role=state.me?.member?.role,org = currentOrg();
+  return () => generation === boardGeneration && state.auth==='ok'&&memberId === state.me?.member?.id&&user===state.me?.user?.id&&role===state.me?.member?.role&&org === currentOrg() && state.dialog?.kind === 'workflows' && state.dialog.instance === d.instance;
+}
+async function openWorkflows(id = null, { includeArchived = false } = {}) {
+  const d = workflowIntent(id ? 'detail' : 'library', { loading: true, includeArchived }); state.dialog = d; update();
+  const current = workflowGuard(d);
+  try {
+    const result = await (id ? api.workflow(id) : api.workflows(includeArchived));
+    if (current()) { state.dialog = { ...state.dialog, loading: false, ...(id ? { selected: result } : result) }; update(); }
+  } catch (error) { if (current()) { state.dialog = { ...d, loading: false, error: errorText(error) }; update(); } }
+}
+function workflowDraft(form) {
+  const fd = new FormData(form);
+  return { name: String(fd.get('name') ?? ''), description: String(fd.get('description') ?? ''), steps: state.dialog.draft.steps.map((s, i) => ({ title: String(fd.get(`title-${i}`) ?? ''), body: String(fd.get(`body-${i}`) ?? ''), acceptance: String(fd.get(`acceptance-${i}`) ?? ''), plan_approval: fd.get(`plan-${i}`) === 'on' })) };
+}
+async function submitWorkflow(form, kind) {
+  const d = state.dialog;
+  if (d?.kind !== 'workflows' || d.busy || boardReadOnly()) return;
+  const current = workflowGuard(d), fd = new FormData(form), selected = d.selected?.workflow;
+  const draft = kind === 'workflow-publish' ? workflowDraft(form) : null;
+  const version = kind === 'workflow-apply' ? d.selected.versions.find((v) => v.version === d.previewVersion) ?? selected : null;
+  state.dialog = { ...d, busy: true, error: null, ...(draft ? { draft } : {}), context: String(fd.get('context') ?? ''), title_prefix: String(fd.get('title_prefix') ?? '') }; update();
+  try {
+    const result = kind === 'workflow-publish'
+      ? await api.publishWorkflow(selected?.id ?? null, { request_id: d.request_id, ...(selected ? { expected_version: selected.version } : {}), definition: draft })
+      : await api.applyWorkflow(state.boardId, selected.id, { request_id: d.request_id, version: version.version, content_hash: version.content_hash, context: String(fd.get('context') ?? ''), title_prefix: String(fd.get('title_prefix') ?? '') });
+    if (!current()) return;
+    if (kind === 'workflow-publish') { toast(`Published workflow version ${result.workflow.version}.`); await openWorkflows(result.workflow.id); }
+    else {
+      toast(`Created ${result.instance.steps.length} workflow tasks.`);
+      if(state.authMode==='accounts'){
+        const scope=workflowScope();await openWorkflows(selected.id);
+        if(Object.keys(scope).every(key=>scope[key]===workflowScope()[key])&&state.dialog?.mode==='detail'&&state.dialog.selected?.workflow.id===selected.id)await workflowJourney.open(result.instance.id,state.dialog.selected);
+      }else{state.dialog=null;update();}
+    }
+  } catch (error) { if (current()) { state.dialog = { ...state.dialog, busy: false, error: errorText(error) }; update(); } }
+}
+async function archiveWorkflow() {
+  const d = state.dialog, w = d?.selected?.workflow;
+  if (!w || d.busy || boardReadOnly()) return;
+  const current = workflowGuard(d); state.dialog = { ...d, busy: true }; update();
+  try { const result = await api.archiveWorkflow(w.id, !w.archived_at); if (current()) { state.dialog = { ...state.dialog, busy: false, selected: result }; update(); } }
+  catch (error) { if (current()) { state.dialog = { ...state.dialog, busy: false, error: errorText(error) }; update(); } }
+}
+
 function paletteKeydown(e) {
   const d = state.dialog;
-  const n = paletteResults(d, { entries: buildModel().entries, view: state.view, readOnly: state.me?.member?.role === 'viewer', filters: state.filters }).length;
+  const n = paletteResults(d, { entries: buildModel().entries, view: state.view, readOnly: boardReadOnly(), filters: state.filters }).length;
   if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
     e.preventDefault();
     if (!n) return;
@@ -1208,7 +1690,7 @@ function paletteKeydown(e) {
 let pendingSeq = 0;
 
 function openQuickAdd() {
-  if (state.me?.member?.role === 'viewer' || state.view !== 'board') return false;
+  if (boardReadOnly() || state.view !== 'board') return false;
   state.quickAdd = { open: true, seed: '', confirm: null, keep: false };
   renderNow();
   const ta = root.querySelector('.quickadd-input');
@@ -1226,6 +1708,8 @@ function closeQuickAdd() {
 // card then replaces each placeholder. A failure removes it and hands the text
 // back in the field.
 async function createQuick(titles, keep) {
+  if (boardReadOnly()) return;
+  const generation = boardGeneration, boardId = state.boardId;
   const prefix = state.board?.key_prefix ?? null;
   const memberId = state.me?.member?.id ?? null;
   const temps = titles.map((t) => pendingCard(t, ++pendingSeq, { prefix, memberId }));
@@ -1235,11 +1719,14 @@ async function createQuick(titles, keep) {
   update();
   const failed = [];
   for (const v of temps) {
+    if (generation !== boardGeneration) return;
     try {
-      const res = await api.createCard(state.boardId, { title: v.title });
+      const res = await api.createCard(boardId, { title: v.title });
+      if (generation !== boardGeneration) return;
       state.cards.delete(v.id);
       applyCard(res);
     } catch (err) {
+      if (generation !== boardGeneration) return;
       state.cards.delete(v.id);
       failed.push(v.title);
       toast(`Couldn't add “${v.title}”: ${errorText(err)}`, 'error');
@@ -1276,6 +1763,7 @@ function onPaste(e) {
 }
 
 async function openNewCard() {
+  if (boardReadOnly()) return;
   state.dialog = { kind: 'new', repos: state.repos };
   update();
   const repos = await loadRepos();
@@ -1293,6 +1781,7 @@ function say(text) {
 }
 
 function moveCards(ids, column, { flipFrom = null } = {}) {
+  if (boardReadOnly()) return { moves: [], skipped: [] };
   const plan = planMoves(ids, viewOf, column);
   const summary = moveSummary(plan, column);
   say(summary);
@@ -1356,26 +1845,50 @@ function onClick(e) {
     if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) dlg.close();
     return;
   }
-  const picked = (e.shiftKey || e.metaKey || e.ctrlKey) && !e.target.closest?.('a, .card-actions') ? e.target.closest?.('.card[data-card-id]') : null;
-  if (picked) {
-    e.preventDefault();
-    setSelection(toggleSelection(state.selection, picked.dataset.cardId));
-    return;
-  }
   const el = e.target.closest?.('[data-action]');
   if (!el || el.disabled) return;
   const action = el.dataset.action;
   const cardId = el.dataset.card;
+  if(action.startsWith('workflow-execution-')){workflowExecutionAction(workflowJourney,action,el,state.dialog?.selected);return;}
   switch (action) {
+    case 'planning-edit': editPlan(cardId); return;
+    case 'planning-close': plannerState(); planner.edit = null; planner.draft = null; update(); return;
+    case 'planning-clear': void savePlan(cardId, { start_date: null, due_date: null }); return;
+    case 'planning-move': movePlan(cardId, Number(el.dataset.direction)); return;
+    case 'planning-nav': {
+      const p = plannerState(); p.anchor = nextAnchor(p.anchor, Number(el.dataset.direction), state.view === 'timeline' ? 'timeline' : p.period) ?? p.anchor; savePlanner(); return;
+    }
+    case 'planning-today': plannerState(); planner.anchor = todayIn(planner.zone); savePlanner(); return;
+    case 'manage-boards': manageBoards(); return;
+    case 'new-board': state.dialog = { kind: 'new-board' }; update(); return;
+    case 'rename-board': case 'archive-board': {
+      const b = state.boards.find((b) => b.id === el.dataset.board);
+      if (b) { state.dialog = { kind: action, id: b.id, name: b.name }; update(); }
+      return;
+    }
+    case 'restore-board': restoreBoard(el.dataset.board); return;
+    case 'switch-board': switchBoard(el.dataset.board); return;
     case 'open': e.preventDefault(); openDetail(cardId, el.dataset.section ?? null); return;
+    case 'team-overview-refresh': loadTeamOverview(); return;
+    case 'team-open-card': openSearchResult({ id: cardId, boardId: el.dataset.board }); return;
     case 'watch': openDetail(cardId, 'activity'); return;
     case 'allow': case 'deny': case 'answer': case 'approve_plan': case 'resolve_conflict': case 'continue':
       openDetail(cardId, 'asks'); return;
+    case 'budget-continue': continueAfterBudget(cardId, root.querySelector('#budget-preset')?.value); return;
+    case 'budget-stop': state.budgetStopped.add(cardId); update(); toast(`${keyOf(cardId)} stays stopped.`); return;
     case 'give_to_claude': openGive(cardId, 'dispatch'); return;
     case 'take_over_with_claude': openGive(cardId, 'redispatch'); return;
-    case 'stop': case 'cancel': case 'take_over_confirm':
+    case 'continue_with_another_ai': openGive(cardId, 'retry', { another: true }); return;
+    case 'hand_to_teammate': { const v = viewOf(cardId); if (v?.record_id) { state.dialog = { kind: 'hand-to-teammate', cardId, recordId: v.record_id }; update(); } return; }
+    case 'switch_ai': state.dialog = { kind: 'switch-ai', cardId, ...handoverPin(viewOf(cardId)) }; update(); return;
+    case 'view_handover': openDetail(cardId, 'handover'); return;
+    case 'stop': case 'cancel': case 'take_over_confirm': case 'resume': case 'handover_ai':
       state.dialog = { kind: 'confirm', action, cardId }; update(); return;
-    case 'take_over': case 'take_over_myself': case 'retry': case 'approve_done':
+    case 'retry':
+      if (viewOf(cardId)?.fail_kind === 'budget') openGive(cardId, 'retry');
+      else doAction(cardId, action, {}, DONE_COPY[action]?.(keyOf(cardId)));
+      return;
+    case 'take_over': case 'take_over_myself': case 'approve_done':
       doAction(cardId, action, {}, DONE_COPY[action]?.(keyOf(cardId))); return;
     case 'request_changes': state.dialog = { kind: 'changes', cardId }; update(); return;
     case 'hand_over': state.dialog = { kind: 'handover', cardId, kind_: 'queue' }; update(); return;
@@ -1384,18 +1897,36 @@ function onClick(e) {
       withBusy(`pr:${prId}`, () => api.answerPermission(prId, el.dataset.decision, el.dataset.scope)).then((res) => {
         if (!res) return;
         applyCard(res);
-        toast(el.dataset.decision === 'deny' ? 'Denied. Claude is told why it can’t run that.' : 'Allowed. Claude continues.');
+        toast(el.dataset.decision === 'deny' ? 'Denied. The agent is told why it can’t run that.' : 'Allowed. The agent can continue.');
         if (state.detail) refreshDetail(state.detail.cardId);
       });
       return;
     }
-    case 'tab': if (state.detail) { state.detail = { ...state.detail, tab: el.dataset.tab }; update(); } return;
+    case 'tab': if (state.detail) { state.detail = { ...state.detail, tab: el.dataset.tab }; update(); if (['packet', 'messages', 'ownership'].includes(el.dataset.tab)) refreshDetail(state.detail.cardId); } return;
+    case 'ownership-reload': if (state.detail) refreshDetail(state.detail.cardId, { ownership: true }); return;
+    case 'packet-reload': if (state.detail) state.detail = { ...state.detail, packetDraft: null, packetSaveError: null }; // explicit discard
+    case 'communication-reload': if (state.detail) refreshDetail(state.detail.cardId, { communication: true }); return;
     case 'close-drawer': root.querySelector('dialog[data-dialog="drawer"]')?.close(); return;
     case 'close-dialog': el.closest('dialog')?.close(); return;
     case 'new-card': openNewCard(); return;
     case 'feedback-send': submitFeedback(); return;
     case 'palette': togglePalette(); return;
     case 'palette-run': { const hit = paletteNow()[Number(el.dataset.index)]; if (hit) runPalette(hit.item); return; }
+    case 'workflow-library': openWorkflows(); return;
+    case 'workflow-show-archived': openWorkflows(null, { includeArchived: !state.dialog.includeArchived }); return;
+    case 'workflow-select': openWorkflows(el.dataset.workflow); return;
+    case 'workflow-new': state.dialog = workflowIntent('edit', { draft: starterWorkflow() }); update(); return;
+    case 'workflow-edit': state.dialog = workflowIntent('edit', { selected: state.dialog.selected, draft: structuredClone(state.dialog.selected.workflow.definition) }); update(); return;
+    case 'workflow-preview': state.dialog = workflowIntent('preview', { selected: state.dialog.selected, previewVersion: state.dialog.selected.workflow.version }); update(); return;
+    case 'workflow-archive': archiveWorkflow(); return;
+    case 'workflow-add-step': case 'workflow-remove-step': {
+      const form = root.querySelector('[data-form="workflow-publish"]'); if (!form || state.dialog.busy) return;
+      const draft = workflowDraft(form);
+      if (action === 'workflow-add-step' && draft.steps.length < 8) draft.steps.push({ title: '', body: '', acceptance: '', plan_approval: true });
+      if (action === 'workflow-remove-step' && draft.steps.length > 1) draft.steps.splice(Number(el.dataset.position), 1);
+      state.dialog = { ...state.dialog, draft }; update(); return;
+    }
+    case 'workflow-open-card': closePalette(); openSearchResult({ id: el.dataset.card, boardId: el.dataset.board??state.boardId }); return;
     case 'quick-add': openQuickAdd(); return;
     case 'quick-add-submit': commitTitles(parseTitles(root.querySelector('.quickadd-input')?.value), false); return;
     case 'quick-add-cancel': closeQuickAdd(); return;
@@ -1415,7 +1946,6 @@ function onClick(e) {
       if (state.themeMenu) root.querySelector('.theme-menu [aria-checked="true"]')?.focus();
       return;
     case 'reconnect': socket?.reconnectNow(); return;
-    case 'clear-selection': setSelection(new Set()); return;
     case 'filter-chip': setFilters({ ...state.filters, chips: toggleIn(state.filters.chips, el.dataset.chip) }); return;
     case 'filter-label-off': setFilters({ ...state.filters, labels: state.filters.labels.filter((l) => l !== el.dataset.label) }); return;
     case 'filter-clear': setFilters(emptyFilters()); return;
@@ -1423,20 +1953,10 @@ function onClick(e) {
     case 'toggle-archived': setShowArchived(!state.showArchived); return;
     case 'archive': archiveCards([cardId]); return;
     case 'restore': restoreCards([cardId]); return;
-    case 'bulk-archive': archiveCards([...state.selection].filter((id) => state.cards.has(id))); return;
-    case 'bulk-restore': restoreCards([...state.selection].filter((id) => state.archived?.has(id))); return;
-    case 'set-cover': setCover(cardId, el.dataset.cover); return;
-    case 'labels-open': state.dialog = { kind: 'labels', busy: false, error: null }; update(); return;
-    case 'label-rename-ask': state.dialog = { ...state.dialog, rename: el.dataset.label, confirmDelete: null }; update(); return;
-    case 'label-delete-ask': state.dialog = { ...state.dialog, confirmDelete: el.dataset.label, rename: null }; update(); return;
-    case 'label-cancel': state.dialog = { ...state.dialog, confirmDelete: null, rename: null }; update(); return;
-    case 'label-delete': {
-      const name = el.dataset.label;
-      const strip = el.dataset.strip === '1';
-      labelCall(() => api.deleteLabel(state.boardId, name, strip)).then((ok) => { if (ok) toast(strip ? `Removed ${name} from every card.` : `${name} has no colour now.`); });
-      return;
-    }
     case 'view': setView(el.dataset.view); return;
+    case 'history-range': if (el.dataset.range !== state.history.range) { state.history.selected = null; loadHistory(el.dataset.range); } return;
+    case 'history-refresh': if (state.history.status !== 'loading') loadHistory(); return;
+    case 'history-open': state.history.selected = el.dataset.run; update(); openDetail(cardId); return;
     case 'local-card-dismiss':
       state.localCardDismissed = true;
       try { localStorage.setItem('board-local-card', 'dismissed'); } catch { /* private mode */ }
@@ -1444,6 +1964,7 @@ function onClick(e) {
       return;
     case 'integ-reload': loadIntegrations(); return;
     case 'integ-connect': connectIntegration(el.dataset.provider, el.dataset.kind); return;
+    case 'integ-copy-url': copyText(el.dataset.url); return;
     case 'integ-token-cancel': state.integ = { ...state.integ, tokenFor: null }; update(); return;
     case 'integ-activity': toggleActivity(el.dataset.conn); return;
     case 'integ-disconnect-ask': state.integ = { ...state.integ, confirmDisconnect: el.dataset.conn }; update(); return;
@@ -1473,36 +1994,62 @@ function onSubmit(e) {
   const form = e.target.closest('form[data-form]');
   if (!form) return;
   e.preventDefault();
+  if (form.dataset.form === 'planning-zone') {
+    const zone = String(new FormData(form).get('zone') ?? '').trim();
+    if (!validZone(zone)) { toast('Use an IANA timezone such as Europe/London or Africa/Johannesburg.', 'error'); return; }
+    plannerState(); planner.zone = zone; savePlanner(); return;
+  }
+  if (form.dataset.form === 'planning-card') {
+    const fd = new FormData(form), fields = { start_date: String(fd.get('start') ?? '') || null, due_date: String(fd.get('due') ?? '') || null, depends_on: fd.getAll('dependencies').map(String) };
+    plannerState(); planner.draft = { start: fields.start_date ?? '', due: fields.due_date ?? '', dependencies: fields.depends_on };
+    void savePlan(form.dataset.card, fields); return;
+  }
   submitDialogForm(form, e.submitter);
 }
 
 function onInput(e) {
+  const form = e.target.closest?.('[data-form="task-packet"], [data-form="task-message"]');
+  if (form && state.detail?.cardId === form.dataset.card) {
+    const packet = form.dataset.form === 'task-packet';
+    state.detail = { ...state.detail, [packet ? 'packetDraft' : 'messageDraft']: communicationDraft(form, form.dataset.form),
+      [packet ? 'packetSaveError' : 'messageSaveError']: null };
+  }
   const el = e.target.closest?.('[data-input]');
   if (el?.dataset.input === 'filter-q') setFilters({ ...state.filters, q: el.value });
-  if (el?.dataset.input === 'palette-q' && state.dialog?.kind === 'palette') { state.dialog = { ...state.dialog, query: el.value, index: 0 }; update(); }
+  if (el?.dataset.input === 'palette-q' && state.dialog?.kind === 'palette') {
+    state.dialog = { ...state.dialog, query: el.value, index: 0 };
+    if (state.dialog.scope === 'search') searchSoon();
+    update();
+  }
 }
 
 function onChange(e) {
   const el = e.target.closest('[data-change]');
   if (!el) return;
   const what = el.dataset.change;
+  if(['workflow-execution-confirm','workflow-choice'].includes(what)){workflowExecutionChange(workflowJourney,el);return;}
+  if (what === 'planning-period' && ['month', 'week'].includes(el.value)) { plannerState(); planner.period = el.value; savePlanner(); return; }
+  if (what === 'workflow-version' && state.dialog?.kind === 'workflows') {
+    const fd = new FormData(root.querySelector('[data-form="workflow-apply"]'));
+    state.dialog = { ...state.dialog, previewVersion: Number(el.value), request_id: crypto.randomUUID(), context: String(fd.get('context') ?? ''), title_prefix: String(fd.get('title_prefix') ?? '') }; update(); return;
+  }
+  if (what === 'board') { switchBoard(el.value); return; }
+  if (what === 'integ-board') { setIntegrationBoard(el.dataset.conn, el.value); return; }
   if (what === 'give-target' && state.dialog?.kind === 'give') { state.dialog = { ...state.dialog, target: el.value }; loadPreview(); }
+  if (what === 'give-ai' && state.dialog?.kind === 'give') { state.dialog = { ...state.dialog, ai: el.value }; update(); }
+  if (what === 'give-budget-mode' && state.dialog?.kind === 'give') { state.dialog = { ...state.dialog, budget_mode: el.value }; update(); }
+  if (what === 'give-budget' && state.dialog?.kind === 'give') state.dialog = { ...state.dialog, budget_usd: el.value };
   if (what === 'give-repo' && state.dialog?.kind === 'give') {
     const repo = state.repos?.find((r) => r.id === el.value);
     const form = el.form;
     state.dialog = { ...state.dialog, repo_id: el.value, base_ref: form?.base_ref?.value || repo?.default_branch || '' };
-    update();
+    loadPreview();
   }
   if (what === 'handover-kind' && state.dialog?.kind === 'handover') { state.dialog = { ...state.dialog, kind_: el.value }; update(); }
   if (what === 'move') moveCards([el.dataset.card], el.value);
   if (what === 'filter-label' && el.value) { setFilters({ ...state.filters, labels: [...state.filters.labels, el.value] }); el.value = ''; }
   if (what === 'filter-assignee') setFilters({ ...state.filters, assignee: el.value || null });
-  if (what === 'bulk-move' && el.value) { moveCards([...state.selection], el.value); el.value = ''; }
   if (what === 'integ-autonomy') setAutonomy(el.dataset.conn, el.dataset.actionId, el.value);
-  if (what === 'label-color' && el.value) {
-    const name = el.dataset.label;
-    labelCall(() => (el.dataset.registered ? api.patchLabel(state.boardId, name, { color: el.value }) : api.createLabel(state.boardId, name, el.value)));
-  }
 }
 
 // Dialog close (Escape, backdrop, close buttons) is the one path back to state.
@@ -1574,6 +2121,17 @@ function themeMenuKey(e) {
 }
 
 function onKeydown(e) {
+  const hbar = e.target.closest?.('[data-history-bar]');
+  if (hbar && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key) && !e.altKey && !e.ctrlKey && !e.metaKey) {
+    const next = neighborBar(historyBars(), hbar.dataset.run, e.key);
+    e.preventDefault();
+    if (next) root.querySelector(`[data-history-bar][data-run="${CSS.escape(next)}"]`)?.focus();
+    return;
+  }
+  const planned = e.target.closest?.('[data-planning-card]');
+  if (planned && e.altKey && !e.ctrlKey && !e.metaKey && ['ArrowLeft', 'ArrowRight'].includes(e.key)) {
+    e.preventDefault(); movePlan(planned.dataset.planningCard, e.key === 'ArrowLeft' ? -1 : 1); return;
+  }
   if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k') { e.preventDefault(); togglePalette(); return; }
   if (e.target.dataset?.input === 'palette-q') { paletteKeydown(e); return; }
   if (kbdKeydown(e)) return;
@@ -1586,7 +2144,7 @@ function onKeydown(e) {
   const typing = e.target.closest?.('input, textarea, select, [contenteditable]');
   if (!typing && !e.metaKey && !e.ctrlKey && !e.altKey && e.key === 'n' && state.auth === 'ok' && state.board && !root.querySelector('dialog[open]')) {
     e.preventDefault();
-    if (state.me?.member?.role !== 'viewer' && !openQuickAdd()) openNewCard();
+    if (!boardReadOnly() && !openQuickAdd()) openNewCard();
     return;
   }
   if (!typing && e.key === '/' && !e.metaKey && !e.ctrlKey && !e.altKey && state.view !== 'dashboard' && !root.querySelector('dialog[open]')) {
@@ -1600,8 +2158,6 @@ function onKeydown(e) {
     return;
   }
   if (!typing && !e.metaKey && !e.ctrlKey && !e.altKey && !root.querySelector('dialog[open]')) {
-    const cardEl = e.key === 'x' ? e.target.closest?.('.card-open')?.closest('.card[data-card-id]') : null;
-    if (cardEl) { e.preventDefault(); setSelection(toggleSelection(state.selection, cardEl.dataset.cardId)); return; }
     if (e.key === 'Escape' && state.selection.size) { setSelection(new Set()); return; }
     if (e.key === 'Escape' && state.view !== 'dashboard' && isFiltering(state.filters)) { setFilters(emptyFilters()); return; }
   }
@@ -1613,6 +2169,7 @@ function onKeydown(e) {
     e.preventDefault();
     state.detail = { ...state.detail, tab: tabs[i].dataset.tab };
     update();
+    if (['packet', 'messages', 'ownership'].includes(tabs[i].dataset.tab)) refreshDetail(state.detail.cardId);
     queueMicrotask(() => root.querySelector(`#tab-${tabs[i].dataset.tab}`)?.focus());
   }
 }
@@ -1641,11 +2198,39 @@ document.addEventListener('keyup', onKeyup);
 document.addEventListener('paste', onPaste);
 document.addEventListener('focusout', onFocusout);
 document.addEventListener('error', onImgError, true);
+let planningDrag = null;
+root.addEventListener('dragstart', e => {
+  const card = e.target.closest?.('[data-planning-card]');
+  if (!card || boardReadOnly()) return;
+  planningDrag = card.dataset.planningCard; e.dataTransfer?.setData('text/plain', 'planning-card');
+});
+root.addEventListener('dragover', e => { if (planningDrag && e.target.closest?.('[data-planning-day]') && !boardReadOnly()) e.preventDefault(); });
+root.addEventListener('drop', e => {
+  const target = e.target.closest?.('[data-planning-day]');
+  if (!planningDrag || !target) return;
+  e.preventDefault(); const id = planningDrag; planningDrag = null;
+  movePlan(id, 0, target.dataset.planningDay);
+});
+root.addEventListener('dragend', () => { planningDrag = null; });
 matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => update());
 
 // Ages advance between pushes (§5.1): re-derive every face once a second.
 setInterval(() => { if (state.auth === 'ok' && state.board) update(); }, 1000);
+setInterval(() => { if (state.view === 'history' && state.board && document.visibilityState === 'visible' && state.history.status === 'ok') loadHistory(); }, 30_000);
 setInterval(() => { if (state.view === 'dashboard' && state.board && document.visibilityState === 'visible') loadJournal(); }, DASH_REFRESH_MS);
+setInterval(() => { if (state.view === 'team' && document.visibilityState === 'visible') loadTeamOverview(); }, 15_000);
+setInterval(()=>{
+  const d=state.dialog;
+  if(d?.journey&&d.mode==='execution-status'&&!d.busy&&workflowJourney.current(d)&&document.visibilityState==='visible')void workflowJourney.status(d.execution.id);
+},5000);
+let ownershipPollBusy = false;
+setInterval(async () => {
+  if (ownershipPollBusy || state.auth !== 'ok' || state.conn.status !== 'open' || document.visibilityState !== 'visible'
+    || state.detail?.tab !== 'ownership' || !state.detail.data || state.detail.data.card.archived) return;
+  ownershipPollBusy = true;
+  try { await refreshDetail(state.detail.cardId, { ownership: true }); }
+  finally { ownershipPollBusy = false; }
+}, 5000);
 
 loadTheme();
 loadLocalCard();

@@ -61,7 +61,7 @@ async function mark(page, name) {
   rects[name] = await page.evaluate(() => {
     const box = (el) => { if (!el) return null; const r = el.getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }; };
     const card = document.querySelector('[data-card-id="c-152"]');
-    const give = [...document.querySelectorAll('button')].find((b) => /^Give to Claude$/.test(b.textContent.trim()));
+    const give = [...document.querySelectorAll('button')].find((b) => /^Tackle with AI$/.test(b.textContent.trim()));
     const btn = card ? (card.querySelector('button.primary, .btn-primary, button.btn') || card.querySelector('button')) : give;
     const inView = (r) => r && r.y >= 0 && r.y + r.h <= 900;
     const pick = (el) => { const r = el && box(el); return inView(r) ? r : null; };

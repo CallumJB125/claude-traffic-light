@@ -7,6 +7,13 @@ const str = (v) => String(v ?? '');
 
 contextBridge.exposeInMainWorld('buddyAccount', {
   state: () => call('state'),
+  burstStatus: () => ipcRenderer.invoke('burst:status'),
+  burstAction: (kind, mode) => ipcRenderer.invoke('burst:action', { kind: str(kind), mode: str(mode) }),
+  burstSetCompaction: (req) => ipcRenderer.invoke('burst:set-compaction', { enabled: !!(req && req.enabled), confirmed: !!(req && req.confirmed), ...(req && req.mode ? { mode: str(req.mode) } : {}) }),
+  keepAwakeGet: () => ipcRenderer.invoke('keepawake:get'),
+  macView: () => ipcRenderer.invoke('keepawake:mac'),
+  keepAwakeSet: (enabled, mode) => ipcRenderer.invoke('keepawake:set', { enabled: !!enabled, ...(mode ? { mode: str(mode) } : {}) }),
+  openClients: () => call('openClients'),
   go: (screen) => call('go', str(screen)),
   hub: (address) => call('hub', str(address)),
   confirm: (yes) => call('confirm', !!yes),
@@ -49,5 +56,7 @@ contextBridge.exposeInMainWorld('buddyAccount', {
   revokeRunner: (team, id) => call('revokeRunner', str(team), str(id)),
   presence: (host, on) => call('presence', str(host), !!on),
   summaries: (host, on) => call('summaries', str(host), !!on),
+  captureEnabled: (on) => call('captureEnabled', !!on),
+  captureDefault: (repo, key) => call('captureDefault', str(repo), str(key)),
   onChanged: (fn) => ipcRenderer.on('buddy:acct:changed', () => fn()),
 });

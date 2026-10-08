@@ -20,12 +20,12 @@ test('normalize: defaults, clamps and a bad mode', () => {
   const n = S.normalize({ mode: 'free', dailyBudget: -5, warnAt: 7, runawayMinutes: 0, runawayDollars: 'x', notifyBudget: false });
   assert.equal(n.notifyBudgetWarning, false);
   assert.equal(n.notifyBudgetExceeded, false);
-  assert.equal(n.mode, 'api');
+  assert.equal(n.mode, 'subscription');
   assert.equal(n.dailyBudget, 0);
   assert.equal(n.warnAt, 1);
   assert.equal(n.runawayMinutes, 1);
   assert.equal(n.runawayDollars, 40);
-  assert.equal(S.normalize({ mode: 'subscription' }).mode, 'subscription');
+  assert.equal(S.normalize({ mode: 'api' }).mode, 'api');
 });
 
 test('the runaway default sits above the measured p99 of 20-minute session spend ($35.24)', () => {
@@ -137,7 +137,7 @@ test('runaways: a token-rate threshold fires on its own and says tokens', () => 
 
 test('snapshot: labels a subscription as an API-price equivalent', () => {
   const turns = [turn(NOW - 5 * MIN, 12)];
-  const api = S.snapshot(turns, { dailyBudget: 10 }, NOW);
+  const api = S.snapshot(turns, { mode: 'api', dailyBudget: 10 }, NOW);
   assert.match(api.unit, /USD/);
   assert.equal(api.budgetText, '$12.00 of $10.00 today');
   const sub = S.snapshot(turns, { mode: 'subscription', dailyBudget: 10 }, NOW);
@@ -253,7 +253,7 @@ test('rules v8: spend rules are slotted in once; deleting them sticks', () => {
     assert.deepEqual(m.map((r) => r.id), R.defaultRules().map((r) => r.id), `from v${from}`);
     assert.deepEqual(R.migrateRules(m, from), m, 'never duplicated');
   }
-  assert.equal(R.RULES_VERSION, 9);
+  assert.equal(R.RULES_VERSION, 11);
 });
 
 test('rules v8: spend rules deleted on v8 stay deleted, one or all', () => {

@@ -7,7 +7,7 @@
 //
 // Browser-safe, dependency-free.
 
-import { isGreen, advanceView, toolBound, formatAge, TTL_MS, ORPHAN_NOTIFY_MS } from './liveness.js';
+import { isGreen, advanceView, toolBound, formatAge, deriveStalled, TTL_MS, ORPHAN_NOTIFY_MS } from './liveness.js';
 import { ACTIVE, columnOf } from './states.js';
 
 export const PILLS = Object.freeze({
@@ -21,17 +21,18 @@ export const PILLS = Object.freeze({
   reconnecting: { icon: '↻', label: 'Reconnecting', tone: 'grey' },
   unresponsive: { icon: '◌', label: 'No signal', tone: 'grey' },
   orphaned: { icon: '✖', label: 'Orphaned', tone: 'red' },
-  handing_over: { icon: '⇄', label: 'Handing over', tone: 'violet' },
-  handed_over: { icon: '⇄', label: 'Handed over', tone: 'violet' },
+  handing_over: { icon: '⇄', label: 'Moving to another AI', tone: 'violet' },
+  handed_over: { icon: '⇄', label: 'Moved to another AI', tone: 'violet' },
   failed: { icon: '✖', label: 'Failed', tone: 'red' },
-  failed_limit: { icon: '✖', label: 'Stopped', tone: 'red' },
+  failed_limit: { icon: '⏸', label: 'Plan limit reached', tone: 'amber' },
+  stalled: { icon: '⚠', label: 'Stalled', tone: 'red' },
   in_review: { icon: '◆', label: 'In review', tone: 'purple' },
   done: { icon: '✓', label: 'Done', tone: 'done' },
   todo: { icon: '', label: '', tone: 'none' },
 });
 
-const BACKEND_LABEL = { claude_cli: 'Claude', codex_cli: 'Codex', interactive: 'Claude', cloud_ma: 'Claude', cloud_gha: 'Claude' };
-const BACKEND_CLI = { claude_cli: 'claude', codex_cli: 'codex', interactive: 'claude', cloud_ma: 'claude', cloud_gha: 'claude' };
+const BACKEND_LABEL = { claude_cli: 'Claude', codex_cli: 'Codex', hermes_cli: 'Hermes', gemini_cli: 'Gemini', interactive: 'Claude', cloud_ma: 'Claude', cloud_gha: 'Claude' };
+const BACKEND_CLI = { claude_cli: 'claude', codex_cli: 'codex', hermes_cli: 'hermes', gemini_cli: 'gemini', interactive: 'claude', cloud_ma: 'claude', cloud_gha: 'claude' };
 
 export const possessive = (name) => `${name}'s`;
 const basename = (p) => String(p).split('/').pop();
@@ -85,6 +86,26 @@ const BLOCKED_ACTIONS = {
   plan: ['approve_plan'], conflict: ['resolve_conflict'], loop: ['continue', 'stop'],
 };
 
+function stalledReason(s, detail) {
+  const age = formatAge(s.since_ms);
+  switch (s.reason) {
+    case 'runner_offline': return detail ?? `runner offline · last seen ${age} ago`;
+    case 'process_gone': return `AI process exited · no activity ${age}`;
+    case 'claim_not_started': return `never started · claimed ${age} ago`;
+    case 'stop_unconfirmed': return 'stop not confirmed · the AI process is still running';
+    default: return detail ?? `no activity ${age}`;
+  }
+}
+
+// Resume stops the stalled run, then retries it. A run whose runner still
+// answers can be moved through the strict hold handover; otherwise the hub
+// stops it first and the next AI is chosen from the saved handover.
+function stalledActions(state, s) {
+  if (s.reason === 'stop_unconfirmed') return ['view_handover'];
+  const reachable = (state === 'running' || state === 'quiet') && (s.reason === 'no_activity' || s.reason === 'process_gone');
+  return ['resume', reachable ? 'switch_ai' : 'handover_ai', 'stop'];
+}
+
 function reasonFor(view, state, live) {
   const who = agentName(view);
   const ask = view.ask ?? {};
@@ -93,9 +114,9 @@ function reasonFor(view, state, live) {
       if (view.queue && view.queue.runner_online === false && view.queue.offline_age_ms != null) {
         return `no runner online for ${view.repo?.short_name ?? 'this repo'} · ${formatAge(view.queue.offline_age_ms)}`;
       }
-      if (view.target?.is_viewer) return 'for your Claude';
+      if (view.target?.is_viewer) return `for your ${view.target.ai_label ?? 'Claude'}`;
       const name = view.target?.name ?? 'your';
-      return `for ${possessive(name)} Claude${view.target?.awaiting_confirm ? ` · awaiting ${name}` : ''}`;
+      return `for ${possessive(name)} ${view.target?.ai_label ?? 'Claude'}${view.target?.awaiting_confirm ? ` · awaiting ${name}` : ''}`;
     }
     case 'claimed': return `${who} · preparing worktree`;
     case 'running': {
@@ -120,13 +141,17 @@ function reasonFor(view, state, live) {
     case 'unresponsive': return `last seen ${formatAge(live?.hb_age_ms ?? view.state_age_ms)} ago${askSuffix(view)}`;
     case 'orphaned': return `take over${view.handover?.synced_age_ms != null ? ` · handover synced ${formatAge(view.handover.synced_age_ms)} ago` : ''}`;
     case 'handing_over': return `waiting for checkpoint · ${formatAge(view.state_age_ms)}`;
-    case 'handed_over': return `to ${view.handover_target_name ?? 'the queue'}${view.handover?.version ? ` · handover v${view.handover.version}` : ''}`;
+    case 'handed_over': return view.handover_hold
+      ? view.handover_provenance === 'checkpoint_complete'
+        ? 'previous AI stopped · read the handover, then choose the next AI'
+        : 'stop/checkpoint not confirmed · replacement AI will not start'
+      : `to ${view.handover_target_name ?? 'the queue'}${view.handover?.version ? ` · handover v${view.handover.version}` : ''}`;
     case 'failed': {
       const owner = view.run?.owner?.name ?? 'the';
       switch (view.fail_kind) {
         case 'limit': return `usage limit on ${possessive(owner)} account${view.limit_resets_in_ms != null ? ` · resets in ${formatAge(view.limit_resets_in_ms)}` : ''}`;
-        case 'network': return 'network';
-        case 'budget': return `budget${view.budget?.cap_usd != null ? ` $${fmtUsd(view.budget.cap_usd)}` : ''} reached`;
+        case 'network': return 'connection lost · retry when you are back online';
+        case 'budget': return view.run?.budget_stop === 'device' ? 'machine budget limit reached' : `budget${view.budget?.cap_usd != null ? ` $${fmtUsd(view.budget.cap_usd)}` : ''} reached`;
         case 'stopped': return `stopped by ${view.stopped_by_name ?? 'someone'}`;
         case 'released': return `released by ${BACKEND_LABEL[view.run?.backend] ?? 'Claude'}${view.fail_reason ? `: ${view.fail_reason}` : ''}`;
         default: return view.fail_reason ?? 'CLI exited';
@@ -164,7 +189,13 @@ export function cardFace(view, { elapsed_ms = 0, connection_lost = false } = {})
   let key = state === 'failed' && view.fail_kind === 'limit' ? 'failed_limit' : state;
   let reason;
   let actions = state === 'blocked' ? [...(BLOCKED_ACTIONS[view.blocked_kind] ?? ['answer'])] : [...(ACTIONS[state] ?? [])];
-  if (state === 'failed') actions = view.fail_kind === 'limit' ? ['take_over', 'retry'] : ['retry', 'take_over'];
+  if (state === 'failed') actions = view.fail_kind === 'limit' ? ['continue_with_another_ai', 'take_over', 'retry'] : ['retry', 'take_over'];
+  // A card carrying its WorkRecord can also go to a teammate (TEAM-CONTEXT-CONTRACT.md, Handoff).
+  if (view.record_id && !view.handoff_requested && actions.includes('continue_with_another_ai')) actions.splice(actions.indexOf('continue_with_another_ai') + 1, 0, 'hand_to_teammate');
+  if (view.run && ['running', 'quiet', 'blocked'].includes(state)) actions.push('switch_ai');
+  if (state === 'handed_over' && view.handover_hold) actions = view.handover_provenance === 'checkpoint_complete'
+    ? ['view_handover', 'take_over_with_claude'] : ['view_handover'];
+  if (view.handover_hold && view.handover_provenance !== 'checkpoint_complete' && state !== 'handing_over') actions = ['view_handover'];
 
   if (state === 'running' && !green && !connection_lost) {
     // The hub says running but the predicate no longer holds on the aged view.
@@ -176,9 +207,17 @@ export function cardFace(view, { elapsed_ms = 0, connection_lost = false } = {})
       reason = quietReason(live);
     }
   }
+  const stalled = connection_lost ? null : deriveStalled({ ...aged, live });
+  if (stalled) {
+    const takeOver = state === 'failed' ? [] : actions.filter((a) => a.startsWith('take_over'));
+    key = 'stalled';
+    reason = stalledReason(stalled, state === 'suspended' || state === 'reconnecting' ? reasonFor(aged, state, live) : stalled.reason === 'no_activity' ? quietReason(live) : null);
+    actions = [...stalledActions(state, stalled), ...takeOver];
+  }
   if (reason === undefined) reason = reasonFor(aged, state, live);
 
-  const pill = PILLS[key];
+  // Reuses the failed pill key (icon, column) so the hub and web need no new state.
+  const pill = key === 'failed' && view.fail_kind === 'network' ? { ...PILLS.failed, label: 'Waiting for network', tone: 'grey' } : PILLS[key];
   let tone = pill.tone;
   if (state === 'running' && !green) tone = connection_lost ? 'unknown' : pill.tone === 'green' ? 'quiet' : pill.tone;
   if (connection_lost && ACTIVE.has(state)) tone = 'unknown';
@@ -198,11 +237,13 @@ export function cardFace(view, { elapsed_ms = 0, connection_lost = false } = {})
     reason,
     text: pill.label ? `${pill.label} · ${reason}` : reason,
     tone,
-    green,
+    green: green && !stalled,
+    stalled: stalled ? { reason: stalled.reason, since_ms: stalled.since_ms } : null,
     actions,
     sponsor: sponsorLine(view),
     runner_line: runnerLine,
     activity_line: view.run && activityAge != null ? `${agentName(view)} · ${formatAge(activityAge)} ago` : null,
+    badge: live?.via_secondary && ['running', 'quiet'].includes(state) ? 'via secondary' : null,
     overlap_chip: top ? `⚠ overlaps ${top.other_key}${top.paths?.[0] ? ` · ${basename(top.paths[0])}` : ''}` : null,
     budget: view.budget && view.budget.cap_usd != null
       ? { text: `$${(view.budget.spent_usd ?? 0).toFixed(2)} / $${fmtUsd(view.budget.cap_usd)}`, ratio: Math.min(1, (view.budget.spent_usd ?? 0) / view.budget.cap_usd) }

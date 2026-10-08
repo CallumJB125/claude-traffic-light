@@ -1,0 +1,16 @@
+tap "homebrew/bundle"
+tap "oven-sh/bun"
+brew "git"
+brew "gh"
+brew "jq"
+brew "fzf"
+brew "neovim"
+brew "starship"
+brew "mise"
+cask "ghostty"
+cask "visual-studio-code"
+cask "1password-cli"
+mas "Xcode", id: 497799835
+vscode "ms-python.python"
+# export HOMEBREW_GITHUB_API_TOKEN=@@SEED:github_token@@
+# Owner: @@EMAIL@@

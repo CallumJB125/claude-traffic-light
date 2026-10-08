@@ -6,7 +6,7 @@
 // BOARD_HOME overrides ~/.board.
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
-import net from 'node:net'; // privacy-flow: local-board-sockets
+import net from '../shared/local-sockets.cjs'; // protected Windows local transport; POSIX Unix sockets
 import { fileURLToPath } from 'node:url';
 import { boardHome, initHome, writeDevice, readPolicy, writePolicy } from './config.js';
 import { Supervisor } from './supervisor.js';

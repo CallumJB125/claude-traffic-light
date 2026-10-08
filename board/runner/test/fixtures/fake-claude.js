@@ -11,7 +11,8 @@
 // scenario.mcp_stdio: board tools go through the real board MCP server (stdio).
 import fs from 'node:fs';
 import path from 'node:path';
-import net from 'node:net';
+import net from '../../../shared/local-sockets.cjs';
+import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 
@@ -46,7 +47,10 @@ function runHook(event, payload, matcherTool) {
     // Like CLI 2.1.285 with CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1: credential-named vars never reach hooks.
     const env = { ...process.env };
     if (env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB === '1') for (const k of Object.keys(env)) if (/TOKEN|SECRET|PASSWORD|API_KEY/.test(k)) delete env[k];
-    const child = spawn('/bin/sh', ['-c', cmd], { env, stdio: ['pipe', 'pipe', 'pipe'] });
+    const hookEvents = { SessionStart: 'start', UserPromptSubmit: 'prompt', PreToolUse: 'pre', PostToolUse: 'post', PostToolUseFailure: 'postfail', PreCompact: 'precompact', Stop: 'stop', StopFailure: 'stopfail', SubagentStop: 'substop' };
+    const child = process.platform === 'win32'
+      ? spawn(process.execPath, [fileURLToPath(new URL('../../hook-shim.js', import.meta.url)), hookEvents[event]], { env, stdio: ['pipe', 'pipe', 'pipe'] })
+      : spawn('/bin/sh', ['-c', cmd], { env, stdio: ['pipe', 'pipe', 'pipe'] });
     let so = '';
     let se = '';
     child.stdout.on('data', (d) => { so += d; });
@@ -153,10 +157,17 @@ process.stdin.on('data', (d) => {
   let i;
   while ((i = buf.indexOf('\n')) >= 0) { const l = buf.slice(0, i); buf = buf.slice(i + 1); if (l.trim()) onStdinLine(l); }
 });
-process.stdin.on('end', () => { log({ ev: 'eof' }); if (!scenario.ignore_eof) process.exit(0); });
+process.stdin.on('end', () => {
+  log({ ev: 'eof' });
+  if (!scenario.ignore_eof) process.exit(0);
+  // An unresolved nextInput Promise and signal handlers do not keep Node
+  // alive. Model the ignored EOF with a referenced, bounded fixture lease
+  // so the stop test exercises SIGTERM/SIGKILL after interrupt cleared wait.
+  setTimeout(() => { killGrandchildren(); mcpProc?.kill(); process.exit(1); }, 30_000);
+});
 
 function killGrandchildren() {
-  for (const g of grandchildren) { try { process.kill(-g, 'SIGKILL'); } catch { /* gone */ } }
+  for (const g of grandchildren) { try { process.kill(process.platform === 'win32' ? g : -g, 'SIGKILL'); } catch { /* gone */ } }
 }
 
 process.on('SIGTERM', () => {
@@ -195,8 +206,13 @@ async function tool(step) {
     out({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: `denied: ${pre.out?.hookSpecificOutput?.permissionDecisionReason ?? 'hook'}`, is_error: true }] } });
     return;
   }
+  if (step.group_child) {
+    const g = spawn(process.execPath, ['-e', 'setTimeout(()=>{},300000)'], { stdio: 'ignore' });
+    g.unref();
+    log({ ev: 'group_child', pid: g.pid });
+  }
   if (step.grandchild) {
-    const g = spawn('/bin/sleep', ['300'], { detached: true, stdio: 'ignore' });
+    const g = spawn(process.execPath, ['-e', 'setTimeout(()=>{},300000)'], { detached: process.platform !== 'win32', stdio: 'ignore' });
     g.unref();
     grandchildren.push(g.pid);
     log({ ev: 'grandchild', pid: g.pid });
@@ -227,7 +243,7 @@ async function runSteps(steps) {
     else if (step.exit != null) { log({ ev: 'exit', code: step.exit }); process.exit(step.exit); }
     else if (step.result) {
       cost += step.cost ?? 0.001;
-      out({ type: 'result', subtype: step.result, is_error: step.result !== 'success', total_cost_usd: cost, num_turns: 1, result: step.text ?? '', terminal_reason: step.terminal_reason ?? null, permission_denials: [] });
+      out({ type: 'result', subtype: step.result, is_error: step.result !== 'success', total_cost_usd: cost, num_turns: 1, result: step.text ?? '', terminal_reason: step.terminal_reason ?? null, permission_denials: [], usage: { input_tokens: 10, output_tokens: 5 } });
       return 'result';
     }
   }

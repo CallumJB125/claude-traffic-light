@@ -73,6 +73,7 @@ function providerEmail(v) {
   const e = canonEmail(v);
   return /^[\x21-\x7e]+@[\x21-\x7e]+$/.test(e) && e.length <= 254 ? e : null;
 }
+export const SEPARATE_ACCOUNT_MESSAGE = (provider) => `This ${provider === 'github' ? 'GitHub' : 'Google'} sign-in made a new, separate account: another account already uses this email address, and accounts are not linked yet. To reach your existing account, sign in the way you did before.`;
 const invalid = () => new HubError('INVALID_TOKEN', 'that sign-in is invalid or has expired: start again');
 const unavailable = () => new HubError('PROVIDER_UNAVAILABLE', 'the sign-in provider could not be reached: try again shortly');
 const refused = () => new HubError('PROVIDER_ERROR', 'the sign-in provider did not accept this sign-in: start again');
@@ -331,8 +332,16 @@ export class OAuth {
         id: randomUUID(), display_name: (who.name || who.email.split('@')[0]).replace(/[\p{C}]/gu, ' ').trim().slice(0, 100) || who.email.split('@')[0].slice(0, 100),
         primary_email: primary, primary_email_verified_at: primary ? now : null, primary_email_via: primary ? via : null, avatar_url: null, created_at: now, deleted_at: null, signup_via: signupVia,
       };
+      // No account linking yet: a weaker address another live account already
+      // holds yields a second account. Say so, so a later link flow can offer the merge.
+      const other = !who.authoritative && (holder ?? this.db.get(`SELECT u.id FROM identities i JOIN users u ON u.id = i.user_id
+        WHERE u.deleted_at IS NULL AND i.email = ? AND i.verified_at IS NOT NULL LIMIT 1`, who.email));
       this.db.insert('users', user);
-      this.accounts.audit('user.create', { user: user.id, detail: { method: who.provider }, ip });
+      this.accounts.audit('user.create', { user: user.id, detail: { method: who.provider, ...(other ? { separate_account: true, existing_user: other.id } : {}) }, ip });
+      if (other) {
+        this.hub.log.warn('sign-in created a separate account: the provider is not authoritative for an address another account holds (no account linking yet)', { method: who.provider, user: user.id, existing_user: other.id, email_ref: this.accounts.emailRef(who.email) });
+        user = { ...user, separateAccount: { code: 'SEPARATE_ACCOUNT', provider: who.provider, message: SEPARATE_ACCOUNT_MESSAGE(who.provider) } };
+      }
     }
     // email_verified: an address good enough for an invite (GitHub primary+verified,
     // authoritative Google); a non-authoritative Google address is kept but never counts.
@@ -367,7 +376,7 @@ export class OAuth {
         const d = this.accounts.issueDevice(user.id, device, { ip, method: who.provider, subjectRef: this.subjectRef(who.provider, who.subject) });
         // The flow now belongs to the account: erasure finds it (M4).
         this.db.run('UPDATE oauth_flows SET user_id = ?, cred_id = ? WHERE id = ?', user.id, d.id, f.id);
-        out = { user: publicUser(this.accounts.liveUser(user.id)), teams: this.accounts.teams(user.id), device_token: d.token, device_id: d.id };
+        out = { user: publicUser(this.accounts.liveUser(user.id)), teams: this.accounts.teams(user.id), device_token: d.token, device_id: d.id, ...(user.separateAccount ? { notice: user.separateAccount } : {}) };
       });
     } catch (e) {
       if (e.code === 'SIGNUP_CLOSED') this.accounts.audit('auth.signup.refused', { target: f.id, detail: { method: who.provider, subject_ref: this.subjectRef(who.provider, who.subject) }, ip });

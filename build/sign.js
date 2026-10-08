@@ -4,12 +4,14 @@
 const path = require('path');
 
 const HELPER = /(^|\/)calendar-helper\/buddy-calendar$/;
+const SETUPS_HELPER = /(^|\/)setups\/buddy-setups$/;
+const SETUPS_ENTITLEMENTS = path.join(__dirname, 'entitlements.setups-helper.plist');
 const HELPER_ENTITLEMENTS = path.join(__dirname, 'entitlements.calendar-helper.plist');
 
 function withHelperEntitlements(optionsForFile) {
   return (file) => {
     const base = optionsForFile ? optionsForFile(file) : {};
-    return HELPER.test(file) ? { ...base, entitlements: HELPER_ENTITLEMENTS } : base;
+    return SETUPS_HELPER.test(file) ? { ...base, entitlements: SETUPS_ENTITLEMENTS } : HELPER.test(file) ? { ...base, entitlements: HELPER_ENTITLEMENTS } : base;
   };
 }
 
@@ -30,3 +32,5 @@ module.exports = sign;
 module.exports.sign = sign;
 module.exports.withHelperEntitlements = withHelperEntitlements;
 module.exports.HELPER_ENTITLEMENTS = HELPER_ENTITLEMENTS;
+
+module.exports.SETUPS_ENTITLEMENTS = SETUPS_ENTITLEMENTS;

@@ -22,10 +22,10 @@ done
 
 cd "$(git rev-parse --show-toplevel)"
 sha=$(git rev-parse HEAD)
-git diff --quiet HEAD -- board || { echo "board/ has uncommitted changes; commit first" >&2; exit 1; }
+git diff --quiet HEAD -- board src/borrow || { echo "board/ has uncommitted changes; commit first" >&2; exit 1; }
 prod=0; [ "$UNIT" = buddy-hub ] && prod=1
 
-git archive --format=tar HEAD board | $PI "set -e
+git archive --format=tar HEAD board src/borrow | $PI "set -e
   stage=\$(mktemp -d); tar -x -C \"\$stage\" -f -
   cd \"\$stage/board\" && npm ci --omit=dev --no-audit --no-fund >/dev/null
   echo $sha > \"\$stage/board/DEPLOYED_SHA\"
@@ -33,7 +33,8 @@ git archive --format=tar HEAD board | $PI "set -e
   sudo mkdir -p $APP_ROOT
   sudo rm -rf $APP_ROOT/board.prev
   [ -d $APP_ROOT/board ] && sudo mv $APP_ROOT/board $APP_ROOT/board.prev
-  sudo mv \"\$stage/board\" $APP_ROOT/board && sudo chown -R root:root $APP_ROOT/board && rm -rf \"\$stage\"
+  sudo mv \"\$stage/board\" $APP_ROOT/board && sudo chown -R root:root $APP_ROOT/board
+  sudo rm -rf $APP_ROOT/src && sudo mv \"\$stage/src\" $APP_ROOT/src && sudo chown -R root:root $APP_ROOT/src && rm -rf \"\$stage\"
   sudo install -d -m 0700 -o buddyhub -g buddyhub $DATA_DIR
   sed -e 's#^Description=.*#Description=Board hub ($UNIT)#' -e 's#/opt/buddy-hub/board#$APP_ROOT/board#g' -e 's#/etc/buddy-hub/hub.env#$ENV_FILE#' -e 's#/var/lib/buddy-hub\$#$DATA_DIR#' $APP_ROOT/board/deploy/pi/buddy-hub.service | sudo tee /etc/systemd/system/$UNIT.service >/dev/null
   if [ $prod = 1 ]; then

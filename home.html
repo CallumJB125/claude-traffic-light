@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; base-uri 'none'; form-action 'none'">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Home</title>
+  <link rel="stylesheet" href="tokens.css">
+  <link rel="stylesheet" href="home.css">
+  <link rel="stylesheet" href="page.css">
+</head>
+<body>
+<main class="page">
+  <header class="page-head"><div>
+    <h1>Home</h1>
+    <p>What's running, what needs you, and today's spend.</p>
+  </div></header>
+  <div id="banner" class="banner" role="region" aria-label="Connect your AI tools" hidden></div>
+  <section id="morning" aria-labelledby="morning-title" hidden><div class="section-header"><h2 id="morning-title">While you were away</h2><p id="morning-count" class="muted"></p></div><div class="body"></div></section>
+  <section id="needs" aria-labelledby="needs-title"><div class="section-header"><h2 id="needs-title">Needs you</h2><p id="needs-count" class="muted"></p></div><div class="body"></div></section>
+  <section id="running" aria-labelledby="running-title"><div class="section-header"><h2 id="running-title">Running now</h2><p id="running-count" class="muted"></p></div><div class="body"></div></section>
+  <section id="today" aria-labelledby="today-title"><div class="section-header"><h2 id="today-title">Today</h2></div><div class="body"></div></section>
+  <section id="cards" aria-labelledby="cards-title" hidden><div class="section-header"><h2 id="cards-title">Your cards</h2></div><div class="body"></div></section>
+  <p id="status" class="muted" role="status" aria-live="polite">Loading…</p>
+</main>
+<script src="home.js"></script>
+</body>
+</html>

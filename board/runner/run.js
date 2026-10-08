@@ -18,6 +18,8 @@ export const ACTIVITY_THROTTLE_MS = 5000;
 export const FACT_FLUSH_MS = 2000;
 export const SNAPSHOT_EVERY_MS = 10 * 60 * 1000;
 export const RATE_LIMIT_RETRIES = 3;
+export const NETWORK_RETRIES = 5;
+const NETWORK_BACKOFF_CAP_MS = 5 * 60_000;
 
 const FILE_TOOLS = new Set(['Read', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Glob', 'Grep']);
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
@@ -41,7 +43,7 @@ function err(code, message) {
 
 /** Failure kind from result text, reusing hooks/set-status.js failureOf() regexes. */
 export function failKindOf(text) {
-  if (/network|ECONN|ENOTFOUND|ETIMEDOUT|fetch failed|connection|offline|socket/i.test(text)) return 'network';
+  if (/broken pipe|EPIPE|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|fetch failed|timeout awaiting response headers|network (error|is unreachable)|offline/i.test(text)) return 'network';
   if (/rate[ _-]?limit|overloaded|\b529\b|\b429\b|usage limit/i.test(text)) return 'limit';
   return 'error';
 }
@@ -81,6 +83,8 @@ export class Run {
     // Envelope nonce (D30): content authors never see it, so they cannot forge our closing tag.
     this.nonce = randomBytes(8).toString('hex');
     this.backend = null;
+    this.generation = 0;
+    this.resumePending = null;
     this.localState = 'running';
     this.fenced = false;
     this.endedNormally = false;  // fenced because board_complete/board_release ended it, not a takeover
@@ -110,6 +114,7 @@ export class Run {
     this.facts = [];
     this.lastFactFlush = now;
     this.costUsd = 0;
+    this.secondaryUsd = 0;
     this.numTurns = 0;
     this.narrative = null;
     this.lastHandoverMono = now;
@@ -131,11 +136,13 @@ export class Run {
     this.expectInterrupt = false;
     this.rateLimited = null;
     this.limitRetries = 0;
+    this.networkRetries = 0;
     this.done = new Promise((resolve) => { this.resolveDone = resolve; });
   }
 
   // ── gate G ────────────────────────────────────────────────────────────────
   gateState() {
+    if (this.windowsStopUnconfirmed) return { open: false, reason: 'windows_stop_unconfirmed' };
     const age = ackAge({ mono_since_ack_ms: this.clock.mono() - this.ack.mono, wall_since_ack_ms: this.clock.wall() - this.ack.wall });
     const wake = this.wake ? { slept_ms: this.wake.slept_ms, age_ms: this.clock.mono() - this.wake.mono } : null;
     return gateOf({ ack_age_ms: age, fenced: this.fenced, wake });
@@ -194,7 +201,10 @@ export class Run {
     this.log.info('gate reopened', { run_id: this.run_id });
     this.localState = 'running';
     if (this.unpushed) this.#retryPush();
-    if (!this.backend?.alive()) this.sup.resumeRun(this);
+    if (!this.backend?.alive()) {
+      if (this.backend?.oneTurn && this.pending.length) this.#resumePending();
+      else Promise.resolve(this.sup.resumeRun(this)).catch(() => {});
+    }
     else if (!this.backend.turnActive) this.#deliverIdle('Board connection restored and your run is still current. Continue where you left off.', 'system');
   }
 
@@ -263,9 +273,11 @@ export class Run {
     return {
       run_id: this.run_id, card_id: this.card_id, fence: this.fence,
       child_alive: !!this.backend?.alive(),
+      read_only: this.readOnly === true,
       tool_in_flight: t ? { name: t.name, summary: t.summary, age_ms: Math.round(now - t.mono), ...(t.bash_timeout_ms ? { bash_timeout_ms: t.bash_timeout_ms } : {}) } : null,
       last_activity_age_ms: this.lastActivityMono == null ? null : Math.round(now - this.lastActivityMono),
       cost_usd: this.costUsd,
+      via_secondary: this.sup.viaSecondary?.() === true,
       post_wake_activity: this.postWakeActivity,
       wake_age_ms: this.wake ? Math.round(now - this.wake.mono) : null,
       gate: this.gateOpen ? 'open' : 'closed',
@@ -276,48 +288,77 @@ export class Run {
   // ── backend wiring ────────────────────────────────────────────────────────
   attach(backend) {
     this.backend = backend;
-    backend.on('init', (e) => {
+    const generation = ++this.generation;
+    this.turnSucceeded = false;
+    this.localState = 'running';
+    const current = () => this.backend === backend && this.generation === generation && !this.ended;
+    const on = (name, fn) => backend.on(name, (...args) => { if (current()) fn(...args); });
+    on('init', (e) => {
       this.sawInit = true;
+      if (backend.oneTurn) { this.sessionStartSeen = true; this.costUsd = null; }
       if (e.session_id) { this.sessionId = e.session_id; this.sup.saveLedger(this); }
       this.fact('session', { session_id: e.session_id ?? this.sessionId, event: 'init' });
       this.activity('init');
     });
-    backend.on('tool_start', (e) => {
-      this.streamTools.set(e.id, { name: e.name, mono: this.clock.mono() });
+    on('tool_start', (e) => {
+      this.streamTools.set(e.id, { name: e.name, input: e.input, mono: this.clock.mono() });
       if (!this.toolInFlight) this.toolInFlight = { name: e.name, summary: this.#summary(e.name, e.input), mono: this.clock.mono() };
       this.activity('tool_start');
     });
-    backend.on('tool_end', (e) => {
+    on('tool_end', (e) => {
+      const start = this.streamTools.get(e.id);
       this.streamTools.delete(e.id);
+      if (!this.streamTools.size) this.toolInFlight = null;
+      if (backend.oneTurn && start) {
+        const duration = Math.max(0, Math.round(this.clock.mono() - start.mono));
+        this.fact('tool_end', { name: start.name, ok: e.ok, duration_ms: duration });
+        if (WRITE_TOOLS.has(start.name)) {
+          const rel = this.#relPath(start.input?.file_path);
+          if (rel) this.fact('file', { path: rel, op: 'write' });
+        }
+        if (start.name === 'Bash') this.#bashFacts(e.input ?? start.input ?? {}, { tool_response: e.output }, e.ok, duration, current).catch(() => {});
+      }
       this.activity('tool_end');
     });
-    backend.on('assistant', (e) => {
+    on('assistant', (e) => {
       this.lastAssistant = e.text;
       this.activity('assistant');
     });
-    backend.on('rate_limit', ({ info }) => {
+    on('rate_limit', ({ info }) => {
       if (info?.status === 'rejected') this.rateLimited = { resetsAt: info.resetsAt ?? null };
     });
-    backend.on('result', (r) => this.#onResult(r));
-    backend.on('exit', (info) => this.#onExit(info));
+    on('result', (r) => this.#onResult(r));
+    on('exit', (info) => this.#onExit(info));
   }
 
   #onResult(r) {
     this.turnSignals = { complete: false, ask: false, release: false };
     this.toolInFlight = null;
     this.streamTools.clear();
-    if (Number.isFinite(r.total_cost_usd)) this.costUsd = r.total_cost_usd;
+    // Burst overflow runs on a secondary provider the Claude CLI cannot see: add it so budgets cover it.
+    this.secondaryUsd = this.sup.secondaryUsdFor?.(this.sessionId) ?? 0;
+    if (Number.isFinite(r.total_cost_usd)) this.costUsd = r.total_cost_usd + this.secondaryUsd;
     if (Number.isSafeInteger(r.num_turns)) this.numTurns = r.num_turns;
-    this.fact('cost', { cost_usd: this.costUsd, num_turns: this.numTurns });
+    if (Number.isFinite(this.costUsd)) this.fact('cost', { cost_usd: this.costUsd, num_turns: this.numTurns });
     if (this.ending) return;
     if (this.completed || this.released) { this.finish(this.completed ? 'completed' : 'released'); return; }
+    if (this.secondaryUsd > 0 && this.budgetUsd > 0 && this.costUsd >= this.budgetUsd) {
+      this.sup.onBudgetReached?.(this);
+      return this.fail('budget', 'budget cap reached (including Burst overflow spend)', this.budgetScope ? { budget_scope: this.budgetScope } : {});
+    }
     if (r.subtype === 'success') {
+      this.turnSucceeded = true;
       this.limitRetries = 0;
+      this.networkRetries = 0;
       if (this.gateOpen && this.pending.length) this.#flushIdle();
       return;
     }
-    if (r.subtype === 'error_max_budget_usd') return this.fail('budget', 'budget cap reached (--max-budget-usd)');
-    if (r.subtype === 'error_max_turns') return this.fail('budget', 'max turns reached');
+    if (r.terminal_reason === 'budget' || r.subtype === 'error_max_budget_usd') {
+      this.sup.onBudgetReached?.(this);
+      return this.fail('budget', 'budget cap reached (--max-budget-usd)', this.budgetScope ? { budget_scope: this.budgetScope } : {});
+    }
+    // A turn limit is not a budget: it must never read "Budget reached" (D-5).
+    if (r.subtype === 'error_max_turns') return this.fail('error', 'max_turns');
     if (this.expectInterrupt) {
       this.expectInterrupt = false;
       if (this.gateOpen && this.pending.length) this.#flushIdle();
@@ -325,10 +366,20 @@ export class Run {
     }
     const text = [r.result, ...(Array.isArray(r.errors) ? r.errors : []), r.terminal_reason, r.subtype].filter(Boolean).join(' ');
     const kind = this.rateLimited ? 'limit' : failKindOf(text);
-    if (kind === 'limit' && !this.rateLimited && this.limitRetries < RATE_LIMIT_RETRIES) {
+    // With a ready Burst secondary the limit is an overflow, not an end: keep the run going through Burst.
+    const burst = this.sup.burstState?.();
+    const failover = kind === 'limit' && burst?.active === true && burst.secondaryReady === true;
+    if (kind === 'limit' && this.limitRetries < RATE_LIMIT_RETRIES && (!this.rateLimited || failover)) {
       const wait = (this.sup.opts.limitBackoffMs ?? 30000) * 2 ** this.limitRetries++;
       this.log.warn('rate limited, retrying', { run_id: this.run_id, wait });
       setTimeout(() => { if (!this.ending && this.backend?.alive()) this.backend.send('You were rate limited; continue where you left off.'); }, wait).unref?.();
+      return;
+    }
+    // A dropped connection is not a limit: its own retries and backoff, and it never spends a limit retry.
+    if (kind === 'network' && this.networkRetries < NETWORK_RETRIES) {
+      const wait = Math.min((this.sup.opts.networkBackoffMs ?? 15000) * 2 ** this.networkRetries++, NETWORK_BACKOFF_CAP_MS);
+      this.log.warn('network error, retrying', { run_id: this.run_id, wait });
+      setTimeout(() => { if (!this.ending && this.backend?.alive()) this.backend.send('The network dropped; continue where you left off.'); }, wait).unref?.();
       return;
     }
     const resetsAt = this.rateLimited?.resetsAt ? this.rateLimited.resetsAt * 1000 : null;
@@ -336,21 +387,60 @@ export class Run {
     this.fail(kind, clip(text, 180), extra);
   }
 
-  #onExit(info) {
+  async #onExit(info) {
+    if (this.backend?.platform === 'win32' && !(await this.#windowsStopConfirmed())) return;
     this.toolInFlight = null;
     if (this.ended) return;
     if (this.ending) return;   // whoever set `ending` stopped the CLI and finishes the run
     if (this.localState === 'paused_offline' || this.fenced) return;   // killed at gate close; resumed on reopen
+    if (this.backend?.oneTurn && info.code === 0 && !info.signal && info.sawResult && this.turnSucceeded) {
+      this.backend.reap?.();
+      this.localState = this.readOnly ? 'awaiting_plan_approval' : 'idle';
+      this.flushFacts();
+      this.sup.sendHbNow();
+      if (this.pending.length) this.#resumePending();
+      return;
+    }
     // Unexpected death: report before anything slow (exit b: < 1 s).
     this.backend?.reap?.();
-    const why = info.error ? `claude failed to start: ${info.error}` : `claude exited (code ${info.code ?? '-'}${info.signal ? `, ${info.signal}` : ''})${info.sawResult ? '' : ' without a result'}`;
+    const provider = this.backend?.oneTurn ? this.backend.constructor.describe?.().label ?? 'Codex' : 'claude';
+    const why = info.error ? `${provider} failed to start: ${info.error}` : `${provider} exited (code ${info.code ?? '-'}${info.signal ? `, ${info.signal}` : ''})${info.sawResult ? '' : ' without a result'}`;
     this.emit({ kind: 'run.failed', fail_kind: 'error', reason: redact(why, this.worktree) });
     this.endReason = 'failed';
     this.ending = true;
     this.#afterExit();
   }
 
+  async #windowsStopConfirmed() {
+    if (this.backend?.platform !== 'win32') return true;
+    let confirmed = false;
+    try { confirmed = await this.backend.confirmStopped(); } catch { /* unknown */ }
+    return confirmed || this.#quarantine('Windows process stop');
+  }
+
+  // Every platform: stop() must return a positive receipt (true). Anything
+  // else means the old process tree may still be working in the worktree, so
+  // the run, its workspace and its repo are held exactly like an unconfirmed
+  // Windows stop: no snapshot, release, cleanup or redispatch.
+  async #stopConfirmed(stopped) {
+    if (!this.backend) return true;
+    if (this.backend.platform === 'win32') return this.#windowsStopConfirmed();
+    return stopped === true || this.#quarantine('Process stop');
+  }
+
+  // Never throws: a throw here would strand a handover or quit waiting on it.
+  #quarantine(what) {
+    this.windowsStopUnconfirmed = true;
+    this.ending = true; this.gateOpen = false; this.localState = 'paused_offline';
+    this.sup.windowsQuarantinedRepos?.add(this.repo_id);
+    try { this.sup.saveLedger?.(this); } catch { /* the in-memory hold still applies */ }
+    this.log.warn(`${what} is unconfirmed; preserving run and workspace`, { run_id: this.run_id });
+    this.sup.notifyLocal?.({ event: 'paused_offline', run_id: this.run_id, key: this.key, reason: `${what} is unconfirmed. This run is quarantined for manual recovery.` });
+    return false;
+  }
+
   async #afterExit() {
+    if (this.backend?.platform === 'win32' && !(await this.#windowsStopConfirmed())) return;
     this.flushFacts();
     await this.snapshotNow({ push: true, why: 'final' });
     this.#end();
@@ -374,7 +464,7 @@ export class Run {
     this.ending = true;
     this.endReason = 'failed';
     this.emit({ kind: 'run.failed', fail_kind: kind, reason: redact(reason, this.worktree), ...extra });
-    await this.backend?.stop();
+    if (!(await this.#stopConfirmed(await this.backend?.stop()))) return;
     if (!this.ended) await this.#afterExit();
   }
 
@@ -383,7 +473,7 @@ export class Run {
     this.ending = true;
     this.endReason = 'prep_failed';
     this.emit({ kind: 'prep.failed', cause: redact(cause, this.worktree) });
-    await this.backend?.stop();
+    if (!(await this.#stopConfirmed(await this.backend?.stop()))) return;
     this.#end();
   }
 
@@ -397,7 +487,7 @@ export class Run {
       new Promise((r) => { if (this.backend?.exited) r(true); else this.backend?.once('exit', () => r(true)); }),
       new Promise((r) => setTimeout(() => r(false), this.sup.opts.interruptWaitMs ?? 5000).unref?.()),
     ]);
-    if (!exited) await this.backend?.stop();
+    if (!exited && !(await this.#stopConfirmed(await this.backend?.stop()))) return;
     if (!this.ended) await this.#afterExit();
   }
 
@@ -413,7 +503,7 @@ export class Run {
         if (this.ending) return;
         this.ending = true;
         this.endReason = 'stopped';
-        await this.backend?.stop();
+        if (!(await this.#stopConfirmed(await this.backend?.stop()))) return;
         await this.#afterExit();
         return;
       case 'park':
@@ -462,10 +552,19 @@ export class Run {
     this.log.info('handover finishing', { run_id: this.run_id, why, mode: h.mode });
     this.ending = true;
     this.endReason = h.mode === 'handover' ? 'handed_over' : 'parked';
-    await this.backend?.stop();
+    const stopped = await this.backend?.stop();
+    if (!(await this.#stopConfirmed(stopped))) { h.resolve(false); return; }
+    // A completed handover is the authority to start a replacement. A failed
+    // stop must never be reported as completion, even after its deadline.
+    if (h.mode === 'handover' && (stopped !== true || this.backend?.alive() !== false)) {
+      this.log.warn('handover stop not confirmed', { run_id: this.run_id });
+      h.resolve(false);
+      return;
+    }
     this.flushFacts();
-    await this.snapshotNow({ push: true, why: 'final handover' });
-    if (h.mode === 'handover') this.emit({ kind: 'handover.complete' });
+    const snapshot = await this.snapshotNow({ push: true, why: 'final handover' });
+    if (h.mode === 'handover') this.emit({ kind: 'handover.complete', stop_confirmed: true,
+      checkpoint_confirmed: snapshot?.status === 'pushed', handover_written: why === 'written' });
     if (h.mode === 'quit') {
       const ok = await this.#releaseForQuit();
       h.resolve(ok);
@@ -528,7 +627,7 @@ export class Run {
     if (this.ending && !this.handover) return;
     this.ending = true;
     this.endReason = 'fenced';
-    await this.backend?.stop();
+    if (!(await this.#stopConfirmed(await this.backend?.stop()))) return;
     this.flushFacts();
     const snap = await this.snapshotNow({ push: true, ref: salvageRef(this.key, this.fence), why: 'salvage', emitAs: 'none' });
     if (snap?.sha) this.sup.salvage(this, 'snapshot', { status: snap.status, sha: snap.sha, ref: snap.ref, reason: snap.reason });
@@ -546,10 +645,12 @@ export class Run {
 
   // ── delivery (comments, answers, handover requests) ───────────────────────
   #deliver(text, kind, comment_ids) {
+    if (this.ending || this.ended || this.fenced || this.completed || this.released) return;
     if (this.backend?.alive() && !this.backend.turnActive && this.gateOpen) {
       this.#deliverIdle(text, kind, comment_ids);
     } else {
       this.pending.push({ text, kind, comment_ids });
+      if (this.backend?.oneTurn && !this.backend.alive()) this.#resumePending();
     }
   }
 
@@ -559,12 +660,33 @@ export class Run {
   }
 
   #flushIdle() {
+    if (this.backend?.oneTurn) { if (!this.backend.alive()) this.#resumePending(); return; }
     const items = this.pending;
     this.pending = [];
     if (!items.length) return;
     const ids = items.flatMap((i) => i.comment_ids ?? []);
     if (!this.backend?.send(items.map((i) => i.text).join('\n\n'))) { this.pending = items; return; }
     if (ids.length) this.emit({ kind: 'comment.delivered', comment_ids: ids, via: 'stdin' });
+  }
+
+  #resumePending() {
+    if (this.resumePending || !this.pending.length || this.backend?.alive() || !this.gateState().open || this.ending || this.ended || this.fenced) return;
+    let items;
+    this.resumePending = Promise.resolve().then(() => {
+      items = [...this.pending];
+      return this.sup.resumeRun(this, items.map((i) => i.text).join('\n\n'));
+    }).then((backend) => {
+      if (!backend || this.ending || this.ended || this.fenced) return;
+      this.pending = this.pending.filter((item) => !items.includes(item));
+      const ids = items.flatMap((i) => i.comment_ids ?? []);
+      if (ids.length) this.emit({ kind: 'comment.delivered', comment_ids: ids, via: 'stdin' });
+    }).catch((e) => {
+      if (!this.ending && !this.ended && !this.fenced && !this.backend?.alive() && this.gateState().open) {
+        this.localState = this.readOnly ? 'awaiting_plan_approval' : 'idle';
+        this.sup.sendHbNow();
+      }
+      this.log.info('resume held', { run_id: this.run_id, code: e.code ?? 'INTERNAL' });
+    }).finally(() => { this.resumePending = null; });
   }
 
   onComments(comments) {
@@ -580,6 +702,13 @@ export class Run {
     if (a.permission_request_id) {
       for (const [k, p] of this.approvals) {
         if (p.prid === a.permission_request_id) { this.answered.add(key); this.approvals.delete(k); p.onAnswer(a); return; }
+      }
+      if (this.backend?.oneTurn && this.offer.require_plan_approval) {
+        // This frame only schedules a fresh authenticated status read. Its
+        // decision/text never changes the sandbox authority itself.
+        if (key) this.answered.add(key);
+        this.#deliver('A plan authorization was answered on the board. Check the recorded board state and continue within your current sandbox.', 'plan');
+        return;
       }
       this.log.info('late permission answer dropped', { run_id: this.run_id });
       return;
@@ -597,7 +726,9 @@ export class Run {
 
   // ── snapshots ─────────────────────────────────────────────────────────────
   snapshotNow({ push = true, ref = snapshotRef(this.key, this.fence), why = 'checkpoint', emitAs = 'snapshot' } = {}) {
+    if (this.windowsStopUnconfirmed) return Promise.resolve(null);
     const job = this.snapshotChain.then(async () => {
+      if (this.windowsStopUnconfirmed) return null;
       this.lastSnapshotMono = this.clock.mono();
       let res;
       try {
@@ -623,6 +754,7 @@ export class Run {
     const u = this.unpushed;
     if (!u) return;
     this.snapshotChain = this.snapshotChain.then(async () => {
+      if (this.windowsStopUnconfirmed) return;
       const res = await pushRef(this.worktree, u.sha, u.ref);
       if (res.status === 'pushed') {
         this.unpushed = null;
@@ -633,6 +765,7 @@ export class Run {
 
   onReconnect() {
     if (this.unpushed && this.gateOpen) this.#retryPush();
+    if (this.backend?.oneTurn && !this.backend.alive() && this.pending.length) this.#resumePending();
   }
 
   #quiescent() {
@@ -823,7 +956,7 @@ export class Run {
     this.fact('plan', { items: [...this.tasks.values()].slice(0, 50).map((t) => ({ text: clip(redact(t.text, this.worktree), 300), status: t.status })) });
   }
 
-  async #bashFacts(input, payload, ok, duration) {
+  async #bashFacts(input, payload, ok, duration, current = () => !this.ended) {
     const cmd = String(input.command ?? '');
     const patterns = (this.sup.policy.repos?.[this.repo_id]?.test_patterns ?? []).map((p) => new RegExp(p));
     if ([...DEFAULT_TEST_PATTERNS, ...patterns].some((re) => re.test(cmd))) {
@@ -835,6 +968,7 @@ export class Run {
     }
     if (/\bgit\b.*\b(commit|push|merge|rebase|reset|checkout|switch)\b/.test(cmd)) {
       const g = await gitFacts(this.worktree);
+      if (!current()) return;
       this.fact('git', g);
     }
   }
@@ -852,7 +986,16 @@ export class Run {
 
   // ── tools (board-mcp) ─────────────────────────────────────────────────────
   hello() {
+    if (this.ended || this.ending || this.completed || this.released) throw err('RUN_ENDED', 'this run has ended');
+    if (this.fenced) throw err('FENCED', 'this run was taken over');
     return { run_id: this.run_id, card_id: this.card_id, key: this.key, fence: this.fence, repo_id: this.repo_id, tools: this.sup.mcpTools };
+  }
+
+  initialPrompt(prompt) {
+    if (this.offer.ai == null || this.offer.ai === 'claude') return prompt;
+    const context = this.#hookStart({ source: 'startup' }).stdout?.hookSpecificOutput?.additionalContext;
+    return [prompt, context, this.offer.require_plan_approval
+      ? 'Your native shell is read-only. Declare your plan and end this turn while its recorded human authorization is pending. Answer text cannot authorize edits; the runner starts a later editable turn only after a recorded allow.' : null].filter(Boolean).join('\n\n');
   }
 
   // Agent text bound for the board. The nonce never leaves: echoed back in a
@@ -886,8 +1029,14 @@ export class Run {
   // Paths, reasons and owner names in overlap results come from other runs
   // and members: data, enveloped like card text.
   #wrapOverlaps(r) {
+    const ownership = (p) => p && ({ ...p,
+      ...(p.author ? { author: { ...p.author, name: this.#wrap(`ownership:${p.card_id} participant`, p.author.name) } } : {}),
+      paths: (p.paths ?? []).map((s) => this.#wrap(`ownership:${p.card_id} reported path`, s)) });
     return {
       ...r,
+      ...(r.ownership ? { ownership: ownership(r.ownership) } : {}),
+      ...(r.ownership_intents ? { ownership_intents: r.ownership_intents.map(ownership) } : {}),
+      ...(r.ownership_overlaps ? { ownership_overlaps: r.ownership_overlaps.map(ownership) } : {}),
       overlaps: (r?.overlaps ?? []).map((o) => {
         const w = (what, s) => (typeof s === 'string' ? this.#wrap(`overlap:${o.other_key ?? 'card'} ${what}`, s) : s);
         return {
@@ -901,11 +1050,43 @@ export class Run {
   }
 
   async tool(name, args = {}, ctx = {}) {
-    if (this.endedNormally) throw err('RUN_ENDED', 'this run has ended normally');
+    if (this.endedNormally || this.ended || this.ending || this.completed || this.released) throw err('RUN_ENDED', 'this run has ended');
     if (this.fenced) throw err('FENCED', 'this card was taken over');
-    if (name === 'approval') return this.#approval(args, ctx);
+    if (name === 'approval') {
+      if (this.backend?.oneTurn) throw err('NOT_AVAILABLE', 'Codex interactive tool approvals are unavailable');
+      return this.#approval(args, ctx);
+    }
     if (MCP_OUTBOX_TOOLS[name]) return this.#outboxTool(name, args);
     switch (name) {
+      case 'board_send_message':
+        return this.#wrapMessages(await this.sup.rpc(this, name, { ...args, body: this.#text(args.body, 4000) }));
+      case 'board_list_messages': {
+        const result = await this.sup.rpc(this, name, args);
+        const receipts = (result.inbox ?? []).map((m) => ({ receipt_id: m.delivery.receipt_id, receipt_token: m.delivery.receipt_token }));
+        if (receipts.length) {
+          // Host receipt is recorded only after the response reaches this
+          // live supervisor. The server rechecks current socket/run/fence.
+          const accepted = await this.sup.rpc(this, 'runner_messages_received', { receipts });
+          for (const m of result.inbox) {
+            const receipt = accepted.receipts?.find((r) => r.message_id === m.id);
+            if (!receipt || !['received', 'acknowledged'].includes(receipt.state)) throw err('INTERNAL', 'host receipt was not confirmed');
+            m.delivery.state = receipt.state;
+          }
+        }
+        return this.#wrapMessages(result);
+      }
+      case 'board_ack_message':
+        return this.sup.rpc(this, name, args);
+      case 'board_read_packet':
+        return this.#wrapPacket(await this.sup.rpc(this, name, args));
+      case 'board_write_packet': {
+        const p = args.data ?? {};
+        const data = { ...p, brief: this.#text(p.brief, 4000), progress: this.#text(p.progress, 4000), nextAction: this.#text(p.nextAction, 2000),
+          decisions: Array.isArray(p.decisions) ? p.decisions.map((s) => this.#text(s, 500)) : p.decisions,
+          reportedChecks: Array.isArray(p.reportedChecks) ? p.reportedChecks.map((s) => this.#text(s, 500)) : p.reportedChecks,
+          artifacts: Array.isArray(p.artifacts) ? p.artifacts.map((a) => a?.kind === 'path' ? { ...a, path: this.#text(a.path, 1024) } : a) : p.artifacts };
+        return this.#wrapPacket(await this.sup.rpc(this, name, { ...args, data }));
+      }
       case 'board_get_card': return this.#wrapCard(await this.sup.rpc(this, 'board_get_card', args.key ? { key: String(args.key) } : {}));
       case 'board_list_cards': {
         const r = await this.sup.rpc(this, 'board_list_cards', { ...(args.column ? { column: String(args.column) } : {}), ...(args.mine != null ? { mine: !!args.mine } : {}) });
@@ -916,8 +1097,11 @@ export class Run {
         this.turnSignals.ask = true;
         return r;
       }
-      case 'board_attach_evidence':
-        return this.sup.rpc(this, 'board_attach_evidence', { kind: args.kind, ref: this.#text(args.ref, 500), summary: this.#text(args.summary, 1000), ...(args.result ? { result: args.result } : {}) });
+      case 'board_attach_evidence': {
+        const ref = this.#text(args.ref, 500);
+        if (this.backend?.oneTurn && args.kind === 'commit') await this.sup.publishCommit(this, ref);
+        return this.sup.rpc(this, 'board_attach_evidence', { kind: args.kind, ref, summary: this.#text(args.summary, 1000), ...(args.result ? { result: args.result } : {}) });
+      }
       case 'board_complete': {
         const r = await this.sup.rpc(this, 'board_complete', { summary: this.#text(args.summary, 2000), evidence_ids: (args.evidence_ids ?? []).map(String) });
         this.turnSignals.complete = true;
@@ -935,7 +1119,10 @@ export class Run {
       }
       case 'board_declare_plan': {
         const paths = (args.paths ?? []).map((p) => filterPath(String(p), this.worktree)).filter((p) => p && p !== '.');
-        return this.#wrapOverlaps(await this.sup.rpc(this, 'board_declare_plan', { summary: this.#text(args.summary, 1000), paths, ...(args.areas ? { areas: args.areas.map((a) => this.#text(a, 100)) } : {}) }));
+        const current = await this.sup.rpc(this, 'board_check_overlap', {});
+        return this.#wrapOverlaps(await this.sup.rpc(this, 'board_declare_plan', { summary: this.#text(args.summary, 1000), paths,
+          ...(current.ownership?.generation ? { ownership_generation: current.ownership.generation } : {}),
+          ...(args.areas ? { areas: args.areas.map((a) => this.#text(a, 100)) } : {}) }));
       }
       case 'board_check_overlap': return this.#wrapOverlaps(await this.sup.rpc(this, 'board_check_overlap', {}));
       case 'board_recall': {
@@ -957,6 +1144,25 @@ export class Run {
       default:
         throw err('VALIDATION', `unknown tool ${name}`);
     }
+  }
+
+  #wrapPacket(result) {
+    const p = result.packet;
+    if (!p) return result;
+    const w = (label, s) => typeof s === 'string' ? this.#wrap(`packet:${p.version} ${label}`, s) : s;
+    return { ...result, packet: { ...p, author: { ...p.author, name: w('author', p.author.name) },
+      data: { ...p.data, brief: w('brief', p.data.brief), progress: w('progress', p.data.progress), nextAction: w('next action', p.data.nextAction),
+        decisions: p.data.decisions.map((s) => w('decision', s)), reportedChecks: p.data.reportedChecks.map((s) => w('reported check', s)),
+        artifacts: p.data.artifacts.map((a) => a.kind === 'path' ? { ...a, path: w('reported path', a.path) } : a) },
+      evidence: p.evidence.map((e) => ({ ...e, summary: w('evidence summary', e.summary), ref: w('evidence ref', e.ref) })) } };
+  }
+
+  #wrapMessages(result) {
+    const wrap = (m) => ({ ...m, body: this.#wrap(`message:${m.id} reported body`, m.body),
+      author: { ...m.author, name: this.#wrap(`message:${m.id} author`, m.author.name) } });
+    return { ...result, ...(result.message ? { message: wrap(result.message) } : {}),
+      ...(result.inbox ? { inbox: result.inbox.map(wrap) } : {}), ...(result.history ? { history: result.history.map(wrap) } : {}),
+      ...(result.peers ? { peers: result.peers.map((p) => ({ ...p, name: this.#wrap(`peer:${p.run_id} owner`, p.name), title: this.#wrap(`peer:${p.run_id} task`, p.title) })) } : {}) };
   }
 
   async #outboxTool(name, args) {

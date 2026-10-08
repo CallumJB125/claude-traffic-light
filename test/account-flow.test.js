@@ -67,6 +67,7 @@ async function harness(fn, { oauthTimeoutMs, live = false, quotas } = {}) {
   const opened = [];
   let browser = realBrowser;
   let afterHub = null; // runs once the hub has answered, before the client sees the answer
+  let probeImpl = null; // a test's /api/health probe, in place of "the mock hub answers itself"
   const fetchImpl = async (u, init) => {
     requests.push(new URL(u));
     if (init?.body) bodies.push(String(init.body));
@@ -95,7 +96,7 @@ async function harness(fn, { oauthTimeoutMs, live = false, quotas } = {}) {
   flow = createAccountFlow({
     store, clientFor, signedIn, userOf: (o) => vault(o).load()?.user ?? null,
     normHub: (u) => normalizeHubUrl(u, { allowOrigins }), normLink: (u) => normalizeLinkHub(u, { allowOrigins }),
-    probe: async (o) => (o === origin ? { ok: true, auth: 'accounts' } : { ok: false, error: 'unreachable' }),
+    probe: async (o) => (probeImpl ? probeImpl(o) : o === origin ? { ok: true, auth: 'accounts' } : { ok: false, error: 'unreachable' }),
     makeDevice: (ws, { onStatus }) => createDeviceController({
       account: clientFor(ws.hub), teamId: ws.teamId, credsFile: deviceFile(ws),
       seal: (s) => Buffer.from(`SEALED:${Buffer.from(s).toString('base64')}`), unseal: (b) => Buffer.from(String(b).slice(7), 'base64').toString(),
@@ -140,7 +141,7 @@ async function harness(fn, { oauthTimeoutMs, live = false, quotas } = {}) {
     c.testToken = () => v?.token ?? null;
     return c;
   };
-  const h = { hub, origin, dir, devDir, store, flow, A, requests, shown, selects, sessions, signedOutHubs, children, deviceFile, signInAs, other, vault, mails, bodies, logs, opened, setBrowser: (b) => { browser = b; }, setAfterHub: (f) => { afterHub = f; }, setNow: (ms) => { skew = ms; }, host: hostOf(origin) };
+  const h = { hub, origin, dir, devDir, store, flow, A, requests, shown, selects, sessions, signedOutHubs, children, deviceFile, signInAs, other, vault, mails, bodies, logs, opened, setBrowser: (b) => { browser = b; }, setAfterHub: (f) => { afterHub = f; }, setProbe: (f) => { probeImpl = f; }, setNow: (ms) => { skew = ms; }, host: hostOf(origin) };
   try { await fn(h); } finally { await flow.stopDevices(); await hub.close(); }
 }
 
@@ -929,7 +930,7 @@ test('sign-in methods: GET /api/auth/methods decides the buttons; each combinati
   assert.equal(s.methods, null);
   assert.match(s.methodsError, /Couldn’t reach/);
   const page = fs.readFileSync(path.join(__dirname, '..', 'buddy-window', 'account.js'), 'utf8');
-  for (const t of ['Continue with Google', 'Continue with GitHub', 'Use an email code instead', 'This server has no sign-in method enabled. Ask the admin.', 'Try again']) assert.ok(page.includes(t), t);
+  for (const t of ['Continue with Google', 'Continue with GitHub', 'Use an email code instead', 'Google and GitHub sign-in aren’t set up at this address yet. Ask your team’s admin.', 'Try again']) assert.ok(page.includes(t), t);
   const { ROUTES } = require('../buddy-window/accounts');
   assert.deepEqual([ROUTES.authMethods, ROUTES.oauthStart, ROUTES.oauthExchange], [['GET', '/api/auth/methods'], ['POST', '/api/auth/oauth/start'], ['POST', '/api/auth/oauth/exchange']]);
 }));
@@ -1673,7 +1674,7 @@ for (const code of [4403, 4401]) {
     const row = await macRow(h, ws);
     assert.deepEqual([row.enabled, row.ended], [false, code]);
     const page = fs.readFileSync(path.join(__dirname, '..', 'buddy-window', 'account.js'), 'utf8');
-    assert.ok(page.includes('This Mac isn’t sharing sessions with ${t.name} any more.') && /link\('Turn on again', \(\) => act\(api\.runner\(t\.id, true\)\)\)/.test(page));
+    assert.ok(page.includes('This Mac no longer runs ${t.name} cards.') && /link\('Turn on again', \(\) => act\(api\.runner\(t\.id, true\)\)\)/.test(page));
     // A 4401 asks the hub; it still answers 200 here, so nobody is signed out.
     assert.deepEqual(h.signedOutHubs, []);
     assert.equal((await h.A.runner(ws.id, true)).ok, true, 'Turn on again enrols afresh');
@@ -1849,7 +1850,7 @@ test('signed-out pages: signInWith refuses an unknown provider and starts nothin
   h.flow.show('integrations');
   const st = await h.A.state();
   assert.equal(st.screen, 'integrations');
-  assert.deepEqual(st.connectors.map((c) => [c.id, c.status]), [['github', 'available'], ['slack', 'soon'], ['sentry', 'soon'], ['linear', 'soon'], ['jira', 'soon'], ['google', 'soon']]);
+  assert.deepEqual(st.connectors.map((c) => [c.id, c.status]), [['github', 'available'], ['slack', 'soon'], ['sentry', 'soon']]);
   assert.equal(st.brand.defaultHost, 'app.plexiform.dev');
   assert.deepEqual(st.signedInHubs, []);
   h.flow.show('team');
@@ -1967,4 +1968,58 @@ test('sign-up control (D104): SIGNUP_CLOSED reads as the one fixed sentence on t
   const text = 'Sign-up is invite-only right now. Ask a team owner for an invite.';
   for (const p of ['google', 'github']) assert.equal(oauthOutcome({ ok: false, status: 403, code: 'SIGNUP_CLOSED', error: 'hub words' }, p, 'h').error, text);
   assert.equal(humanError(403, { error: { code: 'SIGNUP_CLOSED', message: 'hub words' } }, 'h'), text);
+});
+
+// ── a hub leaving Cloudflare Access ─────────────────────────────────────────
+
+test('an Access workspace whose hub now answers /api/health itself is dropped, and the member goes to the Google/GitHub sign-in', async () => harness(async (h) => {
+  // The shape a v53-era app left in buddy-workspaces.json: the hub as a legacy Access entry, no accounts hub.
+  const ws = h.store.addAccess({ url: h.origin, name: 'Team hub', accessTeam: 'acme' });
+  assert.equal(ws.kind, 'access');
+  // Still behind Access (redirects to its login), or unreachable: nothing changes.
+  h.setProbe(async () => ({ ok: true, accessTeam: 'acme', signedIn: false }));
+  assert.equal(await h.flow.recheckAccess(ws), false);
+  h.setProbe(async () => ({ ok: false, error: 'offline' }));
+  assert.equal(await h.flow.recheckAccess(ws), false);
+  h.setProbe(async () => ({ ok: true, accessTeam: null, signedIn: true, auth: 'access' }));
+  assert.equal(await h.flow.recheckAccess(ws), false, 'a hub that itself runs Access auth stays an Access workspace');
+  assert.equal(h.store.get(ws.id)?.kind, 'access');
+  // Access removed: the hub answers health directly in accounts mode.
+  h.setProbe(null);
+  assert.equal(await h.flow.recheckAccess(ws), true);
+  assert.equal(h.store.get(ws.id), null, 'the stale Access entry is gone');
+  assert.equal(h.store.list().some((w) => w.kind === 'access'), false);
+  assert.equal(h.store.activeId(), 'local');
+  assert.equal(h.flow.acct.screen, 'email');
+  assert.equal(h.flow.acct.hub, h.origin);
+  const saved = JSON.parse(fs.readFileSync(path.join(h.dir, 'ws.json'), 'utf8'));
+  assert.deepEqual(saved.access, [], 'persisted');
+  // The sign-in screen shows the hub's methods; with email off there, no email form can be reached.
+  h.hub.setMethods({ google: true, github: true, email: false });
+  const st = await h.A.state();
+  assert.deepEqual(st.methods, { google: true, github: true, email: false });
+  const before = h.requests.filter((u) => u.pathname === '/api/auth/email/start').length;
+  const r = await h.A.email('me@example.com');
+  assert.equal(r.ok, false);
+  assert.equal(r.error, 'Sign in with Google or GitHub.');
+  assert.equal(h.requests.filter((u) => u.pathname === '/api/auth/email/start').length, before, 'no code is even asked for');
+}));
+
+test('typing a hub that left Access drops its old Access entry and goes to the hub sign-in', async () => harness(async (h) => {
+  h.store.addAccess({ url: h.origin, name: 'Team hub', accessTeam: 'acme' });
+  assert.equal((await h.A.hub(h.origin)).ok, true);
+  assert.equal(h.store.list().some((w) => w.kind === 'access'), false);
+  assert.equal(h.flow.acct.screen, 'email');
+}));
+
+test('the workspaces file: an Access entry for a hub survives a reload until a direct health answer retires it', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-ws-'));
+  const file = path.join(dir, 'buddy-workspaces.json');
+  fs.writeFileSync(file, JSON.stringify({ version: 2, active: 'access:app.acme.example', access: [{ url: 'https://app.acme.example', name: 'app.acme.example', accessTeam: 'acme' }], hubs: [] }));
+  const store = createWorkspaceStore(file);
+  assert.equal(store.active().kind, 'access');
+  assert.equal(store.removeAccess('access:app.acme.example'), true);
+  const again = createWorkspaceStore(file);
+  assert.equal(again.active().id, 'local');
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).access, []);
 });

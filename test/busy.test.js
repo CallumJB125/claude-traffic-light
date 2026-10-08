@@ -57,10 +57,10 @@ test('pingsWhileBusy: red through by default, per-rule override, mine as a stub'
   assert.equal(R.pingsWhileBusy(undefined, { lamp: 'amber' }), false);
 });
 
-test('default locked rules still ping while busy; finished and nudges wait', () => {
+test('default red rules (blocked or broken) still ping while busy; finished and nudges wait', () => {
   const byId = Object.fromEntries(R.defaultRules().map((r) => [r.id, R.normalizeRule(r)]));
-  for (const id of ['limit', 'permission', 'offline']) assert.equal(R.pingsWhileBusy(byId[id]), true, id);
-  for (const id of ['done', 'nudge', 'failed-turn', 'working']) assert.equal(R.pingsWhileBusy(byId[id]), false, id);
+  for (const id of ['limit', 'permission', 'offline', 'failed-turn']) assert.equal(R.pingsWhileBusy(byId[id]), true, id);
+  for (const id of ['done', 'nudge', 'working']) assert.equal(R.pingsWhileBusy(byId[id]), false, id);
 });
 
 // ── busyAt ──────────────────────────────────────────────────────────────────
@@ -617,6 +617,12 @@ test('main: git rule sounds and spend notifications go through the busy gate', (
   const notify = main.slice(main.indexOf('function maybeNotify'), main.indexOf('function maybeNotify') + 800);
   assert.match(notify, /spend: st\.spend/);
   assert.match(notify, /for \(const n of fire\) \{\n\s+if \(!notificationAllowed\(/);
+  const budget = main.slice(main.indexOf('function notifyBudget'), main.indexOf('note.show();', main.indexOf('function notifyBudget')));
+  assert.match(budget, /if \(!pingAllowed\(null, \{ signal: 'budget' \}\)\) return;\n\s+const note = new Notification/);
+  assert.match(main, /await performKnock\(appName, target, base, force \|\| pingAllowed\(st\.owned\?\.sound, \{ lamp: base\.lamp \}\)\);/);
+  assert.match(main, /const knockSound = loadConfig\(\)\.sounds && mayPing/);
+  assert.doesNotMatch(main, /(?<!delete )config\.soundOnAmber|\(\)\.soundOnAmber/, 'the old key is only migrated, never read');
+  assert.match(main, /if \(typeof saved\.sounds !== 'boolean' && typeof saved\.soundOnAmber === 'boolean'\) config\.sounds = saved\.soundOnAmber;\n\s+delete config\.soundOnAmber;/);
 });
 
 // ── Help ────────────────────────────────────────────────────────────────────

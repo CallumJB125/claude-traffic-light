@@ -18,6 +18,7 @@ const DesktopShell = require('../src/desktop-shell.js');
 const Verify = require('../src/updater/verify.js');
 const Sign = require('../scripts/release-sign.js');
 const Rename = require('../src/rename-migration.js');
+const { strictJSON } = require('../src/plugins/index-verify');
 
 test('identity: package.json, the builder config, brand.js and the desktop shell agree on Plexiform / dev.plexiform.app', () => {
   assert.equal(Brand.name, 'Plexiform');
@@ -76,14 +77,13 @@ const ALLOW_ANYWHERE = [/claudebuddy:\/\//g, /CLAUDE_BUDDY_[A-Z_]+/g];
 const ALLOW = {
   'src/rename-migration.js': [/^.*$/g], // the old identity, to migrate from
   'src/scrub.js': [/'Claude Buddy\.app'|'Claude Buddy'|'claude-buddy'/g], // logs from old installs scrub the same
-  'src/leftover-shim.js': [/# claude-buddy router/g], // markers old installs wrote into ~/.zshrc
   'setup.js': [/'claude-buddy-setup'/g], // the setup file format's tag, carried by exported files
   'mcp-install.js': [/'claude-buddy'/g], // the MCP server's name: not renamed yet, so Claude's tool names stay
   'mcp-server.js': [/name: 'claude-buddy'/g],
   'MCP.md': [/claude-buddy/g],
   'settings.html': [/<code>claude-buddy<\/code>/g],
   'PRIVACY.md': [/`claude-buddy`/g, /"Claude Buddy Safe Storage"/g], // the MCP entry and the old data folder's name; the old Keychain item
-  'package.json': [/"name": "claude-buddy"/g, /"schemes": \["plexiform", "claudebuddy"\]/g], // the npm name: the .deb package and updater cache keep it; the old links' scheme
+  'package.json': [/"name":\s*"claude-buddy"/g], // the npm name: the .deb package and updater cache keep it; the protocol exception is checked structurally below
   'package-lock.json': [/"name": "claude-buddy"/g],
   'remote/package.json': [/@claude-buddy\/remote/g],
   'brand.js': [/'Claude Buddy'/g, /LEGACY_SCHEMES = \['claudebuddy'\]/g], // formerNames; the old links' scheme
@@ -109,24 +109,53 @@ function sourceFiles() {
   return list.filter((f) => TEXT.test(f) && !SKIP.test(f) && fs.existsSync(path.join(ROOT, f)));
 }
 
+function scanIdentitySource(f, content, usedAllow = new Set()) {
+  if (f === 'package.json') {
+    const parsed = strictJSON(Buffer.from(content), 1024 * 1024);
+    assert.deepEqual(parsed.build.mac.protocols, [{ name: Brand.name, schemes: [Brand.scheme, ...Brand.legacySchemes] }]);
+    // npm version pretty-prints the array. Permit only the unique, exact
+    // protocol tuple; another matching tuple or legacy value is still refused.
+    const schemes = /"schemes"\s*:\s*\[\s*"plexiform"\s*,\s*"claudebuddy"\s*\]/g;
+    assert.equal([...content.matchAll(schemes)].length, 1, 'one deliberate legacy protocol tuple');
+    content = content.replace(schemes, tuple => tuple.replace('"claudebuddy"', '"legacy-protocol"'));
+    usedAllow.add(f);
+  }
+  const stray = [];
+  content.split('\n').forEach((line, i) => {
+    if (!OLD_NAME.test(line)) return;
+    let rest = line;
+    for (const re of ALLOW_ANYWHERE) rest = rest.replace(re, '');
+    for (const re of ALLOW[f] || []) {
+      const next = rest.replace(re, '');
+      if (next !== rest) usedAllow.add(f);
+      rest = next;
+    }
+    if (OLD_NAME.test(rest)) stray.push(`${f}:${i + 1}: ${line.trim().slice(0, 140)}`);
+  });
+  return stray;
+}
+
+test('identity scan accepts compact and pretty beta metadata but still rejects stray legacy values', () => {
+  const fixture = { name: 'claude-buddy', version: '1.0.2-beta.50', build: { mac: { protocols: [{ name: Brand.name, schemes: [Brand.scheme, ...Brand.legacySchemes] }] } } };
+  for (const indent of [undefined, 2]) {
+    assert.deepEqual(scanIdentitySource('package.json', JSON.stringify(fixture, null, indent)), []);
+    for (const extra of [{ description: 'Claude Buddy preview' }, { debugScheme: 'claudebuddy' }, { appId: 'com.callumbaker.old' }]) {
+      assert.equal(scanIdentitySource('package.json', JSON.stringify({ ...fixture, ...extra }, null, indent)).length, 1);
+    }
+  }
+  const wrong = { ...fixture, build: { mac: { protocols: [{ name: 'Wrong product', schemes: [Brand.scheme, ...Brand.legacySchemes] }] } } };
+  assert.throws(() => scanIdentitySource('package.json', JSON.stringify(wrong)), /Expected values to be strictly deep-equal/);
+  assert.throws(() => scanIdentitySource('package.json', JSON.stringify({ ...fixture, extra: { schemes: [Brand.scheme, ...Brand.legacySchemes] } })), /one deliberate legacy protocol tuple/);
+  assert.equal(scanIdentitySource('other.js', 'const label = "claudebuddy";').length, 1);
+});
+
 test('no stray Claude Buddy / claude-buddy / com.callumbaker outside the deliberate migration constants and old-link schemes', () => {
   const files = sourceFiles();
   assert.ok(files.includes('main.js') && files.includes('brand.js') && files.includes('src/updater/mac-swap.js'), 'the scan sees the source tree');
   const stray = [];
   const usedAllow = new Set();
   for (const f of files) {
-    const lines = fs.readFileSync(path.join(ROOT, f), 'utf8').split('\n');
-    lines.forEach((line, i) => {
-      if (!OLD_NAME.test(line)) return;
-      let rest = line;
-      for (const re of ALLOW_ANYWHERE) rest = rest.replace(re, '');
-      for (const re of ALLOW[f] || []) {
-        const next = rest.replace(re, '');
-        if (next !== rest) usedAllow.add(f);
-        rest = next;
-      }
-      if (OLD_NAME.test(rest)) stray.push(`${f}:${i + 1}: ${line.trim().slice(0, 140)}`);
-    });
+    stray.push(...scanIdentitySource(f, fs.readFileSync(path.join(ROOT, f), 'utf8'), usedAllow));
   }
   assert.deepEqual(stray, [], `old name left in:\n${stray.join('\n')}`);
   // An allow-list entry nothing needs any more goes.

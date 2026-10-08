@@ -19,11 +19,11 @@ test('slugify makes safe ids from names', () => {
 
 test('resolveId: slugs, never a built-in unless replacing, suffixed when taken', () => {
   assert.deepEqual(C.resolveId({}, { name: 'Dad' }), { id: 'dad' });
-  assert.ok(C.resolveId({}, { name: 'Neo' }).error, 'a name that slugs to a built-in is refused');
+  assert.ok(C.resolveId({}, { name: 'Wizard' }).error, 'a name that slugs to a built-in is refused');
   assert.ok(C.resolveId({}, { name: 'none' }).error);
   assert.ok(C.resolveId({}, { name: '  ' }).error, 'a name is required');
-  assert.deepEqual(C.resolveId({}, { name: 'Neo', replace: 'neo' }), { id: 'neo' });
-  assert.deepEqual(C.resolveId({}, { name: 'anything', replace: 'powell' }), { id: 'powell' });
+  assert.deepEqual(C.resolveId({}, { name: 'Wizard', replace: 'wizard' }), { id: 'wizard' });
+  assert.deepEqual(C.resolveId({}, { name: 'anything', replace: 'pirate' }), { id: 'pirate' });
   assert.ok(C.resolveId({}, { name: 'x', replace: 'dad' }).error, 'only built-ins can be replaced');
   const idx = { dad: {}, 'dad-2': {} };
   assert.deepEqual(C.resolveId(idx, { name: 'Dad' }), { id: 'dad-3' });
@@ -37,12 +37,12 @@ test('parseIndex is tolerant and fills anchor defaults', () => {
   const idx = C.parseIndex(JSON.stringify({
     dad: { name: 'Dad', shape: 'rounded', addedAt: 5, eyes: { x: 0.3, y: 2 } },
     'Bad Id': { name: 'x' },
-    neo: { mouth: { x: 'a' } },
+    alfred: { mouth: { x: 'a' } },
     ghost: null,
   }));
-  assert.deepEqual(Object.keys(idx).sort(), ['dad', 'neo']);
+  assert.deepEqual(Object.keys(idx).sort(), ['alfred', 'dad']);
   assert.deepEqual(idx.dad, { name: 'Dad', eyes: { x: 0.3, y: 1 }, mouth: C.DEFAULT_MOUTH, shape: 'rounded', addedAt: 5 });
-  assert.deepEqual(idx.neo, { name: 'Neo', eyes: C.DEFAULT_EYES, mouth: C.DEFAULT_MOUTH, shape: 'oval', addedAt: 0 });
+  assert.deepEqual(idx.alfred, { name: 'Alfred', eyes: C.DEFAULT_EYES, mouth: C.DEFAULT_MOUTH, shape: 'oval', addedAt: 0 });
   assert.deepEqual(C.DEFAULT_EYES, { x: 0.5, y: 0.4 });
   assert.deepEqual(C.DEFAULT_MOUTH, { x: 0.5, y: 0.75 });
 });
@@ -56,89 +56,22 @@ test('withEntry / without merge and drop entries immutably', () => {
 });
 
 test('listing: built-ins first (drawn or photo), then user faces oldest first', () => {
-  const idx = C.parseIndex(JSON.stringify({ zed: { name: 'Zed', addedAt: 2 }, amy: { name: 'Amy', addedAt: 9 }, powell: { name: 'Jay', addedAt: 1 } }));
+  const idx = C.parseIndex(JSON.stringify({ zed: { name: 'Zed', addedAt: 2 }, amy: { name: 'Amy', addedAt: 9 }, pirate: { name: 'Jay', addedAt: 1 } }));
   const l = C.listing(idx);
   assert.deepEqual(l.map((c) => c.id), [...C.BUILTINS, 'zed', 'amy']);
-  assert.equal(l.find((c) => c.id === 'powell').photo, true);
-  assert.equal(l.find((c) => c.id === 'powell').name, 'Jay');
-  assert.equal(l.find((c) => c.id === 'neo').photo, false);
-  assert.equal(l.find((c) => c.id === 'neo').name, 'Neo');
+  assert.equal(l.find((c) => c.id === 'pirate').photo, true);
+  assert.equal(l.find((c) => c.id === 'pirate').name, 'Jay');
+  assert.equal(l.find((c) => c.id === 'wizard').photo, false);
+  assert.equal(l.find((c) => c.id === 'wizard').name, 'Wizard');
 });
 
-test('listing: a user photo beats a shipped one; only user photos are removable', () => {
-  const shipped = C.parseIndex(JSON.stringify({ neo: { name: 'Neo', addedAt: 0 }, saylor: { name: 'Saylor', addedAt: 0 } }));
-  const mine = C.parseIndex(JSON.stringify({ neo: { name: 'My Neo', addedAt: 5 }, dad: { name: 'Dad', addedAt: 6 } }));
-  const l = C.listing(mine, shipped);
+test('listing: a user photo replaces a drawn built-in; only user photos are removable', () => {
+  const mine = C.parseIndex(JSON.stringify({ wizard: { name: 'My Wizard', addedAt: 5 }, dad: { name: 'Dad', addedAt: 6 } }));
+  const l = C.listing(mine);
   const by = (id) => l.find((c) => c.id === id);
-  assert.deepEqual([by('neo').name, by('neo').photo, by('neo').user], ['My Neo', true, true]);
-  assert.deepEqual([by('saylor').name, by('saylor').photo, by('saylor').user], ['Saylor', true, false]);
+  assert.deepEqual([by('wizard').name, by('wizard').photo, by('wizard').user], ['My Wizard', true, true]);
   assert.deepEqual([by('alfred').photo, by('alfred').user], [false, false], 'alfred stays drawn');
   assert.deepEqual([by('dad').builtin, by('dad').user], [false, true]);
-});
-
-// 8-bit RGBA PNGs (what Pillow writes for the built faces).
-function pngPixels(buf) {
-  let pos = 8;
-  let w; let h; let type;
-  const idat = [];
-  while (pos < buf.length) {
-    const len = buf.readUInt32BE(pos);
-    const kind = buf.toString('ascii', pos + 4, pos + 8);
-    const data = buf.subarray(pos + 8, pos + 8 + len);
-    if (kind === 'IHDR') { w = data.readUInt32BE(0); h = data.readUInt32BE(4); type = `${data[8]}/${data[9]}/${data[12]}`; }
-    if (kind === 'IDAT') idat.push(data);
-    pos += 12 + len;
-  }
-  assert.equal(type, '8/6/0', 'an 8-bit, non-interlaced RGBA png');
-  const raw = zlib.inflateSync(Buffer.concat(idat));
-  const stride = w * 4;
-  const px = Buffer.alloc(h * stride);
-  for (let y = 0; y < h; y += 1) {
-    const f = raw[y * (stride + 1)];
-    for (let x = 0; x < stride; x += 1) {
-      const r = raw[y * (stride + 1) + 1 + x];
-      const a = x >= 4 ? px[y * stride + x - 4] : 0;
-      const b = y ? px[(y - 1) * stride + x] : 0;
-      const c = x >= 4 && y ? px[(y - 1) * stride + x - 4] : 0;
-      const p = a + b - c;
-      const paeth = Math.abs(p - a) <= Math.abs(p - b) && Math.abs(p - a) <= Math.abs(p - c) ? a : Math.abs(p - b) <= Math.abs(p - c) ? b : c;
-      px[y * stride + x] = (r + [0, a, b, (a + b) >> 1, paeth][f]) & 255;
-    }
-  }
-  return { width: w, height: h, alpha: (x, y) => px[(y * w + x) * 4 + 3], rgb: (x, y) => px.readUIntBE((y * w + x) * 4, 3) };
-}
-
-test('the shipped built-in photos: seven 256×256 faces cut along the head, colours untouched', () => {
-  const dir = path.join(__dirname, '..', 'assets', 'cameos', 'built');
-  const idx = C.loadIndex(dir);
-  assert.deepEqual(Object.keys(idx).sort(), ['baker', 'ellison', 'mcafee', 'neo', 'powell', 'saylor', 'spagni']);
-  assert.equal(C.SIZE, 256);
-  let beyondOval = 0;
-  for (const [id, e] of Object.entries(idx)) {
-    const png = fs.readFileSync(path.join(dir, `${id}.png`));
-    assert.equal(png.subarray(0, 8).toString('hex'), '89504e470d0a1a0a', id);
-    const img = pngPixels(png);
-    assert.deepEqual([img.width, img.height], [C.SIZE, C.SIZE], id);
-    assert.ok(e.mouth.y - e.eyes.y > 0.15 && e.eyes.y > 0.2 && e.mouth.y < 0.95, `${id} anchors`);
-    assert.ok(C.BUILTINS.includes(id));
-    const at = (p) => img.alpha(Math.floor(p.x * C.SIZE), Math.floor(p.y * C.SIZE));
-    assert.equal(at(e.eyes), 255, `${id} eyes on the face`);
-    assert.equal(at(e.mouth), 255, `${id} mouth on the face`);
-    let soft = 0;
-    const colours = new Set();
-    for (let y = 0; y < C.SIZE; y += 1) for (let x = 0; x < C.SIZE; x += 1) {
-      const a = img.alpha(x, y);
-      if (a > 0 && a < 255) soft += 1;
-      if (a === 255) colours.add(img.rgb(x, y));
-      if (a && C.coverage(x + 0.5, y + 0.5, C.SIZE, 'oval') === 0) beyondOval += 1;
-    }
-    assert.ok(soft > 200, `${id} has an anti-aliased edge (${soft} soft pixels)`);
-    // a photo, not a posterised handful of tones
-    assert.ok(colours.size > 5000, `${id} has only ${colours.size} colours`);
-    assert.ok(img.alpha(C.SIZE / 2, C.SIZE - 1) < 128, `${id} neck fades out`);
-  }
-  // hair and ears outside where the old oval would have cut them
-  assert.ok(beyondOval > 2000, `only ${beyondOval} face pixels outside the oval`);
 });
 
 test('hasAlpha: a cut-out has see-through pixels, a photo or screenshot does not', () => {
@@ -212,10 +145,10 @@ test('squareRect keeps the crop square and inside the image', () => {
 
 test('loadIndex drops entries whose photo is gone; removePhoto deletes both', () => {
   const dir = tmp();
-  C.writeIndex(dir, { dad: { name: 'Dad' }, neo: { name: 'Neo' } });
+  C.writeIndex(dir, { dad: { name: 'Dad' }, mum: { name: 'Mum' } });
   fs.writeFileSync(path.join(dir, 'dad.png'), 'x');
   assert.deepEqual(Object.keys(C.loadIndex(dir)), ['dad']);
-  assert.equal(C.removePhoto(dir, 'neo'), false);
+  assert.equal(C.removePhoto(dir, 'mum'), false);
   assert.equal(C.removePhoto(dir, 'dad'), true);
   assert.equal(fs.existsSync(path.join(dir, 'dad.png')), false);
   assert.deepEqual(C.loadIndex(dir), {});
@@ -225,7 +158,7 @@ test('loadIndex drops entries whose photo is gone; removePhoto deletes both', ()
 test('addPhoto refuses without an image or a usable name, before touching disk', () => {
   const dir = tmp();
   assert.ok(C.addPhoto({ dir, source: 'nope', name: 'Dad' }).error);
-  assert.ok(C.addPhoto({ dir, source: 'data:image/png;base64,AAAA', name: 'Neo' }).error);
+  assert.ok(C.addPhoto({ dir, source: 'data:image/png;base64,AAAA', name: 'Wizard' }).error);
   assert.deepEqual(fs.readdirSync(dir), []);
 });
 

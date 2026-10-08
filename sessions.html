@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; base-uri 'none'; form-action 'none'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sessions</title><link rel="stylesheet" href="tokens.css"><link rel="stylesheet" href="sessions.css"></head>
+<body><main><header><div><h1>Sessions</h1><p>AI activity reported on this computer.</p></div><button id="refresh" type="button">Refresh</button></header>
+<details id="add" class="add" open><summary><h2 id="add-title">Add sessions</h2></summary>
+<p class="muted">Three ways in. Nothing here reads your chats.</p>
+<ol class="routes">
+<li><h3>Connect a tool</h3><p class="muted">Let Claude, Codex or Gemini report to Plexiform so their sessions show up here and on your widget.</p><button id="add-connect" type="button">Connect a tool</button><p class="route-status" id="connect-status" role="status"></p></li>
+<li><h3>Link a repo to a board</h3><p class="muted">Choose a repo and a board so work in it can be shared with that board’s team.</p><button id="add-link" type="button">Link a repo to a board</button><div id="panel-link" class="panel" hidden></div></li>
+<li><h3>Start a session here</h3><p class="muted">Pick a repo and an AI. It opens with Plexiform watching, so it is tracked from the start.</p><button id="add-start" type="button">Start a session here</button><div id="panel-start" class="panel" hidden></div></li>
+</ol></details>
+<section class="activity" aria-labelledby="activity-title"><h2 id="activity-title">Codex activity</h2><p id="activity-status">Checking local activity…</p><button id="settings" type="button">Activity settings</button></section>
+<details id="coord" class="add" hidden><summary><h2>Coordination (Burst)</h2></summary>
+<p class="muted">Files sessions changed over each other, and what went wrong. From Burst's session coordination on this Mac.</p>
+<label class="days">Window <select id="coord-days"><option value="1">Today</option><option value="7">Last 7 days</option><option value="14">Last 14 days</option></select></label>
+<div id="coord-body" role="status"></div></details>
+<p id="status" role="status" aria-live="polite">Loading local sessions…</p><div id="content"></div>
+<p class="muted disclosure">Recent means a local report arrived within 90 seconds. Reports do not verify completion, and an idle or silent session may become stale. Cloud sessions need a supported connection to report here. Private chats are not read.</p>
+</main><script src="sessions.js"></script></body></html>

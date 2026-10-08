@@ -138,12 +138,144 @@ function showInvite(inv, team) {
 
 // ── screens ───────────────────────────────────────────────────────────────
 
+// Mirror of Settings' Burst card. Main owns detection, consent and commands;
+// this renders the normalized view and polls only while its section is on screen.
+function burstSection() {
+  const detail = el('span', { class: 'acct-mail' });
+  const chip = el('span', { class: 'acct-mail', role: 'status' });
+  const result = el('p', { class: 'acct-hint', role: 'status' });
+  const buttons = el('div', {});
+  const pl = el('div', { hidden: true });
+  const plState = el('p', { class: 'acct-hint', role: 'status' });
+  const plStats = el('p', { class: 'acct-hint', role: 'status' });
+  const plResult = el('p', { class: 'acct-hint', role: 'status' });
+  const plConfirm = el('div', { hidden: true });
+  const plConfirmText = el('p', { class: 'acct-hint' });
+  const plSet = async (req) => {
+    plResult.textContent = '';
+    const r = await api.burstSetCompaction(req).catch(() => ({ ok: false, error: 'Something went wrong.' }));
+    if (r && r.needsConfirm) { plConfirmText.textContent = r.text; plConfirm.hidden = false; return; }
+    plConfirm.hidden = true;
+    plResult.textContent = r && r.ok ? (r.note || '') : ((r && r.error) || 'Something went wrong.');
+    poll();
+  };
+  const plBtn = (label, req, primary) => el('button', { type: 'button', class: primary ? 'btn btn-primary' : 'btn', onclick: () => plSet(req) }, label);
+  const plDraw = (c) => {
+    pl.hidden = !c;
+    if (!c) return;
+    const tok = (n) => (n >= 1e6 ? `${+(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n));
+    plState.textContent = `${c.enabled ? 'On' : 'Off'}, ${c.thresholdLabel}.${c.enabled ? ' Plexiform\u2019s own Claude compactor is off while this is on.' : ''}`;
+    plStats.textContent = c.compactions ? `${c.compactions} ${c.compactions === 1 ? 'compaction' : 'compactions'} \u00b7 saved ~$${c.savedUsd.toFixed(2)} \u00b7 ${tok(c.tokensNotResent)} tokens not resent` : 'No compactions yet.';
+    plActions.textContent = '';
+    plActions.append(c.enabled ? plBtn('Turn off', { enabled: false }, false) : plBtn('Turn on', { enabled: true }, true),
+      plBtn(c.mode === 'fixed' ? 'Static (current)' : 'Static', { enabled: c.enabled, mode: 'fixed' }, false),
+      plBtn(c.mode === 'intelligent' ? 'Smart (current)' : 'Smart', { enabled: c.enabled, mode: 'intelligent' }, false));
+  };
+  const plActions = el('div', {});
+  pl.append(el('h3', {}, 'Pauseless compaction'),
+    el('p', { class: 'acct-hint' }, 'Keeps long Claude Code sessions going without the pause: Burst summarises the old part in the background and swaps it in. It can raise cost slightly when a summary is made; savings shown below.'),
+    plState, plStats, plActions, plConfirm, plResult);
+  plConfirm.append(plConfirmText, el('button', { type: 'button', class: 'btn btn-primary', onclick: () => plSet({ enabled: true, confirmed: true }) }, 'Turn on'),
+    el('button', { type: 'button', class: 'btn', onclick: () => { plConfirm.hidden = true; } }, 'Cancel'));
+  const name = el('span', { class: 'acct-name' }, 'Claude Burst');
+  const sec = el('section', { class: 'acct-section' }, el('h2', {}, 'Claude Burst'),
+    el('div', { class: 'acct-item' }, el('div', { class: 'acct-who' }, name, detail, chip)), buttons, pl, result);
+  let timer = null;
+  let seen = false;
+  const poll = async () => {
+    clearTimeout(timer);
+    if (sec.isConnected) seen = true; else if (seen) return;
+    if (document.visibilityState !== 'visible') { timer = setTimeout(poll, 5000); return; }
+    let next = 30000;
+    try {
+      const v = await api.burstStatus();
+      if (v) {
+        detail.textContent = v.detail;
+        chip.textContent = v.chip ? v.chip.label : '';
+        plDraw(v.compaction);
+        buttons.textContent = '';
+        for (const a of v.actions) {
+          buttons.append(el('button', { type: 'button', class: a.primary ? 'btn btn-primary' : 'btn', onclick: async () => {
+            const r = await api.burstAction(a.kind, a.modes ? 'base-url' : '').catch(() => ({ ok: false, error: 'Something went wrong.' }));
+            result.textContent = r.cancelled ? 'Cancelled. Nothing changed.' : r.ok ? 'Started in Terminal.' : (r.error || '');
+            poll();
+          } }, a.label));
+        }
+        next = v.nextPollMs;
+      }
+    } catch { /* retry */ }
+    if (next) timer = setTimeout(poll, next);
+  };
+  poll();
+  return sec;
+}
+
+// "Keep this Mac awake while AI is working": main decides Burst or the app's own blocker and
+// asks for consent; this only draws the switch and the honest one-line label.
+function keepAwakeSection() {
+  const label = el('span', { class: 'acct-mail' }, '');
+  const sw = el('div', { class: 'acct-item acct-item-toggle' });
+  const sec = el('section', { class: 'acct-section' }, el('h2', {}, 'Keep awake'), sw);
+  const draw = (v) => {
+    label.textContent = v ? v.label : '';
+    sw.textContent = '';
+    sw.append(el('div', { class: 'acct-who' }, el('span', { class: 'acct-name' }, 'Keep this Mac awake while AI is working'), label),
+      toggle(!!(v && v.on), 'Keep this Mac awake while AI is working', async (on) => {
+        const r = await api.keepAwakeSet(on).catch(() => ({ ok: false, error: 'Something went wrong.' }));
+        if (r && r.ok) draw(r.view);
+        else if (r && r.cancelled) return { ok: false };
+        return r;
+      }));
+  };
+  api.keepAwakeGet().then(draw).catch(() => {});
+  return sec;
+}
+
+// "On this Mac": what is keeping it awake right now (works without Burst), and Burst's own readout of
+// the lid setting, hotspot, automask and Remote Control. Read-only; hidden when there is nothing to say.
+function macStatusSection() {
+  const sec = el('section', { class: 'acct-section', hidden: true }, el('h2', {}, 'On this Mac'));
+  const line = (name, text) => el('div', { class: 'acct-item' }, el('div', { class: 'acct-who' }, el('span', { class: 'acct-name' }, name), el('span', { class: 'acct-mail', role: 'status' }, text)));
+  const draw = (v) => {
+    sec.querySelectorAll('.acct-item, .acct-hint, .btn').forEach((n) => n.remove());
+    const b = v && v.burst;
+    if (!v || (!b && !(v.others || []).length)) { sec.hidden = true; return; }
+    sec.hidden = false;
+    if (b && b.keepAwake) {
+      const k = b.keepAwake;
+      sec.append(line('Lid closed', `${k.mode === 'off' ? 'Burst has it off.' : `On in Burst (${k.mode === 'always' ? 'plugged in and on battery' : 'plugged in only'}).`} Now ${k.onAc ? 'on mains power' : 'on battery'}, closing the lid ${k.sleepDisabled ? 'keeps the Mac awake' : 'sleeps the Mac'}.`));
+      if (k.drift) sec.append(el('p', { class: 'acct-hint', role: 'alert' }, k.drift));
+    }
+    if ((v.others || []).length) {
+      sec.append(el('div', { class: 'acct-item' }, el('div', { class: 'acct-who' }, el('span', { class: 'acct-name' }, 'Other programs keeping this Mac awake'),
+        ...v.others.map((o) => el('span', { class: 'acct-mail' }, `${o.for || o.process} (through ${o.process}, pid ${o.pid}). It keeps a closed laptop awake on battery, whatever is set above.`)))));
+    }
+    if (b && b.hotspot) sec.append(line('Hotspot', b.hotspot.ssid ? `Joins ${b.hotspot.ssid} when this Mac is offline. Now ${b.hotspot.online ? 'online' : 'offline'}. Change it in the Burst dashboard.` : 'Not joining a hotspot.'));
+    if (b && b.automask) sec.append(line('Automask', b.automask.enabled ? `On: ${b.automask.rules} ${b.automask.rules === 1 ? 'kind' : 'kinds'} of personal data masked before requests leave this Mac.` : 'Off.'));
+    if (b && b.remote) sec.append(line('Remote Control', b.remote));
+    if (b) sec.append(el('button', { type: 'button', class: 'btn', onclick: () => { api.burstAction('open-dashboard').catch(() => {}); } }, 'Open the Burst dashboard'));
+  };
+  const poll = () => api.macView().then(draw).catch(() => draw(null));
+  poll();
+  return sec;
+}
+
+const STATUS = { working: 'Working', waiting: 'Needs you', review: 'Finished, ready to review', ended: 'Finished', idle: 'Quiet for a while' };
+
 const SCREENS = {
+  clients(s) {
+    return [heading('Your client projects', 'View the project updates shared with you. Invitations need your explicit acceptance.'),
+      ...(s.workspaces ?? []).map((w) => el('p', { class: 'acct-hint' }, w.name)),
+      ...(s.invitations ?? []).map((i) => el('p', { class: 'acct-hint' }, `${i.inviter_first_name} invited you to ${i.workspace_name}.`)),
+      el('button', { type: 'button', class: 'btn btn-primary', onclick: () => act(api.openClients()) }, 'Open client projects'),
+      el('p', { class: 'acct-hint' }, 'Your client access stays scoped to the projects shared with you.'),
+    ];
+  },
   hub(s) {
     return [
-      heading(s.forInvite ? 'Where is your team?' : s.brand.copy.signInHeading, s.forInvite ? 'This invite doesn’t say which team hub it’s for. Enter the address your team uses.' : s.brand.copy.signInSub),
+      heading(s.forInvite ? 'Where is your team?' : s.brand.copy.signInHeading, s.forInvite ? 'This invite doesn’t say where your team is. Enter the address your team uses.' : s.brand.copy.signInSub),
       form({
-        fields: field('Team hub address', input({ name: 'url', type: 'text', inputmode: 'url', autocomplete: 'url', placeholder: s.brand.defaultHost, value: s.lastHub ?? '', required: true, autofocus: true })),
+        fields: field('Team address', input({ name: 'url', type: 'text', inputmode: 'url', autocomplete: 'url', placeholder: s.brand.defaultHost, value: s.lastHub ?? '', required: true, autofocus: true })),
         submit: 'Continue', busy: 'Checking…',
         fn: (v) => api.hub(v.url),
       }),
@@ -153,9 +285,9 @@ const SCREENS = {
 
   confirm(s) {
     return [
-      el('h1', {}, 'Join a team on this server?'),
+      el('h1', {}, 'Join a team at this address?'),
       el('p', { class: 'acct-host', title: s.host }, s.host),
-      el('p', { class: 'acct-sub' }, 'The invite link sent you here, and you haven’t used this server before. Only continue if you trust it.'),
+      el('p', { class: 'acct-sub' }, 'The invite link sent you here, and you haven’t used this address before. Only continue if you trust it.'),
       el('div', { class: 'acct-actions' },
         el('button', { type: 'button', class: 'btn btn-primary', onclick: () => api.confirm(true) }, 'Continue'),
         el('button', { type: 'button', class: 'btn', onclick: () => api.confirm(false) }, 'Cancel')),
@@ -164,9 +296,9 @@ const SCREENS = {
 
   email(s) {
     const out = [heading('Sign in', null), el('p', { class: 'acct-sub' }, 'to ', hostTag(s.host), s.forInvite ? ' to accept your invite.' : '.')];
-    const foot = el('p', { class: 'acct-foot' }, link('Use a different team hub', () => api.go('hub')));
+    const foot = el('p', { class: 'acct-foot' }, link('Use a different team address', () => api.go('hub')));
     if (!s.methods) {
-      out.push(el('p', { class: 'acct-error', role: 'alert' }, `Couldn’t check how to sign in to ${s.host ?? 'this server'}. ${s.methodsError ?? ''}`.trim()),
+      out.push(el('p', { class: 'acct-error', role: 'alert' }, `Couldn’t check how to sign in to ${s.host ?? 'this address'}. ${s.methodsError ?? ''}`.trim()),
         el('div', { class: 'acct-actions' }, el('button', { type: 'button', class: 'btn btn-primary', onclick: () => render() }, 'Try again')), foot);
       return out;
     }
@@ -177,7 +309,7 @@ const SCREENS = {
       return b;
     });
     if (!providers.length && !m.email) {
-      out.push(el('p', { class: 'acct-hint' }, 'This server has no sign-in method enabled. Ask the admin.'), foot);
+      out.push(el('p', { class: 'acct-hint' }, 'Google and GitHub sign-in aren’t set up at this address yet. Ask your team’s admin.'), foot);
       return out;
     }
     if (providers.length) out.push(el('div', { class: 'acct-providers' }, providers));
@@ -228,7 +360,7 @@ const SCREENS = {
 
   'create-team'(s) {
     if (!s.host) {
-      return [heading('Create a team', 'Sign in to your team hub first. Your team lives there.'),
+      return [heading('Create a team', 'Sign in to your team first. Your team lives there.'),
         el('div', { class: 'acct-actions' }, el('button', { type: 'button', class: 'btn btn-primary', onclick: () => api.go('hub') }, 'Sign in'))];
     }
     // Right after a first sign-in this is the whole choice: start a team, or join the one that invited you.
@@ -248,7 +380,7 @@ const SCREENS = {
 
   integrations(s) {
     return [
-      heading('Integrations', `Connect the tools your team already uses. Integrations live on your team hub (${s.brand.defaultHost}), so you need a team first.`),
+      heading('Integrations', `Connect the tools your team already uses. Integrations live on your team’s address (${s.brand.defaultHost}), so you need a team first.`),
       el('ul', { class: 'acct-connectors', 'aria-label': 'Tools you can connect' }, s.connectors.map((c) => el('li', { class: `acct-connector acct-connector-${c.status}` },
         el('h2', {}, c.name),
         el('p', { class: 'acct-hint' }, c.value),
@@ -263,7 +395,7 @@ const SCREENS = {
     if (!s.team && !s.signedInHubs.length) {
       return [
         heading('Team', 'Sign in to create a team or join one: invite teammates, see their agents live.'),
-        el('p', { class: 'acct-hint' }, `Teams and integrations live on the team hub (${s.brand.defaultHost}). Your board on this Mac stays local until you do.`),
+        el('p', { class: 'acct-hint' }, `Teams and integrations live on your team’s address (${s.brand.defaultHost}). Your board on this Mac stays local until you do.`),
         signedOutActions(),
       ];
     }
@@ -306,7 +438,7 @@ const SCREENS = {
     });
     out.push(el('section', { class: 'acct-section' }, el('h2', {}, `Members (${s.members.length})`), el('ul', { class: 'acct-list' }, rows)));
 
-    if (s.runners) out.push(el('section', { class: 'acct-section' }, el('h2', {}, 'Runners'), runnerRows(s)));
+    if (s.runners) out.push(el('section', { class: 'acct-section' }, el('h2', {}, 'Macs that run this team’s cards'), runnerRows(s)));
 
     if (s.canManage) {
       const rename = form({ fields: el('div', { class: 'acct-row-form' }, input({ name: 'name', type: 'text', maxlength: '60', value: s.team.name, required: true, 'aria-label': 'Team name' })), submit: 'Rename', busy: 'Saving…', fn: (v) => act(api.renameTeam(team, v.name)) });
@@ -335,7 +467,7 @@ const SCREENS = {
         heading('Join with an invite', 'Paste the invite link you were sent.'),
         s.error ? el('p', { class: 'acct-error', role: 'alert' }, s.error) : null,
         form({
-          fields: field('Invite link or code', input({ name: 'code', type: 'text', autocomplete: 'off', placeholder: 'https://… or inv_…', required: true, autofocus: true })),
+          fields: field('Invite link or code', input({ name: 'code', type: 'text', autocomplete: 'off', placeholder: 'Paste the invite link or 8-letter code (ABCD-EFGH)', required: true, autofocus: true })),
           submit: 'Continue', busy: 'Checking…',
           fn: (v) => api.joinCode(v.code),
         }),
@@ -386,7 +518,7 @@ const SCREENS = {
 
   account(s) {
     if (!s.accounts.length) {
-      return [heading('Account', 'You’re not signed in to a team hub.'), el('div', { class: 'acct-actions' }, el('button', { type: 'button', class: 'btn btn-primary', onclick: () => api.go('hub') }, 'Sign in'))];
+      return [heading('Account', 'You’re not signed in to a team.'), el('div', { class: 'acct-actions' }, el('button', { type: 'button', class: 'btn btn-primary', onclick: () => api.go('hub') }, 'Sign in'))];
     }
     const out = [heading('Account', null)];
     for (const a of s.accounts) {
@@ -416,16 +548,40 @@ const SCREENS = {
       }
       out.push(card);
     }
-    out.push(el('p', { class: 'acct-foot' }, link('Sign in to another team hub', () => api.go('hub'))));
+    out.push(el('p', { class: 'acct-foot' }, link('Sign in to another team address', () => api.go('hub'))));
     return out;
   },
 
   thismac(s) {
-    const out = [heading('This Mac', 'Let your team hand cards to Claude on this Mac. Runs happen here, with your own setup.')];
-    if (!s.hubs.length || s.hubs.every((h) => !h.teams.length)) {
-      out.push(el('p', { class: 'acct-hint' }, 'Sign in and join a team to run cards here.'));
-      return out;
+    const out = [heading('This Mac', 'Keep this Mac awake and see how it takes part in your team.')];
+    const solo = !s.hubs.length || s.hubs.every((h) => !h.teams.length);
+    if (solo) out.push(el('p', { class: 'acct-hint' }, 'Join a team to let this Mac run your team’s tasks. ',
+      el('button', { type: 'button', class: 'btn btn-quiet', onclick: () => api.go('team') }, 'Join')));
+    out.push(keepAwakeSection(), burstSection(), macStatusSection());
+    if (s.workCapture) {
+      const sec = el('section', { class: 'acct-section' }, el('h2', {}, 'Automatic work cards'));
+      sec.append(el('div', { class: 'acct-item acct-item-toggle' },
+        el('div', { class: 'acct-who' }, el('span', { class: 'acct-name' }, 'Create cards from reported AI work'),
+          el('span', { class: 'acct-mail' }, 'Work in a linked team repository goes to that team’s board. Other work goes to My board. Only task details and reported progress are sent; transcripts stay private. Finished reports move to Review for you to check.')),
+        toggle(s.workCapture.enabled, 'Create cards automatically from reported AI work', async on => { const r = await api.captureEnabled(on); if (r?.ok) render(); return r; })));
+      if (s.workCapture.notice) sec.append(el('p', { class: 'acct-hint', role: 'status' }, s.workCapture.notice));
+      for (const t of s.workCapture.tasks) {
+        const d = t.destination, destination = d.kind === 'team' ? `${d.team_name || 'Team'} · ${d.board_name || 'Board'}` : 'My board (this Mac)';
+        const status = t.untracked ? 'Tracking stopped' : !t.card_id ? 'Waiting to sync' : (STATUS[t.status] ?? 'Active');
+        const row = el('div', { class: 'acct-item' }, el('div', { class: 'acct-who' },
+          el('span', { class: 'acct-name' }, t.title), el('span', { class: 'acct-mail' }, `${destination} · ${status}`),
+          d.needs_routing ? el('span', { class: 'acct-mail' }, d.reason === 'team_read_only' ? 'Your team role is read-only, so this card stays personal.' : 'This repository is linked to multiple boards. Choose a default for future tasks; this card stays on My board.') : null));
+        const choices = (s.workCapture.choices || []).filter(c => c.repo === t.repo);
+        if (d.needs_routing && choices.length) row.append(form({
+          fields: field('Board for future tasks in this repository', el('select', { name: 'destination', class: 'input' }, choices.map(c => el('option', { value: c.key }, `${c.team_name} · ${c.board_name}`)))),
+          submit: 'Save default', busy: 'Checking…', fn: async v => { const r = await api.captureDefault(t.repo, v.destination); if (r?.ok) render(); return r; },
+        }));
+        sec.append(row);
+      }
+      if (!s.workCapture.tasks.length) sec.append(el('p', { class: 'acct-hint' }, 'Cards appear when a connected AI reports work.'));
+      out.push(sec);
     }
+    if (solo) return out;
     for (const h of s.hubs) {
       const sec = el('section', { class: 'acct-section' }, el('h2', {}, h.host));
       const sums = toggle(h.summaries && h.share, `Include one-line summaries for every team on ${h.host}`, (on) => api.summaries(h.host, on), { disabled: !h.share });
@@ -440,7 +596,7 @@ const SCREENS = {
         const ended = t.state === 'removed';
         const again = ended && !viewer ? link('Turn on again', () => act(api.runner(t.id, true))) : null;
         sec.append(el('div', { class: 'acct-item acct-item-toggle' },
-          el('div', { class: 'acct-who' }, el('span', { class: 'acct-name' }, `Run ${t.name} cards`), el('span', { class: 'acct-mail', 'data-state': t.state }, viewer ? 'Viewers can’t run cards.' : ended ? `This Mac isn’t sharing sessions with ${t.name} any more.` : runnerText(t)), again),
+          el('div', { class: 'acct-who' }, el('span', { class: 'acct-name' }, `Run ${t.name} cards`), el('span', { class: 'acct-mail', 'data-state': t.state }, viewer ? 'Viewers can’t run cards.' : ended ? `This Mac no longer runs ${t.name} cards.` : runnerText(t)), again),
           toggle(t.enabled, `Run ${t.name} cards on this Mac`, (on) => act(api.runner(t.id, on)), { disabled: viewer })));
       }
       out.push(sec);
@@ -457,7 +613,7 @@ const cancelLink = () => link('Cancel', async () => { await api.cancelDelete(); 
 // then Delete team while the check lasts. It is only ever for the team on screen.
 function teamDelete(s) {
   const d = s.team.deleteStep;
-  const warn = `Everyone loses ${s.team.name}, its boards and its cards at once, and runners stop. This can’t be undone from the app.`;
+  const warn = `Everyone loses ${s.team.name}, its boards and its cards at once, and this team’s Macs stop running its cards. This can’t be undone from the app.`;
   if (!d) {
     const f = form({
       fields: field(`Type ${s.team.slug} to confirm`, input({ name: 'slug', type: 'text', autocomplete: 'off', required: true, placeholder: s.team.slug })),
@@ -533,7 +689,7 @@ function runnerRows(s) {
     el('div', { class: 'acct-who' },
       el('span', { class: 'acct-name' }, r.name || 'A Mac', r.current ? el('span', { class: 'chip' }, 'this Mac') : null),
       el('span', { class: 'acct-mail' }, [r.person, r.online ? 'Online' : lastSeen(r.lastSeenAt)].filter(Boolean).join(' · '))),
-    r.canRevoke ? el('button', { type: 'button', class: 'btn btn-quiet', 'aria-label': `Remove ${r.name || 'this runner'}`, onclick: (e) => {
+    r.canRevoke ? el('button', { type: 'button', class: 'btn btn-quiet', 'aria-label': `Remove ${r.name || 'this Mac'}`, onclick: (e) => {
       const b = e.currentTarget;
       if (b.dataset.armed) { act(api.revokeRunner(team, r.id)); return; }
       b.dataset.armed = '1';
@@ -555,13 +711,13 @@ function lastSeen(iso) {
 
 const RUNNER = {
   off: 'Off', starting: 'Starting…', connecting: 'Connecting…', connected: 'Running', backoff: 'Reconnecting…', restarting: 'Restarting…',
-  unavailable: 'Can’t reach the team hub right now.', stopping: 'Stopping…',
+  unavailable: 'Can’t reach your team right now.', stopping: 'Stopping…',
 };
 function runnerText(t) {
   const base = !t.enabled && t.state === 'off' ? 'Off' : (['missing', 'failed'].includes(t.state) ? (t.detail ?? 'Stopped') : (RUNNER[t.state] ?? t.state));
   const parts = [base];
-  if (t.parked > 0) parts.push(`Parked ${t.parked} run${t.parked === 1 ? '' : 's'}`);
-  if (t.parkedPending > 0) parts.push(`${t.parkedPending} run${t.parkedPending === 1 ? ' is' : 's are'} being handed over`);
+  if (t.parked > 0) parts.push(`Paused ${t.parked} run${t.parked === 1 ? '' : 's'}`);
+  if (t.parkedPending > 0) parts.push(`${t.parkedPending} run${t.parkedPending === 1 ? ' is' : 's are'} being moved to another AI`);
   return parts.join(' · ');
 }
 

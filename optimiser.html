@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; base-uri 'none'; form-action 'none'" />
+<title>Usage optimiser</title>
+<link rel="stylesheet" href="tokens.css" />
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: var(--text-base)/1.45 var(--font); -webkit-font-smoothing: antialiased; }
+  @media (prefers-color-scheme: light) {
+    :root { color-scheme: light; --bg: #eceaf0; --panel: #fbfafc; --panel-2: #f3f1f6; --line: #dedae4; --line-strong: #c8c3d1; --text: #1d1a22; --muted: #5b5566; --faint: #6b6577; --accent: #b4532f; --accent-ink: #ffffff; }
+  }
+  body { display: flex; flex-direction: column; user-select: none; cursor: default; }
+  .bar { flex: none; height: 48px; display: flex; align-items: center; gap: var(--space-3); padding: 0 var(--space-5); border-bottom: 1px solid var(--line); background: var(--bg); }
+  .bar h1 { margin: 0; font-size: var(--text-lg); font-weight: 650; letter-spacing: -0.01em; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: var(--radius-pill); border: 1px solid var(--line); background: var(--panel); color: var(--muted); font-size: var(--text-xs); font-weight: 600; }
+  .chip[hidden] { display: none; }
+  .chip i { width: 7px; height: 7px; border-radius: 50%; background: var(--idle); }
+  .chip[data-tone="green"] i { background: var(--green); }
+  .chip[data-tone="amber"] i { background: var(--amber); }
+  .chip[data-tone="red"] i { background: var(--red); }
+  .spacer { flex: 1; }
+  button { font: inherit; color: var(--text); background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius); min-height: 28px; padding: 0 12px; }
+  button:hover:not(:disabled) { border-color: var(--line-strong); }
+  button:disabled { opacity: 0.5; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+  button.link { background: none; border-color: transparent; color: var(--muted); padding: 0 8px; }
+  button.link:hover:not(:disabled) { color: var(--text); border-color: transparent; text-decoration: underline; }
+  main { flex: 1; min-height: 0; overflow-y: auto; padding: var(--space-6) var(--space-5); }
+  .hub { max-width: 920px; margin: 0 auto; display: flex; flex-direction: column; gap: var(--space-3); }
+  .intro h2 { margin: 0 0 var(--space-1); font-size: var(--text-xl); font-weight: 650; letter-spacing: -0.01em; }
+  .intro p { margin: 0; color: var(--muted); max-width: 72ch; user-select: text; }
+  .group-title { margin: var(--space-4) 0 0; font-size: var(--text-xs); font-weight: 650; text-transform: uppercase; letter-spacing: 0.06em; color: var(--faint); }
+  #tools { display: flex; flex-direction: column; gap: var(--space-3); }
+  .tool, .empty { padding: var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); }
+  .tool-head { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+  .tool-head h3, .empty h3 { margin: 0; font-size: var(--text-lg); font-weight: 650; }
+  .by { color: var(--faint); font-size: var(--text-xs); }
+  .empty h2 { margin: var(--space-2) 0 0; font-size: var(--text-base); font-weight: 600; }
+  .empty p, .tool p { margin: var(--space-1) 0 0; color: var(--muted); max-width: 72ch; user-select: text; }
+  .saves { margin-top: var(--space-2); padding: var(--space-2) var(--space-3); border-radius: var(--radius); background: var(--panel-2); color: var(--text); user-select: text; }
+  .saves small { display: block; color: var(--faint); font-size: var(--text-xs); }
+  .actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-3); }
+  .actions:empty { display: none; }
+  .note { min-height: 0; margin-top: var(--space-2); font-size: var(--text-xs); color: var(--muted); }
+  .note:empty { display: none; }
+  .confirm { margin-top: var(--space-2); padding: var(--space-2) var(--space-3); border: 1px solid var(--line-strong); border-radius: var(--radius); font-size: var(--text-sm); color: var(--text); white-space: pre-wrap; }
+  .tool[data-available="false"] { opacity: 0.72; }
+  .tabs { display: flex; gap: 2px; margin-left: var(--space-3); }
+  .tabs[hidden] { display: none; }
+  .tab { background: none; border-color: transparent; color: var(--muted); font-weight: 600; min-height: 28px; padding: 0 12px; }
+  .tab:hover:not(:disabled) { color: var(--text); border-color: transparent; }
+  .tab[aria-selected="true"] { background: var(--panel-2); border-color: var(--line); color: var(--text); }
+  .tab:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  main.pane { display: block; padding: var(--space-5); }
+  .card { border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); padding: var(--space-4); margin: 0 auto var(--space-4); max-width: 920px; user-select: text; }
+  .card h2 { margin: 0 0 var(--space-2); font-size: var(--text-lg); font-weight: 650; }
+  .card p { margin: 0 0 var(--space-2); color: var(--muted); }
+  .head { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
+  .head h2 { margin: 0; }
+  .kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px var(--space-4); margin: var(--space-2) 0 0; }
+  .kv dt { color: var(--faint); }
+  .kv dd { margin: 0; color: var(--text); }
+  table { width: 100%; border-collapse: collapse; font-size: var(--text-sm, 13px); }
+  th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { color: var(--faint); font-weight: 600; font-size: var(--text-xs); }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.note { white-space: normal; color: var(--muted); max-width: 280px; }
+  .scroll { overflow-x: auto; }
+  .filters { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-3); }
+  select { font: inherit; color: var(--text); background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius); min-height: 28px; padding: 0 8px; }
+  .chart { display: flex; align-items: flex-end; gap: 3px; margin-top: var(--space-2); }
+  .bar-col { flex: 1; min-width: 4px; display: flex; flex-direction: column; }
+  .bar-col .bars { display: flex; flex-direction: column; justify-content: flex-end; height: 72px; }
+  .bar-col .day { font-size: 9px; line-height: 1.4; color: var(--muted); text-align: center; margin-top: 2px; white-space: nowrap; overflow: hidden; }
+  .swatch { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+  .swatch.p { background: var(--accent); }
+  .swatch.s { background: var(--amber); }
+  td.dim { color: var(--faint); }
+  .bar-col i { display: block; width: 100%; }
+  .bar-col .p { background: var(--accent); }
+  .bar-col .s { background: var(--amber); }
+  .legend { display: flex; gap: var(--space-4); margin-top: var(--space-2); font-size: var(--text-xs); color: var(--muted); }
+  .muted { color: var(--muted); }
+  .loading { color: var(--faint); margin-top: var(--space-6); }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+  <header class="bar">
+    <h1>Usage optimiser</h1>
+    <div class="tabs" id="tabs" role="tablist" aria-label="Usage optimiser views" hidden>
+      <button type="button" class="tab" role="tab" id="tab-dashboard" data-tab="dashboard" aria-selected="true">Dashboard</button>
+      <button type="button" class="tab" role="tab" id="tab-route" data-tab="route" aria-selected="false" tabindex="-1">Route</button>
+      <button type="button" class="tab" role="tab" id="tab-requests" data-tab="requests" aria-selected="false" tabindex="-1">Requests</button>
+      <button type="button" class="tab" role="tab" id="tab-tools" data-tab="tools" aria-selected="false" tabindex="-1">Tools</button>
+    </div>
+    <span class="chip" id="chip" role="status" hidden><i aria-hidden="true"></i><span id="chip-text"></span></span>
+    <span class="spacer"></span>
+    <button type="button" class="link" id="browser" hidden>Open in browser</button>
+    <button type="button" id="refresh">Refresh</button>
+  </header>
+  <main id="hub" aria-labelledby="hub-title">
+    <div class="hub">
+      <section class="intro">
+        <h2 id="hub-title">Spend less on AI coding</h2>
+        <p>Tools that cut what your AI coding costs: Andrew Baker's Claude Burst and its add-ons, and what Plexiform has built in. Each one says whether it is on here and what it has saved, using only figures the tool reported itself. Turning one on always asks you first.</p>
+      </section>
+      <p class="loading" id="loading">Loading Claude Burst…</p>
+      <h3 class="group-title" id="burst-group-title" hidden>Claude Burst and its tools · Andrew Baker</h3>
+      <section class="empty" id="empty" hidden aria-live="polite">
+        <div class="tool-head"><h3>Claude Burst</h3><span class="by">Andrew Baker</span></div>
+        <h2 id="headline"></h2>
+        <p id="detail"></p>
+        <div class="actions" id="actions"></div>
+        <div class="actions"><button type="button" class="link" id="docs">What is Claude Burst? Read the docs</button></div>
+        <p class="note" id="note" role="status"></p>
+      </section>
+      <div id="tools"></div>
+    </div>
+  </main>
+  <main class="pane" id="route-pane" role="tabpanel" aria-labelledby="tab-route" hidden>
+    <section class="card" id="route-card" aria-live="polite">
+      <div class="head"><h2 id="route-head">Route</h2><span class="chip" id="route-chip" data-tone=""><i aria-hidden="true"></i><span id="route-chip-text"></span></span><span class="spacer"></span><button type="button" class="primary" id="route-reset" hidden>Back to Claude now</button></div>
+      <p id="route-reason"></p>
+      <p class="note" id="route-note" role="status"></p>
+      <dl class="kv" id="route-kv"></dl>
+    </section>
+    <section class="card" id="route-rejected-card" hidden><h2>Models at their limit</h2><div class="scroll"><table><thead><tr><th>Model</th><th>Resets in</th><th>Falls back to</th></tr></thead><tbody id="route-rejected"></tbody></table></div></section>
+    <section class="card" id="route-chain-card" hidden><h2>If a model is at its limit</h2><dl class="kv" id="route-chain"></dl></section>
+    <p class="muted" id="route-error" hidden></p>
+  </main>
+  <main class="pane" id="requests-pane" role="tabpanel" aria-labelledby="tab-requests" hidden>
+    <section class="card" id="hist-card"><h2>Daily spend</h2><div class="chart" id="hist-chart" role="img" aria-label="Daily spend, your plan and backup"></div><div class="legend"><span><i class="swatch p"></i>Your plan</span><span><i class="swatch s"></i>Backup</span><span id="hist-total"></span></div></section>
+    <section class="card">
+      <div class="filters">
+        <label class="muted">Plan or backup <select id="f-slot"><option value="">All</option><option value="primary">Your plan</option><option value="secondary">Backup</option></select></label>
+        <label class="muted">Status <select id="f-status"><option value="">All</option><option value="ok">Succeeded</option><option value="err">Failed</option></select></label>
+        <label class="muted">Model <select id="f-model"><option value="">All</option></select></label>
+        <label class="muted"><input type="checkbox" id="f-pings"> Show pings</label>
+      </div>
+      <div class="scroll"><table><thead><tr><th>Time</th><th>Session</th><th>Plan or backup</th><th>Model</th><th class="num">Status</th><th class="num">Latency</th><th class="num">Tokens in</th><th class="num">Tokens out</th><th class="num">Cost</th><th>Note</th></tr></thead><tbody id="req-rows"></tbody></table></div>
+      <p class="muted" id="req-empty" hidden>No requests yet.</p>
+    </section>
+    <p class="muted" id="req-error" hidden></p>
+  </main>
+  <script src="src/optimiser-tools.js"></script>
+  <script src="optimiser.js"></script>
+</body>
+</html>

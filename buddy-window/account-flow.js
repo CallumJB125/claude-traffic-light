@@ -7,18 +7,19 @@
 
 const crypto = require('node:crypto');
 const { parseInvite, routeInvite, inviteMailto, INVITE_CODE_RE, SLUG_MISMATCH } = require('./accounts');
-const { hostOf, partitionFor, integrationPartitionFor } = require('./workspaces');
+const { hostOf, partitionFor, integrationPartitionFor, accessWsId } = require('./workspaces');
 const { startProviderSignIn, PROVIDERS, PROVIDER_NAME } = require('./oauth');
 const BRAND = require('./brand');
 const { connectorRows } = require('./connectors');
 
 // Screens the page itself may ask for; the rest (`confirm`, `code`, `browser`)
 // are reached only through the flow (e.g. `confirm` after an invite link).
-const PAGE_SCREENS = new Set(['hub', 'email', 'create-team', 'join', 'team', 'thismac', 'account', 'invites', 'integrations']);
+const PAGE_SCREENS = new Set(['hub', 'email', 'create-team', 'join', 'team', 'thismac', 'account', 'invites', 'integrations', 'clients']);
 
 // Argument types per action; the IPC layer refuses anything else before it runs.
 const ACCT_ARGS = {
   state: [], go: ['string'], hub: ['string'], confirm: ['boolean'], email: ['string'], code: ['string'], resend: [], createTeam: ['string'],
+  openClients: [],
   oauth: ['string'], signInWith: ['string'], cancelOAuth: [],
   invite: ['string', 'string', 'string'], resendInvite: ['string', 'string'], emailInvite: ['string', 'string'], revokeInvite: ['string', 'string'], setRole: ['string', 'string', 'string'], removeMember: ['string', 'string'],
   renameTeam: ['string', 'string'], addBoard: ['string', 'string'],
@@ -55,9 +56,13 @@ async function clearHubSessions(origin, fromPartition) {
  *        forgetHub(), hubSignedOut(origin), isOpen(), onHubPage(), devicesChanged(),
  *        openMail(mailtoUrl)}
  */
+// The probe says Cloudflare Access is still in front (a redirect to its login), or the hub itself runs Access auth.
+const behindAccess = (pr) => !!pr.accessTeam || pr.auth === 'access';
+
 function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLink, probe, makeDevice, hasDeviceFile = () => false, discardDeviceFiles = () => {}, deviceInfo = () => ({}), openBrowser = () => {}, oauthAllowOrigins = [], oauthTimeoutMs, ui, log = () => {}, now = () => Date.now() }) {
   const acct = { screen: null, hub: null, notice: null, alert: null, deleting: false };
   let oauthRun = null; // {hub, provider, run, done}: the one provider sign-in waiting on the browser
+  let noticeAfterSignIn = null; // the hub's SEPARATE_ACCOUNT words, for the first screen after that sign-in
   // The check before a deletion: for the account on a hub with no mailer (Google/GitHub), or for one
   // team (its emailed `delete_team` code, or Google/GitHub without a mailer). `confirmed` is held only
   // here, in memory, and only the run that is still current may set it. A step made for one team (or
@@ -76,6 +81,8 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
   // The last invite made or resent per team, in memory only: "Email it" drafts from this, not from the page.
   const minted = new Map(); // workspace id → {id, email, link, code, team}
   const outs = new Map(); // origin → in-flight sign-out cleanup
+  const methodsSeen = new Map(); // origin → the last /api/auth/methods the sign-in screen showed
+  const accessChecks = new Map(); // access workspace id → in-flight "still behind Access?" probe
 
   const hubTrusted = (h) => !!h && (store.knows(h) || trustedHub === h);
   const activeTeam = () => { const w = store.active(); return w.kind === 'team' ? w : null; };
@@ -88,7 +95,8 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
   function show(screen, { notice = null, alert = null } = {}) {
     if (delStep?.team && screen !== 'team') dropDeleteStep();
     acct.screen = screen;
-    acct.notice = notice;
+    acct.notice = notice ?? noticeAfterSignIn;
+    noticeAfterSignIn = null;
     acct.alert = alert;
     ui.show(screen);
   }
@@ -174,7 +182,11 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
       oauthRun = null;
       if (r.ok) {
         log('signed in to team hub', { host: hostOf(origin), via: provider });
+        // Signed in, but to a new account: the next screen says so, or the account page when the board opened instead.
+        noticeAfterSignIn = r.notice ?? null;
         await afterSignIn(origin);
+        if (noticeAfterSignIn && signedIn(origin)) { acct.hub = origin; show('account'); }
+        noticeAfterSignIn = null;
       } else if (!r.cancelled) show('email', { alert: r.error });
       return r;
     });
@@ -317,6 +329,7 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
       return;
     }
     if (r.ok && r.pending_invites?.length) { acct.hub = origin; show('invites'); return; }
+    if (r.ok && !r.teams?.length && (r.client_workspaces?.length || r.pending_client_invites?.length)) { acct.hub = origin; show('clients'); return; }
     if (r.ok && !r.teams?.length) {
       const setup = await clientFor(origin).setupAccount();
       if (!current()) return;
@@ -325,6 +338,7 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
         // An invite may have arrived after the account read. The hub's
         // atomic check takes priority over the client's earlier empty list.
         if (setup.pending_invites?.length) { acct.hub = origin; show('invites'); return; }
+        if (!setup.teams?.length && (setup.client_workspaces?.length || setup.pending_client_invites?.length)) { acct.hub = origin; show('clients'); return; }
       } else {
         setupError = setup.error;
       }
@@ -361,18 +375,48 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
   async function connectHub(origin) {
     const pr = await probe(origin);
     if (!pr.ok) return pr;
-    if (pr.accessTeam || pr.auth === 'access') {
+    if (behindAccess(pr)) {
       store.addAccess({ url: origin, name: hostOf(origin), accessTeam: pr.accessTeam ?? null });
       log('connected team hub (access)', { host: hostOf(origin) });
       ui.forgetHub();
       ui.select('board');
       return { ok: true };
     }
+    // A hub that has left Access: its old Access entry would only open a dead login.
+    if (store.removeAccess(accessWsId(origin))) { log('dropped the Access entry of a hub that signs in itself now', { host: hostOf(origin) }); ui.pushState(); }
     trustedHub = origin;
     acct.hub = origin;
     if (signedIn(origin)) { await afterSignIn(origin); return { ok: true }; }
     show('email');
     return { ok: true };
+  }
+
+  /**
+   * An Access workspace being opened: when its hub now answers /api/health
+   * itself (Cloudflare Access was removed), the entry goes and the member
+   * signs in to the hub with Google or GitHub. While the hub is still behind
+   * Access, or can't be reached, nothing changes. → true when it was retired.
+   */
+  function recheckAccess(ws) {
+    if (ws?.kind !== 'access') return Promise.resolve(false);
+    if (accessChecks.has(ws.id)) return accessChecks.get(ws.id);
+    const p = (async () => {
+      let origin;
+      try { origin = normHub(ws.url); } catch { return false; }
+      const pr = await probe(origin);
+      if (!pr.ok || behindAccess(pr) || !pr.auth || store.get(ws.id)?.kind !== 'access') return false;
+      store.removeAccess(ws.id);
+      log('team hub left Cloudflare Access: signing in to it directly', { host: hostOf(origin) });
+      ui.forgetHub();
+      ui.pushState();
+      trustedHub = origin;
+      acct.hub = origin;
+      if (signedIn(origin)) await afterSignIn(origin);
+      else show('email', { notice: `${hostOf(origin)} now has its own sign-in. Continue with Google or GitHub.` });
+      return true;
+    })().finally(() => accessChecks.delete(ws.id));
+    accessChecks.set(ws.id, p);
+    return p;
   }
 
   async function joined(origin, r) {
@@ -405,9 +449,14 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
     if (screen === 'email') {
       // Nothing is asked of a hub the member hasn't confirmed, this included.
       const m = hubTrusted(acct.hub) ? await clientFor(acct.hub).methods() : { ok: false, error: 'Start again: enter the team hub address.' };
+      if (m.ok) methodsSeen.set(acct.hub, m); else methodsSeen.delete(acct.hub);
       return { ...base, forInvite: !!pendingInvite, email: acct.hub ? (userOf(acct.hub)?.email ?? '') : '', methods: m.ok ? { google: m.google, github: m.github, email: m.email } : null, methodsError: m.ok ? null : m.error };
     }
     if (screen === 'integrations') return { ...base, connectors: connectorRows() };
+    if (screen === 'clients') {
+      const a = accounts.get(acct.hub);
+      return { ...base, workspaces: a?.client_workspaces ?? [], invitations: a?.pending_client_invites ?? [] };
+    }
     if (screen === 'browser') return { ...base, provider: oauthRun?.provider ?? null };
     if (screen === 'code') return { ...base, email: acct.hub ? clientFor(acct.hub).pendingEmail() : null };
     if (screen === 'create-team') {
@@ -478,6 +527,12 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
 
   const ACCT = {
     state: () => screenState(),
+    async openClients() {
+      if (!acct.hub || !signedIn(acct.hub) || !hubTrusted(acct.hub)) return { ok: false, error: 'Sign in to your client hub first.' };
+      if (!ui.openClients) return { ok: false, error: 'Could not open client projects. Please try again.' };
+      await ui.openClients(acct.hub);
+      return { ok: true };
+    },
     go(screen) {
       if (!PAGE_SCREENS.has(screen)) return { ok: false };
       cancelOAuth();
@@ -512,6 +567,10 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
     async email(email) {
       const origin = acct.hub;
       if (!hubTrusted(origin)) return { ok: false, error: 'Start again: enter the team hub address.' };
+      // The sign-in screen offered no email code: only Google or GitHub signs in here.
+      const m = methodsSeen.get(origin) ?? await clientFor(origin).methods();
+      if (!m.ok) return m;
+      if (m.email !== true) return { ok: false, error: 'Sign in with Google or GitHub.' };
       const r = await clientFor(origin).startEmail(email, deviceInfo());
       if (!r.ok) return r;
       show('code');
@@ -874,6 +933,7 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
     hubTrusted,
     openInvite,
     connectHub,
+    recheckAccess,
     signedOutOf,
     checkSignedIn,
     dropDevices,
@@ -900,6 +960,8 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
       lastSessions = Array.isArray(sessions) ? sessions : [];
       for (const e of devices.values()) e.d.setPresence(store.sharesPresence(e.hub), lastSessions, { shareSummaries: store.sharesSummaries(e.hub) });
     },
+    /** Burst facts to every runner that is running cards; false when none is. */
+    burstFacts(facts) { const live = [...devices.values()].filter((e) => e.d.running()); for (const e of live) e.d.sendBurst(facts); return live.length > 0; },
     /** Names of the teams this Mac is running cards for right now. */
     runningTeams: () => [...devices.entries()].filter(([, e]) => e.d.running()).map(([id, e]) => store.get(id)?.name ?? e.name),
     stopDevices: () => { cancelOAuth(); cancelDeleteRun(); return Promise.all([...devices.values()].map((e) => e.d.stop())); },

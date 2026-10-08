@@ -81,9 +81,19 @@ const real = (p) => {
 };
 function broadDirectory(d, home = os.homedir()) {
   if (typeof d !== 'string' || !path.isAbsolute(d) || d.split(/[\\/]/).includes('..') || /[\p{Cc}\p{Cf}]/u.test(d)) return true;
+  if (process.platform === 'win32') {
+    // A current-drive root ("/x" or "\\x") changes meaning with the caller's
+    // drive. Only fully qualified drive/UNC paths may become session grants.
+    const drive = /^[a-z]:[\\/]/i.test(d);
+    const unc = /^[\\/]{2}[^\\/]+[\\/][^\\/]+(?:[\\/]|$)/.test(d);
+    if ((!drive && !unc) || /^[\\/]{2}[?.][\\/]/.test(d)) return true;
+  }
   const fold = (p) => (process.platform === 'darwin' || process.platform === 'win32' ? p.toLowerCase() : p);
   const dir = fold(real(d));
   const h = fold(real(home));
+  // HOME may live on another drive/share. A whole volume is always too broad,
+  // including a fully qualified alias whose observed target is that root.
+  if (dir === fold(path.parse(dir).root)) return true;
   const under = (child, parent) => child === parent || child.startsWith(parent.endsWith(path.sep) ? parent : parent + path.sep);
   if (under(h, dir)) return true;
   if (/^\/system\/volumes\/data(\/|$)/.test(fold(dir))) return true;

@@ -152,6 +152,10 @@ Resolution: rules apply top to bottom; the first rule that lights a lamp is
 the state, and rules above it may layer accents (eyes, pose, sound) on top.
 A rule below the lamp owner never leaks into the look.
 
+There is one character for everything, chosen once in Lights (the Character
+row above the rules). Rules drive pose, eyes, lamp, effects, costume, pet and
+sound, never the body.
+
 ## Share your rules
 
 Presets menu → **Copy share code** puts your whole ruleset on the clipboard
@@ -162,13 +166,37 @@ JSON.
 ## Other agents, not just Claude Code
 
 Every session is tagged with its **source**, and rules can be scoped to one
-agent (**Only agent**). Preferences → **Connect other agents** writes the
-hook config for:
+agent (**Only agent**). **More → AI tools** lists every supported tool on this
+Mac: whether it is installed (and which version), whether it is connected, when
+it last reported, and what Plexiform can show for it. **Connect all detected**
+or a row's **Connect** shows the exact lines to be added to the tool's config,
+saves a copy beside the file (`<file>.plexiform-backup-<time>`), writes it,
+reads it back to check, and offers **Undo**. Claude Code still connects by
+itself at launch; its status is on the same page. It also works from a
+development checkout: the hook commands point at that checkout's `hooks/`.
+The page writes the hook config for:
 
 - **Cursor** — `~/.cursor/hooks.json` (prompt, shell, MCP, file edits, stop)
-- **Codex CLI** — `notify` in `~/.codex/config.toml` (turn complete); Codex runs
-  one notify command, so if another tool already set one Buddy leaves it and says so
+- **Codex desktop and CLI** — lifecycle hooks in `~/.codex/hooks.json` for
+  session activity, waiting, completed turns and subagents. Existing hooks and
+  the separate `notify` command in `config.toml` are preserved. Review and trust
+  the Plexiform hook definitions in Codex before starting a new turn (the CLI
+  provides `/hooks`). Preferences → Health distinguishes configured hooks from
+  received activity. Installing hooks cannot reconstruct an already running
+  turn; no private chat history is read. This adapter records activity only and
+  cannot answer permissions. See [Codex hook review](https://learn.chatgpt.com/docs/hooks).
 - **Gemini CLI** — `hooks` in `~/.gemini/settings.json` (best effort)
+- **Hermes** — the `plexiform-activity` plugin, enabled through Hermes' own CLI
+  (installed app only)
+
+**Tools with no hooks (Aider, OpenCode, Copilot CLI, Amp, …).** *Add a custom
+tool* on the AI tools page installs `~/.local/bin/plexiform-run`. Launch the
+tool through it, `plexiform-run aider --model sonnet`, and the widget shows it
+working, then done or failed from the exit code. That is all the wrapper can
+see: it cannot answer prompts or show tool use. Its events are the generic
+adapter's (`adapters/generic.js`, also `POST /hook/generic?event=start|stop|exit`).
+Gemini CLI and Cursor report working and finished only; no "needs input" state
+is claimed for them.
 
 Claude Code's own hooks always run `set-status.js`. Posting Claude's payload to
 `/hook/claude` (or `emit.js --adapter claude`) works but records less — no host

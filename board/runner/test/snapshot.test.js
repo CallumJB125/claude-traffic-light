@@ -42,10 +42,14 @@ test('snapshot race: 10 snapshots vs 100 agent git-adds → no errors, agent ind
     // The agent's index holds exactly what the agent staged.
     const staged = sh(wt, 'diff', '--cached', '--name-only').split('\n').sort();
     assert.deepEqual(staged, Array.from({ length: 20 }, (_, i) => `f${i}.txt`).sort());
-    // The last snapshot has HEAD as first parent and the working tree content.
-    const last = results.filter((r) => r.sha).at(-1);
+    // The raced snapshots may finish before the last agent write. Capture
+    // final content only after both loops join, retaining every race check.
+    const last = await snapshot({ wt, ref: 'refs/board/K-1/r1', message: 'final after writer', push: false, gitleaks: null });
+    assert.ok(['local', 'unchanged'].includes(last.status));
     assert.equal(sh(wt, 'rev-parse', `${last.sha}^1`), head);
     assert.equal(sh(wt, 'show', `${last.sha}:f19.txt`), 'v99');
+    assert.equal(sh(wt, 'rev-parse', 'HEAD'), head, 'final snapshot leaves HEAD untouched');
+    assert.deepEqual(sh(wt, 'diff', '--cached', '--name-only').split('\n').sort(), staged, 'final snapshot leaves agent index untouched');
     assert.ok(!fs.readdirSync(wt).some((f) => f.startsWith('board-idx')));
   } finally { rm(root); }
 });
