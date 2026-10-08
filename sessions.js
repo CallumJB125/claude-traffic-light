@@ -36,6 +36,9 @@ function handoverRow(section, h) {
       row.append(document.createTextNode(' · '), b);
     }
   }
+  const tl = node('button', 'Timeline', 'link'); tl.type = 'button';
+  tl.addEventListener('click', async () => { const ok = await window.sessionsApi.timeline(h.key).catch(() => false); if (!ok) { tl.textContent = 'Unavailable'; setTimeout(() => { tl.textContent = 'Timeline'; }, 1500); } });
+  row.append(document.createTextNode(' · '), tl);
   if (h.canWrite) {
     const b = node('button', 'Write now', 'link'); b.type = 'button';
     b.addEventListener('click', async () => {

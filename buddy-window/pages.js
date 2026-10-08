@@ -32,6 +32,7 @@ const PAGES = [
   { id: 'waiting', title: 'Waiting on you', icon: 'bell', kind: 'local', file: 'waiting.html', preload: 'waiting-preload.js', query: { embedded: '1' }, group: 'work', unlisted: true },
   { id: 'myday', title: 'My day', icon: 'sun', kind: 'local', file: 'myday.html', preload: 'myday-preload.js', group: 'work', unlisted: true },
   { id: 'sessions', title: 'Running now', icon: 'team', kind: 'local', file: 'sessions.html', preload: 'sessions-preload.js', group: 'work' },
+  { id: 'timeline', title: 'Session timeline', icon: 'layers', kind: 'local', file: 'timeline.html', preload: 'timeline-preload.js', group: 'work', unlisted: true },
   { id: 'checkpoints', title: 'What changed', icon: 'layers', kind: 'local', file: 'checkpoints.html', preload: 'checkpoints-preload.js', group: 'work' },
   // Search across every AI tool's local history (src/memory/search.js registers its IPC).
   { id: 'memory', title: 'Search everything', icon: 'layers', kind: 'local', file: 'memory.html', preload: 'memory-preload.js', group: 'work' },
@@ -82,7 +83,7 @@ const SECTIONS = [
   { id: 'home', title: 'Home', icon: 'sun', default: 'home', pages: ['home', 'overview', 'myday', 'waiting'] },
   { id: 'board', title: 'Board', icon: 'board', default: 'board', pages: ['board', 'board:table', 'board:history', 'board:calendar', 'board:timeline', 'board:dashboard'] },
   { id: 'tasks', title: 'Tasks', icon: 'tasks', default: 'tasks', pages: ['tasks'] },
-  { id: 'sessions', title: 'Running now', icon: 'team', default: 'sessions', menu: 'more', pages: ['sessions'] },
+  { id: 'sessions', title: 'Running now', icon: 'team', default: 'sessions', menu: 'more', pages: ['sessions', 'timeline'] },
   { id: 'checkpoints', title: 'What changed', icon: 'layers', default: 'checkpoints', menu: 'more', pages: ['checkpoints'] },
   { id: 'memory', title: 'Search everything', icon: 'layers', default: 'memory', menu: 'more', pages: ['memory'] },
   { id: 'usage', title: 'Usage & cost', icon: 'chart', default: 'usage', heading: 'Spend', pages: ['usage', 'stats'] },
