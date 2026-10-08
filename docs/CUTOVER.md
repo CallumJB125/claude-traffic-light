@@ -154,3 +154,21 @@ Use when the hub will not start, or sign-in does not work and cannot be fixed qu
 - **`open`.** Anyone with a Google/GitHub/email account can create an account and a team. Appropriate only for a deliberate public launch: it widens mail volume (`BOARD_MAIL_DAILY_CAP`, half reserved for known accounts), abuse surface and support load.
 
 **Google consent screen caveat.** If the Google OAuth consent screen (Audience) is in **Testing** mode, only the test users listed there (maximum 100) can complete Google sign-in, and their grants expire after 7 days, regardless of `BOARD_SIGNUP`. An `allowlist` person who is not a Google test user fails at Google, not at the hub; `open` does not help either. For anyone outside the test list, publish the app (In production): the basic scopes `openid`, `email`, `profile` need no Google verification. Do not add a logo until ready for brand verification. Decide this before step 8 and add test users in the Google console (manual) if you stay in Testing for a closed beta. GitHub sign-in has no such limit.
+
+## Bot protection (optional)
+
+Off unless both `BOARD_TURNSTILE_SITE_KEY` and `BOARD_TURNSTILE_SECRET` are set; with either missing nothing changes (one alone logs a warning at start).
+
+What it covers: a NEW account made by an emailed code. The web `/signin` page shows Cloudflare's Turnstile widget (only when `/api/auth/methods` reports `turnstile_site_key`) and sends its one-time token with `POST /api/auth/email/start`; the hub checks it with `challenges.cloudflare.com/turnstile/v0/siteverify` (secret and token only, 5 s timeout). A bad token is refused (`403 FORBIDDEN`, `reason: human_check`) for every address alike; Cloudflare unreachable refuses the start (`503 PROVIDER_UNAVAILABLE`, fail closed). A start with NO token still signs in an existing account (the desktop app and the phone page have no widget) but makes no new account: it gets the usual "code sent" answer and no mail (audit `auth.code.suppressed`, reason `human_check`). Google/GitHub sign-in (desktop loopback and web) and step-up codes are untouched. Token checks are limited to 20 per hour per client network (`auth_turnstile_ip`); new accounts stay limited to 10 per day per client IP on every path (`signup_ip`).
+
+Turn it on:
+
+1. Cloudflare dashboard → Turnstile → Add widget: hostname = the `BOARD_PUBLIC_URL` host (e.g. `app.plexiform.dev`), mode Managed. Copy the site key and the secret key.
+2. On the hub host, add to `/etc/buddy-hub/hub.env` (keep it root:buddyhub 0640):
+   ```
+   BOARD_TURNSTILE_SITE_KEY=<site key>
+   BOARD_TURNSTILE_SECRET=<secret key>
+   ```
+3. `sudo systemctl restart buddy-hub`, then check `curl -fsS http://127.0.0.1:8787/api/auth/methods` carries `turnstile_site_key`, and that `/signin` shows the widget and an email code for a new address arrives.
+
+Turn it off: remove both lines and restart. Note that with it on, someone new can make an email-code account only from the web `/signin` page; the desktop app and phone page can still sign existing email accounts in, and anyone can still sign up with Google or GitHub.
