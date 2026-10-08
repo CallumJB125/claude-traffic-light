@@ -191,6 +191,10 @@
       "!board/web/scripts/**",
       "!board/runner/scripts/**",
       "!board/hub/data/**",
+      "!.omc",
+      "!.omc/**",
+      "!board/.omc",
+      "!board/.omc/**",
       "!board/**/*.db*"
     ],
     "extraResources": [
