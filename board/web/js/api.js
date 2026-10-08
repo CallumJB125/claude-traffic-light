@@ -143,6 +143,15 @@ export const api = {
   disconnectIntegration: (id) => mut('DELETE', `/api/integrations/${enc(id)}`),
   // Admins only (D42): members get 403, so the page shows them no Activity.
   integrationAudit: (id) => call('GET', `/api/integrations/${enc(id)}/audit?limit=50`),
+  apiTokens: (teamId) => call('GET', `/api/teams/${enc(teamId)}/api-tokens`),
+  createApiToken: (teamId, body) => mut('POST', `/api/teams/${enc(teamId)}/api-tokens`, body),
+  revokeApiToken: (teamId, id) => mut('DELETE', `/api/teams/${enc(teamId)}/api-tokens/${enc(id)}`),
+  webhooks: (teamId) => call('GET', `/api/teams/${enc(teamId)}/webhooks`),
+  createWebhook: (teamId, body) => mut('POST', `/api/teams/${enc(teamId)}/webhooks`, body),
+  patchWebhook: (teamId, id, body) => mut('PATCH', `/api/teams/${enc(teamId)}/webhooks/${enc(id)}`, body),
+  deleteWebhook: (teamId, id) => mut('DELETE', `/api/teams/${enc(teamId)}/webhooks/${enc(id)}`),
+  webhookDeliveries: (teamId, id) => call('GET', `/api/teams/${enc(teamId)}/webhooks/${enc(id)}/deliveries`),
+  testWebhook: (teamId, id) => mut('POST', `/api/teams/${enc(teamId)}/webhooks/${enc(id)}/test`),
   // D98: a member links and unlinks only their own account; admins list and revoke.
   startIdentityLink: (id) => mut('POST', `/api/integrations/${enc(id)}/identity/start`),
   unlinkIdentity: (id) => mut('DELETE', `/api/integrations/${enc(id)}/identity`),
