@@ -5,7 +5,7 @@
 //   data      ~/.claude-traffic-light (or CLAUDE_TRAFFIC_LIGHT_HOME)
 //   userData  the app's folder (~/Library/Application Support/Plexiform)
 //   backups   Plexiform Backups, beside it
-//   legacy    the old Claude Buddy app folder, if it is still there
+//   legacy    the app folder from before the rename, if it is still there
 // Each store lists top-level names inside one root; 'rest' takes whatever
 // else is in that root, so a file a future version adds is still shown and
 // still deletable. Sizes and deletion use lstat and never follow a link.
@@ -46,7 +46,7 @@ const STORES = Object.freeze([
   { id: 'app-other', root: 'userData', kind: 'other', rest: true, label: 'Other files in the app folder', detail: 'Anything else in Plexiform’s app folder.' },
 
   { id: 'backups', root: 'backups', kind: 'backups', all: true, label: 'Backups', detail: 'Copies of your settings, rules, faces and usage history.' },
-  { id: 'legacy', root: 'legacy', kind: 'legacy', all: true, export: false, label: 'Old Claude Buddy folder', detail: 'The app folder left by Claude Buddy, Plexiform’s old name.' },
+  { id: 'legacy', root: 'legacy', kind: 'legacy', all: true, export: false, label: 'App folder from before the rename', detail: 'The app folder left by Plexiform’s earlier name.' },
 ]);
 
 const RECEIPTS = 'deletion-receipts';

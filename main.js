@@ -171,7 +171,7 @@ const BOUNDS_FILE = path.join(ROOT_DIR, 'window-bounds.json');
 const MANUAL_OVERRIDE_FILE = path.join(ROOT_DIR, 'manual-override.json');
 const CONFIG_FILE = path.join(ROOT_DIR, 'config.json');
 const CLAUDE_SETTINGS_PATH = path.join(os.homedir(), '.claude', 'settings.json');
-const dataRoots = (userDataDir = app.getPath('userData')) => ({
+const dataRoots = (userDataDir) => ({
   dataDir: ROOT_DIR,
   userDataDir,
   backupsDir: process.env.CLAUDE_TRAFFIC_LIGHT_BACKUPS || (IS_DEV_RUN ? null : path.join(app.getPath('appData'), `${Brand.name} Backups`)),
@@ -3477,7 +3477,7 @@ utilityHandle('crash-reports:export', settingsOnly, async (e) => {
   fs.writeFileSync(r.filePath, CrashReports.bundle(), { mode: 0o600 });
   return { ok: true, path: r.filePath };
 });
-require('./src/data-rights-main.js').register({ utilityHandle, allowed: settingsOnly, dialog, BrowserWindow, app, roots: () => dataRoots(), isDevRun: IS_DEV_RUN, log: (m) => console.log(m) });
+require('./src/data-rights-main.js').register({ utilityHandle, allowed: settingsOnly, dialog, BrowserWindow, app, roots: () => dataRoots(app.getPath('userData')), isDevRun: IS_DEV_RUN, log: (m) => console.log(m) });
 utilityHandle('show-data-folder', settingsOnly, () => { fs.mkdirSync(ROOT_DIR, { recursive: true }); return shell.openPath(ROOT_DIR); });
 utilityHandle('get-stats', e => analyticsSender(e) || settingsOnly(e), (_e, days) => Stats.summary(stats, Date.now(), Math.min(60, Math.max(1, Number(days) || 7))));
 
