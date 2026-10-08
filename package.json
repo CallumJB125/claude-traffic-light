@@ -63,6 +63,7 @@
       "home.html",
       "home.css",
       "home.js",
+      "home-digest.js",
       "home-preload.js",
       "settings.html",
       "settings-backups.js",
