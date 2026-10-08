@@ -25,6 +25,7 @@ import { validDay, validZone, todayIn, shiftDay } from '../../shared/planning.js
 import { DEFAULT_SORT, nextSort } from './table.js';
 import { dashboardScreen } from './render-dashboard.js';
 import { integrationsScreen, connectWindowTarget, takeInput } from './render-integrations.js';
+import { createApiPanel } from './api-panel.js';
 import { saveSentrySettings } from './sentry-settings.js';
 import { slackChannelPatch } from './render-slack.js';
 import { teamScreen } from './render-team.js';
@@ -75,6 +76,7 @@ const state = {
   filters: emptyFilters(), // shared by Board and Table; lives in ?q= &f= and sessionStorage
   dash: null, // set below: freshDash(), status idle | loading | ok | error
   integ: { status: 'idle', data: null, error: null, open: null, audit: {}, tokenFor: null, manifest: null, confirmDisconnect: null },
+  pub: { status: 'idle' },
   cardsRev: 0,
   selection: new Set(), // card ids picked with Shift/⌘-click
   drag: null, // pointer drag in flight: {ids, over, mode}
@@ -234,8 +236,13 @@ function setFilters(next) {
 
 // ── integrations ─────────────────────────────────────────────────────────────
 
+const apiPanel = createApiPanel({
+  api, teamId: () => state.me?.org?.id, get: () => state.pub, set: (patch) => { state.pub = { ...state.pub, ...patch }; }, update, withBusy, toast, copyText, errorText,
+});
+
 async function loadIntegrations() {
   state.integ = { ...state.integ, status: 'loading' };
+  if (state.authMode === 'accounts' && ['owner', 'admin'].includes(state.me?.member?.role)) apiPanel.load();
   update();
   try {
     state.integ = { ...state.integ, status: 'ok', data: await api.integrations(), error: null };
@@ -479,6 +486,7 @@ function buildModel() {
     invite: state.invite,
     cloud: state.cloud,
     integrations: state.view === 'integrations' ? { ...state.integ, nowMs: Date.now(), local: state.authMode === 'local', openTeam: canOpenTeam() } : null,
+    apiPanel: state.view === 'integrations' && state.authMode === 'accounts' ? state.pub : null,
     presence: { ...state.presence, stale: state.presence.stale || lost },
     teamOverview: { ...state.overview, stale: lost || !!state.overview.error || (state.overview.updatedAt != null && Date.now() - state.overview.updatedAt > 45_000), ageMs: state.overview.updatedAt == null ? null : Date.now() - state.overview.updatedAt },
     // Presence ages freeze at the drop, like card ages.
@@ -1559,6 +1567,7 @@ async function submitDialogForm(form, submitter) {
   if (['new-board', 'rename-board', 'archive-board'].includes(kind)) return submitBoardDialog(form);
   if (kind === 'review-settings') return submitReviewSettings(form);
   if (kind === 'integ-token') return submitIntegrationToken(form);
+  if (kind.startsWith('api-') && apiPanel.submit(form)) return undefined;
   if (kind === 'sentry-settings') return submitSentrySettings(form);
   if (kind === 'slack-channel') return submitSlackChannel(form);
   if (kind === 'integ-prepare') return submitPrepare(form);
@@ -2008,6 +2017,7 @@ function onClick(e) {
   const action = el.dataset.action;
   const cardId = el.dataset.card;
   if(action.startsWith('workflow-execution-')){workflowExecutionAction(workflowJourney,action,el,state.dialog?.selected);return;}
+  if (action.startsWith('api-') && apiPanel.action(action, el)) return;
   switch (action) {
     case 'planning-edit': editPlan(cardId); return;
     case 'planning-close': plannerState(); planner.edit = null; planner.draft = null; update(); return;

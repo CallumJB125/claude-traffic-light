@@ -118,6 +118,13 @@ export async function tenancy({ config = {}, ...opts } = {}) {
   // B's sealed provider key for hosted runs (067).
   const sealed = h.hub.vault.seal(providerConfigAad(B.team), 'claude', `${MARK}-api-key`);
   db.insert('team_provider_configs', { org_id: B.team, provider: 'claude', model: `${MARK}-model`, ...sealed, updated_by: B.owner, created_at: now, updated_at: now });
+  // B's API token and outbound webhook endpoint (069), with one logged delivery.
+  B.apiToken = randomUUID();
+  db.insert('api_tokens', { id: B.apiToken, org_id: B.team, name: `${MARK} token`, token_hash: `${MARK}-hash`, hint: 'abcd', scopes: '["read:cards"]', created_by: B.owner, created_at: now, expires_at: '2099-01-01T00:00:00.000Z' });
+  B.webhook = randomUUID();
+  const whSealed = h.hub.vault.seal(B.webhook, 'webhook_secret', `${MARK}-secret`);
+  db.insert('webhook_endpoints', { id: B.webhook, org_id: B.team, url: `https://${MARK.toLowerCase().replace(/[^a-z0-9]/g, '')}.beta.test/hook`, events: '["card.created"]', ...whSealed, created_by: B.owner, created_at: now, updated_at: now });
+  db.insert('webhook_deliveries', { id: randomUUID(), endpoint_id: B.webhook, event_type: 'card.created', journal_seq: 1, payload: '{}', state: 'delivered', attempts: 1, last_status: 204, created_at: now, updated_at: now });
 
   // The client boundary is separate from all ordinary memberships.
   await user('bguest', 'client@beta.test');
@@ -178,6 +185,9 @@ export async function tenancy({ config = {}, ...opts } = {}) {
       q('SELECT * FROM external_identities WHERE member_id IN (SELECT id FROM members WHERE org_id = ?)', B.team),
       q('SELECT * FROM runner_enrollments WHERE org_id = ?', B.team),
       q('SELECT * FROM team_provider_configs WHERE org_id = ?', B.team),
+      q('SELECT * FROM api_tokens WHERE org_id = ?', B.team),
+      q('SELECT * FROM webhook_endpoints WHERE org_id = ?', B.team),
+      q('SELECT * FROM webhook_deliveries WHERE endpoint_id = ?', B.webhook),
       q('SELECT * FROM board_labels WHERE board_id = ?', B.board),
       q('SELECT * FROM client_workspaces WHERE org_id = ?', B.team),
       q('SELECT * FROM client_projects WHERE workspace_id = ?', B.team),

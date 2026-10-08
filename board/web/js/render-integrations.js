@@ -8,6 +8,7 @@ import { CONNECTORS, STATUS_TEXT, connectorStatus } from './connectors.js';
 import { sentryRouting } from './render-sentry.js';
 import { slackChannel } from './render-slack.js';
 import { trackerIntake } from './render-tracker.js';
+import { apiPanel } from './render-api.js';
 
 const MODE_LABEL = { auto: 'Automatic', ask: 'Ask first', off: 'Off' };
 const DECISION_LABEL = { attempted: 'In progress', auto: 'Done automatically', failed: 'Failed', asked: 'Waiting for a yes', approved: 'Approved', denied: 'Denied', skipped: 'Skipped (off)' };
@@ -389,5 +390,6 @@ export function integrationsScreen(model) {
       vm.local && vm.openTeam ? h('button', { type: 'button', class: 'btn btn-sm btn-primary', 'data-action': 'open-team' }, 'Sign in or create a team') : null,
       vm.local ? h('div', { class: 'integ-grid', 'data-grid': 'local-connectors' }, CONNECTORS.map(localCard))
         : notYet.length ? h('div', { class: 'integ-grid' }, notYet.map((c) => availableCard(c, vm)))
-        : h('p', { class: 'muted' }, vm.available.length ? 'Everything available is connected.' : 'No tools are available on this board yet.')));
+        : h('p', { class: 'muted' }, vm.available.length ? 'Everything available is connected.' : 'No tools are available on this board yet.')),
+    vm.canEdit && !vm.local && model.apiPanel ? apiPanel(model.apiPanel, { nowMs: vm.nowMs, busy: vm.busy }) : null);
 }

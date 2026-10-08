@@ -199,6 +199,16 @@ const MATRIX = {
   // Hosted (cloud) runners and their sealed provider keys (067).
   'POST /api/teams/:team_id/hosted-runners': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/hosted-runners`, body: { name: 'pwned' } },
   'GET /api/teams/:team_id/hosted-runners': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/hosted-runners` },
+  // Public API tokens and outbound webhooks (069): B's team, or A's team with B's token/endpoint ids.
+  'GET /api/teams/:team_id/api-tokens': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/api-tokens` },
+  'POST /api/teams/:team_id/api-tokens': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/api-tokens`, body: { name: 'pwned', scopes: ['read:cards'] } },
+  'DELETE /api/teams/:team_id/api-tokens/:token_id': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/api-tokens/${fx.B.apiToken}`, alt: (fx) => [`/api/teams/${fx.A.team}/api-tokens/${fx.B.apiToken}`] },
+  'GET /api/teams/:team_id/webhooks': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/webhooks` },
+  'POST /api/teams/:team_id/webhooks': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/webhooks`, body: { url: 'https://example.com/hook', events: ['card.created'] } },
+  'PATCH /api/teams/:team_id/webhooks/:endpoint_id': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/webhooks/${fx.B.webhook}`, body: { enabled: false }, alt: (fx) => [`/api/teams/${fx.A.team}/webhooks/${fx.B.webhook}`] },
+  'DELETE /api/teams/:team_id/webhooks/:endpoint_id': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/webhooks/${fx.B.webhook}`, alt: (fx) => [`/api/teams/${fx.A.team}/webhooks/${fx.B.webhook}`] },
+  'GET /api/teams/:team_id/webhooks/:endpoint_id/deliveries': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/webhooks/${fx.B.webhook}/deliveries`, alt: (fx) => [`/api/teams/${fx.A.team}/webhooks/${fx.B.webhook}/deliveries`] },
+  'POST /api/teams/:team_id/webhooks/:endpoint_id/test': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/webhooks/${fx.B.webhook}/test`, alt: (fx) => [`/api/teams/${fx.A.team}/webhooks/${fx.B.webhook}/test`] },
   'GET /api/teams/:team_id/provider-configs': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/provider-configs` },
   'PUT /api/teams/:team_id/provider-configs/:provider': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/provider-configs/claude`, body: { api_key: 'sk-pwned-key', model: 'pwned' } },
   'DELETE /api/teams/:team_id/provider-configs/:provider': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/provider-configs/claude` },
@@ -328,6 +338,7 @@ const PRE_ROUTE = {
   'POST /api/billing/webhook': 'the payment provider signs every delivery (HMAC over timestamp and body with the hub\'s webhook secret); billing.test.js',
   'POST /api/integrations/:provider/webhook': 'the hub\'s own provider app (GitHub App, step 4): the app\'s webhook secret signs every delivery, and it runs only for the connection its installation was linked to, about a repository linked on it (github-app.test.js)',
   'GET /integrations/:provider/callback': 'the provider redirects here; the signed OAuth state plus the bind cookie are the auth',
+  'GET /api/public/v1/*': 'the public API (public-api/index.js): a team API token is the only credential; it reads and comments only in its own team (public-api.test.js)',
   'GET /integrations/:provider/identity/callback': 'the provider redirects a linking member here (D98); the signed identity state plus the bind cookie are the auth, and the member and credential it names are re-checked',
 };
 
