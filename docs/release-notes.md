@@ -10,6 +10,7 @@ Plexiform 1.0.1: the first release for macOS and Linux.
 - **Updates in the app.** The app can check for a newer version and install it.
 - **Jumping to a session running in a detached tmux session** no longer switches the terminal tab you are on. If the session's terminal can't be found, Plexiform tells you and shows the command to attach.
 
+<!-- Usage pop-out: pending N1 (built on another branch). Add a line for it only once src/ wires `popOuts` in main.js. -->
 <!-- DRAFT additions. Uncomment a line only when it is on main AND in the build being tagged; they are all on main now except where noted.
 - **Characters.** New characters to pick as your Body in Lights: a rubber duck, octopus, CRT monitor, blob, capybara and cactus, then an owl, penguin, fox, bee, axolotl and mushroom, and an egg, toaster, cloud, astronaut, sloth, T-rex and cyclops.
 - **Hatch a character.** In Lights, under Body, "+ Hatch" opens a small window: choose a shape, size, arms, accessory and colour (or "Surprise me"), watch it on the real character as you go, and save it. It is made on your computer from templates and kept in `~/.claude-traffic-light/characters`. Describing a character to an AI is not in this release.
