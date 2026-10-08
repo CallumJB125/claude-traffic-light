@@ -78,6 +78,9 @@ export const DEFAULT_LIMITS = Object.freeze({
   runner_repo_token_ip: { capacity: 60, per_ms: 10 * 60_000 },         // GET /api/runner/v1/repo-token, every attempt, per client network
   runner_repo_token_runner: { capacity: 20, per_ms: 10 * 60_000 },     // … minted or refused, per hosted runner (it caches each token ~55 min)
   webhook_fail_ip: { capacity: 30, per_ms: 60_000 },        // failed webhook deliveries, per connection + client IP (/64)
+  public_api_token: { capacity: 120, per_ms: 60_000 },     // /api/public/v1/*, per API token (public-api/)
+  public_api_fail_ip: { capacity: 30, per_ms: 60_000 },    // … missing/unknown/expired/revoked tokens, per client network (/64)
+  webhook_test_member: { capacity: 10, per_ms: 60_000 },   // "Send test event" on an outbound webhook, per admin
   vault_health_conn: { capacity: 1, per_ms: 60_000 },       // 'vault_error' health write + log, per connection
   share_write_user: { capacity: 60, per_ms: 3_600_000 },    // POST /api/interaction/v1/shares (interaction-shares.js)
   share_call_user: { capacity: 240, per_ms: 60_000 },       // shared-session calls, per teammate (a watch long-polls)

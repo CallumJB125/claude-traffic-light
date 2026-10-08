@@ -42,6 +42,7 @@ import { Activity } from './activity/index.js';
 import { oauthProviders } from './config.js';
 import { RemoteAuthority } from './remote/authority.js';
 import { StorageWatch } from './storage-watch.js';
+import { PublicApi } from './public-api/index.js';
 
 // Sync lapse notices and purges run hourly (sync.js sweep).
 const SYNC_SWEEP_MS = 60 * 60_000;
@@ -123,6 +124,8 @@ function buildApp(config, { db, clock, log, github, fetchImpl, timers, mailer })
   hub.repoTokens = hub.hostedRunners ? new HostedRepoTokens(hub, { app: githubApp, integrations }) : null;
   // Expired pending connections (D97) go with the reaper (the registry runs it at most once a minute).
   hub.sweepIntegrationsPending = () => integrations.sweepPending();
+  // Public API tokens and outbound webhooks (docs/PUBLIC-API.md): accounts mode only.
+  hub.publicApi = hub.accounts ? new PublicApi(hub, { api, bus, ...config.outboundWebhooks }) : null;
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 }); // privacy-flow: local-board-hub
   const handler = createHttpHandler({ hub, api, config, integrations, githubCards });
   const lim = { ...REQUEST_LIMITS, ...config.requestLimits };
@@ -180,6 +183,7 @@ function buildApp(config, { db, clock, log, github, fetchImpl, timers, mailer })
     }
     for (const i of intervals) i.unref?.();
     bus.start();
+    hub.publicApi?.webhooks.start();
   }
 
   return {
@@ -206,6 +210,7 @@ function buildApp(config, { db, clock, log, github, fetchImpl, timers, mailer })
       hub.messaging?.close();
       hub.activity?.close();
       bus.stop();
+      hub.publicApi?.webhooks.stop();
       for (const i of intervals) clearInterval(i);
       const done = new Promise((resolve) => server.close(() => resolve()));
       const grace = () => new Promise((r) => setTimeout(r, graceMs).unref());

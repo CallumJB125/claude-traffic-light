@@ -385,6 +385,7 @@ export function createHttpHandler({ hub, api, config, integrations = null, githu
     hub.approvalRelay.routes(route);
     hub.messaging ??= new Messaging(hub, config.messagingLimits);
     hub.messaging.routes(route);
+    hub.publicApi?.routes(route);
     const acc = hub.accounts;
     route('GET', '/api/auth/methods', ({ ip }) => acc.methods({ ip }), { auth: 'none' });
     route('POST', '/api/auth/email/start', async ({ body, ip, ident, req, res }) => acc.start(body, { ip, ident, req, res, human: await acc.human(body, { ip }) }), { auth: 'optional' });
@@ -833,6 +834,8 @@ export function createHttpHandler({ hub, api, config, integrations = null, githu
       if (error instanceof HubError) return sendJson(res, httpStatus(error.code), errorBody(error));
       return sendJson(res, 500, { error: { code: 'INTERNAL', message: 'remote resource unavailable' } });
     }
+    // Public API v1 (public-api/): a team API token is its only credential.
+    if (hub.publicApi && url.pathname.startsWith('/api/public/')) return hub.publicApi.handle(req, res, url, clientIp(req, config));
     // These two paths bypass Cloudflare Access (providers can't sign in):
     // the signed state and the webhook signature are their only auth.
     const cb = integrations && req.method === 'GET' ? /^\/integrations\/([a-z][a-z0-9-]{1,31})\/callback$/.exec(url.pathname) : null;
