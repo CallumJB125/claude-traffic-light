@@ -52,10 +52,16 @@
     const c = b.kind === 'on' ? b.compaction : null;
     if (!c) return { ...base, status: st('', b.kind === 'on' ? 'Not offered by this Burst' : 'Needs Claude Burst'), ...(b.kind === 'on' ? {} : { note: 'Turn on Claude Burst above to use it.' }) };
     const n = num(c.compactions);
-    const saves = n > 0 ? { text: `Saved about ${usd(num(c.savedUsd))} over ${n} compaction${n === 1 ? '' : 's'}, ${tokens(num(c.tokensNotResent))} tokens not resent.`, source: 'Reported by Claude Burst' } : null;
+    const losing = typeof c.netUsd === 'number' && c.netUsd < 0;
+    const money = typeof c.moneyText === 'string' && c.moneyText ? c.moneyText : `About ${usd(num(c.savedUsd))} of tokens not resent, before the cost of writing the summaries.`;
+    const saves = n > 0 ? { text: `${n} compaction${n === 1 ? '' : 's'}, ${tokens(num(c.tokensNotResent))} tokens not resent. ${money}`, source: 'Reported by Claude Burst, API-equivalent prices' } : null;
+    const verdict = typeof b.compactionVerdict === 'string' && b.compactionVerdict ? `Burst's own verdict: ${b.compactionVerdict}.` : '';
+    const smart = losing && c.mode !== 'intelligent' ? 'Smart mode learns per repository whether compaction pays and backs off where it does not.' : '';
+    const note = [verdict, smart].filter(Boolean).join(' ') || undefined;
+    const see = act('section:sec-compaction', 'See compaction in dashboard');
     return c.enabled
-      ? { ...base, status: st('green', `On, ${c.thresholdLabel || 'Static'}`), saves, actions: [act('compaction:off', 'Turn off')] }
-      : { ...base, status: st('', 'Off'), saves, actions: [act('compaction:on', 'Turn on', true)] };
+      ? { ...base, status: st(losing ? 'amber' : 'green', `On, ${c.thresholdLabel || 'Static'}`), saves, ...(note ? { note } : {}), actions: [act('compaction:off', 'Turn off'), see] }
+      : { ...base, status: st('', 'Off'), saves, ...(note ? { note } : {}), actions: [act('compaction:on', 'Turn on', true), see] };
   }
 
   function bandTool(b) {
@@ -109,7 +115,7 @@
   const LINKS = Object.freeze({ burst: 'https://github.com/andrewbakercloudscale/claude-burst', panel: 'https://github.com/andrewbakercloudscale/claude-code-cost-sidebar' });
   const PAGES = Object.freeze(['overview', 'usage']);
   // Burst dashboard sections a card may jump to (claude-burst admin dashboard, v0.19 `.navlink` targets).
-  const SECTIONS = Object.freeze(['sec-config', 'secondarySection']);
+  const SECTIONS = Object.freeze(['sec-config', 'secondarySection', 'sec-compaction']);
 
   const api = { toolsView, bandStatus, MAC_ONLY, LINKS, PAGES, SECTIONS };
   if (typeof module === 'object' && module.exports) module.exports = api;

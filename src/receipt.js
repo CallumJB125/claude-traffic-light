@@ -21,7 +21,7 @@ const isRoutine = (t) => t.output <= Usage.ROUTINE_OUTPUT && t.input + t.cacheWr
 const SOURCES = {
   transcripts: 'Estimate from your Claude Code transcripts at API list prices',
   log: "Plexiform's cost guard log on this computer",
-  burst: 'Claude Burst /api/history (compaction savings, API-equivalent prices)',
+  burst: 'Claude Burst /api/history (compaction savings net of summary cost, API-equivalent prices)',
 };
 const METHODS = {
   saved: 'Each runaway session Plexiform stopped counts as one more runaway window at half to all of the spend it was stopped at. Budget caps held are counted, not priced.',
@@ -68,7 +68,7 @@ async function burstSaved(burst, days) {
     const d = await burst.detect();
     if (!d || d.kind !== 'present') return { available: false, reason: d?.kind || 'absent' };
     const h = historyView(await burst.history({ days: Math.min(90, Math.max(1, days)) }));
-    const saved = h.repos.reduce((n, r) => n + r.savedUsd, 0);
+    const saved = h.repos.reduce((n, r) => n + r.netSavedUsd, 0);
     return { available: true, savedUsd: r2(saved), days, source: SOURCES.burst, method: METHODS.burst };
   } catch { return { available: false, reason: 'unreachable' }; }
 }
@@ -82,7 +82,10 @@ async function build({ now = Date.now(), turns = [], log = [], burst = null, ful
   const saved = savedOf(log, m.from, m.to);
   const could = couldSaveOf(turns, m.from, m.to);
   const b = await burstSaved(burst, m.days);
-  const burstLine = b.available ? `Claude Burst saved ${money(b.savedUsd)} by compaction (Burst's figure, not Plexiform's)` : null;
+  // Burst's saved_usd is net of the summaries' own cost, so it can be negative.
+  const burstLine = !b.available ? null : b.savedUsd > 0 ? `Claude Burst's compaction saved ${money(b.savedUsd)} after the cost of its summaries (Burst's figure, not Plexiform's)`
+    : b.savedUsd < 0 ? `Claude Burst's compaction cost about ${money(-b.savedUsd)} more than it saved (Burst's figure, not Plexiform's)`
+      : 'Claude Burst\'s compaction saved nothing this month (Burst\'s figure, not Plexiform\'s)';
   const inMonth = (ms) => ms >= m.from && ms <= m.to;
   const active = (Array.isArray(turns) ? turns : []).some((t) => t && inMonth(t.ts)) || (Array.isArray(log) ? log : []).some((e) => e && inMonth(e.at));
   if (!full) {

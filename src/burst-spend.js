@@ -91,15 +91,29 @@ function pauselessView(cfg, stats) {
   const mode = cfg.mode === 'intelligent' ? 'intelligent' : 'fixed';
   const at = mode === 'intelligent' ? num(cfg.floor_tokens) : num(cfg.compact_at_tokens);
   const name = mode === 'intelligent' ? 'Smart' : 'Static';
-  return {
+  const out = {
     available: true,
     enabled: cfg.enabled === true,
     mode,
     thresholdLabel: at ? `${name}, from ${tokensLabel(at)} tokens` : name,
     savedUsd: num(st.saved_usd),
+    netUsd: Number.isFinite(st.net_usd) ? st.net_usd : null,
+    costUsd: num(st.summary_usd) + num(st.rewrite_usd),
     compactions: num(st.compactions),
     tokensNotResent: num(st.tokens_not_resent),
   };
+  out.moneyText = compactionMoneyText(out);
+  return out;
+}
+
+const dollars = (v) => `$${v >= 100 ? Math.round(v) : v.toFixed(2)}`;
+// One sentence for every page that shows Burst's compaction money: net of the summaries' own
+// cost when Burst reports it (it can be negative), never a bare gross figure as "saved".
+function compactionMoneyText(p) {
+  if (!p || !p.compactions) return '';
+  if (p.netUsd === null || p.netUsd === undefined) return `About ${dollars(p.savedUsd)} of tokens not resent, before the cost of writing the summaries.`;
+  if (p.netUsd >= 0) return `Saved about ${dollars(p.netUsd)} after the cost of its summaries (${dollars(p.savedUsd)} not resent, ${dollars(p.costUsd)} for summaries).`;
+  return `Cost about ${dollars(-p.netUsd)} more than it saved: ${dollars(p.savedUsd)} of tokens not resent, ${dollars(p.costUsd)} to write the summaries.`;
 }
 
 function normalizeCompaction(state) {
@@ -131,8 +145,9 @@ function learnedThresholds(raw) {
       inForce: num(r && r.in_force),
       source: LEARNED_SOURCES.has(r && r.source) ? r.source : 'fixed',
       compactions: num(r && r.compactions),
+      reason: str(r && r.reason, 160),
     })).filter((r) => r.name),
   };
 }
 
-module.exports = { learnedThresholds, tokensLabel, normalizeUsage, throughBurstView, secondaryUsdOf, secondaryBySession, normalizeCompaction, isSecondaryRoute, SOURCE, COMPACTION_NOTE, MAX_ROWS };
+module.exports = { compactionMoneyText, learnedThresholds, tokensLabel, normalizeUsage, throughBurstView, secondaryUsdOf, secondaryBySession, normalizeCompaction, isSecondaryRoute, SOURCE, COMPACTION_NOTE, MAX_ROWS };

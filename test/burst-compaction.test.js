@@ -90,7 +90,7 @@ test('the generic request path still refuses POST /api/compaction', async () => 
 test('view model: pauseless fields, chip tag, hidden when the feature is absent', () => {
   const st = { ...stateV019(), context: { compaction: pauselessConfig({ enabled: true, mode: 'intelligent' }), compaction_stats: { compactions: 9, saved_usd: 12.34, tokens_not_resent: 3700000 } } };
   const pl = Spend.normalizeCompaction(st).pauseless;
-  assert.deepEqual(pl, { available: true, enabled: true, mode: 'intelligent', thresholdLabel: 'Smart, from 80k tokens', savedUsd: 12.34, compactions: 9, tokensNotResent: 3700000 });
+  assert.deepEqual(pl, { available: true, enabled: true, mode: 'intelligent', thresholdLabel: 'Smart, from 80k tokens', savedUsd: 12.34, netUsd: null, costUsd: 0, compactions: 9, tokensNotResent: 3700000, moneyText: 'About $12.34 of tokens not resent, before the cost of writing the summaries.' });
   const present = (compaction) => ({ kind: 'present', state: { version: '0.19.0', route: 'PRIMARY', active: true, mode: 'base-url', rejected: [], primaryFailures: 0, compaction }, capabilities: {}, upgrade: null });
   const on = View.statusView(present(Spend.normalizeCompaction(st)), { platform: 'darwin' });
   assert.equal(on.compaction.enabled, true);

@@ -59,7 +59,12 @@ test('Burst states map to honest statuses and only allow-listed one-click action
 
 test('savings are only figures the tool reported: Burst compaction stats and the waste finder totals', () => {
   const t = tools(T.toolsView({ burst: ON, waste: { days: 7, files: 12, totals: { reread: 2, failloop: 1, overkill: { turns: 30, low: 1.2, high: 3.45 } } } }));
-  assert.equal(t.compaction.saves.text, 'Saved about $12.34 over 9 compactions, 3.7M tokens not resent.');
+  assert.equal(t.compaction.saves.text, '9 compactions, 3.7M tokens not resent. About $12.34 of tokens not resent, before the cost of writing the summaries.');
+  const losing = tools(T.toolsView({ burst: { ...ON, compactionVerdict: '5 of 5 compactions lost money: back to the fixed Compact at', compaction: { ...ON.compaction, enabled: true, netUsd: -1.63, moneyText: 'Cost about $1.63 more than it saved: x.' } } })).compaction;
+  assert.match(losing.saves.text, /Cost about \$1\.63 more than it saved/);
+  assert.equal(losing.status.tone, 'amber');
+  assert.match(losing.note, /Burst's own verdict: 5 of 5 compactions lost money/);
+  assert.match(losing.note, /Smart mode/);
   assert.match(t.compaction.saves.source, /Claude Burst/);
   assert.equal(t.waste.saves.text, 'Last 7 days: $1.20 to $3.45 of Opus turns could have run on Sonnet (30 routine turns); 2 repeated file reads; 1 failing loop.');
   assert.match(t.waste.saves.source, /12 transcripts/);
@@ -74,8 +79,8 @@ test('savings are only figures the tool reported: Burst compaction stats and the
 
 test('compaction and routing follow Burst: on/off switch, backup route, missing backup, band versions', () => {
   const t = tools(T.toolsView({ burst: ON }));
-  assert.deepEqual(t.compaction.actions.map((a) => a.kind), ['compaction:on']);
-  assert.deepEqual(tools(T.toolsView({ burst: { ...ON, compaction: { ...ON.compaction, enabled: true } } })).compaction.actions.map((a) => a.kind), ['compaction:off']);
+  assert.deepEqual(t.compaction.actions.map((a) => a.kind), ['compaction:on', 'section:sec-compaction']);
+  assert.deepEqual(tools(T.toolsView({ burst: { ...ON, compaction: { ...ON.compaction, enabled: true } } })).compaction.actions.map((a) => a.kind), ['compaction:off', 'section:sec-compaction']);
   assert.equal(tools(T.toolsView({ burst: { ...ON, compaction: null } })).compaction.status.label, 'Not offered by this Burst');
   assert.equal(tools(T.toolsView({ burst: { ...ON, route: 'SECONDARY' } })).routing.status.label, 'Using your backup now');
   assert.equal(tools(T.toolsView({ burst: { ...ON, secondaryReady: false } })).routing.status.label, 'On, no backup ready');

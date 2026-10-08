@@ -44,7 +44,7 @@ test('Burst present: its /api/history savings are shown as Burst\'s and never ad
   assert.deepEqual(b.calls, [{ days: 20 }]);
   assert.equal(r.burst.savedUsd, 3.75);
   assert.equal(r.burst.source, Receipt.SOURCES.burst);
-  assert.match(r.burst.line, /Claude Burst saved \$3\.75.*not Plexiform's/);
+  assert.match(r.burst.line, /compaction saved \$3\.75 after the cost of its summaries.*not Plexiform's/);
   assert.equal(r.saved.high, 40);
   assert.doesNotMatch(r.headline, /43\.75|3\.75/);
 });
@@ -78,4 +78,14 @@ test('nothing stopped this month says so instead of claiming a saving', async ()
   assert.equal(r.saved.high, 0);
   assert.match(r.headline, /hasn't had to stop any spend/);
   assert.equal(r.couldSave.line, null);
+});
+
+test('Burst compaction that lost money reads as a cost, never "$-"', async () => {
+  const b = burst({ history: { days: [], repos: [{ repo: 'a', usd: 10, saved_usd: -1.6277 }, { repo: 'b', usd: 1, saved_usd: 0 }] } });
+  const r = await Receipt.build({ now: NOW, turns, log, burst: b, full: true });
+  assert.equal(r.burst.savedUsd, -1.63);
+  assert.match(r.burst.line, /cost about \$1\.63 more than it saved/);
+  assert.doesNotMatch(r.burst.line, /\$-/);
+  const z = await Receipt.build({ now: NOW, turns, log, burst: burst({ history: { days: [], repos: [] } }), full: true });
+  assert.match(z.burst.line, /saved nothing/);
 });
