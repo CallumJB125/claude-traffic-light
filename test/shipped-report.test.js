@@ -15,7 +15,7 @@ const cost = { items: [
 ] };
 
 test('strips tag text from titles and falls back when nothing is left', () => {
-  assert.equal(Shipped.stripTags('<command-message>go</command-message> Fix <b>the</b> cart'), 'Fix the cart');
+  assert.equal(Shipped.stripTags('<command-message>go</command-message> Fix <br/> the cart'), 'Fix the cart');
   const s = Shipped.sections({ records: [rec({ title: '<command-name>/x</command-name>' })], now: NOW });
   assert.equal(s[0].items[0], 'Claude Code session in shop');
 });
