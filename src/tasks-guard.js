@@ -63,6 +63,7 @@ function createGuard({ P, taskFace }) {
       stateSinceMs: now - int(v.stateAgeMs),
       lastSeq: int(v.lastSeq),
       hub: v.hub ? { cardKey: str(v.hub.cardKey, 60) } : null,
+      limitResetsAtMs: Number.isFinite(v.limitResetsInMs) ? now + v.limitResetsInMs : null,
     };
   }
 

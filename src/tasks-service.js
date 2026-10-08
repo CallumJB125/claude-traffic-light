@@ -398,12 +398,14 @@ function createTasksService(opts) {
     return true;
   }
 
-  async function create(draft) {
+  // extra.startAfter: main's own known reset time for a 'reset' task (Home's "Resume this at reset"); the page cannot set it.
+  async function create(draft, extra = {}) {
     if (!connected()) return failure({ code: 'SUPERVISOR_UNREACHABLE' });
     const cwd = folders.get(typeof draft?.folder === 'string' ? draft.folder : '');
     const v = guard.validateCreate(draft, cwd, { canSchedule: canSchedule() });
     if (!v.ok && v.code === 'PLAN_REQUIRED') return { ok: false, code: 'PLAN_REQUIRED', text: TV.errorText('PLAN_REQUIRED') };
     if (!v.ok || !(await isDir(cwd))) return { ok: false, code: 'VALIDATION', text: TV.errorText('VALIDATION') };
+    if (v.spec.afterReset && Number.isFinite(extra?.startAfter)) v.spec.startAfter = Math.round(extra.startAfter);
     try {
       const r = await client.createTask(v.spec, { requestId: typeof draft.requestId === 'string' && /^[\w-]{8,128}$/.test(draft.requestId) ? draft.requestId : undefined });
       refresh().catch(() => {});

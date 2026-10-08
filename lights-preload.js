@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('lightsApi', {
   removeCharacter: (id) => ipcRenderer.invoke('hatch:remove', id),
   burstChip: () => ipcRenderer.invoke('burst:chip'),
   burstUsage: (range) => ipcRenderer.invoke('burst:usage', range),
+  limits: () => ipcRenderer.invoke('usage:limits'),
   getAggregateStatus: () => ipcRenderer.invoke('get-aggregate-status'),
   getStats: (days) => ipcRenderer.invoke('get-stats', days),
   exportStats: (format, days) => ipcRenderer.invoke('export-stats', format, days),
