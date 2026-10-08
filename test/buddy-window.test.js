@@ -44,7 +44,7 @@ test('the sidebar lists every main feature as its own section and reaches every 
   assert.equal(sectionOf('integrations'), 'team');
   assert.deepEqual(SECTIONS.find((s) => s.id === 'widget').pages, ['widget', 'lights', 'hatch'], 'Widget configuration and Hatch a character live in the Widget section');
   assert.equal(sectionOf('hatch'), 'widget');
-  assert.deepEqual(flat().filter((p) => p.unlisted).map((p) => p.id).sort(), ['myday', 'waiting'], 'Home carries Waiting on you and My day; they keep a page but no sub-nav entry');
+  assert.deepEqual(flat().filter((p) => p.unlisted).map((p) => p.id).sort(), ['myday', 'stats', 'waiting'], 'Home carries Waiting on you and My day, Usage & cost carries Time as a tab; each keeps a page but no sub-nav entry');
   assert.equal(sectionOf('myday'), 'home');
   assert.equal(sectionOf('lights'), 'widget');
   assert.equal(sectionOf('nope'), null);

@@ -39,3 +39,14 @@ test('Auto-answer is hidden unless PLEXIFORM_SHOW_AUTOANSWER=1', () => {
   assert.match(read('lights-preload.js'), /showAutoAnswer: process\.env\.PLEXIFORM_SHOW_AUTOANSWER === '1'/);
   assert.match(view, /v === 'auto' && !window\.lightsApi\.showAutoAnswer/);
 });
+
+test('Usage & cost is one sidebar entry with tabs, links to the Usage optimiser, and names its two heatmaps apart', () => {
+  const { SECTIONS, pageById } = require('../buddy-window/pages.js');
+  assert.deepEqual(SECTIONS.find((s) => s.id === 'usage').pages, ['usage', 'stats']);
+  assert.equal(pageById('stats').unlisted, true, 'Time is a tab, not a second sub-nav entry');
+  assert.match(html, /id="budget-optimiser"/);
+  assert.match(view, /\$\('budget-optimiser'\)\.addEventListener\('click', \(\) => window\.lightsApi\.openOptimiser\(\)\)/);
+  assert.match(read('main.js'), /utilityHandle\('usage:open-optimiser', analyticsSender, \(\) => \{ openBuddy\('optimiser'\); return true; \}\);/);
+  assert.doesNotMatch(read('usage-view.js'), /'When you work'/);
+  assert.match(html, /When you work/);
+});

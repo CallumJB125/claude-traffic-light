@@ -1367,6 +1367,7 @@
     if ($('main').dataset.view === 'stats') renderStats(); else renderUsageHistory(true);
   });
   $('mix-connect').addEventListener('click', () => window.lightsApi.openAiTools());
+  $('budget-optimiser').addEventListener('click', () => window.lightsApi.openOptimiser());
 
   // The daily and weekly limit, written to the same spend settings as Preferences.
   async function loadBudget() {

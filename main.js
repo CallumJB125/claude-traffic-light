@@ -3413,6 +3413,7 @@ utilityHandle('save-spend-limits', analyticsSender, (_e, v) => {
   } catch (err) { return { error: `Could not save: ${err.message}` }; }
 });
 utilityHandle('usage:open-ai-tools', analyticsSender, () => { aiToolsOpen('aitools'); return true; });
+utilityHandle('usage:open-optimiser', analyticsSender, () => { openBuddy('optimiser'); return true; });
 
 // Export the whole visible range as JSON or CSV, wherever the user points.
 utilityHandle('export-stats', e => settingsOnly(e) || analyticsSender(e), async (e, format, days) => {
