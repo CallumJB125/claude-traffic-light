@@ -80,6 +80,7 @@ function build() {
   for (const p of pages) { byId.set(p.id, p); for (const c of p.children ?? []) byId.set(c.id, c); }
   const ul = el('ul', { class: 'nav-list' });
   for (const s of sections) {
+    if (s.heading) ul.append(el('li', { class: 'nav-heading', 'aria-hidden': 'true' }, s.heading));
     const head = el('button', { type: 'button', class: 'nav-item nav-section', 'data-section': s.id }, icon(s.icon), el('span', { class: 'nav-label' }, s.title));
     head.addEventListener('click', () => { if (sectionOf(state.selected) !== s.id) window.buddy.select(s.default); });
     sectionBtns.set(s.id, head);
@@ -101,7 +102,7 @@ function build() {
 // The Usage optimiser's own sections (read from Burst's dashboard by main) unfold under its entry while it is open.
 let optKey = '';
 function paintOptimiserNav() {
-  const li = buttons.get('optimiser')?.parentElement;
+  const li = (buttons.get('optimiser') || sectionBtns.get('optimiser'))?.parentElement;
   if (!li) return;
   const nav = state.selected === 'optimiser' && state.optimiser ? state.optimiser.nav : [];
   const active = state.optimiser ? state.optimiser.active : null;

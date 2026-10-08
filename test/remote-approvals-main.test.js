@@ -193,11 +193,11 @@ test('the remote host: e2e may be a function; pairing steps go plain even when e
   host.close();
 });
 
-test('Settings → Phone is a page of its own with its preload, packaged, and CSP-locked', () => {
+test('Phone is a page of its own with its preload, packaged, and CSP-locked', () => {
   const { PAGES, SECTIONS } = require('../buddy-window/pages.js');
   const p = PAGES.find((x) => x.id === 'phone');
   assert.deepEqual([p.file, p.preload, p.kind], ['phone-pairing.html', 'phone-pairing-preload.js', 'local']);
-  assert.ok(SECTIONS.find((s) => s.id === 'settings').pages.includes('phone'));
+  assert.ok(SECTIONS.find((s) => s.id === 'phone').pages.includes('phone'));
   const files = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).build.files;
   for (const f of ['phone-pairing.html', 'phone-pairing.css', 'phone-pairing-preload.js', 'remote/src/**/*', 'remote/package.json']) assert.ok(files.includes(f), f);
   const html = fs.readFileSync(path.join(ROOT, 'phone-pairing.html'), 'utf8');

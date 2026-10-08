@@ -3090,7 +3090,7 @@ function createTray() {
   // The default menu is the everyday handful (the app's sections, not every
   // page). Debug and resize controls show in dev runs and in the widget's
   // Option/Shift-right-click menu only.
-  const sectionItems = () => BuddyPages.sectionsFor().map((sec) => ({ id: sec.default, title: sec.title, group: 'sections', kind: 'local' }));
+  const sectionItems = () => BuddyPages.sectionsFor().filter((sec) => sec.menu !== false).map((sec) => ({ id: sec.default, title: sec.title, group: 'sections', kind: 'local' }));
   const buildMenu = (from = 'tray') => {
     const advanced = IS_DEV_RUN || from === 'widget';
     return Menu.buildFromTemplate([

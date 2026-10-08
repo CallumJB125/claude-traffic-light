@@ -25,9 +25,9 @@ test('every page has a unique id, a title and a known kind', () => {
   assert.ok(PAGES.some(page => page.id === 'board'));
 });
 
-test('the sidebar has seven sections that together reach every page exactly once', () => {
-  assert.deepEqual(SECTIONS.map((s) => s.id), ['home', 'board', 'tasks', 'usage', 'team', 'widget', 'settings']);
-  assert.deepEqual(SECTIONS.map((s) => s.title), ['Home', 'Board', 'Tasks', 'Usage & cost', 'Team', 'Widget', 'Settings']);
+test('the sidebar lists every main feature as its own section and reaches every page exactly once', () => {
+  assert.deepEqual(SECTIONS.map((s) => s.id), ['home', 'board', 'tasks', 'sessions', 'checkpoints', 'memory', 'usage', 'optimiser', 'clients', 'team', 'aitools', 'widget', 'phone', 'settings']);
+  assert.deepEqual(SECTIONS.map((s) => s.title), ['Home', 'Board', 'Tasks', 'Running now', 'What changed', 'Search everything', 'Usage & cost', 'Usage optimiser', 'Client billing', 'Team', 'AI tools', 'Widget', 'Phone', 'Settings']);
   assert.deepEqual(FOOTER, ['help', 'feedback', 'updates']);
   const listed = [...SECTIONS.flatMap((s) => s.pages), ...FOOTER];
   assert.equal(new Set(listed).size, listed.length, 'no page in two sections');
@@ -35,10 +35,11 @@ test('the sidebar has seven sections that together reach every page exactly once
   for (const s of SECTIONS) assert.ok(s.pages.includes(s.default) && pageById(s.default), `${s.id} opens a page it holds`);
   assert.equal(sectionOf('board:calendar'), 'board');
   assert.equal(sectionOf('waiting'), 'home');
-  assert.equal(sectionOf('sessions'), 'home');
+  assert.equal(sectionOf('sessions'), 'sessions');
+  assert.equal(sectionOf('optimiser'), 'optimiser', 'Usage optimiser is a section of its own');
   assert.equal(pageById('sessions').title, 'Running now');
   assert.equal(pageById('tasks').title, 'Tasks');
-  assert.equal(SECTIONS.find((s) => s.id === 'settings').default, 'aitools');
+  assert.equal(SECTIONS.find((s) => s.id === 'aitools').default, 'aitools');
   assert.equal(sectionOf('help'), null, 'footer links are not in a section');
   assert.equal(sectionOf('integrations'), 'team');
   assert.deepEqual(SECTIONS.find((s) => s.id === 'widget').pages, ['widget', 'lights'], 'Widget configuration moved from Settings to the Widget section');

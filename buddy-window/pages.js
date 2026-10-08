@@ -70,20 +70,27 @@ const GROUPS = [
   { id: 'you', title: 'You' },
 ];
 
-// The sidebar shows these seven and nothing else; every page above is still a
+// The sidebar shows these and nothing else, grouped under small headings; every page above is still a
 // page (deep links, IPC and the app menu address pages, not sections). A
 // section opens `default`; the others are its sub-nav, in this order. Board
 // views are the board page's children, so they are listed by id like the rest.
 // Home opens Overview until the Home page is registered (then `home` leads it);
 // Sessions lives under it as "Running now".
 const SECTIONS = [
-  { id: 'home', title: 'Home', icon: 'sun', default: 'home', pages: ['home', 'overview', 'myday', 'waiting', 'sessions', 'checkpoints', 'memory'] },
+  { id: 'home', title: 'Home', icon: 'sun', default: 'home', pages: ['home', 'overview', 'myday', 'waiting'] },
   { id: 'board', title: 'Board', icon: 'board', default: 'board', pages: ['board', 'board:table', 'board:history', 'board:dashboard'] },
   { id: 'tasks', title: 'Tasks', icon: 'tasks', default: 'tasks', pages: ['tasks'] },
-  { id: 'usage', title: 'Usage & cost', icon: 'chart', default: 'usage', pages: ['usage', 'stats', 'optimiser', 'clients'] },
-  { id: 'team', title: 'Team', icon: 'team', default: 'team', pages: ['team', 'integrations', 'account'] },
+  { id: 'sessions', title: 'Running now', icon: 'team', default: 'sessions', menu: false, pages: ['sessions'] },
+  { id: 'checkpoints', title: 'What changed', icon: 'layers', default: 'checkpoints', menu: false, pages: ['checkpoints'] },
+  { id: 'memory', title: 'Search everything', icon: 'layers', default: 'memory', menu: false, pages: ['memory'] },
+  { id: 'usage', title: 'Usage & cost', icon: 'chart', default: 'usage', heading: 'Spend', pages: ['usage', 'stats'] },
+  { id: 'optimiser', title: 'Usage optimiser', icon: 'chart', default: 'optimiser', menu: false, pages: ['optimiser'] },
+  { id: 'clients', title: 'Client billing', icon: 'chart', default: 'clients', menu: false, pages: ['clients'] },
+  { id: 'team', title: 'Team', icon: 'team', default: 'team', heading: 'Team', pages: ['team', 'integrations', 'account'] },
+  { id: 'aitools', title: 'AI tools', icon: 'plug', default: 'aitools', menu: false, heading: 'You', pages: ['aitools'] },
   { id: 'widget', title: 'Widget', icon: 'lights', default: 'widget', pages: ['widget', 'lights'] },
-  { id: 'settings', title: 'Settings', icon: 'gear', default: 'aitools', pages: ['aitools', 'settings', 'thismac', 'phone', 'hatch'] },
+  { id: 'phone', title: 'Phone', icon: 'bell', default: 'phone', menu: false, pages: ['phone'] },
+  { id: 'settings', title: 'Settings', icon: 'gear', default: 'settings', pages: ['settings', 'thismac', 'hatch'] },
 ];
 // Small links under the sections, not a section of their own.
 const FOOTER = ['help', 'feedback', 'updates'];
