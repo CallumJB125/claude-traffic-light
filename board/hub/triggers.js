@@ -249,7 +249,7 @@ export class Triggers {
       return result;
     };
     const used = this.db.get(`SELECT COUNT(*) AS n FROM event_trigger_firings WHERE trigger_id = ? AND id != ? AND at > ?
-      AND result IN ('done', 'would', 'failed')`, t.id, firingId, new Date(this.hub.wallMs() - HOUR_MS).toISOString()).n;
+      AND (result IN ('done', 'would', 'failed') OR detail = 'pending')`, t.id, firingId, new Date(this.hub.wallMs() - HOUR_MS).toISOString()).n;
     if (used >= t.max_per_hour) return record('rate_limited', 'rate_limited');
     const plan = this.plan(t, ev);
     if (!plan.ok) return record('skipped', plan.detail);

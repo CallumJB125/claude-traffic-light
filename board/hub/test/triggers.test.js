@@ -248,7 +248,7 @@ test('sentry.issue.new → label_card on the issue’s card, through the wrapped
   assert.deepEqual(sentryTriggerEvents({ ...body, action: 'resolved' }, { connectionId: 'c', now: h.clock.wall() }), [], 'only new issues are events');
 }));
 
-test('rate limit: at most max_per_hour actions per rule, then rate_limited until the hour passes', () => rig(async ({ h, send, prEvent, make, mode, firings }) => {
+test('rate limit: at most max_per_hour actions per rule, then rate_limited until the hour passes', () => rig(async ({ h, send, prEvent, make, mode, enable, firings }) => {
   const t = await make({ event: 'github.pr.opened', action: 'add_comment', params: { text: 'x' }, max_per_hour: 2 });
   assert.equal((await mode(t.id, 'dry_run')).status, 200);
   for (let i = 0; i < 4; i += 1) await send('pull_request', prEvent('reopened'));
@@ -258,6 +258,12 @@ test('rate limit: at most max_per_hour actions per rule, then rate_limited until
   assert.equal(firings(t.id).at(-1).result, 'would');
   const def = await make({ event: 'github.pr.opened', action: 'add_comment', params: { text: 'y' } });
   assert.equal(def.max_per_hour, 10, 'the default is 10 an hour');
+  const one = await make({ event: 'card.moved_to_review', action: 'add_comment', params: { text: 'z' }, max_per_hour: 1 });
+  await enable(one.id);
+  const cardId = h.db.get('SELECT id FROM cards WHERE key = ?', KEY).id;
+  const ev = (id) => h.hub.triggers.ingest({ type: 'card.moved_to_review', id, org_id: h.ids.org, card_id: cardId, subject: KEY });
+  await Promise.all([ev('journal:a'), ev('journal:b')]);
+  assert.deepEqual(firings(one.id).map((f) => f.result).sort(), ['done', 'rate_limited'], 'firings still running count toward the limit');
 }));
 
 test('loop guard: what a trigger wrote, or anything raised inside a firing, never triggers again', () => rig(async ({ h, alice, cardId, make, enable, firings, api }) => {
