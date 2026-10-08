@@ -349,6 +349,23 @@ test('tab strip: unknown tabs are refused; no tabs unless Burst is ready; a sect
   assert.equal(off.o.payload().tab, 'dashboard');
 });
 
+test('tool card buttons jump to a fixed Burst section on the Dashboard tab; anything else is refused', async () => {
+  const r = rig();
+  await r.o.open();
+  await r.o.act('tab:tools');
+  const ran = [];
+  r.views[0].webContents.executeJavaScript = async (js) => { ran.push(js); return 'click'; };
+  assert.deepEqual(await r.o.act('section:secondarySection'), { ok: true });
+  assert.equal(r.o.payload().tab, 'dashboard');
+  assert.deepEqual(r.children, [r.views[0]]);
+  assert.match(ran.at(-1), /"secondarySection"/);
+  for (const bad of ['section:sec-x', 'section:', 'section:a"b']) assert.deepEqual(await r.o.act(bad), { ok: false }, bad);
+  assert.deepEqual(r.acts, [], 'never reaches Burst');
+  const off = rig({ snap: down() });
+  await off.o.open();
+  assert.deepEqual(await off.o.act('section:sec-config'), { ok: false });
+});
+
 test('tab resets to Dashboard when Burst stops being present', async () => {
   const r = rig();
   await r.o.open();

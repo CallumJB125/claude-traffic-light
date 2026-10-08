@@ -48,7 +48,7 @@ test('Burst states map to honest statuses and only allow-listed one-click action
   const Embed = require('../src/burst-embed.js');
   for (const k of all) {
     const [verb, arg] = k.split(':');
-    assert.ok((verb === 'burst' && Embed.PAGE_ACTIONS.includes(arg)) || (verb === 'tab' && ['dashboard', 'route'].includes(arg)) || (verb === 'compaction' && ['on', 'off'].includes(arg)) || (verb === 'open' && T.PAGES.includes(arg)), k);
+    assert.ok((verb === 'burst' && Embed.PAGE_ACTIONS.includes(arg)) || (verb === 'tab' && ['dashboard', 'route'].includes(arg)) || (verb === 'compaction' && ['on', 'off'].includes(arg)) || (verb === 'open' && T.PAGES.includes(arg)) || (verb === 'section' && T.SECTIONS.includes(arg)), k);
   }
 });
 

@@ -38,9 +38,9 @@
     const base = { id: 'routing', name: 'Routing and failover', by: BY_BURST, what: 'Part of Burst. Watches each model\'s limit, falls back along a chain (for example Opus to Sonnet), and sends overflow to your backup provider only when your plan is out.', saves: null, actions: [] };
     if (b.kind === 'unsupported') return { ...base, status: st('', MAC_ONLY), available: false };
     if (b.kind !== 'on') return { ...base, status: st('', 'Needs Claude Burst'), note: 'Turn on Claude Burst above to use it.' };
-    if (b.route === 'SECONDARY') return { ...base, status: st('amber', 'Using your backup now'), actions: [act('tab:dashboard', 'See routing in dashboard', true)] };
-    if (b.secondaryReady === false) return { ...base, status: st('amber', 'On, no backup provider'), note: 'Without a backup provider Burst only falls back between Claude models. Add one in the Burst dashboard.', actions: [act('tab:dashboard', 'Set up in dashboard', true)] };
-    return { ...base, status: st('green', 'On, using your plan'), actions: [act('tab:dashboard', 'Open dashboard', true)] };
+    if (b.route === 'SECONDARY') return { ...base, status: st('amber', 'Using your backup now'), actions: [act('section:sec-config', 'See routing in dashboard', true)] };
+    if (b.secondaryReady === false) return { ...base, status: st('amber', 'On, no backup provider'), note: 'Without a backup provider Burst only falls back between Claude models. Add one in the Burst dashboard.', actions: [act('section:secondarySection', 'Add a backup provider in dashboard', true)] };
+    return { ...base, status: st('green', 'On, using your plan'), actions: [act('section:sec-config', 'See routing in dashboard', true)] };
   }
 
   function compactionTool(b) {
@@ -105,8 +105,10 @@
   // The only pages "Learn more" opens, by id; main never takes a URL from the page.
   const LINKS = Object.freeze({ burst: 'https://github.com/andrewbakercloudscale/claude-burst', panel: 'https://github.com/andrewbakercloudscale/claude-code-cost-sidebar' });
   const PAGES = Object.freeze(['overview', 'usage']);
+  // Burst dashboard sections a card may jump to (claude-burst admin dashboard, v0.19 `.navlink` targets).
+  const SECTIONS = Object.freeze(['sec-config', 'secondarySection']);
 
-  const api = { toolsView, bandStatus, MAC_ONLY, LINKS, PAGES };
+  const api = { toolsView, bandStatus, MAC_ONLY, LINKS, PAGES, SECTIONS };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.PlexiformOptimiserTools = Object.freeze(api);
 })(typeof globalThis !== 'undefined' ? globalThis : this);

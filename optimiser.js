@@ -103,7 +103,7 @@
     const [verb, arg] = kind.split(':');
     if (verb === 'compaction') return compaction(id, arg === 'on');
     if (verb === 'open') { if (api.openPage) api.openPage(arg); return undefined; }
-    if (verb === 'tab') { api.act(kind).catch(() => {}); return undefined; }
+    if (verb === 'tab' || verb === 'section') { api.act(kind).catch(() => {}); return undefined; }
     const r = await api.act(arg).catch(() => ({ ok: false, error: 'Something went wrong.' }));
     notes.set(id, { text: r && r.ok ? 'Started in Terminal. This page updates when Burst answers.' : said(r) });
     renderTools();

@@ -14,6 +14,7 @@ const BAR_H = 48; // the native top bar (optimiser.html) above the dashboard
 const PARTITION = 'persist:burst-dashboard';
 const POLL_MS = 5000;
 const TABS = Object.freeze(['dashboard', 'tools']);
+const { SECTIONS: TOOL_SECTIONS } = require('../src/optimiser-tools');
 const FILTER = { urls: ['http://*/*', 'https://*/*', 'ws://*/*', 'wss://*/*'] };
 
 function createOptimiser({
@@ -181,6 +182,18 @@ function createOptimiser({
         const t = kind.slice(4);
         if (!TABS.includes(t) || !last || last.mode !== 'ready') return { ok: false };
         tab = t; sync(); sendState();
+        return { ok: true };
+      }
+      // A tool card's "in dashboard" button: that section when Burst's page lists it, else just the Dashboard tab.
+      if (typeof kind === 'string' && kind.startsWith('section:')) {
+        const id = kind.slice(8);
+        if (!TOOL_SECTIONS.includes(id) || !last || last.mode !== 'ready') return { ok: false };
+        if (tab !== 'dashboard') { tab = 'dashboard'; sync(); sendState(); }
+        const wc = wcOf();
+        if (wc) {
+          wc.executeJavaScript(Embed.sectionScript(id)).catch(() => {});
+          if (nav.some((n) => n.id === id)) { active = id; navChanged(); }
+        }
         return { ok: true };
       }
       if (!Embed.PAGE_ACTIONS.includes(kind)) return { ok: false, error: 'Unknown action.' };
