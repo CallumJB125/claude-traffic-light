@@ -13,8 +13,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, relative } from 'node:path';
-import { mkdtempSync, realpathSync, writeFileSync, existsSync, rmSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { realpathSync, writeFileSync, existsSync, rmSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { generateKeyPairSync, createPublicKey, verify as cryptoVerify, randomUUID } from 'node:crypto';
 import WebSocket from 'ws';
@@ -25,6 +24,7 @@ import { createVault } from '../../web/js/phone-vault.js';
 import { createApprovals } from '../../web/js/phone-approvals.js';
 import { fromB64url } from '../../web/js/remote/encoding.js';
 import { virtualAuthenticator } from '../../../remote/test/helpers.js';
+import { testTempDir } from '../../shared/test-support/tmp.js';
 
 const require = createRequire(import.meta.url);
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -114,10 +114,10 @@ async function rig({ entitled = true } = {}) {
     assert.equal(v.status, 200, v.text);
     const phoneToken = v.body.device_token;
 
-    const dir = mkdtempSync(join(tmpdir(), 'w2b-mac-'));
+    const dir = testTempDir('w2b-mac-');
     const requestsDir = join(dir, 'requests');
     require('node:fs').mkdirSync(requestsDir, { mode: 0o700 });
-    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'w2b-repo-')));
+    const cwd = realpathSync(testTempDir('w2b-repo-'));
     hook = hookSim(requestsDir);
     const ent = { on: entitled, has(f) { return f === 'phone' && this.on; }, limits() { return { devices: this.on ? 3 : 0 }; } };
     const core = createRemoteApprovals({
@@ -130,7 +130,7 @@ async function rig({ entitled = true } = {}) {
     core.setEnabled(true);
     host = createRemoteInteractionHost({
       userId: mac.body.user.id, adapters: { codex: createCodexAppServer({ bin: FAKE }) }, boardCurrent: (b) => b === null, retry: { baseMs: 50, maxMs: 100 },
-      workspace: () => mkdtempSync(join(tmpdir(), 'w2b-owned-')),
+      workspace: () => testTempDir('w2b-owned-'),
       ...core.hostOptions(),
     });
     const st = await host.enable({ baseUrl: h.base, token: mac.body.device_token, WebSocket: SpyWS, fetch });

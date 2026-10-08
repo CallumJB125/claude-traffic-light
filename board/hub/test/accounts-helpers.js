@@ -2,6 +2,7 @@
 // fake clock, the outbox mailer (no mail leaves the process) and the dev
 // fixture org (alice@dev.local owner, bob@dev.local member, board DEV).
 
+import { rmSync } from 'node:fs';
 import WebSocket from 'ws';
 import { createApp } from '../app.js';
 import { silentLogger } from '../log.js';
@@ -86,6 +87,10 @@ export async function startAccounts({ clock = fakeClock(), config = {}, mailer =
     async close() {
       for (const b of sockets) b.terminate();
       await app.close({ graceMs: 50 });
+    },
+    async destroy() {
+      await h.close();
+      rmSync(cfg.dataDir, { recursive: true, force: true });
     },
   };
   return h;

@@ -9,6 +9,7 @@ import { WindowsJob, jobFrame, launchPayload, windowsQuote, jobHelperPath } from
 import { CodexBackend, codexConfig } from '../backends/codex.js';
 import { ClaudeBackend } from '../backends/claude.js';
 import { buildCodexEnv, buildEnv } from '../launch.js';
+import { testTempDir } from '../../shared/test-support/tmp.js';
 const opts = { cwd: 'C:\\work tree', env: { HOME: 'C:\\Users\\tester', SystemRoot: 'C:\\Windows' } };
 function fixture() {
   const helper = new EventEmitter(); Object.assign(helper, { pid: 999, stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough() });
@@ -57,7 +58,7 @@ test('Windows environment is allowlisted and uses no POSIX shell; Codex keeps ex
   assert.ok(policy.includes('":workspace_roots"="read"')); assert.ok(policy.includes('"C:\\\\private"="deny"')); assert.ok(policy.includes('"C:\\\\auth"="deny"')); assert.ok(!policy.includes('/opt/homebrew'));
 });
 test('Windows Codex start is connected to async Job receipt and confirmed stop, Claude refuses before launch', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pf-job-'));
+  const dir = testTempDir('pf-job-');
   const f = fixture(), backend = new CodexBackend({ ...opts, platform: 'win32', bin: 'C:\\codex.exe', runDir: dir, windowsJobOptions: f });
   try {
     const started = backend.start('PRIVATE PROMPT'); assert.equal(backend.pid, null);

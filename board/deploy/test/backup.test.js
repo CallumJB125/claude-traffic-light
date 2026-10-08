@@ -8,10 +8,11 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { createBackup, snapshot, stageRestore, validateBackup } from '../pi/backup-lib.mjs';
+import { testTempDir } from '../../shared/test-support/tmp.js';
 
 const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
 function rig(t, { legacy = false } = {}) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plexiform-backup-'));
+  const root = testTempDir('plexiform-backup-');
   let conn;
   t.after(() => { conn?.close(); fs.rmSync(root, { recursive: true, force: true }); });
   const dataDir = path.join(root, 'data'); fs.mkdirSync(dataDir, { mode: 0o700 });

@@ -2,11 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHmac, randomBytes } from 'node:crypto';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createSentryConnector } from '../integrations/sentry/index.js';
+import { testTempDir } from '../../shared/test-support/tmp.js';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'sentry-check-delivery.mjs');
 const sign = (secret, bytes) => createHmac('sha256', Buffer.from(secret, 'utf8')).update(bytes).digest('hex');
@@ -22,7 +22,7 @@ const run = (dir, secret, extra = []) => spawnSync(process.execPath, [SCRIPT, '-
   { encoding: 'utf8', env: { ...process.env, ...(secret ? { SENTRY_CHECK_SECRET: secret } : {}) } });
 
 test('a delivery signed with the real secret passes and its fixture is the same bytes re-signed under a test secret', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'sentry-gate-'));
+  const dir = testTempDir('sentry-gate-');
   const secret = randomBytes(24).toString('hex');
   const bytes = capture(dir, { secret });
   const out = join(dir, 'fixture.json');
@@ -43,7 +43,7 @@ test('a delivery signed with the real secret passes and its fixture is the same 
 });
 
 test('a wrong secret, a re-serialised body or a missing secret fails and writes nothing', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'sentry-gate-'));
+  const dir = testTempDir('sentry-gate-');
   const secret = randomBytes(24).toString('hex');
   capture(dir, { secret });
   const wrong = run(dir, randomBytes(24).toString('hex'), ['--fixture', join(dir, 'a.json')]);

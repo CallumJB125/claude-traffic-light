@@ -1,8 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, lstatSync, symlinkSync, mkdirSync } from 'node:fs';
+import { rmSync, lstatSync, symlinkSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { openDb } from '../db.js';
 import { StorageWatch, dbFileSize, parseStorageMax, STORAGE_CHECK_MS } from '../storage-watch.js';
@@ -12,6 +11,7 @@ import { startAccounts } from './accounts-helpers.js';
 import { tenancy } from './tenancy/fixture.js';
 import { communicationRig, taskMessage } from './communication-helpers.js';
 import { fakeClients, fakeProviders, s256 } from './fake-oauth.js';
+import { testTempDir } from '../../shared/test-support/tmp.js';
 
 const MiB = 1024 * 1024;
 function pressure(h) {
@@ -32,7 +32,7 @@ test('optional fixed-text config bounds and disabled watcher perform no sampling
 });
 
 test('actual temporary SQLite WAL counts, while missing/type/linked DB samples refuse', t => {
-  const dir = mkdtempSync(join(tmpdir(), 'plexiform-pressure-'));
+  const dir = testTempDir('plexiform-pressure-');
   const path = join(dir, 'board.db'), db = openDb(path); t.after(() => { db.close(); rmSync(dir, { recursive: true, force: true }); });
   const before = dbFileSize(path);
   db.raw.exec('CREATE TABLE pressure_fixture (bytes BLOB); INSERT INTO pressure_fixture VALUES (zeroblob(2097152));');
@@ -46,7 +46,7 @@ test('actual temporary SQLite WAL counts, while missing/type/linked DB samples r
 });
 
 test('actual app startup pauses a populated disk database and the real reaper resumes after compaction', async t => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'plexiform-pressure-boot-')), path = join(dataDir, 'board.db');
+  const dataDir = testTempDir('plexiform-pressure-boot-'), path = join(dataDir, 'board.db');
   const initial = openDb(path);
   initial.raw.exec('CREATE TABLE pressure_fixture (bytes BLOB); INSERT INTO pressure_fixture VALUES (zeroblob(4194304));'); initial.close();
   let h;

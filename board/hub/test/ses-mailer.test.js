@@ -12,8 +12,6 @@ import { createServer } from 'node:http';
 import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
 import { spawn } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inspect } from 'node:util';
@@ -25,6 +23,7 @@ import { createLogger, silentLogger } from '../log.js';
 import { seedDev } from '../seed.js';
 import { testConfig, fakeGitHub, fakeClock } from './helpers.js';
 import { startAccounts } from './accounts-helpers.js';
+import { testTempDir } from '../../shared/test-support/tmp.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const sha256 = (s) => createHash('sha256').update(s).digest('hex');
@@ -454,7 +453,7 @@ function runServer(env, { until = null } = {}) {
 test('boot: the hub with SES starts, logs, stops, and its output never contains the secret, token or key id', async () => {
   const c = creds();
   const token = randomBytes(40).toString('base64');
-  const dir = mkdtempSync(join(tmpdir(), 'board-ses-'));
+  const dir = testTempDir('board-ses-');
   const ok = await runServer({ ...sesEnv(c, { BOARD_SES_SESSION_TOKEN: token }), BOARD_PORT: '0', BOARD_DATA_DIR: dir, BOARD_LOG_LEVEL: 'debug' }, { until: 'hub listening' });
   assert.match(ok.out, /hub listening/);
   for (const f of [c.secretAccessKey, token, c.accessKeyId]) assert.ok(!ok.out.includes(f), 'boot output leaked a credential');

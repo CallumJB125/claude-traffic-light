@@ -11,6 +11,7 @@ import { waitForStopped, killTree, lstartOf } from '../procs.js';
 import { ClaudeBackend } from '../backends/claude.js';
 import { CodexBackend } from '../backends/codex.js';
 import { HermesBackend } from '../backends/hermes.js';
+import { testTempDir } from '../../shared/test-support/tmp.js';
 
 const other = { pid: 10, pgid: 10, stat: 'S' };
 const subject = { pid: 100, groups: [100, 200] };
@@ -52,7 +53,7 @@ for (const Backend of [ClaudeBackend, CodexBackend, HermesBackend]) {
     assert.equal(await b.stop(), false, 'stop result must reject positive live process metadata');
   });
   test(`${Backend.name}: stop returns a verified receipt for owned CLI and detached tool`, async () => {
-    const home = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'px-stop-confirm-'));
+    const home = fs.realpathSync(testTempDir('px-stop-confirm-'));
     let child, tool, childStart, toolStart;
     try {
       const code = `const {spawn}=require('node:child_process'); const c=spawn(process.execPath,['-e','process.on("SIGTERM",()=>{});setInterval(()=>{},100)'],{detached:true,stdio:'ignore'});process.stdout.write(c.pid+'\\n');process.on('SIGTERM',()=>{});setInterval(()=>{},100);`;

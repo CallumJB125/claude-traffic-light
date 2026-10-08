@@ -11,10 +11,10 @@ import { startHub, testConfig } from './helpers.js';
 import { startAccounts } from './accounts-helpers.js';
 import { sha256hex } from '../auth.js';
 import { randomBytes } from 'node:crypto';
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadKey, loadPreviousKey } from '../vault.js';
+import { testTempDir } from '../../shared/test-support/tmp.js';
 
 const base = (over = {}) => ({ ...testConfig({ auth: 'accounts', devLoginSecret: null, accountsDev: true }), ...over });
 
@@ -395,7 +395,7 @@ test('accounts refuses an example.com/.org/.net BOARD_PUBLIC_URL and BOARD_SIGNU
 test('BOARD_ENC_KEY / BOARD_ENC_KEY_FILE text that still has a placeholder word is refused in accounts mode, even when it decodes to 32 bytes', () => {
   // 43 base64 characters and '=': 32 bytes, so only the words give it away.
   const b64 = (w) => `${w}${'A'.repeat(43 - w.length)}=`;
-  const dir = mkdtempSync(join(tmpdir(), 'enckey-'));
+  const dir = testTempDir('enckey-');
   for (const w of WORDS) {
     const text = /^[A-Za-z]+$/.test(w) ? b64(w) : `${w}-${'a'.repeat(30)}`;
     assert.throws(() => loadKey({ env: { BOARD_ENC_KEY: text }, hasParentPort: false, refusePlaceholder: true }), (e) => e.message === 'BOARD_ENC_KEY still has an example placeholder: set a real key (openssl rand -base64 32)' && !e.message.includes(text), w);

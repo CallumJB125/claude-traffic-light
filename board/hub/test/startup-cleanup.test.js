@@ -1,16 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { createApp } from '../app.js';
 import { Db, openDb } from '../db.js';
 import { silentLogger } from '../log.js';
 import { fakeClock, fakeGitHub, testConfig } from './helpers.js';
+import { testTempDir } from '../../shared/test-support/tmp.js';
 
 function fixture(t) {
-  const dir = mkdtempSync(join(tmpdir(), 'hub-startup-close-'));
+  const dir = testTempDir('hub-startup-close-');
   const config = testConfig({ dataDir: dir, dbPath: join(dir, 'board.db'), auth: 'local', localSecret: 's'.repeat(64) });
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   return { config, options: { clock: fakeClock(), log: silentLogger, github: fakeGitHub(), timers: false } };

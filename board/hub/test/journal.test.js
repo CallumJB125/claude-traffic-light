@@ -5,12 +5,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { replay, CARD_STATE } from '../../shared/journal.js';
 import { TTL_MS } from '../../shared/liveness.js';
 import { startHub, runMsg, runHb } from './helpers.js';
+import { testTempDir } from '../../shared/test-support/tmp.js';
 
 const TRACKED = [...CARD_STATE, 'title', 'labels', 'budget_cents', 'repo_id', 'base_ref', 'key', 'parent_card_id'];
 
@@ -89,7 +89,7 @@ test('every change journals: create, PATCH before/after, dispatch→claim→run,
 });
 
 test('restore bump is journalled: replay across a restore still matches', async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'board-journal-'));
+  const dataDir = testTempDir('board-journal-');
   const h1 = await startHub({ dataDir });
   let run;
   try {

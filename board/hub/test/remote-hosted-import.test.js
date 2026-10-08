@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { copyFileSync, mkdirSync, rmSync, symlinkSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { testTempDir } from '../../shared/test-support/tmp.js';
 
 test('hosted board-only source can import remote collaboration without any desktop files',()=>{
- const root=fileURLToPath(new URL('../../..',import.meta.url)),dir=mkdtempSync(join(tmpdir(),'plexiform-remote-hosted-'));
+ const root=fileURLToPath(new URL('../../..',import.meta.url)),dir=testTempDir('plexiform-remote-hosted-');
  try{
   const files=execFileSync('git',['ls-files','-z','--cached','--others','--exclude-standard','--','board'],{cwd:root,encoding:'utf8'}).split('\0').filter(Boolean);
   for(const relative of files){const target=join(dir,relative);mkdirSync(dirname(target),{recursive:true});copyFileSync(join(root,relative),target);}
