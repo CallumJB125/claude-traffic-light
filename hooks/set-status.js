@@ -71,6 +71,18 @@ if (!process.stdin.isTTY) {
 // refused call takes the full path so this process prints the decision.
 let gateDeny = null;
 if (signal === 'tool-use') { try { gateDeny = require('./spend-gate.js').decide({ rootDir: ROOT_DIR, sessionId: data?.session_id, tool: data?.tool_name }); } catch { gateDeny = null; } }
+// Policy packs (hooks/policy-gate.js): fail-safe the same way. A refused
+// prompt never starts a turn, so the session file is left as it was.
+let policyBlock = null;
+if (!gateDeny && (signal === 'tool-use' || signal === 'prompt-submit')) {
+  try {
+    const Policy = require('./policy-gate.js');
+    const out = Policy.decide({ rootDir: ROOT_DIR, signal, data });
+    if (out && out.block) policyBlock = Policy.hookOutput(out);
+    else gateDeny = Policy.hookOutput(out);
+  } catch { gateDeny = null; }
+}
+if (policyBlock) { try { fs.writeSync(1, JSON.stringify(policyBlock)); } catch {} process.exit(0); }
 
 // Fast path (hooks/fast-hook.js; the app turns it on with its `fastHook`
 // setting, default off): hand a frequent event to the running app, which runs
