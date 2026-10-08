@@ -73,7 +73,7 @@ test('compaction and routing follow Burst: on/off switch, backup route, missing 
   assert.deepEqual(tools(T.toolsView({ burst: { ...ON, compaction: { ...ON.compaction, enabled: true } } })).compaction.actions.map((a) => a.kind), ['compaction:off']);
   assert.equal(tools(T.toolsView({ burst: { ...ON, compaction: null } })).compaction.status.label, 'Not offered by this Burst');
   assert.equal(tools(T.toolsView({ burst: { ...ON, route: 'SECONDARY' } })).routing.status.label, 'Using your backup now');
-  assert.equal(tools(T.toolsView({ burst: { ...ON, secondaryReady: false } })).routing.status.label, 'On, no backup provider');
+  assert.equal(tools(T.toolsView({ burst: { ...ON, secondaryReady: false } })).routing.status.label, 'On, no backup ready');
   assert.equal(tools(T.toolsView({ burst: { kind: 'not_installed' } })).routing.status.label, 'Needs Claude Burst');
   assert.equal(t.band.status.label, 'On');
   assert.equal(tools(T.toolsView({ burst: { ...ON, band: { supported: true, installed: true, current: false } } })).band.status.label, 'Installed, out of date');

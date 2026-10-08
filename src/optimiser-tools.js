@@ -39,7 +39,7 @@
     if (b.kind === 'unsupported') return { ...base, status: st('', MAC_ONLY), available: false };
     if (b.kind !== 'on') return { ...base, status: st('', 'Needs Claude Burst'), note: 'Turn on Claude Burst above to use it.' };
     if (b.route === 'SECONDARY') return { ...base, status: st('amber', 'Using your backup now'), actions: [act('section:sec-config', 'See routing in dashboard', true)] };
-    if (b.secondaryReady === false) return { ...base, status: st('amber', 'On, no backup provider'), note: 'Without a backup provider Burst only falls back between Claude models. Add one in the Burst dashboard.', actions: [act('section:secondarySection', 'Add a backup provider in dashboard', true)] };
+    if (b.secondaryReady === false) return { ...base, status: st('amber', 'On, no backup ready'), note: 'No backup provider is ready (none is set up, or its key or sign-in is missing), so Burst only falls back between Claude models.', actions: [act('section:secondarySection', 'Add a backup provider in dashboard', true)] };
     return { ...base, status: st('green', 'On, using your plan'), actions: [act('section:sec-config', 'See routing in dashboard', true)] };
   }
 

@@ -387,7 +387,7 @@ function checkBurstSecondary(ctx) {
   const s = b.state.secondary;
   if (!s || !s.provider) return null;
   if (s.keyPresent) return { status: 'ok', detail: `A secondary provider (${s.provider}) is set up with its key.` };
-  return { status: 'warn', detail: `A secondary provider (${s.provider}) is set up but its key is missing, so Burst can't fail over to it.`, next: 'Open the Burst dashboard and add the key.' };
+  return { status: 'warn', detail: `A secondary provider (${s.provider}) is set up, but Burst can't load its key or sign-in, so it can't fail over to it.`, next: 'In the Usage optimiser, open the Routing card\'s "Add a backup provider in dashboard" and add the credential there.' };
 }
 
 function checkBurstVersion(ctx) {
