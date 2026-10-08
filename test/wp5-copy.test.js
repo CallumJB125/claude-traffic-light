@@ -2,8 +2,8 @@ const test = require('node:test'), assert = require('node:assert/strict'), fs = 
 const read = (f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
 
 test('Team, This Mac and board copy no longer uses Runners, observed, hub or Tackle jargon', () => {
-  const banned = [/'Runners'/, /Team hub address/, /team hub’s address/, /Last report:/, /Paused: limit/, /Handing over'/, /Handed over'/, /Tackle with AI/, /label: 'Observed'/];
-  for (const f of ['buddy-window/account.js', 'buddy-window/brand.js', 'board/shared/cardface.js', 'board/web/js/render-board.js', 'board/web/js/render-dialogs.js', 'board/web/js/render-drawer.js', 'src/budget-notice.js', 'settings.html', 'board/web/js/history.js', 'board/web/js/view.js', 'board/web/js/palette.js', 'tasks.html']) {
+  const banned = [/'Runners'/, /Team hub address/, /team hub’s address/, /Last report:/, /Paused: limit/, /Handing over'/, /Handed over'/, /Tackle with AI/, /label: 'Observed'/, /['`][^'`\n]*team hub[^'`\n]*['`]/, /Runner not available/, /['`]The runner/, /runner key/, /listed as a runner/];
+  for (const f of ['buddy-window/account.js', 'buddy-window/brand.js', 'buddy-window/device.js', 'board/shared/cardface.js', 'board/web/js/render-board.js', 'board/web/js/render-dialogs.js', 'board/web/js/render-drawer.js', 'src/budget-notice.js', 'settings.html', 'board/web/js/history.js', 'board/web/js/view.js', 'board/web/js/palette.js', 'tasks.html']) {
     const src = read(f);
     for (const re of banned) assert.doesNotMatch(src, re, `${f} still has ${re}`);
   }

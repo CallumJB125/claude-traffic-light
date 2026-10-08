@@ -30,7 +30,7 @@ function defaultDeviceName(userName, hostName) {
 // A runner entry that is missing, or exits this soon without saying it's
 // ready, isn't in this build (70's board/runner/app-entry.js lands with P4).
 const NO_RUNNER_MS = 5_000;
-const NO_RUNNER = 'Runner not available in this build';
+const NO_RUNNER = 'Running team tasks is not available in this build';
 // SIGTERM parks live runs within about 25 s (70's runner); then we kill.
 const STOP_GRACE_MS = 30_000;
 const RUNNER_STATES = ['connected', 'backoff', 'unavailable', 'stopping'];
@@ -184,9 +184,9 @@ function createDeviceController({ account, teamId, credsFile, seal, unseal, canS
   async function start() {
     if (child || !creds || !wanted) return;
     if (!entryExists()) { setRunner('missing', NO_RUNNER); return; }
-    if (!hubUrlOk(account.origin)) { setRunner('failed', 'This team hub isn’t on https, so the runner won’t send it this Mac’s runner key.'); return; }
+    if (!hubUrlOk(account.origin)) { setRunner('failed', 'This team address isn’t on https, so this Mac won’t send it its device key.'); return; }
     const unsafe = ensurePrivateDir(dataDir);
-    if (unsafe) { log('runner data folder refused', unsafe); setRunner('failed', 'The runner’s folder on this Mac isn’t private to you, so it won’t start.'); return; }
+    if (unsafe) { log('runner data folder refused', unsafe); setRunner('failed', 'The folder this Mac runs team tasks in isn’t private to you, so it won’t start.'); return; }
     // No args and no cwd: the entry refuses to run without a parentPort, and a
     // cwd inside app.asar makes the fork fail silently. The env is a fixed few
     // names: nothing secret is in it.
@@ -211,7 +211,7 @@ function createDeviceController({ account, teamId, credsFile, seal, unseal, canS
       } else if (m.type === 'runner.event') {
         const ev = runnerEventFrom(m);
         if (ev) { try { onEvent({ ...ev, team_id: teamId }); } catch { /* a listener's error never reaches the runner loop */ } }
-      } else if (m.type === 'runner.fatal') { c.fatal = true; setRunner('failed', scrubTokens(m.message ?? 'The runner stopped.').slice(0, 200)); }
+      } else if (m.type === 'runner.fatal') { c.fatal = true; setRunner('failed', scrubTokens(m.message ?? 'Running team tasks stopped.').slice(0, 200)); }
     });
     c.once('exit', (code) => onExit(c, code));
     // Exactly these five: no device id, account token or Access service token.
@@ -238,7 +238,7 @@ function createDeviceController({ account, teamId, credsFile, seal, unseal, canS
     if (code === 2) return;
     const t = now();
     while (restarts.length && t - restarts[0] > RESTART_WINDOW_MS) restarts.shift();
-    if (restarts.length >= MAX_RESTARTS) { setRunner('failed', `The runner keeps stopping (last exit code ${code}).`); return; }
+    if (restarts.length >= MAX_RESTARTS) { setRunner('failed', `Running team tasks keeps stopping (last exit code ${code}).`); return; }
     restarts.push(t);
     const delay = Math.min(30_000, 1000 * 2 ** (restarts.length - 1));
     setRunner('restarting', null);
@@ -275,7 +275,7 @@ function createDeviceController({ account, teamId, credsFile, seal, unseal, canS
     const r = await account.unenrol(teamId).catch(() => ({ ok: false }));
     // 404: the hub had already dropped it. Unreached: no one holds the token any more, so it can't run.
     if (r.ok || r.status === 404 || r.signedOut) return { ok: true };
-    return { ok: true, notice: `Turned off on this Mac. ${new URL(account.origin).host} didn’t hear it, so this Mac may still be listed as a runner there.` };
+    return { ok: true, notice: `Turned off on this Mac. ${new URL(account.origin).host} didn’t hear it, so this Mac may still be listed there as running team tasks.` };
   }
 
   return {
@@ -314,7 +314,7 @@ function createDeviceController({ account, teamId, credsFile, seal, unseal, canS
           // Enrolled on the hub but nothing this Mac can run with (and any old token is dead now): undo it.
           await dropLocal();
           await account.unenrol(teamId).catch(() => {});
-          return { ok: false, error: 'The team hub didn’t set this Mac up. Try again.' };
+          return { ok: false, error: 'The team address didn’t set this Mac up. Try again.' };
         }
         const prev = creds;
         creds = { hub: account.origin, team_id: teamId, enrollment_id: r.enrollment_id, runner_token: token, name: n };

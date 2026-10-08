@@ -39,7 +39,7 @@ module.exports = Object.freeze({
     signInHeading: `Sign in to ${NAME}`,
     signInSub: 'Enter your team’s Plexiform address (e.g. team.example.com). You’ll pick how to sign in next; no password.',
     inviteHint: `You’ll get a link and a code to send them yourself. ${NAME} doesn’t email invites, and shows them only once.`,
-    notAHub: `That address answered, but it isn’t a ${NAME} team hub.`,
+    notAHub: `That address answered, but it isn’t a ${NAME} team address.`,
     notASignIn: `That address redirects somewhere that isn’t a ${NAME} sign-in.`,
     startingBoard: `${NAME} is starting the board…`,
   }),
