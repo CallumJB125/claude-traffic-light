@@ -71,7 +71,8 @@
       return box;
     }
     if (!snap.tasks.length) {
-      box.append(el('h2', null, 'No tasks yet'), el('p', null, 'Hand something off and it keeps going when you close this window. Quitting Plexiform stops active runs; their history and work are saved for retry.'));
+      box.append(el('h2', null, 'No tasks yet'), el('p', null, 'Hand something off and it keeps going when you close this window. Quitting Plexiform stops active runs; their history and work are saved for retry.'),
+        el('p', null, 'A task is a one-off hand-off. Work you want to track is a card on the Board, and Send to AI… on a card runs the AI there, on the card.'));
       const b = btn('New task', 'primary', openComposer);
       box.append(b, el('p', null, ''), (() => { const p = el('p'); p.append('Shortcut: ', Object.assign(el('kbd'), { textContent: '⌥⌘T' })); return p; })());
       return box;
@@ -566,7 +567,7 @@
     const whenF = el('div', 'field');
     const whenL = el('label', null, 'When should it start?'); whenL.htmlFor = 'c-when';
     const when = el('select'); when.id = 'c-when';
-    for (const [v, label, off] of [['now', 'Start now'], ['reset', 'When my usage limit resets'], ['tonight', comp.canSchedule ? 'Run tonight (10 pm to 7 am)' : 'Run tonight (Plus)', !comp.canSchedule]]) { const o = el('option', null, label); o.value = v; o.disabled = !!off; when.append(o); }
+    for (const [v, label, off] of [['now', 'Start now'], ['reset', 'When my usage limit resets'], ['tonight', comp.canSchedule ? 'Run tonight (10 pm to 7 am)' : 'Run tonight (not on your plan)', !comp.canSchedule]]) { const o = el('option', null, label); o.value = v; o.disabled = !!off; when.append(o); }
     when.value = comp.when;
     when.addEventListener('change', () => { comp.when = when.value; renderComposer(true); });
     whenF.append(whenL, when, el('div', 'sub', comp.when === 'now' ? 'It schedules your own work for when your limit resets or overnight, under your own login on this Mac.' : comp.when === 'reset' ? 'It schedules your own work for when your limit resets. If you have not hit a limit it starts straight away.' : 'It schedules your own work for tonight and keeps this Mac awake (lid open) while the queue has work. It runs only while this Mac is awake.'));

@@ -117,7 +117,8 @@ function renderState(s) {
   $('review-enabled').disabled = !s.reviewAllowed;
   model.disabled = !s.reviewAllowed;
   $('review-cap').textContent = `Budget cap per review: $${s.review.maxBudgetUsd.toFixed(2)}`;
-  $('review-note').textContent = s.reviewAllowed ? '' : 'Second opinion is part of Plexiform Plus.';
+  $('review-badge').hidden = s.reviewAllowed;
+  $('review-note').textContent = s.reviewAllowed ? '' : "Second opinion isn't part of your current plan.";
 }
 
 async function refresh() {

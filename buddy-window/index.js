@@ -250,6 +250,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     log: (message) => log('[work-capture]', message),
     home: os.homedir(),
     factsFor: (o) => handoverWriter()?.facts?.(o.provider === 'claude' ? 'claude-code' : o.provider, o.session_id) ?? null,
+    docFactsFor: (o) => handoverWriter()?.docFacts?.(o.provider === 'claude' ? 'claude-code' : o.provider, o.session_id) ?? null,
     handoverFor(o) {
       const i = handoverWriter()?.info?.({ source: o.provider, sessionId: o.session_id, cwd: o.cwd });
       return i ? { available: i.state === 'ready', written_at: i.state === 'ready' ? i.updatedMs : null } : null;
@@ -278,6 +279,9 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       return userOf(destination.hub)?.id === destination.user_id ? result : { ok: false };
     },
   });
+
+  // Cards made before work records carried a body get one, once each, from their handover facts.
+  if (captureEnabled) workCapture.startBackfill();
 
   const sessionBridge = createSessionBridge({
     userData, hubs: () => store.hubs().filter(signedIn), clientFor, userOf, signedIn, supervisor, workCapture, handoverWriter, home: os.homedir(), log: (m) => log(m),

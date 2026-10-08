@@ -33,7 +33,6 @@ const FIXES = {
   'connect-hermes': 'Connect Hermes activity',
   'open-burst-console': 'Open Burst console',
   'burst-console-restart': 'Restart Burst',
-  'burst-trace': 'Send test message',
 };
 // Claude Code reads hooks once, when a session starts.
 const RESTART_SESSIONS = 'Then restart your Claude sessions.';
@@ -324,14 +323,14 @@ function checkBurst(ctx) {
   return { status: 'ok', detail: 'Burst answered and is your install.' };
 }
 
-// ── Burst rows (ctx.burstFacts from BurstIpc.healthFacts(): { detection, console, audit }) ──
+// ── Burst rows (ctx.burstFacts from BurstIpc.healthFacts(): { detection, console }) ──
 // macOS with Burst installed only. Each answers from caches, never from a request.
 function burstState(ctx) {
   const f = ctx.burstFacts;
   if ((ctx.platform || process.platform) !== 'darwin' || !f || !f.detection) return null;
   const d = f.detection;
   if (d.kind === 'unsupported' || d.kind === 'not_installed') return null;
-  return { d, state: d.state || null, con: f.console || null, audit: Array.isArray(f.audit) ? f.audit : [] };
+  return { d, state: d.state || null, con: f.console || null };
 }
 
 // Gateway not answering: the console answers when it is down, so it names the part that failed.
@@ -398,28 +397,12 @@ function checkBurstVersion(ctx) {
   return { status: 'ok', detail: `Burst ${b.state.version || ''} is up to date.`.replace('  ', ' ') };
 }
 
-function checkBurstTrace(ctx) {
+// Burst's own activity log, route trace and repairs live in its support console;
+// Health links there instead of repeating them.
+function checkBurstConsole(ctx) {
   const b = burstState(ctx);
-  if (!b || b.d.kind !== 'present') return null;
-  return { status: 'info', detail: 'Checks every step from Claude Code to Anthropic (DNS, redirect, certificate, route). Uses a very small part of your Claude subscription.', fix: 'burst-trace' };
-}
-
-// What a Trace route fix returns (data from POST /api/trace) as rows to render.
-function traceView(data) {
-  const o = data && typeof data === 'object' ? data : {};
-  const word = (v) => (typeof v === 'string' ? v.slice(0, 300) : '');
-  const hops = (Array.isArray(o.hops) ? o.hops : []).slice(0, 20).map((h) => ({
-    name: word(h && h.name), state: word(h && h.state), summary: word(h && h.summary), ms: Number.isFinite(h && h.duration_ms) ? h.duration_ms : null,
-  }));
-  return { state: word(o.state), verdict: word(o.verdict), hops };
-}
-
-function checkBurstActivity(ctx) {
-  const b = burstState(ctx);
-  if (!b || b.d.kind === 'unreachable' && !b.audit.length) return null;
-  const list = b.audit.slice(0, 50);
-  const bad = list.filter((e) => e.severity === 'error').length;
-  return { status: 'info', detail: list.length ? `${plural(list.length, 'recent event')}${bad ? `, ${bad} of them errors` : ''}.` : 'Nothing recorded yet.', list };
+  if (!b || b.d.kind !== 'present' || !b.con || b.con.kind !== 'present') return null;
+  return { status: 'info', detail: 'Burst\'s activity log, route test and repairs are in its own console.', fix: 'open-burst-console' };
 }
 
 const CHECKS = [
@@ -440,8 +423,7 @@ const CHECKS = [
   ['burst-guards', 'Burst self-heal guards', checkBurstGuards],
   ['burst-secondary', 'Burst secondary provider', checkBurstSecondary],
   ['burst-version', 'Burst version', checkBurstVersion],
-  ['burst-trace', 'Trace route', checkBurstTrace],
-  ['burst-activity', 'Burst activity', checkBurstActivity],
+  ['burst-console', 'Burst console', checkBurstConsole],
   ['version', 'App version', checkVersion],
 ];
 
@@ -543,6 +525,6 @@ function diagnostics({ report, versions = {}, platform = {}, logText = '', scrub
 
 module.exports = {
   FIXES, LAST_HOOK_FILE, STALE_LOCK_AGE_MS,
-  runChecks, traceView, likelyCause, clearStaleLocks, newestHookAt, lastHookEvent, notConfigured, hookPaths, logExcerpt, diagnostics, ago,
+  runChecks, likelyCause, clearStaleLocks, newestHookAt, lastHookEvent, notConfigured, hookPaths, logExcerpt, diagnostics, ago,
   checkHooks, checkCodexHooks, checkVersion, checkMcp, checkSignal, checkSessions, checkLastHook, checkTranscripts, checkDisk,
 };

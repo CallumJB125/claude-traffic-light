@@ -225,7 +225,7 @@ function register(ctx) {
   });
   ipcMain.handle('cost-guard:set', (e, v) => {
     if (!fromUsage(e)) return null;
-    if (!entitlements.has('costguard.enforce')) return { error: 'Enforced caps come with Plexiform Plus.' };
+    if (!entitlements.has('costguard.enforce')) return { error: "Enforced caps aren't part of your current plan." };
     try { const settings = saveSettings(rootDir, v); enforcer.tick(); return { settings }; } catch (err) { return { error: err?.message ?? String(err) }; }
   });
   return { enforcer, report };

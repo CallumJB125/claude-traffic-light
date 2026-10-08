@@ -294,7 +294,7 @@ function quickAddRow(qa) {
 }
 
 const EMPTY = {
-  todo: 'Nothing waiting. New cards land here.',
+  todo: 'Nothing waiting. A card is one piece of work you track here; Send to AI… on it runs an AI on that card.',
   in_progress: 'No one is working on anything. Send a card to an AI to start.',
   in_review: 'Nothing to review.',
   done: 'Finished work shows up here.',

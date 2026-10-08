@@ -30,7 +30,7 @@
 
   function statusLine(s) {
     if (!s.ready) return 'Phone approvals could not load their keys on this computer.';
-    if (!s.entitled) return 'Off: phone approvals are part of Plexiform Plus.';
+    if (!s.entitled) return "Off: phone approvals aren't part of your current plan.";
     if (!s.enabled) return 'Off.';
     if (!s.signedIn) return 'Sign in to your team hub (Team → Account) first: your phone reaches this computer through it.';
     if (!s.hostConnected) return 'Waiting: turn on “Let my other devices use sessions” in Preferences, and keep this computer awake.';
@@ -98,6 +98,7 @@
   function render(s) {
     state = s;
     $('plan').hidden = s.entitled;
+    if ($('plan-badge')) $('plan-badge').hidden = s.entitled;
     $('enabled').checked = s.enabled;
     $('enabled').disabled = !s.entitled;
     $('status').textContent = message ? `${statusLine(s)} ${message}` : statusLine(s);

@@ -150,7 +150,7 @@ test('non-mac: static text, no polling interval, burst-client never loaded', asy
   assert.deepEqual(await ipc.runAction('console-restart'), { ok: false, error: View.MAC_ONLY });
   assert.equal((await handlers['burst:view']({}, 'route')).view, null);
   assert.equal(await ipc.read('mac'), null);
-  assert.deepEqual(ipc.healthFacts().audit, []);
+  assert.deepEqual(ipc.healthFacts().console, null);
   assert.equal(Object.keys(require.cache).filter((k) => k.endsWith('burst-client.js')).length, before);
 });
 

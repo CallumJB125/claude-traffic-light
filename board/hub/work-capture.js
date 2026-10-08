@@ -27,13 +27,14 @@ function text(value, max, required = false) {
   return s;
 }
 function report(body) {
-  only(body, ['install_id', 'provider', 'session_id', 'task_id', 'repo_id', 'title', 'status', 'summary']);
+  only(body, ['install_id', 'provider', 'session_id', 'task_id', 'repo_id', 'title', 'status', 'summary', 'update_only']);
   if (!UUID.test(body.install_id) || !PROVIDERS.has(body.provider) || !STATUSES.has(body.status)) throw new HubError('VALIDATION', 'invalid capture identity or status');
+  if (body.update_only !== undefined && body.update_only !== true) throw new HubError('VALIDATION', 'invalid update_only');
   const session = identity(body.session_id), task = identity(body.task_id);
   if (!session && !task) throw new HubError('VALIDATION', 'session_id or task_id required');
   if (body.repo_id != null && (typeof body.repo_id !== 'string' || !UUID.test(body.repo_id))) throw new HubError('VALIDATION', 'invalid repo_id');
   return { identity: [body.install_id.toLowerCase(), body.provider, session, task], provider: body.provider, repo_id: body.repo_id ?? null,
-    title: text(body.title, 200, true), status: body.status, ...(Object.hasOwn(body, 'summary') ? { summary: text(body.summary, 2000) } : {}) };
+    title: text(body.title, 200, true), status: body.status, ...(Object.hasOwn(body, 'summary') ? { summary: text(body.summary, 2000) } : {}), updateOnly: body.update_only === true };
 }
 
 export class WorkCapture {
@@ -105,6 +106,8 @@ export class WorkCapture {
         if (row && row.tracking !== 'active') return;
         const now = this.hub.iso();
         const column = ['review', 'ended'].includes(data.status) ? 'in_review' : data.status === 'working' ? 'in_progress' : row?.managed_column ?? 'in_progress';
+        // update_only (the desktop's one-time card backfill) refreshes a known card and never makes one.
+        if (!row && data.updateOnly) return;
         if (!row) {
           const counts = this.db.get('SELECT COUNT(*) AS total,COALESCE(SUM(created_at>?),0) AS recent FROM work_capture_cards WHERE principal=?', new Date(this.hub.clock.wall() - 3_600_000).toISOString(), scope.principal);
           if (counts.total >= 2000 || counts.recent >= 20) throw new HubError('RATE_LIMITED', 'automatic work card limit reached', { retry_after_ms: 3_600_000 });
@@ -141,7 +144,7 @@ export class WorkCapture {
         }
         this.hub.later(() => { this.hub.workCaptureSeen.set(row.id, { mono: this.hub.mono(), epoch: this.hub.epoch }); this.hub.broadcastCard(row.card_id); });
       });
-      return this.result(row, scope.member.id);
+      return row ? this.result(row, scope.member.id) : { card: null, capture: null };
     });
   }
   stop(member, cardId, body, cred = null) {

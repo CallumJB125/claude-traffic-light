@@ -314,22 +314,21 @@ test('page registry: Usage optimiser is a local page of its own section, listed 
   assert.deepEqual(PAGES.filter((x) => x.macOnly || x.burstOnly), []);
 });
 
-test('tab strip: the embedded view is hidden on Route and Requests and restored on Dashboard', async () => {
+test('tab strip: the embedded view is hidden on Tools and restored on Dashboard', async () => {
   const r = rig();
   await r.o.open();
   assert.equal(r.o.payload().tab, 'dashboard');
   assert.deepEqual(r.children, [r.views[0]]);
-  assert.deepEqual(await r.o.act('tab:route'), { ok: true });
+  assert.deepEqual(await r.o.act('tab:tools'), { ok: true });
   assert.deepEqual(r.children, []);
-  assert.equal(r.o.payload().tab, 'route');
-  assert.equal(r.states.at(-1).tab, 'route');
-  await r.o.act('tab:requests');
-  assert.deepEqual(r.children, []);
+  assert.equal(r.o.payload().tab, 'tools');
+  assert.equal(r.states.at(-1).tab, 'tools');
   assert.equal(r.o.hasView(), true, 'the dashboard stays loaded behind the native tabs');
   await r.o.act('tab:dashboard');
   assert.deepEqual(r.children, [r.views[0]]);
   assert.equal(r.views.length, 1);
   assert.deepEqual(r.acts, [], 'tab changes never reach Burst');
+  for (const gone of ['tab:route', 'tab:requests']) assert.deepEqual(await r.o.act(gone), { ok: false }, gone);
 });
 
 test('tab strip: unknown tabs are refused; no tabs unless Burst is ready; a section click returns to Dashboard', async () => {
@@ -339,21 +338,21 @@ test('tab strip: unknown tabs are refused; no tabs unless Burst is ready; a sect
   assert.equal(r.o.payload().tab, 'dashboard');
   r.views[0].webContents.emit('dom-ready');
   await settle();
-  await r.o.act('tab:route');
+  await r.o.act('tab:tools');
   assert.equal(r.o.section('sec-models'), true);
   assert.equal(r.o.payload().tab, 'dashboard');
   assert.deepEqual(r.children, [r.views[0]]);
 
   const off = rig({ snap: down() });
   await off.o.open();
-  assert.deepEqual(await off.o.act('tab:route'), { ok: false });
+  assert.deepEqual(await off.o.act('tab:tools'), { ok: false });
   assert.equal(off.o.payload().tab, 'dashboard');
 });
 
 test('tab resets to Dashboard when Burst stops being present', async () => {
   const r = rig();
   await r.o.open();
-  await r.o.act('tab:route');
+  await r.o.act('tab:tools');
   r.snap = down();
   await r.o.refresh();
   assert.equal(r.o.state().mode, 'empty');

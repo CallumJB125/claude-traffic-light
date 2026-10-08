@@ -114,7 +114,7 @@ function register(ctx) {
   };
   ipcMain.handle('sync:state', wrap(view));
   ipcMain.handle('sync:enable', wrap(async () => {
-    if (!E.has('sync')) return { ok: false, code: 'PLAN_REQUIRED', message: 'Sync needs Plus or Team.' };
+    if (!E.has('sync')) return { ok: false, code: 'PLAN_REQUIRED', message: "Sync isn't part of your current plan." };
     const r = await client.enable();
     store.save('settings', { ...settings(), enabled: true });
     if (r.ok) round();

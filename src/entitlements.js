@@ -10,6 +10,12 @@
 // Anything else — no file, a corrupt or oversized one, an unknown plan, a bad
 // signature, no pinned key, an expired token — is the free plan. Never throws.
 //
+// Beta: while the shipped build pins no hub key (billing is not live, so no
+// plan can be bought), every install gets the top plan's features and limits
+// instead (status().source 'beta'). Pinning a key in src/entitlement-keys.js
+// ends the beta and brings the real gating back with no other change.
+// PLEXIFORM_FORCE_FREE=1 turns the beta off to exercise the free path.
+//
 // Clock: the effective "now" is the latest of the wall clock, the last time
 // this module saw the clock (entitlement-clock.json) and the token's own iat,
 // so turning the clock back cannot stretch a token past its exp.
@@ -59,10 +65,12 @@ const LIMITS = Object.freeze({
 
 // The hub's Ed25519 public keys (PEM), pinned in the app at build time
 // (src/entitlement-keys.js). Empty until the owner pins the hub's key, so until
-// then every token is refused and every install is free.
+// then every token is refused and every install is in the beta.
 const PINNED_KEYS = (() => {
   try { return Object.freeze(require('./entitlement-keys').ENTITLEMENT_KEYS.filter((k) => typeof k === 'string' && k.includes('PUBLIC KEY'))); } catch { return Object.freeze([]); }
 })();
+
+const BETA_ALL_FEATURES = PINNED_KEYS.length === 0;
 
 const TOKEN_FILE = 'entitlement.json';
 const CLOCK_FILE = 'entitlement-clock.json';
@@ -82,9 +90,11 @@ function defaults() {
   };
 }
 
-/** Tests and the W3-B refresh: point at another data root, keys or clock. Clears every cache. */
+/** Tests and the W3-B refresh: point at another data root, keys, clock or beta. Clears every cache. */
 function configure(opts = {}) {
   cfg = { ...defaults(), ...opts };
+  // A data root configured with its own keys (the tests) gets the real gating.
+  if (typeof cfg.beta !== 'boolean') cfg.beta = !(cfg.publicKeys?.length > 0);
   cache = null;
   lastSeen = null;
   lastWritten = 0;
@@ -165,15 +175,19 @@ function verify(token) {
   } catch { return null; }
 }
 
+const BETA = Object.freeze({ plan: 'team', source: 'beta', reason: 'beta', features: Object.freeze([]), expiresAt: null, periodEnd: null, inGrace: false });
+const inBeta = () => conf().beta === true && process.env.PLEXIFORM_FORCE_FREE !== '1';
+
 const FREE = (reason) => Object.freeze({ plan: 'free', source: 'default', reason, features: Object.freeze([]), expiresAt: null, periodEnd: null, inGrace: false });
 
 /**
- * The current entitlement: {plan, source:'default'|'token', reason, features,
+ * The current entitlement: {plan, source:'default'|'token'|'beta', reason, features,
  * expiresAt, periodEnd, inGrace}. inGrace is true between the paid period's
  * end and exp (the offline grace), so a banner can say "renews soon".
  */
 function status() {
   try {
+    if (inBeta()) return BETA;
     const c = conf();
     const file = readSmall(path.join(c.root, TOKEN_FILE));
     const wall = Number(c.now());
@@ -217,4 +231,4 @@ function limits() {
 
 const plan = () => status().plan;
 
-module.exports = { has, limits, plan, status, verify, configure, root: () => conf().root, PLANS, FEATURES, LIMITS, TOKEN_FILE, CLOCK_FILE };
+module.exports = { has, limits, plan, status, verify, configure, root: () => conf().root, beta: () => { try { return inBeta(); } catch { return false; } }, BETA_ALL_FEATURES, PLANS, FEATURES, LIMITS, TOKEN_FILE, CLOCK_FILE };

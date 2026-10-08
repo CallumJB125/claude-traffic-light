@@ -13,7 +13,6 @@ const Spend = require('./burst-spend.js');
 const Handover = require('./burst-handover.js');
 const Actions = require('./burst-actions.js');
 const Codex = require('./burst-codex.js');
-const Notices = require('./burst-notices.js');
 const Route = require('./burst-route.js');
 const Requests = require('./burst-requests.js');
 const Inspect = require('./burst-inspect.js');
@@ -356,13 +355,11 @@ function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usag
     pushBoardFacts,
     registerAction,
     runAction,
-    // Health (synchronous, from caches warmed in the background): the last detection, the
-    // support console's status and Burst's audit, normalized.
+    // Health (synchronous, from caches warmed in the background): the last detection and the
+    // support console's status. Burst's audit stays in its own console.
     healthFacts() {
-      if (!isMac || last.kind === 'unsupported' || last.kind === 'not_installed') return { detection: last, console: null, audit: [] };
-      const con = cached('console', () => client.consoleDetect());
-      const audit = present() ? cached('audit', async () => Notices.normalizeAudit(await client.audit({ limit: 50 }))) : null;
-      return { detection: last, console: con, audit: audit || [] };
+      if (!isMac || last.kind === 'unsupported' || last.kind === 'not_installed') return { detection: last, console: null };
+      return { detection: last, console: cached('console', () => client.consoleDetect()) };
     },
     // This Mac and notices: scrubbed raw reads for their own normalizers; null when Burst is not present.
     async read(name) {

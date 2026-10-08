@@ -174,7 +174,7 @@ function createRemoteApprovals({ dir, requestsDir, keyFor = () => null, entitlem
   async function run(op, args, { dev = null, run: hostRun = null } = {}) {
     await ready;
     if (!identity) return refuse('unavailable', 'Phone approvals are not ready on this computer.');
-    if (!entitled()) return refuse('plan', 'Phone approvals are part of Plexiform Plus.');
+    if (!entitled()) return refuse('plan', "Phone approvals aren't part of your current plan.");
     if (!active()) return refuse('off', 'Phone approvals are switched off on this computer.');
     if (PAIR_OPS.includes(op)) {
       const ph = pairingHost();
@@ -245,7 +245,7 @@ function createRemoteApprovals({ dir, requestsDir, keyFor = () => null, entitlem
 
   async function startPairing() {
     await ready;
-    if (!entitled()) return refuse('plan', 'Phone approvals are part of Plexiform Plus.');
+    if (!entitled()) return refuse('plan', "Phone approvals aren't part of your current plan.");
     if (!active()) return refuse('off', 'Turn on phone approvals first.');
     const st = host()?.status?.();
     if (!st?.connected || typeof st.device !== 'string') return refuse('offline', 'Turn on “Let my other devices use sessions” in Preferences and wait until it says On.');

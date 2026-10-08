@@ -518,7 +518,8 @@ const SCREENS = {
 
   account(s) {
     if (!s.accounts.length) {
-      return [heading('Account', 'You’re not signed in to a team.'), el('div', { class: 'acct-actions' }, el('button', { type: 'button', class: 'btn btn-primary', onclick: () => api.go('hub') }, 'Sign in'))];
+      // The same sign-in as the Team page, not a second screen.
+      return [heading('Account', 'You’re not signed in. Sign in to create a team or join one.'), signedOutActions()];
     }
     const out = [heading('Account', null)];
     for (const a of s.accounts) {

@@ -138,6 +138,34 @@ function renderDoc(f, git = { repo: false }, { burst = null, home = null, render
   return text;
 }
 
+// A stored document back to the facts it was written from (the subset a
+// WorkRecord needs), for sessions whose facts and transcript are gone. Its text
+// was already redacted when it was written. Pure; null for anything not ours.
+function factsFromDoc(doc) {
+  const text = String(doc || '');
+  if (!text.startsWith(MARKER)) return null;
+  const lines = text.split('\n');
+  const field = (prefix) => { const l = lines.find((x) => x.startsWith(prefix)); const v = l ? l.slice(prefix.length).trim() : ''; return v && v !== '(not seen)' && v !== 'unknown' ? v : null; };
+  const iso = (v) => { const t = v ? Date.parse(v.replace(' ', 'T')) : NaN; return Number.isFinite(t) ? new Date(t).toISOString() : null; };
+  const cwd = field('- Working folder: ');
+  const files = {};
+  const at = lines.findIndex((l) => /^Edited \(\d+\):$/.test(l));
+  if (at >= 0 && lines[at + 1] === '```') {
+    for (let i = at + 2; i < lines.length && lines[i] !== '```'; i++) {
+      let p = lines[i].trim();
+      if (cwd && p.startsWith(`${cwd}/`)) p = p.slice(cwd.length + 1);
+      if (p && !p.startsWith('~') && !p.startsWith('/')) files[p] = 'edit';
+    }
+  }
+  const last = lines.indexOf('## Last assistant status line');
+  const assistant = last >= 0 ? (lines[last + 1] || '').trim() : '';
+  return {
+    cwd: cwd || '', firstPrompt: field('- First prompt: '), lastPrompt: field('- Latest prompt: ') || field('- First prompt: '),
+    lastAssistant: assistant && assistant !== '(none recorded)' ? assistant : null, files,
+    startedAt: iso(field('- Started: ')), lastActive: iso(field('- Last active: ')), source: 'document',
+  };
+}
+
 // A ready-to-paste "continue this work" prompt for any AI.
 function asPrompt(doc) {
   return ['Continue the work described below. It was recorded by Plexiform from the previous AI session\'s hook events and transcript, not written by that AI, so check the repository state before relying on it.', '', '---', String(doc || '').replace(MARKER, '').trim(), '---', '', 'Start by confirming the current state of the working folder, then carry on from "Open questions / next step".'].join('\n');
@@ -356,6 +384,11 @@ function create({ rootDir, isExcluded = () => false, burstFor = () => null, git 
       const key = keyOf(adapter, sessionId);
       return mergeFacts(readFacts(factsPath(key)), transcriptFor(key, adapter, sessionId));
     },
+    // What the stored document still says, for a session with no facts left (src/work-capture.js backfill).
+    docFacts(adapter, sessionId) {
+      if (typeof adapter !== 'string' || typeof sessionId !== 'string' || !KEY.test(sessionId)) return null;
+      return factsFromDoc(text(keyOf(adapter, sessionId)));
+    },
     // The event-driven tick every debounceMs; one backfill pass shortly after
     // start, then one every backfillMs (each only for missing or stale docs).
     start(ms = debounceMs) {
@@ -388,4 +421,4 @@ function forCard(writer, cardId, capture) {
   return t ? { markdown: t.replace(MARKER, '').replace(/<!-- plexiform-meta[^>]*-->\n?/, '').trim() } : null;
 }
 
-module.exports = { salvagePayload, forCard, create, renderDoc, mergeFacts, asPrompt, gitFacts, adapterOf, keyOf, MARKER, RING_LIMIT, MAX_DOC_BYTES, LABEL, LABELS };
+module.exports = { salvagePayload, forCard, create, renderDoc, factsFromDoc, mergeFacts, asPrompt, gitFacts, adapterOf, keyOf, MARKER, RING_LIMIT, MAX_DOC_BYTES, LABEL, LABELS };

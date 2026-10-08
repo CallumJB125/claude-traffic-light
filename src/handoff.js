@@ -64,7 +64,7 @@ function create({ entitlements, clipboard, docFor, adapters = defaultAdapters(),
   async function hand(key, to, onEvent = () => {}) {
     if (!Object.hasOwn(TARGETS, to)) return { ok: false, error: 'Choose Codex or Claude.' };
     const fallback = async (note) => { const c = await copy(key); return c.ok ? { ...c, note } : c; };
-    if (!entitlements.has('handoff.launch')) return { ...(await fallback(`Copied. Paste it into ${TARGETS[to]}. One-click launch is part of Plus.`)), upgrade: true };
+    if (!entitlements.has('handoff.launch')) return { ...(await fallback(`Copied. Paste it into ${TARGETS[to]}. One-click launch isn't part of your current plan.`)), upgrade: true };
     if (live.size >= MAX_LIVE) return { ok: false, error: 'End one of the running hand-offs first.' };
     const doc = await docFor(key);
     if (!doc) return { ok: false, error: 'No handover could be built for this session.' };

@@ -38,9 +38,9 @@
     const base = { id: 'routing', name: 'Routing and failover', by: BY_BURST, what: 'Part of Burst. Watches each model\'s limit, falls back along a chain (for example Opus to Sonnet), and sends overflow to your backup provider only when your plan is out.', saves: null, actions: [] };
     if (b.kind === 'unsupported') return { ...base, status: st('', MAC_ONLY), available: false };
     if (b.kind !== 'on') return { ...base, status: st('', 'Needs Claude Burst'), note: 'Turn on Claude Burst above to use it.' };
-    if (b.route === 'SECONDARY') return { ...base, status: st('amber', 'Using your backup now'), actions: [act('tab:route', 'See route', true)] };
-    if (b.secondaryReady === false) return { ...base, status: st('amber', 'On, no backup provider'), note: 'Without a backup provider Burst only falls back between Claude models. Add one in the Burst dashboard.', actions: [act('tab:route', 'See route', true), act('tab:dashboard', 'Set up in dashboard')] };
-    return { ...base, status: st('green', 'On, using your plan'), actions: [act('tab:route', 'See route', true)] };
+    if (b.route === 'SECONDARY') return { ...base, status: st('amber', 'Using your backup now'), actions: [act('tab:dashboard', 'See routing in dashboard', true)] };
+    if (b.secondaryReady === false) return { ...base, status: st('amber', 'On, no backup provider'), note: 'Without a backup provider Burst only falls back between Claude models. Add one in the Burst dashboard.', actions: [act('tab:dashboard', 'Set up in dashboard', true)] };
+    return { ...base, status: st('green', 'On, using your plan'), actions: [act('tab:dashboard', 'Open dashboard', true)] };
   }
 
   function compactionTool(b) {
@@ -76,10 +76,10 @@
     return { id: 'router', name: 'Session router', by: BY_US, what: 'Suggests the cheapest AI tool you have that should handle a request, from its length and wording, offline. When Burst says Claude is near its limit it suggests another AI. It never moves anything by itself.', status: st('green', 'On'), saves: null, actions: [act('open:overview', 'Open Overview')] };
   }
 
-  // w: the cost-guard report's waste (null without Plexiform Plus).
+  // w: the cost-guard report's waste (null when the plan lacks it).
   function wasteTool(w) {
     const base = { id: 'waste', name: 'Waste finder', by: BY_US, what: 'Reads your Claude Code transcripts on this computer for the same file read again and again, the same failing call repeated, and Opus doing routine work Sonnet could do.', saves: null, actions: [act('open:usage', 'See findings')] };
-    if (!w) return { ...base, status: st('', 'Plexiform Plus'), note: 'Usage & cost shows the full list with Plus.' };
+    if (!w) return { ...base, status: st('', 'Not on your plan'), note: "The waste finder isn't part of your current plan." };
     const t = w.totals || {};
     const o = t.overkill || {};
     const days = num(w.days) || 7;

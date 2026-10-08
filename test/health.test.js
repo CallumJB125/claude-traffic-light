@@ -384,7 +384,7 @@ test('Burst rows: macOS with Burst installed only; each has a fixture state prod
   const run = (burstFacts, platform = 'darwin') => Health.runChecks({ ...machine().ctx, platform, burstFacts }).checks.filter((c) => c.id.startsWith('burst-'));
   const by = (rows, id) => rows.find((c) => c.id === id);
   const state = (o = {}) => ({ version: '1.2.0', mode: 'transparent', active: true, inactiveReason: '', caTrusted: true, configError: '', clientTls: { rejecting: false }, pfHeal: { installed: true }, selfHeal: { installed: true }, secondary: { provider: 'together', keyPresent: true }, ...o });
-  const present = (o, upgrade = null) => ({ detection: { kind: 'present', state: state(o), upgrade }, console: { kind: 'present', status: { checks: [], configError: '' } }, audit: [] });
+  const present = (o, upgrade = null) => ({ detection: { kind: 'present', state: state(o), upgrade }, console: { kind: 'present', status: { checks: [], configError: '' } } });
 
   assert.deepEqual(run(undefined), []);
   assert.deepEqual(run({ detection: { kind: 'not_installed' } }), []);
@@ -393,8 +393,10 @@ test('Burst rows: macOS with Burst installed only; each has a fixture state prod
 
   const good = run(present());
   for (const id of ['burst-intercept', 'burst-ca', 'burst-guards', 'burst-secondary', 'burst-version']) assert.equal(by(good, id).status, 'ok', id);
-  assert.equal(by(good, 'burst-trace').fix, 'burst-trace');
-  assert.equal(by(good, 'burst-trace').fixLabel, 'Send test message');
+  assert.equal(by(good, 'burst-console').fix, 'open-burst-console');
+  assert.equal(by(good, 'burst-console').fixLabel, 'Open Burst console');
+  assert.equal(by(good, 'burst-trace'), undefined, 'route test is in Burst\'s dashboard');
+  assert.equal(by(good, 'burst-activity'), undefined, 'the audit is in Burst\'s console');
   assert.equal(by(good, 'burst-gateway'), undefined);
 
   const off = by(run(present({ active: false, inactiveReason: 'ANTHROPIC_BASE_URL was removed' })), 'burst-intercept');
@@ -408,7 +410,7 @@ test('Burst rows: macOS with Burst installed only; each has a fixture state prod
 
   assert.equal(by(run(present({ pfHeal: null })), 'burst-guards').status, 'info');
 
-  const cfg = by(run({ detection: { kind: 'broken', state: state({ configError: 'bad toml line 3' }) }, console: null, audit: [] }), 'burst-config');
+  const cfg = by(run({ detection: { kind: 'broken', state: state({ configError: 'bad toml line 3' }) }, console: null }), 'burst-config');
   assert.equal(cfg.status, 'fail'); assert.equal(cfg.fix, 'open-burst-console'); assert.match(cfg.detail, /bad toml/);
 
   const nokey = by(run(present({ secondary: { provider: 'together', keyPresent: false } })), 'burst-secondary');
@@ -419,7 +421,7 @@ test('Burst rows: macOS with Burst installed only; each has a fixture state prod
 });
 
 test('Burst gateway down: the console names the failing part and offers a restart; no console, no fix', () => {
-  const run = (console) => Health.runChecks({ ...machine().ctx, platform: 'darwin', burstFacts: { detection: { kind: 'unreachable' }, console, audit: [] } }).checks.find((c) => c.id === 'burst-gateway');
+  const run = (console) => Health.runChecks({ ...machine().ctx, platform: 'darwin', burstFacts: { detection: { kind: 'unreachable' }, console } }).checks.find((c) => c.id === 'burst-gateway');
   const named = run({ kind: 'present', status: { checks: [{ name: 'launchd', ok: true }, { name: 'pf redirect', ok: false, detail: 'no rdr rule' }] } });
   assert.equal(named.status, 'fail'); assert.match(named.detail, /pf redirect is failing/); assert.equal(named.fix, 'burst-console-restart');
   const dead = run({ kind: 'unreachable' });
@@ -427,12 +429,13 @@ test('Burst gateway down: the console names the failing part and offers a restar
   assert.equal(run(null).status, 'fail');
 });
 
-test('Burst activity lists the audit, capped at 50; traceView keeps only whitelisted hop fields', () => {
-  const audit = Array.from({ length: 60 }, (_, i) => ({ at: i, kind: 'failover', severity: i === 0 ? 'error' : 'info', title: `t${i}`, detail: '', source: 'alert' }));
-  const facts = { detection: { kind: 'present', state: { mode: 'base-url', active: true, secondary: {} } }, console: null, audit };
-  const row = Health.runChecks({ ...machine().ctx, platform: 'darwin', burstFacts: facts }).checks.find((c) => c.id === 'burst-activity');
-  assert.equal(row.list.length, 50); assert.match(row.detail, /50 recent events, 1 of them errors/);
-  const v = Health.traceView({ state: 'fail', verdict: 'TLS rejected', hops: [{ name: 'TLS', state: 'fail', summary: 'untrusted', duration_ms: 12, secret: 'x', legs: [1] }] });
-  assert.deepEqual(v, { state: 'fail', verdict: 'TLS rejected', hops: [{ name: 'TLS', state: 'fail', summary: 'untrusted', ms: 12 }] });
-  assert.deepEqual(Health.traceView(null), { state: '', verdict: '', hops: [] });
+test('Burst console row: only with Burst and its console present; no activity or trace rows', () => {
+  const run = (facts) => Health.runChecks({ ...machine().ctx, platform: 'darwin', burstFacts: facts }).checks;
+  const det = { kind: 'present', state: { mode: 'base-url', active: true, secondary: {} } };
+  const rows = run({ detection: det, console: { kind: 'present', status: { checks: [] } } });
+  assert.equal(rows.find((c) => c.id === 'burst-console').status, 'info');
+  assert.equal(run({ detection: det, console: null }).find((c) => c.id === 'burst-console'), undefined);
+  assert.equal(run({ detection: { kind: 'unreachable' }, console: { kind: 'present', status: { checks: [] } } }).find((c) => c.id === 'burst-console'), undefined);
+  for (const r of rows) assert.ok(!['burst-trace', 'burst-activity'].includes(r.id), r.id);
+  assert.equal(Health.traceView, undefined);
 });
