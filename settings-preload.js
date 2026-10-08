@@ -10,6 +10,8 @@ contextBridge.exposeInMainWorld('settingsApi', {
   },
   connectAgent: (which) => ipcRenderer.invoke('connect-agent', which),
   signalEndpoint: () => ipcRenderer.invoke('signal-endpoint'),
+  cliStatus: () => ipcRenderer.invoke('cli-install-status'),
+  cliInstall: () => ipcRenderer.invoke('cli-install'),
   nativeBoardStatus: () => ipcRenderer.invoke('native-board-status'),
   nativeBoardBoards: (workspace) => ipcRenderer.invoke('native-board-boards', workspace),
   nativeBoardConnect: (input) => ipcRenderer.invoke('native-board-connect', input),

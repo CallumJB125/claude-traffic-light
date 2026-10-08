@@ -4340,6 +4340,7 @@ ipcMain.handle('connect-agent', async (e, which) => {
 });
 ipcMain.handle('git-status', (e) => settingsOnly(e) ? ({ ...git.status(), enabled: loadConfig().gitSignals !== false }) : null);
 utilityHandle('signal-endpoint', e => settingsOnly(e) || widgetConfigSender(e), () => ({ port: SIGNAL_PORT, emit: EMIT_SCRIPT, token: path.join(ROOT_DIR, 'token') }));
+require('./src/cli-install.js').register({ utilityHandle, allowed: settingsOnly, dialog, BrowserWindow, home: os.homedir(), packaged: app.isPackaged, resourcesPath: process.resourcesPath, appDir: __dirname });
 // Not the signal server's port: an ssh -R tunnel makes this one reachable to
 // every user of the far host, so it serves only the signed device route.
 // A bad override is reported in Settings, never thrown at startup.
