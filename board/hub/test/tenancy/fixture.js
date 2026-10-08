@@ -114,6 +114,11 @@ export async function tenancy({ config = {}, ...opts } = {}) {
   const eb = await as(users.ub, 'POST', `/api/teams/${B.team}/enrol`, { device_name: `${MARK} runner` });
   if (eb.status !== 200) throw new Error(`enrol: ${eb.text}`);
   B.enrollment = eb.body.enrollment_id;
+  // B's event trigger (069), in dry run.
+  const trig = await as(users.ub, 'POST', '/api/triggers', { request_id: randomUUID(), event: 'github.pr.opened', action: 'add_comment', params: { text: `${MARK} trigger` } }, { 'x-board-team': B.team });
+  if (trig.status !== 200) throw new Error(`trigger: ${trig.text}`);
+  B.trigger = trig.body.trigger.id;
+  if ((await as(users.ub, 'POST', `/api/triggers/${B.trigger}/mode`, { request_id: randomUUID(), mode: 'dry_run' })).status !== 200) throw new Error('trigger mode');
   B.runnerToken = eb.body.runner_token;
   // B's sealed provider key for hosted runs (067).
   const sealed = h.hub.vault.seal(providerConfigAad(B.team), 'claude', `${MARK}-api-key`);
@@ -169,6 +174,8 @@ export async function tenancy({ config = {}, ...opts } = {}) {
       q('SELECT * FROM permission_requests WHERE card_id = ?', B.card),
       q('SELECT * FROM asks WHERE card_id = ?', B.card),
       q('SELECT * FROM card_reviews WHERE board_id = ?', B.board),
+      q('SELECT * FROM event_triggers WHERE org_id = ?', B.team),
+      q('SELECT * FROM event_trigger_firings WHERE org_id = ?', B.team),
       q('SELECT * FROM devices WHERE member_id IN (SELECT id FROM members WHERE org_id = ?)', B.team),
       q('SELECT * FROM repos WHERE org_id = ?', B.team),
       q('SELECT * FROM invites WHERE org_id = ?', B.team),
