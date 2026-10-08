@@ -24,6 +24,7 @@ import { createLogger } from './log.js';
 import { seedDev, seedLocal, bootstrapAdmin } from './seed.js';
 import { Accounts } from './identity/accounts.js';
 import { createMailer } from './identity/mailer.js';
+import { createTurnstile } from './identity/turnstile.js';
 import { Teams } from './identity/teams.js';
 import { Invites } from './identity/invites.js';
 import { Clients } from './identity/clients.js';
@@ -75,7 +76,7 @@ function buildApp(config, { db, clock, log, github, fetchImpl, timers, mailer })
   hub.localMemberId = config.auth === 'local' ? seedLocal(hub, config.bootstrapBoard) : null;
   // Accounts mode (D51): its own sign-in; the BOARD_BOOTSTRAP owner is linked
   // to whoever first proves that email address.
-  hub.accounts = config.auth === 'accounts' ? new Accounts(hub, { mailer: mailer !== undefined ? mailer : createMailer(config, { fetchImpl, now: () => new Date(clock.wall()) }) }) : null;
+  hub.accounts = config.auth === 'accounts' ? new Accounts(hub, { mailer: mailer !== undefined ? mailer : createMailer(config, { fetchImpl, now: () => new Date(clock.wall()) }), turnstile: createTurnstile(config, { fetchImpl }) }) : null;
   hub.teams = hub.accounts ? new Teams(hub, { accounts: hub.accounts }) : null;
   hub.invites = hub.accounts ? new Invites(hub, { accounts: hub.accounts, teams: hub.teams }) : null;
   hub.clients = hub.accounts ? new Clients(hub) : null;

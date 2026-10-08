@@ -60,6 +60,8 @@ export function loadConfig(env = process.env) {
     githubClientSecret: env.BOARD_GITHUB_CLIENT_SECRET || null,
     googleWebClientId: env.BOARD_GOOGLE_WEB_CLIENT_ID || null,
     githubWebClientId: env.BOARD_GITHUB_WEB_CLIENT_ID || null,
+    // Cloudflare Turnstile on new email-code accounts: off unless both the site key and BOARD_TURNSTILE_SECRET are set.
+    turnstileSiteKey: env.BOARD_TURNSTILE_SITE_KEY || null,
     accountsDev: flag(env.BOARD_ACCOUNTS_DEV),
     authFailBudget: int(env.BOARD_AUTH_FAIL_BUDGET, 20),
     mailDailyCap: int(env.BOARD_MAIL_DAILY_CAP, 2000),
@@ -99,6 +101,7 @@ export function loadConfig(env = process.env) {
   Object.defineProperties(cfg, {
     googleWebClientSecret: hidden(env.BOARD_GOOGLE_WEB_CLIENT_SECRET || null),
     githubWebClientSecret: hidden(env.BOARD_GITHUB_WEB_CLIENT_SECRET || null),
+    turnstileSecret: hidden(env.BOARD_TURNSTILE_SECRET || null),
     sesAccessKeyId: hidden(env.BOARD_SES_ACCESS_KEY_ID || null),
     sesSecretAccessKey: hidden(env.BOARD_SES_SECRET_ACCESS_KEY || null),
     sesSessionToken: hidden(env.BOARD_SES_SESSION_TOKEN || null),
@@ -126,6 +129,7 @@ export function loadConfig(env = process.env) {
   delete env.BOARD_GITHUB_CLIENT_SECRET;
   delete env.BOARD_GOOGLE_WEB_CLIENT_SECRET;
   delete env.BOARD_GITHUB_WEB_CLIENT_SECRET;
+  delete env.BOARD_TURNSTILE_SECRET;
   delete env.BOARD_BILLING_API_KEY;
   delete env.BOARD_BILLING_WEBHOOK_SECRET;
   delete env.BOARD_PUSH_VAPID_PRIVATE_KEY;
@@ -223,7 +227,7 @@ const SECRET_VARS = Object.freeze([
   ['BOARD_GITHUB_TOKEN', 'githubToken'],
   ['BOARD_GOOGLE_WEB_CLIENT_SECRET', 'googleWebClientSecret'], ['BOARD_GITHUB_WEB_CLIENT_SECRET', 'githubWebClientSecret'],
   ['BOARD_BILLING_API_KEY', 'billingApiKey'], ['BOARD_BILLING_WEBHOOK_SECRET', 'billingWebhookSecret'],
-  ['BOARD_PUSH_VAPID_PRIVATE_KEY', 'pushVapidPrivateKey'],
+  ['BOARD_PUSH_VAPID_PRIVATE_KEY', 'pushVapidPrivateKey'], ['BOARD_TURNSTILE_SECRET', 'turnstileSecret'],
   ['BOARD_SYNC_R2_ACCESS_KEY_ID', 'syncR2AccessKeyId'], ['BOARD_SYNC_R2_SECRET_ACCESS_KEY', 'syncR2SecretAccessKey'],
 ]);
 

@@ -102,10 +102,14 @@ export function mailName(s, max = 60, fallback = 'Someone') {
 }
 
 export class Accounts {
-  constructor(hub, { mailer }) {
+  constructor(hub, { mailer, turnstile = null }) {
     this.hub = hub;
     this.db = hub.db;
     this.mailer = mailer;
+    this.turnstile = turnstile;
+    if (!turnstile && (hub.config.turnstileSiteKey || hub.config.turnstileSecret)) {
+      hub.log.warn('Turnstile is off: set both BOARD_TURNSTILE_SITE_KEY and BOARD_TURNSTILE_SECRET');
+    }
     // A send runs in the background after the hub has answered "started", so a broken
     // mailer is invisible to the person signing in: /api/health carries when one last failed.
     this.mailLastErrorAt = null;
@@ -233,7 +237,24 @@ export class Accounts {
     limitOrThrow(this.hub, 'auth_methods_ip', ipKey(ip));
     const m = oauthProviders(this.hub.config);
     const w = webOauthProviders(this.hub.config);
-    return { google: m.includes('google'), github: m.includes('github'), email: this.emailSignin() && !this.mailFailing(), web: { google: w.includes('google'), github: w.includes('github') } };
+    return {
+      google: m.includes('google'), github: m.includes('github'), email: this.emailSignin() && !this.mailFailing(), web: { google: w.includes('google'), github: w.includes('github') },
+      ...(this.turnstile ? { turnstile_site_key: this.turnstile.siteKey } : {}),
+    };
+  }
+
+  /**
+   * With Turnstile configured, has this sign-in start passed it? No token:
+   * false, so the start may still sign in an existing account (the desktop
+   * app and the phone page have no widget) but never makes a new one. A token
+   * is checked whatever the address, so the answer says nothing about it.
+   */
+  async human(body, { ip }) {
+    if (!this.turnstile || (body?.purpose ?? 'signin') !== 'signin' || !this.emailSignin()) return true;
+    if (body.turnstile_token == null) return false;
+    limitOrThrow(this.hub, 'auth_turnstile_ip', ipKey(ip));
+    await this.turnstile.verify(body.turnstile_token);
+    return true;
   }
 
   // ── email one-time codes (only with a mailer, D66) ────────────────────────
@@ -262,7 +283,7 @@ export class Accounts {
   }
 
   /** POST /api/auth/email/start → {flow_id, expires_in}. Same answer for every address. */
-  start(body, { ip, ident = null, req = null, res = null }) {
+  start(body, { ip, ident = null, req = null, res = null, human = true }) {
     const purpose = body.purpose ?? 'signin';
     if (!PURPOSES.has(purpose)) throw new HubError('VALIDATION', "purpose must be 'signin', 'delete' or 'delete_team'");
     this.requireMailer(purpose);
@@ -306,7 +327,7 @@ export class Accounts {
     // A new address sign-up may not use (D104) is silenced before mailBudget: it spends no mail token.
     const quiet = !lim.take('auth_start_email', mine).ok || !lim.take('auth_start_email_hour', mine).ok || !lim.take('auth_start_email_all', box).ok
       ? 'email_rate' : purpose === 'signin' && !this.hasAccount(email)
-        ? !this.signupAllowed(email) ? 'signup_closed' : storagePaused(this.hub) ? 'signup_paused' : !this.mailBudget(email) ? 'mail_cap' : null
+        ? !this.signupAllowed(email) ? 'signup_closed' : !human ? 'human_check' : storagePaused(this.hub) ? 'signup_paused' : !this.mailBudget(email) ? 'mail_cap' : null
         : !this.mailBudget(email) ? 'mail_cap' : null;
     // A dud does the same work as a real start (a code and its HMAC, the same
     // statements), so the time a refusal takes doesn't tell it apart; its

@@ -19,6 +19,7 @@ import { RunnerConn, authenticateRunner } from './ws-runner.js';
 import { clientIp, failBucketKey, ipKey, limitOrThrow } from './ratelimit.js';
 import { redact } from './log.js';
 import { appendCookie } from './identity/accounts.js';
+import { TURNSTILE_ORIGIN } from './identity/turnstile.js';
 import { BRAND } from '../shared/brand.js';
 import { CLIENT_UPLOAD_BODY_MAX } from './identity/client-artifacts.js';
 import { searchWork } from './search.js';
@@ -295,7 +296,8 @@ export function createHttpHandler({ hub, api, config, integrations = null, githu
   // the hosts its connect forms post to.
   const webCsp = () => {
     const hosts = integrations?.formHosts() ?? [];
-    return hosts.length ? `${CSP}; form-action 'self' ${hosts.map((x) => `https://${x}`).join(' ')}` : CSP;
+    const csp = hub.accounts?.turnstile ? `${CSP.replace("script-src 'self'", `script-src 'self' ${TURNSTILE_ORIGIN}`)}; frame-src ${TURNSTILE_ORIGIN}` : CSP;
+    return hosts.length ? `${csp}; form-action 'self' ${hosts.map((x) => `https://${x}`).join(' ')}` : csp;
   };
   const readLimits = { ...WEBHOOK_READS, ...config.webhookReads };
   const limits = { ...REQUEST_LIMITS, ...config.requestLimits };
@@ -385,7 +387,7 @@ export function createHttpHandler({ hub, api, config, integrations = null, githu
     hub.messaging.routes(route);
     const acc = hub.accounts;
     route('GET', '/api/auth/methods', ({ ip }) => acc.methods({ ip }), { auth: 'none' });
-    route('POST', '/api/auth/email/start', ({ body, ip, ident, req, res }) => acc.start(body, { ip, ident, req, res }), { auth: 'optional' });
+    route('POST', '/api/auth/email/start', async ({ body, ip, ident, req, res }) => acc.start(body, { ip, ident, req, res, human: await acc.human(body, { ip }) }), { auth: 'optional' });
     route('POST', '/api/auth/email/verify', ({ body, ip, ident, req, res }) => acc.verify(body, { ip, ident, req, res }), { auth: 'optional' });
     // Google / GitHub through the desktop app's loopback listener (D76–D78).
     route('POST', '/api/auth/oauth/start', ({ body, ip, ident }) => hub.oauth.start(body, { ip, ident }), { auth: 'optional' });
