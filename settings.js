@@ -241,6 +241,17 @@
     showSection(new URLSearchParams(location.search).get('section') || location.hash.slice(1));
 
 
+    const showCli = (r) => {
+      const el = document.getElementById('cli-status');
+      if (!r) return;
+      if (r.cancelled) { el.textContent = 'Not installed.'; return; }
+      if (r.error) { el.textContent = r.error; return; }
+      if (r.installed || r.ok) el.textContent = `Installed at ${r.link}. If your shell can't find plexiform, add ~/.local/bin to your PATH.`;
+      else if (r.blocked) el.textContent = `Something else is already at ${r.link}; Plexiform won't replace it.`;
+      else el.textContent = `Creates a link at ${r.link}. You'll be asked to confirm first.`;
+    };
+    window.settingsApi.cliStatus().then(showCli);
+    document.getElementById('cli-install').addEventListener('click', async () => showCli(await window.settingsApi.cliInstall()));
     window.settingsApi.signalEndpoint().then((e) => { document.getElementById('endpoint').textContent = `http://127.0.0.1:${e.port}/signal`; document.getElementById('emit-path').textContent = e.emit; if (e.token) document.getElementById('token-path').textContent = e.token; });
     const showGit = (g) => {
       if (!g) return;

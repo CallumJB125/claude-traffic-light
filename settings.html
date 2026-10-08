@@ -676,6 +676,13 @@
     <div class="hint" id="connect-hint">Connect Cursor, Codex, Gemini CLI and Hermes from AI tools in the sidebar. Anything else can run <code id="emit-path">emit.js</code>, or POST to <code id="endpoint">http://127.0.0.1:47172/signal</code> with an <code>x-buddy-token</code> header set to the contents of <code id="token-path">~/.claude-traffic-light/token</code>.</div>
   </div>
 
+  <h2>Command line</h2>
+  <div class="field">
+    <div class="hint">The <code>plexiform</code> command shows status, sessions, spend, handovers and anything waiting on you, in a terminal or from Raycast. Add <code>--json</code> for scripts.</div>
+    <div class="row"><button type="button" class="secondary" id="cli-install">Install command line tool</button></div>
+    <div class="hint" id="cli-status" role="status" aria-live="polite"></div>
+  </div>
+
   <section id="health" aria-labelledby="health-title">
     <h2 id="health-title">Health</h2>
     <div id="health-summary" role="status" aria-live="polite"></div>
