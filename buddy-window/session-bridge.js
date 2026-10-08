@@ -56,6 +56,15 @@ function createSessionBridge({ userData, hubs, clientFor, userOf, signedIn, supe
       if (!row || !(await writer.refresh(Handover.keyOf(Handover.adapterOf(row.provider), row.session_id)))?.ok) return null;
       return Handover.forCard(writer, cardId, allowed);
     },
+    // The board page's "Timeline": the session behind a card, decided the same way, or null.
+    async sessionForCard(cardId) {
+      if (typeof cardId !== 'string' || !/^[A-Za-z0-9_.:-]{1,100}$/.test(cardId)) return null;
+      const hub = currentHub();
+      if (hub === undefined) return null;
+      const allowed = await Share.rowsForHub({ rows: rows(), sessions: latest, hub, shared: links.shared(), rootOf: gitRoot });
+      const row = allowed.find((c) => c && c.card_id === cardId && typeof c.session_id === 'string');
+      return row ? { adapter: Handover.adapterOf(row.provider), sessionId: row.session_id } : null;
+    },
     repoKey: BurstHandover.repoKey,
   };
 }

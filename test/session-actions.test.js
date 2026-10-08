@@ -100,12 +100,14 @@ test('account client routes for repo linking and the opt-in salvage send exist, 
   assert.match(idx, /const fromHubView = \(e\) => !!hubView && e\.sender === hubView\.webContents && !!hubInfo && e\.senderFrame\?\.origin === hubInfo\.origin;/);
   assert.match(idx, /if \(!fromHubView\(e\)\) return null;\n\s+try \{ return await sessionBridge\.localHandover/);
 });
-test('the hub page can only ask to show the Team page: no argument crosses, main checks the sender and picks the page', () => {
+test('the hub page can only ask to show the Team page or a card\'s timeline: main checks the sender, resolves the card and picks the page', () => {
   const pre = fs.readFileSync(path.join(__dirname, '../buddy-window/hub-preload.js'), 'utf8');
-  assert.equal((pre.match(/ipcRenderer\.send\(/g) || []).length, 1);
+  assert.equal((pre.match(/ipcRenderer\.send\(/g) || []).length, 2);
   assert.match(pre, /openTeam: \(\) => ipcRenderer\.send\('buddy:open-team'\),/);
+  assert.match(pre, /openTimeline: \(cardId\) => ipcRenderer\.send\('buddy:open-timeline', String\(cardId\)\.slice\(0, 100\)\),/);
   const idx = fs.readFileSync(path.join(__dirname, '../buddy-window/index.js'), 'utf8');
   assert.match(idx, /ipcMain\.on\('buddy:open-team', \(e\) => \{ if \(fromHubView\(e\)\) select\('team'\); \}\);/);
+  assert.match(idx, /ipcMain\.on\('buddy:open-timeline', \(e, cardId\) => \{\n\s+if \(fromHubView\(e\)\) void sessionBridge\.sessionForCard\(cardId\)/);
   const { pageById } = require('../buddy-window/pages.js');
   assert.deepEqual([pageById('team').kind, pageById('team').screen], ['local', 'team']);
 });

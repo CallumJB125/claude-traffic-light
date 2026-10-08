@@ -142,6 +142,7 @@ function movePlan(id, direction, destination = null) {
   void savePlan(id, fields);
 }
 const canOpenTeam = () => typeof globalThis.plexiformDesktop?.openTeam === 'function';
+const canOpenTimeline = () => typeof globalThis.plexiformDesktop?.openTimeline === 'function';
 const boardReadOnly = () => state.me?.member?.role === 'viewer' || !!state.board?.archived_at;
 const workflowScope = () => ({boardId:state.boardId,generation:boardGeneration,org:currentOrg(),member:state.me?.member?.id,user:state.me?.user?.id??state.me?.member?.user_id,
   role:state.me?.member?.role,auth:state.auth,accounts:state.authMode==='accounts',connected:state.conn.status==='open',readOnly:boardReadOnly(),epoch:state.dash?.epoch});
@@ -1156,7 +1157,7 @@ async function refreshDetail(cardId, { communication = false, ownership = false 
       Promise.resolve(globalThis.plexiformDesktop.localHandover(cardId)).then((r) => {
         const markdown = r?.markdown ?? null;
         if (!current() || !markdown || state.detail.localHandover?.markdown === markdown) return;
-        const local_handover = { markdown };
+        const local_handover = { markdown, timeline: canOpenTimeline() };
         state.detail = { ...state.detail, localHandover: local_handover, data: { ...state.detail.data, local_handover } };
         update();
       }, () => {});
@@ -2109,6 +2110,7 @@ function onClick(e) {
     case 'history-refresh': if (state.history.status !== 'loading') loadHistory(); return;
     case 'history-open': state.history.selected = el.dataset.run; update(); openDetail(cardId); return;
     case 'open-team': if (canOpenTeam()) globalThis.plexiformDesktop.openTeam(); return;
+    case 'open-timeline': if (canOpenTimeline() && cardId) globalThis.plexiformDesktop.openTimeline(cardId); return;
     case 'local-card-dismiss':
       state.localCardDismissed = true;
       try { localStorage.setItem('board-local-card', 'dismissed'); } catch { /* private mode */ }
