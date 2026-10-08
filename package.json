@@ -68,6 +68,7 @@
       "home.js",
       "home-preload.js",
       "home-alerts-view.js",
+      "home-team-today-view.js",
       "settings.html",
       "settings-backups.js",
       "settings-crash-reports.js",
