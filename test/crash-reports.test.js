@@ -151,3 +151,47 @@ test('nothing leaves the process: the file loads no network module and calls no 
   assert.deepEqual(loaded.filter((m) => NET.test(m)), []);
   assert.deepEqual([...new Set(loaded)].sort(), ['../brand.js', './scrub.js', './secret-patterns.js', 'crypto', 'fs', 'path', SRC].sort());
 });
+
+test('Preferences: the switch starts off, shows the exact payload, saves on its own and says nothing is sent', async () => {
+  const { JSDOM } = require('jsdom');
+  const html = fs.readFileSync(path.join(ROOT, 'settings.html'), 'utf8');
+  const dom = new JSDOM(html.replace(/<script src[^>]*><\/script>/g, ''), { url: 'file:///app/settings.html?section=privacy', runScripts: 'outside-only' });
+  const w = dom.window;
+  const doc = w.document;
+  const c = make();
+  c.record('uncaughtException', realisticError());
+  const calls = { optIn: [], saves: 0, exports: 0 };
+  w.settingsApi = {
+    crashReportsState: async () => ({ optedIn: c.isOptedIn(), count: c.list().length, latest: c.payload() }),
+    crashReportsSetOptIn: async (on) => { calls.optIn.push(on); return { optedIn: c.setOptIn(on) }; },
+    crashReportsExport: async () => { calls.exports++; return { ok: true, path: '/tmp/x.json' }; },
+  };
+  doc.addEventListener('change', () => { calls.saves++; });
+  w.eval(fs.readFileSync(path.join(ROOT, 'settings-crash-reports.js'), 'utf8'));
+  const tick = () => new Promise((r) => setTimeout(r, 5));
+  await tick();
+  const toggle = doc.getElementById('crash-opt-in');
+  assert.equal(toggle.checked, false);
+  assert.equal(doc.getElementById('crash-payload').textContent, c.payload());
+  assert.match(doc.getElementById('crash-reports').textContent, /Reports are only saved on this Mac for now/);
+  assert.match(doc.querySelector('#crash-view summary').textContent, /View what would be sent/);
+  toggle.checked = true;
+  toggle.dispatchEvent(new w.Event('change', { bubbles: true }));
+  await tick();
+  assert.deepEqual(calls.optIn, [true]);
+  assert.equal(calls.saves, 0, 'the page-wide config save is not triggered');
+  assert.equal(c.isOptedIn(), true);
+  doc.getElementById('crash-export').click();
+  await tick();
+  assert.equal(calls.exports, 1);
+  assert.match(doc.getElementById('crash-status').textContent, /Saved/);
+});
+
+test('main.js records crashes into the ring and exposes only settings-page IPC for it', () => {
+  const main = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8');
+  assert.match(main, /process\.on\('uncaughtException'[^\n]*CrashReports\.record\('uncaughtException'/);
+  assert.match(main, /process\.on\('unhandledRejection'[^\n]*CrashReports\.record\('unhandledRejection'/);
+  assert.match(main, /app\.on\('render-process-gone'[^\n]*CrashReports\.record\('renderer-gone'/);
+  for (const ch of ['crash-reports:state', 'crash-reports:set-opt-in', 'crash-reports:export']) assert.match(main, new RegExp(`utilityHandle\\('${ch}', settingsOnly,`));
+  assert.doesNotMatch(main, /sendCrashReport/);
+});

@@ -490,6 +490,7 @@
         <li>Session state: the folder, state, tool and model names, and short snippets of an error or reply.</li>
         <li>Tasks you run on this Mac: your task text, messages, replies and checkpoints.</li>
         <li>Your settings, rules and cameo photos. Voice becomes text on this device; audio is not saved.</li>
+        <li>Crash reports are scrubbed and saved on this Mac only. Nothing is sent; see Crash reports below.</li>
         <li>Bug-report diagnostics are only copied to your clipboard when you click Copy diagnostics, with home paths, names, secrets, emails and IP addresses scrubbed first.</li>
       </ul>
       <h3 class="pv-h">Goes to your team hub (only if you join a team)</h3>
@@ -522,6 +523,20 @@
       <summary>Read the privacy notice</summary>
       <div id="privacy-body" class="pv"></div>
     </details>
+  </div>
+  <!-- Crash reports: self-contained; its script is settings-crash-reports.js. -->
+  <div class="field" id="crash-reports">
+    <h3 class="pv-h">Crash reports</h3>
+    <label class="row"><input type="checkbox" id="crash-opt-in" /> Allow sending crash reports</label>
+    <div class="hint">Off by default. Reports are only saved on this Mac for now: nothing is sent, even with this on. Each report keeps the error type, its first line and the code locations, with home paths, names, tokens and emails scrubbed. Never prompts or file contents.</div>
+    <details id="crash-view">
+      <summary>View what would be sent</summary>
+      <pre id="crash-payload" style="margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-xs); max-height: 240px; overflow: auto;"></pre>
+    </details>
+    <div class="row wrap">
+      <button type="button" class="secondary" id="crash-export">Export diagnostics</button>
+    </div>
+    <div class="hint" id="crash-status" role="status" aria-live="polite"></div>
   </div>
   </div>
 
@@ -671,6 +686,7 @@
 
   <script src="privacy-render.js"></script>
   <script src="settings-backups.js"></script>
+  <script src="settings-crash-reports.js"></script>
   <script src="settings.js"></script>
   <script src="native-board/settings.js"></script>
 </body>

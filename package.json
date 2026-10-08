@@ -66,6 +66,7 @@
       "home-preload.js",
       "settings.html",
       "settings-backups.js",
+      "settings-crash-reports.js",
       "burst-chip.js",
       "burst-usage.js",
       "feedback.html",
