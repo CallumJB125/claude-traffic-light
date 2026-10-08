@@ -61,3 +61,40 @@ test('normalizeCompaction: not active when Burst compaction is off', () => {
   assert.equal(Spend.normalizeCompaction(compactionState([], false)).active, false);
   assert.deepEqual(Spend.normalizeCompaction({}), { active: false, sessions: [] });
 });
+
+const learnedBody = () => ({
+  mode: 'intelligent', enabled: true, fixed: 150000, floor: 80000, buffer_percent: 15, delay_minutes: 60, window_days: 14,
+  repos: [
+    { root: '/Users/me/src/plexiform', name: 'plexiform', threshold: 120000, target: 118000, compactions: 7, cost_usd: 0.4, failures: {}, reason: 'x', in_force: 120000, source: 'learned' },
+    { root: '/Users/me/src/other', name: 'other', threshold: 0, compactions: 0, in_force: 0, source: 'off' },
+    { root: '/x', name: '', in_force: 5, source: 'learned' },
+  ],
+});
+
+test('learnedThresholds: names, Compact at in force and why; no roots or learner inputs; null without Burst', () => {
+  const v = Spend.learnedThresholds(learnedBody());
+  assert.deepEqual(v, { intelligent: true, windowDays: 14, repos: [{ name: 'plexiform', inForce: 120000, source: 'learned', compactions: 7 }, { name: 'other', inForce: 0, source: 'off', compactions: 0 }] });
+  assert.doesNotMatch(JSON.stringify(v), /\/Users|cost_usd|reason/);
+  assert.equal(Spend.learnedThresholds({ ...learnedBody(), mode: '' }).intelligent, false);
+  assert.equal(Spend.learnedThresholds({ repos: [{ name: 'a', source: 'weird', in_force: -1 }] }).repos[0].source, 'fixed');
+  assert.equal(Spend.learnedThresholds(null), null);
+  assert.equal(Spend.learnedThresholds({}), null);
+});
+
+test('learnedThresholds through the fake Burst: one GET to /api/intelligent-compaction', async () => {
+  const fake = await createFakeBurst({ '/api/state': { body: compactionState([]) }, '/api/intelligent-compaction': { body: learnedBody() } });
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'burst-learned-'));
+  const bin = path.join(home, '.local', 'bin', 'claude-burst');
+  fs.mkdirSync(path.dirname(bin), { recursive: true });
+  fs.writeFileSync(bin, '#!/bin/sh\n', { mode: 0o755 });
+  fs.mkdirSync(path.join(home, '.config', 'claude-burst'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.config', 'claude-burst', 'config.json'), JSON.stringify({ admin_listen: `127.0.0.1:${fake.port}` }));
+  const client = createBurstClient({ home, platform: 'darwin', inspect: { launchdPid: async () => process.pid, listenerPid: async () => process.pid, exePath: async () => bin } });
+  try {
+    assert.equal((await client.detect()).kind, 'present');
+    const v = Spend.learnedThresholds(await client.intelligentCompaction());
+    assert.equal(v.repos.length, 2);
+    const hits = fake.requests.filter((r) => r.url === '/api/intelligent-compaction');
+    assert.equal(hits.length, 1); assert.equal(hits[0].method, 'GET');
+  } finally { await fake.close(); fs.rmSync(home, { recursive: true, force: true }); }
+});

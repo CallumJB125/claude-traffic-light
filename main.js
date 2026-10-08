@@ -1621,7 +1621,7 @@ const InteractionMain=require('./src/interaction-main').createInteractionMain({
 InteractionMain.register(ipcMain);
 onQuit(app,()=>InteractionMain.close());
 onQuit(app,retireClaudeChannels);
-ipcMain.handle('compaction-stats',e=>settingsOnly(e)?{...CompactionLedger.summary(),settings:loadConfig().compaction,burstNote:BurstIpc.compactionNote()}:null);
+ipcMain.handle('compaction-stats',async e=>settingsOnly(e)?{...CompactionLedger.summary(),settings:loadConfig().compaction,burstNote:BurstIpc.compactionNote(),burstLearned:BurstSpend.learnedThresholds(await BurstIpc.read('intelligentCompaction'))}:null);
 // Remote interaction host (src/remote-interaction.js): OFF unless the
 // "Let my other devices use sessions Plexiform started on this Mac"
 // preference is ticked. Uses the active team hub's own device sign-in (via
@@ -1737,6 +1737,7 @@ try { require('./src/paid-wiring.js').registerAll({ app, ipcMain, rootDir: ROOT_
 const TeamEntry = require('./src/team-entry.js');
 const settingsOnly = (e) => fromUtilityPage(e, 'settings');
 const BurstEventsLib = require('./src/burst-events.js');
+const BurstSpend = require('./src/burst-spend.js');
 const BurstEvents = BurstEventsLib.createBurstEvents();
 const burstNotes = new Map(); // event key -> shown Notification, so a resolving Burst notice can close it
 // Quiet hours, snooze and mutes hold these like any other ping (src/quiet.js).

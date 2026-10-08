@@ -118,4 +118,21 @@ function normalizeCompaction(state) {
 
 const COMPACTION_NOTE = 'Burst is compacting Claude sessions';
 
-module.exports = { tokensLabel, normalizeUsage, throughBurstView, secondaryUsdOf, secondaryBySession, normalizeCompaction, isSecondaryRoute, SOURCE, COMPACTION_NOTE, MAX_ROWS };
+const LEARNED_SOURCES = new Set(['learned', 'override', 'fixed', 'off']);
+// scrubbed GET /api/intelligent-compaction -> the Compact at in force per repository, read-only.
+// Names only: repository roots (local paths) and the learner's cost inputs stay in Burst.
+function learnedThresholds(raw) {
+  if (!raw || typeof raw !== 'object' || !Array.isArray(raw.repos)) return null;
+  return {
+    intelligent: raw.mode === 'intelligent' && raw.enabled === true,
+    windowDays: num(raw.window_days),
+    repos: raw.repos.slice(0, 50).map((r) => ({
+      name: str(r && r.name, 100),
+      inForce: num(r && r.in_force),
+      source: LEARNED_SOURCES.has(r && r.source) ? r.source : 'fixed',
+      compactions: num(r && r.compactions),
+    })).filter((r) => r.name),
+  };
+}
+
+module.exports = { learnedThresholds, tokensLabel, normalizeUsage, throughBurstView, secondaryUsdOf, secondaryBySession, normalizeCompaction, isSecondaryRoute, SOURCE, COMPACTION_NOTE, MAX_ROWS };

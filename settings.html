@@ -593,6 +593,7 @@
     <div class="group-label">What compaction did so far</div>
     <div class="hint" id="compact-saved" role="status" aria-live="polite"></div>
     <div class="hint" id="compact-last"></div>
+    <div class="hint" id="compact-burst-learned" hidden></div>
     <div class="hint">Compacting is not free: it sends the whole context to the model once. A smaller context only pays that back over the turns that follow, so no money saving is shown here.</div>
     <div class="hint">For sessions you started in a terminal, Claude Code has its own setting: the <code>CLAUDE_AUTOCOMPACT_PCT_OVERRIDE</code> environment variable (for example 55) sets how full the context gets before it compacts itself. Plexiform doesn't change it for you.</div>
   </div>
