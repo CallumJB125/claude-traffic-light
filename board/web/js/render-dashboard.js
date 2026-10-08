@@ -165,7 +165,7 @@ function waitPanel(m, model) {
   });
   return panel('wait', 'Where cards wait', 'Total time in each wait, last 4 weeks',
     stages.some((s) => s.value) ? barList(stages, { fmt: dur, label: stageLabel }) : h('p', { class: 'dash-empty' }, 'Not enough history yet: no waits recorded in the last 4 weeks.'),
-    h('h3', { class: 'dash-h3' }, 'Waiting on'),
+    h('h3', { class: 'dash-h3' }, 'Who cards are waiting on'),
     people.length ? h('ul', { class: 'dash-people' }, people) : h('p', { class: 'dash-empty' }, 'Nobody. No open questions or permission requests.'),
     h('p', { class: 'dash-note' }, 'Reviews aren’t assigned to one person, so they aren’t counted here.'));
 }
