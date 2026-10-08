@@ -20,11 +20,19 @@ function codexGroup(g) {
   };
 }
 
+// Burst v0.19's /api/codex keeps its figures in `history` (metrics.History): `window` is an
+// untagged Go struct (Requests, InputTokens, ...) and `models` is the per-model split.
+function windowTotals(w) {
+  return { requests: w.Requests, tokens: num(w.InputTokens) + num(w.OutputTokens), usd: w.APIEquivalentUSD };
+}
+
 function normalizeCodex(raw) {
   const r = obj(raw);
   if (!r) return null;
-  const t = obj(r.totals) || r;
-  const list = [r.by_model, r.models, r.sessions, r.by_session].find(Array.isArray) || [];
+  const h = obj(r.history);
+  const w = h && obj(h.window);
+  const t = obj(r.totals) || (w ? windowTotals(w) : r);
+  const list = [r.by_model, h && h.models, r.models, r.sessions, r.by_session].find(Array.isArray) || [];
   const groups = list.slice(0, MAX_GROUPS).filter(obj).map(codexGroup).filter((g) => g.key);
   const out = {
     requests: num(pick(t, 'requests', 'count', 'turns')),

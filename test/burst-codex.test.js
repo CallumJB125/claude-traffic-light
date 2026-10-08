@@ -31,6 +31,18 @@ test('normalizeCodex: tolerant of shapes, bounded, null when unrecognisable', ()
   assert.match(Codex.codexView(c).note, /not part of the Claude figures/);
 });
 
+test('normalizeCodex: Burst v0.19 shape, totals from history.window and groups per model', () => {
+  const raw = {
+    status: { installed: true, enabled: true }, listening: true,
+    history: { window: { Requests: 295, InputTokens: 4313102, OutputTokens: 255106, APIEquivalentUSD: 0 }, models: [{ model: 'gpt-6.1-sol', slot: 'primary', requests: 218, tokens: 2754107, usd: 0 }, { model: 'gpt-5.6-terra', requests: 77, tokens: 9 }] },
+    sessions: [{ id: '01a1', model: 'gpt-5.6-terra', turns: 9, tokens: 505439 }],
+  };
+  const c = Codex.normalizeCodex(raw);
+  assert.equal(c.requests, 295);
+  assert.equal(c.tokens, 4313102 + 255106);
+  assert.deepEqual(c.groups.map((g) => [g.key, g.requests]), [['gpt-6.1-sol', 218], ['gpt-5.6-terra', 77]]);
+});
+
 test('coordination: who masters what, matched by full or short id; off or errored is absent', () => {
   const raw = { config: { enabled: true }, status: { sessions: [{ id: 'abcdef12-0000', name: 'Fix', masterOf: [], master_of: ['/r/a.js', '/r/b.js'] }], files: [{ path: '/r/a.js', master_name: 'Fix', contributor_names: ['Other'] }, { path: '/r/b.js', master_name: 'Fix' }] } };
   const co = Codex.normalizeCoordination(raw);
