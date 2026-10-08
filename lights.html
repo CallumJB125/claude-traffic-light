@@ -1183,7 +1183,7 @@
     <section id="stats" role="tabpanel" aria-labelledby="view-stats">
       <div class="today" id="today-strip">
         <div class="cell"><div class="k">Working today</div><div class="v" id="today-working">—</div><div class="d" id="today-working-d"></div></div>
-        <div class="cell"><div class="k">Waiting on you</div><div class="v" id="today-waiting">—</div><div class="d" id="today-waiting-d"></div></div>
+        <div class="cell"><div class="k">Time waiting on you</div><div class="v" id="today-waiting">—</div><div class="d" id="today-waiting-d"></div></div>
       </div>
 
       <div class="stats-bar">
@@ -1200,7 +1200,7 @@
         </div>
         <div class="legend" aria-hidden="true">
           <span><i class="sw working"></i>Working</span>
-          <span><i class="sw waiting"></i>Waiting on you</span>
+          <span><i class="sw waiting"></i>Waiting</span>
           <span><i class="sw idle"></i>Idle</span>
         </div>
       </div>
@@ -1334,6 +1334,7 @@
         <label for="budget-warn">Warn at <input type="number" id="budget-warn" min="10" max="100" step="5" /> %</label>
         <button type="button" class="btn" id="budget-save">Set limit</button>
         <span class="budget-state" id="budget-state" role="status" aria-live="polite">Set a limit to turn on alerts (0 = no limit).</span>
+        <button type="button" class="btn ghost" id="budget-optimiser">Stretch your plan: Usage optimiser</button>
       </div>
       <div class="stats-sub" id="mix-loading">Reading transcripts…</div>
       <div class="stats-sub" id="mix-empty" hidden>No AI activity in the last 7 days. <button type="button" class="btn uv-cta" id="mix-connect">Connect AI tools</button></div>

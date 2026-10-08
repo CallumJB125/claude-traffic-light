@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld('lightsApi', {
   getCosts: () => ipcRenderer.invoke('get-costs'),
   saveSpendLimits: (v) => ipcRenderer.invoke('save-spend-limits', v),
   openAiTools: () => ipcRenderer.invoke('usage:open-ai-tools'),
+  openOptimiser: () => ipcRenderer.invoke('usage:open-optimiser'),
   showAutoAnswer: process.env.PLEXIFORM_SHOW_AUTOANSWER === '1',
   modelMix: () => ipcRenderer.invoke('model-mix'),
   usageBundle: (q) => ipcRenderer.invoke('usage-bundle', q),

@@ -117,6 +117,30 @@ test('Claude Code connected automatically is disclosed, and its Undo removes the
   assert.equal(r.config().claudeAutoConnect, true, 'connecting again by hand is consent again');
 });
 
+test('fresh install: nothing was written at start, so Claude Code is offered with Codex and one Connect consents to both', async () => {
+  const r = rig({ claudeAuto: true });
+  r.ctx.saveConfig({ claudeAutoConnect: false }); // what main does at start on a brand-new install (Help.firstRunStart)
+  fs.mkdirSync(path.join(r.home, '.claude'));
+  const settings = path.join(r.home, '.claude', 'settings.json');
+  assert.equal(fs.existsSync(settings), false, 'no hooks before consent');
+  const before = await r.call('onboarding:state');
+  const claude = before.rows.find((x) => x.id === 'claude');
+  assert.deepEqual([claude.connected, claude.auto, claude.selectable, claude.status], [false, false, true, 'Found']);
+  assert.ok(before.pending.includes('claude') && before.pending.includes('codex'));
+  const out = await r.call('onboarding:connect', ['claude', 'codex']);
+  assert.equal(out.ok, true, JSON.stringify(out));
+  assert.match(fs.readFileSync(settings, 'utf8'), /hooks/);
+  assert.notEqual(fs.readFileSync(path.join(r.home, '.codex', 'hooks.json'), 'utf8'), r.original.codex);
+  assert.equal(r.config().claudeAutoConnect, true, 'the click is the consent to the re-connect');
+});
+
+test('main holds the start-up hook install and Open at Login on a brand-new install', () => {
+  const start = source.slice(source.indexOf('const firstRun = Help.shouldOnboard('), source.indexOf("Watchdog.step('widget');"));
+  assert.ok(start.indexOf('if (start.holdClaude) saveConfig({ claudeAutoConnect: false });') < start.indexOf('if (claudeAutoConnect() && !areHooksInstalled()) installHooks();'));
+  assert.match(start, /if \(start\.setLoginItem\) LoginItem\.set\(true\);/);
+  assert.doesNotMatch(start.replace('if (start.setLoginItem) LoginItem.set(true);', ''), /LoginItem\.set\(true\)/);
+});
+
 test('the login item is disclosed with a working toggle', async () => {
   const r = rig();
   assert.equal((await r.call('onboarding:state')).loginItem, true);

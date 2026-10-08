@@ -299,7 +299,7 @@
       const st = I.steps(flat);
       const order = [1, 2, 3, 4, 5, 6, 0];
       const names = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-      kids.push(card('When you work', 'Turns by weekday and hour, local time.',
+      kids.push(card('Busiest hours', 'Turns by weekday and hour, local time.',
         heat(order.map((w) => ({ label: names[w], cells: grid[w].map((v, h) => ({ v, w, h, step: st[w * 24 + h] })) })), 24, (c) => c.step, (c) => [`${names[c.w]} ${String(c.h).padStart(2, '0')}:00`, `Turns: ${num(c.v)}`], 'Turns by weekday and hour'),
         el('div', { class: 'uv-legendrow' }, scale()),
         [['Weekday', ...Array.from({ length: 24 }, (_, h) => String(h))], ...order.map((w) => [names[w], ...grid[w].map((v) => num(v))])]));

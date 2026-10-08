@@ -429,8 +429,8 @@ function installHooks({ narrow = RENAME_MIGRATES && RenameMigration.pending(app.
 // to either break, so none are written (Health says why).
 const EPHEMERAL = RenameMigration.EPHEMERAL_PATH.test(process.execPath);
 const AUTO_INSTALL_HOOKS = !IS_DEV_RUN && !EPHEMERAL;
-// Claude Code connects by itself at start and every 10 minutes after; the setup
-// window says so, and its Undo sets claudeAutoConnect false to stop the re-connect.
+// Once connected with consent (setup or AI tools), Claude Code re-connects at
+// start and every 10 minutes; Undo or Disconnect sets claudeAutoConnect false.
 const claudeAutoConnect = () => AUTO_INSTALL_HOOKS && loadConfig().claudeAutoConnect !== false;
 
 fs.mkdirSync(SESSIONS_DIR, { recursive: true });
@@ -3413,6 +3413,7 @@ utilityHandle('save-spend-limits', analyticsSender, (_e, v) => {
   } catch (err) { return { error: `Could not save: ${err.message}` }; }
 });
 utilityHandle('usage:open-ai-tools', analyticsSender, () => { aiToolsOpen('aitools'); return true; });
+utilityHandle('usage:open-optimiser', analyticsSender, () => { openBuddy('optimiser'); return true; });
 
 // Export the whole visible range as JSON or CSV, wherever the user points.
 utilityHandle('export-stats', e => settingsOnly(e) || analyticsSender(e), async (e, format, days) => {
@@ -4248,8 +4249,8 @@ ipcMain.handle('native-board-connect', nativeBoardAction((s, input) => {
 }));
 ipcMain.handle('native-board-disconnect', nativeBoardAction((s, target) => s.disconnect(target)));
 onQuit(app, () => { nativeBoardService?.stop().catch(() => {}); });
-utilityHandle('mcp-status', settingsOnly, () => McpInstall.status(mcpOpts()));
-utilityHandle('mcp-set-enabled', settingsOnly, (_e, on) => {
+utilityHandle('mcp-status', (e) => fromUtilityPage(e, 'aitools'), () => McpInstall.status(mcpOpts()));
+utilityHandle('mcp-set-enabled', (e) => fromUtilityPage(e, 'aitools'), (_e, on) => {
   try {
     const r = on ? McpInstall.install(mcpOpts()) : McpInstall.uninstall(mcpOpts());
     console.log(`[mcp] ${on ? 'registered' : 'unregistered'} in ${r.path}${r.changed ? '' : ' (no change)'}`);
@@ -4260,7 +4261,7 @@ utilityHandle('mcp-set-enabled', settingsOnly, (_e, on) => {
   }
 });
 
-const AiTools = require('./src/ai-tools-wire.js').wire({ ipcMain, shell, clipboard, home: os.homedir(), runtime: HOOK_RUNTIME, rootDir: ROOT_DIR, fromPage: (e) => fromUtilityPage(e, 'aitools'), askFromWidget: () => !!loadConfig().askFromWidget, ephemeral: EPHEMERAL, openPage: openBuddy });
+const AiTools = require('./src/ai-tools-wire.js').wire({ ipcMain, shell, clipboard, home: os.homedir(), runtime: HOOK_RUNTIME, rootDir: ROOT_DIR, fromPage: (e) => fromUtilityPage(e, 'aitools'), askFromWidget: () => !!loadConfig().askFromWidget, ephemeral: EPHEMERAL, openPage: openBuddy, onClaudeConsent: (on) => saveConfig({ claudeAutoConnect: on }) });
 const aiToolsOpen = (destination) => AiTools.open(destination);
 require('./src/home-main.js').register({ ipcMain, allowed: (e) => fromUtilityPage(e, 'home'), state: () => aggregateState(), localSessions, tools: () => AiTools.quick(), myDay: MyDay, openPage: openBuddy, openAiTools: aiToolsOpen, collisions: CollisionAlerts.rowCollisions(collisionAlerts) });
 // Preferences' "Connect other agents" buttons open the AI tools page on that
@@ -4682,11 +4683,14 @@ app.whenReady().then(() => {
   }
   // Dev runs share the machine with a real install: they must not rewrite the
   // user's hooks or claim Open at Login out from under it.
+  const firstRun = Help.shouldOnboard({ onboarded: fs.existsSync(path.join(ROOT_DIR, Help.ONBOARDED_MARKER)), helpShown: fs.existsSync(path.join(ROOT_DIR, Help.MARKER)), devRun: IS_DEV_RUN });
+  const start = Help.firstRunStart({ firstRun, claudeAutoConnect: loadConfig().claudeAutoConnect });
+  if (start.holdClaude) saveConfig({ claudeAutoConnect: false });
   if (claudeAutoConnect() && !areHooksInstalled()) installHooks();
 
   const autoLaunchMarker = path.join(ROOT_DIR, '.auto-launch-configured');
   if (!IS_DEV_RUN && !fs.existsSync(autoLaunchMarker)) {
-    LoginItem.set(true);
+    if (start.setLoginItem) LoginItem.set(true);
     fs.mkdirSync(ROOT_DIR, { recursive: true });
     fs.writeFileSync(autoLaunchMarker, new Date().toISOString());
   }

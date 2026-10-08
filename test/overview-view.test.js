@@ -37,7 +37,7 @@ test('parent/child task hierarchy renders human edits and hostile strings only a
     await tick(); assert.equal(f.document.querySelectorAll('#content img').length, 0);
     assert.match(f.document.querySelector('article h3').textContent, /<img/);
     assert.match(f.document.querySelector('article details li h3').textContent, /Review the native adapter/);
-    assert.equal(f.document.querySelector('details').open, true); assert.match(f.document.body.textContent, /Waiting on you/);
+    assert.equal(f.document.querySelector('#content details').open, true); assert.match(f.document.body.textContent, /Waiting on you/);
     assert.equal(f.document.querySelectorAll('li button:disabled').length, 2); assert.match(f.document.querySelector('li').textContent, /No supported message connection/);
   } finally { f.close(); }
 });

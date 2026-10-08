@@ -237,15 +237,6 @@
     showSection(new URLSearchParams(location.search).get('section') || location.hash.slice(1));
 
 
-    const mcpToggle = document.getElementById('mcp-toggle');
-    const showMcp = (st) => {
-      mcpToggle.dataset.on = st.installed ? '1' : '';
-      mcpToggle.textContent = st.installed ? 'Disable Claude integration' : 'Enable Claude integration';
-      if (st.error) document.getElementById('mcp-hint').textContent = `Could not update ${st.path}: ${st.error}`;
-      else if (st.installed && !st.current) document.getElementById('mcp-hint').textContent = 'Registered, but pointing at an older copy of Plexiform. Disable and enable again to update it.';
-    };
-    mcpToggle.addEventListener('click', async () => showMcp(await window.settingsApi.mcpSetEnabled(!mcpToggle.dataset.on)));
-    window.settingsApi.mcpStatus().then(showMcp);
     window.settingsApi.signalEndpoint().then((e) => { document.getElementById('endpoint').textContent = `http://127.0.0.1:${e.port}/signal`; document.getElementById('emit-path').textContent = e.emit; if (e.token) document.getElementById('token-path').textContent = e.token; });
     const showGit = (g) => {
       if (!g) return;

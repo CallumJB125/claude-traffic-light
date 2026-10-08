@@ -1367,6 +1367,7 @@
     if ($('main').dataset.view === 'stats') renderStats(); else renderUsageHistory(true);
   });
   $('mix-connect').addEventListener('click', () => window.lightsApi.openAiTools());
+  $('budget-optimiser').addEventListener('click', () => window.lightsApi.openOptimiser());
 
   // The daily and weekly limit, written to the same spend settings as Preferences.
   async function loadBudget() {
@@ -1461,7 +1462,7 @@
         if (h < 1) continue;
         const gap = y === padT + innerH ? 0 : 2;
         const rect = svgEl('rect', { class: 'seg', x: cx - barW / 2, y: y - h, width: barW, height: Math.max(1, h - gap), fill, rx: 2 });
-        attachTip(rect, $('chart'), tip, `${d.date} · ${k === 'waiting' ? 'Waiting on you' : k[0].toUpperCase() + k.slice(1)} ${S.fmt(val(d, k))}${projectFilter ? ` · ${projectFilter}` : ''}`);
+        attachTip(rect, $('chart'), tip, `${d.date} · ${k === 'waiting' ? 'Waiting' : k[0].toUpperCase() + k.slice(1)} ${S.fmt(val(d, k))}${projectFilter ? ` · ${projectFilter}` : ''}`);
         svg.appendChild(rect);
         y -= h;
       }

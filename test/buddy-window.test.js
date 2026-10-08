@@ -42,10 +42,30 @@ test('the sidebar lists every main feature as its own section and reaches every 
   assert.equal(SECTIONS.find((s) => s.id === 'aitools').default, 'aitools');
   assert.equal(sectionOf('help'), null, 'footer links are not in a section');
   assert.equal(sectionOf('integrations'), 'team');
-  assert.deepEqual(SECTIONS.find((s) => s.id === 'widget').pages, ['widget', 'lights'], 'Widget configuration moved from Settings to the Widget section');
+  assert.deepEqual(SECTIONS.find((s) => s.id === 'widget').pages, ['widget', 'lights', 'hatch'], 'Widget configuration and Hatch a character live in the Widget section');
+  assert.equal(sectionOf('hatch'), 'widget');
+  assert.deepEqual(flat().filter((p) => p.unlisted).map((p) => p.id).sort(), ['myday', 'stats', 'waiting'], 'Home carries Waiting on you and My day, Usage & cost carries Time as a tab; each keeps a page but no sub-nav entry');
+  assert.equal(sectionOf('myday'), 'home');
   assert.equal(sectionOf('lights'), 'widget');
   assert.equal(sectionOf('nope'), null);
   assert.equal(pageById('plugins'), null);
+});
+
+test('sidebar: Home lists Home and Overview; opening Waiting on you lights the Home section without a sub-nav entry of its own', async () => {
+  const { JSDOM } = require('jsdom');
+  const read = (f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
+  const dom = new JSDOM(read('buddy-window/sidebar.html').replace(/<script[^>]*><\/script>/g, '').replace(/<link[^>]*>/g, ''), { runScripts: 'outside-only', url: 'file:///synthetic/sidebar.html' });
+  let onState;
+  dom.window.buddy = { onState: (cb) => { onState = cb; }, pages: async () => ({ pages: PAGES, groups: [], sections: SECTIONS, footer: FOOTER, brand: { name: 'Plexiform', hubText: {} } }), select() {}, optimiserSection() {}, workspace() {}, signOut() {}, retry() {} };
+  dom.window.eval(read('buddy-window/sidebar.js'));
+  await new Promise((r) => setTimeout(r, 30));
+  onState({ selected: 'waiting' });
+  const d = dom.window.document;
+  const home = d.querySelector('[data-section="home"]');
+  assert.equal(home.hasAttribute('data-active'), true);
+  assert.deepEqual([...home.parentElement.querySelectorAll('.nav-sub button')].map((b) => b.textContent.trim()), ['Home', 'Overview']);
+  assert.equal(d.querySelector('[aria-current="page"]'), null);
+  dom.window.close();
 });
 
 test('local pages name an app file and its preload, and both exist', () => {

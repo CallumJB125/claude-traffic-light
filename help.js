@@ -13,6 +13,12 @@ const ONBOARDED_MARKER = '.onboarded';
 function shouldOnboard({ onboarded, helpShown, devRun }) {
   return !onboarded && !helpShown && !devRun;
 }
+// A brand-new install changes nothing outside Plexiform before setup's Connect:
+// Claude Code's hooks (and their 10-minute re-connect) and Open at Login wait
+// for consent. An install that already chose (claudeAutoConnect set) keeps it.
+function firstRunStart({ firstRun, claudeAutoConnect }) {
+  return { holdClaude: !!firstRun && claudeAutoConnect === undefined, setLoginItem: !firstRun };
+}
 
 // ── What's on screen, in words ──────────────────────────────────────────────
 // Keyed by the default rules' ids. Only used when the rule still listens for
@@ -42,8 +48,8 @@ const RULE_TEXT = {
   'git-ci-passed': { signal: 'ci-passed', text: 'CI passed on the branch you are working on.' },
   // F1 spend
   runaway: { signal: 'runaway', text: "A session has spent more than your runaway threshold in the last few minutes (hover the widget for how much, how fast). Check it's doing what you meant — Plexiform never stops a session you started; the notification jumps to its terminal." },
-  'budget-exceeded': { signal: 'budget-exceeded', text: "You're over the daily or weekly budget set in Preferences → Spend. Nothing is stopped; this is just so you know." },
-  'budget-warning': { signal: 'budget-warning', text: "You're close to the daily or weekly budget set in Preferences → Spend." },
+  'budget-exceeded': { signal: 'budget-exceeded', text: "You're over the daily or weekly budget set in Usage & cost. Nothing is stopped; this is just so you know." },
+  'budget-warning': { signal: 'budget-warning', text: "You're close to the daily or weekly budget set in Usage & cost." },
 };
 
 const LAMP_TEXT = {
@@ -273,4 +279,4 @@ function notifications(prevKeys, next, config) {
   return { keys, fire };
 }
 
-module.exports = { MARKER, ONBOARDED_MARKER, shouldOnboard, explain, NOTIFY_KINDS, NOTIFY_DEFAULTS, notifyConfig, notifications };
+module.exports = { MARKER, ONBOARDED_MARKER, shouldOnboard, firstRunStart, explain, NOTIFY_KINDS, NOTIFY_DEFAULTS, notifyConfig, notifications };

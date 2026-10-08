@@ -13,5 +13,7 @@ contextBridge.exposeInMainWorld('aiToolsApi', {
   fixRunner: () => ipcRenderer.invoke('aitools:fix-runner'),
   copy: (text) => ipcRenderer.invoke('aitools:copy', text),
   openInstall: (id) => ipcRenderer.invoke('aitools:open-install', id),
+  mcpStatus: () => ipcRenderer.invoke('mcp-status'),
+  mcpSetEnabled: (on) => ipcRenderer.invoke('mcp-set-enabled', on),
   onChanged: (cb) => ipcRenderer.on('status-changed', () => cb()),
 });

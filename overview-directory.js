@@ -134,7 +134,7 @@
   }
   function renderSummary(data) {
     const c = data.entries, kids = c.flatMap(e => e.children), f = e => freshNow(e, data).freshness === 'recent';
-    const metrics = [[c.length, data.view === 'mine' ? 'My sessions' : 'Shared sessions'], [c.filter(e => f(e) && e.state === 'Working').length, 'Working now'], [[...c, ...kids].filter(e => f(e) && e.input).length, data.view === 'mine' ? 'Waiting on you' : 'Need input'], [kids.length, 'Child agents']];
+    const metrics = [[c.length, data.view === 'mine' ? 'My sessions' : 'Shared sessions'], [c.filter(e => f(e) && e.state === 'Working').length, 'Working now'], [[...c, ...kids].filter(e => f(e) && e.input).length, data.view === 'mine' ? 'Need you' : 'Need input'], [kids.length, 'Child agents']];
     return metrics.map(([n, l]) => { const m = el('div', '', 'metric'); m.append(el('strong', String(n)), el('span', l)); return m; });
   }
   function teamFilters(data) {

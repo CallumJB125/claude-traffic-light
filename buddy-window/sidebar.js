@@ -85,10 +85,8 @@ function build() {
     head.addEventListener('click', () => { if (sectionOf(state.selected) !== s.id) window.buddy.select(s.default); });
     sectionBtns.set(s.id, head);
     const sub = el('ul', { class: 'nav-sub', 'aria-label': `${s.title} pages` });
-    for (const id of s.pages.length > 1 ? s.pages : []) {
-      const p = byId.get(id);
-      if (p) sub.append(el('li', {}, item(p, true)));
-    }
+    const listed = s.pages.map((id) => byId.get(id)).filter((p) => p && !p.unlisted);
+    for (const p of listed.length > 1 ? listed : []) sub.append(el('li', {}, item(p, true)));
     subLists.set(s.id, sub);
     ul.append(el('li', {}, head, sub));
   }

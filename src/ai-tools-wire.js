@@ -11,13 +11,22 @@ function handoverSources() {
   return ['claude', 'codex', 'gemini', 'cursor', 'hermes'];
 }
 
-function wire({ ipcMain, shell, clipboard, home, runtime, rootDir, fromPage, askFromWidget, ephemeral, openPage, fs }) {
+function wire({ ipcMain, shell, clipboard, home, runtime, rootDir, fromPage, askFromWidget, ephemeral, openPage, fs, onClaudeConsent = () => {} }) {
   const tools = AiTools.create({
     home, runtime, ...(fs ? { fs } : {}), dataDir: rootDir, sessionsDir: path.join(rootDir, 'sessions'),
     claudeAskFromWidget: askFromWidget, handoverSources,
     blocked: () => (ephemeral ? 'Plexiform is running from a temporary copy or a disk image. Move it to Applications first, or the hooks would point at a path that disappears.' : null),
   });
-  const ipc = AiToolsMain.register({ ipcMain, fromPage, shell, clipboard, tools });
+  // Connecting Claude Code on this page is consent to its re-connect; Disconnect or Undo withdraws it.
+  const consent = (id, on) => async (r) => { const out = await r; if (id === 'claude' && out?.ok) onClaudeConsent(on); return out; };
+  const page = {
+    ...tools,
+    connect: (id) => consent(id, true)(tools.connect(id)),
+    disconnect: (id) => consent(id, false)(tools.disconnect(id)),
+    undo: (id) => consent(id, false)(tools.undo(id)),
+    connectAll: async () => { const r = await tools.connectAll(); if (r?.results?.some((x) => x.id === 'claude' && x.ok)) onClaudeConsent(true); return r; },
+  };
+  const ipc = AiToolsMain.register({ ipcMain, fromPage, shell, clipboard, tools: page });
   return {
     tools,
     // 'aitools', 'aitools:<id>' or 'aitools:all' → opens the page (true), anything else false.

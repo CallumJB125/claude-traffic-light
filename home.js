@@ -97,7 +97,7 @@
       metric(t.longestWaitMs == null ? 'None' : minutes(t.longestWaitMs), 'longest wait for you'),
     );
     const actions = node('div', '', 'actions');
-    actions.append(s && s.budget > 0 ? goButton('See usage', 'usage', 'today:usage') : s ? goButton('Set a daily limit', 'settings', 'today:limit') : goButton('See usage', 'usage', 'today:usage'));
+    actions.append(s && s.budget > 0 ? goButton('See usage', 'usage', 'today:usage') : s ? goButton('Set a daily limit', 'usage', 'today:limit') : goButton('See usage', 'usage', 'today:usage'));
     out.replaceChildren(strip, actions);
   }
 

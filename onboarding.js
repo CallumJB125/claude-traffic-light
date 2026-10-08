@@ -72,6 +72,8 @@ function draw() {
   $('loading').hidden = true;
   const found = view.rows.length > 0;
   $('connect-body').hidden = !found;
+  const names = view.rows.map((r) => r.label);
+  $('connect-body').textContent = `We found ${names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names[0]} on this Mac. Plexiform only sees when a session starts, works, waits or finishes; it never reads your chats.`;
   $('tools').replaceChildren(...view.rows.map(toolRow));
   $('none').hidden = found;
   $('see-changes').parentElement.hidden = !found;
@@ -186,7 +188,7 @@ $('budget-form').addEventListener('submit', (e) => {
     const dollars = Number($('budget').value);
     if (!Number.isFinite(dollars) || dollars < 1) { $('budget-status').textContent = 'Enter a whole number of dollars, like 20.'; return; }
     const saved = await api.setDailyBudget(Math.round(dollars));
-    $('budget-status').textContent = typeof saved === 'number' ? `Saved. You'll get a heads-up near $${saved} a day; change it any time in Preferences → Spend.` : 'Could not save it. Set it later in Preferences → Spend.';
+    $('budget-status').textContent = typeof saved === 'number' ? `Saved. You'll get a heads-up near $${saved} a day; change it any time in Usage & cost.` : 'Could not save it. Set it later in Usage & cost.';
   });
 });
 $('join').addEventListener('click', () => go('join', $('extras-status')));

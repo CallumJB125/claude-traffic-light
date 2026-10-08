@@ -151,6 +151,8 @@ test('needs you lists each wait once with an Answer that opens the Waiting page;
     assert.deepEqual(calls.at(-1), ['navigate', 'waiting']);
     assert.match(f.section('today').textContent, /\$4\.00.*no daily limit/);
     assert.equal(f.section('today').querySelector('.actions button').textContent, 'Set a daily limit');
+    f.section('today').querySelector('.actions button').click();
+    assert.deepEqual(calls.at(-1), ['navigate', 'usage'], 'the limit is set inline on Usage & cost');
     assert.equal(f.section('cards').hidden, false);
     f.section('cards').querySelector('li button').click(); await tick();
     assert.deepEqual(calls.at(-1), ['open', 'h1']);
@@ -162,4 +164,9 @@ test('"Waiting on you" is a list in one place only: the old My day block and Ove
   assert.doesNotMatch(myday, /'Waiting on you'/); assert.match(myday, /'Team decisions'/);
   assert.doesNotMatch(overview, /'Reported sessions'/);
   assert.doesNotMatch(fs.readFileSync(path.join(ROOT, 'overview.html'), 'utf8'), /id="summary"/);
+  const read = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8');
+  assert.doesNotMatch(read('overview-directory.js'), /'Waiting on you'/, 'Overview tile says Need you');
+  assert.doesNotMatch(read('lights.html'), />Waiting on you</, 'Stats shows time waiting, not a second list label');
+  assert.doesNotMatch(read('board/web/js/render-dashboard.js'), /'Waiting on'\)/);
+  assert.match(read('overview.html'), /<details class="reason"><summary>How to add a local model endpoint<\/summary>/, 'the local-models.json how-to is folded away');
 });
