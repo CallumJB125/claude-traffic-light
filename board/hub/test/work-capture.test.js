@@ -54,6 +54,20 @@ test('reports create one ordinary In Progress card with no run, authority, autom
   assert.equal(stale.body.card.capture.reported_status, 'ended');
 });
 
+test('update_only refreshes a known card in place and never creates one', async (t) => {
+  const f = await rig(t), body = observation(f.A.repo), cards = () => f.db.get('SELECT COUNT(*) AS n FROM cards').n, before = cards();
+  const none = await f.as(f.users.amember, 'POST', path(f.A.board), { ...body, update_only: true });
+  assert.equal(none.status, 200, none.text); assert.equal(none.body.card, null);
+  assert.equal(f.db.get('SELECT COUNT(*) AS n FROM work_capture_cards').n, 0); assert.equal(cards(), before);
+  const first = await f.as(f.users.amember, 'POST', path(f.A.board), { ...body, status: 'idle' });
+  const id = first.body.card.id, column = first.body.card.column;
+  const again = await f.as(f.users.amember, 'POST', path(f.A.board), { ...body, status: 'idle', title: 'Fix the login bug', summary: 'Goal: fix it', update_only: true });
+  assert.equal(again.status, 200, again.text); assert.equal(again.body.card.id, id); assert.equal(again.body.card.column, column);
+  assert.equal(f.h.hub.card(id).title, 'Fix the login bug'); assert.equal(f.h.hub.card(id).body, 'Goal: fix it');
+  assert.equal(cards(), before + 1);
+  assert.equal((await f.as(f.users.amember, 'POST', path(f.A.board), { ...body, update_only: 'yes' })).status, 400);
+});
+
 test('destination is pinned across team memberships and concurrent different-board first reports have one winner', async (t) => {
   const f = await rig(t), body = observation(f.A.repo);
   const results = await Promise.all([f.as(f.users.s, 'POST', path(f.A.board), body), f.as(f.users.s, 'POST', path(f.B.board), { ...body, repo_id: f.B.repo })]);

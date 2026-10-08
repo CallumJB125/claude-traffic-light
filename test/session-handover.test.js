@@ -207,3 +207,19 @@ test('the in-app /hook/:adapter route feeds the tap too', async () => {
   server.close();
   assert.deepEqual(facts(root, 'gemini-gx').commands, ['pwd']);
 });
+
+test('a stored document reads back as the facts a work record needs; anything not ours is null', async () => {
+  const root = tmp();
+  ev(root, { signal: 'prompt-submit', data: { prompt: 'Fix the login redirect loop' } });
+  ev(root, { signal: 'tool-use', data: { tool_name: 'Edit', tool_input: { file_path: '/work/app/src/login.js' } } });
+  const w = writer(root);
+  await w.tick();
+  const f = w.docFacts('claude-code', 's1');
+  assert.equal(f.cwd, '/work/app');
+  assert.equal(f.firstPrompt, 'Fix the login redirect loop');
+  assert.equal(f.lastPrompt, 'Fix the login redirect loop');
+  assert.deepEqual(f.files, { 'src/login.js': 'edit' });
+  assert.equal(f.lastAssistant, null);
+  assert.equal(w.docFacts('claude-code', 'missing'), null);
+  assert.equal(H.factsFromDoc('# Something else'), null);
+});

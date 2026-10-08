@@ -17,6 +17,12 @@ const HASH = /^[a-f0-9]{64}$/;
 const MAX_STATE_BYTES = 2 * 1024 * 1024;
 const RETRY_MS = 15000;
 const ACK_RESERVE_BYTES = 2048;
+const BACKFILL_LIMIT = 25;
+const BACKFILL_BUDGET_MS = 2000;
+const BACKFILL_DELAY_MS = 20000;
+const BACKFILL_EVERY_MS = 60000;
+// The title capture used before WorkRecords: the AI's name and the folder's.
+const FALLBACK_TITLE = /^(?:Claude(?: Code)?|Codex|Cursor|Gemini|Hermes) · /;
 const clean = (text,max) => redactSecrets(String(text??'').slice(0,max*2),{docExamples:false})
   .replace(/\b(?:bdt|brt|btk|btr|inv|clinv|pfi|pfm|pfr|pfc|pfcode)_[A-Za-z0-9_-]{43}\b/g,'<redacted:token>')
   .replace(/\b(?:brt1|bmr1)\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g,'<redacted:token>')
@@ -56,6 +62,7 @@ function compactState(v) {
     else {
       for(const k of ['last_seen','attempt_at','sent_at','retry_at'])if(Number.isFinite(e[k])&&e[k]>=0)task[k]=e[k];
       for(const k of ['fingerprint','attempt_fingerprint'])if(HASH.test(e[k]??''))task[k]=e[k];
+      if(e.backfilled===1)task.backfilled=1;
     }
     out.tasks[key]=task;
   }
@@ -125,8 +132,9 @@ function routeFor(repo,routes,choice) {
 const routeKey = r => crypto.createHash('sha256').update(JSON.stringify([r.hub,r.user_id,r.team_id,r.board_id,r.repo_id])).digest('hex');
 // factsFor(o): merged hook + transcript facts for one observation (the handover writer's facts), or null.
 // handoverFor(o): {available, written_at} for its local handover, or null. spendFor(o): {cost_usd, route}, or null.
+// docFactsFor(o): the facts its stored handover document still holds, or null (the backfill's fallback).
 function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam,resolveRepo=repoFor,ownedRoots=[],host=null,now=Date.now,log=()=>{},onChange=()=>{},
-  factsFor=null,handoverFor=null,spendFor=null,home=null,recordsFile=path.join(path.dirname(file),'work-records.json')}) {
+  factsFor=null,handoverFor=null,spendFor=null,docFactsFor=null,home=null,recordsFile=path.join(path.dirname(file),'work-records.json')}) {
   let store;
   try {store=privateState(file,startEnabled);store.save(store.state);}
   catch {
@@ -134,7 +142,7 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
     // would duplicate existing cards, and capture failure must not close Buddy.
     const notice='Automatic cards are paused because private capture storage is unavailable. Your saved identities have been kept.';
     log('automatic cards unavailable: private storage');
-    return {observe:()=>Promise.resolve(),captureOnce:async()=>({ok:false,reason:'storage'}),routes:async()=>({routes:[],complete:false}),enabled:()=>false,setEnabled:()=>false,choose:async()=>false,choices:()=>[],snapshot:()=>[],notice:()=>notice,stop:async()=>{},idle:()=>Promise.resolve()};
+    return {observe:()=>Promise.resolve(),backfill:async()=>({updated:0,pending:0}),startBackfill:()=>{},captureOnce:async()=>({ok:false,reason:'storage'}),routes:async()=>({routes:[],complete:false}),enabled:()=>false,setEnabled:()=>false,choose:async()=>false,choices:()=>[],snapshot:()=>[],notice:()=>notice,stop:async()=>{},idle:()=>Promise.resolve()};
   }
   const STALE_MS=7*24*3600*1000;
   for(const [key,e]of Object.entries(store.state.tasks)){
@@ -252,6 +260,53 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
     // Without share_summaries a team title stays the reported task title or provider · folder: a prompt never leaves.
     return {title:raw.taskTitle||!shared?o.title:shared.title,summary:shared?WorkRecord.cardBody(shared):null};
   }
+  // One time per card: cards made before WorkRecords carried a body (an empty
+  // body, the AI's name and folder as title) get the title and body their
+  // session's handover facts give. My board cards only, in place: update_only
+  // never makes a card, and re-sending the card's own last status never moves
+  // it (an Idle card stays Idle). Bounded per pass, yielding between cards.
+  let backfilling=false,backfillTimer=null,backfillFailures=0;const tried=new Set();
+  const pendingBackfill=()=>Object.entries(state.tasks).filter(([key,e])=>!e.backfilled&&!e.untracked&&e.card_id&&e.status&&e.destination.kind==='local'&&!tried.has(key));
+  async function backfill({limit=BACKFILL_LIMIT,budgetMs=BACKFILL_BUDGET_MS}={}){
+    if(backfilling||stopped||state.enabled===false)return {updated:0,pending:pendingBackfill().length};
+    backfilling=true;const began=Date.now();let updated=0,seen=0;
+    const mark=(key,title=null)=>commit(next=>{const e=next.tasks[key];if(!e)return;e.backfilled=1;if(title)e.title=title;});
+    try{
+      for(const [key,e]of pendingBackfill()){
+        if(stopped||state.enabled===false||seen>=limit||Date.now()-began>budgetMs)break;
+        seen++;tried.add(key);
+        const recordId=`${state.install_id}:${e.provider}:${e.session_id}`;
+        // Reported since the change: the live path already wrote this card.
+        if(records.get(recordId)||BACKGROUND_TITLE.test(String(e.title??'').trim())){mark(key);continue;}
+        const o={provider:e.provider,session_id:e.session_id,task_id:e.task_id,title:e.title,status:e.status,summary:null,cwd:null,personal:false};
+        const facts=call(factsFor,o)??call(docFactsFor,o);
+        const told=facts&&(facts.firstPrompt||facts.lastPrompt||facts.lastAssistant||Object.keys(facts.files??{}).length);
+        if(!told){mark(key);continue;}
+        const rec=WorkRecord.build({install_id:state.install_id,o,raw:{taskTitle:FALLBACK_TITLE.test(e.title??'')?null:e.title},facts,handover:call(handoverFor,o),spend:call(spendFor,o),home});
+        if(!rec){mark(key);continue;}
+        const stored=records.upsert(rec)??rec;
+        const title=stored.title||e.title,summary=WorkRecord.cardBody(stored);
+        let result=null;
+        try{result=await sendLocal({install_id:state.install_id,provider:e.provider,session_id:e.session_id,task_id:e.task_id,repo_id:null,title,status:e.status,summary,update_only:true});}
+        catch{result=null;}
+        if(stopped)break;
+        // The board is not answering: leave this card for a later pass.
+        if(!result?.ok){tried.delete(key);backfillFailures++;log('card backfill deferred');break;}
+        if(mark(key,result.card?title:null)&&result.card)updated++;
+        if(result.capture?.tracking&&result.capture.tracking!=='active')commit(next=>{const x=next.tasks[key];if(x){x.untracked=true;x.reason=clean(result.capture.tracking,64);}});
+        await new Promise(r=>setImmediate(r));
+      }
+    }finally{backfilling=false;}
+    if(updated)changed();
+    return {updated,pending:pendingBackfill().length};
+  }
+  function startBackfill({delayMs=BACKFILL_DELAY_MS,everyMs=BACKFILL_EVERY_MS}={}){
+    if(backfillTimer||stopped)return;
+    const run=async()=>{backfillTimer=null;if(stopped)return;
+      const r=await backfill().catch(()=>({pending:0}));
+      if(r.pending&&!stopped&&backfillFailures<3){backfillTimer=setTimeout(run,everyMs);backfillTimer.unref?.();}};
+    backfillTimer=setTimeout(run,delayMs);backfillTimer.unref?.();
+  }
   async function drain() {while(latest&&!stopped){const next=latest;latest=null;await pass(next);}}
   return {observe(sessions){if(stopped||state.enabled===false)return;latest=Array.isArray(sessions)?sessions:[];
       if(!active){active=drain().catch(()=>log('automatic cards unavailable')).finally(()=>{active=null;if(latest&&!stopped)this.observe(latest);});}return active;},
@@ -333,6 +388,7 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
       }
       return [...rows.values()].map(r=>r.count>1?{...r,title:`${r.title} (${r.count})`}:r);
     },
-    async stop(){stopped=true;latest=null;await active;},idle:()=>active??Promise.resolve()};
+    backfill,startBackfill,
+    async stop(){stopped=true;latest=null;if(backfillTimer){clearTimeout(backfillTimer);backfillTimer=null;}await active;},idle:()=>active??Promise.resolve()};
 }
 module.exports={createWorkCapture,observation,isBackgroundSession,BACKGROUND_TITLE,routeFor,repoFor,clean,phase,routeKey};
