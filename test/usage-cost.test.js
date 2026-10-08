@@ -50,7 +50,7 @@ test('Auto-answer is shown unless PLEXIFORM_SHOW_AUTOANSWER=0, says nothing answ
 
 test('Usage & cost is one sidebar entry with tabs, links to the Usage optimiser, and names its two heatmaps apart', () => {
   const { SECTIONS, pageById } = require('../buddy-window/pages.js');
-  assert.deepEqual(SECTIONS.find((s) => s.id === 'usage').pages, ['usage', 'stats']);
+  assert.deepEqual(SECTIONS.find((s) => s.id === 'usage').pages, ['usage', 'stats', 'optimiser', 'clients']);
   assert.equal(pageById('stats').unlisted, true, 'Time is a tab, not a second sub-nav entry');
   assert.match(html, /id="budget-optimiser"/);
   assert.match(view, /\$\('budget-optimiser'\)\.addEventListener\('click', \(\) => window\.lightsApi\.openOptimiser\(\)\)/);
