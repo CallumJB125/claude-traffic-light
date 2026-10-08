@@ -143,6 +143,11 @@ export const api = {
   disconnectIntegration: (id) => mut('DELETE', `/api/integrations/${enc(id)}`),
   // Admins only (D42): members get 403, so the page shows them no Activity.
   integrationAudit: (id) => call('GET', `/api/integrations/${enc(id)}/audit?limit=50`),
+  triggers: () => call('GET', '/api/triggers'),
+  triggerActivity: () => call('GET', '/api/triggers/activity'),
+  createTrigger: (body) => mut('POST', '/api/triggers', body),
+  setTriggerMode: (id, mode, confirm = false) => mut('POST', `/api/triggers/${enc(id)}/mode`, { mode, ...(confirm ? { confirm: true } : {}) }),
+  deleteTrigger: (id) => mut('DELETE', `/api/triggers/${enc(id)}`),
   // D98: a member links and unlinks only their own account; admins list and revoke.
   startIdentityLink: (id) => mut('POST', `/api/integrations/${enc(id)}/identity/start`),
   unlinkIdentity: (id) => mut('DELETE', `/api/integrations/${enc(id)}/identity`),
