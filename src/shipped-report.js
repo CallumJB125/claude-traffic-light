@@ -19,7 +19,7 @@ const plural = (n, w, many = `${w}s`) => `${n} ${n === 1 ? w : many}`;
 function stripTags(value) {
   return String(value ?? '')
     .replace(/<([A-Za-z][\w:-]*)(?:\s[^>]*)?>[\s\S]*?<\/\1>/g, ' ')
-    .replace(/<\/?[A-Za-z][\w:-]*(?:\s[^>]*)?>/g, ' ')
+    .replace(/<\/?[A-Za-z][\w:-]*(?:[\s/][^>]*)?>/g, ' ')
     .replace(/\s+/g, ' ').trim();
 }
 
