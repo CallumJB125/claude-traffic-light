@@ -42,6 +42,7 @@ export const DEFAULT_LIMITS = Object.freeze({
   auth_start_email_all: { capacity: 40, per_ms: 3_600_000 },  // per address, every network together; over: silent
   auth_start_ip: { capacity: 20, per_ms: 3_600_000 },
   auth_methods_ip: { capacity: 60, per_ms: 60_000 },          // GET /api/auth/methods (no auth)
+  auth_turnstile_ip: { capacity: 20, per_ms: 3_600_000 },     // Turnstile tokens checked with Cloudflare, per /64
   auth_start_global: { capacity: 500, per_ms: 3_600_000 },
   auth_verify_ip: { capacity: 10, per_ms: 10 * 60_000 },
   auth_verify_email: { capacity: 10, per_ms: 15 * 60_000 },   // verify attempts per address AND network; the lockout is the failure budget

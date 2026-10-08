@@ -13,6 +13,9 @@ const $ = (id) => document.getElementById(id);
 const NO_WEB_METHOD = 'Google and GitHub sign-in aren’t set up for the browser on this board yet. Sign in with the desktop app, or ask the board’s owner to set them up.';
 const NO_METHOD = 'No sign-in method is set up on this board yet. Ask the board’s owner to set up Google or GitHub sign-in.';
 const METHODS_FAILED = 'We couldn’t load the sign-in options. Reload the page to try again.';
+const HUMAN_WAIT = 'Finish the check that you’re a person, then try again.';
+const HUMAN_FAILED = 'The check that you’re a person didn’t pass. Try it again.';
+const HUMAN_DOWN = 'We couldn’t check that you’re a person right now. Try again shortly.';
 let flowId = null;
 let email = '';
 let busy = false;
@@ -21,6 +24,7 @@ let clientInvite = null;
 let signinPhase = 'methods';
 let methodsIntent = 0;
 const asked = new Map(); // email → when this page asked for its codes
+let human = null; // the hub's Turnstile widget, only when /api/auth/methods names a site key: {id, token, failed}
 
 function enterPhase(next) { signinPhase = next; methodsIntent++; }
 
@@ -53,11 +57,44 @@ function codeStep(lead) {
   $('code').focus();
 }
 
+// Loaded only when the hub asks for it; if Cloudflare is blocked the start goes without a token.
+function loadHumanCheck(siteKey) {
+  if (human) return;
+  human = { id: null, token: null, failed: false };
+  const s = document.createElement('script');
+  s.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit'; // privacy-flow: hub-turnstile
+  s.onerror = () => { human.failed = true; };
+  s.onload = () => {
+    $('turnstile').hidden = false;
+    human.id = window.turnstile.render('#turnstile', {
+      sitekey: siteKey, action: 'email-signin',
+      callback: (t) => { human.token = t; },
+      'expired-callback': () => { human.token = null; },
+      'error-callback': () => { human.token = null; },
+    });
+  };
+  document.head.append(s);
+}
+
+// A token works once: every start spends it and asks the widget for a fresh one.
+function humanToken() {
+  if (!human || human.failed) return {};
+  const t = human.token;
+  if (!t) return null;
+  human.token = null;
+  window.turnstile?.reset(human.id);
+  return { turnstile_token: t };
+}
+
 async function askForCode() {
   const times = asked.get(email) ?? [];
   const wait = resendWaitS(times, Date.now(), { resend: flowId != null });
   if (wait) { showError(resendWaitText(wait)); return false; }
-  const r = await call('POST', '/api/auth/email/start', { email, client: 'web' });
+  const token = humanToken();
+  if (!token) { showError(HUMAN_WAIT); return false; }
+  const r = await call('POST', '/api/auth/email/start', { email, client: 'web', ...token });
+  if (r.error?.reason === 'human_check') { showError(HUMAN_FAILED); return false; }
+  if (token.turnstile_token && r.error?.code === 'PROVIDER_UNAVAILABLE') { showError(HUMAN_DOWN); return false; }
   if (!r.ok || typeof r.data?.flow_id !== 'string') { showError(accountErrorText(errOf(r), 'start')); return false; }
   asked.set(email, [...times, Date.now()]);
   flowId = r.data.flow_id;
@@ -203,6 +240,7 @@ async function offerMethods() {
   if (!r.ok) { showError(METHODS_FAILED); return; }
   const email = r.data?.email === true;
   $('email-form').hidden = !email;
+  if (email && typeof r.data?.turnstile_site_key === 'string' && r.data.turnstile_site_key) loadHumanCheck(r.data.turnstile_site_key);
   const google = r.data?.web?.google === true; const github = r.data?.web?.github === true;
   $('google-signin').hidden = !google; $('github-signin').hidden = !github;
   $('oauth-options').hidden = !google && !github;
