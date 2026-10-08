@@ -4,6 +4,9 @@
   "version": "1.0.2",
   "description": "A pixel Claude that lives on your desk: a programmable traffic light for every Claude Code (and Cursor, Codex, Gemini\u2026) session \u2014 lights, moods, costumes, pets, a garden, and clicks that do things.",
   "main": "main.js",
+  "bin": {
+    "plexiform": "bin/plexiform.js"
+  },
   "scripts": {
     "start": "electron .",
     "install-hooks": "node hooks/install.js",
@@ -126,6 +129,7 @@
       "usage-waste-view.js",
       "spend.js",
       "mcp-server.js",
+      "bin/**/*",
       "mcp-install.js",
       "native-board/**/*",
       "agents.js",
@@ -206,6 +210,10 @@
       {
         "from": "adapters",
         "to": "adapters"
+      },
+      {
+        "from": "bin",
+        "to": "bin"
       }
     ],
     "mac": {

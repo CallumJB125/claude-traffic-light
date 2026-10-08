@@ -1,0 +1,23 @@
+#!/bin/sh
+# Settings > Advanced > Install command line tool links ~/.local/bin/plexiform
+# here. Packaged, the CLI lives inside app.asar, which only the app's own
+# binary (as Node) can read; from a checkout it runs under node.
+f=$0
+while [ -L "$f" ]; do
+  l=$(readlink "$f")
+  case $l in
+    /*) f=$l ;;
+    *) f=$(dirname "$f")/$l ;;
+  esac
+done
+dir=$(cd "$(dirname "$f")/.." && pwd)
+if [ -f "$dir/app.asar" ]; then
+  for exe in "$dir/../MacOS/Plexiform" "$dir/../plexiform"; do
+    if [ -x "$exe" ]; then
+      ELECTRON_RUN_AS_NODE=1 exec "$exe" "$dir/app.asar/bin/plexiform.js" "$@"
+    fi
+  done
+  echo "plexiform: cannot find the Plexiform app beside $dir" >&2
+  exit 2
+fi
+exec node "$dir/bin/plexiform.js" "$@"

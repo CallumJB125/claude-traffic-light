@@ -639,7 +639,7 @@ async function main() {
   await server.connect(new StdioServerTransport());
 }
 
-module.exports = { TOOLS, CHANNELS, rootDir, loadConfig, readRequests, classifySession, scanSessions, computeState, parseTransition, buddyStatus, buddySessions, buddyWhy, buddyRules, buddyRecentTransitions, buddyModelMix, buddyPendingRequests, buddyGitStatus, buddySpend, buddyUsageHistory, buddyHealth, buddyBurstStatus, buddyBurstCoordination, buddyBurstRequests, hookRuntime, teamCall };
+module.exports = { TOOLS, CHANNELS, rootDir, loadConfig, readRequests, classifySession, scanSessions, computeState, parseTransition, buddyStatus, buddySessions, buddyWhy, buddyRules, buddyRecentTransitions, buddyModelMix, buddyPendingRequests, buddyGitStatus, buddySpend, buddyUsageHistory, buddyHealth, buddyBurstStatus, buddyBurstCoordination, buddyBurstRequests, hookRuntime, teamCall, fetchLive };
 
 if (require.main === module) {
   main().catch((err) => { process.stderr.write(`plexiform mcp: ${err.stack || err}\n`); process.exit(1); });
