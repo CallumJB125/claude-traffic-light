@@ -345,7 +345,7 @@ test('a session cost is kept and shown on the personal board only; a team hub ig
   for (const cost of [{ usd: -1 }, { usd: 'x' }, { usd: 1, unpriced: 1.5 }, { usd: 1, extra: 1 }, [1], null]) {
     assert.equal((await f.as(f.users.amember, 'POST', path(f.A.board), { ...body, cost })).status, 400, JSON.stringify(cost));
   }
-  const dataDir = mkdtempSync(join(tmpdir(), 'capture-cost-')), cookie = `board_local=${'x'.repeat(64)}`;
+  const dataDir = testTempDir('capture-cost-'), cookie = `board_local=${'x'.repeat(64)}`;
   const config = testConfig({ auth: 'local', localSecret: 'x'.repeat(64), devLoginSecret: null, dataDir, dbPath: join(dataDir, 'board.db') });
   const app = createApp(config, { clock: fakeClock(), log: silentLogger, github: fakeGitHub(), timers: false });
   t.after(async () => { await app.close(); rmSync(dataDir, { recursive: true, force: true }); });
