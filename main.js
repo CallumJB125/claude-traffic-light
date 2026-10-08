@@ -3480,6 +3480,7 @@ utilityHandle('save-spend-limits', analyticsSender, (_e, v) => {
 });
 utilityHandle('usage:open-ai-tools', analyticsSender, () => { aiToolsOpen('aitools'); return true; });
 utilityHandle('usage:open-optimiser', analyticsSender, () => { openBuddy('optimiser'); return true; });
+utilityHandle('usage:open-auto-answer', analyticsSender, () => { if (process.env.PLEXIFORM_SHOW_AUTOANSWER === '0') return false; showLightsView('auto'); return true; });
 
 // Export the whole visible range as JSON or CSV, wherever the user points.
 utilityHandle('export-stats', e => settingsOnly(e) || analyticsSender(e), async (e, format, days) => {

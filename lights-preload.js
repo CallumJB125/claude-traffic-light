@@ -20,7 +20,9 @@ contextBridge.exposeInMainWorld('lightsApi', {
   saveSpendLimits: (v) => ipcRenderer.invoke('save-spend-limits', v),
   openAiTools: () => ipcRenderer.invoke('usage:open-ai-tools'),
   openOptimiser: () => ipcRenderer.invoke('usage:open-optimiser'),
-  showAutoAnswer: process.env.PLEXIFORM_SHOW_AUTOANSWER === '1',
+  openAutoAnswer: () => ipcRenderer.invoke('usage:open-auto-answer'),
+  // Rules only save for now (src/auto-rules.js: nothing answers yet, and the tab says so); PLEXIFORM_SHOW_AUTOANSWER=0 hides it.
+  showAutoAnswer: process.env.PLEXIFORM_SHOW_AUTOANSWER !== '0',
   modelMix: () => ipcRenderer.invoke('model-mix'),
   usageBundle: (q) => ipcRenderer.invoke('usage-bundle', q),
   costGuard: { report: () => ipcRenderer.invoke('cost-guard:report'), set: (v) => ipcRenderer.invoke('cost-guard:set', v) },
