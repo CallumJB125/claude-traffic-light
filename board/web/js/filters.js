@@ -1,12 +1,14 @@
 // Board filters as pure logic: the filter model, its URL form (?q= and &f=),
 // matching, and the counts the bar shows. Shared by the Board and Table views.
 import { alertsForViewer } from './view.js';
+import { waitingOnYou } from './pr-status.js';
 
 export const CHIPS = [
   { id: 'mine', label: 'Mine', hint: 'Cards you own, run or are assigned' },
   { id: 'needs', label: 'Needs you', hint: 'Cards on your attention strip' },
   { id: 'working', label: 'AI working', hint: 'An AI agent is running it right now' },
   { id: 'blocked', label: 'Blocked', hint: 'Waiting for an answer or approval' },
+  { id: 'review', label: 'Needs your review', hint: 'An open pull request waiting for your review' },
 ];
 const CHIP_IDS = new Set(CHIPS.map((c) => c.id));
 const WORKING = new Set(['claimed', 'running', 'quiet']);
@@ -56,6 +58,7 @@ const CHIP_TEST = {
   needs: (e, ctx) => alertsForViewer(ctx.viewerId, [e], { max: 1 }).items.length > 0,
   working: (e) => WORKING.has(e.view.run_state ?? 'todo'),
   blocked: (e) => e.view.run_state === 'blocked',
+  review: (e, ctx) => waitingOnYou(e.view, ctx.viewerId),
 };
 
 function haystack(e, members) {

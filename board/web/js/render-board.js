@@ -178,7 +178,7 @@ export function card({ view, face, elapsed_ms = 0 }, model) {
     avatarStack(people)),
   h('h3', { class: 'card-title', id: `t-${view.id}` },
     h('button', { type: 'button', class: 'card-open', 'data-action': pending ? null : 'open', 'data-card': view.id, disabled: pending || null, 'aria-describedby': draggable ? 'dnd-help' : null }, view.title)),
-  observed ? captureBadge(view, elapsed_ms, model.conn?.status === 'lost') : pill(chips.some((c) => c.id === 'proof') ? { ...face, reason: null } : face),
+  observed ? captureBadge(view, elapsed_ms, model.conn?.status === 'lost') : pill(chips.some((c) => c.id === 'proof' || (c.id === 'pr' && face.state === 'in_review')) ? { ...face, reason: null } : face),
   workPhase ? h('p', { class: 'card-work-phase' }, workPhase) : null,
   observed ? captureRecord(view) : null,
   observed ? h('p', { class: 'card-foot' }, 'Existing session · details only. Stop it in your AI tool before starting elsewhere.') : null,
