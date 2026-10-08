@@ -63,7 +63,7 @@ test('savings are only figures the tool reported: Burst compaction stats and the
   assert.equal(none.compaction.saves, null);
   assert.equal(none.waste.saves, null);
   assert.equal(none.waste.status.label, 'On, nothing found');
-  assert.equal(tools(T.toolsView({ burst: ON })).waste.status.label, 'Plexiform Plus', 'no report: the plan gate, not a zero');
+  assert.equal(tools(T.toolsView({ burst: ON })).waste.status.label, 'Not on your plan', 'no report: the plan gate, not a zero');
 });
 
 test('compaction and routing follow Burst: on/off switch, backup route, missing backup, band versions', () => {

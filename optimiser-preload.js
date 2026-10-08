@@ -9,8 +9,6 @@ contextBridge.exposeInMainWorld('optimiserApi', {
   act: (kind) => ipcRenderer.invoke('optimiser:act', String(kind)),
   refresh: () => ipcRenderer.send('optimiser:refresh'),
   openBrowser: () => ipcRenderer.invoke('optimiser:open-browser'),
-  view: (name, args) => ipcRenderer.invoke('burst:view', String(name), args && typeof args === 'object' ? args : {}),
-  burstAction: (id) => ipcRenderer.invoke('burst-action', String(id), {}),
   openDocs: () => ipcRenderer.send('optimiser:docs'),
   tools: () => ipcRenderer.invoke('burst:tools'),
   waste: () => ipcRenderer.invoke('cost-guard:report'),
