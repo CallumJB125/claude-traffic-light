@@ -31,7 +31,16 @@ Source of facts: hooks + `src/handover-transcripts.js` (`factsFrom`), the same f
 ## Reading it back (every AI)
 
 - `hooks/team-brief.js` (SessionStart, all adapters that support context injection): prints ≤1500 chars: who is working on what in this repo, last 5 changes, open handovers, collisions. Silent and fast (<1 s, 800 ms hub timeout) when offline, unlinked or sharing is off.
-- MCP tools in `src/mcp-server.js`: `team_activity({repo?, since_seq?})`, `who_touched({path})`, `team_handover({record_id})` (returns the scrubbed handover the author chose to share), `team_brief()`.
+- MCP tools in `src/mcp-server.js`: `team_activity({repo?, since_seq?})`, `who_touched({path})`, `team_handover({record_id})` (returns the scrubbed handover the author chose to share), `team_brief()`, `team_memory_search({query, here?, repo?, since?, limit?})`, `team_memory_get({record_id})`.
+
+## Team memory (`board/hub/activity/memory.js`, migration 064)
+
+"Has anyone in the team already done or decided X?" An FTS5 index (`memory_docs` + `memory_fts`) over the current WorkRecords: title, goal, summary, files, branch, author display name, repo name, and the handover text the author shared. `ActivityLog.putCurrent` upserts it by `record_id` in the same transaction; `sweep` and `forgetUser` remove rows by the `activity_current` rules (ended 7 days, any 30, deleted teams and accounts). Every field is scrubbed again (`cleanPacketText` + `redactSecrets`) before it is indexed; transcripts are never indexed.
+
+- `GET /api/teams/:team_id/memory/v1/search?q=&repo_id=&since=&limit=` → `{team_id, repo_id, results:[{record_id, repo, author, title, goal, summary, status, branch, files, snippet, score, handover_shared, …}], note}`. bm25 ranked (title ≫ goal > summary/files/handover > branch/author/repo); words are ORed phrases, the last a prefix; `q` 2–200 chars, `limit` ≤ 50, `since` a date or ISO time on the hub's receive time. Bucket `memory_read_user` (60/min).
+- `GET /api/teams/:team_id/memory/v1/records/:record_id` → `{record:{…, handover, handover_at}, note}`.
+- Authority: a live device or session sign-in, a current member of `:team_id` (viewers included), `repo_id` owned by that team, and only records whose repo the team still owns. Anything else is 404.
+- Desktop: the Search everything page's "Team memory" source asks every signed-in team that shares summaries (`TeamActivity.memoryPage`), labelled by team, off when signed out or sharing is off. The MCP tools go through the local signal server like the other `team_*` tools.
 - The desktop subscribes to the stream while the app is open and shows live state and collision alerts.
 
 ## Handoff

@@ -2,9 +2,12 @@
 // module that touches activity_events / activity_current. Kafka-like
 // semantics on SQLite: append-only events, a monotonic offset (seq) readers
 // resume from, and time-based retention. A broker adapter (NATS/Kafka) would
-// replace this file and keep its interface; callers never see SQL.
+// replace this file and keep its interface; callers never see SQL. Every
+// change to activity_current also reaches the team memory index (memory.js)
+// in the same transaction, so search never shows a record the log has dropped.
 
 import { EventEmitter } from 'node:events';
+import { TeamMemory } from './memory.js';
 
 const DAY_MS = 86_400_000;
 export const RETENTION = Object.freeze({ eventsMs: 30 * DAY_MS, endedMs: 7 * DAY_MS, staleMs: 30 * DAY_MS });
@@ -21,6 +24,7 @@ export class ActivityLog {
   constructor(hub) {
     this.hub = hub;
     this.db = hub.db;
+    this.memory = new TeamMemory(hub);
     this.appended = new EventEmitter();
     this.appended.setMaxListeners(0);
   }
@@ -42,7 +46,11 @@ export class ActivityLog {
       ON CONFLICT(record_id) DO UPDATE SET team_id = excluded.team_id, repo_id = excluded.repo_id, rev = excluded.rev, status = excluded.status,
       author_user_id = excluded.author_user_id, payload = excluded.payload, updated_at = excluded.updated_at`,
     recordId, teamId, repoId, rev, status, authorUserId, JSON.stringify(payload), at);
+    this.memory.put({ recordId, teamId, repoId, rev, status, authorUserId, payload, at });
   }
+
+  /** The handover text a record's author shared (activity-handoff.js log.handover). */
+  handover(recordId) { return this.memory.handover(recordId); }
 
   append({ teamId, repoId, recordId, rev, type, authorUserId = null, payload, at }) {
     const r = this.db.run('INSERT INTO activity_events (team_id, repo_id, record_id, rev, type, author_user_id, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
@@ -87,12 +95,14 @@ export class ActivityLog {
       const gone = 'SELECT id FROM orgs WHERE deleted_at IS NOT NULL';
       const teams = this.db.run(`DELETE FROM activity_events WHERE team_id IN (${gone})`).changes
         + this.db.run(`DELETE FROM activity_current WHERE team_id IN (${gone})`).changes;
-      return { events, current, teams };
+      const memory = this.memory.sweep(nowMs, RETENTION);
+      return { events, current, teams, memory };
     });
   }
 
   /** Account deletion: everything this user published goes now. */
   forgetUser(userId) {
+    this.memory.forgetUser(userId);
     this.db.run('DELETE FROM activity_current WHERE author_user_id = ?', userId);
     this.db.run('DELETE FROM activity_events WHERE author_user_id = ?', userId);
     this.db.run("DELETE FROM activity_events WHERE type = 'collision' AND EXISTS (SELECT 1 FROM json_each(activity_events.payload, '$.authors') WHERE value = ?)", userId);

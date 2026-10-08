@@ -1,7 +1,8 @@
 'use strict';
-// Search everything: the local memory index's search page. Text from
-// transcripts is only ever set as textContent; snippet highlights arrive as
-// control-character markers and become <mark> elements here.
+// Search everything: the local memory index's search page, and optionally
+// the team hub's team memory beside it, each under its own heading. Text from
+// transcripts and teammates is only ever set as textContent; snippet
+// highlights arrive as control-character markers and become <mark> elements here.
 (() => {
   const api = window.memoryApi;
   const $ = (id) => document.getElementById(id);
@@ -9,8 +10,10 @@
   const TARGET = { codex: 'Codex', claude: 'Claude' };
   const OPEN = '\u0002', CLOSE = '\u0003';
   const DAY = 86400000;
+  const STATUS = { working: 'working', waiting: 'waiting', review: 'in review', ended: 'ended', idle: 'idle', paused_limit: 'paused at a limit' };
+  const SOURCE_KEY = 'plexiform.memory.source';
   const panels = new Map(); // hand-off id -> { out, reply, send, end, note }
-  let info = null, timer = null, seq = 0;
+  let info = null, timer = null, teamTimer = null, seq = 0;
 
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
   const button = (label, cls, on) => { const b = el('button', cls, label); b.type = 'button'; b.addEventListener('click', on); return b; };
@@ -94,10 +97,46 @@
     }
   }
 
+  function renderTeam(hits) {
+    const list = $('team-results');
+    list.replaceChildren();
+    for (const h of hits) {
+      const li = el('li', 'hit team');
+      li.append(el('span', 'source', `Team memory · ${h.team || 'Team'}`), el('h2', null, h.title || 'Untitled work'));
+      li.append(el('div', 'meta', [h.author, TOOL[h.adapter] || h.adapter, h.repo, h.branch, STATUS[h.status], when(Date.parse(h.updated_at || ''))].filter(Boolean).join(' · ')));
+      if (h.goal) li.append(el('p', null, h.goal));
+      if (h.snippet) li.append(snippet(h.snippet));
+      if (h.handover) li.append(el('p', 'note', `${h.author} shared a handover for this work. Ask your AI: team_memory_get ${h.record_id}`));
+      list.append(li);
+    }
+  }
+
+  async function teamSearch(req, mine) {
+    const status = $('team-status');
+    if (req.q.trim().length < 2) { $('team-results').replaceChildren(); status.textContent = 'Type at least two characters to search team memory.'; return; }
+    status.textContent = 'Asking your team hub…';
+    const r = await api.teamSearch(req).catch(() => null);
+    if (mine !== seq) return;
+    if (!r || !r.ok || !r.available) { $('team-results').replaceChildren(); status.textContent = (r && r.message) || 'Team memory is not available right now.'; return; }
+    renderTeam(r.results);
+    const asked = (r.teams || []).map((t) => t.team);
+    const failed = (r.teams || []).filter((t) => !t.ok).map((t) => `${t.team}: ${t.message}`);
+    const from = asked.length ? ` from ${asked.join(', ')}` : '';
+    status.textContent = [r.results.length ? `${r.results.length} shared record${r.results.length === 1 ? '' : 's'}${from}` : `No shared work matches${from}.`, ...failed].join(' · ');
+  }
+
   async function search() {
     const mine = ++seq;
     const days = Number($('when').value);
     const req = { q: $('q').value, tool: $('tool').value, repo: $('repo').value, from: days ? Date.now() - days * DAY : null };
+    const src = $('source').value;
+    $('local').hidden = src === 'team';
+    $('local-head').hidden = src !== 'both';
+    $('team').hidden = src === 'local';
+    // The hub rate-limits team memory, so typing asks it at most every 400 ms.
+    clearTimeout(teamTimer);
+    if (src !== 'local') teamTimer = setTimeout(() => teamSearch(req, mine), 400);
+    if (src === 'team') return;
     const r = await api.search(req).catch(() => null);
     if (mine !== seq) return;
     if (!r || !r.ok) { $('status').textContent = (r && r.error) || 'Search is not available right now.'; return; }
@@ -133,6 +172,8 @@
   $('form').addEventListener('submit', (e) => { e.preventDefault(); search(); });
   $('q').addEventListener('input', soon);
   for (const id of ['tool', 'repo', 'when']) $(id).addEventListener('change', search);
+  try { const saved = localStorage.getItem(SOURCE_KEY); if ([...$('source').options].some((o) => o.value === saved)) $('source').value = saved; } catch { /* storage unavailable: default source */ }
+  $('source').addEventListener('change', () => { try { localStorage.setItem(SOURCE_KEY, $('source').value); } catch { /* not remembered */ } search(); });
   $('experimental').addEventListener('change', async (e) => { await api.setExperimental(e.target.checked); refresh(); });
   $('reindex').addEventListener('click', async () => { await api.reindex(); $('stats').textContent += ' · updating…'; setTimeout(() => refresh().then(search), 3000); });
   $('clear').addEventListener('click', async () => { await api.clear(); await refresh(); search(); });
