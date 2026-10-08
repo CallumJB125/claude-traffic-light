@@ -171,8 +171,17 @@ const BOUNDS_FILE = path.join(ROOT_DIR, 'window-bounds.json');
 const MANUAL_OVERRIDE_FILE = path.join(ROOT_DIR, 'manual-override.json');
 const CONFIG_FILE = path.join(ROOT_DIR, 'config.json');
 const CLAUDE_SETTINGS_PATH = path.join(os.homedir(), '.claude', 'settings.json');
+const dataRoots = (userDataDir) => ({
+  dataDir: ROOT_DIR,
+  userDataDir,
+  backupsDir: process.env.CLAUDE_TRAFFIC_LIGHT_BACKUPS || (IS_DEV_RUN ? null : path.join(app.getPath('appData'), `${Brand.name} Backups`)),
+  legacyDir: IS_DEV_RUN ? null : path.join(app.getPath('appData'), require('./src/rename-migration.js').OLD.userDataName),
+});
+// Delete my data finishes here, before any store below is opened (src/data-delete.js).
+const pendingDeletion = require('./src/data-delete.js').runPendingDeletion(dataRoots(IS_DEV_RUN ? null : (app.commandLine.getSwitchValue('user-data-dir') || path.join(app.getPath('appData'), app.getName()))));
 
 require('./src/logging.js').installFileLogging({ rootDir: ROOT_DIR, isDevRun: IS_DEV_RUN });
+if (pendingDeletion.ran) console.log(`[data] deleted: ${pendingDeletion.results.map((r) => `${r.id} ${r.status}`).join(', ')}`);
 // Anything that escapes a promise or a callback, from here on: log it (to
 // app.log too) instead of letting it kill a listener silently.
 // A scrubbed copy also goes to the local crash ring (src/crash-reports.js); nothing is sent.
@@ -3470,6 +3479,7 @@ utilityHandle('crash-reports:export', settingsOnly, async (e) => {
   fs.writeFileSync(r.filePath, CrashReports.bundle(), { mode: 0o600 });
   return { ok: true, path: r.filePath };
 });
+require('./src/data-rights-main.js').register({ utilityHandle, allowed: settingsOnly, dialog, BrowserWindow, app, roots: () => dataRoots(app.getPath('userData')), isDevRun: IS_DEV_RUN, log: (m) => console.log(m) });
 utilityHandle('show-data-folder', settingsOnly, () => { fs.mkdirSync(ROOT_DIR, { recursive: true }); return shell.openPath(ROOT_DIR); });
 utilityHandle('get-stats', e => analyticsSender(e) || settingsOnly(e), (_e, days) => Stats.summary(stats, Date.now(), Math.min(60, Math.max(1, Number(days) || 7))));
 

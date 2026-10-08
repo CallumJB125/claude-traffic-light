@@ -221,6 +221,15 @@
   .bk-pick input { margin: 1px 0 0; flex: none; }
   .bk-item button { font-size: var(--text-xs); padding: 3px 10px; }
   .bk-item button.armed { background: var(--danger); color: #fff; border-color: var(--danger); }
+  #data-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+  #data-list li, #data-pick label { display: flex; gap: var(--space-2); align-items: baseline; }
+  #data-pick label { align-items: center; }
+  #data-list .what { font-size: var(--text-xs); color: var(--muted); }
+  #data-list .size, #data-pick .size { margin-left: auto; flex: none; font-size: var(--text-xs); color: var(--muted); font-variant-numeric: tabular-nums; }
+  #data-delete > summary { cursor: pointer; }
+  #data-delete[open] { display: flex; flex-direction: column; gap: 8px; }
+  #data-delete-go:not(:disabled) { background: var(--danger); color: #fff; border-color: var(--danger); }
+  #data-status[data-state="err"] { color: var(--danger-text); }
   .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   @media (prefers-reduced-motion: reduce) {
     * { transition: none !important; }
@@ -532,6 +541,39 @@
     </details>
   </div>
 
+  <!-- Your data: self-contained; its script is settings-data.js, main side src/data-rights-main.js. -->
+  <section class="field" id="data-rights" aria-labelledby="data-rights-title">
+    <h2 id="data-rights-title">Your data</h2>
+    <div class="hint">Everything Plexiform keeps about you on this Mac, by kind. Export a copy or delete it here; nothing is sent anywhere.</div>
+    <ul id="data-list" aria-label="Data Plexiform keeps on this Mac"></ul>
+    <div class="hint" id="data-total"></div>
+    <div class="row wrap">
+      <button type="button" class="secondary" id="data-export">Export my data…</button>
+      <button type="button" class="secondary" id="data-export-activity">Export activity log (CSV)…</button>
+    </div>
+    <div class="hint">The export is a folder of JSON, CSV and text files with a README.txt listing what is in it. Passwords, tokens and keys are redacted, and key files and sign-ins are left out.</div>
+    <details id="data-delete">
+      <summary>Delete my data…</summary>
+      <div class="hint">Choose what to delete. Plexiform quits, deletes it before opening anything on its next start (so nothing is cut off mid-save) and starts again. This can’t be undone: export first if you want a copy. A receipt of what was deleted and when, with no personal content, is left in the data folder.</div>
+      <div id="data-pick" role="group" aria-label="Data to delete" class="stack"></div>
+      <div class="row"><button type="button" class="secondary" id="data-pick-all">Select all</button></div>
+      <label for="data-confirm">Type <b>delete</b> to confirm</label>
+      <div class="row">
+        <input type="text" id="data-confirm" autocomplete="off" spellcheck="false" />
+        <button type="button" class="secondary" id="data-delete-go" disabled>Delete and restart</button>
+      </div>
+      <h3 class="pv-h">Not covered here</h3>
+      <ul class="hint">
+        <li>Data on a team hub: cards, handovers, activity and your account there. Delete it from Account → Delete account, or ask your team’s owner.</li>
+        <li>Your repositories and code. They are never touched.</li>
+        <li>Your AI tools’ own histories and settings (~/.claude, ~/.codex, ~/.gemini, Cursor). They belong to those tools and are never touched.</li>
+        <li>The Plexiform Safe Storage item in your keychain. Once the sign-ins are deleted it unlocks nothing; remove it in Keychain Access if you like.</li>
+      </ul>
+    </details>
+    <div class="hint" id="data-status" role="status" aria-live="polite"></div>
+    <div class="hint" id="data-receipt"></div>
+  </section>
+
   <h2>Sharing and remote control</h2>
   <div class="field" id="sharing">
     <label class="row"><input type="checkbox" id="teamSessionSharing" /> Share sessions started on a team workspace with that team</label>
@@ -736,6 +778,7 @@
   <script src="settings-backups.js"></script>
   <script src="settings-crash-reports.js"></script>
   <script src="settings-policies.js"></script>
+  <script src="settings-data.js"></script>
   <script src="settings.js"></script>
   <script src="native-board/settings.js"></script>
 </body>

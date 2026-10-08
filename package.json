@@ -77,6 +77,7 @@
       "settings-backups.js",
       "settings-crash-reports.js",
       "settings-policies.js",
+      "settings-data.js",
       "burst-chip.js",
       "burst-usage.js",
       "limits-panel.js",

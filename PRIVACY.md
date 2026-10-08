@@ -270,6 +270,7 @@ PROPOSED, not built: let you choose how many days of stats to keep.
 
 ## Export your data
 
+- **Everything at once:** Preferences → Privacy → Your data → Export my data writes a folder you choose with every kind of data listed there, as JSON, CSV and text, and a README.txt saying what is included. Passwords, tokens and keys are redacted, and key files, sign-ins and window caches are left out. Export activity log (CSV) saves the activity log on its own. Nothing is sent.
 - **Stats:** in the Lights window, Stats → Export JSON or Export CSV.
 - **Rules:** in the Lights window, the share menu → Export rules.
 - **Setup:** in the Lights window, Export setup, which bundles your settings, rules, presets and face photos into one file. It contains the photos you added, so be careful who you share it with.
@@ -279,7 +280,9 @@ PROPOSED, not built: let you choose how many days of stats to keep.
 
 ## Delete your data
 
-Plexiform never deletes your settings for you (it only prunes old backups, as above). The reset actions in the Lights window (Reset rules, removing a face, Replace everything on import) first save a backup. To remove everything yourself:
+Preferences → Privacy → Your data → Delete my data lists each kind of data with its size. Choose what to delete and type "delete": Plexiform quits, deletes it before it opens anything on its next start, and starts again. It only deletes inside its own folders (the data folder, its app folder, its backup folder and its app folder from before the rename), never follows a link out of them, and never touches your repositories or your AI tools' own folders (`~/.claude`, `~/.codex`, `~/.gemini`). A receipt naming the kinds of data deleted, when and how much, with no personal content, is left in `deletion-receipts` in the data folder. Data on a team hub is not covered: delete it from Account → Delete account, or ask the team's owner.
+
+Otherwise Plexiform never deletes your settings for you (it only prunes old backups, as above). The reset actions in the Lights window (Reset rules, removing a face, Replace everything on import) first save a backup. To remove everything yourself:
 
 1. Quit the app from its tray (menu-bar) icon → Quit.
 2. Remove the hooks it added to Claude Code (in `~/.claude/settings.json`, or `%USERPROFILE%\.claude\settings.json` on Windows), and the `claude-buddy` entry in `~/.claude.json` if you turned on the Claude integration. Hooks for Cursor, Codex and Gemini, if connected, are in those tools' own config.
