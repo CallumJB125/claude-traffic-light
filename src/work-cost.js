@@ -6,6 +6,7 @@
 // project and the git branch Claude Code recorded for the session's folder.
 // Local data only: nothing here reads the network or writes anywhere.
 const Usage = require('../usage.js');
+const { cleanTitle } = require('./title-clean.js');
 
 const DAY_MS = 86400000;
 const TOOLS = { claude: 'Claude Code', codex: 'Codex', cursor: 'Cursor', gemini: 'Gemini', hermes: 'Hermes' };
@@ -74,7 +75,7 @@ function attribute({ turns = [], tasks = [], records = [], now = Date.now() } = 
     const sk = `${t.provider}:${t.session_id}`;
     if (cardOfSession.has(sk)) continue;
     const rec = recordOf.get(sk);
-    const it = item(`card:${t.card_id}`, { kind: 'card', card_id: t.card_id, title: str(rec?.title) || str(t.title) || 'Untitled card', tool: t.provider, repo: str(t.repo, 300), branch: str(rec?.branch), pr: prOf(t.pr) });
+    const it = item(`card:${t.card_id}`, { kind: 'card', card_id: t.card_id, title: cleanTitle(str(rec?.title) || str(t.title), 200, 'Untitled card'), tool: t.provider, repo: str(t.repo, 300), branch: str(rec?.branch), pr: prOf(t.pr) });
     if (!it.pr) it.pr = prOf(t.pr);
     if (!it.branch) it.branch = str(rec?.branch);
     cardOfSession.set(sk, it);
@@ -92,7 +93,7 @@ function attribute({ turns = [], tasks = [], records = [], now = Date.now() } = 
     let it = cardOfSession.get(sk);
     if (!it) {
       const project = str(t.project) || 'Unknown project', branch = str(t.branch);
-      it = item(`branch:${project}\u0000${branch ?? ''}`, { kind: branch ? 'branch' : 'project', card_id: null, title: branch ? `${project} · ${branch}` : project, tool: 'claude', repo: null, branch, pr: null });
+      it = item(`branch:${project}\u0000${branch ?? ''}`, { kind: branch ? 'branch' : 'project', card_id: null, title: cleanTitle(branch ? `${project} · ${branch}` : project, 200), tool: 'claude', repo: null, branch, pr: null });
     }
     it.sessions.add(sk);
     const c = Usage.costOf(t);

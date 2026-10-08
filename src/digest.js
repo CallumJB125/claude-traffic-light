@@ -13,6 +13,7 @@
 const fs = require('fs');
 const os = require('os');
 const Usage = require('../usage.js');
+const { cleanTitle } = require('./title-clean.js');
 const { redactSecretsPass } = require('./scrub.js');
 const { readTasks } = require('./morning-report.js');
 const { finding } = require('../usage-waste-view.js');
@@ -83,7 +84,7 @@ function gather({ period = 'day', now = Date.now(), tasks = [], records = [], tu
   const finished = [], stuck = [];
   for (const t of Array.isArray(tasks) ? tasks : []) {
     if (!t || typeof t.state !== 'string') continue;
-    const since = num(t.stateSince), title = c(t.title, 120) || 'A task';
+    const since = num(t.stateSince), title = c(cleanTitle(t.title, 120, 'A task'), 120);
     const asks = t.openAsk || (Array.isArray(t.openApprovals) && t.openApprovals.length);
     if ((t.state === 'in_review' || t.state === 'done') && since >= from && since <= now) finished.push({ at: since, title, what: t.state === 'done' ? 'done' : 'ready for review' });
     else if (t.state === 'failed' && since >= from && since <= now) stuck.push({ at: since, title, why: 'failed' });
