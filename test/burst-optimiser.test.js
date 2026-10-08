@@ -203,14 +203,17 @@ test('a different Burst process (new pid) gets a fresh view, the old one is clos
   assert.deepEqual(r.children, [r.views[1]]);
 });
 
-test('Burst stops while shown: the watcher swaps to "Burst isn\'t answering" with Repair; it comes back when Burst does', async () => {
+test('Burst stops while shown: the watcher swaps to "Not responding" with Check again, Repair after repeated misses; it comes back when Burst does', async () => {
   const r = rig();
   await r.o.open();
   assert.equal(r.timers.size, 1);
   r.snap = down();
   await r.tick();
-  assert.equal(r.o.state().headline, "Burst isn't answering");
-  assert.equal(r.o.state().actions[0].kind, 'repair');
+  assert.equal(r.o.state().headline, 'Not responding');
+  assert.deepEqual(r.o.state().actions.map((a) => a.kind), ['retry']);
+  r.snap = { d: { kind: 'unreachable', misses: 3 }, url: null };
+  await r.tick();
+  assert.ok(r.o.state().actions.some((a) => a.kind === 'repair'), 'repair once it keeps failing');
   assert.equal(r.views[0].webContents.closed, true);
   assert.equal(r.states.at(-1).mode, 'empty');
   r.snap = present();

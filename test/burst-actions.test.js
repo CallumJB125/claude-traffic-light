@@ -67,7 +67,7 @@ test('view: chip states and "Turn Burst off" in every on state', () => {
   assert.match(View.statusView(present({ route: 'SECONDARY', until: '2026-10-06T14:05:00' })).chip.label, /^Secondary until \d\d:\d\d$/);
   assert.equal(View.statusView({ kind: 'untrusted', reason: 'r' }).chip.label, 'Untrusted');
   for (const d of [present(), present({ route: 'SECONDARY' }), present({ primaryFailures: 3 })]) assert.ok(View.statusView(d).actions.some((a) => a.kind === 'off'));
-  assert.equal(View.statusView(present({ active: false })).chip.label, 'Burst off');
+  assert.equal(View.statusView(present({ active: false })).chip.label, 'Off');
   assert.equal(View.statusView({ kind: 'broken', state: { version: '0.19.0' } }).actions[0].kind, 'repair');
   assert.deepEqual(View.statusView({ kind: 'not_installed' }).actions.map((a) => a.kind), ['install']);
   assert.ok(View.statusView(present({}, { canUpgrade: true, upToDate: false })).actions.some((a) => a.kind === 'update'));
@@ -168,7 +168,7 @@ test('chip: only normalized {tone,label}; null off-mac and when not installed; n
   assert.deepEqual(Object.keys(c).sort(), ['label', 'tone']);
   assert.deepEqual(c, { tone: 'amber', label: 'Secondary until 09:07' });
   assert.deepEqual(View.statusView(present()).chip, { tone: 'green', label: 'Primary' });
-  assert.deepEqual(View.statusView({ kind: 'unreachable', installed: true }).chip, { tone: 'grey', label: 'Burst off' });
+  assert.deepEqual(View.statusView({ kind: 'unreachable', installed: true }).chip, { tone: 'amber', label: 'Not responding' });
   assert.deepEqual(View.statusView({ kind: 'untrusted', reason: 'x' }).chip, { tone: 'red', label: 'Untrusted' });
 });
 

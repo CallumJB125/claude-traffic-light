@@ -109,10 +109,14 @@ function pageState(d, { platform = process.platform } = {}) {
   const act = (kind, label, primary = false) => ({ kind, label, ...(primary ? { primary: true } : {}) });
   if (platform !== 'darwin' || d.kind === 'unsupported') return { ...base, reason: 'unsupported', headline: 'Not available on this computer', detail: View.MAC_ONLY };
   switch (d.kind) {
+    case 'checking':
+      return { ...base, mode: 'loading', headline: 'Checking Burst…', detail: '', docs: false };
     case 'not_installed':
       return { ...base, headline: 'Not installed', detail: 'Claude Burst is a separate, open-source gateway that keeps Claude Code working through plan limits and shows where your usage goes. Turn it on and its dashboard appears here.', actions: [act('install', 'Turn on Burst…', true)] };
     case 'unreachable':
-      return { ...base, reason: 'down', headline: 'Burst isn\'t answering', detail: 'Burst is installed but its gateway is not responding. Repair it, or turn it on again.', actions: [act('repair', 'Repair', true), act('enable', 'Turn on'), act('off', 'Turn Burst off')] };
+      return (d.misses || 0) < View.RETRY_BEFORE_REPAIR
+        ? { ...base, reason: 'down', headline: 'Not responding', detail: 'Burst is installed but its gateway did not answer just now. A busy or restarting gateway usually answers on the next check.', actions: [act('retry', 'Check again', true)] }
+        : { ...base, reason: 'down', headline: 'Not responding', detail: 'Burst is installed but its gateway has not answered several checks in a row. Repair it, or turn it on again.', actions: [act('retry', 'Check again'), act('repair', 'Repair', true), act('enable', 'Turn on'), act('off', 'Turn Burst off')] };
     case 'broken':
       return { ...base, reason: 'down', headline: 'Burst needs repair', detail: 'Burst\'s configuration could not be read, so it is not working.', actions: [act('repair', 'Repair', true), act('off', 'Turn Burst off')] };
     case 'untrusted':

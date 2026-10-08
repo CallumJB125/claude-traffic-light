@@ -318,7 +318,7 @@ function checkDisk(ctx) {
 // burst-client does before it reads anything.
 function checkBurst(ctx) {
   const v = ctx.burst;
-  if ((ctx.platform || process.platform) !== 'darwin' || !v || v.kind === 'unsupported' || v.kind === 'not_installed') return null;
+  if ((ctx.platform || process.platform) !== 'darwin' || !v || v.kind === 'unsupported' || v.kind === 'not_installed' || v.kind === 'checking') return null;
   if (v.kind === 'untrusted') return { status: 'fail', detail: 'Whatever answers on Burst\'s port is not your Burst install, so Plexiform reads nothing from it.', next: 'Open the Burst console to check it, or turn Burst off.', fix: 'open-burst-console' };
   if (v.kind === 'off' && !v.version) return { status: 'info', detail: 'Burst is installed but not answering, so its trust can\'t be checked.' };
   return { status: 'ok', detail: 'Burst answered and is your install.' };
@@ -330,7 +330,7 @@ function burstState(ctx) {
   const f = ctx.burstFacts;
   if ((ctx.platform || process.platform) !== 'darwin' || !f || !f.detection) return null;
   const d = f.detection;
-  if (d.kind === 'unsupported' || d.kind === 'not_installed') return null;
+  if (d.kind === 'unsupported' || d.kind === 'not_installed' || d.kind === 'checking') return null;
   return { d, state: d.state || null, con: f.console || null };
 }
 

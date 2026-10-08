@@ -41,7 +41,12 @@ test('Burst states map to honest statuses and only allow-listed one-click action
   const kinds = (b) => tools(T.toolsView({ burst: b })).burst.actions.map((a) => a.kind);
   assert.deepEqual(kinds({ kind: 'not_installed' }), ['burst:install']);
   assert.deepEqual(kinds({ kind: 'off', detected: 'present' }), ['burst:enable']);
-  assert.deepEqual(kinds({ kind: 'off', detected: 'unreachable' }), ['burst:repair', 'burst:enable', 'burst:off']);
+  assert.deepEqual(kinds({ kind: 'off', detected: 'unreachable' }), [], 'one miss: nothing alarming to click');
+  assert.equal(tools(T.toolsView({ burst: { kind: 'off', detected: 'unreachable' } })).burst.status.label, 'Not responding');
+  assert.deepEqual(kinds({ kind: 'off', detected: 'unreachable', misses: 3 }), ['burst:repair', 'burst:enable', 'burst:off']);
+  assert.deepEqual(kinds({ kind: 'checking' }), []);
+  assert.equal(tools(T.toolsView({ burst: { kind: 'checking' } })).burst.status.label, 'Checking…');
+  assert.equal(tools(T.toolsView({ burst: { kind: 'off', detected: 'present' } })).burst.status.label, 'Off');
   assert.deepEqual(kinds({ ...ON, updateAvailable: true }), ['tab:dashboard', 'burst:update', 'burst:off']);
   assert.deepEqual(kinds({ kind: 'untrusted' }), ['burst:off']);
   const all = [{ kind: 'not_installed' }, { kind: 'off' }, ON, { kind: 'broken' }, { kind: 'untrusted' }].flatMap((b) => T.toolsView({ burst: b }).groups.flatMap((g) => g.tools).flatMap((t) => t.actions.map((a) => a.kind)));

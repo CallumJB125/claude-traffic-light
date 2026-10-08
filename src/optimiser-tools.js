@@ -24,11 +24,14 @@
     const base = { id: 'burst', name: 'Claude Burst', by: BY_BURST, what: 'A local gateway for Claude Code. When your plan hits its limit it tries other Claude models on your plan, then a provider you choose and pay for, so work keeps going.', saves: null, actions: [], link: 'burst' };
     switch (b.kind) {
       case 'unsupported': return { ...base, status: st('', MAC_ONLY), available: false };
+      case 'checking': return { ...base, status: st('', 'Checking…') };
       case 'not_installed': return { ...base, status: st('', 'Not installed'), actions: [act('burst:install', 'Turn on Burst…', true)] };
       case 'on': return { ...base, status: st('green', b.version ? `On, version ${b.version}` : 'On'), actions: [act('tab:dashboard', 'Open dashboard', true), ...(b.updateAvailable ? [act('burst:update', 'Update')] : []), act('burst:off', 'Turn Burst off')] };
       case 'off': return b.detected === 'present'
-        ? { ...base, status: st('amber', 'Installed, off'), actions: [act('burst:enable', 'Turn on', true), ...(b.updateAvailable ? [act('burst:update', 'Update')] : [])] }
-        : { ...base, status: st('red', 'Installed, not answering'), actions: [act('burst:repair', 'Repair', true), act('burst:enable', 'Turn on'), act('burst:off', 'Turn Burst off')] };
+        ? { ...base, status: st('amber', 'Off'), actions: [act('burst:enable', 'Turn on', true), ...(b.updateAvailable ? [act('burst:update', 'Update')] : [])] }
+        : (b.misses || 0) < 3
+          ? { ...base, status: st('amber', 'Not responding'), note: 'Its gateway did not answer just now. This page checks again on its own.' }
+          : { ...base, status: st('red', 'Not responding'), actions: [act('burst:repair', 'Repair', true), act('burst:enable', 'Turn on'), act('burst:off', 'Turn Burst off')] };
       case 'broken': return { ...base, status: st('red', 'Needs repair'), actions: [act('burst:repair', 'Repair', true), act('burst:off', 'Turn Burst off')] };
       default: return { ...base, status: st('red', 'Untrusted, nothing read'), actions: [act('burst:off', 'Turn Burst off')] };
     }

@@ -39,9 +39,9 @@ function createOptimiser({
 
   function snapshot() {
     const b = burst();
-    return b ? b.snapshot() : { d: { kind: platform === 'darwin' ? 'unreachable' : 'unsupported' }, url: null };
+    return b ? b.snapshot() : { d: { kind: platform === 'darwin' ? 'checking' : 'unsupported' }, url: null };
   }
-  const signature = ({ d }) => `${d.kind}|${d.state ? d.state.version : ''}|${d.pid ?? ''}`;
+  const signature = ({ d }) => `${d.kind}|${d.state ? d.state.version : ''}|${d.pid ?? ''}|${(d.misses || 0) >= 3}`;
 
   function drop() {
     const v = view;
@@ -87,7 +87,7 @@ function createOptimiser({
     wc.on('did-fail-load', (_e, code, _desc, _url, isMain) => {
       if (!isMain || code === -3) return; // -3: aborted by our own navigation
       if (++failures > 1) {
-        last = { ...Embed.pageState({ kind: 'unreachable' }, { platform }), detail: 'The dashboard did not load. Repair Burst, or try again.' };
+        last = { ...Embed.pageState({ kind: 'unreachable', misses: 99 }, { platform }), detail: 'The dashboard did not load twice in a row. Check again, or repair Burst.' };
         drop(); sendState(); sync();
       } else refresh({ reload: true });
     });

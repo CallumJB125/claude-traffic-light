@@ -108,3 +108,30 @@ test('main.js routes burst-* health fixes to runAction and passes the snapshot p
   assert.match(src, /snapshotFile: require\('\.\/src\/burst-snapshot\.js'\)\.snapshotPath\(ROOT_DIR\)/);
   assert.match(src, /burstFacts: BurstIpc\.healthFacts\(\)/);
 });
+
+test('before the first detection finishes everything reads "checking"; misses count up and reset; Check again re-detects', async () => {
+  const handlers = {};
+  let release;
+  const answers = [];
+  const client = { detect: () => (answers.length ? Promise.resolve(answers.shift()) : new Promise((r) => { release = r; })), adminUrl: () => null };
+  const api = Ipc.register({ utilityHandle: (c, a, f) => { handlers[c] = (e, ...x) => (a(e) ? f(e, ...x) : null); }, settingsOnly: () => true, optimiserAllowed: () => true, isMac: true, client, dialog: { showMessageBox: () => { throw new Error('no dialog'); } }, shell: {}, scriptDir: '/x' });
+  assert.equal(api.snapshot().d.kind, 'checking');
+  assert.equal(api.status().kind, 'checking');
+  assert.deepEqual(api.status().actions, [], 'no Repair or Turn off while checking');
+  assert.equal(api.status().chip.label, 'Checking…');
+  assert.equal(api.healthFacts().detection.kind, 'checking');
+  release({ kind: 'unreachable', installed: true });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(api.snapshot().d.misses, 1);
+  assert.deepEqual(api.status().actions.map((a) => a.kind), ['retry']);
+  assert.equal(api.status().chip.label, 'Not responding');
+  answers.push({ kind: 'unreachable', installed: true }, { kind: 'unreachable', installed: true });
+  assert.deepEqual(await handlers['burst:action']({}, { kind: 'retry' }), { ok: true, retried: true });
+  await api.refresh(true);
+  assert.equal(api.snapshot().d.misses, 3);
+  assert.ok(api.status().actions.some((a) => a.kind === 'repair'));
+  answers.push({ kind: 'not_installed' });
+  await api.refresh(true);
+  assert.equal(api.snapshot().d.misses, undefined);
+  assert.equal(api.status(), api.status(), 'This Mac and the optimiser read the same cached detection');
+});

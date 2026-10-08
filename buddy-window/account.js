@@ -197,7 +197,7 @@ function burstSection() {
         for (const a of v.actions) {
           buttons.append(el('button', { type: 'button', class: a.primary ? 'btn btn-primary' : 'btn', onclick: async () => {
             const r = await api.burstAction(a.kind, a.modes ? 'base-url' : '').catch(() => ({ ok: false, error: 'Something went wrong.' }));
-            result.textContent = r.cancelled ? 'Cancelled. Nothing changed.' : r.ok ? 'Started in Terminal.' : (r.error || '');
+            result.textContent = r.cancelled ? 'Cancelled. Nothing changed.' : r.retried ? '' : r.ok ? 'Started in Terminal.' : (r.error || '');
             poll();
           } }, a.label));
         }

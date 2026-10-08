@@ -128,3 +128,25 @@ test('sidebar: the optimiser\'s sections unfold under its entry only while it is
     dom.window.close();
   });
 });
+
+test('native page: "Checking Burst…" while the first detection runs; Check again asks main to re-detect, never acts', async () => {
+  const dom = new JSDOM(read('optimiser.html'), { runScripts: 'outside-only', url: 'file:///synthetic/optimiser.html' });
+  const acted = [];
+  let push;
+  dom.window.optimiserApi = { onState: (cb) => { push = cb; }, ready: () => {}, act: async (k) => { acted.push(k); return { ok: true }; }, refresh: () => acted.push('refresh'), openBrowser: async () => {}, openDocs: () => {} };
+  dom.window.eval(read('optimiser.js'));
+  const d = dom.window.document;
+  assert.equal(d.getElementById('loading').textContent, 'Checking Burst…');
+  push({ mode: 'loading', headline: 'Checking Burst…', detail: '', chip: { tone: 'grey', label: 'Checking…' }, actions: [], docs: false, canBrowser: false });
+  assert.equal(d.getElementById('loading').hidden, false);
+  assert.equal(d.getElementById('empty').hidden, true);
+  assert.equal(d.querySelectorAll('#actions button').length, 0);
+  push({ mode: 'empty', reason: 'down', headline: 'Not responding', detail: 'x', chip: { tone: 'amber', label: 'Not responding' }, actions: [{ kind: 'retry', label: 'Check again', primary: true }], docs: true, canBrowser: false });
+  const btns = [...d.querySelectorAll('#actions button')];
+  assert.deepEqual(btns.map((b) => b.textContent), ['Check again']);
+  btns[0].click();
+  await settle();
+  assert.deepEqual(acted, ['refresh']);
+  assert.equal(d.getElementById('note').textContent, 'Checking again…');
+  dom.window.close();
+});

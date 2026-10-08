@@ -52,7 +52,8 @@ function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usag
   const platform = isMac ? 'darwin' : 'other';
   const client = isMac ? (injected || require('./burst-client.js').createBurstClient({ home })) : null;
   const backoff = createProbeBackoff({ base: POLL_BASE_MS, max: POLL_MAX_MS });
-  let last = { kind: isMac ? 'unreachable' : 'unsupported' };
+  let last = { kind: isMac ? 'checking' : 'unsupported' };
+  let misses = 0;
   let lastView = View.statusView(last, { platform });
   let inflight = null;
   let trayAt = -Infinity;
@@ -62,8 +63,9 @@ function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usag
     if (!isMac) return lastView;
     if (!force && !backoff.due(Date.now())) return lastView;
     inflight = inflight || client.detect().then((d) => {
-      last = d;
-      lastView = View.statusView(d, { platform });
+      misses = d.kind === 'unreachable' ? misses + 1 : 0;
+      last = d.kind === 'unreachable' ? { ...d, misses } : d;
+      lastView = View.statusView(last, { platform });
       try { onView(lastView); } catch (e) { log('[burst] onView failed', e && e.message); }
       writeSnapshot().catch((e) => log('[burst] snapshot failed', e && (e.code || e.message)));
       backoff.probed({ ok: d.kind === 'present' || d.kind === 'not_installed', why: d.kind }, Date.now());
@@ -92,6 +94,7 @@ function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usag
   async function act(kind, mode) {
     if (!isMac) return { ok: false, error: View.MAC_ONLY };
     // The dashboard lives in Plexiform's Usage optimiser page; the browser is the secondary way in.
+    if (kind === 'retry') { backoff.reset(); await refresh(true); return { ok: true, retried: true }; }
     if (kind === 'open-dashboard' && opener) { opener(); return { ok: true }; }
     if (kind === 'open-dashboard' || kind === 'open-browser') {
       const url = last.kind === 'present' ? client.adminUrl() : null;
@@ -150,7 +153,7 @@ function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usag
     const v = await refresh();
     let band = null;
     if (present()) { try { band = Tools.bandStatus(await fresh('modStatus', () => client.modStatus())); } catch { band = null; } }
-    return { kind: v.kind, detected: last.kind, version: v.version, route: v.route, updateAvailable: v.updateAvailable, compaction: v.compaction, secondaryReady: present() ? last.state.secondaryReady === true : null, band };
+    return { kind: v.kind, detected: last.kind, misses: last.misses || 0, version: v.version, route: v.route, updateAvailable: v.updateAvailable, compaction: v.compaction, secondaryReady: present() ? last.state.secondaryReady === true : null, band };
   });
 
   // Widget and Usage header: the chip only, never the card's actions or anything raw. Null on other platforms.

@@ -23,6 +23,9 @@ const DEFAULT_CONSOLE = '127.0.0.1:7789';
 const CONSOLE_TIMEOUT_MS = 8000;
 const MAX_BYTES = 512 * 1024;
 const TIMEOUT_MS = 2000;
+// /api/state is ~40 KB and a busy or restarting gateway can take seconds; one retry before `unreachable`.
+const STATE_TIMEOUT_MS = 5000;
+const STATE_RETRY_MS = 300;
 const TEST_TIMEOUT_MS = 5000;
 const MODES = new Set(['transparent', 'base-url']);
 const COMPACTION_MODES = new Set(['fixed', 'intelligent']);
@@ -151,7 +154,7 @@ const systemInspect = {
   },
 };
 
-function createBurstClient({ home = os.homedir(), platform = process.platform, inspect = systemInspect, now = Date.now, timeoutMs = TIMEOUT_MS } = {}) {
+function createBurstClient({ home = os.homedir(), platform = process.platform, inspect = systemInspect, now = Date.now, timeoutMs = TIMEOUT_MS, stateTimeoutMs = Math.max(timeoutMs, STATE_TIMEOUT_MS), stateRetryMs = STATE_RETRY_MS } = {}) {
   const binPath = path.join(home, '.local', 'bin', 'claude-burst');
   const configPath = path.join(home, '.config', 'claude-burst', 'config.json');
   let addr = null;
@@ -272,7 +275,14 @@ function createBurstClient({ home = os.homedir(), platform = process.platform, i
     addr = parseAdminAddress(readAdminListen());
     if (!addr) return { kind: 'untrusted', installed: true, reason: 'The admin address in Burst\'s config is not on this Mac\'s loopback.' };
     let raw;
-    try { raw = await send('GET', '/api/state'); } catch (e) {
+    const readState = () => send('GET', '/api/state', { timeout: stateTimeoutMs });
+    try {
+      raw = await readState().catch(async (e) => {
+        if (e.code !== 'unreachable' && e.code !== 'timeout') throw e;
+        await new Promise((r) => setTimeout(r, stateRetryMs));
+        return readState();
+      });
+    } catch (e) {
       if (e.code === 'unreachable' || e.code === 'timeout') return { kind: 'unreachable', installed: true, reason: e.code };
       return { kind: 'untrusted', installed: true, reason: `Something on the admin port did not answer like Burst (${e.code || 'error'}).` };
     }
