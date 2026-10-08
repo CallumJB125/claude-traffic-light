@@ -9,6 +9,7 @@ import { sentryRouting } from './render-sentry.js';
 import { slackChannel } from './render-slack.js';
 import { trackerIntake } from './render-tracker.js';
 import { apiPanel } from './render-api.js';
+import { triggersPanel } from './render-triggers.js';
 
 const MODE_LABEL = { auto: 'Automatic', ask: 'Ask first', off: 'Off' };
 const DECISION_LABEL = { attempted: 'In progress', auto: 'Done automatically', failed: 'Failed', asked: 'Waiting for a yes', approved: 'Approved', denied: 'Denied', skipped: 'Skipped (off)' };
@@ -381,6 +382,7 @@ export function integrationsScreen(model) {
       h('h2', { id: 'integ-connected' }, 'Connected'),
       connected.length ? h('div', { class: 'integ-grid' }, connected.map((c) => connectedCard(c, vm)))
         : h('p', { class: 'muted' }, 'Nothing connected yet.')),
+    vm.local ? null : triggersPanel(m.triggers, vm, model.members),
     pending.length ? h('section', { class: 'integ-group', 'aria-labelledby': 'integ-pending' },
       h('h2', { id: 'integ-pending' }, 'Being set up'),
       h('div', { class: 'integ-grid' }, pending.map((p) => pendingCard(p, vm)))) : null,

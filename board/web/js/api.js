@@ -152,6 +152,11 @@ export const api = {
   deleteWebhook: (teamId, id) => mut('DELETE', `/api/teams/${enc(teamId)}/webhooks/${enc(id)}`),
   webhookDeliveries: (teamId, id) => call('GET', `/api/teams/${enc(teamId)}/webhooks/${enc(id)}/deliveries`),
   testWebhook: (teamId, id) => mut('POST', `/api/teams/${enc(teamId)}/webhooks/${enc(id)}/test`),
+  triggers: () => call('GET', '/api/triggers'),
+  triggerActivity: () => call('GET', '/api/triggers/activity'),
+  createTrigger: (body) => mut('POST', '/api/triggers', body),
+  setTriggerMode: (id, mode, confirm = false) => mut('POST', `/api/triggers/${enc(id)}/mode`, { mode, ...(confirm ? { confirm: true } : {}) }),
+  deleteTrigger: (id) => mut('DELETE', `/api/triggers/${enc(id)}`),
   // D98: a member links and unlinks only their own account; admins list and revoke.
   startIdentityLink: (id) => mut('POST', `/api/integrations/${enc(id)}/identity/start`),
   unlinkIdentity: (id) => mut('DELETE', `/api/integrations/${enc(id)}/identity`),

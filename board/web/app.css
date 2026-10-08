@@ -1089,6 +1089,12 @@ dialog::backdrop { background: var(--backdrop); transition: opacity 200ms ease; 
 .integ-token { display: flex; flex-direction: column; gap: 8px; }
 .integ-token .field { display: flex; flex-direction: column; gap: 4px; font-size: var(--text-sm); font-weight: 600; }
 .integ-prepare { display: flex; flex-direction: column; align-items: stretch; gap: 8px; }
+.trigger-rules { display: flex; flex-direction: column; gap: 8px; margin: 0 0 12px; padding: 0; list-style: none; }
+.trigger-rule { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); }
+.trigger-sentence { font-weight: 550; }
+.trigger-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.trigger-new { display: flex; flex-direction: column; gap: 8px; max-width: 560px; margin-bottom: 12px; }
+.trigger-new .field { display: flex; flex-direction: column; gap: 4px; font-size: var(--text-sm); font-weight: 600; }
 .integ-activity { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; font-size: var(--text-sm); }
 .integ-activity li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 6px 0; border-top: 1px solid var(--line); }
 .integ-act-what { font-weight: 550; }

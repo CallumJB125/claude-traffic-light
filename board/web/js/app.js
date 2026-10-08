@@ -28,6 +28,7 @@ import { integrationsScreen, connectWindowTarget, takeInput } from './render-int
 import { createApiPanel } from './api-panel.js';
 import { saveSentrySettings } from './sentry-settings.js';
 import { slackChannelPatch } from './render-slack.js';
+import { triggerActions } from './triggers-actions.js';
 import { teamScreen } from './render-team.js';
 import { emptyFold, pullJournal, windowMetrics, cardMetrics } from './metrics.js';
 import { VIEWS, plannerEnabled } from './views.js';
@@ -239,6 +240,7 @@ function setFilters(next) {
 const apiPanel = createApiPanel({
   api, teamId: () => state.me?.org?.id, get: () => state.pub, set: (patch) => { state.pub = { ...state.pub, ...patch }; }, update, withBusy, toast, copyText, errorText,
 });
+const triggers = triggerActions({ api, state, update, withBusy, errorText, toast });
 
 async function loadIntegrations() {
   state.integ = { ...state.integ, status: 'loading' };
@@ -246,6 +248,7 @@ async function loadIntegrations() {
   update();
   try {
     state.integ = { ...state.integ, status: 'ok', data: await api.integrations(), error: null };
+    triggers.load();
   } catch (err) {
     state.integ = { ...state.integ, status: 'error', error: errorText(err) };
   }
@@ -1570,6 +1573,7 @@ async function submitDialogForm(form, submitter) {
   if (kind.startsWith('api-') && apiPanel.submit(form)) return undefined;
   if (kind === 'sentry-settings') return submitSentrySettings(form);
   if (kind === 'slack-channel') return submitSlackChannel(form);
+  if (kind === 'trigger-new') return triggers.submit(form);
   if (kind === 'integ-prepare') return submitPrepare(form);
   if (kind === 'integ-start') return connectIntegration(form.dataset.provider, 'app_install', takeInput(form));
   if (kind === 'create-team') {
@@ -2141,6 +2145,13 @@ function onClick(e) {
     case 'integ-copy-url': copyText(el.dataset.url); return;
     case 'integ-token-cancel': state.integ = { ...state.integ, tokenFor: null }; update(); return;
     case 'integ-activity': toggleActivity(el.dataset.conn); return;
+    case 'trigger-dry-run': triggers.mode(el.dataset.trigger, 'dry_run'); return;
+    case 'trigger-off': triggers.mode(el.dataset.trigger, 'off'); return;
+    case 'trigger-on-ask': triggers.confirmOn(el.dataset.trigger); return;
+    case 'trigger-on': triggers.mode(el.dataset.trigger, 'on'); return;
+    case 'trigger-on-cancel': triggers.confirmOn(null); return;
+    case 'trigger-delete': triggers.remove(el.dataset.trigger); return;
+    case 'trigger-activity': triggers.toggleActivity(); return;
     case 'integ-disconnect-ask': state.integ = { ...state.integ, confirmDisconnect: el.dataset.conn }; update(); return;
     case 'integ-disconnect-cancel': state.integ = { ...state.integ, confirmDisconnect: null }; update(); return;
     case 'integ-disconnect': disconnectIntegration(el.dataset.conn); return;

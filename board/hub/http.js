@@ -44,6 +44,7 @@ import { Messaging } from './messaging.js';
 import { handleWebhook as billingWebhook } from './billing/webhook.js';
 import { registerHandoffRoutes } from './activity-handoff.js';
 import { registerReviewRoutes } from './reviews.js';
+import { registerTriggerRoutes } from './triggers.js';
 
 const MAX_BODY = 1024 * 1024;
 // A payment-provider event is a few KiB; unverified reads in flight are capped like connector webhooks.
@@ -325,6 +326,7 @@ export function createHttpHandler({ hub, api, config, integrations = null, githu
     if (params.instance_id) return hub.db.get('SELECT b.org_id FROM workflow_instances i JOIN boards b ON b.id=i.board_id JOIN orgs o ON o.id=b.org_id WHERE i.id=? AND o.deleted_at IS NULL',params.instance_id)?.org_id ?? null;
     if (params.plan_id) return hub.db.get('SELECT p.org_id FROM workflow_execution_plans p JOIN orgs o ON o.id=p.org_id WHERE p.id=? AND o.deleted_at IS NULL',params.plan_id)?.org_id ?? null;
     if (params.execution_preview_id) return hub.db.get('SELECT p.org_id FROM workflow_control_previews p JOIN orgs o ON o.id=p.org_id WHERE p.id=? AND o.deleted_at IS NULL',params.execution_preview_id)?.org_id ?? null;
+    if (params.trigger_id) return hub.db.get('SELECT t.org_id FROM event_triggers t JOIN orgs o ON o.id = t.org_id WHERE t.id = ? AND t.deleted_at IS NULL AND o.deleted_at IS NULL', params.trigger_id)?.org_id ?? null;
     if (params.execution_id) return hub.db.get('SELECT e.org_id FROM workflow_executions e JOIN orgs o ON o.id=e.org_id WHERE e.id=? AND o.deleted_at IS NULL',params.execution_id)?.org_id ?? null;
     if (r.pattern.startsWith('/api/client-items/:item_id')) return hub.db.get('SELECT p.workspace_id FROM client_items i JOIN client_projects p ON p.id = i.project_id WHERE i.id = ?', params.item_id)?.workspace_id ?? null;
     if (r.pattern.startsWith('/api/client-approval-requests/:approval_id')) return hub.db.get('SELECT p.workspace_id FROM client_approval_requests a JOIN client_items i ON i.id = a.item_id JOIN client_projects p ON p.id = i.project_id WHERE a.id = ?', params.approval_id)?.workspace_id ?? null;
@@ -567,6 +569,7 @@ export function createHttpHandler({ hub, api, config, integrations = null, githu
   route('PATCH', '/api/cards/:card_id', ({ member, params, body, ident }) => api.patchCard(member, params.card_id, body, { cred: ident?.cred ?? null }), { collaboration: true });
   registerHandoffRoutes(route, { hub, api, getLog: () => hub.activityLog ?? null });
   registerReviewRoutes(route, { hub, api });
+  registerTriggerRoutes(route, { hub });
   route('POST', '/api/cards/:card_id/actions/:action', ({ member, params, body, ident }) => api.action(member, params.card_id, params.action, body, { cred: ident?.cred ?? null }), { writeScope: 'card' });
   route('POST', '/api/cards/:card_id/archive', ({ member, params, body, ident }) => api.archive(member, params.card_id, body, { cred: ident?.cred ?? null }), { writeScope: 'archive' });
   route('POST', '/api/cards/:card_id/restore', ({ member, params, body, ident }) => api.restore(member, params.card_id, body, { cred: ident?.cred ?? null }), { writeScope: 'archive' });

@@ -217,6 +217,8 @@ its URL (a PR comment names its PR by html URL). Writes a member starts from a c
 status, `github/cards.js`) run inside the connection's `act()` under declared actions an admin can switch off, and
 are limited per member and per card.
 
+**Event triggers (docs/event-triggers.md).** `hub/triggers.js` wraps the `github` and `sentry` connectors at registration (`Triggers.observe`): after your `handleWebhook` succeeds, the same verified payload may fire a team admin's trigger rules. A connector does nothing for it, and statuses still never start an AI run: a trigger is a separate, explicit, admin-enabled object whose actions cannot dispatch, move a card or edit code.
+
 **Planned interface (not built yet; do not rely on it).** `signals: ['incident']`
 (S-C3, D99): inside `act()`, `s.signal(kind, {card_id})` for a card **this connection created** writes one
 journal row `integration.signal` `{connection_id, kind, card_id}` (ids only, never text), at most one per

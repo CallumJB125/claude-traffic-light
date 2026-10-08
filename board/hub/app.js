@@ -9,6 +9,7 @@ import { createIntegrations } from './integrations/registry.js';
 import { connectorsFor } from './integrations/index.js';
 import { createGitHubApp } from './integrations/github/app.js';
 import { createGitHubCards } from './integrations/github/cards.js';
+import { Triggers } from './triggers.js';
 import { createServer } from 'node:http'; // privacy-flow: local-board-hub
 import { randomBytes } from 'node:crypto';
 import { WebSocketServer } from 'ws'; // privacy-flow: local-board-hub
@@ -118,7 +119,8 @@ function buildApp(config, { db, clock, log, github, fetchImpl, timers, mailer })
   // The hub's own GitHub App (step 4), from the operator's GITHUB_APP_* settings.
   const githubApp = config.githubApp ? createGitHubApp(config.githubApp, { fetchImpl, now: clock.wall }) : null;
   hub.hasGitHubApp = !!githubApp;
-  for (const c of connectorsFor(config, { githubApp })) integrations.register(c);
+  hub.triggers = new Triggers(hub, { api, bus, log });
+  for (const c of connectorsFor(config, { githubApp })) integrations.register(hub.triggers.observe(c));
   const githubCards = githubApp ? createGitHubCards({ hub, api, integrations, app: githubApp }) : null;
   // A hosted runner's clone/push tokens (GET /api/runner/v1/repo-token): accounts mode only.
   hub.repoTokens = hub.hostedRunners ? new HostedRepoTokens(hub, { app: githubApp, integrations }) : null;
