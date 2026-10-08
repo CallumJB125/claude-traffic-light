@@ -6,6 +6,7 @@ const path = require('node:path');
 const WorkRecord = require('../src/work-record');
 const { factsFrom } = require('../src/handover-transcripts');
 const { createWorkCapture } = require('../src/work-capture');
+const { testTempDir } = require('./helpers/tmp');
 
 const INSTALL = '11111111-2222-4333-8444-555555555555';
 const HOME = '/Users/someone';
@@ -17,7 +18,7 @@ const facts = (extra = {}) => ({
   files: { '/Users/someone/dev/app/src/webhook.js': 'edit', 'test/webhook.test.js': 'edit', '/Users/someone/dev/app/README.md': 'read', '/etc/hosts': 'read', '../other/secret.js': 'edit' },
   ...extra,
 });
-const tmp = (t) => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'work-record-')); t.after(() => fs.rmSync(d, { recursive: true, force: true })); return d; };
+const tmp = (t) => { const d = testTempDir('work-record-'); t.after(() => fs.rmSync(d, { recursive: true, force: true })); return d; };
 
 test('a record is titled by the latest request, never the folder alone, with goal, summary, repo-relative files and branch', () => {
   const r = WorkRecord.build({ install_id: INSTALL, o: o(), raw: { updatedAt: '2026-10-07T10:05:00.000Z' }, facts: facts(), home: HOME });

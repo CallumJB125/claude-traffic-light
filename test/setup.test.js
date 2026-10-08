@@ -8,6 +8,7 @@ const Cameos = require('../cameos');
 const S = require('../setup');
 
 const zlib = require('zlib');
+const { testTempDir } = require('./helpers/tmp');
 // A distinct, valid 256×256 PNG per seed (cameos.js only checks the PNG header and size).
 function photo(seed) {
   const chunk = (type, data) => {
@@ -26,7 +27,7 @@ function photo(seed) {
   const raw = Buffer.concat(Array.from({ length: Cameos.SIZE }, () => row));
   return Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
 }
-const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'setup-'));
+const tmp = () => testTempDir('setup-');
 
 // A user's cameo dir holding 256×256 PNGs.
 function cameoDir(faces) {

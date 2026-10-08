@@ -9,12 +9,13 @@ const Ipc = require('../src/burst-ipc.js');
 const H = require('../src/burst-handover.js');
 const Spend = require('../src/burst-spend.js');
 const { usageReport, compactionState } = require('./fixtures/fake-burst.js');
+const { testTempDir } = require('./helpers/tmp');
 
 const NOTE = '## 2026-10-06 Session\nWorking on parser.\n';
 function setup({ state = compactionState([{ session: 's-1', compactions: 1, requests: 3, saved_tokens: 100, saved_usd: 0.5, net_usd: 0.25 }]), live = true, history = null } = {}) {
   const handlers = {};
   const sent = [], hub = [], files = [];
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'burst-s3-'));
+  const dir = testTempDir('burst-s3-');
   const detect = { kind: 'present', state: Spend && require('../src/burst-client.js') && { version: '0.19.0', route: 'SECONDARY', active: true, secondaryReady: true, until: '', claim: '', mode: 'base-url', configError: '', inactiveReason: '', rejected: [], primaryFailures: 0, compaction: Spend.normalizeCompaction(state) }, capabilities: { state: true, usage: true, handoverAudit: true, handoverFile: true, upgradeStatus: false, testConnection: false }, upgrade: null };
   const client = {
     detect: async () => detect, adminUrl: () => null,

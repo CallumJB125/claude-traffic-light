@@ -7,11 +7,12 @@ const path = require('node:path');
 const Actions = require('../src/session-actions.js');
 const Links = require('../src/session-links.js');
 const { createSessionBoards } = require('../buddy-window/session-boards.js');
+const { testTempDir } = require('./helpers/tmp');
 
 const CWD = '/Users/me/work/app';
 const row = (over = {}) => ({ source: 'codex', sessionId: 's1', cwd: CWD, ...over });
 function rig(over = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sact-'));
+  const dir = testTempDir('sact-');
   const links = Links.create({ file: path.join(dir, 'l.json') });
   const log = { clip: [], pages: [], linked: [], created: [], captured: [] };
   const a = Actions.create({

@@ -11,13 +11,14 @@ const crypto = require('node:crypto');
 const M = require('../src/rename-migration.js');
 const Adapters = require('../adapters/index.js');
 const McpInstall = require('../mcp-install.js');
+const { testTempDir } = require('./helpers/tmp');
 
 const Runtime = Adapters.Runtime;
 const Claude = Adapters.get('claude');
 const quiet = () => {};
 
 function tmpHome() {
-  return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-rename-')));
+  return fs.realpathSync(testTempDir('ctl-rename-'));
 }
 
 // Every file under dir (symlinks as their target text) → its sha256, plus each entry's mtime.

@@ -6,6 +6,7 @@ const path = require('path');
 const { spawnSync, spawn } = require('child_process');
 
 const A = require('../agents.js');
+const { testTempDir } = require('./helpers/tmp');
 const SET_STATUS = path.join(__dirname, '..', 'hooks', 'set-status.js');
 const HOST = os.hostname().split('.')[0];
 
@@ -13,7 +14,7 @@ const HOST = os.hostname().split('.')[0];
 const NOW = 1789040000000;
 const LEAD = 'lead0001-aaaa-bbbb';
 function scanTeam(members, inboxes = {}) {
-  const teamsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-teams-'));
+  const teamsDir = testTempDir('ctl-teams-');
   const dir = path.join(teamsDir, `session-${LEAD.slice(0, 8)}`);
   fs.mkdirSync(path.join(dir, 'inboxes'), { recursive: true });
   const lead = { agentId: 'team-lead@x', name: 'team-lead', agentType: 'team-lead', tmuxPaneId: 'leader', joinedAt: NOW - 60000 };
@@ -56,7 +57,7 @@ test('teams: finished members alone do not make it team mode; the 6 h cap still 
 // A teammate's own transcript is its heartbeat: fresh → working, quiet → waiting.
 const TEAM_CWD = '/work/proj';
 function teamFixture(members) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-beat-'));
+  const root = testTempDir('ctl-beat-');
   const teamsDir = path.join(root, 'teams');
   const projectsDir = path.join(root, 'projects');
   const teamName = `session-${LEAD.slice(0, 8)}`;
@@ -180,7 +181,7 @@ test('teams: transcript path is cached; an unresolved member is rescanned at mos
 
 // ── hooks/set-status.js ─────────────────────────────────────────────────────
 function tmpHome() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-state-'));
+  return testTempDir('ctl-state-');
 }
 function run(home, signal, payload, env = {}) {
   const r = spawnSync(process.execPath, [SET_STATUS, signal], {
@@ -509,7 +510,7 @@ test('set-status: a permission denial in a turn that carries on goes back to wor
 
 // ── agents.js: sweeping session files no stale window can show ──────────────
 test('sweepStaleFiles deletes only .json/.tmp files older than maxAge, by mtime alone', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-sweep-'));
+  const dir = testTempDir('ctl-sweep-');
   const now = Date.now();
   const put = (name, ageMs, body = '{}') => {
     const f = path.join(dir, name);
@@ -561,7 +562,7 @@ test('set-status: parallel SubagentStart/Stop hooks lose no agent (the lock)', a
 });
 
 test('withLock: waits for a live lock, breaks a stale one, and never hangs', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-lock-'));
+  const dir = testTempDir('ctl-lock-');
   const file = path.join(dir, 's.json');
   const lock = `${file}.lock`;
   fs.writeFileSync(lock, '');
@@ -687,7 +688,7 @@ test('userTouched: a notification ask counts only once it outlived the classifie
 });
 
 test('withLock: breaking a stale lock never deletes a live one, and release only frees your own', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-lock2-'));
+  const dir = testTempDir('ctl-lock2-');
   const file = path.join(dir, 's.json');
   const lock = `${file}.lock`;
   // A waiter judged the old lock stale, but by the time it acts a fresh lock
@@ -766,7 +767,7 @@ test('retryTransient: Windows retries EPERM/EACCES/EBUSY a few times; other OSes
 });
 
 test('tryLock: on Windows a lock that cannot be created for EPERM is contention, elsewhere an error', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-lock-'));
+  const dir = testTempDir('ctl-lock-');
   const lock = path.join(dir, 'missing-dir', 'x.lock');
   // ENOENT (no directory) stays an error everywhere.
   assert.throws(() => SessionState.tryLock(lock, 't', 'win32'), { code: 'ENOENT' });

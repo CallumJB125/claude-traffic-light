@@ -20,6 +20,7 @@ const { spawn } = require('node:child_process');
 const { createAccountFlow } = require('../buddy-window/account-flow');
 const { createAccountClient } = require('../buddy-window/accounts');
 const { createWorkspaceStore, normalizeHubUrl, normalizeLinkHub, accessWsId } = require('../buddy-window/workspaces');
+const { testTempDir } = require('./helpers/tmp');
 
 const BOARD = path.join(__dirname, '..', 'board');
 const PRELOAD = path.join(__dirname, 'fixtures', 'oauth-provider-redirect.mjs');
@@ -165,7 +166,7 @@ function browser(hub) {
 }
 
 test('Google and GitHub sign-in on the real hub: desktop loopback flow, browser flow, session, sign-out, no email code', { skip: !ready && 'board dependencies not installed', timeout: 60_000 }, async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plexiform-oauth-e2e-'));
+  const root = testTempDir('plexiform-oauth-e2e-');
   const hex = (n) => crypto.randomBytes(n).toString('hex');
   const clients = {
     googleClientId: `${hex(6)}-desk.apps.test`, googleClientSecret: hex(18), githubClientId: `Iv-desk-${hex(6)}`, githubClientSecret: hex(20),

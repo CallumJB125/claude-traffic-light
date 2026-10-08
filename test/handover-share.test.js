@@ -8,11 +8,12 @@ const Links = require('../src/session-links.js');
 const Share = require('../src/handover-share.js');
 const Handover = require('../src/session-handover.js');
 const BurstHandover = require('../src/burst-handover.js');
+const { testTempDir } = require('./helpers/tmp');
 
 const DOC = `${Handover.MARKER}\n# Session handover\n- Working folder: /Users/me/work/app\n- token sk-ant-api03-aaaaaaaaaaaaaaaaaaaaaaaaaaaa\n`;
 const DEST = { kind: 'team', hub: 'https://hub.example.test', team_id: 't1', board_id: 'b1' };
 function rig(over = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hshare-'));
+  const dir = testTempDir('hshare-');
   const links = Links.create({ file: path.join(dir, 'links.json') });
   const calls = []; let time = 1_000_000;
   const share = Share.create({

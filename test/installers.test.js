@@ -13,6 +13,7 @@ const config = require('../electron-builder.config.js');
 const pkg = require('../package.json');
 const R2 = require('../scripts/release-r2.js');
 const Smoke = require('../src/smoke.js');
+const { testTempDir } = require('./helpers/tmp');
 
 test('installer names say the brand, and so do productName and appId', () => {
   assert.equal(config.productName, Brand.name);
@@ -109,7 +110,7 @@ test('N2: without WINDOWS_RELEASE no Windows file or latest.yml is staged, fetch
   // a Windows-only staging has nothing to promote
   assert.throws(() => R2.promotePlan('1.2.0', WIN_NAMES), /no feed file/);
 
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stage-win-'));
+  const dir = testTempDir('stage-win-');
   for (const n of names) fs.writeFileSync(path.join(dir, n), n);
   const off = fakeAws(new Map());
   R2.main(['stage', '1.2.0', dir], off.run, () => {}, R2_ENV);
@@ -120,7 +121,7 @@ test('N2: without WINDOWS_RELEASE no Windows file or latest.yml is staged, fetch
   assert.deepEqual(keys(on).sort(), names.map((n) => `1.2.0/${n}`).sort());
 
   const bucket = () => new Map(names.map((n) => [`1.2.0/${n}`, n]));
-  const signed = fs.mkdtempSync(path.join(os.tmpdir(), 'signed-win-'));
+  const signed = testTempDir('signed-win-');
   fs.writeFileSync(path.join(signed, 'release.json'), 'm');
   fs.writeFileSync(path.join(signed, 'release.json.sig'), 's');
   const roots = (b) => [...b.keys()].filter((k) => !k.includes('/')).sort();
@@ -131,10 +132,10 @@ test('N2: without WINDOWS_RELEASE no Windows file or latest.yml is staged, fetch
   R2.main(['promote', '1.2.0', '--manifest-dir', signed], fakeAws(pOn).run, () => {}, R2_WIN);
   assert.deepEqual(roots(pOn), [...names, 'release.json', 'release.json.sig'].sort());
 
-  const fOff = fs.mkdtempSync(path.join(os.tmpdir(), 'fetch-win-'));
+  const fOff = testTempDir('fetch-win-');
   R2.main(['fetch-staged', '1.2.0', fOff], fakeAws(bucket()).run, () => {}, R2_ENV);
   assert.deepEqual(fs.readdirSync(fOff).sort(), [...OTHER_NAMES].sort());
-  const fOn = fs.mkdtempSync(path.join(os.tmpdir(), 'fetch-win-'));
+  const fOn = testTempDir('fetch-win-');
   R2.main(['fetch-staged', '1.2.0', fOn], fakeAws(bucket()).run, () => {}, R2_WIN);
   assert.deepEqual(fs.readdirSync(fOn).sort(), [...names].sort());
   // only the exact string 'true' turns it on
@@ -147,7 +148,7 @@ test('N2: without WINDOWS_RELEASE no Windows file or latest.yml is staged, fetch
 test('R2 promote copies the staged files, then uploads the manifest signed now: <version>/ first, the root last', () => {
   const bucket = new Map([['1.1.0/latest.yml', 'y'], ['1.1.0/Plexiform-1.1.0-win-x64.exe', 'e']]);
   const { run, calls } = fakeAws(bucket);
-  const signed = fs.mkdtempSync(path.join(os.tmpdir(), 'signed-'));
+  const signed = testTempDir('signed-');
   fs.writeFileSync(path.join(signed, 'release.json'), 'm');
   fs.writeFileSync(path.join(signed, 'release.json.sig'), 's');
   R2.main(['promote', '1.1.0', '--manifest-dir', signed], run, () => {}, R2_WIN);
@@ -167,7 +168,7 @@ test('R2 promote copies the staged files, then uploads the manifest signed now: 
 
 // M7 (code review): re-running a tag must not change a release that is live.
 test('R2 stage refuses a version that was already promoted', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stage-'));
+  const dir = testTempDir('stage-');
   fs.writeFileSync(path.join(dir, 'latest.yml'), 'y');
   const { run } = fakeAws(new Map([['1.2.0/release.json', 'm'], ['1.2.0/latest.yml', 'y']]));
   assert.throws(() => R2.main(['stage', '1.2.0', dir], run, () => {}, R2_WIN), /already promoted/);
@@ -191,14 +192,14 @@ test('R2: only staging may run without its secrets; promote and the fetches fail
 });
 
 test('R2 fetch-live and fetch-staged download what is there, and nothing when nothing is live', () => {
-  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'live-'));
+  const out = testTempDir('live-');
   const empty = fakeAws(new Map());
   R2.main(['fetch-live', out], empty.run, () => {}, R2_ENV);
   assert.deepEqual(fs.readdirSync(out), []);
   const { run } = fakeAws(new Map([['beta/release.json', 'm'], ['beta/release.json.sig', 's'], ['beta/1.0.0-beta.2/beta.yml', 'y'], ['beta/1.0.0-beta.2/release.json', 'm']]));
   R2.main(['fetch-live', out, '--beta'], run, () => {}, R2_ENV);
   assert.deepEqual(fs.readdirSync(out).sort(), ['release.json', 'release.json.sig']);
-  const staged = fs.mkdtempSync(path.join(os.tmpdir(), 'staged-'));
+  const staged = testTempDir('staged-');
   R2.main(['fetch-staged', '1.0.0-beta.2', staged, '--beta'], run, () => {}, R2_WIN);
   assert.deepEqual(fs.readdirSync(staged), ['beta.yml'], 'the staged files, never a manifest');
 });
@@ -206,14 +207,14 @@ test('R2 fetch-live and fetch-staged download what is there, and nothing when no
 // N4 (security re-review): a failed listing read as "nothing there" could stage over a promoted version.
 test('N4: an aws ls failure is an error with its stderr; only a genuinely empty prefix is empty', () => {
   const failing = (err) => () => { throw err; };
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stage-ls-'));
+  const dir = testTempDir('stage-ls-');
   fs.writeFileSync(path.join(dir, 'latest-mac.yml'), 'y');
   const denied = awsFail(255, 'An error occurred (AccessDenied) when calling the ListObjectsV2 operation: Access Denied');
   assert.throws(() => R2.main(['stage', '1.2.0', dir], failing(denied), () => {}, R2_ENV), /aws s3 ls s3:\/\/bk\/1\.2\.0\/ failed \(exit 255\): An error occurred \(AccessDenied\)/);
   // exit 1 with something on stderr is a failure too, not an empty prefix
   assert.throws(() => R2.main(['fetch-live', dir], failing(awsFail(1, 'Could not connect to the endpoint URL')), () => {}, R2_ENV), /exit 1\): Could not connect/);
   assert.throws(() => R2.main(['fetch-staged', '1.2.0', dir], failing(Object.assign(new Error('spawn aws ENOENT'), { code: 'ENOENT' })), () => {}, R2_ENV), /failed: spawn aws ENOENT/);
-  const signed = fs.mkdtempSync(path.join(os.tmpdir(), 'signed-ls-'));
+  const signed = testTempDir('signed-ls-');
   for (const n of ['release.json', 'release.json.sig']) fs.writeFileSync(path.join(signed, n), n);
   assert.throws(() => R2.main(['promote', '1.2.0', '--manifest-dir', signed], failing(denied), () => {}, R2_ENV), /AccessDenied/);
   // stage asks for stderr to be piped to it, so it can say what went wrong
@@ -226,11 +227,11 @@ test('N4: an aws ls failure is an error with its stderr; only a genuinely empty 
 
 test('N4: fetch-live --version downloads the release.json that version was promoted with', () => {
   const { run } = fakeAws(new Map([['release.json', 'live'], ['release.json.sig', 'ls'], ['1.2.0/release.json', 'old'], ['1.2.0/release.json.sig', 'os'], ['1.2.0/latest-mac.yml', 'y']]));
-  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'promoted-'));
+  const out = testTempDir('promoted-');
   R2.main(['fetch-live', out, '--version', '1.2.0'], run, () => {}, R2_ENV);
   assert.equal(fs.readFileSync(path.join(out, 'release.json'), 'utf8'), 'old');
   assert.equal(fs.readFileSync(path.join(out, 'release.json.sig'), 'utf8'), 'os');
-  const none = fs.mkdtempSync(path.join(os.tmpdir(), 'promoted-'));
+  const none = testTempDir('promoted-');
   const logs = [];
   R2.main(['fetch-live', none, '--version', '1.1.0'], run, (m) => logs.push(m), R2_ENV);
   assert.deepEqual(fs.readdirSync(none), []);
@@ -239,7 +240,7 @@ test('N4: fetch-live --version downloads the release.json that version was promo
 });
 
 test('the smoke test refuses a real home or data folder', () => {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'smoke-t-'));
+  const tmp = testTempDir('smoke-t-');
   assert.equal(Smoke.unsafeReason({ home: tmp, dataDir: tmp, tmp: os.tmpdir() }), null);
   assert.match(Smoke.unsafeReason({ home: os.homedir(), dataDir: tmp, tmp: os.tmpdir() }), /HOME .* is not a temp folder/);
   assert.match(Smoke.unsafeReason({ home: tmp, dataDir: undefined, tmp: os.tmpdir() }), /not set/);
@@ -507,7 +508,7 @@ test('the builder config has no update-feed override: the feed is brand.js', () 
 // M10 (code review): prerm against stub getent, runuser, readlink and timeout.
 test('prerm: only login accounts and root with Plexiform data, each run as itself under a time limit; never on upgrade', { skip: process.platform === 'win32' && 'POSIX sh' }, () => {
   const { execFileSync } = require('child_process');
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'prerm-'));
+  const root = testTempDir('prerm-');
   const bin = path.join(root, 'bin');
   const log = path.join(root, 'calls.log');
   fs.mkdirSync(bin);

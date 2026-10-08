@@ -9,12 +9,13 @@ const { spawnSync } = require('child_process');
 
 const U = require('../usage.js');
 const R = require('../rules.js');
+const { testTempDir } = require('./helpers/tmp');
 
 const SET_STATUS = path.join(__dirname, '..', 'hooks', 'set-status.js');
 const HOST = os.hostname().split('.')[0];
 const NOW = new Date(2026, 8, 10, 12, 0, 0).getTime();
 const DAY = 86400000;
-const tmp = (p = 'ctl-router-') => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), p)));
+const tmp = (p = 'ctl-router-') => fs.realpathSync(testTempDir(p));
 
 test('rules v6: the router signals are gone, and saved rules using them are dropped or disabled', () => {
   for (const id of ['routed-cheap', 'escalated', 'delegated-read']) assert.ok(!R.SIGNALS.some((s) => s.id === id), id);

@@ -2,8 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tenancy } from './tenancy/fixture.js';
 import { createApp } from '../app.js';
@@ -11,6 +10,7 @@ import { testConfig, fakeClock, fakeGitHub } from './helpers.js';
 import { silentLogger } from '../log.js';
 import { WorkCapture } from '../work-capture.js';
 import { dumpDb, startAccounts } from './accounts-helpers.js';
+import { testTempDir } from '../../shared/test-support/tmp.js';
 
 const observation = (repo, extra = {}) => ({ install_id: randomUUID(), provider: 'codex', session_id: 'session-123', task_id: 'task-456', repo_id: repo,
   title: 'Observed work', status: 'working', ...extra });
@@ -298,7 +298,7 @@ test('durable mapping and tombstone survive hub restart; old observations never 
 });
 
 test('embedded local owner captures no-repo work through actual private cookie and preserves restart mapping', async (t) => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'capture-local-')), cookie = `board_local=${'x'.repeat(64)}`;
+  const dataDir = testTempDir('capture-local-'), cookie = `board_local=${'x'.repeat(64)}`;
   const apps = [];
   t.after(async () => { for (const app of [...apps].reverse()) await app.close(); rmSync(dataDir, { recursive: true, force: true }); });
   const config = testConfig({ auth: 'local', localSecret: 'x'.repeat(64), devLoginSecret: null, dataDir, dbPath: join(dataDir, 'board.db') });

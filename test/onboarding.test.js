@@ -13,6 +13,7 @@ const Adapters = require('../adapters/index.js');
 const SetupChecklist = require('../src/setup-checklist.js');
 const BuddyPages = require('../buddy-window/pages');
 const Help = require('../help.js');
+const { testTempDir } = require('./helpers/tmp');
 
 const root = path.join(__dirname, '..');
 const source = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
@@ -25,7 +26,7 @@ const contents = () => ({ mainFrame: {}, isDestroyed: () => false, send() {} });
 const event = (sender) => ({ sender, senderFrame: sender.mainFrame });
 
 function rig({ claudeAuto = false } = {}) {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'plex-onboard-'));
+  const home = testTempDir('plex-onboard-');
   const dataDir = path.join(home, 'data');
   fs.mkdirSync(path.join(home, '.codex'), { recursive: true });
   fs.mkdirSync(path.join(home, '.gemini'), { recursive: true });
@@ -176,7 +177,7 @@ test('budget writes the Spend daily budget; navigation is a short allow-list and
 
 test('first run opens setup (not Help) once; an install that already saw Help is left alone', () => {
   const run = ({ markers = [], devRun = false }) => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'plex-onboard-root-'));
+    const dir = testTempDir('plex-onboard-root-');
     for (const m of markers) fs.writeFileSync(path.join(dir, m), 'x');
     const shown = [];
     const ctx = { fs, path, ROOT_DIR: dir, Help, IS_DEV_RUN: devRun, console, createOnboardingWindow: () => shown.push('setup'), createHelpWindow: () => shown.push('help') };

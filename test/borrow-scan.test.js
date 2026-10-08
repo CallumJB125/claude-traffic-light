@@ -8,11 +8,12 @@ const path = require('path');
 const { scan, EXEC_ALLOWED, PARSERS } = require('../src/borrow/scan.js');
 const { SOURCES } = require('../src/borrow/registry.js');
 const { blockedReason } = require('../src/borrow/blocklist.js');
+const { testTempDir } = require('./helpers/tmp');
 
 // Every temp folder a test makes is removed when the file's tests finish.
 const made = [];
 test.after(() => { for (const d of made) fs.rmSync(d, { recursive: true, force: true }); });
-const tempDir = (prefix) => { const d = fs.mkdtempSync(path.join(os.tmpdir(), prefix)); made.push(d); return d; };
+const tempDir = (prefix) => { const d = testTempDir(prefix); made.push(d); return d; };
 
 function tempHome(files, links = {}) {
   const home = tempDir('borrow-home-');

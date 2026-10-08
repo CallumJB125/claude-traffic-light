@@ -8,13 +8,14 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { createWorktreeShare } = require('../src/worktree-share.js');
+const { testTempDir } = require('./helpers/tmp');
 
 const NOW = Date.parse('2026-10-07T10:00:00Z');
 const at = (ms) => new Date(NOW - ms).toISOString();
 const git = (cwd, ...args) => execFileSync('git', args, { cwd, stdio: 'pipe' });
 
 function repo() {
-  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'wt-share-')));
+  const dir = fs.realpathSync(testTempDir('wt-share-'));
   const main = path.join(dir, 'main');
   fs.mkdirSync(path.join(main, 'sub'), { recursive: true });
   git(main, 'init', '-q');

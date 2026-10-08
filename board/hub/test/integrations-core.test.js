@@ -3,14 +3,14 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, chmodSync, mkdirSync, symlinkSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync, chmodSync, mkdirSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { openDb } from '../db.js';
 import { createBus, DEAD_AFTER } from '../bus.js';
 import { createVault, loadKey, keyIdOf } from '../vault.js';
 import { startHub, runMsg, settle } from './helpers.js';
+import { testTempDir } from '../../shared/test-support/tmp.js';
 
 // ── D40 ──────────────────────────────────────────────────────────────────
 
@@ -193,7 +193,7 @@ test('loadKey: env hex/base64, keyfile outside the data dir only, 0600 only, 32 
   assert.equal(loadKey({ env: { BOARD_ENC_KEY: b64 }, hasParentPort: false }).toString('base64'), b64);
   assert.throws(() => loadKey({ env: { BOARD_ENC_KEY: 'short' }, hasParentPort: false }), /32 bytes/);
   assert.equal(loadKey({ env: {}, hasParentPort: false }), null);
-  const dir = mkdtempSync(join(tmpdir(), 'vault-'));
+  const dir = testTempDir('vault-');
   const data = join(dir, 'data');
   const inside = join(data, 'enc.key');
   assert.throws(() => loadKey({ env: { BOARD_ENC_KEY_FILE: inside }, dataDir: data, hasParentPort: false }), /outside BOARD_DATA_DIR/);

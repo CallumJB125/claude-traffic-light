@@ -8,6 +8,7 @@ const path = require('node:path');
 const Spend = require('../src/burst-spend.js');
 const { createBurstClient } = require('../src/burst-client.js');
 const { createFakeBurst, usageReport, compactionState } = require('./fixtures/fake-burst.js');
+const { testTempDir } = require('./helpers/tmp');
 
 test('Through Burst: secondary spend stands alone, source named, plan traffic is a count never dollars', () => {
   const v = Spend.throughBurstView(Spend.normalizeUsage(usageReport()));
@@ -37,7 +38,7 @@ test('per-session overflow comes only from secondary rows (no double counting wi
 
 test('client.usage and compaction stats come from the fake Burst, GET only, normalized', async () => {
   const fake = await createFakeBurst({ '/api/usage': { body: usageReport() }, '/api/state': { body: compactionState([{ session: 's-1', compactions: 2, requests: 9, saved_tokens: 5000, saved_usd: 1.25, net_usd: 0.75, secret: 'x' }]) } });
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'burst-spend-'));
+  const home = testTempDir('burst-spend-');
   const bin = path.join(home, '.local', 'bin', 'claude-burst');
   fs.mkdirSync(path.dirname(bin), { recursive: true });
   fs.writeFileSync(bin, '#!/bin/sh\n', { mode: 0o755 });
@@ -83,7 +84,7 @@ test('learnedThresholds: names, Compact at in force and why; no roots or learner
 
 test('learnedThresholds through the fake Burst: one GET to /api/intelligent-compaction', async () => {
   const fake = await createFakeBurst({ '/api/state': { body: compactionState([]) }, '/api/intelligent-compaction': { body: learnedBody() } });
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'burst-learned-'));
+  const home = testTempDir('burst-learned-');
   const bin = path.join(home, '.local', 'bin', 'claude-burst');
   fs.mkdirSync(path.dirname(bin), { recursive: true });
   fs.writeFileSync(bin, '#!/bin/sh\n', { mode: 0o755 });

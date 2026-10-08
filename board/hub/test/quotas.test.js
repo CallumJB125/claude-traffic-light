@@ -30,7 +30,7 @@ function fillComments(f, team, total) {
   });
   assert.equal(comments(f, team), total);
 }
-async function rig(t) { const f = await tenancy(); t.after(() => f.h.close()); return f; }
+async function rig(t) { const f = await tenancy(); t.after(() => f.h.destroy()); return f; }
 const counts = f => JSON.stringify(['cards', 'journal', 'workflow_instances', 'workflow_step_cards', 'work_capture_cards', 'client_feedback', 'task_message_threads', 'task_messages', 'task_message_recipients', 'task_message_receipts'].map(table => [table, f.db.get(`SELECT COUNT(*) n FROM ${table}`).n]));
 
 test('card cap spans boards and archived cards; concurrent writers cannot consume the last slot twice or affect another team', async t => {
@@ -113,6 +113,6 @@ test('actual pro and self-hosted plan boundaries do not inherit the free cap; no
   const path = `/api/boards/${f.A.board}/cards`, create = () => f.as(f.users.ua, 'POST', path, { request_id: randomUUID(), title: 'Plan boundary' });
   assert.equal((await create()).status, 200); fillCards(f, f.A, 50000); assert.equal((await create()).status, 403);
   f.db.run("UPDATE orgs SET plan='self_hosted' WHERE id=?", f.A.team); assert.equal((await create()).status, 200); assert.equal(cards(f, f.A), 50001);
-  const h = await startHub(); t.after(() => h.close()); const local = { h, db: h.db }, team = { team: h.hub.board(h.ids.board).org_id, board: h.ids.board, owner: h.ids.alice };
+  const h = await startHub(); t.after(() => h.destroy()); const local = { h, db: h.db }, team = { team: h.hub.board(h.ids.board).org_id, board: h.ids.board, owner: h.ids.alice };
   fillCards(local, team, 5000); const cookie = await h.login('alice'); assert.equal((await h.api(cookie, 'POST', `/api/boards/${h.ids.board}/cards`, { request_id: randomUUID(), title: 'Local cap exempt' })).status, 200);
 });

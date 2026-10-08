@@ -8,6 +8,7 @@ const vm = require('node:vm');
 const { EventEmitter } = require('node:events');
 const { createRequire } = require('node:module');
 const Observer = require('../scripts/windows-install-observer');
+const { testTempDir } = require('./helpers/tmp');
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const START = 1790927577679;
 function clock() {
@@ -21,7 +22,7 @@ function clock() {
   };
 }
 function packaged(t, { existing = false } = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'inner-hook-observer-'));
+  const dir = testTempDir('inner-hook-observer-');
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const file = path.join(__dirname, '../scripts/smoke-installed.js'), module = { exports: {} };
   const c = clock(), child = new EventEmitter(), realRequire = createRequire(file);
@@ -75,7 +76,7 @@ test('hung/rejected inner observation cannot delay original120s termination or s
   const g = packaged(t), success = g.run({ ...g.options, observeInnerHook: async () => { throw new Error('private'); } }); await tick(); g.write(valid()); await g.advance(8000); g.child.emit('exit', 0); assert.equal((await success).ok, true);
 });
 function hook(t, enabled) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'inner-hook-owned-source-'));
+  const dir = testTempDir('inner-hook-owned-source-');
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const home = path.join(dir, 'home'), data = path.join(home, 'data'); fs.mkdirSync(path.join(data, 'sessions'), { recursive: true });
   const settings = path.join(home, 'settings.json'); fs.writeFileSync(settings, JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'inert synthetic hook command' }] }] } }));
@@ -133,7 +134,7 @@ test('malformed optional child contract refuses before PowerShell query', async 
 });
 function lifecycle(t, kind) {
   const Lifecycle = require('../scripts/windows-install-smoke'), Adapters = require('../adapters'), Brand = require('../brand');
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'inner-hook-lifecycle-'));
+  const root = testTempDir('inner-hook-lifecycle-');
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const installer = path.join(root, 'installer.exe'), portable = path.join(root, 'portable.exe'); let installDir, observed = 0, current = true;
   const observation = { ok: true, processes: [{ pid: 92, parentPid: 73, created: new Date(owned.started).toISOString(), image: 'cmd.exe', depth: 2 }], windows: [], truncated: false };

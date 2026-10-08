@@ -11,6 +11,7 @@ const Cursor = require('../adapters/cursor.js');
 const Codex = require('../adapters/codex.js');
 const Gemini = require('../adapters/gemini.js');
 const Runtime = require('../adapters/runtime.js');
+const { testTempDir } = require('./helpers/tmp');
 const SET_STATUS = path.join(__dirname, '..', 'hooks', 'set-status.js');
 
 const rules = () => R.defaultRules();
@@ -474,7 +475,7 @@ test('stats: summary covers 7 days, ranks projects, formats durations', () => {
 
 // ── hooks/set-status.js, for real, against a temp home ─────────────────────
 function tmpHome() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-test-'));
+  return testTempDir('ctl-test-');
 }
 function run(home, signal, payload) {
   const r = spawnSync(process.execPath, [SET_STATUS, signal], {

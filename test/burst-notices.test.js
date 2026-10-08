@@ -5,12 +5,13 @@ const os = require('node:os');
 const path = require('node:path');
 const { createBurstNotices, normalizeNotices, normalizeAudit, noticesPath } = require('../src/burst-notices.js');
 const { gate } = require('../src/burst-events.js');
+const { testTempDir } = require('./helpers/tmp');
 
 const NOW = Date.parse('2026-10-07T10:00:00Z');
 const ev = (id, o = {}) => ({ id, kind: 'failover', severity: 'warn', title: `T${id}`, detail: `D${id}`, at: new Date(NOW - 1000).toISOString(), ts: Math.floor(NOW / 1000), ...o });
 
 function rig(o = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'notices-'));
+  const dir = testTempDir('notices-');
   const file = path.join(dir, 'notices.json');
   const sent = []; const closed = [];
   const write = (events) => fs.writeFileSync(file, JSON.stringify({ events }));

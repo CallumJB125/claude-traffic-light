@@ -8,6 +8,7 @@ const path = require('node:path');
 const Actions = require('../src/burst-actions.js');
 const View = require('../src/burst-view.js');
 const Ipc = require('../src/burst-ipc.js');
+const { testTempDir } = require('./helpers/tmp');
 
 const H = '/Users/test';
 const co = { dir: '/Users/test/claude-burst', exists: true };
@@ -38,7 +39,7 @@ test('no user string reaches a script: bad kind/mode throw, paths are quoted', (
 });
 
 test('runInTerminal writes an executable script and launches it via the stub, not a real Terminal', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'burst-scripts-'));
+  const dir = testTempDir('burst-scripts-');
   const launched = [];
   const r = await Actions.runInTerminal('off', { home: H, dir, launch: async (f) => launched.push(f), checkout: co });
   assert.deepEqual(launched, [path.join(dir, 'burst-off.command')]);
@@ -84,8 +85,8 @@ function harness({ response = 1, detect } = {}) {
   const handlers = {};
   const launched = [];
   const dialogs = [];
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'burst-ipc-'));
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'burst-iph-'));
+  const dir = testTempDir('burst-ipc-');
+  const home = testTempDir('burst-iph-');
   fs.mkdirSync(path.join(home, 'claude-burst', '.git'), { recursive: true });
   fs.writeFileSync(path.join(home, 'claude-burst', 'install.sh'), '');
   const client = { detect: async () => detect, adminUrl: () => 'http://127.0.0.1:7788/', requestUpgrade: async () => { launched.push('api-upgrade'); }, testConnection: async () => ({ ok: true }) };

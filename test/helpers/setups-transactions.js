@@ -5,6 +5,7 @@ const {validatePayload}=require('../../src/borrow/payload');
 const {createTransactionStore}=require('../../src/borrow/transaction-store');
 const {createTransactionCore}=require('../../src/borrow/transaction-core');
 const {hash}=require('../../src/plugins/index-verify');
+const { testTempDir } = require('./tmp');
 function deferred(){let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});return {promise,resolve,reject};}
 function fixture(t,options={}) {
   // This masking fixture needs a known non-secret HOME. macOS TMPDIR ancestry
@@ -13,7 +14,7 @@ function fixture(t,options={}) {
   // directory under the canonical POSIX temporary root for this one fixture.
   const temp=options.lowEntropyPath
     ?path.join(fs.realpathSync(process.platform==='win32'?os.tmpdir():'/tmp'),'pf-'+crypto.randomUUID())
-    :fs.mkdtempSync(path.join(os.tmpdir(),'plexiform-setups-transaction-'));
+    :testTempDir('plexiform-setups-transaction-');
   if(options.lowEntropyPath)fs.mkdirSync(temp,{mode:0o700});t.after(()=>fs.rmSync(temp,{recursive:true,force:true}));
   const home=path.join(temp,'profile'),appData=path.join(temp,'app-data');fs.mkdirSync(home,{mode:0o700});fs.mkdirSync(appData,{mode:0o700});
   const root=path.join(appData,'setups-transactions');

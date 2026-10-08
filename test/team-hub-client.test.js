@@ -4,6 +4,7 @@
 // deadline/bounded fan-out, and the security-review contracts (M1-M7).
 const test = require('node:test'), assert = require('node:assert/strict');
 const { createTeamHubClient } = require('../src/team-hub-client');
+const { testTempDir } = require('./helpers/tmp');
 
 const T0 = 1_800_000_000_000;
 const SHARED = '11111111-2222-4333-8444-555555555555';
@@ -533,7 +534,7 @@ test('L8: send() maps a stale refusal or a generation race to stale/"changed"; o
 function hubDeadlineChild(body, expected) {
   const { spawnSync } = require('node:child_process');
   const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'plex-hub-deadline-'));
+  const home = testTempDir('plex-hub-deadline-');
   const script = `const {createTeamHubClient} = require(${JSON.stringify(require.resolve('../src/team-hub-client'))});
     const shared = ${JSON.stringify(share())};
     const json = body => ({status: 200, headers: {get: () => null}, text: async () => JSON.stringify(body), body: null});

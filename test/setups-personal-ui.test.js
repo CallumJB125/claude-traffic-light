@@ -10,6 +10,7 @@ const vm = require('node:vm');
 const { randomUUID } = require('node:crypto');
 const { JSDOM } = require('jsdom');
 const schema = require('../src/borrow/payload.js');
+const { testTempDir } = require('./helpers/tmp');
 
 const tick = () => new Promise((r) => setImmediate(r));
 const J = (v) => JSON.stringify(v, null, 2);
@@ -20,7 +21,7 @@ function envelope(files) {
 const mcpFile = (servers) => ({ id: randomUUID(), source_id: 'claude-code', relative_path: '.claude.json#mcpServers', format: 'json', content: J({ mcpServers: servers }), note: '' });
 
 function wired(t) {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'plx-wiring-')));
+  const root = fs.realpathSync(testTempDir('plx-wiring-'));
   const home = path.join(root, 'home', 'casey');
   fs.mkdirSync(home, { recursive: true });
   const oldHome = process.env.HOME;

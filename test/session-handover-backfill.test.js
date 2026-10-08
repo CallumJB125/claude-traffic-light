@@ -7,8 +7,9 @@ const Tap = require('../hooks/handover-tap.js');
 const H = require('../src/session-handover.js');
 const T = require('../src/handover-transcripts.js');
 const Main = require('../src/session-handover-main.js');
+const { testTempDir } = require('./helpers/tmp');
 
-const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-backfill-'));
+const tmp = () => testTempDir('ctl-backfill-');
 const noGit = async () => ({ repo: false });
 const jsonl = (rows) => rows.map((r) => JSON.stringify(r)).join('\n') + '\n';
 const CLAUDE_ID = '11111111-2222-3333-4444-555555555555';

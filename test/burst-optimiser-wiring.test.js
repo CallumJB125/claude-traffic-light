@@ -10,13 +10,14 @@ const Ipc = require('../src/burst-ipc.js');
 const View = require('../src/burst-view.js');
 const Spend = require('../src/burst-spend.js');
 const { compactionState } = require('./fixtures/fake-burst.js');
+const { testTempDir } = require('./helpers/tmp');
 
 const ROOT = path.join(__dirname, '..');
 const read = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8');
 const settle = () => new Promise((r) => setTimeout(r, 30));
 
 function ipc({ opener = null } = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'burst-opt-'));
+  const dir = testTempDir('burst-opt-');
   const opened = [];
   const detect = { kind: 'present', state: { version: '0.19.0', route: 'PRIMARY', active: true, secondaryReady: true, until: '', claim: '', mode: 'base-url', configError: '', inactiveReason: '', rejected: [], primaryFailures: 0, compaction: Spend.normalizeCompaction(compactionState()) }, capabilities: { state: true, usage: true, handoverAudit: false, handoverFile: false, upgradeStatus: false, testConnection: false }, upgrade: null, pid: 7 };
   const api = Ipc.register({

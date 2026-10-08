@@ -6,10 +6,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { startHub, fakeGitHub, runMsg, runHb } from './helpers.js';
 import { createGitHub } from '../github.js';
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { testTempDir } from '../../shared/test-support/tmp.js';
 
 function hangingGitHub() {
   const gh = fakeGitHub();
@@ -79,7 +79,7 @@ test('merge polls never overlap', async () => {
 });
 
 test('restore from backup: the runner\'s acked seq wins over the older DB, so the outbox never jams', async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'board-restore-'));
+  const dataDir = testTempDir('board-restore-');
   const h1 = await startHub({ dataDir });
   let dev;
   let seq;

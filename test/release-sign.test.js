@@ -8,6 +8,7 @@ const os = require('os');
 const path = require('path');
 const Sign = require('../scripts/release-sign.js');
 const V = require('../src/updater/verify.js');
+const { testTempDir } = require('./helpers/tmp');
 
 const stable = crypto.generateKeyPairSync('ed25519');
 const beta = crypto.generateKeyPairSync('ed25519');
@@ -18,7 +19,7 @@ const keys = V.loadKeyring({ stable: [stable.publicKey.export({ type: 'spki', fo
 const sha = (b) => crypto.createHash('sha512').update(b).digest('base64');
 const quiet = { log() {} };
 const run = (argv, e = env, log = quiet) => Sign.main(argv, e, log, keys);
-const tmp = (tag) => fs.mkdtempSync(path.join(os.tmpdir(), `release-sign-${tag}-`));
+const tmp = (tag) => testTempDir(`release-sign-${tag}-`);
 const readSigned = (dir, channel = 'stable') => V.openManifest(fs.readFileSync(path.join(dir, 'release.json')), fs.readFileSync(path.join(dir, 'release.json.sig'), 'utf8'), keys, { channel });
 
 function dist(version = '1.2.0', { feed = 'latest' } = {}) {

@@ -8,6 +8,7 @@ const { execFileSync } = require('child_process');
 const Enforce = require('../src/spend-enforce');
 const Gate = require('../hooks/spend-gate');
 const { registerAll } = require('../src/paid-wiring');
+const { testTempDir } = require('./helpers/tmp');
 
 const SET_STATUS = path.join(__dirname, '..', 'hooks', 'set-status.js');
 const ent = (plan) => ({
@@ -22,7 +23,7 @@ const exceeded = (over = {}) => ({
 const runaway = (id = 'run-1') => ({ budget: { level: null }, runaway: [{ sessionId: id, cost: 44, burn: '$44.00 in 20 min', firedAt: 1 }] });
 
 function home(t) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cost-guard-'));
+  const dir = testTempDir('cost-guard-');
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   return dir;
 }

@@ -10,6 +10,7 @@ const State = require('../hooks/session-state');
 const Machine = require('../hooks/session-machine');
 const Overview = require('../src/session-overview');
 const Providers = require('../src/provider-status');
+const { testTempDir } = require('./helpers/tmp');
 const NOW = Date.parse('2026-10-02T07:00:00.000Z');
 const SECRET = 'PRIVATE_QUESTION_ANSWER_COMMAND_PATH';
 const payload = (event, fields = {}) => ({ hook_event_name: event, session_id: 'session-1', cwd: '/synthetic/project', turn_id: 'turn-1', source: 'startup', ...fields });
@@ -111,7 +112,7 @@ test('bounded concurrent calls do not evict earlier asks or refresh their clocks
   assert.deepEqual(s.codexInputRequests, []);
 });
 test('actual emitter receives synthetic async metadata and never stores questions/answers/transcript paths', t => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-input-emitter-'));
+  const home = testTempDir('codex-input-emitter-');
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const emit = (name, fields = {}) => {
     const r = spawnSync(process.execPath, [path.resolve(__dirname, '../hooks/emit.js'), '--adapter', 'codex', '--lifecycle', name], { input: JSON.stringify(payload(name, fields)), encoding: 'utf8', timeout: 4000, env: { ...process.env, CLAUDE_TRAFFIC_LIGHT_HOME: home } });

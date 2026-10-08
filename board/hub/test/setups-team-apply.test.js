@@ -4,12 +4,12 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {createRequire} from 'node:module';
-import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,existsSync,rmSync,realpathSync} from 'node:fs';
-import {tmpdir} from 'node:os';
+import {mkdirSync,writeFileSync,readFileSync,existsSync,rmSync,realpathSync} from 'node:fs';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {tenancy} from './tenancy/fixture.js';
 import {validatePayload} from '../../shared/setups.js';
+import { testTempDir } from '../../shared/test-support/tmp.js';
 const require=createRequire(import.meta.url);
 const {createAccountClient}=require('../../../buddy-window/accounts.js');
 const {createSetupsService}=require('../../../src/setups-service.js');
@@ -23,7 +23,7 @@ const payload=()=>({schema:1,note:'',items:[],files:[
 ]});
 async function world(t,plan){
   const fx=await tenancy();t.after(()=>fx.h.close());fx.db.run('UPDATE orgs SET plan=? WHERE id=?',plan,fx.A.team);
-  const root=realpathSync(mkdtempSync(join(tmpdir(),'setups-team-apply-')));t.after(()=>rmSync(root,{recursive:true,force:true}));
+  const root=realpathSync(testTempDir('setups-team-apply-'));t.after(()=>rmSync(root,{recursive:true,force:true}));
   const home=join(root,'home','robin');mkdirSync(home,{recursive:true});
   const p=payload(),c=validatePayload(p);
   fx.db.run("UPDATE orgs SET plan='pro' WHERE id=?",fx.A.team);

@@ -6,9 +6,10 @@ const os = require('node:os');
 const path = require('node:path');
 const AiTools = require('../src/ai-tools.js');
 const Adapters = require('../adapters/index.js');
+const { testTempDir } = require('./helpers/tmp');
 
 const HOOKS = path.join(__dirname, '..', 'hooks');
-const home = () => fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-aitools-'));
+const home = () => testTempDir('ctl-aitools-');
 const rig = (opts = {}) => {
   const h = opts.home || home();
   const dataDir = path.join(h, 'data');

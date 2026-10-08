@@ -7,6 +7,7 @@ const path = require('path');
 const Health = require('../src/health.js');
 const Claude = require('../adapters/claude-code.js');
 const Runtime = require('../adapters/runtime.js');
+const { testTempDir } = require('./helpers/tmp');
 
 const NOW = Date.parse('2026-09-30T12:00:00.000Z');
 const iso = (agoMs) => new Date(NOW - agoMs).toISOString();
@@ -16,7 +17,7 @@ const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 // A fake machine: home with ~/.claude, an app binary and its hooks dir, and
 // Plexiform's data dir. Everything the checks read lives under one temp folder.
 function machine({ hooks = 'current', sessions = {}, locks = {}, transcripts = true, lastHook = null } = {}) {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-health-'));
+  const home = testTempDir('ctl-health-');
   const root = path.join(home, '.claude-traffic-light');
   const app = path.join(home, 'Applications', 'Claude Buddy.app', 'Contents');
   const hooksDir = path.join(app, 'Resources', 'hooks');

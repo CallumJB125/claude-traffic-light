@@ -7,9 +7,10 @@ import { Readable } from 'node:stream';
 import { createBackup } from '../../pi/backup-lib.mjs';
 import { OffsiteError, hash } from '../schema.mjs';
 import { consume } from '../files.mjs';
+import { testTempDir } from '../../../shared/test-support/tmp.js';
 
 export function rig(t) {
-  const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'offsite-fixture-'));
+  const root = fs.realpathSync(testTempDir('offsite-fixture-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const data = path.join(root, 'data'), outbox = path.join(root, 'outbox'); fs.mkdirSync(data, { mode: 0o700 }); fs.mkdirSync(outbox, { mode: 0o700 });
   const conn = new DatabaseSync(path.join(data, 'board.db'));

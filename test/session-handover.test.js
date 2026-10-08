@@ -8,8 +8,9 @@ const H = require('../src/session-handover.js');
 const Quiet = require('../src/quiet.js');
 const Overview = require('../src/session-overview.js');
 const BurstHandover = require('../src/burst-handover.js');
+const { testTempDir } = require('./helpers/tmp');
 
-const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-handover-'));
+const tmp = () => testTempDir('ctl-handover-');
 const NOW = '2026-10-07T10:00:00.000Z';
 const ev = (root, over) => Tap.record({ rootDir: root, adapter: 'claude-code', sessionId: 's1', cwd: '/work/app', mutedProjects: [], now: NOW, ...over });
 const facts = (root, key = 'claude-code-s1') => JSON.parse(fs.readFileSync(path.join(root, 'handovers', '.facts', `${key}.json`), 'utf8'));

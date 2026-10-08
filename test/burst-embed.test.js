@@ -8,6 +8,7 @@ const path = require('node:path');
 const E = require('../src/burst-embed.js');
 const { createBurstClient } = require('../src/burst-client.js');
 const { createFakeBurst, stateV019, stateV012 } = require('./fixtures/fake-burst.js');
+const { testTempDir } = require('./helpers/tmp');
 
 const O = 'http://127.0.0.1:7788';
 
@@ -72,7 +73,7 @@ test('section script: only a plain id becomes code, and it is quoted', () => {
 const BIN = (home) => path.join(home, '.local', 'bin', 'claude-burst');
 async function detectWith(routes, { inspect, installed = true } = {}) {
   const fake = await createFakeBurst(routes);
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'burst-embed-'));
+  const home = testTempDir('burst-embed-');
   if (installed) { fs.mkdirSync(path.dirname(BIN(home)), { recursive: true }); fs.writeFileSync(BIN(home), '#!/bin/sh\n', { mode: 0o755 }); }
   fs.mkdirSync(path.join(home, '.config', 'claude-burst'), { recursive: true });
   fs.writeFileSync(path.join(home, '.config', 'claude-burst', 'config.json'), JSON.stringify({ admin_listen: `127.0.0.1:${fake.port}` }));
@@ -111,7 +112,7 @@ test('fake Burst down (nothing listening): "Burst isn\'t answering" with Repair 
   const fake = await createFakeBurst({});
   const port = fake.port;
   await fake.close();
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'burst-embed-'));
+  const home = testTempDir('burst-embed-');
   fs.mkdirSync(path.dirname(BIN(home)), { recursive: true });
   fs.writeFileSync(BIN(home), '#!/bin/sh\n', { mode: 0o755 });
   fs.mkdirSync(path.join(home, '.config', 'claude-burst'), { recursive: true });

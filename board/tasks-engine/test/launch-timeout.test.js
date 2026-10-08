@@ -8,12 +8,13 @@ import { execFileSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { TasksEngine } from '../engine.js';
 import { TaskStore } from '../store.js';
+import { testTempDir } from '../../shared/test-support/tmp.js';
 
 const turn = () => new Promise((r) => setImmediate(r));
 async function until(pred) { for (let i = 0; i < 20000 && !pred(); i++) await new Promise((r) => setImmediate(r)); assert.ok(pred(), 'condition reached'); }
 
 async function fixture(hangFirst) {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'plt-')));
+  const root = fs.realpathSync(testTempDir('plt-'));
   const dataDir = path.join(root, 'data'), repo = path.join(root, 'app'), home = path.join(root, 'home');
   for (const d of [dataDir, repo, home]) fs.mkdirSync(d, { mode: 0o700 });
   const env = { HOME: home, PATH: process.env.PATH, TMPDIR: root, LANG: 'C', GIT_CONFIG_NOSYSTEM: '1' };

@@ -8,8 +8,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac, generateKeyPairSync, randomUUID, createPublicKey } from 'node:crypto';
-import { mkdtempSync, writeFileSync, statSync, readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync, statSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
@@ -17,6 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { tenancy } from './tenancy/fixture.js';
 import { dumpDb } from './accounts-helpers.js';
 import { accessUntil, GRACE_S } from '../billing/entitlements.js';
+import { testTempDir } from '../../shared/test-support/tmp.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
@@ -26,7 +26,7 @@ const PRICES = { 'plus:month': 'price_plus_m', 'plus:year': 'price_plus_y', 'tea
 
 function keyFile() {
   const { publicKey, privateKey } = generateKeyPairSync('ed25519');
-  const dir = mkdtempSync(join(tmpdir(), 'billing-key-'));
+  const dir = testTempDir('billing-key-');
   const file = join(dir, 'entitlement.pem');
   writeFileSync(file, privateKey.export({ type: 'pkcs8', format: 'pem' }), { mode: 0o600 });
   return { file, publicPem: publicKey.export({ type: 'spki', format: 'pem' }) };
@@ -122,7 +122,7 @@ test('Plus: hosted Checkout link, then signed checkout + invoice events → a ve
 
     // The desktop verifier (src/entitlements.js) accepts it with the pinned public key.
     const Ent = require('../../../src/entitlements.js');
-    const root = mkdtempSync(join(tmpdir(), 'ent-root-'));
+    const root = testTempDir('ent-root-');
     writeFileSync(join(root, 'entitlement.json'), JSON.stringify({ token: got.body.token }));
     Ent.configure({ root, publicKeys: [fx.key.publicPem], now: () => fx.h.hub.wallMs() });
     assert.equal(Ent.plan(), 'plus');
@@ -306,7 +306,7 @@ test('a hub without billing: checkout is METHOD_DISABLED, the webhook is not a r
 });
 
 test('gen-entitlement-key.mjs writes a 0600 private key, prints only the public key, and never overwrites', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'gen-key-'));
+  const dir = testTempDir('gen-key-');
   const out = join(dir, 'k.pem');
   const script = join(HERE, '..', 'scripts', 'gen-entitlement-key.mjs');
   const printed = execFileSync(process.execPath, [script, '--out', out], { encoding: 'utf8' });

@@ -11,6 +11,7 @@ const { createFakeBurst, stateV019 } = require('./fixtures/fake-burst.js');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { testTempDir } = require('./helpers/tmp');
 
 test('allow-list: GET /api/codex and /api/coordination?days only; POSTs and other queries rejected', () => {
   assert.ok(isAllowed('GET', '/api/codex'));
@@ -68,7 +69,7 @@ test('context fill: from state.context.sessions; absent gives nothing', () => {
 
 test('client.codex / coordination read the GET endpoints; a 404 from an old Burst rejects, IPC degrades silently', async () => {
   const fake = await createFakeBurst({ '/api/state': { body: stateV019() }, '/api/codex': { body: { totals: { requests: 2, usd: 0.5 } } } });
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'burst-cx-'));
+  const home = testTempDir('burst-cx-');
   fs.mkdirSync(path.join(home, '.local', 'bin'), { recursive: true });
   fs.mkdirSync(path.join(home, '.config', 'claude-burst'), { recursive: true });
   const bin = path.join(home, '.local', 'bin', 'claude-burst');
@@ -129,7 +130,7 @@ test('coordination metrics: window, fixed counters, issues newest first; a contr
 
 async function actionHarness(answer) {
   const fake = await createFakeBurst({ '/api/state': { body: stateV019() }, '/api/upgrade-status': { body: {} }, '/api/coordination-act': { body: { ok: 'done' } }, '/api/requests': { body: [] }, '/api/coordination': { body: COORD } });
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'burst-coord-'));
+  const home = testTempDir('burst-coord-');
   const bin = path.join(home, '.local', 'bin', 'claude-burst');
   fs.mkdirSync(path.dirname(bin), { recursive: true });
   fs.writeFileSync(bin, '#!/bin/sh\n', { mode: 0o755 });

@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { Worker } = require('node:worker_threads');
 const { startMainWatchdog, watchdogVerdict } = require('../src/main-watchdog.js');
+const { testTempDir } = require('./helpers/tmp');
 
 test('watchdogVerdict reports a stopped heartbeat once, naming the step', () => {
   assert.equal(watchdogVerdict({ now: 5000, lastBeat: 0, step: 'ready', stallMs: 8000, reported: false }), null);
@@ -20,7 +21,7 @@ test('startMainWatchdog never throws when no worker can start', () => {
 });
 
 test('a blocked main thread is written to app.log by the worker, with the last step', async () => {
-  const logFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'watchdog-')), 'app.log');
+  const logFile = path.join(testTempDir('watchdog-'), 'app.log');
   const dog = startMainWatchdog({
     intervalMs: 50,
     createWorker: () => new Worker(path.join(__dirname, '..', 'src', 'main-watchdog-worker.js'), { workerData: { logFile, stallMs: 300, checkMs: 50 } }),

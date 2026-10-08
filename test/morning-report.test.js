@@ -7,11 +7,12 @@ const path = require('path');
 const MR = require('../src/morning-report.js');
 const KeepAwake = require('../src/keep-awake.js');
 const Home = require('../src/home-main.js');
+const { testTempDir } = require('./helpers/tmp');
 
 const NOW = 1_800_000_000_000;
 const task = (o) => ({ id: 'tsk_000000000001', title: 'Fix login', state: 'in_review', stateSince: NOW - 3600_000, branch: 'buddy/fix', workInPlace: false, cost: { usd: 0.5 },
   evidence: { commits: 3, diffStat: { files: 4, added: 20, removed: 5 }, costUsd: 1.25, tests: 'pass', summary: 'Done.' }, pr: { url: 'https://example.invalid/pr/1' }, openAsk: null, openApprovals: [], ...o });
-const dir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'mr-'));
+const dir = () => testTempDir('mr-');
 
 test('report lists branch, commits, diffstat, cost, PR and open asks for tasks finished since last view', () => {
   const r = MR.build([task({}), task({ id: 'tsk_000000000002', title: 'Old', stateSince: NOW - 10 * 3600_000 }), task({ id: 'tsk_000000000003', title: 'Asks', state: 'blocked', openAsk: { text: 'Which db?' }, evidence: null })], NOW - 2 * 3600_000);

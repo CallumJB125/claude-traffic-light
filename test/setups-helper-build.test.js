@@ -1,5 +1,6 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os');
+const { testTempDir } = require('./helpers/tmp');
 const ROOT=path.join(__dirname,'..');
 test('Setups helper has no inherited Electron/calendar entitlements',()=>{
  const sign=require('../build/sign'),base={entitlements:'/fixture/electron.plist',hardenedRuntime:true},select=sign.withHelperEntitlements(()=>base);
@@ -9,7 +10,7 @@ test('Setups helper has no inherited Electron/calendar entitlements',()=>{
  const plist=fs.readFileSync(sign.SETUPS_ENTITLEMENTS,'utf8');assert.match(plist,/<dict\s*\/>/);assert.doesNotMatch(plist,/<key>/);
 });
 test('build provenance binds every production C module, all headers and unsigned binary bytes',t=>{
- const {manifest,modules}=require('../scripts/setups-helper-manifest'),dir=fs.mkdtempSync(path.join(os.tmpdir(),'pf-build-provenance-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+ const {manifest,modules}=require('../scripts/setups-helper-manifest'),dir=testTempDir('pf-build-provenance-');t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
  const input=path.join(dir,'native/setups-targets'),stage=path.join(dir,'stage');fs.mkdirSync(input,{recursive:true});fs.mkdirSync(stage);
  for(const name of modules)fs.writeFileSync(path.join(input,`${name}.c`),`/* synthetic ${name} */`);
  fs.writeFileSync(path.join(input,'protocol.h'),'/* synthetic header1 */');fs.writeFileSync(path.join(stage,'buddy-setups'),'synthetic executable');

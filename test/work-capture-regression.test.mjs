@@ -7,10 +7,11 @@ import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
 import { execFileSync } from 'node:child_process';
 import { tenancy } from '../board/hub/test/tenancy/fixture.js';
+import { testTempDir } from './helpers/tmp.js';
 const require = createRequire(import.meta.url);
 const { createWorkCapture, repoFor } = require('../src/work-capture.js');
 const { createAccountClient } = require('../buddy-window/accounts.js');
-const tmp = (t) => { const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'capture-independent-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true })); return dir; };
+const tmp = (t) => { const dir = testTempDir('capture-independent-'); t.after(() => fs.rmSync(dir, { recursive: true, force: true })); return dir; };
 const event = (at, extra = {}) => ({ source: 'codex', sessionId: 'independent-task', host: 'fixture', cwd: '/synthetic/not-read',
   signal: 'tool-use', taskTitle: 'Synthetic reported work', updatedAt: new Date(at).toISOString(), ...extra });
 

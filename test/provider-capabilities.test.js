@@ -11,6 +11,7 @@ const { createGeminiAcp } = require('../src/gemini-acp');
 const { ACP_AGENTS, createAcpAgent, findAcpBin } = require('../src/acp-agents');
 const { ownedAdapters } = require('../src/interaction-main');
 const { createOverviewService } = require('../src/overview-service');
+const { testTempDir } = require('./helpers/tmp');
 
 const ROOT = path.join(__dirname, '..');
 const read = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8');
@@ -155,7 +156,7 @@ test('FAKE ACP as another provider id: delivery reaches only the selected sessio
   const spawnSeen = [];
   const spawn = (bin, args, opts) => { spawnSeen.push({ args, env: Object.keys(opts.env) }); return require('node:child_process').spawn(bin, args, opts); };
   const a = createGeminiAcp({ bin: FAKE_ACP, args: ACP_AGENTS.cursor.args, env: ENV, spawn, requestMs: 800, verified: true, provider: 'cursor', label: 'Cursor CLI' });
-  const hub = createInteractionHub({ adapters: { cursor: a }, workspace: () => fs.mkdtempSync(path.join(os.tmpdir(), 'plexiform-acp-')), boardCurrent: (b) => b === null });
+  const hub = createInteractionHub({ adapters: { cursor: a }, workspace: () => testTempDir('plexiform-acp-'), boardCurrent: (b) => b === null });
   try {
     const A = (await hub.launch({ provider: 'cursor' }, ACTOR)).state, B = (await hub.launch({ provider: 'cursor' }, ACTOR)).state;
     assert.match(A.label, /Started by Plexiform · Cursor CLI/); assert.equal(A.provider.id, 'cursor');

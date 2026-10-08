@@ -10,6 +10,7 @@ const T = require('../src/optimiser-tools.js');
 const Ipc = require('../src/burst-ipc.js');
 const { createBurstClient } = require('../src/burst-client.js');
 const { createFakeBurst, pauselessRoutes } = require('./fixtures/fake-burst.js');
+const { testTempDir } = require('./helpers/tmp');
 
 const ROOT = path.join(__dirname, '..');
 const read = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8');
@@ -176,7 +177,7 @@ test('burst:tools answers only the optimiser page, with status facts and the ban
 
   const h = pauselessRoutes();
   const fake = await createFakeBurst({ ...h.routes, '/api/upgrade-status': { body: {} }, '/api/mod-status': { body: { claude: '2.1.300', supported: true, installed: true, current: true, toasts: true, last: { x: 1 } } } });
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'burst-tools-'));
+  const home = testTempDir('burst-tools-');
   const bin = path.join(home, '.local', 'bin', 'claude-burst');
   fs.mkdirSync(path.dirname(bin), { recursive: true });
   fs.writeFileSync(bin, '#!/bin/sh\n', { mode: 0o755 });

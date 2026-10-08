@@ -15,6 +15,7 @@ const { createAccountClient, bearerScope, bearerHeaders } = require('../buddy-wi
 const { createMockAccountsHub } = require('../buddy-window/mock-accounts-hub');
 const { createDeviceController } = require('../buddy-window/device');
 const { createWorkspaceStore, normalizeHubUrl, normalizeLinkHub, hubKey, partitionFor, integrationPartitionFor, hostOf } = require('../buddy-window/workspaces');
+const { testTempDir } = require('./helpers/tmp');
 
 class FakeChild extends EventEmitter {
   constructor() { super(); this.pid = 0; this.killed = 0; this.sent = []; }
@@ -48,7 +49,7 @@ async function realBrowser(url) {
 async function harness(fn, { oauthTimeoutMs, live = false, quotas } = {}) {
   const hub = createMockAccountsHub({ quotas });
   const origin = await hub.listen();
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-flow-'));
+  const dir = testTempDir('buddy-flow-');
   const devDir = path.join(dir, 'devices');
   fs.mkdirSync(devDir);
   const allowOrigins = [origin];
@@ -2017,7 +2018,7 @@ test('typing a hub that left Access drops its old Access entry and goes to the h
 }));
 
 test('the workspaces file: an Access entry for a hub survives a reload until a direct health answer retires it', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-ws-'));
+  const dir = testTempDir('buddy-ws-');
   const file = path.join(dir, 'buddy-workspaces.json');
   fs.writeFileSync(file, JSON.stringify({ version: 2, active: 'access:app.acme.example', access: [{ url: 'https://app.acme.example', name: 'app.acme.example', accessTeam: 'acme' }], hubs: [] }));
   const store = createWorkspaceStore(file);

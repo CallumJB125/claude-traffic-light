@@ -7,11 +7,12 @@ const os = require('node:os');
 const path = require('node:path');
 const { createBurstClient, isAllowed, parseAdminAddress, atLeast } = require('../src/burst-client.js');
 const { createFakeBurst, stateV019, stateV012, upgradeStatus } = require('./fixtures/fake-burst.js');
+const { testTempDir } = require('./helpers/tmp');
 
 const BIN = (home) => path.join(home, '.local', 'bin', 'claude-burst');
 
 function makeHome({ installed = true, adminListen } = {}) {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'burst-home-'));
+  const home = testTempDir('burst-home-');
   if (installed) {
     fs.mkdirSync(path.dirname(BIN(home)), { recursive: true });
     fs.writeFileSync(BIN(home), '#!/bin/sh\n', { mode: 0o755 });

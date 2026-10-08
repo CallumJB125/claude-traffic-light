@@ -6,11 +6,12 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const Private = require('../board/shared/windows-private-directory.cjs');
+const { testTempDir } = require('./helpers/tmp');
 
 // Disposable real filesystem fixtures. Native absence is a failure on Windows;
 // host-independent protocol tests live in windows-private-directory-client.
 test('Windows startup helper creates private descendants, binds identity and refuses broad ACLs/reparse ancestry', { skip: process.platform !== 'win32', timeout: 30000 }, () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plexiform-private-native-'));
+  const root = testTempDir('plexiform-private-native-');
   const powershell = path.join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
   function acl(operation, file) {
     const script = String.raw`

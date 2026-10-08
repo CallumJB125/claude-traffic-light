@@ -1,8 +1,9 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os'),cp=require('node:child_process');
 const {createSetupsPlatform}=require('../../src/setups-platform');
+const { testTempDir } = require('../helpers/tmp');
 function fixture(t){
- const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'pf-platform-'))),profile=path.join(root,'profile'),userData=path.join(profile,'Library','Application Support','Plexiform'),bundle=path.join(root,'Plexiform.app'),contents=path.join(bundle,'Contents'),resources=path.join(contents,'Resources');
+ const root=fs.realpathSync(testTempDir('pf-platform-')),profile=path.join(root,'profile'),userData=path.join(profile,'Library','Application Support','Plexiform'),bundle=path.join(root,'Plexiform.app'),contents=path.join(bundle,'Contents'),resources=path.join(contents,'Resources');
  fs.mkdirSync(userData,{recursive:true,mode:0o700});fs.mkdirSync(path.join(resources,'setups'),{recursive:true,mode:0o700});fs.mkdirSync(path.join(contents,'_CodeSignature'),{mode:0o700});
  const files={seal:path.join(contents,'_CodeSignature','CodeResources'),asar:path.join(resources,'app.asar'),helper:path.join(resources,'setups','buddy-setups'),manifest:path.join(resources,'setups','helper-manifest.json')};
  for(const [role,p]of Object.entries(files))fs.writeFileSync(p,'synthetic '+role,{mode:role==='helper'?0o700:0o600});

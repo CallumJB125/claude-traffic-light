@@ -5,11 +5,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { testTempDir } from '../../shared/test-support/tmp.js';
 
 const board = fileURLToPath(new URL('../../', import.meta.url));
 
 test('engine imports its complete schema from an escaped installation directory', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pf-module-'));
+  const root = testTempDir('pf-module-');
   try {
     const fixture = path.join(root, 'Plexiform space #100% café');
     const engineDir = path.join(fixture, 'tasks-engine');

@@ -14,9 +14,10 @@ const { createRemoteApprovals, register, EXTRA_OPS, PAIR_OPS } = require('../src
 const { createRemoteInteractionHost } = require('../src/remote-interaction.js');
 const Wiring = require('../src/paid-wiring.js');
 const QR = require('../src/qr.js');
+const { testTempDir } = require('./helpers/tmp');
 
 const ROOT = path.join(__dirname, '..');
-const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'w2b-unit-'));
+const tmp = () => testTempDir('w2b-unit-');
 const uuid = () => crypto.randomUUID();
 
 function rig({ entitled = true, devices = 3, connected = true } = {}) {

@@ -1,16 +1,16 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {createRequire} from 'node:module';
-import {mkdtempSync,writeFileSync,rmSync} from 'node:fs';
-import {tmpdir} from 'node:os';
+import {writeFileSync,rmSync} from 'node:fs';
 import {join} from 'node:path';
 import {tenancy} from './tenancy/fixture.js';
+import { testTempDir } from '../../shared/test-support/tmp.js';
 const require=createRequire(import.meta.url);
 const {createAccountClient}=require('../../../buddy-window/accounts.js');
 const {createSetupsService}=require('../../../src/setups-service.js');
 test('actual main service/client→HTTP device-owner rebind during the share dialog never publishes under another account',async t=>{
   const fx=await tenancy();t.after(()=>fx.h.close());fx.db.run("UPDATE orgs SET plan='pro' WHERE id=?",fx.A.team);
-  const home=mkdtempSync(join(tmpdir(),'setups-owner-http-'));t.after(()=>rmSync(home,{recursive:true,force:true}));writeFileSync(join(home,'.gitconfig'),'[alias]\n st = status\n');
+  const home=testTempDir('setups-owner-http-');t.after(()=>rmSync(home,{recursive:true,force:true}));writeFileSync(join(home,'.gitconfig'),'[alias]\n st = status\n');
   const marker={hub:fx.h.base,token:fx.users.ua.token,user:{id:fx.users.ua.id}};let saved=marker;
   const client=createAccountClient({origin:fx.h.base,store:{load:()=>saved,clear:()=>saved=null}});
   const source={name:'Alpha fixture',userId:fx.users.ua.id,teamId:fx.A.team,memberId:fx.A.owner,role:'owner',current:()=>saved===marker,call:(op,args)=>client.setups(op,fx.A.team,args,fx.users.ua.id,fx.A.owner)};

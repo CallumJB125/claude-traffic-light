@@ -4,9 +4,10 @@
 const test = require('node:test'), assert = require('node:assert/strict'), fs = require('node:fs'), os = require('node:os'), path = require('node:path'), crypto = require('node:crypto');
 const V = require('../src/plugins/index-verify'), T = require('../src/plugins/toml-owned'), J = require('../src/plugins/journal-codec'), A = require('../src/plugins/native-adapter-contract');
 const { createPluginPlanner, REQUIRED_COMMANDS } = require('../src/plugins/plan'), { createPluginTransactions } = require('../src/plugins/transactions');
+const { testTempDir } = require('./helpers/tmp');
 const NOW = Date.parse('2026-10-02T12:00:00.000Z'), clone = x => JSON.parse(V.canonical(x));
 function fixture(t, { mcp = false } = {}) {
-  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'plugins-kernel-synthetic-'))); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const dir = fs.realpathSync(testTempDir('plugins-kernel-synthetic-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const bundle = path.join(dir, 'bundle'), root = path.join(bundle, 'delivery-review'), profile = path.join(dir, 'profile'), cache = path.join(profile, 'cache'), config = path.join(profile, 'config.toml'), binary = path.join(dir, 'synthetic-codex');
   fs.mkdirSync(path.join(root, 'skills/delivery-review'), { recursive: true }); fs.mkdirSync(cache, { recursive: true }); fs.writeFileSync(binary, 'Never executed synthetic binary.'); fs.writeFileSync(config, '# Human fixture notes\r\nmodel = "fixture-model"\r\n[foreign]\r\nprivate_value = "synthetic-private-data"\r\n');
   const pair = crypto.generateKeyPairSync('ed25519'), keyId = V.keyId(pair.publicKey), catalog = Buffer.from('{"entries":[{"id":"skill:delivery-review"}]}');

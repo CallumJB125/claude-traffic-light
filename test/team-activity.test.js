@@ -10,6 +10,7 @@ const http = require('node:http');
 const { execFile } = require('node:child_process');
 const TA = require('../src/team-activity.js');
 const Brief = require('../hooks/team-brief.js');
+const { testTempDir } = require('./helpers/tmp');
 
 const TOKEN = 'hub-token-1';
 const now = new Date().toISOString();
@@ -142,7 +143,7 @@ test('tools: team_activity, who_touched, team_handover, team_brief', async (t) =
 // ── Through the local signal server: the hook and the MCP tools ──────────────
 async function appWith(svc) {
   process.env.CLAUDE_TRAFFIC_LIGHT_PORT ||= '1';
-  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-team-'));
+  const rootDir = testTempDir('ctl-team-');
   const S = require('../src/signal-server.js')({ rootDir, sessionsDir: path.join(rootDir, 'sessions'), requestsDir: path.join(rootDir, 'requests'), aggregateState: () => ({ sessions: [] }), broadcastStatus: () => {}, teamActivity: (op, args) => svc.call(op, args), port: 0, retries: 0, app: { on: () => {} } });
   const server = S.startSignalServer();
   await new Promise((r) => server.once('listening', r));
@@ -172,7 +173,7 @@ test('hook: setting off means no request at all; a missing app or a wrong token 
   fs.writeFileSync(path.join(app.rootDir, 'config.json'), JSON.stringify({ teamBrief: true }));
   fs.writeFileSync(path.join(app.rootDir, 'token'), 'f'.repeat(64));
   assert.equal(await Brief.run({ adapter: 'claude', payload: { cwd: '/w/app' }, root: app.rootDir }), null);
-  const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-team-none-'));
+  const empty = testTempDir('ctl-team-none-');
   fs.writeFileSync(path.join(empty, 'config.json'), JSON.stringify({ teamBrief: true }));
   assert.equal(await Brief.run({ adapter: 'claude', payload: { cwd: '/w/app' }, root: empty }), null);
   fs.rmSync(empty, { recursive: true, force: true });
@@ -212,6 +213,6 @@ test('MCP: team_* tools ask the running app with its token, and say so when it i
   assert.equal((await tool('who_touched').run({ path: 'src/auth.js' }, c)).touched.length, 2);
   assert.equal((await tool('team_handover').run({ record_id: 'i2:codex:s-ben' }, c)).shared, true);
   assert.match((await tool('team_brief').run({}, c)).brief, /Team brief/);
-  const off = await tool('team_brief').run({}, { root: fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-team-off-')) });
+  const off = await tool('team_brief').run({}, { root: testTempDir('ctl-team-off-') });
   assert.equal(off.reason, 'app_not_running');
 });

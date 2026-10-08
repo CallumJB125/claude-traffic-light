@@ -7,12 +7,13 @@ const { createInteractionHub, NOTICES } = require('../src/session-interaction');
 const { createClaudeCodeSession, buildClaudeArgs } = require('../src/claude-code-session');
 const { createGeminiAcp, NOT_INSTALLED, NOT_VERIFIED } = require('../src/gemini-acp');
 const { ownedAdapters } = require('../src/interaction-main');
+const { testTempDir } = require('./helpers/tmp');
 
 const ACTOR = 'overview:1:1';
 const FAKE_CLAUDE = path.join(__dirname, 'fixtures', 'fake-claude-stream.js');
 const FAKE_GEMINI = path.join(__dirname, 'fixtures', 'fake-gemini-acp.js');
 const until = async (fn, ms = 4000) => { const end = Date.now() + ms; for (;;) { const v = fn(); if (v) return v; if (Date.now() > end) throw new Error('timed out'); await new Promise((r) => setTimeout(r, 10)); } };
-const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'plexiform-owned-test-'));
+const tmp = () => testTempDir('plexiform-owned-test-');
 const ENV = { HOME: os.homedir(), PATH: process.env.PATH, TMPDIR: os.tmpdir(), ANTHROPIC_API_KEY: 'sk-must-not-pass', GEMINI_API_KEY: 'g-must-not-pass', SECRET_TOKEN: 'nope', CLAUDE_CODE_ENTRYPOINT: 'x' };
 
 function rig(provider, adapter) {
@@ -56,12 +57,12 @@ test('FAKE claude: isolation flags and minimal env reach the child; logins and s
     assert.deepEqual(env.filter((k) => !['HOME', 'PATH', 'TMPDIR', 'CLAUDE_CODE_DISABLE_AUTO_MEMORY', 'DISABLE_TELEMETRY', 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', '__CF_USER_TEXT_ENCODING'].includes(k)), []);
   } finally { x.hub.stopAll(); }
 });
-test('Claude edit tools exist only for a cwd inside an explicit safe root', async () => {
+test('Claude edit tools exist only for a cwd inside an explicit safe root', async (t) => {
   assert.equal(buildClaudeArgs({ sessionId: 'x' }).includes('acceptEdits'), false);
   const root = tmp(), calls = [];
   const fakeSpawn = (bin, args) => { calls.push(args); const { EventEmitter } = require('node:events'); const c = new EventEmitter(); c.stdout = new EventEmitter(); c.stdout.setEncoding = () => {}; c.stderr = new EventEmitter(); c.stdin = Object.assign(new EventEmitter(), { write() {} }); c.pid = 999999; c.kill = () => {}; return c; };
   const a = createClaudeCodeSession({ bin: '/x/claude', spawn: fakeSpawn, safeRoot: root });
-  fs.mkdirSync(path.join(root, 'w')); fs.mkdirSync(`${root}-evil`);
+  fs.mkdirSync(path.join(root, 'w')); fs.mkdirSync(`${root}-evil`); t.after(() => fs.rmSync(`${root}-evil`, { recursive: true, force: true }));
   const outside = tmp(); fs.symlinkSync(outside, path.join(root, 'link'));
   await a.open({ cwd: path.join(root, 'w') }); await a.open({ cwd: tmp() }); await a.open({ cwd: `${root}-evil` });
   await a.open({ cwd: path.join(root, 'link') });
