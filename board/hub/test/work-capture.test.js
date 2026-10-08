@@ -369,7 +369,7 @@ test('a local session\'s open PR is kept and shown on the personal board only; n
   for (const bad of [{ ...pr, number: 13 }, { ...pr, url: 'https://example.com/me/app/pull/12' }, { ...pr, state: 'merged' }, { ...pr, checks: 'green' }, { ...pr, review: 'lgtm' }, { ...pr, extra: 1 }, [pr], 'x']) {
     assert.equal((await f.as(f.users.amember, 'POST', path(f.A.board), { ...body, pr: bad })).status, 400, JSON.stringify(bad));
   }
-  const dataDir = mkdtempSync(join(tmpdir(), 'capture-pr-')), cookie = `board_local=${'x'.repeat(64)}`;
+  const dataDir = testTempDir('capture-pr-'), cookie = `board_local=${'x'.repeat(64)}`;
   const config = testConfig({ auth: 'local', localSecret: 'x'.repeat(64), devLoginSecret: null, dataDir, dbPath: join(dataDir, 'board.db') });
   const app = createApp(config, { clock: fakeClock(), log: silentLogger, github: fakeGitHub(), timers: false });
   t.after(async () => { await app.close(); rmSync(dataDir, { recursive: true, force: true }); });

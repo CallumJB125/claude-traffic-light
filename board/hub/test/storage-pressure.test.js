@@ -48,14 +48,14 @@ test('actual temporary SQLite WAL counts, while missing/type/linked DB samples r
 test('actual app startup pauses a populated disk database and the real reaper resumes after compaction', async t => {
   const dataDir = testTempDir('plexiform-pressure-boot-'), path = join(dataDir, 'board.db');
   const initial = openDb(path);
-  initial.raw.exec('CREATE TABLE pressure_fixture (bytes BLOB); INSERT INTO pressure_fixture VALUES (zeroblob(4194304));'); initial.close();
+  initial.raw.exec('CREATE TABLE pressure_fixture (bytes BLOB); INSERT INTO pressure_fixture VALUES (zeroblob(8388608));'); initial.close();
   let h;
   t.after(async () => { if (h) await h.close(); rmSync(dataDir, { recursive: true, force: true }); });
-  h = await startHub({ dataDir, config: { dbSizeMaxMb: 2 } }); assert.equal(h.hub.storage.paused, true);
+  h = await startHub({ dataDir, config: { dbSizeMaxMb: 4 } }); assert.equal(h.hub.storage.paused, true);
   const cookie = await h.login('alice'), create = () => h.api(cookie, 'POST', `/api/boards/${h.ids.board}/cards`, { request_id: randomUUID(), title: 'Disk pressure admission' });
   assert.equal((await create()).body.error.resource, 'storage');
   h.db.raw.exec('DELETE FROM pressure_fixture; PRAGMA wal_checkpoint(TRUNCATE); VACUUM; PRAGMA wal_checkpoint(TRUNCATE);');
-  assert.ok(dbFileSize(path) < 2 * MiB * .9);
+  assert.ok(dbFileSize(path) < 4 * MiB * .9);
   await h.tick(STORAGE_CHECK_MS); assert.equal(h.hub.storage.paused, false); assert.equal((await create()).status, 200);
 });
 
