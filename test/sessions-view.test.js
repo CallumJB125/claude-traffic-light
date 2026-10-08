@@ -6,6 +6,7 @@ const path = require('node:path');
 const { JSDOM } = require('jsdom');
 const html = fs.readFileSync(path.join(__dirname, '../sessions.html'), 'utf8');
 const script = fs.readFileSync(path.join(__dirname, '../sessions.js'), 'utf8');
+const menuScript = fs.readFileSync(path.join(__dirname, '../continue-menu.js'), 'utf8');
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const state = overrides => ({ status: 'complete', observed_at: Date.now(), omitted: 0, activity: { configured: true, observed: true, latest_age_ms: 1000 }, sessions: [], ...overrides });
 function setup(api) {
@@ -15,7 +16,7 @@ function setup(api) {
   dom.window.setInterval = callback => { intervals.push(callback); return intervals.length; };
   dom.window.setTimeout = callback => { timeouts.push(callback); return timeouts.length; };
   dom.window.clearTimeout = () => {};
-  dom.window.sessionsApi = api; dom.window.eval(script);
+  dom.window.sessionsApi = { onContinue() {}, ...api }; dom.window.eval(menuScript); dom.window.eval(script);
   return { dom, document: dom.window.document, intervals, timeouts, hide(value) { hidden = value; dom.window.document.dispatchEvent(new dom.window.Event('visibilitychange')); } };
 }
 test('DOM renders only text metadata, with explicit stale and child reported state', async () => {
@@ -246,5 +247,25 @@ test('handover row shows its status and Write now asks main for that session onl
     buttons[0].click(); await tick();
     assert.deepEqual(calls, [['write', 'codex-t1']]);
     assert.equal(buttons[0].textContent, 'Written');
+  } finally { fixture.dom.window.close(); }
+});
+test('a row with a ready handover offers Continue in…: the menu lists what main found, and a pick sends only the key and tool id', async () => {
+  const calls = [];
+  const fixture = setup({
+    state: async () => state({ sessions: [{ provider: 'Codex', project: 'p', status: 'Working', freshness: 'recent', age_ms: 1000, handover: { key: 'codex-abc', updated: 'Handover: updated just now', ready: true, canWrite: true } }] }),
+    continueMenu: async () => ({ ok: true, choices: [{ id: 'gemini', label: 'Gemini CLI', mode: 'copy' }, { id: 'copy', label: 'Copy as prompt', mode: 'copy' }] }),
+    continueIn: async (key, to) => { calls.push([key, to]); return { ok: true, mode: 'copied', note: 'Copied as a prompt. Paste it into Gemini CLI.' }; },
+  });
+  try {
+    await tick();
+    const trigger = [...fixture.document.querySelectorAll('#content button')].find(b => b.textContent === 'Continue in…');
+    assert.ok(trigger); assert.equal(trigger.getAttribute('aria-haspopup'), 'menu');
+    trigger.click(); await tick(); await tick();
+    const items = [...fixture.document.querySelectorAll('[role="menuitem"]')];
+    assert.deepEqual(items.map(i => i.querySelector('.continue-label').textContent), ['Gemini CLI', 'Copy as prompt']);
+    items[0].click(); await tick(); await tick();
+    assert.deepEqual(calls, [['codex-abc', 'gemini']]);
+    assert.match(fixture.document.getElementById('content').textContent, /Paste it into Gemini CLI/);
+    assert.equal(fixture.document.querySelectorAll('[role="menu"]').length, 0);
   } finally { fixture.dom.window.close(); }
 });
