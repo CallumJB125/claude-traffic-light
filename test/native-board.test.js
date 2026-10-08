@@ -9,9 +9,10 @@ const { request, readGrant } = require('../native-board/client');
 const { callTool } = require('../native-board/tools');
 const { validate, listTools } = require('../native-board/tools');
 const Install = require('../native-board/install');
+const { testTempDir } = require('./helpers/tmp');
 
 function fixture(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plexiform-board-test-'));
+  const root = testTempDir('plexiform-board-test-');
   const dir = path.join(root, 'grants');
   const key = crypto.randomBytes(32);
   const seal = (s) => { const iv = crypto.randomBytes(12), c = crypto.createCipheriv('aes-256-gcm', key, iv); return Buffer.concat([iv, c.update(s), c.final(), c.getAuthTag()]); };
@@ -145,7 +146,7 @@ test('card updates carry the supplied version and cannot certify an outcome or a
 });
 
 test('JSON app setup and Undo preserve foreign MCP servers and refuse a name collision', async (t) => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'plexiform-mcp-config-')); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const home = testTempDir('plexiform-mcp-config-'); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const file = Install.configPath('claude-code', home);
   const foreign = { command: 'foreign-tool', env: { PRIVATE_TEST_SENTINEL: 'preserve' } };
   fs.writeFileSync(file, JSON.stringify({ theme: 'dark', mcpServers: { foreign } }, null, 4) + '\n');
@@ -160,7 +161,7 @@ test('JSON app setup and Undo preserve foreign MCP servers and refuse a name col
 });
 
 test('malformed JSON configuration remains byte-for-byte unchanged', async (t) => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'plexiform-mcp-config-')); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const home = testTempDir('plexiform-mcp-config-'); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const file = Install.configPath('claude-code', home); fs.writeFileSync(file, '{invalid');
   await assert.rejects(Install.install({ target: 'claude-code', home, grantPath: '/p' }));
   assert.equal(fs.readFileSync(file, 'utf8'), '{invalid');
@@ -185,7 +186,7 @@ test('real stdio MCP exposes scoped tools and performs an authenticated board ro
 });
 
 test('real Codex configuration commands preserve other settings and Undo removes only the owned server', { skip: !Install.findCodex() && 'Codex CLI is not installed' }, async (t) => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'plexiform-codex-config-')); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const home = testTempDir('plexiform-codex-config-'); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   fs.mkdirSync(path.join(home, '.codex'));
   const file = Install.configPath('codex', home);
   fs.writeFileSync(file, 'model = "gpt-6.1-sol"\n[mcp_servers.foreign]\ncommand = "foreign-tool"\n');

@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const S = require('../spend.js');
 const R = require('../rules.js');
 const Help = require('../help.js');
+const { testTempDir } = require('./helpers/tmp');
 
 // Wednesday 2026-09-30 12:00 local.
 const NOW = new Date(2026, 8, 30, 12, 0, 0).getTime();
@@ -175,7 +176,7 @@ test('usage worker: reads off the main thread, then says unchanged until a file 
   const os = require('os');
   const path = require('path');
   const { Worker } = require('worker_threads');
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'spend-worker-'));
+  const root = testTempDir('spend-worker-');
   fs.mkdirSync(path.join(root, 'p'));
   const line = (i) => `${JSON.stringify({ type: 'assistant', sessionId: 's', timestamp: new Date().toISOString(), requestId: `r${i}`, message: { id: `m${i}`, model: 'claude-opus-5', usage: { input_tokens: 0, output_tokens: 1000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } })}\n`;
   fs.writeFileSync(path.join(root, 'p', 's.jsonl'), line(0));

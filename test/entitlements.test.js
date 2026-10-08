@@ -7,6 +7,7 @@ const crypto = require('crypto');
 
 const E = require('../src/entitlements');
 const { registerAll } = require('../src/paid-wiring');
+const { testTempDir } = require('./helpers/tmp');
 
 const DAY = 86400e3;
 const T0 = Date.UTC(2026, 9, 7);
@@ -25,7 +26,7 @@ function sign(claims, { privateKey = KEY.privateKey, header = { alg: 'EdDSA', ty
 const claims = (over = {}) => ({ sub: 'u1', plan: 'plus', iat: (T0 - DAY) / 1000, period_end: (T0 + 30 * DAY) / 1000, exp: (T0 + 44 * DAY) / 1000, ...over });
 
 function setup(t, { token, raw, clock = T0, keys = [KEY.pub], beta } = {}) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ent-'));
+  const root = testTempDir('ent-');
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   if (raw !== undefined) fs.writeFileSync(path.join(root, E.TOKEN_FILE), raw);
   else if (token !== undefined) fs.writeFileSync(path.join(root, E.TOKEN_FILE), JSON.stringify({ token }));
@@ -108,7 +109,7 @@ test('bad signature, wrong key, wrong alg, no pinned key → free', (t) => {
 });
 
 test('the shipped build pins no key yet, so every install is in the beta: the top plan, every feature', (t) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ent-'));
+  const root = testTempDir('ent-');
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   E.configure({ root, now: () => T0 });
   assert.equal(E.BETA_ALL_FEATURES, true);
@@ -122,7 +123,7 @@ test('the shipped build pins no key yet, so every install is in the beta: the to
 });
 
 test('PLEXIFORM_FORCE_FREE=1 ends the beta, and with no pinned key a token alone never unlocks anything', (t) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ent-'));
+  const root = testTempDir('ent-');
   const prev = process.env.PLEXIFORM_FORCE_FREE;
   t.after(() => { fs.rmSync(root, { recursive: true, force: true }); if (prev === undefined) delete process.env.PLEXIFORM_FORCE_FREE; else process.env.PLEXIFORM_FORCE_FREE = prev; });
   fs.writeFileSync(path.join(root, E.TOKEN_FILE), JSON.stringify({ token: sign(claims()) }));

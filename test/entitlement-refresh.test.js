@@ -13,6 +13,7 @@ const crypto = require('crypto');
 const Ent = require('../src/entitlements');
 const { createRefresher, describe } = require('../src/entitlement-refresh');
 const { ENTITLEMENT_KEYS } = require('../src/entitlement-keys');
+const { testTempDir } = require('./helpers/tmp');
 
 const DAY = 86_400_000;
 const T0 = Date.parse('2026-10-01T00:00:00Z');
@@ -30,7 +31,7 @@ function sign(priv, claims) {
 }
 
 function rig({ signedIn = true } = {}) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ent-refresh-'));
+  const root = testTempDir('ent-refresh-');
   const k = keys();
   const clock = { now: T0 };
   Ent.configure({ root, publicKeys: [k.pub], now: () => clock.now });

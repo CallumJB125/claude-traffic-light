@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { JSDOM } = require('jsdom');
 const Home = require('../src/home-main.js');
+const { testTempDir } = require('./helpers/tmp');
 
 const ROOT = path.join(__dirname, '..');
 const html = fs.readFileSync(path.join(ROOT, 'home.html'), 'utf8');
@@ -250,7 +251,7 @@ test('the cost guard hands its report to main for Home', () => {
   assert.match(main, /costGuard: \(\) => \(costGuardReport \? costGuardReport\(\) : null\)/);
   let handed = null;
   const os = require('node:os');
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cg-'));
+  const dir = testTempDir('cg-');
   const reg = require('../src/spend-enforce.js').register({ rootDir: dir, entitlements: { has: () => false, limits: () => ({}) }, ipcMain: { handle() {} }, fromPage: () => false, onQuit: (fn) => fn(), setCostGuardReport: (fn) => { handed = fn; } });
   assert.equal(handed, reg.report);
   fs.rmSync(dir, { recursive: true, force: true });

@@ -12,11 +12,12 @@ const path = require('node:path');
 const http = require('node:http');
 const crypto = require('node:crypto');
 const { WebSocketServer } = require('ws');
+const { testTempDir } = require('../helpers/tmp');
 
 const SECRET = 'SECRET-TRANSCRIPT';
 
 async function startFakeDaemon({ socketMode = 0o600 } = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cdx-'));
+  const dir = testTempDir('cdx-');
   fs.chmodSync(dir, 0o700);
   const real = path.join(dir, 's.sock');
   fs.mkdirSync(path.join(dir, 'app-server-control'), { mode: 0o700 });

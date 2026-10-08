@@ -13,9 +13,10 @@ const I = require('../hooks/pending-input.js');
 const Owned = require('../hooks/owned.js');
 const { fakeApp } = require('./fake-app.js');
 const KEY = require('crypto').randomBytes(32);
+const { testTempDir } = require('./helpers/tmp');
 
 const SET_STATUS = path.join(__dirname, '..', 'hooks', 'set-status.js');
-const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-inputs-'));
+const tmp = () => testTempDir('ctl-inputs-');
 const HOST = os.hostname().split('.')[0];
 
 const QUESTION_INPUT = { questions: [{ question: 'Which framework?', header: 'Framework', options: [{ label: 'React', description: 'hooks' }, { label: 'Vue' }], multiSelect: false }] };
@@ -241,7 +242,7 @@ test('session: a notification ask keeps its words; a classifier denial is "block
 
 test('session: SessionStart records the tmux pane and socket, and ownership only with a matching launch record', () => {
   const home = tmp();
-  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-owned-cwd-'));
+  const cwd = testTempDir('ctl-owned-cwd-');
   const tmuxEnv = { TMUX: '/private/tmp/tmux-501/default,123,0', TMUX_PANE: '%7' };
   // A made-up id: not owned.
   runSync('session-start', home, { session_id: 'a', cwd, source: 'startup' }, { ...tmuxEnv, BUDDY_OWNED: 'x'.repeat(24) });
@@ -283,7 +284,7 @@ test('M2: broad suggestions are never offered — whole-tool Bash/Write/Edit/Mul
 test('L1: all-wildcard rules, odd tool names, shell prefixes and home-equivalent directories are dropped; narrow prefix rules stay', () => {
   // A throwaway home in a temp root of its own, so nothing depends on the machine this runs on
   // (CI's /home/runner, a Mac's /Users/x): os.homedir() reads $HOME on every call.
-  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-l1-home-')));
+  const root = fs.realpathSync.native(testTempDir('ctl-l1-home-'));
   const home = path.join(root, 'home', 'runner');
   fs.mkdirSync(home, { recursive: true });
   const wasHome = process.env.HOME;

@@ -6,9 +6,10 @@ const path = require('path');
 
 const M = require('../mcp-server.js');
 const Snap = require('../src/burst-snapshot.js');
+const { testTempDir } = require('./helpers/tmp');
 
 const NOW = Date.parse('2026-09-11T12:00:00.000Z');
-const root = () => fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-mcp-burst-'));
+const root = () => testTempDir('ctl-mcp-burst-');
 
 const detection = {
   kind: 'present',

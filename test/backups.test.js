@@ -5,6 +5,7 @@ const os = require('os');
 const path = require('path');
 const Backups = require('../src/backups.js');
 const Rules = require('../rules.js');
+const { testTempDir } = require('./helpers/tmp');
 
 const DAY = 86400000;
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -13,7 +14,7 @@ const T0 = Date.parse('2026-10-01T12:00:00.000Z');
 
 // A data folder that holds both what is backed up and what must never be.
 function fixture(config = { rules: [{ id: 'a' }], presets: [], roam: true }) {
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'backups-test-'));
+  const base = testTempDir('backups-test-');
   const dataDir = path.join(base, 'data');
   const backupsDir = path.join(base, 'Backups');
   fs.mkdirSync(path.join(dataDir, 'cameos'), { recursive: true });

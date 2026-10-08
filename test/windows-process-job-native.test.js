@@ -4,6 +4,7 @@ const path = require('node:path');
 const { once } = require('node:events');
 const { spawn } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
+const { testTempDir } = require('./helpers/tmp');
 const enabled = process.platform === 'win32';
 const modulePath = pathToFileURL(path.resolve(__dirname, '../board/runner/windows-job.js')).href;
 async function until(check, ms = 5000) {
@@ -45,7 +46,7 @@ test('native helper crash cannot forge stop confirmation and kills its retained 
 test('native launch refuses an executable writable by another principal before any child runs', { skip: !enabled, timeout: 15000 }, async () => {
   const fs = require('node:fs'); const os = require('node:os'); const { execFileSync } = require('node:child_process');
   const { WindowsJob, jobHelperPath } = await import(modulePath);
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pf-untrusted-exe-')), bin = path.join(dir, 'node.exe'), marker = path.join(dir, 'must-not-exist');
+  const dir = testTempDir('pf-untrusted-exe-'), bin = path.join(dir, 'node.exe'), marker = path.join(dir, 'must-not-exist');
   try {
     fs.copyFileSync(process.execPath, bin);
     execFileSync(path.join(process.env.SystemRoot, 'System32', 'icacls.exe'), [bin, '/grant', '*S-1-1-0:(M)'], { stdio: 'ignore', windowsHide: true });

@@ -10,6 +10,7 @@ const vm = require('node:vm');
 const { createRequire } = require('node:module');
 const Guard = require('../hooks/pending-input');
 const { hashToolInput } = require('../hooks/answer-file');
+const { testTempDir } = require('./helpers/tmp');
 
 function grammar(platform = 'win32', aliases = {}) {
   const source = require.resolve('../hooks/pending-input');
@@ -88,7 +89,7 @@ test('Windows a root suggestion cannot be shown or replayed through a correctly 
 });
 
 test('actual fresh host home/ancestor and symlink targets refuse while narrow directories retain bytes', t => {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'pf-permission-directory-')));
+  const root = fs.realpathSync(testTempDir('pf-permission-directory-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const home = path.join(root, 'home'), allowed = path.join(home, 'work', 'app'), keys = path.join(home, '.ssh');
   fs.mkdirSync(allowed, { recursive: true }); fs.mkdirSync(keys);

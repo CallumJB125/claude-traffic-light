@@ -6,8 +6,9 @@ const path = require('path');
 const zlib = require('zlib');
 const { spawnSync } = require('child_process');
 const C = require('../cameos');
+const { testTempDir } = require('./helpers/tmp');
 
-const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'cameos-'));
+const tmp = () => testTempDir('cameos-');
 
 test('slugify makes safe ids from names', () => {
   assert.equal(C.slugify('Dad'), 'dad');

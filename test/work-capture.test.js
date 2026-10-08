@@ -1,11 +1,12 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path');
 const {createWorkCapture:createReal,observation,routeFor,repoFor,clean,routeKey}=require('../src/work-capture');
+const { testTempDir } = require('./helpers/tmp');
 const createWorkCapture=o=>createReal({startEnabled:true,...o});
 const {execFileSync}=require('node:child_process');
 const crypto=require('node:crypto');
 const R={hub:'https://hub.example.test',user_id:'user-a',team_id:'team-a',board_id:'board-a',repo_id:'repo-a',canonical_url:'github.com/org/app',role:'member'};
 const event=(extra={})=>({source:'codex',sessionId:'thread-1',host:'mac',cwd:'/working/app',signal:'tool-use',updatedAt:new Date(100000).toISOString(),...extra});
-function rig(t,opts={}){const dir=fs.mkdtempSync(path.join(os.tmpdir(),'work-capture-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));const calls=[];let time=100000;
+function rig(t,opts={}){const dir=testTempDir('work-capture-');t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));const calls=[];let time=100000;
  const setup={file:path.join(dir,'capture.json'),host:'mac',getRoutes:async()=>({routes:[R],complete:true}),resolveRepo:async()=>R.canonical_url,
    sendLocal:async body=>{calls.push({kind:'local',body});return {ok:true,card:{id:'local-card'}};},sendTeam:async(destination,body)=>{calls.push({kind:'team',destination,body});return {ok:true,card:{id:'team-card'}};},now:()=>time,...opts};
  const router=createWorkCapture(setup);t.after(()=>router.stop());return {dir,calls,router,setup,advance:n=>time+=n};}
@@ -215,7 +216,7 @@ test('same provider, cwd and explicit title collapse to the newest session',asyn
  assert.deepEqual(r.calls.map(c=>c.body.session_id),['b']);
 });
 test('a fresh install is opted out until the user enables it; an explicit choice persists',async t=>{
- const dir=fs.mkdtempSync(path.join(os.tmpdir(),'work-capture-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+ const dir=testTempDir('work-capture-');t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
  const file=path.join(dir,'c.json'),base={file,getRoutes:async()=>({routes:[],complete:true}),sendLocal:async()=>({ok:true,card:{id:'c'}}),sendTeam:async()=>({ok:true}),resolveRepo:async()=>null,now:()=>100000};
  const a=createReal(base);assert.equal(a.enabled(),false);a.setEnabled(true);await a.stop();
  const b=createReal(base);assert.equal(b.enabled(),true);b.setEnabled(false);await b.stop();assert.equal(createReal(base).enabled(),false);
@@ -241,7 +242,7 @@ test('captureOnce makes one card with the automatic toggle off, dedupes, and hon
  await r.router.observe([event({sessionId:'thread-4'})]);assert.equal(r.calls.length,2,'automatic path stays off');
 });
 test('This Mac list hides stored background entries, groups repeats and prunes old finished ones on start',async t=>{
- const dir=fs.mkdtempSync(path.join(os.tmpdir(),'work-capture-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+ const dir=testTempDir('work-capture-');t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
  const file=path.join(dir,'capture.json'),NOW=10*86400000,tasks={};
  const add=(id,title,status,seen)=>{tasks[crypto.createHash('sha256').update(id).digest('hex')]={destination:{kind:'local'},repo:null,provider:'codex',session_id:id,task_id:'session',title,status,card_id:'c',last_seen:seen};};
  for(let i=0;i<40;i++)add(`mem-${i}`,'Codex · memories','idle',NOW-1000);

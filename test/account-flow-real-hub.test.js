@@ -23,6 +23,7 @@ const { createAccountFlow } = require('../buddy-window/account-flow');
 const { createAccountClient } = require('../buddy-window/accounts');
 const { createDeviceController } = require('../buddy-window/device');
 const { createWorkspaceStore, normalizeHubUrl, normalizeLinkHub, hubKey } = require('../buddy-window/workspaces');
+const { testTempDir } = require('./helpers/tmp');
 
 const BOARD = path.join(__dirname, '..', 'board');
 const ready = fs.existsSync(path.join(BOARD, 'node_modules', 'ws'));
@@ -121,7 +122,7 @@ function install(hub, root, name) {
 }
 
 test('desktop real hub: pending and accepted client-only access stays outside staff teams and runners', { skip: (!ready || !WebSocket) && 'board dependencies not installed' }, async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-clienthub-'));
+  const root = testTempDir('buddy-clienthub-');
   let hub;
   try {
     hub = await startRealHub(path.join(root, 'hub'));
@@ -149,7 +150,7 @@ test('desktop real hub: pending and accepted client-only access stays outside st
 });
 
 test('desktop on the real hub: automatic first team → This Mac runs it; invited sign-in joins directly, code join and returning owner', { skip: (!ready || !WebSocket) && 'board dependencies not installed' }, async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-realhub-'));
+  const root = testTempDir('buddy-realhub-');
   const hub = await startRealHub(path.join(root, 'hub'));
   const installs = [];
   try {

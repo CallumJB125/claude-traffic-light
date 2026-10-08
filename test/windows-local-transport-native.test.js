@@ -10,6 +10,7 @@ const { once } = require('node:events');
 const { spawnSync } = require('node:child_process');
 const Private = require('../board/shared/windows-private-directory.cjs');
 const Local = require('../board/shared/local-sockets.cjs');
+const { testTempDir } = require('./helpers/tmp');
 function prepare(root) {
   const powershell = path.join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
   const script = String.raw`
@@ -34,7 +35,7 @@ function pipeName(identity, role = 1) {
 }
 
 test('native Windows broker authenticates helpers, multiplexes bounded streams, refuses collisions and preserves private tokens', { skip: process.platform !== 'win32', timeout: 60000 }, async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plexiform-transport-native-'));
+  const root = testTempDir('plexiform-transport-native-');
   const peers = [], clients = []; let server, rogue;
   try {
     const identity = prepare(root), endpoint = path.join(root, 'tasks.sock');

@@ -7,10 +7,11 @@ const vm = require('node:vm');
 const Health = require('../src/health');
 const Codex = require('../adapters/codex');
 const Runtime = require('../adapters/runtime');
+const { testTempDir } = require('./helpers/tmp');
 const NOW = Date.parse('2026-10-02T05:00:00Z');
 
 function fixture(t, configured = true) {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'plexiform-codex-health-'));
+  const home = testTempDir('plexiform-codex-health-');
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const root = path.join(home, 'data');
   fs.mkdirSync(path.join(root, 'sessions'), { recursive: true });

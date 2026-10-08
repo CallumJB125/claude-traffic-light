@@ -4,6 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const Module = require('module');
+const { testTempDir } = require('./helpers/tmp');
 
 const ROOT = path.join(__dirname, '..');
 const SRC = path.join(ROOT, 'src', 'crash-reports.js');
@@ -12,7 +13,7 @@ const CrashReports = require(SRC);
 const HOME = '/Users/jdoe';
 const scrubWith = () => ({ home: HOME, user: 'jdoe', hostname: 'jdoes-macbook.local', names: ['acme/secret-launch'] });
 const APP = { version: '1.2.3', os: 'darwin', osVersion: 'macOS 15.1', arch: 'arm64' };
-const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'crash-reports-'));
+const tmp = () => testTempDir('crash-reports-');
 const make = (opts = {}) => CrashReports.create({ dir: path.join(tmp(), 'crash-reports'), app: APP, scrubWith, ...opts });
 
 function realisticError() {

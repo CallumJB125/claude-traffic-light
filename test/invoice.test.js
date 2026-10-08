@@ -8,6 +8,7 @@ const Clients = require('../src/clients.js');
 const Invoice = require('../src/invoice.js');
 const E = require('../src/entitlements');
 const { registerAll, PACKAGES } = require('../src/paid-wiring');
+const { testTempDir } = require('./helpers/tmp');
 
 const NOW = new Date(2026, 9, 15, 12, 0, 0).getTime();
 const MIN = 60000;
@@ -72,7 +73,7 @@ test('subscription mode says API-equivalent estimate in the CSV and the PDF page
 });
 
 test('the invoice says Actual API usage only when Preferences says API; unset or missing config is an estimate', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plex-mode-'));
+  const root = testTempDir('plex-mode-');
   try {
     assert.equal(Clients.modeOf(root), 'subscription', 'no config.json');
     fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ spend: { dailyBudget: 5 } }));
@@ -133,7 +134,7 @@ test('free plan keeps the current month and no rate cards; plus has full history
 });
 
 test('the mapping persists locally, is validated, and register() gates IPC by page', async (t) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'clients-'));
+  const root = testTempDir('clients-');
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   Clients.save(root, { clients: [{ id: 'acme', name: 'Acme', rate: { markupPct: -5, hourlyRate: 'x' } }, { id: '../bad', name: 'Bad' }], mappings: [{ path: '/a', clientId: 'acme' }, { path: '/b', clientId: 'nope' }] });
   const back = Clients.load(root);

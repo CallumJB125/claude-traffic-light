@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const LoginItem = require('../src/login-item.js');
+const { testTempDir } = require('./helpers/tmp');
 
 test('login item: macOS and Windows use Electron’s own setting', () => {
   const calls = [];
@@ -17,7 +18,7 @@ test('login item: macOS and Windows use Electron’s own setting', () => {
 });
 
 test('login item: Linux writes and removes an XDG autostart entry that runs $APPIMAGE', () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-login-'));
+  const home = testTempDir('ctl-login-');
   const li = LoginItem.create({ app: null, platform: 'linux', env: { APPIMAGE: '/home/u/Apps/Plexiform 1.0.AppImage' }, home, execPath: '/tmp/.mount_x/plexiform' });
   assert.equal(li.file, path.join(home, '.config', 'autostart', 'plexiform.desktop'));
   assert.equal(li.get(), false);

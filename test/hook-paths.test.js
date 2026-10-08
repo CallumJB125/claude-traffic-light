@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const HookPaths = require('../src/hook-paths.js');
+const { testTempDir } = require('./helpers/tmp');
 
 const base = { execPath: '/x/Plexiform', resourcesPath: '/x/resources', appDir: '/src', appPath: '/x/resources/app.asar', rootDir: '/home/u/.claude-traffic-light', version: '1.2.3' };
 
@@ -47,7 +48,7 @@ test('hook paths: a dev run is plain node against the checkout', () => {
 });
 
 test('hook paths: materialize copies hooks and adapters, writes the MCP stub; prune (after the lock) drops older versions only', () => {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-hookpaths-'));
+  const tmp = testTempDir('ctl-hookpaths-');
   const res = path.join(tmp, 'resources');
   const root = path.join(tmp, 'data');
   fs.mkdirSync(path.join(res, 'hooks'), { recursive: true });
@@ -78,7 +79,7 @@ test('hook paths: a failed copy falls back to the mounted paths rather than poin
 
 // M6 (code review): a second launch must not delete the copy the running app's hooks use.
 test('hook paths: a finished copy (.ok) is left alone; a new one is built aside and renamed into place', () => {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-hookpaths-'));
+  const tmp = testTempDir('ctl-hookpaths-');
   const res = path.join(tmp, 'resources');
   const root = path.join(tmp, 'data');
   for (const d of ['hooks', 'adapters']) fs.mkdirSync(path.join(res, d), { recursive: true });
@@ -107,7 +108,7 @@ test('hook paths: a finished copy (.ok) is left alone; a new one is built aside 
 
 
 test('Windows portable caches the complete runtime and upgrades a scripts-only cache before extraction cleanup', () => {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-portable-runtime-'));
+  const tmp = testTempDir('ctl-portable-runtime-');
   try {
     const extraction = path.join(tmp, 'extracted');
     const resources = path.join(extraction, 'resources');
@@ -131,7 +132,7 @@ test('Windows portable caches the complete runtime and upgrades a scripts-only c
 });
 
 test('Windows portable never publishes a completed cache after a failed runtime copy', () => {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-portable-failure-'));
+  const tmp = testTempDir('ctl-portable-failure-');
   try {
     const stableDir = path.join(tmp, 'hooks-1.2.3');
     const runtimeFrom = path.join(tmp, 'missing-runtime');

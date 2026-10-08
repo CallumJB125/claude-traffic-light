@@ -7,6 +7,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { breakdownText, breakdownFile, GROUPS } = require('../src/context-breakdown.js');
+const { testTempDir } = require('./helpers/tmp');
 
 const SECRET = 'PRIVATE-PROMPT-TEXT';
 const j = (o) => JSON.stringify(o);
@@ -65,7 +66,7 @@ test('only what follows the last compaction boundary counts', () => {
 });
 
 test('breakdownFile reads only the tail and drops the partial first line; a missing file is null', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ctx-bd-'));
+  const dir = testTempDir('ctx-bd-');
   try {
     const file = path.join(dir, 's.jsonl');
     fs.writeFileSync(file, `${user('z'.repeat(100000))}\n${fixture()}`);

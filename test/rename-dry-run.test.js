@@ -12,6 +12,7 @@ const M = require('../src/rename-migration.js');
 const DryRun = require('../src/rename-dry-run.js');
 const Adapters = require('../adapters/index.js');
 const McpInstall = require('../mcp-install.js');
+const { testTempDir } = require('./helpers/tmp');
 
 const Runtime = Adapters.Runtime;
 const Claude = Adapters.get('claude');
@@ -38,7 +39,7 @@ function snapshot(dir) {
 }
 
 function fixture() {
-  const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-dryrun-')));
+  const home = fs.realpathSync(testTempDir('ctl-dryrun-'));
   const appData = path.join(home, 'Library', 'Application Support');
   const old = path.join(appData, 'claude-buddy');
   const put = (rel, text) => { fs.mkdirSync(path.dirname(path.join(old, rel)), { recursive: true }); fs.writeFileSync(path.join(old, rel), text); };

@@ -4,6 +4,7 @@ const fs = require('node:fs'); const os = require('node:os'); const path = requi
 const { remoteVerdict, allowListReason } = require('../src/deny/allowlist');
 const { compileRules, evaluateDenyList } = require('../src/deny/denylist');
 const { canonicalize } = require('../src/deny/canonical');
+const { testTempDir } = require('./helpers/tmp');
 const rules = compileRules(); const cwd = String.raw`C:\Users\fixture\project`, home = String.raw`C:\Users\fixture`;
 const read = (file, opts = {}) => remoteVerdict(rules, { toolName: 'Read', toolInput: { file_path: file }, cwd }, { home, ...opts });
 test('Windows credential spellings are denied before filesystem calls and signed input stays byte-identical', () => {
@@ -53,7 +54,7 @@ test('POSIX literal-backslash native lookup remains exact rather than changing t
   assert.match(reason, /symlink/); assert.deepEqual(seen, ['/home/fixture', '/project/literal\\directory/literal\\file']);
 });
 test('actual current-host owned symlink to credentials is refused without reading private content', () => {
-  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'plexiform-approval-path-'));
+  const temp = testTempDir('plexiform-approval-path-');
   try {
     const project = path.join(temp, 'project'), keys = path.join(temp, '.ssh'); fs.mkdirSync(project); fs.mkdirSync(keys); fs.writeFileSync(path.join(keys, 'key'), 'synthetic sentinel');
     const link = path.join(project, 'link'); fs.symlinkSync(keys, link, process.platform === 'win32' ? 'junction' : 'dir');

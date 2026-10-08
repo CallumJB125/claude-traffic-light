@@ -7,13 +7,14 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { createWorkCapture } = require('../src/work-capture');
+const { testTempDir } = require('./helpers/tmp');
 
 const keyOf = (provider, session, task = 'session') => crypto.createHash('sha256').update(JSON.stringify([provider, session, task])).digest('hex');
 const entry = (session, over = {}) => ({ destination: { kind: 'local' }, repo: null, provider: 'codex', session_id: session, task_id: 'session', title: 'Codex · app', status: 'idle', card_id: `card-${session}`, last_seen: 100000, sent_at: 100000, ...over });
 
 // A capture state written before work records: cards with folder-name titles and no body.
 function rig(t, { tasks, facts = {}, docFacts = {}, send = null, enabled = true } = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'work-backfill-'));
+  const dir = testTempDir('work-backfill-');
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const file = path.join(dir, 'capture.json');
   const state = { v: 1, install_id: crypto.randomUUID(), tasks: {}, choices: {}, enabled };

@@ -1,6 +1,7 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
+const { testTempDir } = require('./helpers/tmp');
 const SCRIPT = path.join(__dirname, '..', 'scripts', 'cutover-preflight.mjs');
 const good = {
   BOARD_AUTH: 'accounts', BOARD_SECRET: 'k'.repeat(48), BOARD_PUBLIC_URL: 'https://app.plexiform.dev', BOARD_TRUST_CF_IP: '1', BOARD_BIND: '127.0.0.1',
@@ -37,7 +38,7 @@ test('risks: open signup, public-mail domain, leftover Access/bootstrap/restore,
   assert.match(preflight({ ...good, BOARD_SIGNUP_ALLOW: 'domain:gmail.com' }).risks.join(), /public mail provider/);
 });
 test('CLI: reads the env file, lists unclaimed members read-only, exit codes', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'preflight-'));
+  const dir = testTempDir('preflight-');
   try {
     const envFile = path.join(dir, 'hub.env');
     fs.writeFileSync(envFile, Object.entries(good).map(([k, v]) => `${k}=${v}`).join('\n'));

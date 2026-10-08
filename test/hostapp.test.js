@@ -6,6 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const H = require('../hostapp.js');
+const { testTempDir } = require('./helpers/tmp');
 
 const WAITING = new Set(['permission-ask', 'limit-hit', 'idle-nudge']);
 const isWaiting = (s) => WAITING.has(s);
@@ -88,7 +89,7 @@ test('an icon off every display lands on the nearest one', () => {
 
 // ── The hook records which app the session runs in
 test('set-status records the host app in the session file', () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cb-hostapp-'));
+  const home = testTempDir('cb-hostapp-');
   execFileSync('node', [path.join(__dirname, '..', 'hooks', 'set-status.js'), 'tool-use'], {
     env: { ...process.env, CLAUDE_TRAFFIC_LIGHT_HOME: home, __CFBundleIdentifier: 'com.mitchellh.ghostty' },
     input: JSON.stringify({ session_id: 'abc', cwd: '/tmp' }),
@@ -99,7 +100,7 @@ test('set-status records the host app in the session file', () => {
 });
 
 test('an unknown host app is recorded as null rather than a guess', () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cb-hostapp-'));
+  const home = testTempDir('cb-hostapp-');
   execFileSync('node', [path.join(__dirname, '..', 'hooks', 'set-status.js'), 'tool-use'], {
     env: {
       ...process.env,
@@ -118,7 +119,7 @@ test('an unknown host app is recorded as null rather than a guess', () => {
 });
 
 test('the host app is cached, so the process-tree walk runs once per session', () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cb-hostapp-'));
+  const home = testTempDir('cb-hostapp-');
   const run = (env) => execFileSync('node', [path.join(__dirname, '..', 'hooks', 'set-status.js'), 'tool-use'], {
     env: { ...process.env, CLAUDE_TRAFFIC_LIGHT_HOME: home, ...env },
     input: JSON.stringify({ session_id: 'abc', cwd: '/tmp' }),

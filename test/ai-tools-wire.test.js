@@ -8,9 +8,10 @@ const os = require('node:os');
 const path = require('node:path');
 const Adapters = require('../adapters/index.js');
 const { wire } = require('../src/ai-tools-wire.js');
+const { testTempDir } = require('./helpers/tmp');
 
 function rig() {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'plex-wire-'));
+  const home = testTempDir('plex-wire-');
   const rootDir = path.join(home, 'data');
   fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
   fs.mkdirSync(path.join(home, '.codex'), { recursive: true });

@@ -7,6 +7,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const net = require('node:net');
+const { testTempDir } = require('./helpers/tmp');
 
 const hold = () => new Promise((resolve) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => resolve(s)); });
 
@@ -14,7 +15,7 @@ test('signal server: a port still held by the quitting old app is tried again, a
   const holder = await hold();
   const port = holder.address().port;
   process.env.CLAUDE_TRAFFIC_LIGHT_PORT = String(port);
-  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-signal-'));
+  const rootDir = testTempDir('ctl-signal-');
   const quits = [];
   const S = require('../src/signal-server.js')({ rootDir, sessionsDir: rootDir, requestsDir: rootDir, aggregateState: () => ({ sessions: [] }), broadcastStatus: () => {}, port, retries: 20, retryMs: 20, app: { on: (e, fn) => quits.push([e, fn]) } });
   const server = S.startSignalServer();
@@ -32,7 +33,7 @@ test('signal server: gives up after its tries when the port stays taken, writing
   const holder = await hold();
   const port = holder.address().port;
   process.env.CLAUDE_TRAFFIC_LIGHT_PORT ||= String(port);
-  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-signal-'));
+  const rootDir = testTempDir('ctl-signal-');
   const S = require('../src/signal-server.js')({ rootDir, sessionsDir: rootDir, requestsDir: rootDir, aggregateState: () => ({ sessions: [] }), broadcastStatus: () => {}, port, retries: 3, retryMs: 10, app: { on: () => {} } });
   const errors = [];
   const server = S.startSignalServer();

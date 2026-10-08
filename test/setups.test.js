@@ -4,9 +4,10 @@ const {randomUUID}=require('node:crypto');
 const {createSetupsService}=require('../src/setups-service');
 const schema=require('../src/borrow/payload');
 const {createAccountClient}=require('../buddy-window/accounts');
+const { testTempDir } = require('./helpers/tmp');
 const sample=()=>({schema:1,files:[{id:randomUUID(),source_id:'git',relative_path:'.gitconfig',format:'gitconfig',content:'[alias]\n st = status\n',note:''}],items:[],note:''});
 function fixture(t,extra={}){
-  const home=fs.mkdtempSync(path.join(os.tmpdir(),'setups-native-'));t.after(()=>fs.rmSync(home,{recursive:true,force:true}));fs.writeFileSync(path.join(home,'.gitconfig'),'[alias]\n st = status\n[user]\n name = Synthetic Person\n email = synthetic@example.test\n');
+  const home=testTempDir('setups-native-');t.after(()=>fs.rmSync(home,{recursive:true,force:true}));fs.writeFileSync(path.join(home,'.gitconfig'),'[alias]\n st = status\n[user]\n name = Synthetic Person\n email = synthetic@example.test\n');
   const principal={user_id:'u1',team_id:'t1',member_id:'m1'},sent=[];let current=true,time=1_000_000;
   const source={name:'Synthetic team',userId:'u1',teamId:'t1',memberId:'m1',role:'member',current:()=>current,async call(op,args){sent.push({op,args});if(op==='publish'){const checked=schema.validatePayload(args.body.payload);return {ok:true,principal,version:{id:randomUUID(),number:1,content_hash:checked.content_hash}};}return {ok:true,principal,status:'complete',profiles:[],baseline:null};}};
   const service=createSetupsService({home,sources:async()=>[source],now:()=>time,confirm:async()=>true,...extra});

@@ -10,6 +10,7 @@ const { createRequire } = require('node:module');
 const Lifecycle = require('../scripts/windows-install-smoke');
 const Adapters = require('../adapters');
 const Brand = require('../brand');
+const { testTempDir } = require('./helpers/tmp');
 
 function packaged() {
   const file = path.join(__dirname, '../scripts/smoke-installed.js');
@@ -69,7 +70,7 @@ test('ordinary packaged smoke creates no observer timer', async () => {
 });
 
 function fixture(t, observe) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'portable-observation-source-'));
+  const root = testTempDir('portable-observation-source-');
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const installer = path.join(root, 'installer.exe'), portable = path.join(root, 'portable.exe'), calls = [], smokeCalls = [];
   let installDir;

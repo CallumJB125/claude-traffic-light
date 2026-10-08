@@ -12,6 +12,7 @@ const Indexer = require('../src/memory/indexer.js');
 const Search = require('../src/memory/search.js');
 const Handoff = require('../src/handoff.js');
 const { createCodexAppServer } = require('../src/codex-app-server.js');
+const { testTempDir } = require('./helpers/tmp');
 
 const FIX = path.join(__dirname, 'fixtures', 'memory');
 const FAKE_CODEX = path.join(__dirname, 'fixtures', 'fake-codex-app-server.js');
@@ -22,7 +23,7 @@ const NOW = Date.parse('2026-10-03T12:00:00Z');
 const until = async (fn, ms = 5000) => { const end = Date.now() + ms; for (;;) { const v = fn(); if (v) return v; if (Date.now() > end) throw new Error('timed out'); await new Promise((r) => setTimeout(r, 10)); } };
 
 function rig({ muted = [] } = {}) {
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'plex-memory-'));
+  const base = testTempDir('plex-memory-');
   const home = path.join(base, 'home'), root = path.join(base, 'data');
   const claudeDir = path.join(home, '.claude', 'projects', '-Users-dev-work');
   const codexDir = path.join(home, '.codex', 'sessions', '2026', '10', '02');
@@ -282,7 +283,7 @@ test('Hand to Codex starts an owned Codex session with the handover as its first
   const folders = [];
   const h = Handoff.create({ entitlements: ent('plus'), clipboard: clip(), docFor: async () => DOC,
     adapters: { codex: () => createCodexAppServer({ bin: FAKE_CODEX }), claude: () => ({ available: false }) },
-    workspace: () => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'plex-handoff-')); folders.push(d); return d; } });
+    workspace: () => { const d = testTempDir('plex-handoff-'); folders.push(d); return d; } });
   const events = [];
   try {
     const res = await h.hand({ tool: 'claude', sid: 'abc' }, 'codex', (e) => events.push(e));

@@ -11,12 +11,13 @@ const Ipc = require('../src/burst-ipc.js');
 const { createBurstClient } = require('../src/burst-client.js');
 const Snapshot = require('../src/burst-snapshot.js');
 const { createFakeBurst, stateV019 } = require('./fixtures/fake-burst.js');
+const { testTempDir } = require('./helpers/tmp');
 
 const SID = '0f6e3c1a-2b4d-4e5f-8a9b-0c1d2e3f4a5b';
 
 async function harness({ answer = 1 } = {}) {
   const fake = await createFakeBurst({ '/api/state': { body: stateV019() }, '/api/upgrade-status': { body: {} }, '/api/coordination-act': { body: { ok: 'queued' } }, '/api/requests': { body: [] }, '/api/coordination': { body: {} }, '/api/codex': { body: { status: { path: '/Users/me/.codex/config.toml', installed: true, enabled: false }, listening: true } }, '/api/codex/enable': { body: { ok: 'enabled' } }, '/api/reset': { body: { ok: 'reset' } } });
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'burst-ipc-'));
+  const home = testTempDir('burst-ipc-');
   const bin = path.join(home, '.local', 'bin', 'claude-burst');
   fs.mkdirSync(path.dirname(bin), { recursive: true });
   fs.writeFileSync(bin, '#!/bin/sh\n', { mode: 0o755 });

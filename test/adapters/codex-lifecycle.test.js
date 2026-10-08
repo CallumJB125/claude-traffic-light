@@ -9,11 +9,12 @@ const Runtime = require('../../adapters/runtime.js');
 const State = require('../../hooks/session-state.js');
 const Machine = require('../../hooks/session-machine.js');
 const Uninstall = require('../../adapters/uninstall-all.js');
+const { testTempDir } = require('../helpers/tmp');
 const EMIT = path.resolve(__dirname, '../../hooks/emit.js');
 const HOST = os.hostname().split('.')[0];
 const SECRET = 'PRIVATE-PROMPT-RESPONSE-CONTENTS';
 function fixture(t) {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'pf-codex-lifecycle-'));
+  const home = testTempDir('pf-codex-lifecycle-');
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const runtime = Runtime.make({ hooksDir: path.dirname(EMIT), dataDir: home });
   return { home, runtime, file: path.join(home, '.codex', 'hooks.json') };

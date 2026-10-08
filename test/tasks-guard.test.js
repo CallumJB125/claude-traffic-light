@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { createGuard, takeoverCommand } = require('../src/tasks-guard.js');
+const { testTempDir } = require('./helpers/tmp');
 
 const api = (f) => import(pathToFileURL(path.join(__dirname, '..', 'board', 'tasks-api', f)).href);
 let G;
@@ -210,7 +211,7 @@ test('takeoverCommand: no secret-looking env var, an absolute binary, quoted for
 test('resolveBin finds an executable on PATH, leaves an absolute path alone, and falls back to the name', () => {
   const { resolveBin } = require('../src/tasks-guard.js');
   const fs = require('node:fs'); const os = require('node:os');
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rb-'));
+  const dir = testTempDir('rb-');
   fs.writeFileSync(path.join(dir, 'fakeai'), '#!/bin/sh\n', { mode: 0o755 });
   assert.equal(resolveBin('fakeai', { PATH: dir }), path.join(dir, 'fakeai'));
   assert.equal(resolveBin('/abs/bin/x', { PATH: dir }), '/abs/bin/x');

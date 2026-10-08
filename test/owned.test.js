@@ -6,8 +6,9 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const O = require('../hooks/owned.js');
+const { testTempDir } = require('./helpers/tmp');
 
-const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-owned-'));
+const tmp = () => testTempDir('ctl-owned-');
 
 test('a launch record is 0600 in a 0700 dir and yields BUDDY_OWNED', () => {
   const root = tmp();

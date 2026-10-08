@@ -6,8 +6,9 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { createNudgeCounter, suggestionFor, THRESHOLD, WINDOW_MS } = require('../src/approval-nudge.js');
+const { testTempDir } = require('./helpers/tmp');
 
-const tmpFile = () => path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-nudge-')), 'approval-counts.json');
+const tmpFile = () => path.join(testTempDir('ctl-nudge-'), 'approval-counts.json');
 const SECRET = require('crypto').randomBytes(32);
 const counter = (o) => createNudgeCounter({ secret: () => SECRET, ...o });
 const bash = (command) => ({ kind: 'permission', tool: 'Bash', toolInput: { command }, cwd: '/w/app' });

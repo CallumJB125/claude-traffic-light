@@ -5,9 +5,10 @@ const {randomUUID,randomBytes,createCipheriv,createDecipheriv}=require('node:cry
 const {createNativeSupervisor}=require('../../../src/borrow/native-supervisor');
 const {createTransactionController}=require('../../../src/borrow/transaction-controller');
 const {validatePayload}=require('../../../src/borrow/payload');
+const { testTempDir } = require('../tmp');
 function stamp(p){const s=fs.statSync(p,{bigint:true});return {device:s.dev,inode:s.ino,size:s.size,uid:s.uid,mode:s.mode,links:s.nlink,mtime_seconds:s.mtimeNs/1000000000n,mtime_nanoseconds:s.mtimeNs%1000000000n,ctime_seconds:s.ctimeNs/1000000000n,ctime_nanoseconds:s.ctimeNs%1000000000n};}
 function fixture(t,helper,options={}){
- const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'pf-binding-runtime-'))),profile=root+'/profile',app=root+'/app';fs.mkdirSync(profile,{mode:0o700});fs.mkdirSync(app,{mode:0o700});fs.mkdirSync(profile+'/.codex',{mode:0o700});fs.writeFileSync(profile+'/.codex/AGENTS.md',options.before??'Keep synthetic notes.\n',{mode:0o600});
+ const root=fs.realpathSync(testTempDir('pf-binding-runtime-')),profile=root+'/profile',app=root+'/app';fs.mkdirSync(profile,{mode:0o700});fs.mkdirSync(app,{mode:0o700});fs.mkdirSync(profile+'/.codex',{mode:0o700});fs.writeFileSync(profile+'/.codex/AGENTS.md',options.before??'Keep synthetic notes.\n',{mode:0o600});
  const file={id:randomUUID(),source_id:'codex',relative_path:'.codex/AGENTS.md',format:'text',content:options.after??'Write synthetic notes.\n',note:''},extra=options.extraFile?{id:randomUUID(),source_id:'gemini-cli',relative_path:'.gemini/settings.json',format:'json',content:'{"theme":"synthetic"}',note:''}:null,payload=validatePayload({schema:1,files:extra?[file,extra]:[file],items:[],note:''}),actor={account:'fixture-account',team:'fixture-team',member:'fixture-member',device:'fixture-device'};
  if(extra){fs.mkdirSync(profile+'/.gemini',{mode:0o700});fs.writeFileSync(profile+'/.gemini/settings.json','{"theme":"before"}',{mode:0o600});}
  const state={foreground:true,generation:1,actor,sourceCurrent:true,confirmHook:null,readHook:null,wrapHook:null,storeHook:null,unwraps:0,children:[]};

@@ -13,12 +13,13 @@ const Remote = require('../hooks/remote.js');
 const SessionState = require('../hooks/session-state.js');
 const Rules = require('../rules.js');
 const createRemoteDevices = require('../src/remote-devices.js');
+const { testTempDir } = require('./helpers/tmp');
 
 const ROOT = path.join(__dirname, '..');
 const EMIT = path.join(ROOT, 'hooks', 'emit.js');
 const REMOTE_CLI = path.join(ROOT, 'hooks', 'remote.js');
 const HOST = os.hostname().split('.')[0];
-const tmp = (p = 'ctl-remote-') => fs.mkdtempSync(path.join(os.tmpdir(), p));
+const tmp = (p = 'ctl-remote-') => testTempDir(p);
 const TOKEN = 'ab'.repeat(32);
 const ch = (...codes) => String.fromCharCode(...codes);
 

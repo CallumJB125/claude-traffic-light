@@ -11,9 +11,10 @@ const { randomUUID } = require('node:crypto');
 const schema = require('../src/borrow/payload.js');
 const { formatOf } = require('../src/borrow/scrub.js');
 const { createPersonalSetups, diffLines, targetOf } = require('../src/setups-personal.js');
+const { testTempDir } = require('./helpers/tmp');
 
 function tmp(t, name) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `plx-${name}-`));
+  const dir = testTempDir(`plx-${name}-`);
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   return fs.realpathSync(dir);
 }

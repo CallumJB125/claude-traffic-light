@@ -10,11 +10,12 @@ const Adapters = require('../adapters/index.js');
 const McpInstall = require('../mcp-install.js');
 const UninstallAll = require('../adapters/uninstall-all.js');
 const vm = require('node:vm');
+const { testTempDir } = require('./helpers/tmp');
 
 const Runtime = Adapters.Runtime;
 
 function seededHome() {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-uninstall-'));
+  const home = testTempDir('ctl-uninstall-');
   const rt = Runtime.make({ execPath: '/opt/Plexiform/plexiform', platform: 'linux', hooksDir: '/opt/Plexiform/resources/hooks', dataDir: path.join(home, '.claude-traffic-light') });
   const foreignClaude = { type: 'command', command: 'echo mine' };
   fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
@@ -63,7 +64,7 @@ test('uninstall-hooks: removes only Buddy entries from every agent config and ~/
 });
 
 test('uninstall-hooks: an empty home stays empty', () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-uninstall-'));
+  const home = testTempDir('ctl-uninstall-');
   const results = UninstallAll.run({ home, mcp: McpInstall });
   assert.ok(results.every((r) => !r.changed && !r.error));
   assert.deepEqual(fs.readdirSync(home), []);
@@ -71,7 +72,7 @@ test('uninstall-hooks: an empty home stays empty', () => {
 });
 
 test('uninstall-hooks: an unparsable config is reported and left alone', () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-uninstall-'));
+  const home = testTempDir('ctl-uninstall-');
   fs.mkdirSync(path.join(home, '.claude'));
   fs.writeFileSync(path.join(home, '.claude', 'settings.json'), '{ not json');
   const r = UninstallAll.run({ home }).find((x) => x.id === 'claude');
@@ -96,7 +97,7 @@ test('uninstall: main.js --uninstall-hooks runs hooks/uninstall-hooks.js main() 
   const at = main.indexOf("process.argv.includes('--uninstall-hooks')");
   assert.ok(at > 0 && at < main.indexOf("require('electron')"), 'handled before electron is required');
   assert.match(main.slice(at, at + 300), /require\('\.\/hooks\/uninstall-hooks\.js'\)\.main\(/);
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-uninst-main-'));
+  const home = testTempDir('ctl-uninst-main-');
   const lines = [];
   const results = require('../hooks/uninstall-hooks.js').main({ home, mcp: McpInstall, log: (l) => lines.push(l) });
   assert.equal(lines.length, results.length);
@@ -121,32 +122,32 @@ function earlyMain(home, mcp = McpInstall) {
 }
 
 test('early uninstall exits nonzero for an actual malformed config and preserves its exact bytes before Electron', t => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-uninstall-status-')); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const home = testTempDir('ctl-uninstall-status-'); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const file = path.join(home, '.claude', 'settings.json'), bytes = Buffer.from('{ unparseable foreign data\r\n');
   fs.mkdirSync(path.dirname(file)); fs.writeFileSync(file, bytes);
   const result = earlyMain(home); assert.equal(result.code, 1); assert.ok(result.lines.some(line => line.includes('claude: left alone'))); assert.deepEqual(fs.readFileSync(file), bytes);
 });
 
 test('early uninstall exits zero for an empty home and creates no agent configuration', t => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-uninstall-status-')); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const home = testTempDir('ctl-uninstall-status-'); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   assert.equal(earlyMain(home).code, 0); assert.deepEqual(fs.readdirSync(home), []);
 });
 
 test('an actual adapter error with an empty message still exits nonzero and is reported left alone', t => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-uninstall-status-')); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const home = testTempDir('ctl-uninstall-status-'); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const file = path.join(home, 'synthetic-mcp.json'); fs.writeFileSync(file, 'Foreign retained config');
   const mcp = { configPath: () => file, uninstall() { throw new Error(''); } };
   const result = earlyMain(home, mcp); assert.equal(result.code, 1); assert.ok(result.lines.some(line => line.includes('mcp: left alone'))); assert.equal(fs.readFileSync(file, 'utf8'), 'Foreign retained config');
 });
 
 test('unavailable MCP helper reports incomplete removal without changing an empty home', t => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-uninstall-status-')); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const home = testTempDir('ctl-uninstall-status-'); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const lines = [], results = require('../hooks/uninstall-hooks.js').main({ home, mcp: null, log: line => lines.push(line) });
   assert.ok(results.some(row => row.id === 'mcp' && Object.hasOwn(row, 'error'))); assert.ok(lines.some(line => line.includes('MCP uninstall helper unavailable'))); assert.deepEqual(fs.readdirSync(home), []);
 });
 
 test('plain Node uninstall CLI returns nonzero for malformed synthetic-home data without changing it', t => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-uninstall-status-')); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const home = testTempDir('ctl-uninstall-status-'); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const env = { ...process.env, HOME: home, USERPROFILE: home };
   const observed = spawnSync(process.execPath, ['-e', 'process.stdout.write(require("node:os").homedir())'], { env, encoding: 'utf8', timeout: 2000, maxBuffer: 4096 });
   assert.equal(observed.status, 0); assert.equal(observed.stdout, home, 'refuse before helper if synthetic HOME is not the actual child home');

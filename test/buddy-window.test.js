@@ -8,6 +8,7 @@ const path = require('node:path');
 const { EventEmitter } = require('node:events');
 const { PAGES, SECTIONS, FOOTER, sectionOf, flat, pageById, hubPageUrl, navDecision, openDecision, connectDecision, manifestPost, parseConnectName, connectUrlOk, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl } = require('../buddy-window/pages');
 const { createHubSupervisor, hubEnv, MAX_RESTARTS } = require('../buddy-window/hub-process');
+const { testTempDir } = require('./helpers/tmp');
 
 // ── pages ──────────────────────────────────────────────────────────────────
 
@@ -614,7 +615,7 @@ function fakeTimers() {
 function harness(overrides = {}) {
   const children = [];
   const statuses = [];
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-hub-'));
+  const dataDir = testTempDir('buddy-hub-');
   let t = 0;
   const timers = fakeTimers();
   const sup = createHubSupervisor({
@@ -920,7 +921,7 @@ test('workspace list from /api/account: this Mac, then each signed-in hub’s te
 });
 
 test('workspace store: hubs, teams from the account, active team, persisted without secrets, 0600', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-ws-'));
+  const dir = testTempDir('buddy-ws-');
   const file = path.join(dir, 'ws.json');
   const s1 = createWorkspaceStore(file);
   assert.equal(s1.active().id, 'local');
@@ -950,7 +951,7 @@ test('workspace store: hubs, teams from the account, active team, persisted with
 });
 
 test('workspace store: v1 files migrate: every entry the old probe accepted stays an Access workspace', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-ws-'));
+  const dir = testTempDir('buddy-ws-');
   const file = path.join(dir, 'ws.json');
   fs.writeFileSync(file, JSON.stringify({ active: 'team:signedin.example.com', teams: [
     { name: 'Old', url: 'https://old.example.com', accessTeam: 'restless-hall' },
@@ -971,7 +972,7 @@ test('workspace store: v1 files migrate: every entry the old probe accepted stay
 });
 
 test('workspace store: a tampered file cannot smuggle in a non-https hub, a loopback hub or a bad Access team', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-ws-'));
+  const dir = testTempDir('buddy-ws-');
   const file = path.join(dir, 'ws.json');
   fs.writeFileSync(file, JSON.stringify({ version: 2, active: 'team:evil', hubs: ['http://evil.example.com', 'http://127.0.0.1:5000', 'https://ok.example.com', 'https://ok.example.com/path'],
     teams: { 'https://ok.example.com': [{ id: '../x', name: 'bad' }, { id: 'good', name: 'Good' }] },
@@ -997,7 +998,7 @@ const brtOf = (c) => ['brt', c.repeat(43)].join('_');
 const CONFIG_KEYS = ['data_dir', 'hub_url', 'runner_token', 'team_id', 'type'];
 
 function deviceHarness(over = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-dev-'));
+  const dir = testTempDir('buddy-dev-');
   const calls = [];
   const children = [];
   const statuses = [];
@@ -1357,7 +1358,7 @@ test('runner.stopped: parked_pending is read and shown as runs being handed over
 
 test('runner.config: data_dir is made 0700, ours and not a symlink, else the runner does not start', async () => {
   const { ensurePrivateDir, hubUrlOk } = require('../buddy-window/device');
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-priv-'));
+  const dir = testTempDir('buddy-priv-');
   const fresh = path.join(dir, 'a', 'b');
   assert.equal(ensurePrivateDir(fresh), null);
   assert.equal(fs.statSync(fresh).mode & 0o777, 0o700);
@@ -1597,7 +1598,7 @@ test('two teams → two runner processes, each with its own token, team and data
   const { c } = await signIn(hub, origin, 'two@example.com');
   const a = (await c.createTeam('Alpha')).team;
   const b = (await c.createTeam('Beta')).team;
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-dev-'));
+  const dir = testTempDir('buddy-dev-');
   const kids = [];
   const make = (teamId) => createDeviceController({
     account: c, teamId, credsFile: path.join(dir, `${teamId}.bin`), seal: (s) => Buffer.from(`SEALED:${Buffer.from(s).toString('base64')}`), unseal: (x) => Buffer.from(String(x).slice(7), 'base64').toString(),

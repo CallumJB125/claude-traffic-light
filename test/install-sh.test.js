@@ -7,6 +7,7 @@ const http = require('http');
 const zlib = require('zlib');
 const crypto = require('crypto');
 const { execFile } = require('child_process');
+const { testTempDir } = require('./helpers/tmp');
 
 const SCRIPT = path.join(__dirname, '..', 'site', 'src', 'install.sh');
 const sha = (b) => crypto.createHash('sha256').update(b).digest('hex');
@@ -60,7 +61,7 @@ async function fixture(t, { badSums = false, sumsMissing = false } = {}) {
     res.statusCode = 404; res.end('no');
   });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plex-install-'));
+  const root = testTempDir('plex-install-');
   t.after(() => { server.close(); fs.rmSync(root, { recursive: true, force: true }); });
   const shims = path.join(root, 'shims'); fs.mkdirSync(shims);
   const shim = (name, body) => { fs.writeFileSync(path.join(shims, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 }); };

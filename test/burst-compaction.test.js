@@ -10,11 +10,12 @@ const Ipc = require('../src/burst-ipc.js');
 const View = require('../src/burst-view.js');
 const Spend = require('../src/burst-spend.js');
 const { createFakeBurst, stateV019, pauselessConfig, pauselessRoutes } = require('./fixtures/fake-burst.js');
+const { testTempDir } = require('./helpers/tmp');
 
 const BIN = (home) => path.join(home, '.local', 'bin', 'claude-burst');
 async function setup(routes) {
   const fake = await createFakeBurst(routes);
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'burst-pl-'));
+  const home = testTempDir('burst-pl-');
   fs.mkdirSync(path.dirname(BIN(home)), { recursive: true });
   fs.writeFileSync(BIN(home), '#!/bin/sh\n', { mode: 0o755 });
   fs.mkdirSync(path.join(home, '.config', 'claude-burst'), { recursive: true });

@@ -10,6 +10,7 @@ const path = require('path');
 const Keys = require('../src/sync/keys');
 const { createLog, sanitize } = require('../src/sync/log');
 const Sync = require('../src/sync');
+const { testTempDir } = require('./helpers/tmp');
 
 const API_KEY = `sk-ant-api03-${'Z'.repeat(80)}`;
 
@@ -120,7 +121,7 @@ test('only allowlisted fields sync, every string is scrubbed, and raw transcript
 });
 
 test('collect: memory session rows (never turn text or paths), checkpoint summaries and handover docs, scrubbed', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sync-collect-'));
+  const root = testTempDir('sync-collect-');
   try {
     fs.mkdirSync(path.join(root, 'memory'));
     const { DatabaseSync } = require('node:sqlite');
@@ -149,7 +150,7 @@ test('collect: memory session rows (never turn text or paths), checkpoint summar
 });
 
 test('register: a free install gets the upsell and makes no request; IPC answers only the Sync page; state files are 0600 in a 0700 dir', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sync-reg-'));
+  const root = testTempDir('sync-reg-');
   const handlers = new Map();
   const quits = [];
   const opened = [];

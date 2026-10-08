@@ -5,13 +5,14 @@ const C = require('../src/compaction');
 const { createLedger, MAX_ENTRIES } = require('../src/compaction-stats');
 const { createInteractionHub } = require('../src/session-interaction');
 const { createCodexAppServer } = require('../src/codex-app-server');
+const { testTempDir } = require('./helpers/tmp');
 
 const ACTOR = 'overview:1:1';
 const FAKE = path.join(__dirname, 'fixtures', 'fake-codex-app-server.js');
 const ON = { enabled: true, providers: { mem: true, codex: true, local: true }, threshold: 0.5, minTurns: 1, keepTurns: 2 };
 const until = async (fn, ms = 3000) => { const end = Date.now() + ms; for (;;) { const v = fn(); if (v) return v; if (Date.now() > end) throw new Error('timed out'); await new Promise((r) => setTimeout(r, 5)); } };
 const tick = () => new Promise((r) => setTimeout(r, 0));
-const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'plexiform-compaction-test-'));
+const tmp = () => testTempDir('plexiform-compaction-test-');
 
 // 'mem' is not a real provider: normalizeSettings only keeps known ones, so
 // the hub tests use provider id 'codex' with an in-memory adapter.

@@ -10,9 +10,10 @@ const { createRequire } = require('node:module');
 const Lifecycle = require('../scripts/windows-install-smoke');
 const Adapters = require('../adapters');
 const Brand = require('../brand');
+const { testTempDir } = require('./helpers/tmp');
 
 function rig(t, mutate = () => {}) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'windows-lifecycle-source-'));
+  const root = testTempDir('windows-lifecycle-source-');
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const installer = path.join(root, 'installer.exe'), portable = path.join(root, 'portable.exe'), calls = [];
   let installDir;
@@ -136,7 +137,7 @@ test('actual copy verification refuses changed copied bytes before executing it'
 });
 
 test('actual exclusive copy refuses destination-file collision without deleting foreign bytes', t => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nsis-copy-'));
+  const root = testTempDir('nsis-copy-');
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const source = path.join(root, 'source.exe'); fs.writeFileSync(source, Buffer.from([0, 1, 2, 255]));
   const original = fs.openSync; let injected = false;
@@ -152,7 +153,7 @@ test('actual exclusive copy refuses destination-file collision without deleting 
 });
 
 test('copy verification refuses a nonregular installed uninstaller', t => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nsis-copy-'));
+  const root = testTempDir('nsis-copy-');
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const source = path.join(root, 'source.exe'); fs.mkdirSync(source);
   assert.throws(() => Lifecycle.verifiedUninstaller(source, root), /bounded regular/);
@@ -160,7 +161,7 @@ test('copy verification refuses a nonregular installed uninstaller', t => {
 });
 
 function descriptorFixture(t, size = 4) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nsis-descriptor-'));
+  const root = testTempDir('nsis-descriptor-');
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const source = path.join(root, 'source.exe'); fs.writeFileSync(source, Buffer.alloc(size, 17));
   return { root, source };

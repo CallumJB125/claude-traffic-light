@@ -5,6 +5,7 @@ const os = require('os');
 const path = require('path');
 
 const Waste = require('../src/waste');
+const { testTempDir } = require('./helpers/tmp');
 
 // A Claude Code transcript, one object per line, as the CLI writes it.
 function transcript() {
@@ -31,7 +32,7 @@ function transcript() {
 }
 
 function tmp(t) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'waste-'));
+  const dir = testTempDir('waste-');
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   return dir;
 }

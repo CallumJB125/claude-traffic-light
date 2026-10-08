@@ -8,10 +8,11 @@ const vm = require('node:vm');
 const {createRequire} = require('node:module');
 const {spawnSync} = require('node:child_process');
 const {scan} = require('../src/borrow/scan.js');
+const { testTempDir } = require('./helpers/tmp');
 const scanner = require.resolve('../src/borrow/scan.js');
 
 function fixture(t) {
-  const targetHome = fs.mkdtempSync(path.join(os.tmpdir(), 'setups-scan-races-'));
+  const targetHome = testTempDir('setups-scan-races-');
   t.after(() => fs.rmSync(targetHome, {recursive:true, force:true}));
   fs.mkdirSync(path.join(targetHome, '.codex'));
   return targetHome;
@@ -27,7 +28,7 @@ for (const boundary of ['file-fifo', 'file-directory', 'file-symlink', 'file-reg
     if (boundary.endsWith('directory')) fs.mkdirSync(replacement);
     if (boundary.endsWith('regular') || boundary === 'directory-file') fs.writeFileSync(replacement, 'Synthetic different file.');
     if (boundary.endsWith('symlink')) {
-      const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'setups-scan-outside-'));
+      const outside = testTempDir('setups-scan-outside-');
       t.after(() => fs.rmSync(outside, {recursive:true, force:true}));
       if (!directory) fs.writeFileSync(path.join(outside, 'foreign.md'), 'Outside synthetic text.');
       fs.symlinkSync(directory ? outside : path.join(outside, 'foreign.md'), replacement);

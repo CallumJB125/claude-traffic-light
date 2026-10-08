@@ -15,8 +15,9 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { testTempDir } = require('./helpers/tmp');
 
-const FUZZ_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-fuzz-'));
+const FUZZ_HOME = testTempDir('ctl-fuzz-');
 // The hook fixes its root at load; keep it off ~.
 process.env.CLAUDE_TRAFFIC_LIGHT_HOME = path.join(FUZZ_HOME, 'hook-root');
 

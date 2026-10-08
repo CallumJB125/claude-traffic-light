@@ -8,8 +8,9 @@ const { spawnSync } = require('node:child_process');
 const Hermes = require('../adapters/hermes-activity');
 const Bridge = require('../hooks/hermes-activity');
 const Overview = require('../src/session-overview');
+const { testTempDir } = require('./helpers/tmp');
 function fixture(t) {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'plexiform-hermes-'));
+  const home = testTempDir('plexiform-hermes-');
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const runtime = { platform: 'darwin', execPath: null, hooksDir: path.resolve(__dirname, '../hooks'), dataDir: path.join(home, 'activity') };
   fs.mkdirSync(path.join(home, '.hermes'));

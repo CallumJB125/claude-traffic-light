@@ -8,10 +8,11 @@ const { spawnSync } = require('node:child_process');
 const Adapters = require('../adapters/index.js');
 const Generic = require('../src/ai-tools-generic.js');
 const { register, parseDestination } = require('../src/ai-tools-main.js');
+const { testTempDir } = require('./helpers/tmp');
 
 const HOOKS = path.join(__dirname, '..', 'hooks');
 const generic = Adapters.get('generic');
-const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-generic-'));
+const tmp = () => testTempDir('ctl-generic-');
 
 test('the generic adapter turns start, stop and exit into working, done and failed, and nothing else', () => {
   const base = { tool: 'aider', session: 'aider-1-2', cwd: '/work/app', pid: 4242 };

@@ -7,8 +7,9 @@ const { execFileSync } = require('node:child_process');
 const { Worker } = require('node:worker_threads');
 const { EventEmitter } = require('node:events');
 const { syncAgentFiles, createAgentsSync } = require('../src/agents-sync.js');
+const { testTempDir } = require('./helpers/tmp');
 
-const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'agents-sync-'));
+const tmp = () => testTempDir('agents-sync-');
 
 test('syncAgentFiles merges the scan into each session file and skips unchanged ones', () => {
   const dir = tmp();

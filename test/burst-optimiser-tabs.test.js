@@ -9,6 +9,7 @@ const { JSDOM } = require('jsdom');
 const Ipc = require('../src/burst-ipc.js');
 const { createBurstClient } = require('../src/burst-client.js');
 const { createFakeBurst, stateV019 } = require('./fixtures/fake-burst.js');
+const { testTempDir } = require('./helpers/tmp');
 
 const ROOT = path.join(__dirname, '..');
 const read = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8');
@@ -54,7 +55,7 @@ test("Route and Requests are Burst's own dashboard sections now: no native tabs 
 test('end to end consent: cancel on Back to Claude now sends no POST; confirm sends exactly one', async () => {
   for (const [answer, expected] of [[0, 0], [1, 1]]) {
     const fake = await createFakeBurst({ '/api/state': { body: stateV019({ route: 'SECONDARY' }) }, '/api/upgrade-status': { body: {} }, '/api/reset': { body: { ok: true } } });
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'burst-optabs-'));
+    const home = testTempDir('burst-optabs-');
     const bin = path.join(home, '.local', 'bin', 'claude-burst');
     fs.mkdirSync(path.dirname(bin), { recursive: true });
     fs.writeFileSync(bin, '#!/bin/sh\n', { mode: 0o755 });

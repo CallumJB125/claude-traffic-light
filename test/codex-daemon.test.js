@@ -8,6 +8,7 @@ const { createInteractionMain, CHANNELS } = require('../src/interaction-main');
 const { createCodexDaemon, REASONS, reasons, METHODS, threadMeta, checkSocket } = require('../src/codex-daemon');
 const WebSocket = require('ws');
 const { startFakeDaemon, SECRET } = require('./fixtures/fake-codex-daemon');
+const { testTempDir } = require('./helpers/tmp');
 
 const ACTOR = 'overview:1:1', OTHER = 'overview:2:1';
 const CURRENT = (b) => b === null;
@@ -51,7 +52,7 @@ test('opt-in off: listed unavailable with the Preferences reason, and nothing co
 
 test('opted in but the daemon is not running: exact human command in the reason, no start attempted', async () => {
   const bin = '/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex';
-  const adapter = createCodexDaemon({ bin, enabled: () => true, socketPath: path.join(fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'cdx-none-')), 'missing.sock') });
+  const adapter = createCodexDaemon({ bin, enabled: () => true, socketPath: path.join(testTempDir('cdx-none-'), 'missing.sock') });
   assert.equal(adapter.available, false);
   assert.equal(adapter.reason, reasons(bin).notRunning);
   assert(adapter.reason.includes(`\`'${bin}' app-server daemon start\``) && adapter.reason.includes(`\`'${bin}'\` (it attaches`), adapter.reason);

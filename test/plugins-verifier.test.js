@@ -2,13 +2,14 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os'),crypto=require('node:crypto');
 const {spawnSync}=require('node:child_process');
 const V=require('../src/plugins/index-verify'),{verifySource,readBounded,remoteURL}=require('../src/plugins/source-verify'),{createPluginPlanner,productionKeys,REQUIRED_COMMANDS}=require('../src/plugins/plan');
+const { testTempDir } = require('./helpers/tmp');
 const NOW=Date.parse('2026-10-01T12:00:00.000Z');
 const pair=crypto.generateKeyPairSync('ed25519'),keys=[{keyId:V.keyId(pair.publicKey),key:pair.publicKey}];
 const sign=bytes=>JSON.stringify({alg:'ed25519',keyId:keys[0].keyId,sig:crypto.sign(null,bytes,pair.privateKey).toString('base64')});
 const seal=index=>{const bytes=Buffer.from(JSON.stringify(index));return {bytes,signature:sign(bytes)};};
 const verifier=()=>V.createIndexVerifier({keys,now:()=>NOW});
 function fixture(t,{mcp=false}={}){
-  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'plugins-verifier-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+  const dir=testTempDir('plugins-verifier-');t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
   const bundle=path.join(dir,'packages'),root=path.join(bundle,'delivery-review'),profile=path.join(dir,'profile'),binary=path.join(dir,'codex');fs.mkdirSync(path.join(root,'skills/delivery-review'),{recursive:true});fs.mkdirSync(profile);fs.writeFileSync(binary,'Synthetic binary. Never executed.');fs.writeFileSync(path.join(profile,'config.toml'),'# Synthetic private configuration\n');
   const content=new Map([
     ['plugin.json',Buffer.from(JSON.stringify({$schema:'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json',name:'delivery-review',version:'1.0.0',description:'Synthetic reviewed skill.'},null,2))],

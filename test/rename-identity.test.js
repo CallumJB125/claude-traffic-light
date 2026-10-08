@@ -9,6 +9,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
+const { testTempDir } = require('./helpers/tmp');
 
 const ROOT = path.join(__dirname, '..');
 const Brand = require('../brand.js');
@@ -50,7 +51,7 @@ test('identity: the updater, the feed and the signed manifest say plexiform', ()
   assert.match(fs.readFileSync(path.join(ROOT, 'src', 'updater', 'index.js'), 'utf8'), /feedBase: Brand\.urls\.updates/);
   for (const a of [config.artifactName, config.nsis.artifactName, config.deb.artifactName, config.appImage.artifactName]) assert.ok(a.startsWith(`${Brand.name}-`), a);
   // What release-sign writes is what the app's verify accepts, and no other product.
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-identity-'));
+  const dir = testTempDir('ctl-identity-');
   const zip = 'zip-bytes';
   fs.writeFileSync(path.join(dir, 'Plexiform-1.0.0-mac-arm64.zip'), zip);
   const sha = crypto.createHash('sha512').update(zip).digest('base64');

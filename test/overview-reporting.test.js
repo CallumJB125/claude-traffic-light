@@ -1,7 +1,8 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path');
+const { testTempDir } = require('./helpers/tmp');
 test('Opted token-authenticated local model signal reports structured task/model only; browser request refuses',async()=>{
- const dir=fs.mkdtempSync(path.join(os.tmpdir(),'plex-overview-')),quits=[];
+ const dir=testTempDir('plex-overview-'),quits=[];
  const S=require('../src/signal-server')({rootDir:dir,sessionsDir:dir,requestsDir:dir,aggregateState:()=>({sessions:[]}),broadcastStatus:()=>{},port:0,app:{on:(_,fn)=>quits.push(fn)}});
  const server=S.startSignalServer();await new Promise(r=>server.once('listening',r));
  try{const url=`http://127.0.0.1:${server.address().port}/signal`,token=fs.readFileSync(path.join(dir,'token'),'utf8'),payload={source:'ollama',session:'selected-model',signal:'tool-use',model:'qwen3:8b',taskId:'task-1',taskTitle:'Build selected feature',prompt:'Private prompt must not be stored'};

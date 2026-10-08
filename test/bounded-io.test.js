@@ -9,8 +9,9 @@ const path = require('node:path');
 const childProcess = require('node:child_process');
 const { EventEmitter } = require('node:events');
 const B = require('../src/bounded-io.js');
+const { testTempDir } = require('./helpers/tmp');
 
-const tmp = () => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'bounded-io-')));
+const tmp = () => fs.realpathSync(testTempDir('bounded-io-'));
 const sh = (cwd, ...args) => childProcess.execFileSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } });
 function repo() {
   const dir = tmp();

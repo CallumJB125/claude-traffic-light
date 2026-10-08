@@ -6,12 +6,13 @@ const path = require('path');
 
 const M = require('../mcp-server.js');
 const McpInstall = require('../mcp-install.js');
+const { testTempDir } = require('./helpers/tmp');
 
 const NOW = Date.parse('2026-09-11T12:00:00.000Z');
 const iso = (agoMs) => new Date(NOW - agoMs).toISOString();
 
 function fixture({ sessions = {}, config = null, requests = [], log = null } = {}) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-mcp-'));
+  const root = testTempDir('ctl-mcp-');
   fs.mkdirSync(path.join(root, 'sessions'));
   fs.mkdirSync(path.join(root, 'requests'));
   for (const [name, data] of Object.entries(sessions)) fs.writeFileSync(path.join(root, 'sessions', `${name}.json`), typeof data === 'string' ? data : JSON.stringify(data));
@@ -182,7 +183,7 @@ test('buddy_pending_requests lists waiting requests; nothing in the server can a
 
 test('buddy_model_mix: reads transcripts from the given projects dir', async () => {
   const root = fixture({ config: base });
-  const projectsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-mcp-projects-'));
+  const projectsDir = testTempDir('ctl-mcp-projects-');
   const r = await M.buddyModelMix({ root, now: NOW, projectsDir });
   assert.equal(r.transcripts.turns, 0);
   assert.deepEqual([r.week.turns, r.today.turns], [0, 0]);
@@ -191,7 +192,7 @@ test('buddy_model_mix: reads transcripts from the given projects dir', async () 
 
 test('buddy_spend: today, this week and runaways from the transcripts, with the saved budgets', async () => {
   const root = fixture({ config: { ...base, spend: { dailyBudget: 50, mode: 'subscription' } } });
-  const projectsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-mcp-projects-'));
+  const projectsDir = testTempDir('ctl-mcp-projects-');
   // Midday, so the 5 minutes can't straddle a day or week boundary.
   const now = new Date(2026, 8, 30, 12).getTime();
   const lines = [[5, 'claude-opus-5'], [3, 'claude-opus-5'], [2, 'claude-mystery-9']].map(([min, model], i) => JSON.stringify({
@@ -255,7 +256,7 @@ test('mcp-install: launch runs the packaged app as node, or plain node in dev', 
 });
 
 test('mcp-install: idempotent install/uninstall that keeps every other key and server', () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-mcp-home-'));
+  const home = testTempDir('ctl-mcp-home-');
   const file = path.join(home, '.claude.json');
   const foreign = { numStartups: 42, projects: { '/w': { mcpServers: { local: { command: 'x' } } } }, mcpServers: { other: { type: 'stdio', command: 'npx', args: ['-y', 'other'] } } };
   fs.writeFileSync(file, JSON.stringify(foreign));
@@ -280,17 +281,17 @@ test('mcp-install: idempotent install/uninstall that keeps every other key and s
 });
 
 test('mcp-install: creates the file when missing; never clobbers an unparsable file or a foreign same-named server', () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-mcp-home-'));
+  const home = testTempDir('ctl-mcp-home-');
   McpInstall.install({ home, entry });
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(home, '.claude.json'), 'utf8')), { mcpServers: { 'claude-buddy': entry } });
 
-  const bad = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-mcp-home-'));
+  const bad = testTempDir('ctl-mcp-home-');
   fs.writeFileSync(path.join(bad, '.claude.json'), '{"oops":');
   assert.throws(() => McpInstall.install({ home: bad, entry }));
   assert.equal(fs.readFileSync(path.join(bad, '.claude.json'), 'utf8'), '{"oops":');
   assert.match(McpInstall.status({ home: bad, entry }).error, /JSON/);
 
-  const taken = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-mcp-home-'));
+  const taken = testTempDir('ctl-mcp-home-');
   const theirs = { mcpServers: { 'claude-buddy': { command: 'someone-else' } } };
   fs.writeFileSync(path.join(taken, '.claude.json'), JSON.stringify(theirs));
   assert.throws(() => McpInstall.install({ home: taken, entry }), /isn't Plexiform's/);
@@ -355,7 +356,7 @@ test('buddy_usage_history: "all" starts at the first recorded day and says when 
 test('buddy_health: hooks from this copy, the app answering, MCP registered — all ok', async () => {
   const Claude = require('../adapters/claude-code.js');
   const root = fixture({ config: base, sessions: { a: session('a', { updatedAt: iso(90000) }) } });
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-mcp-home-'));
+  const home = testTempDir('ctl-mcp-home-');
   fs.mkdirSync(path.join(home, '.claude', 'projects', '-w-a'), { recursive: true });
   fs.writeFileSync(Claude.configPath(home), JSON.stringify(Claude.apply({}, M.hookRuntime(root), { home })));
   McpInstall.install({ home, entry: McpInstall.launch({ packaged: false, dir: path.join(__dirname, '..'), root: process.env.CLAUDE_TRAFFIC_LIGHT_HOME }) });
@@ -376,7 +377,7 @@ test('buddy_health: an app that moved, not running, no hook yet — each with it
   const Claude = require('../adapters/claude-code.js');
   const Runtime = require('../adapters/runtime.js');
   const root = fixture({ config: base });
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-mcp-home-'));
+  const home = testTempDir('ctl-mcp-home-');
   fs.mkdirSync(path.join(home, '.claude'));
   const gone = Runtime.make({ execPath: '/Applications/Old Buddy.app/Contents/MacOS/Claude Buddy', hooksDir: '/Applications/Old Buddy.app/Contents/Resources/hooks', dataDir: root, platform: 'darwin' });
   fs.writeFileSync(Claude.configPath(home), JSON.stringify(Claude.apply({}, gone)));
