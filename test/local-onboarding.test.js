@@ -15,7 +15,7 @@ const read = (...p) => fs.readFileSync(path.join(...p), 'utf8');
 
 test('only the connectors enabled on the team hub today are "Available"; the rest are "Coming soon"', () => {
   assert.deepEqual([...LAUNCH_CONNECTORS], ['github']);
-  assert.deepEqual(CONNECTORS.map((c) => c.id), ['github', 'slack', 'sentry']);
+  assert.deepEqual(CONNECTORS.map((c) => c.id), ['github', 'slack', 'sentry', 'linear', 'jira']);
   for (const c of CONNECTORS) assert.equal(connectorStatus(c.id), c.id === 'github' ? 'available' : 'soon', c.id);
   const rows = connectorRows();
   assert.deepEqual(rows.filter((r) => r.status === 'available').map((r) => r.id), ['github']);

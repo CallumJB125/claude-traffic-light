@@ -152,12 +152,12 @@ test('local hub (no accounts): a plain note says where to connect, and no connec
 test('local hub: a grid of the six tools with a one-line value and a status in words; only GitHub is "Available after you join a team"', () => {
   const v = integrationsScreen(m({ local: true }));
   const cards = findAll(v, (n) => n.props?.['data-connector']);
-  assert.deepEqual(cards.map((c) => c.props['data-connector']), ['github', 'slack', 'sentry']);
+  assert.deepEqual(cards.map((c) => c.props['data-connector']), ['github', 'slack', 'sentry', 'linear', 'jira']);
   const status = (id) => textOf(findAll(cards.find((c) => c.props['data-connector'] === id), (n) => n.props?.class === 'integ-status small')[0]);
   assert.equal(status('github'), 'Available after you join a team');
-  for (const id of ['slack', 'sentry']) assert.equal(status(id), 'Coming soon', id);
+  for (const id of ['slack', 'sentry', 'linear', 'jira']) assert.equal(status(id), 'Coming soon', id);
   assert.match(textOf(cards[0]), /Cards update when pull requests merge/);
-  assert.deepEqual(findAll(byAttr(v, 'data-grid', 'local-connectors')[0], (n) => n.tag === 'h3').map(textOf), ['GitHub', 'Slack', 'Sentry'], 'tool names are headings');
+  assert.deepEqual(findAll(byAttr(v, 'data-grid', 'local-connectors')[0], (n) => n.tag === 'h3').map(textOf), ['GitHub', 'Slack', 'Sentry', 'Linear', 'Jira'], 'tool names are headings');
   assert.equal(byAttr(integrationsScreen(m()), 'data-grid', 'local-connectors').length, 0, 'a team hub shows no local grid');
 });
 
@@ -176,7 +176,7 @@ test('local hub in the app: a Sign in or create a team button opens the Team pag
 test('the web list of tools: only the launch connectors are available', async () => {
   const { LAUNCH_CONNECTORS, connectorStatus } = await import('../js/connectors.js');
   assert.deepEqual([...LAUNCH_CONNECTORS], ['github']);
-  assert.deepEqual(['github', 'slack', 'sentry', 'x'].map(connectorStatus), ['available', 'soon', 'soon', 'soon']);
+  assert.deepEqual(['github', 'slack', 'sentry', 'linear', 'jira', 'x'].map(connectorStatus), ['available', 'soon', 'soon', 'soon', 'soon', 'soon']);
 });
 
 test('the app tells the Integrations page it is on the local hub from /api/health’s auth', async () => {
@@ -413,3 +413,38 @@ test('step 4: with the hub\'s own GitHub App, admins install it (always another 
   assert.equal(byAttr(member, 'data-action', 'integ-install').length, 0);
   assert.equal(byAttr(member, 'data-action', 'integ-repos').length, 0);
 });
+
+// ── Linear and Jira: the intake panel, the secret label and action names ──
+
+for (const [id, name, where] of [['linear', 'Linear', /Settings → API → Webhooks/], ['jira', 'Jira', /Settings → System → WebHooks/]]) {
+  const avail = { id, name, scopes: [], connect: 'token', shows_webhook_url: true, actions: { [`${id}.card`]: { default: 'auto' }, [`${id}.status`]: { default: 'auto' } } };
+  const c = (over = {}) => ({ id: `${id}1`, provider: id, display_name: name, status: 'active', health: null, settings: { autonomy: {} }, target_board_id: 'b1', webhook_url: `https://hub.example/integrations/${id}1/webhook`, ...over });
+  const boards = [{ id: 'b1', name: 'Main' }, { id: 'b2', name: 'Old', archived_at: '2026-01-01T00:00:00Z' }];
+  const screen = (conn, role = 'owner') => { const x = m({ data: { available: [avail], connections: [conn], vault: true } }, role); return integrationsScreen({ ...x, boards }); };
+
+  test(`${name}: admins see the intake rule, setup hint and webhook URL; no AI start is promised`, () => {
+    const v = screen(c());
+    const [panel] = findAll(v, (n) => n.props?.['aria-label'] === `${name} intake`);
+    const t = textOf(panel);
+    assert.match(t, new RegExp(`New and updated ${name} issues become Todo cards, one per issue\\.`));
+    assert.match(t, /they never move it or start an AI/);
+    assert.match(t, where);
+    assert.doesNotMatch(t, /paused/);
+    assert.match(textOf(v), new RegExp(`Paste this URL into ${name}`));
+    assert.match(textOf(v), new RegExp(`Create cards from new and updated ${name} issues`));
+    assert.equal(actionLabel(`${id}.status`), `Comment when a ${name} issue changes status`);
+  });
+
+  test(`${name}: an archived or missing board says intake is paused; members get no setup hint`, () => {
+    assert.match(textOf(screen(c({ target_board_id: 'b2' }))), /New intake is paused until you choose an active board above\./);
+    const mv = screen(c({ target_board_id: null }), 'member');
+    const [panel] = findAll(mv, (n) => n.props?.['aria-label'] === `${name} intake`);
+    assert.match(textOf(panel), /paused until an admin chooses an active board/);
+    assert.doesNotMatch(textOf(panel), where);
+  });
+
+  test(`${name}: the token form asks for the webhook signing secret`, () => {
+    const v = integrationsScreen(m({ tokenFor: id, data: { available: [avail], connections: [], vault: true } }));
+    assert.match(textOf(byAttr(v, 'data-form', 'integ-token')[0]), new RegExp(`${name} webhook signing secret`));
+  });
+}
