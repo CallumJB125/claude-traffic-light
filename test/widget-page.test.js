@@ -113,11 +113,11 @@ test('open only reaches Widget configuration and Preferences', async () => {
   assert.deepEqual(r.calls.filter((c) => c[0] === 'open'), [['open', 'lights'], ['open', 'settings']]);
 });
 
-test('registry: Widget is its own sidebar section with Widget configuration, packaged with a locked-down page', () => {
+test('registry: Widget lives in the Settings section with Widget configuration, packaged with a locked-down page', () => {
   const p = pageById('widget');
   assert.equal(p.kind, 'local');
-  assert.equal(sectionOf('widget'), 'widget');
-  assert.equal(sectionOf('lights'), 'widget');
+  assert.equal(sectionOf('widget'), 'settings');
+  assert.equal(sectionOf('lights'), 'settings');
   const html = read('widget-page.html');
   assert.match(html, /default-src 'none'/);
   assert.match(html, /connect-src 'none'/);

@@ -139,3 +139,16 @@ test('a failed save says so instead of Saved', async () => {
   assert.equal(doc.getElementById('status').textContent, 'Save failed — disk full');
   assert.equal(doc.getElementById('status').className, 'err');
 });
+
+test('settings has sub-page navigation, no Save button, and a first screen of at most 10 controls', () => {
+  const doc = new JSDOM(html).window.document;
+  const sections = [...doc.querySelectorAll('#section-nav button[data-go]')].map((b) => b.dataset.go);
+  assert.ok(sections.length >= 3);
+  for (const id of sections) assert.ok(doc.querySelector(`.pane[data-section="${id}"]`), `${id} has a pane`);
+  assert.equal(doc.querySelector('.pane:not([hidden])').dataset.section, sections[0], 'the first pane is the one shown');
+  const buttons = [...doc.querySelectorAll('button, input[type=submit]')].filter((b) => !b.closest('#section-nav'));
+  assert.ok(!buttons.some((b) => /^\s*save\b/i.test(b.textContent || b.value || '')), 'changes save as they are made');
+  const first = doc.querySelector('.pane:not([hidden])');
+  const controls = first.querySelectorAll('input:not([type=hidden]), select, textarea').length;
+  assert.ok(controls <= 10, `${controls} controls on the first screen`);
+});

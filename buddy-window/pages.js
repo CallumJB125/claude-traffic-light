@@ -82,20 +82,13 @@ const GROUPS = [
 const SECTIONS = [
   { id: 'home', title: 'Home', icon: 'sun', default: 'home', pages: ['home', 'overview', 'myday', 'waiting'] },
   { id: 'board', title: 'Board', icon: 'board', default: 'board', pages: ['board', 'board:table', 'board:history', 'board:calendar', 'board:timeline', 'board:dashboard'] },
-  { id: 'tasks', title: 'Tasks', icon: 'tasks', default: 'tasks', pages: ['tasks'] },
-  { id: 'sessions', title: 'Running now', icon: 'team', default: 'sessions', menu: 'more', pages: ['sessions', 'timeline'] },
-  { id: 'checkpoints', title: 'What changed', icon: 'layers', default: 'checkpoints', menu: 'more', pages: ['checkpoints'] },
-  { id: 'memory', title: 'Search everything', icon: 'layers', default: 'memory', menu: 'more', pages: ['memory'] },
-  { id: 'usage', title: 'Usage & cost', icon: 'chart', default: 'usage', heading: 'Spend', pages: ['usage', 'stats'] },
-  { id: 'optimiser', title: 'Usage optimiser', icon: 'chart', default: 'optimiser', menu: false, pages: ['optimiser'] },
-  { id: 'clients', title: 'Client billing', icon: 'chart', default: 'clients', menu: false, pages: ['clients'] },
+  { id: 'sessions', title: 'Running now', icon: 'team', default: 'sessions', pages: ['sessions', 'tasks', 'timeline', 'checkpoints', 'memory'] },
+  { id: 'usage', title: 'Usage & cost', icon: 'chart', default: 'usage', heading: 'Spend', pages: ['usage', 'stats', 'optimiser', 'clients'] },
   { id: 'team', title: 'Team', icon: 'team', default: 'team', heading: 'Team', pages: ['team', 'integrations', 'account'] },
-  { id: 'aitools', title: 'AI tools', icon: 'plug', default: 'aitools', menu: 'more', heading: 'You', pages: ['aitools'] },
-  { id: 'widget', title: 'Widget', icon: 'lights', default: 'widget', pages: ['widget', 'lights', 'hatch'] },
-  { id: 'phone', title: 'Phone', icon: 'bell', default: 'phone', menu: false, pages: ['phone'] },
-  { id: 'settings', title: 'Settings', icon: 'gear', default: 'settings', pages: ['settings', 'thismac'] },
+  { id: 'settings', title: 'Settings', icon: 'gear', default: 'settings', heading: 'You', pages: ['settings', 'thismac', 'aitools', 'widget', 'lights', 'hatch', 'phone'] },
 ];
 // `menu: false` keeps a section out of the tray and widget menus; `menu: 'more'` lists it in their More submenu.
+// At most six sections are primary; everything else is a page inside one of them.
 // Small links under the sections, not a section of their own.
 const FOOTER = ['help', 'feedback', 'updates'];
 // Setups is listed only once it works. Personal export/import and the
@@ -106,7 +99,7 @@ const FOOTER = ['help', 'feedback', 'updates'];
 // The page and its deep link remain; PLEXIFORM_SHOW_SETUPS=1 lists it for development.
 const SETUPS_READY = true;
 if (process.env.PLEXIFORM_SHOW_SETUPS === '1' || (SETUPS_READY && require('../src/entitlements').has('setups.personal'))) {
-  SECTIONS.find((s) => s.id === 'settings').pages.splice(6, 0, 'setups');
+  SECTIONS.find((s) => s.id === 'settings').pages.splice(7, 0, 'setups');
   PAGES.find((p) => p.id === 'setups').hidden = false;
 }
 // Plan & billing is listed once paid plans can work: a hub key pinned in

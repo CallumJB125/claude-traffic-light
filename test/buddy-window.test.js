@@ -26,9 +26,18 @@ test('every page has a unique id, a title and a known kind', () => {
   assert.ok(PAGES.some(page => page.id === 'board'));
 });
 
+test('the sidebar has at most six primary sections and every page id still resolves to one', () => {
+  assert.ok(SECTIONS.length <= 6, `${SECTIONS.length} sections`);
+  const ids = ['overview', 'home', 'board', 'board:table', 'board:history', 'board:dashboard', 'board:calendar', 'board:timeline', 'waiting', 'myday', 'sessions', 'timeline', 'checkpoints', 'memory', 'tasks', 'integrations', 'team', 'usage', 'stats', 'optimiser', 'clients', 'setups', 'thismac', 'phone', 'account', 'upgrade', 'sync', 'widget', 'lights', 'aitools', 'settings', 'hatch', 'help', 'feedback', 'updates'];
+  for (const id of ids) {
+    assert.ok(pageById(id), `${id} still exists`);
+    assert.ok(sectionOf(id) || FOOTER.includes(id) || pageById(id).hidden, `${id} is reachable from a section or the footer`);
+  }
+});
+
 test('the sidebar lists every main feature as its own section and reaches every page exactly once', () => {
-  assert.deepEqual(SECTIONS.map((s) => s.id), ['home', 'board', 'tasks', 'sessions', 'checkpoints', 'memory', 'usage', 'optimiser', 'clients', 'team', 'aitools', 'widget', 'phone', 'settings']);
-  assert.deepEqual(SECTIONS.map((s) => s.title), ['Home', 'Board', 'Tasks', 'Running now', 'What changed', 'Search everything', 'Usage & cost', 'Usage optimiser', 'Client billing', 'Team', 'AI tools', 'Widget', 'Phone', 'Settings']);
+  assert.deepEqual(SECTIONS.map((s) => s.id), ['home', 'board', 'sessions', 'usage', 'team', 'settings']);
+  assert.deepEqual(SECTIONS.map((s) => s.title), ['Home', 'Board', 'Running now', 'Usage & cost', 'Team', 'Settings']);
   assert.deepEqual(FOOTER, ['help', 'feedback', 'updates']);
   const listed = [...SECTIONS.flatMap((s) => s.pages), ...FOOTER];
   assert.equal(new Set(listed).size, listed.length, 'no page in two sections');
@@ -37,18 +46,19 @@ test('the sidebar lists every main feature as its own section and reaches every 
   assert.equal(sectionOf('board:calendar'), 'board');
   assert.equal(sectionOf('waiting'), 'home');
   assert.equal(sectionOf('sessions'), 'sessions');
-  assert.equal(sectionOf('optimiser'), 'optimiser', 'Usage optimiser is a section of its own');
+  assert.equal(sectionOf('optimiser'), 'usage', 'Usage optimiser is a page of Usage & cost');
+  assert.equal(sectionOf('tasks'), 'sessions');
   assert.equal(pageById('sessions').title, 'Running now');
   assert.equal(pageById('tasks').title, 'Tasks');
-  assert.equal(SECTIONS.find((s) => s.id === 'aitools').default, 'aitools');
+  assert.equal(sectionOf('aitools'), 'settings');
   assert.equal(sectionOf('help'), null, 'footer links are not in a section');
   assert.equal(sectionOf('integrations'), 'team');
-  assert.deepEqual(SECTIONS.find((s) => s.id === 'widget').pages, ['widget', 'lights', 'hatch'], 'Widget configuration and Hatch a character live in the Widget section');
-  assert.equal(sectionOf('hatch'), 'widget');
+  assert.equal(sectionOf('lights'), 'settings', 'Widget configuration lives in Settings');
+  assert.equal(sectionOf('hatch'), 'settings');
   assert.deepEqual(flat().filter((p) => p.unlisted).map((p) => p.id).sort(), ['myday', 'stats', 'timeline', 'waiting'], 'Home carries Waiting on you and My day, Usage & cost carries Time as a tab, Running now opens a session timeline; each keeps a page but no sub-nav entry');
   assert.equal(sectionOf('timeline'), 'sessions');
   assert.equal(sectionOf('myday'), 'home');
-  assert.equal(sectionOf('lights'), 'widget');
+  assert.equal(sectionOf('lights'), 'settings');
   assert.equal(sectionOf('nope'), null);
   assert.equal(pageById('plugins'), null);
 });
@@ -2070,4 +2080,16 @@ test('Calendar and Timeline are listed under Board by default; PLEXIFORM_SHOW_PL
   assert.equal(pageById('board:timeline').view, 'timeline');
   const out = require('node:child_process').execFileSync(process.execPath, ['-e', "console.log(JSON.stringify(require('./buddy-window/pages').SECTIONS.find((s) => s.id === 'board').pages))"], { cwd: path.join(__dirname, '..'), env: { ...process.env, PLEXIFORM_SHOW_PLANNER: '0' } });
   assert.deepEqual(JSON.parse(out), ['board', 'board:table', 'board:history', 'board:dashboard']);
+});
+
+test('consumer pages use plain language: no "Runner", "observed" or "hub" in visible text', () => {
+  const root = path.join(__dirname, '..');
+  const files = ['memory.html', 'phone-pairing.html', 'settings.html', 'buddy-window/account.html'];
+  const jargon = /\b(runners?|observed|hubs?)\b/i;
+  for (const f of files) {
+    const visible = fs.readFileSync(path.join(root, f), 'utf8').replace(/<(script|style)[\s\S]*?<\/\1>|<!--[\s\S]*?-->|<[^>]+>/g, ' ');
+    assert.doesNotMatch(visible, jargon, `${f} has jargon`);
+  }
+  const strings = fs.readFileSync(path.join(root, 'buddy-window/account.js'), 'utf8').match(/'[^'\n]*'|`[^`\n]*`/g).filter((s) => /\s/.test(s) && !/^'(?:acct-|btn)/.test(s));
+  assert.deepEqual(strings.filter((s) => jargon.test(s)), [], 'account.js strings');
 });

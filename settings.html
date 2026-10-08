@@ -509,10 +509,10 @@
         <li>Crash reports are scrubbed and saved on this Mac only. Nothing is sent; see Crash reports below.</li>
         <li>Bug-report diagnostics are only copied to your clipboard when you click Copy diagnostics, with home paths, names, secrets, emails and IP addresses scrubbed first.</li>
       </ul>
-      <h3 class="pv-h">Goes to your team hub (only if you join a team)</h3>
+      <h3 class="pv-h">Goes to your team server (only if you join a team)</h3>
       <ul>
         <li>Card text, handovers, run progress, member names, linked repository identity, and your account name and email.</li>
-        <li>Credential-like strings and home-folder paths pass a redaction filter first. It is not a guarantee, and the hub's operator can read what you send.</li>
+        <li>Credential-like strings and home-folder paths pass a redaction filter first. It is not a guarantee, and your team server's operator can read what you send.</li>
         <li>Shared sessions: sessions started in a signed-in team workspace can be shared with that team. Owners, admins and members can message a shared session, which uses the session owner's AI quota; viewers can only watch. Stop sharing in Overview or turn automatic sharing off here. Anything already stored as team history stays.</li>
       </ul>
       <h3 class="pv-h">Goes to your AI provider</h3>
@@ -525,7 +525,7 @@
       </ul>
       <h3 class="pv-h">Kept locked down</h3>
       <ul>
-        <li>Your team sign-in and runner credentials are stored in your system's password store (Keychain on macOS), not in plain files.</li>
+        <li>Your team sign-in credentials are stored in your system's password store (Keychain on macOS), not in plain files.</li>
       </ul>
       <p>The full notice below is the exact list.</p>
     </details>
@@ -564,7 +564,7 @@
       </div>
       <h3 class="pv-h">Not covered here</h3>
       <ul class="hint">
-        <li>Data on a team hub: cards, handovers, activity and your account there. Delete it from Account → Delete account, or ask your team’s owner.</li>
+        <li>Data on a team server: cards, handovers, activity and your account there. Delete it from Account → Delete account, or ask your team’s owner.</li>
         <li>Your repositories and code. They are never touched.</li>
         <li>Your AI tools’ own histories and settings (~/.claude, ~/.codex, ~/.gemini, Cursor). They belong to those tools and are never touched.</li>
         <li>The Plexiform Safe Storage item in your keychain. Once the sign-ins are deleted it unlocks nothing; remove it in Keychain Access if you like.</li>
@@ -577,11 +577,11 @@
   <h2>Sharing and remote control</h2>
   <div class="field" id="sharing">
     <label class="row"><input type="checkbox" id="teamSessionSharing" /> Share sessions started on a team workspace with that team</label>
-    <div class="hint">Team members can send messages using your provider account and quota; viewers can watch. The hub relays message and reply text. Personal sessions stay separate. Stop an individual share from Overview.</div>
+    <div class="hint">Team members can send messages using your provider account and quota; viewers can watch. The team server relays message and reply text. Personal sessions stay separate. Stop an individual share from Overview.</div>
     <label class="row"><input type="checkbox" id="teamBrief" aria-describedby="team-brief-hint" /> Give my AI the team brief</label>
-    <div class="hint" id="team-brief-hint">Off by default. When a Claude Code, Codex or Gemini CLI session starts in a repository linked to your team board, and you share summaries with that team, Plexiform asks your team hub what teammates' AIs are doing there and adds it to the session as context: who is working on what (their names, task titles, branches and, if they share them, the files they are editing), the last few changes, open handovers and files two people are editing at once. At most 1,500 characters, about 400 tokens, at the start of each session, billed like any other input. The request tells the hub only which repository you are in, with your sign-in; nothing about your session is sent. If the hub doesn't answer within 0.8 seconds, the session starts without it. The same setting lets your AI ask for more through Plexiform's team_activity, who_touched, team_handover and team_brief tools.</div>
+    <div class="hint" id="team-brief-hint">Off by default. When a Claude Code, Codex or Gemini CLI session starts in a repository linked to your team board, and you share summaries with that team, Plexiform asks your team server what teammates' AIs are doing there and adds it to the session as context: who is working on what (their names, task titles, branches and, if they share them, the files they are editing), the last few changes, open handovers and files two people are editing at once. At most 1,500 characters, about 400 tokens, at the start of each session, billed like any other input. The request tells the team server only which repository you are in, with your sign-in; nothing about your session is sent. If the team server doesn't answer within 0.8 seconds, the session starts without it. The same setting lets your AI ask for more through Plexiform's team_activity, who_touched, team_handover and team_brief tools.</div>
     <label class="row"><input type="checkbox" id="remoteInteractionHost" aria-describedby="interaction-host-status" /> Let my other devices use sessions Plexiform started on this Mac</label>
-    <div class="hint">Your other devices signed in to the same Plexiform account can list, message and close sessions they start here, through your team hub. Off by default; see the privacy notice.</div>
+    <div class="hint">Your other devices signed in to the same Plexiform account can list, message and close sessions they start here, through your team server. Off by default; see the privacy notice.</div>
     <div class="hint" id="interaction-host-status" role="status" aria-live="polite"></div>
     <label class="row"><input type="checkbox" id="codexDaemonMessaging" aria-describedby="codex-daemon-hint" /> Let Plexiform message Codex CLI sessions running on the shared Codex daemon</label>
     <div class="hint" id="codex-daemon-hint">Off by default. Only sessions you start in Terminal with <code>codex</code> (which attaches to Codex's shared daemon, starting it if needed) are listed; Plexiform never starts the daemon and cannot reach Codex desktop-app conversations. Plexiform lists their titles and folders (a title may be generated by Codex from the session's first message), sends only what you type, shows only replies to your messages, never answers approvals and never steers or interrupts turns it did not start. Messages you send run with that session's own permissions. If it can run commands or edit files without asking, Plexiform's messages can too. See the privacy notice.</div>
