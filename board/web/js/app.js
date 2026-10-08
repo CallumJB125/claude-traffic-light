@@ -26,6 +26,7 @@ import { DEFAULT_SORT, nextSort } from './table.js';
 import { dashboardScreen } from './render-dashboard.js';
 import { integrationsScreen, connectWindowTarget, takeInput } from './render-integrations.js';
 import { saveSentrySettings } from './sentry-settings.js';
+import { slackChannelPatch } from './render-slack.js';
 import { teamScreen } from './render-team.js';
 import { emptyFold, pullJournal, windowMetrics, cardMetrics } from './metrics.js';
 import { VIEWS, plannerEnabled } from './views.js';
@@ -813,6 +814,24 @@ async function submitSentrySettings(form) {
   } finally { state.busy.delete(`integ:${id}`); if (current()) update(); }
 }
 
+async function submitSlackChannel(form) {
+  const id = form.dataset.conn, connection = state.integ.data?.connections?.find(c => c.id === id);
+  if (!connection || connection.provider !== 'slack' || state.busy.has(`integ:${id}`)) return;
+  const generation = boardGeneration, org = currentOrg();
+  const current = () => generation === boardGeneration && org === currentOrg();
+  try {
+    const body = slackChannelPatch(form);
+    const result = await withBusy(`integ:${id}`, () => api.patchIntegration(id, body));
+    if (!current() || result === undefined) return;
+    if (result?.connection?.id !== id) throw new Error('The integration response did not match this connection.');
+    state.integ = { ...state.integ, slackErrors: { ...state.integ.slackErrors, [id]: null },
+      data: { ...state.integ.data, connections: state.integ.data.connections.map(c => c.id === id ? result.connection : c) } };
+    toast('Slack channel saved.');
+  } catch (error) {
+    if (current()) state.integ = { ...state.integ, slackErrors: { ...state.integ.slackErrors, [id]: errorText(error) } };
+  } finally { if (current()) update(); }
+}
+
 // ── accounts: a first team ─────────────────────────────────────────────────
 
 async function enterTeam(teamId, done) {
@@ -1529,6 +1548,7 @@ async function submitDialogForm(form, submitter) {
   if (kind === 'review-settings') return submitReviewSettings(form);
   if (kind === 'integ-token') return submitIntegrationToken(form);
   if (kind === 'sentry-settings') return submitSentrySettings(form);
+  if (kind === 'slack-channel') return submitSlackChannel(form);
   if (kind === 'integ-prepare') return submitPrepare(form);
   if (kind === 'integ-start') return connectIntegration(form.dataset.provider, 'app_install', takeInput(form));
   if (kind === 'create-team') {

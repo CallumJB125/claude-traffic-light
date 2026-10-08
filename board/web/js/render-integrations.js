@@ -6,6 +6,7 @@ import { icon } from './icons.js';
 import { formatAge } from './view.js';
 import { CONNECTORS, STATUS_TEXT, connectorStatus } from './connectors.js';
 import { sentryRouting } from './render-sentry.js';
+import { slackChannel } from './render-slack.js';
 
 const MODE_LABEL = { auto: 'Automatic', ask: 'Ask first', off: 'Off' };
 const DECISION_LABEL = { attempted: 'In progress', auto: 'Done automatically', failed: 'Failed', asked: 'Waiting for a yes', approved: 'Approved', denied: 'Denied', skipped: 'Skipped (off)' };
@@ -161,6 +162,7 @@ function connectedCard(conn, m) {
         m.canEdit ? h('select', { class: 'input input-sm', 'aria-label': `Target board for ${connector?.name ?? conn.provider}`, 'data-change': 'integ-board', 'data-conn': conn.id, disabled: m.busy.has(`integ:${conn.id}`) || null },
           (m.boards ?? []).filter((b) => !b.archived_at || b.id === conn.target_board_id).map((b) => h('option', { key: b.id, value: b.id, selected: b.id === conn.target_board_id }, `${b.name}${b.archived_at ? ' (Archived — intake paused)' : ''}`)))
           : h('span', null, (m.boards ?? []).find((b) => b.id === conn.target_board_id)?.name ?? 'Team board'))),
+    conn.provider === 'slack' ? slackChannel(conn, m) : null,
     connector?.identity ? identitySection(conn, connector.name ?? conn.provider, m) : null,
     m.canEdit && Object.hasOwn(conn, 'webhook_url') ? webhookUrlSection(conn, connector?.name ?? conn.provider) : null,
     m.canEdit && conn.settings?.provider?.mode === 'app' ? reposSection(conn, m) : null,
@@ -356,6 +358,7 @@ export function integrationsScreen(model) {
     local: !!m.local, nowMs: m.nowMs ?? Date.now(), open: m.open, audit: m.audit ?? {}, tokenFor: m.tokenFor, manifest: m.manifest, confirmDisconnect: m.confirmDisconnect, busy: model.busy,
     meId: model.me?.member?.id, needs: m.needs ?? {}, confirmCancel: m.confirmCancel, repos: m.repos ?? {},
     sentryErrors: m.sentryErrors ?? {},
+    slackErrors: m.slackErrors ?? {},
   };
   const connected = data.connections ?? [];
   const pending = vm.canEdit ? data.pending ?? [] : [];
