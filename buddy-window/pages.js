@@ -25,8 +25,8 @@ const PAGES = [
       { id: 'board:table', title: 'Table', kind: 'hub', view: 'table' },
       { id: 'board:history', title: 'History', kind: 'hub', view: 'history' },
       { id: 'board:dashboard', title: 'Dashboard', kind: 'hub', view: 'dashboard' },
-      { id: 'board:calendar', title: 'Calendar', kind: 'hub', view: 'calendar', hidden: true },
-      { id: 'board:timeline', title: 'Timeline', kind: 'hub', view: 'timeline', hidden: true },
+      { id: 'board:calendar', title: 'Calendar', kind: 'hub', view: 'calendar' },
+      { id: 'board:timeline', title: 'Timeline', kind: 'hub', view: 'timeline' },
     ] },
   // Home's "Needs you" and "Your cards" carry these; the pages stay for notifications and deep links.
   { id: 'waiting', title: 'Waiting on you', icon: 'bell', kind: 'local', file: 'waiting.html', preload: 'waiting-preload.js', query: { embedded: '1' }, group: 'work', unlisted: true },
@@ -80,20 +80,21 @@ const GROUPS = [
 // is open) but has no sub-nav entry of its own.
 const SECTIONS = [
   { id: 'home', title: 'Home', icon: 'sun', default: 'home', pages: ['home', 'overview', 'myday', 'waiting'] },
-  { id: 'board', title: 'Board', icon: 'board', default: 'board', pages: ['board', 'board:table', 'board:history', 'board:dashboard'] },
+  { id: 'board', title: 'Board', icon: 'board', default: 'board', pages: ['board', 'board:table', 'board:history', 'board:calendar', 'board:timeline', 'board:dashboard'] },
   { id: 'tasks', title: 'Tasks', icon: 'tasks', default: 'tasks', pages: ['tasks'] },
-  { id: 'sessions', title: 'Running now', icon: 'team', default: 'sessions', menu: false, pages: ['sessions'] },
-  { id: 'checkpoints', title: 'What changed', icon: 'layers', default: 'checkpoints', menu: false, pages: ['checkpoints'] },
-  { id: 'memory', title: 'Search everything', icon: 'layers', default: 'memory', menu: false, pages: ['memory'] },
+  { id: 'sessions', title: 'Running now', icon: 'team', default: 'sessions', menu: 'more', pages: ['sessions'] },
+  { id: 'checkpoints', title: 'What changed', icon: 'layers', default: 'checkpoints', menu: 'more', pages: ['checkpoints'] },
+  { id: 'memory', title: 'Search everything', icon: 'layers', default: 'memory', menu: 'more', pages: ['memory'] },
   { id: 'usage', title: 'Usage & cost', icon: 'chart', default: 'usage', heading: 'Spend', pages: ['usage', 'stats'] },
   { id: 'optimiser', title: 'Usage optimiser', icon: 'chart', default: 'optimiser', menu: false, pages: ['optimiser'] },
   { id: 'clients', title: 'Client billing', icon: 'chart', default: 'clients', menu: false, pages: ['clients'] },
   { id: 'team', title: 'Team', icon: 'team', default: 'team', heading: 'Team', pages: ['team', 'integrations', 'account'] },
-  { id: 'aitools', title: 'AI tools', icon: 'plug', default: 'aitools', menu: false, heading: 'You', pages: ['aitools'] },
+  { id: 'aitools', title: 'AI tools', icon: 'plug', default: 'aitools', menu: 'more', heading: 'You', pages: ['aitools'] },
   { id: 'widget', title: 'Widget', icon: 'lights', default: 'widget', pages: ['widget', 'lights', 'hatch'] },
   { id: 'phone', title: 'Phone', icon: 'bell', default: 'phone', menu: false, pages: ['phone'] },
   { id: 'settings', title: 'Settings', icon: 'gear', default: 'settings', pages: ['settings', 'thismac'] },
 ];
+// `menu: false` keeps a section out of the tray and widget menus; `menu: 'more'` lists it in their More submenu.
 // Small links under the sections, not a section of their own.
 const FOOTER = ['help', 'feedback', 'updates'];
 // Setups is listed only once it works. Personal export/import and the
@@ -123,9 +124,8 @@ if (process.env.PLEXIFORM_SHOW_SYNC === '1' || UPGRADE_READY) {
   SECTIONS.find((s) => s.id === 'settings').pages.push('sync');
 }
 
-// Calendar and Timeline are project-planning views and AI runs have no due dates, so they
-// leave the sub-nav; the pages and deep links stay. PLEXIFORM_SHOW_PLANNER=1 restores them.
-if (process.env.PLEXIFORM_SHOW_PLANNER === '1') SECTIONS.find((s) => s.id === 'board').pages.splice(3, 0, 'board:calendar', 'board:timeline');
+// PLEXIFORM_SHOW_PLANNER=0 takes Calendar and Timeline off the sub-nav; the pages and deep links stay.
+if (process.env.PLEXIFORM_SHOW_PLANNER === '0') { const board = SECTIONS.find((s) => s.id === 'board'); board.pages = board.pages.filter((id) => id !== 'board:calendar' && id !== 'board:timeline'); }
 
 /** The sections as this platform shows them: macOnly pages are left out elsewhere. */
 function sectionsFor(platform = process.platform, sections = SECTIONS) {

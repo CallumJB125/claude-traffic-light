@@ -34,10 +34,18 @@ test('no empty state mentions npm or ccusage', () => {
   assert.match(html, /id="mix-connect"/);
 });
 
-test('Auto-answer is hidden unless PLEXIFORM_SHOW_AUTOANSWER=1', () => {
-  assert.match(html, /id="view-auto"[^>]*\bhidden\b/);
-  assert.match(read('lights-preload.js'), /showAutoAnswer: process\.env\.PLEXIFORM_SHOW_AUTOANSWER === '1'/);
+test('Auto-answer is shown unless PLEXIFORM_SHOW_AUTOANSWER=0, says nothing answers yet, and Usage & cost links to it', () => {
+  assert.match(html, /id="view-auto"[^>]*\bhidden\b/, 'hidden until the view script decides');
+  assert.match(read('lights-preload.js'), /showAutoAnswer: process\.env\.PLEXIFORM_SHOW_AUTOANSWER !== '0'/);
   assert.match(view, /v === 'auto' && !window\.lightsApi\.showAutoAnswer/);
+  assert.match(html, /Rules are saved here but nothing answers automatically yet\./);
+  assert.match(html, /<button type="button" class="btn ghost" id="budget-auto" hidden>Auto-answer rules<\/button>/);
+  assert.match(view, /\$\('budget-auto'\)\.hidden = !window\.lightsApi\.showAutoAnswer;/);
+  assert.match(view, /\$\('budget-auto'\)\.addEventListener\('click', \(\) => window\.lightsApi\.openAutoAnswer\(\)\)/);
+  assert.match(read('main.js'), /utilityHandle\('usage:open-auto-answer', analyticsSender, \(\) => \{ if \(process\.env\.PLEXIFORM_SHOW_AUTOANSWER === '0'\) return false; showLightsView\('auto'\); return true; \}\);/);
+  const SRC = require('../src/auto-rules.js');
+  assert.equal(typeof SRC.matchRule, 'function');
+  assert.doesNotMatch(read('main.js'), /AutoRules\.matchRule\(/, 'nothing answers from the rules yet: the tab is a rule editor only');
 });
 
 test('Usage & cost is one sidebar entry with tabs, links to the Usage optimiser, and names its two heatmaps apart', () => {

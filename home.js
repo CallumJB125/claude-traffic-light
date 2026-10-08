@@ -1,6 +1,6 @@
 'use strict';
-// Home: connect banner, then Needs you, Running now, Today and (on a team)
-// Your cards. Main (src/home-main.js) decides what each part holds; this file
+// Home: connect banner, then Needs you, Running now, Today, the cost guard
+// card and (on a team) Your cards. Main (src/home-main.js) decides what each part holds; this file
 // renders with textContent only and gives every empty part one next step.
 (() => {
   const api = window.homeApi;
@@ -101,6 +101,20 @@
     out.replaceChildren(strip, actions);
   }
 
+  function renderCosts(c) {
+    const section = $('costs'), out = body('costs');
+    section.hidden = !c;
+    $('costs-month').textContent = c?.receipt?.month ?? '';
+    if (!c) return out.replaceChildren();
+    const list = node('ul'); list.setAttribute('aria-label', 'Savings and cost guard');
+    if (c.receipt) list.append(item(c.receipt.headline, 'Savings receipt'));
+    if (c.enforce) list.append(item(c.enforce.status, 'Budget cap', c.enforce.on ? 'Enforced' : 'Not enforced', c.enforce.on ? 'working' : ''));
+    if (c.waste) list.append(item(c.waste.top ?? `Nothing wasteful found in ${c.waste.files} transcript${c.waste.files === 1 ? '' : 's'}.`, c.waste.count > 1 ? `Top waste finding of ${c.waste.count}, last ${c.waste.days} days` : `Waste, last ${c.waste.days} days`));
+    const actions = node('div', '', 'actions');
+    actions.append(goButton('Open Usage & cost', 'usage', 'costs:usage'));
+    out.replaceChildren(list, actions);
+  }
+
   async function openCard(handle, control) {
     control.disabled = true;
     try { if (!await api.openCard(handle)) $('status').textContent = 'That card changed or is no longer yours. Home refreshes in a moment.'; }
@@ -136,7 +150,7 @@
 
   function render(s) {
     const focus = document.activeElement?.dataset?.focus;
-    renderBanner(s.banner); renderMorning(s.morning); renderNeeds(s.needs); renderRunning(s.running, s.banner); renderToday(s.today, s.running); renderCards(s.team); renderTeamwork(s.teamless === true);
+    renderBanner(s.banner); renderMorning(s.morning); renderNeeds(s.needs); renderRunning(s.running, s.banner); renderToday(s.today, s.running); renderCosts(s.costs); renderCards(s.team); renderTeamwork(s.teamless === true);
     if (focus) [...document.querySelectorAll('[data-focus]')].find(el => el.dataset.focus === focus)?.focus();
     $('status').textContent = `Updated ${new Date(s.observed_at).toLocaleTimeString()}. Refreshes every 5 seconds.`;
   }

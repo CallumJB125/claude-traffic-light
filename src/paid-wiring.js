@@ -8,7 +8,8 @@
 //    setups: the team Setups service (main-only readForPlan),
 //    keyFor, requestsDir, interactionHost: () => host|null,
 //    setInteractionHostExtras: (fn) => void (phone approvals: {e2e, extra} for the remote host),
-//    teamMemory: (req) => Promise (the hub's team memory for Search everything, src/team-activity.js memoryPage)}
+//    teamMemory: (req) => Promise (the hub's team memory for Search everything, src/team-activity.js memoryPage),
+//    setCostGuardReport: (fn) => void (cost guard: its report() for Home's cost card)}
 // register gates its own work with ctx.entitlements.has(feature).
 'use strict';
 

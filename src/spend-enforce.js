@@ -228,6 +228,7 @@ function register(ctx) {
     if (!entitlements.has('costguard.enforce')) return { error: "Enforced caps aren't part of your current plan." };
     try { const settings = saveSettings(rootDir, v); enforcer.tick(); return { settings }; } catch (err) { return { error: err?.message ?? String(err) }; }
   });
+  ctx.setCostGuardReport?.(report);
   return { enforcer, report };
 }
 

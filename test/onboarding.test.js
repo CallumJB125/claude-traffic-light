@@ -192,7 +192,7 @@ test('first run opens setup (not Help) once; an install that already saw Help is
 
 test('the default tray menu is 20 items or fewer, with debug controls only in dev or the widget menu', () => {
   const build = (from, devRun = false) => {
-    const ctx = { IS_DEV_RUN: devRun, IS_MAC: true, BuddyPages, AppMenu: require('../src/app-menu.js'), BRAND: { OPEN_MENU_LABEL: 'Open Plexiform…' },
+    const ctx = { buddyWin: { captureState: () => ({ enabled: true }) }, refreshTrayMenu: () => {}, IS_DEV_RUN: devRun, IS_MAC: true, BuddyPages, AppMenu: require('../src/app-menu.js'), BRAND: { OPEN_MENU_LABEL: 'Open Plexiform…' },
       Menu: { buildFromTemplate: (t) => t }, budgetItems: () => [], scopeItem: () => [], BurstIpc: { trayItems: () => [] }, quietItems: () => [{ label: 'Snooze Notifications' }],
       loadConfig: () => ({ showWidget: true, menuBarMode: false }), LoginItem: { get: () => true }, updaterTrayItems: () => [{ label: 'Check for Updates…' }], hooksLabel: 'Reinstall Claude Code Hooks' };
     for (const fn of ['openBuddy', 'createFeedbackWindow', 'createHelpWindow', 'showHealth', 'knockNow', 'resizeBy', 'installHooks', 'createTray', 'setManual', 'clearManual', 'saveConfig', 'createWindow', 'applyWidgetVisibility', 'broadcastStatus', 'updateTrayMode']) ctx[fn] = () => {};
@@ -202,9 +202,39 @@ test('the default tray menu is 20 items or fewer, with debug controls only in de
   assert.ok(tray.length <= 20, `${tray.length} items: ${tray.map((i) => i.label).join(' | ')}`);
   const labels = tray.map((i) => i.label);
   for (const gone of ['Knock now', 'Bigger', 'Smaller', 'Reinstall Claude Code Hooks', 'Override: Green (5 min)', 'Clear override']) assert.ok(!labels.includes(gone), gone);
-  assert.equal(labels.filter((l) => /^Open .+…$/.test(l) && l !== 'Open Plexiform…').length, BuddyPages.sectionsFor().filter((sec) => sec.menu !== false).length, 'one Open item per sidebar section that is in the menu');
+  assert.equal(labels.filter((l) => /^Open .+…$/.test(l) && l !== 'Open Plexiform…').length, BuddyPages.sectionsFor().filter((sec) => sec.menu === undefined).length, 'one Open item per sidebar section that is in the menu');
+  const more = tray.find((i) => i.label === 'More');
+  assert.deepEqual(more.submenu.map((i) => i.label), ['Open Running now…', 'Open What changed…', 'Open Search everything…', 'Open AI tools…']);
+  assert.equal(labels.indexOf('More'), labels.indexOf('Open Settings…') + 1, 'More sits under the sections');
   for (const kept of ['Open at Login', 'Quit', 'Floating Widget', 'What does this mean?…']) assert.ok(labels.includes(kept), kept);
   for (const advanced of [build('widget'), build('tray', true)]) assert.ok(advanced.some((i) => i.label === 'Knock now') && advanced.some((i) => i.label === 'Override: Red (5 min)'));
+});
+
+test('the tray pauses and resumes automatic work cards, and turning them on the first time opens This Mac', () => {
+  const build = (capture, config = {}) => {
+    const calls = [];
+    const ctx = { buddyWin: { captureState: () => capture, setCapture: (on) => { calls.push(['setCapture', on]); return true; } }, refreshTrayMenu: () => calls.push(['refresh']),
+      IS_DEV_RUN: false, IS_MAC: true, BuddyPages, AppMenu: require('../src/app-menu.js'), BRAND: { OPEN_MENU_LABEL: 'Open Plexiform…' },
+      Menu: { buildFromTemplate: (t) => t }, budgetItems: () => [], scopeItem: () => [], BurstIpc: { trayItems: () => [] }, quietItems: () => [],
+      loadConfig: () => ({ showWidget: true, menuBarMode: false, ...config }), LoginItem: { get: () => true }, updaterTrayItems: () => [], hooksLabel: 'x' };
+    for (const fn of ['openBuddy', 'createFeedbackWindow', 'createHelpWindow', 'showHealth', 'knockNow', 'resizeBy', 'installHooks', 'createTray', 'setManual', 'clearManual', 'saveConfig', 'createWindow', 'applyWidgetVisibility', 'broadcastStatus', 'updateTrayMode']) ctx[fn] = (...a) => calls.push([fn, ...a]);
+    const items = vm.runInNewContext(`${slice('  const sectionItems = ', '\n  // Rebuilt in place')}\nbuildMenu('tray');`, ctx);
+    return { item: items.find((i) => /automatic cards/.test(i.label || '')), calls: { get list() { return JSON.parse(JSON.stringify(calls)); } } };
+  };
+  const on = build({ enabled: true });
+  assert.equal(on.item.label, 'Pause automatic cards');
+  assert.equal(on.item.sublabel, 'Automatic cards are on');
+  on.item.click();
+  assert.deepEqual(on.calls.list, [['setCapture', false], ['saveConfig', { autoCardsPausedFromTray: true }], ['refresh']]);
+  const paused = build({ enabled: false }, { autoCardsPausedFromTray: true });
+  assert.equal(paused.item.label, 'Resume automatic cards');
+  paused.item.click();
+  assert.deepEqual(paused.calls.list, [['setCapture', true], ['saveConfig', { autoCardsPausedFromTray: false }], ['refresh']]);
+  const off = build({ enabled: false });
+  assert.equal(off.item.label, 'Turn on automatic cards…');
+  off.item.click();
+  assert.deepEqual(off.calls.list, [['openBuddy', 'thismac']]);
+  assert.equal(build(null).item, undefined, 'no item where capture is off for the run (the demo)');
 });
 
 // ── The page itself ─────────────────────────────────────────────────────────

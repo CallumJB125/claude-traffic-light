@@ -2061,11 +2061,11 @@ test('Setups is listed under Settings now that personal export/import, Apply and
   assert.equal(pageById('setups').file, 'setups.html');
 });
 
-test('Calendar and Timeline leave the sidebar but stay addressable; PLEXIFORM_SHOW_PLANNER=1 restores them', () => {
+test('Calendar and Timeline are listed under Board by default; PLEXIFORM_SHOW_PLANNER=0 takes them off the sub-nav', () => {
   const board = SECTIONS.find((s) => s.id === 'board');
-  assert.ok(!board.pages.includes('board:calendar') && !board.pages.includes('board:timeline'));
+  assert.deepEqual(board.pages, ['board', 'board:table', 'board:history', 'board:calendar', 'board:timeline', 'board:dashboard']);
   assert.equal(pageById('board:calendar').view, 'calendar');
   assert.equal(pageById('board:timeline').view, 'timeline');
-  const out = require('node:child_process').execFileSync(process.execPath, ['-e', "console.log(JSON.stringify(require('./buddy-window/pages').SECTIONS.find((s) => s.id === 'board').pages))"], { cwd: path.join(__dirname, '..'), env: { ...process.env, PLEXIFORM_SHOW_PLANNER: '1' } });
-  assert.deepEqual(JSON.parse(out), ['board', 'board:table', 'board:history', 'board:calendar', 'board:timeline', 'board:dashboard']);
+  const out = require('node:child_process').execFileSync(process.execPath, ['-e', "console.log(JSON.stringify(require('./buddy-window/pages').SECTIONS.find((s) => s.id === 'board').pages))"], { cwd: path.join(__dirname, '..'), env: { ...process.env, PLEXIFORM_SHOW_PLANNER: '0' } });
+  assert.deepEqual(JSON.parse(out), ['board', 'board:table', 'board:history', 'board:dashboard']);
 });

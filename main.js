@@ -1501,7 +1501,9 @@ function getBuddy() {
       devAccountsHub: app.isPackaged ? null : devAccountsHub,
       captureEnabled: !DEMO,
       handoverWriter: () => { try { return SessionHandoverMain.writer; } catch { return null; } },
+      onCaptureChange: () => refreshTrayMenu(),
     });
+    refreshTrayMenu();
     if (typeof buddyWin[BudgetNotice.CONTRACT.subscribeMethod] === 'function') {
       const unsubscribe = buddyWin[BudgetNotice.CONTRACT.subscribeMethod](handleBudgetEvent);
       if (typeof unsubscribe === 'function') onQuit(app, unsubscribe);
@@ -1769,8 +1771,9 @@ const SetupsLocal=require('./src/setups-main').createSetupsMain({app,buddy:()=>b
 SetupsLocal.register(ipcMain);
 onQuit(app,()=>SetupsLocal.close());
 
+let costGuardReport = null;
 // Paid-tier packages (src/paid-wiring.js): each registers itself if present; nothing here may block startup.
-try { require('./src/paid-wiring.js').registerAll({ app, ipcMain, rootDir: ROOT_DIR, buddy: () => buddyWin, fromPage: fromUtilityPage, setups: SetupsNative, onQuit: (fn) => onQuit(app, fn), log: (m) => console.warn(m), spend: () => spendSnapshot(loadConfig()), runawayStoppers: () => runawayStoppers, usageTurns: () => getUsageTurns(), ownedSessions: { list: () => InteractionMain.listOwned(), target: (s) => InteractionMain.sharedTarget(s) }, keyFor, requestsDir: REQUESTS_DIR, interactionHost: () => hostSync.host(), setInteractionHostExtras: (fn) => { interactionHostExtras = fn; }, teamMemory: (req) => TeamActivity.memoryPage(req) }); } catch (e) { console.warn('[paid] wiring failed:', e?.message ?? e); } // privacy-flow: team-memory
+try { require('./src/paid-wiring.js').registerAll({ setCostGuardReport: (fn) => { costGuardReport = fn; }, app, ipcMain, rootDir: ROOT_DIR, buddy: () => buddyWin, fromPage: fromUtilityPage, setups: SetupsNative, onQuit: (fn) => onQuit(app, fn), log: (m) => console.warn(m), spend: () => spendSnapshot(loadConfig()), runawayStoppers: () => runawayStoppers, usageTurns: () => getUsageTurns(), ownedSessions: { list: () => InteractionMain.listOwned(), target: (s) => InteractionMain.sharedTarget(s) }, keyFor, requestsDir: REQUESTS_DIR, interactionHost: () => hostSync.host(), setInteractionHostExtras: (fn) => { interactionHostExtras = fn; }, teamMemory: (req) => TeamActivity.memoryPage(req) }); } catch (e) { console.warn('[paid] wiring failed:', e?.message ?? e); } // privacy-flow: team-memory
 
 // Settings → Account & team, and the widget's one-time Team hint. Each
 // handler checks its sender; the page to open is never taken from the renderer.
@@ -3131,16 +3134,26 @@ function createTray() {
   // The default menu is the everyday handful (the app's sections, not every
   // page). Debug and resize controls show in dev runs and in the widget's
   // Option/Shift-right-click menu only.
-  const sectionItems = () => BuddyPages.sectionsFor().filter((sec) => sec.menu !== false).map((sec) => ({ id: sec.default, title: sec.title, group: 'sections', kind: 'local' }));
+  const sectionItems = () => BuddyPages.sectionsFor().filter((sec) => sec.menu !== false).map((sec) => ({ id: sec.default, title: sec.title, group: sec.menu === 'more' ? 'more' : 'sections', kind: 'local' }));
+  // Pausing is one click; turning cards on for the first time goes through This Mac, which explains what they send.
+  const captureItems = () => {
+    const capture = buddyWin?.captureState?.();
+    if (!capture) return [];
+    const pausedHere = loadConfig().autoCardsPausedFromTray === true;
+    if (capture.enabled) return [{ label: 'Pause automatic cards', sublabel: 'Automatic cards are on', click: () => { if (buddyWin.setCapture(false)) saveConfig({ autoCardsPausedFromTray: true }); refreshTrayMenu(); } }];
+    if (pausedHere) return [{ label: 'Resume automatic cards', sublabel: 'Automatic cards are paused', click: () => { if (buddyWin.setCapture(true)) saveConfig({ autoCardsPausedFromTray: false }); refreshTrayMenu(); } }];
+    return [{ label: 'Turn on automatic cards…', sublabel: 'Automatic cards are off', click: () => openBuddy('thismac') }];
+  };
   const buildMenu = (from = 'tray') => {
     const advanced = IS_DEV_RUN || from === 'widget';
     return Menu.buildFromTemplate([
       ...budgetItems(),
       ...scopeItem(),
       ...BurstIpc.trayItems(),
-      ...AppMenu.appItems({ pages: sectionItems(), groups: [{ id: 'sections' }], open: openBuddy, openLabel: BRAND.OPEN_MENU_LABEL, feedback: { label: "Something's off / Idea…", click: createFeedbackWindow } }),
+      ...AppMenu.appItems({ pages: sectionItems(), groups: [{ id: 'sections' }, { id: 'more', submenu: 'More' }], open: openBuddy, openLabel: BRAND.OPEN_MENU_LABEL, feedback: { label: "Something's off / Idea…", click: createFeedbackWindow } }),
       { label: 'Open Claude', click: () => shell.openExternal('https://claude.ai') },
       ...quietItems(),
+      ...captureItems(),
       ...(advanced ? [{ label: 'Show Widget Now', click: () => { saveConfig({ showWidget: true }); clearTimeout(snoozeTimer); if (!win) createWindow(); win.showInactive(); createTray(); } }] : []),
       { label: 'Reset Widget Position', click: () => { const wa = screen.getPrimaryDisplay().workArea; if (!win) createWindow(); strip = WidgetStrip.NONE; win.setMaximumSize(MAX_WIDTH, Math.round(MAX_WIDTH / WIDGET_ASPECT)); win.setAspectRatio(WIDGET_ASPECT); win.setBounds({ x: wa.x + wa.width - 140, y: wa.y + 46, width: 107, height: 137 }); win.showInactive(); broadcastStatus(); } },
       {
@@ -3467,6 +3480,7 @@ utilityHandle('save-spend-limits', analyticsSender, (_e, v) => {
 });
 utilityHandle('usage:open-ai-tools', analyticsSender, () => { aiToolsOpen('aitools'); return true; });
 utilityHandle('usage:open-optimiser', analyticsSender, () => { openBuddy('optimiser'); return true; });
+utilityHandle('usage:open-auto-answer', analyticsSender, () => { if (process.env.PLEXIFORM_SHOW_AUTOANSWER === '0') return false; showLightsView('auto'); return true; });
 
 // Export the whole visible range as JSON or CSV, wherever the user points.
 utilityHandle('export-stats', e => settingsOnly(e) || analyticsSender(e), async (e, format, days) => {
@@ -4316,7 +4330,7 @@ utilityHandle('mcp-set-enabled', (e) => fromUtilityPage(e, 'aitools'), (_e, on) 
 
 const AiTools = require('./src/ai-tools-wire.js').wire({ ipcMain, shell, clipboard, home: os.homedir(), runtime: HOOK_RUNTIME, rootDir: ROOT_DIR, fromPage: (e) => fromUtilityPage(e, 'aitools'), askFromWidget: () => !!loadConfig().askFromWidget, ephemeral: EPHEMERAL, openPage: openBuddy, onClaudeConsent: (on) => saveConfig({ claudeAutoConnect: on }) });
 const aiToolsOpen = (destination) => AiTools.open(destination);
-require('./src/home-main.js').register({ ipcMain, allowed: (e) => fromUtilityPage(e, 'home'), state: () => aggregateState(), localSessions, tools: () => AiTools.quick(), myDay: MyDay, openPage: openBuddy, openAiTools: aiToolsOpen, collisions: CollisionAlerts.rowCollisions(collisionAlerts) });
+require('./src/home-main.js').register({ ipcMain, allowed: (e) => fromUtilityPage(e, 'home'), state: () => aggregateState(), localSessions, tools: () => AiTools.quick(), myDay: MyDay, openPage: openBuddy, openAiTools: aiToolsOpen, collisions: CollisionAlerts.rowCollisions(collisionAlerts), costGuard: () => (costGuardReport ? costGuardReport() : null) });
 // Preferences' "Connect other agents" buttons open the AI tools page on that
 // tool, where the exact change is previewed and confirmed (src/ai-tools.js).
 ipcMain.handle('connect-agent', async (e, which) => {
