@@ -59,7 +59,7 @@
     // One click: ticking the calendar saves it at once, and that save is what
     // shows macOS's one-time access prompt. It is off until then.
     document.getElementById('busyCalendar').addEventListener('change', async (e) => {
-      try { await window.settingsApi.saveConfig({ busyCalendar: e.target.checked }); } catch { /* Save reports errors */ }
+      try { await window.settingsApi.saveConfig({ busyCalendar: e.target.checked }); flash(); } catch (err) { flash(err); }
       setTimeout(showBusy, 1500);
     });
 
@@ -204,19 +204,23 @@
       setTimeout(showInteractionHost, 1500);
       setTimeout(showBusy, 1500);
       showRemote(await window.settingsApi.remoteDevices());
-      status.className = '';
-      status.textContent = 'Saved';
-      setTimeout(() => (status.textContent = ''), 2500);
-      } catch (err) {
-        status.className = 'err';
-        status.textContent = `Save failed — ${err.message}`;
-        status.setAttribute('role', 'alert');
-        setTimeout(() => { status.textContent = ''; status.className = ''; status.setAttribute('role', 'status'); }, 6000);
-      }
+      flash();
+      } catch (err) { flash(err); }
     }
 
-    // Every control saves when it changes. Voice, Compactor, boards and the
-    // calendar tick keep their own saves; they are left out here.
+    let flashTimer = null;
+    function flash(err) {
+      clearTimeout(flashTimer);
+      status.className = err ? 'err' : '';
+      status.setAttribute('role', err ? 'alert' : 'status');
+      status.textContent = err ? `Save failed — ${err.message}` : 'Saved';
+      flashTimer = setTimeout(() => { status.textContent = ''; status.className = ''; status.setAttribute('role', 'status'); }, err ? 6000 : 2500);
+    }
+    window.showSaved = flash;
+
+    // Every control saves when it changes. Voice, Compactor, crash reports and
+    // the calendar tick keep their own saves (and say Saved themselves); boards
+    // and the device name only fill in a form for their button.
     let saving = Promise.resolve();
     const OWN_SAVE = /^(voice-|compact-|native-board-|remote-name$|busyCalendar$)/;
     document.addEventListener('change', (e) => {
@@ -225,7 +229,7 @@
       saving = saving.then(saveAll);
     });
 
-    const SECTIONS = ['general', 'notifications', 'widget', 'privacy', 'advanced'];
+    const SECTIONS = ['general', 'notifications', 'spend', 'widget', 'privacy', 'advanced'];
     function showSection(id) {
       if (!SECTIONS.includes(id)) id = 'general';
       for (const p of document.querySelectorAll('.pane')) p.hidden = p.dataset.section !== id;
@@ -233,7 +237,7 @@
       try { history.replaceState(null, '', `?${new URLSearchParams({ ...Object.fromEntries(new URLSearchParams(location.search)), section: id })}`); } catch { /* embedded pages may refuse */ }
     }
     window.showSettingsSection = showSection;
-    for (const b of document.querySelectorAll('#section-nav button')) b.addEventListener('click', () => showSection(b.dataset.go));
+    for (const b of document.querySelectorAll('#section-nav button')) b.addEventListener('click', () => { showSection(b.dataset.go); document.body.scrollTop = 0; });
     showSection(new URLSearchParams(location.search).get('section') || location.hash.slice(1));
 
 
@@ -418,7 +422,7 @@
     // The Widget page and the tray change some of these keys too: re-read on return so a later save keeps them.
     document.addEventListener('visibilitychange', () => { if (!document.hidden) load().catch(() => {}); });
 
-    // ── Voice (F7) ── its own saves, so the Save button's list stays untouched.
+    // ── Voice (F7) ── its own saves, kept out of the page-wide list.
     (async () => {
       const hotkey = document.getElementById('voice-hotkey');
       const longPress = document.getElementById('voice-longPress');
@@ -440,10 +444,11 @@
       if (!st.available) for (const el of [hotkey, longPress, askClaude]) el.disabled = true;
       const save = async () => {
         await window.settingsApi.saveConfig({ voice: { hotkey: hotkey.value || null, longPress: longPress.checked, askClaude: askClaude.checked } });
+        flash();
         const now = await window.settingsApi.voiceStatus();
         show({ taken: now.hotkeyTaken });
       };
-      for (const el of [hotkey, longPress, askClaude]) el.addEventListener('change', () => save().catch((err) => { hint.textContent = `Save failed — ${err.message}`; }));
+      for (const el of [hotkey, longPress, askClaude]) el.addEventListener('change', () => save().catch((err) => { flash(err); hint.textContent = `Save failed — ${err.message}`; }));
     })();
 
     // ── Compactor ── its own saves. Numbers come only from recorded before/after counts.
@@ -511,8 +516,9 @@
       const save = async () => {
         const cur = (await window.settingsApi.getConfig()).compaction || {};
         await window.settingsApi.saveConfig({ compaction: { ...cur, enabled: $('enabled').checked, providers: { ...cur.providers, codex: $('codex').checked }, threshold: Number($('threshold').value) / 100 } });
+        flash();
         withNote(await window.settingsApi.compactionStats().catch(() => null));
       };
       $('threshold').addEventListener('input', showThreshold);
-      for (const el of [$('enabled'), $('codex'), $('threshold')]) el.addEventListener('change', () => save().catch((err) => { $('saved').textContent = `Save failed — ${err.message}`; }));
+      for (const el of [$('enabled'), $('codex'), $('threshold')]) el.addEventListener('change', () => save().catch((err) => { flash(err); $('saved').textContent = `Save failed — ${err.message}`; }));
     })();
