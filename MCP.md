@@ -4,7 +4,7 @@ Plexiform ships an MCP server, `mcp-server.js`, so any Claude Code session can a
 
 ## Turning it on
 
-**Preferences → Claude integration → Enable Claude integration.** This writes one entry, `claude-buddy` (the server keeps its name from before the rename, so Claude's tool names stay the same), under the top-level `mcpServers` key of `~/.claude.json`. That is Claude Code's user scope, which every project sees ([docs](https://code.claude.com/docs/en/mcp)). Restart any open sessions afterwards. **Disable** removes that one entry. Nothing else in the file is touched.
+**Settings → AI tools → Claude Code → Turn on Claude integration.** This writes one entry, `claude-buddy` (the server keeps its name from before the rename, so Claude's tool names stay the same), under the top-level `mcpServers` key of `~/.claude.json`. That is Claude Code's user scope, which every project sees ([docs](https://code.claude.com/docs/en/mcp)). Restart any open sessions afterwards. **Turn off** removes that one entry. Nothing else in the file is touched.
 
 The packaged app registers itself like this:
 

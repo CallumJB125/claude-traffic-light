@@ -24,7 +24,8 @@ async function open(rows, api = {}) {
     openInstall: async (id) => { calls.push(['install', id]); return true; },
     connectAll: async () => ({ ok: true, results: [{ id: 'codex', ok: true, message: 'Connected.' }] }),
     undo: async () => ({ ok: true, message: 'Restored your original config.' }),
-    disconnect: async () => ({ ok: true, message: 'x' }), addCustom: async () => ({ ok: true, command: 'plexiform-run aider' }), ...api,
+    disconnect: async () => ({ ok: true, message: 'x' }), addCustom: async () => ({ ok: true, command: 'plexiform-run aider' }),
+    mcpStatus: async () => ({ installed: false, current: true }), mcpSetEnabled: async (on) => { calls.push(['mcp', on]); return { installed: on, current: true }; }, ...api,
   };
   dom.window.eval(script);
   await tick();
@@ -89,4 +90,17 @@ test('Connect all shows every diff, then one confirm reports per-tool results', 
   await tick(); await tick();
   assert.equal(box.hidden, true);
   assert.match(doc.getElementById('status').textContent, /Codex CLI: connected/);
+});
+
+test('Claude Code\'s row carries the Claude integration (MCP) switch; Settings no longer has it', async () => {
+  const { doc, calls } = await open([row({ id: 'claude', label: 'Claude Code', connected: true, state: 'connected', primary: { action: 'disconnect', label: 'Disconnect' } }), row({ id: 'codex', label: 'Codex CLI' })]);
+  const [claude, codex] = [...doc.querySelectorAll('section.tool')];
+  assert.match(claude.textContent, /Claude integration \(MCP\): off\./);
+  assert.equal(codex.querySelector('#mcp-toggle'), null);
+  claude.querySelector('#mcp-toggle').click(); await tick();
+  assert.deepEqual(calls, [['mcp', true]]);
+  assert.match(doc.querySelector('section.tool').textContent, /Claude integration \(MCP\): on\./);
+  assert.doesNotMatch(fs.readFileSync(path.join(ROOT, 'settings.html'), 'utf8'), /mcp-toggle/);
+  const main = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8');
+  assert.match(main, /utilityHandle\('mcp-set-enabled', \(e\) => fromUtilityPage\(e, 'aitools'\)/);
 });

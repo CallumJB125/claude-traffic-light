@@ -85,9 +85,24 @@ function rowEl(row) {
   if (row.chips.length) { const ul = node('ul', '', 'chips'); ul.setAttribute('aria-label', 'What Plexiform shows for this tool'); for (const c of row.chips) ul.append(node('li', c)); el.append(ul); }
   const p = previews.get(row.id);
   if (p) el.append(previewBlock(row, p, () => act(() => confirm(row)), () => { previews.delete(row.id); row.state === 'fix' ? act(refresh) : draw(); }, row.state === 'reconnect' ? 'Confirm and reconnect' : undefined));
+  if (row.id === 'claude' && row.installed) el.append(mcpBlock());
   const res = results.get(row.id);
   if (res) { const r = node('p', res.text, `result ${res.ok ? '' : 'error'}`); r.setAttribute('role', res.ok ? 'status' : 'alert'); el.append(r); }
   return el;
+}
+
+let mcp = null;
+function mcpBlock() {
+  const box = node('div', '', 'mcp');
+  box.append(node('p', mcp?.installed ? 'Claude integration (MCP): on.' : 'Claude integration (MCP): off.'));
+  box.append(node('p', 'Lets you ask Claude "why is my widget amber?" or have it answer a waiting permission prompt. Writes one entry (claude-buddy) to ~/.claude.json; restart open sessions to pick it up.', 'muted'));
+  if (mcp?.error) box.append(node('p', `Could not update ${mcp.path}: ${mcp.error}`, 'error'));
+  else if (mcp?.installed && !mcp.current) box.append(node('p', 'Registered, but pointing at an older copy of Plexiform. Turn it off and on again to update it.', 'muted'));
+  const b = node('button', mcp?.installed ? 'Turn off Claude integration' : 'Turn on Claude integration'); b.type = 'button'; b.id = 'mcp-toggle';
+  b.disabled = !mcp;
+  b.addEventListener('click', () => act(async () => { mcp = await api.mcpSetEnabled(!mcp.installed); draw(); }));
+  const bar = node('div', '', 'row-actions'); bar.append(b); box.append(bar);
+  return box;
 }
 
 function draw() {
@@ -101,7 +116,7 @@ function draw() {
   if (focusId && !scrolled) { scrolled = true; document.getElementById(`tool-${focusId}`)?.scrollIntoView({ block: 'center' }); }
 }
 
-async function refresh() { snap = await api.scan(); draw(); }
+async function refresh() { [snap, mcp] = await Promise.all([api.scan(), api.mcpStatus().catch(() => null)]); draw(); }
 
 allBtn.addEventListener('click', () => act(async () => {
   const boxes = [];

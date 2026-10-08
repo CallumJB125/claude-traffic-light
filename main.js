@@ -4248,8 +4248,8 @@ ipcMain.handle('native-board-connect', nativeBoardAction((s, input) => {
 }));
 ipcMain.handle('native-board-disconnect', nativeBoardAction((s, target) => s.disconnect(target)));
 onQuit(app, () => { nativeBoardService?.stop().catch(() => {}); });
-utilityHandle('mcp-status', settingsOnly, () => McpInstall.status(mcpOpts()));
-utilityHandle('mcp-set-enabled', settingsOnly, (_e, on) => {
+utilityHandle('mcp-status', (e) => fromUtilityPage(e, 'aitools'), () => McpInstall.status(mcpOpts()));
+utilityHandle('mcp-set-enabled', (e) => fromUtilityPage(e, 'aitools'), (_e, on) => {
   try {
     const r = on ? McpInstall.install(mcpOpts()) : McpInstall.uninstall(mcpOpts());
     console.log(`[mcp] ${on ? 'registered' : 'unregistered'} in ${r.path}${r.changed ? '' : ' (no change)'}`);
