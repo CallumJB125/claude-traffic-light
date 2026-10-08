@@ -115,6 +115,22 @@ test('create: the folder must be a handle main gave out; the page cannot pass a 
   assert.ok(info.recent.every((r) => r.handle && r.label));
 });
 
+test('create: a reset task can carry main\'s known reset time; other tasks and the page cannot set one', async () => {
+  const f = svc.registerFolder('/Users/demo/Development/acme-web');
+  const at = Date.now() + 3 * 3600_000;
+  const r = await svc.create({ text: 'continue at reset', folder: f.handle, ai: 'claude', when: 'reset', startAfter: 1 }, { startAfter: at });
+  assert.equal(r.ok, true, JSON.stringify(r));
+  const now = await svc.create({ text: 'start now', folder: f.handle, ai: 'claude', when: 'now' }, { startAfter: at });
+  const page = await svc.create({ text: 'page tries', folder: f.handle, ai: 'claude', when: 'reset', startAfter: at });
+  const c = await (await import(pathToFileURL(path.join(__dirname, '..', 'board', 'tasks-api', 'client.js')).href)).connect({ socketPath: srv.socketPath, tokenPath: srv.tokenPath });
+  try {
+    const spec = async (id) => (await c.getTask(id)).spec;
+    assert.deepEqual([(await spec(r.id)).afterReset, (await spec(r.id)).startAfter], [true, at]);
+    assert.equal((await spec(now.id)).startAfter, undefined);
+    assert.equal((await spec(page.id)).startAfter, undefined);
+  } finally { c.close(); }
+});
+
 test('takeover: main asks in a native dialog first; the copy holds no token, is single use, and the screen is masked', async () => {
   const copied = [];
   const t = await until(() => svc.snapshot().tasks.find((x) => x.actions.includes('takeover')));
