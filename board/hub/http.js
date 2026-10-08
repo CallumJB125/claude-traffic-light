@@ -471,6 +471,13 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     route('DELETE', '/api/teams/:team_id/enrol', ({ member, ident, ip }) => enr.unenrol(member, ident, { ip }));
     route('GET', '/api/teams/:team_id/enrolments', ({ member, ident }) => enr.list(member, ident));
     route('DELETE', '/api/teams/:team_id/enrolments/:enrollment_id', ({ member, params, ip }) => enr.revoke(member, params.enrollment_id, { ip }));
+    // Hosted (cloud) runners and the provider keys they use (067, docs/CLOUD-RUNNER-RUNBOOK.md).
+    const hosted = hub.hostedRunners;
+    route('POST', '/api/teams/:team_id/hosted-runners', ({ member, ident, body, ip }) => hosted.create(member, ident, body, { ip }));
+    route('GET', '/api/teams/:team_id/hosted-runners', ({ member }) => hosted.list(member));
+    route('GET', '/api/teams/:team_id/provider-configs', ({ member }) => hosted.providerList(member));
+    route('PUT', '/api/teams/:team_id/provider-configs/:provider', ({ member, params, body, ip }) => hosted.setProvider(member, params.provider, body, { ip }));
+    route('DELETE', '/api/teams/:team_id/provider-configs/:provider', ({ member, params, ip }) => hosted.removeProvider(member, params.provider, { ip }));
     // Paid plans (billing/): the caller's plan, hosted Checkout and portal links, and the signed
     // entitlement token the desktop app verifies offline. The provider's webhook is handled before the route table.
     const billing = hub.billing;

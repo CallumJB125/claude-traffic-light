@@ -61,12 +61,34 @@ function overlapWarning(preview, targetName) {
       h('button', { type: 'button', class: 'btn', 'data-action': 'close-dialog' }, `Wait for ${first.other_key}`)));
 }
 
+// The team's cloud runner (the caller's own hosted runner): honest when none is
+// set up or it is offline, with what its recent runs cost.
+export const CLOUD = 'cloud';
+function cloudChoice(dlg) {
+  const hosted = dlg.preview?.hosted;
+  if (!hosted) return null;
+  const cloud = dlg.target === CLOUD;
+  const r = hosted.runners?.find((x) => x.online) ?? hosted.runners?.[0];
+  const seen = r?.last_seen_at ? Date.now() - Date.parse(r.last_seen_at) : null;
+  const status = !hosted.enrolled
+    ? 'No cloud runner is set up for this team. An admin adds one from the Plexiform app (Cloud runner runbook).'
+    : hosted.online
+      ? `${r.name} is online${r.active_runs ? ` · ${r.active_runs} running` : ''}${r.serves_repo === false ? ' · this repo is not configured on it, so the card would wait' : ''}.`
+      : `${r.name} is offline${seen != null ? ` (last seen ${formatAge(seen)} ago)` : ''}. Work waits in the queue until it reconnects.`;
+  const recent = (hosted.recent_runs ?? []).map((x) => `${x.card_key} ${x.cost_usd == null ? 'cost not reported' : fmtUsd(x.cost_usd)}`);
+  return h('div', { class: 'field field-check', id: 'give-cloud' },
+    h('label', { class: 'check' }, h('input', { type: 'checkbox', name: 'cloud', checked: cloud, disabled: !hosted.enrolled || null, 'data-change': 'give-cloud' }), 'Run in the cloud'),
+    h('p', { class: 'hint' }, status, hosted.enrolled ? ' Keeps working while your computer is closed.' : ''),
+    cloud && recent.length ? h('p', { class: 'hint', id: 'give-cloud-cost' }, `Recent cloud runs: ${recent.join(' · ')}`) : null);
+}
+
 export function giveDialog(dlg, model) {
   const view = model.entries.find((e) => e.view.id === dlg.cardId)?.view;
   if (!view) return null;
   const meId = model.me?.member?.id;
   const members = [...model.members.values()];
-  const target = dlg.target ?? meId;
+  const cloud = dlg.target === CLOUD;
+  const target = cloud ? meId : dlg.target ?? meId;
   const targetMember = model.members.get(target);
   const isMe = target === meId;
   const repos = dlg.repos ?? [];
@@ -74,7 +96,7 @@ export function giveDialog(dlg, model) {
   const busy = dlg.busy;
   const moving = dlg.mode === 'redispatch' && view.handover_hold;
   const title = moving ? `Continue ${view.key} with another AI` : `Send ${view.key} to AI`;
-  const providers = tackleChoices(dlg.preview?.runners);
+  const providers = tackleChoices(cloud ? (dlg.preview?.hosted?.runners ?? []).filter((r) => r.online) : dlg.preview?.runners);
   const ai = providers.find((a) => a.id === dlg.ai) ?? providers.find((a) => a.id === 'claude');
   const uncapped = ai.budget === 'none' || dlg.budget_mode === 'none';
   const noBudgetAllowed = isMe || dlg.preview?.can_use_no_budget === true;
@@ -93,7 +115,8 @@ export function giveDialog(dlg, model) {
     uncapped && view.budget?.cap_usd != null ? h('p', { class: 'hint' }, `This assignment removes the current ${fmtUsd(view.budget.cap_usd)} card budget.`) : null,
     field('give-ai', 'AI', h('select', { id: 'give-ai', name: 'ai', class: 'input', 'data-change': 'give-ai', disabled: waiting || null },
       providers.map((p) => h('option', { value: p.id, selected: p.id === ai.id, disabled: !p.available || null }, `${p.label}${p.available && !dlg.preview?.runners?.length ? '' : p.reason ? ` · ${readinessText(p.reason)}` : ''}`))),
-      !waiting && !dlg.preview?.error && !dlg.preview?.runners?.length ? 'The machine is offline. Work queues until a compatible signed-in runner connects.' : null),
+      !cloud && !waiting && !dlg.preview?.error && !dlg.preview?.runners?.length ? 'The machine is offline. Work queues until a compatible signed-in runner connects.' : null),
+    cloudChoice(dlg),
     capNotice(ai, dlg, uncapped, view),
     // A required repo with no default stays in view; a chosen one waits in Advanced.
     repoId ? null : repoField,
@@ -101,7 +124,7 @@ export function giveDialog(dlg, model) {
       h('fieldset', { class: 'field runner-pick' },
         h('legend', null, 'Whose machine runs it'),
         members.map((m) => h('label', { key: m.member_id, class: `runner-opt${target === m.member_id ? ' is-picked' : ''}` },
-          h('input', { type: 'radio', name: 'target', value: m.member_id, checked: target === m.member_id, 'data-change': 'give-target' }),
+          h('input', { type: 'radio', name: 'target', value: m.member_id, checked: !cloud && target === m.member_id, 'data-change': 'give-target' }),
           h('span', { class: 'runner-name' }, m.member_id === meId ? 'Your machine' : `${m.name}'s machine`),
           h('span', { class: 'runner-note' }, m.member_id === meId ? 'Uses your signed-in AI account' : `${m.name} confirms on their machine first`)))),
       repoId ? repoField : null,
@@ -123,13 +146,14 @@ export function giveDialog(dlg, model) {
     h('div', { class: 'sponsor-box', id: 'give-sponsor' },
       pixelClaude({ lamps: { green: true }, cls: 'sponsor-mark' }),
       h('div', null,
-        h('p', { class: 'sponsor-line' }, isMe ? `Runs on your machine · your ${ai.label} account` : `Runs on ${targetMember?.name}'s machine · their ${ai.label} account`),
-        h('p', { class: 'hint' }, isMe ? 'Usage comes out of your own plan.' : `This spends ${targetMember?.name}'s plan, so ${targetMember?.name} must confirm before it starts.`))),
+        h('p', { class: 'sponsor-line' }, cloud ? `Runs on the team's cloud runner · ${ai.label}` : isMe ? `Runs on your machine · your ${ai.label} account` : `Runs on ${targetMember?.name}'s machine · their ${ai.label} account`),
+        h('p', { class: 'hint' }, cloud ? `Uses the team's stored ${ai.label} key, or the cloud runner's own sign-in when none is stored. Usage counts against that account, inside the cloud runner's own time, token and spend limits.`
+          : isMe ? 'Usage comes out of your own plan.' : `This spends ${targetMember?.name}'s plan, so ${targetMember?.name} must confirm before it starts.`))),
     errorLine(dlg),
     h('div', { class: 'modal-foot' },
       h('button', { type: 'button', class: 'btn', 'data-action': 'close-dialog' }, 'Cancel'),
       h('button', { type: 'submit', class: 'btn btn-claude', disabled: busy || waiting || deviceLimit || (dlg.mode === 'retry' && uncapped) || !ai.available || (uncapped && !noBudgetAllowed) || null, 'aria-busy': busy ? 'true' : null, 'aria-describedby': 'give-sponsor' },
-        busy ? 'Queuing…' : hasOverlap ? (isMe ? 'Send anyway' : `Ask ${targetMember?.name} anyway`) : isMe ? moving ? `Continue with ${ai.label}` : 'Start' : `Ask ${targetMember?.name}`))), { wide: true });
+        busy ? 'Queuing…' : hasOverlap ? (isMe ? 'Send anyway' : `Ask ${targetMember?.name} anyway`) : cloud ? 'Run in the cloud' : isMe ? moving ? `Continue with ${ai.label}` : 'Start' : `Ask ${targetMember?.name}`))), { wide: true });
 }
 
 const turnLimited = (ai, dlg) => ai.id !== 'codex' && dlg.max_turns != null;

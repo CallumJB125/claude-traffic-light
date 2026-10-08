@@ -14,6 +14,10 @@ describe (`BOARD_AUTH=access`, `BOARD_ACCESS_*`) is legacy and no longer the pro
 | `buddy-hub-backup.{service,timer}` + `backup.mjs` | nightly paired DB + deliverable snapshot, 14 verified bundles kept in `/var/lib/buddy-hub/backups` |
 | `add-member.mjs` | legacy (Access mode): seed email-only members on the host before anyone can sign in |
 | `deploy.sh` | ship `board/` at HEAD, `npm ci`, install units, restart, health check |
+| `buddy-runner.service` | the cloud runner as `buddyrunner`: only `/var/lib/buddy-runner` writable, hub data/env hidden, CPU/task/memory limits, delegated cgroup for per-run sandboxes, egress filter |
+| `runner.env.example` | `/etc/buddy-runner/runner.env` template (no secrets; the runner token is `/etc/buddy-runner/runner.token`, LoadCredential) |
+| `hermes-dgx.conf` | drop-in that lets runs reach a tailnet model server (Hermes · DGX) |
+| `install-runner.sh` / `deploy-runner.sh` | on the Pi (root): user, dirs, unit; from the laptop: ship `board/` and run it. Never touches the hub |
 
 `BOARD_SECRET` is REQUIRED in accounts mode and must be at least 32 bytes (`openssl rand -base64 48`); the hub refuses to start without it. Keep it with the data: changing it signs everyone out.
 
@@ -97,3 +101,12 @@ Restore from Litestream (hub host lost or DB damaged):
    epoch, so any runner or card that was live before the restore cannot write over the restored state. Remove
    the line after the first start.
 4. Check `/api/health` and the journal tail. Runners reconnect on their own.
+
+## Cloud runner beside the hub
+
+The cloud runner (`buddy-runner`) is a separate unit with its own unprivileged user, code tree
+(`/opt/buddy-runner`) and state (`/var/lib/buddy-runner`); it connects to the hub over loopback
+like any enrolled runner and never reads the hub's files. Install and the owner steps:
+`docs/CLOUD-RUNNER-RUNBOOK.md` (repo root). `PI="ssh …" board/deploy/pi/deploy-runner.sh` ships
+and installs it; it starts only once `/etc/buddy-runner/runner.env` and `runner.token` exist.
+The hub needs migration 067 (deploy the hub first, with a backup).

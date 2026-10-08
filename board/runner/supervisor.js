@@ -129,6 +129,8 @@ export class Supervisor extends EventEmitter {
     this.supervisorLstart = lstartOf(process.pid);
     this.formFactor = opts.formFactor ?? this.policy.form_factor ?? detectFormFactor();
     this.confirm = opts.confirm ?? ((o) => this.#confirmViaControl(o));
+    // Hosted (cloud) mode: hosted/index.js. null on a member's own machine.
+    this.hosted = opts.hosted ?? null;
   }
 
   // ── lifecycle ─────────────────────────────────────────────────────────────
@@ -316,6 +318,7 @@ export class Supervisor extends EventEmitter {
     this.attempt = 0;
     this.originDown = false;
     this.outbox.ack(m.last_seq_acked);
+    if (this.hosted) this.policy = this.hosted.onAllowlist(this.l, this.allowlist);
     // Delayed = written while offline, by an earlier supervisor, or older than
     // one heartbeat: only those never move a card (D3).
     const now = this.clock.mono();
@@ -499,6 +502,12 @@ export class Supervisor extends EventEmitter {
   async #scopeForRepo(repoId) {
     const repo = this.policy.repos?.[repoId];
     if (!repo?.local_path) return null;
+    if (this.hosted) {
+      try { await this.hosted.ensureCheckout(repoId); } catch (e) {
+        this.log.warn('hosted checkout unavailable; the offer stays queued', { repo_id: repoId, code: e.code ?? 'error', err: e.message });
+        return null;
+      }
+    }
     const s = await sessionOf(repo.local_path);
     return scopeOf(s, { allowlist: this.allowlist, opted_in: Object.keys(this.policy.repos).filter((k) => this.policy.repos[k]?.opt_in) });
   }
@@ -629,16 +638,21 @@ export class Supervisor extends EventEmitter {
     // Codex and Hermes: one CLI turn per process, board tools over the per-run MCP server.
     const oneTurn = ai !== 'claude';
     const caps = (BACKENDS[ai] ?? ClaudeBackend).describe().capabilities;
-    const budget = runBudget(run.offer.budget_usd, repo.budget_per_run);
+    // The hosted dollar cap binds where the CLI can enforce one; elsewhere its token and time caps do.
+    const budget = runBudget(run.offer.budget_usd, this.hosted && caps.budget === 'none' ? undefined : repo.budget_per_run);
     if (oneTurn && ((budget.usd != null && caps.budget === 'none') || (run.offer.max_turns != null && !caps.maxTurns))) throw err('NOT_AVAILABLE', 'This AI cannot enforce a native budget or max-turn cap');
     if (oneTurn && !run.gitAccess) throw err('POLICY_DENIED', 'Run Git grant unavailable');
     if (caps.permissions === 'none' && run.offer.require_plan_approval) throw err('NOT_AVAILABLE', 'This AI has no sandbox for a plan-approval run');
-    const apiKeyFile = !oneTurn && this.env.ANTHROPIC_API_KEY ? path.join(run.runDir, API_KEY_FILE) : null;
-    if (apiKeyFile) writeFileAtomic(apiKeyFile, this.env.ANTHROPIC_API_KEY);
+    const realBin = ai === 'claude' ? this.claudeBin : this.ais?.find((a) => a.id === ai)?.bin;
+    const hosted = this.hosted ? await this.hosted.prepare(this, run, ai, realBin) : null;
+    if (this.runs.get(run.run_id) !== run || run.ending || run.ended || run.fenced || !run.gateState().open) return null;
+    const anthropicKey = hosted?.anthropicKey ?? this.env.ANTHROPIC_API_KEY;
+    const apiKeyFile = !oneTurn && anthropicKey ? path.join(run.runDir, API_KEY_FILE) : null;
+    if (apiKeyFile) writeFileAtomic(apiKeyFile, anthropicKey);
     const home = path.resolve(this.l.home);
     const boardHome = home === path.join(this.env.HOME ?? '', '.board') ? null : home;
     if (!oneTurn) {
-      const settings = buildSettings({ worktree: run.worktree, tmpdir: this.env.TMPDIR || '/tmp', repo, apiKeyFile, boardHome });
+      const settings = buildSettings({ worktree: run.worktree, tmpdir: this.env.TMPDIR || '/tmp', repo, apiKeyFile, boardHome, extraDenyRead: hosted?.denyRead ?? [] });
       writeJsonAtomic(path.join(run.runDir, 'settings.json'), settings);
       writeJsonAtomic(path.join(run.runDir, 'mcp.json'), buildMcpConfig({ socket: run.socketPath, token: run.run_token, server: this.mcpServer }));
     }
@@ -648,21 +662,23 @@ export class Supervisor extends EventEmitter {
     const buddyOwned = recordBuddyLaunch(buddyHome, { cwd: run.worktree });
     const cacheDir = path.join(home, 'cache', run.run_id);
     if (oneTurn) { ensureDir(cacheDir); ensureDir(path.join(cacheDir, 'tmp')); }
-    const env = oneTurn ? buildCodexEnv(this.env, cacheDir) : buildEnv(this.env, { runDir: run.runDir, socket: run.socketPath, supervisorPid: process.pid, supervisorLstart: this.supervisorLstart, buddyOwned });
-    const systemPrompt = boardBrief({ key: run.key, fence: run.fence, nonce: run.nonce, trusted: trustedInstructions(repo.local_path, 20000, oneTurn ? 'codex' : ai) });
+    const env = { ...(oneTurn ? buildCodexEnv(this.env, cacheDir) : buildEnv(this.env, { runDir: run.runDir, socket: run.socketPath, supervisorPid: process.pid, supervisorLstart: this.supervisorLstart, buddyOwned })), ...hosted?.env };
+    const brief = boardBrief({ key: run.key, fence: run.fence, nonce: run.nonce, trusted: trustedInstructions(repo.local_path, 20000, oneTurn ? 'codex' : ai) });
+    const systemPrompt = hosted?.briefNote ? `${brief}\n\n${hosted.briefNote}` : brief;
     const Backend = this.opts.Backend ?? BACKENDS[ai] ?? ClaudeBackend;
     run.budgetScope = budget.scope;
     run.budgetUsd = budget.usd;
     run.readOnly = oneTurn && run.offer.require_plan_approval && !editable;
     const backend = new Backend({
-      bin: ai === 'claude' ? this.claudeBin : this.ais?.find((a) => a.id === ai)?.bin, cwd: run.worktree, env, runDir: run.runDir, sessionId: run.sessionId, resume,
-      budgetUsd: budget.usd, maxTurns: run.offer.max_turns, systemPrompt, model: repo.model,
+      bin: hosted?.bin ?? realBin, cwd: run.worktree, env, runDir: run.runDir, sessionId: run.sessionId, resume,
+      budgetUsd: budget.usd, maxTurns: run.offer.max_turns, systemPrompt, model: hosted?.model ?? repo.model,
       log: this.log, boardHome, interruptWaitMs: this.opts.interruptWaitMs ?? INTERRUPT_WAIT_MS, stopGraceMs: this.opts.stopGraceMs ?? STOP_GRACE_MS,
       ...(oneTurn ? { ...run.gitAccess, cacheDir, boardRunDir: run.runDir, permissionMode: run.readOnly ? 'plan' : 'acceptEdits',
-        denyPaths: [repo.local_path, this.l.device, this.l.policy, this.l.ledger, this.l.outboxDir, path.join(home, 'run')], } : {}),
+        denyPaths: [repo.local_path, this.l.device, this.l.policy, this.l.ledger, this.l.outboxDir, path.join(home, 'run'), ...(hosted?.denyRead ?? [])], } : {}),
     });
     if (oneTurn) backend.oneTurn = true;
     run.attach(backend);
+    this.hosted?.attach(run, backend);
     if (backend.platform === 'win32') this.saveLedger(run);
     await backend.start(prompt ?? (resume ? 'Board connection restored and your run is still current. Continue where you left off.' : run.initialPrompt(firstPrompt({ key: run.key, title: run.offer.title, nonce: run.nonce }))));
     this.saveLedger(run);
@@ -738,6 +754,12 @@ export class Supervisor extends EventEmitter {
   // snapshot that never got pushed keeps the worktree for a manual salvage.
   cleanupRun(run) {
     if (run.windowsStopUnconfirmed) return;
+    // Hosted: push the run branch and empty its cgroup before the worktree goes.
+    if (this.hosted && !run.hostedFinished) {
+      run.hostedFinished = true;
+      this.hosted.finishRun(run).catch((e) => this.log.warn('hosted run finish failed', { run_id: run.run_id, err: e.message })).finally(() => this.cleanupRun(run));
+      return;
+    }
     if (this.opts.keepRunFiles ?? this.env.BOARD_KEEP_RUN_FILES === '1') return;
     try { fs.rmSync(run.runDir, { recursive: true, force: true }); } catch { /* gone */ }
     const localPath = this.policy.repos?.[run.repo_id]?.local_path;

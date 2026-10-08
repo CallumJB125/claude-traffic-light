@@ -342,13 +342,15 @@ export class Api {
     const selfKnown = self.touched_paths.length > 0 || self.planned_paths.length > 0;
     // 'unknown' = live work exists that this card cannot be compared against: never reported as clear.
     const check = { status: overlaps.length ? 'overlap' : !others ? 'clear' : !selfKnown || unknown.length ? 'unknown' : 'clear', self_known: selfKnown, unknown_runs: unknown.slice(0, 10) };
-    const dev = [...this.hub.runners.values()].find((c) => c.member_id === tid && c.repos.has(selectedRepo));
+    const dev = [...this.hub.runners.values()].find((c) => c.member_id === tid && !c.hosted && c.repos.has(selectedRepo));
     const sponsor = sponsorLine({ target: { member_id: tid, name: target.display_name, is_viewer: tid === member.id, device_name: dev?.device.name } }) ?? '';
-    const runners = [...this.hub.runners.values()].filter((c) => c.ready && c.member_id === tid && c.repos.has(selectedRepo)).map((c) => ({
+    const runners = [...this.hub.runners.values()].filter((c) => c.ready && c.member_id === tid && !c.hosted && c.repos.has(selectedRepo)).map((c) => ({
       device_name: c.device.name,
       ai: (c.ai ?? runnerAis(undefined)).map((a) => ({ id: a.id, label: a.label, available: [null, 'may_need_sign_in'].includes(readiness(a)), reason: readiness(a), budget: a.capabilities.budget, legacy: a.legacy })),
     }));
-    return { overlaps, check, sponsor, runners, can_use_no_budget: tid === member.id || this.hub.isAdmin(member) };
+    // The caller's own cloud runner, for "Run in the cloud": honest when none is enrolled or it is offline.
+    const hosted = tid === member.id && this.hub.hostedRunners ? this.hub.hostedRunners.previewFor(member, selectedRepo) : null;
+    return { overlaps, check, sponsor, runners, can_use_no_budget: tid === member.id || this.hub.isAdmin(member), ...(hosted ? { hosted } : {}) };
   }
 
   // ── cards ─────────────────────────────────────────────────────────────────
@@ -737,6 +739,10 @@ export class Api {
         let target = body.target_member_id ?? null;
         if (target == null && action === 'retry') target = rel.run?.on_behalf_of ?? null;
         if (target != null) this.orgMember(member, target);
+        // "Run in the cloud": the caller's own hosted runner, never a teammate's machine.
+        const placement = body.placement === undefined ? (action === 'retry' ? rel.dispatch?.placement ?? null : null) : body.placement;
+        if (placement != null && placement !== 'hosted') throw new HubError('VALIDATION', 'placement must be "hosted" or null');
+        if (placement === 'hosted' && (target ?? me) !== me) throw new HubError('POLICY_DENIED', 'cloud runs use your own cloud runner', { reason: 'HOSTED_SELF_ONLY' });
         const existing = this.db.get('SELECT * FROM dispatches WHERE request_id = ?', body.request_id);
         if (existing && existing.card_id !== cardId) throw new HubError('CONFLICT', 'request_id belongs to another card');
         ctx.duplicate_request = !!existing;
@@ -763,8 +769,8 @@ export class Api {
         if ((this.hub.dailyRemainingCents(row.board_id) ?? 50) < 50) throw new HubError('BUDGET_EXCEEDED', 'the board’s daily spend cap is reached; new runs wait until tomorrow or an admin raises it');
         if (row.fail_kind === 'budget' && rel.run?.terminal_reason === 'budget_device') throw new HubError('POLICY_DENIED', 'the machine owner must change their local limit', { reason: 'DEVICE_LIMIT' });
         if (!existing && row.fail_kind === 'budget' && (!involved(rel.dispatcher, rel.owner) || mode === 'none' || cents == null || cents < Math.max(row.budget_cents ?? 0, this.hub.cardSpentCents(cardId)) + 50)) throw new HubError('POLICY_DENIED', 'increase the budget as its owner before continuing', { reason: 'BUDGET_TOO_LOW' });
-        if (existing && (existing.backend !== AI_BACKENDS[ai] || existing.target_member_id !== target || existing.budget_mode !== mode || (mode === 'cap' && existing.budget_cents !== cents))) throw new HubError('CONFLICT', 'request_id already belongs to another dispatch choice');
-        Object.assign(event, { request_id: body.request_id, target_member_id: target, backend: AI_BACKENDS[ai], ai, budget_mode: mode, budget_cents: mode === 'cap' ? cents : null });
+        if (existing && (existing.backend !== AI_BACKENDS[ai] || existing.target_member_id !== target || existing.budget_mode !== mode || (mode === 'cap' && existing.budget_cents !== cents) || (existing.placement ?? null) !== placement)) throw new HubError('CONFLICT', 'request_id already belongs to another dispatch choice');
+        Object.assign(event, { request_id: body.request_id, target_member_id: target, backend: AI_BACKENDS[ai], ai, budget_mode: mode, budget_cents: mode === 'cap' ? cents : null, placement });
         if (supplied && !existing && cents !== row.budget_cents) {
             opts.pre = () => {
               this.db.run('UPDATE cards SET budget_cents = ? WHERE id = ?', cents, cardId);
@@ -794,7 +800,7 @@ export class Api {
         ctx.needs_confirm = this.hub.needsConfirm(me, target ?? me, row.repo_id);
         const remaining = this.hub.remainingBudgetCents(row, rel.dispatch);
         ctx.policy_ok = this.policyOk(row, rel.dispatch?.budget_mode === 'none' ? null : row.budget_cents) && (remaining == null || remaining >= 50);
-        Object.assign(event, { request_id: body.request_id, target_member_id: target, comment, ai: aiOfDispatch(rel.dispatch ?? rel.run), backend: rel.dispatch?.backend ?? rel.run?.backend ?? 'claude_cli', budget_mode: rel.dispatch?.budget_mode ?? null, budget_cents: rel.dispatch?.budget_cents ?? null });
+        Object.assign(event, { request_id: body.request_id, target_member_id: target, comment, ai: aiOfDispatch(rel.dispatch ?? rel.run), backend: rel.dispatch?.backend ?? rel.run?.backend ?? 'claude_cli', budget_mode: rel.dispatch?.budget_mode ?? null, budget_cents: rel.dispatch?.budget_cents ?? null, placement: rel.dispatch?.placement ?? null });
         opts.pre = () => this.insertComment(member, cardId, { body: comment, for_agent: true });
         break;
       }

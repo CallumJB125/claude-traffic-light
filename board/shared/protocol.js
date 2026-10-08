@@ -87,10 +87,10 @@ export const RPC_METHODS = Object.freeze([
   'board_get_card', 'board_list_cards', 'board_ask_human', 'board_attach_evidence', 'board_complete',
   'board_release', 'board_declare_plan', 'board_check_overlap', 'board_recall', 'approval', 'team_context',
   'approval_cancel', 'board_create_card', 'board_add_lesson', 'runner_plan_status', 'board_read_packet', 'board_write_packet',
-  'board_send_message', 'board_list_messages', 'board_ack_message', 'runner_messages_received',
+  'board_send_message', 'board_list_messages', 'board_ack_message', 'runner_messages_received', 'runner_provider_config',
 ]);
 // RPC methods that are runner plumbing, not board-mcp tools.
-export const RUNNER_ONLY_RPC = Object.freeze(['team_context', 'approval_cancel', 'runner_plan_status', 'runner_messages_received']);
+export const RUNNER_ONLY_RPC = Object.freeze(['team_context', 'approval_cancel', 'runner_plan_status', 'runner_messages_received', 'runner_provider_config']);
 // Only the server may create this permission request after a declared plan.
 export const CODEX_PLAN_PERMISSION = 'Authorize Codex edits for this run';
 
@@ -114,6 +114,7 @@ export const TOOL_SCOPES = Object.freeze({
   'permission:ask': "ask this card's approvers for a tool permission; cannot grant one",
   'message:read': "read this run's exact fenced task inbox and same-team/repository active peer identities; acknowledge only its current server connection's issued delivery",
   'message:write': "post a bounded message on this run's own card to exact active same-team/repository recipient runs; never trigger dispatch or resume",
+  'provider:read': "hosted runners only: the team's stored credential for this run's own AI, for the runner process to start it; never an agent tool",
 });
 export const MCP_TOOL_SCOPES = Object.freeze({
   board_get_card: 'card:read',

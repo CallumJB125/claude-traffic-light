@@ -54,6 +54,8 @@ export class RunnerConn {
     this.ws = ws;
     this.device = device;
     this.enrollmentId = enrollmentId;   // accounts: the runner enrolment this socket authenticated with (D80)
+    // A hosted (cloud) runner claims only "Run in the cloud" dispatches (067).
+    this.hosted = enrollmentId != null && hub.db.get('SELECT hosted FROM runner_enrollments WHERE id = ?', enrollmentId)?.hosted === 1;
     this.generation = randomUUID();     // server-issued host connection identity, never from hello/HB data
     this.device_id = device.id;
     this.member_id = device.member_id;

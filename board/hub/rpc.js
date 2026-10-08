@@ -187,6 +187,11 @@ const METHODS = {
     return { overlaps: hub.overlapViews(hub.card(row.id)), ...hub.ownership.snapshot(ctx), ...(permission ? { plan_permission_request_id: permission.id, plan_authorization: permission.state } : {}) };
   },
 
+  runner_provider_config(hub, { run, row, connection }) {
+    if (!hub.hostedRunners) throw new HubError('NOT_AVAILABLE', 'hosted runners need accounts mode');
+    return hub.hostedRunners.credentialsFor(connection, run, row);
+  },
+
   runner_plan_status(hub, { run, row }) {
     if (run.ai !== 'codex') throw new HubError('NOT_AVAILABLE', 'this run does not use Codex');
     // Removing the label cannot widen a run launched with a plan gate. A
@@ -339,6 +344,7 @@ export const METHOD_SCOPES = Object.freeze({
   board_create_card: 'card:create_child',
   board_add_lesson: 'lesson:suggest',
   runner_plan_status: 'card:read',
+  runner_provider_config: 'provider:read',
   board_send_message: 'message:write',
   board_list_messages: 'message:read',
   board_ack_message: 'message:read',

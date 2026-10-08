@@ -196,6 +196,12 @@ const MATRIX = {
   'POST /api/teams/:team_id/billing/checkout': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/billing/checkout`, body: { seats: 5, interval: 'month' } },
   'POST /api/teams/:team_id/billing/portal': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/billing/portal` },
   'GET /api/teams/:team_id/enrolments': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/enrolments` },
+  // Hosted (cloud) runners and their sealed provider keys (067).
+  'POST /api/teams/:team_id/hosted-runners': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/hosted-runners`, body: { name: 'pwned' } },
+  'GET /api/teams/:team_id/hosted-runners': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/hosted-runners` },
+  'GET /api/teams/:team_id/provider-configs': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/provider-configs` },
+  'PUT /api/teams/:team_id/provider-configs/:provider': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/provider-configs/claude`, body: { api_key: 'sk-pwned-key', model: 'pwned' } },
+  'DELETE /api/teams/:team_id/provider-configs/:provider': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/provider-configs/claude` },
   'DELETE /api/teams/:team_id/enrolments/:enrollment_id': {
     kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/enrolments/${fx.B.enrollment}`,
     alt: (fx) => [`/api/teams/${fx.A.team}/enrolments/${fx.B.enrollment}`],
