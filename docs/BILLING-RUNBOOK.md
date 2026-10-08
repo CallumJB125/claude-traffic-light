@@ -15,8 +15,12 @@ products, keys, webhooks or deploys.
   and the webhook is not a route.
 - **Web** (`/billing`): plan, seats used / paid, Subscribe, Manage billing.
 - **Desktop** (`src/entitlement-refresh.js`, Plan & billing page): asks the
-  signed-in hub once a day and on sign-in. `src/entitlement-keys.js` is
-  **empty**, so every install stays free until a key is pinned.
+  signed-in hub once a day and on sign-in. `src/entitlement-keys.js:10` is
+  **empty**, so `src/entitlements.js:73` sets `BETA_ALL_FEATURES` and every
+  install is full-featured (top plan, every Plus/Team feature) until a key is
+  pinned. Free-tier limits are not enforced in this build.
+  `PLEXIFORM_FORCE_FREE=1` turns the beta off (`src/entitlements.js:179`) to
+  exercise the free path.
 - **Card data:** never stored. Only the provider's customer and subscription
   ids, plan, seats, status and period end are kept.
 
