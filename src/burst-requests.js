@@ -38,14 +38,14 @@ function requestsView(raw, { limit = 200 } = {}) {
   return { rows: rows.slice(0, Math.max(0, limit)) };
 }
 
-// scrubbed GET /api/history -> { days: [{ day, primaryUsd, secondaryUsd, requests }], repos: [{ repo, usd, savedUsd }] }
+// scrubbed GET /api/history -> { days: [{ day, primaryUsd, secondaryUsd, requests, secondaryRequests }], repos: [{ repo, usd, savedUsd, requests }] }
 function historyView(raw) {
   const h = raw && typeof raw === 'object' ? raw : {};
   return {
     days: (Array.isArray(h.days) ? h.days : []).slice(0, 90).map((d) => ({
-      day: str(d && d.date, 10), primaryUsd: num(d && d.primary_usd), secondaryUsd: num(d && d.secondary_usd), requests: num(d && d.requests),
+      day: str(d && d.date, 10), primaryUsd: num(d && d.primary_usd), secondaryUsd: num(d && d.secondary_usd), requests: num(d && d.requests), secondaryRequests: num(d && d.secondary_requests),
     })),
-    repos: (Array.isArray(h.repos) ? h.repos : []).slice(0, 50).map((r) => ({ repo: str(r && r.repo, 100), usd: num(r && r.usd), savedUsd: num(r && r.saved_usd) })),
+    repos: (Array.isArray(h.repos) ? h.repos : []).slice(0, 50).map((r) => ({ repo: str(r && r.repo, 100), usd: num(r && r.usd), savedUsd: num(r && r.saved_usd), requests: num(r && r.requests) })),
   };
 }
 

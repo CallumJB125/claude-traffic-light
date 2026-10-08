@@ -15,7 +15,39 @@
   const usd = (v) => `$${v >= 100 ? Math.round(v) : v.toFixed(2)}`;
   const reqs = (n) => `${n.toLocaleString('en-US')} request${n === 1 ? '' : 's'}`;
 
-  function draw(v, codex) {
+  // Burst's own 14-day buckets: request counts by slot, backup-provider dollars, and per-repository
+  // compaction savings. Plan traffic stays a count; its API-equivalent dollars are not shown.
+  function drawHistory(h) {
+    const days = h.days.filter((d) => d.day);
+    if (days.some((d) => d.requests)) {
+      const max = Math.max(...days.map((d) => d.requests), 1);
+      const total = days.reduce((n, d) => n + d.requests, 0);
+      const backup = days.reduce((n, d) => n + d.secondaryRequests, 0);
+      const strip = el('div', null, 'burst-days');
+      strip.setAttribute('role', 'img');
+      strip.setAttribute('aria-label', `${reqs(total)} through Burst over ${days.length} days, ${reqs(backup)} to backup providers`);
+      Object.assign(strip.style, { display: 'flex', alignItems: 'flex-end', gap: '2px', height: '40px', margin: '4px 0' });
+      for (const d of days) {
+        const col = el('div');
+        col.title = `${d.day}: ${reqs(d.requests)}${d.secondaryRequests ? `, ${d.secondaryRequests.toLocaleString('en-US')} to backup providers (${usd(d.secondaryUsd)})` : ''}`;
+        Object.assign(col.style, { flex: '1', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', height: '100%' });
+        const plan = Math.max(0, d.requests - d.secondaryRequests);
+        const top = el('div'); Object.assign(top.style, { height: `${(d.secondaryRequests / max) * 100}%`, background: '#c98500' });
+        const bottom = el('div'); Object.assign(bottom.style, { height: `${(plan / max) * 100}%`, minHeight: d.requests ? '1px' : '0', background: 'currentColor', opacity: '0.45' });
+        col.append(top, bottom);
+        strip.append(col);
+      }
+      sec.append(el('h4', `Last ${days.length} days`), strip, el('div', `${reqs(total)}; ${reqs(backup)} went to backup providers (top of each bar).`, 'note'));
+    }
+    const saved = h.repos.filter((r) => r.repo && r.savedUsd > 0);
+    if (saved.length) {
+      const sl = el('ul');
+      for (const r of saved) sl.append(el('li', `${r.repo}: ${usd(r.savedUsd)} saved${r.requests ? ` · ${reqs(r.requests)}` : ''}`));
+      sec.append(el('div', 'Burst compaction savings by repository (API-equivalent, last 14 days)', 'note'), sl);
+    }
+  }
+
+  function draw(v, codex, history) {
     sec.hidden = !v;
     if (!v) return;
     sec.replaceChildren(el('h3', 'Through Burst'), el('div', `Source: ${v.source}`, 'note'));
@@ -34,6 +66,7 @@
     }
     if (v.planRequests) sec.append(el('div', `${reqs(v.planRequests)} on your Claude plan went through Burst. They are counted in the Claude figures above, not here.`, 'note'));
     sec.append(el('div', v.note, 'note'));
+    if (history) drawHistory(history);
     if (codex) {
       sec.append(el('h4', 'Codex'), el('div', `${reqs(codex.requests)}${codex.tokens ? ` · ${codex.tokens.toLocaleString('en-US')} tokens` : ''}${codex.usd ? ` · ${usd(codex.usd)}` : ''}`));
       if (codex.groups.length) {
@@ -52,7 +85,7 @@
     let next = 30000;
     try {
       const r = await api.burstUsage('7d');
-      draw(r && r.view, r && r.codex);
+      draw(r && r.view, r && r.codex, r && r.history);
       next = r && r.nextPollMs;
       if (!next) return;
     } catch { /* retry slowly */ }

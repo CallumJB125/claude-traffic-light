@@ -163,7 +163,9 @@ function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usag
     if (!isMac || last.kind !== 'present' || !last.capabilities.usage) return { view: null, nextPollMs: isMac ? backoff.gap : 0 };
     let codex = null;
     if (client.codex) { try { codex = Codex.codexView(await client.codex()); } catch { codex = null; } }
-    try { return { view: Spend.throughBurstView(await client.usage({ range })), codex, nextPollMs: backoff.gap }; } catch { return { view: null, nextPollMs: backoff.gap }; }
+    let history = null;
+    if (client.history) { try { history = Requests.historyView(await fresh('history', () => client.history({ days: 14 }))); } catch { history = null; } }
+    try { return { view: Spend.throughBurstView(await client.usage({ range })), codex, history, nextPollMs: backoff.gap }; } catch { return { view: null, nextPollMs: backoff.gap }; }
   });
 
   // Sessions page: per-session compaction stats and the handover of observed Claude sessions.

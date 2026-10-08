@@ -11,7 +11,7 @@ const Spend = require('../src/burst-spend.js');
 const { usageReport, compactionState } = require('./fixtures/fake-burst.js');
 
 const NOTE = '## 2026-10-06 Session\nWorking on parser.\n';
-function setup({ state = compactionState([{ session: 's-1', compactions: 1, requests: 3, saved_tokens: 100, saved_usd: 0.5, net_usd: 0.25 }]), live = true } = {}) {
+function setup({ state = compactionState([{ session: 's-1', compactions: 1, requests: 3, saved_tokens: 100, saved_usd: 0.5, net_usd: 0.25 }]), live = true, history = null } = {}) {
   const handlers = {};
   const sent = [], hub = [], files = [];
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'burst-s3-'));
@@ -21,6 +21,7 @@ function setup({ state = compactionState([{ session: 's-1', compactions: 1, requ
     usage: async () => Spend.normalizeUsage(usageReport()),
     handoverAudit: async () => [{ root: '/work/plex' }],
     handoverFile: async (root) => { files.push(root); return NOTE; },
+    ...(history ? { history: async (q) => { history.calls.push(q); return history.body; } } : {}),
   };
   const api = Ipc.register({
     utilityHandle: (ch, allowed, fn) => { handlers[ch] = (e, ...a) => (allowed(e) ? fn(e, ...a) : null); },
@@ -39,6 +40,19 @@ test('usage channel: only the Usage page; returns the Through Burst view model, 
   const r = await t.handlers['burst:usage']({ usage: true }, '7d');
   assert.equal(r.view.secondaryUsd, 1.5);
   assert.ok(!('recent' in r.view) && !('byProvider' in r.view));
+  assert.equal(r.history, null);
+});
+
+test('usage channel: Burst\'s 14-day history, normalized, cached between polls', async () => {
+  const history = { calls: [], body: { days: [{ date: '2026-10-06', requests: 40, secondary_requests: 4, secondary_usd: 0.25, primary_usd: 9 }], repos: [{ repo: 'plexiform', path: '/Users/x/plexiform', usd: 2, saved_usd: 0.5, requests: 40 }] } };
+  const t = setup({ history });
+  await settle();
+  const r = await t.handlers['burst:usage']({ usage: true }, '7d');
+  assert.deepEqual(r.history.days, [{ day: '2026-10-06', primaryUsd: 9, secondaryUsd: 0.25, requests: 40, secondaryRequests: 4 }]);
+  assert.deepEqual(r.history.repos, [{ repo: 'plexiform', usd: 2, savedUsd: 0.5, requests: 40 }]);
+  assert.doesNotMatch(JSON.stringify(r.history), /\/Users/);
+  await t.handlers['burst:usage']({ usage: true }, '7d');
+  assert.deepEqual(history.calls, [{ days: 14 }]);
 });
 
 test('sessions: compaction stats for every session; Burst handover only for observed Claude sessions; nothing shared by default', async () => {
