@@ -66,6 +66,8 @@
       "home.css",
       "home.js",
       "home-preload.js",
+      "demo-banner.js",
+      "demo-banner.css",
       "settings.html",
       "settings-backups.js",
       "settings-crash-reports.js",

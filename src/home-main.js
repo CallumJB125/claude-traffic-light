@@ -89,7 +89,7 @@ function costs(report) {
 // Tasks finished while you were away (Plus). Null when there is nothing, or the plan lacks it.
 const morningReport = () => require('./morning-report.js').current();
 
-function register({ ipcMain, allowed, state, localSessions, tools, myDay, openPage, openAiTools, morning = morningReport, now = Date.now, collisions = null, costGuard = () => null }) {
+function register({ ipcMain, allowed, state, localSessions, tools, myDay, openPage, openAiTools, morning = morningReport, now = Date.now, collisions = null, costGuard = () => null, demo = null }) {
   let toolsMemo = { at: -Infinity, value: null };
   let costsMemo = { at: -Infinity, value: null };
   let teamMemo = { at: -Infinity, value: null, none: false };
@@ -98,7 +98,7 @@ function register({ ipcMain, allowed, state, localSessions, tools, myDay, openPa
     const time = now();
     const st = part(state);
     const inputs = st && st.reason !== 'travel' ? (st.inputs || []) : [];
-    if (time - toolsMemo.at > TOOLS_TTL_MS) toolsMemo = { at: time, value: part(() => banner(tools())) };
+    if (time - toolsMemo.at > TOOLS_TTL_MS) { const rows = part(tools); toolsMemo = { at: time, value: part(() => banner(rows)), demo: Array.isArray(rows) && !rows.some((t) => t && t.connected) }; }
     if (time - teamMemo.at > TEAM_TTL_MS) {
       let team = null, none = false;
       try { team = cards(await myDay.snapshot()); none = team === null; } catch { team = null; }
@@ -112,6 +112,7 @@ function register({ ipcMain, allowed, state, localSessions, tools, myDay, openPa
     return {
       observed_at: time,
       banner: toolsMemo.value,
+      canDemo: !!demo && toolsMemo.demo === true,
       needs: st ? part(() => needs(inputs, time)) : null,
       running: st ? part(() => running(localSessions(st.sessions || []), time, collisions)) : null,
       today: st ? part(() => today(st.spend, inputs, time)) : null,
@@ -121,7 +122,8 @@ function register({ ipcMain, allowed, state, localSessions, tools, myDay, openPa
       costs: costsMemo.value,
     };
   }
-  ipcMain.handle('home:state', (e) => (allowed(e) ? snapshot() : null));
+  // The demo answers from its fixtures alone: no store is read while it is on.
+  ipcMain.handle('home:state', (e) => (!allowed(e) ? null : demo?.active() ? demo.home(now()) : snapshot()));
   ipcMain.handle('home:navigate', (e, destination) => {
     if (!allowed(e) || typeof destination !== 'string') return false;
     if (AITOOLS.test(destination)) { toolsMemo.at = -Infinity; return !!openAiTools(destination); }
@@ -129,8 +131,8 @@ function register({ ipcMain, allowed, state, localSessions, tools, myDay, openPa
     openPage(destination);
     return true;
   });
-  ipcMain.handle('home:morning-seen', (e) => (allowed(e) ? !!morning()?.markSeen() : false));
-  ipcMain.handle('home:open-card', async (e, handle) => (allowed(e) && typeof handle === 'string' && handle.length <= 100 ? !!await myDay.open(handle) : false));
+  ipcMain.handle('home:morning-seen', (e) => (allowed(e) && !demo?.active() ? !!morning()?.markSeen() : false));
+  ipcMain.handle('home:open-card', async (e, handle) => (allowed(e) && !demo?.active() && typeof handle === 'string' && handle.length <= 100 ? !!await myDay.open(handle) : false));
 }
 
 module.exports = { register, banner, needs, running, today, cards, costs, LOCAL_BOARD };

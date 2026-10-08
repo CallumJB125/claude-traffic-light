@@ -59,6 +59,7 @@
     <div class="start-actions" role="group" aria-label="Get started">
       <button class="primary" id="start-setup">Run setup again</button>
       <button id="start-privacy">What leaves your machine</button>
+      <button id="start-demo">Try the demo</button>
     </div>
     <p class="start-notice" id="start-notice" role="status" aria-live="polite"></p>
   </section>
@@ -181,7 +182,7 @@
     $('setup-list').addEventListener('click', openDest);
     $('tools-prompt').addEventListener('click', openDest);
 
-    for (const [id, destination] of [['start-setup', 'onboarding'], ['start-privacy', 'settings']]) {
+    for (const [id, destination] of [['start-setup', 'onboarding'], ['start-privacy', 'settings'], ['start-demo', 'demo']]) {
       $(id).addEventListener('click', async () => {
         let opened = false;
         try { opened = await window.helpApi.navigate(destination); } catch {}

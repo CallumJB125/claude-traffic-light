@@ -26,3 +26,7 @@ contextBridge.exposeInMainWorld('recipesApi', {
   importFile: () => ipcRenderer.invoke('recipes:import'),
   pickFolder: () => ipcRenderer.invoke('tasks:pick-folder'),
 });
+contextBridge.exposeInMainWorld('demoApi', {
+  state: () => ipcRenderer.invoke('demo:state'),
+  exit: () => ipcRenderer.invoke('demo:exit'),
+});

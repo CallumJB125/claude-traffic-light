@@ -8,3 +8,8 @@ contextBridge.exposeInMainWorld('homeApi', {
   morningSeen: () => ipcRenderer.invoke('home:morning-seen'),
   openCard: (handle) => (typeof handle === 'string' && handle.length <= 100 ? ipcRenderer.invoke('home:open-card', handle) : Promise.resolve(false)),
 });
+contextBridge.exposeInMainWorld('demoApi', {
+  state: () => ipcRenderer.invoke('demo:state'),
+  start: () => ipcRenderer.invoke('demo:start'),
+  exit: () => ipcRenderer.invoke('demo:exit'),
+});
