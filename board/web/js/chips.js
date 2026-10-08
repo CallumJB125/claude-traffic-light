@@ -49,9 +49,22 @@ function handoverChip(view, face, elapsed_ms) {
   };
 }
 
+// Observed local work (My board only): what its session cost at API prices.
+// A "+" says the figure undercounts because some requests had no price.
+function observedCostChip(view) {
+  const c = view.capture?.cost;
+  if (!c || !Number.isFinite(c.usd) || (c.usd <= 0 && !c.unpriced)) return null;
+  const unpriced = c.unpriced > 0 ? ` · ${c.unpriced} request${c.unpriced === 1 ? '' : 's'} could not be priced` : '';
+  return {
+    id: 'cost', text: `${fmtUsd(c.usd)}${c.unpriced > 0 ? '+' : ''}`, tone: c.unpriced > 0 ? 'amber' : 'quiet',
+    title: `This work cost about ${fmtUsd(c.usd)} at API list prices (API-price equivalent, not a bill)${view.pr?.number ? ` · PR #${view.pr.number}` : ''}${unpriced}`,
+  };
+}
+
 function costChip(view, face) {
+  if (!face.budget) return observedCostChip(view);
   // An unspent budget on a card nobody is running is noise; the drawer shows it.
-  if (!face.budget || !(view.run || view.budget?.spent_usd > 0)) return null;
+  if (!(view.run || view.budget?.spent_usd > 0)) return null;
   const { spent_usd = 0, cap_usd } = view.budget;
   return {
     id: 'cost', text: `${fmtUsd(spent_usd)}/${fmtUsd(cap_usd)}`, ratio: face.budget.ratio,

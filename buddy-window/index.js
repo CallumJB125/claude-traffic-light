@@ -122,7 +122,7 @@ async function probeHub(origin, partition) {
   });
 }
 
-function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onClosed = () => {}, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged, devAccountsHub = null, captureEnabled = true, onCaptureChange = () => {}, onOverviewRetired = () => {}, isConstrained = () => false, handoverWriter = () => null } = {}) {
+function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onClosed = () => {}, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged, devAccountsHub = null, captureEnabled = true, onCaptureChange = () => {}, onOverviewRetired = () => {}, isConstrained = () => false, handoverWriter = () => null, spendFor = () => null } = {}) {
   // The dev-only mock accounts hub runs on loopback; that one exact origin is
   // the only non-https hub ever accepted.
   const allowOrigins = devAccountsHub && isDev ? [devAccountsHub] : [];
@@ -276,6 +276,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       }));
       return { routes, complete };
     },
+    spendFor: (o) => spendFor(o),
     sendLocal: (body) => supervisor.captureWork(body),
     async sendTeam(destination, body) {
       if (!signedIn(destination.hub) || userOf(destination.hub)?.id !== destination.user_id) return { ok: false };
@@ -1106,6 +1107,8 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     sessionBridge, captureOnce: (row, key) => workCapture.captureOnce(row, key),
     /** The tray's automatic-cards item: null where capture is off for this run (the demo). */
     captureState: () => (captureEnabled ? { enabled: workCapture.enabled() } : null),
+    /** Main-only: captured sessions' cards and work records, for Usage & cost's cost by work. */
+    workCostRows: () => ({ tasks: workCapture.costRows?.() ?? [], records: workCapture.localRecords?.() ?? [] }),
     setCapture: (on) => captureEnabled && typeof on === 'boolean' && workCapture.setEnabled(on),
     async stop() {
       const url = localUrl();

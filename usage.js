@@ -52,6 +52,7 @@ function turnFrom(j, file, subagent) {
     ts: Date.parse(j.timestamp) || 0,
     sessionId: j.sessionId || null,
     cwd,
+    branch: typeof j.gitBranch === 'string' && j.gitBranch && j.gitBranch !== 'HEAD' ? j.gitBranch.slice(0, 200) : null,
     project: cwd ? cwd.split(/[\\/]/).filter(Boolean).pop() : path.basename(path.dirname(subagent ? path.dirname(path.dirname(file)) : file)),
     model: j.message.model || null,
     modelKey: modelKey(j.message.model),

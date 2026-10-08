@@ -27,14 +27,18 @@ function text(value, max, required = false) {
   return s;
 }
 function report(body) {
-  only(body, ['install_id', 'provider', 'session_id', 'task_id', 'repo_id', 'title', 'status', 'summary', 'update_only']);
+  only(body, ['install_id', 'provider', 'session_id', 'task_id', 'repo_id', 'title', 'status', 'summary', 'update_only', 'cost']);
   if (!UUID.test(body.install_id) || !PROVIDERS.has(body.provider) || !STATUSES.has(body.status)) throw new HubError('VALIDATION', 'invalid capture identity or status');
   if (body.update_only !== undefined && body.update_only !== true) throw new HubError('VALIDATION', 'invalid update_only');
   const session = identity(body.session_id), task = identity(body.task_id);
   if (!session && !task) throw new HubError('VALIDATION', 'session_id or task_id required');
   if (body.repo_id != null && (typeof body.repo_id !== 'string' || !UUID.test(body.repo_id))) throw new HubError('VALIDATION', 'invalid repo_id');
+  const cost = body.cost;
+  if (cost !== undefined && (!cost || typeof cost !== 'object' || Array.isArray(cost) || Object.keys(cost).some((k) => k !== 'usd' && k !== 'unpriced')
+    || typeof cost.usd !== 'number' || !Number.isFinite(cost.usd) || cost.usd < 0 || cost.usd > 1e6 || !Number.isInteger(cost.unpriced ?? 0) || (cost.unpriced ?? 0) < 0 || (cost.unpriced ?? 0) > 1e9)) throw new HubError('VALIDATION', 'invalid cost');
   return { identity: [body.install_id.toLowerCase(), body.provider, session, task], provider: body.provider, repo_id: body.repo_id ?? null,
-    title: text(body.title, 200, true), status: body.status, ...(Object.hasOwn(body, 'summary') ? { summary: text(body.summary, 2000) } : {}), updateOnly: body.update_only === true };
+    title: text(body.title, 200, true), status: body.status, ...(Object.hasOwn(body, 'summary') ? { summary: text(body.summary, 2000) } : {}), updateOnly: body.update_only === true,
+    ...(cost ? { cost: { usd: Math.round(cost.usd * 100) / 100, unpriced: cost.unpriced ?? 0 } } : {}) };
 }
 
 export class WorkCapture {
@@ -99,6 +103,8 @@ export class WorkCapture {
     // arbitrates simultaneous first reports to DIFFERENT boards for this user.
     return this.hub.withBoard(boardId, () => {
       const scope = this.destination(member, boardId, data.repo_id, cred);
+      // A session's cost stays on the personal board, whose data never leaves the Mac.
+      const local = this.hub.config.auth === 'local';
       let row;
       this.hub.txn(() => {
         row = this.db.get('SELECT * FROM work_capture_cards WHERE principal=? AND source_hash=?', scope.principal, hash);
@@ -114,7 +120,8 @@ export class WorkCapture {
           const cardId = randomUUID(), id = randomUUID(), summary = data.summary ?? '';
           insertCardRecord(this.hub, boardId, scope.member.id, { title: data.title, body: summary, repo_id: data.repo_id, column_name: column }, { id: cardId, now });
           this.db.insert('work_capture_cards', { id, principal: scope.principal, user_id: scope.member.user_id ?? null, member_id: scope.member.id, board_id: boardId, repo_id: data.repo_id,
-            source_hash: hash, provider: data.provider, card_id: cardId, reported_status: data.status, managed_title: data.title, managed_body: summary, managed_column: column, created_at: now, received_at: now });
+            source_hash: hash, provider: data.provider, card_id: cardId, reported_status: data.status, managed_title: data.title, managed_body: summary, managed_column: column, created_at: now, received_at: now,
+            ...(local && data.cost ? { cost_usd: data.cost.usd, cost_unpriced: data.cost.unpriced } : {}) });
           this.hub.journal({ board_id: boardId, card_id: cardId, actor_kind: 'member', actor_id: scope.member.id, kind: 'card.create', payload: { capture_id: id, source: 'local_observation', provider: data.provider,
             title_hmac: this.hub.refHash(data.title), body_hmac: this.hub.refHash(summary), repo_id: data.repo_id, column_name: column } });
           this.hub.feed(cardId, 'created', {}, { actor: scope.member.id });
@@ -135,6 +142,7 @@ export class WorkCapture {
           if (row.column_managed && card.column_name !== column) set.column_name = column;
           this.db.run('UPDATE work_capture_cards SET reported_status=?,received_at=?,managed_title=?,managed_body=?,managed_column=? WHERE id=?', data.status, now,
             set.title ?? row.managed_title, set.body ?? row.managed_body, set.column_name ?? row.managed_column, row.id);
+          if (local && data.cost) this.db.run('UPDATE work_capture_cards SET cost_usd=?,cost_unpriced=? WHERE id=?', data.cost.usd, data.cost.unpriced, row.id);
           if (Object.keys(set).length) {
             this.db.run(`UPDATE cards SET ${Object.keys(set).map((k) => `${k}=?`).join(',')},version=version+1,updated_at=? WHERE id=?`, ...Object.values(set), now, card.id);
             this.hub.journal({ board_id: boardId, card_id: card.id, actor_kind: 'member', actor_id: scope.member.id, kind: 'card.update', payload: { capture_id: row.id, source: 'local_observation',

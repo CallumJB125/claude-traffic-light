@@ -64,6 +64,7 @@ function compactState(v) {
       for(const k of ['last_seen','attempt_at','sent_at','retry_at'])if(Number.isFinite(e[k])&&e[k]>=0)task[k]=e[k];
       for(const k of ['fingerprint','attempt_fingerprint'])if(HASH.test(e[k]??''))task[k]=e[k];
       if(e.backfilled===1)task.backfilled=1;
+      const pr=prOf(e.pr);if(pr)task.pr=pr;
     }
     out.tasks[key]=task;
   }
@@ -130,6 +131,18 @@ function routeFor(repo,routes,choice) {
   if(matches.length===1)return matches[0].role==='viewer'?{kind:'local',needs_routing:true,reason:'team_read_only'}:{kind:'team',...matches[0]};
   return {kind:'local',needs_routing:true};
 }
+// The board's PR link for a card, kept so Usage & cost can name it (src/work-cost.js).
+function prOf(pr){
+  const number=Number(pr?.number);
+  if(!Number.isInteger(number)||number<=0||number>1e9)return null;
+  return {number,url:typeof pr.url==='string'&&pr.url.length<=500&&/^https:\/\/github\.com\/[^\s]+$/.test(pr.url)?pr.url:null};
+}
+// What a local session cost so far, for My board's cost chip. Team hubs never get it.
+function costBody(spend){
+  const usd=Number(spend?.cost_usd),unpriced=Number(spend?.unpriced??0);
+  if(!Number.isFinite(usd)||usd<0||usd>1e6||!Number.isInteger(unpriced)||unpriced<0)return null;
+  return {usd:Math.round(usd*100)/100,unpriced};
+}
 const routeKey = r => crypto.createHash('sha256').update(JSON.stringify([r.hub,r.user_id,r.team_id,r.board_id,r.repo_id])).digest('hex');
 // factsFor(o): merged hook + transcript facts for one observation (the handover writer's facts), or null.
 // handoverFor(o): {available, written_at} for its local handover, or null. spendFor(o): {cost_usd, route}, or null.
@@ -189,6 +202,7 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
     if(commit(next=>{
       const e=next.tasks[key];
       if(typeof result.card?.id==='string'&&ID.test(result.card.id))e.card_id=result.card.id;
+      const pr=prOf(result.card?.pr);if(pr)e.pr=pr;else if(result.card)delete e.pr;
       if(fingerprint)e.fingerprint=fingerprint;
       e.status=body.status;e.sent_at=now();e.title=title;delete e.retry_at;delete e.attempt_at;delete e.attempt_fingerprint;
       if(result.capture?.tracking&&result.capture.tracking!=='active'){e.untracked=true;e.reason=clean(result.capture.tracking,64);
@@ -240,7 +254,8 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
         entry=state.tasks[key];changed();}
       const currentRoute=routesByKey.get(routeKey(entry.destination));
       const {title,summary}=cardText(o,raw,entry,currentRoute);
-      const body={install_id:state.install_id,provider:o.provider,session_id:o.session_id,task_id:o.task_id,repo_id:entry.destination.repo_id??null,title,status:o.status,...(summary!==null?{summary}: {})};
+      const cost=entry.destination.kind==='local'?costBody(call(spendFor,o)):null;
+      const body={install_id:state.install_id,provider:o.provider,session_id:o.session_id,task_id:o.task_id,repo_id:entry.destination.repo_id??null,title,status:o.status,...(summary!==null?{summary}: {}),...(cost?{cost}:{})};
       // A repeated UI poll is not a new activity report. The hook's bounded
       // change marker detects new observations, never verified liveness.
       const marker=typeof raw.updatedAt==='string'?raw.updatedAt.slice(0,100):null;
@@ -288,12 +303,13 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
         const facts=call(factsFor,o)??call(docFactsFor,o);
         const told=facts&&(facts.firstPrompt||facts.lastPrompt||facts.lastAssistant||Object.keys(facts.files??{}).length);
         if(!told){mark(key);continue;}
-        const rec=WorkRecord.build({install_id:state.install_id,o,raw:{taskTitle:FALLBACK_TITLE.test(e.title??'')?null:e.title},facts,handover:call(handoverFor,o),spend:call(spendFor,o),home});
+        const spend=call(spendFor,o),cost=costBody(spend);
+        const rec=WorkRecord.build({install_id:state.install_id,o,raw:{taskTitle:FALLBACK_TITLE.test(e.title??'')?null:e.title},facts,handover:call(handoverFor,o),spend,home});
         if(!rec){mark(key);continue;}
         const stored=records.upsert(rec)??rec;
         const title=stored.title||e.title,summary=WorkRecord.cardBody(stored);
         let result=null;
-        try{result=await sendLocal({install_id:state.install_id,provider:e.provider,session_id:e.session_id,task_id:e.task_id,repo_id:null,title,status:e.status,summary,update_only:true});}
+        try{result=await sendLocal({install_id:state.install_id,provider:e.provider,session_id:e.session_id,task_id:e.task_id,repo_id:null,title,status:e.status,summary,...(cost?{cost}:{}),update_only:true});}
         catch{result=null;}
         if(stopped)break;
         // The board is not answering: leave this card for a later pass.
@@ -339,7 +355,8 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
       }
       const route=entry.destination.kind==='team'?(catalog.routes??[]).find(r=>routeKey(r)===routeKey(entry.destination)):null;
       const {title,summary}=cardText(o,raw,entry,route);
-      await send(key,{install_id:state.install_id,provider:o.provider,session_id:o.session_id,task_id:o.task_id,repo_id:entry.destination.repo_id??null,title,status:o.status,...(summary!==null?{summary}:{})},{title,force:true});
+      const cost=entry.destination.kind==='local'?costBody(call(spendFor,o)):null;
+      await send(key,{install_id:state.install_id,provider:o.provider,session_id:o.session_id,task_id:o.task_id,repo_id:entry.destination.repo_id??null,title,status:o.status,...(summary!==null?{summary}:{}),...(cost?{cost}:{})},{title,force:true});
       const done=state.tasks[key];
       return done?.card_id?{ok:true,card_id:done.card_id,destination:{...done.destination}}:{ok:false,reason:done?.untracked?(done.reason||'untracked'):'send_failed'};
     },
@@ -363,6 +380,8 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
     },
     // Main-only: this Mac's own WorkRecords (local data, never sent by this call).
     localRecords:()=>records.list(),
+    // Main-only: each captured session's card and PR, for cost per card (src/work-cost.js).
+    costRows(){return Object.values(state.tasks).filter(e=>!BACKGROUND_TITLE.test(String(e.title??'').trim())).map(e=>({provider:e.provider,session_id:e.session_id,task_id:e.task_id,card_id:e.card_id,title:e.title,repo:e.repo,pr:e.pr??null,last_seen:e.last_seen??e.sent_at??null}));},
     enabled:()=>state.enabled!==false,
     notice:()=>notice,
     setEnabled(on){if(!commit(next=>{next.enabled=!!on;}))return false;if(!on)latest=null;changed();return true;},
