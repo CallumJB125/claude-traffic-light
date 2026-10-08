@@ -13,6 +13,7 @@ const fs = require('fs');
 const path = require('path');
 const Gate = require('../hooks/policy-gate.js');
 const Packs = require('../hooks/policy-packs.js');
+const Spend = require('../spend.js');
 
 const TICK_MS = 60 * 1000;
 const SPEND_TTL_MS = 3 * 60 * 1000;
@@ -36,10 +37,19 @@ function packList() {
 
 const describe = (loaded) => ({
   name: loaded.policy ? loaded.policy.name : null,
+  budget: loaded.policy ? budgetSummary(loaded.policy) : null,
   source: loaded.source,
   file: loaded.file,
   warnings: loaded.warnings.slice(0, 5),
 });
+
+function budgetSummary(p) {
+  const parts = [];
+  if (p.dailySpendCapUsd) parts.push(`${usd(p.dailySpendCapUsd)} a day`);
+  if (p.weeklySpendCapUsd) parts.push(`${usd(p.weeklySpendCapUsd)} a week`);
+  if (p.holdTasksAtLimit) parts.push('no new background tasks once a limit is hit');
+  return parts.length ? parts.join(', ') : null;
+}
 
 /** Repos seen in this Mac's session files, each with the policy it is under. */
 function knownRepos(rootDir) {
@@ -65,7 +75,7 @@ function state(rootDir) {
   const def = Gate.readPolicyFile(path.join(rootDir, Gate.DEFAULT_FILE));
   return {
     packs: packList(),
-    default: { path: path.join(rootDir, Gate.DEFAULT_FILE), name: def.policy ? def.policy.name : null, warnings: def.missing ? [] : def.warnings },
+    default: { path: path.join(rootDir, Gate.DEFAULT_FILE), name: def.policy ? def.policy.name : null, budget: def.policy ? budgetSummary(def.policy) : null, warnings: def.missing ? [] : def.warnings },
     repos: knownRepos(rootDir),
   };
 }
@@ -104,9 +114,8 @@ function apply(rootDir, { target, pack, content } = {}) {
 const startOfDay = (now) => { const d = new Date(now); d.setHours(0, 0, 0, 0); return d.getTime(); };
 const usd = (n) => `$${n.toFixed(2)}`;
 
-/** → {root: reason} for every repo whose policy cap today's spend has reached. */
-function overCaps({ rootDir, turns, now = Date.now(), costOf }) {
-  const from = startOfDay(now);
+/** → Map(repo root → USD spent since `from`), by the nearest repo of each turn's folder. */
+function spendByRepo({ turns, from, now, costOf }) {
   const rootOf = new Map();
   const spent = new Map();
   for (const t of Array.isArray(turns) ? turns : []) {
@@ -117,13 +126,41 @@ function overCaps({ rootDir, turns, now = Date.now(), costOf }) {
     const root = rootOf.get(t.cwd);
     spent.set(root, (spent.get(root) || 0) + c);
   }
+  return spent;
+}
+
+/** → {root: reason} for every repo whose policy cap today's spend has reached. */
+function overCaps({ rootDir, turns, now = Date.now(), costOf }) {
   const repos = {};
-  for (const [root, cost] of spent) {
+  for (const [root, cost] of spendByRepo({ turns, from: startOfDay(now), now, costOf })) {
     const loaded = Gate.loadFor({ rootDir, cwd: root });
     const cap = loaded.policy?.dailySpendCapUsd;
     if (cap && cost >= cap) repos[root] = `this repo's daily spend cap of ${usd(cap)} is reached (${usd(cost)} today)`;
   }
   return repos;
+}
+
+/**
+ * Whether a new background task (Tasks, a recipe, a scheduled run) in `cwd` should be held:
+ * the repo's policy says holdTasksAtLimit and a repo cap, or the overall daily/weekly
+ * budget (`budget` = {level, which, text}), has been reached. Running sessions are never touched.
+ * → null, or {text, reasons[]}
+ */
+function startHold({ rootDir, cwd, turns, now = Date.now(), costOf, budget = null }) {
+  const loaded = Gate.loadFor({ rootDir, cwd });
+  const p = loaded.policy;
+  if (!p || p.holdTasksAtLimit !== true) return null;
+  const reasons = [];
+  if (p.dailySpendCapUsd || p.weeklySpendCapUsd) {
+    const spentIn = (from) => spendByRepo({ turns, from, now, costOf }).get(loaded.root) || 0;
+    const day = p.dailySpendCapUsd ? spentIn(startOfDay(now)) : 0;
+    const week = p.weeklySpendCapUsd ? spentIn(Spend.startOfWeek(now)) : 0;
+    if (p.dailySpendCapUsd && day >= p.dailySpendCapUsd) reasons.push(`this repo's daily cap of ${usd(p.dailySpendCapUsd)} is reached (${usd(day)} today)`);
+    if (p.weeklySpendCapUsd && week >= p.weeklySpendCapUsd) reasons.push(`this repo's weekly cap of ${usd(p.weeklySpendCapUsd)} is reached (${usd(week)} this week)`);
+  }
+  if (budget && budget.level === 'exceeded') reasons.push(`your ${budget.which === 'week' ? 'weekly' : 'daily'} spend limit is reached${budget.text ? ` (${budget.text})` : ''}`);
+  if (!reasons.length) return null;
+  return { text: `New background tasks are on hold: ${reasons.join(' and ')}. Tasks already running are not affected.`, reasons };
 }
 
 function writeSpendGate(rootDir, repos, now = Date.now()) {
@@ -187,6 +224,11 @@ function register(ctx) {
     if (!settings(e)) return null;
     try { return await fn(e, ...args); } catch (err) { log(`[policy] ${channel}: ${err?.message ?? err}`); return { error: err?.message ?? String(err) }; }
   });
+  ctx.setTaskStartGuard?.(async (cwd) => {
+    const turns = typeof ctx.usageTurns === 'function' ? await ctx.usageTurns() : [];
+    const snap = typeof ctx.spend === 'function' ? ctx.spend() : null;
+    return startHold({ rootDir, cwd, turns, costOf: usage.costOf, budget: snap?.budget ? { level: snap.budget.level, which: snap.budget.which, text: snap.budgetText } : null });
+  });
   handle('policy:state', () => state(rootDir));
   handle('policy:preview', (_e, req) => preview(rootDir, req || {}));
   handle('policy:apply', async (_e, req) => { const r = apply(rootDir, req || {}); if (r.ok) await tick(); return r; });
@@ -199,4 +241,4 @@ function register(ctx) {
   return { tick };
 }
 
-module.exports = { register, state, preview, apply, rowInfo, overCaps, writeSpendGate, knownRepos, targetFile, pruneBlocks, packList };
+module.exports = { register, state, preview, apply, rowInfo, overCaps, startHold, writeSpendGate, knownRepos, targetFile, pruneBlocks, packList };

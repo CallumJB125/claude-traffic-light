@@ -259,3 +259,34 @@ test('Running now rows carry the policy name and the latest refusal; none when t
   assert.equal(snap.sessions.find((s) => s.project === 'two').policy, undefined);
   assert.doesNotThrow(() => Overview.snapshot({ sessions: [{ sessionId: 'a', cwd: '/w' }], policy: () => { throw new Error('x'); } }));
 });
+
+test('startHold: only a policy that opts in holds new tasks, for a repo cap or the overall budget', (t) => {
+  const { repo, data } = repoWith(t, { version: 1, name: 'Held', dailySpendCapUsd: 5, weeklySpendCapUsd: 20, holdTasksAtLimit: true });
+  const now = Date.now();
+  const costOf = () => 3;
+  const hold = (turns, budget) => Policy.startHold({ rootDir: data, cwd: path.join(repo, 'src'), turns, now, costOf, budget });
+  assert.equal(hold([{ ts: now - 1000, cwd: repo }]), null, 'under both caps');
+  const day = hold([{ ts: now - 1000, cwd: repo }, { ts: now - 2000, cwd: repo }]);
+  assert.match(day.text, /on hold: this repo's daily cap of \$5\.00 is reached \(\$6\.00 today\)\. Tasks already running are not affected/);
+  const budget = hold([], { level: 'exceeded', which: 'week', text: '$80 of $75 this week' });
+  assert.match(budget.text, /your weekly spend limit is reached \(\$80 of \$75 this week\)/);
+  assert.equal(hold([], { level: 'warning', which: 'day' }), null, 'a warning is not a limit');
+  assert.equal(hold([{ ts: now - 1000, cwd: '/elsewhere' }, { ts: now - 1000, cwd: '/elsewhere' }]), null, 'other repos do not count');
+});
+
+test('startHold: without holdTasksAtLimit nothing is held, even over a cap', (t) => {
+  const { repo, data } = repoWith(t, { version: 1, name: 'Soft', dailySpendCapUsd: 1 });
+  const now = Date.now();
+  assert.equal(Policy.startHold({ rootDir: data, cwd: repo, turns: [{ ts: now - 1, cwd: repo }], now, costOf: () => 9, budget: { level: 'exceeded', which: 'day' } }), null);
+  assert.equal(Policy.startHold({ rootDir: data, cwd: '/definitely/not/here', turns: [], now, costOf: () => 1 }), null);
+});
+
+test('the weekly cap and hold flag are read; a bad value is dropped with a warning', () => {
+  const ok = Gate.normalize({ version: 1, weeklySpendCapUsd: 40, holdTasksAtLimit: true });
+  assert.equal(ok.policy.weeklySpendCapUsd, 40);
+  assert.equal(ok.policy.holdTasksAtLimit, true);
+  const bad = Gate.normalize({ version: 1, weeklySpendCapUsd: 0, holdTasksAtLimit: 'yes' });
+  assert.equal(bad.policy.weeklySpendCapUsd, undefined);
+  assert.equal(bad.policy.holdTasksAtLimit, undefined);
+  assert.equal(bad.warnings.length, 2);
+});

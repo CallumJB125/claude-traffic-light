@@ -518,13 +518,13 @@
 
     const where = el('div', 'field');
     where.append(el('span', 'lbl', 'Which folder?'));
-    const pick = btn(comp.folder ? 'Change folder…' : 'Choose folder…', '', async () => { const f = await api.pickFolder(); if (f) { comp.folder = f; comp.error = ''; renderComposer(true); } });
+    const pick = btn(comp.folder ? 'Change folder…' : 'Choose folder…', '', async () => { const f = await api.pickFolder(); if (f) { comp.folder = f; comp.error = ''; comp.held = false; renderComposer(true); } });
     pick.id = 'c-folder-btn';
     const chosen = el('span', null, comp.folder ? `  ${comp.folder.label}` : '  None chosen'); chosen.id = 'c-folder';
     where.append(pick, chosen);
     if (comp.recent.length) {
       const chips = el('div', 'chips');
-      for (const r of comp.recent) { const c = el('button', 'chip', r.label); c.type = 'button'; c.setAttribute('aria-pressed', String(comp.folder?.handle === r.handle)); c.addEventListener('click', () => { comp.folder = r; comp.error = ''; renderComposer(true); }); chips.append(c); }
+      for (const r of comp.recent) { const c = el('button', 'chip', r.label); c.type = 'button'; c.setAttribute('aria-pressed', String(comp.folder?.handle === r.handle)); c.addEventListener('click', () => { comp.folder = r; comp.error = ''; comp.held = false; renderComposer(true); }); chips.append(c); }
       where.append(chips);
     }
     where.append(el('div', 'sub', 'Git repositories use a separate worktree for review. A folder without git is edited in place.'));
@@ -577,6 +577,10 @@
     const cancel = btn('Cancel', '', closeComposer);
     const err = el('span', 'err', comp.error); err.id = 'c-err'; err.setAttribute('role', 'alert');
     foot.append(go, cancel, err);
+    if (comp.held) {
+      const override = btn('Start anyway…', '', () => submitComposer(true)); override.type = 'button'; override.id = 'c-override'; override.disabled = !connected() || comp.busy;
+      foot.append(override);
+    }
     root.append(words, where, aiF, surf, permF, whenF, foot);
     main.append(root);
     updateCount();
@@ -588,15 +592,17 @@
     $('c-count').textContent = `${n.toLocaleString('en')} of ${TV.LIMITS.taskText.toLocaleString('en')}`;
   }
 
-  async function submitComposer() {
+  async function submitComposer(overrideBudget = false) {
     if (!comp || comp.busy || !connected()) return;
     const text = $('c-text').value;
     const v = TV.validateDraft({ text, hasFolder: !!comp.folder });
     if (!v.ok) { comp.error = v.error; $('c-err').textContent = v.error; return; }
     comp.busy = true; $('c-go').disabled = true; $('c-err').textContent = '';
-    const r = await api.create({ text, folder: comp.folder.handle, ai: comp.ai, surface: comp.surface, permissionLevel: comp.perm, planFirst: comp.planFirst, when: comp.when });
+    const r = await api.create({ text, folder: comp.folder.handle, ai: comp.ai, surface: comp.surface, permissionLevel: comp.perm, planFirst: comp.planFirst, when: comp.when, overrideBudget: overrideBudget === true });
     if (!comp) return;
     comp.busy = false;
+    if (r && r.cancelled) { renderComposer(true); return; }
+    comp.held = r?.code === 'BUDGET_HELD';
     if (!r || !r.ok) { comp.error = r?.text || TV.errorText('INTERNAL'); renderComposer(true); return; }
     comp = null; view = 'detail'; selectedId = r.id; pendingSelect = r.id;
     renderList();

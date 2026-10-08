@@ -18,7 +18,7 @@
   function describe(p) {
     if (!p) return 'No policy.';
     const where = p.source === 'repo' ? 'this repo’s .plexiform/policy.json' : p.source === 'default' ? 'your default policy' : null;
-    const now = p.name ? `Under “${p.name}” from ${where}.` : 'No policy applies.';
+    const now = p.name ? `Under “${p.name}” from ${where}.${p.budget ? ` Budget: ${p.budget}.` : ''}` : 'No policy applies.';
     return p.warnings && p.warnings.length ? `${now} ${p.warnings.join(' ')}` : now;
   }
 
@@ -26,7 +26,7 @@
     if (!data) return;
     const r = repo.value === 'default' ? { name: data.default.name, source: data.default.name ? 'default' : null, warnings: data.default.warnings } : data.repos.find((x) => x.root === repo.value);
     $('policy-current').textContent = repo.value === 'default'
-      ? (r.name ? `Your default is “${r.name}”. ${r.warnings.join(' ')}` : `No default policy. ${r.warnings.join(' ')}`).trim()
+      ? (r.name ? `Your default is “${r.name}”.${r.budget ? ` Budget: ${r.budget}.` : ''} ${r.warnings.join(' ')}` : `No default policy. ${r.warnings.join(' ')}`).trim()
       : describe(r);
     const p = data.packs.find((x) => x.id === pack.value);
     $('policy-desc').textContent = p ? p.description : '';

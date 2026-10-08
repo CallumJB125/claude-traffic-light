@@ -267,3 +267,25 @@ test('retry while the real helper starts shares one startup/connect; a stopped p
   s.stop(); release(); await new Promise((r) => setTimeout(r, 30));
   assert.notEqual(s.snapshot().conn.status, 'connected');
 });
+
+test('a held budget refuses a new task with a message; the override needs the native confirmation', async () => {
+  const held = { text: 'New background tasks are on hold: test.' };
+  const guarded = createTasksService({ boardHome: dir, homeDir: '/Users/demo', copy: () => {}, isDir: () => true, startGuard: async () => held, confirmDialog: async (info) => { dialogs.push(info); return answer; } });
+  guarded.start();
+  await until(() => guarded.snapshot().conn.status === 'connected');
+  const folder = guarded.registerFolder('/Users/demo/Development/acme-web');
+  const draft = { text: 'Tidy the docs', folder: folder.handle, ai: 'claude' };
+  try {
+    const before = guarded.snapshot().tasks.length;
+    const r = await guarded.create(draft);
+    assert.deepEqual([r.ok, r.code, r.canOverride, r.text], [false, 'BUDGET_HELD', true, held.text]);
+    dialogs.length = 0; answer = false;
+    const no = await guarded.create({ ...draft, overrideBudget: true }, { wcId: 7 });
+    assert.equal(no.cancelled, true);
+    assert.equal(dialogs.at(-1).label, 'Start anyway');
+    assert.equal(guarded.snapshot().tasks.length, before, 'nothing started');
+    answer = true;
+    const yes = await guarded.create({ ...draft, overrideBudget: true }, { wcId: 7 });
+    assert.equal(yes.ok, true);
+  } finally { answer = false; guarded.stop(); }
+});
