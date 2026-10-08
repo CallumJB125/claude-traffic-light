@@ -63,6 +63,8 @@ function throughBurstView(usage) {
     unpriced: secondary.some((g) => g.unpriced),
     providers: secondary.map(({ key, requests, usd, unpriced }) => ({ key, requests, usd, unpriced })),
     planRequests: plan.reduce((n, g) => n + g.requests, 0),
+    totalRequests: u.totals.requests,
+    unpricedRequests: Math.min(u.totals.unpriced, u.totals.requests || u.totals.unpriced),
     repos: [...repos].map(([key, usd]) => ({ key, usd })).sort((a, b) => b.usd - a.usd).slice(0, 10),
     reposNote: u.recent.length >= MAX_ROWS ? `Repositories are summed from the latest ${MAX_ROWS} requests.` : '',
     note: 'Secondary-provider spend only. It is not part of the Claude figures on this page, and is never added to them.',

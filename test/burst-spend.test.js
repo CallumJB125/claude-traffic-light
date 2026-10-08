@@ -108,3 +108,10 @@ test('compaction money: net of the summaries when Burst reports it, a loss reads
   assert.match(Spend.compactionMoneyText({ compactions: 2, savedUsd: 3, costUsd: 1, netUsd: 2 }), /^Saved about \$2\.00 after the cost of its summaries/);
   assert.equal(Spend.compactionMoneyText({ compactions: 0 }), '');
 });
+
+test('Through Burst says how many requests could not be priced', () => {
+  const v = Spend.throughBurstView(Spend.normalizeUsage(usageReport({ totals: { requests: 17533, usd: 218.26, unpriced: 7620 } })));
+  assert.equal(v.unpricedRequests, 7620);
+  assert.equal(v.totalRequests, 17533);
+  assert.equal(Spend.throughBurstView(Spend.normalizeUsage(usageReport())).unpricedRequests, 0);
+});

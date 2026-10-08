@@ -31,6 +31,14 @@ test('Through Burst: 14-day bars by slot and per-repository compaction savings, 
   assert.match(sec.textContent, /pricey: cost \$1\.63 more than it saved/);
   assert.match(sec.textContent, /No backup-provider spend in the last 7 days/);
   assert.doesNotMatch(sec.textContent, /quiet|\$9/);
+  assert.match(sec.textContent, /Claude Burst's own log .* not from Plexiform's reading of your transcripts/);
+});
+
+test('Through Burst: unpriced requests are counted next to the dollars', async () => {
+  const sec = await render({ view: { ...VIEW, unpricedRequests: 7620, totalRequests: 17533 }, codex: null, history: null, nextPollMs: 0 });
+  assert.match(sec.textContent, /7,620 of 17,533 requests could not be priced/);
+  const none = await render({ view: VIEW, codex: null, history: null, nextPollMs: 0 });
+  assert.doesNotMatch(none.textContent, /could not be priced/);
 });
 
 test('Through Burst: no history, no chart; no Burst, section hidden', async () => {

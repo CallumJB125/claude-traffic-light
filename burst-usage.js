@@ -51,7 +51,7 @@
   function draw(v, codex, history) {
     sec.hidden = !v;
     if (!v) return;
-    sec.replaceChildren(el('h3', 'Through Burst'), el('div', `Source: ${v.source}`, 'note'));
+    sec.replaceChildren(el('h3', 'Through Burst'), el('div', `These figures come from Claude Burst's own log of the requests it carried, not from Plexiform's reading of your transcripts above. Source: ${v.source}.`, 'note'));
     if (v.empty) sec.append(el('div', `No backup-provider spend in the last ${RANGES[v.range] || '7 days'}: everything went to your Claude plan.`, 'note'));
     else {
       sec.append(el('div', `Backup providers: ${usd(v.secondaryUsd)}${v.unpriced ? '+' : ''} across ${reqs(v.secondaryRequests)}`));
@@ -65,6 +65,7 @@
         if (v.reposNote) sec.append(el('div', v.reposNote, 'note'));
       }
     }
+    if (v.unpricedRequests) sec.append(el('div', `${v.unpricedRequests.toLocaleString('en-US')} of ${reqs(v.totalRequests || v.unpricedRequests)} could not be priced (Burst has no price for their model), so any dollar figure from Burst here is a lower bound.`, 'note'));
     if (v.planRequests) sec.append(el('div', `${reqs(v.planRequests)} on your Claude plan went through Burst. They are counted in the Claude figures above, not here.`, 'note'));
     sec.append(el('div', v.note, 'note'));
     if (history) drawHistory(history);
