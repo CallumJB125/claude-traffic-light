@@ -26,6 +26,7 @@
     $('upgrade-year').hidden = paid || !s.signedIn;
     $('manage').hidden = !paid || !s.signedIn || !!s.beta;
     $('refresh').hidden = !s.signedIn || !!s.beta;
+    $('pay-note').hidden = !!s.beta;
     const list = $('limits');
     list.replaceChildren();
     for (const [k, v] of Object.entries(s.limits || {})) {

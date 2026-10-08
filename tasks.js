@@ -71,7 +71,8 @@
       return box;
     }
     if (!snap.tasks.length) {
-      box.append(el('h2', null, 'No tasks yet'), el('p', null, 'Hand something off and it keeps going when you close this window. Quitting Plexiform stops active runs; their history and work are saved for retry.'));
+      box.append(el('h2', null, 'No tasks yet'), el('p', null, 'Hand something off and it keeps going when you close this window. Quitting Plexiform stops active runs; their history and work are saved for retry.'),
+        el('p', null, 'A task is a one-off hand-off. Work you want to track is a card on the Board, and Send to AI… on a card runs the AI there, on the card.'));
       const b = btn('New task', 'primary', openComposer);
       box.append(b, el('p', null, ''), (() => { const p = el('p'); p.append('Shortcut: ', Object.assign(el('kbd'), { textContent: '⌥⌘T' })); return p; })());
       return box;

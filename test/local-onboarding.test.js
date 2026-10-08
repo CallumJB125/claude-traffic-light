@@ -68,6 +68,15 @@ test('the sign-in buttons use the account page bridge: one new composed action, 
   assert.match(acct, /Join with an invite link', \(\) => api\.go\('join'\)|onclick: \(\) => api\.go\('join'\) \}, 'Join with an invite link'/);
 });
 
+test('signed-out Account offers the same sign-in as Team, not a second sign-in screen', () => {
+  const acct = read(dir, 'account.js');
+  const body = acct.split('  account(s) {')[1].split('const out = [heading(')[0];
+  assert.match(body, /signedOutActions\(\)/);
+  assert.doesNotMatch(body, /api\.go\('hub'\)/);
+  const team = acct.split('  team(s) {')[1].split('if (!s.team) {')[0];
+  assert.match(team, /signedOutActions\(\)/);
+});
+
 test('signed-out Team and Integrations copy: plain, names the hub from the brand, status is words', () => {
   const acct = read(dir, 'account.js');
   assert.match(acct, /Sign in to create a team or join one: invite teammates, see their agents live\./);
