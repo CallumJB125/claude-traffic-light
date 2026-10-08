@@ -2,7 +2,7 @@
     const waitingInput = document.getElementById('waitingStaleHours');
     const soundInput = document.getElementById('sounds');
     const status = document.getElementById('status');
-    const NOTIFY_KINDS = ['permission-ask', 'turn-failed', 'offline'];
+    const NOTIFY_KINDS = ['permission-ask', 'turn-failed', 'offline', 'stuck'];
     const syncNotifyKinds = () => { const on = document.getElementById('notifyOnStates').checked; for (const k of NOTIFY_KINDS) document.getElementById(`notify-${k}`).disabled = !on; };
     document.getElementById('notifyOnStates').addEventListener('change', syncNotifyKinds);
 

@@ -180,8 +180,8 @@ function explain(state, rules, extra = {}) {
 // session it belongs to, or 'offline'), and only keys that weren't there on
 // the previous evaluation fire. A state that holds never fires twice; one
 // that ends and comes back does.
-const NOTIFY_KINDS = ['permission-ask', 'turn-failed', 'offline'];
-const NOTIFY_DEFAULTS = { 'permission-ask': true, 'turn-failed': true, offline: true };
+const NOTIFY_KINDS = ['permission-ask', 'turn-failed', 'offline', 'stuck'];
+const NOTIFY_DEFAULTS = { 'permission-ask': true, 'turn-failed': true, offline: true, stuck: true };
 
 const folderOf = Rules.folderOf;
 
@@ -193,6 +193,8 @@ function notifiable({ sessions = [], pending = [], offline = false, spend = null
     if (!s || !s.sessionId || (s.signal !== 'permission-ask' && s.signal !== 'turn-failed')) continue;
     out.set(`${s.signal}:${s.sessionId}`, { kind: s.signal, session: s });
   }
+  // One per silent stretch: updatedAt is when it went quiet, so a session that stirs and stalls again tells you again.
+  for (const s of sessions) if (s && s.sessionId && s.stuck && Number.isFinite(s.stuck.sinceMs)) out.set(`stuck:${s.updatedAt || ''}:${s.sessionId}`, { kind: 'stuck', session: s });
   // A blocking request from the widget's Allow/Deny path is an ask even while
   // the session file still says the tool is running.
   for (const r of pending) {
@@ -229,6 +231,7 @@ function message(kind, s, text) {
   if (kind === 'runaway') return { title: `Runaway session${where ? ` — ${where}` : ''}`, body: `${s.burn}. Click to jump to its terminal.` };
   if (kind === 'budget-exceeded') return { title: 'Over budget', body: `${text || 'Spend is over your budget'}.` };
   if (kind === 'budget-warning') return { title: 'Nearing your budget', body: `${text || 'Spend is close to your budget'}.` };
+  if (kind === 'stuck') return { title: `Stuck?${where ? ` — ${where}` : ''}`, body: `Silent for ${Math.max(1, Math.round(s.stuck.sinceMs / 60000))} min${s.stuck.tool ? `, last tool ${s.stuck.tool}` : ''}.${s.hostApp && !device ? ' Click to jump to its terminal.' : ''}` };
   if (kind === 'permission-ask') {
     const body = s.askKind === 'question' ? 'Claude has a question for you.' : s.tool ? `Claude wants to use ${s.tool}.` : 'Claude is waiting for your answer.';
     return { title: `Needs your input${where ? ` — ${where}` : ''}`, body };
