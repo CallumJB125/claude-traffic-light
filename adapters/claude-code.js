@@ -58,6 +58,7 @@ function denyRulesFor(home, runtime) {
   const root = path.resolve(runtime?.dataDir || process.env.CLAUDE_TRAFFIC_LIGHT_HOME || path.join(home, '.claude-traffic-light'));
   const rel = path.relative(path.resolve(home), root);
   const inHome = rel && !rel.startsWith('..') && !path.isAbsolute(rel);
+  try { if (JSON.parse(fs.readFileSync(path.join(root, 'config.json'), 'utf8')).protectPlexiformFiles === false) return []; } catch {}
   return [`Edit(${inHome ? `~/${rel.split(path.sep).join('/')}` : `/${root.split(path.sep).join('/')}`}/**)`];
 }
 const rulesOf = (opts) => (opts?.home ? denyRulesFor(opts.home, opts.runtime) : DENY_RULES);

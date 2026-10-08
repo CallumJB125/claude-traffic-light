@@ -212,3 +212,12 @@ test('L3: the deny rule follows the state dir; uninstall removes only a rule Bud
   assert.equal(fs.lstatSync(path.join(hl, '.claude', 'settings.json')).isSymbolicLink(), true);
   assert.deepEqual(JSON.parse(fs.readFileSync(real, 'utf8')).permissions.deny, ['Edit(~/.claude-traffic-light/**)']);
 });
+
+test('protectPlexiformFiles:false in config.json stops the installer adding the Edit deny rule', () => {
+  const rt = (home) => Runtime.make({ execPath: null, hooksDir: path.join(home, 'hooks'), dataDir: path.join(home, '.claude-traffic-light') });
+  const h = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'deny-off-'));
+  fs.mkdirSync(path.join(h, '.claude-traffic-light'), { recursive: true });
+  assert.deepEqual(Claude.denyRulesFor(h, rt(h)), ['Edit(~/.claude-traffic-light/**)']);
+  fs.writeFileSync(path.join(h, '.claude-traffic-light', 'config.json'), JSON.stringify({ protectPlexiformFiles: false }));
+  assert.deepEqual(Claude.denyRulesFor(h, rt(h)), []);
+});
