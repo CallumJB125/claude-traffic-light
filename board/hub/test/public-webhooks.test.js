@@ -1,4 +1,4 @@
-// Outbound webhooks (docs/PUBLIC-API.md, migration 069): signed deliveries
+// Outbound webhooks (docs/PUBLIC-API.md, migration 070): signed deliveries
 // to a local receiver, ids and titles only unless include_text, SSRF refusals
 // (loopback, private, metadata, IPv6 loopback, a host resolving to one, a
 // redirect), retry with backoff then disable with an audit row, the delivery

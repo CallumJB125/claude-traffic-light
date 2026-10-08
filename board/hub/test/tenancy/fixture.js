@@ -118,7 +118,7 @@ export async function tenancy({ config = {}, ...opts } = {}) {
   // B's sealed provider key for hosted runs (067).
   const sealed = h.hub.vault.seal(providerConfigAad(B.team), 'claude', `${MARK}-api-key`);
   db.insert('team_provider_configs', { org_id: B.team, provider: 'claude', model: `${MARK}-model`, ...sealed, updated_by: B.owner, created_at: now, updated_at: now });
-  // B's API token and outbound webhook endpoint (069), with one logged delivery.
+  // B's API token and outbound webhook endpoint (070), with one logged delivery.
   B.apiToken = randomUUID();
   db.insert('api_tokens', { id: B.apiToken, org_id: B.team, name: `${MARK} token`, token_hash: `${MARK}-hash`, hint: 'abcd', scopes: '["read:cards"]', created_by: B.owner, created_at: now, expires_at: '2099-01-01T00:00:00.000Z' });
   B.webhook = randomUUID();

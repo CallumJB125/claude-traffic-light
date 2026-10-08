@@ -1,4 +1,4 @@
-// Public API v1 and team API tokens (docs/PUBLIC-API.md, migration 069):
+// Public API v1 and team API tokens (docs/PUBLIC-API.md, migration 070):
 // token lifecycle and audit, scope enforcement, expired/revoked/removed
 // tokens refused, the per-token rate limit, and the read/comment endpoints.
 import { test } from 'node:test';

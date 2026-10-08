@@ -1,4 +1,4 @@
-// Outbound webhooks (docs/PUBLIC-API.md, migration 069). A team admin
+// Outbound webhooks (docs/PUBLIC-API.md, migration 070). A team admin
 // registers an https endpoint and the event types it wants; the hub POSTs each
 // event as JSON signed with HMAC-SHA256 under a secret shown once.
 //

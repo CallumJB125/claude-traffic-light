@@ -199,7 +199,7 @@ const MATRIX = {
   // Hosted (cloud) runners and their sealed provider keys (067).
   'POST /api/teams/:team_id/hosted-runners': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/hosted-runners`, body: { name: 'pwned' } },
   'GET /api/teams/:team_id/hosted-runners': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/hosted-runners` },
-  // Public API tokens and outbound webhooks (069): B's team, or A's team with B's token/endpoint ids.
+  // Public API tokens and outbound webhooks (070): B's team, or A's team with B's token/endpoint ids.
   'GET /api/teams/:team_id/api-tokens': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/api-tokens` },
   'POST /api/teams/:team_id/api-tokens': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/api-tokens`, body: { name: 'pwned', scopes: ['read:cards'] } },
   'DELETE /api/teams/:team_id/api-tokens/:token_id': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/api-tokens/${fx.B.apiToken}`, alt: (fx) => [`/api/teams/${fx.A.team}/api-tokens/${fx.B.apiToken}`] },

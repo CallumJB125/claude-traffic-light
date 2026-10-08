@@ -2,7 +2,7 @@
 
 Other tools can read a team's boards and cards with an **API token**, and the team hub can tell them when something changes with **webhooks**. Both need an accounts-mode hub (`BOARD_AUTH=accounts`). Only a team **owner or admin** can manage them, from **Integrations → API and webhooks** in the web app or through the management routes below.
 
-Code: `board/hub/public-api/` (`index.js` routes, `tokens.js`, `webhooks.js`, `ssrf.js`). Tables: migration `069_public_api.sql`. Web panel: `board/web/js/render-api.js` and `api-panel.js`.
+Code: `board/hub/public-api/` (`index.js` routes, `tokens.js`, `webhooks.js`, `ssrf.js`). Tables: migration `070_public_api.sql`. Web panel: `board/web/js/render-api.js` and `api-panel.js`.
 
 ## Contents
 

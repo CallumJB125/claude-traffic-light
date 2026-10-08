@@ -530,7 +530,7 @@ A cloud (hosted) runner is an enrolment with `hosted: true`, run as `buddy-runne
 
 The app's runner process gets `{"type": "runner.config", "hub_url": "https://…", "runner_token": "brt_…", "team_id": "…", "data_dir": "/abs/path"}` over its parent port (one runner process per enrolled team; no `device_id`, `device_token` or `cf_*` fields with it). It sends the two headers on the WebSocket connect only: never in argv, the environment, a log line or a file. Under Electron the hook shim and the board MCP server it hands to Claude run with `ELECTRON_RUN_AS_NODE=1` (CONTRACT D82).
 
-## Public API tokens and outbound webhooks (069)
+## Public API tokens and outbound webhooks (070)
 
 Team owners and admins manage API tokens (`/api/teams/:team_id/api-tokens`) and webhook endpoints (`/api/teams/:team_id/webhooks`). Other tools use the token-only `/api/public/v1/*` routes. Rate limits: `public_api_token` (120 per minute per token), `public_api_fail_ip` (30 failed authentications per minute per network) and `webhook_test_member` (10 per minute). The full contract, including scopes, event schemas and signature verification, is in [docs/PUBLIC-API.md](../docs/PUBLIC-API.md).
 

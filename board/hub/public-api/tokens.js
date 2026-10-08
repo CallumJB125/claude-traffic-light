@@ -1,4 +1,4 @@
-// Team API tokens (docs/PUBLIC-API.md, migration 069). A team owner or admin
+// Team API tokens (docs/PUBLIC-API.md, migration 070). A team owner or admin
 // makes one with a name, a few scopes and an expiry; the hub keeps only its
 // sha256 and shows the token once. It acts as the member who made it, only in
 // that team, and stops working when it expires, is revoked, or that member
