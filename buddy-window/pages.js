@@ -82,18 +82,19 @@ const SECTIONS = [
   { id: 'home', title: 'Home', icon: 'sun', default: 'home', pages: ['home', 'overview', 'myday', 'waiting'] },
   { id: 'board', title: 'Board', icon: 'board', default: 'board', pages: ['board', 'board:table', 'board:history', 'board:calendar', 'board:timeline', 'board:dashboard'] },
   { id: 'tasks', title: 'Tasks', icon: 'tasks', default: 'tasks', pages: ['tasks'] },
-  { id: 'sessions', title: 'Running now', icon: 'team', default: 'sessions', menu: false, pages: ['sessions'] },
-  { id: 'checkpoints', title: 'What changed', icon: 'layers', default: 'checkpoints', menu: false, pages: ['checkpoints'] },
-  { id: 'memory', title: 'Search everything', icon: 'layers', default: 'memory', menu: false, pages: ['memory'] },
+  { id: 'sessions', title: 'Running now', icon: 'team', default: 'sessions', menu: 'more', pages: ['sessions'] },
+  { id: 'checkpoints', title: 'What changed', icon: 'layers', default: 'checkpoints', menu: 'more', pages: ['checkpoints'] },
+  { id: 'memory', title: 'Search everything', icon: 'layers', default: 'memory', menu: 'more', pages: ['memory'] },
   { id: 'usage', title: 'Usage & cost', icon: 'chart', default: 'usage', heading: 'Spend', pages: ['usage', 'stats'] },
   { id: 'optimiser', title: 'Usage optimiser', icon: 'chart', default: 'optimiser', menu: false, pages: ['optimiser'] },
   { id: 'clients', title: 'Client billing', icon: 'chart', default: 'clients', menu: false, pages: ['clients'] },
   { id: 'team', title: 'Team', icon: 'team', default: 'team', heading: 'Team', pages: ['team', 'integrations', 'account'] },
-  { id: 'aitools', title: 'AI tools', icon: 'plug', default: 'aitools', menu: false, heading: 'You', pages: ['aitools'] },
+  { id: 'aitools', title: 'AI tools', icon: 'plug', default: 'aitools', menu: 'more', heading: 'You', pages: ['aitools'] },
   { id: 'widget', title: 'Widget', icon: 'lights', default: 'widget', pages: ['widget', 'lights', 'hatch'] },
   { id: 'phone', title: 'Phone', icon: 'bell', default: 'phone', menu: false, pages: ['phone'] },
   { id: 'settings', title: 'Settings', icon: 'gear', default: 'settings', pages: ['settings', 'thismac'] },
 ];
+// `menu: false` keeps a section out of the tray and widget menus; `menu: 'more'` lists it in their More submenu.
 // Small links under the sections, not a section of their own.
 const FOOTER = ['help', 'feedback', 'updates'];
 // Setups is listed only once it works. Personal export/import and the

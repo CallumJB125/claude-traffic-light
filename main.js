@@ -1501,7 +1501,9 @@ function getBuddy() {
       devAccountsHub: app.isPackaged ? null : devAccountsHub,
       captureEnabled: !DEMO,
       handoverWriter: () => { try { return SessionHandoverMain.writer; } catch { return null; } },
+      onCaptureChange: () => refreshTrayMenu(),
     });
+    refreshTrayMenu();
     if (typeof buddyWin[BudgetNotice.CONTRACT.subscribeMethod] === 'function') {
       const unsubscribe = buddyWin[BudgetNotice.CONTRACT.subscribeMethod](handleBudgetEvent);
       if (typeof unsubscribe === 'function') onQuit(app, unsubscribe);
@@ -3131,16 +3133,26 @@ function createTray() {
   // The default menu is the everyday handful (the app's sections, not every
   // page). Debug and resize controls show in dev runs and in the widget's
   // Option/Shift-right-click menu only.
-  const sectionItems = () => BuddyPages.sectionsFor().filter((sec) => sec.menu !== false).map((sec) => ({ id: sec.default, title: sec.title, group: 'sections', kind: 'local' }));
+  const sectionItems = () => BuddyPages.sectionsFor().filter((sec) => sec.menu !== false).map((sec) => ({ id: sec.default, title: sec.title, group: sec.menu === 'more' ? 'more' : 'sections', kind: 'local' }));
+  // Pausing is one click; turning cards on for the first time goes through This Mac, which explains what they send.
+  const captureItems = () => {
+    const capture = buddyWin?.captureState?.();
+    if (!capture) return [];
+    const pausedHere = loadConfig().autoCardsPausedFromTray === true;
+    if (capture.enabled) return [{ label: 'Pause automatic cards', sublabel: 'Automatic cards are on', click: () => { if (buddyWin.setCapture(false)) saveConfig({ autoCardsPausedFromTray: true }); refreshTrayMenu(); } }];
+    if (pausedHere) return [{ label: 'Resume automatic cards', sublabel: 'Automatic cards are paused', click: () => { if (buddyWin.setCapture(true)) saveConfig({ autoCardsPausedFromTray: false }); refreshTrayMenu(); } }];
+    return [{ label: 'Turn on automatic cards…', sublabel: 'Automatic cards are off', click: () => openBuddy('thismac') }];
+  };
   const buildMenu = (from = 'tray') => {
     const advanced = IS_DEV_RUN || from === 'widget';
     return Menu.buildFromTemplate([
       ...budgetItems(),
       ...scopeItem(),
       ...BurstIpc.trayItems(),
-      ...AppMenu.appItems({ pages: sectionItems(), groups: [{ id: 'sections' }], open: openBuddy, openLabel: BRAND.OPEN_MENU_LABEL, feedback: { label: "Something's off / Idea…", click: createFeedbackWindow } }),
+      ...AppMenu.appItems({ pages: sectionItems(), groups: [{ id: 'sections' }, { id: 'more', submenu: 'More' }], open: openBuddy, openLabel: BRAND.OPEN_MENU_LABEL, feedback: { label: "Something's off / Idea…", click: createFeedbackWindow } }),
       { label: 'Open Claude', click: () => shell.openExternal('https://claude.ai') },
       ...quietItems(),
+      ...captureItems(),
       ...(advanced ? [{ label: 'Show Widget Now', click: () => { saveConfig({ showWidget: true }); clearTimeout(snoozeTimer); if (!win) createWindow(); win.showInactive(); createTray(); } }] : []),
       { label: 'Reset Widget Position', click: () => { const wa = screen.getPrimaryDisplay().workArea; if (!win) createWindow(); strip = WidgetStrip.NONE; win.setMaximumSize(MAX_WIDTH, Math.round(MAX_WIDTH / WIDGET_ASPECT)); win.setAspectRatio(WIDGET_ASPECT); win.setBounds({ x: wa.x + wa.width - 140, y: wa.y + 46, width: 107, height: 137 }); win.showInactive(); broadcastStatus(); } },
       {

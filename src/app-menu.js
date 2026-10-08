@@ -6,6 +6,7 @@
 // page (Usage); the sidebar still opens the page itself.
 // `whileSoon`: page id → opener, used only while the registry still marks the
 // page 'soon' (Tasks has its own window before its sidebar entry is wired).
+// A group with `submenu` (its label) is listed as one submenu of its pages, under the group before it.
 'use strict';
 
 const ACCELERATORS = Object.freeze({ lights: 'CmdOrCtrl+L', settings: 'CmdOrCtrl+,' });
@@ -17,6 +18,11 @@ function appItems({ pages, groups, open, openLabel, openAccelerator = 'CmdOrCtrl
   for (const g of groups) {
     const ps = pages.filter((p) => p.group === g.id);
     if (!ps.length) continue;
+    if (g.submenu) {
+      const item = { label: g.submenu, submenu: ps.filter((p) => p.kind !== 'soon').map((p) => ({ label: `Open ${p.title}…`, click: () => (popOuts[p.id] || (() => open(p.id)))() })) };
+      if (out.length > 2 && out[out.length - 1].type === 'separator') out.splice(out.length - 1, 0, item); else out.push(item, { type: 'separator' });
+      continue;
+    }
     for (const p of ps) {
       if (p.kind === 'soon') {
         out.push(whileSoon[p.id] ? { label: `Open ${p.title}…`, click: () => whileSoon[p.id]() } : { label: `Open ${p.title}… (soon)`, enabled: false });

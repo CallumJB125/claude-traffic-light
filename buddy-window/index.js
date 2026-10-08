@@ -122,7 +122,7 @@ async function probeHub(origin, partition) {
   });
 }
 
-function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onClosed = () => {}, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged, devAccountsHub = null, captureEnabled = true, onOverviewRetired = () => {}, isConstrained = () => false, handoverWriter = () => null } = {}) {
+function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onClosed = () => {}, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged, devAccountsHub = null, captureEnabled = true, onCaptureChange = () => {}, onOverviewRetired = () => {}, isConstrained = () => false, handoverWriter = () => null } = {}) {
   // The dev-only mock accounts hub runs on loopback; that one exact origin is
   // the only non-https hub ever accepted.
   const allowOrigins = devAccountsHub && isDev ? [devAccountsHub] : [];
@@ -244,6 +244,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     onStatus,
   });
 
+  let captureWas = null;
   const workCapture = createWorkCapture({
     file: path.join(userData, 'work-capture.json'), host: os.hostname().split('.')[0],
     ownedRoots: [path.join(userData, 'runner'), path.join(userData, 'tasks'), path.join(userData, 'plexiform-tasks')],
@@ -255,7 +256,11 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       const i = handoverWriter()?.info?.({ source: o.provider, sessionId: o.session_id, cwd: o.cwd });
       return i ? { available: i.state === 'ready', written_at: i.state === 'ready' ? i.updatedMs : null } : null;
     },
-    onChange() { if (flow.acct.screen === 'thismac' && accountView && !accountView.webContents.isDestroyed()) accountView.webContents.send('buddy:acct:changed'); },
+    onChange() {
+      if (flow.acct.screen === 'thismac' && accountView && !accountView.webContents.isDestroyed()) accountView.webContents.send('buddy:acct:changed');
+      const on = workCapture.enabled();
+      if (on !== captureWas) { captureWas = on; onCaptureChange(on); }
+    },
     async getRoutes() {
       const hubs = store.hubs().filter(signedIn);
       const routes = []; let complete = hubs.length <= 8;
@@ -1099,6 +1104,9 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     /** The widget's live sessions changed: hubs sharing presence get the new list. */
     sessionsChanged(sessions) { flow.sessionsChanged(sessions); if (captureEnabled) { void workCapture.observe(sessions); sessionBridge.sessionsChanged(sessions); } },
     sessionBridge, captureOnce: (row, key) => workCapture.captureOnce(row, key),
+    /** The tray's automatic-cards item: null where capture is off for this run (the demo). */
+    captureState: () => (captureEnabled ? { enabled: workCapture.enabled() } : null),
+    setCapture: (on) => captureEnabled && typeof on === 'boolean' && workCapture.setEnabled(on),
     async stop() {
       const url = localUrl();
       await workCapture.stop();
