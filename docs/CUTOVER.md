@@ -6,6 +6,12 @@ Host layout (production): unit `buddy-hub`, code `/opt/buddy-hub/board`, env `/e
 
 Expect a short outage (the restart) plus a window where runners cannot connect: accounts mode rejects every legacy Access-era device token, so each runner must enrol again (step 9).
 
+## Production state as found (read-only check, 2026-10-08)
+
+- **Signup is open.** Production `hub.env` already has `BOARD_SIGNUP=open` and no `BOARD_SIGNUP_ALLOW` entries. Once the hub runs in accounts mode, anyone with a Google, GitHub or (if `BOARD_EMAIL_SIGNIN=1`) email account can create an account and a team. If that is not intended, set `BOARD_SIGNUP=allowlist` with entries before step 8 (see "Signup policy" below).
+- **No bot protection.** The hub rate-limits sign-in and other routes (`board/hub/ratelimit.js`, `identity/oauth.js`, `identity/accounts.js`) but has no CAPTCHA or Turnstile check on sign-in or signup (no `turnstile`/`captcha` code under `board/hub` or `board/web` on `claude/release` @ 8aded5d8). An optional Cloudflare Turnstile check is being added on a separate branch (`claude/w-a9-botguard`) and is not in this build. With `open` signup, this makes automated account creation possible.
+- **Google consent screen.** While the Google OAuth consent screen is in **Testing** mode, Google sign-in works only for the test users listed there (at most 100), whatever `BOARD_SIGNUP` says; see the caveat at the end.
+
 ## 0. Decide before you start
 
 1. **BOARD_SIGNUP policy** (see section "Signup policy" at the end). Default `allowlist`.
