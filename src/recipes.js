@@ -203,7 +203,8 @@ function register({ ipcMain, allowed, recipes, tasks, confirm, pickSave, pickOpe
       ].join('\n'),
     }, e);
     if (!yes) return { ok: false, cancelled: true, error: 'Cancelled. Nothing was started.' };
-    return tasks().create(draftFor(r, folder, tonight ? 'tonight' : 'now'));
+    const made = await tasks().create(draftFor(r, folder, tonight ? 'tonight' : 'now'));
+    return made && made.code === 'BUDGET_HELD' ? { ...made, error: `${made.text} Start it from Tasks to override.` } : made;
   });
   on('recipes:save-mine', async (_e, id) => recipes.saveMine(id));
   on('recipes:delete-mine', async (e, id) => {

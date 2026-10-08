@@ -399,6 +399,7 @@ function createTasksService(opts) {
   }
 
   // extra.startAfter: main's own known reset time for a 'reset' task (Home's "Resume this at reset"); the page cannot set it.
+  // extra.wcId: the page's webContents, for the native confirmation of a budget override.
   async function create(draft, extra = {}) {
     if (!connected()) return failure({ code: 'SUPERVISOR_UNREACHABLE' });
     const cwd = folders.get(typeof draft?.folder === 'string' ? draft.folder : '');
@@ -406,6 +407,14 @@ function createTasksService(opts) {
     if (!v.ok && v.code === 'PLAN_REQUIRED') return { ok: false, code: 'PLAN_REQUIRED', text: TV.errorText('PLAN_REQUIRED') };
     if (!v.ok || !(await isDir(cwd))) return { ok: false, code: 'VALIDATION', text: TV.errorText('VALIDATION') };
     if (v.spec.afterReset && Number.isFinite(extra?.startAfter)) v.spec.startAfter = Math.round(extra.startAfter);
+    let held = null;
+    try { held = await opts.startGuard?.(cwd); } catch { held = null; }
+    if (held) {
+      if (draft.overrideBudget !== true) return { ok: false, code: 'BUDGET_HELD', text: held.text, canOverride: true };
+      let yes = false;
+      try { yes = !!(await opts.confirmDialog?.({ action: 'create', label: 'Start anyway', title: 'Start over the limit', where: tilde(cwd, homeDir), detail: `${held.text}\nThis one task will start regardless. Nothing already running is stopped either way.` }, extra?.wcId ?? 0)); } catch { yes = false; }
+      if (!yes) return { ok: false, code: 'CONFIRM_REQUIRED', text: '', cancelled: true };
+    }
     try {
       const r = await client.createTask(v.spec, { requestId: typeof draft.requestId === 'string' && /^[\w-]{8,128}$/.test(draft.requestId) ? draft.requestId : undefined });
       refresh().catch(() => {});

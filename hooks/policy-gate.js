@@ -68,9 +68,14 @@ function normalize(raw) {
       }
     }
   }
-  if (raw.dailySpendCapUsd !== undefined && raw.dailySpendCapUsd !== null) {
-    if (!Number.isFinite(raw.dailySpendCapUsd) || raw.dailySpendCapUsd <= 0) warnings.push('"dailySpendCapUsd" is not a positive number');
-    else p.dailySpendCapUsd = raw.dailySpendCapUsd;
+  for (const k of ['dailySpendCapUsd', 'weeklySpendCapUsd']) {
+    if (raw[k] === undefined || raw[k] === null) continue;
+    if (!Number.isFinite(raw[k]) || raw[k] <= 0) warnings.push(`"${k}" is not a positive number`);
+    else p[k] = raw[k];
+  }
+  if (raw.holdTasksAtLimit !== undefined) {
+    if (typeof raw.holdTasksAtLimit !== 'boolean') warnings.push('"holdTasksAtLimit" is not true or false');
+    else p.holdTasksAtLimit = raw.holdTasksAtLimit;
   }
   return { policy: p, warnings };
 }
