@@ -28,6 +28,7 @@ const Brand = require('./brand.js');
 const Adapters = require('./adapters/index.js');
 const Stats = require('./stats.js');
 const Usage = require('./usage.js');
+const WorkCost = require('./src/work-cost.js');
 const UsageHistory = require('./usage-history.js');
 const Spend = require('./spend.js');
 const SessionState = require('./hooks/session-state.js');
@@ -1502,6 +1503,7 @@ function getBuddy() {
       captureEnabled: !DEMO,
       handoverWriter: () => { try { return SessionHandoverMain.writer; } catch { return null; } },
       onCaptureChange: () => refreshTrayMenu(),
+      spendFor: (o) => { if (!usageMemo.turns) getUsageTurns().catch(() => {}); return WorkCost.sessionSpend(usageMemo.turns, o); },
     });
     refreshTrayMenu();
     if (typeof buddyWin[BudgetNotice.CONTRACT.subscribeMethod] === 'function') {
@@ -3662,6 +3664,28 @@ utilityHandle('usage-bundle', e => fromUtilityPage(e, 'usage'), (_e, q = {}) => 
   const project = typeof q.project === 'string' && q.project.length < 1024 ? q.project : null;
   const out = UsageHistory.bundle(openHistory(), { range, now, project, compare: q.compare !== false });
   return { ...out, progress: historyState.progress, mode: Spend.normalize(loadConfig().spend).mode };
+});
+
+// Cost by work (src/work-cost.js): local transcripts joined to this Mac's captured cards.
+async function workCostReport() {
+  const rows = buddyWin?.workCostRows?.() ?? { tasks: [], records: [] };
+  return WorkCost.attribute({ turns: await getUsageTurns(), tasks: rows.tasks, records: rows.records, now: Date.now() });
+}
+utilityHandle('work-cost', e => fromUtilityPage(e, 'usage'), async () => {
+  const r = await workCostReport();
+  const brief = (w) => ({ ...w, items: undefined, count: w.items.length });
+  return { basis: r.basis, week: brief(r.week), month: brief(r.month) };
+});
+utilityHandle('work-cost-export', e => fromUtilityPage(e, 'usage'), async (e) => {
+  const csv = WorkCost.toCsv(await workCostReport());
+  const r = await dialog.showSaveDialog(BrowserWindow.fromWebContents(e.sender) || undefined, {
+    title: 'Export cost by work',
+    defaultPath: path.join(app.getPath('documents'), `plexiform-cost-by-work-${Stats.dayKey(Date.now())}.csv`),
+    filters: [{ name: 'CSV', extensions: ['csv'] }],
+  });
+  if (r.canceled || !r.filePath) return { ok: false };
+  fs.writeFileSync(r.filePath, csv);
+  return { ok: true, path: r.filePath };
 });
 
 // Hook activity is what moves spend, so each burst of it gets a fresh read

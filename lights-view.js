@@ -1636,6 +1636,7 @@
   async function renderMix() {
     renderUsageHistory();
     if (window.UsageWasteView) window.UsageWasteView.render($('usage-waste'), window.lightsApi);
+    if (window.UsageWorkView) window.UsageWorkView.render($('usage-work'), window.lightsApi);
     let mix = null;
     try { mix = await window.lightsApi.modelMix(); } catch { /* shown as empty below */ }
     // Loading ends whether or not the read produced data.
