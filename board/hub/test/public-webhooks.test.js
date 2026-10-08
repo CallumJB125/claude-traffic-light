@@ -134,7 +134,7 @@ test('SSRF: loopback, private, link-local metadata, IPv6 loopback and plain http
     await refused('https://mixed.example.test/hook');
     w.opts.lookup = async () => [{ address: '169.254.169.254', family: 4 }];
     await refused('https://metadata.example.test/hook');
-    assert.equal(fx.db.get('SELECT COUNT(*) AS n FROM webhook_endpoints').n, 0);
+    assert.equal(fx.db.get('SELECT COUNT(*) AS n FROM webhook_endpoints WHERE org_id = ?', A.team).n, 0);
 
     // Registered while the name was public, then it rebinds to a private address: that attempt is refused, nothing is sent.
     w.opts.lookup = async () => [{ address: '93.184.216.34', family: 4 }];

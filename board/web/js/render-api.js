@@ -90,7 +90,7 @@ function endpointCard(e, p, busy) {
 function webhookForm(events, busy) {
   return h('form', { class: 'integ-token', 'data-form': 'api-webhook' },
     h('label', { class: 'field' }, h('span', null, 'Endpoint URL (https)'),
-      h('input', { class: 'input', name: 'url', type: 'url', required: true, placeholder: 'https://example.com/plexiform', autocomplete: 'off', spellcheck: 'false', ...NO_MANAGER })),
+      h('input', { class: 'input', name: 'url', type: 'url', required: true, placeholder: 'https://…', autocomplete: 'off', spellcheck: 'false', ...NO_MANAGER })),
     h('fieldset', { class: 'field' }, h('legend', null, 'Send these events'),
       events.map((ev) => h('label', { key: ev, class: 'small' }, h('input', { type: 'checkbox', name: 'event', value: ev, checked: true }), ` ${eventLabel(ev)}`))),
     h('label', { class: 'small' }, h('input', { type: 'checkbox', name: 'include_text' }), ' Include card text (descriptions and comments). Off: ids and titles only.'),
