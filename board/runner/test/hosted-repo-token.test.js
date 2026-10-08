@@ -52,7 +52,12 @@ test('RepoTokens: hub offline, refused, no installation and malformed answers ar
   const mk = (a) => new RepoTokens({ hub: 'https://h.test', team: 't', runnerToken: 'brt_x', fetchImpl: fakeHub([a]).fetchImpl });
   await assert.rejects(mk(new TypeError('fetch failed')).get('r'), { code: 'HUB_UNREACHABLE' });
   await assert.rejects(mk({ status: 401 }).get('r'), { code: 'UNAUTHENTICATED' });
-  await assert.rejects(mk({ status: 404 }).get('r'), { code: 'NOT_AVAILABLE' });
+  await assert.rejects(mk({ status: 404, body: { error: { code: 'NOT_FOUND', message: 'no repository token for this runner and repository' } } }).get('r'), { code: 'NOT_FOUND' }, 'no offer or run: not a missing endpoint any more');
+  const why = 'this repository is not linked to the team\'s GitHub App installation (Integrations → GitHub → Choose repositories)';
+  await assert.rejects(mk({ status: 404, body: { error: { code: 'NOT_FOUND', message: why, reason: 'no_installation' } } }).get('r'), { code: 'NO_GITHUB_APP', message: why });
+  await assert.rejects(mk({ status: 403, body: { error: { code: 'POLICY_DENIED', message: 'not granted\u0007', reason: 'not_granted' } } }).get('r'), { code: 'NO_GITHUB_APP', message: 'not granted' });
+  await assert.rejects(mk({ status: 403 }).get('r'), { code: 'UNAUTHENTICATED' });
+  await assert.rejects(mk({ status: 429 }).get('r'), { code: 'RATE_LIMITED' });
   await assert.rejects(mk({ status: 502 }).get('r'), { code: 'HUB_UNREACHABLE' });
   await assert.rejects(mk({ body: { token: 'has spaces in it and is long', expires_at: '2099-01-01T00:00:00Z' } }).get('r'), { code: 'INTERNAL' });
   await assert.rejects(mk({ body: { token: TOKEN_A, expires_at: '2000-01-01T00:00:00Z' } }).get('r'), /expired/);

@@ -41,13 +41,37 @@ ssh bondly-pi 'curl -fsS http://127.0.0.1:8787/api/health'
 Check that the hub has its encryption key (`BOARD_ENC_KEY`, the one that already seals integration
 secrets). Without one, storing a provider key answers `POLICY_DENIED`.
 
-### 2. The repo-token endpoint (blocking for real runs)
+### 2. The hub's GitHub App, with the repos linked (blocking for real runs)
 
 The runner clones and pushes with short-lived GitHub App installation tokens from
-`GET /api/runner/v1/repo-token?repo_id=` (`{token, expires_at}`, authenticated by the runner token).
-**That endpoint is being built separately and is not in this branch.** Until it ships, a hosted
-offer cannot clone: the runner logs `NOT_AVAILABLE` and the offer stays queued (it is not failed).
-The GitHub App needs `contents: write` on the repos you list in step 6.
+`GET /api/runner/v1/repo-token?repo_id=` → `{token, expires_at}` (`board/hub/hosted-repo-tokens.js`).
+The hub mints one only when all of these hold, and answers the same `404` otherwise:
+
+- the caller is a **hosted** runner (its `brt_…` token plus `Board-Team`, as on its socket; a
+  person's sign-in or a desktop runner never gets one; a bad or revoked runner token is `401`);
+- the repo belongs to that runner's team;
+- the runner has work on it: a "Run in the cloud" offer it is eligible for right now, or its own run
+  on that repo, live or ended less than 15 minutes ago (the runner pushes the run branch after the
+  run reports its end). An idle runner gets nothing.
+
+GitHub narrows each token to that one repository with `contents: write` and `pull_requests: write`
+(the hub refuses an answer that is wider, narrower or names another repository). The hub never
+caches, logs or stores the token; each mint is audited (`runner.repo_token`: who, which runner,
+which repo, card, installation, expiry) and limited to 20 per runner per 10 minutes. The runner
+keeps it in memory and hands it to one `git` process at a time through `GIT_ASKPASS`.
+
+So before step 10:
+
+1. The hub has its GitHub App (docs/GITHUB-APP-RUNBOOK.md), registered with **Contents: read and
+   write**. An installation made before that permission was added must be updated on GitHub (the
+   org owner approves the new permission), or every mint answers `403 not_granted`.
+2. A team admin installed the app and linked each repo in `BUDDY_RUNNER_REPOS` (step 6) on
+   Integrations → GitHub → Choose repositories.
+
+A repo with no linked installation is an honest error, not a silent queue: the runner declines the
+offer and the card says "The cloud runner cannot clone this repository: this repository is not
+linked to the team's GitHub App installation …". A hub or GitHub outage keeps the offer queued and it
+is retried on the next offer.
 
 ### 3. Packages on the Pi
 

@@ -311,11 +311,12 @@ const SPEC = {
 export default defineConnector(SPEC);
 
 // What an installation of the hub's app may do: the manifest's permissions
-// (docs/github-app-manifest.json). It writes pull requests only (open one,
-// comment on one); contents and issues are read so push and PR-comment
-// events are delivered.
-export const APP_SCOPES = Object.freeze(['pull_requests:write', 'contents:read', 'issues:read', 'checks:read', 'metadata:read']);
-const installationOf = (connection) => {
+// (docs/github-app-manifest.json). The hub itself writes pull requests only
+// (open one, comment on one); contents write is for the hosted runner's
+// clone and push, through tokens narrowed to one repository
+// (hosted-repo-tokens.js). Issues are read so PR-comment events are delivered.
+export const APP_SCOPES = Object.freeze(['pull_requests:write', 'contents:write', 'issues:read', 'checks:read', 'metadata:read']);
+export const installationOf = (connection) => {
   const id = connection?.settings?.provider?.installation_id;
   return Number.isSafeInteger(id) && id > 0 && connection.external_id === `inst:${id}` ? id : null;
 };

@@ -74,7 +74,8 @@ export function githubAppConfig(env, { readFile }) {
 }
 
 /**
- * → { jwt(), token(installationId), request(installationId, method, path, body?),
+ * → { jwt(), token(installationId), repoToken(installationId, {repositoryId, permissions}),
+ *     request(installationId, method, path, body?),
  *     repositories(installationId), slug(), installUrl(state),
  *     installationFor({code, installationId}), verify({headers, rawBody}),
  *     forget(installationId), cached() }
@@ -134,6 +135,36 @@ export function createGitHubApp(config, { fetchImpl = globalThis.fetch, now = Da
   }
 
   const forget = (installationId) => { tokens.delete(String(installationId)); };
+
+  /**
+   * A token narrowed to one repository and exactly these permissions, for
+   * someone outside this process (a hosted runner's git): never cached here,
+   * never the installation-wide token above. GitHub's answer must name that
+   * one repository and grant exactly what was asked (plus metadata read,
+   * which GitHub always adds), or the token is dropped unreturned.
+   * → {token, expires_at}
+   */
+  async function repoToken(installationId, { repositoryId, permissions }) {
+    const id = String(installationId);
+    if (!INSTALL_ID.test(id)) throw new GitHubAppError('validation', 'not an installation id');
+    if (!posInt(repositoryId)) throw new GitHubAppError('validation', 'not a repository id');
+    const res = await send(`${API}/app/installations/${id}/access_tokens`, {
+      method: 'POST', headers: { authorization: `Bearer ${jwt()}`, 'content-type': 'application/json' },
+      body: { repository_ids: [repositoryId], permissions },
+    });
+    // 422: the installation does not grant those permissions, or lacks that repository.
+    if (res.status === 422) throw new GitHubAppError('not_granted', 'GitHub POST /app/installations/:id/access_tokens → 422', 422);
+    const v = await json(res, 'POST /app/installations/:id/access_tokens');
+    const exp = Date.parse(v?.expires_at ?? '');
+    if (typeof v?.token !== 'string' || !v.token || v.token.length > 512 || !Number.isFinite(exp)) throw new GitHubAppError('provider_error', 'GitHub returned no installation token');
+    const got = v.permissions !== null && typeof v.permissions === 'object' ? v.permissions : {};
+    const exact = Object.entries(permissions).every(([k, level]) => got[k] === level)
+      && Object.entries(got).every(([k, level]) => permissions[k] === level || (k === 'metadata' && level === 'read'));
+    const repos = Array.isArray(v.repositories) ? v.repositories : [];
+    if (!exact || repos.length !== 1 || repos[0]?.id !== repositoryId) throw new GitHubAppError('not_granted', 'GitHub returned a token wider or narrower than asked');
+    if (exp <= now()) throw new GitHubAppError('provider_error', 'GitHub returned an expired installation token');
+    return { token: v.token, expires_at: new Date(exp).toISOString() };
+  }
 
   /**
    * A REST call as the installation. A 401 means GitHub no longer takes the
@@ -220,6 +251,7 @@ export function createGitHubApp(config, { fetchImpl = globalThis.fetch, now = Da
     appId,
     jwt,
     token,
+    repoToken,
     request,
     repositories,
     slug,

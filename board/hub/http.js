@@ -479,6 +479,11 @@ export function createHttpHandler({ hub, api, config, integrations = null, githu
     route('GET', '/api/teams/:team_id/provider-configs', ({ member }) => hosted.providerList(member));
     route('PUT', '/api/teams/:team_id/provider-configs/:provider', ({ member, params, body, ip }) => hosted.setProvider(member, params.provider, body, { ip }));
     route('DELETE', '/api/teams/:team_id/provider-configs/:provider', ({ member, params, ip }) => hosted.removeProvider(member, params.provider, { ip }));
+    // A hosted runner's own clone/push token (hosted-repo-tokens.js): its runner token is the auth, not a sign-in.
+    route('GET', '/api/runner/v1/repo-token', ({ req, query, ip }) => {
+      if (!hub.repoTokens) throw new HubError('NOT_FOUND', 'no such route');
+      return hub.repoTokens.mint(req, query, { ip });
+    }, { auth: 'runner', replay: false });
     // Paid plans (billing/): the caller's plan, hosted Checkout and portal links, and the signed
     // entitlement token the desktop app verifies offline. The provider's webhook is handled before the route table.
     const billing = hub.billing;
@@ -1006,7 +1011,8 @@ export function createHttpHandler({ hub, api, config, integrations = null, githu
       let ident = null;
       let member = null;
       if (config.auth === 'accounts') {
-        if (r.auth !== 'none') {
+        // 'runner': the handler checks the runner token itself; a person's sign-in never counts there.
+        if (r.auth !== 'none' && r.auth !== 'runner') {
           try { ident = hub.accounts.authenticate(req, { ip }); } catch (e) { if (r.auth !== 'optional') throw e; }
           if (!ident && r.auth !== 'optional') throw new HubError('UNAUTHENTICATED', 'not signed in');
           // A phone's relay-scoped sign-in works only on the relay and sign-out (migration 056).

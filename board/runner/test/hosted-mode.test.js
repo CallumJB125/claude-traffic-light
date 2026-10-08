@@ -23,7 +23,7 @@ function capturingLog() {
   return { log: makeLogger(stream), text: () => lines.join('') };
 }
 
-async function hostedRig({ scenario, caps = {}, rpc } = {}) {
+async function hostedRig({ scenario, caps = {}, rpc, tokenAnswer = null } = {}) {
   const root = tmpDir('hst-');
   const repo = makeRepo(root);
   // What GitHub is to the Pi: the clone URL reaches the local bare repo.
@@ -36,6 +36,7 @@ async function hostedRig({ scenario, caps = {}, rpc } = {}) {
   const tokenCalls = [];
   const fetchImpl = async (url, init) => {
     tokenCalls.push({ url, auth: init.headers.authorization });
+    if (tokenAnswer) return { status: tokenAnswer.status, ok: tokenAnswer.status < 300, json: async () => tokenAnswer.body };
     return { status: 200, ok: true, json: async () => ({ token: GH_TOKEN, expires_at: new Date(Date.now() + 3_600_000).toISOString() }) };
   };
   const hub = await startFakeHub();
@@ -192,4 +193,28 @@ test('no provider key on the hub: the run starts with the CLI\'s own login; hub 
     await waitFor(() => rig.hub.outs('prep.failed').length, { what: 'prep.failed', timeout: 10_000 });
     assert.match(rig.hub.outs('prep.failed')[0].cause, /spawn: provider credentials go only to a hosted runner/);
   } finally { await rig.close(); }
+});
+
+test('no GitHub App installation for the repo: the offer is declined with the hub\'s reason, never left queued; a hub outage keeps it queued', { skip: !posix }, async () => {
+  const why = 'this repository is not linked to the team\'s GitHub App installation (Integrations → GitHub → Choose repositories)';
+  const rig = await hostedRig({ scenario: { steps: [{ result: 'success' }] }, tokenAnswer: { status: 404, body: { error: { code: 'NOT_FOUND', message: why, reason: 'no_installation' } } } });
+  try {
+    const offer = offerFor({ key: 'APP-7' });
+    rig.hub.send(offer);
+    const d = await waitFor(() => rig.hub.of('decline').find((f) => f.card_id === offer.card_id), { what: 'decline' });
+    assert.equal(d.request_id, offer.request_id);
+    assert.equal(d.reason, `The cloud runner cannot clone this repository: ${why}`);
+    assert.equal(rig.hub.of('claim').length, 0);
+    assert.equal(fs.existsSync(path.join(rig.hosted.repoPath(REPO_ID), '.git')), false);
+  } finally { await rig.close(); }
+  const down = await hostedRig({ scenario: { steps: [{ result: 'success' }] }, tokenAnswer: { status: 503, body: { error: { code: 'PROVIDER_UNAVAILABLE', message: 'GitHub could not be reached; try again shortly' } } } });
+  try {
+    const offer = offerFor({ key: 'APP-8' });
+    down.hub.send(offer);
+    await waitFor(() => down.tokenCalls.length >= 1, { what: 'token asked' });
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal(down.hub.of('decline').length, 0, 'a transient failure is not a decline');
+    assert.equal(down.hub.of('claim').length, 0);
+    assert.match(down.cap.text(), /the offer stays queued/);
+  } finally { await down.close(); }
 });

@@ -33,6 +33,7 @@ import { OAuth } from './identity/oauth.js';
 import { WebOAuth } from './identity/oauth-web.js';
 import { Enrolments } from './identity/enrolments.js';
 import { HostedRunners } from './hosted-runners.js';
+import { HostedRepoTokens } from './hosted-repo-tokens.js';
 import { Billing } from './billing/entitlements.js';
 import { PushService } from './push.js';
 import { Sync } from './sync.js';
@@ -117,6 +118,8 @@ function buildApp(config, { db, clock, log, github, fetchImpl, timers, mailer })
   hub.hasGitHubApp = !!githubApp;
   for (const c of connectorsFor(config, { githubApp })) integrations.register(c);
   const githubCards = githubApp ? createGitHubCards({ hub, api, integrations, app: githubApp }) : null;
+  // A hosted runner's clone/push tokens (GET /api/runner/v1/repo-token): accounts mode only.
+  hub.repoTokens = hub.hostedRunners ? new HostedRepoTokens(hub, { app: githubApp, integrations }) : null;
   // Expired pending connections (D97) go with the reaper (the registry runs it at most once a minute).
   hub.sweepIntegrationsPending = () => integrations.sweepPending();
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 }); // privacy-flow: local-board-hub

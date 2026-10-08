@@ -551,6 +551,19 @@ export class Supervisor extends EventEmitter {
       return;
     }
     this.policy = readPolicy(this.l);
+    // Hosted: a repo the team's GitHub App cannot serve will not clone on any
+    // retry, so the card says why instead of staying queued. Anything else
+    // (hub or GitHub briefly down) keeps the offer queued.
+    if (this.hosted && this.policy.repos?.[offer.repo_id]?.local_path) {
+      try { await this.hosted.ensureCheckout(offer.repo_id); } catch (e) {
+        if (e.code === 'NO_GITHUB_APP') {
+          this.log.warn('hosted checkout impossible; declining the offer', { card_id: offer.card_id, repo_id: offer.repo_id, err: e.message });
+          return this.#decline(offer, `The cloud runner cannot clone this repository: ${e.message}`);
+        }
+        this.log.warn('hosted checkout unavailable; the offer stays queued', { repo_id: offer.repo_id, code: e.code ?? 'error', err: e.message });
+        return;
+      }
+    }
     // Default deny: a repo that doesn't scope produces zero bytes (exit f).
     const scope = await this.#scopeForRepo(offer.repo_id);
     if (!scope || scope.repo_id !== offer.repo_id) {

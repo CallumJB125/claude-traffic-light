@@ -74,6 +74,8 @@ export const DEFAULT_LIMITS = Object.freeze({
   integration_app_repos_member: { capacity: 30, per_ms: 10 * 60_000 }, // list / link an installation's repositories, per admin
   github_card_action_member: { capacity: 10, per_ms: 10 * 60_000 },   // Open PR / Comment status from a card, per member
   github_card_action_card: { capacity: 3, per_ms: 60_000 },            // … per card
+  runner_repo_token_ip: { capacity: 60, per_ms: 10 * 60_000 },         // GET /api/runner/v1/repo-token, every attempt, per client network
+  runner_repo_token_runner: { capacity: 20, per_ms: 10 * 60_000 },     // … minted or refused, per hosted runner (it caches each token ~55 min)
   webhook_fail_ip: { capacity: 30, per_ms: 60_000 },        // failed webhook deliveries, per connection + client IP (/64)
   vault_health_conn: { capacity: 1, per_ms: 60_000 },       // 'vault_error' health write + log, per connection
   share_write_user: { capacity: 60, per_ms: 3_600_000 },    // POST /api/interaction/v1/shares (interaction-shares.js)

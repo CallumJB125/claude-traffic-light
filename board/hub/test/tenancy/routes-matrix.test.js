@@ -202,6 +202,10 @@ const MATRIX = {
   'GET /api/teams/:team_id/provider-configs': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/provider-configs` },
   'PUT /api/teams/:team_id/provider-configs/:provider': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/provider-configs/claude`, body: { api_key: 'sk-pwned-key', model: 'pwned' } },
   'DELETE /api/teams/:team_id/provider-configs/:provider': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/provider-configs/claude` },
+  // A hosted runner's clone/push token: a person's sign-in never counts, naming B's repo or B's team header alike
+  // (a hosted runner of A asking for B's repo: hosted-repo-token.test.js).
+  'GET /api/runner/v1/repo-token': { kind: 'cross', path: (fx) => `/api/runner/v1/repo-token?repo_id=${fx.B.repo}`, headers: (fx) => ({ 'board-team': fx.B.team }),
+    alt: (fx) => [`/api/runner/v1/repo-token?repo_id=${fx.A.repo}`] },
   'DELETE /api/teams/:team_id/enrolments/:enrollment_id': {
     kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/enrolments/${fx.B.enrollment}`,
     alt: (fx) => [`/api/teams/${fx.A.team}/enrolments/${fx.B.enrollment}`],

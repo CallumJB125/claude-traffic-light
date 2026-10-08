@@ -13,6 +13,8 @@ const FETCH_TIMEOUT_MS = 15_000;
 const TOKEN_RE = /^[A-Za-z0-9_.-]{20,512}$/;
 
 const err = (code, message) => Object.assign(new Error(message), { code });
+// The hub's own fixed error text, bounded and printable; null when there is none.
+const hubText = (m) => (typeof m === 'string' && m.trim() ? m.replace(/[\p{C}]/gu, ' ').trim().slice(0, 240) : null);
 
 export function hubHttpBase(hub) {
   const u = new URL(hub);
@@ -49,11 +51,19 @@ export class RepoTokens {
     } catch {
       throw err('HUB_UNREACHABLE', 'the board hub is unreachable; cannot get a repository token');
     }
-    if (res.status === 401 || res.status === 403) throw err('UNAUTHENTICATED', `the hub refused a repository token (${res.status})`);
-    if (res.status === 404) throw err('NOT_AVAILABLE', 'the hub has no GitHub App installation for this repository');
-    if (!res.ok) throw err('HUB_UNREACHABLE', `the hub could not mint a repository token (${res.status})`);
-    let body;
-    try { body = await res.json(); } catch { throw err('INTERNAL', 'the hub answered a repository token request with no JSON'); }
+    let body = null;
+    try { body = await res.json(); } catch { body = null; }
+    if (!res.ok) {
+      const e = body?.error ?? {};
+      if (res.status === 401) throw err('UNAUTHENTICATED', 'the hub refused this runner\'s token');
+      // The repo is the team's and this runner has work on it, but GitHub cannot be used for it: say why.
+      if ((res.status === 404 && e.reason === 'no_installation') || (res.status === 403 && e.reason === 'not_granted')) throw err('NO_GITHUB_APP', hubText(e.message) ?? 'this repository has no GitHub App installation on the hub');
+      if (res.status === 403) throw err('UNAUTHENTICATED', 'the hub refused a repository token (403)');
+      if (res.status === 404) throw err('NOT_FOUND', 'the hub has no repository token for this runner and repository (no current offer or run on it)');
+      if (res.status === 429) throw err('RATE_LIMITED', 'too many repository token requests; the hub asked to wait');
+      throw err('HUB_UNREACHABLE', `the hub could not mint a repository token (${res.status})`);
+    }
+    if (body == null) throw err('INTERNAL', 'the hub answered a repository token request with no JSON');
     const expiresAt = Date.parse(body?.expires_at ?? '');
     if (typeof body?.token !== 'string' || !TOKEN_RE.test(body.token) || !Number.isFinite(expiresAt)) throw err('INTERNAL', 'the hub answered with a malformed repository token');
     if (expiresAt - this.now() <= 0) throw err('INTERNAL', 'the hub answered with an expired repository token');

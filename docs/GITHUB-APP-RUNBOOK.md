@@ -53,6 +53,18 @@ is `board/hub/integrations/github/` (`app.js` auth, `webhook.js` events,
   opened as hub-verified evidence, so its merge moves the card to Done. Each
   is audited on the connection and can be switched off there (*On its own*).
   Limits: 10 per member per 10 minutes, 3 per card per minute.
+- **Cloud runner clone and push.** A team's hosted runner
+  (docs/CLOUD-RUNNER-RUNBOOK.md) asks `GET /api/runner/v1/repo-token?repo_id=`
+  for a token to clone and push one linked repository (`hosted-repo-tokens.js`).
+  The hub asks GitHub's create-installation-token for exactly that repository
+  (`repository_ids`) and `permissions: {contents: write, pull_requests: write}`,
+  checks the answer grants exactly that (plus the metadata read GitHub always
+  adds) on that one repository, and returns `{token, expires_at}` once: not
+  cached, logged or stored, unlike the hub's own installation token. Only for a
+  hosted runner of the team that linked the repository, and only while it has an
+  offer or a run (ended under 15 minutes ago) on it; anything else is `404`.
+  Each mint is audited (`runner.repo_token`) and limited to 20 per runner per 10
+  minutes (60 per client network).
 
 ## Register the app (once)
 
@@ -90,8 +102,13 @@ is `board/hub/integrations/github/` (`app.js` auth, `webhook.js` events,
      *Request user authorization (OAuth) during installation* on; *Redirect
      on update* on. No Setup URL (GitHub ignores it with OAuth during install).
    - Repository permissions: **Metadata** read, **Pull requests** read and
-     write, **Checks** read, **Contents** read, **Issues** read. Nothing else,
-     no organization or account permissions.
+     write, **Checks** read, **Contents** read and write, **Issues** read.
+     Nothing else, no organization or account permissions. Contents write is
+     only for the cloud runner's clone and push, through tokens narrowed to one
+     repository; the hub itself never writes contents. An app registered with
+     Contents read: raise it to read and write on the app's page, then each
+     installation's owner accepts the new permission on GitHub (until then the
+     cloud runner's tokens answer `403 not_granted`).
    - Events: Pull request, Pull request review, Check suite, Check run, Push,
      Issue comment. (Installation events are always sent to an app.)
    - Where can it be installed: *Any account*.
@@ -162,3 +179,6 @@ flow), restart, then delete the app on GitHub.
 | *Open PR*: *GitHub refused it* | the run branch is not pushed, or has no commits beyond the base |
 | *Open PR*: *no access to this repository* | the installation no longer includes it: add it on GitHub, link it again |
 | Connection health *suspended* | the installation was suspended on GitHub |
+| Cloud card declined: *not linked to the team's GitHub App installation* | link the repository on the team's installation (*Choose repositories*) |
+| Cloud runner: repo token `403 not_granted` | the installation has not accepted Contents write, or no longer includes the repository; log line `repo token not minted` |
+| Cloud runner: repo token `404` with a card queued | the card's dispatch is not "Run in the cloud", the runner does not advertise the repo, or its run ended over 15 minutes ago |
