@@ -186,7 +186,7 @@ $('budget-form').addEventListener('submit', (e) => {
     const dollars = Number($('budget').value);
     if (!Number.isFinite(dollars) || dollars < 1) { $('budget-status').textContent = 'Enter a whole number of dollars, like 20.'; return; }
     const saved = await api.setDailyBudget(Math.round(dollars));
-    $('budget-status').textContent = typeof saved === 'number' ? `Saved. You'll get a heads-up near $${saved} a day; change it any time in Preferences → Spend.` : 'Could not save it. Set it later in Preferences → Spend.';
+    $('budget-status').textContent = typeof saved === 'number' ? `Saved. You'll get a heads-up near $${saved} a day; change it any time in Usage & cost.` : 'Could not save it. Set it later in Usage & cost.';
   });
 });
 $('join').addEventListener('click', () => go('join', $('extras-status')));

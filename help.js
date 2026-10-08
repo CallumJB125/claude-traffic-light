@@ -42,8 +42,8 @@ const RULE_TEXT = {
   'git-ci-passed': { signal: 'ci-passed', text: 'CI passed on the branch you are working on.' },
   // F1 spend
   runaway: { signal: 'runaway', text: "A session has spent more than your runaway threshold in the last few minutes (hover the widget for how much, how fast). Check it's doing what you meant — Plexiform never stops a session you started; the notification jumps to its terminal." },
-  'budget-exceeded': { signal: 'budget-exceeded', text: "You're over the daily or weekly budget set in Preferences → Spend. Nothing is stopped; this is just so you know." },
-  'budget-warning': { signal: 'budget-warning', text: "You're close to the daily or weekly budget set in Preferences → Spend." },
+  'budget-exceeded': { signal: 'budget-exceeded', text: "You're over the daily or weekly budget set in Usage & cost. Nothing is stopped; this is just so you know." },
+  'budget-warning': { signal: 'budget-warning', text: "You're close to the daily or weekly budget set in Usage & cost." },
 };
 
 const LAMP_TEXT = {
