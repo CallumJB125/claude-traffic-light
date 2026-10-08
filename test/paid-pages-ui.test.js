@@ -56,15 +56,16 @@ test('Sync: a free, signed-out install shows only the plan blocker, with See pla
   assert.doesNotMatch(doc.body.textContent, /team hub \(Account\)/);
 });
 
-test('Sync: an entitled, signed-out install shows Sign in, which opens Account', async (t) => {
+test('Sync: an entitled, signed-out install shows Sign in or create a team, which opens Team', async (t) => {
   const opened = [];
   const doc = page(t, 'sync.html', 'sync.js', { sync: { state: async () => ({ entitled: true, plan: 'plus', signedIn: false, enabled: false, local: {}, hub: null }), open: (p) => opened.push(p) } });
   await tick();
   assert.equal(doc.getElementById('upsell').hidden, true);
   assert.equal(doc.getElementById('sign-in').hidden, false);
   assert.match(doc.getElementById('detail').textContent, /Plexiform account/);
+  assert.equal(doc.getElementById('sign-in').textContent, 'Sign in or create a team');
   doc.getElementById('sign-in').click();
-  assert.deepEqual(opened, ['account']);
+  assert.deepEqual(opened, ['team']);
 });
 
 test('Plan & billing: signed out shows a Sign in button and plain wording', async (t) => {

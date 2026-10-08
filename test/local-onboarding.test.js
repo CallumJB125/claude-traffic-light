@@ -65,7 +65,7 @@ test('the sign-in buttons use the account page bridge: one new composed action, 
   assert.match(acct, /api\.signInWith\(p\)/);
   assert.match(acct, /Continue with Google/);
   assert.match(acct, /Continue with GitHub/);
-  assert.match(acct, /Join with an invite link', \(\) => api\.go\('join'\)|onclick: \(\) => api\.go\('join'\) \}, 'Join with an invite link'/);
+  assert.match(acct, /onclick: \(\) => api\.go\('join'\) \}, 'Paste your invite link'/);
 });
 
 test('signed-out Account offers the same sign-in as Team, not a second sign-in screen', () => {
@@ -77,10 +77,10 @@ test('signed-out Account offers the same sign-in as Team, not a second sign-in s
   assert.match(team, /signedOutActions\(\)/);
 });
 
-test('signed-out Team and Integrations copy: plain, names the hub from the brand, status is words', () => {
+test('signed-out Team and Integrations copy: plain, no hub address, status is words', () => {
   const acct = read(dir, 'account.js');
-  assert.match(acct, /Sign in to create a team or join one: invite teammates, see their agents live\./);
-  assert.match(acct, /Teams and integrations live on your team’s address \(\$\{s\.brand\.defaultHost\}\)/);
+  assert.match(acct, /heading\('Work with a team', 'Share one board with your teammates and see what their AI sessions are working on\. My board stays on this Mac; only team boards are shared\.'\)/);
+  assert.doesNotMatch(acct, /team’s address/);
   assert.ok(!/app\.plexiform\.dev/.test(acct), 'the host comes from the brand, not the page');
   assert.match(acct, /el\('p', \{ class: 'acct-connector-status' \}, c\.statusText\)/);
   assert.match(acct, /el\('ul', \{ class: 'acct-connectors', 'aria-label'/);

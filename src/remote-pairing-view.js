@@ -32,7 +32,7 @@
     if (!s.ready) return 'Phone approvals could not load their keys on this computer.';
     if (!s.entitled) return "Off: phone approvals aren't part of your current plan.";
     if (!s.enabled) return 'Off.';
-    if (!s.signedIn) return 'Sign in to your team hub (Team → Account) first: your phone reaches this computer through it.';
+    if (!s.signedIn) return 'Sign in on the Team page first (Sign in or create a team): your phone reaches this computer through your team.';
     if (!s.hostConnected) return 'Waiting: turn on “Let my other devices use sessions” in Preferences, and keep this computer awake.';
     return 'On.';
   }

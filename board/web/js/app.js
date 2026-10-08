@@ -141,6 +141,7 @@ function movePlan(id, direction, destination = null) {
   if (!fields) { toast('That move exceeds the supported calendar dates.', 'error'); return; }
   void savePlan(id, fields);
 }
+const canOpenTeam = () => typeof globalThis.plexiformDesktop?.openTeam === 'function';
 const boardReadOnly = () => state.me?.member?.role === 'viewer' || !!state.board?.archived_at;
 const workflowScope = () => ({boardId:state.boardId,generation:boardGeneration,org:currentOrg(),member:state.me?.member?.id,user:state.me?.user?.id??state.me?.member?.user_id,
   role:state.me?.member?.role,auth:state.auth,accounts:state.authMode==='accounts',connected:state.conn.status==='open',readOnly:boardReadOnly(),epoch:state.dash?.epoch});
@@ -472,10 +473,11 @@ function buildModel() {
     planner: plannerState(),
     dashboard: state.view === 'dashboard' ? dashboardModel(live) : null,
     localCard: state.authMode === 'local' && !state.localCardDismissed,
+    openTeam: canOpenTeam(),
     accounts: state.authMode === 'accounts',
     invite: state.invite,
     cloud: state.cloud,
-    integrations: state.view === 'integrations' ? { ...state.integ, nowMs: Date.now(), local: state.authMode === 'local' } : null,
+    integrations: state.view === 'integrations' ? { ...state.integ, nowMs: Date.now(), local: state.authMode === 'local', openTeam: canOpenTeam() } : null,
     presence: { ...state.presence, stale: state.presence.stale || lost },
     teamOverview: { ...state.overview, stale: lost || !!state.overview.error || (state.overview.updatedAt != null && Date.now() - state.overview.updatedAt > 45_000), ageMs: state.overview.updatedAt == null ? null : Date.now() - state.overview.updatedAt },
     // Presence ages freeze at the drop, like card ages.
@@ -2106,6 +2108,7 @@ function onClick(e) {
     case 'history-range': if (el.dataset.range !== state.history.range) { state.history.selected = null; loadHistory(el.dataset.range); } return;
     case 'history-refresh': if (state.history.status !== 'loading') loadHistory(); return;
     case 'history-open': state.history.selected = el.dataset.run; update(); openDetail(cardId); return;
+    case 'open-team': if (canOpenTeam()) globalThis.plexiformDesktop.openTeam(); return;
     case 'local-card-dismiss':
       state.localCardDismissed = true;
       try { localStorage.setItem('board-local-card', 'dismissed'); } catch { /* private mode */ }

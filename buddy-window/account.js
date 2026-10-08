@@ -54,14 +54,22 @@ const input = (attrs) => el('input', { class: 'input', spellcheck: 'false', ...a
 const link = (text, onclick) => el('button', { type: 'button', class: 'acct-link', onclick }, text);
 const heading = (title, sub) => [el('h1', {}, title), sub ? el('p', { class: 'acct-sub' }, sub) : null];
 const notice = (text) => (text ? el('p', { class: 'acct-notice', role: 'status' }, text) : null);
-// Sign-in for someone with no account: the same Google/GitHub sign-in the email screen offers, and the join page.
+// Sign-in for someone with no account: one obvious path (Google or GitHub, the same sign-in the email screen
+// offers), the hub's other methods one link away, and invites kept apart so they don't compete with it.
 function signedOutActions() {
   const providers = [['google', 'Continue with Google'], ['github', 'Continue with GitHub']].map(([p, text]) => {
     const b = el('button', { type: 'button', class: `btn btn-provider btn-${p}` }, text);
     b.addEventListener('click', async () => { b.disabled = true; const r = await api.signInWith(p); if (!r?.ok) { b.disabled = false; flash(r?.error ?? 'Something went wrong. Try again.', true); } });
     return b;
   });
-  return el('div', { class: 'acct-providers' }, providers, el('button', { type: 'button', class: 'btn', onclick: () => api.go('join') }, 'Join with an invite link'));
+  return [
+    el('p', { class: 'acct-hint' }, 'Your browser opens so you can sign in, then you come back here. No new password needed.'),
+    el('div', { class: 'acct-providers' }, providers),
+    el('p', { class: 'acct-foot acct-foot-tight' }, link('Other ways to sign in', () => api.signInOther())),
+    el('section', { class: 'acct-section' }, el('h2', {}, 'Were you sent an invite?'),
+      el('p', { class: 'acct-hint' }, 'Paste the link from your invite to join that team.'),
+      el('div', { class: 'acct-actions acct-actions-left' }, el('button', { type: 'button', class: 'btn', onclick: () => api.go('join') }, 'Paste your invite link'))),
+  ];
 }
 const hostTag = (host) => el('span', { class: 'acct-hosttag' }, host);
 
@@ -336,11 +344,13 @@ const SCREENS = {
 
   browser(s) {
     const who = { google: 'Google', github: 'GitHub' }[s.provider] ?? 'the sign-in page';
+    const again = s.provider ? el('button', { type: 'button', class: 'btn btn-primary', onclick: () => api.oauth(s.provider) }, 'Try again') : null;
     return [
-      heading('Continue in your browser', null),
-      el('p', { class: 'acct-sub' }, `We opened ${who} in your browser. Sign in there, then come back here. `, s.host ? ['Signing in to ', hostTag(s.host), '.'] : null),
-      el('p', { class: 'acct-hint', role: 'status' }, 'Waiting for your browser…'),
-      el('div', { class: 'acct-actions' }, el('button', { type: 'button', class: 'btn', onclick: () => api.cancelOAuth() }, 'Cancel')),
+      heading('Finish signing in in your browser', null),
+      el('p', { class: 'acct-sub' }, `We opened ${who} in your browser. Sign in there; this window notices by itself and moves on.`),
+      el('p', { class: 'acct-hint', role: 'status' }, 'Waiting for your browser… This stops after 5 minutes.'),
+      el('p', { class: 'acct-hint' }, 'No browser window? Choose Try again. If nothing opens, check that your Mac has a default web browser, then try again.'),
+      el('div', { class: 'acct-actions' }, again, el('button', { type: 'button', class: 'btn', onclick: () => api.cancelOAuth() }, 'Cancel')),
     ];
   },
 
@@ -361,10 +371,7 @@ const SCREENS = {
   },
 
   'create-team'(s) {
-    if (!s.host) {
-      return [heading('Create a team', 'Sign in to your team first. Your team lives there.'),
-        el('div', { class: 'acct-actions' }, el('button', { type: 'button', class: 'btn btn-primary', onclick: () => api.go('hub') }, 'Sign in'))];
-    }
+    if (!s.host) return [heading('Create a team', 'Sign in first. Your team is made for you when you do.'), signedOutActions()];
     // Right after a first sign-in this is the whole choice: start a team, or join the one that invited you.
     return [
       heading('Create or join a team', null),
@@ -382,22 +389,21 @@ const SCREENS = {
 
   integrations(s) {
     return [
-      heading('Integrations', `Connect the tools your team already uses. Integrations live on your team’s address (${s.brand.defaultHost}), so you need a team first.`),
+      heading('Integrations', 'Connect the tools your team already uses. Integrations belong to a team, so you need one first.'),
       el('ul', { class: 'acct-connectors', 'aria-label': 'Tools you can connect' }, s.connectors.map((c) => el('li', { class: `acct-connector acct-connector-${c.status}` },
         el('h2', {}, c.name),
         el('p', { class: 'acct-hint' }, c.value),
         el('p', { class: 'acct-connector-status' }, c.statusText)))),
       s.signedInHubs.length
         ? el('p', { class: 'acct-hint' }, 'You’re signed in. Pick a team in the switcher at the top of the sidebar, then open Integrations again.')
-        : [el('p', { class: 'acct-sub' }, 'Sign in to create a team or join one, then connect tools.'), signedOutActions()],
+        : [el('p', { class: 'acct-sub' }, 'Sign in and you get a team of your own, then connect tools.'), signedOutActions()],
     ];
   },
 
   team(s) {
     if (!s.team && !s.signedInHubs.length) {
       return [
-        heading('Team', 'Sign in to create a team or join one: invite teammates, see their agents live.'),
-        el('p', { class: 'acct-hint' }, `Teams and integrations live on your team’s address (${s.brand.defaultHost}). Your board on this Mac stays local until you do.`),
+        heading('Work with a team', 'Share one board with your teammates and see what their AI sessions are working on. My board stays on this Mac; only team boards are shared.'),
         signedOutActions(),
       ];
     }
@@ -521,7 +527,7 @@ const SCREENS = {
   account(s) {
     if (!s.accounts.length) {
       // The same sign-in as the Team page, not a second screen.
-      return [heading('Account', 'You’re not signed in. Sign in to create a team or join one.'), signedOutActions()];
+      return [heading('Account', 'You’re not signed in. Signing in gives you a team to share a board with.'), signedOutActions()];
     }
     const out = [heading('Account', null)];
     for (const a of s.accounts) {

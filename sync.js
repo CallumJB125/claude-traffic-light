@@ -87,7 +87,7 @@
   async function refresh() { show(await api.state().catch(() => null)); }
 
   if (!api) return;
-  $('sign-in').addEventListener('click', () => api.open('account'));
+  $('sign-in').addEventListener('click', () => api.open('team'));
   $('see-plans').addEventListener('click', () => api.open('upgrade'));
   $('enable').addEventListener('click', async () => {
     $('note').textContent = 'Turning on…';

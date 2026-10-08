@@ -19,9 +19,9 @@ function wiring(){
 }
 test('Help navigation opens only the existing destinations (and setup) with one closed argument',()=>{
   const f=wiring(),e=event(f.pages.help);
-  for(const destination of ['overview','board','join','settings','aitools','aitools:codex','aitools:all','onboarding'])assert.equal(f.handler(e,destination),true);
-  assert.deepEqual(f.opened,['overview','board','join','settings','aitools','aitools','aitools','setup window']);f.opened.length=0;
-  for(const args of [[],['overview','extra'],[null],[{}],[['overview']],[new String('overview')],['https://example.com'],['file:///private/data'],['command'],['setups'],['aitools:../x'],['aitools:'],['aitoolsx'],['team'],['signin'],['Overview'],['onboarding','x'],['Onboarding']])assert.equal(f.handler(e,...args),false);
+  for(const destination of ['overview','board','join','team','settings','aitools','aitools:codex','aitools:all','onboarding'])assert.equal(f.handler(e,destination),true);
+  assert.deepEqual(f.opened,['overview','board','join','team','settings','aitools','aitools','aitools','setup window']);f.opened.length=0;
+  for(const args of [[],['overview','extra'],[null],[{}],[['overview']],[new String('overview')],['https://example.com'],['file:///private/data'],['command'],['setups'],['aitools:../x'],['aitools:'],['aitoolsx'],['signin'],['Overview'],['onboarding','x'],['Onboarding']])assert.equal(f.handler(e,...args),false);
   assert.deepEqual(f.opened,[]);
 });
 test('Help navigation rejects foreign, subframe, retired, destroyed and missing owners',()=>{

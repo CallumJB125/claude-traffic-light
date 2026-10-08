@@ -10,7 +10,8 @@ test('a fresh install shows four steps, each with a fix that Help may open', () 
   assert.deepEqual(c.rows.map((r) => r.id), ['hooks', 'signin', 'team', 'tackle']);
   assert.deepEqual(c.rows.map((r) => r.state), ['todo', 'todo', 'todo', 'todo']);
   assert.equal(c.done, 0);
-  assert.ok(c.rows.every((r) => ['board', 'join', 'settings'].includes(r.fix.destination)));
+  assert.ok(c.rows.every((r) => ['board', 'team', 'settings'].includes(r.fix.destination)));
+  assert.deepEqual([c.rows[1].fix, c.rows[2].fix], [{ label: 'Sign in or create a team', destination: 'team' }, { label: 'Sign in or create a team', destination: 'team' }], 'sign-in and team steps open the Team page');
   assert.deepEqual(c.rows[3].fix, { label: 'Open the board', destination: 'board' }, 'the card step opens the board, not Overview');
   assert.equal(c.prompt, null);
   assert.match(c.rows[0].detail, /No hooks\. Reinstall\./);

@@ -1915,6 +1915,10 @@ test('first sign-in creates one personal team and board without an extra screen'
   assert.equal(h.store.active().role, 'owner');
   assert.equal(h.store.list().filter((w) => w.kind === 'team').length, 1);
   assert.equal(h.shown.includes('create-team'), false);
+  assert.equal(h.flow.acct.screen, 'team', 'lands on the new team, not a blank board');
+  const st = await h.A.state();
+  assert.equal(st.notice, "You’re signed in. We made a team for you, new's team, with one board, and you’re its owner. Invite people below, or open Board in the sidebar to start.");
+  assert.equal(st.team?.name, "new's team");
   await h.A.signOut(h.host);
   await h.signInAs('new@example.com');
   assert.equal(h.store.list().filter((w) => w.kind === 'team').length, 1);

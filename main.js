@@ -2064,7 +2064,7 @@ ipcMain.handle('help:navigate', (e, ...args) => {
   const destination = args[0];
   if (typeof destination === 'string' && /^aitools(:[a-z]{2,12})?$/.test(destination)) return typeof aiToolsOpen === 'function' ? aiToolsOpen(destination) : (openBuddy('aitools'), true);
   if (destination === 'onboarding') { createOnboardingWindow(); return true; }
-  if (typeof destination !== 'string' || !['overview', 'board', 'join', 'settings'].includes(destination)) return false;
+  if (typeof destination !== 'string' || !['overview', 'board', 'join', 'team', 'settings'].includes(destination)) return false;
   openBuddy(destination);
   return true;
 });

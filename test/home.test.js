@@ -170,3 +170,28 @@ test('"Waiting on you" is a list in one place only: the old My day block and Ove
   assert.doesNotMatch(read('board/web/js/render-dashboard.js'), /'Waiting on'\)/);
   assert.match(read('overview.html'), /<details class="reason"><summary>How to add a local model endpoint<\/summary>/, 'the local-models.json how-to is folded away');
 });
+
+test('no team boards: Home offers Sign in or create a team, which opens the Team page; on a team it is gone', async () => {
+  const calls = [];
+  const h = setup([{ ...fresh, teamless: true }], calls);
+  await tick(); await tick();
+  const sec = h.section('teamwork');
+  assert.equal(sec.hidden, false);
+  assert.match(sec.textContent, /Share a board with your teammates/);
+  const b = [...sec.querySelectorAll('button')].find((x) => x.textContent === 'Sign in or create a team');
+  b.click(); await tick();
+  assert.deepEqual(calls, [['navigate', 'team']]);
+  h.close();
+  const t = setup([{ ...fresh, teamless: false, team: { unavailable: false, cards: [], decisions: [] } }]);
+  await tick(); await tick();
+  assert.equal(t.section('teamwork').hidden, true);
+  t.close();
+});
+
+test('teamless is true only when the board list was read and holds no team board', async () => {
+  const handlers = new Map();
+  const reg = (myDay) => { handlers.clear(); Home.register({ ipcMain: { handle: (c, f) => handlers.set(c, f) }, allowed: () => true, state: () => null, localSessions: () => [], tools: () => [], myDay, openPage() {}, openAiTools() {}, morning: () => null, now: () => NOW }); return handlers.get('home:state')({}); };
+  assert.equal((await reg({ snapshot: async () => ({ sources: [{ name: Home.LOCAL_BOARD, cards: [] }] }) })).teamless, true);
+  assert.equal((await reg({ snapshot: async () => ({ sources: [{ name: 'Core', cards: [], decisions: [] }] }) })).teamless, false);
+  assert.equal((await reg({ snapshot: async () => { throw new Error('x'); } })).teamless, false, 'unknown is not teamless');
+});

@@ -302,15 +302,19 @@ const EMPTY = {
   idle: 'Quiet sessions with no recent update show up here.',
 };
 
-// Local mode only: the board works alone, and a team is where it is shared. The app's
-// Team page does the signing in (this page has no way to ask for it), so this points there.
+// Local mode only: the board works alone, and a team is where it is shared. Signing in happens
+// on the app's Team page; outside the app (no openTeam bridge) the card says where that is.
 export function localCard(model) {
   if (!model.localCard || model.view !== 'board') return null;
   return h('section', { class: 'localcard', 'aria-labelledby': 'localcard-title' },
     h('div', { class: 'localcard-text' },
       h('h2', { id: 'localcard-title', class: 'localcard-title' }, 'You’re on your local board'),
-      h('p', { class: 'localcard-body muted small' }, 'Create a team to collaborate: share one board with teammates and their AI sessions, and connect tools like GitHub. Open Team in the sidebar to sign in. Teams and integrations live on your team’s address.')),
-    h('button', { type: 'button', class: 'btn btn-sm btn-ghost', 'data-action': 'local-card-dismiss' }, 'Dismiss'));
+      h('p', { class: 'localcard-body muted small' }, model.openTeam
+        ? 'Sign in to share this board with teammates and their AI sessions, and to connect tools like GitHub.'
+        : 'Sign in to share this board with teammates and their AI sessions, and to connect tools like GitHub: open Team in the app’s sidebar.')),
+    h('div', { class: 'localcard-actions' },
+      model.openTeam ? h('button', { type: 'button', class: 'btn btn-sm btn-primary', 'data-action': 'open-team' }, 'Sign in or create a team') : null,
+      h('button', { type: 'button', class: 'btn btn-sm btn-ghost', 'data-action': 'local-card-dismiss' }, 'Dismiss')));
 }
 
 export function alertsStrip(alerts, model) {

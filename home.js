@@ -128,9 +128,15 @@
     if (c.decisions.length) out.append(node('h3', 'Team decisions'), cardList(c.decisions, 'Team decisions', x => `${x.kind} · ${x.summary} · ${x.board}`, 'decision'));
   }
 
+  function renderTeamwork(teamless) {
+    const section = $('teamwork');
+    section.hidden = !teamless;
+    body('teamwork').replaceChildren(...(teamless ? [empty('Share a board with your teammates and see what their AI sessions are working on.', goButton('Sign in or create a team', 'team', 'teamwork:team', true))] : []));
+  }
+
   function render(s) {
     const focus = document.activeElement?.dataset?.focus;
-    renderBanner(s.banner); renderMorning(s.morning); renderNeeds(s.needs); renderRunning(s.running, s.banner); renderToday(s.today, s.running); renderCards(s.team);
+    renderBanner(s.banner); renderMorning(s.morning); renderNeeds(s.needs); renderRunning(s.running, s.banner); renderToday(s.today, s.running); renderCards(s.team); renderTeamwork(s.teamless === true);
     if (focus) [...document.querySelectorAll('[data-focus]')].find(el => el.dataset.focus === focus)?.focus();
     $('status').textContent = `Updated ${new Date(s.observed_at).toLocaleTimeString()}. Refreshes every 5 seconds.`;
   }
