@@ -32,11 +32,25 @@ function excluded(list, cwd) {
 const dirOf = (rootDir) => path.join(rootDir, 'handovers');
 const factsFile = (rootDir, adapter, sessionId) => path.join(dirOf(rootDir), '.facts', `${safeSessionId(adapter)}-${safeSessionId(sessionId)}.json`);
 
+// Harnesses and plugins put tagged blocks (<system-reminder>, <realtime_delegation>, ...)
+// ahead of what the person typed. An unclosed one is cut off, so nothing after it is theirs.
+const LEAD_TAG = /^<([A-Za-z][\w.:-]{0,80})(?:\s[^<>]*)?(\/?)>/;
+function untag(v) {
+  let t = typeof v === 'string' ? v.trim() : '';
+  for (let m; t.startsWith('<') && (m = LEAD_TAG.exec(t));) {
+    if (m[2]) { t = t.slice(m[0].length).trim(); continue; }
+    const end = t.indexOf(`</${m[1]}>`, m[0].length);
+    if (end < 0) return null;
+    t = t.slice(end + m[1].length + 3).trim();
+  }
+  return t || null;
+}
+
 function promptOf(d) {
-  const direct = str(d.prompt) || str(d.user_prompt) || str(d.userPrompt);
+  const direct = untag(d.prompt) || untag(d.user_prompt) || untag(d.userPrompt);
   if (direct) return direct;
   const msgs = d['input-messages'] || d.input_messages;
-  return Array.isArray(msgs) ? str(msgs[msgs.length - 1]) : null;
+  return Array.isArray(msgs) ? untag(msgs[msgs.length - 1]) : null;
 }
 const assistantOf = (d) => str(d.last_assistant_message) || str(d['last-assistant-message']) || str(d.lastAssistantMessage);
 
@@ -99,4 +113,4 @@ function record({ rootDir, adapter, signal, sessionId, cwd, data, mutedProjects,
 }
 
 // mutate and clip are also how src/handover-transcripts.js builds facts from a transcript.
-module.exports = { record, factsFile, dirOf, excluded, mutate, clip, CAP };
+module.exports = { record, factsFile, dirOf, excluded, mutate, clip, untag, CAP };

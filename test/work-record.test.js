@@ -157,3 +157,29 @@ test('background memories runs found through their facts and repeated sessions o
   assert.equal(r.router.localRecords().length, 1);
   assert.equal(r.router.localRecords()[0].session_id, 'thread-2');
 });
+
+test('titles and goals skip tagged system blocks for the text the person typed, and a cut-off block is not a title', () => {
+  const tagged = '<realtime_delegation>\n<source>transcript_tail_flush</source>\n</realtime_delegation>\nFix the login redirect loop';
+  const r = WorkRecord.build({ install_id: INSTALL, o: o(), raw: {}, facts: facts({ firstPrompt: tagged, lastPrompt: tagged }), home: HOME });
+  assert.equal(r.title, 'Fix the login redirect loop');
+  assert.equal(r.goal, 'Fix the login redirect loop');
+  const cut = WorkRecord.build({ install_id: INSTALL, o: o(), raw: { taskTitle: '<realtime_delegation> <source>transcript_tail_fl…' }, facts: facts({ firstPrompt: '<realtime_delegation> <source>transcript_tail_fl…', lastPrompt: null }), home: HOME });
+  assert.equal(cut.title, 'Codex · app');
+  assert.equal(cut.goal, '');
+  for (const rec of [r, cut]) assert.doesNotMatch(rec.title, /^\s*</);
+});
+
+test('transcript and hook prompts drop leading tagged blocks and keep the real request', () => {
+  const { promptText } = require('../src/handover-transcripts');
+  const Tap = require('../hooks/handover-tap.js');
+  assert.equal(promptText('<system-reminder>ctx</system-reminder>\n<realtime_delegation a="1"><source>x</source></realtime_delegation> add dark mode'), 'add dark mode');
+  assert.equal(promptText('<realtime_delegation> <source>transcript_tail_fl'), null);
+  assert.equal(promptText('<br/> keep this'), 'keep this');
+  assert.equal(promptText('<3 thanks, ship it'), '<3 thanks, ship it');
+  assert.equal(promptText('a <b>bold</b> ask'), 'a <b>bold</b> ask');
+  const f = { tools: {}, files: {}, commands: [] };
+  Tap.mutate(f, 'prompt-submit', { prompt: `<realtime_delegation>${'x'.repeat(600)}</realtime_delegation>\nrename the config loader` }, '2026-10-07T10:00:00.000Z');
+  assert.equal(f.firstPrompt, 'rename the config loader');
+  Tap.mutate(f, 'prompt-submit', { prompt: '<system-reminder>only harness text</system-reminder>' }, '2026-10-07T10:01:00.000Z');
+  assert.equal(f.lastPrompt, 'rename the config loader');
+});

@@ -9,6 +9,7 @@ const { toolEnv } = require('./tool-path');
 const { redactSecrets } = require('./secret-patterns');
 const { withDeadline, GRACE_MS } = require('./bounded-io');
 const WorkRecord = require('./work-record');
+const { untag } = require('../hooks/handover-tap.js');
 const PROVIDERS = new Set(['codex','cursor','gemini','hermes','claude']);
 const ID = /^[A-Za-z0-9_.:-]{1,120}$/;
 const isId = value => typeof value==='string'&&ID.test(value);
@@ -118,7 +119,7 @@ function observation(s,{ownedRoots=[],host=null}={}) {
   const provider = PROVIDERS.has(s.source)?s.source:PROVIDERS.has(s.via)?s.via:s.source==null&&s.via==null?'claude':null;
   if(!provider)return null;
   const task = s.taskId==null?'session':s.taskId;if(!isId(task))return null;
-  return {provider,session_id:s.sessionId,task_id:task,title:clean(s.taskTitle||`${provider[0].toUpperCase()+provider.slice(1)} · ${path.basename(s.cwd||'Work')}`,200),
+  return {provider,session_id:s.sessionId,task_id:task,title:clean(untag(s.taskTitle)||`${provider[0].toUpperCase()+provider.slice(1)} · ${path.basename(s.cwd||'Work')}`,200),
     status:phase(s.signal),summary:typeof s.taskSummary==='string'?clean(s.taskSummary,2000):null,cwd:s.cwd,personal:s.scope?.state==='personal'};
 }
 function routeFor(repo,routes,choice) {
@@ -157,6 +158,8 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
   const call=(fn,o)=>{try{return typeof fn==='function'?fn(o)??null:null;}catch{return null;}};
   const recordFor=(o,raw,entry=null)=>WorkRecord.build({install_id:state.install_id,o,raw,facts:factsOf(o),repo_id:entry?.destination.kind==='team'?entry.destination.repo_id:null,
     handover:entry?call(handoverFor,o):null,spend:entry?call(spendFor,o):null,home});
+  const shows=rec=>!!(rec&&(rec.goal||rec.summary||rec.files.edited.length));
+  const placeless=cwd=>typeof cwd!=='string'||!path.isAbsolute(cwd)||path.resolve(cwd)===path.parse(path.resolve(cwd)).root||typeof home==='string'&&home!==''&&path.resolve(cwd)===path.resolve(home);
   const changed=()=>{try{onChange();}catch{/* UI updates do not affect capture */}};
   function commit(mutate,reserve=0) {
     // Publish memory only after the bounded private file commits. In particular
@@ -205,7 +208,7 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
       // and a session restarted on the same request (resume, retry) is the same work.
       const draft=fresh(raw)?recordFor(o,raw):null;if(draft&&BACKGROUND_TITLE.test(draft.title))continue;
       const goal=draft?.goal??'';
-      const dup=JSON.stringify(raw.taskTitle?[o.provider,o.cwd??null,o.title]:goal.length>=20?[o.provider,o.cwd??null,goal]:[o.provider,o.session_id,o.task_id]),at=Date.parse(raw.updatedAt)||0;
+      const dup=JSON.stringify(untag(raw.taskTitle)?[o.provider,o.cwd??null,o.title]:goal.length>=20?[o.provider,o.cwd??null,goal]:[o.provider,o.session_id,o.task_id]),at=Date.parse(raw.updatedAt)||0;
       if(!newest.has(dup)||at>newest.get(dup).at)newest.set(dup,{at,raw});
     }
     const keep=new Set([...newest.values()].map(v=>v.raw));
@@ -224,6 +227,9 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
       // retries. Source timestamps are reported change markers, never verified
       // agent liveness. A missing or invalid marker cannot renew activity.
       if(!fresh(raw))continue;
+      // A session with nothing to show in the home folder (or none) would be titled after the user's
+      // account: it waits for a prompt, a summary or an edit before it gets a card.
+      if(!entry&&!untag(raw.taskTitle)&&placeless(o.cwd)&&!shows(recordFor(o,raw)))continue;
       if(!entry){if(Object.keys(state.tasks).length>=2000){log('automatic card limit reached');continue;}
         const repo=safeCanonical(await resolveRepo(o.cwd));
         if(stopped||state.enabled===false)return;

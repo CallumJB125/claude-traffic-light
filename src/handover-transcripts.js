@@ -95,8 +95,9 @@ function promptText(text) {
   if (!t) return null;
   const cmd = /<command-name>([^<]{1,200})<\/command-name>/.exec(t);
   if (cmd) { const args = /<command-args>([^<]{0,400})<\/command-args>/.exec(t); return `${cmd[1].trim()}${args && args[1].trim() ? ` ${args[1].trim()}` : ''}`; }
-  if (t.startsWith('<') || t.startsWith('Caveat:') || t.startsWith('[Request interrupted')) return null;
-  return t;
+  const own = Tap.untag(t);
+  if (!own || own.startsWith('Caveat:') || own.startsWith('[Request interrupted')) return null;
+  return own;
 }
 
 const blank = (adapter, sessionId) => ({ v: 1, adapter, sessionId, cwd: '', startedAt: null, lastActive: null, tools: {}, files: {}, commands: [] });

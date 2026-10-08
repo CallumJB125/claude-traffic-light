@@ -253,3 +253,23 @@ test('This Mac list hides stored background entries, groups repeats and prunes o
  assert.deepEqual(titles,['Codex · app (3)','Codex · recent']);
  assert.ok(!Object.values(JSON.parse(fs.readFileSync(file,'utf8')).tasks).some(e=>e.title==='Codex · old'));
 });
+test('a session with nothing to show in the home folder gets no card until it has a prompt, and never one per session',async t=>{
+ const HOME='/Users/someone',facts={};
+ const r=rig(t,{home:HOME,factsFor:o=>facts[o.session_id]??null,resolveRepo:async()=>null});
+ const hermes=(id,extra={})=>({source:'hermes',sessionId:id,host:'mac',cwd:HOME,signal:'tool-use',updatedAt:new Date(100000).toISOString(),...extra});
+ await r.router.observe([hermes('h1'),hermes('h2'),hermes('h3'),hermes('h4',{cwd:undefined}),hermes('h5',{cwd:'/'})]);
+ assert.equal(r.calls.length,0);assert.equal(r.router.snapshot().length,0);
+ facts.h6={cwd:HOME,firstPrompt:'Summarise my unread email',lastPrompt:'Summarise my unread email'};
+ r.advance(31000);await r.router.observe([hermes('h1',{updatedAt:new Date(131000).toISOString()}),hermes('h6',{updatedAt:new Date(131000).toISOString()})]);
+ assert.deepEqual(r.calls.map(c=>[c.body.session_id,c.body.title]),[['h6','Summarise my unread email']]);
+ await r.router.observe([hermes('h7',{taskTitle:'Tidy downloads',updatedAt:new Date(131000).toISOString()})]);
+ assert.equal(r.calls.at(-1).body.title,'Tidy downloads');
+ await r.router.observe([hermes('h8',{cwd:'/Users/someone/dev/app',updatedAt:new Date(131000).toISOString()})]);
+ assert.equal(r.calls.at(-1).body.title,'Hermes · app');
+});
+test('a reported task title made of a tagged system block never becomes the card title',async t=>{
+ const r=rig(t,{resolveRepo:async()=>null});
+ await r.router.observe([event({taskTitle:'<realtime_delegation> <source>transcript_tail_fl'})]);
+ assert.equal(r.calls[0].body.title,'Codex · app');
+ assert.equal(observation(event({taskTitle:'<system-reminder>x</system-reminder> Fix the login loop'})).title,'Fix the login loop');
+});
