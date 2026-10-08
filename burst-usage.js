@@ -13,6 +13,7 @@
   after.after(sec);
   const el = (tag, text, cls) => { const e = document.createElement(tag); if (text != null) e.textContent = text; if (cls) e.className = cls; return e; };
   const usd = (v) => `$${v >= 100 ? Math.round(v) : v.toFixed(2)}`;
+  const RANGES = { '24h': '24 hours', '7d': '7 days', '30d': '30 days' };
   const reqs = (n) => `${n.toLocaleString('en-US')} request${n === 1 ? '' : 's'}`;
 
   // Burst's own 14-day buckets: request counts by slot, backup-provider dollars, and per-repository
@@ -39,11 +40,11 @@
       }
       sec.append(el('h4', `Last ${days.length} days`), strip, el('div', `${reqs(total)}; ${reqs(backup)} went to backup providers (top of each bar).`, 'note'));
     }
-    const saved = h.repos.filter((r) => r.repo && r.savedUsd > 0);
-    if (saved.length) {
+    const compacted = h.repos.filter((r) => r.repo && r.compacted && r.netSavedUsd);
+    if (compacted.length) {
       const sl = el('ul');
-      for (const r of saved) sl.append(el('li', `${r.repo}: ${usd(r.savedUsd)} saved${r.requests ? ` · ${reqs(r.requests)}` : ''}`));
-      sec.append(el('div', 'Burst compaction savings by repository (API-equivalent, last 14 days)', 'note'), sl);
+      for (const r of compacted) sl.append(el('li', `${r.repo}: ${r.netSavedUsd > 0 ? `${usd(r.netSavedUsd)} saved` : `cost ${usd(-r.netSavedUsd)} more than it saved`}${r.requests ? ` · ${reqs(r.requests)}` : ''}`));
+      sec.append(el('div', 'Burst compaction by repository, after the cost of its summaries (API-equivalent, last 14 days)', 'note'), sl);
     }
   }
 
@@ -51,7 +52,7 @@
     sec.hidden = !v;
     if (!v) return;
     sec.replaceChildren(el('h3', 'Through Burst'), el('div', `Source: ${v.source}`, 'note'));
-    if (v.empty) sec.append(el('div', `No secondary-provider spend in the last ${v.range || '7d'}.`, 'note'));
+    if (v.empty) sec.append(el('div', `No backup-provider spend in the last ${RANGES[v.range] || '7 days'}: everything went to your Claude plan.`, 'note'));
     else {
       sec.append(el('div', `Backup providers: ${usd(v.secondaryUsd)}${v.unpriced ? '+' : ''} across ${reqs(v.secondaryRequests)}`));
       const list = el('ul');

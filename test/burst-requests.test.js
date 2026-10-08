@@ -41,6 +41,6 @@ test('requestsView: newest first, capped at the limit, junk dropped', () => {
 
 test('historyView maps days and repos', () => {
   const h = historyView({ days: [{ date: '2026-10-06', primary_usd: 1.5, secondary_usd: 0.25, requests: 40, other: 1 }], repos: [{ repo: 'plexiform', path: '/Users/x/plexiform', usd: 2, saved_usd: 0.5 }] });
-  assert.deepEqual(h, { days: [{ day: '2026-10-06', primaryUsd: 1.5, secondaryUsd: 0.25, requests: 40, secondaryRequests: 0 }], repos: [{ repo: 'plexiform', usd: 2, savedUsd: 0.5, requests: 0 }] });
+  assert.deepEqual(h, { days: [{ day: '2026-10-06', primaryUsd: 1.5, secondaryUsd: 0.25, requests: 40, secondaryRequests: 0 }], repos: [{ repo: 'plexiform', usd: 2, savedUsd: 0.5, netSavedUsd: 0.5, compacted: false, requests: 0 }] });
   assert.deepEqual(historyView(null), { days: [], repos: [] });
 });

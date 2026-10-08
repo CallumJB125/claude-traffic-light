@@ -49,7 +49,7 @@ test('usage channel: Burst\'s 14-day history, normalized, cached between polls',
   await settle();
   const r = await t.handlers['burst:usage']({ usage: true }, '7d');
   assert.deepEqual(r.history.days, [{ day: '2026-10-06', primaryUsd: 9, secondaryUsd: 0.25, requests: 40, secondaryRequests: 4 }]);
-  assert.deepEqual(r.history.repos, [{ repo: 'plexiform', usd: 2, savedUsd: 0.5, requests: 40 }]);
+  assert.deepEqual(r.history.repos, [{ repo: 'plexiform', usd: 2, savedUsd: 0.5, netSavedUsd: 0.5, compacted: false, requests: 40 }]);
   assert.doesNotMatch(JSON.stringify(r.history), /\/Users/);
   await t.handlers['burst:usage']({ usage: true }, '7d');
   assert.deepEqual(history.calls, [{ days: 14 }]);

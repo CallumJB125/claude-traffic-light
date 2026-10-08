@@ -20,7 +20,7 @@ async function render(reply) {
 test('Through Burst: 14-day bars by slot and per-repository compaction savings, no plan dollars', async () => {
   const history = {
     days: [{ day: '2026-10-05', requests: 0, secondaryRequests: 0, primaryUsd: 0, secondaryUsd: 0 }, { day: '2026-10-06', requests: 40, secondaryRequests: 4, primaryUsd: 9, secondaryUsd: 0.25 }],
-    repos: [{ repo: 'plexiform', usd: 2, savedUsd: 0.5, requests: 40 }, { repo: 'quiet', usd: 1, savedUsd: 0, requests: 3 }],
+    repos: [{ repo: 'plexiform', usd: 2, savedUsd: 0.5, netSavedUsd: 0.5, compacted: true, requests: 40 }, { repo: 'pricey', usd: 2, savedUsd: 0, netSavedUsd: -1.63, compacted: true, requests: 9 }, { repo: 'quiet', usd: 1, savedUsd: 0, netSavedUsd: 0, compacted: false, requests: 3 }],
   };
   const sec = await render({ view: VIEW, codex: null, history, nextPollMs: 0 });
   assert.equal(sec.hidden, false);
@@ -28,6 +28,8 @@ test('Through Burst: 14-day bars by slot and per-repository compaction savings, 
   assert.equal(strip.children.length, 2);
   assert.match(strip.getAttribute('aria-label'), /40 requests .* 4 requests to backup/);
   assert.match(sec.textContent, /plexiform: \$0\.50 saved/);
+  assert.match(sec.textContent, /pricey: cost \$1\.63 more than it saved/);
+  assert.match(sec.textContent, /No backup-provider spend in the last 7 days/);
   assert.doesNotMatch(sec.textContent, /quiet|\$9/);
 });
 

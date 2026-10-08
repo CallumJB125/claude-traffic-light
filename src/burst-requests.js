@@ -38,14 +38,14 @@ function requestsView(raw, { limit = 200 } = {}) {
   return { rows: rows.slice(0, Math.max(0, limit)) };
 }
 
-// scrubbed GET /api/history -> { days: [{ day, primaryUsd, secondaryUsd, requests, secondaryRequests }], repos: [{ repo, usd, savedUsd, requests }] }
+// scrubbed GET /api/history -> { days: [{ day, primaryUsd, secondaryUsd, requests, secondaryRequests }], repos: [{ repo, usd, savedUsd, netSavedUsd (signed: compaction can cost more than it saves), compacted, requests }] }
 function historyView(raw) {
   const h = raw && typeof raw === 'object' ? raw : {};
   return {
     days: (Array.isArray(h.days) ? h.days : []).slice(0, 90).map((d) => ({
       day: str(d && d.date, 10), primaryUsd: num(d && d.primary_usd), secondaryUsd: num(d && d.secondary_usd), requests: num(d && d.requests), secondaryRequests: num(d && d.secondary_requests),
     })),
-    repos: (Array.isArray(h.repos) ? h.repos : []).slice(0, 50).map((r) => ({ repo: str(r && r.repo, 100), usd: num(r && r.usd), savedUsd: num(r && r.saved_usd), requests: num(r && r.requests) })),
+    repos: (Array.isArray(h.repos) ? h.repos : []).slice(0, 50).map((r) => ({ repo: str(r && r.repo, 100), usd: num(r && r.usd), savedUsd: num(r && r.saved_usd), netSavedUsd: Number.isFinite(r && r.saved_usd) ? r.saved_usd : 0, compacted: !!(r && r.compacted), requests: num(r && r.requests) })),
   };
 }
 

@@ -61,7 +61,7 @@
     if (b.kind !== 'on' || !b.band) return { ...base, status: st('', 'Comes with Claude Burst'), note: 'Burst\'s installer adds it.' };
     const m = b.band;
     if (!m.supported) return { ...base, status: st('', 'Needs a newer Claude Code') };
-    if (!m.installed) return { ...base, status: st('', 'Not installed'), note: 'Repair Burst to install it again.', actions: [act('burst:repair', 'Repair Burst')] };
+    if (!m.installed) return { ...base, status: st('', 'Not installed'), note: 'Repair Burst installs it: Terminal opens with the command, and nothing runs until you confirm.', actions: [act('burst:repair', 'Repair Burst…')] };
     if (!m.current) return { ...base, status: st('amber', 'Installed, out of date'), actions: [act('burst:update', 'Update Burst')] };
     return { ...base, status: st('green', m.toasts ? 'On, with alerts' : 'On') };
   }
@@ -79,7 +79,7 @@
   // w: the cost-guard report's waste (null when the plan lacks it).
   function wasteTool(w) {
     const base = { id: 'waste', name: 'Waste finder', by: BY_US, what: 'Reads your Claude Code transcripts on this computer for the same file read again and again, the same failing call repeated, and Opus doing routine work Sonnet could do.', saves: null, actions: [act('open:usage', 'See findings')] };
-    if (!w) return { ...base, status: st('', 'Not on your plan'), note: "The waste finder isn't part of your current plan." };
+    if (!w) return { ...base, status: st('', 'Not on your plan'), note: "The waste finder isn't part of your current plan.", actions: [] };
     const t = w.totals || {};
     const o = t.overkill || {};
     const days = num(w.days) || 7;
