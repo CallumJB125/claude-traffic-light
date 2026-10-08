@@ -1081,6 +1081,7 @@ function setShowArchived(on) {
 }
 
 async function archiveCards(ids) {
+  let done = 0;
   for (const id of ids) {
     const res = await withBusy(`${id}:archive`, () => api.archiveCard(id));
     if (!res?.card) continue;
@@ -1088,8 +1089,10 @@ async function archiveCards(ids) {
     if (state.showArchived) state.archived?.set(id, { view: res.card, rx: perf() });
     state.cardsRev += 1;
     if (!state.showArchived && state.detail?.cardId === id) closeDrawer();
-    toast(`${res.card.key} archived. Show archived to restore it.`);
+    done += 1;
+    if (ids.length === 1) toast(`${res.card.key} archived. Show archived to restore it.`);
   }
+  if (ids.length > 1 && done) toast(`${done} idle sessions cleared. Show archived to restore them.`);
   if (!state.showArchived) state.selection = pruneSelection(state.selection, state.cards.keys());
   update();
 }
@@ -2077,6 +2080,7 @@ function onClick(e) {
     case 'toggle-done': state.showAllDone = !state.showAllDone; update(); return;
     case 'toggle-archived': setShowArchived(!state.showArchived); return;
     case 'archive': archiveCards([cardId]); return;
+    case 'clear-idle': archiveCards((el.dataset.ids || '').split(',').filter(Boolean)); return;
     case 'restore': restoreCards([cardId]); return;
     case 'view': setView(el.dataset.view); return;
     case 'history-range': if (el.dataset.range !== state.history.range) { state.history.selected = null; loadHistory(el.dataset.range); } return;

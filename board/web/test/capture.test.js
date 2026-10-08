@@ -37,3 +37,11 @@ test('a captured card without a record body shows no record block; a plain legac
  assert.equal(textOf(byClass(n2,'capture-summary')[0]),'Fixed the flaky test');assert.equal(byClass(n2,'capture-goal').length,0);
  const run=view({capture:{...capture,summary:'Goal: x'}}), n3=card({view:run,face:displayFace(run),elapsed_ms:0},model([]));assert.equal(byClass(n3,'capture-record').length,0);
 });
+test('the Idle column offers one button that carries every live idle card id, and none when empty or read-only', async () => {
+ const { idleColumn } = await import('../js/render-board.js');
+ const mk = id => { const v = observed({ id }); return { view: v, face: displayFace(v), elapsed_ms: 0 }; };
+ const btn = n => byAttr(n, 'data-action', 'clear-idle')[0];
+ assert.equal(btn(idleColumn([mk('a'), mk('b')], model([]))).props['data-ids'], 'a,b');
+ assert.equal(btn(idleColumn([], model([]))), undefined);
+ assert.equal(btn(idleColumn([mk('a')], { ...model([]), readOnly: true })), undefined);
+});

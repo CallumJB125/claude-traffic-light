@@ -253,7 +253,8 @@ export function idleColumn(entries, model) {
   return h('section', { key: 'idle', class: 'column column-idle', 'data-column': 'idle', 'aria-labelledby': 'col-idle' },
     h('header', { class: 'column-head' },
       h('h2', { id: 'col-idle', title: 'No update for a few minutes. Hidden after a day; use Show archived to see them.' }, COLUMN_LABEL.idle),
-      h('span', { class: 'column-count num', 'aria-label': `${count} cards` }, String(count))),
+      h('span', { class: 'column-count num', 'aria-label': `${count} cards` }, String(count)),
+      count && !model.readOnly ? h('button', { type: 'button', class: 'btn btn-sm btn-ghost', 'data-action': 'clear-idle', 'data-ids': entries.filter((e) => !e.view.archived).map((e) => e.view.id).join(','), title: 'Archive every idle session. Show archived brings them back.' }, 'Clear all') : null),
     h('div', { class: 'column-body' }, count ? entries.map((e) => card(e, model)) : [h('p', { key: 'empty', class: 'column-empty' }, EMPTY.idle)]));
 }
 
