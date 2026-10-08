@@ -70,6 +70,7 @@
       "home.html",
       "home.css",
       "home.js",
+      "home-digest.js",
       "home-preload.js",
       "home-alerts-view.js",
       "settings.html",
