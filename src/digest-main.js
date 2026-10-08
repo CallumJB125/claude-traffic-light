@@ -15,12 +15,13 @@ const { createSecureStorage } = require('../buddy-window/secure-storage.js');
 const MAILTO_BODY_MAX = 1800;
 const period = (p) => (p === 'week' ? 'week' : 'day');
 
-function register({ ipcMain, allowed, rootDir, userData, safeStorage, clipboard, dialog, shell, Notification, fetch, usageTurns, costGuard, teamBrief = async () => null, openHome = () => {}, onQuit = () => {}, log = () => {} }) {
+function register({ ipcMain, allowed, rootDir, userData, safeStorage, clipboard, dialog, shell, Notification, fetch, usageTurns, costGuard, workCost = async () => null, teamBrief = async () => null, openHome = () => {}, onQuit = () => {}, log = () => {} }) {
   const secure = createSecureStorage(safeStorage);
   const digest = createDigest({
     tasksStoreDir: path.join(userData, 'tasks', 'store'),
     recordsFile: path.join(userData, 'work-records.json'),
     turns: usageTurns, report: costGuard,
+    shipped: async () => { const r = await workCost(); return r?.week ? { cost: r.week } : null; },
     // The team brief is about one repository: the one you worked in most recently. Home only, never sent anywhere.
     team: async (turns) => {
       const last = (Array.isArray(turns) ? turns : []).reduce((a, t) => (t?.cwd && (!a || t.ts > a.ts) ? t : a), null);

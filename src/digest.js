@@ -17,6 +17,7 @@ const { cleanTitle } = require('./title-clean.js');
 const { redactSecretsPass } = require('./scrub.js');
 const { readTasks } = require('./morning-report.js');
 const { finding } = require('../usage-waste-view.js');
+const Shipped = require('./shipped-report.js');
 
 const PERIODS = new Set(['day', 'week']);
 const LIST_MAX = 8;
@@ -77,7 +78,7 @@ function readRecords(file) {
 const sessionName = (r) => [PROVIDER[r.adapter] || 'AI', r.folder ? `session in ${r.folder}` : 'session', r.branch ? `(branch ${r.branch})` : ''].filter(Boolean).join(' ');
 
 // The facts for one period, already cleaned. Pure: callers pass what they read.
-function gather({ period = 'day', now = Date.now(), tasks = [], records = [], turns = [], report = null, team = null, home, username } = {}) {
+function gather({ period = 'day', now = Date.now(), tasks = [], records = [], turns = [], report = null, team = null, shipped = null, home, username } = {}) {
   const p = PERIODS.has(period) ? period : 'day';
   const { from } = windowOf(p, now);
   const c = (v, n) => clean(v, n, { home, username });
@@ -112,6 +113,7 @@ function gather({ period = 'day', now = Date.now(), tasks = [], records = [], tu
     spend: spendOf(turns, p, now),
     saved: receipt && !receipt.teaser && typeof receipt.headline === 'string' ? c(receipt.headline, 200) : null,
     waste: waste && Array.isArray(waste.findings) && waste.findings.length ? c(finding(waste.findings[0]), 240) : null,
+    shipped: p === 'week' && shipped ? Shipped.sections({ records, cost: shipped.cost, prs: shipped.prs, now, clean: c }) : [],
     team: typeof team === 'string' && team.trim() ? c(team, 600) : null,
   };
 }
@@ -150,6 +152,7 @@ function compose(data) {
   else spend.push(`${money(s.current)} today, ${change(s.current, s.previous, 'yesterday')}.`, `${money(s.week)} over the last 7 days.`);
   if (s.unpriced) spend.push(`${plural(s.unpriced, 'reply', 'replies')} from models without a known price ${s.unpriced === 1 ? 'is' : 'are'} not counted.`);
   sections.push({ id: 'spend', heading: 'Spend (at API list prices)', summary: null, items: spend });
+  if (Array.isArray(d.shipped)) sections.push(...d.shipped);
   if (d.saved) sections.push({ id: 'saved', heading: 'Saved by Plexiform', summary: null, items: [d.saved] });
   if (d.waste) sections.push({ id: 'waste', heading: 'Top waste finding', summary: null, items: [d.waste] });
   const lines = (sec) => [sec.summary, ...sec.items].filter(Boolean);
@@ -161,14 +164,14 @@ function compose(data) {
 }
 
 // Reads the local sources and composes. report() and team() are optional and may be async.
-function createDigest({ tasksStoreDir, recordsFile, turns = async () => [], report = async () => null, team = async () => null, now = Date.now, home = os.homedir(), username = user() }) {
+function createDigest({ tasksStoreDir, recordsFile, turns = async () => [], report = async () => null, team = async () => null, shipped = async () => null, now = Date.now, home = os.homedir(), username = user() }) {
   const safe = async (fn, ...a) => { try { return await fn(...a); } catch { return null; } };
   return {
     async build(period = 'day', { withTeam = false } = {}) {
       const t = now();
-      const [allTurns, rep] = await Promise.all([safe(turns), safe(report)]);
+      const [allTurns, rep, ship] = await Promise.all([safe(turns), safe(report), period === 'week' ? safe(shipped) : null]);
       const brief = withTeam ? await safe(team, allTurns) : null;
-      return compose(gather({ period, now: t, tasks: tasksStoreDir ? readTasks(tasksStoreDir) : [], records: recordsFile ? readRecords(recordsFile) : [], turns: allTurns || [], report: rep, team: brief, home, username }));
+      return compose(gather({ period, now: t, tasks: tasksStoreDir ? readTasks(tasksStoreDir) : [], records: recordsFile ? readRecords(recordsFile) : [], turns: allTurns || [], report: rep, team: brief, shipped: ship, home, username }));
     },
   };
 }
