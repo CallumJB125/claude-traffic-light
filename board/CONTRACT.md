@@ -267,7 +267,7 @@ When the socket drops, the web shows one banner "Board connection lost: states a
   overlaps: [OverlapView],
   budget: {spent_usd, cap_usd} | null,
   pr: {number, url, state:'open'|'merged'|'closed', merged_by?, merged_age_ms?} | null,
-  pr_link_status: {state:'open'|'draft'|'merged'|'closed'|null, checks:'passing'|'failing'|'pending'|'none'|null, review:'none'|'requested'|'changes_requested'|'approved'|null} | null,   // additive (D42): the status an integration stored on the card's newest 'pr' external_link (of a connection not revoked); null when none. `pr` above stays the merge poll's
+  pr_link_status: {state:'open'|'draft'|'merged'|'closed'|null, checks:'passing'|'failing'|'pending'|'none'|null, review:'none'|'requested'|'changes_requested'|'approved'|null, number?, url?} | null,   // additive (D42): the status an integration stored on the card's newest 'pr' external_link (of a connection not revoked); null when none. number and url only when the link is an https://github.com/<o>/<r>/pull/<n> URL. `pr` above stays the merge poll's
   evidence: {tests:'pass'|'fail'|'none'|null, verification:'hub_verified'|'self_reported'} | null }
 
 LeaseView  = { hb_age_ms, child_alive, activity_age_ms,

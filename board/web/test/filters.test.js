@@ -80,10 +80,10 @@ test('applyFilters reports shown and total, and leaves the list alone when nothi
 
 test('filterOptions: per-chip counts, labels by frequency, people on cards', () => {
   const o = filterOptions(entries, ctx);
-  assert.deepEqual(o.counts, { mine: 2, needs: 1, working: 1, blocked: 2 });
+  assert.deepEqual(o.counts, { mine: 2, needs: 1, working: 1, blocked: 2, review: 0 });
   assert.deepEqual(o.labels, [{ label: 'api', n: 2 }, { label: 'db', n: 1 }, { label: 'payments', n: 1 }]);
   assert.deepEqual(o.people.map((p) => p.id), ['m-alice', 'm-bob']);
-  assert.equal(CHIPS.length, 4);
+  assert.equal(CHIPS.length, 5);
 });
 
 // ── render ──────────────────────────────────────────────────────────────────
@@ -96,13 +96,13 @@ const withFilters = (fl, extra = {}) => {
   });
 };
 
-test('filter bar: search with "/", four chips with counts and pressed state, label and person pickers', () => {
+test('filter bar: search with "/", five chips with counts and pressed state, label and person pickers', () => {
   const bar = filterBar(withFilters(f({ chips: ['blocked'], q: 'x' })));
   const input = byAttr(bar, 'data-input', 'filter-q')[0];
   assert.equal(input.props.value, 'x');
   assert.equal(input.props['aria-keyshortcuts'], '/');
   const chips = byAttr(bar, 'data-action', 'filter-chip');
-  assert.deepEqual(chips.map((c) => [c.props['data-chip'], c.props['aria-pressed']]), [['mine', 'false'], ['needs', 'false'], ['working', 'false'], ['blocked', 'true']]);
+  assert.deepEqual(chips.map((c) => [c.props['data-chip'], c.props['aria-pressed']]), [['mine', 'false'], ['needs', 'false'], ['working', 'false'], ['blocked', 'true'], ['review', 'false']]);
   assert.match(textOf(chips[3]), /Blocked2/);
   assert.equal(byAttr(bar, 'data-change', 'filter-label').length, 1);
   assert.equal(byAttr(bar, 'data-change', 'filter-assignee').length, 1);

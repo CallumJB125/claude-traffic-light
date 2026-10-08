@@ -14,5 +14,6 @@ export function workCaptureView(hub, cardId) {
     // (src/work-record.js cardBody) for the card face. A team hub's view never echoes it.
     ...(hub.config?.auth === 'local' && typeof row.managed_body === 'string' && row.managed_body ? { summary: row.managed_body.slice(0, 2000) } : {}),
     ...(hub.config?.auth === 'local' && row.cost_usd != null ? { cost: { usd: row.cost_usd, unpriced: row.cost_unpriced ?? 0 } } : {}),
+    ...(hub.config?.auth === 'local' && row.pr ? { pr: JSON.parse(row.pr) } : {}),
     grants_execution: false, verified_run: false };
 }

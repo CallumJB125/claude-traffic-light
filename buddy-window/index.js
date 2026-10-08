@@ -122,7 +122,7 @@ async function probeHub(origin, partition) {
   });
 }
 
-function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onClosed = () => {}, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged, devAccountsHub = null, captureEnabled = true, onCaptureChange = () => {}, onOverviewRetired = () => {}, isConstrained = () => false, handoverWriter = () => null, spendFor = () => null, openTimeline = () => false, continueIn = null } = {}) {
+function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onClosed = () => {}, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged, devAccountsHub = null, captureEnabled = true, onCaptureChange = () => {}, onOverviewRetired = () => {}, isConstrained = () => false, handoverWriter = () => null, spendFor = () => null, openTimeline = () => false, continueIn = null, prFor = () => null } = {}) {
   // The dev-only mock accounts hub runs on loopback; that one exact origin is
   // the only non-https hub ever accepted.
   const allowOrigins = devAccountsHub && isDev ? [devAccountsHub] : [];
@@ -277,6 +277,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       return { routes, complete };
     },
     spendFor: (o) => spendFor(o),
+    prFor: (o) => prFor(o),
     sendLocal: (body) => supervisor.captureWork(body),
     async sendTeam(destination, body) {
       if (!signedIn(destination.hub) || userOf(destination.hub)?.id !== destination.user_id) return { ok: false };
@@ -1092,6 +1093,11 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       const { routes } = await workCapture.routes();
       const route = (routes || []).find((r) => (repo ? r.repo_id === repo || r.canonical_url === repo : !!canonical && r.canonical_url === canonical) && signedIn(r.hub) && userOf(r.hub)?.id === r.user_id);
       return route ? { repo: route.canonical_url, route, token: () => tokenFor(route.hub) } : null;
+    },
+    // Main-only (src/team-today.js): the board a linked route is on, as the Board page shows it to you.
+    async teamBoardSnapshot(route) {
+      if (!route || !signedIn(route.hub) || userOf(route.hub)?.id !== route.user_id) return null;
+      return clientFor(route.hub).nativeBoard('snapshot', { team: route.team_id, board: route.board_id });
     },
     // Main-only (src/team-activity.js memoryPage): every linked team route this computer is signed in for.
     async teamMemoryLinks() {

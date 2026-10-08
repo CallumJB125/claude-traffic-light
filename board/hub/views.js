@@ -75,11 +75,12 @@ function prView(hub, row) {
 // The integration's own view of the card's newest PR link (D42), beside
 // `pr` (the merge poll's): additive, and only allowlisted values.
 function prLinkStatus(hub, row) {
-  const l = hub.db.get(`SELECT l.status FROM external_links l JOIN connections c ON c.id = l.connection_id
+  const l = hub.db.get(`SELECT l.status, l.url FROM external_links l JOIN connections c ON c.id = l.connection_id
     WHERE l.card_id = ? AND l.kind = 'pr' AND c.status != 'revoked' ORDER BY l.created_at DESC, l.rowid DESC LIMIT 1`, row.id);
   if (!l?.status) return null;
   const s = cleanLinkStatus(json(l.status, null));
-  return Object.keys(s).length ? { state: s.state ?? null, checks: s.checks ?? null, review: s.review ?? null } : null;
+  const pull = typeof l.url === 'string' ? /^https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/([1-9][0-9]{0,9})$/.exec(l.url) : null;
+  return Object.keys(s).length ? { state: s.state ?? null, checks: s.checks ?? null, review: s.review ?? null, ...(pull ? { number: Number(pull[1]), url: l.url } : {}) } : null;
 }
 
 function askView(hub, row) {

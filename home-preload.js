@@ -8,6 +8,9 @@ contextBridge.exposeInMainWorld('homeApi', {
   morningSeen: () => ipcRenderer.invoke('home:morning-seen'),
   alerts: () => ipcRenderer.invoke('home:alerts'),
   alertAct: (kind, action, handle) => (['stuck', 'limit'].includes(kind) && ['open', 'handoff', 'dismiss', 'resume'].includes(action) && typeof handle === 'string' && handle.length <= 100 ? ipcRenderer.invoke('home:alert', kind, action, handle) : Promise.resolve({ ok: false })),
+  teamToday: () => ipcRenderer.invoke('home:team-today'),
+  teamTodaySeen: () => ipcRenderer.invoke('home:team-today-seen'),
+  teamTodayRefresh: () => ipcRenderer.invoke('home:team-today-refresh'),
   openCard: (handle) => (typeof handle === 'string' && handle.length <= 100 ? ipcRenderer.invoke('home:open-card', handle) : Promise.resolve(false)),
   digest: {
     get: (period) => ipcRenderer.invoke('digest:get', period === 'week' ? 'week' : 'day'),

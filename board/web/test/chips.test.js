@@ -11,33 +11,36 @@ const chipsOf = (v, opts = {}) => cardChips(v, displayFace(v, opts), opts);
 const ids = (cs) => cs.map((c) => c.id);
 const review = (extra = {}) => view({ run_state: 'in_review', live: null, state_age_ms: 5000, pr: { number: 1042, url: 'https://github.com/o/r/pull/1042', state: 'open' }, evidence: { tests: 'pass', verification: 'hub_verified' }, ...extra });
 
-test('in review: proof chip with tests, PR number and who verified it; a link to the PR', () => {
-  const [proof] = chipsOf(review());
+test('in review: a PR chip that links to the PR, then a proof chip with tests and who verified them', () => {
+  const [pr, proof] = chipsOf(review());
+  assert.deepEqual([pr.id, pr.text, pr.href], ['pr', 'PR #1042', 'https://github.com/o/r/pull/1042']);
   assert.equal(proof.id, 'proof');
-  assert.equal(proof.text, 'tests ✓ · PR #1042 · hub-verified');
+  assert.equal(proof.text, 'tests ✓ · hub-verified');
   assert.equal(proof.tone, 'green');
   assert.equal(proof.icon, 'check');
-  assert.equal(proof.href, 'https://github.com/o/r/pull/1042');
+  assert.equal(proof.href, undefined, 'the PR chip is the one link');
   assert.match(proof.title, /Verified by the hub/);
 });
 
 test('in review: self-reported evidence is not green, failing tests are red, no tests is called out', () => {
-  assert.equal(chipsOf(review({ evidence: { tests: 'pass', verification: 'self_reported' } }))[0].tone, 'quiet');
-  assert.match(chipsOf(review({ evidence: { tests: 'pass', verification: 'self_reported' } }))[0].text, /self-reported$/);
-  const fail = chipsOf(review({ evidence: { tests: 'fail', verification: 'hub_verified' } }))[0];
+  const proofOf = (v) => chipsOf(v).find((c) => c.id === 'proof');
+  assert.equal(proofOf(review({ evidence: { tests: 'pass', verification: 'self_reported' } })).tone, 'quiet');
+  assert.match(proofOf(review({ evidence: { tests: 'pass', verification: 'self_reported' } })).text, /self-reported$/);
+  const fail = proofOf(review({ evidence: { tests: 'fail', verification: 'hub_verified' } }));
   assert.deepEqual([fail.tone, fail.icon, fail.text.startsWith('tests ✗')], ['red', 'cross', true]);
-  const none = chipsOf(review({ evidence: { tests: 'none', verification: 'self_reported' } }))[0];
+  const none = proofOf(review({ evidence: { tests: 'none', verification: 'self_reported' } }));
   assert.equal(none.tone, 'amber');
-  assert.match(none.text, /^no tests · PR #1042/);
+  assert.equal(none.text, 'no tests · self-reported');
   assert.equal(chipsOf(review({ pr: null, evidence: null, budget: null })).length, 0, 'nothing to prove, no chip');
 });
 
 test('done: a compact proof, without the verification word', () => {
   const done = view({ run_state: 'done', live: null, pr: { number: 88, url: 'https://x/pr/88', state: 'merged', merged_age_ms: 3000 }, evidence: { tests: 'pass', verification: 'hub_verified' }, budget: null });
-  const [proof] = chipsOf(done);
-  assert.equal(proof.text, 'tests ✓ · PR #88');
-  const merged = chipsOf(view({ run_state: 'done', live: null, budget: null, pr: { number: 9, url: 'u', state: 'merged' }, evidence: null }))[0];
-  assert.deepEqual([merged.text, merged.icon], ['PR #9', 'check']);
+  const [pr, proof] = chipsOf(done);
+  assert.equal(pr.text, 'PR #88 · merged');
+  assert.equal(proof.text, 'tests ✓');
+  const merged = chipsOf(view({ run_state: 'done', live: null, budget: null, pr: { number: 9, url: 'u', state: 'merged' }, evidence: null }));
+  assert.deepEqual(merged.map((c) => [c.id, c.text, c.icon]), [['pr', 'PR #9 · merged', 'check']]);
 });
 
 test('proof only on in review and done', () => {
@@ -74,10 +77,10 @@ test('cost: compact spent/cap with a ratio and a level; hidden on an idle card w
   assert.equal(chipsOf(view({ budget: null })).find((x) => x.id === 'cost'), undefined);
 });
 
-test('order is proof, handover, cost', () => {
+test('order is PR, proof, handover, cost', () => {
   const v = review({ run: view().run, handover: { version: 1, synced_age_ms: 1000 }, budget: { spent_usd: 1, cap_usd: 5 } });
-  // in_review has no live run state in handover set, so only proof + cost here
-  assert.deepEqual(ids(chipsOf(v)), ['proof', 'cost']);
+  // in_review has no live run state in handover set, so only PR + proof + cost here
+  assert.deepEqual(ids(chipsOf(v)), ['pr', 'proof', 'cost']);
   const live = view({ handover: { version: 1, synced_age_ms: 1000 }, budget: { spent_usd: 1, cap_usd: 5 } });
   assert.deepEqual(ids(chipsOf(live)), ['handover', 'cost']);
 });
@@ -86,7 +89,8 @@ test('card face: chips render in one row; the in-review pill drops its reason be
   const v = review({ budget: { spent_usd: 0.5, cap_usd: 5 } });
   const n = card({ view: v, face: displayFace(v), elapsed_ms: 0 }, model([]));
   const row = byClass(n, 'card-chips')[0];
-  assert.match(textOf(row), /tests ✓ · PR #1042 · hub-verified/);
+  assert.match(textOf(row), /PR #1042/);
+  assert.match(textOf(row), /tests ✓ · hub-verified/);
   assert.match(textOf(row), /\$0\.50\/\$5/);
   assert.equal(findAll(row, (x) => x.tag === 'a' && x.props.href === 'https://github.com/o/r/pull/1042').length, 1);
   assert.equal(byClass(n, 'pill-reason').length, 0, 'not said twice');
