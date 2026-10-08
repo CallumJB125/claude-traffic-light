@@ -167,6 +167,8 @@ function createOptimiser({
     nav: () => nav.slice(),
     active: () => active,
     hasView: () => !!view,
+    // Dev shots: the embedded dashboard is its own view, so the page capture never includes it.
+    capture: () => { const wc = wcOf(); return wc && view && (win()?.contentView.children || []).includes(view) ? wc.capturePage() : Promise.resolve(null); },
     section(id) {
       const wc = wcOf();
       const js = Embed.sectionScript(id);

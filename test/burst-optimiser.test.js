@@ -381,3 +381,12 @@ test('tab resets to Dashboard when Burst stops being present', async () => {
   assert.equal(r.o.payload().tab, 'dashboard');
   assert.deepEqual(r.children, [r.views[r.views.length - 1]]);
 });
+
+test('dev shots: the embedded dashboard is captured on its own, only while it is shown', async () => {
+  const r = rig();
+  await r.o.open();
+  r.views[0].webContents.capturePage = async () => 'png';
+  assert.equal(await r.o.capture(), 'png');
+  await r.o.act('tab:tools');
+  assert.equal(await r.o.capture(), null);
+});

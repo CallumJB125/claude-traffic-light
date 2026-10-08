@@ -4784,6 +4784,7 @@ app.whenReady().then(() => {
         const prefix = process.argv[shotAt + 1];
         fs.writeFileSync(`${prefix}-sidebar.png`, shots.sidebar.toPNG());
         if (shots.content) fs.writeFileSync(`${prefix}-content.png`, shots.content.toPNG());
+        if (shots.burst) fs.writeFileSync(`${prefix}-burst.png`, shots.burst.toPNG());
         console.log('[buddy-shot]', JSON.stringify(buddyWin.status()));
         app.quit();
       }, Number(process.env.BUDDY_SHOT_DELAY_MS ?? 6000));
