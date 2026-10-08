@@ -35,6 +35,18 @@ function normalizeCodex(raw) {
   return out.requests || out.tokens || out.usd || groups.length ? out : null;
 }
 
+// /api/codex `status` (Burst's reading of ~/.codex/config.toml) -> whether Codex goes through Burst.
+// Never the config path or base URL.
+function codexRouting(raw) {
+  const r = obj(raw);
+  const st = r && obj(r.status);
+  if (!st || typeof st.enabled !== 'boolean') return null;
+  const problem = st.invalid ? `Codex's config.toml does not parse: ${str(st.invalid, 160)}`
+    : st.conflict ? `Your config.toml sets model_provider = "${str(st.conflict, 60)}" itself, so Burst can't add its own.`
+    : !st.enabled && r.listening === false ? `Burst's Codex gateway is not running${r.listen_error ? `: ${str(r.listen_error, 160)}` : ''}.` : '';
+  return { installed: st.installed === true, enabled: st.enabled, problem };
+}
+
 function codexView(codex) {
   if (!codex) return null;
   return {
@@ -119,4 +131,4 @@ function contextFor(fills, sessionId) {
   return { tokens: f.tokens, limit: f.limit, pct: f.limit ? Math.min(100, Math.round((f.tokens / f.limit) * 100)) : null };
 }
 
-module.exports = { normalizeCodex, codexView, normalizeCoordination, coordinationFor, normalizeContextFill, contextFor };
+module.exports = { codexRouting, normalizeCodex, codexView, normalizeCoordination, coordinationFor, normalizeContextFill, contextFor };

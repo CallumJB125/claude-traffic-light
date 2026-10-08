@@ -218,6 +218,8 @@ const VALID_ARGS = {
   'coord-message': { session: SID, message: 'please commit src/a.js' },
   'coord-release': { release: '/Users/me/src/app/a.js' },
   trace: {},
+  'codex-enable': {},
+  'codex-disable': {},
 };
 const GATEWAY_KINDS = Object.keys(VALID_ARGS);
 const okRoutes = () => Object.fromEntries(Object.values(MUTATE_ALLOW).filter((m) => !m.target).map((m) => [m.path, { body: { ok: 'done' } }]));

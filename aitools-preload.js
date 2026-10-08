@@ -13,5 +13,7 @@ contextBridge.exposeInMainWorld('aiToolsApi', {
   fixRunner: () => ipcRenderer.invoke('aitools:fix-runner'),
   copy: (text) => ipcRenderer.invoke('aitools:copy', text),
   openInstall: (id) => ipcRenderer.invoke('aitools:open-install', id),
+  burstCodex: () => ipcRenderer.invoke('burst:codex-routing'),
+  burstAction: (id) => ipcRenderer.invoke('burst-action', id, {}),
   onChanged: (cb) => ipcRenderer.on('status-changed', () => cb()),
 });

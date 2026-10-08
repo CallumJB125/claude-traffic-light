@@ -92,6 +92,9 @@ const MUTATE_ALLOW = Object.freeze({
   trace: { path: '/api/trace', body: () => ({}), timeoutMs: 60000 },
   'console-restart': { target: 'console', path: '/api/console/restart', body: () => ({}), timeoutMs: 25000 },
   'console-diagnose': { target: 'console', path: '/api/console/diagnose', body: () => ({}), timeoutMs: 10000 },
+  // Burst writes or removes its own block in ~/.codex/config.toml, backing the file up first.
+  'codex-enable': { path: '/api/codex/enable', body: () => ({}) },
+  'codex-disable': { path: '/api/codex/disable', body: () => ({}) },
 });
 
 function isAllowed(method, urlPath) {
@@ -341,6 +344,7 @@ function createBurstClient({ home = os.homedir(), platform = process.platform, i
 
   // Both are best-effort extras: an older Burst answers 404 and callers treat any failure as absent.
   async function codex() { return Codex.normalizeCodex(await request('GET', '/api/codex')); }
+  async function codexRouting() { return Codex.codexRouting(await request('GET', '/api/codex')); }
   async function coordination({ days = 1 } = {}) { return Codex.normalizeCoordination(await request('GET', `/api/coordination?days=${[1, 7, 14].includes(days) ? days : 1}`)); }
 
   // Scrubbed raw answers for the normalizers in burst-route/-requests/-inspect/-notices and This Mac.
@@ -421,7 +425,7 @@ function createBurstClient({ home = os.homedir(), platform = process.platform, i
   }
 
   return {
-    detect, request, testConnection, requestUpgrade, setCompaction, usage, sessionSecondaryUsd, codex, coordination, handoverAudit, handoverFile,
+    detect, request, testConnection, requestUpgrade, setCompaction, usage, sessionSecondaryUsd, codex, codexRouting, coordination, handoverAudit, handoverFile,
     requests, history, inspect: inspectContext, audit, automask, mac, settings, modStatus, intelligentCompaction, consoleDetect, mutate,
     binPath,
     adminUrl: () => (addr ? `http://${addr.host === '::1' ? '[::1]' : addr.host}:${addr.port}/` : null),

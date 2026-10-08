@@ -43,10 +43,12 @@ const ACTIONS = Object.freeze({
   'coord-release': { consent: (a) => ({ title: 'Hand on', detail: `${a.release}\n\nThe session that most recently changed this file now commits it, or it is free.` }) },
   trace: { consent: () => ({ title: 'Send test message', detail: 'Burst sends one tiny real request through each step (DNS, redirect, TLS, credential, route) and reports where it stops. It uses a very small part of your Claude subscription.' }) },
   'console-restart': { console: true, consent: () => ({ title: 'Restart Burst', detail: 'Burst\'s support console restarts its gateway through launchd, or starts it if it is stopped; if Burst was turned off, this turns it back on. A request in flight may fail once.' }) },
+  'codex-enable': { consent: () => ({ title: 'Route Codex through Burst', detail: 'Burst adds its own block to ~/.codex/config.toml, after saving a copy of the file, so Codex sessions you start from now on send their requests through Burst. Running Codex sessions are not changed.' }) },
+  'codex-disable': { consent: () => ({ title: 'Stop routing Codex through Burst', detail: 'Burst removes its block from ~/.codex/config.toml, after saving a copy of the file. Codex sessions you start from now on talk to OpenAI directly again.' }) },
   'console-diagnose': { console: true, consent: () => ({ title: 'Diagnose Burst', detail: 'Burst\'s support console opens a Terminal window and writes a diagnose report you can copy.' }) },
 });
 
-function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usageAllowed = () => false, sessionsAllowed = () => false, accountAllowed = () => false, optimiserAllowed = () => false, stateFile = null, snapshotFile = null, transcriptFor = () => null, hubSend = null, runner = null, isMac, dialog, shell, scriptDir, home = os.homedir(), launch, client: injected, onView = () => {}, log = () => {} }) {
+function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usageAllowed = () => false, sessionsAllowed = () => false, accountAllowed = () => false, optimiserAllowed = () => false, aitoolsAllowed = () => false, stateFile = null, snapshotFile = null, transcriptFor = () => null, hubSend = null, runner = null, isMac, dialog, shell, scriptDir, home = os.homedir(), launch, client: injected, onView = () => {}, log = () => {} }) {
   const platform = isMac ? 'darwin' : 'other';
   const client = isMac ? (injected || require('./burst-client.js').createBurstClient({ home })) : null;
   const backoff = createProbeBackoff({ base: POLL_BASE_MS, max: POLL_MAX_MS });
@@ -263,7 +265,14 @@ function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usag
     }
   }
   const anyPage = (e) => card(e) || usageAllowed(e) || sessionsAllowed(e) || optimiserAllowed(e);
-  utilityHandle('burst-action', anyPage, async (_e, id, args) => runAction(id, args));
+  const CODEX_ACTIONS = new Set(['codex-enable', 'codex-disable']);
+  utilityHandle('burst-action', (e) => anyPage(e) || aitoolsAllowed(e), async (e, id, args) => (anyPage(e) || CODEX_ACTIONS.has(id) ? runAction(id, args) : { ok: false, error: 'Not available.' }));
+
+  // AI tools page, Codex row: whether Codex goes through Burst. Null whenever Burst is not present.
+  utilityHandle('burst:codex-routing', aitoolsAllowed, async () => {
+    if (!present()) return { view: null };
+    try { return { view: await client.codexRouting() }; } catch (err) { log('[burst] codex routing failed', err && err.code); return { view: null }; }
+  });
 
   // Read-only views for the Usage optimiser and Sessions pages. Each name has its own senders.
   const optimiserOrUsage = (e) => optimiserAllowed(e) || usageAllowed(e);

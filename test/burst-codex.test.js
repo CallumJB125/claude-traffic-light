@@ -165,3 +165,15 @@ test('coordination view for the Sessions page is the normalized one, and only Se
     assert.equal(h.posts().length, 0);
   } finally { await h.done(); }
 });
+
+test('codexRouting: on/off and why it cannot be turned on; never the config path or base URL', () => {
+  const st = (status, over = {}) => Codex.codexRouting({ status: { path: '/Users/me/.codex/config.toml', installed: true, base_url: 'http://127.0.0.1:7790/v1', ...status }, listening: true, ...over });
+  assert.deepEqual(st({ enabled: true }), { installed: true, enabled: true, problem: '' });
+  assert.doesNotMatch(JSON.stringify(st({ enabled: true })), /config\.toml|7790/);
+  assert.match(st({ enabled: false, conflict: 'azure' }).problem, /model_provider = "azure"/);
+  assert.match(st({ enabled: false, invalid: 'line 3' }).problem, /does not parse: line 3/);
+  assert.match(st({ enabled: false }, { listening: false, listen_error: 'port in use' }).problem, /not running: port in use/);
+  assert.equal(Codex.codexRouting({ status: {} }), null);
+  assert.equal(Codex.codexRouting(null), null);
+  assert.equal(Codex.codexRouting({ requests: 3 }), null);
+});
