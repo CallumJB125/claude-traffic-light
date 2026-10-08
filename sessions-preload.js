@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('sessionsApi', {
   state: () => ipcRenderer.invoke('sessions:state'),
   settings: () => ipcRenderer.invoke('sessions:settings'),
   handover: (action, key) => ipcRenderer.invoke('sessions:handover', action, key),
+  timeline: key => ipcRenderer.invoke('timeline:open', key),
   setup: () => ipcRenderer.invoke('sessions:setup'),
   pickFolder: () => ipcRenderer.invoke('sessions:pick-folder'),
   linkRepo: (folder, board) => ipcRenderer.invoke('sessions:link-repo', { folder, board }),

@@ -1502,6 +1502,7 @@ function getBuddy() {
       devAccountsHub: app.isPackaged ? null : devAccountsHub,
       captureEnabled: !DEMO,
       handoverWriter: () => { try { return SessionHandoverMain.writer; } catch { return null; } },
+      openTimeline: (session) => SessionTimelineMain.openSession(session),
       onCaptureChange: () => refreshTrayMenu(),
       spendFor: (o) => { if (!usageMemo.turns) getUsageTurns().catch(() => {}); return WorkCost.sessionSpend(usageMemo.turns, o); },
     });
@@ -1814,6 +1815,7 @@ onQuit(app, () => BurstNotices.stop());
 let keepAwakeMain = null;
 keepAwakeMain = require('./src/keep-awake-ipc.js').register({ utilityHandle, allowed: (e) => fromPage(e, buddyWin?.accountWebContents?.()), isMac: IS_MAC, burst: BurstIpc, keepAwake: require('./src/keep-awake.js').createKeepAwake({ powerSaveBlocker }), dialog, getPref: () => { const v = loadConfig().keepAwake; return ['app', 'ac', 'always'].includes(v) ? v : 'off'; }, setPref: (v) => saveConfig({ keepAwake: v }), log: console.log });
 const SessionHandoverMain = require('./src/session-handover-main.js').register({ ipcMain, rootDir: ROOT_DIR, isExcluded: (cwd) => Quiet.projectMuted(loadConfig().mutedProjects, cwd), burstFor: (row) => { const h = BurstIpc.enrichSession({ sessionId: row.sessionId, cwd: row.cwd, source: row.adapter === 'claude-code' ? null : row.adapter }); return h && h.handover ? h.handover.text : null; }, home: os.homedir(), sessionsAllowed: sessionsSender, clipboard, shell, sessions: () => ({ live: localSessions(aggregateState().sessions || []), capture: buddyWin?.handoverSessions?.() ?? [] }), log: console.log });
+const SessionTimelineMain = require('./src/session-timeline-main.js').register({ ipcMain, rootDir: ROOT_DIR, home: os.homedir(), user: os.userInfo().username, hostname: os.hostname(), writer: () => SessionHandoverMain.writer, isExcluded: (cwd) => Quiet.projectMuted(loadConfig().mutedProjects, cwd), sessions: () => ({ live: localSessions(aggregateState().sessions || []), capture: buddyWin?.handoverSessions?.() ?? [] }), sessionsAllowed: sessionsSender, pageAllowed: (e) => fromUtilityPage(e, 'timeline'), openPage: (id) => openBuddy(id), pageContents: () => buddyWin?.pageWebContents('timeline'), dialog, BrowserWindow, downloads: () => app.getPath('downloads'), log: console.log });
 ipcMain.handle('account-view', (e) => {
   if (!settingsOnly(e)) return null;
   return TeamEntry.settingsView(accountSummary(), new URL(BRAND.DEFAULT_HUB).host);
