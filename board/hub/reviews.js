@@ -8,7 +8,7 @@
 // request_changes and approve_done transitions.
 
 import { randomUUID } from 'node:crypto';
-import sessionRouter from '../../src/session-router.js';
+import sessionRouter from '../shared/session-router.cjs';
 import { HubError, json } from './db.js';
 import { can } from './permissions.js';
 import { AI_LABELS, AI_CAPABILITIES, aiOfDispatch, acceptsAi } from '../shared/ai.js';

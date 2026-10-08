@@ -19,3 +19,10 @@ test('hosted board-only source can import remote collaboration without any deskt
   execFileSync(process.execPath,['--input-type=module','-e',code,module,shared,http],{cwd:dir,env:{PATH:process.env.PATH,NODE_NO_WARNINGS:'1'},stdio:'pipe',timeout:10000});
  }finally{rmSync(dir,{recursive:true,force:true});}
 });
+
+test('board/shared/session-router.js stays identical to the desktop copy (the hub cannot import src/)', async () => {
+  const { readFileSync } = await import('node:fs');
+  const a = readFileSync(new URL('../../shared/session-router.cjs', import.meta.url), 'utf8');
+  const b = readFileSync(new URL('../../../src/session-router.js', import.meta.url), 'utf8');
+  (await import('node:assert/strict')).default.equal(a, b);
+});

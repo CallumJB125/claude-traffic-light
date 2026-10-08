@@ -160,7 +160,7 @@ export function cloudPanel(model) {
   const c = model.cloud ?? {};
   const data = c.data;
   const runners = data?.runners ?? [];
-  return h('section', { class: 'team-invite', 'aria-labelledby': 'team-cloud-h' },
+  return h('section', { class: 'team-cloud', 'aria-labelledby': 'team-cloud-h' },
     h('h2', { class: 'team-needs-h', id: 'team-cloud-h' }, icon('sync', 'icon-xs'), 'Cloud runner'),
     h('p', { class: 'hint' }, 'An always-on runner on your own server keeps cards working while laptops are closed. Choose "Run in the cloud" when you send a card to an AI.'),
     c.status === 'loading' && !data ? h('p', { class: 'hint', role: 'status' }, 'Checking…') : null,
