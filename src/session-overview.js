@@ -69,7 +69,16 @@ function sharedOf(fn, rows) {
     }));
   } catch { return []; }
 }
-function snapshot({ sessions = [], activity = {}, available = true, now = Date.now(), enrich = null, handover = null, info = null, sharedTrees = null, collisions = null } = {}) {
+// The policy pack the row's repo is under and its latest refusal (src/policy.js rowInfo).
+function policyOf(fn, row) {
+  try {
+    const p = fn ? fn(row) : null;
+    if (!object(p)) return {};
+    const text = (v, n) => (typeof v === 'string' && v ? v.slice(0, n) : null);
+    return { policy: { name: text(p.name, 80), source: p.source === 'repo' || p.source === 'default' ? p.source : null, warning: text(p.warning, 300), blocked: object(p.blocked) && text(p.blocked.text, 400) ? { text: text(p.blocked.text, 400), tool: text(p.blocked.tool, 80), at: Number.isFinite(p.blocked.at) ? p.blocked.at : null } : null } };
+  } catch { return {}; }
+}
+function snapshot({ sessions = [], activity = {}, available = true, now = Date.now(), enrich = null, handover = null, info = null, sharedTrees = null, collisions = null, policy = null } = {}) {
   const time = Number.isFinite(now) && now >= 0 ? now : Date.now();
   let latest = null, omitted = 0;
   const rows = [];
@@ -104,6 +113,7 @@ function snapshot({ sessions = [], activity = {}, available = true, now = Date.n
       ...handoverOf(handover, row),
       ...actionsOf(info, row),
       ...collisionsOf(collisions, row),
+      ...policyOf(policy, row),
     });
   }
   rows.sort((a, b) => (a.age_ms ?? Infinity) - (b.age_ms ?? Infinity));

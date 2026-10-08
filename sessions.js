@@ -257,6 +257,7 @@ function render(snapshot) {
     const section = node('section', '', 'session');
     const heading = node('h2', `${item.provider} · ${item.project}`);
     heading.append(node('span', item.freshness === 'recent' ? 'Recent' : item.freshness === 'stale' ? 'Stale' : 'Freshness unknown', 'freshness'));
+    if (item.policy?.name) heading.append(node('span', `Policy: ${item.policy.name}`, 'freshness policy'));
     const confidence = item.freshness === 'recent' && snapshot.status !== 'unavailable' ? 'Reported' : 'Last reported';
     section.append(heading, node('p', `${confidence}: ${item.status}${item.stuck ? ` (${item.stuck.tool ? `last tool ${item.stuck.tool}, ` : ''}since ${Math.max(1, Math.round(item.stuck.since_ms / 60000))}m)` : ''} · Last seen ${age(item.age_ms).toLowerCase()} · Reported by ${item.provider}`, 'muted'));
     if (item.children?.length) {
@@ -264,6 +265,8 @@ function render(snapshot) {
       for (const child of item.children) list.append(node('li', `${child.label} · ${confidence}: ${child.status}`));
       section.append(list);
     }
+    if (item.policy?.blocked) section.append(node('p', `${item.policy.blocked.text}${item.policy.blocked.tool && item.policy.blocked.tool !== 'prompt' ? ` (${item.policy.blocked.tool})` : ''}`, 'warn'));
+    if (item.policy?.warning) section.append(node('p', item.policy.warning, 'muted'));
     if (item.sharedTree) section.append(node('p', `Shares its working tree with another live session (${item.sharedTree})`, 'warn'));
     for (const c of item.collisions ?? []) {
       const line = node('p', `Collision: ${c.text}. `, 'warn');
