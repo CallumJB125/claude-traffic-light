@@ -484,4 +484,4 @@ function register(ctx) {
   ctx.onQuit?.(() => engine.invalidate());
 }
 
-module.exports = { createPersonalSetups, register, diffLines, targetOf, SAFE_SETTINGS, ENVELOPE_KIND, LIMITS };
+module.exports = { createPersonalSetups, register, diffLines, targetOf, readChosen, writeChosen, SAFE_SETTINGS, ENVELOPE_KIND, LIMITS };

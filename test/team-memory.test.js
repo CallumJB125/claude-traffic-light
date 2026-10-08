@@ -132,7 +132,7 @@ function page(t, api) {
   const dom = new JSDOM(fs.readFileSync(path.join(ROOT, 'memory.html'), 'utf8'), { runScripts: 'outside-only', url: 'http://localhost/' });
   t.after(() => dom.window.close());
   dom.window.memoryApi = api;
-  dom.window.eval(fs.readFileSync(path.join(ROOT, 'memory.js'), 'utf8'));
+  for (const f of ['continue-menu.js', 'memory.js']) dom.window.eval(fs.readFileSync(path.join(ROOT, f), 'utf8'));
   return dom.window;
 }
 const localApi = (team) => ({

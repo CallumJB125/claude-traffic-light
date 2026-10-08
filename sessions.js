@@ -35,6 +35,7 @@ function handoverRow(section, h) {
       b.addEventListener('click', async () => { b.disabled = true; try { const ok = await window.sessionsApi.handover(action, h.key); b.textContent = ok ? (action === 'view' ? 'Opened' : 'Copied') : 'Unavailable'; } catch { b.textContent = 'Unavailable'; } setTimeout(() => { b.textContent = label; b.disabled = false; }, 1500); });
       row.append(document.createTextNode(' · '), b);
     }
+    row.append(document.createTextNode(' · '), continueButton(h.key));
   }
   const tl = node('button', 'Timeline', 'link'); tl.type = 'button';
   tl.addEventListener('click', async () => { const ok = await window.sessionsApi.timeline(h.key).catch(() => false); if (!ok) { tl.textContent = 'Unavailable'; setTimeout(() => { tl.textContent = 'Timeline'; }, 1500); } });
@@ -50,6 +51,28 @@ function handoverRow(section, h) {
     row.append(document.createTextNode(' · '), b);
   }
   section.append(row);
+}
+
+// Continue in another tool (src/continue-in.js): launched hand-offs, from here or a board card, reply above the rows.
+const continued = new Map();
+const continueApi = { reply: (id, text) => window.sessionsApi.continueReply(id, text), end: (id) => window.sessionsApi.continueEnd(id) };
+function continuePanel(r) { if (!continued.has(r.id)) continued.set(r.id, window.ContinueMenu.panel(r, document.getElementById('continued'), continueApi)); return continued.get(r.id); }
+window.sessionsApi.onContinue(ev => { if (ev && typeof ev.id === 'string') continuePanel(ev).event(ev); });
+function continueButton(key) {
+  const out = node('span', '', 'continue-note'); out.setAttribute('role', 'status');
+  const wrap = node('span');
+  wrap.append(window.ContinueMenu.button({
+    className: 'link',
+    menu: () => window.sessionsApi.continueMenu(),
+    onOpen: () => { editing = true; }, onClose: () => { editing = false; },
+    pick: async c => {
+      out.textContent = ' Working…';
+      const r = await window.sessionsApi.continueIn(key, c.id).catch(() => null);
+      if (r?.ok && r.mode === 'launched') { out.textContent = ''; continuePanel(r); return; }
+      out.textContent = ` ${r?.ok ? r.note || 'Copied.' : r?.error || 'That did not work.'}`;
+    },
+  }), out);
+  return wrap;
 }
 
 // ── Add sessions panel and per-row actions (src/session-actions.js) ──────────

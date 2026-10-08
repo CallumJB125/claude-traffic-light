@@ -1,0 +1,9 @@
+{
+  "id": "summarise-todays-ai-work",
+  "title": "Summarise today's AI work",
+  "what": "Collects what your AI sessions changed today across branches and worktrees in this repo and writes a short end-of-day summary.",
+  "prompt": "Summarise today's AI-assisted work in this repository.\n\n1. List today's commits on every branch with `git log --all --since=midnight --no-merges --stat`, including task branches such as buddy/*.\n2. List worktrees with `git worktree list` and note uncommitted changes in each (`git -C <worktree> status --short`).\n3. Write an end-of-day summary: what was finished, what is in progress and where, what is waiting for review or a merge, and anything that looks abandoned.\n4. Finish with the three most useful things to do first tomorrow.\n\nKeep it under 250 words. Do not change any files.",
+  "tool": "auto",
+  "edits": false,
+  "cost": "Low: reads git history and status only."
+}

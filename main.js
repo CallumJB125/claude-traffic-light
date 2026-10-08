@@ -1514,6 +1514,7 @@ function getBuddy() {
       openTimeline: (session) => SessionTimelineMain.openSession(session),
       onCaptureChange: () => refreshTrayMenu(),
       spendFor: (o) => { if (!usageMemo.turns) getUsageTurns().catch(() => {}); return WorkCost.sessionSpend(usageMemo.turns, o); },
+      continueIn: (o) => ContinueIn.popup({ Menu, continueIn, onEvent: continueToSessions, ...o }),
     });
     refreshTrayMenu();
     if (typeof buddyWin[BudgetNotice.CONTRACT.subscribeMethod] === 'function') {
@@ -1825,6 +1826,15 @@ let keepAwakeMain = null;
 keepAwakeMain = require('./src/keep-awake-ipc.js').register({ utilityHandle, allowed: (e) => fromPage(e, buddyWin?.accountWebContents?.()), isMac: IS_MAC, burst: BurstIpc, keepAwake: require('./src/keep-awake.js').createKeepAwake({ powerSaveBlocker }), dialog, getPref: () => { const v = loadConfig().keepAwake; return ['app', 'ac', 'always'].includes(v) ? v : 'off'; }, setPref: (v) => saveConfig({ keepAwake: v }), log: console.log });
 const SessionHandoverMain = require('./src/session-handover-main.js').register({ ipcMain, rootDir: ROOT_DIR, isExcluded: (cwd) => Quiet.projectMuted(loadConfig().mutedProjects, cwd), burstFor: (row) => { const h = BurstIpc.enrichSession({ sessionId: row.sessionId, cwd: row.cwd, source: row.adapter === 'claude-code' ? null : row.adapter }); return h && h.handover ? h.handover.text : null; }, home: os.homedir(), sessionsAllowed: sessionsSender, clipboard, shell, sessions: () => ({ live: localSessions(aggregateState().sessions || []), capture: buddyWin?.handoverSessions?.() ?? [] }), log: console.log });
 const SessionTimelineMain = require('./src/session-timeline-main.js').register({ ipcMain, rootDir: ROOT_DIR, home: os.homedir(), user: os.userInfo().username, hostname: os.hostname(), writer: () => SessionHandoverMain.writer, isExcluded: (cwd) => Quiet.projectMuted(loadConfig().mutedProjects, cwd), sessions: () => ({ live: localSessions(aggregateState().sessions || []), capture: buddyWin?.handoverSessions?.() ?? [] }), sessionsAllowed: sessionsSender, pageAllowed: (e) => fromUtilityPage(e, 'timeline'), openPage: (id) => openBuddy(id), pageContents: () => buddyWin?.pageWebContents('timeline'), dialog, BrowserWindow, downloads: () => app.getPath('downloads'), log: console.log });
+// "Try the demo" (src/demo-mode.js): fixtures only, a flag in memory. A dev run may start in it for screenshots.
+const Demo = require('./src/demo-mode.js').create();
+if (IS_DEV_RUN && !app.isPackaged && process.env.PLEXIFORM_DEMO_MODE === '1') Demo.start();
+require('./src/demo-mode.js').register({ ipcMain, demo: Demo, allowed: (e) => ['home', 'tasks', 'help'].some((p) => fromUtilityPage(e, p)) });
+const ContinueIn = require('./src/continue-in.js');
+const continueIn = ContinueIn.create({ entitlements: require('./src/entitlements.js'), clipboard, tools: () => AiTools.quick(), log: console.log });
+const continueToSessions = (ev) => buddyWin?.sendToPage('sessions', 'continue:event', ev);
+ContinueIn.register({ ipcMain, allowed: fromUtilityPage, continueIn, writer: () => SessionHandoverMain.writer, sendToSessions: continueToSessions });
+onQuit(app, () => continueIn.stop());
 ipcMain.handle('account-view', (e) => {
   if (!settingsOnly(e)) return null;
   return TeamEntry.settingsView(accountSummary(), new URL(BRAND.DEFAULT_HUB).host);
@@ -1960,6 +1970,15 @@ ipcMain.handle('tasks:pick-folder', async (e) => {
   return getTasks().registerFolder(dir);
 });
 onQuit(app, () => tasksSvc?.stop());
+// Recipes on the Tasks page (src/recipes.js): built from the recipe file in main, asked with a native dialog, run by the Tasks engine.
+require('./src/recipes.js').register({
+  ipcMain, allowed: tasksSenderOk, tasks: getTasks, home: os.homedir(), demo: () => Demo.active(),
+  recipes: require('./src/recipes.js').create({ builtInDir: path.join(__dirname, 'recipes'), dataDir: path.join(ROOT_DIR, 'recipes'), home: os.homedir() }),
+  confirm: async (info, e) => (await dialog.showMessageBox(BrowserWindow.fromWebContents(e.sender) || undefined, { type: 'question', buttons: ['Cancel', info.action], defaultId: 0, cancelId: 0, noLink: true, message: `${info.action}: ${info.title}?`, detail: info.detail })).response === 1,
+  pickSave: async (e) => { const r = await dialog.showSaveDialog(BrowserWindow.fromWebContents(e.sender) || undefined, { title: 'Share my recipes', defaultPath: 'my-plexiform-recipes.json', filters: [{ name: 'Plexiform setup', extensions: ['json'] }] }); return r.canceled ? null : r.filePath || null; },
+  pickOpen: async (e) => { const r = await dialog.showOpenDialog(BrowserWindow.fromWebContents(e.sender) || undefined, { title: 'Import recipes', properties: ['openFile'], filters: [{ name: 'Plexiform setup', extensions: ['json'] }] }); return r.canceled ? null : r.filePaths?.[0] || null; },
+  readFile: (f) => require('./src/setups-personal.js').readChosen(f), writeFile: (f, t) => require('./src/setups-personal.js').writeChosen(f, t),
+});
 
 let lightsWin = null;
 let onboardingWin = null; // the first-run setup window (createOnboardingWindow)
@@ -2120,6 +2139,7 @@ ipcMain.handle('help:navigate', (e, ...args) => {
   const destination = args[0];
   if (typeof destination === 'string' && /^aitools(:[a-z]{2,12})?$/.test(destination)) return typeof aiToolsOpen === 'function' ? aiToolsOpen(destination) : (openBuddy('aitools'), true);
   if (destination === 'onboarding') { createOnboardingWindow(); return true; }
+  if (destination === 'demo') { Demo.start(); openBuddy('home'); return true; }
   if (typeof destination !== 'string' || !['overview', 'board', 'join', 'team', 'settings'].includes(destination)) return false;
   openBuddy(destination);
   return true;
@@ -4366,7 +4386,7 @@ utilityHandle('mcp-set-enabled', (e) => fromUtilityPage(e, 'aitools'), (_e, on) 
 
 const AiTools = require('./src/ai-tools-wire.js').wire({ ipcMain, shell, clipboard, home: os.homedir(), runtime: HOOK_RUNTIME, rootDir: ROOT_DIR, fromPage: (e) => fromUtilityPage(e, 'aitools'), askFromWidget: () => !!loadConfig().askFromWidget, ephemeral: EPHEMERAL, openPage: openBuddy, onClaudeConsent: (on) => saveConfig({ claudeAutoConnect: on }) });
 const aiToolsOpen = (destination) => AiTools.open(destination);
-require('./src/home-main.js').register({ ipcMain, allowed: (e) => fromUtilityPage(e, 'home'), state: () => aggregateState(), localSessions, tools: () => AiTools.quick(), myDay: MyDay, openPage: openBuddy, openAiTools: aiToolsOpen, collisions: CollisionAlerts.rowCollisions(collisionAlerts), costGuard: () => (costGuardReport ? costGuardReport() : null) });
+require('./src/home-main.js').register({ ipcMain, allowed: (e) => fromUtilityPage(e, 'home'), state: () => aggregateState(), localSessions, tools: () => AiTools.quick(), myDay: MyDay, openPage: openBuddy, openAiTools: aiToolsOpen, collisions: CollisionAlerts.rowCollisions(collisionAlerts), costGuard: () => (costGuardReport ? costGuardReport() : null), demo: Demo });
 require('./src/home-alerts.js').wire({ ipcMain, dialog, clipboard, homeAllowed: (e) => fromUtilityPage(e, 'home'), usageAllowed: (e) => fromUtilityPage(e, 'usage'), sessions: () => aggregateState().sessions || [], burst: () => BurstIpc.snapshot().d, tasksRows: () => tasksSvc?.snapshot().tasks || [], tasksService: getTasks, handoverText: (key) => SessionHandoverMain.writer.text(key), jump: (s) => jumpToSession(s, Rules.folderOf(s.cwd), s.hostApp) });
 require('./src/digest-main.js').register({ ipcMain, allowed: (e) => fromUtilityPage(e, 'home'), rootDir: ROOT_DIR, userData: app.getPath('userData'), safeStorage: require('electron').safeStorage, clipboard, dialog, shell, Notification, fetch: (...a) => net.fetch(...a), usageTurns: () => getUsageTurns(), costGuard: () => (costGuardReport ? costGuardReport() : null), teamBrief: (cwd) => (loadConfig().teamBrief === true ? TeamActivity.call('team_brief', { cwd }) : null), openHome: () => openBuddy('home'), onQuit: (fn) => onQuit(app, fn), log: (m) => console.warn(m) }); // privacy-flow: digest-slack
 // Preferences' "Connect other agents" buttons open the AI tools page on that

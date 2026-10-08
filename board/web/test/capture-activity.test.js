@@ -84,3 +84,12 @@ test('stale observed sessions leave In progress for the Idle lane; day-old ones 
  const cols = groupColumns([entry(cap(120_000)), entry(cap(1000, { fresh: true, age_ms: 1000 }))]);
  assert.equal(cols.idle.length, 1); assert.equal(cols.in_progress.length, 1);
 });
+test('observed work offers Continue in… only inside the desktop app, which shows the tool menu itself', () => {
+ assert.equal(byAttr(rendered(observed()), 'data-action', 'continue-in').length, 0, 'a browser has no desktop bridge');
+ globalThis.plexiformDesktop = { continueIn: async () => null };
+ try {
+  const n = rendered(observed()), b = byAttr(n, 'data-action', 'continue-in');
+  assert.equal(b.length, 1); assert.equal(textOf(b[0]), 'Continue in…'); assert.equal(b[0].props['aria-haspopup'], 'menu');
+  assert.equal(b[0].props['data-card'], observed().id);
+ } finally { delete globalThis.plexiformDesktop; }
+});

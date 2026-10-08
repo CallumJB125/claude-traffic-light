@@ -440,7 +440,7 @@ function createTasksService(opts) {
     return { handle, label };
   }
 
-  return { start, stop, retryNow, snapshot, openTask, closeTask, act, saveCheckpoint, copyTakeover, create, composerInfo, registerFolder, markSeen };
+  return { start, stop, retryNow, snapshot, openTask, closeTask, act, saveCheckpoint, copyTakeover, create, composerInfo, registerFolder, markSeen, folderOf: (handle) => folders.get(handle) ?? null };
 }
 
 module.exports = { createTasksService, OFFLINE };

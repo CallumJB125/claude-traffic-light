@@ -5,6 +5,7 @@ p { margin: 4px 0; }
 .muted, #status { color: var(--muted); }
 section, .banner { margin-top: 16px; padding: 16px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-lg); }
 .banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; border-left: 3px solid var(--accent); }
+.banner[hidden] { display: none; }
 .section-header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 ul { margin: 8px 0 0; padding: 0; list-style: none; }
 li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }

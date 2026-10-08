@@ -1,0 +1,9 @@
+{
+  "id": "add-missing-tests",
+  "title": "Add tests for untested code",
+  "what": "Finds important code with no tests, writes focused tests that match the project's style, and runs them to prove they pass.",
+  "prompt": "Add tests for important code that has none.\n\n1. Work out how tests are written and run here, and copy that style exactly.\n2. Find the three to five most important untested areas: public functions, error paths, and code that changed recently (`git log --since='30 days ago' --name-only`). Use a coverage tool if the project already has one.\n3. Write focused tests for real behaviour, including edge cases and failures. No snapshot dumps and no tests that only check that mocks were called.\n4. Run the full suite. If a new test reveals a bug, keep the test, mark it clearly as failing and describe the bug instead of changing production code.\n5. Commit the tests.\n\nSummarise what is now covered and what is still worth testing.",
+  "tool": "auto",
+  "edits": true,
+  "cost": "Medium: reads code and runs the tests a few times."
+}

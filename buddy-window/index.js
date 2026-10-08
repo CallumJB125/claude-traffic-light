@@ -122,7 +122,7 @@ async function probeHub(origin, partition) {
   });
 }
 
-function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onClosed = () => {}, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged, devAccountsHub = null, captureEnabled = true, onCaptureChange = () => {}, onOverviewRetired = () => {}, isConstrained = () => false, handoverWriter = () => null, spendFor = () => null, openTimeline = () => false } = {}) {
+function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onClosed = () => {}, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged, devAccountsHub = null, captureEnabled = true, onCaptureChange = () => {}, onOverviewRetired = () => {}, isConstrained = () => false, handoverWriter = () => null, spendFor = () => null, openTimeline = () => false, continueIn = null } = {}) {
   // The dev-only mock accounts hub runs on loopback; that one exact origin is
   // the only non-https hub ever accepted.
   const allowOrigins = devAccountsHub && isDev ? [devAccountsHub] : [];
@@ -944,6 +944,11 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   });
   ipcMain.on('buddy:open-timeline', (e, cardId) => {
     if (fromHubView(e)) void sessionBridge.sessionForCard(cardId).then((s) => { if (s) openTimeline(s); }, () => {});
+  });
+  // "Continue in…" on an observed-work card: main shows the menu; a launch's replies show on Running now.
+  ipcMain.handle('buddy:continue-in', async (e, cardId) => {
+    if (!fromHubView(e) || !continueIn) return null;
+    try { return await continueIn({ load: async () => (await sessionBridge.localHandover(cardId))?.markdown ?? null, window: win, showSessions: () => select('sessions') }); } catch { return null; }
   });
   ipcMain.handle('buddy:acct:captureEnabled', (e, on) => {
     if (!fromAccount(e) || typeof on !== 'boolean' || !captureEnabled) return { ok: false, error: 'Not allowed.' };

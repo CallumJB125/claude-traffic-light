@@ -5,7 +5,7 @@
 (() => {
   const api = window.homeApi;
   const $ = id => document.getElementById(id);
-  let generation = 0;
+  let generation = 0, demoOn = false;
   const node = (tag, text, className) => { const el = document.createElement(tag); if (text != null) el.textContent = text; if (className) el.className = className; return el; };
   const money = v => (v >= 100 ? `$${Math.round(v)}` : `$${Number(v).toFixed(2)}`);
   const ago = ms => ms == null ? 'time unknown' : ms < 60_000 ? 'just now' : ms < 3_600_000 ? `${Math.floor(ms / 60_000)} min ago` : `${Math.floor(ms / 3_600_000)} h ago`;
@@ -24,11 +24,12 @@
     const li = node('li'); li.append(text); if (tag) li.append(node('span', tag, `tag ${tone || ''}`)); return li;
   }
 
-  function renderBanner(b) {
+  function renderBanner(b, canDemo) {
     const el = $('banner');
     el.hidden = !b;
     if (!b) { el.replaceChildren(); return; }
     el.replaceChildren(node('p', b.text), goButton(b.action.label, b.action.destination, 'banner', true));
+    if (canDemo && window.demoApi) el.append(button('Try the demo', async () => { await window.demoApi.start().catch(() => null); location.reload(); }, 'banner:demo'));
   }
 
   const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
@@ -116,6 +117,7 @@
   }
 
   async function openCard(handle, control) {
+    if (demoOn) { $('status').textContent = 'This is a sample card on the demo board. Exit the demo to see your own.'; return; }
     control.disabled = true;
     try { if (!await api.openCard(handle)) $('status').textContent = 'That card changed or is no longer yours. Home refreshes in a moment.'; }
     catch { $('status').textContent = 'That card could not be opened. Try again.'; }
@@ -150,7 +152,8 @@
 
   function render(s) {
     const focus = document.activeElement?.dataset?.focus;
-    renderBanner(s.banner); renderMorning(s.morning); renderNeeds(s.needs); renderRunning(s.running, s.banner); renderToday(s.today, s.running); renderCosts(s.costs); renderCards(s.team); renderTeamwork(s.teamless === true);
+    demoOn = s.demo === true;
+    renderBanner(s.banner, s.canDemo === true); renderMorning(s.morning); renderNeeds(s.needs); renderRunning(s.running, s.banner); renderToday(s.today, s.running); renderCosts(s.costs); renderCards(s.team); renderTeamwork(s.teamless === true);
     if (focus) [...document.querySelectorAll('[data-focus]')].find(el => el.dataset.focus === focus)?.focus();
     $('status').textContent = `Updated ${new Date(s.observed_at).toLocaleTimeString()}. Refreshes every 5 seconds.`;
   }

@@ -7,4 +7,5 @@ contextBridge.exposeInMainWorld('plexiformDesktop', Object.freeze({
   localHandover: (cardId) => ipcRenderer.invoke('buddy:local-handover', String(cardId).slice(0, 100)),
   openTeam: () => ipcRenderer.send('buddy:open-team'),
   openTimeline: (cardId) => ipcRenderer.send('buddy:open-timeline', String(cardId).slice(0, 100)),
+  continueIn: (cardId) => ipcRenderer.invoke('buddy:continue-in', String(cardId).slice(0, 100)),
 }));

@@ -21,3 +21,8 @@ contextBridge.exposeInMainWorld('homeApi', {
     set: (patch) => ipcRenderer.invoke('digest:set', patch && typeof patch === 'object' ? { period: patch.period, time: patch.time, slack: patch.slack, notify: patch.notify } : {}),
   },
 });
+contextBridge.exposeInMainWorld('demoApi', {
+  state: () => ipcRenderer.invoke('demo:state'),
+  start: () => ipcRenderer.invoke('demo:start'),
+  exit: () => ipcRenderer.invoke('demo:exit'),
+});

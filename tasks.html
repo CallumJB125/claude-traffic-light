@@ -6,6 +6,8 @@
 <title>Tasks</title>
 <link rel="stylesheet" href="tokens.css">
 <link rel="stylesheet" href="tasks.css">
+<link rel="stylesheet" href="recipes.css">
+<link rel="stylesheet" href="demo-banner.css">
 </head>
 <body>
   <div class="app">
@@ -17,10 +19,14 @@
       <p id="conn-note" class="conn-note" role="status" aria-live="polite" hidden></p>
       <ul id="list" class="list"></ul>
       <p id="list-empty" class="list-empty" hidden></p>
+      <div class="recipes-entry"><button type="button" class="btn" id="recipes-open" aria-controls="recipes">Recipes</button><span>Ready-made tasks to run now or tonight</span></div>
     </aside>
     <main class="main" id="main" aria-live="off"></main>
+    <section id="recipes" class="recipes" aria-labelledby="recipes-title" hidden></section>
   </div>
   <script src="src/tasks-view.js"></script>
   <script src="tasks.js"></script>
+  <script src="recipes.js"></script>
+  <script src="demo-banner.js"></script>
 </body>
 </html>
