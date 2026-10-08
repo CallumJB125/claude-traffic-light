@@ -355,7 +355,7 @@ export function integrationsScreen(model) {
     boards: model.boards ?? model.me?.boards ?? [],
     available: data.available ?? [], vault: !!data.vault, canEdit: ['owner', 'admin'].includes(model.me?.member?.role),
     canWrite: ['owner', 'admin', 'member'].includes(model.me?.member?.role), linked: m.linked ?? {},
-    local: !!m.local, nowMs: m.nowMs ?? Date.now(), open: m.open, audit: m.audit ?? {}, tokenFor: m.tokenFor, manifest: m.manifest, confirmDisconnect: m.confirmDisconnect, busy: model.busy,
+    local: !!m.local, openTeam: !!m.openTeam, nowMs: m.nowMs ?? Date.now(), open: m.open, audit: m.audit ?? {}, tokenFor: m.tokenFor, manifest: m.manifest, confirmDisconnect: m.confirmDisconnect, busy: model.busy,
     meId: model.me?.member?.id, needs: m.needs ?? {}, confirmCancel: m.confirmCancel, repos: m.repos ?? {},
     sentryErrors: m.sentryErrors ?? {},
     slackErrors: m.slackErrors ?? {},
@@ -379,7 +379,8 @@ export function integrationsScreen(model) {
       h('div', { class: 'integ-grid' }, pending.map((p) => pendingCard(p, vm)))) : null,
     h('section', { class: 'integ-group', 'aria-labelledby': 'integ-available' },
       h('h2', { id: 'integ-available' }, 'Add a tool'),
-      vm.local ? h('p', { class: 'integ-local muted' }, 'Integrations live on a team hub. Open Team in the sidebar to sign in, then create a team or join one.') : null,
+      vm.local ? h('p', { class: 'integ-local muted' }, vm.openTeam ? 'Integrations live on a team. Sign in to create a team or join one.' : 'Integrations live on a team. Open Team in the app’s sidebar to sign in, then create a team or join one.') : null,
+      vm.local && vm.openTeam ? h('button', { type: 'button', class: 'btn btn-sm btn-primary', 'data-action': 'open-team' }, 'Sign in or create a team') : null,
       vm.local ? h('div', { class: 'integ-grid', 'data-grid': 'local-connectors' }, CONNECTORS.map(localCard))
         : notYet.length ? h('div', { class: 'integ-grid' }, notYet.map((c) => availableCard(c, vm)))
         : h('p', { class: 'muted' }, vm.available.length ? 'Everything available is connected.' : 'No tools are available on this board yet.')));

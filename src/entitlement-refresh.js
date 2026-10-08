@@ -171,8 +171,8 @@ function register(ctx) {
     if (url) await open(url);
     return { ok: !!url, reason: r.reason ?? null };
   });
-  // Sign in opens the Account page, as phone:upgrade opens this one.
-  ipcMain.handle('entitlement:sign-in', (e) => { if (fromUpgrade(e)) ctx.buddy?.()?.open?.('account'); return null; });
+  // Sign in opens the Team page (where signing in happens), as phone:upgrade opens this one.
+  ipcMain.handle('entitlement:sign-in', (e) => { if (fromUpgrade(e)) ctx.buddy?.()?.open?.('team'); return null; });
   return refresher;
 }
 

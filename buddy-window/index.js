@@ -930,8 +930,10 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       } catch (err) { log('account action failed', op, err.message); return { ok: false, error: 'Something went wrong. Try again.' }; }
     });
   }
+  const fromHubView = (e) => !!hubView && e.sender === hubView.webContents && !!hubInfo && e.senderFrame?.origin === hubInfo.origin;
+  ipcMain.on('buddy:open-team', (e) => { if (fromHubView(e)) select('team'); });
   ipcMain.handle('buddy:local-handover', async (e, cardId) => {
-    if (!hubView || e.sender !== hubView.webContents || !hubInfo || e.senderFrame?.origin !== hubInfo.origin) return null;
+    if (!fromHubView(e)) return null;
     try { return await sessionBridge.localHandover(cardId); } catch { return null; }
   });
   ipcMain.handle('buddy:acct:captureEnabled', (e, on) => {

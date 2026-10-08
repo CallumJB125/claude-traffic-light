@@ -139,11 +139,11 @@ test('local hub (no accounts): a plain note says where to connect, and no connec
   const v = integrationsScreen(m({ local: true, manifest: { provider: 'github', action: 'https://github.com/settings/apps/new?state=s', fields: { manifest: '{}' } } }));
   const note = findAll(v, (n) => n.props?.class === 'integ-local muted');
   assert.equal(note.length, 1);
-  assert.equal(textOf(note[0]), 'Integrations live on a team hub. Open Team in the sidebar to sign in, then create a team or join one.');
+  assert.equal(textOf(note[0]), 'Integrations live on a team. Open Team in the app’s sidebar to sign in, then create a team or join one.');
   assert.equal(note[0].tag, 'p');
   assert.equal(byAttr(v, 'data-action', 'integ-connect').length, 0);
   assert.equal(findAll(v, (n) => n.tag === 'form').length, 0);
-  assert.equal(findAll(v, (n) => n.tag === 'a').length, 0, 'text only');
+  assert.equal(findAll(v, (n) => n.tag === 'a').length, 0, 'no links');
   const team = integrationsScreen(m());
   assert.equal(findAll(team, (n) => n.props?.class === 'integ-local muted').length, 0, 'a team hub shows no note');
   assert.equal(byAttr(team, 'data-action', 'integ-connect').length, 1);
@@ -161,6 +161,18 @@ test('local hub: a grid of the six tools with a one-line value and a status in w
   assert.equal(byAttr(integrationsScreen(m()), 'data-grid', 'local-connectors').length, 0, 'a team hub shows no local grid');
 });
 
+test('local hub in the app: a Sign in or create a team button opens the Team page; in a browser the text says where Team is', () => {
+  const inApp = integrationsScreen(m({ local: true, openTeam: true }));
+  const [b] = byAttr(inApp, 'data-action', 'open-team');
+  assert.equal(textOf(b), 'Sign in or create a team');
+  assert.equal(b.tag, 'button');
+  assert.doesNotMatch(textOf(inApp), /sidebar/);
+  const browser = integrationsScreen(m({ local: true }));
+  assert.equal(byAttr(browser, 'data-action', 'open-team').length, 0);
+  assert.match(textOf(browser), /Open Team in the app’s sidebar to sign in/);
+  assert.equal(byAttr(integrationsScreen(m({ openTeam: true })), 'data-action', 'open-team').length, 0, 'a team hub has no button');
+});
+
 test('the web list of tools: only the launch connectors are available', async () => {
   const { LAUNCH_CONNECTORS, connectorStatus } = await import('../js/connectors.js');
   assert.deepEqual([...LAUNCH_CONNECTORS], ['github']);
@@ -170,7 +182,7 @@ test('the web list of tools: only the launch connectors are available', async ()
 test('the app tells the Integrations page it is on the local hub from /api/health’s auth', async () => {
   const { readFileSync } = await import('node:fs');
   const src = readFileSync(new URL('../js/app.js', import.meta.url), 'utf8');
-  assert.match(src, /integrations: state\.view === 'integrations' \? \{ \.\.\.state\.integ, nowMs: Date\.now\(\), local: state\.authMode === 'local' \} : null,/);
+  assert.match(src, /integrations: state\.view === 'integrations' \? \{ \.\.\.state\.integ, nowMs: Date\.now\(\), local: state\.authMode === 'local', openTeam: canOpenTeam\(\) \} : null,/);
   assert.match(src, /state\.authMode = \(await api\.health\(\)\)\.auth/);
 });
 

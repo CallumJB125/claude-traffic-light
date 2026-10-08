@@ -90,11 +90,22 @@ test('board broker: a viewer cannot link; an admin-refused hub gives the ask-an-
   assert.equal((await sb.linkRepo(viewer.key, 'github.com/org/app')).needsAdmin, true);
   assert.equal(await sb.captureKey(team.key, 'github.com/org/app'), null);
 });
-test('account client routes for repo linking and the opt-in salvage send exist, and the hub page bridge is read-only and sender-checked', () => {
+test('account client routes for repo linking and the opt-in salvage send exist, and the hub page bridge is read-only plus show-Team, and sender-checked', () => {
   const { ROUTES } = require('../buddy-window/accounts.js');
   assert.deepEqual([ROUTES.createRepo, ROUTES.addBoardRepo, ROUTES.salvageHandover], [['POST', '/api/repos'], ['POST', '/api/boards/:board/repos'], ['POST', '/api/cards/:card/handover/salvage']]);
   const pre = fs.readFileSync(path.join(__dirname, '../buddy-window/hub-preload.js'), 'utf8');
   assert.equal((pre.match(/ipcRenderer\.invoke\(/g) || []).length, 1); assert.match(pre, /buddy:local-handover/);
   const idx = fs.readFileSync(path.join(__dirname, '../buddy-window/index.js'), 'utf8');
-  assert.match(idx, /preload: path\.join\(DIR, 'hub-preload\.js'\)/); assert.match(idx, /e\.sender !== hubView\.webContents/);
+  assert.match(idx, /preload: path\.join\(DIR, 'hub-preload\.js'\)/);
+  assert.match(idx, /const fromHubView = \(e\) => !!hubView && e\.sender === hubView\.webContents && !!hubInfo && e\.senderFrame\?\.origin === hubInfo\.origin;/);
+  assert.match(idx, /if \(!fromHubView\(e\)\) return null;\n\s+try \{ return await sessionBridge\.localHandover/);
+});
+test('the hub page can only ask to show the Team page: no argument crosses, main checks the sender and picks the page', () => {
+  const pre = fs.readFileSync(path.join(__dirname, '../buddy-window/hub-preload.js'), 'utf8');
+  assert.equal((pre.match(/ipcRenderer\.send\(/g) || []).length, 1);
+  assert.match(pre, /openTeam: \(\) => ipcRenderer\.send\('buddy:open-team'\),/);
+  const idx = fs.readFileSync(path.join(__dirname, '../buddy-window/index.js'), 'utf8');
+  assert.match(idx, /ipcMain\.on\('buddy:open-team', \(e\) => \{ if \(fromHubView\(e\)\) select\('team'\); \}\);/);
+  const { pageById } = require('../buddy-window/pages.js');
+  assert.deepEqual([pageById('team').kind, pageById('team').screen], ['local', 'team']);
 });

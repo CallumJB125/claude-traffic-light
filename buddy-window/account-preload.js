@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('buddyAccount', {
   code: (code) => call('code', str(code)),
   oauth: (provider) => call('oauth', str(provider)),
   signInWith: (provider) => call('signInWith', str(provider)),
+  signInOther: () => call('signInOther'),
   cancelOAuth: () => call('cancelOAuth'),
   resend: () => call('resend'),
   createTeam: (name) => call('createTeam', str(name)),

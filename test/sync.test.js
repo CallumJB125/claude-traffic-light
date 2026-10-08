@@ -168,7 +168,7 @@ test('register: a free install gets the upsell and makes no request; IPC answers
     await handlers.get('sync:open')('other-page', 'upgrade');
     await handlers.get('sync:open')('page', 'upgrade');
     await handlers.get('sync:open')('page', 'settings');
-    assert.deepEqual(opened, ['upgrade', 'account'], 'only the Sync page navigates, and only to Plan & billing or Account');
+    assert.deepEqual(opened, ['upgrade', 'team'], 'only the Sync page navigates, and only to Plan & billing or Team (where sign-in is)');
     assert.equal(await handlers.get('sync:state')('other-page'), null);
     const st = await handlers.get('sync:state')('page');
     assert.deepEqual([st.entitled, st.enabled, st.signedIn, st.hub], [false, false, true, null]);

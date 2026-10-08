@@ -72,7 +72,7 @@ const morningReport = () => require('./morning-report.js').current();
 
 function register({ ipcMain, allowed, state, localSessions, tools, myDay, openPage, openAiTools, morning = morningReport, now = Date.now, collisions = null }) {
   let toolsMemo = { at: -Infinity, value: null };
-  let teamMemo = { at: -Infinity, value: null };
+  let teamMemo = { at: -Infinity, value: null, none: false };
   const part = (fn) => { try { return fn(); } catch { return null; } };
   async function snapshot() {
     const time = now();
@@ -80,9 +80,9 @@ function register({ ipcMain, allowed, state, localSessions, tools, myDay, openPa
     const inputs = st && st.reason !== 'travel' ? (st.inputs || []) : [];
     if (time - toolsMemo.at > TOOLS_TTL_MS) toolsMemo = { at: time, value: part(() => banner(tools())) };
     if (time - teamMemo.at > TEAM_TTL_MS) {
-      let team = null;
-      try { team = cards(await myDay.snapshot()); } catch { team = null; }
-      teamMemo = { at: time, value: team };
+      let team = null, none = false;
+      try { team = cards(await myDay.snapshot()); none = team === null; } catch { team = null; }
+      teamMemo = { at: time, value: team, none };
     }
     return {
       observed_at: time,
@@ -91,6 +91,7 @@ function register({ ipcMain, allowed, state, localSessions, tools, myDay, openPa
       running: st ? part(() => running(localSessions(st.sessions || []), time, collisions)) : null,
       today: st ? part(() => today(st.spend, inputs, time)) : null,
       team: teamMemo.value,
+      teamless: teamMemo.none,
       morning: part(() => morning()?.state() ?? null),
     };
   }

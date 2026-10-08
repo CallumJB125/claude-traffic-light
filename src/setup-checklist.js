@@ -49,7 +49,7 @@ function signInRow(account) {
   return {
     id: 'signin', title: 'Sign in with Google or GitHub', state,
     detail: state === DONE ? `Signed in${account.name ? ` as ${account.name}` : ''}.` : 'Optional until you want a team board.',
-    fix: state === DONE ? null : { label: 'Sign in', destination: 'join' },
+    fix: state === DONE ? null : { label: 'Sign in or create a team', destination: 'team' },
   };
 }
 
@@ -58,7 +58,7 @@ function teamRow(account) {
   return {
     id: 'team', title: 'Create or join a team', state,
     detail: state === DONE ? `On ${account.teamName}.` : 'Your board stays on this Mac until you do.',
-    fix: state === DONE ? null : { label: 'Join your team', destination: 'join' },
+    fix: state === DONE ? null : { label: 'Sign in or create a team', destination: 'team' },
   };
 }
 

@@ -20,7 +20,7 @@ const PAGE_SCREENS = new Set(['hub', 'email', 'create-team', 'join', 'team', 'th
 const ACCT_ARGS = {
   state: [], go: ['string'], hub: ['string'], confirm: ['boolean'], email: ['string'], code: ['string'], resend: [], createTeam: ['string'],
   openClients: [],
-  oauth: ['string'], signInWith: ['string'], cancelOAuth: [],
+  oauth: ['string'], signInWith: ['string'], signInOther: [], cancelOAuth: [],
   invite: ['string', 'string', 'string'], resendInvite: ['string', 'string'], emailInvite: ['string', 'string'], revokeInvite: ['string', 'string'], setRole: ['string', 'string', 'string'], removeMember: ['string', 'string'],
   renameTeam: ['string', 'string'], addBoard: ['string', 'string'],
   teamDeleteStart: ['string', 'string'], teamDeleteCode: ['string', 'string'], teamDeleteResend: ['string'], teamDeleteOAuth: ['string', 'string'], deleteTeam: ['string'],
@@ -31,6 +31,9 @@ const ACCT_ARGS = {
 const TEAM_CHANGED = { ok: false, error: 'The team changed while this page was open. Look again, then try once more.' };
 
 /** Providers that can confirm a deletion: those the hub offers, cut to the ones the account says it signs in with. */
+// What the hub's first-sign-in setup made (teams.js setup: a team named after you, one board, you as owner), and what next.
+const firstTeamNotice = (name) => `You’re signed in. We made a team for you, ${name}, with one board, and you’re its owner. Invite people below, or open Board in the sidebar to start.`;
+
 function deleteProviders(methods, account) {
   const on = PROVIDERS.filter((p) => methods[p]);
   const raw = Array.isArray(account?.identities) ? account.identities : [];
@@ -339,6 +342,13 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
         // atomic check takes priority over the client's earlier empty list.
         if (setup.pending_invites?.length) { acct.hub = origin; show('invites'); return; }
         if (!setup.teams?.length && (setup.client_workspaces?.length || setup.pending_client_invites?.length)) { acct.hub = origin; show('clients'); return; }
+        const made = setup.setup === 'created' ? store.list().find((w) => w.kind === 'team' && w.hub === origin) : null;
+        if (made) {
+          ui.switchWorkspace(made.id, { show: false });
+          acct.hub = origin;
+          show('team', { notice: firstTeamNotice(made.name) });
+          return;
+        }
       } else {
         setupError = setup.error;
       }
@@ -592,6 +602,8 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
       beginOAuth(acct.hub, provider);
       return { ok: true };
     },
+    // "Other ways to sign in": the default hub's own sign-in screen, which lists only what that hub offers.
+    signInOther() { return ACCT.hub(BRAND.DEFAULT_HUB); },
     async cancelOAuth() {
       cancelOAuth();
       show('email');
@@ -968,4 +980,4 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
   };
 }
 
-module.exports = { createAccountFlow, clearHubSessions, PAGE_SCREENS, ACCT_ARGS };
+module.exports = { createAccountFlow, clearHubSessions, PAGE_SCREENS, ACCT_ARGS, firstTeamNotice };
