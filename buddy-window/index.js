@@ -122,7 +122,7 @@ async function probeHub(origin, partition) {
   });
 }
 
-function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onClosed = () => {}, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged, devAccountsHub = null, captureEnabled = true, onCaptureChange = () => {}, onOverviewRetired = () => {}, isConstrained = () => false, handoverWriter = () => null, spendFor = () => null } = {}) {
+function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onClosed = () => {}, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged, devAccountsHub = null, captureEnabled = true, onCaptureChange = () => {}, onOverviewRetired = () => {}, isConstrained = () => false, handoverWriter = () => null, spendFor = () => null, prFor = () => null } = {}) {
   // The dev-only mock accounts hub runs on loopback; that one exact origin is
   // the only non-https hub ever accepted.
   const allowOrigins = devAccountsHub && isDev ? [devAccountsHub] : [];
@@ -277,6 +277,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       return { routes, complete };
     },
     spendFor: (o) => spendFor(o),
+    prFor: (o) => prFor(o),
     sendLocal: (body) => supervisor.captureWork(body),
     async sendTeam(destination, body) {
       if (!signedIn(destination.hub) || userOf(destination.hub)?.id !== destination.user_id) return { ok: false };

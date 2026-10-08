@@ -137,6 +137,13 @@ function prOf(pr){
   if(!Number.isInteger(number)||number<=0||number>1e9)return null;
   return {number,url:typeof pr.url==='string'&&pr.url.length<=500&&/^https:\/\/github\.com\/[^\s]+$/.test(pr.url)?pr.url:null};
 }
+// The open PR on a local session's branch (src/branch-prs.js), for My board's PR chip. Team hubs never get it.
+const PR_STATES=new Set(['open','draft']),PR_CHECKS=new Set(['passing','failing','pending','none']),PR_REVIEWS=new Set(['none','requested','changes_requested','approved']);
+function prBody(pr){
+  const base=prOf(pr);
+  if(!base||!base.url||!PR_STATES.has(pr.state))return null;
+  return {...base,state:pr.state,checks:PR_CHECKS.has(pr.checks)?pr.checks:null,review:PR_REVIEWS.has(pr.review)?pr.review:null};
+}
 // What a local session cost so far, for My board's cost chip. Team hubs never get it.
 function costBody(spend){
   const usd=Number(spend?.cost_usd),unpriced=Number(spend?.unpriced??0);
@@ -148,7 +155,7 @@ const routeKey = r => crypto.createHash('sha256').update(JSON.stringify([r.hub,r
 // handoverFor(o): {available, written_at} for its local handover, or null. spendFor(o): {cost_usd, route}, or null.
 // docFactsFor(o): the facts its stored handover document still holds, or null (the backfill's fallback).
 function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam,resolveRepo=repoFor,ownedRoots=[],host=null,now=Date.now,log=()=>{},onChange=()=>{},
-  factsFor=null,handoverFor=null,spendFor=null,docFactsFor=null,home=null,recordsFile=path.join(path.dirname(file),'work-records.json')}) {
+  factsFor=null,handoverFor=null,spendFor=null,prFor=null,docFactsFor=null,home=null,recordsFile=path.join(path.dirname(file),'work-records.json')}) {
   let store;
   try {store=privateState(file,startEnabled);store.save(store.state);}
   catch {
@@ -254,8 +261,9 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
         entry=state.tasks[key];changed();}
       const currentRoute=routesByKey.get(routeKey(entry.destination));
       const {title,summary}=cardText(o,raw,entry,currentRoute);
-      const cost=entry.destination.kind==='local'?costBody(call(spendFor,o)):null;
-      const body={install_id:state.install_id,provider:o.provider,session_id:o.session_id,task_id:o.task_id,repo_id:entry.destination.repo_id??null,title,status:o.status,...(summary!==null?{summary}: {}),...(cost?{cost}:{})};
+      const local=entry.destination.kind==='local';
+      const cost=local?costBody(call(spendFor,o)):null;
+      const body={install_id:state.install_id,provider:o.provider,session_id:o.session_id,task_id:o.task_id,repo_id:entry.destination.repo_id??null,title,status:o.status,...(summary!==null?{summary}: {}),...(cost?{cost}:{}),...(local&&typeof prFor==='function'?{pr:prBody(call(prFor,o))}:{})};
       // A repeated UI poll is not a new activity report. The hook's bounded
       // change marker detects new observations, never verified liveness.
       const marker=typeof raw.updatedAt==='string'?raw.updatedAt.slice(0,100):null;
@@ -416,4 +424,4 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
     backfill,startBackfill,
     async stop(){stopped=true;latest=null;if(backfillTimer){clearTimeout(backfillTimer);backfillTimer=null;}await active;},idle:()=>active??Promise.resolve()};
 }
-module.exports={createWorkCapture,observation,isBackgroundSession,BACKGROUND_TITLE,routeFor,repoFor,clean,phase,routeKey};
+module.exports={createWorkCapture,observation,isBackgroundSession,BACKGROUND_TITLE,routeFor,repoFor,clean,phase,routeKey,prBody};

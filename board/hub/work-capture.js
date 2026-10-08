@@ -11,6 +11,16 @@ import { limitOrThrow } from './ratelimit.js';
 const PROVIDERS = new Set(['codex', 'cursor', 'gemini', 'hermes', 'claude']);
 const STATUSES = new Set(['working', 'waiting', 'review', 'idle', 'ended']);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const PULL_URL = /^https:\/\/github\.com\/[A-Za-z0-9][\w.-]*\/[A-Za-z0-9][\w.-]*\/pull\/([1-9][0-9]{0,9})$/;
+const PR_KEYS = ['number', 'url', 'state', 'checks', 'review'];
+const PR_VALUES = { state: ['open', 'draft'], checks: ['passing', 'failing', 'pending', 'none', null], review: ['none', 'requested', 'changes_requested', 'approved', null] };
+// null clears the card's PR (the branch has none open any more).
+function prOf(pr) {
+  if (pr === null) return null;
+  const m = pr && typeof pr === 'object' && !Array.isArray(pr) && typeof pr.url === 'string' ? PULL_URL.exec(pr.url) : null;
+  if (!m || Object.keys(pr).some((k) => !PR_KEYS.includes(k)) || pr.number !== Number(m[1]) || Object.entries(PR_VALUES).some(([k, ok]) => !ok.includes(pr[k] ?? null))) throw new HubError('VALIDATION', 'invalid pr');
+  return { number: pr.number, url: pr.url, state: pr.state, checks: pr.checks ?? null, review: pr.review ?? null };
+}
 const missing = () => new HubError('NOT_FOUND', 'capture destination not found');
 const conflict = (reason) => new HubError('CONFLICT', 'this observation already has a fixed destination', { reason });
 function only(body, keys) {
@@ -27,7 +37,7 @@ function text(value, max, required = false) {
   return s;
 }
 function report(body) {
-  only(body, ['install_id', 'provider', 'session_id', 'task_id', 'repo_id', 'title', 'status', 'summary', 'update_only', 'cost']);
+  only(body, ['install_id', 'provider', 'session_id', 'task_id', 'repo_id', 'title', 'status', 'summary', 'update_only', 'cost', 'pr']);
   if (!UUID.test(body.install_id) || !PROVIDERS.has(body.provider) || !STATUSES.has(body.status)) throw new HubError('VALIDATION', 'invalid capture identity or status');
   if (body.update_only !== undefined && body.update_only !== true) throw new HubError('VALIDATION', 'invalid update_only');
   const session = identity(body.session_id), task = identity(body.task_id);
@@ -38,7 +48,8 @@ function report(body) {
     || typeof cost.usd !== 'number' || !Number.isFinite(cost.usd) || cost.usd < 0 || cost.usd > 1e6 || !Number.isInteger(cost.unpriced ?? 0) || (cost.unpriced ?? 0) < 0 || (cost.unpriced ?? 0) > 1e9)) throw new HubError('VALIDATION', 'invalid cost');
   return { identity: [body.install_id.toLowerCase(), body.provider, session, task], provider: body.provider, repo_id: body.repo_id ?? null,
     title: text(body.title, 200, true), status: body.status, ...(Object.hasOwn(body, 'summary') ? { summary: text(body.summary, 2000) } : {}), updateOnly: body.update_only === true,
-    ...(cost ? { cost: { usd: Math.round(cost.usd * 100) / 100, unpriced: cost.unpriced ?? 0 } } : {}) };
+    ...(cost ? { cost: { usd: Math.round(cost.usd * 100) / 100, unpriced: cost.unpriced ?? 0 } } : {}),
+    ...(Object.hasOwn(body, 'pr') ? { pr: prOf(body.pr) } : {}) };
 }
 
 export class WorkCapture {
@@ -121,7 +132,7 @@ export class WorkCapture {
           insertCardRecord(this.hub, boardId, scope.member.id, { title: data.title, body: summary, repo_id: data.repo_id, column_name: column }, { id: cardId, now });
           this.db.insert('work_capture_cards', { id, principal: scope.principal, user_id: scope.member.user_id ?? null, member_id: scope.member.id, board_id: boardId, repo_id: data.repo_id,
             source_hash: hash, provider: data.provider, card_id: cardId, reported_status: data.status, managed_title: data.title, managed_body: summary, managed_column: column, created_at: now, received_at: now,
-            ...(local && data.cost ? { cost_usd: data.cost.usd, cost_unpriced: data.cost.unpriced } : {}) });
+            ...(local && data.cost ? { cost_usd: data.cost.usd, cost_unpriced: data.cost.unpriced } : {}), ...(local && data.pr ? { pr: JSON.stringify(data.pr) } : {}) });
           this.hub.journal({ board_id: boardId, card_id: cardId, actor_kind: 'member', actor_id: scope.member.id, kind: 'card.create', payload: { capture_id: id, source: 'local_observation', provider: data.provider,
             title_hmac: this.hub.refHash(data.title), body_hmac: this.hub.refHash(summary), repo_id: data.repo_id, column_name: column } });
           this.hub.feed(cardId, 'created', {}, { actor: scope.member.id });
@@ -143,6 +154,7 @@ export class WorkCapture {
           this.db.run('UPDATE work_capture_cards SET reported_status=?,received_at=?,managed_title=?,managed_body=?,managed_column=? WHERE id=?', data.status, now,
             set.title ?? row.managed_title, set.body ?? row.managed_body, set.column_name ?? row.managed_column, row.id);
           if (local && data.cost) this.db.run('UPDATE work_capture_cards SET cost_usd=?,cost_unpriced=? WHERE id=?', data.cost.usd, data.cost.unpriced, row.id);
+          if (local && Object.hasOwn(data, 'pr')) this.db.run('UPDATE work_capture_cards SET pr=? WHERE id=?', data.pr ? JSON.stringify(data.pr) : null, row.id);
           if (Object.keys(set).length) {
             this.db.run(`UPDATE cards SET ${Object.keys(set).map((k) => `${k}=?`).join(',')},version=version+1,updated_at=? WHERE id=?`, ...Object.values(set), now, card.id);
             this.hub.journal({ board_id: boardId, card_id: card.id, actor_kind: 'member', actor_id: scope.member.id, kind: 'card.update', payload: { capture_id: row.id, source: 'local_observation',

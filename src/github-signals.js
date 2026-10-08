@@ -34,6 +34,7 @@ const path = require('path');
 const { toolEnv } = require('./tool-path.js');
 const { execFile } = require('child_process');
 const { withDeadline, GRACE_MS } = require('./bounded-io.js');
+const BranchPrs = require('./branch-prs.js');
 
 const SIGNALS = ['pr-review-requested', 'pr-changes-requested', 'ci-failed', 'ci-passed', 'deploy-finished', 'deploy-failed'];
 const ACTIVE_MS = 90 * 1000;
@@ -216,6 +217,8 @@ async function folderRepo(cwd, git = defaultGit) {
 function create({ stateFile, runGh = defaultRunGh, git = defaultGit, now = Date.now, log = () => {}, folderMs = FOLDER_MS } = {}) {
   const etags = new Map();
   let st = { state: 'starting', login: null, loginAt: 0, repos: {}, events: [], seen: {}, rate: null, failures: 0, lastPollAt: 0, nextPollAt: 0, error: null };
+  const folders = new Map();
+  const prs = {};
   try {
     const saved = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
     if (saved && typeof saved === 'object') {
@@ -288,6 +291,7 @@ function create({ stateFile, runGh = defaultRunGh, git = defaultGit, now = Date.
     const found = await Promise.all(cwds.map(async (cwd) => ({ cwd, info: await withDeadline((done) => { folderRepo(cwd, git).then(done, () => done(null)); }, folderMs, null) })));
     const fresh = {};
     for (const { cwd, info } of found) {
+      if (info) folders.set(cwd, info); else folders.delete(cwd);
       if (!info) continue;
       const r = fresh[info.repo] || (fresh[info.repo] = { branches: [], cwds: [] });
       if (info.branch && !r.branches.includes(info.branch)) r.branches.push(info.branch);
@@ -327,6 +331,7 @@ function create({ stateFile, runGh = defaultRunGh, git = defaultGit, now = Date.
     const reviews = {};
     for (const p of mine) reviews[p.number] = await newestReviews(repo, p.number);
     const candidates = repoEvents({ repo, login: st.login, branches: info.branches, deployWorkflows, runs: (runs && runs.workflow_runs) || [], pulls, reviews });
+    prs[repo] = BranchPrs.index({ pulls, runs: (runs && runs.workflow_runs) || [], reviews, isDeploy: (name) => isDeployWorkflow(name, deployWorkflows) });
     // A review request that went away (answered or withdrawn) may come back.
     // Only a complete list can say one went away.
     if (pulls.length < PULLS_PAGE) {
@@ -447,7 +452,13 @@ function create({ stateFile, runGh = defaultRunGh, git = defaultGit, now = Date.
     st.state = reason;
   }
 
-  return { tick, due, ingest, active, status, pause, request };
+  // The open PR on the branch a session folder is on, from the last poll; null when none or unknown.
+  function prFor(cwd) {
+    const f = typeof cwd === 'string' ? folders.get(cwd) : null;
+    return (f && f.branch && prs[f.repo] && prs[f.repo][f.branch]) || null;
+  }
+
+  return { tick, due, ingest, active, status, pause, request, prFor };
 }
 
 // The alert-sound memory key for a resolved look. When a git rule owns the

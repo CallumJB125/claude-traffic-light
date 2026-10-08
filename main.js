@@ -1504,6 +1504,7 @@ function getBuddy() {
       handoverWriter: () => { try { return SessionHandoverMain.writer; } catch { return null; } },
       onCaptureChange: () => refreshTrayMenu(),
       spendFor: (o) => { if (!usageMemo.turns) getUsageTurns().catch(() => {}); return WorkCost.sessionSpend(usageMemo.turns, o); },
+      prFor: (o) => (loadConfig().gitSignals !== false ? git.prFor(o.cwd) : null),
     });
     refreshTrayMenu();
     if (typeof buddyWin[BudgetNotice.CONTRACT.subscribeMethod] === 'function') {
