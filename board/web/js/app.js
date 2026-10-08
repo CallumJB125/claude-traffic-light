@@ -363,6 +363,39 @@ async function setAutonomy(id, action, mode) {
   }
 }
 
+// The hub's own GitHub App (step 4): its install page opens in the same connect window as a sign-in.
+async function installApp(provider) {
+  const res = await withBusy(`integ-connect:${provider}`, () => api.installApp(provider));
+  if (res?.url && res.bind) window.open(res.url, connectWindowTarget(provider, res.bind, navigator.userAgent), 'noopener');
+}
+
+async function toggleRepos(id) {
+  if (state.integ.repos?.[id]) {
+    const { [id]: _, ...rest } = state.integ.repos;
+    state.integ = { ...state.integ, repos: rest };
+    update();
+    return;
+  }
+  const res = await withBusy(`integ-repos:${id}`, () => api.appRepos(id));
+  if (res?.repos) { state.integ = { ...state.integ, repos: { ...state.integ.repos, [id]: res.repos } }; update(); }
+}
+
+// Linking also adds the repository to the open board, so its PRs find their cards.
+async function linkRepo(id, repoId, link) {
+  const res = await withBusy(`integ-repos:${id}`, () => (link ? api.linkAppRepo(id, repoId, state.boardId) : api.unlinkAppRepo(id, repoId)));
+  if (!res) return;
+  state.integ = { ...state.integ, repos: { ...state.integ.repos, [id]: (state.integ.repos?.[id] ?? []).map((r) => (r.id === repoId ? { ...r, linked: link } : r)) } };
+  toast(link ? 'Repository linked.' : 'Repository unlinked.');
+  update();
+}
+
+async function githubCardAction(cardId, what) {
+  const res = await withBusy(`${cardId}:github-${what}`, () => (what === 'pr' ? api.openPr(cardId) : api.commentStatus(cardId)));
+  if (!res) return;
+  if (what === 'pr') toast(res.existing ? 'This card already has a pull request.' : 'Pull request opened on GitHub.');
+  else toast('Status posted on the pull request.');
+}
+
 async function disconnectIntegration(id) {
   const res = await withBusy(`integ:${id}`, () => api.disconnectIntegration(id));
   state.integ = { ...state.integ, confirmDisconnect: null };
@@ -2071,6 +2104,11 @@ function onClick(e) {
     case 'integ-unlink': unlinkIdentity(el.dataset.conn); return;
     case 'integ-linked': toggleLinked(el.dataset.conn); return;
     case 'integ-revoke': revokeIdentity(el.dataset.conn, el.dataset.member); return;
+    case 'integ-install': installApp(el.dataset.provider); return;
+    case 'integ-repos': toggleRepos(el.dataset.conn); return;
+    case 'integ-repo-link': linkRepo(el.dataset.conn, Number(el.dataset.repo), el.dataset.link === '1'); return;
+    case 'github-pr': githubCardAction(cardId, 'pr'); return;
+    case 'github-comment': githubCardAction(cardId, 'comment'); return;
     case 'dashboard-refresh': if (el.getAttribute('aria-disabled') !== 'true') loadJournal(); return;
     case 'table-sort': state.table = { ...state.table, sort: nextSort(state.table.sort, el.dataset.by) }; update(); return;
     case 'access-login': e.preventDefault(); location.reload(); return;

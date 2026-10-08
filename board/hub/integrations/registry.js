@@ -958,6 +958,11 @@ export function createIntegrations({
       linkedByCard,
       linkStatusFor,
       linked: (kind, externalId) => db.get('SELECT card_id FROM external_links WHERE connection_id = ? AND kind = ? AND external_id = ?', c.id, String(kind), String(externalId))?.card_id ?? null,
+      // The card a link of this connection points at by its URL (an issue
+      // comment names its PR by html URL, never by the PR's id).
+      linkedUrl: (kind, url) => (typeof url === 'string' && url
+        ? db.get('SELECT card_id FROM external_links WHERE connection_id = ? AND kind = ? AND url = ? ORDER BY created_at DESC, rowid DESC LIMIT 1', c.id, String(kind), url)?.card_id ?? null
+        : null),
       // Existing connectors taking boardIds()[0] respect this connection's
       // selected target. An archived target pauses intake; never reroute it.
       boardIds: () => {
@@ -1021,7 +1026,11 @@ export function createIntegrations({
 
   /** A client address inside the connector's declared ingressCidrs (the provider's own senders). */
   function trustedIngress(connectionId, ip) {
-    const list = ingress.get(row(connectionId)?.provider);
+    return providerIngress(row(connectionId)?.provider, ip);
+  }
+
+  function providerIngress(provider, ip) {
+    const list = ingress.get(provider);
     const a = String(ip ?? '').replace(/^::ffff:(?=\d+\.\d+\.\d+\.\d+$)/i, '');
     const family = isIP(a);
     return !!(list && family && list.check(a, family === 4 ? 'ipv4' : 'ipv6'));
@@ -1218,6 +1227,142 @@ export function createIntegrations({
     return { status: 200, ...ack };
   }
 
+  // ── one app, many installations (GitHub App, step 4) ────────────────────
+  // A connector with `app` (the hub's own provider app, configured from the
+  // operator's environment) takes every installation's deliveries at one URL,
+  // signed with the app's secret. A delivery runs for the one live connection
+  // its installation was linked to, and only about a repository a team admin
+  // linked on it (integration_app_repos); everything else verified is a plain
+  // 200 that does nothing. From there it is that connection's delivery like
+  // any other: the same dedupe keys, lease, buckets, handler and audit.
+
+  const appIgnored = () => ({ status: 200, body: { ok: true, ignored: true }, verified: true });
+
+  /** The HTTP layer asks this before reading an app delivery's body. */
+  const appTarget = (provider) => !!connectors.get(provider)?.app;
+
+  async function appWebhook(provider, { headers, rawBody }) {
+    const conn = connectors.get(provider);
+    if (!conn?.app) return webhookNotFound();
+    if (rawBody.length > MAX_BODY) return { status: 413, body: { error: { code: 'PAYLOAD_TOO_LARGE', message: 'too large' } }, live: true };
+    let v;
+    try { v = conn.app.verify({ headers, rawBody }); } catch (e) { v = { ok: false, reason: e.message }; }
+    if (!v?.ok || !v.dedupe_key) {
+      log?.warn?.('integration app webhook rejected', { integration: provider, reason: redact(v?.reason ?? 'no dedupe key') });
+      return { status: 401, body: { error: { code: 'UNAUTHENTICATED', message: 'bad signature' } }, live: true };
+    }
+    let payload;
+    try { payload = JSON.parse(rawBody.toString('utf8')); } catch { payload = null; }
+    if (!isBareObject(payload) || POISON_KEYS.some((k) => Object.hasOwn(payload, k))) return { status: 400, body: { error: { code: 'VALIDATION', message: 'body must be JSON' } }, live: true };
+    let r = null;
+    try { r = conn.app.route({ headers, payload }); } catch { r = null; }
+    if (r?.lifecycle) return { ...appLifecycle(conn, r.lifecycle, v, rawBody), live: true };
+    const ext = typeof r?.external_id === 'string' ? r.external_id : null;
+    const c = ext && Number.isSafeInteger(r.repo_id) ? db.get("SELECT * FROM connections WHERE provider = ? AND external_id = ? AND status = 'active'", provider, ext) : null;
+    if (!c || !db.get('SELECT 1 AS x FROM integration_app_repos WHERE connection_id = ? AND external_repo_id = ?', c.id, r.repo_id)) return { ...appIgnored(), live: true };
+    const out = await verifiedWebhook(c, conn, { headers, rawBody, v });
+    return { ...out, verified: !out.body?.duplicate && !out.body?.in_progress, live: true };
+  }
+
+  // An installation removed, suspended or narrowed on the provider: every
+  // connection made from it follows, once per delivery (dedupe), as the system.
+  function appLifecycle(conn, l, v, rawBody) {
+    const keys = [`app:${conn.id}:${String(v.dedupe_key).slice(0, 200)}`, `app:${conn.id}:body:${createHash('sha256').update(rawBody).digest('hex')}`];
+    const lease = reserve(conn.id, keys);
+    if (lease.dup) return { status: 200, body: { ok: true, duplicate: true } };
+    const conns = typeof l.external_id === 'string' ? db.all("SELECT * FROM connections WHERE provider = ? AND external_id = ? AND status != 'revoked'", conn.id, l.external_id) : [];
+    try {
+      for (const c of conns) {
+        if (l.op === 'deleted') revokeConnection(c.id, null);
+        else if (l.op === 'suspend') setHealth(c.id, false, 'suspended');
+        else if (l.op === 'unsuspend') setHealth(c.id, true);
+        else if (l.op === 'repositories_removed' && Array.isArray(l.repo_ids)) {
+          const ids = l.repo_ids.filter((x) => Number.isSafeInteger(x));
+          if (ids.length) db.run(`DELETE FROM integration_app_repos WHERE connection_id = ? AND external_repo_id IN (${ids.map(() => '?').join(',')})`, c.id, ...ids);
+        }
+      }
+    } catch (e) {
+      db.run('DELETE FROM inbound_dedupe WHERE provider = ? AND dedupe_key IN (?, ?) AND lease_until = ?', conn.id, ...keys, lease.until);
+      throw e;
+    }
+    db.run("UPDATE inbound_dedupe SET state = 'done', lease_until = NULL WHERE provider = ? AND dedupe_key IN (?, ?) AND lease_until = ?", conn.id, ...keys, lease.until);
+    return { status: 200, body: { ok: true }, verified: true };
+  }
+
+  // The connection an app connector's admin route names: active, the
+  // member's team's, made from an installation.
+  function appConnection(member, connectionId) {
+    const c = row(connectionId);
+    const conn = c && connectors.get(c.provider);
+    if (!c || c.status !== 'active' || c.org_id !== member.org_id || !conn?.app || conn.app.installationOf(linkConnection(c)) == null) throw new HubError('NOT_FOUND', 'no such integration');
+    return { c, conn };
+  }
+
+  /** GET …/repos: the installation's repositories, each with whether it is linked. */
+  async function appRepos({ member, connectionId }) {
+    const { c, conn } = appConnection(member, connectionId);
+    limitOrThrow(hub, 'integration_app_repos_member', member.id);
+    let list;
+    try { list = await conn.app.repositories(linkConnection(c)); } catch (e) {
+      setHealth(c.id, false, errCode(e));
+      throw new HubError('PROVIDER_UNAVAILABLE', `${conn.name} could not list this installation's repositories. Try again in a minute.`);
+    }
+    const linked = new Set(db.all('SELECT external_repo_id FROM integration_app_repos WHERE connection_id = ?', c.id).map((x) => x.external_repo_id));
+    return { repos: list.map((x) => ({ id: x.id, full_name: x.full_name, private: x.private, linked: linked.has(x.id) })) };
+  }
+
+  /**
+   * POST …/repos {repo_id, board_id?}: link one repository of the
+   * installation (GitHub is asked again; the body's name is never used). With
+   * board_id, the repository is also added to that board of the team (made
+   * as a team repo first if needed), so its PRs can find their cards.
+   */
+  async function appLinkRepo({ member, connectionId, repoId, boardId = null }) {
+    const { c, conn } = appConnection(member, connectionId);
+    if (!Number.isSafeInteger(repoId) || repoId <= 0) throw new HubError('VALIDATION', 'repo_id is the repository\'s numeric id');
+    if (boardId != null && (typeof boardId !== 'string' || hub.board(boardId)?.org_id !== member.org_id)) throw new HubError('NOT_FOUND', 'board not found');
+    limitOrThrow(hub, 'integration_app_repos_member', member.id);
+    let list;
+    try { list = await conn.app.repositories(linkConnection(c)); } catch (e) {
+      setHealth(c.id, false, errCode(e));
+      throw new HubError('PROVIDER_UNAVAILABLE', `${conn.name} could not list this installation's repositories. Try again in a minute.`);
+    }
+    const repo = list.find((x) => x.id === repoId);
+    if (!repo) throw new HubError('NOT_FOUND', 'that repository is not in this installation');
+    let boardRepoId = null;
+    hub.txn(() => {
+      if (row(c.id)?.status !== 'active') throw new HubError('NOT_FOUND', 'no such integration');
+      db.run('INSERT OR IGNORE INTO integration_app_repos (connection_id, external_repo_id, full_name, linked_by, linked_at) VALUES (?, ?, ?, ?, ?)', c.id, repo.id, repo.full_name, member.id, now());
+      if (boardId) {
+        const canonical = `github.com/${repo.full_name.toLowerCase()}`;
+        const have = db.all('SELECT id, canonical_url FROM repos WHERE org_id = ?', member.org_id).find((x) => String(x.canonical_url).toLowerCase() === canonical);
+        boardRepoId = have?.id ?? api.createRepo(member, { url: `https://github.com/${repo.full_name}` }).repo.id;
+        api.addBoardRepo(member, boardId, { repo_id: boardRepoId });
+      }
+      hub.journal({ board_id: null, actor_kind: 'member', actor_id: member.id, kind: 'integration.app_repo_link', payload: { connection_id: c.id, provider: c.provider, repo_id: repo.id } });
+    });
+    return { repo: { id: repo.id, full_name: repo.full_name, private: repo.private, linked: true }, ...(boardRepoId ? { board_repo_id: boardRepoId } : {}) };
+  }
+
+  /** DELETE …/repos/:repo_id: its deliveries are ignored from now on. */
+  function appUnlinkRepo({ member, connectionId, repoId }) {
+    const { c } = appConnection(member, connectionId);
+    return hub.txn(() => {
+      const removed = Number(db.run('DELETE FROM integration_app_repos WHERE connection_id = ? AND external_repo_id = ?', c.id, repoId).changes) > 0;
+      if (removed) hub.journal({ board_id: null, actor_kind: 'member', actor_id: member.id, kind: 'integration.app_repo_unlink', payload: { connection_id: c.id, provider: c.provider, repo_id: repoId } });
+      return { ok: true, removed };
+    });
+  }
+
+  /** The team's live installation connection that linked this repo (github.com/owner/name), or null. */
+  function appConnectionForRepo(orgId, provider, canonical) {
+    const full = typeof canonical === 'string' && canonical.startsWith('github.com/') ? canonical.slice('github.com/'.length).toLowerCase() : null;
+    if (!full) return null;
+    const rows = db.all(`SELECT c.id AS connection_id, a.external_repo_id, a.full_name FROM integration_app_repos a JOIN connections c ON c.id = a.connection_id
+      WHERE c.org_id = ? AND c.provider = ? AND c.status = 'active' AND lower(a.full_name) = ?`, orgId, provider, full);
+    return rows.length === 1 ? rows[0] : null;
+  }
+
   // Only a plain `true` is early: a throw or a Promise answers late, which
   // keeps the provider's retry.
   function askEarly(conn, payload, headers) {
@@ -1403,6 +1548,56 @@ export function createIntegrations({
     return { url: conn.connect.authorizeUrl(args), bind, cookie };
   }
 
+  /**
+   * POST /api/integrations/:provider/install (step 4): the provider's install
+   * page for the hub's own app, carrying a state signed like /start's (the
+   * admin, their team, 10 minutes, single use, bound to this browser), marked
+   * as an install so the callback never treats it as a manifest code.
+   */
+  async function appInstallStart({ member, provider, publicUrl }) {
+    const conn = connectors.get(provider);
+    if (!conn?.app) throw new HubError('NOT_FOUND', 'no such integration');
+    if (!hub.vault.available) throw new HubError('POLICY_DENIED', 'integrations need the hub encryption key first');
+    limitOrThrow(hub, 'integration_install_member', member.id);
+    const { state, bind, cookie } = mintState(member, provider, randomUUID(), publicUrl, { ga: 1 });
+    let url = null;
+    try { url = urlOn(await conn.app.installUrl({ state }), conn.hosts); } catch (e) { warn('integration install start failed', conn, e); }
+    if (!url) throw new HubError('PROVIDER_UNAVAILABLE', `${conn.name} could not be reached. Try again in a minute.`);
+    return { url: url.href, bind, cookie };
+  }
+
+  // The install callback: GitHub confirms the signed-in user can see the
+  // installation (connect.app.install), then it becomes this team's
+  // connection. One installation is one connection hub-wide: another team's
+  // is the same generic CONFLICT, and a reinstall in the same team answers
+  // with the connection it already has.
+  async function appInstallCallback(conn, member, query) {
+    let v;
+    try { v = await conn.app.install({ query }); } catch (e) {
+      if (e?.code === 'REQUESTED') return { ok: false, error: `Your request to install the app was sent to the account's owners on ${conn.name}. Connect again once they approve it.` };
+      warn('integration install failed', conn, e);
+      if (e?.code === 'not_owned') return { ok: false, error: `${conn.name} did not confirm that installation for your account. Start again from Plexiform.` };
+      return { ok: false, error: 'The provider did not accept the connection. Try again.' };
+    }
+    const ext = typeof v?.external_id === 'string' && v.external_id.length <= 200 ? v.external_id : null;
+    const facts = exchangeConfig(v?.settings);
+    if (!ext || !facts) return { ok: false, error: 'Could not save the connection.' };
+    try {
+      return hub.txn(() => {
+        const have = db.get("SELECT * FROM connections WHERE provider = ? AND external_id = ? AND status != 'revoked'", conn.id, ext);
+        if (have && have.org_id === member.org_id) return { ok: true, connection: publicConnection(have), provider_name: conn.name, next_url: null };
+        if (have) throw new HubError('CONFLICT', `this ${conn.name} installation is already connected`);
+        const connection = createConnection({
+          external_id: ext, display_name: v.display_name, scopes: v.scopes, secrets: {}, settings: { provider: facts },
+          orgId: member.org_id, memberId: member.id, provider: conn.id,
+        });
+        return { ok: true, connection, provider_name: conn.name, next_url: null };
+      });
+    } catch (e) {
+      return { ok: false, error: e instanceof HubError ? e.message : 'Could not save the connection.' };
+    }
+  }
+
   /** → {ok:true, connection, provider_name, next_url} | {ok:false, error} (error is safe to show). */
   async function oauthCallback({ provider, query, publicUrl, bindCookie = null }) {
     const conn = connectors.get(provider);
@@ -1427,6 +1622,7 @@ export function createIntegrations({
     const member = hub.member(st.m);
     if (!member || member.removed_at || member.org_id !== st.o || !['owner', 'admin'].includes(member.role)) return { ok: false, error: 'Only a team admin can connect this.' };
     if (query.get('error')) return { ok: false, error: 'The connection was cancelled.' };
+    if (st.ga === 1) return conn.app ? appInstallCallback(conn, member, query) : invalid;
     // A pending row (D97) is finished only by the member who prepared it.
     const pending = st.pd === 1 ? livePending(st.i) : null;
     if (st.pd === 1 && (!pending || pending.org_id !== st.o || pending.provider !== provider || pending.created_by !== st.m || pending.match === '{}')) return { ok: false, error: SETUP_EXPIRED };
@@ -1992,7 +2188,7 @@ export function createIntegrations({
     register,
     /** Hosts a manifest connect form may post to (the web's CSP form-action). */
     formHosts: () => [...new Set([...connectors.values()].filter((c) => c.connect.manifestForm).map((c) => c.connect.formHost))],
-    connectors: () => [...connectors.values()].map((c) => ({ id: c.id, name: c.name, scopes: c.scopes, connect: c.connect.kind, actions: c.actions, prepare: c.connect.prepareInputs ? [...c.connect.prepareInputs] : null, identity: !!c.identity, start: c.connect.startInputs ? [...c.connect.startInputs] : null, shows_webhook_url: c.showsWebhookUrl === true })),
+    connectors: () => [...connectors.values()].map((c) => ({ id: c.id, name: c.name, scopes: c.scopes, connect: c.connect.kind, actions: c.actions, prepare: c.connect.prepareInputs ? [...c.connect.prepareInputs] : null, identity: !!c.identity, start: c.connect.startInputs ? [...c.connect.startInputs] : null, shows_webhook_url: c.showsWebhookUrl === true, app: !!c.app })),
     list: (orgId) => db.all("SELECT * FROM connections WHERE org_id = ? AND status != 'revoked' ORDER BY created_at", orgId).map(publicConnection),
     get: (id) => { const c = row(id); return c ? publicConnection(c) : null; },
     orgOf: (id) => row(id)?.org_id ?? livePending(id)?.org_id ?? null,
@@ -2091,6 +2287,14 @@ export function createIntegrations({
     webhookTarget,
     trustedIngress,
     webhook,
+    appTarget,
+    appIngress: providerIngress,
+    appWebhook,
+    appInstallStart,
+    appRepos,
+    appLinkRepo,
+    appUnlinkRepo,
+    appConnectionForRepo,
     sweepDedupe,
     oauthStart,
     oauthCallback,

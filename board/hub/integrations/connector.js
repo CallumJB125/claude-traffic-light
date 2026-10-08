@@ -133,6 +133,22 @@
 //   // (Slack: response_url). Errors are swallowed; the answer was already sent.
 //   async onAckedFailure({ payload, headers, error_code, fetch }) → void,
 //
+//   // Optional (step 4): the hub's own provider app, set up by the operator
+//   // (GitHub: integrations/github/app.js, withApp). Every installation's
+//   // deliveries arrive at POST /api/integrations/<id>/webhook signed with the
+//   // app's secret; the registry runs one for the live connection whose
+//   // external_id route() names, only about a repository linked on it
+//   // (integration_app_repos), through the same dedupe, lease, buckets and
+//   // handleWebhook as a per-connection delivery.
+//   app: {
+//     verify({ headers, rawBody }) → { ok, dedupe_key } | { ok: false, reason },
+//     route({ headers, payload }) → { external_id, repo_id } | { lifecycle: { external_id, op, repo_ids? } } | null,
+//     async installUrl({ state }) → 'https://<one of hosts>/…',   // the install page; state comes back to /callback
+//     async install({ query }) → { external_id, display_name, scopes, settings },   // must confirm the browser's installation id
+//     async repositories(connection) → [{ id, full_name, private }],
+//     installationOf(connection) → installation id | null,
+//   },
+//
 //   // Optional: the provider's published webhook source ranges (GitHub's
 //   // `hooks` from https://api.github.com/meta). A delivery from one of them
 //   // skips the per-connection in-flight read cap (it still needs a valid
@@ -224,6 +240,7 @@ const PREPARE_INPUTS_MAX = 8;
 const START_INPUTS_MAX = 4;
 const CONFIG_KEYS_MAX = 32;
 const DAILY_CARD_CAP_MAX = 10_000;
+const APP_HOOKS = Object.freeze(['verify', 'route', 'installUrl', 'install', 'repositories', 'installationOf']);
 // A settings.config key an admin may write (D42 addendum C1): never a path, a
 // prototype key or the name of another settings namespace, in any case.
 export const CONFIG_KEY_RE = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
@@ -313,6 +330,9 @@ export function defineConnector(spec) {
   }
   if (spec?.dailyCardCap !== undefined && !(Number.isInteger(spec.dailyCardCap) && spec.dailyCardCap >= 1 && spec.dailyCardCap <= DAILY_CARD_CAP_MAX)) {
     errs.push(`dailyCardCap is an integer 1–${DAILY_CARD_CAP_MAX} (new cards per day per connection)`);
+  }
+  if (spec?.app !== undefined && (!spec.app || typeof spec.app !== 'object' || !spec.handleWebhook || APP_HOOKS.some((k) => typeof spec.app[k] !== 'function'))) {
+    errs.push(`app holds ${APP_HOOKS.join(', ')} (functions), for a connector that takes webhooks`);
   }
   if (spec?.configKeys !== undefined) {
     const k = spec.configKeys;

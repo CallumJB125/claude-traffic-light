@@ -10,7 +10,7 @@
 
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 
-export const EVENTS = Object.freeze(['pull_request', 'pull_request_review', 'check_suite', 'ping']);
+export const EVENTS = Object.freeze(['pull_request', 'pull_request_review', 'check_suite', 'check_run', 'push', 'issue_comment', 'ping']);
 
 const header = (headers, name) => {
   const v = headers?.[name] ?? headers?.[name.toLowerCase()];
@@ -39,16 +39,16 @@ export function verify({ headers, rawBody, secrets }) {
   return { ok: true, event, dedupe_key: dedupeKey(event, payload && typeof payload === 'object' ? payload : {}, rawBody) };
 }
 
-const OBJECT_OF = { pull_request: 'pull_request', pull_request_review: 'review', check_suite: 'check_suite', ping: 'hook' };
-const WHEN_OF = { pull_request: 'updated_at', pull_request_review: 'submitted_at', check_suite: 'updated_at', ping: 'updated_at' };
+const OBJECT_OF = { pull_request: 'pull_request', pull_request_review: 'review', check_suite: 'check_suite', check_run: 'check_run', ping: 'hook' };
+const WHEN_OF = { pull_request: 'updated_at', pull_request_review: 'submitted_at', check_suite: 'updated_at', check_run: 'completed_at', ping: 'updated_at' };
 
 // Replay key from signed fields; a hash keeps it short and scalar. A review
 // is keyed by its own id (two reviews on one PR in one second are two
-// events); an event this connector ignores is keyed by its whole body.
+// events); any other event (push, issue_comment, one it ignores) by its whole body.
 export function dedupeKey(event, p, rawBody = JSON.stringify(p)) {
   if (!OBJECT_OF[event]) return `${event}:${createHash('sha256').update(rawBody).digest('hex').slice(0, 32)}`;
   const obj = p[OBJECT_OF[event]] ?? {};
-  const parts = [event, p.action ?? '', String(obj.id ?? ''), String(obj[WHEN_OF[event]] ?? ''), String(p.pull_request?.head?.sha ?? p.check_suite?.head_sha ?? '')];
+  const parts = [event, p.action ?? '', String(obj.id ?? ''), String(obj[WHEN_OF[event]] ?? ''), String(p.pull_request?.head?.sha ?? p.check_suite?.head_sha ?? p.check_run?.head_sha ?? '')];
   return `${event}:${createHash('sha256').update(parts.join('\0')).digest('hex').slice(0, 32)}`;
 }
 
@@ -85,6 +85,24 @@ function prFacts(pr, repository) {
 // submit an approving review.
 const TRUSTED = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
 const FAILING = new Set(['failure', 'timed_out', 'action_required', 'startup_failure', 'cancelled']);
+const SHA = /^[0-9a-f]{40}$/;
+
+// The PR's own html URL in this repository, else null.
+function prUrlOf(v, fullName) {
+  if (typeof v !== 'string' || typeof fullName !== 'string') return null;
+  const m = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/([1-9][0-9]{0,9})$/.exec(v);
+  return m && m[1].toLowerCase() === fullName.toLowerCase() ? v : null;
+}
+
+// A suite or run speaks only for the PRs it actually ran for: same head commit, same repo.
+function checkFacts(obj, repository, checks) {
+  const headSha = str(obj?.head_sha, 40);
+  const repoId = int(repository.id);
+  const prs = (Array.isArray(obj?.pull_requests) ? obj.pull_requests : [])
+    .filter((x) => headSha && x?.head?.sha === headSha && repoId !== null && int(x?.base?.repo?.id) === repoId)
+    .map((x) => ({ pr_id: str(x?.id, 30), number: int(x?.number) })).filter((x) => x.pr_id && x.number).slice(0, 20);
+  return prs.length ? [{ kind: 'pr.checks', repo: str(repository.full_name, 140), head_sha: headSha, prs, checks }] : [];
+}
 
 /**
  * The facts in one delivery, in the order to apply them. Each is one of:
@@ -93,6 +111,8 @@ const FAILING = new Set(['failure', 'timed_out', 'action_required', 'startup_fai
  *   { kind: 'pr.closed', ...pr, by }                      → system pr_closed (unmerged)
  *   { kind: 'pr.review', ...pr, review: 'approved'|'changes_requested'|'commented'|'dismissed' }
  *   { kind: 'pr.checks', repo, head_sha, prs: [{pr_id, number}], checks: 'success'|'failure'|'pending' }
+ *   { kind: 'branch.push', repo, branch, head_sha }       a new head on a branch (checks pending again)
+ *   { kind: 'pr.comment', repo, number, url, comment_id, comment_url, by }   a trusted person commented on a PR
  */
 export function factsOf(event, p) {
   const repository = p?.repository;
@@ -127,14 +147,46 @@ export function factsOf(event, p) {
       const c = String(suite?.conclusion ?? '');
       checks = c === 'success' ? 'success' : FAILING.has(c) ? 'failure' : null; // neutral, skipped, stale: no news
     }
-    if (!checks) return [];
-    const headSha = str(suite?.head_sha, 40);
-    const repoId = int(repository.id);
-    // Only the PRs this suite actually ran for: same head commit, same repo.
-    const prs = (Array.isArray(suite?.pull_requests) ? suite.pull_requests : [])
-      .filter((x) => headSha && x?.head?.sha === headSha && repoId !== null && int(x?.base?.repo?.id) === repoId)
-      .map((x) => ({ pr_id: str(x?.id, 30), number: int(x?.number) })).filter((x) => x.pr_id && x.number).slice(0, 20);
-    return prs.length ? [{ kind: 'pr.checks', repo: str(repository.full_name, 140), head_sha: headSha, prs, checks }] : [];
+    return checks ? checkFacts(suite, repository, checks) : [];
+  }
+  // One failing check run is news before its suite completes; a passing one
+  // is not (the others may still fail), so only the suite says passing.
+  if (event === 'check_run') {
+    const run = p.check_run;
+    return p.action === 'completed' && FAILING.has(String(run?.conclusion ?? '')) ? checkFacts(run, repository, 'failure') : [];
+  }
+  if (event === 'push') {
+    const ref = typeof p.ref === 'string' ? p.ref : '';
+    if (!ref.startsWith('refs/heads/') || ref.length > 11 + 250 || p.deleted === true || !SHA.test(p.after ?? '')) return [];
+    return [{ kind: 'branch.push', repo: str(repository.full_name, 140), default_branch: str(repository.default_branch, 250), branch: ref.slice('refs/heads/'.length), head_sha: p.after }];
+  }
+  // A comment on a PR by someone with write access, never a bot's (the
+  // app's own status comments come back as issue_comment events).
+  if (event === 'issue_comment' && p.action === 'created') {
+    const c = p.comment;
+    const url = prUrlOf(p.issue?.pull_request?.html_url, repository.full_name);
+    const commentUrl = url && typeof c?.html_url === 'string' && c.html_url.startsWith(url) && /^#issuecomment-[0-9]{1,20}$/.test(c.html_url.slice(url.length)) ? c.html_url : null;
+    if (!commentUrl || !TRUSTED.has(c?.author_association) || c?.user?.type === 'Bot' || !int(c?.id)) return [];
+    return [{ kind: 'pr.comment', repo: str(repository.full_name, 140), number: Number(url.slice(url.lastIndexOf('/') + 1)), url, comment_id: c.id, comment_url: commentUrl, by: login(c.user) }];
   }
   return [];
+}
+
+/**
+ * Where one delivery to the hub's own app goes (step 4): the installation it
+ * is for and the repository it is about, or that installation's lifecycle
+ * ({op: 'deleted' | 'suspend' | 'unsuspend' | 'repositories_removed', repo_ids}).
+ * null: nothing to route (no installation, a ping, an event about no repository).
+ */
+export function appRoute(event, p) {
+  const installation = int(p?.installation?.id);
+  if (!installation) return null;
+  if (event === 'installation') return ['deleted', 'suspend', 'unsuspend'].includes(p.action) ? { installation_id: installation, lifecycle: { op: p.action } } : null;
+  if (event === 'installation_repositories') {
+    if (p.action !== 'removed') return null;
+    const ids = (Array.isArray(p.repositories_removed) ? p.repositories_removed : []).map((r) => int(r?.id)).filter(Boolean).slice(0, 1000);
+    return ids.length ? { installation_id: installation, lifecycle: { op: 'repositories_removed', repo_ids: ids } } : null;
+  }
+  const repo = int(p?.repository?.id);
+  return EVENTS.includes(event) && event !== 'ping' && repo ? { installation_id: installation, repo_id: repo } : null;
 }

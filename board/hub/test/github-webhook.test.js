@@ -2,7 +2,7 @@
 // the GitHub connector), with fixtures shaped like GitHub's payloads.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { verify, sign, dedupeKey, factsOf } from '../integrations/github/webhook.js';
+import { verify, sign, dedupeKey, factsOf, appRoute } from '../integrations/github/webhook.js';
 
 const SECRET = ['whsec', 'test-0123456789abcdef'].join('-');
 const repo = { id: 501, full_name: 'acme/app', default_branch: 'main' };
@@ -136,4 +136,49 @@ test('M2: conclusions: neutral, skipped and stale say nothing; requested is pend
   assert.equal(checksOf({ conclusion: 'success' }), 'success');
   assert.equal(checksOf({ conclusion: null, status: 'queued' }, 'requested'), 'pending');
   assert.equal(checksOf({ conclusion: null, status: 'queued' }, 'rerequested'), 'pending');
+});
+
+test('step 4: a failing check run is news before its suite; a passing one is not; only PRs on its head in its repo', () => {
+  const run = (over = {}, action = 'completed', repository = repo) => ({ action, repository, check_run: { id: 8, head_sha: 'a'.repeat(40), status: 'completed', conclusion: 'failure', completed_at: 't', pull_requests: [suitePr()], ...over } });
+  assert.deepEqual(factsOf('check_run', run()), [{ kind: 'pr.checks', repo: 'acme/app', head_sha: 'a'.repeat(40), prs: [{ pr_id: '991', number: 42 }], checks: 'failure' }]);
+  for (const c of ['success', 'neutral', 'skipped', null]) assert.deepEqual(factsOf('check_run', run({ conclusion: c })), [], String(c));
+  assert.deepEqual(factsOf('check_run', run({}, 'created')), []);
+  assert.deepEqual(factsOf('check_run', run({ pull_requests: [suitePr({ base: { ref: 'main', repo: { id: 999 } } })] })), [], 'PR of another repo');
+  assert.notEqual(dedupeKey('check_run', run()), dedupeKey('check_run', run({ id: 9 })));
+});
+
+test('step 4: a push to a branch is a new head; a tag, a deletion or a bad sha says nothing', () => {
+  const push = (over = {}) => ({ ref: 'refs/heads/board/BDL-12-r3', after: 'b'.repeat(40), deleted: false, repository: repo, ...over });
+  assert.deepEqual(factsOf('push', push()), [{ kind: 'branch.push', repo: 'acme/app', default_branch: 'main', branch: 'board/BDL-12-r3', head_sha: 'b'.repeat(40) }]);
+  assert.deepEqual(factsOf('push', push({ ref: 'refs/tags/v1' })), []);
+  assert.deepEqual(factsOf('push', push({ deleted: true, after: '0'.repeat(40) })), []);
+  assert.deepEqual(factsOf('push', push({ after: 'zz' })), []);
+});
+
+test('step 4: a PR comment by someone with write access names who and where, never the text; bots, issues and other repos say nothing', () => {
+  const comment = (over = {}, issue = {}) => ({
+    action: 'created', repository: repo,
+    issue: { number: 42, pull_request: { html_url: 'https://github.com/acme/app/pull/42' }, ...issue },
+    comment: { id: 5, body: 'secret plans', html_url: 'https://github.com/acme/app/pull/42#issuecomment-5', author_association: 'MEMBER', user: { login: 'tonde', type: 'User' }, ...over },
+  });
+  const [f] = factsOf('issue_comment', comment());
+  assert.deepEqual(f, { kind: 'pr.comment', repo: 'acme/app', number: 42, url: 'https://github.com/acme/app/pull/42', comment_id: 5, comment_url: 'https://github.com/acme/app/pull/42#issuecomment-5', by: 'tonde' });
+  assert.ok(!JSON.stringify(f).includes('secret plans'));
+  assert.deepEqual(factsOf('issue_comment', comment({ user: { login: 'plexiform[bot]', type: 'Bot' } })), []);
+  assert.deepEqual(factsOf('issue_comment', comment({ author_association: 'NONE' })), []);
+  assert.deepEqual(factsOf('issue_comment', comment({}, { pull_request: undefined })), [], 'a plain issue');
+  assert.deepEqual(factsOf('issue_comment', comment({}, { pull_request: { html_url: 'https://github.com/mallory/app/pull/42' } })), []);
+  assert.deepEqual(factsOf('issue_comment', comment({ html_url: 'https://evil.example/x' })), []);
+});
+
+test('step 4: an app delivery routes by its installation and repository; lifecycle events by their installation only', () => {
+  assert.deepEqual(appRoute('pull_request', { installation: { id: 7 }, repository: repo }), { installation_id: 7, repo_id: 501 });
+  assert.equal(appRoute('pull_request', { repository: repo }), null, 'no installation');
+  assert.equal(appRoute('ping', { installation: { id: 7 }, repository: repo }), null);
+  assert.equal(appRoute('star', { installation: { id: 7 }, repository: repo }), null, 'an event the app does not take');
+  assert.equal(appRoute('pull_request', { installation: { id: 7 } }), null, 'about no repository');
+  assert.deepEqual(appRoute('installation', { action: 'deleted', installation: { id: 7 } }), { installation_id: 7, lifecycle: { op: 'deleted' } });
+  assert.equal(appRoute('installation', { action: 'created', installation: { id: 7 } }), null);
+  assert.deepEqual(appRoute('installation_repositories', { action: 'removed', installation: { id: 7 }, repositories_removed: [{ id: 501 }, { id: 'x' }] }), { installation_id: 7, lifecycle: { op: 'repositories_removed', repo_ids: [501] } });
+  assert.equal(appRoute('installation_repositories', { action: 'added', installation: { id: 7 }, repositories_added: [{ id: 1 }] }), null);
 });

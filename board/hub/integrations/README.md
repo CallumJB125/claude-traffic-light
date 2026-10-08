@@ -185,6 +185,26 @@ unchanged. The UI saves the explicit default/target board together, plus up to 3
 severity, optional redacted issue message and cooldown. Missing/archived default pauses creation; a
 multi-project incident whose routes disagree also pauses instead of guessing.
 
+**One app, many installations (GitHub App, step 4).** A connector whose provider lets one operator-owned app
+be installed by many accounts declares `app: {verify, route, installUrl, install, repositories, installationOf}`
+(`connector.js`; GitHub: `github/index.js` `withApp`, configured from `GITHUB_APP_*`, `docs/GITHUB-APP-RUNBOOK.md`).
+`POST /api/integrations/:provider/install` (admins) returns the provider's install page with a state signed like
+`/start`'s and marked as an install; the callback hands the query to `app.install`, which **must** confirm the
+browser-supplied installation id with the provider for the signed-in user (GitHub: the install's one-time `code`
+→ `GET /user/installations`) before the registry makes the connection (`external_id` `inst:<id>`, no sealed
+secrets). An installation is one connection hub-wide: another team's is a generic `CONFLICT`; a reinstall in the
+same team answers with the existing connection. Every installation's deliveries arrive at
+`POST /api/integrations/:provider/webhook`, read under the same caps as a connection's (with `app:<provider>` as
+the connection key and the connector's `ingressCidrs`), checked by `app.verify` (the app's own secret), then
+`app.route` names the installation and repository: a delivery runs as that live connection's own (same dedupe
+keys, lease, buckets, handler and audit) **only** for a repository an admin linked on it (`integration_app_repos`,
+migration 065, through `GET/POST/DELETE /api/integrations/:id/repos`); anything else verified is `200 {ignored}`.
+`route` may answer `{lifecycle: {op}}` instead (`deleted` revokes, `suspend`/`unsuspend` set health,
+`repositories_removed` unlinks), applied once per delivery. `ctx.linkedUrl(kind, url)` finds the card of a link by
+its URL (a PR comment names its PR by html URL). Writes a member starts from a card (GitHub: Open PR, Comment
+status, `github/cards.js`) run inside the connection's `act()` under declared actions an admin can switch off, and
+are limited per member and per card.
+
 **Planned interface (not built yet; do not rely on it).** `signals: ['incident']`
 (S-C3, D99): inside `act()`, `s.signal(kind, {card_id})` for a card **this connection created** writes one
 journal row `integration.signal` `{connection_id, kind, card_id}` (ids only, never text), at most one per

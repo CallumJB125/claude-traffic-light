@@ -150,6 +150,13 @@ export const api = {
   revokeIdentity: (id, memberId) => mut('DELETE', `/api/integrations/${enc(id)}/identities/${enc(memberId)}`),
   // Runs overlapping [from, to] (ISO times, at most 31 days), for the History view.
   runs: (boardId, from, to) => call('GET', `/api/boards/${enc(boardId)}/runs?from=${enc(from)}&to=${enc(to)}`, undefined, { signal: AbortSignal.timeout(30_000) }),
+  // The hub's own GitHub App (step 4): install it, link an installation's repositories; card actions.
+  installApp: (provider) => mut('POST', `/api/integrations/${enc(provider)}/install`),
+  appRepos: (id) => call('GET', `/api/integrations/${enc(id)}/repos`),
+  linkAppRepo: (id, repoId, boardId) => mut('POST', `/api/integrations/${enc(id)}/repos`, { repo_id: repoId, ...(boardId ? { board_id: boardId } : {}) }),
+  unlinkAppRepo: (id, repoId) => mut('DELETE', `/api/integrations/${enc(id)}/repos/${enc(repoId)}`),
+  openPr: (cardId) => mut('POST', `/api/cards/${enc(cardId)}/github/pr`),
+  commentStatus: (cardId) => mut('POST', `/api/cards/${enc(cardId)}/github/comment`),
   // Also returns offset_ms (hub clock − ours, from the Date header): journal
   // times are hub times. A page gets 30 s before it counts as unreachable.
   journal: async (boardId, afterSeq = 0, limit = 1000) => {

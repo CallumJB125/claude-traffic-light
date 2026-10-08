@@ -36,6 +36,11 @@ const ACTION_LABEL = {
   'sentry.status': 'Comment on issue status and regressions',
   'sentry.incident': 'Create cards from critical metric alerts',
   'sentry.incident-status': 'Comment on incident status updates',
+  'pr.link': 'Link a card’s pull request',
+  'pr.status': 'Show checks and review on the card',
+  'pr.comment_notice': 'Note new PR comments on the card',
+  'pr.create': 'Open a PR from a card (when a member asks)',
+  'pr.comment': 'Comment a card’s status on its PR (when a member asks)',
 };
 export const actionLabel = (id) => ACTION_LABEL[id] ?? id;
 
@@ -103,6 +108,7 @@ function ownerLine(conn, name) {
   const p = conn.settings?.provider;
   const org = typeof p?.org === 'string' && LOGIN_RE.test(p.org) ? p.org : null;
   const login = typeof p?.login === 'string' && LOGIN_RE.test(p.login) ? p.login : null;
+  if (p?.mode === 'app' && login) return `Installed on the ${name} ${p.account_type === 'Organization' ? 'organization' : 'account'} ${login}`;
   if (org) return `Created under the ${name} organization ${org}`;
   return login ? `Created under the ${name} account ${login}` : null;
 }
@@ -115,6 +121,23 @@ function webhookUrlSection(conn, name) {
         h('p', { key: 'u', class: 'integ-webhook-url' }, h('code', { class: 'num' }, conn.webhook_url), ' ',
           h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'integ-copy-url', 'data-url': conn.webhook_url }, 'Copy'))]
       : h('p', { class: 'muted small' }, 'This hub has no public address. Ask its administrator to configure one before connecting webhooks.'));
+}
+
+// An installation of the hub's own app (step 4): which of its repositories
+// this team links. Only linked ones reach cards; linking one also adds it to
+// the open board. Admins only (the list comes from the provider).
+function reposSection(conn, m) {
+  const list = m.repos?.[conn.id];
+  const busy = m.busy.has(`integ-repos:${conn.id}`);
+  return h('section', { class: 'integ-section', 'aria-label': 'Repositories' },
+    h('h4', null, 'Repositories'),
+    h('button', { type: 'button', class: 'link small', 'data-action': 'integ-repos', 'data-conn': conn.id, 'aria-expanded': list ? 'true' : 'false', disabled: busy || null }, list ? 'Hide repositories' : 'Choose repositories'),
+    list ? (list.length
+      ? h('ul', { class: 'integ-linked' }, list.map((r) => h('li', { key: r.id },
+        h('span', { class: 'num' }, r.full_name), r.private ? h('span', { class: 'muted small' }, ' · private') : null, ' ',
+        h('button', { type: 'button', class: r.linked ? 'btn btn-sm btn-quiet-danger' : 'btn btn-sm', 'data-action': 'integ-repo-link', 'data-conn': conn.id, 'data-repo': String(r.id), 'data-link': r.linked ? '0' : '1', disabled: busy || null },
+          r.linked ? 'Unlink' : 'Link'))))
+      : h('p', { class: 'muted small' }, 'This installation has no repositories yet: add some on GitHub.')) : null);
 }
 
 function connectedCard(conn, m) {
@@ -140,6 +163,7 @@ function connectedCard(conn, m) {
           : h('span', null, (m.boards ?? []).find((b) => b.id === conn.target_board_id)?.name ?? 'Team board'))),
     connector?.identity ? identitySection(conn, connector.name ?? conn.provider, m) : null,
     m.canEdit && Object.hasOwn(conn, 'webhook_url') ? webhookUrlSection(conn, connector?.name ?? conn.provider) : null,
+    m.canEdit && conn.settings?.provider?.mode === 'app' ? reposSection(conn, m) : null,
     h('div', { class: 'integ-card-actions' },
       m.canEdit ? h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'integ-activity', 'data-conn': conn.id, 'aria-expanded': open ? 'true' : 'false' }, open ? 'Hide activity' : 'Activity') : null,
       m.canEdit ? (confirming
@@ -276,6 +300,9 @@ function availableCard(c, m) {
     m.local ? null
       : !m.canEdit ? h('p', { class: 'muted small' }, 'A team admin can connect this.')
       : !m.vault ? null
+      : c.app ? h('div', null,
+        h('p', { class: 'muted small' }, `Install the Plexiform app on a ${c.name} account or organization, then choose which repositories this team links.`),
+        h('button', { type: 'button', class: 'btn btn-sm btn-primary', 'data-action': 'integ-install', 'data-provider': c.id, disabled: busy || null, 'aria-busy': busy ? 'true' : null }, `Install on ${c.name}`))
       : manifest ? manifestForm(c, manifest)
       : Array.isArray(c.start) && c.start.length && c.connect !== 'token' ? startForm(c, busy)
       : Array.isArray(c.prepare) && c.connect !== 'token' ? prepareForm(c, busy)
@@ -327,12 +354,13 @@ export function integrationsScreen(model) {
     available: data.available ?? [], vault: !!data.vault, canEdit: ['owner', 'admin'].includes(model.me?.member?.role),
     canWrite: ['owner', 'admin', 'member'].includes(model.me?.member?.role), linked: m.linked ?? {},
     local: !!m.local, nowMs: m.nowMs ?? Date.now(), open: m.open, audit: m.audit ?? {}, tokenFor: m.tokenFor, manifest: m.manifest, confirmDisconnect: m.confirmDisconnect, busy: model.busy,
-    meId: model.me?.member?.id, needs: m.needs ?? {}, confirmCancel: m.confirmCancel,
+    meId: model.me?.member?.id, needs: m.needs ?? {}, confirmCancel: m.confirmCancel, repos: m.repos ?? {},
     sentryErrors: m.sentryErrors ?? {},
   };
   const connected = data.connections ?? [];
   const pending = vm.canEdit ? data.pending ?? [] : [];
-  const notYet = vm.available.filter((c) => !connected.some((x) => x.provider === c.id) && !pending.some((p) => p.provider === c.id));
+  // An app connector takes one installation per account or organization: always another one to add.
+  const notYet = vm.available.filter((c) => c.app || (!connected.some((x) => x.provider === c.id) && !pending.some((p) => p.provider === c.id)));
   return main(
     h('header', { class: 'integview-head' },
       h('h1', null, 'Integrations'),

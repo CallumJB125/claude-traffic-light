@@ -8,10 +8,18 @@
 // this team's boards), never from text in a PR title or body, and never from
 // a fork (webhook.js drops a fork PR's branch). Connect is a GitHub App made
 // from a manifest (connect.manifestForm), so Callum approves one screen.
+//
+// Step 4: a hub with its own GitHub App (app.js; withApp below) also connects
+// a team to an installation of that one app (connect.app): its deliveries
+// all arrive at /api/integrations/github/webhook, signed with the app's
+// secret, and reach the connection that installation was linked to, for the
+// repositories a team admin linked. The same apply() maps them to cards; a
+// member's 'Open PR' and 'Comment status' (cards.js) write with the
+// installation's token.
 
 import { randomBytes } from 'node:crypto';
 import { defineConnector } from '../connector.js';
-import { verify as verifyWebhook, factsOf, EVENTS } from './webhook.js';
+import { verify as verifyWebhook, factsOf, EVENTS, appRoute } from './webhook.js';
 
 const API = 'https://api.github.com';
 const LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/;
@@ -192,12 +200,28 @@ export async function apply(ctx, facts) {
           await linkAndStatus(ctx, { ...pr, repo: f.repo }, { checks: CHECKS[f.checks] });
         }
         break;
+      // A push to the card's branch is a new head before its synchronize
+      // arrives: the old checks no longer describe it.
+      case 'branch.push': {
+        const b = boardCard(ctx, f);
+        const prId = b && typeof ctx.linkedByCard === 'function' ? ctx.linkedByCard(b.card, 'pr') : null;
+        if (prId) await linkAndStatus(ctx, { pr_id: prId, repo: f.repo }, { checks: 'pending', head_sha: f.head_sha });
+        break;
+      }
+      // Who commented, and where: never the comment's text (D41).
+      case 'pr.comment': {
+        const card = typeof ctx.linkedUrl === 'function' ? ctx.linkedUrl('pr', f.url) : null;
+        if (!card || !f.by) break;
+        await ctx.act('pr.comment_notice', { card_id: card, external_ref: `#${f.number}`, detail: { pr: f.number } }, (s) => s.actAs(ctx.connection.created_by)
+          .comment(card, { request_id: `github-comment-${f.comment_id}`, body: `${f.by} commented on pull request #${f.number}: ${f.comment_url}` }));
+        break;
+      }
       default:
     }
   }
 }
 
-export default defineConnector({
+const SPEC = {
   id: 'github',
   name: 'GitHub',
   scopes: ['pull_requests:read', 'checks:read', 'metadata:read'],
@@ -277,7 +301,62 @@ export default defineConnector({
     'system.pr_closed': { default: 'auto' },
     'pr.link': { default: 'auto', reversible: true },
     'pr.status': { default: 'auto', reversible: true },
+    // Declared here too: a manifest app's owner can add issue_comment to it on GitHub later.
+    'pr.comment_notice': { default: 'auto' },
   },
 
   async health() { return { ok: true }; },
-});
+};
+
+export default defineConnector(SPEC);
+
+// What an installation of the hub's app may do: the manifest's permissions
+// (docs/github-app-manifest.json). It writes pull requests only (open one,
+// comment on one); contents and issues are read so push and PR-comment
+// events are delivered.
+export const APP_SCOPES = Object.freeze(['pull_requests:write', 'contents:read', 'issues:read', 'checks:read', 'metadata:read']);
+const installationOf = (connection) => {
+  const id = connection?.settings?.provider?.installation_id;
+  return Number.isSafeInteger(id) && id > 0 && connection.external_id === `inst:${id}` ? id : null;
+};
+
+/**
+ * The connector with the hub's own app (createGitHubApp): `connect.app` for
+ * the registry's install flow and its one app webhook. Member-started writes
+ * (Open PR, Comment status) are declared here so admins can switch them off;
+ * they run only from a member's click, never from an event.
+ */
+export function withApp(app) {
+  return defineConnector({
+    ...SPEC,
+    scopes: [...APP_SCOPES],
+    actions: { ...SPEC.actions, 'pr.create': { default: 'auto' }, 'pr.comment': { default: 'auto' } },
+    app: Object.freeze({
+      verify: ({ headers, rawBody }) => app.verify({ headers, rawBody }),
+      // {external_id, repo_id} | {lifecycle: {external_id, op, repo_ids?}} | null
+      route({ headers, payload }) {
+        const r = appRoute(String(headers?.['x-github-event'] ?? ''), payload);
+        if (!r) return null;
+        if (r.lifecycle) return { lifecycle: { ...r.lifecycle, external_id: `inst:${r.installation_id}` } };
+        return { external_id: `inst:${r.installation_id}`, repo_id: r.repo_id };
+      },
+      installUrl: ({ state }) => app.installUrl(state),
+      // The callback's installation_id counts only once GitHub confirms the
+      // signed-in user can see it (app.installationFor).
+      async install({ query }) {
+        if (query.get('setup_action') === 'request') throw Object.assign(new Error('install requested'), { code: 'REQUESTED' });
+        const inst = await app.installationFor({ code: query.get('code'), installationId: query.get('installation_id') });
+        return {
+          external_id: `inst:${inst.installation_id}`, display_name: inst.account_login, scopes: [...APP_SCOPES],
+          settings: { mode: 'app', installation_id: inst.installation_id, login: inst.account_login, account_type: inst.account_type, repository_selection: inst.repository_selection },
+        };
+      },
+      repositories: (connection) => {
+        const id = installationOf(connection);
+        if (!id) throw new Error('not an app installation');
+        return app.repositories(id);
+      },
+      installationOf,
+    }),
+  });
+}

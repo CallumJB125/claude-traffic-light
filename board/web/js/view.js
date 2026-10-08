@@ -138,7 +138,7 @@ export function boardLamps(viewerId, entries, connection_lost) {
   const { items } = alertsForViewer(viewerId, entries, { max: 99 });
   return {
     red: items.some((a) => a.kind === 'orphaned' || a.kind === 'failed'),
-    amber: items.some((a) => a.kind === 'blocked' || a.kind === 'overlap'),
+    amber: items.some((a) => a.kind === 'blocked' || a.kind === 'overlap' || a.kind === 'checks' || a.kind === 'review'),
     green: entries.some((e) => e.face.green),
   };
 }

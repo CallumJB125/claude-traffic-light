@@ -11,6 +11,7 @@ import { cleanLinkStatus } from './integrations/connector.js';
 import { AI_LABELS, AI_CAPABILITIES, aiOfDispatch } from '../shared/ai.js';
 import { workCaptureView } from './work-capture-view.js';
 import { commentIdentity } from './remote/attribution.js';
+import { githubCardView } from './integrations/github/cards.js';
 
 export const EMAIL_ONLY = 'email:';   // github_login placeholder of an email-only (Access OTP) member
 export const LOCAL_ONLY = 'local:';   // github_login placeholder of the BOARD_AUTH=local owner (D35)
@@ -197,6 +198,7 @@ export function cardView(hub, row, viewerId) {
     budget: budgetCap != null ? { spent_usd: hub.cardSpentCents(row.id) / 100, cap_usd: budgetCap / 100 } : null,
     pr: prView(hub, row),
     pr_link_status: prLinkStatus(hub, row),
+    github: githubCardView(hub, row),
     evidence: evidenceSummary(hub, row.id, runRow?.id),
     review: hub.reviews?.summary(row) ?? null,
   };

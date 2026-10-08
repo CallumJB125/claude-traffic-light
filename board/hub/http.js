@@ -270,7 +270,7 @@ function sendConnectPage(res, status, text, kind, headers = {}, next = null) {
   res.end(body);
 }
 
-export function createHttpHandler({ hub, api, config, integrations = null }) {
+export function createHttpHandler({ hub, api, config, integrations = null, githubCards = null }) {
   const workflows = new Workflows(hub);
   const workflowExecutions = new WorkflowExecutions(api);
   const workflowExecutor = api.workflowExecutor;
@@ -730,6 +730,36 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
       own(member, params.id);
       return { entries: integrations.audit(params.id, { limit: Number(query.get('limit') ?? 100) }) };
     }, { integrationAccess: 'admin' });
+    // The hub's own provider app (GitHub App, step 4): an admin installs it
+    // and links the installation's repositories. 404 on a hub without one.
+    route('POST', '/api/integrations/:provider/install', async ({ member, params, req, res, integrationCurrent }) => {
+      api.requireAdmin(member);
+      const out = await integrations.appInstallStart({ member, provider: params.provider, publicUrl: publicBase(req) });
+      integrationCurrent();
+      setBind(res, out.cookie);
+      return { url: out.url, bind: out.bind };
+    }, { replay: PREPARE_REPLAY, integrationAccess: 'admin' });
+    route('GET', '/api/integrations/:id/repos', ({ member, params }) => {
+      api.requireAdmin(member);
+      own(member, params.id);
+      return integrations.appRepos({ member, connectionId: params.id });
+    }, { integrationAccess: 'admin' });
+    route('POST', '/api/integrations/:id/repos', ({ member, params, body }) => {
+      api.requireAdmin(member);
+      own(member, params.id);
+      return integrations.appLinkRepo({ member, connectionId: params.id, repoId: body.repo_id, boardId: body.board_id ?? null });
+    }, { integrationAccess: 'admin' });
+    route('DELETE', '/api/integrations/:id/repos/:repo_id', ({ member, params }) => {
+      api.requireAdmin(member);
+      own(member, params.id);
+      const repoId = Number(params.repo_id);
+      if (!Number.isSafeInteger(repoId) || repoId <= 0) throw new HubError('NOT_FOUND', 'no such repository');
+      return integrations.appUnlinkRepo({ member, connectionId: params.id, repoId });
+    }, { integrationAccess: 'admin' });
+    // A member's own click on a card (never an event): its repo's installation writes.
+    const cards = () => { if (!githubCards) throw new HubError('NOT_FOUND', 'no such route'); return githubCards; };
+    route('POST', '/api/cards/:card_id/github/pr', ({ member, params, ident }) => cards().openPr(member, params.card_id, { cred: ident?.cred ?? null }), { collaboration: true });
+    route('POST', '/api/cards/:card_id/github/comment', ({ member, params, ident }) => cards().commentStatus(member, params.card_id, { cred: ident?.cred ?? null }), { collaboration: true });
   }
 
   async function serveFile(req, res, path) {
@@ -844,11 +874,15 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
       }
     }
     const hook = integrations && req.method === 'POST' ? /^\/integrations\/([0-9a-f-]{36})\/webhook$/.exec(url.pathname) : null;
-    if (hook) {
+    // One provider app's deliveries for every installation (GitHub App, step
+    // 4): the same caps, with `app:<provider>` where a connection id would be.
+    const appHook = integrations && req.method === 'POST' && !hook ? /^\/api\/integrations\/([a-z][a-z0-9-]{1,31})\/webhook$/.exec(url.pathname) : null;
+    if (hook || appHook) {
+      const target = hook ? hook[1] : `app:${appHook[1]}`;
       try {
         // Any other id (unknown, inactive, revoked, pending) is read under the
         // same caps and answered by webhook(): one 404 for all of them (D97).
-        const live = integrations.webhookTarget(hook[1]);
+        const live = hook ? integrations.webhookTarget(hook[1]) : integrations.appTarget(appHook[1]);
         // Nothing here refuses a delivery for other senders' failures: a
         // provider's shared egress IPs also carry anyone's forged posts. Failures
         // (per connection + client IP) only turn a later failure's 401 into a
@@ -856,14 +890,15 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
         // (WEBHOOK_READS) apply, and a refused read is 503 so the provider retries.
         const raw = clientIp(req, config);
         const ip = failBucketKey(raw);
-        const failKey = `${hook[1]}|${ip}`;
+        const failKey = `${target}|${ip}`;
         // Not a connection: the sender picks the id, so its reads share one
         // slot pool and its failures one bucket per address (no bucket per id,
         // and no id answers apart).
-        const connKey = live ? hook[1] : '-';
-        const vetKey = `${hook[1]}|${vetBucketKey(ip)}`;
+        const connKey = live ? target : '-';
+        const vetKey = `${target}|${vetBucketKey(ip)}`;
         const count = (m, k) => m.get(k) ?? 0;
-        const vetted = live && (integrations.trustedIngress(hook[1], raw) || (verifiedPairs.get(vetKey) ?? -Infinity) > hub.mono());
+        const trusted = hook ? integrations.trustedIngress(hook[1], raw) : integrations.appIngress(appHook[1], raw);
+        const vetted = live && (trusted || (verifiedPairs.get(vetKey) ?? -Infinity) > hub.mono());
         const cut = () => cutIfUnread(req, res);
         if (count(reading.pair, failKey) >= readLimits.perPair || count(reading.ip, ip) >= readLimits.perIp || (!vetted && count(reading.conn, connKey) >= (live ? readLimits.perConn : readLimits.perUnknown))) {
           cut();
@@ -896,7 +931,9 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
         if (got.error === 408) return failed(408, { error: { code: 'TIMEOUT', message: 'body not received in time' } });
         if (got.error) return undefined;
         // webhook() spends webhook_conn only once the signature is verified.
-        const out = await integrations.webhook(hook[1], { headers: req.headers, rawBody: got.body });
+        const out = hook
+          ? await integrations.webhook(hook[1], { headers: req.headers, rawBody: got.body })
+          : await integrations.appWebhook(appHook[1], { headers: req.headers, rawBody: got.body });
         if (out.verified) {
           verifiedPairs.delete(vetKey);
           verifiedPairs.set(vetKey, hub.mono() + readLimits.verifiedMs);
@@ -908,7 +945,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
         return sendJson(res, out.status, out.body, out.headers);
       } catch (e) {
         if (e instanceof HubError) return sendJson(res, httpStatus(e.code), errorBody(e), retryHeader(e));
-        hub.log.error('integration webhook failed', { connection_id: hook[1], err: redact(e?.message ?? e) });
+        hub.log.error('integration webhook failed', { connection_id: target, err: redact(e?.message ?? e) });
         return sendJson(res, 500, { error: { code: 'INTERNAL', message: 'internal error' } });
       }
     }

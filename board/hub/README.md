@@ -113,6 +113,10 @@ Raspberry Pi 5 (arm64). Node 22 prints an `ExperimentalWarning` for SQLite; that
 | `BOARD_GITHUB_TOKEN` | — | Read-only token (fine-grained: Pull requests + Contents read). Enables PR/commit verification and the Done merge poll. A PR only counts when it is a same-repo PR from the run branch into the run's base branch (D90); forks and retargeted PRs stay `self_reported` and never move the card. Unset: evidence stays `self_reported` and no auto-Done |
 | `BOARD_GITHUB_API` | `https://api.github.com` | GitHub API base URL |
 | `BOARD_GITHUB_POLL_MS` | `60000` | Merge poll interval for in-review cards |
+| `GITHUB_APP_ID` | — | The hub's own GitHub App (step 4, `docs/GITHUB-APP-RUNBOOK.md`): its numeric id. With the four below, teams connect GitHub by installing that app; its deliveries arrive at `<BOARD_PUBLIC_URL>/api/integrations/github/webhook`. All unset: no app (the per-team manifest flow stays). Any set without the rest stops start-up with a text naming the variable, never a value |
+| `GITHUB_APP_PRIVATE_KEY_FILE` | — | Path to the app's private key (`.pem`, mode 0600, outside the repo and the data dir). Read once at start-up into memory; it signs the app JWT that buys installation tokens (held in memory until 5 min before they expire, never stored or logged) |
+| `GITHUB_APP_WEBHOOK_SECRET` | — | The app's webhook secret (16–256 characters): every app delivery's `X-Hub-Signature-256` is checked with it. Removed from the environment once read |
+| `GITHUB_APP_CLIENT_ID` / `GITHUB_APP_CLIENT_SECRET` | — | The app's OAuth client: the install callback trades GitHub's one-time code for the installing user's token, asks only whether that user can see the installation, then revokes it. The secret is removed from the environment once read |
 | `BOARD_WEB_DIR` | `board/web` | Static web root (`/` → `index.html`, `/web/*`) |
 | `BOARD_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` or `silent` |
 | `BOARD_SHUTDOWN_GRACE_MS` | `5000` | How long a graceful shutdown waits for WS close handshakes and queued writes |

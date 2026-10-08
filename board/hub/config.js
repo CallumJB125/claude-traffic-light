@@ -2,7 +2,9 @@
 // hub/README.md; keep the two in sync.
 
 import { isIP } from 'node:net'; // privacy-flow: local-board-sockets
+import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { githubAppConfig } from './integrations/github/app.js';
 import { fileURLToPath } from 'node:url';
 import { parseStorageMax, validateStorageMax } from './storage-watch.js';
 import { r2Config } from './sync-store.js';
@@ -108,6 +110,8 @@ export function loadConfig(env = process.env) {
     pushVapidPrivateKey: hidden(env.BOARD_PUSH_VAPID_PRIVATE_KEY || null),
     syncR2AccessKeyId: hidden(env.BOARD_SYNC_R2_ACCESS_KEY_ID || null),
     syncR2SecretAccessKey: hidden(env.BOARD_SYNC_R2_SECRET_ACCESS_KEY || null),
+    // The hub's own GitHub App (step 4): its key, webhook and client secrets are non-enumerable inside.
+    githubApp: hidden(githubAppConfig(env, { readFile: (p) => readFileSync(p, 'utf8') })),
   });
   // Only from the real environment (nothing started later inherits them); a test's env object stays as given.
   if (env === process.env) {
@@ -127,6 +131,8 @@ export function loadConfig(env = process.env) {
   delete env.BOARD_PUSH_VAPID_PRIVATE_KEY;
   delete env.BOARD_SYNC_R2_ACCESS_KEY_ID;
   delete env.BOARD_SYNC_R2_SECRET_ACCESS_KEY;
+  delete env.GITHUB_APP_WEBHOOK_SECRET;
+  delete env.GITHUB_APP_CLIENT_SECRET;
   validateConfig(cfg);
   return cfg;
 }

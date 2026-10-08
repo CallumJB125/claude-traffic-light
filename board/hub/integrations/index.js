@@ -3,9 +3,12 @@
 // Sentry (./sentry/index.js) is built but not listed: it joins this list only
 // once a real Sentry delivery has been checked against its verify() (CONTRACT
 // D42 addendum "the Sentry connector", go-live gate).
+// `githubApp`: the hub's own GitHub App client (github/app.js), when the
+// operator configured one; GitHub then also connects by installation.
 import fake from './fake/index.js';
-import github from './github/index.js';
+import github, { withApp } from './github/index.js';
 
-export function connectorsFor(config) {
-  return config.auth === 'dev' ? [fake, github] : [github];
+export function connectorsFor(config, { githubApp = null } = {}) {
+  const gh = githubApp ? withApp(githubApp) : github;
+  return config.auth === 'dev' ? [fake, gh] : [gh];
 }

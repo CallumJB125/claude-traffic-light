@@ -118,6 +118,20 @@ test('overlap chip, activity line, budget bar', () => {
   assert.deepEqual(f.budget, { text: '$1.20 / $5', ratio: 0.24 });
 });
 
+test('alerts strip: failing checks and a requested review on an open PR need the people on the card; a merged PR or a bystander gets none', () => {
+  const pr = (s) => ({ state: 'open', checks: null, review: null, ...s });
+  const cards = [
+    view('in_review', { id: 'c', key: 'BDL-150', state_age_ms: 1000, pr_link_status: pr({ checks: 'failing', review: 'requested' }) }),
+    view('in_review', { id: 'r', key: 'BDL-151', state_age_ms: 2000, pr_link_status: pr({ review: 'requested' }) }),
+    view('done', { id: 'd', key: 'BDL-152', state_age_ms: 3000, pr_link_status: pr({ state: 'merged', checks: 'failing' }) }),
+  ];
+  assert.deepEqual(alertsFor('m-c', cards).items.map((i) => [i.kind, i.text]), [
+    ['checks', '✖ BDL-150 · checks failing on its PR'],
+    ['review', '👀 BDL-151 · review requested on its PR'],
+  ]);
+  assert.equal(alertsFor('m-nobody', cards).items.length, 0);
+});
+
 test('alerts strip: per viewer, N-rules for orphans, newest first, max 5 + more', () => {
   const cards = [
     view('blocked', { id: 'b', key: 'BDL-142', blocked_kind: 'permission', ask: { count: 2 }, state_age_ms: 1000, approvers: ['m-c'] }),

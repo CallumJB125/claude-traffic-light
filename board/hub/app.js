@@ -7,6 +7,8 @@ import { loadKey, loadPreviousKey } from './vault.js';
 import { createBus } from './bus.js';
 import { createIntegrations } from './integrations/registry.js';
 import { connectorsFor } from './integrations/index.js';
+import { createGitHubApp } from './integrations/github/app.js';
+import { createGitHubCards } from './integrations/github/cards.js';
 import { createServer } from 'node:http'; // privacy-flow: local-board-hub
 import { randomBytes } from 'node:crypto';
 import { WebSocketServer } from 'ws'; // privacy-flow: local-board-hub
@@ -110,11 +112,15 @@ function buildApp(config, { db, clock, log, github, fetchImpl, timers, mailer })
   const bus = createBus({ db, log });
   hub.on('journal', () => bus.poke());
   const integrations = createIntegrations({ hub, api, bus, log, fetchImpl, publicUrl: config.publicUrl });
-  for (const c of connectorsFor(config)) integrations.register(c);
+  // The hub's own GitHub App (step 4), from the operator's GITHUB_APP_* settings.
+  const githubApp = config.githubApp ? createGitHubApp(config.githubApp, { fetchImpl, now: clock.wall }) : null;
+  hub.hasGitHubApp = !!githubApp;
+  for (const c of connectorsFor(config, { githubApp })) integrations.register(c);
+  const githubCards = githubApp ? createGitHubCards({ hub, api, integrations, app: githubApp }) : null;
   // Expired pending connections (D97) go with the reaper (the registry runs it at most once a minute).
   hub.sweepIntegrationsPending = () => integrations.sweepPending();
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 }); // privacy-flow: local-board-hub
-  const handler = createHttpHandler({ hub, api, config, integrations });
+  const handler = createHttpHandler({ hub, api, config, integrations, githubCards });
   const lim = { ...REQUEST_LIMITS, ...config.requestLimits };
   const server = createServer({
     requestTimeout: lim.requestTimeoutMs, headersTimeout: lim.headersTimeoutMs, keepAliveTimeout: lim.keepAliveTimeoutMs, connectionsCheckingInterval: lim.checkIntervalMs,

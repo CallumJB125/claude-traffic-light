@@ -289,6 +289,13 @@ export function alertsFor(viewerId, views, { max = 5 } = {}) {
         items.push({ kind: 'overlap', card_id: v.id, age_ms: o.age_ms ?? age, text: `⚠ ${v.key} overlaps ${o.other_key}${o.other_owner ? ` (${o.other_owner})` : ''}${o.paths?.[0] ? ` · ${basename(o.paths[0])}` : ''}` });
       }
     }
+    // A connected code host's facts about the card's PR (D42): failing CI
+    // needs someone, and so does a review asked for while the PR is open.
+    const pr = v.pr_link_status;
+    if (involved && pr && (pr.state === 'open' || pr.state === 'draft')) {
+      if (pr.checks === 'failing') items.push({ kind: 'checks', card_id: v.id, age_ms: age, text: `✖ ${v.key} · checks failing on its PR` });
+      else if (pr.review === 'requested') items.push({ kind: 'review', card_id: v.id, age_ms: age, text: `👀 ${v.key} · review requested on its PR` });
+    }
     if (v.run_state === 'orphaned' && age >= ORPHAN_NOTIFY_MS) {
       items.push({ kind: 'orphaned', card_id: v.id, age_ms: age - ORPHAN_NOTIFY_MS, text: `✖ ${v.key} orphaned · take over` });
     }

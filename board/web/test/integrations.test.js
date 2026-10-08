@@ -387,3 +387,17 @@ test('Sentry: its actions have plain names, and the copy button writes only the 
   const app = readFileSync(new URL('../js/app.js', import.meta.url), 'utf8');
   assert.match(app, /case 'integ-copy-url': copyText\(el\.dataset\.url\); return;/);
 });
+
+test('step 4: with the hub\'s own GitHub App, admins install it (always another installation to add) and choose an installation\'s repositories', () => {
+  const app = [{ ...available[0], app: true, scopes: ['pull_requests:write', 'metadata:read'] }, available[1]];
+  const inst = { ...conn, id: 'c2', health: { ok: true }, settings: { autonomy: {}, provider: { mode: 'app', installation_id: 7, login: 'acme', account_type: 'Organization' } } };
+  const v = integrationsScreen(m({ data: { available: app, connections: [inst], vault: true }, repos: { c2: [{ id: 1, full_name: 'acme/app', private: true, linked: true }, { id: 2, full_name: 'acme/site', private: false, linked: false }] } }));
+  const t = textOf(v);
+  assert.deepEqual(byAttr(v, 'data-action', 'integ-install').map((b) => b.props['data-provider']), ['github'], 'still offered while one is connected');
+  assert.match(t, /Installed on the GitHub organization acme/);
+  const links = byAttr(v, 'data-action', 'integ-repo-link');
+  assert.deepEqual(links.map((b) => [b.props['data-repo'], b.props['data-link'], textOf(b)]), [['1', '0', 'Unlink'], ['2', '1', 'Link']]);
+  const member = integrationsScreen(m({ data: { available: app, connections: [{ ...inst, settings: { autonomy: {} } }], vault: true } }, 'member'));
+  assert.equal(byAttr(member, 'data-action', 'integ-install').length, 0);
+  assert.equal(byAttr(member, 'data-action', 'integ-repos').length, 0);
+});

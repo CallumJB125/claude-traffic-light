@@ -136,6 +136,17 @@ test('connect guard: only the signed-in hub’s own Integrations page, right aft
   for (const url of ['https://localhost./', 'https://foo.localhost./x', 'https://github.com./login', 'https://8.8.8.8/', 'https://0x7f000001/', 'https://printer.local/', 'https://metadata.google.internal/', 'https://router.home.arpa/', 'https://user:pw@github.com/', 'data:text/html,x', 'file:///etc/passwd', 'javascript:alert(1)']) assert.equal(connectUrlOk(url), false, url);
 });
 
+test('GitHub App install (step 4): the install page opens in the connect window, its sign-in hop stays there, and the callback ends it', () => {
+  const hub = 'https://app.plexiform.dev';
+  const page = `${hub}/?org=t1&view=integrations`;
+  const install = 'https://github.com/apps/plexiform/installations/new?state=eyJtIjoiYSJ9.c2ln';
+  assert.deepEqual(connectDecision({ url: install, frameName: 'plexiform-connect|github|bnd1', referrer: page, pageUrl: page, hubOrigin: hub, signedIn: true, gestureAt: 1000, now: 2000 }), { ok: true, provider: 'github', bind: 'bnd1' });
+  assert.equal(openDecision({ url: install, frameName: 'plexiform-connect|github|bnd1' }, { hubOrigin: hub }), 'connect');
+  for (const u of [install, 'https://github.com/login/oauth/authorize?client_id=Iv1.x&state=s', `${hub}/integrations/github/callback?code=c&installation_id=55000111&setup_action=install&state=s`]) assert.equal(connectNavOk(u, hub), true, u);
+  assert.equal(isConnectCallback(`${hub}/integrations/github/callback?code=c&installation_id=55000111&setup_action=install&state=s`, hub), true);
+  assert.equal(isConnectCallback(`${hub}/api/integrations/github/webhook`, hub), false, 'the app webhook is never a page');
+});
+
 test('connect window navigation: public https provider pages and the hub callback only; popups are refused', () => {
   const hub = 'https://app.plexiform.dev';
   for (const u of ['https://github.com/login', 'https://github.com/sessions/two-factor', 'https://slack.com/oauth/v2/authorize', `${hub}/integrations/github/callback?code=x&state=y`]) assert.equal(connectNavOk(u, hub), true, u);

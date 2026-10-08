@@ -189,6 +189,17 @@ test('drawer: approver gets Allow once / Allow for this run / Deny; others see w
   assert.match(textOf(done), /Allowed by Sam/);
 });
 
+test('drawer: the GitHub App\'s card actions show only when the hub offers them, and never read-only', () => {
+  const v = view({ run_state: 'in_review', column: 'in_review', github: { open_pr: true, comment: false } });
+  const n = drawer(drawerModel(v, {}));
+  assert.equal(byAttr(n, 'data-action', 'github-pr').length, 1);
+  assert.equal(byAttr(n, 'data-action', 'github-comment').length, 0);
+  const linked = drawer(drawerModel({ ...v, github: { open_pr: false, comment: true } }, {}));
+  assert.deepEqual([byAttr(linked, 'data-action', 'github-pr').length, byAttr(linked, 'data-action', 'github-comment').length], [0, 1]);
+  assert.equal(byAttr(drawer(drawerModel({ ...v, github: null }, {})), 'data-action', 'github-pr').length, 0);
+  assert.equal(byAttr(drawer(drawerModel(v, {}, { readOnly: true })), 'data-action', 'github-pr').length, 0);
+});
+
 test('drawer: the actions that only open the drawer are not repeated inside it', () => {
   const v = view({ run_state: 'blocked', blocked_kind: 'question', ask: { kind: 'question', count: 1 } });
   const n = drawer(drawerModel(v, {}));

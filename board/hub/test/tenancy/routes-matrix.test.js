@@ -303,6 +303,13 @@ const MATRIX = {
     kind: 'cross', path: (fx) => `/api/integrations/${fx.B.connection}/identities/${fx.B.s}`,
     alt: (fx) => [`/api/integrations/${fx.B.pending}/identities/${fx.B.owner}`],
   },
+  // The hub's own GitHub App (step 4): install with B's team header; B's connection's repositories; B's card's actions.
+  'POST /api/integrations/:provider/install': { kind: 'cross', path: () => '/api/integrations/github/install', headers: (fx) => ({ 'x-board-team': fx.B.team }) },
+  'GET /api/integrations/:id/repos': { kind: 'cross', path: (fx) => `/api/integrations/${fx.B.connection}/repos`, alt: (fx) => [`/api/integrations/${fx.B.pending}/repos`] },
+  'POST /api/integrations/:id/repos': { kind: 'cross', path: (fx) => `/api/integrations/${fx.B.connection}/repos`, body: (fx) => ({ repo_id: 4242, board_id: fx.B.board }), alt: (fx) => [`/api/integrations/${fx.B.pending}/repos`] },
+  'DELETE /api/integrations/:id/repos/:repo_id': { kind: 'cross', path: (fx) => `/api/integrations/${fx.B.connection}/repos/4242` },
+  'POST /api/cards/:card_id/github/pr': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/github/pr` },
+  'POST /api/cards/:card_id/github/comment': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/github/comment` },
 };
 
 // Not registered in accounts mode at all (a plain 404 "no such route"), with why.
@@ -315,6 +322,7 @@ const REFUSED = {
 const PRE_ROUTE = {
   'POST /integrations/:id/webhook': 'the provider signs every delivery; the signature (the connection\'s own secret) is the auth',
   'POST /api/billing/webhook': 'the payment provider signs every delivery (HMAC over timestamp and body with the hub\'s webhook secret); billing.test.js',
+  'POST /api/integrations/:provider/webhook': 'the hub\'s own provider app (GitHub App, step 4): the app\'s webhook secret signs every delivery, and it runs only for the connection its installation was linked to, about a repository linked on it (github-app.test.js)',
   'GET /integrations/:provider/callback': 'the provider redirects here; the signed OAuth state plus the bind cookie are the auth',
   'GET /integrations/:provider/identity/callback': 'the provider redirects a linking member here (D98); the signed identity state plus the bind cookie are the auth, and the member and credential it names are re-checked',
 };

@@ -332,6 +332,12 @@ function archiveButton(view, model) {
   return h('button', { type: 'button', class: 'btn btn-sm btn-ghost', 'data-action': 'archive', 'data-card': view.id, disabled: model.busy?.has(`${view.id}:archive`) || null }, 'Archive');
 }
 
+// The hub's GitHub App (step 4): a member opens the card's PR, or comments its status there.
+function githubButton(view, model, what, label) {
+  const busy = model.busy?.has(`${view.id}:github-${what}`);
+  return h('button', { type: 'button', class: 'btn btn-sm', 'data-action': `github-${what}`, 'data-card': view.id, disabled: busy || null, 'aria-busy': busy ? 'true' : null }, label);
+}
+
 const HAND_OVER_FROM = new Set(['running', 'quiet', 'blocked']);
 // On the card these open the drawer; inside it the requests are already on screen.
 const OPENS_DRAWER = new Set(['watch', 'allow', 'deny', 'answer', 'approve_plan', 'resolve_conflict', 'continue']);
@@ -388,6 +394,8 @@ export function drawer(model) {
         h('select', { class: 'input input-sm', 'data-change': 'move', 'data-card': view.id },
           COLUMNS.map((c) => h('option', { value: c, selected: (view.column ?? 'todo') === c }, COLUMN_LABEL[c])))));
     }
+    if (!model.readOnly && !archived && view.github?.open_pr) extra.push(githubButton(view, model, 'pr', 'Open PR on GitHub'));
+    if (!model.readOnly && !archived && view.github?.comment) extra.push(githubButton(view, model, 'comment', 'Comment status'));
     extra.push(archiveButton(view, model));
     const hypothesis = det.data?.handover?.doc?.sections?.hypothesis;
     const asks = det.data?.asks ?? [];
