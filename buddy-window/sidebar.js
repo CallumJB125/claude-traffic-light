@@ -178,7 +178,7 @@ function paintWorkspaces() {
   }
   const more = el('optgroup', { label: '──────────' });
   if (state.signedIn) more.append(el('option', { value: 'create-team' }, 'Create a team…'));
-  more.append(el('option', { value: 'join' }, 'Join with an invite…'), el('option', { value: 'signin' }, 'Sign in to a team hub…'));
+  more.append(el('option', { value: 'join' }, 'Join with an invite…'), el('option', { value: 'signin' }, 'Sign in to a team…'));
   sel.append(more);
   sel.addEventListener('change', () => {
     const v = sel.value;

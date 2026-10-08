@@ -204,9 +204,7 @@ test('the default tray menu is 20 items or fewer, with debug controls only in de
   const labels = tray.map((i) => i.label);
   for (const gone of ['Knock now', 'Bigger', 'Smaller', 'Reinstall Claude Code Hooks', 'Override: Green (5 min)', 'Clear override']) assert.ok(!labels.includes(gone), gone);
   assert.equal(labels.filter((l) => /^Open .+…$/.test(l) && l !== 'Open Plexiform…').length, BuddyPages.sectionsFor().filter((sec) => sec.menu === undefined).length, 'one Open item per sidebar section that is in the menu');
-  const more = tray.find((i) => i.label === 'More');
-  assert.deepEqual(more.submenu.map((i) => i.label), ['Open Running now…', 'Open What changed…', 'Open Search everything…', 'Open AI tools…']);
-  assert.equal(labels.indexOf('More'), labels.indexOf('Open Settings…') + 1, 'More sits under the sections');
+  assert.ok(!labels.includes('More'), 'six sections need no More submenu');
   for (const kept of ['Open at Login', 'Quit', 'Floating Widget', 'What does this mean?…']) assert.ok(labels.includes(kept), kept);
   for (const advanced of [build('widget'), build('tray', true)]) assert.ok(advanced.some((i) => i.label === 'Knock now') && advanced.some((i) => i.label === 'Override: Red (5 min)'));
 });

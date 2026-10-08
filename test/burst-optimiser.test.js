@@ -303,17 +303,15 @@ test('without Burst wiring (or off macOS) the page is still a native state, neve
   assert.equal(r.o.payload().mode, 'loading', 'before the first check there is a loading payload');
 });
 
-test('page registry: Usage optimiser is a local page of its own section, listed for every user', () => {
+test('page registry: Usage optimiser is a local page in Usage & cost, listed for every user', () => {
   const p = pageById('optimiser');
   assert.equal(p.title, 'Usage optimiser');
   assert.equal(p.kind, 'local');
   assert.ok(!p.macOnly && !p.burstOnly, 'the tool hub is for everyone; Burst-only parts say so inside the page');
   assert.ok(fs.existsSync(path.join(__dirname, '..', p.file)) && fs.existsSync(path.join(__dirname, '..', p.preload)));
-  assert.deepEqual(SECTIONS.find((s) => s.id === 'usage').pages, ['usage', 'stats']);
-  assert.equal(sectionOf('optimiser'), 'optimiser');
-  assert.deepEqual(sectionsFor('darwin').find((s) => s.id === 'optimiser').pages, ['optimiser']);
-  assert.deepEqual(sectionsFor('win32').find((s) => s.id === 'optimiser').pages, ['optimiser']);
-  assert.deepEqual(sectionsFor('linux').find((s) => s.id === 'optimiser').pages, ['optimiser']);
+  assert.deepEqual(SECTIONS.find((s) => s.id === 'usage').pages, ['usage', 'stats', 'optimiser', 'clients']);
+  assert.equal(sectionOf('optimiser'), 'usage');
+  for (const platform of ['darwin', 'win32', 'linux']) assert.ok(sectionsFor(platform).find((s) => s.id === 'usage').pages.includes('optimiser'));
   assert.deepEqual(PAGES.filter((x) => x.macOnly || x.burstOnly), []);
 });
 
