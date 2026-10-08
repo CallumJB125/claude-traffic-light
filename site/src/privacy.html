@@ -24,7 +24,7 @@
           <li><strong>Update checks and downloads:</strong> the app's update feature asks <code>download.plexiform.dev</code> for newer versions and downloads when requested. This reveals your IP address and app version.</li>
           <li><strong>Installing:</strong> the installer script (<code>plexiform.dev/install.sh</code>) and the download page's manual links get releases from GitHub (<code>api.github.com</code> and <code>github.com</code>), not from <code>download.plexiform.dev</code>. The download page asks <code>api.github.com</code> from your browser for the latest release. GitHub sees your IP address, as it does for any download.</li>
           <li><strong>Cloudflare</strong> serves this website and passes hosted hub and update-check traffic through. An injected Web Analytics beacon is described below.</li>
-          <li><strong>Crash reports:</strong> recorded and scrubbed on your computer only. Sending them is not built yet; when it is, it will stay off until you opt in.</li>
+          <li><strong>Crash reports:</strong> recorded and scrubbed on your computer only. Sending them is not built yet (there is no receiving endpoint); when it is, it will stay off until you opt in.</li>
         </ul></section>
         <section id="stays"><h2>What stays on your computer</h2><ul>
           <li>The usage reader examines Claude Code conversation logs locally to calculate tokens and cost. Its usage record keeps counts and costs, not a copy of the full conversation.</li>
