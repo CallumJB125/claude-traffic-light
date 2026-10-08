@@ -81,7 +81,7 @@ const ALLOW = {
   'mcp-install.js': [/'claude-buddy'/g], // the MCP server's name: not renamed yet, so Claude's tool names stay
   'mcp-server.js': [/name: 'claude-buddy'/g],
   'MCP.md': [/claude-buddy/g],
-  'settings.html': [/<code>claude-buddy<\/code>/g],
+  'aitools.js': [/Writes one entry \(claude-buddy\)/g], // the MCP entry's real name in ~/.claude.json
   'PRIVACY.md': [/`claude-buddy`/g, /"Claude Buddy Safe Storage"/g], // the MCP entry and the old data folder's name; the old Keychain item
   'package.json': [/"name":\s*"claude-buddy"/g], // the npm name: the .deb package and updater cache keep it; the protocol exception is checked structurally below
   'package-lock.json': [/"name": "claude-buddy"/g],
