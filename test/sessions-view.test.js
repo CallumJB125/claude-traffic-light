@@ -262,7 +262,7 @@ test('a row with a ready handover offers Continue in…: the menu lists what mai
     assert.ok(trigger); assert.equal(trigger.getAttribute('aria-haspopup'), 'menu');
     trigger.click(); await tick(); await tick();
     const items = [...fixture.document.querySelectorAll('[role="menuitem"]')];
-    assert.deepEqual(items.map(i => i.querySelector('.continue-label').textContent), ['Gemini CLI', 'Copy as prompt']);
+    assert.deepEqual(items.map(i => i.querySelector('.continue-label').textContent), ['Gemini CLI', 'Copy as prompt', 'Hand off to another AI…']);
     items[0].click(); await tick(); await tick();
     assert.deepEqual(calls, [['codex-abc', 'gemini']]);
     assert.match(fixture.document.getElementById('content').textContent, /Paste it into Gemini CLI/);
