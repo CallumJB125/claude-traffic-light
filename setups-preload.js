@@ -30,8 +30,13 @@ const personal={
   backups:()=>ipcRenderer.invoke('setups:personal-backups'),
   undo:id=>opaque('setups:personal-undo',id),
 };
+const folder={
+  plan:handle=>typeof handle==='string'&&handle.length<=100?ipcRenderer.invoke('setups:folder-plan',handle):refuse(),
+  apply:(planId,token)=>uuid(planId)&&typeof token==='string'&&/^[0-9a-f]{64}$/.test(token)?ipcRenderer.invoke('setups:folder-apply',planId,token):refuse(),
+  undo:undoId=>opaque('setups:folder-undo',undoId),
+};
 contextBridge.exposeInMainWorld('setupsApi',{
-  personal,
+  personal,folder,
   state:()=>ipcRenderer.invoke('setups:state'),read:handle=>ipcRenderer.invoke('setups:read',handle),
   draft:(handle,input)=>ipcRenderer.invoke('setups:draft',handle,input),edit:(handle,input)=>ipcRenderer.invoke('setups:edit',handle,input),
   approve:(handle,file,hash)=>ipcRenderer.invoke('setups:approve',handle,file,hash),publish:(handle,hash)=>ipcRenderer.invoke('setups:publish',handle,hash),

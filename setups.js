@@ -138,6 +138,35 @@ async function openProfile(profile,team){
       window.SetupsPersonal.renderPlan(holder,plan,line,()=>chosen===selection&&holder.isConnected);
     }),line,holder);
   }
+  if(api.folder){
+    const area=el('div'),note=el('p');note.setAttribute('role','status');
+    const alive=()=>chosen===selection&&area.isConnected;
+    review.append(el('h3','Apply to a folder'),button('Apply to a folder…',async()=>{
+      if(chosen!==selection)return;note.textContent='';area.replaceChildren();
+      const plan=await api.folder.plan(profile.handle);
+      if(!alive()||!plan)return;
+      if(!plan.ok){note.textContent=plan.error??'This setup could not be previewed.';return;}
+      note.textContent=plan.changes?`Review ${plan.changes} change${plan.changes===1?'':'s'} to ${plan.folder}. Nothing has been written yet.`:`Everything in ${plan.folder} already matches. Nothing to apply.`;
+      for(const e of plan.entries){const pre=el('pre',e.diff||'(no changes)');area.append(el('h4',`${e.path} · ${e.action}`),pre);}
+      if(!plan.changes)return;
+      const cancel=button('Cancel',()=>{area.replaceChildren();note.textContent='Cancelled. Nothing was changed.';});
+      area.append(button('Apply',async()=>{
+        if(!alive())return;
+        const r=await api.folder.apply(plan.planId,plan.token);
+        if(!alive()||!r)return;
+        area.replaceChildren();
+        if(!r.ok){note.textContent=r.error??'Apply failed. Nothing was changed.';return;}
+        note.textContent=`Wrote ${r.written.length} file${r.written.length===1?'':'s'} to ${plan.folder}.`;
+        area.append(button('Undo',async()=>{
+          if(!alive())return;
+          const u=await api.folder.undo(r.undoId);
+          if(!alive()||!u)return;
+          area.replaceChildren();
+          note.textContent=u.ok?`Restored ${u.restored.length} file${u.restored.length===1?'':'s'}${u.skipped.length?`; left ${u.skipped.length} changed since Apply`:''}.`:u.error??'Undo failed.';
+        }));
+      }),cancel);
+    }),note,area);
+  }
   if(api.nativeLocal)renderLocalPlan(selection);
   review.scrollIntoView({block:'start'});
 }
