@@ -1785,6 +1785,7 @@ ipcMain.handle('setups:export',(e,handle)=>setupsSender(e)?SetupsNative.export(h
 const SetupsLocal=require('./src/setups-main').createSetupsMain({app,buddy:()=>buddyWin,service:SetupsNative,dialog,safeStorage:require('electron').safeStorage,accepted:false});
 SetupsLocal.register(ipcMain);
 onQuit(app,()=>SetupsLocal.close());
+require('./src/setups-folder.js').register({ipcMain,allowed:setupsSender,source:h=>SetupsNative.readForPlan(h),pickFolder:async()=>{const r=await dialog.showOpenDialog(BrowserWindow.fromWebContents(buddyWin?.pageWebContents('setups'))||undefined,{title:'Choose the folder to apply this setup to',properties:['openDirectory']});return r.canceled?null:r.filePaths[0]??null;}});
 
 let costGuardReport = null;
 let taskStartGuard = null;
