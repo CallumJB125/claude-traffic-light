@@ -91,7 +91,7 @@ test('register: every channel checks its page, and Running now runs by handover 
   const continueIn = ContinueIn.create({ entitlements: ent('free'), clipboard: c, tools: () => rows('hermes') });
   ContinueIn.register({ ipcMain, allowed: (e, page) => e.page === page, continueIn, writer: () => ({ text: (k) => { asked.push(k); return k === 'codex-abc' ? DOC : null; } }) });
   try {
-    assert.deepEqual([...handlers.keys()].sort(), ['continue:end', 'continue:menu', 'continue:reply', 'continue:run']);
+    assert.deepEqual([...handlers.keys()].sort(), ['continue:end', 'continue:handoff', 'continue:menu', 'continue:reply', 'continue:run']);
     assert.equal((await handlers.get('continue:menu')({ page: 'board' })).ok, false);
     assert.deepEqual((await handlers.get('continue:menu')({ page: 'memory' })).choices.map((x) => x.id), ['hermes', 'copy']);
     assert.equal((await handlers.get('continue:run')({ page: 'memory' }, 'codex-abc', 'hermes')).ok, false, 'Search runs through its own hand-off channels');
@@ -121,4 +121,70 @@ test('the board popup lists the menu natively and resolves with the run, or null
     popped.callback();
     assert.equal(await q, null);
   } finally { continueIn.stop(); }
+});
+
+const HDOC = '<!-- plexiform-session-handover v1 -->\n# Session handover: claude-code abc\n\n## Session\n- Adapter: claude-code\n- Session id: abc\n- Working folder: /Users/jane/proj\n- Branch: feat/wombat\n\n## Current goal\nLatest request: x\n\n## What was asked\n- First prompt: Ship the wombat importer, api_key=sk-abcdefghijklmnopqrstuvwx\n\n## Files touched\nEdited (1):\n```\nsrc/a.js\n```\nRead or opened (0):\n(none)\n\n## Last assistant status line\nParser done in /Users/jane/proj.\n';
+
+test('handoff: Cancel is a no-op, Confirm releases a scrubbed packet to the launcher', async () => {
+  const c = clip();
+  const shown = [];
+  let answer = false;
+  const ci = ContinueIn.create({ entitlements: ent('free'), clipboard: c, tools: () => rows('gemini', 'claude'), home: '/Users/jane', confirm: async (o) => { shown.push(o); return answer; } });
+  try {
+    const no = await ci.handoff(async () => HDOC, 'gemini');
+    assert.deepEqual(no, { ok: false, cancelled: true });
+    assert.equal(c.text, null, 'cancel copies nothing');
+    assert.equal(shown.length, 1);
+    assert.match(shown[0].text, /Ship the wombat importer/);
+    assert.match(shown[0].text, /feat\/wombat/);
+    assert.match(shown[0].text, /src\/a\.js/);
+    assert.doesNotMatch(shown[0].text, /sk-abcdefghijklmnop|\/Users\/jane/);
+    answer = 'yes';
+    assert.equal((await ci.handoff(async () => HDOC, 'gemini')).cancelled, true, 'only a literal true confirms');
+    assert.equal(c.text, null);
+    answer = true;
+    const r = await ci.handoff(async () => HDOC, 'gemini');
+    assert.equal(r.ok, true); assert.equal(r.mode, 'copied');
+    assert.match(c.text, /Ship the wombat importer/);
+    assert.doesNotMatch(c.text, /sk-abcdefghijklmnop|\/Users\/jane|plexiform-session-handover/);
+  } finally { ci.stop(); }
+});
+
+test('handoff: unknown tool, copy, missing or foreign handover and same-tool never reach the confirm dialog', async () => {
+  let asked = 0;
+  const ci = ContinueIn.create({ entitlements: ent('free'), clipboard: clip(), tools: () => rows('gemini', 'claude'), confirm: async () => { asked++; return true; } });
+  try {
+    for (const to of ['cursor', 'copy', '../x', 5]) assert.equal((await ci.handoff(async () => HDOC, to)).ok, false);
+    assert.equal((await ci.handoff(async () => null, 'gemini')).ok, false);
+    assert.equal((await ci.handoff(async () => 'not a handover', 'gemini')).ok, false);
+    assert.equal((await ci.handoff(async () => HDOC, 'claude')).ok, false, 'claude-code to claude is the same tool');
+    assert.equal(asked, 0);
+  } finally { ci.stop(); }
+});
+
+test('handoff: Plus launch goes through the visible owned session only after Confirm', async () => {
+  const a = fakeAdapter();
+  let answer = false;
+  const ci = ContinueIn.create({ entitlements: ent('plus'), clipboard: clip(), tools: () => rows('codex'), adapters: { codex: () => a, claude: () => fakeAdapter() }, confirm: async () => answer });
+  try {
+    assert.equal((await ci.handoff(async () => HDOC, 'codex')).cancelled, true);
+    assert.equal(a.sent.length, 0);
+    answer = true;
+    const r = await ci.handoff(async () => HDOC, 'codex');
+    assert.equal(r.mode, 'launched');
+    assert.equal(a.sent.length, 1);
+    assert.match(a.sent[0], /Ship the wombat importer/);
+  } finally { ci.stop(); }
+});
+
+test('handoff IPC: Sessions page only, a page cannot supply a confirmation', async () => {
+  const handlers = {};
+  const ipcMain = { handle: (ch, fn) => { handlers[ch] = fn; } };
+  const calls = [];
+  const continueIn = { menu: () => [], handoff: async (load, to) => { calls.push([to, await load()]); return { ok: true }; } };
+  ContinueIn.register({ ipcMain, allowed: (e, p) => e.page === p, continueIn, writer: () => ({ text: (k) => `doc:${k}` }) });
+  assert.equal((await handlers['continue:handoff']({ page: 'memory' }, 'k', 'codex')).ok, false);
+  assert.equal((await handlers['continue:handoff']({ page: 'sessions' }, { x: 1 }, 'codex')).ok, false);
+  assert.equal((await handlers['continue:handoff']({ page: 'sessions' }, 'k', 'codex')).ok, true);
+  assert.deepEqual(calls, [['codex', 'doc:k']]);
 });

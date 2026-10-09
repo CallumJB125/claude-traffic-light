@@ -8,8 +8,8 @@
   document.addEventListener('click', (e) => { if (openMenu && !openMenu.wrap.contains(e.target)) close(); });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && openMenu) { const t = openMenu.trigger; close(); t.focus(); } });
 
-  // menu() → {ok, choices:[{id,label,mode}]}; pick(choice) runs it.
-  function button({ menu, pick, className = 'small', onOpen = () => {}, onClose = () => {} }) {
+  // menu() → {ok, choices:[{id,label,mode}]}; pick(choice) runs it; handoff(choice) (optional) adds the preview-and-confirm hand-off.
+  function button({ menu, pick, handoff = null, className = 'small', onOpen = () => {}, onClose = () => {} }) {
     const wrap = el('span', 'continue-wrap');
     const trigger = el('button', className, 'Continue in…');
     trigger.type = 'button';
@@ -29,6 +29,26 @@
         item.append(el('span', 'continue-label', c.label), el('span', 'continue-hint', c.id === 'copy' ? 'Paste into any AI tool' : c.mode === 'launch' ? 'Starts it here with the handover' : 'Copies the handover to paste in'));
         item.addEventListener('click', () => { close(); pick(c); });
         box.append(item);
+      }
+      const tools = r && r.ok ? r.choices.filter((c) => c.id !== 'copy') : [];
+      if (handoff && tools.length) {
+        const more = el('button', 'continue-item');
+        more.type = 'button';
+        more.setAttribute('role', 'menuitem');
+        more.append(el('span', 'continue-label', 'Hand off to another AI…'), el('span', 'continue-hint', 'Preview what is shared, then confirm'));
+        more.addEventListener('click', () => {
+          box.replaceChildren();
+          for (const c of tools) {
+            const item = el('button', 'continue-item');
+            item.type = 'button';
+            item.setAttribute('role', 'menuitem');
+            item.append(el('span', 'continue-label', c.label), el('span', 'continue-hint', 'Shows a preview first'));
+            item.addEventListener('click', () => { close(); handoff(c); });
+            box.append(item);
+          }
+          box.querySelector('button')?.focus();
+        });
+        box.append(more);
       }
       wrap.append(box);
       openMenu = { wrap, box, trigger, onClose };

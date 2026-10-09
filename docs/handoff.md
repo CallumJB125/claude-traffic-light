@@ -16,6 +16,11 @@
 - `confirmation(packet)` is created by the UI when the person presses confirm for the packet shown. It carries a digest of the contents.
 - `release(packet, confirmation)` throws unless the packet is valid and the confirmation matches its digest, then returns the prompt. Editing the packet after confirming invalidates the confirmation. Callers must go through `release` before `handoff.copy` or `handoff.hand`.
 
-## Not done yet
+## In the app
 
-UI wiring. The continue-in menu (`continue-menu.js`, `src/continue-in.js`) already hands over a session's handover; a packet preview with a Confirm step does not fit it as a small addition, so it is left for a follow-up.
+Sessions: **Continue in…** then **Hand off to another AI…** lists the tools found on this Mac. The board card's Continue in menu has the same item as a submenu. Choosing a tool does not run anything: main builds the packet from the session's handover (goal = latest prompt, edited files, last assistant line, branch), scrubs it, and shows a native dialog with the exact text and two buttons, Cancel and Confirm and hand off.
+
+- Cancel (or closing the dialog) does nothing: nothing is launched or copied.
+- Confirm creates the confirmation in main (`confirmation`), calls `release`, and passes the released text to the existing continue-in launcher (`src/continue-in.js` `run`): Codex and Claude Code on Plus start a visible, text-only owned session shown on Sessions with Send and End; every other tool, and the free plan, get the text on the clipboard.
+- The page only names a session key and a tool id (`continue:handoff`, Sessions page only, sender-checked like its neighbours). It cannot supply a confirmation.
+- Nothing leaves this Mac beyond the existing continue-in paths, so PRIVACY.md has no new entry.
