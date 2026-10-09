@@ -23,6 +23,7 @@ contextBridge.exposeInMainWorld('sessionsApi', {
   openRecord: (recordId) => ipcRenderer.invoke('sessions:open-record', recordId),
   continueMenu: () => ipcRenderer.invoke('continue:menu'),
   continueIn: (key, to) => ipcRenderer.invoke('continue:run', String(key), String(to)),
+  continueHandoff: (key, to) => ipcRenderer.invoke('continue:handoff', String(key), String(to)),
   continueReply: (id, text) => ipcRenderer.invoke('continue:reply', String(id), String(text)),
   continueEnd: (id) => ipcRenderer.invoke('continue:end', String(id)),
   onContinue: (cb) => ipcRenderer.on('continue:event', (_e, ev) => cb(ev)),

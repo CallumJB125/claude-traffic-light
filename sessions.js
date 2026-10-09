@@ -64,6 +64,12 @@ function continueButton(key) {
   wrap.append(window.ContinueMenu.button({
     className: 'link',
     menu: () => window.sessionsApi.continueMenu(),
+    handoff: async c => {
+      out.textContent = ' Waiting for your confirmation…';
+      const r = await window.sessionsApi.continueHandoff(key, c.id).catch(() => null);
+      if (r?.ok && r.mode === 'launched') { out.textContent = ''; continuePanel(r); return; }
+      out.textContent = r?.cancelled ? ' Cancelled. Nothing was shared.' : ` ${r?.ok ? r.note || 'Copied.' : r?.error || 'That did not work.'}`;
+    },
     onOpen: () => { editing = true; }, onClose: () => { editing = false; },
     pick: async c => {
       out.textContent = ' Working…';

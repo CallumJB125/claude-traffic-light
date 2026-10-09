@@ -8,6 +8,8 @@
 // only ever names a tool id: main loads the handover itself.
 
 const Handoff = require('./handoff.js');
+const Packet = require('./handoff-packet.js');
+const SessionHandover = require('./session-handover.js');
 
 const TOOLS = Object.freeze([
   { id: 'claude', label: 'Claude Code' },
@@ -26,7 +28,23 @@ function choices(rows, { canLaunch = false } = {}) {
   return [...TOOLS.filter((t) => found.has(t.id)).map((t) => ({ id: t.id, label: t.label, mode: canLaunch && LAUNCH.has(t.id) ? 'launch' : 'copy' })), { ...COPY }];
 }
 
-function create({ entitlements, clipboard, tools = () => [], adapters = null, log = () => {} }) {
+const SOURCE = { 'claude-code': 'claude' };
+
+// The stored handover document → a scrubbed packet for `to`. Null when it is not one of ours.
+function packetFromDoc(doc, to, home) {
+  const facts = SessionHandover.factsFromDoc(doc);
+  if (!facts) return null;
+  const line = (prefix) => { const l = String(doc).split('\n').find((x) => x.startsWith(prefix)); return l ? l.slice(prefix.length).trim() : ''; };
+  const adapter = line('- Adapter: ');
+  const branch = line('- Branch: ');
+  return Packet.build({
+    from: SOURCE[adapter] || adapter, to, goal: facts.lastPrompt, files: Object.keys(facts.files), summary: facts.lastAssistant,
+    branch: branch.startsWith('unknown') ? '' : branch,
+  }, { home });
+}
+
+// confirm({ to, label, text }) → true only when the person pressed Confirm on the native preview.
+function create({ entitlements, clipboard, tools = () => [], adapters = null, confirm = async () => false, home = null, log = () => {} }) {
   const h = Handoff.create({ entitlements, clipboard, log, ...(adapters ? { adapters } : {}), docFor: async (k) => (k && typeof k.load === 'function' ? (await k.load()) || null : null) });
   function menu() {
     let rows = [];
@@ -46,7 +64,22 @@ function create({ entitlements, clipboard, tools = () => [], adapters = null, lo
     if (!r.ok) return r;
     return { ...r, to: pick.id, note: pick.id === 'copy' ? 'Copied as a prompt. Paste it into any AI tool.' : `Copied as a prompt. Paste it into ${pick.label}.` };
   }
-  return { menu, run, reply: (id, text) => h.reply(id, text), end: (id) => h.end(id), stop: () => h.stop() };
+  // Hand off: build the packet, show exactly what would be shared, and only on
+  // Confirm release it and go through run (a visible, text-only owned session
+  // or the clipboard). Cancel returns before anything is launched or copied.
+  async function handoff(load, to, onEvent = () => {}) {
+    const pick = typeof to === 'string' && ID.test(to) && to !== COPY.id ? menu().find((c) => c.id === to) : null;
+    if (!pick) return { ok: false, error: 'That tool was not found on this Mac.' };
+    const doc = await load();
+    const packet = doc ? packetFromDoc(doc, pick.id, home) : null;
+    if (!packet) return { ok: false, error: 'No handover could be built for this session.' };
+    const v = Packet.validate(packet);
+    if (!v.ok) return { ok: false, error: v.errors[0] };
+    if ((await confirm({ to: pick.id, label: pick.label, text: Packet.toPrompt(packet) })) !== true) return { ok: false, cancelled: true };
+    const text = Packet.release(packet, Packet.confirmation(packet));
+    return run(async () => text, pick.id, onEvent);
+  }
+  return { menu, run, handoff, reply: (id, text) => h.reply(id, text), end: (id) => h.end(id), stop: () => h.stop() };
 }
 
 // Sessions and Search ask for the menu; Sessions also runs it by handover key
@@ -60,6 +93,10 @@ function register({ ipcMain, allowed, continueIn, writer, sendToSessions = () =>
   on('continue:run', ['sessions'], (key, to) => {
     if (typeof key !== 'string' || key.length > 260) return { ok: false, error: 'Unknown session.' };
     return continueIn.run(() => writer()?.text(key) ?? null, to, sendToSessions);
+  });
+  on('continue:handoff', ['sessions'], (key, to) => {
+    if (typeof key !== 'string' || key.length > 260) return { ok: false, error: 'Unknown session.' };
+    return continueIn.handoff(() => writer()?.text(key) ?? null, to, sendToSessions);
   });
   on('continue:reply', ['sessions'], (id, text) => continueIn.reply(String(id), text));
   on('continue:end', ['sessions'], (id) => continueIn.end(String(id)));
@@ -77,10 +114,15 @@ function popup({ Menu, continueIn, window, load, showSessions = () => {}, onEven
         resolve(continueIn.run(load, c.id, onEvent).then((r) => { if (r.ok && r.mode === 'launched') showSessions(); return r; }));
       },
     }));
+    const handoffItems = continueIn.menu().filter((c) => c.id !== 'copy').map((c) => ({
+      label: c.label,
+      click: () => { picked = true; resolve(continueIn.handoff(load, c.id, onEvent).then((r) => { if (r.ok && r.mode === 'launched') showSessions(); return r; })); },
+    }));
+    if (handoffItems.length) items.push({ type: 'separator' }, { label: 'Hand off to another AI…', submenu: handoffItems });
     // A click arrives just after the menu closes on some platforms.
     Menu.buildFromTemplate([{ label: 'Continue in', enabled: false }, { type: 'separator' }, ...items])
       .popup({ window, callback: () => setTimeout(() => { if (!picked) resolve(null); }, 150) });
   });
 }
 
-module.exports = { create, register, popup, choices, TOOLS };
+module.exports = { create, register, popup, choices, packetFromDoc, TOOLS };
