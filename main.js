@@ -286,6 +286,8 @@ const DEFAULT_CONFIG = {
   teamSessionSharing: true,
   // Session-start team brief and team_* MCP tools (src/team-activity.js): off until ticked.
   teamBrief: false,
+  // Agent mail inbox (src/agent-mail.js): teammates' AI questions polled from the team hub; off until ticked.
+  agentMailInbox: false,
   // A role reset the team hub never acknowledged ({origin, userId}; no token): retried at start.
   remoteInteractionResetPending: null,
   // Existing Codex CLI sessions on Codex's shared daemon (src/codex-daemon.js): off until ticked in Preferences.
@@ -488,6 +490,7 @@ const { SIGNAL_PORT, startSignalServer, readRequests, answerRequest, keyFor } = 
   aggregateState: (...a) => aggregateState(...a),
   broadcastStatus: (...a) => broadcastStatus(...a),
   teamActivity: (op, args) => TeamActivity.call(op, args),
+  agentMail: (op, args) => AgentMail.op(op, args),
 });
 // A remote session's folder names a directory on another machine: it is
 // shown, never opened, copied as a path, knocked on or used to find a
@@ -1719,7 +1722,35 @@ const hostSync=require('./src/interaction-host-sync').createInteractionHostSync(
     return recv;
   },
 });
-function syncInteractionHost(){hostSync.sync();}
+// Agent mail (board/MESSAGING.md §6a): local AIs' asks to teammates, held on the hub until
+// Send on Running now; the teammates' side is an opt-in inbox poll with hostSync's lifecycle.
+const AgentMail=require('./src/agent-mail').create({identity:()=>devMockReady?getBuddy().interactionHostIdentity?.()??null:null,resolve:async(a)=>(devMockReady?(await getBuddy().teamActivityLink?.(a))??null:null),
+  fetch:(...a)=>net.fetch(...a),home:os.homedir(),enabled:()=>loadConfig().agentMailInbox===true,notify:n=>notifyAgentMail(n),onChange:()=>buddyWin?.sendToPage('sessions','mail:changed'),log:m=>console.log(m)}); // privacy-flow: agent-mail
+require('./src/agent-mail').register({ipcMain,allowed:sessionsSender,mail:AgentMail,tasks:()=>{const t=getTasks();t.start();return t;},
+  confirm:async(info,e)=>(await dialog.showMessageBox(BrowserWindow.fromWebContents(e.sender)||undefined,{type:'question',buttons:['Cancel',info.action],defaultId:0,cancelId:0,noLink:true,message:`${info.title}?`,detail:info.detail})).response===1,
+  pickFolder:async e=>{
+    let dir=null;
+    if(IS_DEV_RUN&&!app.isPackaged&&process.env.CLAUDE_TRAFFIC_LIGHT_TASKS_PICK)dir=process.env.CLAUDE_TRAFFIC_LIGHT_TASKS_PICK;
+    else{const r=await dialog.showOpenDialog(BrowserWindow.fromWebContents(e.sender)||undefined,{title:'Choose the folder the handoff works in',properties:['openDirectory']});dir=r.canceled?null:r.filePaths[0];}
+    try{return dir&&path.isAbsolute(dir)&&fs.statSync(dir).isDirectory()?dir:null;}catch{return null;}
+  },
+  ask:(text,to,onEvent)=>continueIn.ask(text,to,onEvent),sendToSessions:ev=>continueToSessions(ev)});
+onQuit(app,()=>AgentMail.stop());
+app.on('browser-window-focus',()=>AgentMail.poke());
+// One notification per agent mail item, like maybeNotify's: a held ask waiting for Send, or a teammate's AI's question or handoff.
+function notifyAgentMail(n){
+  const from=n.from||'A teammate';
+  const title=n.kind==='held'?'Your AI wants to message a teammate':n.handoff?`${from}'s AI offered you work`:`${from}'s AI asked you`;
+  const body=n.kind==='held'?`To ${n.to||'a teammate'}. Nothing is sent until you press Send in Running now.`:'Open Running now to answer it.';
+  console.log(`[agent-mail] notify ${n.kind}`);
+  if(IS_DEV_RUN||!Notification.isSupported())return;
+  const note=new Notification({title,body,silent:true});
+  liveNotifications.add(note);
+  note.on('click',()=>{liveNotifications.delete(note);openBuddy('sessions');});
+  note.on('close',()=>liveNotifications.delete(note));
+  note.show();
+}
+function syncInteractionHost(){hostSync.sync();AgentMail.sync();}
 onQuit(app,()=>hostSync.close());
 // While anything is shared, refresh who has access (members who joined or left) and drop shares a team admin ended.
 const TeamSessionSharing=require('./src/team-session-sharing').createTeamSessionSharing({
@@ -3478,6 +3509,7 @@ function applyConfigEffects(prev, next, touched) {
     enableCalendar: () => BusyWatch.enableCalendar().catch((err) => console.warn('[busy]', err.message)),
     applyWidgetVisibility, syncTailnetListener, createTray, applyVoiceHotkey, applyLowPower, syncFastHook, broadcastStatus, syncInteractionHost,
   }, touched);
+  AgentMail.sync();
 }
 function commitConfig(partial) {
   const prev = loadConfig();
@@ -4398,7 +4430,7 @@ utilityHandle('mcp-set-enabled', (e) => fromUtilityPage(e, 'aitools'), (_e, on) 
 const AiTools = require('./src/ai-tools-wire.js').wire({ ipcMain, shell, clipboard, home: os.homedir(), runtime: HOOK_RUNTIME, rootDir: ROOT_DIR, fromPage: (e) => fromUtilityPage(e, 'aitools'), askFromWidget: () => !!loadConfig().askFromWidget, ephemeral: EPHEMERAL, openPage: openBuddy, onClaudeConsent: (on) => saveConfig({ claudeAutoConnect: on }) });
 const aiToolsOpen = (destination) => AiTools.open(destination);
 require('./src/home-main.js').register({ ipcMain, allowed: (e) => fromUtilityPage(e, 'home'), state: () => aggregateState(), localSessions, tools: () => AiTools.quick(), myDay: MyDay, openPage: openBuddy, openAiTools: aiToolsOpen, collisions: CollisionAlerts.rowCollisions(collisionAlerts), costGuard: () => (costGuardReport ? costGuardReport() : null), demo: Demo });
-require('./src/home-alerts.js').wire({ ipcMain, dialog, clipboard, homeAllowed: (e) => fromUtilityPage(e, 'home'), usageAllowed: (e) => fromUtilityPage(e, 'usage'), sessions: () => aggregateState().sessions || [], burst: () => BurstIpc.snapshot().d, tasksRows: () => tasksSvc?.snapshot().tasks || [], tasksService: getTasks, handoverText: (key) => SessionHandoverMain.writer.text(key), jump: (s) => jumpToSession(s, Rules.folderOf(s.cwd), s.hostApp) });
+require('./src/home-alerts.js').wire({ ipcMain, dialog, clipboard, homeAllowed: (e) => fromUtilityPage(e, 'home'), usageAllowed: (e) => fromUtilityPage(e, 'usage'), sessions: () => aggregateState().sessions || [], burst: () => BurstIpc.snapshot().d, tasksRows: () => tasksSvc?.snapshot().tasks || [], tasksService: getTasks, handoverText: (key) => SessionHandoverMain.writer.text(key), jump: (s) => jumpToSession(s, Rules.folderOf(s.cwd), s.hostApp), mail: () => AgentMail.pending(), openMail: async () => { openBuddy('sessions'); } });
 require('./src/digest-main.js').register({ ipcMain, allowed: (e) => fromUtilityPage(e, 'home'), rootDir: ROOT_DIR, userData: app.getPath('userData'), safeStorage: require('electron').safeStorage, clipboard, dialog, shell, Notification, fetch: (...a) => net.fetch(...a), usageTurns: () => getUsageTurns(), costGuard: () => (costGuardReport ? costGuardReport() : null), workCost: () => workCostReport(), teamBrief: (cwd) => (loadConfig().teamBrief === true ? TeamActivity.call('team_brief', { cwd }) : null), openHome: () => openBuddy('home'), onQuit: (fn) => onQuit(app, fn), log: (m) => console.warn(m) }); // privacy-flow: digest-slack
 { const TeamToday = require('./src/team-today.js'); const fake = IS_DEV_RUN && !app.isPackaged && process.env.CLAUDE_BUDDY_FAKE_TEAM_TODAY; TeamToday.wire({ ipcMain, allowed: (e) => fromUtilityPage(e, 'home'), file: path.join(ROOT_DIR, 'team-today.json'), log: (m) => console.log(m), ...(fake ? TeamToday.fixtureSources(JSON.parse(fs.readFileSync(fake, 'utf8'))) : { links: async () => (await buddyWin?.teamMemoryLinks?.()) ?? [], board: async (route) => (await buddyWin?.teamBoardSnapshot?.(route)) ?? null, mine: () => buddyWin?.workCostRows?.().records ?? [], fetch: (...a) => net.fetch(...a) }) }); } // privacy-flow: team-today
 // Preferences' "Connect other agents" buttons open the AI tools page on that
