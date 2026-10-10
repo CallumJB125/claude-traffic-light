@@ -91,6 +91,9 @@ test('buildIndex twice on the same items gives byte-identical output; generatedA
   assert.equal(index.serial, 1);
   assert.equal(JSON.parse(S.buildIndex(items(), { serial: 7 }).text).serial, 7);
   assert.throws(() => S.buildIndex(items(), { serial: 0 }), /serial/);
+  assert.throws(() => S.buildIndex([{ item: recipe({ updated: '2027-01-01' }), name: 'explain-it' }], { now: Date.parse('2026-10-10T12:00:00Z') }), /updated: not later than tomorrow/);
+  assert.throws(() => S.buildIndex([{ item: recipe({ added: '2026-09-01', updated: '2026-09-02' }), name: 'explain-it' }]), /generatedAt 2026-09-02T00:00:00.000Z/);
+  assert.doesNotThrow(() => S.buildIndex([{ item: recipe({ updated: '2026-10-11' }), name: 'explain-it' }], { now: Date.parse('2026-10-10T12:00:00Z') }));
   assert.equal(S.validateIndex({ ...index, serial: 0 }), 'index-schema');
   assert.ok(a.endsWith('}\n'));
   assert.equal(S.validateIndex(index), null);

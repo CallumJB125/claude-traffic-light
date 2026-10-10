@@ -42,3 +42,9 @@ test('a save that names a key applies its effect even when the value is the same
 test('automatic team sharing setting applies the hosting side effect',()=>{
  let calls=0;applyConfigSideEffects({teamSessionSharing:true},{teamSessionSharing:false},{syncInteractionHost:()=>calls++,broadcastStatus(){}});assert.equal(calls,1);
 });
+
+test('the agent mail inbox preference syncs the poller, and only that preference does',()=>{
+ let calls=0;const d={syncAgentMail:()=>calls++,syncInteractionHost(){},broadcastStatus(){},applyWidgetVisibility(){},createTray(){}};
+ applyConfigSideEffects({showWidget:true},{showWidget:false},d);assert.equal(calls,0);
+ applyConfigSideEffects({agentMailInbox:false},{agentMailInbox:true},d);assert.equal(calls,1);
+});

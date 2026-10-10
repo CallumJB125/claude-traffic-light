@@ -181,6 +181,23 @@ test('072 keeps existing message rows, their seq and the sequence, and allows he
   assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'msg_messages_source_state'").get());
 });
 
+test('072 carries the seq high-water mark across: a deleted top message\'s seq is never reused', async () => {
+  const { DatabaseSync } = await import('node:sqlite');
+  const { migrate, loadMigrations } = await import('../../shared/migrate.js');
+  const all = loadMigrations();
+  const row = () => ({ id: randomUUID(), request_id: randomUUID(), request_hash: 'h', kind: 'message', source_kind: 'person', source_user_id: 'u1', source_cred_kind: 'device', source_cred_id: 'd1',
+    dest_kind: 'person', dest_user_id: 'u2', conversation_id: 'c', body: 'b', authority_version: 0, state: 'queued', created_at: 'a', expires_at: 'b', updated_at: 'c' });
+  const put = (db) => { const r = row(); const cols = Object.keys(r); return Number(db.prepare(`INSERT INTO msg_messages (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`).run(...Object.values(r)).lastInsertRowid); };
+  for (const keep of [1, 0]) {
+    const db = new DatabaseSync(':memory:');
+    migrate(db, { migrations: all.filter((m) => m.version < 72) });
+    for (let i = 0; i < 3; i++) put(db);
+    db.prepare('DELETE FROM msg_messages WHERE seq > ?').run(keep);
+    migrate(db, { migrations: all });
+    assert.equal(put(db), 4, `with ${keep} row(s) left`);
+  }
+});
+
 test('the hub scrubs every credential shape the app does, userinfo in any scheme, and handoff reports; routes survive', async () => {
   const r = await messagingRig();
   try {

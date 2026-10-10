@@ -146,7 +146,7 @@ test('the inbox poller: off by default, starts with the preference, stops on 401
   assert.equal(mail.polling(), true);
   assert.equal(ticks.length, 1);
   await new Promise((res) => setImmediate(res));
-  assert.equal(fetched.length, 1);
+  assert.deepEqual(fetched.map((u) => new URL(u).search).sort(), ['?box=held&limit=50', '?box=inbox&limit=50'], 'one inbox poll, and the held count read once at start');
   status = 401;
   await ticks[0]();
   assert.equal(mail.polling(), false, 'a refused sign-in stops it');
@@ -163,6 +163,32 @@ test('the inbox poller: off by default, starts with the preference, stops on 401
   mail.stop();
   assert.equal(mail.polling(), false, 'quit stops it');
   assert.equal(ticks.length, 0);
+});
+
+test('the poller signals a change only when the inbox changes, and reads the held count once when it starts', async () => {
+  const ticks = [];
+  const timers = { setInterval: (fn) => { ticks.push(fn); return { fn }; }, clearInterval: () => {} };
+  const from = { user_id: 'ana', name: 'Ana' };
+  let messages = [];
+  const reads = [];
+  let changed = 0;
+  const mail = AgentMail.create({ identity: () => ({ origin: 'https://hub.example', userId: 'me', token: () => 't' }), resolve: async () => null, enabled: () => true, timers,
+    onChange: () => { changed++; },
+    fetch: async (u) => { const box = new URL(u).searchParams.get('box'); reads.push(box);
+      return new Response(JSON.stringify({ messages: box === 'held' ? [{ id: 'h1', kind: 'message', body: 'x' }] : messages }), { status: 200 }); } });
+  mail.sync();
+  await new Promise((res) => setImmediate(res));
+  assert.equal(mail.pending().held, 1, 'Home sees the held count without the Sessions page');
+  const settled = changed;
+  await ticks[0](); await ticks[0]();
+  assert.equal(changed, settled, 'an unchanged inbox does not re-render the panel');
+  assert.deepEqual(reads.filter((b) => b === 'held'), ['held'], 'no held read per tick');
+  messages = [{ id: 'q1', kind: 'message', state: 'queued', via: { provider: 'claude' }, source: from }];
+  await ticks[0]();
+  assert.equal(changed, settled + 1);
+  await ticks[0]();
+  assert.equal(changed, settled + 1);
+  mail.stop();
 });
 
 test('accept: the native confirm shows the full packet, the task is created only after it, accept is posted only after the task exists; a non-git folder is refused', async (t) => {
@@ -262,6 +288,15 @@ test('agent-mail-view: held text is editable and sent with its digest; questions
   btn('Choose a folder').click(); await tick();
   btn('Accept…').click(); await tick();
   assert.deepEqual(calls.find((c) => c[0] === 'accept'), ['accept', 'o1', 'fh', 'auto']);
+  // Edits in progress survive a re-render (the poller's mail:changed, a refocus).
+  const type = (el, v, ev = 'input') => { el.value = v; el.dispatchEvent(new w.Event(ev)); };
+  type(sec.querySelector('textarea'), 'Which queue, exactly?');
+  type(sec.querySelector('input[aria-label="Reason for declining"]'), 'busy this week');
+  type(sec.querySelectorAll('select[aria-label="Which AI"]')[1], 'codex', 'change');
+  w.document.dispatchEvent(new w.Event('visibilitychange')); await tick();
+  assert.equal(sec.querySelector('textarea').value, 'Which queue, exactly?');
+  assert.equal(sec.querySelector('input[aria-label="Reason for declining"]').value, 'busy this week');
+  assert.equal(sec.querySelectorAll('select[aria-label="Which AI"]')[1].value, 'codex');
   state.inbox = []; state.held = []; state.polling = false;
   w.document.dispatchEvent(new w.Event('visibilitychange')); await tick();
   assert.equal(sec.hidden, true, 'nothing waiting and the inbox off: the panel is hidden');

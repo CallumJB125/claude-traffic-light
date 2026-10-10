@@ -14,6 +14,7 @@ function applyConfigSideEffects(prev, next, d, touched) {
   if (hit('voice')) d.applyVoiceHotkey();
   if (hit('lowPower')) d.applyLowPower?.();
   if (hit('fastHook')) d.syncFastHook?.();
+  if (hit('agentMailInbox')) d.syncAgentMail?.();
   d.broadcastStatus();
 }
 

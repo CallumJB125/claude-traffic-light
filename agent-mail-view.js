@@ -12,9 +12,15 @@
   const node = (tag, text, className) => { const el = document.createElement(tag); if (text != null) el.textContent = text; if (className) el.className = className; return el; };
   const btn = (label, onClick, primary) => { const b = node('button', label, primary ? 'primary' : ''); b.type = 'button'; b.addEventListener('click', () => void onClick(b)); return b; };
   const say = (r, ok) => { status.textContent = r && r.ok === false ? (r.cancelled ? r.error || 'Cancelled.' : r.error || 'That did not work. Try again.') : r && (r.warning || r.note) ? r.warning || r.note : ok || ''; };
-  // Kept across re-renders, by message id: the answer being written, the folder chosen.
+  // Kept across re-renders, by message id: the answer being written, the folder chosen,
+  // and drafts: a held message's edited text, a decline reason, the AI chosen.
   const asking = new Map(); // continue-in launch id -> message id
-  const answers = new Map(), folders = new Map();
+  const answers = new Map(), folders = new Map(), drafts = new Map();
+  const keep = (id, key, field) => {
+    const d = drafts.get(id);
+    if (d && key in d) field.value = d[key];
+    field.addEventListener(field.tagName === 'SELECT' ? 'change' : 'input', () => drafts.set(id, { ...drafts.get(id), [key]: field.value }));
+  };
   const opened = new Set();
   let tools = null, busy = false, generation = 0;
 
@@ -37,6 +43,7 @@
     li.append(node('p', [hub ? `Through ${hub}` : null, via ? `from “${via}” (self-declared)` : null, 'Nothing is sent until you press Send.'].filter(Boolean).join(' · '), 'muted'));
     const label = node('label', 'Exactly what will be sent (you can edit it)');
     const text = node('textarea'); text.value = m.body; text.rows = Math.min(14, Math.max(4, m.body.split('\n').length + 1)); text.maxLength = 4000;
+    keep(m.id, 'text', text);
     label.append(text);
     const actions = node('div', null, 'row-actions');
     actions.append(
@@ -90,7 +97,9 @@
     const where = node('span', folders.get(m.id)?.label || 'No folder chosen', 'muted');
     const ai = node('select'); ai.setAttribute('aria-label', 'Which AI');
     for (const [id, label] of [['auto', 'Automatic'], ['claude', 'Claude Code'], ['codex', 'Codex'], ['gemini', 'Gemini CLI']]) { const o = node('option', label); o.value = id; ai.append(o); }
+    keep(m.id, 'ai', ai);
     const reason = node('input'); reason.type = 'text'; reason.maxLength = 500; reason.placeholder = 'Reason (optional)'; reason.setAttribute('aria-label', 'Reason for declining');
+    keep(m.id, 'reason', reason);
     const actions = node('div', null, 'row-actions');
     actions.append(
       btn('Choose a folder', async (b) => { const r = await run(b, () => api.mailPickFolder(), '', false); if (r && r.ok) { folders.set(m.id, { handle: r.handle, label: r.label }); where.textContent = r.label; } }),
@@ -107,6 +116,8 @@
     const held = (s && s.held) || [], inbox = (s && s.inbox) || [];
     section.hidden = !s || !s.signedIn || (!held.length && !inbox.length && !s.polling);
     if (section.hidden) return out.replaceChildren();
+    const live = new Set([...held, ...inbox].map((m) => m.id));
+    for (const id of drafts.keys()) if (!live.has(id)) drafts.delete(id);
     const list = node('ul', null, 'mail-list');
     for (const m of held) list.append(heldItem(m, s.hub));
     for (const m of inbox) {

@@ -6,7 +6,11 @@
 -- indexes are re-created, plus one for the per-sender held cap. Copied out and
 -- back rather than renamed: ALTER TABLE RENAME re-parses every trigger in the
 -- schema, and a database that skipped migrations may hold one that no longer parses.
+-- DROP also deletes the table's sqlite_sequence row, and the reinsert would set it
+-- to max(seq): a discarded top message's seq would be handed out again, so the old
+-- high-water mark is carried across.
 
+CREATE TABLE msg_seq_072 AS SELECT seq FROM sqlite_sequence WHERE name = 'msg_messages';
 CREATE TABLE msg_messages_072 AS SELECT * FROM msg_messages;
 DROP TABLE msg_messages;
 CREATE TABLE msg_messages (
@@ -58,6 +62,9 @@ SELECT seq, id, request_id, request_hash, kind, source_kind, source_user_id, sou
   hop, visited, authority_version, state, phase, lease, lease_until, attempts, reason, response, created_at, expires_at, updated_at, delivered_at, replied_at
 FROM msg_messages_072;
 DROP TABLE msg_messages_072;
+UPDATE sqlite_sequence SET seq = max(seq, (SELECT seq FROM msg_seq_072)) WHERE name = 'msg_messages' AND EXISTS (SELECT 1 FROM msg_seq_072);
+INSERT INTO sqlite_sequence (name, seq) SELECT 'msg_messages', seq FROM msg_seq_072 WHERE NOT EXISTS (SELECT 1 FROM sqlite_sequence WHERE name = 'msg_messages');
+DROP TABLE msg_seq_072;
 
 CREATE INDEX msg_messages_dest_target ON msg_messages(dest_target_id, state, seq);
 CREATE INDEX msg_messages_dest_user ON msg_messages(dest_user_id, seq);

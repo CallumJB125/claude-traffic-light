@@ -12,7 +12,7 @@
 // build's Node may not load): setup payloads get a shape check here and the
 // full check only in the app, via validateSetupPayload.
 
-const { closed, canonical, hash } = require('./plugins/index-verify.js');
+const { closed, canonical, hash, timeValid, FLOOR } = require('./plugins/index-verify.js');
 const Recipes = require('./recipes.js');
 const { validateCharacter } = require('../characters/validate.js');
 const CharacterStore = require('./character-store.js');
@@ -160,13 +160,15 @@ function validateIndex(index, timeOk = true) {
 // owner's counter from gallery/index-meta.json, raised on every publish, so a
 // takedown (which can lower generatedAt) still supersedes the list before it.
 // Throws with every problem found; else the index and its exact bytes.
-function buildIndex(items, { serial = 1 } = {}) {
+function buildIndex(items, { serial = 1, now = Date.now() } = {}) {
   const problems = [];
   const seen = new Map();
   for (const { item, name, kind } of items) {
     const where = `${kind || item?.kind}/${name ?? item?.id}`;
     const found = validateItem(item, name);
     if (kind !== undefined && item?.kind !== kind) found.push(`kind: must equal the folder (${kind})`);
+    // Apps refuse an index dated after tomorrow, so one future date would sink the whole gallery.
+    if (!found.length) for (const k of ['added', 'updated']) if (Date.parse(`${item[k]}T00:00:00.000Z`) > now + 86400000) found.push(`${k}: not later than tomorrow`);
     for (const p of found) problems.push(`${where}: ${p}`);
     if (!found.length) {
       if (seen.has(`${item.kind}/${item.id}`)) problems.push(`${where}: duplicate`);
@@ -181,6 +183,7 @@ function buildIndex(items, { serial = 1 } = {}) {
   const entries = [...seen.values()].map(entryOf).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   for (const e of entries) if (Buffer.byteLength(JSON.stringify(e)) > LIMITS.entryBytes) problems.push(`${e.id}: over ${LIMITS.entryBytes} bytes`);
   const generatedAt = `${entries.map((e) => e.updated).sort().at(-1)}T00:00:00.000Z`;
+  if (!timeValid(generatedAt, FLOOR, now)) problems.push(`generatedAt ${generatedAt}: apps accept ${FLOOR} up to tomorrow`);
   const index = sorted({ kind: 'plexiform.gallery', schemaVersion: 1, serial, generatedAt, entries });
   const text = `${JSON.stringify(index, null, 2)}\n`;
   if (Buffer.byteLength(text) > LIMITS.indexBytes) problems.push(`index is over ${LIMITS.indexBytes} bytes`);

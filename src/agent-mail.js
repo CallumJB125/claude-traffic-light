@@ -181,7 +181,7 @@ function create({ identity, resolve, fetch, home = null, enabled = () => false, 
     let body;
     if (decision === 'send' && typeof edited === 'string' && edited !== cur.body.message.body) {
       if (!edited.trim()) return { ok: false, error: 'Write the message first, or discard it.' };
-      body = clean(edited, LIMITS.handoffBody);
+      body = clean(edited, cur.body.message.kind === 'handoff' ? LIMITS.handoffBody : LIMITS.body);
     }
     const r = await msg(id, 'POST', `/messages/${encodeURIComponent(mid)}/release`, { decision, ...(body !== undefined ? { body } : {}) });
     if (r.status !== 200) { onChange(); return failed(r); }
@@ -275,16 +275,21 @@ function create({ identity, resolve, fetch, home = null, enabled = () => false, 
     if (!running || keyOf(identity()) !== key) return;
     if (r.status === 401 || r.status === 403) { log('[agent-mail] the hub refused this sign-in; inbox stopped'); stop(); return; }
     if (r.status !== 200 || !Array.isArray(r.body?.messages)) return;
+    const ids = (list) => list.map((m) => m.id).sort().join('\n');
+    const before = ids(inbox);
     inbox = r.body.messages.filter((m) => m && m.via && m.source?.user_id !== id.userId
       && (m.kind === 'handoff' ? m.handoff?.state === 'offered' : ['queued', 'delivered'].includes(m.state)));
     for (const m of inbox) if (!seen.has(m.id)) { seen.add(m.id); notify({ kind: 'inbox', id: m.id, from: m.source?.name ?? null, handoff: m.kind === 'handoff' }); }
-    onChange();
+    // An unchanged inbox re-rendered the panel every tick, wiping half-written edits.
+    if (ids(inbox) !== before) onChange();
   }
   function start(id) {
     key = keyOf(id); running = true;
     timer = timers.setInterval(() => poll().catch(() => {}), pollMs);
     timer?.unref?.();
     poll().catch(() => {});
+    // Home's held count after a restart; only once the user has turned the inbox on.
+    held().then(() => onChange(), () => {});
   }
   function stop() {
     running = false;

@@ -53,6 +53,7 @@ const EXTRA_SECRETS = [
   // as in a cut or minified line. The run is taken whole, so still linear.
   new RegExp(`(?<![\\w.-])(?=[\\w.-]{129})(?=[\\w.-]*?(?:${KEY_WORDS}))(?=([\\w.-]+))\\1["']?[ \\t]{0,8}[:=][ \\t]{0,8}(?<v>"(?:[^"\\\\\\n]|\\\\.){0,2048}"?|'[^'\\n]{0,2048}'?|[^\\s"'\x60][^\\n\\r"'\x60]{0,2047})`, 'gi'),
 ];
+const [PASSWORD_IS, ...LATER_SECRETS] = EXTRA_SECRETS;
 
 const PATTERNS = {
   LONG_LINE: new RegExp(`^[^\\n]{${MAX_LINE + 1},}$`, 'gm'),
@@ -180,8 +181,8 @@ function maskPii(text) {
 
 function redactSecretsPass(text) {
   // "password is: X" goes first: the shared key=value rule would take "is:" as the value and leave X.
-  let out = redactShared(redactExtra(String(text == null ? '' : text), EXTRA_SECRETS.slice(0, 1)));
-  return maskPii(redactExtra(out, EXTRA_SECRETS.slice(1)));
+  let out = redactShared(redactExtra(String(text == null ? '' : text), [PASSWORD_IS]));
+  return maskPii(redactExtra(out, LATER_SECRETS));
 }
 function redactExtra(out, list) {
   for (const re of list) {

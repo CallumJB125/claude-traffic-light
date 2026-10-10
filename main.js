@@ -3525,8 +3525,8 @@ function applyConfigEffects(prev, next, touched) {
     installHooks,
     enableCalendar: () => BusyWatch.enableCalendar().catch((err) => console.warn('[busy]', err.message)),
     applyWidgetVisibility, syncTailnetListener, createTray, applyVoiceHotkey, applyLowPower, syncFastHook, broadcastStatus, syncInteractionHost,
+    syncAgentMail: () => AgentMail.sync(),
   }, touched);
-  AgentMail.sync();
 }
 function commitConfig(partial) {
   const prev = loadConfig();
