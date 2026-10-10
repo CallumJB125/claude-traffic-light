@@ -15,9 +15,11 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
-const schema = require('./borrow/payload.js');
-const { formatOf } = require('./borrow/scrub.js');
-const Personal = require('./setups-personal.js');
+// Loaded on first share: they pull in the .mjs secret patterns, and the site
+// build validates gallery recipes with problems() on a Node that may not load it.
+const schema = () => require('./borrow/payload.js');
+const Personal = () => require('./setups-personal.js');
+const scrub = () => require('./borrow/scrub.js');
 
 const KEYS = Object.freeze(['id', 'title', 'what', 'prompt', 'tool', 'edits', 'cost']);
 const TOOLS = Object.freeze(['auto', 'claude', 'codex', 'gemini']);
@@ -140,16 +142,16 @@ function create({ builtInDir, dataDir, home, fsApi = fs, now = Date.now }) {
     if (!chosen.length) return { ok: false, error: 'Save a recipe as your own first, then share it.' };
     const files = chosen.map((r) => {
       const rel = `${SHARE_DIR}/${r.id}.md`;
-      return { id: randomUUID(), source_id: 'claude-code', relative_path: rel, format: formatOf(`~/${rel}`), content: commandText(r), note: '' };
+      return { id: randomUUID(), source_id: 'claude-code', relative_path: rel, format: scrub().formatOf(`~/${rel}`), content: commandText(r), note: '' };
     });
     let checked;
-    try { checked = schema.validatePayload({ schema: 1, files, items: [], note: '' }); } catch { return { ok: false, error: 'One of your recipes did not pass the privacy check (a home folder path or a secret). Edit it out, then share again.' }; }
-    const text = `${JSON.stringify({ kind: Personal.ENVELOPE_KIND, schema: 1, exported_at: new Date(now()).toISOString(), content_hash: checked.content_hash, payload: checked.payload }, null, 2)}\n`;
+    try { checked = schema().validatePayload({ schema: 1, files, items: [], note: '' }); } catch { return { ok: false, error: 'One of your recipes did not pass the privacy check (a home folder path or a secret). Edit it out, then share again.' }; }
+    const text = `${JSON.stringify({ kind: Personal().ENVELOPE_KIND, schema: 1, exported_at: new Date(now()).toISOString(), content_hash: checked.content_hash, payload: checked.payload }, null, 2)}\n`;
     return { ok: true, text, count: chosen.length };
   }
 
   function importText(text) {
-    const checked = Personal.createPersonalSetups({ home, dataRoot: dataDir, fsApi }).parseEnvelope(text);
+    const checked = Personal().createPersonalSetups({ home, dataRoot: dataDir, fsApi }).parseEnvelope(text);
     if (!checked) return { ok: false, error: 'That is not a valid shared setup or recipe file.' };
     const found = checked.payload.files.filter((f) => f.source_id === 'claude-code' && SHARE_FILE.test(f.relative_path)).map((f) => fromCommand(f.content)).filter(Boolean);
     if (!found.length) return { ok: false, error: 'That file has no recipes in it.' };

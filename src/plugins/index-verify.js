@@ -54,24 +54,57 @@ function descriptorValid(d){
   const capabilities=[...(d.components.skills.length?['instructions']:[]),...(d.components.mcp.length?['network','oauth','remote-mcp']:[])].sort();
   return canonical(d.capabilities)===canonical(capabilities);
 }
-function createIndexVerifier({keys=[],now=Date.now,floor=FLOOR}={}){
+const TIME=/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+function timeValid(generatedAt,floor,current){
+  const at=Date.parse(generatedAt),min=Date.parse(floor);
+  return typeof generatedAt==='string'&&TIME.test(generatedAt)&&Number.isFinite(at)&&new Date(at).toISOString()===generatedAt&&Number.isFinite(min)&&Number.isFinite(current)&&at>=min&&at<=current+86400000;
+}
+// validateIndex(index,timeOk) → null or a refusal reason. It gets the time
+// verdict rather than the core refusing first, so each caller keeps its own
+// order of schema, time and entry refusals.
+function checkIndex(bytes,{now=Date.now,floor=FLOOR,maxBytes=LIMITS.indexBytes,validateIndex}){
+  let index;try{index=strictJSON(bytes,maxBytes);}catch{return refuse('index-json');}
+  const timeOk=!!index&&typeof index==='object'&&!Array.isArray(index)&&timeValid(index.generatedAt,floor,now());
+  const reason=validateIndex(index,timeOk);
+  return reason?refuse(reason):{index};
+}
+const trustedKeys=keys=>keys.filter(k=>k?.key?.asymmetricKeyType==='ed25519'&&keyId(k.key)===k.keyId&&!DEV_KEY_IDS.has(k.keyId));
+function createSignedVerifier({keys=[],now=Date.now,floor=FLOOR,maxBytes=LIMITS.indexBytes,validateIndex}={}){
   // Injection is private module construction for tests/release wiring. No
   // renderer, descriptor, remote URL or unsigned catalog supplies these keys.
-  const trusted=keys.filter(k=>k?.key?.asymmetricKeyType==='ed25519'&&keyId(k.key)===k.keyId&&!DEV_KEY_IDS.has(k.keyId));
+  const trusted=trustedKeys(keys);
   return function verify(bytes,signature){
-    if(!Buffer.isBuffer(bytes)||!bytes.length||bytes.length>LIMITS.indexBytes)return refuse('index-bounds');
-    if(!trusted.length)return refuse('no-production-key');
+    if(!Buffer.isBuffer(bytes)||!bytes.length||bytes.length>maxBytes)return refuse('index-bounds');
     let s;try{s=strictJSON(Buffer.isBuffer(signature)?signature:Buffer.from(typeof signature==='string'?signature:''),LIMITS.signatureBytes);}catch{return refuse('signature');}
     if(!closed(s,['alg','keyId','sig'])||s.alg!=='ed25519'||DEV_KEY_IDS.has(s.keyId)||typeof s.sig!=='string'||!/^[A-Za-z0-9+/]{86}==$/.test(s.sig))return refuse('signature');
     if(Buffer.from(s.sig,'base64').toString('base64')!==s.sig)return refuse('signature');
     const key=trusted.find(k=>k.keyId===s.keyId);if(!key)return refuse('unknown-key');
     try{if(!crypto.verify(null,bytes,key.key,Buffer.from(s.sig,'base64')))return refuse('signature');}catch{return refuse('signature');}
-    let index;try{index=strictJSON(bytes);}catch{return refuse('index-json');}
-    if(!closed(index,['schemaVersion','generatedAt','catalog_sha256','entries'])||index.schemaVersion!==1||!SHA.test(index.catalog_sha256??'')||!Array.isArray(index.entries)||index.entries.length>LIMITS.entries)return refuse('index-schema');
-    const at=Date.parse(index.generatedAt),min=Date.parse(floor),current=now();
-    if(typeof index.generatedAt!=='string'||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(index.generatedAt)||!Number.isFinite(at)||new Date(at).toISOString()!==index.generatedAt||!Number.isFinite(min)||!Number.isFinite(current)||at<min||at>current+86400000)return refuse('index-time');
-    const ids=new Set(),names=new Set();for(const d of index.entries){if(!descriptorValid(d)||ids.has(d.id)||names.has(d.name))return refuse('descriptor');ids.add(d.id);names.add(d.name);}
-    return {status:'verified',reason:null,index,index_hash:hash(bytes)};
+    const checked=checkIndex(bytes,{now,floor,maxBytes,validateIndex});if(!checked.index)return checked;
+    return {status:'verified',reason:null,index:checked.index,index_hash:hash(bytes),keyId:key.keyId};
   };
 }
-module.exports={LIMITS,FLOOR,SHA,closed,canonical,hash,keyId,keysFromPems,strictJSON,safePath,compatible,packageHash,descriptorValid,createIndexVerifier};
+// The same strict parse, time and schema checks for an index that has no
+// pinned key to check it against. Callers label the result as unsigned.
+function parseUnsigned(bytes,{maxBytes=LIMITS.indexBytes,validateIndex,floor=FLOOR,now=Date.now}={}){
+  if(!Buffer.isBuffer(bytes)||!bytes.length||bytes.length>maxBytes)return refuse('index-bounds');
+  const checked=checkIndex(bytes,{now,floor,maxBytes,validateIndex});if(!checked.index)return checked;
+  return {status:'unsigned',reason:null,index:checked.index,index_hash:hash(bytes)};
+}
+function pluginIndex(index,timeOk){
+  if(!closed(index,['schemaVersion','generatedAt','catalog_sha256','entries'])||index.schemaVersion!==1||!SHA.test(index.catalog_sha256??'')||!Array.isArray(index.entries)||index.entries.length>LIMITS.entries)return 'index-schema';
+  if(!timeOk)return 'index-time';
+  const ids=new Set(),names=new Set();for(const d of index.entries){if(!descriptorValid(d)||ids.has(d.id)||names.has(d.name))return 'descriptor';ids.add(d.id);names.add(d.name);}
+  return null;
+}
+function createIndexVerifier({keys=[],now=Date.now,floor=FLOOR}={}){
+  const verify=createSignedVerifier({keys,now,floor,maxBytes:LIMITS.indexBytes,validateIndex:pluginIndex});
+  const anyKey=trustedKeys(keys).length>0;
+  return function verifyPluginIndex(bytes,signature){
+    if(!Buffer.isBuffer(bytes)||!bytes.length||bytes.length>LIMITS.indexBytes)return refuse('index-bounds');
+    if(!anyKey)return refuse('no-production-key');
+    const {keyId:_signer,...result}=verify(bytes,signature);
+    return result;
+  };
+}
+module.exports={LIMITS,FLOOR,SHA,closed,canonical,hash,keyId,keysFromPems,strictJSON,safePath,compatible,packageHash,descriptorValid,createIndexVerifier,createSignedVerifier,parseUnsigned,timeValid};
