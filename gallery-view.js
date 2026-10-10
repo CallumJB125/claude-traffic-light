@@ -21,7 +21,7 @@
 
   async function refresh(b) {
     b.disabled = true; say('Fetching the gallery from plexiform.dev…');
-    const r = await api.fetch().catch(() => null);
+    const r = await api.refresh().catch(() => null);
     b.disabled = false;
     if (!r || !r.ok) { say((r && r.error) || 'Could not fetch the gallery. Try again.'); return; }
     data = r;

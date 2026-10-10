@@ -163,11 +163,11 @@ function create({ dataDir, fetch, keysDir, now = Date.now, recipes, characterSto
     if (!S.ADDABLE.includes(e.kind)) return { ok: false, error: `Adding ${KIND_LABEL[e.kind]} from the gallery is available in a later version.` };
     if (e.kind === 'recipe') {
       const p = e.payload;
-      const yes = await confirm({ title: `Add “${e.title}” to My recipes?`, action: 'Add recipe', detail: [by(e), p.what, 'It only reads: plan mode, no file changes.', 'The full prompt it gives your AI:', '', p.prompt].join('\n') }, ev);
+      const yes = await confirm({ title: e.title, action: 'Add to My recipes', detail: [by(e), p.what, 'It only reads: plan mode, no file changes.', 'The full prompt it gives your AI:', '', p.prompt].join('\n') }, ev);
       if (!yes) return { ok: false, cancelled: true, error: 'Cancelled. Nothing was added.' };
       return recipes.addFromGallery(e);
     }
-    const yes = await confirm({ title: `Add “${e.payload.name}” to Characters?`, action: 'Add character', detail: [by(e), 'A widget character: art only, checked again by the app’s sanitiser before it is saved.'].join('\n') }, ev);
+    const yes = await confirm({ title: e.payload.name, action: 'Add to Characters', detail: [by(e), 'A widget character: art only, checked again by the app’s sanitiser before it is saved.'].join('\n') }, ev);
     if (!yes) return { ok: false, cancelled: true, error: 'Cancelled. Nothing was added.' };
     try {
       const ch = characterStore.save({ ...e.payload, id: characterStore.freeId(e.payload.id) }, { source: 'gallery' });

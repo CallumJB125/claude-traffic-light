@@ -34,7 +34,7 @@ async function rig(t, { demo = false, cachedFirst = false } = {}) {
   const dom = new JSDOM(html, { runScripts: 'outside-only', pretendToBeVisual: true });
   const w = dom.window;
   w.recipesApi = { list: async () => { calls.list += 1; return { ok: true, builtIn: [], mine: [], canSchedule: true, demo }; }, pickFolder: async () => null };
-  w.galleryApi = { fetch: async () => { calls.fetch += 1; return service.fetchIndex(); }, cached: async () => service.cached(), add: async (id, sha) => { calls.add.push([id, sha]); return { ok: true, id: 'explain-it', kind: id.split('/')[0] }; } };
+  w.galleryApi = { refresh: async () => { calls.fetch += 1; return service.fetchIndex(); }, cached: async () => service.cached(), add: async (id, sha) => { calls.add.push([id, sha]); return { ok: true, id: 'explain-it', kind: id.split('/')[0] }; } };
   for (const s of scripts) w.eval(s);
   await tick();
   const $ = (sel) => w.document.querySelector(sel);

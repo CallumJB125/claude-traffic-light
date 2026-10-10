@@ -1977,14 +1977,25 @@ ipcMain.handle('tasks:pick-folder', async (e) => {
 });
 onQuit(app, () => tasksSvc?.stop());
 // Recipes on the Tasks page (src/recipes.js): built from the recipe file in main, asked with a native dialog, run by the Tasks engine.
+const recipes = require('./src/recipes.js').create({ builtInDir: path.join(__dirname, 'recipes'), dataDir: path.join(ROOT_DIR, 'recipes'), home: os.homedir() });
+const tasksConfirm = async (info, e) => (await dialog.showMessageBox(BrowserWindow.fromWebContents(e.sender) || undefined, { type: 'question', buttons: ['Cancel', info.action], defaultId: 0, cancelId: 0, noLink: true, message: `${info.action}: ${info.title}?`, detail: info.detail })).response === 1;
 require('./src/recipes.js').register({
-  ipcMain, allowed: tasksSenderOk, tasks: getTasks, home: os.homedir(), demo: () => Demo.active(),
-  recipes: require('./src/recipes.js').create({ builtInDir: path.join(__dirname, 'recipes'), dataDir: path.join(ROOT_DIR, 'recipes'), home: os.homedir() }),
-  confirm: async (info, e) => (await dialog.showMessageBox(BrowserWindow.fromWebContents(e.sender) || undefined, { type: 'question', buttons: ['Cancel', info.action], defaultId: 0, cancelId: 0, noLink: true, message: `${info.action}: ${info.title}?`, detail: info.detail })).response === 1,
+  ipcMain, allowed: tasksSenderOk, tasks: getTasks, home: os.homedir(), demo: () => Demo.active(), recipes,
+  confirm: tasksConfirm,
   pickSave: async (e) => { const r = await dialog.showSaveDialog(BrowserWindow.fromWebContents(e.sender) || undefined, { title: 'Share my recipes', defaultPath: 'my-plexiform-recipes.json', filters: [{ name: 'Plexiform setup', extensions: ['json'] }] }); return r.canceled ? null : r.filePath || null; },
   pickOpen: async (e) => { const r = await dialog.showOpenDialog(BrowserWindow.fromWebContents(e.sender) || undefined, { title: 'Import recipes', properties: ['openFile'], filters: [{ name: 'Plexiform setup', extensions: ['json'] }] }); return r.canceled ? null : r.filePaths?.[0] || null; },
   readFile: (f) => require('./src/setups-personal.js').readChosen(f), writeFile: (f, t) => require('./src/setups-personal.js').writeChosen(f, t),
 });
+// The community gallery on the Tasks page (src/gallery.js): fetched only on a click, in its own
+// cookieless session, verified, then added after a native confirm. Specs stub the session's fetch.
+{
+  const Gallery = require('./src/gallery.js');
+  const gallery = Gallery.create({
+    dataDir: ROOT_DIR, keysDir: path.join(__dirname, 'build'), recipes, characterStore, broadcastCharacters, demo: () => Demo.active(), confirm: tasksConfirm,
+    fetch: (...a) => require('electron').session.fromPartition('gallery').fetch(...a), // privacy-flow: gallery
+  });
+  Gallery.register({ ipcMain, allowed: tasksSenderOk, gallery });
+}
 
 let lightsWin = null;
 let onboardingWin = null; // the first-run setup window (createOnboardingWindow)
