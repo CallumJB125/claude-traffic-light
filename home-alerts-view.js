@@ -33,11 +33,12 @@
     return li;
   }
   function render(s) {
-    const stuck = (s && s.stuck) || [], limits = (s && s.limits) || [];
-    section.hidden = !stuck.length && !limits.length;
+    const stuck = (s && s.stuck) || [], limits = (s && s.limits) || [], mail = (s && s.mail) || [];
+    section.hidden = !stuck.length && !limits.length && !mail.length;
     if (section.hidden) return out.replaceChildren();
     const focus = document.activeElement?.dataset?.focus;
-    const list = node('ul'); list.setAttribute('aria-label', 'Stuck sessions and usage limits');
+    const list = node('ul'); list.setAttribute('aria-label', 'Stuck sessions, usage limits and agent mail');
+    mail.forEach((c, at) => list.append(card('mail', c, at, [['Open Agent mail', 'open', true]])));
     stuck.forEach((c, at) => list.append(card('stuck', c, at, [...(c.canOpen ? [['Open session', 'open', true]] : []), ...(c.canHand ? [['Hand to another AI', 'handoff']] : []), ['Dismiss', 'dismiss']])));
     limits.forEach((c, at) => list.append(card('limit', c, at, [...(c.canResume ? [['Resume this at reset', 'resume', true]] : []), ['Dismiss', 'dismiss']])));
     out.replaceChildren(list);

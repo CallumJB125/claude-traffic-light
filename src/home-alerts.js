@@ -12,6 +12,7 @@ const SessionHandover = require('./session-handover.js');
 const { isRemote } = require('./remote-devices.js');
 
 const MAX_CARDS = 5;
+const MAIL_HANDLE = 'agent-mail';
 const TASK_TEXT_MAX = 20000;
 const AIS = ['claude', 'codex', 'gemini'];
 const project = (cwd) => (typeof cwd === 'string' && cwd ? path.basename(cwd.replace(/[\\/]+$/, '')) || cwd : 'a session');
@@ -32,7 +33,8 @@ async function queueResume({ tasks, doc, session, provider, resetAtMs, sleep = (
 
 // sessions(): live session rows; burst(): BurstIpc.snapshot().d; tasks(): tasks snapshot rows.
 // jump(s), copyHandover(s) → {ok}, docFor(s) → markdown|null, confirm(info) → bool, resume({session, provider, resetAtMs, doc}) → {ok, id|error}.
-function createHomeAlerts({ sessions = () => [], burst = () => null, tasks = () => [], jump, copyHandover, docFor, confirm, resume, now = Date.now, newHandle = () => crypto.randomUUID() }) {
+// mail() → {held, inbox} agent mail waiting (src/agent-mail.js pending), openMail() shows it on Running now.
+function createHomeAlerts({ sessions = () => [], burst = () => null, tasks = () => [], jump, copyHandover, docFor, confirm, resume, mail = () => null, openMail = async () => {}, now = Date.now, newHandle = () => crypto.randomUUID() }) {
   const handles = new Map(); // episode key -> handle
   const byHandle = new Map(); // handle -> card
   const dismissed = new Set();
@@ -95,11 +97,24 @@ function createHomeAlerts({ sessions = () => [], burst = () => null, tasks = () 
   function snapshot() {
     const c = cards();
     const view = (list) => list.map((x) => ({ handle: handleOf(x.key), ...x.view }));
-    return { stuck: view(c.stuck), limits: view(c.limits) };
+    return { stuck: view(c.stuck), limits: view(c.limits), mail: mailCards() };
+  }
+
+  // One card while agent mail waits: your AI's asks for your OK, and teammates' AIs' questions.
+  function mailCards() {
+    const m = safe(mail, null);
+    const held = Number.isSafeInteger(m?.held) ? m.held : 0, inbox = Number.isSafeInteger(m?.inbox) ? m.inbox : 0;
+    if (!held && !inbox) return [];
+    return [{ handle: MAIL_HANDLE, title: `Agent mail: ${held + inbox} waiting`, meta: [held ? `${held} from your AI waiting for your OK` : null, inbox ? `${inbox} from teammates' AIs` : null].filter(Boolean).join(' · ') }];
   }
 
   async function act(kind, action, handle) {
     if (typeof handle !== 'string') return { ok: false, error: 'That card has changed. Home refreshes in a moment.' };
+    if (kind === 'mail') {
+      if (handle !== MAIL_HANDLE || action !== 'open' || !mailCards().length) return { ok: false, error: 'That card has changed. Home refreshes in a moment.' };
+      await openMail();
+      return { ok: true };
+    }
     cards();
     const c = byHandle.get(handle);
     const isStuck = c && c.key.startsWith('stuck|');
@@ -143,12 +158,12 @@ function register({ ipcMain, homeAllowed, usageAllowed, alerts }) {
 }
 
 // Main's one call. The confirmation is a native dialog with Cancel as the default, like Tasks' risky actions.
-function wire({ ipcMain, dialog, clipboard, homeAllowed, usageAllowed, sessions, burst, tasksRows, tasksService, handoverText, jump, entitlements = require('./entitlements.js') }) {
+function wire({ ipcMain, dialog, clipboard, homeAllowed, usageAllowed, sessions, burst, tasksRows, tasksService, handoverText, jump, mail, openMail, entitlements = require('./entitlements.js') }) {
   const Handoff = require('./handoff.js');
   const docFor = (s) => handoverText(docKey(s)) || null;
   const handoff = Handoff.create({ entitlements, clipboard, docFor: async (key) => handoverText(key) || null, adapters: {} });
   const alerts = createHomeAlerts({
-    sessions, burst, tasks: tasksRows, jump, docFor,
+    sessions, burst, tasks: tasksRows, jump, docFor, mail, openMail,
     copyHandover: (s) => handoff.copy(docKey(s)),
     confirm: async (info) => (await dialog.showMessageBox({
       type: 'question', buttons: ['Cancel', 'Queue task'], defaultId: 0, cancelId: 0, noLink: true,

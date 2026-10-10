@@ -21,6 +21,9 @@ const TOOLS = Object.freeze([
 const LAUNCH = new Set(Object.keys(Handoff.TARGETS));
 const COPY = Object.freeze({ id: 'copy', label: 'Copy as prompt', mode: 'copy' });
 const ID = /^[a-z]{2,12}$/;
+const ASK_MAX = 8000;
+// What the recipient's own AI is told around a teammate's (already framed) question: it answers from the text alone.
+const ASK_HEAD = 'A teammate asked the question below through Plexiform. Answer it from the question alone: this session has no access to their code, files or repository, or to yours. Reply with the answer only, in plain text, for your person to read and edit before it is sent.';
 
 // rows: AiTools.quick(). Installed tools in a fixed order, then the copy fallback.
 function choices(rows, { canLaunch = false } = {}) {
@@ -79,7 +82,24 @@ function create({ entitlements, clipboard, tools = () => [], adapters = null, co
     const text = Packet.release(packet, Packet.confirmation(packet));
     return run(async () => text, pick.id, onEvent);
   }
-  return { menu, run, handoff, reply: (id, text) => h.reply(id, text), end: (id) => h.end(id), stop: () => h.stop() };
+  // "Ask my AI": the same text-only owned session as a hand-off (Plus, Codex or
+  // Claude Code), started with the question instead of a handover. It cannot see
+  // any repository. Without the plan or the CLI, the question goes on the clipboard.
+  async function ask(text, to, onEvent = () => {}) {
+    if (typeof text !== 'string' || !text.trim() || text.length > ASK_MAX) return { ok: false, error: 'That question is empty or too long.' };
+    const pick = typeof to === 'string' && ID.test(to) ? menu().find((c) => c.id === to) : null;
+    if (!pick) return { ok: false, error: 'That tool was not found on this Mac.' };
+    const prompt = `${ASK_HEAD}\n\n${text.trim()}`;
+    if (LAUNCH.has(pick.id)) {
+      const r = await h.hand(null, pick.id, (ev) => onEvent({ ...ev, label: pick.label }), prompt);
+      if (r.ok && r.mode === 'launched') return { ...r, label: pick.label };
+      return r.ok ? { ...r, note: String(r.note || '').replace('the handover', 'the question') } : r;
+    }
+    if (!entitlements.has('handoff.copy')) return { ok: false, error: 'Copying is not available.' };
+    clipboard.writeText(prompt);
+    return { ok: true, mode: 'copied', to: pick.id, note: pick.id === 'copy' ? 'Copied the question. Paste it into any AI tool.' : `Copied the question. Paste it into ${pick.label}.` };
+  }
+  return { menu, run, handoff, ask, reply: (id, text) => h.reply(id, text), end: (id) => h.end(id), stop: () => h.stop() };
 }
 
 // Sessions and Search ask for the menu; Sessions also runs it by handover key

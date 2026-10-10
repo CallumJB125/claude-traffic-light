@@ -27,4 +27,14 @@ contextBridge.exposeInMainWorld('sessionsApi', {
   continueReply: (id, text) => ipcRenderer.invoke('continue:reply', String(id), String(text)),
   continueEnd: (id) => ipcRenderer.invoke('continue:end', String(id)),
   onContinue: (cb) => ipcRenderer.on('continue:event', (_e, ev) => cb(ev)),
+  // Agent mail (src/agent-mail.js): main resolves every id against the hub again.
+  mailList: () => ipcRenderer.invoke('mail:list'),
+  mailRelease: (id, decision, digest, body) => ipcRenderer.invoke('mail:release', String(id), String(decision), String(digest), typeof body === 'string' ? body : undefined),
+  mailOpen: (id) => ipcRenderer.invoke('mail:open', String(id)),
+  mailAnswer: (id, text) => ipcRenderer.invoke('mail:answer', String(id), String(text)),
+  mailDecline: (id, reason) => ipcRenderer.invoke('mail:decline', String(id), String(reason || '')),
+  mailAskAi: (id, to) => ipcRenderer.invoke('mail:ask-ai', String(id), String(to)),
+  mailPickFolder: () => ipcRenderer.invoke('mail:pick-folder'),
+  mailAccept: (id, folder, ai) => ipcRenderer.invoke('mail:accept', String(id), String(folder), String(ai)),
+  onMail: (cb) => ipcRenderer.on('mail:changed', () => cb()),
 });

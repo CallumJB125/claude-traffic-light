@@ -61,12 +61,19 @@ function create({ entitlements, clipboard, docFor, adapters = defaultAdapters(),
     return { ok: true };
   }
 
-  async function hand(key, to, onEvent = () => {}) {
+  // prompt: send this text as it is instead of the key's handover (continueIn.ask); the copy fallback copies it.
+  async function hand(key, to, onEvent = () => {}, prompt = null) {
     if (!Object.hasOwn(TARGETS, to)) return { ok: false, error: 'Choose Codex or Claude.' };
-    const fallback = async (note) => { const c = await copy(key); return c.ok ? { ...c, note } : c; };
+    const copyIt = async () => {
+      if (prompt == null) return copy(key);
+      if (!entitlements.has('handoff.copy')) return { ok: false, error: 'Copying is not available.' };
+      clipboard.writeText(prompt);
+      return { ok: true, mode: 'copied' };
+    };
+    const fallback = async (note) => { const c = await copyIt(); return c.ok ? { ...c, note } : c; };
     if (!entitlements.has('handoff.launch')) return { ...(await fallback(`Copied. Paste it into ${TARGETS[to]}. One-click launch isn't part of your current plan.`)), upgrade: true };
     if (live.size >= MAX_LIVE) return { ok: false, error: 'End one of the running hand-offs first.' };
-    const doc = await docFor(key);
+    const doc = prompt ?? await docFor(key);
     if (!doc) return { ok: false, error: 'No handover could be built for this session.' };
     const adapter = adapterFor(to);
     if (adapter.available === false) return fallback(`${TARGETS[to]} is not installed here, so the handover was copied instead.`);
@@ -86,7 +93,7 @@ function create({ entitlements, clipboard, docFor, adapters = defaultAdapters(),
         else if (e.kind === 'closed') { onEvent({ id, kind: 'closed' }); end(id); }
       });
       live.set(id, { adapter, target, off, folder, to });
-      await adapter.send({ target, text: SessionHandover.asPrompt(doc), clientId: crypto.randomUUID() });
+      await adapter.send({ target, text: prompt ?? SessionHandover.asPrompt(doc), clientId: crypto.randomUUID() });
       return { ok: true, mode: 'launched', id, to, label: TARGETS[to] };
     } catch (e) {
       log(`[handoff] launch in ${to} failed: ${e && e.message}`);

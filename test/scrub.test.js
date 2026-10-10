@@ -138,3 +138,10 @@ test('cleanJsonError drops the quoted input', () => {
   assert.equal(cleanJsonError(`Unexpected token 'a', "a secret" is not valid JSON`), 'invalid JSON (input not shown)');
   assert.equal(cleanJsonError('Expected property name or \'}\' in JSON at position 1'), 'Expected property name or \'}\' in JSON at position 1');
 });
+
+test('redactSecretsPass: "password is: X" loses X even though the shared key=value rule also matches', () => {
+  for (const t of ['password is: hunter2', 'Password is:hunter2 ok', 'my passphrase is: hunter2']) {
+    const out = require('../src/scrub.js').redactSecretsPass(t);
+    assert.ok(!out.includes('hunter2'), out);
+  }
+});

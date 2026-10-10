@@ -228,4 +228,4 @@ function createSessionMessagingHost({ baseUrl, token, fetch = globalThis.fetch, 
   return { start, stop, sync, pullOnce, deliver, sendFromSession, decideHandoff, running: () => !stopped };
 }
 
-module.exports = { createSessionMessagingHost, createMessagingClient, frame };
+module.exports = { createSessionMessagingHost, createMessagingClient, frame, label };

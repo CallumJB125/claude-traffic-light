@@ -55,6 +55,8 @@
       "sessions.css",
       "sessions.js",
       "sessions-preload.js",
+      "agent-mail-view.js",
+      "agent-mail-view.css",
       "timeline.html",
       "timeline.css",
       "timeline.js",

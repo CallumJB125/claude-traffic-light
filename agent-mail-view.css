@@ -1,0 +1,11 @@
+.mail { margin: 20px 0; padding: 16px; background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--amber); border-radius: var(--radius-lg); }
+.mail[hidden] { display: none; }
+.mail-list { list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 12px; }
+.mail-item { border-top: 1px solid var(--line); padding-top: 12px; display: grid; gap: 8px; }
+.mail-item h3 { margin: 0; font-size: var(--text-base); overflow-wrap: anywhere; }
+.mail-item label { display: grid; gap: 2px; font-size: var(--text-sm); color: var(--muted); }
+.mail-item textarea, .mail-item select, .mail-item input { font: inherit; color: inherit; background: var(--panel-2); border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 8px; min-height: 44px; }
+.mail-item textarea { min-height: 72px; resize: vertical; }
+.mail-body { margin: 0; padding: 10px; white-space: pre-wrap; overflow-wrap: anywhere; font: var(--text-sm)/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius); max-height: 320px; overflow: auto; }
+#mail-status { color: var(--muted); font-size: var(--text-sm); }
+.mail button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
