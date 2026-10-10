@@ -57,7 +57,7 @@ async function exercise(page, f, runHb, runtime) {
   // A current account revocation must clear the panel, not leave old paths.
   f.db.run('UPDATE user_devices SET revoked_at=? WHERE id=?',f.h.hub.iso(),f.users.amember.device_id);
   await panel.getByRole('button',{name:'Refresh coordination',exact:true}).click();
-  await expect.poll(async()=>page.isClosed() || !(await page.locator('body').textContent()).includes('src/shared/**')).toBe(true);
+  await expect.poll(async()=>page.isClosed() || !(await page.locator('body').textContent().catch(() => '')).includes('src/shared/**')).toBe(true);
   if(!page.isClosed())await expect(page.locator('body')).not.toContainText(f.users.amember.token);
   console.log(`Coordination ${runtime}: account revocation clears or closes old view`);
 }

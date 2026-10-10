@@ -1,5 +1,5 @@
-// Team and Integrations findable without signing in: the tray items, the
-// Settings "Account & team" section and the widget's one-time hint. Which page
+// Team and Integrations findable without signing in: the tray's Team section,
+// Integrations under it in the sidebar and the widget's one-time hint. Which page
 // opened is read from the Plexiform window's own sidebar and account screen.
 const path = require('path');
 const { test, expect } = require('@playwright/test');
@@ -9,6 +9,8 @@ const F = require('./inputs-fixtures');
 const SHOT = { threshold: 0.05, stylePath: path.join(__dirname, 'no-hover-chrome.css') };
 const trayClick = (app, label) => app.evaluate((_e, l) => global.__buddyTrayMenu.items.find((i) => i.label === l).click(), label);
 const trayLabels = (app) => app.evaluate(() => global.__buddyTrayMenu.items.map((i) => i.label));
+// The tray and widget menus list the app's six sections, nothing finer.
+const SECTIONS = ['Open Home…', 'Open Board…', 'Open Running now…', 'Open Usage & cost…', 'Open Team…', 'Open Settings…'];
 const shownPage = async (app, label) => expect((await windowByFile(app, 'sidebar.html')).locator('[aria-current="page"]')).toContainText(label, { timeout: 15000 });
 const accountScreen = async (app, screen) => {
   await expect.poll(() => app.windows().filter((p) => p.url().includes('account.html')).map((p) => new URL(p.url()).searchParams.get('screen')), { timeout: 15000 }).toContain(screen);
@@ -19,12 +21,13 @@ test.describe('tray and Settings', () => {
   test.beforeAll(async () => { h = await launchApp(); });
   test.afterAll(async () => { await h?.cleanup(); });
 
-  test('the tray has Team and Integrations, and they open those pages', async () => {
+  test('the tray has the Team section, and Integrations is a page inside it', async () => {
     await expect.poll(() => trayLabels(h.app).catch(() => []), { timeout: 15000 }).toContain('Open Team…');
     const labels = await trayLabels(h.app);
-    for (const l of ['Open Team…', 'Open Integrations…', 'Open Waiting on you…', 'Open Usage…', 'Open Account…', 'Open Settings…', 'Open Tasks…']) expect(labels).toContain(l);
-    expect(await h.app.evaluate(() => global.__buddyTrayMenu.items.find((i) => i.label === 'Open Tasks…').enabled)).not.toBe(false);
-    await trayClick(h.app, 'Open Integrations…');
+    expect(labels.filter((l) => SECTIONS.includes(l))).toEqual(SECTIONS);
+    await trayClick(h.app, 'Open Team…');
+    await shownPage(h.app, 'Team');
+    await (await windowByFile(h.app, 'sidebar.html')).evaluate(() => window.buddy.select('integrations'));
     await shownPage(h.app, 'Integrations');
     await trayClick(h.app, 'Open Team…');
     await shownPage(h.app, 'Team');
@@ -64,7 +67,7 @@ test.describe('widget right-click', () => {
       await w.evaluate(() => document.getElementById('app').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, shiftKey: true })));
       await expect.poll(() => h.app.evaluate(() => !!global.__buddyWidgetMenu), { timeout: 10000 }).toBe(true);
       const labels = await h.app.evaluate(() => global.__buddyWidgetMenu.items.map((i) => i.label).filter(Boolean));
-      for (const l of ['Open Plexiform…', 'Open Team…', 'Open Integrations…', 'Open Board…', 'Open Tasks…', 'Open Usage…', 'Open Settings…', 'Open About & Updates…', 'Floating Widget', 'Open at Login', 'Quit']) expect(labels).toContain(l);
+      for (const l of ['Open Plexiform…', ...SECTIONS, 'Floating Widget', 'Open at Login', 'Quit']) expect(labels).toContain(l);
       expect(labels).toEqual(await trayLabels(h.app).then((t) => t.filter(Boolean)));
       const lights = h.app.windows().filter((p) => p.url().includes('lights.html'));
       expect(lights).toHaveLength(0);

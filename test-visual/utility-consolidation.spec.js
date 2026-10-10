@@ -11,7 +11,8 @@ test('ordinary utilities stay in the main app and Widget configuration contains 
   const syntheticHome = fs.mkdtempSync(path.join(os.tmpdir(), 'plexiform-utility-acceptance-'));
   const h = await launchApp({ extraArgs: ['--lights'], env: { HOME: syntheticHome, USERPROFILE: syntheticHome } });
   const errors = [];
-  h.app.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+  // Main's [startup] timing lines go to stderr on dev launches; they are not errors.
+  h.app.on('console', message => { if (message.type() === 'error' && !message.text().startsWith('[startup] ')) errors.push(message.text()); });
   const inspect = (file, script, query = null) => h.app.evaluate(async ({ webContents }, { file, script, query }) => {
     const page = webContents.getAllWebContents().find(w => {
       try { const u = new URL(w.getURL()); return u.pathname.endsWith('/' + file) && (!query || u.searchParams.get('view') === query); } catch { return false; }
@@ -44,7 +45,7 @@ test('ordinary utilities stay in the main app and Widget configuration contains 
       ['settings', 'settings.html', 'document.querySelector("#workingStaleMinutes").value.length > 0'],
       ['hatch', 'hatch.html', 'document.querySelector("#shape").children.length > 0'],
       ['feedback', 'feedback.html', '!!window.feedbackApi && !!document.querySelector("#save")'],
-      ['updates', 'updates.html', '!!window.updates && document.body.innerText.includes("1.0.1")'],
+      ['updates', 'updates.html', `!!window.updates && document.body.innerText.includes(${JSON.stringify(require('../package.json').version)})`],
       ['sessions', 'sessions.html', '!!window.sessionsApi && !!document.querySelector("#content")'],
     ]) {
       await select(id);
@@ -62,6 +63,7 @@ test('ordinary utilities stay in the main app and Widget configuration contains 
       }
     }
     await select('settings');
+    await expect.poll(() => inspect('settings.html', 'document.querySelector("#workingStaleMinutes").value.length > 0')).toBe(true);
     await inspect('settings.html', 'document.querySelector("#workingStaleMinutes").value = "42"; document.querySelector("#workingStaleMinutes").dispatchEvent(new Event("change", { bubbles: true })); true');
     // The change autosaves, which proves settings mutations use the embedded owner.
     await expect.poll(() => JSON.parse(fs.readFileSync(path.join(h.home, 'config.json'), 'utf8')).workingStaleMinutes).toBe(42);

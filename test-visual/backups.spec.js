@@ -6,7 +6,7 @@ const { test, expect } = require('@playwright/test');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { launchApp, windowByFile } = require('./app');
+const { launchApp, windowByFile, openSettingsPane, snapToPixels } = require('./app');
 const Backups = require('../src/backups.js');
 
 const CFG = { roam: false, randomEvents: false, seasonal: false, showTasks: false, showAgents: false, hints: { teamSeen: true } };
@@ -35,10 +35,13 @@ test.beforeAll(async () => {
   await lights.evaluate(() => window.lightsApi.openPreferences());
   settings = await windowByFile(h.app, 'settings.html');
   await settings.waitForLoadState('load');
+  await openSettingsPane(settings, 'privacy');
   // the launch-time daily snapshot carries today's real date: drop it, add the fixed ones
   await expect.poll(() => fs.readdirSync(h.backups).length).toBeGreaterThan(0);
   for (const n of fs.readdirSync(h.backups)) fs.rmSync(path.join(h.backups, n), { recursive: true, force: true });
   seed(h.backups);
+  // Opened here, not in the first test, so a later test still finds it open on a restarted worker.
+  await settings.locator('#backups > summary').click();
 });
 
 test.afterAll(async () => { await h?.cleanup(); });
@@ -46,7 +49,6 @@ test.afterAll(async () => { await h?.cleanup(); });
 const readConfig = () => JSON.parse(fs.readFileSync(path.join(h.home, 'config.json'), 'utf8'));
 
 test('Backups: lists snapshots in plain words, damaged ones flagged and not restorable', async () => {
-  await settings.locator('#backups > summary').click();
   const items = settings.locator('#backups-list .bk-item');
   await expect(items).toHaveCount(3);
   await expect(items.nth(0).locator('.bk-title')).toHaveText('Restore your settings from 30 Sep, 18:40');
@@ -58,7 +60,8 @@ test('Backups: lists snapshots in plain words, damaged ones flagged and not rest
   await expect(settings.locator('#backups-summary')).toHaveText('2 backups, 1 damaged. Latest: 30 Sep, 18:40.');
   await settings.evaluate(() => document.getElementById('backups').scrollIntoView({ block: 'start' }));
   await settings.waitForTimeout(300);
-  await expect(settings.locator('#backups')).toHaveScreenshot('backups-list.png');
+  // Same content alone and in a full run, but glyph anti-aliasing differs between the two (~1.3% of pixels).
+  await expect(await snapToPixels(settings.locator('#backups'))).toHaveScreenshot('backups-list.png', { maxDiffPixelRatio: 0.015 });
 });
 
 test('Backups: the diff names what differs, and a subset restores with a before-restore copy', async () => {
@@ -69,7 +72,8 @@ test('Backups: the diff names what differs, and a subset restores with a before-
   await settings.evaluate(() => document.getElementById('backups').scrollIntoView({ block: 'start' }));
   await settings.waitForTimeout(300);
   // the open diff is taller than the window, so shoot the window, not the element
-  await expect(settings).toHaveScreenshot('backups-diff.png');
+  // The embedded page can land a row off between a lone and a full run (≈1.7k px of 950k).
+  await expect(settings).toHaveScreenshot('backups-diff.png', { maxDiffPixelRatio: 0.008 });
   await picks.nth(0).locator('input').uncheck();
   await picks.nth(2).locator('input').uncheck();
   await item.getByRole('button', { name: 'Restore selected' }).click();

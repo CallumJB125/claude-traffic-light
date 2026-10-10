@@ -5,6 +5,9 @@ const path = require('node:path');
 const os = require('node:os');
 const net = require('node:net');
 const { randomUUID } = require('node:crypto');
+// The calendar opens on today (week and month view), so plans are dated from this week's Monday and
+// every day the test shows or drops on stays inside this week, which is always in the month grid.
+const day = (n) => { const t = new Date(); const d = new Date(t.getFullYear(), t.getMonth(), t.getDate() - ((t.getDay() + 6) % 7) + n); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 const port = () => new Promise(resolve => { const server = net.createServer(); server.listen(0, '127.0.0.1', () => { const value = server.address().port; server.close(() => resolve(value)); }); });
 
 async function launchPlannerApp(f, temp) {
@@ -40,7 +43,7 @@ test('actual main My day opens own work and Calendar/Timeline persist real plans
     expect(own.status).toBe(200); const id = own.body.card.id;
     const predecessor = await f.as(u, 'POST', `/api/boards/${f.A.board}/cards`, { title: 'Synthetic planner predecessor', repo_id: f.A.repo });
     expect(predecessor.status).toBe(200); const predecessorId = predecessor.body.card.id;
-    const predecessorPlan = await f.as(u, 'PATCH', `/api/cards/${predecessorId}/planning`, { request_id: randomUUID(), version: predecessor.body.card.version, start_date: '2026-09-28', due_date: '2026-09-30' });
+    const predecessorPlan = await f.as(u, 'PATCH', `/api/cards/${predecessorId}/planning`, { request_id: randomUUID(), version: predecessor.body.card.version, start_date: day(-6), due_date: day(-4) });
     expect(predecessorPlan.status).toBe(200);
     const beforeRuns = f.db.get('SELECT COUNT(*) n FROM dispatches').n;
     const launched = await launchPlannerApp(f, temp); app = launched.app;
@@ -78,21 +81,21 @@ test('actual main My day opens own work and Calendar/Timeline persist real plans
     await expect.poll(() => pane("document.querySelector('.calendar-grid')?.getAttribute('aria-label')"), { timeout: 15000 }).toBe('month calendar');
     await pane(`document.querySelector('[data-action="planning-edit"][data-card="${id}"]').click()`);
     await expect.poll(() => pane("document.querySelector('.planning-editor h2')?.textContent")).toBe(`Plan ${own.body.card.key}`);
-    await pane(`(() => { const form = document.querySelector('[data-form="planning-card"]'); form.elements.start.value = '2026-10-01'; form.elements.due.value = '2026-10-03'; form.elements.dependencies.querySelector('[value="${predecessorId}"]').selected = true; form.requestSubmit(); })()`);
-    await expect.poll(() => f.h.hub.card(id).due_date).toBe('2026-10-03');
+    await pane(`(() => { const form = document.querySelector('[data-form="planning-card"]'); form.elements.start.value = '${day(1)}'; form.elements.due.value = '${day(3)}'; form.elements.dependencies.querySelector('[value="${predecessorId}"]').selected = true; form.requestSubmit(); })()`);
+    await expect.poll(() => f.h.hub.card(id).due_date).toBe(day(3));
     expect(f.db.all('SELECT depends_on_card_id FROM card_dependencies WHERE card_id=?', id).map(row => row.depends_on_card_id)).toEqual([predecessorId]);
     await pane(`document.querySelector('[data-change="planning-period"]').value='week'; document.querySelector('[data-change="planning-period"]').dispatchEvent(new Event('change',{bubbles:true}));`);
     await expect.poll(() => pane("document.querySelector('.calendar-grid')?.getAttribute('aria-label')")).toBe('week calendar');
     await pane(`document.querySelector('[data-planning-card="${id}"]').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',altKey:true,bubbles:true}));`);
-    await expect.poll(() => f.h.hub.card(id).due_date).toBe('2026-10-04');
-    expect(f.h.hub.card(id).start_date).toBe('2026-10-02');
+    await expect.poll(() => f.h.hub.card(id).due_date).toBe(day(4));
+    expect(f.h.hub.card(id).start_date).toBe(day(2));
     await pane(`document.querySelector('[data-change="planning-period"]').value='month'; document.querySelector('[data-change="planning-period"]').dispatchEvent(new Event('change',{bubbles:true}));`);
     await expect.poll(() => pane("document.querySelector('.calendar-grid')?.getAttribute('aria-label')")).toBe('month calendar');
     const boardPage = app.windows().find(page => page.url().startsWith(`${f.h.base}/?`));
     expect(boardPage).toBeTruthy();
-    await boardPage.locator(`[data-planning-card="${id}"]`).dragTo(boardPage.locator('[data-planning-day="2026-10-06"]'));
-    await expect.poll(() => f.h.hub.card(id).due_date).toBe('2026-10-06');
-    expect(f.h.hub.card(id).start_date).toBe('2026-10-04');
+    await boardPage.locator(`[data-planning-card="${id}"]`).dragTo(boardPage.locator(`[data-planning-day="${day(6)}"]`));
+    await expect.poll(() => f.h.hub.card(id).due_date).toBe(day(6));
+    expect(f.h.hub.card(id).start_date).toBe(day(4));
     await boardPage.locator(`[data-action="planning-edit"][data-card="${predecessorId}"]`).click();
     await expect.poll(() => pane("document.querySelector('.planning-editor h2')?.textContent")).toBe(`Plan ${predecessor.body.card.key}`);
     await pane(`(() => { const form = document.querySelector('[data-form="planning-card"]'); form.elements.dependencies.querySelector('[value="${id}"]').selected = true; form.requestSubmit(); })()`);
@@ -101,12 +104,12 @@ test('actual main My day opens own work and Calendar/Timeline persist real plans
     await pane("document.querySelector('[data-action=planning-close]').click()");
     await sidebar.evaluate(() => window.buddy.select('board:timeline'));
     await expect.poll(() => pane("document.querySelector('.timeline-table')?.textContent")).toContain('Synthetic own planner work');
-    await expect.poll(() => pane("document.querySelector('.timeline-table')?.textContent")).toContain('2026-10-04 → 2026-10-06');
+    await expect.poll(() => pane("document.querySelector('.timeline-table')?.textContent")).toContain(`${day(4)} → ${day(6)}`);
     await expect.poll(() => pane("document.querySelector('.planner-path')?.textContent")).toContain('Add a start and due date to every open card');
-    const completeInitialPlan = await f.as(u, 'PATCH', `/api/cards/${f.A.card}/planning`, { request_id: randomUUID(), version: f.h.hub.card(f.A.card).version, start_date: '2026-09-30', due_date: '2026-09-30' });
+    const completeInitialPlan = await f.as(u, 'PATCH', `/api/cards/${f.A.card}/planning`, { request_id: randomUUID(), version: f.h.hub.card(f.A.card).version, start_date: day(-4), due_date: day(-4) });
     expect(completeInitialPlan.status).toBe(200);
     await pane('location.reload()');
-    await expect.poll(() => pane("document.querySelector('.timeline-table')?.textContent"), { timeout: 15000 }).toContain('2026-10-04 → 2026-10-06');
+    await expect.poll(() => pane("document.querySelector('.timeline-table')?.textContent"), { timeout: 15000 }).toContain(`${day(4)} → ${day(6)}`);
     await expect.poll(() => pane("document.querySelector('.planner-path')?.textContent")).toContain(`${predecessor.body.card.key} → ${own.body.card.key}`);
     expect(f.db.get('SELECT COUNT(*) n FROM dispatches').n).toBe(beforeRuns);
     f.db.run("UPDATE members SET role='viewer' WHERE id=?", f.A.member);

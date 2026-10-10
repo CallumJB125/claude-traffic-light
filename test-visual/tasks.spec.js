@@ -1,22 +1,16 @@
 // The Tasks page against the mock supervisor (board/tasks-api/mock-server.js):
 // the list, a task's transcript and thread, a message, an action, the
 // composer, and the empty state when nothing is running. The page is opened
-// the way a person does: the tray's "Open Tasks…".
+// in the main window, from the sidebar.
 const fs = require('fs');
 const path = require('path');
 const { pathToFileURL } = require('url');
 const { test, expect } = require('@playwright/test');
-const { launchApp, windowByFile } = require('./app');
+const { launchApp, embedded } = require('./app');
 const { startTasksMock, shortTmp } = require('./tasks-mock');
 
 const SHOT = { threshold: 0.05, stylePath: path.join(__dirname, 'no-hover-chrome.css') };
-const openTasks = async (app) => {
-  await expect.poll(() => app.evaluate(() => !!global.__buddyTrayMenu).catch(() => false), { timeout: 15000 }).toBe(true);
-  await app.evaluate(() => global.__buddyTrayMenu.items.find((i) => i.label === 'Open Tasks…').click());
-  const page = await windowByFile(app, 'tasks.html');
-  await page.waitForLoadState('load');
-  return page;
-};
+const openTasks = (app) => embedded(app, 'tasks', 'tasks.html');
 const row = (page, text) => page.locator('#list .row', { hasText: text });
 
 test.describe('with a supervisor', () => {
@@ -34,11 +28,11 @@ test.describe('with a supervisor', () => {
     // let the scripted demo reach its resting states
     await expect(row(page, 'Add a dark mode toggle')).toContainText('Needs you', { timeout: 20000 });
     await expect(row(page, 'Refactor the payment parser')).toContainText('Paused', { timeout: 20000 });
-    await expect(row(page, 'Migrate the test fixtures')).toContainText('Orphaned', { timeout: 20000 });
+    await expect(row(page, 'Migrate the test fixtures')).toContainText('Stalled', { timeout: 20000 });
     await expect(row(page, 'Add a dark mode toggle')).toContainText('Claude');
     await expect(row(page, 'Add a dark mode toggle')).toContainText('acme-web');
     for (const t of ['Refactor the payment parser', 'Migrate the test fixtures']) await expect(row(page, t).locator('.dot')).not.toHaveClass(/green/);
-    await expect(page.locator('#list .row').first()).toContainText(/Needs you|Orphaned/, { timeout: 5000 });
+    await expect(page.locator('#list .row').first()).toContainText(/Needs you|Stalled/, { timeout: 5000 });
     await page.waitForTimeout(2500);
     await page.mouse.move(0, 0);
     await expect(page).toHaveScreenshot('list-empty-detail.png', { ...SHOT, mask: [page.locator('.age')], maxDiffPixelRatio: 0.02 });
@@ -60,12 +54,12 @@ test.describe('with a supervisor', () => {
 
   test('a destructive action asks first, and cancelling does nothing', async () => {
     await row(page, 'Migrate the test fixtures').click();
-    await expect(page.locator('#d-head .d-state')).toContainText('Orphaned');
+    await expect(page.locator('#d-head .d-state')).toContainText('Stalled');
     await page.getByRole('button', { name: 'Stop', exact: true }).click();
     await expect(page.locator('.confirm')).toContainText('Stop this task?');
     await page.getByRole('button', { name: 'Cancel' }).click();
     await expect(page.locator('.confirm')).toHaveCount(0);
-    await expect(page.locator('#d-head .d-state')).toContainText('Orphaned');
+    await expect(page.locator('#d-head .d-state')).toContainText('Stalled');
     await page.getByRole('button', { name: 'Stop', exact: true }).click();
     await page.getByRole('button', { name: 'Yes, stop' }).click();
     await expect(page.locator('#d-head .d-state')).toContainText('Failed', { timeout: 15000 });
@@ -140,6 +134,9 @@ test.describe('no supervisor', () => {
     try {
       h = await launchApp({ env: { CLAUDE_TRAFFIC_LIGHT_TASKS_HOME: absent } });
       const page = await openTasks(h.app);
+      // With no tasks the Recipes gallery covers the main pane; put it away to see the connection state.
+      await expect(page.locator('#recipes')).toBeVisible({ timeout: 15000 });
+      await page.keyboard.press('Escape');
       await expect(page.locator('#main h2')).toHaveText('The Tasks background helper is unavailable.', { timeout: 15000 });
       await expect(page.locator('#main')).toContainText('reconnects automatically');
       await expect(page.getByRole('button', { name: 'Try again now' })).toBeVisible();

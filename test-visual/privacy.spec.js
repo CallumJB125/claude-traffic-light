@@ -1,5 +1,5 @@
 const { test, expect } = require('@playwright/test');
-const { launchApp, windowByFile } = require('./app');
+const { launchApp, windowByFile, openSettingsPane } = require('./app');
 
 let h;
 
@@ -13,6 +13,7 @@ test('settings Privacy section shows the draft notice', async () => {
   await lights.evaluate(() => window.lightsApi.openPreferences());
   const settings = await windowByFile(h.app, 'settings.html');
   await settings.waitForLoadState('load');
+  await openSettingsPane(settings, 'privacy');
   await settings.locator('#privacy-notice summary').click();
   await expect(settings.locator('#privacy-body blockquote')).toContainText('DRAFT');
   await settings.evaluate(() => document.querySelector('#privacy').previousElementSibling.scrollIntoView({ block: 'start' }));

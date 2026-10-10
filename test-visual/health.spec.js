@@ -79,11 +79,12 @@ test.afterAll(async () => { await h?.cleanup(); });
 
 // What the tray's Health… does to an open Preferences window.
 async function showHealth(report) {
-  await h.app.evaluate(({ ipcMain, BrowserWindow }, r) => {
+  await h.app.evaluate(({ ipcMain, webContents }, r) => {
     ipcMain.removeHandler('health-report');
     globalThis.healthRuns = 0;
     ipcMain.handle('health-report', () => { globalThis.healthRuns += 1; return r; });
-    BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().endsWith('settings.html')).webContents.send('show-section', 'health');
+    // Settings is a page inside the main window since the sidebar fold, not its own BrowserWindow.
+    webContents.getAllWebContents().find((w) => w.getURL().split('?')[0].endsWith('settings.html')).send('show-section', 'health');
   }, report);
   await expect(settings.locator('#health .check')).toHaveCount(8);
   // All the way down, so the sticky Save bar sits below the panel rather

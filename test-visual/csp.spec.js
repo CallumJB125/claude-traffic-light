@@ -4,7 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const { test, expect } = require('@playwright/test');
-const { launchApp, signal, windowByFile } = require('./app');
+const { launchApp, signal, windowByFile, embedded, openSettingsPane } = require('./app');
 const states = require('../test/fixtures/updater-states.json').states;
 const { startTasksMock, shortTmp } = require('./tasks-mock');
 
@@ -114,15 +114,11 @@ test('widget: garden', async () => {
 
 test('lights: every tab, sounds, export, a photo cameo', async () => {
   test.setTimeout(120000);
-  for (const t of ['view-stats', 'view-mix', 'view-auto', 'view-rules']) {
+  // The widget's popup has only Rules and Auto-answer; Usage and Stats are main-window pages (below).
+  for (const t of ['view-auto', 'view-rules']) {
     await lights.click(`#${t}`);
     await lights.waitForTimeout(500);
   }
-  await lights.click('#view-mix');
-  await lights.waitForTimeout(800);
-  await lights.click('#view-stats');
-  for (const d of ['7', '30', '60']) { await lights.click(`[data-days="${d}"]`, { timeout: 5000 }); await lights.waitForTimeout(200); }
-  await lights.click('#view-rules');
 
   // sounds: the file-less preview goes to main; select a sound and play it
   await lights.locator('#rule-list li').first().click();
@@ -155,6 +151,15 @@ test('lights: every tab, sounds, export, a photo cameo', async () => {
   await lights.waitForTimeout(1000);
   await collect(lights, 'lights');
   expect(await lights.evaluate(() => window.__errs)).toEqual([]);
+
+  const mix = await embedded(h.app, 'usage', 'lights.html', { view: 'mix' });
+  await watch(mix, 'usage');
+  await mix.waitForTimeout(800);
+  await collect(mix, 'usage');
+  const stats = await embedded(h.app, 'stats', 'lights.html', { view: 'stats' });
+  await watch(stats, 'stats');
+  for (const r of ['7d', '30d', '90d']) { await stats.click(`#ut-range [data-range="${r}"]`, { timeout: 5000 }); await stats.waitForTimeout(200); }
+  await collect(stats, 'stats');
   expect(violations).toEqual([]);
 });
 
@@ -163,13 +168,15 @@ test('settings: Preferences, Health and Backups run under the policy', async () 
   const settings = await windowByFile(h.app, 'settings.html');
   await settings.waitForLoadState('load');
   await watch(settings, 'settings');
+  await openSettingsPane(settings, 'advanced');
   await settings.locator('#health').scrollIntoViewIfNeeded();
   await expect(settings.locator('#health-summary')).not.toHaveText('', { timeout: 10000 });
+  await settings.locator('#health-recheck').click();
+  await settings.waitForTimeout(500);
+  await openSettingsPane(settings, 'privacy');
   await settings.locator('#backups > summary').click();
   await settings.locator('#backups-now').click();
   await expect(settings.locator('#backups-status')).not.toHaveText('', { timeout: 5000 });
-  await settings.locator('#health-recheck').click();
-  await settings.waitForTimeout(500);
   // enforced here too: an inline handler never runs
   await settings.evaluate(() => { const b = document.createElement('b'); b.setAttribute('onclick', 'window.__x = 1'); document.body.append(b); b.click(); });
   await settings.waitForTimeout(200);
@@ -184,7 +191,7 @@ test('settings: Preferences, Health and Backups run under the policy', async () 
 });
 
 test('feedback: the form, a screenshot preview and the scrubbed preview run under the policy', async () => {
-  const settings = await windowByFile(h.app, 'settings.html');
+  const settings = await embedded(h.app, 'settings', 'settings.html');
   await settings.locator('#feedback-open').click();
   const form = await windowByFile(h.app, 'feedback.html');
   await form.waitForLoadState('load');
@@ -209,9 +216,7 @@ test('feedback: the form, a screenshot preview and the scrubbed preview run unde
 });
 
 test('tasks: the list, a task with its transcript and thread, and the composer run under the policy; an inline handler and a fetch are refused', async () => {
-  await h.app.evaluate(() => global.__buddyTrayMenu.items.find((i) => i.label === 'Open Tasks…').click());
-  const tasks = await windowByFile(h.app, 'tasks.html');
-  await tasks.waitForLoadState('load');
+  const tasks = await embedded(h.app, 'tasks', 'tasks.html');
   await watch(tasks, 'tasks');
   await expect(tasks.locator('#list .row')).toHaveCount(5, { timeout: 15000 });
   await tasks.locator('#list .row', { hasText: 'Add a dark mode toggle' }).click();

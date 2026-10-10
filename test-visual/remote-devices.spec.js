@@ -1,7 +1,7 @@
 const { test, expect } = require('@playwright/test');
 const fs = require('fs');
 const path = require('path');
-const { launchApp, status, windowByFile } = require('./app');
+const { launchApp, status, windowByFile, openSettingsPane, snapToPixels } = require('./app');
 const Protocol = require('../hooks/remote-protocol.js');
 
 // A fixed, already-paired device, so the list renders the same every run.
@@ -24,13 +24,14 @@ async function openSection(app) {
   await lights.evaluate(() => window.lightsApi.openPreferences());
   const settings = await windowByFile(app, 'settings.html');
   await settings.waitForLoadState('load');
+  await openSettingsPane(settings, 'advanced');
   const section = settings.locator('#remote-devices');
   await section.scrollIntoViewIfNeeded();
   return { settings, section };
 }
 
 // The port is per run (the hermetic launcher picks a free one).
-const shot = (section, name, extra = []) => expect(section).toHaveScreenshot(name, { mask: [section.locator('.remote-port'), section.locator('#remote-listener'), ...extra] });
+const shot = async (section, name, extra = []) => expect(await snapToPixels(section)).toHaveScreenshot(name, { mask: [section.locator('.remote-port'), section.locator('#remote-listener'), ...extra] });
 
 test('a signed remote event shows as a namespaced session', async () => {
   h = await seeded();

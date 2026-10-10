@@ -4,7 +4,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { test, expect } = require('@playwright/test');
-const { launchApp, windowByFile } = require('./app');
+const { launchApp, windowByFile, openSettingsPane } = require('./app');
 const { request } = require('../native-board/client');
 
 test('a signed-in person connects only selected boards and Undo revokes the live connection', async () => {
@@ -38,6 +38,7 @@ test('a signed-in person connects only selected boards and Undo revokes the live
     await widget.evaluate(() => window.trafficLight.openLights());
     await (await windowByFile(h.app, 'lights.html')).evaluate(() => window.lightsApi.openPreferences());
     const settings = await windowByFile(h.app, 'settings.html');
+    await openSettingsPane(settings, 'advanced');
     const teams = settings.locator('#native-board-workspace option[value]:not([value=""])');
     await expect(teams).toHaveCount(1);
     await settings.locator('#native-board-workspace').selectOption(await teams.first().getAttribute('value'));

@@ -30,6 +30,7 @@ test('lights window renders its default state', async () => {
 });
 
 test('settings window renders its default state', async () => {
+  await widget.evaluate(() => window.trafficLight.openLights());
   const lights = await windowByFile(h.app, 'lights.html');
   await lights.evaluate(() => window.lightsApi.openPreferences());
   const settings = await settled(await windowByFile(h.app, 'settings.html'));

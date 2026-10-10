@@ -45,15 +45,21 @@ test('permission: the real command, answered from the bubble; the hook gets it a
 });
 
 test('keyboard: Enter allows an allow-listed command once it has settled', async () => {
-  // Enter needs a real session folder (it resolves relative paths against it).
-  const proj = fs.mkdtempSync(path.join(require('os').tmpdir(), 'ctl-vis-proj-'));
-  const hook = F.blockingHook(h, 'permission-request', { session_id: 'vis-kbd-ok', cwd: proj, tool_name: 'Bash', tool_input: { command: 'git status' } });
-  await expect(widget.locator('.ib-head')).toHaveText('Bash: git status', { timeout: 10000 });
-  await widget.locator('.ib-title').click();
-  await widget.waitForTimeout(700);
-  await widget.keyboard.press('Enter');
-  const { out } = await hook.done;
-  expect(JSON.parse(out).hookSpecificOutput.decision.behavior).toBe('allow');
+  // One-key approval is opt-in (Preferences); main rereads config.json on change.
+  const configFile = path.join(h.home, 'config.json');
+  const before = fs.readFileSync(configFile, 'utf8');
+  fs.writeFileSync(configFile, JSON.stringify({ ...JSON.parse(before), oneKeyApprove: true }));
+  try {
+    // Enter needs a real session folder (it resolves relative paths against it).
+    const proj = fs.mkdtempSync(path.join(require('os').tmpdir(), 'ctl-vis-proj-'));
+    const hook = F.blockingHook(h, 'permission-request', { session_id: 'vis-kbd-ok', cwd: proj, tool_name: 'Bash', tool_input: { command: 'git status' } });
+    await expect(widget.locator('.ib-head')).toHaveText('Bash: git status', { timeout: 10000 });
+    await widget.locator('.ib-title').click();
+    await widget.waitForTimeout(700);
+    await widget.keyboard.press('Enter');
+    const { out } = await hook.done;
+    expect(JSON.parse(out).hookSpecificOutput.decision.behavior).toBe('allow');
+  } finally { fs.writeFileSync(configFile, before); }
 });
 
 test('keyboard: Enter never allows a deny-listed or off-list command; ⌘. denies it', async () => {
@@ -222,6 +228,9 @@ test('the Lights auto-answer rules view', async () => {
   await lights.locator('#auto-tools input[value="Bash"]').check();
   await lights.locator('#auto-command').fill('git *');
   await expect(lights.locator('#auto-why')).toContainText('name the git subcommand');
+  // Filling the command focuses it, which scrolls the form into view when the page is taller than the popup.
+  await lights.evaluate(() => { window.scrollTo(0, 0); for (const el of document.querySelectorAll('*')) if (el.scrollTop) el.scrollTop = 0; });
+  await lights.mouse.move(0, 0);
   await lights.waitForTimeout(500);
   await expect(lights).toHaveScreenshot('lights-auto-rules.png', SHOT);
   await lights.close();

@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { test, expect } = require('@playwright/test');
-const { launchApp, windowByFile } = require('./app');
+const { launchApp, windowByFile, embedded } = require('./app');
 const quote = (s) => `'${s.replaceAll("'", "'\\''")}'`;
 
 test('Tasks desktop starts its real helper, edits durable checkpoints, restarts from them and uses the sidebar', async () => {
@@ -18,9 +18,7 @@ test('Tasks desktop starts its real helper, edits durable checkpoints, restarts 
   let h, client;
   try {
     h = await launchApp({ env: { PATH: `${bins}:${process.env.PATH}`, CODEX_HOME: auth, CLAUDE_TRAFFIC_LIGHT_TASKS_PICK: repo } });
-    await expect.poll(() => h.app.evaluate(() => !!global.__buddyTrayMenu)).toBe(true);
-    await h.app.evaluate(() => global.__buddyTrayMenu.items.find((i) => i.label === 'Open Tasks…').click());
-    const page = await windowByFile(h.app, 'tasks.html'); await page.waitForLoadState('load');
+    const page = await embedded(h.app, 'tasks', 'tasks.html');
     await expect(page.locator('#main h2')).toHaveText('No tasks yet', { timeout: 20000 });
     await page.locator('#new-task').click();
     await expect(page.locator('#c-ai option[value="codex"]')).toBeEnabled({ timeout: 10000 });
@@ -72,9 +70,10 @@ test('Tasks desktop starts its real helper, edits durable checkpoints, restarts 
     const record = fs.readFileSync(path.join(dataDir, 'store', 'tasks.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).filter((x) => x.task.id === id).at(-1).task;
     expect(record.checkpoint.schemaVersion).toBe(1); expect(record.checkpoint.nextAction).toBe('SHARED-LOCAL-NEXT-ACTION');
     // Open the same real engine from the ordinary main window/sidebar.
-    await h.app.evaluate(() => global.__buddyTrayMenu.items.find((i) => /Open Plexiform/.test(i.label)).click());
-    const shell = await windowByFile(h.app, 'buddy-window/sidebar.html'); await shell.waitForLoadState('load');
-    await shell.locator('[data-section="today"]').click(); await shell.locator('[data-page="tasks"]').click();
+    const shell = await windowByFile(h.app, 'buddy-window/sidebar.html');
+    await shell.evaluate(() => window.buddy.select('home'));
+    await shell.locator('[data-section="sessions"]').click(); await shell.locator('[data-page="tasks"]').click();
+    await expect(shell.locator('[data-page="tasks"]')).toHaveAttribute('aria-current', 'page');
     await expect.poll(() => h.app.evaluate(({ webContents }) => webContents.getAllWebContents().some((w) => w.getURL().includes('tasks.html?embedded=1')))).toBe(true);
     const noSecret = await page.evaluate(() => !/btk_|btr_/.test(document.body.innerText)); expect(noSecret).toBe(true);
   } finally { client?.close(); await h?.cleanup(); fs.rmSync(dir, { recursive: true, force: true }); }

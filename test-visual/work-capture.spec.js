@@ -18,6 +18,9 @@ test('reported Codex work creates a team card, unmatched work creates a personal
     app=await electron.launch({args:[path.join(__dirname,'clients-fixture-main.js'),`--user-data-dir=${path.join(temp,'profile')}`],env:{...process.env,
       PLEXIFORM_CLIENT_TEST_HUB:x.h.base,PLEXIFORM_CLIENT_TEST_ACCOUNT:JSON.stringify({hub:x.h.base,token:user.token,device_id:user.device_id,user:{id:user.id,email:user.email}})}});
     await expect.poll(()=>app.evaluate(()=>global.__clientTestInit),{timeout:15000}).toMatchObject({stage:'connected',result:{ok:true}});
+    // Automatic cards are off until the person turns them on.
+    await app.evaluate(()=>global.__clientTestBuddy.setCapture(true));
+    expect(await app.evaluate(()=>global.__clientTestBuddy.captureState())).toEqual({enabled:true});
     expect(fs.realpathSync(await app.evaluate(({app})=>app.getPath('userData')))).toBe(fs.realpathSync(path.join(temp,'profile')));
     const emit=async (session,signal,cwd,title) => {
       execFileSync(process.execPath,[path.resolve(__dirname,'../hooks/emit.js'),signal,'--source','codex','--session',session,'--task','build','--cwd',cwd,'--title',title,'--summary','PRIVATE BRIEF'],
@@ -33,7 +36,7 @@ test('reported Codex work creates a team card, unmatched work creates a personal
     const pane=js=>app.evaluate(async({webContents},[origin,code])=>{
       const wc=webContents.getAllWebContents().find(w=>w.getURL().startsWith(`${origin}/?`));return wc?await wc.executeJavaScript(code,true):null;
     },[x.h.base,js]);
-    await expect.poll(()=>pane(`document.querySelector('.card[data-card-id="${card.id}"] .capture-report')?.textContent`),{timeout:15000}).toBe('Reported Codex · working');
+    await expect.poll(()=>pane(`document.querySelector('.card[data-card-id="${card.id}"] .capture-report')?.textContent`),{timeout:15000}).toBe('Reported Codex · AI working');
     await emit('team-work','stop',repo,'Fix automatic routing');
     await expect.poll(()=>x.h.hub.card(card.id).column_name).toBe('in_review');
     expect(x.db.get('SELECT COUNT(*) AS n FROM work_capture_cards').n).toBe(1);expect(x.h.hub.card(card.id).run_state).toBeNull();
