@@ -61,10 +61,11 @@ active members, at send and again at every read/receipt.
             identity_source: 'hub_credential'|'hub_host_device' },
   to:     { kind: 'person'|'session', user_id, name, target?, provider? },
   body,                     // sender and recipient only
-  state: 'queued'|'delivered'|'replied'|'rejected'|'expired'|'outcome_unknown',
+  state: 'held'|'queued'|'delivered'|'replied'|'rejected'|'expired'|'outcome_unknown',   // held: §6a
   reason,                   // machine reason for rejected/expired/outcome_unknown/turn end
   response, response_source: 'provider_reported'|null,   // never a success claim
   handoff: { brief, card_refs, artifacts, state: 'offered'|'accepted'|'declined'|'expired', report } | null,
+  via: {surface, provider, label, label_source:'self_declared'} | null,   // §6a, display only
   hop, authority_version, created_at, expires_at, delivered_at, replied_at,
   grants_execution: false, approval: false }
 ```
@@ -103,10 +104,11 @@ People (any signed-in credential):
 |---|---|---|
 | `GET /targets` | – | `{targets:[{target, scope, org_id, card_id, provider, label, label_source:'self_declared', owner:{user_id,name}, mine, online, accepts_sessions}]}` – own personal + team-shared in my teams only |
 | `POST /messages` | `{request_id(uuid), to:{target}|{user_id, org_id}, body, kind?, card_id?, conversation_id?, reply_to?, ttl_s?, handoff?:{card_refs?, artifacts?}}` | `{message}` – persisted (state `queued`) before this returns. Same `request_id` + same content → the same message (dedupe); different content → 409 |
-| `GET /messages?box=sent|inbox&limit=` | – | `{messages}` (newest first, ≤ 50) |
+| `GET /messages?box=sent|inbox|held&limit=&reply_to=` | – | `{messages}` (newest first, ≤ 50) |
 | `GET /messages/:id` | – | `{message}`; sender or recipient only, re-validated (else 404) |
 | `POST /messages/:id/receipt` | `{state:'delivered'}` | person recipient marks delivered |
 | `POST /messages/:id/handoff` | `{decision:'accept'|'decline', report?}` | person recipient decides a handoff |
+| `POST /messages/:id/release` | `{decision:'send'|'discard', body?}` | sender releases a held message (§6a) |
 
 Host device (desktop token, host role, only for its own targets):
 
@@ -189,6 +191,37 @@ session-sourced message or handoff delivered into that session (a person's messa
 clear it); per-target turns/hour and parallel caps bound anything else.
 A session speaks only inside its own scope: a personal session only to its owner's personal
 sessions; a team session only to that team's shared sessions and members.
+
+## 6a. Agent-authored messages (held for the sender's person)
+
+Migration `072_message_hold.sql`. An AI agent on the sender's own Mac can draft a question or a
+handoff to a teammate (a person destination only), but the hub **holds** it until the sender's
+person releases it.
+
+- `POST /messages` with `hold:true` (and an optional `via:{surface:'local', provider?, label?}`,
+  label ≤ 60, **self-declared display only**, needs `hold`) stores `state:'held'`. `hold` is
+  refused for session targets and together with `ttl_s`. ≤ 8 held per user; a held message
+  that is not released within 1 h becomes `expired` with reason `not_released`.
+- A held message (or one that expired while held) is **invisible to its recipient**: not listed,
+  `GET`/receipt/handoff/`reply_to` all 404.
+- `GET /messages?box=held`: the caller's own held messages.
+- `POST /messages/:id/release {decision:'send'|'discard', body?}` (sender only): `discard`
+  deletes the row; `send` re-validates the (optionally edited) body and the send (membership,
+  queues) like a new send and moves it to `queued` with a new person lifetime, or to `rejected`
+  (e.g. `sender_removed`). Refused 403 `HUMAN_ONLY` for anything but a desktop device token or a
+  web cookie + CSRF (a phone relay sign-in, runner tokens, remote-MCP grants and any other
+  credential kind never reach it).
+- `GET /messages?box=inbox&reply_to=<id>`: only replies addressed to the caller that answer `<id>`.
+- Every body (held or not, and an edited release) goes through `cleanPacketText`
+  (`board/shared/packet-text.js`): secrets, credentials in URLs and absolute paths are replaced
+  before storage. v1 did no scrubbing.
+
+**The hub cannot tell the app's UI from the app's local `/team/mail` relay**: both use the same
+desktop device token. The real release gate is the app's IPC (`mail:release`, accepted only
+from the sessions page); the local `/team/mail` endpoint exposes no release operation, only
+`ask`, `hand_off` and `mail` (replies to, and outcomes of, asks it created). Any local process
+holding the app's `x-buddy-token` can create held asks and read the replies to held asks: the
+same trust level as the existing `/team/activity` endpoint. It can never release one.
 
 ## 7. Revocation
 

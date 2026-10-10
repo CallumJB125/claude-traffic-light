@@ -18,7 +18,7 @@
 import { randomUUID, randomBytes, createHash, timingSafeEqual } from 'node:crypto';
 import { HubError } from './db.js';
 import { limitOrThrow } from './ratelimit.js';
-import { packetRelativePath } from '../shared/packet-text.js';
+import { packetRelativePath, cleanPacketText } from '../shared/packet-text.js';
 
 export const MESSAGING_LIMITS = Object.freeze({
   // A session receives the body framed (src/session-messaging.js frame()) through an
@@ -32,18 +32,22 @@ export const MESSAGING_LIMITS = Object.freeze({
   teammateTurnsPerHour: 20, teammateParallel: 4, ownerTurnsPerHour: 240,
   registrationsPerHour: 64, parkedPulls: 2, sweepMs: 60_000,
   cardRefs: 8, artifacts: 16,
+  // Agent-authored asks wait for their sender's person (MESSAGING §6a).
+  heldPerUser: 8, heldTtlMs: 3_600_000, viaLabelChars: 60,
 });
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const ID = /^[A-Za-z0-9_.:-]{1,100}$/;
 const PROVIDER = /^[a-z][a-z0-9-]{0,31}$/;
 const CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
-const STATES = ['queued', 'delivered', 'replied', 'rejected', 'expired', 'outcome_unknown'];
+const STATES = ['held', 'queued', 'delivered', 'replied', 'rejected', 'expired', 'outcome_unknown'];
 const object = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const invalid = (m = 'invalid message request') => new HubError('VALIDATION', m);
 // Unknown, foreign, revoked and unshared all look the same: no oracle.
 const missing = () => new HubError('NOT_FOUND', 'no such message or session');
 const digest = (v) => createHash('sha256').update(JSON.stringify(v)).digest('hex');
 const sameSecret = (a, b) => typeof a === 'string' && typeof b === 'string' && a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
+// Held, or expired while held: never shown to its recipient.
+const unreleased = (m) => m.state === 'held' || (m.state === 'expired' && m.reason === 'not_released');
 const parse = (s, d) => { try { return s == null ? d : JSON.parse(s); } catch { return d; } };
 
 function shape(v, keys, required = []) {
@@ -84,6 +88,13 @@ export class Messaging {
     if (!s) throw invalid('message text is empty');
     if (s.length > max || (bytes && Buffer.byteLength(s) > bytes)) throw new HubError('PAYLOAD_TOO_LARGE', 'message too large');
     return s;
+  }
+  // Bodies are scrubbed (secrets, credentials in URLs, absolute paths) before they are stored.
+  bodyText(v, max, bytes) { return this.text(cleanPacketText(this.text(v, max, bytes), max), max, bytes); }
+  // A message only a desktop app's or a browser's signed-in person may release (never a phone relay sign-in).
+  human(ident) {
+    const c = ident?.cred;
+    if (!((c?.kind === 'device' && !c.scope) || c?.kind === 'session')) throw new HubError('FORBIDDEN', 'only a signed-in person can release this', { reason: 'HUMAN_ONLY' });
   }
 
   // ── authority ─────────────────────────────────────────────────────────────
@@ -183,6 +194,7 @@ export class Messaging {
     this.hub.txn(() => {
       for (const m of this.db.all("SELECT * FROM msg_messages WHERE state = 'queued' AND phase = 'accepted' AND lease_until <= ?", now)) this.finish(m, 'outcome_unknown', 'receiver_lost');
       for (const m of this.db.all("SELECT * FROM msg_messages WHERE state = 'queued' AND expires_at <= ? AND (phase IS NULL OR phase = 'leased')", now)) this.finish(m, 'expired', 'expired');
+      for (const m of this.db.all("SELECT * FROM msg_messages WHERE state = 'held' AND expires_at <= ?", now)) this.update(m, { state: 'expired', reason: 'not_released', ...(m.handoff_state === 'offered' ? { handoff_state: 'expired' } : {}) });
       this.db.run("UPDATE msg_messages SET phase = NULL WHERE state = 'queued' AND phase = 'leased' AND lease_until <= ?", now);
     });
   }
@@ -218,6 +230,7 @@ export class Messaging {
       body: m.body, state: m.state, reason: m.reason ?? null,
       response: see ? m.response ?? null : null, response_source: see && m.response != null ? 'provider_reported' : null,
       handoff: h ? { brief: m.body, card_refs: h.card_refs, artifacts: h.artifacts, state: this.handoffExpired(m) ? 'expired' : m.handoff_state, report: m.handoff_report ?? null } : null,
+      via: m.via_json ? { ...parse(m.via_json, {}), label_source: 'self_declared' } : null,
       hop: m.hop, authority_version: m.authority_version, created_at: m.created_at, expires_at: m.expires_at,
       delivered_at: m.delivered_at ?? null, replied_at: m.replied_at ?? null, grants_execution: false, approval: false,
     };
@@ -249,7 +262,7 @@ export class Messaging {
   }
 
   send(ident, body) {
-    shape(body, ['request_id', 'to', 'body', 'kind', 'card_id', 'conversation_id', 'reply_to', 'ttl_s', 'handoff'], ['request_id', 'to', 'body']);
+    shape(body, ['request_id', 'to', 'body', 'kind', 'card_id', 'conversation_id', 'reply_to', 'ttl_s', 'handoff', 'hold', 'via'], ['request_id', 'to', 'body']);
     return this.create({ kind: 'person', user_id: ident.user.id, cred: ident.cred, target: null }, body);
   }
 
@@ -263,7 +276,18 @@ export class Messaging {
     const dest = to.target != null ? { target: uuid(to.target) } : { user_id: id(to.user_id), org_id: id(to.org_id) };
     const kind = body.kind ?? 'message';
     if (!['message', 'handoff'].includes(kind)) throw invalid();
-    const text = this.text(body.body, L.bodyChars, L.bodyBytes);
+    const text = this.bodyText(body.body, L.bodyChars, L.bodyBytes);
+    if (body.hold != null && typeof body.hold !== 'boolean') throw invalid();
+    const hold = body.hold === true;
+    // Held: a person destination only, the default lifetime once released, and a display-only via.
+    if (hold && (src.target || dest.target || body.ttl_s != null)) throw invalid('only a message to a person can be held');
+    if (body.via != null && !hold) throw invalid();
+    let via = null;
+    if (body.via != null) {
+      const v = shape(body.via, ['surface', 'provider', 'label'], ['surface']);
+      if (v.surface !== 'local' || (v.provider != null && (typeof v.provider !== 'string' || !PROVIDER.test(v.provider)))) throw invalid();
+      via = { surface: 'local', provider: v.provider ?? null, label: v.label == null ? null : this.text(v.label, L.viaLabelChars).replace(/\s+/g, ' ') };
+    }
     const cardId = id(body.card_id, true), replyTo = uuid(body.reply_to, true), convo = uuid(body.conversation_id, true), causedBy = uuid(body.caused_by, true);
     let handoff = null;
     if (body.handoff != null) {
@@ -278,7 +302,7 @@ export class Messaging {
         return { kind: 'path', path: p };
       }) };
     } else if (kind === 'handoff') handoff = { card_refs: [], artifacts: [] };
-    const fingerprint = digest({ from: src.target?.id ?? null, dest, kind, text, cardId, replyTo, convo, causedBy, ttl: body.ttl_s ?? null, handoff });
+    const fingerprint = digest({ from: src.target?.id ?? null, dest, kind, text, cardId, replyTo, convo, causedBy, ttl: body.ttl_s ?? null, handoff, ...(hold ? { hold, via } : {}) });
     // Same request_id: the same message (dedupe), never a second one.
     const prior = this.db.get('SELECT * FROM msg_messages WHERE source_user_id = ? AND request_id = ?', src.user_id, request);
     if (prior) {
@@ -311,7 +335,7 @@ export class Messaging {
     if (replyTo) {
       reply = this.db.get('SELECT * FROM msg_messages WHERE id = ?', replyTo);
       // Only inside the same team (or both personal) and the same conversation.
-      if (!reply || (reply.source_user_id !== src.user_id && reply.dest_user_id !== src.user_id)
+      if (!reply || (reply.source_user_id !== src.user_id && reply.dest_user_id !== src.user_id) || (unreleased(reply) && reply.source_user_id !== src.user_id)
         || (reply.org_id ?? null) !== orgId || (convo && convo !== reply.conversation_id)) throw missing();
     }
     // hop: session-sourced forwards in this chain (a person's message is 0).
@@ -354,6 +378,7 @@ export class Messaging {
     if (t && this.db.get("SELECT COUNT(*) n FROM msg_messages WHERE dest_target_id = ? AND state = 'queued'", t.id).n >= L.perTarget) throw new HubError('RATE_LIMITED', 'that session has too many waiting messages', { retry_after_s: 30, reason: 'QUEUE_FULL' });
     if (!t && this.db.get("SELECT COUNT(*) n FROM msg_messages WHERE dest_kind = 'person' AND dest_user_id = ? AND state = 'queued'", destUser).n >= L.perPersonInbox) throw new HubError('RATE_LIMITED', 'that person has too many unread messages', { retry_after_s: 30, reason: 'QUEUE_FULL' });
     if (this.db.get("SELECT COUNT(*) n FROM msg_messages WHERE source_user_id = ? AND state = 'queued'", src.user_id).n >= L.perSender) throw new HubError('RATE_LIMITED', 'too many of your messages are waiting', { retry_after_s: 30, reason: 'QUEUE_FULL' });
+    if (hold && this.db.get("SELECT COUNT(*) n FROM msg_messages WHERE source_user_id = ? AND state = 'held'", src.user_id).n >= L.heldPerUser) throw new HubError('RATE_LIMITED', 'too many messages are waiting for your OK', { retry_after_s: 60, reason: 'HELD_FULL' });
 
     const now = this.nowMs();
     const m = {
@@ -362,19 +387,55 @@ export class Messaging {
       dest_kind: t ? 'session' : 'person', dest_target_id: t?.id ?? null, dest_user_id: destUser, org_id: orgId, card_id: cardId,
       conversation_id: reply?.conversation_id ?? convo ?? null, reply_to: reply?.id ?? null, caused_by: cause?.id ?? null, body: text,
       handoff: handoff ? JSON.stringify(handoff) : null, handoff_state: handoff ? 'offered' : null, hop, visited: JSON.stringify(visited),
-      authority_version: t ? t.generation : 0, state: 'queued', attempts: 0, created_at: this.at(now), expires_at: this.at(now + ttl * 1000), updated_at: this.at(now),
+      authority_version: t ? t.generation : 0, state: hold ? 'held' : 'queued', attempts: 0, created_at: this.at(now),
+      expires_at: this.at(now + (hold ? L.heldTtlMs : ttl * 1000)), updated_at: this.at(now), via_json: via ? JSON.stringify(via) : null,
     };
     m.conversation_id ??= m.id;
     return this.hub.txn(() => {
       this.db.insert('msg_messages', m);
       this.journal(m);
       // A person's reply answers the message it replies to.
-      if (reply && !t && reply.dest_kind === 'person' && reply.dest_user_id === src.user_id && ['queued', 'delivered'].includes(reply.state)) {
-        this.update(reply, { state: 'replied', replied_at: this.at(), phase: null, ...(reply.delivered_at ? {} : { delivered_at: this.at() }) });
-      }
+      if (reply && !t && !hold) this.answered(reply, src.user_id);
       if (t) this.hub.later(() => this.wake(t.host_device_id));
       return { message: this.project(this.db.get('SELECT * FROM msg_messages WHERE id = ?', m.id), src.user_id) };
     });
+  }
+
+  answered(reply, uid) {
+    if (reply.dest_kind === 'person' && reply.dest_user_id === uid && ['queued', 'delivered'].includes(reply.state)) {
+      this.update(reply, { state: 'replied', replied_at: this.at(), phase: null, ...(reply.delivered_at ? {} : { delivered_at: this.at() }) });
+    }
+  }
+
+  // ── held (agent-authored) messages: the sender's person sends or discards ──
+  release(ident, mid, body) {
+    shape(body, ['decision', 'body'], ['decision']);
+    this.human(ident);
+    if (!['send', 'discard'].includes(body.decision) || (body.decision === 'discard' && body.body != null)) throw invalid();
+    this.sweep();
+    const uid = ident.user.id, L = this.limits;
+    const m = typeof mid === 'string' && UUID.test(mid) ? this.db.get('SELECT * FROM msg_messages WHERE id = ?', mid) : null;
+    if (!m || m.source_user_id !== uid) throw missing();
+    if (m.state !== 'held') throw new HubError('CONFLICT', 'this message is no longer waiting for your OK', { state: m.state });
+    if (body.decision === 'discard') {
+      this.hub.txn(() => { this.db.run('DELETE FROM msg_messages WHERE id = ?', m.id); this.journal({ ...m, state: 'rejected', reason: 'discarded' }); });
+      return { discarded: true, id: m.id };
+    }
+    // Sent: re-validated like a new send (text, membership, queues), with a fresh lifetime.
+    const text = body.body == null ? m.body : this.bodyText(body.body, L.bodyChars, L.bodyBytes);
+    if (this.db.get("SELECT COUNT(*) n FROM msg_messages WHERE dest_kind = 'person' AND dest_user_id = ? AND state = 'queued'", m.dest_user_id).n >= L.perPersonInbox) throw new HubError('RATE_LIMITED', 'that person has too many unread messages', { retry_after_s: 30, reason: 'QUEUE_FULL' });
+    if (this.db.get("SELECT COUNT(*) n FROM msg_messages WHERE source_user_id = ? AND state = 'queued'", uid).n >= L.perSender) throw new HubError('RATE_LIMITED', 'too many of your messages are waiting', { retry_after_s: 30, reason: 'QUEUE_FULL' });
+    this.hub.txn(() => {
+      this.update(m, { state: 'queued', body: text, expires_at: this.at(this.nowMs() + L.personTtlMaxS * 1000) }, false);
+      const p = this.problem(m);
+      if (p) this.finish(m, p.state, p.reason);
+      else {
+        this.journal(m);
+        const reply = m.reply_to ? this.db.get('SELECT * FROM msg_messages WHERE id = ?', m.reply_to) : null;
+        if (reply) this.answered(reply, uid);
+      }
+    });
+    return { message: this.project(m, uid) };
   }
 
   mine(ident, mid) {
@@ -383,6 +444,8 @@ export class Messaging {
     if (!m || (m.source_user_id !== uid && m.dest_user_id !== uid)) throw missing();
     // A recipient (person, or owner of a shared session) who left the team no longer sees it.
     if (m.dest_user_id === uid && m.source_user_id !== uid && m.org_id && !this.member(uid, m.org_id)) throw missing();
+    // A held message is invisible to its recipient until released.
+    if (unreleased(m) && m.source_user_id !== uid) throw missing();
     return this.fresh(m);
   }
   get(ident, mid) { limitOrThrow(this.hub, 'messaging_read_user', ident.user.id); this.sweep(); return { message: this.project(this.mine(ident, mid), ident.user.id) }; }
@@ -391,11 +454,14 @@ export class Messaging {
     limitOrThrow(this.hub, 'messaging_read_user', ident.user.id);
     this.sweep();
     const box = query?.get?.('box') ?? 'inbox';
-    if (!['inbox', 'sent'].includes(box)) throw invalid();
+    if (!['inbox', 'sent', 'held'].includes(box)) throw invalid();
     const limit = Math.min(50, Math.max(1, Number.parseInt(query?.get?.('limit') ?? '50', 10) || 50));
+    const replyTo = query?.get?.('reply_to') ?? null;
+    if (replyTo != null && (box !== 'inbox' || !UUID.test(replyTo))) throw invalid();
     const uid = ident.user.id;
     const rows = box === 'sent' ? this.db.all('SELECT * FROM msg_messages WHERE source_user_id = ? ORDER BY seq DESC LIMIT ?', uid, limit)
-      : this.db.all('SELECT * FROM msg_messages WHERE dest_user_id = ? ORDER BY seq DESC LIMIT ?', uid, limit * 2)
+      : box === 'held' ? this.db.all("SELECT * FROM msg_messages WHERE source_user_id = ? AND state = 'held' ORDER BY seq DESC LIMIT ?", uid, limit)
+      : this.db.all(`SELECT * FROM msg_messages WHERE dest_user_id = ? AND ((state != 'held' AND NOT (state = 'expired' AND reason = 'not_released')) OR source_user_id = ?)${replyTo ? ' AND reply_to = ?' : ''} ORDER BY seq DESC LIMIT ?`, uid, uid, ...(replyTo ? [replyTo] : []), limit * 2)
         .filter((m) => !m.org_id || m.source_user_id === uid || this.member(uid, m.org_id)).slice(0, limit);
     return { messages: rows.map((m) => this.project(this.fresh(m), uid)) };
   }
@@ -624,6 +690,7 @@ export class Messaging {
     route('GET', `${p}/messages/:id`, ({ ident, params }) => this.get(ident, params.id), o);
     route('POST', `${p}/messages/:id/receipt`, ({ ident, params, body }) => this.receipt(ident, params.id, body), { ...o, strictBody: true });
     route('POST', `${p}/messages/:id/handoff`, ({ ident, params, body }) => this.decide(ident, params.id, body), { ...o, strictBody: true });
+    route('POST', `${p}/messages/:id/release`, ({ ident, params, body }) => this.release(ident, params.id, body), { ...o, strictBody: true, maxBody: 32 * 1024 });
     route('PUT', `${p}/host/targets`, ({ ident, body }) => this.syncTargets(ident, body), { ...o, strictBody: true, maxBody: 32 * 1024 });
     route('POST', `${p}/host/pull`, ({ ident, body }) => this.pull(ident, body), { ...o, strictBody: true });
     route('POST', `${p}/host/messages/:id/report`, ({ ident, params, body }) => this.report(ident, params.id, body), { ...o, strictBody: true, maxBody: 96 * 1024 });

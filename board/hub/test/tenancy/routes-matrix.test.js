@@ -79,6 +79,7 @@ const MATRIX = {
   'GET /api/messaging/v1/messages/:id': { kind: 'cross', path: f => `/api/messaging/v1/messages/${f.B.message}`, alt: () => [`/api/messaging/v1/messages/${randomUUID()}`] },
   'POST /api/messaging/v1/messages/:id/receipt': { kind: 'cross', path: f => `/api/messaging/v1/messages/${f.B.message}/receipt`, bare: true, body: { state: 'delivered' } },
   'POST /api/messaging/v1/messages/:id/handoff': { kind: 'cross', path: f => `/api/messaging/v1/messages/${f.B.handoff}/handoff`, bare: true, body: { decision: 'accept' } },
+  'POST /api/messaging/v1/messages/:id/release': { kind: 'cross', path: f => `/api/messaging/v1/messages/${f.B.message}/release`, bare: true, body: { decision: 'send' } },
   // Host routes need a host-role device: the sweep's callers are not hosts, so 403 (messaging tests cover host success and cross-user 404).
   'PUT /api/messaging/v1/host/targets': { kind: 'cross', status: 403, path: () => '/api/messaging/v1/host/targets', body: { targets: [] } },
   'POST /api/messaging/v1/host/pull': { kind: 'cross', status: 403, path: () => '/api/messaging/v1/host/pull', body: {} },
