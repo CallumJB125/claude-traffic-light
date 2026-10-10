@@ -179,8 +179,12 @@ function maskPii(text) {
 }
 
 function redactSecretsPass(text) {
-  let out = redactShared(String(text == null ? '' : text));
-  for (const re of EXTRA_SECRETS) {
+  // "password is: X" goes first: the shared key=value rule would take "is:" as the value and leave X.
+  let out = redactShared(redactExtra(String(text == null ? '' : text), EXTRA_SECRETS.slice(0, 1)));
+  return maskPii(redactExtra(out, EXTRA_SECRETS.slice(1)));
+}
+function redactExtra(out, list) {
+  for (const re of list) {
     out = out.replace(re, (...a) => {
       const g = a[a.length - 1];
       let v = g.v;
@@ -195,7 +199,7 @@ function redactSecretsPass(text) {
       return `${head}${R}${tail}`;
     });
   }
-  return maskPii(out);
+  return out;
 }
 
 // For a JSON.parse error shown to the person or logged: newer Node quotes

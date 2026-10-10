@@ -1,7 +1,9 @@
 // Portable participant text; never an authority or an artifact access grant.
 import { redact } from './scope.js';
 
-export function cleanPacketText(value, max, root = null) {
+// anyPath: false keeps relative-looking absolute paths such as /api/v1/orders (message bodies);
+// home, temp and volume paths are still removed by redact().
+export function cleanPacketText(value, max, root = null, { anyPath = true } = {}) {
   if (typeof value !== 'string' || value.length > max) throw new TypeError('Checkpoint text is too long or invalid.');
   let s = value.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '');
   s = s.replace(/\bhttps?:\/\/[^\s<>"'`]+/gi, (url) => {
@@ -14,7 +16,7 @@ export function cleanPacketText(value, max, root = null) {
   s = s.replace(/\bbrt1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '<redacted:run_token>');
   s = s.replace(/\bbmr1\.[A-Za-z0-9-]+\.[A-Za-z0-9_-]+/g, '<redacted:message_receipt>');
   s = s.replace(/(?:-----BEGIN [A-Z ]*PRIVATE KEY-----|<redacted:private_key>)[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g, '<redacted:private_key>');
-  s = s.replace(/(?<![\w.:/-])\/(?!\/)[^\s"'`<>),;\]}]+/g, '<path>');
+  if (anyPath) s = s.replace(/(?<![\w.:/-])\/(?!\/)[^\s"'`<>),;\]}]+/g, '<path>');
   return s.slice(0, max);
 }
 

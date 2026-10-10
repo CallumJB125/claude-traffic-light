@@ -19,6 +19,7 @@ import { randomUUID, randomBytes, createHash, timingSafeEqual } from 'node:crypt
 import { HubError } from './db.js';
 import { limitOrThrow } from './ratelimit.js';
 import { packetRelativePath, cleanPacketText } from '../shared/packet-text.js';
+import { redactSecrets } from '../shared/secret-patterns.mjs';
 
 export const MESSAGING_LIMITS = Object.freeze({
   // A session receives the body framed (src/session-messaging.js frame()) through an
@@ -89,8 +90,13 @@ export class Messaging {
     if (s.length > max || (bytes && Buffer.byteLength(s) > bytes)) throw new HubError('PAYLOAD_TOO_LARGE', 'message too large');
     return s;
   }
-  // Bodies are scrubbed (secrets, credentials in URLs, absolute paths) before they are stored.
-  bodyText(v, max, bytes) { return this.text(cleanPacketText(this.text(v, max, bytes), max), max, bytes); }
+  // Bodies are scrubbed before they are stored: credentials in any scheme://user:pass@ URL,
+  // "password is: X" (as src/scrub.js), the full shared secret list (secret-patterns.mjs, the app's too), then cleanPacketText (home paths, tokens).
+  bodyText(v, max, bytes) {
+    const s = this.text(v, max, bytes).replace(/\b([a-z][a-z0-9+.-]{0,30}:\/\/)[^\s/@:]+:[^\s/@]+@/gi, '$1<redacted>@')
+      .replace(/(?<![\w])((?:password|passphrase|pin)\s{1,8}is\s{0,8}:\s{0,8})\S{1,256}/gi, '$1<redacted>');
+    return this.text(cleanPacketText(redactSecrets(s, { classes: ['credential', 'likely'], docExamples: false }).slice(0, max), max, null, { anyPath: false }), max, bytes);
+  }
   // A message only a desktop app's or a browser's signed-in person may release (never a phone relay sign-in).
   human(ident) {
     const c = ident?.cred;
@@ -277,6 +283,8 @@ export class Messaging {
     const kind = body.kind ?? 'message';
     if (!['message', 'handoff'].includes(kind)) throw invalid();
     const text = this.bodyText(body.body, L.bodyChars, L.bodyBytes);
+    // Size limits hold for what was sent, not only for what is left after scrubbing.
+    const raw = body.body.trim();
     if (body.hold != null && typeof body.hold !== 'boolean') throw invalid();
     const hold = body.hold === true;
     // Held: a person destination only, the default lifetime once released, and a display-only via.
@@ -324,7 +332,8 @@ export class Messaging {
     for (const c of [cardId, ...(handoff?.card_refs ?? [])]) if (c && !this.card(src.user_id, c, orgId)) throw missing();
     if (t) {
       const refs = handoff ? [...handoff.card_refs, ...handoff.artifacts.map((a) => a.path)].join(', ') : '';
-      if (text.length + refs.length > L.sessionBodyChars || Buffer.byteLength(text) + Buffer.byteLength(refs) > L.sessionBodyBytes) {
+      const longest = raw.length >= text.length ? raw : text;
+      if (longest.length + refs.length > L.sessionBodyChars || Math.max(Buffer.byteLength(raw), Buffer.byteLength(text)) + Buffer.byteLength(refs) > L.sessionBodyBytes) {
         throw new HubError('PAYLOAD_TOO_LARGE', 'message too large for a session', { reason: 'SESSION_BODY_LIMIT' });
       }
     }
@@ -487,7 +496,7 @@ export class Messaging {
 
   decideHandoff(m, body) {
     if (!['accept', 'decline'].includes(body.decision)) throw invalid();
-    const report = this.text(body.report, this.limits.reportChars, null, { optional: true });
+    const report = body.report == null ? null : this.bodyText(body.report, this.limits.reportChars, null);
     if (!['queued', 'delivered', 'replied'].includes(m.state) || m.handoff_state !== 'offered' || this.handoffExpired(m) || (m.state === 'queued' && m.phase === 'accepted')) throw new HubError('CONFLICT', 'this handoff can no longer be decided');
     this.hub.txn(() => this.update(m, { handoff_state: body.decision === 'accept' ? 'accepted' : 'declined', handoff_report: report,
       ...(m.state === 'queued' ? { state: 'delivered', delivered_at: this.at(), phase: null } : {}) }));

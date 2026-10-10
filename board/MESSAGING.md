@@ -212,16 +212,25 @@ person releases it.
   web cookie + CSRF (a phone relay sign-in, runner tokens, remote-MCP grants and any other
   credential kind never reach it).
 - `GET /messages?box=inbox&reply_to=<id>`: only replies addressed to the caller that answer `<id>`.
-- Every body (held or not, and an edited release) goes through `cleanPacketText`
-  (`board/shared/packet-text.js`): secrets, credentials in URLs and absolute paths are replaced
-  before storage. v1 did no scrubbing.
+- Every body (held or not, and an edited release) and every handoff report is scrubbed before
+  storage: `user:pass@` in any `scheme://` URL, "password is: X", the full shared secret list
+  (`board/shared/secret-patterns.mjs`, the same list as the app's `src/scrub.js`), then
+  `cleanPacketText` (`board/shared/packet-text.js`: URL queries, home, temp and volume paths,
+  Plexiform tokens, private keys). Other absolute paths such as `/api/v1/orders` are kept. Size
+  limits apply to the body as sent. v1 did no scrubbing.
 
 **The hub cannot tell the app's UI from the app's local `/team/mail` relay**: both use the same
 desktop device token. The real release gate is the app's IPC (`mail:release`, accepted only
 from the sessions page); the local `/team/mail` endpoint exposes no release operation, only
 `ask`, `hand_off` and `mail` (replies to, and outcomes of, asks it created). Any local process
 holding the app's `x-buddy-token` can create held asks and read the replies to held asks: the
-same trust level as the existing `/team/activity` endpoint. It can never release one.
+same trust level as the existing `/team/activity` endpoint. It can never release one. `/team/mail`
+has no preference gate: such a process can raise up to 8 held asks at a time (each expiring
+after 1 h), each with a notification to the person, as long as the app is signed in.
+
+`HUMAN_ONLY` is only as strong as the desktop device token at rest: the app keeps it sealed with
+Electron safeStorage (`buddy-accounts/*.bin`), so a process running as the same user that can
+unseal it can call release itself.
 
 ## 7. Revocation
 

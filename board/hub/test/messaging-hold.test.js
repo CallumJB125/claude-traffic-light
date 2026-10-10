@@ -180,3 +180,26 @@ test('072 keeps existing message rows, their seq and the sequence, and allows he
   assert.throws(() => db.prepare("UPDATE msg_messages SET via_json = 'not json'").run(), /CHECK/);
   assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'msg_messages_source_state'").get());
 });
+
+test('the hub scrubs every credential shape the app does, userinfo in any scheme, and handoff reports; routes survive', async () => {
+  const r = await messagingRig();
+  try {
+    const samples = ['sk_live_51Hab0123456789', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U',
+      'postgres://admin:hunter2@db.internal:5432/app', 'npm_abcdefghijklmnopqrstuvwxyz0123456789', 'glpat-abcdefghij0123456789', 'api_key: "Zx9q-secretvalue-123456"'];
+    const leaks = ['sk_live_51H', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIi', 'hunter2', 'npm_abcdefghij', 'glpat-abcdefghij', 'Zx9q-secretvalue'];
+    const body = samples.map((s, i) => `${i}: ${s}`).join('\n') + '\nGET /api/v1/orders?id=1 is slow';
+    const m = (await ask(r, r.winA, body)).body.message;
+    for (const l of leaks) assert.ok(!m.body.includes(l), `${l} survived:\n${m.body}`);
+    assert.match(m.body, /postgres:\/\/<redacted>@db\.internal/);
+    assert.match(m.body, /GET \/api\/v1\/orders/, 'a route stays readable');
+    // An edited release goes through the same scrubber.
+    const out = (await release(r, r.winA, m.id, { decision: 'send', body: `try ${samples[3]} via ftp://u:pw@host/x` })).body.message;
+    assert.ok(!out.body.includes('npm_abcdefghij') && !out.body.includes('u:pw@'), out.body);
+
+    // A handoff decision report is scrubbed too.
+    const h = (await r.api(r.winA, 'POST', '/messages', { request_id: randomUUID(), to: { user_id: r.bob.user, org_id: r.org }, kind: 'handoff', body: 'take it' })).body.message;
+    const d = await r.api(r.bob, 'POST', `/messages/${h.id}/handoff`, { decision: 'decline', report: `no, password is: hunter2 and ${samples[0]}` });
+    assert.equal(d.status, 200, d.text);
+    assert.ok(!d.body.message.handoff.report.includes('hunter2') && !d.body.message.handoff.report.includes('sk_live_51H'), d.body.message.handoff.report);
+  } finally { await r.close(); }
+});

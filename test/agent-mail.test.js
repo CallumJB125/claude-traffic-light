@@ -266,3 +266,37 @@ test('agent-mail-view: held text is editable and sent with its digest; questions
   w.document.dispatchEvent(new w.Event('visibilitychange')); await tick();
   assert.equal(sec.hidden, true, 'nothing waiting and the inbox off: the panel is hidden');
 });
+
+test('a release the hub rejects (sender left the team) is reported as not sent, and a failed release keeps the Home count', async (t) => {
+  const { r, mailFor } = await rig(t);
+  const b = mailFor(r.bob);
+  const q = await b.op('ask', { to: 'alice', question: 'q?' });
+  assert.equal(q.status, 'waiting_for_your_ok', JSON.stringify(q));
+  const h = (await b.list()).held[0];
+  assert.equal(b.pending().held, 1);
+  // A hub error (bad id) leaves the held count alone.
+  assert.equal((await b.release(h.id, 'send', 'wrong')).ok, false);
+  assert.equal(b.pending().held, 1);
+  r.h.db.run('UPDATE members SET removed_at = ? WHERE org_id = ? AND user_id = ?', new Date().toISOString(), r.org, r.bob.user);
+  const out = await b.release(h.id, 'send', h.digest);
+  assert.deepEqual(out, { ok: false, state: 'rejected', error: 'Not sent: sender_removed' });
+});
+
+test('team_agent_mail answers a repeat within 10 s from memory, and a new ask clears it', async (t) => {
+  const { r, calls, mailFor } = await rig(t);
+  let clock = 1_000_000;
+  const a = mailFor(r.winA, { now: () => clock });
+  await a.op('mail', {});
+  const reads = () => calls.filter((c) => c.startsWith('GET /api/messaging/v1/messages')).length;
+  const first = reads();
+  await a.op('mail', {});
+  assert.equal(reads(), first, 'the repeat costs no hub reads');
+  clock += 10_001;
+  await a.op('mail', {});
+  assert.ok(reads() > first);
+  const before = reads();
+  await a.op('ask', { to: 'bob', question: 'q?' });
+  const m = await a.op('mail', {});
+  assert.ok(reads() > before);
+  assert.equal(m.asks.length, 1);
+});

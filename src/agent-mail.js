@@ -17,11 +17,13 @@
 const crypto = require('node:crypto');
 const Scrub = require('./scrub.js');
 const Packet = require('./handoff-packet.js');
-const { frame } = require('./session-messaging.js');
+const { frame, label } = require('./session-messaging.js');
 const { inRepo } = require('./recipes.js');
 
 const LIMITS = Object.freeze({ body: 3000, title: Packet.LIMITS.goal, brief: Packet.LIMITS.summary, handoffBody: 4000, label: 60, answer: 4000, files: 16 });
 const POLL_MS = 60_000;
+// team_agent_mail costs up to 11 hub reads: an AI asking again within this window gets the same answer.
+const MAIL_MEMO_MS = 10_000;
 const PROVIDER = /^[a-z][a-z0-9-]{0,31}$/;
 const SAME_HUB = 'Asking teammates needs your team board on the same Plexiform account hub.';
 const NOTE = 'Nothing is sent until your person presses Send in Plexiform (Running now → Agent mail). Do not call this again or wait in a loop; check team_agent_mail later.';
@@ -30,7 +32,8 @@ const digest = (s) => crypto.createHash('sha256').update(String(s)).digest('hex'
 const origin = (u) => { try { return new URL(u).origin; } catch { return null; } };
 
 function create({ identity, resolve, fetch, home = null, enabled = () => false, notify = () => {}, onChange = () => {},
-  timers = { setInterval, clearInterval }, pollMs = POLL_MS, log = () => {} }) {
+  timers = { setInterval, clearInterval }, pollMs = POLL_MS, now = Date.now, log = () => {} }) {
+  let mailMemo = null;
   const clean = (s, max) => Scrub.redactSecretsPass(home ? String(s).split(home).join('~') : String(s)).trim().slice(0, max);
 
   async function call(id, method, path, body) {
@@ -78,6 +81,7 @@ function create({ identity, resolve, fetch, home = null, enabled = () => false, 
     const r = await msg(t.id, 'POST', '/messages', { request_id: crypto.randomUUID(), to: { user_id: t.member.user_id, org_id: t.org }, body, hold: true, ...extra });
     if (r.status !== 200 || !r.body?.message) return { available: true, sent: false, reason: 'refused', message: r.body?.error?.message || 'The team hub refused that.' };
     heldIds.add(r.body.message.id);
+    mailMemo = null;
     onChange();
     notify({ kind: 'held', id: r.body.message.id, to: t.member.display_name });
     return { available: true, ask_id: r.body.message.id, status: 'waiting_for_your_ok', to: t.member.display_name, note: NOTE };
@@ -111,12 +115,19 @@ function create({ identity, resolve, fetch, home = null, enabled = () => false, 
   async function mail({ ask_id: askId } = {}) {
     const id = identity();
     if (!id) return unavailable('signed_out', 'Sign in to your team in Plexiform first.');
+    const key = `${id.origin}\n${id.userId}\n${askId ?? ''}`;
+    if (mailMemo && mailMemo.key === key && now() - mailMemo.at < MAIL_MEMO_MS) return mailMemo.value;
+    const value = await readMail(id, askId);
+    if (value.available) mailMemo = { key, at: now(), value };
+    return value;
+  }
+  async function readMail(id, askId) {
     const r = await msg(id, 'GET', '/messages?box=sent&limit=50');
     if (r.status !== 200 || !Array.isArray(r.body?.messages)) return unavailable('offline', 'The team hub could not be reached. Try again.');
     const mine = r.body.messages.filter((m) => m && m.via && (!askId || m.id === askId));
     const out = [];
     for (const m of mine.slice(0, 10)) {
-      const item = { ask_id: m.id, kind: m.kind, to: m.to?.name ?? null, status: m.state === 'held' ? 'waiting_for_your_ok' : m.state, created_at: m.created_at };
+      const item = { ask_id: m.id, kind: m.kind, to: label(m.to?.name, 'a teammate'), status: m.state === 'held' ? 'waiting_for_your_ok' : m.state, created_at: m.created_at };
       if (m.state !== 'held') {
         const rr = await msg(id, 'GET', `/messages?box=inbox&limit=20&reply_to=${encodeURIComponent(m.id)}`);
         const replies = rr.status === 200 && Array.isArray(rr.body?.messages) ? rr.body.messages.filter((x) => x && x.reply_to === m.id && x.to?.user_id === id.userId) : [];
@@ -173,10 +184,13 @@ function create({ identity, resolve, fetch, home = null, enabled = () => false, 
       body = clean(edited, LIMITS.handoffBody);
     }
     const r = await msg(id, 'POST', `/messages/${encodeURIComponent(mid)}/release`, { decision, ...(body !== undefined ? { body } : {}) });
+    if (r.status !== 200) { onChange(); return failed(r); }
     heldIds.delete(mid);
     onChange();
-    if (r.status !== 200) return failed(r);
-    return decision === 'discard' ? { ok: true, discarded: true } : { ok: true, state: r.body.message.state, reason: r.body.message.reason ?? null };
+    if (decision === 'discard') return { ok: true, discarded: true };
+    // The hub answers 200 for a release it then rejected (e.g. sender_removed): that was not sent.
+    const m = r.body?.message;
+    return m?.state === 'queued' ? { ok: true, state: 'queued' } : { ok: false, state: m?.state ?? null, error: `Not sent: ${m?.reason || m?.state || 'refused'}` };
   }
 
   const inboxItem = (mid) => inbox.find((m) => m.id === mid) || null;
