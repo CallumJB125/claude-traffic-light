@@ -15,11 +15,11 @@ const DataDelete = require('../src/data-delete.js');
 
 const NOW = Date.parse('2026-10-10T12:00:00.000Z');
 const base = (kind, id, payload, over = {}) => ({ schema: 1, kind, id, title: `Title ${id}`, summary: 'One line.', author: { name: 'Ana', github: 'ana-dev' }, license: 'CC0-1.0', tags: [], stacks: ['any'], tools: [], added: '2026-10-01', updated: '2026-10-05', payload, ...over });
-const recipeItem = (over = {}) => base('recipe', 'explain-it', { id: 'explain-it', title: 'Explain it', what: 'Explains the repo.', prompt: 'Read the repository.\n\nNEVER-ELIDED full prompt line.', tool: 'auto', edits: false, cost: 'Low.' }, over);
-const charItem = () => base('character', 'pebble', Hatch.templateCharacter({ name: 'Pebble' }));
+const recipeItem = (over = {}) => base('recipe', 'explain-it', { id: 'explain-it', title: 'Title explain-it', what: 'Explains the repo.', prompt: 'Read the repository.\n\nNEVER-ELIDED full prompt line.', tool: 'auto', edits: false, cost: 'Low.' }, over);
+const charItem = (over = {}) => base('character', 'pebble', Hatch.templateCharacter({ name: 'Pebble' }), over);
 const packItem = () => base('pack', 'starter', { members: ['recipe/explain-it', 'character/pebble'], note: '' });
 const rulesItem = () => { const Rules = require('../rules.js'); return base('rules', 'calm', { rulesVersion: Rules.RULES_VERSION, rules: [Rules.normalizeRule({ id: 'r1', name: 'Done', when: { signal: ['done'] }, then: { lamp: 'green' } })] }); };
-const indexOf = (items) => Buffer.from(S.buildIndex(items.map((item) => ({ item, name: item.id }))).text);
+const indexOf = (items, serial = 1) => Buffer.from(S.buildIndex(items.map((item) => ({ item, name: item.id })), { serial }).text);
 const defaultItems = () => [recipeItem(), charItem(), packItem(), rulesItem()];
 
 function fakeFetch(routes) {
@@ -119,20 +119,43 @@ test('a pinned key makes the signature required; an unsigned list is still stric
   assert.equal((await rig(t, { bytes: dup }).g.fetchIndex()).ok, false);
 });
 
-test('an older list than the cached one is refused; bad entries are dropped and counted', async (t) => {
-  const r = rig(t);
+test('lists are ordered by serial: lower is refused, the same serial with other bytes is refused, a takedown is accepted', async (t) => {
+  const r = rig(t, { items: [recipeItem(), charItem({ updated: '2026-10-09' })], bytes: indexOf([recipeItem(), charItem({ updated: '2026-10-09' })], 5) });
   assert.equal((await r.g.fetchIndex()).ok, true);
-  const older = indexOf([recipeItem({ updated: '2026-10-02' })]);
-  const fresh = Gallery.create({ dataDir: r.dataDir, fetch: fakeFetch({ [Gallery.INDEX_URL]: older }), keysDir: r.keysDir, now: () => NOW });
-  assert.match((await fresh.fetchIndex()).error, /older than the one you already have/);
+  const next = (bytes) => Gallery.create({ dataDir: r.dataDir, fetch: fakeFetch({ [Gallery.INDEX_URL]: bytes }), keysDir: r.keysDir, now: () => NOW });
+  assert.match((await next(indexOf([recipeItem(), charItem({ updated: '2026-10-09' })], 4)).fetchIndex()).error, /older than the one you already have/);
+  assert.match((await next(indexOf([recipeItem()], 5)).fetchIndex()).error, /does not match the one you already have/, 'a replayed or forked list under the same serial');
+  assert.equal((await next(indexOf([recipeItem(), charItem({ updated: '2026-10-09' })], 5)).fetchIndex()).ok, true, 'the same list again is fine');
+  // Taking down the newest item lowers generatedAt; the raised serial still wins.
+  const takedown = indexOf([recipeItem()], 6);
+  assert.ok(JSON.parse(takedown).generatedAt < '2026-10-09');
+  const v = await next(takedown).fetchIndex();
+  assert.equal(v.ok, true);
+  assert.deepEqual(v.items.map((i) => i.id), ['recipe/explain-it']);
+  assert.match((await next(indexOf([recipeItem(), charItem({ updated: '2026-10-09' })], 5)).fetchIndex()).error, /older/, 'the taken-down list cannot be replayed');
+});
+
+test('bad entries are dropped and counted; the cache is re-read, so deleting it empties the list', async (t) => {
 
   const index = JSON.parse(indexOf(defaultItems()).toString());
   index.entries[0].title = 'Changed after hashing';
   index.entries.push({ ...index.entries[1] });
-  const v = await rig(t, { bytes: Buffer.from(JSON.stringify(index)) }).g.fetchIndex();
+  const r = rig(t, { bytes: Buffer.from(JSON.stringify(index)) });
+  const v = await r.g.fetchIndex();
   assert.equal(v.ok, true);
   assert.equal(v.dropped, 2);
   assert.equal(v.items.length, 3);
+  assert.equal(r.g.cached().items.length, 3);
+  fs.rmSync(path.join(r.dataDir, 'gallery'), { recursive: true });
+  assert.deepEqual(r.g.cached(), { ok: false, none: true });
+  assert.match((await r.g.add('recipe/explain-it', v.items.find((i) => i.kind === 'recipe').sha256)).error, /no longer in the gallery/);
+});
+
+test('the character confirm and saved name come from the validated character', async (t) => {
+  const r = rig(t);
+  await r.g.fetchIndex();
+  await r.g.add('character/pebble', (r.g.cached().items.find((i) => i.kind === 'character')).sha256);
+  assert.equal(r.confirms[0].title, 'Pebble');
 });
 
 test('adds: the sha must match, demo refuses, packs/rules/setups are not added', async (t) => {

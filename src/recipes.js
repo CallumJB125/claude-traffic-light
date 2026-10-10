@@ -145,11 +145,13 @@ function create({ builtInDir, dataDir, home, fsApi = fs, now = Date.now }) {
     const taken = new Set([...mine(), ...builtIn()].map((r) => r.id));
     const nid = taken.has(entry.payload.id) ? freeId(entry.payload.id) : entry.payload.id;
     if (!nid) return { ok: false, error: 'Could not name the copy. Delete an older copy first.' };
-    write({ ...entry.payload, id: nid, edits: false });
+    // The sidecar first: a gallery recipe never exists without where it came from.
     const origin = { source: 'gallery', gallery_id: entry.id, sha256: entry.sha256, author: entry.author, license: entry.license, added_at: new Date(now()).toISOString() };
-    const file = path.join(dataDir, `${nid}.origin.json`), tmp = `${file}.${process.pid}.tmp`;
+    const file = path.join(dataDir, `${nid}.origin.json`), tmp = `${file}.${randomUUID()}.tmp`;
+    fsApi.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
     fsApi.writeFileSync(tmp, `${JSON.stringify(origin, null, 2)}\n`, { mode: 0o600 });
     fsApi.renameSync(tmp, file);
+    try { write({ ...entry.payload, id: nid, edits: false }); } catch (e) { fsApi.rmSync(file, { force: true }); throw e; }
     return { ok: true, id: nid, kind: 'recipe' };
   }
   function originOf(id) {

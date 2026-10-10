@@ -14,9 +14,11 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { randomUUID } = require('node:crypto');
 const V = require('./plugins/index-verify.js');
 const S = require('./gallery-schema.js');
 const Brand = require('../brand.js');
+const { validateCharacter } = require('../characters/validate.js');
 
 const INDEX_URL = `${Brand.urls.site}/gallery/index.json`;
 const SIG_URL = `${INDEX_URL}.sig`;
@@ -29,6 +31,7 @@ const REASON = {
   'unknown-key': 'The gallery list is signed with a key this version does not know. Update the app, then try again.',
   'index-time': 'The gallery list is dated in the future or before the gallery existed, so it is not shown.',
   rollback: 'The gallery list is older than the one you already have, so it is not shown.',
+  replay: 'The gallery list does not match the one you already have under the same version, so it is not shown.',
 };
 const unreadable = 'The gallery list was not in the expected format, so nothing from it is shown.';
 
@@ -89,7 +92,7 @@ function create({ dataDir, fetch, keysDir, now = Date.now, recipes, characterSto
       seen.add(e.id);
       entries.push(e);
     }
-    return { entries, dropped, fetchedAt, generatedAt: result.index.generatedAt, keyId: result.keyId || null };
+    return { entries, dropped, fetchedAt, serial: result.index.serial, indexHash: result.index_hash, keyId: result.keyId || null };
   }
   function view(s) {
     const byId = new Map(s.entries.map((e) => [e.id, e]));
@@ -105,7 +108,7 @@ function create({ dataDir, fetch, keysDir, now = Date.now, recipes, characterSto
   }
   function save(bytes, sig, fetchedAt) {
     fs.mkdirSync(cacheDir, { recursive: true, mode: 0o700 });
-    const put = (name, data) => { const file = path.join(cacheDir, name), tmp = `${file}.${process.pid}.tmp`; fs.writeFileSync(tmp, data, { mode: 0o600 }); fs.renameSync(tmp, file); };
+    const put = (name, data) => { const file = path.join(cacheDir, name), tmp = `${file}.${randomUUID()}.tmp`; fs.writeFileSync(tmp, data, { mode: 0o600 }); fs.renameSync(tmp, file); };
     put('index.json', bytes);
     if (sig) put('index.json.sig', sig); else fs.rmSync(path.join(cacheDir, 'index.json.sig'), { force: true });
     put('fetched.json', JSON.stringify({ fetchedAt }));
@@ -141,16 +144,19 @@ function create({ dataDir, fetch, keysDir, now = Date.now, recipes, characterSto
     }
     const r = check(bytes, sig);
     if (!r.index) return { ok: false, error: REASON[r.reason] || unreadable };
-    const before = state || fromCache();
-    if (before && r.index.generatedAt < before.generatedAt) return { ok: false, error: REASON.rollback };
+    // The owner's serial, not generatedAt, orders lists: a takedown can lower generatedAt.
+    const before = fromCache() || state;
+    if (before && r.index.serial < before.serial) return { ok: false, error: REASON.rollback };
+    if (before && r.index.serial === before.serial && r.index_hash !== before.indexHash) return { ok: false, error: REASON.replay };
     const fetchedAt = now();
     try { save(bytes, sig, fetchedAt); } catch { /* shown anyway; fetched again next time */ }
     state = load(r, fetchedAt);
     return view(state);
   }
 
+  // Read from disk each time, so Delete my data (or a hand-edited cache) is reflected.
   function cached() {
-    state = state || fromCache();
+    state = fromCache();
     return state ? view(state) : { ok: false, none: true };
   }
 
@@ -167,10 +173,12 @@ function create({ dataDir, fetch, keysDir, now = Date.now, recipes, characterSto
       if (!yes) return { ok: false, cancelled: true, error: 'Cancelled. Nothing was added.' };
       return recipes.addFromGallery(e);
     }
-    const yes = await confirm({ title: e.payload.name, action: 'Add to Characters', detail: [by(e), 'A widget character: art only, checked again by the app’s sanitiser before it is saved.'].join('\n') }, ev);
+    const v = validateCharacter(e.payload, { source: 'import' });
+    if (!v.ok) return { ok: false, error: 'That character could not be added.' };
+    const yes = await confirm({ title: v.character.name, action: 'Add to Characters', detail: [by(e), 'A widget character: art only, checked again by the app’s sanitiser before it is saved.'].join('\n') }, ev);
     if (!yes) return { ok: false, cancelled: true, error: 'Cancelled. Nothing was added.' };
     try {
-      const ch = characterStore.save({ ...e.payload, id: characterStore.freeId(e.payload.id) }, { source: 'gallery' });
+      const ch = characterStore.save({ ...v.character, id: characterStore.freeId(v.character.id) }, { source: 'gallery' });
       broadcastCharacters();
       return { ok: true, id: ch.id, kind: 'character' };
     } catch (err) {

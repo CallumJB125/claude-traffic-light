@@ -9,7 +9,7 @@ const NOW = Date.parse('2026-10-10T12:00:00.000Z');
 const pair = crypto.generateKeyPairSync('ed25519');
 const keys = [{ keyId: V.keyId(pair.publicKey), key: pair.publicKey }];
 const sign = (bytes, keyId = keys[0].keyId, priv = pair.privateKey) => JSON.stringify({ alg: 'ed25519', keyId, sig: crypto.sign(null, bytes, priv).toString('base64') });
-const index = (over = {}) => ({ kind: 'plexiform.gallery', schemaVersion: 1, generatedAt: '2026-10-09T00:00:00.000Z', entries: [], ...over });
+const index = (over = {}) => ({ kind: 'plexiform.gallery', schemaVersion: 1, serial: 1, generatedAt: '2026-10-09T00:00:00.000Z', entries: [], ...over });
 const bytesOf = (o) => Buffer.from(`${JSON.stringify(o, null, 2)}\n`);
 const options = { keys, now: () => NOW, maxBytes: S.LIMITS.indexBytes, validateIndex: S.validateIndex };
 const verifier = (over = {}) => V.createSignedVerifier({ ...options, ...over });

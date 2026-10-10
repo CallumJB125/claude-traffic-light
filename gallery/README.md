@@ -67,12 +67,16 @@ node site/gallery-build.js --write
 node site/tools/sign-gallery.mjs gallery/index.json <private.pem>
 ```
 
-Commit `gallery/index.json` and `gallery/index.json.sig` together. The Pages
+`--write` raises the serial in `gallery/index-meta.json`; apps refuse a list
+with a lower serial than one they already have, or the same serial with
+different contents, so an old signed list cannot be replayed after a takedown.
+The signer refuses an index that is not the one built from the items.
+Commit `gallery/index-meta.json`, `gallery/index.json` and `gallery/index.json.sig` together. The Pages
 build rebuilds the index from the items and fails unless it is byte-identical
 to the committed one, so a stale index never deploys. It never signs.
 
 ## Takedown
 
 Ask in an issue or email the support address on plexiform.dev. The owner
-deletes the item, regenerates and re-signs the index and deploys. Apps drop the
+deletes the item, runs `--write` (which raises the serial), re-signs and deploys. Apps drop the
 item the next time someone refreshes the gallery.

@@ -30,6 +30,12 @@ test('sign-gallery: a throwaway key signs the committed index and createSignedVe
     for (const e of ok.index.entries) assert.deepEqual(S.validateEntry(e), [], e.id);
     const tampered = Buffer.from(bytes); tampered[tampered.length - 3] ^= 1;
     assert.equal(verify(tampered, sig).status, 'unverified');
+    const stale = path.join(dir, 'stale.json');
+    fs.writeFileSync(stale, fs.readFileSync(path.join(ROOT, 'gallery', 'index.json'), 'utf8').replace('"serial": 1', '"serial": 2'));
+    const refused = spawnSync(process.execPath, [SIGNER, stale, keyFile], { encoding: 'utf8' });
+    assert.notEqual(refused.status, 0);
+    assert.match(refused.stderr, /not the index built from gallery\/items/);
+    assert.ok(!fs.existsSync(`${stale}.sig`));
     fs.writeFileSync(path.join(dir, 'junk.json'), '{"not":"an index"}');
     assert.notEqual(spawnSync(process.execPath, [SIGNER, path.join(dir, 'junk.json'), keyFile]).status, 0);
     const rsa = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });

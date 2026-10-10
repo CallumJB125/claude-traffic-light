@@ -11,10 +11,15 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const V = require('../../src/plugins/index-verify.js');
 const S = require('../../src/gallery-schema.js');
+const { check } = require('../gallery-build.js');
 
 const [indexFile, keyFile] = process.argv.slice(2);
 if (!indexFile || !keyFile) { console.error('usage: node site/tools/sign-gallery.mjs gallery/index.json <private.pem>'); process.exit(2); }
 const bytes = fs.readFileSync(indexFile);
+// Only ever sign the index built from gallery/items as committed now.
+let built;
+try { built = check(); } catch (e) { console.error(e.message); process.exit(1); }
+if (built.stale || !bytes.equals(Buffer.from(built.text))) { console.error('refusing to sign: this is not the index built from gallery/items. Run node site/gallery-build.js --write first.'); process.exit(1); }
 const parsed = V.parseUnsigned(bytes, { maxBytes: S.LIMITS.indexBytes, validateIndex: S.validateIndex });
 if (parsed.status !== 'unsigned') { console.error(`not a gallery index (${parsed.reason})`); process.exit(1); }
 const privateKey = crypto.createPrivateKey(fs.readFileSync(keyFile));

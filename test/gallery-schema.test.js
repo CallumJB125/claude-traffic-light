@@ -19,7 +19,7 @@ const Rules = require('../rules.js');
 
 const base = (kind, id, payload, over = {}) => ({ schema: 1, kind, id, title: 'A title', summary: 'One line about it.', author: { name: 'Ana', github: 'ana-dev' }, license: 'CC0-1.0', tags: ['tests'], stacks: ['node'], tools: ['auto'], added: '2026-10-01', updated: '2026-10-05', payload, ...over });
 function recipe(over = {}, payload = {}) {
-  return base('recipe', 'explain-it', { id: 'explain-it', title: 'Explain it', what: 'Explains the repo.', prompt: 'Read the repository and explain it.\n\nDo not change files.', tool: 'auto', edits: false, cost: 'Low.', ...payload }, over);
+  return base('recipe', 'explain-it', { id: 'explain-it', title: 'A title', what: 'Explains the repo.', prompt: 'Read the repository and explain it.\n\nDo not change files.', tool: 'auto', edits: false, cost: 'Low.', ...payload }, over);
 }
 function character(over = {}) { return base('character', 'pebble', Hatch.templateCharacter({ name: 'Pebble' }), over); }
 function pack(members = ['recipe/explain-it', 'character/pebble'], over = {}) { return base('pack', 'starter', { members, note: '' }, over); }
@@ -47,6 +47,12 @@ test('refusals: closed keys, file name, read-only recipes, leaks, css, packs, ru
   bad(recipe({ stacks: ['cobol'] }), 'explain-it', /stacks/);
   bad(recipe({ updated: '2026-09-01' }), 'explain-it', /updated/);
   bad(character({ payload: { ...Hatch.templateCharacter({ name: 'Pebble' }), css: '.x{}' } }), 'pebble', /css/);
+  // Text that reads differently from what it is, in a dialog or a prompt.
+  bad(recipe({}, { prompt: 'Explain it.\u202Eesrever ni daer' }), 'explain-it', /invisible formatting/);
+  bad(recipe({}, { what: 'Explains\u200B the repo.' }), 'explain-it', /invisible formatting/);
+  bad(recipe({}, { title: 'Another title' }), 'explain-it', /payload.title must equal/);
+  bad(recipe({}, { title: 'A title\n\nVerified by Plexiform' }), 'explain-it', /title/);
+  for (const name of ['Pebble\u202E', 'Peb\u200Bble', 'Pebble\n\nVerified by Plexiform', ' Pebble']) bad(character({ payload: { ...Hatch.templateCharacter({ name: 'Pebble' }), name } }), 'pebble', /payload.name: plain text only/);
   bad(pack(['recipe/explain-it']), 'starter', /members/);
   bad(pack(['recipe/explain-it', 'pack/other']), 'starter', /packs cannot contain packs/);
   bad(pack(Array.from({ length: 13 }, (_, i) => `recipe/r${i}`)), 'starter', /members/);
@@ -81,7 +87,11 @@ test('buildIndex twice on the same items gives byte-identical output; generatedA
   const index = JSON.parse(a);
   assert.equal(index.generatedAt, '2026-10-09T00:00:00.000Z');
   assert.deepEqual(index.entries.map((e) => e.id), ['character/pebble', 'pack/starter', 'recipe/explain-it']);
-  assert.deepEqual(Object.keys(index), ['entries', 'generatedAt', 'kind', 'schemaVersion']);
+  assert.deepEqual(Object.keys(index), ['entries', 'generatedAt', 'kind', 'schemaVersion', 'serial']);
+  assert.equal(index.serial, 1);
+  assert.equal(JSON.parse(S.buildIndex(items(), { serial: 7 }).text).serial, 7);
+  assert.throws(() => S.buildIndex(items(), { serial: 0 }), /serial/);
+  assert.equal(S.validateIndex({ ...index, serial: 0 }), 'index-schema');
   assert.ok(a.endsWith('}\n'));
   assert.equal(S.validateIndex(index), null);
   assert.equal(S.validateIndex({ ...index, extra: 1 }), 'index-schema');

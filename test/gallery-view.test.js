@@ -17,7 +17,7 @@ const html = fs.readFileSync(path.join(ROOT, 'tasks.html'), 'utf8');
 const scripts = ['recipes.js', 'gallery-view.js'].map((f) => fs.readFileSync(path.join(ROOT, f), 'utf8'));
 const base = (kind, id, payload, over = {}) => ({ schema: 1, kind, id, title: `Title ${id}`, summary: `About ${id}.`, author: { name: 'Ana', github: 'ana-dev' }, license: 'CC0-1.0', tags: [], stacks: ['any'], tools: [], added: '2026-10-01', updated: '2026-10-05', payload, ...over });
 const items = [
-  base('recipe', 'explain-it', { id: 'explain-it', title: 'Explain it', what: 'Explains the repo.', prompt: 'THE FULL PROMPT <b>text</b>', tool: 'auto', edits: false, cost: 'Low.' }, { stacks: ['python'] }),
+  base('recipe', 'explain-it', { id: 'explain-it', title: 'Title explain-it', what: 'Explains the repo.', prompt: 'THE FULL PROMPT <b>text</b>', tool: 'auto', edits: false, cost: 'Low.' }, { stacks: ['python'] }),
   base('character', 'pebble', Hatch.templateCharacter({ name: 'Pebble' }), { stacks: ['swift'] }),
   base('pack', 'starter', { members: ['recipe/explain-it', 'character/pebble', 'rules/calm'], note: 'Starter.' }),
   base('rules', 'calm', { rulesVersion: Rules.RULES_VERSION, rules: [Rules.normalizeRule({ id: 'r1', name: 'Done', when: { signal: ['done'] }, then: { lamp: 'green' } })] }),

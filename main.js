@@ -1990,9 +1990,15 @@ require('./src/recipes.js').register({
 // cookieless session, verified, then added after a native confirm. Specs stub the session's fetch.
 {
   const Gallery = require('./src/gallery.js');
+  let gallerySession = null;
+  // A fixed user agent: Electron's default names the app, Electron, Chrome and OS versions.
+  const galleryFetch = (...a) => {
+    if (!gallerySession) { gallerySession = require('electron').session.fromPartition('gallery'); gallerySession.setUserAgent('Plexiform-Gallery'); }
+    return gallerySession.fetch(...a); // privacy-flow: gallery
+  };
   const gallery = Gallery.create({
     dataDir: ROOT_DIR, keysDir: path.join(__dirname, 'build'), recipes, characterStore, broadcastCharacters, demo: () => Demo.active(), confirm: tasksConfirm,
-    fetch: (...a) => require('electron').session.fromPartition('gallery').fetch(...a), // privacy-flow: gallery
+    fetch: galleryFetch,
   });
   Gallery.register({ ipcMain, allowed: tasksSenderOk, gallery });
 }

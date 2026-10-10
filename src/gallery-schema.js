@@ -31,7 +31,7 @@ const SHA = /^[0-9a-f]{64}$/;
 const HOME_PATH = /(?:\/Users\/|\/home\/|[A-Za-z]:[\\/]Users[\\/])/i;
 const ITEM_KEYS = ['schema', 'kind', 'id', 'title', 'summary', 'author', 'license', 'tags', 'stacks', 'tools', 'added', 'updated', 'payload'];
 const ENTRY_KEYS = ['id', 'kind', 'slug', 'title', 'summary', 'author', 'license', 'tags', 'stacks', 'tools', 'added', 'updated', 'sha256', 'payload'];
-const INDEX_KEYS = ['kind', 'schemaVersion', 'generatedAt', 'entries'];
+const INDEX_KEYS = ['kind', 'schemaVersion', 'serial', 'generatedAt', 'entries'];
 // Setups writes these three as plain files an AI reads when asked. Rules files
 // (CLAUDE.md/AGENTS.md/GEMINI.md) replace the whole home file and are followed
 // in every session; mcp and settings change what runs. Those are refused.
@@ -48,10 +48,15 @@ function leaks(value) {
 // Sorted keys at every level: the byte form the index is built and signed in.
 const sorted = (v) => JSON.parse(canonical(v));
 
-function payloadProblems(kind, id, p) {
+// Format characters (bidi overrides, zero-width) let text read differently
+// from what it is, in a confirm dialog or a prompt.
+const FORMAT = /\p{Cf}/u;
+function payloadProblems(kind, id, p, item = {}) {
   if (kind === 'recipe') {
     const out = Recipes.problems(p).map((x) => `payload.${x}`);
     if (p && p.id !== id) out.push('payload.id must equal the item id');
+    if (p && p.title !== item.title) out.push('payload.title must equal the item title');
+    if (strings(p).some((v) => FORMAT.test(v))) out.push('payload: invisible formatting characters (bidi or zero-width) are not allowed');
     if (p && p.edits !== false) out.push('payload.edits must be false: gallery recipes only read');
     return out;
   }
@@ -59,6 +64,7 @@ function payloadProblems(kind, id, p) {
     if (p && Object.hasOwn(p, 'css')) return ['payload.css: gallery characters cannot carry CSS'];
     const v = validateCharacter(p, { source: 'import' });
     if (!v.ok) return v.errors.map((e) => `payload.${e.path || 'character'}: ${e.message}`);
+    if (v.character.name !== p.name) return ['payload.name: plain text only (no control, formatting or markup characters, no surrounding spaces)'];
     return Buffer.byteLength(JSON.stringify(v.character)) > CharacterStore.LIMITS.fileBytes ? ['payload: character is too large'] : [];
   }
   if (kind === 'pack') {
@@ -118,7 +124,7 @@ function validateItem(item, name) {
   if (!date(item.added)) out.push('added: YYYY-MM-DD');
   if (!date(item.updated) || (date(item.added) && item.updated < item.added)) out.push('updated: YYYY-MM-DD, not before added');
   if (out.length) return out;
-  out.push(...payloadProblems(item.kind, item.id, item.payload));
+  out.push(...payloadProblems(item.kind, item.id, item.payload, item));
   const leak = leaks(item.kind === 'character' ? { ...item, payload: { name: item.payload.name } } : item);
   if (leak) out.push(`contains ${leak}`);
   return out;
@@ -146,13 +152,15 @@ function validateEntry(entry) {
 // The index shape only: entries are checked one by one (validateEntry), so the
 // app can drop a bad entry and keep the rest. timeOk comes from the verifier.
 function validateIndex(index, timeOk = true) {
-  if (!closed(index, INDEX_KEYS) || index.kind !== 'plexiform.gallery' || index.schemaVersion !== 1 || !Array.isArray(index.entries) || index.entries.length > LIMITS.entries) return 'index-schema';
+  if (!closed(index, INDEX_KEYS) || index.kind !== 'plexiform.gallery' || index.schemaVersion !== 1 || !Number.isSafeInteger(index.serial) || index.serial < 1 || !Array.isArray(index.entries) || index.entries.length > LIMITS.entries) return 'index-schema';
   return timeOk ? null : 'index-time';
 }
 
-// items: [{ item, name }] from gallery/items/<kind>/<name>.json. Throws with
-// every problem found; else the index and its exact bytes.
-function buildIndex(items) {
+// items: [{ item, name }] from gallery/items/<kind>/<name>.json; serial: the
+// owner's counter from gallery/index-meta.json, raised on every publish, so a
+// takedown (which can lower generatedAt) still supersedes the list before it.
+// Throws with every problem found; else the index and its exact bytes.
+function buildIndex(items, { serial = 1 } = {}) {
   const problems = [];
   const seen = new Map();
   for (const { item, name, kind } of items) {
@@ -167,12 +175,13 @@ function buildIndex(items) {
   }
   for (const [where, item] of seen) if (item.kind === 'pack') for (const m of item.payload.members) if (!seen.has(m)) problems.push(`${where}: member ${m} is not in the gallery`);
   if (!seen.size) problems.push('no items');
+  if (!Number.isSafeInteger(serial) || serial < 1) problems.push('serial: a whole number from 1 (gallery/index-meta.json)');
   if (seen.size > LIMITS.entries) problems.push(`more than ${LIMITS.entries} items`);
   if (problems.length) { const e = new Error(`gallery items are not valid:\n${problems.join('\n')}`); e.problems = problems; throw e; }
   const entries = [...seen.values()].map(entryOf).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   for (const e of entries) if (Buffer.byteLength(JSON.stringify(e)) > LIMITS.entryBytes) problems.push(`${e.id}: over ${LIMITS.entryBytes} bytes`);
   const generatedAt = `${entries.map((e) => e.updated).sort().at(-1)}T00:00:00.000Z`;
-  const index = sorted({ kind: 'plexiform.gallery', schemaVersion: 1, generatedAt, entries });
+  const index = sorted({ kind: 'plexiform.gallery', schemaVersion: 1, serial, generatedAt, entries });
   const text = `${JSON.stringify(index, null, 2)}\n`;
   if (Buffer.byteLength(text) > LIMITS.indexBytes) problems.push(`index is over ${LIMITS.indexBytes} bytes`);
   if (problems.length) { const e = new Error(`gallery items are not valid:\n${problems.join('\n')}`); e.problems = problems; throw e; }

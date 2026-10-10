@@ -12,7 +12,7 @@ const Hatch = require('../characters/hatch');
 const PROMPT = 'Read the repository and explain it.\n\nGALLERY-SPEC-FULL-PROMPT: list every module.';
 const base = (kind, id, payload) => ({ schema: 1, kind, id, title: `Spec ${id}`, summary: `About ${id}.`, author: { name: 'Ana', github: 'ana-dev' }, license: 'CC0-1.0', tags: [], stacks: ['any'], tools: ['auto'], added: '2026-10-01', updated: '2026-10-05', payload });
 const items = [
-  base('recipe', 'spec-explain', { id: 'spec-explain', title: 'Spec explain', what: 'Explains the repo.', prompt: PROMPT, tool: 'auto', edits: false, cost: 'Low.' }),
+  base('recipe', 'spec-explain', { id: 'spec-explain', title: 'Spec spec-explain', what: 'Explains the repo.', prompt: PROMPT, tool: 'auto', edits: false, cost: 'Low.' }),
   base('character', 'speccy', Hatch.templateCharacter({ name: 'Speccy' })),
   base('pack', 'spec-pack', { members: ['recipe/spec-explain', 'character/speccy'], note: '' }),
 ];
@@ -71,6 +71,6 @@ test('Browse the gallery fetches only on a click, labels it unsigned, and adds a
     await testInfo.attach('gallery', { body: Buffer.from(png, 'base64'), contentType: 'image/png' });
 
     await inspect('tasks.html', '[...document.querySelectorAll("#cg-gallery button")].find(b => b.textContent === "Back to recipes").click(); if (document.querySelector("#recipes").hidden) document.querySelector("#recipes-open").click(); true');
-    await expect.poll(() => inspect('tasks.html', '[...document.querySelectorAll("#recipes .recipe h3")].map(e => e.textContent).includes("Spec explain")')).toBe(true);
+    await expect.poll(() => inspect('tasks.html', '[...document.querySelectorAll("#recipes .recipe h3")].map(e => e.textContent).includes("Spec spec-explain")')).toBe(true);
   } finally { await h.cleanup(); }
 });

@@ -254,7 +254,7 @@ function galleryFixture({ title = 'Explain <b>it</b> {{brand.name}}' } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gallery-site-'));
   const base = (kind, id, payload) => ({ schema: 1, kind, id, title, summary: 'Reads the repo & explains it.', author: { name: 'Ana', github: 'ana-dev' }, license: 'CC0-1.0', tags: ['docs'], stacks: ['node'], tools: ['auto'], added: '2026-10-01', updated: '2026-10-02', payload });
   const items = [
-    base('recipe', 'explain-it', { id: 'explain-it', title: 'Explain it', what: 'Explains the repo.', prompt: 'Read it. <script>alert(1)</script> $& $1', tool: 'auto', edits: false, cost: 'Low.' }),
+    base('recipe', 'explain-it', { id: 'explain-it', title, what: 'Explains the repo.', prompt: 'Read it. <script>alert(1)</script> $& $1', tool: 'auto', edits: false, cost: 'Low.' }),
     base('character', 'pebble', Hatch.templateCharacter({ name: 'Pebble' })),
     base('pack', 'starter', { members: ['recipe/explain-it', 'character/pebble'], note: '' }),
   ];
@@ -262,7 +262,8 @@ function galleryFixture({ title = 'Explain <b>it</b> {{brand.name}}' } = {}) {
     fs.mkdirSync(path.join(root, 'gallery', 'items', item.kind), { recursive: true });
     fs.writeFileSync(path.join(root, 'gallery', 'items', item.kind, `${item.id}.json`), JSON.stringify(item, null, 2));
   }
-  fs.writeFileSync(path.join(root, 'gallery', 'index.json'), S.buildIndex(items.map((item) => ({ item, name: item.id, kind: item.kind }))).text);
+  fs.writeFileSync(path.join(root, 'gallery', 'index-meta.json'), '{"serial":3}\n');
+  fs.writeFileSync(path.join(root, 'gallery', 'index.json'), S.buildIndex(items.map((item) => ({ item, name: item.id, kind: item.kind })), { serial: 3 }).text);
   return root;
 }
 
@@ -316,4 +317,27 @@ test('gallery: with the flag off the site has no gallery page, data, script, lin
   assert.ok(!/\/gallery/.test(fs.readFileSync(path.join(DIST, 'sitemap.xml'), 'utf8')));
   assert.ok(!/\/gallery/.test(fs.readFileSync(path.join(DIST, '_headers'), 'utf8')));
   assert.ok(!/href="\/gallery"/.test(fs.readFileSync(path.join(DIST, 'index.html'), 'utf8')));
+  assert.ok(!/Community gallery/.test(fs.readFileSync(path.join(DIST, 'privacy.html'), 'utf8')));
+});
+
+test('gallery: once a gallery key is pinned the deploy needs a signature that verifies against it', () => {
+  const crypto = require('crypto');
+  const { build, DIST } = require('../build.js');
+  const root = galleryFixture();
+  try {
+    const pair = crypto.generateKeyPairSync('ed25519');
+    fs.mkdirSync(path.join(root, 'build'));
+    fs.writeFileSync(path.join(root, 'build', 'gallery-key.pub.pem'), pair.publicKey.export({ type: 'spki', format: 'pem' }));
+    const V = require('../../src/plugins/index-verify.js');
+    const bytes = fs.readFileSync(path.join(root, 'gallery', 'index.json'));
+    const sigOf = (priv, pub) => JSON.stringify({ alg: 'ed25519', keyId: V.keyId(pub), sig: crypto.sign(null, bytes, priv).toString('base64') });
+    assert.throws(() => build({ live: { gallery: true }, galleryRoot: root }), /index\.json\.sig is missing/);
+    const other = crypto.generateKeyPairSync('ed25519');
+    fs.writeFileSync(path.join(root, 'gallery', 'index.json.sig'), sigOf(other.privateKey, other.publicKey));
+    assert.throws(() => build({ live: { gallery: true }, galleryRoot: root }), /does not verify.*unknown-key/);
+    fs.writeFileSync(path.join(root, 'gallery', 'index.json.sig'), sigOf(pair.privateKey, pair.publicKey));
+    build({ live: { gallery: true }, galleryRoot: root });
+    assert.ok(fs.readFileSync(path.join(DIST, 'gallery', 'index.json.sig')).equals(fs.readFileSync(path.join(root, 'gallery', 'index.json.sig'))));
+    assert.match(fs.readFileSync(path.join(DIST, 'privacy.html'), 'utf8'), /Community gallery:/);
+  } finally { build(); fs.rmSync(root, { recursive: true, force: true }); }
 });

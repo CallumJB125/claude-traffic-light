@@ -24,7 +24,7 @@ jobs:
         env:
           BASE_REF: ${{ github.base_ref }}
         run: |
-          outside="$(git diff --name-only "origin/${BASE_REF}...HEAD" | grep -v '^gallery/items/' || true)"
+          outside="$(git diff --no-renames --name-only "origin/${BASE_REF}...HEAD" | grep -v '^gallery/items/' || true)"
           if [ -n "$outside" ]; then
             echo "::error::A gallery submission may only change files under gallery/items/. Also changed:"
             echo "$outside"
