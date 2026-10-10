@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "author": {
+    "name": "Plexiform",
+    "github": "CallumJB125"
+  },
+  "license": "CC0-1.0",
+  "added": "2026-10-10",
+  "updated": "2026-10-10",
+  "kind": "recipe",
+  "id": "security-check",
+  "title": "Check for leaked secrets and risky code",
+  "summary": "Scans the repo and its recent history for committed secrets and common risky patterns, and tells you what to rotate or fix first.",
+  "tags": [
+    "security",
+    "review"
+  ],
+  "stacks": [
+    "any"
+  ],
+  "tools": [
+    "claude"
+  ],
+  "payload": {
+    "id": "security-check",
+    "title": "Check for leaked secrets and risky code",
+    "what": "Scans the repo and its recent history for committed secrets and common risky patterns, and tells you what to rotate or fix first.",
+    "prompt": "Check this repository for leaked secrets and risky code.\n\n1. Search tracked files for anything that looks like a leaked credential, such as API keys, tokens, private keys, passwords in config and committed .env files.\n2. Search the last 200 commits too (`git log -p -200`), because a deleted secret is still in history.\n3. Look for common risky patterns: string-built SQL, shell commands built from input, disabled TLS checks, eval of untrusted data, overly broad file permissions.\n4. Report each finding with file, line or commit, how serious it is, and what to do (rotate the key, move it to a secret store, fix the code).\n\nNever print a full credential. Show only its first four characters. Do not change any files.",
+    "tool": "claude",
+    "edits": false,
+    "cost": "Medium: reads recent history as well as the current code."
+  }
+}

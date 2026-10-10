@@ -85,6 +85,7 @@
     render();
   }
 
+  document.addEventListener('gallery:added', () => { void load(); });
   $('recipes-open').addEventListener('click', () => { show(root.hidden); if (!root.hidden) void load(); });
   $('new-task').addEventListener('click', () => show(false));
   $('list').addEventListener('click', () => show(false));

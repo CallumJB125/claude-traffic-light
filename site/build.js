@@ -31,11 +31,12 @@ const hashOf = (file) => crypto.createHash('sha1').update(fs.readFileSync(file))
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const lookup = (obj, dotted) => dotted.split('.').reduce((o, k) => (o == null ? o : o[k]), obj);
 
-function build({ live } = {}) {
+function build({ live, galleryRoot = ROOT } = {}) {
   const LIVE = { ...LIVE_FILE, ...live };
   rmrf(DIST);
   fs.mkdirSync(DIST, { recursive: true });
   copyDir(path.join(SRC, 'assets'), path.join(DIST, 'assets'));
+  if (!LIVE.gallery) fs.rmSync(path.join(DIST, 'assets', 'gallery.js'), { force: true });
   for (const f of APP_FILES) {
     const to = path.join(DIST, 'assets', 'app', f);
     fs.mkdirSync(path.dirname(to), { recursive: true });
@@ -45,16 +46,8 @@ function build({ live } = {}) {
   const partials = {};
   for (const f of fs.readdirSync(path.join(SRC, 'partials'))) partials[f.replace(/\.html$/, '')] = fs.readFileSync(path.join(SRC, 'partials', f), 'utf8');
 
-  const pages = [];
-  const sources = fs.readdirSync(SRC).filter((n) => n.endsWith('.html')).map((f) => [f, path.join(SRC, f)]);
-  for (const [f, source] of sources) {
-    let html = fs.readFileSync(source, 'utf8');
-    const m = /^<!--page (\{.*?\})-->\s*/s.exec(html);
-    const meta = m ? JSON.parse(m[1]) : {};
-    if (m) html = html.slice(m[0].length);
-    const slug = f === 'index.html' ? '' : f.replace(/\.html$/, '');
-    meta.path = slug ? `/${slug}` : '/';
-    meta.canonical = `${Brand.urls.site}${slug ? `/${slug}` : '/'}`;
+  // meta: the page's <!--page {...}--> header plus path and canonical
+  function renderPage(html, meta, f) {
     meta.contact = Brand.email('support');
     const ctx = { brand: Brand, page: meta };
     // partials first (they carry placeholders too), then placeholders
@@ -75,10 +68,28 @@ function build({ live } = {}) {
       return raw ? String(v) : esc(v);
     });
     // the nav link to this page says so
-    html = html.replace(new RegExp(`(<a href="${meta.path}")(?= |>)`), '$1 aria-current="page"');
+    return html.replace(new RegExp(`(<a href="${meta.path}")(?= |>)`), '$1 aria-current="page"');
+  }
+
+  const pages = [];
+  // Item text is escaped and spliced in after the template is rendered, so
+  // nothing a contributor writes is read as a placeholder.
+  const gallery = LIVE.gallery ? require('./gallery-build.js').buildGallery({ root: galleryRoot, dist: DIST, src: SRC, renderPage, esc }) : null;
+  const sources = fs.readdirSync(SRC).filter((n) => n.endsWith('.html') && (n !== 'gallery.html' || gallery)).map((f) => [f, path.join(SRC, f)]);
+  for (const [f, source] of sources) {
+    let html = fs.readFileSync(source, 'utf8');
+    const m = /^<!--page (\{.*?\})-->\s*/s.exec(html);
+    const meta = m ? JSON.parse(m[1]) : {};
+    if (m) html = html.slice(m[0].length);
+    const slug = f === 'index.html' ? '' : f.replace(/\.html$/, '');
+    meta.path = slug ? `/${slug}` : '/';
+    meta.canonical = `${Brand.urls.site}${slug ? `/${slug}` : '/'}`;
+    html = renderPage(html, meta, f);
+    if (f === 'gallery.html') html = html.replace('<!--cg:list-->', () => gallery.list);
     fs.writeFileSync(path.join(DIST, f), html);
     if (!meta.noindex) pages.push(meta);
   }
+  if (gallery) pages.push(...gallery.pages);
 
   fs.writeFileSync(path.join(DIST, 'robots.txt'), `User-agent: *\nAllow: /\nSitemap: ${Brand.urls.site}/sitemap.xml\n`);
   fs.writeFileSync(path.join(DIST, 'sitemap.xml'), `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${pages.map((p) => `  <url><loc>${p.canonical}</loc></url>`).join('\n')}\n</urlset>\n`);
@@ -95,7 +106,11 @@ function build({ live } = {}) {
   Cache-Control: public, max-age=31536000, immutable
 /*.html
   Cache-Control: public, max-age=0, must-revalidate
-`);
+${gallery ? `/gallery/*.json
+  Cache-Control: public, max-age=300
+/gallery/*.sig
+  Cache-Control: public, max-age=300
+` : ''}`);
   return { pages: pages.length };
 }
 

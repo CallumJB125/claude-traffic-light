@@ -31,6 +31,7 @@ const STORES = Object.freeze([
   { id: 'crash-reports', root: 'data', kind: 'diagnostics', label: 'Crash reports', detail: 'Scrubbed crash reports kept on this Mac.', names: ['crash-reports'] },
   { id: 'feedback', root: 'data', kind: 'feedback', label: 'Feedback drafts', detail: 'Feedback you started writing.', names: ['feedback'] },
   { id: 'recipes', root: 'data', kind: 'settings', label: 'Your recipes', detail: 'Recipes you saved as your own.', names: ['recipes'] },
+  { id: 'gallery', root: 'data', kind: 'cache', label: 'Community gallery list', detail: 'The last gallery list you fetched from plexiform.dev, kept so it opens without fetching again.', names: ['gallery'] },
   { id: 'team-today', root: 'data', kind: 'cache', label: 'Team today summary', detail: 'The last Team today summary fetched from your team, kept so Home opens fast.', names: ['team-today.json'] },
   { id: 'keys', root: 'data', kind: 'secret', export: false, label: 'Keys and local tokens', detail: 'The local signal token, paired-device keys, licence and sync keys. Never exported.',
     names: ['token', 'port', 'hook.sock', 'approval-secret.json', 'entitlement.json', 'entitlement-clock.json', 'remote', 'remote.json', 'remote-state.json', 'sync'] },
