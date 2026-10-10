@@ -847,6 +847,10 @@ test('oauth: a delete check’s tab says it is confirming, never signing in', ()
   assert.equal(page(true, '/callback?error=access_denied&state=st'), 'Confirming was cancelled. You can close this tab and go back to Plexiform.');
   assert.equal(page(true, '/callback?state=zz&code=abc'), 'This confirmation link isn’t valid. Go back to Plexiform and try again.');
   assert.equal(page(false, '/callback?code=abc&state=st'), 'Finish signing in in Plexiform. You can close this tab.');
+  // Real provider codes: Google's carry a slash ("4/0A…"), GitHub's are hex. A code with a space is still refused.
+  assert.equal(page(false, `/callback?code=${encodeURIComponent('4/0AVG7fiQ3x-9_Kq.Lm~Z')}&state=st`), 'Finish signing in in Plexiform. You can close this tab.');
+  assert.equal(page(false, '/callback?code=0123456789abcdef0123&state=st'), 'Finish signing in in Plexiform. You can close this tab.');
+  assert.equal(page(false, '/callback?code=ab%20cd&state=st'), 'This sign-in link isn’t valid. Go back to Plexiform and try again.');
 });
 
 test('oauth: the listener binds 127.0.0.1 only; other addresses, other Hosts and non-GET are refused', async () => {
