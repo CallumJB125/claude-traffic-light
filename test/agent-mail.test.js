@@ -335,3 +335,15 @@ test('team_agent_mail answers a repeat within 10 s from memory, and a new ask cl
   assert.ok(reads() > before);
   assert.equal(m.asks.length, 1);
 });
+
+test('sync starts the poller once the identity appears after the preference was already on', async () => {
+  let id = null;
+  const mail = AgentMail.create({ identity: () => id, resolve: async () => null, enabled: () => true,
+    timers: { setInterval: () => ({}), clearInterval() {} }, fetch: async () => new Response(JSON.stringify({ messages: [] }), { status: 200 }) });
+  mail.sync();
+  assert.equal(mail.polling(), false, 'signed out: nothing runs');
+  id = { origin: 'https://hub.example', userId: 'me', token: () => 't' };
+  mail.sync();
+  assert.equal(mail.polling(), true);
+  mail.stop();
+});

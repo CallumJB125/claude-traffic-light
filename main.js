@@ -1530,6 +1530,7 @@ function getBuddy() {
     if (typeof buddyWin.onAccountChange === 'function') buddyWin.onAccountChange(() => {OverviewMain.invalidate();buddyWin.sendToPage('settings', 'account-changed');});
     if(typeof buddyWin.onSetupsIdentityChange==='function')buddyWin.onSetupsIdentityChange(()=>{OverviewMain.invalidate();SetupsLocal.invalidate();buddyWin.sendToPage('setups','setups:changed');});
     if(typeof buddyWin.onSetupsIdentityChange==='function')buddyWin.onSetupsIdentityChange(()=>syncInteractionHost());
+    if(typeof buddyWin.onActiveChange==='function')buddyWin.onActiveChange(()=>syncInteractionHost());
   }
   return buddyWin;
 }

@@ -199,7 +199,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       if (id === 'optimiser') optimiser.drop();
     },
   });
-  const setupIdentityListeners=new Set();let setupIdentityMarkers=[];
+  const setupIdentityListeners=new Set(),activeListeners=new Set();let setupIdentityMarkers=[],activeMarker=null;
   let overviewDocument=0,setupSourcesGeneration=0,setupLocalGeneration=0,setupCurrentSources=[],setupModalTicket=null;
   let selected = 'board';
   let hubStatus = { state: 'stopped' };
@@ -408,6 +408,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   }
 
   function pushState() {
+    if(activeMarker!==store.active().id){activeMarker=store.active().id;for(const listener of activeListeners)listener();}
     const markers=store.hubs().map(origin=>[origin,vault(origin).load()]);
     if(markers.length!==setupIdentityMarkers.length || markers.some((value,index)=>value[0]!==setupIdentityMarkers[index]?.[0]||value[1]!==setupIdentityMarkers[index]?.[1])) {
       setupSourcesGeneration++;setupCurrentSources=[];
@@ -1066,6 +1067,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
         return answer;
       }finally{if(setupModalTicket===ticket)setupModalTicket=null;}
     },
+    onActiveChange(listener) {if(typeof listener!=='function')return ()=>{};activeListeners.add(listener);return ()=>activeListeners.delete(listener);},
     onSetupsIdentityChange(listener) {if(typeof listener!=='function')return ()=>{};setupIdentityListeners.add(listener);return ()=>setupIdentityListeners.delete(listener);},
     openMyDayCard: handle => myDayBroker.open(handle),
     // Account client stays in main. The broker checks the sealed grant's

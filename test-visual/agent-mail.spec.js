@@ -112,7 +112,8 @@ test('agent mail: a held ask is sent only on Send, answered by the teammate, and
     // Confirm: a Tasks task, and only then "accept" on the hub (retried while the Tasks mock connects).
     await B.app.evaluate(() => { globalThis.__mail.response = 1; });
     await expect.poll(async () => {
-      await bMail.getByRole('button', { name: 'Accept…' }).click();
+      const accept = bMail.getByRole('button', { name: 'Accept…' });
+      if (await accept.count()) await accept.click({ timeout: 2000 }).catch(() => {});
       return bPage.locator('#mail-status').textContent();
     }, { timeout: 30000 }).toContain('Accepted. It is running in Tasks.');
     expect(state(ho.ask_id).handoff_state).toBe('accepted');
