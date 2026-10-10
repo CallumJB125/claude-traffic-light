@@ -170,6 +170,8 @@
       "tasks-preload.js",
       "recipes.js",
       "recipes.css",
+      "gallery-view.js",
+      "gallery-view.css",
       "recipes/**/*",
       "myday.html",
       "myday.js",

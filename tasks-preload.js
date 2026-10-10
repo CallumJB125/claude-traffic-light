@@ -26,6 +26,12 @@ contextBridge.exposeInMainWorld('recipesApi', {
   importFile: () => ipcRenderer.invoke('recipes:import'),
   pickFolder: () => ipcRenderer.invoke('tasks:pick-folder'),
 });
+// The community gallery: main fetches and verifies; the page names an entry id and its sha256.
+contextBridge.exposeInMainWorld('galleryApi', {
+  fetch: () => ipcRenderer.invoke('gallery:fetch'),
+  cached: () => ipcRenderer.invoke('gallery:cached'),
+  add: (id, sha) => ipcRenderer.invoke('gallery:add', String(id), String(sha)),
+});
 contextBridge.exposeInMainWorld('demoApi', {
   state: () => ipcRenderer.invoke('demo:state'),
   exit: () => ipcRenderer.invoke('demo:exit'),
