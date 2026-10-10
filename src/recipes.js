@@ -132,7 +132,32 @@ function create({ builtInDir, dataDir, home, fsApi = fs, now = Date.now }) {
   function deleteMine(id) {
     if (typeof id !== 'string' || !ID.test(id) || !mine().some((r) => r.id === id)) return { ok: false, error: 'That recipe is not one of yours.' };
     fsApi.rmSync(path.join(dataDir, `${id}.json`), { force: true });
+    fsApi.rmSync(path.join(dataDir, `${id}.origin.json`), { force: true });
     return { ok: true };
+  }
+
+  // A verified gallery entry (src/gallery.js) as one of the person's recipes,
+  // read-only whatever it says, with where it came from in <id>.origin.json
+  // beside it. readDir only loads <id>.json, so the sidecar is never a recipe.
+  function addFromGallery(entry) {
+    if (require('./gallery-schema.js').validateEntry(entry).length || entry.kind !== 'recipe') return { ok: false, error: 'That gallery recipe did not pass the checks (a home folder path, a secret or an unknown field), so it was not added.' };
+    if (mine().length >= LIMITS.mine) return { ok: false, error: `You can keep up to ${LIMITS.mine} recipes of your own.` };
+    const taken = new Set([...mine(), ...builtIn()].map((r) => r.id));
+    const nid = taken.has(entry.payload.id) ? freeId(entry.payload.id) : entry.payload.id;
+    if (!nid) return { ok: false, error: 'Could not name the copy. Delete an older copy first.' };
+    write({ ...entry.payload, id: nid, edits: false });
+    const origin = { source: 'gallery', gallery_id: entry.id, sha256: entry.sha256, author: entry.author, license: entry.license, added_at: new Date(now()).toISOString() };
+    const file = path.join(dataDir, `${nid}.origin.json`), tmp = `${file}.${process.pid}.tmp`;
+    fsApi.writeFileSync(tmp, `${JSON.stringify(origin, null, 2)}\n`, { mode: 0o600 });
+    fsApi.renameSync(tmp, file);
+    return { ok: true, id: nid, kind: 'recipe' };
+  }
+  function originOf(id) {
+    if (typeof id !== 'string' || !ID.test(id)) return null;
+    try {
+      const o = JSON.parse(fsApi.readFileSync(path.join(dataDir, `${id}.origin.json`), 'utf8'));
+      return o && o.source === 'gallery' && o.author && typeof o.author.name === 'string' ? o : null;
+    } catch { return null; }
   }
 
   // The share file: the personal setups envelope, one Claude Code command per recipe.
@@ -166,7 +191,7 @@ function create({ builtInDir, dataDir, home, fsApi = fs, now = Date.now }) {
     return added.length ? { ok: true, added } : { ok: false, error: `You can keep up to ${LIMITS.mine} recipes of your own.` };
   }
 
-  return { builtIn, mine, find, saveMine, deleteMine, exportText, importText };
+  return { builtIn, mine, find, saveMine, deleteMine, addFromGallery, originOf, exportText, importText };
 }
 
 const view = (r, own) => ({ id: r.id, title: r.title, what: r.what, tool: r.tool, toolLabel: TOOL_LABEL[r.tool], edits: r.edits, cost: r.cost, prompt: r.prompt, mine: own });
@@ -192,6 +217,10 @@ function register({ ipcMain, allowed, recipes, tasks, confirm, pickSave, pickOpe
     if (!dir) return { ok: false, error: 'Choose the folder it should work in first.' };
     if (r.edits && !inRepo(dir)) return { ok: false, error: 'This recipe changes files, so it runs in its own git worktree. Choose a folder inside a git repository.' };
     const tonight = when === 'tonight';
+    // Someone else's words can end up in your own recipes (a gallery add, an
+    // import), so a recipe of yours shows exactly what the AI will be told.
+    const own = recipes.mine().some((x) => x.id === r.id);
+    const origin = own ? recipes.originOf(r.id) : null;
     const yes = await confirm({
       title: r.title,
       action: tonight ? 'Run tonight' : 'Run now',
@@ -202,6 +231,7 @@ function register({ ipcMain, allowed, recipes, tasks, confirm, pickSave, pickOpe
         `AI: ${TOOL_LABEL[r.tool]}`,
         tonight ? 'Starts between 10 pm and 7 am while this Mac is awake.' : 'Starts now in the background.',
         `Cost: ${r.cost}`,
+        ...(own ? ['', ...(origin ? [`From the community gallery by ${String(origin.author.name).slice(0, 60)} (self-declared).`] : []), 'The full prompt it gives your AI:', '', r.prompt] : []),
       ].join('\n'),
     }, e);
     if (!yes) return { ok: false, cancelled: true, error: 'Cancelled. Nothing was started.' };
