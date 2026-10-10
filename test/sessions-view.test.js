@@ -269,3 +269,24 @@ test('a row with a ready handover offers Continue in…: the menu lists what mai
     assert.equal(fixture.document.querySelectorAll('[role="menu"]').length, 0);
   } finally { fixture.dom.window.close(); }
 });
+test('Hand off to another AI… stays open and lists the tools, and a pick sends the key and tool id to the hand-off', async () => {
+  const calls = [];
+  const fixture = setup({
+    state: async () => state({ sessions: [{ provider: 'Codex', project: 'p', status: 'Working', freshness: 'recent', age_ms: 1000, handover: { key: 'codex-abc', updated: 'Handover: updated just now', ready: true, canWrite: true } }] }),
+    continueMenu: async () => ({ ok: true, choices: [{ id: 'gemini', label: 'Gemini CLI', mode: 'copy' }, { id: 'copy', label: 'Copy as prompt', mode: 'copy' }] }),
+    continueIn: async () => { throw new Error('not a hand-off'); },
+    continueHandoff: async (key, to) => { calls.push([key, to]); return { ok: false, cancelled: true }; },
+  });
+  try {
+    await tick();
+    [...fixture.document.querySelectorAll('#content button')].find(b => b.textContent === 'Continue in…').click(); await tick(); await tick();
+    const more = [...fixture.document.querySelectorAll('[role="menuitem"]')].find(i => i.textContent.startsWith('Hand off'));
+    more.dispatchEvent(new fixture.dom.window.MouseEvent('click', { bubbles: true })); await tick();
+    const items = [...fixture.document.querySelectorAll('[role="menuitem"]')];
+    assert.deepEqual(items.map(i => i.querySelector('.continue-label').textContent), ['Gemini CLI']);
+    items[0].dispatchEvent(new fixture.dom.window.MouseEvent('click', { bubbles: true })); await tick(); await tick();
+    assert.deepEqual(calls, [['codex-abc', 'gemini']]);
+    assert.match(fixture.document.getElementById('content').textContent, /Cancelled\. Nothing was shared\./);
+    assert.equal(fixture.document.querySelectorAll('[role="menu"]').length, 0);
+  } finally { fixture.dom.window.close(); }
+});

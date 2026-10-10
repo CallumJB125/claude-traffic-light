@@ -5,7 +5,8 @@
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
   let openMenu = null;
   const close = () => { if (!openMenu) return; const m = openMenu; openMenu = null; m.box.remove(); m.trigger.setAttribute('aria-expanded', 'false'); m.onClose(); };
-  document.addEventListener('click', (e) => { if (openMenu && !openMenu.wrap.contains(e.target)) close(); });
+  // composedPath, not contains: the hand-off item replaces itself with the tool list mid-click.
+  document.addEventListener('click', (e) => { if (openMenu && !e.composedPath().includes(openMenu.wrap)) close(); });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && openMenu) { const t = openMenu.trigger; close(); t.focus(); } });
 
   // menu() → {ok, choices:[{id,label,mode}]}; pick(choice) runs it; handoff(choice) (optional) adds the preview-and-confirm hand-off.
