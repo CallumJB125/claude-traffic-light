@@ -213,3 +213,20 @@ test('Usage Limits panel lists each provider and says when a time is unknown', a
   assert.match(fs.readFileSync(path.join(ROOT, 'lights-preload.js'), 'utf8'), /limits: \(\) => ipcRenderer\.invoke\('usage:limits'\)/);
   dom.window.close();
 });
+
+test('agent mail: one Needs-you card counts held asks and teammates\' questions; Open shows it, nothing else acts', async () => {
+  let pending = null;
+  const opened = [];
+  const alerts = HomeAlerts.createHomeAlerts({ sessions: () => [], now: () => NOW, mail: () => pending, openMail: async () => { opened.push(1); } });
+  assert.deepEqual(alerts.snapshot().mail, []);
+  assert.equal((await alerts.act('mail', 'open', 'agent-mail')).ok, false, 'no card, nothing to open');
+  pending = { held: 2, inbox: 1 };
+  assert.deepEqual(alerts.snapshot().mail, [{ handle: 'agent-mail', title: 'Agent mail: 3 waiting', meta: '2 from your AI waiting for your OK · 1 from teammates\' AIs' }]);
+  assert.equal((await alerts.act('mail', 'dismiss', 'agent-mail')).ok, false);
+  assert.equal((await alerts.act('mail', 'open', 'other')).ok, false);
+  assert.deepEqual(await alerts.act('mail', 'open', 'agent-mail'), { ok: true });
+  assert.equal(opened.length, 1);
+  pending = { held: 0, inbox: 1 };
+  assert.equal(alerts.snapshot().mail[0].meta, '1 from teammates\' AIs');
+  assert.deepEqual(HomeAlerts.createHomeAlerts({ mail: () => { throw new Error('x'); } }).snapshot().mail, []);
+});

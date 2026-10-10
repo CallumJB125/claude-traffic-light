@@ -220,3 +220,49 @@ test('register: every mail channel is refused outside the sessions page', async 
   for (const fn of handlers.values()) assert.deepEqual(await fn({ page: 'tasks' }), { ok: false, error: 'Not allowed.' });
   assert.deepEqual(await handlers.get('mail:list')({ page: 'sessions' }), { ok: true });
 });
+
+test('agent-mail-view: held text is editable and sent with its digest; questions and handoffs render as text; the chosen folder survives a refresh', async () => {
+  const { JSDOM } = require('jsdom');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'sessions.html'), 'utf8').replace(/<script[^>]*><\/script>/g, '');
+  const dom = new JSDOM(html, { runScripts: 'outside-only', pretendToBeVisual: true });
+  const w = dom.window;
+  const calls = [];
+  const state = { ok: true, signedIn: true, hub: 'plexiform.dev', polling: true,
+    held: [{ id: 'h1', kind: 'message', to: 'Ana', body: 'Which queue?', digest: 'd1', via: { provider: 'claude', label: 'shop-api', label_source: 'self_declared' } }],
+    inbox: [{ id: 'q1', kind: 'message', from: 'Ben', body: '<img src=x onerror=alert(1)> what?', via: null }, { id: 'o1', kind: 'handoff', from: 'Cy', body: '# Handoff\nDo it', handoff: { state: 'offered', artifacts: ['src/a.js'] } }] };
+  w.sessionsApi = {
+    mailList: async () => state, continueMenu: async () => ({ choices: [{ id: 'claude', label: 'Claude Code', mode: 'launch' }, { id: 'copy', label: 'Copy as prompt', mode: 'copy' }] }),
+    mailRelease: async (...a) => { calls.push(['release', ...a]); return { ok: true }; }, mailOpen: async (id) => { calls.push(['open', id]); return { ok: true }; },
+    mailAnswer: async (...a) => { calls.push(['answer', ...a]); return { ok: true }; }, mailDecline: async (...a) => { calls.push(['decline', ...a]); return { ok: true }; },
+    mailAskAi: async (...a) => { calls.push(['ask', ...a]); return { ok: true, mode: 'launched', id: 'L1' }; },
+    mailPickFolder: async () => ({ ok: true, handle: 'fh', label: '~/shop' }), mailAccept: async (...a) => { calls.push(['accept', ...a]); return { ok: true }; },
+    onContinue: (cb) => { w.__continue = cb; }, onMail: () => {},
+  };
+  w.eval(fs.readFileSync(path.join(__dirname, '..', 'agent-mail-view.js'), 'utf8'));
+  const tick = () => new Promise((r) => setTimeout(r, 20));
+  await tick();
+  const sec = w.document.getElementById('mail');
+  assert.equal(sec.hidden, false);
+  assert.equal(sec.querySelector('img'), null, 'teammate text is never parsed as HTML');
+  assert.match(sec.textContent, /Your AI wants to ask Ana/);
+  assert.match(sec.textContent, /Through plexiform\.dev · from “shop-api” \(self-declared\)/);
+  assert.match(sec.textContent, /Ben's AI asked you/);
+  assert.match(sec.textContent, /It can’t see your code or files/);
+  assert.match(sec.textContent, /Cy's AI offered you work/);
+  assert.deepEqual(calls.filter((c) => c[0] === 'open').map((c) => c[1]), ['q1', 'o1']);
+  const btn = (label) => [...sec.querySelectorAll('button')].find((b) => b.textContent === label);
+  const held = sec.querySelector('textarea');
+  held.value = 'Which queue? (edited)';
+  btn('Send').click(); await tick();
+  assert.deepEqual(calls.find((c) => c[0] === 'release'), ['release', 'h1', 'send', 'd1', 'Which queue? (edited)']);
+  btn('Ask my AI').click(); await tick();
+  assert.deepEqual(calls.find((c) => c[0] === 'ask'), ['ask', 'q1', 'claude']);
+  w.__continue({ id: 'L1', kind: 'message', text: 'Use QUEUE_URL.' });
+  assert.equal(sec.querySelector('textarea[data-mail="q1"]').value, 'Use QUEUE_URL.');
+  btn('Choose a folder').click(); await tick();
+  btn('Accept…').click(); await tick();
+  assert.deepEqual(calls.find((c) => c[0] === 'accept'), ['accept', 'o1', 'fh', 'auto']);
+  state.inbox = []; state.held = []; state.polling = false;
+  w.document.dispatchEvent(new w.Event('visibilitychange')); await tick();
+  assert.equal(sec.hidden, true, 'nothing waiting and the inbox off: the panel is hidden');
+});

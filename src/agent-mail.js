@@ -77,6 +77,7 @@ function create({ identity, resolve, fetch, home = null, enabled = () => false, 
   async function hold(t, body, extra) {
     const r = await msg(t.id, 'POST', '/messages', { request_id: crypto.randomUUID(), to: { user_id: t.member.user_id, org_id: t.org }, body, hold: true, ...extra });
     if (r.status !== 200 || !r.body?.message) return { available: true, sent: false, reason: 'refused', message: r.body?.error?.message || 'The team hub refused that.' };
+    heldIds.add(r.body.message.id);
     onChange();
     notify({ kind: 'held', id: r.body.message.id, to: t.member.display_name });
     return { available: true, ask_id: r.body.message.id, status: 'waiting_for_your_ok', to: t.member.display_name, note: NOTE };
@@ -136,6 +137,7 @@ function create({ identity, resolve, fetch, home = null, enabled = () => false, 
 
   // ── the person's side (IPC from the sessions page) ──────────────────────────
   let inbox = [];          // agent-authored messages to me, open
+  let heldIds = new Set(); // my held ones, as last seen (Home's count)
   let seen = new Set();    // ids already notified
   let timer = null, key = null, running = false;
   const keyOf = (id) => (id ? `${id.origin}\n${id.userId}` : null);
@@ -147,13 +149,15 @@ function create({ identity, resolve, fetch, home = null, enabled = () => false, 
     const id = identity();
     if (!id) return [];
     const r = await msg(id, 'GET', '/messages?box=held&limit=50');
-    return r.status === 200 && Array.isArray(r.body?.messages) ? r.body.messages.map(view) : [];
+    if (r.status !== 200 || !Array.isArray(r.body?.messages)) return [];
+    heldIds = new Set(r.body.messages.map((m) => m.id));
+    return r.body.messages.map(view);
   }
 
   async function list() {
     const id = identity();
     if (!id) return { ok: true, signedIn: false, held: [], inbox: [], polling: false };
-    return { ok: true, signedIn: true, held: await held(), inbox: inbox.map(view), polling: !!timer };
+    return { ok: true, signedIn: true, hub: origin(id.origin) ? new URL(id.origin).host : null, held: await held(), inbox: inbox.map(view), polling: !!timer };
   }
 
   async function release(mid, decision, shownDigest, edited) {
@@ -169,6 +173,7 @@ function create({ identity, resolve, fetch, home = null, enabled = () => false, 
       body = clean(edited, LIMITS.handoffBody);
     }
     const r = await msg(id, 'POST', `/messages/${encodeURIComponent(mid)}/release`, { decision, ...(body !== undefined ? { body } : {}) });
+    heldIds.delete(mid);
     onChange();
     if (r.status !== 200) return failed(r);
     return decision === 'discard' ? { ok: true, discarded: true } : { ok: true, state: r.body.message.state, reason: r.body.message.reason ?? null };
@@ -284,9 +289,10 @@ function create({ identity, resolve, fetch, home = null, enabled = () => false, 
     start(id);
   }
   const poke = () => { if (running) poll().catch(() => {}); };
-  const counts = async () => ({ held: (await held()).length, inbox: inbox.length });
+  // Home's "Needs you": what is known now, without asking the hub.
+  const pending = () => (identity() ? { held: heldIds.size, inbox: inbox.length } : { held: 0, inbox: 0 });
 
-  return { OPS, op, list, release, open, answer, decline, askAi, accept, sync, stop, poke, counts, polling: () => running, held, LIMITS };
+  return { OPS, op, list, release, open, answer, decline, askAi, accept, sync, stop, poke, pending, polling: () => running, held, LIMITS };
 }
 
 // Sessions page only. deps: tasks(), confirm(opts, e), pickFolder(e) → path|null,

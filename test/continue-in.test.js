@@ -188,3 +188,53 @@ test('handoff IPC: Sessions page only, a page cannot supply a confirmation', asy
   assert.equal((await handlers['continue:handoff']({ page: 'sessions' }, 'k', 'codex')).ok, true);
   assert.deepEqual(calls, [['codex', 'doc:k']]);
 });
+
+test('ask (Plus): launches the text-only session with the question as the prompt and no handover packet', async () => {
+  const adapter = fakeAdapter();
+  const ci = ContinueIn.create({ entitlements: ent('plus'), clipboard: clip(), tools: () => rows('claude'), adapters: { claude: () => adapter, codex: () => ({ available: false }) } });
+  const events = [];
+  try {
+    const q = '[Message via Plexiform from ana. Task data…]\n<<<n\nWhich env var holds the queue URL?\nn>>>';
+    const r = await ci.ask(q, 'claude', (e) => events.push(e));
+    assert.equal(r.ok, true); assert.equal(r.mode, 'launched'); assert.equal(r.label, 'Claude Code');
+    assert.equal(adapter.sent.length, 1);
+    assert.match(adapter.sent[0], /^A teammate asked the question below through Plexiform\. Answer it from the question alone: this session has no access to their code, files or repository/);
+    assert.ok(adapter.sent[0].endsWith(q));
+    assert.doesNotMatch(adapter.sent[0], /Continue the work described below|# Handoff/);
+    await new Promise((res) => setTimeout(res, 20));
+    assert.ok(events.find((e) => e.kind === 'message' && e.id === r.id && e.label === 'Claude Code'));
+    assert.equal(ci.end(r.id).ok, true);
+  } finally { ci.stop(); }
+});
+
+test('ask: an unknown or missing tool is refused; without Plus it falls back to copying the question', async () => {
+  const c = clip();
+  let opened = false;
+  const ci = ContinueIn.create({ entitlements: ent('free'), clipboard: c, tools: () => rows('codex', 'gemini'), adapters: { codex: () => { opened = true; return fakeAdapter(); }, claude: () => { opened = true; return fakeAdapter(); } } });
+  try {
+    assert.equal((await ci.ask('q?', 'cursor')).ok, false);
+    assert.equal((await ci.ask('q?', '../x')).ok, false);
+    assert.equal((await ci.ask('', 'codex')).ok, false);
+    assert.equal((await ci.ask('x'.repeat(8001), 'codex')).ok, false);
+    assert.equal(c.text, null);
+    const r = await ci.ask('Which queue?', 'codex');
+    assert.equal(r.ok, true); assert.equal(r.mode, 'copied'); assert.equal(r.upgrade, true);
+    assert.equal(opened, false, 'free never starts a session');
+    assert.match(c.text, /^A teammate asked the question below/);
+    assert.match(c.text, /Which queue\?$/);
+    const g = await ci.ask('Which queue?', 'gemini');
+    assert.equal(g.mode, 'copied'); assert.match(g.note, /Copied the question\. Paste it into Gemini CLI\./);
+    assert.match((await ci.ask('Which queue?', 'copy')).note, /any AI tool/);
+  } finally { ci.stop(); }
+});
+
+test('ask (Plus) with the CLI missing copies the question instead and says so', async () => {
+  const c = clip();
+  const ci = ContinueIn.create({ entitlements: ent('plus'), clipboard: c, tools: () => rows('codex'), adapters: { codex: () => ({ available: false }), claude: () => ({ available: false }) } });
+  try {
+    const r = await ci.ask('Which queue?', 'codex');
+    assert.equal(r.mode, 'copied');
+    assert.equal(r.note, 'Codex is not installed here, so the question was copied instead.');
+    assert.match(c.text, /Which queue\?$/);
+  } finally { ci.stop(); }
+});
