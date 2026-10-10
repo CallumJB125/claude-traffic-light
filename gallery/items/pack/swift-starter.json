@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "author": {
+    "name": "Plexiform",
+    "github": "CallumJB125"
+  },
+  "license": "CC0-1.0",
+  "added": "2026-10-10",
+  "updated": "2026-10-10",
+  "kind": "pack",
+  "id": "swift-starter",
+  "title": "Swift starter pack",
+  "summary": "Read-only recipes for a Swift app: explain it, review a PR, a security pass, a weekly report.",
+  "tags": [
+    "starter"
+  ],
+  "stacks": [
+    "swift"
+  ],
+  "tools": [],
+  "payload": {
+    "members": [
+      "recipe/explain-repo",
+      "recipe/review-open-pr",
+      "recipe/security-check",
+      "recipe/weekly-report",
+      "character/pebble"
+    ],
+    "note": "Each member is added on its own from the app."
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "author": {
+    "name": "Plexiform",
+    "github": "CallumJB125"
+  },
+  "license": "CC0-1.0",
+  "added": "2026-10-10",
+  "updated": "2026-10-10",
+  "kind": "recipe",
+  "id": "release-notes",
+  "title": "Write release notes from commits",
+  "summary": "Turns the commits since the last tag into release notes people can read: new features, fixes and anything that needs action when upgrading.",
+  "tags": [
+    "release",
+    "git"
+  ],
+  "stacks": [
+    "any"
+  ],
+  "tools": [
+    "auto"
+  ],
+  "payload": {
+    "id": "release-notes",
+    "title": "Write release notes from commits",
+    "what": "Turns the commits since the last tag into release notes people can read: new features, fixes and anything that needs action when upgrading.",
+    "prompt": "Write release notes for the changes since the last release.\n\n1. Find the latest tag with `git describe --tags --abbrev=0` (if there is none, use the first commit) and list commits since then with `git log <tag>..HEAD --no-merges`.\n2. Sort them into: New, Improved, Fixed, and Breaking changes or action needed. Leave out internal chores, test-only and CI-only changes.\n3. Write each item as one sentence a user would understand, not the commit message.\n4. Suggest the next version number (semantic versioning) and say why.\n\nOutput Markdown only. Do not change any files or create tags.",
+    "tool": "auto",
+    "edits": false,
+    "cost": "Low: reads commit messages and a few diffs."
+  }
+}

@@ -29,7 +29,8 @@
     "voice-helper": "node scripts/build-voice-helper.js",
     "setups-helper": "sh scripts/build-setups-helper.sh",
     "test:native-darwin": "npm run setups-helper && PLEXIFORM_TEST_HELPER=$PWD/native/setups-build/buddy-setups node --test --test-concurrency=1 test/native-darwin/*.test.js",
-    "build:site": "node site/build.js"
+    "build:site": "node site/build.js",
+    "gallery:check": "node site/gallery-build.js --check"
   },
   "author": "",
   "license": "MIT",
@@ -42,6 +43,7 @@
       "scripts/report-agent-status.js",
       "build/codex-plugins/**/*",
       "build/codex-plugin-key*.pub.pem",
+      "build/gallery-key*.pub.pem",
       "!src/update-stub.js",
       "!src/team-hub-fake.js",
       "!node_modules/**/*.{ts,map,d.cts,d.mts,md}",

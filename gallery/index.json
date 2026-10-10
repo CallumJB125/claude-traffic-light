@@ -1,0 +1,447 @@
+{
+  "entries": [
+    {
+      "added": "2026-10-10",
+      "author": {
+        "github": "CallumJB125",
+        "name": "Plexiform"
+      },
+      "id": "character/pebble",
+      "kind": "character",
+      "license": "CC0-1.0",
+      "payload": {
+        "anchors": {
+          "eyes": {
+            "left": {
+              "x": 27,
+              "y": 48
+            },
+            "right": {
+              "x": 37,
+              "y": 48
+            }
+          },
+          "faceBox": {
+            "h": 17,
+            "w": 20,
+            "x": 22,
+            "y": 40
+          },
+          "ground": 68,
+          "hands": {
+            "left": {
+              "x": 8.5,
+              "y": 55
+            },
+            "right": {
+              "x": 53,
+              "y": 57
+            }
+          },
+          "hatLine": 38,
+          "head": {
+            "h": 20,
+            "w": 20,
+            "x": 22,
+            "y": 38
+          },
+          "mouth": {
+            "x": 32,
+            "y": 54
+          },
+          "skinParts": []
+        },
+        "contract": 1,
+        "id": "pebble",
+        "legs": false,
+        "name": "Pebble",
+        "sprite": {
+          "body": "<rect x=\"24\" y=\"38\" width=\"14\" height=\"2\" fill=\"#ecb59c\" /><rect x=\"38\" y=\"38\" width=\"2\" height=\"2\" fill=\"#a16244\" /><rect x=\"22\" y=\"40\" width=\"2\" height=\"2\" fill=\"#ecb59c\" /><rect x=\"24\" y=\"40\" width=\"16\" height=\"2\" fill=\"#e0885f\" /><rect x=\"40\" y=\"40\" width=\"2\" height=\"2\" fill=\"#a16244\" /><rect x=\"20\" y=\"42\" width=\"2\" height=\"2\" fill=\"#ecb59c\" /><rect x=\"22\" y=\"42\" width=\"20\" height=\"2\" fill=\"#e0885f\" /><rect x=\"42\" y=\"42\" width=\"2\" height=\"2\" fill=\"#a16244\" /><rect x=\"18\" y=\"44\" width=\"2\" height=\"2\" fill=\"#ecb59c\" /><rect x=\"20\" y=\"44\" width=\"24\" height=\"2\" fill=\"#e0885f\" /><rect x=\"44\" y=\"44\" width=\"2\" height=\"2\" fill=\"#a16244\" /><rect x=\"16\" y=\"46\" width=\"2\" height=\"2\" fill=\"#ecb59c\" /><rect x=\"18\" y=\"46\" width=\"28\" height=\"2\" fill=\"#e0885f\" /><rect x=\"46\" y=\"46\" width=\"2\" height=\"2\" fill=\"#a16244\" /><rect x=\"16\" y=\"48\" width=\"2\" height=\"2\" fill=\"#ecb59c\" /><rect x=\"18\" y=\"48\" width=\"28\" height=\"2\" fill=\"#e0885f\" /><rect x=\"46\" y=\"48\" width=\"2\" height=\"2\" fill=\"#a16244\" /><rect x=\"16\" y=\"50\" width=\"2\" height=\"2\" fill=\"#ecb59c\" /><rect x=\"18\" y=\"50\" width=\"28\" height=\"2\" fill=\"#e0885f\" /><rect x=\"46\" y=\"50\" width=\"2\" height=\"2\" fill=\"#a16244\" /><rect x=\"14\" y=\"52\" width=\"2\" height=\"2\" fill=\"#ecb59c\" /><rect x=\"16\" y=\"52\" width=\"32\" height=\"2\" fill=\"#e0885f\" /><rect x=\"48\" y=\"52\" width=\"2\" height=\"2\" fill=\"#a16244\" /><rect x=\"8\" y=\"54\" width=\"6\" height=\"2\" fill=\"#ecb59c\" /><rect x=\"14\" y=\"54\" width=\"36\" height=\"2\" fill=\"#e0885f\" /><rect x=\"50\" y=\"54\" width=\"2\" height=\"2\" fill=\"#ecb59c\" /><rect x=\"52\" y=\"54\" width=\"2\" height=\"2\" fill=\"#a16244\" /><rect x=\"8\" y=\"56\" width=\"6\" height=\"2\" fill=\"#a16244\" /><rect x=\"14\" y=\"56\" width=\"36\" height=\"2\" fill=\"#e0885f\" /><rect x=\"50\" y=\"56\" width=\"4\" height=\"2\" fill=\"#a16244\" /><rect x=\"14\" y=\"58\" width=\"2\" height=\"2\" fill=\"#ecb59c\" /><rect x=\"16\" y=\"58\" width=\"10\" height=\"2\" fill=\"#e0885f\" /><rect x=\"26\" y=\"58\" width=\"12\" height=\"2\" fill=\"#f3d2c2\" /><rect x=\"38\" y=\"58\" width=\"10\" height=\"2\" fill=\"#e0885f\" /><rect x=\"48\" y=\"58\" width=\"2\" height=\"2\" fill=\"#a16244\" /><rect x=\"14\" y=\"60\" width=\"2\" height=\"2\" fill=\"#ecb59c\" /><rect x=\"16\" y=\"60\" width=\"10\" height=\"2\" fill=\"#e0885f\" /><rect x=\"26\" y=\"60\" width=\"12\" height=\"2\" fill=\"#f3d2c2\" /><rect x=\"38\" y=\"60\" width=\"10\" height=\"2\" fill=\"#e0885f\" /><rect x=\"48\" y=\"60\" width=\"2\" height=\"2\" fill=\"#a16244\" /><rect x=\"14\" y=\"62\" width=\"2\" height=\"2\" fill=\"#ecb59c\" /><rect x=\"16\" y=\"62\" width=\"10\" height=\"2\" fill=\"#e0885f\" /><rect x=\"26\" y=\"62\" width=\"12\" height=\"2\" fill=\"#f3d2c2\" /><rect x=\"38\" y=\"62\" width=\"10\" height=\"2\" fill=\"#e0885f\" /><rect x=\"48\" y=\"62\" width=\"2\" height=\"2\" fill=\"#a16244\" /><rect x=\"14\" y=\"64\" width=\"2\" height=\"2\" fill=\"#ecb59c\" /><rect x=\"16\" y=\"64\" width=\"32\" height=\"2\" fill=\"#e0885f\" /><rect x=\"48\" y=\"64\" width=\"2\" height=\"2\" fill=\"#a16244\" /><rect x=\"14\" y=\"66\" width=\"36\" height=\"2\" fill=\"#a16244\" />"
+        }
+      },
+      "sha256": "4cee09385e239be7e68f047b085bed27d1c5cab8fd581b88bad954c44dfabdf2",
+      "slug": "pebble",
+      "stacks": [
+        "any"
+      ],
+      "summary": "A small round widget character drawn with the Hatch templates.",
+      "tags": [
+        "character"
+      ],
+      "title": "Pebble",
+      "tools": [],
+      "updated": "2026-10-10"
+    },
+    {
+      "added": "2026-10-10",
+      "author": {
+        "github": "CallumJB125",
+        "name": "Plexiform"
+      },
+      "id": "pack/nextjs-starter",
+      "kind": "pack",
+      "license": "CC0-1.0",
+      "payload": {
+        "members": [
+          "recipe/explain-repo",
+          "recipe/review-open-pr",
+          "recipe/security-check",
+          "recipe/triage-failing-ci",
+          "character/pebble"
+        ],
+        "note": "Each member is added on its own from the app."
+      },
+      "sha256": "ec7afcf50d41a5c6b3ff6cff1ce6685177827342562466cf031c16c227119147",
+      "slug": "nextjs-starter",
+      "stacks": [
+        "nextjs"
+      ],
+      "summary": "Read-only recipes for a Next.js app: explain it, review a PR, check security, triage CI.",
+      "tags": [
+        "starter"
+      ],
+      "title": "Next.js starter pack",
+      "tools": [],
+      "updated": "2026-10-10"
+    },
+    {
+      "added": "2026-10-10",
+      "author": {
+        "github": "CallumJB125",
+        "name": "Plexiform"
+      },
+      "id": "pack/python-starter",
+      "kind": "pack",
+      "license": "CC0-1.0",
+      "payload": {
+        "members": [
+          "recipe/explain-repo",
+          "recipe/todo-roundup",
+          "recipe/triage-failing-ci",
+          "recipe/release-notes",
+          "character/pebble"
+        ],
+        "note": "Each member is added on its own from the app."
+      },
+      "sha256": "347f0aa3b600dd4960ba6e18edcf23418d8a0ae9a727ff9e87f7a1cd4dfd9436",
+      "slug": "python-starter",
+      "stacks": [
+        "python"
+      ],
+      "summary": "Read-only recipes for a Python project: explain it, find TODOs, triage CI, write release notes.",
+      "tags": [
+        "starter"
+      ],
+      "title": "Python starter pack",
+      "tools": [],
+      "updated": "2026-10-10"
+    },
+    {
+      "added": "2026-10-10",
+      "author": {
+        "github": "CallumJB125",
+        "name": "Plexiform"
+      },
+      "id": "pack/swift-starter",
+      "kind": "pack",
+      "license": "CC0-1.0",
+      "payload": {
+        "members": [
+          "recipe/explain-repo",
+          "recipe/review-open-pr",
+          "recipe/security-check",
+          "recipe/weekly-report",
+          "character/pebble"
+        ],
+        "note": "Each member is added on its own from the app."
+      },
+      "sha256": "616cadceb2b0bd11b0c2ee44392a5ab47c77e2c5364e260badfff0a2b9eb5ef2",
+      "slug": "swift-starter",
+      "stacks": [
+        "swift"
+      ],
+      "summary": "Read-only recipes for a Swift app: explain it, review a PR, a security pass, a weekly report.",
+      "tags": [
+        "starter"
+      ],
+      "title": "Swift starter pack",
+      "tools": [],
+      "updated": "2026-10-10"
+    },
+    {
+      "added": "2026-10-10",
+      "author": {
+        "github": "CallumJB125",
+        "name": "Plexiform"
+      },
+      "id": "recipe/explain-repo",
+      "kind": "recipe",
+      "license": "CC0-1.0",
+      "payload": {
+        "cost": "Medium: reads a broad sample of the codebase once.",
+        "edits": false,
+        "id": "explain-repo",
+        "prompt": "Explain this repository to a new teammate on their first day.\n\nCover, in this order:\n1. What it does and who uses it, in two or three sentences.\n2. How to install, run and test it locally (exact commands, taken from the repo, not guessed).\n3. The layout: the five to ten most important folders and files, one line each.\n4. How a typical request or action flows through the code, naming the real files and functions.\n5. Conventions worth knowing (style, naming, error handling, how tests are written).\n6. Three good first tasks for someone new.\n\nUse plain language and keep it under 800 words. Do not change any files.",
+        "title": "Explain this repo to a new teammate",
+        "tool": "auto",
+        "what": "Reads the codebase and explains it the way you would on someone's first day: what it does, how it is laid out, how to run it and where to start."
+      },
+      "sha256": "cca4c8b898ffc4ae38065070ed004108cb8a8c29970ac9b40b5deafbeb0bab0a",
+      "slug": "explain-repo",
+      "stacks": [
+        "any"
+      ],
+      "summary": "Reads the codebase and explains it the way you would on someone's first day: what it does, how it is laid out, how to run it and where to start.",
+      "tags": [
+        "onboarding",
+        "docs"
+      ],
+      "title": "Explain this repo to a new teammate",
+      "tools": [
+        "auto"
+      ],
+      "updated": "2026-10-10"
+    },
+    {
+      "added": "2026-10-10",
+      "author": {
+        "github": "CallumJB125",
+        "name": "Plexiform"
+      },
+      "id": "recipe/release-notes",
+      "kind": "recipe",
+      "license": "CC0-1.0",
+      "payload": {
+        "cost": "Low: reads commit messages and a few diffs.",
+        "edits": false,
+        "id": "release-notes",
+        "prompt": "Write release notes for the changes since the last release.\n\n1. Find the latest tag with `git describe --tags --abbrev=0` (if there is none, use the first commit) and list commits since then with `git log <tag>..HEAD --no-merges`.\n2. Sort them into: New, Improved, Fixed, and Breaking changes or action needed. Leave out internal chores, test-only and CI-only changes.\n3. Write each item as one sentence a user would understand, not the commit message.\n4. Suggest the next version number (semantic versioning) and say why.\n\nOutput Markdown only. Do not change any files or create tags.",
+        "title": "Write release notes from commits",
+        "tool": "auto",
+        "what": "Turns the commits since the last tag into release notes people can read: new features, fixes and anything that needs action when upgrading."
+      },
+      "sha256": "e22d2de18dc864485ce184767cd7a043ce4db218a8e5e5e68a5d174ec6c692d4",
+      "slug": "release-notes",
+      "stacks": [
+        "any"
+      ],
+      "summary": "Turns the commits since the last tag into release notes people can read: new features, fixes and anything that needs action when upgrading.",
+      "tags": [
+        "release",
+        "git"
+      ],
+      "title": "Write release notes from commits",
+      "tools": [
+        "auto"
+      ],
+      "updated": "2026-10-10"
+    },
+    {
+      "added": "2026-10-10",
+      "author": {
+        "github": "CallumJB125",
+        "name": "Plexiform"
+      },
+      "id": "recipe/review-open-pr",
+      "kind": "recipe",
+      "license": "CC0-1.0",
+      "payload": {
+        "cost": "Medium: reads the diff and nearby files. Larger PRs cost more.",
+        "edits": false,
+        "id": "review-open-pr",
+        "prompt": "Review the open pull request for the current branch.\n\n1. Find it with `gh pr view --json number,title,body,baseRefName` if the GitHub CLI is available; otherwise compare against the default branch with `git diff $(git merge-base HEAD origin/HEAD)...HEAD`.\n2. Read the whole diff and the files around each change.\n3. Report, most important first: real bugs, missing or weak tests, security or data-loss risks, confusing names or logic. For each, give the file and line and a concrete suggestion.\n4. End with a one-line verdict: ready to merge, merge after small fixes, or needs more work.\n\nDo not change any files and do not post anything to GitHub.",
+        "title": "Review my open PR",
+        "tool": "claude",
+        "what": "Finds the pull request for the current branch and reviews the diff for bugs, missing tests and unclear code, like a careful teammate would."
+      },
+      "sha256": "cb12da9173a2846f9db87b4ce8a957d49b38298ac96737aff67ec1fe4c11e173",
+      "slug": "review-open-pr",
+      "stacks": [
+        "any"
+      ],
+      "summary": "Finds the pull request for the current branch and reviews the diff for bugs, missing tests and unclear code, like a careful teammate would.",
+      "tags": [
+        "review",
+        "pull-request"
+      ],
+      "title": "Review my open PR",
+      "tools": [
+        "claude"
+      ],
+      "updated": "2026-10-10"
+    },
+    {
+      "added": "2026-10-10",
+      "author": {
+        "github": "CallumJB125",
+        "name": "Plexiform"
+      },
+      "id": "recipe/security-check",
+      "kind": "recipe",
+      "license": "CC0-1.0",
+      "payload": {
+        "cost": "Medium: reads recent history as well as the current code.",
+        "edits": false,
+        "id": "security-check",
+        "prompt": "Check this repository for leaked secrets and risky code.\n\n1. Search tracked files for anything that looks like a leaked credential, such as API keys, tokens, private keys, passwords in config and committed .env files.\n2. Search the last 200 commits too (`git log -p -200`), because a deleted secret is still in history.\n3. Look for common risky patterns: string-built SQL, shell commands built from input, disabled TLS checks, eval of untrusted data, overly broad file permissions.\n4. Report each finding with file, line or commit, how serious it is, and what to do (rotate the key, move it to a secret store, fix the code).\n\nNever print a full credential. Show only its first four characters. Do not change any files.",
+        "title": "Check for leaked secrets and risky code",
+        "tool": "claude",
+        "what": "Scans the repo and its recent history for committed secrets and common risky patterns, and tells you what to rotate or fix first."
+      },
+      "sha256": "20c19ad64e52360e6729024978661c7001d01e961f47020ed65408a563f63cdd",
+      "slug": "security-check",
+      "stacks": [
+        "any"
+      ],
+      "summary": "Scans the repo and its recent history for committed secrets and common risky patterns, and tells you what to rotate or fix first.",
+      "tags": [
+        "security",
+        "review"
+      ],
+      "title": "Check for leaked secrets and risky code",
+      "tools": [
+        "claude"
+      ],
+      "updated": "2026-10-10"
+    },
+    {
+      "added": "2026-10-10",
+      "author": {
+        "github": "CallumJB125",
+        "name": "Plexiform"
+      },
+      "id": "recipe/summarise-todays-ai-work",
+      "kind": "recipe",
+      "license": "CC0-1.0",
+      "payload": {
+        "cost": "Low: reads git history and status only.",
+        "edits": false,
+        "id": "summarise-todays-ai-work",
+        "prompt": "Summarise today's AI-assisted work in this repository.\n\n1. List today's commits on every branch with `git log --all --since=midnight --no-merges --stat`, including task branches such as buddy/*.\n2. List worktrees with `git worktree list` and note uncommitted changes in each (`git -C <worktree> status --short`).\n3. Write an end-of-day summary: what was finished, what is in progress and where, what is waiting for review or a merge, and anything that looks abandoned.\n4. Finish with the three most useful things to do first tomorrow.\n\nKeep it under 250 words. Do not change any files.",
+        "title": "Summarise today's AI work",
+        "tool": "auto",
+        "what": "Collects what your AI sessions changed today across branches and worktrees in this repo and writes a short end-of-day summary."
+      },
+      "sha256": "fd325f8e052d657128d6ddaee339fa0c58ea962139ef02bbb6b5034f7530cfe5",
+      "slug": "summarise-todays-ai-work",
+      "stacks": [
+        "any"
+      ],
+      "summary": "Collects what your AI sessions changed today across branches and worktrees in this repo and writes a short end-of-day summary.",
+      "tags": [
+        "summary",
+        "daily"
+      ],
+      "title": "Summarise today's AI work",
+      "tools": [
+        "auto"
+      ],
+      "updated": "2026-10-10"
+    },
+    {
+      "added": "2026-10-10",
+      "author": {
+        "github": "CallumJB125",
+        "name": "Plexiform"
+      },
+      "id": "recipe/todo-roundup",
+      "kind": "recipe",
+      "license": "CC0-1.0",
+      "payload": {
+        "cost": "Low: a text search and a little reading.",
+        "edits": false,
+        "id": "todo-roundup",
+        "prompt": "Make a task list from the TODO, FIXME, HACK and XXX comments in this repository.\n\n1. Search tracked files only (`git grep -n -E 'TODO|FIXME|HACK|XXX'`).\n2. For each one, read the code around it and write a one-line task in plain language, with the file and line.\n3. Use `git blame` to add how old each comment is.\n4. Group them into Fix soon (bugs, security, data loss), Should do, and Nice to have, and drop duplicates.\n\nOutput a Markdown checklist. Do not change any files.",
+        "title": "Turn TODO comments into a task list",
+        "tool": "gemini",
+        "what": "Finds every TODO, FIXME and HACK comment in the code and turns them into a prioritised list you can paste into your tracker."
+      },
+      "sha256": "3b60d5b3d7005dae09b20ea106debf728e0c579ec25bfa0f832d68dc6eb4fd3e",
+      "slug": "todo-roundup",
+      "stacks": [
+        "any"
+      ],
+      "summary": "Finds every TODO, FIXME and HACK comment in the code and turns them into a prioritised list you can paste into your tracker.",
+      "tags": [
+        "todo",
+        "planning"
+      ],
+      "title": "Turn TODO comments into a task list",
+      "tools": [
+        "gemini"
+      ],
+      "updated": "2026-10-10"
+    },
+    {
+      "added": "2026-10-10",
+      "author": {
+        "github": "CallumJB125",
+        "name": "Plexiform"
+      },
+      "id": "recipe/triage-failing-ci",
+      "kind": "recipe",
+      "license": "CC0-1.0",
+      "payload": {
+        "cost": "Low to medium: reads CI logs, which can be long.",
+        "edits": false,
+        "id": "triage-failing-ci",
+        "prompt": "Triage the failing CI for the current branch.\n\n1. If the GitHub CLI is available, run `gh run list --branch \"$(git branch --show-current)\" --limit 5` and `gh run view <id> --log-failed` for the latest failed run. Otherwise read the CI config (.github/workflows, .gitlab-ci.yml and so on) and run the same steps locally.\n2. Find the first real error, not the noise after it.\n3. Decide whether it is a code bug, a flaky test, an environment or secret problem, or a dependency change, and show the evidence.\n4. Say exactly what to change to fix it, with file and line.\n\nDo not change any files, re-run jobs or push.",
+        "title": "Triage failing CI",
+        "tool": "claude",
+        "what": "Looks at the latest failing CI run for this branch, finds the first real error, and explains the likely cause and the fix."
+      },
+      "sha256": "c0b06775f674265b513cdf7b74bf658b551cd5b098a9d85fe5e5e542c75ff0e5",
+      "slug": "triage-failing-ci",
+      "stacks": [
+        "any"
+      ],
+      "summary": "Looks at the latest failing CI run for this branch, finds the first real error, and explains the likely cause and the fix.",
+      "tags": [
+        "ci",
+        "debugging"
+      ],
+      "title": "Triage failing CI",
+      "tools": [
+        "claude"
+      ],
+      "updated": "2026-10-10"
+    },
+    {
+      "added": "2026-10-10",
+      "author": {
+        "github": "CallumJB125",
+        "name": "Plexiform"
+      },
+      "id": "recipe/weekly-report",
+      "kind": "recipe",
+      "license": "CC0-1.0",
+      "payload": {
+        "cost": "Low: reads git history only. Usually a few cents at API prices, or a small slice of a subscription.",
+        "edits": false,
+        "id": "weekly-report",
+        "prompt": "Write a weekly report of my work in this repository for the last 7 days.\n\n1. Run `git log --since='7 days ago' --no-merges --stat` (all branches I authored: use `git log --author=\"$(git config user.name)\"`).\n2. Group the work into 3 to 6 themes (features, fixes, refactors, docs, chores).\n3. For each theme write one or two sentences a manager would understand, and name the most important commits.\n4. Finish with \"Still open\": branches with unmerged work and any TODO or FIXME I added this week.\n\nKeep it under 300 words. Do not change any files.",
+        "title": "Weekly report from my git history",
+        "tool": "auto",
+        "what": "Reads the last seven days of commits in this repo and writes a short, plain-English report of what got done, what changed and what is still open."
+      },
+      "sha256": "f899e1938bbbd4cb8f11d38b3a69974f3f736e7132150f3c3b3f1838b3dcda97",
+      "slug": "weekly-report",
+      "stacks": [
+        "any"
+      ],
+      "summary": "Reads the last seven days of commits in this repo and writes a short, plain-English report of what got done, what changed and what is still open.",
+      "tags": [
+        "summary",
+        "weekly"
+      ],
+      "title": "Weekly report from my git history",
+      "tools": [
+        "auto"
+      ],
+      "updated": "2026-10-10"
+    }
+  ],
+  "generatedAt": "2026-10-10T00:00:00.000Z",
+  "kind": "plexiform.gallery",
+  "schemaVersion": 1
+}
