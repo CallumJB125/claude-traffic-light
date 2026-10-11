@@ -161,7 +161,8 @@ test('the Setups page pulls a gallery plan on every show, cached view included',
   const queue = [null];
   let asked = 0;
   const unit = (id, label) => ({ id, kind: 'skill', label, target: label, status: 'ready', requires_confirm: true, reason: 'An AI will follow these instructions in every session.', command: null, placeholders: [], before: null, after: 'text', diff: [{ op: '+', text: 'GALLERY-LINE' }] });
-  w.setupsApi = { personal: { galleryPlan: async () => { asked += 1; return queue.shift() ?? null; }, apply: async () => ({ ok: false }) } };
+  let shown = () => {};
+  w.setupsApi = { personal: { galleryPlan: async () => { asked += 1; return queue.shift() ?? null; }, apply: async () => ({ ok: false }), onShown: (cb) => { shown = cb; } } };
   w.eval(fs.readFileSync(path.join(ROOT, 'setups-personal.js'), 'utf8'));
   const tick = () => new Promise((r) => setTimeout(r, 0));
   await tick();
@@ -190,6 +191,16 @@ test('the Setups page pulls a gallery plan on every show, cached view included',
   w.dispatchEvent(new w.Event('focus')); await tick();
   assert.equal(asked, 3, 'focus asks too; nothing pending leaves the review alone');
   assert.match(w.document.getElementById('personal').textContent, /GALLERY-LINE/);
+  shown();
+  await tick();
+  assert.equal(asked, 4, 'the Buddy window saying the cached page is shown again asks too');
+});
+
+test('the Buddy window tells a re-attached Setups page it is shown, since it gets no visibilitychange', () => {
+  const buddy = fs.readFileSync(path.join(ROOT, 'buddy-window', 'index.js'), 'utf8');
+  assert.match(buddy, /const shownAgain = v\.webContents\.getURL\(\) !== '' && !v\.webContents\.isLoading\(\) && content !== v;/);
+  assert.match(buddy, /if \(page\.id === 'setups' && shownAgain\) \{ try \{ v\.webContents\.send\('setups:shown'\); \}/);
+  assert.match(fs.readFileSync(path.join(ROOT, 'setups-preload.js'), 'utf8'), /onShown:callback=>ipcRenderer\.on\('setups:shown',\(\)=>callback\(\)\)/);
 });
 
 test('the Discover card lists a setup’s files in full and says where it opened', async (t) => {

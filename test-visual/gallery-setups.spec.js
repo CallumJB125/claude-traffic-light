@@ -73,9 +73,9 @@ test('a gallery setup opens on a cached Setups page and needs its own tick befor
     await testInfo.attach('gallery-setup-review', { body: Buffer.from(png, 'base64'), contentType: 'image/png' });
 
     const applyDisabled = () => inspect('setups.html', '[...document.querySelectorAll("#personal button")].find(b => b.textContent.startsWith("Apply selected")).disabled');
-    await inspect('setups.html', 'const i = document.querySelector("#personal .personal-unit input"); i.checked = true; i.dispatchEvent(new Event("change")); true');
+    await inspect('setups.html', '{ const i = document.querySelector("#personal .personal-unit input"); i.checked = true; i.dispatchEvent(new Event("change")); } true');
     expect(await applyDisabled()).toBe(true);
-    await inspect('setups.html', 'const i = document.querySelectorAll("#personal .personal-unit input")[1]; i.checked = true; i.dispatchEvent(new Event("change")); true');
+    await inspect('setups.html', '{ const i = document.querySelectorAll("#personal .personal-unit input")[1]; i.checked = true; i.dispatchEvent(new Event("change")); } true');
     expect(await applyDisabled()).toBe(false);
     expect(fs.existsSync(path.join(home, '.claude'))).toBe(false);
     await inspect('setups.html', '[...document.querySelectorAll("#personal button")].find(b => b.textContent.startsWith("Apply selected")).click(); true');

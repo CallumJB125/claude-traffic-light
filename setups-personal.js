@@ -172,7 +172,8 @@
   }
 
   // A setup added from the community gallery waits in main, one use. This page
-  // is kept alive and not reloaded when shown again, so it asks on every show.
+  // is kept alive and not reloaded when shown again, so it asks on every show:
+  // the Buddy window says when (a re-attached view gets no visibilitychange).
   let pulling = false;
   async function pullGallery() {
     if (document.hidden || pulling || typeof api.galleryPlan !== 'function') return;
@@ -189,6 +190,7 @@
   }
   document.addEventListener('visibilitychange', () => { void pullGallery(); });
   window.addEventListener('focus', () => { void pullGallery(); });
+  api.onShown?.(() => { void pullGallery(); });
   void pullGallery();
 
   window.SetupsPersonal = Object.freeze({ renderPlan });

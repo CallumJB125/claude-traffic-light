@@ -65,6 +65,6 @@ test('widget rules from the gallery confirm natively, then wait in Widget config
     await expect(lights.locator('#rule-list li')).toHaveCount(NAMES.length);
     await expect(lights.locator('#rule-list li').first()).toContainText(NAMES[0]);
     await expect(lights.locator('#save-state')).toContainText('From the gallery');
-    expect((await observed()).fetches).toBe(1);
+    expect((await observed()).fetches).toBe(2); // one Fetch click: the index and its signature; the add fetches nothing
   } finally { await h.cleanup(); }
 });

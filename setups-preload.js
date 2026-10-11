@@ -27,6 +27,7 @@ const personal={
   importFile:()=>ipcRenderer.invoke('setups:personal-import'),
   teamPlan:handle=>uuid(handle)?ipcRenderer.invoke('setups:team-plan',handle):refuse(),
   galleryPlan:()=>ipcRenderer.invoke('setups:gallery-plan'),
+  onShown:callback=>ipcRenderer.on('setups:shown',()=>callback()),
   apply:personalApply,
   backups:()=>ipcRenderer.invoke('setups:personal-backups'),
   undo:id=>opaque('setups:personal-undo',id),
