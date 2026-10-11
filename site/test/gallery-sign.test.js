@@ -31,7 +31,7 @@ test('sign-gallery: a throwaway key signs the committed index and createSignedVe
     const tampered = Buffer.from(bytes); tampered[tampered.length - 3] ^= 1;
     assert.equal(verify(tampered, sig).status, 'unverified');
     const stale = path.join(dir, 'stale.json');
-    fs.writeFileSync(stale, fs.readFileSync(path.join(ROOT, 'gallery', 'index.json'), 'utf8').replace('"serial": 1', '"serial": 2'));
+    fs.writeFileSync(stale, fs.readFileSync(path.join(ROOT, 'gallery', 'index.json'), 'utf8').replace(/"serial": (\d+)/, (_, n) => `"serial": ${Number(n) + 1}`));
     const refused = spawnSync(process.execPath, [SIGNER, stale, keyFile], { encoding: 'utf8' });
     assert.notEqual(refused.status, 0);
     assert.match(refused.stderr, /not the index built from gallery\/items/);

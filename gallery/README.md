@@ -1,6 +1,6 @@
 # Plexiform community gallery
 
-Recipes and widget characters people share for Plexiform, listed at
+Recipes, widget characters, widget rules and setups people share for Plexiform, listed at
 plexiform.dev/gallery and browsable in the app (Tasks → Recipes → Browse the
 gallery). The app fetches the list only when you click, and you see everything
 an item contains before it is saved.
@@ -12,10 +12,12 @@ an item contains before it is saved.
 | `recipe` | `items/recipe/<id>.json` | A recipe in the app's format with `"edits": false`. Gallery recipes only read: they plan and report and never change files. No secrets, tokens or home folder paths. |
 | `character` | `items/character/<id>.json` | A character that passes the app's import validator. No `css`. |
 | `pack` | `items/pack/<id>.json` | `{ "members": ["recipe/<id>", "character/<id>"], "note": "" }`: 2–12 items already in the gallery, no packs inside packs. Packs are a list: each member is added on its own. |
+| `rules` | `items/rules/<id>.json` | `{ "rulesVersion": <n>, "rules": [...] }`: 1–40 rules exactly as the app writes them (export them from Widget configuration). No clicks that run commands, Shortcuts, links or apps, no sounds from files and no photo cameos. They open in Widget configuration and replace someone's rules only after they press Load and Save. |
 
-Widget rules (`rules`) and setups (`setup`) have a schema but are not accepted
-yet. Setups are owner-only: they are instructions an AI follows, and their
-payload cannot be written by hand.
+Setups (`setup`, in `items/setup/`) are owner-only: they are instructions an AI
+follows, and their payload cannot be written by hand. They may hold only Claude
+Code skills, commands and agents (never CLAUDE.md, AGENTS.md, GEMINI.md, MCP
+servers or settings), and the app asks for a separate tick on every file.
 
 ## Item format
 
