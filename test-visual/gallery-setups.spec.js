@@ -8,11 +8,16 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { launchApp, windowByFile } = require('./app');
-const S = require('../src/gallery-schema');
 
-const CMD = '# Spec command\nGALLERY-SETUP-SPEC: explain the diff, change nothing.\n';
-const item = { schema: 1, kind: 'setup', id: 'spec-setup', title: 'Spec setup', summary: 'One command.', author: { name: 'Ana', github: 'ana-dev' }, license: 'CC0-1.0', tags: [], stacks: ['any'], tools: ['claude'], added: '2026-10-01', updated: '2026-10-05', payload: { schema: 1, files: [{ id: '3e1a0f4b-6d4a-4b82-8d5e-4f5a6b7c8d9e', source_id: 'claude-code', relative_path: '.claude/commands/spec-explain.md', format: 'text', content: CMD, note: '' }], items: [], note: '' } };
-const INDEX = S.buildIndex([{ item, name: item.id }]).text;
+// The app ships the owner's public key (build/gallery-key.pub.pem), so only
+// the committed, signed index is accepted: the stub serves exactly those bytes.
+const ROOT = path.join(__dirname, '..');
+const INDEX = fs.readFileSync(path.join(ROOT, 'gallery', 'index.json'));
+const SIG = fs.readFileSync(path.join(ROOT, 'gallery', 'index.json.sig'));
+const COUNT = fs.readdirSync(path.join(ROOT, 'gallery', 'items')).reduce((n, kind) => n + fs.readdirSync(path.join(ROOT, 'gallery', 'items', kind)).length, 0);
+const ITEM = JSON.parse(fs.readFileSync(path.join(ROOT, 'gallery', 'items', 'setup', 'explain-diff-command.json'), 'utf8'));
+const FILE = ITEM.payload.files[0];
+const CMD = FILE.content;
 
 test('a gallery setup opens on a cached Setups page and needs its own tick before Apply', async ({}, testInfo) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gallery-setups-home-'));
@@ -23,12 +28,16 @@ test('a gallery setup opens on a cached Setups page and needs its own tick befor
   }, { file, script });
   try {
     const widget = await windowByFile(h.app, 'index.html');
-    await h.app.evaluate(({ dialog, session }, index) => {
-      globalThis.__gallery = { confirms: [] };
-      session.fromPartition('gallery').fetch = async (url) => (url.endsWith('/gallery/index.json') ? new Response(index, { status: 200 }) : new Response('missing', { status: 404 }));
-      const answer = async (opts) => { globalThis.__gallery.confirms.push(opts); return { response: 1 }; };
-      dialog.showMessageBox = async (a, b) => answer(b || a);
-    }, INDEX);
+    await h.app.evaluate(({ dialog, session }, { index, sig }) => {
+      globalThis.__gallery = { fetches: 0, confirms: [] };
+      session.fromPartition('gallery').fetch = async (url) => {
+        globalThis.__gallery.fetches += 1;
+        if (url.endsWith('/gallery/index.json')) return new Response(Buffer.from(index, 'base64'), { status: 200 });
+        if (url.endsWith('/gallery/index.json.sig')) return new Response(Buffer.from(sig, 'base64'), { status: 200 });
+        return new Response('missing', { status: 404 });
+      };
+      dialog.showMessageBox = async (a, b) => { const opts = b || a; globalThis.__gallery.confirms.push(opts); return { response: 1 }; };
+    }, { index: INDEX.toString('base64'), sig: SIG.toString('base64') });
     const observed = () => h.app.evaluate(() => globalThis.__gallery);
 
     await widget.evaluate(() => window.trafficLight.openHelp());
@@ -42,19 +51,19 @@ test('a gallery setup opens on a cached Setups page and needs its own tick befor
     await expect.poll(() => inspect('tasks.html', '!!window.galleryApi && !!document.querySelector("#cg-open")'), { timeout: 20000 }).toBe(true);
     await inspect('tasks.html', 'document.querySelector("#cg-open").click(); true');
     await inspect('tasks.html', '[...document.querySelectorAll("#cg-gallery button")].find(b => b.textContent === "Fetch the gallery").click(); true');
-    await expect.poll(() => inspect('tasks.html', 'document.querySelectorAll("#cg-gallery .cg-card").length')).toBe(1);
-    expect(await inspect('tasks.html', 'document.querySelector(\'[data-id="setup/spec-setup"] pre\').textContent')).toBe(CMD);
+    await expect.poll(() => inspect('tasks.html', 'document.querySelectorAll("#cg-gallery .cg-card").length')).toBe(COUNT);
+    expect(await inspect('tasks.html', 'document.querySelector(\'[data-id="setup/explain-diff-command"] pre\').textContent')).toBe(CMD);
 
-    await inspect('tasks.html', 'document.querySelector(\'[data-id="setup/spec-setup"] .recipe-actions button\').click(); true');
+    await inspect('tasks.html', 'document.querySelector(\'[data-id="setup/explain-diff-command"] .recipe-actions button\').click(); true');
     const personal = () => inspect('setups.html', 'document.querySelector("#personal").textContent');
     await expect.poll(personal, { timeout: 15000 }).toContain('Setup from the community gallery');
     expect(await inspect('setups.html', 'window.__specLoads')).toBe(1);
     const add = (await observed()).confirms[0];
-    expect(add.message).toBe('Review on the Setups page: Spec setup?');
-    expect(add.detail).toContain('~/.claude/commands/spec-explain.md');
+    expect(add.message).toBe(`Review on the Setups page: ${ITEM.title}?`);
+    expect(add.detail).toContain(`~/${FILE.relative_path}`);
     const text = await personal();
     expect(text).toContain('An AI will follow these instructions in every session.');
-    expect(text).toContain('GALLERY-SETUP-SPEC');
+    expect(text).toContain(CMD.split('\n').find((l) => l.startsWith('Explain')));
     expect(text).toContain('self-declared');
 
     const png = await h.app.evaluate(async ({ webContents }) => {
@@ -71,8 +80,8 @@ test('a gallery setup opens on a cached Setups page and needs its own tick befor
     expect(fs.existsSync(path.join(home, '.claude'))).toBe(false);
     await inspect('setups.html', '[...document.querySelectorAll("#personal button")].find(b => b.textContent.startsWith("Apply selected")).click(); true');
     await expect.poll(personal).toContain('Applied 1 change');
-    expect(fs.readFileSync(path.join(home, '.claude', 'commands', 'spec-explain.md'), 'utf8')).toBe(CMD);
-    expect((await observed()).confirms[1].detail).toContain('.claude/commands/spec-explain.md');
+    expect(fs.readFileSync(path.join(home, FILE.relative_path), 'utf8')).toBe(CMD);
+    expect((await observed()).confirms[1].detail).toContain(FILE.relative_path);
   } finally {
     await h.cleanup();
     fs.rmSync(home, { recursive: true, force: true });
