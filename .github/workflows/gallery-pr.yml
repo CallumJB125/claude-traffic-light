@@ -20,7 +20,10 @@ jobs:
 
       # A contributor adds or edits files under gallery/items/ only. The index,
       # its signature and everything else are the owner's to change.
+      # The owner's own branches carry the index, its signature and the rest of the
+      # tree, so the fence applies to contributors only.
       - name: Only gallery/items/** may change
+        if: github.actor != github.repository_owner
         env:
           BASE_REF: ${{ github.base_ref }}
         run: |
