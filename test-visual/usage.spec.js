@@ -62,15 +62,16 @@ const lightsOf = (harness) => embedded(harness.app, 'usage', 'lights.html', { vi
 async function open(scheme) {
   const lights = await lightsOf(h);
   await lights.setViewportSize({ width: 1100, height: 2200 }).catch(() => {});
-  await lights.emulateMedia({ colorScheme: scheme, reducedMotion: 'reduce' });
   const base = lights.url().split('?')[0];
   await lights.goto(`${base}?embedded=1&view=mix&now=${NOW}`);
+  await lights.emulateMedia({ colorScheme: scheme, reducedMotion: 'reduce' });
   await lights.waitForSelector('#usage-history .uv-card');
   await lights.waitForTimeout(400);
   return lights;
 }
 
-for (const scheme of ['dark', 'light']) {
+// tokens.css has no light palette: the Lights page is dark-only, so there is no light variant to shoot.
+for (const scheme of ['dark']) {
   test(`usage history renders its charts (${scheme})`, async () => {
     const lights = await open(scheme);
     const errs = await lights.evaluate(() => window.__errs || []);
