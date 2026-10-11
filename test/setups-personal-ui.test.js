@@ -45,7 +45,7 @@ function wired(t) {
 
 test('wiring registers only for the free personal entitlement and checks the sender on every channel', async (t) => {
   const w = wired(t);
-  assert.deepEqual([...w.handlers.keys()].sort(), ['setups:personal-apply', 'setups:personal-backups', 'setups:personal-collect', 'setups:personal-export', 'setups:personal-import', 'setups:personal-undo', 'setups:team-plan']);
+  assert.deepEqual([...w.handlers.keys()].sort(), ['setups:gallery-plan', 'setups:personal-apply', 'setups:personal-backups', 'setups:personal-collect', 'setups:personal-export', 'setups:personal-import', 'setups:personal-undo', 'setups:team-plan']);
   for (const [ch, fn] of w.handlers) assert.equal(await fn({ sender: {} }), null, ch);
   const none = new Map();
   require('../src/setups-personal.js').register({ ipcMain: { handle: (c, f) => none.set(c, f) }, rootDir: w.root, entitlements: { has: () => false }, fromPage: () => true });

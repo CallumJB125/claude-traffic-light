@@ -12,7 +12,8 @@
 // in what it verified, shows a native confirm with everything it contains,
 // and only then adds it. Recipes and characters are saved at once; widget
 // rules open in Widget configuration as an offer that still needs Load and
-// Save there.
+// Save there; a setup is parked here (one use, 10 minutes) for the Setups page
+// to pull when it is shown, and is written only after its review and Apply.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -26,6 +27,7 @@ const INDEX_URL = `${Brand.urls.site}/gallery/index.json`;
 const SIG_URL = `${INDEX_URL}.sig`;
 const KEY_FILES = ['gallery-key.pub.pem', 'gallery-key-next.pub.pem'];
 const TIMEOUT_MS = 10_000;
+const PENDING_TTL_MS = 10 * 60_000;
 const KIND_LABEL = { recipe: 'recipe', character: 'character', pack: 'pack', rules: 'widget rules', setup: 'setup' };
 const REASON = {
   'no-production-key': 'The gallery key on this Mac could not be read, so the list is not shown. Reinstall the app.',
@@ -72,15 +74,17 @@ function preview(e, byId) {
   if (e.kind === 'recipe') return { what: p.what, prompt: p.prompt, tool: p.tool, cost: p.cost };
   if (e.kind === 'character') return { name: p.name };
   if (e.kind === 'rules') return { names: p.rules.map((r) => r.name) };
+  if (e.kind === 'setup') return { note: p.note, files: p.files.map((f) => ({ path: f.relative_path, content: f.content })) };
   if (e.kind === 'pack') return { note: p.note, members: p.members.map((id) => { const m = byId.get(id); return m ? { id, kind: m.kind, title: m.title, sha256: m.sha256, addable: S.ADDABLE.includes(m.kind) } : { id, missing: true }; }) };
   return null;
 }
 
-function create({ dataDir, fetch, keysDir, now = Date.now, recipes, characterStore, confirm, broadcastCharacters = () => {}, offerRules = () => {}, demo = () => false }) {
+function create({ dataDir, fetch, keysDir, now = Date.now, recipes, characterStore, confirm, broadcastCharacters = () => {}, offerRules = () => {}, openSetups = () => {}, demo = () => false }) {
   const cacheDir = path.join(dataDir, 'gallery');
   const { keys, broken } = readKeys(keysDir);
   const signed = keys.length > 0 || broken;
   let state = null;
+  let pending = null;
 
   function check(bytes, sig) {
     const opts = { now, floor: V.FLOOR, maxBytes: S.LIMITS.indexBytes, validateIndex: S.validateIndex };
@@ -177,6 +181,7 @@ function create({ dataDir, fetch, keysDir, now = Date.now, recipes, characterSto
       return recipes.addFromGallery(e);
     }
     if (e.kind === 'rules') return addRules(e, ev);
+    if (e.kind === 'setup') return addSetup(e, ev);
     const v = validateCharacter(e.payload, { source: 'import' });
     if (!v.ok) return { ok: false, error: 'That character could not be added.' };
     const yes = await confirm({ title: v.character.name, action: 'Add to Characters', detail: [by(e), 'A widget character: art only, checked again by the app’s sanitiser before it is saved.'].join('\n') }, ev);
@@ -203,7 +208,26 @@ function create({ dataDir, fetch, keysDir, now = Date.now, recipes, characterSto
     return { ok: true, kind: 'rules' };
   }
 
-  return { fetchIndex, cached, add, INDEX_URL };
+  // The full reviewed-setups check runs here, in the app. The Setups page then
+  // shows every file, each with its own tick, before Apply writes anything.
+  async function addSetup(e, ev) {
+    let checked;
+    try { checked = S.validateSetupPayload(e.payload); } catch { return { ok: false, error: 'That setup could not be added.' }; }
+    const files = checked.payload.files.map((f) => f.relative_path);
+    const yes = await confirm({ title: e.title, action: 'Review on the Setups page', detail: [by(e), `${files.length} file${files.length === 1 ? '' : 's'} an AI will read as instructions:`, ...files.map((f) => `• ~/${f}`), '', 'It opens on the Setups page with every file in full. Nothing is written until you tick each file and press Apply there, and a backup is saved first.'].join('\n') }, ev);
+    if (!yes) return { ok: false, cancelled: true, error: 'Cancelled. Nothing was changed.' };
+    pending = { payload: checked.payload, by: by(e), expires: now() + PENDING_TTL_MS };
+    openSetups();
+    return { ok: true, kind: 'setup' };
+  }
+  // One use: the Setups page takes it when it is shown, or it lapses.
+  function takePending() {
+    const p = pending;
+    pending = null;
+    return p && p.expires > now() ? { payload: p.payload, by: p.by } : null;
+  }
+
+  return { fetchIndex, cached, add, takePending, INDEX_URL };
 }
 
 // IPC for the Tasks page (allowed: main's Tasks-page sender check).

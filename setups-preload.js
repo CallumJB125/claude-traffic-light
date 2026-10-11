@@ -26,6 +26,7 @@ const personal={
   exportFile:(handle,excluded)=>uuid(handle)&&ids(excluded,256)&&excluded.every(uuid)?ipcRenderer.invoke('setups:personal-export',handle,[...excluded]):refuse(),
   importFile:()=>ipcRenderer.invoke('setups:personal-import'),
   teamPlan:handle=>uuid(handle)?ipcRenderer.invoke('setups:team-plan',handle):refuse(),
+  galleryPlan:()=>ipcRenderer.invoke('setups:gallery-plan'),
   apply:personalApply,
   backups:()=>ipcRenderer.invoke('setups:personal-backups'),
   undo:id=>opaque('setups:personal-undo',id),

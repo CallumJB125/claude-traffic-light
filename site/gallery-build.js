@@ -83,7 +83,7 @@ function itemBody(e, esc) {
   else if (e.kind === 'character') body = `<p>A widget character named <strong>${esc(p.name)}</strong>. Its art is checked by the app's sanitiser when you add it.</p>`;
   else if (e.kind === 'pack') body = `${p.note ? `<p>${esc(p.note)}</p>` : ''}<h2>In this pack</h2><ul>${p.members.map((m) => `<li><a href="${esc(href(m))}">${esc(m)}</a></li>`).join('')}</ul>`;
   else if (e.kind === 'rules') body = `<p>Widget rules. Adding them opens them in Widget configuration, where they replace your rules only when you press Load and then Save. Clicks in gallery rules never run commands.</p><h2>The rules</h2><ul>${p.rules.map((r) => `<li>${esc(r.name)}</li>`).join('')}</ul><pre class="cg-pre">${esc(JSON.stringify(p, null, 2))}</pre>`;
-  else body = `<p>Adding ${esc(KIND_LABEL[e.kind].toLowerCase())} from the gallery comes in a later version of the app.</p><pre class="cg-pre">${esc(JSON.stringify(p, null, 2))}</pre>`;
+  else body = `<p>Skills, commands and agents an AI will read as instructions. Adding it opens it on the Setups page, where nothing is written until you tick each file and press Apply.</p>${p.files.map((f) => `<h2>~/${esc(f.relative_path)}</h2><pre class="cg-pre">${esc(f.content)}</pre>`).join('')}`;
   const how = S.ADDABLE.includes(e.kind) ? `<p class="cg-how">To add it: in ${esc(Brand.name)}, open Tasks → Recipes → Browse the gallery, then Add. You see everything it contains before anything is saved.</p>` : '';
   return `<p class="lede">${esc(e.summary)}</p><dl class="cg-facts">${facts.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>${body}${how}`;
 }

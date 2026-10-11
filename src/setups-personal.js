@@ -39,6 +39,10 @@ const PH = /\{\{(HOME|USER|HOSTNAME|NAME|EMAIL(?::\d+)?|IP:\d+|HOST:\d+|PRIVATE:
 const LIMITS = Object.freeze({ importBytes: schema.SETUP_BODY_MAX, targetBytes: 16 * 1024 * 1024, mcpServers: 64, mcpBytes: 16 * 1024, valueBytes: 4096, valuesBytes: 16 * 1024, values: 128, backups: 50, manifestBytes: 40 * 1024 * 1024, diffCells: 2_250_000, ttl: 10 * 60_000 });
 const NOFOLLOW = fs.constants.O_NOFOLLOW ?? 0;
 const NONBLOCK = fs.constants.O_NONBLOCK ?? 0;
+// A gallery setup comes from a stranger: every unit needs its own tick, and
+// only files an AI reads when asked (skills, commands, agents) are accepted.
+const GALLERY_REASON = 'An AI will follow these instructions in every session.';
+const GALLERY_KINDS = Object.freeze(['skill', 'command', 'agent']);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const sha = (text) => createHash('sha256').update(text ?? '\0absent').digest('hex');
@@ -281,7 +285,10 @@ function createPersonalSetups({ home, dataRoot, user = () => os.userInfo().usern
 
   function planFromPayload(payload, origin) {
     let checked; try { checked = schema.validatePayload(payload); } catch { return refuse('invalid', 'This setup is not a valid reviewed setup.'); }
+    const gallery = origin === 'gallery';
+    if (gallery && (checked.payload.items.length || checked.payload.files.some((f) => !GALLERY_KINDS.includes(targetOf(f.relative_path)?.kind)))) return refuse('invalid', 'A gallery setup can only hold skills, commands and agents. Rules files, MCP servers and settings are never taken from the gallery.');
     const { units, dropped } = unitsFor(checked.payload);
+    if (gallery) for (const u of units) { u.requires_confirm = true; u.reason = u.reason ? `${GALLERY_REASON} ${u.reason}` : GALLERY_REASON; }
     const handle = keep(plans, { origin, content_hash: checked.content_hash, units });
     const plan = live(plans, handle);
     return {
@@ -465,6 +472,14 @@ function register(ctx) {
     if (typeof profileHandle !== 'string' || profileHandle.length > 100 || typeof ctx.setups?.readForPlan !== 'function') return unavailable();
     const source = await ctx.setups.readForPlan(profileHandle);
     return source ? engine.planFromPayload(source.payload, 'team') : refuse('unavailable', 'This team setup is unavailable. Team setups need the Team plan and current team access.');
+  });
+  // A setup added from the community gallery (src/gallery.js parks it, one use).
+  // The page pulls on every show because a cached page is not reloaded.
+  handle('setups:gallery-plan', () => {
+    const p = ctx.gallery?.takePending?.();
+    if (!p) return null;
+    const plan = engine.planFromPayload(p.payload, 'gallery');
+    return plan.ok ? { ...plan, from: p.by } : plan;
   });
   handle('setups:personal-apply', async (planHandle, input) => {
     if (!isObject(input) || Object.keys(input).some((k) => !['selected', 'confirmed', 'values'].includes(k))) return unavailable();
