@@ -146,3 +146,11 @@ test('trust labels put the kind before the sender-chosen label, and the native-c
   assert.equal(TV.partyText({ kind: 'human', label: 'x' }), 'You');
   for (const a of TV.NATIVE_CONFIRM) assert.ok(!TV.CONFIRM_ACTIONS.includes(a), a);
 });
+
+test('galleryFirst: the Recipes gallery leads only when the helper is up and there are no tasks', () => {
+  assert.equal(TV.galleryFirst({ conn: { status: 'connected' }, tasks: [] }), true);
+  assert.equal(TV.galleryFirst({ conn: { status: 'connected' }, tasks: [{ id: 't1' }] }), false);
+  assert.equal(TV.galleryFirst({ conn: { status: 'unavailable' }, tasks: [] }), false, 'a down helper keeps its notice visible');
+  assert.equal(TV.galleryFirst({ conn: { status: 'connecting' }, tasks: [] }), false);
+  assert.equal(TV.galleryFirst(null), false);
+});

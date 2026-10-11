@@ -187,5 +187,9 @@
     merge: 'Merge this task’s branch into your checkout? Nothing is pushed.',
   });
 
-  return { LIMITS, ERROR_TEXT, errorText, TERMINAL, ageText, rowView, sortTasks, CAPS, newTranscript, addEvent, messageStatus, isMine, partyName, mergeMessage, validateDraft, validateMessage, ACTION_LABEL, CONFIRM_ACTIONS, NATIVE_CONFIRM, KIND_LABEL, partyText, CONFIRM_TEXT, AI_NAME };
+  // The Recipes gallery may cover the main pane only while the helper is up and there is nothing to list;
+  // otherwise it would hide the "helper unavailable / Try again now" notice.
+  const galleryFirst = (snap) => !!snap && snap.conn?.status === 'connected' && !(snap.tasks || []).length;
+
+  return { galleryFirst, LIMITS, ERROR_TEXT, errorText, TERMINAL, ageText, rowView, sortTasks, CAPS, newTranscript, addEvent, messageStatus, isMine, partyName, mergeMessage, validateDraft, validateMessage, ACTION_LABEL, CONFIRM_ACTIONS, NATIVE_CONFIRM, KIND_LABEL, partyText, CONFIRM_TEXT, AI_NAME };
 }));
