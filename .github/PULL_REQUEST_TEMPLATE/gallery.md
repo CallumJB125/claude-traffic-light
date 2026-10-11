@@ -1,15 +1,14 @@
-## Gallery submission
+<!-- Gallery submission. Keep the change to files under gallery/items/ only. -->
 
-<!-- Add one file under gallery/items/<kind>/<id>.json. See gallery/README.md. -->
+## What this adds
 
-- Kind: recipe / character / pack
-- File: `gallery/items/…`
+- Kind (recipe / character / pack):
+- Id (the file name without .json):
+- One line on what it does:
 
-Checklist:
+## Checks
 
-- [ ] This PR changes files under `gallery/items/` only (not `gallery/index.json` or its `.sig`: the owner regenerates and signs those).
-- [ ] `npm run gallery:check -- --items-only` passes locally.
-- [ ] A recipe has `"edits": false` and its prompt contains no secrets, tokens, home folder paths or private URLs.
-- [ ] A character has no `css`.
-- [ ] I made this, or I have the right to share it, under the license in the file (CC0-1.0 unless it says MIT).
-- [ ] I understand `author.github` is shown as self-declared.
+- [ ] The item is mine to share, or its source allows CC0-1.0 (or MIT, if the item says so).
+- [ ] It does nothing the summary does not say: no sending data anywhere, no credentials, no hidden steps.
+- [ ] `node site/gallery-build.js --check --items-only` passes locally.
+- [ ] Nothing outside `gallery/items/` changed.
