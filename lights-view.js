@@ -1239,6 +1239,8 @@
     applyRules(incoming, tpl);
     flash(done);
   });
+  // After boot, so the offer is not overwritten by the saved rules loading in.
+  window.lightsApi.onOffer((incoming) => { if (Array.isArray(incoming)) void booted.then(() => offerRules(incoming, 'From the gallery — Save to keep them')); });
   $('share-form').addEventListener('submit', async (e) => {
     e.preventDefault(); e.stopPropagation();
     try { offerRules(await decodeShare($('share-code').value), 'Loaded shared rules — Save to keep them'); }
@@ -1707,7 +1709,7 @@
   }
 
   // ── Boot ───────────────────────────────────────────────────────────────
-  (async () => {
+  const booted = (async () => {
     $('tool-list').innerHTML = R.TOOL_SUGGESTIONS.map((t) => `<option value="${t}">`).join('');
     config = await window.lightsApi.getConfig();
     rules = config.rules.map(R.normalizeRule);

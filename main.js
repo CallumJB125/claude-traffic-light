@@ -1822,7 +1822,7 @@ require('./src/setups-folder.js').register({ipcMain,allowed:setupsSender,source:
 let costGuardReport = null;
 let taskStartGuard = null;
 // Paid-tier packages (src/paid-wiring.js): each registers itself if present; nothing here may block startup.
-try { require('./src/paid-wiring.js').registerAll({ setCostGuardReport: (fn) => { costGuardReport = fn; }, setTaskStartGuard: (fn) => { taskStartGuard = fn; }, app, ipcMain, rootDir: ROOT_DIR, buddy: () => buddyWin, fromPage: fromUtilityPage, setups: SetupsNative, onQuit: (fn) => onQuit(app, fn), log: (m) => console.warn(m), spend: () => spendSnapshot(loadConfig()), runawayStoppers: () => runawayStoppers, usageTurns: () => getUsageTurns(), ownedSessions: { list: () => InteractionMain.listOwned(), target: (s) => InteractionMain.sharedTarget(s) }, keyFor, requestsDir: REQUESTS_DIR, interactionHost: () => hostSync.host(), setInteractionHostExtras: (fn) => { interactionHostExtras = fn; }, teamMemory: (req) => TeamActivity.memoryPage(req) }); } catch (e) { console.warn('[paid] wiring failed:', e?.message ?? e); } // privacy-flow: team-memory
+try { require('./src/paid-wiring.js').registerAll({ setCostGuardReport: (fn) => { costGuardReport = fn; }, setTaskStartGuard: (fn) => { taskStartGuard = fn; }, app, ipcMain, rootDir: ROOT_DIR, buddy: () => buddyWin, fromPage: fromUtilityPage, setups: SetupsNative, onQuit: (fn) => onQuit(app, fn), log: (m) => console.warn(m), spend: () => spendSnapshot(loadConfig()), runawayStoppers: () => runawayStoppers, usageTurns: () => getUsageTurns(), ownedSessions: { list: () => InteractionMain.listOwned(), target: (s) => InteractionMain.sharedTarget(s) }, keyFor, requestsDir: REQUESTS_DIR, interactionHost: () => hostSync.host(), setInteractionHostExtras: (fn) => { interactionHostExtras = fn; }, teamMemory: (req) => TeamActivity.memoryPage(req), gallery: { takePending: () => galleryService?.takePending() ?? null } }); } catch (e) { console.warn('[paid] wiring failed:', e?.message ?? e); } // privacy-flow: team-memory
 
 // Settings → Account & team, and the widget's one-time Team hint. Each
 // handler checks its sender; the page to open is never taken from the renderer.
@@ -2020,6 +2020,8 @@ require('./src/recipes.js').register({
 });
 // The community gallery on the Tasks page (src/gallery.js): fetched only on a click, in its own
 // cookieless session, verified, then added after a native confirm. Specs stub the session's fetch.
+// Setups (via paid-wiring above) takes a parked gallery setup from it when its page is shown.
+let galleryService = null;
 {
   const Gallery = require('./src/gallery.js');
   let gallerySession = null;
@@ -2030,8 +2032,11 @@ require('./src/recipes.js').register({
   };
   const gallery = Gallery.create({
     dataDir: ROOT_DIR, keysDir: path.join(__dirname, 'build'), recipes, characterStore, broadcastCharacters, demo: () => Demo.active(), confirm: tasksConfirm,
+    offerRules: (rules) => showLightsView('rules', { event: 'rules:offer', data: rules }),
+    openSetups: () => openBuddy('setups'),
     fetch: galleryFetch,
   });
+  galleryService = gallery;
   Gallery.register({ ipcMain, allowed: tasksSenderOk, gallery });
 }
 

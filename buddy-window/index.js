@@ -491,8 +491,12 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       if (page.id === 'overview') v.webContents.on('did-stop-loading', () => notifyOverviewReady(v));
       v.webContents.loadFile(path.join(DIR, '..', page.file), { query: page.query || {} }).catch(() => {});
     }
+    const shownAgain = v.webContents.getURL() !== '' && !v.webContents.isLoading() && content !== v;
     attach(v);
     if (page.id === 'overview') notifyOverviewReady(v);
+    // A kept-alive page gets no visibilitychange when it is attached again, so Setups is told
+    // (it pulls a setup added from the community gallery on every show).
+    if (page.id === 'setups' && shownAgain) { try { v.webContents.send('setups:shown'); } catch { /* closed */ } }
   }
 
   // Local pages load our own files only; nothing navigates them anywhere else.

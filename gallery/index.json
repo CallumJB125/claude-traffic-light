@@ -439,10 +439,150 @@
         "auto"
       ],
       "updated": "2026-10-10"
+    },
+    {
+      "added": "2026-10-11",
+      "author": {
+        "github": "CallumJB125",
+        "name": "Plexiform"
+      },
+      "id": "rules/quiet-desk",
+      "kind": "rules",
+      "license": "CC0-1.0",
+      "payload": {
+        "rules": [
+          {
+            "enabled": true,
+            "id": "quiet-ask",
+            "locked": false,
+            "name": "Needs you, quietly",
+            "then": {
+              "agents": null,
+              "agentsColor": null,
+              "cameo": null,
+              "celebrate": false,
+              "clicks": {},
+              "costume": null,
+              "effect": null,
+              "eyes": null,
+              "lamp": "amber",
+              "lampColor": null,
+              "lampFx": null,
+              "lampShape": null,
+              "number": null,
+              "pet": null,
+              "pose": "wave",
+              "screenFx": null,
+              "sign": null,
+              "signFx": null,
+              "sound": null,
+              "text": null
+            },
+            "when": {
+              "cwd": null,
+              "signal": [
+                "permission-ask"
+              ],
+              "source": null,
+              "tool": null
+            }
+          },
+          {
+            "enabled": true,
+            "id": "quiet-done",
+            "locked": false,
+            "name": "Done, quietly",
+            "then": {
+              "agents": null,
+              "agentsColor": null,
+              "cameo": null,
+              "celebrate": false,
+              "clicks": {},
+              "costume": null,
+              "effect": null,
+              "eyes": null,
+              "lamp": "green",
+              "lampColor": null,
+              "lampFx": null,
+              "lampShape": null,
+              "number": null,
+              "pet": null,
+              "pose": "party",
+              "screenFx": null,
+              "sign": null,
+              "signFx": null,
+              "sound": null,
+              "text": null
+            },
+            "when": {
+              "cwd": null,
+              "signal": [
+                "stop"
+              ],
+              "source": null,
+              "tool": null
+            }
+          }
+        ],
+        "rulesVersion": 11
+      },
+      "sha256": "c4e155e0345fbd59b4f18366bcf33b8f27cfb1d6a844ee94dec05cf271fa61a6",
+      "slug": "quiet-desk",
+      "stacks": [
+        "any"
+      ],
+      "summary": "Calm widget rules for a shared office: no sounds, amber with a wave when your AI needs you, green with a small party when it is done.",
+      "tags": [
+        "quiet",
+        "office"
+      ],
+      "title": "Quiet desk",
+      "tools": [],
+      "updated": "2026-10-11"
+    },
+    {
+      "added": "2026-10-11",
+      "author": {
+        "github": "CallumJB125",
+        "name": "Plexiform"
+      },
+      "id": "setup/explain-diff-command",
+      "kind": "setup",
+      "license": "CC0-1.0",
+      "payload": {
+        "files": [
+          {
+            "content": "---\ndescription: Explain the current diff in plain words before you commit.\n---\nRead the staged and unstaged changes in this repository (git diff and git diff --staged).\n\nExplain, in plain words, what changed and why it might matter: one short paragraph per file, then a list of anything that looks risky or unfinished.\n\nDo not change any files.\n",
+            "format": "text",
+            "id": "7f3c2a1e-9b4d-4c8e-a6f2-5d1e0b9c8a7f",
+            "note": "",
+            "relative_path": ".claude/commands/explain-diff.md",
+            "source_id": "claude-code"
+          }
+        ],
+        "items": [],
+        "note": "",
+        "schema": 1
+      },
+      "sha256": "41a1dad1b1e3f2703bc6768b2111f0a5a8246c8e54ba77726c680c66e202cac7",
+      "slug": "explain-diff-command",
+      "stacks": [
+        "any"
+      ],
+      "summary": "A /explain-diff command for Claude Code that explains your uncommitted changes in plain words and never edits files.",
+      "tags": [
+        "review",
+        "git"
+      ],
+      "title": "Explain my diff (Claude Code command)",
+      "tools": [
+        "claude"
+      ],
+      "updated": "2026-10-11"
     }
   ],
-  "generatedAt": "2026-10-10T00:00:00.000Z",
+  "generatedAt": "2026-10-11T00:00:00.000Z",
   "kind": "plexiform.gallery",
   "schemaVersion": 1,
-  "serial": 1
+  "serial": 2
 }

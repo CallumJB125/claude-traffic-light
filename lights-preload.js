@@ -51,6 +51,8 @@ contextBridge.exposeInMainWorld('lightsApi', {
   // Auto-answer rules: main says why a rule can't be saved (null = fine).
   checkAutoRule: (rule) => ipcRenderer.invoke('check-auto-rule', rule),
   onAutoRulePrefill: (cb) => ipcRenderer.on('auto-rule-prefill', (e, rule) => cb(rule)),
+  // Widget rules from the community gallery: main checked and migrated them; the page still asks before loading.
+  onOffer: (cb) => ipcRenderer.on('rules:offer', (e, rules) => cb(rules)),
   onMotionPaused: (cb) => ipcRenderer.on('motion-paused', (e, paused) => cb(paused)),
   onWindowFocus: (cb) => ipcRenderer.on('window-focus', (e, focused) => cb(focused)),
 });

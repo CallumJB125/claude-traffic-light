@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "author": {
+    "name": "Plexiform",
+    "github": "CallumJB125"
+  },
+  "license": "CC0-1.0",
+  "added": "2026-10-11",
+  "updated": "2026-10-11",
+  "kind": "setup",
+  "id": "explain-diff-command",
+  "title": "Explain my diff (Claude Code command)",
+  "summary": "A /explain-diff command for Claude Code that explains your uncommitted changes in plain words and never edits files.",
+  "tags": [
+    "review",
+    "git"
+  ],
+  "stacks": [
+    "any"
+  ],
+  "tools": [
+    "claude"
+  ],
+  "payload": {
+    "schema": 1,
+    "files": [
+      {
+        "id": "7f3c2a1e-9b4d-4c8e-a6f2-5d1e0b9c8a7f",
+        "source_id": "claude-code",
+        "relative_path": ".claude/commands/explain-diff.md",
+        "format": "text",
+        "content": "---\ndescription: Explain the current diff in plain words before you commit.\n---\nRead the staged and unstaged changes in this repository (git diff and git diff --staged).\n\nExplain, in plain words, what changed and why it might matter: one short paragraph per file, then a list of anything that looks risky or unfinished.\n\nDo not change any files.\n",
+        "note": ""
+      }
+    ],
+    "items": [],
+    "note": ""
+  }
+}

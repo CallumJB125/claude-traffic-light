@@ -9,7 +9,8 @@
 //    keyFor, requestsDir, interactionHost: () => host|null,
 //    setInteractionHostExtras: (fn) => void (phone approvals: {e2e, extra} for the remote host),
 //    teamMemory: (req) => Promise (the hub's team memory for Search everything, src/team-activity.js memoryPage),
-//    setCostGuardReport: (fn) => void (cost guard: its report() for Home's cost card)}
+//    setCostGuardReport: (fn) => void (cost guard: its report() for Home's cost card),
+//    gallery: {takePending} (a setup added from the community gallery, one use, or null)}
 // register gates its own work with ctx.entitlements.has(feature).
 'use strict';
 

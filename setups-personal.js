@@ -91,8 +91,10 @@
   function renderPlan(container, plan, line, current = () => true) {
     container.replaceChildren();
     const ready = plan.units.filter((u) => u.status === 'ready');
-    say(line, ready.length ? `Review ${ready.length} change${ready.length === 1 ? '' : 's'} from ${plan.origin === 'team' ? 'this team setup' : 'this file'}. Nothing has changed yet.` : 'Nothing in this setup can be applied here.');
-    container.append(el('h3', plan.origin === 'team' ? 'Apply this team setup on this computer' : 'Imported setup'), el('p', 'Imported setups are untrusted until you review them. A backup is saved before anything changes, and Undo restores it.'));
+    const from = { team: 'this team setup', gallery: 'this gallery setup' }[plan.origin] ?? 'this file';
+    say(line, ready.length ? `Review ${ready.length} change${ready.length === 1 ? '' : 's'} from ${from}. Nothing has changed yet.` : 'Nothing in this setup can be applied here.');
+    container.append(el('h3', { team: 'Apply this team setup on this computer', gallery: 'Setup from the community gallery' }[plan.origin] ?? 'Imported setup'), el('p', 'Imported setups are untrusted until you review them. A backup is saved before anything changes, and Undo restores it.'));
+    if (plan.from) container.append(el('p', plan.from));
     if (plan.dropped?.length) container.append(el('p', `Never imported: ${plan.dropped.map((d) => `${d.key} (${d.reason})`).join('; ')}.`));
     const rows = [], values = new Map();
     for (const u of plan.units) {
@@ -106,7 +108,7 @@
         const pick = checkbox('Apply this change', () => sync());
         section.append(pick.label);
         let confirm = null;
-        if (u.requires_confirm) { confirm = checkbox(`I confirm this ${u.kind === 'mcp' ? 'MCP server and its command' : u.kind === 'setting' ? 'permission change' : 'runnable file'} exactly as shown.`, () => sync()); section.append(confirm.label); }
+        if (u.requires_confirm) { confirm = checkbox(`I confirm this ${u.kind === 'mcp' ? 'MCP server and its command' : u.kind === 'setting' ? 'permission change' : plan.origin === 'gallery' ? 'file' : 'runnable file'} exactly as shown.`, () => sync()); section.append(confirm.label); }
         for (const name of u.placeholders ?? []) {
           if (values.has(name)) continue;
           const label = el('label', `Your own value for ${name}`), input = el('input');
@@ -163,11 +165,33 @@
     say(status, `${r.backups.length} backup${r.backups.length === 1 ? '' : 's'}, newest first.`);
     for (const b of r.backups) {
       const row = el('section'), line = el('p', `${b.status.replace('_', ' ')} · ${b.changes} change${b.changes === 1 ? '' : 's'} · ${b.files.join(', ')}`);
-      row.append(el('h3', `${new Date(b.created_at).toLocaleString()} · from ${b.origin === 'team' ? 'a team setup' : 'a file'}`), line);
+      row.append(el('h3', `${new Date(b.created_at).toLocaleString()} · from ${{ team: 'a team setup', gallery: 'the community gallery' }[b.origin] ?? 'a file'}`), line);
       if (b.status === 'applied' || b.status === 'applying') row.append(button('Undo…', () => undo(b.id, line)));
       area.append(row);
     }
   }
+
+  // A setup added from the community gallery waits in main, one use. This page
+  // is kept alive and not reloaded when shown again, so it asks on every show:
+  // the Buddy window says when (a re-attached view gets no visibilitychange).
+  let pulling = false;
+  async function pullGallery() {
+    if (document.hidden || pulling || typeof api.galleryPlan !== 'function') return;
+    pulling = true;
+    try {
+      const plan = await api.galleryPlan();
+      if (!plan) return;
+      const mine = ++gen;
+      area.replaceChildren();
+      if (!plan.ok) { say(status, plan.error ?? 'That gallery setup could not be shown.'); return; }
+      renderPlan(area, plan, status, () => mine === gen);
+      root.scrollIntoView?.({ block: 'start' });
+    } catch { /* nothing pending */ } finally { pulling = false; }
+  }
+  document.addEventListener('visibilitychange', () => { void pullGallery(); });
+  window.addEventListener('focus', () => { void pullGallery(); });
+  api.onShown?.(() => { void pullGallery(); });
+  void pullGallery();
 
   window.SetupsPersonal = Object.freeze({ renderPlan });
 })();
