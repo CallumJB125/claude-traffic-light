@@ -2,7 +2,7 @@
 // The Tasks page's Recipes block (src/recipes.js decides everything): a
 // gallery over the task pane with Run now, Run tonight, Save as my own, and
 // sharing your own recipes as a file. It opens by itself while there are no
-// tasks yet. Text is only ever textContent; the page sends recipe ids and the
+// tasks yet and the helper is up. Text is only ever textContent; the page sends recipe ids and the
 // folder handle main gave it.
 (() => {
   const api = window.recipesApi;
@@ -90,9 +90,11 @@
   $('new-task').addEventListener('click', () => show(false));
   $('list').addEventListener('click', () => show(false));
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !root.hidden) { closedByPerson = true; show(false); } });
-  // With no tasks yet, the gallery is the first thing to see.
-  const list = $('list');
-  const auto = () => { if (!closedByPerson) show(!list.children.length); };
-  new MutationObserver(auto).observe(list, { childList: true });
-  void load().then(auto);
+  // With no tasks yet and the helper up, the gallery is the first thing to see; a down helper keeps its notice visible.
+  let galleryFirst = false;
+  document.addEventListener('tasks:snapshot', (e) => {
+    galleryFirst = !!e.detail?.galleryFirst;
+    if (!galleryFirst) show(false); else if (!closedByPerson) show(true);
+  });
+  void load();
 })();

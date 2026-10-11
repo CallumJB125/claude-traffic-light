@@ -134,9 +134,8 @@ test.describe('no supervisor', () => {
     try {
       h = await launchApp({ env: { CLAUDE_TRAFFIC_LIGHT_TASKS_HOME: absent } });
       const page = await openTasks(h.app);
-      // With no tasks the Recipes gallery covers the main pane; put it away to see the connection state.
-      await expect(page.locator('#recipes')).toBeVisible({ timeout: 15000 });
-      await page.keyboard.press('Escape');
+      // The Recipes gallery stays out of the way while the helper is down, so the notice shows without dismissing anything.
+      await expect(page.locator('#recipes')).toBeHidden();
       await expect(page.locator('#main h2')).toHaveText('The Tasks background helper is unavailable.', { timeout: 15000 });
       await expect(page.locator('#main')).toContainText('reconnects automatically');
       await expect(page.getByRole('button', { name: 'Try again now' })).toBeVisible();

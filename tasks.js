@@ -616,6 +616,7 @@
     snap = s;
     if (!connected()) comp && view === 'composer' && renderComposer(true);
     renderList();
+    document.dispatchEvent(new CustomEvent('tasks:snapshot', { detail: { galleryFirst: TV.galleryFirst(s) } }));
     if (pendingSelect && byId(pendingSelect)) { const id = pendingSelect; pendingSelect = null; openTask(id); return; }
     if (view === 'detail') {
       if (selectedId && !byId(selectedId) && connected()) { selectedId = null; d = null; api.close(); }
