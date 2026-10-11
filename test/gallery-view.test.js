@@ -61,8 +61,9 @@ test('opening the gallery fetches nothing until Fetch is pressed; then it lists 
   assert.equal(recipe.querySelector('pre').textContent, 'THE FULL PROMPT <b>text</b>', 'text, never markup');
   assert.equal(recipe.querySelector('b'), null);
   assert.match(recipe.textContent, /by Ana \(@ana-dev\), self-declared/);
-  assert.match(r.$('[data-id="rules/calm"]').textContent, /Available in a later version/);
-  assert.equal(r.$('[data-id="rules/calm"] .recipe-actions button'), null);
+  assert.match(r.$('[data-id="rules/calm"]').textContent, /1 widget rule/);
+  assert.equal(r.$('[data-id="rules/calm"] .cg-members li').textContent, 'Done');
+  assert.ok(r.$('[data-id="rules/calm"] .recipe-actions button'));
 });
 
 test('with a cache it opens without fetching; filters and search narrow the list', async (t) => {
@@ -92,8 +93,7 @@ test('Add sends only the id and sha, reloads My recipes, and pack members add on
   assert.match(r.$('#cg-gallery .recipes-status').textContent, /Added “Title explain-it” to My recipes\./);
   const members = r.$$('[data-id="pack/starter"] .cg-members li');
   assert.equal(members.length, 3);
-  assert.equal(members[2].querySelector('button'), null);
-  assert.match(members[2].textContent, /later version/);
+  assert.ok(members[2].querySelector('button'), 'widget rules add from a pack too');
   members[1].querySelector('button').click(); await tick();
   assert.equal(r.calls.add[1][0], 'character/pebble');
   assert.equal(r.$('[data-id="pack/starter"] .recipe-actions button'), null, 'a pack has no Add all');
@@ -108,4 +108,14 @@ test('in the demo Add is disabled; Back and Escape close the gallery', async (t)
   r.$('#cg-open').click(); await tick();
   r.w.document.dispatchEvent(new r.w.KeyboardEvent('keydown', { key: 'Escape' }));
   assert.equal(r.$('#cg-gallery').hidden, true);
+});
+
+test('adding widget rules says where they opened and does not reload My recipes', async (t) => {
+  const r = await rig(t, { cachedFirst: true });
+  r.$('#cg-open').click(); await tick();
+  const before = r.calls.list;
+  r.$('[data-id="rules/calm"] .recipe-actions button').click(); await tick();
+  assert.equal(r.calls.add.at(-1)[0], 'rules/calm');
+  assert.match(r.$('#cg-gallery .recipes-status').textContent, /Opened “Title calm” in Widget configuration\. Press Load there, then Save/);
+  assert.equal(r.calls.list, before);
 });

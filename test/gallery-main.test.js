@@ -77,7 +77,7 @@ test('a click fetches through the injected fetch with redirects refused, and cac
   assert.ok(r.fetch.calls[0].opts.signal);
   assert.match(v.provenance, /^Unsigned · fetched from plexiform\.dev over HTTPS$/);
   assert.equal(v.signed, false);
-  assert.deepEqual(v.items.map((i) => [i.id, i.addable]), [['character/pebble', true], ['pack/starter', false], ['recipe/explain-it', true], ['rules/calm', false]]);
+  assert.deepEqual(v.items.map((i) => [i.id, i.addable]), [['character/pebble', true], ['pack/starter', false], ['recipe/explain-it', true], ['rules/calm', true]]);
   assert.match(v.items.find((i) => i.kind === 'recipe').preview.prompt, /NEVER-ELIDED/);
   assert.deepEqual(v.items.find((i) => i.kind === 'pack').preview.members.map((m) => m.addable), [true, true]);
   const file = path.join(r.dataDir, 'gallery', 'index.json');
@@ -158,13 +158,12 @@ test('the character confirm and saved name come from the validated character', a
   assert.equal(r.confirms[0].title, 'Pebble');
 });
 
-test('adds: the sha must match, demo refuses, packs/rules/setups are not added', async (t) => {
+test('adds: the sha must match, demo refuses, packs are not added', async (t) => {
   const r = rig(t);
   const v = await r.g.fetchIndex();
   const item = (id) => v.items.find((i) => i.id === id);
   assert.match((await r.g.add('recipe/explain-it', 'f'.repeat(64))).error, /changed or is no longer/);
   assert.match((await r.g.add('pack/starter', item('pack/starter').sha256)).error, /one at a time/);
-  assert.match((await r.g.add('rules/calm', item('rules/calm').sha256)).error, /later version/);
   assert.equal(r.confirms.length, 0);
   const demo = rig(t, { demo: true });
   const dv = await demo.g.fetchIndex();

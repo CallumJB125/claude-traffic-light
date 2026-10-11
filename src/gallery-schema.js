@@ -19,7 +19,7 @@ const CharacterStore = require('./character-store.js');
 const { findSecrets } = require('./secret-patterns.js');
 
 const KINDS = Object.freeze(['recipe', 'character', 'pack', 'rules', 'setup']);
-const ADDABLE = Object.freeze(['recipe', 'character']);
+const ADDABLE = Object.freeze(['recipe', 'character', 'rules']);
 const STACKS = Object.freeze(['nextjs', 'python', 'swift', 'go', 'rust', 'node', 'rails', 'any']);
 const LICENSES = Object.freeze(['CC0-1.0', 'MIT']);
 const LIMITS = Object.freeze({ indexBytes: 2 * 1024 * 1024, entries: 500, entryBytes: 128 * 1024, id: 48, title: 80, summary: 300, name: 60, tags: 8, tag: 24, stacks: 4, packMin: 2, packMax: 12, note: 300, rules: 40, setupFiles: 128, setupFileBytes: 256 * 1024 });

@@ -33,7 +33,7 @@
     const r = await api.add(item.id, item.sha256).catch(() => null);
     b.disabled = false;
     if (r && r.ok) {
-      say(r.kind === 'character' ? `Added “${item.title}” to Characters.` : `Added “${item.title}” to My recipes.`);
+      say(r.kind === 'character' ? `Added “${item.title}” to Characters.` : r.kind === 'rules' ? `Opened “${item.title}” in Widget configuration. Press Load there, then Save, to keep them.` : `Added “${item.title}” to My recipes.`);
       if (r.kind === 'recipe') document.dispatchEvent(new CustomEvent('gallery:added'));
       return;
     }
@@ -55,6 +55,7 @@
     const more = el('details', 'recipe-prompt');
     if (item.kind === 'recipe') { more.append(el('summary', null, 'See the prompt'), el('p', 'recipe-cost', `${p.what} Cost: ${p.cost}`), el('pre', null, p.prompt)); li.append(more); }
     else if (item.kind === 'character') li.append(el('p', 'recipe-cost', `A widget character named ${p.name}. Its art is checked again before it is saved.`));
+    else if (item.kind === 'rules') { more.append(el('summary', null, `${p.names.length} widget rule${p.names.length === 1 ? '' : 's'}`), el('p', 'recipe-cost', 'They open in Widget configuration, and replace your rules only when you press Load and then Save there.')); const ul = el('ul', 'cg-members'); for (const n of p.names) ul.append(el('li', null, n)); more.append(ul); li.append(more); }
     else if (item.kind === 'pack') {
       more.open = true;
       more.append(el('summary', null, `${p.members.length} items, each added on its own`));
@@ -90,7 +91,7 @@
   function render() {
     const head = el('header', 'recipes-head');
     const title = el('div');
-    title.append(el('h2', null, 'Community gallery'), el('p', null, 'Recipes and widget characters other people shared on plexiform.dev. Gallery recipes only read: they plan and report and never change files. You see everything an item contains before it is added, and nothing runs when you add it.'));
+    title.append(el('h2', null, 'Community gallery'), el('p', null, 'Recipes, widget characters and widget rules other people shared on plexiform.dev. Gallery recipes only read: they plan and report and never change files. You see everything an item contains before it is added, and nothing runs when you add it.'));
     title.firstChild.id = 'cg-title';
     head.append(title, btn('Back to recipes', 'small', () => show(false)));
     const where = el('div', 'recipes-where');

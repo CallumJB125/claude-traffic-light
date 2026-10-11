@@ -10,7 +10,9 @@
 //
 // The page names only an entry id and its sha256; main looks the entry up
 // in what it verified, shows a native confirm with everything it contains,
-// and only then adds it. v1 adds recipes and characters.
+// and only then adds it. Recipes and characters are saved at once; widget
+// rules open in Widget configuration as an offer that still needs Load and
+// Save there.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -69,11 +71,12 @@ function preview(e, byId) {
   const p = e.payload;
   if (e.kind === 'recipe') return { what: p.what, prompt: p.prompt, tool: p.tool, cost: p.cost };
   if (e.kind === 'character') return { name: p.name };
+  if (e.kind === 'rules') return { names: p.rules.map((r) => r.name) };
   if (e.kind === 'pack') return { note: p.note, members: p.members.map((id) => { const m = byId.get(id); return m ? { id, kind: m.kind, title: m.title, sha256: m.sha256, addable: S.ADDABLE.includes(m.kind) } : { id, missing: true }; }) };
   return null;
 }
 
-function create({ dataDir, fetch, keysDir, now = Date.now, recipes, characterStore, confirm, broadcastCharacters = () => {}, demo = () => false }) {
+function create({ dataDir, fetch, keysDir, now = Date.now, recipes, characterStore, confirm, broadcastCharacters = () => {}, offerRules = () => {}, demo = () => false }) {
   const cacheDir = path.join(dataDir, 'gallery');
   const { keys, broken } = readKeys(keysDir);
   const signed = keys.length > 0 || broken;
@@ -173,6 +176,7 @@ function create({ dataDir, fetch, keysDir, now = Date.now, recipes, characterSto
       if (!yes) return { ok: false, cancelled: true, error: 'Cancelled. Nothing was added.' };
       return recipes.addFromGallery(e);
     }
+    if (e.kind === 'rules') return addRules(e, ev);
     const v = validateCharacter(e.payload, { source: 'import' });
     if (!v.ok) return { ok: false, error: 'That character could not be added.' };
     const yes = await confirm({ title: v.character.name, action: 'Add to Characters', detail: [by(e), 'A widget character: art only, checked again by the app’s sanitiser before it is saved.'].join('\n') }, ev);
@@ -184,6 +188,19 @@ function create({ dataDir, fetch, keysDir, now = Date.now, recipes, characterSto
     } catch (err) {
       return { ok: false, error: /^at most/.test(err.message) ? `You can keep ${err.message}. Delete one first.` : 'That character could not be added.' };
     }
+  }
+
+  // Migrated like an imported rules file, then offered in Widget configuration,
+  // where they replace the person's rules only after Load and then Save.
+  async function addRules(e, ev) {
+    const Rules = require('../rules.js');
+    const rules = Rules.migrateRules(e.payload.rules.map(Rules.normalizeRule), Rules.rulesVersionOf(e.payload));
+    if (Rules.clickCommands(e.payload.rules).length) return { ok: false, error: 'Those widget rules could not be added.' };
+    const k = e.payload.rules.length;
+    const yes = await confirm({ title: e.title, action: 'Open in Widget configuration', detail: [by(e), `${k} widget rule${k === 1 ? '' : 's'}: ${e.payload.rules.map((r) => r.name).join(', ')}.`, 'They open in Widget configuration as an offer. Your rules change only if you press Load there and then Save, and Revert goes back to your saved rules. Clicks in gallery rules never run commands, Shortcuts, links or apps.'].join('\n') }, ev);
+    if (!yes) return { ok: false, cancelled: true, error: 'Cancelled. Nothing was changed.' };
+    offerRules(rules);
+    return { ok: true, kind: 'rules' };
   }
 
   return { fetchIndex, cached, add, INDEX_URL };

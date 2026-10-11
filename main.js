@@ -2030,6 +2030,7 @@ require('./src/recipes.js').register({
   };
   const gallery = Gallery.create({
     dataDir: ROOT_DIR, keysDir: path.join(__dirname, 'build'), recipes, characterStore, broadcastCharacters, demo: () => Demo.active(), confirm: tasksConfirm,
+    offerRules: (rules) => showLightsView('rules', { event: 'rules:offer', data: rules }),
     fetch: galleryFetch,
   });
   Gallery.register({ ipcMain, allowed: tasksSenderOk, gallery });
