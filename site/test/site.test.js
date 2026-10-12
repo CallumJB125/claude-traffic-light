@@ -283,6 +283,8 @@ test('gallery: with the flag on, the committed index is copied, item pages are e
     const list = fs.readFileSync(path.join(DIST, 'gallery.html'), 'utf8');
     assert.equal((list.match(/class="cg-item"/g) || []).length, 3);
     assert.ok(!/<b>it/.test(list));
+    const S = require('../../src/gallery-schema.js');
+    for (const kind of S.KINDS) assert.match(list, new RegExp(`data-cg-kind="${kind}"`), `a filter chip for ${kind}`);
     assert.match(fs.readFileSync(path.join(DIST, 'index.html'), 'utf8'), /<a href="\/gallery">Gallery<\/a>/);
     const sitemap = fs.readFileSync(path.join(DIST, 'sitemap.xml'), 'utf8');
     for (const p of ['/gallery<', '/gallery/recipe/explain-it<', '/gallery/character/pebble<', '/gallery/pack/starter<']) assert.ok(sitemap.includes(`plexiform.dev${p}`), p);

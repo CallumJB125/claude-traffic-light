@@ -23,7 +23,7 @@
 <main id="main" class="page">
   <div class="wrap">
     <h1>Gallery</h1>
-    <p class="lede">Recipes and widget characters other people made for {{brand.name}}. Each one is reviewed before it is listed. Recipes here only read: they plan and report, and never change files.</p>
+    <p class="lede">Recipes, widget characters, widget rules and setups other people made for {{brand.name}}. Each one is reviewed before it is listed. Recipes here only read: they plan and report, and never change files.</p>
     <p class="prose" style="margin-top:14px">Authors' names and GitHub handles are self-declared. Add things from inside the app (Tasks → Recipes → Browse the gallery), where you see everything an item contains before it is saved.</p>
     <div class="cg-tools" role="search">
       <input id="cg-search" aria-label="Search the gallery" type="search" placeholder="Search" autocomplete="off" />
@@ -31,6 +31,8 @@
       <button type="button" class="chip cg-chip" data-cg-kind="recipe" aria-pressed="false">Recipes</button>
       <button type="button" class="chip cg-chip" data-cg-kind="character" aria-pressed="false">Characters</button>
       <button type="button" class="chip cg-chip" data-cg-kind="pack" aria-pressed="false">Packs</button>
+      <button type="button" class="chip cg-chip" data-cg-kind="rules" aria-pressed="false">Rules</button>
+      <button type="button" class="chip cg-chip" data-cg-kind="setup" aria-pressed="false">Setups</button>
       <select id="cg-stack" aria-label="Stack"><option value="">Any stack</option><option value="nextjs">Next.js</option><option value="python">Python</option><option value="swift">Swift</option><option value="go">Go</option><option value="rust">Rust</option><option value="node">Node</option><option value="rails">Rails</option></select>
     </div>
     <p id="cg-count" class="cg-note" aria-live="polite" style="margin-top:14px"></p>
