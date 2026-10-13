@@ -23,4 +23,19 @@ Sessions: **Continue in…** then **Hand off to another AI…** lists the tools 
 - Cancel (or closing the dialog) does nothing: nothing is launched or copied.
 - Confirm creates the confirmation in main (`confirmation`), calls `release`, and passes the released text to the existing continue-in launcher (`src/continue-in.js` `run`): Codex and Claude Code on Plus start a visible, text-only owned session shown on Sessions with Send and End; every other tool, and the free plan, get the text on the clipboard.
 - The page only names a session key and a tool id (`continue:handoff`, Sessions page only, sender-checked like its neighbours). It cannot supply a confirmation.
-- Nothing leaves this Mac beyond the existing continue-in paths, so PRIVACY.md has no new entry.
+- A hand-off to a tool leaves this Mac only into that tool. A hand-off to a teammate (below) is a PRIVACY.md flow (`flow:handoff`).
+
+## To a teammate (agent mail)
+
+While signed in to a team, the same submenu ends with **A teammate…** (Sessions) or the teammates' names (board card). The names come from the members of the team board the session's folder is linked to (`AgentMail.teammates`, same rule as `team_ask`). The packet is built with `to: 'teammate'`, shown in the same native dialog, and on Confirm `AgentMail.sendHandoff` holds it on the hub exactly like an AI's `team_hand_off` draft and releases it at once (the confirm was the Send), so it reaches the teammate's Agent mail, scrubbed again by the hub, with `via.label` "Hand off from Plexiform". The teammate accepts it the usual way (folder, native confirm, a Tasks run in its own worktree) or declines.
+
+**Status back.** The hand-offs that left this Mac show on Sessions → Agent mail under *Hand-offs you sent* with their state: offered, accepted, done, failed, declined, expired. The receiver's app remembers the task an accepted hand-off became (`AgentMail.acceptedTasks`); when the tasks snapshot shows it at `in_review`/`done` or `failed`, main calls `taskEnded`, which posts `decision: done|failed` with the task's short reason to `POST /messages/:id/handoff` (hub: only the receiver, only once `accepted`, migration 073). The sender's AI reads the same outcome through `team_agent_mail`.
+
+## Asked for by the AI (hand-off requests)
+
+A running session can ask for a hand-off to another tool on this Mac in two ways, and both end in the same place:
+
+- The local MCP tool `hand_off_to_tool { to, title, reason, brief, files, branch }` (`/team/mail` op `request_handoff`).
+- One line in its reply: `plexiform: handoff to codex: <why>` (`src/handoff-requests.js` `parseMarker`). The handover writer (`src/session-handover.js` `onRendered`) passes the session's last assistant text and facts to `HandoffRequests.fromText`; one marker makes one request per session and target, however often the handover is re-rendered, and a dismissed request does not come back.
+
+`src/handoff-requests.js` keeps at most 8 pending requests in memory (an hour each, finished ones kept ten minutes) and never launches anything. Each shows on Sessions → **Hand-off requests** with Confirm… and Dismiss, plus a notification. Confirm calls `continueIn.handoffPacket`: the same native preview, `release`, and `run` as a hand-off the person started. The launched session's `done`/`closed` events write the outcome (state and the other tool's last message, 500 chars) back on the card; the asking AI reads only states and outcomes through `hand_off_status`. Free plan or a copy-only tool: the packet is copied and the request ends as *copied*.
