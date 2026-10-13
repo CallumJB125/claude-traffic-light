@@ -10,6 +10,7 @@ const S = require('../src/gallery-schema.js');
 const V = require('../src/plugins/index-verify.js');
 const Hatch = require('../characters/hatch.js');
 const CharacterStore = require('../src/character-store.js');
+const Recipes = require('../src/recipes.js');
 const Inventory = require('../src/data-inventory.js');
 const DataDelete = require('../src/data-delete.js');
 
@@ -49,16 +50,20 @@ function rig(t, { items = defaultItems(), bytes = null, keys = null, routes = nu
   const sign = (b) => JSON.stringify({ alg: 'ed25519', keyId: V.keyId(signer.publicKey), sig: crypto.sign(null, b, signer.privateKey).toString('base64') });
   const fetch = fakeFetch(routes || { [Gallery.INDEX_URL]: body, ...(signer && keys !== 'broken' ? { [Gallery.SIG_URL]: sign(body) } : {}) });
   const store = CharacterStore.create({ dir: path.join(dataDir, 'characters') });
-  const confirms = [], added = [], broadcasts = [];
+  const confirms = [], added = [], broadcasts = [], changed = [];
+  // The real recipes store, so origin sidecars and Installed are exercised; `added` records what reached it.
+  const realRecipes = Recipes.create({ builtInDir: path.join(dir, 'no-built-in'), dataDir: path.join(dataDir, 'recipes'), home: dir, now: () => NOW });
+  const recipes = { ...realRecipes, addFromGallery: (e) => { added.push(e); const r = realRecipes.addFromGallery(e); return r.ok ? { ok: true, id: e.slug ?? r.id } : r; } };
   const g = Gallery.create({
     dataDir, fetch, keysDir, now: () => NOW,
-    recipes: { addFromGallery: (e) => { added.push(e); return { ok: true, id: e.slug }; } },
+    recipes,
     characterStore: store,
     confirm: async (opts) => { confirms.push(opts); return confirm; },
     broadcastCharacters: () => broadcasts.push(1),
+    onRecipesChanged: () => changed.push(1),
     demo: () => demo,
   });
-  return { g, fetch, dataDir, keysDir, store, confirms, added, broadcasts, sign };
+  return { g, recipes: realRecipes, changed, fetch, dataDir, keysDir, store, confirms, added, broadcasts, sign };
 }
 
 test('nothing is fetched when the service is created or when the cache is read', async (t) => {
@@ -171,6 +176,76 @@ test('adds: the sha must match, demo refuses, packs are not added', async (t) =>
   assert.equal(demo.added.length, 0);
 });
 
+test('a pack adds its recipes and characters after one confirm, skips what is here, and names what opens on its own', async (t) => {
+  const items = [recipeItem(), charItem(), rulesItem(), base('pack', 'starter', { members: ['recipe/explain-it', 'character/pebble', 'rules/calm'], note: '' })];
+  const no = rig(t, { items, confirm: false });
+  const nv = await no.g.fetchIndex();
+  const sha = nv.items.find((i) => i.id === 'pack/starter').sha256;
+  assert.equal((await no.g.addPack('pack/starter', sha)).cancelled, true);
+  assert.equal(no.added.length, 0);
+  assert.equal(no.store.list().length, 0);
+  const r = rig(t, { items });
+  const v = await r.g.fetchIndex();
+  assert.match((await r.g.addPack('pack/starter', 'f'.repeat(64))).error, /changed or is no longer/);
+  assert.match((await r.g.addPack('recipe/explain-it', v.items.find((i) => i.kind === 'recipe').sha256)).error, /not a pack/);
+  const out = await r.g.addPack('pack/starter', sha);
+  assert.deepEqual(out, { ok: true, added: ['recipe/explain-it', 'character/pebble'], present: [], separate: ['rules/calm'], failed: [] });
+  assert.equal(r.confirms.length, 1, 'one confirm for the whole pack');
+  assert.equal(r.confirms[0].action, 'Add the pack');
+  assert.match(r.confirms[0].detail, /2 items will be added:\n• recipe: Title explain-it\n• character: Title pebble/);
+  assert.match(r.confirms[0].detail, /open one at a time/);
+  assert.equal(r.broadcasts.length, 1);
+  assert.equal(r.changed.length, 1);
+  assert.deepEqual(r.store.list().map((c) => [c.character.id, c.meta.source, c.meta.params]), [['u-pebble', 'gallery', { gallery_id: 'character/pebble', sha256: v.items.find((i) => i.kind === 'character').sha256 }]]);
+  // again: everything is here already, nothing is asked or added
+  const again = await r.g.addPack('pack/starter', sha);
+  assert.deepEqual(again, { ok: true, added: [], present: ['recipe/explain-it', 'character/pebble'], separate: ['rules/calm'], failed: [] });
+  assert.equal(r.confirms.length, 1);
+  const demo = rig(t, { items, demo: true });
+  await demo.g.fetchIndex();
+  assert.match((await demo.g.addPack('pack/starter', sha)).error, /demo/);
+});
+
+test('installed lists what the gallery put here, and remove takes only that away', async (t) => {
+  const r = rig(t);
+  const v = await r.g.fetchIndex();
+  const item = (id) => v.items.find((i) => i.id === id);
+  assert.deepEqual(r.g.installed(), { ok: true, recipes: [], characters: [] });
+  await r.g.add('recipe/explain-it', item('recipe/explain-it').sha256);
+  await r.g.add('character/pebble', item('character/pebble').sha256);
+  r.store.save(Hatch.templateCharacter({ name: 'Mine' }), { source: 'hatch' });
+  r.recipes.saveMine('explain-it');
+  const inst = r.g.installed();
+  assert.deepEqual(inst.recipes, [{ id: 'explain-it', galleryId: 'recipe/explain-it', title: 'Title explain-it', author: { name: 'Ana', github: 'ana-dev' }, addedAt: '2026-10-10T12:00:00.000Z' }]);
+  assert.equal(inst.characters.length, 1);
+  assert.equal(inst.characters[0].id, 'u-pebble');
+  assert.equal(inst.characters[0].galleryId, 'character/pebble');
+  assert.equal(inst.characters[0].title, 'Pebble');
+  assert.equal(r.changed.length, 1, 'the recipe add told the Tasks page');
+  assert.match(r.g.remove('recipe', 'my-explain-it').error, /did not come from the gallery/);
+  assert.match(r.g.remove('character', 'u-mine').error, /did not come from the gallery/);
+  assert.match(r.g.remove('setup', 'x').error, /Only gallery recipes and characters/);
+  assert.deepEqual(r.g.remove('recipe', 'explain-it'), { ok: true });
+  assert.equal(r.changed.length, 2);
+  assert.deepEqual(r.g.remove('character', 'u-pebble'), { ok: true });
+  assert.equal(r.broadcasts.length, 2);
+  assert.deepEqual(r.g.installed(), { ok: true, recipes: [], characters: [] });
+  assert.deepEqual(r.recipes.mine().map((x) => x.id), ['my-explain-it'], 'the person’s own copy stays');
+  assert.deepEqual(r.store.list().map((c) => c.character.id), ['u-mine']);
+  const demo = rig(t, { demo: true });
+  assert.match(demo.g.remove('recipe', 'explain-it').error, /demo/);
+});
+
+test('a character preview carries the sanitised definition the app would save', async (t) => {
+  const r = rig(t);
+  const v = await r.g.fetchIndex();
+  const ch = v.items.find((i) => i.kind === 'character');
+  assert.equal(ch.preview.name, 'Pebble');
+  assert.equal(ch.preview.character.name, 'Pebble');
+  assert.ok(typeof ch.preview.character.sprite.body === 'string');
+  assert.equal(ch.added, '2026-10-01');
+});
+
 test('adding a recipe confirms with the full prompt first; cancelling adds nothing', async (t) => {
   const no = rig(t, { confirm: false });
   const nv = await no.g.fetchIndex();
@@ -211,10 +286,20 @@ test('the gallery cache is listed in Your data and removed by Delete my data', a
 test('IPC answers only the allowed sender and passes only an id and sha', async (t) => {
   const handlers = {};
   const calls = [];
-  Gallery.register({ ipcMain: { handle: (c, fn) => { handlers[c] = fn; } }, allowed: (e) => e.ok, gallery: { fetchIndex: async () => ({ ok: true }), cached: () => ({ ok: true }), add: async (...a) => { calls.push(a); return { ok: true }; } } });
-  assert.deepEqual(Object.keys(handlers).sort(), ['gallery:add', 'gallery:cached', 'gallery:fetch']);
+  const opened = [];
+  Gallery.register({ ipcMain: { handle: (c, fn) => { handlers[c] = fn; } }, allowed: (e) => e.ok, openDiscover: () => opened.push(1), gallery: { fetchIndex: async () => ({ ok: true }), cached: () => ({ ok: true }), add: async (...a) => { calls.push(a); return { ok: true }; }, addPack: async (...a) => { calls.push(['pack', ...a]); return { ok: true }; }, installed: () => ({ ok: true, recipes: [], characters: [] }), remove: (...a) => { calls.push(['remove', ...a]); return { ok: true }; } } });
+  assert.deepEqual(Object.keys(handlers).sort(), ['gallery:add', 'gallery:add-pack', 'gallery:cached', 'gallery:fetch', 'gallery:installed', 'gallery:open-discover', 'gallery:remove']);
   assert.equal(await handlers['gallery:fetch']({ ok: false }), null);
+  assert.equal(await handlers['gallery:open-discover']({ ok: false }), null);
+  assert.equal(opened.length, 0);
   const e = { ok: true };
   await handlers['gallery:add'](e, 'recipe/x', 'abc', 'ignored');
   assert.deepEqual(calls[0], ['recipe/x', 'abc', e]);
+  await handlers['gallery:add-pack'](e, 'pack/x', 'abc', 'ignored');
+  assert.deepEqual(calls[1], ['pack', 'pack/x', 'abc', e]);
+  await handlers['gallery:remove'](e, 'recipe', 'x', 'ignored');
+  assert.deepEqual(calls[2], ['remove', 'recipe', 'x']);
+  assert.deepEqual(await handlers['gallery:installed'](e), { ok: true, recipes: [], characters: [] });
+  assert.deepEqual(await handlers['gallery:open-discover'](e), { ok: true });
+  assert.equal(opened.length, 1);
 });
