@@ -1,0 +1,264 @@
+[
+  {
+    "name": "sessionStart",
+    "event": "sessionStart",
+    "payload": {
+      "sessionId": "cp-7a1",
+      "timestamp": "2026-10-13T09:00:00Z",
+      "cwd": "/w/cp",
+      "source": "startup"
+    },
+    "expect": [
+      {
+        "signal": "session-start",
+        "sessionId": "cp-7a1",
+        "cwd": "/w/cp",
+        "tool": null
+      }
+    ]
+  },
+  {
+    "name": "userPromptSubmitted",
+    "event": "userPromptSubmitted",
+    "payload": {
+      "sessionId": "cp-7a1",
+      "timestamp": "2026-10-13T09:00:01Z",
+      "cwd": "/w/cp",
+      "prompt": "fix the tests"
+    },
+    "expect": [
+      {
+        "signal": "prompt-submit",
+        "sessionId": "cp-7a1",
+        "cwd": "/w/cp",
+        "tool": null
+      }
+    ]
+  },
+  {
+    "name": "preToolUse",
+    "event": "preToolUse",
+    "payload": {
+      "sessionId": "cp-7a1",
+      "timestamp": "2026-10-13T09:00:02Z",
+      "cwd": "/w/cp",
+      "toolName": "bash",
+      "toolArgs": {
+        "command": "npm test"
+      }
+    },
+    "expect": [
+      {
+        "signal": "tool-use",
+        "sessionId": "cp-7a1",
+        "cwd": "/w/cp",
+        "tool": "bash"
+      }
+    ]
+  },
+  {
+    "name": "notification permission",
+    "event": "notification",
+    "payload": {
+      "sessionId": "cp-7a1",
+      "cwd": "/w/cp",
+      "hook_event_name": "notification",
+      "notification_type": "permission_prompt",
+      "message": "Copilot needs your permission to run rm -rf build"
+    },
+    "expect": [
+      {
+        "signal": "permission-ask",
+        "sessionId": "cp-7a1",
+        "cwd": "/w/cp",
+        "tool": null,
+        "extra": {
+          "askKind": "notification"
+        }
+      }
+    ]
+  },
+  {
+    "name": "postToolUse",
+    "event": "postToolUse",
+    "payload": {
+      "sessionId": "cp-7a1",
+      "timestamp": "2026-10-13T09:00:05Z",
+      "cwd": "/w/cp",
+      "toolName": "bash",
+      "toolArgs": {},
+      "toolResult": {
+        "resultType": "success",
+        "textResultForLlm": "ok"
+      }
+    },
+    "expect": [
+      {
+        "signal": "tool-done",
+        "sessionId": "cp-7a1",
+        "cwd": "/w/cp",
+        "tool": "bash"
+      }
+    ]
+  },
+  {
+    "name": "postToolUseFailure",
+    "event": "postToolUseFailure",
+    "payload": {
+      "sessionId": "cp-7a1",
+      "cwd": "/w/cp",
+      "toolName": "edit",
+      "toolArgs": {},
+      "error": "no such file"
+    },
+    "expect": [
+      {
+        "signal": "tool-failed",
+        "sessionId": "cp-7a1",
+        "cwd": "/w/cp",
+        "tool": "edit"
+      }
+    ]
+  },
+  {
+    "name": "subagentStart",
+    "event": "subagentStart",
+    "payload": {
+      "sessionId": "cp-7a1",
+      "cwd": "/w/cp",
+      "transcriptPath": "/t",
+      "agentName": "explore"
+    },
+    "expect": [
+      {
+        "signal": "subagent-start",
+        "sessionId": "cp-7a1",
+        "cwd": "/w/cp",
+        "tool": null
+      }
+    ]
+  },
+  {
+    "name": "subagentStop",
+    "event": "subagentStop",
+    "payload": {
+      "sessionId": "cp-7a1",
+      "cwd": "/w/cp",
+      "agentId": "a1",
+      "agentType": "explore",
+      "agentName": "explore",
+      "response": "done",
+      "stopReason": "end_turn"
+    },
+    "expect": [
+      {
+        "signal": "subagent-done",
+        "sessionId": "cp-7a1",
+        "cwd": "/w/cp",
+        "tool": null
+      }
+    ]
+  },
+  {
+    "name": "agentStop",
+    "event": "agentStop",
+    "payload": {
+      "sessionId": "cp-7a1",
+      "cwd": "/w/cp",
+      "transcriptPath": "/t",
+      "stopReason": "end_turn",
+      "stop_hook_active": false
+    },
+    "expect": [
+      {
+        "signal": "stop",
+        "sessionId": "cp-7a1",
+        "cwd": "/w/cp",
+        "tool": null
+      }
+    ]
+  },
+  {
+    "name": "errorOccurred",
+    "event": "errorOccurred",
+    "payload": {
+      "sessionId": "cp-7a1",
+      "cwd": "/w/cp",
+      "error": {
+        "message": "boom",
+        "name": "Error"
+      },
+      "errorContext": "model",
+      "recoverable": false
+    },
+    "expect": [
+      {
+        "signal": "turn-failed",
+        "sessionId": "cp-7a1",
+        "cwd": "/w/cp",
+        "tool": null
+      }
+    ]
+  },
+  {
+    "name": "notification limit",
+    "event": "notification",
+    "payload": {
+      "sessionId": "cp-7a1",
+      "cwd": "/w/cp",
+      "notification_type": "info",
+      "message": "You have reached your monthly premium request quota"
+    },
+    "expect": [
+      {
+        "signal": "limit-hit",
+        "sessionId": "cp-7a1",
+        "cwd": "/w/cp",
+        "tool": null
+      }
+    ]
+  },
+  {
+    "name": "sessionEnd",
+    "event": "sessionEnd",
+    "payload": {
+      "sessionId": "cp-7a1",
+      "cwd": "/w/cp",
+      "reason": "user_exit"
+    },
+    "expect": [
+      {
+        "signal": "session-end",
+        "sessionId": "cp-7a1",
+        "cwd": "/w/cp",
+        "tool": null
+      }
+    ]
+  },
+  {
+    "name": "preToolUse never gates: no reply",
+    "event": "preToolUse",
+    "payload": {
+      "sessionId": "cp-7a1",
+      "cwd": "/w/cp",
+      "toolName": "bash"
+    },
+    "reply": null,
+    "expect": [
+      {
+        "signal": "tool-use",
+        "sessionId": "cp-7a1",
+        "cwd": "/w/cp",
+        "tool": "bash"
+      }
+    ]
+  },
+  {
+    "name": "unknown event",
+    "event": "userPromptTransformed",
+    "payload": {
+      "sessionId": "cp-7a1"
+    },
+    "expect": []
+  }
+]
