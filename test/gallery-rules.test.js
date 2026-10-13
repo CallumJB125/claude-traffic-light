@@ -77,3 +77,17 @@ test('main offers through Widget rules; the page waits for its own rules before 
   assert.match(view, /window\.lightsApi\.onOffer\(\(incoming\) => \{ if \(Array\.isArray\(incoming\)\) void booted\.then\(\(\) => offerRules\(incoming, 'From the gallery — Save to keep them'\)\); \}\);/);
   assert.match(view, /const booted = \(async \(\) => \{/);
 });
+
+test('the rules offer is its own bar above the rules list, not inside the open Presets dropdown', () => {
+  const { JSDOM } = require('jsdom');
+  const doc = new JSDOM(fs.readFileSync(path.join(ROOT, 'lights.html'), 'utf8')).window.document;
+  const bar = doc.getElementById('rules-choice');
+  assert.ok(bar && bar.hidden, 'hidden until something is offered');
+  assert.equal(bar.closest('#presets'), null, 'not inside the Presets dropdown');
+  assert.equal(bar.nextElementSibling, doc.getElementById('rule-list'), 'directly above the rules list');
+  assert.ok(bar.querySelector('#rules-summary') && bar.querySelector('[data-rules=load]') && bar.querySelector('[data-rules=cancel]'));
+  const view = fs.readFileSync(path.join(ROOT, 'lights-view.js'), 'utf8');
+  const offer = view.slice(view.indexOf('function offerRules('), view.indexOf("$('rules-choice').addEventListener"));
+  assert.match(offer, /\$\('presets'\)\.hidden = true;/, 'offering closes Presets');
+  assert.doesNotMatch(offer, /\$\('presets'\)\.hidden = false/);
+});
