@@ -63,10 +63,21 @@
     $('save').disabled = true;
     try {
       const r = await api.save(token);
-      if (r && r.ok) status(`Saved as ${r.name}. Pick it in Lights, under Body.`, true);
+      if (r && r.ok) { status(`Saved as ${r.name}. Pick it in Lights, under Body, or share it to the gallery below.`, true); await loadShareList(r.id); }
       else status((r && r.error) || 'Could not save it.');
     } catch { status('Could not save it.'); }
     $('save').disabled = false;
+  }
+
+  // "Share to the gallery…": the saved characters (main's validated list) to pick from; the one just saved is selected.
+  async function loadShareList(preferId) {
+    if (!window.galleryPublish || !window.userCharacters) return;
+    let list = [];
+    try { list = (await window.userCharacters.list()) || []; } catch { list = []; }
+    const pick = $('share-pick');
+    pick.replaceChildren(...list.map((c) => { const o = document.createElement('option'); o.value = c.id; o.textContent = c.name; return o; }));
+    if (preferId && list.some((c) => c.id === preferId)) pick.value = preferId;
+    $('share-row').hidden = $('share-hint').hidden = !list.length;
   }
 
   async function describe() {
@@ -104,6 +115,12 @@
     $('form').addEventListener('submit', (e) => { e.preventDefault(); save(); });
     $('close').textContent = new URLSearchParams(location.search).get('embedded') === '1' ? 'Back to widget configuration' : 'Close';
     $('close').addEventListener('click', () => api.close());
+    $('share-gallery').addEventListener('click', () => {
+      const id = $('share-pick').value;
+      if (!id) return;
+      window.galleryPublish.open({ kind: 'character', ref: id, onDone: (d) => { if (d.error) status(d.error); else if (d.opened) status('Opened GitHub with your character filled in. Press Propose changes there to open the pull request.', true); } });
+    });
+    await loadShareList();
     await refresh();
     if (!reduce) setInterval(() => { if (document.hidden) return; look = (look + 1) % LOOKS.length; if (token) show(currentId); }, 2600);
   }

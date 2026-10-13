@@ -2061,6 +2061,17 @@ let galleryService = null;
   galleryService = gallery;
   Gallery.register({ ipcMain, allowed: tasksSenderOk, gallery });
 }
+// "Share to gallery…" (src/gallery-publish.js): a recipe of mine, a saved character or widget rules as a
+// gallery item, checked here, handed over as a prefilled GitHub new-file page or JSON on the clipboard.
+{
+  const Publish = require('./src/gallery-publish.js');
+  const publish = Publish.create({
+    recipes, characterStore, presets: () => loadConfig().presets || [],
+    profile: { get: () => loadConfig().galleryAuthor || null, set: (v) => saveConfig({ galleryAuthor: v }) },
+    openExternal: (url) => shell.openExternal(url), clipboard, demo: () => Demo.active(),
+  });
+  Publish.register({ ipcMain, allowed: (e) => tasksSenderOk(e) || widgetConfigSender(e) || fromUtilityPage(e, 'hatch'), publish });
+}
 
 let lightsWin = null;
 let onboardingWin = null; // the first-run setup window (createOnboardingWindow)

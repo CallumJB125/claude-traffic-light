@@ -1,0 +1,24 @@
+/* The "Share to gallery…" dialog (gallery-publish-view.js), on the Tasks, Widget configuration and Hatch pages. */
+.gp-dialog { border: 1px solid var(--line-strong, #444); border-radius: var(--radius-lg, 12px); background: var(--panel, #1c1c1e); color: var(--text, #eee); padding: 0; width: min(640px, calc(100vw - 32px)); max-height: calc(100vh - 48px); }
+.gp-dialog::backdrop { background: rgba(0, 0, 0, 0.5); }
+.gp-form { display: grid; gap: var(--space-3, 12px); padding: var(--space-5, 20px); }
+.gp-form h2 { margin: 0; font-size: var(--text-lg, 17px); }
+.gp-intro, .gp-note, .gp-hint { margin: 0; color: var(--text-muted, #aaa); font-size: var(--text-sm, 12px); }
+.gp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3, 12px); }
+.gp-grid .gp-field:nth-child(-n+2) { grid-column: 1 / -1; }
+.gp-field { display: grid; gap: 4px; font-size: var(--text-sm, 12px); }
+.gp-label { font-weight: 600; }
+.gp-field input, .gp-field select { font: inherit; color: inherit; background: var(--panel-2, #2a2a2c); border: 1px solid var(--line-strong, #444); border-radius: var(--radius, 6px); padding: 5px 8px; min-height: 28px; }
+.gp-field select[multiple] { min-height: 72px; }
+.gp-field input:focus-visible, .gp-field select:focus-visible { outline: none; box-shadow: var(--focus, 0 0 0 2px #38bdf8); }
+.gp-check { margin: 0; font-size: var(--text-sm, 12px); color: var(--ok-text, #6ee7b7); }
+.gp-check.gp-bad { color: var(--danger-text, #fca5a5); }
+.gp-problems { margin: 0; padding-left: 18px; font-size: var(--text-sm, 12px); color: var(--danger-text, #fca5a5); }
+.gp-problems:empty { display: none; }
+.gp-preview summary { cursor: pointer; font-size: var(--text-sm, 12px); color: var(--text-muted, #aaa); }
+.gp-preview pre { margin: 8px 0 0; max-height: 220px; overflow: auto; font: 11px/1.4 var(--font-mono, ui-monospace, Menlo, monospace); white-space: pre-wrap; word-break: break-word; background: var(--panel-2, #2a2a2c); border-radius: var(--radius, 6px); padding: 8px; }
+.gp-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.gp-actions .btn { border: 1px solid var(--line-strong, #444); background: var(--panel-2, #2a2a2c); color: inherit; border-radius: var(--radius, 6px); padding: 5px 11px; min-height: 28px; font: inherit; cursor: pointer; }
+.gp-actions .btn.primary { background: var(--accent, #38bdf8); border-color: var(--accent, #38bdf8); color: var(--accent-ink, #000); font-weight: 600; }
+.gp-actions .btn:disabled { opacity: 0.5; cursor: default; }
+.gp-actions .btn:focus-visible { outline: none; box-shadow: var(--focus, 0 0 0 2px #38bdf8); }
