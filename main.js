@@ -2071,7 +2071,7 @@ let galleryService = null;
   const publish = Publish.create({
     recipes, characterStore, presets: () => loadConfig().presets || [],
     profile: { get: () => loadConfig().galleryAuthor || null, set: (v) => saveConfig({ galleryAuthor: v }) },
-    openExternal: (url) => shell.openExternal(url), clipboard, demo: () => Demo.active(),
+    openExternal: (url) => shell.openExternal(url), clipboard, demo: () => Demo.active(), // privacy-flow: gallery-publish
   });
   Publish.register({ ipcMain, allowed: (e) => tasksSenderOk(e) || widgetConfigSender(e) || fromUtilityPage(e, 'hatch'), publish });
 }
