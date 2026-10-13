@@ -8,7 +8,7 @@
 // signed-out window cannot say "available" for something the hub doesn't offer.
 'use strict';
 
-const LAUNCH_CONNECTORS = Object.freeze(['github']);
+const LAUNCH_CONNECTORS = Object.freeze(['github', 'slack', 'sentry']);
 
 const CONNECTORS = Object.freeze([
   { id: 'github', name: 'GitHub', value: 'Cards update when pull requests merge; open the PR from the card.' },
