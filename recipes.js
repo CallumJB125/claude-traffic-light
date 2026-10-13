@@ -33,6 +33,64 @@
     if (res && res.ok) { say(ok(res)); await load(); } else say((res && res.error) || 'That did not work.');
   }
 
+  const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const REPEATS = [['off', 'Does not repeat'], ['nightly', 'Every night'], ['weekdays', 'Every weekday'], ['weekly', 'Every week on…'], ['hours', 'Every few hours while awake']];
+  const scheduleOf = (id) => (data.schedules || []).find((x) => x.id === id) || null;
+
+  // The repeat controls on a card: a repeat, a time (or a day and time, or an
+  // hours gap), then Save. What is saved shows as its next run and last runs.
+  function scheduleBlock(r) {
+    const cur = scheduleOf(r.id);
+    const box = el('div', 'recipe-repeat');
+    if (cur) {
+      box.append(el('p', 'repeat-now', `${cur.label}. ${cur.next}. Works in: ${cur.folderLabel}`));
+      if (cur.history.length) {
+        const h = el('ul', 'repeat-history'); h.setAttribute('aria-label', 'Last runs');
+        for (const x of cur.history) h.append(el('li', `repeat-${x.result}`, `${x.when}: ${x.result === 'started' ? 'ran' : x.result === 'skipped' ? 'skipped' : 'did not start'}${x.note ? ` (${x.note})` : ''}`));
+        box.append(h);
+      }
+      const row = el('div', 'recipe-actions');
+      row.append(
+        btn(cur.paused ? 'Resume' : 'Pause', 'small', () => act(() => api.pauseSchedule(r.id, !cur.paused), () => (cur.paused ? 'Resumed.' : 'Paused. Nothing runs until you resume it.'))),
+        ...(cur.paused ? [] : [btn('Skip next', 'small', () => act(() => api.skipNext(r.id), (x) => `Skipped. ${x.entry.next}.`))]),
+        btn('Stop repeating', 'small', () => act(() => api.schedule(r.id, { kind: 'off' }, null), () => 'It no longer repeats.')),
+      );
+      box.append(row);
+      return box;
+    }
+    const d = el('details', 'repeat-set');
+    const sum = el('summary', null, data.canSchedule ? 'Repeat…' : 'Repeat… (not on your plan)');
+    d.append(sum);
+    if (!data.canSchedule || data.demo) { d.append(el('p', 'sub', data.demo ? 'This is the demo: nothing runs.' : 'Repeating recipes come with the overnight queue on Plus.')); return d; }
+    const form = el('div', 'repeat-form');
+    const kind = el('select'); kind.setAttribute('aria-label', 'Repeat');
+    for (const [v, label] of REPEATS) { const o = el('option', null, label); o.value = v; kind.append(o); }
+    const day = el('select'); day.setAttribute('aria-label', 'Day'); DAYS.forEach((n, i) => { const o = el('option', null, n); o.value = String(i); day.append(o); }); day.value = '1';
+    const time = el('input'); time.type = 'time'; time.value = '22:00'; time.setAttribute('aria-label', 'Time');
+    const every = el('select'); every.setAttribute('aria-label', 'Every'); for (const n of [1, 2, 3, 4, 6, 8, 12]) { const o = el('option', null, n === 1 ? 'every hour' : `every ${n} hours`); o.value = String(n); every.append(o); } every.value = '4';
+    const sync = () => { day.hidden = kind.value !== 'weekly'; time.hidden = !['nightly', 'weekdays', 'weekly'].includes(kind.value); every.hidden = kind.value !== 'hours'; };
+    kind.addEventListener('change', sync); sync();
+    const save = btn('Save', 'small primary', async () => {
+      if (kind.value === 'off') return;
+      if (!folder && !(await chooseFolder())) return;
+      const sched = kind.value === 'hours' ? { kind: 'hours', every: Number(every.value) } : kind.value === 'weekly' ? { kind: 'weekly', day: Number(day.value), time: time.value } : { kind: kind.value, time: time.value };
+      await act(() => api.schedule(r.id, sched, folder.handle), (x) => `“${r.title}” repeats: ${x.entry.label}. ${x.entry.next}.`);
+    });
+    form.append(kind, day, time, every, save);
+    d.append(form, el('p', 'sub', 'Each run starts in the background while this Mac is awake, under your own login. A run that would pass your daily spend limit is skipped. You confirm once.'));
+    return d;
+  }
+
+  // The Tasks sidebar's one-line view of what runs next.
+  function renderNext() {
+    const strip = $('recipes-next');
+    if (!strip) return;
+    const live = (data?.schedules || []).filter((x) => !x.paused && x.nextRunAtMs !== null).sort((a, b) => a.nextRunAtMs - b.nextRunAtMs);
+    strip.hidden = !live.length;
+    strip.textContent = live.length ? `${live.length === 1 ? 'Next repeat' : 'Next repeats'}: ${live.slice(0, 2).map((x) => `${x.next.replace(/^Next run /, '')} ${titleOf(x.id)}`).join(' · ')}${live.length > 2 ? ` · and ${live.length - 2} more` : ''}` : '';
+  }
+  const titleOf = (id) => [...(data?.mine || []), ...(data?.builtIn || [])].find((r) => r.id === id)?.title || id;
+
   function card(r) {
     const li = el('li', 'recipe');
     li.append(el('h3', null, r.title), el('p', 'recipe-what', r.what));
@@ -51,7 +109,7 @@
     row.append(r.mine
       ? btn('Delete', 'small', () => act(() => api.deleteMine(r.id), () => 'Deleted your copy.'))
       : btn('Save as my own', 'small', () => act(() => api.saveMine(r.id), () => `Saved a copy to My recipes. Share it with Share my recipes.`)));
-    li.append(row);
+    li.append(row, scheduleBlock(r));
     return li;
   }
 
@@ -83,9 +141,15 @@
     if (!r || !r.ok) { root.replaceChildren(el('p', 'recipes-status', 'Recipes are unavailable right now.')); return; }
     data = r;
     render();
+    renderNext();
   }
 
   document.addEventListener('gallery:added', () => { void load(); });
+  api.onSchedulesChanged?.(() => { void load(); });
+  // A repeat set on the New task form: open Recipes on the recipe it made.
+  document.addEventListener('recipes:scheduled', () => { show(true); void load().then(() => say('It repeats. It is in My recipes with its next run.')); });
+  // A repeat set on the New task form: open Recipes on the recipe it made.
+  document.addEventListener('recipes:scheduled', () => { show(true); void load().then(() => say('It repeats. It is in My recipes with its next run.')); });
   $('recipes-open').addEventListener('click', () => { show(root.hidden); if (!root.hidden) void load(); });
   $('new-task').addEventListener('click', () => show(false));
   $('list').addEventListener('click', () => show(false));

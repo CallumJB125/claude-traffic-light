@@ -150,3 +150,58 @@ test('Run stops when the confirmation is cancelled, and in the demo nothing runs
   assert.equal(demo.asked.length, 0); assert.equal(demo.created.length, 0);
   assert.equal((await demo.call('recipes:list')).demo, true);
 });
+
+test('Repeat: a schedule is confirmed once with the folder and prompt, then the due run starts with no dialog; the New task form keeps its task as a recipe', async (t) => {
+  const Sched = require('../src/recipe-schedules.js');
+  const root = temp(t);
+  fs.mkdirSync(path.join(root, 'repo', '.git'), { recursive: true });
+  const handlers = new Map(), created = [], asked = [], registered = [];
+  const folders = { repo: path.join(root, 'repo') };
+  const tasks = { folderOf: (h) => folders[h] ?? null, registerFolder: (p) => { registered.push(p); return { handle: 'h-repo', label: 'repo' }; }, create: async (d) => { created.push(d); return { ok: true, id: `tsk_${created.length}` }; }, composerInfo: async () => ({ canSchedule: true }) };
+  const recipes = engine(root);
+  let clock = new Date(2026, 9, 13, 9, 0).getTime();
+  const timers = [];
+  const scheduler = Sched.createScheduler({
+    store: Sched.createStore({ dataDir: path.join(root, 'data') }), now: () => clock,
+    run: Recipes.scheduledRunner({ recipes, tasks: () => tasks }), exists: (id) => !!recipes.find(id),
+    setTimer: (fn, ms) => { const x = { fn, due: clock + ms }; timers.push(x); return x; }, clearTimer: (x) => { const i = timers.indexOf(x); if (i >= 0) timers.splice(i, 1); },
+  });
+  Recipes.register({
+    ipcMain: { handle: (ch, fn) => handlers.set(ch, fn) }, allowed: () => true, recipes, tasks: () => tasks, home: root, scheduler,
+    confirm: async (info) => { asked.push(info); return true; }, pickSave: async () => null, pickOpen: async () => null, readFile: () => null, writeFile: () => {}, demo: () => false,
+  });
+  const call = (ch, ...a) => handlers.get(ch)({ page: 'tasks' }, ...a);
+  assert.match((await call('recipes:schedule', 'fix-flaky-tests', { kind: 'nightly', time: '22:00' }, 'nowhere')).error, /Choose the folder/);
+  const res = await call('recipes:schedule', 'fix-flaky-tests', { kind: 'nightly', time: '22:00' }, 'repo');
+  assert.equal(res.ok, true); assert.equal(res.entry.label, 'Every night at 22:00'); assert.equal(res.entry.next, 'Next run 22:00');
+  assert.equal(asked.length, 1); assert.equal(asked[0].action, 'Repeat'); assert.match(asked[0].detail, /Every night at 22:00\./); assert.match(asked[0].detail, /skipped/);
+  const list = await call('recipes:list');
+  assert.equal(list.schedules.length, 1); assert.equal(list.schedules[0].id, 'fix-flaky-tests'); assert.equal(list.schedules[0].folderLabel, '~/repo'); assert.equal(list.schedules[0].folder, undefined, 'the raw path stays in main');
+  // 22:30: the run starts with no dialog, from the recipe file, in the chosen folder.
+  clock = new Date(2026, 9, 13, 22, 30).getTime();
+  await scheduler.tick();
+  assert.equal(asked.length, 1);
+  assert.equal(created.length, 1);
+  assert.equal(created[0].when, 'now'); assert.equal(created[0].folder, 'h-repo'); assert.equal(created[0].permissionLevel, 'auto-edits');
+  assert.deepEqual(registered, [path.join(root, 'repo')]);
+  assert.equal((await call('recipes:list')).schedules[0].history[0].result, 'started');
+  // Pause, skip, stop.
+  assert.equal((await call('recipes:schedule-pause', 'fix-flaky-tests', true)).entry.next, 'Paused');
+  assert.equal((await call('recipes:schedule-pause', 'fix-flaky-tests', false)).entry.nextRunAtMs, new Date(2026, 9, 14, 22, 0).getTime());
+  assert.equal((await call('recipes:schedule-skip', 'fix-flaky-tests')).entry.nextRunAtMs, new Date(2026, 9, 15, 22, 0).getTime());
+  assert.equal((await call('recipes:schedule', 'fix-flaky-tests', { kind: 'off' }, null)).ok, true);
+  assert.equal((await call('recipes:list')).schedules.length, 0);
+  // The New task form: kept as a recipe of your own, then scheduled; a cancelled confirmation keeps nothing.
+  const kept = await call('recipes:keep-and-schedule', { text: 'Tidy the changelog\nand nothing else', ai: 'codex', permissionLevel: 'plan' }, { kind: 'weekdays', time: '08:00' }, 'repo');
+  assert.equal(kept.ok, true); assert.equal(kept.recipeId, 'my-tidy-the-changelog');
+  const mine = recipes.mine().find((r) => r.id === kept.recipeId);
+  assert.equal(mine.title, 'Tidy the changelog'); assert.equal(mine.tool, 'codex'); assert.equal(mine.edits, false); assert.equal(mine.prompt, 'Tidy the changelog\nand nothing else');
+  assert.equal((await call('recipes:list')).schedules[0].id, kept.recipeId);
+  // Deleting the recipe removes its schedule.
+  recipes.deleteMine(kept.recipeId);
+  const Recipes2 = Recipes.create({ builtInDir: DIR, dataDir: path.join(root, 'data'), home: root, onDeleted: (id) => scheduler.remove(id) });
+  const again = await call('recipes:keep-and-schedule', { text: 'Again', ai: 'auto', permissionLevel: 'auto-edits' }, { kind: 'hours', every: 2 }, 'repo');
+  assert.equal(again.ok, true);
+  Recipes2.deleteMine(again.recipeId);
+  assert.equal(scheduler.list().some((s) => s.id === again.recipeId), false);
+});

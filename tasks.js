@@ -483,7 +483,7 @@
     view = 'composer';
     d && api.close();
     d = null;
-    comp = { folder: null, recent: [], ais: [], ai: 'auto', surface: 'background', perm: 'auto-edits', planFirst: false, when: 'now', canSchedule: false, busy: false, error: '' };
+    comp = { folder: null, recent: [], ais: [], ai: 'auto', surface: 'background', perm: 'auto-edits', planFirst: false, when: 'now', repeat: 'off', repeatTime: '22:00', repeatDay: '1', repeatEvery: '4', canSchedule: false, busy: false, error: '' };
     renderList();
     renderComposer();
     const info = await api.composer();
@@ -570,6 +570,21 @@
     for (const [v, label, off] of [['now', 'Start now'], ['reset', 'When my usage limit resets'], ['tonight', comp.canSchedule ? 'Run tonight (10 pm to 7 am)' : 'Run tonight (not on your plan)', !comp.canSchedule]]) { const o = el('option', null, label); o.value = v; o.disabled = !!off; when.append(o); }
     when.value = comp.when;
     when.addEventListener('change', () => { comp.when = when.value; renderComposer(true); });
+    // Repeat: the task is kept as a recipe of your own and runs again on a schedule (Plus, with the overnight queue).
+    const repF = el('div', 'field');
+    const repL = el('label', null, 'Repeat it?'); repL.htmlFor = 'c-repeat';
+    const rep = el('select'); rep.id = 'c-repeat';
+    for (const [v, label, off] of [['off', 'No, just this once'], ['nightly', comp.canSchedule ? 'Every night' : 'Every night (not on your plan)', !comp.canSchedule], ['weekdays', comp.canSchedule ? 'Every weekday' : 'Every weekday (not on your plan)', !comp.canSchedule], ['weekly', comp.canSchedule ? 'Every week on…' : 'Every week (not on your plan)', !comp.canSchedule], ['hours', comp.canSchedule ? 'Every few hours while this Mac is awake' : 'Every few hours (not on your plan)', !comp.canSchedule]]) { const o = el('option', null, label); o.value = v; o.disabled = !!off; rep.append(o); }
+    rep.value = comp.repeat;
+    rep.addEventListener('change', () => { comp.repeat = rep.value; renderComposer(true); });
+    repF.append(repL, rep);
+    if (comp.repeat !== 'off') {
+      const row = el('div', 'repeat-form');
+      if (comp.repeat === 'weekly') { const day = el('select'); day.id = 'c-repeat-day'; day.setAttribute('aria-label', 'Day'); ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].forEach((n, i) => { const o = el('option', null, n); o.value = String(i); day.append(o); }); day.value = comp.repeatDay; day.addEventListener('change', () => { comp.repeatDay = day.value; }); row.append(day); }
+      if (comp.repeat === 'hours') { const ev = el('select'); ev.id = 'c-repeat-every'; ev.setAttribute('aria-label', 'Every'); for (const n of [1, 2, 3, 4, 6, 8, 12]) { const o = el('option', null, n === 1 ? 'every hour' : `every ${n} hours`); o.value = String(n); ev.append(o); } ev.value = comp.repeatEvery; ev.addEventListener('change', () => { comp.repeatEvery = ev.value; }); row.append(ev); }
+      else { const time = el('input'); time.type = 'time'; time.id = 'c-repeat-time'; time.setAttribute('aria-label', 'Time'); time.value = comp.repeatTime; time.addEventListener('change', () => { comp.repeatTime = time.value; }); row.append(time); }
+      repF.append(row, el('div', 'sub', 'It is kept in My recipes and each run starts in the background while this Mac is awake. A run that would pass your daily spend limit is skipped. You confirm once.'));
+    }
     whenF.append(whenL, when, el('div', 'sub', comp.when === 'now' ? 'It schedules your own work for when your limit resets or overnight, under your own login on this Mac.' : comp.when === 'reset' ? 'It schedules your own work for when your limit resets. If you have not hit a limit it starts straight away.' : 'It schedules your own work for tonight and keeps this Mac awake (lid open) while the queue has work. It runs only while this Mac is awake.'));
 
     const foot = el('div', 'foot');
@@ -581,7 +596,7 @@
       const override = btn('Start anyway…', '', () => submitComposer(true)); override.type = 'button'; override.id = 'c-override'; override.disabled = !connected() || comp.busy;
       foot.append(override);
     }
-    root.append(words, where, aiF, surf, permF, whenF, foot);
+    root.append(words, where, aiF, surf, permF, whenF, repF, foot);
     main.append(root);
     updateCount();
     if (!keepFocus || hadFocus || !text) ta.focus();
@@ -598,6 +613,17 @@
     const v = TV.validateDraft({ text, hasFolder: !!comp.folder });
     if (!v.ok) { comp.error = v.error; $('c-err').textContent = v.error; return; }
     comp.busy = true; $('c-go').disabled = true; $('c-err').textContent = '';
+    if (comp.repeat !== 'off') {
+      const sched = comp.repeat === 'hours' ? { kind: 'hours', every: Number(comp.repeatEvery) } : comp.repeat === 'weekly' ? { kind: 'weekly', day: Number(comp.repeatDay), time: comp.repeatTime } : { kind: comp.repeat, time: comp.repeatTime };
+      const k = await window.recipesApi.keepAndSchedule({ text, ai: comp.ai, permissionLevel: comp.perm }, sched, comp.folder.handle).catch(() => null);
+      if (!comp) return;
+      comp.busy = false;
+      if (k && k.cancelled) { renderComposer(true); return; }
+      if (!k || !k.ok) { comp.error = k?.error || k?.text || TV.errorText('INTERNAL'); renderComposer(true); return; }
+      closeComposer();
+      document.dispatchEvent(new CustomEvent('recipes:scheduled', { detail: { id: k.recipeId } }));
+      return;
+    }
     const r = await api.create({ text, folder: comp.folder.handle, ai: comp.ai, surface: comp.surface, permissionLevel: comp.perm, planFirst: comp.planFirst, when: comp.when, overrideBudget: overrideBudget === true });
     if (!comp) return;
     comp.busy = false;

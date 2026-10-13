@@ -239,3 +239,19 @@ test('Home\'s Digest card renders the digest, switches period, and keeps Slack o
     assert.doesNotMatch(fs.readFileSync(path.join(ROOT, 'home-digest.js'), 'utf8'), /innerHTML/);
   } finally { dom.window.close(); }
 });
+
+test('repeating recipes that ran, were skipped or failed in the window get their own section', () => {
+  const scheduled = [
+    { id: 'nightly-tests', title: 'Run the tests tonight', at: NOW - 2 * H, result: 'started', note: '', taskId: 'tsk_1' },
+    { id: 'weekly-report', title: 'Weekly report for /Users/alice/code', at: NOW - 3 * H, result: 'skipped', note: 'Skipped: the daily limit is reached.', taskId: null },
+    { id: 'old', title: 'Old', at: NOW - 30 * H, result: 'started', note: '', taskId: null },
+    { id: 'bad', title: 'Bad', at: NOW - H, result: 'failed', note: 'Supervisor unreachable.', taskId: null },
+  ];
+  const d = Digest.compose(Digest.gather({ period: 'day', now: NOW, scheduled, ...opts }));
+  const sec = d.sections.find((s) => s.id === 'repeats');
+  assert.equal(sec.heading, 'Repeating recipes today');
+  assert.deepEqual(sec.items, ['Bad: did not start (Supervisor unreachable.)', 'Run the tests tonight: ran', 'Weekly report for a file: skipped (Skipped: the daily limit is reached.)']);
+  assert.doesNotMatch(d.text, /alice/);
+  assert.equal(Digest.compose(Digest.gather({ period: 'day', now: NOW, ...opts })).sections.some((s) => s.id === 'repeats'), false, 'no section when nothing repeated');
+  assert.equal(Digest.compose(Digest.gather({ period: 'week', now: NOW, scheduled, ...opts })).sections.find((s) => s.id === 'repeats').items.length, 4, 'the week includes yesterday\'s run');
+});

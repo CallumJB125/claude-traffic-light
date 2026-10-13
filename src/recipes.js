@@ -99,7 +99,7 @@ function fromCommand(text) {
   return valid(r) ? r : null;
 }
 
-function create({ builtInDir, dataDir, home, fsApi = fs, now = Date.now }) {
+function create({ builtInDir, dataDir, home, fsApi = fs, now = Date.now, onDeleted = () => {} }) {
   const builtIn = () => readDir(builtInDir, fsApi);
   const mine = () => readDir(dataDir, fsApi);
   const find = (id) => (typeof id === 'string' ? mine().find((r) => r.id === id) || builtIn().find((r) => r.id === id) || null : null);
@@ -129,10 +129,25 @@ function create({ builtInDir, dataDir, home, fsApi = fs, now = Date.now }) {
     write({ ...r, id: nid, title });
     return { ok: true, id: nid };
   }
+  // A task typed on the Tasks page kept as a recipe of your own, so it can repeat.
+  function createMine({ title, prompt, tool, edits }) {
+    const first = String(prompt ?? '').split('\n').map((l) => l.trim()).find(Boolean) || 'My task';
+    const r = { id: '', title: line(title, LIMITS.title) ? title : first.slice(0, LIMITS.title), what: first.slice(0, LIMITS.what), prompt: String(prompt ?? ''), tool: TOOLS.includes(tool) ? tool : 'auto', edits: edits === true, cost: 'Set by you' };
+    if (mine().length >= LIMITS.mine) return { ok: false, error: `You can keep up to ${LIMITS.mine} recipes of your own.` };
+    const base = r.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').split('-').filter(Boolean).slice(0, 6).join('-') || 'task';
+    const nid = freeId(base);
+    if (!nid) return { ok: false, error: 'Could not name the recipe. Delete an older one first.' };
+    r.id = nid;
+    const bad = problems(r);
+    if (bad.length) return { ok: false, error: `That task cannot be kept as a recipe: ${bad[0]}.` };
+    write(r);
+    return { ok: true, id: nid };
+  }
   function deleteMine(id) {
     if (typeof id !== 'string' || !ID.test(id) || !mine().some((r) => r.id === id)) return { ok: false, error: 'That recipe is not one of yours.' };
     fsApi.rmSync(path.join(dataDir, `${id}.json`), { force: true });
     fsApi.rmSync(path.join(dataDir, `${id}.origin.json`), { force: true });
+    onDeleted(id);
     return { ok: true };
   }
 
@@ -193,14 +208,31 @@ function create({ builtInDir, dataDir, home, fsApi = fs, now = Date.now }) {
     return added.length ? { ok: true, added } : { ok: false, error: `You can keep up to ${LIMITS.mine} recipes of your own.` };
   }
 
-  return { builtIn, mine, find, saveMine, deleteMine, addFromGallery, originOf, exportText, importText };
+  return { builtIn, mine, find, saveMine, createMine, deleteMine, addFromGallery, originOf, exportText, importText };
 }
 
 const view = (r, own) => ({ id: r.id, title: r.title, what: r.what, tool: r.tool, toolLabel: TOOL_LABEL[r.tool], edits: r.edits, cost: r.cost, prompt: r.prompt, mine: own });
 
+// What the scheduler (src/recipe-schedules.js) calls when a repeating recipe
+// is due: the same task the person confirmed when they set the schedule, built
+// again from the recipe file, in the folder they chose then. No dialog: the
+// confirmation happened when the schedule was set.
+function scheduledRunner({ recipes, tasks }) {
+  return async (id, entry) => {
+    const r = recipes.find(id);
+    if (!r) return { ok: false, error: 'That recipe is no longer available.' };
+    const dir = entry && typeof entry.folder === 'string' ? entry.folder : '';
+    if (!dir) return { ok: false, error: 'Its folder is gone.' };
+    if (r.edits && !inRepo(dir)) return { ok: false, error: 'Its folder is not inside a git repository any more.' };
+    const t = tasks();
+    const f = t.registerFolder(dir);
+    return t.create(draftFor(r, f.handle, 'now'));
+  };
+}
+
 // IPC for the Tasks page's Recipes block. tasks(): the Tasks service (create, folderOf, composerInfo);
 // confirm(lines, e) and the two file pickers are main's native dialogs.
-function register({ ipcMain, allowed, recipes, tasks, confirm, pickSave, pickOpen, readFile, writeFile, home = '', demo = () => false }) {
+function register({ ipcMain, allowed, recipes, tasks, confirm, pickSave, pickOpen, readFile, writeFile, home = '', demo = () => false, scheduler = null }) {
   const on = (channel, fn) => ipcMain.handle(channel, async (e, ...args) => {
     if (!allowed(e)) return null;
     try { return await fn(e, ...args); } catch { return { ok: false, error: 'Something went wrong. Nothing was changed.' }; }
@@ -209,8 +241,56 @@ function register({ ipcMain, allowed, recipes, tasks, confirm, pickSave, pickOpe
   on('recipes:list', async () => {
     let canSchedule = false;
     try { canSchedule = !!(await tasks().composerInfo())?.canSchedule; } catch { canSchedule = false; }
-    return { ok: true, builtIn: recipes.builtIn().map((r) => view(r, false)), mine: recipes.mine().map((r) => view(r, true)), canSchedule, demo: demo() };
+    const schedules = scheduler ? scheduler.list().map((v) => ({ ...v, folderLabel: tilde(v.folder), folder: undefined })) : [];
+    return { ok: true, builtIn: recipes.builtIn().map((r) => view(r, false)), mine: recipes.mine().map((r) => view(r, true)), canSchedule, demo: demo(), schedules };
   });
+  // A schedule: the person confirms once, with the folder and the recipe's
+  // prompt in front of them; every later run starts without asking.
+  async function schedule(e, id, schedule, folder) {
+    if (!scheduler) return { ok: false, error: 'Repeating recipes are unavailable right now.' };
+    if (demo()) return { ok: false, error: 'This is the demo: nothing runs. Exit the demo to schedule a recipe.' };
+    const Sched = require('./recipe-schedules.js');
+    const s = Sched.normalize(schedule);
+    if (!s) return { ok: false, error: 'Choose a repeat and a time.' };
+    if (s.kind === 'off') return scheduler.set(id, s, null);
+    const r = recipes.find(id);
+    if (!r) return { ok: false, error: 'That recipe is no longer available.' };
+    const dir = typeof folder === 'string' ? tasks().folderOf(folder) : null;
+    if (!dir) return { ok: false, error: 'Choose the folder it should work in first.' };
+    if (r.edits && !inRepo(dir)) return { ok: false, error: 'This recipe changes files, so it runs in its own git worktree. Choose a folder inside a git repository.' };
+    const own = recipes.mine().some((x) => x.id === r.id);
+    const origin = own ? recipes.originOf(r.id) : null;
+    const yes = await confirm({
+      title: r.title,
+      action: 'Repeat',
+      detail: [
+        `${Sched.describe(s)}.`,
+        `Runs in: ${tilde(dir)}`,
+        r.what,
+        r.edits ? 'Each run can change files, only in its own git worktree on a new branch. Your checkout is untouched until you merge.' : 'It only reads: plan mode, no file changes.',
+        `AI: ${TOOL_LABEL[r.tool]}`,
+        'Each run starts in the background without asking again, only while this Mac is awake. A run that would go over your daily spend limit is skipped. Pause or stop it from Recipes.',
+        `Cost per run: ${r.cost}`,
+        ...(own ? ['', ...(origin ? [`From the community gallery by ${String(origin.author.name).slice(0, 60)} (self-declared).`] : []), 'The full prompt it gives your AI:', '', r.prompt] : []),
+      ].join('\n'),
+    }, e);
+    if (!yes) return { ok: false, cancelled: true, error: 'Cancelled. Nothing was scheduled.' };
+    return scheduler.set(id, s, dir);
+  }
+  on('recipes:schedule', schedule);
+  // The Tasks page's "Repeat" on a new task: kept as a recipe of your own, then scheduled like any recipe.
+  on('recipes:keep-and-schedule', async (e, draft, sched, folder) => {
+    if (!scheduler) return { ok: false, error: 'Repeating recipes are unavailable right now.' };
+    if (demo()) return { ok: false, error: 'This is the demo: nothing runs.' };
+    if (!isObject(draft)) return { ok: false, error: 'Type what it should do first.' };
+    const made = recipes.createMine({ title: '', prompt: draft.text, tool: draft.ai, edits: draft.permissionLevel !== 'plan' });
+    if (!made.ok) return made;
+    const r = await schedule(e, made.id, sched, folder);
+    if (!r || !r.ok) { recipes.deleteMine(made.id); return r; }
+    return { ...r, recipeId: made.id };
+  });
+  on('recipes:schedule-pause', async (_e, id, on_) => (scheduler ? scheduler.pause(String(id), on_ === true) : { ok: false, error: 'Repeating recipes are unavailable right now.' }));
+  on('recipes:schedule-skip', async (_e, id) => (scheduler ? scheduler.skipNext(String(id)) : { ok: false, error: 'Repeating recipes are unavailable right now.' }));
   on('recipes:run', async (e, id, folder, when) => {
     if (demo()) return { ok: false, error: 'This is the demo: nothing runs. Exit the demo to run a recipe.' };
     const r = recipes.find(id);
@@ -265,4 +345,4 @@ function register({ ipcMain, allowed, recipes, tasks, confirm, pickSave, pickOpe
   });
 }
 
-module.exports = { create, register, problems, valid, draftFor, inRepo, commandText, fromCommand, readDir, KEYS, TOOLS, LIMITS, SHARE_DIR };
+module.exports = { create, register, scheduledRunner, problems, valid, draftFor, inRepo, commandText, fromCommand, readDir, KEYS, TOOLS, LIMITS, SHARE_DIR };

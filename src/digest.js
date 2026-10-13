@@ -78,7 +78,7 @@ function readRecords(file) {
 const sessionName = (r) => [PROVIDER[r.adapter] || 'AI', r.folder ? `session in ${r.folder}` : 'session', r.branch ? `(branch ${r.branch})` : ''].filter(Boolean).join(' ');
 
 // The facts for one period, already cleaned. Pure: callers pass what they read.
-function gather({ period = 'day', now = Date.now(), tasks = [], records = [], turns = [], report = null, team = null, shipped = null, home, username } = {}) {
+function gather({ period = 'day', now = Date.now(), tasks = [], records = [], turns = [], report = null, team = null, shipped = null, scheduled = [], home, username } = {}) {
   const p = PERIODS.has(period) ? period : 'day';
   const { from } = windowOf(p, now);
   const c = (v, n) => clean(v, n, { home, username });
@@ -104,12 +104,18 @@ function gather({ period = 'day', now = Date.now(), tasks = [], records = [], tu
   }
   const newest = (a, b) => b.at - a.at || a.title.localeCompare(b.title);
   finished.sort(newest); stuck.sort(newest);
+  // Repeating recipes that were due in the window: started, skipped (spend limit) or failed to start.
+  const repeats = (Array.isArray(scheduled) ? scheduled : [])
+    .filter((h) => h && Number.isFinite(h.at) && h.at >= from && h.at <= now && ['started', 'skipped', 'failed'].includes(h.result))
+    .map((h) => ({ at: h.at, title: c(cleanTitle(h.title, 120, 'A recipe'), 120), what: h.result === 'started' ? 'ran' : h.result === 'skipped' ? `skipped${h.note ? ` (${c(h.note, 120)})` : ''}` : `did not start${h.note ? ` (${c(h.note, 120)})` : ''}` }));
+  repeats.sort(newest);
   const receipt = report?.receipt;
   const waste = report?.waste;
   return {
     period: p, now,
     finished: finished.map(({ title, what }) => ({ title, what })),
     stuck: stuck.map(({ title, why }) => ({ title, why })),
+    repeats: repeats.map(({ title, what }) => ({ title, what })),
     spend: spendOf(turns, p, now),
     saved: receipt && !receipt.teaser && typeof receipt.headline === 'string' ? c(receipt.headline, 200) : null,
     waste: waste && Array.isArray(waste.findings) && waste.findings.length ? c(finding(waste.findings[0]), 240) : null,
@@ -151,6 +157,8 @@ function compose(data) {
   else if (week) spend.push(`${money(s.current)} this week, ${change(s.current, s.previous, 'last week')}.`);
   else spend.push(`${money(s.current)} today, ${change(s.current, s.previous, 'yesterday')}.`, `${money(s.week)} over the last 7 days.`);
   if (s.unpriced) spend.push(`${plural(s.unpriced, 'reply', 'replies')} from models without a known price ${s.unpriced === 1 ? 'is' : 'are'} not counted.`);
+  const repeats = Array.isArray(d.repeats) ? d.repeats : [];
+  if (repeats.length) sections.push(listSection('repeats', `Repeating recipes ${span}`, repeats, (r) => `${r.title}: ${r.what}`, ''));
   sections.push({ id: 'spend', heading: 'Spend (at API list prices)', summary: null, items: spend });
   if (Array.isArray(d.shipped)) sections.push(...d.shipped);
   if (d.saved) sections.push({ id: 'saved', heading: 'Saved by Plexiform', summary: null, items: [d.saved] });
@@ -164,14 +172,15 @@ function compose(data) {
 }
 
 // Reads the local sources and composes. report() and team() are optional and may be async.
-function createDigest({ tasksStoreDir, recordsFile, turns = async () => [], report = async () => null, team = async () => null, shipped = async () => null, now = Date.now, home = os.homedir(), username = user() }) {
+function createDigest({ tasksStoreDir, recordsFile, turns = async () => [], report = async () => null, team = async () => null, shipped = async () => null, scheduled = async () => [], now = Date.now, home = os.homedir(), username = user() }) {
   const safe = async (fn, ...a) => { try { return await fn(...a); } catch { return null; } };
   return {
     async build(period = 'day', { withTeam = false } = {}) {
       const t = now();
-      const [allTurns, rep, ship] = await Promise.all([safe(turns), safe(report), period === 'week' ? safe(shipped) : null]);
+      const { from } = windowOf(PERIODS.has(period) ? period : 'day', t);
+      const [allTurns, rep, ship, sched] = await Promise.all([safe(turns), safe(report), period === 'week' ? safe(shipped) : null, safe(scheduled, from, t)]);
       const brief = withTeam ? await safe(team, allTurns) : null;
-      return compose(gather({ period, now: t, tasks: tasksStoreDir ? readTasks(tasksStoreDir) : [], records: recordsFile ? readRecords(recordsFile) : [], turns: allTurns || [], report: rep, team: brief, shipped: ship, home, username }));
+      return compose(gather({ period, now: t, tasks: tasksStoreDir ? readTasks(tasksStoreDir) : [], records: recordsFile ? readRecords(recordsFile) : [], turns: allTurns || [], report: rep, team: brief, shipped: ship, scheduled: sched || [], home, username }));
     },
   };
 }

@@ -2015,10 +2015,26 @@ ipcMain.handle('tasks:pick-folder', async (e) => {
 });
 onQuit(app, () => tasksSvc?.stop());
 // Recipes on the Tasks page (src/recipes.js): built from the recipe file in main, asked with a native dialog, run by the Tasks engine.
-const recipes = require('./src/recipes.js').create({ builtInDir: path.join(__dirname, 'recipes'), dataDir: path.join(ROOT_DIR, 'recipes'), home: os.homedir() });
+// Repeating recipes (src/recipe-schedules.js): their schedules sit beside the recipes; a
+// due run starts through the Tasks engine with no dialog (the person confirmed when scheduling).
+const RecipeSchedules = require('./src/recipe-schedules.js');
+let recipeScheduler = null;
+const recipes = require('./src/recipes.js').create({ builtInDir: path.join(__dirname, 'recipes'), dataDir: path.join(ROOT_DIR, 'recipes'), home: os.homedir(), onDeleted: (id) => recipeScheduler?.remove(id) });
+recipeScheduler = RecipeSchedules.createScheduler({
+  store: RecipeSchedules.createStore({ dataDir: path.join(ROOT_DIR, 'recipes') }),
+  run: require('./src/recipes.js').scheduledRunner({ recipes, tasks: () => { const t = getTasks(); t.start(); return t; } }),
+  exists: (id) => !!recipes.find(id),
+  canSchedule: () => { try { return require('./src/entitlements.js').has('queue.windows'); } catch { return false; } },
+  log: (m) => console.log(m),
+  onChange: () => { for (const wc of tasksPages()) wc.send('recipes:schedules-changed'); },
+});
+app.whenReady().then(() => { if (!Demo.active()) recipeScheduler.start(); });
+powerMonitor.on('resume', () => recipeScheduler?.wake());
+powerMonitor.on('unlock-screen', () => recipeScheduler?.wake());
+onQuit(app, () => recipeScheduler?.stop());
 const tasksConfirm = async (info, e) => (await dialog.showMessageBox(BrowserWindow.fromWebContents(e.sender) || undefined, { type: 'question', buttons: ['Cancel', info.action], defaultId: 0, cancelId: 0, noLink: true, message: `${info.action}: ${info.title}?`, detail: info.detail })).response === 1;
 require('./src/recipes.js').register({
-  ipcMain, allowed: tasksSenderOk, tasks: getTasks, home: os.homedir(), demo: () => Demo.active(), recipes,
+  ipcMain, allowed: tasksSenderOk, tasks: getTasks, home: os.homedir(), demo: () => Demo.active(), recipes, scheduler: recipeScheduler,
   confirm: tasksConfirm,
   pickSave: async (e) => { const r = await dialog.showSaveDialog(BrowserWindow.fromWebContents(e.sender) || undefined, { title: 'Share my recipes', defaultPath: 'my-plexiform-recipes.json', filters: [{ name: 'Plexiform setup', extensions: ['json'] }] }); return r.canceled ? null : r.filePath || null; },
   pickOpen: async (e) => { const r = await dialog.showOpenDialog(BrowserWindow.fromWebContents(e.sender) || undefined, { title: 'Import recipes', properties: ['openFile'], filters: [{ name: 'Plexiform setup', extensions: ['json'] }] }); return r.canceled ? null : r.filePaths?.[0] || null; },
@@ -4460,7 +4476,7 @@ const AiTools = require('./src/ai-tools-wire.js').wire({ ipcMain, shell, clipboa
 const aiToolsOpen = (destination) => AiTools.open(destination);
 require('./src/home-main.js').register({ ipcMain, allowed: (e) => fromUtilityPage(e, 'home'), state: () => aggregateState(), localSessions, tools: () => AiTools.quick(), myDay: MyDay, openPage: openBuddy, openAiTools: aiToolsOpen, collisions: CollisionAlerts.rowCollisions(collisionAlerts), costGuard: () => (costGuardReport ? costGuardReport() : null), demo: Demo });
 require('./src/home-alerts.js').wire({ ipcMain, dialog, clipboard, homeAllowed: (e) => fromUtilityPage(e, 'home'), usageAllowed: (e) => fromUtilityPage(e, 'usage'), sessions: () => aggregateState().sessions || [], burst: () => BurstIpc.snapshot().d, tasksRows: () => tasksSvc?.snapshot().tasks || [], tasksService: getTasks, handoverText: (key) => SessionHandoverMain.writer.text(key), jump: (s) => jumpToSession(s, Rules.folderOf(s.cwd), s.hostApp), mail: () => AgentMail.pending(), openMail: async () => { openBuddy('sessions'); } });
-require('./src/digest-main.js').register({ ipcMain, allowed: (e) => fromUtilityPage(e, 'home'), rootDir: ROOT_DIR, userData: app.getPath('userData'), safeStorage: require('electron').safeStorage, clipboard, dialog, shell, Notification, fetch: (...a) => net.fetch(...a), usageTurns: () => getUsageTurns(), costGuard: () => (costGuardReport ? costGuardReport() : null), workCost: () => workCostReport(), teamBrief: (cwd) => (loadConfig().teamBrief === true ? TeamActivity.call('team_brief', { cwd }) : null), openHome: () => openBuddy('home'), onQuit: (fn) => onQuit(app, fn), log: (m) => console.warn(m) }); // privacy-flow: digest-slack
+require('./src/digest-main.js').register({ ipcMain, allowed: (e) => fromUtilityPage(e, 'home'), rootDir: ROOT_DIR, userData: app.getPath('userData'), safeStorage: require('electron').safeStorage, clipboard, dialog, shell, Notification, fetch: (...a) => net.fetch(...a), usageTurns: () => getUsageTurns(), costGuard: () => (costGuardReport ? costGuardReport() : null), workCost: () => workCostReport(), scheduledRuns: (from, to) => (recipeScheduler ? recipeScheduler.runsBetween(from, to).map((h) => ({ ...h, title: recipes.find(h.id)?.title || 'A recipe' })) : []), teamBrief: (cwd) => (loadConfig().teamBrief === true ? TeamActivity.call('team_brief', { cwd }) : null), openHome: () => openBuddy('home'), onQuit: (fn) => onQuit(app, fn), log: (m) => console.warn(m) }); // privacy-flow: digest-slack
 { const TeamToday = require('./src/team-today.js'); const fake = IS_DEV_RUN && !app.isPackaged && process.env.CLAUDE_BUDDY_FAKE_TEAM_TODAY; TeamToday.wire({ ipcMain, allowed: (e) => fromUtilityPage(e, 'home'), file: path.join(ROOT_DIR, 'team-today.json'), log: (m) => console.log(m), ...(fake ? TeamToday.fixtureSources(JSON.parse(fs.readFileSync(fake, 'utf8'))) : { links: async () => (await buddyWin?.teamMemoryLinks?.()) ?? [], board: async (route) => (await buddyWin?.teamBoardSnapshot?.(route)) ?? null, mine: () => buddyWin?.workCostRows?.().records ?? [], fetch: (...a) => net.fetch(...a) }) }); } // privacy-flow: team-today
 // Preferences' "Connect other agents" buttons open the AI tools page on that
 // tool, where the exact change is previewed and confirmed (src/ai-tools.js).
