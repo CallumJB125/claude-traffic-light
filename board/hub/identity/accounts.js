@@ -239,6 +239,8 @@ export class Accounts {
     const w = webOauthProviders(this.hub.config);
     return {
       google: m.includes('google'), github: m.includes('github'), email: this.emailSignin() && !this.mailFailing(), web: { google: w.includes('google'), github: w.includes('github') },
+      // Whether this hub can wake a phone (board/hub/push.js): the desktop's Phone page says so honestly when not.
+      push: this.hub.push?.configured === true,
       ...(this.turnstile ? { turnstile_site_key: this.turnstile.siteKey } : {}),
     };
   }

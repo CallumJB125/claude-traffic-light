@@ -93,7 +93,7 @@ test('D66: no mailer: email sign-in is 404 METHOD_DISABLED and silent, methods s
     h = await startAccounts({ mailer: null, config: { signinMethods: ['google'], googleClientId: 'id-x', googleClientSecret: ['sec', 'ret'].join('-') } });
     const m = await h.call('GET', '/api/auth/methods');
     assert.equal(m.status, 200);
-    assert.deepEqual(m.body, { google: true, github: false, email: false, web: { google: false, github: false } });
+    assert.deepEqual(m.body, { google: true, github: false, email: false, web: { google: false, github: false }, push: false });
     const s = await h.start('alice@dev.local');
     assert.equal(s.status, 404);
     assert.equal(s.body.error.code, 'METHOD_DISABLED');

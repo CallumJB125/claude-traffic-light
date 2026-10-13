@@ -1,6 +1,7 @@
 # Phone approvals runbook (W2-B: remote approvals, push, tasks from the phone)
 
-> **REQUIRES INDEPENDENT SECURITY REVIEW before release.** A remote approval
+> **REQUIRES INDEPENDENT SECURITY REVIEW before release.** Reviewer entry
+> point: `docs/PHONE-SECURITY.md`. A remote approval
 > is a remote code execution path. Written by the implementing agent and not
 > reviewed. Nothing here may be released or marketed until a reviewer outside
 > this lane has signed off W2-A (`docs/relay-e2e-threat-model.md`) and W2-B
@@ -61,7 +62,10 @@ only") → first-wins answer file with the per-request key → hook ack.
   account deletion, and a 404/410 from the push service.
 - Pushes are **empty** (no payload, no encryption needed), `TTL: 60`,
   `Urgency: high`, `Topic: needs-you`, VAPID JWT (ES256, 12 h). Off unless the
-  three `BOARD_PUSH_VAPID_*` variables are set.
+  three `BOARD_PUSH_VAPID_*` variables are set. `GET /api/auth/methods`
+  reports `push: true|false` so the desktop Phone page can say when the hub
+  doesn't send notifications. Each wake-up writes one `audit` row
+  (`phone.ping`: which computer, which user, how many phones; never the request).
 - Phone-scoped (`relay`) sign-ins may use exactly these phone routes
   (`RELAY_SCOPE_ROUTES` in `board/hub/http.js`).
 - Nothing in `board/hub` reads or writes `.answer` files (tested:
@@ -77,9 +81,9 @@ push subscribe, voice via the browser's own `SpeechRecognition`.
 ## Owner-gated
 
 1. **Security review sign-off** for W2-A + W2-B before any release.
-2. **VAPID key pair into the hub env.** Generate offline on a trusted machine
-   (for example `openssl ecparam -name prime256v1 -genkey -noout` and export
-   the raw public point and private scalar as base64url), then set on the hub
+2. **VAPID key pair into the hub env.** Generate on a trusted machine with
+   `node board/hub/scripts/gen-vapid.mjs --subject mailto:<ops address>` (it
+   prints the three lines below and writes nothing), then set on the hub
    only, never in git:
    - `BOARD_PUSH_VAPID_PUBLIC_KEY` — base64url, 65-byte uncompressed point
    - `BOARD_PUSH_VAPID_PRIVATE_KEY` — base64url, 32-byte scalar (hidden in config dumps, deleted from `process.env` at start)

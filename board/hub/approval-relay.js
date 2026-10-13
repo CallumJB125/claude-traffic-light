@@ -78,6 +78,8 @@ export class ApprovalRelay {
     p.last = t;
     p.times.push(t);
     const r = await this.push.ping(ident.user.id, { except: ident.cred.id });
+    // Audit the wake-up only: which computer asked and how many phones were told. The request itself never reaches the hub.
+    this.hub.db.insert('audit', { actor: `device:${ident.cred.id}`, action: 'phone.ping', target: ident.user.id, detail: JSON.stringify({ sent: r.sent, failed: r.failed }), at: this.hub.iso() });
     return { ok: true, sent: r.sent };
   }
 
