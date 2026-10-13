@@ -75,7 +75,10 @@ test('opencode: a plugin file that is not ours is left alone', async () => {
 test('the plugin OpenCode loads is valid ES module syntax and spawns emit.js with the hook name', () => {
   const { runtime } = rig();
   const text = Adapters.get('opencode').pluginText(runtime);
-  assert.doesNotThrow(() => new (require('node:vm').SourceTextModule || function () {})(text));
+  const file = path.join(testTempDir('ctl-oc-plugin-'), 'plexiform.mjs');
+  fs.writeFileSync(file, text);
+  const r = require('node:child_process').spawnSync(process.execPath, ['--check', file]);
+  assert.equal(r.status, 0, r.stderr.toString());
   assert.match(text, /import \{ spawn \} from "node:child_process"/);
   assert.match(text, /"--adapter","opencode"\]/);
   assert.match(text, /export const PlexiformPlugin = async/);
