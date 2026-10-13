@@ -34,6 +34,7 @@
     if (!s.enabled) return 'Off.';
     if (!s.signedIn) return 'Sign in on the Team page first (Sign in or create a team): your phone reaches this computer through your team.';
     if (!s.hostConnected) return 'Waiting: turn on “Let my other devices use sessions” in Preferences, and keep this computer awake.';
+    if (s.hubPush === false) return 'On. Your team hub doesn’t send phone notifications yet, so your phone sees requests when you open it.';
     return 'On.';
   }
 

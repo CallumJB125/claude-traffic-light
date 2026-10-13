@@ -3,6 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { generateKeyPairSync } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { startAccounts } from './accounts-helpers.js';
 import { PushService, vapidKey, PUSH_HOSTS } from '../push.js';
 import { loadConfig } from '../config.js';
@@ -78,6 +79,33 @@ test('the ping route: hosting computer only, coalesced, rate-limited, and a no-o
     const limited = await ping();
     assert.equal(limited.status, 429, JSON.stringify(limited.body));
   } finally { await r.h.close(); }
+});
+
+test('methods says whether this hub can wake a phone; a ping leaves one audit row naming the computer, never the request', async () => {
+  const r = await rig();
+  try {
+    assert.equal((await r.h.call('GET', '/api/auth/methods')).body.push, true);
+    await r.h.call('PUT', '/api/interaction/v1/role', { token: r.mac.device_token, body: { role: 'host' } });
+    await r.h.call('PUT', '/api/push/v1/subscription', { token: r.phone.device_token, body: { endpoint: 'https://fcm.googleapis.com/fcm/send/abc' } });
+    assert.equal((await r.h.call('POST', '/api/approvals/v1/ping', { token: r.mac.device_token, body: {} })).status, 200);
+    const rows = r.h.db.all("SELECT actor, action, target, detail FROM audit WHERE action = 'phone.ping'").map((x) => ({ ...x }));
+    assert.deepEqual(rows, [{ actor: `device:${r.mac.device_id}`, action: 'phone.ping', target: r.mac.user.id, detail: JSON.stringify({ sent: 1, failed: 0 }) }]);
+    assert.equal((await r.h.call('POST', '/api/approvals/v1/ping', { token: r.mac.device_token, body: {} })).body.coalesced, true);
+    assert.equal(r.h.db.all("SELECT 1 FROM audit WHERE action = 'phone.ping'").length, 1, 'a coalesced ping is not a wake-up');
+  } finally { await r.h.close(); }
+  const plain = await startAccounts();
+  try { assert.equal((await plain.call('GET', '/api/auth/methods')).body.push, false); } finally { await plain.close(); }
+});
+
+test('scripts/gen-vapid.mjs prints a pair the hub accepts, writes nothing, and insists on a subject', () => {
+  const script = new URL('../scripts/gen-vapid.mjs', import.meta.url).pathname;
+  const out = execFileSync(process.execPath, [script, '--subject', 'mailto:ops@plexiform.test'], { encoding: 'utf8' });
+  const env = Object.fromEntries(out.trim().split('\n').map((l) => l.split('=')));
+  assert.deepEqual(Object.keys(env), ['BOARD_PUSH_VAPID_PUBLIC_KEY', 'BOARD_PUSH_VAPID_PRIVATE_KEY', 'BOARD_PUSH_VAPID_SUBJECT']);
+  assert.equal(vapidKey({ publicKey: env.BOARD_PUSH_VAPID_PUBLIC_KEY, privateKey: env.BOARD_PUSH_VAPID_PRIVATE_KEY }).publicKey, env.BOARD_PUSH_VAPID_PUBLIC_KEY);
+  assert.equal(loadConfig({ BOARD_AUTH: 'accounts', BOARD_SECRET: 's'.repeat(40), BOARD_ACCOUNTS_DEV: '1', ...env }).pushVapidSubject, 'mailto:ops@plexiform.test');
+  assert.throws(() => execFileSync(process.execPath, [script], { stdio: 'pipe' }), /usage/);
+  assert.throws(() => execFileSync(process.execPath, [script, '--subject', 'ops'], { stdio: 'pipe' }), /usage/);
 });
 
 test('config: the three VAPID values go together, the private key is hidden, and a bad pair is refused', () => {

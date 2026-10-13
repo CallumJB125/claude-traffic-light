@@ -37,7 +37,7 @@ async function webRig(config = {}) {
 
 test('web providers are distinct; native methods/endpoints do not use web credentials',async()=>{
   const r=await webRig({googleClientId:null,googleClientSecret:null,githubClientId:null,githubClientSecret:null});try{
-    assert.deepEqual((await r.h.call('GET','/api/auth/methods')).body,{google:false,github:false,email:false,web:{google:true,github:true}});
+    assert.deepEqual((await r.h.call('GET','/api/auth/methods')).body,{google:false,github:false,email:false,web:{google:true,github:true},push:false});
     const x=await r.h.call('POST','/api/auth/oauth/start',{body:{provider:'google',client:'buddy_desktop',redirect_uri:'http://127.0.0.1:5555/callback',code_challenge:RANDOM}});
     assert.equal(x.body.error.code,'METHOD_DISABLED');
   }finally{await r.h.close();}
