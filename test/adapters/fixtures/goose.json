@@ -1,0 +1,161 @@
+[
+  {
+    "name": "SessionStart",
+    "event": "SessionStart",
+    "payload": {
+      "event": "SessionStart",
+      "session_id": "gs-20261013-1",
+      "working_dir": "/w/goose"
+    },
+    "expect": [
+      {
+        "signal": "session-start",
+        "sessionId": "gs-20261013-1",
+        "cwd": "/w/goose",
+        "tool": null
+      }
+    ]
+  },
+  {
+    "name": "UserPromptSubmit",
+    "event": "UserPromptSubmit",
+    "payload": {
+      "event": "UserPromptSubmit",
+      "session_id": "gs-20261013-1",
+      "matcher_context": "add a test",
+      "message": "add a test",
+      "working_dir": "/w/goose"
+    },
+    "expect": [
+      {
+        "signal": "prompt-submit",
+        "sessionId": "gs-20261013-1",
+        "cwd": "/w/goose",
+        "tool": null
+      }
+    ]
+  },
+  {
+    "name": "PreToolUse",
+    "event": "PreToolUse",
+    "payload": {
+      "event": "PreToolUse",
+      "session_id": "gs-20261013-1",
+      "matcher_context": "developer__shell",
+      "tool_name": "developer__shell",
+      "tool_input": {
+        "command": "ls"
+      },
+      "tool_call_id": "c1",
+      "working_dir": "/w/goose"
+    },
+    "expect": [
+      {
+        "signal": "tool-use",
+        "sessionId": "gs-20261013-1",
+        "cwd": "/w/goose",
+        "tool": "developer__shell"
+      }
+    ]
+  },
+  {
+    "name": "PostToolUse",
+    "event": "PostToolUse",
+    "payload": {
+      "event": "PostToolUse",
+      "session_id": "gs-20261013-1",
+      "tool_name": "developer__text_editor",
+      "tool_call_id": "c2",
+      "working_dir": "/w/goose"
+    },
+    "expect": [
+      {
+        "signal": "tool-done",
+        "sessionId": "gs-20261013-1",
+        "cwd": "/w/goose",
+        "tool": "developer__text_editor"
+      }
+    ]
+  },
+  {
+    "name": "PostToolUseFailure",
+    "event": "PostToolUseFailure",
+    "payload": {
+      "event": "PostToolUseFailure",
+      "session_id": "gs-20261013-1",
+      "tool_name": "developer__shell",
+      "tool_call_id": "c3",
+      "working_dir": "/w/goose"
+    },
+    "expect": [
+      {
+        "signal": "tool-failed",
+        "sessionId": "gs-20261013-1",
+        "cwd": "/w/goose",
+        "tool": "developer__shell"
+      }
+    ]
+  },
+  {
+    "name": "Stop",
+    "event": "Stop",
+    "payload": {
+      "event": "Stop",
+      "session_id": "gs-20261013-1",
+      "last_assistant_message": "Done.",
+      "working_dir": "/w/goose"
+    },
+    "expect": [
+      {
+        "signal": "stop",
+        "sessionId": "gs-20261013-1",
+        "cwd": "/w/goose",
+        "tool": null
+      }
+    ]
+  },
+  {
+    "name": "event name from the payload when the argument is missing",
+    "event": "",
+    "payload": {
+      "event": "Stop",
+      "session_id": "gs-20261013-1",
+      "working_dir": "/w/goose"
+    },
+    "expect": [
+      {
+        "signal": "stop",
+        "sessionId": "gs-20261013-1",
+        "cwd": "/w/goose",
+        "tool": null
+      }
+    ]
+  },
+  {
+    "name": "SessionEnd",
+    "event": "SessionEnd",
+    "payload": {
+      "event": "SessionEnd",
+      "session_id": "gs-20261013-1",
+      "working_dir": "/w/goose"
+    },
+    "expect": [
+      {
+        "signal": "session-end",
+        "sessionId": "gs-20261013-1",
+        "cwd": "/w/goose",
+        "tool": null
+      }
+    ]
+  },
+  {
+    "name": "not a goose event",
+    "event": "BeforeReadFile",
+    "payload": {
+      "event": "BeforeReadFile",
+      "session_id": "gs-20261013-1",
+      "working_dir": "/w/goose"
+    },
+    "expect": []
+  }
+]
