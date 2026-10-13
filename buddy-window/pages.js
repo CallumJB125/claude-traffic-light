@@ -37,6 +37,8 @@ const PAGES = [
   // Search across every AI tool's local history (src/memory/search.js registers its IPC).
   { id: 'memory', title: 'Search everything', icon: 'layers', kind: 'local', file: 'memory.html', preload: 'memory-preload.js', group: 'work' },
   { id: 'tasks', title: 'Tasks', icon: 'tasks', kind: 'local', file: 'tasks.html', preload: 'tasks-preload.js', query: { embedded: '1' }, group: 'work' },
+  // The community gallery (src/gallery.js): recipes, characters, widget rules, setups and packs from the site.
+  { id: 'discover', title: 'Discover', icon: 'puzzle', kind: 'local', file: 'discover.html', preload: 'discover-preload.js', group: 'work' },
   // localScreen: the account page's explainer for the local board, which has no integrations of its own.
   { id: 'integrations', title: 'Integrations', icon: 'plug', kind: 'hub', view: 'integrations', localScreen: 'integrations', group: 'team' },
   { id: 'team', title: 'Team', icon: 'team', kind: 'local', screen: 'team', group: 'team' },
@@ -82,7 +84,7 @@ const GROUPS = [
 const SECTIONS = [
   { id: 'home', title: 'Home', icon: 'sun', default: 'home', pages: ['home', 'overview', 'myday', 'waiting'] },
   { id: 'board', title: 'Board', icon: 'board', default: 'board', pages: ['board', 'board:table', 'board:history', 'board:calendar', 'board:timeline', 'board:dashboard'] },
-  { id: 'sessions', title: 'Sessions', icon: 'team', default: 'sessions', pages: ['sessions', 'tasks', 'timeline', 'checkpoints', 'memory'] },
+  { id: 'sessions', title: 'Sessions', icon: 'team', default: 'sessions', pages: ['sessions', 'tasks', 'discover', 'timeline', 'checkpoints', 'memory'] },
   { id: 'usage', title: 'Usage & cost', icon: 'chart', default: 'usage', heading: 'Spend', pages: ['usage', 'stats', 'optimiser', 'clients'] },
   { id: 'team', title: 'Team', icon: 'team', default: 'team', heading: 'Team', pages: ['team', 'integrations', 'account'] },
   { id: 'settings', title: 'Settings', icon: 'gear', default: 'settings', heading: 'You', pages: ['settings', 'thismac', 'aitools', 'widget', 'lights', 'hatch', 'phone'] },

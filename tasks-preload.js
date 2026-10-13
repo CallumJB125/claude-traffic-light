@@ -30,12 +30,12 @@ contextBridge.exposeInMainWorld('recipesApi', {
   skipNext: (id) => ipcRenderer.invoke('recipes:schedule-skip', String(id)),
   onSchedulesChanged: (fn) => { ipcRenderer.on('recipes:schedules-changed', () => fn()); },
   pickFolder: () => ipcRenderer.invoke('tasks:pick-folder'),
+  // A gallery recipe was added or removed on the Discover page.
+  onChanged: (cb) => ipcRenderer.on('recipes:changed', () => cb()),
 });
-// The community gallery: main fetches and verifies; the page names an entry id and its sha256.
+// The community gallery lives on the Discover page; this only opens it.
 contextBridge.exposeInMainWorld('galleryApi', {
-  refresh: () => ipcRenderer.invoke('gallery:fetch'),
-  cached: () => ipcRenderer.invoke('gallery:cached'),
-  add: (id, sha) => ipcRenderer.invoke('gallery:add', String(id), String(sha)),
+  openDiscover: () => ipcRenderer.invoke('gallery:open-discover'),
 });
 // "Share to gallery…" (src/gallery-publish.js): main builds and checks the item; the page names a kind, a ref and a draft token.
 contextBridge.exposeInMainWorld('galleryPublishApi', {

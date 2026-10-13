@@ -175,6 +175,8 @@
       "recipes.css",
       "gallery-view.js",
       "gallery-view.css",
+      "discover.html",
+      "discover-preload.js",
       "recipes/**/*",
       "myday.html",
       "myday.js",
