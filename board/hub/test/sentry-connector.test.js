@@ -486,13 +486,18 @@ test('verifyToken: the client secret\'s shape only; a refusal never echoes it; t
 
 // ── go-live gate ──────────────────────────────────────────────────────────
 
-test('go-live gate: Sentry is in no hub\'s default connectors until a real delivery is verified', async () => {
-  for (const auth of ['dev', 'access', 'accounts', 'local']) assert.ok(!connectorsFor({ auth }).some((c) => c.id === 'sentry'), auth);
-  const h = await startHub();
+test('offered: Sentry is in every hub\'s connectors and an admin can connect it by client secret', async () => {
+  for (const auth of ['dev', 'access', 'accounts', 'local']) assert.ok(connectorsFor({ auth }).some((c) => c.id === 'sentry'), auth);
+  for (const auth of ['dev', 'access', 'accounts', 'local']) assert.ok(connectorsFor({ auth }).some((c) => c.id === 'slack'), auth);
+  const h = await startHub({ config: { connectors: ['slack', 'sentry'] } });
   try {
+    h.hub.setVaultKey(randomBytes(32));
     const alice = await h.login('alice');
     const r = await h.api(alice, 'GET', '/api/integrations');
-    assert.ok(!r.body.available.some((c) => c.id === 'sentry'));
-    assert.equal((await h.api(alice, 'POST', '/api/integrations/sentry/token', { token: newSecret() })).status, 404);
+    assert.ok(r.body.available.some((c) => c.id === 'slack'), 'slack is offered too');
+    const sentry = r.body.available.find((c) => c.id === 'sentry');
+    assert.ok(sentry);
+    assert.equal(sentry.shows_webhook_url, true);
+    assert.equal((await h.api(alice, 'POST', '/api/integrations/sentry/token', { token: newSecret() })).status, 200);
   } finally { await h.close(); }
 });

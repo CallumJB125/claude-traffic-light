@@ -149,13 +149,13 @@ test('local hub (no accounts): a plain note says where to connect, and no connec
   assert.equal(byAttr(team, 'data-action', 'integ-connect').length, 1);
 });
 
-test('local hub: a grid of the six tools with a one-line value and a status in words; only GitHub is "Available after you join a team"', () => {
+test('local hub: a grid of the tools with a one-line value and a status in words; GitHub, Slack and Sentry are "Available after you join a team"', () => {
   const v = integrationsScreen(m({ local: true }));
   const cards = findAll(v, (n) => n.props?.['data-connector']);
   assert.deepEqual(cards.map((c) => c.props['data-connector']), ['github', 'slack', 'sentry', 'linear', 'jira']);
   const status = (id) => textOf(findAll(cards.find((c) => c.props['data-connector'] === id), (n) => n.props?.class === 'integ-status small')[0]);
-  assert.equal(status('github'), 'Available after you join a team');
-  for (const id of ['slack', 'sentry', 'linear', 'jira']) assert.equal(status(id), 'Coming soon', id);
+  for (const id of ['github', 'slack', 'sentry']) assert.equal(status(id), 'Available after you join a team', id);
+  for (const id of ['linear', 'jira']) assert.equal(status(id), 'Coming soon', id);
   assert.match(textOf(cards[0]), /Cards update when pull requests merge/);
   assert.deepEqual(findAll(byAttr(v, 'data-grid', 'local-connectors')[0], (n) => n.tag === 'h3').map(textOf), ['GitHub', 'Slack', 'Sentry', 'Linear', 'Jira'], 'tool names are headings');
   assert.equal(byAttr(integrationsScreen(m()), 'data-grid', 'local-connectors').length, 0, 'a team hub shows no local grid');
@@ -175,8 +175,8 @@ test('local hub in the app: a Sign in or create a team button opens the Team pag
 
 test('the web list of tools: only the launch connectors are available', async () => {
   const { LAUNCH_CONNECTORS, connectorStatus } = await import('../js/connectors.js');
-  assert.deepEqual([...LAUNCH_CONNECTORS], ['github']);
-  assert.deepEqual(['github', 'slack', 'sentry', 'linear', 'jira', 'x'].map(connectorStatus), ['available', 'soon', 'soon', 'soon', 'soon', 'soon']);
+  assert.deepEqual([...LAUNCH_CONNECTORS], ['github', 'slack', 'sentry']);
+  assert.deepEqual(['github', 'slack', 'sentry', 'linear', 'jira', 'x'].map(connectorStatus), ['available', 'available', 'available', 'soon', 'soon', 'soon']);
 });
 
 test('the app tells the Integrations page it is on the local hub from /api/health’s auth', async () => {

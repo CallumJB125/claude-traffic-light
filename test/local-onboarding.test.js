@@ -14,13 +14,13 @@ const dir = path.join(__dirname, '..', 'buddy-window');
 const read = (...p) => fs.readFileSync(path.join(...p), 'utf8');
 
 test('only the connectors enabled on the team hub today are "Available"; the rest are "Coming soon"', () => {
-  assert.deepEqual([...LAUNCH_CONNECTORS], ['github']);
+  assert.deepEqual([...LAUNCH_CONNECTORS], ['github', 'slack', 'sentry']);
   assert.deepEqual(CONNECTORS.map((c) => c.id), ['github', 'slack', 'sentry', 'linear', 'jira']);
-  for (const c of CONNECTORS) assert.equal(connectorStatus(c.id), c.id === 'github' ? 'available' : 'soon', c.id);
+  for (const c of CONNECTORS) assert.equal(connectorStatus(c.id), LAUNCH_CONNECTORS.includes(c.id) ? 'available' : 'soon', c.id);
   const rows = connectorRows();
-  assert.deepEqual(rows.filter((r) => r.status === 'available').map((r) => r.id), ['github']);
-  assert.equal(rows.find((r) => r.id === 'github').statusText, 'Available after you join a team');
-  for (const r of rows.filter((x) => x.id !== 'github')) assert.equal(r.statusText, 'Coming soon', r.id);
+  assert.deepEqual(rows.filter((r) => r.status === 'available').map((r) => r.id), ['github', 'slack', 'sentry']);
+  for (const id of ['github', 'slack', 'sentry']) assert.equal(rows.find((r) => r.id === id).statusText, 'Available after you join a team', id);
+  for (const r of rows.filter((x) => !LAUNCH_CONNECTORS.includes(x.id))) assert.equal(r.statusText, 'Coming soon', r.id);
   assert.equal(connectorStatus('nope'), 'soon', 'an unknown tool is never "available"');
   assert.deepEqual(STATUS_TEXT, { available: 'Available after you join a team', soon: 'Coming soon' });
   for (const c of CONNECTORS) assert.ok(c.value.length > 0 && c.value.length < 90, c.id);

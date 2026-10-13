@@ -1855,7 +1855,7 @@ test('signed-out pages: signInWith refuses an unknown provider and starts nothin
   h.flow.show('integrations');
   const st = await h.A.state();
   assert.equal(st.screen, 'integrations');
-  assert.deepEqual(st.connectors.map((c) => [c.id, c.status]), [['github', 'available'], ['slack', 'soon'], ['sentry', 'soon'], ['linear', 'soon'], ['jira', 'soon']]);
+  assert.deepEqual(st.connectors.map((c) => [c.id, c.status]), [['github', 'available'], ['slack', 'available'], ['sentry', 'available'], ['linear', 'soon'], ['jira', 'soon']]);
   assert.equal(st.brand.defaultHost, 'app.plexiform.dev');
   assert.deepEqual(st.signedInHubs, []);
   h.flow.show('team');

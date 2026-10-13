@@ -6,7 +6,7 @@
 // enabled on the team hub today. Update it, in both files, when a connector is
 // enabled on the prod hub. It is never decided by a network call, so a
 // signed-out window cannot say "available" for something the hub doesn't offer.
-export const LAUNCH_CONNECTORS = Object.freeze(['github']);
+export const LAUNCH_CONNECTORS = Object.freeze(['github', 'slack', 'sentry']);
 
 export const CONNECTORS = Object.freeze([
   { id: 'github', name: 'GitHub', value: 'Cards update when pull requests merge; open the PR from the card.' },

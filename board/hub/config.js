@@ -53,6 +53,9 @@ export function loadConfig(env = process.env) {
     // Email one-time-code sign-in is off unless asked for: a mailer configured for invites never turns it on.
     emailSignin: flag(env.BOARD_EMAIL_SIGNIN),
     signinMethods: (env.BOARD_SIGNIN_METHODS || '').split(',').map((s) => s.trim()).filter(Boolean),
+    // The connectors offered besides GitHub (integrations/index.js). Unset: slack and sentry. Linear and
+    // jira join only after their runbook check; unknown ids are ignored.
+    connectors: [...new Set((env.BOARD_CONNECTORS ?? 'slack,sentry').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean))],
     signup: env.BOARD_SIGNUP || null,
     googleClientId: env.BOARD_GOOGLE_CLIENT_ID || null,
     googleClientSecret: env.BOARD_GOOGLE_CLIENT_SECRET || null,

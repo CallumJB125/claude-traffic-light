@@ -196,6 +196,12 @@ test('connect: a secret of the wrong shape is refused; go-live gate: Linear is i
     }
   } finally { await h.close(); }
   for (const auth of ['dev', 'access', 'accounts', 'local']) assert.ok(!connectorsFor({ auth }).some((c) => c.id === 'linear'), auth);
+  // An operator who ran the runbook check opts in with BOARD_CONNECTORS; a typo or an unknown id is ignored.
+  for (const auth of ['dev', 'access', 'accounts', 'local']) {
+    assert.ok(connectorsFor({ auth, connectors: ['linear'] }).some((c) => c.id === 'linear'), auth);
+    assert.ok(!connectorsFor({ auth, connectors: ['github', 'fake', 'nope'] }).some((c) => c.id === 'linear'), auth);
+  }
+  assert.equal(connectorsFor({ auth: 'accounts', connectors: ['linear', 'linear'] }).filter((c) => c.id === 'linear').length, 1, 'listed once');
   const g = await startHub();
   try {
     const alice2 = await g.login('alice');

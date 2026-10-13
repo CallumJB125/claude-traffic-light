@@ -57,6 +57,10 @@ test('accounts refuses to start without a secret, a public URL (loopback try-out
   assert.equal(oenv.BOARD_GOOGLE_CLIENT_SECRET, undefined);
   assert.equal(oenv.BOARD_GITHUB_CLIENT_SECRET, undefined);
   assert.deepEqual(loadConfig({ BOARD_AUTH: 'accounts', BOARD_SECRET: 's'.repeat(40), BOARD_PUBLIC_URL: 'https://b.acme.test', BOARD_TRUST_CF_IP: '1', BOARD_SIGNIN_METHODS: 'google, github' }).signinMethods, ['google', 'github']);
+  const connectorsEnv = (BOARD_CONNECTORS) => loadConfig({ BOARD_AUTH: 'accounts', BOARD_SECRET: 's'.repeat(40), BOARD_PUBLIC_URL: 'https://b.acme.test', BOARD_TRUST_CF_IP: '1', BOARD_SIGNIN_METHODS: 'google', ...(BOARD_CONNECTORS === undefined ? {} : { BOARD_CONNECTORS }) }).connectors;
+  assert.deepEqual(connectorsEnv(undefined), ['slack', 'sentry'], 'unset: slack and sentry are offered');
+  assert.deepEqual(connectorsEnv(''), [], 'empty: only GitHub');
+  assert.deepEqual(connectorsEnv(' Slack, sentry,linear ,linear'), ['slack', 'sentry', 'linear'], 'trimmed, lower-cased, deduplicated');
 });
 
 test('H1/D66: an exposed accounts hub needs https, BOARD_TRUST_CF_IP and a sign-in method, never the console mailer; no Resend key needed', () => {
