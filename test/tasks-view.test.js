@@ -100,6 +100,10 @@ test('composer and message validation use the protocol limits', () => {
   assert.equal(TV.validateDraft({ text: '  ', hasFolder: true }).ok, false);
   assert.match(TV.validateDraft({ text: 'do it', hasFolder: false }).error, /folder/);
   assert.equal(TV.validateDraft({ text: 'do it', hasFolder: true }).ok, true);
+  assert.equal(TV.validateDraft({ text: 'do it', hasFolder: true, budget: '' }).ok, true, 'no cap is fine');
+  assert.equal(TV.validateDraft({ text: 'do it', hasFolder: true, budget: '5' }).ok, true);
+  assert.match(TV.validateDraft({ text: 'do it', hasFolder: true, budget: '0.1' }).error, /Max spend/);
+  assert.match(TV.validateDraft({ text: 'do it', hasFolder: true, budget: 'lots' }).error, /Max spend/);
   assert.match(TV.validateDraft({ text: 'x'.repeat(20001), hasFolder: true }).error, /1 character over/);
   assert.equal(TV.validateDraft({ text: 'x'.repeat(20000), hasFolder: true }).ok, true);
   assert.equal(TV.validateMessage('hi').ok, true);

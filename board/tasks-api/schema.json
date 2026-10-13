@@ -1710,6 +1710,9 @@
         "costReport": {
           "type": "boolean"
         },
+        "budget": {
+          "type": "boolean"
+        },
         "sandbox": {
           "type": "boolean"
         }
@@ -1722,6 +1725,7 @@
         "permissionRouting",
         "modelSelect",
         "costReport",
+        "budget",
         "sandbox"
       ],
       "additionalProperties": false

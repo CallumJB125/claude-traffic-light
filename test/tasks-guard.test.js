@@ -174,6 +174,22 @@ test('validateCreate: the folder comes from main, the words are bounded, default
   assert.deepEqual(G.validateCreate({ text: 'x', ai: 'codex', surface: 'tab', permissionLevel: 'ask', planFirst: true }, '/p').spec, { text: 'x', cwd: '/p', source: 'local', ai: 'codex', surface: 'tab', permissionLevel: 'ask', planFirst: true });
 });
 
+test('validateCreate: a per-task spend cap is a bounded dollar amount or nothing', () => {
+  assert.equal(G.validateCreate({ text: 'x', budgetUsd: 5 }, '/p').spec.budgetUsd, 5);
+  assert.equal(G.validateCreate({ text: 'x', budgetUsd: '2.555' }, '/p').spec.budgetUsd, 2.56, 'a string from the form, rounded to cents');
+  assert.equal(G.validateCreate({ text: 'x', budgetUsd: '' }, '/p').spec.budgetUsd, undefined);
+  assert.equal(G.validateCreate({ text: 'x', budgetUsd: null }, '/p').spec.budgetUsd, undefined);
+  for (const bad of [0, 0.1, -3, 1001, 'lots', NaN, Infinity, {}]) assert.equal(G.validateCreate({ text: 'x', budgetUsd: bad }, '/p').code, 'VALIDATION', String(bad));
+});
+
+test('a task that stopped at its cap reads "Stopped at cap" with the budget in the reason', () => {
+  const t = G.sanitizeTask(view({ state: 'failed', failKind: 'budget', cost: { usd: 5.01, budgetUsd: 5 }, actions: undefined, label: undefined, reason: undefined, tone: undefined, green: undefined }));
+  assert.equal(t.label, 'Stopped at cap');
+  assert.match(t.reason, /budget \$5(\.00)? reached/);
+  assert.deepEqual(t.cost, { usd: 5.01, budgetUsd: 5 });
+  assert.ok(t.actions.includes('retry'));
+});
+
 test('every action the contract names is either handled or deliberately refused by validateAct', () => {
   for (const a of P.ACTIONS) {
     const t = G.sanitizeTask(view({ actions: [a], confirm: [] }));
@@ -222,6 +238,8 @@ test('resolveBin finds an executable on PATH, leaves an absolute path alone, and
 test('sanitizeAis keeps known AIs only', () => {
   const a = G.sanitizeAis([{ id: 'claude', installed: true, loggedIn: true, health: 'ok', notes: ['n'] }, { id: 'evil', installed: true }, { id: 'codex', installed: false, loggedIn: null, health: 'weird', notes: [] }]);
   assert.deepEqual(a.map((x) => [x.id, x.label, x.installed, x.loggedIn, x.health]), [['claude', 'Claude', true, true, 'ok'], ['codex', 'Codex', false, null, 'warn']]);
+  const caps = G.sanitizeAis([{ id: 'claude', capabilities: { background: true, budget: true } }, { id: 'codex', capabilities: { background: true, budget: 'yes' } }]).map((x) => x.capabilities.budget);
+  assert.deepEqual(caps, [true, false], 'a native per-task cap is a boolean the composer can trust');
 });
 
 test('STATES is the same list as board/shared/states.js', async () => {

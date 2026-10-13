@@ -183,7 +183,7 @@ export class TasksEngine extends EventEmitter {
       const capabilities = {
         background: startable && c.structuredEvents, resume: c.resume, hooks: c.permissions === 'hooks',
         mcp: startable && c.permissions === 'hooks', permissionRouting: c.permissions === 'hooks', modelSelect: c.model,
-        costReport: c.budget !== 'none', sandbox: c.permissions !== 'none',
+        costReport: c.budget !== 'none', budget: c.budget === 'native', sandbox: c.permissions !== 'none',
       };
       const notes = [];
       if (!d.installed) notes.push('Not installed.');
