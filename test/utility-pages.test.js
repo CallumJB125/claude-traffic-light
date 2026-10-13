@@ -44,7 +44,7 @@ function handlers() {
     SessionOverview: { snapshot: input => { observed.push(input); return { status: input.available === false ? 'unavailable' : 'complete' }; } },
     localSessions: sessions => sessions, aggregateState: () => ({ sessions: [{ fixture: 'metadata' }] }),
     IS_DEV_RUN: false, Adapters: { get: () => ({ isActivityInstalled: () => true }) }, os: { homedir: () => '/synthetic' }, HOOK_RUNTIME: {},
-    createSettingsWindow: () => opened.push('settings'), Date,
+    createSettingsWindow: () => opened.push('settings'), aiToolsOpen: (d) => opened.push(d), Date,
     InteractionMain: { sendLocal: async (session, text) => { messaged.push([session, text]); return { ok: true, status: 'acknowledged', error: null }; } },
   };
   const start = source.indexOf("const { fromPage } =");
@@ -74,9 +74,9 @@ test('actual main IPC allows analytics reads but refuses unrelated page and subf
   assert.equal(f.registered.get('get-config')(event(f.pages.sessions)), null);
 });
 
-test('actual Sessions refresh and Preferences IPC require current main-frame Sessions owner', () => {
+test('actual Sessions refresh and AI tools IPC require current main-frame Sessions owner', () => {
   const f = handlers();
-  const refresh = f.registered.get('sessions:state'); const preferences = f.registered.get('sessions:settings');
+  const refresh = f.registered.get('sessions:state'); const preferences = f.registered.get('sessions:aitools');
   for (const e of [event(f.widget), event(f.popup), event(f.pages.settings), { sender: f.pages.sessions, senderFrame: {} }, {}]) {
     assert.equal(refresh(e), null); assert.equal(preferences(e), false);
   }
@@ -84,7 +84,7 @@ test('actual Sessions refresh and Preferences IPC require current main-frame Ses
   assert.equal(refresh(event(f.pages.sessions)).status, 'complete');
   assert.equal(f.observed[0].activity.configured, true);
   assert.equal(preferences(event(f.pages.sessions)), true);
-  assert.deepEqual(f.opened, ['settings']);
+  assert.deepEqual(f.opened, ['aitools:codex']);
   const old = f.pages.sessions; f.pages.sessions = wc();
   assert.equal(refresh(event(old)), null);
   f.pages.sessions.isDestroyed = () => true;

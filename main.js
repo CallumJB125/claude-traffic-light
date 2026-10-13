@@ -1603,7 +1603,8 @@ ipcMain.handle('sessions:message', (e, session, text) => {
   if (typeof session !== 'string' || typeof text !== 'string' || !text.trim() || text.length > 500) return { ok: false, error: 'Write a message first.' };
   return InteractionMain.sendLocal(session, text);
 });
-ipcMain.handle('sessions:settings', e => { if (!sessionsSender(e)) return false; createSettingsWindow(); return true; });
+// Codex activity hooks are connected from the AI tools page's Codex row (src/ai-tools.js).
+ipcMain.handle('sessions:aitools', e => { if (!sessionsSender(e)) return false; return !!aiToolsOpen('aitools:codex'); });
 // Overview uses main-owned structured reports/current own-board work only.
 // Teammates' shared sessions come from a team hub directory. Until the real
 // hub's directory client lands, a FAKE in-memory hub (clearly labelled as

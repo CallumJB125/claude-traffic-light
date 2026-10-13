@@ -281,8 +281,8 @@ function render(snapshot) {
   const a = snapshot.activity;
   activity.textContent = a?.observed ? `A Codex lifecycle event was received ${age(a.latest_age_ms).toLowerCase()}.`
     : a?.configured === true ? 'Hooks are configured. No local lifecycle event is visible yet. Review the Plexiform hooks through Codex /hooks, then start a fresh turn.'
-      : a?.configured === false ? 'Codex activity is not configured for this copy of Plexiform. Open Activity settings to configure it, then review the hooks in Codex.'
-        : 'Codex hook configuration is unavailable. Check Activity settings.';
+      : a?.configured === false ? 'Codex is not connected to this copy of Plexiform. Connect it on the AI tools page, then review the hooks in Codex.'
+        : 'Codex hook configuration could not be read. Check Codex on the AI tools page.';
   for (const t of snapshot.shared ?? []) content.append(node('p', `${t.sessions} sessions share this working tree: ${t.project}, with ${t.dirty} uncommitted file${t.dirty === 1 ? '' : 's'}. Commit, or give one session its own worktree, before they overwrite each other.`, 'banner'));
   document.getElementById('coord').hidden = !(snapshot.sessions ?? []).some(i => i.burst?.coordination);
   for (const item of snapshot.sessions ?? []) {
@@ -333,7 +333,7 @@ async function refresh({ clear = false } = {}) {
     if (editing) return; // an open row panel would be wiped by a redraw
     render(snapshot);
   } catch {
-    if (request === generation && !document.hidden) { content.replaceChildren(); activity.textContent = 'Codex activity is unavailable. Check Activity settings.'; status.textContent = 'Local activity is unavailable. Try Refresh.'; }
+    if (request === generation && !document.hidden) { content.replaceChildren(); activity.textContent = 'Codex activity is unavailable. Check Codex on the AI tools page.'; status.textContent = 'Local activity is unavailable. Try Refresh.'; }
   }
 }
 const COORD_LABELS = { shared: 'shared', refused: 'refused', held: 'held for a commit', stopped: 'stopped with uncommitted files', errors: 'hook errors' };
@@ -363,11 +363,11 @@ document.getElementById('add-connect').addEventListener('click', async () => {
 });
 document.getElementById('add-link').addEventListener('click', () => togglePanel('panel-link', host => linkPanel(host, null, null)));
 document.getElementById('add-start').addEventListener('click', () => togglePanel('panel-start', startPanel));
-document.getElementById('settings').addEventListener('click', async event => {
+document.getElementById('codex-aitools').addEventListener('click', async event => {
   event.currentTarget.disabled = true;
-  try { if (!await window.sessionsApi.settings()) status.textContent = 'Activity settings are unavailable. Try again from Preferences.'; }
-  catch { status.textContent = 'Activity settings are unavailable. Try again from Preferences.'; }
-  finally { document.getElementById('settings').disabled = false; }
+  try { if (!await window.sessionsApi.aiTools()) status.textContent = 'The AI tools page could not be opened. Open it from Settings in the sidebar.'; }
+  catch { status.textContent = 'The AI tools page could not be opened. Open it from Settings in the sidebar.'; }
+  finally { document.getElementById('codex-aitools').disabled = false; }
 });
 document.addEventListener('visibilitychange', () => {
   // A hidden page must not retain a status that appears current on return.
