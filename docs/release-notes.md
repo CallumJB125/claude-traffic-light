@@ -21,7 +21,7 @@ Plexiform 1.0.1: the first release for macOS and Linux.
 **Known limits**
 - This release is not signed by Apple. Opening it the first time takes a few extra steps (see Install).
 - macOS may ask to use the keychain. Enter your Mac password and choose **Always Allow**. It may ask again after an update while the app is unsigned.
-- Slack and Sentry are not in this release.
+- Linear and Jira are not offered in this release (Slack and Sentry are, from 2026-10-13).
 - Signing in by email needs your address verified until we move out of the email sandbox.
 - Windows is not included in this release. Linux installers pass CI smoke checks; wider device testing continues.
 

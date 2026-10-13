@@ -1,14 +1,10 @@
 # Sentry connector runbook (team hub)
 
-Status: **built and tested, not offered.** Sentry is in no hub's
-`connectorsFor()` (`board/hub/integrations/index.js`; a test in
-`board/hub/test/sentry-connector.test.js` asserts it for every auth mode), and
-the signed-out pages show it as *Coming soon* (`LAUNCH_CONNECTORS` in
-`board/web/js/connectors.js` and `buddy-window/connectors.js`). CONTRACT D42
-addendum "the Sentry connector" sets a **go-live gate**: a real Sentry
-delivery must be checked against `verify()` over its exact bytes before Sentry
-is added anywhere. That gate, and enabling on any hub, is **owner-gated**.
-Nothing here has been done with a real Sentry org.
+Status: **offered on every hub since 2026-10-13.** Sentry is in `connectorsFor()`
+(`board/hub/integrations/index.js`) and the signed-out pages list it as
+*Available after you join a team* (`LAUNCH_CONNECTORS`). The owner steps below
+are still the acceptance checks to run on a real workspace before relying on
+it; nothing below has been done on a real Sentry account yet.
 
 Code: `board/hub/integrations/sentry/` (`index.js` verify and handler,
 `events.js` issue and metric-alert parsing, `text.js` the scrub and caps).

@@ -94,4 +94,4 @@ A failure on any row of Parts 1 to 3 blocks the account-mode release until expla
 
 - Sharing live AI sessions and teammate messaging: `docs/release-readiness-2026-10-03.md`.
 - Owner-only setup of OAuth clients, SES and signup policy: `docs/CUTOVER.md`.
-- Slack, Sentry, Linear and Jira connectors: not offered in this release.
+- Linear and Jira connectors: not offered in this release. Slack and Sentry are offered; their runbooks hold the acceptance steps.

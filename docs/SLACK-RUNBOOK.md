@@ -1,11 +1,10 @@
 # Slack connector runbook (team hub)
 
-Status: **built and tested, not offered.** Slack is in no hub's
-`connectorsFor()` (`board/hub/integrations/index.js`) and the signed-out pages
-show it as *Coming soon* (`LAUNCH_CONNECTORS` in `board/web/js/connectors.js`
-and `buddy-window/connectors.js`). Turning it on is **owner-gated**: only the
-hub owner does the steps below, on a hub they choose, after the acceptance
-checks pass. Nothing here has been done on any real hub or Slack workspace.
+Status: **offered on every hub since 2026-10-13.** Slack is in `connectorsFor()`
+(`board/hub/integrations/index.js`) and the signed-out pages list it as
+*Available after you join a team* (`LAUNCH_CONNECTORS`). The owner steps below
+are still the acceptance checks to run on a real workspace before relying on
+it; nothing below has been done on a real Slack account yet.
 
 Code: `board/hub/integrations/slack/` (`webhook.js` verify and parsing,
 `spec.js` connect, identity and handlers, `README.md` the security notes and
