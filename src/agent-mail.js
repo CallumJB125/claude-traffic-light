@@ -26,7 +26,7 @@ const POLL_MS = 60_000;
 const MAIL_MEMO_MS = 10_000;
 const PROVIDER = /^[a-z][a-z0-9-]{0,31}$/;
 const SAME_HUB = 'Asking teammates needs your team board on the same Plexiform account hub.';
-const NOTE = 'Nothing is sent until your person presses Send in Plexiform (Running now → Agent mail). Do not call this again or wait in a loop; check team_agent_mail later.';
+const NOTE = 'Nothing is sent until your person presses Send in Plexiform (Sessions → Agent mail). Do not call this again or wait in a loop; check team_agent_mail later.';
 const unavailable = (reason, message) => ({ available: false, reason, message });
 const digest = (s) => crypto.createHash('sha256').update(String(s)).digest('hex');
 const origin = (u) => { try { return new URL(u).origin; } catch { return null; } };

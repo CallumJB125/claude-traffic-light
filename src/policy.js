@@ -7,7 +7,7 @@
 //   - the per-repo daily spend cap: today's spend per repo is worked out here
 //     and written to policy-spend.json, which the hook reads (fail-open: a
 //     missing or stale file allows everything)
-//   - Running now: which policy a session is under, and its latest refusal
+//   - Sessions: which policy a session is under, and its latest refusal
 // Everything stays on this Mac.
 const fs = require('fs');
 const path = require('path');
@@ -179,7 +179,7 @@ function pruneBlocks(rootDir, now = Date.now()) {
   }
 }
 
-// ── Running now ──────────────────────────────────────────────────────────────
+// ── Sessions ──────────────────────────────────────────────────────────────
 
 /** The policy a session row is under and its latest refusal, or null. */
 function rowInfo(row, rootDir, { now = Date.now() } = {}) {

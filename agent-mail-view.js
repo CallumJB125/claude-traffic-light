@@ -1,5 +1,5 @@
 'use strict';
-// Running now's Agent mail panel (src/agent-mail.js). Your AI's asks wait here
+// Sessions' Agent mail panel (src/agent-mail.js). Your AI's asks wait here
 // for Send or Discard; teammates' AIs' questions and handoffs (opt-in inbox)
 // are answered, asked of your own AI, accepted or declined here. Every text is
 // set with textContent or a field value; main re-checks everything.
@@ -114,6 +114,12 @@
 
   function render(s) {
     const held = (s && s.held) || [], inbox = (s && s.inbox) || [];
+    // Signed out: say what it is and where to sign in, rather than hiding it.
+    if (s && s.signedIn === false) {
+      section.hidden = false;
+      return out.replaceChildren(node('p', 'Agent mail lets your AI ask a teammate a question or hand them work, and shows what teammates’ AIs ask you. Nothing is sent until you press Send.', 'muted'),
+        btn('Sign in to use agent mail', (b) => run(b, async () => ((await api.openAccount?.()) ? { ok: true } : { ok: false, error: 'The Account page could not be opened. Open it from Team in the sidebar.' }), '', false), true));
+    }
     section.hidden = !s || !s.signedIn || (!held.length && !inbox.length && !s.polling);
     if (section.hidden) return out.replaceChildren();
     const live = new Set([...held, ...inbox].map((m) => m.id));

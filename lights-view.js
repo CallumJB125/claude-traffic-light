@@ -9,7 +9,7 @@
     document.title = 'Usage & cost';
     document.querySelector('#titlebar h1').textContent = document.title;
   } else if (widgetOnly) {
-    document.title = 'Widget configuration';
+    document.title = 'Widget rules';
     document.querySelector('#titlebar h1').textContent = document.title;
   }
 
@@ -1157,7 +1157,7 @@
     e.stopPropagation();
     const open = $('presets').hidden;
     $('presets').hidden = !open;
-    if (open) { renderUserPresets(); $('preset-name').value = ''; $('preset-save').disabled = true; $('setup-choice').hidden = true; $('rules-choice').hidden = true; $('presets').querySelector('button')?.focus(); }
+    if (open) { renderUserPresets(); $('preset-name').value = ''; $('preset-save').disabled = true; $('setup-choice').hidden = true; $('presets').querySelector('button')?.focus(); }
   });
   document.addEventListener('click', (e) => { if (!e.target.closest('#presets')) $('presets').hidden = true; });
   window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('presets').hidden) { $('presets').hidden = true; $('presets-btn').focus(); } });
@@ -1224,7 +1224,7 @@
       + (cmds.length ? `<br>Clicks in these rules run:${cmds.map((c) => `<code>${escape(c)}</code>`).join('')}` : '');
     $('share-form').hidden = true;
     $('setup-choice').hidden = true;
-    $('presets').hidden = false;
+    $('presets').hidden = true;
     $('rules-choice').hidden = false;
     $('rules-choice').querySelector('button').focus();
   }
@@ -1235,7 +1235,7 @@
     const { rules: incoming, done, tpl } = offered;
     offered = null;
     $('rules-choice').hidden = true;
-    if (b.dataset.rules === 'cancel') { $('presets').hidden = true; return; }
+    if (b.dataset.rules === 'cancel') return;
     applyRules(incoming, tpl);
     flash(done);
   });

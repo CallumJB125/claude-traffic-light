@@ -9,6 +9,8 @@
 // `unknown` (no account summary, no task service) counts as not done, so the
 // panel never claims a step that nothing confirmed.
 
+const { summary } = require('./ai-tools.js');
+
 const DONE = 'done';
 const TODO = 'todo';
 const UNKNOWN = 'unknown';
@@ -35,13 +37,12 @@ function toolRow(t) {
   };
 }
 
-// The single first-run question: everything found but not yet connected.
+// The single first-run question: everything found but not yet connected,
+// worded by the same summary as Home and the AI tools page.
 function promptFor(tools) {
-  const pending = tools.filter((t) => t.installed && !t.connected && t.state !== 'fix');
-  if (!pending.length) return null;
-  const names = pending.map((t) => t.label);
-  const list = names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names[0];
-  return { text: `We found ${list} on this Mac. Connect ${names.length > 1 ? 'them' : 'it'}?`, ids: pending.map((t) => t.id), fix: { label: 'Connect all', destination: 'aitools:all' } };
+  const sum = summary(tools);
+  if (!sum.ready.length) return null;
+  return { text: sum.text, ids: sum.ready, fix: { label: 'Connect all', destination: 'aitools:all' } };
 }
 
 function signInRow(account) {

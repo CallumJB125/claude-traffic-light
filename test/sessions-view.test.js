@@ -30,6 +30,13 @@ test('configured without delivery explains the supported hooks handoff instead o
   try { await tick(); assert.match(fixture.document.getElementById('activity-status').textContent, /Codex \/hooks/); assert.match(fixture.document.getElementById('content').textContent, /No local sessions/); }
   finally { fixture.dom.window.close(); }
 });
+test('unconfigured and unreadable Codex activity point at the AI tools page, never a missing settings pane', async () => {
+  for (const configured of [false, undefined]) {
+    const fixture = setup({ state: async () => state({ activity: { configured } }) });
+    try { await tick(); const t = fixture.document.getElementById('activity-status').textContent; assert.match(t, /AI tools page/); assert.doesNotMatch(t, /Activity settings/); }
+    finally { fixture.dom.window.close(); }
+  }
+});
 test('hiding clears old activity, pauses polling and refuses an earlier pending reply', async () => {
   let resolveOld, count = 0;
   const fixture = setup({ state: () => { count++; return count === 1 ? new Promise(resolve => { resolveOld = resolve; }) : Promise.resolve(state({ sessions: [{ provider: 'Codex', project: 'fresh', status: 'Working', freshness: 'recent', age_ms: 0, children: [] }] })); } });
@@ -51,10 +58,10 @@ test('out-of-order refresh cannot replace a newer result and a rejected refresh 
     assert.match(fixture.document.getElementById('status').textContent, /unavailable/); assert.doesNotMatch(fixture.document.body.textContent, /private failure/);
   } finally { fixture.dom.window.close(); }
 });
-test('settings refusal stays truthful and the settings button is restored', async () => {
+test('the Codex button opens AI tools; a refusal stays truthful and the button is restored', async () => {
   let opened = 0;
-  const fixture = setup({ state: async () => state(), settings: async () => { opened++; return false; } });
-  try { await tick(); fixture.document.getElementById('settings').click(); await tick(); assert.equal(opened, 1); assert.equal(fixture.document.getElementById('settings').disabled, false); assert.match(fixture.document.getElementById('status').textContent, /settings are unavailable/); }
+  const fixture = setup({ state: async () => state(), aiTools: async () => { opened++; return false; } });
+  try { await tick(); const b = fixture.document.getElementById('codex-aitools'); assert.equal(b.textContent, 'Open Codex in AI tools'); b.click(); await tick(); assert.equal(opened, 1); assert.equal(b.disabled, false); assert.match(fixture.document.getElementById('status').textContent, /AI tools page could not be opened/); }
   finally { fixture.dom.window.close(); }
 });
 

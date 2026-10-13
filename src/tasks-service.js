@@ -422,6 +422,17 @@ function createTasksService(opts) {
     } catch (e) { return failure(e); }
   }
 
+  // The helper runs only some AIs; any other AI found on this Mac (src/ai-tools.js
+  // quick(), via opts.detectedTools) is still listed, marked as not in Tasks yet.
+  function withDetected(list) {
+    let found = [];
+    try { found = opts.detectedTools ? opts.detectedTools() || [] : []; } catch { found = []; }
+    const listed = new Set(list.map((a) => a.id));
+    const extra = found.filter((t) => t && t.installed && Object.hasOwn(TV.AI_NAME, t.id) && !listed.has(t.id))
+      .map((t) => ({ id: t.id, label: TV.AI_NAME[t.id], installed: true, loggedIn: null, health: 'warn', note: 'Not in Tasks yet.', tasks: false, capabilities: { background: false, permissionRouting: false, costReport: false } }));
+    return [...list, ...extra];
+  }
+
   async function composerInfo() {
     if (connected()) {
       try { ais = guard.sanitizeAis(await client.detectAIs()); } catch { /* keep the last list */ }
@@ -436,7 +447,7 @@ function createTasksService(opts) {
       recent.push(registerFolder(root));
       if (recent.length >= 5) break;
     }
-    return { ais: ais || [], recent, canSchedule: canSchedule() };
+    return { ais: withDetected(ais || []), recent, canSchedule: canSchedule() };
   }
 
   // Folder choices are handed to the page as opaque handles with a display label.

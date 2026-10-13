@@ -33,7 +33,7 @@
     const r = await api.add(item.id, item.sha256).catch(() => null);
     b.disabled = false;
     if (r && r.ok) {
-      say(r.kind === 'character' ? `Added “${item.title}” to Characters.` : r.kind === 'rules' ? `Opened “${item.title}” in Widget configuration. Press Load there, then Save, to keep them.` : r.kind === 'setup' ? `Opened “${item.title}” on the Setups page. Nothing is written until you tick each file and Apply there.` : `Added “${item.title}” to My recipes.`);
+      say(r.kind === 'character' ? `Added “${item.title}” to Characters.` : r.kind === 'rules' ? `Opened “${item.title}” in Widget rules. Press Load there, then Save, to keep them.` : r.kind === 'setup' ? `Opened “${item.title}” on the Setups page. Nothing is written until you tick each file and Apply there.` : `Added “${item.title}” to My recipes.`);
       if (r.kind === 'recipe') document.dispatchEvent(new CustomEvent('gallery:added'));
       return;
     }
@@ -56,7 +56,7 @@
     if (item.kind === 'recipe') { more.append(el('summary', null, 'See the prompt'), el('p', 'recipe-cost', `${p.what} Cost: ${p.cost}`), el('pre', null, p.prompt)); li.append(more); }
     else if (item.kind === 'character') li.append(el('p', 'recipe-cost', `A widget character named ${p.name}. Its art is checked again before it is saved.`));
     else if (item.kind === 'setup') { more.append(el('summary', null, `${p.files.length} file${p.files.length === 1 ? '' : 's'} an AI will read as instructions`)); for (const f of p.files) more.append(el('p', 'recipe-cost', `~/${f.path}`), el('pre', null, f.content)); if (p.note) more.append(el('p', 'recipe-cost', p.note)); li.append(more); }
-    else if (item.kind === 'rules') { more.append(el('summary', null, `${p.names.length} widget rule${p.names.length === 1 ? '' : 's'}`), el('p', 'recipe-cost', 'They open in Widget configuration, and replace your rules only when you press Load and then Save there.')); const ul = el('ul', 'cg-members'); for (const n of p.names) ul.append(el('li', null, n)); more.append(ul); li.append(more); }
+    else if (item.kind === 'rules') { more.append(el('summary', null, `${p.names.length} widget rule${p.names.length === 1 ? '' : 's'}`), el('p', 'recipe-cost', 'They open in Widget rules, and replace your rules only when you press Load and then Save there.')); const ul = el('ul', 'cg-members'); for (const n of p.names) ul.append(el('li', null, n)); more.append(ul); li.append(more); }
     else if (item.kind === 'pack') {
       more.open = true;
       more.append(el('summary', null, `${p.members.length} items, each added on its own`));

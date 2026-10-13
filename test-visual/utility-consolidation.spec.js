@@ -7,7 +7,7 @@ const { launchApp, windowByFile } = require('./app');
 
 // Actual Electron renderer acceptance, entirely synthetic. HOME also isolates
 // optional read-only probes that do not use the app's per-run data override.
-test('ordinary utilities stay in the main app and Widget configuration contains two tabs', async () => {
+test('ordinary utilities stay in the main app and Widget rules contains two tabs', async () => {
   const syntheticHome = fs.mkdtempSync(path.join(os.tmpdir(), 'plexiform-utility-acceptance-'));
   const h = await launchApp({ extraArgs: ['--lights'], env: { HOME: syntheticHome, USERPROFILE: syntheticHome } });
   const errors = [];

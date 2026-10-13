@@ -131,7 +131,7 @@ function draw() {
   const names = found.map((r) => r.label);
   allBtn.hidden = !snap.pending.length;
   status.textContent = !found.length ? 'No AI tools found on this Mac yet. Install one below, then check again.'
-    : snap.pending.length ? `Found ${names.join(', ')}. ${snap.pending.length} not connected yet.` : `Found ${names.join(', ')}. All connected.`;
+    : snap.summary?.text || `Found ${names.join(', ')}.`;
   if (focusId && !scrolled) { scrolled = true; document.getElementById(`tool-${focusId}`)?.scrollIntoView({ block: 'center' }); }
 }
 

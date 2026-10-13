@@ -61,6 +61,37 @@ function diffLines(before, after) {
   return { lines: out, unchanged: same };
 }
 
+const joinNames = (names) => (names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names[0]);
+
+// The one account of what was found and what is connected. Home's banner, the
+// AI tools page and Help's first-run prompt all word it from here, so their
+// counts cannot disagree. `rows` are quick() or scan() rows.
+function summary(rows) {
+  const found = (Array.isArray(rows) ? rows : []).filter((r) => r && r.kind !== 'custom' && r.installed);
+  const label = (r) => String(r.label || r.id);
+  const connected = found.filter((r) => r.connected), waiting = found.filter((r) => !r.connected);
+  const ready = waiting.filter((r) => r.state !== 'fix');
+  let text = null;
+  if (found.length) {
+    const head = `Found ${joinNames(found.map(label))} on this Mac.`;
+    text = !waiting.length ? `${head} ${found.length > 1 ? 'All connected.' : 'Connected.'}`
+      : !connected.length ? `${head} ${found.length > 1 ? 'None' : 'Not'} connected yet.`
+        : `${head} ${joinNames(connected.map(label))} connected; ${joinNames(waiting.map(label))} not connected yet.`;
+  }
+  return { found: found.map((r) => r.id), connected: connected.map((r) => r.id), waiting: waiting.map((r) => r.id), ready: ready.map((r) => r.id), waitingLabels: waiting.map(label), text };
+}
+
+// Why a tool cannot be used yet, and the AI tools row that fixes it, for pages
+// that list a tool as unavailable (Overview). Null once it is connected: then
+// the page's own reason stands.
+function nextStep(row) {
+  if (!row || !row.id) return null;
+  const label = String(row.label || row.id), destination = `aitools:${row.id}`;
+  if (!row.installed) return { reason: `Not installed on this Mac. Install ${label}, then connect it on the AI tools page.`, action: { label: 'How to install', destination } };
+  if (!row.connected) return { reason: `Installed, but not connected to Plexiform yet.`, action: { label: row.state === 'fix' ? 'Fix' : 'Connect', destination } };
+  return null;
+}
+
 function friendly(err, file, home) {
   const where = tilde(file, home);
   if (err?.code === 'EACCES' || err?.code === 'EPERM') return `Plexiform cannot write ${where} (permission denied). Check the file's owner and permissions, then try again.`;
@@ -224,7 +255,7 @@ function create({
     });
     const found = rows.filter((r) => r.kind === 'tool' && r.installed);
     const todo = found.filter((r) => !r.connected && r.state !== 'fix');
-    return { rows: [...rows, ...customRows], runner: generic, found: found.map((r) => r.id), pending: todo.map((r) => r.id), platformOk: platform !== 'win32', home };
+    return { rows: [...rows, ...customRows], runner: generic, found: found.map((r) => r.id), pending: todo.map((r) => r.id), summary: summary(rows), platformOk: platform !== 'win32', home };
   }
 
   // What connecting would write, as a diff of the file as the adapter would
@@ -367,4 +398,4 @@ function create({
   return { scan, quick, preview, connect, connectAll, undo, disconnect, addCustom, removeCustom, fixRunner, installUrl: (id) => BY_ID.get(id)?.installUrl || null, ids: () => TOOLS.map((t) => t.id) };
 }
 
-module.exports = { create, diffLines, TOOLS };
+module.exports = { create, diffLines, summary, nextStep, TOOLS };

@@ -249,7 +249,7 @@ test('the per-repo daily cap: over-cap repos are written to the gate the hook re
   assert.deepEqual(Policy.overCaps({ rootDir: data, turns, now, costOf: () => 1 }), {});
 });
 
-test('Running now rows carry the policy name and the latest refusal; none when there is no policy', () => {
+test('Sessions rows carry the policy name and the latest refusal; none when there is no policy', () => {
   const snap = Overview.snapshot({
     sessions: [{ sessionId: 'a', cwd: '/w/one', updatedAt: new Date().toISOString(), signal: 'tool-use' }, { sessionId: 'b', cwd: '/w/two', updatedAt: new Date().toISOString(), signal: 'tool-use' }],
     policy: (row) => (row.sessionId === 'a' ? { name: 'Careful', source: 'repo', warning: null, blocked: { text: 'Blocked by policy: x', tool: 'Bash', at: 1 }, raw: 'never shown' } : null),

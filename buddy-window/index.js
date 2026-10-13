@@ -951,7 +951,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   ipcMain.on('buddy:open-timeline', (e, cardId) => {
     if (fromHubView(e)) void sessionBridge.sessionForCard(cardId).then((s) => { if (s) openTimeline(s); }, () => {});
   });
-  // "Continue in…" on an observed-work card: main shows the menu; a launch's replies show on Running now.
+  // "Continue in…" on an observed-work card: main shows the menu; a launch's replies show on Sessions.
   ipcMain.handle('buddy:continue-in', async (e, cardId) => {
     if (!fromHubView(e) || !continueIn) return null;
     try { return await continueIn({ load: async () => (await sessionBridge.localHandover(cardId))?.markdown ?? null, window: win, showSessions: () => select('sessions') }); } catch { return null; }

@@ -96,6 +96,18 @@ test('messages: delivered and read states, quarantine, one entry per id', () => 
   assert.equal(TV.partyName({ kind: 'human', id: 'u' }), 'You');
 });
 
+test('New task AI picker: a found AI the helper does not run is listed but not choosable; the Codex caveat needs Codex chosen', () => {
+  const caps = { background: true };
+  assert.deepEqual(TV.aiOption({ id: 'codex', label: 'Codex', installed: true, loggedIn: true, capabilities: caps }), { value: 'codex', label: 'Codex', disabled: false });
+  assert.deepEqual(TV.aiOption({ id: 'claude', label: 'Claude', installed: true, tasks: false, capabilities: { background: false } }), { value: 'claude', label: 'Claude (not in Tasks yet)', disabled: true });
+  assert.equal(TV.aiOption({ id: 'gemini', label: 'Gemini', installed: false, capabilities: caps }).label, 'Gemini (not installed)');
+  assert.equal(TV.aiOption({ id: 'codex', label: 'Codex', installed: true, loggedIn: false, capabilities: caps }).label, 'Codex (logged out)');
+  assert.equal(TV.aiOption({ id: 'codex', label: 'Codex', installed: true, capabilities: { background: false } }).label, 'Codex (update required)');
+  assert.match(TV.aiNote('codex'), /billed under that account/);
+  assert.doesNotMatch(TV.aiNote('auto'), /billed/, 'Choose for me carries no Codex billing caveat');
+  assert.doesNotMatch(TV.aiNote('claude'), /billed/);
+});
+
 test('composer and message validation use the protocol limits', () => {
   assert.equal(TV.validateDraft({ text: '  ', hasFolder: true }).ok, false);
   assert.match(TV.validateDraft({ text: 'do it', hasFolder: false }).error, /folder/);

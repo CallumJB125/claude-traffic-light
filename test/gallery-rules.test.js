@@ -1,6 +1,6 @@
 'use strict';
 // D5: widget rules from the community gallery. Main confirms natively, then
-// offers them to Widget configuration, which still needs Load and Save.
+// offers them to Widget rules, which still needs Load and Save.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -41,7 +41,7 @@ test('adding widget rules confirms natively first, then offers them; nothing is 
   const r = await rig(t);
   assert.deepEqual(await r.g.add('rules/calm', r.sha), { ok: true, kind: 'rules' });
   assert.equal(r.confirms.length, 1);
-  assert.equal(r.confirms[0].action, 'Open in Widget configuration');
+  assert.equal(r.confirms[0].action, 'Open in Widget rules');
   assert.match(r.confirms[0].detail, /by Ana \(@ana-dev\), self-declared/);
   assert.match(r.confirms[0].detail, /2 widget rules: Done, Done quietly\./);
   assert.match(r.confirms[0].detail, /only if you press Load there and then Save/);
@@ -68,7 +68,7 @@ test('a wrong sha or the demo adds nothing', async (t) => {
   assert.equal(r.confirms.length + demo.confirms.length, 0);
 });
 
-test('main offers through Widget configuration; the page waits for its own rules before showing the offer', () => {
+test('main offers through Widget rules; the page waits for its own rules before showing the offer', () => {
   const main = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8');
   assert.match(main, /offerRules: \(rules\) => showLightsView\('rules', \{ event: 'rules:offer', data: rules \}\)/);
   const preload = fs.readFileSync(path.join(ROOT, 'lights-preload.js'), 'utf8');
@@ -76,4 +76,18 @@ test('main offers through Widget configuration; the page waits for its own rules
   const view = fs.readFileSync(path.join(ROOT, 'lights-view.js'), 'utf8');
   assert.match(view, /window\.lightsApi\.onOffer\(\(incoming\) => \{ if \(Array\.isArray\(incoming\)\) void booted\.then\(\(\) => offerRules\(incoming, 'From the gallery — Save to keep them'\)\); \}\);/);
   assert.match(view, /const booted = \(async \(\) => \{/);
+});
+
+test('the rules offer is its own bar above the rules list, not inside the open Presets dropdown', () => {
+  const { JSDOM } = require('jsdom');
+  const doc = new JSDOM(fs.readFileSync(path.join(ROOT, 'lights.html'), 'utf8')).window.document;
+  const bar = doc.getElementById('rules-choice');
+  assert.ok(bar && bar.hidden, 'hidden until something is offered');
+  assert.equal(bar.closest('#presets'), null, 'not inside the Presets dropdown');
+  assert.equal(bar.nextElementSibling, doc.getElementById('rule-list'), 'directly above the rules list');
+  assert.ok(bar.querySelector('#rules-summary') && bar.querySelector('[data-rules=load]') && bar.querySelector('[data-rules=cancel]'));
+  const view = fs.readFileSync(path.join(ROOT, 'lights-view.js'), 'utf8');
+  const offer = view.slice(view.indexOf('function offerRules('), view.indexOf("$('rules-choice').addEventListener"));
+  assert.match(offer, /\$\('presets'\)\.hidden = true;/, 'offering closes Presets');
+  assert.doesNotMatch(offer, /\$\('presets'\)\.hidden = false/);
 });

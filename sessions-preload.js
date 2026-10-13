@@ -2,7 +2,7 @@
 const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('sessionsApi', {
   state: () => ipcRenderer.invoke('sessions:state'),
-  settings: () => ipcRenderer.invoke('sessions:settings'),
+  aiTools: () => ipcRenderer.invoke('sessions:aitools'),
   handover: (action, key) => ipcRenderer.invoke('sessions:handover', action, key),
   timeline: key => ipcRenderer.invoke('timeline:open', key),
   setup: () => ipcRenderer.invoke('sessions:setup'),
@@ -29,6 +29,7 @@ contextBridge.exposeInMainWorld('sessionsApi', {
   onContinue: (cb) => ipcRenderer.on('continue:event', (_e, ev) => cb(ev)),
   // Agent mail (src/agent-mail.js): main resolves every id against the hub again.
   mailList: () => ipcRenderer.invoke('mail:list'),
+  openAccount: () => ipcRenderer.invoke('sessions:open-account'),
   mailRelease: (id, decision, digest, body) => ipcRenderer.invoke('mail:release', String(id), String(decision), String(digest), typeof body === 'string' ? body : undefined),
   mailOpen: (id) => ipcRenderer.invoke('mail:open', String(id)),
   mailAnswer: (id, text) => ipcRenderer.invoke('mail:answer', String(id), String(text)),

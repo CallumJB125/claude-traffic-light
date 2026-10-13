@@ -130,6 +130,20 @@
   }
   #rules header span.count { font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--faint); font-variant-numeric: tabular-nums; }
   /* What the widget is showing right now, and which rule owns each channel. */
+  #rules-choice {
+    margin: 0 6px 6px;
+    padding: 8px;
+    border: 1px solid var(--accent);
+    border-radius: var(--radius);
+    background: var(--accent-soft);
+    max-height: 40%;
+    overflow-y: auto;
+    flex: none;
+  }
+  #rules-choice[hidden] { display: none; }
+  #rules-choice .actions { display: flex; gap: 6px; margin-top: 8px; }
+  #rules-choice .btn { flex: 1; height: 26px; justify-content: center; }
+  #rules-choice .btn.primary:hover { background: #e5866a; }
   #now {
     margin: 0 6px 6px;
     padding: 6px 8px;
@@ -958,6 +972,14 @@
           </label>
         </div>
       </details>
+      <!-- Rules offered from the gallery, a share code, a file or a template: its own bar above the list, not inside Presets. -->
+      <div id="rules-choice" role="region" aria-label="Rules waiting to load" hidden>
+        <div id="rules-summary"></div>
+        <div class="actions">
+          <button type="button" class="btn primary" data-rules="load">Load these rules</button>
+          <button type="button" class="btn ghost" data-rules="cancel">Cancel</button>
+        </div>
+      </div>
       <ul id="rule-list" role="listbox" aria-label="Rules, highest priority first"></ul>
       <footer>
         <button class="btn" id="add-btn">
@@ -1415,11 +1437,6 @@
     <button type="button" class="btn primary" data-setup="merge">Merge presets &amp; faces, keep my rules</button>
     <button type="button" class="btn ghost" data-setup="replace">Replace everything</button>
     <button type="button" class="btn ghost" data-setup="cancel">Cancel</button>
-  </div>
-  <div id="rules-choice" class="menu-choice" hidden>
-    <div id="rules-summary"></div>
-    <button type="button" class="btn primary" data-rules="load">Load these rules</button>
-    <button type="button" class="btn ghost" data-rules="cancel">Cancel</button>
   </div>
   <form id="share-form" class="menu-form" hidden>
     <input type="text" id="share-code" aria-label="Share code" placeholder="ctl1:…" autocomplete="off" spellcheck="false" />

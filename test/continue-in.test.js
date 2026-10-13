@@ -83,7 +83,7 @@ test('Plus: Codex launches through the existing hand-off with the handover as it
   } finally { ci.stop(); }
 });
 
-test('register: every channel checks its page, and Running now runs by handover key from the writer', async () => {
+test('register: every channel checks its page, and Sessions runs by handover key from the writer', async () => {
   const handlers = new Map();
   const ipcMain = { handle: (ch, fn) => handlers.set(ch, fn) };
   const asked = [];

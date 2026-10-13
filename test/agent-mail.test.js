@@ -247,6 +247,30 @@ test('register: every mail channel is refused outside the sessions page', async 
   assert.deepEqual(await handlers.get('mail:list')({ page: 'sessions' }), { ok: true });
 });
 
+test('agent-mail-view: signed out, the section stays visible with one sentence and a sign-in button that opens Account', async () => {
+  const { JSDOM } = require('jsdom');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'sessions.html'), 'utf8').replace(/<script[^>]*><\/script>/g, '');
+  const dom = new JSDOM(html, { runScripts: 'outside-only', pretendToBeVisual: true });
+  const w = dom.window;
+  let opened = 0, answer = true;
+  w.sessionsApi = { mailList: async () => ({ ok: true, signedIn: false, held: [], inbox: [], polling: false }), continueMenu: async () => ({ choices: [] }), openAccount: async () => { opened++; return answer; }, onContinue: () => {}, onMail: () => {} };
+  try {
+    w.eval(fs.readFileSync(path.join(__dirname, '..', 'agent-mail-view.js'), 'utf8'));
+    const tick = () => new Promise((r) => setTimeout(r, 20));
+    await tick();
+    const sec = w.document.getElementById('mail');
+    assert.equal(sec.hidden, false);
+    assert.match(sec.querySelector('.body').textContent, /^Agent mail lets your AI ask a teammate/);
+    const b = [...sec.querySelectorAll('button')].find((x) => x.textContent === 'Sign in to use agent mail');
+    assert.ok(b);
+    b.click(); await tick();
+    assert.equal(opened, 1);
+    answer = false;
+    b.click(); await tick();
+    assert.match(w.document.getElementById('mail-status').textContent, /Account page could not be opened/);
+  } finally { w.close(); }
+});
+
 test('agent-mail-view: held text is editable and sent with its digest; questions and handoffs render as text; the chosen folder survives a refresh', async () => {
   const { JSDOM } = require('jsdom');
   const html = fs.readFileSync(path.join(__dirname, '..', 'sessions.html'), 'utf8').replace(/<script[^>]*><\/script>/g, '');

@@ -1,6 +1,6 @@
 'use strict';
 // D5 in the real app: widget rules added from the Tasks page's gallery open in
-// Widget configuration as an offer, after main's native confirm, and replace
+// Widget rules as an offer, after main's native confirm, and replace
 // the rules only on Load. The gallery session's fetch and the dialog are
 // stubbed in main, so nothing reaches plexiform.dev and no dialog is shown.
 const { test, expect } = require('@playwright/test');
@@ -17,7 +17,7 @@ const COUNT = fs.readdirSync(path.join(ROOT, 'gallery', 'items')).reduce((n, kin
 const ITEM = JSON.parse(fs.readFileSync(path.join(ROOT, 'gallery', 'items', 'rules', 'quiet-desk.json'), 'utf8'));
 const NAMES = ITEM.payload.rules.map((r) => r.name);
 
-test('widget rules from the gallery confirm natively, then wait in Widget configuration for Load', async ({}, testInfo) => {
+test('widget rules from the gallery confirm natively, then wait in Widget rules for Load', async ({}, testInfo) => {
   const h = await launchApp();
   const inspect = (file, script) => h.app.evaluate(async ({ webContents }, { file, script }) => {
     const page = webContents.getAllWebContents().find((w) => { try { return new URL(w.getURL()).pathname.endsWith('/' + file); } catch { return false; } });
@@ -47,9 +47,9 @@ test('widget rules from the gallery confirm natively, then wait in Widget config
     expect(await inspect('tasks.html', 'document.querySelector(\'[data-id="rules/quiet-desk"]\').textContent')).toContain(NAMES[1]);
 
     await inspect('tasks.html', 'document.querySelector(\'[data-id="rules/quiet-desk"] .recipe-actions button\').click(); true');
-    await expect.poll(() => inspect('tasks.html', 'document.querySelector("#cg-gallery .recipes-status").textContent')).toContain('in Widget configuration');
+    await expect.poll(() => inspect('tasks.html', 'document.querySelector("#cg-gallery .recipes-status").textContent')).toContain('in Widget rules');
     const confirm = (await observed()).confirms[0];
-    expect(confirm.message).toBe(`Open in Widget configuration: ${ITEM.title}?`);
+    expect(confirm.message).toBe(`Open in Widget rules: ${ITEM.title}?`);
     expect(confirm.detail).toContain(`${NAMES.length} widget rules: ${NAMES.join(', ')}.`);
     expect(confirm.detail).toContain('self-declared');
 

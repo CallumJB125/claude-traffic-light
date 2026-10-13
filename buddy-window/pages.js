@@ -4,7 +4,7 @@
 // kind:
 //   hub     — a page of the board web app, loaded from the hub's own origin
 //             in a sandboxed view (`view` is its ?view=).
-//   window  — an the Widget configuration popup (Rules and Auto-answer).
+//   window  — an the Widget rules popup (Rules and Auto-answer).
 //   local   — an app file rendered in its own view with its own preload
 //             (the plug-in point for Tasks and settings pages); `screen`
 //             picks the account page's screen (account.html), `file` +
@@ -31,7 +31,7 @@ const PAGES = [
   // Home's "Needs you" and "Your cards" carry these; the pages stay for notifications and deep links.
   { id: 'waiting', title: 'Waiting on you', icon: 'bell', kind: 'local', file: 'waiting.html', preload: 'waiting-preload.js', query: { embedded: '1' }, group: 'work', unlisted: true },
   { id: 'myday', title: 'My day', icon: 'sun', kind: 'local', file: 'myday.html', preload: 'myday-preload.js', group: 'work', unlisted: true },
-  { id: 'sessions', title: 'Running now', icon: 'team', kind: 'local', file: 'sessions.html', preload: 'sessions-preload.js', group: 'work' },
+  { id: 'sessions', title: 'Sessions', icon: 'team', kind: 'local', file: 'sessions.html', preload: 'sessions-preload.js', group: 'work' },
   { id: 'timeline', title: 'Session timeline', icon: 'layers', kind: 'local', file: 'timeline.html', preload: 'timeline-preload.js', group: 'work', unlisted: true },
   { id: 'checkpoints', title: 'What changed', icon: 'layers', kind: 'local', file: 'checkpoints.html', preload: 'checkpoints-preload.js', group: 'work' },
   // Search across every AI tool's local history (src/memory/search.js registers its IPC).
@@ -57,8 +57,8 @@ const PAGES = [
   // Encrypted sync across your own computers (src/sync/index.js serves its IPC; Plus/Team, upsell otherwise).
   { id: 'sync', title: 'Sync', icon: 'layers', kind: 'local', file: 'sync.html', preload: 'sync-preload.js', group: 'you', hidden: true },
   // The floating widget: live preview, show/hide, size, corner and what it shows (src/widget-page.js serves its IPC).
-  { id: 'widget', title: 'Look and position', icon: 'lights', kind: 'local', file: 'widget-page.html', preload: 'widget-page-preload.js', group: 'you' },
-  { id: 'lights', title: 'Widget configuration', icon: 'lights', kind: 'window', window: 'lights', group: 'you' },
+  { id: 'widget', title: 'Widget', icon: 'lights', kind: 'local', file: 'widget-page.html', preload: 'widget-page-preload.js', group: 'you' },
+  { id: 'lights', title: 'Widget rules', icon: 'lights', kind: 'window', window: 'lights', group: 'you' },
   { id: 'aitools', title: 'AI tools', icon: 'plug', kind: 'local', file: 'aitools.html', preload: 'aitools-preload.js', group: 'you' },
   { id: 'settings', title: 'Preferences', icon: 'gear', kind: 'local', file: 'settings.html', preload: 'settings-preload.js', query: { embedded: '1' }, group: 'you' },
   { id: 'hatch', title: 'Hatch a character', icon: 'puzzle', kind: 'local', file: 'hatch.html', preload: 'hatch-preload.js', query: { embedded: '1' }, group: 'you' },
@@ -82,7 +82,7 @@ const GROUPS = [
 const SECTIONS = [
   { id: 'home', title: 'Home', icon: 'sun', default: 'home', pages: ['home', 'overview', 'myday', 'waiting'] },
   { id: 'board', title: 'Board', icon: 'board', default: 'board', pages: ['board', 'board:table', 'board:history', 'board:calendar', 'board:timeline', 'board:dashboard'] },
-  { id: 'sessions', title: 'Running now', icon: 'team', default: 'sessions', pages: ['sessions', 'tasks', 'timeline', 'checkpoints', 'memory'] },
+  { id: 'sessions', title: 'Sessions', icon: 'team', default: 'sessions', pages: ['sessions', 'tasks', 'timeline', 'checkpoints', 'memory'] },
   { id: 'usage', title: 'Usage & cost', icon: 'chart', default: 'usage', heading: 'Spend', pages: ['usage', 'stats', 'optimiser', 'clients'] },
   { id: 'team', title: 'Team', icon: 'team', default: 'team', heading: 'Team', pages: ['team', 'integrations', 'account'] },
   { id: 'settings', title: 'Settings', icon: 'gear', default: 'settings', heading: 'You', pages: ['settings', 'thismac', 'aitools', 'widget', 'lights', 'hatch', 'phone'] },

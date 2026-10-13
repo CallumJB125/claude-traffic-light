@@ -1,5 +1,5 @@
 'use strict';
-// "Continue in…": the small menu Running now and Search everything share
+// "Continue in…": the small menu Sessions and Search everything share
 // (src/continue-in.js decides what it lists). Text is only ever textContent.
 (() => {
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };

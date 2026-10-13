@@ -33,7 +33,7 @@ async function queueResume({ tasks, doc, session, provider, resetAtMs, sleep = (
 
 // sessions(): live session rows; burst(): BurstIpc.snapshot().d; tasks(): tasks snapshot rows.
 // jump(s), copyHandover(s) → {ok}, docFor(s) → markdown|null, confirm(info) → bool, resume({session, provider, resetAtMs, doc}) → {ok, id|error}.
-// mail() → {held, inbox} agent mail waiting (src/agent-mail.js pending), openMail() shows it on Running now.
+// mail() → {held, inbox} agent mail waiting (src/agent-mail.js pending), openMail() shows it on Sessions.
 function createHomeAlerts({ sessions = () => [], burst = () => null, tasks = () => [], jump, copyHandover, docFor, confirm, resume, mail = () => null, openMail = async () => {}, now = Date.now, newHandle = () => crypto.randomUUID() }) {
   const handles = new Map(); // episode key -> handle
   const byHandle = new Map(); // handle -> card

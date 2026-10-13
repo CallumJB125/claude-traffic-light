@@ -1603,7 +1603,10 @@ ipcMain.handle('sessions:message', (e, session, text) => {
   if (typeof session !== 'string' || typeof text !== 'string' || !text.trim() || text.length > 500) return { ok: false, error: 'Write a message first.' };
   return InteractionMain.sendLocal(session, text);
 });
-ipcMain.handle('sessions:settings', e => { if (!sessionsSender(e)) return false; createSettingsWindow(); return true; });
+// Codex activity hooks are connected from the AI tools page's Codex row (src/ai-tools.js).
+// Agent mail's signed-out state: sign in on the Account page.
+ipcMain.handle('sessions:open-account', e => { if (!sessionsSender(e)) return false; openBuddy('account'); return true; });
+ipcMain.handle('sessions:aitools', e => { if (!sessionsSender(e)) return false; return !!aiToolsOpen('aitools:codex'); });
 // Overview uses main-owned structured reports/current own-board work only.
 // Teammates' shared sessions come from a team hub directory. Until the real
 // hub's directory client lands, a FAKE in-memory hub (clearly labelled as
@@ -1678,6 +1681,8 @@ const InteractionMain=require('./src/interaction-main').createInteractionMain({
   localModelsFile:path.join(app.getPath('userData'),'local-models.json'),
   // Team sharing of Overview sessions goes through the remote host below (null while it is off).
   shares:()=>hostSync.host(),
+  // Unavailable providers carry the AI tools page's reason and open its row (src/ai-tools.js nextStep).
+  tools:()=>AiTools.quick(),openAiTools:(d)=>aiToolsOpen(d),
 });
 InteractionMain.register(ipcMain);
 onQuit(app,()=>InteractionMain.close());
@@ -1724,7 +1729,7 @@ const hostSync=require('./src/interaction-host-sync').createInteractionHostSync(
   },
 });
 // Agent mail (board/MESSAGING.md §6a): local AIs' asks to teammates, held on the hub until
-// Send on Running now; the teammates' side is an opt-in inbox poll with hostSync's lifecycle.
+// Send on Sessions; the teammates' side is an opt-in inbox poll with hostSync's lifecycle.
 const AgentMail=require('./src/agent-mail').create({identity:()=>devMockReady?getBuddy().interactionHostIdentity?.()??null:null,resolve:async(a)=>(devMockReady?(await getBuddy().teamActivityLink?.(a))??null:null),
   fetch:(...a)=>net.fetch(...a),home:os.homedir(),enabled:()=>loadConfig().agentMailInbox===true,notify:n=>notifyAgentMail(n),onChange:()=>buddyWin?.sendToPage('sessions','mail:changed'),log:m=>console.log(m)}); // privacy-flow: agent-mail
 require('./src/agent-mail').register({ipcMain,allowed:sessionsSender,mail:AgentMail,tasks:()=>{const t=getTasks();t.start();return t;},
@@ -1742,7 +1747,7 @@ app.on('browser-window-focus',()=>AgentMail.poke());
 function notifyAgentMail(n){
   const from=n.from||'A teammate';
   const title=n.kind==='held'?'Your AI wants to message a teammate':n.handoff?`${from}'s AI offered you work`:`${from}'s AI asked you`;
-  const body=n.kind==='held'?`To ${n.to||'a teammate'}. Nothing is sent until you press Send in Running now.`:'Open Running now to answer it.';
+  const body=n.kind==='held'?`To ${n.to||'a teammate'}. Nothing is sent until you press Send on the Sessions page.`:'Open the Sessions page to answer it.';
   console.log(`[agent-mail] notify ${n.kind}`);
   if(IS_DEV_RUN||!Notification.isSupported())return;
   const note=new Notification({title,body,silent:true});
@@ -1959,6 +1964,7 @@ function getTasks() {
     boardHome: dataDir,
     ensureSupervisor: () => tasksProcess?.ensure(),
     homeDir: os.homedir(),
+    detectedTools: () => AiTools.quick(),
     startGuard: (cwd) => (taskStartGuard ? taskStartGuard(cwd) : null),
     copy: (text) => clipboard.writeText(text),
     onChange: (snap) => {
@@ -2055,7 +2061,7 @@ function createLightsWindow() {
     minWidth: 720,
     minHeight: 560,
     useContentSize: true,
-    title: 'Widget configuration',
+    title: 'Widget rules',
     // Off macOS 'hiddenInset' hides the window controls with the title bar.
     titleBarStyle: IS_MAC ? 'hiddenInset' : 'default',
     backgroundColor: '#1c1a1f',

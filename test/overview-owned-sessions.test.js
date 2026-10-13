@@ -34,13 +34,13 @@ function loadBridge(ipcRenderer) {
   assert.equal(exposed, 1, 'one narrow global only');
   return api;
 }
-function stack({ snapshot = { schema: 1, status: 'complete', observed_at: Date.now(), omitted: 0, sessions: [] }, extra = {}, local = { endpoints: [], models: [] }, router = true } = {}) {
+function stack({ snapshot = { schema: 1, status: 'complete', observed_at: Date.now(), omitted: 0, sessions: [] }, extra = {}, local = { endpoints: [], models: [] }, router = true, mainOpts = {} } = {}) {
   const handlers = new Map(), listeners = new Map(), invoked = [];
   const contents = { id: 9, isDestroyed: () => false, mainFrame: {}, send: (ch, s) => { for (const fn of listeners.get(ch) ?? []) fn({ sender: 'private-event' }, structuredClone(s)); } };
   const ctx = { contents, generation: 1, document: 1, foreground: true };
   let board = 'local', readable = true;
   const adapter = memAdapter();
-  const main = createInteractionMain({ context: () => (ctx.foreground ? ctx : null), readContext: () => (readable ? ctx : null), adapters: { codex: adapter, ...extra }, owned: null, workspace: () => null, currentBoard: () => board, localModels: { refresh: async () => (typeof local === 'function' ? local() : local) } });
+  const main = createInteractionMain({ context: () => (ctx.foreground ? ctx : null), readContext: () => (readable ? ctx : null), adapters: { codex: adapter, ...extra }, owned: null, workspace: () => null, currentBoard: () => board, localModels: { refresh: async () => (typeof local === 'function' ? local() : local) } , ...mainOpts });
   main.register({ handle: (ch, fn) => handlers.set(ch, fn) });
   const api = loadBridge({
     invoke: (ch, ...args) => { invoked.push(ch); if (ch === 'overview:state') return Promise.resolve(snapshot); return Promise.resolve(handlers.get(ch)({ sender: contents, senderFrame: contents.mainFrame }, ...structuredClone(args))); },
@@ -242,6 +242,28 @@ function multi(opts = {}) {
   const s = stack({ ...opts, extra: { claude, gemini, [LOCAL]: llama, ...opts.extra }, local });
   return Object.assign(s, { claude, gemini, llama, setLastUsed: (v) => { lastUsed = v; } });
 }
+
+test('An unavailable provider the AI tools page knows says why and opens its AI tools row', async () => {
+  const opened = [];
+  const tools = () => [{ id: 'gemini', label: 'Gemini CLI', installed: false, connected: false, state: 'missing' }, { id: 'claude', label: 'Claude Code', installed: true, connected: true, state: 'connected' }];
+  const s = multi({ mainOpts: { tools, openAiTools: (d) => { opened.push(d); return true; } } });
+  try {
+    await s.ready();
+    const row = s.option('gemini').closest('label');
+    assert.equal(row.querySelector('.tag').textContent, 'Unavailable');
+    assert.match(row.querySelector('.reason').textContent, /^Not installed on this Mac\. Install Gemini CLI, then connect it on the AI tools page\./);
+    const next = row.querySelector('.reason button.next');
+    assert.equal(next.textContent, 'How to install');
+    next.click(); await tick();
+    assert.deepEqual(opened, ['aitools:gemini']);
+    assert.equal(s.option('gemini').checked, false, 'the button does not pick the provider');
+    assert.equal(s.option('claude').closest('label').querySelector('button.next'), null, 'available providers have no next step');
+    // Main refuses a provider the AI tools page does not list, whatever the page asks.
+    assert.equal(await s.handlers.get(CHANNELS.openAiTools)({ sender: s.contents, senderFrame: s.contents.mainFrame }, 'copilot'), false);
+    assert.equal(await s.handlers.get(CHANNELS.openAiTools)({ sender: {}, senderFrame: {} }, 'gemini'), false);
+    assert.deepEqual(opened, ['aitools:gemini']);
+  } finally { s.close(); }
+});
 
 test('Picker lists every provider with availability and the exact reason; capability-aware cards per provider', async () => {
   const s = multi();

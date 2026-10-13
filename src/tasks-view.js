@@ -191,5 +191,17 @@
   // otherwise it would hide the "helper unavailable / Try again now" notice.
   const galleryFirst = (snap) => !!snap && snap.conn?.status === 'connected' && !(snap.tasks || []).length;
 
-  return { galleryFirst, LIMITS, ERROR_TEXT, errorText, TERMINAL, ageText, rowView, sortTasks, CAPS, newTranscript, addEvent, messageStatus, isMine, partyName, mergeMessage, validateDraft, validateMessage, ACTION_LABEL, CONFIRM_ACTIONS, NATIVE_CONFIRM, KIND_LABEL, partyText, CONFIRM_TEXT, AI_NAME };
+  // The New task form's "Which AI?" option for one AI. `tasks: false` marks an
+  // AI found on this Mac that the Tasks helper does not run yet: it is listed
+  // so the picker matches what was found, but cannot be chosen.
+  function aiOption(a) {
+    const why = a.tasks === false ? 'not in Tasks yet' : !a.installed ? 'not installed' : a.loggedIn === false ? 'logged out' : !a.capabilities?.background ? 'update required' : '';
+    return { value: a.id, label: `${a.label}${why ? ` (${why})` : ''}`, disabled: !!why };
+  }
+  // The note under the picker: the Codex billing caveat only once Codex itself is chosen.
+  function aiNote(choice) {
+    return choice === 'codex' ? 'Codex uses your existing login. Usage is billed under that account; this CLI provides no native spend cap.' : 'Choosing for you picks an available AI and tells you why.';
+  }
+
+  return { aiOption, aiNote, galleryFirst, LIMITS, ERROR_TEXT, errorText, TERMINAL, ageText, rowView, sortTasks, CAPS, newTranscript, addEvent, messageStatus, isMine, partyName, mergeMessage, validateDraft, validateMessage, ACTION_LABEL, CONFIRM_ACTIONS, NATIVE_CONFIRM, KIND_LABEL, partyText, CONFIRM_TEXT, AI_NAME };
 }));
