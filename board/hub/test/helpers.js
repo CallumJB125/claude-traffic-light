@@ -50,6 +50,8 @@ export function testConfig(over = {}) {
     secret: 'x'.repeat(40), devLoginSecret: DEV_SECRET, publicUrl: null, devSeed: true, devRepo: 'git@github.com:acme/app.git', bootstrap: null,
     restore: false, tunnelProbeUrl: null, githubToken: null, githubApi: 'https://api.github.com', githubPollMs: 60_000,
     webDir: resolve(HERE, 'fixtures', 'web'), sharedDir: resolve(HERE, '..', '..', 'shared'), logLevel: 'silent', shutdownGraceMs: 200,
+    // Tests register the connector they exercise themselves (with the test clock); a hub offers only GitHub unless a test says otherwise.
+    connectors: [],
     ...over,
     devSeed: (over.auth ?? 'dev') === 'dev',
   });
