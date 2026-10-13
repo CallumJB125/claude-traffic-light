@@ -13,7 +13,8 @@ const { launchApp, windowByFile } = require('./app');
 const ROOT = path.join(__dirname, '..');
 const INDEX = fs.readFileSync(path.join(ROOT, 'gallery', 'index.json'));
 const SIG = fs.readFileSync(path.join(ROOT, 'gallery', 'index.json.sig'));
-const COUNT = fs.readdirSync(path.join(ROOT, 'gallery', 'items')).reduce((n, kind) => n + fs.readdirSync(path.join(ROOT, 'gallery', 'items', kind)).length, 0);
+// The Discover page shows one kind per tab: the rules items.
+const COUNT = fs.readdirSync(path.join(ROOT, 'gallery', 'items', 'rules')).length;
 const ITEM = JSON.parse(fs.readFileSync(path.join(ROOT, 'gallery', 'items', 'rules', 'quiet-desk.json'), 'utf8'));
 const NAMES = ITEM.payload.rules.map((r) => r.name);
 
@@ -39,15 +40,15 @@ test('widget rules from the gallery confirm natively, then wait in Widget rules 
 
     await widget.evaluate(() => window.trafficLight.openHelp());
     await expect.poll(() => inspect('sidebar.html', '!!window.buddy')).toBe(true);
-    await inspect('sidebar.html', 'window.buddy.select("tasks"); true');
-    await expect.poll(() => inspect('tasks.html', '!!window.galleryApi && !!document.querySelector("#cg-open")'), { timeout: 20000 }).toBe(true);
-    await inspect('tasks.html', 'document.querySelector("#cg-open").click(); true');
-    await inspect('tasks.html', '[...document.querySelectorAll("#cg-gallery button")].find(b => b.textContent === "Fetch the gallery").click(); true');
-    await expect.poll(() => inspect('tasks.html', 'document.querySelectorAll("#cg-gallery .cg-card").length')).toBe(COUNT);
-    expect(await inspect('tasks.html', 'document.querySelector(\'[data-id="rules/quiet-desk"]\').textContent')).toContain(NAMES[1]);
+    await inspect('sidebar.html', 'window.buddy.select("discover"); true');
+    await expect.poll(() => inspect('discover.html', '!!window.galleryApi && !!document.querySelector("#cg-gallery h2")'), { timeout: 20000 }).toBe(true);
+    await inspect('discover.html', '[...document.querySelectorAll("#cg-gallery button")].find(b => b.textContent === "Fetch the gallery").click(); true');
+    await inspect('discover.html', '[...document.querySelectorAll(".cg-tabs .cg-chip")].find(b => b.textContent === "Widget rules").click(); true');
+    await expect.poll(() => inspect('discover.html', 'document.querySelectorAll("#cg-gallery .cg-card").length')).toBe(COUNT);
+    expect(await inspect('discover.html', 'document.querySelector(\'[data-id="rules/quiet-desk"]\').textContent')).toContain(NAMES[1]);
 
-    await inspect('tasks.html', 'document.querySelector(\'[data-id="rules/quiet-desk"] .recipe-actions button\').click(); true');
-    await expect.poll(() => inspect('tasks.html', 'document.querySelector("#cg-gallery .recipes-status").textContent')).toContain('in Widget rules');
+    await inspect('discover.html', '[...document.querySelectorAll(\'[data-id="rules/quiet-desk"] .recipe-actions button\')].find(b => b.textContent === "Add").click(); true');
+    await expect.poll(() => inspect('discover.html', 'document.querySelector("#cg-gallery .recipes-status").textContent')).toContain('in Widget rules');
     const confirm = (await observed()).confirms[0];
     expect(confirm.message).toBe(`Open in Widget rules: ${ITEM.title}?`);
     expect(confirm.detail).toContain(`${NAMES.length} widget rules: ${NAMES.join(', ')}.`);
