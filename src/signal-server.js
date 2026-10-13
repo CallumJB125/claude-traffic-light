@@ -74,7 +74,7 @@ module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcast
           ? done(200, { proof: Answer.requestKeyProof(SIGNAL_TOKEN, req.socket.localPort, d.nonce) })
           : done(400, { error: 'nonce must be 64 hex chars' })));
       }
-      const hookRoute = /^\/hook\/([\w-]+)(?:\?event=([\w-]*))?$/.exec(req.url || '');
+      const hookRoute = /^\/hook\/([\w-]+)(?:\?event=([\w.-]*))?$/.exec(req.url || '');
       if (req.method !== 'POST' || (req.url !== '/signal' && req.url !== '/request-key' && req.url !== '/metadata/agents' && req.url !== '/team/activity' && req.url !== '/team/mail' && !hookRoute)) return done(404, { error: 'POST /signal, POST /hook/:adapter or GET /status' });
       if (!tokenMatches(req.headers[SIGNAL_TOKEN_HEADER])) return done(401, { error: `send header ${SIGNAL_TOKEN_HEADER} with the contents of ${tokenFile}` });
       if (req.url === '/metadata/agents') { // privacy-flow: agent-self-report

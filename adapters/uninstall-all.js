@@ -33,6 +33,14 @@ function holdsOurs(adapter, file) {
 // mcp: mcp-install.js, or null where it can't be loaded. → [{ id, file, changed, error? }]
 function run({ home, mcp = null }) {
   const results = [];
+  for (const adapter of Adapters.extras()) {
+    const file = adapter.configPath(home);
+    try {
+      if (!adapter.holdsOurs({ home }) && !(adapter.ownFile && fs.existsSync(file))) { results.push({ id: adapter.id, file, changed: false }); continue; }
+      adapter.uninstall({ home });
+      results.push({ id: adapter.id, file, changed: true });
+    } catch (err) { results.push({ id: adapter.id, file, changed: false, error: err.message }); }
+  }
   for (const adapter of Adapters.list()) {
     const file = adapter.configPath(home);
     try {

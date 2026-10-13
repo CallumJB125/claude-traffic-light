@@ -10,7 +10,7 @@ const { redactSecrets } = require('./secret-patterns');
 const { withDeadline, GRACE_MS } = require('./bounded-io');
 const WorkRecord = require('./work-record');
 const { untag } = require('../hooks/handover-tap.js');
-const PROVIDERS = new Set(['codex','cursor','gemini','hermes','claude']);
+const PROVIDERS = new Set(['codex','cursor','gemini','hermes','claude','copilot','goose','cline','opencode','aider']);
 const ID = /^[A-Za-z0-9_.:-]{1,120}$/;
 const isId = value => typeof value==='string'&&ID.test(value);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;

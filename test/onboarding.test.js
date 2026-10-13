@@ -93,7 +93,7 @@ test('two detected tools: one "Connect 2 tools" call connects both, keeps backup
 
 test('connect refuses anything but a short list of known tool ids', async () => {
   const r = rig();
-  for (const bad of ['codex', [], ['codex', '../x'], [{}], Array(9).fill('codex')]) {
+  for (const bad of ['codex', [], ['codex', '../x'], [{}], Array(11).fill('codex')]) {
     const out = await r.call('onboarding:connect', bad);
     assert.ok(out === null || (out.ok && out.results.length === 0), JSON.stringify(bad));
   }
@@ -268,7 +268,7 @@ test('the page: connect two tools in one click, then the first session flips ste
   assert.equal($('step-signal').hidden, true);
   assert.equal($('connect').textContent, 'Connect 2 tools');
   assert.equal($('login-text').textContent, 'Plexiform opens when you log in.');
-  assert.equal($('missing-title').textContent, 'Not installed (3)');
+  assert.equal($('missing-title').textContent, 'Not installed (8)');
   await p.click('connect');                                   // click 1
   assert.deepEqual(p.calls.find((c) => c[0] === 'onboarding:connect'), ['onboarding:connect', ['codex', 'gemini']]);
   assert.equal($('step-connect').hidden, true);

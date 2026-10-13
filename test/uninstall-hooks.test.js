@@ -55,7 +55,7 @@ function assertClean(home, geminiText) {
 test('uninstall-hooks: removes only Buddy entries from every agent config and ~/.claude.json', () => {
   const { home, geminiText } = seededHome();
   const results = UninstallAll.run({ home, mcp: McpInstall });
-  assert.deepEqual(Object.fromEntries(results.map((r) => [r.id, r.changed])), { claude: true, cursor: true, codex: true, gemini: false, mcp: true });
+  assert.deepEqual(Object.fromEntries(results.map((r) => [r.id, r.changed])), { copilot: false, goose: false, cline: false, opencode: false, aider: false, claude: true, cursor: true, codex: true, gemini: false, mcp: true });
   assert.ok(results.every((r) => !r.error), JSON.stringify(results));
   assertClean(home, geminiText);
   // Running again changes nothing.

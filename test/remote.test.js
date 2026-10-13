@@ -882,7 +882,7 @@ test('e2e: a hook on the reporter lights a namespaced session on the desktop; th
     assert.ok(await waitFor(() => one(desk.R)?.signal === 'stop'));
     await runEmit(rep.home, ['--adapter', 'claude', 'SessionEnd'], payload());
     assert.ok(await waitFor(() => desk.R.readSessions().length === 0));
-    await runEmit(rep.home, ['stop', '--source', 'Aider', '--session', 'x1', '--cwd', '/w']);
+    await runEmit(rep.home, ['stop', '--source', 'Amp', '--session', 'x1', '--cwd', '/w']);
     assert.ok(await waitFor(() => one(desk.R)?.sessionId === `remote:${rep.device}:custom-x1`), 'bare signals forward, source lowered');
   } finally { desk.close(); }
 });

@@ -29,8 +29,8 @@ Cell legend:
 | **Cursor** | Cursor IDE and CLI local; Cloud Agents on Cursor-hosted VMs (or self-hosted pools) | owned: `agent acp` adapter wired but unavailable (not installed, isolation unverified); existing IDE/CLI chats: observe only | **built** | **built** | **built** | wired, unverified | wired, unverified | docs: not built | none | wired, unverified | docs: not built | between turns |
 | **Gemini CLI** | local CLI | owned: `gemini --acp` adapter built but unavailable (not installed, isolation unverified); existing sessions: observe only (hooks, best effort) | **built** | **built** | **built** | wired, unverified | wired, unverified | docs: not built | none | wired, unverified | none | between turns |
 | **Hermes Agent** | local agent; model per the user's Hermes config (here a tailnet vLLM) | owned: `hermes acp` reachable through the shared ACP client but kept unavailable (tools cannot be turned off); existing sessions: observe only if the user's Hermes posts to Plexiform's local signal endpoint | **built** | docs: not built | **built** | wired, unverified | wired, unverified | docs: not built | wired, unverified | wired, unverified | none | between turns |
-| **OpenCode** | local CLI/server | owned: `opencode acp` adapter wired but unavailable (not installed); existing TUI sessions: not connected | docs: not built | docs: not built | **built** | wired, unverified | wired, unverified | docs: not built | none | wired, unverified | docs: not built | between turns |
-| **Copilot CLI** | local CLI; model calls go to GitHub Copilot (or BYOK provider) | owned: `copilot --acp --stdio` adapter wired but unavailable (not installed, public preview); existing sessions: not connected | none | docs: not built | **built** | wired, unverified | wired, unverified | none | none | wired, unverified | none | between turns |
+| **OpenCode** | local CLI/server | owned: `opencode acp` adapter wired but unavailable (not installed); existing sessions: observed through the Plexiform plugin | **built** | **built** | **built** | wired, unverified | wired, unverified | docs: not built | none | wired, unverified | docs: not built | between turns |
+| **Copilot CLI** | local CLI; model calls go to GitHub Copilot (or BYOK provider) | owned: `copilot --acp --stdio` adapter wired but unavailable (not installed, public preview); existing sessions: observed through Plexiform's hooks file | **built** | **built** | **built** | wired, unverified | wired, unverified | none | none | wired, unverified | none | between turns |
 | **Ollama** | local HTTP (127.0.0.1:11434) or LAN/tailnet | owned: Plexiform-held conversation over the stateless native API (built) | **built** | n/a | n/a | **built** | **built** | **built** | none | **built** | n/a | between turns |
 | **LM Studio** | local HTTP (127.0.0.1:1234) | owned: Plexiform-held conversation over OpenAI-compatible API (built) | **built** | n/a | n/a | **built** | **built** | **built** | none | **built** | n/a | between turns |
 | **OpenAI-compatible local server** | local, LAN or tailnet HTTP (vLLM, llama.cpp llama-server, litellm proxy, others) | owned: Plexiform-held conversation (built) | **built** | n/a | n/a | **built** | **built** | **built** | none | **built** | n/a | between turns |
@@ -38,6 +38,8 @@ Cell legend:
 | **ChatGPT** | OpenAI-hosted chat app | neither: README lets a user's own Shortcut/script POST activity to Plexiform's local endpoint | none | **built** | **built** | none | none | none | none | none | provider-only | none |
 | **Windsurf** | local IDE | neither: Plexiform only recognises it as the app hosting a terminal (hostapp.js, set-status.js) | docs: not built | docs: not built | **built** | none | none | none | none | none | none | none |
 | **Aider** | local CLI | neither | **built** | **built** | **built** | none | none | none | none | none | none | none |
+| **Cline** | VS Code extension | neither: observed through file hooks | **built** | **built** | **built** | none | none | none | none | none | none | none |
+| **Goose** | local CLI/desktop app | neither: observed through a hook plugin | **built** | **built** | **built** | none | none | none | none | none | none | none |
 | **Custom agent (local signal endpoint)** | whatever program the user wires up, on this computer | neither: a user's own script, Shortcut or other agent posts activity to Plexiform | **built** | **built** | **built** | none | none | none | none | none | none | none |
 
 ## AI-to-AI handoff readiness
@@ -60,6 +62,8 @@ Input to the handoff contract: which sessions can take a message while a turn ru
 | **ChatGPT** | no | no | none (human copy/paste only) | none | none |
 | **Windsurf** | no | no | none | none | none |
 | **Aider** | no | no | none | none | none |
+| **Cline** | no | no | none | none | none |
+| **Goose** | no | no | none | none | none |
 | **Custom agent (local signal endpoint)** | no | no | none | none | none |
 
 ## Per platform

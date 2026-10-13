@@ -15,7 +15,7 @@ const SCOPE_RULE = 'A session only shows once it writes into a repo linked to th
 const AI_TOOLS_PAGE_ID = 'aitools';
 const FALLBACK_PAGE_ID = 'settings';
 const COMMANDS = { claude: 'claude', codex: 'codex', gemini: 'gemini' };
-const PROVIDERS = new Set(['codex', 'cursor', 'gemini', 'hermes']);
+const PROVIDERS = new Set(['codex', 'cursor', 'gemini', 'hermes', 'copilot', 'goose', 'cline', 'opencode', 'aider']);
 const q = (s) => `'${String(s).replace(/'/g, "'\\''")}'`;
 const providerOf = (row) => (row.source == null || row.source === 'claude' || row.source === 'claude-code' ? 'claude' : PROVIDERS.has(row.source) ? row.source : null);
 const isLocal = (r) => r && typeof r === 'object' && !r.remote && !r.device && typeof r.sessionId === 'string' && !r.sessionId.startsWith('remote:');

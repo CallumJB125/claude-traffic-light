@@ -33,6 +33,7 @@ report() {
   printf '{"tool":"%s","session":"%s","cwd":"%s","pid":%s,"code":%s}' "$KEY" "$SID" "$CWD" "$$" "\${2:-0}" | ${emit} "$1" >/dev/null 2>&1 || true
 }
 report start 0
+export PLEXIFORM_SESSION="$SID" PLEXIFORM_TOOL="$KEY"
 trap ':' INT
 "$@"
 CODE=$?

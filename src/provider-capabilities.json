@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "verified": "2026-10-02",
-  "machine": "macOS build Mac (darwin 25.4.0); installed here: claude 2.1.287, codex-cli 0.159.2 (inside ChatGPT.app), hermes 0.21.3, aider 0.86.2; NOT installed: gemini, cursor-agent/agent, copilot, opencode, ollama, lms, llama-server",
+  "machine": "macOS build Mac (darwin 25.4.0); installed here: claude 2.1.287, codex-cli 0.159.2 (inside ChatGPT.app), hermes 0.21.3, aider 0.86.2; NOT installed: gemini, cursor-agent/agent, copilot, opencode, cline, goose, ollama, lms, llama-server",
   "statuses": {
     "built": "Implemented in Plexiform and covered by tests (fake provider fixtures unless a real run is recorded).",
     "unverified": "Plexiform has the adapter code path (shared and fake-tested) but it has never been accepted against this provider; it stays unavailable.",
@@ -394,16 +394,16 @@
       "advertised": true,
       "installedHere": null,
       "hosting": "local CLI/server",
-      "management": "owned: `opencode acp` adapter wired but unavailable (not installed); existing TUI sessions: not connected",
+      "management": "owned: `opencode acp` adapter wired but unavailable (not installed); existing sessions: observed through the Plexiform plugin",
       "channel": "Owned: ACP (`opencode acp`). Also documented: `opencode serve` HTTP API (POST /session, /session/:id/message with client messageID, /session/:id/abort, GET /event SSE).",
       "matrix": {
         "discovery": {
-          "status": "supported-not-built",
-          "how": "GET /session on an `opencode serve` server; the TUI runs a server on a random port."
+          "status": "built",
+          "how": "Plugin ~/.config/opencode/plugins/plexiform.js (adapters/opencode.js) reports session.created/idle/error/deleted and tool.execute.before/after to Plexiform."
         },
         "telemetry": {
-          "status": "supported-not-built",
-          "how": "GET /event SSE (session.status, message.updated, message.part.updated); plugins. Until then, `plexiform-run <tool> [args]` (More > AI tools > Add a custom tool; adapters/generic.js) shows it as working then done or failed (start and exit only; not a hook, so no prompt or tool detail)."
+          "status": "built",
+          "how": "Plugin hooks: working, waiting on a permission (permission.asked), done, failed. No cost."
         },
         "taskReporting": {
           "status": "built",
@@ -452,7 +452,8 @@
         "https://opencode.ai/docs/cli/",
         "https://opencode.ai/docs/server/",
         "https://opencode.ai/docs/sdk/",
-        "https://opencode.ai/docs/permissions/"
+        "https://opencode.ai/docs/permissions/",
+        "https://opencode.ai/docs/plugins/"
       ]
     },
     {
@@ -466,16 +467,16 @@
       "advertised": true,
       "installedHere": null,
       "hosting": "local CLI; model calls go to GitHub Copilot (or BYOK provider)",
-      "management": "owned: `copilot --acp --stdio` adapter wired but unavailable (not installed, public preview); existing sessions: not connected",
+      "management": "owned: `copilot --acp --stdio` adapter wired but unavailable (not installed, public preview); existing sessions: observed through Plexiform's hooks file",
       "channel": "Owned: ACP server (public preview).",
       "matrix": {
         "discovery": {
-          "status": "unsupported",
-          "how": "No documented session listing for other apps; Plexiform installs no Copilot hooks."
+          "status": "built",
+          "how": "Hooks file ~/.copilot/hooks/plexiform.json (adapters/copilot.js): sessionStart/End, userPromptSubmitted, pre/postToolUse, agentStop, subagents, notification."
         },
         "telemetry": {
-          "status": "supported-not-built",
-          "how": "Copilot CLI hooks run shell commands at session points; not installed by Plexiform. Until then, `plexiform-run <tool> [args]` (More > AI tools > Add a custom tool; adapters/generic.js) shows it as working then done or failed (start and exit only; not a hook, so no prompt or tool detail)."
+          "status": "built",
+          "how": "Hooks: working, waiting on a permission (notification), subagents, done, failed, limit. Observe only: preToolUse and permissionRequest are never answered. No cost."
         },
         "taskReporting": {
           "status": "built",
@@ -523,7 +524,8 @@
       "evidence": [
         "https://docs.github.com/en/copilot/reference/copilot-cli-reference/acp-server",
         "https://docs.github.com/en/copilot/how-tos/use-copilot-agents/use-copilot-cli",
-        "https://github.blog/changelog/2026-01-28-acp-support-in-copilot-cli-is-now-in-public-preview/"
+        "https://github.blog/changelog/2026-01-28-acp-support-in-copilot-cli-is-now-in-public-preview/",
+        "https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-hooks-reference"
       ]
     },
     {
@@ -956,7 +958,7 @@
       "label": "Aider",
       "aliases": [],
       "kind": "agent",
-      "advertised": false,
+      "advertised": true,
       "installedHere": "0.86.2",
       "hosting": "local CLI",
       "management": "neither",
@@ -968,7 +970,7 @@
         },
         "telemetry": {
           "status": "built",
-          "how": "Working while the run is open, then done or failed from its exit code. Nothing finer: no prompts, tools or answers."
+          "how": "notifications-command in ~/.aider.conf.yml (adapters/aider.js) reports \"waiting for you\" after each answer; working and done/failed only when launched through plexiform-run, whose PLEXIFORM_SESSION joins the two. Aider has no prompt or tool hooks."
         },
         "taskReporting": {
           "status": "built",
@@ -1015,7 +1017,8 @@
       },
       "evidence": [
         "https://aider.chat/docs/scripting.html",
-        "local: aider 0.86.2"
+        "local: aider 0.86.2",
+        "https://aider.chat/docs/usage/notifications.html"
       ]
     },
     {
@@ -1084,6 +1087,143 @@
       },
       "evidence": [
         "README.md (local signal endpoint, emit.js)"
+      ]
+    },
+    {
+      "id": "cline",
+      "label": "Cline",
+      "aliases": [
+        "Cline"
+      ],
+      "kind": "agent",
+      "advertised": true,
+      "installedHere": null,
+      "hosting": "VS Code extension; model per the user's Cline provider",
+      "management": "neither: observed through Plexiform's file hooks in ~/Documents/Cline/Hooks; no way in",
+      "channel": "None for sending. Hooks only: TaskStart/Resume/Cancel/Complete, UserPromptSubmit, Pre/PostToolUse, PreCompact (stdin JSON, stdout {cancel}).",
+      "matrix": {
+        "discovery": {
+          "status": "built",
+          "how": "File hooks (adapters/cline.js): TaskStart opens the session, TaskComplete/TaskCancel end the turn."
+        },
+        "telemetry": {
+          "status": "built",
+          "how": "Hooks: working, tool names, done, failed. No permission signal (Cline asks in its own panel), no cost."
+        },
+        "taskReporting": {
+          "status": "built",
+          "how": "Self-reported only (board MCP / signals)."
+        },
+        "receive": {
+          "status": "unsupported",
+          "how": "No documented channel for another app to send a message into a session."
+        },
+        "reply": {
+          "status": "unsupported",
+          "how": "-"
+        },
+        "resume": {
+          "status": "unsupported",
+          "how": "-"
+        },
+        "steer": {
+          "status": "unsupported",
+          "how": "-"
+        },
+        "interrupt": {
+          "status": "unsupported",
+          "how": "-"
+        },
+        "remoteControl": {
+          "status": "unsupported",
+          "how": "-"
+        }
+      },
+      "handoff": {
+        "midTurn": false,
+        "betweenTurns": false,
+        "channel": "none",
+        "ack": "none",
+        "existingSessions": "none"
+      },
+      "prerequisite": "A Cline API for sending into a task (none documented).",
+      "tos": "-",
+      "reasons": {
+        "owned": "unavailable: Cline has no supported channel for Plexiform to start or message a session",
+        "notInstalled": "unavailable: Cline has no supported channel for Plexiform to start or message a session",
+        "existing": "This Cline task only reports activity through its hooks; Cline has no channel for Plexiform to send into it."
+      },
+      "evidence": [
+        "https://docs.cline.bot/features/hooks"
+      ]
+    },
+    {
+      "id": "goose",
+      "label": "Goose",
+      "aliases": [
+        "Goose agent",
+        "goose"
+      ],
+      "kind": "agent",
+      "advertised": true,
+      "installedHere": null,
+      "hosting": "local CLI/desktop app (block/goose); model per the user's goose provider",
+      "management": "neither: observed through Plexiform's hook plugin in ~/.agents/plugins/plexiform; no way in",
+      "channel": "None for sending. Hooks only: SessionStart/End, UserPromptSubmit, Pre/PostToolUse, PostToolUseFailure, Stop (stdin JSON).",
+      "matrix": {
+        "discovery": {
+          "status": "built",
+          "how": "Hook plugin (adapters/goose.js): SessionStart/SessionEnd and Stop."
+        },
+        "telemetry": {
+          "status": "built",
+          "how": "Hooks: working, tool names, done, failed. Observe only: PreToolUse and Stop are never blocked. No permission signal, no cost."
+        },
+        "taskReporting": {
+          "status": "built",
+          "how": "Self-reported only (board MCP / signals)."
+        },
+        "receive": {
+          "status": "unsupported",
+          "how": "No documented channel for another app to send a message into a session."
+        },
+        "reply": {
+          "status": "unsupported",
+          "how": "-"
+        },
+        "resume": {
+          "status": "unsupported",
+          "how": "-"
+        },
+        "steer": {
+          "status": "unsupported",
+          "how": "-"
+        },
+        "interrupt": {
+          "status": "unsupported",
+          "how": "-"
+        },
+        "remoteControl": {
+          "status": "unsupported",
+          "how": "-"
+        }
+      },
+      "handoff": {
+        "midTurn": false,
+        "betweenTurns": false,
+        "channel": "none",
+        "ack": "none",
+        "existingSessions": "none"
+      },
+      "prerequisite": "A goose API for sending into a session (none documented for other apps).",
+      "tos": "-",
+      "reasons": {
+        "owned": "unavailable: Goose has no supported channel for Plexiform to start or message a session",
+        "notInstalled": "unavailable: Goose has no supported channel for Plexiform to start or message a session",
+        "existing": "This goose session only reports activity through its hooks; goose has no channel for Plexiform to send into it."
+      },
+      "evidence": [
+        "https://block.github.io/goose/docs/guides/context-engineering/hooks/"
       ]
     }
   ],

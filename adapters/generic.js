@@ -1,4 +1,5 @@
-// Any tool without native hooks (Aider, OpenCode, Copilot CLI, Windsurf, Amp, …).
+// Any tool without native hooks (Windsurf, Amp, Roo Code, …; Aider, OpenCode,
+// Copilot CLI, Cline and Goose have adapters of their own since round 3).
 // Nothing is installed into the tool: `plexiform-run <tool> [args]` (see
 // src/ai-tools-generic.js) launches it and reports start and exit. So the
 // widget can show working → done/failed and nothing else: no prompts, no tool
@@ -12,6 +13,9 @@ function normalize(event, payload) {
   const tool = typeof d.tool === 'string' && NAME.test(d.tool) ? d.tool : null;
   if (event === 'start') return [{ ...base, signal: 'prompt-submit', tool }];
   if (event === 'stop') return [{ ...base, signal: 'stop', tool: null, pid: null }];
+  // A tool's own "waiting for you" notification (Aider's notifications-command)
+  // run inside plexiform-run, which exports PLEXIFORM_SESSION for it.
+  if (event === 'ready') return [{ ...base, signal: 'stop', tool: null, pid: null }];
   if (event === 'exit') return [{ ...base, signal: Number(d.code) === 0 ? 'stop' : 'turn-failed', tool: null, pid: null }];
   return [];
 }

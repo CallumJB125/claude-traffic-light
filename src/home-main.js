@@ -21,7 +21,7 @@ const text = (v, n = 200) => (typeof v === 'string' ? v.replace(/[\u0000-\u001f\
 function banner(tools) {
   if (!Array.isArray(tools)) return null;
   const installed = tools.filter((t) => t && t.installed);
-  if (!installed.length) return { kind: 'none', text: 'No AI tools found yet. Plexiform works with Claude Code, Codex, Gemini CLI, Cursor and Hermes.', action: { label: 'See AI tools', destination: 'aitools' } };
+  if (!installed.length) return { kind: 'none', text: 'No AI tools found yet. Plexiform works with Claude Code, Codex, Gemini CLI, Cursor, Hermes, Copilot CLI, OpenCode, Goose, Cline and Aider.', action: { label: 'See AI tools', destination: 'aitools' } };
   const sum = summary(tools);
   if (!sum.waiting.length) return null;
   const names = sum.waitingLabels.map((l) => text(l, 60));

@@ -27,7 +27,7 @@ const backups = (dir) => fs.readdirSync(dir).filter((f) => f.includes('.plexifor
 test('scan lists every platform: detected ones ready to connect, the rest "Not installed" with an install link', async () => {
   const { tools } = rig();
   const snap = await tools.scan();
-  assert.deepEqual(snap.rows.filter((r) => r.kind === 'tool').map((r) => r.id), ['claude', 'codex', 'gemini', 'cursor', 'hermes']);
+  assert.deepEqual(snap.rows.filter((r) => r.kind === 'tool').map((r) => r.id), ['claude', 'codex', 'gemini', 'cursor', 'hermes', 'copilot', 'opencode', 'goose', 'cline', 'aider']);
   assert.equal(row(snap, 'codex').state, 'ready');
   assert.equal(row(snap, 'codex').primary.label, 'Connect');
   assert.equal(row(snap, 'gemini').lastEvent.text, 'no events yet');
