@@ -152,6 +152,9 @@
   document.addEventListener('recipes:scheduled', () => { show(true); void load().then(() => say('It repeats. It is in My recipes with its next run.')); });
   // A repeat set on the New task form: open Recipes on the recipe it made.
   document.addEventListener('recipes:scheduled', () => { show(true); void load().then(() => say('It repeats. It is in My recipes with its next run.')); });
+  if (api.onChanged) api.onChanged(() => { void load(); });
+  // Browse the gallery opens the Discover page, where everything from plexiform.dev lives.
+  $('cg-open').addEventListener('click', () => { void window.galleryApi?.openDiscover(); });
   $('recipes-open').addEventListener('click', () => { show(root.hidden); if (!root.hidden) void load(); });
   $('new-task').addEventListener('click', () => show(false));
   $('list').addEventListener('click', () => show(false));

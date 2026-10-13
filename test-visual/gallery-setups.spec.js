@@ -14,7 +14,8 @@ const { launchApp, windowByFile } = require('./app');
 const ROOT = path.join(__dirname, '..');
 const INDEX = fs.readFileSync(path.join(ROOT, 'gallery', 'index.json'));
 const SIG = fs.readFileSync(path.join(ROOT, 'gallery', 'index.json.sig'));
-const COUNT = fs.readdirSync(path.join(ROOT, 'gallery', 'items')).reduce((n, kind) => n + fs.readdirSync(path.join(ROOT, 'gallery', 'items', kind)).length, 0);
+// The Discover page shows one kind per tab: the setup items.
+const COUNT = fs.readdirSync(path.join(ROOT, 'gallery', 'items', 'setup')).length;
 const ITEM = JSON.parse(fs.readFileSync(path.join(ROOT, 'gallery', 'items', 'setup', 'explain-diff-command.json'), 'utf8'));
 const FILE = ITEM.payload.files[0];
 const CMD = FILE.content;
@@ -47,14 +48,17 @@ test('a gallery setup opens on a cached Setups page and needs its own tick befor
     await expect.poll(() => inspect('setups.html', '!!document.querySelector("#personal h2")'), { timeout: 20000 }).toBe(true);
     await inspect('setups.html', 'window.__specLoads = (window.__specLoads || 0) + 1; true');
 
-    await inspect('sidebar.html', 'window.buddy.select("tasks"); true');
-    await expect.poll(() => inspect('tasks.html', '!!window.galleryApi && !!document.querySelector("#cg-open")'), { timeout: 20000 }).toBe(true);
-    await inspect('tasks.html', 'document.querySelector("#cg-open").click(); true');
-    await inspect('tasks.html', '[...document.querySelectorAll("#cg-gallery button")].find(b => b.textContent === "Fetch the gallery").click(); true');
-    await expect.poll(() => inspect('tasks.html', 'document.querySelectorAll("#cg-gallery .cg-card").length')).toBe(COUNT);
-    expect(await inspect('tasks.html', 'document.querySelector(\'[data-id="setup/explain-diff-command"] pre\').textContent')).toBe(CMD);
+    await inspect('sidebar.html', 'window.buddy.select("discover"); true');
+    await expect.poll(() => inspect('discover.html', '!!window.galleryApi && !!document.querySelector("#cg-gallery h2")'), { timeout: 20000 }).toBe(true);
+    await inspect('discover.html', '[...document.querySelectorAll("#cg-gallery button")].find(b => b.textContent === "Fetch the gallery").click(); true');
+    await inspect('discover.html', '[...document.querySelectorAll(".cg-tabs .cg-chip")].find(b => b.textContent === "Setups").click(); true');
+    await expect.poll(() => inspect('discover.html', 'document.querySelectorAll("#cg-gallery .cg-card").length')).toBe(COUNT);
+    // The file's full text is in the item's drawer, before Add.
+    await inspect('discover.html', 'document.querySelector(\'[data-id="setup/explain-diff-command"]\').click(); true');
+    expect(await inspect('discover.html', 'document.querySelector("#cg-drawer pre").textContent')).toBe(CMD);
+    await inspect('discover.html', 'document.querySelector("#cg-drawer .cg-drawer-close").click(); true');
 
-    await inspect('tasks.html', 'document.querySelector(\'[data-id="setup/explain-diff-command"] .recipe-actions button\').click(); true');
+    await inspect('discover.html', '[...document.querySelectorAll(\'[data-id="setup/explain-diff-command"] .recipe-actions button\')].find(b => b.textContent === "Add").click(); true');
     const personal = () => inspect('setups.html', 'document.querySelector("#personal").textContent');
     await expect.poll(personal, { timeout: 15000 }).toContain('Setup from the community gallery');
     expect(await inspect('setups.html', 'window.__specLoads')).toBe(1);

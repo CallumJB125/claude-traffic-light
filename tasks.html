@@ -7,7 +7,6 @@
 <link rel="stylesheet" href="tokens.css">
 <link rel="stylesheet" href="tasks.css">
 <link rel="stylesheet" href="recipes.css">
-<link rel="stylesheet" href="gallery-view.css">
 <link rel="stylesheet" href="gallery-publish.css">
 <link rel="stylesheet" href="demo-banner.css">
 </head>
@@ -22,16 +21,14 @@
       <ul id="list" class="list"></ul>
       <p id="list-empty" class="list-empty" hidden></p>
       <p id="recipes-next" class="recipes-next" hidden></p>
-      <div class="recipes-entry"><button type="button" class="btn" id="recipes-open" aria-controls="recipes">Recipes</button><span>Ready-made tasks to run now, tonight or on a repeat</span><button type="button" class="btn small" id="cg-open" aria-controls="cg-gallery" aria-expanded="false">Browse the gallery</button></div>
+      <div class="recipes-entry"><button type="button" class="btn" id="recipes-open" aria-controls="recipes">Recipes</button><span>Ready-made tasks to run now, tonight or on a repeat</span><button type="button" class="btn small" id="cg-open">Browse the gallery</button></div>
     </aside>
     <main class="main" id="main" aria-live="off"></main>
     <section id="recipes" class="recipes" aria-labelledby="recipes-title" hidden></section>
-    <section id="cg-gallery" class="recipes cg-gallery" aria-labelledby="cg-title" hidden></section>
   </div>
   <script src="src/tasks-view.js"></script>
   <script src="tasks.js"></script>
   <script src="recipes.js"></script>
-  <script src="gallery-view.js"></script>
   <script src="gallery-publish-view.js"></script>
   <script src="demo-banner.js"></script>
 </body>

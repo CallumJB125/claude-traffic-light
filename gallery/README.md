@@ -1,8 +1,8 @@
 # Plexiform community gallery
 
 Recipes, widget characters, widget rules and setups people share for Plexiform, listed at
-plexiform.dev/gallery and browsable in the app (Tasks → Recipes → Browse the
-gallery). The app fetches the list only when you click, and you see everything
+plexiform.dev/gallery and browsable in the app (Discover in the sidebar, or
+Tasks → Browse the gallery). The app fetches the list only when you click, and you see everything
 an item contains before it is saved.
 
 ## What can be submitted

@@ -1870,7 +1870,7 @@ const SessionTimelineMain = require('./src/session-timeline-main.js').register({
 // "Try the demo" (src/demo-mode.js): fixtures only, a flag in memory. A dev run may start in it for screenshots.
 const Demo = require('./src/demo-mode.js').create();
 if (IS_DEV_RUN && !app.isPackaged && process.env.PLEXIFORM_DEMO_MODE === '1') Demo.start();
-require('./src/demo-mode.js').register({ ipcMain, demo: Demo, allowed: (e) => ['home', 'tasks', 'help'].some((p) => fromUtilityPage(e, p)) });
+require('./src/demo-mode.js').register({ ipcMain, demo: Demo, allowed: (e) => ['home', 'tasks', 'help', 'discover'].some((p) => fromUtilityPage(e, p)) });
 const ContinueIn = require('./src/continue-in.js');
 const confirmHandoff = async ({ label, text }) => (await dialog.showMessageBox(BrowserWindow.getFocusedWindow() ?? undefined, { type: 'question', title: 'Hand off to another AI', message: `Hand off this work to ${label}?`, detail: `This is exactly what will be shared with ${label}. It has been scrubbed of secrets and your home folder path, and nothing leaves this Mac except into the tool you chose.\n\n${text}`, buttons: ['Cancel', 'Confirm and hand off'], defaultId: 0, cancelId: 0, noLink: true })).response === 1;
 const continueIn = ContinueIn.create({ entitlements: require('./src/entitlements.js'), clipboard, tools: () => AiTools.quick(), confirm: confirmHandoff, home: os.homedir(), log: console.log });
@@ -2040,7 +2040,7 @@ require('./src/recipes.js').register({
   pickOpen: async (e) => { const r = await dialog.showOpenDialog(BrowserWindow.fromWebContents(e.sender) || undefined, { title: 'Import recipes', properties: ['openFile'], filters: [{ name: 'Plexiform setup', extensions: ['json'] }] }); return r.canceled ? null : r.filePaths?.[0] || null; },
   readFile: (f) => require('./src/setups-personal.js').readChosen(f), writeFile: (f, t) => require('./src/setups-personal.js').writeChosen(f, t),
 });
-// The community gallery on the Tasks page (src/gallery.js): fetched only on a click, in its own
+// The community gallery on the Discover page (src/gallery.js): fetched only on a click, in its own
 // cookieless session, verified, then added after a native confirm. Specs stub the session's fetch.
 // Setups (via paid-wiring above) takes a parked gallery setup from it when its page is shown.
 let galleryService = null;
@@ -2056,10 +2056,13 @@ let galleryService = null;
     dataDir: ROOT_DIR, keysDir: path.join(__dirname, 'build'), recipes, characterStore, broadcastCharacters, demo: () => Demo.active(), confirm: tasksConfirm,
     offerRules: (rules) => showLightsView('rules', { event: 'rules:offer', data: rules }),
     openSetups: () => openBuddy('setups'),
+    // The Tasks page's My recipes list lives in another view; it reloads on this.
+    onRecipesChanged: () => { for (const wc of tasksPages()) wc.send('recipes:changed'); },
     fetch: galleryFetch,
   });
   galleryService = gallery;
-  Gallery.register({ ipcMain, allowed: tasksSenderOk, gallery });
+  const discoverSenderOk = (e) => fromUtilityPage(e, 'discover');
+  Gallery.register({ ipcMain, allowed: (e) => discoverSenderOk(e) || tasksSenderOk(e), gallery, openDiscover: () => openBuddy('discover') });
 }
 // "Share to gallery…" (src/gallery-publish.js): a recipe of mine, a saved character or widget rules as a
 // gallery item, checked here, handed over as a prefilled GitHub new-file page or JSON on the clipboard.
@@ -2068,7 +2071,7 @@ let galleryService = null;
   const publish = Publish.create({
     recipes, characterStore, presets: () => loadConfig().presets || [],
     profile: { get: () => loadConfig().galleryAuthor || null, set: (v) => saveConfig({ galleryAuthor: v }) },
-    openExternal: (url) => shell.openExternal(url), clipboard, demo: () => Demo.active(),
+    openExternal: (url) => shell.openExternal(url), clipboard, demo: () => Demo.active(), // privacy-flow: gallery-publish
   });
   Publish.register({ ipcMain, allowed: (e) => tasksSenderOk(e) || widgetConfigSender(e) || fromUtilityPage(e, 'hatch'), publish });
 }

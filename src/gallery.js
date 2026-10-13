@@ -1,5 +1,6 @@
 'use strict';
-// The community gallery in the app (Tasks → Recipes → Browse the gallery).
+// The community gallery in the app (the Discover page; Tasks → Browse the
+// gallery opens it too).
 // The list is fetched from plexiform.dev only when the person clicks, never
 // at start or on a timer, through an injected fetch (main passes the
 // 'gallery' session's, so nothing else's cookies ride along). It is checked
@@ -72,14 +73,15 @@ async function readBounded(res, max) {
 function preview(e, byId) {
   const p = e.payload;
   if (e.kind === 'recipe') return { what: p.what, prompt: p.prompt, tool: p.tool, cost: p.cost };
-  if (e.kind === 'character') return { name: p.name };
+  // The drawer draws the character with the same sanitised definition the app would save.
+  if (e.kind === 'character') { const v = validateCharacter(p, { source: 'import' }); return { name: p.name, character: v.ok ? v.character : null }; }
   if (e.kind === 'rules') return { names: p.rules.map((r) => r.name) };
   if (e.kind === 'setup') return { note: p.note, files: p.files.map((f) => ({ path: f.relative_path, content: f.content })) };
   if (e.kind === 'pack') return { note: p.note, members: p.members.map((id) => { const m = byId.get(id); return m ? { id, kind: m.kind, title: m.title, sha256: m.sha256, addable: S.ADDABLE.includes(m.kind) } : { id, missing: true }; }) };
   return null;
 }
 
-function create({ dataDir, fetch, keysDir, now = Date.now, recipes, characterStore, confirm, broadcastCharacters = () => {}, offerRules = () => {}, openSetups = () => {}, demo = () => false }) {
+function create({ dataDir, fetch, keysDir, now = Date.now, recipes, characterStore, confirm, broadcastCharacters = () => {}, onRecipesChanged = () => {}, offerRules = () => {}, openSetups = () => {}, demo = () => false }) {
   const cacheDir = path.join(dataDir, 'gallery');
   const { keys, broken } = readKeys(keysDir);
   const signed = keys.length > 0 || broken;
@@ -107,10 +109,11 @@ function create({ dataDir, fetch, keysDir, now = Date.now, recipes, characterSto
       ok: true,
       fetchedAt: s.fetchedAt,
       provenance: s.keyId ? `Signed (key ${s.keyId})` : 'Unsigned · fetched from plexiform.dev over HTTPS',
+      site: `${Brand.urls.site}/gallery/`,
       signed: !!s.keyId,
       dropped: s.dropped,
       demo: demo(),
-      items: s.entries.map((e) => ({ id: e.id, kind: e.kind, title: e.title, summary: e.summary, author: e.author, license: e.license, tags: e.tags, stacks: e.stacks, tools: e.tools, updated: e.updated, sha256: e.sha256, addable: S.ADDABLE.includes(e.kind), preview: preview(e, byId) })),
+      items: s.entries.map((e) => ({ id: e.id, kind: e.kind, title: e.title, summary: e.summary, author: e.author, license: e.license, tags: e.tags, stacks: e.stacks, tools: e.tools, added: e.added, updated: e.updated, sha256: e.sha256, addable: S.ADDABLE.includes(e.kind), preview: preview(e, byId) })),
     };
   }
   function save(bytes, sig, fetchedAt) {
@@ -178,7 +181,9 @@ function create({ dataDir, fetch, keysDir, now = Date.now, recipes, characterSto
       const p = e.payload;
       const yes = await confirm({ title: e.title, action: 'Add to My recipes', detail: [by(e), p.what, 'It only reads: plan mode, no file changes.', 'The full prompt it gives your AI:', '', p.prompt].join('\n') }, ev);
       if (!yes) return { ok: false, cancelled: true, error: 'Cancelled. Nothing was added.' };
-      return recipes.addFromGallery(e);
+      const r = recipes.addFromGallery(e);
+      if (r.ok) onRecipesChanged();
+      return r;
     }
     if (e.kind === 'rules') return addRules(e, ev);
     if (e.kind === 'setup') return addSetup(e, ev);
@@ -187,7 +192,7 @@ function create({ dataDir, fetch, keysDir, now = Date.now, recipes, characterSto
     const yes = await confirm({ title: v.character.name, action: 'Add to Characters', detail: [by(e), 'A widget character: art only, checked again by the app’s sanitiser before it is saved.'].join('\n') }, ev);
     if (!yes) return { ok: false, cancelled: true, error: 'Cancelled. Nothing was added.' };
     try {
-      const ch = characterStore.save({ ...v.character, id: characterStore.freeId(v.character.id) }, { source: 'gallery' });
+      const ch = characterStore.save({ ...v.character, id: characterStore.freeId(v.character.id) }, { source: 'gallery', params: { gallery_id: e.id, sha256: e.sha256 } });
       broadcastCharacters();
       return { ok: true, id: ch.id, kind: 'character' };
     } catch (err) {
@@ -220,6 +225,76 @@ function create({ dataDir, fetch, keysDir, now = Date.now, recipes, characterSto
     openSetups();
     return { ok: true, kind: 'setup' };
   }
+  // What came from the gallery and is still here: recipes carry an origin
+  // sidecar, characters their hatch.json params. Widget rules and setups are
+  // not tracked (they become the person's own rules and files once loaded).
+  function installed() {
+    const recipesOut = [];
+    for (const r of recipes.mine()) {
+      const o = recipes.originOf(r.id);
+      if (o) recipesOut.push({ id: r.id, galleryId: o.gallery_id, title: r.title, author: o.author, addedAt: o.added_at });
+    }
+    const charactersOut = [];
+    for (const c of characterStore.list()) {
+      if (c.meta.source !== 'gallery') continue;
+      const gid = typeof c.meta.params?.gallery_id === 'string' ? c.meta.params.gallery_id : null;
+      charactersOut.push({ id: c.character.id, galleryId: gid, title: c.character.name, addedAt: c.meta.createdAt ? new Date(c.meta.createdAt).toISOString() : null });
+    }
+    return { ok: true, recipes: recipesOut, characters: charactersOut };
+  }
+  const present = () => { const i = installed(); return new Set([...i.recipes, ...i.characters].map((x) => x.galleryId).filter(Boolean)); };
+
+  // A whole pack after one confirm: recipes and characters are added here;
+  // widget rules and setups still open one at a time (each has its own review).
+  async function addPack(id, sha, ev) {
+    if (demo()) return { ok: false, error: 'This is the demo: exit it to add things from the gallery.' };
+    const e = typeof id === 'string' && typeof sha === 'string' ? state?.entries.find((x) => x.id === id) : null;
+    if (!e || e.sha256 !== sha) return { ok: false, error: 'That item changed or is no longer in the gallery. Refresh and try again.' };
+    if (e.kind !== 'pack') return { ok: false, error: 'That is not a pack.' };
+    const byId = new Map(state.entries.map((x) => [x.id, x]));
+    const have = present();
+    const members = e.payload.members.map((m) => byId.get(m)).filter(Boolean);
+    const batch = members.filter((m) => (m.kind === 'recipe' || m.kind === 'character') && !have.has(m.id));
+    const already = members.filter((m) => have.has(m.id)).map((m) => m.id);
+    const separate = members.filter((m) => m.kind === 'rules' || m.kind === 'setup').map((m) => m.id);
+    if (!batch.length) return { ok: true, added: [], present: already, separate, failed: [] };
+    const lines = batch.map((m) => `• ${KIND_LABEL[m.kind]}: ${m.title}`);
+    const yes = await confirm({ title: e.title, action: 'Add the pack', detail: [by(e), `${batch.length} item${batch.length === 1 ? '' : 's'} will be added:`, ...lines, ...(already.length ? ['', `${already.length} already here and left as ${already.length === 1 ? 'it is' : 'they are'}.`] : []), ...(separate.length ? ['', 'Widget rules and setups in this pack open one at a time from their own cards.'] : []), '', 'Gallery recipes only read: plan mode, no file changes. Characters are checked by the app’s sanitiser before they are saved.'].join('\n') }, ev);
+    if (!yes) return { ok: false, cancelled: true, error: 'Cancelled. Nothing was added.' };
+    const added = [], failed = [];
+    for (const m of batch) {
+      try {
+        if (m.kind === 'recipe') { const r = recipes.addFromGallery(m); if (r.ok) added.push(m.id); else failed.push(m.id); continue; }
+        const v = validateCharacter(m.payload, { source: 'import' });
+        if (!v.ok) { failed.push(m.id); continue; }
+        characterStore.save({ ...v.character, id: characterStore.freeId(v.character.id) }, { source: 'gallery', params: { gallery_id: m.id, sha256: m.sha256 } });
+        added.push(m.id);
+      } catch { failed.push(m.id); }
+    }
+    if (added.some((x) => x.startsWith('character/'))) broadcastCharacters();
+    if (added.some((x) => x.startsWith('recipe/'))) onRecipesChanged();
+    return { ok: true, added, present: already, separate, failed };
+  }
+
+  // Remove something the gallery added. Only a gallery recipe or character goes; nothing else is touched.
+  function remove(kind, id) {
+    if (demo()) return { ok: false, error: 'This is the demo: nothing is removed.' };
+    if (kind === 'recipe') {
+      if (typeof id !== 'string' || !recipes.originOf(id)) return { ok: false, error: 'That recipe did not come from the gallery.' };
+      const r = recipes.deleteMine(id);
+      if (r.ok) onRecipesChanged();
+      return r;
+    }
+    if (kind === 'character') {
+      const c = typeof id === 'string' ? characterStore.list().find((x) => x.character.id === id) : null;
+      if (!c || c.meta.source !== 'gallery') return { ok: false, error: 'That character did not come from the gallery.' };
+      if (!characterStore.remove(id)) return { ok: false, error: 'That character could not be removed.' };
+      broadcastCharacters();
+      return { ok: true };
+    }
+    return { ok: false, error: 'Only gallery recipes and characters can be removed here.' };
+  }
+
   // One use: the Setups page takes it when it is shown, or it lapses.
   function takePending() {
     const p = pending;
@@ -233,11 +308,11 @@ function create({ dataDir, fetch, keysDir, now = Date.now, recipes, characterSto
     return state ? state.entries : null;
   }
 
-  return { fetchIndex, cached, add, takePending, entries, INDEX_URL };
+  return { fetchIndex, cached, add, addPack, installed, remove, takePending, entries, INDEX_URL };
 }
 
-// IPC for the Tasks page (allowed: main's Tasks-page sender check).
-function register({ ipcMain, allowed, gallery }) {
+// IPC for the Discover page, and the Tasks page's way there (allowed: main's sender check for both).
+function register({ ipcMain, allowed, gallery, openDiscover = () => {} }) {
   const on = (channel, fn) => ipcMain.handle(channel, async (e, ...args) => {
     if (!allowed(e)) return null;
     try { return await fn(e, ...args); } catch { return { ok: false, error: 'Something went wrong. Nothing was changed.' }; }
@@ -245,6 +320,10 @@ function register({ ipcMain, allowed, gallery }) {
   on('gallery:fetch', () => gallery.fetchIndex());
   on('gallery:cached', () => gallery.cached());
   on('gallery:add', (e, id, sha) => gallery.add(id, sha, e));
+  on('gallery:add-pack', (e, id, sha) => gallery.addPack(id, sha, e));
+  on('gallery:installed', () => gallery.installed());
+  on('gallery:remove', (e, kind, id) => gallery.remove(kind, id));
+  on('gallery:open-discover', () => { openDiscover(); return { ok: true }; });
 }
 
 module.exports = { create, register, readBounded, INDEX_URL, SIG_URL };

@@ -203,20 +203,24 @@ test('the Buddy window tells a re-attached Setups page it is shown, since it get
   assert.match(fs.readFileSync(path.join(ROOT, 'setups-preload.js'), 'utf8'), /onShown:callback=>ipcRenderer\.on\('setups:shown',\(\)=>callback\(\)\)/);
 });
 
-test('the Discover card lists a setup’s files in full and says where it opened', async (t) => {
+test('the Discover card names a setup’s files, its drawer shows them in full, and Add says where it opened', async (t) => {
   const r = await rig(t);
-  const html = fs.readFileSync(path.join(ROOT, 'tasks.html'), 'utf8');
+  const html = fs.readFileSync(path.join(ROOT, 'discover.html'), 'utf8');
   const dom = new JSDOM(html, { runScripts: 'outside-only', pretendToBeVisual: true });
   const w = dom.window;
-  w.recipesApi = { list: async () => ({ ok: true, builtIn: [], mine: [], canSchedule: true }), pickFolder: async () => null };
-  w.galleryApi = { refresh: async () => r.g.fetchIndex(), cached: async () => r.g.cached(), add: async () => ({ ok: true, kind: 'setup' }) };
-  for (const f of ['recipes.js', 'gallery-view.js']) w.eval(fs.readFileSync(path.join(ROOT, f), 'utf8'));
+  w.galleryApi = { refresh: async () => r.g.fetchIndex(), cached: async () => r.g.cached(), add: async () => ({ ok: true, kind: 'setup' }), installed: async () => ({ ok: true, recipes: [], characters: [] }) };
+  w.eval(fs.readFileSync(path.join(ROOT, 'gallery-view.js'), 'utf8'));
   const tick = () => new Promise((res) => setTimeout(res, 0));
-  await tick();
-  w.document.querySelector('#cg-open').click(); await tick();
+  await tick(); await tick();
+  [...w.document.querySelectorAll('.cg-tabs .cg-chip')].find((b) => b.textContent === 'Setups').click();
   const card = w.document.querySelector('[data-id="setup/reviewer"]');
   assert.match(card.textContent, /2 files an AI will read as instructions/);
-  assert.equal(card.querySelector('pre').textContent, SKILL);
-  card.querySelector('.recipe-actions button').click(); await tick();
+  card.click();
+  const drawer = w.document.querySelector('#cg-drawer');
+  assert.equal(drawer.hidden, false);
+  assert.equal(drawer.querySelector('pre').textContent, SKILL);
+  assert.match(drawer.textContent, /Nothing is written until you tick each file and press Apply there/);
+  [...drawer.querySelectorAll('button')].find((b) => b.textContent === 'Add').click(); await tick(); await tick();
   assert.match(w.document.querySelector('#cg-gallery .recipes-status').textContent, /Opened “Reviewer kit” on the Setups page\. Nothing is written until you tick each file and Apply there\./);
+  assert.equal(drawer.hidden, true);
 });
