@@ -44,7 +44,7 @@ function handlers() {
     SessionOverview: { snapshot: input => { observed.push(input); return { status: input.available === false ? 'unavailable' : 'complete' }; } },
     localSessions: sessions => sessions, aggregateState: () => ({ sessions: [{ fixture: 'metadata' }] }),
     IS_DEV_RUN: false, Adapters: { get: () => ({ isActivityInstalled: () => true }) }, os: { homedir: () => '/synthetic' }, HOOK_RUNTIME: {},
-    createSettingsWindow: () => opened.push('settings'), aiToolsOpen: (d) => opened.push(d), Date,
+    createSettingsWindow: () => opened.push('settings'), aiToolsOpen: (d) => opened.push(d), openBuddy: (id) => opened.push(id), Date,
     InteractionMain: { sendLocal: async (session, text) => { messaged.push([session, text]); return { ok: true, status: 'acknowledged', error: null }; } },
   };
   const start = source.indexOf("const { fromPage } =");
@@ -85,6 +85,10 @@ test('actual Sessions refresh and AI tools IPC require current main-frame Sessio
   assert.equal(f.observed[0].activity.configured, true);
   assert.equal(preferences(event(f.pages.sessions)), true);
   assert.deepEqual(f.opened, ['aitools:codex']);
+  const account = f.registered.get('sessions:open-account');
+  assert.equal(account(event(f.pages.settings)), false);
+  assert.equal(account(event(f.pages.sessions)), true);
+  assert.deepEqual(f.opened, ['aitools:codex', 'account']);
   const old = f.pages.sessions; f.pages.sessions = wc();
   assert.equal(refresh(event(old)), null);
   f.pages.sessions.isDestroyed = () => true;

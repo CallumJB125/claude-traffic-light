@@ -1604,6 +1604,8 @@ ipcMain.handle('sessions:message', (e, session, text) => {
   return InteractionMain.sendLocal(session, text);
 });
 // Codex activity hooks are connected from the AI tools page's Codex row (src/ai-tools.js).
+// Agent mail's signed-out state: sign in on the Account page.
+ipcMain.handle('sessions:open-account', e => { if (!sessionsSender(e)) return false; openBuddy('account'); return true; });
 ipcMain.handle('sessions:aitools', e => { if (!sessionsSender(e)) return false; return !!aiToolsOpen('aitools:codex'); });
 // Overview uses main-owned structured reports/current own-board work only.
 // Teammates' shared sessions come from a team hub directory. Until the real
