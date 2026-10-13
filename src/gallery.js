@@ -227,7 +227,13 @@ function create({ dataDir, fetch, keysDir, now = Date.now, recipes, characterSto
     return p && p.expires > now() ? { payload: p.payload, by: p.by } : null;
   }
 
-  return { fetchIndex, cached, add, takePending, INDEX_URL };
+  // The verified entries, from the cache when nothing was fetched yet; null before any list is known.
+  function entries() {
+    if (!state) state = fromCache();
+    return state ? state.entries : null;
+  }
+
+  return { fetchIndex, cached, add, takePending, entries, INDEX_URL };
 }
 
 // IPC for the Tasks page (allowed: main's Tasks-page sender check).

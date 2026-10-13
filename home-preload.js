@@ -11,6 +11,8 @@ contextBridge.exposeInMainWorld('homeApi', {
   teamToday: () => ipcRenderer.invoke('home:team-today'),
   teamTodaySeen: () => ipcRenderer.invoke('home:team-today-seen'),
   teamTodayRefresh: () => ipcRenderer.invoke('home:team-today-refresh'),
+  starter: () => ipcRenderer.invoke('home:starter'),
+  starterAct: (action) => (['look', 'add', 'run', 'dismiss'].includes(action) ? ipcRenderer.invoke('home:starter-act', action) : Promise.resolve({ ok: false })),
   openCard: (handle) => (typeof handle === 'string' && handle.length <= 100 ? ipcRenderer.invoke('home:open-card', handle) : Promise.resolve(false)),
   digest: {
     get: (period) => ipcRenderer.invoke('digest:get', period === 'week' ? 'week' : 'day'),
