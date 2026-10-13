@@ -14,6 +14,8 @@ const INDEX = fs.readFileSync(path.join(ROOT, 'gallery', 'index.json'));
 const SIG = fs.readFileSync(path.join(ROOT, 'gallery', 'index.json.sig'));
 const items = (kind) => fs.readdirSync(path.join(ROOT, 'gallery', 'items', kind)).map((f) => JSON.parse(fs.readFileSync(path.join(ROOT, 'gallery', 'items', kind, f), 'utf8')));
 const PACK = items('pack')[0];
+// Item files carry the bare slug; the index and the page's data-id use kind/slug.
+const PACK_ID = `${PACK.kind}/${PACK.id}`;
 const RECIPE_COUNT = items('recipe').length;
 const PACK_COUNT = items('pack').length;
 const packRecipes = PACK.payload.members.filter((m) => m.startsWith('recipe/'));
@@ -57,14 +59,14 @@ test('Discover is its own page with tabs, one card per pack, a drawer, Add pack 
     // Packs: one card each, members named, no Add of their own.
     await d('[...document.querySelectorAll(".cg-tabs .cg-chip")].find(b => b.textContent === "Packs").click(); true');
     await expect.poll(() => d('document.querySelectorAll("#cg-gallery .cg-card").length')).toBe(PACK_COUNT);
-    expect(await d(`document.querySelectorAll('[data-id="${PACK.id}"] .cg-members li').length`)).toBe(PACK.payload.members.length);
-    expect(await d(`document.querySelectorAll('[data-id="${PACK.id}"] .cg-members .btn.primary').length`)).toBe(0);
+    expect(await d(`document.querySelectorAll('[data-id="${PACK_ID}"] .cg-members li').length`)).toBe(PACK.payload.members.length);
+    expect(await d(`document.querySelectorAll('[data-id="${PACK_ID}"] .cg-members .btn.primary').length`)).toBe(0);
 
     // The drawer: the whole item, the site link, Add pack.
-    await d(`document.querySelector('[data-id="${PACK.id}"]').click(); true`);
+    await d(`document.querySelector('[data-id="${PACK_ID}"]').click(); true`);
     await expect.poll(() => d('!document.querySelector("#cg-drawer").hidden')).toBe(true);
     expect(await d('document.querySelector("#cg-drawer-title").textContent')).toBe(PACK.title);
-    expect(await d('document.querySelector("#cg-drawer a.cg-site").href')).toBe(`https://plexiform.dev/gallery/${PACK.id}`);
+    expect(await d('document.querySelector("#cg-drawer a.cg-site").href')).toBe(`https://plexiform.dev/gallery/${PACK_ID}`);
     expect(await d('[...document.querySelectorAll(".cg-facts dt")].map(e => e.textContent)')).toEqual(['By', 'License', 'Added', 'Updated', 'Stacks', 'Tools', 'Tags', 'sha256']);
     const png = await h.app.evaluate(async ({ webContents }) => {
       const contents = webContents.getAllWebContents().find((w) => w.getURL().includes('/discover.html'));
@@ -93,6 +95,6 @@ test('Discover is its own page with tabs, one card per pack, a drawer, Add pack 
     await d('[...document.querySelectorAll(".cg-installed button")].find(b => b.textContent === "Remove").click(); true');
     await expect.poll(() => d('document.querySelectorAll(".cg-installed").length')).toBe(packRecipes.length + packCharacters.length - 1);
     await d('[...document.querySelectorAll(".cg-tabs .cg-chip")].find(b => b.textContent === "Packs").click(); true');
-    await expect.poll(() => d(`[...document.querySelectorAll('[data-id="${PACK.id}"] .cg-members li')].filter(li => li.textContent.includes("installed")).length`)).toBe(packRecipes.length + packCharacters.length - 1);
+    await expect.poll(() => d(`[...document.querySelectorAll('[data-id="${PACK_ID}"] .cg-members li')].filter(li => li.textContent.includes("installed")).length`)).toBe(packRecipes.length + packCharacters.length - 1);
   } finally { await h.cleanup(); }
 });
