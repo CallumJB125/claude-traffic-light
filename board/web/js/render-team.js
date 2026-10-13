@@ -148,6 +148,13 @@ export function invitePanel(model) {
         h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'copy-invite', 'data-what': 'code' }, 'Copy code'))) : null);
 }
 
+// " · $1.20 today of $3.00 cap · over cap" (Team plan roll-up); nothing without the field.
+export function boardSpendText(spend) {
+  if (!spend) return '';
+  const cap = spend.cap_usd != null ? ` of $${spend.cap_usd.toFixed(2)} cap` : '';
+  return ` · $${(spend.today_usd ?? 0).toFixed(2)} today${cap}${spend.over ? ' · over cap' : ''}`;
+}
+
 const ACTIVITY = { working: 'Working', waiting: 'Waiting for a person', quiet: 'Quiet', idle: 'Idle · task still open', disconnected: 'Runner disconnected', no_live_run: 'No active AI run' };
 const TASK_STATE = { todo: 'To do', queued: 'Queued', claimed: 'Starting', running: 'In progress', quiet: 'In progress', blocked: 'Blocked', parked: 'Waiting', suspended: 'Paused', reconnecting: 'Reconnecting', unresponsive: 'Not responding', orphaned: 'Run lost', handing_over: 'Moving to another AI', handed_over: 'Moved to another AI', in_review: 'In review', done: 'Done', failed: 'Failed' };
 // The team's cloud runner (docs/CLOUD-RUNNER-RUNBOOK.md): admins add one (its
@@ -232,13 +239,14 @@ export function overviewPanel(model) {
     overview.error ? h('p', { class: 'form-error', role: 'alert' }, overview.error) : null,
     overview.stale && data ? h('p', { class: 'teamview-stale', role: 'status' }, 'Overview may be out of date. Refresh to check current activity.') : null,
     data ? [
-      h('div', { class: 'team-overview-stats' }, [['Open tasks', data.totals.open], ['Need attention', data.totals.attention], ['Ready for review', data.totals.review], ['Done', data.totals.done]].map(([label, n]) => h('div', { key: label, class: 'team-overview-stat' }, h('strong', { class: 'num' }, String(n)), h('span', null, label)))),
+      h('div', { class: 'team-overview-stats' }, [['Open tasks', data.totals.open], ['Need attention', data.totals.attention], ['Ready for review', data.totals.review], ['Done', data.totals.done], ...(data.totals.spend ? [['Spent today', `$${data.totals.spend.today_usd.toFixed(2)}`]] : [])].map(([label, n]) => h('div', { key: label, class: 'team-overview-stat' }, h('strong', { class: 'num' }, String(n)), h('span', null, label)))),
+      data.totals.spend?.boards_over_cap ? h('p', { class: 'team-overview-meta team-overview-over' }, `${data.totals.spend.boards_over_cap} ${data.totals.spend.boards_over_cap === 1 ? 'board is' : 'boards are'} over its daily cap: new AI starts there wait until tomorrow.`) : null,
       h('p', { class: 'team-overview-meta' }, 'Live activity comes from current connected runners. Change verification checks the attached commit or pull request; test results remain the AI’s report.'),
       h('div', { class: 'team-overview-columns' },
         overviewList('Needs attention', data.attention, overview.stale, 'No blocked or failed tasks in this snapshot.'),
         overviewList('AI tasks', data.work, overview.stale, 'No queued or active AI tasks in this snapshot.'),
         overviewList('Ready for review', data.review, overview.stale, 'Nothing waiting for review in this snapshot.')),
-      h('details', { class: 'team-overview-projects' }, h('summary', null, 'Board overview'), h('ul', { class: 'team-overview-list' }, data.boards.map((board) => h('li', { key: board.id, class: 'team-overview-board' }, h('strong', null, board.name), h('span', { class: 'team-overview-meta' }, `${board.open} open · ${board.attention} need attention · ${board.review} in review · ${board.done} done`)))), data.boards_truncated ? h('p', { class: 'team-overview-meta' }, 'Showing the first 60 active boards; totals include all active boards.') : null),
+      h('details', { class: 'team-overview-projects' }, h('summary', null, 'Board overview'), h('ul', { class: 'team-overview-list' }, data.boards.map((board) => h('li', { key: board.id, class: 'team-overview-board' }, h('strong', null, board.name), h('span', { class: 'team-overview-meta' }, `${board.open} open · ${board.attention} need attention · ${board.review} in review · ${board.done} done${boardSpendText(board.spend)}`)))), data.boards_truncated ? h('p', { class: 'team-overview-meta' }, 'Showing the first 60 active boards; totals include all active boards.') : null),
       h('details', { class: 'team-overview-projects' }, h('summary', null, 'Recently changed tasks'), h('ul', { class: 'team-overview-list' }, data.recent.items.map((item) => overviewTask(item, overview.stale))))
     ] : null);
 }
