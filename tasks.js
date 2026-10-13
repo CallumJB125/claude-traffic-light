@@ -534,13 +534,13 @@
     const sel = el('select'); sel.id = 'c-ai';
     const add = (v, label, disabled) => { const o = el('option', null, label); o.value = v; o.disabled = !!disabled; sel.append(o); };
     add('auto', 'Choose for me');
-    for (const a of comp.ais) add(a.id, `${a.label}${!a.installed ? ' (not installed)' : a.loggedIn === false ? ' (logged out)' : !a.capabilities.background ? ' (update required)' : ''}`, !a.installed || a.loggedIn === false || !a.capabilities.background);
-    if (!comp.ais.some((a) => a.id === comp.ai)) comp.ai = 'auto';
+    for (const a of comp.ais) { const o = TV.aiOption(a); add(o.value, o.label, o.disabled); }
+    if (!comp.ais.some((a) => a.id === comp.ai && !TV.aiOption(a).disabled)) comp.ai = 'auto';
     sel.value = comp.ai;
     sel.addEventListener('change', () => { comp.ai = sel.value; renderComposer(true); });
-    const provider = comp.ais.find((a) => a.id === comp.ai) || comp.ais.find((a) => a.installed && a.capabilities.background);
+    const provider = comp.ais.find((a) => a.id === comp.ai) || comp.ais.find((a) => a.installed && a.capabilities.background && a.tasks !== false);
     const codex = provider?.id === 'codex';
-    aiF.append(aiL, sel, el('div', 'sub', codex ? 'Codex uses your existing login. Usage is billed under that account; this CLI provides no native spend cap.' : 'Choosing for you picks an available AI and tells you why.'));
+    aiF.append(aiL, sel, el('div', 'sub', TV.aiNote(comp.ai)));
 
     const surf = el('div', 'field radios');
     surf.append(el('span', 'lbl', 'Where does it run?'));

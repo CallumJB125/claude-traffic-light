@@ -1960,6 +1960,7 @@ function getTasks() {
     boardHome: dataDir,
     ensureSupervisor: () => tasksProcess?.ensure(),
     homeDir: os.homedir(),
+    detectedTools: () => AiTools.quick(),
     startGuard: (cwd) => (taskStartGuard ? taskStartGuard(cwd) : null),
     copy: (text) => clipboard.writeText(text),
     onChange: (snap) => {

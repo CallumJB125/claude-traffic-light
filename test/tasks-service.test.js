@@ -221,6 +221,15 @@ test('recent folders: only tasks started on this Mac, from the raw root; every h
   assert.equal(r.ok, false, 'a handle whose folder is gone is refused');
 });
 
+test('composer AI list: AIs found on this Mac that the helper does not list are added as not in Tasks yet', async () => {
+  const s = createTasksService({ boardHome: path.join(tmp(), 'nothing-here'), homeDir: '', detectedTools: () => [
+    { id: 'claude', label: 'Claude Code', installed: true, connected: false }, { id: 'gemini', label: 'Gemini CLI', installed: false }, { id: 'hermes', label: 'Hermes Agent', installed: true }] });
+  const info = await s.composerInfo();
+  assert.deepEqual(info.ais.map((a) => [a.id, a.tasks, a.capabilities.background]), [['claude', false, false]], 'only a found AI the Tasks helper knows; not-installed and unknown ones are left out');
+  const broken = createTasksService({ boardHome: path.join(tmp(), 'nothing-here'), homeDir: '', detectedTools: () => { throw new Error('x'); } });
+  assert.deepEqual((await broken.composerInfo()).ais, []);
+});
+
 test('no supervisor: an offline snapshot with the plain empty-state words, retried by itself', async () => {
   const absent = path.join(tmp(), 'nothing-here');
   const s = createTasksService({ boardHome: absent, homeDir: '' });
