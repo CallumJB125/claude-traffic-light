@@ -22,7 +22,7 @@ const CHANNELS = Object.freeze({
   launch: 'interaction:launch', discover: 'interaction:discover', attach: 'interaction:attach', send: 'interaction:send', interrupt: 'interaction:interrupt', close: 'interaction:close',
   event: 'interaction:event', localModels: 'interaction:local-models', fanout: 'interaction:fanout',
   shareList: 'interaction:share-list', shareCreate: 'interaction:share-create', shareStop: 'interaction:share-stop',
-  channelSetup: 'interaction:channel-setup',
+  channelSetup: 'interaction:channel-setup', openAiTools: 'interaction:open-aitools',
 });
 const MAX_FANOUT = 6;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -48,8 +48,21 @@ function ownedAdapters({ env = process.env } = {}) {
   };
 }
 
+// A provider the AI tools page finds not installed or not connected shows that
+// page's reading (src/ai-tools.js nextStep) and a button to its row, instead of
+// a bare "Unavailable"; every other unavailable provider keeps its exact reason.
+function explainCapabilities(caps, rows) {
+  const { nextStep } = require('./ai-tools');
+  const byId = new Map((Array.isArray(rows) ? rows : []).filter((r) => r && typeof r.id === 'string').map((r) => [r.id, r]));
+  return caps.map((c) => {
+    if (c.available !== false) return c;
+    const step = nextStep(byId.get(c.provider));
+    return step ? { ...c, reason: step.reason, next: { label: step.action.label, provider: c.provider } } : c;
+  });
+}
+
 // shares: () => the remote interaction host (src/remote-interaction.js) or null; team sharing goes through it.
-function createInteractionMain({ context, readContext = context, adapters: given, owned = ownedAdapters, workspace, currentBoard = () => null, now, localModelsFile = null, localModels: givenLocalModels, compaction = null, shares = () => null, prepareChannel = null }) {
+function createInteractionMain({ context, readContext = context, adapters: given, owned = ownedAdapters, workspace, currentBoard = () => null, now, localModelsFile = null, localModels: givenLocalModels, compaction = null, shares = () => null, prepareChannel = null, tools = () => null, openAiTools = null }) {
   const adapters = { ...(owned ? owned() : {}), ...given };
   // Local models register into `adapters` as they are found.
   const localModels = givenLocalModels !== undefined ? givenLocalModels : createLocalModels({ adapters, configFile: localModelsFile });
@@ -197,7 +210,19 @@ function createInteractionMain({ context, readContext = context, adapters: given
     retireDocuments() { documents.clear(); return hub.reap(() => false); },
     register(ipc) {
       // null (not []) when this document may not read, so the page keeps its last known state.
-      ipc.handle(CHANNELS.capabilities, async (e) => ((await actorOf(e, false)) ? hub.capabilities() : null));
+      ipc.handle(CHANNELS.capabilities, async (e) => {
+        if (!(await actorOf(e, false))) return null;
+        let rows = null;
+        try { rows = tools(); } catch { rows = null; }
+        return explainCapabilities(hub.capabilities(), rows);
+      });
+      // Only a provider the AI tools page lists, and only from the foreground Overview.
+      ipc.handle(CHANNELS.openAiTools, async (e, id) => {
+        if (typeof id !== 'string' || !/^[a-z]{2,12}$/.test(id) || !openAiTools || !(await actorOf(e, true))) return false;
+        let rows = null;
+        try { rows = tools(); } catch { rows = null; }
+        return Array.isArray(rows) && rows.some((r) => r && r.id === id) ? !!openAiTools(`aitools:${id}`) : false;
+      });
       ipc.handle(CHANNELS.list, async (e) => { const a = await actorOf(e, false); return a ? hub.list(a) : null; });
       // Local models register into `adapters` as they are found (read-only loopback probes + configured endpoints).
       ipc.handle(CHANNELS.localModels, async (e) => ((await actorOf(e, false)) && localModels ? localModels.refresh() : null));
@@ -218,4 +243,4 @@ function createInteractionMain({ context, readContext = context, adapters: given
   };
 }
 
-module.exports = { createInteractionMain, ownedAdapters, CHANNELS, boardKey };
+module.exports = { createInteractionMain, ownedAdapters, explainCapabilities, CHANNELS, boardKey };

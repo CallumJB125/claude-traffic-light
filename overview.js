@@ -359,11 +359,20 @@
   // honest reason. A provider that disappears stays listed as no longer found.
   const features = c => [c.capabilities.steer === true ? 'can steer a running turn' : '', c.capabilities.interrupt === true ? 'can interrupt' : ''].filter(Boolean).join(' · ');
   function providerRow(id) {
-    const row = node('label', '', 'provider-option'), input = node('input'), name = node('span', '', 'provider-name'), tag = node('span', '', 'tag'), reason = node('span', '', 'reason');
+    const row = node('label', '', 'provider-option'), input = node('input'), name = node('span', '', 'provider-name'), tag = node('span', '', 'tag'), reason = node('span', '', 'reason'), next = node('button', '', 'next');
     input.type = 'radio'; input.name = 'owned-provider'; input.value = id;
     input.addEventListener('change', () => { if (input.checked) { selectedProvider = id; startButton(); } });
+    next.type = 'button'; next.hidden = true;
+    next.addEventListener('click', async event => {
+      event.preventDefault(); next.disabled = true;
+      let ok = false;
+      try { ok = typeof ix?.openAiTools === 'function' && await ix.openAiTools(id) === true; } catch { ok = false; }
+      next.disabled = false;
+      if (!ok) next.replaceWith(document.createTextNode('Open AI tools from Settings in the sidebar.'));
+    });
+    reason.append(next);
     row.append(input, name, tag, reason); $('provider-list').append(row);
-    return { row, input, name, tag, reason };
+    return { row, input, name, tag, reason, next };
   }
   // ── Existing sessions on an opt-in provider (Codex CLI on the shared daemon):
   // never offered as "start", only found and attached, labelled unmanaged.
@@ -424,7 +433,9 @@
       p.parts.name.textContent = p.cap.label;
       p.parts.tag.textContent = p.missing ? 'Not listed' : available ? 'Available' : 'Unavailable';
       p.parts.tag.className = `tag ${available ? 'completed' : 'stale'}`;
-      p.parts.reason.textContent = p.missing ? 'No longer listed on the last check.' : available ? features(p.cap) : p.cap.reason || 'Unavailable.';
+      const next = !p.missing && !available && obj(p.cap.next) && p.cap.next.provider === id && text(p.cap.next.label, 40) ? p.cap.next.label : null;
+      p.parts.reason.replaceChildren(p.missing ? 'No longer listed on the last check.' : available ? features(p.cap) : p.cap.reason || 'Unavailable.');
+      if (next) { p.parts.next.textContent = next; p.parts.next.hidden = false; p.parts.reason.append(' ', p.parts.next); }
       p.parts.input.disabled = !available;
       if (!available && selectedProvider === id) { selectedProvider = null; p.parts.input.checked = false; }
     }

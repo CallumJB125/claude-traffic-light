@@ -53,3 +53,20 @@ test('Home, Help and the AI tools page say the same thing for the same tools', a
     assert.equal(dom.window.document.getElementById('status').textContent, LINE);
   } finally { dom.window.close(); }
 });
+
+test('nextStep: not installed and not connected each name a reason and the AI tools row; connected has none', () => {
+  const { nextStep } = require('../src/ai-tools.js');
+  assert.deepEqual(nextStep(row('gemini', 'Gemini CLI', { installed: false, state: 'missing' })), { reason: 'Not installed on this Mac. Install Gemini CLI, then connect it on the AI tools page.', action: { label: 'How to install', destination: 'aitools:gemini' } });
+  assert.deepEqual(nextStep(row('gemini', 'Gemini CLI')).action, { label: 'Connect', destination: 'aitools:gemini' });
+  assert.match(nextStep(row('gemini', 'Gemini CLI')).reason, /not connected/);
+  assert.equal(nextStep(row('gemini', 'Gemini CLI', { state: 'fix' })).action.label, 'Fix');
+  assert.equal(nextStep(row('gemini', 'Gemini CLI', { connected: true })), null);
+  assert.equal(nextStep(null), null);
+  const { explainCapabilities } = require('../src/interaction-main.js');
+  const caps = [{ provider: 'gemini', available: false, reason: 'unavailable: gemini not installed' }, { provider: 'copilot', available: false, reason: 'exact adapter reason' }, { provider: 'codex', available: true, reason: '' }];
+  const out = explainCapabilities(caps, [row('gemini', 'Gemini CLI', { installed: false })]);
+  assert.deepEqual(out[0].next, { label: 'How to install', provider: 'gemini' });
+  assert.equal(out[1].reason, 'exact adapter reason', 'a provider AI tools does not list keeps its exact reason');
+  assert.equal(out[2], caps[2]);
+  assert.deepEqual(explainCapabilities(caps, null), caps);
+});

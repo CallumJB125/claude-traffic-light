@@ -62,6 +62,8 @@ contextBridge.exposeInMainWorld('overviewApi', {
     interrupt: request => closed(request, ['session', 'generation', 'turn']) && uuid(request.session) && generation(request.generation) && uuid(request.turn) ? ipcRenderer.invoke('interaction:interrupt', { session: request.session, generation: request.generation, turn: request.turn }) : denied(),
     close: request => closed(request, ['session', 'generation']) && uuid(request.session) && generation(request.generation) ? ipcRenderer.invoke('interaction:close', { session: request.session, generation: request.generation }) : denied(),
     localModels: () => ipcRenderer.invoke('interaction:local-models'),
+    // An unavailable provider's next step: main opens that tool's AI tools row, if it lists one.
+    openAiTools: id => typeof id === 'string' && /^[a-z]{2,12}$/.test(id) ? ipcRenderer.invoke('interaction:open-aitools', id) : Promise.resolve(false),
     // Ask all: one message to up to 6 distinct owned sessions; main sends each through the per-session guards.
     fanout: request => {
       if (!closed(request, ['sessions', 'text']) || !Array.isArray(request.sessions) || request.sessions.length < 1 || request.sessions.length > 6) return denied();

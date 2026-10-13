@@ -1679,6 +1679,8 @@ const InteractionMain=require('./src/interaction-main').createInteractionMain({
   localModelsFile:path.join(app.getPath('userData'),'local-models.json'),
   // Team sharing of Overview sessions goes through the remote host below (null while it is off).
   shares:()=>hostSync.host(),
+  // Unavailable providers carry the AI tools page's reason and open its row (src/ai-tools.js nextStep).
+  tools:()=>AiTools.quick(),openAiTools:(d)=>aiToolsOpen(d),
 });
 InteractionMain.register(ipcMain);
 onQuit(app,()=>InteractionMain.close());

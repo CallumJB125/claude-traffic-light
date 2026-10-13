@@ -81,6 +81,17 @@ function summary(rows) {
   return { found: found.map((r) => r.id), connected: connected.map((r) => r.id), waiting: waiting.map((r) => r.id), ready: ready.map((r) => r.id), waitingLabels: waiting.map(label), text };
 }
 
+// Why a tool cannot be used yet, and the AI tools row that fixes it, for pages
+// that list a tool as unavailable (Overview). Null once it is connected: then
+// the page's own reason stands.
+function nextStep(row) {
+  if (!row || !row.id) return null;
+  const label = String(row.label || row.id), destination = `aitools:${row.id}`;
+  if (!row.installed) return { reason: `Not installed on this Mac. Install ${label}, then connect it on the AI tools page.`, action: { label: 'How to install', destination } };
+  if (!row.connected) return { reason: `Installed, but not connected to Plexiform yet.`, action: { label: row.state === 'fix' ? 'Fix' : 'Connect', destination } };
+  return null;
+}
+
 function friendly(err, file, home) {
   const where = tilde(file, home);
   if (err?.code === 'EACCES' || err?.code === 'EPERM') return `Plexiform cannot write ${where} (permission denied). Check the file's owner and permissions, then try again.`;
@@ -387,4 +398,4 @@ function create({
   return { scan, quick, preview, connect, connectAll, undo, disconnect, addCustom, removeCustom, fixRunner, installUrl: (id) => BY_ID.get(id)?.installUrl || null, ids: () => TOOLS.map((t) => t.id) };
 }
 
-module.exports = { create, diffLines, summary, TOOLS };
+module.exports = { create, diffLines, summary, nextStep, TOOLS };

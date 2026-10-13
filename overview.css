@@ -67,6 +67,7 @@ textarea { width: 100%; resize: vertical; min-height: 90px; padding: 10px; }
 .provider-option + .provider-option { border-top: 1px solid var(--line); }
 .provider-option input, .ask-target input { margin: 0; align-self: center; }
 .provider-option .reason { flex-basis: 100%; margin: 0 0 0 24px; overflow-wrap: anywhere; }
+.provider-option .reason .next { min-height: 28px; padding: 2px 10px; }
 .provider-option:has(input:disabled) { cursor: default; }
 .provider-option:has(input:disabled) .provider-name { color: var(--muted); }
 .provider-name { overflow-wrap: anywhere; }
