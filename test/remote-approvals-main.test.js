@@ -35,7 +35,7 @@ function rig({ entitled = true, devices = 3, connected = true } = {}) {
     ping: async (url, token) => { pings.push({ url, token }); return 200; },
     clock: () => clock,
   });
-  return { dir, requestsDir, ent, core, pings, status, advance: (ms) => { clock += ms; } };
+  return { dir, requestsDir, ent, core, pings, status, advance: (ms) => { clock += ms; }, clock: () => clock };
 }
 
 // A paired phone, written to the registry file before the core first reads it (as a restart would).
@@ -170,6 +170,28 @@ test('the ping says nothing and fires once per new request, at most every 5 s', 
   assert.equal(r.pings.length, 1, 'coalesced within 5 s');
   r.status.connected = false;
   assert.equal(r.pings.length, 1);
+});
+
+test('the Phone page learns whether the hub can wake a phone from /api/auth/methods, cached a minute, never failing the page', async () => {
+  const r = rig();
+  const asked = [];
+  let answer = { push: false };
+  const core = createRemoteApprovals({
+    dir: path.join(r.dir, 'remote'), requestsDir: r.requestsDir, entitlements: r.ent, keyFor: () => null,
+    hub: () => ({ origin: 'https://hub.plexiform.test', userId: 'alice', token: () => 'bdt_x' }), host: () => ({ status: () => r.status }),
+    ping: async () => 200, methods: async (url) => { asked.push(url); if (answer instanceof Error) throw answer; return answer; }, clock: () => r.clock(),
+  });
+  assert.equal((await core.state()).hubPush, false);
+  assert.deepEqual(asked, ['https://hub.plexiform.test/api/auth/methods']);
+  answer = { push: true };
+  assert.equal((await core.state()).hubPush, false, 'cached');
+  r.advance(61_000);
+  assert.equal((await core.state()).hubPush, true);
+  answer = new Error('offline');
+  r.advance(61_000);
+  assert.equal((await core.state()).hubPush, null, 'unknown, not an error');
+  const view = fs.readFileSync(path.join(ROOT, 'src', 'remote-pairing-view.js'), 'utf8');
+  assert.match(view, /hubPush === false/);
 });
 
 test('the remote host: e2e may be a function; pairing steps go plain even when e2e is required; approval ops only sealed', async () => {

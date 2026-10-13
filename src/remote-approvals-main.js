@@ -57,7 +57,9 @@ function originOf(url) {
  * (this computer's team-hub sign-in); host() → the remote interaction host or
  * null; ping(url, token) → Promise<status> (the one network call, main side).
  */
-function createRemoteApprovals({ dir, requestsDir, keyFor = () => null, entitlements, hub = () => null, host = () => null, ping = async () => 0, clock = Date.now, log = () => {}, realpath = fs.realpathSync.native, home = os.homedir() }) {
+const METHODS_TTL_MS = 60_000;
+
+function createRemoteApprovals({ dir, requestsDir, keyFor = () => null, entitlements, hub = () => null, host = () => null, ping = async () => 0, methods = async () => null, clock = Date.now, log = () => {}, realpath = fs.realpathSync.native, home = os.homedir() }) {
   const settingsFile = path.join(dir, 'settings.json');
   let identity = null, registry = null, approvals = null, pairing = null, pairingKey = null, current = null;
   let lastPing = 0;
@@ -222,10 +224,24 @@ function createRemoteApprovals({ dir, requestsDir, keyFor = () => null, entitlem
     if (status >= 200 && status < 300) for (const id of fresh) pinged.add(id);
   }
 
+  // Does the hub send phone notifications (GET /api/auth/methods `push`)? null until known; cached a minute per hub.
+  let hubMethods = { origin: null, at: -Infinity, push: null };
+  async function hubPush(a) {
+    if (!a) return null;
+    const t = clock();
+    if (hubMethods.origin !== a.origin || t - hubMethods.at > METHODS_TTL_MS) {
+      let push = null;
+      try { const m = await methods(`${a.origin}/api/auth/methods`); push = typeof m?.push === 'boolean' ? m.push : null; } catch { push = null; }
+      hubMethods = { origin: a.origin, at: t, push };
+    }
+    return hubMethods.push;
+  }
+
   // ── Desktop UI (src/remote-pairing-view.js through the page's IPC) ────────
   async function state() {
     await ready;
     const a = account();
+    const push = await hubPush(a);
     const h = host();
     const st = h?.status?.() ?? null;
     const devices = (await unrevoked()).map((d) => ({ deviceId: d.deviceId, name: d.name, createdAt: d.createdAt, lastUsedAt: d.lastUsedAt, passkey: !!d.passkey, otherAccount: d.ownerId !== a?.userId }));
@@ -233,7 +249,7 @@ function createRemoteApprovals({ dir, requestsDir, keyFor = () => null, entitlem
     if (!p) current = null;
     return {
       ready: !!identity, entitled: entitled(), enabled: settings().enabled, signedIn: !!a,
-      hostConnected: !!st?.connected, devices, limit: deviceLimit(), phoneOrigin: phoneOrigin(),
+      hostConnected: !!st?.connected, devices, limit: deviceLimit(), phoneOrigin: phoneOrigin(), hubPush: push,
       pairing: p ? { pid: p.pid, link: p.link, expiresAt: p.expiresAt, stage: p.stage, deviceName: p.deviceName ?? null } : null,
     };
   }
@@ -309,6 +325,8 @@ function register(ctx) {
     host: () => ctx.interactionHost?.() ?? null,
     // The only network call: "a request is waiting", no content (board/hub/approval-relay.js).
     ping: async (url, token) => (await net.fetch(url, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', accept: 'application/json' }, body: '{}' })).status, // privacy-flow: phone-approvals
+    // The hub's public sign-in methods (no auth, nothing of ours in it): only its `push` flag is read.
+    methods: async (url) => { const res = await net.fetch(url, { headers: { accept: 'application/json' } }); return res.ok ? res.json() : null; }, // privacy-flow: phone-approvals
   });
   ctx.setInteractionHostExtras?.(() => core.hostOptions());
 
