@@ -52,12 +52,28 @@
     out.append(actions);
   }
 
+  function pausedCard(p) {
+    const li = item(p.text, p.note, 'Paused', 'waiting');
+    li.id = 'needs-paused';
+    if (p.resumable) {
+      li.append(button('Resume', async (ev) => {
+        const b = ev.currentTarget; b.disabled = true;
+        const r = await api.resumeCap();
+        if (!r?.ok) { $('status').textContent = r?.error || 'Could not resume. Try again from Usage & cost.'; b.disabled = false; return; }
+        void refresh();
+      }, 'needs:resume'));
+    }
+    li.append(goButton('Raise limit', 'usage', 'needs:limit'));
+    return li;
+  }
+
   function renderNeeds(n) {
     const out = body('needs');
-    $('needs-count').textContent = n?.total ? `${n.total} waiting` : '';
+    $('needs-count').textContent = n?.total ? `${n.total} waiting` : n?.paused ? 'Paused' : '';
     if (!n) return out.replaceChildren(unavailable('needs'));
-    if (!n.total) return out.replaceChildren(empty('Nothing needs you right now. Questions and permission requests from your AI tools show up here.', goButton('Alert settings', 'settings', 'needs:settings')));
+    if (!n.total && !n.paused) return out.replaceChildren(empty('Nothing needs you right now. Questions and permission requests from your AI tools show up here.', goButton('Alert settings', 'settings', 'needs:settings')));
     const list = node('ul'); list.setAttribute('aria-label', 'Needs you');
+    if (n.paused) list.append(pausedCard(n.paused));
     n.items.forEach((i, at) => {
       const li = item(i.headline, `${i.kind} · ${i.project}${i.age ? ` · ${i.age}` : ''}`, i.late ? 'Long wait' : null, 'waiting');
       li.append(goButton('Answer', 'waiting', `needs:${at}`)); list.append(li);

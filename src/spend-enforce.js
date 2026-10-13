@@ -41,15 +41,47 @@ function writeAtomic(file, obj) {
   } catch (e) { fs.rmSync(tmp, { force: true }); throw e; }
 }
 
+// `resumed` is the one window ({which: 'day'|'week', key}) the person chose to
+// carry on in after the cap paused them; it lapses with that window.
+const resumedOf = (v) => (v && typeof v === 'object' && ['day', 'week'].includes(v.which) && typeof v.key === 'string' && v.key.length <= 40 ? { which: v.which, key: v.key } : null);
 function readSettings(rootDir) {
   const s = readJson(path.join(rootDir, SETTINGS_FILE), {});
-  return { enforceCaps: s?.enforceCaps === true, stopRunaways: s?.stopRunaways === true };
+  return { enforceCaps: s?.enforceCaps === true, stopRunaways: s?.stopRunaways === true, resumed: resumedOf(s?.resumed) };
 }
 function saveSettings(rootDir, v) {
   const cur = readSettings(rootDir);
-  const next = { enforceCaps: typeof v?.enforceCaps === 'boolean' ? v.enforceCaps : cur.enforceCaps, stopRunaways: typeof v?.stopRunaways === 'boolean' ? v.stopRunaways : cur.stopRunaways };
+  const next = {
+    enforceCaps: typeof v?.enforceCaps === 'boolean' ? v.enforceCaps : cur.enforceCaps,
+    stopRunaways: typeof v?.stopRunaways === 'boolean' ? v.stopRunaways : cur.stopRunaways,
+    resumed: v && Object.prototype.hasOwnProperty.call(v, 'resumed') ? resumedOf(v.resumed) : cur.resumed,
+  };
   writeAtomic(path.join(rootDir, SETTINGS_FILE), next);
   return next;
+}
+
+const windowKey = (b) => (b?.which === 'week' ? b.weekKey : b?.dayKey);
+/** The cap window the snapshot is over, when the person already chose to carry on in it. */
+function isResumed(snapshot, settings) {
+  const b = snapshot?.budget, r = settings?.resumed;
+  return !!(b && r && b.which === r.which && windowKey(b) === r.key);
+}
+const money = (n) => `$${(Number.isFinite(n) ? n : 0).toFixed(2)}`;
+/**
+ * What the person sees while the cap holds: null, or
+ * {which, spent, limit, text, resumable, note}. `note` says what the cap
+ * cannot hold (Codex hooks only observe), so the card never over-promises.
+ */
+function pauseView({ snapshot, settings, gate }) {
+  if (!gate?.cap || !snapshot?.budget) return null;
+  const b = snapshot.budget;
+  const w = b.which === 'week' ? b.week : b.day;
+  const period = b.which === 'week' ? 'weekly' : 'daily';
+  return {
+    which: b.which, spent: w?.spent ?? 0, limit: w?.budget ?? 0,
+    text: `Paused at your ${money(w?.budget)} ${period} limit (${money(w?.spent)} spent)`,
+    resumable: !isResumed(snapshot, settings),
+    note: 'Claude Code tool calls are refused until you resume or raise the limit. Codex sessions keep running: Codex hooks only observe, so stop those in their terminal.',
+  };
 }
 
 function readLog(rootDir) {
@@ -64,7 +96,7 @@ function appendLog(rootDir, entries) {
 /** → the gate to write ({v, at, ttlMs, cap, sessions}), or null when nothing is refused. */
 function gateFor({ snapshot, settings, now = Date.now() }) {
   if (!snapshot) return null;
-  const cap = settings.enforceCaps && snapshot.budget?.level === 'exceeded'
+  const cap = settings.enforceCaps && snapshot.budget?.level === 'exceeded' && !isResumed(snapshot, settings)
     ? `Plexiform budget cap reached (${snapshot.budgetText || 'over budget'}). Raise or turn off the cap in ${WHERE}.` : null;
   const sessions = {};
   if (settings.stopRunaways) {
@@ -86,14 +118,19 @@ function writeGate(rootDir, gate) {
 // Owned Claude sessions (claude -p, started by Plexiform) get a Stop: their
 // interrupt, through the interaction hub as the document that owns them.
 // `mine` holds the ids this module registered, so it never removes another's.
-function syncOwnedStoppers(stoppers, owned, mine) {
+// Codex sessions Plexiform started are interrupted the same way when the cap
+// holds (Codex hooks cannot refuse a tool call); `codex` collects their ids.
+const OWNED_PROVIDERS = new Set(['claude', 'codex']);
+function syncOwnedStoppers(stoppers, owned, mine, codex = new Set()) {
   if (!stoppers || !owned || typeof owned.list !== 'function') return;
   const live = new Set();
+  codex.clear();
   for (const o of owned.list() || []) {
     const s = o?.state;
     const id = o?.nativeSessionId;
-    if (!s || s.ownership !== 'plexiform-owned' || s.provider?.id !== 'claude' || s.status !== 'working' || !s.activeTurn || typeof id !== 'string' || !id) continue;
+    if (!s || s.ownership !== 'plexiform-owned' || !OWNED_PROVIDERS.has(s.provider?.id) || s.status !== 'working' || !s.activeTurn || typeof id !== 'string' || !id) continue;
     live.add(id);
+    if (s.provider.id === 'codex') codex.add(id);
     if (stoppers.has(id) && !mine.has(id)) continue;
     const { session, generation, activeTurn } = s;
     stoppers.set(id, async () => {
@@ -114,11 +151,12 @@ function syncOwnedStoppers(stoppers, owned, mine) {
  */
 function createEnforcer({ rootDir, entitlements, spend = () => null, stoppers = () => null, owned = null, now = Date.now, log = () => {} }) {
   const mine = new Set();
+  const codexOwned = new Set();
   const seen = new Set();
   let gate = null;
 
   function tick() {
-    try { syncOwnedStoppers(stoppers(), owned, mine); } catch (e) { log(`[cost-guard] stoppers: ${e?.message ?? e}`); }
+    try { syncOwnedStoppers(stoppers(), owned, mine, codexOwned); } catch (e) { log(`[cost-guard] stoppers: ${e?.message ?? e}`); }
     try {
       const settings = readSettings(rootDir);
       if (!entitlements.has('costguard.enforce') || (!settings.enforceCaps && !settings.stopRunaways)) { gate = null; writeGate(rootDir, null); return gate; }
@@ -131,6 +169,15 @@ function createEnforcer({ rootDir, entitlements, spend = () => null, stoppers = 
         const b = snapshot.budget;
         const key = `cap:${b.which}:${b.which === 'day' ? b.dayKey : b.weekKey}`;
         if (!seen.has(key)) { seen.add(key); events.push({ kind: 'cap', at: t, which: b.which, spent: (b.which === 'day' ? b.day : b.week)?.spent ?? null }); }
+        // A Codex session Plexiform started cannot be gated by a hook: interrupt it once per cap episode.
+        for (const id of codexOwned) {
+          const k = `${key}:codex:${id}`;
+          if (seen.has(k)) continue;
+          seen.add(k);
+          events.push({ kind: 'cap-interrupt', at: t, sessionId: id });
+          const stop = stoppers()?.get(id);
+          if (stop) Promise.resolve().then(stop).catch((e) => log(`[cost-guard] cap interrupt failed: ${e?.message ?? e}`));
+        }
       }
       for (const r of gate ? snapshot.runaway || [] : []) {
         if (!gate.sessions[r.sessionId]) continue;
@@ -152,9 +199,21 @@ function createEnforcer({ rootDir, entitlements, spend = () => null, stoppers = 
     }
   }
 
+  // "Resume": carry on in the window that is over. The next tick lifts the gate.
+  function resume() {
+    const b = spend()?.budget;
+    if (!b || b.level !== 'exceeded') return { settings: readSettings(rootDir) };
+    const settings = saveSettings(rootDir, { resumed: { which: b.which, key: windowKey(b) } });
+    appendLog(rootDir, [{ kind: 'resume', at: now(), which: b.which, spent: (b.which === 'day' ? b.day : b.week)?.spent ?? null }]);
+    tick();
+    return { settings };
+  }
+
   return {
     tick,
+    resume,
     gate: () => gate,
+    paused: () => pauseView({ snapshot: spend(), settings: readSettings(rootDir), gate }),
     close() { try { writeGate(rootDir, null); } catch { /* lapses by TTL */ } },
   };
 }
@@ -185,7 +244,7 @@ function createReport({ rootDir, entitlements, enforcer, projectsDir, usageTurns
     const g = enforcer.gate();
     return {
       plan: typeof entitlements.plan === 'function' ? entitlements.plan() : 'free',
-      enforce: { available: has('costguard.enforce'), settings: readSettings(rootDir), capActive: !!g?.cap, sessionsStopped: g ? Object.keys(g.sessions).length : 0 },
+      enforce: { available: has('costguard.enforce'), settings: readSettings(rootDir), capActive: !!g?.cap, sessionsStopped: g ? Object.keys(g.sessions).length : 0, paused: (() => { try { return enforcer.paused?.() ?? null; } catch { return null; } })() },
       waste: wasteOut,
       receipt: receiptOut,
     };
@@ -226,10 +285,18 @@ function register(ctx) {
   ipcMain.handle('cost-guard:set', (e, v) => {
     if (!fromUsage(e)) return null;
     if (!entitlements.has('costguard.enforce')) return { error: "Enforced caps aren't part of your current plan." };
-    try { const settings = saveSettings(rootDir, v); enforcer.tick(); return { settings }; } catch (err) { return { error: err?.message ?? String(err) }; }
+    try { const settings = saveSettings(rootDir, { enforceCaps: v?.enforceCaps, stopRunaways: v?.stopRunaways }); enforcer.tick(); return { settings }; } catch (err) { return { error: err?.message ?? String(err) }; }
+  });
+  // Home's "Paused at your limit" card and the Usage page both offer Resume.
+  const fromHome = (e) => { try { return !!fromPage(e, 'home'); } catch { return false; } };
+  ipcMain.handle('cost-guard:resume', (e) => {
+    if (!fromUsage(e) && !fromHome(e)) return null;
+    if (!entitlements.has('costguard.enforce')) return { error: "Enforced caps aren't part of your current plan." };
+    try { return enforcer.resume(); } catch (err) { return { error: err?.message ?? String(err) }; }
   });
   ctx.setCostGuardReport?.(report);
+  ctx.setCostGuardResume?.(() => enforcer.resume());
   return { enforcer, report };
 }
 
-module.exports = { register, createEnforcer, createReport, gateFor, writeGate, syncOwnedStoppers, readSettings, saveSettings, readLog, appendLog, SETTINGS_FILE, LOG_FILE, GATE_TTL_MS };
+module.exports = { register, createEnforcer, createReport, gateFor, pauseView, isResumed, writeGate, syncOwnedStoppers, readSettings, saveSettings, readLog, appendLog, SETTINGS_FILE, LOG_FILE, GATE_TTL_MS };

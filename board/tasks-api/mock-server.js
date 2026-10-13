@@ -64,19 +64,19 @@ const MOCK_AIS = [
   {
     id: 'claude', installed: true, bin: '/usr/local/bin/claude', version: '2.1.285', loggedIn: true,
     models: ['opus', 'sonnet', 'haiku'],
-    capabilities: { background: true, resume: true, hooks: true, mcp: true, permissionRouting: true, modelSelect: true, costReport: true, sandbox: true },
+    capabilities: { background: true, resume: true, hooks: true, mcp: true, permissionRouting: true, modelSelect: true, costReport: true, budget: true, sandbox: true },
     notes: [], health: 'ok',
   },
   {
     id: 'codex', installed: true, bin: '/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex', version: '0.159.2', loggedIn: true,
     models: ['gpt-5-codex'],
-    capabilities: { background: true, resume: true, hooks: false, mcp: true, permissionRouting: false, modelSelect: true, costReport: false, sandbox: true },
+    capabilities: { background: true, resume: true, hooks: false, mcp: true, permissionRouting: false, modelSelect: true, costReport: false, budget: false, sandbox: true },
     notes: ['No hooks: status comes from the output stream only ("limited status").', 'No mid-turn input: messages are delivered by resume at the end of the turn.', "No permission routing: background runs can't use 'ask'."],
     health: 'warn',
   },
   {
     id: 'gemini', installed: false, bin: null, version: null, loggedIn: null, models: [],
-    capabilities: { background: false, resume: false, hooks: false, mcp: false, permissionRouting: false, modelSelect: false, costReport: false, sandbox: false },
+    capabilities: { background: false, resume: false, hooks: false, mcp: false, permissionRouting: false, modelSelect: false, costReport: false, budget: false, sandbox: false },
     notes: ['Not installed.'], health: 'missing',
   },
 ];

@@ -91,3 +91,26 @@ test('a card an AI still reports working on counts as open, not done, whatever i
     assert.deepEqual([stale.totals.done, stale.totals.open], [before.totals.done + 1, before.totals.open - 1]);
   } finally { await f.h.close(); }
 });
+
+test('spend roll-up: Team plans see today per board against its cap and a team total; free plans see no spend fields', async () => {
+  const f = await tenancy();
+  try {
+    const { h, as, db, B, users } = f;
+    const overview = async () => (await as(users.ub, 'GET', '/api/team-overview')).body;
+    const free = await overview();
+    assert.equal(free.totals.spend, null);
+    assert.ok(free.boards.every((b) => !('spend' in b)), 'no per-board spend on free');
+    db.run("UPDATE orgs SET plan = 'pro' WHERE id = ?", B.team);
+    db.run('UPDATE runs SET cost_cents = 120, started_at = ? WHERE id = ?', h.hub.iso(), B.run);
+    const pro = await overview();
+    const board = pro.boards.find((b) => b.id === B.board);
+    assert.deepEqual(board.spend, { today_usd: h.hub.spentTodayCents(B.board) / 100, cap_usd: null, over: false });
+    assert.deepEqual(pro.totals.spend, { today_usd: board.spend.today_usd, boards_over_cap: 0, capped_boards: 0 });
+    db.run("UPDATE boards SET settings = json_set(COALESCE(settings, '{}'), '$.daily_cap_usd', 1) WHERE id = ?", B.board);
+    const capped = await overview();
+    const spent = h.hub.spentTodayCents(B.board) / 100;
+    assert.deepEqual(capped.boards.find((b) => b.id === B.board).spend, { today_usd: spent, cap_usd: 1, over: spent >= 1 });
+    assert.equal(capped.totals.spend.capped_boards, 1);
+    assert.equal(capped.totals.spend.boards_over_cap, spent >= 1 ? 1 : 0);
+  } finally { await f.h.close(); }
+});

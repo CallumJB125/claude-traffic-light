@@ -32,9 +32,12 @@ function banner(tools) {
   };
 }
 
-function needs(inputs, now) {
+// `paused` (the cost guard's pause view) sits above the waits: the person's own
+// limit stopped the work, so it needs them before any question does.
+function needs(inputs, now, paused = null) {
   const queue = InputView.queue(inputs);
   return {
+    paused: paused && typeof paused.text === 'string' ? { text: text(paused.text, 160), note: text(paused.note, 300), resumable: paused.resumable !== false } : null,
     total: queue.length,
     items: queue.slice(0, LIST_MAX).map((i) => ({ kind: InputView.KIND_LABEL[i.kind] || 'Waiting', headline: InputView.headline(i), project: text(InputView.project(i), 100), age: InputView.ageText(i, now), late: InputView.escalated(i, now) })),
   };
@@ -77,7 +80,8 @@ function costs(report) {
     receipt: r && typeof r.headline === 'string' ? { month: text(r.month, 40), headline: text(r.headline) } : null,
     enforce: e && e.available ? {
       on: !!e.settings?.enforceCaps,
-      status: text(e.capActive ? 'Your limit is spent: tool calls are being refused.'
+      paused: e.paused && typeof e.paused.text === 'string' ? { text: text(e.paused.text, 160), note: text(e.paused.note, 300), resumable: e.paused.resumable !== false } : null,
+      status: text(e.capActive ? (e.paused?.text ? `${e.paused.text}: tool calls are being refused.` : 'Your limit is spent: tool calls are being refused.')
         : e.sessionsStopped ? `${e.sessionsStopped} runaway session${e.sessionsStopped === 1 ? ' is' : 's are'} being held.`
           : e.settings?.enforceCaps ? 'Your limit is enforced. Nothing is being refused right now.' : 'Your limit is not enforced.'),
     } : null,
@@ -89,7 +93,7 @@ function costs(report) {
 // Tasks finished while you were away (Plus). Null when there is nothing, or the plan lacks it.
 const morningReport = () => require('./morning-report.js').current();
 
-function register({ ipcMain, allowed, state, localSessions, tools, myDay, openPage, openAiTools, morning = morningReport, now = Date.now, collisions = null, costGuard = () => null, demo = null }) {
+function register({ ipcMain, allowed, state, localSessions, tools, myDay, openPage, openAiTools, morning = morningReport, now = Date.now, collisions = null, costGuard = () => null, resumeCap = null, demo = null }) {
   let toolsMemo = { at: -Infinity, value: null };
   let costsMemo = { at: -Infinity, value: null };
   let teamMemo = { at: -Infinity, value: null, none: false };
@@ -113,7 +117,7 @@ function register({ ipcMain, allowed, state, localSessions, tools, myDay, openPa
       observed_at: time,
       banner: toolsMemo.value,
       canDemo: !!demo && toolsMemo.demo === true,
-      needs: st ? part(() => needs(inputs, time)) : null,
+      needs: st ? part(() => needs(inputs, time, costsMemo.value?.enforce?.paused ?? null)) : null,
       running: st ? part(() => running(localSessions(st.sessions || []), time, collisions)) : null,
       today: st ? part(() => today(st.spend, inputs, time)) : null,
       team: teamMemo.value,
@@ -130,6 +134,16 @@ function register({ ipcMain, allowed, state, localSessions, tools, myDay, openPa
     if (!PAGES.has(destination)) return false;
     openPage(destination);
     return true;
+  });
+  // Resume after a cap: the cost guard owns the decision (src/spend-enforce.js); Home only forwards it.
+  ipcMain.handle('home:resume-cap', async (e) => {
+    if (!allowed(e) || demo?.active() || typeof resumeCap !== 'function') return { ok: false };
+    try {
+      const r = await resumeCap();
+      if (!r || r.error) return { ok: false, error: r?.error };
+      try { costsMemo = { at: now(), value: costs(await costGuard()) }; } catch { costsMemo.at = -Infinity; }
+      return { ok: true };
+    } catch { return { ok: false }; }
   });
   ipcMain.handle('home:morning-seen', (e) => (allowed(e) && !demo?.active() ? !!morning()?.markSeen() : false));
   ipcMain.handle('home:open-card', async (e, handle) => (allowed(e) && !demo?.active() && typeof handle === 'string' && handle.length <= 100 ? !!await myDay.open(handle) : false));

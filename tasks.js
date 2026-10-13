@@ -483,7 +483,7 @@
     view = 'composer';
     d && api.close();
     d = null;
-    comp = { folder: null, recent: [], ais: [], ai: 'auto', surface: 'background', perm: 'auto-edits', planFirst: false, when: 'now', repeat: 'off', repeatTime: '22:00', repeatDay: '1', repeatEvery: '4', canSchedule: false, busy: false, error: '' };
+    comp = { folder: null, recent: [], ais: [], ai: 'auto', surface: 'background', perm: 'auto-edits', planFirst: false, when: 'now', repeat: 'off', repeatTime: '22:00', repeatDay: '1', repeatEvery: '4', budget: '', canSchedule: false, busy: false, error: '' };
     renderList();
     renderComposer();
     const info = await api.composer();
@@ -542,6 +542,16 @@
     const codex = provider?.id === 'codex';
     aiF.append(aiL, sel, el('div', 'sub', TV.aiNote(comp.ai)));
 
+    // A cap for this one task, only for an AI that stops itself at one (Claude). "Choose for me" keeps it: the pick then prefers such an AI.
+    const canCap = comp.ai === 'auto' ? comp.ais.some((a) => a.installed && a.capabilities.budget) : !!provider?.capabilities.budget;
+    const capF = el('div', 'field');
+    if (canCap) {
+      const capL = el('label', null, 'Max spend for this task (optional)'); capL.htmlFor = 'c-budget';
+      const cap = el('input'); cap.id = 'c-budget'; cap.type = 'number'; cap.inputMode = 'decimal'; cap.min = String(TV.LIMITS.taskBudgetMin); cap.max = String(TV.LIMITS.taskBudgetMax); cap.step = '0.5'; cap.placeholder = 'e.g. 5'; cap.value = comp.budget;
+      cap.addEventListener('input', () => { comp.budget = cap.value; comp.error = ''; $('c-err').textContent = ''; });
+      capF.append(capL, cap, el('div', 'sub', `In dollars at API prices, $${TV.LIMITS.taskBudgetMin} to $${TV.LIMITS.taskBudgetMax}. The task stops at the cap and is marked "Stopped at cap"; you can retry it with a higher one.`));
+    } else comp.budget = '';
+
     const surf = el('div', 'field radios');
     surf.append(el('span', 'lbl', 'Where does it run?'));
     for (const [v, label] of [['background', 'In the background: keeps going when you close this window']]) {
@@ -596,7 +606,7 @@
       const override = btn('Start anyway…', '', () => submitComposer(true)); override.type = 'button'; override.id = 'c-override'; override.disabled = !connected() || comp.busy;
       foot.append(override);
     }
-    root.append(words, where, aiF, surf, permF, whenF, repF, foot);
+    root.append(words, where, aiF, capF, surf, permF, whenF, repF, foot);
     main.append(root);
     updateCount();
     if (!keepFocus || hadFocus || !text) ta.focus();
@@ -610,7 +620,7 @@
   async function submitComposer(overrideBudget = false) {
     if (!comp || comp.busy || !connected()) return;
     const text = $('c-text').value;
-    const v = TV.validateDraft({ text, hasFolder: !!comp.folder });
+    const v = TV.validateDraft({ text, hasFolder: !!comp.folder, budget: comp.budget });
     if (!v.ok) { comp.error = v.error; $('c-err').textContent = v.error; return; }
     comp.busy = true; $('c-go').disabled = true; $('c-err').textContent = '';
     if (comp.repeat !== 'off') {
@@ -624,7 +634,7 @@
       document.dispatchEvent(new CustomEvent('recipes:scheduled', { detail: { id: k.recipeId } }));
       return;
     }
-    const r = await api.create({ text, folder: comp.folder.handle, ai: comp.ai, surface: comp.surface, permissionLevel: comp.perm, planFirst: comp.planFirst, when: comp.when, overrideBudget: overrideBudget === true });
+    const r = await api.create({ text, folder: comp.folder.handle, ai: comp.ai, surface: comp.surface, permissionLevel: comp.perm, planFirst: comp.planFirst, when: comp.when, budgetUsd: comp.budget === '' ? undefined : Number(comp.budget), overrideBudget: overrideBudget === true });
     if (!comp) return;
     comp.busy = false;
     if (r && r.cancelled) { renderComposer(true); return; }

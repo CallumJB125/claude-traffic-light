@@ -11,6 +11,25 @@ const clean = (value, max = 140) => String(value ?? '').replace(/[\u0000-\u001f\
 const slots = (values) => values.map(() => '?').join(',');
 const scope = 'b.org_id = ? AND b.archived_at IS NULL AND c.archived_at IS NULL';
 
+const ROLLUP_PLANS = new Set(['pro', 'self_hosted']);
+const usd = (cents) => Math.round(cents) / 100;
+/** → { total: {today_usd, boards_over_cap, capped_boards} | null, boards: Map(id → {today_usd, cap_usd, over}) } */
+export function teamSpend(hub, org, boards) {
+  const plan = hub.db.get('SELECT plan FROM orgs WHERE id = ?', org.id)?.plan;
+  if (!ROLLUP_PLANS.has(plan)) return { total: null, boards: new Map() };
+  const out = new Map();
+  let today = 0, over = 0, capped = 0;
+  for (const b of boards) {
+    const spent = hub.spentTodayCents(b.id), cap = hub.dailyCapCents(b.id);
+    const row = { today_usd: usd(spent), cap_usd: cap == null ? null : usd(cap), over: cap != null && spent >= cap };
+    out.set(b.id, row);
+    today += spent;
+    if (cap != null) capped += 1;
+    if (row.over) over += 1;
+  }
+  return { total: { today_usd: usd(today), boards_over_cap: over, capped_boards: capped }, boards: out };
+}
+
 export function teamOverview(hub, member, query, { cred = null } = {}) {
   if (cred && !hub.accounts?.credValid(cred)) throw new HubError('UNAUTHENTICATED', 'sign in again');
   const fresh = hub.activeMember(member?.id);
@@ -33,6 +52,8 @@ export function teamOverview(hub, member, query, { cred = null } = {}) {
     for (const t of [totals, boards.find((b) => b.id === r.board_id)]) if (t) { t.done -= 1; t.open += 1; }
   }
   const projectCount = hub.db.get('SELECT COUNT(*) AS n FROM boards WHERE org_id = ? AND archived_at IS NULL', org.id).n;
+  // Spend roll-up (Team plan): today's reported spend per board against its daily cap, and the team total.
+  const spend = teamSpend(hub, org, boards);
   const rows = (condition, params = []) => hub.db.all(`SELECT c.*, b.name AS board_name FROM cards c JOIN boards b ON b.id = c.board_id
     WHERE ${scope} AND ${condition} ORDER BY c.updated_at DESC, c.id LIMIT 21`, org.id, ...params);
   const project = (row) => {
@@ -62,7 +83,7 @@ export function teamOverview(hub, member, query, { cred = null } = {}) {
   const list = (result) => ({ items: result.slice(0, 20).map(project), truncated: result.length > 20 });
   return {
     generated_at: hub.iso(), team: { id: org.id, name: clean(org.name) }, scope: 'active_boards', board_count: projectCount,
-    totals, boards: boards.slice(0, 60).map((b) => ({ ...b, name: clean(b.name) })), boards_truncated: boards.length > 60,
+    totals: { ...totals, spend: spend.total }, boards: boards.slice(0, 60).map((b) => ({ ...b, name: clean(b.name), ...(spend.boards.has(b.id) ? { spend: spend.boards.get(b.id) } : {}) })), boards_truncated: boards.length > 60,
     attention: list(rows(`c.run_state IN (${slots(ATTENTION)})`, ATTENTION)),
     work: list(rows(`c.run_state IN (${slots(WORK)})`, WORK)),
     review: list(rows("c.column_name = 'in_review'")), recent: list(rows('1 = 1')),

@@ -131,7 +131,7 @@ export function taskFace(task) {
   }
   return {
     green,
-    label: task.hub ? f.label : (LOCAL_LABEL[task.state] ?? f.label),
+    label: task.hub ? f.label : task.state === 'failed' && task.failKind === 'budget' ? 'Stopped at cap' : (LOCAL_LABEL[task.state] ?? f.label),
     tone: f.tone,
     reason,
     actions: actionsFor(task),

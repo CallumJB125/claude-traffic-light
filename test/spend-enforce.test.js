@@ -138,7 +138,7 @@ test('an owned Claude session registers a stopper that interrupts its running tu
   let rows = [{ state, nativeSessionId: 'native-1' }, { state: { ...state, provider: { id: 'codex' } }, nativeSessionId: 'native-codex' }, { state: { ...state, ownership: 'existing-unmanaged' }, nativeSessionId: 'native-x' }, { state, nativeSessionId: 'someone-else' }];
   const owned = { list: () => rows, target: (s) => ({ actor: 'overview:1:1', hub: { interrupt: async (req, actor) => { calls.push([req, actor, s]); return { ok: true }; } } }) };
   Enforce.syncOwnedStoppers(stoppers, owned, mine);
-  assert.deepEqual([...stoppers.keys()].sort(), ['native-1', 'someone-else']);
+  assert.deepEqual([...stoppers.keys()].sort(), ['native-1', 'native-codex', 'someone-else'], 'Claude and Codex sessions Plexiform started; never unmanaged ones');
   assert.equal(stoppers.get('someone-else')(), 'theirs');
   await stoppers.get('native-1')();
   assert.deepEqual(calls, [[{ session: state.session, generation: 3, turn: state.activeTurn }, 'overview:1:1', state.session]]);
@@ -191,7 +191,7 @@ test('register: Plus gets waste, the full receipt and the switches', async (t) =
   Enforce.register({ rootDir: root, ipcMain, entitlements: ent('plus'), fromPage: (e, id) => e.page === id, onQuit: (fn) => quits.push(fn), log: () => {}, spend: () => exceeded() });
   t.after(() => quits.forEach((fn) => fn()));
   const set = await ipcMain.handlers.get('cost-guard:set')({ page: 'usage' }, { enforceCaps: true, stopRunaways: 'yes' });
-  assert.deepEqual(set.settings, { enforceCaps: true, stopRunaways: false });
+  assert.deepEqual(set.settings, { enforceCaps: true, stopRunaways: false, resumed: null });
   assert.ok(fs.existsSync(path.join(root, Gate.GATE_FILE)), 'turning it on applies at once');
   const r = await ipcMain.handlers.get('cost-guard:report')({ page: 'usage' });
   assert.equal(r.enforce.available, true);
@@ -209,4 +209,66 @@ test('paid-wiring finds the cost guard and registers it', (t) => {
   const out = registerAll({ rootDir: root, ipcMain: fakeIpc(), entitlements: ent('free'), fromPage: () => false, onQuit: (fn) => quits.push(fn), log: () => {} });
   t.after(() => quits.forEach((fn) => fn()));
   assert.deepEqual(out.find((x) => x.name === 'cost-guard'), { name: 'cost-guard', status: 'ok' });
+});
+
+test('pause at the limit: the Home card reads the window, Resume lifts the gate for that window only, and it is logged', async (t) => {
+  const root = home(t);
+  Enforce.saveSettings(root, { enforceCaps: true });
+  let snap = exceeded({ budget: { level: 'exceeded', which: 'day', dayKey: 'Wed Oct 07 2026', weekKey: 'Mon Oct 05 2026', day: { spent: 12, budget: 10 }, week: { spent: 30, budget: 100 } } });
+  const e = Enforce.createEnforcer({ rootDir: root, entitlements: ent('plus'), spend: () => snap });
+  assert.ok(e.tick().cap);
+  const p = e.paused();
+  assert.equal(p.text, 'Paused at your $10.00 daily limit ($12.00 spent)');
+  assert.equal(p.resumable, true);
+  assert.match(p.note, /Codex sessions keep running/);
+  assert.equal(JSON.parse(hook(root)).hookSpecificOutput.permissionDecision, 'deny');
+  const r = e.resume();
+  assert.deepEqual(r.settings.resumed, { which: 'day', key: 'Wed Oct 07 2026' });
+  assert.equal(e.gate(), null, 'the gate is lifted at once');
+  assert.equal(hook(root).trim(), '', 'the hook allows again');
+  assert.equal(e.paused(), null);
+  assert.deepEqual(Enforce.readLog(root).map((x) => x.kind), ['cap', 'resume']);
+  // The next day the cap holds again: the resume was for that window only.
+  snap = exceeded({ budget: { ...snap.budget, dayKey: 'Thu Oct 08 2026' } });
+  assert.ok(e.tick().cap);
+  assert.equal(e.paused().resumable, true);
+  // Switching off the cap keeps the resumed window on record, but nothing is held.
+  const settings = Enforce.saveSettings(root, { enforceCaps: false });
+  assert.deepEqual(settings.resumed, { which: 'day', key: 'Wed Oct 07 2026' });
+  assert.equal(e.tick(), null);
+  assert.equal(e.paused(), null);
+});
+
+test('pause: a Codex session Plexiform started is interrupted once per cap episode; Claude is held by the hook', async (t) => {
+  const root = home(t);
+  Enforce.saveSettings(root, { enforceCaps: true });
+  const stops = [];
+  const stoppers = new Map();
+  const live = (provider, id) => ({ nativeSessionId: id, state: { ownership: 'plexiform-owned', provider: { id: provider }, status: 'working', activeTurn: 't1', session: 's', generation: 1 } });
+  const owned = { list: () => [live('codex', 'cx-1'), live('claude', 'cl-1')], target: () => ({ hub: { interrupt: async (req) => { stops.push(req); return { ok: true }; } }, actor: 'me' }) };
+  const e = Enforce.createEnforcer({ rootDir: root, entitlements: ent('plus'), spend: () => exceeded(), stoppers: () => stoppers, owned });
+  e.tick(); e.tick();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(stops.length, 1, 'one interrupt for the Codex session, none for Claude (its hook refuses calls)');
+  assert.deepEqual(Enforce.readLog(root).map((x) => [x.kind, x.sessionId ?? null]), [['cap', null], ['cap-interrupt', 'cx-1']]);
+  assert.ok(stoppers.has('cl-1') && stoppers.has('cx-1'), 'both owned sessions get a Stop');
+});
+
+test('register: Home may resume a cap; other pages and free may not', async (t) => {
+  const root = home(t);
+  const ipcMain = fakeIpc();
+  const quits = [];
+  let resumeFn = null;
+  Enforce.register({ rootDir: root, ipcMain, entitlements: ent('plus'), fromPage: (e, id) => e.page === id, onQuit: (fn) => quits.push(fn), log: () => {}, spend: () => exceeded(), setCostGuardResume: (fn) => { resumeFn = fn; } });
+  t.after(() => quits.forEach((fn) => fn()));
+  await ipcMain.handlers.get('cost-guard:set')({ page: 'usage' }, { enforceCaps: true });
+  assert.equal((await ipcMain.handlers.get('cost-guard:report')({ page: 'usage' })).enforce.paused.text, 'Paused at your $0.00 daily limit ($12.00 spent)');
+  assert.equal(await ipcMain.handlers.get('cost-guard:resume')({ page: 'sessions' }), null);
+  const r = await ipcMain.handlers.get('cost-guard:resume')({ page: 'home' });
+  assert.deepEqual(r.settings.resumed, { which: 'day', key: 'Wed Oct 07 2026' });
+  assert.equal((await ipcMain.handlers.get('cost-guard:report')({ page: 'usage' })).enforce.capActive, false);
+  assert.equal(typeof resumeFn, 'function');
+  const free = fakeIpc();
+  Enforce.register({ rootDir: home(t), ipcMain: free, entitlements: ent('free'), fromPage: (e, id) => e.page === id, onQuit: (fn) => quits.push(fn), log: () => {}, spend: () => exceeded() });
+  assert.match((await free.handlers.get('cost-guard:resume')({ page: 'home' })).error, /plan/);
 });

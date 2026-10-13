@@ -86,7 +86,7 @@ test('Home IPC answers only the Home page and navigates only to known pages', as
   });
   assert.equal(await handlers.get('home:state')({ sender: {} }), null);
   const s = await handlers.get('home:state')({ sender: page });
-  assert.equal(s.banner.kind, 'connect'); assert.equal(s.team, null); assert.deepEqual(s.needs, { total: 0, items: [] });
+  assert.equal(s.banner.kind, 'connect'); assert.equal(s.team, null); assert.deepEqual(s.needs, { paused: null, total: 0, items: [] });
   assert.equal(handlers.get('home:navigate')({ sender: page }, 'https://example.com'), false);
   assert.equal(handlers.get('home:navigate')({ sender: page }, 'thismac'), false);
   assert.equal(handlers.get('home:navigate')({ sender: {} }, 'waiting'), false);
@@ -206,7 +206,7 @@ test('costs: the cost guard report becomes one card of receipt headline, cap sta
     waste: { days: 7, files: 3, findings: [{ kind: 'reread', path: '/a/b/app.js', count: 5, approxTokens: 1200, evidence: [] }, { kind: 'failloop', tool: 'Bash', count: 3, evidence: [] }] },
   });
   assert.deepEqual(c.receipt, { month: 'October 2026', headline: 'Saved about $12 this month' });
-  assert.deepEqual(c.enforce, { on: true, status: 'Your limit is enforced. Nothing is being refused right now.' });
+  assert.deepEqual(c.enforce, { on: true, paused: null, status: 'Your limit is enforced. Nothing is being refused right now.' });
   assert.equal(c.waste.top, 'app.js was read 5 times with no edit in between (about 1,200 tokens re-sent)', 'the same sentence Usage & cost shows');
   assert.equal(c.waste.count, 2);
   assert.equal(Home.costs({ enforce: { available: true, settings: { enforceCaps: true }, capActive: true } }).enforce.status, 'Your limit is spent: tool calls are being refused.');
@@ -255,4 +255,43 @@ test('the cost guard hands its report to main for Home', () => {
   const reg = require('../src/spend-enforce.js').register({ rootDir: dir, entitlements: { has: () => false, limits: () => ({}) }, ipcMain: { handle() {} }, fromPage: () => false, onQuit: (fn) => fn(), setCostGuardReport: (fn) => { handed = fn; } });
   assert.equal(handed, reg.report);
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('needs you: the cost guard pause sits first, Resume asks main and Raise limit opens Usage & cost', async () => {
+  const paused = { text: 'Paused at your $10.00 daily limit ($12.00 spent)', note: 'Claude Code tool calls are refused until you resume or raise the limit.', resumable: true };
+  const n = Home.needs([], NOW, paused);
+  assert.equal(n.total, 0); assert.deepEqual(n.paused, paused);
+  assert.equal(Home.needs([], NOW, null).paused, null);
+  assert.equal(Home.costs({ enforce: { available: true, settings: { enforceCaps: true }, capActive: true, paused } }).enforce.status, 'Paused at your $10.00 daily limit ($12.00 spent): tool calls are being refused.');
+  const calls = [];
+  const state = { ...fresh, banner: null, needs: { paused, total: 1, items: [{ kind: 'Permission', headline: 'Bash: npm test', project: 'app', age: 'waiting 6 min', late: false }] } };
+  const f = setup([state, { ...state, needs: { paused: null, total: 1, items: state.needs.items } }], calls);
+  f.dom.window.homeApi.resumeCap = async () => { calls.push(['resume']); return { ok: true }; };
+  try {
+    await tick();
+    const items = f.section('needs').querySelectorAll('li');
+    assert.equal(items.length, 2);
+    assert.equal(items[0].id, 'needs-paused');
+    assert.match(items[0].textContent, /Paused at your \$10\.00 daily limit/);
+    const [resume, raise] = items[0].querySelectorAll('button');
+    assert.equal(resume.textContent, 'Resume'); assert.equal(raise.textContent, 'Raise limit');
+    raise.click();
+    assert.deepEqual(calls.at(-1), ['navigate', 'usage']);
+    resume.click(); await tick(); await tick();
+    assert.ok(calls.some((c) => c[0] === 'resume'));
+    assert.equal(f.section('needs').querySelectorAll('li').length, 1, 'after the resume the card is gone');
+  } finally { f.close(); }
+});
+
+test('home:resume-cap forwards to the cost guard and re-reads the costs card at once', async () => {
+  const handlers = new Map();
+  const ipcMain = { handle: (name, fn) => handlers.set(name, fn) };
+  let paused = { text: 'Paused at your $10.00 daily limit ($12.00 spent)', note: 'n', resumable: true };
+  const report = () => ({ enforce: { available: true, settings: { enforceCaps: true }, capActive: !!paused, paused }, waste: null, receipt: null });
+  Home.register({ ipcMain, allowed: () => true, state: () => ({ inputs: [], sessions: [], spend: null }), localSessions: (s) => s, tools: () => [], myDay: { snapshot: async () => ({ sources: [] }) }, openPage() {}, openAiTools() {}, morning: () => null, now: () => NOW, costGuard: report, resumeCap: async () => { if (!paused) return { error: 'nothing is paused' }; paused = null; return { settings: {} }; } });
+  await handlers.get('home:state')({}); await tick();
+  assert.equal((await handlers.get('home:state')({})).needs.paused.text, paused.text);
+  assert.deepEqual(await handlers.get('home:resume-cap')({}), { ok: true });
+  assert.equal((await handlers.get('home:state')({})).needs.paused, null);
+  assert.deepEqual(await handlers.get('home:resume-cap')({ }), { ok: false, error: 'nothing is paused' }, 'nothing to resume is reported honestly');
 });

@@ -239,6 +239,12 @@ function createGuard({ P, taskFace }) {
     const spec = { text: draft.text.trim(), cwd, source: 'local', ai: pick(draft.ai, P.AI_CHOICES, 'auto'), surface: pick(draft.surface, SURFACES_UI, 'background') };
     if (PERMS_UI.includes(draft.permissionLevel)) spec.permissionLevel = draft.permissionLevel;
     if (draft.planFirst === true) spec.planFirst = true;
+    // A spend cap for this one task: the AI stops itself at it (native cap), the task ends "stopped at cap".
+    if (draft.budgetUsd !== undefined && draft.budgetUsd !== null && draft.budgetUsd !== '') {
+      const b = Number(draft.budgetUsd);
+      if (!Number.isFinite(b) || b < TV.LIMITS.taskBudgetMin || b > TV.LIMITS.taskBudgetMax) return fail('VALIDATION');
+      spec.budgetUsd = Math.round(b * 100) / 100;
+    }
     // Schedules your own CLI run for later on this Mac. 'reset' is free; the overnight window is Plus.
     if (draft.when === 'reset') spec.afterReset = true;
     else if (draft.when === 'tonight') {
@@ -253,7 +259,7 @@ function createGuard({ P, taskFace }) {
     return (Array.isArray(list) ? list : []).filter((a) => P.AIS.includes(a?.id)).map((a) => ({
       id: a.id, label: TV.AI_NAME[a.id], installed: a.installed === true, loggedIn: typeof a.loggedIn === 'boolean' ? a.loggedIn : null,
       health: pick(a.health, ['ok', 'warn', 'missing'], 'warn'), note: str(Array.isArray(a.notes) ? a.notes[0] : '', 200),
-      capabilities: { background: a.capabilities?.background === true, permissionRouting: a.capabilities?.permissionRouting === true, costReport: a.capabilities?.costReport === true },
+      capabilities: { background: a.capabilities?.background === true, permissionRouting: a.capabilities?.permissionRouting === true, costReport: a.capabilities?.costReport === true, budget: a.capabilities?.budget === true },
     }));
   }
 

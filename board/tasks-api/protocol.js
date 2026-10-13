@@ -48,7 +48,7 @@ export const LOCAL_SOURCES = Object.freeze(['local', 'cli']);
 export const REMOTE_SOURCES = Object.freeze(['board', 'phone', 'slack', 'voice']);
 export const PARK_REASONS = Object.freeze(['user', 'limit', 'auth', 'ask_timeout', 'approval_timeout', 'message_loop']);
 export const OUTCOMES = Object.freeze(['merged', 'pr_opened', 'pr_merged', 'discarded']);
-export const CAPABILITIES = Object.freeze(['background', 'resume', 'hooks', 'mcp', 'permissionRouting', 'modelSelect', 'costReport', 'sandbox']);
+export const CAPABILITIES = Object.freeze(['background', 'resume', 'hooks', 'mcp', 'permissionRouting', 'modelSelect', 'costReport', 'budget', 'sandbox']);
 
 // Board error codes reused verbatim (shared/protocol.js ERRORS), plus the
 // tasks-only codes below them.

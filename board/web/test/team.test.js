@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { textOf, byClass, byAttr } from '../js/h.js';
 import { displayFace } from '../js/view.js';
-import { teamRows, teamScreen, overviewPanel, cloudPanel, SCOPE_RULE } from '../js/render-team.js';
+import { teamRows, teamScreen, overviewPanel, cloudPanel, boardSpendText, SCOPE_RULE } from '../js/render-team.js';
 import { view, model, ALICE, BOB } from './fixtures.js';
 
 const NOW = Date.parse('2026-10-01T12:00:00Z');
@@ -173,4 +173,19 @@ test('Cloud runner panel: admins only; status, the new token once, and provider 
   assert.match(t, /BUDDY_RUNNER_TEAM: team-1/);
   assert.match(t, /Claude Code · key stored · claude-sonnet-4-5/);
   assert.match(textOf(cloudPanel({ ...base, cloud: { status: 'ok', data: { runners: [], providers: [], encryption: false } } })), /no encryption key/);
+});
+
+test('team overview spend roll-up: a Spent today stat, each board against its cap, and an over-cap line; nothing on free', () => {
+  const boards = [{ id: 'b1', name: 'Web', open: 2, attention: 0, review: 1, done: 3, spend: { today_usd: 1.2, cap_usd: 3, over: false } }, { id: 'b2', name: 'API', open: 1, attention: 1, review: 0, done: 0, spend: { today_usd: 4, cap_usd: 3, over: true } }];
+  const data = { team: { name: 'Our team' }, board_count: 2, totals: { open: 3, attention: 1, review: 1, done: 3, spend: { today_usd: 5.2, boards_over_cap: 1, capped_boards: 2 } }, boards, attention: { items: [] }, work: { items: [] }, review: { items: [] }, recent: { items: [] } };
+  const t = textOf(overviewPanel({ teamOverview: { status: 'ok', data } }));
+  assert.match(t, /\$5\.20Spent today/);
+  assert.match(t, /1 board is over its daily cap/);
+  assert.match(t, /Web.*\$1\.20 today of \$3\.00 cap/);
+  assert.match(t, /API.*\$4\.00 today of \$3\.00 cap · over cap/);
+  assert.equal(boardSpendText(undefined), '');
+  assert.equal(boardSpendText({ today_usd: 0.5, cap_usd: null, over: false }), ' · $0.50 today');
+  const free = { ...data, totals: { open: 3, attention: 1, review: 1, done: 3, spend: null }, boards: boards.map(({ spend, ...b }) => b) };
+  const ft = textOf(overviewPanel({ teamOverview: { status: 'ok', data: free } }));
+  assert.doesNotMatch(ft, /Spent today|over cap|today of/);
 });

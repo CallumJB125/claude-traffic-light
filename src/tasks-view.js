@@ -9,7 +9,7 @@
   'use strict';
 
   // Same numbers as board/tasks-api/protocol.js and TASKS-CONTRACT.md §5.1/§8.6 (a unit test pins them).
-  const LIMITS = Object.freeze({ taskText: 20000, message: 8192, answer: 20000, note: 4000 });
+  const LIMITS = Object.freeze({ taskText: 20000, message: 8192, answer: 20000, note: 4000, taskBudgetMin: 0.5, taskBudgetMax: 1000 });
 
   // Every contract error code in plain words. The server's own message is never shown.
   const ERROR_TEXT = Object.freeze({
@@ -161,6 +161,10 @@
       return { ok: false, error: `That is ${over} character${over === 1 ? '' : 's'} over the ${LIMITS.taskText.toLocaleString('en')} limit.` };
     }
     if (!d.hasFolder) return { ok: false, error: 'Choose the folder it should work in.' };
+    if (d.budget !== undefined && d.budget !== null && String(d.budget).trim() !== '') {
+      const b = Number(d.budget);
+      if (!Number.isFinite(b) || b < LIMITS.taskBudgetMin || b > LIMITS.taskBudgetMax) return { ok: false, error: `Max spend must be between $${LIMITS.taskBudgetMin} and $${LIMITS.taskBudgetMax}, or left empty.` };
+    }
     return { ok: true };
   }
   function validateMessage(body) {
