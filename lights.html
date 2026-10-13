@@ -7,6 +7,7 @@
 <title>Lights</title>
 <link rel="stylesheet" href="tokens.css" />
 <link rel="stylesheet" href="rig.css" />
+<link rel="stylesheet" href="gallery-publish.css" />
 <style>
   * { box-sizing: border-box; }
   html, body {
@@ -732,12 +733,13 @@
   #presets button small { color: var(--muted); font-size: 11px; }
   #presets .menu-head { padding: 6px 8px 2px; font-size: 10px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--faint); }
   #presets .menu-head + .menu-head, #presets .menu-head:first-child { padding-top: 4px; }
-  #presets .user { display: grid; grid-template-columns: 1fr auto; align-items: center; }
+  #presets .user { display: grid; grid-template-columns: 1fr auto auto; align-items: center; }
   #presets .user button.pick { min-width: 0; }
   #presets .user button.pick span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
   #presets .user button.x { width: 24px; height: 24px; padding: 0; display: grid; place-items: center; color: var(--faint); border-radius: 5px; }
   #presets .user button.x:hover { color: #ff8a80; background: rgba(184, 68, 58, 0.15); }
-  #presets .user button.x svg { width: 12px; height: 12px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; }
+  #presets .user button.x.share:hover { color: var(--accent); background: rgba(56, 189, 248, 0.15); }
+  #presets .user button.x svg { width: 12px; height: 12px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
   #presets .menu-share { display: flex; flex-direction: column; }
   #presets .menu-share button { width: 100%; text-align: left; padding: 6px 8px; border: none; border-radius: 5px; background: transparent; display: flex; flex-direction: column; gap: 1px; }
   #presets .menu-share button:hover { background: var(--accent-soft); }
@@ -1404,6 +1406,7 @@
     <button type="button" id="share-paste"><span>Paste a share code…</span><small>Loads someone's rules (you can still Save or Revert)</small></button>
     <button type="button" id="share-export"><span>Export to file…</span><small>JSON you can commit or send</small></button>
     <button type="button" id="share-import"><span>Import from file…</span><small></small></button>
+    <button type="button" id="share-gallery"><span>Share to the gallery…</span><small>Current rules as a community gallery item, by pull request</small></button>
   </div>
   <div class="menu-head">Whole setup</div>
   <div class="menu-share">
@@ -1485,6 +1488,7 @@
 
 <script src="hooks/session-machine.js"></script>
 <script src="rules.js"></script>
+<script src="gallery-publish-view.js"></script>
 <script src="stats.js"></script>
 <script src="usage-insights.js"></script>
 <script src="usage-view.js"></script>

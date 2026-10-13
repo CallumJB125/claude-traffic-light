@@ -996,6 +996,7 @@
       const row = document.createElement('div');
       row.className = 'user';
       row.innerHTML = `<button class="pick" data-user="${p.id}"><span>${escape(p.name)}</span><small>${p.rules.length} rule${p.rules.length === 1 ? '' : 's'}</small></button>
+        <button class="x share" data-share="${p.id}" title="Share to the gallery" aria-label="Share preset ${escape(p.name)} to the gallery"><svg viewBox="0 0 16 16"><path d="M8 11V3M5 6l3-3 3 3M3 10v3h10v-3"/></svg></button>
         <button class="x" data-remove="${p.id}" title="Delete preset" aria-label="Delete preset ${escape(p.name)}"><svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8"/></svg></button>`;
       box.appendChild(row);
     }
@@ -1183,7 +1184,14 @@
       config = await window.lightsApi.saveConfig({ presets: userPresets().filter((x) => x.id !== b.dataset.remove) });
       renderUserPresets();
     }
+    if (b.dataset.share) { $('presets').hidden = true; shareToGallery({ preset: b.dataset.share }); }
   });
+  // Rules as a gallery item (gallery-publish-view.js): main checks them (no command clicks, no file sounds) and shows the JSON before anything opens.
+  function shareToGallery(ref) {
+    if (!window.galleryPublish) return flash('Sharing to the gallery is unavailable');
+    window.galleryPublish.open({ kind: 'rules', ref, onDone: (d) => { if (d.error) flash(d.error); else if (d.opened) flash('Opened GitHub with your rules filled in — press Propose changes there'); } });
+  }
+  $('share-gallery').addEventListener('click', (e) => { e.stopPropagation(); $('presets').hidden = true; shareToGallery({ rules: rules.map(R.normalizeRule) }); });
   // ── Sharing: a compact code (deflate + base64url) or a JSON file. Codes
   // are versioned ("ctl1:") so a future format can still read old ones.
   async function encodeShare(rulesToShare) {

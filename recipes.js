@@ -51,6 +51,8 @@
     row.append(r.mine
       ? btn('Delete', 'small', () => act(() => api.deleteMine(r.id), () => 'Deleted your copy.'))
       : btn('Save as my own', 'small', () => act(() => api.saveMine(r.id), () => `Saved a copy to My recipes. Share it with Share my recipes.`)));
+    // Gallery items are read-only prompts anyone can add; main refuses one that edits or came from the gallery.
+    if (r.mine && window.galleryPublish) row.append(btn('Share to gallery…', 'small', () => window.galleryPublish.open({ kind: 'recipe', ref: r.id, onDone: (d) => say(d.error ? d.error : d.opened ? `Opened GitHub with “${r.title}” filled in. Press Propose changes there to open the pull request.` : '') })));
     li.append(row);
     return li;
   }

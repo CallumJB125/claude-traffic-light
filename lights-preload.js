@@ -57,6 +57,13 @@ contextBridge.exposeInMainWorld('lightsApi', {
   onWindowFocus: (cb) => ipcRenderer.on('window-focus', (e, focused) => cb(focused)),
 });
 
+// "Share to gallery…" (src/gallery-publish.js): main builds and checks the item; the page names a kind, a ref and a draft token.
+contextBridge.exposeInMainWorld('galleryPublishApi', {
+  begin: (kind, ref) => ipcRenderer.invoke('gallery-publish:begin', String(kind), ref),
+  draft: (kind, ref, meta) => ipcRenderer.invoke('gallery-publish:draft', String(kind), ref, meta),
+  open: (token) => ipcRenderer.invoke('gallery-publish:open', String(token)),
+  copy: (token) => ipcRenderer.invoke('gallery-publish:copy', String(token)),
+});
 // User characters: the list main has validated, and a nudge when it changes.
 contextBridge.exposeInMainWorld('userCharacters', {
   list: () => ipcRenderer.invoke('characters:list'),
