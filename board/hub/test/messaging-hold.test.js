@@ -172,13 +172,34 @@ test('072 keeps existing message rows, their seq and the sequence, and allows he
   const cols = Object.keys(row);
   db.prepare(`INSERT INTO msg_messages (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`).run(...Object.values(row));
   assert.throws(() => db.prepare("UPDATE msg_messages SET state = 'held'").run(), /CHECK/);
-  assert.deepEqual(migrate(db, { migrations: all }), [72]);
+  assert.deepEqual(migrate(db, { migrations: all.filter((m) => m.version < 73) }), [72]);
   assert.deepEqual({ ...db.prepare('SELECT seq, body, state, via_json FROM msg_messages').get() }, { seq: 1, body: 'kept', state: 'replied', via_json: null });
   db.prepare("UPDATE msg_messages SET state = 'held'").run();
   db.prepare(`INSERT INTO msg_messages (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`).run(...Object.values({ ...row, id: randomUUID(), request_id: randomUUID() }));
   assert.equal(db.prepare('SELECT MAX(seq) n FROM msg_messages').get().n, 2);
   assert.throws(() => db.prepare("UPDATE msg_messages SET via_json = 'not json'").run(), /CHECK/);
   assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'msg_messages_source_state'").get());
+});
+
+test('073 keeps rows, seq, via_json and the indexes, and allows the done and failed handoff outcomes', async () => {
+  const { DatabaseSync } = await import('node:sqlite');
+  const { migrate, loadMigrations } = await import('../../shared/migrate.js');
+  const all = loadMigrations();
+  const db = new DatabaseSync(':memory:');
+  migrate(db, { migrations: all.filter((m) => m.version < 73) });
+  const row = { id: randomUUID(), request_id: randomUUID(), request_hash: 'h', kind: 'handoff', source_kind: 'person', source_user_id: 'u1', source_cred_kind: 'device', source_cred_id: 'd1',
+    dest_kind: 'person', dest_user_id: 'u2', conversation_id: 'c', body: 'kept', handoff: '{}', handoff_state: 'accepted', authority_version: 0, state: 'delivered', created_at: 'a', expires_at: 'b', updated_at: 'c', via_json: '{"surface":"local"}' };
+  const cols = Object.keys(row);
+  db.prepare(`INSERT INTO msg_messages (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`).run(...Object.values(row));
+  assert.throws(() => db.prepare("UPDATE msg_messages SET handoff_state = 'done'").run(), /CHECK/);
+  assert.deepEqual(migrate(db, { migrations: all }), [73]);
+  assert.deepEqual({ ...db.prepare('SELECT seq, body, handoff_state, via_json FROM msg_messages').get() }, { seq: 1, body: 'kept', handoff_state: 'accepted', via_json: '{"surface":"local"}' });
+  db.prepare("UPDATE msg_messages SET handoff_state = 'done'").run();
+  db.prepare("UPDATE msg_messages SET handoff_state = 'failed'").run();
+  assert.throws(() => db.prepare("UPDATE msg_messages SET handoff_state = 'bogus'").run(), /CHECK/);
+  db.prepare(`INSERT INTO msg_messages (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`).run(...Object.values({ ...row, id: randomUUID(), request_id: randomUUID() }));
+  assert.equal(db.prepare('SELECT MAX(seq) n FROM msg_messages').get().n, 2);
+  for (const idx of ['msg_messages_offered', 'msg_messages_source_state', 'msg_messages_dest_user']) assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?").get(idx), idx);
 });
 
 test('072 carries the seq high-water mark across: a deleted top message\'s seq is never reused', async () => {

@@ -242,7 +242,7 @@ test('accept: the native confirm shows the full packet, the task is created only
 test('register: every mail channel is refused outside the sessions page', async () => {
   const handlers = new Map();
   AgentMail.register({ ipcMain: { handle: (c, fn) => handlers.set(c, fn) }, allowed: (e) => e.page === 'sessions', mail: { list: async () => ({ ok: true }) }, tasks: () => ({}), confirm: async () => true, pickFolder: async () => null, ask: async () => ({}) });
-  assert.deepEqual([...handlers.keys()].sort(), ['mail:accept', 'mail:answer', 'mail:ask-ai', 'mail:decline', 'mail:list', 'mail:open', 'mail:pick-folder', 'mail:release']);
+  assert.deepEqual([...handlers.keys()].sort(), ['mail:accept', 'mail:answer', 'mail:ask-ai', 'mail:decline', 'mail:handoff', 'mail:list', 'mail:open', 'mail:pick-folder', 'mail:release', 'mail:teammates']);
   for (const fn of handlers.values()) assert.deepEqual(await fn({ page: 'tasks' }), { ok: false, error: 'Not allowed.' });
   assert.deepEqual(await handlers.get('mail:list')({ page: 'sessions' }), { ok: true });
 });
@@ -370,4 +370,82 @@ test('sync starts the poller once the identity appears after the preference was 
   mail.sync();
   assert.equal(mail.polling(), true);
   mail.stop();
+});
+
+test('the person\'s own hand-off: teammates are the board\'s members; the confirmed packet is held and released in one go; the outcome comes back when the task ends', async (t) => {
+  const { r, mailFor, calls } = await rig(t);
+  const Packet = require('../src/handoff-packet.js');
+  const a = mailFor(r.winA);
+  const b = mailFor(r.bob, { enabled: () => true });
+  const who = await a.teammates('/Users/alice/shop');
+  assert.equal(who.ok, true);
+  assert.deepEqual(who.teammates.map((x) => x.name), ['Bob']);
+  assert.equal((await AgentMail.create({ identity: () => null, resolve: async () => null, fetch }).teammates('/x')).reason, 'signed_out');
+  const packet = Packet.build({ from: 'claude', to: 'teammate', goal: 'Finish the CSV export', files: ['src/export.js'], summary: 'Streaming works; headers left. Token sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGH', branch: 'csv' }, { home: '/Users/alice' });
+  assert.equal((await a.sendHandoff({ cwd: '/Users/alice/shop', to: 'nobody', packet })).ok, false);
+  assert.equal((await a.sendHandoff({ cwd: '/Users/alice/shop', to: r.bob.user, packet: { ...packet, to: 'codex' } })).ok, false, 'a tool packet is not for a teammate');
+  calls.length = 0;
+  const sent = await a.sendHandoff({ cwd: '/Users/alice/shop', to: r.bob.user, packet });
+  assert.equal(sent.ok, true, JSON.stringify(sent));
+  assert.equal(sent.to, 'Bob');
+  assert.deepEqual(calls.filter((c) => c.startsWith('POST')).map((c) => c.replace(sent.id, ':id')), ['POST /api/messaging/v1/messages', 'POST /api/messaging/v1/messages/:id/release']);
+  const m = (await r.api(r.winA, 'GET', `/messages/${sent.id}`)).body.message;
+  assert.equal(m.state, 'queued');
+  assert.equal(m.kind, 'handoff');
+  assert.equal(m.via.label, 'Hand off from Plexiform');
+  assert.ok(!m.body.includes('sk-ant-api03'));
+  assert.deepEqual(m.handoff.artifacts, [{ kind: 'path', path: 'src/export.js' }]);
+  assert.equal((await a.list()).held.length, 0, 'nothing left waiting for Send');
+  // It is in Alice's sent list, offered; Bob sees it in his inbox as a handoff.
+  const mine = (await a.list()).sent;
+  assert.equal(mine.length, 1);
+  assert.deepEqual({ ...mine[0], id: undefined, created_at: undefined }, { id: undefined, created_at: undefined, to: 'bob', goal: 'Finish the CSV export', state: 'offered', report: null });
+  b.sync();
+  await new Promise((res) => setTimeout(res, 300));
+  const inbox = (await b.list()).inbox;
+  assert.equal(inbox.length, 1);
+  assert.equal(inbox[0].kind, 'handoff');
+  // Bob accepts: the task id is remembered; when the task ends the hub hears the outcome once; a stranger's task id does nothing.
+  const repo = testTempDir('agent-mail-repo-');
+  fs.mkdirSync(path.join(repo, '.git'));
+  const tasks = () => ({ folderOf: () => repo, create: async () => ({ ok: true, id: 'task-9' }) });
+  assert.deepEqual(await b.accept(inbox[0].id, { folder: 'repo', ai: 'claude', tasks, confirm: async () => true }), { ok: true, task: 'task-9' });
+  assert.deepEqual(b.acceptedTasks(), ['task-9']);
+  assert.equal(await b.taskEnded('task-other', 'done'), false);
+  assert.equal(await b.taskEnded('task-9', 'running'), false);
+  assert.deepEqual(b.acceptedTasks(), ['task-9']);
+  assert.equal(await b.taskEnded('task-9', 'in_review', 'Export streams; see /Users/alice/notes'), true);
+  assert.deepEqual(b.acceptedTasks(), []);
+  assert.equal(await b.taskEnded('task-9', 'done'), false, 'reported once');
+  const after = (await a.list()).sent[0];
+  assert.equal(after.state, 'done');
+  assert.match(after.report, /Export streams/);
+  assert.ok(!after.report.includes('/Users/alice'), after.report);
+  const ai = await a.op('mail', { ask_id: sent.id });
+  assert.equal(ai.asks[0].handoff.state, 'done');
+  assert.match(ai.asks[0].handoff.report, /Export streams/);
+  b.stop();
+});
+
+test('mail:teammates and mail:handoff: no packet, unknown teammate, cancel, then the hand-off goes through', async () => {
+  const handlers = new Map();
+  const log = [];
+  const mail = { teammates: async (cwd) => ({ ok: true, teammates: cwd === '/w' ? [{ user_id: 'u1', name: 'Bob' }] : [] }), sendHandoff: async (o) => { log.push(['send', o.to]); return { ok: true, id: 'm1', to: 'Bob' }; } };
+  let yes = false;
+  const Packet = require('../src/handoff-packet.js');
+  const packet = Packet.build({ from: 'claude', to: 'teammate', goal: 'G', files: [], summary: 'S', branch: '' });
+  AgentMail.register({ ipcMain: { handle: (c, fn) => handlers.set(c, fn) }, allowed: () => true, mail, tasks: () => ({}), confirm: async () => true, pickFolder: async () => null, ask: async () => ({}),
+    packetFor: async (key) => (key === 'k' ? { cwd: '/w', packet } : null), confirmHandoff: async (o) => { log.push(['confirm', o.label]); return yes; } });
+  const e = { page: 'sessions' };
+  assert.deepEqual((await handlers.get('mail:teammates')(e, 'nope')).teammates, []);
+  assert.deepEqual((await handlers.get('mail:teammates')(e, 'k')).teammates, [{ user_id: 'u1', name: 'Bob' }]);
+  assert.match((await handlers.get('mail:handoff')(e, 'nope', 'u1')).error, /No handover/);
+  assert.match((await handlers.get('mail:handoff')(e, 'k', 'u2')).error, /Choose a teammate/);
+  assert.equal((await handlers.get('mail:handoff')(e, 'k', 'u1')).cancelled, true);
+  assert.deepEqual(log, [['confirm', 'Bob (teammate)']]);
+  yes = true;
+  const r = await handlers.get('mail:handoff')(e, 'k', 'u1');
+  assert.equal(r.ok, true);
+  assert.match(r.note, /Handed off to Bob/);
+  assert.deepEqual(log, [['confirm', 'Bob (teammate)'], ['confirm', 'Bob (teammate)'], ['send', 'u1']]);
 });

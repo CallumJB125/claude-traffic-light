@@ -302,6 +302,11 @@
     <div class="hint">Every sound Plexiform makes: a rule's alert when the light turns amber or red, and the knock. Off silences them all.</div>
   </div>
 
+  <div class="field" id="agent-mail">
+    <label class="row"><input type="checkbox" id="agentMailInbox" aria-describedby="agent-mail-hint" /> Show teammates' AI questions and hand-offs to me (agent mail)</label>
+    <div class="hint" id="agent-mail-hint">Off by default. When on, while you are signed in to your team, Plexiform asks your team server every minute for questions and hand-offs teammates' AIs sent you and shows them on Sessions → Agent mail, with a notification for each. Nothing reaches your AI unless you choose Ask my AI (it sees only the question, never your code), and a hand-off runs only after you accept it and confirm its full text. Messages your own AI drafts for teammates, and hand-offs your AI asks for, are never sent or started until you press Send or Confirm, whether this is on or off. See the privacy notice, "Agent mail".</div>
+  </div>
+
   <div class="field">
     <label class="row"><input type="checkbox" id="notifyOnStates" /> Send a notification when something needs you</label>
     <div class="hint">A macOS notification once each time a state starts, so you hear about it even when the widget is hidden. Click it to jump to that terminal.</div>
@@ -580,8 +585,7 @@
     <div class="hint">Team members can send messages using your provider account and quota; viewers can watch. The team server relays message and reply text. Personal sessions stay separate. Stop an individual share from Overview.</div>
     <label class="row"><input type="checkbox" id="teamBrief" aria-describedby="team-brief-hint" /> Give my AI the team brief</label>
     <div class="hint" id="team-brief-hint">Off by default. When a Claude Code, Codex or Gemini CLI session starts in a repository linked to your team board, and you share summaries with that team, Plexiform asks your team server what teammates' AIs are doing there and adds it to the session as context: who is working on what (their names, task titles, branches and, if they share them, the files they are editing), the last few changes, open handovers and files two people are editing at once. At most 1,500 characters, about 400 tokens, at the start of each session, billed like any other input. The request tells the team server only which repository you are in, with your sign-in; nothing about your session is sent. If the team server doesn't answer within 0.8 seconds, the session starts without it. The same setting lets your AI ask for more through Plexiform's team_activity, who_touched, team_handover and team_brief tools.</div>
-    <label class="row"><input type="checkbox" id="agentMailInbox" aria-describedby="agent-mail-hint" /> Show my teammates' AI questions</label>
-    <div class="hint" id="agent-mail-hint">Off by default. When on, while you are signed in to your team, Plexiform asks your team server every minute (and when you come back to the app) for questions and handoffs teammates' AIs sent you, and shows them in Sessions → Agent mail. Nothing reaches your AI unless you choose Ask my AI, which sees only the question, not your code or files; a handoff runs only after you accept it and confirm the full text. Questions your own AI drafts for teammates are never sent until you press Send, whether this is on or off.</div>
+    <div class="hint">Agent mail (teammates' AI questions and hand-offs to you) is under Notifications.</div>
     <label class="row"><input type="checkbox" id="remoteInteractionHost" aria-describedby="interaction-host-status" /> Let my other devices use sessions Plexiform started on this Mac</label>
     <div class="hint">Your other devices signed in to the same Plexiform account can list, message and close sessions they start here, through your team server. Off by default; see the privacy notice.</div>
     <div class="hint" id="interaction-host-status" role="status" aria-live="polite"></div>

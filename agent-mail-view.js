@@ -112,15 +112,24 @@
     return li;
   }
 
+  // Hand-offs that left this Mac and how they went: the status comes back from the teammate's accept, decline or finished task.
+  const SENT = { offered: 'Waiting for them', accepted: 'Accepted, running on their Mac', done: 'Finished', failed: 'Did not finish', declined: 'Declined', expired: 'Expired, not answered in time' };
+  function sentItem(m) {
+    const li = node('li', null, 'mail-item');
+    li.append(node('h3', `Handed off to ${m.to || 'a teammate'}: ${m.goal || 'work'}`));
+    li.append(node('p', `${SENT[m.state] || m.state}${m.report ? ` · ${m.report}` : ''}`, 'muted'));
+    return li;
+  }
+
   function render(s) {
-    const held = (s && s.held) || [], inbox = (s && s.inbox) || [];
+    const held = (s && s.held) || [], inbox = (s && s.inbox) || [], sent = (s && s.sent) || [];
     // Signed out: say what it is and where to sign in, rather than hiding it.
     if (s && s.signedIn === false) {
       section.hidden = false;
       return out.replaceChildren(node('p', 'Agent mail lets your AI ask a teammate a question or hand them work, and shows what teammates’ AIs ask you. Nothing is sent until you press Send.', 'muted'),
         btn('Sign in to use agent mail', (b) => run(b, async () => ((await api.openAccount?.()) ? { ok: true } : { ok: false, error: 'The Account page could not be opened. Open it from Team in the sidebar.' }), '', false), true));
     }
-    section.hidden = !s || !s.signedIn || (!held.length && !inbox.length && !s.polling);
+    section.hidden = !s || !s.signedIn || (!held.length && !inbox.length && !sent.length && !s.polling);
     if (section.hidden) return out.replaceChildren();
     const live = new Set([...held, ...inbox].map((m) => m.id));
     for (const id of drafts.keys()) if (!live.has(id)) drafts.delete(id);
@@ -131,6 +140,7 @@
       list.append(m.kind === 'handoff' ? handoffItem(m) : questionItem(m));
     }
     const parts = [list];
+    if (sent.length) { parts.push(node('h3', 'Hand-offs you sent')); const sl = node('ul', null, 'mail-list'); for (const m of sent) sl.append(sentItem(m)); parts.push(sl); }
     if (!held.length && !inbox.length) parts.push(node('p', 'Nothing waiting. Questions your AI drafts for teammates, and teammates’ AIs’ questions to you, show up here.', 'muted'));
     if (!s.polling) parts.push(node('p', 'To see teammates’ AI questions here, turn on “Show my teammates’ AI questions” in Preferences.', 'muted'));
     out.replaceChildren(...parts);

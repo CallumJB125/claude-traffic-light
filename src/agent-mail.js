@@ -51,8 +51,8 @@ function create({ identity, resolve, fetch, home = null, enabled = () => false, 
   const msg = (id, method, path, body) => call(id, method, `/api/messaging/v1${path}`, body);
   const failed = (r) => ({ ok: false, error: r.status === 0 ? 'The team hub could not be reached. Try again.' : r.body?.error?.message || 'The team hub refused that.' });
 
-  // The teammate `to` (user id or exact display name) on the team board this folder is linked to.
-  async function teammate(cwd, to) {
+  // The other members of the team board this folder is linked to (the messaging org), or a `fail`.
+  async function members(cwd) {
     const id = identity();
     if (!id) return { fail: unavailable('signed_out', 'Sign in to your team in Plexiform first.') };
     let link = null;
@@ -63,7 +63,19 @@ function create({ identity, resolve, fetch, home = null, enabled = () => false, 
     const team = String(link.route.team_id || '');
     const r = await call(id, 'GET', `/api/teams/${encodeURIComponent(team)}/members`);
     if (r.status !== 200 || !Array.isArray(r.body?.members)) return { fail: unavailable('offline', 'The team members could not be read. Try again.') };
-    const others = r.body.members.filter((m) => m && m.user_id !== id.userId);
+    return { id, org: team, others: r.body.members.filter((m) => m && m.user_id !== id.userId) };
+  }
+  // The person's picker: names and ids only. [] when signed out, unlinked or offline.
+  async function teammates(cwd) {
+    const m = await members(cwd);
+    return m.fail ? { ok: false, error: m.fail.message, reason: m.fail.reason, teammates: [] }
+      : { ok: true, teammates: m.others.filter((x) => x.user_id).map((x) => ({ user_id: x.user_id, name: typeof x.display_name === 'string' && x.display_name.trim() ? x.display_name.trim() : 'A teammate' })) };
+  }
+  // The teammate `to` (user id or exact display name) on the team board this folder is linked to.
+  async function teammate(cwd, to) {
+    const m = await members(cwd);
+    if (m.fail) return m;
+    const { id, org: team, others } = m;
     const want = typeof to === 'string' ? to.trim() : '';
     const byId = others.filter((m) => m.user_id && m.user_id === want);
     const byName = others.filter((m) => typeof m.display_name === 'string' && m.display_name.trim().toLowerCase() === want.toLowerCase());
@@ -109,6 +121,25 @@ function create({ identity, resolve, fetch, home = null, enabled = () => false, 
     const t = await teammate(cwd, to);
     if (t.fail) return t.fail;
     return hold(t, body, { kind: 'handoff', handoff: { artifacts: packet.files.map((p) => ({ kind: 'path', path: p })) }, via: via({ provider, label }) });
+  }
+
+  // The person's own hand-off to a teammate (continue-in's packet, previewed and confirmed natively first): held and released
+  // in one go, so it travels exactly like an AI's draft (scrubbed again by the hub, shown in the teammate's Agent mail).
+  async function sendHandoff({ cwd, to, packet } = {}) {
+    const v = Packet.validate(packet);
+    if (!v.ok) return { ok: false, error: v.errors[0] };
+    if (packet.to !== 'teammate') return { ok: false, error: 'This packet is for a tool, not a teammate.' };
+    const body = Packet.toPrompt(packet);
+    if (body.length > LIMITS.handoffBody) return { ok: false, error: `Too long: keep the handoff under ${LIMITS.handoffBody} characters.` };
+    const t = await teammate(cwd, to);
+    if (t.fail) return { ok: false, error: t.fail.message, reason: t.fail.reason };
+    const h = await hold(t, body, { kind: 'handoff', handoff: { artifacts: packet.files.map((p) => ({ kind: 'path', path: p })) }, via: via({ provider: packet.from || 'plexiform', label: 'Hand off from Plexiform' }) }); // privacy-flow: handoff
+    if (!h.ask_id) return { ok: false, error: h.message || 'The team hub refused that.' };
+    // The hub scrubs the body again before holding it: release what it holds, not what was sent.
+    const cur = await msg(t.id, 'GET', `/messages/${encodeURIComponent(h.ask_id)}`);
+    if (cur.status !== 200 || !cur.body?.message) return { ok: false, error: 'The team hub could not be reached. Try again.' };
+    const r = await release(h.ask_id, 'send', digest(cur.body.message.body));
+    return r.ok ? { ok: true, id: h.ask_id, to: t.member.display_name || 'your teammate' } : r;
   }
 
   // Only messages created here (they carry `via`), and only the replies to them: never the inbox.
@@ -165,10 +196,19 @@ function create({ identity, resolve, fetch, home = null, enabled = () => false, 
     return r.body.messages.map(view);
   }
 
+  // Hand-offs that left this Mac (an AI's released draft or the person's own) and how they went: offered, accepted, done, failed, declined, expired.
+  async function sent() {
+    const id = identity();
+    if (!id) return [];
+    const r = await msg(id, 'GET', '/messages?box=sent&limit=50');
+    if (r.status !== 200 || !Array.isArray(r.body?.messages)) return [];
+    return r.body.messages.filter((m) => m && m.kind === 'handoff' && m.via && m.state !== 'held' && m.handoff)
+      .map((m) => ({ id: m.id, to: m.to?.name ?? null, goal: String(m.body || '').split('\n').find((l) => l && !l.startsWith('#'))?.trim().slice(0, 200) ?? '', state: m.handoff.state, report: m.handoff.report ?? null, created_at: m.created_at }));
+  }
   async function list() {
     const id = identity();
-    if (!id) return { ok: true, signedIn: false, held: [], inbox: [], polling: false };
-    return { ok: true, signedIn: true, hub: origin(id.origin) ? new URL(id.origin).host : null, held: await held(), inbox: inbox.map(view), polling: !!timer };
+    if (!id) return { ok: true, signedIn: false, held: [], inbox: [], sent: [], polling: false };
+    return { ok: true, signedIn: true, hub: origin(id.origin) ? new URL(id.origin).host : null, held: await held(), inbox: inbox.map(view), sent: await sent(), polling: !!timer };
   }
 
   async function release(mid, decision, shownDigest, edited) {
@@ -261,8 +301,26 @@ function create({ identity, resolve, fetch, home = null, enabled = () => false, 
     const r = await msg(c.id, 'POST', `/messages/${encodeURIComponent(mid)}/handoff`, { decision: 'accept' });
     drop(mid);
     if (r.status !== 200) return { ok: true, task: made.id, warning: 'The task started, but the team hub did not record the acceptance.' };
+    accepted.set(String(made.id), { mid, key: keyOf(c.id) });
     return { ok: true, task: made.id };
   }
+
+  // Status back: the Tasks run an accepted handoff became has ended. Called by main from the tasks snapshot; the
+  // outcome goes to the hub once (done at in_review or done, failed at failed), with the task's own short summary.
+  const accepted = new Map(); // task id -> { mid, key }
+  async function taskEnded(taskId, state, summary = '') {
+    const a = accepted.get(String(taskId));
+    if (!a) return false;
+    const decision = state === 'failed' ? 'failed' : ['done', 'in_review'].includes(state) ? 'done' : null;
+    if (!decision) return false;
+    accepted.delete(String(taskId));
+    const id = identity();
+    if (!id || keyOf(id) !== a.key) return false;
+    const report = typeof summary === 'string' && summary.trim() ? clean(summary, 2000) : (decision === 'done' ? 'Finished. The work is in its own git worktree, ready to review.' : 'The task failed before it finished.');
+    const r = await msg(id, 'POST', `/messages/${encodeURIComponent(a.mid)}/handoff`, { decision, report });
+    return r.status === 200;
+  }
+  const acceptedTasks = () => [...accepted.keys()];
 
   function drop(mid) { inbox = inbox.filter((m) => m.id !== mid); onChange(); }
 
@@ -311,12 +369,12 @@ function create({ identity, resolve, fetch, home = null, enabled = () => false, 
   // Home's "Needs you": what is known now, without asking the hub.
   const pending = () => (identity() ? { held: heldIds.size, inbox: inbox.length } : { held: 0, inbox: 0 });
 
-  return { OPS, op, list, release, open, answer, decline, askAi, accept, sync, stop, poke, pending, polling: () => running, held, LIMITS };
+  return { OPS, op, list, release, open, answer, decline, askAi, accept, teammates, sendHandoff, sent, taskEnded, acceptedTasks, sync, stop, poke, pending, polling: () => running, held, LIMITS };
 }
 
 // Sessions page only. deps: tasks(), confirm(opts, e), pickFolder(e) → path|null,
 // ask(text, to, onEvent) (continueIn.ask), sendToSessions(event).
-function register({ ipcMain, allowed, mail, tasks, confirm, pickFolder, ask, sendToSessions = () => {} }) {
+function register({ ipcMain, allowed, mail, tasks, confirm, pickFolder, ask, sendToSessions = () => {}, packetFor = async () => null, confirmHandoff = async () => false }) {
   const on = (channel, fn) => ipcMain.handle(channel, async (e, ...args) => {
     if (!allowed(e)) return { ok: false, error: 'Not allowed.' };
     try { return await fn(e, ...args); } catch { return { ok: false, error: 'Something went wrong. Nothing was sent.' }; }
@@ -332,6 +390,20 @@ function register({ ipcMain, allowed, mail, tasks, confirm, pickFolder, ask, sen
     return dir ? { ok: true, ...tasks().registerFolder(dir) } : { ok: false, cancelled: true };
   });
   on('mail:accept', (e, id, folder, ai) => mail.accept(id, { folder, ai: typeof ai === 'string' && /^[a-z]{2,12}$/.test(ai) ? ai : 'auto', tasks, confirm, e }));
+  // packetFor(key) → { cwd, packet (to 'teammate') } or null; confirmHandoff({ label, text }) → true only on Confirm.
+  on('mail:teammates', async (_e, key) => {
+    const p = typeof key === 'string' && key.length <= 260 ? await packetFor(key) : null;
+    return p ? mail.teammates(p.cwd) : { ok: false, error: 'No handover could be built for this session.', teammates: [] };
+  });
+  on('mail:handoff', async (_e, key, to) => {
+    const p = typeof key === 'string' && key.length <= 260 ? await packetFor(key) : null;
+    if (!p) return { ok: false, error: 'No handover could be built for this session.' };
+    const who = (await mail.teammates(p.cwd)).teammates.find((t) => t.user_id === to);
+    if (!who) return { ok: false, error: 'Choose a teammate first.' };
+    if ((await confirmHandoff({ label: `${who.name} (teammate)`, text: Packet.toPrompt(p.packet) })) !== true) return { ok: false, cancelled: true, error: 'Cancelled. Nothing was sent.' };
+    const r = await mail.sendHandoff({ cwd: p.cwd, to, packet: p.packet });
+    return r.ok ? { ...r, note: `Handed off to ${r.to}. It shows in their Agent mail; how it went shows here under Hand-offs you sent.` } : r;
+  });
 }
 
 module.exports = { create, register, LIMITS, POLL_MS };

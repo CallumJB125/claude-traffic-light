@@ -193,7 +193,8 @@ function mergeFacts(hook, tx) {
 
 // rows(): the sessions Plexiform lists, as { adapter, sessionId, cwd, lastActiveMs, state }
 // (src/session-handover-main.js builds them). transcripts: src/handover-transcripts.js createLocator, or null.
-function create({ rootDir, isExcluded = () => false, burstFor = () => null, git = gitFacts, home = null, now = () => Date.now(), debounceMs = DEBOUNCE_MS, ringLimit = RING_LIMIT, rows = () => [], transcripts = null, backfillMs = BACKFILL_MS, startupDelayMs = STARTUP_DELAY_MS, passLimit = PASS_LIMIT, passBudgetMs = PASS_BUDGET_MS, log = () => {} }) {
+// onRendered({ key, adapter, sessionId, cwd, facts }) after each written document (src/handoff-requests.js reads the last assistant text for a hand-off marker).
+function create({ rootDir, isExcluded = () => false, burstFor = () => null, git = gitFacts, home = null, now = () => Date.now(), debounceMs = DEBOUNCE_MS, ringLimit = RING_LIMIT, rows = () => [], transcripts = null, backfillMs = BACKFILL_MS, startupDelayMs = STARTUP_DELAY_MS, passLimit = PASS_LIMIT, passBudgetMs = PASS_BUDGET_MS, onRendered = () => {}, log = () => {} }) {
   const { docs, facts } = dirs(rootDir);
   const rendered = new Map(); // key -> { factsMtime, at }
   const txCache = new Map(); // key -> { file, mtimeMs, size, facts }
@@ -242,6 +243,7 @@ function create({ rootDir, isExcluded = () => false, burstFor = () => null, git 
     let burst = null;
     try { burst = burstFor({ adapter: f.adapter, sessionId: f.sessionId, cwd: f.cwd }); } catch { burst = null; }
     writeAtomic(docFile(key), renderDoc(f, g, { burst, home, renderedAt: new Date(now()).toISOString(), state }));
+    try { onRendered({ key, adapter: f.adapter, sessionId: f.sessionId, cwd: f.cwd, branch: g.repo ? g.branch : '', facts: f }); } catch { /* a listener's problem, never the document's */ }
     return true;
   }
 
