@@ -21,7 +21,7 @@ const join = (names) => (names.length > 1 ? `${names.slice(0, -1).join(', ')} an
 function banner(tools) {
   if (!Array.isArray(tools)) return null;
   const installed = tools.filter((t) => t && t.installed);
-  if (!installed.length) return { kind: 'none', text: 'No AI tools found yet. Plexiform works with Claude Code, Codex, Gemini CLI, Cursor and Hermes.', action: { label: 'See AI tools', destination: 'aitools' } };
+  if (!installed.length) return { kind: 'none', text: 'No AI tools found yet. Plexiform works with Claude Code, Codex, Gemini CLI, Cursor, Hermes, Copilot CLI, OpenCode, Goose, Cline and Aider.', action: { label: 'See AI tools', destination: 'aitools' } };
   const pending = installed.filter((t) => !t.connected);
   if (!pending.length) return null;
   const names = pending.map((t) => text(t.label, 60) || t.id);

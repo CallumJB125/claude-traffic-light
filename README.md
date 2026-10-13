@@ -188,8 +188,23 @@ The page writes the hook config for:
 - **Gemini CLI** — `hooks` in `~/.gemini/settings.json` (best effort)
 - **Hermes** — the `plexiform-activity` plugin, enabled through Hermes' own CLI
   (installed app only)
+- **Copilot CLI** — Plexiform's own hooks file, `~/.copilot/hooks/plexiform.json`
+  (session, prompt, tool, subagent and stop events; observe only, it never
+  answers a permission)
+- **OpenCode** — Plexiform's own plugin, `~/.config/opencode/plugins/plexiform.js`
+  (session created/idle/error, tool before/after, permission asked)
+- **Goose** — a hook plugin of Plexiform's own, `~/.agents/plugins/plexiform/`
+  (session, prompt, tool and stop events; observe only)
+- **Cline** — one script per hook in `~/Documents/Cline/Hooks/` (task start,
+  resume, complete, cancel, prompt, tool use). Only empty slots are used; a
+  hook you wrote yourself is never replaced. macOS and Linux only.
+- **Aider** — two marked lines in `~/.aider.conf.yml` (`notifications` and
+  `notifications-command`) report "waiting for you" after each answer. Aider
+  has no prompt or tool hooks, so run it as `plexiform-run aider` to see
+  working and done as well; the wrapper exports `PLEXIFORM_SESSION` so both
+  land in one session.
 
-**Tools with no hooks (Aider, OpenCode, Copilot CLI, Amp, …).** *Add a custom
+**Tools with no hooks (Amp, Windsurf and others).** *Add a custom
 tool* on the AI tools page installs `~/.local/bin/plexiform-run`. Launch the
 tool through it, `plexiform-run aider --model sonnet`, and the widget shows it
 working, then done or failed from the exit code. That is all the wrapper can
