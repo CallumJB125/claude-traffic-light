@@ -18,6 +18,7 @@ const { redactSecretsPass } = require('./scrub.js');
 const { readTasks } = require('./morning-report.js');
 const { finding } = require('../usage-waste-view.js');
 const Shipped = require('./shipped-report.js');
+const Weekly = require('./weekly-report.js');
 
 const PERIODS = new Set(['day', 'week']);
 const LIST_MAX = 8;
@@ -75,6 +76,14 @@ function readRecords(file) {
   } catch { return []; }
 }
 
+// The weekly repo view (src/weekly-report.js): overview lines and one line per repo. PR count comes from what shipped.
+function weeklyOf({ records, tasks, turns, now, shipped, clean }) {
+  const ship = shipped ? Shipped.sections({ records, cost: shipped.cost, prs: shipped.prs, now, clean }) : [];
+  const prs = ship.find((x) => x.id === 'prs');
+  const w = Weekly.sections({ records, tasks, turns, now, prs: prs ? prs.items.filter((i) => i.startsWith('PR #')).length : 0, clean });
+  return w.length ? { overview: w[0], repos: w[1] } : null;
+}
+
 const sessionName = (r) => [PROVIDER[r.adapter] || 'AI', r.folder ? `session in ${r.folder}` : 'session', r.branch ? `(branch ${r.branch})` : ''].filter(Boolean).join(' ');
 
 // The facts for one period, already cleaned. Pure: callers pass what they read.
@@ -120,6 +129,7 @@ function gather({ period = 'day', now = Date.now(), tasks = [], records = [], tu
     saved: receipt && !receipt.teaser && typeof receipt.headline === 'string' ? c(receipt.headline, 200) : null,
     waste: waste && Array.isArray(waste.findings) && waste.findings.length ? c(finding(waste.findings[0]), 240) : null,
     shipped: p === 'week' && shipped ? Shipped.sections({ records, cost: shipped.cost, prs: shipped.prs, now, clean: c }) : [],
+    weekly: p === 'week' ? weeklyOf({ records, tasks, turns, now, shipped, clean: c }) : null,
     team: typeof team === 'string' && team.trim() ? c(team, 600) : null,
   };
 }
@@ -147,6 +157,7 @@ function compose(data) {
   const s = d.spend || { current: 0, previous: 0, week: 0, unpriced: 0, turns: 0 };
   const span = week ? 'this week' : 'today';
   const sections = [];
+  if (d.weekly?.overview) sections.push(d.weekly.overview);
   if (!finished.length && !stuck.length) sections.push({ id: 'quiet', heading: 'Overview', summary: week ? 'A quiet week: nothing finished and nothing is waiting on you.' : 'A quiet day: nothing finished and nothing is waiting on you.', items: [] });
   else {
     sections.push(listSection('finished', `Finished ${span}`, finished, (f) => `${f.title}: ${f.what}`, `Nothing finished ${span}.`));
@@ -161,6 +172,7 @@ function compose(data) {
   if (repeats.length) sections.push(listSection('repeats', `Repeating recipes ${span}`, repeats, (r) => `${r.title}: ${r.what}`, ''));
   sections.push({ id: 'spend', heading: 'Spend (at API list prices)', summary: null, items: spend });
   if (Array.isArray(d.shipped)) sections.push(...d.shipped);
+  if (d.weekly?.repos) sections.push(d.weekly.repos);
   if (d.saved) sections.push({ id: 'saved', heading: 'Saved by Plexiform', summary: null, items: [d.saved] });
   if (d.waste) sections.push({ id: 'waste', heading: 'Top waste finding', summary: null, items: [d.waste] });
   const lines = (sec) => [sec.summary, ...sec.items].filter(Boolean);
