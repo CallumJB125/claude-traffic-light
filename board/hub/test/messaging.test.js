@@ -98,6 +98,15 @@ test('people message people inside a shared team without any model; receipts, re
     const decided = await bob.handoff(m.id, 'accept', 'on it');
     assert.equal(decided.body.message.handoff.state, 'accepted');
     assert.equal(decided.body.message.handoff.report, 'on it');
+    // Only the receiver closes it, only once accepted, and the outcome report is scrubbed like a body.
+    assert.equal((await alice.handoff(m.id, 'done', 'x')).status, 404);
+    assert.equal((await bob.handoff(m.id, 'accept')).status, 409);
+    const closed = await bob.handoff(m.id, 'done', 'Merged in PR 12. Token ghp_abcdefghijklmnopqrstuvwxyz0123456789 was in .env');
+    assert.equal(closed.status, 200, JSON.stringify(closed.body));
+    assert.equal(closed.body.message.handoff.state, 'done');
+    assert.ok(!closed.body.message.handoff.report.includes('ghp_abcdefghijklmnopqrstuvwxyz'), closed.body.message.handoff.report);
+    assert.equal((await bob.handoff(m.id, 'failed')).status, 409);
+    assert.equal((await alice.get(m.id)).body.message.handoff.state, 'done');
     const reply = await bob.send({ to: { user_id: r.winA.user, org_id: r.org }, body: 'done', reply_to: m.id });
     assert.equal(reply.body.message.conversation_id, m.conversation_id);
     const after = (await alice.get(m.id)).body.message;

@@ -495,8 +495,14 @@ export class Messaging {
   }
 
   decideHandoff(m, body) {
-    if (!['accept', 'decline'].includes(body.decision)) throw invalid();
+    if (!['accept', 'decline', 'done', 'failed'].includes(body.decision)) throw invalid();
     const report = body.report == null ? null : this.bodyText(body.report, this.limits.reportChars, null);
+    // The outcome of an accepted handoff: the receiver closes it once, with a short report the sender (and the sender's AI) can read.
+    if (['done', 'failed'].includes(body.decision)) {
+      if (m.handoff_state !== 'accepted') throw new HubError('CONFLICT', 'only an accepted handoff can be closed');
+      this.hub.txn(() => this.update(m, { handoff_state: body.decision, handoff_report: report }));
+      return;
+    }
     if (!['queued', 'delivered', 'replied'].includes(m.state) || m.handoff_state !== 'offered' || this.handoffExpired(m) || (m.state === 'queued' && m.phase === 'accepted')) throw new HubError('CONFLICT', 'this handoff can no longer be decided');
     this.hub.txn(() => this.update(m, { handoff_state: body.decision === 'accept' ? 'accepted' : 'declined', handoff_report: report,
       ...(m.state === 'queued' ? { state: 'delivered', delivered_at: this.at(), phase: null } : {}) }));

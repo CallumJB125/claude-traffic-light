@@ -173,7 +173,10 @@ still live under the generation the handoff was delivered to.
 A handoff is a message with `kind:'handoff'`: `body` is the explicit public brief, plus
 `card_refs` and permitted artifacts (relative paths). Never transcripts. `handoff.state`:
 `offered` → `accepted` | `declined` (by the receiving person, or by the receiving session via
-its host's `handoff` report) | `expired`.
+its host's `handoff` report) | `expired`; an `accepted` handoff is later closed by the same
+receiving person with `decision: 'done'` or `'failed'` (`POST /messages/:id/handoff`, optional
+`report`, 2000 chars, scrubbed like a body), which is the outcome the sender and the sender's
+AI (`team_agent_mail`) read. Any other transition from `accepted` is a 409.
 
 Session-sourced messages (`/host/send`) are **opt-in automation** on the destination target:
 `automation: {sessions:true, max_hops:1…3, turns_per_hour:1…30, parallel:1…4}` (else refused).
