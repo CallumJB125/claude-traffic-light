@@ -234,7 +234,7 @@
         break;
       }
       default:
-        if (s.lastCheckedAt) { out.headline = "You're up to date"; out.message = { tone: 'info', text: `${name} ${s.currentVersion} is the latest ${s.channel === 'beta' ? 'beta' : 'version'}.` }; } else out.headline = 'Not checked yet';
+        if (s.lastCheckedAt) { out.headline = "You're up to date"; out.message = { tone: 'info', text: `${name} ${s.currentVersion} is the latest ${s.channel === 'beta' ? 'beta' : 'version'}.` }; } else out.headline = 'Check for updates';
         out.buttons = [check('Check now', { primary: true })];
     }
     return out;
