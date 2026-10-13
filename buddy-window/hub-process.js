@@ -205,6 +205,53 @@ function createHubSupervisor(opts) {
 
   return {
     mode,
+    launchCurrent: current => !disposed && state === 'ready' && info === current,
+    async myDay() {
+      if (mode !== 'local' || disposed) return { ok: false };
+      const current = await this.ensure();
+      const headers = { Accept: 'application/json', Cookie: `board_local=${current.localSecret}` };
+      const result = await fetchImpl(`${current.url}/api/my-day`, { headers, signal: AbortSignal.timeout(5000), redirect: 'manual' }); // privacy-flow: local-board-hub
+      const value = await result.json().catch(() => null);
+      return result.ok && info === current && !disposed ? { ok: true, ...value } : { ok: false };
+    },
+    // Overview sends only an explicitly selected fixed current card/run. The
+    // HTTP communication route rechecks current membership/fence in its queue.
+    async overviewMessage({card,board,fence,run,text,requestId},fresh) {
+      const valid=value=>typeof value==='string'&&/^[A-Za-z0-9_.:-]{1,128}$/.test(value);
+      if(mode!=='local'||disposed||![card,board,run,requestId].every(valid)||!Number.isSafeInteger(fence)||fence<0||typeof text!=='string'||!text.trim()||text.length>4000||Buffer.byteLength(text)>8192||typeof fresh!=='function'||!fresh())return {ok:false};
+      const current=await this.ensure();if(!fresh()||info!==current||disposed)return {ok:false};
+      const headers={Accept:'application/json','Content-Type':'application/json',Cookie:`board_local=${current.localSecret}`,Origin:current.url};
+      const body={request_id:requestId,expected_fence:fence,kind:'coordination',body:text,recipient_run_ids:[run]};
+      const response=await fetchImpl(`${current.url}/api/cards/${encodeURIComponent(card)}/messages?board_id=${encodeURIComponent(board)}`,{method:'POST',headers,body:JSON.stringify(body),signal:AbortSignal.timeout(5000),redirect:'manual'}); // privacy-flow: local-board-hub
+      // Omit returned message/body/receipts from the Overview result.
+      return {ok:response.ok&&info===current&&!disposed&&fresh()};
+    },
+    // Main-only automatic work reports use this launch's real local cookie.
+    // The destination is the embedded personal board, never a renderer URL.
+    async captureWork(body) {
+      if (mode !== 'local' || disposed) return { ok: false };
+      const current = await this.ensure();
+      const headers = { Accept: 'application/json', Cookie: `board_local=${current.localSecret}`, Origin: current.url };
+      const me = await fetchImpl(`${current.url}/api/me`, { headers, signal: AbortSignal.timeout(5000), redirect: 'manual' }); // privacy-flow: local-board-hub
+      const identity = me.ok ? await me.json() : null;
+      const board = identity?.boards?.find(b => !b.archived_at && b.name === 'My board') ?? identity?.boards?.find(b => !b.archived_at);
+      if (!board || !/^[A-Za-z0-9_.:-]{1,100}$/.test(board.id)) return { ok: false };
+      const result = await fetchImpl(`${current.url}/api/boards/${board.id}/work-capture`, { // privacy-flow: local-board-hub
+        method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(5000), redirect: 'manual',
+      }); // privacy-flow: local-board-hub
+      const value = await result.json().catch(() => null);
+      return result.ok ? { ok: true, ...value } : { ok: false };
+    },
+    // Main-only: the few fixed personal-board routes Sessions needs to link a repo and find a card.
+    // The path is checked against a closed list; a renderer never names one.
+    async localRequest(method, pathname, body) {
+      if (mode !== 'local' || disposed || !['GET', 'POST'].includes(method) || !/^\/api\/(?:me|repos|boards\/[A-Za-z0-9_.:-]{1,100}(?:\/repos)?)$/.test(pathname)) return { ok: false };
+      const current = await this.ensure();
+      const headers = { Accept: 'application/json', Cookie: `board_local=${current.localSecret}`, Origin: current.url, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) };
+      const result = await fetchImpl(`${current.url}${pathname}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(5000), redirect: 'manual' }); // privacy-flow: local-board-hub
+      const value = await result.json().catch(() => null);
+      return info === current && !disposed ? { ok: result.ok, status: result.status, ...(value && typeof value === 'object' ? value : {}) } : { ok: false };
+    },
     ensure() {
       if (disposed) return Promise.reject(new Error('the app is quitting'));
       stopping = false;

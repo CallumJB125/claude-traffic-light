@@ -13,6 +13,8 @@ export const INVITE_REPLAYED = 'This invite was already made. Resend it to get a
 export const NO_REACH = 'Can’t reach the board. Check your connection and try again.';
 // The hub's sign-up control (D104) refuses a new account: the mode, never who is allowed.
 export const SIGNUP_CLOSED = 'Sign-up is invite-only right now. Ask a team owner for an invite.';
+export const SIGNUP_PAUSED = 'New sign-ups are temporarily paused. Try again later.';
+export const STORAGE_PAUSED = 'The board is temporarily unable to add new items. Try again later.';
 
 export const INVITE_TOKEN_RE = /^inv_[A-Za-z0-9_-]{43}$/;
 const INVITE_CODE_RE = /^[BCDFGHJKLMNPQRSTVWXZ]{4}-?[BCDFGHJKLMNPQRSTVWXZ]{4}$/;
@@ -38,6 +40,7 @@ export function accountErrorText(err, step) {
   const code = err?.code ?? null;
   const extra = err?.extra ?? {};
   if (code === 'RATE_LIMITED' || status === 429) return `Too many tries. Wait ${waitFor(extra.retry_after_s)} and try again.`;
+  if (code === 'SIGNUP_PAUSED') return SIGNUP_PAUSED;
   // The hub answers a start before it mails, so a failing mailer can't show here; a start that
   // fails outright is the nearest thing the page can see.
   if (step === 'start' && (status === 0 || status >= 500 || code === 'NETWORK')) return SEND_FAILED;
@@ -64,6 +67,7 @@ export function accountErrorText(err, step) {
       if (step === 'invite' && extra.reason === 'REPLAYED') return INVITE_REPLAYED;
       return extra.invite_id ? 'There’s already an invite waiting for that address.' : 'That clashes with something that changed. Reload and try again.';
     case 'QUOTA_EXCEEDED':
+      if (extra.resource === 'storage') return STORAGE_PAUSED;
       if (extra.resource === 'teams') return 'You already own as many teams as your plan allows.';
       if (extra.resource === 'members') return 'This team is full.';
       return 'Your plan’s limit is reached.';

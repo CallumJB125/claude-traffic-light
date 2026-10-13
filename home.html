@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; base-uri 'none'; form-action 'none'">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Home</title>
+  <link rel="stylesheet" href="tokens.css">
+  <link rel="stylesheet" href="home.css">
+  <link rel="stylesheet" href="page.css">
+  <link rel="stylesheet" href="demo-banner.css">
+</head>
+<body>
+<main class="page">
+  <header class="page-head"><div>
+    <h1>Home</h1>
+    <p>What's running, what needs you, and today's spend.</p>
+    <p>A task (Tasks) is a one-off hand-off that keeps going when you close the window. A board card is a piece of work you track; Send to AI… on a card runs the AI on the board.</p>
+  </div></header>
+  <div id="banner" class="banner" role="region" aria-label="Connect your AI tools" hidden></div>
+  <section id="starter" aria-labelledby="starter-title" hidden><div class="section-header"><h2 id="starter-title">Start with a pack</h2></div><div class="body"></div></section>
+  <section id="morning" aria-labelledby="morning-title" hidden><div class="section-header"><h2 id="morning-title">While you were away</h2><p id="morning-count" class="muted"></p></div><div class="body"></div></section>
+  <section id="alerts" aria-labelledby="alerts-title" hidden><div class="section-header"><h2 id="alerts-title">Stuck and limits</h2></div><div class="body"></div></section>
+  <section id="needs" aria-labelledby="needs-title"><div class="section-header"><h2 id="needs-title">Needs you</h2><p id="needs-count" class="muted"></p></div><div class="body"></div></section>
+  <section id="running" aria-labelledby="running-title"><div class="section-header"><h2 id="running-title">Running now</h2><p id="running-count" class="muted"></p></div><div class="body"></div></section>
+  <section id="teamtoday" aria-labelledby="teamtoday-title" hidden><div class="section-header"><h2 id="teamtoday-title">Team today</h2><p id="teamtoday-updated" class="muted"></p></div><div class="body"></div></section>
+  <section id="today" aria-labelledby="today-title"><div class="section-header"><h2 id="today-title">Today</h2></div><div class="body"></div></section>
+  <section id="digest" aria-labelledby="digest-title"><div class="section-header"><h2 id="digest-title">Digest</h2><div class="switch" role="group" aria-label="Digest period"><button type="button" data-period="day" aria-pressed="true">Daily</button><button type="button" data-period="week" aria-pressed="false">Weekly</button></div></div><div class="body"></div><div class="digest-actions actions"></div><details class="digest-delivery"><summary>Send it automatically</summary><div class="delivery-body"></div></details><p class="digest-status muted" role="status" aria-live="polite"></p></section>
+  <section id="costs" aria-labelledby="costs-title" hidden><div class="section-header"><h2 id="costs-title">Savings and cost guard</h2><p id="costs-month" class="muted"></p></div><div class="body"></div></section>
+  <section id="teamwork" aria-labelledby="teamwork-title" hidden><div class="section-header"><h2 id="teamwork-title">Work with a team</h2></div><div class="body"></div></section>
+  <section id="cards" aria-labelledby="cards-title" hidden><div class="section-header"><h2 id="cards-title">Your cards</h2></div><div class="body"></div></section>
+  <p id="status" class="muted" role="status" aria-live="polite">Loading…</p>
+</main>
+<script src="demo-banner.js"></script>
+<script src="home.js"></script>
+<script src="home-alerts-view.js"></script>
+<script src="home-starter.js"></script>
+<script src="home-digest.js"></script>
+<script src="home-team-today-view.js"></script>
+</body>
+</html>

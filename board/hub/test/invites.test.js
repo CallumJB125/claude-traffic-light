@@ -5,6 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { tenancy, ROOMY } from './tenancy/fixture.js';
 import { dumpDb } from './accounts-helpers.js';
 import { mailName } from '../identity/invites.js';
@@ -332,7 +333,7 @@ test('removing an inviter withdraws the invites they sent that nobody used', asy
 });
 
 test('the /invite page: served with no-referrer, reads the fragment, tries plexiform://, claudebuddy:// only on a click; /download follows BOARD_DOWNLOAD_URL', async () => {
-  const fx = await setup({ config: { webDir: new URL('../../web', import.meta.url).pathname, downloadUrl: 'https://downloads.example.com/Plexiform.dmg' } });
+  const fx = await setup({ config: { webDir: fileURLToPath(new URL('../../web', import.meta.url)), downloadUrl: 'https://downloads.example.com/Plexiform.dmg' } });
   try {
     const { h } = fx;
     const page = await fetch(`${h.base}/invite`);

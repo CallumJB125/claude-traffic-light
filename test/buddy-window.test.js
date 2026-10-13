@@ -6,8 +6,9 @@ const os = require('node:os');
 const fs = require('node:fs');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
-const { PAGES, flat, pageById, hubPageUrl, navDecision, openDecision, connectDecision, manifestPost, parseConnectName, connectUrlOk, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl } = require('../buddy-window/pages');
+const { PAGES, SECTIONS, FOOTER, sectionOf, flat, pageById, hubPageUrl, navDecision, openDecision, connectDecision, manifestPost, parseConnectName, connectUrlOk, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl } = require('../buddy-window/pages');
 const { createHubSupervisor, hubEnv, MAX_RESTARTS } = require('../buddy-window/hub-process');
+const { testTempDir } = require('./helpers/tmp');
 
 // ── pages ──────────────────────────────────────────────────────────────────
 
@@ -16,11 +17,67 @@ test('every page has a unique id, a title and a known kind', () => {
   assert.equal(new Set(all.map((p) => p.id)).size, all.length);
   for (const p of all) {
     assert.ok(p.title, p.id);
-    assert.ok(['hub', 'window', 'local', 'soon'].includes(p.kind), p.id);
+    assert.ok(['hub', 'window', 'local'].includes(p.kind), `${p.id}: no placeholder pages`);
+    assert.ok(!p.pending, `${p.id}: no soon pill`);
     if (p.kind === 'window') assert.ok(p.window, p.id);
   }
-  for (const want of ['board', 'myday', 'tasks', 'integrations', 'team', 'usage', 'setups', 'plugins', 'settings']) assert.ok(pageById(want), want);
-  assert.equal(PAGES[0].id, 'board');
+  for (const want of ['board', 'myday', 'tasks', 'integrations', 'team', 'usage', 'setups', 'settings', 'aitools']) assert.ok(pageById(want), want);
+  assert.equal(PAGES[0].id, 'overview');
+  assert.ok(PAGES.some(page => page.id === 'board'));
+});
+
+test('the sidebar has at most six primary sections and every page id still resolves to one', () => {
+  assert.ok(SECTIONS.length <= 6, `${SECTIONS.length} sections`);
+  const ids = ['overview', 'home', 'board', 'board:table', 'board:history', 'board:dashboard', 'board:calendar', 'board:timeline', 'waiting', 'myday', 'sessions', 'timeline', 'checkpoints', 'memory', 'tasks', 'integrations', 'team', 'usage', 'stats', 'optimiser', 'clients', 'setups', 'thismac', 'phone', 'account', 'upgrade', 'sync', 'widget', 'lights', 'aitools', 'settings', 'hatch', 'help', 'feedback', 'updates'];
+  for (const id of ids) {
+    assert.ok(pageById(id), `${id} still exists`);
+    assert.ok(sectionOf(id) || FOOTER.includes(id) || pageById(id).hidden, `${id} is reachable from a section or the footer`);
+  }
+});
+
+test('the sidebar lists every main feature as its own section and reaches every page exactly once', () => {
+  assert.deepEqual(SECTIONS.map((s) => s.id), ['home', 'board', 'sessions', 'usage', 'team', 'settings']);
+  assert.deepEqual(SECTIONS.map((s) => s.title), ['Home', 'Board', 'Sessions', 'Usage & cost', 'Team', 'Settings']);
+  assert.deepEqual(FOOTER, ['help', 'feedback', 'updates']);
+  const listed = [...SECTIONS.flatMap((s) => s.pages), ...FOOTER];
+  assert.equal(new Set(listed).size, listed.length, 'no page in two sections');
+  assert.deepEqual([...listed].sort(), flat().filter((p) => !p.hidden).map((p) => p.id).sort(), 'no visible page is orphaned');
+  for (const s of SECTIONS) assert.ok(s.pages.includes(s.default) && pageById(s.default), `${s.id} opens a page it holds`);
+  assert.equal(sectionOf('board:calendar'), 'board');
+  assert.equal(sectionOf('waiting'), 'home');
+  assert.equal(sectionOf('sessions'), 'sessions');
+  assert.equal(sectionOf('optimiser'), 'usage', 'Usage optimiser is a page of Usage & cost');
+  assert.equal(sectionOf('tasks'), 'sessions');
+  assert.equal(pageById('sessions').title, 'Sessions');
+  assert.equal(pageById('tasks').title, 'Tasks');
+  assert.equal(sectionOf('aitools'), 'settings');
+  assert.equal(sectionOf('help'), null, 'footer links are not in a section');
+  assert.equal(sectionOf('integrations'), 'team');
+  assert.equal(sectionOf('lights'), 'settings', 'Widget rules lives in Settings');
+  assert.equal(sectionOf('hatch'), 'settings');
+  assert.deepEqual(flat().filter((p) => p.unlisted).map((p) => p.id).sort(), ['myday', 'stats', 'timeline', 'waiting'], 'Home carries Waiting on you and My day, Usage & cost carries Time as a tab, Sessions opens a session timeline; each keeps a page but no sub-nav entry');
+  assert.equal(sectionOf('timeline'), 'sessions');
+  assert.equal(sectionOf('myday'), 'home');
+  assert.equal(sectionOf('lights'), 'settings');
+  assert.equal(sectionOf('nope'), null);
+  assert.equal(pageById('plugins'), null);
+});
+
+test('sidebar: Home lists Home and Overview; opening Waiting on you lights the Home section without a sub-nav entry of its own', async () => {
+  const { JSDOM } = require('jsdom');
+  const read = (f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
+  const dom = new JSDOM(read('buddy-window/sidebar.html').replace(/<script[^>]*><\/script>/g, '').replace(/<link[^>]*>/g, ''), { runScripts: 'outside-only', url: 'file:///synthetic/sidebar.html' });
+  let onState;
+  dom.window.buddy = { onState: (cb) => { onState = cb; }, pages: async () => ({ pages: PAGES, groups: [], sections: SECTIONS, footer: FOOTER, brand: { name: 'Plexiform', hubText: {} } }), select() {}, optimiserSection() {}, workspace() {}, signOut() {}, retry() {} };
+  dom.window.eval(read('buddy-window/sidebar.js'));
+  await new Promise((r) => setTimeout(r, 30));
+  onState({ selected: 'waiting' });
+  const d = dom.window.document;
+  const home = d.querySelector('[data-section="home"]');
+  assert.equal(home.hasAttribute('data-active'), true);
+  assert.deepEqual([...home.parentElement.querySelectorAll('.nav-sub button')].map((b) => b.textContent.trim()), ['Home', 'Overview']);
+  assert.equal(d.querySelector('[aria-current="page"]'), null);
+  dom.window.close();
 });
 
 test('local pages name an app file and its preload, and both exist', () => {
@@ -109,6 +166,17 @@ test('connect guard: only the signed-in hub’s own Integrations page, right aft
   assert.equal(connectUrlOk('https://slack.com/oauth/v2/authorize'), true);
   // localhost. resolves to loopback; a trailing dot, an IP literal or a private-use suffix names nothing a provider uses.
   for (const url of ['https://localhost./', 'https://foo.localhost./x', 'https://github.com./login', 'https://8.8.8.8/', 'https://0x7f000001/', 'https://printer.local/', 'https://metadata.google.internal/', 'https://router.home.arpa/', 'https://user:pw@github.com/', 'data:text/html,x', 'file:///etc/passwd', 'javascript:alert(1)']) assert.equal(connectUrlOk(url), false, url);
+});
+
+test('GitHub App install (step 4): the install page opens in the connect window, its sign-in hop stays there, and the callback ends it', () => {
+  const hub = 'https://app.plexiform.dev';
+  const page = `${hub}/?org=t1&view=integrations`;
+  const install = 'https://github.com/apps/plexiform/installations/new?state=eyJtIjoiYSJ9.c2ln';
+  assert.deepEqual(connectDecision({ url: install, frameName: 'plexiform-connect|github|bnd1', referrer: page, pageUrl: page, hubOrigin: hub, signedIn: true, gestureAt: 1000, now: 2000 }), { ok: true, provider: 'github', bind: 'bnd1' });
+  assert.equal(openDecision({ url: install, frameName: 'plexiform-connect|github|bnd1' }, { hubOrigin: hub }), 'connect');
+  for (const u of [install, 'https://github.com/login/oauth/authorize?client_id=Iv1.x&state=s', `${hub}/integrations/github/callback?code=c&installation_id=55000111&setup_action=install&state=s`]) assert.equal(connectNavOk(u, hub), true, u);
+  assert.equal(isConnectCallback(`${hub}/integrations/github/callback?code=c&installation_id=55000111&setup_action=install&state=s`, hub), true);
+  assert.equal(isConnectCallback(`${hub}/api/integrations/github/webhook`, hub), false, 'the app webhook is never a page');
 });
 
 test('connect window navigation: public https provider pages and the hub callback only; popups are refused', () => {
@@ -558,7 +626,7 @@ function fakeTimers() {
 function harness(overrides = {}) {
   const children = [];
   const statuses = [];
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-hub-'));
+  const dataDir = testTempDir('buddy-hub-');
   let t = 0;
   const timers = fakeTimers();
   const sup = createHubSupervisor({
@@ -864,7 +932,7 @@ test('workspace list from /api/account: this Mac, then each signed-in hub’s te
 });
 
 test('workspace store: hubs, teams from the account, active team, persisted without secrets, 0600', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-ws-'));
+  const dir = testTempDir('buddy-ws-');
   const file = path.join(dir, 'ws.json');
   const s1 = createWorkspaceStore(file);
   assert.equal(s1.active().id, 'local');
@@ -894,7 +962,7 @@ test('workspace store: hubs, teams from the account, active team, persisted with
 });
 
 test('workspace store: v1 files migrate: every entry the old probe accepted stays an Access workspace', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-ws-'));
+  const dir = testTempDir('buddy-ws-');
   const file = path.join(dir, 'ws.json');
   fs.writeFileSync(file, JSON.stringify({ active: 'team:signedin.example.com', teams: [
     { name: 'Old', url: 'https://old.example.com', accessTeam: 'restless-hall' },
@@ -915,7 +983,7 @@ test('workspace store: v1 files migrate: every entry the old probe accepted stay
 });
 
 test('workspace store: a tampered file cannot smuggle in a non-https hub, a loopback hub or a bad Access team', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-ws-'));
+  const dir = testTempDir('buddy-ws-');
   const file = path.join(dir, 'ws.json');
   fs.writeFileSync(file, JSON.stringify({ version: 2, active: 'team:evil', hubs: ['http://evil.example.com', 'http://127.0.0.1:5000', 'https://ok.example.com', 'https://ok.example.com/path'],
     teams: { 'https://ok.example.com': [{ id: '../x', name: 'bad' }, { id: 'good', name: 'Good' }] },
@@ -941,7 +1009,7 @@ const brtOf = (c) => ['brt', c.repeat(43)].join('_');
 const CONFIG_KEYS = ['data_dir', 'hub_url', 'runner_token', 'team_id', 'type'];
 
 function deviceHarness(over = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-dev-'));
+  const dir = testTempDir('buddy-dev-');
   const calls = [];
   const children = [];
   const statuses = [];
@@ -1296,12 +1364,12 @@ test('runner.stopped: parked_pending is read and shown as runs being handed over
   c.emit('message', { type: 'runner.stopped', parked: 0, parked_pending: -2 });
   assert.equal(d.status().parkedPending, 0);
   const page = fs.readFileSync(path.join(__dirname, '..', 'buddy-window', 'account.js'), 'utf8');
-  assert.match(page, /being handed over/);
+  assert.match(page, /being moved to another AI/);
 });
 
 test('runner.config: data_dir is made 0700, ours and not a symlink, else the runner does not start', async () => {
   const { ensurePrivateDir, hubUrlOk } = require('../buddy-window/device');
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-priv-'));
+  const dir = testTempDir('buddy-priv-');
   const fresh = path.join(dir, 'a', 'b');
   assert.equal(ensurePrivateDir(fresh), null);
   assert.equal(fs.statSync(fresh).mode & 0o777, 0o700);
@@ -1387,7 +1455,7 @@ async function signIn(hub, origin, email, extra = {}) {
 
 test('ROUTES: every endpoint is one [method, path] row', () => {
   for (const [name, [method, p]] of Object.entries(ROUTES)) {
-    assert.ok(['GET', 'POST', 'PATCH', 'DELETE'].includes(method), name);
+    assert.ok(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(method), name);
     assert.match(p, /^\/api\//, name);
   }
 });
@@ -1541,7 +1609,7 @@ test('two teams → two runner processes, each with its own token, team and data
   const { c } = await signIn(hub, origin, 'two@example.com');
   const a = (await c.createTeam('Alpha')).team;
   const b = (await c.createTeam('Beta')).team;
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-dev-'));
+  const dir = testTempDir('buddy-dev-');
   const kids = [];
   const make = (teamId) => createDeviceController({
     account: c, teamId, credsFile: path.join(dir, `${teamId}.bin`), seal: (s) => Buffer.from(`SEALED:${Buffer.from(s).toString('base64')}`), unseal: (x) => Buffer.from(String(x).slice(7), 'base64').toString(),
@@ -1996,4 +2064,32 @@ test('runner events: the window object exposes onRunnerEvent(cb) → unsubscribe
   assert.match(idx, /const runnerListeners = new Set\(\);/);
   assert.match(idx, /onEvent: emitRunnerEvent,/);
   assert.match(idx, /onRunnerEvent\(cb\) \{ if \(typeof cb !== 'function'\) return \(\) => \{\}; runnerListeners\.add\(cb\); return \(\) => runnerListeners\.delete\(cb\); \},/);
+});
+
+test('Setups is listed under Settings now that personal export/import, Apply and Undo exist (free entitlement)', () => {
+  const { SECTIONS, pageById, sectionOf } = require('../buddy-window/pages');
+  assert.ok(SECTIONS.find(s => s.id === 'settings').pages.includes('setups'));
+  assert.equal(sectionOf('setups'), 'settings');
+  assert.equal(pageById('setups').file, 'setups.html');
+});
+
+test('Calendar and Timeline are listed under Board by default; PLEXIFORM_SHOW_PLANNER=0 takes them off the sub-nav', () => {
+  const board = SECTIONS.find((s) => s.id === 'board');
+  assert.deepEqual(board.pages, ['board', 'board:table', 'board:history', 'board:calendar', 'board:timeline', 'board:dashboard']);
+  assert.equal(pageById('board:calendar').view, 'calendar');
+  assert.equal(pageById('board:timeline').view, 'timeline');
+  const out = require('node:child_process').execFileSync(process.execPath, ['-e', "console.log(JSON.stringify(require('./buddy-window/pages').SECTIONS.find((s) => s.id === 'board').pages))"], { cwd: path.join(__dirname, '..'), env: { ...process.env, PLEXIFORM_SHOW_PLANNER: '0' } });
+  assert.deepEqual(JSON.parse(out), ['board', 'board:table', 'board:history', 'board:dashboard']);
+});
+
+test('consumer pages use plain language: no "Runner", "observed" or "hub" in visible text', () => {
+  const root = path.join(__dirname, '..');
+  const files = ['memory.html', 'phone-pairing.html', 'settings.html', 'buddy-window/account.html'];
+  const jargon = /\b(runners?|observed|hubs?)\b/i;
+  for (const f of files) {
+    const visible = fs.readFileSync(path.join(root, f), 'utf8').replace(/<(script|style)[\s\S]*?<\/\1>|<!--[\s\S]*?-->|<[^>]+>/g, ' ');
+    assert.doesNotMatch(visible, jargon, `${f} has jargon`);
+  }
+  const strings = fs.readFileSync(path.join(root, 'buddy-window/account.js'), 'utf8').match(/'[^'\n]*'|`[^`\n]*`/g).filter((s) => /\s/.test(s) && !/^'(?:acct-|btn)/.test(s));
+  assert.deepEqual(strings.filter((s) => jargon.test(s)), [], 'account.js strings');
 });

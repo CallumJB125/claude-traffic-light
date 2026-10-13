@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const V = require('../src/updater/verify.js');
+const { testTempDir } = require('./helpers/tmp');
 
 const pair = () => crypto.generateKeyPairSync('ed25519');
 const pem = (k) => k.export({ type: 'spki', format: 'pem' });
@@ -49,7 +50,7 @@ test('the shipped keys: one Ed25519 key per channel, stable and beta different, 
 
 test('loadShippedKeys trusts only the two exact file names, and a missing one fails closed', () => {
   const Updater = require('../src/updater/index.js');
-  const dir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'keys-'));
+  const dir = testTempDir('keys-');
   fs.writeFileSync(path.join(dir, 'update-key.pub.pem'), pem(publicKey));
   fs.writeFileSync(path.join(dir, 'update-key-OLD-retired.pub.pem'), pem(beta.publicKey));
   const ring = Updater.loadShippedKeys(dir);

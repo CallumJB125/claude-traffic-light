@@ -90,6 +90,18 @@ export function textSimilarity(a, b) {
   return d ? dot / d : 0;
 }
 
+// Repo-relative file paths a card names in its text ("src/api/submit.ts"):
+// the only pre-run hint of what an un-started card will touch.
+export function hintPaths(text, max = 20) {
+  const out = new Set();
+  for (const m of String(text ?? '').matchAll(/(?:^|[\s`'"(\[])((?:[\w@.-]+\/)+[\w.-]+\.\w{1,8})(?=$|[\s`'")\],.:;])/g)) {
+    if (m[1].split('/').some((seg) => seg === '..' || seg === '.')) continue;
+    out.add(m[1]);
+    if (out.size >= max) break;
+  }
+  return [...out];
+}
+
 /**
  * run: {run_id, card_key, owner_label ("James's Claude"), repo_id, branch,
  *       touched_paths: string[], planned_paths: string[] (globs ok),

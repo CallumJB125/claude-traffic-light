@@ -6,8 +6,9 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { createSecretStore } = require('../src/nudge-secret.js');
+const { testTempDir } = require('./helpers/tmp');
 
-const tmpFile = () => path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-secret-')), 'approval-secret.json');
+const tmpFile = () => path.join(testTempDir('ctl-secret-'), 'approval-secret.json');
 // A stand-in keychain: reversible, and able to fail.
 const fakeSafe = ({ available = true, broken = false } = {}) => ({
   isEncryptionAvailable: () => available,

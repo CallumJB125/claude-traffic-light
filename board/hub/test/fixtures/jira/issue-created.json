@@ -1,0 +1,20 @@
+{
+  "timestamp": 1759309200000,
+  "webhookEvent": "jira:issue_created",
+  "issue_event_type_name": "issue_created",
+  "user": { "accountId": "5b10ac8d82e05b22cc7d4ef5", "displayName": "Jane Doe" },
+  "issue": {
+    "id": "10001",
+    "self": "https://acme.atlassian.net/rest/api/2/issue/10001",
+    "key": "PROJ-42",
+    "fields": {
+      "summary": "Invoice PDF shows the wrong currency",
+      "description": "Seen by customer jane@example.com on https://acme.example/invoices/7",
+      "issuetype": { "id": "10004", "name": "Bug" },
+      "priority": { "id": "2", "name": "High" },
+      "project": { "id": "10000", "key": "PROJ", "name": "Project" },
+      "status": { "id": "10000", "name": "To Do", "statusCategory": { "id": 2, "key": "new", "name": "To Do" } },
+      "created": "2026-10-01T09:00:00.000+0000"
+    }
+  }
+}

@@ -5,8 +5,9 @@ const os = require('os');
 const path = require('path');
 const Store = require('../src/character-store.js');
 const Hatch = require('../characters/hatch.js');
+const { testTempDir } = require('./helpers/tmp');
 
-const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'chars-'));
+const tmp = () => testTempDir('chars-');
 const make = (over = {}) => { const dir = tmp(); const logs = []; return { dir, logs, store: Store.create({ dir: path.join(dir, 'characters'), log: (m) => logs.push(m), ...over }) }; };
 const otter = () => Hatch.templateCharacter({ name: 'Otter', shape: 'animal', color: '#4f9be0' });
 

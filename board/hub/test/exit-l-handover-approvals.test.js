@@ -20,7 +20,7 @@ test('exit (l): hand over to the queue → handover_begin → handover.complete 
     const res = await h.action(alice, run.card_id, 'hand_over', { target: { kind: 'queue' } });
     assert.equal(res.status, 200);
     assert.equal(res.body.card.run_state, 'handing_over');
-    assert.match(cardFace(res.body.card).text, /Handing over · waiting for checkpoint/);
+    assert.match(cardFace(res.body.card).text, /Moving to another AI · waiting for checkpoint/);
     const cmd = await r.next('cmd', (m) => m.cmd === 'handover_begin');
     assert.deepEqual([cmd.fence, cmd.wait_ms], [run.fence, HANDOVER_WAIT_MS]);
 

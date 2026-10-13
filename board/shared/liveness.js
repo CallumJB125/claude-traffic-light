@@ -55,6 +55,7 @@ export const DEGRADED_NO_SESSIONSTART_MS = 30 * S;
 export const PRESENCE_MIN_MS = 5 * S;        // D37b: runner sends a changed presence at most this often
 export const PRESENCE_KEEPALIVE_MS = 60 * S; // D37b: runner re-sends an unchanged presence
 export const PRESENCE_TTL_MS = 90 * S;       // D37b: hub forgets a device's presence this long after its last frame
+export const T_STOP_CONFIRM_MS = 30 * S;     // a stopped run whose CLI is still reported alive this long: stop unconfirmed
 export const PRESENCE_PUSH_MS = 1 * S;       // D37b: team.presence to a board's browsers at most this often (trailing edge)
 
 // bound(Bash) = its timeout (default 2 min, max 10 min) + 30 s; bound(other) = 10 min.
@@ -154,6 +155,48 @@ export function timerEvent(s) {
       return null;
     case 'reconnecting':
       if (s.hub_uptime_ms >= TTL_MS && s.hb_age_ms == null) return { type: 'reconnect_timeout' };
+      return null;
+    default:
+      return null;
+  }
+}
+
+// ── Stalled (derived, never stored) ────────────────────────────────────────
+
+export const STALL_REASONS = Object.freeze(['runner_offline', 'process_gone', 'claim_not_started', 'no_activity', 'stop_unconfirmed']);
+
+/**
+ * A run the card still shows as in progress while nothing is working on it.
+ * `v` is the CardView fields the hub and the web both hold: { run_state,
+ * state_age_ms, fail_kind, live: LeaseView|null, run: {child_alive}|null }.
+ * Pure over ages, so the web re-evaluates it on advanced ages every second.
+ * Returns { reason, since_ms } or null. blocked (waiting for a person) and
+ * handing_over (its own 3-minute timer) are never stalled by silence alone.
+ */
+export function deriveStalled(v) {
+  const state = v.run_state;
+  const live = v.live;
+  const age = v.state_age_ms ?? 0;
+  if (state === 'failed') {
+    return v.fail_kind === 'stopped' && v.run?.child_alive === true && age >= T_STOP_CONFIRM_MS
+      ? { reason: 'stop_unconfirmed', since_ms: age } : null;
+  }
+  if (!live) return null;
+  const hb = live.hb_age_ms;
+  switch (state) {
+    case 'unresponsive':
+    case 'orphaned':
+      return { reason: 'runner_offline', since_ms: hb ?? age };
+    case 'suspended':
+    case 'reconnecting':
+      return age >= TTL_MS ? { reason: 'runner_offline', since_ms: hb ?? age } : null;
+    case 'claimed':
+    case 'running':
+    case 'quiet':
+      if (hb == null || hb > TTL_MS) return { reason: 'runner_offline', since_ms: hb ?? age };
+      if (state === 'claimed') return age >= T_CLAIM_MS ? { reason: 'claim_not_started', since_ms: age } : null;
+      if (live.child_alive === false && (live.activity_age_ms == null || live.activity_age_ms > TTL_MS)) return { reason: 'process_gone', since_ms: live.activity_age_ms ?? age };
+      if (!hasProgress(live)) return { reason: 'no_activity', since_ms: live.activity_age_ms ?? age };
       return null;
     default:
       return null;

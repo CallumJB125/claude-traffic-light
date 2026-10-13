@@ -35,7 +35,7 @@ import { buildJournal, historyCards } from './journal.js';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const WEB = path.resolve(HERE, '..');
 const SHARED = path.resolve(HERE, '../../shared');
-const SHARED_OK = new Set(['states', 'liveness', 'fence', 'scope', 'overlap', 'cardface', 'handover', 'protocol', 'brand']);
+const SHARED_OK = new Set(['states', 'liveness', 'fence', 'scope', 'overlap', 'cardface', 'handover', 'protocol', 'brand', 'ai', 'planning', 'workflow-execution', 'workflow-execution-controls', 'packet-text', 'capture-lane', 'review']);
 const CSP = "default-src 'self'; connect-src 'self'; img-src 'self' https://avatars.githubusercontent.com; style-src 'self'; script-src 'self'";
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.json': 'application/json' };
 const PLAN_LABEL = PLAN_APPROVAL_LABEL;
@@ -140,6 +140,7 @@ export function createMockHub({ login = null, clock = () => Date.now(), history 
       budget: c.budget ?? null,
       pr: c.pr ? { number: c.pr.number, url: c.pr.url, state: c.pr.state, ...(c.pr.merged_by ? { merged_by: c.pr.merged_by } : {}), ...(c.pr.merged_at ? { merged_age_ms: now - c.pr.merged_at } : {}) } : null,
       evidence: c.evidence ?? null,
+      review: c.review ?? null,
     };
   }
 
@@ -162,6 +163,7 @@ export function createMockHub({ login = null, clock = () => Date.now(), history 
       evidence: d.evidence ?? [],
       overlaps: toView(c, viewerId, now).overlaps,
       memories: d.memories ?? [],
+      reviews: d.reviews ?? [],
     };
   }
 
@@ -439,7 +441,7 @@ export function createMockHub({ login = null, clock = () => Date.now(), history 
       return serveFile(req, res, f);
     }
     if (method === 'GET' && p.startsWith('/shared/')) {
-      const m = /^\/shared\/([a-z]+)\.js$/.exec(p);
+      const m = /^\/shared\/([a-z-]+)\.js$/.exec(p);
       if (!m || !SHARED_OK.has(m[1])) return json(res, 404, { error: { code: 'NOT_FOUND', message: 'not found' } });
       return serveFile(req, res, path.join(SHARED, `${m[1]}.js`));
     }
@@ -502,6 +504,15 @@ export function createMockHub({ login = null, clock = () => Date.now(), history 
       if (m[1] !== BOARD.id) throw new HttpError('NOT_FOUND', 'no such board');
       return json(res, 200, journal.page(url.searchParams.get('after_seq'), url.searchParams.get('limit')));
     }
+    if ((m = /^\/api\/boards\/([^/]+)\/runs$/.exec(p)) && method === 'GET') {
+      if (m[1] !== BOARD.id) throw new HttpError('NOT_FOUND', 'no such board');
+      const now = clock(), ended = { done: 'finished', in_review: 'finished', failed: 'failed', parked: 'stopped' };
+      const runs = [...cards.values()].filter((c) => c.run).map((c, i) => ({
+        id: c.run.id ?? `run-${c.id}`, card_id: c.id, key: c.key, title: c.title, ai: i % 3 === 2 ? 'codex' : 'claude', ai_label: i % 3 === 2 ? 'Codex' : 'Claude Code',
+        started_at: new Date(c.state_since ?? now - 20 * 60_000).toISOString(), ended_at: ended[c.run_state] ? new Date((c.state_since ?? now) + 25 * 60_000).toISOString() : null,
+        outcome: ended[c.run_state] ?? 'running', end_reason: null, cost_usd: i % 3 === 2 ? null : 0.5 + i / 10, has_handover: i % 2 === 0 }));
+      return json(res, 200, { from: url.searchParams.get('from'), to: url.searchParams.get('to'), now: new Date(now).toISOString(), truncated: false, runs, observed: [] });
+    }
     if ((m = /^\/api\/cards\/([^/]+)$/.exec(p)) && method === 'GET') return json(res, 200, toDetail(card(decodeURIComponent(m[1])), me.member_id));
     if ((m = /^\/api\/cards\/([^/]+)\/handover$/.exec(p)) && method === 'GET') {
       const ho = handoverOf(card(decodeURIComponent(m[1])), clock());
@@ -523,7 +534,7 @@ export function createMockHub({ login = null, clock = () => Date.now(), history 
       const sponsor = targetId === me.member_id
         ? `Runs on your ${t.device} · your claude account`
         : `Runs on ${t.name}'s ${t.device} · ${t.name}'s claude account · ${t.name} must confirm`;
-      return json(res, 200, { overlaps, sponsor });
+      return json(res, 200, { overlaps, check: { status: overlaps.length ? 'overlap' : 'clear', self_known: true, unknown_runs: [] }, sponsor });
     }
 
     if (!mutating) throw new HttpError('NOT_FOUND', 'not found');

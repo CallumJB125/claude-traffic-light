@@ -1,2 +1,4 @@
 /* Screenshots after a click: the widget's hover-only buttons stay hidden. */
 #gear, #help { opacity: 0 !important; }
+/* A native checkbox is tinted only while its window is the key window; a fixed accent draws it the same either way. */
+input[type="checkbox"] { accent-color: #0a84ff; }

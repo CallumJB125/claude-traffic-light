@@ -6,10 +6,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { startHub, fakeGitHub, runMsg, runHb } from './helpers.js';
 import { createGitHub } from '../github.js';
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { testTempDir } from '../../shared/test-support/tmp.js';
 
 function hangingGitHub() {
   const gh = fakeGitHub();
@@ -17,6 +17,22 @@ function hangingGitHub() {
   gh.getPull = () => { gh.calls++; return new Promise(() => {}); };
   return gh;
 }
+
+test('accepted heartbeat records only the server-issued current connection generation; replacement cannot inherit it', async () => {
+  const h = await startHub();
+  try {
+    const cookie = await h.login('alice'), dev = await h.enroll(cookie), runner = await h.runner(dev), run = await h.startRun(cookie, runner);
+    const old = h.hub.runners.get(dev.device_id), live = h.hub.lease(run.run_id);
+    assert.equal(live.hb_connection_generation, old.generation);
+    const replacement = await h.runner(dev, { runs: [{ ...runMsg(run), state: 'running' }] });
+    const current = h.hub.runners.get(dev.device_id); assert.notEqual(current.generation, old.generation);
+    assert.equal(live.hb_connection_generation, old.generation, 'old task state remains historical until this connection sends a heartbeat');
+    assert.notEqual(live.hb_connection_generation, current.generation);
+    const ack = await replacement.hb([runHb(run, { generation: old.generation, hb_connection_generation: old.generation })]);
+    assert.equal(ack.runs[0].current, true); assert.equal(live.hb_connection_generation, current.generation);
+    assert.match(current.generation, /^[0-9a-f-]{36}$/);
+  } finally { await h.destroy(); }
+});
 
 test('a hung GitHub evidence check does not hold up the heartbeats and outbox frames behind it', async () => {
   const h = await startHub({ github: hangingGitHub() });
@@ -34,11 +50,13 @@ test('a hung GitHub evidence check does not hold up the heartbeats and outbox fr
   } finally { await h.destroy(); }
 });
 
-test('GitHub fetches abort after the timeout instead of hanging', async (t) => {
-  // AbortSignal.timeout is unref'd; keep this real deadline probe alive.
-  const keepAlive = setInterval(() => {}, 1000);
-  t.after(() => clearInterval(keepAlive));
-  const fetchImpl = (url, { signal }) => new Promise((resolve, reject) => { signal.addEventListener('abort', () => reject(signal.reason)); });
+test('GitHub fetches abort after the timeout instead of hanging', async () => {
+  const fetchImpl = (url, { signal }) => new Promise((resolve, reject) => {
+    // A real pending network request keeps Node alive. Mirror that handle,
+    // since AbortSignal.timeout deliberately uses an unreferenced timer.
+    const handle = setInterval(() => {}, 1000);
+    signal.addEventListener('abort', () => { clearInterval(handle); reject(signal.reason); }, { once: true });
+  });
   const gh = createGitHub({ fetchImpl, timeoutMs: 50 });
   const t0 = Date.now();
   await assert.rejects(gh.getPull('github.com/acme/app', 1), /TimeoutError|aborted|timeout/i);
@@ -61,7 +79,7 @@ test('merge polls never overlap', async () => {
 });
 
 test('restore from backup: the runner\'s acked seq wins over the older DB, so the outbox never jams', async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'board-restore-'));
+  const dataDir = testTempDir('board-restore-');
   const h1 = await startHub({ dataDir });
   let dev;
   let seq;

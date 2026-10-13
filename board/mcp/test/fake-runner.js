@@ -4,8 +4,9 @@
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { rmSync } from 'node:fs';
 import { validate, MCP_TOOLS } from '../../shared/protocol.js';
+import { testTempDir } from '../../shared/test-support/tmp.js';
 
 export const TOKEN = 'brt1.test-payload.test-sig';
 
@@ -14,7 +15,7 @@ export const TOKEN = 'brt1.test-payload.test-sig';
  *   Default: echo {tool: name, args}.
  */
 export async function startFakeRunner({ onTool, token = TOKEN } = {}) {
-  const dir = mkdtempSync(path.join(os.tmpdir(), 'bmcp-'));
+  const dir = testTempDir('bmcp-');
   const socketPath = path.join(dir, 'ipc.sock');
   const received = [];
   const invalid = [];

@@ -291,7 +291,7 @@ Roles: `owner`, `admin`, `member`, `guest` (existing `viewer` rows migrate to `g
 | See member emails | ✓ | ✓ | ✗ (names + avatars) | ✗ |
 | Create / edit / move cards, labels, assignees | ✓ | ✓ | ✓ | ✗ |
 | Comment | ✓ trusted | ✓ trusted | ✓ trusted | ✓ **untrusted** (`trusted=0`: never delivered to an agent, shown with a "guest" badge) |
-| Dispatch (Give to Claude) to **own** runner | ✓ | ✓ | ✓ | ✗ |
+| Dispatch (Tackle with AI) to **own** runner | ✓ | ✓ | ✓ | ✗ |
 | Dispatch to **another member's** runner | ✓ | ✓ | ✓ | ✗ |
 | … conditions | target is owner/admin/member of the same team (not removed, not guest), has an un-revoked enrolment in this team, and team `settings.cross_dispatch != 'off'`. The runner's local policy still decides (`auto_accept_from`, else confirm, CONTRACT §5.2 `needs_confirm`). The hub can only **restrict**, never force acceptance | | | |
 | Be a dispatch target / enrol a runner in the team | ✓ | ✓ | ✓ | ✗ |
@@ -945,7 +945,7 @@ Vanilla modules in `web/js/` (no framework), path routing with the index.html fa
 - **Team settings**: general (name, slug), cross-dispatch toggle, member guest invites toggle, GitHub connection + repo list with verification chips, danger zone (transfer, delete, restore countdown).
 - **Devices** (account and team views): device, client, platform, last seen, enrolments, revoke; "Add to team".
 - **Device approval page** `/device`: big code to compare, device facts, country mismatch warning, team checkboxes, Approve / Deny; typed-mode warning.
-- **Guest affordances**: no Give to Claude or edit controls; comments labelled "guest · not sent to Claude".
+- **Guest affordances**: no Tackle with AI or edit controls; comments labelled "guest · not sent to Claude".
 - Dispatch dialog: target picker lists only members with a live enrolment in this team.
 
 ---

@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "author": {
+    "name": "Plexiform",
+    "github": "CallumJB125"
+  },
+  "license": "CC0-1.0",
+  "added": "2026-10-10",
+  "updated": "2026-10-10",
+  "kind": "recipe",
+  "id": "todo-roundup",
+  "title": "Turn TODO comments into a task list",
+  "summary": "Finds every TODO, FIXME and HACK comment in the code and turns them into a prioritised list you can paste into your tracker.",
+  "tags": [
+    "todo",
+    "planning"
+  ],
+  "stacks": [
+    "any"
+  ],
+  "tools": [
+    "gemini"
+  ],
+  "payload": {
+    "id": "todo-roundup",
+    "title": "Turn TODO comments into a task list",
+    "what": "Finds every TODO, FIXME and HACK comment in the code and turns them into a prioritised list you can paste into your tracker.",
+    "prompt": "Make a task list from the TODO, FIXME, HACK and XXX comments in this repository.\n\n1. Search tracked files only (`git grep -n -E 'TODO|FIXME|HACK|XXX'`).\n2. For each one, read the code around it and write a one-line task in plain language, with the file and line.\n3. Use `git blame` to add how old each comment is.\n4. Group them into Fix soon (bugs, security, data loss), Should do, and Nice to have, and drop duplicates.\n\nOutput a Markdown checklist. Do not change any files.",
+    "tool": "gemini",
+    "edits": false,
+    "cost": "Low: a text search and a little reading."
+  }
+}

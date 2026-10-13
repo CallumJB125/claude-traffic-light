@@ -203,11 +203,12 @@ const PRESENT_CASES = [
   ['shown', { signal: 'limit-hit', updatedAt: iso(-100), agents: working(-100) }, {}, 'limit-hit', 'hook signal'],
   ['held', { state: 'amber', updatedAt: iso(-100) }, {}, 'tool-use', 'hysteresis-held'],
   ['shown', { state: 'amber', updatedAt: iso(-5000) }, {}, 'permission-ask', 'hook signal'],
-  ['shown', { signal: 'tool-use' }, {}, 'tool-use', 'hook signal'],
+  ['stale', { signal: 'tool-use' }, {}, 'tool-use', 'hook signal'],
+  ['stuck', { signal: 'tool-use', tool: 'Bash', updatedAt: iso(-7 * 60000) }, { stuckMs: 5 * 60000 }, 'tool-use', 'hook signal'],
 ];
 
 test('reader: the presentation rules are the ones the doc lists, in order', () => {
-  assert.deepEqual(M.PRESENTATION.map((p) => p.id), ['no-signal', 'gone', 'held', 'promoted', 'stale-agents', 'stale', 'shown']);
+  assert.deepEqual(M.PRESENTATION.map((p) => p.id), ['no-signal', 'gone', 'held', 'promoted', 'stale-agents', 'stuck', 'stale', 'shown']);
   const covered = new Set(PRESENT_CASES.map((c) => c[0]));
   for (const p of M.PRESENTATION) assert.ok(covered.has(p.id), `no case for ${p.id}`);
 });
@@ -215,7 +216,7 @@ test('reader: the presentation rules are the ones the doc lists, in order', () =
 for (const [outcome, session, over, presented, source] of PRESENT_CASES) {
   test(`reader: ${outcome} — ${JSON.stringify(session).slice(0, 90)}`, () => {
     const c = M.classify(session, { ...CTX, ...over });
-    const live = ['held', 'promoted', 'shown'].includes(outcome);
+    const live = ['held', 'promoted', 'shown', 'stuck'].includes(outcome);
     assert.equal(c.live, live);
     if (['no-signal', 'gone', 'stale-agents', 'stale'].includes(outcome)) assert.equal(c.dropped, outcome);
     else assert.equal(c.rule, outcome);
@@ -238,8 +239,60 @@ test('reader: a promoted session carries the turn it hides', () => {
   assert.deepEqual([c.session.signal, c.session.tool, c.session.turnSignal], ['tool-use', 'Agent', 'stop']);
 });
 
+test('reader: a hook subagent quiet past AGENT_QUIET_MS reads stale, not working, and stops promoting the session', () => {
+  const quiet = M.AGENT_QUIET_MS;
+  const agent = (over) => ({ id: 'a', kind: 'subagent', source: 'hook', status: 'working', since: iso(-quiet - 60000), ...over });
+  const stale = M.classify({ signal: 'stop', updatedAt: iso(0), agents: [agent({})] }, CTX);
+  assert.equal(stale.presented, 'stop', 'no longer promoted to working');
+  assert.equal(stale.session.agents[0].status, 'stale');
+  const busy = M.classify({ signal: 'stop', updatedAt: iso(0), agents: [agent({ lastAt: iso(-60000) })] }, CTX);
+  assert.deepEqual([busy.presented, busy.session.agents[0].status], ['tool-use', 'working'], 'its own tool use keeps it fresh');
+  const young = M.classify({ signal: 'stop', updatedAt: iso(0), agents: [agent({ since: iso(-60000) })] }, CTX);
+  assert.equal(young.session.agents[0].status, 'working');
+  const scanned = M.classify({ signal: 'stop', updatedAt: iso(0), agents: [agent({ source: 'scan' })] }, CTX);
+  assert.equal(scanned.session.agents[0].status, 'working', 'the scan owns its own entries');
+  const stopped = M.classify({ signal: 'stop', updatedAt: iso(0), agents: [agent({ status: 'stopped', since: iso(0) })] }, CTX);
+  assert.equal(stopped.presented, 'stop', 'a stopped agent is not working');
+  assert.ok(M.AGENT_STATUSES.includes('stale') && M.AGENT_STATUSES.includes('stopped'));
+});
+
 // ── Doc ───────────────────────────────────────────────────────────────────
 test('docs/state-machine.md is generated from the table (run node scripts/state-machine-doc.js)', () => {
   assert.equal(fs.readFileSync(Doc.OUT, 'utf8'), Doc.render());
   assert.ok(Doc.render().includes(M.mermaid()));
+});
+
+// Regression: invalid clocks and unknown agent states cannot fabricate activity.
+test('reader: unknown or future clocks stay offline until a real fresh event', () => {
+  for (const updatedAt of [undefined, null, 'bad', iso(1), 123]) {
+    const result = M.classify({ signal: 'tool-use', updatedAt, agents: working(0) }, CTX);
+    assert.equal(result.live, false);
+    assert.equal(result.confidence, 'unknown');
+  }
+  assert.equal(M.classify({ signal: 'tool-use', updatedAt: iso(0) }, CTX).live, true);
+});
+test('reader: unknown child states and malformed child heartbeats never promote a stopped turn', () => {
+  for (const status of [undefined, 'unexpected', {}, null]) {
+    assert.equal(M.classify({ signal: 'stop', updatedAt: iso(0), agents: [{ status, since: iso(0) }] }, CTX).presented, 'stop');
+  }
+  for (const since of [undefined, 'bad', iso(1)]) {
+    const result = M.classify({ signal: 'stop', updatedAt: iso(0), agents: [{ source: 'hook', status: 'working', since }] }, CTX);
+    assert.equal(result.presented, 'stop');
+    assert.equal(result.session.agents[0].status, 'stale');
+  }
+});
+test('Claude correlation overflow remains input-needed until an explicit turn boundary', () => {
+  let prev = {};
+  for (let i = 0; i < 17; i++) {
+    const r = M.reduceClaudeInputs(prev, { signal: 'permission-ask', askKind: 'question', toolUseId: `q-${i}`, tool: 'AskUserQuestion' }, iso(0));
+    prev = { claudeInputRequests: r.requests, claudeInputOverflow: r.overflow };
+  }
+  assert.equal(prev.claudeInputRequests.length, 16); assert.equal(M.claudeInputPending(prev), true);
+  for (let i = 0; i < 17; i++) {
+    const r = M.reduceClaudeInputs(prev, { signal: 'tool-done', toolUseId: `q-${i}` }, iso(0));
+    prev = { claudeInputRequests: r.requests, claudeInputOverflow: r.overflow };
+  }
+  assert.equal(M.claudeInputPending(prev), true, 'overflow cannot establish that every ask ended');
+  const ended = M.reduceClaudeInputs(prev, { signal: 'session-end' }, iso(0));
+  assert.deepEqual(ended, { requests: [], overflow: false, answered: false });
 });

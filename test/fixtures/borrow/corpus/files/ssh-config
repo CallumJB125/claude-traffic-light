@@ -1,0 +1,35 @@
+Include ~/.orbstack/ssh/config
+
+Host *
+    AddKeysToAgent yes
+    UseKeychain yes
+    IdentityFile ~/.ssh/id_ed25519
+    ServerAliveInterval 60
+
+Host github.com
+    HostName github.com
+    User git
+    IdentitiesOnly yes
+
+Host prod
+    HostName @@IP@@
+    User @@USER@@
+    Port 2222
+    ForwardAgent no
+
+Host nas
+    HostName @@IP2@@
+    User admin
+
+Host mini
+    HostName @@TSHOST2@@
+    User @@USER@@
+    SetEnv AUTH_TOKEN=@@SEED:env_secret@@
+
+Host build
+    HostName @@INTHOST@@
+    ProxyJump prod
+
+Host laptop
+    HostName @@HOSTLOCAL@@
+    User @@USER@@

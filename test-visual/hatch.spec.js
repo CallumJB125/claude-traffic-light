@@ -6,6 +6,9 @@ const fs = require('fs');
 const path = require('path');
 const { test, expect } = require('@playwright/test');
 const { launchApp, windowByFile } = require('./app');
+const CharacterStore = require('../src/character-store.js');
+const Hatch = require('../characters/hatch.js');
+const { findClaudeBin } = require('../src/claude-code-session.js');
 
 let h;
 let lights;
@@ -21,14 +24,19 @@ test.afterAll(async () => { await h?.cleanup(); });
 const charDir = (id) => path.join(h.home, 'characters', id);
 
 test('Hatch: choices in, a saved character out, picked in Lights, deleted again', async () => {
+  // The body picker sits in the collapsed Character section.
+  await lights.locator('#character > summary').click();
   await expect(lights.locator('#bodies .posebtn').first()).toBeVisible({ timeout: 15000 });
   await lights.locator('#bodies .addhatch').click();
   const hatch = await windowByFile(h.app, 'hatch.html');
   await hatch.waitForLoadState('load');
 
-  // no AI yet: the description box says so instead of pretending
-  await expect(hatch.locator('#desc')).toBeDisabled();
-  await expect(hatch.locator('#desc-hint')).toContainText('needs an AI');
+  // Describe-it runs Claude Code when its binary is installed; without one the box says so instead of pretending.
+  if (findClaudeBin()) await expect(hatch.locator('#desc')).toBeEnabled();
+  else {
+    await expect(hatch.locator('#desc')).toBeDisabled();
+    await expect(hatch.locator('#desc-hint')).toContainText('needs an AI');
+  }
 
   // the page cannot reach the network or run inline script
   const csp = await hatch.evaluate(() => document.querySelector('meta[http-equiv="Content-Security-Policy"]').content);
@@ -75,13 +83,15 @@ test('Hatch: choices in, a saved character out, picked in Lights, deleted again'
   await lights.locator('#bodies .posebtn[title="u-otter"]').click();
   await expect(lights.locator('#bodies .posebtn[title="u-otter"]')).toHaveClass(/\bon\b/);
 
+  // Hatch is a main-window page now: Close goes back to the Lights popup rather than closing a window.
+  await h.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('lights.html')).hide());
   await hatch.click('#close');
-  await expect.poll(() => h.app.windows().some((p) => !p.isClosed() && p.url().includes('hatch.html'))).toBe(false);
+  await expect.poll(() => h.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().some((w) => w.webContents.getURL().includes('lights.html') && w.isVisible()))).toBe(true);
 
   // delete the second one: two clicks (arm, then confirm), then it is gone from the picker and the disk
   const cell = lights.locator('#bodies .posecell', { has: lights.locator('.posebtn[title="u-otter-2"]') });
-  await cell.hover();
-  await cell.locator('.face-x').click();
+  // The picker re-renders as character updates land, dropping the hover: hover again until the click takes.
+  await expect(async () => { await cell.hover(); await cell.locator('.face-x').click({ timeout: 1000 }); }).toPass({ timeout: 15000 });
   await expect(cell.locator('.face-x')).toHaveText('delete?');
   await cell.locator('.face-x').click();
   await expect(lights.locator('#bodies .posebtn[title="u-otter-2"]')).toHaveCount(0, { timeout: 10000 });
@@ -90,6 +100,10 @@ test('Hatch: choices in, a saved character out, picked in Lights, deleted again'
 });
 
 test('Hatch: only Lights can open it, and a planted character file is validated, not trusted', async () => {
+  // A valid character alongside, planted here so this test does not lean on the one above.
+  if (!fs.existsSync(charDir('u-otter'))) {
+    CharacterStore.create({ dir: path.join(h.home, 'characters') }).save({ ...Hatch.templateCharacter({ name: 'Otter', shape: 'animal' }), id: 'u-otter', name: 'Otter' });
+  }
   // a file dropped in the folder is parsed as data and sanitised like a fresh Hatch
   const dir = charDir('u-planted');
   fs.mkdirSync(dir, { recursive: true });

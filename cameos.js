@@ -1,13 +1,12 @@
 // Photo cameos: the user's own faces, cut out in Lights and kept under
 // ~/.claude-traffic-light/cameos as <id>.png (256×256, transparent outside the
 // head) plus index.json { <id>: { name, eyes, mouth, shape, addedAt } }.
-// Anchors are fractions of the square (0..1). Built-in slots ship a photo in
-// assets/cameos/built (same layout; scripts/build-cameos.py) — alfred stays
-// drawn — and a user photo saved under a built-in id replaces it.
+// Anchors are fractions of the square (0..1). Built-in slots are drawn (rig.js);
+// a user photo saved under a built-in id replaces the drawing.
 const fs = require('fs');
 const path = require('path');
 
-const BUILTINS = ['neo', 'alfred', 'mcafee', 'spagni', 'powell', 'baker', 'ellison', 'saylor', 'wizard', 'scientist', 'pirate', 'punk'];
+const BUILTINS = ['alfred', 'wizard', 'scientist', 'pirate', 'punk'];
 const ID_RE = /^[a-z0-9-]{1,32}$/;
 // Saved with full photographic detail; it's cut at WORK first, where edges
 // have room.
@@ -85,9 +84,9 @@ function without(index, id) {
 
 // The picker's order: every built-in (drawn or photo), then the user's faces
 // oldest first. `user` marks a photo the user saved, the only kind that can be
-// removed (a built-in slot then falls back to its shipped photo or drawing).
-function listing(index, shipped = {}) {
-  const built = BUILTINS.map((id) => ({ id, builtin: true, photo: !!(index[id] || shipped[id]), user: !!index[id], ...(index[id] || shipped[id] || { name: titleCase(id) }) }));
+// removed (a built-in slot then falls back to its drawing).
+function listing(index) {
+  const built = BUILTINS.map((id) => ({ id, builtin: true, photo: !!index[id], user: !!index[id], ...(index[id] || { name: titleCase(id) }) }));
   const users = Object.keys(index).filter((id) => !BUILTINS.includes(id))
     .sort((a, b) => index[a].addedAt - index[b].addedAt || a.localeCompare(b))
     .map((id) => ({ id, builtin: false, photo: true, user: true, ...index[id] }));
@@ -155,7 +154,7 @@ function setAlpha(buf, i, a) {
   buf[i + 3] = a;
 }
 
-// The silhouette at working size, as scripts/build-cameos.py does it: drop the
+// The silhouette at working size: drop the
 // faint fringe, pull the edge in a pixel (past any leftover backdrop) and
 // soften. Rows from `jawRow` down are trimmed to the oval, which clears
 // collars and shoulders but sits wider than any jaw. Never raises alpha, so

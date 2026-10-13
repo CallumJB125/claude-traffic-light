@@ -6,14 +6,14 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { TTL_MS } from '../../shared/liveness.js';
 import { startHub, fakeClock, runHb, runMsg } from './helpers.js';
+import { testTempDir } from '../../shared/test-support/tmp.js';
 
 test('exit (g): hub restart → reconnecting → first HB of the new epoch recovers; nothing orphaned after +3 min', async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'board-reboot-'));
+  const dataDir = testTempDir('board-reboot-');
   try {
     let h = await startHub({ dataDir });
     const alice = await h.login('alice');
@@ -65,7 +65,7 @@ test('exit (g): hub restart → reconnecting → first HB of the new epoch recov
 });
 
 test('exit (g): a runner that reconnects inside the window never sees unresponsive', async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'board-reboot-'));
+  const dataDir = testTempDir('board-reboot-');
   try {
     let h = await startHub({ dataDir });
     const alice = await h.login('alice');
@@ -88,7 +88,7 @@ test('exit (g): a runner that reconnects inside the window never sees unresponsi
 });
 
 test('exit (g): restore from backup bumps fences by 1000 with a new epoch; old leases are FENCED', async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'board-restore-'));
+  const dataDir = testTempDir('board-restore-');
   try {
     let h = await startHub({ dataDir });
     const alice = await h.login('alice');

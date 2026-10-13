@@ -273,8 +273,10 @@ function euRigBusy({ busy, ...over }) {
 }
 
 // A clock and timers the test moves by hand (no real waiting, so no flakes under load).
+// It starts at the real time because publish() stamps issuedAt with the real
+// clock: a fixed start became "issued in the future" a day after it was written.
 function fakeTime() {
-  const clock = { t: Date.parse('2026-10-01T12:00:00.000Z'), timers: [] };
+  const clock = { t: Date.now(), timers: [] };
   clock.now = () => clock.t;
   clock.setTimer = (fn, ms) => { const h = { fn, at: clock.t + ms }; clock.timers.push(h); return h; };
   clock.clearTimer = (h) => { const i = clock.timers.indexOf(h); if (i >= 0) clock.timers.splice(i, 1); };
@@ -431,6 +433,20 @@ const euRig = (au, { stallMs, ...over } = {}) => createService({
   fetch, keyring: keys, feedBase: feed.base, currentVersion: '1.1.0', userData: tmpDir('ud'),
   backend: EU.create({ updater: au, CancellationToken: FakeToken, platform: 'win32', log: quiet, stallMs }),
   platform: 'win32', arch: 'x64', retryDelayMs: 0, log: quiet, ...over,
+});
+
+test('portable copy verifies the signed NSIS offer but cannot download, install or revert into an installed app', async () => {
+  publish(feed, { privateKey, version: '1.2.0', files: [EXE('1.2.0')] });
+  const backend = require('../src/updater/index').backendFor({ app: { isPackaged: true }, platform: 'win32', env: { PORTABLE_EXECUTABLE_FILE: 'C:\\Downloads\\Plexiform-portable.exe' }, dev: false });
+  const svc = createService({ fetch, keyring: keys, feedBase: feed.base, currentVersion: '1.1.0', userData: tmpDir('portable'), backend, platform: 'win32', arch: 'x64', retryDelayMs: 0, log: quiet });
+  assert.deepEqual(await svc.check({ user: true }), { ok: false, error: 'portable' });
+  assert.equal(svc.getState().available.version, '1.2.0');
+  assert.equal(svc.getState().canRevert, false);
+  assert.deepEqual(await svc.download(), { ok: false, error: 'portable' });
+  assert.deepEqual(await svc.install(), { ok: false, error: 'not-ready' });
+  assert.equal(feed.requests.some(r => r.path.endsWith('.exe') || r.path.endsWith('.yml')), false);
+  assert.equal(typeof backend.download, 'undefined');
+  assert.equal(typeof backend.install, 'undefined');
 });
 
 test('electron-updater: a feed whose sha512 differs from the signed release is refused before downloadUpdate', async () => {

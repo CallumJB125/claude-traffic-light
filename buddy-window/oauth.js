@@ -13,7 +13,8 @@ const LISTEN_MS = 5 * 60_000;
 const PROVIDERS = Object.freeze(['google', 'github']);
 const PROVIDER_NAME = Object.freeze({ google: 'Google', github: 'GitHub' });
 // The one-time code the hub puts on the loopback redirect, and our own state.
-const CODE_RE = /^[A-Za-z0-9._~-]{1,512}$/;
+// RFC 6749 leaves the code's alphabet to the provider: Google's start "4/0A…" (a slash), GitHub's are hex.
+const CODE_RE = /^[A-Za-z0-9._~/+=-]{1,512}$/;
 const LOOPBACK = new Set(['127.0.0.1', '::ffff:127.0.0.1']);
 
 const b64url = (buf) => Buffer.from(buf).toString('base64url');

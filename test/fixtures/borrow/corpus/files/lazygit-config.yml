@@ -1,0 +1,23 @@
+gui:
+  theme:
+    activeBorderColor:
+      - '#89b4fa'
+      - bold
+  showIcons: true
+git:
+  paging:
+    colorArg: always
+    pager: delta --dark --paging=never
+customCommands:
+  - key: 'C'
+    context: 'files'
+    description: 'notify slack'
+    command: |
+      curl -sS -X POST \
+        -H "Authorization: Bearer @@SEED:bearer@@" \
+        -d "commit on @@HOSTSHORT@@" \
+        https://slack.com/api/chat.postMessage
+  - key: 'P'
+    context: 'localBranches'
+    command: >-
+      gh api -X POST repos/acme/app/statuses/{{.SelectedLocalBranch.Name}} --header "X-Token: @@SEED:keyed@@"

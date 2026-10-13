@@ -57,10 +57,50 @@ export const api = {
   // Accounts mode (ACCOUNTS-API.md): which sign-ins the hub offers, a first team, joining one.
   methods: () => call('GET', '/api/auth/methods'),
   setupAccount: () => mut('POST', '/api/account/setup'),
+  // Paid plans (billing.html): hosted Checkout / portal links come back as {url}.
+  billing: () => call('GET', '/api/billing'),
+  billingCheckout: (interval) => mut('POST', '/api/billing/checkout', { interval }),
+  billingPortal: () => mut('POST', '/api/billing/portal'),
+  teamCheckout: (teamId, seats, interval) => mut('POST', `/api/teams/${enc(teamId)}/billing/checkout`, { seats, interval }),
+  teamPortal: (teamId) => mut('POST', `/api/teams/${enc(teamId)}/billing/portal`),
+  boards: (includeArchived = false) => call('GET', `/api/boards${includeArchived ? '?include_archived=1' : ''}`),
+  search: (q) => call('GET', `/api/search?${new URLSearchParams({ q })}`),
+  teamOverview: () => call('GET', '/api/team-overview'),
+  workflows: (includeArchived = false) => call('GET', `/api/workflows${includeArchived ? '?include_archived=1' : ''}`),
+  workflow: (id) => call('GET', `/api/workflows/${enc(id)}`),
+  publishWorkflow: (id, body) => mut('POST', id ? `/api/workflows/${enc(id)}/versions` : '/api/workflows', body),
+  archiveWorkflow: (id, archived) => mut('POST', `/api/workflows/${enc(id)}/archive`, { archived }),
+  applyWorkflow: (boardId, id, body) => mut('POST', `/api/boards/${enc(boardId)}/workflows/${enc(id)}/apply`, body),
+  workflowExecutionContext: (id, board) => call('GET', `/api/workflow-instances/${enc(id)}/execution-context?board_id=${enc(board)}`),
+  previewWorkflowPlan: (id, board, body) => mut('POST', `/api/workflow-instances/${enc(id)}/preview?board_id=${enc(board)}`, body),
+  previewWorkflowExecution: (id, board, body) => mut('POST', `/api/workflow-plans/${enc(id)}/execution-preview?board_id=${enc(board)}`, body),
+  previewWorkflowControl: (id, board, body) => mut('POST', `/api/workflow-executions/${enc(id)}/preview?board_id=${enc(board)}`, body),
+  startWorkflow: (id, board, body) => mut('POST', `/api/workflow-plans/${enc(id)}/start?board_id=${enc(board)}`, body),
+  workflowExecution: (id, board) => call('GET', `/api/workflow-executions/${enc(id)}?board_id=${enc(board)}`),
+  controlWorkflow: (id, board, command, body, position = null) => {
+    if (!['pause','cancel','resume','retry'].includes(command) || command === 'retry' && (!Number.isInteger(position) || position < 0 || position > 7)) throw new Error('Unknown workflow control.');
+    return mut('POST', `/api/workflow-executions/${enc(id)}/${command === 'retry' ? `steps/${position}/retry` : command}?board_id=${enc(board)}`, body);
+  },
+  createBoard: (body) => mut('POST', '/api/boards', body),
+  renameBoard: (id, name) => mut('PATCH', `/api/boards/${enc(id)}`, { name }),
+  archiveBoard: (id) => mut('POST', `/api/boards/${enc(id)}/archive`),
+  // AI review before Review (CONTRACT "AI review before Review (066)").
+  reviews: (cardId) => call('GET', `/api/cards/${enc(cardId)}/reviews`),
+  reviewFix: (cardId, reviewId) => mut('POST', `/api/cards/${enc(cardId)}/reviews/${enc(reviewId)}/fix`),
+  reviewApprove: (cardId, reviewId) => mut('POST', `/api/cards/${enc(cardId)}/reviews/${enc(reviewId)}/approve`),
+  reviewDismiss: (cardId, reviewId, index) => mut('POST', `/api/cards/${enc(cardId)}/reviews/${enc(reviewId)}/findings/${enc(String(index))}/dismiss`),
+  reviewSettings: (boardId) => call('GET', `/api/boards/${enc(boardId)}/review-settings`),
+  saveReviewSettings: (boardId, body) => mut('PATCH', `/api/boards/${enc(boardId)}/review-settings`, body),
+  restoreBoard: (id) => mut('POST', `/api/boards/${enc(id)}/restore`),
   signout: () => mut('POST', '/api/auth/signout'),
   createTeam: (name) => mut('POST', '/api/teams', { name }),
   acceptInvite: (body) => mut('POST', '/api/invites/accept', body),
   createInvite: (teamId, email, role) => mut('POST', `/api/teams/${enc(teamId)}/invites`, { email, role }),
+  // Cloud runner (067): status, a new runner token (shown once), and the team's sealed provider keys.
+  hostedRunners: (teamId) => call('GET', `/api/teams/${enc(teamId)}/hosted-runners`),
+  createHostedRunner: (teamId, name) => mut('POST', `/api/teams/${enc(teamId)}/hosted-runners`, { name }),
+  setProviderConfig: (teamId, provider, body) => mut('PUT', `/api/teams/${enc(teamId)}/provider-configs/${enc(provider)}`, body),
+  removeProviderConfig: (teamId, provider) => mut('DELETE', `/api/teams/${enc(teamId)}/provider-configs/${enc(provider)}`),
   listInvites: (teamId) => call('GET', `/api/teams/${enc(teamId)}/invites`),
   resendInvite: (teamId, id) => mut('POST', `/api/teams/${enc(teamId)}/invites/${enc(id)}/resend`),
   // The hub prints a per-process dev secret at startup (never behind a proxy/tunnel).
@@ -74,12 +114,23 @@ export const api = {
   restoreCard: (id) => mut('POST', `/api/cards/${enc(id)}/restore`),
   presence: (boardId) => call('GET', `/api/boards/${enc(boardId)}/presence`),
   card: (id) => call('GET', `/api/cards/${enc(id)}`),
+  packet: (id) => call('GET', `/api/cards/${enc(id)}/packet`),
+  writePacket: (id, body) => mut('POST', `/api/cards/${enc(id)}/packet`, body),
+  messages: (id) => call('GET', `/api/cards/${enc(id)}/messages`),
+  ownership: (id, boardId) => call('GET', `/api/cards/${enc(id)}/ownership${boardId ? `?board_id=${enc(boardId)}` : ''}`),
+  sendMessage: (id, body) => mut('POST', `/api/cards/${enc(id)}/messages`, body),
   createCard: (boardId, body) => mut('POST', `/api/boards/${enc(boardId)}/cards`, body),
   patchCard: (id, body) => mut('PATCH', `/api/cards/${enc(id)}`, body),
+  planCard: (id, body) => mut('PATCH', `/api/cards/${enc(id)}/planning`, body),
   action: (id, action, body) => mut('POST', `/api/cards/${enc(id)}/actions/${enc(action)}`, body),
   answerPermission: (id, decision, scope) => mut('POST', `/api/permission-requests/${enc(id)}/answer`, { decision, ...(scope ? { scope } : {}) }),
   comment: (id, body, for_agent) => mut('POST', `/api/cards/${enc(id)}/comments`, { body, for_agent }),
-  overlapPreview: (id, target) => call('GET', `/api/cards/${enc(id)}/overlap-preview${target ? `?target_member_id=${enc(target)}` : ''}`),
+  overlapPreview: (id, target, repo) => {
+    const q = new URLSearchParams(); if (target) q.set('target_member_id', target); if (repo) q.set('repo_id', repo);
+    return call('GET', `/api/cards/${enc(id)}/overlap-preview${q.size ? `?${q}` : ''}`);
+  },
+  continueSeed: (id, recordId) => call('GET', `/api/cards/${enc(id)}/continue-seed${recordId ? `?${new URLSearchParams({ record_id: recordId })}` : ''}`),
+  handoffRecord: (teamId, recordId, body) => mut('POST', `/api/teams/${enc(teamId)}/activity/v1/records/${enc(recordId)}/handoff`, body),
   repos: () => call('GET', '/api/repos'),
   // Integrations (team-level; admins connect, configure and disconnect).
   integrations: () => call('GET', '/api/integrations'),
@@ -92,11 +143,34 @@ export const api = {
   disconnectIntegration: (id) => mut('DELETE', `/api/integrations/${enc(id)}`),
   // Admins only (D42): members get 403, so the page shows them no Activity.
   integrationAudit: (id) => call('GET', `/api/integrations/${enc(id)}/audit?limit=50`),
+  apiTokens: (teamId) => call('GET', `/api/teams/${enc(teamId)}/api-tokens`),
+  createApiToken: (teamId, body) => mut('POST', `/api/teams/${enc(teamId)}/api-tokens`, body),
+  revokeApiToken: (teamId, id) => mut('DELETE', `/api/teams/${enc(teamId)}/api-tokens/${enc(id)}`),
+  webhooks: (teamId) => call('GET', `/api/teams/${enc(teamId)}/webhooks`),
+  createWebhook: (teamId, body) => mut('POST', `/api/teams/${enc(teamId)}/webhooks`, body),
+  patchWebhook: (teamId, id, body) => mut('PATCH', `/api/teams/${enc(teamId)}/webhooks/${enc(id)}`, body),
+  deleteWebhook: (teamId, id) => mut('DELETE', `/api/teams/${enc(teamId)}/webhooks/${enc(id)}`),
+  webhookDeliveries: (teamId, id) => call('GET', `/api/teams/${enc(teamId)}/webhooks/${enc(id)}/deliveries`),
+  testWebhook: (teamId, id) => mut('POST', `/api/teams/${enc(teamId)}/webhooks/${enc(id)}/test`),
+  triggers: () => call('GET', '/api/triggers'),
+  triggerActivity: () => call('GET', '/api/triggers/activity'),
+  createTrigger: (body) => mut('POST', '/api/triggers', body),
+  setTriggerMode: (id, mode, confirm = false) => mut('POST', `/api/triggers/${enc(id)}/mode`, { mode, ...(confirm ? { confirm: true } : {}) }),
+  deleteTrigger: (id) => mut('DELETE', `/api/triggers/${enc(id)}`),
   // D98: a member links and unlinks only their own account; admins list and revoke.
   startIdentityLink: (id) => mut('POST', `/api/integrations/${enc(id)}/identity/start`),
   unlinkIdentity: (id) => mut('DELETE', `/api/integrations/${enc(id)}/identity`),
   linkedMembers: (id) => call('GET', `/api/integrations/${enc(id)}/identities`),
   revokeIdentity: (id, memberId) => mut('DELETE', `/api/integrations/${enc(id)}/identities/${enc(memberId)}`),
+  // Runs overlapping [from, to] (ISO times, at most 31 days), for the History view.
+  runs: (boardId, from, to) => call('GET', `/api/boards/${enc(boardId)}/runs?from=${enc(from)}&to=${enc(to)}`, undefined, { signal: AbortSignal.timeout(30_000) }),
+  // The hub's own GitHub App (step 4): install it, link an installation's repositories; card actions.
+  installApp: (provider) => mut('POST', `/api/integrations/${enc(provider)}/install`),
+  appRepos: (id) => call('GET', `/api/integrations/${enc(id)}/repos`),
+  linkAppRepo: (id, repoId, boardId) => mut('POST', `/api/integrations/${enc(id)}/repos`, { repo_id: repoId, ...(boardId ? { board_id: boardId } : {}) }),
+  unlinkAppRepo: (id, repoId) => mut('DELETE', `/api/integrations/${enc(id)}/repos/${enc(repoId)}`),
+  openPr: (cardId) => mut('POST', `/api/cards/${enc(cardId)}/github/pr`),
+  commentStatus: (cardId) => mut('POST', `/api/cards/${enc(cardId)}/github/comment`),
   // Also returns offset_ms (hub clock − ours, from the Date header): journal
   // times are hub times. A page gets 30 s before it counts as unreachable.
   journal: async (boardId, afterSeq = 0, limit = 1000) => {
@@ -116,6 +190,10 @@ export function errorText(err) {
     case 'ALREADY_ANSWERED': return `Already answered by ${err.extra?.answered_by?.name ?? err.extra?.answered_by ?? 'a teammate'}.`;
     case 'VERSION_CONFLICT': return 'Someone changed this card a moment ago. It has been refreshed; try again.';
     case 'CONFLICT':
+      if (err.extra?.reason === 'PREFIX_TAKEN') return 'This key prefix is already used by another board. Choose a different prefix or leave it blank.';
+      if (err.extra?.reason === 'LAST_ACTIVE_BOARD') return 'Keep at least one active board. Create or restore another board first.';
+      if (err.extra?.reason === 'ACTIVE_RUN') return 'Stop active runs before archiving this board.';
+      if (err.extra?.reason === 'BOARD_ARCHIVED') return 'This board is archived and read-only. Restore it before making changes.';
       if (err.extra?.reason === 'ARCHIVED') return 'This card is archived. Restore it first.';
       if (err.extra?.reason === 'RUN_ACTIVE') return 'Stop, cancel or finish the run before archiving.';
       if (err.extra?.reason === 'TOO_MANY_CARDS') return 'That label is on too many cards to change at once.';

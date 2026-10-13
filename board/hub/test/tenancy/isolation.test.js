@@ -22,6 +22,7 @@ test('T-ROLES: per-role answers on team A (owner, admin, member, viewer)', async
       ['GET', `/api/teams/${A.team}/members`, undefined, [200, 200, 200, 200]],
       ['GET', `/api/boards/${A.board}`, undefined, [200, 200, 200, 200]],
       ['GET', `/api/boards/${A.board}/journal`, undefined, [200, 200, 200, 200]],
+      ['GET', `/api/boards/${A.board}/runs`, undefined, [200, 200, 200, 200]],
       ['GET', `/api/cards/${A.card}`, undefined, [200, 200, 200, 200]],
       ['POST', `/api/boards/${A.board}/cards`, () => ({ request_id: rid(), title: 't' }), [200, 200, 200, 403]],
       ['POST', `/api/cards/${A.card}/comments`, () => ({ request_id: rid(), body: 'hi' }), [200, 200, 200, 403]],

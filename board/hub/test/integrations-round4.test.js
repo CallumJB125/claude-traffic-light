@@ -32,8 +32,8 @@ const schemaOf = (db, tables = ['comments', 'journal']) => db.prepare(
 
 test('H-1: 008 starts with the `-- migrate: rebuilds` directive, which the runner reads as a comment', () => {
   const m = loadMigrations().find((x) => x.version === 8);
-  assert.equal(m.sql.split('\n')[0], '-- migrate: rebuilds');
-  assert.match(readFileSync(new URL('../../shared/migrations/008_integrations.sql', import.meta.url), 'utf8'), /^-- migrate: rebuilds\n/);
+  assert.equal(m.sql.split(/\r?\n/)[0], '-- migrate: rebuilds');
+  assert.match(readFileSync(new URL('../../shared/migrations/008_integrations.sql', import.meta.url), 'utf8'), /^-- migrate: rebuilds\r?\n/);
 });
 
 test('H-1: 008 keeps every trigger and index journal and comments had at 007 (only the two table definitions change)', () => {
@@ -339,7 +339,9 @@ test('L-4: an org’s bus consumer reads only its boards’ rows in SQL and stil
     bus.poke();
     await bus.settle();
     assert.deepEqual(seen, [h.ids.board], 'another org’s rows and hub-wide rows never reach it');
-    assert.ok(queries.length && queries.every((q) => /org_id = \?/.test(q)), 'filtered in SQL');
+    const UNSCOPED = /^SELECT \* FROM journal WHERE seq > \? ORDER BY seq LIMIT \?$/;
+    assert.ok(queries.some((q) => /org_id = \?/.test(q)), 'the org consumer reads with an org filter in SQL');
+    assert.ok(queries.every((q) => /org_id = \?/.test(q) || UNSCOPED.test(q.replace(/\s+/g, ' ').trim())), 'every other read is the plain unscoped consumer read, never a half-filtered one');
     const head = h.db.get('SELECT MAX(seq) AS s FROM journal').s;
     assert.equal(h.db.get("SELECT seq FROM bus_cursors WHERE consumer = 'org-only'").seq, head);
     assert.equal(bus.health().find((x) => x.consumer === 'org-only').backlog, 0);

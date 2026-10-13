@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import net from 'node:net';
+import net from '../../shared/local-sockets.cjs';
 import { startFakeHub, startRunner, makeRepo, tmpDir, rm, offerFor, claimRun, waitFor, readFakeLog, OWNER, REPO_ID } from './helpers.js';
 import { answererAllowed, runAllowKey } from '../policy.js';
 

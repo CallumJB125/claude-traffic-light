@@ -2,6 +2,7 @@
 // Generic emitter for any agent, not just Claude Code:
 //
 //   emit.js <signal> [--source name] [--session id] [--cwd path] [--tool name]
+//                  [--task id] [--title text] [--summary text]
 //   emit.js --adapter <id> [event]      payload JSON on stdin, or (Codex) as the last arg
 //
 // signals: prompt-submit | tool-use | tool-done | tool-failed | stop |
@@ -46,12 +47,10 @@ let event = adapterId ? argv[argv.indexOf('--adapter') + 2] : null;
 if (!adapterId && opt('cursor')) { adapterId = 'cursor'; event = opt('cursor'); }
 if (!adapterId && argv.includes('--codex')) adapterId = 'codex';
 
-if (adapterId) {
+function emitAdapter(payload) {
   const adapter = Adapters.get(adapterId);
   if (!adapter) process.exit(0);
-  // Codex passes its JSON as the last argument; everyone else pipes it.
-  const payload = adapterId === 'codex' ? parse(argv[argv.length - 1]) : parse(readStdin());
-  const reply = adapter.reply ? adapter.reply(event, payload) : null;
+  const reply = opt('lifecycle') ? null : adapter.reply ? adapter.reply(event, payload) : null;
   // fs.writeSync, like set-status.js: stdout is an async pipe on macOS and
   // process.exit below would cut the reply short.
   if (reply) {
@@ -72,17 +71,55 @@ if (adapterId) {
   // (the desktop orders events by it), and each event is dispatched.
   const Remote = fs.existsSync(path.join(ROOT_DIR, 'remote.json')) ? require('./remote.js') : null;
   const fallbackSession = process.env.CLAUDE_SESSION_ID || `${adapter.id}-${process.ppid}`;
+  const accepted = [];
   for (const e of events) {
     e.sessionId = SessionState.safeSessionId(e.sessionId || fallbackSession);
     const file = SessionState.sessionFileFor(SESSIONS_DIR, HOST_TAG, adapter.id, e.sessionId);
     const before = Remote ? SessionState.readJson(file) : null;
-    if (Remote && !e.pid) e.pid = Remote.agentPid(before?.claudePid);
+    if (Remote && !e.pid && !e.codexLifecycle) e.pid = Remote.agentPid(before?.claudePid);
     if (Remote && e.signal === 'session-end') e.seq = Remote.nextSeq(before?.remoteSeq);
-    SessionState.applyAdapterEvent(SESSIONS_DIR, { host: HOST_TAG, source: adapter.id, event: e, fallbackSession, fallbackCwd: process.cwd(), decorate: Remote && ((next, prev) => { next.remoteSeq = e.seq = Remote.nextSeq(prev?.remoteSeq); }) });
+    const applied = SessionState.applyAdapterEvent(SESSIONS_DIR, { host: HOST_TAG, source: adapter.id, event: e, fallbackSession, fallbackCwd: process.cwd(), decorate: Remote && ((next, prev) => { next.remoteSeq = e.seq = Remote.nextSeq(prev?.remoteSeq); }) });
+    if (!applied) continue;
+    try { require('./handover-tap.js').record({ rootDir: ROOT_DIR, adapter: adapter.id, signal: e.signal, sessionId: e.sessionId, cwd: e.cwd || process.cwd(), data: payload }); } catch { /* best effort */ }
     if (Remote && !e.cwd) e.cwd = process.cwd();
+    accepted.push(e);
   }
-  if (Remote) Remote.dispatchThenExit(adapter.id, events);
-  else process.exit(0);
+  const exit = () => { if (Remote) Remote.dispatchThenExit(adapter.id, accepted); else process.exit(0); };
+  // Opt-in team brief as SessionStart context (hooks/team-brief.js), for the
+  // adapters whose SessionStart output reaches the model.
+  if (event === 'SessionStart' && (adapter.id === 'gemini' || (adapter.id === 'codex' && opt('lifecycle')))) {
+    const Brief = require('./team-brief.js');
+    Brief.run({ adapter: adapter.id, payload, root: ROOT_DIR }).then((out) => { Brief.print(out); exit(); }, exit);
+  } else exit();
+}
+
+if (adapterId) {
+  const lifecycle = opt('lifecycle');
+  if (argv.includes('--lifecycle')) {
+    const codex = Adapters.get('codex');
+    if (adapterId !== 'codex' || !codex.LIFECYCLE_EVENTS.includes(lifecycle)) process.exit(0);
+    event = lifecycle;
+    // These two events explicitly require JSON stdout on success. A neutral
+    // object never approves, blocks, continues, or supplies model context,
+    // even when input is malformed, oversized, or never reaches EOF.
+    if (event === 'Stop' || event === 'SubagentStop') fs.writeSync(1, '{}');
+    let bytes = 0; const chunks = [];
+    const timer = setTimeout(() => process.exit(0), 750);
+    process.stdin.on('data', (chunk) => {
+      bytes += chunk.length;
+      if (bytes > 1024 * 1024) process.exit(0);
+      chunks.push(chunk);
+    });
+    process.stdin.on('error', () => process.exit(0));
+    process.stdin.on('end', () => {
+      clearTimeout(timer);
+      emitAdapter(parse(Buffer.concat(chunks, bytes).toString('utf8')));
+    });
+    process.stdin.resume();
+  } else {
+    // Legacy notify JSON remains argv; lifecycle JSON is explicitly stdin.
+    emitAdapter(adapterId === 'codex' ? parse(argv[argv.length - 1]) : parse(readStdin()));
+  }
 }
 
 // The bare-signal form, when no adapter was named (the adapter branch above
@@ -91,11 +128,12 @@ if (!adapterId) {
   const signal = argv.find((a) => KNOWN.includes(a)) || null;
   if (!signal) process.exit(0);
   // Lower case, as the desktop's reporter check wants a source to be.
-  const source = /^[a-z]/.test(String(opt('source') || '').toLowerCase()) ? opt('source').toLowerCase() : 'custom';
+  const source = /^[a-z][a-z0-9_-]{0,23}$/.test(String(opt('source') || '').toLowerCase()) ? opt('source').toLowerCase() : 'custom';
   fs.mkdirSync(SESSIONS_DIR, { recursive: true });
-  const sessionId = opt('session') || process.env.CLAUDE_SESSION_ID || `${source}-${process.ppid}`;
-  const file = path.join(SESSIONS_DIR, `${HOST_TAG}-${source}-${sessionId}.json`);
+  const sessionId = SessionState.safeSessionId(opt('session') || process.env.CLAUDE_SESSION_ID || `${source}-${process.ppid}`);
+  const file = SessionState.sessionFileFor(SESSIONS_DIR, HOST_TAG, source, sessionId);
   let cwd = '';
+  try { require('./handover-tap.js').record({ rootDir: ROOT_DIR, adapter: source, signal, sessionId, cwd: opt('cwd') || process.cwd(), data: {} }); } catch { /* best effort */ }
   let seq = null;
   const Remote = fs.existsSync(path.join(ROOT_DIR, 'remote.json')) ? require('./remote.js') : null;
   if (signal === 'session-end') { if (Remote) seq = Remote.nextSeq(SessionState.readJson(file)?.remoteSeq); fs.rmSync(file, { force: true }); }
@@ -105,7 +143,8 @@ if (!adapterId) {
     SessionState.withLock(file, () => {
       const prev = SessionState.readJson(file);
       cwd = opt('cwd') || prev?.cwd || process.cwd();
-      const next = SessionState.applyBareSignal(prev, { sessionId, host: HOST_TAG, source, cwd, signal, tool: opt('tool') || null });
+      const next = SessionState.applyBareSignal(prev, { sessionId, host: HOST_TAG, source, cwd, signal, tool: opt('tool') || null,
+        taskId: opt('task'), taskTitle: opt('title'), taskSummary: opt('summary') });
       if (Remote) next.remoteSeq = seq = Remote.nextSeq(prev?.remoteSeq);
       SessionState.writeJsonAtomic(file, next);
     });

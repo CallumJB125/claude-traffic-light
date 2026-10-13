@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "author": {
+    "name": "Plexiform",
+    "github": "CallumJB125"
+  },
+  "license": "CC0-1.0",
+  "added": "2026-10-10",
+  "updated": "2026-10-10",
+  "kind": "pack",
+  "id": "nextjs-starter",
+  "title": "Next.js starter pack",
+  "summary": "Read-only recipes for a Next.js app: explain it, review a PR, check security, triage CI.",
+  "tags": [
+    "starter"
+  ],
+  "stacks": [
+    "nextjs"
+  ],
+  "tools": [],
+  "payload": {
+    "members": [
+      "recipe/explain-repo",
+      "recipe/review-open-pr",
+      "recipe/security-check",
+      "recipe/triage-failing-ci",
+      "character/pebble"
+    ],
+    "note": "Each member is added on its own from the app."
+  }
+}

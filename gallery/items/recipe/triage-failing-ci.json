@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "author": {
+    "name": "Plexiform",
+    "github": "CallumJB125"
+  },
+  "license": "CC0-1.0",
+  "added": "2026-10-10",
+  "updated": "2026-10-10",
+  "kind": "recipe",
+  "id": "triage-failing-ci",
+  "title": "Triage failing CI",
+  "summary": "Looks at the latest failing CI run for this branch, finds the first real error, and explains the likely cause and the fix.",
+  "tags": [
+    "ci",
+    "debugging"
+  ],
+  "stacks": [
+    "any"
+  ],
+  "tools": [
+    "claude"
+  ],
+  "payload": {
+    "id": "triage-failing-ci",
+    "title": "Triage failing CI",
+    "what": "Looks at the latest failing CI run for this branch, finds the first real error, and explains the likely cause and the fix.",
+    "prompt": "Triage the failing CI for the current branch.\n\n1. If the GitHub CLI is available, run `gh run list --branch \"$(git branch --show-current)\" --limit 5` and `gh run view <id> --log-failed` for the latest failed run. Otherwise read the CI config (.github/workflows, .gitlab-ci.yml and so on) and run the same steps locally.\n2. Find the first real error, not the noise after it.\n3. Decide whether it is a code bug, a flaky test, an environment or secret problem, or a dependency change, and show the evidence.\n4. Say exactly what to change to fix it, with file and line.\n\nDo not change any files, re-run jobs or push.",
+    "tool": "claude",
+    "edits": false,
+    "cost": "Low to medium: reads CI logs, which can be long."
+  }
+}

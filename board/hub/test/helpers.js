@@ -3,8 +3,7 @@
 // and browsers speaking the real WS protocol. Nothing touches the network
 // beyond 127.0.0.1 or any home-directory state.
 
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { rmSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
@@ -13,6 +12,7 @@ import { createApp } from '../app.js';
 import { silentLogger } from '../log.js';
 import { validateConfig } from '../config.js';
 import { seedDev } from '../seed.js';
+import { testTempDir } from '../../shared/test-support/tmp.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -44,12 +44,14 @@ export function fakeGitHub() {
 }
 
 export function testConfig(over = {}) {
-  const dir = over.dataDir ?? mkdtempSync(join(tmpdir(), 'board-hub-'));
+  const dir = over.dataDir ?? testTempDir('board-hub-');
   return validateConfig({
     bind: '127.0.0.1', port: 0, dataDir: dir, dbPath: join(dir, 'board.db'), auth: 'dev', accessTeam: null, accessAud: null,
     secret: 'x'.repeat(40), devLoginSecret: DEV_SECRET, publicUrl: null, devSeed: true, devRepo: 'git@github.com:acme/app.git', bootstrap: null,
     restore: false, tunnelProbeUrl: null, githubToken: null, githubApi: 'https://api.github.com', githubPollMs: 60_000,
     webDir: resolve(HERE, 'fixtures', 'web'), sharedDir: resolve(HERE, '..', '..', 'shared'), logLevel: 'silent', shutdownGraceMs: 200,
+    // Tests register the connector they exercise themselves (with the test clock); a hub offers only GitHub unless a test says otherwise.
+    connectors: [],
     ...over,
     devSeed: (over.auth ?? 'dev') === 'dev',
   });

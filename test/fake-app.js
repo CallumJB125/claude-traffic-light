@@ -10,6 +10,7 @@ const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
+const { testTempDir } = require('./helpers/tmp');
 
 const SERVER = `
 const [token, keysFile, takeKeys] = process.argv.slice(1);
@@ -40,7 +41,7 @@ function fakeApp(home, { takeKeys = true } = {}) {
   const token = crypto.randomBytes(16).toString('hex');
   fs.mkdirSync(home, { recursive: true });
   fs.writeFileSync(path.join(home, 'token'), token, { mode: 0o600 });
-  const keysFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-fake-app-')), 'keys.json');
+  const keysFile = path.join(testTempDir('ctl-fake-app-'), 'keys.json');
   const child = spawn(process.execPath, ['-e', SERVER, token, keysFile, takeKeys ? '1' : '0'], { stdio: ['ignore', 'pipe', 'inherit'] });
   const keyFor = (id) => {
     try { const hex = JSON.parse(fs.readFileSync(keysFile, 'utf8'))[id]; return hex ? Buffer.from(hex, 'hex') : null; } catch { return null; }

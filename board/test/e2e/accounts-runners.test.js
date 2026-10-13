@@ -60,7 +60,7 @@ async function appRunner({ root, name, hubPort, teamId, runnerToken, repo, repoI
   const logFile = path.join(root, `${name}.log`);
   const out = fs.openSync(logFile, 'a');
   const child = spawn(process.execPath, ['--import', PRELOAD, path.join(BOARD, 'runner', 'app-entry.js')], {
-    env: { PATH: process.env.PATH, HOME: userHome, TMPDIR: '/tmp', LANG: 'en_US.UTF-8', BOARD_TEST_TIME_SCALE: String(SCALE), CLAUDE_TRAFFIC_LIGHT_HOME: path.join(userHome, '.ctl') },
+    env: { PATH: process.env.PATH, HOME: userHome, TMPDIR: '/tmp', LANG: 'en_US.UTF-8', BOARD_AI_DETECT: '0', BOARD_TEST_TIME_SCALE: String(SCALE), CLAUDE_TRAFFIC_LIGHT_HOME: path.join(userHome, '.ctl') },
     stdio: ['ignore', out, out, 'ipc'],
   });
   const messages = [];

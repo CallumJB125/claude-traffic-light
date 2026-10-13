@@ -52,15 +52,20 @@ test('dispatch is idempotent by request_id; a dispatch for a teammate needs thei
     const d1 = await h.api(alice, 'POST', `/api/cards/${card.id}/actions/dispatch`, { request_id: rid, target_member_id: h.ids.bob });
     const d2 = await h.api(alice, 'POST', `/api/cards/${card.id}/actions/dispatch`, { request_id: rid, target_member_id: h.ids.bob });
     assert.equal(d1.status, 200);
-    assert.equal(d2.headers.get('board-replayed'), '1');
+    assert.equal(d2.status, 200);
+    assert.equal(d2.body.card.id, d1.body.card.id);
     assert.equal(h.db.get('SELECT count(*) AS n FROM dispatches WHERE card_id = ?', card.id).n, 1);
     assert.equal(d1.body.card.target.awaiting_confirm, true);
     assert.equal(d1.body.card.target.name, 'Bob');
 
-    // DB-level idempotency (cache miss, e.g. another client): step returns the existing dispatch.
+    // Dispatch retries validate the exact choice against the durable row,
+    // rather than returning an old generic HTTP cache response.
     h.hub.requestCache.clear();
-    const d3 = await h.api(alice, 'POST', `/api/cards/${card.id}/actions/dispatch`, { request_id: rid });
+    const d3 = await h.api(alice, 'POST', `/api/cards/${card.id}/actions/dispatch`, { request_id: rid, target_member_id: h.ids.bob });
     assert.equal(d3.status, 200);
+    const changed = await h.api(alice, 'POST', `/api/cards/${card.id}/actions/dispatch`, { request_id: rid });
+    assert.equal(changed.status, 409);
+    assert.equal(changed.body.error.code, 'CONFLICT');
     assert.equal(h.db.get('SELECT count(*) AS n FROM dispatches WHERE card_id = ?', card.id).n, 1);
 
     const offer = await rb.next('offer', (o) => o.card_id === card.id);

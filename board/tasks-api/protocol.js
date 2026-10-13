@@ -18,12 +18,13 @@ export const REQUEST_CACHE_MS = 24 * 60 * 60 * 1000; // createTask requestId mem
 export const ACT_CACHE_MS = 10 * 60 * 1000;      // act requestId memory (board D8)
 export const TAKEOVER_TIMEOUT_MS = 4 * 60 * 1000; // client timeout for act takeover (> T_HANDOVER_MS)
 
-export const SOCKET_NAME = 'runner.sock';
+// Its own socket in the engine's data dir; the runner's control socket stays runner.sock.
+export const SOCKET_NAME = 'tasks.sock';
 export const TOKEN_NAME = 'tasks.token';
 
 export const METHODS = Object.freeze([
   'hello', 'createTask', 'listTasks', 'getTask', 'subscribe', 'unsubscribe', 'act',
-  'detectAIs', 'getLimits', 'setLimits', 'getClaims', 'listMessages',
+  'detectAIs', 'getLimits', 'setLimits', 'getClaims', 'listMessages', 'saveCheckpoint',
 ]);
 
 export const ACTIONS = Object.freeze([
@@ -47,7 +48,7 @@ export const LOCAL_SOURCES = Object.freeze(['local', 'cli']);
 export const REMOTE_SOURCES = Object.freeze(['board', 'phone', 'slack', 'voice']);
 export const PARK_REASONS = Object.freeze(['user', 'limit', 'auth', 'ask_timeout', 'approval_timeout', 'message_loop']);
 export const OUTCOMES = Object.freeze(['merged', 'pr_opened', 'pr_merged', 'discarded']);
-export const CAPABILITIES = Object.freeze(['background', 'resume', 'hooks', 'mcp', 'permissionRouting', 'modelSelect', 'costReport', 'sandbox']);
+export const CAPABILITIES = Object.freeze(['background', 'resume', 'hooks', 'mcp', 'permissionRouting', 'modelSelect', 'costReport', 'budget', 'sandbox']);
 
 // Board error codes reused verbatim (shared/protocol.js ERRORS), plus the
 // tasks-only codes below them.

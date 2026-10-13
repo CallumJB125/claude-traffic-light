@@ -18,6 +18,7 @@ const Tmux = require('../src/focus/tmux.js');
 const VSCode = require('../src/focus/vscode.js');
 const { createExplainer } = require('../src/focus/permission.js');
 const { createJumper, isRemote } = require('../src/focus/jump.js');
+const { testTempDir } = require('./helpers/tmp');
 
 const SET_STATUS = path.join(__dirname, '..', 'hooks', 'set-status.js');
 const HOST = os.hostname().split('.')[0];
@@ -72,7 +73,7 @@ function hookEnv(home, extra = {}) {
 const runHook = (home, signal, extra, payload = {}) => spawnSync('node', [SET_STATUS, signal], { env: hookEnv(home, extra), input: JSON.stringify({ session_id: 'jump', cwd: '/tmp', ...payload }) });
 const sessionFile = (home) => path.join(home, 'sessions', `${HOST}-jump.json`);
 const readSession = (home) => JSON.parse(fs.readFileSync(sessionFile(home), 'utf8'));
-const withHome = (fn) => { const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cb-jump-')); try { return fn(home); } finally { fs.rmSync(home, { recursive: true, force: true }); } };
+const withHome = (fn) => { const home = testTempDir('cb-jump-'); try { return fn(home); } finally { fs.rmSync(home, { recursive: true, force: true }); } };
 // The hook skips a repeat of the same signal inside a second.
 const pastDedupe = () => { const until = Date.now() + 1100; while (Date.now() < until) { /* spin */ } };
 
@@ -111,7 +112,7 @@ test('the permission-request write keeps the recorded terminal', () => withHome(
 }));
 
 test('the SessionStart write waits for the session lock', async () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cb-jump-'));
+  const home = testTempDir('cb-jump-');
   try {
     fs.mkdirSync(path.join(home, 'sessions'), { recursive: true });
     const lock = `${sessionFile(home)}.lock`;
@@ -128,7 +129,7 @@ test('the SessionStart write waits for the session lock', async () => {
 });
 
 test('the hook exits 0 when recording cannot possibly work', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cb-jump-'));
+  const dir = testTempDir('cb-jump-');
   const notADir = path.join(dir, 'file');
   fs.writeFileSync(notADir, 'x');
   try {
@@ -442,7 +443,7 @@ test('tmux: hostile panes, sockets, server pids and client ttys are refused', ()
 });
 
 test('tmux: the socket must be a socket we own, in a private directory, with a live server we own', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cb-tmux-'));
+  const dir = testTempDir('cb-tmux-');
   fs.chmodSync(dir, 0o700);
   const sock = path.join(dir, 'default');
   const server = net.createServer().listen(sock);

@@ -33,6 +33,14 @@ function holdsOurs(adapter, file) {
 // mcp: mcp-install.js, or null where it can't be loaded. → [{ id, file, changed, error? }]
 function run({ home, mcp = null }) {
   const results = [];
+  for (const adapter of Adapters.extras()) {
+    const file = adapter.configPath(home);
+    try {
+      if (!adapter.holdsOurs({ home }) && !(adapter.ownFile && fs.existsSync(file))) { results.push({ id: adapter.id, file, changed: false }); continue; }
+      adapter.uninstall({ home });
+      results.push({ id: adapter.id, file, changed: true });
+    } catch (err) { results.push({ id: adapter.id, file, changed: false, error: err.message }); }
+  }
   for (const adapter of Adapters.list()) {
     const file = adapter.configPath(home);
     try {
@@ -42,6 +50,19 @@ function run({ home, mcp = null }) {
     } catch (err) {
       results.push({ id: adapter.id, file, changed: false, error: err.message });
     }
+  }
+  // Codex's additive lifecycle file is independent of the legacy notify
+  // entry, including when a foreign notify prevents any TOML cleanup.
+  const codex = Adapters.get('codex');
+  const hermes = require('./hermes-activity');
+  if (fs.existsSync(hermes.configPath(home))) {
+    try { results.push(hermes.uninstall({ home })); }
+    catch (err) { results.push({ id: 'hermes-activity', file: hermes.configPath(home), changed: false, error: err.message }); }
+  }
+  const activity = codex.lifecycleConfigPath(home);
+  if (fs.existsSync(activity)) {
+    const r = codex.uninstallActivity({ home });
+    results.push({ id: 'codex-activity', file: activity, changed: !!r.changed, ...(r.error ? { error: r.error } : {}) });
   }
   if (mcp) {
     const file = mcp.configPath(home);

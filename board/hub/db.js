@@ -23,11 +23,16 @@ export function openDb(path, { now } = {}) {
   if (!memory) mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const fresh = !memory && !existsSync(path);
   const raw = new DatabaseSync(path);
-  if (fresh) chmodSync(path, 0o600);
-  raw.exec('PRAGMA busy_timeout = 5000');
-  migrate(raw, { wal: !memory, now });
-  if (!memory) raw.exec('PRAGMA synchronous = NORMAL');
-  return new Db(raw);
+  try {
+    if (fresh) chmodSync(path, 0o600);
+    raw.exec('PRAGMA busy_timeout = 5000');
+    migrate(raw, { wal: !memory, now });
+    if (!memory) raw.exec('PRAGMA synchronous = NORMAL');
+    return new Db(raw);
+  } catch (error) {
+    try { raw.close(); } catch { /* Preserve the original initialization error. */ }
+    throw error;
+  }
 }
 
 export class Db {

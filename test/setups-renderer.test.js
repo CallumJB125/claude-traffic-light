@@ -1,0 +1,136 @@
+'use strict';
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
+const {JSDOM}=require('jsdom');
+const source=fs.readFileSync(path.join(__dirname,'../setups.js'),'utf8');
+const tick=()=>new Promise(r=>setImmediate(r));
+const OLD='Synthetic older account configuration';
+const payload=text=>({files:[{id:'file1',source_id:'git',relative_path:'.gitconfig',content:text,note:''}],items:[],note:''});
+const read=text=>({ok:true,version:1,versions:[],own:true,payload:payload(text)});
+const draft=(handle='draft1',text=OLD)=>({ok:true,handle,content_hash:'hash1',file_hashes:[{file_id:'file1',hash:'file-hash1'}],approved_files:['file1'],payload:payload(text)});
+const state={status:'complete',sources:[{id:'git',label:'Git'}],teams:[{name:'Synthetic team',handle:'team1',role:'owner',status:'complete',profiles:[{handle:'profile1',own:true,version:1,files:1,items:0},{handle:'profile2',own:true,version:2,files:1,items:0}]}]};
+function fixture(t,overrides={}){
+  let changed,stateCalls=0;const calls=[];
+  const dom=new JSDOM(fs.readFileSync(path.join(__dirname,'../setups.html'),'utf8'),{runScripts:'outside-only'});t.after(()=>dom.window.close());
+  dom.window.HTMLElement.prototype.scrollIntoView=()=>{};dom.window.confirm=()=>true;
+  const methods={nativeLocal:()=>true,localState:async()=>({ok:true,status:'review_available',supported_recipes:['codex-instructions-v1','claude-settings-v1','gemini-settings-v1'],wrapped_storage_available:null}),listLocked:async()=>({ok:true,status:'locked',transactions:[]}),localStatus:async()=>({ok:true,status:'locked',phase:'uninspected'}),plan:async()=>({ok:false}),check:async()=>({ok:true,current:true}),apply:async()=>({ok:true,phase:'verified',target_files_changed:true}),recover:async()=>({ok:false}),confirmUndo:async()=>({ok:false}),state:async()=>state,read:async()=>read(OLD),draft:async()=>draft(),edit:async()=>draft(),approve:async()=>draft(),publish:async()=>({ok:true}),action:async()=>({ok:true,activity:[]}),export:async()=>({ok:true}),...overrides};
+  dom.window.setupsApi=Object.fromEntries(Object.entries(methods).map(([name,fn])=>[name,(...args)=>{calls.push({name,args});if(name==='state')stateCalls++;return fn(...args);} ]));
+  dom.window.setupsApi.changed=fn=>changed=fn;dom.window.eval(source);
+  const button=text=>[...dom.window.document.querySelectorAll('button')].find(node=>node.textContent===text);
+  return {dom,calls,button,changed:()=>changed(),stateCalls:()=>stateCalls,review:()=>dom.window.document.getElementById('review'),status:()=>dom.window.document.getElementById('status').textContent};
+}
+async function open(f){f.button('Review').click();await tick();}
+async function inspect(f){f.button('Select files to share').click();const check=f.review().querySelector('input[value="git"]');check.checked=true;f.button('Inspect selected files').click();await tick();}
+for(const operation of ['read','draft','edit','approve','publish','activity','baseline','receipt','export'])test(`native identity notification retires pending renderer ${operation} success and capabilities`,async t=>{
+  let release;const method=['activity','baseline','receipt'].includes(operation)?'action':operation;
+  const f=fixture(t,{[method]:()=>new Promise(r=>release=r),...(operation==='approve'?{draft:async()=>({...draft(),approved_files:[]})}:{})});await tick();
+  if(['draft','edit','approve','publish'].includes(operation)){
+    await inspect(f);
+    if(operation==='edit')f.button('Save reviewed edits').click();
+    if(operation==='approve'){const check=f.review().querySelector('input[type="checkbox"]');check.checked=true;check.dispatchEvent(new f.dom.window.Event('change'));}
+    if(operation==='publish'){const check=[...f.review().querySelectorAll('input[type="checkbox"]')].at(-1);check.checked=true;check.dispatchEvent(new f.dom.window.Event('change'));f.button('Share reviewed setup').click();}
+  }else{
+    await open(f);
+    if(operation==='activity')f.button('Show sharing activity').click();
+    if(operation==='baseline')f.button('Set selected team baseline').click();
+    if(operation==='receipt')f.button('Record selected entries as reviewed').click();
+    if(operation==='export')f.button('Export your shared setup').click();
+  }
+  await tick();assert.ok(release,`${operation} reached its real pending API call`);f.changed();
+  release(operation==='read'?read(OLD):['draft','edit','approve'].includes(operation)?draft():{ok:true,activity:[{created_at:'now',kind:OLD}]});await tick();
+  assert.equal(f.review().textContent,'');assert.equal(f.dom.window.document.getElementById('teams').textContent,'');assert.equal(f.status(),'Your account changed. Refresh to load current team access.');assert.equal(f.stateCalls(),1);
+});
+test('native identity notification retires pending state success',async t=>{
+  const releases=[];const f=fixture(t,{state:()=>new Promise(r=>releases.push(r))});f.changed();assert.equal(releases.length,2,'nothing was on screen, so the page reloads its access');
+  releases[0]({...state,teams:[{...state.teams[0],name:'Retired team'}]});await tick();assert.equal(f.dom.window.document.getElementById('teams').textContent,'');assert.equal(f.status(),'Loading current team access…');
+  releases[1](state);await tick();const text=f.dom.window.document.getElementById('teams').textContent;assert.ok(text.includes('Synthetic team'));assert.ok(!text.includes('Retired team'));
+});
+test('a fresh profile with no account shows no account-changed message and no empty box',async t=>{
+  const f=fixture(t,{state:async()=>({status:'none',teams:[],sources:[]})});await tick();f.changed();await tick();
+  assert.equal(f.status(),'Sign in and join a team to share or review setups.');assert.equal(f.review().childElementCount,0);
+  assert.match(fs.readFileSync(path.join(__dirname,'../setups.css'),'utf8'),/section:empty\{display:none\}/);
+});
+test('later refresh wins over older state replies without resurrecting old handles',async t=>{
+  const releases=[];const f=fixture(t,{state:()=>new Promise(r=>releases.push(r))});f.dom.window.document.getElementById('refresh').click();assert.equal(releases.length,2);
+  releases[1]({...state,teams:[{...state.teams[0],name:'Current team'}]});await tick();releases[0]({...state,teams:[{...state.teams[0],name:'Retired team'}]});await tick();assert.ok(f.dom.window.document.body.textContent.includes('Current team'));assert.ok(!f.dom.window.document.body.textContent.includes('Retired team'));
+});
+test('later profile handle wins over a pending older read and its failure',async t=>{
+  let release;const f=fixture(t,{read:handle=>handle==='profile1'?new Promise(r=>release=r):Promise.resolve(read('Current reviewed configuration'))});await tick();const buttons=[...f.dom.window.document.querySelectorAll('button')].filter(n=>n.textContent==='Review');buttons[0].click();await tick();buttons[1].click();await tick();release({ok:false,error:'Retired account error'});await tick();assert.ok(f.review().textContent.includes('Current reviewed configuration'));assert.ok(!f.status().includes('Retired account error'));
+});
+test('pending saved edit cannot overwrite a newer unsaved change to the same draft handle',async t=>{
+  let release;const f=fixture(t,{edit:()=>new Promise(r=>release=r)});await tick();await inspect(f);const text=f.review().querySelector('.file-text');text.value='First saved edit';text.dispatchEvent(new f.dom.window.Event('input'));f.button('Save reviewed edits').click();await tick();text.value='Newer unsaved edit';text.dispatchEvent(new f.dom.window.Event('input'));release(draft('draft1','First saved edit'));await tick();assert.equal(f.review().querySelector('.file-text').value,'Newer unsaved edit');assert.equal(f.button('Share reviewed setup').disabled,true);
+});
+test('pending edit uses its captured draft and cannot replace a newer draft',async t=>{
+  let release,n=0;const f=fixture(t,{draft:async()=>draft(`draft${++n}`,n===1?OLD:'Current draft text'),edit:()=>new Promise(r=>release=r)});await tick();await inspect(f);f.button('Save reviewed edits').click();await tick();await inspect(f);release(draft('draft1',OLD));await tick();assert.equal(f.review().querySelector('.file-text').value,'Current draft text');assert.equal(f.calls.find(c=>c.name==='edit').args[0],'draft1');
+});
+test('current action failure hides previous full reviewed text and disabled capabilities',async t=>{
+  const f=fixture(t,{action:async()=>({ok:false,error:'Refresh current team access.'})});await tick();await open(f);assert.ok(f.review().textContent.includes(OLD));f.button('Show sharing activity').click();await tick();assert.equal(f.review().textContent,'');assert.equal(f.status(),'Refresh current team access.');
+});
+test('retired publish reply does not re-enable Share after a newer unsaved edit',async t=>{
+  let release;const f=fixture(t,{publish:()=>new Promise(r=>release=r)});await tick();await inspect(f);
+  const check=[...f.review().querySelectorAll('input[type="checkbox"]')].at(-1);check.checked=true;check.dispatchEvent(new f.dom.window.Event('change'));f.button('Share reviewed setup').click();await tick();
+  const text=f.review().querySelector('.file-text');text.value='Newer unreviewed text';text.dispatchEvent(new f.dom.window.Event('input'));release({ok:true});await tick();
+  assert.equal(f.button('Share reviewed setup').disabled,true);assert.equal(f.review().querySelector('.file-text').value,'Newer unreviewed text');assert.equal(f.stateCalls(),1);
+});
+
+const FILE='12345678-1234-4234-8234-123456789abc',PLAN='22345678-1234-4234-8234-123456789abc',TX='32345678-1234-4234-8234-123456789abc',RECOVERY='42345678-1234-4234-8234-123456789abc',HASH='a'.repeat(64);
+const nativeRead=()=>({ok:true,version:1,versions:[],own:true,payload:{files:[{id:FILE,source_id:'codex',relative_path:'.codex/AGENTS.md',format:'text',content:'Name {{NAME}}. <img src=x onerror="window.bad=true">',note:''}],items:[],note:''}});
+const nativePlan=()=>({ok:true,kind:'read_only_plan',ready:true,handle:PLAN,source_hash:HASH,plan_hash:HASH,expires_at:Date.now()+600000,targets:[{file_id:FILE,recipe:'codex-instructions-v1',status:'reviewable',mode:'replace',exists:true,before_hash:HASH,after_hash:HASH,conflicts:[],before:{status:'reviewable',content:'Previous {{NAME}} notes.'},shared:{status:'reviewable',content:nativeRead().payload.files[0].content},after:{status:'reviewable',content:'Name {{NAME}}. <img src=x onerror="window.bad=true">'}}]});
+async function localReview(f){await tick();f.button('Check local capability').click();await tick();await open(f);const labels=[...f.review().querySelectorAll('.local-plan label')];for(const text of ['influence tool behavior','instruction text']){const input=labels.find(n=>n.textContent.includes(text)).querySelector('input');input.checked=true;input.dispatchEvent(new f.dom.window.Event('change'));}const selected=f.review().querySelector('[data-local-file]');assert.equal(selected.disabled,false);selected.checked=true;selected.dispatchEvent(new f.dom.window.Event('change'));const value=f.review().querySelector('[data-placeholder="NAME"]');value.value='Private local name';value.dispatchEvent(new f.dom.window.Event('input'));}
+async function createPlan(f){f.button('Create masked local plan').click();await tick();}
+function confirmPlan(f){const label=[...f.review().querySelectorAll('.local-preview label')].find(n=>n.textContent.includes('every displayed'));const input=label.querySelector('input');input.checked=true;input.dispatchEvent(new f.dom.window.Event('change'));}
+test('ordinary embedded rendering and locked metadata listing make no implicit wrapping/capability/unlock call',async t=>{
+ const f=fixture(t);await tick();await open(f);assert.equal(f.calls.filter(c=>c.name==='localState').length,0);assert.equal(f.button('Create masked local plan').disabled,true);f.button('Load locked local history').click();await tick();assert.equal(f.calls.filter(c=>c.name==='localState').length,0);assert.equal(f.calls.filter(c=>c.name==='recover'||c.name==='confirmUndo').length,0);assert.ok(f.dom.window.document.getElementById('local').textContent.includes('No retained'));
+});
+test('explicit code and instruction consent precedes local selection, and inventory/unsupported formats are excluded',async t=>{
+ const f=fixture(t,{read:async()=>nativeRead()});await tick();f.button('Check local capability').click();await tick();await open(f);f.button('Select eligible supported files').click();await tick();assert.equal(f.review().querySelector('[data-local-file]').checked,false);assert.equal(f.button('Create masked local plan').disabled,true);assert.ok(f.dom.window.document.getElementById('local').textContent.includes('OS encryption is uninspected'));
+});
+test('closed local plan carries opaque source handle and copied typed choices/values only, previews are text and Apply is exact-hash one-use',async t=>{
+ const f=fixture(t,{read:async()=>nativeRead(),plan:async()=>nativePlan()});await localReview(f);await createPlan(f);const sent=f.calls.find(c=>c.name==='plan');assert.equal(sent.args[0],'profile1');assert.deepEqual(Object.keys(sent.args[1]).sort(),['files','values']);assert.deepEqual(JSON.parse(JSON.stringify(sent.args[1].files)),[{id:FILE,mode:'replace',replace_keys:[],instructions:true,code:true}]);assert.deepEqual(JSON.parse(JSON.stringify(sent.args[1].values)),{NAME:'Private local name'});assert.equal(f.review().querySelector('[data-placeholder]').value,'');assert.equal(f.review().querySelector('.local-preview img'),null);assert.ok(!f.review().querySelector('.local-preview').textContent.includes('Private local name'));assert.equal(f.button('Apply reviewed local plan').disabled,true);confirmPlan(f);f.button('Apply reviewed local plan').click();await tick();assert.deepEqual(f.calls.find(c=>c.name==='apply').args,[PLAN,HASH]);assert.ok(f.review().textContent.includes('Apply verified for every selected file'));assert.equal(f.button('Apply reviewed local plan').disabled,true);assert.equal(f.calls.filter(c=>c.name==='action').length,0);
+});
+for(const operation of ['plan','check','apply'])test(`identity retirement withholds pending local ${operation} success and values`,async t=>{
+ let release;const f=fixture(t,{read:async()=>nativeRead(),plan:async()=>nativePlan(),[operation]:()=>new Promise(r=>release=r)});await localReview(f);await createPlan(f);if(operation==='check')f.button('Check this plan is current').click();if(operation==='apply'){confirmPlan(f);f.button('Apply reviewed local plan').click();}await tick();assert.ok(release);f.changed();release(operation==='plan'?nativePlan():operation==='apply'?{ok:true,phase:'verified',target_files_changed:true}:{ok:true,current:true});await tick();assert.equal(f.review().textContent,'');assert.ok(!f.dom.window.document.body.textContent.includes('Private local name'));assert.ok(!f.dom.window.document.body.textContent.includes('Apply verified'));
+});
+test('new local edits retire pending plan and current check failure removes old preview/grant',async t=>{
+ let release;const f=fixture(t,{read:async()=>nativeRead(),plan:()=>new Promise(r=>release=r),check:async()=>({ok:false})});await localReview(f);f.button('Create masked local plan').click();await tick();const input=f.review().querySelector('[data-placeholder]');input.value='Newer local value';input.dispatchEvent(new f.dom.window.Event('input'));release(nativePlan());await tick();assert.equal(f.review().querySelector('.local-preview').textContent,'');assert.equal(f.button('Apply reviewed local plan'),undefined);
+});
+test('malformed partial target DTO cannot expose an Apply grant, and unknown retained effects are never verified',async t=>{
+ const f=fixture(t,{read:async()=>nativeRead(),plan:async()=>({...nativePlan(),targets:[{...nativePlan().targets[0],conflicts:{bad:true}}]})});await localReview(f);await createPlan(f);assert.equal(f.button('Apply reviewed local plan'),undefined);assert.equal(f.review().textContent,'');assert.ok(f.status().includes('operation unavailable'));
+ const g=fixture(t,{read:async()=>nativeRead(),plan:async()=>nativePlan(),apply:async()=>({ok:false,phase:'unknown',retained:true,transaction_id:TX})});await localReview(g);await createPlan(g);confirmPlan(g);g.button('Apply reviewed local plan').click();await tick();assert.ok(g.review().textContent.includes('unknown. Evidence is retained'));assert.ok(!g.review().textContent.includes('Apply verified'));
+});
+test('locked own-local recovery has no preview before separate native confirmations and Undo handle is one-use',async t=>{
+ const f=fixture(t,{state:async()=>({...state,teams:[],status:'unavailable'}),listLocked:async()=>({ok:true,status:'locked',transactions:[{id:TX,locked:true}]}),recover:async()=>({ok:true,handle:RECOVERY,transaction_id:TX,phase:'inspected',recovery_authority:'own_local_review_only',local_previews:'withheld_local_values',targets:[{index:0,status:'inspectable'}]}),confirmUndo:async()=>({ok:true,phase:'undone',target_files_changed:true})});await tick();f.button('Load locked local history').click();await tick();assert.ok(f.dom.window.document.getElementById('local').textContent.includes('not freshly inspected'));assert.equal(f.calls.filter(c=>c.name==='recover').length,0);f.button('Review local recovery').click();await tick();assert.ok(f.dom.window.document.getElementById('local').textContent.includes('Local values and previous text stay withheld'));assert.equal(f.calls.filter(c=>c.name==='confirmUndo').length,0);assert.equal(f.button('Confirm conditional Undo').disabled,false);f.button('Confirm conditional Undo').click();await tick();assert.deepEqual(f.calls.find(c=>c.name==='confirmUndo').args,[RECOVERY]);assert.equal(f.button('Confirm conditional Undo').disabled,true);assert.ok(f.dom.window.document.getElementById('local').textContent.includes('Undo verified'));assert.equal(f.calls.filter(c=>c.name==='localState').length,0);
+});
+for(const operation of ['listLocked','recover','confirmUndo'])test(`retired ${operation} reply cannot resurrect locked recovery capabilities`,async t=>{
+ let release;const f=fixture(t,{listLocked:async()=>({ok:true,status:'locked',transactions:[{id:TX,locked:true}]}),recover:async()=>({ok:true,handle:RECOVERY,transaction_id:TX,phase:'inspected',recovery_authority:'own_local_review_only',local_previews:'withheld_local_values'}),[operation]:()=>new Promise(r=>release=r)});await tick();f.button('Load locked local history').click();await tick();if(operation!=='listLocked'){f.button('Review local recovery').click();await tick();}if(operation==='confirmUndo'){f.button('Confirm conditional Undo').click();await tick();}assert.ok(release);f.changed();release(operation==='listLocked'?{ok:true,status:'locked',transactions:[{id:TX,locked:true}]}:operation==='recover'?{ok:true,handle:RECOVERY,transaction_id:TX,phase:'inspected',recovery_authority:'own_local_review_only',local_previews:'withheld_local_values'}:{ok:true,phase:'undone',target_files_changed:true});await tick();assert.ok(!f.dom.window.document.getElementById('local').textContent.includes(TX));assert.equal(f.button('Confirm conditional Undo'),undefined);assert.ok(!f.dom.window.document.getElementById('local').textContent.includes('Undo verified'));
+});
+test('preload exposes only named local IPC and never a private source/current/root/confirmation capability',()=>{
+ const vm=require('node:vm'),calls=[];let bridge;vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../setups-preload.js'),'utf8'),{TextEncoder,require:()=>({contextBridge:{exposeInMainWorld:(_name,value)=>bridge=value},ipcRenderer:{invoke:(...args)=>{calls.push(args);return Promise.resolve({ok:false});},on(){}}})});bridge.localState();bridge.plan(PLAN,{files:[{id:FILE,mode:'replace',replace_keys:[],instructions:true,code:true}],values:{}});bridge.check(PLAN);bridge.apply(PLAN,HASH);bridge.listLocked();bridge.localStatus(TX);bridge.recover(TX);bridge.confirmUndo(RECOVERY);assert.deepEqual(calls.map(c=>c[0]),['setups:local-state','setups:plan','setups:check','setups:apply','setups:list-locked','setups:local-status','setups:recover','setups:confirm-undo']);for(const name of ['readForPlan','currentActor','roots','launch','wrapping','confirm','invoke'])assert.equal(bridge[name],undefined);
+});
+test('a failed current check retires the displayed plan and every Apply capability',async t=>{
+ const f=fixture(t,{read:async()=>nativeRead(),plan:async()=>nativePlan(),check:async()=>({ok:false})});await localReview(f);await createPlan(f);confirmPlan(f);f.button('Check this plan is current').click();await tick();assert.equal(f.review().textContent,'');assert.equal(f.button('Apply reviewed local plan'),undefined);assert.ok(f.status().includes('Create a fresh review'));
+});
+test('expired and incomplete plans cannot enable Apply and revoking code consent removes preview',async t=>{
+ const f=fixture(t,{read:async()=>nativeRead(),plan:async()=>({...nativePlan(),expires_at:1})});await localReview(f);await createPlan(f);assert.equal(f.button('Apply reviewed local plan'),undefined);
+ const g=fixture(t,{read:async()=>nativeRead(),plan:async()=>({...nativePlan(),ready:false})});await localReview(g);await createPlan(g);confirmPlan(g);assert.equal(g.button('Apply reviewed local plan').disabled,true);const code=[...g.review().querySelectorAll('.local-plan label')].find(n=>n.textContent.includes('influence tool')).querySelector('input');code.checked=false;code.dispatchEvent(new g.dom.window.Event('change'));assert.equal(g.review().querySelector('.local-preview').textContent,'');assert.equal(g.review().querySelector('[data-local-file]').checked,false);
+});
+test('preload rejects unknown authority, malformed handles and oversized values before IPC and copies valid local request',async()=>{
+ const vm=require('node:vm'),calls=[];let bridge;vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../setups-preload.js'),'utf8'),{TextEncoder,require:()=>({contextBridge:{exposeInMainWorld:(_name,x)=>bridge=x},ipcRenderer:{invoke:(...a)=>{calls.push(a);return Promise.resolve({ok:true});},on(){}}})});
+ const valid={files:[{id:FILE,mode:'replace',replace_keys:[],instructions:true,code:true}],values:{NAME:'original'}};
+ for(const input of [{...valid,profile:'/renderer'},{...valid,values:{NAME:'x'.repeat(4097)}},{files:[{...valid.files[0],principal:{account:'renderer'}}],values:{}},{...valid,values:{LOGIN:'provider-password'}}])assert.equal((await bridge.plan(PLAN,input)).ok,false);
+ assert.equal((await bridge.apply('file:///profile',HASH)).ok,false);assert.equal((await bridge.recover('../transaction')).ok,false);assert.equal(calls.length,0);await bridge.plan(PLAN,valid);valid.values.NAME='changed after dispatch';assert.equal(calls[0][2].values.NAME,'original');assert.deepEqual(Object.keys(calls[0][2]).sort(),['files','values']);
+});
+test('retired local request cannot clear a newer pending local operation lease',async t=>{
+ const releases=[];const f=fixture(t,{localState:()=>new Promise(r=>releases.push(r))});await tick();f.button('Check local capability').click();await tick();f.changed();f.button('Check local capability').click();await tick();assert.equal(releases.length,2);releases[0]({ok:true,status:'review_available',supported_recipes:['codex-instructions-v1'],wrapped_storage_available:null});await tick();assert.equal(f.button('Load locked local history').disabled,true);releases[1]({ok:true,status:'review_available',supported_recipes:['codex-instructions-v1'],wrapped_storage_available:null});await tick();assert.equal(f.button('Load locked local history').disabled,false);
+});
+test('JSON merge replacement keys are explicit, ordinary select-all excludes unsupported files and inventory',async t=>{
+ const JSONFILE='62345678-1234-4234-8234-123456789abc',UNSUPPORTED='72345678-1234-4234-8234-123456789abc';
+ const f=fixture(t,{read:async()=>({...nativeRead(),payload:{files:[{id:JSONFILE,source_id:'gemini-cli',relative_path:'.gemini/settings.json',format:'json',content:'{"theme":"synthetic"}',note:''},{id:UNSUPPORTED,source_id:'git',relative_path:'.gitconfig',format:'gitconfig',content:'[alias]\n st=status\n',note:''}],items:[{id:'inventory1',kind:'plugin',name:'example',version:null}],note:''}})});await tick();f.button('Check local capability').click();await tick();await open(f);const code=[...f.review().querySelectorAll('.local-plan label')].find(n=>n.textContent.includes('influence tool')).querySelector('input');code.checked=true;code.dispatchEvent(new f.dom.window.Event('change'));f.button('Select eligible supported files').click();await tick();assert.equal(f.review().querySelector(`[data-local-file="${JSONFILE}"]`).checked,true);assert.equal(f.review().querySelector(`[data-local-file="${UNSUPPORTED}"]`).checked,false);assert.equal(f.review().querySelector(`[data-local-file="${UNSUPPORTED}"]`).disabled,true);const keys=f.review().querySelector('[aria-label="Explicit replacement keys .gemini/settings.json"]');keys.value='theme';keys.dispatchEvent(new f.dom.window.Event('input'));f.button('Create masked local plan').click();await tick();assert.deepEqual(JSON.parse(JSON.stringify(f.calls.find(c=>c.name==='plan').args[1].files)),[{id:JSONFILE,mode:'merge',replace_keys:['theme'],instructions:false,code:true}]);assert.equal(f.review().textContent,'');
+});
+
+test('a ready flag cannot replace every selected typed masked target review',async t=>{
+ const variants=[...['adapter_unavailable','local_review_unavailable'].flatMap(status=>[()=>({file_id:FILE,recipe:'codex-instructions-v1',status}),()=>({...nativePlan().targets[0],status})]),()=>({...nativePlan().targets[0],before:undefined}),()=>({...nativePlan().targets[0],after:{status:'withheld'}}),()=>({...nativePlan().targets[0],shared:{status:'reviewable',content:123}}),()=>({...nativePlan().targets[0],file_id:TX}),()=>({...nativePlan().targets[0],recipe:'gemini-settings-v1'}),()=>null];
+ for(const target of variants){const f=fixture(t,{read:async()=>nativeRead(),plan:async()=>({...nativePlan(),targets:[target()]})});await localReview(f);await createPlan(f);assert.equal(f.button('Apply reviewed local plan'),undefined);assert.equal(f.review().textContent,'');assert.equal(f.calls.filter(c=>c.name==='apply').length,0);}
+});
+test('a false ready plan can show unavailable rows without granting Apply',async t=>{
+ for(const targetStatus of ['adapter_unavailable','local_review_unavailable']){const f=fixture(t,{read:async()=>nativeRead(),plan:async()=>({...nativePlan(),ready:false,targets:[{file_id:FILE,recipe:'codex-instructions-v1',status:targetStatus}]})});await localReview(f);await createPlan(f);assert.ok(f.review().textContent.includes('Unavailable: '+targetStatus));confirmPlan(f);assert.equal(f.button('Apply reviewed local plan').disabled,true);f.button('Apply reviewed local plan').click();await tick();assert.equal(f.calls.filter(c=>c.name==='apply').length,0);}
+});

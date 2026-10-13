@@ -1,0 +1,57 @@
+<!--page {"title":"Gallery · Plexiform","desc":"Community recipes and widget characters for Plexiform, reviewed before they are listed.","nav":"gallery"}-->
+<!doctype html>
+<html lang="en">
+<head>
+{{include:head}}
+<style>
+  .cg-tools { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 28px; }
+  .cg-tools input, .cg-tools select { font: inherit; padding: 8px 12px; border: 2px solid var(--line); border-radius: 10px; background: var(--paper); color: var(--ink); }
+  .cg-tools input { flex: 1 1 16em; }
+  .cg-chip[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+  .cg-chip { cursor: pointer; }
+  #cg-list { list-style: none; padding: 0; margin: 28px 0 0; display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 19em), 1fr)); }
+  .cg-item { border: 2px solid var(--line); border-radius: 14px; padding: 16px 18px; }
+  .cg-item a { color: var(--ink); text-decoration: none; } .cg-item a:hover strong { text-decoration: underline; }
+  .cg-item p { margin: 6px 0 0; color: var(--ink-2); }
+  .cg-kind { font-size: 0.8rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-3); }
+  .cg-by, .cg-note { font-size: 0.9rem; color: var(--ink-3); }
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+{{include:nav}}
+<main id="main" class="page">
+  <div class="wrap">
+    <h1>Gallery</h1>
+    <p class="lede">Recipes, widget characters, widget rules and setups other people made for {{brand.name}}. Each one is reviewed before it is listed. Recipes here only read: they plan and report, and never change files.</p>
+    <p class="prose" style="margin-top:14px">Authors' names and GitHub handles are self-declared. Add things from inside the app (Discover in the sidebar), where you see everything an item contains before it is saved.</p>
+    <div class="cg-tools" role="search">
+      <input id="cg-search" aria-label="Search the gallery" type="search" placeholder="Search" autocomplete="off" />
+      <button type="button" class="chip cg-chip" data-cg-kind="" aria-pressed="true">All</button>
+      <button type="button" class="chip cg-chip" data-cg-kind="recipe" aria-pressed="false">Recipes</button>
+      <button type="button" class="chip cg-chip" data-cg-kind="character" aria-pressed="false">Characters</button>
+      <button type="button" class="chip cg-chip" data-cg-kind="pack" aria-pressed="false">Packs</button>
+      <button type="button" class="chip cg-chip" data-cg-kind="rules" aria-pressed="false">Rules</button>
+      <button type="button" class="chip cg-chip" data-cg-kind="setup" aria-pressed="false">Setups</button>
+      <select id="cg-stack" aria-label="Stack"><option value="">Any stack</option><option value="nextjs">Next.js</option><option value="python">Python</option><option value="swift">Swift</option><option value="go">Go</option><option value="rust">Rust</option><option value="node">Node</option><option value="rails">Rails</option></select>
+    </div>
+    <p id="cg-count" class="cg-note" aria-live="polite" style="margin-top:14px"></p>
+    <ul id="cg-list">
+<!--cg:list-->
+    </ul>
+    <section style="margin-top:56px">
+      <h2>Submit yours</h2>
+      <p class="prose">Open a pull request that adds one file under <code>gallery/items/</code>. A check runs the same validator the app uses, and the owner reviews every item. Items are CC0-1.0 unless you choose MIT. The <a href="https://github.com/CallumJB125/claude-traffic-light/blob/main/gallery/README.md">gallery README</a> has the format, the review rules and how to ask for something to be taken down.</p>
+      <ul class="prose" style="margin-top:10px">
+        <li><a href="https://github.com/CallumJB125/claude-traffic-light/new/main/gallery/items/recipe?filename=your-recipe-id.json">Add a recipe</a> (read-only: <code>"edits": false</code>)</li>
+        <li><a href="https://github.com/CallumJB125/claude-traffic-light/new/main/gallery/items/character?filename=your-character-id.json">Add a character</a> (no CSS)</li>
+        <li><a href="https://github.com/CallumJB125/claude-traffic-light/new/main/gallery/items/pack?filename=your-pack-id.json">Add a pack</a> (2–12 items already in the gallery)</li>
+      </ul>
+    </section>
+  </div>
+</main>
+{{include:footer}}
+<script src="{{asset:assets/site.js}}" defer></script>
+<script src="{{asset:assets/gallery.js}}" defer></script>
+</body>
+</html>

@@ -16,7 +16,8 @@
 // is 'ask', a plan first when planFirst).
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import net from 'node:net';
+import net from '../shared/local-sockets.cjs';
+import { ensurePrivateDir } from '../runner/util.js';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -63,19 +64,19 @@ const MOCK_AIS = [
   {
     id: 'claude', installed: true, bin: '/usr/local/bin/claude', version: '2.1.285', loggedIn: true,
     models: ['opus', 'sonnet', 'haiku'],
-    capabilities: { background: true, resume: true, hooks: true, mcp: true, permissionRouting: true, modelSelect: true, costReport: true, sandbox: true },
+    capabilities: { background: true, resume: true, hooks: true, mcp: true, permissionRouting: true, modelSelect: true, costReport: true, budget: true, sandbox: true },
     notes: [], health: 'ok',
   },
   {
     id: 'codex', installed: true, bin: '/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex', version: '0.159.2', loggedIn: true,
     models: ['gpt-5-codex'],
-    capabilities: { background: true, resume: true, hooks: false, mcp: true, permissionRouting: false, modelSelect: true, costReport: false, sandbox: true },
+    capabilities: { background: true, resume: true, hooks: false, mcp: true, permissionRouting: false, modelSelect: true, costReport: false, budget: false, sandbox: true },
     notes: ['No hooks: status comes from the output stream only ("limited status").', 'No mid-turn input: messages are delivered by resume at the end of the turn.', "No permission routing: background runs can't use 'ask'."],
     health: 'warn',
   },
   {
     id: 'gemini', installed: false, bin: null, version: null, loggedIn: null, models: [],
-    capabilities: { background: false, resume: false, hooks: false, mcp: false, permissionRouting: false, modelSelect: false, costReport: false, sandbox: false },
+    capabilities: { background: false, resume: false, hooks: false, mcp: false, permissionRouting: false, modelSelect: false, costReport: false, budget: false, sandbox: false },
     notes: ['Not installed.'], health: 'missing',
   },
 ];
@@ -103,8 +104,7 @@ new file mode 100644
  */
 export async function startMockServer(opts = {}) {
   const dir = opts.dir ?? fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-tasks-'));
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  fs.chmodSync(dir, 0o700);
+  ensurePrivateDir(dir);
   const socketPath = path.join(dir, SOCKET_NAME);
   const tokenPath = path.join(dir, TOKEN_NAME);
   const token = opts.token ?? `btk_${crypto.randomBytes(32).toString('base64url')}`;
@@ -975,7 +975,11 @@ export async function startMockServer(opts = {}) {
       createCache.set(requestId, { id: task.id, hash, at: now() });
       return { id: task.id, duplicate: false };
     },
-    listTasks: (p) => [...tasks.values()].filter((t) => p.includeDone !== false || t.state !== 'done').map(view),
+    listTasks: (p) => {
+      const all = [...tasks.values()].filter((t) => p.includeDone !== false || t.state !== 'done');
+      const from = p.after ? all.findIndex((t) => t.id === p.after) + 1 : 0;
+      return all.slice(from, from + (p.limit ?? 200)).map(view);
+    },
     getTask: ({ id }) => {
       const t = tasks.get(id);
       if (!t) throw new ApiError('NOT_FOUND', `no task ${id}`);
@@ -1109,7 +1113,7 @@ export async function startMockServer(opts = {}) {
   });
 
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(socketPath, resolve); });
-  fs.chmodSync(socketPath, 0o600);
+  if (process.platform !== 'win32') fs.chmodSync(socketPath, 0o600);
 
   // Supervisor tick: keep live runs' heartbeats fresh, re-emit a state event
   // when green flips, and push the hb/green lease to every client.

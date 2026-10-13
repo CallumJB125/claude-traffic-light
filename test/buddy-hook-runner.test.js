@@ -7,6 +7,7 @@ const { spawnSync } = require('node:child_process');
 const Runner = require('../src/buddy-hook-runner.js');
 const Runtime = require('../adapters/runtime.js');
 const Codex = require('../adapters/codex.js');
+const { testTempDir } = require('./helpers/tmp');
 
 const HOOKS = path.join(__dirname, '..', 'hooks');
 
@@ -31,7 +32,7 @@ test('buddy-hook: the Windows Codex notify is the exe with --buddy-hook, and nee
 });
 
 test('buddy-hook: a Codex payload full of cmd.exe metacharacters arrives intact', () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-buddyhook-'));
+  const home = testTempDir('ctl-buddyhook-');
   const cwd = 'C:\\work\\a "quoted" & b | c ^ d %PATH% ! (e)';
   const payload = JSON.stringify({ type: 'agent-turn-complete', 'thread-id': 'th-1', cwd });
   const runner = `require(${JSON.stringify(path.join(__dirname, '..', 'src', 'buddy-hook-runner.js'))}).run(process.argv)`;

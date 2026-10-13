@@ -7,6 +7,7 @@ const P = (d, extra = {}) => h('path', { d, ...extra });
 const stroke = { fill: 'none', stroke: 'currentColor', 'stroke-width': '1.5', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' };
 
 const SHAPES = {
+  calendar: () => [h('rect', { x: 2.5, y: 3.5, width: 11, height: 10, rx: 1.5 }), P('M5 2.5v3M11 2.5v3M2.5 7h11')],
   clock: () => [h('circle', { cx: 8, cy: 8, r: 5.75 }), P('M8 5v3.2l2 1.3')],
   ring: () => [h('circle', { cx: 8, cy: 8, r: 5.25, 'stroke-dasharray': '2.2 2.2' })],
   lamp: () => [h('rect', { x: 3, y: 3, width: 10, height: 10, rx: 2.5, fill: 'currentColor' })],
@@ -44,7 +45,7 @@ const SHAPES = {
 export const PILL_ICON = {
   queued: 'clock', claimed: 'ring', running: 'lamp', quiet: 'half', blocked: 'hand', parked: 'pause',
   suspended: 'moon', reconnecting: 'sync', unresponsive: 'ring', orphaned: 'cross', handing_over: 'swap',
-  handed_over: 'swap', failed: 'cross', failed_limit: 'cross', in_review: 'diamond', done: 'check',
+  handed_over: 'swap', failed: 'cross', failed_limit: 'cross', stalled: 'warn', in_review: 'diamond', done: 'check',
 };
 
 export const ALERT_ICON = { blocked: 'hand', overlap: 'warn', orphaned: 'cross', failed: 'cross' };

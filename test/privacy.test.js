@@ -34,6 +34,25 @@ test('Preferences renders PRIVACY.md itself, so the two cannot drift', () => {
   assert.ok(files.includes('PRIVACY.md') && files.includes('privacy-render.js'), 'both must ship in the package');
 });
 
+test('team session sharing discloses history, viewer, provider-account and presence limits', () => {
+  const entry = privacy.split('\n').find((l) => l.startsWith('- **Sharing one session with a team'));
+  assert.ok(entry, 'missing team sharing entry');
+  assert.match(entry, /messages from before then are never shown to them, also not when you later share the same session with another team/);
+  assert.match(entry, /role is viewer, who can only watch/);
+  assert.match(entry, /runs on your provider account[^.]*quota[^.]*local model endpoint[^.]*you are responsible for it/);
+  assert.match(entry, /whether the computer the session runs on is currently online/);
+  assert.match(entry, /short code added when two people/);
+});
+
+test('no disclosure bullet is duplicated, and messaging says team targets are not live', () => {
+  const heads = [...privacy.matchAll(/^- \*\*(.+?)\*\* <!-- flow:/gm)].map((m) => m[1]);
+  const dup = heads.filter((h, i) => heads.indexOf(h) !== i);
+  assert.deepEqual(dup, [], `duplicated bullets: ${dup.join(' | ')}`);
+  const msg = privacy.split('\n').find((l) => l.includes('flow:session-messaging'));
+  assert.match(msg, /team messaging targets are not live yet/);
+  assert.doesNotMatch(privacy, /same account/i);
+});
+
 test('the renderer escapes HTML', () => {
   assert.equal(render('a <script>x</script>'), '<p>a &lt;script&gt;x&lt;/script&gt;</p>');
 });
@@ -69,7 +88,7 @@ function shipped(dir = ROOT, out = []) {
     if (SKIP_DIRS.has(e.name)) continue;
     const p = path.join(dir, e.name);
     if (e.isDirectory()) shipped(p, out);
-    else if (/\.(js|mjs|cjs|html|css|swift)$/.test(e.name) && e.name !== 'playwright.config.js') {
+    else if (/\.(js|mjs|cjs|html|css|swift|py)$/.test(e.name) && e.name !== 'playwright.config.js') {
       const r = path.relative(ROOT, p);
       if (!BY_PACKAGING.has(r.split(path.sep)[0]) || packaged(PKG, r.split(path.sep).join('/'))) out.push(p);
     }
@@ -107,6 +126,8 @@ const CHANNEL = new RegExp([
   `(?:loadURL|downloadURL)\\(\\s*${NOT_LITERAL}`, '(?:loadURL|downloadURL)\\(\\s*[\'"`]https?:', `openExternal\\(\\s*${NOT_LITERAL}`,
   '@import\\b', 'url\\(\\s*[\'"]?(?:https?:)?//',
   'do shell script',
+  // Bundled Python observer plugins must disclose their process channels too.
+  '\\bsubprocess\\.(?:run|Popen|call|check_call|check_output)\\s*\\(',
   // a shell told to run a network tool, or git talking to a remote
   '\\b(?:sh|zsh|bash|cmd|powershell)[\'"`]\\s*,\\s*\\[[^\\]]*\\b(?:curl|wget|ssh|scp|nc|ncat|ftp|telnet|gh)\\b',
   '[\'"`]git[\'"`]\\s*,\\s*\\[[^\\]]*[\'"`](?:fetch|pull|push|clone|ls-remote|remote\\s+update)[\'"`]',
@@ -235,9 +256,14 @@ test('the website (site/) stays out of the app package, so its fetches are not a
   for (const f of ['site/src/assets/site.js', 'site/build.js', 'site/functions/api/waitlist.js']) assert.ok(!packaged(pkg, f), `${f} is being packaged: tag its network lines with privacy-flow and document them in PRIVACY.md`);
   assert.ok(packaged({ build: { files: ['**/*'] } }, 'site/src/assets/site.js'), 'self-check: a catch-all glob covers site/');
 });
-test('the phone relay (remote/) stays out of the app package until it is documented', () => {
+// Phone approvals (W2-B, src/remote-approvals-main.js) ship the security core:
+// remote/src is packaged, so the tripwire above scans it like src/. Its tests,
+// threat model and anything else under remote/ stay out.
+test('only the phone security core (remote/src) is packaged from remote/, and so it is scanned', () => {
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
-  for (const f of ['remote/src/relay.js', 'remote/package.json', 'remote']) assert.ok(!packaged(pkg, f), `${f} is being packaged: remove remote from SKIP_DIRS and document its flows`);
+  for (const f of ['remote/src/approvals.js', 'remote/src/node/file-store.js', 'remote/package.json']) assert.ok(packaged(pkg, f), `${f} must ship with src/remote-approvals-main.js`);
+  for (const f of ['remote/test/helpers.js', 'remote/THREAT_MODEL.md', 'remote']) assert.ok(!packaged(pkg, f), `${f} is being packaged`);
+  assert.ok(files.some((f) => rel(f) === 'remote/src/approvals.js'), 'the tripwire scans the packaged security core');
   assert.ok(packaged({ build: { files: ['**/*'] } }, 'remote/src/relay.js'), 'self-check: a catch-all glob covers remote/');
   assert.ok(packaged({ build: { mac: { extraResources: [{ from: 'remote', to: 'r' }] } } }, 'remote/src/relay.js'), 'self-check: per-OS extraResources');
   assert.ok(!packaged({ build: { files: ['**/*', '!remote/**'] } }, 'remote/src/relay.js'), 'self-check: negation');
@@ -308,13 +334,20 @@ test('the shipped dependency list is an allow-list', () => {
   }
 });
 
-test('every window turns spellcheck off (it downloads dictionaries from Google on Windows/Linux)', () => {
-  let windows = 0;
+test('every BrowserWindow turns spellcheck off and every embedded session is covered by the offline policy', () => {
+  const windows = new Map();
   for (const f of files) {
     const src = fs.readFileSync(f, 'utf8');
     const n = (src.match(/new BrowserWindow\(/g) || []).length;
-    windows += n;
+    if (n) windows.set(rel(f), n);
     assert.equal((src.match(/spellcheck:\s*false/g) || []).length, n, `${rel(f)}: every new BrowserWindow needs webPreferences.spellcheck: false`);
   }
-  assert.ok(windows >= 6);
+  assert.deepEqual([...windows.entries()].sort(), [['buddy-window/index.js', 1], ['main.js', 5], ['src/invoice.js', 1]]); // main: widget, Lights, overlay, tray renderer, first-run setup; invoice: hidden offline PDF printer
+  const main = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8');
+  assert.match(main, /require\('\.\/src\/spellcheck\.js'\)\.keepOffline\(\{ app, getDefaultSession: \(\) => require\('electron'\)\.session\.defaultSession \}\)/);
+  const policy = fs.readFileSync(path.join(ROOT, 'src/spellcheck.js'), 'utf8');
+  assert.match(policy, /app\.on\('session-created', off\)/);
+  assert.match(policy, /app\.whenReady\(\)\.then\(\(\) => off\(getDefaultSession\(\)\)\)/);
+  assert.match(policy, /ses\.setSpellCheckerEnabled\(false\)/);
+  assert.match(policy, /ses\.setSpellCheckerDictionaryDownloadURL\(NOWHERE\)/);
 });

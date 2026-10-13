@@ -9,6 +9,7 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const { storageHelp } = require('./secure-storage');
 const http = require('node:http'); // privacy-flow: team-hub-account
 const https = require('node:https'); // privacy-flow: team-hub-account
 const dns = require('node:dns'); // privacy-flow: team-hub-account
@@ -44,6 +45,31 @@ const ROUTES = {
   unenrol: ['DELETE', '/api/teams/:team/enrol'],
   enrolments: ['GET', '/api/teams/:team/enrolments'],
   revokeEnrolment: ['DELETE', '/api/teams/:team/enrolments/:enrollment'],
+  nativeSnapshot: ['GET', '/api/boards/:board'],
+  nativeCard: ['GET', '/api/cards/:card'],
+  nativeCreate: ['POST', '/api/boards/:board/cards'],
+  nativePatch: ['PATCH', '/api/cards/:card'],
+  nativeComment: ['POST', '/api/cards/:card/comments'],
+  nativeReadPacket: ['GET', '/api/cards/:card/packet'],
+  nativeWritePacket: ['POST', '/api/cards/:card/packet'],
+  nativeMessages: ['GET', '/api/cards/:card/messages'],
+  nativeSendMessage: ['POST', '/api/cards/:card/messages'],
+  nativeWorkContext: ['GET', '/api/boards/:board/work-context'],
+  captureRoutes: ['GET', '/api/work-capture/routes'],
+  myDay: ['GET', '/api/my-day'],
+  setupsList: ['GET','/api/teams/:team/setups'],
+  setupsPublish: ['POST','/api/teams/:team/setups'],
+  setupsRead: ['GET','/api/setup-profiles/:profile/versions/:version'],
+  setupsExport: ['GET','/api/setup-profiles/:profile/export'],
+  setupsUnpublish: ['DELETE','/api/setup-profiles/:profile'],
+  setupsActivity: ['GET','/api/setup-profiles/:profile/activity'],
+  setupsBaseline: ['PUT','/api/teams/:team/setup-baseline'],
+  setupsReceipt: ['POST','/api/setup-profiles/:profile/borrow-receipts'],
+  captureWork: ['POST', '/api/boards/:board/work-capture'],
+  repos: ['GET', '/api/repos'],
+  createRepo: ['POST', '/api/repos'],
+  addBoardRepo: ['POST', '/api/boards/:board/repos'],
+  salvageHandover: ['POST', '/api/cards/:card/handover/salvage'],
 };
 
 const ROLES = ['owner', 'admin', 'member', 'viewer'];
@@ -216,14 +242,26 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
 
   // `token`: a token that must not be stored, sent in place of the saved one (the revoke of a cancelled sign-in).
   // `via`: a transport for this one call in place of fetchImpl (a provider sign-in's pinned address).
-  async function call(name, { params, body, auth = true, token = null, via = null } = {}) {
+  async function call(name, { params, body, auth = true, token = null, via = null, accountOwner = null, memberOwner = null } = {}) {
     const [method] = ROUTES[name];
     let url;
     try { url = origin + routePath(name, params); } catch { return { ok: false, error: 'That isn’t a valid id.' }; }
+    if (name.startsWith('native') && params?.boardIds) {
+      const narrowed = new URL(url);
+      for (const id of params.boardIds) narrowed.searchParams.append('board_id', id);
+      if(name==='nativeWorkContext')for(const key of ['repo_id','limit','cursor'])if(params[key]!=null)narrowed.searchParams.set(key,String(params[key]));
+      url = narrowed.href;
+    }
     const headers = { Accept: 'application/json' };
     const s = token ? { token } : auth ? saved() : null;
     if (auth && !s) return { ok: false, signedOut: true, error: 'Sign in first.' };
     if (s) headers.Authorization = `Bearer ${s.token}`;
+    if(name.startsWith('setups')) {
+      if(typeof accountOwner!=='string'||!ID_RE.test(accountOwner))return {ok:false,error:'Refresh your current account before using Setups.'};
+      if(typeof memberOwner!=='string'||!ID_RE.test(memberOwner))return {ok:false,error:'Refresh your current team membership before using Setups.'};
+      headers['X-Plexiform-Account']=accountOwner;
+      headers['X-Plexiform-Member']=memberOwner;
+    }
     // The team the call acts in; a URL id in another team makes the hub answer 404.
     if (params?.team) headers['X-Board-Team'] = String(params.team);
     if (body !== undefined) headers['Content-Type'] = 'application/json';
@@ -235,7 +273,13 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
       return { ok: false, error: `Couldn’t reach ${host}. Check the address and your connection.` };
     }
     let json = null;
-    try { json = await res.json(); } catch { json = null; }
+    try {
+      if(name.startsWith('setups') && res.body?.getReader) {
+        const reader=res.body.getReader(),parts=[];let size=0;
+        try {for(;;){const next=await reader.read();if(next.done)break;size+=next.value.byteLength;if(size>3*1024*1024)throw new Error('Setups response too large');parts.push(Buffer.from(next.value));}json=JSON.parse(Buffer.concat(parts).toString('utf8'));}
+        catch(error){await reader.cancel().catch(()=>{});throw error;}
+      } else {json=await res.json();if(name.startsWith('setups')&&Buffer.byteLength(JSON.stringify(json))>3*1024*1024)json=null;}
+    } catch { json = null; }
     // STEP_UP_REQUIRED is also a 401, but only means "do the check again".
     if (res.status === 401 && s && (json?.error?.code ?? 'UNAUTHENTICATED') === 'UNAUTHENTICATED') {
       // No refresh in this model: a 401 on the device token means it was
@@ -261,7 +305,7 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
     try {
       store.save({ hub: origin, token: r.device_token, device_id: r.device_id ?? null, user: r.user ?? null });
     } catch {
-      return { ok: false, error: 'This Mac couldn’t store your sign-in securely. Try again.' };
+      return { ok: false, error: `Plexiform couldn’t save your sign-in securely. ${storageHelp()}` };
     }
     return { ok: true, user: r.user ?? null, teams: Array.isArray(r.teams) ? r.teams : [] };
   }
@@ -363,7 +407,9 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
       }
       if (!r.ok) return oauthOutcome(r, provider, host);
       const done = signedInWith(r);
-      return done.ok ? { ...done, email: r.user?.email ?? null } : done;
+      // The hub made a second account (another one holds this address; no linking yet): the member must hear it.
+      const notice = r.notice?.code === 'SEPARATE_ACCOUNT' && typeof r.notice.message === 'string' ? { notice: r.notice.message.slice(0, 500) } : {};
+      return done.ok ? { ...done, email: r.user?.email ?? null, ...notice } : done;
     },
 
     pendingEmail: () => (flow?.purpose === 'signin' ? flow.email : null),
@@ -376,6 +422,30 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
       return call('createTeam', { body: { name: n, request_id: crypto.randomUUID() } });
     },
     getTeam: (team) => call('team', { params: { team } }),
+    captureRoutes: () => call('captureRoutes'),
+    myDay: () => call('myDay'),
+    setups(op, team, {profile,version,body}={}, owner=saved()?.user?.id, memberOwner=null) {
+      const name={list:'setupsList',publish:'setupsPublish',read:'setupsRead',export:'setupsExport',unpublish:'setupsUnpublish',activity:'setupsActivity',baseline:'setupsBaseline',receipt:'setupsReceipt'}[op];
+      if(!name || typeof team!=='string' || !ID_RE.test(team)) return Promise.resolve({ok:false});
+      return call(name,{params:{team,profile,version},body:ROUTES[name][0]==='GET'?undefined:body,accountOwner:owner,memberOwner});
+    },
+    captureWork: (team, board, body) => call('captureWork', { params: { team, board }, body }),
+    // Linking a repo to a board (owners and admins; the hub answers 403 otherwise) and the opt-in handover share.
+    listRepos: (team) => call('repos', { params: { team } }),
+    createRepo: (team, url) => call('createRepo', { params: { team }, body: { request_id: crypto.randomUUID(), url } }),
+    addBoardRepo: (team, board, repoId) => call('addBoardRepo', { params: { team, board }, body: { repo_id: repoId } }),
+    salvageHandover: (team, card, body) => call('salvageHandover', { params: { team, card }, body }),
+    // Main-only board broker: fixed routes and team header; never an arbitrary
+    // URL or bearer credential supplied by an MCP client.
+    nativeBoard(operation, params, body) {
+      const name = { snapshot: 'nativeSnapshot', card: 'nativeCard', create: 'nativeCreate', patch: 'nativePatch', comment: 'nativeComment',
+        readPacket: 'nativeReadPacket', writePacket: 'nativeWritePacket', messages: 'nativeMessages', sendMessage: 'nativeSendMessage', workContext:'nativeWorkContext' }[operation];
+      if (!name || !ID_RE.test(String(params?.team ?? ''))) return Promise.resolve({ ok: false, error: 'Invalid board operation.' });
+      if (['readPacket', 'writePacket', 'messages', 'sendMessage','workContext'].includes(operation)
+        && (!Array.isArray(params.boardIds) || params.boardIds.length < 1 || params.boardIds.length > 32
+          || params.boardIds.some((id) => typeof id !== 'string' || !ID_RE.test(id)))) return Promise.resolve({ ok: false, error: 'Choose the permitted boards.' });
+      return call(name, { params, body });
+    },
     renameTeam(team, name) {
       const n = String(name ?? '').trim();
       if (!n || n.length > 60) return Promise.resolve({ ok: false, error: 'Give the team a name (up to 60 characters).' });

@@ -2,6 +2,7 @@
 // fake clock, the outbox mailer (no mail leaves the process) and the dev
 // fixture org (alice@dev.local owner, bob@dev.local member, board DEV).
 
+import { rmSync } from 'node:fs';
 import WebSocket from 'ws';
 import { createApp } from '../app.js';
 import { silentLogger } from '../log.js';
@@ -13,7 +14,8 @@ import { fakeClock, fakeGitHub, testConfig, FakeBrowser } from './helpers.js';
 // fetchImpl: the hub's outbound fetch (OAuth providers); log: a capturing logger.
 export async function startAccounts({ clock = fakeClock(), config = {}, mailer = outboxMailer(), fetchImpl, log = silentLogger } = {}) {
   // Open sign-up unless a test says otherwise (accounts mode defaults to allowlist, D104).
-  const cfg = testConfig({ auth: 'accounts', devLoginSecret: null, accountsDev: true, signup: 'open', ...config });
+  // Email-code sign-in is opt-in (BOARD_EMAIL_SIGNIN); this rig signs in by code unless a test turns it off.
+  const cfg = testConfig({ auth: 'accounts', devLoginSecret: null, accountsDev: true, signup: 'open', emailSignin: true, ...config });
   const app = createApp(cfg, { clock, log, github: fakeGitHub(), timers: false, mailer, ...(fetchImpl ? { fetchImpl } : {}) });
   seedDev(app.hub);
   const addr = await app.listen(0, '127.0.0.1');
@@ -85,6 +87,10 @@ export async function startAccounts({ clock = fakeClock(), config = {}, mailer =
     async close() {
       for (const b of sockets) b.terminate();
       await app.close({ graceMs: 50 });
+    },
+    async destroy() {
+      await h.close();
+      rmSync(cfg.dataDir, { recursive: true, force: true });
     },
   };
   return h;

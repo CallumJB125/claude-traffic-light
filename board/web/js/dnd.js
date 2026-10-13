@@ -2,7 +2,7 @@
 // machine. No DOM, no clocks. A column is derived (rank, then recency), never
 // stored, so a drop only ever changes `column`; where the card will *land* is
 // computed by running the same sort with the column changed.
-import { COLUMNS, COLUMN_LABEL, groupColumns, isHumanOwned } from './view.js';
+import { COLUMNS, COLUMN_LABEL, groupColumns, isHumanOwned, hasLiveCapture } from './view.js';
 
 const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
@@ -18,6 +18,7 @@ export function planMoves(ids, getView, column) {
     const v = getView(id);
     if (!v) continue;
     if (!isHumanOwned(v)) skipped.push({ id, key: v.key, reason: 'run' });
+    else if (column === 'done' && hasLiveCapture(v)) skipped.push({ id, key: v.key, reason: 'working' });
     else if (v.column === column) unchanged.push(id);
     else moves.push({ id, key: v.key, from: v.column, version: v.version });
   }
@@ -30,11 +31,14 @@ export function moveSummary(plan, column) {
   const parts = [];
   if (plan.moves.length === 1) parts.push(`Moved ${plan.moves[0].key} to ${label}.`);
   else if (plan.moves.length > 1) parts.push(`Moved ${plural(plan.moves.length, 'card')} to ${label}.`);
-  if (plan.skipped.length) {
-    const keys = plan.skipped.map((s) => s.key).join(', ');
-    const one = plan.skipped.length === 1;
+  const runs = plan.skipped.filter((s) => s.reason !== 'working');
+  const working = plan.skipped.filter((s) => s.reason === 'working');
+  if (runs.length) {
+    const keys = runs.map((s) => s.key).join(', ');
+    const one = runs.length === 1;
     parts.push(`Skipped ${keys}: Claude drives ${one ? 'its' : 'their'} column, so ${one ? 'it' : 'they'} can't be moved by hand.`);
   }
+  if (working.length) parts.push(`Skipped ${working.map((s) => s.key).join(', ')}: an AI is still working, so it can't be marked done yet.`);
   if (!plan.moves.length && !plan.skipped.length && plan.unchanged.length) parts.push(`Already in ${label}.`);
   return parts.join(' ');
 }

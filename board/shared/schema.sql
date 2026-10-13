@@ -130,7 +130,7 @@ CREATE TABLE card_assignees (
   PRIMARY KEY (card_id, member_id)
 );
 
--- A Give to Claude request. Idempotency key = request_id (client-generated uuid).
+-- A Tackle with AI request. Idempotency key = request_id (client-generated uuid).
 CREATE TABLE dispatches (
   request_id TEXT PRIMARY KEY,
   card_id TEXT NOT NULL REFERENCES cards,

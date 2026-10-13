@@ -1,0 +1,12 @@
+{
+  "ok": true,
+  "access_token": "__RUNTIME__",
+  "token_type": "bot",
+  "scope": "commands,chat:write",
+  "bot_user_id": "U0BOT001",
+  "app_id": "A0APP01",
+  "team": { "name": "Acme", "id": "T0TEAM1" },
+  "enterprise": null,
+  "is_enterprise_install": false,
+  "authed_user": { "id": "U0ADMIN1" }
+}

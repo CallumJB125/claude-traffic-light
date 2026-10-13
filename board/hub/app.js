@@ -7,6 +7,9 @@ import { loadKey, loadPreviousKey } from './vault.js';
 import { createBus } from './bus.js';
 import { createIntegrations } from './integrations/registry.js';
 import { connectorsFor } from './integrations/index.js';
+import { createGitHubApp } from './integrations/github/app.js';
+import { createGitHubCards } from './integrations/github/cards.js';
+import { Triggers } from './triggers.js';
 import { createServer } from 'node:http'; // privacy-flow: local-board-hub
 import { randomBytes } from 'node:crypto';
 import { WebSocketServer } from 'ws'; // privacy-flow: local-board-hub
@@ -22,21 +25,47 @@ import { createLogger } from './log.js';
 import { seedDev, seedLocal, bootstrapAdmin } from './seed.js';
 import { Accounts } from './identity/accounts.js';
 import { createMailer } from './identity/mailer.js';
+import { createTurnstile } from './identity/turnstile.js';
 import { Teams } from './identity/teams.js';
 import { Invites } from './identity/invites.js';
+import { Clients } from './identity/clients.js';
+import { ClientArtifacts } from './identity/client-artifacts.js';
+import { ClientFeedback } from './identity/client-feedback.js';
 import { OAuth } from './identity/oauth.js';
 import { WebOAuth } from './identity/oauth-web.js';
 import { Enrolments } from './identity/enrolments.js';
+import { HostedRunners } from './hosted-runners.js';
+import { HostedRepoTokens } from './hosted-repo-tokens.js';
+import { Billing } from './billing/entitlements.js';
+import { PushService } from './push.js';
+import { Sync } from './sync.js';
+import { Activity } from './activity/index.js';
 import { oauthProviders } from './config.js';
+import { RemoteAuthority } from './remote/authority.js';
+import { StorageWatch } from './storage-watch.js';
+import { PublicApi } from './public-api/index.js';
+
+// Sync lapse notices and purges run hourly (sync.js sweep).
+const SYNC_SWEEP_MS = 60 * 60_000;
 
 export function createApp(config, { clock = defaultClock, log = createLogger({ level: config.logLevel }), github = null, fetchImpl = globalThis.fetch, timers = true, mailer } = {}) { // privacy-flow: hub-server
   const db = openDb(config.dbPath, { now: () => new Date(clock.wall()).toISOString() });
+  try {
+    return buildApp(config, { db, clock, log, github, fetchImpl, timers, mailer });
+  } catch (error) {
+    // Construction never hands the caller an app to close on failure.
+    try { db.close(); } catch { /* Preserve the original startup error. */ }
+    throw error;
+  }
+}
+
+function buildApp(config, { db, clock, log, github, fetchImpl, timers, mailer }) {
   const gh = github ?? (config.githubToken ? createGitHub({ token: config.githubToken, api: config.githubApi, fetchImpl }) : noGitHub);
   if (config.auth !== 'local' && db.meta('local_member')) {
-    db.close();
     throw new Error('this database belongs to the desktop app (BOARD_AUTH=local)');
   }
   const hub = new Hub({ db, config, clock, log, github: gh });
+  hub.storage = new StorageWatch(hub);
   // Dev login needs this per-process secret (header Board-Dev-Secret), printed
   // at startup: a loopback bind alone does not prove who is asking.
   hub.devLoginSecret = config.auth === 'dev' ? (config.devLoginSecret ?? randomBytes(18).toString('base64url')) : null;
@@ -49,12 +78,22 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
   hub.localMemberId = config.auth === 'local' ? seedLocal(hub, config.bootstrapBoard) : null;
   // Accounts mode (D51): its own sign-in; the BOARD_BOOTSTRAP owner is linked
   // to whoever first proves that email address.
-  hub.accounts = config.auth === 'accounts' ? new Accounts(hub, { mailer: mailer !== undefined ? mailer : createMailer(config, { fetchImpl, now: () => new Date(clock.wall()) }) }) : null;
+  hub.accounts = config.auth === 'accounts' ? new Accounts(hub, { mailer: mailer !== undefined ? mailer : createMailer(config, { fetchImpl, now: () => new Date(clock.wall()) }), turnstile: createTurnstile(config, { fetchImpl }) }) : null;
   hub.teams = hub.accounts ? new Teams(hub, { accounts: hub.accounts }) : null;
   hub.invites = hub.accounts ? new Invites(hub, { accounts: hub.accounts, teams: hub.teams }) : null;
+  hub.clients = hub.accounts ? new Clients(hub) : null;
+  hub.clientArtifacts = hub.clients ? new ClientArtifacts(hub) : null;
+  hub.clientFeedback = hub.clients ? new ClientFeedback(hub) : null;
   hub.oauth = hub.accounts ? new OAuth(hub, { accounts: hub.accounts, fetchImpl }) : null;
   hub.oauthWeb = hub.oauth ? new WebOAuth(hub) : null;
   hub.enrolments = hub.accounts ? new Enrolments(hub, { accounts: hub.accounts }) : null;
+  hub.hostedRunners = hub.enrolments ? new HostedRunners(hub, { accounts: hub.accounts, enrolments: hub.enrolments }) : null;
+  hub.billing = hub.accounts ? new Billing(hub, { fetchImpl }) : null;
+  // Phone push (push.js): content-free pings; off without the operator's VAPID keys.
+  hub.push = hub.accounts ? new PushService(hub, { fetchImpl, ...(config.pushHosts ? { hosts: config.pushHosts } : {}), allowHttp: config.pushAllowHttp === true }) : null;
+  hub.sync = hub.accounts ? new Sync(hub) : null;
+  hub.activity = hub.accounts ? new Activity(hub) : null;
+  hub.remoteAuthority = hub.accounts ? new RemoteAuthority(hub) : null;
   // Deleting an account or a team needs a step-up: an email code (a mailer)
   // or an OAuth re-authentication (a configured provider). Without either,
   // say so, and how an operator erases.
@@ -77,11 +116,20 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
   const bus = createBus({ db, log });
   hub.on('journal', () => bus.poke());
   const integrations = createIntegrations({ hub, api, bus, log, fetchImpl, publicUrl: config.publicUrl });
-  for (const c of connectorsFor(config)) integrations.register(c);
+  // The hub's own GitHub App (step 4), from the operator's GITHUB_APP_* settings.
+  const githubApp = config.githubApp ? createGitHubApp(config.githubApp, { fetchImpl, now: clock.wall }) : null;
+  hub.hasGitHubApp = !!githubApp;
+  hub.triggers = new Triggers(hub, { api, bus, log });
+  for (const c of connectorsFor(config, { githubApp })) integrations.register(hub.triggers.observe(c));
+  const githubCards = githubApp ? createGitHubCards({ hub, api, integrations, app: githubApp }) : null;
+  // A hosted runner's clone/push tokens (GET /api/runner/v1/repo-token): accounts mode only.
+  hub.repoTokens = hub.hostedRunners ? new HostedRepoTokens(hub, { app: githubApp, integrations }) : null;
   // Expired pending connections (D97) go with the reaper (the registry runs it at most once a minute).
   hub.sweepIntegrationsPending = () => integrations.sweepPending();
+  // Public API tokens and outbound webhooks (docs/PUBLIC-API.md): accounts mode only.
+  hub.publicApi = hub.accounts ? new PublicApi(hub, { api, bus, ...config.outboundWebhooks }) : null;
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 }); // privacy-flow: local-board-hub
-  const handler = createHttpHandler({ hub, api, config, integrations });
+  const handler = createHttpHandler({ hub, api, config, integrations, githubCards });
   const lim = { ...REQUEST_LIMITS, ...config.requestLimits };
   const server = createServer({
     requestTimeout: lim.requestTimeoutMs, headersTimeout: lim.headersTimeoutMs, keepAliveTimeout: lim.keepAliveTimeoutMs, connectionsCheckingInterval: lim.checkIntervalMs,
@@ -98,6 +146,26 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
       ticking = true;
       try { await hub.tick(); } catch (e) { log.error('reaper tick failed', { err: e }); } finally { ticking = false; }
     }, REAPER_MS));
+    // Messaging retention, expired handoffs and retired targets (MESSAGING.md §5): never per request.
+    if (hub.messaging) {
+      intervals.push(setInterval(() => {
+        if (closed) return;
+        try { hub.messaging.purge(); } catch (e) { log.warn('messaging sweep failed', { err: e }); }
+      }, hub.messaging.limits.sweepMs));
+    }
+    // Sync lapse notices and purges (sync.js): hourly, never per request.
+    if (hub.sync?.enabled) {
+      intervals.push(setInterval(() => {
+        if (closed) return;
+        hub.sync.sweep().catch((e) => log.warn('sync sweep failed', { err: e }));
+      }, SYNC_SWEEP_MS));
+    }
+    if (hub.activity) {
+      intervals.push(setInterval(() => {
+        if (closed) return;
+        try { hub.activity.sweep(); } catch (e) { log.warn('activity sweep failed', { err: e }); }
+      }, SYNC_SWEEP_MS));
+    }
     if (gh.enabled) {
       intervals.push(setInterval(() => { hub.pollMerges().catch((e) => log.warn('merge poll failed', { err: e })); }, config.githubPollMs));
     }
@@ -117,10 +185,11 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
     }
     for (const i of intervals) i.unref?.();
     bus.start();
+    hub.publicApi?.webhooks.start();
   }
 
   return {
-    hub, api, server, db, config, routes: handler.routes, devLoginSecret: hub.devLoginSecret, integrations, bus,
+    hub, api, server, db, config, routes: handler.routes, remoteState: handler.remoteState, devLoginSecret: hub.devLoginSecret, integrations, bus,
     listen(port = config.port, host = config.bind) {
       return new Promise((resolve, reject) => {
         server.once('error', reject);
@@ -138,7 +207,12 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
     async close({ graceMs = config.shutdownGraceMs ?? 5000 } = {}) {
       if (closed) return;
       closed = true;
+      api.workflowExecutor.close();
+      hub.interactionRelay?.close();
+      hub.messaging?.close();
+      hub.activity?.close();
       bus.stop();
+      hub.publicApi?.webhooks.stop();
       for (const i of intervals) clearInterval(i);
       const done = new Promise((resolve) => server.close(() => resolve()));
       const grace = () => new Promise((r) => setTimeout(r, graceMs).unref());

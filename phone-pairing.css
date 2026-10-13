@@ -1,0 +1,6 @@
+.qr { display: block; width: 240px; height: 240px; background: #fff; border-radius: var(--radius); margin: 8px 0; }
+.qr path { fill: #000; }
+.link { width: 100%; font: var(--text-sm) ui-monospace, monospace; padding: 6px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg); color: var(--text); }
+.code { font: var(--text-lg) ui-monospace, monospace; letter-spacing: .2em; width: 9em; padding: 6px 8px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--bg); color: var(--text); }
+.device { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 8px 0; border-top: 1px solid var(--line); flex-wrap: wrap; }
+.warn { color: var(--red); }

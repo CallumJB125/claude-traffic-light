@@ -27,7 +27,7 @@ test('the event shows a row with the text and both buttons; a duplicate adds not
   await inject(EVENT);
   await expect(widget.locator('#budget')).toBeVisible({ timeout: 10000 });
   await expect(widget.locator('#budget-text')).toHaveText(TEXT);
-  await expect(widget.locator('#budget-acts button')).toHaveText(['Increase budget & continue…', 'Stop run…']);
+  await expect(widget.locator('#budget-acts button')).toHaveText(['Increase & continue', 'Stop']);
   await inject(EVENT);
   await inject({ ...EVENT, run_id: 'bad id' });
   await widget.waitForTimeout(300);
@@ -39,7 +39,11 @@ test('the event shows a row with the text and both buttons; a duplicate adds not
   await expect(widget).toHaveScreenshot('widget-budget-notice.png', SHOT);
 });
 
+// Each later test injects the event itself (a duplicate adds nothing), so it
+// stands alone when an earlier failure restarts the worker on a fresh app.
 test('a status broadcast with the same data keeps the buttons (a click is not lost)', async () => {
+  await inject(EVENT);
+  await expect(widget.locator('#budget-acts button')).toHaveCount(2, { timeout: 10000 });
   await widget.evaluate(() => { document.querySelector('#budget-acts button').dataset.same = '1'; });
   await signal(h, { signal: 'tool-use', session: 'bc', source: 'claude', cwd: '/work/bc', tool: 'Bash' });
   await expect.poll(async () => (await widget.evaluate(() => window.trafficLight.getAggregateStatus())).sessions.length).toBeGreaterThan(0);
@@ -49,7 +53,9 @@ test('a status broadcast with the same data keeps the buttons (a click is not lo
 });
 
 test('with no way to open the card, a button says where to go and offers the board', async () => {
-  await widget.locator('#budget-acts button', { hasText: 'Stop run…' }).click();
+  await inject(EVENT);
+  await expect(widget.locator('#budget-acts button', { hasText: 'Stop' })).toBeVisible({ timeout: 10000 });
+  await widget.locator('#budget-acts button', { hasText: 'Stop' }).click();
   await expect(widget.locator('#budget-text')).toHaveText('Open the card on your board to raise the budget or stop the run.');
   await expect(widget.locator('#budget-acts button')).toHaveText(['Open board']);
 });
@@ -77,7 +83,7 @@ test('x dismisses, run.ended clears, and the next notice shows', async () => {
 
 test('the ask bubble wins while it is up', async () => {
   await inject({ ...EVENT, card_key: undefined, run_id: 'run_3' });
-  await expect(widget.locator('#budget-text')).toHaveText('Your Give to Claude run reached its budget ($4.80 of $5.00)');
+  await expect(widget.locator('#budget-text')).toHaveText('Your AI run reached its budget ($4.80 of $5.00)');
   const hook = F.blockingHook(h, 'permission-request', { session_id: 'vis-budget', cwd: '/visual/app', tool_name: 'Bash', tool_input: { command: 'git status' } });
   await expect(widget.locator('.ib-item.kind-permission.open')).toBeVisible({ timeout: 10000 });
   await expect(widget.locator('#budget')).toBeHidden();

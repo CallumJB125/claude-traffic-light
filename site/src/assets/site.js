@@ -116,7 +116,7 @@
   if (os === 'win' || os === 'linux') {
     const base = (document.querySelector('meta[name="downloads"]') || {}).content;
     const other = () => { for (const a of document.querySelectorAll('[data-other-platforms]')) a.hidden = false; };
-    if (!base) other();
+    if (!base || (os === 'win' && document.querySelector('meta[name="windows-downloads"]')?.content !== 'true')) other();
     else fetch(`${base}/${FEEDFILE[os]}`, { cache: 'no-cache' }).then((r) => (r.ok ? r.text() : Promise.reject())).then((t) => { if (/^version:/m.test(t)) label(NAMES[os]); else other(); }).catch(other);
   } else if (os === 'other') {
     for (const a of document.querySelectorAll('[data-other-platforms]')) a.hidden = false;

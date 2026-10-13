@@ -1,0 +1,5 @@
+{
+  "type": "module",
+  "private": true,
+  "description": "The interaction relay's end-to-end envelope, shared by the app (src/remote-interaction.js), the phone PWA (board/web/js/phone-e2e.js, a byte-identical copy) and the phone security core (remote/)."
+}

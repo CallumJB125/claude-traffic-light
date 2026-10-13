@@ -99,13 +99,8 @@
     ok(/name/i.test($('face-err').textContent), 'saving without a name asks for one');
     fire(document, 'keydown', { key: 'Escape' });
     ok($('face-modal').hidden, 'Escape closes the face modal');
-    cameoBtn('neo').click();
-    const stagePhoto = () => document.querySelector('#stage-rig .cameo-photo-img').getAttribute('href') || '';
-    ok(stageLook().cls.includes('has-photo') && stageLook().cls.includes('costume-unicorn') && stagePhoto().startsWith('data:image/png'), 'a built-in photo cameo applies on the stage alongside the costume');
     cameoBtn('alfred').click();
-    ok(stageLook().cls.includes('cameo-alfred') && !stageLook().cls.includes('has-photo'), 'alfred is still the drawn face');
-    cameoBtn('baker').click();
-    ok(stageLook().cls.includes('has-photo') && !stageLook().cls.includes('cameo-alfred'), 'switching back to a photo cameo swaps it');
+    ok(stageLook().cls.includes('cameo-alfred') && stageLook().cls.includes('costume-unicorn') && !stageLook().cls.includes('has-photo'), 'a drawn cameo applies on the stage alongside the costume');
     const pick = (id, title) => Array.from($(id).querySelectorAll('.posebtn')).find((b) => b.title === title).click();
     pick('signs', 'h5'); ok(stageLook().cls.includes('sign-h5'), 'sign layout applies on the stage');
     pick('shapes', 'heart'); ok(document.querySelector('#stage-rig .sign-h5 .lamp').getAttribute('href') === '#lamp-heart', 'lamp shape swaps the symbol');

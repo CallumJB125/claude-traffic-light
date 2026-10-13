@@ -18,10 +18,15 @@ function loadMcp() {
 // Shared with main.js --uninstall-hooks (the Windows uninstaller).
 function main({ home = os.homedir(), mcp = loadMcp(), log = console.log } = {}) {
   const results = UninstallAll.run({ home, mcp });
-  for (const r of results) log(`[uninstall-hooks] ${r.id}: ${r.error ? `left alone (${r.error})` : r.changed ? 'removed' : 'nothing to remove'} ${r.file}`);
+  if (!mcp) results.push({ id: 'mcp', file: path.join(home, '.claude.json'), changed: false, error: 'MCP uninstall helper unavailable' });
+  for (const r of results) log(`[uninstall-hooks] ${r.id}: ${Object.hasOwn(r, 'error') ? `left alone (${r.error})` : r.changed ? 'removed' : 'nothing to remove'} ${r.file}`);
   return results;
 }
 
-if (require.main === module) main();
+function exitCode(results) {
+  return Array.isArray(results) && results.every(r => r && typeof r === 'object' && !Object.hasOwn(r, 'error')) ? 0 : 1;
+}
 
-module.exports = { main, loadMcp };
+if (require.main === module) process.exitCode = exitCode(main());
+
+module.exports = { main, loadMcp, exitCode };

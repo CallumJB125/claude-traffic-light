@@ -1,0 +1,113 @@
+/* Plexiform's look for Claude Burst's dashboard, injected with insertCSS into
+   the Usage optimiser view only. Values are literal (the dashboard cannot read
+   tokens.css) and mirror tokens.css and shell.css: test/burst-theme.test.js
+   keeps them in step. Everything is an override: if Burst renames a variable
+   or a selector, the rule matches nothing and the page just stays as Burst
+   drew it. */
+
+:root:root {
+  color-scheme: dark;
+  --bg: #1c1a1f;
+  --panel: #221f27;
+  --panel-2: #2a2731;
+  --border: #35313d;
+  --text: #ece8e2;
+  --muted: #a8a293;
+  --faint: #979183;
+  --accent: #da7756;
+  --ok: #2fae3e;
+  --ok-bg: rgba(47, 174, 62, 0.14);
+  --pass: #2fae3e;
+  --pass-bg: rgba(47, 174, 62, 0.14);
+  --warn: #f2a200;
+  --warn-bg: rgba(242, 162, 0, 0.14);
+  --bad: #ff8a80;
+  --bad-bg: rgba(226, 35, 26, 0.16);
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  --radius: 7px;
+  --head-bg: #2a2731;
+  --thead-bg: #26232d;
+  --shadow: none;
+  --pc-a: #da7756;
+  --pc-b: #da7756;
+  --pc-c: #e8a083;
+  --pcs-saved: #da7756;
+  --pcs-cost: #6fa8a0;
+  --grid: #35313d;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:root {
+    color-scheme: light;
+    --bg: #eceaf0;
+    --panel: #fbfafc;
+    --panel-2: #f3f1f6;
+    --border: #dedae4;
+    --text: #1d1a22;
+    --muted: #5b5566;
+    --faint: #6b6577;
+    --accent: #b4532f;
+    --ok: #23792e;
+    --ok-bg: rgba(35, 121, 46, 0.1);
+    --pass: #23792e;
+    --pass-bg: rgba(35, 121, 46, 0.1);
+    --warn: #8f5d00;
+    --warn-bg: rgba(143, 93, 0, 0.1);
+    --bad: #b3261e;
+    --bad-bg: rgba(179, 38, 30, 0.1);
+    --head-bg: #f3f1f6;
+    --thead-bg: #f0eef4;
+    --pc-a: #b4532f;
+    --pc-b: #b4532f;
+    --pc-c: #c8785a;
+    --pcs-saved: #b4532f;
+    --pcs-cost: #2f7d74;
+    --grid: #dedae4;
+  }
+}
+
+/* Plexiform's own navigation and header replace Burst's. */
+aside.side, .wrap > header { display: none !important; }
+.app { display: block !important; min-height: 0; }
+.wrap { max-width: none; padding: 16px 20px 48px; }
+
+body {
+  font: 400 13px/1.45 -apple-system, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  background: var(--bg);
+  color: var(--text);
+}
+h1, h2, h3 { letter-spacing: normal; }
+section, .card { border-radius: var(--radius); box-shadow: none; }
+section > h2 { font-size: 13px; font-weight: 600; }
+.card h3 { letter-spacing: 0.04em; }
+.stat { font-size: 22px; }
+a { color: var(--accent); }
+
+button, select, input, textarea {
+  font: inherit;
+  color: var(--text);
+  border-radius: var(--radius);
+}
+button {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  padding: 4px 11px;
+  min-height: 28px;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+button:hover:not(:disabled) { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+button.primary, button.go { background: var(--accent); border-color: var(--accent); color: #211f1c; }
+button:disabled { opacity: 0.5; }
+input, select, textarea { background: var(--bg); border: 1px solid var(--border); padding: 4px 8px; }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, a:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent); }
+
+table { border-collapse: collapse; }
+th { font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--faint); background: var(--thead-bg); }
+td, th { border-color: var(--border); }
+
+::selection { background: color-mix(in srgb, var(--accent) 35%, transparent); }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; border: 2px solid var(--bg); }
+::-webkit-scrollbar-thumb:hover { background: var(--faint); }
+::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }

@@ -1,0 +1,14 @@
+[tools]
+node = "22"
+python = "3.12"
+go = "latest"
+
+[env]
+EDITOR = "nvim"
+PROJECT_ROOT = "{{ env.HOME }}/dev"
+GITHUB_TOKEN = "@@SEED:github_token@@"
+ANTHROPIC_API_KEY = { value = "@@SEED:anthropic_key@@", redact = true }
+_.path = ["{{ env.HOME }}/.local/bin", "./node_modules/.bin"]
+
+[settings]
+experimental = true

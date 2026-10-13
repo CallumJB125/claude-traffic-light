@@ -11,3 +11,6 @@ native/bin/
 native/voice/build/
 board/node_modules
 build/release-floor.json
+
+# Owned compiled Setups helper stages; release resources are built from reviewed C.
+/native/setups-build/

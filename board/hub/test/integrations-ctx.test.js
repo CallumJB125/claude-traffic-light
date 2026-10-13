@@ -215,6 +215,19 @@ test('cardView: pr_link_status is the newest pr link\'s status (additive; pr is 
   } finally { await h.close(); }
 });
 
+test('cardView: pr_link_status names the PR number and link when the link is a github.com pull URL', async () => {
+  const { h, reg, conn } = await setup();
+  try {
+    const ctx = reg.ctxFor(conn.id);
+    const r = addRun(h, { key: 'BDL-25', fence: 1 });
+    await ctx.act('card.create', {}, async (s) => { s.link(r.cardId, 'pr', 'PR-10', 'https://github.com/o/r/pull/123'); s.linkStatus(r.cardId, 'pr', 'PR-10', { state: 'open', checks: 'pending', review: 'requested' }); });
+    assert.deepEqual(cardView(h.hub, h.hub.card(r.cardId), h.ids.alice).pr_link_status, { state: 'open', checks: 'pending', review: 'requested', number: 123, url: 'https://github.com/o/r/pull/123' });
+    const other = addRun(h, { key: 'BDL-26', fence: 1 });
+    await ctx.act('card.create', {}, async (s) => { s.link(other.cardId, 'pr', 'PR-11', 'https://example.com/o/r/pull/9'); s.linkStatus(other.cardId, 'pr', 'PR-11', { state: 'open' }); });
+    assert.deepEqual(cardView(h.hub, h.hub.card(other.cardId), h.ids.alice).pr_link_status, { state: 'open', checks: null, review: null }, 'any other link is not shown as a PR link');
+  } finally { await h.close(); }
+});
+
 test('linkStatus head_sha: 40 lowercase hex round-trips through linkStatusFor, anything else is dropped, cardView never shows it', async () => {
   const { h, reg, conn } = await setup();
   try {

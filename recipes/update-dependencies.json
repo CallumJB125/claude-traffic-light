@@ -1,0 +1,9 @@
+{
+  "id": "update-dependencies",
+  "title": "Update dependencies safely",
+  "what": "Updates outdated packages a few at a time, runs the tests after each step, and leaves anything risky (major versions) as a clear note instead.",
+  "prompt": "Update this project's dependencies safely.\n\n1. Find the package manager and list outdated dependencies (for example `npm outdated`, `pip list --outdated`, `cargo outdated`, `go list -u -m all`).\n2. Apply patch and minor updates in small groups. After each group, install, build and run the tests. If anything fails, find out why; fix it if the fix is small and clear, otherwise revert that group.\n3. Do not apply major version updates. List them with what the changelog says would break.\n4. Commit each successful group separately with the packages and versions in the message.\n\nFinish with a table: package, old version, new version, status (updated, reverted, major left for you).",
+  "tool": "auto",
+  "edits": true,
+  "cost": "Medium: installs and runs the tests after each group of updates."
+}

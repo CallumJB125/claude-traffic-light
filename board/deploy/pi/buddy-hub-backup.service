@@ -1,5 +1,5 @@
 [Unit]
-Description=Buddy board hub nightly DB snapshot
+Description=Buddy board hub nightly paired database and deliverable snapshot
 
 [Service]
 Type=oneshot

@@ -10,6 +10,12 @@
 //   7. policy says this device's owner may act (owner; teammates off by default)
 //   8. allow only: remote allow-list + deny-list pass → else "approve at your desk"
 //   9. first-wins settle, and the hook confirms it took the answer
+// With a `secondFactor` (W2-B: passkeyFactor in webauthn.js) every decision
+// must also carry a fresh user-verified passkey assertion over its own
+// canonical payload, checked after step 4 (so expired or replayed decisions
+// are refused before any WebAuthn work). handleDecision's second argument
+// binds the transport: `channelDevice` (the end-to-end channel's device id)
+// must be the signing device, so one paired device can't carry another's.
 // Rejections before step 2 succeeds are answered unsigned (the desktop never
 // signs anything for a sender it hasn't authenticated). Every outcome is
 // audited in a hash chain; unauthenticated noise is rate-limited.
@@ -59,8 +65,10 @@ export class RemoteApprovals {
     replay,
     maxTtlMs = MAX_DECISION_TTL_MS,
     skewMs = CLOCK_SKEW_MS,
+    // ({device, decision, payload, assertion}) → {ok} | {ok:false, reason}; null = signature only.
+    secondFactor = null,
   }) {
-    Object.assign(this, { identity, registry, pending, authorize, bashAllow, trustTestCommands, realpath, home, repoLabels, audit, clock, maxTtlMs, skewMs, unverifiedAuditPerMinute });
+    Object.assign(this, { identity, registry, pending, authorize, bashAllow, trustTestCommands, realpath, home, repoLabels, audit, clock, maxTtlMs, skewMs, unverifiedAuditPerMinute, secondFactor });
     this.rules = compileRules(rules);
     this.replay = replay || new ReplayCache({ clock });
     this.chain = { seq: auditHead.seq ?? 0, head: auditHead.head ?? GENESIS_HASH };
@@ -105,7 +113,8 @@ export class RemoteApprovals {
     return publishRequest(this.identity, p, { deskOnly: await this.#verdict(p), now: this.clock() });
   }
 
-  async handleDecision(env) {
+  // ctx: {channelDevice?, assertion?} from the transport (src/remote-approvals-main.js).
+  async handleDecision(env, ctx = {}) {
     const now = this.clock();
     let d = null;
     let device = null;
@@ -143,13 +152,22 @@ export class RemoteApprovals {
     if (!active) return reject((await this.registry.get(d.deviceId)) ? 'revoked' : 'unknown-device');
     if (!(await verifyBytes(active.key, env.sig, utf8(env.payload)))) return reject('bad-signature');
     device = active.record;
+    if (ctx.channelDevice !== undefined && ctx.channelDevice !== d.deviceId) return reject('channel-mismatch');
 
     if (d.expiresAt <= d.issuedAt || d.expiresAt - d.issuedAt > this.maxTtlMs) return reject('bad-expiry');
     if (d.issuedAt > now + this.skewMs) return reject('not-yet-valid');
+    // Never valid for longer than maxTtlMs from now, whatever issuedAt claims (skew included).
+    if (d.expiresAt > now + this.maxTtlMs) return reject('bad-expiry');
     if (d.expiresAt <= now) return reject('expired');
 
     const seen = this.replay.checkAndRecord(d.deviceId, d.nonce, d.expiresAt + this.skewMs);
     if (seen !== 'ok') return reject(seen === 'replay' ? 'replay' : 'replay-cache-full');
+
+    if (this.secondFactor) {
+      let sf;
+      try { sf = await this.secondFactor({ device, decision: d, payload: env.payload, assertion: ctx.assertion ?? null }); } catch { sf = null; }
+      if (!sf || sf.ok !== true) return reject('passkey-required', { passkeyReason: typeof sf?.reason === 'string' ? sf.reason : 'failed' });
+    }
 
     const pendingReq = await this.pending.get(d.requestId);
     if (!pendingReq) return reject('no-such-request');

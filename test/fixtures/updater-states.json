@@ -505,6 +505,29 @@
       "requiredByHub": null,
       "busyReason": null,
       "installKind": "restart"
+    },
+    "error-portable": {
+      "status": "error",
+      "currentVersion": "1.1.0",
+      "channel": "stable",
+      "autoDownload": false,
+      "lastCheckedAt": "2026-10-01T08:00:00.000Z",
+      "available": {
+        "version": "1.2.0",
+        "notes": "",
+        "size": 100,
+        "publishedAt": "2026-10-01T10:00:00.000Z"
+      },
+      "progress": null,
+      "error": {
+        "code": "portable",
+        "detail": "Download the latest portable copy and replace it after quitting Plexiform."
+      },
+      "canRevert": false,
+      "previousVersion": null,
+      "requiredByHub": null,
+      "busyReason": null,
+      "installKind": "portable"
     }
   }
 }

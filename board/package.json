@@ -2,7 +2,7 @@
   "name": "board",
   "version": "0.1.0",
   "private": true,
-  "description": "Team board with Give to Claude cards: hub, runner, web, board MCP and their shared pure core. See CONTRACT.md.",
+  "description": "Team board with Tackle with AI cards: hub, runner, web, board MCP and their shared pure core. See CONTRACT.md.",
   "type": "module",
   "engines": {
     "node": ">=22.13"

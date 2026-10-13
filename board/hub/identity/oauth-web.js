@@ -6,13 +6,13 @@ import { HubError } from '../db.js';
 import { parseCookies, safeEqual, sha256hex } from '../auth.js';
 import { ipKey, limitOrThrow } from '../ratelimit.js';
 import { ipPrefix, appendCookie, sessionCookie, SESSION_ABS_MS } from './accounts.js';
-import { OAUTH_FLOW_TTL_MS, OPEN_FLOWS_PER_CLIENT } from './oauth.js';
+import { OAUTH_FLOW_TTL_MS, OPEN_FLOWS_PER_CLIENT, SEPARATE_ACCOUNT_MESSAGE } from './oauth.js';
 
 export const WEB_OAUTH_COOKIE = '__Host-plexiform_oauth';
 const AAD = Buffer.from(`${WEB_OAUTH_COOKIE}:v1`);
 const RANDOM_RE = /^[A-Za-z0-9_-]{43}$/;
 const FLOW_RE = /^[A-Za-z0-9_-]{24}$/;
-const ERRORS = new Set(['INVALID_TOKEN', 'METHOD_DISABLED', 'PROVIDER_UNAVAILABLE', 'PROVIDER_ERROR', 'EMAIL_UNVERIFIED', 'SIGNUP_CLOSED', 'RATE_LIMITED']);
+const ERRORS = new Set(['INVALID_TOKEN', 'METHOD_DISABLED', 'PROVIDER_UNAVAILABLE', 'PROVIDER_ERROR', 'EMAIL_UNVERIFIED', 'SIGNUP_CLOSED', 'SIGNUP_PAUSED', 'RATE_LIMITED']);
 const invalid = () => new HubError('INVALID_TOKEN', 'that sign-in is invalid or has expired: start again');
 const random = (n = 32) => randomBytes(n).toString('base64url');
 const s256 = (v) => createHash('sha256').update(v).digest('base64url');
@@ -20,8 +20,8 @@ const closed = (v, keys) => v && typeof v === 'object' && !Array.isArray(v) && O
 
 function invitation(v) {
   if (v == null) return null;
-  if (!closed(v, ['kind', 'token']) || v.kind !== 'team' || typeof v.token !== 'string'
-    || !/^inv_[A-Za-z0-9_-]{43}$/.test(v.token)) {
+  if (!closed(v, ['kind', 'token']) || !['team', 'client'].includes(v.kind) || typeof v.token !== 'string'
+    || !(v.kind === 'team' ? /^inv_[A-Za-z0-9_-]{43}$/ : /^clinv_[A-Za-z0-9_-]{43}$/).test(v.token)) {
     throw new HubError('VALIDATION', 'invalid invitation');
   }
   return { kind: v.kind, token: v.token };
@@ -53,9 +53,10 @@ export class WebOAuth {
       const b = Buffer.from(v, 'base64url'); if (b.length < 29 || b.toString('base64url') !== v) throw invalid();
       const d = createDecipheriv('aes-256-gcm', this.key, b.subarray(0, 12)); d.setAAD(AAD); d.setAuthTag(b.subarray(12, 28));
       const p = JSON.parse(Buffer.concat([d.update(b.subarray(28)), d.final()]).toString('utf8'));
-      if (!closed(p, ['phase', 'flow_id', 'browser_nonce', 'verifier', 'invitation']) || !['start', 'result'].includes(p.phase)
+      if (!closed(p, ['phase', 'flow_id', 'browser_nonce', 'verifier', 'invitation', 'notice']) || !['start', 'result'].includes(p.phase)
         || !FLOW_RE.test(p.flow_id) || !RANDOM_RE.test(p.browser_nonce)
-        || (p.phase === 'start' ? !RANDOM_RE.test(p.verifier) : p.verifier != null)) throw invalid();
+        || (p.phase === 'start' ? !RANDOM_RE.test(p.verifier) || p.notice != null : p.verifier != null)
+        || (p.notice != null && p.notice !== 'SEPARATE_ACCOUNT')) throw invalid();
       return { ...p, invitation: invitation(p.invitation) };
     } catch { throw invalid(); }
   }
@@ -84,7 +85,7 @@ export class WebOAuth {
   // Called only on the exact public callback routes. Failure always sends a
   // fixed own-page destination; provider exceptions/description are discarded.
   async callback(provider, query, { req, res, ip }) {
-    let p = null; let f = null; let proven = null; let outcome = 'INVALID_TOKEN'; let claimed = false;
+    let p = null; let f = null; let proven = null; let outcome = 'INVALID_TOKEN'; let claimed = false; let notice = null;
     try {
       limitOrThrow(this.hub, 'oauth_exchange_ip', ipKey(ip));
       p = this.cookie(req);
@@ -113,6 +114,7 @@ export class WebOAuth {
       let session;
       this.hub.txn(() => {
         const user = this.oauth.resolveUser(who, { ip });
+        notice = user.separateAccount ? 'SEPARATE_ACCOUNT' : null;
         session = this.accounts.createSession(user.id, { ip, ua: req.headers['user-agent'], method: provider });
         this.db.run("UPDATE oauth_web_flows SET outcome = 'OK', user_id = ?, session_id = ? WHERE id = ?", user.id, session.id, f.id);
         this.accounts.audit('auth.signin', { user: user.id, target: session.id, detail: { method: provider, client: 'web' }, ip });
@@ -126,7 +128,7 @@ export class WebOAuth {
         this.accounts.audit(outcome === 'SIGNUP_CLOSED' ? 'auth.signup.refused' : 'auth.oauth.failed', { target: f.id, detail: { provider: f.provider, client: 'web', reason: outcome, ...(outcome === 'SIGNUP_CLOSED' && proven ? { method: f.provider, subject_ref: this.oauth.subjectRef(f.provider, proven.subject) } : {}) }, ip });
       }
     }
-    if (claimed) this.setCookie(res, { phase: 'result', flow_id: f.id, browser_nonce: p.browser_nonce, invitation: p.invitation }, (Date.parse(f.expires_at) - this.hub.wallMs()) / 1000);
+    if (claimed) this.setCookie(res, { phase: 'result', flow_id: f.id, browser_nonce: p.browser_nonce, invitation: p.invitation, ...(outcome === 'OK' && notice ? { notice } : {}) }, (Date.parse(f.expires_at) - this.hub.wallMs()) / 1000);
     res.writeHead(303, { location: `/signin#oauth=${claimed ? 'web' : 'invalid'}`, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' });
     res.end();
   }
@@ -140,7 +142,9 @@ export class WebOAuth {
       || !this.accounts.credValid(ident.cred) || !this.accounts.csrfOk(ident, req.headers['x-csrf-token']))) throw invalid();
     if (!this.db.run('UPDATE oauth_web_flows SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL', this.accounts.now(), f.id).changes) throw invalid();
     this.setCookie(res, null);
-    return { ok: f.outcome === 'OK', ...(f.outcome === 'OK' ? {} : { error: { code: f.outcome } }), invitation: p.invitation };
+    // A sign-in that made a second account says so (accounts are not linked yet), as the desktop exchange does.
+    const notice = f.outcome === 'OK' && p.notice === 'SEPARATE_ACCOUNT' ? { notice: { code: 'SEPARATE_ACCOUNT', provider: f.provider, message: SEPARATE_ACCOUNT_MESSAGE(f.provider) } } : {};
+    return { ok: f.outcome === 'OK', ...(f.outcome === 'OK' ? {} : { error: { code: f.outcome } }), ...notice, invitation: p.invitation };
   }
 
   sweep() { this.db.run('DELETE FROM oauth_web_flows WHERE expires_at < ?', this.accounts.at(-86_400_000)); }

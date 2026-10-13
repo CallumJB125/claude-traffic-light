@@ -31,6 +31,10 @@ function decodeKey(text, { name = 'BOARD_ENC_KEY', refusePlaceholder = false } =
   return buf;
 }
 
+// The AAD row id of a team's hosted-run provider credential (team_provider_configs):
+// a namespace no connection id (a UUID) can take, so neither opens as the other.
+export const providerConfigAad = (orgId) => `provider-config:${orgId}`;
+
 // Short, non-secret id: lets rows name the key they were sealed with.
 export const keyIdOf = (key) => createHash('sha256').update('board-vault-key-id').update(key).digest('hex').slice(0, 12);
 

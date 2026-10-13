@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; base-uri 'none'; form-action 'none'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Session timeline</title><link rel="stylesheet" href="tokens.css"><link rel="stylesheet" href="timeline.css"><link rel="stylesheet" href="page.css"></head>
+<body><main class="page">
+<header class="page-head"><div><h1>Session timeline</h1><p id="subtitle">What one AI session was asked, changed and ran, in order. Read from this computer only.</p></div><button id="refresh" type="button">Refresh</button></header>
+<section class="pick"><label for="session">Session</label> <select id="session"><option value="">Loading…</option></select></section>
+<section id="facts" aria-label="Summary" hidden><dl id="facts-list"></dl><p class="note" id="source"></p></section>
+<section id="files-box" aria-labelledby="files-title" hidden><h2 id="files-title">Files edited</h2><ul class="files" id="files"></ul></section>
+<section aria-labelledby="events-title"><h2 id="events-title">Timeline</h2><p id="status" role="status" aria-live="polite">Loading…</p><ol class="events" id="events"></ol></section>
+<section id="export" aria-labelledby="export-title"><h2 id="export-title">Export replay</h2>
+<p class="muted">Saves one HTML file to a place you choose, to share however you like. It has no scripts, links or outside files, and Plexiform uploads nothing.</p>
+<label class="toggle"><input id="prompts" type="checkbox"> Include what the AI was asked and its replies</label>
+<h3>What is included</h3><ul id="included" class="summary"></ul><p class="note" id="excluded"></p>
+<div class="row"><button id="save" type="button">Save replay…</button><span id="save-status" class="note" role="status"></span></div>
+</section>
+</main><script src="timeline.js"></script></body></html>

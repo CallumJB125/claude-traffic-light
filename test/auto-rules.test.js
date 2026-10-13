@@ -7,6 +7,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const A = require('../src/auto-rules.js');
+const { testTempDir } = require('./helpers/tmp');
 
 const HOME = '/Users/tester';
 const refuse = (r) => A.refusal(r, { home: HOME });
@@ -110,8 +111,8 @@ test('matching: deny rules win, rules can be scoped to a project, only permissio
 });
 
 test('matching resolves symlinks: a link inside an allowed folder can point anywhere', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-auto-'));
-  const secret = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-secret-'));
+  const dir = testTempDir('ctl-auto-');
+  const secret = testTempDir('ctl-secret-');
   fs.writeFileSync(path.join(secret, 'key'), 'x');
   fs.symlinkSync(secret, path.join(dir, 'link'));
   try {
@@ -176,7 +177,7 @@ test('S-M2: wildcard caps: two per command word, four per path, never **/**', ()
 // ── Enter: allow-list based (src/enter-allow.js) ─────────────────────────
 const E = require('../src/enter-allow.js');
 // A real project folder: Enter needs the session folder to exist (it is realpath'd).
-const PROJ = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-enter-')));
+const PROJ = fs.realpathSync(testTempDir('ctl-enter-'));
 fs.mkdirSync(path.join(PROJ, 'src'));
 const enterOk = (tool, toolInput, cwd = PROJ) => A.danger({ tool, toolInput, cwd }) === null && E.enterBlockedReason({ tool, toolInput, cwd }) === null;
 
@@ -188,7 +189,7 @@ test('Enter needs an absolute session folder that exists', () => {
 });
 
 test('Enter: a relative symlink to a secret is resolved against the session folder', () => {
-  const secret = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-enter-secret-'));
+  const secret = testTempDir('ctl-enter-secret-');
   fs.mkdirSync(path.join(secret, '.ssh'));
   fs.writeFileSync(path.join(secret, '.ssh', 'id_ed25519'), 'x');
   fs.symlinkSync(path.join(secret, '.ssh', 'id_ed25519'), path.join(PROJ, 'notes.txt'));

@@ -1,0 +1,9 @@
+{
+  "id": "weekly-report",
+  "title": "Weekly report from my git history",
+  "what": "Reads the last seven days of commits in this repo and writes a short, plain-English report of what got done, what changed and what is still open.",
+  "prompt": "Write a weekly report of my work in this repository for the last 7 days.\n\n1. Run `git log --since='7 days ago' --no-merges --stat` (all branches I authored: use `git log --author=\"$(git config user.name)\"`).\n2. Group the work into 3 to 6 themes (features, fixes, refactors, docs, chores).\n3. For each theme write one or two sentences a manager would understand, and name the most important commits.\n4. Finish with \"Still open\": branches with unmerged work and any TODO or FIXME I added this week.\n\nKeep it under 300 words. Do not change any files.",
+  "tool": "auto",
+  "edits": false,
+  "cost": "Low: reads git history only. Usually a few cents at API prices, or a small slice of a subscription."
+}

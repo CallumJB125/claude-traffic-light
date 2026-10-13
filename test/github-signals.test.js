@@ -9,12 +9,13 @@ const G = require('../src/github-signals.js');
 const R = require('../rules.js');
 const Help = require('../help.js');
 const M = require('../mcp-server.js');
+const { testTempDir } = require('./helpers/tmp');
 
 const FIX = path.join(__dirname, 'fixtures', 'github');
 // path.resolve: an absolute name passes through (a temp dir can be on another drive than the checkout).
 const raw = (name) => fs.readFileSync(path.resolve(FIX, name), 'utf8');
 const NOW = Date.parse('2026-09-30T12:00:00Z');
-const tmp = () => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-git-')));
+const tmp = () => fs.realpathSync(testTempDir('ctl-git-'));
 
 // A fake `gh`: answers each API path with a fixture, and a 304 when the
 // caller sends the ETag of a response that hasn't "changed" since.

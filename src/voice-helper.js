@@ -8,7 +8,7 @@ const readline = require('readline');
 const FRIENDLY = {
   'speech-denied': 'Speech recognition is off for Plexiform. Turn it on in System Settings, Privacy and Security, Speech Recognition.',
   'mic-denied': 'The microphone is off for Plexiform. Turn it on in System Settings, Privacy and Security, Microphone.',
-  'hold-unsupported': "Buddy can't tell when that key is let go. Pick another key in Preferences, or press and hold the widget instead.",
+  'hold-unsupported': "Plexiform can't tell when that key is let go. Pick another key in Preferences, or press and hold the widget instead.",
 };
 const friendly = (e) => FRIENDLY[e] || String(e || 'Listening failed.');
 

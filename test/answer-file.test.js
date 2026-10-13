@@ -10,9 +10,10 @@ const crypto = require('crypto');
 const { spawn, spawnSync } = require('child_process');
 const A = require('../hooks/answer-file.js');
 const { fakeApp } = require('./fake-app.js');
+const { testTempDir } = require('./helpers/tmp');
 
 const SET_STATUS = path.join(__dirname, '..', 'hooks', 'set-status.js');
-const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-answer-'));
+const tmp = () => testTempDir('ctl-answer-');
 const KEY = crypto.randomBytes(32);
 
 // A request as the hook writes it; returns its decisionHash.

@@ -3,7 +3,7 @@
 // per-run `token`. board-mcp never talks to the hub: the runner owns scope,
 // fence, redaction and the hub connection.
 
-import net from 'node:net'; // privacy-flow: local-board-sockets
+import net from '../shared/local-sockets.cjs'; // protected Windows local transport; POSIX Unix sockets
 
 export const MAX_LINE_BYTES = 1024 * 1024;
 

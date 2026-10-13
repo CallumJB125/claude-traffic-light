@@ -4,40 +4,69 @@
 // kind:
 //   hub     — a page of the board web app, loaded from the hub's own origin
 //             in a sandboxed view (`view` is its ?view=).
-//   window  — an existing app window (Lights, Preferences…) opened as is until
-//             its owner moves it into this window.
+//   window  — an the Widget rules popup (Rules and Auto-answer).
 //   local   — an app file rendered in its own view with its own preload
 //             (the plug-in point for Tasks and settings pages); `screen`
 //             picks the account page's screen (account.html), `file` +
 //             `preload` (in the app root) name a page of their own.
-//   soon    — named in the plan but not built yet; says so honestly.
+//   soon    — named in the plan but not built yet; says so honestly. (None today:
+//             a page with no working feature is left out, not shown with a pill.)
 'use strict';
 
 const { NAME } = require('./brand');
 const { isPrivateHost } = require('./workspaces');
 
 const PAGES = [
+  { id: 'overview', title: 'Overview', icon: 'layers', kind: 'local', file: 'overview.html', preload: 'overview-preload.js', group: 'work' },
+  // hidden until the sidebar lists it (and makes it the default) as its own section.
+  { id: 'home', title: 'Home', icon: 'sun', kind: 'local', file: 'home.html', preload: 'home-preload.js', group: 'work' },
   { id: 'board', title: 'Board', icon: 'board', kind: 'hub', view: 'board', group: 'work',
     children: [
       { id: 'board:table', title: 'Table', kind: 'hub', view: 'table' },
+      { id: 'board:history', title: 'History', kind: 'hub', view: 'history' },
       { id: 'board:dashboard', title: 'Dashboard', kind: 'hub', view: 'dashboard' },
-      { id: 'board:calendar', title: 'Calendar', kind: 'soon' },
-      { id: 'board:timeline', title: 'Timeline', kind: 'soon' },
+      { id: 'board:calendar', title: 'Calendar', kind: 'hub', view: 'calendar' },
+      { id: 'board:timeline', title: 'Timeline', kind: 'hub', view: 'timeline' },
     ] },
-  { id: 'waiting', title: 'Waiting on you', icon: 'bell', kind: 'local', file: 'waiting.html', preload: 'waiting-preload.js', query: { embedded: '1' }, group: 'work' },
-  { id: 'myday', title: 'My day', icon: 'sun', kind: 'soon', group: 'work', blurb: 'Your cards, what is waiting on you, your agents and your calendar in one place.' },
-  { id: 'tasks', title: 'Tasks', icon: 'tasks', kind: 'soon', group: 'work', blurb: `Standalone Claude tasks you started from ${NAME}, with their messages. Being built by buddy-builder-2.` },
+  // Home's "Needs you" and "Your cards" carry these; the pages stay for notifications and deep links.
+  { id: 'waiting', title: 'Waiting on you', icon: 'bell', kind: 'local', file: 'waiting.html', preload: 'waiting-preload.js', query: { embedded: '1' }, group: 'work', unlisted: true },
+  { id: 'myday', title: 'My day', icon: 'sun', kind: 'local', file: 'myday.html', preload: 'myday-preload.js', group: 'work', unlisted: true },
+  { id: 'sessions', title: 'Sessions', icon: 'team', kind: 'local', file: 'sessions.html', preload: 'sessions-preload.js', group: 'work' },
+  { id: 'timeline', title: 'Session timeline', icon: 'layers', kind: 'local', file: 'timeline.html', preload: 'timeline-preload.js', group: 'work', unlisted: true },
+  { id: 'checkpoints', title: 'What changed', icon: 'layers', kind: 'local', file: 'checkpoints.html', preload: 'checkpoints-preload.js', group: 'work' },
+  // Search across every AI tool's local history (src/memory/search.js registers its IPC).
+  { id: 'memory', title: 'Search everything', icon: 'layers', kind: 'local', file: 'memory.html', preload: 'memory-preload.js', group: 'work' },
+  { id: 'tasks', title: 'Tasks', icon: 'tasks', kind: 'local', file: 'tasks.html', preload: 'tasks-preload.js', query: { embedded: '1' }, group: 'work' },
+  // The community gallery (src/gallery.js): recipes, characters, widget rules, setups and packs from the site.
+  { id: 'discover', title: 'Discover', icon: 'puzzle', kind: 'local', file: 'discover.html', preload: 'discover-preload.js', group: 'work' },
   // localScreen: the account page's explainer for the local board, which has no integrations of its own.
   { id: 'integrations', title: 'Integrations', icon: 'plug', kind: 'hub', view: 'integrations', localScreen: 'integrations', group: 'team' },
   { id: 'team', title: 'Team', icon: 'team', kind: 'local', screen: 'team', group: 'team' },
-  { id: 'usage', title: 'Usage', icon: 'chart', kind: 'window', window: 'mix', group: 'you' },
-  { id: 'setups', title: 'Setups', icon: 'layers', kind: 'soon', group: 'you', blurb: 'Borrow a teammate’s Claude setup. Being built by buddy-builder-4.' },
-  { id: 'plugins', title: 'Plugins', icon: 'puzzle', kind: 'soon', group: 'you', blurb: 'Find and install Claude Code plugins.' },
+  { id: 'usage', title: 'Usage', icon: 'chart', kind: 'local', file: 'lights.html', preload: 'lights-preload.js', query: { embedded: '1', view: 'mix' }, group: 'you' },
+  // Usage & cost's Time tab; the page stays for deep links.
+  { id: 'stats', title: 'Stats', icon: 'chart', kind: 'local', file: 'lights.html', preload: 'lights-preload.js', query: { embedded: '1', view: 'stats' }, group: 'you', unlisted: true },
+  // Every user's cost-tool hub (src/optimiser-tools.js); with a trusted Burst on a Mac it also embeds Burst's dashboard (burst-embed.js).
+  // A page may still be macOnly (left out of the sidebar elsewhere) or burstOnly (listed only while Burst is present).
+  { id: 'optimiser', title: 'Usage optimiser', icon: 'chart', kind: 'local', file: 'optimiser.html', preload: 'optimiser-preload.js', query: { embedded: '1' }, group: 'you' },
+  { id: 'clients', title: 'Client billing', icon: 'chart', kind: 'local', file: 'clients-local.html', preload: 'clients-preload.js', group: 'you' },
+  { id: 'setups', title: 'Setups', icon: 'layers', kind: 'local', file: 'setups.html', preload: 'setups-preload.js', group: 'you', hidden: true },
   { id: 'thismac', title: 'This Mac', icon: 'laptop', kind: 'local', screen: 'thismac', group: 'you' },
+  // Phone approvals and pairing (src/remote-approvals-main.js serves its IPC; Plus shows an upsell otherwise).
+  { id: 'phone', title: 'Phone', icon: 'bell', kind: 'local', file: 'phone-pairing.html', preload: 'phone-pairing-preload.js', group: 'you' },
   { id: 'account', title: 'Account', icon: 'user', kind: 'local', screen: 'account', group: 'you' },
-  { id: 'lights', title: 'Lights', icon: 'lights', kind: 'window', window: 'lights', group: 'you' },
-  { id: 'settings', title: 'Settings', icon: 'gear', kind: 'window', window: 'settings', group: 'you' },
-  { id: 'updates', title: 'About & Updates', icon: 'info', kind: 'local', file: 'updates.html', preload: 'updates-preload.js', group: 'you' },
+  // Paid plan (src/entitlement-refresh.js serves its IPC): plan, limits, grace days, Upgrade / Manage billing.
+  { id: 'upgrade', title: 'Plan & billing', icon: 'user', kind: 'local', file: 'upgrade.html', preload: 'upgrade-preload.js', group: 'you', hidden: true },
+  // Encrypted sync across your own computers (src/sync/index.js serves its IPC; Plus/Team, upsell otherwise).
+  { id: 'sync', title: 'Sync', icon: 'layers', kind: 'local', file: 'sync.html', preload: 'sync-preload.js', group: 'you', hidden: true },
+  // The floating widget: live preview, show/hide, size, corner and what it shows (src/widget-page.js serves its IPC).
+  { id: 'widget', title: 'Widget', icon: 'lights', kind: 'local', file: 'widget-page.html', preload: 'widget-page-preload.js', group: 'you' },
+  { id: 'lights', title: 'Widget rules', icon: 'lights', kind: 'window', window: 'lights', group: 'you' },
+  { id: 'aitools', title: 'AI tools', icon: 'plug', kind: 'local', file: 'aitools.html', preload: 'aitools-preload.js', group: 'you' },
+  { id: 'settings', title: 'Preferences', icon: 'gear', kind: 'local', file: 'settings.html', preload: 'settings-preload.js', query: { embedded: '1' }, group: 'you' },
+  { id: 'hatch', title: 'Hatch a character', icon: 'puzzle', kind: 'local', file: 'hatch.html', preload: 'hatch-preload.js', query: { embedded: '1' }, group: 'you' },
+  { id: 'help', title: 'Help', icon: 'info', kind: 'local', file: 'help.html', preload: 'help-preload.js', query: { embedded: '1' }, group: 'you' },
+  { id: 'feedback', title: 'Feedback', icon: 'info', kind: 'local', file: 'feedback.html', preload: 'feedback-preload.js', query: { embedded: '1' }, group: 'you' },
+  { id: 'updates', title: "What's new", icon: 'info', kind: 'local', file: 'updates.html', preload: 'updates-preload.js', group: 'you' },
 ];
 
 const GROUPS = [
@@ -46,10 +75,69 @@ const GROUPS = [
   { id: 'you', title: 'You' },
 ];
 
+// The sidebar shows these and nothing else, grouped under small headings; every page above is still a
+// page (deep links, IPC and the app menu address pages, not sections). A
+// section opens `default`; the others are its sub-nav, in this order. Board
+// views are the board page's children, so they are listed by id like the rest.
+// An `unlisted` page belongs to its section (so the section lights up while it
+// is open) but has no sub-nav entry of its own.
+const SECTIONS = [
+  { id: 'home', title: 'Home', icon: 'sun', default: 'home', pages: ['home', 'overview', 'myday', 'waiting'] },
+  { id: 'board', title: 'Board', icon: 'board', default: 'board', pages: ['board', 'board:table', 'board:history', 'board:calendar', 'board:timeline', 'board:dashboard'] },
+  { id: 'sessions', title: 'Sessions', icon: 'team', default: 'sessions', pages: ['sessions', 'tasks', 'discover', 'timeline', 'checkpoints', 'memory'] },
+  { id: 'usage', title: 'Usage & cost', icon: 'chart', default: 'usage', heading: 'Spend', pages: ['usage', 'stats', 'optimiser', 'clients'] },
+  { id: 'team', title: 'Team', icon: 'team', default: 'team', heading: 'Team', pages: ['team', 'integrations', 'account'] },
+  { id: 'settings', title: 'Settings', icon: 'gear', default: 'settings', heading: 'You', pages: ['settings', 'thismac', 'aitools', 'widget', 'lights', 'hatch', 'phone'] },
+];
+// `menu: false` keeps a section out of the tray and widget menus; `menu: 'more'` lists it in their More submenu.
+// At most six sections are primary; everything else is a page inside one of them.
+// Small links under the sections, not a section of their own.
+const FOOTER = ['help', 'feedback', 'updates'];
+// Setups is listed only once it works. Personal export/import and the
+// reviewed Apply with backup and Undo (src/setups-personal.js) are built and
+// tested, cross-platform; the signed native helper path (src/setups-main.js,
+// accepted:false) stays held and its panel hidden. The entitlement
+// (setups.personal, a free feature) lists it with no env var.
+// The page and its deep link remain; PLEXIFORM_SHOW_SETUPS=1 lists it for development.
+const SETUPS_READY = true;
+if (process.env.PLEXIFORM_SHOW_SETUPS === '1' || (SETUPS_READY && require('../src/entitlements').has('setups.personal'))) {
+  SECTIONS.find((s) => s.id === 'settings').pages.splice(7, 0, 'setups');
+  PAGES.find((p) => p.id === 'setups').hidden = false;
+}
+// Plan & billing is listed once paid plans can work: a hub key pinned in
+// src/entitlement-keys.js (until then no token verifies and Upgrade could not
+// unlock anything). PLEXIFORM_SHOW_UPGRADE=1 lists it for testing.
+const UPGRADE_READY = (() => { try { return require('../src/entitlement-keys').ENTITLEMENT_KEYS.length > 0; } catch { return false; } })();
+if (process.env.PLEXIFORM_SHOW_UPGRADE === '1' || UPGRADE_READY) {
+  PAGES.find((p) => p.id === 'upgrade').hidden = false;
+  SECTIONS.find((s) => s.id === 'team').pages.push('upgrade');
+}
+// Sync sits under Settings once paid plans can work (the same pinned key):
+// before that it could only show an upsell to a plan nobody can buy.
+// PLEXIFORM_SHOW_SYNC=1 lists it for testing.
+if (process.env.PLEXIFORM_SHOW_SYNC === '1' || UPGRADE_READY) {
+  PAGES.find((p) => p.id === 'sync').hidden = false;
+  SECTIONS.find((s) => s.id === 'settings').pages.push('sync');
+}
+
+// PLEXIFORM_SHOW_PLANNER=0 takes Calendar and Timeline off the sub-nav; the pages and deep links stay.
+if (process.env.PLEXIFORM_SHOW_PLANNER === '0') { const board = SECTIONS.find((s) => s.id === 'board'); board.pages = board.pages.filter((id) => id !== 'board:calendar' && id !== 'board:timeline'); }
+
+/** The sections as this platform shows them: macOnly pages are left out elsewhere. */
+function sectionsFor(platform = process.platform, sections = SECTIONS) {
+  return sections.map((s) => ({ ...s, pages: s.pages.filter((id) => platform === 'darwin' || !pageById(id)?.macOnly) }));
+}
+
 function flat(pages = PAGES) {
   const out = [];
   for (const p of pages) { out.push(p); for (const c of p.children ?? []) out.push({ ...c, parent: p.id }); }
   return out;
+}
+
+/** The section a page lives in (a board view lives with the board). */
+function sectionOf(id, sections = SECTIONS) {
+  const parent = flat().find((p) => p.id === id)?.parent;
+  return sections.find((s) => s.pages.includes(id) || (parent && s.pages.includes(parent)))?.id ?? null;
 }
 
 function pageById(id, pages = PAGES) {
@@ -297,4 +385,4 @@ function pageForHubUrl(url) {
   return hit?.id ?? 'board';
 }
 
-module.exports = { PAGES, GROUPS, flat, pageById, hubPageUrl, fragmentOk, navDecision, openDecision, connectDecision, manifestPost, parseConnectName, connectUrlOk, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl, GESTURE_MS };
+module.exports = { PAGES, GROUPS, SECTIONS, FOOTER, sectionsFor, sectionOf, flat, pageById, hubPageUrl, fragmentOk, navDecision, openDecision, connectDecision, manifestPost, parseConnectName, connectUrlOk, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl, GESTURE_MS };

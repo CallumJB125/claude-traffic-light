@@ -4,8 +4,9 @@
 const fs = require('fs');
 const path = require('path');
 const { test, expect } = require('@playwright/test');
-const { launchApp, signal, windowByFile } = require('./app');
+const { launchApp, signal, windowByFile, embedded, openSettingsPane } = require('./app');
 const states = require('../test/fixtures/updater-states.json').states;
+const { startTasksMock, shortTmp } = require('./tasks-mock');
 
 const GARDEN_RULE = { id: 'csp-garden', name: 'Garden', when: { signal: ['tool-use'] }, then: { lamp: 'green', effect: 'garden' } };
 
@@ -27,9 +28,13 @@ const collect = async (page, label) => { for (const v of await page.evaluate(() 
 let h;
 let widget;
 let lights;
+let tasksMock;
+let tasksWork;
 
 test.beforeAll(async () => {
-  h = await launchApp({ config: { askFromWidget: true } });
+  tasksMock = await startTasksMock();
+  tasksWork = shortTmp();
+  h = await launchApp({ config: { askFromWidget: true }, env: { CLAUDE_TRAFFIC_LIGHT_TASKS_HOME: tasksMock.dir, CLAUDE_TRAFFIC_LIGHT_TASKS_PICK: tasksWork } });
   h.app.process().stdout.on('data', (d) => appLog.push(...String(d).split('\n')));
   widget = await windowByFile(h.app, 'index.html');
   await widget.evaluate(() => window.trafficLight.openLights());
@@ -39,7 +44,7 @@ test.beforeAll(async () => {
   await watch(lights, 'lights');
 });
 
-test.afterAll(async () => { await h?.cleanup(); });
+test.afterAll(async () => { await h?.cleanup(); await tasksMock?.close(); fs.rmSync(tasksWork || '', { recursive: true, force: true }); });
 
 test('the policy is really enforced: an inline handler and a fetch are both refused', async () => {
   const marker = [];
@@ -97,16 +102,6 @@ test('widget: idle, working, asking, away recap, update row, costume, cameo phot
   expect(violations).toEqual([]);
 });
 
-test('widget: the shipped cameo photos load through the real status path', async () => {
-  const cameo = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'assets', 'cameos', 'built', 'index.json'), 'utf8'));
-  const id = Object.keys(cameo.cameos || cameo)[0];
-  await lights.evaluate((i) => window.lightsApi.previewOnWidget({ lamp: 'green', eyes: 'default', pose: 'none', costume: 'none', cameo: i }, 3000), id);
-  await widget.waitForTimeout(800);
-  expect(await widget.locator('image').count()).toBeGreaterThan(0);
-  await collect(widget, 'widget');
-  expect(violations).toEqual([]);
-});
-
 test('widget: garden', async () => {
   test.setTimeout(60000);
   await lights.evaluate((r) => window.lightsApi.saveConfig({ rules: [r] }), GARDEN_RULE);
@@ -119,15 +114,11 @@ test('widget: garden', async () => {
 
 test('lights: every tab, sounds, export, a photo cameo', async () => {
   test.setTimeout(120000);
-  for (const t of ['view-stats', 'view-mix', 'view-auto', 'view-rules']) {
+  // The widget's popup has only Rules and Auto-answer; Usage and Stats are main-window pages (below).
+  for (const t of ['view-auto', 'view-rules']) {
     await lights.click(`#${t}`);
     await lights.waitForTimeout(500);
   }
-  await lights.click('#view-mix');
-  await lights.waitForTimeout(800);
-  await lights.click('#view-stats');
-  for (const d of ['7', '30', '60']) { await lights.click(`[data-days="${d}"]`, { timeout: 5000 }); await lights.waitForTimeout(200); }
-  await lights.click('#view-rules');
 
   // sounds: the file-less preview goes to main; select a sound and play it
   await lights.locator('#rule-list li').first().click();
@@ -160,6 +151,15 @@ test('lights: every tab, sounds, export, a photo cameo', async () => {
   await lights.waitForTimeout(1000);
   await collect(lights, 'lights');
   expect(await lights.evaluate(() => window.__errs)).toEqual([]);
+
+  const mix = await embedded(h.app, 'usage', 'lights.html', { view: 'mix' });
+  await watch(mix, 'usage');
+  await mix.waitForTimeout(800);
+  await collect(mix, 'usage');
+  const stats = await embedded(h.app, 'stats', 'lights.html', { view: 'stats' });
+  await watch(stats, 'stats');
+  for (const r of ['7d', '30d', '90d']) { await stats.click(`#ut-range [data-range="${r}"]`, { timeout: 5000 }); await stats.waitForTimeout(200); }
+  await collect(stats, 'stats');
   expect(violations).toEqual([]);
 });
 
@@ -168,13 +168,15 @@ test('settings: Preferences, Health and Backups run under the policy', async () 
   const settings = await windowByFile(h.app, 'settings.html');
   await settings.waitForLoadState('load');
   await watch(settings, 'settings');
+  await openSettingsPane(settings, 'advanced');
   await settings.locator('#health').scrollIntoViewIfNeeded();
   await expect(settings.locator('#health-summary')).not.toHaveText('', { timeout: 10000 });
+  await settings.locator('#health-recheck').click();
+  await settings.waitForTimeout(500);
+  await openSettingsPane(settings, 'privacy');
   await settings.locator('#backups > summary').click();
   await settings.locator('#backups-now').click();
   await expect(settings.locator('#backups-status')).not.toHaveText('', { timeout: 5000 });
-  await settings.locator('#health-recheck').click();
-  await settings.waitForTimeout(500);
   // enforced here too: an inline handler never runs
   await settings.evaluate(() => { const b = document.createElement('b'); b.setAttribute('onclick', 'window.__x = 1'); document.body.append(b); b.click(); });
   await settings.waitForTimeout(200);
@@ -188,28 +190,8 @@ test('settings: Preferences, Health and Backups run under the policy', async () 
   expect(violations).toEqual([]);
 });
 
-test('usage pop-out: renders under the policy, and an inline handler and a fetch are refused', async () => {
-  await h.app.evaluate(() => global.__buddyTrayMenu.items.find((i) => i.label === 'Open Usage…').click());
-  const pop = await windowByFile(h.app, 'usage-pop.html');
-  await pop.waitForLoadState('load');
-  await h.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((x) => x.getTitle() === 'Usage')?.emit('focus')); // headless: no real focus, and an unfocused pop-out closes itself
-  await watch(pop, 'usage-pop');
-  await expect(pop.locator('#note')).not.toHaveText('', { timeout: 10000 });
-  await pop.evaluate(() => { const b = document.createElement('b'); b.setAttribute('onclick', 'window.__x = 1'); document.body.append(b); b.click(); fetch('https://example.invalid/').catch(() => {}); });
-  await pop.waitForTimeout(300);
-  expect(await pop.evaluate(() => window.__x)).toBeUndefined();
-  const seen = await pop.evaluate(() => window.__csp);
-  expect(seen.some((s) => s.startsWith('script-src'))).toBe(true);
-  expect(seen.some((s) => s.startsWith('connect-src'))).toBe(true);
-  await pop.evaluate(() => { window.__csp.length = 0; });
-  violations.length = 0;
-  await pop.waitForTimeout(200);
-  await collect(pop, 'usage-pop');
-  expect(violations).toEqual([]);
-});
-
 test('feedback: the form, a screenshot preview and the scrubbed preview run under the policy', async () => {
-  const settings = await windowByFile(h.app, 'settings.html');
+  const settings = await embedded(h.app, 'settings', 'settings.html');
   await settings.locator('#feedback-open').click();
   const form = await windowByFile(h.app, 'feedback.html');
   await form.waitForLoadState('load');
@@ -230,5 +212,30 @@ test('feedback: the form, a screenshot preview and the scrubbed preview run unde
   await form.locator('#save').click();
   await expect(form.locator('#done')).toBeVisible({ timeout: 10000 });
   await collect(form, 'feedback');
+  expect(violations).toEqual([]);
+});
+
+test('tasks: the list, a task with its transcript and thread, and the composer run under the policy; an inline handler and a fetch are refused', async () => {
+  const tasks = await embedded(h.app, 'tasks', 'tasks.html');
+  await watch(tasks, 'tasks');
+  await expect(tasks.locator('#list .row')).toHaveCount(5, { timeout: 15000 });
+  await tasks.locator('#list .row', { hasText: 'Add a dark mode toggle' }).click();
+  await expect(tasks.locator('#tx .msg').first()).toBeVisible({ timeout: 10000 });
+  await tasks.locator('#tab-messages').click();
+  await tasks.locator('#tab-details').click();
+  await expect(tasks.locator('#pane-details pre.box').first()).toBeVisible();
+  await tasks.keyboard.press('Alt+Meta+T');
+  await expect(tasks.locator('.composer h2')).toBeVisible();
+  await tasks.locator('#c-folder-btn').click();
+  await expect(tasks.locator('#c-folder')).not.toHaveText(/None chosen/);
+  await tasks.evaluate(() => { const b = document.createElement('b'); b.setAttribute('onclick', 'window.__x = 1'); document.body.append(b); b.click(); fetch('https://example.invalid/').catch(() => {}); });
+  await tasks.waitForTimeout(300);
+  expect(await tasks.evaluate(() => window.__x)).toBeUndefined();
+  const seen = await tasks.evaluate(() => window.__csp);
+  expect(seen.some((x) => x.startsWith('script-src'))).toBe(true);
+  expect(seen.some((x) => x.startsWith('connect-src'))).toBe(true);
+  await tasks.evaluate(() => { window.__csp.length = 0; });
+  violations.length = 0;
+  await collect(tasks, 'tasks');
   expect(violations).toEqual([]);
 });

@@ -9,8 +9,12 @@ function applyConfigSideEffects(prev, next, d, touched) {
   if (next.busyCalendar === true && !prev.busyCalendar) d.enableCalendar();
   if (hit('showWidget')) d.applyWidgetVisibility();
   if (hit('remoteTailscale')) d.syncTailnetListener();
+  if (hit('remoteInteractionHost') || hit('teamSessionSharing')) d.syncInteractionHost?.();
   if (hit('menuBarMode') || hit('showWidget')) d.createTray();
   if (hit('voice')) d.applyVoiceHotkey();
+  if (hit('lowPower')) d.applyLowPower?.();
+  if (hit('fastHook')) d.syncFastHook?.();
+  if (hit('agentMailInbox')) d.syncAgentMail?.();
   d.broadcastStatus();
 }
 

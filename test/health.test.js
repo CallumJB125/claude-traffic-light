@@ -7,15 +7,17 @@ const path = require('path');
 const Health = require('../src/health.js');
 const Claude = require('../adapters/claude-code.js');
 const Runtime = require('../adapters/runtime.js');
+const { testTempDir } = require('./helpers/tmp');
 
 const NOW = Date.parse('2026-09-30T12:00:00.000Z');
 const iso = (agoMs) => new Date(NOW - agoMs).toISOString();
 const GB = 1024 ** 3;
+const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // A fake machine: home with ~/.claude, an app binary and its hooks dir, and
-// Buddy's data dir. Everything the checks read lives under one temp folder.
+// Plexiform's data dir. Everything the checks read lives under one temp folder.
 function machine({ hooks = 'current', sessions = {}, locks = {}, transcripts = true, lastHook = null } = {}) {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-health-'));
+  const home = testTempDir('ctl-health-');
   const root = path.join(home, '.claude-traffic-light');
   const app = path.join(home, 'Applications', 'Claude Buddy.app', 'Contents');
   const hooksDir = path.join(app, 'Resources', 'hooks');
@@ -74,7 +76,7 @@ test('hooks: missing, or settings.json unparsable', () => {
   const broken = Health.runChecks(machine({ hooks: '{ nope' }).ctx);
   assert.equal(byId(broken, 'hooks').status, 'fail');
   assert.equal(byId(broken, 'hooks').fix, undefined, 'no one-click fix: reinstalling would refuse to write over it');
-  assert.match(byId(broken, 'hooks').detail, /^~\/\.claude\/settings\.json can't be read/);
+  assert.match(byId(broken, 'hooks').detail, new RegExp(`^${escapeRegex(path.join('~', '.claude', 'settings.json'))} can't be read`));
 });
 
 test('hooks: pointing at an app that was moved away is a failure', () => {
@@ -83,7 +85,7 @@ test('hooks: pointing at an app that was moved away is a failure', () => {
   fs.writeFileSync(Claude.configPath(m.home), JSON.stringify(Claude.apply({}, old)));
   const c = byId(Health.runChecks(m.ctx), 'hooks');
   assert.equal(c.status, 'fail');
-  assert.equal(c.detail, 'Points at a copy of Buddy that was moved or deleted (/Volumes/Old/Claude Buddy.app/Contents/Resources/hooks/set-status.js).');
+  assert.equal(c.detail, 'Points at a copy of Plexiform that was moved or deleted (/Volumes/Old/Claude Buddy.app/Contents/Resources/hooks/set-status.js).');
   assert.equal(c.fix, 'reinstall-hooks');
 });
 
@@ -95,7 +97,7 @@ test('hooks: registered from a checkout that still exists is a warning naming it
   fs.writeFileSync(Claude.configPath(m.home), JSON.stringify(Claude.apply({}, Runtime.make({ execPath: null, hooksDir: checkout, dataDir: m.root }))));
   const c = byId(Health.runChecks(m.ctx), 'hooks');
   assert.equal(c.status, 'warn');
-  assert.equal(c.detail, 'Pointing at a different copy of Buddy (~/dev/claude-traffic-light/hooks/set-status.js), not this one.');
+  assert.equal(c.detail, `Pointing at a different copy of Plexiform (${path.join('~', 'dev', 'claude-traffic-light', 'hooks', 'set-status.js')}), not this one.`);
 });
 
 test('hooks: this copy, but missing an event or out of step with askFromWidget', () => {
@@ -136,7 +138,7 @@ test('sessions: unreadable files are reported; a missing folder fails', () => {
   fs.rmSync(path.join(m.root, 'sessions'), { recursive: true });
   const gone = byId(Health.runChecks(m.ctx), 'sessions');
   assert.equal(gone.status, 'fail');
-  assert.match(gone.next, /reopen Buddy/);
+  assert.match(gone.next, /reopen Plexiform/);
 });
 
 test('last hook: newest of the live session files and the saved stamp', () => {
@@ -178,19 +180,19 @@ test('transcripts: missing folder warns, present folder opens a file without rea
   const denied = { ...fs, readdirSync: (d, o) => { if (String(d).endsWith('projects')) throw Object.assign(new Error('denied'), { code: 'EACCES' }); return fs.readdirSync(d, o); } };
   const f = byId(Health.runChecks({ ...m.ctx, fs: denied }), 'transcripts');
   assert.equal(f.status, 'fail');
-  assert.equal(f.detail, "~/.claude/projects can't be read (EACCES).");
+  assert.equal(f.detail, `${path.join('~', '.claude', 'projects')} can't be read (EACCES).`);
 });
 
 test('mcp, signal server, disk and update states', () => {
   const { ctx } = machine();
   const run = (extra, id) => byId(Health.runChecks({ ...ctx, ...extra }), id);
   assert.equal(run({ mcp: { installed: false, path: '/x' } }, 'mcp').fix, 'enable-mcp');
-  assert.equal(run({ mcp: { installed: true, current: false, path: '/x' } }, 'mcp').detail, 'Registered, but pointing at an older copy of Buddy.');
+  assert.equal(run({ mcp: { installed: true, current: false, path: '/x' } }, 'mcp').detail, 'Registered, but pointing at an older copy of Plexiform.');
   assert.equal(run({ mcp: { installed: false, path: '/x', error: 'Unexpected token' } }, 'mcp').status, 'fail');
   assert.equal(run({ mcpConnected: true }, 'mcp').detail, 'Registered, and this answer came through it.');
   const busy = run({ signal: { listening: false, port: 47172, error: 'EADDRINUSE' } }, 'signal');
   assert.equal(busy.status, 'warn');
-  assert.equal(busy.detail, "Another program is using its port (47172), so other tools can't reach Buddy.");
+  assert.equal(busy.detail, "Another program is using its port (47172), so other tools can't reach Plexiform.");
   assert.equal(run({ signal: { running: false, port: 47172 } }, 'signal').status, 'fail');
   assert.equal(run({ statfs: () => ({ bavail: 100, bsize: 1024 * 1024 }) }, 'disk').status, 'fail');
   assert.equal(run({ statfs: () => ({ bavail: 500, bsize: 1024 * 1024 }) }, 'disk').status, 'warn');
@@ -251,11 +253,11 @@ test('hooks: current, but also registered from another copy, or in an older form
   const m = machine();
   const checkout = path.join(m.home, 'dev', 'buddy', 'hooks');
   const twice = Claude.apply({}, m.runtime);
-  twice.hooks.Stop.push({ matcher: '', hooks: [{ type: 'command', command: `node "${checkout}/set-status.js" stop` }] });
+  twice.hooks.Stop.push({ matcher: '', hooks: [{ type: 'command', command: `node "${path.join(checkout, 'set-status.js')}" stop` }] });
   fs.writeFileSync(Claude.configPath(m.home), JSON.stringify(twice));
   const c = byId(Health.runChecks(m.ctx), 'hooks');
   assert.equal(c.status, 'warn');
-  assert.equal(c.detail, "Installed, but also registered from a copy that isn't there any more (~/dev/buddy/hooks/set-status.js).");
+  assert.equal(c.detail, `Installed, but also registered from a copy that isn't there any more (${path.join('~', 'dev', 'buddy', 'hooks', 'set-status.js')}).`);
   assert.equal(c.fix, 'reinstall-hooks');
   // The same script run by plain node: this app, an older command form.
   const old = Claude.apply({}, Runtime.make({ execPath: null, hooksDir: m.hooksDir, dataDir: m.root }));
@@ -285,7 +287,7 @@ test('last hook: not green when the hooks are broken or it is over a day old', (
 
 test('update available always says what to do', () => {
   const { ctx } = machine();
-  assert.equal(byId(Health.runChecks({ ...ctx, updateStatus: () => ({ state: 'available' }) }), 'version').next, 'Quit Buddy and install the update from the tray.');
+  assert.equal(byId(Health.runChecks({ ...ctx, updateStatus: () => ({ state: 'available' }) }), 'version').next, 'Quit Plexiform and install the update from the tray.');
 });
 
 test('stale-lock clearing also removes old aside files and pluralises', () => {
@@ -334,11 +336,11 @@ test('hooks: P3\'s deny rule — present is fine, missing is a warning, a foreig
   const settings = JSON.parse(fs.readFileSync(Claude.configPath(m.home), 'utf8'));
   assert.deepEqual(settings.permissions.deny, Claude.denyRulesFor(m.home, m.runtime));
   assert.equal(byId(Health.runChecks(m.ctx), 'hooks').status, 'ok');
-  // The person's own deny rules beside Buddy's change nothing.
+  // The person's own deny rules beside Plexiform's change nothing.
   settings.permissions.deny.unshift('Read(~/.ssh/**)');
   fs.writeFileSync(Claude.configPath(m.home), JSON.stringify(settings));
   assert.equal(byId(Health.runChecks(m.ctx), 'hooks').status, 'ok');
-  // Buddy's rule removed by hand.
+  // Plexiform's rule removed by hand.
   settings.permissions.deny = ['Read(~/.ssh/**)'];
   fs.writeFileSync(Claude.configPath(m.home), JSON.stringify(settings));
   const c = byId(Health.runChecks(m.ctx), 'hooks');
@@ -362,8 +364,89 @@ test('hooks: a settings.json the real installer wrote (P3 deny rule, .buddy-back
   assert.ok(fs.readdirSync(path.join(m.home, '.claude')).some((f) => f.includes('buddy-backup')), 'installer left its backup');
   const c = byId(Health.runChecks(m.ctx), 'hooks');
   assert.equal(c.status, 'ok', c.detail);
-  assert.equal(c.detail, 'Installed, and pointing at this copy of Buddy.');
+  assert.equal(c.detail, 'Installed, and pointing at this copy of Plexiform.');
   // Installing twice changes nothing the check cares about.
   Claude.install({ home: m.home, runtime: m.runtime });
   assert.equal(byId(Health.runChecks(m.ctx), 'hooks').status, 'ok');
+});
+
+test('Burst trust check: macOS with Burst installed only; untrusted offers the console fix', () => {
+  const run = (burst, platform = 'darwin') => Health.runChecks({ ...machine().ctx, burst, platform }).checks.find((c) => c.id === 'burst');
+  assert.equal(run(undefined), undefined);
+  assert.equal(run({ kind: 'not_installed' }), undefined);
+  assert.equal(run({ kind: 'on', version: '1' }, 'win32'), undefined);
+  assert.equal(run({ kind: 'on', version: '1' }).status, 'ok');
+  const bad = run({ kind: 'untrusted' });
+  assert.equal(bad.status, 'fail'); assert.equal(bad.fix, 'open-burst-console'); assert.equal(bad.fixLabel, 'Open Burst console');
+  assert.equal(run(require('../src/burst-view.js').statusView({ kind: 'unreachable' }, { platform: 'darwin' })).status, 'info');
+});
+
+test('Burst rows: macOS with Burst installed only; each has a fixture state producing ok, warn or fail', () => {
+  const run = (burstFacts, platform = 'darwin') => Health.runChecks({ ...machine().ctx, platform, burstFacts }).checks.filter((c) => c.id.startsWith('burst-'));
+  const by = (rows, id) => rows.find((c) => c.id === id);
+  const state = (o = {}) => ({ version: '1.2.0', mode: 'transparent', active: true, inactiveReason: '', caTrusted: true, configError: '', clientTls: { rejecting: false }, pfHeal: { installed: true }, selfHeal: { installed: true }, secondary: { provider: 'together', keyPresent: true }, ...o });
+  const present = (o, upgrade = null) => ({ detection: { kind: 'present', state: state(o), upgrade }, console: { kind: 'present', status: { checks: [], configError: '' } } });
+
+  assert.deepEqual(run(undefined), []);
+  assert.deepEqual(run({ detection: { kind: 'not_installed' } }), []);
+  assert.deepEqual(run(present(), 'win32'), []);
+  assert.deepEqual(run(present(), 'linux'), []);
+
+  const good = run(present());
+  for (const id of ['burst-intercept', 'burst-ca', 'burst-guards', 'burst-secondary', 'burst-version']) assert.equal(by(good, id).status, 'ok', id);
+  assert.equal(by(good, 'burst-console').fix, 'open-burst-console');
+  assert.equal(by(good, 'burst-console').fixLabel, 'Open Burst console');
+  assert.equal(by(good, 'burst-trace'), undefined, 'route test is in Burst\'s dashboard');
+  assert.equal(by(good, 'burst-activity'), undefined, 'the audit is in Burst\'s console');
+  assert.equal(by(good, 'burst-gateway'), undefined);
+
+  const off = by(run(present({ active: false, inactiveReason: 'ANTHROPIC_BASE_URL was removed' })), 'burst-intercept');
+  assert.equal(off.status, 'warn'); assert.equal(off.detail, 'ANTHROPIC_BASE_URL was removed'); assert.equal(off.fix, 'burst-console-restart');
+  assert.equal(by(run(present({ active: false })), 'burst-intercept').status, 'warn');
+
+  assert.equal(by(run(present({ caTrusted: false })), 'burst-ca').status, 'warn');
+  const rej = by(run(present({ clientTls: { rejecting: true, lastClass: 'unknown authority' } })), 'burst-ca');
+  assert.equal(rej.status, 'fail'); assert.match(rej.detail, /unknown authority/);
+  assert.equal(by(run(present({ mode: 'base-url', caTrusted: false })), 'burst-ca'), undefined);
+
+  assert.equal(by(run(present({ pfHeal: null })), 'burst-guards').status, 'info');
+
+  const cfg = by(run({ detection: { kind: 'broken', state: state({ configError: 'bad toml line 3' }) }, console: null }), 'burst-config');
+  assert.equal(cfg.status, 'fail'); assert.equal(cfg.fix, 'open-burst-console'); assert.match(cfg.detail, /bad toml/);
+
+  const nokey = by(run(present({ secondary: { provider: 'together', keyPresent: false } })), 'burst-secondary');
+  assert.equal(nokey.status, 'warn'); assert.doesNotMatch(JSON.stringify(nokey), /base_url|sk-/);
+
+  const behind = by(run(present({}, { canUpgrade: true, upToDate: false, latestVersion: '1.3.0' })), 'burst-version');
+  assert.equal(behind.status, 'info'); assert.match(behind.detail, /1\.3\.0/);
+});
+
+test('Burst gateway down: the console names the failing part and offers a restart, or a diagnose when nothing fails; no console, no fix', () => {
+  const run = (console) => Health.runChecks({ ...machine().ctx, platform: 'darwin', burstFacts: { detection: { kind: 'unreachable' }, console } }).checks.find((c) => c.id === 'burst-gateway');
+  const named = run({ kind: 'present', status: { checks: [{ name: 'launchd', ok: true }, { name: 'pf redirect', ok: false, detail: 'no rdr rule' }] } });
+  assert.equal(named.status, 'fail'); assert.match(named.detail, /pf redirect is failing/); assert.equal(named.fix, 'burst-console-restart');
+  const quiet = run({ kind: 'present', status: { checks: [{ name: 'launchd', ok: true }] } });
+  assert.equal(quiet.status, 'fail'); assert.equal(quiet.fix, 'burst-console-diagnose'); assert.equal(quiet.fixLabel, 'Diagnose Burst');
+  const dead = run({ kind: 'unreachable' });
+  assert.equal(dead.status, 'fail'); assert.equal(dead.fix, undefined);
+  assert.equal(run(null).status, 'fail');
+});
+
+test('Burst console row: only with Burst and its console present; no activity or trace rows', () => {
+  const run = (facts) => Health.runChecks({ ...machine().ctx, platform: 'darwin', burstFacts: facts }).checks;
+  const det = { kind: 'present', state: { mode: 'base-url', active: true, secondary: {} } };
+  const rows = run({ detection: det, console: { kind: 'present', status: { checks: [] } } });
+  assert.equal(rows.find((c) => c.id === 'burst-console').status, 'info');
+  assert.equal(run({ detection: det, console: null }).find((c) => c.id === 'burst-console'), undefined);
+  assert.equal(run({ detection: { kind: 'unreachable' }, console: { kind: 'present', status: { checks: [] } } }).find((c) => c.id === 'burst-console'), undefined);
+  for (const r of rows) assert.ok(!['burst-trace', 'burst-activity'].includes(r.id), r.id);
+  assert.equal(Health.traceView, undefined);
+});
+
+test('Burst version: cannot-check-for-updates when Burst has no checkout, never up to date', () => {
+  const det = { kind: 'present', state: { version: '0.19.0', mode: 'transparent', active: true, secondary: {} }, upgrade: { canUpgrade: false, upToDate: false, error: 'no checkout of the claude-burst repo found next to it' } };
+  const row = Health.runChecks({ ...machine().ctx, platform: 'darwin', burstFacts: { detection: det, console: null } }).checks.find((c) => c.id === 'burst-version');
+  assert.equal(row.status, 'info');
+  assert.match(row.detail, /can't check for updates: no checkout/);
+  assert.doesNotMatch(row.detail, /up to date/);
 });

@@ -7,6 +7,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const V = require('../src/updater/verify.js');
+const { testTempDir } = require('./helpers/tmp');
 
 // A stable key and a separate beta key, as the app ships them.
 function keyPair() {
@@ -79,6 +80,6 @@ function publish(feed, { prefix = '/', privateKey, version, channel = 'stable', 
   return manifest;
 }
 
-const tmpDir = (tag) => fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), `updater-${tag}-`));
+const tmpDir = (tag) => fs.realpathSync(testTempDir(`updater-${tag}-`));
 
 module.exports = { keyPair, startFeed, publish, sha, tmpDir };
