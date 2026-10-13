@@ -37,4 +37,12 @@ contextBridge.exposeInMainWorld('sessionsApi', {
   mailPickFolder: () => ipcRenderer.invoke('mail:pick-folder'),
   mailAccept: (id, folder, ai) => ipcRenderer.invoke('mail:accept', String(id), String(folder), String(ai)),
   onMail: (cb) => ipcRenderer.on('mail:changed', () => cb()),
+  // A hand-off the person starts to a teammate (same packet preview as a tool hand-off; sent through the team hub).
+  mailTeammates: (key) => ipcRenderer.invoke('mail:teammates', String(key)),
+  mailHandoff: (key, to) => ipcRenderer.invoke('mail:handoff', String(key), String(to)),
+  // Hand-off requests from a running AI (src/handoff-requests.js): the person confirms, dismisses, or reads the outcome.
+  handoffRequests: () => ipcRenderer.invoke('handoff:list'),
+  handoffConfirm: (id) => ipcRenderer.invoke('handoff:confirm', String(id)),
+  handoffDismiss: (id) => ipcRenderer.invoke('handoff:dismiss', String(id)),
+  onHandoffRequests: (cb) => ipcRenderer.on('handoff:changed', () => cb()),
 });

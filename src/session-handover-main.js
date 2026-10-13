@@ -42,8 +42,8 @@ function rowsFrom({ live = [], capture = [], now = Date.now() } = {}) {
   return [...out.values()];
 }
 
-function register({ ipcMain, rootDir, isExcluded, burstFor, home, sessionsAllowed, clipboard, shell, sessions = () => ({}), log = () => {}, start = true }) {
-  const writer = SessionHandover.create({ rootDir, isExcluded, burstFor, home, log, transcripts: Transcripts.createLocator({ home }), rows: () => rowsFrom({ ...(sessions() || {}), now: Date.now() }) });
+function register({ ipcMain, rootDir, isExcluded, burstFor, home, sessionsAllowed, clipboard, shell, sessions = () => ({}), onRendered = () => {}, log = () => {}, start = true }) {
+  const writer = SessionHandover.create({ rootDir, isExcluded, burstFor, home, log, onRendered, transcripts: Transcripts.createLocator({ home }), rows: () => rowsFrom({ ...(sessions() || {}), now: Date.now() }) });
   if (start) writer.start();
   ipcMain.handle('sessions:handover', async (e, action, key) => {
     if (!sessionsAllowed(e)) return false;

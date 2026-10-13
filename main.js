@@ -490,7 +490,7 @@ const { SIGNAL_PORT, startSignalServer, readRequests, answerRequest, keyFor } = 
   aggregateState: (...a) => aggregateState(...a),
   broadcastStatus: (...a) => broadcastStatus(...a),
   teamActivity: (op, args) => TeamActivity.call(op, args),
-  agentMail: (op, args) => AgentMail.op(op, args),
+  agentMail: (op, args) => (op === 'request_handoff' || op === 'hand_off_status' ? localHandoffOp(op, args) : AgentMail.op(op, args)),
 });
 // A remote session's folder names a directory on another machine: it is
 // shown, never opened, copied as a path, knocked on or used to find a
@@ -1518,7 +1518,16 @@ function getBuddy() {
       openTimeline: (session) => SessionTimelineMain.openSession(session),
       onCaptureChange: () => refreshTrayMenu(),
       spendFor: (o) => { if (!usageMemo.turns) getUsageTurns().catch(() => {}); return WorkCost.sessionSpend(usageMemo.turns, o); },
-      continueIn: (o) => ContinueIn.popup({ Menu, continueIn, onEvent: continueToSessions, ...o }),
+      continueIn: (o) => ContinueIn.popup({ Menu, continueIn, onEvent: continueToSessions, ...o,
+        teammates: async () => { const p = teammatePacketFromDoc(await o.load()); return p ? (await AgentMail.teammates(p.cwd)).teammates : []; },
+        handoffToTeammate: async (load, to) => {
+          const p = teammatePacketFromDoc(await load());
+          if (!p) return { ok: false, error: 'No handover could be built for this card.' };
+          const who = (await AgentMail.teammates(p.cwd)).teammates.find((t) => t.user_id === to);
+          if (!who) return { ok: false, error: 'Choose a teammate first.' };
+          if ((await confirmHandoff({ label: `${who.name} (teammate)`, text: require('./src/handoff-packet.js').toPrompt(p.packet) })) !== true) return { ok: false, cancelled: true };
+          return AgentMail.sendHandoff({ cwd: p.cwd, to, packet: p.packet });
+        } }),
       prFor: (o) => (loadConfig().gitSignals !== false ? git.prFor(o.cwd) : null),
     });
     refreshTrayMenu();
@@ -1735,8 +1744,46 @@ require('./src/agent-mail').register({ipcMain,allowed:sessionsSender,mail:AgentM
     else{const r=await dialog.showOpenDialog(BrowserWindow.fromWebContents(e.sender)||undefined,{title:'Choose the folder the handoff works in',properties:['openDirectory']});dir=r.canceled?null:r.filePaths[0];}
     try{return dir&&path.isAbsolute(dir)&&fs.statSync(dir).isDirectory()?dir:null;}catch{return null;}
   },
-  ask:(text,to,onEvent)=>continueIn.ask(text,to,onEvent),sendToSessions:ev=>continueToSessions(ev)});
+  ask:(text,to,onEvent)=>continueIn.ask(text,to,onEvent),sendToSessions:ev=>continueToSessions(ev),
+  packetFor:async(key)=>teammatePacketFromDoc(SessionHandoverMain.writer.text(key)),confirmHandoff:(o)=>confirmHandoff(o)});
 onQuit(app,()=>AgentMail.stop());
+// A session's handover → the scrubbed packet a teammate would get (continue-in's builder, target 'teammate') and its folder.
+function teammatePacketFromDoc(doc){
+  if(!doc)return null;
+  const packet=ContinueIn.packetFromDoc(doc,'teammate',os.homedir());
+  if(!packet||!require('./src/handoff-packet.js').validate(packet).ok)return null;
+  const cwd=require('./src/session-handover.js').factsFromDoc(doc)?.cwd||'';
+  return cwd?{cwd,packet}:null;
+}
+// A hand-off marker ("plexiform: handoff to codex: why") in a session's last reply becomes a pending request, once per session and target.
+function onHandoverRendered({ adapter, sessionId, cwd, branch, facts }) {
+  const f = facts || {};
+  if (!f.lastAssistant) return;
+  const from = { 'claude-code': 'claude' }[adapter] || adapter;
+  HandoffRequests.fromText(f.lastAssistant, { from, title: f.lastPrompt || f.firstPrompt || '', brief: f.lastAssistant, files: Object.keys(f.files || {}), branch: branch || '', cwd, sessionId: `${adapter}:${sessionId}` });
+}
+// Hand-off requests from a running AI (src/handoff-requests.js): pending until the person confirms on Sessions.
+const HandoffRequests=require('./src/handoff-requests.js').create({tools:()=>continueIn.menu(),home:os.homedir(),log:m=>console.log(m),
+  onChange:()=>buddyWin?.sendToPage('sessions','handoff:changed'),notify:(r)=>notifyHandoffRequest(r)});
+function localHandoffOp(op,args){
+  const a=args&&typeof args==='object'?args:{};
+  if(op==='hand_off_status')return Promise.resolve(HandoffRequests.status({request_id:typeof a.request_id==='string'?a.request_id:undefined}));
+  return Promise.resolve(HandoffRequests.request({from:a.from,to:a.to,reason:a.reason,title:a.title,brief:a.brief,files:a.files,branch:a.branch,cwd:typeof a.cwd==='string'?a.cwd:''}));
+}
+function notifyHandoffRequest(r){
+  console.log('[handoff-requests] notify');
+  if(IS_DEV_RUN||!Notification.isSupported())return;
+  const note=new Notification({title:'Your AI asks to hand off its work',body:`To ${r.label||r.to}. Nothing starts until you confirm it in Sessions.`,silent:true});
+  liveNotifications.add(note);
+  note.on('click',()=>{liveNotifications.delete(note);openBuddy('sessions');});
+  note.on('close',()=>liveNotifications.delete(note));
+  note.show();
+}
+for(const[channel,fn]of[['handoff:list',()=>({ok:true,requests:HandoffRequests.list()})],
+  ['handoff:confirm',(_e,id)=>HandoffRequests.confirm(id,{continueIn,onEvent:(ev)=>continueToSessions(ev)})],
+  ['handoff:dismiss',(_e,id)=>HandoffRequests.dismiss(id)]]){
+  ipcMain.handle(channel,async(e,...args)=>{if(!sessionsSender(e))return{ok:false,error:'Not allowed.'};try{return await fn(e,...args);}catch{return{ok:false,error:'Something went wrong. Nothing was started.'};}});
+}
 app.on('browser-window-focus',()=>AgentMail.poke());
 // One notification per agent mail item, like maybeNotify's: a held ask waiting for Send, or a teammate's AI's question or handoff.
 function notifyAgentMail(n){
@@ -1860,7 +1907,7 @@ if (IS_MAC) BurstNotices.start();
 onQuit(app, () => BurstNotices.stop());
 let keepAwakeMain = null;
 keepAwakeMain = require('./src/keep-awake-ipc.js').register({ utilityHandle, allowed: (e) => fromPage(e, buddyWin?.accountWebContents?.()), isMac: IS_MAC, burst: BurstIpc, keepAwake: require('./src/keep-awake.js').createKeepAwake({ powerSaveBlocker }), dialog, getPref: () => { const v = loadConfig().keepAwake; return ['app', 'ac', 'always'].includes(v) ? v : 'off'; }, setPref: (v) => saveConfig({ keepAwake: v }), log: console.log });
-const SessionHandoverMain = require('./src/session-handover-main.js').register({ ipcMain, rootDir: ROOT_DIR, isExcluded: (cwd) => Quiet.projectMuted(loadConfig().mutedProjects, cwd), burstFor: (row) => { const h = BurstIpc.enrichSession({ sessionId: row.sessionId, cwd: row.cwd, source: row.adapter === 'claude-code' ? null : row.adapter }); return h && h.handover ? h.handover.text : null; }, home: os.homedir(), sessionsAllowed: sessionsSender, clipboard, shell, sessions: () => ({ live: localSessions(aggregateState().sessions || []), capture: buddyWin?.handoverSessions?.() ?? [] }), log: console.log });
+const SessionHandoverMain = require('./src/session-handover-main.js').register({ ipcMain, rootDir: ROOT_DIR, isExcluded: (cwd) => Quiet.projectMuted(loadConfig().mutedProjects, cwd), onRendered: (r) => onHandoverRendered(r), burstFor: (row) => { const h = BurstIpc.enrichSession({ sessionId: row.sessionId, cwd: row.cwd, source: row.adapter === 'claude-code' ? null : row.adapter }); return h && h.handover ? h.handover.text : null; }, home: os.homedir(), sessionsAllowed: sessionsSender, clipboard, shell, sessions: () => ({ live: localSessions(aggregateState().sessions || []), capture: buddyWin?.handoverSessions?.() ?? [] }), log: console.log });
 const SessionTimelineMain = require('./src/session-timeline-main.js').register({ ipcMain, rootDir: ROOT_DIR, home: os.homedir(), user: os.userInfo().username, hostname: os.hostname(), writer: () => SessionHandoverMain.writer, isExcluded: (cwd) => Quiet.projectMuted(loadConfig().mutedProjects, cwd), sessions: () => ({ live: localSessions(aggregateState().sessions || []), capture: buddyWin?.handoverSessions?.() ?? [] }), sessionsAllowed: sessionsSender, pageAllowed: (e) => fromUtilityPage(e, 'timeline'), openPage: (id) => openBuddy(id), pageContents: () => buddyWin?.pageWebContents('timeline'), dialog, BrowserWindow, downloads: () => app.getPath('downloads'), log: console.log });
 // "Try the demo" (src/demo-mode.js): fixtures only, a flag in memory. A dev run may start in it for screenshots.
 const Demo = require('./src/demo-mode.js').create();
@@ -1868,7 +1915,7 @@ if (IS_DEV_RUN && !app.isPackaged && process.env.PLEXIFORM_DEMO_MODE === '1') De
 require('./src/demo-mode.js').register({ ipcMain, demo: Demo, allowed: (e) => ['home', 'tasks', 'help'].some((p) => fromUtilityPage(e, p)) });
 const ContinueIn = require('./src/continue-in.js');
 const confirmHandoff = async ({ label, text }) => (await dialog.showMessageBox(BrowserWindow.getFocusedWindow() ?? undefined, { type: 'question', title: 'Hand off to another AI', message: `Hand off this work to ${label}?`, detail: `This is exactly what will be shared with ${label}. It has been scrubbed of secrets and your home folder path, and nothing leaves this Mac except into the tool you chose.\n\n${text}`, buttons: ['Cancel', 'Confirm and hand off'], defaultId: 0, cancelId: 0, noLink: true })).response === 1;
-const continueIn = ContinueIn.create({ entitlements: require('./src/entitlements.js'), clipboard, tools: () => AiTools.quick(), confirm: confirmHandoff, home: os.homedir(), log: console.log });
+const continueIn = ContinueIn.create({ entitlements: require('./src/entitlements.js'), clipboard, tools: () => AiTools.quick(), confirm: confirmHandoff, home: os.homedir(), mailAvailable: () => !!(devMockReady && getBuddy().interactionHostIdentity?.()), log: console.log });
 const continueToSessions = (ev) => buddyWin?.sendToPage('sessions', 'continue:event', ev);
 ContinueIn.register({ ipcMain, allowed: fromUtilityPage, continueIn, writer: () => SessionHandoverMain.writer, sendToSessions: continueToSessions });
 onQuit(app, () => continueIn.stop());
@@ -1963,6 +2010,7 @@ function getTasks() {
     copy: (text) => clipboard.writeText(text),
     onChange: (snap) => {
       for (const wc of tasksPages()) wc.send('tasks:changed', snap);
+      for (const id of AgentMail.acceptedTasks()) { const t = (snap?.tasks || []).find((x) => x && String(x.id) === id); if (t && ['done', 'in_review', 'failed'].includes(t.state)) AgentMail.taskEnded(id, t.state, t.reason || '').catch(() => {}); }
       try { keepAwakeMain?.hold(require('./src/morning-report.js').queueActive(snap)); } catch { /* the blocker is best-effort */ }
     },
     onEvent: (wcId, id, event) => { const wc = tasksPages().find((w) => w.id === wcId); if (wc) wc.send('tasks:event', { id, event }); },
