@@ -61,8 +61,14 @@
     };
     card.append(row('enforceCaps', 'Enforce my limit: refuse Claude Code tool calls once the daily or weekly limit is spent'),
       row('stopRunaways', 'Stop runaway sessions: refuse their tool calls, and interrupt sessions Plexiform started'));
-    const status = e.capActive ? 'Your limit is spent: tool calls are being refused.' : e.sessionsStopped ? `${e.sessionsStopped} runaway session${e.sessionsStopped === 1 ? ' is' : 's are'} being held.` : 'Nothing is being refused right now.';
+    const status = e.capActive ? `${e.paused?.text || 'Your limit is spent'}: tool calls are being refused.` : e.sessionsStopped ? `${e.sessionsStopped} runaway session${e.sessionsStopped === 1 ? ' is' : 's are'} being held.` : 'Nothing is being refused right now.';
     card.append(el('div', 'note', `${status} If Plexiform stops updating, Claude Code carries on as normal.`));
+    if (e.paused?.resumable && typeof api.costGuard.resume === 'function') {
+      const resume = el('button', 'cg-resume', 'Resume for the rest of this period');
+      resume.type = 'button';
+      resume.addEventListener('click', async () => { resume.disabled = true; try { await api.costGuard.resume(); } catch { /* the card re-reads */ } rerender(); });
+      card.append(resume, el('div', 'note', 'Resuming lets work carry on over the limit until it resets. Raising the limit is above, under Spend.'));
+    }
     return card;
   }
 
