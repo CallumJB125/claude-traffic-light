@@ -20,15 +20,17 @@ const TOOLS = Object.freeze([
 ]);
 const LAUNCH = new Set(Object.keys(Handoff.TARGETS));
 const COPY = Object.freeze({ id: 'copy', label: 'Copy as prompt', mode: 'copy' });
+// Hand-off only (never a "Continue in" target): the packet goes to a teammate through agent mail.
+const TEAMMATE = Object.freeze({ id: 'teammate', label: 'A teammate…', mode: 'mail' });
 const ID = /^[a-z]{2,12}$/;
 const ASK_MAX = 8000;
 // What the recipient's own AI is told around a teammate's (already framed) question: it answers from the text alone.
 const ASK_HEAD = 'A teammate asked the question below through Plexiform. Answer it from the question alone: this session has no access to their code, files or repository, or to yours. Reply with the answer only, in plain text, for your person to read and edit before it is sent.';
 
 // rows: AiTools.quick(). Installed tools in a fixed order, then the copy fallback.
-function choices(rows, { canLaunch = false } = {}) {
+function choices(rows, { canLaunch = false, canMail = false } = {}) {
   const found = new Set((Array.isArray(rows) ? rows : []).filter((r) => r && r.installed === true && typeof r.id === 'string').map((r) => r.id));
-  return [...TOOLS.filter((t) => found.has(t.id)).map((t) => ({ id: t.id, label: t.label, mode: canLaunch && LAUNCH.has(t.id) ? 'launch' : 'copy' })), { ...COPY }];
+  return [...TOOLS.filter((t) => found.has(t.id)).map((t) => ({ id: t.id, label: t.label, mode: canLaunch && LAUNCH.has(t.id) ? 'launch' : 'copy' })), { ...COPY }, ...(canMail ? [{ ...TEAMMATE }] : [])];
 }
 
 const SOURCE = { 'claude-code': 'claude' };
@@ -47,16 +49,19 @@ function packetFromDoc(doc, to, home) {
 }
 
 // confirm({ to, label, text }) → true only when the person pressed Confirm on the native preview.
-function create({ entitlements, clipboard, tools = () => [], adapters = null, confirm = async () => false, home = null, log = () => {} }) {
+// mailAvailable() → true while signed in to a team (the teammate hand-off entry shows; the page resolves who).
+function create({ entitlements, clipboard, tools = () => [], adapters = null, confirm = async () => false, home = null, mailAvailable = () => false, log = () => {} }) {
   const h = Handoff.create({ entitlements, clipboard, log, ...(adapters ? { adapters } : {}), docFor: async (k) => (k && typeof k.load === 'function' ? (await k.load()) || null : null) });
   function menu() {
     let rows = [];
     try { rows = tools(); } catch { rows = []; }
-    return choices(rows, { canLaunch: entitlements.has('handoff.launch') });
+    let mail = false;
+    try { mail = mailAvailable() === true; } catch { mail = false; }
+    return choices(rows, { canLaunch: entitlements.has('handoff.launch'), canMail: mail });
   }
   // load() → the handover markdown, or null.
   async function run(load, to, onEvent = () => {}) {
-    const pick = typeof to === 'string' && ID.test(to) ? menu().find((c) => c.id === to) : null;
+    const pick = typeof to === 'string' && ID.test(to) && to !== TEAMMATE.id ? menu().find((c) => c.id === to) : null;
     if (!pick) return { ok: false, error: 'That tool was not found on this Mac.' };
     const key = { load };
     if (LAUNCH.has(pick.id)) {
@@ -71,7 +76,7 @@ function create({ entitlements, clipboard, tools = () => [], adapters = null, co
   // Confirm release it and go through run (a visible, text-only owned session
   // or the clipboard). Cancel returns before anything is launched or copied.
   async function handoff(load, to, onEvent = () => {}) {
-    const pick = typeof to === 'string' && ID.test(to) && to !== COPY.id ? menu().find((c) => c.id === to) : null;
+    const pick = typeof to === 'string' && ID.test(to) && to !== COPY.id && to !== TEAMMATE.id ? menu().find((c) => c.id === to) : null;
     if (!pick) return { ok: false, error: 'That tool was not found on this Mac.' };
     const doc = await load();
     const packet = doc ? packetFromDoc(doc, pick.id, home) : null;
@@ -82,12 +87,23 @@ function create({ entitlements, clipboard, tools = () => [], adapters = null, co
     const text = Packet.release(packet, Packet.confirmation(packet));
     return run(async () => text, pick.id, onEvent);
   }
+  // A packet someone else built (src/handoff-requests.js: an AI asked for this
+  // hand-off): the same native preview, confirm, release and run as handoff().
+  async function handoffPacket(packet, to, onEvent = () => {}) {
+    const pick = typeof to === 'string' && ID.test(to) && to !== COPY.id && to !== TEAMMATE.id ? menu().find((c) => c.id === to) : null;
+    if (!pick) return { ok: false, error: 'That tool was not found on this Mac.' };
+    const v = Packet.validate(packet);
+    if (!v.ok || packet.to !== pick.id) return { ok: false, error: v.ok ? 'Choose the tool to hand off to.' : v.errors[0] };
+    if ((await confirm({ to: pick.id, label: pick.label, text: Packet.toPrompt(packet) })) !== true) return { ok: false, cancelled: true };
+    const text = Packet.release(packet, Packet.confirmation(packet));
+    return run(async () => text, pick.id, onEvent);
+  }
   // "Ask my AI": the same text-only owned session as a hand-off (Plus, Codex or
   // Claude Code), started with the question instead of a handover. It cannot see
   // any repository. Without the plan or the CLI, the question goes on the clipboard.
   async function ask(text, to, onEvent = () => {}) {
     if (typeof text !== 'string' || !text.trim() || text.length > ASK_MAX) return { ok: false, error: 'That question is empty or too long.' };
-    const pick = typeof to === 'string' && ID.test(to) ? menu().find((c) => c.id === to) : null;
+    const pick = typeof to === 'string' && ID.test(to) && to !== TEAMMATE.id ? menu().find((c) => c.id === to) : null;
     if (!pick) return { ok: false, error: 'That tool was not found on this Mac.' };
     const prompt = `${ASK_HEAD}\n\n${text.trim()}`;
     if (LAUNCH.has(pick.id)) {
@@ -99,7 +115,7 @@ function create({ entitlements, clipboard, tools = () => [], adapters = null, co
     clipboard.writeText(prompt);
     return { ok: true, mode: 'copied', to: pick.id, note: pick.id === 'copy' ? 'Copied the question. Paste it into any AI tool.' : `Copied the question. Paste it into ${pick.label}.` };
   }
-  return { menu, run, handoff, ask, reply: (id, text) => h.reply(id, text), end: (id) => h.end(id), stop: () => h.stop() };
+  return { menu, run, handoff, handoffPacket, ask, reply: (id, text) => h.reply(id, text), end: (id) => h.end(id), stop: () => h.stop() };
 }
 
 // Sessions and Search ask for the menu; Sessions also runs it by handover key
@@ -124,25 +140,37 @@ function register({ ipcMain, allowed, continueIn, writer, sendToSessions = () =>
 
 // The board card's menu, as a native menu over the board. Resolves to the
 // run's result, or null when it was closed without a choice.
-function popup({ Menu, continueIn, window, load, showSessions = () => {}, onEvent = () => {} }) {
-  return new Promise((resolve) => {
+// teammates: () → [{user_id, name}] for the folder the card is about (agent mail; [] when signed out or unlinked);
+// handoffToTeammate(load, user_id) sends the same previewed packet through the team hub.
+function popup({ Menu, continueIn, window, load, showSessions = () => {}, onEvent = () => {}, teammates = () => [], handoffToTeammate = null }) {
+  let list = [];
+  try { list = handoffToTeammate ? teammates() : []; } catch { list = []; }
+  // The hub is asked for the names first; a plain array builds the menu at once.
+  if (list && typeof list.then === 'function') return list.then((people) => build(people), () => build([]));
+  return build(list);
+  function build(people) { return new Promise((resolve) => {
     let picked = false;
-    const items = continueIn.menu().map((c) => ({
+    const items = continueIn.menu().filter((c) => c.mode !== 'mail').map((c) => ({
       label: c.id === 'copy' || c.mode === 'launch' ? c.label : `${c.label} (copies the prompt)`,
       click: () => {
         picked = true;
         resolve(continueIn.run(load, c.id, onEvent).then((r) => { if (r.ok && r.mode === 'launched') showSessions(); return r; }));
       },
     }));
-    const handoffItems = continueIn.menu().filter((c) => c.id !== 'copy').map((c) => ({
+    const handoffItems = continueIn.menu().filter((c) => c.id !== 'copy' && c.mode !== 'mail').map((c) => ({
       label: c.label,
       click: () => { picked = true; resolve(continueIn.handoff(load, c.id, onEvent).then((r) => { if (r.ok && r.mode === 'launched') showSessions(); return r; })); },
     }));
+    people = (Array.isArray(people) ? people : []).filter((p) => p && p.user_id && p.name).slice(0, 20);
+    for (const p of people) handoffItems.push(...(handoffItems.length && people[0] === p ? [{ type: 'separator' }] : []), {
+      label: `${p.name} (teammate)`,
+      click: () => { picked = true; resolve(handoffToTeammate(load, p.user_id).then((r) => { if (r.ok) showSessions(); return r; })); },
+    });
     if (handoffItems.length) items.push({ type: 'separator' }, { label: 'Hand off to another AI…', submenu: handoffItems });
     // A click arrives just after the menu closes on some platforms.
     Menu.buildFromTemplate([{ label: 'Continue in', enabled: false }, { type: 'separator' }, ...items])
       .popup({ window, callback: () => setTimeout(() => { if (!picked) resolve(null); }, 150) });
-  });
+  }); }
 }
 
-module.exports = { create, register, popup, choices, packetFromDoc, TOOLS };
+module.exports = { create, register, popup, choices, packetFromDoc, TOOLS, TEAMMATE };

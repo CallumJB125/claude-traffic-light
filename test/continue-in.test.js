@@ -238,3 +238,65 @@ test('ask (Plus) with the CLI missing copies the question instead and says so', 
     assert.match(c.text, /Which queue\?$/);
   } finally { ci.stop(); }
 });
+
+test('a teammate is a hand-off target only: listed when signed in, never a "Continue in" tool, never launched or copied', async () => {
+  assert.deepEqual(ContinueIn.choices(rows('codex'), { canLaunch: true, canMail: true }).map((c) => [c.id, c.mode]), [['codex', 'launch'], ['copy', 'copy'], ['teammate', 'mail']]);
+  assert.deepEqual(ContinueIn.choices(rows('codex')).map((c) => c.id), ['codex', 'copy']);
+  const c = clip();
+  const ci = ContinueIn.create({ entitlements: ent('plus'), clipboard: c, tools: () => rows('codex'), mailAvailable: () => true, adapters: { codex: () => fakeAdapter(), claude: () => fakeAdapter() } });
+  try {
+    assert.ok(ci.menu().some((x) => x.id === 'teammate' && x.label === 'A teammate…'));
+    assert.equal((await ci.run(async () => DOC, 'teammate')).ok, false);
+    assert.equal((await ci.handoff(async () => DOC, 'teammate')).ok, false);
+    assert.equal((await ci.ask('q', 'teammate')).ok, false);
+    assert.equal(c.text, null);
+    const off = ContinueIn.create({ entitlements: ent('plus'), clipboard: c, tools: () => rows('codex'), mailAvailable: () => { throw new Error('hub down'); } });
+    assert.ok(!off.menu().some((x) => x.id === 'teammate'));
+  } finally { ci.stop(); }
+});
+
+test('handoffPacket: a packet built elsewhere goes through the same native preview, confirm and launch; cancel launches nothing', async () => {
+  const Packet = require('../src/handoff-packet.js');
+  const adapter = fakeAdapter();
+  const shown = [];
+  let yes = false;
+  const ci = ContinueIn.create({ entitlements: ent('plus'), clipboard: clip(), tools: () => rows('codex'), confirm: async (o) => { shown.push(o); return yes; }, adapters: { codex: () => adapter, claude: () => ({ available: false }) } });
+  try {
+    const packet = Packet.build({ from: 'claude', to: 'codex', goal: 'Finish the parser', files: ['src/parser.js'], summary: 'Grammar is done; tests are not.', branch: 'feat/p' });
+    assert.deepEqual(await ci.handoffPacket(packet, 'codex'), { ok: false, cancelled: true });
+    assert.equal(shown[0].label, 'Codex');
+    assert.match(shown[0].text, /^# Handoff from claude to codex\n\n## Goal\nFinish the parser/);
+    assert.equal(adapter.sent.length, 0);
+    assert.equal((await ci.handoffPacket(packet, 'claude')).ok, false, 'the packet names codex');
+    assert.equal((await ci.handoffPacket({ ...packet, goal: '' }, 'codex')).ok, false);
+    yes = true;
+    const r = await ci.handoffPacket(packet, 'codex');
+    assert.equal(r.ok, true); assert.equal(r.mode, 'launched'); assert.equal(r.label, 'Codex');
+    assert.match(adapter.sent[0], /## Files touched\n- src\/parser.js/);
+  } finally { ci.stop(); }
+});
+
+test('the board popup adds teammates under "Hand off to another AI…", from a sync list or a promise, and hands off through the callback', async () => {
+  let template = null;
+  const Menu = { buildFromTemplate: (t) => { template = t; return { popup: () => {} }; } };
+  const ci = ContinueIn.create({ entitlements: ent('plus'), clipboard: clip(), tools: () => rows('codex'), mailAvailable: () => true, adapters: { codex: () => fakeAdapter(), claude: () => fakeAdapter() } });
+  try {
+    const sent = [];
+    const handoffToTeammate = async (load, to) => { sent.push([await load(), to]); return { ok: true }; };
+    const p = ContinueIn.popup({ Menu, continueIn: ci, window: 'w', load: async () => DOC, teammates: () => [{ user_id: 'u-bob', name: 'Bob' }, { user_id: null, name: 'ghost' }], handoffToTeammate });
+    const sub = template.find((i) => i.label === 'Hand off to another AI…').submenu;
+    assert.deepEqual(sub.map((i) => i.label || i.type), ['Codex', 'separator', 'Bob (teammate)']);
+    assert.ok(!template.some((i) => i.label === 'A teammate…'), 'the mail entry is never a plain Continue in item');
+    sub[2].click();
+    assert.deepEqual(await p, { ok: true });
+    assert.deepEqual(sent, [[DOC, 'u-bob']]);
+    // Async names (the hub is asked first); a failing lookup leaves the tools alone.
+    void ContinueIn.popup({ Menu, continueIn: ci, window: 'w', load: async () => DOC, teammates: async () => [{ user_id: 'u-al', name: 'Al' }], handoffToTeammate });
+    await new Promise((res) => setTimeout(res, 5));
+    assert.ok(template.find((i) => i.label === 'Hand off to another AI…').submenu.some((i) => i.label === 'Al (teammate)'));
+    template = null;
+    void ContinueIn.popup({ Menu, continueIn: ci, window: 'w', load: async () => DOC, teammates: async () => { throw new Error('offline'); }, handoffToTeammate });
+    await new Promise((res) => setTimeout(res, 5));
+    assert.deepEqual(template.find((i) => i.label === 'Hand off to another AI…').submenu.map((i) => i.label), ['Codex']);
+  } finally { ci.stop(); }
+});

@@ -65,6 +65,7 @@ function continueButton(key) {
     className: 'link',
     menu: () => window.sessionsApi.continueMenu(),
     handoff: async c => {
+      if (c.id === 'teammate') return teammatePicker(key, wrap, out);
       out.textContent = ' Waiting for your confirmation…';
       const r = await window.sessionsApi.continueHandoff(key, c.id).catch(() => null);
       if (r?.ok && r.mode === 'launched') { out.textContent = ''; continuePanel(r); return; }
@@ -79,6 +80,29 @@ function continueButton(key) {
     },
   }), out);
   return wrap;
+}
+
+// Hand off to a teammate: a small inline picker (names from the team hub for this session's folder), then the
+// same native preview-and-confirm as a tool hand-off, and the packet goes through agent mail.
+async function teammatePicker(key, wrap, out) {
+  wrap.querySelector('.teammate-pick')?.remove();
+  out.textContent = ' Finding your teammates…';
+  const r = await window.sessionsApi.mailTeammates(key).catch(() => null);
+  if (!r?.ok || !r.teammates.length) { out.textContent = ` ${r?.error || (r?.ok ? 'No teammates on the board this folder is linked to.' : 'Teammates could not be listed.')}`; return; }
+  out.textContent = '';
+  const box = node('span', '', 'teammate-pick');
+  const pick = node('select'); pick.setAttribute('aria-label', 'Which teammate');
+  for (const t of r.teammates) { const o = node('option', t.name); o.value = t.user_id; pick.append(o); }
+  const go = button('Hand off…', async () => {
+    go.disabled = true; out.textContent = ' Waiting for your confirmation…';
+    const res = await window.sessionsApi.mailHandoff(key, pick.value).catch(() => null);
+    out.textContent = ` ${res?.ok ? res.note || 'Handed off.' : res?.cancelled ? 'Cancelled. Nothing was sent.' : res?.error || 'That did not work.'}`;
+    box.remove();
+  }); go.className = 'small primary';
+  const cancel = button('Cancel', () => { box.remove(); out.textContent = ''; }); cancel.className = 'small';
+  box.append(pick, go, cancel);
+  wrap.append(box);
+  pick.focus();
 }
 
 // ── Add sessions panel and per-row actions (src/session-actions.js) ──────────

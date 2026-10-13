@@ -23,7 +23,7 @@
       const box = el('div', 'continue-menu');
       box.setAttribute('role', 'menu');
       box.setAttribute('aria-label', 'Continue this work in');
-      for (const c of r && r.ok ? r.choices : [{ id: 'copy', label: 'Copy as prompt', mode: 'copy' }]) {
+      for (const c of (r && r.ok ? r.choices : [{ id: 'copy', label: 'Copy as prompt', mode: 'copy' }]).filter((c) => c.mode !== 'mail')) {
         const item = el('button', 'continue-item');
         item.type = 'button';
         item.setAttribute('role', 'menuitem');
@@ -43,7 +43,7 @@
             const item = el('button', 'continue-item');
             item.type = 'button';
             item.setAttribute('role', 'menuitem');
-            item.append(el('span', 'continue-label', c.label), el('span', 'continue-hint', 'Shows a preview first'));
+            item.append(el('span', 'continue-label', c.label), el('span', 'continue-hint', c.mode === 'mail' ? 'Pick who, preview, then it goes through your team hub' : 'Shows a preview first'));
             item.addEventListener('click', () => { close(); handoff(c); });
             box.append(item);
           }
