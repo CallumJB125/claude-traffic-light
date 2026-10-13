@@ -58,12 +58,12 @@ test('one row per detected tool, each Fix opening its own AI tools row, plus a s
   assert.deepEqual(c.rows[1].fix, { label: 'Connect', destination: 'aitools:codex' });
   assert.deepEqual(c.rows[2].fix, { label: 'Fix', destination: 'aitools:gemini' });
   assert.match(c.rows[2].detail, /not valid JSON/);
-  assert.deepEqual(c.prompt, { text: 'We found Codex CLI on this Mac. Connect it?', ids: ['codex'], fix: { label: 'Connect all', destination: 'aitools:all' } });
+  assert.deepEqual(c.prompt, { text: 'Found Claude Code, Codex CLI and Gemini CLI on this Mac. Claude Code connected; Codex CLI and Gemini CLI not connected yet.', ids: ['codex'], fix: { label: 'Connect all', destination: 'aitools:all' } });
 });
 
 test('the prompt names every unconnected tool and disappears once all are connected', () => {
   const two = build({ tools: [tool('claude', 'Claude Code'), tool('codex', 'Codex CLI')] });
-  assert.equal(two.prompt.text, 'We found Claude Code and Codex CLI on this Mac. Connect them?');
+  assert.equal(two.prompt.text, 'Found Claude Code and Codex CLI on this Mac. None connected yet.');
   const none = build({ tools: [tool('claude', 'Claude Code', { connected: true, state: 'connected' })] });
   assert.equal(none.prompt, null);
 });

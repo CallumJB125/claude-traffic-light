@@ -6,6 +6,7 @@
 const InputView = require('./input-view.js');
 const SessionOverview = require('./session-overview.js');
 const { finding } = require('../usage-waste-view.js');
+const { summary } = require('./ai-tools.js');
 
 const LOCAL_BOARD = 'My board (this Mac)';
 const PAGES = new Set(['waiting', 'sessions', 'board', 'usage', 'settings', 'team', 'myday', 'overview', 'tasks']);
@@ -15,20 +16,19 @@ const TEAM_TTL_MS = 15000;
 const TOOLS_TTL_MS = 15000;
 const COSTS_TTL_MS = 60000;
 const text = (v, n = 200) => (typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, n) : '');
-const join = (names) => (names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names[0]);
 
 // Any tool found but not connected gets the banner; nothing found gets the install pointer.
 function banner(tools) {
   if (!Array.isArray(tools)) return null;
   const installed = tools.filter((t) => t && t.installed);
   if (!installed.length) return { kind: 'none', text: 'No AI tools found yet. Plexiform works with Claude Code, Codex, Gemini CLI, Cursor and Hermes.', action: { label: 'See AI tools', destination: 'aitools' } };
-  const pending = installed.filter((t) => !t.connected);
-  if (!pending.length) return null;
-  const names = pending.map((t) => text(t.label, 60) || t.id);
+  const sum = summary(tools);
+  if (!sum.waiting.length) return null;
+  const names = sum.waitingLabels.map((l) => text(l, 60));
   return {
     kind: 'connect',
-    text: `We found ${join(names)} on this Mac. Connect ${names.length > 1 ? 'them' : 'it'} to see what ${names.length > 1 ? 'they are' : 'it is'} doing here.`,
-    action: pending.length > 1 ? { label: `Connect ${pending.length} tools`, destination: 'aitools:all' } : { label: `Connect ${names[0]}`, destination: `aitools:${pending[0].id}` },
+    text: `${text(sum.text, 400)} Connect ${names.length > 1 ? 'them' : 'it'} to see what ${names.length > 1 ? 'they are' : 'it is'} doing here.`,
+    action: names.length > 1 ? { label: `Connect ${names.length} tools`, destination: 'aitools:all' } : { label: `Connect ${names[0]}`, destination: `aitools:${sum.waiting[0]}` },
   };
 }
 

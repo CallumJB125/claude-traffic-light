@@ -43,7 +43,7 @@ test('Home is a registered local page with its own sandboxed files', () => {
 test('the connect banner: nothing found, some unconnected, all connected', () => {
   assert.equal(Home.banner([tool('claude', 'Claude Code', false, false)]).kind, 'none');
   const two = Home.banner([tool('claude', 'Claude Code', true, true), tool('codex', 'Codex', true, false), tool('gemini', 'Gemini CLI', true, false)]);
-  assert.match(two.text, /We found Codex and Gemini CLI on this Mac/);
+  assert.equal(two.text, 'Found Claude Code, Codex and Gemini CLI on this Mac. Claude Code connected; Codex and Gemini CLI not connected yet. Connect them to see what they are doing here.');
   assert.deepEqual(two.action, { label: 'Connect 2 tools', destination: 'aitools:all' });
   assert.deepEqual(Home.banner([tool('codex', 'Codex', true, false)]).action, { label: 'Connect Codex', destination: 'aitools:codex' });
   assert.equal(Home.banner([tool('claude', 'Claude Code', true, true)]), null);
