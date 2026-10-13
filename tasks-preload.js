@@ -24,6 +24,11 @@ contextBridge.exposeInMainWorld('recipesApi', {
   deleteMine: (id) => ipcRenderer.invoke('recipes:delete-mine', String(id)),
   exportMine: () => ipcRenderer.invoke('recipes:export'),
   importFile: () => ipcRenderer.invoke('recipes:import'),
+  schedule: (id, schedule, folder) => ipcRenderer.invoke('recipes:schedule', String(id), schedule, folder == null ? null : String(folder)),
+  keepAndSchedule: (draft, schedule, folder) => ipcRenderer.invoke('recipes:keep-and-schedule', draft, schedule, String(folder)),
+  pauseSchedule: (id, on) => ipcRenderer.invoke('recipes:schedule-pause', String(id), on === true),
+  skipNext: (id) => ipcRenderer.invoke('recipes:schedule-skip', String(id)),
+  onSchedulesChanged: (fn) => { ipcRenderer.on('recipes:schedules-changed', () => fn()); },
   pickFolder: () => ipcRenderer.invoke('tasks:pick-folder'),
 });
 // The community gallery: main fetches and verifies; the page names an entry id and its sha256.
