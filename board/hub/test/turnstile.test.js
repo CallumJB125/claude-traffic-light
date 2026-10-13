@@ -70,7 +70,7 @@ test('unset: methods carry no site key, the CSP is unchanged and a start never c
   const h = await startAccounts({ fetchImpl: cf.fetchImpl });
   try {
     const m = await h.call('GET', '/api/auth/methods');
-    assert.deepEqual(Object.keys(m.body).sort(), ['email', 'github', 'google', 'web']);
+    assert.deepEqual(Object.keys(m.body).sort(), ['email', 'github', 'google', 'push', 'web']);
     const page = await h.call('GET', '/signin');
     assert.doesNotMatch(page.headers.get('content-security-policy'), /challenges\.cloudflare\.com|frame-src/);
     const s = await h.start('new@dev.local', { turnstile_token: 'bad' });
