@@ -37,7 +37,7 @@ test('the sidebar has at most six primary sections and every page id still resol
 
 test('the sidebar lists every main feature as its own section and reaches every page exactly once', () => {
   assert.deepEqual(SECTIONS.map((s) => s.id), ['home', 'board', 'sessions', 'usage', 'team', 'settings']);
-  assert.deepEqual(SECTIONS.map((s) => s.title), ['Home', 'Board', 'Running now', 'Usage & cost', 'Team', 'Settings']);
+  assert.deepEqual(SECTIONS.map((s) => s.title), ['Home', 'Board', 'Sessions', 'Usage & cost', 'Team', 'Settings']);
   assert.deepEqual(FOOTER, ['help', 'feedback', 'updates']);
   const listed = [...SECTIONS.flatMap((s) => s.pages), ...FOOTER];
   assert.equal(new Set(listed).size, listed.length, 'no page in two sections');
@@ -48,14 +48,14 @@ test('the sidebar lists every main feature as its own section and reaches every 
   assert.equal(sectionOf('sessions'), 'sessions');
   assert.equal(sectionOf('optimiser'), 'usage', 'Usage optimiser is a page of Usage & cost');
   assert.equal(sectionOf('tasks'), 'sessions');
-  assert.equal(pageById('sessions').title, 'Running now');
+  assert.equal(pageById('sessions').title, 'Sessions');
   assert.equal(pageById('tasks').title, 'Tasks');
   assert.equal(sectionOf('aitools'), 'settings');
   assert.equal(sectionOf('help'), null, 'footer links are not in a section');
   assert.equal(sectionOf('integrations'), 'team');
-  assert.equal(sectionOf('lights'), 'settings', 'Widget configuration lives in Settings');
+  assert.equal(sectionOf('lights'), 'settings', 'Widget rules lives in Settings');
   assert.equal(sectionOf('hatch'), 'settings');
-  assert.deepEqual(flat().filter((p) => p.unlisted).map((p) => p.id).sort(), ['myday', 'stats', 'timeline', 'waiting'], 'Home carries Waiting on you and My day, Usage & cost carries Time as a tab, Running now opens a session timeline; each keeps a page but no sub-nav entry');
+  assert.deepEqual(flat().filter((p) => p.unlisted).map((p) => p.id).sort(), ['myday', 'stats', 'timeline', 'waiting'], 'Home carries Waiting on you and My day, Usage & cost carries Time as a tab, Sessions opens a session timeline; each keeps a page but no sub-nav entry');
   assert.equal(sectionOf('timeline'), 'sessions');
   assert.equal(sectionOf('myday'), 'home');
   assert.equal(sectionOf('lights'), 'settings');

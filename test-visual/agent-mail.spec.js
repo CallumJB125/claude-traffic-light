@@ -2,7 +2,7 @@
 // Agent mail through the actual main.js (planner-fixture-main.js) against a
 // synthetic real accounts hub (board/hub/test/tenancy/fixture.js): A's AI asks
 // over the local /team/mail endpoint, the ask is held until A presses Send on
-// Running now, B (inbox preference on) answers it and A's AI reads the framed
+// Sessions, B (inbox preference on) answers it and A's AI reads the framed
 // reply; a handoff is accepted only through main's native confirm showing the
 // full packet, Cancel creates nothing, Confirm creates a Tasks task (the Local
 // Tasks API mock) and A sees "accepted".
@@ -58,7 +58,7 @@ test('agent mail: a held ask is sent only on Send, answered by the teammate, and
   try {
     A = await launch(f, asker, path.join(temp, 'a'));
 
-    // 1. A's AI asks: held on the hub, invisible to the teammate, waiting on A's Running now.
+    // 1. A's AI asks: held on the hub, invisible to the teammate, waiting on A's Sessions.
     const q = await A.mail('ask', { cwd: repo, to: teammate.id, question: 'Which env var holds the queue URL?', provider: 'claude', label: 'Claude in app' });
     expect(q, JSON.stringify(q)).toMatchObject({ status: 'waiting_for_your_ok' });
     expect(state(q.ask_id).state).toBe('held');

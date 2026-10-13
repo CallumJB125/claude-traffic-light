@@ -410,7 +410,7 @@ function denyMessage(rule, loaded) {
 
 const safeId = (id) => (typeof id === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(id) ? id.replace(/:/g, '_') : null);
 
-/** Leaves the latest refusal where the Running now page can show it. Best effort. */
+/** Leaves the latest refusal where the Sessions page can show it. Best effort. */
 function recordBlock(rootDir, sessionId, entry, { now = Date.now() } = {}) {
   const id = safeId(sessionId);
   if (!rootDir || !id) return;

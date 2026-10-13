@@ -222,7 +222,7 @@ test('main: only the Sessions page opens a timeline, only the Timeline page read
   assert.equal(api.current().sessionId, 'abc');
 });
 
-test('wiring: Running now and the board card open the timeline page, which is registered and packaged', () => {
+test('wiring: Sessions and the board card open the timeline page, which is registered and packaged', () => {
   const root = path.join(__dirname, '..');
   const { pageById } = require('../buddy-window/pages.js');
   const p = pageById('timeline');

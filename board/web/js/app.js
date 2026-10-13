@@ -1150,7 +1150,7 @@ async function continueIn(cardId) {
   try { r = await globalThis.plexiformDesktop?.continueIn?.(cardId); } catch { r = null; }
   if (!r) return;
   if (!r.ok) { if (r.error) toast(r.error, 'error'); return; }
-  toast(r.note || (r.mode === 'launched' ? `${r.label} started. Its replies are on Running now.` : 'Copied.'));
+  toast(r.note || (r.mode === 'launched' ? `${r.label} started. Its replies are on the Sessions page.` : 'Copied.'));
 }
 
 async function openDetail(cardId, section = null) {

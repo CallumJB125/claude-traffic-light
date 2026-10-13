@@ -9,7 +9,7 @@
     document.title = 'Usage & cost';
     document.querySelector('#titlebar h1').textContent = document.title;
   } else if (widgetOnly) {
-    document.title = 'Widget configuration';
+    document.title = 'Widget rules';
     document.querySelector('#titlebar h1').textContent = document.title;
   }
 

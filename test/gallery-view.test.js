@@ -116,6 +116,6 @@ test('adding widget rules says where they opened and does not reload My recipes'
   const before = r.calls.list;
   r.$('[data-id="rules/calm"] .recipe-actions button').click(); await tick();
   assert.equal(r.calls.add.at(-1)[0], 'rules/calm');
-  assert.match(r.$('#cg-gallery .recipes-status').textContent, /Opened “Title calm” in Widget configuration\. Press Load there, then Save/);
+  assert.match(r.$('#cg-gallery .recipes-status').textContent, /Opened “Title calm” in Widget rules\. Press Load there, then Save/);
   assert.equal(r.calls.list, before);
 });

@@ -10,7 +10,7 @@ const SHOT = { threshold: 0.05, stylePath: path.join(__dirname, 'no-hover-chrome
 const trayClick = (app, label) => app.evaluate((_e, l) => global.__buddyTrayMenu.items.find((i) => i.label === l).click(), label);
 const trayLabels = (app) => app.evaluate(() => global.__buddyTrayMenu.items.map((i) => i.label));
 // The tray and widget menus list the app's six sections, nothing finer.
-const SECTIONS = ['Open Home…', 'Open Board…', 'Open Running now…', 'Open Usage & cost…', 'Open Team…', 'Open Settings…'];
+const SECTIONS = ['Open Home…', 'Open Board…', 'Open Sessions…', 'Open Usage & cost…', 'Open Team…', 'Open Settings…'];
 const shownPage = async (app, label) => expect((await windowByFile(app, 'sidebar.html')).locator('[aria-current="page"]')).toContainText(label, { timeout: 15000 });
 const accountScreen = async (app, screen) => {
   await expect.poll(() => app.windows().filter((p) => p.url().includes('account.html')).map((p) => new URL(p.url()).searchParams.get('screen')), { timeout: 15000 }).toContain(screen);

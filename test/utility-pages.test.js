@@ -19,7 +19,7 @@ test('page authority refuses missing, foreign, destroyed and child-frame senders
   assert.equal(fromPage(event(contents), contents), false);
 });
 
-test('all ordinary utility menu routes target main pages except Widget configuration', () => {
+test('all ordinary utility menu routes target main pages except Widget rules', () => {
   const utilities = ['usage', 'stats', 'settings', 'help', 'hatch', 'updates', 'feedback', 'sessions', 'waiting', 'tasks'];
   for (const id of utilities) assert.equal(pageById(id).kind, 'local', id);
   assert.deepEqual(PAGES.filter(p => p.kind === 'window').map(p => p.id), ['lights']);
@@ -68,7 +68,7 @@ test('actual main IPC allows analytics reads but refuses unrelated page and subf
   for (const id of ['stats', 'usage', 'settings']) assert.equal(read(event(f.pages[id]), 7).fixture, 'stats');
   for (const id of ['hatch', 'feedback', 'help', 'sessions']) assert.equal(read(event(f.pages[id]), 7), null);
   assert.equal(read({ sender: f.pages.stats, senderFrame: {} }, 7), null);
-  assert.equal(read(event(f.popup), 7), null, 'Widget configuration does not expose analytics');
+  assert.equal(read(event(f.popup), 7), null, 'Widget rules does not expose analytics');
   assert.equal(f.registered.get('get-config')(event(f.widget)).fixture, 'config');
   assert.equal(f.registered.get('get-config')(event(f.popup)).fixture, 'config');
   assert.equal(f.registered.get('get-config')(event(f.pages.sessions)), null);

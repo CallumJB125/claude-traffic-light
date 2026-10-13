@@ -11,7 +11,7 @@
 // The page names only an entry id and its sha256; main looks the entry up
 // in what it verified, shows a native confirm with everything it contains,
 // and only then adds it. Recipes and characters are saved at once; widget
-// rules open in Widget configuration as an offer that still needs Load and
+// rules open in Widget rules as an offer that still needs Load and
 // Save there; a setup is parked here (one use, 10 minutes) for the Setups page
 // to pull when it is shown, and is written only after its review and Apply.
 
@@ -195,14 +195,14 @@ function create({ dataDir, fetch, keysDir, now = Date.now, recipes, characterSto
     }
   }
 
-  // Migrated like an imported rules file, then offered in Widget configuration,
+  // Migrated like an imported rules file, then offered in Widget rules,
   // where they replace the person's rules only after Load and then Save.
   async function addRules(e, ev) {
     const Rules = require('../rules.js');
     const rules = Rules.migrateRules(e.payload.rules.map(Rules.normalizeRule), Rules.rulesVersionOf(e.payload));
     if (Rules.clickCommands(e.payload.rules).length) return { ok: false, error: 'Those widget rules could not be added.' };
     const k = e.payload.rules.length;
-    const yes = await confirm({ title: e.title, action: 'Open in Widget configuration', detail: [by(e), `${k} widget rule${k === 1 ? '' : 's'}: ${e.payload.rules.map((r) => r.name).join(', ')}.`, 'They open in Widget configuration as an offer. Your rules change only if you press Load there and then Save, and Revert goes back to your saved rules. Clicks in gallery rules never run commands, Shortcuts, links or apps.'].join('\n') }, ev);
+    const yes = await confirm({ title: e.title, action: 'Open in Widget rules', detail: [by(e), `${k} widget rule${k === 1 ? '' : 's'}: ${e.payload.rules.map((r) => r.name).join(', ')}.`, 'They open in Widget rules as an offer. Your rules change only if you press Load there and then Save, and Revert goes back to your saved rules. Clicks in gallery rules never run commands, Shortcuts, links or apps.'].join('\n') }, ev);
     if (!yes) return { ok: false, cancelled: true, error: 'Cancelled. Nothing was changed.' };
     offerRules(rules);
     return { ok: true, kind: 'rules' };

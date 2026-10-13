@@ -1,6 +1,6 @@
 'use strict';
 // "Continue in another tool" from any surface that has a session's handover:
-// a Running now row, an observed-work board card, a Search result. The menu
+// a Sessions row, an observed-work board card, a Search result. The menu
 // lists only the AI tools src/ai-tools.js found on this Mac, plus "Copy as
 // prompt". Codex and Claude Code launch through src/handoff.js (its Plus
 // gate, its text-only owned session in an empty temporary folder, its copy

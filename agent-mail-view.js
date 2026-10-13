@@ -1,5 +1,5 @@
 'use strict';
-// Running now's Agent mail panel (src/agent-mail.js). Your AI's asks wait here
+// Sessions' Agent mail panel (src/agent-mail.js). Your AI's asks wait here
 // for Send or Discard; teammates' AIs' questions and handoffs (opt-in inbox)
 // are answered, asked of your own AI, accepted or declined here. Every text is
 // set with textContent or a field value; main re-checks everything.
