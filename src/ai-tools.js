@@ -21,6 +21,11 @@ const TOOLS = [
   { id: 'gemini', adapter: 'gemini', bins: ['gemini'], installUrl: 'https://geminicli.com/docs/' },
   { id: 'cursor', adapter: 'cursor', bins: ['cursor-agent'], installUrl: 'https://cursor.com/docs/cli/overview' },
   { id: 'hermes', adapter: null, bins: ['hermes'], installUrl: 'https://github.com/NousResearch/hermes-agent' },
+  { id: 'copilot', adapter: 'copilot', bins: ['copilot'], installUrl: 'https://docs.github.com/en/copilot/how-tos/copilot-cli', after: 'Start a new Copilot session to pick up the hooks.' },
+  { id: 'opencode', adapter: 'opencode', bins: ['opencode'], installUrl: 'https://opencode.ai/docs/', after: 'Restart OpenCode to load the plugin.' },
+  { id: 'goose', adapter: 'goose', bins: ['goose'], installUrl: 'https://block.github.io/goose/docs/getting-started/installation', after: 'Start a new goose session to pick up the hooks.' },
+  { id: 'cline', adapter: 'cline', bins: [], installUrl: 'https://docs.cline.bot/getting-started/installing-cline', after: 'Cline reads its hooks when the next task starts.' },
+  { id: 'aider', adapter: 'aider', bins: ['aider'], installUrl: 'https://aider.chat/docs/install.html', after: 'Shows when Aider is waiting for you. Run it as `plexiform-run aider` to see working and done as well.' },
 ];
 const BY_ID = new Map(TOOLS.map((t) => [t.id, t]));
 const CHIPS = ['Live status', 'Answer prompts', 'Board cards', 'Handover', 'Cost'];
@@ -104,6 +109,7 @@ function create({
   const filesOf = (t) => {
     if (t.id === 'hermes') return [];
     const a = adapterOf(t);
+    if (a.files) return a.files(home);
     return [t.id === 'codex' ? a.lifecycleConfigPath(home) : a.configPath(home)];
   };
 
@@ -120,6 +126,7 @@ function create({
     try {
       if (t.id === 'hermes') return Hermes.holdsOurs({ home });
       const a = adapterOf(t);
+      if (a.holdsOurs) return a.holdsOurs({ home, fs });
       const [file] = filesOf(t);
       if (!exists(file)) return false;
       if (t.id === 'codex') { const data = Runtime.readJsonConfig(file, fs); return JSON.stringify(a.stripActivity(data)) !== JSON.stringify(data); }
@@ -130,6 +137,9 @@ function create({
   }
   const configProblem = (t) => {
     if (t.id === 'hermes') return null;
+    const a = adapterOf(t);
+    if (a.plan) { try { a.plan({ home, runtime, fs }); return null; } catch (e) { return friendly(e, filesOf(t)[0], home); } }
+    if (a.ownFile) return null;
     const [file] = filesOf(t);
     try { Runtime.readJsonConfig(file, fs); if (t.id === 'codex') adapterOf(t).validateActivity(Runtime.readJsonConfig(file, fs)); return null; } catch (e) { return friendly(e, file, home); }
   };
@@ -246,6 +256,13 @@ function create({
       return { ok: true, id, already: isConnected(t), files: [], steps: [`Write the plexiform-activity plugin files into ${tilde(dir, home)}.`, 'Run `hermes plugins enable plexiform-activity` for your default profile.', 'No existing Hermes setting is edited. Undo removes the plugin folder.'] };
     }
     const [file] = filesOf(t);
+    const a = adapterOf(t);
+    if (a.plan) {
+      try {
+        const files = a.plan({ home, runtime, fs }).files.map((f) => ({ file: tilde(f.file, home), existed: !!f.before, backup: f.before ? `${path.basename(f.file)}.plexiform-backup-<time>` : null, ...diffLines(f.before, f.after) }));
+        return { ok: true, id, already: isConnected(t), files };
+      } catch (e) { return { ok: false, error: friendly(e, file, home) }; }
+    }
     try {
       const text = exists(file) ? fs.readFileSync(file, 'utf8') : '';
       const before = Runtime.readJsonConfig(file, fs);
