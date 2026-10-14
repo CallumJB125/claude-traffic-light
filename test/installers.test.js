@@ -300,7 +300,8 @@ function releaseMatrixExpression(yml) {
   assert.equal(typeof include, 'string');
   const match = /^\$\{\{ (.+) \}\}$/.exec(include);
   assert.ok(match, 'one expression selects the release matrix');
-  assert.match(match[1], /^fromJSON\(\(vars\.WINDOWS_RELEASE == 'true' \|\| \(github\.event_name == 'workflow_dispatch' && inputs\.validate_windows\)\) && '[^']*' \|\| '[^']*'\)$/);
+  assert.match(match[1], /^fromJSON\(.+\)$/);
+  assert.match(match[1], /vars\.WINDOWS_RELEASE == 'true'/);
   return match[1];
 }
 
@@ -343,6 +344,18 @@ test('release scope: macOS/Linux by default; Windows diagnostics cannot enable p
   for (const name of ['stage', 'stage-beta']) {
     assert.match(jobs[name], /needs: \[build, native-directory\]/);
     assert.ok(!/inputs\.validate_windows/.test(jobs[name]), `${name}: diagnostics never grant publication`);
+  }
+  for (const [event, beta, platform, flag, wanted] of [
+    ['workflow_dispatch', false, 'linux', undefined, ['linux']],
+    ['workflow_dispatch', false, 'mac', undefined, ['mac']],
+    ['workflow_dispatch', false, 'win', undefined, ['win']],
+    ['workflow_dispatch', true, 'linux', undefined, ['mac', 'linux']],
+    ['workflow_dispatch', true, 'win', 'true', ['mac', 'win', 'linux']],
+    ['push', false, 'linux', undefined, ['mac', 'linux']],
+    ['push', false, 'mac', 'true', ['mac', 'win', 'linux']],
+  ]) {
+    const rows = vm.runInNewContext(expression, { vars: { WINDOWS_RELEASE: flag }, github: { event_name: event }, inputs: { beta, validation_platform: platform }, fromJSON: JSON.parse });
+    assert.deepEqual(rows.map(row => row.platform), wanted, `${event} beta=${beta} platform=${platform}`);
   }
 });
 
@@ -649,7 +662,7 @@ test('release.yml: every smoke test blocks release staging, with explicit Window
 test('manual native-only diagnostics cannot stage artifacts or omit the native gate', () => {
   const doc = require('js-yaml').load(readText('.github/workflows/release.yml'));
   assert.deepEqual(doc.on.workflow_dispatch.inputs.native_only, { description: 'Run native acceptance only; no installers or staging', type: 'boolean', default: false });
-  assert.equal(doc.concurrency.group, "release-${{ github.ref }}${{ inputs.native_only && '-native' || '' }}");
+  assert.equal(doc.concurrency.group, "release-${{ github.ref }}${{ inputs.native_only && '-native' || '' }}-${{ github.event_name == 'workflow_dispatch' && !inputs.beta && inputs.validation_platform || 'all' }}");
   assert.equal(doc.concurrency['cancel-in-progress'], false);
   assert.equal(doc.jobs.build.if, "github.event_name != 'workflow_dispatch' || !inputs.native_only");
   assert.equal(doc.jobs['native-directory'].if, undefined);

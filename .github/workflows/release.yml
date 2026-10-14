@@ -37,12 +37,17 @@ on:
         description: 'Also run Windows installer/tests for acceptance; this does not enable Windows publication'
         type: boolean
         default: false
+      validation_platform:
+        description: 'Single-platform artifact-only validation; ignored for beta and tag releases'
+        type: choice
+        options: [all, linux, mac, win]
+        default: all
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.ref }}${{ inputs.native_only && '-native' || '' }}
+  group: release-${{ github.ref }}${{ inputs.native_only && '-native' || '' }}-${{ github.event_name == 'workflow_dispatch' && !inputs.beta && inputs.validation_platform || 'all' }}
   cancel-in-progress: false
 
 jobs:
@@ -64,7 +69,8 @@ jobs:
       # still runs on every dispatch; no assertions are skipped within a build.
       # validate_windows permits an unpublished acceptance build before that flag.
       matrix:
-        include: ${{ fromJSON((vars.WINDOWS_RELEASE == 'true' || (github.event_name == 'workflow_dispatch' && inputs.validate_windows)) && '[{"os":"macos-latest","platform":"mac"},{"os":"windows-latest","platform":"win"},{"os":"ubuntu-latest","platform":"linux"}]' || '[{"os":"macos-latest","platform":"mac"},{"os":"ubuntu-latest","platform":"linux"}]') }}
+        # A narrowed matrix is permitted only when no staging job can run.
+        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && !inputs.beta && (inputs.validation_platform == 'linux' && '[{"os":"ubuntu-latest","platform":"linux"}]' || inputs.validation_platform == 'mac' && '[{"os":"macos-latest","platform":"mac"}]' || inputs.validation_platform == 'win' && '[{"os":"windows-latest","platform":"win"}]') || (vars.WINDOWS_RELEASE == 'true' || (github.event_name == 'workflow_dispatch' && inputs.validate_windows)) && '[{"os":"macos-latest","platform":"mac"},{"os":"windows-latest","platform":"win"},{"os":"ubuntu-latest","platform":"linux"}]' || '[{"os":"macos-latest","platform":"mac"},{"os":"ubuntu-latest","platform":"linux"}]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     permissions:
