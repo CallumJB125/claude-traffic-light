@@ -19,7 +19,7 @@ function create({ bridge, capture, current, copy, save, choose, open }) {
     if (!doc?.markdown || !fresh()) return unavailable();
     if (action === 'refresh') return { ok: true, markdown: doc.markdown };
     if (action === 'copy') { copy(asPrompt(doc.markdown)); return { ok: true }; }
-    const destination = await choose();
+    const destination = await choose(token);
     if (!destination) return { ok: false, cancelled: true };
     if (!fresh()) return unavailable();
     // Sharing may have been revoked while the native dialog was open.

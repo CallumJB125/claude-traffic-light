@@ -953,13 +953,13 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     bridge: sessionBridge,
     capture(e) {
       if (!fromHubView(e) || e.senderFrame !== hubView.webContents.mainFrame || content !== hubView || !win?.isFocused()) return null;
-      return { view: hubView, info: hubInfo, frame: e.senderFrame, document: hubDocument, url: e.senderFrame.url, org: hubInfo.org, workspace: store.active()?.id,
+      return { window: win, view: hubView, info: hubInfo, frame: e.senderFrame, document: hubDocument, url: e.senderFrame.url, org: hubInfo.org, workspace: store.active()?.id,
         marker: hubInfo.bearer ? vault(hubInfo.origin).load() : null };
     },
-    current(t) { return t.view === hubView && t.info === hubInfo && t.document === hubDocument && t.frame === hubView?.webContents.mainFrame && t.url === t.frame.url && t.org === hubInfo?.org
+    current(t) { return t.window === win && t.view === hubView && t.info === hubInfo && t.document === hubDocument && t.frame === hubView?.webContents.mainFrame && t.url === t.frame.url && t.org === hubInfo?.org
       && t.workspace === store.active()?.id && t.marker === (hubInfo?.bearer ? vault(hubInfo.origin).load() : null) && content === hubView && !!win?.isFocused(); },
     copy: text => clipboard.writeText(text),
-    choose: async () => { const r = await dialog.showSaveDialog({ title: 'Save session handover', defaultPath: path.join(app.getPath('downloads'), 'session-handover.md'), filters: [{ name: 'Markdown', extensions: ['md'] }] }); return r.canceled ? null : r.filePath; },
+    choose: async token => { const r = await dialog.showSaveDialog(token.window, { title: 'Save session handover', defaultPath: path.join(app.getPath('downloads'), 'session-handover.md'), filters: [{ name: 'Markdown', extensions: ['md'] }] }); return r.canceled ? null : r.filePath; },
     save: (file, text) => fs.writeFileSync(file, text, { mode: 0o600 }),
     open(key) { selectedSessionKey = key; select('sessions'); const wc = localViews.get('sessions')?.webContents; if (!wc) return false; if (!wc.isLoading()) wc.send('sessions:selection', key); return true; },
   });

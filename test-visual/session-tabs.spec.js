@@ -117,6 +117,22 @@ test('captured session tabs show useful context and save only a reviewed explici
     for (const action of ['local-handover-copy', 'local-handover-save', 'open-timeline'])
       expect(await pane(`document.querySelectorAll('.tabpanel [data-action="${action}"]').length`)).toBe(1);
     expect(await pane('document.querySelectorAll(".tabpanel [data-action=continue-in]").length')).toBe(1);
+    // A background renderer cannot open a native save dialog or export local
+    // handover text. Actual native sheet focus restoration is checked manually.
+    const exported = path.join(temp, 'synthetic-session-handover.md');
+    await app.evaluate(({ dialog, BaseWindow }, destination) => {
+      global.__sessionTabsSaveDialogs = 0;
+      dialog.showSaveDialog = async () => {
+        global.__sessionTabsSaveDialogs++;
+        return { canceled: false, filePath: destination };
+      };
+      for (const window of BaseWindow.getAllWindows()) window.hide();
+    }, exported);
+    await pane('document.querySelector("[data-action=local-handover-save]").click()');
+    await expect.poll(() => pane('document.body.textContent.includes("This local session is no longer available on this board.")')).toBe(true);
+    expect(await app.evaluate(() => global.__sessionTabsSaveDialogs)).toBe(0);
+    expect(fs.existsSync(exported)).toBe(false);
+    await app.evaluate(() => global.__sessionTabsBuddy.open('board'));
     await choose('comments');
     expect(await pane('document.querySelectorAll("[name=for_agent]").length')).toBe(0);
     expect(await panelText()).toContain('Saved on this card.');

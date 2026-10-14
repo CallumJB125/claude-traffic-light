@@ -34,6 +34,12 @@ test('save re-resolves sharing after the dialog and writes nothing after revocat
   assert.equal((await r.act(r.token, 'save', 'card-1')).ok, false); assert.deepEqual(r.effects, []); assert.equal(r.options.length, 2);
   const yes = rig(); assert.equal((await yes.act(yes.token, 'save', 'card-1')).ok, true); assert.equal(yes.effects[0][0], 'save');
 });
+test('save chooses a destination using the captured originating-window token', async () => {
+  let chosen;
+  const r = rig({ choose: async token => { chosen = token; return '/chosen/handover.md'; } });
+  assert.equal((await r.act(r.token, 'save', 'card-1')).ok, true);
+  assert.equal(chosen, r.token);
+});
 test('cancelled save leaves all files untouched', async () => {
   const r = rig({ choose: async () => null }); assert.equal((await r.act(r.token, 'save', 'card-1')).cancelled, true); assert.deepEqual(r.effects, []);
 });
