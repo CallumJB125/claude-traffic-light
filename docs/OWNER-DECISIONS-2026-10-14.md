@@ -2,8 +2,46 @@
 
 Implementation branch: `codex/owner-decisions-2026-10-14`, based on `08f46dd8`.
 Final tested app/runtime revision: `1adca098cf451fc6bcab6cffcd237591b4fc6c4b`.
-The original `claude/release` checkout and handover are preserved. No merge or public
-release promotion has occurred.
+The original `claude/release` checkout and handover are preserved. Implementation
+PR #7 remains unmerged. The owner subsequently authorized public beta publication;
+the release-note-only PR #8 was merged into `main` for the signing workflow.
+
+## Public beta publication
+
+`1.0.2-beta.65` is published for Mac (arm64/x64) and Linux (x64), from frozen
+source `6375c805bb07b43c5cdb329f07aaaeeee302d1be`. Runtime code is unchanged from
+the installed, verified `1adca098`; subsequent changes prepare notes/site copy
+and deterministic release tests. The site's live browser download page resolves
+all six installer links to beta.65. Windows remains unavailable.
+
+[Build/stage run](https://github.com/CallumJB125/claude-traffic-light/actions/runs/38632768053)
+and [signed promotion](https://github.com/CallumJB125/claude-traffic-light/actions/runs/38634807144)
+passed. Mac: root 4,752 passed, 12 skipped; remote 220 passed; board 3,106 passed;
+native Darwin 48 passed. Linux: root 4,743 passed, 21 skipped; remote 220 passed;
+board 3,105 passed, one skipped. No failures/cancellations. Both packaged smokes
+passed. The native-directory job passed, without enabling Windows publication.
+
+The public beta manifest's Ed25519 signature, version, channel, expiry, current
+notes and six Mac/Linux entries were independently verified. Both feed files'
+versions, sizes and SHA-512 values match the signed manifest. The public installer
+dry run downloaded the arm64 ZIP and verified SHA-256 without replacing the app.
+These checks do not establish a real signed version-to-version device update.
+Mac remains ad-hoc signed and not notarized.
+
+The static site changelog is deployed at
+`https://1034b27a.plexiform-site.pages.dev` and verified on
+`https://plexiform.dev/changelog`: the beta.65 entry is present, and the old blanket
+keychain approval advice is removed. Site tests passed 30/30. The waitlist function
+is preserved and returns the expected HTTP 405 to a read-only GET. Two Wrangler
+attempts stalled during function compilation; byte-identical dist/functions files
+staged outside Documents compiled and deployed successfully. Failed logs remain
+in the adjacent task workspace. The exact protected file-open cause is unproven.
+
+Failed runs 38630241589 (abbreviated-ref checkout) and 38630478009 (two Mac root
+test failures) are preserved in the adjacent task workspace. Receipt fixtures now
+observe rejection immediately and wait for exact events; real timeout/security
+assertions remain. Root test files run serially so the unchanged 200 ms memory
+benchmark is measured without unrelated fixture contention. No test was removed.
 
 ## Captured-session tabs
 
@@ -36,6 +74,16 @@ disconnect safety; preserved rejected work; and successful integration of both
 contributions. Tools that can only be observed must be labelled accordingly.
 This is a source audit, not a replay of a real team incident or provider acceptance.
 
+The next teammate-session steering design is recorded in
+[TEAMMATE-SESSION-STEERING-2026-10-14.md](TEAMMATE-SESSION-STEERING-2026-10-14.md).
+Start with the selected-session UI/client gap, then add owner-reviewed proposals,
+granular delegation and durable next-turn queues. Watch, propose and delegated
+action have separate boundaries. Codex expected-current-turn steering and other
+providers' next-turn messages have distinct controls and receipts. Bind every
+command to the reviewed session generation/turn and never automatically resend an
+uncertain provider dispatch. Reuse the current durable stream before considering
+Kafka. This is a design and acceptance plan, not shipped teammate steering.
+
 ## Owner-authorized capabilities
 
 - Agent Mail is free, including Ask my AI. Inbox polling stays OFF; Send/Confirm
@@ -49,13 +97,13 @@ This is a source audit, not a replay of a real team incident or provider accepta
   remains OFF pending independent security and physical device acceptance.
 - Linear/Jira delivery tooling and runbooks are ready; actual signed deliveries
   remain required before enabling/advertising.
-- Signing/updater infrastructure is ready without signing credentials,
-  notarization or real signed updater/device acceptance. Privacy notice is live;
+- Signing/updater infrastructure is ready without Apple/Windows package-signing
+  credentials, notarization or real signed updater/device acceptance. Privacy notice is live;
   qualified legal review remains open.
 
 ## Validation and installed Mac
 
-- Final root: **4,753 passed, 11 skipped /4,764**, zero failures/cancellations.
+- Local runtime root: **4,753 passed, 11 skipped /4,764**, zero failures/cancellations.
 - Remote: 220 passed; site: 30 passed in the preceding sequential check; their
   production source is unchanged by the final app-only fix. Web: 441 passed.
 - Final isolated captured-session integration passed with zero dispatches/runs;
@@ -75,7 +123,8 @@ This is a source audit, not a replay of a real team incident or provider accepta
   `7b0bc2c08030e6e1a414f78b3f09f0c1fca7d70b4600dea712b2936b81eb550f`.
   Packages are ad-hoc signed, not notarized.
 - Earlier full visual run was468/472; all four focused reruns passed without
-  baseline changes. Mac/Linux CI success is earlier-revision evidence.
+  baseline changes. Current Mac/Linux release CI passed at `6375c805`; runtime
+  code is unchanged from `1adca098`.
 
 Earlier desktop starts/quit attempts stalled in a synchronous file open. A temporary
 trace identified an optional Burst read on main and was removed before packaging.
