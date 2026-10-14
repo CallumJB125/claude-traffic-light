@@ -373,6 +373,7 @@ test('focused installer acceptance selects one platform and cannot stage a relea
   }
   const steps = doc.jobs.build.steps;
   assert.match(steps.find(s => s.name === 'Build installers').run, /--publish never/);
+  assert.equal(steps.some(s => s.name === 'Beta version'), false, 'artifact-only acceptance has no beta input or versioning step');
   const release = require('js-yaml').load(readText('.github/workflows/release.yml'));
   assert.equal(steps.find(s => s.name === 'Unit tests').run, release.jobs.build.steps.find(s => s.name === 'Unit tests').run);
   assert.ok(!/release-r2|gh release|release-promote|secrets\./.test(yml));
@@ -403,7 +404,7 @@ test('release.yml: tags and manual runs only, nothing signed, no branch conditio
   assert.match(jobs.build, /timeout-minutes: 60/);
   assert.doesNotMatch(jobs.build, /--test-force-exit/, 'forced exit can silently discard completed child-test verdicts');
   assert.match(jobs.build, /name: Unit tests\n(?:.*\n)*? {8}timeout-minutes: 20\n/);
-  assert.match(jobs.build, /node --test --test-concurrency=4 --test-timeout=120000 test\/\*\.test\.js test\/adapters\/\*\.test\.js/);
+  assert.match(jobs.build, /node --test --test-concurrency=1 --test-timeout=120000 test\/\*\.test\.js test\/adapters\/\*\.test\.js/);
   assert.match(jobs.build, /node --test --test-concurrency=4 --test-timeout=120000 remote\/test\//);
   assert.ok(!/npm test/.test(jobs.build));
   // Every selected platform blocks staging; artifacts/evidence remain for debugging.

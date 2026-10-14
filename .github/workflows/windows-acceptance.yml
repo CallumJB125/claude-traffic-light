@@ -59,16 +59,6 @@ jobs:
       - name: Install locked board dependencies
         run: npm --prefix board ci
 
-      # A beta build gets a prerelease version, so it follows the beta feed
-      # (its updater picks the channel from the version).
-      - name: Beta version
-        if: github.event_name == 'workflow_dispatch' && inputs.beta
-        shell: bash
-        run: |
-          v="$(node -p "require('./package.json').version")-beta.${GITHUB_RUN_NUMBER}"
-          npm version --no-git-tag-version "$v"
-          echo "beta version $v"
-
       # The app refuses any release.json signed before this moment, even on a
       # fresh install (src/updater/index.js loadBuiltAt).
       - name: Release floor
@@ -97,6 +87,8 @@ jobs:
       # eat the job. The ICS tests assume SAST, and Electron-based tests need
       # a display and no sandbox on Linux runners.
       # WINDOWS_RELEASE still controls publication, never test success.
+      # Mirror the release gate, including serial root-file execution for its
+      # unchanged memory latency benchmark.
       - name: Unit tests
         id: units
         shell: bash
@@ -108,7 +100,7 @@ jobs:
           run() { if [ "$RUNNER_OS" = Linux ]; then xvfb-run --auto-servernum "$@"; else "$@"; fi; }
           status=0
           mkdir -p work/windows-release
-          run node --test --test-concurrency=4 --test-timeout=120000 test/*.test.js test/adapters/*.test.js 2>&1 | tee work/windows-release/root-tests.log || status=1
+          run node --test --test-concurrency=1 --test-timeout=120000 test/*.test.js test/adapters/*.test.js 2>&1 | tee work/windows-release/root-tests.log || status=1
           node --test --test-concurrency=4 --test-timeout=120000 remote/test/*.test.js 2>&1 | tee work/windows-release/remote-tests.log || status=1
           (cd board && node --test --test-concurrency=4 --test-timeout=120000 '*/test/**/*.test.js') 2>&1 | tee work/windows-release/board-tests.log || status=1
           exit $status

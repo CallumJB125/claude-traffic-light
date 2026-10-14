@@ -142,6 +142,9 @@ jobs:
       # eat the job. The ICS tests assume SAST, and Electron-based tests need
       # a display and no sandbox on Linux runners.
       # WINDOWS_RELEASE still controls publication, never test success.
+      # Root files run serially: memory.test.js includes a wall-clock latency
+      # requirement that unrelated parallel SQLite/CPU fixtures distort. Keep
+      # its 200 ms assertion and every test in the mandatory gate.
       - name: Unit tests
         id: units
         shell: bash
@@ -153,7 +156,7 @@ jobs:
           run() { if [ "$RUNNER_OS" = Linux ]; then xvfb-run --auto-servernum "$@"; else "$@"; fi; }
           status=0
           mkdir -p work/windows-release
-          run node --test --test-concurrency=4 --test-timeout=120000 test/*.test.js test/adapters/*.test.js 2>&1 | tee work/windows-release/root-tests.log || status=1
+          run node --test --test-concurrency=1 --test-timeout=120000 test/*.test.js test/adapters/*.test.js 2>&1 | tee work/windows-release/root-tests.log || status=1
           node --test --test-concurrency=4 --test-timeout=120000 remote/test/*.test.js 2>&1 | tee work/windows-release/remote-tests.log || status=1
           (cd board && node --test --test-concurrency=4 --test-timeout=120000 '*/test/**/*.test.js') 2>&1 | tee work/windows-release/board-tests.log || status=1
           exit $status
