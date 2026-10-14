@@ -95,9 +95,19 @@ incomplete with68 captured failures when the unit stage hit20 minutes. Packaging
 is insufficient for acceptance. Genuine key/token ACL and storage durability gaps
 must not be hidden with fixture skips or deleted privacy assertions.
 
-The [new full Windows artifact-only run](https://github.com/CallumJB125/claude-traffic-light/actions/runs/38621935528)
-is pinned to the final runtime revision and remains in progress. Native-directory
-passed; the full unit result is pending. Windows publication remains gated.
+The [final Windows artifact-only run](https://github.com/CallumJB125/claude-traffic-light/actions/runs/38621935528)
+at `1adca098` completed **failure**. Root: **4,508 passed, 118 failed, 139 skipped
+/4,765**, zero cancelled. Remote: **217 passed, 3 failed /220**. Hub remains
+incomplete: 30 visible failure blocks through emitted test 1122 before the Unit
+tests step hit its 20-minute deadline. All five native Job containment checks and
+306 native-directory checks passed unskipped. Installer build/lifecycle passed;
+release staging was skipped. Windows publication remains gated.
+
+Remaining failures include hub artifact durability (`EPERM` on directory `fsync`
+and resulting HTTP 500s), backup/restore integrity, four hub file timeouts,
+startup/auth and private-storage assertions. Setups/scanning, shell installers,
+CLI and permission/path fixtures still need platform-specific classification.
+Raw evidence: adjacent task workspace `work/owner-windows-final-current.log`.
 
 ## Deployment and recovery
 
