@@ -150,7 +150,7 @@
     const request = ++generation;
     let s;
     try { s = await api.mailList(); } catch { s = null; }
-    if (tools === null) { try { tools = (await api.continueMenu())?.choices || []; } catch { tools = []; } }
+    if (tools === null) { try { const menu = await api.continueMenu(); tools = menu?.mailChoices || menu?.choices || []; } catch { tools = []; } }
     // Never re-render under someone typing an answer or editing a held message.
     if (request !== generation || busy || (section.contains(document.activeElement) && /^(TEXTAREA|INPUT|SELECT)$/.test(document.activeElement.tagName))) return;
     render(s);

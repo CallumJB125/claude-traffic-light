@@ -104,10 +104,8 @@ if (process.env.PLEXIFORM_SHOW_SETUPS === '1' || (SETUPS_READY && require('../sr
   SECTIONS.find((s) => s.id === 'settings').pages.splice(7, 0, 'setups');
   PAGES.find((p) => p.id === 'setups').hidden = false;
 }
-// Plan & billing is listed once paid plans can work: a hub key pinned in
-// src/entitlement-keys.js (until then no token verifies and Upgrade could not
-// unlock anything). PLEXIFORM_SHOW_UPGRADE=1 lists it for testing.
-const UPGRADE_READY = (() => { try { return require('../src/entitlement-keys').ENTITLEMENT_KEYS.length > 0; } catch { return false; } })();
+// Plan & billing is listed after beta ends and a verification key is pinned. PLEXIFORM_SHOW_UPGRADE=1 lists it for testing.
+const UPGRADE_READY = (() => { try { return !require('../src/release-policy').BETA_ALL_FEATURES && require('../src/entitlement-keys').ENTITLEMENT_KEYS.length > 0; } catch { return false; } })();
 if (process.env.PLEXIFORM_SHOW_UPGRADE === '1' || UPGRADE_READY) {
   PAGES.find((p) => p.id === 'upgrade').hidden = false;
   SECTIONS.find((s) => s.id === 'team').pages.push('upgrade');

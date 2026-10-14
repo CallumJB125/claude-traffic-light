@@ -263,3 +263,8 @@ handed a response.
   hosting), and team sharing applies only to Overview sessions, so no session the receiver
   offers is ever shared. Team targets are not live until the two are joined.
   Hosting off ⇒ nothing changes.
+
+## Agent Mail access
+
+Agent Mail is free, including Ask my AI. Your AI provider may charge for usage.
+Inbox polling remains off by default. Send and handoff confirmation stay explicit.

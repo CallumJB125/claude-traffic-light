@@ -2,6 +2,7 @@
 // parentPort: credentials remain in the engine's private files.
 import { startTasksEngine } from './index.js';
 import { makeLogger } from '../runner/util.js';
+import { desktopProviders } from './desktop-providers.js';
 
 const parent = process.parentPort;
 let engine;
@@ -18,9 +19,7 @@ process.on('SIGINT', close);
 try {
   engine = await startTasksEngine({
     dataDir: process.env.PLEXIFORM_TASKS_DATA_DIR,
-    // Other providers remain registered for explicit use by their own
-    // engine integration. Opening this desktop page never probes Claude.
-    enabledAis: ['codex'], defaultAi: 'codex',
+    ...desktopProviders(),
     log: makeLogger(process.stderr, { quiet: true }),
     stopGraceMs: 1500,
   });

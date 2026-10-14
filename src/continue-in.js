@@ -52,12 +52,12 @@ function packetFromDoc(doc, to, home) {
 // mailAvailable() → true while signed in to a team (the teammate hand-off entry shows; the page resolves who).
 function create({ entitlements, clipboard, tools = () => [], adapters = null, confirm = async () => false, home = null, mailAvailable = () => false, log = () => {} }) {
   const h = Handoff.create({ entitlements, clipboard, log, ...(adapters ? { adapters } : {}), docFor: async (k) => (k && typeof k.load === 'function' ? (await k.load()) || null : null) });
-  function menu() {
+  function menu(feature = 'handoff.launch') {
     let rows = [];
     try { rows = tools(); } catch { rows = []; }
     let mail = false;
     try { mail = mailAvailable() === true; } catch { mail = false; }
-    return choices(rows, { canLaunch: entitlements.has('handoff.launch'), canMail: mail });
+    return choices(rows, { canLaunch: entitlements.has(feature), canMail: mail });
   }
   // load() → the handover markdown, or null.
   async function run(load, to, onEvent = () => {}) {
@@ -98,16 +98,16 @@ function create({ entitlements, clipboard, tools = () => [], adapters = null, co
     const text = Packet.release(packet, Packet.confirmation(packet));
     return run(async () => text, pick.id, onEvent);
   }
-  // "Ask my AI": the same text-only owned session as a hand-off (Plus, Codex or
+  // "Ask my AI": free Agent Mail uses a text-only owned session (Codex or
   // Claude Code), started with the question instead of a handover. It cannot see
-  // any repository. Without the plan or the CLI, the question goes on the clipboard.
+  // any repository. Without the CLI, the question goes on the clipboard.
   async function ask(text, to, onEvent = () => {}) {
     if (typeof text !== 'string' || !text.trim() || text.length > ASK_MAX) return { ok: false, error: 'That question is empty or too long.' };
     const pick = typeof to === 'string' && ID.test(to) && to !== TEAMMATE.id ? menu().find((c) => c.id === to) : null;
     if (!pick) return { ok: false, error: 'That tool was not found on this Mac.' };
     const prompt = `${ASK_HEAD}\n\n${text.trim()}`;
     if (LAUNCH.has(pick.id)) {
-      const r = await h.hand(null, pick.id, (ev) => onEvent({ ...ev, label: pick.label }), prompt);
+      const r = await h.hand(null, pick.id, (ev) => onEvent({ ...ev, label: pick.label }), prompt, 'agentMail');
       if (r.ok && r.mode === 'launched') return { ...r, label: pick.label };
       return r.ok ? { ...r, note: String(r.note || '').replace('the handover', 'the question') } : r;
     }
@@ -115,7 +115,7 @@ function create({ entitlements, clipboard, tools = () => [], adapters = null, co
     clipboard.writeText(prompt);
     return { ok: true, mode: 'copied', to: pick.id, note: pick.id === 'copy' ? 'Copied the question. Paste it into any AI tool.' : `Copied the question. Paste it into ${pick.label}.` };
   }
-  return { menu, run, handoff, handoffPacket, ask, reply: (id, text) => h.reply(id, text), end: (id) => h.end(id), stop: () => h.stop() };
+  return { menu, mailMenu: () => menu('agentMail'), run, handoff, handoffPacket, ask, reply: (id, text) => h.reply(id, text), end: (id) => h.end(id), stop: () => h.stop() };
 }
 
 // Sessions and Search ask for the menu; Sessions also runs it by handover key
@@ -125,7 +125,7 @@ function register({ ipcMain, allowed, continueIn, writer, sendToSessions = () =>
     if (!pages.some((p) => allowed(e, p))) return { ok: false, error: 'Not allowed.' };
     try { return await fn(...args); } catch { return { ok: false, error: 'Something went wrong. Try again.' }; }
   });
-  on('continue:menu', ['sessions', 'memory'], () => ({ ok: true, choices: continueIn.menu() }));
+  on('continue:menu', ['sessions', 'memory'], () => ({ ok: true, choices: continueIn.menu(), mailChoices: continueIn.mailMenu?.() ?? continueIn.menu() }));
   on('continue:run', ['sessions'], (key, to) => {
     if (typeof key !== 'string' || key.length > 260) return { ok: false, error: 'Unknown session.' };
     return continueIn.run(() => writer()?.text(key) ?? null, to, sendToSessions);

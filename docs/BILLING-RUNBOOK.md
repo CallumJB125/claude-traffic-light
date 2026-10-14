@@ -92,3 +92,11 @@ products, keys, webhooks or deploys.
   payment on the provider's page is the confirmation.
 - **The Team yearly price** is optional, and the web page offers monthly
   only.
+
+## Explicit beta policy (2026-10-14)
+
+The app now pins the hub Ed25519 verification key. Beta access is controlled
+separately by `src/release-policy.js` (`BETA_ALL_FEATURES: true`). Key rotation
+does not change access or offer paid plans. Disable beta only after billing and
+migration acceptance. `PLEXIFORM_FORCE_FREE=1` still exercises the free plan,
+including free Agent Mail. Private keys belong outside the repository.

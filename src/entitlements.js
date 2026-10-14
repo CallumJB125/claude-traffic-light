@@ -10,10 +10,8 @@
 // Anything else — no file, a corrupt or oversized one, an unknown plan, a bad
 // signature, no pinned key, an expired token — is the free plan. Never throws.
 //
-// Beta: while the shipped build pins no hub key (billing is not live, so no
-// plan can be bought), every install gets the top plan's features and limits
-// instead (status().source 'beta'). Pinning a key in src/entitlement-keys.js
-// ends the beta and brings the real gating back with no other change.
+// Beta access is an explicit release-policy.js setting, independent of the
+// verification key. Pinning or rotating a key cannot silently change plans.
 // PLEXIFORM_FORCE_FREE=1 turns the beta off to exercise the free path.
 //
 // Clock: the effective "now" is the latest of the wall clock, the last time
@@ -43,6 +41,7 @@ const FEATURES = Object.freeze({
   'queue.morningReport': 'plus',
   'queue.push': 'plus',
   'memory.search': 'free', // free: last limits()['memory.days'] days
+  'agentMail': 'free', // includes text-only Ask my AI; provider charges still apply
   'handoff.copy': 'free',
   'handoff.launch': 'plus',
   'sync': 'plus',
@@ -64,13 +63,12 @@ const LIMITS = Object.freeze({
 });
 
 // The hub's Ed25519 public keys (PEM), pinned in the app at build time
-// (src/entitlement-keys.js). Empty until the owner pins the hub's key, so until
-// then every token is refused and every install is in the beta.
+// (src/entitlement-keys.js). A missing key refuses tokens; it never grants access.
 const PINNED_KEYS = (() => {
   try { return Object.freeze(require('./entitlement-keys').ENTITLEMENT_KEYS.filter((k) => typeof k === 'string' && k.includes('PUBLIC KEY'))); } catch { return Object.freeze([]); }
 })();
 
-const BETA_ALL_FEATURES = PINNED_KEYS.length === 0;
+const BETA_ALL_FEATURES = require('./release-policy').BETA_ALL_FEATURES === true;
 
 const TOKEN_FILE = 'entitlement.json';
 const CLOCK_FILE = 'entitlement-clock.json';
@@ -94,7 +92,7 @@ function defaults() {
 function configure(opts = {}) {
   cfg = { ...defaults(), ...opts };
   // A data root configured with its own keys (the tests) gets the real gating.
-  if (typeof cfg.beta !== 'boolean') cfg.beta = !(cfg.publicKeys?.length > 0);
+  if (typeof cfg.beta !== 'boolean') cfg.beta = Object.hasOwn(opts, 'publicKeys') ? false : BETA_ALL_FEATURES;
   cache = null;
   lastSeen = null;
   lastWritten = 0;

@@ -40,8 +40,8 @@ too-long `runner.sock` path refuses to start (`SOCKET_PATH_TOO_LONG`).
 
 Opening the sidebar Tasks page or Tasks window lazily starts
 `board/tasks-engine/utility-entry.js` under `src/tasks-process.js`. The helper
-uses the private `<userData>/tasks` folder and detects only Codex by default;
-opening the page does not invoke Claude. The backend registry still supports
+uses the private `<userData>/tasks` folder and detects Codex and Claude Code on macOS/Linux, with Codex as the default.
+Native Windows only enables Codex because Claude lacks a supported provider sandbox. The backend registry still supports
 explicit provider integrations. The service reads its private token and
 connects through the real socket. Packaged builds never use the mock service.
 
