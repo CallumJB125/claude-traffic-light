@@ -81,7 +81,7 @@ static int trusted_executable(const WCHAR *name, HANDLE *held, DWORD *count) {
 }
 static DWORD WINAPI watch_parent(void *unused) {
     (void)unused; WaitForSingleObject(parent_process, INFINITE);
-    TerminateJobObject(job, 1); ExitProcess(1); return 0;
+    TerminateJobObject(job, 1); ExitProcess(1);
 }
 static DWORD WINAPI control(void *unused) {
     BYTE head[5], *data; DWORD n; (void)unused;
