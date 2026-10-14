@@ -141,7 +141,7 @@ function backendFor({ app, fetch, platform, env, userData, dev }) {
     // Never start NSIS from a portable copy or register an installed app.
     preflight: () => new V.UpdateError('portable', `Download the latest portable copy from ${Brand.urls.download} and replace this executable after quitting Plexiform.`),
   };
-  if (platform === 'win32' || (platform === 'linux' && env.APPIMAGE)) return require('./electron-updater.js').create({ platform }); // privacy-flow: auto-update
+  if ((platform === 'darwin' && require('../../package.json').plexiformSignedMac === true) || platform === 'win32' || (platform === 'linux' && env.APPIMAGE)) return require('./electron-updater.js').create({ platform }); // privacy-flow: auto-update
   if (platform === 'linux') return require('./deb.js').create({ fetch, userData, downloadsDir: app.getPath('downloads') });
   if (platform === 'darwin') return MacSwap.create({ fetch, userData, execPath: process.execPath, quit: () => app.quit() });
   return null;

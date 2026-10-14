@@ -101,7 +101,7 @@ function create({
     au.quitAndInstall(true, true);
   }
 
-  return { kind: 'restart', fileKind: platform === 'win32' ? 'nsis' : 'appimage', canFetchRevert: true, prepare, download, install };
+  return { kind: 'restart', fileKind: platform === 'darwin' ? 'mac-zip' : platform === 'win32' ? 'nsis' : 'appimage', canFetchRevert: true, prepare, download, install };
 }
 
 module.exports = { create, feedChannel };

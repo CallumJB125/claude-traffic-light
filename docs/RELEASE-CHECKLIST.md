@@ -156,3 +156,15 @@ Windows: the installer lifecycle check is a same-version upgrade-mode test only.
 | Bad build promoted | Promote the previous version with **rollback** ticked (E14). Affected apps go back; new installs get the old one. |
 | Feed expired | Re-promote the live version (fresh `issuedAt`, 30 more days). |
 | Signing key lost or leaked | **[OWNER]** Ship a release replacing the public key (`build/update-key*.pub.pem`), then switch the secret. Older installs need a manual download. |
+
+## Signing implementation update (2026-10-14)
+
+`build/signing-policy.js` enables notarization only with a Developer ID plus
+complete Apple API-key or app-password credentials. Set
+`PLEXIFORM_REQUIRE_SIGNING=1` for release builds: missing signing/notarization
+credentials fail before packaging. Unsigned development builds remain possible.
+Signed/notarized macOS packages carry `plexiformSignedMac` metadata and use
+electron-updater only after the existing signed-manifest checks; ad-hoc packages
+retain the existing verified swap path. Signed Windows packaging also requires
+a certificate when signing is required. This code does not constitute signed
+installer, notarization, Windows device or legal/privacy acceptance.

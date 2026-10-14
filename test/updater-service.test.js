@@ -804,3 +804,16 @@ test('the UI fixture covers every status and error and matches the state shape',
   assert.equal(live.autoDownload, false);
   assert.equal(fixture.states['idle-never-checked'].autoDownload, false, 'the default is off');
 });
+
+test('signed Mac updater verifies the zip before an explicit download', async () => {
+  const zip = { name: 'Plexiform-1.2.0-mac-arm64.zip', body: Buffer.from('zip-fixture'), platform: 'darwin', arch: 'arm64', kind: 'mac-zip' };
+  publish(feed, { privateKey, version: '1.2.0', files: [zip] });
+  const au = fakeUpdater({ info: { version: '1.2.0', files: [{ url: zip.name, sha512: sha(zip.body), size: zip.body.length }] } });
+  const backend = EU.create({ updater: au, CancellationToken: FakeToken, platform: 'darwin', log: quiet });
+  const svc = euRig(au, { backend, platform: 'darwin', arch: 'arm64' });
+  try {
+    assert.equal(backend.fileKind, 'mac-zip');
+    assert.equal((await svc.check()).ok, true); assert.equal(au.downloads, 0);
+    assert.equal((await svc.download()).ok, true); assert.equal(au.downloads, 1);
+  } finally { svc.stop(); }
+});
