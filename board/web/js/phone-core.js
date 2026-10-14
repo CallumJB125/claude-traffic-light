@@ -79,7 +79,7 @@ export function createApi({ fetch, uuid, origin = '', e2e = null }) {
     try {
       res = await fetch(`${origin}${path}`, { // privacy-flow: phone-control
         method, headers, body: body === undefined ? undefined : JSON.stringify(body),
-        credentials: 'omit', cache: 'no-store', referrerPolicy: 'no-referrer', signal: ctl.signal,
+        credentials: 'omit', redirect: 'error', cache: 'no-store', referrerPolicy: 'no-referrer', signal: ctl.signal,
       });
     } catch {
       throw new NetworkError(signal?.aborted ? 'aborted' : 'network');
@@ -100,6 +100,7 @@ export function createApi({ fetch, uuid, origin = '', e2e = null }) {
   return {
     setToken(t) { token = t; if (!t) e2e?.reset(); },
     hasToken: () => !!token,
+    methods: () => request('GET', '/api/auth/methods', undefined, { auth: false }),
     // Phone approvals (phone-approvals.js) use the same authenticated requests on their own routes.
     request,
     hosts: (o) => request('GET', '/api/interaction/v1/hosts', undefined, o),
@@ -222,6 +223,9 @@ export function createController({ api, vault, now = Date.now, online = () => tr
   }
 
   async function boot() {
+    if (api.methods) {
+      try { const r = await api.methods(); if (r.status === 200) set({ auth: { ...state.auth, emailEnabled: r.body?.email === true } }); } catch { /* sign-in will report offline */ }
+    }
     try { token = await vault.load(); } catch { token = null; }
     if (!token) return set({ view: 'signin' });
     api.setToken(token);

@@ -1,5 +1,7 @@
 // /phone/ entry: wires the controller (phone-core.js), the vault and the
 // renderer to the page. Event delegation only (no inline handlers: CSP).
+import { startBrowserSignIn, finishBrowserSignIn } from './phone-browser-auth.js';
+const HUB_ORIGIN = typeof __PLEXIFORM_PHONE_HUB__ === 'string' ? __PLEXIFORM_PHONE_HUB__ : location.origin;
 import { render } from './h.js';
 import { createApi, createController, createE2E } from './phone-core.js';
 import { createVault, idbKv } from './phone-vault.js';
@@ -17,9 +19,9 @@ const guessName = () => {
 
 const vault = createVault({ kv: idbKv() });
 const e2e = createE2E({ store: vault });
-const api = createApi({ fetch: (...a) => fetch(...a), uuid: () => crypto.randomUUID(), e2e }); // privacy-flow: phone-control
+const api = createApi({ fetch: (...a) => fetch(...a), uuid: () => crypto.randomUUID(), e2e, origin: HUB_ORIGIN }); // privacy-flow: phone-control
 const ctl = createController({ api, vault, online: () => navigator.onLine, deviceName: guessName() });
-const ui = { confirmClose: false };
+const ui = { confirmClose: false, browserSignin: null };
 
 // Phone approvals (phone-approvals.js). A pairing link's fragment is read once
 // and removed from the address bar; it never reaches a server.
@@ -32,7 +34,8 @@ const pushAdapter = 'PushManager' in globalThis ? {
     return reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key }); // privacy-flow: phone-push
   },
 } : null;
-const appr = createApprovals({ api, e2e, vault, credentials: navigator.credentials, push: pushAdapter, origin: location.origin, rpId: location.hostname, uuid: () => crypto.randomUUID(), deviceName: guessName() });
+const appr = createApprovals({ api, e2e, vault, credentials: navigator.credentials, push: pushAdapter, origin: location.origin, hubOrigin: HUB_ORIGIN, rpId: location.hostname, uuid: () => crypto.randomUUID(), deviceName: guessName() });
+const signInResult = new URLSearchParams(location.hash.slice(1)).get('signin');
 let pendingPair = location.hash.startsWith('#pair=') ? location.hash.slice(1) : '';
 let wantApprovals = !!pendingPair || location.hash === '#approvals';
 if (location.hash) history.replaceState(null, '', '/phone/');
@@ -42,6 +45,14 @@ appr.subscribe(() => paint());
 const DEPTH = { sessions: 1, session: 2 };
 let lastView = null;
 
+function paintBrowserSignin() {
+  const area = document.getElementById('browser-signin-status');
+  if (!area || !ui.browserSignin) return;
+  if (ui.browserSignin.error) { area.textContent = ui.browserSignin.error; return; }
+  const code = document.createElement('p'); code.textContent = `Your code is ${ui.browserSignin.code}. Check it matches on the next screen.`;
+  const link = document.createElement('a'); link.href = ui.browserSignin.url; link.className = 'btn primary'; link.textContent = 'Continue to sign in';
+  area.append(code, link);
+}
 function paint() {
   if (appr.state.open && signedIn()) { render(root, approvalsView(appr.state, Date.now())); return; }
   if (wantApprovals && signedIn()) { openApprovals(); return; }
@@ -52,10 +63,12 @@ function paint() {
     ui.confirmClose = false;
     lastView = st.view;
     render(root, phoneView(st, Date.now(), ui));
+    paintBrowserSignin();
     root.querySelector('h1')?.focus?.();
     return;
   }
   render(root, phoneView(st, Date.now(), ui));
+    paintBrowserSignin();
 }
 ctl.subscribe(paint);
 // Liveness and "checked … ago" labels age even when nothing arrives.
@@ -68,6 +81,14 @@ root.addEventListener('click', async (e) => {
   const action = b.getAttribute('data-action');
   if (action !== 'close') ui.confirmClose = false;
   switch (action) {
+    case 'browser-signin': {
+      b.disabled = true;
+      try {
+        const flow = await startBrowserSignIn({ api, storage: sessionStorage, hubOrigin: HUB_ORIGIN, pair: pendingPair });
+        ui.browserSignin = flow; paint();
+      } catch { ui.browserSignin = { error: 'Could not start sign-in. Try again.' }; paint(); }
+      return;
+    }
     case 'open-approvals': return openApprovals();
     case 'approvals-back': appr.close(); lastView = null; return paint();
     case 'approvals-refresh': return appr.load();
@@ -147,4 +168,11 @@ function listen() {
 
 // A notification tap while the app is open.
 navigator.serviceWorker?.addEventListener?.('message', (e) => { if (e.data?.type === 'plexiform-open-approvals') { if (signedIn()) openApprovals(); else wantApprovals = true; } });
-ctl.boot();
+async function bootPhone() {
+  if (signInResult) {
+    try { pendingPair = await finishBrowserSignIn({ id: signInResult, api, storage: sessionStorage, vault }) || ''; wantApprovals = !!pendingPair; }
+    catch { /* Show sign-in again; no credential is accepted without the verifier. */ }
+  }
+  await ctl.boot();
+}
+bootPhone();

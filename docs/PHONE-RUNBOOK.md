@@ -132,3 +132,32 @@ push subscribe, voice via the browser's own `SpeechRecognition`.
   of pairing could register a software key instead (and then approve without
   a biometric). Closed by the separate pinned origin (owner-gated item 4), or
   by requiring and verifying attestation.
+
+## 2026-10-14 implementation
+
+`npm run build:phone` creates `dist/phone-site` for a separate static host. Set
+`PLEXIFORM_PHONE_HUB` at build time to pin the API origin (default
+`https://app.plexiform.dev`). The bundle has SRI and a CSP script hash; no imported
+module is loaded from the hub. Set `BOARD_PHONE_ORIGIN` on the hub to the exact
+HTTPS origin. CORS accepts only the phone API routes, never cookies or full
+desktop tokens. The hub may only receive the phone's relay-scoped credential.
+
+Google/GitHub sign-in is available through `/phone-connect`: five-minute PKCE
+request, explicit browser consent with matching code, single-use exchange.
+The device token stays out of URLs. Email-code sign-in is hidden when disabled.
+Physical iOS/Android PWA redirect/storage acceptance remains outstanding.
+
+Generate VAPID without printing its secret:
+
+```sh
+node board/hub/scripts/gen-vapid.mjs --subject https://plexiform.dev --out /private/vapid.env
+```
+
+Publish the static site under credentials unavailable to the hub operator.
+Pin that origin in the desktop build/settings for pairing and passkeys. Existing
+same-origin pairings may need to be recreated. Keep the public phone flag off
+until independent security review and real phone approval/deny/revoke tests pass.
+
+Hosted beta origin: `https://plexiform-phone.pages.dev`. It is pinned in the
+desktop release policy for `https://app.plexiform.dev`; self-hosted hubs keep
+their own origin or explicit operator override. The marketing phone flag stays off.

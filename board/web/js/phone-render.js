@@ -37,9 +37,11 @@ function signin(st) {
   if (!a.flowId) {
     return h('main', { class: 'screen signin' },
       h('div', { class: 'brand' }, h('img', { src: '/web/phone-icon-192.png', alt: '', width: '56', height: '56' }), h('h1', null, 'Plexiform on your phone')),
-      h('p', { class: 'lead' }, 'Sign in with the email you use for Plexiform. We email you a 6-digit code.'),
+      h('p', { class: 'lead' }, 'Sign in with your Plexiform account using Google or GitHub.'),
       noticeBar(st.notice),
-      h('form', { class: 'stack', 'data-form': 'email', novalidate: true },
+      btn('browser-signin', 'Continue with Google or GitHub', { kind: 'primary' }),
+      h('div', { id: 'browser-signin-status', role: 'status' }),
+      h('form', { class: 'stack', 'data-form': 'email', novalidate: true, hidden: a.emailEnabled === false || null },
         h('label', { for: 'email' }, 'Email'),
         h('input', { id: 'email', name: 'email', type: 'email', autocomplete: 'email', inputmode: 'email', required: true, 'aria-describedby': described, value: a.email }),
         h('label', { for: 'device-name' }, 'Name for this phone'),

@@ -30,7 +30,8 @@
     "setups-helper": "sh scripts/build-setups-helper.sh",
     "test:native-darwin": "npm run setups-helper && PLEXIFORM_TEST_HELPER=$PWD/native/setups-build/buddy-setups node --test --test-concurrency=1 test/native-darwin/*.test.js",
     "build:site": "node site/build.js",
-    "gallery:check": "node site/gallery-build.js --check"
+    "gallery:check": "node site/gallery-build.js --check",
+    "build:phone": "node board/web/scripts/build-phone.mjs"
   },
   "author": "",
   "license": "MIT",
@@ -309,6 +310,7 @@
     "@playwright/test": "^1.63.0",
     "electron": "^44.3.0",
     "electron-builder": "26.16.1",
+    "esbuild": "0.25.12",
     "jsdom": "^30.0.1"
   },
   "dependencies": {
