@@ -8,6 +8,7 @@ const { createClaudeCodeSession, buildClaudeArgs } = require('../src/claude-code
 const { createGeminiAcp, NOT_INSTALLED, NOT_VERIFIED } = require('../src/gemini-acp');
 const { ownedAdapters } = require('../src/interaction-main');
 const { testTempDir } = require('./helpers/tmp');
+const { spawnProviderFixture } = require('./helpers/provider-fixture-spawn');
 
 const ACTOR = 'overview:1:1';
 const FAKE_CLAUDE = path.join(__dirname, 'fixtures', 'fake-claude-stream.js');
@@ -23,8 +24,8 @@ function rig(provider, adapter) {
   const state = (s) => hub.state({ session: s.session }, ACTOR);
   return { hub, launch, send, state };
 }
-const claude = (over = {}) => rig('claude', createClaudeCodeSession({ bin: FAKE_CLAUDE, env: ENV, ackMs: 800, killGraceMs: 200, ...over }));
-const gemini = (over = {}) => rig('gemini', createGeminiAcp({ bin: FAKE_GEMINI, env: ENV, requestMs: 800, verified: true, ...over }));
+const claude = (over = {}) => rig('claude', createClaudeCodeSession({ bin: FAKE_CLAUDE, spawn: spawnProviderFixture, env: ENV, ackMs: 800, killGraceMs: 200, ...over }));
+const gemini = (over = {}) => rig('gemini', createGeminiAcp({ bin: FAKE_GEMINI, spawn: spawnProviderFixture, env: ENV, requestMs: 800, verified: true, ...over }));
 
 // ── Claude Code ──
 test('FAKE claude: message reaches the selected owned session only, with lifecycle ack, replayed echo and streamed reply', async () => {
@@ -63,7 +64,7 @@ test('Claude edit tools exist only for a cwd inside an explicit safe root', asyn
   const fakeSpawn = (bin, args) => { calls.push(args); const { EventEmitter } = require('node:events'); const c = new EventEmitter(); c.stdout = new EventEmitter(); c.stdout.setEncoding = () => {}; c.stderr = new EventEmitter(); c.stdin = Object.assign(new EventEmitter(), { write() {} }); c.pid = 999999; c.kill = () => {}; return c; };
   const a = createClaudeCodeSession({ bin: '/x/claude', spawn: fakeSpawn, safeRoot: root });
   fs.mkdirSync(path.join(root, 'w')); fs.mkdirSync(`${root}-evil`); t.after(() => fs.rmSync(`${root}-evil`, { recursive: true, force: true }));
-  const outside = tmp(); fs.symlinkSync(outside, path.join(root, 'link'));
+  const outside = tmp(); fs.symlinkSync(outside, path.join(root, 'link'), process.platform === 'win32' ? 'junction' : 'dir');
   await a.open({ cwd: path.join(root, 'w') }); await a.open({ cwd: tmp() }); await a.open({ cwd: `${root}-evil` });
   await a.open({ cwd: path.join(root, 'link') });
   assert.deepEqual(calls.map((c) => c[c.indexOf('--permission-mode') + 1]), ['acceptEdits', 'dontAsk', 'dontAsk', 'dontAsk'], 'a symlink inside the root that leads outside is not inside it');
@@ -143,7 +144,7 @@ test('Hostile FAKE claude: an init for a different session id kills that child',
   } finally { x.hub.stopAll(); }
 });
 test('FAKE claude: denied permissions surface as a refusal notice; close reaps the child', async () => {
-  const adapter = createClaudeCodeSession({ bin: FAKE_CLAUDE, env: ENV, ackMs: 800, killGraceMs: 200 });
+  const adapter = createClaudeCodeSession({ bin: FAKE_CLAUDE, spawn: spawnProviderFixture, env: ENV, ackMs: 800, killGraceMs: 200 });
   const x = rig('claude', adapter);
   try {
     const A = await x.launch();
