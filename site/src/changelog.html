@@ -12,6 +12,18 @@
     <h1>Changelog</h1>
     <p class="lede">What changed, newest first. The beta moves fast, so this is written in plain words rather than version numbers.</p>
     <div class="log">
+      <article id="2026-10-14">
+        <time datetime="2026-10-14">14 October 2026</time>
+        <h2>Useful session tabs and handovers</h2>
+        <p>Public preview 1.0.2-beta.64 for macOS and Linux. <a href="https://github.com/CallumJB125/claude-traffic-light/releases/tag/v1.0.2-beta.64">Release notes and checksums</a></p>
+        <ul>
+          <li><strong>Session tabs.</strong> Captured sessions show recorded activity and context, open the exact session controls, and offer relevant handover actions. Import context into a draft, review it, save it, and refresh without losing edits.</li>
+          <li><strong>Handovers.</strong> Refresh, copy, export Markdown, continue in another supported tool, or open the timeline. Historical handover text is readable.</li>
+          <li><strong>Desktop reliability.</strong> Optional Burst configuration reads have a deadline, and explicitly stopped memory workers stay stopped. Session actions recheck the current window, team, workspace, account, and sharing scope.</li>
+          <li><strong>Free Agent Mail.</strong> Ask my AI is included. Inbox polling is off by default, and sending requires confirmation. Claude Tasks is available on macOS and Linux, with Codex as the default provider.</li>
+          <li><strong>Current limits.</strong> Independent agents can still overwrite shared-checkout work; captured-session ownership and collision alerts are advisory. Windows, public phone access, and Linear/Jira delivery remain gated. Public account registration is closed, and production email sign-in is off. Mac builds are ad-hoc signed and are not Apple-notarized.</li>
+        </ul>
+      </article>
       <!-- DRAFT for release 1: confirm the date at the tag; keep the email-code line only once the mail service is deployed.
            Candidate lines (uncomment only when on main AND in the tagged build; see docs/release-notes.md for the wording):
            characters (duck, octopus, CRT, blob, capybara, cactus, owl, penguin, fox, bee, axolotl, mushroom, egg, toaster, cloud, astronaut, sloth, T-rex, cyclops),
@@ -27,7 +39,7 @@
           <li><strong>Backups and restore.</strong> Your local settings can be backed up and restored from Settings, Backups.</li>
           <li><strong>Updates in the app.</strong> {{brand.name}} can check for a newer version and install it.</li>
           <li><strong>Detached sessions.</strong> Jumping to a session running in a detached tmux session no longer switches the terminal tab you are on. If the session's terminal can't be found, {{brand.name}} tells you and shows the command to attach.</li>
-          <li><strong>Known limits.</strong> Linear and Jira are not offered yet. The beta is unsigned, so macOS may ask you to use the keychain; choose Always Allow. Signing in by email needs your address verified until we move out of the email sandbox, and the Windows and Linux builds have not been tried on real machines yet.</li>
+          <li><strong>Known limits at that release.</strong> Linear and Jira were not offered. Mac builds were not Apple-notarized. If macOS asks to use the keychain, verify the requesting app before granting access. Email sign-in and wider Windows/Linux device acceptance remained limited; see the latest entry above for current availability.</li>
         </ul>
       </article>
       <article id="2026-09-30">
