@@ -16,6 +16,7 @@ import { startAccounts } from './accounts-helpers.js';
 import { createLogger } from '../log.js';
 
 const require = createRequire(import.meta.url);
+const { spawnProviderFixture } = require('../../../test/helpers/provider-fixture-spawn');
 const { createRemoteInteractionHost } = require('../../../src/remote-interaction.js');
 const { createInteractionHub } = require('../../../src/session-interaction.js');
 const { createCodexAppServer } = require('../../../src/codex-app-server.js');
@@ -38,9 +39,9 @@ async function rig() {
   const winA = await signIn('alice@dev.local', 'Alice Windows');
   const bob = await signIn('bob@dev.local', 'Bob Phone');
   const carol = await signIn('carol@dev.local', 'Carol Windows');
-  const adapter = createCodexAppServer({ bin: FAKE });
+  const adapter = createCodexAppServer({ bin: FAKE, spawn: spawnProviderFixture });
   // A separate "Overview" hub on the same Mac: its sessions are reachable only once shared.
-  const overview = createInteractionHub({ adapters: { codex: createCodexAppServer({ bin: FAKE }) }, boardCurrent: (b) => b === 'board:x', now: () => h.clock.wall() });
+  const overview = createInteractionHub({ adapters: { codex: createCodexAppServer({ bin: FAKE, spawn: spawnProviderFixture }) }, boardCurrent: (b) => b === 'board:x', now: () => h.clock.wall() });
   // More hubs a test may add (actor 'extra:<i>'), reachable only once shared, like Overview's.
   const extra = [];
   const mac = createRemoteInteractionHost({
@@ -135,7 +136,7 @@ test('LOCAL REPORTING PROOF: real hub shares bounded parent/child/input reports 
     // A second main-owned hub can use a slower clock. Even if its DTO calls
     // the old question current, the relaying host must enforce its own TTL.
     let ownerTime = r.h.clock.wall();
-    const slower = createInteractionHub({ adapters: { codex: createCodexAppServer({ bin: FAKE }) }, boardCurrent: () => true, now: () => ownerTime });
+    const slower = createInteractionHub({ adapters: { codex: createCodexAppServer({ bin: FAKE, spawn: spawnProviderFixture }) }, boardCurrent: () => true, now: () => ownerTime });
     r.extra.push(slower);
     try {
       const other = (await slower.launch({ provider: 'codex' }, 'extra:0')).state;
@@ -712,7 +713,7 @@ test('LOCAL PROOF: actual shared endpoint reaches Overview once, with live Messa
     const s = await r.launch();
     const made = await r.mac.shareSession({ session: s.session, team: r.org, scope: 'interact' });
     assert.equal(made.ok, true);
-    bobHost = createRemoteInteractionHost({ userId: r.bob.user, adapters: { codex: createCodexAppServer({ bin: FAKE }) }, now: () => r.h.clock.wall() });
+    bobHost = createRemoteInteractionHost({ userId: r.bob.user, adapters: { codex: createCodexAppServer({ bin: FAKE, spawn: spawnProviderFixture }) }, now: () => r.h.clock.wall() });
     assert.equal((await bobHost.enable({ baseUrl: r.h.base, token: r.bob.token, WebSocket })).state, 'connected');
     const bobSession = (await bobHost.hub.launch({ provider: 'codex' }, bobHost.actor)).state;
     assert.equal((await bobHost.shareSession({ session: bobSession.session, team: r.org, scope: 'interact' })).ok, true);

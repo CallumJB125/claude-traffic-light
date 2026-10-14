@@ -17,6 +17,7 @@ import { startAccounts } from './accounts-helpers.js';
 import { createApi, createController, sessionView } from '../../web/js/phone-core.js';
 
 const require = createRequire(import.meta.url);
+const { spawnProviderFixture } = require('../../../test/helpers/provider-fixture-spawn');
 const { createRemoteInteractionHost } = require('../../../src/remote-interaction.js');
 const { createCodexAppServer } = require('../../../src/codex-app-server.js');
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -52,7 +53,7 @@ async function rig() {
   try {
     const mac = await h.signIn('alice@dev.local', { device_name: 'Alice Mac' });
     assert.equal(mac.status, 200, mac.text);
-    const adapter = createCodexAppServer({ bin: FAKE });
+    const adapter = createCodexAppServer({ bin: FAKE, spawn: spawnProviderFixture });
     host = createRemoteInteractionHost({ userId: mac.body.user.id, adapters: { codex: adapter }, boardCurrent: (b) => b === null, retry: { baseMs: 50, maxMs: 100 } });
     // The Mac's explicit opt-in (role 'host'), then its connection: what the app does.
     const st = await host.enable({ baseUrl: h.base, token: mac.body.device_token, WebSocket, fetch });

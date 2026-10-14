@@ -13,6 +13,7 @@ const Search = require('../src/memory/search.js');
 const Handoff = require('../src/handoff.js');
 const { createCodexAppServer } = require('../src/codex-app-server.js');
 const { testTempDir } = require('./helpers/tmp');
+const { spawnProviderFixture } = require('./helpers/provider-fixture-spawn');
 
 const FIX = path.join(__dirname, 'fixtures', 'memory');
 const FAKE_CODEX = path.join(__dirname, 'fixtures', 'fake-codex-app-server.js');
@@ -272,7 +273,102 @@ test('the worker indexes, searches and builds handovers off the main thread', as
     assert.equal(await client.call('handover', { tool: 'claude', sid: 'nope', home: r.home }), null);
     await client.call('clear');
     assert.equal((await client.call('stats')).turns, 0);
-  } finally { client.stop(); r.done(); }
+  } finally { await client.stop(); r.done(); }
+});
+
+test('worker stop invalidates pending searches immediately, is idempotent and waits for actual termination', async () => {
+  const { EventEmitter } = require('node:events');
+  let worker, finish, terminations = 0;
+  class ControlledWorker extends EventEmitter {
+    constructor() { super(); worker = this; }
+    postMessage(m) { this.request = m; }
+    terminate() { terminations++; return new Promise((resolve) => { finish = resolve; }); }
+  }
+  const client = Search.createClient({ file: 'synthetic', workerData: {}, Worker: ControlledWorker });
+  const pending = client.call('search');
+  const refused = assert.rejects(pending, /search index stopped/);
+  const stopped = client.stop();
+  assert.equal(client.stop(), stopped, 'repeated stop returns the same pending termination');
+  assert.equal(terminations, 1);
+  await refused;
+  let completed = false; stopped.then(() => { completed = true; });
+  worker.emit('message', { id: worker.request.id, result: 'obsolete result' });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(completed, false, 'request invalidation is not worker termination');
+  finish(0); await stopped;
+  assert.equal(completed, true);
+  assert.equal(client.stop(), stopped);
+});
+
+test('worker termination failure cannot claim that index file handles have closed', async () => {
+  const { EventEmitter } = require('node:events');
+  class RefusedWorker extends EventEmitter {
+    postMessage() {}
+    terminate() { return Promise.reject(new Error('synthetic termination failure')); }
+  }
+  const client = Search.createClient({ file: 'synthetic', workerData: {}, Worker: RefusedWorker });
+  const pending = assert.rejects(client.call('search'), /search index stopped/);
+  const stopped = client.stop();
+  await pending;
+  await assert.rejects(stopped, /synthetic termination failure/);
+  assert.equal(client.stop(), stopped);
+});
+
+test('explicit stop refuses new searches during and after termination instead of reopening the index', async () => {
+  const { EventEmitter } = require('node:events');
+  let finish, starts = 0, terminations = 0;
+  class ControlledWorker extends EventEmitter {
+    constructor() { super(); starts++; }
+    postMessage() {}
+    terminate() { terminations++; return new Promise(resolve => { finish = resolve; }); }
+  }
+  const client = Search.createClient({ file: 'synthetic', workerData: {}, Worker: ControlledWorker });
+  const pending = assert.rejects(client.call('search'), /search index stopped/);
+  const stopped = client.stop();
+  await assert.rejects(client.call('stats'), /search index stopped/);
+  assert.equal(starts, 1); assert.equal(terminations, 1); assert.equal(client.stop(), stopped);
+  finish(0); await stopped; await pending;
+  await assert.rejects(client.call('search'), /search index stopped/);
+  assert.equal(starts, 1, 'a successful teardown must not leave a newly opened SQLite worker');
+});
+
+test('a worker that exits naturally can restart until explicit disposal', async () => {
+  const { EventEmitter } = require('node:events');
+  const workers = [];
+  class ControlledWorker extends EventEmitter {
+    constructor() { super(); workers.push(this); }
+    postMessage(request) { this.request = request; }
+    terminate() { return Promise.resolve(0); }
+  }
+  const client = Search.createClient({ file: 'synthetic', workerData: {}, Worker: ControlledWorker });
+  const interrupted = assert.rejects(client.call('stats'), /search index stopped/);
+  workers[0].emit('exit', 1); await interrupted;
+  const recovered = client.call('stats');
+  assert.equal(workers.length, 2);
+  workers[1].emit('message', { id: workers[1].request.id, result: 'recovered' });
+  assert.equal(await recovered, 'recovered'); await client.stop();
+  await assert.rejects(client.call('stats'), /search index stopped/);
+});
+
+test('quit closes request admission and a queued index result cannot reschedule a follow-up pass', async t => {
+  const timers = t.mock.method(global, 'setTimeout');
+  const handlers = new Map(), quits = [];
+  const reg = Search.register({ rootDir: path.join(os.tmpdir(), 'synthetic-memory-disposal-not-created'),
+    ipcMain: { handle: (channel, fn) => handlers.set(channel, fn) },
+    entitlements: { has: () => true, limits: () => ({}), plan: () => 'free' },
+    fromPage: () => true, onQuit: fn => quits.push(fn), electron: { clipboard: clip(), shell: { openPath: async () => '' } } });
+  let complete, calls = 0;
+  // Only the already-completed worker reply is held; no synthetic DB is opened.
+  reg.client.call = () => { calls++; return new Promise(resolve => { complete = resolve; }); };
+  try {
+    const pass = reg.pass(); complete({ more: true });
+    await Promise.all(quits.map(fn => fn()));
+    assert.equal(await pass, null);
+    assert.equal(await reg.pass(), null);
+    assert.equal(timers.mock.calls.filter(call => call.arguments[1] === 2000).length, 0, 'quit must retire an index result whose continuation has not yet run');
+    for (const handler of handlers.values()) assert.deepEqual(await handler({}), { ok: false, error: 'Not allowed.' });
+    assert.equal(calls, 1);
+  } finally { await Promise.all(quits.map(fn => fn())); }
 });
 
 const ent = (plan) => ({ has: (f) => (f === 'handoff.launch' ? plan !== 'free' : true) });
@@ -282,7 +378,7 @@ const DOC = '<!-- plexiform-session-handover v1 -->\n# Session handover: claude-
 test('Hand to Codex starts an owned Codex session with the handover as its first message (fake app-server)', async () => {
   const folders = [];
   const h = Handoff.create({ entitlements: ent('plus'), clipboard: clip(), docFor: async () => DOC,
-    adapters: { codex: () => createCodexAppServer({ bin: FAKE_CODEX }), claude: () => ({ available: false }) },
+    adapters: { codex: () => createCodexAppServer({ bin: FAKE_CODEX, spawn: spawnProviderFixture }), claude: () => ({ available: false }) },
     workspace: () => { const d = testTempDir('plex-handoff-'); folders.push(d); return d; } });
   const events = [];
   try {
@@ -342,7 +438,7 @@ test('register(ctx): every handler checks the memory page sender; nothing regist
     assert.equal((await handlers.get('memory:handover')(e, 'open', { tool: 'claude', sid: '../../etc' })).ok, false);
     assert.equal((await handlers.get('memory:hand')(e, { tool: 'nope', sid: 'x' }, 'codex')).ok, false);
     assert.equal((await handlers.get('memory:team-search')(e, { q: 'csv' })).available, false, 'no team memory wired: off, not an error');
-  } finally { for (const fn of quits) fn(); void reg; r.done(); }
+  } finally { await Promise.all(quits.map((fn) => fn())); void reg; r.done(); }
 });
 
 test('register(ctx): the team-search handler hands main only the words and date, bounded', async () => {
@@ -360,7 +456,7 @@ test('register(ctx): the team-search handler hands main only the words and date,
     assert.equal(out.ok, true); assert.equal(out.results[0].title, 'CSV export');
     assert.deepEqual(Object.keys(asked[0]).sort(), ['limit', 'q', 'since']);
     assert.equal(asked[0].q.length, 200); assert.equal(asked[0].since, '2026-09-01T00:00:00.000Z');
-  } finally { for (const fn of quits) fn(); r.done(); }
+  } finally { await Promise.all(quits.map((fn) => fn())); r.done(); }
 });
 
 

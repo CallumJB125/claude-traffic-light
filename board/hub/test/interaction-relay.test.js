@@ -16,6 +16,7 @@ import { createLogger } from '../log.js';
 import { RELAY_LIMITS } from '../interaction-relay.js';
 
 const require = createRequire(import.meta.url);
+const { spawnProviderFixture } = require('../../../test/helpers/provider-fixture-spawn');
 const { createRemoteInteractionHost, createRemoteInteractionClient } = require('../../../src/remote-interaction.js');
 const { createCodexAppServer } = require('../../../src/codex-app-server.js');
 const FAKE = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'test', 'fixtures', 'fake-codex-app-server.js');
@@ -38,7 +39,7 @@ async function rig({ limits } = {}) {
   const wsUrl = `${h.base.replace('http', 'ws')}/ws/interaction-host`;
   const hosts = [];
   const host = async (dev, { userId = dev.user, retry, expect = 'connected' } = {}) => {
-    const adapter = createCodexAppServer({ bin: FAKE });
+    const adapter = createCodexAppServer({ bin: FAKE, spawn: spawnProviderFixture });
     // Contract defaults: boardCurrent refuses unless supplied; remote sessions are board-less.
     const x = createRemoteInteractionHost({ userId, adapters: { codex: adapter }, boardCurrent: (b) => b === null, retry });
     x.adapter = adapter;

@@ -17,6 +17,7 @@ const net = require('node:net');
 const http = require('node:http');
 const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
+const { pathToFileURL } = require('node:url');
 const { createAccountFlow } = require('../buddy-window/account-flow');
 const { createAccountClient } = require('../buddy-window/accounts');
 const { createWorkspaceStore, normalizeHubUrl, normalizeLinkHub, accessWsId } = require('../buddy-window/workspaces');
@@ -42,7 +43,7 @@ const freePort = () => new Promise((resolve) => { const s = net.createServer(); 
 // https://<provider host>/<path> would (the hub test suite's fake-oauth.js),
 // and the two authorize pages consent as the next queued person and redirect.
 async function startFakeProvider(clients) {
-  const { fakeProviders } = await import(path.join(BOARD, 'hub', 'test', 'fake-oauth.js'));
+  const { fakeProviders } = await import(pathToFileURL(path.join(BOARD, 'hub', 'test', 'fake-oauth.js')).href);
   const p = fakeProviders({ clock: { wall: () => Date.now() }, clients });
   const people = [];
   const server = http.createServer(async (req, res) => {
