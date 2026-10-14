@@ -154,19 +154,43 @@ const systemInspect = {
   },
 };
 
-function createBurstClient({ home = os.homedir(), platform = process.platform, inspect = systemInspect, now = Date.now, timeoutMs = TIMEOUT_MS, stateTimeoutMs = Math.max(timeoutMs, STATE_TIMEOUT_MS), stateRetryMs = STATE_RETRY_MS } = {}) {
+function createBurstClient({ home = os.homedir(), platform = process.platform, inspect = systemInspect, now = Date.now, timeoutMs = TIMEOUT_MS, stateTimeoutMs = Math.max(timeoutMs, STATE_TIMEOUT_MS), stateRetryMs = STATE_RETRY_MS, configTimeoutMs = TIMEOUT_MS, readConfigFile = (file, encoding) => fs.promises.readFile(file, encoding) } = {}) {
   const binPath = path.join(home, '.local', 'bin', 'claude-burst');
   const configPath = path.join(home, '.config', 'claude-burst', 'config.json');
   let addr = null;
   let consoleAddr = null;
   let upgradeCache = null;
+  let configInFlight = null;
+  let authorityEpoch = 0;
 
   const installed = () => { try { fs.accessSync(binPath, fs.constants.X_OK); return true; } catch { return false; } };
 
-  const readConfig = () => { try { return JSON.parse(fs.readFileSync(configPath, 'utf8')) || {}; } catch { return {}; } };
-  function readAdminListen() {
-    const cfg = readConfig();
-    return typeof cfg.admin_listen === 'string' && cfg.admin_listen ? cfg.admin_listen : DEFAULT_ADMIN;
+  const configUnavailable = () => Object.assign(new Error('Burst\'s config is not available right now'), { code: 'config_timeout' });
+  const unavailableDetection = () => ({ kind: 'unreachable', installed: true, reason: 'config_timeout' });
+  const configDeadlineMs = Number.isFinite(configTimeoutMs) && configTimeoutMs > 0 ? configTimeoutMs : TIMEOUT_MS;
+  async function readConfig() {
+    // macOS can hold a filesystem open behind a privacy prompt. Leave that
+    // read off main, and retain it until it settles: timing out a caller must
+    // not queue another blocked open on every tray refresh.
+    if (!configInFlight) {
+      const pending = Promise.resolve().then(() => readConfigFile(configPath, 'utf8'))
+        .then((text) => JSON.parse(text) || {}).catch(() => ({}));
+      configInFlight = pending;
+      pending.then(() => { if (configInFlight === pending) configInFlight = null; });
+    }
+    let timer;
+    try {
+      return await Promise.race([configInFlight, new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          // An unread config cannot grant the default loopback address, or
+          // leave an older detection/mutation holding cached authority.
+          authorityEpoch += 1;
+          addr = null;
+          consoleAddr = null;
+          reject(configUnavailable());
+        }, configDeadlineMs);
+      })]);
+    } finally { clearTimeout(timer); }
   }
 
   function send(method, urlPath, { body = null, header = false, timeout = timeoutMs, to = addr } = {}) {
@@ -272,10 +296,16 @@ function createBurstClient({ home = os.homedir(), platform = process.platform, i
   async function detect() {
     if (platform !== 'darwin') return { kind: 'unsupported' };
     if (!installed()) return { kind: 'not_installed' };
-    addr = parseAdminAddress(readAdminListen());
-    if (!addr) return { kind: 'untrusted', installed: true, reason: 'The admin address in Burst\'s config is not on this Mac\'s loopback.' };
+    const epoch = authorityEpoch;
+    let cfg;
+    try { cfg = await readConfig(); } catch { return unavailableDetection(); }
+    if (epoch !== authorityEpoch) return unavailableDetection();
+    addr = null;
+    const candidate = parseAdminAddress(typeof cfg.admin_listen === 'string' && cfg.admin_listen ? cfg.admin_listen : DEFAULT_ADMIN);
+    if (!candidate) return { kind: 'untrusted', installed: true, reason: 'The admin address in Burst\'s config is not on this Mac\'s loopback.' };
     let raw;
-    const readState = () => send('GET', '/api/state', { timeout: stateTimeoutMs });
+    const readState = () => epoch === authorityEpoch
+      ? send('GET', '/api/state', { timeout: stateTimeoutMs, to: candidate }) : Promise.reject(configUnavailable());
     try {
       raw = await readState().catch(async (e) => {
         if (e.code !== 'unreachable' && e.code !== 'timeout') throw e;
@@ -283,6 +313,7 @@ function createBurstClient({ home = os.homedir(), platform = process.platform, i
         return readState();
       });
     } catch (e) {
+      if (e.code === 'config_timeout') return unavailableDetection();
       if (e.code === 'unreachable' || e.code === 'timeout') return { kind: 'unreachable', installed: true, reason: e.code };
       return { kind: 'untrusted', installed: true, reason: `Something on the admin port did not answer like Burst (${e.code || 'error'}).` };
     }
@@ -290,7 +321,8 @@ function createBurstClient({ home = os.homedir(), platform = process.platform, i
     const shapeOk = raw && typeof raw === 'object' && parseVersion(raw.version) && Number.isInteger(raw.pid)
       && (modeOk || (typeof raw.config_error === 'string' && raw.config_error));
     if (!shapeOk) return { kind: 'untrusted', installed: true, reason: 'The admin port answered, but not with Burst\'s state.' };
-    if (!await trusted(raw, addr.port)) return { kind: 'untrusted', installed: true, reason: 'The program answering on the admin port is not Burst\'s own gateway.' };
+    if (!await trusted(raw, candidate.port)) return { kind: 'untrusted', installed: true, reason: 'The program answering on the admin port is not Burst\'s own gateway.' };
+    if (epoch !== authorityEpoch) return unavailableDetection();
 
     const state = normalizeState(raw);
     const capabilities = atLeast(state.version, [0, 19, 0])
@@ -301,12 +333,14 @@ function createBurstClient({ home = os.homedir(), platform = process.platform, i
       if (upgradeCache && now() - upgradeCache.at < UPGRADE_CACHE_MS) upgrade = upgradeCache.value;
       else {
         try {
-          const u = await request('GET', '/api/upgrade-status');
+          const u = scrub(await send('GET', '/api/upgrade-status', { to: candidate }));
           upgrade = { canUpgrade: u.can_upgrade === true, upToDate: u.up_to_date === true, latestVersion: str(u.latest_version), behind: num(u.behind), error: str(u.error).slice(0, 160) };
         } catch (e) { if (e.code === 'http' && e.status === 404) capabilities.upgradeStatus = false; }
         upgradeCache = { at: now(), value: upgrade };
       }
     }
+    if (epoch !== authorityEpoch) return unavailableDetection();
+    addr = candidate;
     return { kind: state.configError ? 'broken' : 'present', installed: true, state, capabilities, upgrade, pid: raw.pid };
   }
 
@@ -329,12 +363,14 @@ function createBurstClient({ home = os.homedir(), platform = process.platform, i
     if (typeof enabled !== 'boolean' || (mode !== undefined && !COMPACTION_MODES.has(mode))) throw Object.assign(new Error('bad request'), { code: 'bad_request' });
     const d = await detect();
     if (d.kind !== 'present') throw Object.assign(new Error('Burst is not trusted right now'), { code: 'not_present' });
-    const raw = await send('GET', '/api/state');
+    const to = addr, epoch = authorityEpoch;
+    const raw = await send('GET', '/api/state', { to });
     const cfg = raw && raw.pid === d.pid && raw.context && raw.context.compaction;
     if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg) || typeof cfg.enabled !== 'boolean') throw bad('Burst did not report a compaction setting');
     if ('mode' in cfg && !COMPACTION_MODES.has(cfg.mode)) throw bad('Burst reported a compaction mode Plexiform does not know');
     if (mode !== undefined && !('mode' in cfg)) throw bad('This Burst has no compaction modes');
-    const r = await send('POST', '/api/compaction', { body: JSON.stringify({ ...cfg, enabled, ...(mode !== undefined ? { mode } : {}) }), header: true, timeout: Math.max(timeoutMs, TEST_TIMEOUT_MS) });
+    if (epoch !== authorityEpoch || addr !== to) throw Object.assign(new Error('Burst is not trusted right now'), { code: 'not_present' });
+    const r = await send('POST', '/api/compaction', { body: JSON.stringify({ ...cfg, enabled, ...(mode !== undefined ? { mode } : {}) }), header: true, timeout: Math.max(timeoutMs, TEST_TIMEOUT_MS), to });
     if (!r || typeof r.ok !== 'string') throw Object.assign(new Error('Burst did not confirm'), { code: 'bad_json' });
     return { ok: true };
   }
@@ -374,18 +410,24 @@ function createBurstClient({ home = os.homedir(), platform = process.platform, i
   async function consoleDetect() {
     if (platform !== 'darwin') return { kind: 'unsupported' };
     if (!installed()) return { kind: 'not_installed' };
-    const listen = readConfig().console_listen;
+    const epoch = authorityEpoch;
+    let cfg;
+    try { cfg = await readConfig(); } catch { return unavailableDetection(); }
+    if (epoch !== authorityEpoch) return unavailableDetection();
+    const listen = cfg.console_listen;
     if (listen === 'off') return { kind: 'off' };
     const ca = parseAdminAddress(typeof listen === 'string' && listen ? listen : DEFAULT_CONSOLE);
     if (!ca) return { kind: 'untrusted', reason: 'The console address in Burst\'s config is not on this Mac\'s loopback.' };
     const [launchd, listener] = await Promise.all([inspect.launchdPid(CONSOLE_LABEL), inspect.listenerPid(ca.port)]);
     if (!listener) return { kind: 'unreachable' };
     if (!launchd || launchd !== listener || !await exeOk(listener)) return { kind: 'untrusted', reason: 'The program answering on the console port is not Burst\'s own console.' };
+    if (epoch !== authorityEpoch) return unavailableDetection();
     let raw;
     try { raw = await send('GET', '/api/console', { to: ca, timeout: Math.max(timeoutMs, CONSOLE_TIMEOUT_MS) }); } catch (e) {
       return e.code === 'unreachable' || e.code === 'timeout' ? { kind: 'unreachable' } : { kind: 'untrusted', reason: `The console did not answer like Burst (${e.code || 'error'}).` };
     }
     if (!raw || typeof raw !== 'object' || !parseVersion(raw.version) || !Array.isArray(raw.checks)) return { kind: 'untrusted', reason: 'The console port answered, but not with Burst\'s console.' };
+    if (epoch !== authorityEpoch) return unavailableDetection();
     consoleAddr = ca;
     return {
       kind: 'present', pid: listener,
@@ -406,19 +448,22 @@ function createBurstClient({ home = os.homedir(), platform = process.platform, i
     if (!spec) throw Object.assign(new Error(`denied: ${kind}`), { code: 'denied' });
     const body = JSON.stringify(spec.body(args && typeof args === 'object' ? args : {}));
     const timeout = Math.max(timeoutMs, spec.timeoutMs || TEST_TIMEOUT_MS);
-    let to;
+    let to, epoch;
     if (spec.target === 'console') {
       const c = await consoleDetect();
       if (c.kind !== 'present') throw Object.assign(new Error('Burst\'s console is not trusted right now'), { code: 'not_present' });
-      if (await inspect.listenerPid(consoleAddr.port) !== c.pid) throw Object.assign(new Error('Burst\'s console changed; try again'), { code: 'pid_changed' });
       to = consoleAddr;
+      epoch = authorityEpoch;
+      if (!to || await inspect.listenerPid(to.port) !== c.pid) throw Object.assign(new Error('Burst\'s console changed; try again'), { code: 'pid_changed' });
     } else {
       const d = await detect();
       if (d.kind !== 'present') throw Object.assign(new Error('Burst is not trusted right now'), { code: 'not_present' });
-      const raw = await send('GET', '/api/state');
-      if (!raw || raw.pid !== d.pid) throw Object.assign(new Error('Burst restarted; try again'), { code: 'pid_changed' });
       to = addr;
+      epoch = authorityEpoch;
+      const raw = await send('GET', '/api/state', { to });
+      if (!raw || raw.pid !== d.pid) throw Object.assign(new Error('Burst restarted; try again'), { code: 'pid_changed' });
     }
+    if (epoch !== authorityEpoch || (spec.target === 'console' ? consoleAddr : addr) !== to) throw Object.assign(new Error('Burst is not trusted right now'), { code: 'not_present' });
     const r = await send('POST', spec.path, { body, header: true, timeout, to });
     return { ok: true, data: scrub(r) };
   }
