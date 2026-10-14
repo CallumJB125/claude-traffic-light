@@ -346,6 +346,26 @@ test('release scope: macOS/Linux by default; Windows diagnostics cannot enable p
   }
 });
 
+test('focused installer acceptance selects one platform and cannot stage a release', () => {
+  const yml = readText('.github/workflows/windows-acceptance.yml');
+  const doc = require('js-yaml').load(yml);
+  assert.deepEqual(Object.keys(doc.jobs), ['build']);
+  assert.deepEqual(doc.permissions, { contents: 'read' });
+  assert.deepEqual(doc.on.workflow_dispatch.inputs.platform.options, ['win', 'linux', 'mac']);
+  assert.equal(doc.on.workflow_dispatch.inputs.platform.default, 'win');
+  const expression = /^\$\{\{ (.+) \}\}$/.exec(doc.jobs.build.strategy.matrix.include)[1];
+  for (const [platform, os] of [['win', 'windows-latest'], ['linux', 'ubuntu-latest'], ['mac', 'macos-latest']]) {
+    const rows = vm.runInNewContext(expression, { inputs: { platform }, fromJSON: JSON.parse });
+    assert.deepEqual(rows, [{ os, platform }]);
+  }
+  const steps = doc.jobs.build.steps;
+  assert.match(steps.find(s => s.name === 'Build installers').run, /--publish never/);
+  const release = require('js-yaml').load(readText('.github/workflows/release.yml'));
+  assert.equal(steps.find(s => s.name === 'Unit tests').run, release.jobs.build.steps.find(s => s.name === 'Unit tests').run);
+  assert.ok(!/release-r2|gh release|release-promote|secrets\./.test(yml));
+  assertNoShellInputInterpolation(yml, 'installer acceptance');
+});
+
 test('workflow input guard rejects both inline and multiline shell interpolation', () => {
   for (const source of [
     '      - run: echo ${{ inputs.version }}\n',

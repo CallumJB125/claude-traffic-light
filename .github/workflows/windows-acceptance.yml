@@ -1,6 +1,7 @@
 # Diagnostic copy of the release build job. No staging, signing or publication.
-# Reuse passing Mac/Linux evidence while fixing concrete Windows failures.
-name: Windows acceptance only
+# Reuse passing platform evidence while fixing a concrete installer failure.
+# The file name and default retain compatibility with Windows runbooks.
+name: Installer acceptance only
 on:
   workflow_dispatch:
     inputs:
@@ -8,10 +9,15 @@ on:
         description: Exact candidate commit
         required: true
         type: string
+      platform:
+        description: Platform to validate without staging or publication
+        type: choice
+        options: [win, linux, mac]
+        default: win
 permissions:
   contents: read
 concurrency:
-  group: windows-acceptance-${{ github.ref }}
+  group: installer-acceptance-${{ github.ref }}-${{ inputs.platform || 'win' }}
   cancel-in-progress: false
 jobs:
   build:
@@ -19,9 +25,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: windows-latest
-            platform: win
+        include: ${{ fromJSON(inputs.platform == 'linux' && '[{"os":"ubuntu-latest","platform":"linux"}]' || inputs.platform == 'mac' && '[{"os":"macos-latest","platform":"mac"}]' || '[{"os":"windows-latest","platform":"win"}]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     permissions:
@@ -104,9 +108,9 @@ jobs:
           run() { if [ "$RUNNER_OS" = Linux ]; then xvfb-run --auto-servernum "$@"; else "$@"; fi; }
           status=0
           mkdir -p work/windows-release
-          run node --test --test-timeout=120000 test/*.test.js test/adapters/*.test.js 2>&1 | tee work/windows-release/root-tests.log || status=1
-          node --test --test-timeout=120000 remote/test/*.test.js 2>&1 | tee work/windows-release/remote-tests.log || status=1
-          (cd board && node --test --test-timeout=120000 '*/test/**/*.test.js') 2>&1 | tee work/windows-release/board-tests.log || status=1
+          run node --test --test-concurrency=4 --test-timeout=120000 test/*.test.js test/adapters/*.test.js 2>&1 | tee work/windows-release/root-tests.log || status=1
+          node --test --test-concurrency=4 --test-timeout=120000 remote/test/*.test.js 2>&1 | tee work/windows-release/remote-tests.log || status=1
+          (cd board && node --test --test-concurrency=4 --test-timeout=120000 '*/test/**/*.test.js') 2>&1 | tee work/windows-release/board-tests.log || status=1
           exit $status
 
       - name: Native helpers (Mac)
