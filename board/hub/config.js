@@ -91,6 +91,8 @@ export function loadConfig(env = process.env) {
       'plus:month': env.BOARD_BILLING_PRICE_PLUS_MONTH || null, 'plus:year': env.BOARD_BILLING_PRICE_PLUS_YEAR || null,
       'team:month': env.BOARD_BILLING_PRICE_TEAM_MONTH || null, 'team:year': env.BOARD_BILLING_PRICE_TEAM_YEAR || null,
     },
+    phoneOrigin: env.BOARD_PHONE_ORIGIN || null,
+    crashReports: env.BOARD_CRASH_REPORTS === '1',
     entitlementKeyFile: env.BOARD_ENTITLEMENT_KEY_FILE ? resolve(env.BOARD_ENTITLEMENT_KEY_FILE) : null,
     // Phone push (board/hub/push.js): off unless the operator sets a VAPID key pair (docs/PHONE-RUNBOOK.md).
     pushVapidPublicKey: env.BOARD_PUSH_VAPID_PUBLIC_KEY || null,
@@ -340,6 +342,10 @@ export function validateConfig(cfg) {
     if (cfg.billingProvider !== 'stripe') throw new Error(`BOARD_BILLING_PROVIDER must be stripe, got ${cfg.billingProvider}`);
     if (cfg.auth !== 'accounts') throw new Error('BOARD_BILLING_PROVIDER needs BOARD_AUTH=accounts');
     if (!cfg.billingApiKey || !cfg.billingWebhookSecret) throw new Error('BOARD_BILLING_PROVIDER needs BOARD_BILLING_API_KEY and BOARD_BILLING_WEBHOOK_SECRET');
+  }
+  if (cfg.phoneOrigin) {
+    const u = new URL(cfg.phoneOrigin);
+    if (u.protocol !== 'https:' || u.origin !== cfg.phoneOrigin || u.username || u.password) throw new Error('BOARD_PHONE_ORIGIN must be an exact HTTPS origin');
   }
   const push = [cfg.pushVapidPublicKey, cfg.pushVapidPrivateKey, cfg.pushVapidSubject];
   if (push.some(Boolean)) {

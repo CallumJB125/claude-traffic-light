@@ -44,6 +44,8 @@ import { Messaging } from './messaging.js';
 import { handleWebhook as billingWebhook } from './billing/webhook.js';
 import { registerHandoffRoutes } from './activity-handoff.js';
 import { registerReviewRoutes } from './reviews.js';
+import { PhoneAuth } from './identity/phone-auth.js';
+import { phoneCors } from './phone-cors.js';
 import { registerTriggerRoutes } from './triggers.js';
 
 const MAX_BODY = 1024 * 1024;
@@ -107,7 +109,7 @@ export const RELAY_SCOPE_ROUTES = new Set([
 ]);
 // Accounts mode: pages served without auth (their JS talks to /api/auth/*;
 // tokens ride in the URL fragment, which never reaches the server).
-const ACCOUNT_PAGES = { '/signin': 'signin.html', '/auth/email': 'signin.html', '/invite': 'invite.html', '/clients': 'clients.html', '/client-invite': 'client-invite.html', '/remote-consent': 'remote-consent.html', '/connections': 'remote-grants.html', '/billing': 'billing.html',
+const ACCOUNT_PAGES = { '/phone-connect': 'phone-connect.html', '/signin': 'signin.html', '/auth/email': 'signin.html', '/invite': 'invite.html', '/clients': 'clients.html', '/client-invite': 'client-invite.html', '/remote-consent': 'remote-consent.html', '/connections': 'remote-grants.html', '/billing': 'billing.html',
   // Phone control PWA (PHONE.md): its service worker lives under /phone/ so its scope is /phone/ only.
   '/phone': 'phone.html', '/phone/': 'phone.html', '/phone/sw.js': 'phone-sw.js', '/phone/manifest.webmanifest': 'phone.webmanifest' };
 
@@ -357,6 +359,11 @@ export function createHttpHandler({ hub, api, config, integrations = null, githu
 
   // `mail` appears only on a hub that can send mail; it says when a send last failed, and whether
   // sends are failing in a row (email is then off in /api/auth/methods), never to whom or why.
+  if (hub.crashReports) route('POST', '/api/crash-reports/v1', ({ body, ip }) => {
+    limitOrThrow(hub, 'crash_ip', ipKey(ip));
+    limitOrThrow(hub, 'crash_global', 'all');
+    return hub.crashReports.accept(body);
+  }, { auth: 'none', maxBody: 2048, strictBody: true });
   route('GET', '/api/health', ({ req }) => {
     // A tunnel also connects from loopback: proxy metadata excludes this
     // local operator field. Never expose sizes, limits, paths or error text.
@@ -389,6 +396,13 @@ export function createHttpHandler({ hub, api, config, integrations = null, githu
     hub.messaging.routes(route);
     hub.publicApi?.routes(route);
     const acc = hub.accounts;
+    if (config.publicUrl) {
+      const phoneAuth = new PhoneAuth(hub);
+      route('POST', '/api/auth/phone/start', (ctx) => phoneAuth.start(ctx.body, ctx), { auth: 'none', replay: false });
+      route('GET', '/api/auth/phone/:id', ({ params }) => phoneAuth.describe(params.id), { auth: 'user' });
+      route('POST', '/api/auth/phone/approve', (ctx) => phoneAuth.approve(ctx.body, ctx), { auth: 'user', replay: false });
+      route('POST', '/api/auth/phone/exchange', (ctx) => phoneAuth.exchange(ctx.body, ctx), { auth: 'none', replay: false });
+    }
     route('GET', '/api/auth/methods', ({ ip }) => acc.methods({ ip }), { auth: 'none' });
     route('POST', '/api/auth/email/start', async ({ body, ip, ident, req, res }) => acc.start(body, { ip, ident, req, res, human: await acc.human(body, { ip }) }), { auth: 'optional' });
     route('POST', '/api/auth/email/verify', ({ body, ip, ident, req, res }) => acc.verify(body, { ip, ident, req, res }), { auth: 'optional' });
@@ -828,6 +842,9 @@ export function createHttpHandler({ hub, api, config, integrations = null, githu
       // Validate the original path before URL's dot-segment normalization.
       decodeURIComponent(rawPath);
     } catch { return sendJson(res, 400, { error: { code: 'VALIDATION', message: 'bad request path' } }); }
+    const fromPhone = phoneCors(req, res, config, url.pathname, RELAY_SCOPE_ROUTES);
+    if (req.method === 'OPTIONS' && fromPhone) { res.writeHead(204); res.end(); return; }
+    if (config.phoneOrigin && req.headers.origin === config.phoneOrigin && config.phoneOrigin !== config.publicUrl && !fromPhone) return sendJson(res, 403, { error: { code: 'FORBIDDEN', message: 'phone origin is not allowed here' } });
     if (loopbackOnly(config) && !devRequestOk(req)) return sendJson(res, 403, { error: { code: 'FORBIDDEN', message: `${config.auth} auth serves direct loopback requests only` } });
     if (config.auth === 'local' && !localCookieOk(hub, req)) return sendJson(res, 401, { error: { code: 'UNAUTHENTICATED', message: 'not signed in' } });
     try {
@@ -1011,7 +1028,7 @@ export function createHttpHandler({ hub, api, config, integrations = null, githu
       const ip = clientIp(req, config);
       if (r.mutating) limitOrThrow(hub, r.auth === 'none' ? 'login_ip' : 'mutate_ip', ipKey(ip));
       if (r.mutating) {
-        if (!sameOrigin(req, config.publicUrl)) throw new HubError('FORBIDDEN', 'cross-origin request');
+        if (!fromPhone && !sameOrigin(req, config.publicUrl)) throw new HubError('FORBIDDEN', 'cross-origin request');
         if (!/^application\/json\b/i.test(req.headers['content-type'] ?? '')) throw new HubError('VALIDATION', 'Content-Type must be application/json');
       }
       const pick = { resourceOrg: resourceOrg(r, params), requestedOrg: req.headers['board-org'] || url.searchParams.get('org') || null };
@@ -1026,6 +1043,7 @@ export function createHttpHandler({ hub, api, config, integrations = null, githu
           // A phone's relay-scoped sign-in works only on the relay and sign-out (migration 056).
           if (ident?.cred.scope === 'relay' && !RELAY_SCOPE_ROUTES.has(`${r.method} ${r.pattern}`)) throw new HubError('FORBIDDEN', 'this phone sign-in can only use remote sessions');
         }
+        if (fromPhone && ident && (ident.cred.kind !== 'device' || ident.cred.scope !== 'relay')) throw new HubError('FORBIDDEN', 'phone requests require a relay device');
         if (ident?.setCookie) appendCookie(res, ident.setCookie);
         // Bearer (desktop) requests carry no ambient credential: no CSRF token.
         // On an optional-auth route a cookie that fails CSRF is just ignored.

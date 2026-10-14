@@ -2,8 +2,7 @@
 // exception or unhandled rejection) or a renderer that dies is turned into a
 // small allow-listed report, scrubbed with src/scrub.js before it is written,
 // and kept in a capped ring file in the data folder (mode 0600). Nothing here
-// talks to the network: sendCrashReport is the one place sending will go, and
-// until it is wired it refuses. test/crash-reports.test.js checks that this
+// talks to the network: main injects the structural-only sender after consent. test/crash-reports.test.js checks that this
 // file loads no network module.
 //
 // Only these fields are ever kept: an error's name, the first line of its
@@ -15,6 +14,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { scrub } = require('./scrub.js');
+const { CONSENT_VERSION } = require('../board/shared/crash-report.cjs');
 
 const RING_FILE = 'reports.jsonl';
 const CONSENT_FILE = 'consent.json';
@@ -66,11 +66,9 @@ function writePrivate(file, text) {
   fs.renameSync(tmp, file);
 }
 
-// Not wired: no endpoint exists yet. The owner replaces this body with the
-// real upload (tagging that line with a privacy-flow marker and documenting
-// it in PRIVACY.md); until then nothing a crash produces leaves this Mac.
+// Safe fallback for collectors without an injected sender.
 function sendCrashReport(_report) {
-  return { sent: false, reason: 'Sending is not built yet; reports are only saved on this Mac.' };
+  return { sent: false, reason: 'Sending is unavailable; report saved locally.' };
 }
 
 //   dir:       where the ring and the consent file live (inside the data folder)
@@ -95,12 +93,12 @@ function create({ dir, app = {}, scrubWith = () => ({}), now = () => Date.now(),
   }
 
   function isOptedIn() {
-    try { return JSON.parse(fs.readFileSync(consent, 'utf8')).optedIn === true; } catch { return false; }
+    try { const c = JSON.parse(fs.readFileSync(consent, 'utf8')); return c.optedIn === true && c.version === CONSENT_VERSION; } catch { return false; }
   }
 
   function setOptIn(on) {
     ensureDir();
-    writePrivate(consent, JSON.stringify({ optedIn: on === true, at: new Date(now()).toISOString() }));
+    writePrivate(consent, JSON.stringify({ version: CONSENT_VERSION, optedIn: on === true, at: new Date(now()).toISOString() }));
     return isOptedIn();
   }
 
@@ -125,7 +123,7 @@ function create({ dir, app = {}, scrubWith = () => ({}), now = () => Date.now(),
       while (kept.length > 1 && Buffer.byteLength(kept.join('\n') + '\n') > MAX_RING_BYTES) kept.shift();
       ensureDir();
       writePrivate(ring, `${kept.join('\n')}\n`); // privacy-flow: crash-capture-local
-      if (isOptedIn()) send(report);
+      if (isOptedIn()) Promise.resolve(send(report)).catch(() => {});
       return report;
     } catch { return null; }
   }

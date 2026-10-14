@@ -20,7 +20,7 @@
     const r = await api.crashReportsSetOptIn(toggle.checked).catch(() => null);
     toggle.checked = !!(r && r.optedIn);
     if (r && window.showSaved) window.showSaved();
-    say(toggle.checked ? 'Allowed. Reports are only saved on this Mac for now.' : 'Off. Reports are only saved on this Mac.');
+    say(toggle.checked ? 'On. New structural crash reports will be sent to Plexiform.' : 'Off. Reports are only saved on this Mac.');
   });
   $('crash-view').addEventListener('toggle', () => { if ($('crash-view').open) refresh(); });
   $('crash-export').addEventListener('click', async () => {

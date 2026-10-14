@@ -184,9 +184,10 @@ require('./src/logging.js').installFileLogging({ rootDir: ROOT_DIR, isDevRun: IS
 if (pendingDeletion.ran) console.log(`[data] deleted: ${pendingDeletion.results.map((r) => `${r.id} ${r.status}`).join(', ')}`);
 // Anything that escapes a promise or a callback, from here on: log it (to
 // app.log too) instead of letting it kill a listener silently.
-// A scrubbed copy also goes to the local crash ring (src/crash-reports.js); nothing is sent.
+// A scrubbed copy also goes to the local crash ring; structural reports are sent only after renewed opt-in.
 const CrashReports = require('./src/crash-reports.js').create({
   dir: path.join(ROOT_DIR, 'crash-reports'),
+  send: require('./src/crash-report-sender.js').create({ fetch: (...args) => net.fetch(...args) }), // privacy-flow: crash-send
   app: { version: app.getVersion(), os: process.platform, osVersion: os.release(), arch: process.arch },
   scrubWith: () => {
     const names = [];
@@ -3638,7 +3639,7 @@ function commitConfig(partial) {
 }
 
 utilityHandle('get-privacy', settingsOnly, () => { try { return fs.readFileSync(path.join(__dirname, 'PRIVACY.md'), 'utf8'); } catch { return null; } });
-utilityHandle('crash-reports:state', settingsOnly, () => ({ optedIn: CrashReports.isOptedIn(), count: CrashReports.list().length, latest: CrashReports.payload() }));
+utilityHandle('crash-reports:state', settingsOnly, () => ({ optedIn: CrashReports.isOptedIn(), count: CrashReports.list().length, latest: CrashReports.latest() ? JSON.stringify(require('./board/shared/crash-report.cjs').wireReport(CrashReports.latest()), null, 2) : '' }));
 utilityHandle('crash-reports:set-opt-in', settingsOnly, (_e, on) => ({ optedIn: CrashReports.setOptIn(on === true) }));
 utilityHandle('crash-reports:export', settingsOnly, async (e) => {
   const r = await dialog.showSaveDialog(BrowserWindow.fromWebContents(e.sender) || undefined, {
