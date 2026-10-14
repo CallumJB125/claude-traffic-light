@@ -30,7 +30,7 @@ async function fixture(t, options = {}) {
   return { adapter, origin, grant, call, linked, link: connected.value.link };
 }
 
-test('terminal channel: write alone is unconfirmed; exact provider accept and reply provide receipt', async t => {
+test('terminal channel: write alone is unconfirmed; exact provider accept and reply provide receipt', { timeout: 10_000 }, async t => {
   const f = await fixture(t), id = crypto.randomUUID(), received = [];
   // Control only the send deadline, so this success path follows actual HTTP
   // and receipt events without racing CI scheduling against 100 ms. Restore
