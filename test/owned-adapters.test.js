@@ -44,7 +44,8 @@ test('FAKE claude: message reaches the selected owned session only, with lifecyc
   } finally { x.hub.stopAll(); }
 });
 test('FAKE claude: isolation flags and minimal env reach the child; logins and secrets do not', async () => {
-  const x = claude();
+  const passedEnv = [];
+  const x = claude({ spawn: (bin, args, opts) => { passedEnv.push(Object.keys(opts.env).sort()); return spawnProviderFixture(bin, args, opts); } });
   try {
     const A = await x.launch();
     await x.send(A, 'ENV');
@@ -55,7 +56,13 @@ test('FAKE claude: isolation flags and minimal env reach the child; logins and s
     assert.equal(flag('--setting-sources'), ''); assert.equal(flag('--tools'), '');
     assert.equal(flag('--permission-mode'), 'dontAsk'); assert.equal(flag('--permission-prompts'), 'none');
     assert(!argv.includes('--mcp-config') && !argv.includes('--plugin-dir') && !argv.includes('--settings') && !argv.some((a) => /bypass|dangerously/i.test(a)));
-    assert.deepEqual(env.filter((k) => !['HOME', 'PATH', 'TMPDIR', 'CLAUDE_CODE_DISABLE_AUTO_MEMORY', 'DISABLE_TELEMETRY', 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', '__CF_USER_TEXT_ENCODING'].includes(k)), []);
+    const allowed = ['HOME', 'PATH', 'TMPDIR', 'CLAUDE_CODE_DISABLE_AUTO_MEMORY', 'DISABLE_TELEMETRY', 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC'];
+    assert.deepEqual(passedEnv, [[...allowed].sort()], 'the adapter passes only its exact environment allowlist');
+    // libuv supplies fixed OS bootstrap variables on Windows even for a
+    // deliberately minimal env. These are not caller credentials or secrets.
+    const bootstrap = process.platform === 'win32' ? ['HOMEDRIVE', 'HOMEPATH', 'LOGONSERVER', 'SYSTEMDRIVE', 'SYSTEMROOT', 'TEMP', 'USERDOMAIN', 'USERNAME', 'USERPROFILE', 'WINDIR'] : ['__CF_USER_TEXT_ENCODING'];
+    assert.deepEqual(env.filter((k) => ![...allowed, ...bootstrap].includes(k)), []);
+    for (const forbidden of ['ANTHROPIC_API_KEY', 'GEMINI_API_KEY', 'SECRET_TOKEN', 'CLAUDE_CODE_ENTRYPOINT']) assert.equal(env.includes(forbidden), false, forbidden);
   } finally { x.hub.stopAll(); }
 });
 test('Claude edit tools exist only for a cwd inside an explicit safe root', async (t) => {
