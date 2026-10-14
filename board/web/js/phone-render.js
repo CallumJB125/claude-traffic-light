@@ -30,7 +30,7 @@ function freshness(loadedAt, now, error) {
     btn('refresh', 'Refresh', { kind: 'quiet small' }));
 }
 
-function signin(st) {
+function signin(st, ui) {
   const a = st.auth;
   const err = a.error ? h('p', { class: 'field-error', role: 'alert', id: 'auth-error' }, a.error) : null;
   const described = a.error ? 'auth-error' : null;
@@ -39,8 +39,12 @@ function signin(st) {
       h('div', { class: 'brand' }, h('img', { src: '/web/phone-icon-192.png', alt: '', width: '56', height: '56' }), h('h1', null, 'Plexiform on your phone')),
       h('p', { class: 'lead' }, 'Sign in with your Plexiform account using Google or GitHub.'),
       noticeBar(st.notice),
-      btn('browser-signin', 'Continue with Google or GitHub', { kind: 'primary' }),
-      h('div', { id: 'browser-signin-status', role: 'status' }),
+      btn('browser-signin', 'Continue with Google or GitHub', { kind: 'primary', disabled: ui.browserSigningIn }),
+      h('div', { id: 'browser-signin-status', role: 'status' },
+        ui.browserSignin?.error ? h('p', null, ui.browserSignin.error) : ui.browserSignin ? [
+          h('p', null, `Your code is ${ui.browserSignin.code}. Check it matches on the next screen.`),
+          h('a', { href: ui.browserSignin.url, class: 'btn primary' }, 'Continue to sign in'),
+        ] : null),
       h('form', { class: 'stack', 'data-form': 'email', novalidate: true, hidden: a.emailEnabled === false || null },
         h('label', { for: 'email' }, 'Email'),
         h('input', { id: 'email', name: 'email', type: 'email', autocomplete: 'email', inputmode: 'email', required: true, 'aria-describedby': described, value: a.email }),
@@ -177,7 +181,7 @@ function session(st, now, ui) {
 
 export function phoneView(st, now, ui = { confirmClose: false }) {
   if (st.view === 'boot') return h('main', { class: 'screen' }, h('p', { class: 'muted' }, 'Loading…'));
-  if (st.view === 'signin') return signin(st);
+  if (st.view === 'signin') return signin(st, ui);
   if (st.view === 'hosts') return hosts(st, now);
   if (st.view === 'sessions') return sessions(st, now);
   if (st.view === 'session' && st.session) return session(st, now, ui);
