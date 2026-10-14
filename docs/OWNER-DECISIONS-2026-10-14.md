@@ -80,8 +80,10 @@ This is a source audit, not a replay of a real team incident or provider accepta
 Earlier desktop starts/quit attempts stalled in a synchronous file open. A temporary
 trace identified an optional Burst read on main and was removed before packaging.
 After the bounded async fix, a later privileged filesystem trace/restart reached a
-responsive installed board and passed doctor. No OS permissions were changed. The
-trace did not reproduce a slow open, so every earlier stall's cause is not proven.
+responsive installed board and passed doctor. The owner enabled macOS Full Disk
+Access during diagnosis (observed OFF, then ON); the agent did not change OS
+permissions. Normal launch and native export succeeded afterward. The trace did
+not reproduce a slow open, so every earlier stall's cause is not directly proven.
 Preserve this startup reliability concern and its failed evidence.
 
 ## Windows
