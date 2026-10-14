@@ -56,7 +56,7 @@ function create({ entitlements, clipboard, docFor, adapters = defaultAdapters(),
     if (!h) return { ok: false, error: 'That hand-off has already ended.' };
     live.delete(id);
     h.off();
-    try { h.adapter.release({ target: h.target }); } catch { /* gone */ }
+    try { Promise.resolve(h.adapter.release({ target: h.target })).catch(() => {}); } catch { /* gone */ }
     if (h.folder) fs.rmSync(h.folder, { recursive: true, force: true });
     return { ok: true };
   }

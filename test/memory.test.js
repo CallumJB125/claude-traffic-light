@@ -362,3 +362,19 @@ test('register(ctx): the team-search handler hands main only the words and date,
     assert.equal(asked[0].q.length, 200); assert.equal(asked[0].since, '2026-09-01T00:00:00.000Z');
   } finally { for (const fn of quits) fn(); r.done(); }
 });
+
+
+test('ending a handoff tolerates an asynchronous provider release failure', async () => {
+  const h = Handoff.create({ entitlements: ent('plus'), clipboard: clip(), docFor: async () => DOC,
+    adapters: { codex: () => ({
+      open: async () => ({ target: 'fixture' }), on: () => () => {}, send: async () => {},
+      release: async () => { throw Error('Provider already exited'); }, stop() {},
+    }) }, workspace: () => testTempDir('plex-handoff-release-') });
+  try {
+    const result = await h.hand(null, 'codex');
+    assert.equal(result.mode, 'launched');
+    assert.equal(h.end(result.id).ok, true);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(h.live(), 0);
+  } finally { h.stop(); }
+});
