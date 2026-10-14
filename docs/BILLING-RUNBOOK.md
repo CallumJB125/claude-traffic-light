@@ -15,12 +15,11 @@ products, keys, webhooks or deploys.
   and the webhook is not a route.
 - **Web** (`/billing`): plan, seats used / paid, Subscribe, Manage billing.
 - **Desktop** (`src/entitlement-refresh.js`, Plan & billing page): asks the
-  signed-in hub once a day and on sign-in. `src/entitlement-keys.js:10` is
-  **empty**, so `src/entitlements.js:73` sets `BETA_ALL_FEATURES` and every
-  install is full-featured (top plan, every Plus/Team feature) until a key is
-  pinned. Free-tier limits are not enforced in this build.
-  `PLEXIFORM_FORCE_FREE=1` turns the beta off (`src/entitlements.js:179`) to
-  exercise the free path.
+  signed-in hub once a day and on sign-in. `src/entitlement-keys.js` now pins
+  the hub's public key. `src/release-policy.js` explicitly sets
+  `BETA_ALL_FEATURES: true`, preserving full beta access independently of
+  key installation or rotation. `PLEXIFORM_FORCE_FREE=1` exercises the free
+  path. Paid billing remains disabled.
 - **Card data:** never stored. Only the provider's customer and subscription
   ids, plan, seats, status and period end are kept.
 
@@ -54,7 +53,10 @@ products, keys, webhooks or deploys.
    the secret API key (a restricted key that can create Checkout and portal
    sessions is enough) as `BOARD_BILLING_API_KEY`. Set `BOARD_BILLING_PROVIDER=stripe`.
    Keep both secrets in the root-only env file, never in git.
-4. **Generate and pin the entitlement signing key.** On the hub host:
+4. **Entitlement signing key.** The 2026-10-14 candidate pins the generated
+   public key; staging and production read the matching protected key from
+   `/etc/buddy-hub/entitlement-key-20261014.pem`. Do not regenerate it during
+   routine deployment. For a future rotation, on the hub host:
    `node board/hub/scripts/gen-entitlement-key.mjs --out /etc/buddy-hub/entitlement-key.pem`
    (outside the repo; mode 0600; it refuses to overwrite). Set
    `BOARD_ENTITLEMENT_KEY_FILE` to that path. Paste the printed **public** key

@@ -145,7 +145,7 @@ Windows: the installer lifecycle check is a same-version upgrade-mode test only.
 
 - [ ] Update `docs/release-notes.md` (the release body is shown in the draft release) and `site/src/changelog.html` with the real date.
 - [ ] Rebuild and deploy the site if the download page changed (site deploy is **[OWNER]**; flags live in `site/site.config.json`: `windowsDownloads`, `phone`, `publicSignup`).
-- [ ] Watch for crash reports: sending is not built, so users report problems through the feedback form or support. Plan to check the GitHub issues and feedback board daily for the first week.
+- [ ] Review optional structural crash reports in the private hub intake (new reports after renewed consent only; no error text or stacks). Feedback and support remain the source of detailed user reports. Check GitHub issues and the feedback board daily for the first week.
 - [ ] Write the release SHA, the promote time and `issuedAt` in the handover notes.
 
 ## G. Rollback quick reference

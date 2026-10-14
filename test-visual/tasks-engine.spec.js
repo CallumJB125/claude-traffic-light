@@ -22,9 +22,13 @@ test('Tasks desktop starts its real helper, edits durable checkpoints, restarts 
     await expect(page.locator('#main h2')).toHaveText('No tasks yet', { timeout: 20000 });
     await page.locator('#new-task').click();
     await expect(page.locator('#c-ai option[value="codex"]')).toBeEnabled({ timeout: 10000 });
-    // Claude Code found on this Mac is listed (not in Tasks yet) but never choosable; the helper still never runs it.
+    // Supported desktop platforms now offer Claude; this fixture still runs only fake Codex.
     const claudeOption = page.locator('#c-ai option[value="claude"]');
-    if (await claudeOption.count()) await expect(claudeOption).toBeDisabled();
+    if (await claudeOption.count()) {
+      if (process.platform === 'win32') await expect(claudeOption).toBeDisabled();
+      else await expect(claudeOption).toBeEnabled();
+    }
+    await page.locator('#c-ai').selectOption('codex');
     await expect(page.locator('#c-perm')).not.toContainText('Ask me');
     await page.fill('#c-text', 'Build the isolated fixture'); await page.locator('#c-folder-btn').click(); await page.locator('#c-go').click();
     await expect(page.locator('#d-head .d-state')).toContainText('Ready to review', { timeout: 20000 });
