@@ -2,6 +2,8 @@
 const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('sessionsApi', {
   state: () => ipcRenderer.invoke('sessions:state'),
+  selection: () => ipcRenderer.invoke('buddy:session-selection'),
+  onSelection: cb => { const listener = (_e, key) => { if (typeof key === 'string' && /^[\w.-]{1,200}$/.test(key)) cb(key); }; ipcRenderer.on('sessions:selection', listener); return () => ipcRenderer.removeListener('sessions:selection', listener); },
   aiTools: () => ipcRenderer.invoke('sessions:aitools'),
   handover: (action, key) => ipcRenderer.invoke('sessions:handover', action, key),
   timeline: key => ipcRenderer.invoke('timeline:open', key),

@@ -1,4 +1,6 @@
 import { h } from './h.js';
+import { isObservedWork } from '../../shared/capture-lane.js';
+import { reportedSessionContext } from './local-session-context.js';
 
 const REASONS = { awaiting_heartbeat: 'Waiting for a fresh host heartbeat', not_current: 'Previous run', read_only: 'Read only',
   hub_restarted: 'Waiting after board restart', connection_changed: 'Host connection changed', expired: 'Heartbeat expired',
@@ -20,6 +22,7 @@ export function ownershipPanel(detail, model, elapsed = 0) {
     h('button', { class: 'btn btn-sm', 'data-action': 'ownership-reload' }, 'Reload coordination'));
   if (!detail.ownershipLoaded) return h('p', { class: 'muted', role: 'status' }, 'Loading coordination…');
   const data = detail.ownership, connected = model.conn?.status === 'open', own = data?.ownership;
+  const observed = isObservedWork(detail.data.card), report = reportedSessionContext(detail);
   const peers = (data?.ownership_intents ?? []).filter(p => p && p.run_id !== own?.run_id);
   const paths = (entry) => entry.paths?.length ? h('ul', { class: 'md-list' }, entry.paths.map(p => h('li', { key: p }, h('code', null, p))))
     : h('p', { class: 'muted small' }, 'No file paths declared.');
@@ -31,8 +34,18 @@ export function ownershipPanel(detail, model, elapsed = 0) {
     entry.paths_truncated ? h('p', { class: 'muted small' }, 'Showing the first 20 declared paths.') : null);
   return h('div', { class: 'task-ownership' },
     h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-action': 'ownership-reload' }, 'Refresh coordination'),
+    observed ? h('section', { class: 'dsec', 'aria-label': 'Reported file activity' },
+      h('h3', null, 'Reported file activity'),
+      h('p', { class: 'muted small' }, 'These paths come from a session report. They are not ownership declarations or file locks.'),
+      report?.files.length ? h('ul', { class: 'md-list' }, report.files.map(path => h('li', { key: path }, h('code', null, path))))
+        : h('p', { class: 'muted' }, 'No file paths reported for this session.'),
+      report?.more ? h('p', { class: 'muted small' }, `${report.more} more files were reported.`) : null,
+      h('div', { class: 'drawer-actions' },
+        h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-action': 'tab', 'data-tab': 'packet' }, 'View task context'),
+        typeof globalThis.plexiformDesktop?.openTimeline === 'function'
+          ? h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-action': 'open-timeline', 'data-card': detail.cardId }, 'Open timeline') : null)) : null,
     h('p', { class: 'muted small' }, 'Declared paths help teammates coordinate. They do not lock files or grant permission to edit.'),
-    own ? h('div', null, h('h3', null, 'This task'), h('ul', { class: 'comments' }, participant(own)))
+    own ? h('div', null, h('h3', null, 'Declared work on this task'), h('ul', { class: 'comments' }, participant(own)))
       : h('p', { class: 'muted' }, 'This task has no current agent declaration.'),
     data?.ownership_overlaps?.length ? h('section', { 'aria-label': 'Declared overlaps' }, h('h3', null, 'Declared paths overlap'),
       h('p', { class: 'muted small' }, 'Check with the teammate before editing shared files.'),

@@ -16,7 +16,7 @@ const path = require('node:path');
 const http = require('node:http'); // privacy-flow: local-board-hub
 const crypto = require('node:crypto');
 const { pathToFileURL } = require('node:url');
-const { BaseWindow, BrowserWindow, WebContentsView, ipcMain, session, shell, utilityProcess, app, nativeTheme, net, safeStorage, dialog } = require('electron'); // privacy-flow: team-hub-account
+const { BaseWindow, BrowserWindow, WebContentsView, ipcMain, session, shell, utilityProcess, app, nativeTheme, net, safeStorage, dialog, clipboard } = require('electron'); // privacy-flow: team-hub-account
 const { PAGES, GROUPS, SECTIONS, FOOTER, sectionsFor, pageById, hubPageUrl, fragmentOk, navDecision, openDecision, connectDecision, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl } = require('./pages');
 const { createHubSupervisor } = require('./hub-process');
 const { createWorkspaceStore, normalizeHubUrl, normalizeLinkHub, accessTeamFromLocation, partitionFor: teamPartition, integrationPartitionFor, hubKey, hostOf } = require('./workspaces');
@@ -181,6 +181,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   let sidebar = null;
   let content = null; // the view currently attached on the right
   let hubView = null;
+  let hubDocument = 0;
   let infoView = null;
   let accountView = null;
   let accountLoad = Promise.resolve();
@@ -294,6 +295,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     userData, hubs: () => store.hubs().filter(signedIn), clientFor, userOf, signedIn, supervisor, workCapture, handoverWriter, home: os.homedir(), log: (m) => log(m),
     // null: the personal board; an origin: that team hub; undefined: no hub page is showing.
     currentHub: () => (hubInfo && content === hubView ? (hubInfo.team ? hubInfo.origin : null) : undefined),
+    currentTeam: () => hubInfo?.team ? hubInfo.org : null,
   });
 
   async function setupSources() {
@@ -679,6 +681,9 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     });
     view.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#1c1a1f' : '#eceaf0');
     const wc = view.webContents;
+    wc.on('did-start-navigation', d => { if (d.isMainFrame && !d.isSameDocument) hubDocument++; });
+    wc.on('render-process-gone', () => { hubDocument++; });
+    wc.once('destroyed', () => { hubDocument++; });
     if (h.client) clientDownloads.set(hubSes, (url, sender, gesture) => {
       const current = () => !!win && view === hubView && content === view && hubInfo?.client && hubInfo.origin === h.origin && signedIn(h.origin);
       if (!gesture || sender !== wc || !current()) return;
@@ -943,6 +948,26 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     });
   }
   const fromHubView = (e) => !!hubView && e.sender === hubView.webContents && !!hubInfo && e.senderFrame?.origin === hubInfo.origin;
+  let selectedSessionKey = null;
+  const cardSessionAction = require('./card-session-actions').create({
+    bridge: sessionBridge,
+    capture(e) {
+      if (!fromHubView(e) || e.senderFrame !== hubView.webContents.mainFrame || content !== hubView || !win?.isFocused()) return null;
+      return { view: hubView, info: hubInfo, frame: e.senderFrame, document: hubDocument, url: e.senderFrame.url, org: hubInfo.org, workspace: store.active()?.id,
+        marker: hubInfo.bearer ? vault(hubInfo.origin).load() : null };
+    },
+    current(t) { return t.view === hubView && t.info === hubInfo && t.document === hubDocument && t.frame === hubView?.webContents.mainFrame && t.url === t.frame.url && t.org === hubInfo?.org
+      && t.workspace === store.active()?.id && t.marker === (hubInfo?.bearer ? vault(hubInfo.origin).load() : null) && content === hubView && !!win?.isFocused(); },
+    copy: text => clipboard.writeText(text),
+    choose: async () => { const r = await dialog.showSaveDialog({ title: 'Save session handover', defaultPath: path.join(app.getPath('downloads'), 'session-handover.md'), filters: [{ name: 'Markdown', extensions: ['md'] }] }); return r.canceled ? null : r.filePath; },
+    save: (file, text) => fs.writeFileSync(file, text, { mode: 0o600 }),
+    open(key) { selectedSessionKey = key; select('sessions'); const wc = localViews.get('sessions')?.webContents; if (!wc) return false; if (!wc.isLoading()) wc.send('sessions:selection', key); return true; },
+  });
+  ipcMain.handle('buddy:card-session-action', async (e, action, cardId) => { try { return await cardSessionAction(e, action, cardId); } catch { return { ok: false, error: 'Could not complete this session action. Try again.' }; } });
+  ipcMain.handle('buddy:session-selection', e => {
+    const wc = localViews.get('sessions')?.webContents;
+    return wc && e.sender === wc && e.senderFrame === wc.mainFrame && isLocalPage(e.senderFrame.url) ? selectedSessionKey : null;
+  });
   ipcMain.on('buddy:open-team', (e) => { if (fromHubView(e)) select('team'); });
   ipcMain.handle('buddy:local-handover', async (e, cardId) => {
     if (!fromHubView(e)) return null;
