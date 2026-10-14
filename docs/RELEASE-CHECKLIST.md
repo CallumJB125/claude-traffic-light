@@ -30,7 +30,7 @@ Nothing on this page has been run as part of writing it. Current state, read fro
 - [ ] `docs/release-notes.md` and `site/src/changelog.html` match what is in the build (see `docs/claims-audit-2026-10-09.md`). Uncomment a draft line only if it is on main and in the tagged build.
 - [ ] `PRIVACY.md` and `site/src/privacy.html` match the build. Anything new that leaves the machine needs a privacy-flow entry first.
 - [ ] Decide the release version and bump `version` in `package.json`; merge to main. **[OWNER]** decides the number and whether this is a stable or a beta release.
-- [ ] Windows: leave `WINDOWS_RELEASE` unset unless the exact candidate has passed the Windows acceptance checks (`windows-acceptance.yml`). Setting it never bypasses tests. **[OWNER]**
+- [ ] Windows: leave `WINDOWS_RELEASE` unset unless the exact candidate has passed the Windows acceptance checks (`release.yml`, artifact-only dispatch with `validation_platform=win` and `beta=false`). Setting it never bypasses tests. **[OWNER]**
 
 ## B. Signing and notarisation (macOS and Windows) **[OWNER]**
 
@@ -168,3 +168,9 @@ electron-updater only after the existing signed-manifest checks; ad-hoc packages
 retain the existing verified swap path. Signed Windows packaging also requires
 a certificate when signing is required. This code does not constitute signed
 installer, notarization, Windows device or legal/privacy acceptance.
+
+For a focused artifact-only rerun, dispatch `release.yml` with a full candidate
+SHA as `ref`, `beta=false`, and `validation_platform=linux`, `mac`, or `win`.
+The selected platform still runs all unit and installer checks; native Windows
+directory acceptance also runs. The selector is ignored for beta and tag
+releases, so release staging always requires the complete approved matrix.
