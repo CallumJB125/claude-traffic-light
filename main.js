@@ -1624,7 +1624,7 @@ ipcMain.handle('sessions:aitools', e => { if (!sessionsSender(e)) return false; 
 let overviewTeams={host:null,at:0,value:null},overviewTeamHub=null;
 // Team brief + team_* MCP tools (src/team-activity.js), opt-in via teamBrief.
 const TeamActivity=require('./src/team-activity').createTeamActivity({enabled:()=>loadConfig().teamBrief===true,resolve:async(a)=>(devMockReady?(await getBuddy().teamActivityLink?.(a))??null:null),teams:async()=>(devMockReady?(await getBuddy().teamMemoryLinks?.())??[]:[]),fetch:(...a)=>net.fetch(...a),log:m=>console.log(m)}); // privacy-flow: team-brief
-const liveTeamHub=require('./src/team-hub-live').createLiveTeamHub({identity:()=>devMockReady?getBuddy().interactionHostIdentity?.()??null:null,fetch:(...a)=>net.fetch(...a)}); // privacy-flow: team-hub-directory
+const liveTeamHub=require('./src/team-hub-live').createLiveTeamHub({identity:()=>app.isReady()&&devMockReady?getBuddy().interactionHostIdentity?.()??null:null,fetch:(...a)=>net.fetch(...a)}); // privacy-flow: team-hub-directory
 if(IS_DEV_RUN&&!app.isPackaged&&process.env.CLAUDE_BUDDY_FAKE_TEAM_HUB){try{overviewTeamHub=require('./src/team-hub-fake').createFakeTeamHub(JSON.parse(fs.readFileSync(process.env.CLAUDE_BUDDY_FAKE_TEAM_HUB,'utf8')));}catch(e){console.warn('[overview] fake team hub not loaded:',e.message);}}
 const OverviewMain=require('./src/overview-main').createOverviewMain({
   buddy:()=>buddyWin,sessions:()=>aggregateState().sessions||[],
@@ -1642,7 +1642,9 @@ const OverviewMain=require('./src/overview-main').createOverviewMain({
 });
 OverviewMain.register(ipcMain);
 overviewTeamHub?.onChange(()=>OverviewMain.directoryChanged());
-if(!overviewTeamHub)liveTeamHub.onChange(()=>OverviewMain.directoryChanged());
+// A subscription reads the current identity immediately. Electron's secure
+// storage is unavailable before ready; do not construct the account vault then.
+app.whenReady().then(()=>{if(!overviewTeamHub)liveTeamHub.onChange(()=>OverviewMain.directoryChanged());});
 onQuit(app,()=>{liveTeamHub.close();OverviewMain.close();});
 // Owned-session interaction: Plexiform starts its own provider sessions and
 // talks only to those. Existing unmanaged sessions stay observation-only.

@@ -134,7 +134,11 @@ function createWorkspaceStore(file, { allowOrigins = [], signedIn = () => true }
   } catch { /* first run or unreadable: local only */ }
 
   const list = () => buildWorkspaceList({ hubs: data.hubs, teams: data.teams, access: data.access, signedIn });
-  if (!list().some((w) => w.id === data.active)) data.active = 'local';
+  // Validate the remembered choice without consulting OS credential storage.
+  // A locked store hides team workspaces until it recovers, but must not turn
+  // an unrelated preference save into a permanent switch to the local board.
+  const known = buildWorkspaceList({ hubs: data.hubs, teams: data.teams, access: data.access });
+  if (!known.some((w) => w.id === data.active)) data.active = 'local';
 
   function save() {
     fs.mkdirSync(path.dirname(file), { recursive: true });

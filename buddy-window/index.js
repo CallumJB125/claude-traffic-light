@@ -143,8 +143,11 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     v = {
       load() {
         if (cache !== undefined) return cache;
-        cache = null;
-        try { if (fs.existsSync(file)) cache = JSON.parse(credentialStorage.decrypt(fs.readFileSync(file))); } catch (e) { log('account sign-in unreadable; treated as signed out', e.message); }
+        // Locked/unready OS storage can recover during this process. Keep the
+        // sealed file and retry later instead of caching a permanent sign-out.
+        if (!credentialStorage.available()) return null;
+        try { cache = fs.existsSync(file) ? JSON.parse(credentialStorage.decrypt(fs.readFileSync(file))) : null; }
+        catch (e) { log('account sign-in unreadable; treated as signed out', e.message); return null; }
         if (cache && cache.hub !== origin) cache = null;
         return cache;
       },
