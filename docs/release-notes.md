@@ -3,7 +3,7 @@ Plexiform 1.0.2 public beta — 15 October 2026
 This preview is available for macOS (Apple silicon and Intel) and Linux (x64).
 
 **What changed**
-- Home's optional starter-pack detection reads recent project folders in one bounded background worker. An unavailable or permission-blocked folder cannot freeze the main window; dismissed or unnecessary suggestions do not scan those folders.
+- Home's optional starter-pack detection reads recent project folders in a separate helper process with a deadline. An unavailable folder cannot freeze navigation or leave shutdown waiting for a blocked thread. Dismissed or unnecessary suggestions do not scan those folders.
 - Open a shared Team session to see its task, current reported activity, messages, exact-text receipts and streamed output. Send to the selected session, steer its current turn or request interruption where the provider and explicit share allow it. Every final action is bound to the reviewed session generation and turn.
 - Codex and Claude report fixed activity categories such as thinking, reading, searching and editing. Tool arguments and raw commands are not included. A steering receipt is separate from evidence that the requested correction was applied; its output view starts after that message.
 - Busy sessions without steering let you keep a local draft until sending becomes available. Drafts are not queued or sent automatically. Refused and uncertain actions preserve drafts and are never retried automatically.
@@ -22,7 +22,7 @@ This preview is available for macOS (Apple silicon and Intel) and Linux (x64).
 - Windows downloads remain unavailable pending runtime and privacy acceptance. Public phone access and Linear/Jira delivery remain gated.
 - Public account registration remains closed. Existing invited teams use Google or GitHub sign-in; production email sign-in is not enabled.
 - Mac builds use ad-hoc signing and are not Apple-notarized. Follow the installation guidance at https://plexiform.dev/download; verify the download checksum.
-- macOS folder permissions can affect filesystem features. A normal installed beta.67 Home navigation stalled on synchronous directory scanning; the follow-up moves the optional starter scan off main with a deadline. Other earlier file-access stalls do not all have a proven cause. Linux device acceptance beyond CI continues.
+- macOS folder permissions can affect filesystem features. Normal installed beta.67 Home navigation stalled on synchronous directory scanning; the follow-up isolates the optional starter scan with a deadline and process cleanup. Other earlier file-access stalls do not all have a proven cause. Linux device acceptance beyond CI continues.
 - A signed update feed verifies release bytes; it does not establish Apple/Windows platform signing or a completed real-device update acceptance check.
 
 **Install**
