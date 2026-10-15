@@ -74,7 +74,9 @@ test('act: a refused action never reaches the supervisor and comes back as plain
 });
 
 test('send a message to a task round-trips into its thread', async () => {
-  const t = await until(() => svc.snapshot().tasks.find((x) => x.actions.includes('message')));
+  // Demo runs advance at speed40. A running row can lose its message action
+  // while openTask awaits the socket; review waits for this deliberate action.
+  const t = await until(() => svc.snapshot().tasks.find((x) => x.state === 'in_review' && x.actions.includes('message')));
   const opened = await svc.openTask(t.id);
   const r = await svc.act({ id: t.id, action: 'message', payload: { body: 'please also add tests' } });
   assert.equal(r.ok, true, JSON.stringify(r));

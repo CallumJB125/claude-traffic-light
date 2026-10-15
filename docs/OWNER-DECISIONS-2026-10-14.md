@@ -29,7 +29,7 @@ and isolated public/installed smokes pass. Pending-Keychain navigation is usable
 After direct owner approval, the saved team account restored. A real routing defect
 was then observed: restoring off a hub page retains the cached local board, so Board
 can show local My board under a team workspace label. Local Live is not team Live.
-A focused beta.76 follow-up is in progress; published beta.74 bytes are immutable.
+A focused beta.77 follow-up is in progress; published beta.74 bytes are immutable.
 Public team-board, Quit and unchanged-restart acceptance remain open. UI automation
 is paused after concurrent app interaction and an owned Claude conversation appeared.
 
@@ -371,3 +371,34 @@ conversation may survive even when its renderer no longer displays the controls.
 The live backend has no read-only inventory exposed to this UI. No End, Send,
 Quit or install action was issued against that conversation. A disk backup cannot
 restore its in-memory provider context or an unsent reply.
+
+## Beta.76 retained failures and beta.77 fixture correction
+
+Release run `38780052146` at frozen `bc7ccd1e` failed before staging in both
+attempts. Linux passed: root 4,942 plus 21 skips, remote 220, board 3,106 plus
+one skip, and packaged smoke. Windows native 69+166+71 passed.
+
+Mac attempt one passed native49, root4,951 plus12 skips and remote220, then
+board3,105 passed/two failed. Both failures were an extra single process-table
+observation after the backend had already returned a verified stop and was
+not alive. The known stop fixture passed9/9 in isolation; an unchanged failed-job
+retry preserved every assertion. Unknown process-table evidence and observed
+live processes both fail that probe; the failed boolean cannot distinguish them.
+
+Attempt two passed native49, remote220 and all3,107 board tests, including those
+stop cases. Root passed4,950/failedone/skipped12: the task-message test selected
+a speed40 demo run that could change state while openTask awaited the socket.
+The stale-action guard correctly returned ILLEGAL_TRANSITION. The test now
+selects a stable in_review task advertising message and still requires the real
+Unix-socket round trip and exact human-message event. Its21 checks pass.
+
+No beta.76 package, public feed or website update occurred. Both attempts and
+the classification are retained in the task workspace. Beta.77 will carry the
+same routing runtime; no production process-stop or task guard was relaxed.
+
+Fresh browser checks recovered: GitHub OAuth signs in but its separate identity
+reaches Create or join a team, without the existing Google-team membership.
+A subsequent fresh Google sign-in as callum@pistorventures.org reached Callum's
+team Board with Live status. No team was created/joined and no invite was sent.
+The browser was restored to the Google team board. This supersedes earlier
+browser-policy-service unavailability; native77 acceptance remains separate.
