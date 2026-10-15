@@ -1,8 +1,9 @@
-Plexiform 1.0.2 public beta — 15 October 2026
+Plexiform 1.0.2-beta.72 public beta — 15 October 2026
 
 This preview is available for macOS (Apple silicon and Intel) and Linux (x64).
 
 **What changed**
+- The saved team account loads after local secure storage is ready at startup. If storage is temporarily unavailable, reading the retained sign-in remains retryable instead of treating the account as absent.
 - Home's optional starter-pack detection reads recent project folders in a separate helper process with a deadline. An unavailable folder cannot freeze navigation or leave shutdown waiting for a blocked thread. Dismissed or unnecessary suggestions do not scan those folders.
 - Open a shared Team session to see its task, current reported activity, messages, exact-text receipts and streamed output. Send to the selected session, steer its current turn or request interruption where the provider and explicit share allow it. Every final action is bound to the reviewed session generation and turn.
 - Codex and Claude report fixed activity categories such as thinking, reading, searching and editing. Tool arguments and raw commands are not included. A steering receipt is separate from evidence that the requested correction was applied; its output view starts after that message.
