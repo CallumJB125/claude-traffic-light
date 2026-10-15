@@ -8,7 +8,20 @@ The original `claude/release` checkout and handover are preserved. Implementatio
 PR #7 remains unmerged. The owner subsequently authorized public beta publication;
 the release-note-only PR #8 was merged into `main` for the signing workflow.
 
-## Current status — 15 October 2026
+## Current local startup candidate — 15 October 2026
+
+Public downloads remain beta.72. The installed app is a local beta.73 candidate
+at `9120098147959b01e249eeb437e4a59dd3c55220`, not a public release. Responsive
+pending-Keychain navigation and Quit passed. Owner-approved saved-account
+restoration into Callum's team, Live board, Home/Overview/Team sessions and Quit
+also passed. The unchanged fresh restart asks for Keychain authorization again;
+persistent authorization remains unaccepted. No new release was staged or
+promoted. Full evidence, retained failures and scope limits are recorded in
+[SESSION-INTERACTION-2026-10-15.md](SESSION-INTERACTION-2026-10-15.md).
+
+## Public beta.72 release evidence
+
+The following beta.72 installation observations predate the local candidate.
 
 The public desktop release is `1.0.2-beta.72`, frozen source
 `09b4495146dd27d1cd8f7e0275344103f8777035`. Its

@@ -1,25 +1,31 @@
 # Session interaction implementation — 15 October 2026
 
-## Current release
+## Current release and local candidate
 
-The public desktop release is `1.0.2-beta.72`, frozen source
-`09b4495146dd27d1cd8f7e0275344103f8777035`. Its
-[build/stage run](https://github.com/CallumJB125/claude-traffic-light/actions/runs/38717768703)
-and [signed promotion](https://github.com/CallumJB125/claude-traffic-light/actions/runs/38761070371)
-passed. Public GitHub source/prerelease/notes and independent signed-manifest,
-feed and arm64 ZIP verification passed; the ZIP matches its staged SHA-256.
-The first Linux assertion failure and unchanged-source retry are preserved below.
-The beta.72 site is deployed and the public arm64 app is installed. Its 22 changed
-runtime/privacy files match frozen source; package and installed signature plus
-isolated smoke checks passed. Normal launch is waiting inside macOS Keychain
-authorization for the new app signature; retained-sign-in, Home/navigation and
-clean-Quit acceptance remain pending the owner's direct OS authorization. Two
-browser automation policy-service failures prevent the beta.72 real-browser
-refresh; this is an unchecked surface, not a site result.
-Earlier beta.71 passed installed normal navigation/clean Quit after the owner
-cleared Keychain authorization and reconnected to Callum's team with Live state.
-That does not establish beta.72 update persistence. Implementation PR #7 remains
-draft and unmerged. The original `claude/release` checkout is preserved.
+Public downloads remain `1.0.2-beta.72` at frozen source
+`09b4495146dd27d1cd8f7e0275344103f8777035`. Build/stage
+[38717768703](https://github.com/CallumJB125/claude-traffic-light/actions/runs/38717768703)
+and signed promotion
+[38761070371](https://github.com/CallumJB125/claude-traffic-light/actions/runs/38761070371)
+passed, and the beta.72 site remains deployed. No newer release was staged or
+published. Implementation PR #7 stays draft and unmerged.
+
+The installed app is now a **local beta.73 candidate** from
+`9120098147959b01e249eeb437e4a59dd3c55220`. Its 31 changed runtime/privacy files,
+deep/strict ad-hoc signature and candidate/installed isolated smoke checks pass.
+Real installed Board, Home, Overview and Team sessions remain responsive while
+Keychain authorization waits in the isolated crypto process. Normal Quit exits
+both GUI and credential child while authorization is pending. After the owner
+completed the OS prompt directly, the retained account restored into Callum's
+team with Live board state; navigation and signed-in Quit passed.
+
+The unchanged fresh restart asks for Keychain authorization again. Persistent
+OS authorization and automatic fresh restoration are **not accepted**. The GUI
+remains usable. No security setting or Keychain ACL was changed by automation;
+Computer Use cannot operate the system security dialog. Zero sessions are shared
+with this team and some activity remains unavailable; no real teammate was
+shared or messaged. Public beta.72's earlier blank/blocked-launch evidence remains
+below and does not describe the candidate's responsive UI.
 
 ## Implemented behavior
 
@@ -275,3 +281,42 @@ claimed: signed-in restoration, rendered navigation and a usable fresh restart
 remain open. Post-launch source hashes and deep/strict signature verification
 still match the public package. No Keychain ACL or OS security setting was changed
 by automation. The system security dialog cannot be controlled by Computer Use.
+
+## Async account startup candidate — local only
+
+`db398da6` adds cache-only asynchronous account restoration, awaited encrypted
+saves with generation/cancellation fences, explicit retry after a failed read,
+and remembered-workspace preservation during concurrent hub hydration.
+`91200981` isolates packaged Mac account crypto in a disposable process because
+Electron's native worker can remain alive on Quit while Keychain waits. A fixed
+native guard checks kernel ancestry, executable/code identity, GUI registration,
+startup mode and stable process lifetime before any credential request. Account
+text uses private in-memory pipes, never argv/environment/logs/plaintext files.
+Four packaged unauthorized-launch tests passed, including Electron Node mode.
+The native guard is universal and signed with empty entitlements. Linux's secure
+backend guard remains synchronous, as do existing runner/native-board credential
+paths; they are outside this fix's nonblocking claim. This user profile has no
+saved runner or native-board connection files.
+
+The direct-async candidate's failed native Quit and samples are preserved. The
+isolated candidate passed pending-authorization navigation/Quit and post-approval
+saved-account restoration/navigation/Quit. Its unchanged fresh restart again
+waits for OS authorization; persistent trust is still an owner-controlled gate.
+Screenshots and process evidence are in the adjacent task outputs/work folders.
+Latest completed data backup contains 25 checked SQLite snapshots, with the
+failed direct-async app retained; public beta.72 is retained in the prior backup.
+Legacy MCP processes and caffeinate remain untouched.
+
+Final root run: 4,932 passed, 11 skipped and one updater-helper failure /4,944;
+its unchanged focused rerun passed 1/1. Earlier affected privacy/harness checks
+were repaired and passed 58/58 focused checks. Native run: 42 passed, seven existing
+Setups failures /49; the exact two failed files passed 25/25 unchanged separately.
+All failures remain retained. Their exact causes are unproved; do not call these
+clean full runs or real-device updater acceptance. Logs are
+`work/account-isolation-root-final-tests.log`,
+`work/account-isolation-updater-targeted-retry.log`,
+`work/account-isolation-native-tests.log` and
+`work/account-isolation-native-targeted-retry.log` in the adjacent task workspace.
+Hub auth methods still report Google/GitHub web enabled, email disabled and push
+enabled. Browser refresh remains unchecked after the earlier policy-service
+failure; no bypass or provider configuration change was attempted.
