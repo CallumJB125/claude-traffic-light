@@ -177,6 +177,34 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
 
   const store = createWorkspaceStore(path.join(userData, 'buddy-workspaces.json'), { allowOrigins, signedIn });
   const getTeamHub = () => { const w = store.active(); return w.kind === 'local' ? null : w; };
+  // A restored credential can reveal the remembered workspace without an
+  // explicit switchWorkspace call. Detached board views and pending resolves
+  // must follow that identity change while the user's local page stays put.
+  function activeHubBinding() {
+    const w = store.active();
+    return { workspace: w.id, kind: w.kind, url: w.hub ?? w.url ?? null,
+      org: w.teamId ?? null, marker: w.kind === 'team' ? vault(w.hub).load() : null };
+  }
+  function hubBindingCurrent(binding) {
+    if (!binding) return false;
+    if (binding.client) return !!binding.marker && vault(binding.origin).load() === binding.marker;
+    const current = activeHubBinding();
+    return ['workspace', 'kind', 'url', 'org', 'marker'].every(key => binding[key] === current[key]);
+  }
+  function resolvedHubMatches(h, binding) {
+    if (binding.kind === 'local') return h.team === false && h.partition === partitionFor();
+    if (binding.kind === 'team') return h.team === true && h.bearer === true &&
+      h.origin === binding.url && h.org === binding.org && h.partition === teamPartition(binding.url);
+    return binding.kind === 'access' && h.team === true && !h.bearer &&
+      h.url === binding.url && h.partition === teamPartition(binding.url);
+  }
+  function retireChangedHub() {
+    if ((hubInfo && !hubBindingCurrent(hubBinding)) || (hubLoading && !hubBindingCurrent(hubLoadingBinding))) {
+      forgetHub();
+      return true;
+    }
+    return false;
+  }
 
   const clients = new Map();
   function clientFor(origin) {
@@ -215,8 +243,10 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   let selected = 'board';
   let hubStatus = { state: 'stopped' };
   let hubInfo = null; // {url, origin, accessTeam, partition, team, bearer, org}
+  let hubBinding = null;
   let viewError = null; // the hub is fine but its page failed to load
   let hubLoading = null;
+  let hubLoadingBinding = null;
 
   // Usage optimiser: Burst's dashboard in its own locked view above the native page (see optimiser.js).
   let burstApi = null;
@@ -304,8 +334,8 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   const sessionBridge = createSessionBridge({
     userData, hubs: () => store.hubs().filter(signedIn), clientFor, userOf, signedIn, supervisor, workCapture, handoverWriter, home: os.homedir(), log: (m) => log(m),
     // null: the personal board; an origin: that team hub; undefined: no hub page is showing.
-    currentHub: () => (hubInfo && content === hubView ? (hubInfo.team ? hubInfo.origin : null) : undefined),
-    currentTeam: () => hubInfo?.team ? hubInfo.org : null,
+    currentHub: () => (hubInfo && content === hubView && hubBindingCurrent(hubBinding) ? (hubInfo.team ? hubInfo.origin : null) : undefined),
+    currentTeam: () => hubInfo?.team && hubBindingCurrent(hubBinding) ? hubInfo.org : null,
   });
 
   async function setupSources() {
@@ -392,8 +422,10 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     gen += 1;
     connectLife.bump();
     hubLoading = null; // a resolve for the old hub must not be awaited by the new one
+    hubLoadingBinding = null;
     const old = localUrl();
     hubInfo = null;
+    hubBinding = null;
     viewError = null;
     if (hubView) { if (content === hubView) content = null; dispose(hubView, win); hubView = null; }
     if (old) session.fromPartition(partitionFor()).cookies.remove(old, 'board_local').catch(() => {}); // privacy-flow: local-board-hub
@@ -626,6 +658,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
 
   async function accountStorageChanged(origin, { reason }) {
     if (stopping) return;
+    if (retireChangedHub() && win && isHubPage(selected)) showInfo(pageById(selected));
     pushState();
     if (reason !== 'restored') return;
     const marker = vault(origin).load();
@@ -633,9 +666,13 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     const navigation = setupLocalGeneration, page = selected, workspace = store.activeId();
     try { await flow.refreshAccount(origin); } catch { /* offline accounts can retry later */ }
     if (stopping || vault(origin).load() !== marker) return;
+    const retired = retireChangedHub();
     // Hydration may reveal the remembered team. Preserve navigation performed
     // while waiting, including an explicit switch to the local workspace.
-    if (win && navigation === setupLocalGeneration && page === selected && workspace === store.activeId() && isHubPage(selected)) {
+    // Membership refresh can also remove a team opened during this wait.
+    // Re-render only the currently selected hub page against its fresh scope.
+    if (retired && win && pageById(selected)?.kind === 'hub') select(selected);
+    else if (win && navigation === setupLocalGeneration && page === selected && workspace === store.activeId() && isHubPage(selected)) {
       forgetHub();
       void showHubPage(pageById(selected));
     }
@@ -673,10 +710,11 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     installBearer(origin);
     const h = { url: origin, origin, accessTeam: null, partition: teamPartition(origin), team: true, bearer: true, client: true, org: null };
     hubInfo = h;
+    hubBinding = { client: true, origin, marker: vault(origin).load() };
     const view = makeHubView(h);
     hubView = view;
     await view.webContents.loadURL(`${origin}/clients`); // privacy-flow: team-hub-account
-    if (current !== gen || !win || selected !== 'flow:clients' || view !== hubView || !signedIn(origin)) return;
+    if (current !== gen || !win || selected !== 'flow:clients' || view !== hubView || !hubBindingCurrent(hubBinding)) return;
     attach(view);
     pushState();
   }
@@ -855,19 +893,31 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
 
   async function showHubPage(page) {
     if (!win || !page) return;
+    retireChangedHub();
     const myGen = gen;
+    const binding = activeHubBinding();
     if (!hubInfo) {
       if (hubStatus.state !== 'ready' || getTeamHub()) showInfo(page);
-      if (!hubLoading) { const p = resolveHub().finally(() => { if (hubLoading === p) hubLoading = null; }); hubLoading = p; }
+      if (!hubLoading) {
+        hubLoadingBinding = binding;
+        const p = resolveHub().finally(() => { if (hubLoading === p) { hubLoading = null; hubLoadingBinding = null; } });
+        hubLoading = p;
+      }
       try {
         const h = await hubLoading;
         if (myGen !== gen) return undefined; // the newer caller (switch/connect) owns the load
+        if (!hubBindingCurrent(binding)) {
+          forgetHub();
+          return win && selected === page.id ? showHubPage(page) : undefined;
+        }
+        if (!resolvedHubMatches(h, binding)) throw new Error('The selected workspace could not be resolved. Try again.');
         // A hub that restarted while we set its cookie has a new URL: start
         // over against the new one rather than adopt a dead one. (hubLoading
         // is already cleared here; the crash budget bounds the loop.)
         if (!h.team && supervisor.status().url !== h.url) return showHubPage(page);
-        if (!hubInfo) hubInfo = h;
+        if (!hubInfo) { hubInfo = h; hubBinding = binding; }
       } catch (e) {
+        if (myGen !== gen || !hubBindingCurrent(binding)) return;
         log('board unavailable', e.message);
         // The hub may be fine (e.g. the cookie could not be set): offer Retry.
         if (hubStatus.state === 'ready') viewError = `Could not open the board (${e.message}).`;
@@ -876,7 +926,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
         return;
       }
     }
-    if (!win || selected !== page.id || !hubInfo) return;
+    if (!win || selected !== page.id || !hubInfo || !hubBindingCurrent(binding)) return;
     if (!hubView) hubView = makeHubView(hubInfo);
     const view = hubView;
     const url = hubPageUrl(hubInfo.url, page, { org: hubInfo.org });
@@ -885,7 +935,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       viewError = null;
       await view.webContents.loadURL(url).catch(() => {}); // privacy-flow: team-hub-account
     }
-    if (win && selected === page.id && view === hubView && !viewError) attach(view);
+    if (win && myGen === gen && selected === page.id && view === hubView && !viewError && hubBindingCurrent(binding)) attach(view);
   }
 
   // ── selection ───────────────────────────────────────────────────────────
@@ -933,12 +983,10 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   // ── workspaces ──────────────────────────────────────────────────────────
 
   function switchWorkspace(id, { show = true } = {}) {
-    const prev = store.active();
     if (!id || !store.setActive(id)) return;
-    connectLife.bump();
-    const next = store.active();
-    // Another team on the same hub is the same page with a different ?org=.
-    if (hubInfo?.bearer && prev.kind === 'team' && next.kind === 'team' && prev.hub === next.hub) { hubInfo.org = next.teamId; viewError = null; } else forgetHub();
+    // Retire the old document even for another team on the same hub: its
+    // pending loads and IPC still belong to the workspace being left.
+    forgetHub();
     if (show) select('board'); else pushState();
   }
 
@@ -995,7 +1043,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       } catch (err) { log('account action failed', op, err.message); return { ok: false, error: 'Something went wrong. Try again.' }; }
     });
   }
-  const fromHubView = (e) => !!hubView && e.sender === hubView.webContents && !!hubInfo && e.senderFrame?.origin === hubInfo.origin;
+  const fromHubView = (e) => !!hubView && e.sender === hubView.webContents && !!hubInfo && hubBindingCurrent(hubBinding) && e.senderFrame?.origin === hubInfo.origin;
   let selectedSessionKey = null;
   const cardSessionAction = require('./card-session-actions').create({
     bridge: sessionBridge,
