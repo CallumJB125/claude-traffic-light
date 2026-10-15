@@ -8,7 +8,80 @@ The original `claude/release` checkout and handover are preserved. Implementatio
 PR #7 remains unmerged. The owner subsequently authorized public beta publication;
 the release-note-only PR #8 was merged into `main` for the signing workflow.
 
-## Public beta.74 and routing follow-up — 15 October 2026
+## Public beta.82 and preserved installed beta.74 — 15 October 2026
+
+Public desktop preview `1.0.2-beta.82` is frozen at `c9ec7ef241b9160eaa0c1b1960434caf0c5200ae`.
+Build/stage `38793491891` and signed promotion `38796721608` passed.
+Notes-only PR #14 merged to main `777ceb9cc006f92fe46279dd41c24446b34b81a2` after staged-package
+acceptance; implementation PR #7 remains draft and unmerged.
+
+Mac passed native 50/50, root 4,951 with 12 skipped, remote 220/220 and board
+3,107/3,107. Linux passed root 4,942 with 21 skipped, remote 220/220 and board
+3,106 with one skipped. Both packaged smokes and Windows native 69+166+71
+checks passed with no failures or cancellations. Windows installers remain
+unpublished; Mac x64 runtime acceptance and notarization remain open.
+
+The public signed manifest, both feed sizes/SHA512, six installers, GitHub
+tag/source/notes/asset sizes and downloaded arm64 ZIP match staging. The isolated
+arm64 package matches all 31 checked runtime/privacy files; strict signatures,
+universal guard with empty entitlements in both slices, four unauthorized-launch
+refusals and isolated smoke passed. Initial empty-plist checker diagnostics are
+retained separately from the corrected passing parser. This is isolated package
+evidence, not installed beta.82 account or restart acceptance.
+
+The matching website is deployed at `https://9b007918.plexiform-site.pages.dev`.
+Thirty site tests, 152 frozen inputs/notes and 118 staged hashes passed. A provider
+receipt binds that successful production deployment to the exact frozen source.
+The deployment URL's download and changelog HTML match the payload byte for byte;
+the public domain returns HTTP 200 and adds Cloudflare email protection and
+analytics. The strict raw canonical-byte mismatch is retained.
+A separate saved-response proof (`work/beta82-canonical-rewrite-proof-zSqYlc/receipt.json`)
+reverses only the exact protected support href, pinned email decoder and pinned
+HTTPS/SRI beacon, restoring every remaining byte to the staged payload. Both
+pages have the same bounded beacon configuration. Independent adversarial
+review passed 21 invalid variants. Raw canonical hashes remain different; no
+analytics runtime, cookie or privacy/legal acceptance is inferred.
+Waitlist GET remains HTTP 405. Gallery stays on; phone, public signup and Windows
+download flags stay off. A real browser shows beta.82 and all six installer links.
+
+Fresh Google browser sign-in reached Callum's team, and a final browser reload
+still shows Live. Curl confirms both web OAuth methods enabled, email disabled
+and push enabled. GitHub's separate identity reaches Create or join a team;
+access to the existing Google team through GitHub remains unaccepted. No team
+or invitation was created.
+
+Installed beta.74 at `4a7f050c568df47083927ec74797104620accf6f` remains open.
+It had restored the saved account after direct owner Keychain approval, then
+exposed the stale cached local Board binding. The fix retires that binding while
+preserving Home/Overview or an explicit local-board choice. Related tests 261/261,
+independent routing/startup 27/27 and synthetic actual-Electron scenarios 3/3
+passed; exact beta.74 controls reproduce the defect. The desktop runtime is
+byte-identical across the synthetic-tested frozen beta.75 and public beta.82;
+subsequent changes harden test fixtures and update notes/site metadata.
+
+An owned temporary Claude continuation was observed in installed beta.74. It uses
+no session persistence; an empty or evicted Sessions view does not establish that
+its backend ended. No authoritative end receipt is available, and a disk backup
+cannot restore that in-memory context or an unsent reply. During this publication
+pass, no End, Send, Quit or replacement installation was performed. Native beta.82 account/Board/Quit/fresh-
+restart acceptance is deferred. The 25 checked SQLite snapshots and retained
+local beta.73 backup, original checkouts/private .omc, failed evidence, legacy
+MCP 5445/6076 and caffeinate 41145 remain preserved.
+
+Earlier beta.75–81 failures, including the cancelled beta.79 typo, remain
+recorded below and in the task workspace. The final beta.82 result is independent
+of those failures; no production guard or deadline was relaxed. Original
+Cloudflare installation 170293601 remains per the owner's explicit skip; the
+gallery key backup/restore is verified in local login Keychain only, with
+off-device/offline backup still open.
+
+External teammate/device/provider acceptance, executable next-turn queues,
+proposals/granular delegation and universal shared-checkout overwrite prevention
+remain incomplete. The full current report and browser screenshot are in the
+adjacent task's `outputs/session-interaction-validation.txt` and
+`outputs/public-beta82-download.png`. No whole-vision completion is claimed.
+
+## Historical beta.74 checkpoint — 15 October 2026
 
 Public and installed beta.74 is frozen at `4a7f050c568df47083927ec74797104620accf6f`.
 Build/stage `38771091656` and signed promotion `38774498360` passed. Notes-only
