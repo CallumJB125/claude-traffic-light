@@ -163,7 +163,7 @@ jobs:
 
       - name: Native helpers (Mac)
         if: matrix.platform == 'mac'
-        run: npm run calendar-helper && npm run voice-helper
+        run: npm run calendar-helper && npm run voice-helper && npm run account-storage-parent
 
       - name: Build installers
         id: installers

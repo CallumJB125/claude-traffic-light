@@ -51,7 +51,7 @@ function fixture(t, { origins = [FIRST], selected = 'home', ready = true, refres
   initial.activateTeam(origins.at(-1), 'fixture-team');
 
   const readiness = deferred(), reads = [], nativeCalls = [], refreshes = [], resumes = [], navigations = [], pushes = [], accountMessages = [], stops = [];
-  let appReady = ready, readyWaits = 0, api;
+  let appReady = ready, readyWaits = 0, processCreates = 0, processCloses = 0, api;
   const safeStorage = {
     isEncryptionAvailable() { nativeCalls.push('sync-available'); throw Error('synchronous native storage is forbidden'); },
     encryptString() { nativeCalls.push('sync-encrypt'); throw Error('synchronous native storage is forbidden'); },
@@ -67,8 +67,17 @@ function fixture(t, { origins = [FIRST], selected = 'home', ready = true, refres
   const context = {
     Buffer, Map, Set, Promise, process: { platform: 'darwin' }, path, userData, ACCOUNTS_DIR: accountDir,
     allowOrigins: [], fileKey: hubKey, safeStorage,
-    app: { isReady: () => appReady, whenReady: () => { readyWaits += 1; return readiness.promise; } },
+    app: { isPackaged: true, isReady: () => appReady, whenReady: () => { readyWaits += 1; return readiness.promise; } },
     createSecureStorage: storage => createSecureStorage(storage, 'darwin'),
+    createAccountStorageProcess: () => {
+      processCreates += 1;
+      // Exercise the index selection/retirement of the isolated transport
+      // while native promises remain deterministic synthetic test gates.
+      return { ...createSecureStorage(safeStorage, 'darwin'), close() {
+        processCloses += 1;
+        stops.push('crypto-process');
+      } };
+    },
     createAccountVault: options => createAccountVault({ ...options, io: { ...fs,
       readFileSync: (...args) => { reads.push(args[0]); return fs.readFileSync(...args); },
     } }),
@@ -104,9 +113,10 @@ function fixture(t, { origins = [FIRST], selected = 'home', ready = true, refres
   vm.createContext(context);
   vm.runInContext(`${vaultBlock}\n${restoreBlock}\n${selectBlock}\n${switchBlock}\nconst controller = {\n${resumeMethod}\n${stopMethod}\n};\nthis.api = {vault, signedIn, tokenFor, userOf, store, controller, select, switchWorkspace};`, context);
   api = context.api;
-  t.after(() => api.controller.stop());
+  t.after(() => { if (!processCloses) return api.controller.stop(); });
   return { api, context, nativeCalls, reads, refreshes, resumes, navigations, pushes, accountMessages, stops,
     readyWaits: () => readyWaits,
+    processCreates: () => processCreates, processCloses: () => processCloses,
     ready() { appReady = true; readiness.resolve(); },
     async restore(origin) {
       nativeGates.get(origin).resolve({ result: JSON.stringify(recordFor(origin)), shouldReEncrypt: false });
@@ -125,6 +135,8 @@ test('startup cache reads wait for app readiness and refresh a hydrated identity
   }
   await turn();
   assert.equal(f.readyWaits(), 1);
+  assert.equal(f.processCreates(), 1);
+  assert.equal(f.processCloses(), 0);
   assert.deepEqual(f.reads, []);
   assert.deepEqual(f.nativeCalls, []);
   assert.deepEqual(f.refreshes, []);
@@ -232,7 +244,8 @@ test('stop completes while native authorization is pending and prevents late ref
   assert.deepEqual(f.refreshes, []);
   assert.deepEqual(f.resumes, []);
   assert.deepEqual([f.pushes.length, f.accountMessages.length, f.navigations.length], effects);
-  assert.deepEqual(f.stops, ['capture', 'supervisor', 'devices']);
+  assert.equal(f.processCloses(), 1);
+  assert.deepEqual(f.stops, ['crypto-process', 'capture', 'supervisor', 'devices'], 'isolated crypto is retired before other cleanup waits');
   f.api.controller.resumeDevices();
   assert.deepEqual(f.resumes, []);
 });

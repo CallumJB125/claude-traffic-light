@@ -4,7 +4,7 @@
 const path = require('path');
 
 const HELPER = /(^|\/)calendar-helper\/buddy-calendar$/;
-const SETUPS_HELPER = /(^|\/)setups\/buddy-setups$/;
+const SETUPS_HELPER = /(^|\/)(?:setups\/buddy-setups|account-storage\/buddy-account-storage-parent)$/;
 const SETUPS_ENTITLEMENTS = path.join(__dirname, 'entitlements.setups-helper.plist');
 const HELPER_ENTITLEMENTS = path.join(__dirname, 'entitlements.calendar-helper.plist');
 

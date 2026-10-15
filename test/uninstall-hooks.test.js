@@ -115,7 +115,10 @@ function earlyMain(home, mcp = McpInstall) {
     if (id === './mcp-install.js') return mcp;
     throw new Error(`Unexpected startup module ${id}`);
   };
-  try { vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8'), { process, require: fixtureRequire }); }
+  // main.js is a CommonJS module; its early worker dispatch may return from
+  // that module wrapper before normal app startup.
+  const source = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
+  try { vm.runInNewContext(`(function () {\n${source}\n})();`, { process, require: fixtureRequire }); }
   catch (error) { assert.equal(error, stopped); }
   assert.ok(!calls.some(call => call[1] === 'electron'));
   return { code: calls.find(call => call[0] === 'exit')?.[1], lines };

@@ -24,6 +24,7 @@ const { createAccountClient, pinnedTransport, bearerScope, bearerHeaders } = req
 const { createDeviceController, defaultDeviceName } = require('./device');
 const { createSecureStorage, storageHelp } = require('./secure-storage');
 const { createAccountVault } = require('./account-vault');
+const { createAccountStorageProcess } = require('./account-storage-process');
 const { createAccountFlow, clearHubSessions, ACCT_ARGS } = require('./account-flow');
 const { createConnectLife } = require('./connect-life');
 const BRAND = require('./brand');
@@ -135,13 +136,26 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
 
   // ── sealed per-hub device token ────────────────────────────────────────
   const credentialStorage = createSecureStorage(safeStorage);
+  // A pending Keychain operation also survives Chromium shutdown. Keep Mac
+  // account crypto in a disposable process that can be retired after cleanup.
+  const accountProcess = process.platform === 'darwin' && app.isPackaged ? createAccountStorageProcess({
+    ready: () => app.isReady(),
+    spawn(executable, args, options) {
+      const profile = fs.mkdtempSync(path.join(app.getPath('temp'), 'plexiform-account-storage-'));
+      let child;
+      try { child = require('node:child_process').spawn(executable, [...args, `--user-data-dir=${profile}`], options); } // privacy-flow: team-hub-account
+      catch (error) { fs.rmSync(profile, { recursive: true, force: true }); throw error; }
+      child.once('exit', () => { try { fs.rmSync(profile, { recursive: true, force: true }); } catch { /* disposable profile; no account files */ } });
+      return child;
+    },
+  }) : null;
   // Electron's async Linux provider cannot attest that it avoided plaintext
   // fallback. Preserve the existing verified desktop-store backend there.
   // Mac/Windows use only native async crypto for account credentials.
   const accountStorage = process.platform === 'linux' ? {
     encryptAsync: async text => credentialStorage.encrypt(text),
     decryptAsync: async bytes => credentialStorage.decrypt(bytes),
-  } : credentialStorage;
+  } : accountProcess ?? credentialStorage;
   let stopping = false, resumeRequested = false;
   const resumedHubs = new Set();
   const vaults = new Map();
@@ -952,8 +966,12 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   ipcMain.on('buddy:signout', onSignOut);
   ipcMain.on('buddy:select', onSelect);
   ipcMain.on('buddy:retry', onRetry);
-  ipcMain.on('buddy:account-storage-retry', e => {
+  ipcMain.on('buddy:account-storage-retry', async e => {
     if (!fromSidebar(e) || stopping) return;
+    // A denied native provider can cache unavailable for its lifetime. A
+    // deliberate retry gets a fresh isolated provider after the old one exits.
+    if (accountProcess && !await accountProcess.restart()) return;
+    if (stopping) return;
     for (const v of vaults.values()) if (v.state() === 'locked') void v.retry();
   });
   const fromOptimiser = (e) => { const wc = localViews.get('optimiser')?.webContents; return !!wc && e.sender === wc && isLocalPage(e.senderFrame?.url ?? ''); };
@@ -1195,6 +1213,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     async stop() {
       stopping = true;
       for (const v of vaults.values()) v.close();
+      accountProcess?.close();
       const url = localUrl();
       await workCapture.stop();
       await Promise.all([supervisor.stop({ final: true }), flow.stopDevices()]);

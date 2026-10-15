@@ -1,3 +1,8 @@
+// Only a private stdio crypto service, before normal app startup touches data.
+if (process.argv.includes('--plexiform-account-storage-worker')) {
+  require('./buddy-window/account-storage-worker').start();
+  return;
+}
 // Windows hook commands in argv form run the exe with --buddy-hook: the hook
 // script runs here and the process exits before any of the app starts.
 if (process.argv.includes('--buddy-hook')) require('./src/buddy-hook-runner.js').run(process.argv);
