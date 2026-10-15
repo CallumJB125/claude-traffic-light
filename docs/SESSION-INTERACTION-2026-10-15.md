@@ -21,7 +21,7 @@ and isolated public/installed smokes pass. Pending-Keychain navigation is usable
 After direct owner approval, the saved team account restored. A real routing defect
 was then observed: restoring off a hub page retains the cached local board, so Board
 can show local My board under a team workspace label. Local Live is not team Live.
-A focused beta.80 follow-up is in progress; published beta.74 bytes are immutable.
+A focused beta.81 follow-up is in progress; published beta.74 bytes are immutable.
 Public team-board, Quit and unchanged-restart acceptance remain open. UI automation
 is paused after concurrent app interaction and an owned Claude conversation appeared.
 
@@ -478,3 +478,25 @@ requested cancellation immediately, before staging/publication. No beta.79
 package or feed change is accepted. The next dispatch reads the exact ref from
 Git rather than manually transcribing it. Beta.80 retains the same reviewed
 fixtures and desktop runtime.
+
+## Beta.80 ticket tampering fixture and beta.81 preparation
+
+Run `38789411498` at frozen `dcaa5d1c` failed Linux board tests before
+staging. Linux root passed 4,942 with 21 skipped, remote passed 220, and board
+passed 3,105 with one failure and one skip. The sync ticket-tampering test
+replaced a random UUID's final character with `0`; when already `0`, the request
+was unchanged and correctly accepted. The fixture now guarantees a different
+path and asserts inequality before checking the existing HTTP 403 refusal.
+Size, hash, device and expiry checks and production sync code are unchanged.
+Focused sync tests pass 8/8. The Mac unit step passed and packaging
+continued; its final packaging receipt is retained separately. No beta.80
+publication or website deployment occurred.
+
+An analogous audit found three Slack test cases replacing a random HMAC suffix
+with fixed `AA`, which could also be unchanged. Those test mutations now guarantee
+a different canonical suffix and explicitly verify inequality while retaining
+the original rejection assertions. Focused Slack tests pass 85/85; all 16 valid
+SHA256 base64url final characters were checked to remain canonical and change
+the decoded signature bytes. No production authentication code changed.
+Beta.81 retains the same desktop runtime as the frozen synthetic-tested beta.75
+source; installation over the owner's live beta.74 continuation remains deferred.

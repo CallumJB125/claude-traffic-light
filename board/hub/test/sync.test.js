@@ -168,7 +168,9 @@ test('quota: device count and bytes are enforced from the plan limits; tickets a
     const sha256 = (await import('node:crypto')).createHash('sha256').update(data).digest('hex');
     const t = (await fx.api(a.dev, 'POST', '/api/sync/uploads', { size: data.length, sha256, epoch: 1 })).body;
     assert.equal((await fx.api(a.dev, 'PUT', '/api/sync/blobs', { ...t, size: t.size + 1, data: data.toString('base64url') })).status, 403, 'size changed');
-    assert.equal((await fx.api(a.dev, 'PUT', '/api/sync/blobs', { ...t, path: t.path.replace(/.$/, '0'), data: data.toString('base64url') })).status, 403, 'path changed');
+    const tamperedPath = t.path.slice(0, -1) + (t.path.endsWith('0') ? '1' : '0');
+    assert.notEqual(tamperedPath, t.path, 'tampering must change the ticket path');
+    assert.equal((await fx.api(a.dev, 'PUT', '/api/sync/blobs', { ...t, path: tamperedPath, data: data.toString('base64url') })).status, 403, 'path changed');
     assert.equal((await fx.api(a.dev, 'PUT', '/api/sync/blobs', { ...t, data: Buffer.from('other bytes of the same.. ').toString('base64url') })).status, 400, 'hash mismatch');
     assert.equal((await fx.api(others[0], 'PUT', '/api/sync/blobs', { ...t, data: data.toString('base64url') })).status, 403, 'another device (no key yet)');
     fx.h.clock.advance(11 * 60_000);
