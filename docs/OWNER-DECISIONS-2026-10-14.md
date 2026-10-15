@@ -29,7 +29,7 @@ and isolated public/installed smokes pass. Pending-Keychain navigation is usable
 After direct owner approval, the saved team account restored. A real routing defect
 was then observed: restoring off a hub page retains the cached local board, so Board
 can show local My board under a team workspace label. Local Live is not team Live.
-A focused beta.79 follow-up is in progress; published beta.74 bytes are immutable.
+A focused beta.80 follow-up is in progress; published beta.74 bytes are immutable.
 Public team-board, Quit and unchanged-restart acceptance remain open. UI automation
 is paused after concurrent app interaction and an owned Claude conversation appeared.
 
@@ -452,3 +452,12 @@ This distinguishes legitimate identifier substrings from card values. All7
 billing checks pass; independent review found no remaining concrete issues.
 No billing runtime, payment setting, production privacy guard or card data
 handling changed. Beta.79 retains the same desktop routing runtime.
+
+## Beta.79 cancelled dispatch
+
+Run `38789254653` used the correct workflow-branch head `b9d1784a`, but its
+checkout input contained a mistyped full source hash. The release operator
+requested cancellation immediately, before staging/publication. No beta.79
+package or feed change is accepted. The next dispatch reads the exact ref from
+Git rather than manually transcribing it. Beta.80 retains the same reviewed
+fixtures and desktop runtime.
