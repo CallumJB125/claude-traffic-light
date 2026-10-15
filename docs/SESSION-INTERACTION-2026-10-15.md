@@ -21,7 +21,7 @@ and isolated public/installed smokes pass. Pending-Keychain navigation is usable
 After direct owner approval, the saved team account restored. A real routing defect
 was then observed: restoring off a hub page retains the cached local board, so Board
 can show local My board under a team workspace label. Local Live is not team Live.
-A focused beta.78 follow-up is in progress; published beta.74 bytes are immutable.
+A focused beta.79 follow-up is in progress; published beta.74 bytes are immutable.
 Public team-board, Quit and unchanged-restart acceptance remain open. UI automation
 is paused after concurrent app interaction and an owned Claude conversation appeared.
 
@@ -449,3 +449,23 @@ All9 stop checks pass, including a further run under two controlled disposable
 process-churn workers. Independent review retained PID, group, observer and
 cleanup coverage. Real provider sessions and installed74 were untouched. Beta.78
 will use unchanged routing runtime; public74 and all failed evidence remain.
+
+## Beta.78 billing sentinel and beta.79 preparation
+
+Run `38787326030` at frozen `882c4b88` passed Mac's native/root/remote/board
+unit acceptance, including all revised stop cases. Linux root4,942 plus21 skips
+and remote220 passed, but board3,105 passed/one failed/one skipped. The failure
+was the billing privacy test's raw search for four digits4242 in every database
+value, including random UUIDs and token hashes. The exact colliding row was not
+logged, so that cause is plausible rather than proven from the old CI output.
+No staged package or publication is accepted from this run.
+
+The test now deliberately persists a valid provider customer ID containing4242,
+while all three accepted webhook fixtures retain their original card canaries.
+It rejects exact string/numeric last4 values throughout all rows, including
+nested and JSON-encoded values, and retains the raw long fingerprint/address/
+brand/email canary checks plus entitlements/billing-events schema assertions.
+This distinguishes legitimate identifier substrings from card values. All7
+billing checks pass; independent review found no remaining concrete issues.
+No billing runtime, payment setting, production privacy guard or card data
+handling changed. Beta.79 retains the same desktop routing runtime.

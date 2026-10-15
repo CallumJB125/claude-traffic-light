@@ -282,11 +282,26 @@ test('no card data is ever stored: only provider ids, plan, seats and period', a
   try {
     const me = { type: 'user', id: fx.users.ua.id };
     const end = fx.nowS() + 30 * DAY;
-    await fx.deliver(fx.event('checkout.session.completed', session(me, 'plus')));
-    await fx.deliver(fx.event('customer.subscription.updated', subscription(me, 'plus', { periodEnd: end })));
-    await fx.deliver(fx.event('invoice.paid', invoice(me, end)));
+    // Provider ids may legitimately contain the four-digit card canary. Keep
+    // that collision deterministic rather than depending on random UUID/hash bytes.
+    const customer = 'cus_fixture_4242_identifier';
+    assert.equal((await fx.deliver(fx.event('checkout.session.completed', session(me, 'plus', { customer })))).status, 200);
+    assert.equal((await fx.deliver(fx.event('customer.subscription.updated', { ...subscription(me, 'plus', { periodEnd: end }), customer }))).status, 200);
+    assert.equal((await fx.deliver(fx.event('invoice.paid', { ...invoice(me, end), customer }))).status, 200);
+    assert.equal(fx.row('user', me.id).provider_customer, customer);
     const dump = dumpDb(fx.db);
-    for (const secret of ['4242', 'FPRINTCARDSECRET', 'Secret Street', 'visa', 'buyer@alpha.test']) assert.ok(!dump.includes(secret), `stored: ${secret}`);
+    for (const secret of ['FPRINTCARDSECRET', 'Secret Street', 'visa', 'buyer@alpha.test']) assert.ok(!dump.includes(secret), `stored: ${secret}`);
+    const checkLast4 = (value) => {
+      assert.ok(value !== '4242' && value !== 4242, 'card last4 stored as a value');
+      if (value && typeof value === 'object') {
+        for (const [key, entry] of Object.entries(value)) { checkLast4(key); checkLast4(entry); }
+      } else if (typeof value === 'string') {
+        let decoded;
+        try { decoded = JSON.parse(value); } catch { return; }
+        if (decoded !== value) checkLast4(decoded);
+      }
+    };
+    for (const line of dump.split('\n')) checkLast4(JSON.parse(line));
     const cols = fx.db.all("SELECT name FROM pragma_table_info('entitlements')").map((c) => c.name);
     assert.ok(!cols.some((c) => /card|last4|brand|exp_|address|fingerprint|payment_method/.test(c)), cols.join(','));
     assert.deepEqual(fx.db.all("SELECT name FROM pragma_table_info('billing_events')").map((c) => c.name).sort(), ['event_id', 'outcome', 'provider', 'received_at', 'type']);
