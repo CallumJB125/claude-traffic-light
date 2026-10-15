@@ -1,8 +1,9 @@
-Plexiform 1.0.2-beta.74 public beta — 15 October 2026
+Plexiform 1.0.2-beta.82 public beta — 15 October 2026
 
 This preview is available for macOS (Apple silicon and Intel) and Linux (x64).
 
 **What changed**
+- Restoring a saved team account while Home, Overview or another local page is open refreshes the cached board target without changing the page you are using. Opening Board afterward shows the restored team's board; an explicit choice to use the local board stays local.
 - Team-account restore and save use asynchronous secure storage on macOS and Windows. Saved sign-ins restore after app readiness while local navigation stays usable; a sign-in succeeds only after its credential is saved securely.
 - On macOS, team-account cryptography runs in a disposable helper so a pending Keychain authorization cannot hold normal Quit open. The helper verifies its running Plexiform parent before accessing secure storage. Quitting retires the helper, and late completions cannot restore an account or resume a runner.
 - The sidebar explains when a saved sign-in is unlocking or being saved. If secure storage is locked, it shows recovery guidance and an explicit Retry saved sign-in action. Ordinary reads do not repeatedly retry a denied authorization. Restoring an account preserves the selected page and remembered workspace, including a local-board choice made while waiting.
