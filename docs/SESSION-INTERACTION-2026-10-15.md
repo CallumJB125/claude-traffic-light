@@ -37,14 +37,22 @@ live-state failures cannot silently downgrade into the legacy send path.
 
 - Full local root run during implementation: 4,813 passed, 11 skipped /4,824;
   zero failures/cancellations. Later changes have focused regressions below and
-  will be covered by the frozen release CI.
+  were covered by the frozen release CI.
 - Final combined main/preload/controller/renderer/provider/client regressions:
   259 passed, including per-steer output isolation and busy-provider drafts.
 - Remote 220/220 and site 30/30 passed. The first full board run had 3,104 passed
   and three fixture failures: old cache timing assumptions and an old collapsed
   success shape. Tests now exercise selected live read/action paths, unchanged
   passive observation times and exact task-inbox receipts. All 23 sharing/board
-  contract tests passed after those updates. Frozen release CI remains required.
+  contract tests passed after those updates. Frozen release CI subsequently
+  passed the complete suites on both Mac and Linux.
+- Frozen beta.67 build/stage run `38706691686`, source `88c9817d`: Mac root
+  4,828 passed / 12 skipped, remote 220/220, board 3,107/3,107 and native Darwin
+  48/48. Linux root 4,819 passed / 21 skipped, remote 220/220 and board 3,106
+  passed / one skipped. Zero failures or cancellations. Mac arm64 and Linux x64
+  packaged smoke checks passed; Mac x64 installers built without a runtime
+  smoke on that architecture. All six Mac/Linux installers and feed checksums
+  passed staging validation. Windows publication remains disabled.
 - Real Codex CLI `0.162.0-alpha.17.2` and Claude `2.1.300`: isolated empty
   sessions, disabled tools, exact marker accepted, literal input echo recorded,
   response completed, untouched sibling received zero deliveries.
@@ -61,6 +69,32 @@ Logs, screenshots and safe fixture state are in the adjacent task workspace.
 Real provider calls used disposable sessions only. Existing user sessions,
 external teammates, provider permissions and installed app data were untouched
 during these checks. No credentials appear in the evidence.
+
+## Publication and Home follow-up
+
+Beta.67 build/stage `38706691686` and signed promotion `38709044983` passed.
+Public manifest signature, channel, version, expiry, six installer entries and
+both feed hashes/sizes verified. The downloaded arm64 ZIP also matched its staged
+GitHub SHA-256. The live browser download page resolves all six links to beta.67;
+the 15 October changelog is deployed. Production hub health/auth and an existing
+authenticated browser board remain live.
+
+The public arm64 app was installed after preserving the previous app and private
+data, including 25 checked SQLite snapshots. Package and installed smoke checks,
+ad-hoc signature verification and the 15 changed desktop files' source hashes
+passed. Normal board launch worked, but Home navigation then blocked on a
+synchronous directory scan. A CLI diagnostic launch reached Home, Overview and
+Team sessions; that does not establish normal-launch acceptance. The optional
+Home starter-pack detector scans arbitrary recent project roots synchronously,
+matching the blocked native call, though the exact blocked path was not captured.
+
+The follow-up moves every starter project-marker read into one dedicated worker
+with a 1.5-second response deadline. A timed-out underlying scan remains single
+flight rather than accumulating workers. Ineligible cards skip usage and folder
+scans; dismissal, installation, navigation and close retire late suggestions.
+Real blocked-worker and positive-detection tests plus Home/starter regressions
+passed 36/36. Frozen follow-up CI and normal installed Home acceptance remain
+required before calling that issue resolved.
 
 ## Remaining acceptance and scope
 

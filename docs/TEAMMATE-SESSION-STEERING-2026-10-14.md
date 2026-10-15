@@ -1,6 +1,34 @@
 # Teammate AI-session steering — design and acceptance plan
 14 October 2026
 
+## Implementation status — 15 October 2026
+
+The selected-session interaction gap described below is now implemented at frozen
+source `88c9817d162e173bfed75324c895398b7aeafd0a`. See
+[SESSION-INTERACTION-2026-10-15.md](SESSION-INTERACTION-2026-10-15.md) for the current
+behavior, privacy protections, evidence and remaining acceptance. Team sessions
+can show a selected shared session's live activity, conversation and actual
+receipt/echo/output states, then send, steer the current turn or interrupt where
+the existing explicit share and provider allow it. Actions require review of the
+exact target and text, with main-owned generation/turn binding. Busy providers
+without steering support allow a local draft that a person can send once idle;
+the draft is not durably queued or sent automatically.
+
+Durable executable next-turn queues, owner-reviewed proposals and new granular
+delegation records remain unimplemented. The existing interact share was not
+silently expanded. Universal prevention of independent agents overwriting or
+undoing one another's work also remains unimplemented. Local two-identity desktop
+checks with real providers are documented separately; external two-person,
+two-device/provider acceptance is still open. Release beta.67 passed its frozen
+checks and signed publication; installed Home navigation exposed a separate
+blocking directory scan, now being addressed by the follow-up described in the
+implementation report.
+
+The sections below preserve the 14 October design and source-review snapshot,
+including its then-current implementation limits and proposed future acceptance.
+They are historical evidence, not a claim that every proposed tier, queue or
+conflict barrier has now shipped.
+
 ## Recommendation
 Build on the existing exact-session relay and durable task inbox. Give teammates
 three clearly different abilities: watch, propose a change, and act under an
