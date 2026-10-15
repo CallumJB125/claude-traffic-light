@@ -320,3 +320,15 @@ clean full runs or real-device updater acceptance. Logs are
 Hub auth methods still report Google/GitHub web enabled, email disabled and push
 enabled. Browser refresh remains unchecked after the earlier policy-service
 failure; no bypass or provider configuration change was attempted.
+
+## Accepted unchanged candidate restart — 15 October 2026
+
+The owner completed Always Allow directly. The next unchanged installed launch
+restored the retained Callum Baker account, Callum's team and Live board without
+another authorization step. Home, Overview, Team sessions and normal Quit passed;
+both GUI and credential child exited. Package executable/ASAR hashes are unchanged
+from before approval. Evidence is `work/account-isolated-fresh-accepted.json` and
+`outputs/async-startup-fresh-restored.png` in the adjacent task workspace. Earlier
+pending restart observations remain history; this result supersedes that gate for
+this exact local candidate. It is not public-package or updater-device acceptance.
+Public beta.72 remains live while the next build/stage gates are prepared.

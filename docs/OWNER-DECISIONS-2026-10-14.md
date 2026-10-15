@@ -303,3 +303,15 @@ Cloudflare installation170293601 remains after the owner skipped its blocked
 confirmation. Gallery key backup/restore was verified in local login Keychain,
 which is not off-device/offline. Physical phone, real connector delivery,
 signing/updater/device, Windows, team-conflict and legal acceptance remain open.
+
+## Accepted unchanged candidate restart — 15 October 2026
+
+The owner completed Always Allow directly. The next unchanged installed launch
+restored the retained Callum Baker account, Callum's team and Live board without
+another authorization step. Home, Overview, Team sessions and normal Quit passed;
+both GUI and credential child exited. Package executable/ASAR hashes are unchanged
+from before approval. Evidence is `work/account-isolated-fresh-accepted.json` and
+`outputs/async-startup-fresh-restored.png` in the adjacent task workspace. Earlier
+pending restart observations remain history; this result supersedes that gate for
+this exact local candidate. It is not public-package or updater-device acceptance.
+Public beta.72 remains live while the next build/stage gates are prepared.
