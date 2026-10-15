@@ -21,7 +21,7 @@ and isolated public/installed smokes pass. Pending-Keychain navigation is usable
 After direct owner approval, the saved team account restored. A real routing defect
 was then observed: restoring off a hub page retains the cached local board, so Board
 can show local My board under a team workspace label. Local Live is not team Live.
-A focused beta.75 follow-up is in progress; published beta.74 bytes are immutable.
+A focused beta.76 follow-up is in progress; published beta.74 bytes are immutable.
 Public team-board, Quit and unchanged-restart acceptance remain open. UI automation
 is paused after concurrent app interaction and an owned Claude conversation appeared.
 
@@ -365,3 +365,26 @@ from before approval. Evidence is `work/account-isolated-fresh-accepted.json` an
 pending restart observations remain history; this result supersedes that gate for
 this exact local candidate. It is not public-package or updater-device acceptance.
 Public beta.72 remains live while the next build/stage gates are prepared.
+
+## Beta.75 failed build and beta.76 preparation
+
+Release run `38777606934` at frozen source `5461acac` failed before staging;
+no beta.75 installers, feed change or website deployment occurred. Mac/Linux
+root suites each found one obsolete source assertion that omitted the new hub
+binding guard. Mac root: 4,950 passed, one failed, 12 skipped; Linux root:
+4,941 passed, one failed, 21 skipped. Remote 220/220 passed on both. Mac board:
+3,106 passed, one failed; Linux board: 3,106 passed, one skipped. Mac native
+49/49 and Windows native 69+166+71 passed. Failed logs are retained.
+
+The Mac sharing fixture could request its independent held turn before the
+previous steer completed, ignore a busy refusal and poll for a turn that never
+started. The test now waits for that exact completion, asserts the new-turn
+acknowledgement and checks the remote held turn before interrupting it. No
+production rate limit or runtime code was changed by these test repairs. Focused
+routing/action regressions pass 39/39 and sharing contracts pass 21/21.
+
+Installation remains deferred: the previously observed no-persistence Sessions
+conversation may survive even when its renderer no longer displays the controls.
+The live backend has no read-only inventory exposed to this UI. No End, Send,
+Quit or install action was issued against that conversation. A disk backup cannot
+restore its in-memory provider context or an unsent reply.

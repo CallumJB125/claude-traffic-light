@@ -101,7 +101,7 @@ test('account client routes and card-id-only local session actions are sender ch
   assert.match(pre, /continueIn: \(cardId\) => ipcRenderer\.invoke\('buddy:continue-in', String\(cardId\)\.slice\(0, 100\)\)/, 'the card id is the only thing that crosses; main shows the menu');
   const idx = fs.readFileSync(path.join(__dirname, '../buddy-window/index.js'), 'utf8');
   assert.match(idx, /preload: path\.join\(DIR, 'hub-preload\.js'\)/);
-  assert.match(idx, /const fromHubView = \(e\) => !!hubView && e\.sender === hubView\.webContents && !!hubInfo && e\.senderFrame\?\.origin === hubInfo\.origin;/);
+  assert.match(idx, /const fromHubView = \(e\) => !!hubView && e\.sender === hubView\.webContents && !!hubInfo && hubBindingCurrent\(hubBinding\) && e\.senderFrame\?\.origin === hubInfo\.origin;/);
   assert.match(idx, /if \(!fromHubView\(e\)\) return null;\n\s+try \{ return await sessionBridge\.localHandover/);
   assert.match(idx, /ipcMain\.handle\('buddy:continue-in', async \(e, cardId\) => \{\n\s+if \(!fromHubView\(e\) \|\| !continueIn\) return null;/);
 });

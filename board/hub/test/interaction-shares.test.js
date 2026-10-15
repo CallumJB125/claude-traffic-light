@@ -235,8 +235,19 @@ test('LOCAL PROOF: a teammate watches a shared session; with interact they steer
     const turn = await until(async () => (await r.call(r.bob, up.share.id, 'state', { session: s.session })).body.result.state.activeTurn);
     const steer = await r.call(r.bob, up.share.id, 'send', { session: s.session, generation: s.generation, text: 'more', expectedTurn: turn });
     assert.equal(steer.body.result.delivery.mode, 'steer');
-    await r.call(r.bob, up.share.id, 'send', { session: s.session, generation: s.generation, text: 'HOLD 2' });
-    const turn2 = await until(async () => (await r.call(r.bob, up.share.id, 'state', { session: s.session })).body.result.state.activeTurn);
+    // The acknowledgement may precede the fake provider's completion event.
+    // Wait for that exact delivery before starting the independent held turn;
+    // otherwise HOLD 2 is refused as busy and polling cannot find a new turn.
+    await until(() => r.mac.hub.state({ session: s.session }, r.mac.actor).deliveries.some((d) =>
+      d.id === steer.body.result.delivery.id && d.state === 'completed'));
+    const held = await r.call(r.bob, up.share.id, 'send', { session: s.session, generation: s.generation, text: 'HOLD 2' });
+    assert.equal(held.status, 200, held.text);
+    assert.equal(held.body.result.status, 'acknowledged', held.text);
+    assert.equal(held.body.result.delivery.mode, 'new-turn');
+    const turn2 = await until(() => r.mac.hub.state({ session: s.session }, r.mac.actor).activeTurn);
+    const heldRead = await r.call(r.bob, up.share.id, 'state', { session: s.session });
+    assert.equal(heldRead.status, 200, heldRead.text);
+    assert.equal(heldRead.body.result.state.activeTurn, turn2);
     const intr = await r.call(r.bob, up.share.id, 'interrupt', { session: s.session, generation: s.generation, turn: turn2 });
     assert.equal(intr.body.result.status, 'interrupt-requested');
     await until(() => r.mac.hub.state({ session: s.session }, r.mac.actor).deliveries.some((d) => d.state === 'interrupted'));
