@@ -1,59 +1,80 @@
 'use strict';
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path');
-const { Worker } = require('node:worker_threads');
+const { fork, execFileSync, execFile } = require('node:child_process');
+const { promisify } = require('node:util');
 const { createDetector } = require('../src/starter-pack-detector.js');
 const Main = require('../src/starter-pack-main.js');
 const { testTempDir } = require('./helpers/tmp');
 const tick = () => new Promise(r => setImmediate(r));
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
 
-test('a genuinely blocked worker times out without blocking main or accumulating refresh workers', async t => {
-  const gate = new SharedArrayBuffer(4), ready = deferred(), exited = deferred();
-  let starts = 0, worker;
-  const detector = createDetector({ timeoutMs: 150, startWorker: data => {
-    starts++;
-    worker = new Worker(`const {parentPort,workerData}=require('node:worker_threads');
-      parentPort.postMessage({type:'blocked'});
-      Atomics.wait(new Int32Array(workerData.gate),0,0);
-      parentPort.postMessage({type:'detected',detected:workerData.folders.map(f=>({...f,folder:require('node:path').basename(f.cwd),stacks:['node']}))});
-      parentPort.close();`, { eval: true, workerData: { ...data, gate } });
-    worker.once('message', () => ready.resolve()); worker.once('exit', () => exited.resolve());
-    return worker;
+const pipeFixture = t => {
+  const root = testTempDir('starter-native-open-', t), fifo = path.join(root, 'blocked-read'), entry = path.join(root, 'blocked.cjs');
+  execFileSync('mkfifo', [fifo]);
+  fs.writeFileSync(entry, `process.once('message',m=>{process.send({type:'ready'},()=>{
+    require('node:fs').openSync(m.folders[0].cwd,'r');
+    process.send({type:'detected',detected:[]});process.disconnect();
+  });});`);
+  return { fifo, entry };
+};
+const waitFor = async promise => {
+  let timer;
+  try { return await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('owned helper did not exit')), 2500); })]); }
+  finally { clearTimeout(timer); }
+};
+const childFor = file => fork(file, [], { execArgv: [], stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
+
+test('a native-blocked read times out without blocking main or accumulating helper processes', { skip: process.platform === 'win32' }, async t => {
+  const { fifo, entry } = pipeFixture(t), ready = deferred(), exited = deferred();
+  let starts = 0, child, exitSignal;
+  const detector = createDetector({ timeoutMs: 1000, startProcess: () => {
+    starts++; child = childFor(entry);
+    child.once('message', () => ready.resolve()); child.once('exit', (_code, signal) => { exitSignal = signal; exited.resolve(); });
+    return child;
   } });
   t.after(() => detector.close());
-  const folders = [{ cwd: path.resolve('/synthetic/project'), at: 1 }];
+  const folders = [{ cwd: fifo, at: 1 }];
   let heartbeats = 0; const pulse = setInterval(() => heartbeats++, 5); t.after(() => clearInterval(pulse));
   const result = detector.detect(folders), began = Date.now();
-  await ready.promise;
+  await waitFor(ready.promise);
   assert.equal(detector.detect(folders), result, 'the same underlying read is shared');
   assert.deepEqual(await result, []);
-  assert.ok(Date.now() - began < 2000, 'optional read returns at a bounded deadline');
-  assert.ok(heartbeats > 2, 'main event loop stayed responsive while the worker blocked');
+  assert.ok(Date.now() - began < 2500, 'optional read returns at a bounded deadline');
+  assert.ok(heartbeats > 2, 'main event loop stayed responsive while native open blocked');
   for (let i = 0; i < 20; i++) assert.deepEqual(await detector.detect(folders), []);
-  assert.deepEqual(await detector.detect([{ cwd: path.resolve('/synthetic/other'), at: 2 }]), []);
-  assert.equal(starts, 1, 'timeouts and changed inputs do not create replacement workers');
-  Atomics.store(new Int32Array(gate), 0, 1); Atomics.notify(new Int32Array(gate), 0);
-  await exited.promise;
-  assert.deepEqual(await result, [], 'late success cannot revive a timed-out result');
+  assert.equal(starts, 1, 'refresh does not accumulate processes before actual exit or during negative cache');
+  await waitFor(exited.promise); assert.equal(exitSignal, 'SIGKILL', 'native open is forcibly stopped in its own process');
+  assert.deepEqual(await detector.detect(folders), []); assert.equal(starts, 1, 'timed-out input backs off after exit');
+  assert.deepEqual(await result, [], 'late lifecycle events cannot revive a timed-out result');
   await detector.close(); assert.deepEqual(await detector.detect(folders), []); assert.equal(starts, 1);
 });
 
-test('close resolves outstanding detection and permanently prevents another worker', async t => {
-  let starts = 0;
-  const detector = createDetector({ timeoutMs: 10_000, startWorker: () => {
-    starts++; return new Worker(`Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0)`, { eval: true });
+test('close kills a native-blocked child, resolves outstanding detection and remains terminal', { skip: process.platform === 'win32' }, async t => {
+  const { fifo, entry } = pipeFixture(t), ready = deferred(), exited = deferred(); let starts = 0;
+  const detector = createDetector({ timeoutMs: 10_000, startProcess: () => {
+    starts++; const child = childFor(entry); child.once('message', () => ready.resolve()); child.once('exit', (_code, signal) => exited.resolve(signal)); return child;
   } });
   t.after(() => detector.close());
-  const pending = detector.detect([{ cwd: path.resolve('/synthetic/project'), at: 1 }]);
+  const pending = detector.detect([{ cwd: fifo, at: 1 }]); await waitFor(ready.promise);
   const closed = detector.close();
   assert.deepEqual(await pending, []);
   assert.equal(detector.close(), closed, 'cleanup is idempotent and awaitable');
-  await closed; assert.deepEqual(await detector.detect([{ cwd: path.resolve('/synthetic/project'), at: 1 }]), []);
+  await closed; assert.equal(await waitFor(exited.promise), 'SIGKILL'); assert.deepEqual(await detector.detect([{ cwd: fifo, at: 1 }]), []);
   assert.equal(starts, 1);
 });
 
-test('production worker keeps positive marker detection and never returns project file contents', async t => {
+test('parent can exit naturally after closing a child blocked in native open', { skip: process.platform === 'win32' }, async t => {
+  const { fifo, entry } = pipeFixture(t);
+  const script = `const {createDetector}=require(process.argv[1]);const {fork}=require('node:child_process');
+    const detector=createDetector({timeoutMs:10000,startProcess:()=>{const child=fork(process.argv[2],[],{execArgv:[],stdio:['ignore','ignore','ignore','ipc']});
+      child.once('message',()=>{detector.close();process.stdout.write('closed');});return child;}});
+    detector.detect([{cwd:process.argv[3],at:1}]);`;
+  const result = await promisify(execFile)(process.execPath, ['-e', script, require.resolve('../src/starter-pack-detector.js'), entry, fifo], { timeout: 2500, killSignal: 'SIGKILL' });
+  assert.equal(result.stdout, 'closed'); assert.equal(result.stderr, '');
+});
+
+test('production fork keeps positive marker detection and never returns project file contents', async t => {
   const root = testTempDir('starter-worker-', t), web = path.join(root, 'web'), swift = path.join(root, 'app');
   fs.mkdirSync(web); fs.mkdirSync(swift); fs.mkdirSync(path.join(swift, 'Thing.xcodeproj'));
   fs.writeFileSync(path.join(web, 'package.json'), JSON.stringify({ dependencies: { next: '15' }, privateText: 'DO_NOT_RETURN_PROJECT_CONTENTS' }));
@@ -63,9 +84,21 @@ test('production worker keeps positive marker detection and never returns projec
   assert.equal(JSON.stringify(result).includes('DO_NOT_RETURN_PROJECT_CONTENTS'), false);
 });
 
-test('worker startup failure drops optional suggestions without an inline filesystem fallback', async () => {
-  const detector = createDetector({ startWorker: () => { throw new Error('private filesystem failure'); } });
+test('process startup failure drops optional suggestions without an inline filesystem fallback', async () => {
+  const detector = createDetector({ startProcess: () => { throw new Error('private filesystem failure'); } });
   assert.deepEqual(await detector.detect([{ cwd: path.resolve('/synthetic/project'), at: 1 }]), []);
+  await detector.close();
+});
+
+test('failure backoff follows folder paths despite changing activity timestamps', async () => {
+  let time = 1, starts = 0;
+  const detector = createDetector({ now: () => time, startProcess: () => { starts++; throw new Error('unavailable'); } });
+  const cwd = path.resolve('/synthetic/project');
+  assert.deepEqual(await detector.detect([{ cwd, at: 1 }]), []);
+  for (const at of [2, 3, 4]) assert.deepEqual(await detector.detect([{ cwd, at }]), []);
+  assert.equal(starts, 1, 'fresh hook timestamps do not bypass folder backoff');
+  time += 45_001;
+  assert.deepEqual(await detector.detect([{ cwd, at: 5 }]), []); assert.equal(starts, 2, 'a later attempt is allowed after backoff');
   await detector.close();
 });
 

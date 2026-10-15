@@ -88,13 +88,23 @@ Team sessions; that does not establish normal-launch acceptance. The optional
 Home starter-pack detector scans arbitrary recent project roots synchronously,
 matching the blocked native call, though the exact blocked path was not captured.
 
-The follow-up moves every starter project-marker read into one dedicated worker
-with a 1.5-second response deadline. A timed-out underlying scan remains single
-flight rather than accumulating workers. Ineligible cards skip usage and folder
-scans; dismissal, installation, navigation and close retire late suggestions.
-Real blocked-worker and positive-detection tests plus Home/starter regressions
-passed 36/36. Frozen follow-up CI and normal installed Home acceptance remain
-required before calling that issue resolved.
+The first follow-up moved starter project-marker reads into a dedicated worker.
+Normal Home, Overview and Team sessions then loaded, but quitting blocked in
+Node's Worker::JoinThread while the worker remained inside a native directory
+open. The local candidate and sample are retained; beta.69 was cancelled before
+staging. The earlier beta.68 dispatch selected main's older workflow and was
+cancelled before staging; the gated workflow remains required.
+
+The revised follow-up isolates every starter project-marker read in a dedicated
+child process with a 1.5-second deadline and explicit termination. Pending reads
+remain single flight until actual exit; a 45-second cooldown follows folder
+paths, unaffected by changing activity timestamps. Child output is discarded;
+folder inputs and the closed metadata response use IPC only. Ineligible cards
+skip usage/folder scans, and dismissal, installation, navigation and close retire
+late suggestions. Native FIFO-blocked process tests, natural parent exit and
+positive detection are covered; Home/starter regressions passed 38/38. Frozen
+follow-up CI and normal installed Home plus shutdown acceptance remain required
+before calling that issue resolved.
 
 ## Remaining acceptance and scope
 
