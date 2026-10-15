@@ -1,8 +1,12 @@
-Plexiform 1.0.2 public beta — 14 October 2026
+Plexiform 1.0.2 public beta — 15 October 2026
 
 This preview is available for macOS (Apple silicon and Intel) and Linux (x64).
 
 **What changed**
+- Open a shared Team session to see its task, current reported activity, messages, exact-text receipts and streamed output. Send to the selected session, steer its current turn or request interruption where the provider and explicit share allow it. Every final action is bound to the reviewed session generation and turn.
+- Codex and Claude report fixed activity categories such as thinking, reading, searching and editing. Tool arguments and raw commands are not included. A steering receipt is separate from evidence that the requested correction was applied; its output view starts after that message.
+- Busy sessions without steering let you keep a local draft until sending becomes available. Drafts are not queued or sent automatically. Refused and uncertain actions preserve drafts and are never retried automatically.
+- Watch-only shares remain read-only. Changed accounts, sessions, turns, team views and revoked shares retire pending controls. Sharing excludes earlier history, including same-millisecond history and immediate steering receipts. Passive directory caching keeps larger teams within the existing relay request limits; the selected conversation reads fresh state.
 - Captured AI-session cards now show recorded Activity, editable Task context, exact-session controls, reported files, and relevant Handover actions. Context can be imported into a draft, reviewed, saved, and refreshed without losing edits.
 - Handovers support refresh, copy, native Markdown export, continuation in another supported tool, and timeline navigation. Historical handover text is readable. Comments offer agent delivery only for a current managed run.
 - Session actions recheck the originating window, document, team, workspace, account, and sharing scope after asynchronous work. Native export opens from the correct board window.
@@ -11,6 +15,8 @@ This preview is available for macOS (Apple silicon and Intel) and Linux (x64).
 - Claude Tasks is available on macOS and Linux; Codex remains the default provider. AI tools require their own installation, sign-in, permissions, and provider subscriptions or usage credits.
 
 **Current limits**
+- Existing sessions need a supported, explicitly enabled connection. The Codex shared daemon supports explicitly attached CLI sessions; it does not reach Codex desktop conversations. Observed activity hooks alone do not provide a messaging channel. Claude/Gemini/local adapters do not all support current-turn steering; only available actions are offered.
+- Real Codex and Claude disposable-session checks passed. Desktop shared-session send, steer and interrupt passed through the real transport with local test accounts and real Codex. Two independent external teammates/devices and every provider/device combination have not been accepted yet. Durable next-turn executable queues, owner-reviewed proposals and granular new delegation records are not included in this preview.
 - Plexiform provides session visibility, shared context, handovers, and isolation for managed Tasks. It does not yet universally prevent independent agents from overwriting work in a shared checkout. Ownership declarations and captured-session collision alerts are advisory.
 - Windows downloads remain unavailable pending runtime and privacy acceptance. Public phone access and Linear/Jira delivery remain gated.
 - Public account registration remains closed. Existing invited teams use Google or GitHub sign-in; production email sign-in is not enabled.
