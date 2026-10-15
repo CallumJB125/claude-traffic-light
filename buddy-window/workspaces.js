@@ -137,8 +137,11 @@ function createWorkspaceStore(file, { allowOrigins = [], signedIn = () => true }
   // Validate the remembered choice without consulting OS credential storage.
   // A locked store hides team workspaces until it recovers, but must not turn
   // an unrelated preference save into a permanent switch to the local board.
-  const known = buildWorkspaceList({ hubs: data.hubs, teams: data.teams, access: data.access });
-  if (!known.some((w) => w.id === data.active)) data.active = 'local';
+  const configured = () => buildWorkspaceList({ hubs: data.hubs, teams: data.teams, access: data.access });
+  const validateActive = () => {
+    if (!configured().some((w) => w.id === data.active)) data.active = 'local';
+  };
+  validateActive();
 
   function save() {
     fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -179,7 +182,7 @@ function createWorkspaceStore(file, { allowOrigins = [], signedIn = () => true }
       const next = teamsFromAccount(account);
       const changed = JSON.stringify(next) !== JSON.stringify(data.teams[origin] ?? []);
       data.teams[origin] = next;
-      if (!get(data.active)) data.active = 'local';
+      validateActive();
       if (changed) save();
       return changed;
     },
@@ -187,7 +190,7 @@ function createWorkspaceStore(file, { allowOrigins = [], signedIn = () => true }
     forgetTeams(origin) {
       if (!data.teams[origin]?.length) return;
       data.teams[origin] = [];
-      if (!get(data.active)) data.active = 'local';
+      validateActive();
       save();
     },
     addAccess({ url, name, accessTeam = null }) {

@@ -40,54 +40,60 @@ test('unavailable or throwing OS store stays closed and gives graphical recovery
   assert.match(storageHelp('linux'),/Passwords and Keys or KWallet/);
 });
 function vaultFixture(backend, { saved = null, available = true } = {}) {
-  const source=fs.readFileSync(path.join(__dirname,'../buddy-window/index.js'),'utf8');
-  const start=source.indexOf('  const credentialStorage = createSecureStorage(safeStorage);');
-  assert.ok(start>=0);
-  const body=source.slice(start,source.indexOf('  const signedIn =',start));
+  const {createAccountVault}=require('../buddy-window/account-vault');
   const f=fixture('linux',backend,available); const writes=[];
   let sealed=saved===null?null:Buffer.from(`sealed:${JSON.stringify(saved)}`),reads=0,removals=0;
-  const context={safeStorage:f.native,createSecureStorage:s=>createSecureStorage(s,'linux'),Map,JSON,process:{pid:1},path,ACCOUNTS_DIR:'/fixture/accounts',fileKey:()=> 'fixture',log:()=>{},fs:{existsSync:()=>sealed!==null,readFileSync:()=>{reads++;return sealed;},mkdirSync:()=>{},writeFileSync:(...args)=>writes.push(args),renameSync:()=>{sealed=writes.at(-1)[1];},rmSync:()=>{sealed=null;removals++;}}};
-  vm.createContext(context); vm.runInContext(`${body}\nthis.result = vault('https://hub.example');`,context);
-  return {...f, vault:context.result,writes,reads:()=>reads,removals:()=>removals};
+  const io={existsSync:()=>sealed!==null,readFileSync:()=>{reads++;return sealed;},mkdirSync:()=>{},writeFileSync:(...args)=>writes.push(args),renameSync:()=>{sealed=writes.at(-1)[1];},rmSync:()=>{sealed=null;removals++;}};
+  // Production Linux keeps the established secure backend guard. Its native
+  // async provider is deliberately disabled until its fallback is attestable.
+  const vault=createAccountVault({origin:'https://hub.example',file:'/fixture/accounts/fixture.bin',storage:{encryptAsync:async text=>f.storage.encrypt(text),decryptAsync:async bytes=>f.storage.decrypt(bytes)},io});
+  return {...f, vault,writes,reads:()=>reads,removals:()=>removals};
 }
-test('production account vault starts without Keychain calls and never writes with Linux basic_text', () => {
+test('account vault starts without Keychain calls and never writes with Linux basic_text', async () => {
   const f=vaultFixture('basic_text'); assert.equal(f.vault.load(),null); assert.deepEqual(f.calls,[]);
-  assert.throws(()=>f.vault.save({hub:'https://hub.example',token:'synthetic'}));
+  await assert.rejects(f.vault.save({hub:'https://hub.example',token:'synthetic'}));
   assert.deepEqual(f.writes,[]); assert.deepEqual(f.calls,[]);
-  const good=vaultFixture('gnome_libsecret'); good.vault.save({hub:'https://hub.example',token:'synthetic'});
+  const good=vaultFixture('gnome_libsecret'); await good.vault.save({hub:'https://hub.example',token:'synthetic'});
   assert.equal(good.writes.length,1); assert.equal(good.writes[0][2].mode,0o600);
   assert.ok(good.writes[0][1].toString().startsWith('sealed:'));
 });
-test('saved account survives temporarily unavailable OS storage and explicit clear remains signed out', () => {
+test('saved account survives temporarily unavailable OS storage and explicit clear remains signed out', async () => {
   const saved={hub:'https://hub.example',token:'synthetic',user:{id:'u'}};
   const f=vaultFixture('gnome_libsecret',{saved,available:false});
   assert.equal(f.vault.load(),null);
+  await f.vault.retry();
   assert.equal(f.vault.load(),null);
-  assert.equal(f.reads(),0,'unavailable storage never reads the sealed credential');
+  assert.equal(f.reads(),1,'only ciphertext is read while storage is unavailable');
   assert.deepEqual(f.calls,[]);
   assert.equal(f.removals(),0);
   f.setAvailable(true);
+  assert.equal(f.vault.load(),null,'polling cannot repeat authorization');
+  await f.vault.retry();
   assert.deepEqual(f.vault.load(),saved,'unlocking retries the saved credential without another sign-in');
-  assert.equal(f.reads(),1);
+  assert.equal(f.reads(),2);
   assert.deepEqual(f.calls,['decrypt']);
   f.vault.clear();
   f.setAvailable(false);
   f.setAvailable(true);
   assert.equal(f.vault.load(),null,'explicit sign-out cannot resurrect the old credential');
   assert.equal(f.removals(),1);
-  assert.equal(f.reads(),1);
+  assert.equal(f.reads(),2);
 });
-test('a transient native decryption failure can recover while wrong-hub credentials remain closed', () => {
+test('a transient native decryption failure can explicitly recover while wrong-hub credentials remain closed', async () => {
   const saved={hub:'https://hub.example',token:'synthetic'};
   const f=vaultFixture('gnome_libsecret',{saved});
   const decrypt=f.native.decryptString;
   let first=true;
   f.native.decryptString=bytes=>{if(first){first=false;throw Error('temporarily locked');}return decrypt(bytes);};
   assert.equal(f.vault.load(),null);
+  await f.vault.retry();
+  assert.equal(f.vault.load(),null);
+  await f.vault.retry();
   assert.deepEqual(f.vault.load(),saved);
   assert.equal(f.removals(),0);
   const other=vaultFixture('gnome_libsecret',{saved:{...saved,hub:'https://other.example'}});
   assert.equal(other.vault.load(),null);
+  await other.vault.retry();
   assert.equal(other.vault.load(),null);
   assert.equal(other.reads(),1,'a wrong-hub credential is never made usable');
 });

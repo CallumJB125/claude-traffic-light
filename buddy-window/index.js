@@ -22,7 +22,8 @@ const { createHubSupervisor } = require('./hub-process');
 const { createWorkspaceStore, normalizeHubUrl, normalizeLinkHub, accessTeamFromLocation, partitionFor: teamPartition, integrationPartitionFor, hubKey, hostOf } = require('./workspaces');
 const { createAccountClient, pinnedTransport, bearerScope, bearerHeaders } = require('./accounts');
 const { createDeviceController, defaultDeviceName } = require('./device');
-const { createSecureStorage } = require('./secure-storage');
+const { createSecureStorage, storageHelp } = require('./secure-storage');
+const { createAccountVault } = require('./account-vault');
 const { createAccountFlow, clearHubSessions, ACCT_ARGS } = require('./account-flow');
 const { createConnectLife } = require('./connect-life');
 const BRAND = require('./brand');
@@ -134,33 +135,25 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
 
   // ── sealed per-hub device token ────────────────────────────────────────
   const credentialStorage = createSecureStorage(safeStorage);
+  // Electron's async Linux provider cannot attest that it avoided plaintext
+  // fallback. Preserve the existing verified desktop-store backend there.
+  // Mac/Windows use only native async crypto for account credentials.
+  const accountStorage = process.platform === 'linux' ? {
+    encryptAsync: async text => credentialStorage.encrypt(text),
+    decryptAsync: async bytes => credentialStorage.decrypt(bytes),
+  } : credentialStorage;
+  let stopping = false, resumeRequested = false;
+  const resumedHubs = new Set();
   const vaults = new Map();
   function vault(origin) {
     let v = vaults.get(origin);
     if (v) return v;
-    const file = path.join(ACCOUNTS_DIR, `${fileKey(origin)}.bin`);
-    let cache; // undefined until first read; the board view asks per request
-    v = {
-      load() {
-        if (cache !== undefined) return cache;
-        // Locked/unready OS storage can recover during this process. Keep the
-        // sealed file and retry later instead of caching a permanent sign-out.
-        if (!credentialStorage.available()) return null;
-        try { cache = fs.existsSync(file) ? JSON.parse(credentialStorage.decrypt(fs.readFileSync(file))) : null; }
-        catch (e) { log('account sign-in unreadable; treated as signed out', e.message); return null; }
-        if (cache && cache.hub !== origin) cache = null;
-        return cache;
-      },
-      save(obj) {
-        if (!credentialStorage.available()) throw new Error('Secure account storage unavailable');
-        fs.mkdirSync(ACCOUNTS_DIR, { recursive: true, mode: 0o700 });
-        const tmp = `${file}.${process.pid}.tmp`;
-        fs.writeFileSync(tmp, credentialStorage.encrypt(JSON.stringify(obj)), { mode: 0o600 });
-        fs.renameSync(tmp, file);
-        cache = obj;
-      },
-      clear() { cache = null; fs.rmSync(file, { force: true }); },
-    };
+    v = createAccountVault({
+      origin, file: path.join(ACCOUNTS_DIR, `${fileKey(origin)}.bin`), storage: accountStorage,
+      ready: () => app.isReady(), whenReady: () => app.whenReady(),
+      onChange: event => { void accountStorageChanged(origin, event).catch(() => log('saved sign-in refresh failed')); },
+    });
+    if (stopping) v.close();
     vaults.set(origin, v);
     return v;
   }
@@ -432,6 +425,10 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       burst: (() => { try { return burstApi?.snapshot().d.kind === 'present'; } catch { return false; } })(),
       optimiser: selected === 'optimiser' ? { nav: optimiser.nav(), active: optimiser.active() } : null,
       signedIn: store.hubs().some(signedIn),
+      accountStorage: [...vaults.values()].some(v => v.state() === 'restoring') ? 'restoring'
+        : [...vaults.values()].some(v => v.state() === 'saving') ? 'saving'
+        : [...vaults.values()].some(v => v.state() === 'locked') ? 'locked' : 'ready',
+      accountStorageHelp: storageHelp(),
       runners: flow.runningTeams(),
       hub: team
         ? { state: viewError ? 'failed' : 'ready', error: viewError, mode: 'team', name: team.name }
@@ -606,6 +603,32 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       },
     },
   });
+
+  function resumeRestored(origin) {
+    if (stopping || !resumeRequested || resumedHubs.has(origin) || !signedIn(origin)) return;
+    resumedHubs.add(origin);
+    try { flow.resumeDevices(origin); } catch { log('saved runner could not resume'); }
+  }
+
+  async function accountStorageChanged(origin, { reason }) {
+    if (stopping) return;
+    pushState();
+    if (reason !== 'restored') return;
+    const marker = vault(origin).load();
+    if (!marker) return;
+    const navigation = setupLocalGeneration, page = selected, workspace = store.activeId();
+    try { await flow.refreshAccount(origin); } catch { /* offline accounts can retry later */ }
+    if (stopping || vault(origin).load() !== marker) return;
+    // Hydration may reveal the remembered team. Preserve navigation performed
+    // while waiting, including an explicit switch to the local workspace.
+    if (win && navigation === setupLocalGeneration && page === selected && workspace === store.activeId() && isHubPage(selected)) {
+      forgetHub();
+      void showHubPage(pageById(selected));
+    }
+    if (accountView && !accountView.webContents.isDestroyed()) accountView.webContents.send('buddy:acct:changed');
+    resumeRestored(origin);
+    pushState();
+  }
 
   // ── hub view ────────────────────────────────────────────────────────────
 
@@ -929,6 +952,10 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   ipcMain.on('buddy:signout', onSignOut);
   ipcMain.on('buddy:select', onSelect);
   ipcMain.on('buddy:retry', onRetry);
+  ipcMain.on('buddy:account-storage-retry', e => {
+    if (!fromSidebar(e) || stopping) return;
+    for (const v of vaults.values()) if (v.state() === 'locked') void v.retry();
+  });
   const fromOptimiser = (e) => { const wc = localViews.get('optimiser')?.webContents; return !!wc && e.sender === wc && isLocalPage(e.senderFrame?.url ?? ''); };
   ipcMain.on('optimiser:ready', (e) => { if (fromOptimiser(e)) e.sender.send('optimiser:state', optimiser.payload()); });
   ipcMain.on('optimiser:refresh', (e) => { if (fromOptimiser(e)) optimiser.refresh({ reload: true }); });
@@ -1144,7 +1171,14 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     select,
     openInvite: (link) => flow.openInvite(link),
     /** App start: runners the member left on come back without opening the window. */
-    resumeDevices: () => flow.resumeDevices(),
+    resumeDevices() {
+      if (stopping) return;
+      resumeRequested = true;
+      for (const origin of store.hubs()) {
+        const v = vault(origin); v.load();
+        if (v.state() === 'ready') resumeRestored(origin);
+      }
+    },
     /** Subscribe to validated runner events (`run.budget_reached`); returns the unsubscribe function. */
     onRunnerEvent(cb) { if (typeof cb !== 'function') return () => {}; runnerListeners.add(cb); return () => runnerListeners.delete(cb); },
     /** Burst facts for the runner (src/burst-ipc.js): only while a runner is running cards. */
@@ -1159,6 +1193,8 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     workCostRows: () => ({ tasks: workCapture.costRows?.() ?? [], records: workCapture.localRecords?.() ?? [] }),
     setCapture: (on) => captureEnabled && typeof on === 'boolean' && workCapture.setEnabled(on),
     async stop() {
+      stopping = true;
+      for (const v of vaults.values()) v.close();
       const url = localUrl();
       await workCapture.stop();
       await Promise.all([supervisor.stop({ final: true }), flow.stopDevices()]);
