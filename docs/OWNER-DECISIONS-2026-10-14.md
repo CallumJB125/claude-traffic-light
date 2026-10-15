@@ -8,7 +8,116 @@ The original `claude/release` checkout and handover are preserved. Implementatio
 PR #7 remains unmerged. The owner subsequently authorized public beta publication;
 the release-note-only PR #8 was merged into `main` for the signing workflow.
 
-## Public beta publication
+## Current status — 15 October 2026
+
+The public desktop release is `1.0.2-beta.72`, frozen source
+`09b4495146dd27d1cd8f7e0275344103f8777035`. Its
+[build/stage run](https://github.com/CallumJB125/claude-traffic-light/actions/runs/38717768703)
+and [signed promotion](https://github.com/CallumJB125/claude-traffic-light/actions/runs/38761070371)
+passed. Final Mac root: 4,843 passed, 12 skipped; remote 220/220; board 3,107/3,107;
+native Darwin 48/48. Final Linux root: 4,834 passed, 21 skipped; remote 220/220;
+board 3,106 passed, one skipped. The first Linux failure and unchanged-source
+retry remain recorded below. Final checks have zero failures/cancellations. Mac arm64 and Linux
+x64 packaged smokes passed; Mac x64 installers built without a runtime smoke.
+The Windows native filesystem gate passed 69+166+71 checks, but Windows installer
+publication and broader runtime/privacy acceptance remain gated. Mac remains
+ad-hoc signed and not notarized.
+
+Team sessions now opens the selected live activity/conversation and supports
+reviewed Send, Steer and Interrupt where the explicit share and provider permit.
+Generation/turn binding, watch-only access, revocation clearing and uncertain
+delivery handling are covered. Real Codex/Claude checks used two local test
+identities, not external people/devices. Durable executable next-turn queues,
+owner-reviewed proposals, new granular delegation records and universal conflict
+prevention remain unimplemented. The historical design below retains that scope.
+
+Normal installed beta.67 Home exposed synchronous project scanning. The first
+worker fix made Home responsive but hung Quit; it was not published. The final
+killable child-process fix passed local normal launch/navigation/clean Quit and
+66 focused privacy/Home/starter/quit checks, followed by complete beta.71 CI.
+Historical beta.71 verification: public manifest signature/product/channel/version/expiry, six-entry
+Mac/Linux matrix and both feed size/SHA-512 checks passed. The downloaded arm64
+ZIP matches staged SHA-256
+`68978afa3b9aa56af00cb7b0d61f90297fd18925915e8c43b1a99792bed131f1`.
+The site at `https://1fadf9e4.plexiform-site.pages.dev` is deployed, the live
+changelog shows beta.71, all six browser download links resolve to beta.71, and
+the waitlist GET retains its expected HTTP 405. The public arm64 app is installed;
+19 runtime files plus `PRIVACY.md`, ad-hoc signature and isolated smoke match.
+
+The owner completed Google desktop sign-in into existing Callum's team with Live
+board state. A localhost browser error did not prevent completion; the transient
+34-second app pause is retained as unresolved evidence. No external session was
+shared or messaged. The post-sign-in private backup is
+`work/app-backups/20261015T094804Z-session-interaction` in the adjacent task
+workspace. Normal launch of public beta.71 initially showed "Work with a team"
+rather than the earlier team connection. After the owner cleared macOS Keychain
+authorization, the public app reconnected to Callum's team with Live state and
+passed normal Home, Overview, Team sessions and clean Quit. Team sessions had
+zero shared sessions and "Some activity is unavailable"; no real teammate was
+shared or messaged. The app was closed and a new private backup with 25 checked
+SQLite snapshots was saved at `work/app-backups/20261015T151256Z-session-interaction`.
+Sign-in persistence through the beta.72 update remains open.
+
+The beta.72 startup fix is frozen at
+`09b4495146dd27d1cd8f7e0275344103f8777035`. Live-team identity subscription now
+waits for Electron readiness, temporarily unavailable/decryption-failed credential
+reads remain retryable, and transient sign-out no longer replaces the remembered
+team workspace with local. Focused auth/lifecycle checks passed 226/226. Its local
+package matches all 22 changed runtime/privacy files and passes ad-hoc signature
+verification plus isolated smoke. Attempt 1 of CI `38717768703` passed Mac root
+4,843, 12 skipped /4,855; remote 220/220; board 3,107/3,107; native Darwin 48/48
+and arm64 packaged smoke. Its native Windows gate passed 69+166+71 checks.
+Linux root passed 4,834, 21 skipped /4,855 and remote 220/220. Linux board had
+3,105 passed, one skipped and one failure in `no card data is ever stored: only
+provider ids, plan, seats and period`; staging was skipped. The synthetic assertion
+reported `stored:4242`. Failed logs remain in `work/beta72-linux-job.log`.
+The unchanged focused billing test passed 1/1, but a fixture collision is unproven.
+Only the failed Linux job was rerun as attempt 2 at the same frozen source,
+without source edits or weakening the privacy assertion. That retry passed:
+Linux root 4,834, 21 skipped /4,855; remote 220/220; board 3,106 passed, one
+skipped /3,107 and packaged smoke. The earlier Mac/native successes were retained;
+both package smokes and six-installer/feed staging passed, with no Windows
+installers. Twelve checksum entries and 13 R2 objects verified; staged arm64 ZIP
+SHA-256 is `06fbf631cce3f1d9d5c004b53344621cf71a17ae1c4c00e428378fc535a18b59`.
+The first failure remains unexplained and preserved. Release-notes-only PR #12
+was merged; signed promotion `38761070371` passed. GitHub prerelease/source/final
+notes and independent public manifest signature/channel/expiry/six-entry matrix,
+both feed sizes/SHA-512 and downloaded arm64 ZIP verification passed. The public
+ZIP matches the staged SHA-256 above. All six public installer HEAD requests
+returned HTTP 200 with exact expected
+sizes (`work/beta72-public-download-heads.json`). The site at commit
+`aadd9afb0ace9c9ff2f535f06f0d0de35c239971` builds and passes 30/30 tests. Its
+118-file output is deployed to `https://be3c1e09.plexiform-site.pages.dev`;
+live changelog/download HTML curl checks pass and waitlist GET remains HTTP 405.
+A sample of the earlier public beta.71 reconnection wait shows
+`SecItemCopyMatching`; the owner cleared that OS prompt directly and beta.71 normal
+team connection/navigation/clean Quit then passed.
+
+The public beta.72 arm64 package and atomically installed copy match all 22
+runtime/privacy files at the frozen source, pass ad-hoc signature verification
+and pass isolated smoke. The previous public beta.71 app is preserved with the
+25 checked SQLite snapshots in the latest `151256Z-session-interaction` backup.
+Normal beta.72 launch waits inside macOS Keychain `SecItemCopyMatching` for the
+owner to authorize the new app signature; no new pre-readiness unreadable-account
+log appeared. This fix does not bypass OS authorization. Retained sign-in,
+Home/Overview/Team sessions navigation and clean Quit remain pending. Browser
+automation failed its internal policy service twice before site access, so the
+beta.72 real-browser refresh is unchecked; no bypass was used.
+
+Staging and production hub are at
+`88c9817d162e173bfed75324c895398b7aeafd0a`; later Home changes are app-only.
+Health/auth and the authenticated browser board are live. Google/GitHub web and
+push are configured; production email is OFF. Current rollback backups:
+
+- `/opt/buddy-hub-staging/owner-backup-20261015T083517241743Z`
+- `/opt/buddy-hub/owner-backup-20261015T083627048062Z`
+
+Implementation PR #7 remains draft/unmerged. Release-note-only PRs #8–#12 were
+merged for publication. No original checkout, private data or failed evidence was
+discarded. The sections below preserve the earlier beta.65 evidence and design;
+they are historical snapshots rather than the current release state.
+
+## Historical beta.65 publication
 
 `1.0.2-beta.65` is published for Mac (arm64/x64) and Linux (x64), from frozen
 source `6375c805bb07b43c5cdb329f07aaaeeee302d1be`. Runtime code is unchanged from

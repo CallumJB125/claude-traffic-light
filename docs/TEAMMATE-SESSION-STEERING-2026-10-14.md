@@ -3,8 +3,11 @@
 
 ## Implementation status — 15 October 2026
 
-The selected-session interaction gap described below is now implemented at frozen
-source `88c9817d162e173bfed75324c895398b7aeafd0a`. See
+The selected-session interaction gap described below is now implemented. Its
+initial frozen source was `88c9817d162e173bfed75324c895398b7aeafd0a`; the final
+beta.71 desktop source, including the Home process fix and privacy inventory,
+was `af711c5707364fb325053c243e8a4f45201ef889`. The current published beta.72
+retained-account follow-up is `09b4495146dd27d1cd8f7e0275344103f8777035`. See
 [SESSION-INTERACTION-2026-10-15.md](SESSION-INTERACTION-2026-10-15.md) for the current
 behavior, privacy protections, evidence and remaining acceptance. Team sessions
 can show a selected shared session's live activity, conversation and actual
@@ -19,10 +22,33 @@ delegation records remain unimplemented. The existing interact share was not
 silently expanded. Universal prevention of independent agents overwriting or
 undoing one another's work also remains unimplemented. Local two-identity desktop
 checks with real providers are documented separately; external two-person,
-two-device/provider acceptance is still open. Release beta.67 passed its frozen
-checks and signed publication; installed Home navigation exposed a separate
-blocking directory scan, now being addressed by the follow-up described in the
-implementation report.
+two-device/provider acceptance is still open. Beta.71's full Mac/Linux checks and
+signed promotion passed. Its Home scan uses a killable child process; a local
+packaged candidate passed normal navigation and clean Quit. The beta.71 public
+signature/feed/arm64 ZIP checks, live site links and installed source/signature/
+isolated smoke checks passed. The earlier desktop Google account connected to
+Callum's team with Live state, but the final public app did not retain that team
+connection on normal launch. That initial loss is preserved in the implementation
+report. The owner later cleared Keychain
+authorization; public beta.71 reconnected to Callum's team with Live state and
+passed normal Home/Overview/Team sessions/clean Quit. A retained-account startup fix is
+frozen for beta.72 at `09b4495146dd27d1cd8f7e0275344103f8777035`, with
+226 focused auth/lifecycle checks passed; installed persistence acceptance is
+pending. Its local package matches all 22 changed
+runtime/privacy files and passes signature verification plus isolated smoke;
+normal beta.72 UI/update-persistence acceptance is not established. Its first CI
+attempt passed Mac and the native filesystem gate, but one Linux card-data
+storage assertion failed. The unchanged focused test and Linux-only retry passed;
+final staging and both package smokes passed. Failed evidence is retained and its
+cause is unproven. Signed promotion and public beta.72 signature/feed/ZIP
+verification passed. The beta.72 site is deployed and the public arm64 app is
+installed, with exact 22-file/source, signature and isolated-smoke checks passed
+for package and installed copies. All six public installer HEAD requests returned
+HTTP 200 with exact expected sizes. Normal beta.72 launch waits for owner-controlled
+macOS Keychain authorization for the new app signature; retained sign-in,
+navigation and clean Quit remain pending. Its browser refresh is unchecked because
+browser automation fails its internal policy service. Neither sign-in nor
+local test identities establish external teammate interaction acceptance.
 
 The sections below preserve the 14 October design and source-review snapshot,
 including its then-current implementation limits and proposed future acceptance.
