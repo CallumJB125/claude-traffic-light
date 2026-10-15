@@ -21,7 +21,7 @@ and isolated public/installed smokes pass. Pending-Keychain navigation is usable
 After direct owner approval, the saved team account restored. A real routing defect
 was then observed: restoring off a hub page retains the cached local board, so Board
 can show local My board under a team workspace label. Local Live is not team Live.
-A focused beta.81 follow-up is in progress; published beta.74 bytes are immutable.
+A focused beta.82 follow-up is in progress; published beta.74 bytes are immutable.
 Public team-board, Quit and unchanged-restart acceptance remain open. UI automation
 is paused after concurrent app interaction and an owned Claude conversation appeared.
 
@@ -488,9 +488,9 @@ replaced a random UUID's final character with `0`; when already `0`, the request
 was unchanged and correctly accepted. The fixture now guarantees a different
 path and asserts inequality before checking the existing HTTP 403 refusal.
 Size, hash, device and expiry checks and production sync code are unchanged.
-Focused sync tests pass 8/8. The Mac unit step passed and packaging
-continued; its final packaging receipt is retained separately. No beta.80
-publication or website deployment occurred.
+Focused sync tests pass 8/8. Mac passed native 49/49, root 4,951 with
+12 skipped, remote 220/220, board 3,107/3,107 and packaged smoke. Staging was
+skipped because Linux failed. No beta.80 publication or website deployment occurred.
 
 An analogous audit found three Slack test cases replacing a random HMAC suffix
 with fixed `AA`, which could also be unchanged. Those test mutations now guarantee
@@ -500,3 +500,23 @@ SHA256 base64url final characters were checked to remain canonical and change
 the decoded signature bytes. No production authentication code changed.
 Beta.81 retains the same desktop runtime as the frozen synthetic-tested beta.75
 source; installation over the owner's live beta.74 continuation remains deferred.
+
+## Beta.81 native supervisor observation and beta.82 preparation
+
+Run `38791472396` at frozen `208f6efa` failed Mac's native bootstrap-cutoff
+test: 48 passed and one failed. Its immediate assertion required the child's
+exitCode/signalCode to be set when open rejected. Production intentionally
+returns after its absolute deadline with renewal blocked if reaping is still
+pending, and keeps that block until the captured child's close event. A slow
+synchronous launch can consume the fixture's 200 ms budget before timers are
+installed; the deadline then leaves only a minimal close-event wait. The failed
+assertion alone does not establish that the child escaped SIGKILL.
+
+The fixture correction checks the kill request, the separate close receipt, and
+a deterministic held-close case that refuses replacement launches until cleanup
+is observed. Production deadlines, SIGKILL behavior and fail-closed renewal
+remain unchanged. Focused native supervisor checks pass 5/5, including both
+changed cases independently (2/2); the complete local native suite passes 50/50.
+Linux's full unit step passed and continued to packaging; exact final receipts
+are retained separately. Windows native checks passed 69+166+71. No beta.81
+staging or publication is claimed.

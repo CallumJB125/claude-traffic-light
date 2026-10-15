@@ -29,7 +29,7 @@ and isolated public/installed smokes pass. Pending-Keychain navigation is usable
 After direct owner approval, the saved team account restored. A real routing defect
 was then observed: restoring off a hub page retains the cached local board, so Board
 can show local My board under a team workspace label. Local Live is not team Live.
-A focused beta.81 follow-up is in progress; published beta.74 bytes are immutable.
+A focused beta.82 follow-up is in progress; published beta.74 bytes are immutable.
 Public team-board, Quit and unchanged-restart acceptance remain open. UI automation
 is paused after concurrent app interaction and an owned Claude conversation appeared.
 
