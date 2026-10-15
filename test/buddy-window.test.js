@@ -575,7 +575,9 @@ test('connect sign-out generation wiring: bumped on sign-out, account and hub sw
   const fn = src.slice(src.indexOf('async function openConnect'), src.indexOf('async function showHubPage'));
   assert.ok(src.indexOf('const connectLife = createConnectLife();') < src.indexOf('createHubSupervisor({'), 'exists before anything can call forgetHub');
   assert.match(src, /function forgetHub\(\) \{\n\s+gen \+= 1;\n\s+connectLife\.bump\(\);/);
-  assert.match(src, /if \(!id \|\| !store\.setActive\(id\)\) return;\n\s+connectLife\.bump\(\);/);
+  const switchWorkspace = src.slice(src.indexOf('function switchWorkspace('), src.indexOf('async function onSignOut'));
+  assert.match(switchWorkspace, /if \(!id \|\| !store\.setActive\(id\)\) return;/);
+  assert.match(switchWorkspace, /\n\s+forgetHub\(\);/, 'every workspace switch retires the hub and bumps connectLife');
   assert.match(src, /await connectLife\.clearing\(integrationPartitionFor\(origin\), \(\) => clearHubSessions\(origin, \(p\) => session\.fromPartition\(p\)\)\);/);
   const refuse = fn.indexOf("if (!current) { log('connect window refused', 'signed out or switched while opening'); return; }");
   assert.ok(refuse > fn.indexOf('connectLife.setBindCookie(') && refuse < fn.indexOf('new BrowserWindow('), 'refused after the cookie set, before the window');

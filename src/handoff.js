@@ -56,13 +56,13 @@ function create({ entitlements, clipboard, docFor, adapters = defaultAdapters(),
     if (!h) return { ok: false, error: 'That hand-off has already ended.' };
     live.delete(id);
     h.off();
-    try { h.adapter.release({ target: h.target }); } catch { /* gone */ }
+    try { Promise.resolve(h.adapter.release({ target: h.target })).catch(() => {}); } catch { /* gone */ }
     if (h.folder) fs.rmSync(h.folder, { recursive: true, force: true });
     return { ok: true };
   }
 
   // prompt: send this text as it is instead of the key's handover (continueIn.ask); the copy fallback copies it.
-  async function hand(key, to, onEvent = () => {}, prompt = null) {
+  async function hand(key, to, onEvent = () => {}, prompt = null, feature = 'handoff.launch') {
     if (!Object.hasOwn(TARGETS, to)) return { ok: false, error: 'Choose Codex or Claude.' };
     const copyIt = async () => {
       if (prompt == null) return copy(key);
@@ -71,7 +71,7 @@ function create({ entitlements, clipboard, docFor, adapters = defaultAdapters(),
       return { ok: true, mode: 'copied' };
     };
     const fallback = async (note) => { const c = await copyIt(); return c.ok ? { ...c, note } : c; };
-    if (!entitlements.has('handoff.launch')) return { ...(await fallback(`Copied. Paste it into ${TARGETS[to]}. One-click launch isn't part of your current plan.`)), upgrade: true };
+    if (!['handoff.launch', 'agentMail'].includes(feature) || !entitlements.has(feature)) return { ...(await fallback(`Copied. Paste it into ${TARGETS[to]}. One-click launch isn't part of your current plan.`)), upgrade: true };
     if (live.size >= MAX_LIVE) return { ok: false, error: 'End one of the running hand-offs first.' };
     const doc = prompt ?? await docFor(key);
     if (!doc) return { ok: false, error: 'No handover could be built for this session.' };

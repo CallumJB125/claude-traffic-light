@@ -300,7 +300,8 @@ function releaseMatrixExpression(yml) {
   assert.equal(typeof include, 'string');
   const match = /^\$\{\{ (.+) \}\}$/.exec(include);
   assert.ok(match, 'one expression selects the release matrix');
-  assert.match(match[1], /^fromJSON\(\(vars\.WINDOWS_RELEASE == 'true' \|\| \(github\.event_name == 'workflow_dispatch' && inputs\.validate_windows\)\) && '[^']*' \|\| '[^']*'\)$/);
+  assert.match(match[1], /^fromJSON\(.+\)$/);
+  assert.match(match[1], /vars\.WINDOWS_RELEASE == 'true'/);
   return match[1];
 }
 
@@ -344,6 +345,39 @@ test('release scope: macOS/Linux by default; Windows diagnostics cannot enable p
     assert.match(jobs[name], /needs: \[build, native-directory\]/);
     assert.ok(!/inputs\.validate_windows/.test(jobs[name]), `${name}: diagnostics never grant publication`);
   }
+  for (const [event, beta, platform, flag, wanted] of [
+    ['workflow_dispatch', false, 'linux', undefined, ['linux']],
+    ['workflow_dispatch', false, 'mac', undefined, ['mac']],
+    ['workflow_dispatch', false, 'win', undefined, ['win']],
+    ['workflow_dispatch', true, 'linux', undefined, ['mac', 'linux']],
+    ['workflow_dispatch', true, 'win', 'true', ['mac', 'win', 'linux']],
+    ['push', false, 'linux', undefined, ['mac', 'linux']],
+    ['push', false, 'mac', 'true', ['mac', 'win', 'linux']],
+  ]) {
+    const rows = vm.runInNewContext(expression, { vars: { WINDOWS_RELEASE: flag }, github: { event_name: event }, inputs: { beta, validation_platform: platform }, fromJSON: JSON.parse });
+    assert.deepEqual(rows.map(row => row.platform), wanted, `${event} beta=${beta} platform=${platform}`);
+  }
+});
+
+test('focused installer acceptance selects one platform and cannot stage a release', () => {
+  const yml = readText('.github/workflows/windows-acceptance.yml');
+  const doc = require('js-yaml').load(yml);
+  assert.deepEqual(Object.keys(doc.jobs), ['build']);
+  assert.deepEqual(doc.permissions, { contents: 'read' });
+  assert.deepEqual(doc.on.workflow_dispatch.inputs.platform.options, ['win', 'linux', 'mac']);
+  assert.equal(doc.on.workflow_dispatch.inputs.platform.default, 'win');
+  const expression = /^\$\{\{ (.+) \}\}$/.exec(doc.jobs.build.strategy.matrix.include)[1];
+  for (const [platform, os] of [['win', 'windows-latest'], ['linux', 'ubuntu-latest'], ['mac', 'macos-latest']]) {
+    const rows = vm.runInNewContext(expression, { inputs: { platform }, fromJSON: JSON.parse });
+    assert.deepEqual(rows, [{ os, platform }]);
+  }
+  const steps = doc.jobs.build.steps;
+  assert.match(steps.find(s => s.name === 'Build installers').run, /--publish never/);
+  assert.equal(steps.some(s => s.name === 'Beta version'), false, 'artifact-only acceptance has no beta input or versioning step');
+  const release = require('js-yaml').load(readText('.github/workflows/release.yml'));
+  assert.equal(steps.find(s => s.name === 'Unit tests').run, release.jobs.build.steps.find(s => s.name === 'Unit tests').run);
+  assert.ok(!/release-r2|gh release|release-promote|secrets\./.test(yml));
+  assertNoShellInputInterpolation(yml, 'installer acceptance');
 });
 
 test('workflow input guard rejects both inline and multiline shell interpolation', () => {
@@ -370,8 +404,8 @@ test('release.yml: tags and manual runs only, nothing signed, no branch conditio
   assert.match(jobs.build, /timeout-minutes: 60/);
   assert.doesNotMatch(jobs.build, /--test-force-exit/, 'forced exit can silently discard completed child-test verdicts');
   assert.match(jobs.build, /name: Unit tests\n(?:.*\n)*? {8}timeout-minutes: 20\n/);
-  assert.match(jobs.build, /node --test --test-timeout=120000 test\/\*\.test\.js test\/adapters\/\*\.test\.js/);
-  assert.match(jobs.build, /node --test --test-timeout=120000 remote\/test\//);
+  assert.match(jobs.build, /node --test --test-concurrency=1 --test-timeout=120000 test\/\*\.test\.js test\/adapters\/\*\.test\.js/);
+  assert.match(jobs.build, /node --test --test-concurrency=4 --test-timeout=120000 remote\/test\//);
   assert.ok(!/npm test/.test(jobs.build));
   // Every selected platform blocks staging; artifacts/evidence remain for debugging.
   assert.ok(!/continue-on-error:/.test(jobs.build));
@@ -379,7 +413,7 @@ test('release.yml: tags and manual runs only, nothing signed, no branch conditio
   releaseMatrixExpression(yml); // semantics and native/stage gates are exercised above
   assert.match(jobs.build, /name: Windows installer lifecycle/);
   assert.match(jobs.build, /run: node scripts\/windows-install-smoke\.js/);
-  assert.match(jobs.build, /node --test --test-timeout=120000 '\*\/test\/\*\*\/\*\.test\.js'/, 'the board authority suite is mandatory too');
+  assert.match(jobs.build, /node --test --test-concurrency=4 --test-timeout=120000 '\*\/test\/\*\*\/\*\.test\.js'/, 'the board authority suite is mandatory too');
   assert.match(jobs.build, /dist\/\*\.yml/, 'beta*.yml as well as latest*.yml');
   // N2: both stage jobs read the repo variable and drop Windows before the checksums and every upload
   for (const j of ['stage', 'stage-beta']) {
@@ -629,7 +663,7 @@ test('release.yml: every smoke test blocks release staging, with explicit Window
 test('manual native-only diagnostics cannot stage artifacts or omit the native gate', () => {
   const doc = require('js-yaml').load(readText('.github/workflows/release.yml'));
   assert.deepEqual(doc.on.workflow_dispatch.inputs.native_only, { description: 'Run native acceptance only; no installers or staging', type: 'boolean', default: false });
-  assert.equal(doc.concurrency.group, "release-${{ github.ref }}${{ inputs.native_only && '-native' || '' }}");
+  assert.equal(doc.concurrency.group, "release-${{ github.ref }}${{ inputs.native_only && '-native' || '' }}-${{ github.event_name == 'workflow_dispatch' && !inputs.beta && inputs.validation_platform || 'all' }}");
   assert.equal(doc.concurrency['cancel-in-progress'], false);
   assert.equal(doc.jobs.build.if, "github.event_name != 'workflow_dispatch' || !inputs.native_only");
   assert.equal(doc.jobs['native-directory'].if, undefined);

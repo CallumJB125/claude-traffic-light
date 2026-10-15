@@ -16,13 +16,15 @@ const path = require('node:path');
 const http = require('node:http'); // privacy-flow: local-board-hub
 const crypto = require('node:crypto');
 const { pathToFileURL } = require('node:url');
-const { BaseWindow, BrowserWindow, WebContentsView, ipcMain, session, shell, utilityProcess, app, nativeTheme, net, safeStorage, dialog } = require('electron'); // privacy-flow: team-hub-account
+const { BaseWindow, BrowserWindow, WebContentsView, ipcMain, session, shell, utilityProcess, app, nativeTheme, net, safeStorage, dialog, clipboard } = require('electron'); // privacy-flow: team-hub-account
 const { PAGES, GROUPS, SECTIONS, FOOTER, sectionsFor, pageById, hubPageUrl, fragmentOk, navDecision, openDecision, connectDecision, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl } = require('./pages');
 const { createHubSupervisor } = require('./hub-process');
 const { createWorkspaceStore, normalizeHubUrl, normalizeLinkHub, accessTeamFromLocation, partitionFor: teamPartition, integrationPartitionFor, hubKey, hostOf } = require('./workspaces');
 const { createAccountClient, pinnedTransport, bearerScope, bearerHeaders } = require('./accounts');
 const { createDeviceController, defaultDeviceName } = require('./device');
-const { createSecureStorage } = require('./secure-storage');
+const { createSecureStorage, storageHelp } = require('./secure-storage');
+const { createAccountVault } = require('./account-vault');
+const { createAccountStorageProcess } = require('./account-storage-process');
 const { createAccountFlow, clearHubSessions, ACCT_ARGS } = require('./account-flow');
 const { createConnectLife } = require('./connect-life');
 const BRAND = require('./brand');
@@ -134,30 +136,38 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
 
   // ── sealed per-hub device token ────────────────────────────────────────
   const credentialStorage = createSecureStorage(safeStorage);
+  // A pending Keychain operation also survives Chromium shutdown. Keep Mac
+  // account crypto in a disposable process that can be retired after cleanup.
+  const accountProcess = process.platform === 'darwin' && app.isPackaged ? createAccountStorageProcess({
+    ready: () => app.isReady(),
+    spawn(executable, args, options) {
+      const profile = fs.mkdtempSync(path.join(app.getPath('temp'), 'plexiform-account-storage-'));
+      let child;
+      try { child = require('node:child_process').spawn(executable, [...args, `--user-data-dir=${profile}`], options); } // privacy-flow: team-hub-account
+      catch (error) { fs.rmSync(profile, { recursive: true, force: true }); throw error; }
+      child.once('exit', () => { try { fs.rmSync(profile, { recursive: true, force: true }); } catch { /* disposable profile; no account files */ } });
+      return child;
+    },
+  }) : null;
+  // Electron's async Linux provider cannot attest that it avoided plaintext
+  // fallback. Preserve the existing verified desktop-store backend there.
+  // Mac/Windows use only native async crypto for account credentials.
+  const accountStorage = process.platform === 'linux' ? {
+    encryptAsync: async text => credentialStorage.encrypt(text),
+    decryptAsync: async bytes => credentialStorage.decrypt(bytes),
+  } : accountProcess ?? credentialStorage;
+  let stopping = false, resumeRequested = false;
+  const resumedHubs = new Set();
   const vaults = new Map();
   function vault(origin) {
     let v = vaults.get(origin);
     if (v) return v;
-    const file = path.join(ACCOUNTS_DIR, `${fileKey(origin)}.bin`);
-    let cache; // undefined until first read; the board view asks per request
-    v = {
-      load() {
-        if (cache !== undefined) return cache;
-        cache = null;
-        try { if (fs.existsSync(file)) cache = JSON.parse(credentialStorage.decrypt(fs.readFileSync(file))); } catch (e) { log('account sign-in unreadable; treated as signed out', e.message); }
-        if (cache && cache.hub !== origin) cache = null;
-        return cache;
-      },
-      save(obj) {
-        if (!credentialStorage.available()) throw new Error('Secure account storage unavailable');
-        fs.mkdirSync(ACCOUNTS_DIR, { recursive: true, mode: 0o700 });
-        const tmp = `${file}.${process.pid}.tmp`;
-        fs.writeFileSync(tmp, credentialStorage.encrypt(JSON.stringify(obj)), { mode: 0o600 });
-        fs.renameSync(tmp, file);
-        cache = obj;
-      },
-      clear() { cache = null; fs.rmSync(file, { force: true }); },
-    };
+    v = createAccountVault({
+      origin, file: path.join(ACCOUNTS_DIR, `${fileKey(origin)}.bin`), storage: accountStorage,
+      ready: () => app.isReady(), whenReady: () => app.whenReady(),
+      onChange: event => { void accountStorageChanged(origin, event).catch(() => log('saved sign-in refresh failed')); },
+    });
+    if (stopping) v.close();
     vaults.set(origin, v);
     return v;
   }
@@ -167,6 +177,34 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
 
   const store = createWorkspaceStore(path.join(userData, 'buddy-workspaces.json'), { allowOrigins, signedIn });
   const getTeamHub = () => { const w = store.active(); return w.kind === 'local' ? null : w; };
+  // A restored credential can reveal the remembered workspace without an
+  // explicit switchWorkspace call. Detached board views and pending resolves
+  // must follow that identity change while the user's local page stays put.
+  function activeHubBinding() {
+    const w = store.active();
+    return { workspace: w.id, kind: w.kind, url: w.hub ?? w.url ?? null,
+      org: w.teamId ?? null, marker: w.kind === 'team' ? vault(w.hub).load() : null };
+  }
+  function hubBindingCurrent(binding) {
+    if (!binding) return false;
+    if (binding.client) return !!binding.marker && vault(binding.origin).load() === binding.marker;
+    const current = activeHubBinding();
+    return ['workspace', 'kind', 'url', 'org', 'marker'].every(key => binding[key] === current[key]);
+  }
+  function resolvedHubMatches(h, binding) {
+    if (binding.kind === 'local') return h.team === false && h.partition === partitionFor();
+    if (binding.kind === 'team') return h.team === true && h.bearer === true &&
+      h.origin === binding.url && h.org === binding.org && h.partition === teamPartition(binding.url);
+    return binding.kind === 'access' && h.team === true && !h.bearer &&
+      h.url === binding.url && h.partition === teamPartition(binding.url);
+  }
+  function retireChangedHub() {
+    if ((hubInfo && !hubBindingCurrent(hubBinding)) || (hubLoading && !hubBindingCurrent(hubLoadingBinding))) {
+      forgetHub();
+      return true;
+    }
+    return false;
+  }
 
   const clients = new Map();
   function clientFor(origin) {
@@ -181,6 +219,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   let sidebar = null;
   let content = null; // the view currently attached on the right
   let hubView = null;
+  let hubDocument = 0;
   let infoView = null;
   let accountView = null;
   let accountLoad = Promise.resolve();
@@ -204,8 +243,10 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   let selected = 'board';
   let hubStatus = { state: 'stopped' };
   let hubInfo = null; // {url, origin, accessTeam, partition, team, bearer, org}
+  let hubBinding = null;
   let viewError = null; // the hub is fine but its page failed to load
   let hubLoading = null;
+  let hubLoadingBinding = null;
 
   // Usage optimiser: Burst's dashboard in its own locked view above the native page (see optimiser.js).
   let burstApi = null;
@@ -293,7 +334,8 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   const sessionBridge = createSessionBridge({
     userData, hubs: () => store.hubs().filter(signedIn), clientFor, userOf, signedIn, supervisor, workCapture, handoverWriter, home: os.homedir(), log: (m) => log(m),
     // null: the personal board; an origin: that team hub; undefined: no hub page is showing.
-    currentHub: () => (hubInfo && content === hubView ? (hubInfo.team ? hubInfo.origin : null) : undefined),
+    currentHub: () => (hubInfo && content === hubView && hubBindingCurrent(hubBinding) ? (hubInfo.team ? hubInfo.origin : null) : undefined),
+    currentTeam: () => hubInfo?.team && hubBindingCurrent(hubBinding) ? hubInfo.org : null,
   });
 
   async function setupSources() {
@@ -380,8 +422,10 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     gen += 1;
     connectLife.bump();
     hubLoading = null; // a resolve for the old hub must not be awaited by the new one
+    hubLoadingBinding = null;
     const old = localUrl();
     hubInfo = null;
+    hubBinding = null;
     viewError = null;
     if (hubView) { if (content === hubView) content = null; dispose(hubView, win); hubView = null; }
     if (old) session.fromPartition(partitionFor()).cookies.remove(old, 'board_local').catch(() => {}); // privacy-flow: local-board-hub
@@ -427,6 +471,10 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       burst: (() => { try { return burstApi?.snapshot().d.kind === 'present'; } catch { return false; } })(),
       optimiser: selected === 'optimiser' ? { nav: optimiser.nav(), active: optimiser.active() } : null,
       signedIn: store.hubs().some(signedIn),
+      accountStorage: [...vaults.values()].some(v => v.state() === 'restoring') ? 'restoring'
+        : [...vaults.values()].some(v => v.state() === 'saving') ? 'saving'
+        : [...vaults.values()].some(v => v.state() === 'locked') ? 'locked' : 'ready',
+      accountStorageHelp: storageHelp(),
       runners: flow.runningTeams(),
       hub: team
         ? { state: viewError ? 'failed' : 'ready', error: viewError, mode: 'team', name: team.name }
@@ -602,6 +650,37 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     },
   });
 
+  function resumeRestored(origin) {
+    if (stopping || !resumeRequested || resumedHubs.has(origin) || !signedIn(origin)) return;
+    resumedHubs.add(origin);
+    try { flow.resumeDevices(origin); } catch { log('saved runner could not resume'); }
+  }
+
+  async function accountStorageChanged(origin, { reason }) {
+    if (stopping) return;
+    if (retireChangedHub() && win && isHubPage(selected)) showInfo(pageById(selected));
+    pushState();
+    if (reason !== 'restored') return;
+    const marker = vault(origin).load();
+    if (!marker) return;
+    const navigation = setupLocalGeneration, page = selected, workspace = store.activeId();
+    try { await flow.refreshAccount(origin); } catch { /* offline accounts can retry later */ }
+    if (stopping || vault(origin).load() !== marker) return;
+    const retired = retireChangedHub();
+    // Hydration may reveal the remembered team. Preserve navigation performed
+    // while waiting, including an explicit switch to the local workspace.
+    // Membership refresh can also remove a team opened during this wait.
+    // Re-render only the currently selected hub page against its fresh scope.
+    if (retired && win && pageById(selected)?.kind === 'hub') select(selected);
+    else if (win && navigation === setupLocalGeneration && page === selected && workspace === store.activeId() && isHubPage(selected)) {
+      forgetHub();
+      void showHubPage(pageById(selected));
+    }
+    if (accountView && !accountView.webContents.isDestroyed()) accountView.webContents.send('buddy:acct:changed');
+    resumeRestored(origin);
+    pushState();
+  }
+
   // ── hub view ────────────────────────────────────────────────────────────
 
   // Once per hub partition: the device token rides as a header on requests to
@@ -631,10 +710,11 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     installBearer(origin);
     const h = { url: origin, origin, accessTeam: null, partition: teamPartition(origin), team: true, bearer: true, client: true, org: null };
     hubInfo = h;
+    hubBinding = { client: true, origin, marker: vault(origin).load() };
     const view = makeHubView(h);
     hubView = view;
     await view.webContents.loadURL(`${origin}/clients`); // privacy-flow: team-hub-account
-    if (current !== gen || !win || selected !== 'flow:clients' || view !== hubView || !signedIn(origin)) return;
+    if (current !== gen || !win || selected !== 'flow:clients' || view !== hubView || !hubBindingCurrent(hubBinding)) return;
     attach(view);
     pushState();
   }
@@ -679,6 +759,9 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     });
     view.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#1c1a1f' : '#eceaf0');
     const wc = view.webContents;
+    wc.on('did-start-navigation', d => { if (d.isMainFrame && !d.isSameDocument) hubDocument++; });
+    wc.on('render-process-gone', () => { hubDocument++; });
+    wc.once('destroyed', () => { hubDocument++; });
     if (h.client) clientDownloads.set(hubSes, (url, sender, gesture) => {
       const current = () => !!win && view === hubView && content === view && hubInfo?.client && hubInfo.origin === h.origin && signedIn(h.origin);
       if (!gesture || sender !== wc || !current()) return;
@@ -810,19 +893,31 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
 
   async function showHubPage(page) {
     if (!win || !page) return;
+    retireChangedHub();
     const myGen = gen;
+    const binding = activeHubBinding();
     if (!hubInfo) {
       if (hubStatus.state !== 'ready' || getTeamHub()) showInfo(page);
-      if (!hubLoading) { const p = resolveHub().finally(() => { if (hubLoading === p) hubLoading = null; }); hubLoading = p; }
+      if (!hubLoading) {
+        hubLoadingBinding = binding;
+        const p = resolveHub().finally(() => { if (hubLoading === p) { hubLoading = null; hubLoadingBinding = null; } });
+        hubLoading = p;
+      }
       try {
         const h = await hubLoading;
         if (myGen !== gen) return undefined; // the newer caller (switch/connect) owns the load
+        if (!hubBindingCurrent(binding)) {
+          forgetHub();
+          return win && selected === page.id ? showHubPage(page) : undefined;
+        }
+        if (!resolvedHubMatches(h, binding)) throw new Error('The selected workspace could not be resolved. Try again.');
         // A hub that restarted while we set its cookie has a new URL: start
         // over against the new one rather than adopt a dead one. (hubLoading
         // is already cleared here; the crash budget bounds the loop.)
         if (!h.team && supervisor.status().url !== h.url) return showHubPage(page);
-        if (!hubInfo) hubInfo = h;
+        if (!hubInfo) { hubInfo = h; hubBinding = binding; }
       } catch (e) {
+        if (myGen !== gen || !hubBindingCurrent(binding)) return;
         log('board unavailable', e.message);
         // The hub may be fine (e.g. the cookie could not be set): offer Retry.
         if (hubStatus.state === 'ready') viewError = `Could not open the board (${e.message}).`;
@@ -831,7 +926,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
         return;
       }
     }
-    if (!win || selected !== page.id || !hubInfo) return;
+    if (!win || selected !== page.id || !hubInfo || !hubBindingCurrent(binding)) return;
     if (!hubView) hubView = makeHubView(hubInfo);
     const view = hubView;
     const url = hubPageUrl(hubInfo.url, page, { org: hubInfo.org });
@@ -840,7 +935,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       viewError = null;
       await view.webContents.loadURL(url).catch(() => {}); // privacy-flow: team-hub-account
     }
-    if (win && selected === page.id && view === hubView && !viewError) attach(view);
+    if (win && myGen === gen && selected === page.id && view === hubView && !viewError && hubBindingCurrent(binding)) attach(view);
   }
 
   // ── selection ───────────────────────────────────────────────────────────
@@ -888,12 +983,10 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   // ── workspaces ──────────────────────────────────────────────────────────
 
   function switchWorkspace(id, { show = true } = {}) {
-    const prev = store.active();
     if (!id || !store.setActive(id)) return;
-    connectLife.bump();
-    const next = store.active();
-    // Another team on the same hub is the same page with a different ?org=.
-    if (hubInfo?.bearer && prev.kind === 'team' && next.kind === 'team' && prev.hub === next.hub) { hubInfo.org = next.teamId; viewError = null; } else forgetHub();
+    // Retire the old document even for another team on the same hub: its
+    // pending loads and IPC still belong to the workspace being left.
+    forgetHub();
     if (show) select('board'); else pushState();
   }
 
@@ -921,6 +1014,14 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   ipcMain.on('buddy:signout', onSignOut);
   ipcMain.on('buddy:select', onSelect);
   ipcMain.on('buddy:retry', onRetry);
+  ipcMain.on('buddy:account-storage-retry', async e => {
+    if (!fromSidebar(e) || stopping) return;
+    // A denied native provider can cache unavailable for its lifetime. A
+    // deliberate retry gets a fresh isolated provider after the old one exits.
+    if (accountProcess && !await accountProcess.restart()) return;
+    if (stopping) return;
+    for (const v of vaults.values()) if (v.state() === 'locked') void v.retry();
+  });
   const fromOptimiser = (e) => { const wc = localViews.get('optimiser')?.webContents; return !!wc && e.sender === wc && isLocalPage(e.senderFrame?.url ?? ''); };
   ipcMain.on('optimiser:ready', (e) => { if (fromOptimiser(e)) e.sender.send('optimiser:state', optimiser.payload()); });
   ipcMain.on('optimiser:refresh', (e) => { if (fromOptimiser(e)) optimiser.refresh({ reload: true }); });
@@ -942,7 +1043,27 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       } catch (err) { log('account action failed', op, err.message); return { ok: false, error: 'Something went wrong. Try again.' }; }
     });
   }
-  const fromHubView = (e) => !!hubView && e.sender === hubView.webContents && !!hubInfo && e.senderFrame?.origin === hubInfo.origin;
+  const fromHubView = (e) => !!hubView && e.sender === hubView.webContents && !!hubInfo && hubBindingCurrent(hubBinding) && e.senderFrame?.origin === hubInfo.origin;
+  let selectedSessionKey = null;
+  const cardSessionAction = require('./card-session-actions').create({
+    bridge: sessionBridge,
+    capture(e) {
+      if (!fromHubView(e) || e.senderFrame !== hubView.webContents.mainFrame || content !== hubView || !win?.isFocused()) return null;
+      return { window: win, view: hubView, info: hubInfo, frame: e.senderFrame, document: hubDocument, url: e.senderFrame.url, org: hubInfo.org, workspace: store.active()?.id,
+        marker: hubInfo.bearer ? vault(hubInfo.origin).load() : null };
+    },
+    current(t) { return t.window === win && t.view === hubView && t.info === hubInfo && t.document === hubDocument && t.frame === hubView?.webContents.mainFrame && t.url === t.frame.url && t.org === hubInfo?.org
+      && t.workspace === store.active()?.id && t.marker === (hubInfo?.bearer ? vault(hubInfo.origin).load() : null) && content === hubView && !!win?.isFocused(); },
+    copy: text => clipboard.writeText(text),
+    choose: async token => { const r = await dialog.showSaveDialog(token.window, { title: 'Save session handover', defaultPath: path.join(app.getPath('downloads'), 'session-handover.md'), filters: [{ name: 'Markdown', extensions: ['md'] }] }); return r.canceled ? null : r.filePath; },
+    save: (file, text) => fs.writeFileSync(file, text, { mode: 0o600 }),
+    open(key) { selectedSessionKey = key; select('sessions'); const wc = localViews.get('sessions')?.webContents; if (!wc) return false; if (!wc.isLoading()) wc.send('sessions:selection', key); return true; },
+  });
+  ipcMain.handle('buddy:card-session-action', async (e, action, cardId) => { try { return await cardSessionAction(e, action, cardId); } catch { return { ok: false, error: 'Could not complete this session action. Try again.' }; } });
+  ipcMain.handle('buddy:session-selection', e => {
+    const wc = localViews.get('sessions')?.webContents;
+    return wc && e.sender === wc && e.senderFrame === wc.mainFrame && isLocalPage(e.senderFrame.url) ? selectedSessionKey : null;
+  });
   ipcMain.on('buddy:open-team', (e) => { if (fromHubView(e)) select('team'); });
   ipcMain.handle('buddy:local-handover', async (e, cardId) => {
     if (!fromHubView(e)) return null;
@@ -1116,7 +1237,14 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     select,
     openInvite: (link) => flow.openInvite(link),
     /** App start: runners the member left on come back without opening the window. */
-    resumeDevices: () => flow.resumeDevices(),
+    resumeDevices() {
+      if (stopping) return;
+      resumeRequested = true;
+      for (const origin of store.hubs()) {
+        const v = vault(origin); v.load();
+        if (v.state() === 'ready') resumeRestored(origin);
+      }
+    },
     /** Subscribe to validated runner events (`run.budget_reached`); returns the unsubscribe function. */
     onRunnerEvent(cb) { if (typeof cb !== 'function') return () => {}; runnerListeners.add(cb); return () => runnerListeners.delete(cb); },
     /** Burst facts for the runner (src/burst-ipc.js): only while a runner is running cards. */
@@ -1131,6 +1259,9 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     workCostRows: () => ({ tasks: workCapture.costRows?.() ?? [], records: workCapture.localRecords?.() ?? [] }),
     setCapture: (on) => captureEnabled && typeof on === 'boolean' && workCapture.setEnabled(on),
     async stop() {
+      stopping = true;
+      for (const v of vaults.values()) v.close();
+      accountProcess?.close();
       const url = localUrl();
       await workCapture.stop();
       await Promise.all([supervisor.stop({ final: true }), flow.stopDevices()]);

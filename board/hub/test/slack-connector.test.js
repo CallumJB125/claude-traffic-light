@@ -316,7 +316,9 @@ test('F2: a form left open past the hour is answered "expired" in the ack and dr
   assert.equal(gone.ctx.slack.calls.length, 0);
   // A bad MAC on an old form is still tampering.
   const [b, mac] = old.split('.');
-  await assert.rejects(run(ctx, submission({ signing_secret: s }, { meta: `${b}.${mac.slice(0, -2)}AA` })), (e) => e.healthCode === 'bad_metadata');
+  const changedMac = mac.slice(0, -1) + (mac.endsWith('A') ? 'Q' : 'A');
+  assert.notEqual(changedMac, mac, 'tampering must change the random MAC');
+  await assert.rejects(run(ctx, submission({ signing_secret: s }, { meta: `${b}.${changedMac}` })), (e) => e.healthCode === 'bad_metadata');
 });
 
 test('F3: a Slack Connect /plex command (recorded shape: their home team_id, our app) is told EXTERNAL via response_url; no throw, no act', async () => {

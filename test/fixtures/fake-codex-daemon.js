@@ -2,6 +2,10 @@
 // FAKE stand-in for Codex's shared app-server daemon control socket: a
 // WebSocket server on a private Unix socket (0600, in a 0700 directory) behind
 // a rendezvous symlink, following codex-cli 0.159.2's generated schema shapes.
+// Windows has no supported private Unix socket/uid path in this adapter:
+// there the protocol fixture uses loopback TCP plus explicit POSIX stat
+// metadata. This exercises actor/turn/privacy boundaries, not Windows daemon
+// availability or kernel socket security. POSIX hosts retain the real socket.
 // It is deliberately hostile: thread metadata carries a `preview`, resume
 // returns turns even when asked not to, other clients' turns stream to every
 // connection, and approvals are broadcast. Integration-test only; it is not
@@ -11,12 +15,13 @@ const os = require('node:os');
 const path = require('node:path');
 const http = require('node:http');
 const crypto = require('node:crypto');
-const { WebSocketServer } = require('ws');
+const { WebSocket, WebSocketServer } = require('ws');
 const { testTempDir } = require('../helpers/tmp');
 
 const SECRET = 'SECRET-TRANSCRIPT';
 
-async function startFakeDaemon({ socketMode = 0o600 } = {}) {
+async function startFakeDaemon({ socketMode = 0o600, transport = process.platform === 'win32' ? 'modeled-posix' : 'unix' } = {}) {
+  if (!['unix', 'modeled-posix'].includes(transport)) throw new Error('Unknown fake daemon transport');
   const dir = testTempDir('cdx-');
   fs.chmodSync(dir, 0o700);
   const real = path.join(dir, 's.sock');
@@ -108,11 +113,33 @@ async function startFakeDaemon({ socketMode = 0o600 } = {}) {
       } catch (e) { ws.send(JSON.stringify({ id: m.id, error: { code: -32600, message: e.message } })); }
     });
   });
-  await new Promise((resolve) => server.listen(real, resolve));
-  fs.chmodSync(real, socketMode);
-  fs.symlinkSync(real, socketPath);
+  const modeledPosix = transport === 'modeled-posix';
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    if (modeledPosix) server.listen(0, '127.0.0.1', resolve);
+    else server.listen(real, resolve);
+  });
+  let adapterOptions = {};
+  if (modeledPosix) {
+    const socketStat = { isSocket: () => true, uid: 501, mode: 0o140000 | socketMode, dev: 1, ino: 2 };
+    const dirStat = { isSocket: () => false, uid: 501, mode: 0o40700 };
+    adapterOptions = {
+      uid: 501,
+      fsImpl: {
+        realpathSync: (p) => { if (p !== socketPath) throw new Error('Unknown fixture socket'); return real; },
+        statSync: (p) => { if (p === real) return socketStat; if (p === path.dirname(real)) return dirStat; throw new Error('Unknown fixture path'); },
+      },
+      connect: (p) => {
+        if (p !== real) throw new Error('Unknown fixture socket');
+        return new WebSocket(`ws://127.0.0.1:${server.address().port}/`, { perMessageDeflate: false });
+      },
+    };
+  } else {
+    fs.chmodSync(real, socketMode);
+    fs.symlinkSync(real, socketPath);
+  }
   const fake = {
-    socketPath, realPath: real, calls, responses, threads, addThread, duplicateResponses: false,
+    socketPath, realPath: real, adapterOptions, modeledPosix, calls, responses, threads, addThread, duplicateResponses: false,
     get connections() { return connections; },
     // The human's own turn in their terminal: other clients see it stream.
     foreignTurn(threadId) {

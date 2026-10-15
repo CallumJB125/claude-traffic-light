@@ -61,7 +61,9 @@ test('capability reasons: hooks alone never claim inbound control; unmanaged Cod
     for (const k of ['receive', 'reply', 'resume', 'steer', 'interrupt', 'remoteControl']) { assert.equal(e.capabilities[k].available, false, k); assert.ok(e.capabilities[k].reason.length > 10, k); }
     assert.equal(e.interact, null);
   }
-  assert.match(codex.capabilities.receive.reason, /Codex, which has no supported way/);
+  assert.match(codex.capabilities.receive.reason, /Activity hooks cannot send/);
+  assert.match(codex.capabilities.receive.reason, /shared daemon needs the Preferences opt-in and explicit attachment/);
+  assert.match(codex.capabilities.receive.reason, /Codex desktop conversations cannot be reached/);
   assert.match(gemini.capabilities.receive.reason, /hooks report activity only/);
   assert.deepEqual(Object.keys(codex.capabilities), CAPABILITIES);
   const [o] = d.mine({ owned: [owned({ status: 'working', capabilities: { steer: false, interrupt: true } })] });

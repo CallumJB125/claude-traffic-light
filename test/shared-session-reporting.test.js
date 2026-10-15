@@ -103,14 +103,14 @@ test('untrusted hub client whitelists metadata and keeps child/report times inde
   const task = { title: 'Task /tmp/private', source: 'self-reported', observed_at: 600, received_at: 700, secret: 'hidden' };
   const reportChild = { ref: child, name: 'Worker', task_title: 'Test', state: 'input', source: 'observed', observed_at: 500, received_at: 650, created_at: 400, rawID: 'hidden' };
   let advertisedInput = true, clientTime = 1000;
-  const fetch = async (url) => ({ status: 200, text: async () => JSON.stringify(url.endsWith('/shared') ? { shared: [{ id: share, session, scope: 'interact', team: { id: 'team', name: 'Team' }, owner: { id: 'owner', name: 'Owner' }, online: true }] } : { result: { ok: true, state: { provider: { id: 'codex', label: 'Codex' }, status: 'working', input_needed: advertisedInput, observed_at: 1000, reporting: { task, input: { needed: true, source: 'provider', observed_at: 800, received_at: 850 }, children: [reportChild, reportChild, { ...reportChild, ref: 'raw-provider-id' }, { ...reportChild, ref: session, source: 'invented' }] } } } }) });
+  const fetch = async (url) => ({ status: 200, text: async () => JSON.stringify(url.endsWith('/shared') ? { shared: [{ id: share, session, scope: 'interact', team: { id: 'team', name: 'Team' }, owner: { id: 'owner', name: 'Owner' }, online: true }] } : { result: { ok: true, state: { session, generation: 1, activeTurn: null, provider: { id: 'codex', label: 'Codex' }, status: 'working', input_needed: advertisedInput, observed_at: 1000, reporting: { task, input: { needed: true, source: 'provider', observed_at: 800, received_at: 850 }, children: [reportChild, reportChild, { ...reportChild, ref: 'raw-provider-id' }, { ...reportChild, ref: session, source: 'invented' }] } } } }) });
   const client = createTeamHubClient({ baseUrl: 'http://127.0.0.1', token: () => 'fixture', fetch }, { now: () => clientTime });
   const [row] = await client.sessions(null, 'team');
   assert.equal(row.task_title, 'Task <path>'); assert.equal(row.task_source, 'self-reported'); assert.equal(row.input_needed, true); assert.equal(row.state, 'input');
   assert.equal(row.observed_at, 1000); assert.equal(row.task_observed_at, 600); assert.equal(row.task_received_at, 700);
   assert.equal(row.children.length, 1); assert.equal(row.children[0].observed_at, 500); assert.equal(row.children[0].received_at, 650);
   assert.ok(!JSON.stringify(row).includes('hidden'));
-  advertisedInput = false; const [noLongerCurrent] = await client.sessions(null, 'team'); assert.equal(noLongerCurrent.input_needed, false); assert.equal(noLongerCurrent.input_reported_needed, true);
+  advertisedInput = false; clientTime = 46_000; const [noLongerCurrent] = await client.sessions(null, 'team'); assert.equal(noLongerCurrent.input_needed, false); assert.equal(noLongerCurrent.input_reported_needed, true);
   advertisedInput = true; clientTime = 90_801; const [oldReport] = await client.sessions(null, 'team'); assert.equal(oldReport.input_needed, false); assert.equal(oldReport.input_reported_needed, true); assert.equal(oldReport.input_observed_at, 800);
 });
 test('an uncertain provider send records unconfirmed once and cannot claim refusal or acknowledgement', async () => {
@@ -128,12 +128,12 @@ test('shared client preserves uncertain send warning and never retries the opera
   const fetch = async (url, opts) => {
     let body;
     if (url.endsWith('/shared')) body = { shared: [{ id: share, session, scope: 'interact', team: { id: 'team', name: 'Team' }, owner: { id: 'owner', name: 'Owner' }, online: true }] };
-    else if (JSON.parse(opts.body).op === 'state') body = { result: { ok: true, state: { generation: 1 } } };
+    else if (JSON.parse(opts.body).op === 'state') body = { result: { ok: true, state: { session, generation: 1 } } };
     else { sends++; body = { result: { ok: false, status: 'unconfirmed', error: 'private unsafe detail' } }; }
     return { status: 200, text: async () => JSON.stringify(body) };
   };
   const client = createTeamHubClient({ baseUrl: 'http://127.0.0.1', token: () => 'fixture', fetch });
-  const result = await client.send(null, 'team', share, 'Single message');
+  const result = await client.send({ id: 'viewer' }, 'team', share, 'Single message');
   assert.equal(result.status, 'unconfirmed'); assert.match(result.error, /Do not resend automatically/); assert.equal(sends, 1); assert.ok(!JSON.stringify(result).includes('private unsafe detail'));
 });
 test('input-needed expires independently of state reads while its original last report remains immutable', async () => {

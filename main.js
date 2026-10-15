@@ -1,3 +1,8 @@
+// Only a private stdio crypto service, before normal app startup touches data.
+if (process.argv.includes('--plexiform-account-storage-worker')) {
+  require('./buddy-window/account-storage-worker').start();
+  return;
+}
 // Windows hook commands in argv form run the exe with --buddy-hook: the hook
 // script runs here and the process exits before any of the app starts.
 if (process.argv.includes('--buddy-hook')) require('./src/buddy-hook-runner.js').run(process.argv);
@@ -184,9 +189,10 @@ require('./src/logging.js').installFileLogging({ rootDir: ROOT_DIR, isDevRun: IS
 if (pendingDeletion.ran) console.log(`[data] deleted: ${pendingDeletion.results.map((r) => `${r.id} ${r.status}`).join(', ')}`);
 // Anything that escapes a promise or a callback, from here on: log it (to
 // app.log too) instead of letting it kill a listener silently.
-// A scrubbed copy also goes to the local crash ring (src/crash-reports.js); nothing is sent.
+// A scrubbed copy also goes to the local crash ring; structural reports are sent only after renewed opt-in.
 const CrashReports = require('./src/crash-reports.js').create({
   dir: path.join(ROOT_DIR, 'crash-reports'),
+  send: require('./src/crash-report-sender.js').create({ fetch: (...args) => net.fetch(...args) }), // privacy-flow: crash-send
   app: { version: app.getVersion(), os: process.platform, osVersion: os.release(), arch: process.arch },
   scrubWith: () => {
     const names = [];
@@ -1623,7 +1629,7 @@ ipcMain.handle('sessions:aitools', e => { if (!sessionsSender(e)) return false; 
 let overviewTeams={host:null,at:0,value:null},overviewTeamHub=null;
 // Team brief + team_* MCP tools (src/team-activity.js), opt-in via teamBrief.
 const TeamActivity=require('./src/team-activity').createTeamActivity({enabled:()=>loadConfig().teamBrief===true,resolve:async(a)=>(devMockReady?(await getBuddy().teamActivityLink?.(a))??null:null),teams:async()=>(devMockReady?(await getBuddy().teamMemoryLinks?.())??[]:[]),fetch:(...a)=>net.fetch(...a),log:m=>console.log(m)}); // privacy-flow: team-brief
-const liveTeamHub=require('./src/team-hub-live').createLiveTeamHub({identity:()=>devMockReady?getBuddy().interactionHostIdentity?.()??null:null,fetch:(...a)=>net.fetch(...a)}); // privacy-flow: team-hub-directory
+const liveTeamHub=require('./src/team-hub-live').createLiveTeamHub({identity:()=>app.isReady()&&devMockReady?getBuddy().interactionHostIdentity?.()??null:null,fetch:(...a)=>net.fetch(...a)}); // privacy-flow: team-hub-directory
 if(IS_DEV_RUN&&!app.isPackaged&&process.env.CLAUDE_BUDDY_FAKE_TEAM_HUB){try{overviewTeamHub=require('./src/team-hub-fake').createFakeTeamHub(JSON.parse(fs.readFileSync(process.env.CLAUDE_BUDDY_FAKE_TEAM_HUB,'utf8')));}catch(e){console.warn('[overview] fake team hub not loaded:',e.message);}}
 const OverviewMain=require('./src/overview-main').createOverviewMain({
   buddy:()=>buddyWin,sessions:()=>aggregateState().sessions||[],
@@ -1641,7 +1647,9 @@ const OverviewMain=require('./src/overview-main').createOverviewMain({
 });
 OverviewMain.register(ipcMain);
 overviewTeamHub?.onChange(()=>OverviewMain.directoryChanged());
-if(!overviewTeamHub)liveTeamHub.onChange(()=>OverviewMain.directoryChanged());
+// A subscription reads the current identity immediately. Electron's secure
+// storage is unavailable before ready; do not construct the account vault then.
+app.whenReady().then(()=>{if(!overviewTeamHub)liveTeamHub.onChange(()=>OverviewMain.directoryChanged());});
 onQuit(app,()=>{liveTeamHub.close();OverviewMain.close();});
 // Owned-session interaction: Plexiform starts its own provider sessions and
 // talks only to those. Existing unmanaged sessions stay observation-only.
@@ -3638,7 +3646,7 @@ function commitConfig(partial) {
 }
 
 utilityHandle('get-privacy', settingsOnly, () => { try { return fs.readFileSync(path.join(__dirname, 'PRIVACY.md'), 'utf8'); } catch { return null; } });
-utilityHandle('crash-reports:state', settingsOnly, () => ({ optedIn: CrashReports.isOptedIn(), count: CrashReports.list().length, latest: CrashReports.payload() }));
+utilityHandle('crash-reports:state', settingsOnly, () => ({ optedIn: CrashReports.isOptedIn(), count: CrashReports.list().length, latest: CrashReports.latest() ? JSON.stringify(require('./board/shared/crash-report.cjs').wireReport(CrashReports.latest()), null, 2) : '' }));
 utilityHandle('crash-reports:set-opt-in', settingsOnly, (_e, on) => ({ optedIn: CrashReports.setOptIn(on === true) }));
 utilityHandle('crash-reports:export', settingsOnly, async (e) => {
   const r = await dialog.showSaveDialog(BrowserWindow.fromWebContents(e.sender) || undefined, {
@@ -4543,6 +4551,7 @@ require('./src/home-main.js').register({ ipcMain, allowed: (e) => fromUtilityPag
   const StarterMain = require('./src/starter-pack-main.js');
   const starter = StarterMain.create({ store: require('./src/starter-pack.js').createStore({ dir: ROOT_DIR }), gallery: galleryService, recipes, characters: characterStore, tasks: getTasks, confirm: tasksConfirm, turns: () => getUsageTurns(), sessions: () => localSessions(aggregateState().sessions || []), tools: () => AiTools.quick(), demo: () => Demo.active() });
   StarterMain.register({ ipcMain, allowed: (e) => fromUtilityPage(e, 'home'), starter });
+  onQuit(app, () => starter.close());
 }
 require('./src/home-alerts.js').wire({ ipcMain, dialog, clipboard, homeAllowed: (e) => fromUtilityPage(e, 'home'), usageAllowed: (e) => fromUtilityPage(e, 'usage'), sessions: () => aggregateState().sessions || [], burst: () => BurstIpc.snapshot().d, tasksRows: () => tasksSvc?.snapshot().tasks || [], tasksService: getTasks, handoverText: (key) => SessionHandoverMain.writer.text(key), jump: (s) => jumpToSession(s, Rules.folderOf(s.cwd), s.hostApp), mail: () => AgentMail.pending(), openMail: async () => { openBuddy('sessions'); } });
 require('./src/digest-main.js').register({ ipcMain, allowed: (e) => fromUtilityPage(e, 'home'), rootDir: ROOT_DIR, userData: app.getPath('userData'), safeStorage: require('electron').safeStorage, clipboard, dialog, shell, Notification, fetch: (...a) => net.fetch(...a), usageTurns: () => getUsageTurns(), costGuard: () => (costGuardReport ? costGuardReport() : null), workCost: () => workCostReport(), scheduledRuns: (from, to) => (recipeScheduler ? recipeScheduler.runsBetween(from, to).map((h) => ({ ...h, title: recipes.find(h.id)?.title || 'A recipe' })) : []), teamBrief: (cwd) => (loadConfig().teamBrief === true ? TeamActivity.call('team_brief', { cwd }) : null), openHome: () => openBuddy('home'), onQuit: (fn) => onQuit(app, fn), log: (m) => console.warn(m) }); // privacy-flow: digest-slack

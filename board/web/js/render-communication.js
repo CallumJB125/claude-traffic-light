@@ -1,4 +1,6 @@
 import { h } from './h.js';
+import { isObservedWork } from '../../shared/capture-lane.js';
+import { reportedSessionContext } from './local-session-context.js';
 
 const field = (name, label, value, maxLength, rows = 3) => h('div', { class: 'field' },
   h('label', { for: `packet-${name}` }, label),
@@ -7,7 +9,24 @@ const hidden = (name, value) => h('input', { type: 'hidden', name, value });
 const authorSource = author => author.identity_source === 'remote_grant'
   ? `via ${author.application ?? 'Remote application'} · unverified application` : author.provider ?? 'Team member';
 const writable = (detail, model) => ['owner', 'admin', 'member'].includes(model.me?.member?.role)
-  && !detail.data.card.archived && !model.board?.archived_at;
+  && !model.readOnly && !detail.data.card.archived && !model.board?.archived_at;
+
+function reportedContext(detail, model) {
+  const report = reportedSessionContext(detail);
+  if (!report) return null;
+  return h('section', { class: 'dsec', 'aria-label': 'Reported task context' },
+    h('h3', null, 'Reported by this session'),
+    h('p', { class: 'muted small' }, 'Recorded from local AI activity. Review it before saving shared task context.'),
+    h('dl', { class: 'details' },
+      report.goal ? [h('dt', null, 'Goal'), h('dd', { class: 'prose' }, report.goal)] : null,
+      report.summary ? [h('dt', null, 'Progress'), h('dd', { class: 'prose' }, report.summary)] : null,
+      report.files.length ? [h('dt', null, 'Reported files'), h('dd', null,
+        h('ul', { class: 'md-list' }, report.files.map(path => h('li', { key: path }, h('code', null, path)))),
+        report.more ? h('p', { class: 'muted small' }, `${report.more} more files were reported.`) : null)] : null),
+    !detail.packet && !detail.packetDraft && writable(detail, model)
+      ? h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'packet-use-report', 'data-card': detail.cardId,
+        disabled: model.busy?.has(`packet:${detail.cardId}`) || null }, 'Use reported context') : null);
+}
 
 export function packetPanel(detail, model) {
   if (detail.data.card.archived) return h('p', { class: 'muted' }, 'Restore this task to access its shared context.');
@@ -20,6 +39,7 @@ export function packetPanel(detail, model) {
     reportedChecks: (d?.reportedChecks ?? []).join('\n'), expected_version: p?.version ?? 0, expected_fence: detail.data.card.fence,
     evidence: (d?.artifacts ?? []).filter((a) => a.kind === 'evidence') };
   return h('div', { class: 'task-packet' }, h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-action': 'communication-reload' }, 'Refresh context'),
+    reportedContext(detail, model),
     p ? h('p', { class: 'muted small' }, `Version ${p.version} · ${p.author.name} · ${authorSource(p.author)}`)
       : h('p', { class: 'muted' }, 'Save a brief, decisions and next action so another teammate can pick this up.'),
     p?.evidence?.length ? h('ul', { class: 'md-list' }, p.evidence.map((e) => h('li', { key: e.id }, `${e.kind ?? 'Evidence'} · ${e.verification} · ${e.summary ?? ''}`))) : null,
@@ -29,7 +49,7 @@ export function packetPanel(detail, model) {
       field('progress', 'Progress', values.progress, 4000), field('nextAction', 'Next action', values.nextAction, 2000),
       field('paths', 'Artifacts (one repository-relative path per line)', values.paths, 16032),
       field('reportedChecks', 'Reported checks (one per line)', values.reportedChecks, 10020),
-      h('p', { class: 'muted small' }, 'Reported checks are participant statements. Evidence verification is shown separately.'),
+      h('p', { class: 'muted small' }, 'Saving keeps shared task context. It does not send a message or start AI work. Reported checks are participant statements; evidence verification is shown separately.'),
       detail.packetSaveError ? h('p', { class: 'form-error', role: 'alert' }, detail.packetSaveError) : null,
       h('div', { class: 'composer-row' }, h('button', { type: 'submit', class: 'btn btn-primary btn-sm', disabled: model.busy?.has(`packet:${detail.cardId}`) || null }, 'Save task context'),
         detail.packetDraft ? h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'packet-reload' }, 'Discard draft and reload') : null))
@@ -43,7 +63,16 @@ export function messagePanel(detail, model) {
     h('button', { class: 'btn btn-sm', 'data-action': 'communication-reload' }, 'Reload messages'));
   if (!detail.messagesLoaded) return h('p', { class: 'muted', role: 'status' }, 'Loading messages…');
   const history = detail.messages?.messages ?? [], peers = detail.messages?.peers ?? [], draft = detail.messageDraft ?? {};
+  const observed = isObservedWork(detail.data.card);
   return h('div', null, h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-action': 'communication-reload' }, 'Refresh messages'),
+    observed ? h('section', { class: 'dsec', 'aria-label': 'Reported session messages' },
+      h('h3', null, 'Talk to this session'),
+      h('p', { class: 'muted' }, 'This card reports local AI activity. Task messages below go to managed board runs; they do not enter this reported session.'),
+      typeof globalThis.plexiformDesktop?.openSession === 'function'
+        ? [h('p', { class: 'muted small' }, 'Open session controls to see whether this exact session supports direct messages.'),
+          h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'open-session', 'data-card': detail.cardId }, 'Open session controls')]
+        : h('p', { class: 'muted small' }, 'Use your AI tool to talk to this reported session.')) : null,
+    observed ? h('h3', null, 'Task messages') : null,
     history.length ? h('ul', { class: 'comments task-messages' }, history.map((m) => h('li', { key: m.id, class: 'comment' },
       h('div', { class: 'comment-head' }, h('strong', null, m.author.name), h('span', { class: 'muted small' }, `${authorSource(m.author)} · ${m.kind} · ${m.card_key}`)),
       h('p', { class: 'comment-body' }, m.body), h('p', { class: 'muted small' }, m.deliveries.map((r) => `${r.recipient_name ?? 'Teammate'}’s ${r.provider ?? 'agent'}: ${r.state === 'acknowledged' ? 'Acknowledged (agent reported)' : r.state === 'received' ? 'Received by host' : r.state === 'superseded' ? 'Previous run' : 'Pending'}`).join(' · ')))))
@@ -58,5 +87,7 @@ export function messagePanel(detail, model) {
       h('p', { class: 'muted small' }, 'Messages wait for the current agent to read them. Sending does not start work or approve an action.'),
       detail.messageSaveError ? h('p', { class: 'form-error', role: 'alert' }, detail.messageSaveError) : null,
       h('button', { type: 'submit', class: 'btn btn-primary btn-sm', disabled: model.busy?.has(`message:${detail.cardId}`) || null }, 'Send task message'))
-      : writable(detail, model) ? h('p', { class: 'muted' }, 'A current agent run on this linked repository is needed to receive a message.') : null);
+      : writable(detail, model) ? h('p', { class: 'muted' }, observed
+        ? 'No managed board runs on this repository are available to receive task messages.'
+        : 'A current agent run on this linked repository is needed to receive a message.') : null);
 }

@@ -19,6 +19,7 @@ const childProcess = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const { claudeActivityLabel } = require('./session-activity');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const ENV_KEYS = ['HOME', 'USER', 'LOGNAME', 'PATH', 'LANG', 'TMPDIR', 'TZ', 'CLAUDE_CONFIG_DIR',
@@ -96,7 +97,7 @@ function createClaudeCodeSession({ bin, env = process.env, spawn = childProcess.
     if (!turnId) return;
     if (typeof text === 'string') emit({ kind: 'message', target: c.target, turnId, text });
     emit({ kind: 'turn-completed', target: c.target, turnId, status: c.interrupting === turnId && status !== 'completed' ? 'interrupted' : status, error });
-    c.done.add(turnId); c.active = null; c.interrupting = null;
+    c.done.add(turnId); c.active = null; c.interrupting = null; c.blocks.clear(); c.tools.clear(); c.blockMessage = '';
   }
 
   function onLine(c, line) {
@@ -121,7 +122,28 @@ function createClaudeCodeSession({ bin, env = process.env, spawn = childProcess.
       const content = m.message?.content;
       const text = typeof content === 'string' ? content : (Array.isArray(content) ? content : []).filter((b) => b?.type === 'text' && typeof b.text === 'string').map((b) => b.text).join('');
       emit({ kind: 'input-recorded', target, turnId: m.uuid, clientId: m.uuid, text });
+    } else if (m.type === 'user' && c.active && Array.isArray(m.message?.content)) {
+      // A streamed tool-use block ends when its arguments are complete, not
+      // when the tool finishes. Only its matching result completes activity.
+      for (const b of m.message.content) if (b?.type === 'tool_result' && typeof b.tool_use_id === 'string') {
+        const tool = c.tools.get(b.tool_use_id);
+        if (tool) emit({ kind: 'activity', target, turnId: c.active, activityId: tool.block, label: tool.label, phase: 'completed' });
+      }
     } else if (m.type === 'stream_event' && m.parent_tool_use_id == null && c.active) {
+      const ev = m.event;
+      if (ev?.type === 'message_start' && typeof ev.message?.id === 'string') c.blockMessage = crypto.createHash('sha256').update(ev.message.id).digest('hex').slice(0, 32);
+      const block = `${c.blockMessage}:${ev?.index}`;
+      if (ev?.type === 'content_block_start' && Number.isSafeInteger(ev.index) && !c.blocks.has(block)) {
+        const label = claudeActivityLabel(ev.content_block);
+        if (label && c.blocks.size < 256) {
+          const tool = ev.content_block.type === 'tool_use';
+          c.blocks.set(block, { label, tool });
+          if (tool && typeof ev.content_block.id === 'string' && c.tools.size < 256) c.tools.set(ev.content_block.id, { block, label });
+          emit({ kind: 'activity', target, turnId: c.active, activityId: block, label, phase: 'working' });
+        }
+      } else if (ev?.type === 'content_block_stop' && c.blocks.has(block) && !c.blocks.get(block).tool) {
+        emit({ kind: 'activity', target, turnId: c.active, activityId: block, label: c.blocks.get(block).label, phase: 'completed' });
+      }
       const d = m.event?.type === 'content_block_delta' ? m.event.delta : null;
       if (d?.type === 'text_delta' && typeof d.text === 'string') emit({ kind: 'delta', target, turnId: c.active, text: d.text });
     } else if (m.type === 'result') {
@@ -143,7 +165,7 @@ function createClaudeCodeSession({ bin, env = process.env, spawn = childProcess.
     const childEnv = { ...Object.fromEntries(ENV_KEYS.filter((k) => env[k]).map((k) => [k, env[k]])), CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1', DISABLE_TELEMETRY: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' };
     const child = spawn(bin, buildClaudeArgs({ sessionId: target, writable, model, systemPrompt, maxBudgetUsd }), // privacy-flow: owned-claude-session
       { cwd, env: childEnv, stdio: ['pipe', 'pipe', 'pipe'], detached: true });
-    const c = { target, child, sent: new Set(), done: new Set(), waiters: new Map(), active: null, interrupting: null, closed: false, exited: false };
+    const c = { target, child, sent: new Set(), done: new Set(), waiters: new Map(), blocks: new Map(), tools: new Map(), blockMessage: '', active: null, interrupting: null, closed: false, exited: false };
     children.set(target, c);
     let buffer = '', skipping = false;
     child.stdout.setEncoding('utf8');

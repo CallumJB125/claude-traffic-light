@@ -122,7 +122,34 @@ function paintOptimiserNav() {
 // From main (brand.js), with the page list.
 let HUB_TEXT = {};
 
+let accountStorageKey = '';
+function paintAccountStorage() {
+  const box = document.getElementById('account-storage');
+  const status = state.accountStorage;
+  const pending = status === 'restoring' || status === 'saving';
+  const locked = status === 'locked';
+  const help = locked && typeof state.accountStorageHelp === 'string' ? state.accountStorageHelp : '';
+  const key = JSON.stringify([status, help]);
+  if (key === accountStorageKey) return;
+  accountStorageKey = key;
+  box.textContent = '';
+  box.hidden = !pending && !locked;
+  if (box.hidden) return;
+  const message = el('p', { class: 'sidebar-hub' });
+  message.textContent = pending
+    ? `${status === 'saving' ? 'Saving sign-in securely…' : 'Unlocking saved sign-in…'} You can keep using Plexiform.`
+    : help || 'Unlock your computer’s password store, then retry your saved sign-in.';
+  box.append(message);
+  if (locked) {
+    const retry = el('button', { type: 'button', class: 'ws-signout' });
+    retry.textContent = 'Retry saved sign-in';
+    retry.addEventListener('click', () => window.buddy.retryAccountStorage());
+    box.append(retry);
+  }
+}
+
 function paint() {
+  paintAccountStorage();
   for (const [id, btn] of buttons) {
     const on = id === state.selected;
     if (on) btn.setAttribute('aria-current', 'page'); else btn.removeAttribute('aria-current');

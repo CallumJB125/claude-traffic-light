@@ -17,12 +17,13 @@
 // state and time under selfReported.
 const crypto = require('node:crypto');
 const { clean } = require('./work-capture');
+const { validActivity } = require('./session-activity');
 
 const CAPABILITIES = Object.freeze(['discovery', 'telemetry', 'taskReporting', 'receive', 'reply', 'resume', 'steer', 'interrupt', 'remoteControl']);
 const STALE_MS = 90_000;
 const MAX_ENTRIES = 300, MAX_CHILDREN = 64;
 const TEAM_STATES = Object.freeze({ working: 'Working', waiting: 'Waiting', input: 'Needs input', idle: 'Idle', ended: 'Ended' });
-const CODEX_UNMANAGED = 'Started in Codex, which has no supported way for another app to send to it. Start a session from Plexiform to message it.';
+const CODEX_UNMANAGED = require('./provider-capabilities.json').platforms.find((p) => p.id === 'codex').reasons.existing;
 const object = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const str = (v, max) => (typeof v === 'string' ? clean(v, max) : '');
 const cap = (available, reason) => ({ available: available === true, reason: available === true ? '' : reason });
@@ -63,6 +64,7 @@ function createSessionDirectory({ now = Date.now, staleMs = STALE_MS, secret = c
     return next;
   }
   const timing = (key, at, time) => { const observedAt = observe(key, at, time); return { observedAt, ...freshness(observedAt, time, staleMs) }; };
+  const activityOf = (a, time) => validActivity(a) && a.observed_at <= time ? { label: a.label, phase: a.phase, observedAt: a.observed_at, ...freshness(a.observed_at, time, staleMs) } : null;
 
   function teamBadges(list) {
     const out = [], keys = new Set();
@@ -147,6 +149,7 @@ function createSessionDirectory({ now = Date.now, staleMs = STALE_MS, secret = c
         remoteControl: cap(live && interact.length > 0, existing ? 'A session started outside Plexiform is never shared with a team.' : mine.length ? 'Shared to watch only.' : 'Not shared. Use Share… on its card to let a team watch or send.'),
       }),
       interact: { kind: 'owned', ref: s.session }, children: [], nativeSessionId,nativeTurnId,leaf: typeof leaf === 'string' ? leaf : null,
+      activity: activityOf(s.activity, time),
     };
     for (const c of (Array.isArray(s.reporting?.children) ? s.reporting.children : []).slice(0, MAX_CHILDREN)) {
       if (!object(c) || typeof c.ref !== 'string') continue;
@@ -228,6 +231,7 @@ function createSessionDirectory({ now = Date.now, staleMs = STALE_MS, secret = c
       state, input: live && (state === 'Needs input' || x.input_needed === true), ...t, selfReported: sr,
       provenance: [x.messageContract === 'task-inbox' ? 'board' : 'shared', ...(sr ? ['self-reported'] : [])],
       messageContract: x.messageContract === 'task-inbox' ? 'task-inbox' : 'live',
+      activity: activityOf(x.activity, time),
       notice: x.messageContract === 'task-inbox' ? 'Task inbox: the agent reads this message with its board tools. Queued does not mean received or acknowledged. Sending does not resume a paused run.' : '',
       handoffs: (Array.isArray(x.handoffs) ? x.handoffs : []).slice(0, 10).filter(object).map((h) => ({ direction: h.direction === 'out' ? 'out' : 'in', with: str(h.with, 80) || 'Teammate', state: ['offered', 'accepted', 'declined'].includes(h.state) ? h.state : 'offered', summary: str(h.summary, 200) })),
       capabilities: capabilities({

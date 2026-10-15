@@ -14,3 +14,4 @@ build/release-floor.json
 
 # Owned compiled Setups helper stages; release resources are built from reviewed C.
 /native/setups-build/
+/native/account-storage-build/

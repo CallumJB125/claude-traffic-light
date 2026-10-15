@@ -33,6 +33,7 @@ import { teamScreen } from './render-team.js';
 import { emptyFold, pullJournal, windowMetrics, cardMetrics } from './metrics.js';
 import { VIEWS, plannerEnabled } from './views.js';
 import { drawer } from './render-drawer.js';
+import { reportedContextDraft, withLocalHandover } from './local-session-context.js';
 import { colorMap } from './labels.js';
 import { dialog, CLOUD } from './render-dialogs.js';
 import { decodeFeedback, sendFeedback, canSend, ARM_MS, FRAGMENT_PREFIX } from './feedback-send.js';
@@ -1153,6 +1154,19 @@ async function continueIn(cardId) {
   toast(r.note || (r.mode === 'launched' ? `${r.label} started. Its replies are on the Sessions page.` : 'Copied.'));
 }
 
+async function localSessionAction(cardId, action) {
+  const detail = state.detail, generation = boardGeneration;
+  if (!detail || detail.cardId !== cardId) return;
+  await withBusy(`session-action:${cardId}`, async () => {
+    const bridge = globalThis.plexiformDesktop;
+    const result = action === 'open' ? await bridge?.openSession?.(cardId) : await bridge?.handoverAction?.(cardId, action);
+    if (generation !== boardGeneration || state.detail?.intent !== detail.intent || state.detail?.cardId !== cardId) return;
+    if (!result?.ok) { if (action === 'refresh') { state.detail = withLocalHandover(state.detail, null); update(); } if (!result?.cancelled) toast(result?.error || 'This session action is unavailable.', 'error'); return; }
+    if (action === 'refresh') { state.detail = withLocalHandover(state.detail, result, canOpenTimeline()); update(); }
+    if (action !== 'open') toast(({ refresh: 'Session handover refreshed.', copy: 'Handover copied as a prompt.', save: 'Session handover saved.' })[action]);
+  });
+}
+
 async function openDetail(cardId, section = null) {
   if (!state.cards.has(cardId) && !state.archived?.has(cardId)) return;
   const same = state.detail?.cardId === cardId;
@@ -1174,13 +1188,14 @@ async function refreshDetail(cardId, { communication = false, ownership = false 
     state.detail = { ...state.detail, data, rx: perf(), error: null };
     // Only the desktop app can answer: the handover it wrote locally for a session attached to this card.
     if (typeof globalThis.plexiformDesktop?.localHandover === 'function') {
-      Promise.resolve(globalThis.plexiformDesktop.localHandover(cardId)).then((r) => {
-        const markdown = r?.markdown ?? null;
-        if (!current() || !markdown || state.detail.localHandover?.markdown === markdown) return;
-        const local_handover = { markdown, timeline: canOpenTimeline() };
-        state.detail = { ...state.detail, localHandover: local_handover, data: { ...state.detail.data, local_handover } };
+      const applyLocal = r => {
+        if (!current()) return;
+        const next = withLocalHandover(state.detail, r, canOpenTimeline());
+        if (next.localHandover?.markdown === state.detail.localHandover?.markdown) return;
+        state.detail = next;
         update();
-      }, () => {});
+      };
+      Promise.resolve(globalThis.plexiformDesktop.localHandover(cardId)).then(applyLocal, () => applyLocal(null));
     }
     if (state.detail.tab === 'ownership' && !data.card.archived
       && (ownership || !state.detail.ownershipLoaded || perf() - (state.detail.ownershipRx ?? 0) >= 5000)) {
@@ -1225,7 +1240,8 @@ async function submitCommunication(form, kind) {
   const detail = state.detail, cardId = form.dataset.card, generation = boardGeneration;
   if (!detail || detail.cardId !== cardId || boardReadOnly()) return;
   const packet = kind === 'task-packet', key = packet ? 'packetDraft' : 'messageDraft', errorKey = packet ? 'packetSaveError' : 'messageSaveError';
-  const draft = detail[key] ?? communicationDraft(form, kind), intent = detail.intent;
+  const previous = detail[key] ?? communicationDraft(form, kind);
+  const draft = { ...previous, request_id: previous.request_id ?? crypto.randomUUID() }, intent = detail.intent;
   state.detail = { ...detail, [key]: draft, [errorKey]: null };
   const current = () => generation === boardGeneration && state.detail?.intent === intent && state.detail.cardId === cardId;
   const lines = (v) => v.split('\n').map((s) => s.trim()).filter(Boolean);
@@ -2078,6 +2094,7 @@ function onClick(e) {
       return;
     }
     case 'tab': if (state.detail) { state.detail = { ...state.detail, tab: el.dataset.tab }; update(); if (['packet', 'messages', 'ownership'].includes(el.dataset.tab)) refreshDetail(state.detail.cardId); } return;
+    case 'packet-use-report': if (state.detail && !boardReadOnly()) { const draft = reportedContextDraft(state.detail); if (draft) { state.detail = { ...state.detail, packetDraft: draft, packetSaveError: null }; update(); toast('Reported context added to your draft. Review it, then save.'); } } return;
     case 'ownership-reload': if (state.detail) refreshDetail(state.detail.cardId, { ownership: true }); return;
     case 'packet-reload': if (state.detail) state.detail = { ...state.detail, packetDraft: null, packetSaveError: null }; // explicit discard
     case 'communication-reload': if (state.detail) refreshDetail(state.detail.cardId, { communication: true }); return;
@@ -2135,6 +2152,10 @@ function onClick(e) {
     case 'history-open': state.history.selected = el.dataset.run; update(); openDetail(cardId); return;
     case 'open-team': if (canOpenTeam()) globalThis.plexiformDesktop.openTeam(); return;
     case 'open-timeline': if (canOpenTimeline() && cardId) globalThis.plexiformDesktop.openTimeline(cardId); return;
+    case 'open-session': if (cardId) localSessionAction(cardId, 'open'); return;
+    case 'local-handover-refresh': if (cardId) localSessionAction(cardId, 'refresh'); return;
+    case 'local-handover-copy': if (cardId) localSessionAction(cardId, 'copy'); return;
+    case 'local-handover-save': if (cardId) localSessionAction(cardId, 'save'); return;
     case 'local-card-dismiss':
       state.localCardDismissed = true;
       try { localStorage.setItem('board-local-card', 'dismissed'); } catch { /* private mode */ }
@@ -2420,13 +2441,13 @@ setInterval(()=>{
   const d=state.dialog;
   if(d?.journey&&d.mode==='execution-status'&&!d.busy&&workflowJourney.current(d)&&document.visibilityState==='visible')void workflowJourney.status(d.execution.id);
 },5000);
-let ownershipPollBusy = false;
+let detailPollBusy = false;
 setInterval(async () => {
-  if (ownershipPollBusy || state.auth !== 'ok' || state.conn.status !== 'open' || document.visibilityState !== 'visible'
-    || state.detail?.tab !== 'ownership' || !state.detail.data || state.detail.data.card.archived) return;
-  ownershipPollBusy = true;
-  try { await refreshDetail(state.detail.cardId, { ownership: true }); }
-  finally { ownershipPollBusy = false; }
+  if (detailPollBusy || state.auth !== 'ok' || state.conn.status !== 'open' || document.visibilityState !== 'visible'
+    || !['ownership', 'messages', 'handover'].includes(state.detail?.tab) || !state.detail.data || state.detail.data.card.archived) return;
+  detailPollBusy = true;
+  try { await refreshDetail(state.detail.cardId, { ownership: state.detail.tab === 'ownership', communication: state.detail.tab === 'messages' }); }
+  finally { detailPollBusy = false; }
 }, 5000);
 
 loadTheme();

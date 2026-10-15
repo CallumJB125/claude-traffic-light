@@ -2,6 +2,17 @@
 const content = document.getElementById('content'), status = document.getElementById('status');
 const activity = document.getElementById('activity-status');
 let generation = 0;
+let selectedSessionKey = null, selectionPending = false;
+function selectSession(key) { if (typeof key !== 'string' || !/^[\w.-]{1,200}$/.test(key)) return; selectedSessionKey = key; selectionPending = true; void refresh(); }
+let selectionEventSeen = false;
+window.sessionsApi.onSelection?.(key => { selectionEventSeen = true; selectSession(key); });
+window.sessionsApi.selection?.().then(key => { if (!selectionEventSeen) selectSession(key); }).catch(() => {});
+function focusSelectedSession() {
+  const rows = [...content.querySelectorAll('[data-session-key]')], selected = rows.find(r => r.dataset.sessionKey === selectedSessionKey);
+  if (!selected) { status.textContent = 'Close the open editor to load the selected session.'; return; }
+  for (const row of rows) { if (row === selected) row.setAttribute('aria-current', 'true'); else row.removeAttribute('aria-current'); }
+  selected.tabIndex = -1; selected.scrollIntoView?.({ block: 'center' }); selected.focus({ preventScroll: true }); selectionPending = false;
+}
 const node = (tag, text, className) => { const el = document.createElement(tag); if (text) el.textContent = text; if (className) el.className = className; return el; };
 const age = value => value == null ? 'Age unknown' : value < 60_000 ? `${Math.floor(value / 1000)}s ago` : value < 3_600_000 ? `${Math.floor(value / 60_000)}m ago` : `${Math.floor(value / 3_600_000)}h ago`;
 const usd = v => `$${Math.abs(v).toFixed(2)}`;
@@ -311,6 +322,9 @@ function render(snapshot) {
   document.getElementById('coord').hidden = !(snapshot.sessions ?? []).some(i => i.burst?.coordination);
   for (const item of snapshot.sessions ?? []) {
     const section = node('section', '', 'session');
+    if (item.handover?.key) section.dataset.sessionKey = item.handover.key;
+    const selected = item.handover?.key === selectedSessionKey;
+    if (selected) { section.setAttribute('aria-current', 'true'); section.tabIndex = -1; }
     const heading = node('h2', `${item.provider} · ${item.project}`);
     heading.append(node('span', item.freshness === 'recent' ? 'Recent' : item.freshness === 'stale' ? 'Stale' : 'Freshness unknown', 'freshness'));
     if (item.policy?.name) heading.append(node('span', `Policy: ${item.policy.name}`, 'freshness policy'));
@@ -334,6 +348,7 @@ function render(snapshot) {
     sessionTools(section, item);
     rowActions(section, item);
     content.append(section);
+    if (selected && selectionPending) { selectionPending = false; section.scrollIntoView?.({ block: 'center' }); section.focus({ preventScroll: true }); }
   }
   if (!snapshot.sessions?.length) {
     content.append(node('p', snapshot.status === 'unavailable' ? 'Local session reports are unavailable. Try Refresh.' : 'No local sessions are visible yet.', 'muted'));
@@ -354,7 +369,7 @@ async function refresh({ clear = false } = {}) {
     })]).finally(() => clearTimeout(timer));
     if (request !== generation || document.hidden) return;
     if (!snapshot) throw new Error('unavailable');
-    if (editing) return; // an open row panel would be wiped by a redraw
+    if (editing) { if (selectionPending) focusSelectedSession(); return; } // preserve an open editor while navigating to an existing row
     render(snapshot);
   } catch {
     if (request === generation && !document.hidden) { content.replaceChildren(); activity.textContent = 'Codex activity is unavailable. Check Codex on the AI tools page.'; status.textContent = 'Local activity is unavailable. Try Refresh.'; }

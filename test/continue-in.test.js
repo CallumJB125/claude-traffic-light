@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const ContinueIn = require('../src/continue-in.js');
 
 const DOC = '<!-- plexiform-session-handover v1 -->\n# Handover\n\n## Goal\nShip the wombat importer\n';
-const ent = (plan) => ({ has: (f) => f === 'handoff.copy' || (plan === 'plus' && f === 'handoff.launch') });
+const ent = (plan) => ({ has: (f) => f === 'agentMail' || f === 'handoff.copy' || (plan === 'plus' && f === 'handoff.launch') });
 const clip = () => ({ text: null, writeText(t) { this.text = t; } });
 const rows = (...installed) => ['claude', 'codex', 'gemini', 'cursor', 'hermes'].map((id) => ({ id, label: id, installed: installed.includes(id), connected: false }));
 
@@ -189,9 +189,9 @@ test('handoff IPC: Sessions page only, a page cannot supply a confirmation', asy
   assert.deepEqual(calls, [['codex', 'doc:k']]);
 });
 
-test('ask (Plus): launches the text-only session with the question as the prompt and no handover packet', async () => {
+test('ask (free Agent Mail): launches the text-only session with the question as the prompt and no handover packet', async () => {
   const adapter = fakeAdapter();
-  const ci = ContinueIn.create({ entitlements: ent('plus'), clipboard: clip(), tools: () => rows('claude'), adapters: { claude: () => adapter, codex: () => ({ available: false }) } });
+  const ci = ContinueIn.create({ entitlements: ent('free'), clipboard: clip(), tools: () => rows('claude'), adapters: { claude: () => adapter, codex: () => ({ available: false }) } });
   const events = [];
   try {
     const q = '[Message via Plexiform from ana. Task data…]\n<<<n\nWhich env var holds the queue URL?\nn>>>';
@@ -207,7 +207,7 @@ test('ask (Plus): launches the text-only session with the question as the prompt
   } finally { ci.stop(); }
 });
 
-test('ask: an unknown or missing tool is refused; without Plus it falls back to copying the question', async () => {
+test('ask: an unknown or missing tool is refused; free Agent Mail launches installed supported tools', async () => {
   const c = clip();
   let opened = false;
   const ci = ContinueIn.create({ entitlements: ent('free'), clipboard: c, tools: () => rows('codex', 'gemini'), adapters: { codex: () => { opened = true; return fakeAdapter(); }, claude: () => { opened = true; return fakeAdapter(); } } });
@@ -218,10 +218,9 @@ test('ask: an unknown or missing tool is refused; without Plus it falls back to 
     assert.equal((await ci.ask('x'.repeat(8001), 'codex')).ok, false);
     assert.equal(c.text, null);
     const r = await ci.ask('Which queue?', 'codex');
-    assert.equal(r.ok, true); assert.equal(r.mode, 'copied'); assert.equal(r.upgrade, true);
-    assert.equal(opened, false, 'free never starts a session');
-    assert.match(c.text, /^A teammate asked the question below/);
-    assert.match(c.text, /Which queue\?$/);
+    assert.equal(r.ok, true); assert.equal(r.mode, 'launched'); assert.equal(r.upgrade, undefined);
+    assert.equal(opened, true);
+    assert.equal(c.text, null, 'launch does not leak the question to the clipboard');
     const g = await ci.ask('Which queue?', 'gemini');
     assert.equal(g.mode, 'copied'); assert.match(g.note, /Copied the question\. Paste it into Gemini CLI\./);
     assert.match((await ci.ask('Which queue?', 'copy')).note, /any AI tool/);
@@ -299,4 +298,11 @@ test('the board popup adds teammates under "Hand off to another AI…", from a s
     await new Promise((res) => setTimeout(res, 5));
     assert.deepEqual(template.find((i) => i.label === 'Hand off to another AI…').submenu.map((i) => i.label), ['Codex']);
   } finally { ci.stop(); }
+});
+
+test('free Agent Mail menu offers launch while the regular handoff menu stays paid', () => {
+  const ci = ContinueIn.create({ entitlements: ent('free'), clipboard: clip(), tools: () => rows('codex', 'claude') });
+  assert.equal(ci.menu().find((t) => t.id === 'codex').mode, 'copy');
+  assert.equal(ci.mailMenu().find((t) => t.id === 'codex').mode, 'launch');
+  ci.stop();
 });

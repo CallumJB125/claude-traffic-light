@@ -1,12 +1,6 @@
-// The hub's Ed25519 public keys (SPKI PEM) that src/entitlements.js trusts,
-// fixed at build time. EMPTY until the owner generates the hub's signing key
-// (board/hub/scripts/gen-entitlement-key.mjs prints the entry to paste here;
-// docs/BILLING-RUNBOOK.md). While empty every entitlement token is refused and
-// every install is in the beta with every feature on (src/entitlements.js
-// BETA_ALL_FEATURES); pinning a key here ends the beta. Public keys only: never
-// a private key.
 'use strict';
-
-const ENTITLEMENT_KEYS = Object.freeze([]);
-
+// Public verification keys only. Beta access is set separately in release-policy.js.
+const ENTITLEMENT_KEYS = Object.freeze([
+  "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEARema91CO0bl95hCWqqg7yMJRHWwwm1Io7h4tfJV8Uyg=\n-----END PUBLIC KEY-----\n",
+]);
 module.exports = { ENTITLEMENT_KEYS };

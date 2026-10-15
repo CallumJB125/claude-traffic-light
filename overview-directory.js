@@ -12,6 +12,7 @@
   const obj = v => v !== null && typeof v === 'object' && !Array.isArray(v);
   const str = (v, max = 1000) => typeof v === 'string' && v.length <= max;
   const hex = (v, n) => typeof v === 'string' && new RegExp(`^[0-9a-f]{${n}}$`).test(v);
+  const uuid = v => typeof v === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(v);
   const CAPS = ['discovery', 'telemetry', 'taskReporting', 'receive', 'reply', 'resume', 'steer', 'interrupt', 'remoteControl'];
   const CAP_LABEL = { discovery: 'Discovery', telemetry: 'Activity reports', taskReporting: 'Task reporting', receive: 'Receive messages', reply: 'Reply', resume: 'Resume', steer: 'Steer a running turn', interrupt: 'Interrupt', remoteControl: 'Use from other devices or teammates' };
   const PROVENANCE = { owned: 'Started by Plexiform', observed: 'Observed from activity hooks', 'self-reported': 'Self-reported by the agent', shared: 'Shared with this team by its owner', board: 'Board run', 'plexiform-tasks': 'Plexiform Tasks' };
@@ -38,8 +39,17 @@
   const el = (tag, text, cls) => { const n = document.createElement(tag); if (text != null) n.textContent = text; if (cls) n.className = cls; return n; };
   const set = (n, v) => { if (n.textContent !== v) n.textContent = v; };
   const button = (label, fn) => { const b = el('button', label); b.type = 'button'; b.addEventListener('click', fn); return b; };
+  const OPERATIONS = ['send', 'steer', 'interrupt'];
+  const ACTIVITY_LABELS = ['Thinking', 'Running a command', 'Editing files', 'Reading files', 'Searching', 'Using a tool', 'Coordinating agents'];
+  const OP_LABEL = { send: 'Send a message', steer: 'Steer current turn', interrupt: 'Interrupt current turn' };
+  const FINAL_LABEL = { send: 'Send message', steer: 'Steer this turn', interrupt: 'Interrupt this turn' };
+  const validInspection = r => obj(r) && r.ok === true && uuid(r.selection) && obj(r.state) && obj(r.state.provider) && str(r.state.provider.label, 200)
+    && str(r.state.status, 80) && Number.isSafeInteger(r.state.generation) && r.state.generation >= 0 && (r.state.activeTurn === null || uuid(r.state.activeTurn))
+    && Array.isArray(r.state.deliveries) && r.state.deliveries.length <= 20 && r.state.deliveries.every(d => obj(d) && str(d.id, 100) && str(d.text, 4000) && str(d.state, 80) && str(d.response, 16000)
+      && (d.by === null || d.by === undefined || str(d.by, 80)) && (d.error === null || d.error === undefined || str(d.error, 1000)) && (d.notices === undefined || Array.isArray(d.notices) && d.notices.length <= 5 && d.notices.every(n => str(n, 1000))))
+    && obj(r.capabilities) && OPERATIONS.every(op => validCap(r.capabilities[op]));
 
-  let hooks = null, view = 'mine', team = null, read = 0, received = 0;
+  let hooks = null, view = 'mine', team = null, read = 0, received = 0, selected = null;
   const lists = { mine: { rows: new Map(), data: null }, team: { rows: new Map(), data: null } };
   const TEAM_FILTERS = ['person', 'task', 'platform', 'device', 'status'];
   const keyOf = (e, f) => f === 'person' ? e.owner.name : f === 'task' ? e.task.title : f === 'platform' ? e.provider.label : f === 'device' ? e.device.label : e.state;
@@ -56,24 +66,26 @@
     const avatar = el('span', '', 'avatar'); avatar.setAttribute('aria-hidden', 'true');
     const titles = el('div'), title = el('h3'), owner = el('p', '', 'muted'), tag = el('span', '', 'tag');
     titles.append(title, owner); who.append(avatar, titles); head.append(who, tag);
-    const meta = el('p', '', 'row-meta'), badges = el('p', '', 'badges'), when = el('p', '', 'muted'), self = el('p', '', 'muted');
+    const meta = el('p', '', 'row-meta'), badges = el('p', '', 'badges'), when = el('p', '', 'muted'), activity = el('p', '', 'dir-activity'), self = el('p', '', 'muted');
     const children = el('ul', '', 'agent-list'), handoffs = el('ul', '', 'handoffs'), deliveries = el('ol', '', 'deliveries');
     children.setAttribute('aria-label', 'Child agents'); handoffs.setAttribute('aria-label', 'Handoffs'); deliveries.setAttribute('aria-label', 'Messages and responses');
     const actions = el('div', '', 'actions'), why = el('p', '', 'reason'), notice = el('p', '', 'reason'); notice.setAttribute('role', 'status');
     const details = el('details', '', 'caps'), capList = el('ul', '', 'cap-list'); details.append(el('summary', 'What Plexiform can do with this session'), capList);
-    li.append(head, meta, badges, when, self, children, handoffs, deliveries, actions, why, notice, details);
-    return { li, avatar, title, owner, tag, meta, badges, when, self, children, handoffs, deliveries, actions, why, notice, capList, details, kind, composer: null, gone: false, entry: null };
+    li.append(head, meta, badges, when, activity, self, children, handoffs, deliveries, actions, why, notice, details);
+    return { li, avatar, title, owner, tag, meta, badges, when, activity, self, children, handoffs, deliveries, actions, why, notice, capList, details, kind, composer: null, gone: false, entry: null };
   }
   function updateRow(v, e, data) {
     v.entry = e; v.gone = false; v.li.classList.remove('gone');
     const f = freshNow(e, data);
     set(v.avatar, e.owner.initials); v.avatar.hidden = e.owner.self && data.view === 'mine';
     set(v.title, e.task.source === 'unknown' ? `${e.provider.label} session` : e.task.title);
+    if (selected?.row === v) set(selected.target, `${e.owner.name} · ${e.provider.label} · ${v.title.textContent}`);
     set(v.owner, `${e.owner.self ? 'You' : e.owner.name}${e.task.source === 'human' ? ' · task title edited by a person' : e.task.source === 'unknown' ? ' · task not reported' : ''}`);
     set(v.tag, stateText(e, f)); v.tag.className = `tag ${tone(e, f)}`;
     set(v.meta, [e.provider.label + (e.provider.kind === 'local' ? ' · local model' : ''), e.device.label + (e.device.local && e.device.label !== 'This device' ? ' (this device)' : ''), e.board.label, e.card?.key ? `Card ${e.card.key}` : ''].filter(Boolean).join(' · '));
     set(v.badges, [...e.teams.map(t => `Team: ${t.name}`), ...e.provenance.map(p => PROVENANCE[p])].join(' · '));
     set(v.when, `Last observed ${age(f.ageMs)}${f.freshness === 'stale' ? ' · stale' : f.freshness === 'unknown' ? ' · freshness unknown' : ''}`);
+    set(v.activity, activityText(e.activity)); v.activity.hidden = !v.activity.textContent;
     set(v.self, e.selfReported ? `Self-reported: ${e.selfReported.state}${e.selfReported.at !== null ? ` at ${new Date(e.selfReported.at).toLocaleTimeString()}` : ''} (not verified)` : ''); v.self.hidden = !e.selfReported;
     const kids = e.children.map(c => { const cf = freshNow(c, data), li = el('li', '', 'agent'), h = el('div', '', 'row-heading'); h.append(el('h4', c.task.source === 'unknown' ? c.label : `${c.label}: ${c.task.title}`), el('span', stateText(c, cf), `tag ${tone(c, cf)}`)); li.append(h, el('p', `Last observed ${age(cf.ageMs)}${c.selfReported ? ' · self-reported, not verified' : ''}`, 'muted')); return li; });
     const sig = JSON.stringify(e.children.map(c => [c.id, c.state, c.task.title, freshNow(c, data).freshness, Math.floor((freshNow(c, data).ageMs ?? -1) / 1000)]));
@@ -91,26 +103,43 @@
     v.message.hidden = !canMessage; v.message.disabled = !!v.busy;
     v.message.textContent = e.interact?.kind === 'team' ? 'Message' : e.interact?.kind === 'owned' ? 'Open conversation' : 'Message';
     v.message.setAttribute('aria-label', `${v.message.textContent}: ${v.title.textContent}`);
+    if (v.kind === 'team' && !v.inspect) {
+      v.inspect = button('Show activity', () => void openActivity(v));
+      v.actions.prepend(v.inspect);
+    }
+    if (v.inspect) { v.inspect.hidden = false; v.inspect.setAttribute('aria-expanded', String(selected?.row === v)); v.inspect.setAttribute('aria-label', `Show activity: ${v.title.textContent}`); }
     set(v.why, canMessage ? e.notice || '' : e.capabilities.receive.reason || 'No supported message channel.'); v.why.hidden = canMessage && !e.notice;
     if (v.composer && (!canMessage || e.interact?.kind !== 'team')) { v.composer.box.remove(); v.composer = null; }
   }
   function tombstone(v) {
     if (v.gone) return; v.gone = true; v.li.classList.add('gone');
+    if (selected?.row === v) clearActivity();
     const e = v.entry, shared = e.kind === 'shared';
     // A row that left a team view keeps no task details: it may no longer be shared.
     set(v.title, shared ? `${e.owner.name}'s ${e.provider.label} session` : v.title.textContent);
     set(v.tag, 'No longer listed'); v.tag.className = 'tag stale';
     set(v.meta, shared ? '' : v.meta.textContent);
-    for (const n of [v.badges, v.self, v.children, v.handoffs, v.deliveries, v.details]) n.hidden = true;
+    for (const n of [v.badges, v.activity, v.self, v.children, v.handoffs, v.deliveries, v.details]) n.hidden = true;
+    set(v.activity, '');
     if (shared) for (const n of [v.children, v.handoffs, v.deliveries, v.capList]) n.replaceChildren();
     set(v.when, shared ? 'No longer shared with you, or it ended.' : 'No longer reported. It ended, or its reports stopped.');
     v.composer?.box.remove(); v.composer = null; v.message.hidden = true; v.why.hidden = true;
+    if (v.inspect) v.inspect.hidden = true;
     if (!v.dismiss) { v.dismiss = button('Dismiss', () => { v.li.remove(); for (const l of Object.values(lists)) for (const [id, x] of l.rows) if (x === v) l.rows.delete(id); }); v.actions.append(v.dismiss); }
   }
   async function interact(v) {
     const e = v.entry; if (!e || v.gone || !e.interact || !hooks) return;
     if (e.interact.kind === 'owned') { show('mine'); hooks.focusOwned(e.interact.ref); return; }
     if (e.interact.kind === 'work') { show('mine'); hooks.composeWork(e.interact.ref); return; }
+    if (typeof api.teamInspect === 'function' && typeof api.teamAction === 'function') {
+      const a = await openActivity(v);
+      if (!a || v.gone || view !== 'team' || selected !== a) return;
+      if (a?.inspection) { a.input.focus(); return; }
+      // A temporary failure on a live connection must never downgrade to the
+      // legacy message path and skip the inspected target review.
+      if (a.inspectionStatus !== 'unsupported' && e.messageContract !== 'task-inbox') return;
+      if (selected === a) clearActivity();
+    }
     if (v.composer) { v.composer.input.focus(); return; }
     const box = el('div', '', 'composer'), label = el('label', `Message ${e.owner.name}'s session`), input = el('textarea');
     input.id = `team-msg-${e.id}`; label.htmlFor = input.id; input.maxLength = 4000;
@@ -131,6 +160,164 @@
     if (r?.ok === true) { c.input.value = ''; set(c.note, e.messageContract === 'task-inbox' ? 'Queued in this board run’s task inbox. The agent has not acknowledged it yet. Receipt and reply appear above when reported.' : 'Queued by the team hub. Its acknowledgement and reply appear above when they arrive.'); void refresh(); }
     else set(c.note, `${r?.status === 'unconfirmed' ? 'Receipt unconfirmed.' : 'Not sent.'} ${str(r?.error, 300) && r.error ? r.error : 'This session is unavailable. Refresh and try again.'}`);
     c.input.focus();
+  }
+  // One selected session at a time. Reads refresh its visible activity; the
+  // final action keeps the exact main-owned preview token the person reviewed.
+  // No provider/session routing identifiers are constructed in this page.
+  function clearActivity() {
+    const a = selected; selected = null;
+    if (!a) return;
+    a.read++; a.preview = null; a.inspection = null; a.input.value = '';
+    a.transcript.replaceChildren(); set(a.reviewText, ''); set(a.reviewTarget, ''); set(a.activity, '');
+    a.box.remove(); a.row.li.classList.remove('selected');
+    a.row.inspect?.setAttribute('aria-expanded', 'false');
+  }
+  function activityText(activity) {
+    if (!obj(activity) || !ACTIVITY_LABELS.includes(activity.label)) return '';
+    const at = activity.observed_at ?? activity.observedAt;
+    const stale = activity.freshness !== undefined && activity.freshness !== 'recent' || !Number.isFinite(at) || Date.now() - at > 90_000;
+    return `${stale || activity.phase === 'completed' ? 'Last reported' : 'Now'}: ${activity.label}${Number.isFinite(at) ? ` · ${age(Math.max(0, Date.now() - at))}` : ''}`;
+  }
+  function activitySummary(a, state = null) {
+    const e = a.row.entry, task = state?.reporting?.task?.title || state?.task_title;
+    const activity = state?.activity ?? e.activity;
+    const reported = activityText(activity);
+    set(a.activity, [reported, str(task, 400) && task ? `Task: ${task}` : ''].filter(Boolean).join('\n'));
+    a.activity.hidden = !a.activity.textContent;
+  }
+  function renderConversation(a, deliveries) {
+    const sig = JSON.stringify(deliveries);
+    if (a.deliverySig === sig) return;
+    a.deliverySig = sig;
+    const follow = a.transcript.scrollHeight - a.transcript.scrollTop - a.transcript.clientHeight < 80;
+    const messages = deliveries.map(d => {
+      const li = el('li', '', 'delivery'), head = el('div', '', 'delivery-head');
+      head.append(el('strong', `${d.by ? `Sent by ${d.by}` : 'Message'}${d.mode === 'steer' ? ' (steer)' : ''}`), el('span', d.state, `tag ${d.state}`));
+      li.append(head, el('p', d.text, 'delivery-text'));
+      if (d.recorded === true) li.append(el('p', 'The provider echoed this exact message text.', 'reason'));
+      else if (d.state === 'acknowledged') li.append(el('p', 'The provider accepted this message; its exact text has not been echoed yet.', 'reason'));
+      if (d.response) {
+        if (d.mode === 'steer') li.append(el('p', 'Turn output after this message. This does not confirm the requested change was applied.', 'reason'));
+        li.append(el('p', d.response, 'delivery-response'));
+      }
+      else if (['acknowledged', 'recorded', 'responding'].includes(d.state)) li.append(el('p', 'Provider receipt reported; waiting for response text.', 'reason'));
+      else if (['queued', 'sending'].includes(d.state)) li.append(el('p', 'Queued; the agent has not acknowledged this message yet.', 'reason'));
+      else if (['unconfirmed', 'unknown'].includes(d.state)) li.append(el('p', 'Receipt unconfirmed. The agent may still act; do not resend automatically.', 'reason'));
+      if (d.error) li.append(el('p', d.error, 'reason'));
+      for (const n of d.notices ?? []) li.append(el('p', n, 'reason'));
+      return li;
+    });
+    a.transcript.replaceChildren(...(messages.length ? messages : [el('li', 'No conversation messages have been reported for this shared session.', 'muted')]));
+    if (follow) a.transcript.scrollTop = a.transcript.scrollHeight;
+  }
+  function renderActivityControls(a) {
+    const r = a.inspection;
+    for (const op of OPERATIONS) {
+      a.buttons[op].disabled = !!a.busy || !r?.capabilities[op].available;
+      const reason = r?.capabilities[op].reason;
+      a.buttons[op].title = str(reason, 600) ? reason : '';
+    }
+    const canDraft = !!r && r.state.status !== 'ended' && r.state.capabilities?.newTurn === true;
+    const mayWrite = canDraft || !!r && OPERATIONS.slice(0, 2).some(op => r.capabilities[op].available);
+    if (r) a.canDraft = mayWrite;
+    a.input.disabled = !!a.busy || !(r ? mayWrite : a.canDraft);
+    const waitingDraft = canDraft && r.state.status === 'working' && !r.capabilities.send.available && !r.capabilities.steer.available;
+    set(a.draftHint, waitingDraft ? 'Keep a draft while this turn finishes. Send becomes available when idle; drafts are not queued or sent automatically.' : '');
+    a.draftHint.hidden = !waitingDraft;
+    const reasons = r ? OPERATIONS.filter(op => !r.capabilities[op].available).map(op => `${OP_LABEL[op]}: ${r.capabilities[op].reason}`) : [];
+    set(a.limits, reasons.join(' '));
+  }
+  async function inspectActivity(a) {
+    if (selected !== a || view !== 'team' || document.hidden || a.row.gone || a.reading) return;
+    const request = ++a.read; a.reading = true; a.recheck.disabled = true;
+    let r; try { r = typeof api.teamInspect === 'function' ? await api.teamInspect({ id: a.row.entry.id }) : null; } catch { r = null; }
+    a.reading = false; a.recheck.disabled = false;
+    if (selected !== a || request !== a.read || view !== 'team' || document.hidden || a.row.gone) return;
+    if (!validInspection(r)) {
+      a.inspection = null;
+      a.preview = null; a.review.hidden = true;
+      a.inspectionStatus = typeof api.teamInspect !== 'function' ? 'unsupported' : str(r?.status, 80) ? r.status : 'unavailable';
+      a.composer.hidden = !a.hasLive;
+      if (r?.status === 'stale' || r?.status === 'forbidden') {
+        tombstone(a.row); void refresh(); return;
+      } else { activitySummary(a); renderConversation(a, a.row.entry.deliveries ?? []); }
+      set(a.status, str(r?.error, 600) && r.error ? r.error : 'Live conversation is unavailable for this connection. Activity comes from the last directory report.');
+      if (a.hasLive) set(a.note, 'Live state could not be refreshed. Your draft is kept; check activity before reviewing an action.');
+      renderActivityControls(a); return;
+    }
+    a.inspection = r; a.inspectionStatus = 'ready'; a.hasLive = true; a.composer.hidden = false; activitySummary(a, r.state); renderConversation(a, r.state.deliveries);
+    set(a.status, `${r.state.provider.label} · ${r.state.status}${r.state.activeTurn ? ' · current turn running' : ''} · checked ${new Date().toLocaleTimeString()}. Updates automatically.`);
+    // A live read can invalidate a prepared action, but never silently retarget it.
+    if (a.preview && (a.preview.generation !== r.state.generation || a.preview.turn !== r.state.activeTurn || !r.capabilities[a.preview.operation].available)) {
+      a.preview = null; a.review.hidden = true;
+      set(a.note, 'This session moved on. Your draft is kept; review it again for the current session state.');
+    }
+    renderActivityControls(a);
+  }
+  async function openActivity(v) {
+    if (!v.entry || v.gone || view !== 'team') return null;
+    if (selected?.row === v) { await inspectActivity(selected); return selected; }
+    clearActivity();
+    // A legacy task-inbox composer must not coexist with the live composer.
+    v.composer?.box.remove(); v.composer = null;
+    const box = el('section', '', 'team-activity'), heading = el('div', '', 'row-heading'), title = el('h4', 'Session activity');
+    box.id = `team-activity-${v.entry.id}`; box.setAttribute('aria-label', `Selected session: ${v.title.textContent}`); title.tabIndex = -1;
+    v.inspect?.setAttribute('aria-controls', box.id);
+    const close = button('Close activity', () => { clearActivity(); v.inspect?.focus(); }), recheck = button('Check activity', () => void inspectActivity(a));
+    const readActions = el('div', '', 'actions'); readActions.append(recheck, close); heading.append(title, readActions);
+    const target = el('p', `${v.entry.owner.name} · ${v.entry.provider.label} · ${v.title.textContent}`, 'team-target');
+    const status = el('p', 'Reading this shared session…', 'reason');
+    const activity = el('p', '', 'team-current-activity');
+    const transcript = el('ol', '', 'deliveries team-conversation'); transcript.setAttribute('aria-label', `Conversation: ${v.title.textContent}`); transcript.tabIndex = 0;
+    const composer = el('div', '', 'composer'), label = el('label', 'Message this session'), input = el('textarea'); composer.hidden = true; input.id = `team-live-${v.entry.id}`; label.htmlFor = input.id; input.maxLength = 4000;
+    const note = el('p', 'Your exact text goes to this shared session. Review the target and action before sending.', 'reason'); note.setAttribute('role', 'status');
+    const draftHint = el('p', '', 'reason'); draftHint.hidden = true;
+    const actions = el('div', '', 'actions'), buttons = {};
+    for (const op of OPERATIONS) { buttons[op] = button(OP_LABEL[op], () => prepareAction(a, op)); actions.append(buttons[op]); }
+    const limits = el('p', '', 'reason'), review = el('section', '', 'team-action-review'); review.hidden = true;
+    const reviewTarget = el('p', '', 'team-target'), reviewText = el('p', '', 'delivery-text'), final = button('Confirm', () => void commitAction(a));
+    const cancel = button('Back to draft', () => { a.preview = null; review.hidden = true; input.focus(); });
+    const reviewActions = el('div', '', 'actions'); reviewActions.append(final, cancel); review.append(reviewTarget, reviewText, reviewActions);
+    composer.append(label, input, draftHint, note, actions, limits, review); box.append(heading, target, status, activity, transcript, composer);
+    const a = { row: v, box, target, status, activity, transcript, composer, input, draftHint, note, buttons, limits, review, reviewTarget, reviewText, final, cancel, recheck, read: 0, reading: false, inspection: null, inspectionStatus: null, hasLive: false, canDraft: false, preview: null, busy: false };
+    selected = a; v.li.classList.add('selected'); v.inspect?.setAttribute('aria-expanded', 'true'); v.li.insertBefore(box, v.why); title.focus();
+    input.addEventListener('input', () => { if (a.preview) { a.preview = null; review.hidden = true; } });
+    box.addEventListener('keydown', ev => {
+      if (ev.key !== 'Escape') return;
+      ev.preventDefault();
+      if (a.preview && !a.busy) { a.preview = null; review.hidden = true; input.focus(); }
+      else { clearActivity(); v.inspect?.focus(); }
+    });
+    activitySummary(a); renderActivityControls(a); await inspectActivity(a); return selected === a ? a : null;
+  }
+  function prepareAction(a, operation) {
+    if (selected !== a || a.busy || !a.inspection?.capabilities[operation].available) return;
+    const text = operation === 'interrupt' ? '' : a.input.value.trim();
+    if (operation !== 'interrupt' && (!text || text.length > 4000 || text.includes('\0') || new Blob([text]).size > 8192)) { set(a.note, 'Write a message of at most 4,000 characters and 8 KB.'); a.input.focus(); return; }
+    const r = a.inspection;
+    a.preview = { selection: r.selection, operation, text, generation: r.state.generation, turn: r.state.activeTurn };
+    set(a.reviewTarget, `${FINAL_LABEL[operation]} to ${a.row.entry.owner.name}'s ${r.state.provider.label} session: ${a.row.title.textContent}${operation !== 'send' ? ' · this current turn only' : ''}`);
+    set(a.reviewText, operation === 'interrupt' ? 'Requests the provider to stop the current turn. Work already performed can remain.' : text);
+    set(a.final, FINAL_LABEL[operation]); a.review.hidden = false; a.final.focus();
+  }
+  async function commitAction(a) {
+    const p = a.preview;
+    if (selected !== a || !p || a.busy || typeof api.teamAction !== 'function') return;
+    a.busy = true; a.final.disabled = true; a.cancel.disabled = true; renderActivityControls(a);
+    let r; try { r = await api.teamAction({ selection: p.selection, operation: p.operation, text: p.text }); } catch { r = { ok: false, status: 'unconfirmed' }; }
+    if (selected !== a) return;
+    a.busy = false; a.preview = null; a.review.hidden = true; a.final.disabled = false; a.cancel.disabled = false;
+    if (r?.ok === true) {
+      if (p.operation !== 'interrupt') a.input.value = '';
+      const receipt = str(r.delivery?.state, 80) ? r.delivery.state : str(r.status, 80) ? r.status : 'accepted';
+      set(a.note, p.operation === 'interrupt' ? 'Interrupt request accepted by the provider. Check its reported state below.' : `Provider result: ${receipt}. Receipt and response text are shown as they are reported.`);
+    } else {
+      const uncertain = r?.status === 'unconfirmed';
+      set(a.note, `${uncertain ? 'Receipt unconfirmed. The agent may still act; do not resend automatically.' : 'Action refused. Your draft is kept.'}${str(r?.error, 600) && r.error ? ` ${r.error}` : ''}`);
+      if (r?.status === 'forbidden') a.input.value = '';
+    }
+    await inspectActivity(a); void refresh();
+    if (selected === a && !a.input.disabled) a.input.focus();
   }
   function renderSummary(data) {
     const c = data.entries, kids = c.flatMap(e => e.children), f = e => freshNow(e, data).freshness === 'recent';
@@ -193,18 +380,20 @@
     let data; try { data = await api.directory(req); } catch { data = null; }
     if (request !== read || document.hidden || which !== view) return;
     const status = $(`${which}-status`);
-    if (!valid(data) || data.view !== which || data.status === 'unavailable') { set(status, 'Session directory is unavailable right now. Showing the last known state.'); return; }
+    if (!valid(data) || data.view !== which || data.status === 'unavailable') { clearActivity(); set(status, 'Session directory is unavailable right now. Showing the last known state.'); return; }
     // Out-of-order answers never replace a newer one.
     if (data.observed_at < received) return; received = data.observed_at;
     const l = lists[which];
-    if (which === 'team' && l.data && l.data.team?.key !== data.team?.key) { l.rows.clear(); l.groups?.clear(); $('team-list').replaceChildren(); }
+    if (which === 'team' && l.data && l.data.team?.key !== data.team?.key) { clearActivity(); l.rows.clear(); l.groups?.clear(); $('team-list').replaceChildren(); }
     l.data = data;
     if (which === 'team') renderTeams(data);
     render(which);
+    if (which === 'team' && selected) void inspectActivity(selected);
     set(status, `Checked ${new Date(data.observed_at).toLocaleTimeString()}. Updates automatically.${data.status === 'partial' ? ' Some activity is unavailable.' : ''}`);
   }
   function show(next) {
     if (view === next) return;
+    clearActivity();
     view = next; read++;
     for (const t of ['mine', 'team']) { const on = t === next; $(`tab-${t}`).setAttribute('aria-selected', String(on)); $(`tab-${t}`).tabIndex = on ? 0 : -1; $(`${t}-section`).hidden = !on; }
     for (const n of document.querySelectorAll('[data-view="mine"]')) n.classList.toggle('view-hidden', next !== 'mine');
@@ -217,8 +406,9 @@
     $('views').hidden = false; $('mine-section').hidden = false;
     for (const t of ['mine', 'team']) $(`tab-${t}`).addEventListener('click', () => show(t));
     $('views').addEventListener('keydown', ev => { if (ev.key === 'ArrowRight' || ev.key === 'ArrowLeft') { const next = view === 'mine' ? 'team' : 'mine'; show(next); $(`tab-${next}`).focus(); } });
-    $('team-pick').addEventListener('change', () => { team = hex($('team-pick').value, 32) ? $('team-pick').value : null; received = 0; void refresh(); });
-    for (const id of ['team-group', ...TEAM_FILTERS.map(f => `team-${f}-filter`)]) $(id).addEventListener('change', () => render('team'));
+    $('team-pick').addEventListener('change', () => { clearActivity(); lists.team.rows.clear(); lists.team.groups?.clear(); $('team-list').replaceChildren(); team = hex($('team-pick').value, 32) ? $('team-pick').value : null; received = 0; void refresh(); });
+    for (const id of ['team-group', ...TEAM_FILTERS.map(f => `team-${f}-filter`)]) $(id).addEventListener('change', () => { clearActivity(); render('team'); });
+    document.addEventListener('visibilitychange', () => { if (document.hidden && selected) { selected.preview = null; selected.review.hidden = true; } });
     if (typeof api.onDirectoryChanged === 'function') api.onDirectoryChanged(soon);
   }
   window.OverviewDirectory = Object.freeze({ start, refresh, soon, rerender: () => { render('mine'); render('team'); } });

@@ -65,14 +65,17 @@ Tick each one by reading the code and running the named test. All tests:
 
 From `remote/THREAT_MODEL.md` §8 and §10, still open at the time of writing:
 
-- **R1 / O2: the PWA is served by the hub origin.** JS served from that origin
-  could use the device key to show one thing and sign another. The design
-  decision is a separate static origin with CSP and SRI that the hub operator
-  cannot write to. Owner-gated (runbook item 4 and 5). Until then, the hub
-  operator is in the trust base for the phone.
+- **R1 / O2: phone code remains trusted.** The hosted beta build now uses
+  `plexiform-phone.pages.dev`, separate from the pinned hub API at
+  `app.plexiform.dev`, with CSP/SRI and restricted CORS. This reduces exposure
+  to hub-origin script changes. Both services currently have the same account
+  operator, so compromise of that operator or the Pages deployment can still
+  replace trusted phone code. Independent review and deployment acceptance
+  remain open; self-hosted same-origin deployments retain the original risk.
 - **Passkey registration uses `attestation: 'none'`.** Script on the PWA
-  origin within 10 minutes of pairing could register a software key. Closed
-  by the separate origin, or by requiring attestation (runbook "Not built").
+  origin within 10 minutes of pairing could register a software key. A separate
+  origin reduces hub exposure but does not prove hardware provenance;
+  requiring attestation would need a separate design and compatibility review.
 - **O4: no real-device verification yet** of P-256 WebCrypto, non-extractable
   keys in IndexedDB and platform passkeys on iOS 16.4+ home-screen PWAs.
 - **R4: shell judgement is heuristic.** The final bound is the AI tool's own

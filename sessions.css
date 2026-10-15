@@ -9,6 +9,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .activity, .session { margin: 20px 0; padding: 16px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-lg); }
 .activity button { margin-top: 10px; }
 .session h2 { overflow-wrap: anywhere; }
+.session[aria-current="true"] { border-color: var(--accent); outline: 2px solid var(--accent); outline-offset: 2px; }
 .session ul { list-style: none; padding: 0; margin: 12px 0 0; }
 .session li { border-top: 1px solid var(--line); padding: 8px 0; }
 .freshness { display: inline-block; padding: 2px 8px; border: 1px solid var(--line); border-radius: var(--radius); margin-left: 8px; font-size: var(--text-sm); }

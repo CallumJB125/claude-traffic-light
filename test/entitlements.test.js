@@ -108,7 +108,7 @@ test('bad signature, wrong key, wrong alg, no pinned key → free', (t) => {
   assert.equal(E.plan(), 'plus', 'a bad pinned key is skipped');
 });
 
-test('the shipped build pins no key yet, so every install is in the beta: the top plan, every feature', (t) => {
+test('beta access is explicit and independent of verification keys', (t) => {
   const root = testTempDir('ent-');
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   E.configure({ root, now: () => T0 });
@@ -137,7 +137,7 @@ test('PLEXIFORM_FORCE_FREE=1 ends the beta, and with no pinned key a token alone
   assert.equal(E.plan(), 'team');
 });
 
-test('a pinned key ends the beta: the real gating returns with no other change', (t) => {
+test('custom verification keys default to real gating unless beta is explicitly enabled', (t) => {
   setup(t);
   assert.equal(E.beta(), false);
   assert.equal(E.plan(), 'free');
@@ -201,7 +201,7 @@ test('a token written later is picked up without a restart', (t) => {
 test('the module opens no network or process channel', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'entitlements.js'), 'utf8');
   // ./entitlement-keys is the build-time list of pinned public keys: data only, no requires of its own.
-  for (const m of src.matchAll(/require\(\s*['"]([^'"]+)['"]\s*\)/g)) assert.ok(['fs', 'os', 'path', 'crypto', './entitlement-keys'].includes(m[1]), m[1]);
+  for (const m of src.matchAll(/require\(\s*['"]([^'"]+)['"]\s*\)/g)) assert.ok(['fs', 'os', 'path', 'crypto', './entitlement-keys', './release-policy'].includes(m[1]), m[1]);
   assert.doesNotMatch(fs.readFileSync(path.join(__dirname, '..', 'src', 'entitlement-keys.js'), 'utf8'), /require\(|import\(/);
   assert.doesNotMatch(src, /\bfetch\(|child_process|https?\.|\bnet\b|WebSocket|privacy-flow/);
 });

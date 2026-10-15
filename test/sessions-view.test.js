@@ -297,3 +297,45 @@ test('Hand off to another AI… stays open and lists the tools, and a pick sends
     assert.equal(fixture.document.querySelectorAll('[role="menu"]').length, 0);
   } finally { fixture.dom.window.close(); }
 });
+
+test('a newer exact-session selection event takes precedence over a late initial selection query', async () => {
+  let receiveSelection, resolveInitial;
+  const rows = ['first', 'second'].map(id => withActions({ project: id,
+    handover: { key: `codex-${id}`, updated: 'Handover: not written yet', note: 'Synthetic recorded session', ready: false, canWrite: false } }));
+  const fixture = setup({ state: async () => state({ sessions: rows }),
+    onSelection: callback => { receiveSelection = callback; },
+    selection: () => new Promise(resolve => { resolveInitial = resolve; }) });
+  try {
+    await tick(); receiveSelection('codex-second'); await tick();
+    const selected = () => fixture.document.querySelector('#content .session[aria-current="true"]');
+    assert.equal(selected()?.dataset.sessionKey, 'codex-second');
+    assert.equal(fixture.document.activeElement, selected());
+    resolveInitial('codex-first'); await tick();
+    assert.equal(selected()?.dataset.sessionKey, 'codex-second', 'a stale startup reply must not redirect the selected session');
+    assert.equal(fixture.document.querySelectorAll('#content .session[aria-current="true"]').length, 1);
+    assert.equal(fixture.document.activeElement, selected());
+  } finally { fixture.dom.window.close(); }
+});
+
+test('an exact-session selection focuses the requested existing row without discarding another row editor', async () => {
+  let receiveSelection;
+  const rows = ['first', 'second'].map(id => withActions({ project: id, actions: { handle: id },
+    handover: { key: `codex-${id}`, updated: 'Handover: not written yet', note: 'Synthetic recorded session', ready: false, canWrite: false } }));
+  const fixture = setup({ state: async () => state({ sessions: rows }), setup: async () => SETUP,
+    onSelection: callback => { receiveSelection = callback; }, selection: async () => 'codex-first' });
+  try {
+    await tick();
+    const first = fixture.document.querySelector('[data-session-key="codex-first"]');
+    [...first.querySelectorAll('button')].find(button => button.textContent === 'Make a card').click(); await tick();
+    const editor = first.querySelector('.row-panel'), chosenBoard = editor.querySelector('select');
+    assert.ok(editor); chosenBoard.value = 'b1';
+    receiveSelection('codex-second'); await tick();
+    const selected = fixture.document.querySelector('#content .session[aria-current="true"]');
+    assert.equal(selected?.dataset.sessionKey, 'codex-second');
+    assert.equal(fixture.document.activeElement, selected);
+    assert.equal(fixture.document.querySelectorAll('#content .session[aria-current="true"]').length, 1);
+    assert.equal(first.hasAttribute('aria-current'), false);
+    assert.equal(first.querySelector('.row-panel'), editor, 'preserve the open editor and its current selection');
+    assert.equal(editor.querySelector('select').value, 'b1');
+  } finally { fixture.dom.window.close(); }
+});

@@ -46,7 +46,7 @@ export function passkeyChallenge(did, deviceId) {
  * A pairing link (or just its fragment) → {qr, host}. The link is
  * `<phone origin>/phone/#pair=1&hub=…&did=…&dpk=…&pid=…&s=…&exp=…&h=<host device id>`.
  */
-export function parsePairingLink(text, { origin, now = Date.now() }) {
+export function parsePairingLink(text, { origin, hubOrigin: expectedHub = origin, now = Date.now() }) {
   const s = String(text ?? '').trim();
   const frag = s.includes('#') ? s.slice(s.indexOf('#') + 1) : s;
   const p = new URLSearchParams(frag);
@@ -58,7 +58,7 @@ export function parsePairingLink(text, { origin, now = Date.now() }) {
   const parsed = parsePairingQr(JSON.stringify(qr), { now, allowInsecureHub: local });
   let hubOrigin = null;
   try { hubOrigin = new URL(parsed.hub).origin; } catch { hubOrigin = null; }
-  if (hubOrigin !== origin) throw new Error('This code is for a different Plexiform hub than the one this phone is signed in to.');
+  if (hubOrigin !== expectedHub) throw new Error('This code is for a different Plexiform hub than the one this phone is signed in to.');
   return { qr: parsed, host };
 }
 
@@ -77,7 +77,7 @@ const blank = () => ({
  * phone-vault; credentials: navigator.credentials; push: {subscribe(key) →
  * PushSubscription, state() → 'on'|'off'|'unsupported'} or null.
  */
-export function createApprovals({ api, e2e, vault, credentials, push = null, origin, rpId, now = () => Date.now(), uuid, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), deviceName = 'Phone' }) {
+export function createApprovals({ api, e2e, vault, credentials, push = null, origin, hubOrigin = origin, rpId, now = () => Date.now(), uuid, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), deviceName = 'Phone' }) {
   let state = blank();
   const subs = new Set();
   const set = (patch) => { state = { ...state, ...patch }; for (const fn of [...subs]) fn(state); };
@@ -128,7 +128,7 @@ export function createApprovals({ api, e2e, vault, credentials, push = null, ori
 
   async function pair(text) {
     let link;
-    try { link = parsePairingLink(text, { origin, now: now() }); } catch (e) { return fail('idle', e.message); }
+    try { link = parsePairingLink(text, { origin, hubOrigin, now: now() }); } catch (e) { return fail('idle', e.message); }
     const { qr, host } = link;
     set({ busy: true, pairing: { stage: 'sending', sas: null, error: null, text: '' } });
     try {

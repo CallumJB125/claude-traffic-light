@@ -5,6 +5,7 @@
 // the exact reason. ACP runs here are against the FAKE ACP fixture, not proof.
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
+const { pathToFileURL } = require('node:url');
 const MATRIX = require('../src/provider-capabilities.json');
 const { createInteractionHub } = require('../src/session-interaction');
 const { createGeminiAcp } = require('../src/gemini-acp');
@@ -12,6 +13,7 @@ const { ACP_AGENTS, createAcpAgent, findAcpBin } = require('../src/acp-agents');
 const { ownedAdapters } = require('../src/interaction-main');
 const { createOverviewService } = require('../src/overview-service');
 const { testTempDir } = require('./helpers/tmp');
+const { spawnProviderFixture } = require('./helpers/provider-fixture-spawn');
 
 const ROOT = path.join(__dirname, '..');
 const read = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8');
@@ -62,9 +64,9 @@ async function advertisedLabels() {
   const labels = new Map();
   const add = (where, v) => { if (typeof v === 'string' && v) labels.set(`${where}:${v}`, v); };
   for (const a of require('../adapters').list()) { add('adapters', a.id); add('adapters', a.label); }
-  const backends = await import(path.join(ROOT, 'board/runner/backends/index.js'));
+  const backends = await import(pathToFileURL(path.join(ROOT, 'board/runner/backends/index.js')).href);
   for (const k of Object.keys(backends.BACKENDS)) add('runner-backends', k);
-  const protocol = await import(path.join(ROOT, 'board/shared/protocol.js'));
+  const protocol = await import(pathToFileURL(path.join(ROOT, 'board/shared/protocol.js')).href);
   for (const k of protocol.PRESENCE_AGENTS) add('presence', k);
   const { PROVIDERS } = require('../src/overview-service');
   for (const [k, v] of Object.entries(PROVIDERS)) { add('overview', k); add('overview', v); }
@@ -136,9 +138,10 @@ test('ACP agents not installed: listed unavailable with the exact recorded reaso
 });
 
 test('ACP agents found on disk stay unavailable with the recorded isolation reason, whatever the caller passes', async () => {
+  const home = path.resolve('/h');
   for (const id of Object.keys(ACP_AGENTS)) {
     const spawned = [];
-    const a = createAcpAgent(id, { env: { HOME: '/h' }, exists: (p) => p.startsWith('/h/') || p.startsWith('/opt/homebrew/'), verified: true, spawn: (...x) => { spawned.push(x); throw new Error('must not spawn'); } });
+    const a = createAcpAgent(id, { env: { HOME: home }, exists: (p) => p.startsWith(`${home}${path.sep}`) || p.startsWith('/opt/homebrew/'), verified: true, spawn: (...x) => { spawned.push(x); throw new Error('must not spawn'); } });
     assert.equal(a.available, false, id);
     assert.equal(a.reason, MATRIX.platforms.find((x) => x.id === id).reasons.owned);
     const hub = createInteractionHub({ adapters: { [id]: a }, boardCurrent: (b) => b === null });
@@ -146,7 +149,8 @@ test('ACP agents found on disk stay unavailable with the recorded isolation reas
     assert.deepEqual(spawned, [], 'an unavailable agent is never started');
     hub.stopAll();
   }
-  assert.equal(findAcpBin('cursor', { env: { HOME: '/h' }, exists: (p) => p === '/h/.local/bin/agent' }), '/h/.local/bin/agent');
+  const agent = path.join(home, '.local/bin/agent');
+  assert.equal(findAcpBin('cursor', { env: { HOME: home }, exists: (p) => p === agent }), agent);
   assert.equal(findAcpBin('nope', { env: { HOME: '/h' }, exists: () => true }), null);
   assert.equal(findAcpBin('hermes', { env: {}, exists: (p) => p === '/opt/homebrew/bin/hermes' }), '/opt/homebrew/bin/hermes', 'no HOME: only absolute candidates');
 });
@@ -154,7 +158,7 @@ test('ACP agents found on disk stay unavailable with the recorded isolation reas
 test('FAKE ACP as another provider id: delivery reaches only the selected session; foreign updates never ack; env allowlist', async () => {
   const ENV = { HOME: os.homedir(), PATH: process.env.PATH, TMPDIR: os.tmpdir(), CURSOR_API_KEY: 'must-not-pass', GITHUB_TOKEN: 'must-not-pass' };
   const spawnSeen = [];
-  const spawn = (bin, args, opts) => { spawnSeen.push({ args, env: Object.keys(opts.env) }); return require('node:child_process').spawn(bin, args, opts); };
+  const spawn = (bin, args, opts) => { spawnSeen.push({ args, env: Object.keys(opts.env) }); return spawnProviderFixture(bin, args, opts); };
   const a = createGeminiAcp({ bin: FAKE_ACP, args: ACP_AGENTS.cursor.args, env: ENV, spawn, requestMs: 800, verified: true, provider: 'cursor', label: 'Cursor CLI' });
   const hub = createInteractionHub({ adapters: { cursor: a }, workspace: () => testTempDir('plexiform-acp-'), boardCurrent: (b) => b === null });
   try {

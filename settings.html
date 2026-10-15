@@ -598,7 +598,7 @@
   <div class="field" id="crash-reports">
     <h3 class="pv-h">Crash reports</h3>
     <label class="row"><input type="checkbox" id="crash-opt-in" /> Allow sending crash reports</label>
-    <div class="hint">Off by default. Reports are only saved on this Mac for now: nothing is sent, even with this on. Each report keeps the error type, its first line and the code locations, with home paths, names, tokens and emails scrubbed. Never prompts or file contents.</div>
+    <div class="hint">Off by default. Sends new crash reports to Plexiform: app version, OS family, processor type, time and error type or renderer exit reason/code. No messages, stack traces, paths, prompts, account identifiers or file contents are sent. Reports are kept for up to 30 days. Your network address is visible to the server and its hosting provider. Older consent must be renewed. Export diagnostics includes more local detail.</div>
     <details id="crash-view">
       <summary>View what would be sent</summary>
       <pre id="crash-payload" style="margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-xs); max-height: 240px; overflow: auto;"></pre>

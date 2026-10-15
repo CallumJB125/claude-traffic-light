@@ -54,7 +54,9 @@ test('POSIX literal-backslash native lookup remains exact rather than changing t
   assert.match(reason, /symlink/); assert.deepEqual(seen, ['/home/fixture', '/project/literal\\directory/literal\\file']);
 });
 test('actual current-host owned symlink to credentials is refused without reading private content', () => {
-  const temp = testTempDir('plexiform-approval-path-');
+  // GitHub's Windows TEMP can contain RUNNER~1. That spelling deliberately
+  // refuses before lookup; use its real long path to exercise junction lookup.
+  const temp = fs.realpathSync.native(testTempDir('plexiform-approval-path-'));
   try {
     const project = path.join(temp, 'project'), keys = path.join(temp, '.ssh'); fs.mkdirSync(project); fs.mkdirSync(keys); fs.writeFileSync(path.join(keys, 'key'), 'synthetic sentinel');
     const link = path.join(project, 'link'); fs.symlinkSync(keys, link, process.platform === 'win32' ? 'junction' : 'dir');

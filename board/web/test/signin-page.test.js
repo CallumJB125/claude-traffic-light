@@ -12,7 +12,7 @@ const SRC = readFileSync(new URL('../js/signin.js', import.meta.url), 'utf8').re
 const TOKEN = `inv_${'A'.repeat(43)}`;
 const settle = () => new Promise((r) => setImmediate(r));
 
-function page({ hash = '', routes = {}, now = () => 1_000_000, window = {} } = {}) {
+function page({ hash = '', routes = {}, now = () => 1_000_000, window = {}, sessionStorage } = {}) {
   const els = {};
   const el = (id) => (els[id] ??= { id, textContent: '', hidden: ['code-form', 'code-foot', 'confirm', 'signin-error'].includes(id), value: '', on: {}, focus() {}, addEventListener(type, fn) { this.on[type] = fn; } });
   const calls = [];
@@ -31,7 +31,7 @@ function page({ hash = '', routes = {}, now = () => 1_000_000, window = {} } = {
     location: { hash, pathname: '/signin', replace: (u) => replaced.push(u), assign: (u) => replaced.push(u) },
     history: { replaceState() {} },
     document: { getElementById: el, createElement: () => ({}), head: { append: (x) => scripts.push(x) } },
-    window,
+    window, sessionStorage,
     fetch,
   };
   vm.runInNewContext(SRC, ctx);
@@ -41,6 +41,22 @@ function page({ hash = '', routes = {}, now = () => 1_000_000, window = {} } = {
 }
 
 const start = { '/api/auth/email/start': { status: 200, body: { flow_id: 'f'.repeat(24), expires_in: 600 } } };
+
+test('phone return only resumes a strict flow id; unavailable storage preserves board sign-in', async () => {
+  for (const value of ['p'.repeat(32), 'https://other.example/', null, 'throws']) {
+    let removed = false;
+    const p = page({ sessionStorage: {
+      getItem() { if (value === 'throws') throw Error('storage denied'); return value; },
+      removeItem() { removed = true; },
+    }, routes: { ...start, '/api/auth/email/verify': { status: 200, body: {} } } });
+    p.els.email.value = 'jo@example.com';
+    await p.submit('email-form');
+    p.els.code.value = '111111';
+    await p.submit('code-form');
+    assert.deepEqual(p.replaced, [value === 'p'.repeat(32) ? `/phone-connect#${value}` : '/']);
+    assert.equal(removed, value !== 'throws');
+  }
+});
 
 test('a wrong code says how many tries are left; a dead or expired one asks for a new code', async () => {
   let left = 4;

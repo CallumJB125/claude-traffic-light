@@ -102,3 +102,13 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .
 .caps { margin-top: 8px; font-size: var(--text-sm); }
 .cap-list { margin: 4px 0 0; padding-left: 18px; }
 .agent h4 { font-size: var(--text-base); margin: 0; overflow-wrap: anywhere; }
+.dir-entry.selected { border-color: var(--accent); }
+.team-activity { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+.team-activity h4 { font-size: var(--text-base); margin: 0; }
+.team-target { font-weight: 600; overflow-wrap: anywhere; }
+.team-current-activity { white-space: pre-wrap; margin-top: 8px; }
+.dir-activity { font-size: var(--text-sm); margin-top: 6px; }
+.team-conversation { max-height: 400px; overflow-y: auto; overscroll-behavior: contain; border: 1px solid var(--line); border-radius: var(--radius); padding: 4px 12px; }
+.team-conversation:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.team-action-review { border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 12px; margin-top: 12px; background: var(--panel-2); }
+.team-action-review .delivery-text { max-height: 240px; overflow-y: auto; }

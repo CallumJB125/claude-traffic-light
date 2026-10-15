@@ -1,6 +1,7 @@
 'use strict';
 // codex-daemon adapter (existing Codex CLI sessions on the shared daemon)
-// against a FAKE, hostile daemon on a real private Unix socket.
+// against a FAKE, hostile daemon. POSIX uses a real private Unix socket;
+// Windows runs the protocol with explicitly modeled POSIX socket metadata.
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path');
 const { createInteractionHub, ERRORS, NOTICES } = require('../src/session-interaction');
@@ -19,7 +20,7 @@ const tick = (ms = 50) => new Promise((r) => setTimeout(r, ms));
 async function rig({ enabled = true, socketMode, withThread = true } = {}) {
   const fake = await startFakeDaemon({ socketMode });
   let on = enabled;
-  const adapter = createCodexDaemon({ bin: '/usr/bin/true', enabled: () => on, socketPath: fake.socketPath });
+  const adapter = createCodexDaemon({ bin: '/usr/bin/true', enabled: () => on, socketPath: fake.socketPath, ...fake.adapterOptions });
   const events = [];
   const hub = createInteractionHub({ adapters: { 'codex-daemon': adapter }, boardCurrent: CURRENT, onEvent: (actor, s) => events.push({ actor, s }) });
   const A = withThread ? fake.addThread() : null;
@@ -425,10 +426,21 @@ test('socket check: owner uid and private directory are required (no root-owned 
 test('the socket is checked again after connecting: a swapped socket is refused before initialize', async () => {
   const a = await startFakeDaemon(), b = await startFakeDaemon();
   try {
-    const adapter = createCodexDaemon({ bin: '/usr/bin/true', enabled: () => true, socketPath: a.socketPath, connect: (real) => {
-      fs.renameSync(b.realPath, real); // the inode behind the checked path changes before the connection lands
-      return new WebSocket(`ws+unix://${real}:/`, { perMessageDeflate: false });
-    } });
+    let swapped = false;
+    const options = a.modeledPosix ? {
+      ...a.adapterOptions,
+      fsImpl: {
+        ...a.adapterOptions.fsImpl,
+        statSync: (p) => { const stat = a.adapterOptions.fsImpl.statSync(p); return swapped && p === a.realPath ? { ...stat, ino: stat.ino + 1 } : stat; },
+      },
+      connect: () => { swapped = true; return b.adapterOptions.connect(b.realPath); },
+    } : {
+      connect: (real) => {
+        fs.renameSync(b.realPath, real); // the inode behind the checked path changes before the connection lands
+        return new WebSocket(`ws+unix://${real}:/`, { perMessageDeflate: false });
+      },
+    };
+    const adapter = createCodexDaemon({ bin: '/usr/bin/true', enabled: () => true, socketPath: a.socketPath, ...options });
     await assert.rejects(adapter.discover(), (e) => e.message === REASONS.unsafe);
     assert.equal(b.calls.length, 0, 'nothing is sent to a socket that failed the re-check');
     assert.equal(a.calls.length, 0);

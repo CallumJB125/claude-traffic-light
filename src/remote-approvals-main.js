@@ -33,6 +33,7 @@ const path = require('path');
 const Remote = require('../remote/src/index.js');
 const RemoteNode = require('../remote/src/node/index.js');
 
+const { PHONE_ORIGINS } = require('./release-policy');
 const EXTRA_OPS = Object.freeze(['approvals.list', 'approvals.decide', 'approvals.passkey', 'tasks.start']);
 const PAIR_OPS = Object.freeze(['pair.init', 'pair.reveal', 'pair.poll']);
 const PASSKEY_WINDOW_MS = 10 * 60_000;
@@ -85,9 +86,9 @@ function createRemoteApprovals({ dir, requestsDir, keyFor = () => null, entitlem
   const entitled = () => { try { return entitlements.has('phone') === true; } catch { return false; } };
   const deviceLimit = () => { try { const n = entitlements.limits().devices; return Number.isFinite(n) ? n : 0; } catch { return 0; } };
   const active = () => !!identity && entitled() && settings().enabled && !!account();
-  // The origin the phone app runs on (pinned for passkeys): the team hub's
-  // own, until the separate static origin exists (docs/PHONE-RUNBOOK.md).
-  const phoneOrigin = () => settings().phoneOrigin ?? originOf(account()?.origin ?? '');
+  // Phone passkeys bind to the static origin pinned in the build. Self-hosted
+  // hubs retain their configured origin unless the operator pins an override.
+  const phoneOrigin = () => settings().phoneOrigin ?? PHONE_ORIGINS[originOf(account()?.origin ?? '')] ?? originOf(account()?.origin ?? '');
   const origins = () => { const o = phoneOrigin(); return o ? [o] : []; };
   const rpId = () => { const o = phoneOrigin(); return o ? new URL(o).hostname : ''; };
 

@@ -964,8 +964,8 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
       show(which === 'signin' ? 'hub' : which);
     },
     /** App start: runners the member left on come back without opening the window. */
-    resumeDevices() {
-      for (const w of store.list()) if (w.kind === 'team' && hasDeviceFile(w)) deviceFor(w).resume();
+    resumeDevices(origin = null) {
+      for (const w of store.list()) if (w.kind === 'team' && (!origin || w.hub === origin) && hasDeviceFile(w)) deviceFor(w).resume();
     },
     /** The widget's live sessions changed: hubs sharing presence get the new list. */
     sessionsChanged(sessions) {

@@ -6,6 +6,7 @@ const { createLedger, MAX_ENTRIES } = require('../src/compaction-stats');
 const { createInteractionHub } = require('../src/session-interaction');
 const { createCodexAppServer } = require('../src/codex-app-server');
 const { testTempDir } = require('./helpers/tmp');
+const { spawnProviderFixture } = require('./helpers/provider-fixture-spawn');
 
 const ACTOR = 'overview:1:1';
 const FAKE = path.join(__dirname, 'fixtures', 'fake-codex-app-server.js');
@@ -130,14 +131,15 @@ test('Ledger: refuses junk and never invents a number', () => {
   assert.equal(l.record({ provider: 'codex', before: 5, after: 2, source: 'provider', cost: 0, costSource: 'made-up', at: 1 }).costSource, 'unknown');
   assert.equal(l.summary().total.reducedTokens, 3); assert.equal(l.summary().total.costTokens, 0);
 });
-test('Ledger: bounded entries, totals survive the bound, persistence round-trip, mode 600, no text stored', () => {
+test('Ledger: bounded entries, totals survive the bound, persistence round-trip, POSIX mode 600, no text stored', () => {
   const dir = tmp(), file = path.join(dir, 'compaction-stats.json');
   const l = createLedger({ file });
   for (let i = 0; i < MAX_ENTRIES + 25; i++) l.record({ provider: 'codex', before: 100, after: 40, source: 'provider', cost: 150, costSource: 'provider', at: i, text: 'SECRET-PROMPT', summary: 'SECRET-SUMMARY', target: 'thread-xyz' });
   assert.equal(l.entries().length, MAX_ENTRIES);
   const raw = fs.readFileSync(file, 'utf8');
   for (const leak of ['SECRET', 'thread-xyz', 'text', 'summary']) assert(!raw.includes(leak), leak);
-  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  // Windows stat/chmod do not expose or enforce POSIX user/group mode bits.
+  if (process.platform !== 'win32') assert.equal(fs.statSync(file).mode & 0o777, 0o600);
   assert.deepEqual(fs.readdirSync(dir), ['compaction-stats.json'], 'no tmp or lock file left behind');
   const again = createLedger({ file });
   assert.equal(again.summary().total.compactions, MAX_ENTRIES + 25);
@@ -482,7 +484,7 @@ test('Hostile hub: a provider without compact capability is never asked', async 
 
 // ── Real adapter code against the FAKE app-server process ──
 test('FAKE app-server: Codex adapter compacts via thread/compact/start and the ledger records provider usage', async () => {
-  const adapter = createCodexAppServer({ bin: FAKE }), seen = [];
+  const adapter = createCodexAppServer({ bin: FAKE, spawn: spawnProviderFixture }), seen = [];
   adapter.on((e) => seen.push(e.kind));
   const file = path.join(tmp(), 'stats.json');
   const ledger = createLedger({ file });
@@ -505,7 +507,7 @@ test('FAKE app-server: Codex adapter compacts via thread/compact/start and the l
     assert.equal(s.last.source, 'provider');
     assert.equal(s.last.costSource, 'unknown', 'the fake, like Codex 0.159, reports 0 tokens for the compaction turn');
     assert.equal(s.last.payback.kind, 'at-least');
-    assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+    if (process.platform !== 'win32') assert.equal(fs.statSync(file).mode & 0o777, 0o600);
     assert(!fs.readFileSync(file, 'utf8').includes('three'));
     assert.equal(hub.state({ session: A.session }, ACTOR).deliveries.length, 4);
   } finally { hub.stopAll(); }

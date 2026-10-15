@@ -20,6 +20,7 @@ import { createApi, createE2E } from '../../web/js/phone-core.js';
 import { generateAgreementKey, exportAgreementPublic } from '../../web/js/phone-e2e.js';
 
 const require = createRequire(import.meta.url);
+const { spawnProviderFixture } = require('../../../test/helpers/provider-fixture-spawn');
 const { createRemoteInteractionHost } = require('../../../src/remote-interaction.js');
 const { createCodexAppServer } = require('../../../src/codex-app-server.js');
 const FAKE = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'test', 'fixtures', 'fake-codex-app-server.js');
@@ -55,7 +56,7 @@ async function rig({ required = true, paired = true } = {}) {
     const did = 'desk-alice-mac', dev = 'phone-alice-1';
     const peers = new Map([[dev, await exportAgreementPublic(phoneKeys.publicKey)]]);
     host = createRemoteInteractionHost({
-      userId: mac.body.user.id, adapters: { codex: createCodexAppServer({ bin: FAKE }) }, boardCurrent: (b) => b === null, retry: { baseMs: 50, maxMs: 100 },
+      userId: mac.body.user.id, adapters: { codex: createCodexAppServer({ bin: FAKE, spawn: spawnProviderFixture }) }, boardCurrent: (b) => b === null, retry: { baseMs: 50, maxMs: 100 },
       e2e: { did, privateKey: deskKeys.privateKey, peer: (d) => peers.get(d) ?? null, required },
     });
     const st = await host.enable({ baseUrl: h.base, token: mac.body.device_token, WebSocket: SpyWS, fetch });

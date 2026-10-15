@@ -10,6 +10,8 @@ const {spawnSync} = require('node:child_process');
 const {scan} = require('../src/borrow/scan.js');
 const { testTempDir } = require('./helpers/tmp');
 const scanner = require.resolve('../src/borrow/scan.js');
+const safeReadFlags = [fs.constants.O_NOFOLLOW, fs.constants.O_NONBLOCK]
+  .every(value => Number.isInteger(value) && value > 0);
 
 function fixture(t) {
   const targetHome = testTempDir('setups-scan-races-');
@@ -19,7 +21,10 @@ function fixture(t) {
 }
 
 for (const boundary of ['file-fifo', 'file-directory', 'file-symlink', 'file-regular', 'directory-fifo', 'directory-file', 'directory-symlink']) {
-  test(`actual scanner child refuses ${boundary} replacement within the original one-second bound`, t => {
+  test(`actual scanner child refuses ${boundary} replacement within the original one-second bound`, {
+    skip: boundary.startsWith('file-') && !safeReadFlags ? 'Host lacks the scanner’s required no-follow/nonblocking file flags'
+      : boundary.endsWith('fifo') && !fs.existsSync('/usr/bin/mkfifo') ? 'Requires the actual POSIX FIFO fixture tool' : false,
+  }, t => {
     const targetHome = fixture(t), directory = boundary.startsWith('directory-');
     const target = path.join(targetHome, directory ? '.codex/prompts' : '.codex/AGENTS.md');
     if (directory) fs.mkdirSync(target); else fs.writeFileSync(target, 'Synthetic original, never executed.');
@@ -30,8 +35,9 @@ for (const boundary of ['file-fifo', 'file-directory', 'file-symlink', 'file-reg
     if (boundary.endsWith('symlink')) {
       const outside = testTempDir('setups-scan-outside-');
       t.after(() => fs.rmSync(outside, {recursive:true, force:true}));
-      if (!directory) fs.writeFileSync(path.join(outside, 'foreign.md'), 'Outside synthetic text.');
-      fs.symlinkSync(directory ? outside : path.join(outside, 'foreign.md'), replacement);
+      fs.writeFileSync(path.join(outside, 'foreign.md'), 'Outside synthetic text.');
+      fs.symlinkSync(directory ? outside : path.join(outside, 'foreign.md'), replacement,
+        directory ? (process.platform === 'win32' ? 'junction' : 'dir') : 'file');
     }
     const code = String.raw`const fs=require('node:fs');const {scan}=require(process.argv[1]);const [home,target,replacement,directory]=process.argv.slice(2);let changed=false,reads=0;const api=new Proxy(fs,{get(object,key){if(key===(directory==='true'?'readdirSync':'openSync'))return(...args)=>{if(!changed){changed=true;fs.renameSync(target,target+'.preserved');fs.renameSync(replacement,target);}return object[key](...args);};if(key==='readSync')return(...args)=>{reads++;return object.readSync(...args);};return object[key];}});const result=scan({home,only:['codex'],exec:null,fsApi:api});const files=result.sources.flatMap(source=>source.files);process.stdout.write(JSON.stringify({changed,reads,files:files.length}));process.exitCode=changed&&reads===0&&files.length===0?0:2;`;
     const child = spawnSync(process.execPath, ['-e', code, scanner, targetHome, target, replacement, String(directory)], {shell:false, encoding:'utf8', timeout:1000, maxBuffer:4096});
@@ -64,7 +70,9 @@ for (const [flag, value] of [['O_NOFOLLOW', undefined], ['O_NOFOLLOW', 0], ['O_N
   });
 }
 
-test('unchanged single-link files still use real no-follow/nonblocking opens and preserve bytes', t => {
+test('unchanged single-link files still use real no-follow/nonblocking opens and preserve bytes', {
+  skip: !safeReadFlags && 'Host lacks the scanner’s required no-follow/nonblocking file flags',
+}, t => {
   const targetHome = fixture(t), target = path.join(targetHome, '.codex/AGENTS.md');
   const content = 'Synthetic observed instructions.\r\nNo tool is executed.\r\n';
   fs.writeFileSync(target, content);

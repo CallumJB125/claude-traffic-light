@@ -7,6 +7,8 @@ const os = require('node:os');
 const path = require('node:path');
 const Actions = require('../src/burst-actions.js');
 const View = require('../src/burst-view.js');
+// These fixtures model the Mac UI regardless of the CI runner's platform.
+const statusView = (state, options = {}) => View.statusView(state, { platform: 'darwin', ...options });
 const Ipc = require('../src/burst-ipc.js');
 const { testTempDir } = require('./helpers/tmp');
 
@@ -62,20 +64,20 @@ test('consent text copies the README changes; transparent adds CA/hosts/pf; off 
 const present = (over = {}, upgrade = null) => ({ kind: 'present', installed: true, capabilities: { upgradeStatus: true, testConnection: true }, upgrade, state: { version: '0.19.0', mode: 'base-url', active: true, route: 'PRIMARY', until: '', rejected: [], primaryFailures: 0, ...over } });
 
 test('view: chip states and "Turn Burst off" in every on state', () => {
-  assert.equal(View.statusView(present()).chip.label, 'Primary');
-  assert.equal(View.statusView(present({ rejected: [{ model: 'm', until: '' }] })).chip.label, 'Limit near');
-  assert.equal(View.statusView(present({ primaryFailures: 2 })).chip.label, 'Limit near');
-  assert.match(View.statusView(present({ route: 'SECONDARY', until: '2026-10-06T14:05:00' })).chip.label, /^Secondary until \d\d:\d\d$/);
-  assert.equal(View.statusView({ kind: 'untrusted', reason: 'r' }).chip.label, 'Untrusted');
-  for (const d of [present(), present({ route: 'SECONDARY' }), present({ primaryFailures: 3 })]) assert.ok(View.statusView(d).actions.some((a) => a.kind === 'off'));
-  assert.equal(View.statusView(present({ active: false })).chip.label, 'Off');
-  assert.equal(View.statusView({ kind: 'broken', state: { version: '0.19.0' } }).actions[0].kind, 'repair');
-  assert.deepEqual(View.statusView({ kind: 'not_installed' }).actions.map((a) => a.kind), ['install']);
-  assert.ok(View.statusView(present({}, { canUpgrade: true, upToDate: false })).actions.some((a) => a.kind === 'update'));
+  assert.equal(statusView(present()).chip.label, 'Primary');
+  assert.equal(statusView(present({ rejected: [{ model: 'm', until: '' }] })).chip.label, 'Limit near');
+  assert.equal(statusView(present({ primaryFailures: 2 })).chip.label, 'Limit near');
+  assert.match(statusView(present({ route: 'SECONDARY', until: '2026-10-06T14:05:00' })).chip.label, /^Secondary until \d\d:\d\d$/);
+  assert.equal(statusView({ kind: 'untrusted', reason: 'r' }).chip.label, 'Untrusted');
+  for (const d of [present(), present({ route: 'SECONDARY' }), present({ primaryFailures: 3 })]) assert.ok(statusView(d).actions.some((a) => a.kind === 'off'));
+  assert.equal(statusView(present({ active: false })).chip.label, 'Off');
+  assert.equal(statusView({ kind: 'broken', state: { version: '0.19.0' } }).actions[0].kind, 'repair');
+  assert.deepEqual(statusView({ kind: 'not_installed' }).actions.map((a) => a.kind), ['install']);
+  assert.ok(statusView(present({}, { canUpgrade: true, upToDate: false })).actions.some((a) => a.kind === 'update'));
 });
 
 test('view: non-mac gets the honest text, no actions, no chip', () => {
-  const v = View.statusView({ kind: 'unsupported' }, { platform: 'win32' });
+  const v = statusView({ kind: 'unsupported' }, { platform: 'win32' });
   assert.equal(v.detail, 'Burst runs on macOS only. Not available on Windows or Linux.');
   assert.deepEqual(v.actions, []);
   assert.equal(v.chip, null);
@@ -163,14 +165,14 @@ test('main.js wiring is a require+register line and one tray spread', () => {
 });
 
 test('chip: only normalized {tone,label}; null off-mac and when not installed; no raw fields leak', () => {
-  assert.equal(View.statusView({ kind: 'not_installed' }).chip, null);
-  assert.equal(View.statusView({ kind: 'unsupported' }, { platform: 'linux' }).chip, null);
-  const c = View.statusView(present({ route: 'SECONDARY', until: '2026-10-06T09:07:00' })).chip;
+  assert.equal(statusView({ kind: 'not_installed' }).chip, null);
+  assert.equal(statusView({ kind: 'unsupported' }, { platform: 'linux' }).chip, null);
+  const c = statusView(present({ route: 'SECONDARY', until: '2026-10-06T09:07:00' })).chip;
   assert.deepEqual(Object.keys(c).sort(), ['label', 'tone']);
   assert.deepEqual(c, { tone: 'amber', label: 'Secondary until 09:07' });
-  assert.deepEqual(View.statusView(present()).chip, { tone: 'green', label: 'Primary' });
-  assert.deepEqual(View.statusView({ kind: 'unreachable', installed: true }).chip, { tone: 'amber', label: 'Not responding' });
-  assert.deepEqual(View.statusView({ kind: 'untrusted', reason: 'x' }).chip, { tone: 'red', label: 'Untrusted' });
+  assert.deepEqual(statusView(present()).chip, { tone: 'green', label: 'Primary' });
+  assert.deepEqual(statusView({ kind: 'unreachable', installed: true }).chip, { tone: 'amber', label: 'Not responding' });
+  assert.deepEqual(statusView({ kind: 'untrusted', reason: 'x' }).chip, { tone: 'red', label: 'Untrusted' });
 });
 
 test('ipc chip channel: widget/usage senders get only the chip; others get null; non-mac hides and stops polling', async () => {

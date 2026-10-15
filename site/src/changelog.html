@@ -12,6 +12,62 @@
     <h1>Changelog</h1>
     <p class="lede">What changed, newest first. The beta moves fast, so this is written in plain words rather than version numbers.</p>
     <div class="log">
+      <article id="2026-10-15-beta82">
+        <time datetime="2026-10-15">15 October 2026</time>
+        <h2>Open the right board after your team account restores</h2>
+        <p>Public preview 1.0.2-beta.82 for macOS and Linux. <a href="https://github.com/CallumJB125/claude-traffic-light/releases/tag/v1.0.2-beta.82">Release notes and checksums</a></p>
+        <ul>
+          <li><strong>Refresh the board target.</strong> If your saved team account restores while Home, Overview or another local page is open, Board now opens that team's board afterward. It no longer keeps the cached local board under the team's label.</li>
+          <li><strong>Keep your place.</strong> Restoring the account refreshes the board target without changing the page you are using. An explicit choice to use the local board stays local.</li>
+          <li><strong>Existing features and limits.</strong> The previous preview's responsive Mac account startup, secure-save retry and clean Quit while Keychain is waiting remain included. Mac builds remain ad-hoc signed and are not Apple-notarized; new builds may need fresh Keychain approval. External teammate/device and real-device updater acceptance, Windows, public phone access, Linear/Jira delivery and privacy/legal review remain gated.</li>
+        </ul>
+      </article>
+      <article id="2026-10-15-beta74">
+        <time datetime="2026-10-15">15 October 2026</time>
+        <h2>Keep working while your saved account unlocks</h2>
+        <p>Public preview 1.0.2-beta.74 for macOS and Linux. <a href="https://github.com/CallumJB125/claude-traffic-light/releases/tag/v1.0.2-beta.74">Release notes and checksums</a></p>
+        <ul>
+          <li><strong>Responsive saved-account startup.</strong> On Mac, restoring your team sign-in runs in the background while you use local pages. Your selected page and workspace stay selected, including a local-board choice made while waiting.</li>
+          <li><strong>Secure save and explicit retry.</strong> Sign-in stays pending until its credential is saved securely. A locked password store shows recovery guidance and a Retry saved sign-in button. Cancelling a sign-in or signing out prevents a late storage result from bringing that account back.</li>
+          <li><strong>Quit while Keychain is waiting.</strong> On Mac, a pending account Keychain authorization no longer leaves Plexiform running after normal Quit. Quitting retires the account-storage helper; late results cannot refresh the account or restart a runner.</li>
+          <li><strong>Storage scope.</strong> This change covers team-account storage on Mac. Runner tokens and local-board credentials retain their existing storage paths, and Linux retains its guarded desktop password-store backend.</li>
+          <li><strong>Mac approval.</strong> Builds remain ad-hoc signed and are not Apple-notarized. A new build can require fresh Keychain approval: verify that the request names Plexiform and Plexiform Safe Storage before completing it directly on your Mac.</li>
+          <li><strong>Acceptance and limits.</strong> Existing shared-session features remain available with their provider and sharing boundaries. External teammate/device and real-device updater acceptance remain open. Windows, public phone access and Linear/Jira delivery remain gated, and privacy/legal review remains open.</li>
+        </ul>
+      </article>
+      <article id="2026-10-15-beta72">
+        <time datetime="2026-10-15">15 October 2026</time>
+        <h2>Restore your saved team connection</h2>
+        <p>Public preview 1.0.2-beta.72 for macOS and Linux. <a href="https://github.com/CallumJB125/claude-traffic-light/releases/tag/v1.0.2-beta.72">Release notes and checksums</a></p>
+        <ul>
+          <li><strong>Team sign-in at startup.</strong> The app restores your saved team account once local secure storage is ready. A temporary delay reading it remains retryable, preserving the saved sign-in.</li>
+        </ul>
+      </article>
+      <article id="2026-10-15">
+        <time datetime="2026-10-15">15 October 2026</time>
+        <h2>Interact with a shared AI session</h2>
+        <p>Public preview 1.0.2-beta.71 for macOS and Linux. <a href="https://github.com/CallumJB125/claude-traffic-light/releases/tag/v1.0.2-beta.71">Release notes and checksums</a></p>
+        <ul>
+          <li><strong>Home and shutdown.</strong> An unavailable recent project folder no longer freezes Home or leaves the app waiting when you quit.</li>
+          <li><strong>See the work.</strong> Open a Team session for its reported task and activity, messages, exact-text receipts and streamed output. Codex and Claude report fixed activity categories without raw commands or tool arguments.</li>
+          <li><strong>Send, steer and interrupt.</strong> Review the exact target and action, then use the controls supported by its owner and provider. Codex supports current-turn steering; busy providers without steering let you keep a draft until Send becomes available. Drafts are not automatically queued or sent.</li>
+          <li><strong>Honest delivery.</strong> Provider receipt, recorded input, responding, completion and interruption have separate states. Steering output starts after the message and does not itself prove the correction was applied. Uncertain deliveries are never retried automatically.</li>
+          <li><strong>Sharing boundaries.</strong> Watch-only stays read-only. Changed sessions, turns, accounts and revoked shares retire controls. Earlier shared-session history stays private, including immediate steering receipts. Passive directory caching reduces request load while the selected conversation reads fresh state.</li>
+          <li><strong>Acceptance and limits.</strong> Real Codex and Claude disposable-session checks passed. Desktop shared-session controls were exercised with real providers and local test accounts; external teammate/device acceptance remains open. Existing sessions need a supported explicit connection. Universal shared-checkout conflict prevention, durable executable next-turn queues, Windows and the other gated previews remain outside this release.</li>
+        </ul>
+      </article>
+      <article id="2026-10-14">
+        <time datetime="2026-10-14">14 October 2026</time>
+        <h2>Useful session tabs and handovers</h2>
+        <p>Public preview 1.0.2-beta.65 for macOS and Linux. <a href="https://github.com/CallumJB125/claude-traffic-light/releases/tag/v1.0.2-beta.65">Release notes and checksums</a></p>
+        <ul>
+          <li><strong>Session tabs.</strong> Captured sessions show recorded activity and context, open the exact session controls, and offer relevant handover actions. Import context into a draft, review it, save it, and refresh without losing edits.</li>
+          <li><strong>Handovers.</strong> Refresh, copy, export Markdown, continue in another supported tool, or open the timeline. Historical handover text is readable.</li>
+          <li><strong>Desktop reliability.</strong> Optional Burst configuration reads have a deadline, and explicitly stopped memory workers stay stopped. Session actions recheck the current window, team, workspace, account, and sharing scope.</li>
+          <li><strong>Free Agent Mail.</strong> Ask my AI is included. Inbox polling is off by default, and sending requires confirmation. Claude Tasks is available on macOS and Linux, with Codex as the default provider.</li>
+          <li><strong>Current limits.</strong> Independent agents can still overwrite shared-checkout work; ownership declarations and captured-session collision alerts are advisory. Windows, public phone access, and Linear/Jira delivery remain gated. Public account registration is closed, and production email sign-in is off. Mac builds are ad-hoc signed and are not Apple-notarized.</li>
+        </ul>
+      </article>
       <!-- DRAFT for release 1: confirm the date at the tag; keep the email-code line only once the mail service is deployed.
            Candidate lines (uncomment only when on main AND in the tagged build; see docs/release-notes.md for the wording):
            characters (duck, octopus, CRT, blob, capybara, cactus, owl, penguin, fox, bee, axolotl, mushroom, egg, toaster, cloud, astronaut, sloth, T-rex, cyclops),
@@ -27,7 +83,7 @@
           <li><strong>Backups and restore.</strong> Your local settings can be backed up and restored from Settings, Backups.</li>
           <li><strong>Updates in the app.</strong> {{brand.name}} can check for a newer version and install it.</li>
           <li><strong>Detached sessions.</strong> Jumping to a session running in a detached tmux session no longer switches the terminal tab you are on. If the session's terminal can't be found, {{brand.name}} tells you and shows the command to attach.</li>
-          <li><strong>Known limits.</strong> Linear and Jira are not offered yet. The beta is unsigned, so macOS may ask you to use the keychain; choose Always Allow. Signing in by email needs your address verified until we move out of the email sandbox, and the Windows and Linux builds have not been tried on real machines yet.</li>
+          <li><strong>Known limits at that release.</strong> Linear and Jira were not offered. Mac builds were not Apple-notarized. If macOS asks to use the keychain, verify the requesting app before granting access. Email sign-in and wider Windows/Linux device acceptance remained limited; see the latest entry above for current availability.</li>
         </ul>
       </article>
       <article id="2026-09-30">

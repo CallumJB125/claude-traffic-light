@@ -27,6 +27,7 @@ import { virtualAuthenticator } from '../../../remote/test/helpers.js';
 import { testTempDir } from '../../shared/test-support/tmp.js';
 
 const require = createRequire(import.meta.url);
+const { spawnProviderFixture } = require('../../../test/helpers/provider-fixture-spawn');
 const HERE = dirname(fileURLToPath(import.meta.url));
 const { createRemoteInteractionHost } = require('../../../src/remote-interaction.js');
 const { createRemoteApprovals } = require('../../../src/remote-approvals-main.js');
@@ -129,7 +130,7 @@ async function rig({ entitled = true } = {}) {
     await core.ready;
     core.setEnabled(true);
     host = createRemoteInteractionHost({
-      userId: mac.body.user.id, adapters: { codex: createCodexAppServer({ bin: FAKE }) }, boardCurrent: (b) => b === null, retry: { baseMs: 50, maxMs: 100 },
+      userId: mac.body.user.id, adapters: { codex: createCodexAppServer({ bin: FAKE, spawn: spawnProviderFixture }) }, boardCurrent: (b) => b === null, retry: { baseMs: 50, maxMs: 100 },
       workspace: () => testTempDir('w2b-owned-'),
       ...core.hostOptions(),
     });

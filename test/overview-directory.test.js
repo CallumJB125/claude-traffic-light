@@ -94,7 +94,7 @@ test('My sessions: an owned session and an observed Codex session, each with hon
     assert.ok(owned && observed, 'both rows');
     assert.equal(s.rows('mine-list').length, 2);
     assert.match(owned.querySelector('.tag').textContent, /Ready/);
-    assert.match(observed.textContent, /Codex, which has no supported way for another app to send to it/);
+    assert.match(observed.textContent, /Activity hooks cannot send to this Codex session/);
     assert.equal([...observed.querySelectorAll('button')].filter((b) => !b.hidden && /Message/.test(b.textContent)).length, 0, 'no message control without a channel');
     assert.match(observed.querySelector('.caps').textContent, /Activity reports: available/);
     assert.match(observed.querySelector('.caps').textContent, /Interrupt: unavailable/);
@@ -256,7 +256,7 @@ test('board-run team composer distinguishes task-inbox queuing from agent acknow
     const row = s.row('team-list', /Fix login/);
     assert.ok(row); assert.match(row.textContent, /Queued does not mean received or acknowledged/);
     assert.match(s.$('team-status').textContent, /Some activity is unavailable/);
-    row.querySelector('.actions button').click(); await tick();
+    [...row.querySelectorAll('.actions button')].find(b => b.textContent === 'Message').click(); await tick();
     assert.match(row.querySelector('.composer').textContent, /Sending does not resume a paused run/);
     row.querySelector('textarea').value = 'Read this task message';
     row.querySelector('.composer button').click(); await tick();
