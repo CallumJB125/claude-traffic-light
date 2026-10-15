@@ -19,9 +19,9 @@ both GUI and credential child while authorization is pending. After the owner
 completed the OS prompt directly, the retained account restored into Callum's
 team with Live board state; navigation and signed-in Quit passed.
 
-The unchanged fresh restart asks for Keychain authorization again. Persistent
-OS authorization and automatic fresh restoration are **not accepted**. The GUI
-remains usable. No security setting or Keychain ACL was changed by automation;
+After the owner completed Always Allow, the next unchanged fresh restart restored
+the team and Live board without another authorization step. Home, Overview,
+Team sessions and normal Quit passed. No security setting or Keychain ACL was changed by automation;
 Computer Use cannot operate the system security dialog. Zero sessions are shared
 with this team and some activity remains unavailable; no real teammate was
 shared or messaged. Public beta.72's earlier blank/blocked-launch evidence remains

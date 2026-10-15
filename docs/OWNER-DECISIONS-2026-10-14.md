@@ -14,8 +14,8 @@ Public downloads remain beta.72. The installed app is a local beta.73 candidate
 at `9120098147959b01e249eeb437e4a59dd3c55220`, not a public release. Responsive
 pending-Keychain navigation and Quit passed. Owner-approved saved-account
 restoration into Callum's team, Live board, Home/Overview/Team sessions and Quit
-also passed. The unchanged fresh restart asks for Keychain authorization again;
-persistent authorization remains unaccepted. No new release was staged or
+also passed. After direct owner Always Allow, the next unchanged fresh restart
+restored automatically; navigation and clean Quit passed. No new release was staged or
 promoted. Full evidence, retained failures and scope limits are recorded in
 [SESSION-INTERACTION-2026-10-15.md](SESSION-INTERACTION-2026-10-15.md).
 
