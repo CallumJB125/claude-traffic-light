@@ -29,7 +29,7 @@ and isolated public/installed smokes pass. Pending-Keychain navigation is usable
 After direct owner approval, the saved team account restored. A real routing defect
 was then observed: restoring off a hub page retains the cached local board, so Board
 can show local My board under a team workspace label. Local Live is not team Live.
-A focused beta.77 follow-up is in progress; published beta.74 bytes are immutable.
+A focused beta.78 follow-up is in progress; published beta.74 bytes are immutable.
 Public team-board, Quit and unchanged-restart acceptance remain open. UI automation
 is paused after concurrent app interaction and an owned Claude conversation appeared.
 
@@ -402,3 +402,33 @@ A subsequent fresh Google sign-in as callum@pistorventures.org reached Callum's
 team Board with Live status. No team was created/joined and no invite was sent.
 The browser was restored to the Google team board. This supersedes earlier
 browser-policy-service unavailability; native77 acceptance remains separate.
+
+## Beta.77 stop-fixture observation and beta.78 preparation
+
+Run `38784500243` at frozen `18aced9c` failed before staging. Mac native49,
+root4,951 plus12 skips, remote220 passed; board3,106 passed/one failed. Linux
+root4,942 plus21 skips, remote220, board3,106 plusone skip and packaged smoke
+passed; Windows native69+166+71 passed. The task-message fixture now passes.
+
+The remaining Codex stop case again failed only the extra timeout0 process-table
+observation, after b.stop returnedtrue and the backend was not alive. Across76/77
+the extra observation affected allthree adapters; no retained rows identify
+whether those failures were unknown metadata or a live owned process. No actual
+receipt violation or a specific kernel cause is asserted from that boolean.
+
+The disposable fixture now waits for the tool's ready handshake after both
+SIGTERM handlers exist, verifies both detached groups and the root's discovery
+of its tool, and preserves its recorded identity through failed later reads.
+After the unchanged production stop and not-alive assertions, one bounded real
+ps snapshot includes the observer, each exact owned PID (even if its group
+changes), and every member of each owned group. Exact owned identities must
+be absent or zombies; the existing timeout0 helper also verifies all owned
+groups against that same frozen snapshot. Unknown owned metadata and unreadable
+observations fail, with bounded PID/PGID/STAT diagnostics. Unrelated process
+status churn is outside this independent owned-scope assertion. No post-stop
+wait or retry was added and no production guard/deadline changed.
+
+All9 stop checks pass, including a further run under two controlled disposable
+process-churn workers. Independent review retained PID, group, observer and
+cleanup coverage. Real provider sessions and installed74 were untouched. Beta.78
+will use unchanged routing runtime; public74 and all failed evidence remain.

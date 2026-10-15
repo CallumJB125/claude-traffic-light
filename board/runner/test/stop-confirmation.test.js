@@ -2,12 +2,12 @@
 // user session is launched or signalled by this stop-receipt regression.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { once } from 'node:events';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { waitForStopped, killTree, lstartOf } from '../procs.js';
+import { waitForStopped, killTree, lstartOf, treeGroups } from '../procs.js';
 import { ClaudeBackend } from '../backends/claude.js';
 import { CodexBackend } from '../backends/codex.js';
 import { HermesBackend } from '../backends/hermes.js';
@@ -17,6 +17,22 @@ const other = { pid: 10, pgid: 10, stat: 'S' };
 const subject = { pid: 100, groups: [100, 200] };
 const row = (pid, pgid = pid, stat = 'S') => ({ pid, pgid, stat });
 const probe = (rows) => waitForStopped(subject, { timeoutMs: 0, readTable: () => rows });
+
+// Independently observe this fixture's complete owned scope. An unrelated
+// runner process can have an unknown STAT during churn; it says nothing about
+// these owned identities. Keep the observer as positive evidence of a real read,
+// and retain every process in an owned group, including reparented descendants.
+function ownedSnapshot({ pids, groups }) {
+  const out = execFileSync(process.platform === 'darwin' ? '/bin/ps' : 'ps',
+    ['-axo', 'pid=,pgid=,stat='], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 1000 });
+  const rows = out.trim().split('\n').map((line) => {
+    const m = /^\s*(\d+)\s+(\d+)\s+(\S+)\s*$/.exec(line);
+    assert.ok(m, 'process metadata must be readable');
+    return { pid: Number(m[1]), pgid: Number(m[2]), stat: m[3] };
+  }).filter((r) => r.pid === process.pid || pids.includes(r.pid) || groups.includes(r.pgid));
+  assert.ok(rows.some((r) => r.pid === process.pid), 'a successful snapshot includes its observer');
+  return rows;
+}
 
 test('stop receipt requires root and every remembered tool group to stop', async () => {
   assert.equal(await probe([other, row(100)]), false, 'root still executing');
@@ -56,19 +72,30 @@ for (const Backend of [ClaudeBackend, CodexBackend, HermesBackend]) {
     const home = fs.realpathSync(testTempDir('px-stop-confirm-'));
     let child, tool, childStart, toolStart;
     try {
-      const code = `const {spawn}=require('node:child_process'); const c=spawn(process.execPath,['-e','process.on("SIGTERM",()=>{});setInterval(()=>{},100)'],{detached:true,stdio:'ignore'});process.stdout.write(c.pid+'\\n');process.on('SIGTERM',()=>{});setInterval(()=>{},100);`;
+      const code = `const {spawn}=require('node:child_process');process.on('SIGTERM',()=>{});const c=spawn(process.execPath,['-e','process.on("SIGTERM",()=>{});process.send("ready");setInterval(()=>{},100)'],{detached:true,stdio:['ignore','ignore','ignore','ipc']});c.once('message',m=>{if(m==='ready'){c.disconnect();process.stdout.write(c.pid+'\\n');}});setInterval(()=>{},100);`;
       child = spawn(process.execPath, ['-e', code], { detached: true, stdio: ['pipe', 'pipe', 'ignore'], env: { HOME: home, PATH: process.env.PATH, CODEX_HOME: path.join(home, '.codex') } });
-      tool = Number(String((await once(child.stdout, 'data'))[0]).trim());
+      childStart = lstartOf(child.pid);
+      tool = Number(String((await once(child.stdout, 'data', { signal: AbortSignal.timeout(5000) }))[0]).trim());
       assert.ok(Number.isSafeInteger(tool) && tool > 1, 'disposable tool started');
-      childStart = lstartOf(child.pid); toolStart = lstartOf(tool);
+      childStart ??= lstartOf(child.pid); toolStart = lstartOf(tool);
       assert.ok(childStart && toolStart, 'disposable identities recorded before stopping');
+      const owned = { pid: child.pid, pids: [child.pid, tool], groups: [child.pid, tool] };
+      const before = ownedSnapshot(owned);
+      assert.ok(before.some((r) => r.pid === child.pid && r.pgid === child.pid), 'owned CLI group is ready');
+      assert.ok(before.some((r) => r.pid === tool && r.pgid === tool), 'detached tool group is ready');
+      const tree = treeGroups(child.pid);
+      assert.ok(tree.pids.includes(tool) && tree.groups.includes(tool), 'the tool is a discoverable owned descendant');
       const b = new Backend({ stopGraceMs: 20, interruptWaitMs: 0 });
       Object.assign(b, { child, pid: child.pid, pgid: child.pid, lstart: childStart, exited: false, turnActive: false });
       child.once('exit', () => { b.exited = true; b.emit('exit', {}); });
       b.refreshTree();
       assert.equal(await b.stop(), true, 'stop must return positive verification itself');
       assert.equal(b.alive(), false);
-      assert.equal(await waitForStopped({ pid: child.pid, groups: [child.pid, tool] }, { timeoutMs: 0 }), true, 'owned root and tool are already non-executing at receipt');
+      const receipt = ownedSnapshot(owned);
+      assert.ok(receipt.every((r) => !owned.pids.includes(r.pid) || r.stat.startsWith('Z')),
+        `owned identities cannot execute in any group at receipt: ${JSON.stringify(receipt)}`);
+      assert.equal(await waitForStopped(owned, { timeoutMs: 0, readTable: () => receipt }), true,
+        `owned root and tool are already non-executing at receipt: ${JSON.stringify(receipt)}`);
     } finally {
       if (child?.pid && childStart) killTree(child.pid, childStart);
       if (tool && toolStart) killTree(tool, toolStart);
