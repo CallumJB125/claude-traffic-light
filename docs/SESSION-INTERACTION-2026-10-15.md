@@ -264,3 +264,14 @@ already discloses send/steer/interrupt and was not silently expanded. Provider
 approvals, worktree/file ownership enforcement and integration gates are not
 granted by messages. Universal prevention of independent agents undoing shared
 checkout work remains unimplemented; Kafka would not itself enforce it.
+
+### Final native acceptance status
+
+The owner cleared the beta.72 Keychain prompts, including reporting Always Allow.
+Startup then resumed, but both widget and main windows were blank. Both processes
+quit cleanly. A fresh launch still blocked in `SecItemCopyMatching`; the retained
+sample is `work/beta72-final-restart-sample.txt`. No further native acceptance is
+claimed: signed-in restoration, rendered navigation and a usable fresh restart
+remain open. Post-launch source hashes and deep/strict signature verification
+still match the public package. No Keychain ACL or OS security setting was changed
+by automation. The system security dialog cannot be controlled by Computer Use.
