@@ -24,7 +24,7 @@ function startDetectorProcess() {
   const env = { ...process.env, ELECTRON_RUN_AS_NODE: '1' };
   delete env.NODE_OPTIONS;
   delete env.VSCODE_INSPECTOR_OPTIONS;
-  return fork(path.join(__dirname, 'starter-pack-process.js'), [], {
+  return fork(path.join(__dirname, 'starter-pack-process.js'), [], { // privacy-flow: home-starter-detection
     execPath: process.execPath, execArgv: [], env,
     stdio: ['ignore', 'ignore', 'ignore', 'ipc'], serialization: 'json',
   });
@@ -52,7 +52,7 @@ function createDetector({ timeoutMs = TIMEOUT_MS, startProcess = startDetectorPr
     const kill = () => { try { pass.child?.kill('SIGKILL'); } catch { /* already gone */ } };
     const unavailable = () => { failed = { key: failureKey, until: now() + RETRY_MS }; settle([]); kill(); };
     try {
-      const child = pass.child = startProcess(); // privacy-flow: local-worker
+      const child = pass.child = startProcess();
       child.on('message', message => {
         if (pending !== pass || stopped || pass.settled || message?.type !== 'detected') return;
         settle(projection(message.detected, folders));
