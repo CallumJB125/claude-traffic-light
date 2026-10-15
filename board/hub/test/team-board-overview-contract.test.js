@@ -33,7 +33,10 @@ test('LOCAL TEAM BOARD PROOF: real client and Overview discover own/uninvolved p
   const wire = JSON.stringify(rows);
   for (const raw of [b.run.run_id, b.run.card_id, x.users.amember.id, b.user.id, x.A.member, x.A.admin, x.A.repo, x.users.amember.token, 'board-run:']) assert.ok(!wire.includes(raw), raw);
   const exactText = 'Actual selected teammate inbox message';
-  assert.deepEqual(await view.teamMessage({ id: peer.id, text: exactText }), { ok: true, status: 'queued', error: '' });
+  const sent = await view.teamMessage({ id: peer.id, text: exactText });
+  assert.equal(sent.ok, true); assert.equal(sent.status, 'queued');
+  assert.equal(sent.messageContract, 'task-inbox'); assert.match(sent.notice, /Queued is not received or acknowledged/);
+  assert.equal(sent.delivery.text, exactText); assert.equal(sent.delivery.state, 'queued'); assert.equal(sent.delivery.response, '');
   assert.equal(x.h.db.get("SELECT COUNT(*) n FROM journal WHERE kind = 'message.create'").n, 1);
   const inbox = (await b.client.rpc(b.run, 'board_list_messages')).result.inbox;
   const message = inbox.find(m => m.body === exactText); assert.ok(message); assert.equal(message.card_id, b.run.card_id);

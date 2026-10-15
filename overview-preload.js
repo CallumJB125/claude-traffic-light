@@ -34,6 +34,13 @@ contextBridge.exposeInMainWorld('overviewApi', {
     const text = messageText(request.text);
     return text === null ? denied() : ipcRenderer.invoke('overview:team-message', { id: request.id, text });
   },
+  teamInspect: request => closed(request, ['id']) && typeof request.id === 'string' && /^[0-9a-f]{40}$/.test(request.id)
+    ? ipcRenderer.invoke('overview:team-inspect', { id: request.id }) : denied(),
+  teamAction: request => {
+    if (!closed(request, ['selection', 'operation', 'text']) || !uuid(request.selection) || !['send', 'steer', 'interrupt'].includes(request.operation)) return denied();
+    const text = request.operation === 'interrupt' ? request.text === '' ? '' : null : messageText(request.text);
+    return text === null ? denied() : ipcRenderer.invoke('overview:team-action', { selection: request.selection, operation: request.operation, text });
+  },
   onDirectoryChanged: callback => {
     if (typeof callback !== 'function') return () => {};
     const listener = (_event, ...args) => { if (args.length === 0) callback(); };

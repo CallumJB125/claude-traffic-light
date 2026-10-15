@@ -52,12 +52,13 @@ const noShare = () => new HubError('NOT_FOUND', 'that shared session is not avai
 // A steer after the share joins a turn that may have begun before it: that turn's
 // response carries pre-share output, so it is withheld unless the turn began after.
 function sinceShared(result, since) {
-  if (!object(result) || !object(result.state) || !Array.isArray(result.state.deliveries)) return result;
-  const after = (d) => object(d) && Number.isFinite(d.sentAt) && d.sentAt >= since;
+  if (!object(result)) return result;
+  if (!object(result.state) || !Array.isArray(result.state.deliveries)) return Object.hasOwn(result, 'delivery') ? { ...result, delivery: null } : result;
+  const after = (d) => object(d) && Number.isFinite(d.sentAt) && d.sentAt > since;
   const fresh = new Set(result.state.deliveries.filter((d) => after(d) && d.mode === 'new-turn' && d.turn != null).map((d) => d.turn));
   const deliveries = result.state.deliveries.filter(after)
     .map((d) => (d.mode === 'new-turn' || fresh.has(d.turn) ? d : { ...d, response: '' }));
-  return { ...result, state: { ...result.state, deliveries } };
+  return { ...result, state: { ...result.state, deliveries }, ...(Object.hasOwn(result, 'delivery') ? { delivery: deliveries.find((d) => d.id === result.delivery?.id) ?? null } : {}) };
 }
 const ACTIVE_MEMBER = `SELECT m.id, m.role FROM members m JOIN orgs o ON o.id = m.org_id
   WHERE m.org_id = ? AND m.user_id = ? AND m.removed_at IS NULL AND o.deleted_at IS NULL`;

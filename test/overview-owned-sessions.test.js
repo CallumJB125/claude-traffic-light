@@ -218,15 +218,16 @@ test('Unmanaged Codex parent keeps Message disabled with the exact reason, even 
   const snap = await svc.snapshot();
   const msg = snap.sessions[0].capabilities.message;
   assert.equal(msg.enabled, false);
-  assert.equal(msg.reason, 'Plexiform can message sessions it starts itself. This one was started in Codex, which has no supported way for another app to send to it.');
-  assert.doesNotMatch(msg.reason, /opt|daemon/, 'no promise of a setting that does not exist');
+  assert.equal(msg.reason, require('../src/provider-capabilities.json').platforms.find(p => p.id === 'codex').reasons.existing);
+  assert.match(msg.reason, /shared daemon needs the Preferences opt-in and explicit attachment/);
+  assert.match(msg.reason, /Codex desktop conversations cannot be reached/);
   snap.observed_at = Date.now() - 200_000; // stale on the page
   const s = stack({ snapshot: snap });
   try {
     await s.ready();
     const button = [...s.doc.querySelectorAll('#content button')].find((b) => b.textContent === 'Message');
     assert.equal(button.disabled, true);
-    assert.match(s.doc.getElementById('content').textContent, /This one was started in Codex, which has no supported way for another app to send to it\./);
+    assert.match(s.doc.getElementById('content').textContent, /Activity hooks cannot send to this Codex session/);
   } finally { s.close(); }
 });
 

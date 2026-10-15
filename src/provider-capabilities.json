@@ -107,7 +107,7 @@
       "installedHere": "codex-cli 0.159.2 (/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex)",
       "hosting": "local app-server; Codex Cloud tasks are OpenAI-hosted",
       "management": "owned: Plexiform-spawned `codex app-server` stdio threads (built); existing desktop/IDE threads: observe only; existing CLI sessions on the shared daemon: opt-in messaging (built)",
-      "channel": "Owned: app-server JSON-RPC thread/start, turn/start, turn/steer, turn/interrupt (src/codex-app-server.js). Existing: hooks (adapters/codex.js).",
+      "channel": "Owned: app-server JSON-RPC thread/start, turn/start, turn/steer, turn/interrupt (src/codex-app-server.js). Existing: hooks are observation only; Codex CLI sessions on the shared daemon require the Preferences opt-in and explicit attachment (src/codex-daemon.js). Desktop conversations are not reachable through that connection.",
       "matrix": {
         "discovery": {
           "status": "built",
@@ -158,7 +158,7 @@
       "reasons": {
         "owned": "",
         "notInstalled": "Codex CLI not found",
-        "existing": "Plexiform can message sessions it starts itself. This one was started in Codex, which has no supported way for another app to send to it."
+        "existing": "Activity hooks cannot send to this Codex session. Codex CLI work on the shared daemon needs the Preferences opt-in and explicit attachment in Overview. Codex desktop conversations cannot be reached through that connection."
       },
       "evidence": [
         "https://learn.chatgpt.com/docs/app-server",

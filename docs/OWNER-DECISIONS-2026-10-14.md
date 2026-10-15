@@ -1,7 +1,9 @@
 # Plexiform owner work — 2026-10-14
 
 Implementation branch: `codex/owner-decisions-2026-10-14`, based on `08f46dd8`.
-Final tested app/runtime revision: `1adca098cf451fc6bcab6cffcd237591b4fc6c4b`.
+Beta.65 tested app/runtime revision: `1adca098cf451fc6bcab6cffcd237591b4fc6c4b`.
+The subsequent session-interaction implementation and its separate evidence are
+recorded in [SESSION-INTERACTION-2026-10-15.md](SESSION-INTERACTION-2026-10-15.md).
 The original `claude/release` checkout and handover are preserved. Implementation
 PR #7 remains unmerged. The owner subsequently authorized public beta publication;
 the release-note-only PR #8 was merged into `main` for the signing workflow.

@@ -213,8 +213,10 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
   // was created (never earlier history), never the owner's board key. A steer
   // into a turn that began before the share shows no response: it holds pre-share output.
   function project(state, sh) {
-    const { board, reporting, task_title, input_needed, ...rest } = state;
-    const after = rest.deliveries.filter((d) => d.sentAt >= sh.createdAt);
+    const { board, reporting, task_title, input_needed, activity, ...rest } = state;
+    // Same-millisecond ordering cannot be proved from these timestamps, so
+    // exclude the boundary instead of exposing a prompt sent before sharing.
+    const after = rest.deliveries.filter((d) => d.sentAt > sh.createdAt);
     const fresh = new Set(after.filter((d) => d.mode === 'new-turn' && d.turn != null).map((d) => d.turn));
     // A fresh host receipt or a repeated old hook report cannot expose metadata
     // from before the share. Child creation is independently gated as well:
@@ -224,7 +226,7 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
     const task = visible(reporting?.task) ? reporting.task : null;
     const input = visible(reporting?.input) ? reporting.input : null;
     const children = (Array.isArray(reporting?.children) ? reporting.children : []).filter((c) => visible(c) && Number.isSafeInteger(c.created_at) && c.created_at > sh.createdAt).slice(0, 20);
-    return { ...rest, task_title: task?.title ?? null, input_needed: input_needed === true && input?.needed === true && input.observed_at >= 0 && at - input.observed_at <= 90_000, reporting: { task, input, children }, deliveries: after.map((d) => (d.mode === 'new-turn' || fresh.has(d.turn) ? d : { ...d, response: '' })) };
+    return { ...rest, activity: visible(activity) ? activity : null, task_title: task?.title ?? null, input_needed: input_needed === true && input?.needed === true && input.observed_at >= 0 && at - input.observed_at <= 90_000, reporting: { task, input, children }, deliveries: after.map((d) => (d.mode === 'new-turn' || fresh.has(d.turn) ? d : { ...d, response: '' })) };
   }
   function sharedRead(t, sh) {
     const st = t.hub.state({ session: sh.session }, t.actor);
@@ -236,6 +238,13 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
     // Receipt time proves the owner's host answered this authorized state read;
     // it does not claim new provider activity or refresh child report times.
     return { ok: true, version: p.version, state: { ...out, observed_at: clock() } };
+  }
+  function projectResult(result, sh) {
+    if (!object(result?.state)) return Object.hasOwn(result ?? {}, 'delivery') ? { ...result, delivery: null } : result;
+    const state = project(result.state, sh);
+    // The immediate send receipt carries the same response as the transcript;
+    // derive it from the filtered transcript so steering cannot leak history.
+    return { ...result, state, ...(Object.hasOwn(result, 'delivery') ? { delivery: state.deliveries.find((d) => d.id === result.delivery?.id) ?? null } : {}) };
   }
   const liveShare = (sh) => !!sh && shares.get(sh.id) === sh && (sh.expiresAt === null || clock() < sh.expiresAt);
 
@@ -261,11 +270,11 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
       const req = { session: sh.session, generation: args.generation, board: st.board, text: args.text };
       if (args.expectedTurn !== undefined) req.expectedTurn = args.expectedTurn;
       const result = await t.hub.send(req, t.actor, { by: member.name });
-      return result.state ? { ...result, state: project(result.state, sh) } : result;
+      return projectResult(result, sh);
     }
     if (!closed(args, ['session', 'generation', 'turn'])) return REFUSED.invalid;
     const result = await t.hub.interrupt(args, t.actor);
-    return result.state ? { ...result, state: project(result.state, sh) } : result;
+    return projectResult(result, sh);
   }
 
   function sharedWatch(sh, t, args) {

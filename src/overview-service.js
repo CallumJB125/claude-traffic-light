@@ -7,6 +7,7 @@ const Machine=require('../hooks/session-machine');
 const AgentReports=require('./agent-self-report');
 const {clean}=require('./work-capture');
 const Directory=require('./session-directory');
+const {createTeamSessionControls}=require('./team-session-controls');
 const PROVIDERS=Object.freeze({codex:'Codex',claude:'Claude Code','claude-code':'Claude Code',cursor:'Cursor',gemini:'Gemini',hermes:'Hermes',opencode:'OpenCode',copilot:'Copilot',ollama:'Ollama',lmstudio:'LM Studio','llama.cpp':'llama.cpp',local:'Local model'});
 const LOCAL=new Set(['ollama','lmstudio','llama.cpp','local']);
 const ID=/^[A-Za-z0-9_.:-]{1,128}$/,UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -28,7 +29,7 @@ const provider=(source,model)=>{const known=typeof source==='string'&&Object.has
 // user's teams on the sharing hub; teamHub() → the team directory adapter
 // (src/session-directory.js interface) or null.
 function createOverviewService({sessions=()=>[],work=async()=>({sources:[],capture:[]}),managed=()=>({conn:{status:'offline'},tasks:[]}),openManaged=null,messageManaged=null,now=Date.now,current=()=>true,actionCurrent=current,navigationCurrent=()=>false,owned=()=>[],shares=()=>null,hubTeams=async()=>null,teamHub=()=>null}){
- let epoch=0,handles=new Map(),teamRefs=new Map();const secret=crypto.randomBytes(32);
+ let epoch=0,directoryEpoch=0,routeEpoch=0,teamView=null,handles=new Map(),teamRefs=new Map();const secret=crypto.randomBytes(32);
  const directoryModel=Directory.createSessionDirectory({now});
  const stable=parts=>crypto.createHmac('sha256',secret).update(JSON.stringify(parts)).digest('hex');
  const teamKey=(origin,teamId)=>stable(['team',origin,teamId]).slice(0,32);
@@ -138,13 +139,29 @@ function createOverviewService({sessions=()=>[],work=async()=>({sources:[],captu
  const safe=(fn,fallback)=>{try{return fn()??fallback;}catch{return fallback;}};
  const viewerOf=hub=>{const v=safe(()=>hub?.viewer?.(),null);return object(v)&&typeof v.id==='string'&&v.id?{id:v.id,name:clean(v.name,80)||'You'}:null;};
  const unavailableDirectory=(view,time)=>({schema:1,view,status:'unavailable',observed_at:time,teams:[],team:null,notice:'',entries:[],counts:directoryModel.counts([])});
+ const controls=createTeamSessionControls({resolve:resolveTeam,current:permitted,actionCurrent:actionPermitted,now});
+ async function resolveTeam(entryId,effect=false){
+  const e=teamRefs.get(entryId),generation=routeEpoch;
+  const fresh=()=>permitted()&&(!effect||actionPermitted())&&generation===routeEpoch&&teamView===e?.teamKey;
+  if(!e||e.expires<now()||!fresh())return response('stale');
+  const hub=safe(teamHub,null),viewer=viewerOf(hub);
+  if(!hub||hub!==e.hub||!viewer||viewer.id!==e.viewerId)return response('stale');
+  // Board-run task inboxes keep their own durable contract; they never acquire
+  // provider-turn controls merely by appearing alongside live session shares.
+  if(e.messageContract==='task-inbox')return{ok:false,status:'unsupported',error:'This board run uses its task inbox. Open its card or use Message.'};
+  // inspect/act freshly authorize the exact share. Re-reading every teammate's
+  // state here would fan out N relay calls for each selected-session read.
+  return{hub,viewer,team:e.team,ref:e.ref,scope:e.scope,isCurrent:()=>fresh()&&e.expires>=now()&&safe(teamHub,null)===hub&&viewerOf(hub)?.id===viewer.id};
+ }
  // My sessions / Team sessions. Team privacy is filtered here, never in the page.
  async function directory(request){
   const time=now(),view=request?.view;
   if(!(closed(request,['view'])&&view==='mine'||closed(request,['view','team'])&&view==='team'&&(request.team===null||typeof request.team==='string'&&/^[0-9a-f]{32}$/.test(request.team))))return unavailableDirectory('mine',time);
+  const readGeneration=++directoryEpoch,reading=()=>readGeneration===directoryEpoch&&permitted();
+  if(view==='mine'&&teamView!==null||view==='team'&&request.team!==null&&teamView!==request.team){routeEpoch++;teamView=view==='mine'?null:request.team;teamRefs.clear();controls.invalidate();}
   if(!permitted())return unavailableDirectory(view,time);
-  const built=await build(time,permitted);
-  if(!built||!permitted())return unavailableDirectory(view,time);
+  const built=await build(time,reading);
+  if(!built||!reading())return unavailableDirectory(view,time);
   const sh=safe(shares,null),origin=typeof sh?.origin==='string'?sh.origin:null;
   const shareList=(origin&&Array.isArray(sh.list)?sh.list:[]).filter(x=>object(x)&&typeof x.session==='string'&&object(x.team)&&typeof x.team.id==='string').map(x=>({session:x.session,scope:x.scope,teamKey:teamKey(origin,x.team.id),teamName:clean(x.team.name,80)||'Team'}));
   const ownedList=(()=>{const v=safe(owned,[]);return Array.isArray(v)?v.slice(0,50):[];})();
@@ -157,19 +174,21 @@ function createOverviewService({sessions=()=>[],work=async()=>({sources:[],captu
   const adapterOrigin=hub?.fake!==true&&typeof hub?.origin==='string'?hub.origin:'adapter:';
   if(hub&&viewer){try{fakeTeams=(await hub.teams(viewer)).filter(t=>object(t)&&typeof t.id==='string').slice(0,64);}catch{fakeTeams=[];}
    for(const t of fakeTeams)add(teamKey(adapterOrigin,t.id),t.name,hub.fake===true?'fake':'adapter');}
-  if(!permitted())return unavailableDirectory(view,time);
+  if(!reading())return unavailableDirectory(view,time);
   const teamList=[...teams.values()].map(t=>({...t,label:t.source==='fake'?clean(hub?.label,80)||'Fake team hub':''}));
   let status=built.partial||built.omitted?'partial':'complete';
   if(view==='mine')return{schema:1,view,status,observed_at:time,teams:teamList,team:null,notice:'',entries:personal,counts:directoryModel.counts(personal)};
   const selected=teams.get(request.team)??teams.values().next().value??null;
+  if(teamView!==(selected?.key??null)){routeEpoch++;teamView=selected?.key??null;teamRefs.clear();controls.invalidate();}
   if(!selected)return{schema:1,view,status,observed_at:time,teams:teamList,team:null,notice:'You are not in a team yet, or no team is connected.',entries:[],counts:directoryModel.counts([])};
   const adapterTeam=fakeTeams.find(t=>teamKey(adapterOrigin,t.id)===selected.key)??null;
   let hubEntries=[];
   if(adapterTeam){try{hubEntries=await hub.sessions(viewer,adapterTeam.id);}catch{hubEntries=[];}}
-  if(!permitted())return unavailableDirectory(view,time);
+  if(!reading())return unavailableDirectory(view,time);
   if(hubEntries?.partial===true)status='partial';
   const model=directoryModel.team({team:{key:selected.key,name:selected.name,id:adapterTeam?.id??null},viewer:viewer??{id:''},member:!!adapterTeam,personal,hubEntries});
-  for(const [entryId,ref] of model.refs)teamRefs.set(entryId,{...ref,team:adapterTeam.id,teamKey:selected.key,hub,expires:time+45000});
+  teamRefs.clear();
+  for(const [entryId,ref] of model.refs)teamRefs.set(entryId,{...ref,messageContract:model.entries.find(x=>x.id===entryId)?.messageContract,team:adapterTeam.id,teamKey:selected.key,hub,viewerId:viewer?.id,expires:time+45000});
   while(teamRefs.size>500)teamRefs.delete(teamRefs.keys().next().value);
   const notice=adapterTeam?(hub.fake===true?`${clean(hub.label,80)||'Fake team hub'}: these teammates and sessions are test data, not a real team.`:''):'Your own sessions in this team are shown. Teammates\' shared sessions appear once your team hub\'s shared-session directory is connected.';
   return{schema:1,view,status,observed_at:time,teams:teamList,team:{key:selected.key,name:selected.name,source:selected.source},notice,entries:model.entries,counts:directoryModel.counts(model.entries)};
@@ -177,19 +196,20 @@ function createOverviewService({sessions=()=>[],work=async()=>({sources:[],captu
  // Message a teammate's session shared with the selected team to send.
  async function teamMessage(request){
   if(!closed(request,['id','text'])||typeof request.id!=='string'||!/^[0-9a-f]{40}$/.test(request.id)||typeof request.text!=='string'||request.text.includes('\0')||!request.text.trim()||request.text.trim().length>4000||Buffer.byteLength(request.text.trim())>8192)return response('invalid');
-  const e=teamRefs.get(request.id);if(!e||e.expires<now()||!actionPermitted())return response('stale');
+  const e=teamRefs.get(request.id),generation=routeEpoch;if(!e||e.expires<now()||!actionPermitted())return response('stale');
   if(e.scope!=='interact')return{...response('unavailable'),error:'Shared with you to watch only.'};
-  const hub=safe(teamHub,null),viewer=viewerOf(hub);if(!hub||hub!==e.hub||!viewer)return response('stale');
+  const hub=safe(teamHub,null),viewer=viewerOf(hub);if(!hub||hub!==e.hub||!viewer||viewer.id!==e.viewerId||teamView!==e.teamKey)return response('stale');
+  const alive=()=>actionPermitted()&&generation===routeEpoch&&teamView===e.teamKey&&safe(teamHub,null)===hub&&viewerOf(hub)?.id===viewer.id&&e.expires>=now();
   // Re-check the share right before sending: revoked, expired or removed members refuse.
   let fresh;try{fresh=await hub.sessions(viewer,e.team);}catch{fresh=[];}
-  if(!actionPermitted())return response('stale');
+  if(!alive())return response('stale');
   const again=directoryModel.team({team:{key:e.teamKey,name:'',id:e.team},viewer,member:true,personal:[],hubEntries:fresh});
   const now2=again.refs.get(request.id);if(!now2||now2.ref!==e.ref||now2.scope!=='interact')return{ok:false,status:'stale',error:'This session is no longer shared with you to send.'};
   const target=again.entries.find(x=>x.id===request.id);if(target?.capabilities.receive.available!==true)return{ok:false,status:'unavailable',error:target?.capabilities.receive.reason||'Unavailable.'};
-  let out;try{out=await hub.send(viewer,e.team,e.ref,request.text.trim(),crypto.randomUUID());}catch{out=null;}
-  if(!actionPermitted())return response('stale');
-  return out?.ok===true?response('queued'):{ok:false,status:['forbidden','stale','unavailable','unconfirmed'].includes(out?.status)?out.status:'unavailable',error:clean(out?.error,300)||'The team hub did not accept the message.'};
+  let out;try{out=await hub.send(viewer,e.team,e.ref,request.text.trim(),crypto.randomUUID(),alive);}catch{return{ok:false,status:'unconfirmed',error:'No receipt yet. Inspect the task inbox before sending again.'};}
+  if(!alive())return{ok:false,status:'unconfirmed',error:'The view changed. Inspect the receipt before sending again.'};
+  return out?.ok===true?out:{ok:false,status:['forbidden','stale','busy','unavailable','unconfirmed'].includes(out?.status)?out.status:'unavailable',error:clean(out?.error,300)||'The team hub did not accept the message.'};
  }
- return{snapshot,directory,teamMessage,open:r=>action(r),message:r=>action(r,true),invalidate(){epoch++;handles.clear();teamRefs.clear();}};
+ return{snapshot,directory,teamMessage,teamInspect:controls.inspect,teamAction:controls.action,open:r=>action(r),message:r=>action(r,true),invalidate(){epoch++;directoryEpoch++;routeEpoch++;teamView=null;handles.clear();teamRefs.clear();controls.invalidate();}};
 }
 module.exports={createOverviewService,PROVIDERS,provider,response};

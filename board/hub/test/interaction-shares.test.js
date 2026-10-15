@@ -55,8 +55,10 @@ async function rig() {
   const st = await mac.enable({ baseUrl: h.base, token: macA.token, WebSocket });
   assert.equal(st.state, 'connected');
   const launch = async () => (await mac.hub.launch({ provider: 'codex' }, mac.actor)).state;
-  const ownerSend = (s, text) => mac.hub.send({ session: s.session, generation: s.generation, text }, mac.actor);
-  const call = (dev, share, op, args, requestId = rid()) => h.call('POST', `/api/interaction/v1/shared/${share}/call`, { token: dev.token, body: { request_id: requestId, op, args } });
+  // Model operation ordering explicitly: strict share-time privacy suppresses
+  // messages in an indistinguishable same-millisecond boundary.
+  const ownerSend = (s, text) => { h.clock.advance(1); return mac.hub.send({ session: s.session, generation: s.generation, text }, mac.actor); };
+  const call = (dev, share, op, args, requestId = rid()) => { if (op === 'send') h.clock.advance(1); return h.call('POST', `/api/interaction/v1/shared/${share}/call`, { token: dev.token, body: { request_id: requestId, op, args } }); };
   const shared = (dev) => h.call('GET', '/api/interaction/v1/shared', { token: dev.token });
   const bobName = h.db.get('SELECT display_name AS n FROM users WHERE id = ?', bob.user).n;
   // Puts a signed-in user straight into a team with a role.
@@ -71,6 +73,31 @@ async function rig() {
     async close() { mac.close(); overview.stopAll(); await h.close(); },
   };
 }
+
+test('LOCAL ACTIVITY PROOF: shared reads omit pre-share activity and preserve its independent provider clock', async () => {
+  const r = await rig();
+  try {
+    const s = await r.launch();
+    await r.ownerSend(s, 'HOLD private prior task');
+    const own = () => r.mac.hub.state({ session: s.session }, r.mac.actor);
+    assert.equal(own().activity.label, 'Thinking');
+    const made = await r.mac.shareSession({ session: s.session, team: r.org, scope: 'watch' });
+    assert.equal(made.ok, true);
+    const read = async () => (await r.call(r.bob, made.share.id, 'state', { session: s.session })).body.result.state;
+    assert.equal((await read()).activity, null, 'even same-millisecond pre-share metadata stays private');
+    r.h.clock.advance(1000);
+    assert.equal((await read()).activity, null, 'a fresh host read does not freshen pre-share provider activity');
+    await r.mac.hub.interrupt({ session: s.session, generation: s.generation, turn: own().activeTurn }, r.mac.actor);
+    await until(() => own().status === 'ready');
+    const completed = (await read()).activity;
+    assert.equal(completed.label, 'Thinking'); assert.equal(completed.phase, 'completed');
+    assert.equal(completed.observed_at, r.h.clock.wall());
+    r.h.clock.advance(1000);
+    assert.deepEqual((await read()).activity, completed, 'host read does not change activity observation time');
+    assert.ok(!JSON.stringify(completed).includes(r.mac.hub.targetOf(s.session)), 'native session remains private');
+    assert.ok(!JSON.stringify(await read()).includes('private prior task'), 'activity exposes no pre-share prompt');
+  } finally { await r.close(); }
+});
 
 test('LOCAL REPORTING PROOF: real hub shares bounded parent/child/input reports with independent clocks and no pre-share history', async () => {
   const r = await rig();
@@ -101,6 +128,9 @@ test('LOCAL REPORTING PROOF: real hub shares bounded parent/child/input reports 
     assert.ok(!JSON.stringify(rows).includes('new-child-private-id')); assert.ok(!JSON.stringify(rows).includes('/Users/alice')); assert.ok(!JSON.stringify(rows).includes('ghp_abcdefghijklmnopqrstuv123456789'));
     r.h.clock.advance(1000);
     rows = await hub.sessions(null, r.org);
+    assert.equal(rows[0].observed_at, parentAt, 'passive cache keeps the real earlier receipt time');
+    assert.equal((await hub.inspect(hub.viewer(), r.org, made.share.id)).ok, true, 'selected session reads exact live state');
+    rows = await hub.sessions(null, r.org);
     assert.equal(rows[0].observed_at, r.h.clock.wall()); assert.equal(rows[0].children[0].observed_at, childAt, 'fresh state receipt is not child activity');
     assert.equal(rows[0].children[0].received_at, childAt);
     const reportedInputAt = rows[0].input_observed_at;
@@ -113,14 +143,17 @@ test('LOCAL REPORTING PROOF: real hub shares bounded parent/child/input reports 
     await r.ownerSend(s, 'HOLD reporting proof');
     const turn = await until(() => r.mac.hub.state({ session: s.session }, r.mac.actor).activeTurn);
     r.h.clock.advance(1000); report({ inputNeeded: true, source: 'observed' });
+    assert.equal((await hub.inspect(hub.viewer(), r.org, made.share.id)).state.input_needed, true);
     assert.equal((await hub.sessions(null, r.org))[0].input_needed, true);
     await r.mac.hub.interrupt({ session: s.session, generation: s.generation, turn }, r.mac.actor);
     await until(() => r.mac.hub.state({ session: s.session }, r.mac.actor).status === 'ready');
+    assert.equal((await hub.inspect(hub.viewer(), r.org, made.share.id)).state.input_needed, false);
     rows = await hub.sessions(null, r.org); assert.equal(rows[0].input_needed, false); assert.equal(rows[0].state, 'idle', 'correlated turn completion clears its wait in actual shared state');
     r.h.clock.advance(1000); report({ inputNeeded: true, source: 'observed' });
     r.adapter.stop(); await until(() => r.mac.hub.state({ session: s.session }, r.mac.actor).status === 'ended');
     wire = (await r.call(r.bob, made.share.id, 'state', { session: s.session })).body.result.state;
     assert.equal(wire.status, 'ended'); assert.equal(wire.input_needed, false); assert.equal(wire.reporting.input.needed, true, 'closed provider preserves the last report, never a current question');
+    assert.equal((await hub.inspect(hub.viewer(), r.org, made.share.id)).state.status, 'ended');
     rows = await hub.sessions(null, r.org); assert.equal(rows[0].state, 'ended'); assert.equal(rows[0].input_needed, false); assert.equal(rows[0].input_reported_needed, true);
     r.mac.stopSharing(made.share.id);
     assert.equal(r.mac.shared().some(x => x.id === made.share.id), false, 'the local grant is removed immediately');
@@ -678,6 +711,7 @@ test('HISTORY: a teammate\'s steer into a turn that began before the share does 
     const { share } = await r.mac.shareSession({ session: s.session, team: r.org, scope: 'interact' });
     const steer = await r.call(r.bob, share.id, 'send', { session: s.session, generation: s.generation, text: 'more', expectedTurn: turn });
     assert.equal(steer.body.result.delivery?.mode, 'steer', steer.text);
+    assert.equal(steer.body.result.delivery.response, '', 'the immediate steer receipt cannot reveal a pre-share turn response');
     await until(() => r.mac.hub.state({ session: s.session }, r.mac.actor).deliveries.find((d) => d.text === 'more' && d.state === 'completed'));
     assert.ok(r.mac.hub.state({ session: s.session }, r.mac.actor).deliveries.find((d) => d.text === 'more').response, 'the owner still sees it');
     const seen = (await r.call(r.bob, share.id, 'state', { session: s.session })).body.result.state.deliveries;
@@ -689,7 +723,7 @@ test('HISTORY: a teammate\'s steer into a turn that began before the share does 
     const relay = r.h.hub.interactionRelay, orig = relay.dispatch;
     relay.dispatch = async function (...a) {
       const res = await orig.apply(this, a);
-      return { ...res, state: { ...res.state, deliveries: res.state.deliveries.map((d) => ({ ...d, response: 'pre-share output' })) } };
+      return { ...res, delivery: { ...res.state.deliveries[0], response: 'pre-share output' }, state: { ...res.state, deliveries: res.state.deliveries.map((d) => ({ ...d, response: 'pre-share output' })) } };
     };
     try {
       const got = await r.call(r.bob, share.id, 'state', { session: s.session });
@@ -721,6 +755,7 @@ test('LOCAL PROOF: actual shared endpoint reaches Overview once, with live Messa
     const aliceOverview = createOverviewService({ now: () => r.h.clock.wall(), hubTeams: async () => ({ origin: r.h.base, teams: [{ id: r.org, name: 'Dev team' }] }), teamHub: () => aliceHub });
     const aliceRows = await aliceOverview.directory({ view: 'team', team: null });
     assert.equal(aliceRows.entries.length, 1, 'two live hosting desktops can discover each other');
+    r.h.clock.advance(1);
     assert.equal((await aliceOverview.teamMessage({ id: aliceRows.entries[0].id, text: 'alice into bob session' })).ok, true);
     assert.ok(bobHost.hub.state({ session: bobSession.session }, bobHost.actor).deliveries.some(d => d.text === 'alice into bob session'));
     const raw = (await r.shared(r.bob)).body.shared;
@@ -735,10 +770,13 @@ test('LOCAL PROOF: actual shared endpoint reaches Overview once, with live Messa
     assert.equal(rows.entries[0].capabilities.receive.available, true, 'Message can be rendered');
     assert.equal(rows.entries[0].observedAt, r.h.clock.wall());
     assert.equal(JSON.stringify(rows).includes(r.macA.user), false, 'owner account id stays in main');
-    const sent = await overview.teamMessage({ id: rows.entries[0].id, text: 'overview teammate turn' });
+    r.h.clock.advance(1);
+    const selected = await overview.teamInspect({ id: rows.entries[0].id });
+    assert.equal(selected.ok, true);
+    const sent = await overview.teamAction({ selection: selected.selection, operation: 'send', text: 'overview teammate turn' });
     assert.equal(sent.ok, true, JSON.stringify(sent));
     assert.ok(r.mac.hub.state({ session: s.session }, r.mac.actor).deliveries.some(d => d.text === 'overview teammate turn'));
-    await until(async () => { const refreshed = await overview.directory({ view: 'team', team: rows.team.key }); return refreshed.entries[0]?.deliveries.some(d => d.text === 'overview teammate turn' && d.state === 'completed' && d.response); });
+    await until(async () => { const refreshed = await overview.teamInspect({ id: rows.entries[0].id }); return refreshed.state?.deliveries.some(d => d.text === 'overview teammate turn' && d.state === 'completed' && d.response); });
     r.h.db.run("UPDATE members SET role = 'viewer' WHERE org_id = ? AND user_id = ?", r.org, r.bob.user);
     const watch = await overview.directory({ view: 'team', team: rows.team.key });
     assert.equal(watch.entries[0].capabilities.receive.available, false);

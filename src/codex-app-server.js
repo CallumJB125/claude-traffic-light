@@ -8,6 +8,7 @@ const { EventEmitter } = require('node:events');
 const childProcess = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
+const { codexActivityLabel } = require('./session-activity');
 
 // Owned threads are text-only: no shell/exec, image viewing, skills,
 // plugins, MCP servers, hooks, browser/computer use, web search, memories,
@@ -70,6 +71,10 @@ function createCodexAppServer({ bin, env = process.env, spawn = childProcess.spa
   }
   function onNotification({ method, params: p = {} }) {
     const target = p.threadId;
+    if (['item/started', 'item/completed'].includes(method) && typeof target === 'string' && typeof p.turnId === 'string' && typeof p.item?.id === 'string') {
+      const label = codexActivityLabel(p.item.type);
+      if (label) events.emit('event', { kind: 'activity', target, turnId: p.turnId, activityId: p.item.id, label, phase: method === 'item/started' ? 'working' : 'completed' });
+    }
     if (method === 'turn/started' && typeof target === 'string' && typeof p.turn?.id === 'string') events.emit('event', { kind: 'turn-started', target, turnId: p.turn.id });
     else if (method === 'turn/completed' && typeof target === 'string' && typeof p.turn?.id === 'string') {
       events.emit('event', { kind: 'turn-completed', target, turnId: p.turn.id, status: ['completed', 'interrupted', 'failed'].includes(p.turn.status) ? p.turn.status : 'failed', error: typeof p.turn.error?.message === 'string' ? p.turn.error.message : null });
