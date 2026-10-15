@@ -1,6 +1,39 @@
 # Session interaction implementation — 15 October 2026
 
-## Current release and local candidate
+## Public beta.74 and routing follow-up — 15 October 2026
+
+Public and installed beta.74 is frozen at `4a7f050c568df47083927ec74797104620accf6f`.
+Build/stage `38771091656` and signed promotion `38774498360` passed. Notes-only
+PR #13 merged to main `b434ce5a`; implementation PR #7 remains draft/unmerged.
+Mac native 49/49, root 4,932 passed/12 skipped, remote 220/220, board 3,107/3,107;
+Linux root 4,923 passed/21 skipped, remote 220/220, board 3,106 passed/one skipped.
+Both packaged smokes and Windows native 69+166+71 checks passed. No Windows
+installers published; Mac x64 runtime acceptance and notarization remain open.
+Public signatures/feeds/six installers, GitHub source/notes/HEAD sizes and the
+downloaded arm64 ZIP/staged SHA256 match. Site `fe84befe` deployed at
+`https://fb51c908.plexiform-site.pages.dev`; site tests 30/30 and 118-file staging
+provenance plus live HTML/GET405 checks pass. Browser policy-service failure
+continues to prevent fresh real-browser acceptance.
+
+The installed public package matches 31 changed runtime/privacy files; its native
+guard is universal with empty entitlements, four unauthorized launches were denied,
+and isolated public/installed smokes pass. Pending-Keychain navigation is usable.
+After direct owner approval, the saved team account restored. A real routing defect
+was then observed: restoring off a hub page retains the cached local board, so Board
+can show local My board under a team workspace label. Local Live is not team Live.
+A focused beta.75 follow-up is in progress; published beta.74 bytes are immutable.
+Public team-board, Quit and unchanged-restart acceptance remain open. UI automation
+is paused after concurrent app interaction and an owned Claude conversation appeared.
+
+The new private backup `work/app-backups/20261015T171216Z-session-interaction` has
+25 checked SQLite snapshots and retains accepted local beta.73. Legacy MCP
+5445/6076, caffeinate 41145, old failed evidence and protected checkouts remain.
+Safe visual failures reproduced against beta.72; eight acceptance exclusions remain.
+Full current evidence is in the adjacent task's `outputs/session-interaction-validation.txt`
+and `outputs/beta74-visual-assessment.txt`. No external teammate/device acceptance
+or universal shared-checkout overwrite prevention is claimed.
+
+## Earlier publication checkpoint (before beta.74)
 
 Public downloads remain `1.0.2-beta.72` at frozen source
 `09b4495146dd27d1cd8f7e0275344103f8777035`. Build/stage
