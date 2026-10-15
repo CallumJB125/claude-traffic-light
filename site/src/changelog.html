@@ -12,6 +12,19 @@
     <h1>Changelog</h1>
     <p class="lede">What changed, newest first. The beta moves fast, so this is written in plain words rather than version numbers.</p>
     <div class="log">
+      <article id="2026-10-15-beta74">
+        <time datetime="2026-10-15">15 October 2026</time>
+        <h2>Keep working while your saved account unlocks</h2>
+        <p>Public preview 1.0.2-beta.74 for macOS and Linux. <a href="https://github.com/CallumJB125/claude-traffic-light/releases/tag/v1.0.2-beta.74">Release notes and checksums</a></p>
+        <ul>
+          <li><strong>Responsive saved-account startup.</strong> On Mac, restoring your team sign-in runs in the background while you use local pages. Your selected page and workspace stay selected, including a local-board choice made while waiting.</li>
+          <li><strong>Secure save and explicit retry.</strong> Sign-in stays pending until its credential is saved securely. A locked password store shows recovery guidance and a Retry saved sign-in button. Cancelling a sign-in or signing out prevents a late storage result from bringing that account back.</li>
+          <li><strong>Quit while Keychain is waiting.</strong> On Mac, a pending account Keychain authorization no longer leaves Plexiform running after normal Quit. Quitting retires the account-storage helper; late results cannot refresh the account or restart a runner.</li>
+          <li><strong>Storage scope.</strong> This change covers team-account storage on Mac. Runner tokens and local-board credentials retain their existing storage paths, and Linux retains its guarded desktop password-store backend.</li>
+          <li><strong>Mac approval.</strong> Builds remain ad-hoc signed and are not Apple-notarized. A new build can require fresh Keychain approval: verify that the request names Plexiform and Plexiform Safe Storage before completing it directly on your Mac.</li>
+          <li><strong>Acceptance and limits.</strong> Existing shared-session features remain available with their provider and sharing boundaries. External teammate/device and real-device updater acceptance remain open. Windows, public phone access and Linear/Jira delivery remain gated, and privacy/legal review remains open.</li>
+        </ul>
+      </article>
       <article id="2026-10-15-beta72">
         <time datetime="2026-10-15">15 October 2026</time>
         <h2>Restore your saved team connection</h2>
