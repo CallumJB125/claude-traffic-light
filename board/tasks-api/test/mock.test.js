@@ -53,7 +53,9 @@ test('demo A: queued → running (transcript/tool/diff) → approval → running
     assert.deepEqual(done.actions, ['merge', 'openPr', 'message', 'discard']);
     assert.equal(done.green, false);
 
-    const merged = await client.act(a.id, 'merge', {});
+    const review = (await client.act(a.id, 'merge', { phase: 'preview' })).integration;
+    assert.equal(review.canApply, true);
+    const merged = await client.act(a.id, 'merge', { phase: 'apply', reviewId: review.id, reviewHash: review.hash, confirm: true });
     assert.equal(merged.task.state, 'done');
     assert.equal(merged.task.outcome, 'merged');
     assert.equal(merged.task.reason, 'merged into main');

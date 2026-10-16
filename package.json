@@ -75,6 +75,7 @@
       "overview.js",
       "overview-share.js",
       "overview-directory.js",
+      "overview-coordinator.js",
       "overview-preload.js",
       "home.html",
       "home.css",

@@ -339,7 +339,8 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
 
   // `by` (main-only, never from a request): the teammate a shared session's
   // message came from (src/remote-interaction.js), shown as "Sent by <by>".
-  async function send(req, actor, { by = null } = {}) {
+  async function send(req, actor, { by = null, fresh = () => true } = {}) {
+    if (fresh() !== true) return refuse('stale', ERRORS.stale);
     if (!closed(req, ['session', 'generation', 'board', 'text', 'expectedTurn']) || typeof req.text !== 'string' || req.text.includes('\0')) return refuse('invalid', ERRORS.invalid);
     const text = req.text.trim();
     if (!text || text.length > MAX_TEXT || Buffer.byteLength(text) > MAX_BYTES) return refuse('invalid', ERRORS.invalid);
@@ -364,6 +365,7 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
       if (r.ended || r.generation !== gen) return refuse('stale', ERRORS.stale);
       if (r.activeTurn) return refuse('busy', ERRORS.busy);
     }
+    if (fresh() !== true) return refuse('stale', ERRORS.stale);
     const target = r.target, generation = r.generation;
     const d = { id: crypto.randomUUID(), clientId: crypto.randomUUID(), text, by: typeof by === 'string' && by && by.length <= 80 ? by : null, mode: expectedTurnId ? 'steer' : 'new-turn', state: 'sending', turnId: null, sentAt: now(), ...(expectedTurnId ? { steerTurnId: expectedTurnId, responsePrefix: r.turns.get(expectedTurnId)?.response ?? '', responseOffset: r.turns.get(expectedTurnId)?.responseLength ?? 0, responseAfter: '' } : {}) };
     r.deliveries.set(d.id, d);

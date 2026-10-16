@@ -240,6 +240,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   });
   const setupIdentityListeners=new Set(),activeListeners=new Set();let setupIdentityMarkers=[],activeMarker=null;
   let overviewDocument=0,setupSourcesGeneration=0,setupLocalGeneration=0,setupCurrentSources=[],setupModalTicket=null;
+  let tasksDocument=0,tasksGeneration=0,tasksModalTicket=null;
   let selected = 'board';
   let hubStatus = { state: 'stopped' };
   let hubInfo = null; // {url, origin, accessTeam, partition, team, bearer, org}
@@ -452,7 +453,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   }
 
   function pushState() {
-    if(activeMarker!==store.active().id){activeMarker=store.active().id;for(const listener of activeListeners)listener();}
+    if(activeMarker!==store.active().id){tasksGeneration++;activeMarker=store.active().id;for(const listener of activeListeners)listener();}
     const markers=store.hubs().map(origin=>[origin,vault(origin).load()]);
     if(markers.length!==setupIdentityMarkers.length || markers.some((value,index)=>value[0]!==setupIdentityMarkers[index]?.[0]||value[1]!==setupIdentityMarkers[index]?.[1])) {
       setupSourcesGeneration++;setupCurrentSources=[];
@@ -528,6 +529,12 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
         // Overview also counts documents (not focus changes) for session ownership.
         const retire=page.id==='overview'?()=>{overviewDocument++;retireSetupDocument();try{onOverviewRetired();}catch{/* never blocks retirement */}}:retireSetupDocument;
         // A same-document navigation (hash/pushState) keeps the document, so it must not end sessions.
+        v.webContents.on('did-start-navigation',d=>{if(d.isMainFrame&&!d.isSameDocument)retire();});
+        v.webContents.on('render-process-gone',retire);
+        v.webContents.once('destroyed',retire);
+      }
+      if(page.id==='tasks'){
+        const retire=()=>{tasksDocument++;};
         v.webContents.on('did-start-navigation',d=>{if(d.isMainFrame&&!d.isSameDocument)retire();});
         v.webContents.on('render-process-gone',retire);
         v.webContents.once('destroyed',retire);
@@ -945,6 +952,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     if (!page) return;
     if (page.kind === 'window') { openWindow(page.window); return; }
     setupLocalGeneration++;
+    tasksGeneration++;
     if (page.localScreen && !getTeamHub()) { flow.show(page.localScreen); return; }
     if (page.kind === 'local' && page.screen) { flow.show(page.screen); return; }
     flow.leftAccountPages();
@@ -1131,8 +1139,12 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     sidebar.webContents.once('did-finish-load', () => { pushState(); win?.show(); });
     win.on('resize', layout);
     win.on('blur',()=>{if(!setupModalTicket)setupLocalGeneration++;});
+    win.on('blur',()=>{if(!tasksModalTicket)tasksGeneration++;});
+    win.on('hide',()=>{tasksGeneration++;});
+    win.on('minimize',()=>{tasksGeneration++;});
     win.on('closed', () => {
       setupLocalGeneration++;
+      tasksGeneration++;
       // Close every page: detached views otherwise keep running (and the board
       // page keeps its socket). The hub keeps running while the app runs, so
       // reopening is instant; it stops with the app.
@@ -1168,6 +1180,23 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       const expected=pathToFileURL(path.join(DIR,'..','overview.html')).href;
       if(wc.getURL()!==expected||wc.mainFrame?.url!==expected||wc.isLoading())return null;
       return {window:win,contents:wc,generation:setupLocalGeneration,document:overviewDocument,foreground:true};
+    },
+    tasksContext() {
+      const v=localViews.get('tasks'),wc=v?.webContents;
+      if(!win||win.isDestroyed()||!wc||wc.isDestroyed()||selected!=='tasks'||content!==v||!win.contentView.children.includes(v)||!win.isVisible()||win.isMinimized())return null;
+      const expected=new URL(pathToFileURL(path.join(DIR,'..','tasks.html')).href);expected.searchParams.set('embedded','1');
+      if(wc.getURL()!==expected.href||wc.mainFrame?.url!==expected.href||wc.isLoading())return null;
+      return {window:win,contents:wc,generation:tasksGeneration,document:tasksDocument,account:setupSourcesGeneration,workspace:store.active()?.id,foreground:win.isFocused()};
+    },
+    async tasksConfirm(show) {
+      const before=this.tasksContext();
+      if(typeof show!=='function'||!before?.foreground||tasksModalTicket||setupModalTicket)return null;
+      const ticket={...before,frame:before.contents.mainFrame};tasksModalTicket=ticket;
+      try {
+        const answer=await show(before.window),after=this.tasksContext();
+        if(tasksModalTicket!==ticket||!after?.foreground||after.contents.mainFrame!==ticket.frame||['window','contents','generation','document','account','workspace'].some(key=>after[key]!==ticket[key]))return null;
+        return answer;
+      }finally{if(tasksModalTicket===ticket)tasksModalTicket=null;}
     },
     setupSources,
     // Main-only identities. No renderer receives a sealed marker or window.

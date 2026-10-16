@@ -82,7 +82,7 @@ function fixture(t, { origins = [FIRST], selected = 'home', ready = true, refres
       readFileSync: (...args) => { reads.push(args[0]); return fs.readFileSync(...args); },
     } }),
     createWorkspaceStore,
-    selected, setupLocalGeneration: 0, win: {}, hubInfo: null, hubBinding: null,
+    selected, setupLocalGeneration: 0, tasksGeneration: 0, win: {}, hubInfo: null, hubBinding: null,
     hubLoading: null, hubLoadingBinding: null, viewError: null,
     accountView: { webContents: { isDestroyed: () => false, send: (...args) => accountMessages.push(args) } },
     pageById, isHubPage: id => pageById(id)?.kind === 'hub',

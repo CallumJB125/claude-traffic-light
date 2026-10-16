@@ -176,6 +176,7 @@
     head.append(actions);
     for (const a of actionButtons(t)) actions.append(a);
     if (d.confirm) head.append(confirmBar(t));
+    if (d.integration && t.state === 'in_review') head.append(integrationReview(d.integration));
     const err = el('p', 'err', d.error); err.setAttribute('role', 'alert');
     head.append(err);
     renderBanners(t);
@@ -197,7 +198,7 @@
       if (t.parkReason === 'limit') out.push(go('resume', { when: 'reset' }, 'Resume when the limit resets'));
     }
     if (has('handback')) out.push(go('handback', {}, TV.ACTION_LABEL.handback, 'primary'));
-    if (has('merge')) out.push(go('merge', { strategy: 'merge' }, 'Merge into your branch', 'primary'));
+    if (has('merge')) { const review = btn(d.integrating ? 'Checking integration…' : 'Review integration', 'primary', () => runAct('merge', { phase: 'preview' })); review.disabled = !!d.integrating; out.push(review); }
     if (has('openPr')) out.push(go('openPr', {}, TV.ACTION_LABEL.openPr));
     if (has('retry')) { out.push(go('retry', {}, 'Retry')); out.push(go('retry', { fresh: true }, d.detail.checkpoint || d.detail.handover ? 'Restart from checkpoint' : 'Retry from scratch')); }
     if (has('switchAi')) for (const id of Object.keys(TV.AI_NAME)) if (id !== t.ai.id) out.push(go('switchAi', { ai: id }, `Continue with ${TV.AI_NAME[id]}`));
@@ -223,16 +224,39 @@
   }
 
   async function runAct(action, payload, confirmed = false) {
+    if (d.integrating) return;
     d.error = '';
     d.takeover = null;
     const id = d.id;
-    const r = await api.act({ id, action, payload, confirmed });
+    if (action === 'merge') { d.integrating = true; if (payload.phase === 'apply') d.integration = null; renderHead(); }
+    else d.integration = null;
+    let r;
+    try { r = await api.act({ id, action, payload, confirmed }); }
+    catch { r = { ok: false, text: action === 'merge' && payload.phase === 'apply' ? 'Integration receipt unconfirmed. Inspect your branch before reviewing another integration.' : TV.errorText('INTERNAL') }; }
     if (!d || d.id !== id) return r;
+    d.integrating = false;
     if (r && r.cancelled) d.error = '';
     else if (!r || !r.ok) d.error = r?.text || TV.errorText('INTERNAL');
     else if (r.takeover) d.takeover = r.takeover;
+    else if (r.integration) { d.integration = r.integration.status === 'merged' ? null : r.integration; if (r.integration.status === 'merged') d.error = 'Reviewed changes integrated. Nothing was pushed; the task worktree is kept.'; }
     renderHead();
     return r;
+  }
+
+  function integrationReview(review) {
+    const box = el('section', 'integration-review');
+    box.append(el('h3', null, `Integration into ${review.branch}`), el('p', null, review.reason));
+    const list = el('ul');
+    for (const file of review.files) list.append(el('li', null, `${file.status} · ${file.path}`));
+    box.append(list);
+    if (review.patch) box.append(el('pre', 'diff', review.patch));
+    if (review.canApply && review.review) {
+      const confirm = btn('Integrate reviewed changes…', 'primary', () => runAct('merge', { phase: 'apply', review: review.review }));
+      confirm.disabled = !!d.integrating || Date.now() >= review.expiresAt;
+      box.append(confirm, el('p', 'sub', 'Plexiform asks you to confirm this exact review. A changed source or checkout requires a new review.'));
+    }
+    const cancel = btn('Close review', '', () => { d.integration = null; renderHead(); }); cancel.disabled = !!d.integrating; box.append(cancel);
+    return box;
   }
 
   // Permission requests, questions and the supervisor's own choices (wait for the limit, switch AI…).

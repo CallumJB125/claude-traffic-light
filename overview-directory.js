@@ -103,6 +103,8 @@
     v.message.hidden = !canMessage; v.message.disabled = !!v.busy;
     v.message.textContent = e.interact?.kind === 'team' ? 'Message' : e.interact?.kind === 'owned' ? 'Open conversation' : 'Message';
     v.message.setAttribute('aria-label', `${v.message.textContent}: ${v.title.textContent}`);
+    if (api.followups && !v.followup) { v.followup = button('Prepare follow-up', () => void composeFollowup(v)); v.actions.append(v.followup); }
+    if (v.followup) v.followup.hidden = !canMessage || !['owned', 'team'].includes(e.interact?.kind) || e.messageContract === 'task-inbox';
     if (v.kind === 'team' && !v.inspect) {
       v.inspect = button('Show activity', () => void openActivity(v));
       v.actions.prepend(v.inspect);
@@ -124,6 +126,7 @@
     if (shared) for (const n of [v.children, v.handoffs, v.deliveries, v.capList]) n.replaceChildren();
     set(v.when, shared ? 'No longer shared with you, or it ended.' : 'No longer reported. It ended, or its reports stopped.');
     v.composer?.box.remove(); v.composer = null; v.message.hidden = true; v.why.hidden = true;
+    v.followupDraft?.box.remove(); v.followupDraft = null; if (v.followup) v.followup.hidden = true;
     if (v.inspect) v.inspect.hidden = true;
     if (!v.dismiss) { v.dismiss = button('Dismiss', () => { v.li.remove(); for (const l of Object.values(lists)) for (const [id, x] of l.rows) if (x === v) l.rows.delete(id); }); v.actions.append(v.dismiss); }
   }
@@ -160,6 +163,74 @@
     if (r?.ok === true) { c.input.value = ''; set(c.note, e.messageContract === 'task-inbox' ? 'Queued in this board run’s task inbox. The agent has not acknowledged it yet. Receipt and reply appear above when reported.' : 'Queued by the team hub. Its acknowledgement and reply appear above when they arrive.'); void refresh(); }
     else set(c.note, `${r?.status === 'unconfirmed' ? 'Receipt unconfirmed.' : 'Not sent.'} ${str(r?.error, 300) && r.error ? r.error : 'This session is unavailable. Refresh and try again.'}`);
     c.input.focus();
+  }
+  async function composeFollowup(v) {
+    if (v.gone || !api.followups || !v.entry) return;
+    if (v.followupDraft) { v.followupDraft.input.focus(); return; }
+    const box = el('section', '', 'composer followup-composer'), label = el('label', `Follow-up for ${v.title.textContent}`), input = el('textarea');
+    input.id = `followup-${v.entry.id}`; input.maxLength = 4000; label.htmlFor = input.id;
+    const note = el('p', 'Prepare one new turn for this original session. Review before queuing; nothing is sent while drafting.', 'reason'); note.setAttribute('role', 'status');
+    const review = el('div', '', 'followup-review'); review.hidden = true;
+    const exactTarget = el('p', '', 'team-target'), exactText = el('p', '', 'delivery-text'), terms = el('p', '', 'reason');
+    const d = { box, input, note, review, selection: null, busy: false, requestId: null, revision: 0 };
+    const prepare = button('Review follow-up', async () => {
+      const text = input.value.trim();
+      if (d.busy || v.gone) return;
+      if (!text || text.length > 4000 || text.includes('\0') || new Blob([text]).size > 8192) { set(note, 'Write a message of at most 4,000 characters and 8 KB.'); return; }
+      d.busy = true; prepare.disabled = true;
+      const revision = d.revision;
+      let r; try { r = await api.followups.review({ id: v.entry.id }); } catch { r = null; }
+      d.busy = false; prepare.disabled = false;
+      if (v.followupDraft !== d || v.gone || revision !== d.revision) return;
+      if (!r?.ok || !uuid(r.selection) || !str(r.label, 240) || !str(r.notice, 1000)) { set(note, r?.error || 'This session cannot accept a queued new turn.'); return; }
+      d.selection = r.selection; d.text = text; d.requestId = crypto.randomUUID();
+      set(exactTarget, r.label); set(exactText, text); set(terms, r.notice); review.hidden = false; confirm.focus();
+    });
+    const confirm = button('Queue next turn', async () => {
+      if (d.busy || !d.selection || v.gone) return;
+      d.busy = true; confirm.disabled = true; prepare.disabled = true;
+      let r; try { r = await api.followups.enqueue({ selection: d.selection, requestId: d.requestId, text: d.text }); } catch { r = null; }
+      d.busy = false; confirm.disabled = false; prepare.disabled = false; d.selection = null; review.hidden = true;
+      if (v.followupDraft !== d) return;
+      if (r?.ok) { input.value = ''; set(note, 'Queued locally. Provider acknowledgement and any blocked reason appear in Follow-ups below.'); void refreshFollowups(); }
+      else set(note, r?.error || 'Could not save this follow-up. Review the original session again.');
+    });
+    const back = button('Back to draft', () => { d.selection = null; review.hidden = true; input.focus(); });
+    const close = button('Close draft', () => { if (d.busy) return; box.remove(); v.followupDraft = null; v.followup.focus(); });
+    const actions = el('div', '', 'actions'), finalActions = el('div', '', 'actions'); actions.append(prepare, close); finalActions.append(confirm, back);
+    review.append(exactTarget, exactText, terms, finalActions); box.append(label, input, note, actions, review);
+    input.addEventListener('input', () => { d.revision++; d.selection = null; review.hidden = true; });
+    v.followupDraft = d; v.li.insertBefore(box, v.why); input.focus();
+  }
+  let followupPanel = null, followupRead = 0, displayedFollowupScope;
+  const followupRows = new Map();
+  async function refreshFollowups() {
+    if (!followupPanel || document.hidden) return;
+    const ticket = ++followupRead;
+    let r; try { r = await api.followups.list(); } catch { r = null; }
+    if (ticket !== followupRead || document.hidden) return;
+    const statuses = ['queued', 'blocked', 'sending', 'acknowledged', 'unconfirmed', 'refused', 'cancelled', 'expired'];
+    const validItems = r?.ok && Array.isArray(r.items) && r.items.length <= 16 && r.items.every(i => obj(i) && uuid(i.id) && str(i.label, 240) && str(i.text, 4000) && statuses.includes(i.status) && str(i.reason, 600));
+    if (!validItems) { followupPanel.list.replaceChildren(); followupRows.clear(); set(followupPanel.status, str(r?.error, 1000) ? r.error : 'Follow-ups are unavailable for this account.'); return; }
+    set(followupPanel.status, r.items.length ? 'Saved encrypted on this Mac. Acknowledged means the provider accepted the message; open its session for responses.' : 'No saved follow-ups on this account and board.');
+    const seen = new Set();
+    for (const item of r.items) {
+      seen.add(item.id); let row = followupRows.get(item.id);
+      if (!row) {
+        const box = el('li', '', 'delivery'), title = el('strong'), state = el('span', '', 'tag'), text = el('p', '', 'delivery-text'), why = el('p', '', 'reason'), actions = el('div', '', 'actions');
+        const act = async method => { if (row.busy) return; row.busy = true; cancel.disabled = true; discard.disabled = true; let result; try { result = await api.followups[method]({ id: item.id }); } catch {} row.busy = false; if (!result?.ok) set(why, result?.error || 'The action could not be confirmed.'); else await refreshFollowups(); };
+        const cancel = button('Cancel follow-up', () => void act('cancel')), discard = button('Discard saved copy', () => void act('discard'));
+        actions.append(cancel, discard); box.append(title, state, text, why, actions); row = { box, title, state, text, why, cancel, discard, busy: false }; followupRows.set(item.id, row);
+      }
+      set(row.title, item.label); set(row.state, item.status); set(row.text, item.text);
+      const receipt = obj(item.receipt) && str(item.receipt.id, 100) && str(item.receipt.state, 80) ? ` Provider receipt ID: ${item.receipt.id} (${item.receipt.state}).` : '';
+      const expiry = ['queued', 'blocked', 'refused'].includes(item.status) && Number.isSafeInteger(item.expiresAt) ? ` Unsent text expires ${new Date(item.expiresAt).toLocaleString()}.` : '';
+      set(row.why, item.reason + receipt + expiry);
+      row.cancel.hidden = !['queued', 'blocked', 'refused'].includes(item.status); row.cancel.disabled = row.busy; row.discard.disabled = row.busy || item.status === 'sending';
+      row.discard.title = 'Removes only this saved copy. It cannot undo work already sent to a provider.';
+    }
+    for (const [id, row] of followupRows) if (!seen.has(id)) { row.box.remove(); followupRows.delete(id); }
+    place(followupPanel.list, r.items.map(i => followupRows.get(i.id).box));
   }
   // One selected session at a time. Reads refresh its visible activity; the
   // final action keeps the exact main-owned preview token the person reviewed.
@@ -380,7 +451,12 @@
     let data; try { data = await api.directory(req); } catch { data = null; }
     if (request !== read || document.hidden || which !== view) return;
     const status = $(`${which}-status`);
-    if (!valid(data) || data.view !== which || data.status === 'unavailable') { clearActivity(); set(status, 'Session directory is unavailable right now. Showing the last known state.'); return; }
+    if (!valid(data) || data.view !== which || data.status === 'unavailable') { clearActivity(); followupRead++; if (followupPanel) { followupPanel.list.replaceChildren(); followupRows.clear(); set(followupPanel.status, 'Follow-ups are hidden while the current account cannot be verified.'); } set(status, 'Session directory is unavailable right now. Showing the last known state.'); return; }
+    if (data.followupScope !== undefined && data.followupScope !== displayedFollowupScope) {
+      displayedFollowupScope = data.followupScope; followupRead++;
+      if (followupPanel) { followupPanel.list.replaceChildren(); followupRows.clear(); set(followupPanel.status, 'Checking follow-ups for the current account and board…'); }
+      for (const l of Object.values(lists)) for (const v of l.rows.values()) if (v.followupDraft) { v.followupDraft.revision++; v.followupDraft.input.value = ''; v.followupDraft.box.remove(); v.followupDraft = null; }
+    }
     // Out-of-order answers never replace a newer one.
     if (data.observed_at < received) return; received = data.observed_at;
     const l = lists[which];
@@ -388,12 +464,14 @@
     l.data = data;
     if (which === 'team') renderTeams(data);
     render(which);
+    void refreshFollowups();
     if (which === 'team' && selected) void inspectActivity(selected);
     set(status, `Checked ${new Date(data.observed_at).toLocaleTimeString()}. Updates automatically.${data.status === 'partial' ? ' Some activity is unavailable.' : ''}`);
   }
   function show(next) {
     if (view === next) return;
     clearActivity();
+    followupRead++; if (followupPanel) { followupPanel.list.replaceChildren(); followupRows.clear(); }
     view = next; read++;
     for (const t of ['mine', 'team']) { const on = t === next; $(`tab-${t}`).setAttribute('aria-selected', String(on)); $(`tab-${t}`).tabIndex = on ? 0 : -1; $(`${t}-section`).hidden = !on; }
     for (const n of document.querySelectorAll('[data-view="mine"]')) n.classList.toggle('view-hidden', next !== 'mine');
@@ -404,6 +482,10 @@
   function start(given) {
     hooks = given;
     $('views').hidden = false; $('mine-section').hidden = false;
+    if (api.followups && typeof api.followups.list === 'function') {
+      const box = el('section', '', 'directory session-followups'), title = el('h2', 'Follow-ups on this account and board'), status = el('p', '', 'reason'), list = el('ol', '', 'deliveries');
+      box.id = 'session-followups'; box.setAttribute('aria-label', 'Saved session follow-ups'); status.setAttribute('role', 'status'); list.setAttribute('aria-label', 'Follow-up queue'); box.append(title, status, list); $('mine-section').before(box); followupPanel = { box, status, list };
+    }
     for (const t of ['mine', 'team']) $(`tab-${t}`).addEventListener('click', () => show(t));
     $('views').addEventListener('keydown', ev => { if (ev.key === 'ArrowRight' || ev.key === 'ArrowLeft') { const next = view === 'mine' ? 'team' : 'mine'; show(next); $(`tab-${next}`).focus(); } });
     $('team-pick').addEventListener('change', () => { clearActivity(); lists.team.rows.clear(); lists.team.groups?.clear(); $('team-list').replaceChildren(); team = hex($('team-pick').value, 32) ? $('team-pick').value : null; received = 0; void refresh(); });

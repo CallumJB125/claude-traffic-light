@@ -3603,21 +3603,48 @@
           "additionalProperties": false
         },
         "merge": {
-          "type": "object",
-          "properties": {
-            "strategy": {
-              "enum": [
-                "merge",
-                "squash",
-                "ff"
-              ]
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "phase": {
+                  "const": "preview"
+                }
+              },
+              "required": [
+                "phase"
+              ],
+              "additionalProperties": false
             },
-            "deleteBranch": {
-              "type": "boolean"
+            {
+              "type": "object",
+              "properties": {
+                "phase": {
+                  "const": "apply"
+                },
+                "reviewId": {
+                  "type": "string",
+                  "maxLength": 36,
+                  "minLength": 36
+                },
+                "reviewHash": {
+                  "type": "string",
+                  "maxLength": 64,
+                  "minLength": 64
+                },
+                "confirm": {
+                  "const": true
+                }
+              },
+              "required": [
+                "phase",
+                "reviewId",
+                "reviewHash",
+                "confirm"
+              ],
+              "additionalProperties": false
             }
-          },
-          "required": [],
-          "additionalProperties": false
+          ]
         },
         "openPr": {
           "type": "object",
@@ -4276,6 +4303,9 @@
             "url"
           ],
           "additionalProperties": false
+        },
+        "integration": {
+          "type": "object"
         }
       },
       "required": [

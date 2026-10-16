@@ -36,6 +36,32 @@ contextBridge.exposeInMainWorld('overviewApi', {
   },
   teamInspect: request => closed(request, ['id']) && typeof request.id === 'string' && /^[0-9a-f]{40}$/.test(request.id)
     ? ipcRenderer.invoke('overview:team-inspect', { id: request.id }) : denied(),
+  followups: {
+    list: () => ipcRenderer.invoke('overview:followup-list'),
+    review: request => closed(request, ['id']) && typeof request.id === 'string' && /^[0-9a-f]{40}$/.test(request.id) ? ipcRenderer.invoke('overview:followup-review', { id: request.id }) : denied(),
+    enqueue: request => {
+      if (!closed(request, ['selection', 'requestId', 'text']) || !uuid(request.selection) || !uuid(request.requestId)) return denied();
+      const text = messageText(request.text);
+      return text === null ? denied() : ipcRenderer.invoke('overview:followup-enqueue', { selection: request.selection, requestId: request.requestId, text });
+    },
+    cancel: request => closed(request, ['id']) && uuid(request.id) ? ipcRenderer.invoke('overview:followup-cancel', { id: request.id }) : denied(),
+    discard: request => closed(request, ['id']) && uuid(request.id) ? ipcRenderer.invoke('overview:followup-discard', { id: request.id }) : denied(),
+  },
+  coordinator: {
+    inventory: request => closed(request, ['team']) && (request.team === null || typeof request.team === 'string' && /^[0-9a-f]{32}$/.test(request.team)) ? ipcRenderer.invoke('overview:coordinator-inventory', { team: request.team }) : denied(),
+    propose: request => {
+      if (!closed(request, ['team', 'title', 'assignments']) || typeof request.team !== 'string' || !/^[0-9a-f]{32}$/.test(request.team) || typeof request.title !== 'string' || !request.title.trim() || request.title.length > 120 || !Array.isArray(request.assignments) || !request.assignments.length || request.assignments.length > 6) return denied();
+      const assignments = request.assignments.map(a => closed(a, ['id', 'name', 'text']) && typeof a.id === 'string' && /^[0-9a-f]{40}$/.test(a.id) && typeof a.name === 'string' && !!a.name.trim() && a.name.length <= 80 && messageText(a.text) !== null ? { id: a.id, name: a.name, text: messageText(a.text) } : null);
+      return assignments.includes(null) ? denied() : ipcRenderer.invoke('overview:coordinator-propose', { team: request.team, title: request.title, assignments });
+    },
+    confirm: request => {
+      if (!closed(request, ['proposal', 'grants']) || !uuid(request.proposal) || !Array.isArray(request.grants) || !request.grants.length || request.grants.length > 6) return denied();
+      const grants = request.grants.map(g => closed(g, ['assignment', 'operation']) && uuid(g.assignment) && g.operation === 'send' ? { assignment: g.assignment, operation: 'send' } : null);
+      return grants.includes(null) ? denied() : ipcRenderer.invoke('overview:coordinator-confirm', { proposal: request.proposal, grants });
+    },
+    results: request => closed(request, ['proposal']) && uuid(request.proposal) ? ipcRenderer.invoke('overview:coordinator-results', { proposal: request.proposal }) : denied(),
+    cancel: request => closed(request, ['proposal']) && uuid(request.proposal) ? ipcRenderer.invoke('overview:coordinator-cancel', { proposal: request.proposal }) : denied(),
+  },
   teamAction: request => {
     if (!closed(request, ['selection', 'operation', 'text']) || !uuid(request.selection) || !['send', 'steer', 'interrupt'].includes(request.operation)) return denied();
     const text = request.operation === 'interrupt' ? request.text === '' ? '' : null : messageText(request.text);

@@ -28,7 +28,7 @@ const provider=(source,model)=>{const known=typeof source==='string'&&Object.has
 // Mac's live session shares; hubTeams() → {origin, teams} the signed-in
 // user's teams on the sharing hub; teamHub() → the team directory adapter
 // (src/session-directory.js interface) or null.
-function createOverviewService({sessions=()=>[],work=async()=>({sources:[],capture:[]}),managed=()=>({conn:{status:'offline'},tasks:[]}),openManaged=null,messageManaged=null,now=Date.now,current=()=>true,actionCurrent=current,navigationCurrent=()=>false,owned=()=>[],shares=()=>null,hubTeams=async()=>null,teamHub=()=>null}){
+function createOverviewService({sessions=()=>[],work=async()=>({sources:[],capture:[]}),managed=()=>({conn:{status:'offline'},tasks:[]}),openManaged=null,messageManaged=null,now=Date.now,current=()=>true,actionCurrent=current,navigationCurrent=()=>false,owned=()=>[],shares=()=>null,hubTeams=async()=>null,teamHub=()=>null,followups=null,followupScope=()=>null,followupLocal=null}){
  let epoch=0,directoryEpoch=0,routeEpoch=0,teamView=null,handles=new Map(),teamRefs=new Map();const secret=crypto.randomBytes(32);
  const directoryModel=Directory.createSessionDirectory({now});
  const stable=parts=>crypto.createHmac('sha256',secret).update(JSON.stringify(parts)).digest('hex');
@@ -140,6 +140,65 @@ function createOverviewService({sessions=()=>[],work=async()=>({sources:[],captu
  const viewerOf=hub=>{const v=safe(()=>hub?.viewer?.(),null);return object(v)&&typeof v.id==='string'&&v.id?{id:v.id,name:clean(v.name,80)||'You'}:null;};
  const unavailableDirectory=(view,time)=>({schema:1,view,status:'unavailable',observed_at:time,teams:[],team:null,notice:'',entries:[],counts:directoryModel.counts([])});
  const controls=createTeamSessionControls({resolve:resolveTeam,current:permitted,actionCurrent:actionPermitted,now});
+ let coordinator=null;
+ coordinator=require('./team-coordinator').createTeamCoordinator({inventory:request=>directory({view:'team',team:request.team}),inspect:controls.inspect,action:controls.action,current:permitted,actionCurrent:actionPermitted,now});
+ const personalRefs=new Map(),followupSelections=new Map();
+ const followupUnavailable=()=>({ok:false,status:'unavailable',error:'Encrypted local follow-ups are unavailable for this account or session.'});
+ const pinned=raw=>({...raw,key:crypto.createHash('sha256').update(JSON.stringify([raw.kind,raw.route,raw.generation,raw.provider])).digest('hex')});
+ const exactTarget=t=>object(t)&&pinned(t).key===t.key;
+ async function followupReview(request){
+  if(!followups||!closed(request,['id'])||typeof request.id!=='string'||!/^[0-9a-f]{40}$/.test(request.id)||!actionPermitted())return followupUnavailable();
+  const epoch=routeEpoch,owner=followupScope();
+  const fresh=()=>actionPermitted()&&epoch===routeEpoch&&owner===followupScope();
+  let target,label;
+  const own=personalRefs.get(request.id);
+  if(own?.interact?.kind==='owned'){
+   const raw=followupLocal?.target?.(own.interact.ref);
+   if(raw){target=pinned(raw);label=`Your ${own.provider.label} session: ${own.task.title}`;}
+  }else{
+   const r=await resolveTeam(request.id,false);
+   if(!fresh()||!r?.hub||r.scope!=='interact'||typeof r.hub.inspect!=='function'||typeof r.hub.act!=='function'||typeof r.hub.origin!=='string')return followupUnavailable();
+   let out;try{out=await r.hub.inspect(r.viewer,r.team,r.ref);}catch{return followupUnavailable();}
+   const s=out?.state;
+   if(!fresh()||r.isCurrent()!==true||!out?.ok||!s||s.status==='ended'||s.capabilities?.newTurn!==true||!Number.isSafeInteger(s.generation)||typeof s.provider?.id!=='string')return followupUnavailable();
+   target=pinned({kind:'team',route:{origin:r.hub.origin,viewer:r.viewer.id,team:r.team,ref:r.ref},generation:s.generation,provider:s.provider.id});
+   label=`Shared ${s.provider.label||s.provider.id} session in the selected team`;
+  }
+  if(!target||!fresh()||typeof owner!=='string')return followupUnavailable();
+  const selection=crypto.randomUUID();followupSelections.set(selection,{target,label:label.slice(0,240),epoch,owner,expires:now()+45000});
+  for(const[k,v]of followupSelections)if(v.expires<now())followupSelections.delete(k);
+  while(followupSelections.size>64)followupSelections.delete(followupSelections.keys().next().value);
+  return{ok:true,status:'review',selection,label:label.slice(0,240),notice:'Saved encrypted on this computer for at most seven days before dispatch. Sends one new turn when this original session is ready and Overview is focused on this account and board. It may use AI credits. Restart keeps the follow-up, but cannot restore an ended session. Requires OS encryption and durable filesystem sync.'};
+ }
+ async function followupEnqueue(request){
+  if(!followups||!closed(request,['selection','requestId','text'])||!UUID.test(request.selection)||!UUID.test(request.requestId)||typeof request.text!=='string')return followupUnavailable();
+  const chosen=followupSelections.get(request.selection);followupSelections.delete(request.selection);
+  const fresh=()=>!!chosen&&actionPermitted()&&chosen.epoch===routeEpoch&&chosen.owner===followupScope()&&chosen.expires>=now();
+  if(!fresh())return response('stale');
+  const still=await resolveFollowup(chosen.target);
+  if(!fresh()||!still?.ok||still.current()!==true)return{ok:false,status:'stale',error:still?.error||'The original session changed. Review it again.'};
+  return followups.enqueue({id:request.requestId,target:chosen.target,label:chosen.label,text:request.text,current:fresh});
+ }
+ async function resolveFollowup(t){
+  if(!exactTarget(t)||!actionPermitted())return{ok:false,error:'Focus this account and board in Overview to continue.'};
+  const owner=followupScope(),epoch=routeEpoch;
+  const fresh=()=>actionPermitted()&&owner===followupScope()&&epoch===routeEpoch;
+  if(t.kind==='owned')return followupLocal?.resolve?.(t,fresh)??{ok:false,terminal:true,error:'The original session is no longer held by Plexiform.'};
+  const hub=safe(teamHub,null),viewer=viewerOf(hub),r=t.route;
+  if(!hub||hub.origin!==r.origin||viewer?.id!==r.viewer)return{ok:false,error:'Return to the original signed-in hub account.'};
+  if(teamView!==teamKey(r.origin,r.team))return{ok:false,error:'Open the original team in Team sessions to continue.'};
+  const current=()=>fresh()&&safe(teamHub,null)===hub&&viewerOf(hub)?.id===r.viewer;
+  let out;try{out=await hub.inspect(viewer,r.team,r.ref);}catch{return{ok:false,error:'The shared session is temporarily unavailable.'};}
+  if(!current())return{ok:false,error:'The view or account changed.'};
+  if(!out?.ok)return{ok:false,terminal:['forbidden','stale'].includes(out?.status),error:clean(out?.error,400)||'The original share is unavailable.'};
+  const s=out.state;
+  if(!s||s.generation!==t.generation||s.provider?.id!==t.provider||s.status==='ended')return{ok:false,terminal:true,error:'The original shared session ended or changed. Nothing will be sent.'};
+  // The client/host reauthorize interact scope for every act. inspect alone
+  // does not confer sending rights; no cached share grant is resurrected.
+  if(s.capabilities?.newTurn!==true||typeof hub.act!=='function')return{ok:false,terminal:true,error:'This connection does not support a new-turn follow-up.'};
+  return{ok:true,ready:s.status==='ready'&&s.activeTurn===null,current,
+   send:(text,id,keep)=>hub.act(viewer,r.team,r.ref,{operation:'send',generation:t.generation,turn:null,text},id,()=>current()&&keep())};
+ }
  async function resolveTeam(entryId,effect=false){
   const e=teamRefs.get(entryId),generation=routeEpoch;
   const fresh=()=>permitted()&&(!effect||actionPermitted())&&generation===routeEpoch&&teamView===e?.teamKey;
@@ -158,7 +217,7 @@ function createOverviewService({sessions=()=>[],work=async()=>({sources:[],captu
   const time=now(),view=request?.view;
   if(!(closed(request,['view'])&&view==='mine'||closed(request,['view','team'])&&view==='team'&&(request.team===null||typeof request.team==='string'&&/^[0-9a-f]{32}$/.test(request.team))))return unavailableDirectory('mine',time);
   const readGeneration=++directoryEpoch,reading=()=>readGeneration===directoryEpoch&&permitted();
-  if(view==='mine'&&teamView!==null||view==='team'&&request.team!==null&&teamView!==request.team){routeEpoch++;teamView=view==='mine'?null:request.team;teamRefs.clear();controls.invalidate();}
+  if(view==='mine'&&teamView!==null||view==='team'&&request.team!==null&&teamView!==request.team){routeEpoch++;teamView=view==='mine'?null:request.team;teamRefs.clear();controls.invalidate();coordinator?.invalidate();}
   if(!permitted())return unavailableDirectory(view,time);
   const built=await build(time,reading);
   if(!built||!reading())return unavailableDirectory(view,time);
@@ -166,6 +225,7 @@ function createOverviewService({sessions=()=>[],work=async()=>({sources:[],captu
   const shareList=(origin&&Array.isArray(sh.list)?sh.list:[]).filter(x=>object(x)&&typeof x.session==='string'&&object(x.team)&&typeof x.team.id==='string').map(x=>({session:x.session,scope:x.scope,teamKey:teamKey(origin,x.team.id),teamName:clean(x.team.name,80)||'Team'}));
   const ownedList=(()=>{const v=safe(owned,[]);return Array.isArray(v)?v.slice(0,50):[];})();
   const personal=directoryModel.mine({work:built.rows,meta:built.meta,owned:ownedList,shares:shareList});
+  personalRefs.clear();for(const e of personal)personalRefs.set(e.id,e);
   const teams=new Map(),add=(key,name,source)=>{if(!teams.has(key))teams.set(key,{key,name:clean(name,80)||'Team',source});};
   let real=null;try{real=await hubTeams();}catch{real=null;}
   if(typeof real?.origin==='string'&&Array.isArray(real.teams))for(const t of real.teams.slice(0,64))if(object(t)&&typeof t.id==='string')add(teamKey(real.origin,t.id),t.name,'hub');
@@ -179,7 +239,7 @@ function createOverviewService({sessions=()=>[],work=async()=>({sources:[],captu
   let status=built.partial||built.omitted?'partial':'complete';
   if(view==='mine')return{schema:1,view,status,observed_at:time,teams:teamList,team:null,notice:'',entries:personal,counts:directoryModel.counts(personal)};
   const selected=teams.get(request.team)??teams.values().next().value??null;
-  if(teamView!==(selected?.key??null)){routeEpoch++;teamView=selected?.key??null;teamRefs.clear();controls.invalidate();}
+  if(teamView!==(selected?.key??null)){routeEpoch++;teamView=selected?.key??null;teamRefs.clear();controls.invalidate();coordinator?.invalidate();}
   if(!selected)return{schema:1,view,status,observed_at:time,teams:teamList,team:null,notice:'You are not in a team yet, or no team is connected.',entries:[],counts:directoryModel.counts([])};
   const adapterTeam=fakeTeams.find(t=>teamKey(adapterOrigin,t.id)===selected.key)??null;
   let hubEntries=[];
@@ -210,6 +270,13 @@ function createOverviewService({sessions=()=>[],work=async()=>({sources:[],captu
   if(!alive())return{ok:false,status:'unconfirmed',error:'The view changed. Inspect the receipt before sending again.'};
   return out?.ok===true?out:{ok:false,status:['forbidden','stale','busy','unavailable','unconfirmed'].includes(out?.status)?out.status:'unavailable',error:clean(out?.error,300)||'The team hub did not accept the message.'};
  }
- return{snapshot,directory,teamMessage,teamInspect:controls.inspect,teamAction:controls.action,open:r=>action(r),message:r=>action(r,true),invalidate(){epoch++;directoryEpoch++;routeEpoch++;teamView=null;handles.clear();teamRefs.clear();controls.invalidate();}};
+ return{snapshot,directory:async request=>{const out=await directory(request);return{...out,followupScope:followupScope()};},teamMessage,teamInspect:controls.inspect,teamAction:controls.action,
+  followupReview,followupEnqueue,
+  coordinatorInventory:coordinator.inventory,coordinatorPropose:coordinator.propose,coordinatorConfirm:coordinator.confirm,coordinatorResults:coordinator.results,coordinatorCancel:coordinator.cancel,
+  followupList:()=>{const owner=followupScope(),epoch=routeEpoch;return permitted()&&followups?followups.list(()=>permitted()&&owner===followupScope()&&epoch===routeEpoch):followupUnavailable();},
+  followupCancel:r=>{const owner=followupScope(),epoch=routeEpoch;return actionPermitted()&&closed(r,['id'])&&followups?followups.cancel(r.id,()=>actionPermitted()&&owner===followupScope()&&epoch===routeEpoch):followupUnavailable();},
+  followupDiscard:r=>{const owner=followupScope(),epoch=routeEpoch;return actionPermitted()&&closed(r,['id'])&&followups?followups.discard(r.id,()=>actionPermitted()&&owner===followupScope()&&epoch===routeEpoch):followupUnavailable();},
+  pumpFollowups:()=>actionPermitted()&&followups?followups.advance(resolveFollowup):Promise.resolve(),
+  open:r=>action(r),message:r=>action(r,true),invalidate(){epoch++;directoryEpoch++;routeEpoch++;teamView=null;handles.clear();teamRefs.clear();personalRefs.clear();followupSelections.clear();controls.invalidate();coordinator?.invalidate();}};
 }
 module.exports={createOverviewService,PROVIDERS,provider,response};

@@ -45,14 +45,14 @@ function createGit({ bin = findGit(), env = process.env, tmpdir = os.tmpdir() } 
   const base = { GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0', LANG: 'C', LC_ALL: 'C', ...IDENTITY };
   for (const k of ['HOME', 'PATH', 'TMPDIR', 'SYSTEMROOT', 'USERPROFILE']) if (env[k]) base[k] = env[k];
 
-  function run(cwd, args, { index = null, global = false, input = null, timeoutMs = 60000, maxBuffer = 64 << 20 } = {}) {
+  function run(cwd, args, { index = null, global = false, input = null, timeoutMs = 60000, maxBuffer = 64 << 20, encoding = 'utf8' } = {}) {
     if (!bin) return Promise.reject(Object.assign(new Error('git not found'), { code: 'NOGIT', stderr: '' }));
     const childEnv = { ...base, ...(global ? {} : { GIT_CONFIG_GLOBAL: DEV_NULL }), ...(index ? { GIT_INDEX_FILE: index } : {}) };
     // -C, not a spawn cwd, and a deadline: see src/bounded-io.js.
     const stuck = Object.assign(new Error('git did not finish'), { code: 'ETIMEDOUT', stderr: '' });
     return withDeadline((done) => {
       try {
-        const child = childProcess.execFile(bin, ['-C', cwd, ...SAFE_GIT, ...args], { env: childEnv, timeout: timeoutMs, killSignal: 'SIGKILL', maxBuffer, encoding: 'utf8', windowsHide: true }, (err, stdout, stderr) => { // privacy-flow: checkpoint-git
+        const child = childProcess.execFile(bin, ['-C', cwd, ...SAFE_GIT, ...args], { env: childEnv, timeout: timeoutMs, killSignal: 'SIGKILL', maxBuffer, encoding, windowsHide: true }, (err, stdout, stderr) => { // privacy-flow: checkpoint-git
           if (err) { err.stderr = stderr; done({ err }); } else done({ stdout });
         });
         if (input != null) child.stdin.end(input); else child.stdin.end();

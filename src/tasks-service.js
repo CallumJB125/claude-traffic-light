@@ -59,6 +59,7 @@ function createTasksService(opts) {
   const folders = new Map();
   const roots = new Map();         // taskId → the supervisor's raw repo root (never rebuilt from a display label)
   const takeovers = new Map();     // taskId → { t, at }
+  const integrationReviews = new Map(); // opaque page handle -> exact helper review and selected document
   const relayed = new Map();       // taskId → { approvals: Map(id → {tool, inputSummary, hash}), asks: Set }
   const slots = new Map();         // webContents id → { id, sub, gen }: one open task per page
   let gen = 0;
@@ -94,7 +95,7 @@ function createTasksService(opts) {
     publishTimer = setTimeout(() => { publishTimer = null; publish(); }, 40);
   }
 
-  function setConn(status, code = null) { conn = { status, code }; publish({ force: true }); }
+  function setConn(status, code = null) { if (status !== 'connected') integrationReviews.clear(); conn = { status, code }; publish({ force: true }); }
 
   function codeOf(e) {
     const code = e?.code;
@@ -246,6 +247,7 @@ function createTasksService(opts) {
   }
 
   function stop() {
+    integrationReviews.clear();
     stopped = true;
     clearInterval(tick);
     clearTimeout(retryTimer);
@@ -333,6 +335,7 @@ function createTasksService(opts) {
   }
 
   async function closeTask(wcId = 0) {
+    for (const [key, value] of integrationReviews) if (value.wcId === wcId) integrationReviews.delete(key);
     const o = slots.get(wcId);
     slots.delete(wcId);
     if (o?.sub) await o.sub.unsubscribe();
@@ -356,6 +359,7 @@ function createTasksService(opts) {
   }
 
   async function act(req, wcId = 0, current = () => true) {
+    if (req?.action === 'merge') return integrate(req, wcId, current);
     if (!connected()) return failure({ code: 'SUPERVISOR_UNREACHABLE' });
     const row = tasks.get(req?.id);
     const ctx = relayed.get(req?.id) || { approvals: new Map(), asks: new Set() };
@@ -385,6 +389,55 @@ function createTasksService(opts) {
       return out;
     } catch (e) {
       if (['ILLEGAL_TRANSITION', 'NOT_FOUND', 'ALREADY_ANSWERED', 'HUB_OWNED'].includes(e?.code)) refresh().catch(() => {});
+      return failure(e);
+    }
+  }
+
+  // Integration is reviewed before any native confirmation. Renderer fields
+  // never become Git refs, paths, helper review IDs or hashes.
+  async function integrate(req, wcId, current) {
+    const mine = slots.get(wcId), row = tasks.get(req?.id), channel = client;
+    const alive = () => connected() && client === channel && slots.get(wcId) === mine && current() === true
+      && tasks.get(req.id)?.state === 'in_review' && tasks.get(req.id)?.actions.includes('merge');
+    if (!req || Object.keys(req).some(k => !['id', 'action', 'payload', 'confirmed'].includes(k)) || !mine || mine.id !== req.id || !row || !alive()) return failure({ code: 'ILLEGAL_TRANSITION' });
+    const p = req.payload;
+    if (!p || typeof p !== 'object' || Array.isArray(p)) return failure({ code: 'VALIDATION' });
+    let dispatched = false;
+    try {
+      let result;
+      if (p.phase === 'preview' && Object.keys(p).length === 1) {
+        for (const [key, value] of integrationReviews) if (value.wcId === wcId || value.expiresAt <= now()) integrationReviews.delete(key);
+        result = await channel.act(req.id, 'merge', { phase: 'preview' });
+        if (!alive()) return failure({ code: 'CONFLICT' });
+        const r = result.integration;
+        if (!r || !['review', 'dirty', 'conflict', 'unchanged'].includes(r.status) || typeof r.branch !== 'string' || r.branch.length > 200
+          || !Array.isArray(r.files) || r.files.length > 500 || r.files.some(f => !f || typeof f.path !== 'string' || f.path.length > 1024 || /[\u0000-\u001f\u007f]/.test(f.path) || !['A', 'M', 'D'].includes(f.status))
+          || typeof r.patch !== 'string' || Buffer.byteLength(r.patch) > 256 * 1024) return failure({ code: 'INTERNAL' });
+        const canApply = r.status === 'review' && r.canApply === true && /^[0-9a-f-]{36}$/.test(r.id ?? '') && /^[0-9a-f]{64}$/.test(r.hash ?? '')
+          && Number.isSafeInteger(r.expiresAt) && r.expiresAt > now() && r.expiresAt <= now() + 5 * 60_000;
+        if (r.status === 'review' && !canApply) return failure({ code: 'INTERNAL' });
+        const handle = canApply ? crypto.randomUUID() : null;
+        if (handle) { while (integrationReviews.size >= 100) integrationReviews.delete(integrationReviews.keys().next().value); integrationReviews.set(handle, { id: req.id, wcId, mine, channel, current, helperId: r.id, hash: r.hash, expiresAt: r.expiresAt, branch: r.branch, count: r.files.length }); }
+        const reason = { review: 'Creates a local merge commit. Nothing is pushed. The task worktree is kept.', dirty: 'Your checkout has changes. Save or commit them first; Plexiform has left them unchanged.', conflict: 'These changes conflict with your branch. Resolve them in the task worktree and review again.', unchanged: 'There are no new changes to integrate.' }[r.status];
+        return { ok: true, integration: { status: r.status, canApply, review: handle, branch: r.branch, reason, files: r.files.map(f => ({ path: f.path, status: f.status })), patch: r.patch, expiresAt: canApply ? r.expiresAt : null } };
+      }
+      if (p.phase !== 'apply' || Object.keys(p).length !== 2 || typeof p.review !== 'string') return failure({ code: 'VALIDATION' });
+      const r = integrationReviews.get(p.review); integrationReviews.delete(p.review);
+      if (!r || r.id !== req.id || r.wcId !== wcId || r.mine !== mine || r.channel !== channel || r.expiresAt <= now() || r.current() !== true) return failure({ code: 'CONFLICT' });
+      const yes = await opts.confirmDialog?.({ action: 'merge', label: 'Integrate reviewed changes', title: row.title || 'Untitled task', where: row.where,
+        detail: `Integrate the ${r.count} reviewed file change${r.count === 1 ? '' : 's'} into ${r.branch}? This creates a local merge commit. Nothing is pushed. The task worktree is kept.\nReview: ${r.hash}` }, wcId);
+      if (yes !== true) return { ok: false, code: 'CONFIRM_REQUIRED', text: '', cancelled: true };
+      if (!alive() || r.expiresAt <= now()) return failure({ code: 'CONFLICT' });
+      dispatched = true;
+      result = await channel.act(req.id, 'merge', { phase: 'apply', reviewId: r.helperId, reviewHash: r.hash, confirm: true });
+      const task = guard.sanitizeTask(result.task, { now: now(), homeDir });
+      if (task) { tasks.set(task.id, task); publishSoon(); }
+      if (result.integration?.status !== 'merged' || !/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(result.integration.commit ?? '')) return failure({ code: 'CONFLICT' });
+      return { ok: true, task, integration: { status: 'merged', branch: r.branch } };
+    } catch (e) {
+      if (e?.details?.outcome === 'unconfirmed' || dispatched && ['TIMEOUT', 'SUPERVISOR_UNREACHABLE', 'INTERNAL'].includes(e?.code)) return { ok: false, code: 'CONFLICT', text: 'Integration receipt unconfirmed. Inspect your branch before reviewing another integration; it may already have changed.' };
+      if (e?.code === 'CONFLICT') return { ok: false, code: 'CONFLICT', text: 'The integration review changed or Git refused it. Your task worktree is kept. Inspect your checkout and review again.' };
+      if (e?.code === 'POLICY_DENIED') return { ok: false, code: e.code, text: 'This repository or change needs manual integration. The task worktree is kept; nothing was integrated.' };
       return failure(e);
     }
   }

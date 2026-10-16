@@ -41,6 +41,7 @@ const STORES = Object.freeze([
     names: ['work-capture.json', 'work-records.json', 'session-links.json'] },
   { id: 'board', root: 'userData', kind: 'board', label: 'Local team board', detail: 'The board database on this Mac: cards, comments and handovers.', names: ['board', 'board-dev'] },
   { id: 'tasks', root: 'userData', kind: 'tasks', label: 'Tasks run on this Mac', detail: 'Task text, messages, replies and run folders.', names: ['tasks', 'plexiform-tasks', 'runner'] },
+  { id: 'session-followups', root: 'userData', kind: 'messages', export: false, label: 'Queued session follow-ups', detail: 'OS-encrypted local messages and delivery receipts, scoped to their original account and board. Not included in the scrubbed export; view or discard them in Overview, or delete this store here.', names: ['session-followups'] },
   { id: 'accounts', root: 'userData', kind: 'secret', export: false, label: 'Team sign-in and setups', detail: 'Sealed team sign-ins, device tokens, workspaces and setups history. Never exported.',
     names: ['buddy-accounts', 'buddy-devices', 'buddy-workspaces.json', 'setups-runtime-v2', 'native-board', 'native-board-dev-home'] },
   { id: 'app-prefs', root: 'userData', kind: 'settings', label: 'App preferences', detail: 'Update channel and local model settings.', names: ['updater.json', 'local-models.json'] },

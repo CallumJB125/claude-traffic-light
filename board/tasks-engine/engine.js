@@ -29,6 +29,7 @@ import { confine, globBase, realish } from '../runner/paths.js';
 import { checkGitPush } from '../runner/run.js';
 import { runAllowKey } from '../runner/policy.js';
 import { makeGit, resolveGit } from './git.js';
+import { createTaskIntegration } from './integration.js';
 import { lstartOf, sameProcess, killTree, commandLines } from '../runner/procs.js';
 import { ensureDir, writeJsonAtomic, writeFileAtomic, clip, RUNNER_VERSION } from '../runner/util.js';
 
@@ -41,7 +42,7 @@ const LEASED = new Set(['claimed', 'running', 'quiet', 'blocked', 'handing_over'
 const SLOT = new Set(['claimed', 'running', 'quiet', 'blocked', 'handing_over']);
 // What this engine implements today; the face's other actions are filtered
 // out so `actions` stays the exact list the engine accepts (§5.3).
-const ENGINE_ACTIONS = new Set(['stop', 'pause', 'resume', 'approve', 'deny', 'answer', 'message', 'takeover', 'handback', 'discard', 'retry']);
+const ENGINE_ACTIONS = new Set(['stop', 'pause', 'resume', 'approve', 'deny', 'answer', 'message', 'takeover', 'handback', 'discard', 'retry', 'merge']);
 const LEVEL_RANK = { plan: 0, ask: 1, 'auto-edits': 2, auto: 3, bypass: 4 };
 // CLIs that run one exec turn per process with no hook/IPC channel.
 const ONE_TURN = new Set(['codex', 'gemini']);
@@ -92,7 +93,7 @@ const PLAN_TOOLS = new Set(['Read', 'Glob', 'Grep']);
 const MAX_WAITING_PER_SOURCE = 100;
 const MAX_PARALLEL = 8;
 const DAY_MS = 24 * 60 * 60 * 1000;
-const RELAY_DENIED = new Set(['approve', 'answer', 'takeover']);
+const RELAY_DENIED = new Set(['approve', 'answer', 'takeover', 'merge']);
 const RELAY_PARENT_ACTIVE = new Set(['claimed', 'running', 'quiet', 'blocked', 'handing_over', 'handed_over']);
 
 export class ApiError extends Error {
@@ -150,6 +151,7 @@ export class TasksEngine extends EventEmitter {
     this.messages = new MessageStore(path.join(this.dataDir, 'mesh'));
     const gitBin = resolveGit(this.env);
     this.git = gitBin ? makeGit(gitBin, this.env) : () => Promise.reject(Object.assign(new Error('no git'), { code: 'NO_GIT' }));
+    this.integration = createTaskIntegration({ bin: gitBin, env: this.env, dataDir: this.dataDir, now: this.now });
   }
 
   async init() {
@@ -258,6 +260,7 @@ export class TasksEngine extends EventEmitter {
   }
 
   #available(task, action) {
+    if (action === 'merge') return !!task.repo && !!task.gitDir && task.worktreeCreated && !task.workInPlace;
     if (action === 'answer') return !!task.openAsk && !['limit', 'auth'].includes(task.openAsk.kind);
     if (action === 'takeover') return !!this.#aiInfo(task.ai.id)?.bin;
     return true;
@@ -1411,6 +1414,21 @@ export class TasksEngine extends EventEmitter {
   async #doAct(task, action, payload, actor) {
     const run = this.runs.get(task.id);
     switch (action) {
+      case 'merge': {
+        const current = () => !this.closing && !this.closed && task.state === 'in_review' && !this.runs.has(task.id)
+          && ![...this.tasks.values()].some(t => t.workInPlace && t.repo?.root === task.repo?.root && SLOT.has(t.state));
+        if (!current()) throw new ApiError('SESSION_BUSY', 'the destination or task is still active');
+        try {
+          if (payload.phase === 'preview') return { integration: await this.integration.preview(task, current) };
+          const receipt = await this.integration.apply(task, payload.reviewId, payload.reviewHash, current);
+          task.integrationReceipt = receipt;
+          this.#setState(task, 'done', { outcome: 'merged' });
+          return { integration: receipt };
+        } catch (error) {
+          const code = ['CONFLICT', 'POLICY_DENIED'].includes(error.code) ? error.code : 'INTERNAL';
+          throw new ApiError(code, code === 'POLICY_DENIED' ? 'manual integration is required' : 'integration needs a fresh review', error.details?.outcome === 'unconfirmed' ? { outcome: 'unconfirmed' } : undefined);
+        }
+      }
       case 'stop': {
         if (run) await this.#stopRun(task, run);
         task.stoppedBy = 'you';

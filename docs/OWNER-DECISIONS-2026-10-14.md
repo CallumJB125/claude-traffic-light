@@ -8,6 +8,37 @@ The original `claude/release` checkout and handover are preserved. Implementatio
 PR #7 remains unmerged. The owner subsequently authorized public beta publication;
 the release-note-only PR #8 was merged into `main` for the signing workflow.
 
+## Completion-plan execution — 16 October 2026
+
+The owner approved a unified completion plan covering the useful Morphy workflows
+and Plexiform's remaining promised journeys. The task workspace now contains
+`outputs/plexiform-completion-plan.txt`, `outputs/plexiform-feature-coverage.json`
+and `outputs/plexiform-completion-status.json`. The current inventory maps 56
+families; historical ledger rows remain explicitly unverified.
+
+The first implementation adds reviewed per-turn Undo, reviewed local Tasks
+integration, an encrypted selected-session follow-up outbox, and named reviewed
+assignments in Team sessions. These are local source changes, separate from the
+public beta.82 and installed beta.74 described below. No new installer, website
+deployment, provider message or implementation-PR merge establishes acceptance.
+
+Undo preserves later changes and existing filesystem metadata; deleted-file
+recreation, permission changes, linked paths and content transformations are
+explicitly skipped. Tasks integration requires an isolated finished task, an
+unchanged review and a clean destination; it creates a local merge commit and
+retains the source worktree. External independent writers are not universally
+locked. Follow-ups pin the original account, board, session/share and generation;
+they require durable encrypted storage, expire unsent text after seven days,
+dispatch only from a current focused Overview and never automatically retry an
+uncertain send. Unsupported directory-sync platforms refuse queue writes.
+
+Named assignments use existing explicit interaction shares and one-use exact
+message grants. They do not implement remote-owner approval requests, persistent
+delegation or autonomous coordination. Local Git, renderer, main-process and
+regression tests are recorded separately from installed-app, real provider,
+external teammate/device and distribution acceptance. The execution ledger
+retains all remaining phases; no whole-app completion is claimed.
+
 ## Public beta.82 and preserved installed beta.74 — 15 October 2026
 
 Public desktop preview `1.0.2-beta.82` is frozen at `c9ec7ef241b9160eaa0c1b1960434caf0c5200ae`.

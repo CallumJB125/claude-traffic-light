@@ -62,11 +62,12 @@ function explainCapabilities(caps, rows) {
 }
 
 // shares: () => the remote interaction host (src/remote-interaction.js) or null; team sharing goes through it.
-function createInteractionMain({ context, readContext = context, adapters: given, owned = ownedAdapters, workspace, currentBoard = () => null, now, localModelsFile = null, localModels: givenLocalModels, compaction = null, shares = () => null, prepareChannel = null, tools = () => null, openAiTools = null }) {
+function createInteractionMain({ context, readContext = context, adapters: given, owned = ownedAdapters, workspace, currentBoard = () => null, accountScope = () => null, now, localModelsFile = null, localModels: givenLocalModels, compaction = null, shares = () => null, prepareChannel = null, tools = () => null, openAiTools = null }) {
   const adapters = { ...(owned ? owned() : {}), ...given };
   // Local models register into `adapters` as they are found.
   const localModels = givenLocalModels !== undefined ? givenLocalModels : createLocalModels({ adapters, configFile: localModelsFile });
   const documents = new Map();
+  const ownedScopes = new Map();
   const boardCurrent = (b) => b !== null && b === boardKey(currentBoard());
   const actorFor = (c) => `overview:${c.contents.id}:${c.document}`;
   // Workspace folder name per owned session, main-only: lets the Overview
@@ -106,7 +107,12 @@ function createInteractionMain({ context, readContext = context, adapters: given
       const fresh = () => { const c = context(); return !!c?.foreground && !c.contents.isDestroyed() && actorFor(c) === actor && currentBoard() === board; };
       return prepareChannel({ actor, board, fresh });
     },
-    launch: (req, actor) => (object(req) && !Object.hasOwn(req, 'board') ? hub.launch({ ...req, board: boardKey(currentBoard()) }, actor) : hub.launch(null, actor)),
+    async launch(req, actor) {
+      const owner = accountScope();
+      const out = await (object(req) && !Object.hasOwn(req, 'board') ? hub.launch({ ...req, board: boardKey(currentBoard()) }, actor) : hub.launch(null, actor));
+      if (out?.ok && out.state?.session) { ownedScopes.set(out.state.session, owner); while (ownedScopes.size > 64) ownedScopes.delete(ownedScopes.keys().next().value); }
+      return out;
+    },
     // Existing sessions on an opt-in provider (codex-daemon): metadata list, then subscribe to one by handle.
     discover: (req, actor) => hub.discover(req, actor),
     attach: (req, actor) => (object(req) && !Object.hasOwn(req, 'board') ? hub.attach({ ...req, board: boardKey(currentBoard()) }, actor) : hub.attach(null, actor)),
@@ -182,6 +188,29 @@ function createInteractionMain({ context, readContext = context, adapters: given
     },
     // Session directory: this document's owned sessions (public state + main-only folder name).
     listOwned() { const out = []; for (const actor of documents.keys()) for (const state of hub.list(actor)) out.push({ state, leaf: leaves.get(state.session) ?? null, nativeSessionId: hub.targetOf(state.session), nativeTurnId: hub.reportTurnOf(state.session) }); return out; },
+    // Main-only outbox route. Never attach/relaunch, borrow a new generation,
+    // or queue against an unmanaged terminal's permissions.
+    followupTarget(session) {
+      for (const actor of documents.keys()) {
+        const s = hub.state({ session }, actor);
+        if (s?.ownership !== 'plexiform-owned' || s.status === 'ended' || s.capabilities?.newTurn !== true || !boardCurrent(s.board) || !ownedScopes.has(session) || ownedScopes.get(session) !== accountScope()) continue;
+        return { kind: 'owned', route: { session, actor, board: s.board, account: ownedScopes.get(session) }, generation: s.generation, provider: s.provider.id };
+      }
+      return null;
+    },
+    resolveFollowup(target, fresh) {
+      const r = target?.route;
+      const s = r && documents.has(r.actor) ? hub.state({ session: r.session }, r.actor) : null;
+      if (!s || s.ownership !== 'plexiform-owned' || s.status === 'ended' || s.generation !== target.generation || s.provider.id !== target.provider || s.board !== r.board)
+        return { ok: false, terminal: true, error: 'The original session ended or changed. Plexiform will not recreate or reattach it.' };
+      if (!ownedScopes.has(r.session) || ownedScopes.get(r.session) !== r.account || r.account !== accountScope()) return { ok: false, error: 'Return to the account and board that started this session.' };
+      const current = () => fresh() === true && documents.has(r.actor) && boardCurrent(r.board) && accountScope() === r.account
+        && hub.state({ session: r.session }, r.actor)?.generation === target.generation;
+      if (!boardCurrent(r.board)) return { ok: false, error: BOARD_STALE };
+      if (s.capabilities.newTurn !== true) return { ok: false, terminal: true, error: 'This provider does not support a new-turn follow-up.' };
+      return { ok: true, ready: s.status === 'ready' && s.activeTurn === null, current,
+        send: (text, _id, keep) => hub.send({ session: r.session, generation: target.generation, board: r.board, text }, r.actor, { fresh: () => current() && keep() }) };
+    },
     // Match native provider session identity, never a folder/project label.
     reportHooks(rows) {
       if(!Array.isArray(rows))return;
@@ -207,7 +236,7 @@ function createInteractionMain({ context, readContext = context, adapters: given
       }
     },
     // The Overview document was reloaded, crashed or destroyed: its sessions end now, not on the next request.
-    retireDocuments() { documents.clear(); return hub.reap(() => false); },
+    retireDocuments() { documents.clear(); ownedScopes.clear(); return hub.reap(() => false); },
     register(ipc) {
       // null (not []) when this document may not read, so the page keeps its last known state.
       ipc.handle(CHANNELS.capabilities, async (e) => {
@@ -239,7 +268,7 @@ function createInteractionMain({ context, readContext = context, adapters: given
         });
       }
     },
-    close() { hub.stopAll(); documents.clear(); },
+    close() { hub.stopAll(); documents.clear(); ownedScopes.clear(); },
   };
 }
 

@@ -117,6 +117,17 @@ their processes for restart recovery and only closes this engine's IPC and store
   finished tasks pruned after 30 days / beyond the newest 500, per-task package
   caches (global caches are not writable).
 
-Not yet: `merge`, `openPr`, `switchAi`, tmux/tab surfaces, task-to-task
+Local isolated tasks also support reviewed `merge`: `phase:preview` snapshots
+the exact source through a private index and computes the integration without
+editing either checkout. `phase:apply` requires the matching one-use review ID,
+hash and explicit confirmation within five minutes. Dirty destinations,
+conflicts, stale source/index/branch/HEAD/config, custom filters/merge drivers,
+symlink/gitlink changes and untracked credential-shaped files are held for
+manual resolution. Successful integration creates a local merge commit and
+keeps the source worktree. Nothing is pushed. Only the full local-user credential
+may use this path; relay participants cannot integrate. Independent writers do
+not share the helper's repository lock, so this is not a global filesystem lock.
+
+Not yet: `openPr`, `switchAi`, tmux/tab surfaces, task-to-task
 messaging tools, `.buddy/claims.json`, approval/ask timeouts, sleep detection,
 transient-429 retries, the per-project `bypass` opt-in.

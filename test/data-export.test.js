@@ -41,6 +41,7 @@ function plantStores(mac) {
   put(path.join(mac.roots.userDataDir, 'work-records.json'), JSON.stringify({ records: [{ card: 'Login page', cost: 2.1, access_token: GH }] }));
   put(path.join(mac.roots.userDataDir, 'tasks', 'tasks.token'), RAW);
   put(path.join(mac.roots.userDataDir, 'buddy-accounts', 'hub.sealed'), RAW);
+  put(path.join(mac.roots.userDataDir, 'session-followups', 'outbox.bin'), 'SEALED-PRIVATE-FOLLOWUP-CANARY');
   put(path.join(mac.roots.userDataDir, 'Cookies'), `session=${RAW}`);
   put(path.join(mac.outside, 'notes.md'), 'outside content must not be exported');
   fs.symlinkSync(mac.outside, path.join(d, 'handovers', 'escape'));
@@ -56,6 +57,8 @@ test('the export holds every exportable store, with no planted credential anywhe
   const files = walk(r.dir);
   const all = files.map((f) => fs.readFileSync(f, 'latin1')).join('\n');
   for (const s of SECRETS) assert.ok(!all.includes(s), `export leaked ${s.slice(0, 12)}…`);
+  assert.ok(!all.includes('SEALED-PRIVATE-FOLLOWUP-CANARY'), 'sealed follow-ups must not bypass the scrubbed export');
+  assert.ok(r.excluded.some(s=>s.label==='Queued session follow-ups'));
   assert.ok(!all.includes('outside content'), 'followed a link out of the data folder');
   const rel = files.map((f) => path.relative(r.dir, f)).sort();
   for (const want of ['README.txt', 'audit/activity-log.csv', 'settings/config.json', 'handovers/handovers/claude-code-1.md', 'sessions/sessions/s1.json', 'memory/memory/index.db.sessions.jsonl', 'memory/memory/index.db.turns.jsonl', 'work/work-records.json', 'characters/cameos/me.png', 'activity/one-key-approvals.jsonl']) {

@@ -15,6 +15,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const CheckpointGit = require('./checkpoint-git');
 const DiffReview = require('./diff-review');
+const TurnUndo = require('./checkpoint-undo');
+const crypto = require('node:crypto');
 
 const { REF_ROOT } = CheckpointGit;
 const CONFIG_FILE = 'checkpoints.json';
@@ -118,6 +120,19 @@ function createCheckpoints({ rootDir, entitlements, git = CheckpointGit.createGi
   const dataDir = path.join(rootDir, DATA_DIR);
   const indexFile = path.join(dataDir, 'index.json');
   const chains = new Map();
+  const undoReviews = new Map();
+  const auditFile = (sid, turn) => path.join(dataDir, 'turns', `${refSid(sid)}-t${turn}.json`);
+  const audit = (sid, turn) => readJson(auditFile(sid, turn), null);
+  async function overlap(top, sid, proof) {
+    for (const [other, entry] of Object.entries(index())) {
+      if (other === sid || entry.top !== top) continue;
+      const running = lastTurn(await refsOf(top, other));
+      if (running?.phase !== 'start') continue;
+      proof.overlap = true;
+      const prior = audit(other, running.turn);
+      if (prior?.sessionId === other) writeJson(auditFile(other, running.turn), { ...prior, overlap: true });
+    }
+  }
   // One thing at a time per key (a session, then a repo), in the order asked.
   function serial(key, fn) {
     const prev = chains.get(key) ?? Promise.resolve();
@@ -183,7 +198,11 @@ function createCheckpoints({ rootDir, entitlements, git = CheckpointGit.createGi
         // A turn whose end was never seen: how things are now is its end.
         if (last?.phase === 'start') await git.updateRef(repo.top, turnRef(sessionId, last.turn), await git.snapshot(repo, { parent: last.sha, message: subject('end-approx') }));
         const n = (last?.turn ?? 0) + 1;
-        await git.updateRef(repo.top, turnRef(sessionId, n), await git.snapshot(repo, { message: subject('start') }));
+        const before = await git.snapshot(repo, { message: subject('start') });
+        const proof = { sessionId, top: repo.top, before, after: null, overlap: false, formatSafe: await TurnUndo.formatSafe(git, repo) };
+        await overlap(repo.top, sessionId, proof);
+        await git.updateRef(repo.top, turnRef(sessionId, n), before);
+        writeJson(auditFile(sessionId, n), proof);
         await gc(repo.top, sessionId);
         return { turn: n };
       });
@@ -206,6 +225,13 @@ function createCheckpoints({ rootDir, entitlements, git = CheckpointGit.createGi
         const phase = open ? 'end' : parent ? 'end-approx' : 'end-only';
         const end = await git.snapshot(repo, { parent, message: subject(phase) });
         await git.updateRef(repo.top, turnRef(sessionId, n), end);
+        const proof = audit(sessionId, n);
+        if (open && proof?.sessionId === sessionId && proof.before === parent) {
+          await overlap(repo.top, sessionId, proof);
+          proof.after = end;
+          proof.formatSafe = proof.formatSafe && await TurnUndo.formatSafe(git, repo);
+          writeJson(auditFile(sessionId, n), proof);
+        }
         await gc(repo.top, sessionId);
         return { turn: n, before: parent, after: end };
       });
@@ -236,7 +262,11 @@ function createCheckpoints({ rootDir, entitlements, git = CheckpointGit.createGi
     const drop = [];
     refs.filter((r) => r.kind === 'turn').sort((a, b) => b.turn - a.turn).forEach((r, i) => { if (i >= turns || r.at < cutoff) drop.push(r.ref); });
     refs.filter((r) => r.kind === 'safety').sort((a, b) => b.at - a.at).forEach((r, i) => { if (i >= SAFETY_KEEP || r.at < cutoff) drop.push(r.ref); });
-    for (const ref of drop) await git.deleteRef(top, ref);
+    for (const ref of drop) {
+      await git.deleteRef(top, ref);
+      const point = refs.find(r => r.ref === ref);
+      if (point?.kind === 'turn') { try { fs.unlinkSync(auditFile(sid, point.turn)); } catch { /* already gone */ } }
+    }
     return drop.length;
   }
 
@@ -274,7 +304,9 @@ function createCheckpoints({ rootDir, entitlements, git = CheckpointGit.createGi
       const after = running ? null : r.sha;
       let files = null;
       if (before && after) { try { files = await git.diffFiles(e.top, before, after); } catch { files = null; } }
-      out.push({ turn: r.turn, at: r.at, phase: r.phase, running, approx: r.phase === 'end-approx', hasBefore: !!before, hasAfter: !!after, files, review: readJson(reviewFile(sid, r.turn), null) });
+      const proof = audit(sid, r.turn);
+      const undoAvailable = r.phase === 'end' && proof?.sessionId === sid && proof.before === before && proof.after === after && proof.formatSafe && !proof.overlap;
+      out.push({ turn: r.turn, at: r.at, phase: r.phase, running, approx: r.phase === 'end-approx', hasBefore: !!before, hasAfter: !!after, files, undoAvailable, undoReason: proof?.overlap ? 'overlap' : proof?.formatSafe === false ? 'attributes' : undoAvailable ? null : 'unattributed', review: readJson(reviewFile(sid, r.turn), null) });
     }
     const safety = refs.filter((x) => x.kind === 'safety').sort((a, b) => b.at - a.at).map((r) => ({ id: r.id, at: r.at }));
     return { turns: out, safety, skip: null };
@@ -326,7 +358,73 @@ function createCheckpoints({ rootDir, entitlements, git = CheckpointGit.createGi
     return out;
   }
 
-  return { turnStart, turnEnd, turns, diff, restore, gc, gcAll, state, config, setConfig, sessions, limits };
+  const reviewAllowed = current => { try { return entitlements.has('checkpoints') && current() === true; } catch { return false; } };
+  async function repoBusy(top) {
+    if (await isBusy(top)) return true;
+    for (const [sid, entry] of Object.entries(index())) if (entry.top === top && (await refsOf(top, sid)).some(r => r.phase === 'start')) return true;
+    return false;
+  }
+  async function checkoutBinding(repo) {
+    const [head, branch, stage] = await Promise.all([
+      git.run(repo.top, ['rev-parse', '--verify', 'HEAD']).catch(() => ''),
+      git.run(repo.top, ['symbolic-ref', '-q', 'HEAD']).catch(() => ''),
+      git.run(repo.top, ['ls-files', '--stage', '-z']),
+    ]);
+    return crypto.createHash('sha256').update(JSON.stringify([head, branch, stage, repo.gitDir])).digest('hex');
+  }
+  async function previewUndo(sid, turn, { current = () => true } = {}) {
+    const e = index()[sid];
+    if (!e?.top || !reviewAllowed(current)) return { ok: false, reason: 'unavailable' };
+    return serial(`r:${e.top}`, async () => {
+      if (await repoBusy(e.top) || !reviewAllowed(current)) return { ok: false, reason: 'busy' };
+      const repo = await git.repoOf(e.top);
+      if (repo.skip || repo.top !== e.top) return { ok: false, reason: 'moved' };
+      const c = await turnCommits(repo.top, sid, turn), proof = audit(sid, turn);
+      if (!c?.after || !c.before || proof?.sessionId !== sid || proof.before !== c.before || proof.after !== c.after) return { ok: false, reason: 'unattributed' };
+      if (proof.overlap) return { ok: false, reason: 'overlap' };
+      if (!proof.formatSafe || !await TurnUndo.formatSafe(git, repo)) return { ok: false, reason: 'attributes' };
+      const live = await git.snapshot(repo, { message: subject('undo-review') });
+      const plan = await TurnUndo.preview({ git, repo, ...c, current: live });
+      const binding = await checkoutBinding(repo);
+      if (!reviewAllowed(current) || await repoBusy(repo.top)) return { ok: false, reason: 'busy' };
+      for (const [key, review] of undoReviews) if (review.expires <= now()) undoReviews.delete(key);
+      if (undoReviews.size >= 20) undoReviews.delete(undoReviews.keys().next().value);
+      const token = crypto.randomUUID(), expires = now() + 45000;
+      undoReviews.set(token, { sid, turn, plan, binding, expires });
+      return { ok: true, token, turn, expires, files: plan.files, eligible: plan.selected.length, skipped: plan.files.length - plan.selected.length };
+    });
+  }
+  async function undo(sid, token, { current = () => true } = {}) {
+    const review = undoReviews.get(token);
+    undoReviews.delete(token); // every attempt consumes the review, including refusal
+    if (!review || review.sid !== sid || review.expires <= now()) return { ok: false, reason: 'stale' };
+    const e = index()[sid];
+    if (!e?.top || e.top !== review.plan.root.real || !reviewAllowed(current)) return { ok: false, reason: 'unavailable' };
+    const fresh = () => review.expires > now() && reviewAllowed(current);
+    const result = await serial(`r:${e.top}`, async () => {
+      if (!fresh()) return { ok: false, reason: 'stale' };
+      if (await repoBusy(e.top)) return { ok: false, reason: 'busy' };
+      const repo = await git.repoOf(e.top);
+      if (repo.skip || repo.top !== e.top) return { ok: false, reason: 'moved' };
+      if (!await TurnUndo.formatSafe(git, repo)) return { ok: false, reason: 'stale' };
+      const c = await turnCommits(repo.top, sid, review.turn), proof = audit(sid, review.turn);
+      if (!c || c.before !== review.plan.before || c.after !== review.plan.after || proof?.overlap || proof?.after !== c.after) return { ok: false, reason: 'stale' };
+      if (await checkoutBinding(repo) !== review.binding) return { ok: false, reason: 'stale' };
+      const safety = await git.snapshot(repo, { message: subject('safety') });
+      if (!fresh() || !await TurnUndo.unchanged({ git, repo, plan: review.plan, current: safety })) return { ok: false, reason: 'stale' };
+      if (!review.plan.selected.length) return { ok: true, written: 0, removed: 0, skipped: review.plan.files.length, safety: null };
+      const ms = now();
+      await git.updateRef(repo.top, safetyRef(sid, ms), safety);
+      const r = await TurnUndo.apply({ git, repo, plan: review.plan, current: fresh, isBusy: async () => { const busy = await repoBusy(repo.top); return busy || !fresh(); } });
+      await gc(repo.top, sid);
+      return { ...r, safety: String(ms), skipped: review.plan.files.length - review.plan.selected.length };
+    });
+    notify();
+    return result;
+  }
+
+  const cancelUndo = (sid, token) => { if (undoReviews.get(token)?.sid !== sid) return false; return undoReviews.delete(token); };
+  return { turnStart, turnEnd, turns, diff, restore, previewUndo, undo, cancelUndo, gc, gcAll, state, config, setConfig, sessions, limits };
 }
 
 const SID_RE = /^[A-Za-z0-9_.:-]{1,120}$/;
@@ -354,6 +452,16 @@ function register(ctx) {
 
   const ok = (e) => fromPage(e, 'checkpoints');
   const sid = (v) => typeof v === 'string' && SID_RE.test(v) ? v : null;
+  const documents = new WeakMap(), tickets = new Map();
+  function documentScope(e) {
+    const wc = e.sender;
+    if (!documents.has(wc)) {
+      documents.set(wc, 0);
+      wc.on('did-start-navigation', () => documents.set(wc, documents.get(wc) + 1));
+    }
+    const epoch = documents.get(wc), frame = e.senderFrame;
+    return { sender: wc, current: () => { try { return !wc.isDestroyed() && documents.get(wc) === epoch && e.senderFrame === frame && ok(e); } catch { return false; } } };
+  }
   ipcMain.handle('checkpoints:state', (e) => ok(e) ? cps.state() : null);
   ipcMain.handle('checkpoints:set', (e, patch) => {
     if (!ok(e) || !patch || typeof patch !== 'object') return null;
@@ -367,6 +475,29 @@ function register(ctx) {
   ipcMain.handle('checkpoints:diff', async (e, id, turn, file) => {
     if (!ok(e) || !sid(id) || !Number.isInteger(turn) || (file != null && (typeof file !== 'string' || file.length > PATH_MAX))) return null;
     return cps.diff(id, turn, file ?? null).catch(() => null);
+  });
+  ipcMain.handle('checkpoints:undo-preview', async (e, id, turn) => {
+    if (!ok(e) || !sid(id) || !Number.isInteger(turn) || turn < 1) return null;
+    const scope = documentScope(e);
+    const r = await cps.previewUndo(id, turn, scope).catch(() => ({ ok: false, reason: 'failed' }));
+    if (!scope.current()) return null;
+    for (const [key, t] of tickets) if (t.expires <= Date.now() || !t.current()) tickets.delete(key);
+    while (tickets.size >= 20) tickets.delete(tickets.keys().next().value);
+    if (r.ok) tickets.set(r.token, { ...scope, sid: id, expires: r.expires });
+    return r;
+  });
+  ipcMain.handle('checkpoints:undo', async (e, id, token) => {
+    if (!ok(e) || !sid(id) || typeof token !== 'string' || token.length > 100) return null;
+    const ticket = tickets.get(token); tickets.delete(token);
+    if (!ticket || ticket.sid !== id || ticket.sender !== e.sender || !ticket.current()) return { ok: false, reason: 'stale' };
+    return cps.undo(id, token, ticket).catch(err => { log(`[checkpoints] undo failed: ${err?.code || 'failed'}`); return { ok: false, reason: 'failed' }; });
+  });
+  ipcMain.handle('checkpoints:undo-cancel', (e, id, token) => {
+    if (!ok(e) || !sid(id) || typeof token !== 'string' || token.length > 100) return false;
+    const ticket = tickets.get(token);
+    if (!ticket || ticket.sender !== e.sender || ticket.sid !== id) return false;
+    tickets.delete(token);
+    return cps.cancelUndo(id, token);
   });
   ipcMain.handle('checkpoints:restore', async (e, id, target) => {
     if (!ok(e) || !sid(id) || !target || typeof target !== 'object') return null;

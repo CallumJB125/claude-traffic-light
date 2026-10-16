@@ -1630,6 +1630,22 @@ let overviewTeams={host:null,at:0,value:null},overviewTeamHub=null;
 // Team brief + team_* MCP tools (src/team-activity.js), opt-in via teamBrief.
 const TeamActivity=require('./src/team-activity').createTeamActivity({enabled:()=>loadConfig().teamBrief===true,resolve:async(a)=>(devMockReady?(await getBuddy().teamActivityLink?.(a))??null:null),teams:async()=>(devMockReady?(await getBuddy().teamMemoryLinks?.())??[]:[]),fetch:(...a)=>net.fetch(...a),log:m=>console.log(m)}); // privacy-flow: team-brief
 const liveTeamHub=require('./src/team-hub-live').createLiveTeamHub({identity:()=>app.isReady()&&devMockReady?getBuddy().interactionHostIdentity?.()??null:null,fetch:(...a)=>net.fetch(...a)}); // privacy-flow: team-hub-directory
+// Private encrypted outbox, separate from remote hub persistence. Native
+// authorization runs off the main process on packaged Macs and cannot hold Quit.
+const followupNativeStorage=require('./buddy-window/secure-storage').createSecureStorage(require('electron').safeStorage);
+const followupStorageProcess=process.platform==='darwin'&&app.isPackaged?require('./buddy-window/account-storage-process').createAccountStorageProcess({ready:()=>app.isReady(),spawn(executable,args,options){ // privacy-flow: session-followups
+  const profile=fs.mkdtempSync(path.join(app.getPath('temp'),'plexiform-followup-storage-'));
+  let child;try{child=require('node:child_process').spawn(executable,[...args,`--user-data-dir=${profile}`],options);}catch(error){fs.rmSync(profile,{recursive:true,force:true});throw error;} // privacy-flow: session-followups
+  child.once('exit',()=>{try{fs.rmSync(profile,{recursive:true,force:true});}catch{}});return child;
+}}):null;
+const followupStorage=followupStorageProcess??(process.platform==='linux'?{encryptAsync:async s=>followupNativeStorage.encrypt(s),decryptAsync:async b=>followupNativeStorage.decrypt(b)}:followupNativeStorage);
+const followupScope=()=>{
+  if(!app.isReady()||!devMockReady)return null;
+  const b=getBuddy(),account=b.interactionHostIdentity?.()??null,board=b.status?.().workspace;
+  if(typeof board!=='string'||!board)return null;
+  return crypto.createHash('sha256').update(JSON.stringify([account?.origin??'signed-out-local',account?.userId??'signed-out-local',board])).digest('hex');
+};
+const sessionFollowups=require('./src/session-followups').createSessionFollowups({file:path.join(app.getPath('userData'),'session-followups','outbox.bin'),storage:followupStorage,scope:followupScope,onChange:()=>OverviewMain.directoryChanged()});
 if(IS_DEV_RUN&&!app.isPackaged&&process.env.CLAUDE_BUDDY_FAKE_TEAM_HUB){try{overviewTeamHub=require('./src/team-hub-fake').createFakeTeamHub(JSON.parse(fs.readFileSync(process.env.CLAUDE_BUDDY_FAKE_TEAM_HUB,'utf8')));}catch(e){console.warn('[overview] fake team hub not loaded:',e.message);}}
 const OverviewMain=require('./src/overview-main').createOverviewMain({
   buddy:()=>buddyWin,sessions:()=>aggregateState().sessions||[],
@@ -1644,13 +1660,15 @@ const OverviewMain=require('./src/overview-main').createOverviewMain({
   hubTeams:async()=>{const h=hostSync.host(),origin=hostSync.origin();if(!h||!origin)return null;if(overviewTeams.host===h&&Date.now()-overviewTeams.at<30_000)return overviewTeams.value;
     const r=await h.listShares().catch(()=>null);overviewTeams={host:h,at:Date.now(),value:r?.ok?{origin,teams:r.teams}:null};return overviewTeams.value;},
   teamHub:()=>overviewTeamHub||liveTeamHub.current(),
+  followups:sessionFollowups,followupScope,
+  followupLocal:{target:session=>InteractionMain.followupTarget(session),resolve:(target,fresh)=>InteractionMain.resolveFollowup(target,fresh)},
 });
 OverviewMain.register(ipcMain);
 overviewTeamHub?.onChange(()=>OverviewMain.directoryChanged());
 // A subscription reads the current identity immediately. Electron's secure
 // storage is unavailable before ready; do not construct the account vault then.
 app.whenReady().then(()=>{if(!overviewTeamHub)liveTeamHub.onChange(()=>OverviewMain.directoryChanged());});
-onQuit(app,()=>{liveTeamHub.close();OverviewMain.close();});
+onQuit(app,()=>{liveTeamHub.close();OverviewMain.close();sessionFollowups.close();followupStorageProcess?.close();});
 // Owned-session interaction: Plexiform starts its own provider sessions and
 // talks only to those. Existing unmanaged sessions stay observation-only.
 const CodexAppServer=require('./src/codex-app-server');
@@ -1670,6 +1688,7 @@ claudeChannel.attach=async args=>{
   return attachClaudeChannel(args);
 };
 const InteractionMain=require('./src/interaction-main').createInteractionMain({
+  accountScope:followupScope,
   compaction:Compaction.createSessionCompactor({settings:()=>loadConfig().compaction,ledger:CompactionLedger}),
   context:()=>buddyWin?.overviewContext?.()??null,
   readContext:()=>buddyWin?.overviewReadContext?.()??null,
@@ -2033,12 +2052,13 @@ function getTasks() {
     confirmDialog: async (info, wcId) => {
       const wc = tasksPages().find((w) => w.id === wcId);
       const parent = (wc && BrowserWindow.fromWebContents(wc)) || undefined;
-      const r = await dialog.showMessageBox(parent, {
+      const show = async owner => dialog.showMessageBox(owner, {
         type: 'warning', buttons: ['Cancel', info.label], defaultId: 0, cancelId: 0, noLink: true,
         message: `${info.label}?`,
         detail: [`Task: ${info.title}`, info.where ? `Runs in: ${info.where}` : '', info.detail].filter(Boolean).join('\n'),
       });
-      return r.response === 1;
+      const r = info.action === 'merge' ? await buddyWin?.tasksConfirm?.(show) : await show(parent);
+      return r?.response === 1;
     },
     seen: {
       load: () => { try { return JSON.parse(fs.readFileSync(TASKS_SEEN_FILE, 'utf8')); } catch { return {}; } },
@@ -2053,7 +2073,7 @@ ipcMain.handle('tasks:state', (e) => { if (!tasksSenderOk(e)) return null; const
 ipcMain.handle('tasks:retry', (e) => { if (tasksSenderOk(e)) getTasks().retryNow(); });
 ipcMain.handle('tasks:open', (e, id) => (tasksSenderOk(e) ? getTasks().openTask(id, e.sender.id) : null));
 ipcMain.handle('tasks:close', (e) => { if (tasksSenderOk(e)) return getTasks().closeTask(e.sender.id); return null; });
-ipcMain.handle('tasks:act', (e, req) => (tasksSenderOk(e) ? getTasks().act(req, e.sender.id) : null));
+require('./src/tasks-main').register({ipcMain,buddy:()=>buddyWin,service:getTasks});
 ipcMain.handle('tasks:checkpoint', (e, req) => (tasksSenderOk(e) ? getTasks().saveCheckpoint(req, e.sender.id) : null));
 ipcMain.handle('tasks:create', (e, draft) => (tasksSenderOk(e) ? getTasks().create(draft, { wcId: e.sender.id }) : null));
 ipcMain.handle('tasks:composer', (e) => (tasksSenderOk(e) ? getTasks().composerInfo() : null));

@@ -50,19 +50,23 @@ function createTeamSessionControls({ resolve, current = () => true, actionCurren
     while (selections.size > 300) selections.delete(selections.keys().next().value);
     return { ok: true, status: 'ready', selection, state: out.state, capabilities: capabilities(target, out.state) };
   }
-  async function action(request) {
+  // A main-owned caller may impose a narrower grant lifetime. It never comes
+  // from the renderer request, and must remain current through every await and
+  // the host's final dispatch check, rather than borrowing this token's TTL.
+  async function action(request, { current: grantCurrent = () => true } = {}) {
+    const grantValid = () => { try { return grantCurrent() === true; } catch { return false; } };
     if (!closed(request, ['selection', 'operation', 'text']) || typeof request.selection !== 'string' || !UUID.test(request.selection)
       || !['send', 'steer', 'interrupt'].includes(request.operation) || typeof request.text !== 'string' || request.text.includes('\0')
       || (request.operation === 'interrupt' ? request.text !== '' : !request.text.trim() || request.text.trim().length > 4000 || Buffer.byteLength(request.text.trim()) > 8192)) return fail('invalid', 'Check the selected action and message.');
     const selected = selections.get(request.selection), generation = epoch;
-    if (!selected || selected.expires < now() || !alive(generation) || !actionCurrent()) return fail('stale', STALE);
+    if (!selected || selected.expires < now() || !alive(generation) || !actionCurrent() || !grantValid()) return fail('stale', STALE);
     // Consume before the first await. A double-click or replay cannot dispatch twice.
     selections.delete(request.selection);
     if ([...pending].some(target => same(target, selected.target))) return fail('busy', 'An action on this session is awaiting a receipt. Inspect it before sending again.');
     const lock = selected.target;
     pending.add(lock);
     try {
-    const fresh = () => alive(generation) && actionCurrent() === true && selected.expires >= now() && targetCurrent(selected.target);
+    const fresh = () => alive(generation) && actionCurrent() === true && grantValid() && selected.expires >= now() && targetCurrent(selected.target);
     let target, state;
     try {
       target = await resolve(selected.id, true);

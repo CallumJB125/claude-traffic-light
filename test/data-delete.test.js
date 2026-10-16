@@ -137,3 +137,4 @@ test('nothing is deleted while the requesting app or another copy still runs', (
   assert.ok(!exists(path.join(d, 'config.json')));
   assert.ok(exists(path.join(mac.roots.userDataDir, 'SingletonLock')), 'the app lock is not data');
 });
+test('encrypted follow-up store is explicitly deletable before the next app start',t=>{const mac=fakeMac();t.after(mac.cleanup);put(path.join(mac.roots.userDataDir,'session-followups','outbox.bin'),'synthetic sealed messages');put(path.join(mac.roots.userDataDir,'work-records.json'),'keep');Delete.requestDeletion({ids:['session-followups'],confirm:'delete',dataDir:mac.roots.dataDir,pid:999999});const r=Delete.runPendingDeletion({...mac.roots,isAlive:dead});assert.equal(r.ran,true);assert.equal(exists(path.join(mac.roots.userDataDir,'session-followups')),false);assert.equal(exists(path.join(mac.roots.userDataDir,'work-records.json')),true);});

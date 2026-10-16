@@ -916,8 +916,15 @@ export async function startMockServer(opts = {}) {
         return {};
       }
       case 'merge': {
+        if (payload.phase === 'preview') {
+          const id = crypto.randomUUID(), hash = crypto.createHash('sha256').update(id).digest('hex'), expiresAt = Date.now() + 300000;
+          task.integrationReview = { id, hash, expiresAt };
+          return { integration: { status: 'review', canApply: true, id, hash, expiresAt, branch: task.baseBranch ?? 'main', files: [{ path: 'src/settings/theme.js', status: 'M' }], patch: PATCH, reason: 'Synthetic integration preview; no filesystem changes.' } };
+        }
+        const review = task.integrationReview; task.integrationReview = null;
+        if (!review || review.id !== payload.reviewId || review.hash !== payload.reviewHash || review.expiresAt <= Date.now()) throw new ApiError('CONFLICT', 'review changed');
         setState(task, 'done', { outcome: 'merged' });
-        return {};
+        return { integration: { status: 'merged', commit: 'a'.repeat(40), branch: task.baseBranch ?? 'main' } };
       }
       case 'openPr': {
         prCounter += 1;

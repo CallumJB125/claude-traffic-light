@@ -41,6 +41,21 @@
     </section>
     <p id="team-notice" class="reason" role="status" hidden></p>
     <div id="team-summary" class="summary" aria-label="Team sessions summary"></div>
+    <details id="coordinator-panel" class="coordinator" hidden>
+      <summary>Review team assignments</summary>
+      <p class="muted">Name the work for up to six explicitly shared sessions, review each exact message, then approve individual sends. Sessions must be idle and already shared with you to send. Each message uses its owner's provider account and quota.</p>
+      <p class="reason">Your approval covers these messages only. Owner approval requests, ongoing delegation and autonomous coordination are not available here. Proposals stay in this view and are not saved after navigation or restart.</p>
+      <label class="router-label" for="coordinator-title">Goal</label><input id="coordinator-title" type="text" maxlength="120" autocomplete="off">
+      <div class="actions"><button id="coordinator-refresh" type="button">Check shared sessions</button><button id="coordinator-add" type="button" disabled>Add assignment</button></div>
+      <div id="coordinator-assignments"></div>
+      <div class="actions"><button id="coordinator-review" type="button" disabled>Review assignments</button></div>
+      <p id="coordinator-status" class="reason" role="status" aria-live="polite">Check current sessions to begin.</p>
+      <section id="coordinator-preview" class="coordinator-action-review" aria-label="Review named assignments" hidden>
+        <h3 id="coordinator-preview-title"></h3><p id="coordinator-expiry" class="reason"></p>
+        <div id="coordinator-results" class="coordinator-results"></div>
+        <div class="actions"><button id="coordinator-confirm" type="button" disabled>Send approved assignments</button><button id="coordinator-replies" type="button" hidden>Refresh replies</button><button id="coordinator-back" type="button">Back to draft</button></div>
+      </section>
+    </details>
     <div id="team-list"></div>
     <p id="team-empty" class="empty" hidden>Nothing shared with this team yet.</p>
   </section>
@@ -100,6 +115,7 @@
 <script src="src/session-router.js"></script>
 <script src="overview-share.js"></script>
 <script src="overview-directory.js"></script>
+<script src="overview-coordinator.js"></script>
 <script src="overview.js"></script>
 </body>
 </html>

@@ -198,7 +198,7 @@ const payloads = {
   approve: optional({ approvalId: str(), scope: en(['once', 'task']) }, ['approvalId']),
   deny: optional({ approvalId: str(), message: str({ maxLength: 2000 }) }, ['approvalId']),
   answer: optional({ askId: str(), answer: str({ minLength: 1, maxLength: 20000 }) }, ['askId', 'answer']),
-  merge: optional({ strategy: en(['merge', 'squash', 'ff']), deleteBranch: bool }, []),
+  merge: { oneOf: [obj({ phase: { const: 'preview' } }), obj({ phase: { const: 'apply' }, reviewId: str({ minLength: 36, maxLength: 36 }), reviewHash: str({ minLength: 64, maxLength: 64 }), confirm: { const: true } })] },
   openPr: optional({ draft: bool, title: str(), body: str(LONG) }, []),
   discard: optional({ confirm: { const: true } }, ['confirm']),
   retry: optional({ fresh: bool }, []),
@@ -283,6 +283,7 @@ const schema = {
     ActParams: obj({ id: str(), action: en(ACTIONS), payload: { type: 'object' }, requestId: str({ minLength: 8, maxLength: 128 }) }, ['id', 'action', 'requestId']),
     ActResult: obj({
       ok: { const: true }, task: ref('TaskView'), messageId: str(), takeover: ref('TakeoverResult'), pr: obj({ number: int(), url: str() }),
+      integration: { type: 'object' },
     }, ['ok', 'task']),
     ListMessagesParams: obj({ id: str(), afterSeq: int() }, ['id']),
     ListMessagesResult: arr(ref('Message')),

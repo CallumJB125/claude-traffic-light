@@ -49,7 +49,7 @@ test('create → worktree → running → ready to review; task text is data on 
   assert.equal(d.evidence.tests, 'pass');
   assert.equal(d.evidence.diffStat.files, 1);
   assert.equal(d.cost.usd, 0.05);
-  assert.deepEqual(d.actions, ['message', 'discard']);
+  assert.deepEqual(d.actions, ['merge', 'message', 'discard']);
   assert.equal(d.label, 'Ready to review');
 
   const log = fakeLog(runDirOf(m, id));

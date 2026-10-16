@@ -262,12 +262,12 @@ test('[mock] openPr ends the task with a PR and is idempotent (engine: openPr/me
   } finally { await m.close(); }
 });
 
-test('[engine] in review offers only what E1 implements', async () => {
+test('[engine] in review offers reviewed local merge and keeps unavailable PR creation absent', async () => {
   const m = await startTarget('engine');
   try {
     const { id } = await m.client.createTask(m.spec);
     await waitFor(async () => (await m.client.getTask(id)).state === 'in_review', { label: 'in_review' });
-    assert.deepEqual((await m.client.getTask(id)).actions, ['message', 'discard']);
+    assert.deepEqual((await m.client.getTask(id)).actions, ['merge', 'message', 'discard']);
     await assert.rejects(m.client.act(id, 'openPr', {}), (e) => e.code === 'ILLEGAL_TRANSITION' && !e.details.allowed.includes('openPr'));
   } finally { await m.close(); }
 });
