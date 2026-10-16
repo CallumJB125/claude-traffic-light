@@ -3647,22 +3647,71 @@
           ]
         },
         "openPr": {
-          "type": "object",
-          "properties": {
-            "draft": {
-              "type": "boolean"
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "phase": {
+                  "const": "preview"
+                },
+                "title": {
+                  "type": "string",
+                  "maxLength": 120,
+                  "minLength": 1
+                },
+                "body": {
+                  "type": "string",
+                  "maxLength": 10000
+                }
+              },
+              "required": [
+                "phase",
+                "title",
+                "body"
+              ],
+              "additionalProperties": false
             },
-            "title": {
-              "type": "string",
-              "maxLength": 256
+            {
+              "type": "object",
+              "properties": {
+                "phase": {
+                  "const": "apply"
+                },
+                "reviewId": {
+                  "type": "string",
+                  "maxLength": 36,
+                  "minLength": 36
+                },
+                "reviewHash": {
+                  "type": "string",
+                  "maxLength": 64,
+                  "minLength": 64
+                },
+                "confirm": {
+                  "const": true
+                }
+              },
+              "required": [
+                "phase",
+                "reviewId",
+                "reviewHash",
+                "confirm"
+              ],
+              "additionalProperties": false
             },
-            "body": {
-              "type": "string",
-              "maxLength": 20000
+            {
+              "type": "object",
+              "properties": {
+                "phase": {
+                  "const": "receipt"
+                }
+              },
+              "required": [
+                "phase"
+              ],
+              "additionalProperties": false
             }
-          },
-          "required": [],
-          "additionalProperties": false
+          ]
         },
         "discard": {
           "type": "object",
@@ -3695,11 +3744,27 @@
                 "codex",
                 "gemini"
               ]
+            },
+            "phase": {
+              "enum": [
+                "preview",
+                "apply"
+              ]
+            },
+            "reviewId": {
+              "type": "string",
+              "maxLength": 128
+            },
+            "reviewHash": {
+              "type": "string",
+              "maxLength": 64,
+              "minLength": 64
+            },
+            "confirm": {
+              "type": "boolean"
             }
           },
-          "required": [
-            "ai"
-          ],
+          "required": [],
           "additionalProperties": false
         }
       },
@@ -4305,6 +4370,9 @@
           "additionalProperties": false
         },
         "integration": {
+          "type": "object"
+        },
+        "providerChange": {
           "type": "object"
         }
       },

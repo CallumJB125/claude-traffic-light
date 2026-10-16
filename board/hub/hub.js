@@ -1033,6 +1033,7 @@ export class Hub extends EventEmitter {
     this.enrolments?.recheck();
     this.oauth?.sweep();
     this.sweepIntegrationsPending?.();
+    this.interactionShares?.proposals.prune();
     this.reviews.sweep();
     this.presence.sweep();
     await this.idle();

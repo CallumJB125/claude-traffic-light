@@ -94,7 +94,8 @@ function createGuard({ P, taskFace }) {
         tests: strOrNull(ev.tests, 20), testCommand: strOrNull(ev.testCommand, 200), summary: strOrNull(ev.summary, 2000),
         diffStat: ev.diffStat ? { files: int(ev.diffStat.files), added: int(ev.diffStat.added), removed: int(ev.diffStat.removed) } : null,
       } : null,
-      pr: d.pr ? { number: int(d.pr.number), state: pick(d.pr.state, ['open', 'merged', 'closed'], 'open') } : null,
+      pr: d.pr ? { number: int(d.pr.number), state: pick(d.pr.state, ['open', 'merged', 'closed'], 'open'),
+        url: typeof d.pr.url === 'string' && /^https:\/\/github\.com\/[A-Za-z0-9][\w.-]*\/[A-Za-z0-9][\w.-]*\/pull\/[1-9][0-9]*$/.test(d.pr.url) && d.pr.url.endsWith(`/pull/${int(d.pr.number)}`) ? d.pr.url : null } : null,
       openApprovals: (Array.isArray(d.openApprovals) ? d.openApprovals : []).slice(0, 10).map((a) => ({ approvalId: str(a.approvalId, 128), tool: str(a.tool, 80), inputSummary: str(a.inputSummary, 500) })),
       openAsk: d.openAsk ? {
         askId: str(d.openAsk.askId, 128), kind: str(d.openAsk.kind, 20), text: str(d.openAsk.text, 4000),

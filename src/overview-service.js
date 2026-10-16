@@ -8,6 +8,7 @@ const AgentReports=require('./agent-self-report');
 const {clean}=require('./work-capture');
 const Directory=require('./session-directory');
 const {createTeamSessionControls}=require('./team-session-controls');
+const FollowupSchedules=require('./recipe-schedules');
 const PROVIDERS=Object.freeze({codex:'Codex',claude:'Claude Code','claude-code':'Claude Code',cursor:'Cursor',gemini:'Gemini',hermes:'Hermes',opencode:'OpenCode',copilot:'Copilot',ollama:'Ollama',lmstudio:'LM Studio','llama.cpp':'llama.cpp',local:'Local model'});
 const LOCAL=new Set(['ollama','lmstudio','llama.cpp','local']);
 const ID=/^[A-Za-z0-9_.:-]{1,128}$/,UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -141,13 +142,15 @@ function createOverviewService({sessions=()=>[],work=async()=>({sources:[],captu
  const unavailableDirectory=(view,time)=>({schema:1,view,status:'unavailable',observed_at:time,teams:[],team:null,notice:'',entries:[],counts:directoryModel.counts([])});
  const controls=createTeamSessionControls({resolve:resolveTeam,current:permitted,actionCurrent:actionPermitted,now});
  let coordinator=null;
- coordinator=require('./team-coordinator').createTeamCoordinator({inventory:request=>directory({view:'team',team:request.team}),inspect:controls.inspect,action:controls.action,current:permitted,actionCurrent:actionPermitted,now});
+ coordinator=require('./team-coordinator').createTeamCoordinator({inventory:request=>directory({view:'team',team:request.team}),inspect:controls.inspect,action:controls.action,resolve:resolveTeam,current:permitted,actionCurrent:actionPermitted,now});
  const personalRefs=new Map(),followupSelections=new Map();
  const followupUnavailable=()=>({ok:false,status:'unavailable',error:'Encrypted local follow-ups are unavailable for this account or session.'});
  const pinned=raw=>({...raw,key:crypto.createHash('sha256').update(JSON.stringify([raw.kind,raw.route,raw.generation,raw.provider])).digest('hex')});
  const exactTarget=t=>object(t)&&pinned(t).key===t.key;
  async function followupReview(request){
-  if(!followups||!closed(request,['id'])||typeof request.id!=='string'||!/^[0-9a-f]{40}$/.test(request.id)||!actionPermitted())return followupUnavailable();
+  if(!followups||!(closed(request,['id','text'])||closed(request,['id','text','when']))||typeof request.id!=='string'||!/^[0-9a-f]{40}$/.test(request.id)||typeof request.text!=='string'||!request.text.trim()||request.text.includes('\0')||request.text.trim().length>4000||Buffer.byteLength(request.text.trim())>8192||!actionPermitted())return followupUnavailable();
+  if(Object.hasOwn(request,'when')&&!object(request.when))return response('invalid');
+  const text=request.text.trim();
   const epoch=routeEpoch,owner=followupScope();
   const fresh=()=>actionPermitted()&&epoch===routeEpoch&&owner===followupScope();
   let target,label;
@@ -165,19 +168,31 @@ function createOverviewService({sessions=()=>[],work=async()=>({sources:[],captu
    label=`Shared ${s.provider.label||s.provider.id} session in the selected team`;
   }
   if(!target||!fresh()||typeof owner!=='string')return followupUnavailable();
-  const selection=crypto.randomUUID();followupSelections.set(selection,{target,label:label.slice(0,240),epoch,owner,expires:now()+45000});
+  const when=request.when??{kind:'ready'};
+  let reset=null;
+  if(when?.kind==='provider-reset'){
+   const resolved=await resolveFollowup(target);
+   if(!fresh()||!resolved?.ok||resolved.current?.()!==true)return followupUnavailable();
+   reset=resolved.reset?.()??null;
+  }
+  const schedule=FollowupSchedules.followupSchedule(when,now(),reset);
+  if(!schedule)return{ok:false,status:'unavailable',error:when?.kind==='provider-reset'?'This exact session has no future provider-reported reset time. Choose a time yourself or wait for a provider limit report.':'Choose a future time within seven days.'};
+  const scheduleLabel=FollowupSchedules.describeFollowup(schedule);
+  const selection=crypto.randomUUID();followupSelections.set(selection,{target,label:label.slice(0,240),epoch,owner,expires:now()+45000,schedule,text});
   for(const[k,v]of followupSelections)if(v.expires<now())followupSelections.delete(k);
   while(followupSelections.size>64)followupSelections.delete(followupSelections.keys().next().value);
-  return{ok:true,status:'review',selection,label:label.slice(0,240),notice:'Saved encrypted on this computer for at most seven days before dispatch. Sends one new turn when this original session is ready and Overview is focused on this account and board. It may use AI credits. Restart keeps the follow-up, but cannot restore an ended session. Requires OS encryption and durable filesystem sync.'};
+  return{ok:true,status:'review',selection,label:label.slice(0,240),schedule:{kind:schedule.kind,atMs:schedule.atMs??null,label:scheduleLabel},notice:`${scheduleLabel}. One attempt only, in queue order. Keep Plexiform open and Overview focused on this account and board; a missed time waits for that view and the original session to be ready. A provider reset report predicts availability, not successful completion. May use AI credits. Saved encrypted for at most seven days; restart cannot restore an ended session. Requires OS encryption and durable filesystem sync.`};
  }
  async function followupEnqueue(request){
   if(!followups||!closed(request,['selection','requestId','text'])||!UUID.test(request.selection)||!UUID.test(request.requestId)||typeof request.text!=='string')return followupUnavailable();
   const chosen=followupSelections.get(request.selection);followupSelections.delete(request.selection);
   const fresh=()=>!!chosen&&actionPermitted()&&chosen.epoch===routeEpoch&&chosen.owner===followupScope()&&chosen.expires>=now();
-  if(!fresh())return response('stale');
+  if(!fresh()||request.text!==chosen.text)return response('stale');
   const still=await resolveFollowup(chosen.target);
   if(!fresh()||!still?.ok||still.current()!==true)return{ok:false,status:'stale',error:still?.error||'The original session changed. Review it again.'};
-  return followups.enqueue({id:request.requestId,target:chosen.target,label:chosen.label,text:request.text,current:fresh});
+  const scheduledCurrent=()=>fresh()&&still.current()===true&&(!chosen.schedule?.atMs||chosen.schedule.atMs>now())&&(chosen.schedule?.kind!=='provider-reset'||still.reset?.()?.id===chosen.schedule.evidence);
+  if(!scheduledCurrent())return{ok:false,status:'stale',error:'The reviewed time or provider reset report changed. Review the follow-up again.'};
+  return followups.enqueue({id:request.requestId,target:chosen.target,label:chosen.label,text:chosen.text,schedule:chosen.schedule,current:scheduledCurrent});
  }
  async function resolveFollowup(t){
   if(!exactTarget(t)||!actionPermitted())return{ok:false,error:'Focus this account and board in Overview to continue.'};
@@ -272,6 +287,7 @@ function createOverviewService({sessions=()=>[],work=async()=>({sources:[],captu
  }
  return{snapshot,directory:async request=>{const out=await directory(request);return{...out,followupScope:followupScope()};},teamMessage,teamInspect:controls.inspect,teamAction:controls.action,
   followupReview,followupEnqueue,
+  coordinatorRequestOwner:coordinator.requestOwner,coordinatorRemoteList:coordinator.remoteList,coordinatorRemoteSend:coordinator.remoteSend,coordinatorRemoteCancel:coordinator.remoteCancel,coordinatorRemoteReplace:coordinator.remoteReplace,
   coordinatorInventory:coordinator.inventory,coordinatorPropose:coordinator.propose,coordinatorConfirm:coordinator.confirm,coordinatorResults:coordinator.results,coordinatorCancel:coordinator.cancel,
   followupList:()=>{const owner=followupScope(),epoch=routeEpoch;return permitted()&&followups?followups.list(()=>permitted()&&owner===followupScope()&&epoch===routeEpoch):followupUnavailable();},
   followupCancel:r=>{const owner=followupScope(),epoch=routeEpoch;return actionPermitted()&&closed(r,['id'])&&followups?followups.cancel(r.id,()=>actionPermitted()&&owner===followupScope()&&epoch===routeEpoch):followupUnavailable();},

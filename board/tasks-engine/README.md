@@ -127,7 +127,38 @@ manual resolution. Successful integration creates a local merge commit and
 keeps the source worktree. Nothing is pushed. Only the full local-user credential
 may use this path; relay participants cannot integrate. Independent writers do
 not share the helper's repository lock, so this is not a global filesystem lock.
+Integration also binds the existing task checkpoint/decision version and local
+state/claims journal sequence. Overlapping, unknown, truncated or in-place
+active claims block review with named tasks to inspect. A missing heartbeat,
+terminal handoff or unconfirmed stop does not release the claim. This inventory
+covers this Tasks engine; it does not assert cross-device or hub ownership.
 
-Not yet: `openPr`, `switchAi`, tmux/tab surfaces, task-to-task
+Provider handover uses `switchAi` preview/apply on stopped, isolated Git tasks
+in `parked` or `failed{limit}`. Review shows the source diff, existing checkpoint,
+queued task messages, exact next AI, retained permission level and spend cap.
+The renderer handle is opaque; native confirmation consumes a five-minute,
+single-use helper review bound to source tree/index/config/branch, context,
+pending messages and provider availability. The queued launch checks the same
+workspace and expiry again. Pending notes are marked delivered only at dispatch.
+An expired/changed review, cancellation, restart, timeout or launch error before
+dispatch restores the original stopped provider; another switch needs a fresh
+review. Claude and Codex are the supported targets; an AI
+that cannot retain the approval mode or native spend cap is refused. In-place,
+non-Git, unsupported/unsafe/binary or oversized changes need manual handover.
+The new provider uses a fresh session and its default model. Existing worktree,
+files, total spend and task history remain; prior plan approval does not carry
+over. A queued receipt is not proof of a provider response. Fixtures exercise
+actual adapters with offline CLI processes; real provider/native acceptance
+remains separate.
+
+Draft pull requests use `openPr` preview/apply/receipt. Commit and publish the
+task branch before review: this path never commits or pushes. It pins the
+github.com origin, account, base/head, task context and exact draft text for
+five minutes. An uncertain request consumes the attempt durably; only a
+read-only receipt lookup follows. GitHub branches remain mutable after review,
+and changed receipt revisions are shown explicitly. Review and native dialog
+acceptance are local evidence; real GitHub creation acceptance is separate.
+
+Not yet: tmux/tab creation surfaces, task-to-task
 messaging tools, `.buddy/claims.json`, approval/ask timeouts, sleep detection,
 transient-429 retries, the per-project `bypass` opt-in.

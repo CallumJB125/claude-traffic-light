@@ -19,6 +19,18 @@ test('normalize accepts the five kinds and rejects the rest', () => {
   assert.deepEqual(S.normalize({ kind: 'hours', every: 4 }), { kind: 'hours', every: 4 });
   for (const bad of [null, {}, { kind: 'nightly' }, { kind: 'nightly', time: '24:00' }, { kind: 'weekly', day: 7, time: '09:00' }, { kind: 'hours', every: 5 }, { kind: 'monthly', time: '09:00' }]) assert.equal(S.normalize(bad), null, JSON.stringify(bad));
 });
+test('selected-session schedule reuses the calendar engine for one next occurrence and bounds durable eligibility', () => {
+ const now=at(2026,10,16,12), evidence={id:'a'.repeat(64),atMs:now+H,observedAt:now-1000};
+ assert.deepEqual(S.followupSchedule(undefined,now),{kind:'ready'});
+ assert.deepEqual(S.followupSchedule({kind:'next',schedule:{every:2,kind:'hours'}},now),{kind:'at',atMs:now+2*H});
+ assert.deepEqual(S.followupSchedule({kind:'next',schedule:{kind:'nightly',time:'22:30'}},now),{kind:'at',atMs:S.nextRun({kind:'nightly',time:'22:30'},now)});
+ assert.deepEqual(S.followupSchedule({kind:'provider-reset'},now,evidence),{kind:'provider-reset',atMs:now+H,evidence:evidence.id});
+ for(const request of [null,{}, {kind:'at',atMs:now}, {kind:'at',atMs:now+7*D}, {kind:'at',atMs:now+H,repeat:true}, {kind:'next',schedule:{kind:'hours',every:1,extra:'ignored'}}, {kind:'provider-reset',atMs:now+H}])assert.equal(S.followupSchedule(request,now,evidence),null);
+ for(const reset of [null,{...evidence,id:'user-text'},{...evidence,observedAt:now+1},{...evidence,atMs:now},{...evidence,source:'other-session'}])assert.equal(S.followupSchedule({kind:'provider-reset'},now,reset),null);
+ assert.equal(S.validFollowupSchedule(undefined,now),true,'old queued next-turn entries remain readable');
+ assert.equal(S.validFollowupSchedule({kind:'at',atMs:now+H},now),true);
+ assert.match(S.describeFollowup({kind:'provider-reset',atMs:now+H}),/provider-reported reset/);
+});
 
 test('nextRun: nightly is the next occurrence of the time, strictly after now, across midnight and a DST change', () => {
   const s = { kind: 'nightly', time: '22:00' };

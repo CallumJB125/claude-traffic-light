@@ -29,7 +29,8 @@ function defaultCheckpoints(rootDir) {
 }
 
 function register({ ipcMain, rootDir, home, user = null, hostname = null, writer = () => null, sessions = () => ({}), isExcluded = () => false, sessionsAllowed, pageAllowed, openPage, pageContents = () => null, dialog, BrowserWindow, downloads = () => home, transitions = defaultTransitions(rootDir), checkpointTurns = defaultCheckpoints(rootDir), locator = Transcripts.createLocator({ home }), now = Date.now, log = () => {} }) {
-  let current = null;
+  let current = null, selectionVersion = 0;
+  const documents = new WeakMap();
 
   const listed = () => {
     let rows = [];
@@ -49,10 +50,32 @@ function register({ ipcMain, rootDir, home, user = null, hostname = null, writer
     return Timeline.build({ adapter: row.adapter, sessionId: row.sessionId, cwd, branch: facts?.branch, state: row.state, facts, transcript: file ? Timeline.readTranscript(file, row.adapter) : null, transitions: moves, checkpoints: turns });
   }
 
-  const choose = (key) => { const r = typeof key === 'string' && KEY.test(key) ? rowFor(key) : null; if (r) current = r; return current || listed()[0] || null; };
+  const choose = (key) => {
+    // A named target must never fall back to whichever session is now first.
+    const r = key == null ? current || listed()[0] || null : typeof key === 'string' && KEY.test(key) ? rowFor(key) : null;
+    if (!r && key != null) { current = null; selectionVersion++; }
+    if (r && (!current || keyOf(current) !== keyOf(r))) { current = r; selectionVersion++; }
+    return r;
+  };
+  const guard = (e, row) => {
+    const version = selectionVersion, sender = e.sender, frame = e.senderFrame;
+    let document = documents.get(sender);
+    if (!document) {
+      document = { version: 0 }; documents.set(sender, document);
+      for (const event of ['did-start-navigation', 'render-process-gone', 'destroyed']) sender?.on?.(event, () => { document.version++; });
+    }
+    const documentVersion = document.version;
+    const processId = frame?.processId, routingId = frame?.routingId, url = frame?.url;
+    return () => {
+      try { return pageAllowed(e) && !sender?.isDestroyed?.() && !frame?.isDestroyed?.()
+        && (!frame || (frame.processId === processId && frame.routingId === routingId && frame.url === url))
+        && document.version === documentVersion && version === selectionVersion && row && current && keyOf(row) === keyOf(current) && !isExcluded(row.cwd); }
+      catch { return false; }
+    };
+  };
 
   function show(row) {
-    current = row;
+    current = row; selectionVersion++;
     openPage('timeline');
     const wc = pageContents();
     if (wc && !wc.isDestroyed()) wc.send('timeline:changed');
@@ -66,9 +89,9 @@ function register({ ipcMain, rootDir, home, user = null, hostname = null, writer
   }
 
   const label = (r) => `${PROVIDER[r.adapter] || r.adapter} · ${r.cwd ? path.basename(r.cwd) : r.sessionId.slice(0, 8)}`;
-  const exportOf = async (key, includePrompts) => {
-    const tl = await timelineOf(choose(key));
-    return tl ? Replay.exportReplay(tl, { includePrompts: includePrompts === true, home, user, hostname, now: now() }) : null;
+  const exportOf = async (row, includePrompts) => {
+    const tl = await timelineOf(row);
+    return tl && !isExcluded(tl.cwd) ? { ...Replay.exportReplay(tl, { includePrompts: includePrompts === true, home, user, hostname, now: now() }), cwd: tl.cwd } : null;
   };
 
   ipcMain.handle('timeline:open', (e, key) => {
@@ -79,30 +102,35 @@ function register({ ipcMain, rootDir, home, user = null, hostname = null, writer
   ipcMain.handle('timeline:list', (e) => {
     if (!pageAllowed(e)) return null;
     const rows = listed();
-    if (current && !rows.some((r) => keyOf(r) === keyOf(current))) rows.unshift(current);
+    if (current && !isExcluded(current.cwd) && !rows.some((r) => keyOf(r) === keyOf(current))) rows.unshift(current);
     return { sessions: rows.map((r) => ({ key: keyOf(r), label: label(r) })), current: current ? keyOf(current) : rows[0] ? keyOf(rows[0]) : null };
   });
   ipcMain.handle('timeline:load', async (e, key) => {
     if (!pageAllowed(e)) return null;
     const row = choose(key);
-    if (!row) return { empty: 'No sessions are listed on this computer yet.' };
+    if (!row) return { empty: key == null ? 'No sessions are listed on this computer yet.' : 'This selected session is no longer available. Choose a session from the list.' };
+    const valid = guard(e, row);
     const tl = await timelineOf(row);
+    if (!valid() || (tl && isExcluded(tl.cwd))) return null;
     if (!tl) return { empty: 'This project is muted, so it has no timeline.' };
     const view = Timeline.forDisplay(tl, { home });
     return { key: keyOf(row), title: label(row), view: { ...view, events: view.events.map((ev) => ({ at: ev.at, kind: ev.kind, ...Timeline.describe(ev) })) } };
   });
   ipcMain.handle('timeline:preview', async (e, key, includePrompts) => {
     if (!pageAllowed(e)) return null;
-    const out = await exportOf(key, includePrompts);
-    return out ? out.summary : null;
+    const row = choose(key), valid = guard(e, row);
+    const out = await exportOf(row, includePrompts);
+    return valid() && out && !isExcluded(out.cwd) ? out.summary : null;
   });
   ipcMain.handle('timeline:export', async (e, key, includePrompts) => {
     if (!pageAllowed(e)) return null;
-    const out = await exportOf(key, includePrompts);
-    if (!out) return { ok: false, error: 'Nothing to export.' };
+    const row = choose(key), valid = guard(e, row);
+    const out = await exportOf(row, includePrompts);
+    if (!out || !valid() || isExcluded(out.cwd)) return { ok: false, error: 'The selected session changed. Review its replay again.' };
     let dir = home; try { dir = downloads() || home; } catch { dir = home; }
     const pick = await dialog.showSaveDialog(BrowserWindow.fromWebContents(e.sender) ?? undefined, { title: 'Save session replay', buttonLabel: 'Save replay', defaultPath: path.join(dir, Replay.fileName(out.model)), filters: [{ name: 'Web page', extensions: ['html'] }] });
     if (pick.canceled || !pick.filePath) return { ok: false, cancelled: true };
+    if (!valid() || isExcluded(out.cwd)) return { ok: false, error: 'The selected session changed. Review its replay again.' };
     try { fs.writeFileSync(pick.filePath, out.html, { mode: 0o600 }); } catch (err) { log('[timeline] export failed', err && err.code); return { ok: false, error: 'Could not save the file.' }; }
     return { ok: true, name: path.basename(pick.filePath) };
   });

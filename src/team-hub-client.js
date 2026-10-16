@@ -303,6 +303,44 @@ function createTeamHubClient({ baseUrl, token, fetch = globalThis.fetch, viewer:
     catch { return uncertain(); }
   }
 
+  async function proposals(viewerArg, teamId, ref, operation, input = null, fresh = () => true) {
+    const who = viewerArg?.id, current = () => sameViewer(viewerArg) && viewerArg?.id === who && fresh() === true;
+    if (!['list','request','send','cancel'].includes(operation) || !current()) return failed('forbidden', REASONS.forbidden);
+    const target = await sharedTarget(viewerArg, teamId, ref);
+    if (target.error) return target.error;
+    if (!current()) return failed('forbidden', REASONS.forbidden);
+    const row = target.row;
+    if (row.scope !== 'interact') return failed('forbidden', 'Owner-reviewed requests require an existing Watch and send share.');
+    let endpoint = `${base}/api/interaction/v1/shared/${encodeURIComponent(ref)}/proposals`, method = operation === 'list' ? 'GET' : operation === 'cancel' ? 'DELETE' : 'POST', body;
+    if (operation === 'request') {
+      if (!object(input) || !UUID.test(input.id) || !UUID.test(input.decision) || !Number.isSafeInteger(input.version) || !Number.isSafeInteger(input.generation) || typeof input.title !== 'string' || typeof input.text !== 'string') return failed('invalid', REASONS.invalid);
+      body = { id: input.id, decision: input.decision, version: input.version, generation: input.generation, title: input.title, text: input.text };
+    } else if (operation === 'send' || operation === 'cancel') {
+      if (!object(input) || !UUID.test(input.id) || !Number.isSafeInteger(input.version) || typeof input.digest !== 'string') return failed('invalid', REASONS.invalid);
+      endpoint += `/${encodeURIComponent(input.id)}${operation === 'send' ? '/send' : ''}`;
+      if (operation === 'send') {
+        const before = await readShared(row, viewerArg);
+        if (!current()) return failed('forbidden', REASONS.forbidden);
+        if (!before.ok || before.state.generation !== input.generation || before.state.status !== 'ready' || before.state.activeTurn !== null) return failed('stale', 'The reviewed session is busy, ended or changed.');
+        body = { version: input.version, digest: input.digest, request_id: crypto.randomUUID() };
+      }
+    }
+    try {
+      if (!current()) return failed('forbidden', REASONS.forbidden);
+      const r = await request(endpoint, { method, ...(body ? { body } : {}) }); // privacy-flow: interaction-proposals
+      if (!current()) return operation === 'send' ? uncertain() : failed('stale', CHANGED);
+      if (r.status !== 200 || r.body?.ok !== true) return failed(r.status === 403 ? 'forbidden' : r.status === 409 || r.status === 404 ? 'stale' : 'unavailable', 'The hub did not accept this proposal action. Refresh its current state.');
+      const valid = p => object(p) && UUID.test(p.id) && p.share === row.ref && object(p.requester) && p.requester.id === who && typeof p.requester.name === 'string'
+        && UUID.test(p.decision) && Number.isSafeInteger(p.version) && p.version > 0 && Number.isSafeInteger(p.generation) && typeof p.digest === 'string' && /^[a-f0-9]{64}$/.test(p.digest)
+        && typeof p.title === 'string' && p.title.length <= 120 && typeof p.text === 'string' && p.text.length <= 4000 && typeof p.status === 'string' && p.action === 'send' && p.budget === 1;
+      const clean = p => ({ id:p.id, decision:p.decision, version:p.version, generation:p.generation, title:p.title, text:p.text, digest:p.digest, status:p.status,
+        acknowledgedAt: typeof p.acknowledgedAt === 'string' ? p.acknowledgedAt : null, expiresAt: typeof p.expiresAt === 'string' ? p.expiresAt : null,
+        receipt: object(p.receipt) && typeof p.receipt.id === 'string' ? { id:p.receipt.id.slice(0,100),state:String(p.receipt.state).slice(0,80) } : null });
+      if (operation === 'list') return Array.isArray(r.body.proposals) && r.body.proposals.length <= 64 && r.body.proposals.every(valid) ? { ok:true, proposals:r.body.proposals.map(clean) } : failed('unavailable', REASONS.unavailable);
+      return valid(r.body.proposal) ? { ok:true, proposal:clean(r.body.proposal) } : failed('unavailable', REASONS.unavailable);
+    } catch { return operation === 'send' ? uncertain() : failed('unavailable', REASONS.unavailable); }
+  }
+
   async function accountTeams() {
     const r = await request(`${base}/api/account`, { method: 'GET' });
     if (r.status !== 200 || !object(r.body) || r.body.user?.id !== viewer()?.id || !Array.isArray(r.body.teams)) return [];
@@ -631,7 +669,7 @@ function createTeamHubClient({ baseUrl, token, fetch = globalThis.fetch, viewer:
     };
   }
 
-  return Object.defineProperty({ teams, sessions, inspect, act, send, onChange, viewer }, 'origin', { value: new URL(base).origin, enumerable: true });
+  return Object.defineProperty({ teams, sessions, inspect, act, send, proposals, onChange, viewer }, 'origin', { value: new URL(base).origin, enumerable: true });
 }
 
 module.exports = { createTeamHubClient, parseBase };

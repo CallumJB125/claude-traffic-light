@@ -41,6 +41,7 @@
     box.append(toggle, status, panel);
     card.append(box);
     let teams = [], mine = [], busy = false, note = '';
+    const proposals = new Map();
 
     function render() {
       toggle.textContent = mine.length ? 'Sharing…' : 'Share…';
@@ -53,7 +54,21 @@
           const li = el('li');
           li.append(el('strong', s.team.name), el('span', ` · ${SCOPE[s.scope]} · ${s.expiresAt === null ? 'until you stop it' : until(s.expiresAt)}`), el('p', who(s), 'reason'));
           const stop = button('Stop sharing', () => void stopShare(s.id)); stop.disabled = busy;
-          li.append(stop); list.append(li);
+          li.append(stop);
+          if (s.scope === 'interact' && typeof ix.proposalList === 'function') {
+            const check = button('Review team proposals', () => void proposalAction(s.id)); check.disabled = busy; li.append(check);
+            for (const p of proposals.get(s.id) ?? []) {
+              const proposal = el('article', '', 'coordinator-result');
+              proposal.append(el('strong', p.title), el('p', `Requested by ${p.requester.name} · decision version ${p.version} · ${p.status}`, 'reason'), el('p', p.text, 'delivery-text'));
+              if (p.acknowledgedAt) proposal.append(el('p', `Owner acknowledged version ${p.version}. One send only${p.expiresAt ? `; ${until(Date.parse(p.expiresAt))}` : ''}.`, 'reason'));
+              if (p.status === 'pending') { const approve = button('Approve this message for 10 minutes', () => void proposalAction(s.id, 'approve', p)); approve.disabled = busy; proposal.append(approve); }
+              if (['pending','approved'].includes(p.status)) { const revoke = button(p.status === 'pending' ? 'Reject proposal' : 'Revoke grant', () => void proposalAction(s.id, 'revoke', p)); revoke.disabled = busy; proposal.append(revoke); }
+              if (p.receipt) proposal.append(el('p', `Provider receipt: ${p.receipt.state}`, 'reason'));
+              li.append(proposal);
+            }
+            li.append(el('p', 'Approval covers this named requester, exact message, session generation and decision version. Budget: one new turn; provider token or cost limits are not enforced. Broad Watch and send access remains. Proposals are stored on your team hub for up to seven days.', 'reason'));
+          }
+          list.append(li);
         }
         parts.push(list);
       }
@@ -66,6 +81,23 @@
         parts.push(form, el('p', 'Members of that team see this session\'s messages and the provider\'s replies from the moment you share it (not earlier ones), through your team hub, and whether this computer is online. "Watch and send" also lets them send, steer and interrupt (team viewers can only watch); their messages show who sent them. What they send runs on your provider account and uses your quota (the provider sign-in or local model endpoint this session runs on), and you are responsible for it. Only you can close it.', 'reason'));
       } else parts.push(el('p', 'You are not in a team you can share with.', 'reason'));
       panel.replaceChildren(...parts);
+    }
+    async function proposalAction(share, action = 'list', p = null) {
+      if (busy) return;
+      busy = true; render(); let r, actionStatus;
+      try {
+        if (action === 'approve') r = await ix.proposalApprove({ share, id: p.id, version: p.version, digest: p.digest, expiresInS: 600 });
+        else if (action === 'revoke') r = await ix.proposalRevoke({ share, id: p.id });
+        else r = { ok: true };
+        actionStatus = r?.proposal?.status;
+        if (r?.ok === true) r = await ix.proposalList({ share });
+      } catch { r = null; }
+      busy = false;
+      if (r?.ok && Array.isArray(r.proposals)) {
+        proposals.set(share, r.proposals.filter(x => obj(x) && str(x.id,100) && str(x.title,120) && str(x.text,4000) && obj(x.requester) && str(x.requester.name,200) && Number.isSafeInteger(x.version) && str(x.digest,64) && str(x.status,80)).slice(0,64));
+        note = action === 'approve' ? 'Decision acknowledged. The requester can send this exact message once before expiry.' : action === 'revoke' ? actionStatus === 'revoked' ? 'Grant revoked. A send already started cannot be undone.' : 'This request already started or was retired. Check its current receipt; it cannot be undone here.' : 'Review the requester and exact message before approving.';
+      } else note = str(r?.error,600) ? r.error : 'Proposals are unavailable on this hub.';
+      render();
     }
     async function refresh() {
       let r; try { r = await ix.shareList(); } catch { r = null; }

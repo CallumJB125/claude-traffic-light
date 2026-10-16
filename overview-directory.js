@@ -170,6 +170,11 @@
     const box = el('section', '', 'composer followup-composer'), label = el('label', `Follow-up for ${v.title.textContent}`), input = el('textarea');
     input.id = `followup-${v.entry.id}`; input.maxLength = 4000; label.htmlFor = input.id;
     const note = el('p', 'Prepare one new turn for this original session. Review before queuing; nothing is sent while drafting.', 'reason'); note.setAttribute('role', 'status');
+    const whenLabel = el('label', 'When to send'), when = el('select'), timeLabel = el('label', 'Earliest send time (your local time)'), time = el('input');
+    when.id = `followup-when-${v.entry.id}`; whenLabel.htmlFor = when.id;
+    for (const [value, title] of [['ready','When the session is ready'],['hour','In one hour'],['at','Choose a date and time'],['provider-reset','After a reported usage reset']]) { const option = el('option', title); option.value = value; when.append(option); }
+    time.id = `followup-time-${v.entry.id}`; timeLabel.htmlFor = time.id; time.type = 'datetime-local'; time.hidden = true; timeLabel.hidden = true;
+    const timingNote = el('p', 'One attempt within seven days. Keep Plexiform open and Overview focused on this account and board. Scheduled messages wait in queue order; closing the app does not start a background run. Usage reset requires a report from this exact session.', 'reason');
     const review = el('div', '', 'followup-review'); review.hidden = true;
     const exactTarget = el('p', '', 'team-target'), exactText = el('p', '', 'delivery-text'), terms = el('p', '', 'reason');
     const d = { box, input, note, review, selection: null, busy: false, requestId: null, revision: 0 };
@@ -177,13 +182,19 @@
       const text = input.value.trim();
       if (d.busy || v.gone) return;
       if (!text || text.length > 4000 || text.includes('\0') || new Blob([text]).size > 8192) { set(note, 'Write a message of at most 4,000 characters and 8 KB.'); return; }
+      const chosenDate = new Date(time.value), pad = n => String(n).padStart(2, '0');
+      const localDate = `${chosenDate.getFullYear()}-${pad(chosenDate.getMonth()+1)}-${pad(chosenDate.getDate())}T${pad(chosenDate.getHours())}:${pad(chosenDate.getMinutes())}`;
+      if (when.value === 'at' && localDate !== time.value) { set(note, 'Choose a valid local date and time. This time may be skipped by a clock change.'); time.focus(); return; }
+      const timing = when.value === 'hour' ? {kind:'next',schedule:{kind:'hours',every:1}} : when.value === 'at' ? {kind:'at',atMs:chosenDate.getTime()} : {kind:when.value};
+      if (timing.kind === 'at' && (!Number.isSafeInteger(timing.atMs) || timing.atMs <= Date.now() || timing.atMs >= Date.now() + 7 * 86400000)) { set(note, 'Choose a future date and time within seven days.'); time.focus(); return; }
       d.busy = true; prepare.disabled = true;
       const revision = d.revision;
-      let r; try { r = await api.followups.review({ id: v.entry.id }); } catch { r = null; }
+      let r; try { r = await api.followups.review({ id: v.entry.id, text, when: timing }); } catch { r = null; }
       d.busy = false; prepare.disabled = false;
       if (v.followupDraft !== d || v.gone || revision !== d.revision) return;
       if (!r?.ok || !uuid(r.selection) || !str(r.label, 240) || !str(r.notice, 1000)) { set(note, r?.error || 'This session cannot accept a queued new turn.'); return; }
       d.selection = r.selection; d.text = text; d.requestId = crypto.randomUUID();
+      set(confirm, timing.kind === 'ready' ? 'Queue next turn' : 'Schedule one follow-up');
       set(exactTarget, r.label); set(exactText, text); set(terms, r.notice); review.hidden = false; confirm.focus();
     });
     const confirm = button('Queue next turn', async () => {
@@ -198,8 +209,10 @@
     const back = button('Back to draft', () => { d.selection = null; review.hidden = true; input.focus(); });
     const close = button('Close draft', () => { if (d.busy) return; box.remove(); v.followupDraft = null; v.followup.focus(); });
     const actions = el('div', '', 'actions'), finalActions = el('div', '', 'actions'); actions.append(prepare, close); finalActions.append(confirm, back);
-    review.append(exactTarget, exactText, terms, finalActions); box.append(label, input, note, actions, review);
-    input.addEventListener('input', () => { d.revision++; d.selection = null; review.hidden = true; });
+    review.append(exactTarget, exactText, terms, finalActions); box.append(label, input, whenLabel, when, timeLabel, time, timingNote, note, actions, review);
+    const retire = () => { d.revision++; d.selection = null; review.hidden = true; };
+    input.addEventListener('input', retire); time.addEventListener('input', retire);
+    when.addEventListener('change', () => { retire(); time.hidden = when.value !== 'at'; timeLabel.hidden = time.hidden; });
     v.followupDraft = d; v.li.insertBefore(box, v.why); input.focus();
   }
   let followupPanel = null, followupRead = 0, displayedFollowupScope;
@@ -225,7 +238,8 @@
       set(row.title, item.label); set(row.state, item.status); set(row.text, item.text);
       const receipt = obj(item.receipt) && str(item.receipt.id, 100) && str(item.receipt.state, 80) ? ` Provider receipt ID: ${item.receipt.id} (${item.receipt.state}).` : '';
       const expiry = ['queued', 'blocked', 'refused'].includes(item.status) && Number.isSafeInteger(item.expiresAt) ? ` Unsent text expires ${new Date(item.expiresAt).toLocaleString()}.` : '';
-      set(row.why, item.reason + receipt + expiry);
+      const timing = obj(item.schedule) && str(item.schedule.label, 240) && item.schedule.kind !== 'ready' ? `${item.schedule.label}. ` : '';
+      set(row.why, timing + item.reason + receipt + expiry);
       row.cancel.hidden = !['queued', 'blocked', 'refused'].includes(item.status); row.cancel.disabled = row.busy; row.discard.disabled = row.busy || item.status === 'sending';
       row.discard.title = 'Removes only this saved copy. It cannot undo work already sent to a provider.';
     }

@@ -63,6 +63,14 @@ const MATRIX = {
   'DELETE /api/interaction/v1/shares/:share_id': { kind: 'cross', path: f => `/api/interaction/v1/shares/${f.B.share}` },
   'DELETE /api/teams/:team_id/interaction-shares/:share_id': { kind: 'cross', path: f => `/api/teams/${f.B.team}/interaction-shares/${f.B.share}` },
   'GET /api/interaction/v1/shared': { kind: 'self' },
+  'GET /api/interaction/v1/shared/:share_id/proposals': { kind: 'cross', path:f=>`/api/interaction/v1/shared/${f.B.share}/proposals` },
+  'POST /api/interaction/v1/shared/:share_id/proposals': { kind: 'cross', bare:true, path:f=>`/api/interaction/v1/shared/${f.B.share}/proposals`, body:()=>({id:randomUUID(),decision:randomUUID(),version:1,generation:1,title:'Foreign request',text:'Do not execute'}) },
+  'DELETE /api/interaction/v1/shared/:share_id/proposals/:proposal_id': { kind: 'cross', path:f=>`/api/interaction/v1/shared/${f.B.share}/proposals/${f.B.proposal}` },
+  'POST /api/interaction/v1/shared/:share_id/proposals/:proposal_id/send': { kind: 'cross', path:f=>`/api/interaction/v1/shared/${f.B.share}/proposals/${f.B.proposal}/send`, body:()=>({version:1,digest:'a'.repeat(64)}) },
+  'GET /api/interaction/v1/shares/:share_id/proposals': { kind: 'cross', status:403, path:f=>`/api/interaction/v1/shares/${f.B.share}/proposals` },
+  'POST /api/interaction/v1/shares/:share_id/proposals/:proposal_id/approve': { kind: 'cross', status:403, path:f=>`/api/interaction/v1/shares/${f.B.share}/proposals/${f.B.proposal}/approve` },
+  'DELETE /api/interaction/v1/shares/:share_id/proposals/:proposal_id': { kind: 'cross', status:403, path:f=>`/api/interaction/v1/shares/${f.B.share}/proposals/${f.B.proposal}` },
+
   // Phone approvals (W2-B): a foreign computer is "not available"; ping and push are the caller's own.
   'POST /api/approvals/v1/hosts/:host_id/call': { kind: 'cross', path: f => `/api/approvals/v1/hosts/${f.users.ub.device_id}/call`, body: { op: 'pair.poll', args: { pid: 'x' } } },
   'POST /api/approvals/v1/ping': { kind: 'self' },
@@ -403,6 +411,9 @@ async function sweep(fx, caller) {
   // A live share of a B member's session with team B.
   fx.B.share = randomUUID(); fx.B.shareSession = randomUUID();
   fx.db.insert('interaction_shares', { id: fx.B.share, owner_user_id: fx.users.ub.id, host_device_id: fx.users.ub.device_id, session_id: fx.B.shareSession, org_id: fx.B.team, scope: 'interact', created_at: fx.h.hub.iso() });
+  fx.B.proposal=randomUUID();
+  fx.db.insert('interaction_proposals',{id:fx.B.proposal,share_id:fx.B.share,requester_user_id:fx.users.s.id,decision_id:randomUUID(),decision_version:1,generation:1,title:MARK,message:MARK,digest:'a'.repeat(64),action:'send',action_budget:1,status:'pending',created_at:fx.h.hub.iso(),retain_until:new Date(fx.h.hub.wallMs()+86400000).toISOString()});
+  const proposalsBefore=JSON.stringify(fx.db.all('SELECT * FROM interaction_proposals ORDER BY id'));
   // B's messaging: a live session target of B's owner shared with B, a message and a handoff to S (both in B).
   fx.B.msgTarget = randomUUID();
   fx.db.run("UPDATE user_devices SET interaction_role = 'host' WHERE id = ?", fx.users.ub.device_id);
@@ -437,6 +448,7 @@ async function sweep(fx, caller) {
   }
   assert.deepEqual(leaks, []);
   assert.ok(calls >= 30, `only ${calls} cross-team calls made`);
+  assert.equal(JSON.stringify(fx.db.all('SELECT * FROM interaction_proposals ORDER BY id')),proposalsBefore,'foreign proposals are unchanged');
   assert.equal(fx.snapshotB(), before, "team B's rows changed");
   assert.equal(JSON.stringify([fx.db.all('SELECT * FROM msg_messages ORDER BY seq'), fx.db.all('SELECT * FROM msg_targets ORDER BY id')]), messagesBefore, 'no message or target was added or changed');
   assert.equal(JSON.stringify(fx.db.all('SELECT * FROM setup_versions WHERE profile_id=?',fx.B.setupProfile)),setupsBefore,'foreign sealed setups are unchanged');

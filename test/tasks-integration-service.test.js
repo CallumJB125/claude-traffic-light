@@ -130,3 +130,64 @@ local('lost post-dispatch reply reports uncertainty and cannot repeat an already
   assert.equal(f.h.task(f.id).state, 'done'); assert.equal(fs.existsSync(path.join(f.h.repo.checkout, 'integrated.js')), true);
   assert.equal((await f.apply(r.integration.review)).ok, false); assert.equal(f.dialogs.length, 1);
 });
+
+async function peerTask(f, paths = []) {
+  f.h.setScenario({ wait: true });
+  const { id } = await f.h.client.createTask({ text: 'Parallel task to inspect', cwd: f.h.repo.checkout, ai: 'codex' });
+  await waitFor(() => f.h.task(id)?.state === 'running');
+  await waitFor(() => f.h.eng.engine.runs.get(id)?.toolInFlight);
+  const task = f.h.task(id);
+  // Controlled provider observation; the real temporary peer worktree holds
+  // this independent writer's data. No real provider or teammate is contacted.
+  for (const p of paths) { fs.mkdirSync(path.dirname(path.join(task.worktree, p)), { recursive: true }); fs.writeFileSync(path.join(task.worktree, p), 'peer work must survive\n'); }
+  task.touched = [...paths];
+  return task;
+}
+local('production renderer names overlapping local task claims and can open the exact task', async t => {
+  const f = await setup(t, { renderer: true }), peer = await peerTask(f, ['integrated.js']);
+  const claims = await f.h.client.getClaims(f.h.repo.checkout); assert.ok(claims.claims.some(c => c.taskId === peer.id));
+  f.button('Review integration').click(); await waitFor(() => f.dom.window.document.querySelector('.integration-review'));
+  const box = f.dom.window.document.querySelector('.integration-review');
+  assert.match(box.textContent, /Other local tasks may still change/); assert.match(box.textContent, /Overlapping paths: integrated.js/);
+  assert.equal(f.button('Integrate reviewed changes…'), undefined); assert.equal(f.dialogs.length, 0);
+  f.button('Inspect task').click(); await waitFor(() => f.dom.window.document.body.textContent.includes('Parallel task to inspect'));
+  assert.equal(fs.readFileSync(path.join(peer.worktree, 'integrated.js'), 'utf8'), 'peer work must survive\n');
+  assert.equal(fs.existsSync(path.join(f.h.repo.checkout, 'integrated.js')), false);
+});
+local('native confirmation spanning a saved task decision requires a new exact review', async t => {
+  let f; f = await setup(t, { confirm: async () => {
+    const packet = f.h.task(f.id).checkpoint;
+    await f.h.client.saveCheckpoint(f.id, packet.version, { brief: packet.brief, decisions: ['Use revised scope before integration'], progress: packet.progress, nextAction: packet.nextAction, artifacts: packet.artifacts, reportedChecks: packet.reportedChecks });
+    return true;
+  } });
+  const r = await f.preview(), version = r.integration.coordination.decisionVersion;
+  const applied = await f.apply(r.integration.review); assert.equal(applied.ok, false); assert.equal(applied.code, 'CONFLICT');
+  assert.equal(f.h.task(f.id).checkpoint.version, version + 1); assert.equal(fs.existsSync(path.join(f.h.repo.checkout, 'integrated.js')), false);
+  const renewed = await f.preview(); assert.equal(renewed.integration.coordination.decisionVersion, version + 1); assert.equal(renewed.integration.canApply, true);
+});
+local('a peer starting during the native confirmation retires review and exposes its unknown paths', async t => {
+  let f, peer; f = await setup(t, { confirm: async () => { peer = await peerTask(f); return true; } });
+  const r = await f.preview(), applied = await f.apply(r.integration.review);
+  assert.equal(applied.ok, false); assert.equal(applied.code, 'CONFLICT'); assert.equal(fs.existsSync(path.join(f.h.repo.checkout, 'integrated.js')), false);
+  const blocked = await f.preview(); assert.equal(blocked.integration.status, 'ownership'); assert.equal(blocked.integration.coordination.conflicts[0].taskId, peer.id);
+  assert.equal(blocked.integration.coordination.conflicts[0].reason, 'paths-unconfirmed');
+});
+for (const state of ['handed_over', 'orphaned', 'unresponsive', 'failed']) local(`unconfirmed ${state} writer retains its claim until resolved`, async t => {
+  const f = await setup(t), peer = await peerTask(f, ['integrated.js']);
+  peer.state = state; peer.lastGreen = false; if (state === 'failed') peer.windowsStopUnconfirmed = true;
+  const r = await f.preview(); assert.equal(r.integration.status, 'ownership'); assert.equal(r.integration.canApply, false);
+  assert.ok((await f.h.client.getClaims(f.h.repo.checkout)).claims.some(c => c.taskId === peer.id));
+  assert.equal(fs.readFileSync(path.join(peer.worktree, 'integrated.js'), 'utf8'), 'peer work must survive\n');
+});
+local('a peer that starts and finishes during native confirmation still retires the old ownership review', async t => {
+  let f; f = await setup(t, { confirm: async () => {
+    f.h.setScenario({});
+    const { id } = await f.h.client.createTask({ text: 'Short independent peer', cwd: f.h.repo.checkout, ai: 'codex' });
+    await waitFor(() => f.h.task(id)?.state === 'in_review');
+    return true;
+  } });
+  const r = await f.preview(), applied = await f.apply(r.integration.review);
+  assert.equal(applied.ok, false); assert.equal(applied.code, 'CONFLICT');
+  assert.equal(fs.existsSync(path.join(f.h.repo.checkout, 'integrated.js')), false);
+  const renewed = await f.preview(); assert.equal(renewed.integration.canApply, true);
+});

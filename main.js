@@ -2057,7 +2057,7 @@ function getTasks() {
         message: `${info.label}?`,
         detail: [`Task: ${info.title}`, info.where ? `Runs in: ${info.where}` : '', info.detail].filter(Boolean).join('\n'),
       });
-      const r = info.action === 'merge' ? await buddyWin?.tasksConfirm?.(show) : await show(parent);
+      const r = ['merge', 'switchAi', 'openPr'].includes(info.action) ? await buddyWin?.tasksConfirm?.(show) : await show(parent);
       return r?.response === 1;
     },
     seen: {

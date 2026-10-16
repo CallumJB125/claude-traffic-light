@@ -21,6 +21,7 @@ const CHANNELS = Object.freeze({
   capabilities: 'interaction:capabilities', list: 'interaction:list', state: 'interaction:state',
   launch: 'interaction:launch', discover: 'interaction:discover', attach: 'interaction:attach', send: 'interaction:send', interrupt: 'interaction:interrupt', close: 'interaction:close',
   event: 'interaction:event', localModels: 'interaction:local-models', fanout: 'interaction:fanout',
+  proposalList: 'interaction:proposal-list', proposalApprove: 'interaction:proposal-approve', proposalRevoke: 'interaction:proposal-revoke',
   shareList: 'interaction:share-list', shareCreate: 'interaction:share-create', shareStop: 'interaction:share-stop',
   channelSetup: 'interaction:channel-setup', openAiTools: 'interaction:open-aitools',
 });
@@ -209,6 +210,7 @@ function createInteractionMain({ context, readContext = context, adapters: given
       if (!boardCurrent(r.board)) return { ok: false, error: BOARD_STALE };
       if (s.capabilities.newTurn !== true) return { ok: false, terminal: true, error: 'This provider does not support a new-turn follow-up.' };
       return { ok: true, ready: s.status === 'ready' && s.activeTurn === null, current,
+        reset: () => current() ? hub.resetEvidence(r.session, r.actor, target.generation) : null,
         send: (text, _id, keep) => hub.send({ session: r.session, generation: target.generation, board: r.board, text }, r.actor, { fresh: () => current() && keep() }) };
     },
     // Match native provider session identity, never a folder/project label.
@@ -257,6 +259,21 @@ function createInteractionMain({ context, readContext = context, adapters: given
       ipc.handle(CHANNELS.localModels, async (e) => ((await actorOf(e, false)) && localModels ? localModels.refresh() : null));
       ipc.handle(CHANNELS.state, async (e, ...args) => { const a = await actorOf(e, false); return a ? hub.state(one(args), a) : null; });
       ipc.handle(CHANNELS.shareList, async (e) => { const a = await actorOf(e, false); return a ? sharing[CHANNELS.shareList](null, a) : null; });
+      for (const [name, method] of [['proposalList', 'proposalList'], ['proposalApprove', 'proposalApprove'], ['proposalRevoke', 'proposalRevoke']]) {
+        ipc.handle(CHANNELS[name], async (e, ...args) => {
+          const effect = name !== 'proposalList', a = await actorOf(e, effect), req = one(args), host = shares();
+          if (!a || !object(req) || typeof req.share !== 'string' || !host || typeof host[method] !== 'function') return denied;
+          const sh = host.shared().find(s => s.id === req.share);
+          if (!sh || !owns(sh.session, a)) return denied;
+          const c = effect ? context() : readContext(), board = currentBoard(), account = accountScope();
+          if (!c) return denied;
+          const fresh = () => { const x = effect ? context() : readContext(); return !!x && (!effect || x.foreground) && x.contents === c.contents && x.document === c.document && x.generation === c.generation
+            && currentBoard() === board && accountScope() === account && shares() === host && owns(sh.session, a); };
+          if (!fresh()) return denied;
+          const out = await host[method](name === 'proposalList' ? req.share : req, fresh);
+          return fresh() ? out : denied;
+        });
+      }
       for (const ch of [CHANNELS.shareCreate, CHANNELS.shareStop]) {
         ipc.handle(ch, async (e, ...args) => { const a = await actorOf(e, true); return a ? sharing[ch](one(args), a) : denied; });
       }

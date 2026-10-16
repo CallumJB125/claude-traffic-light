@@ -38,7 +38,17 @@ contextBridge.exposeInMainWorld('overviewApi', {
     ? ipcRenderer.invoke('overview:team-inspect', { id: request.id }) : denied(),
   followups: {
     list: () => ipcRenderer.invoke('overview:followup-list'),
-    review: request => closed(request, ['id']) && typeof request.id === 'string' && /^[0-9a-f]{40}$/.test(request.id) ? ipcRenderer.invoke('overview:followup-review', { id: request.id }) : denied(),
+    review: request => {
+      if (!(closed(request, ['id','text']) || closed(request, ['id','text','when'])) || typeof request.id !== 'string' || !/^[0-9a-f]{40}$/.test(request.id)) return denied();
+      const text = messageText(request.text);
+      if (text === null) return denied();
+      if (request.when === undefined) return ipcRenderer.invoke('overview:followup-review', { id: request.id, text });
+      const w = request.when;
+      if (!(closed(w, ['kind']) && ['ready', 'provider-reset'].includes(w.kind)
+        || closed(w, ['kind', 'atMs']) && w.kind === 'at' && Number.isSafeInteger(w.atMs) && w.atMs >= 0
+        || closed(w, ['kind', 'schedule']) && w.kind === 'next' && closed(w.schedule, ['kind', 'every']) && w.schedule.kind === 'hours' && [1,2,3,4,6,8,12].includes(w.schedule.every))) return denied();
+      return ipcRenderer.invoke('overview:followup-review', { id: request.id, text, when: w });
+    },
     enqueue: request => {
       if (!closed(request, ['selection', 'requestId', 'text']) || !uuid(request.selection) || !uuid(request.requestId)) return denied();
       const text = messageText(request.text);
@@ -48,6 +58,12 @@ contextBridge.exposeInMainWorld('overviewApi', {
     discard: request => closed(request, ['id']) && uuid(request.id) ? ipcRenderer.invoke('overview:followup-discard', { id: request.id }) : denied(),
   },
   coordinator: {
+    requestOwner: request => closed(request, ['proposal']) && uuid(request.proposal) ? ipcRenderer.invoke('overview:coordinator-request-owner', { ...request }) : denied(),
+    remoteList: request => closed(request, ['id']) && typeof request.id === 'string' && /^[0-9a-f]{40}$/.test(request.id) ? ipcRenderer.invoke('overview:coordinator-remote-list', { ...request }) : denied(),
+    remoteSend: request => closed(request, ['selection']) && uuid(request.selection) ? ipcRenderer.invoke('overview:coordinator-remote-send', { ...request }) : denied(),
+    remoteReplace: request => closed(request, ['selection','text']) && uuid(request.selection) && messageText(request.text)!==null ? ipcRenderer.invoke('overview:coordinator-remote-replace', {selection:request.selection,text:messageText(request.text)}) : denied(),
+    remoteCancel: request => closed(request, ['selection']) && uuid(request.selection) ? ipcRenderer.invoke('overview:coordinator-remote-cancel', { ...request }) : denied(),
+
     inventory: request => closed(request, ['team']) && (request.team === null || typeof request.team === 'string' && /^[0-9a-f]{32}$/.test(request.team)) ? ipcRenderer.invoke('overview:coordinator-inventory', { team: request.team }) : denied(),
     propose: request => {
       if (!closed(request, ['team', 'title', 'assignments']) || typeof request.team !== 'string' || !/^[0-9a-f]{32}$/.test(request.team) || typeof request.title !== 'string' || !request.title.trim() || request.title.length > 120 || !Array.isArray(request.assignments) || !request.assignments.length || request.assignments.length > 6) return denied();
@@ -106,6 +122,9 @@ contextBridge.exposeInMainWorld('overviewApi', {
       return ipcRenderer.invoke('interaction:fanout', { sessions, text });
     },
     // Team sharing of one of this page's sessions (watch, or interact = also send/steer/interrupt).
+    proposalList: request => closed(request, ['share']) && uuid(request.share) ? ipcRenderer.invoke('interaction:proposal-list', { share: request.share }) : denied(),
+    proposalApprove: request => closed(request, ['share','id','version','digest','expiresInS']) && uuid(request.share) && uuid(request.id) && Number.isSafeInteger(request.version) && request.version > 0 && typeof request.digest === 'string' && /^[a-f0-9]{64}$/.test(request.digest) && Number.isSafeInteger(request.expiresInS) && request.expiresInS >= 60 && request.expiresInS <= 3600 ? ipcRenderer.invoke('interaction:proposal-approve', { ...request }) : denied(),
+    proposalRevoke: request => closed(request, ['share','id']) && uuid(request.share) && uuid(request.id) ? ipcRenderer.invoke('interaction:proposal-revoke', { ...request }) : denied(),
     shareList: () => ipcRenderer.invoke('interaction:share-list'),
     shareCreate: request => {
       if (!closed(request, ['session', 'team', 'scope', 'expiresInS']) || !uuid(request.session) || typeof request.team !== 'string' || !request.team || request.team.length > 100

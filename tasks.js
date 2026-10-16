@@ -177,6 +177,9 @@
     for (const a of actionButtons(t)) actions.append(a);
     if (d.confirm) head.append(confirmBar(t));
     if (d.integration && t.state === 'in_review') head.append(integrationReview(d.integration));
+    if (d.providerChange && hasProviderChange(t)) head.append(providerChangeReview(d.providerChange));
+    if (d.prDraft && t.actions.includes('openPr')) head.append(pullRequestDraft());
+    if (d.pullRequest) head.append(pullRequestReview(d.pullRequest));
     const err = el('p', 'err', d.error); err.setAttribute('role', 'alert');
     head.append(err);
     renderBanners(t);
@@ -199,13 +202,14 @@
     }
     if (has('handback')) out.push(go('handback', {}, TV.ACTION_LABEL.handback, 'primary'));
     if (has('merge')) { const review = btn(d.integrating ? 'Checking integration…' : 'Review integration', 'primary', () => runAct('merge', { phase: 'preview' })); review.disabled = !!d.integrating; out.push(review); }
-    if (has('openPr')) out.push(go('openPr', {}, TV.ACTION_LABEL.openPr));
+    if (has('openPr')) { const b=btn('Prepare draft pull request','',()=>{d.prDraft??={title:t.title||'',body:''};d.pullRequest=null;renderHead();});b.disabled=!!d.creatingPr;out.push(b); }
     if (has('retry')) { out.push(go('retry', {}, 'Retry')); out.push(go('retry', { fresh: true }, d.detail.checkpoint || d.detail.handover ? 'Restart from checkpoint' : 'Retry from scratch')); }
-    if (has('switchAi')) for (const id of Object.keys(TV.AI_NAME)) if (id !== t.ai.id) out.push(go('switchAi', { ai: id }, `Continue with ${TV.AI_NAME[id]}`));
+    if (has('switchAi')) for (const id of ['claude', 'codex']) if (id !== t.ai.id) out.push(go('switchAi', { phase: 'preview', ai: id }, `Continue with ${TV.AI_NAME[id]}`));
     if (has('pause')) out.push(go('pause', {}, TV.ACTION_LABEL.pause));
     if (has('takeover')) out.push(go('takeover', {}, TV.ACTION_LABEL.takeover));
     if (has('stop')) out.push(go('stop', {}, TV.ACTION_LABEL.stop, 'danger'));
     if (has('discard')) out.push(go('discard', {}, TV.ACTION_LABEL.discard, 'danger'));
+    if (d.switching) for (const button of out) button.disabled = true;
     return out;
   }
 
@@ -224,28 +228,79 @@
   }
 
   async function runAct(action, payload, confirmed = false) {
-    if (d.integrating) return;
+    if (d.integrating || d.switching || d.creatingPr) return;
     d.error = '';
     d.takeover = null;
     const id = d.id;
     if (action === 'merge') { d.integrating = true; if (payload.phase === 'apply') d.integration = null; renderHead(); }
     else d.integration = null;
+    if (action === 'switchAi') { d.switching = true; if (payload.phase === 'apply') d.providerChange = null; renderHead(); }
+    else d.providerChange = null;
+    if (action === 'openPr') { d.creatingPr=true; renderHead(); }
+    else d.pullRequest=null;
     let r;
     try { r = await api.act({ id, action, payload, confirmed }); }
     catch { r = { ok: false, text: action === 'merge' && payload.phase === 'apply' ? 'Integration receipt unconfirmed. Inspect your branch before reviewing another integration.' : TV.errorText('INTERNAL') }; }
     if (!d || d.id !== id) return r;
     d.integrating = false;
+    d.switching = false;
+    d.creatingPr = false;
     if (r && r.cancelled) d.error = '';
     else if (!r || !r.ok) d.error = r?.text || TV.errorText('INTERNAL');
     else if (r.takeover) d.takeover = r.takeover;
     else if (r.integration) { d.integration = r.integration.status === 'merged' ? null : r.integration; if (r.integration.status === 'merged') d.error = 'Reviewed changes integrated. Nothing was pushed; the task worktree is kept.'; }
+    else if (r.providerChange) { d.providerChange = r.providerChange.status === 'review' ? r.providerChange : null; if (r.providerChange.status === 'queued') d.error = `Reviewed handover queued for ${TV.AI_NAME[r.providerChange.to]}. Watch this task for the new session’s response.`; }
+    else if (r.pullRequest) { d.pullRequest=r.pullRequest;d.prDraft=null; }
     renderHead();
     return r;
+  }
+
+  const hasProviderChange = t => t.actions.includes('switchAi');
+  function pullRequestDraft() {
+    const box=el('section','integration-review pr-draft'),title=el('input'),body=el('textarea');
+    box.append(el('h3',null,'Prepare a GitHub draft'),el('p',null,'Commit and publish this task branch first. Plexiform checks its current GitHub destination and changes, then asks you to confirm the exact draft.'));
+    title.value=d.prDraft.title;title.maxLength=120;title.setAttribute('aria-label','Pull request title');
+    body.value=d.prDraft.body;body.maxLength=10000;body.rows=5;body.setAttribute('aria-label','Pull request description');
+    title.disabled=body.disabled=!!d.creatingPr;
+    title.addEventListener('input',()=>{d.prDraft.title=title.value;});body.addEventListener('input',()=>{d.prDraft.body=body.value;});
+    const review=btn(d.creatingPr?'Checking GitHub…':'Review draft pull request','primary',()=>runAct('openPr',{phase:'preview',title:title.value,body:body.value}));review.disabled=!!d.creatingPr;
+    const cancel=btn('Close draft','',()=>{d.prDraft=null;renderHead();});cancel.disabled=!!d.creatingPr;box.append(title,body,review,cancel);return box;
+  }
+  function pullRequestReview(r) {
+    const box=el('section','integration-review pr-review');box.append(el('h3',null,r.status==='created'?`Pull request #${r.number}`:'GitHub draft review'));
+    if(r.status==='created') {const link=el('a','btn','Open pull request on GitHub');link.href=r.url;link.target='_blank';link.rel='noopener noreferrer';box.append(el('p',null,r.draft?'Draft created.':'Pull request receipt recovered.'),link);if(r.changed)box.append(el('p','err','The remote branches changed. Review the current changes on GitHub before merging.'));return box;}
+    if(r.status==='review') {
+      box.append(el('p',null,`${r.account} · ${r.repo} · ${r.branch} → ${r.base}`),el('p','sub',`Head ${r.head} · Base ${r.baseHead}`),el('h4',null,r.title),el('pre',null,r.body),el('p',null,'Creates a draft only. Nothing is pushed. Later commits to these branches change the pull request.'));
+      const diff=el('details');diff.append(el('summary',null,'Review published changes'),el('pre','diff',r.patch));box.append(diff);
+      const apply=btn('Create reviewed draft…','primary',()=>runAct('openPr',{phase:'apply',review:r.review}));apply.disabled=!!d.creatingPr||Date.now()>=r.expiresAt;box.append(apply);
+    } else {box.append(el('p',null,r.reason));if(r.status==='unconfirmed'){const check=btn('Check saved GitHub receipt','',()=>runAct('openPr',{phase:'receipt'}));check.disabled=!!d.creatingPr;box.append(check);}}
+    const close=btn('Close pull request review','',()=>{d.pullRequest=null;renderHead();});close.disabled=!!d.creatingPr;box.append(close);return box;
+  }
+  function providerChangeReview(review) {
+    const box = el('section', 'integration-review provider-review');
+    box.append(el('h3', null, `${TV.AI_NAME[review.from]} → ${TV.AI_NAME[review.to]}`), el('p', null, `Start a new session in the same worktree on ${review.branch}, using reviewed task context v${review.contextVersion}.`),
+      el('p', null, `Permission: ${review.permissionLevel} · Model: ${TV.AI_NAME[review.to]} default · ${review.budgetUsd === null ? 'No task spend cap' : `$${review.budgetUsd} task cap; $${review.spentUsd} spent`}. ${review.planFirst ? 'The new AI must submit a fresh plan.' : ''}`));
+    const context = el('details'); context.append(el('summary', null, 'Task context to pass to the new AI'), el('pre', null, review.handover)); box.append(context);
+    if (review.messagesText) { const messages = el('details'); messages.append(el('summary', null, 'Queued task messages to pass to the new AI'), el('pre', null, review.messagesText)); box.append(messages); }
+    const changes = el('details'); changes.append(el('summary', null, `${review.files.length} changed file(s) in the worktree`), el('pre', 'diff', review.patch || 'No changes from the task’s starting revision.')); box.append(changes);
+    const apply = btn(`Start reviewed ${TV.AI_NAME[review.to]} session…`, 'primary', () => runAct('switchAi', { phase: 'apply', review: review.review }));
+    apply.disabled = !!d.switching || Date.now() >= review.expiresAt;
+    const cancel = btn('Close handover review', '', () => { d.providerChange = null; renderHead(); }); cancel.disabled = !!d.switching;
+    box.append(apply, cancel); return box;
   }
 
   function integrationReview(review) {
     const box = el('section', 'integration-review');
     box.append(el('h3', null, `Integration into ${review.branch}`), el('p', null, review.reason));
+    if (review.coordination) {
+      box.append(el('p', 'sub', `Task context v${review.coordination.decisionVersion} · ${review.coordination.observedClaims} other local task claim(s) checked. Claims report observed work; they are not filesystem locks.`));
+      for (const conflict of review.coordination.conflicts) {
+        const item = el('p');
+        const reason = conflict.reason === 'overlap' ? `Overlapping paths: ${conflict.paths.join(', ')}` : conflict.reason === 'destination-active' ? 'This task may still edit the destination checkout.' : 'This task’s current editing paths are not fully known.';
+        item.append(el('span', null, `${conflict.title} · ${conflict.state} · ${reason} `), btn('Inspect task', '', () => selectTask(conflict.taskId)));
+        box.append(item);
+      }
+    }
     const list = el('ul');
     for (const file of review.files) list.append(el('li', null, `${file.status} · ${file.path}`));
     box.append(list);
@@ -427,6 +482,7 @@
     }
     if (t.pr) fact('Pull request', `#${t.pr.number} (${t.pr.state})`);
     pane.append(dl);
+    if(t.pr?.url){const link=el('a','btn','Open pull request on GitHub');link.href=t.pr.url;link.target='_blank';link.rel='noopener noreferrer';pane.append(link);}
     pane.append(el('div', 'sect', 'What you asked'), el('pre', 'box', t.text));
     const p = t.checkpoint;
     pane.append(el('div', 'sect', p ? `Checkpoint · version ${p.version}` : 'Checkpoint'));

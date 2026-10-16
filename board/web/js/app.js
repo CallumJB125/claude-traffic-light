@@ -617,7 +617,7 @@ function screen() {
   if (state.auth === 'loading') return loadingScreen();
   if (state.auth === 'no_team') return h('div', { class: 'app-shell' }, noTeamScreen({ invites: state.me?.pending_invites ?? [], onboard: state.onboard }), toasts());
   if (state.auth !== 'ok') {
-    return signinScreen({ status: state.auth, error: state.authError, devLogin: state.authMode === 'dev', accounts: state.authMode === 'accounts', emailOff: state.methods?.email === false, devSecretKnown: !!devSecret(), busy: state.authBusy, email: state.email });
+    return signinScreen({ status: state.auth, error: state.authError, devLogin: state.authMode === 'dev', accounts: state.authMode === 'accounts', emailOff: state.methods?.email === false, web: state.methods?.web, devSecretKnown: !!devSecret(), busy: state.authBusy, email: state.email });
   }
   if (state.conn.status === 'upgrade') return loadingScreen('This page is older than the board. Reload to get the new version.');
   if (!state.board) return h('div', { class: 'app-shell' }, loadingScreen(state.conn.status === 'connecting' && state.conn.retryAt ? 'Can’t reach the board yet. Retrying…' : 'Loading the board…'), toasts());

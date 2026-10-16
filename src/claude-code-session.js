@@ -106,6 +106,17 @@ function createClaudeCodeSession({ bin, env = process.env, spawn = childProcess.
     if (!m || typeof m !== 'object' || Array.isArray(m)) return;
     // A control_response is matched by our own random request id (this child's stdout only); it need not carry a session id.
     if (m.type === 'control_response' && typeof m.response?.request_id === 'string') { settle(c, `ctl:${m.response.request_id}`, m.response.subtype === 'success'); return; }
+    // This dedicated child's structured provider event is the only source
+    // for reset continuation. Never infer a reset from error text or another
+    // CLI's aggregate usage. Some CLI versions omit session_id here.
+    if (m.type === 'rate_limit_event' && m.parent_tool_use_id == null && (m.session_id === undefined || m.session_id === c.target) && c.active) {
+      const info = m.rate_limit_info;
+      if (!info || !['rejected', 'allowed', 'allowed_warning'].includes(info.status)) return;
+      const resetAtMs = Number.isSafeInteger(info.resetsAt) && info.resetsAt > 0 && Number.isSafeInteger(info.resetsAt * 1000) ? info.resetsAt * 1000 : null;
+      const eventId = crypto.createHash('sha256').update(JSON.stringify([c.target, c.active, info.status, resetAtMs])).digest('hex');
+      emit({ kind: 'usage-limit', target: c.target, turnId: c.active, status: info.status, resetAtMs, eventId });
+      return;
+    }
     // Only this child's own session id counts; anything else is foreign.
     if (m.session_id !== c.target) {
       if (m.type === 'system' && m.subtype === 'init') close(c, 'Claude Code started a different session');

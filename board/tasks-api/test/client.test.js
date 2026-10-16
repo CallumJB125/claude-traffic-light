@@ -249,26 +249,46 @@ test('[engine] the same codex requests: not available yet, and only background r
   } finally { await m.close(); }
 });
 
-test('[mock] openPr ends the task with a PR and is idempotent (engine: openPr/merge not in E1, never offered in actions)', async () => {
+test('[mock] openPr requires exact reviewed preview/apply; receipt is explicitly synthetic and idempotent', async () => {
   const m = await startMock({ demo: false });
   try {
     const { id } = await m.client.createTask({ text: 'Rename the helper and update its callers', cwd: '/tmp/repo-x' });
     await waitFor(async () => (await m.client.getTask(id)).state === 'in_review', { label: 'in_review' });
-    const r1 = await m.client.act(id, 'openPr', { draft: true }, { requestId: 'act-00000002' });
-    const r2 = await m.client.act(id, 'openPr', { draft: true }, { requestId: 'act-00000002' });
-    assert.deepEqual(r2.pr, r1.pr, 'replayed, not a second PR');
-    assert.equal(r1.task.outcome, 'pr_opened');
-    assert.match(r1.task.reason, /^PR #\d+ opened$/);
+    for(const payload of [{},{draft:true}])await assert.rejects(m.client.act(id,'openPr',payload),e=>e.code==='VALIDATION');
+    const preview=await m.client.act(id,'openPr',{phase:'preview',title:'Reviewed mock change',body:'Exact synthetic description'}),r=preview.pullRequest;
+    assert.equal(preview.mock,true);assert.equal(r.status,'review');assert.match(r.id,/^[a-f0-9-]{36}$/);assert.match(r.hash,/^[a-f0-9]{64}$/);assert.ok(r.expiresAt>Date.now());
+    assert.match(r.body,/Exact synthetic description/);assert.match(r.body,/Synthetic mock preview/);assert.equal((await m.client.getTask(id)).state,'in_review');
+    const payload={phase:'apply',reviewId:r.id,reviewHash:r.hash,confirm:true};
+    const r1=await m.client.act(id,'openPr',payload,{requestId:'act-00000002'}),r2=await m.client.act(id,'openPr',payload,{requestId:'act-00000002'});
+    assert.deepEqual(r2.pullRequest,r1.pullRequest,'same reviewed request returns its synthetic receipt');
+    assert.equal(r1.mock,true);assert.match(r1.pullRequest.reason,/No real GitHub pull request/);assert.equal(r1.pullRequest.draft,true);
+    assert.equal(r1.task.outcome,'pr_opened');assert.match(r1.task.reason,/^PR #\d+ opened$/);
+    await assert.rejects(m.client.act(id,'openPr',{}, {requestId:'act-00000002'}),e=>e.code==='CONFLICT','same request ID never accepts unreviewed content');
   } finally { await m.close(); }
 });
 
-test('[engine] in review offers reviewed local merge and keeps unavailable PR creation absent', async () => {
+for(const fault of ['missing','hash','expired','task-changed','replaced','unconfirmed'])test(`[mock] openPr ${fault} review cannot create a synthetic receipt`,async()=>{
+ const m=await startMock({demo:false});try{
+  const {id}=await m.client.createTask({text:'Review simulated change',cwd:'/tmp/repo-x'});await waitFor(async()=>(await m.client.getTask(id)).state==='in_review');
+  const request={phase:'preview',title:'Synthetic title',body:'Synthetic body'},r=(await m.client.act(id,'openPr',request)).pullRequest;
+  if(fault==='missing')m.srv.tasks.get(id).pullRequestReview=null;
+  if(fault==='expired')m.srv.tasks.get(id).pullRequestReview.expiresAt=Date.now()-1;
+  if(fault==='task-changed')m.srv.tasks.get(id).branch='different-task-branch';
+  if(fault==='replaced')await m.client.act(id,'openPr',request);
+  const payload={phase:'apply',reviewId:r.id,reviewHash:fault==='hash'?'f'.repeat(64):r.hash,confirm:fault!=='unconfirmed'};
+  await assert.rejects(m.client.act(id,'openPr',payload),e=>['CONFLICT','VALIDATION'].includes(e.code));
+  assert.equal((await m.client.getTask(id)).state,'in_review');assert.equal(m.srv.tasks.get(id).pr,null);
+ }finally{await m.close();}
+});
+
+test('[engine] review actions follow installed capabilities; openPr never accepts an unreviewed payload', async () => {
   const m = await startTarget('engine');
   try {
     const { id } = await m.client.createTask(m.spec);
     await waitFor(async () => (await m.client.getTask(id)).state === 'in_review', { label: 'in_review' });
-    assert.deepEqual((await m.client.getTask(id)).actions, ['merge', 'message', 'discard']);
-    await assert.rejects(m.client.act(id, 'openPr', {}), (e) => e.code === 'ILLEGAL_TRANSITION' && !e.details.allowed.includes('openPr'));
+    const actions=(await m.client.getTask(id)).actions;
+    assert.deepEqual(actions.filter(action=>action!=='openPr'), ['merge', 'message', 'discard']);
+    await assert.rejects(m.client.act(id,'openPr',{}),e=>actions.includes('openPr')?e.code==='VALIDATION':e.code==='ILLEGAL_TRANSITION'&&!e.details.allowed.includes('openPr')); // No valid preview: never contacts real GitHub.
   } finally { await m.close(); }
 });
 

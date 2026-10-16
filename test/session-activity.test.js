@@ -15,6 +15,23 @@ function child(onWrite) {
   c.kill = () => { c.exitCode = 0; c.emit('exit', 0); };
   return c;
 }
+test('Claude reset evidence comes only from an active owned parent structured event', async () => {
+  let c; const events=[];
+  const a=createClaudeCodeSession({bin:'/synthetic/claude',spawn:()=>(c=child()),killGraceMs:10}); a.on(e=>events.push(e));
+  try {
+    const {target}=await a.open({cwd:'/tmp'}), id='10000000-0000-4000-8000-000000000001';
+    const frame=m=>c.stdout.emit('data',`${JSON.stringify(m)}\n`);
+    const rate={type:'rate_limit_event',rate_limit_info:{status:'rejected',resetsAt:2000000000}};
+    frame(rate); assert.equal(events.filter(e=>e.kind==='usage-limit').length,0);
+    const sent=a.send({target,text:'task',clientId:id}); frame({type:'command_lifecycle',session_id:target,command_uuid:id,state:'started'}); await sent;
+    frame({...rate,session_id:'other'}); frame({...rate,parent_tool_use_id:'child'}); frame({...rate,rate_limit_info:{status:'made-up',resetsAt:2000000000}});
+    assert.equal(events.filter(e=>e.kind==='usage-limit').length,0);
+    frame(rate); const first=events.filter(e=>e.kind==='usage-limit').at(-1);
+    assert.equal(first.target,target); assert.equal(first.resetAtMs,2000000000000); assert.match(first.eventId,/^[0-9a-f]{64}$/);
+    frame(rate); assert.equal(events.filter(e=>e.kind==='usage-limit').at(-1).eventId,first.eventId);
+    frame({...rate,rate_limit_info:{status:'allowed'}}); assert.equal(events.filter(e=>e.kind==='usage-limit').at(-1).resetAtMs,null);
+  } finally {a.stop();}
+});
 function memoryRig() {
   const ee = new EventEmitter(); let seq = 0, at = T0;
   const adapter = { label: 'Synthetic', capabilities: { newTurn: true }, alive: () => true, open: async () => ({ target: 'private-target' }), send: async () => ({ turnId: `private-turn-${++seq}`, mode: 'new-turn' }), on: f => { ee.on('event', f); return () => ee.off('event', f); } };

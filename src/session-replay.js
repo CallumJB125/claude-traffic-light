@@ -54,7 +54,10 @@ function prepare(timeline, { includePrompts = false, home = null, user = null, h
     if (e.tool != null) x.tool = clean(e.tool);
     if (Array.isArray(e.files)) x.files = e.files.map((f) => ({ ...pick(f, FILE_KEYS), path: clean(f.path) }));
     if (e.kind === 'command' && e.text != null) x.text = clean(e.text);
-    if ((e.kind === 'prompt' || e.kind === 'turn-end') && includePrompts && e.text != null) x.text = clean(e.text);
+    if (['prompt', 'turn-end', 'delegation', 'delegation-result'].includes(e.kind) && includePrompts && e.text != null) {
+      x.text = clean(e.text);
+      // Target ids are intentionally excluded, just like the parent session id.
+    }
     return x;
   });
   return {
@@ -82,9 +85,9 @@ function summary(model) {
     `Final status: ${model.status}`,
     `${model.provider}, project folder name "${model.project || 'unknown'}"${model.branch ? `, branch ${model.branch}` : ''}`,
   ];
-  if (model.includePrompts) included.push(`What the AI was asked and its replies: ${n('prompts', 'prompt')} (secrets redacted; read them before you share this file)`);
+  if (model.includePrompts) included.push(`What the AI was asked and its replies: ${n('prompts', 'prompt')}, including recorded subagent requests and tool results (secrets redacted; read them before you share this file)`);
   const excluded = [
-    ...(model.includePrompts ? [] : ['What the AI was asked and its replies (tick the box to include them)']),
+    ...(model.includePrompts ? [] : ['What the AI was asked and its replies, including subagent request and result text (tick the box to include them)']),
     'File contents and diffs', 'Full folder paths, your user name, email addresses, IP addresses and this computer\'s name', 'The session id', 'Anything not listed above',
   ];
   return { included, excluded };

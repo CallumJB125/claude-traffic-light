@@ -196,6 +196,16 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
       if (e.target !== r.target) return;
       if (e.kind === 'closed') { r.ended = true; r.activeTurn = null; emit(r); return; }
       if (e.kind === 'activity') { if (recordActivity(r, e)) emit(r); return; }
+      if (e.kind === 'usage-limit') {
+        // Main-only provider evidence, never accepted from a hook/renderer or
+        // another session. A replay cannot renew the observation timestamp.
+        if (r.existing || !r.activeTurn || e.turnId !== r.activeTurn || !['rejected', 'allowed', 'allowed_warning'].includes(e.status) || typeof e.eventId !== 'string' || !/^[0-9a-f]{64}$/.test(e.eventId)) return;
+        if (r.resetEvent === e.eventId) return;
+        r.resetEvent = e.eventId;
+        r.resetEvidence = e.status === 'rejected' && Number.isSafeInteger(e.resetAtMs) && e.resetAtMs > now()
+          ? { id: crypto.createHash('sha256').update(JSON.stringify([r.id, r.generation, e.eventId])).digest('hex'), atMs: e.resetAtMs, observedAt: now() } : null;
+        return;
+      }
       if (['task-report', 'child-report', 'input-needed'].includes(e.kind)) {
         // Only an exact target and its active owned turn may report telemetry.
         if (r.existing || !r.activeTurn || e.turnId !== r.activeTurn) return;
@@ -372,6 +382,9 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
     while (r.deliveries.size > MAX_DELIVERIES) r.deliveries.delete(r.deliveries.keys().next().value);
     r.sending = true;
     let ack, uncertain = false;
+    // A new provider attempt consumes the old limit observation. A later
+    // follow-up must use a new rejection report, never borrow this one.
+    if (!expectedTurnId) r.resetEvidence = null;
     try { ack = await r.adapter.send({ target, text, clientId: d.clientId, expectedTurnId }); } catch (e) { ack = null; uncertain = e?.code === 'DELIVERY_UNCONFIRMED'; } finally { r.sending = false; }
     if (uncertain) { d.state = 'unconfirmed'; emit(r); return refuse('unconfirmed', 'No receipt yet; Claude may still act. Do not resend automatically.'); }
     if (!ack) { d.state = 'refused'; emit(r); return refuse('unavailable', ERRORS.unavailable); }
@@ -441,11 +454,15 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
   // target replacement (provider relaunch), which bumps the generation.
   const targetOf = (id) => sessions.get(id)?.target ?? null;
   const reportTurnOf = (id) => sessions.get(id)?.reportTurn ?? null;
+  const resetEvidence = (id, actor, generation) => {
+    const r = sessions.get(id);
+    return r && !r.ended && !r.existing && r.actor === actor && r.generation === generation && r.adapter.alive() && isCurrent(r.board) && r.resetEvidence ? { ...r.resetEvidence } : null;
+  };
   async function replaceTarget(id) {
     const r = sessions.get(id);
     if (!r || r.ended || r.existing) return false;
     const old = { target: r.target, activeTurn: r.activeTurn };
-    r.generation++; r.activeTurn = null; r.activityTurn = null; r.reportTurn = null; r.turns.clear(); r.deliveries.clear(); r.reporting = reporting(); r.target = null;
+    r.generation++; r.activeTurn = null; r.activityTurn = null; r.reportTurn = null; r.resetEvidence = null; r.resetEvent = null; r.turns.clear(); r.deliveries.clear(); r.reporting = reporting(); r.target = null;
     const compactTurn = compaction?.drop(r);
     if (compactTurn) { try { await r.adapter.interrupt({ target: old.target, turnId: compactTurn }); } catch { /* provider gone */ } }
     if (old.activeTurn) { try { await r.adapter.interrupt({ target: old.target, turnId: old.activeTurn }); } catch { /* provider gone */ } }
@@ -463,7 +480,7 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
   // of a provider that is now off are stopped.
   const compactionSettingsChanged = () => compaction?.settingsChanged([...sessions.values()]) ?? Promise.resolve();
 
-  return { capabilities, launch, discover, attach, send, interrupt, state, list, close, reap, stopAll, targetOf, reportTurnOf, replaceTarget, report, compactionSettingsChanged };
+  return { capabilities, launch, discover, attach, send, interrupt, state, list, close, reap, stopAll, targetOf, reportTurnOf, resetEvidence, replaceTarget, report, compactionSettingsChanged };
 }
 
 module.exports = { createInteractionHub, ERRORS, NOTICES, cleanReportText, REPORT_SOURCES, CHILD_STATES };

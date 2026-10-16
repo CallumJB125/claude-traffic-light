@@ -32,7 +32,7 @@ function fixture() {
   const dom = new JSDOM(read('overview.html'), { runScripts: 'outside-only', pretendToBeVisual: true }), doc = dom.window.document;
   dom.window.overviewApi = api; dom.window.eval(read('overview-coordinator.js'));
   const $ = id => doc.getElementById(id);
-  return { api, ctx, handlers, event, calls, state, dom, doc, $, revoke: () => revoked = true,
+  return { api, ctx, handlers, event, calls, state, dom, doc, $, hub, revoke: () => revoked = true,
     async draft() {
       const d = await api.directory({ view: 'team', team: null }); const option = doc.createElement('option'); option.value = d.team.key; $('team-pick').append(option);
       $('team-section').hidden = false; $('coordinator-panel').open = true; $('coordinator-refresh').click(); await tick();
@@ -73,4 +73,46 @@ test('forged preload authority and foreign-frame calls fail closed', async () =>
     assert.equal((await x.api.coordinator.propose({ team: 'a'.repeat(32), title: 'Forged', assignments: [], actor: 'owner' })).ok, false);
     const result = await x.handlers.get('overview:coordinator-inventory')({ sender: x.event.sender, senderFrame: {} }, { team: null }); assert.equal(result.ok, false); assert.equal(x.calls.length, 0);
   } finally { x.close(); }
+});
+
+test('owner request UI uses real preload/main and exact one-use selection before executing an approved proposal',async()=>{
+ const x=fixture(), records=new Map(), effects=[];
+ x.hub.proposals=async(_viewer,_team,_ref,operation,input,fresh)=>{
+  if(!fresh())return{ok:false,status:'stale'};
+  if(operation==='request'){const p={...input,status:'pending',digest:'a'.repeat(64),acknowledgedAt:null,expiresAt:null,receipt:null};records.set(p.id,p);return{ok:true,proposal:{...p}};}
+  if(operation==='list')return{ok:true,proposals:[...records.values()].map(p=>({...p}))};
+  const p=records.get(input.id);if(!p||p.status!=='approved')return{ok:false,status:'stale'};
+  p.status='sent';p.receipt={id:crypto.randomUUID(),state:'acknowledged'};effects.push(input.text);return{ok:true,proposal:{...p}};
+ };
+ try{
+  await x.draft();x.$('coordinator-request-owner').click();await tick();assert.equal(records.size,1);assert.deepEqual(effects,[]);
+  const p=[...records.values()][0];assert.equal(p.text,'Inspect parser behavior');p.status='approved';p.acknowledgedAt=new Date().toISOString();p.expiresAt=new Date(Date.now()+600000).toISOString();
+  const button=label=>[...x.doc.querySelectorAll('button')].find(b=>b.textContent===label);
+  button('Check owner decisions for this session').click();await tick();assert.match(x.doc.body.textContent,/Owner acknowledged this exact version/);
+  button('Send this approved message once').click();await tick();assert.deepEqual(effects,['Inspect parser behavior']);assert.match(x.doc.body.textContent,/Provider receipt:/);
+  assert.equal(button('Send this approved message once'),undefined);
+ }finally{x.close();}
+});
+
+for(const change of ['background','document','revoke'])test(`owner-approved selection is fenced after ${change}`,async()=>{
+ const x=fixture();let effects=0;
+ const p={id:crypto.randomUUID(),decision:crypto.randomUUID(),version:1,generation:1,title:'Exact request',text:'Only this',digest:'a'.repeat(64),status:'approved',receipt:null};
+ x.hub.proposals=async(_v,_t,_r,op,_p,fresh)=>{if(!fresh())return{ok:false};if(op==='list')return{ok:true,proposals:[p]};effects++;return{ok:true,proposal:p};};
+ try{
+  await x.draft();const id=x.doc.querySelector('[aria-label="Assignment session"]').value;
+  const list=await x.api.coordinator.remoteList({id});assert.equal(list.ok,true);
+  if(change==='background')x.ctx.foreground=false;if(change==='document')x.ctx.document++;if(change==='revoke')x.revoke();
+  assert.equal((await x.api.coordinator.remoteSend({selection:list.proposals[0].selection})).ok,false);assert.equal(effects,0);
+ }finally{x.close();}
+});
+
+test('revising a retained owner decision sends exact replacement text through one-use IPC review',async()=>{
+ const x=fixture(),records=[{id:crypto.randomUUID(),decision:crypto.randomUUID(),version:1,generation:1,title:'Original request',text:'Earlier text',digest:'a'.repeat(64),status:'approved',receipt:null}],requests=[];
+ x.hub.proposals=async(_v,_t,_r,op,input,fresh)=>{if(!fresh())return{ok:false};if(op==='list')return{ok:true,proposals:records.map(p=>({...p}))};assert.equal(op,'request');requests.push(input);records[0].status='superseded';const p={...input,status:'pending',receipt:null};records.push(p);return{ok:true,proposal:p};};
+ try{
+  await x.draft();const button=label=>[...x.doc.querySelectorAll('button')].find(b=>b.textContent===label);
+  button('Check owner decisions for this session').click();await tick();
+  const input=x.doc.querySelector('[aria-label="Revised owner request"]');assert.equal(input.value,'Earlier text');input.value='New exact owner-reviewed text';
+  button('Send revised text for owner review').click();await tick();assert.equal(requests.length,1);assert.equal(requests[0].decision,records[0].decision);assert.equal(requests[0].version,2);assert.equal(requests[0].text,'New exact owner-reviewed text');assert.match(x.doc.body.textContent,/superseded/);assert.deepEqual(x.calls,[]);
+ }finally{x.close();}
 });

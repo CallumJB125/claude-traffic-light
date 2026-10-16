@@ -14,12 +14,14 @@ const DEV_NULL = process.platform === 'win32' ? 'NUL' : '/dev/null';
 const digest = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const invalid = (message = 'The integration review changed. Review the task again.') => Object.assign(new Error(message), { code: 'CONFLICT' });
 const unsafe = () => Object.assign(new Error('This repository needs manual integration.'), { code: 'POLICY_DENIED' });
-const taskBinding = t => [t.id, t.state, t.stateSince, t.sessionId, t.repo?.root, t.worktree, t.branch, t.gitRef, t.gitDir, t.baseSha, t.worktreeCreated, t.workInPlace];
+const taskBinding = t => [t.id, t.state, t.stateSince, t.sessionId, t.repo?.root, t.worktree, t.branch, t.gitRef, t.gitDir, t.baseSha, t.worktreeCreated, t.workInPlace,
+  t.source, digest(t.sourceMeta ?? null), t.ai?.id, t.ai?.model, t.permissionLevel, t.planFirst, t.planApproved, t.cost?.usd, t.cost?.budgetUsd,
+  digest(t.spec ?? null), digest(t.checkpoint ?? null), digest(t.handover ?? null)];
 const permittedPath = p => p && !path.isAbsolute(p) && !/[\\:\u0000-\u001f\u007f]/.test(p)
   && !p.split('/').some(s => !s || s === '.' || s === '..' || /^\.git$/i.test(s));
 const privatePath = p => p.split('/').some(s => /^(?:\.env(?:\..*)?|\.ssh|\.aws|credentials|secrets?|id_[a-z0-9]+)$/i.test(s)) || /\.(?:pem|p12|pfx|key)$/i.test(p);
 
-export function createTaskIntegration({ bin, env = process.env, dataDir, now = Date.now }) {
+export function createTaskIntegration({ bin, env = process.env, dataDir, now = Date.now, readCoordination }) {
   const reviews = new Map(), queues = new Map();
   const baseEnv = { GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: DEV_NULL, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0', LANG: 'C', LC_ALL: 'C' };
   for (const k of ['HOME', 'PATH', 'TMPDIR', 'SystemRoot', 'SYSTEMROOT']) if (env[k]) baseEnv[k] = env[k];
@@ -46,6 +48,27 @@ export function createTaskIntegration({ bin, env = process.env, dataDir, now = D
   }
   function eligible(t) {
     if (t.state !== 'in_review' || t.workInPlace || !t.worktreeCreated || !t.repo?.root || !t.gitDir || !t.gitRef || !OID.test(t.baseSha ?? '')) throw unsafe();
+  }
+  // The engine supplies the same observed claims used by getClaims, plus its
+  // existing packet versions. No renderer/CLI field becomes coordination
+  // authority. Synchronous reads allow a last check immediately before spawn.
+  function coordination(t) {
+    const c = readCoordination?.(t);
+    if (!c || c.taskId !== t.id || c.repoRoot !== t.repo?.root || typeof c.epoch !== 'string'
+      || !Number.isSafeInteger(c.decisionVersion) || c.decisionVersion < 0 || !Array.isArray(c.claims) || c.claims.length > 500
+      || c.claims.some(p => !p || typeof p.taskId !== 'string' || p.taskId.length > 256 || typeof p.state !== 'string'
+        || !Array.isArray(p.paths) || p.paths.length > MAX_FILES || p.paths.some(v => typeof v !== 'string' || v.length > 1024))) throw unsafe();
+    return structuredClone(c);
+  }
+  const pathKey = p => p.normalize('NFC').toLowerCase().replace(/\/$/, '');
+  function coordinationView(c, changed) {
+    const paths = changed.map(f => [f.path, pathKey(f.path)]);
+    return { scope: 'local-tasks', decisionVersion: c.decisionVersion, observedClaims: c.claims.length, advisory: true,
+      conflicts: c.claims.flatMap(p => {
+        const unknown = p.workInPlace || p.paths.length === 0 || p.pathsTruncated || p.paths.some(v => !permittedPath(v));
+        const overlaps = paths.filter(([, key]) => p.paths.some(v => { const peer = pathKey(v); return key === peer || key.startsWith(`${peer}/`) || peer.startsWith(`${key}/`); })).map(([v]) => v);
+        return unknown || overlaps.length ? [{ taskId: p.taskId, state: p.state, paths: overlaps.slice(0, 20), reason: p.workInPlace ? 'destination-active' : unknown ? 'paths-unconfirmed' : 'overlap' }] : [];
+      }) };
   }
   async function repo(root, current) {
     const real = await checked(fs.realpath(root), current);
@@ -104,17 +127,36 @@ export function createTaskIntegration({ bin, env = process.env, dataDir, now = D
   }
   async function capture(t, current) {
     eligible(t);
+    const context = coordination(t), binding = taskBinding(t);
     const source = await repo(t.worktree, current), destination = await repo(t.repo.root, current);
     if (source.root === destination.root || source.common !== destination.common || source.gitDir !== t.gitDir || source.branch !== t.gitRef) throw invalid();
     const tree = await snapshot(source, current);
-    return { source, destination, tree, task: taskBinding(t) };
+    if (digest(context) !== digest(coordination(t)) || digest(binding) !== digest(taskBinding(t))) throw invalid();
+    return { source, destination, tree, task: binding, coordination: context };
+  }
+  // Reuse the same restricted Git snapshot for an explicit provider handover.
+  // Only isolated, engine-created worktrees have sufficient recorded identity.
+  async function inspectSource(t, current = () => true) {
+    if (t.workInPlace || !t.worktreeCreated || !t.repo?.root || !t.gitDir || !t.gitRef || !OID.test(t.baseSha ?? '')) throw unsafe();
+    const binding = taskBinding(t), context = coordination(t), source = await repo(t.worktree, current);
+    if (source.gitDir !== t.gitDir || source.branch !== t.gitRef) throw invalid();
+    const tree = await snapshot(source, current), changed = await files(source.root, t.baseSha, tree, current);
+    if (changed.some(f => privatePath(f.path))) throw unsafe();
+    const patch = await checked(git(source.root, ['diff', '--no-ext-diff', '--no-textconv', '--no-color', '--no-renames', t.baseSha, tree, '--'], { maxBuffer: MAX_PATCH + 1 }), current);
+    const numstat = await checked(git(source.root, ['diff', '--numstat', '--no-ext-diff', '--no-textconv', '--no-renames', t.baseSha, tree, '--']), current);
+    if (Buffer.byteLength(patch) > MAX_PATCH || numstat.split('\n').some(s => s.startsWith('-\t-\t'))) throw unsafe();
+    const fresh = await repo(t.worktree, current);
+    if (digest(fresh) !== digest(source) || digest(binding) !== digest(taskBinding(t)) || digest(context) !== digest(coordination(t))) throw invalid();
+    return { source, tree, task: binding, coordination: context, files: changed, patch };
   }
   async function preview(t, current = () => true) {
     return serial(t.repo?.root, async () => {
       const c = await capture(t, current), changed = await files(c.source.root, t.baseSha, c.tree, current);
-      const blocked = (status, reason, entries = changed) => ({ status, canApply: false, reason, branch: c.destination.branch.slice(11), files: entries, patch: '', expiresAt: null });
+      const context = coordinationView(c.coordination, changed);
+      const blocked = (status, reason, entries = changed) => ({ status, canApply: false, reason, branch: c.destination.branch.slice(11), files: entries, patch: '', expiresAt: null, coordination: context });
       if (c.destination.status) return blocked('dirty', 'Save or commit your checkout changes before integrating. Your files were left unchanged.');
       if (!changed.length) return blocked('unchanged', 'This task has no changes to integrate.');
+      if (context.conflicts.length) return blocked('ownership', 'Other local tasks may still change these paths. Resolve their ownership or wait for them to finish, then review again.');
       const snapshotCommit = (await checked(git(c.source.root, ['commit-tree', c.tree, '-p', c.source.head], { input: 'Plexiform reviewed task snapshot\n' }), current)).trim();
       let merged;
       try { merged = await checked(git(c.destination.root, ['merge-tree', '--write-tree', '--name-only', '--merge-base', t.baseSha, c.destination.head, snapshotCommit]), current); }
@@ -133,9 +175,10 @@ export function createTaskIntegration({ bin, env = process.env, dataDir, now = D
       // Reject changes during the preview itself. A later source content edit
       // is detected by the second private-index tree at confirmation.
       const freshSource = await repo(t.worktree, current), freshDestination = await repo(t.repo.root, current);
-      if (digest(freshSource) !== digest(c.source) || digest(freshDestination) !== digest(c.destination)) throw invalid();
+      if (digest(freshSource) !== digest(c.source) || digest(freshDestination) !== digest(c.destination)
+        || digest(c.coordination) !== digest(coordination(t)) || digest(c.task) !== digest(taskBinding(t))) throw invalid();
       const id = crypto.randomUUID(), expiresAt = now() + TTL;
-      const review = { status: 'review', canApply: true, reason: 'Creates a local merge commit on this branch. Nothing is pushed. The task worktree is kept.', branch: c.destination.branch.slice(11), files: resultFiles, patch, expiresAt };
+      const review = { status: 'review', canApply: true, reason: 'Creates a local merge commit on this branch. Nothing is pushed. The task worktree is kept.', branch: c.destination.branch.slice(11), files: resultFiles, patch, expiresAt, coordination: context };
       const hash = digest({ c, commit, review });
       for (const [key, value] of reviews) if (value.expiresAt <= now()) reviews.delete(key);
       while (reviews.size >= MAX_REVIEWS) reviews.delete(reviews.keys().next().value);
@@ -147,9 +190,10 @@ export function createTaskIntegration({ bin, env = process.env, dataDir, now = D
     const r = reviews.get(id); reviews.delete(id);
     if (!r || r.hash !== hash || r.expiresAt <= now() || digest(r.c.task) !== digest(taskBinding(t))) throw invalid();
     return serial(t.repo.root, async () => {
-      const fresh = () => current() && now() < r.expiresAt && digest(r.c.task) === digest(taskBinding(t));
+      const fresh = () => current() && now() < r.expiresAt && digest(r.c.task) === digest(taskBinding(t)) && digest(r.c.coordination) === digest(coordination(t));
       const c = await capture(t, fresh);
       if (digest(c) !== digest(r.c)) throw invalid();
+      if (!fresh()) throw invalid();
       let mergeError = null;
       try { await checked(git(c.destination.root, ['merge', '--ff-only', '--no-edit', '--no-stat', '--no-overwrite-ignore', '--no-autostash', '--no-verify-signatures', r.commit]), fresh); }
       catch (error) { mergeError = error; }
@@ -162,5 +206,5 @@ export function createTaskIntegration({ bin, env = process.env, dataDir, now = D
       throw Object.assign(invalid('Integration outcome is unconfirmed. Inspect your branch before reviewing another integration.'), { details: { outcome: 'unconfirmed' } });
     });
   }
-  return { preview, apply, clear() { reviews.clear(); } };
+  return { preview, apply, inspectSource, clear() { reviews.clear(); } };
 }

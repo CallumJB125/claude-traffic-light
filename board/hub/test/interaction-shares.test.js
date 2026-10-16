@@ -74,6 +74,71 @@ async function rig() {
   };
 }
 
+async function proposalFixture(r, { scope = 'interact' } = {}) {
+  const s = await r.launch(), share = (await r.mac.shareSession({ session:s.session, team:r.org, scope })).share;
+  const base = `/api/interaction/v1/shared/${share.id}/proposals`;
+  const body = { id:rid(), decision:rid(), version:1, generation:s.generation, title:'Reviewed audit', text:'Report READY without editing anything.' };
+  const create = (b=body, who=r.bob) => r.h.call('POST',base,{token:who.token,body:b});
+  const approve = p => r.mac.proposalApprove({ share:share.id,id:p.id,version:p.version,digest:p.digest,expiresInS:600 });
+  const send = (p, who=r.bob) => { r.h.clock.advance(1); return r.h.call('POST',`${base}/${p.id}/send`,{token:who.token,body:{version:p.version,digest:p.digest,request_id:rid()}}); };
+  return {s,share,base,body,create,approve,send};
+}
+
+test('owner proposal uses persisted exact review and one host-enforced send with a real relay receipt', async () => {
+  const r=await rig();
+  try {
+    const p=await proposalFixture(r), made=await p.create(); assert.equal(made.status,200,made.text);
+    const proposal=made.body.proposal;
+    assert.equal(proposal.status,'pending'); assert.equal(r.mac.hub.state({session:p.s.session},r.mac.actor).deliveries.length,0);
+    assert.equal((await p.send(proposal)).status,409);
+    assert.equal((await p.approve(proposal)).ok,true);
+    assert.equal(r.h.db.get('SELECT status FROM interaction_proposals WHERE id = ?',proposal.id).status,'approved');
+    const sent=await p.send(proposal); assert.equal(sent.status,200,sent.text); assert.equal(sent.body.proposal.status,'sent');
+    assert.ok(sent.body.proposal.receipt.id); assert.equal((await p.send(proposal)).status,409);
+    assert.equal(r.mac.hub.state({session:p.s.session},r.mac.actor).deliveries.length,1);
+    assert.equal((await p.send(proposal,r.carol)).status,404);
+    assert.equal((await r.mac.proposalList(p.share.id)).proposals[0].receipt.id,sent.body.proposal.receipt.id);
+  } finally {await r.close();}
+});
+
+test('proposal versions, wrong text, watch scope, stale generation, expiry and revoke never grant implicit sends', async () => {
+  const r=await rig();
+  try {
+    const watched=await proposalFixture(r,{scope:'watch'}); assert.equal((await watched.create()).status,403);
+    const p=await proposalFixture(r), made=(await p.create()).body.proposal;
+    assert.equal((await p.create({...p.body,text:'Changed text with the old id'})).status,409);
+    assert.equal((await p.approve({...made,digest:'0'.repeat(64)})).ok,false);
+    assert.equal((await p.approve(made)).ok,true);
+    const v2=(await p.create({...p.body,id:rid(),version:2,text:'Replacement decision'})).body.proposal;
+    assert.equal((await p.send(made)).status,409);
+    assert.equal((await p.approve(v2)).ok,true);
+    assert.equal((await r.mac.proposalRevoke({share:p.share.id,id:v2.id})).ok,true);
+    assert.equal((await p.send(v2)).status,409);
+    const v3=(await p.create({...p.body,id:rid(),version:3})).body.proposal;
+    assert.equal((await p.approve(v3)).ok,true); r.h.clock.advance(600001);
+    assert.equal((await p.send(v3)).status,409);
+    const v4=(await p.create({...p.body,id:rid(),version:4,generation:p.s.generation+1})).body.proposal;
+    assert.equal((await p.approve(v4)).ok,false);
+    assert.equal(r.mac.hub.state({session:p.s.session},r.mac.actor).deliveries.length,0);
+  } finally {await r.close();}
+});
+
+test('hub approval alone does not create host authority; uncertain or interrupted dispatch is never retried', async () => {
+  const r=await rig();
+  try {
+    const p=await proposalFixture(r), proposal=(await p.create()).body.proposal;
+    const approval=await r.h.call('POST',`/api/interaction/v1/shares/${p.share.id}/proposals/${proposal.id}/approve`,{token:r.macA.token,body:{version:proposal.version,digest:proposal.digest,generation:proposal.generation,expires_in_s:600}});
+    assert.equal(approval.status,200);
+    const refused=await p.send(proposal); assert.equal(refused.status,200,refused.text); assert.equal(refused.body.proposal.status,'refused');
+    assert.equal((await p.send(proposal)).status,409); assert.equal(r.mac.hub.state({session:p.s.session},r.mac.actor).deliveries.length,0);
+    const next=(await p.create({...p.body,id:rid(),version:2})).body.proposal; assert.equal((await p.approve(next)).ok,true);
+    r.h.db.run("UPDATE interaction_proposals SET status = 'dispatching', used_at = ? WHERE id = ?",r.h.hub.iso(),next.id);
+    assert.equal((await p.send(next)).status,409);
+    r.h.clock.advance(7*86400000); r.h.hub.interactionShares.proposals.prune();
+    assert.equal(r.h.db.get('SELECT COUNT(*) AS n FROM interaction_proposals').n,0);
+  } finally {await r.close();}
+});
+
 test('LOCAL ACTIVITY PROOF: shared reads omit pre-share activity and preserve its independent provider clock', async () => {
   const r = await rig();
   try {
@@ -826,4 +891,166 @@ test('replacing a share releases its parked watches before a new watch and send 
     assert.equal(stopped.length, 2, 'stopping hosting must release parked watches immediately');
     assert.ok(stopped.every((value) => value.status === 'stale'));
   } finally { await r.close(); }
+});
+
+// Owner-reviewed delegation: real local accounts, HTTP routes, SQLite,
+// WebSocket relay and host adapter; the provider remains a disposable fixture.
+async function proposalRig(r) {
+  const state = await r.launch();
+  const { share } = await r.mac.shareSession({ session: state.session, team: r.org, scope: 'interact' });
+  r.h.clock.advance(1);
+  const client = createReportingTeamHubClient({ baseUrl: r.h.base, token: () => r.bob.token, viewerId: r.bob.user }, { now: () => r.h.clock.wall() });
+  const viewer = { id: r.bob.user }, decision = rid();
+  const create = async (version = 1, text = 'reviewed proposal', options = {}) => client.proposals(viewer,r.org,share.id,'request', { id:rid(),decision,version,generation:state.generation,title:'Review parser',text,...options });
+  const approve = p => r.mac.proposalApprove({ share:share.id,id:p.id,version:p.version,digest:p.digest,expiresInS:600 });
+  const send = p => client.proposals(viewer,r.org,share.id,'send',p);
+  return {state,share,client,viewer,create,approve,send};
+}
+
+test('PROPOSALS: owner acknowledges exact decision; requester sends one durable action and correlated receipt', async () => {
+ const r=await rig(); try {
+  const x=await proposalRig(r), made=await x.create(); assert.equal(made.ok,true,JSON.stringify(made));
+  const p=made.proposal;
+  assert.equal(r.mac.hub.state({session:x.state.session},r.mac.actor).deliveries.length,0);
+  assert.equal((await x.send(p)).ok,false,'pending request cannot execute');
+  assert.equal((await x.approve(p)).ok,true);
+  const list=await x.client.proposals(x.viewer,r.org,x.share.id,'list');
+  assert.equal(list.proposals[0].status,'approved'); assert.ok(list.proposals[0].acknowledgedAt);
+  r.h.clock.advance(1);
+  const sent=await x.send(list.proposals[0]); assert.equal(sent.ok,true,JSON.stringify(sent)); assert.equal(sent.proposal.status,'sent'); assert.ok(sent.proposal.receipt.id);
+  assert.equal((await x.send(list.proposals[0])).ok,false,'one action budget persists after dispatch');
+  assert.equal(r.h.db.get('SELECT status FROM interaction_proposals WHERE id=?',p.id).status,'sent');
+  assert.equal(r.mac.hub.state({session:x.state.session},r.mac.actor).deliveries.filter(d=>d.text==='reviewed proposal').length,1);
+ }finally{await r.close();}
+});
+
+test('PROPOSALS: supersession, revoke, viewer scope and foreign actors refuse without provider work', async () => {
+ const r=await rig(); try {
+  const x=await proposalRig(r), first=(await x.create()).proposal; assert.equal((await x.approve(first)).ok,true);
+  const newer=(await x.create(2,'replacement decision')).proposal;
+  assert.equal((await x.send(first)).ok,false,'old decision cannot dispatch');
+  assert.equal((await x.approve(first)).ok,false,'old acknowledgement cannot be revived');
+  assert.equal((await x.approve(newer)).ok,true);
+  assert.equal((await r.mac.proposalRevoke({share:x.share.id,id:newer.id})).ok,true);
+  assert.equal((await x.send(newer)).ok,false);
+  const foreign=await r.h.call('GET',`/api/interaction/v1/shared/${x.share.id}/proposals`,{token:r.carol.token});assert.equal(foreign.status,404);
+  r.h.db.run("UPDATE members SET role='viewer' WHERE org_id=? AND user_id=?",r.org,r.bob.user);
+  assert.equal((await x.create(3)).ok,false);
+  assert.equal(r.mac.hub.state({session:x.state.session},r.mac.actor).deliveries.length,0);
+ }finally{await r.close();}
+});
+
+test('PROPOSALS: host rejects a forged or reused approval even with an interact share',async()=>{
+ const r=await rig();try{
+  const x=await proposalRig(r),p=(await x.create()).proposal;
+  const frame=()=>r.frame('send',{session:x.state.session,generation:x.state.generation,text:p.text},x.share,r.bob,{proposal:{id:p.id,digest:p.digest,version:p.version}});
+  assert.equal((await r.mac.handle(frame())).ok,false,'hub cannot invent local owner approval');
+  assert.equal((await x.approve(p)).ok,true);
+  assert.equal((await r.mac.handle(frame())).ok,false,'host checks persisted admission, not only cached approval');
+  assert.equal(r.mac.hub.state({session:x.state.session},r.mac.actor).deliveries.length,0);
+ }finally{await r.close();}
+});
+
+test('PROPOSALS: revocation during approval response cannot reinstall local authority',async()=>{
+ const r=await rig();try{
+  const x=await proposalRig(r),p=(await x.create()).proposal;
+  const service=r.h.hub.interactionShares.proposals, original=service.approve.bind(service);
+  let release, entered;const at=new Promise(resolve=>entered=resolve),hold=new Promise(resolve=>release=resolve);
+  service.approve=async(...a)=>{const out=original(...a);entered();await hold;return out;};
+  const approving=x.approve(p);await at;
+  assert.equal((await r.mac.proposalRevoke({share:x.share.id,id:p.id})).ok,true);
+  release();assert.equal((await approving).ok,false);
+  const frame=r.frame('send',{session:x.state.session,generation:x.state.generation,text:p.text},x.share,r.bob,{proposal:{id:p.id,digest:p.digest,version:p.version}});
+  assert.equal((await r.mac.handle(frame)).ok,false);
+  assert.equal(r.mac.hub.state({session:x.state.session},r.mac.actor).deliveries.length,0);
+ }finally{await r.close();}
+});
+
+test('PROPOSALS: document change during owner acknowledgement never grants execution',async()=>{
+ const r=await rig();try{
+  const x=await proposalRig(r),p=(await x.create()).proposal;
+  const service=r.h.hub.interactionShares.proposals, original=service.approve.bind(service);
+  let current=true;service.approve=(...a)=>{const out=original(...a);current=false;return out;};
+  assert.equal((await r.mac.proposalApprove({share:x.share.id,id:p.id,version:p.version,digest:p.digest,expiresInS:600},()=>current)).ok,false);
+  assert.equal((await x.send(p)).proposal.status,'refused','server approval without current local owner grant cannot execute');
+  assert.equal(r.mac.hub.state({session:x.state.session},r.mac.actor).deliveries.length,0);
+ }finally{await r.close();}
+});
+
+test('PROPOSALS: expiry, deletion retention and changed generations fail safely',async()=>{
+ const r=await rig();try{
+  const x=await proposalRig(r),p=(await x.create()).proposal;assert.equal((await x.approve(p)).ok,true);
+  r.h.clock.advance(600001);assert.equal((await x.send(p)).ok,false);
+  const next=(await x.create(2,'stale generation',{generation:x.state.generation+1})).proposal;
+  assert.equal((await x.approve(next)).ok,false);
+  r.h.clock.advance(7*86400000);r.h.hub.interactionShares.proposals.prune();
+  assert.equal(r.h.db.get('SELECT COUNT(*) AS n FROM interaction_proposals').n,0);
+  assert.equal(r.mac.hub.state({session:x.state.session},r.mac.actor).deliveries.length,0);
+ }finally{await r.close();}
+});
+
+test('PROPOSALS: supersession while owner response is held refuses that old local grant',async()=>{
+ const r=await rig();try{
+  const x=await proposalRig(r),p=(await x.create()).proposal;
+  const service=r.h.hub.interactionShares.proposals, original=service.approve.bind(service);
+  let release,entered;const at=new Promise(resolve=>entered=resolve),hold=new Promise(resolve=>release=resolve);
+  service.approve=async(...a)=>{const out=original(...a);entered();await hold;return out;};
+  const approving=x.approve(p);await at;const next=await x.create(2,'newest version');assert.equal(next.ok,true);release();
+  assert.equal((await approving).ok,false);
+  assert.equal((await x.send(p)).ok,false);
+  assert.equal(r.mac.hub.state({session:x.state.session},r.mac.actor).deliveries.length,0);
+ }finally{await r.close();}
+});
+
+test('PROPOSALS: lost acknowledgement persists uncertainty and never permits automatic retry',async()=>{
+ const r=await rig();try{
+  const x=await proposalRig(r),p=(await x.create()).proposal;assert.equal((await x.approve(p)).ok,true);
+  const relay=r.h.hub.interactionRelay,original=relay.dispatch.bind(relay);
+  relay.dispatch=async(...a)=>{const out=await original(...a);if(a[1]?.share?.proposal)throw new Error('discarded response');return out;};
+  assert.equal((await x.send(p)).ok,false);
+  assert.equal(r.h.db.get('SELECT status FROM interaction_proposals WHERE id=?',p.id).status,'unconfirmed');
+  relay.dispatch=original;assert.equal((await x.send(p)).ok,false);
+  assert.equal(r.mac.hub.state({session:x.state.session},r.mac.actor).deliveries.filter(d=>d.text===p.text).length,1);
+ }finally{await r.close();}
+});
+
+test('PROPOSALS: revocation while relay admission is held prevents later host effect',async()=>{
+ const r=await rig();try{
+  const x=await proposalRig(r),p=(await x.create()).proposal;assert.equal((await x.approve(p)).ok,true);
+  const relay=r.h.hub.interactionRelay,original=relay.dispatch.bind(relay);
+  let release,entered;const at=new Promise(resolve=>entered=resolve),hold=new Promise(resolve=>release=resolve);
+  relay.dispatch=async(...a)=>{if(a[1]?.share?.proposal){entered();await hold;}return original(...a);};
+  const sending=x.send(p);await at;await r.mac.proposalRevoke({share:x.share.id,id:p.id});release();
+  const out=await sending;assert.equal(out.proposal.status,'refused');assert.equal(r.mac.hub.state({session:x.state.session},r.mac.actor).deliveries.length,0);
+ }finally{await r.close();}
+});
+
+test('PROPOSALS: Overview coordinator reaches persisted owner review and exact provider receipt through production services',async()=>{
+ const r=await rig();try{
+  const {createOverviewService}=require('../../../src/overview-service.js');
+  const x=await proposalRig(r),overview=createOverviewService({now:()=>r.h.clock.wall(),teamHub:()=>x.client});
+  const inventory=await overview.coordinatorInventory({team:null});assert.equal(inventory.ok,true);
+  const entry=inventory.entries[0];assert.ok(entry?.available);
+  const review=await overview.coordinatorPropose({team:inventory.team.key,title:'Team review',assignments:[{id:entry.id,name:'Named reviewer',text:'Exact owner reviewed task'}]});assert.equal(review.ok,true);assert.equal(review.assignments[0].status,'review');
+  const requested=await overview.coordinatorRequestOwner({proposal:review.proposal});assert.equal(requested.assignments[0].status,'awaiting-owner');
+  const owner=await r.mac.proposalList(x.share.id);assert.equal(owner.proposals.length,1);assert.equal((await x.approve(owner.proposals[0])).ok,true);
+  const listed=await overview.coordinatorRemoteList({id:entry.id});assert.equal(listed.proposals[0].status,'approved');
+  const revised=await overview.coordinatorRemoteReplace({selection:listed.proposals[0].selection,text:'Revised exact task'});assert.equal(revised.ok,true);assert.equal(revised.proposal.version,2);
+  assert.equal((await x.send(listed.proposals[0])).ok,false,'the older owner-approved version was retired');
+  assert.equal((await x.approve(revised.proposal)).ok,true);
+  const fresh=await overview.coordinatorRemoteList({id:entry.id}),approved=fresh.proposals.find(p=>p.status==='approved');
+  const sent=await overview.coordinatorRemoteSend({selection:approved.selection});assert.equal(sent.ok,true,JSON.stringify(sent));assert.equal(sent.proposal.status,'sent');assert.ok(sent.proposal.receipt.id);
+  assert.equal((await overview.coordinatorRemoteSend({selection:approved.selection})).ok,false);
+  const deliveries=r.mac.hub.state({session:x.state.session},r.mac.actor).deliveries;
+  assert.equal(deliveries.filter(d=>d.text==='Revised exact task').length,1);assert.equal(deliveries.some(d=>d.text==='Exact owner reviewed task'),false);
+ }finally{await r.close();}
+});
+
+test('PROPOSALS: a different owned share cannot revoke another session grant by guessing its ID',async()=>{
+ const r=await rig();try{
+  const x=await proposalRig(r),p=(await x.create()).proposal;assert.equal((await x.approve(p)).ok,true);
+  const second=await r.launch(),other=(await r.mac.shareSession({session:second.session,team:r.org,scope:'interact'})).share;
+  assert.equal((await r.mac.proposalRevoke({share:other.id,id:p.id})).ok,false);
+  const sent=await x.send(p);assert.equal(sent.proposal.status,'sent');
+ }finally{await r.close();}
 });

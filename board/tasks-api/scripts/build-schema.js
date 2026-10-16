@@ -199,10 +199,10 @@ const payloads = {
   deny: optional({ approvalId: str(), message: str({ maxLength: 2000 }) }, ['approvalId']),
   answer: optional({ askId: str(), answer: str({ minLength: 1, maxLength: 20000 }) }, ['askId', 'answer']),
   merge: { oneOf: [obj({ phase: { const: 'preview' } }), obj({ phase: { const: 'apply' }, reviewId: str({ minLength: 36, maxLength: 36 }), reviewHash: str({ minLength: 64, maxLength: 64 }), confirm: { const: true } })] },
-  openPr: optional({ draft: bool, title: str(), body: str(LONG) }, []),
+  openPr: { oneOf: [obj({ phase: { const: 'preview' }, title: str({minLength:1,maxLength:120}), body: str({maxLength:10000}) }), obj({ phase: { const: 'apply' }, reviewId: str({ minLength:36,maxLength:36 }), reviewHash: str({ minLength:64,maxLength:64 }), confirm: { const:true } }), obj({ phase: { const:'receipt' } })] },
   discard: optional({ confirm: { const: true } }, ['confirm']),
   retry: optional({ fresh: bool }, []),
-  switchAi: optional({ ai: en(AIS) }, ['ai']),
+  switchAi: optional({ ai: en(AIS), phase: en(['preview', 'apply']), reviewId: str({ maxLength: 128 }), reviewHash: str({ minLength: 64, maxLength: 64 }), confirm: bool }, []),
 };
 
 const errorObj = obj({ code: en(ERRORS), message: str({ maxLength: 1024 }), details: { type: 'object' } }, ['code', 'message']);
@@ -284,6 +284,7 @@ const schema = {
     ActResult: obj({
       ok: { const: true }, task: ref('TaskView'), messageId: str(), takeover: ref('TakeoverResult'), pr: obj({ number: int(), url: str() }),
       integration: { type: 'object' },
+      providerChange: { type: 'object' },
     }, ['ok', 'task']),
     ListMessagesParams: obj({ id: str(), afterSeq: int() }, ['id']),
     ListMessagesResult: arr(ref('Message')),

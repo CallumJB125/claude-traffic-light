@@ -17,9 +17,10 @@ function fixture(t) {
   const wt = path.join(dir, 'task'); git(checkout, 'worktree', 'add', '-q', '-b', 'task', wt);
   const task = { id: 'task-1', state: 'in_review', stateSince: 1, sessionId: 'session-1', repo: { root: checkout }, worktree: wt, branch: 'task', gitRef: 'refs/heads/task', gitDir: git(wt, 'rev-parse', '--absolute-git-dir'), baseSha, worktreeCreated: true, workInPlace: false };
   let clock = Date.now();
-  const helper = createTaskIntegration({ bin, dataDir: path.join(dir, 'data'), now: () => clock });
+  const coordination = { epoch: 'fixture-engine', taskId: task.id, repoRoot: checkout, decisionVersion: 0, claims: [] };
+  const helper = createTaskIntegration({ bin, dataDir: path.join(dir, 'data'), now: () => clock, readCoordination: () => coordination });
   const write = (name, text, root = wt) => { fs.mkdirSync(path.dirname(path.join(root, name)), { recursive: true }); fs.writeFileSync(path.join(root, name), text); };
-  return { dir, checkout, wt, task, helper, write, advance: ms => clock += ms,
+  return { dir, checkout, wt, task, helper, coordination, write, advance: ms => clock += ms,
     preview: () => helper.preview(task), apply: r => helper.apply(task, r.id, r.hash),
     status: root => git(root, 'status', '--porcelain'), head: root => git(root, 'rev-parse', 'HEAD') };
 }
@@ -109,7 +110,7 @@ posix('real engine exposes reviewed merge, refuses unreviewed requests and integ
   const m = await startEngine({ dir }); t.after(() => m.close());
   const { id } = await m.client.createTask({ text: 'Disposable integration task', cwd: repo.checkout, ai: 'claude' });
   const detail = await waitFor(async () => { const t = await m.client.getTask(id); return t.state === 'in_review' && t; });
-  assert.equal(detail.actions.includes('merge'), true); assert.equal(detail.actions.includes('openPr'), false);
+  assert.equal(detail.actions.includes('merge'), true); assert.equal(detail.actions.includes('openPr'), m.eng.engine.pullRequests.available);
   await assert.rejects(m.eng.engine.act({ id, action: 'merge', payload: { phase: 'preview' }, requestId: crypto.randomUUID() }, { principal: { kind: 'relay', id: 'synthetic-relay', source: 'phone', userId: 'person', taskIds: [id] } }), e => e.code === 'POLICY_DENIED');
   fs.writeFileSync(path.join(detail.worktree, 'accepted.js'), 'export const accepted = true;\n');
   await assert.rejects(m.client.act(id, 'merge', {}), e => e.code === 'VALIDATION');
@@ -117,4 +118,54 @@ posix('real engine exposes reviewed merge, refuses unreviewed requests and integ
   const requestId = crypto.randomUUID(), applied = await m.client.act(id, 'merge', { phase: 'apply', reviewId: r.integration.id, reviewHash: r.integration.hash, confirm: true }, { requestId });
   assert.equal(applied.task.state, 'done'); assert.equal(applied.task.outcome, 'merged'); assert.ok(fs.existsSync(detail.worktree));
   assert.equal(fs.readFileSync(path.join(repo.checkout, 'accepted.js'), 'utf8'), 'export const accepted = true;\n');
+});
+
+for (const kind of ['overlap', 'ancestor', 'case-alias', 'unknown', 'truncated', 'in-place']) posix(`coordination blocks ${kind} claims with an actionable review and no Git effects`, async t => {
+  const f = fixture(t); f.write('src/shared.js', 'task\n');
+  const p = { taskId: 'peer-task', state: 'running', sessionId: 'peer-session', paths: ['src/shared.js'], workInPlace: false, pathsTruncated: false };
+  if (kind === 'ancestor') p.paths = ['src'];
+  if (kind === 'case-alias') p.paths = ['SRC/SHARED.JS'];
+  if (kind === 'unknown') p.paths = [];
+  if (kind === 'truncated') { p.paths = ['elsewhere.js']; p.pathsTruncated = true; }
+  if (kind === 'in-place') { p.paths = ['elsewhere.js']; p.workInPlace = true; }
+  f.coordination.claims.push(p);
+  const head = f.head(f.checkout), r = await f.preview();
+  assert.equal(r.status, 'ownership'); assert.equal(r.canApply, false); assert.equal(r.id, undefined);
+  assert.equal(r.coordination.conflicts[0].taskId, p.taskId); assert.equal(r.coordination.scope, 'local-tasks');
+  assert.equal(f.head(f.checkout), head); assert.equal(f.status(f.checkout), ''); assert.equal(fs.existsSync(path.join(f.checkout, 'src/shared.js')), false);
+});
+posix('a disjoint observed peer claim permits reviewed integration without losing either worktree', async t => {
+  const f = fixture(t); f.write('src/shared.js', 'task\n');
+  f.coordination.claims.push({ taskId: 'peer-task', state: 'running', paths: ['src/shared-other.js'] });
+  const r = await f.preview(); assert.equal(r.canApply, true); assert.equal(r.coordination.observedClaims, 1); assert.deepEqual(r.coordination.conflicts, []);
+  await f.apply(r); assert.equal(fs.readFileSync(path.join(f.checkout, 'src/shared.js'), 'utf8'), 'task\n');
+});
+for (const kind of ['decision-version', 'decision-content', 'source-authority', 'new-peer', 'peer-paths', 'peer-session', 'peer-decision', 'engine-epoch']) posix(`${kind} invalidates an exact integration review before mutation`, async t => {
+  const f = fixture(t); f.write('src/shared.js', 'task\n');
+  f.task.checkpoint = { version: 1, decisions: ['Reviewed decision'] }; f.coordination.decisionVersion = 1;
+  f.coordination.claims.push({ taskId: 'peer-task', state: 'running', paths: ['other.js'], sessionId: 'peer-session', decisionVersion: 1 });
+  const r = await f.preview(); assert.equal(r.canApply, true);
+  if (kind === 'decision-version') { f.task.checkpoint.version++; f.coordination.decisionVersion++; }
+  if (kind === 'decision-content') f.task.checkpoint.decisions[0] = 'Changed with same version';
+  if (kind === 'source-authority') f.task.sourceMeta = { userId: 'replacement' };
+  if (kind === 'new-peer') f.coordination.claims.push({ taskId: 'new-peer', state: 'running', paths: ['third.js'] });
+  if (kind === 'peer-paths') f.coordination.claims[0].paths.push('src/shared.js');
+  if (kind === 'peer-session') f.coordination.claims[0].sessionId = 'replaced';
+  if (kind === 'peer-decision') f.coordination.claims[0].decisionVersion++;
+  if (kind === 'engine-epoch') f.coordination.epoch = 'replacement-engine';
+  const head = f.head(f.checkout); await assert.rejects(f.apply(r), e => e.code === 'CONFLICT');
+  assert.equal(f.head(f.checkout), head); assert.equal(f.status(f.checkout), ''); assert.equal(fs.existsSync(path.join(f.checkout, 'src/shared.js')), false);
+  await assert.rejects(f.apply(r), e => e.code === 'CONFLICT', 'stale review remains single-use');
+});
+posix('coordination changes during asynchronous Git revalidation refuse apply before checkout effects', async t => {
+  const f = fixture(t); f.write('src/shared.js', 'task\n'); const r = await f.preview(); let calls = 0;
+  const current = () => { if (++calls === 5) f.coordination.claims.push({ taskId: 'new-peer', state: 'running', paths: ['src/shared.js'] }); return true; };
+  const head = f.head(f.checkout);
+  await assert.rejects(f.helper.apply(f.task, r.id, r.hash, current), e => e.code === 'CONFLICT');
+  assert.ok(calls >= 5); assert.equal(f.head(f.checkout), head); assert.equal(fs.existsSync(path.join(f.checkout, 'src/shared.js')), false);
+});
+posix('integration refuses missing coordination authority instead of treating it as an empty inventory', async t => {
+  const f = fixture(t); f.write('task.js', 'task\n');
+  const helper = createTaskIntegration({ bin, dataDir: path.join(f.dir, 'no-authority') });
+  await assert.rejects(helper.preview(f.task), e => e.code === 'POLICY_DENIED');
 });

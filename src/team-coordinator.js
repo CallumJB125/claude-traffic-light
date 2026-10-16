@@ -15,8 +15,8 @@ const fail = (status, error) => ({ ok: false, status, error });
 const STALE = 'The team or session changed. Check current sessions and review a new proposal.';
 const safeText = (v, max) => typeof v === 'string' ? v.slice(0, max) : '';
 
-function createTeamCoordinator({ inventory: readInventory, inspect, action, current = () => true, actionCurrent = current, now = Date.now }) {
-  const proposals = new Map();
+function createTeamCoordinator({ inventory: readInventory, inspect, action, resolve = async () => null, current = () => true, actionCurrent = current, now = Date.now }) {
+  const proposals = new Map(), remoteSelections = new Map();
   let epoch = 0;
   const permitted = effect => { try { return current() === true && (!effect || actionCurrent() === true); } catch { return false; } };
   const alive = (at, effect = false) => at === epoch && permitted(effect);
@@ -85,7 +85,7 @@ function createTeamCoordinator({ inventory: readInventory, inspect, action, curr
         if (!alive(at)) return fail('stale', STALE);
         if (!read?.ok || !UUID.test(read.selection) || read.state?.status !== 'ready' || read.state?.activeTurn !== null || read.capabilities?.send?.available !== true) why = safeText(read?.capabilities?.send?.reason || read?.error, 600) || 'This session is busy or its live send channel is unavailable.';
       }
-      assignments.push({ id: crypto.randomUUID(), entry: e.id, name: input.name.trim(), text: input.text.trim(), target: target(e), signature: signature(e), selection: why ? null : read.selection,
+      assignments.push({ id: crypto.randomUUID(), entry: e.id, name: input.name.trim(), text: input.text.trim(), target: target(e), signature: signature(e), generation: read?.state?.generation ?? null, selection: why ? null : read.selection,
         status: why ? 'blocked' : 'review', reason: why, receipt: null, response: '', grant: null });
     }
     if (!alive(at) || createdAt + REVIEW_MS < now()) return fail('stale', STALE);
@@ -149,6 +149,49 @@ function createTeamCoordinator({ inventory: readInventory, inspect, action, curr
     }
     return alive(at) ? project(p, masked) : fail('stale', STALE);
   }
+  async function requestOwner(request) {
+    if (!closed(request, ['proposal']) || !UUID.test(request.proposal)) return fail('invalid', 'Review a proposal first.');
+    const p = proposals.get(request.proposal), at = epoch;
+    if (!p || p.status !== 'review' || p.expiresAt < now() || !alive(at, true)) return fail('stale', STALE);
+    p.status = 'requesting-owner';
+    for (const a of p.assignments) {
+      if (a.status !== 'review') continue;
+      const fresh = () => alive(at, true) && p.expiresAt >= now();
+      const t = await resolve(a.entry, true);
+      if (!fresh() || !t?.hub?.proposals || t.scope !== 'interact' || !t.isCurrent()) { a.status='refused'; a.reason='Owner-reviewed proposals are unavailable for this connection.'; continue; }
+      let r; try { r = await t.hub.proposals(t.viewer,t.team,t.ref,'request',{ id:a.id, decision:p.id, version:1, generation:a.generation,title:a.name,text:a.text }, () => fresh() && t.isCurrent()); } catch { r=null; }
+      a.selection=null; a.status=r?.ok?'awaiting-owner':'unconfirmed'; a.reason=r?.ok?'The session owner must review this exact message in its Share panel.':safeText(r?.error,600)||'Request outcome is unknown. Refresh owner requests before trying again.';
+    }
+    p.status='awaiting-owner';
+    return alive(at) ? project(p) : fail('stale', STALE);
+  }
+  async function remoteList(request) {
+    if (!closed(request,['id']) || !ENTRY.test(request.id)) return fail('invalid','Choose a shared session.');
+    const at=epoch, t=await resolve(request.id,false);
+    if (!alive(at) || !t?.hub?.proposals || !t.isCurrent()) return fail('unavailable','Owner-reviewed proposals are unavailable for this connection.');
+    const r=await t.hub.proposals(t.viewer,t.team,t.ref,'list',null,()=>alive(at)&&t.isCurrent());
+    if (!alive(at)||!t.isCurrent()) return fail('stale',STALE);
+    if (!r?.ok||!Array.isArray(r.proposals)) return r;
+    for (const [id,v] of remoteSelections) if(v.expires<now())remoteSelections.delete(id);
+    const records=r.proposals.map(p=>{const selection=crypto.randomUUID();remoteSelections.set(selection,{entry:request.id, proposal:p,expires:now()+45000,epoch:at});return{...p,selection};});
+    while(remoteSelections.size>128)remoteSelections.delete(remoteSelections.keys().next().value);
+    return{ok:true,proposals:records};
+  }
+  async function remoteAction(request, operation) {
+    if(!closed(request,operation==='replace'?['selection','text']:['selection'])||!UUID.test(request.selection)||operation==='replace'&&!message(request.text))return fail('invalid','Refresh and review the exact owner request.');
+    const chosen=remoteSelections.get(request.selection);remoteSelections.delete(request.selection);
+    const fresh=()=>!!chosen&&alive(chosen.epoch,true)&&chosen.expires>=now();
+    if(!fresh())return fail('stale',STALE);
+    const t=await resolve(chosen.entry,true);
+    if(!fresh()||!t?.hub?.proposals||!t.isCurrent())return fail('stale',STALE);
+    if(operation==='send'||operation==='replace'){
+      const read=await inspect({id:chosen.entry});
+      if(!fresh()||!t.isCurrent()||!read?.ok||read.state?.generation!==chosen.proposal.generation||read.state?.status==='ended'||operation==='send'&&(read.state?.status!=='ready'||read.state?.activeTurn!==null||read.capabilities?.send?.available!==true))return fail('stale',STALE);
+    }
+    const payload=operation==='replace'?{id:crypto.randomUUID(),decision:chosen.proposal.decision,version:chosen.proposal.version+1,generation:chosen.proposal.generation,title:chosen.proposal.title,text:request.text.trim()}:chosen.proposal;
+    const r=await t.hub.proposals(t.viewer,t.team,t.ref,operation==='replace'?'request':operation,payload,()=>fresh()&&t.isCurrent());
+    return fresh()?r:fail(operation==='send'?'unconfirmed':'stale','The view changed. Refresh receipts before acting again.');
+  }
   function cancel(request) {
     if (!closed(request, ['proposal']) || !UUID.test(request.proposal)) return fail('invalid', 'Choose a proposal.');
     const p = proposals.get(request.proposal);
@@ -156,6 +199,6 @@ function createTeamCoordinator({ inventory: readInventory, inspect, action, curr
     proposals.delete(p.id);
     return { ok: true, status: 'cancelled' };
   }
-  return { inventory, propose, confirm, results, cancel, invalidate() { epoch++; proposals.clear(); } };
+  return { inventory, propose, confirm, results, cancel, requestOwner, remoteList, remoteSend:r=>remoteAction(r,'send'), remoteCancel:r=>remoteAction(r,'cancel'), remoteReplace:r=>remoteAction(r,'replace'), invalidate() { epoch++; proposals.clear(); remoteSelections.clear(); } };
 }
 module.exports = { createTeamCoordinator, REVIEW_MS, MAX_ASSIGNMENTS };
