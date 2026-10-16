@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('tasksApi', {
   act: (req) => ipcRenderer.invoke('tasks:act', req),
   saveCheckpoint: (req) => ipcRenderer.invoke('tasks:checkpoint', req),
   create: (draft) => ipcRenderer.invoke('tasks:create', draft),
+  preflight: (req) => ipcRenderer.invoke('tasks:preflight', req),
   composer: () => ipcRenderer.invoke('tasks:composer'),
   pickFolder: () => ipcRenderer.invoke('tasks:pick-folder'),
   copyTakeover: (id) => ipcRenderer.invoke('tasks:copy-takeover', id),

@@ -13,6 +13,7 @@ import { packetPanel, messagePanel } from './render-communication.js';
 import { captureBadge } from './render-capture.js';
 import { ownershipPanel } from './render-ownership.js';
 import { reportedSessionContext } from './local-session-context.js';
+import { taskWorkspacePanel } from './render-task-workspace.js';
 
 const ago = (ms) => (ms == null ? 'never' : `${formatAge(ms)} ago`);
 const add = (ms, e) => (ms == null ? null : ms + e);
@@ -144,8 +145,13 @@ export function handoverBody(markdown) {
   return String(markdown ?? '').split('\n').filter((l, i) => !(i < 4 && (/^# Handover/.test(l) || /^Last synced:/.test(l)))).join('\n');
 }
 
+export function drawerTab(section, current = 'overview') {
+  if (['asks', 'overlaps', 'review'].includes(section)) return 'activity';
+  return ['overview', 'activity', 'packet', 'messages', 'ownership', 'handover', 'comments', 'details'].includes(section) ? section : current;
+}
+
 function tabs(active, counts) {
-  const list = [['activity', 'Activity'], ['packet', 'Task context'], ['messages', 'Messages'], ['ownership', 'Coordination'], ['handover', 'Handover'], ['comments', `Comments${counts.comments ? ` ${counts.comments}` : ''}`], ['details', 'Details']];
+  const list = [['overview', 'Overview'], ['activity', 'Activity'], ['packet', 'Task context'], ['messages', 'Messages'], ['ownership', 'Coordination'], ['handover', 'Handover'], ['comments', `Comments${counts.comments ? ` ${counts.comments}` : ''}`], ['details', 'Details']];
   return h('div', { class: 'tabs', role: 'tablist', 'aria-label': 'Card sections' },
     list.map(([id, label]) => h('button', {
       type: 'button', role: 'tab', id: `tab-${id}`, class: 'tab', 'aria-selected': String(active === id), 'aria-controls': 'tabpanel',
@@ -239,6 +245,8 @@ function tabPanel(tab, detail, model, elapsed) {
 
 function whoBlock(view, face, model) {
   const rows = [];
+  if (view.run?.owner?.name) rows.push(['Run owner', view.run.owner.name]);
+  else if (isObservedWork(view)) rows.push(['Session owner', 'Not recorded on this card']);
   if (face.sponsor) rows.push(['Account', face.sponsor]);
   if (view.run) rows.push(['Runner', `${face.runner_line}${view.run.device_name ? ` on ${view.run.device_name}` : ''}${view.run.hosted ? ' (cloud runner)' : ''}`]);
   if (view.run?.dispatched_by) rows.push(['Given by', view.run.dispatched_by.name]);
@@ -415,9 +423,15 @@ export function drawer(model) {
     if (!model.readOnly && !archived && view.github?.comment) extra.push(githubButton(view, model, 'comment', 'Comment status'));
     extra.push(archiveButton(view, model));
     const hypothesis = det.data?.handover?.doc?.sections?.hypothesis;
-    const asks = det.data?.asks ?? [];
-    const prs = det.data?.permission_requests ?? [];
+    const activeTab = det.tab ?? 'overview';
+    const overview = activeTab === 'overview';
+    const asks = (det.data?.asks ?? []).filter(a => !overview || a.state === 'open' || a.state == null);
+    const prs = (det.data?.permission_requests ?? []).filter(p => !overview || p.state === 'open' || p.state === 'parked');
     const openCount = asks.filter((a) => a.state === 'open' || a.state == null).length + prs.filter((p) => p.state === 'open' || p.state === 'parked').length;
+
+    const requests = (asks.length || prs.length) ? h('section', { class: 'dsec dsec-asks', id: 'sec-asks' },
+      h('h3', { class: 'dsec-title' }, openCount ? `Needs you · ${openCount}` : 'Requests'),
+      h('ul', { class: 'asks' }, prs.map((p) => permissionBlock(p, model)), asks.map((a) => askBlock(a, model)))) : null;
 
     body.push(
       h('div', { class: 'drawer-status' },
@@ -427,35 +441,35 @@ export function drawer(model) {
         model.readOnly ? null : h('div', { class: 'drawer-actions' }, archived ? null : cardActions({ ...face, actions: face.actions.filter((a) => !OPENS_DRAWER.has(a) && !ADVANCED_ACTIONS.has(a)) }, view, model.busy), extra)),
       budgetBanner(view, model),
       whoBlock(view, face, model),
-      resultBlock(view, det),
-      reviewBlock(view, det, model),
-      view.capture ? h('section', { class: 'dsec', 'aria-label': 'AI work report' }, h('h3', { class: 'dsec-title' }, 'AI work report'),
-        h('p', {}, 'This card follows activity reported by a local AI session. Your manual edits take priority.'),
-        h('p', { class: 'muted small' }, 'A finished report requests review; it does not verify completion or start an AI run.')) : null,
-      view.client_feedback ? h('section', { class: 'dsec', 'aria-label': 'Client feedback source' }, h('h3', { class: 'dsec-title' }, 'Client feedback'), h('p', {}, `Feedback from ${view.client_feedback.source_name}`), h('p', {}, `Intake authorized by ${view.client_feedback.intake_name}`), h('p', { class: 'muted small' }, 'Feedback intake creates a task for human triage.')) : null,
-      (asks.length || prs.length) ? h('section', { class: 'dsec dsec-asks', id: 'sec-asks' },
-        h('h3', { class: 'dsec-title' }, openCount ? `Needs you · ${openCount}` : 'Requests'),
-        h('ul', { class: 'asks' }, prs.map((p) => permissionBlock(p, model)), asks.map((a) => askBlock(a, model)))) : null,
-      hypothesis ? h('section', { class: 'dsec hypothesis' },
-        h('h3', { class: 'dsec-title' }, 'Current hypothesis'),
-        h('p', null, inline(hypothesis)),
-        det.data?.handover?.ages?.narrative_ms != null ? h('p', { class: 'muted small' }, `Narrative synced ${ago(add(det.data.handover.ages.narrative_ms, elapsed))}`) : null) : null,
-      face.budget ? h('section', { class: 'dsec' }, h('h3', { class: 'dsec-title' }, 'Budget'), budgetBar(face.budget),
-        view.run ? h('p', { class: 'muted small' }, `Spent on ${face.sponsor ? face.sponsor.replace(/^Runs on [^·]+· /, '') : 'the owner\'s account'}. Soft by one API call.`) : null) : null,
-      costText(view.cost) ? h('section', { class: 'dsec', 'aria-label': 'Cost' }, h('h3', { class: 'dsec-title' }, 'Cost'),
-        h('p', { class: 'cost-total num' }, costText(view.cost)),
-        view.cost.status !== 'reported' ? h('p', { class: 'muted small' }, 'This AI does not report dollar cost, so it is not counted in totals.') : null) : null,
-      overlapsBlock(det.data?.overlaps ?? view.overlaps, elapsed),
-      h('details', { class: 'dsec drawer-advanced' }, h('summary', { class: 'dsec-title' }, 'Advanced'),
-        more.length ? h('div', { class: 'drawer-actions' }, more) : null,
-        h('section', { 'aria-label': 'Planning' }, h('h3', { class: 'dsec-title' }, 'Planning'),
-          h('p', { class: 'muted' }, `Start: ${view.start_date ?? 'Unscheduled'} · Due: ${view.due_date ?? 'Unscheduled'}`),
-          h('p', { class: 'muted' }, `${view.depends_on?.length ?? 0} predecessors`),
-          model.readOnly || archived ? null : h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'planning-edit', 'data-card': view.id }, 'Edit dates and dependencies'))),
+      requests,
       det.data ? h('section', { class: 'dsec dsec-tabs' },
-        tabs(det.tab, { comments: det.data.comments?.length ?? 0 }),
-        h('div', { class: 'tabpanel', id: 'tabpanel', role: 'tabpanel', 'aria-labelledby': `tab-${det.tab}`, tabindex: '0' },
-          tabPanel(det.tab, det, model, elapsed))) : h('p', { class: 'muted', role: 'status' }, det.error ?? 'Loading details…'));
+        tabs(activeTab, { comments: det.data.comments?.length ?? 0 }),
+        h('div', { class: 'tabpanel', id: 'tabpanel', role: 'tabpanel', 'aria-labelledby': `tab-${activeTab}`, tabindex: '0' },
+          overview ? taskWorkspacePanel(det, model, openCount > 0) : [
+            resultBlock(view, det),
+            reviewBlock(view, det, model),
+            view.capture ? h('section', { class: 'dsec', 'aria-label': 'AI work report' }, h('h3', { class: 'dsec-title' }, 'AI work report'),
+              h('p', {}, 'This card follows activity reported by a local AI session. Your manual edits take priority.'),
+              h('p', { class: 'muted small' }, 'A finished report requests review; it does not verify completion or start an AI run.')) : null,
+            view.client_feedback ? h('section', { class: 'dsec', 'aria-label': 'Client feedback source' }, h('h3', { class: 'dsec-title' }, 'Client feedback'), h('p', {}, `Feedback from ${view.client_feedback.source_name}`), h('p', {}, `Intake authorized by ${view.client_feedback.intake_name}`), h('p', { class: 'muted small' }, 'Feedback intake creates a task for human triage.')) : null,
+            hypothesis ? h('section', { class: 'dsec hypothesis' },
+              h('h3', { class: 'dsec-title' }, 'Current hypothesis'),
+              h('p', null, inline(hypothesis)),
+              det.data?.handover?.ages?.narrative_ms != null ? h('p', { class: 'muted small' }, `Narrative synced ${ago(add(det.data.handover.ages.narrative_ms, elapsed))}`) : null) : null,
+            face.budget ? h('section', { class: 'dsec' }, h('h3', { class: 'dsec-title' }, 'Budget'), budgetBar(face.budget),
+              view.run ? h('p', { class: 'muted small' }, `Spent on ${face.sponsor ? face.sponsor.replace(/^Runs on [^·]+· /, '') : 'the owner\'s account'}. Soft by one API call.`) : null) : null,
+            costText(view.cost) ? h('section', { class: 'dsec', 'aria-label': 'Cost' }, h('h3', { class: 'dsec-title' }, 'Cost'),
+              h('p', { class: 'cost-total num' }, costText(view.cost)),
+              view.cost.status !== 'reported' ? h('p', { class: 'muted small' }, 'This AI does not report dollar cost, so it is not counted in totals.') : null) : null,
+            overlapsBlock(det.data?.overlaps ?? view.overlaps, elapsed),
+            h('details', { class: 'dsec drawer-advanced' }, h('summary', { class: 'dsec-title' }, 'Advanced'),
+              more.length ? h('div', { class: 'drawer-actions' }, more) : null,
+              h('section', { 'aria-label': 'Planning' }, h('h3', { class: 'dsec-title' }, 'Planning'),
+                h('p', { class: 'muted' }, `Start: ${view.start_date ?? 'Unscheduled'} · Due: ${view.due_date ?? 'Unscheduled'}`),
+                h('p', { class: 'muted' }, `${view.depends_on?.length ?? 0} predecessors`),
+                model.readOnly || archived ? null : h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'planning-edit', 'data-card': view.id }, 'Edit dates and dependencies'))),
+            tabPanel(activeTab, det, model, elapsed)]))
+        : h('p', { class: 'muted', role: 'status' }, det.error ?? 'Loading details…'));
 
     return h('dialog', { class: 'drawer', 'data-dialog': 'drawer', 'aria-labelledby': 'drawer-title' },
       h('div', { class: 'drawer-inner' },

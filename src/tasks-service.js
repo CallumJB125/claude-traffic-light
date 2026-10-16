@@ -574,26 +574,77 @@ function createTasksService(opts) {
 
   // extra.startAfter: main's own known reset time for a 'reset' task (Home's "Resume this at reset"); the page cannot set it.
   // extra.wcId: the page's webContents, for the native confirmation of a budget override.
+  // extra.current: main's exact document/account/workspace guard; other main callers retain their existing API.
   async function create(draft, extra = {}) {
     if (!connected()) return failure({ code: 'SUPERVISOR_UNREACHABLE' });
+    const channel = client, current = () => connected() && client === channel && (!extra.current || extra.current() === true);
+    if (!current()) return failure({ code: 'CONFLICT' });
     const cwd = folders.get(typeof draft?.folder === 'string' ? draft.folder : '');
     const v = guard.validateCreate(draft, cwd, { canSchedule: canSchedule() });
     if (!v.ok && v.code === 'PLAN_REQUIRED') return { ok: false, code: 'PLAN_REQUIRED', text: TV.errorText('PLAN_REQUIRED') };
     if (!v.ok || !(await isDir(cwd))) return { ok: false, code: 'VALIDATION', text: TV.errorText('VALIDATION') };
+    if (!current()) return failure({ code: 'CONFLICT' });
     if (v.spec.afterReset && Number.isFinite(extra?.startAfter)) v.spec.startAfter = Math.round(extra.startAfter);
     let held = null;
     try { held = await opts.startGuard?.(cwd); } catch { held = null; }
+    if (!current()) return failure({ code: 'CONFLICT' });
     if (held) {
       if (draft.overrideBudget !== true) return { ok: false, code: 'BUDGET_HELD', text: held.text, canOverride: true };
       let yes = false;
       try { yes = !!(await opts.confirmDialog?.({ action: 'create', label: 'Start anyway', title: 'Start over the limit', where: tilde(cwd, homeDir), detail: `${held.text}\nThis one task will start regardless. Nothing already running is stopped either way.` }, extra?.wcId ?? 0)); } catch { yes = false; }
       if (!yes) return { ok: false, code: 'CONFIRM_REQUIRED', text: '', cancelled: true };
     }
+    if (!current()) return failure({ code: 'CONFLICT' });
     try {
-      const r = await client.createTask(v.spec, { requestId: typeof draft.requestId === 'string' && /^[\w-]{8,128}$/.test(draft.requestId) ? draft.requestId : undefined });
+      const r = await channel.createTask(v.spec, { requestId: typeof draft.requestId === 'string' && /^[\w-]{8,128}$/.test(draft.requestId) ? draft.requestId : undefined });
       refresh().catch(() => {});
       return { ok: true, id: r.id };
     } catch (e) { return failure(e); }
+  }
+
+  // Advisory observations from the existing local helper, never a filesystem lock.
+  async function preflight(req, extra = {}) {
+    const unavailable = () => ({ ok: false, code: 'CONFLICT', text: 'Could not inspect known local work. Check the folder again before starting.' });
+    const cwd = folders.get(typeof req?.folder === 'string' ? req.folder : '');
+    if (!req || Object.keys(req).some(k => k !== 'folder') || !cwd) return failure({ code: 'VALIDATION' });
+    const channel = client, current = () => connected() && client === channel && (!extra.current || extra.current() === true);
+    if (!current()) return unavailable();
+    const active = new Set(['queued', 'claimed', 'running', 'quiet', 'blocked', 'suspended', 'reconnecting', 'unresponsive', 'orphaned', 'handing_over', 'handed_over']);
+    const uncertainStates = new Set(['suspended', 'reconnecting', 'unresponsive', 'orphaned', 'handing_over', 'handed_over', 'done', 'failed']);
+    const clean = (v, max) => typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f]/g, '').slice(0, max) : '';
+    const contains = (root, folder) => { const rel = path.relative(root, folder); return rel === '' || (!rel.startsWith(`..${path.sep}`) && rel !== '..' && !path.isAbsolute(rel)); };
+    try {
+      if (!(await isDir(cwd)) || !current()) return unavailable();
+      const list = await channel.listTasks({});
+      if (!current() || !Array.isArray(list) || list.length > 5000) return unavailable();
+      // Source describes who requested a task, not where it runs. A local Board/phone task can also write here.
+      const local = list.filter(t => t && !t.hub && typeof t.id === 'string' && t.id.length <= 128);
+      const repoRoots = [...new Set(local.map(t => t.repo?.root).filter(root => typeof root === 'string' && path.isAbsolute(root) && contains(root, cwd)))];
+      const root = repoRoots.sort((a, b) => b.length - a.length)[0] || cwd;
+      const claims = await channel.getClaims(root);
+      if (!current() || claims?.repo !== root || !Array.isArray(claims.claims) || claims.claims.length > 5000) return unavailable();
+      const byClaim = new Map(claims.claims.filter(c => c && typeof c.taskId === 'string' && c.taskId.length <= 128).map(c => [c.taskId, c]));
+      const relevant = local.filter(t => t.repo?.root === root && (active.has(t.state) || byClaim.has(t.id)));
+      // Non-Git rows omit their folder in listTasks; inspect only active local rows through the existing detail API.
+      const folderRows = local.filter(t => !t.repo && active.has(t.state));
+      if (folderRows.length > 40) return unavailable();
+      for (const t of folderRows) {
+        const detail = await channel.getTask(t.id);
+        if (!current() || !detail || typeof detail.worktree !== 'string') return unavailable();
+        if (path.isAbsolute(detail.worktree) && contains(detail.worktree, cwd)) relevant.push(t);
+      }
+      // A claim may appear between listTasks and getClaims; retain it as explicitly uncertain.
+      const listed = new Map(list.map(t => [t?.id, t]));
+      for (const [id, claim] of byClaim) if (!listed.has(id)) relevant.push({ id, title: 'Local task', state: 'unknown', branch: claim.branch });
+      const peers = relevant.slice(0, 40).map(raw => {
+        const claim = byClaim.get(raw.id), allPaths = Array.isArray(claim?.paths) ? claim.paths : [];
+        const paths = allPaths.filter(p => typeof p === 'string' && p.length <= 1024 && !/[\u0000-\u001f\u007f]/.test(p) && !path.isAbsolute(p) && !path.win32.isAbsolute(p) && !p.split(/[\\/]/).includes('..')).slice(0, 20).map(p => clean(p, 300));
+        const t = guard.sanitizeTask(raw, { now: now(), homeDir });
+        return { id: clean(t.id, 128), title: clean(t.title, 200), state: raw.state === 'unknown' ? 'unknown' : t.state, branch: clean(t.branch, 200) || null, paths,
+          uncertain: raw.state === 'unknown' || uncertainStates.has(t.state) || raw.workInPlace === true || !claim || paths.length === 0 || paths.length !== allPaths.length || allPaths.some(p => typeof p !== 'string' || p.length > 300) };
+      });
+      return { ok: true, preflight: { checkedAt: now(), peers, note: `Known local Tasks only; other apps and remote work may be missing. Paths are observed so far and can change. Git tasks start in an isolated worktree by default.${relevant.length > 40 ? ' Showing the first 40 tasks.' : ''}` } };
+    } catch { return unavailable(); }
   }
 
   // The helper runs only some AIs; any other AI found on this Mac (src/ai-tools.js
@@ -634,7 +685,7 @@ function createTasksService(opts) {
     return { handle, label };
   }
 
-  return { start, stop, retryNow, snapshot, openTask, closeTask, act, saveCheckpoint, copyTakeover, create, composerInfo, registerFolder, markSeen, folderOf: (handle) => folders.get(handle) ?? null };
+  return { start, stop, retryNow, snapshot, openTask, closeTask, act, saveCheckpoint, copyTakeover, create, preflight, composerInfo, registerFolder, markSeen, folderOf: (handle) => folders.get(handle) ?? null };
 }
 
 module.exports = { createTasksService, OFFLINE };

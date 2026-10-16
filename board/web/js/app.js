@@ -32,7 +32,7 @@ import { triggerActions } from './triggers-actions.js';
 import { teamScreen } from './render-team.js';
 import { emptyFold, pullJournal, windowMetrics, cardMetrics } from './metrics.js';
 import { VIEWS, plannerEnabled } from './views.js';
-import { drawer } from './render-drawer.js';
+import { drawer, drawerTab } from './render-drawer.js';
 import { reportedContextDraft, withLocalHandover } from './local-session-context.js';
 import { colorMap } from './labels.js';
 import { dialog, CLOUD } from './render-dialogs.js';
@@ -1170,7 +1170,7 @@ async function localSessionAction(cardId, action) {
 async function openDetail(cardId, section = null) {
   if (!state.cards.has(cardId) && !state.archived?.has(cardId)) return;
   const same = state.detail?.cardId === cardId;
-  const tab = ['handover', 'comments', 'packet', 'messages', 'ownership'].includes(section) ? section : (same ? state.detail.tab : 'activity');
+  const tab = drawerTab(section, same ? state.detail.tab : undefined);
   state.detail = { ...(same ? state.detail : {}), intent: ++drawerSession, cardId, data: same ? state.detail.data : null, rx: same ? state.detail.rx : null, tab, scrollTo: ['asks', 'overlaps', 'review'].includes(section) ? section : null, error: null };
   try { history.replaceState(null, '', `#card=${encodeURIComponent(cardId)}`); } catch { /* sandboxed */ }
   update();
@@ -1209,7 +1209,7 @@ async function refreshDetail(cardId, { communication = false, ownership = false 
         state.detail = { ...state.detail, ownershipLoaded: true, ownership: null, ownershipError: errorText(err) };
       }
     }
-    if (['packet', 'messages'].includes(state.detail.tab) && !data.card.archived
+    if (['overview', 'packet', 'messages'].includes(state.detail.tab) && !data.card.archived
       && (communication || !state.detail.packetLoaded || perf() - (state.detail.communicationRx ?? 0) >= 5000)) {
       const [packet, messages] = await Promise.allSettled([api.packet(cardId), api.messages(cardId)]);
       if (!current()) return;
@@ -2093,7 +2093,7 @@ function onClick(e) {
       });
       return;
     }
-    case 'tab': if (state.detail) { state.detail = { ...state.detail, tab: el.dataset.tab }; update(); if (['packet', 'messages', 'ownership'].includes(el.dataset.tab)) refreshDetail(state.detail.cardId); } return;
+    case 'tab': if (state.detail) { state.detail = { ...state.detail, tab: el.dataset.tab }; update(); if (['overview', 'packet', 'messages', 'ownership'].includes(el.dataset.tab)) refreshDetail(state.detail.cardId); } return;
     case 'packet-use-report': if (state.detail && !boardReadOnly()) { const draft = reportedContextDraft(state.detail); if (draft) { state.detail = { ...state.detail, packetDraft: draft, packetSaveError: null }; update(); toast('Reported context added to your draft. Review it, then save.'); } } return;
     case 'ownership-reload': if (state.detail) refreshDetail(state.detail.cardId, { ownership: true }); return;
     case 'packet-reload': if (state.detail) state.detail = { ...state.detail, packetDraft: null, packetSaveError: null }; // explicit discard
@@ -2387,7 +2387,7 @@ function onKeydown(e) {
     e.preventDefault();
     state.detail = { ...state.detail, tab: tabs[i].dataset.tab };
     update();
-    if (['packet', 'messages', 'ownership'].includes(tabs[i].dataset.tab)) refreshDetail(state.detail.cardId);
+    if (['overview', 'packet', 'messages', 'ownership'].includes(tabs[i].dataset.tab)) refreshDetail(state.detail.cardId);
     queueMicrotask(() => root.querySelector(`#tab-${tabs[i].dataset.tab}`)?.focus());
   }
 }
@@ -2444,9 +2444,9 @@ setInterval(()=>{
 let detailPollBusy = false;
 setInterval(async () => {
   if (detailPollBusy || state.auth !== 'ok' || state.conn.status !== 'open' || document.visibilityState !== 'visible'
-    || !['ownership', 'messages', 'handover'].includes(state.detail?.tab) || !state.detail.data || state.detail.data.card.archived) return;
+    || !['overview', 'ownership', 'messages', 'handover'].includes(state.detail?.tab) || !state.detail.data || state.detail.data.card.archived) return;
   detailPollBusy = true;
-  try { await refreshDetail(state.detail.cardId, { ownership: state.detail.tab === 'ownership', communication: state.detail.tab === 'messages' }); }
+  try { await refreshDetail(state.detail.cardId, { ownership: state.detail.tab === 'ownership', communication: ['overview', 'messages'].includes(state.detail.tab) }); }
   finally { detailPollBusy = false; }
 }, 5000);
 

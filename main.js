@@ -2057,7 +2057,7 @@ function getTasks() {
         message: `${info.label}?`,
         detail: [`Task: ${info.title}`, info.where ? `Runs in: ${info.where}` : '', info.detail].filter(Boolean).join('\n'),
       });
-      const r = ['merge', 'switchAi', 'openPr'].includes(info.action) ? await buddyWin?.tasksConfirm?.(show) : await show(parent);
+      const r = ['merge', 'switchAi', 'openPr'].includes(info.action) || info.action === 'create' && wc ? await buddyWin?.tasksConfirm?.(show) : await show(parent);
       return r?.response === 1;
     },
     seen: {
@@ -2075,7 +2075,6 @@ ipcMain.handle('tasks:open', (e, id) => (tasksSenderOk(e) ? getTasks().openTask(
 ipcMain.handle('tasks:close', (e) => { if (tasksSenderOk(e)) return getTasks().closeTask(e.sender.id); return null; });
 require('./src/tasks-main').register({ipcMain,buddy:()=>buddyWin,service:getTasks});
 ipcMain.handle('tasks:checkpoint', (e, req) => (tasksSenderOk(e) ? getTasks().saveCheckpoint(req, e.sender.id) : null));
-ipcMain.handle('tasks:create', (e, draft) => (tasksSenderOk(e) ? getTasks().create(draft, { wcId: e.sender.id }) : null));
 ipcMain.handle('tasks:composer', (e) => (tasksSenderOk(e) ? getTasks().composerInfo() : null));
 ipcMain.handle('tasks:copy-takeover', (e, id) => !!tasksSenderOk(e) && typeof id === 'string' && getTasks().copyTakeover(id));
 // The folder comes back as an opaque handle plus a label: the page cannot name a path of its own.
