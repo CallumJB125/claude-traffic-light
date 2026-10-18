@@ -88,6 +88,8 @@ const state = {
   // Archived cards (D94) are not in the snapshot: "Show archived" fetches them into their own map.
   showArchived: false,
   pinboardOpen: false,
+  viewsOpen: false,
+  momentsOpen: false,
   archived: null, // id → {view, rx} while showArchived
   // team.presence (D37b). `stale` from a socket drop until the next frame.
   presence: { members: [], loaded: false, stale: false },
@@ -457,6 +459,9 @@ function buildModel() {
     entries,
     visible: filtered.entries,
     filters: state.filters,
+    filtersActive: isFiltering(state.filters),
+    viewsOpen: state.viewsOpen,
+    momentsOpen: state.momentsOpen,
     filterInfo: { total: filtered.total, shown: filtered.shown, options: filterOptions(entries, fctx), archived: state.archived?.size ?? null },
     labelColors,
     showArchived: state.showArchived,
@@ -1039,6 +1044,13 @@ function onMessage(msg) {
       if (msg.board_id !== state.boardId || !state.board) return;
       state.board = { ...state.board, settings: { ...(state.board.settings ?? {}), pins: Array.isArray(msg.pins) ? msg.pins : [] } };
       break;
+    case 'board.views':
+    case 'board.moments': {
+      if (msg.board_id !== state.boardId || !state.board) return;
+      const key = msg.type === 'board.views' ? 'views' : 'moments';
+      state.board = { ...state.board, settings: { ...(state.board.settings ?? {}), [key]: Array.isArray(msg[key]) ? msg[key] : [] } };
+      break;
+    }
     case 'lease.tick': {
       const c = state.cards.get(msg.card_id);
       if (!c) return;
@@ -1125,6 +1137,63 @@ async function removePin(id) {
   const res = await withBusy(`pin:${id}`, () => api.removePin(state.boardId, id));
   if (!res?.pins) return;
   state.board = { ...state.board, settings: { ...(state.board.settings ?? {}), pins: res.pins } };
+  update();
+}
+// ── shared views and moments ────────────────────────────────────────────────
+function viewValues(f) {
+  const out = {};
+  if (f.q.trim()) out.q = f.q.trim();
+  if (f.chips.length) out.chips = f.chips.join(',');
+  if (f.labels.length) out.labels = f.labels.join(',');
+  if (f.assignee) out.assignee = f.assignee;
+  return out;
+}
+function filtersFromView(values) {
+  const f = emptyFilters();
+  if (typeof values.q === 'string') f.q = values.q;
+  if (typeof values.chips === 'string') f.chips = values.chips.split(',').filter(Boolean);
+  if (typeof values.labels === 'string') f.labels = values.labels.split(',').filter(Boolean);
+  if (typeof values.assignee === 'string') f.assignee = values.assignee;
+  return f;
+}
+async function saveView(name, form) {
+  if (!name) { toast('Name the view first.', 'error'); return; }
+  const values = viewValues(state.filters);
+  if (!Object.keys(values).length) { toast('Set some filters first, then save them as a view.', 'error'); return; }
+  state.viewsOpen = true;
+  const res = await withBusy('view:save', () => api.saveView(state.boardId, { name, values }));
+  if (!res?.views) return;
+  state.board = { ...state.board, settings: { ...(state.board.settings ?? {}), views: res.views } };
+  form?.reset?.();
+  toast(`Saved “${name}” for the team.`);
+  update();
+}
+function applyView(id) {
+  const v = (state.board?.settings?.views ?? []).find((x) => x.id === id);
+  if (!v) return;
+  setFilters(filtersFromView(v.values));
+  toast(`Showing “${v.name}”.`);
+}
+async function removeView(id) {
+  const res = await withBusy(`view:${id}`, () => api.removeView(state.boardId, id));
+  if (!res?.views) return;
+  state.board = { ...state.board, settings: { ...(state.board.settings ?? {}), views: res.views } };
+  update();
+}
+async function markMoment(moment, form) {
+  if (!moment.label) { toast('Say what happened.', 'error'); return; }
+  state.momentsOpen = true;
+  const res = await withBusy('moment:mark', () => api.markMoment(state.boardId, moment));
+  if (!res?.moments) return;
+  state.board = { ...state.board, settings: { ...(state.board.settings ?? {}), moments: res.moments } };
+  form?.reset?.();
+  toast(`Marked “${moment.label}”.`);
+  update();
+}
+async function removeMoment(id) {
+  const res = await withBusy(`moment:${id}`, () => api.removeMoment(state.boardId, id));
+  if (!res?.moments) return;
+  state.board = { ...state.board, settings: { ...(state.board.settings ?? {}), moments: res.moments } };
   update();
 }
 function setShowArchived(on) {
@@ -2168,6 +2237,9 @@ function onClick(e) {
     case 'toggle-done': state.showAllDone = !state.showAllDone; update(); return;
     case 'toggle-archived': setShowArchived(!state.showArchived); return;
     case 'pin-remove': void removePin(el.dataset.pin); return;
+    case 'view-apply': applyView(el.dataset.view); return;
+    case 'view-remove': void removeView(el.dataset.view); return;
+    case 'moment-remove': void removeMoment(el.dataset.moment); return;
     case 'archive': archiveCards([cardId]); return;
     case 'clear-idle': archiveCards((el.dataset.ids || '').split(',').filter(Boolean)); return;
     case 'restore': restoreCards([cardId]); return;
@@ -2235,6 +2307,16 @@ function onSubmit(e) {
   if (form.dataset.form === 'pin-add') {
     const fd = new FormData(form);
     void addPin({ kind: String(fd.get('kind') ?? 'note'), label: String(fd.get('label') ?? '').trim(), value: String(fd.get('value') ?? '').trim() }, form);
+    return;
+  }
+  if (form.dataset.form === 'view-save') {
+    const fd = new FormData(form);
+    void saveView(String(fd.get('name') ?? '').trim(), form);
+    return;
+  }
+  if (form.dataset.form === 'moment-mark') {
+    const fd = new FormData(form);
+    void markMoment({ kind: String(fd.get('kind') ?? 'moment'), label: String(fd.get('label') ?? '').trim(), note: String(fd.get('note') ?? '').trim() }, form);
     return;
   }
   if (form.dataset.form === 'planning-zone') {
@@ -2438,7 +2520,7 @@ function onImgError(e) {
 
 document.addEventListener('click', onClick);
 document.addEventListener('submit', onSubmit);
-document.addEventListener('toggle', (e) => { if (e.target?.dataset?.actionToggle === 'pinboard') state.pinboardOpen = e.target.open; }, true);
+document.addEventListener('toggle', (e) => { const t = e.target?.dataset?.actionToggle; if (t === 'pinboard') state.pinboardOpen = e.target.open; else if (t === 'views') state.viewsOpen = e.target.open; else if (t === 'moments') state.momentsOpen = e.target.open; }, true);
 document.addEventListener('change', onChange);
 document.addEventListener('input', onInput);
 document.addEventListener('keydown', onKeydown);

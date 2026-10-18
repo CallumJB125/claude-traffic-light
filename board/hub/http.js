@@ -554,6 +554,10 @@ export function createHttpHandler({ hub, api, config, integrations = null, githu
   route('GET', '/api/boards/:board_id', ({ member, params, query }) => selectedContext(hub, api.snapshot(member, params.board_id, { includeArchived: query.get('include_archived') === '1' }), communicationOptions(query).boardIds));
   route('PUT', '/api/boards/:board_id/pins', ({ member, params, body, ident }) => api.setPins(member, params.board_id, body, { cred: ident?.cred ?? null }), { writeScope: 'board' });
   route('POST', '/api/boards/:board_id/pins', ({ member, params, body, ident }) => api.setPins(member, params.board_id, body, { cred: ident?.cred ?? null, mode: 'append' }), { writeScope: 'board' });
+  route('POST', '/api/boards/:board_id/views', ({ member, params, body, ident }) => api.setViews(member, params.board_id, body, { cred: ident?.cred ?? null }), { writeScope: 'board' });
+  route('DELETE', '/api/boards/:board_id/views/:view_id', ({ member, params, body, ident }) => api.setViews(member, params.board_id, { ...body, id: params.view_id }, { cred: ident?.cred ?? null, mode: 'remove' }), { writeScope: 'board' });
+  route('POST', '/api/boards/:board_id/moments', ({ member, params, body, ident }) => api.setMoments(member, params.board_id, body, { cred: ident?.cred ?? null }), { writeScope: 'board' });
+  route('DELETE', '/api/boards/:board_id/moments/:moment_id', ({ member, params, body, ident }) => api.setMoments(member, params.board_id, { ...body, id: params.moment_id }, { cred: ident?.cred ?? null, mode: 'remove' }), { writeScope: 'board' });
   route('DELETE', '/api/boards/:board_id/pins/:pin_id', ({ member, params, body, ident }) => api.setPins(member, params.board_id, { ...body, id: params.pin_id }, { cred: ident?.cred ?? null, mode: 'remove' }), { writeScope: 'board' });
   route('GET', '/api/boards/:board_id/labels', ({ member, params }) => api.listLabels(member, params.board_id));
   route('POST', '/api/boards/:board_id/labels', ({ member, params, body, ident }) => api.createLabel(member, params.board_id, body, { cred: ident?.cred ?? null }), { writeScope: 'board' });

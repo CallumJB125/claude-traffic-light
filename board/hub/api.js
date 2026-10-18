@@ -573,6 +573,72 @@ export class Api {
   // Project pinboard (board.settings.pins): staging URL, designs, commands, conventions, priorities.
   // Any writer may add or remove a pin; viewers read. Append-only journal, same scrub as labels.
   pinsOf(boardId) { return Array.isArray(json(this.hub.board(boardId).settings, {}).pins) ? json(this.hub.board(boardId).settings, {}).pins : []; }
+  // Shared saved views (board.settings.views): a named filter combination any writer can save for the team.
+  viewsOf(boardId) { return Array.isArray(json(this.hub.board(boardId).settings, {}).views) ? json(this.hub.board(boardId).settings, {}).views : []; }
+  async setViews(member, boardId, body, { cred = null, mode = 'append' } = {}) {
+    member = this.currentWriter(member, cred);
+    this.boardFor(member, boardId);
+    this.requireLabel(member, 'label.write');
+    const clean = (v) => {
+      if (!v || typeof v !== 'object') throw new HubError('VALIDATION', 'view must be an object');
+      const name = str(v.name, 60, 'view.name', { required: true });
+      if (!v.values || typeof v.values !== 'object' || Array.isArray(v.values)) throw new HubError('VALIDATION', 'view.values must be an object of filter values');
+      const entries = Object.entries(v.values).filter(([k, val]) => /^[a-z][a-z0-9_-]{0,23}$/i.test(k) && typeof val === 'string' && val.trim()).slice(0, 8).map(([k, val]) => [k, val.trim().slice(0, 80)]);
+      if (!entries.length) throw new HubError('VALIDATION', 'a view needs at least one filter value');
+      const id = typeof v.id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(v.id) ? v.id : randomUUID();
+      return { id, name, values: Object.fromEntries(entries) };
+    };
+    const item = mode === 'remove' ? null : clean(body.view);
+    return this.withWritableBoard(boardId, (current) => {
+      member = current;
+      this.requireLabel(member, 'label.write');
+      const now = this.hub.iso();
+      const before = this.viewsOf(boardId);
+      if (mode === 'remove' && !before.some((x) => x.id === body.id)) throw new HubError('NOT_FOUND', 'no such view');
+      const views = mode === 'remove' ? before.filter((x) => x.id !== body.id)
+        : [...before.filter((x) => x.id !== item.id && x.name.toLowerCase() !== item.name.toLowerCase()), { ...item, by: member.display_name ?? 'A teammate', at: now }];
+      if (views.length > 20) throw new HubError('VALIDATION', 'a board holds at most 20 shared views');
+      const settings = { ...json(this.hub.board(boardId).settings, {}), views };
+      this.hub.txn(() => {
+        this.db.run('UPDATE boards SET settings = ? WHERE id = ?', JSON.stringify(settings), boardId);
+        this.hub.journal({ board_id: boardId, actor_kind: 'member', actor_id: member.id, kind: 'board.views_set', payload: { count: views.length, mode, request_id: body.request_id ?? null } });
+        this.hub.later(() => this.hub.broadcastSettings(boardId, 'views'));
+      });
+      return { views };
+    }, { member, cred });
+  }
+  // Moments (board.settings.moments): "mark a moment" — a dated note the team keeps (a demo, a decision, a ship).
+  momentsOf(boardId) { return Array.isArray(json(this.hub.board(boardId).settings, {}).moments) ? json(this.hub.board(boardId).settings, {}).moments : []; }
+  async setMoments(member, boardId, body, { cred = null, mode = 'append' } = {}) {
+    member = this.currentWriter(member, cred);
+    this.boardFor(member, boardId);
+    this.requireLabel(member, 'label.write');
+    const KINDS = ['moment', 'ship', 'decision', 'demo'];
+    const clean = (m) => {
+      if (!m || typeof m !== 'object') throw new HubError('VALIDATION', 'moment must be an object');
+      const kind = KINDS.includes(m.kind) ? m.kind : 'moment';
+      const label = str(m.label, 120, 'moment.label', { required: true });
+      const note = str(m.note, 500, 'moment.note') ?? '';
+      const id = typeof m.id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(m.id) ? m.id : randomUUID();
+      return { id, kind, label, note };
+    };
+    const item = mode === 'remove' ? null : clean(body.moment);
+    return this.withWritableBoard(boardId, (current) => {
+      member = current;
+      this.requireLabel(member, 'label.write');
+      const now = this.hub.iso();
+      const before = this.momentsOf(boardId);
+      if (mode === 'remove' && !before.some((x) => x.id === body.id)) throw new HubError('NOT_FOUND', 'no such moment');
+      const moments = mode === 'remove' ? before.filter((x) => x.id !== body.id) : [{ ...item, by: member.display_name ?? 'A teammate', at: now }, ...before].slice(0, 50);
+      const settings = { ...json(this.hub.board(boardId).settings, {}), moments };
+      this.hub.txn(() => {
+        this.db.run('UPDATE boards SET settings = ? WHERE id = ?', JSON.stringify(settings), boardId);
+        this.hub.journal({ board_id: boardId, actor_kind: 'member', actor_id: member.id, kind: mode === 'remove' ? 'board.moment_removed' : 'board.moment_marked', payload: { kind: item?.kind ?? null, request_id: body.request_id ?? null } });
+        this.hub.later(() => this.hub.broadcastSettings(boardId, 'moments'));
+      });
+      return { moments };
+    }, { member, cred });
+  }
   async setPins(member, boardId, body, { cred = null, mode = 'replace' } = {}) {
     member = this.currentWriter(member, cred);
     this.boardFor(member, boardId);

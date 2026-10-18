@@ -1103,6 +1103,12 @@ export class Hub extends EventEmitter {
     for (const b of this.browsers) if (b.boardId === boardId) b.send({ type: 'card.remove', board_id: boardId, card_id: cardId });
   }
 
+  // One board.settings list (views, moments) to every browser on the board.
+  broadcastSettings(boardId, key) {
+    const s = json(this.board(boardId).settings, {});
+    const list = Array.isArray(s[key]) ? s[key] : [];
+    for (const b of this.browsers) if (b.boardId === boardId) b.send({ type: `board.${key}`, board_id: boardId, [key]: list });
+  }
   broadcastPins(boardId) {
     const pins = Array.isArray(json(this.board(boardId).settings, {}).pins) ? json(this.board(boardId).settings, {}).pins : [];
     for (const b of this.browsers) if (b.boardId === boardId) b.send({ type: 'board.pins', board_id: boardId, pins });

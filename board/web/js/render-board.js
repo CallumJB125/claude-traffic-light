@@ -7,6 +7,7 @@ import { inline } from './markdown.js';
 import { VIEWS } from './views.js';
 import { filterBar } from './render-filters.js';
 import { pinboardPanel } from './pinboard.js';
+import { sharedViewsPanel, momentsPanel } from './moments.js';
 import { THEMES, BACKGROUNDS } from './themes.js';
 import { cardChips } from './chips.js';
 import { costText, boardCostRollup, dailyCapText } from './cost.js';
@@ -446,6 +447,8 @@ export function boardScreen(model, body = null) {
     needsYouSection(model.needsYou, model),
     localCard(model),
     pinboardPanel(model),
+    sharedViewsPanel(model),
+    momentsPanel(model),
     model.view === 'dashboard' ? null : filterBar(model),
     body ? null : stalledLane(cols.stalled, model),
     body ?? h('main', { class: 'board board-with-idle', id: 'board', 'aria-label': 'Board columns' },

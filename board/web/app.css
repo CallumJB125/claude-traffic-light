@@ -1419,4 +1419,9 @@ dialog::backdrop { background: var(--backdrop); transition: opacity 200ms ease; 
 .pin-form { display: grid; grid-template-columns: 120px 1fr 2fr auto; gap: 8px; padding: 6px 0 12px; border-top: 1px solid var(--line); }
 .pin-form input, .pin-form select { font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line-input, var(--line)); border-radius: var(--radius-sm); padding: 6px 8px; min-width: 0; }
 .pin-empty { padding: 0 0 10px; }
+.shared-views .pin-form { grid-template-columns: 1fr auto; }
+.pin-view .pin-label.link { border: 0; background: none; color: var(--accent); cursor: pointer; font: inherit; text-align: left; padding: 0; }
+.shipped-week h4 { margin: 8px 0 2px; color: var(--muted); font-weight: 600; }
+.pin-ship .pin-label::before { content: '🚀 '; }
+.pin-moment-decision .pin-kind, .pin-moment-demo .pin-kind { color: var(--accent); }
 @media (max-width: 720px) { .pin { grid-template-columns: 1fr auto; } .pin-kind, .pin-value, .pin-by { grid-column: 1; } .pin-remove { grid-column: 2; grid-row: 1; } .pin-form { grid-template-columns: 1fr 1fr; } }
