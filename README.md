@@ -253,6 +253,16 @@ Lights, rules, overlay effects, sounds (system beep or a file), speech and
 the local endpoint all work; Dock-icon roaming, macOS Shortcuts and the
 menu-bar template icon are macOS-only.
 
+## Teammates on the widget
+
+When a teammate sends you "Can you look at this?", or you are waiting on one,
+the widget shows a small **Teammates** panel under the character (the same
+spot as the "While you were away" recap, which takes precedence). Each row
+names who is asking and what about, or who you are waiting on and where that
+stands; click a row to open Agent mail. The × hides that set until it
+changes. The tooltip carries the counts too. Nothing new is sent or fetched:
+the panel reads the agent-mail inbox you already opted in to.
+
 ## Answer permission prompts from the widget
 
 Preferences → **Answer permission prompts from the widget** (off by default)

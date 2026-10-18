@@ -130,7 +130,7 @@ function applyStatus(data) {
   else if (Array.isArray(data.inputs)) bubble.update(data.inputs, { scopes: window.WorkScopeView.scopesBySession(data.sessions) });
   // A look preview carries no budget field: keep what is showing.
   if (data.budget !== undefined || data.reason === 'travel') renderBudget(data.reason === 'travel' ? null : data.budget);
-  renderAway(data.reason === 'travel' ? null : data.away);
+  renderAway(data.reason === 'travel' ? null : data.away, data.reason === 'travel' ? null : data.team);
   idleNow = data.reason === 'idle' && !(data.inputs && data.inputs.length);
   if (idleNow && !hintAsked) { hintAsked = true; window.trafficLight.teamHint().then((h) => { hintOffer = h; paintRow(); }).catch(() => {}); }
   else paintRow();
@@ -171,7 +171,8 @@ function applyStatus(data) {
   const reported = !['manual', 'preview', 'travel'].includes(data.reason) ? data.providerStatus?.headline : null;
   const reportAge = data.providerStatus?.latest_age_ms;
   const seen = reported ? Number.isFinite(reportAge) && reportAge >= 0 ? ` · Last seen ${Math.floor(reportAge / 1000)}s ago` : ' · Last seen unknown' : '';
-  tooltip.textContent = (reported ? `${reported} · Rule “${text}”` : text) + suffix + (data.paceLine ? ` — ${data.paceLine}` : '') + seen;
+  const team = data.team ? ` · ${data.team.looks.length ? `${data.team.looks.length} teammate${data.team.looks.length === 1 ? '' : 's'} asking you to look` : ''}${data.team.looks.length && data.team.waiting.length ? ', ' : ''}${data.team.waiting.length ? `waiting on ${data.team.waiting.length}` : ''}` : '';
+  tooltip.textContent = (reported ? `${reported} · Rule “${text}”` : text) + suffix + team + (data.paceLine ? ` — ${data.paceLine}` : '') + seen;
 }
 
 // In-app update row. Text only (textContent): a hub name is not ours.
@@ -292,12 +293,48 @@ document.getElementById('budget-x').addEventListener('click', (e) => { e.stopPro
 const AWAY_LINES = 3;
 const AWAY_WORDS = { 'needs-you': (x) => x.detail || 'needs you', failed: (x) => `failed${x.detail && x.detail !== 'error' ? ` (${x.detail})` : ''}`, done: () => 'done' };
 let awayKey = null;
-function renderAway(recap) {
-  document.body.classList.toggle('away', !!recap);
-  const key = recap ? `${recap.to}` : null;
+let teamDismissed = null; // the team panel the person closed; it returns when the requests change
+const teamKey = (team) => team ? [...team.looks.map((l) => `l:${l.id}:${l.handling ? 1 : 0}`), ...team.waiting.map((w) => `w:${w.id}:${w.state}`)].join('|') : null;
+// Teammates' requests take the recap's panel when there is no recap: who is asking me to look, and what I am waiting on.
+function renderTeam(team, rows) {
+  document.getElementById('away-head').textContent = 'Teammates';
+  document.getElementById('away-head').title = `${team.looks.length} asking you to look · ${team.waiting.length} you are waiting on — click a row to open agent mail`;
+  const els = [];
+  for (const l of team.looks.slice(0, AWAY_LINES)) {
+    const b = document.createElement('button');
+    b.className = `row look${l.handling ? ' handling' : ''}`;
+    b.title = `${l.from} asks: ${l.question}${l.handling ? ' — you said you would handle it' : ''}`;
+    const dot = document.createElement('i'); dot.className = 'dot';
+    const text = document.createElement('span'); text.textContent = `${l.from} · ${l.handling ? 'handling' : 'asks'} · ${l.question}`;
+    b.append(dot, text);
+    b.addEventListener('mousedown', (e) => e.stopPropagation());
+    b.addEventListener('click', async (e) => { e.stopPropagation(); if (!(await window.trafficLight.openMail())) showFeedback('Agent mail could not be opened'); });
+    els.push(b);
+  }
+  for (const w of team.waiting.slice(0, Math.max(0, AWAY_LINES - els.length))) {
+    const b = document.createElement('button');
+    b.className = 'row waiting';
+    b.title = `Waiting on ${w.to}: ${w.question} — ${w.state}`;
+    const dot = document.createElement('i'); dot.className = 'dot';
+    const text = document.createElement('span'); text.textContent = `Waiting on ${w.to} · ${w.state}`;
+    b.append(dot, text);
+    b.addEventListener('mousedown', (e) => e.stopPropagation());
+    b.addEventListener('click', async (e) => { e.stopPropagation(); if (!(await window.trafficLight.openMail())) showFeedback('Agent mail could not be opened'); });
+    els.push(b);
+  }
+  const extra = team.looks.length + team.waiting.length - els.length;
+  if (extra > 0) { const m = document.createElement('div'); m.className = 'more'; m.textContent = `+${extra} more`; els.push(m); }
+  rows.replaceChildren(...els);
+}
+function renderAway(recap, team = null) {
+  const showTeam = !recap && !!team && teamKey(team) !== teamDismissed;
+  document.body.classList.toggle('away', !!recap || showTeam);
+  document.body.classList.toggle('team', showTeam);
+  const key = recap ? `${recap.to}` : showTeam ? `team:${teamKey(team)}` : null;
   if (key === awayKey) return;
   awayKey = key;
   const rows = document.getElementById('away-rows');
+  if (showTeam) { renderTeam(team, rows); return; }
   if (!recap) { rows.replaceChildren(); return; }
   document.getElementById('away-head').textContent = 'While you were away';
   document.getElementById('away-head').title = `${recap.headline}${recap.reasons && recap.reasons.length ? ` — while busy (${recap.reasons.join(', ')})` : ''}`;
@@ -334,7 +371,7 @@ function renderAway(recap) {
   rows.replaceChildren(...els);
 }
 document.getElementById('away-x').addEventListener('mousedown', (e) => e.stopPropagation());
-document.getElementById('away-x').addEventListener('click', (e) => { e.stopPropagation(); window.trafficLight.awayDismiss(); });
+document.getElementById('away-x').addEventListener('click', (e) => { e.stopPropagation(); if (document.body.classList.contains('team')) { teamDismissed = awayKey ? awayKey.slice('team:'.length) : null; awayKey = null; renderAway(null, null); } else window.trafficLight.awayDismiss(); });
 
 refresh();
 window.trafficLight.onStatusChanged(refresh);

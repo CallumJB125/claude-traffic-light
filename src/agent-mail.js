@@ -430,7 +430,8 @@ function create({ identity, resolve, fetch, home = null, enabled = () => false, 
   }
   const poke = () => { if (running) poll().catch(() => {}); };
   // Home's "Needs you": what is known now, without asking the hub.
-  const pending = () => (identity() ? { held: heldIds.size, inbox: inbox.length, waiting: waitingMemo?.value ?? [] } : { held: 0, inbox: 0, waiting: [] });
+  const looks = () => inbox.filter(isLook).map((m) => ({ id: m.id, from: m.source?.name ?? 'a teammate', question: questionOf(m), handling: m.handoff?.state === 'accepted' }));
+  const pending = () => (identity() ? { held: heldIds.size, inbox: inbox.length, waiting: waitingMemo?.value ?? [], looks: looks() } : { held: 0, inbox: 0, waiting: [], looks: [] });
 
   return { OPS, op, list, release, open, answer, decline, askAi, accept, teammates, sendHandoff, sent, askLook, waitingOn, acknowledge, resolveLook, replyLook, taskEnded, acceptedTasks, sync, stop, poke, pending, polling: () => running, held, LIMITS, LOOK_LABEL };
 }

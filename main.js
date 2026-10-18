@@ -818,6 +818,8 @@ function sumTasks(sessions) {
 // the overlay, the garden, the roamer, the alert sound). Resolving it once and
 // handing out the same object for 200 ms turns that back into one pass.
 let stateMemo = { at: 0, key: null, value: null };
+// Teammates' open "Can you look at this?" requests and my Waiting on, for the widget. Set once agent mail exists.
+let teamRequests = () => null;
 
 // A dropped network otherwise only shows up as a failed turn, and Claude
 // Code's idle nudge a minute later used to paper over even that.
@@ -906,7 +908,7 @@ function computeState(opts = {}) {
   const minions = config.showAgents ? Rules.filterAgentKinds(Rules.liveAgents(sessions), config.agentKinds).slice(0, 32) : [];
   const sNote = spendNote(config.rules, fired, sessions, spend);
   const stuck = Stuck.summary(sessions);
-  return { stuck, look: { ...Stuck.applyStuck(withNumber(look, sessions, tasks), stuck), tasks, minions, agentRoster: config.agentRoster !== false, agentChipSize: config.agentChipSize }, reason: sessions.length ? 'session' : 'idle', sessions, fired, owned, firedNames: Rules.firedNames(config.rules, fired, owned), tool: currentTool(sessions), agentCount, pending, inputs, tasks, minions, spend, spendNote: sNote, paceLine: config.paceTooltip !== false && spend && spend.pace && spend.pace.noteworthy && !sNote ? spend.pace.text : null, away: BusyWatch.recap(), budget: budgetView(), busy: BusyWatch.holding() };
+  return { stuck, look: { ...Stuck.applyStuck(withNumber(look, sessions, tasks), stuck), tasks, minions, agentRoster: config.agentRoster !== false, agentChipSize: config.agentChipSize }, reason: sessions.length ? 'session' : 'idle', sessions, fired, owned, firedNames: Rules.firedNames(config.rules, fired, owned), tool: currentTool(sessions), agentCount, pending, inputs, tasks, minions, spend, spendNote: sNote, paceLine: config.paceTooltip !== false && spend && spend.pace && spend.pace.noteworthy && !sNote ? spend.pace.text : null, away: BusyWatch.recap(), budget: budgetView(), busy: BusyWatch.holding(), team: teamRequests() };
 }
 
 // The tool of the most recently updated session that is using one.
@@ -1767,7 +1769,9 @@ const hostSync=require('./src/interaction-host-sync').createInteractionHostSync(
 // Agent mail (board/MESSAGING.md §6a): local AIs' asks to teammates, held on the hub until
 // Send on Sessions; the teammates' side is an opt-in inbox poll with hostSync's lifecycle.
 const AgentMail=require('./src/agent-mail').create({identity:()=>devMockReady?getBuddy().interactionHostIdentity?.()??null:null,resolve:async(a)=>(devMockReady?(await getBuddy().teamActivityLink?.(a))??null:null),
-  fetch:(...a)=>net.fetch(...a),home:os.homedir(),enabled:()=>loadConfig().agentMailInbox===true,notify:n=>notifyAgentMail(n),onChange:()=>buddyWin?.sendToPage('sessions','mail:changed'),log:m=>console.log(m)}); // privacy-flow: agent-mail
+  fetch:(...a)=>net.fetch(...a),home:os.homedir(),enabled:()=>loadConfig().agentMailInbox===true,notify:n=>notifyAgentMail(n),onChange:()=>{buddyWin?.sendToPage('sessions','mail:changed');stateMemo={at:0,key:null,value:null};broadcastStatus();},log:m=>console.log(m)}); // privacy-flow: agent-mail
+teamRequests = () => { const p = AgentMail.pending(); const looks = (p.looks || []).slice(0, 3), waiting = (p.waiting || []).slice(0, 3); return looks.length || waiting.length ? { looks, waiting } : null; };
+ipcMain.handle('open-mail', (e) => { if (!widgetOnly(e)) return false; openBuddy('sessions'); return true; });
 require('./src/pinboard.js').register({ipcMain,allowed:sessionsSender,pinboard:require('./src/pinboard.js').createPinboard({resolve:async(a)=>(devMockReady?(await getBuddy().teamActivityLink?.(a))??null:null),fetch:(...a)=>net.fetch(...a),log:m=>console.log(m)}),cwdFor:async(key)=>{try{const p=await teammatePacketFromDoc(SessionHandoverMain.writer.text(key));return p?.cwd??null;}catch{return null;}}}); // privacy-flow: pinboard
 require('./src/agent-mail').register({ipcMain,allowed:sessionsSender,mail:AgentMail,tasks:()=>{const t=getTasks();t.start();return t;},
   confirm:async(info,e)=>(await dialog.showMessageBox(BrowserWindow.fromWebContents(e.sender)||undefined,{type:'question',buttons:['Cancel',info.action],defaultId:0,cancelId:0,noLink:true,message:`${info.title}?`,detail:info.detail})).response===1,
@@ -3037,7 +3041,7 @@ function broadcastStatus() {
     updateOverlay(st.look);
     const tk = JSON.stringify(WorkScopeView.trayItem(localSessions(st.sessions || []), { available: typeof WorkScope?.setSessionScope === 'function' }));
     if (tk !== trayScopeKey) { trayScopeKey = tk; refreshTrayMenu(); }
-    stripAway = !!st.away && !travelLook;
+    stripAway = (!!st.away || !!st.team) && !travelLook;
     stripBudget = budgetNotices.list().length > 0;
     applyStrip(travelLook ? 0 : bubblePx, stripAway, updateRowShown && !travelLook, stripBudget && !travelLook);
     updateGarden(st);

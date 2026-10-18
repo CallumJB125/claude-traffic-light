@@ -55,6 +55,7 @@ contextBridge.exposeInMainWorld('trafficLight', {
   updaterInstall: (when) => ipcRenderer.invoke('updater:install', { when: when === 'now' ? 'now' : 'idle' }),
   openUpdates: () => ipcRenderer.invoke('open-updates'),
   updateRowShown: (on) => ipcRenderer.send('update-row', !!on),
+  openMail: () => ipcRenderer.invoke('open-mail'),
   awayOpen: (i) => ipcRenderer.invoke('away-open', i),
   awayDismiss: () => ipcRenderer.invoke('away-dismiss'),
   // Budget notice: the widget names a run and an action; main builds the fragment.
