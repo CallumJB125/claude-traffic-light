@@ -89,8 +89,11 @@ if (policyBlock) { try { fs.writeSync(1, JSON.stringify(policyBlock)); } catch {
 // this same script in-process. Anything but a clear "handled" within a short
 // timeout, and the work below happens here exactly as before.
 const Fast = require('./fast-hook.js');
+// The fast path intentionally discards stdout; a prompt brief must reach the
+// real provider hook, not the in-process status reporter.
+const needsTurnBrief = signal === 'prompt-submit' && require('./team-brief.js').enabled(ROOT_DIR);
 // The app's own in-process run sets NO_FAST: it must never forward to itself.
-const fastEndpoint = !gateDeny && !process.env.PLEXIFORM_NO_FAST && Fast.eligible(signal, data) ? Fast.readEndpoint(ROOT_DIR) : null;
+const fastEndpoint = !gateDeny && !needsTurnBrief && !process.env.PLEXIFORM_NO_FAST && Fast.eligible(signal, data) ? Fast.readEndpoint(ROOT_DIR) : null;
 if (fastEndpoint) {
   Fast.forward(Fast.build({ signal, payload, env: process.env, ppid: process.ppid, cwd: process.cwd(), token: fastEndpoint.token }), fastEndpoint)
     .then((handled) => (handled ? process.exit(0) : fullPath()), () => fullPath());
@@ -303,12 +306,14 @@ function finish() {
   if (hookOutput) {
     const buf = Buffer.from(JSON.stringify(hookOutput));
     const sleeper = new Int32Array(new SharedArrayBuffer(4));
+    let wrote = true;
     for (let off = 0; off < buf.length;) {
       try { off += fs.writeSync(1, buf, off); } catch (e) {
-        if (e.code !== 'EAGAIN') break;
+        if (e.code !== 'EAGAIN') { wrote = false; break; }
         Atomics.wait(sleeper, 0, 0, 5);
       }
     }
+    if (wrote && hookOutput.hookSpecificOutput?.additionalContext) require('./team-brief.js').recordDelivered(hookOutput);
   }
   process.exit(0);
 }
@@ -650,7 +655,7 @@ if (signal === 'tool-use' && tool === 'AskUserQuestion' && !data?.agent_id && as
 // `workingSince` marks when the current turn began (for the "working over N
 // minutes" signal) and resets on each new prompt.
 // Judged on the unlocked read: skipping is only ever safe, never a lost write.
-if (prevOnEntry && resolved !== 'subagent-start' && resolved !== 'subagent-done' && tool !== 'TaskStop'
+if (prevOnEntry && !needsTurnBrief && signal !== 'session-start' && resolved !== 'subagent-start' && resolved !== 'subagent-done' && tool !== 'TaskStop'
     && !Machine.claudeInputPending(prevOnEntry) && !(resolved === 'permission-ask' && typeof data?.tool_use_id === 'string')) {
   const prev = prevOnEntry;
   const agentChurn = fromSubagent && stepOf(prev, new Date().toISOString()).bookkeeping;
@@ -694,7 +699,7 @@ writeSession({ hostApp: detectHostApp(starting ? null : prevOnEntry?.hostApp), p
 // Opt-in team brief (hooks/team-brief.js): the session is already recorded, and
 // it gives up after 800 ms, so the light never waits on the hub. With it off
 // the hook stays synchronous and exits here, as every other event does.
-const TeamBrief = resolved === 'session-start' ? require('./team-brief.js') : null;
-if (TeamBrief && TeamBrief.enabled(ROOT_DIR)) TeamBrief.run({ adapter: 'claude', payload: data, root: ROOT_DIR }).then((out) => { hookOutput = out; finish(); }, finish);
+const TeamBrief = !gateDeny && (signal === 'session-start' || resolved === 'prompt-submit') ? require('./team-brief.js') : null;
+if (TeamBrief && TeamBrief.enabled(ROOT_DIR)) TeamBrief.run({ adapter: 'claude', event: resolved === 'prompt-submit' ? 'UserPromptSubmit' : 'SessionStart', payload: data, root: ROOT_DIR }).then((out) => { hookOutput = out; finish(); }, finish);
 else finish();
 }

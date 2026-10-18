@@ -251,6 +251,17 @@
           "type": "string",
           "maxLength": 256
         },
+        "parentId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "title": {
           "type": "string",
           "maxLength": 256
@@ -629,6 +640,17 @@
         "id": {
           "type": "string",
           "maxLength": 256
+        },
+        "parentId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "title": {
           "type": "string",
@@ -1332,6 +1354,67 @@
           "type": "array",
           "items": {
             "$ref": "#/$defs/Message"
+          }
+        },
+        "collaboration": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "requestId": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "kind": {
+                "enum": [
+                  "buddy_spin_off",
+                  "buddy_message"
+                ]
+              },
+              "taskId": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 256
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "messageId": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 256
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "state": {
+                "enum": [
+                  "pending",
+                  "queued",
+                  "delivered",
+                  "uncertain"
+                ]
+              },
+              "at": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "requestId",
+              "kind",
+              "taskId",
+              "messageId",
+              "state",
+              "at"
+            ],
+            "additionalProperties": false
           }
         }
       },

@@ -16,7 +16,7 @@
       <h2 id="install" style="margin:0;font-size:1.5rem;color:var(--desk-ink)">Install in one line</h2>
       <p>On a Mac or Linux computer, paste this into Terminal:</p>
       <p><code id="install-cmd">curl -fsSL https://plexiform.dev/install.sh | sh</code> <button type="button" class="btn" id="copy-install">Copy</button></p>
-      <p>It downloads the newest build from GitHub, checks its SHA-256 against the checksum published with that release, and installs it, with no Apple Developer ID and no "can't be opened" prompt. It never uses sudo. You can <a href="/install.sh">read the script</a> first; it is short. Add <code>PLEXIFORM_CHANNEL=stable</code> before <code>sh</code> to skip pre-releases.</p>
+      <p>It downloads the newest build from GitHub, checks its SHA-256 against the checksum published with that release, and installs it without sudo. The Mac preview uses ad-hoc signing; it is not Apple Developer ID signed or notarized, and macOS may still ask for authorization. You can <a href="/install.sh">read the script</a> first; it is short. Add <code>PLEXIFORM_CHANNEL=stable</code> before <code>sh</code> to skip pre-releases.</p>
     </div>
 
     <h2 style="margin-top:56px;font-size:1.5rem">Download manually</h2>
@@ -47,7 +47,7 @@
     {{/notlive}}
 
     <h2 id="first-open" style="margin-top:64px;font-size:1.7rem">Opening it the first time</h2>
-    <p class="prose" style="margin-top:12px">The one-line installer above avoids this: a file fetched by <code>curl</code> is not marked as downloaded from the internet, so macOS does not stop it. If you download the .dmg or .zip in a browser instead, read on. The Mac beta uses ad-hoc signing, not Apple Developer ID signing or notarization, so macOS may require confirmation on first open and after an update.</p>
+    <p class="prose" style="margin-top:12px">If you download the .dmg or .zip in a browser, follow these first-open steps. The Mac beta uses ad-hoc signing, not Apple Developer ID signing or notarization, so macOS may require confirmation on first open and after an update.</p>
     <div class="grid-2" style="margin-top:28px">
       <div>
         <h3>On a Mac</h3>

@@ -97,12 +97,12 @@ test('a slow hub: the brief gives up inside its deadline', async (t) => {
   assert.ok(Date.now() - t0 < 1000, `${Date.now() - t0} ms`);
 });
 
-test('the folder→route lookup is cached, so later session starts skip it', async (t) => {
+test('brief permissions resolve freshly before and after every hub read', async (t) => {
   const hub = await fakeHub(); t.after(() => hub.server.close());
   const { svc, resolves } = activity(hub.origin);
   await svc.brief({ cwd: '/w/app' });
   await svc.brief({ cwd: '/w/app' });
-  assert.equal(resolves.length, 1);
+  assert.equal(resolves.length, 4);
 });
 
 test('tools: team_activity, who_touched, team_handover, team_brief', async (t) => {
@@ -161,7 +161,7 @@ test('hook: the brief comes back as SessionStart additionalContext for Claude, C
   assert.ok(out.hookSpecificOutput.additionalContext.length <= 1500);
   for (const adapter of ['codex', 'gemini']) assert.ok(await Brief.run({ adapter, payload: { cwd: '/w/app' }, root: app.rootDir }), adapter);
   for (const adapter of ['cursor', 'hermes']) assert.equal(await Brief.run({ adapter, payload: { cwd: '/w/app' }, root: app.rootDir }), null, adapter);
-  assert.equal(await Brief.run({ adapter: 'claude', payload: { cwd: '/w/app', source: 'compact' }, root: app.rootDir }), null);
+  assert.ok(await Brief.run({ adapter: 'claude', payload: { cwd: '/w/app', source: 'compact' }, root: app.rootDir }), 'compaction restores the current brief');
 });
 
 test('hook: setting off means no request at all; a missing app or a wrong token is silence', async (t) => {

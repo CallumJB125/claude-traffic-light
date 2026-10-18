@@ -1,1 +1,14 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 70" shape-rendering="crispEdges"><rect x="4" y="24" width="56" height="5" fill="#726c62"/><rect x="6.5" y="6.5" width="16" height="16" rx="2.5" fill="#3a3542"/><rect x="24" y="6.5" width="16" height="16" rx="2.5" fill="#3a3542"/><rect x="41.5" y="6.5" width="16" height="16" rx="2.5" fill="#2db396"/><rect x="0" y="29" width="9" height="10" fill="#da7756"/><g fill="#da7756"><rect x="17" y="39" width="30" height="13"/><rect x="4" y="52" width="56" height="7"/><rect x="15" y="59" width="7" height="9"/><rect x="28.5" y="59" width="7" height="9"/><rect x="42" y="59" width="7" height="9"/></g><g fill="#211f1c"><rect x="22" y="43.5" width="4.5" height="4.5"/><rect x="37.5" y="43.5" width="4.5" height="4.5"/></g></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="96 96 832 832" width="832" height="832">
+  <defs>
+    <linearGradient id="plate" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#2c3037"/><stop offset="1" stop-color="#15171b"/></linearGradient>
+    <linearGradient id="ivory" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#ffffff"/><stop offset="1" stop-color="#d9dce2"/></linearGradient>
+    <linearGradient id="copper" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#f3b79a"/><stop offset="1" stop-color="#d78564"/></linearGradient>
+    <mask id="ivory-under" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024"><rect width="1024" height="1024" fill="#fff"/><path d="M536 436H664" stroke="#000" stroke-width="120"/></mask>
+    <mask id="copper-under" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024"><rect width="1024" height="1024" fill="#fff"/><path d="M364 548H548" stroke="#000" stroke-width="132"/></mask>
+  </defs>
+  <rect x="96" y="96" width="832" height="832" rx="192" fill="url(#plate)"/>
+  <rect x="97" y="97" width="830" height="830" rx="191" fill="none" stroke="#fff" stroke-opacity=".09" stroke-width="2"/>
+  <!-- Two independent paths, woven into one shared direction. -->
+  <rect x="300" y="248" width="300" height="300" rx="84" fill="none" stroke="url(#ivory)" stroke-width="92" mask="url(#ivory-under)"/>
+  <rect x="424" y="436" width="300" height="300" rx="84" fill="none" stroke="url(#copper)" stroke-width="92" mask="url(#copper-under)"/>
+</svg>

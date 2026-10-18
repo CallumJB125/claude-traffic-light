@@ -413,6 +413,7 @@
     for (const m of d.messages) {
       const mine = TV.isMine(m);
       const b = el('div', `bubble ${mine ? 'out' : 'in'}${m.quarantined ? ' flagged' : ''}`);
+      b.dataset.messageId = m.id; b.tabIndex = -1;
       const peer = !mine && m.direction === 'in';
       b.append(el('div', 'who', mine ? 'You' : m.direction === 'out' ? `This task to ${TV.partyText(m.to)}` : `From ${TV.partyText(m.from)}${peer ? ' (untrusted)' : ''}`));
       b.append(el('div', 'body', m.body));
@@ -458,6 +459,49 @@
 
   // A compact landing view of this exact task. Reports never imply independent
   // verification, and all actions still go through the existing guarded flows.
+  function renderCollaboration(pane, task, live) {
+    const parentId = Object.hasOwn(live, 'parentId') ? live.parentId : task.parentId;
+    const children = (snap?.tasks || []).filter(row => row.parentId === task.id);
+    const receipts = Array.isArray(task.collaboration) ? task.collaboration.slice(-50).sort((a, b) => b.at - a.at) : [];
+    if (!parentId && !children.length && !receipts.length) return;
+    pane.append(el('h3', 'sect', 'Agent collaboration'));
+    const family = el('div', 'box');
+    const related = (id, label) => {
+      const row = byId(id), line = el('p');
+      line.append(el('span', null, `${label}: ${row ? `${row.title || 'Untitled task'} · ${row.label || row.state}` : 'Not available in the current task list'} `));
+      if (row) { const open = btn('Open task', 'small', () => selectTask(id)); open.setAttribute('aria-label', `Open task: ${row.title || 'Untitled task'}`); line.append(open); }
+      return line;
+    };
+    if (parentId) family.append(related(parentId, 'Requested by'));
+    for (const child of children.slice(0, 20)) family.append(related(child.id, 'Helping task'));
+    if (children.length > 20) family.append(el('p', 'tx-empty', `Showing 20 of ${children.length} helping tasks. All remain in the task list.`));
+    if (family.childNodes.length) pane.append(family);
+    if (!receipts.length) return;
+    pane.append(el('p', 'tx-empty', 'Request receipts track delivery. An agent response must be checked in the conversation.'));
+    const list = el('ol', 'box');
+    const earlier = el('details'), olderList = el('ol', 'box');
+    earlier.append(el('summary', null, `${Math.max(0, receipts.length - 5)} earlier request receipts`), olderList);
+    const labels = { pending: 'Pending · no delivery confirmed', queued: 'Queued · waiting for delivery', delivered: 'Delivered · no agent response confirmed', uncertain: 'Delivery uncertain · check the conversation before retrying' };
+    for (const [index, receipt] of receipts.entries()) {
+      const item = el('li');
+      item.append(el('strong', null, receipt.kind === 'buddy_spin_off' ? 'Delegated task' : 'Message to agent'), el('p', null, labels[receipt.state] || 'Delivery not confirmed'));
+      if (Number.isFinite(receipt.at)) item.append(el('p', 'tx-empty', new Date(receipt.at).toLocaleString()));
+      if (receipt.taskId) item.append(related(receipt.taskId, 'Recipient'));
+      const message = receipt.messageId && d.messages.find(m => m.id === receipt.messageId);
+      if (message) item.append(btn('View message', 'small', () => {
+        setTab('messages');
+        const bubble = [...$('thread').children].find(node => node.dataset.messageId === receipt.messageId);
+        bubble?.scrollIntoView({ block: 'center' }); bubble?.focus();
+      }));
+      const details = el('details');
+      details.append(el('summary', null, 'Delivery details'), el('p', null, `Request: ${receipt.requestId}`));
+      if (receipt.messageId) details.append(el('p', null, `Message: ${receipt.messageId}`));
+      item.append(details); (index < 5 ? list : olderList).append(item);
+    }
+    pane.append(list);
+    if (receipts.length > 5) pane.append(earlier);
+  }
+
   function renderOverview() {
     const pane = $('pane-overview');
     if (!pane || !d?.detail) return;
@@ -472,8 +516,10 @@
     pane.append(links);
     section('Current request', t.text);
     pane.append(el('p', 'tx-empty', t.workInPlace ? 'This task edits the original folder. Coordinate other writers before continuing.' : `Separate working copy${t.branch ? ` · ${t.branch}` : ''}. Changes are combined only through a separate review.`));
+    renderCollaboration(pane, t, live);
     const latest = [...d.tx.items].reverse().find(i => i.kind === 'text' && i.role === 'assistant');
     section(latest?.open ? 'Response in progress' : 'Latest reported result', (latest?.text ? (latest.text.length > 8000 ? '…' : '') + latest.text.slice(-8000) : '') || t.evidence?.summary || p?.progress);
+    renderSavedOutput(pane, t, latest);
     const stat = d.diff?.stat || t.evidence?.diffStat;
     pane.append(el('h3', 'sect', 'Changes to review'));
     if (stat) pane.append(el('p', null, `${stat.files} files · +${stat.added} −${stat.removed}`));
@@ -489,6 +535,44 @@
     section('Next action', p?.nextAction || (live.state === 'in_review' ? 'Review the changes above, then integrate them or prepare a draft pull request.' : live.state === 'done' ? 'Review the recorded outcome and saved context.' : live.reason || 'Read the latest response or send a follow-up to this task.'));
     if (t.pr?.url) { const link = el('a', 'btn', `Open pull request #${t.pr.number}`); link.href = t.pr.url; link.target = '_blank'; link.rel = 'noopener noreferrer'; pane.append(link); }
     pane.append(el('p', 'tx-empty', 'This view uses the task history and saved checkpoint on this device.'));
+  }
+
+  function renderSavedOutput(pane, task, latest) {
+    const output = window.TaskOutputs?.fromTask(task);
+    if (!window.TaskOutputs) return;
+    const card = el('section', 'box'); card.id = 'saved-output'; card.setAttribute('aria-label', 'Saved report and references');
+    card.append(el('h3', 'sect', 'Saved report and references'));
+    if (output) {
+      const stamp = output.at ? ` · ${new Date(output.at).toLocaleString()}` : '';
+      card.append(el('p', 'tx-empty', `${output.source} · version ${output.version} · ${output.author}${stamp}`));
+      card.append(el('pre', null, output.text || 'No report text saved yet.'));
+      if (output.artifacts.length) {
+        const refs = el('ul');
+        for (const a of output.artifacts) {
+          const item = el('li'); item.append(`${a.kind}: `);
+          if (a.href) { const link = el('a', null, a.text); link.href = a.href; link.target = '_blank'; link.rel = 'noopener noreferrer'; item.append(link); }
+          else item.append(el('span', null, a.text));
+          refs.append(item);
+        }
+        card.append(refs);
+      }
+      card.append(el('p', 'tx-empty', 'Saved on this device and restored with the task. A checkpoint version records the report; file references point to current files. Reports can be updated as work continues.'));
+    } else card.append(el('p', 'tx-empty', 'Keep a report or note with this task so it is available when you return.'));
+    const edit = (response) => {
+      setTab('details');
+      if (!d.checkpointDraft) $('checkpoint-edit')?.click();
+      const field = $('checkpoint-progress');
+      if (field && typeof response === 'string') { field.value = response; field.dispatchEvent(new Event('input', { bubbles: true })); }
+      field?.focus();
+    };
+    const actions = el('div', 'd-actions'), editButton = btn(output ? 'Edit saved report' : 'Write a report or note', '', () => edit());
+    editButton.disabled = !connected() || !api.saveCheckpoint; actions.append(editButton);
+    if (latest?.text && !latest.open && latest.text !== output?.text && latest.text.length <= 4000) {
+      const keep = btn('Keep this response', '', () => edit(latest.text));
+      keep.disabled = !connected() || !api.saveCheckpoint || !!d.checkpointDraft;
+      actions.append(keep);
+    } else if (latest?.text?.length > 4000) card.append(el('p', 'tx-empty', 'The latest response is longer than a saved note. Edit the report to keep a summary and add the report file to its references.'));
+    card.append(actions); pane.append(card);
   }
 
   // ───────────────────────── details tab ─────────────────────────

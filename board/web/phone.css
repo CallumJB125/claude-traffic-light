@@ -1,34 +1,34 @@
 /* Phone control (/phone/): mobile-first, 16px gutters, 44px targets. */
 :root {
   color-scheme: dark;
-  --bg: #1c1a1f;
-  --panel: #242129;
-  --line: #3a3542;
-  --text: #ece8e2;
-  --muted: #a8a293;
-  --accent: #da7756;
-  --accent-ink: #211f1c;
+  --bg: #17191d;
+  --panel: #202329;
+  --line: #343941;
+  --text: #f0f1f3;
+  --muted: #b0b7c2;
+  --accent: #e49a78;
+  --accent-ink: #251c18;
   --danger: #ff8a80;
   --warn: oklch(0.82 0.16 79);
   --ok: oklch(0.72 0.12 174);
-  --mine: #2e2a35;
+  --mine: #292d34;
   --radius: 10px;
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
 }
 @media (prefers-color-scheme: light) {
   :root {
     color-scheme: light;
-    --bg: #f6f3ee;
+    --bg: #f4f5f7;
     --panel: #ffffff;
-    --line: #ddd6cb;
-    --text: #211f1c;
-    --muted: #645e55;
-    --accent: #b5532f;
+    --line: #dde1e6;
+    --text: #20252d;
+    --muted: #556171;
+    --accent: #a34425;
     --accent-ink: #ffffff;
     --danger: #a3271d;
     --warn: #8a5a00;
     --ok: #146b5a;
-    --mine: #ece6dc;
+    --mine: #eef0f3;
   }
 }
 
@@ -132,3 +132,10 @@ textarea { resize: vertical; min-height: 88px; }
   .btn, .row { transition: filter 120ms ease-out, transform 120ms ease-out; }
   .btn:not(:disabled):active, .row:not(:disabled):active { transform: scale(0.98); }
 }
+
+/* Readable companion to the desktop workspace, with the same generous touch targets. */
+.screen { gap: 16px; }
+h1 { font-size: 24px; letter-spacing: -.03em; }
+.bar { padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.btn:active:enabled { transform: scale(.98); }
+@media (prefers-reduced-motion: reduce) { .btn:active:enabled { transform: none; } }

@@ -49,10 +49,10 @@
       && (d.by === null || d.by === undefined || str(d.by, 80)) && (d.error === null || d.error === undefined || str(d.error, 1000)) && (d.notices === undefined || Array.isArray(d.notices) && d.notices.length <= 5 && d.notices.every(n => str(n, 1000))))
     && obj(r.capabilities) && OPERATIONS.every(op => validCap(r.capabilities[op]));
 
-  let hooks = null, view = 'mine', team = null, read = 0, received = 0, selected = null;
+  let hooks = null, view = 'mine', team = null, read = 0, received = 0, selected = null, teamFocus = 'all';
   const lists = { mine: { rows: new Map(), data: null }, team: { rows: new Map(), data: null } };
-  const TEAM_FILTERS = ['person', 'task', 'platform', 'device', 'status'];
-  const keyOf = (e, f) => f === 'person' ? e.owner.name : f === 'task' ? e.task.title : f === 'platform' ? e.provider.label : f === 'device' ? e.device.label : e.state;
+  const TEAM_FILTERS = ['person', 'project', 'task', 'platform', 'device', 'status'];
+  const keyOf = (e, f) => f === 'person' ? e.owner.name : f === 'project' ? e.board.label || 'No project reported' : f === 'task' ? e.task.title : f === 'platform' ? e.provider.label : f === 'device' ? e.device.label : e.state;
   const freshNow = (e, data) => {
     if (e.freshness !== 'recent' || e.ageMs === null) return { freshness: e.freshness, ageMs: e.ageMs };
     const a = e.ageMs + Math.max(0, Date.now() - data.observed_at);
@@ -70,43 +70,47 @@
     const children = el('ul', '', 'agent-list'), handoffs = el('ul', '', 'handoffs'), deliveries = el('ol', '', 'deliveries');
     children.setAttribute('aria-label', 'Child agents'); handoffs.setAttribute('aria-label', 'Handoffs'); deliveries.setAttribute('aria-label', 'Messages and responses');
     const actions = el('div', '', 'actions'), why = el('p', '', 'reason'), notice = el('p', '', 'reason'); notice.setAttribute('role', 'status');
-    const details = el('details', '', 'caps'), capList = el('ul', '', 'cap-list'); details.append(el('summary', 'What Plexiform can do with this session'), capList);
-    li.append(head, meta, badges, when, activity, self, children, handoffs, deliveries, actions, why, notice, details);
-    return { li, avatar, title, owner, tag, meta, badges, when, activity, self, children, handoffs, deliveries, actions, why, notice, capList, details, kind, composer: null, gone: false, entry: null };
+    const details = el('details', '', 'caps'), capList = el('ul', '', 'cap-list'); details.append(el('summary', 'Permissions and report details'), badges, self, capList);
+    const childDetails = el('details', '', 'dir-children'), childSummary = el('summary'); childDetails.append(childSummary, children);
+    const history = el('details', '', 'dir-history'); history.append(el('summary', 'Recent messages and handoffs'), handoffs, deliveries);
+    li.append(head, meta, when, activity, childDetails, history, actions, why, notice, details);
+    return { li, avatar, title, owner, tag, meta, badges, when, activity, self, children, handoffs, deliveries, actions, why, notice, capList, details, childDetails, childSummary, history, kind, composer: null, gone: false, entry: null };
   }
   function updateRow(v, e, data) {
     v.entry = e; v.gone = false; v.li.classList.remove('gone');
     const f = freshNow(e, data);
+    v.li.dataset.freshness = f.freshness; v.li.dataset.attention = String(needsInput(e, data));
     set(v.avatar, e.owner.initials); v.avatar.hidden = e.owner.self && data.view === 'mine';
     set(v.title, e.task.source === 'unknown' ? `${e.provider.label} session` : e.task.title);
-    if (selected?.row === v) set(selected.target, `${e.owner.name} · ${e.provider.label} · ${v.title.textContent}`);
-    set(v.owner, `${e.owner.self ? 'You' : e.owner.name}${e.task.source === 'human' ? ' · task title edited by a person' : e.task.source === 'unknown' ? ' · task not reported' : ''}`);
+    if (selected?.row === v) set(selected.target, targetText(e, v.title.textContent));
+    set(v.owner, `${e.owner.self ? 'You' : e.owner.name}${e.task.source === 'unknown' ? ' · task not reported' : ''}`);
     set(v.tag, stateText(e, f)); v.tag.className = `tag ${tone(e, f)}`;
     set(v.meta, [e.provider.label + (e.provider.kind === 'local' ? ' · local model' : ''), e.device.label + (e.device.local && e.device.label !== 'This device' ? ' (this device)' : ''), e.board.label, e.card?.key ? `Card ${e.card.key}` : ''].filter(Boolean).join(' · '));
-    set(v.badges, [...e.teams.map(t => `Team: ${t.name}`), ...e.provenance.map(p => PROVENANCE[p])].join(' · '));
+    set(v.badges, [...e.teams.map(t => `Team: ${t.name}`), ...e.provenance.map(p => PROVENANCE[p]), ...(e.task.source === 'human' ? ['task title edited by a person'] : [])].join(' · '));
     set(v.when, `Last observed ${age(f.ageMs)}${f.freshness === 'stale' ? ' · stale' : f.freshness === 'unknown' ? ' · freshness unknown' : ''}`);
     set(v.activity, activityText(e.activity)); v.activity.hidden = !v.activity.textContent;
     set(v.self, e.selfReported ? `Self-reported: ${e.selfReported.state}${e.selfReported.at !== null ? ` at ${new Date(e.selfReported.at).toLocaleTimeString()}` : ''} (not verified)` : ''); v.self.hidden = !e.selfReported;
     const kids = e.children.map(c => { const cf = freshNow(c, data), li = el('li', '', 'agent'), h = el('div', '', 'row-heading'); h.append(el('h4', c.task.source === 'unknown' ? c.label : `${c.label}: ${c.task.title}`), el('span', stateText(c, cf), `tag ${tone(c, cf)}`)); li.append(h, el('p', `Last observed ${age(cf.ageMs)}${c.selfReported ? ' · self-reported, not verified' : ''}`, 'muted')); return li; });
     const sig = JSON.stringify(e.children.map(c => [c.id, c.state, c.task.title, freshNow(c, data).freshness, Math.floor((freshNow(c, data).ageMs ?? -1) / 1000)]));
     if (v.childSig !== sig) { v.childSig = sig; v.children.replaceChildren(...kids); }
-    v.children.hidden = !kids.length;
+    v.children.hidden = !kids.length; v.childDetails.hidden = !kids.length; set(v.childSummary, `${kids.length} child ${kids.length === 1 ? 'agent' : 'agents'}${e.children.some(c => c.input && freshNow(c, data).freshness === 'recent') ? ' · input needed' : ''}`);
     const hs = (e.handoffs ?? []).map(h => el('li', `${h.direction === 'out' ? 'Handoff to' : 'Handoff from'} ${h.with} · ${h.state}${h.summary ? ` · ${h.summary}` : ''}`));
     const hsig = JSON.stringify(e.handoffs ?? []); if (v.hsig !== hsig) { v.hsig = hsig; v.handoffs.replaceChildren(...hs); } v.handoffs.hidden = !hs.length;
     const ds = (e.deliveries ?? []).map(d => { const li = el('li', '', 'delivery'), h = el('div', '', 'delivery-head'); h.append(el('strong', d.by ? `Sent by ${d.by}` : 'You'), el('span', d.state, `tag ${d.state}`)); li.append(h, el('p', d.text, 'delivery-text')); if (d.response) li.append(el('p', d.response, 'delivery-response')); return li; });
-    const dsig = JSON.stringify(e.deliveries ?? []); if (v.dsig !== dsig) { v.dsig = dsig; v.deliveries.replaceChildren(...ds); } v.deliveries.hidden = !ds.length;
+    const dsig = JSON.stringify(e.deliveries ?? []); if (v.dsig !== dsig) { v.dsig = dsig; v.deliveries.replaceChildren(...ds); } v.deliveries.hidden = !ds.length; v.history.hidden = !ds.length && !hs.length;
     const csig = JSON.stringify(CAPS.map(k => [k, e.capabilities[k]]));
     if (v.csig !== csig) { v.csig = csig; v.capList.replaceChildren(...CAPS.map(k => el('li', `${CAP_LABEL[k]}: ${e.capabilities[k].available ? 'available' : `unavailable. ${e.capabilities[k].reason}`}`, e.capabilities[k].available ? '' : 'muted'))); }
     // One primary action: message where a permitted, supported channel exists; otherwise the exact reason.
     const canMessage = e.interact !== null && e.capabilities.receive.available;
     if (!v.message) { v.message = button('Message', () => void interact(v)); v.actions.append(v.message); }
     v.message.hidden = !canMessage; v.message.disabled = !!v.busy;
+    v.message.className = 'session-message';
     v.message.textContent = e.interact?.kind === 'team' ? 'Message' : e.interact?.kind === 'owned' ? 'Open conversation' : 'Message';
     v.message.setAttribute('aria-label', `${v.message.textContent}: ${v.title.textContent}`);
     if (api.followups && !v.followup) { v.followup = button('Prepare follow-up', () => void composeFollowup(v)); v.actions.append(v.followup); }
     if (v.followup) v.followup.hidden = !canMessage || !['owned', 'team'].includes(e.interact?.kind) || e.messageContract === 'task-inbox';
     if (v.kind === 'team' && !v.inspect) {
-      v.inspect = button('Show activity', () => void openActivity(v));
+      v.inspect = button('Show activity', () => void openActivity(v)); v.inspect.className = 'session-inspect';
       v.actions.prepend(v.inspect);
     }
     if (v.inspect) { v.inspect.hidden = false; v.inspect.setAttribute('aria-expanded', String(selected?.row === v)); v.inspect.setAttribute('aria-label', `Show activity: ${v.title.textContent}`); }
@@ -121,7 +125,7 @@
     set(v.title, shared ? `${e.owner.name}'s ${e.provider.label} session` : v.title.textContent);
     set(v.tag, 'No longer listed'); v.tag.className = 'tag stale';
     set(v.meta, shared ? '' : v.meta.textContent);
-    for (const n of [v.badges, v.activity, v.self, v.children, v.handoffs, v.deliveries, v.details]) n.hidden = true;
+    for (const n of [v.badges, v.activity, v.self, v.children, v.handoffs, v.deliveries, v.details, v.childDetails, v.history]) n.hidden = true;
     set(v.activity, '');
     if (shared) for (const n of [v.children, v.handoffs, v.deliveries, v.capList]) n.replaceChildren();
     set(v.when, shared ? 'No longer shared with you, or it ended.' : 'No longer reported. It ended, or its reports stopped.');
@@ -350,7 +354,7 @@
     v.inspect?.setAttribute('aria-controls', box.id);
     const close = button('Close activity', () => { clearActivity(); v.inspect?.focus(); }), recheck = button('Check activity', () => void inspectActivity(a));
     const readActions = el('div', '', 'actions'); readActions.append(recheck, close); heading.append(title, readActions);
-    const target = el('p', `${v.entry.owner.name} · ${v.entry.provider.label} · ${v.title.textContent}`, 'team-target');
+    const target = el('p', targetText(v.entry, v.title.textContent), 'team-target');
     const status = el('p', 'Reading this shared session…', 'reason');
     const activity = el('p', '', 'team-current-activity');
     const transcript = el('ol', '', 'deliveries team-conversation'); transcript.setAttribute('aria-label', `Conversation: ${v.title.textContent}`); transcript.tabIndex = 0;
@@ -417,7 +421,21 @@
       s.value = prev;
     }
   }
-  const matches = e => TEAM_FILTERS.every(f => !$(`team-${f}-filter`).value || keyOf(e, f) === $(`team-${f}-filter`).value);
+  const needsInput = (e, data) => [e, ...e.children].some(x => x.input && freshNow(x, data).freshness === 'recent');
+  const targetText = (e, title) => [e.owner.name, e.provider.label, e.device.label, e.board.label, title].filter(Boolean).join(' · ');
+  const matches = (e, data) => {
+    if (!TEAM_FILTERS.every(f => !$(`team-${f}-filter`).value || keyOf(e, f) === $(`team-${f}-filter`).value)) return false;
+    const query = $('team-search').value.trim().toLocaleLowerCase();
+    if (query && ![e.task.title, e.owner.name, e.provider.label, e.device.label, e.board.label, e.card?.key || ''].join(' ').toLocaleLowerCase().includes(query)) return false;
+    const fresh = freshNow(e, data).freshness;
+    return teamFocus === 'all' || teamFocus === 'attention' && needsInput(e, data) || teamFocus === 'working' && fresh === 'recent' && e.state === 'Working' || teamFocus === 'stale' && fresh !== 'recent';
+  };
+  function resetTeamFilters() {
+    for (const f of TEAM_FILTERS) $(`team-${f}-filter`).value = '';
+    $('team-search').value = ''; teamFocus = 'all';
+    clearActivity(); render('team');
+  }
+
   // Keyed, in-place: an element moves only when its position must change.
   function place(container, nodes) {
     let prev = null;
@@ -439,18 +457,25 @@
     }
     teamFilters(data);
     $('team-summary').replaceChildren(...renderSummary(data));
+    const counts = { all: data.entries.length, attention: data.entries.filter(e => needsInput(e, data)).length, working: data.entries.filter(e => e.state === 'Working' && freshNow(e, data).freshness === 'recent').length, stale: data.entries.filter(e => freshNow(e, data).freshness !== 'recent').length };
+    const labels = { all: 'All sessions', attention: 'Need input', working: 'Working', stale: 'Stale / unknown' };
+    for (const b of document.querySelectorAll('[data-team-focus]')) { const key = b.dataset.teamFocus; b.setAttribute('aria-pressed', String(key === teamFocus)); set(b, `${labels[key]} · ${counts[key]}`); }
+
     const group = $('team-group').value || 'person', groups = new Map();
-    for (const v of all) { if (!v.gone && !matches(v.entry)) continue; const k = v.gone ? 'No longer listed' : keyOf(v.entry, group); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(v); }
+    for (const v of all) { if (!v.gone && !matches(v.entry, data)) continue; const k = v.gone ? 'No longer listed' : keyOf(v.entry, group); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(v); }
     if (!l.groups) l.groups = new Map();
     const blocks = [...groups.keys()].sort((a, b) => a === 'No longer listed' ? 1 : b === 'No longer listed' ? -1 : a.localeCompare(b)).map(k => {
       let g = l.groups.get(k); if (!g) { g = { box: el('section', '', 'dir-group'), head: el('h3', k), list: el('ul', '', 'dir-list') }; g.box.append(g.head, g.list); l.groups.set(k, g); }
-      g.list.setAttribute('aria-label', k); place(g.list, groups.get(k).map(v => v.li)); return g.box;
+      g.list.setAttribute('aria-label', k); place(g.list, groups.get(k).sort((a, b) => Number(!a.gone && !needsInput(a.entry, data)) - Number(!b.gone && !needsInput(b.entry, data))).map(v => v.li)); return g.box;
     });
     for (const [k, g] of l.groups) if (!groups.has(k)) l.groups.delete(k);
     place($('team-list'), blocks);
     const shown = [...groups.values()].flat().filter(v => !v.gone).length;
     set($('team-count'), `${shown} of ${data.entries.length} shared ${data.entries.length === 1 ? 'session' : 'sessions'}`);
-    $('team-empty').hidden = data.entries.length > 0;
+    $('team-empty').hidden = shown > 0;
+    set($('team-empty-title'), data.entries.length ? 'No sessions match these filters' : 'Nothing shared yet');
+    set($('team-empty-text'), data.entries.length ? 'Try another teammate or project, or clear the filters to see all shared work.' : data.teams.length ? 'Ask a teammate to share a session with this team. Its activity and permitted controls will appear here.' : 'Join a team from Team in the sidebar to see the sessions its members choose to share.');
+    $('team-empty-reset').hidden = !data.entries.length;
   }
   function renderTeams(data) {
     const pick = $('team-pick'), prev = team;
@@ -504,6 +529,10 @@
     $('views').addEventListener('keydown', ev => { if (ev.key === 'ArrowRight' || ev.key === 'ArrowLeft') { const next = view === 'mine' ? 'team' : 'mine'; show(next); $(`tab-${next}`).focus(); } });
     $('team-pick').addEventListener('change', () => { clearActivity(); lists.team.rows.clear(); lists.team.groups?.clear(); $('team-list').replaceChildren(); team = hex($('team-pick').value, 32) ? $('team-pick').value : null; received = 0; void refresh(); });
     for (const id of ['team-group', ...TEAM_FILTERS.map(f => `team-${f}-filter`)]) $(id).addEventListener('change', () => { clearActivity(); render('team'); });
+    $('team-search').addEventListener('input', () => { clearActivity(); render('team'); });
+    for (const b of document.querySelectorAll('[data-team-focus]')) b.addEventListener('click', () => { teamFocus = b.dataset.teamFocus; clearActivity(); render('team'); });
+    $('team-clear-filters').addEventListener('click', resetTeamFilters);
+    $('team-empty-reset').addEventListener('click', resetTeamFilters);
     document.addEventListener('visibilitychange', () => { if (document.hidden && selected) { selected.preview = null; selected.review.hidden = true; } });
     if (typeof api.onDirectoryChanged === 'function') api.onDirectoryChanged(soon);
   }

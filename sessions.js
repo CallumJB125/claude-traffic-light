@@ -3,7 +3,7 @@ const content = document.getElementById('content'), status = document.getElement
 const activity = document.getElementById('activity-status');
 let generation = 0;
 let selectedSessionKey = null, selectionPending = false;
-function selectSession(key) { if (typeof key !== 'string' || !/^[\w.-]{1,200}$/.test(key)) return; selectedSessionKey = key; selectionPending = true; void refresh(); }
+function selectSession(key) { if (typeof key !== 'string' || !/^[\w.-]{1,200}$/.test(key)) return; selectedSessionKey = key; selectionPending = true; for (const id of ['session-search', 'session-provider', 'session-freshness']) { const control = document.getElementById(id); if (control) control.value = ''; } applyLocalFilters(); void refresh(); }
 let selectionEventSeen = false;
 window.sessionsApi.onSelection?.(key => { selectionEventSeen = true; selectSession(key); });
 window.sessionsApi.selection?.().then(key => { if (!selectionEventSeen) selectSession(key); }).catch(() => {});
@@ -322,6 +322,7 @@ function render(snapshot) {
   document.getElementById('coord').hidden = !(snapshot.sessions ?? []).some(i => i.burst?.coordination);
   for (const item of snapshot.sessions ?? []) {
     const section = node('section', '', 'session');
+    section.dataset.search = `${item.provider} ${item.project}`.toLocaleLowerCase(); section.dataset.provider = item.provider; section.dataset.freshness = item.freshness;
     if (item.handover?.key) section.dataset.sessionKey = item.handover.key;
     const selected = item.handover?.key === selectedSessionKey;
     if (selected) { section.setAttribute('aria-current', 'true'); section.tabIndex = -1; }
@@ -354,14 +355,37 @@ function render(snapshot) {
     content.append(node('p', snapshot.status === 'unavailable' ? 'Local session reports are unavailable. Try Refresh.' : 'No local sessions are visible yet.', 'muted'));
     if (snapshot.status !== 'unavailable') content.append(emptyState());
   }
+  updateLocalFilters(snapshot.sessions ?? []);
   // The Add sessions panel stays open while there is nothing to show and folds once sessions exist, unless the person chose.
   if (!addTouched) document.getElementById('add').open = !snapshot.sessions?.length;
   status.textContent = snapshot.status === 'unavailable' ? 'Local activity is unavailable. Try Refresh.'
     : `Updated ${new Date(snapshot.observed_at).toLocaleTimeString()}. Refreshes every 5 seconds while this page is visible.${snapshot.omitted ? ` ${snapshot.omitted} additional reports exceed the display limit.` : ''}`;
 }
+function applyLocalFilters() {
+  const query = document.getElementById('session-search').value.trim().toLocaleLowerCase();
+  const provider = document.getElementById('session-provider').value, freshness = document.getElementById('session-freshness').value;
+  const rows = [...content.querySelectorAll('.session')]; let shown = 0;
+  for (const row of rows) {
+    row.hidden = !!(query && !row.dataset.search.includes(query) || provider && row.dataset.provider !== provider || freshness && row.dataset.freshness !== freshness);
+    if (!row.hidden) shown++;
+  }
+  document.getElementById('session-count').textContent = `${shown} of ${rows.length} ${rows.length === 1 ? 'session' : 'sessions'}`;
+  document.getElementById('session-filter-empty').hidden = !rows.length || shown > 0;
+}
+function updateLocalFilters(sessions) {
+  const provider = document.getElementById('session-provider'), previous = provider.value;
+  const values = [...new Set(sessions.map(s => s.provider))].sort((a, b) => a.localeCompare(b));
+  provider.replaceChildren(new Option('All tools', ''), ...values.map(v => new Option(v, v)));
+  if (previous && !values.includes(previous)) provider.append(new Option(`${previous} · none now`, previous));
+  provider.value = previous; applyLocalFilters();
+}
+function resetLocalFilters() {
+  for (const id of ['session-search', 'session-provider', 'session-freshness']) document.getElementById(id).value = '';
+  applyLocalFilters();
+}
 async function refresh({ clear = false } = {}) {
   const request = ++generation;
-  if (clear) { content.replaceChildren(); status.textContent = 'Checking local sessions…'; activity.textContent = 'Checking local activity…'; }
+  if (clear) { content.replaceChildren(); updateLocalFilters([]); status.textContent = 'Checking local sessions…'; activity.textContent = 'Checking local activity…'; }
   try {
     let timer;
     const snapshot = await Promise.race([window.sessionsApi.state(), new Promise((_, reject) => {
@@ -372,7 +396,7 @@ async function refresh({ clear = false } = {}) {
     if (editing) { if (selectionPending) focusSelectedSession(); return; } // preserve an open editor while navigating to an existing row
     render(snapshot);
   } catch {
-    if (request === generation && !document.hidden) { content.replaceChildren(); activity.textContent = 'Codex activity is unavailable. Check Codex on the AI tools page.'; status.textContent = 'Local activity is unavailable. Try Refresh.'; }
+    if (request === generation && !document.hidden) { content.replaceChildren(); updateLocalFilters([]); activity.textContent = 'Codex activity is unavailable. Check Codex on the AI tools page.'; status.textContent = 'Local activity is unavailable. Try Refresh.'; }
   }
 }
 const COORD_LABELS = { shared: 'shared', refused: 'refused', held: 'held for a commit', stopped: 'stopped with uncommitted files', errors: 'hook errors' };
@@ -394,6 +418,10 @@ async function loadCoordination() {
 }
 document.getElementById('coord').addEventListener('toggle', e => { if (e.currentTarget.open) void loadCoordination(); });
 document.getElementById('coord-days').addEventListener('change', () => { void loadCoordination(); });
+document.getElementById('session-search').addEventListener('input', applyLocalFilters);
+for (const id of ['session-provider', 'session-freshness']) document.getElementById(id).addEventListener('change', applyLocalFilters);
+for (const id of ['session-reset', 'session-empty-reset']) document.getElementById(id).addEventListener('click', resetLocalFilters);
+document.getElementById('start-session-shortcut').addEventListener('click', () => { const add = document.getElementById('add'), host = document.getElementById('panel-start'); add.open = true; addTouched = true; host.hidden = false; startPanel(host); host.scrollIntoView?.({ block: 'center' }); });
 document.getElementById('refresh').addEventListener('click', () => { editing = false; refresh({ clear: true }); });
 document.getElementById('add').addEventListener('toggle', () => { addTouched = true; });
 document.getElementById('add-connect').addEventListener('click', async () => {
@@ -410,7 +438,7 @@ document.getElementById('codex-aitools').addEventListener('click', async event =
 });
 document.addEventListener('visibilitychange', () => {
   // A hidden page must not retain a status that appears current on return.
-  editing = false; ++generation; content.replaceChildren(); status.textContent = 'Checking local sessions…'; activity.textContent = 'Checking local activity…';
+  editing = false; ++generation; content.replaceChildren(); updateLocalFilters([]); status.textContent = 'Checking local sessions…'; activity.textContent = 'Checking local activity…';
   if (!document.hidden) void refresh();
 });
 setInterval(() => { if (!document.hidden) void refresh(); }, 5000);

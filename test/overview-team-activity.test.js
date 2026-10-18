@@ -225,3 +225,21 @@ test('a busy nonsteering provider permits a local draft and preserves it until S
     assert.deepEqual(s.actions, [{ selection: nextToken, operation: 'send', text: 'Next, verify the login test' }]);
   } finally { s.close(); }
 });
+
+
+test('session management filters teammates and projects, exposes attention and explains no matches', async () => {
+  const s = harness();
+  try {
+    const attention = entry(); attention.input = true; attention.board.label = 'Website';
+    const stale = entry('d'.repeat(40)); stale.owner.name = 'Cara'; stale.task.title = 'Ship the release'; stale.board.label = 'Desktop'; stale.freshness = 'stale'; stale.ageMs = 120000;
+    s.setEntries([attention, stale]); s.$('tab-team').click(); await tick();
+    const rows = () => [...s.$('team-list').querySelectorAll('.dir-entry')];
+    s.doc.querySelector('[data-team-focus="attention"]').click(); assert.equal(rows().length, 1); assert.match(rows()[0].textContent, /Fix login/);
+    s.$('team-clear-filters').click(); s.$('team-project-filter').value = 'Desktop'; s.$('team-project-filter').dispatchEvent(new s.dom.window.Event('change')); assert.equal(rows().length, 1); assert.match(rows()[0].textContent, /Cara/);
+    s.$('team-search').value = 'no matching task'; s.$('team-search').dispatchEvent(new s.dom.window.Event('input'));
+    assert.equal(rows().length, 0); assert.equal(s.$('team-empty').hidden, false); assert.match(s.$('team-empty-title').textContent, /No sessions match/);
+    s.$('team-empty-reset').click(); assert.equal(rows().length, 2); assert.equal(s.$('team-search').value, '');
+    s.doc.querySelector('[data-team-focus="stale"]').click(); assert.equal(rows().length, 1); assert.match(rows()[0].textContent, /Ship the release/);
+    assert.equal(s.actions.length, 0); assert.equal(s.calls(), 0, 'filtering never inspects or sends to a session');
+  } finally { s.close(); }
+});

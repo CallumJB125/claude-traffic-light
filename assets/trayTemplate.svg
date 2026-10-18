@@ -1,8 +1,12 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 22 22" width="22" height="22">
-  <!-- template image: black + alpha only (macOS recolours it). The cap's dot is cut out. -->
-  <path fill="#000" fill-rule="evenodd" d="M1.6 10.6C1.6 5.3 5.7 1.6 11 1.6S20.4 5.3 20.4 10.6c0 1.5-1.5 2.4-3.1 2.4H4.7c-1.6 0-3.1-.9-3.1-2.4ZM11 5.9a2.3 2.3 0 1 0 0 4.6 2.3 2.3 0 0 0 0-4.6Z"/>
-  <path fill="#000" d="M8.9 12.6h4.2c-.4 2.2 0 3.6 1.1 5.2H7.8c1.1-1.6 1.5-3 1.1-5.2Z"/>
-  <g fill="none" stroke="#000" stroke-width="1.35" stroke-linecap="round">
-    <path d="M11 17.6v3.2M9.3 18.3c-1.3.7-2.5.9-4 .8M12.7 18.3c1.3.7 2.5.9 4 .8"/>
-  </g>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="220 172 584 640" width="22" height="22">
+  <defs>
+    <linearGradient id="plate" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#2c3037"/><stop offset="1" stop-color="#15171b"/></linearGradient>
+    <linearGradient id="ivory" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#ffffff"/><stop offset="1" stop-color="#d9dce2"/></linearGradient>
+    <linearGradient id="copper" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#f3b79a"/><stop offset="1" stop-color="#d78564"/></linearGradient>
+    <mask id="ivory-under" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024"><rect width="1024" height="1024" fill="#fff"/><path d="M536 436H664" stroke="#000" stroke-width="120"/></mask>
+    <mask id="copper-under" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024"><rect width="1024" height="1024" fill="#fff"/><path d="M364 548H548" stroke="#000" stroke-width="132"/></mask>
+  </defs>
+  <!-- Two independent paths, woven into one shared direction. -->
+  <rect x="300" y="248" width="300" height="300" rx="84" fill="none" stroke="#000" stroke-width="92" mask="url(#ivory-under)"/>
+  <rect x="424" y="436" width="300" height="300" rx="84" fill="none" stroke="#000" stroke-width="92" mask="url(#copper-under)"/>
 </svg>

@@ -1,6 +1,6 @@
 /* Plexiform team board.
    Dark is the widget's own world (tokens.css at the repo root, copied value
-   for value so the two windows agree); light is a cool lilac-grey paper.
+   for value so the two windows agree); light is a neutral paper.
    Status colour comes only from the widget's OKLCH lamp tokens, and follows
    the widget's rhythm: a lamp that is green by both hub and browser breathes,
    amber holds, red blinks three times and holds. */
@@ -12,18 +12,18 @@
   color-scheme: dark;
 
   /* ── incumbent window tokens (tokens.css) ── */
-  --bg: #1c1a1f;
-  --panel: #221f27;
-  --panel-2: #2a2731;
-  --line: #35313d;
-  --line-strong: #46414f;
-  --line-input: #7a748a;
-  --text: #ece8e2;
-  --muted: #a8a293;
-  --faint: #979183;
-  --accent: #da7756;
-  --accent-ink: #211f1c;
-  --accent-soft: rgba(218, 119, 86, 0.14);
+  --bg: #17191d;
+  --panel: #202329;
+  --panel-2: #292d34;
+  --line: #343941;
+  --line-strong: #4b535f;
+  --line-input: #78818e;
+  --text: #f0f1f3;
+  --muted: #b0b7c2;
+  --faint: #9aa3b0;
+  --accent: #e49a78;
+  --accent-ink: #251c18;
+  --accent-soft: rgba(228, 154, 120, 0.14);
   --danger: #b8443a;
   --danger-text: #ff8a80;
 
@@ -45,27 +45,27 @@
   --tone-done: oklch(0.62 0.035 174);
   --tone-unknown: oklch(0.55 0.015 300);
 
-  --bg-deep: #17151a;
+  --bg-deep: #121417;
   --shadow: 0 1px 0 rgba(0, 0, 0, 0.25), 0 8px 24px -12px rgba(0, 0, 0, 0.55);
   --shadow-pop: 0 24px 64px -16px rgba(0, 0, 0, 0.7), 0 2px 6px rgba(0, 0, 0, 0.3);
   --backdrop: rgba(12, 10, 14, 0.62);
-  --px-body: #da7756;
-  --px-eye: #211f1c;
+  --px-body: #e49a78;
+  --px-eye: #251c18;
   --px-post: #726c62;
 
   --radius-sm: 4px;
-  --radius: 7px;
-  --radius-lg: 10px;
+  --radius: 8px;
+  --radius-lg: 12px;
   --radius-pill: 999px;
 
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
   --text-xs: 11px;
   --text-sm: 12px;
-  --text-base: 13px;
+  --text-base: 14px;
   --text-md: 14px;
   --text-lg: 16px;
-  --text-xl: 20px;
+  --text-xl: 22px;
 
   --shadow-lift-color: light-dark(rgba(40, 30, 60, 0.32), rgba(0, 0, 0, 0.66));
   --shadow-lift: 0 18px 34px -12px var(--shadow-lift-color), 0 3px 8px -2px var(--shadow-lift-color);
@@ -80,19 +80,19 @@
    3:1 on white; the pixel Claude keeps the exact lamp values. */
 :root[data-theme="light"] {
   color-scheme: light;
-  --bg: #eceaf0;
-  --bg-deep: #e3e0e8;
-  --panel: #fbfafc;
-  --panel-2: #f3f1f6;
-  --line: #dedae4;
-  --line-strong: #c8c3d1;
-  --line-input: #8a8497;
-  --text: #1d1a22;
-  --muted: #5b5566;
-  --faint: #6b6577;
-  --accent: #b4532f;
+  --bg: #f4f5f7;
+  --bg-deep: #e9ecf0;
+  --panel: #ffffff;
+  --panel-2: #eef0f3;
+  --line: #dde1e6;
+  --line-strong: #c3cad3;
+  --line-input: #8792a0;
+  --text: #20252d;
+  --muted: #556171;
+  --faint: #657183;
+  --accent: #a34425;
   --accent-ink: #ffffff;
-  --accent-soft: rgba(180, 83, 47, 0.1);
+  --accent-soft: rgba(163, 68, 37, 0.08);
   --danger: #b3261e;
   --danger-text: #b3261e;
   --tone-green: oklch(0.53 0.11 174);
@@ -113,19 +113,19 @@
 @media (prefers-color-scheme: light) {
   :root:not([data-theme]) {
     color-scheme: light;
-    --bg: #eceaf0;
-    --bg-deep: #e3e0e8;
-    --panel: #fbfafc;
-    --panel-2: #f3f1f6;
-    --line: #dedae4;
-    --line-strong: #c8c3d1;
-    --line-input: #8a8497;
-    --text: #1d1a22;
-    --muted: #5b5566;
-    --faint: #6b6577;
-    --accent: #b4532f;
+    --bg: #f4f5f7;
+    --bg-deep: #e9ecf0;
+    --panel: #ffffff;
+    --panel-2: #eef0f3;
+    --line: #dde1e6;
+    --line-strong: #c3cad3;
+    --line-input: #8792a0;
+    --text: #20252d;
+    --muted: #556171;
+    --faint: #657183;
+    --accent: #a34425;
     --accent-ink: #ffffff;
-    --accent-soft: rgba(180, 83, 47, 0.1);
+    --accent-soft: rgba(163, 68, 37, 0.08);
     --danger: #b3261e;
     --danger-text: #b3261e;
     --tone-green: oklch(0.53 0.11 174);
@@ -1370,3 +1370,33 @@ dialog::backdrop { background: var(--backdrop); transition: opacity 200ms ease; 
 .review-disclosure p { line-height: 1.45; }
 .needs-you-chip { font-size: 12px; padding: 0 6px; border-radius: 999px; border: 1px solid var(--line); white-space: nowrap; }
 .needs-you-chip[data-tone="amber"] { color: var(--tone-amber); border-color: color-mix(in oklab, var(--tone-amber) 40%, var(--line)); }
+
+/* Workspace finish: match the desktop without changing board interactions. */
+.topbar { min-height: 68px; padding-inline: 24px; background: var(--panel); gap: 14px; }
+.brand-board { font-size: 17px; letter-spacing: -.025em; }
+.topbar-actions { gap: 10px; }
+.btn { min-height: 36px; }
+.btn-sm { min-height: 30px; }
+.btn-icon { width: 36px; }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+@media (hover: hover) and (pointer: fine) { .btn-primary:hover:not(:disabled) { background: color-mix(in oklab, var(--accent) 90%, var(--text)); border-color: var(--accent); } }
+.board { gap: 18px; padding: 20px 24px 24px; }
+.column-head { min-height: 42px; padding: 0 4px 10px; }
+.column-head h2 { letter-spacing: -.01em; }
+.column-body { gap: 10px; }
+.card { padding: 15px; gap: 10px; box-shadow: 0 1px 2px rgba(0,0,0,.07); }
+.column-empty { padding: 20px 16px; line-height: 1.6; background: color-mix(in oklab, var(--panel) 45%, transparent); }
+.alerts { padding-block: 12px; background: var(--bg); }
+.drawer-title { font-size: 28px; line-height: 1.2; letter-spacing: -.035em; margin-top: 24px; }
+.drawer-head { min-height: 60px; }
+.drawer-actions { gap: 10px; }
+.dsec { padding-block: 20px; }
+.dsec-title { font-size: var(--text-base); color: var(--text); }
+.task-workspace .prose { line-height: 1.65; }
+.task-workspace .muted.small { margin-block: 8px; line-height: 1.6; }
+.task-workspace .dsec:first-child { padding: 18px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--bg); margin-top: 18px; }
+.task-workspace .details { line-height: 1.6; }
+.task-workspace .dsec > .btn { margin-top: 10px; }
+.menu-item { min-height: 38px; }
+@media (max-width: 900px) { .topbar { padding-inline: 16px; flex-wrap: wrap; padding-block: 12px; } .topbar-actions { margin-left: auto; } .board { padding: 16px; gap: 14px; } }
+@media (max-width: 560px) { .topbar { gap: 10px; } .topbar-actions { flex-wrap: wrap; gap: 6px; } .drawer-title { font-size: 24px; } .drawer-actions .btn { white-space: normal; line-height: 1.3; padding-block: 8px; } }

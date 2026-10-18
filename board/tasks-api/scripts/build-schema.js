@@ -88,6 +88,7 @@ const taskSpec = optional({
 
 const taskViewProps = {
   id: str(),
+  parentId: nullable(str()),
   title: str(),
   state: en(STATES),
   blockedKind: nullable(en(BLOCKED_KINDS)),
@@ -136,6 +137,7 @@ const taskDetailProps = {
   openAsk: nullable(openAsk),
   audit: arr(ref('AuditEntry')),
   messages: arr(ref('Message')),
+  collaboration: arr(obj({ requestId: str(), kind: en(['buddy_spin_off', 'buddy_message']), taskId: nullable(str()), messageId: nullable(str()), state: en(['pending', 'queued', 'delivered', 'uncertain']), at: int() })),
 };
 
 const party = obj({ kind: en(PARTY_KINDS), id: str({ minLength: 1 }), label: str() });
@@ -215,8 +217,8 @@ const schema = {
   $defs: {
     TaskSpec: taskSpec,
     LeaseView: leaseView,
-    TaskView: obj(taskViewProps),
-    TaskDetail: obj(taskDetailProps, Object.keys(taskDetailProps).filter((k) => k !== 'checkpoint')),
+    TaskView: obj(taskViewProps, Object.keys(taskViewProps).filter((k) => k !== 'parentId')),
+    TaskDetail: obj(taskDetailProps, Object.keys(taskDetailProps).filter((k) => !['checkpoint', 'parentId', 'collaboration'].includes(k))),
     CheckpointData: obj(packetDataProps),
     Checkpoint: packet,
     Capabilities: obj(Object.fromEntries(CAPABILITIES.map((c) => [c, bool]))),

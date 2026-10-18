@@ -9,8 +9,9 @@ import { WindowsJob } from '../windows-job.js';
 import { detectCli } from './detect.js';
 import { lstartOf, killTree, processTable, treeGroups, killGroups, waitForStopped, STOP_VERIFY_MS } from '../procs.js';
 import { writeFileAtomic } from '../util.js';
-import { CODEX_MCP_SERVER, underElectron } from '../launch.js';
+import { CODEX_MCP_SERVER, TASK_MCP_SERVER, underElectron } from '../launch.js';
 import { CODEX_BOARD_TOOLS } from '../../mcp/codex-run.js';
+import { TASK_TOOL_NAMES } from '../../mcp/task-tools.js';
 
 export class NotAvailableError extends Error {
   constructor(message = 'this AI capability is not available') { super(message); this.code = 'NOT_AVAILABLE'; }
@@ -22,7 +23,11 @@ const ownedRef = (ref) => typeof ref === 'string' && ref.startsWith('refs/heads/
   && ref.split('/').every((p) => p && !p.startsWith('.') && !p.endsWith('.') && !p.endsWith('.lock'));
 
 /** Same profile is used for new, resumed and user-owned terminal turns. */
-export function codexConfig({ cwd, cacheDir, dataDir, gitDir, commonGitDir, gitRef, readOnly = false, env = {}, instructionsFile, denyPaths = [], boardRunDir = null, platform = process.platform }) {
+export function codexConfig({ cwd, cacheDir, dataDir, gitDir, commonGitDir, gitRef, readOnly = false, env = {}, instructionsFile, denyPaths = [], boardRunDir = null, taskRunDir = null, platform = process.platform }) {
+  if (boardRunDir && taskRunDir) throw new NotAvailableError('A Codex run must have exactly one collaboration scope');
+  const mcpRunDir = taskRunDir || boardRunDir;
+  const mcpServer = taskRunDir ? TASK_MCP_SERVER : CODEX_MCP_SERVER;
+  const mcpTools = taskRunDir ? TASK_TOOL_NAMES : CODEX_BOARD_TOOLS;
   const paths = platform === 'win32' ? path.win32 : path;
   const filesystem = { ':minimal': 'read', ':workspace_roots': readOnly ? 'read' : 'write' };
   // OS minimal permissions omit common installed tool runtimes. Grant read
@@ -53,6 +58,7 @@ export function codexConfig({ cwd, cacheDir, dataDir, gitDir, commonGitDir, gitR
   }
   if (gitDir) for (const n of ['config', 'config.worktree', 'hooks']) filesystem[paths.join(gitDir, n)] = 'read';
   if (dataDir) filesystem[dataDir] = 'deny';
+  if (taskRunDir) filesystem[taskRunDir] = 'deny';
   for (const d of denyPaths) filesystem[d] = 'deny';
   for (const d of [env.CODEX_HOME || (env.HOME && paths.join(env.HOME, '.codex')), ...['.ssh', '.aws', '.config/gh', '.claude', '.claude.json', '.claude-traffic-light', 'Library/Keychains'].map((n) => env.HOME && paths.join(env.HOME, n))].filter(Boolean)) filesystem[d] = 'deny';
   const shellEnv = {};
@@ -67,19 +73,19 @@ export function codexConfig({ cwd, cacheDir, dataDir, gitDir, commonGitDir, gitR
     'shell_environment_policy.experimental_use_profile=false',
     `projects.${JSON.stringify(cwd)}.trust_level="untrusted"`,
     'project_doc_max_bytes=0', 'web_search="disabled"', 'mcp_servers={}',
-    ...(boardRunDir ? [
+    ...(mcpRunDir ? [
       `mcp_servers.board.command=${JSON.stringify(process.execPath)}`,
-      `mcp_servers.board.args=${JSON.stringify([CODEX_MCP_SERVER, boardRunDir])}`,
+      `mcp_servers.board.args=${JSON.stringify([mcpServer, mcpRunDir])}`,
       `mcp_servers.board.env=${table(underElectron() ? { ELECTRON_RUN_AS_NODE: '1' } : {})}`,
       'mcp_servers.board.env_vars=[]', 'mcp_servers.board.required=true',
       'mcp_servers.board.startup_timeout_sec=10', 'mcp_servers.board.tool_timeout_sec=60',
-      `mcp_servers.board.enabled_tools=${JSON.stringify(CODEX_BOARD_TOOLS)}`,
-      // The task dispatch authorizes these closed, per-run board tools.
+      `mcp_servers.board.enabled_tools=${JSON.stringify(mcpTools)}`,
+      // The task dispatch authorizes only this exact per-run tool surface.
       // Codex exec cannot present an MCP approval prompt; without an exact
       // tool policy it cancels writes before the fenced hub can validate them.
       // Shell sandbox and recorded human plan grants remain independent.
       'mcp_servers.board.default_tools_approval_mode="prompt"',
-      ...CODEX_BOARD_TOOLS.map((tool) => `mcp_servers.board.tools.${tool}.approval_mode="approve"`),
+      ...mcpTools.map((tool) => `mcp_servers.board.tools.${tool}.approval_mode="approve"`),
     ] : []), 'hooks={}', 'notify=[]',
     'features.apps=false', 'features.multi_agent=false', 'features.hooks=false',
     ...(instructionsFile ? [`model_instructions_file=${JSON.stringify(instructionsFile)}`] : []),

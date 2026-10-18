@@ -36,6 +36,7 @@ function createGuard({ P, taskFace }) {
     }
     return {
       id: v.id,
+      parentId: typeof v.parentId === 'string' && v.parentId.length > 0 && v.parentId.length <= 128 ? v.parentId : null,
       title: str(v.title, 200),
       state,
       blockedKind: strOrNull(v.blockedKind, 40),
@@ -78,6 +79,14 @@ function createGuard({ P, taskFace }) {
     };
   }
 
+  function sanitizeCollaboration(r) {
+    if (!r || typeof r.requestId !== 'string' || !r.requestId || r.requestId.length > 256
+        || !['buddy_spin_off', 'buddy_message'].includes(r.kind) || !['pending', 'queued', 'delivered', 'uncertain'].includes(r.state)
+        || !Number.isSafeInteger(r.at) || r.at < 0) return null;
+    const id = v => typeof v === 'string' && v.length > 0 && v.length <= 128 ? v : null;
+    return { requestId: r.requestId, kind: r.kind, taskId: id(r.taskId), messageId: id(r.messageId), state: r.state, at: r.at };
+  }
+
   function sanitizeDetail(d, opts = {}) {
     const base = sanitizeTask(d, opts);
     if (!base) return null;
@@ -106,6 +115,7 @@ function createGuard({ P, taskFace }) {
       } : null,
       limitResetsAtMs: Number.isFinite(d.limitResetsInMs) ? now + d.limitResetsInMs : null,
       messages: (Array.isArray(d.messages) ? d.messages : []).slice(-200).map(sanitizeMessage).filter(Boolean),
+      collaboration: (Array.isArray(d.collaboration) ? d.collaboration : []).slice(-50).map(sanitizeCollaboration).filter(Boolean),
     };
   }
 

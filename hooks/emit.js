@@ -89,7 +89,7 @@ function emitAdapter(payload) {
   // adapters whose SessionStart output reaches the model.
   if (event === 'SessionStart' && (adapter.id === 'gemini' || (adapter.id === 'codex' && opt('lifecycle')))) {
     const Brief = require('./team-brief.js');
-    Brief.run({ adapter: adapter.id, payload, root: ROOT_DIR }).then((out) => { Brief.print(out); exit(); }, exit);
+    Brief.run({ adapter: adapter.id, event, payload, root: ROOT_DIR }).then((out) => { Brief.print(out); exit(); }, exit);
   } else exit();
 }
 

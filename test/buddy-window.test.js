@@ -27,7 +27,7 @@ test('every page has a unique id, a title and a known kind', () => {
 });
 
 test('the sidebar has at most six primary sections and every page id still resolves to one', () => {
-  assert.ok(SECTIONS.length <= 6, `${SECTIONS.length} sections`);
+  assert.ok(SECTIONS.filter(s => s.menu === undefined).length <= 6, `${SECTIONS.length} sections including workspace utilities`);
   const ids = ['overview', 'home', 'board', 'board:table', 'board:history', 'board:dashboard', 'board:calendar', 'board:timeline', 'waiting', 'myday', 'sessions', 'timeline', 'checkpoints', 'memory', 'tasks', 'integrations', 'team', 'usage', 'stats', 'optimiser', 'clients', 'setups', 'thismac', 'phone', 'account', 'upgrade', 'sync', 'widget', 'lights', 'aitools', 'settings', 'hatch', 'help', 'feedback', 'updates'];
   for (const id of ids) {
     assert.ok(pageById(id), `${id} still exists`);
@@ -36,18 +36,18 @@ test('the sidebar has at most six primary sections and every page id still resol
 });
 
 test('the sidebar lists every main feature as its own section and reaches every page exactly once', () => {
-  assert.deepEqual(SECTIONS.map((s) => s.id), ['home', 'board', 'sessions', 'usage', 'team', 'settings']);
-  assert.deepEqual(SECTIONS.map((s) => s.title), ['Home', 'Board', 'Sessions', 'Usage & cost', 'Team', 'Settings']);
+  assert.deepEqual(SECTIONS.map((s) => s.id), ['home', 'board', 'sessions', 'inbox', 'team', 'usage', 'settings']);
+  assert.deepEqual(SECTIONS.map((s) => s.title), ['Home', 'Projects', 'Agents', 'Inbox', 'Team', 'Usage & cost', 'Settings']);
   assert.deepEqual(FOOTER, ['help', 'feedback', 'updates']);
   const listed = [...SECTIONS.flatMap((s) => s.pages), ...FOOTER];
   assert.equal(new Set(listed).size, listed.length, 'no page in two sections');
   assert.deepEqual([...listed].sort(), flat().filter((p) => !p.hidden).map((p) => p.id).sort(), 'no visible page is orphaned');
   for (const s of SECTIONS) assert.ok(s.pages.includes(s.default) && pageById(s.default), `${s.id} opens a page it holds`);
   assert.equal(sectionOf('board:calendar'), 'board');
-  assert.equal(sectionOf('waiting'), 'home');
+  assert.equal(sectionOf('waiting'), 'inbox');
   assert.equal(sectionOf('sessions'), 'sessions');
   assert.equal(sectionOf('optimiser'), 'usage', 'Usage optimiser is a page of Usage & cost');
-  assert.equal(sectionOf('tasks'), 'sessions');
+  assert.equal(sectionOf('tasks'), 'board');
   assert.equal(pageById('sessions').title, 'Sessions');
   assert.equal(pageById('tasks').title, 'Tasks');
   assert.equal(sectionOf('aitools'), 'settings');
@@ -55,15 +55,15 @@ test('the sidebar lists every main feature as its own section and reaches every 
   assert.equal(sectionOf('integrations'), 'team');
   assert.equal(sectionOf('lights'), 'settings', 'Widget rules lives in Settings');
   assert.equal(sectionOf('hatch'), 'settings');
-  assert.deepEqual(flat().filter((p) => p.unlisted).map((p) => p.id).sort(), ['myday', 'stats', 'timeline', 'waiting'], 'Home carries Waiting on you and My day, Usage & cost carries Time as a tab, Sessions opens a session timeline; each keeps a page but no sub-nav entry');
+  assert.deepEqual(flat().filter((p) => p.unlisted).map((p) => p.id).sort(), ['stats', 'timeline'], 'Inbox exposes questions and daily priorities; Usage and Agents retain their deep-linked secondary views');
   assert.equal(sectionOf('timeline'), 'sessions');
-  assert.equal(sectionOf('myday'), 'home');
+  assert.equal(sectionOf('myday'), 'inbox');
   assert.equal(sectionOf('lights'), 'settings');
   assert.equal(sectionOf('nope'), null);
   assert.equal(pageById('plugins'), null);
 });
 
-test('sidebar: Home lists Home and Overview; opening Waiting on you lights the Home section without a sub-nav entry of its own', async () => {
+test('sidebar: Inbox exposes waiting requests and daily priorities while Agents opens the Overview', async () => {
   const { JSDOM } = require('jsdom');
   const read = (f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
   const dom = new JSDOM(read('buddy-window/sidebar.html').replace(/<script[^>]*><\/script>/g, '').replace(/<link[^>]*>/g, ''), { runScripts: 'outside-only', url: 'file:///synthetic/sidebar.html' });
@@ -73,10 +73,11 @@ test('sidebar: Home lists Home and Overview; opening Waiting on you lights the H
   await new Promise((r) => setTimeout(r, 30));
   onState({ selected: 'waiting' });
   const d = dom.window.document;
-  const home = d.querySelector('[data-section="home"]');
-  assert.equal(home.hasAttribute('data-active'), true);
-  assert.deepEqual([...home.parentElement.querySelectorAll('.nav-sub button')].map((b) => b.textContent.trim()), ['Home', 'Overview']);
-  assert.equal(d.querySelector('[aria-current="page"]'), null);
+  const inbox = d.querySelector('[data-section="inbox"]');
+  assert.equal(inbox.hasAttribute('data-active'), true);
+  assert.deepEqual([...inbox.parentElement.querySelectorAll('.nav-sub button')].map((b) => b.textContent.trim()), ['Waiting on you', 'My day']);
+  assert.equal(d.querySelector('[aria-current="page"]').dataset.page, 'waiting');
+  assert.equal(SECTIONS.find(s => s.id === 'sessions').default, 'overview');
   dom.window.close();
 });
 

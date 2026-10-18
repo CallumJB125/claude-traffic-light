@@ -11,6 +11,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { IpcClient } from './ipc.js';
 import { TOOLS, callTool, jsonSchemaOf, errorResult } from './tools.js';
+import { createTaskServer } from './task-tools.js';
 
 export const SERVER_NAME = 'board';
 export const SERVER_VERSION = '0.1.0';
@@ -58,13 +59,19 @@ export async function main(env = process.env) {
     return;
   }
   const ipc = new IpcClient({ socketPath: env.BOARD_RUN_SOCKET, token: env.BOARD_RUN_TOKEN });
-  const server = createBoardServer({ ipc });
-  server.onclose = () => { ipc.close(); process.exit(0); };
-  await server.connect(new StdioServerTransport());
-  ipc.request('hello', {}, { timeoutMs: 5000 }).then(
-    (r) => log('info', 'board-mcp connected to runner', { run_id: r?.run_id, key: r?.key }),
-    (err) => log('warn', 'board-mcp could not greet runner', { code: err.code, error: err.message }),
-  );
+  try {
+    // The authenticated runner chooses scope before any tools are exposed.
+    // Tokens and model-provided arguments never select a tool surface.
+    const hello = await ipc.request('hello', {}, { timeoutMs: 5000 });
+    if (hello?.scope != null && !['task', 'board'].includes(hello.scope)) throw new Error('Unsupported run scope');
+    const server = hello?.scope === 'task'
+      ? createTaskServer({ ipc, includeApproval: true })
+      : createBoardServer({ ipc });
+    server.onclose = () => { ipc.close(); process.exit(0); };
+    await server.connect(new StdioServerTransport());
+    log('info', 'board-mcp connected to runner', { run_id: hello?.run_id, key: hello?.key });
+    return server;
+  } catch (err) { ipc.close(); throw err; }
 }
 
 const isEntry = (() => {
