@@ -180,6 +180,7 @@
     if (request !== generation || document.hidden) return;
     if (!s || typeof s !== 'object') { $('status').textContent = 'Home is unavailable right now. It tries again in a few seconds.'; return; }
     render(s);
+    document.dispatchEvent(new CustomEvent('home:state', { detail: s }));
   }
   $('open-tasks')?.addEventListener('click', () => go('tasks'));
   $('open-projects')?.addEventListener('click', () => go('board'));

@@ -60,12 +60,24 @@
   };
   const stateText = (e, f) => f.freshness === 'recent' ? e.state : `${e.state} · ${f.freshness === 'stale' ? 'Stale' : 'Freshness unknown'}`;
   const tone = (e, f) => f.freshness !== 'recent' ? f.freshness : e.input ? 'waiting' : e.state === 'Working' ? 'working' : '';
+  // Optional page helpers (src/session-pulse.js etc.); each feature is absent when its script is not loaded.
+  const Pulse = window.PlexiformPulse || null, Pins = window.PlexiformPins || null, Follow = window.PlexiformFollow || null, Requests = window.PlexiformRequests || null, Presence = window.PlexiformPresence || null, Palette = window.PlexiformPalette || null;
+  // Per-viewer conveniences only (pins, follows, saved filters); sharing and permissions never live here.
+  const store = { read(k, parse) { try { return parse(localStorage.getItem(k)); } catch { return parse(null); } }, write(k, v) { try { localStorage.setItem(k, v); } catch { /* unavailable */ } } };
+  let pins = Pins ? store.read('plexiform.pins', Pins.parse) : null, follows = Follow ? store.read('plexiform.follows', Follow.parse) : null;
+  const savePins = () => { if (Pins) store.write('plexiform.pins', Pins.serialize(pins)); };
+  const saveFollows = () => { if (Follow) store.write('plexiform.follows', Follow.serialize(follows)); };
+  const RECEIPT_TEXT = { sending: 'Drafted · review and send', sent: 'Sent', acknowledged: 'Acknowledged', answered: 'Answered', expired: 'Expired, no reply' };
 
   function rowView(kind) {
     const li = el('li', '', 'dir-entry'), head = el('div', '', 'row-heading'), who = el('div', '', 'dir-who');
     const avatar = el('span', '', 'avatar'); avatar.setAttribute('aria-hidden', 'true');
     const titles = el('div'), title = el('h3'), owner = el('p', '', 'muted'), tag = el('span', '', 'tag');
-    titles.append(title, owner); who.append(avatar, titles); head.append(who, tag);
+    titles.append(title, owner); who.append(avatar, titles);
+    const presence = el('span', '', 'presence'); presence.setAttribute('aria-label', 'Teammates viewing now'); presence.hidden = true; who.append(presence);
+    const tools = el('div', '', 'row-tools'), tagWrap = el('div', '', 'row-tools'); tagWrap.append(tag, tools); head.append(who, tagWrap);
+    const pulse = el('p', '', 'dir-pulse'), pulseDot = el('span', '', 'pulse-dot'), pulseText = el('span'); pulseDot.setAttribute('aria-hidden', 'true'); pulse.append(pulseDot, pulseText); pulse.hidden = true;
+    const receipt = el('p', '', 'ask-receipt'); receipt.hidden = true; receipt.setAttribute('role', 'status');
     const meta = el('p', '', 'row-meta'), badges = el('p', '', 'badges'), when = el('p', '', 'muted'), activity = el('p', '', 'dir-activity'), self = el('p', '', 'muted');
     const children = el('ul', '', 'agent-list'), handoffs = el('ul', '', 'handoffs'), deliveries = el('ol', '', 'deliveries');
     children.setAttribute('aria-label', 'Child agents'); handoffs.setAttribute('aria-label', 'Handoffs'); deliveries.setAttribute('aria-label', 'Messages and responses');
@@ -73,8 +85,8 @@
     const details = el('details', '', 'caps'), capList = el('ul', '', 'cap-list'); details.append(el('summary', 'Permissions and report details'), badges, self, capList);
     const childDetails = el('details', '', 'dir-children'), childSummary = el('summary'); childDetails.append(childSummary, children);
     const history = el('details', '', 'dir-history'); history.append(el('summary', 'Recent messages and handoffs'), handoffs, deliveries);
-    li.append(head, meta, when, activity, childDetails, history, actions, why, notice, details);
-    return { li, avatar, title, owner, tag, meta, badges, when, activity, self, children, handoffs, deliveries, actions, why, notice, capList, details, childDetails, childSummary, history, kind, composer: null, gone: false, entry: null };
+    li.append(head, meta, pulse, when, activity, childDetails, history, actions, receipt, why, notice, details);
+    return { li, avatar, title, owner, tag, tools, presence, pulse, pulseText, receipt, meta, badges, when, activity, self, children, handoffs, deliveries, actions, why, notice, capList, details, childDetails, childSummary, history, kind, composer: null, gone: false, entry: null, request: null };
   }
   function updateRow(v, e, data) {
     v.entry = e; v.gone = false; v.li.classList.remove('gone');
@@ -88,6 +100,16 @@
     set(v.meta, [e.provider.label + (e.provider.kind === 'local' ? ' · local model' : ''), e.device.label + (e.device.local && e.device.label !== 'This device' ? ' (this device)' : ''), e.board.label, e.card?.key ? `Card ${e.card.key}` : ''].filter(Boolean).join(' · '));
     set(v.badges, [...e.teams.map(t => `Team: ${t.name}`), ...e.provenance.map(p => PROVENANCE[p]), ...(e.task.source === 'human' ? ['task title edited by a person'] : [])].join(' · '));
     set(v.when, `Last observed ${age(f.ageMs)}${f.freshness === 'stale' ? ' · stale' : f.freshness === 'unknown' ? ' · freshness unknown' : ''}`);
+    const p = Pulse ? Pulse.pulse(e, Date.now(), data.observed_at) : null;
+    if (p) { set(v.pulseText, p.line); v.pulse.hidden = false; v.li.dataset.pulse = p.freshness; v.when.hidden = true; } else delete v.li.dataset.pulse;
+    v.li.dataset.pinned = String(!!(Pins && Pins.pinned(pins, e)));
+    if (Pins && !v.pin) { v.pin = button('Pin', () => { pins = Pins.togglePin(pins, v.entry); savePins(); render(v.kind); }); v.pin.className = 'session-pin'; v.tools.append(v.pin); }
+    if (v.pin) { const on = Pins.pinned(pins, e); v.pin.setAttribute('aria-pressed', String(on)); set(v.pin, on ? 'Pinned' : 'Pin'); v.pin.setAttribute('aria-label', `${on ? 'Unpin' : 'Pin'}: ${v.title.textContent}`); }
+    if (Follow && v.kind === 'team' && !v.follow) { v.follow = button('Follow', () => { follows = Follow.toggle(follows, v.entry); saveFollows(); render('team'); }); v.follow.className = 'session-follow'; v.tools.append(v.follow); }
+    if (v.follow) { const on = Follow.following(follows, e); v.follow.setAttribute('aria-pressed', String(on)); set(v.follow, on ? 'Following' : 'Follow'); v.follow.title = 'Tell me once when this session needs input, finishes or fails.'; v.follow.setAttribute('aria-label', `${on ? 'Unfollow' : 'Follow'}: ${v.title.textContent}`); }
+    const viewers = Presence && Presence.validViewers(e.viewers) ? e.viewers.filter(x => !e.owner.self || x.name !== 'You') : [];
+    const vsig = JSON.stringify(viewers); if (v.vsig !== vsig) { v.vsig = vsig; v.presence.replaceChildren(...viewers.slice(0, 5).map(x => { const a = el('span', x.initials, 'avatar'); a.title = `${x.name} is viewing`; a.setAttribute('aria-label', `${x.name} is viewing`); return a; })); }
+    v.presence.hidden = !viewers.length;
     set(v.activity, activityText(e.activity)); v.activity.hidden = !v.activity.textContent;
     set(v.self, e.selfReported ? `Self-reported: ${e.selfReported.state}${e.selfReported.at !== null ? ` at ${new Date(e.selfReported.at).toLocaleTimeString()}` : ''} (not verified)` : ''); v.self.hidden = !e.selfReported;
     const kids = e.children.map(c => { const cf = freshNow(c, data), li = el('li', '', 'agent'), h = el('div', '', 'row-heading'); h.append(el('h4', c.task.source === 'unknown' ? c.label : `${c.label}: ${c.task.title}`), el('span', stateText(c, cf), `tag ${tone(c, cf)}`)); li.append(h, el('p', `Last observed ${age(cf.ageMs)}${c.selfReported ? ' · self-reported, not verified' : ''}`, 'muted')); return li; });
@@ -102,8 +124,19 @@
     if (v.csig !== csig) { v.csig = csig; v.capList.replaceChildren(...CAPS.map(k => el('li', `${CAP_LABEL[k]}: ${e.capabilities[k].available ? 'available' : `unavailable. ${e.capabilities[k].reason}`}`, e.capabilities[k].available ? '' : 'muted'))); }
     // One primary action: message where a permitted, supported channel exists; otherwise the exact reason.
     const canMessage = e.interact !== null && e.capabilities.receive.available;
+    const quiet = p && !p.canRequest;
     if (!v.message) { v.message = button('Message', () => void interact(v)); v.actions.append(v.message); }
-    v.message.hidden = !canMessage; v.message.disabled = !!v.busy;
+    v.message.hidden = !canMessage; v.message.disabled = !!v.busy || !!quiet; v.message.title = quiet ? p.reason : '';
+    if (Requests && v.kind === 'team' && !v.ask) {
+      const menu = el('div', '', 'ask-menu'), list = el('ul', '', 'ask-list'); list.hidden = true; list.setAttribute('role', 'menu');
+      const toggle = button('Ask…', () => { list.hidden = !list.hidden; toggle.setAttribute('aria-expanded', String(!list.hidden)); if (!list.hidden) list.querySelector('button')?.focus(); });
+      toggle.className = 'session-ask'; toggle.setAttribute('aria-haspopup', 'menu'); toggle.setAttribute('aria-expanded', 'false');
+      for (const t of Requests.TEMPLATES) { const li = el('li'); li.setAttribute('role', 'none'); const b = button(t.label, () => { list.hidden = true; toggle.setAttribute('aria-expanded', 'false'); void ask(v, t.id); }); b.setAttribute('role', 'menuitem'); li.append(b); list.append(li); }
+      menu.addEventListener('keydown', ev => { if (ev.key === 'Escape') { list.hidden = true; toggle.setAttribute('aria-expanded', 'false'); toggle.focus(); } });
+      menu.append(toggle, list); v.ask = { menu, toggle, list }; v.actions.append(menu);
+    }
+    if (v.ask) { const ok = canMessage && e.interact?.kind === 'team'; v.ask.menu.hidden = !ok; v.ask.toggle.disabled = !!quiet || !!v.busy; v.ask.toggle.title = quiet ? p.reason : 'Send one bounded request through the team hub; you review the exact text first.'; v.ask.toggle.setAttribute('aria-label', `Ask: ${v.title.textContent}`); }
+    renderReceipt(v);
     v.message.className = 'session-message';
     v.message.textContent = e.interact?.kind === 'team' ? 'Message' : e.interact?.kind === 'owned' ? 'Open conversation' : 'Message';
     v.message.setAttribute('aria-label', `${v.message.textContent}: ${v.title.textContent}`);
@@ -133,6 +166,25 @@
     v.followupDraft?.box.remove(); v.followupDraft = null; if (v.followup) v.followup.hidden = true;
     if (v.inspect) v.inspect.hidden = true;
     if (!v.dismiss) { v.dismiss = button('Dismiss', () => { v.li.remove(); for (const l of Object.values(lists)) for (const [id, x] of l.rows) if (x === v) l.rows.delete(id); }); v.actions.append(v.dismiss); }
+  }
+  function renderReceipt(v) {
+    if (!Requests || !v.request || !v.entry) { v.receipt.hidden = true; return; }
+    const state = Requests.receiptState(v.request, v.entry.deliveries ?? [], Date.now());
+    v.receipt.replaceChildren(el('span', `${v.request.label}:`), el('span', RECEIPT_TEXT[state] || state, `tag ${state}`));
+    v.receipt.hidden = false;
+    if (state === 'answered' || state === 'expired') v.receipt.append(button('Clear', () => { v.request = null; renderReceipt(v); }));
+  }
+  // A template only drafts the exact text into the existing reviewed composer; nothing is sent until the person presses Send there.
+  async function ask(v, templateId) {
+    const e = v.entry; if (!e || v.gone || !Requests) return;
+    const r = Requests.buildRequest(templateId, { sender: 'You', target: e.id, task: e.task.title, now: Date.now() });
+    if (!r.ok) { set(v.why, r.error); v.why.hidden = false; return; }
+    v.request = { ...r.request, text: r.text };
+    await interact(v);
+    if (v.gone) return;
+    const input = selected?.row === v ? selected.input : v.composer?.input;
+    if (input) { input.value = r.text; input.dispatchEvent(new Event('input', { bubbles: true })); input.focus(); }
+    renderReceipt(v);
   }
   async function interact(v) {
     const e = v.entry; if (!e || v.gone || !e.interact || !hooks) return;
@@ -450,12 +502,13 @@
     const all = [...l.rows.values()];
     if (which === 'mine') {
       $('mine-summary').replaceChildren(...renderSummary(data));
-      place($('mine-list'), all.map(v => v.li));
+      place($('mine-list'), (Pins ? Pins.order(pins, all.map(v => v.entry)).map(e => all.find(v => v.entry === e)) : all).map(v => v.li));
       set($('mine-count'), `${data.entries.length} ${data.entries.length === 1 ? 'session' : 'sessions'}`);
       $('mine-empty').hidden = all.length > 0;
       return;
     }
     teamFilters(data);
+    renderSavedFilters();
     $('team-summary').replaceChildren(...renderSummary(data));
     const counts = { all: data.entries.length, attention: data.entries.filter(e => needsInput(e, data)).length, working: data.entries.filter(e => e.state === 'Working' && freshNow(e, data).freshness === 'recent').length, stale: data.entries.filter(e => freshNow(e, data).freshness !== 'recent').length };
     const labels = { all: 'All sessions', attention: 'Need input', working: 'Working', stale: 'Stale / unknown' };
@@ -464,9 +517,11 @@
     const group = $('team-group').value || 'person', groups = new Map();
     for (const v of all) { if (!v.gone && !matches(v.entry, data)) continue; const k = v.gone ? 'No longer listed' : keyOf(v.entry, group); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(v); }
     if (!l.groups) l.groups = new Map();
-    const blocks = [...groups.keys()].sort((a, b) => a === 'No longer listed' ? 1 : b === 'No longer listed' ? -1 : a.localeCompare(b)).map(k => {
+    const pinnedGroup = k => Pins && groups.get(k).some(v => !v.gone && Pins.pinned(pins, v.entry));
+    const blocks = [...groups.keys()].sort((a, b) => a === 'No longer listed' ? 1 : b === 'No longer listed' ? -1 : Number(pinnedGroup(b)) - Number(pinnedGroup(a)) || a.localeCompare(b)).map(k => {
       let g = l.groups.get(k); if (!g) { g = { box: el('section', '', 'dir-group'), head: el('h3', k), list: el('ul', '', 'dir-list') }; g.box.append(g.head, g.list); l.groups.set(k, g); }
-      g.list.setAttribute('aria-label', k); place(g.list, groups.get(k).sort((a, b) => Number(!a.gone && !needsInput(a.entry, data)) - Number(!b.gone && !needsInput(b.entry, data))).map(v => v.li)); return g.box;
+      const ordered = groups.get(k).sort((a, b) => Number(!a.gone && !needsInput(a.entry, data)) - Number(!b.gone && !needsInput(b.entry, data)));
+      g.list.setAttribute('aria-label', k); place(g.list, (Pins ? Pins.order(pins, ordered.map(v => v.entry)).map(e => ordered.find(v => v.entry === e)) : ordered).map(v => v.li)); return g.box;
     });
     for (const [k, g] of l.groups) if (!groups.has(k)) l.groups.delete(k);
     place($('team-list'), blocks);
@@ -476,6 +531,52 @@
     set($('team-empty-title'), data.entries.length ? 'No sessions match these filters' : 'Nothing shared yet');
     set($('team-empty-text'), data.entries.length ? 'Try another teammate or project, or clear the filters to see all shared work.' : data.teams.length ? 'Ask a teammate to share a session with this team. Its activity and permitted controls will appear here.' : 'Join a team from Team in the sidebar to see the sessions its members choose to share.');
     $('team-empty-reset').hidden = !data.entries.length;
+  }
+  const filterValues = () => ({ ...Object.fromEntries(TEAM_FILTERS.map(f => [f, $(`team-${f}-filter`).value])), search: $('team-search').value, focus: teamFocus, group: $('team-group').value });
+  function applyFilter(values) {
+    for (const f of TEAM_FILTERS) $(`team-${f}-filter`).value = values[f] || '';
+    $('team-search').value = values.search || ''; teamFocus = values.focus || 'all'; if (values.group) $('team-group').value = values.group;
+    clearActivity(); render('team');
+  }
+  let savedUi = null;
+  function renderSavedFilters() {
+    const box = $('saved-filters'); if (!box || !Pins) return;
+    if (!savedUi) {
+      const name = el('input'); name.type = 'text'; name.id = 'saved-filter-name'; name.maxLength = 60; name.placeholder = 'Name this view'; name.setAttribute('aria-label', 'Name for the current filters');
+      const save = button('Save filters', () => { const n = name.value.trim(); if (!n) { name.focus(); return; } pins = Pins.saveFilter(pins, n, filterValues()); savePins(); name.value = ''; renderSavedFilters(); });
+      savedUi = { name, save, chips: el('div', '', 'saved-filters') }; savedUi.chips.setAttribute('role', 'group'); savedUi.chips.setAttribute('aria-label', 'Saved views');
+      box.append(savedUi.chips, name, save);
+    }
+    const current = JSON.stringify(filterValues());
+    savedUi.chips.replaceChildren(...pins.filters.map(f => {
+      const chip = el('span', '', 'chip'); chip.setAttribute('aria-pressed', String(JSON.stringify({ ...filterValues(), ...Object.fromEntries(Object.keys(filterValues()).map(k => [k, f.values[k] || (k === 'focus' ? 'all' : k === 'group' ? $('team-group').value : '')])) }) === current));
+      const apply = button(f.name, () => applyFilter(f.values)); apply.className = 'chip-apply'; apply.setAttribute('aria-label', `Show saved view: ${f.name}`);
+      const x = button('×', () => { pins = Pins.removeFilter(pins, f.name); savePins(); renderSavedFilters(); }); x.className = 'chip-x'; x.setAttribute('aria-label', `Remove saved view: ${f.name}`);
+      chip.append(apply, x); return chip;
+    }));
+    savedUi.save.disabled = !Object.values(filterValues()).some((val, i) => val && !(['focus', 'group'].includes(Object.keys(filterValues())[i]) && (val === 'all' || val === 'person')));
+  }
+  let followNote = null;
+  function noteFollows(fresh) {
+    if (!Follow || !fresh.length) return;
+    if (!followNote) { followNote = el('p', '', 'reason'); followNote.setAttribute('role', 'status'); followNote.setAttribute('aria-live', 'polite'); $('team-status').after(followNote); }
+    set(followNote, `Followed: ${fresh.map(Follow.describe).join(' · ')}`);
+  }
+  function index() {
+    if (!Palette) return [];
+    const entries = [...(lists.team.data?.entries ?? []), ...(lists.mine.data?.entries ?? [])];
+    return Palette.indexOf({ entries: entries.filter((e, i) => entries.findIndex(x => x.id === e.id) === i) });
+  }
+  function openFromPalette(item) {
+    if (!item) return;
+    if (item.kind === 'person') { show('team'); applyFilter({ person: item.id }); return; }
+    if (item.kind === 'project') { show('team'); applyFilter({ project: item.id }); return; }
+    if (item.kind !== 'session') return;
+    const which = lists.team.rows.has(item.id) ? 'team' : lists.mine.rows.has(item.id) ? 'mine' : null; if (!which) return;
+    show(which); if (which === 'team') applyFilter({});
+    const v = lists[which].rows.get(item.id); if (!v) return;
+    v.li.scrollIntoView?.({ block: 'center' }); v.li.classList.add('selected'); setTimeout(() => v.li.classList.remove('selected'), 2000);
+    if (which === 'team') { void openActivity(v); } else (v.message?.hidden ? v.title : v.message).focus?.();
   }
   function renderTeams(data) {
     const pick = $('team-pick'), prev = team;
@@ -500,6 +601,7 @@
     if (data.observed_at < received) return; received = data.observed_at;
     const l = lists[which];
     if (which === 'team' && l.data && l.data.team?.key !== data.team?.key) { clearActivity(); l.rows.clear(); l.groups?.clear(); $('team-list').replaceChildren(); }
+    if (which === 'team' && Follow && l.data) { const r = Follow.observe(follows, l.data.entries, data.entries, Date.now()); if (r.fresh.length) { follows = r.state; saveFollows(); noteFollows(r.fresh); } }
     l.data = data;
     if (which === 'team') renderTeams(data);
     render(which);
@@ -536,5 +638,5 @@
     document.addEventListener('visibilitychange', () => { if (document.hidden && selected) { selected.preview = null; selected.review.hidden = true; } });
     if (typeof api.onDirectoryChanged === 'function') api.onDirectoryChanged(soon);
   }
-  window.OverviewDirectory = Object.freeze({ start, refresh, soon, rerender: () => { render('mine'); render('team'); } });
+  window.OverviewDirectory = Object.freeze({ start, refresh, soon, rerender: () => { render('mine'); render('team'); }, index, openFromPalette });
 })();

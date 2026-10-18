@@ -21,6 +21,7 @@
   <div id="banner" class="banner" role="region" aria-label="Connect your AI tools" hidden></div>
   <section id="starter" aria-labelledby="starter-title" hidden><div class="section-header"><h2 id="starter-title">Start with a pack</h2></div><div class="body"></div></section>
   <section id="morning" aria-labelledby="morning-title" hidden><div class="section-header"><h2 id="morning-title">While you were away</h2><p id="morning-count" class="muted"></p></div><div class="body"></div></section>
+  <section id="inbox" aria-labelledby="inbox-title" hidden><div class="section-header"><h2 id="inbox-title">Inbox</h2><p id="inbox-count" class="muted"></p></div><div class="body"></div><p id="inbox-status" class="muted" role="status" aria-live="polite"></p></section>
   <section id="alerts" aria-labelledby="alerts-title" hidden><div class="section-header"><h2 id="alerts-title">Stuck and limits</h2></div><div class="body"></div></section>
   <section id="needs" aria-labelledby="needs-title"><div class="section-header"><h2 id="needs-title">Needs you</h2><p id="needs-count" class="muted"></p></div><div class="body"></div></section>
   <section id="running" aria-labelledby="running-title"><div class="section-header"><h2 id="running-title">Running now</h2><p id="running-count" class="muted"></p></div><div class="body"></div></section>
@@ -33,7 +34,11 @@
   <p id="status" class="muted" role="status" aria-live="polite">Loading…</p>
 </main>
 <script src="demo-banner.js"></script>
+<script src="src/attention-inbox.js"></script>
+<script src="src/session-follow.js"></script>
+<script src="src/teammate-tour.js"></script>
 <script src="home.js"></script>
+<script src="home-inbox-view.js"></script>
 <script src="home-alerts-view.js"></script>
 <script src="home-starter.js"></script>
 <script src="home-digest.js"></script>

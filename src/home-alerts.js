@@ -97,7 +97,7 @@ function createHomeAlerts({ sessions = () => [], burst = () => null, tasks = () 
   function snapshot() {
     const c = cards();
     const view = (list) => list.map((x) => ({ handle: handleOf(x.key), ...x.view }));
-    return { stuck: view(c.stuck), limits: view(c.limits), mail: mailCards() };
+    return { stuck: view(c.stuck), limits: view(c.limits), mail: mailCards(), waiting: waitingCards() };
   }
 
   // One card while agent mail waits: your AI's asks for your OK, and teammates' AIs' questions.
@@ -108,8 +108,19 @@ function createHomeAlerts({ sessions = () => [], burst = () => null, tasks = () 
     return [{ handle: MAIL_HANDLE, title: `Agent mail: ${held + inbox} waiting`, meta: [held ? `${held} from your AI waiting for your OK` : null, inbox ? `${inbox} from teammates' AIs` : null].filter(Boolean).join(' · ') }];
   }
 
+  // One row per look request this person sent that a teammate has not finished (src/agent-mail.js waitingOn).
+  const WAIT_TEXT = { sent: 'sent, not seen yet', seen: 'seen', handling: 'they’ll handle it' };
+  function waitingCards() {
+    const m = safe(mail, null);
+    return (Array.isArray(m?.waiting) ? m.waiting : []).slice(0, MAX_CARDS).map((w) => ({ handle: `${MAIL_HANDLE}:${String(w.id).slice(0, 60)}`, title: `Waiting on ${w.to}: ${w.question || 'a look'}`, meta: WAIT_TEXT[w.state] || String(w.state), state: w.state }));
+  }
   async function act(kind, action, handle) {
     if (typeof handle !== 'string') return { ok: false, error: 'That card has changed. Home refreshes in a moment.' };
+    if (kind === 'waiting') {
+      if (action !== 'open' || !waitingCards().some((c) => c.handle === handle)) return { ok: false, error: 'That card has changed. Home refreshes in a moment.' };
+      await openMail();
+      return { ok: true };
+    }
     if (kind === 'mail') {
       if (handle !== MAIL_HANDLE || action !== 'open' || !mailCards().length) return { ok: false, error: 'That card has changed. Home refreshes in a moment.' };
       await openMail();

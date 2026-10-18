@@ -47,6 +47,7 @@ function handoverRow(section, h) {
       row.append(document.createTextNode(' · '), b);
     }
     row.append(document.createTextNode(' · '), continueButton(h.key));
+    if (window.sessionsApi.pinAdd) row.append(document.createTextNode(' · '), pinButton(h.key));
   }
   const tl = node('button', 'Timeline', 'link'); tl.type = 'button';
   tl.addEventListener('click', async () => { const ok = await window.sessionsApi.timeline(h.key).catch(() => false); if (!ok) { tl.textContent = 'Unavailable'; setTimeout(() => { tl.textContent = 'Timeline'; }, 1500); } });
@@ -93,6 +94,25 @@ function continueButton(key) {
   return wrap;
 }
 
+// Pin to project: one link, command, convention or priority onto the team board this folder is linked to.
+function pinButton(key) {
+  const wrap = node('span'), out = node('span', '', 'continue-note'); out.setAttribute('role', 'status');
+  const open = node('button', 'Pin to project', 'link'); open.type = 'button';
+  open.addEventListener('click', () => {
+    if (wrap.querySelector('.pin-pick')) return;
+    const box = node('span', '', 'pin-pick teammate-pick');
+    const kind = node('select'); kind.setAttribute('aria-label', 'What kind of pin');
+    for (const [k, l] of [['link', 'Link'], ['command', 'Command'], ['note', 'Convention'], ['priority', 'Priority']]) { const o = node('option', l); o.value = k; kind.append(o); }
+    const label = node('input'); label.type = 'text'; label.maxLength = 80; label.placeholder = 'Label'; label.setAttribute('aria-label', 'Pin label');
+    const value = node('input'); value.type = 'text'; value.maxLength = 500; value.placeholder = 'https://… or a command or note'; value.setAttribute('aria-label', 'Pin value');
+    const go = button('Pin', async () => { go.disabled = true; const r = await window.sessionsApi.pinAdd(key, kind.value, label.value, value.value).catch(() => null); out.textContent = ` ${r?.ok ? `Pinned to the project board (${r.count} pinned).` : r?.error || 'That did not work.'}`; if (r?.ok) box.remove(); else go.disabled = false; }); go.className = 'small primary';
+    const cancel = button('Cancel', () => { box.remove(); out.textContent = ''; }); cancel.className = 'small';
+    box.append(kind, label, value, go, cancel); wrap.append(box); label.focus();
+  });
+  wrap.append(open, out);
+  return wrap;
+}
+
 // Hand off to a teammate: a small inline picker (names from the team hub for this session's folder), then the
 // same native preview-and-confirm as a tool hand-off, and the packet goes through agent mail.
 async function teammatePicker(key, wrap, out) {
@@ -104,6 +124,14 @@ async function teammatePicker(key, wrap, out) {
   const box = node('span', '', 'teammate-pick');
   const pick = node('select'); pick.setAttribute('aria-label', 'Which teammate');
   for (const t of r.teammates) { const o = node('option', t.name); o.value = t.user_id; pick.append(o); }
+  const q = node('input'); q.type = 'text'; q.maxLength = 500; q.placeholder = 'What should they look at?'; q.setAttribute('aria-label', 'What should they look at?'); q.className = 'look-question';
+  const look = button('Can you look at this?', async () => {
+    if (!q.value.trim()) { q.focus(); out.textContent = ' Write what they should look at.'; return; }
+    look.disabled = true; out.textContent = ' Sending your request…';
+    const res = await window.sessionsApi.mailLook?.(key, pick.value, q.value).catch(() => null);
+    out.textContent = ` ${res?.ok ? res.note || 'Asked.' : res?.error || 'That did not work.'}`;
+    box.remove();
+  }); look.className = 'small';
   const go = button('Hand off…', async () => {
     go.disabled = true; out.textContent = ' Waiting for your confirmation…';
     const res = await window.sessionsApi.mailHandoff(key, pick.value).catch(() => null);
@@ -111,7 +139,7 @@ async function teammatePicker(key, wrap, out) {
     box.remove();
   }); go.className = 'small primary';
   const cancel = button('Cancel', () => { box.remove(); out.textContent = ''; }); cancel.className = 'small';
-  box.append(pick, go, cancel);
+  box.append(pick, q, look, go, cancel);
   wrap.append(box);
   pick.focus();
 }

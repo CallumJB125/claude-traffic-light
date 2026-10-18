@@ -1768,6 +1768,7 @@ const hostSync=require('./src/interaction-host-sync').createInteractionHostSync(
 // Send on Sessions; the teammates' side is an opt-in inbox poll with hostSync's lifecycle.
 const AgentMail=require('./src/agent-mail').create({identity:()=>devMockReady?getBuddy().interactionHostIdentity?.()??null:null,resolve:async(a)=>(devMockReady?(await getBuddy().teamActivityLink?.(a))??null:null),
   fetch:(...a)=>net.fetch(...a),home:os.homedir(),enabled:()=>loadConfig().agentMailInbox===true,notify:n=>notifyAgentMail(n),onChange:()=>buddyWin?.sendToPage('sessions','mail:changed'),log:m=>console.log(m)}); // privacy-flow: agent-mail
+require('./src/pinboard.js').register({ipcMain,allowed:sessionsSender,pinboard:require('./src/pinboard.js').createPinboard({resolve:async(a)=>(devMockReady?(await getBuddy().teamActivityLink?.(a))??null:null),fetch:(...a)=>net.fetch(...a),log:m=>console.log(m)}),cwdFor:async(key)=>{try{const p=await teammatePacketFromDoc(SessionHandoverMain.writer.text(key));return p?.cwd??null;}catch{return null;}}}); // privacy-flow: pinboard
 require('./src/agent-mail').register({ipcMain,allowed:sessionsSender,mail:AgentMail,tasks:()=>{const t=getTasks();t.start();return t;},
   confirm:async(info,e)=>(await dialog.showMessageBox(BrowserWindow.fromWebContents(e.sender)||undefined,{type:'question',buttons:['Cancel',info.action],defaultId:0,cancelId:0,noLink:true,message:`${info.title}?`,detail:info.detail})).response===1,
   pickFolder:async e=>{

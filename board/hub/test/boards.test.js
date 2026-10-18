@@ -224,3 +224,31 @@ test('migration029 refuses legacy duplicate prefixes atomically; read-only audit
     assert.equal(prefixAudit(db).ready, true);
   } finally { db.close(); }
 });
+
+test('pinboard: writers add and remove pins, viewers only read, links must be https, the board broadcasts and journals', async () => {
+  const fx = await tenancy();
+  try {
+    const { as, users, A, h } = fx;
+    const socket = await h.browser({ token: users.aviewer.token });
+    await socket.subscribe(A.board);
+    const added = await as(users.amember, 'POST', `/api/boards/${A.board}/pins`, { pin: { kind: 'link', label: 'Staging', value: 'https://staging.example.test' } });
+    assert.equal(added.status, 200, added.text);
+    assert.equal(added.body.pins.length, 1);
+    assert.equal(added.body.pins[0].by, h.hub.member(A.member).display_name);
+    const event = await socket.next('board.pins');
+    assert.equal(event.pins[0].label, 'Staging');
+    assert.equal((await as(users.amember, 'POST', `/api/boards/${A.board}/pins`, { pin: { kind: 'link', label: 'Bad', value: 'http://insecure' } })).status, 400);
+    assert.equal((await as(users.amember, 'POST', `/api/boards/${A.board}/pins`, { pin: { kind: 'shell', label: 'Bad', value: 'x' } })).status, 400);
+    assert.equal((await as(users.aviewer, 'POST', `/api/boards/${A.board}/pins`, { pin: { kind: 'note', label: 'No', value: 'x' } })).status, 403);
+    const replaced = await as(users.aadmin, 'PUT', `/api/boards/${A.board}/pins`, { pins: [...added.body.pins, { kind: 'priority', label: 'Ship checkout' }, { kind: 'command', label: 'Tests', value: 'npm test' }] });
+    assert.equal(replaced.status, 200, replaced.text);
+    assert.deepEqual(replaced.body.pins.map((p) => p.kind), ['link', 'priority', 'command']);
+    assert.equal(replaced.body.pins[0].by, h.hub.member(A.member).display_name, 'the original pinner is kept');
+    const snap = await as(users.aviewer, 'GET', `/api/boards/${A.board}`);
+    assert.equal(snap.body.board.settings.pins.length, 3);
+    const removed = await as(users.amember, 'DELETE', `/api/boards/${A.board}/pins/${added.body.pins[0].id}`, {});
+    assert.equal(removed.status, 200, removed.text);
+    assert.equal(removed.body.pins.length, 2);
+    assert.deepEqual(h.db.all("SELECT kind FROM journal WHERE board_id = ? AND kind = 'board.pins_set'", A.board).length, 3);
+  } finally { await fx.h.close(); }
+});

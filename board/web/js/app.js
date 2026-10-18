@@ -87,6 +87,7 @@ const state = {
   quickAdd: null, // inline add-a-card: {open, seed, confirm: titles|null, keep}
   // Archived cards (D94) are not in the snapshot: "Show archived" fetches them into their own map.
   showArchived: false,
+  pinboardOpen: false,
   archived: null, // id → {view, rx} while showArchived
   // team.presence (D37b). `stale` from a socket drop until the next frame.
   presence: { members: [], loaded: false, stale: false },
@@ -1034,6 +1035,10 @@ function onMessage(msg) {
       if (msg.board_id !== state.boardId || !state.board) return;
       state.board = { ...state.board, labels: msg.labels };
       break;
+    case 'board.pins':
+      if (msg.board_id !== state.boardId || !state.board) return;
+      state.board = { ...state.board, settings: { ...(state.board.settings ?? {}), pins: Array.isArray(msg.pins) ? msg.pins : [] } };
+      break;
     case 'lease.tick': {
       const c = state.cards.get(msg.card_id);
       if (!c) return;
@@ -1103,6 +1108,25 @@ async function loadArchived() {
   update();
 }
 
+// ── project pinboard ────────────────────────────────────────────────────────
+async function addPin(pin, form) {
+  if (!pin.label) { toast('Give the pin a label.', 'error'); return; }
+  if (pin.kind === 'link' && !/^https:\/\/\S+$/i.test(pin.value)) { toast('A link pin needs an https:// address.', 'error'); return; }
+  if (pin.kind !== 'priority' && !pin.value) { toast('Add the link, command or note to pin.', 'error'); return; }
+  state.pinboardOpen = true;
+  const res = await withBusy('pin:add', () => api.addPin(state.boardId, pin));
+  if (!res?.pins) return;
+  state.board = { ...state.board, settings: { ...(state.board.settings ?? {}), pins: res.pins } };
+  form?.reset?.();
+  toast(`Pinned “${pin.label}”.`);
+  update();
+}
+async function removePin(id) {
+  const res = await withBusy(`pin:${id}`, () => api.removePin(state.boardId, id));
+  if (!res?.pins) return;
+  state.board = { ...state.board, settings: { ...(state.board.settings ?? {}), pins: res.pins } };
+  update();
+}
 function setShowArchived(on) {
   state.showArchived = on;
   if (on) loadArchived();
@@ -2143,6 +2167,7 @@ function onClick(e) {
     case 'filter-clear': setFilters(emptyFilters()); return;
     case 'toggle-done': state.showAllDone = !state.showAllDone; update(); return;
     case 'toggle-archived': setShowArchived(!state.showArchived); return;
+    case 'pin-remove': void removePin(el.dataset.pin); return;
     case 'archive': archiveCards([cardId]); return;
     case 'clear-idle': archiveCards((el.dataset.ids || '').split(',').filter(Boolean)); return;
     case 'restore': restoreCards([cardId]); return;
@@ -2207,6 +2232,11 @@ function onSubmit(e) {
   const form = e.target.closest('form[data-form]');
   if (!form) return;
   e.preventDefault();
+  if (form.dataset.form === 'pin-add') {
+    const fd = new FormData(form);
+    void addPin({ kind: String(fd.get('kind') ?? 'note'), label: String(fd.get('label') ?? '').trim(), value: String(fd.get('value') ?? '').trim() }, form);
+    return;
+  }
   if (form.dataset.form === 'planning-zone') {
     const zone = String(new FormData(form).get('zone') ?? '').trim();
     if (!validZone(zone)) { toast('Use an IANA timezone such as Europe/London or Africa/Johannesburg.', 'error'); return; }
@@ -2408,6 +2438,7 @@ function onImgError(e) {
 
 document.addEventListener('click', onClick);
 document.addEventListener('submit', onSubmit);
+document.addEventListener('toggle', (e) => { if (e.target?.dataset?.actionToggle === 'pinboard') state.pinboardOpen = e.target.open; }, true);
 document.addEventListener('change', onChange);
 document.addEventListener('input', onInput);
 document.addEventListener('keydown', onKeydown);

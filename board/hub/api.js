@@ -570,6 +570,44 @@ export class Api {
     }, { member, cred });
   }
 
+  // Project pinboard (board.settings.pins): staging URL, designs, commands, conventions, priorities.
+  // Any writer may add or remove a pin; viewers read. Append-only journal, same scrub as labels.
+  pinsOf(boardId) { return Array.isArray(json(this.hub.board(boardId).settings, {}).pins) ? json(this.hub.board(boardId).settings, {}).pins : []; }
+  async setPins(member, boardId, body, { cred = null, mode = 'replace' } = {}) {
+    member = this.currentWriter(member, cred);
+    this.boardFor(member, boardId);
+    this.requireLabel(member, 'label.write');
+    const incoming = mode === 'remove' ? [] : Array.isArray(body.pins) ? body.pins : body.pin ? [body.pin] : null;
+    if (!incoming && mode !== 'remove') throw new HubError('VALIDATION', 'pins must be a list');
+    const clean = (p, i) => {
+      if (!p || typeof p !== 'object') throw new HubError('VALIDATION', `pins[${i}] must be an object`);
+      const kind = ['link', 'command', 'note', 'priority'].includes(p.kind) ? p.kind : null;
+      if (!kind) throw new HubError('VALIDATION', `pins[${i}].kind must be link, command, note or priority`);
+      const label = str(p.label, 80, `pins[${i}].label`, { required: true });
+      const value = str(p.value, 500, `pins[${i}].value`, { required: kind !== 'priority' }) ?? '';
+      if (kind === 'link' && !/^https:\/\/[^\s]+$/i.test(value)) throw new HubError('VALIDATION', `pins[${i}].value must be an https link`);
+      const id = typeof p.id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(p.id) ? p.id : randomUUID();
+      return { id, kind, label, value };
+    };
+    const items = (incoming || []).map(clean);
+    return this.withWritableBoard(boardId, (current) => {
+      member = current;
+      this.requireLabel(member, 'label.write');
+      const now = this.hub.iso();
+      const before = this.pinsOf(boardId);
+      const stamp = (p) => { const old = before.find((x) => x.id === p.id); return { ...p, by: old?.by ?? member.display_name ?? 'A teammate', at: old?.at ?? now }; };
+      let pins = mode === 'append' ? [...before.filter((x) => !items.some((p) => p.id === x.id)), ...items.map(stamp)] : mode === 'remove' ? before.filter((x) => x.id !== body.id) : items.map(stamp);
+      if (pins.length > 20) throw new HubError('VALIDATION', 'a pinboard holds at most 20 pins');
+      const settings = { ...json(this.hub.board(boardId).settings, {}), pins };
+      this.hub.txn(() => {
+        this.db.run('UPDATE boards SET settings = ? WHERE id = ?', JSON.stringify(settings), boardId);
+        this.hub.journal({ board_id: boardId, actor_kind: 'member', actor_id: member.id, kind: 'board.pins_set', payload: { count: pins.length, mode, request_id: body.request_id ?? null } });
+        this.hub.later(() => this.hub.broadcastPins(boardId));
+      });
+      return { pins };
+    }, { member, cred });
+  }
+
   async patchLabel(member, boardId, name, body, { cred = null } = {}) {
     member = this.currentWriter(member, cred);
     this.boardFor(member, boardId);

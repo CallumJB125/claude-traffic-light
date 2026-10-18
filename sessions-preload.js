@@ -43,6 +43,11 @@ contextBridge.exposeInMainWorld('sessionsApi', {
   // A hand-off the person starts to a teammate (same packet preview as a tool hand-off; sent through the team hub).
   mailTeammates: (key) => ipcRenderer.invoke('mail:teammates', String(key)),
   mailHandoff: (key, to) => ipcRenderer.invoke('mail:handoff', String(key), String(to)),
+  pinAdd: (key, kind, label, value) => ipcRenderer.invoke('pins:add', String(key), String(kind), String(label || ''), String(value || '')),
+  mailLook: (key, to, question) => ipcRenderer.invoke('mail:look', String(key), String(to), String(question || '')),
+  mailAcknowledge: (id) => ipcRenderer.invoke('mail:acknowledge', String(id)),
+  mailResolve: (id, report) => ipcRenderer.invoke('mail:resolve', String(id), String(report || '')),
+  mailReply: (id, text) => ipcRenderer.invoke('mail:reply', String(id), String(text || '')),
   // Hand-off requests from a running AI (src/handoff-requests.js): the person confirms, dismisses, or reads the outcome.
   handoffRequests: () => ipcRenderer.invoke('handoff:list'),
   handoffConfirm: (id) => ipcRenderer.invoke('handoff:confirm', String(id)),

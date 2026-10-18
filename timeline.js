@@ -108,5 +108,16 @@ $('save').addEventListener('click', async () => {
     out.textContent = r?.ok ? `Saved as ${r.name}.` : r?.cancelled ? 'Not saved.' : r?.error || 'Could not save the file.';
   } catch { if (g === generation && selected === key) out.textContent = 'Could not save the file.'; } finally { if (g === generation && selected === key) void preview(); }
 });
+if (typeof api.canShare === 'function') api.canShare().then(ok => { const sec = $('share-section'); if (sec) sec.hidden = ok !== true; }).catch(() => {});
+$('share')?.addEventListener('click', async () => {
+  const b = $('share'), out = $('share-status');
+  const selected = key, g = generation;
+  b.disabled = true; out.textContent = 'Sharing…';
+  try {
+    const r = await api.share(selected);
+    if (g !== generation || selected !== key) return;
+    out.textContent = r?.ok ? `Posted to the team card (${r.date}).` : r?.error || 'Could not share this summary.';
+  } catch { if (g === generation && selected === key) out.textContent = 'Could not share this summary.'; } finally { b.disabled = false; }
+});
 api.changed(() => { key = null; $('prompts').checked = false; void load(null); });
 void load(null);

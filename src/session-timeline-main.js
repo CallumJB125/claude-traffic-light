@@ -10,6 +10,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const Timeline = require('./session-timeline.js');
 const Replay = require('./session-replay.js');
+const SummaryShare = require('./summary-share.js');
 const Transcripts = require('./handover-transcripts.js');
 const SessionHandover = require('./session-handover.js');
 const { rowsFrom } = require('./session-handover-main.js');
@@ -28,7 +29,7 @@ function defaultCheckpoints(rootDir) {
   };
 }
 
-function register({ ipcMain, rootDir, home, user = null, hostname = null, writer = () => null, sessions = () => ({}), isExcluded = () => false, sessionsAllowed, pageAllowed, openPage, pageContents = () => null, dialog, BrowserWindow, downloads = () => home, transitions = defaultTransitions(rootDir), checkpointTurns = defaultCheckpoints(rootDir), locator = Transcripts.createLocator({ home }), now = Date.now, log = () => {} }) {
+function register({ ipcMain, rootDir, home, user = null, hostname = null, writer = () => null, sessions = () => ({}), isExcluded = () => false, sessionsAllowed, pageAllowed, openPage, pageContents = () => null, dialog, BrowserWindow, downloads = () => home, transitions = defaultTransitions(rootDir), checkpointTurns = defaultCheckpoints(rootDir), locator = Transcripts.createLocator({ home }), now = Date.now, log = () => {} , shareSummary = null }) {
   let current = null, selectionVersion = 0;
   const documents = new WeakMap();
 
@@ -121,6 +122,22 @@ function register({ ipcMain, rootDir, home, user = null, hostname = null, writer
     const row = choose(key), valid = guard(e, row);
     const out = await exportOf(row, includePrompts);
     return valid() && out && !isExcluded(out.cwd) ? out.summary : null;
+  });
+  // shareSummary: main-owned { shared(), send(payload), cardsFor(row), rootOf(cwd), author() }; absent = nothing is sent.
+  ipcMain.handle('timeline:share-available', (e) => (pageAllowed(e) ? !!shareSummary : false));
+  ipcMain.handle('timeline:share-summary', async (e, key) => {
+    if (!pageAllowed(e)) return null;
+    const row = choose(key), valid = guard(e, row);
+    if (!row) return { ok: false, error: 'Choose a session first.' };
+    if (!shareSummary) return { ok: false, error: 'No team hub is connected. Nothing was sent.' };
+    const out = await exportOf(row, false);
+    if (!out || !valid() || isExcluded(out.cwd)) return { ok: false, error: 'The selected session changed. Review its replay again.' };
+    let root = null, cards = [];
+    try { root = await shareSummary.rootOf(out.cwd); } catch { root = null; }
+    try { cards = (await shareSummary.cardsFor(row)) || []; } catch { cards = []; }
+    const bundle = SummaryShare.buildBundle({ replay: out, cards, session: { adapter: row.adapter, sessionId: row.sessionId, task: row.task || '', author: shareSummary.author?.() || 'You' }, home, user, now: now() });
+    if (!valid()) return { ok: false, error: 'The selected session changed. Review its replay again.' };
+    return SummaryShare.share({ root, bundle, shared: shareSummary.shared?.() || {}, send: shareSummary.send });
   });
   ipcMain.handle('timeline:export', async (e, key, includePrompts) => {
     if (!pageAllowed(e)) return null;

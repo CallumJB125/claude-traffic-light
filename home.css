@@ -80,3 +80,13 @@ button.row-link:active { transform: none; }
 #status { margin: 0; font-size: var(--text-sm); }
 @media (max-width: 740px) { main.page { grid-template-columns: minmax(0, 1fr); gap: 14px; } .page .page-head { padding: 22px; } section, .banner { padding: 16px; } }
 @media (prefers-reduced-motion: reduce) { button:active:enabled { transform: none; } }
+
+/* Inbox and first-run tour */
+#inbox li[data-kind="approval"] .title, #inbox li[data-kind="question"] .title { color: var(--text); }
+#inbox .tag.waiting { background: color-mix(in oklab, var(--amber) 9%, transparent); }
+.tour { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; padding: 16px; background: color-mix(in oklab, var(--bg) 70%, transparent); }
+.tour-dialog { width: min(480px, 100%); background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--radius-lg); padding: 20px 22px; box-shadow: 0 24px 60px color-mix(in oklab, var(--bg) 60%, transparent); animation: tour-in var(--t); }
+.tour-dialog h2 { margin: 0 0 8px; font-size: var(--text-xl); }
+.tour-steps { font-size: var(--text-sm); }
+@keyframes tour-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .tour-dialog { animation: none; } }

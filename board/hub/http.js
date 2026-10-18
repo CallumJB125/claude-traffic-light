@@ -552,6 +552,9 @@ export function createHttpHandler({ hub, api, config, integrations = null, githu
   route('POST', '/api/boards/:board_id/archive', ({ member, params }) => api.setBoardArchived(member, params.board_id, true));
   route('POST', '/api/boards/:board_id/restore', ({ member, params }) => api.setBoardArchived(member, params.board_id, false));
   route('GET', '/api/boards/:board_id', ({ member, params, query }) => selectedContext(hub, api.snapshot(member, params.board_id, { includeArchived: query.get('include_archived') === '1' }), communicationOptions(query).boardIds));
+  route('PUT', '/api/boards/:board_id/pins', ({ member, params, body, ident }) => api.setPins(member, params.board_id, body, { cred: ident?.cred ?? null }), { writeScope: 'board' });
+  route('POST', '/api/boards/:board_id/pins', ({ member, params, body, ident }) => api.setPins(member, params.board_id, body, { cred: ident?.cred ?? null, mode: 'append' }), { writeScope: 'board' });
+  route('DELETE', '/api/boards/:board_id/pins/:pin_id', ({ member, params, body, ident }) => api.setPins(member, params.board_id, { ...body, id: params.pin_id }, { cred: ident?.cred ?? null, mode: 'remove' }), { writeScope: 'board' });
   route('GET', '/api/boards/:board_id/labels', ({ member, params }) => api.listLabels(member, params.board_id));
   route('POST', '/api/boards/:board_id/labels', ({ member, params, body, ident }) => api.createLabel(member, params.board_id, body, { cred: ident?.cred ?? null }), { writeScope: 'board' });
   route('PATCH', '/api/boards/:board_id/labels/:name', ({ member, params, body, ident }) => api.patchLabel(member, params.board_id, params.name, body, { cred: ident?.cred ?? null }), { writeScope: 'label' });
