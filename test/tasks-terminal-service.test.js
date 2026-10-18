@@ -48,6 +48,8 @@ local('Tasks terminal review can cancel, launches one exact session, and hands b
   f.button('Open in Terminal…').click(); await waitFor(() => f.authority.dialogs.length === 2 && !f.button('Open in Terminal…').disabled);
   assert.equal(f.launched.length, 0);
   allowOpen = true; f.button('Open in Terminal…').click(); await waitFor(() => f.launched.length === 1);
+  const openDialog = f.authority.dialogs.find(d => d.message === 'Open in Terminal?');
+  assert.ok(openDialog && openDialog.detail.length <= 800, 'Open in Terminal sheet keeps its detail short enough to fit on screen');
   assert.equal(f.launched[0].sessionId, f.h.task(f.id).sessionId);
   assert.ok(f.launched[0].argv.includes('resume')); assert.ok(f.launched[0].argv.includes('--ignore-user-config'));
   assert.equal((await f.api.openTerminal(f.id)).ok, false); assert.equal(await f.api.copyTakeover(f.id), false);

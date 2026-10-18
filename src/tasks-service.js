@@ -584,6 +584,8 @@ function createTasksService(opts) {
     return true;
   }
 
+  // The native sheet grows with its detail text; the full command stays visible in the Tasks panel.
+  const briefCommand = (cmd) => cmd.length > 480 ? cmd.slice(0, 480) + ' … (full command shown in Tasks)' : cmd;
   async function openTerminal(id, wcId = 0, current = () => true) {
     const e = takeovers.get(id), mine = slots.get(wcId);
     const alive = () => connected() && e?.channel === client && e.wcId === wcId && !!mine && e.mine === mine && slots.get(wcId) === mine
@@ -593,7 +595,7 @@ function createTasksService(opts) {
     try {
       const row = tasks.get(id);
       const yes = await opts.confirmDialog?.({ action: 'openTerminal', label: 'Open in Terminal', title: row.title || 'Untitled task', where: row.where,
-        detail: `Continue the same ${TV.AI_NAME[e.ai]} session in Terminal with its existing permissions. Exit it before choosing Hand back in Tasks. Opening Terminal does not confirm an AI response.\n\n${takeoverCommand(e.t, { mask: true, resolve: opts.resolveBin })}` }, wcId);
+        detail: `Continue the same ${TV.AI_NAME[e.ai]} session in Terminal with its existing permissions. Exit it before choosing Hand back in Tasks. Opening Terminal does not confirm an AI response.\n\n${briefCommand(takeoverCommand(e.t, { mask: true, resolve: opts.resolveBin }))}` }, wcId);
       if (yes !== true) return { ok: false, code: 'CONFIRM_REQUIRED', text: '', cancelled: true };
       if (!alive() || takeovers.get(id) !== e) return failure({ code: 'CONFLICT' });
       const raw = await e.channel.getTask(id);
