@@ -1,4 +1,4 @@
-Plexiform 1.0.2-beta.86 — 18 October 2026
+Plexiform 1.0.2-beta.87 — 18 October 2026
 
 For macOS (Apple silicon and Intel) and Linux (x64).
 
