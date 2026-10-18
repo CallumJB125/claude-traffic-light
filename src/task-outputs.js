@@ -23,5 +23,11 @@
     return { taskId: task.id, version: p.version, at: Number.isSafeInteger(p.at) && p.at > 0 ? p.at : null,
       text: text(p.progress, 4000), author: authors[p.author?.kind] || 'Recorded participant', source: sources[p.provenance] || 'Saved checkpoint', artifacts };
   }
-  return { fromTask };
+  function cardsSource(task) {
+    const p = task?.checkpoint;
+    if (!p || !Number.isSafeInteger(p.version) || p.version < 1) return null;
+    const s = p.resultCardsSource || p;
+    return { version: s.version, at: Number.isSafeInteger(s.at) && s.at > 0 ? s.at : null, author: authors[s.author?.kind] || 'Recorded participant' };
+  }
+  return { fromTask, cardsSource };
 }));

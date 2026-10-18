@@ -59,6 +59,9 @@ function createTasksService(opts) {
   const folders = new Map();
   const roots = new Map();         // taskId → the supervisor's raw repo root (never rebuilt from a display label)
   const takeovers = new Map();     // taskId → { t, at }
+  const terminalLaunches = new Map(); // Retire pending one-use command files before handback or shutdown.
+  const terminalLaunching = new Set();
+  const retireTerminal = id => { try { terminalLaunches.get(id)?.(); } catch { /* no repeat launch */ } terminalLaunches.delete(id); };
   const integrationReviews = new Map(); // opaque page handle -> exact helper review and selected document
   const providerReviews = new Map(); // reviewed source snapshot and exact next AI
   const pullRequestReviews = new Map(); // exact GitHub destination, text and source; opaque renderer handle
@@ -97,7 +100,7 @@ function createTasksService(opts) {
     publishTimer = setTimeout(() => { publishTimer = null; publish(); }, 40);
   }
 
-  function setConn(status, code = null) { if (status !== 'connected') { integrationReviews.clear(); providerReviews.clear(); pullRequestReviews.clear(); } conn = { status, code }; publish({ force: true }); }
+  function setConn(status, code = null) { if (status !== 'connected') { integrationReviews.clear(); providerReviews.clear(); pullRequestReviews.clear(); takeovers.clear(); for (const id of terminalLaunches.keys()) retireTerminal(id); } conn = { status, code }; publish({ force: true }); }
 
   function codeOf(e) {
     const code = e?.code;
@@ -158,6 +161,7 @@ function createTasksService(opts) {
   function onGlobalEvent(e) {
     const id = e.taskId;
     if (e.type === 'state') {
+      if (e.state && e.state !== 'handed_over') { takeovers.delete(id); retireTerminal(id); }
       const t = tasks.get(id);
       if (!t) { refresh().catch(() => {}); return; }
       tasks.set(id, guard.applyState(t, e, now()));
@@ -249,6 +253,8 @@ function createTasksService(opts) {
   }
 
   function stop() {
+    takeovers.clear();
+    for (const id of terminalLaunches.keys()) retireTerminal(id);
     pullRequestReviews.clear();
     integrationReviews.clear();
     providerReviews.clear();
@@ -339,6 +345,7 @@ function createTasksService(opts) {
   }
 
   async function closeTask(wcId = 0) {
+    for (const [id, value] of takeovers) if (value.wcId === wcId) takeovers.delete(id);
     for (const [key, value] of pullRequestReviews) if (value.wcId === wcId) pullRequestReviews.delete(key);
     for (const [key, value] of integrationReviews) if (value.wcId === wcId) integrationReviews.delete(key);
     for (const [key, value] of providerReviews) if (value.wcId === wcId) providerReviews.delete(key);
@@ -369,6 +376,7 @@ function createTasksService(opts) {
     if (req?.action === 'merge') return integrate(req, wcId, current);
     if (req?.action === 'switchAi') return switchProvider(req, wcId, current);
     if (!connected()) return failure({ code: 'SUPERVISOR_UNREACHABLE' });
+    if (['handback', 'discard'].includes(req?.action) && terminalLaunching.has(req.id)) return failure({ code: 'SESSION_BUSY' });
     const row = tasks.get(req?.id);
     const ctx = relayed.get(req?.id) || { approvals: new Map(), asks: new Set() };
     let v = guard.validateAct(req, row, ctx);
@@ -385,13 +393,16 @@ function createTasksService(opts) {
     }
     try {
       if(current()!==true)return {ok:false,code:'ILLEGAL_TRANSITION',text:''};
+      if (['handback', 'discard'].includes(v.action)) { takeovers.delete(v.id); retireTerminal(v.id); }
       const r = await client.act(v.id, v.action, v.payload);
       const t = guard.sanitizeTask(r.task, { now: now(), homeDir });
       if (t) { tasks.set(t.id, t); publishSoon(); }
       const out = { ok: true, task: t };
       if (v.action === 'takeover' && r.takeover) {
-        takeovers.set(v.id, { t: r.takeover, at: now() });
-        out.takeover = { command: takeoverCommand(r.takeover, { mask: true, resolve: opts.resolveBin }), note: typeof r.takeover.note === 'string' ? r.takeover.note.slice(0, 300) : '' };
+        const mine = slots.get(wcId);
+        const canOpen = typeof opts.launchTerminal === 'function' && !!mine && mine.id === v.id && t?.state === 'handed_over' && !!t.repo && !t.workInPlace && !t.hub && ['claude', 'codex'].includes(t.ai.id) && t.cost.budgetUsd === null;
+        takeovers.set(v.id, { t: r.takeover, at: now(), wcId, mine, current, channel: client, ai: t?.ai.id, permissionLevel: t?.permissionLevel, seq: t?.lastSeq, canOpen, busy: false });
+        out.takeover = { command: takeoverCommand(r.takeover, { mask: true, resolve: opts.resolveBin }), canOpen, note: typeof r.takeover.note === 'string' ? r.takeover.note.slice(0, 300) : '' };
       }
       if (v.action === 'handback') takeovers.delete(v.id);
       return out;
@@ -566,10 +577,41 @@ function createTasksService(opts) {
   // The copy is single-use and short-lived; it holds no secret (takeoverCommand drops them).
   function copyTakeover(id) {
     const e = takeovers.get(id);
+    if (e?.busy) return false;
     takeovers.delete(id);
-    if (!e || now() - e.at > TAKEOVER_TTL_MS) return false;
+    if (!e || now() - e.at > TAKEOVER_TTL_MS || !connected() || e.channel !== client || e.current() !== true) return false;
     opts.copy?.(takeoverCommand(e.t, { resolve: opts.resolveBin }));
     return true;
+  }
+
+  async function openTerminal(id, wcId = 0, current = () => true) {
+    const e = takeovers.get(id), mine = slots.get(wcId);
+    const alive = () => connected() && e?.channel === client && e.wcId === wcId && !!mine && e.mine === mine && slots.get(wcId) === mine
+      && e.current() === true && current() === true && now() - e.at < TAKEOVER_TTL_MS && tasks.get(id)?.state === 'handed_over';
+    if (!e?.canOpen || e.busy || !alive()) return failure({ code: 'CONFLICT' });
+    e.busy = true;
+    try {
+      const row = tasks.get(id);
+      const yes = await opts.confirmDialog?.({ action: 'openTerminal', label: 'Open in Terminal', title: row.title || 'Untitled task', where: row.where,
+        detail: `Continue the same ${TV.AI_NAME[e.ai]} session in Terminal with its existing permissions. Exit it before choosing Hand back in Tasks. Opening Terminal does not confirm an AI response.\n\n${takeoverCommand(e.t, { mask: true, resolve: opts.resolveBin })}` }, wcId);
+      if (yes !== true) return { ok: false, code: 'CONFIRM_REQUIRED', text: '', cancelled: true };
+      if (!alive() || takeovers.get(id) !== e) return failure({ code: 'CONFLICT' });
+      const raw = await e.channel.getTask(id);
+      if (!alive() || raw.state !== 'handed_over' || raw.sessionId !== e.t.sessionId || raw.worktree !== e.t.cwd || raw.ai?.id !== e.ai
+        || raw.lastSeq !== e.seq || raw.permissionLevel !== e.permissionLevel || raw.workInPlace || !raw.repo || raw.cost?.budgetUsd != null) return failure({ code: 'CONFLICT' });
+      // Consume before the OS request. An uncertain response must never launch a duplicate.
+      takeovers.delete(id);
+      terminalLaunching.add(id);
+      const result = await opts.launchTerminal(e.t, alive);
+      if (typeof result?.cancelPending === 'function') terminalLaunches.set(id, result.cancelPending);
+      if (!connected() || client !== e.channel || tasks.get(id)?.state !== 'handed_over') retireTerminal(id);
+      // Terminal taking focus is expected after dispatch. The exact document is
+      // checked by the launcher immediately before that request, not afterward.
+      return result?.status === 'requested'
+        ? { ok: true, status: 'requested', text: 'Terminal launch requested. Continue there, then exit the session and choose Hand back. Watch the session for its response.' }
+        : { ok: false, code: 'CONFLICT', status: 'unconfirmed', text: 'Terminal launch could not be confirmed. Check Terminal before handing the task back; Plexiform will not launch it again automatically.' };
+    } catch (error) { return failure(error); }
+    finally { e.busy = false; terminalLaunching.delete(id); }
   }
 
   // extra.startAfter: main's own known reset time for a 'reset' task (Home's "Resume this at reset"); the page cannot set it.
@@ -685,7 +727,7 @@ function createTasksService(opts) {
     return { handle, label };
   }
 
-  return { start, stop, retryNow, snapshot, openTask, closeTask, act, saveCheckpoint, copyTakeover, create, preflight, composerInfo, registerFolder, markSeen, folderOf: (handle) => folders.get(handle) ?? null };
+  return { start, stop, retryNow, snapshot, openTask, closeTask, act, saveCheckpoint, copyTakeover, openTerminal, create, preflight, composerInfo, registerFolder, markSeen, folderOf: (handle) => folders.get(handle) ?? null };
 }
 
 module.exports = { createTasksService, OFFLINE };

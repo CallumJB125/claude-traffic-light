@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('tasksApi', {
   composer: () => ipcRenderer.invoke('tasks:composer'),
   pickFolder: () => ipcRenderer.invoke('tasks:pick-folder'),
   copyTakeover: (id) => ipcRenderer.invoke('tasks:copy-takeover', id),
+  openTerminal: (id) => ipcRenderer.invoke('tasks:open-terminal', id),
   onChanged: (cb) => ipcRenderer.on('tasks:changed', (_e, snap) => cb(snap)),
   onEvent: (cb) => ipcRenderer.on('tasks:event', (_e, m) => cb(m)),
 });

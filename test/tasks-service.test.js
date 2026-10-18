@@ -134,12 +134,15 @@ test('create: a reset task can carry main\'s known reset time; other tasks and t
   } finally { c.close(); }
 });
 
-test('takeover: main asks in a native dialog first; the copy holds no token, is single use, and the screen is masked', async () => {
+test('takeover: main asks in a native dialog first; the copy holds no token, is single use, and the screen is masked', async context => {
   const copied = [];
-  const t = await until(() => svc.snapshot().tasks.find((x) => x.actions.includes('takeover')));
+  // The fast demo can finish a running row while the two dialogs are checked.
+  // A stopped row keeps this copy/confirmation check independent of demo timing.
+  const t = await until(() => svc.snapshot().tasks.find((x) => ['parked', 'failed', 'orphaned'].includes(x.state) && x.actions.includes('takeover')));
   const dlg = [];
   let yes = false;
   const s2 = createTasksService({ boardHome: dir, homeDir: '', copy: (x) => copied.push(x), confirmDialog: async (i) => { dlg.push(i); return yes; }, resolveBin: (n) => `/opt/bin/${n}` });
+  context.after(() => s2.stop());
   s2.start();
   await until(() => s2.snapshot().conn.status === 'connected');
   const no = await s2.act({ id: t.id, action: 'takeover', confirmed: true });

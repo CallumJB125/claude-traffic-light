@@ -150,6 +150,18 @@ kbd { font: inherit; padding: 0 4px; border: 1px solid var(--line-strong); borde
 #pane-overview .box { font: inherit; line-height: 1.65; padding: 16px; background: var(--bg); }
 #pane-overview .tx-empty { font-size: var(--text-sm); line-height: 1.6; }
 #pane-overview ul { padding-left: 20px; line-height: 1.7; overflow-wrap: anywhere; }
+#result-cards article.box { margin-bottom: 12px; border: 1px solid var(--line); border-radius: var(--radius); overflow-wrap: anywhere; }
+#result-cards article h4 { margin: 0 0 8px; }
+#result-cards article p { margin: 8px 0; }
+#result-cards article table { width: 100%; border-collapse: collapse; margin: 8px 0 12px; table-layout: fixed; }
+#result-cards article th, #result-cards article td { padding: 8px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+#result-cards article label { cursor: pointer; }
+#result-cards article input[type=checkbox] { accent-color: var(--accent); }
+#result-card-editor { border: 1px solid var(--line); border-radius: var(--radius); }
+#result-card-editor > .field { display: inline-flex; flex-direction: column; gap: 6px; width: min(100%, 290px); margin: 0 12px 14px 0; vertical-align: top; font-size: var(--text-sm); color: var(--muted); }
+#result-card-editor > .field input { width: 100%; color: var(--text); font-size: var(--text-base); }
+#result-card-editor > h4 { margin: 18px 0 10px; }
+#result-card-error { overflow-wrap: anywhere; }
 .tx { gap: 18px; line-height: 1.65; }
 .tx .msg { max-width: 85ch; }
 .bubble { padding: 12px 16px; line-height: 1.6; }

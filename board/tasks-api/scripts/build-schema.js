@@ -33,15 +33,26 @@ const optional = (properties, required) => obj(properties, required);
 const ASK_KINDS = [...BLOCKED_KINDS, 'limit', 'auth'];
 const HANDOVER_PROVENANCE = ['continuous', 'checkpoint_complete', 'checkpoint_incomplete', 'takeover', 'frozen'];
 const packetArtifact = { oneOf: [obj({ kind: { const: 'path' }, path: str(PATH) }), obj({ kind: { const: 'commit' }, sha: str({ minLength: 40, maxLength: 64 }) }), obj({ kind: { const: 'pr' }, url: str({ maxLength: 1024 }) })] };
+const cardId = str({ minLength: 1, maxLength: 64 });
+const cardBase = { id: cardId, title: str({ maxLength: 120 }) };
+const resultCard = { oneOf: [
+  obj({ ...cardBase, kind: { const: 'checklist' }, items: arr(obj({ id: cardId, label: str({ maxLength: 240 }), done: bool })) }),
+  obj({ ...cardBase, kind: { const: 'metric' }, value: str({ maxLength: 80 }), unit: str({ maxLength: 40 }), note: str({ maxLength: 240 }) }),
+  obj({ ...cardBase, kind: { const: 'table' }, columns: arr(str({ maxLength: 80 }), { minItems: 1 }), rows: arr(arr(str({ maxLength: 240 }))) }),
+] };
 const packetDataProps = {
   brief: str({ maxLength: 4000 }), decisions: arr(str({ maxLength: 500 })), progress: str({ maxLength: 4000 }),
   nextAction: str({ maxLength: 2000 }), artifacts: arr(packetArtifact), reportedChecks: arr(str({ maxLength: 500 })),
+  resultCards: arr(resultCard, { description: 'Optional closed data cards. Runtime bounds: 8 cards / 24 KiB, 20 checklist items, 6 table columns and 20 equal-width rows. Omission preserves existing cards; [] clears them.' }),
 };
-const packet = obj({ schemaVersion: { const: 1 }, version: int({ minimum: 1 }), at: int(),
-  author: obj({ kind: en(['human', 'agent', 'remote', 'supervisor']), id: str(), source: en([...SOURCES, 'engine']) }),
+const packetAuthor = obj({ kind: en(['human', 'agent', 'remote', 'supervisor']), id: str(), source: en([...SOURCES, 'engine']) });
+const packetProps = { schemaVersion: { const: 1 }, version: int({ minimum: 1 }), at: int(),
+  author: packetAuthor,
   provenance: en([...HANDOVER_PROVENANCE, 'participant']), ...packetDataProps,
+  resultCardsSource: obj({ version: int({ minimum: 1 }), at: int(), author: packetAuthor }),
   observed: obj({ state: en(STATES), tests: nullable(en(['pass', 'fail', 'none'])) }),
-});
+};
+const packet = obj(packetProps, Object.keys(packetProps).filter(k => !['resultCards', 'resultCardsSource'].includes(k)));
 
 const faceProps = {
   green: bool,
@@ -219,7 +230,7 @@ const schema = {
     LeaseView: leaseView,
     TaskView: obj(taskViewProps, Object.keys(taskViewProps).filter((k) => k !== 'parentId')),
     TaskDetail: obj(taskDetailProps, Object.keys(taskDetailProps).filter((k) => !['checkpoint', 'parentId', 'collaboration'].includes(k))),
-    CheckpointData: obj(packetDataProps),
+    CheckpointData: obj(packetDataProps, Object.keys(packetDataProps).filter(k => k !== 'resultCards')),
     Checkpoint: packet,
     Capabilities: obj(Object.fromEntries(CAPABILITIES.map((c) => [c, bool]))),
     DiffStat: obj({ files: int(), added: int(), removed: int() }),

@@ -363,10 +363,24 @@
     }
     if (d.takeover) {
       const c = el('div', 'takeover');
-      c.append(el('strong', null, 'Run this in your terminal to carry on'), (() => { const p = el('pre', null, d.takeover.command); return p; })());
+      c.append(el('strong', null, 'Continue this session in your terminal'), (() => { const p = el('pre', null, d.takeover.command); return p; })());
       if (d.takeover.note) c.append(el('p', null, d.takeover.note));
-      const copied = el('span', null, '');
-      c.append(btn('Copy command', '', async () => { copied.textContent = (await api.copyTakeover(d.id)) ? ' Copied.' : ' Could not copy.'; }), copied);
+      const copied = el('span', null, d.takeover.resultText || '');
+      const identity = d, handover = d.takeover;
+      const copy = btn('Copy command', '', async () => { const ok = await api.copyTakeover(identity.id); if (d !== identity || d.takeover !== handover) return; copied.textContent = handover.resultText = ok ? ' Copied. Run it once, then exit before handing back.' : ' This handover has expired or was already used.'; if (ok) { handover.used = true; copy.disabled = true; if (open) open.disabled = true; } });
+      const open = handover.canOpen && api.openTerminal ? btn('Open in Terminal…', 'primary', async () => {
+        handover.pending = true; open.disabled = true; copy.disabled = true;
+        let result;
+        try { result = await api.openTerminal(identity.id); } catch { result = { text: 'Terminal launch could not be confirmed. Check Terminal before handing the task back.' }; }
+        if (d !== identity || d.takeover !== handover) return;
+        handover.pending = false; handover.used = !result?.cancelled;
+        copied.textContent = handover.resultText = result?.text || '';
+        if (result?.cancelled) { open.disabled = false; copy.disabled = false; }
+      }) : null;
+      if (open) c.append(open);
+      copy.disabled = !!(handover.used || handover.pending);
+      if (open) open.disabled = copy.disabled;
+      c.append(copy, copied);
       box.append(c);
     }
   }
@@ -505,6 +519,8 @@
   function renderOverview() {
     const pane = $('pane-overview');
     if (!pane || !d?.detail) return;
+    // Streaming updates must not replace a card draft or move its caret.
+    if (d.cardDraft && $('result-card-editor')) return;
     const t = d.detail, live = byId(d.id) || t, p = t.checkpoint;
     pane.replaceChildren();
     if (!connected()) pane.append(el('p', 'err', 'Offline. These are the last received details; reconnect before acting.'));
@@ -520,6 +536,7 @@
     const latest = [...d.tx.items].reverse().find(i => i.kind === 'text' && i.role === 'assistant');
     section(latest?.open ? 'Response in progress' : 'Latest reported result', (latest?.text ? (latest.text.length > 8000 ? '…' : '') + latest.text.slice(-8000) : '') || t.evidence?.summary || p?.progress);
     renderSavedOutput(pane, t, latest);
+    renderResultCards(pane, t);
     const stat = d.diff?.stat || t.evidence?.diffStat;
     pane.append(el('h3', 'sect', 'Changes to review'));
     if (stat) pane.append(el('p', null, `${stat.files} files · +${stat.added} −${stat.removed}`));
@@ -535,6 +552,67 @@
     section('Next action', p?.nextAction || (live.state === 'in_review' ? 'Review the changes above, then integrate them or prepare a draft pull request.' : live.state === 'done' ? 'Review the recorded outcome and saved context.' : live.reason || 'Read the latest response or send a follow-up to this task.'));
     if (t.pr?.url) { const link = el('a', 'btn', `Open pull request #${t.pr.number}`); link.href = t.pr.url; link.target = '_blank'; link.rel = 'noopener noreferrer'; pane.append(link); }
     pane.append(el('p', 'tx-empty', 'This view uses the task history and saved checkpoint on this device.'));
+  }
+
+  const cardId = () => window.crypto?.randomUUID?.() || `card-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  function beginCardDraft(id, kind = null) {
+    if (!d || d.cardDraft || d.checkpointDraft || !connected() || !api.saveCheckpoint) return;
+    const p = d.detail.checkpoint;
+    let cards;
+    try { cards = window.ResultCards.cleanResultCards(p?.resultCards || []); } catch { d.cardError = 'Saved card data could not be read. Reload this task.'; renderOverview(); return; }
+    if (kind) {
+      if (cards.length >= 8) return;
+      id = cardId();
+      cards.push(kind === 'checklist' ? { id, kind, title: 'Checklist', items: [{ id: cardId(), label: '', done: false }] }
+        : kind === 'metric' ? { id, kind, title: 'Metric', value: '', unit: '', note: '' }
+        : { id, kind: 'table', title: 'Table', columns: ['Name', 'Value'], rows: [['', '']] });
+    }
+    if (!cards.some(c => c.id === id)) return;
+    d.cardDraft = { cardId: id, cards, expectedVersion: p?.version ?? d.detail.handover?.version ?? 0, busy: false, error: '',
+      data: { brief: p?.brief ?? d.detail.text.slice(0, 4000), decisions: [...(p?.decisions || [])], progress: p?.progress || '', nextAction: p?.nextAction || '', artifacts: (p?.artifacts || []).map(a => ({ ...a })), reportedChecks: [...(p?.reportedChecks || [])] } };
+  }
+  function redrawCardDraft() { $('result-card-editor')?.remove(); renderOverview(); }
+  async function saveCardDraft() {
+    const owner = d, draft = d?.cardDraft;
+    if (!draft || draft.busy || !connected()) return;
+    let cards;
+    try { cards = window.ResultCards.cleanResultCards(draft.cards); } catch (e) { draft.error = e.message; redrawCardDraft(); return; }
+    draft.busy = true; draft.error = ''; redrawCardDraft();
+    let r;
+    try { r = await api.saveCheckpoint({ id: owner.id, expectedVersion: draft.expectedVersion, data: { ...draft.data, resultCards: cards } }); }
+    catch { r = { ok: false, text: 'Could not save the card changes.' }; }
+    if (d !== owner || d.cardDraft !== draft) return;
+    draft.busy = false;
+    if (r?.ok) { d.detail.checkpoint = r.checkpoint; d.cardDraft = null; d.cardError = ''; }
+    else draft.error = r?.code === 'CONFLICT' ? 'The saved checkpoint changed. Your card draft is preserved; reload before reviewing and saving again.' : r?.text || 'Could not save the card changes.';
+    redrawCardDraft();
+  }
+  function renderResultCards(pane, task) {
+    if (!window.ResultCards || !window.ResultCardsView) return;
+    let cards;
+    try { cards = window.ResultCards.cleanResultCards(task.checkpoint?.resultCards || []); } catch { pane.append(el('p', 'err', 'Saved card data could not be displayed.')); return; }
+    if (d.cardDraft) {
+      const owner = d, draft = d.cardDraft;
+      pane.append(window.ResultCardsView.editor({ document, state: draft, newId: cardId, onRender: redrawCardDraft, onSave: saveCardDraft,
+        onCancel: () => { d.cardDraft = null; redrawCardDraft(); },
+        onRemove: () => { draft.cards = draft.cards.filter(c => c.id !== draft.cardId); saveCardDraft(); },
+        onReload: async () => {
+          if (draft.busy) return; draft.busy = true; redrawCardDraft();
+          let r; try { r = await api.open(owner.id); } catch { r = null; }
+          if (d !== owner || d.cardDraft !== draft) return;
+          if (r?.ok) { d.detail = r.detail; d.messages = [...r.detail.messages]; for (const e of r.replay || []) applyEvent(e, true); d.cardDraft = null; syncThread(); }
+          else { draft.busy = false; draft.error = r?.text || 'Could not reload this task.'; }
+          redrawCardDraft();
+        } }));
+      return;
+    }
+    const p = task.checkpoint, source = window.TaskOutputs?.cardsSource(task);
+    pane.append(window.ResultCardsView.render({ document, cards, disabled: !connected() || !api.saveCheckpoint || !!d.checkpointDraft,
+      provenance: p ? `Cards last saved by ${source?.author || 'Recorded participant'} at checkpoint version ${source?.version || p.version}. Included in checkpoint version ${p.version}. This records the saved data, not an independent verification.` : null,
+      onEdit: id => { beginCardDraft(id); redrawCardDraft(); }, onAdd: kind => { beginCardDraft(null, kind); redrawCardDraft(); },
+      onToggle: (id, itemId, done) => { beginCardDraft(id); const item = d.cardDraft?.cards.find(c => c.id === id)?.items.find(i => i.id === itemId); if (item) { item.done = done; saveCardDraft(); } },
+    }));
+    if (d.cardError) pane.append(el('p', 'err', d.cardError));
   }
 
   function renderSavedOutput(pane, task, latest) {
@@ -566,10 +644,10 @@
       field?.focus();
     };
     const actions = el('div', 'd-actions'), editButton = btn(output ? 'Edit saved report' : 'Write a report or note', '', () => edit());
-    editButton.disabled = !connected() || !api.saveCheckpoint; actions.append(editButton);
+    editButton.disabled = !connected() || !api.saveCheckpoint || !!d.cardDraft; actions.append(editButton);
     if (latest?.text && !latest.open && latest.text !== output?.text && latest.text.length <= 4000) {
       const keep = btn('Keep this response', '', () => edit(latest.text));
-      keep.disabled = !connected() || !api.saveCheckpoint || !!d.checkpointDraft;
+      keep.disabled = !connected() || !api.saveCheckpoint || !!d.checkpointDraft || !!d.cardDraft;
       actions.append(keep);
     } else if (latest?.text?.length > 4000) card.append(el('p', 'tx-empty', 'The latest response is longer than a saved note. Edit the report to keep a summary and add the report file to its references.'));
     card.append(actions); pane.append(card);
@@ -627,7 +705,7 @@
           paths: (p?.artifacts ?? []).filter((a) => a.kind === 'path').map((a) => a.path).join('\n'), otherArtifacts: (p?.artifacts ?? []).filter((a) => a.kind !== 'path'), reportedChecks: (p?.reportedChecks ?? []).join('\n'), busy: false };
         renderDetails(); $('checkpoint-brief')?.focus();
       });
-      edit.id = 'checkpoint-edit'; edit.disabled = !connected() || !api.saveCheckpoint; pane.append(edit);
+      edit.id = 'checkpoint-edit'; edit.disabled = !connected() || !api.saveCheckpoint || !!d.cardDraft; pane.append(edit);
     } else pane.append(checkpointEditor());
   }
 

@@ -24,6 +24,14 @@ the inbox updates transport delivery so Codex does not receive a duplicate turn.
 Stored/delivered receipts are not a model acknowledgement. An acknowledgement or
 answer is a separate attributed message; the UI shows this distinction.
 
+`buddy_save_output` saves a concise report and plain-data checklist, metric or
+table cards on the caller's own task. Read `checkpoint_version` from `buddy_tasks`
+first: stale saves are refused, and identical request retries reuse their receipt.
+Matching card IDs update; other cards, decisions and references are retained.
+People can edit these cards in the task overview. Concurrent edits keep the draft
+for review instead of overwriting the saved version. Cards cannot execute code,
+formulas or external actions, and retain checkpoint attribution across restart.
+
 ## Verified boundary
 
 A real local Codex task delegated a read-only review to a real Claude helper,

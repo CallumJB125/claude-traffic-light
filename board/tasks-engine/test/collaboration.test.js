@@ -62,3 +62,47 @@ test('simultaneous helper requests cannot exceed the family cap; uncertain inten
   tasks.delete('tsk_last');
   await assert.rejects(handle(root, {}, 'buddy_spin_off', { request_id: 'budget-0001', text: 'Read only' }), denied('POLICY_DENIED'));
 });
+
+test('agent result cards use versioned checkpoints, retain human edits and reject stale or repeated writes', async () => {
+  const dir = tmpDir(), repo = makeRepo(dir);
+  const h = await startEngine({ dir, scenario: { steps: [{ tool: 'Read', input: { file_path: 'README.md' }, ms: 60000 }] } });
+  let ipc;
+  try {
+    const { id } = await h.client.createTask({ text: 'Keep the result', cwd: repo.checkout, permissionLevel: 'auto-edits' });
+    const run = await waitFor(() => h.eng.engine.runs.get(id)?.backend?.turnActive && h.eng.engine.runs.get(id));
+    ipc = new IpcClient({ socketPath: run.socketPath, token: run.token });
+    const self = (await ipc.request('tool', { name: 'buddy_tasks', args: {} })).tasks.find(t => t.id === id);
+    const card = { id: 'review', kind: 'checklist', title: 'Review', items: [{ id: 'read', label: 'Read the brief', done: true }] };
+    const request = { name: 'buddy_save_output', args: { request_id: 'output-0001', expected_version: self.checkpoint_version, progress: 'Brief reviewed.', result_cards: [card] } };
+    const saved = await ipc.request('tool', request);
+    assert.deepEqual(await ipc.request('tool', request), saved, 'same request returns its original receipt');
+    let detail = await h.client.getTask(id);
+    assert.deepEqual(detail.checkpoint.resultCards, [card]);
+    assert.equal(detail.checkpoint.author.kind, 'agent');
+    assert.equal(detail.checkpoint.author.id, id);
+    const source = detail.checkpoint.resultCardsSource;
+    assert.equal(source.author.id, id);
+    const readBack = await ipc.request('tool', { name: 'buddy_tasks', args: {} });
+    assert.deepEqual(readBack.saved_output.result_cards, [card]);
+    assert.equal(readBack.saved_output.checkpoint_version, saved.checkpoint_version);
+    assert.deepEqual(readBack.saved_output.source, source);
+    await assert.rejects(ipc.request('tool', { name: request.name, args: { ...request.args, request_id: 'output-stale' } }), denied('CONFLICT'));
+    await assert.rejects(ipc.request('tool', { name: request.name, args: { ...request.args, progress: 'Changed duplicate' } }), denied('CONFLICT'));
+    const oldClientData = { brief: 'Human brief', decisions: ['Keep the review'], progress: 'Human edit', nextAction: 'Review result', artifacts: [], reportedChecks: [] };
+    await h.client.saveCheckpoint(id, detail.checkpoint.version, oldClientData);
+    detail = await h.client.getTask(id);
+    assert.deepEqual(detail.checkpoint.resultCards, [card], 'old clients preserve cards they do not know about');
+    assert.deepEqual(detail.checkpoint.resultCardsSource, source, 'unrelated human edits retain card attribution');
+    const second = { id: 'count', kind: 'metric', title: 'Reviewed files', value: '1', unit: 'file', note: 'Reported by agent' };
+    await ipc.request('tool', { name: request.name, args: { request_id: 'output-0002', expected_version: detail.checkpoint.version, result_cards: [second] } });
+    detail = await h.client.getTask(id);
+    assert.deepEqual(detail.checkpoint.resultCards, [card, second]);
+    assert.equal(detail.checkpoint.progress, 'Human edit');
+    assert.deepEqual(detail.checkpoint.decisions, ['Keep the review']);
+    await h.client.saveCheckpoint(id, detail.checkpoint.version, { ...oldClientData, resultCards: [] });
+    assert.deepEqual((await h.client.getTask(id)).checkpoint.resultCards, [], 'explicit clear is respected');
+    run.stopping = true;
+    await assert.rejects(ipc.request('tool', request), denied('POLICY_DENIED'));
+    run.stopping = false;
+  } finally { ipc?.close(); await h.close(); rm(dir); }
+});

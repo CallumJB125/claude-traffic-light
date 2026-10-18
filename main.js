@@ -2042,6 +2042,7 @@ function getTasks() {
     detectedTools: () => AiTools.quick(),
     startGuard: (cwd) => (taskStartGuard ? taskStartGuard(cwd) : null),
     copy: (text) => clipboard.writeText(text),
+    ...(IS_MAC ? { launchTerminal: (descriptor, current) => require('./src/tasks-terminal').launchTaskTerminal(descriptor, { current }) } : {}),
     onChange: (snap) => {
       for (const wc of tasksPages()) wc.send('tasks:changed', snap);
       for (const id of AgentMail.acceptedTasks()) { const t = (snap?.tasks || []).find((x) => x && String(x.id) === id); if (t && ['done', 'in_review', 'failed'].includes(t.state)) AgentMail.taskEnded(id, t.state, t.reason || '').catch(() => {}); }
@@ -2057,7 +2058,7 @@ function getTasks() {
         message: `${info.label}?`,
         detail: [`Task: ${info.title}`, info.where ? `Runs in: ${info.where}` : '', info.detail].filter(Boolean).join('\n'),
       });
-      const r = ['merge', 'switchAi', 'openPr'].includes(info.action) || info.action === 'create' && wc ? await buddyWin?.tasksConfirm?.(show) : await show(parent);
+      const r = ['merge', 'switchAi', 'openPr', 'takeover', 'openTerminal'].includes(info.action) || info.action === 'create' && wc ? await buddyWin?.tasksConfirm?.(show) : await show(parent);
       return r?.response === 1;
     },
     seen: {

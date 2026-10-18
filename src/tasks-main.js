@@ -27,5 +27,10 @@ function register({ ipcMain, buddy, service }) {
     if (!same(before)) return { ok: false, code: 'CONFLICT', text: 'The Tasks view changed. Inspect the task and your branch before reviewing another action.' };
     return result;
   });
+  ipcMain.handle('tasks:open-terminal', async (event, ...args) => {
+    const before = owner();
+    if (!before || event.sender !== before.contents || event.senderFrame !== before.frame || args.length !== 1 || typeof args[0] !== 'string') return { ok: false, code: 'ILLEGAL_TRANSITION', text: 'Focus the current Tasks page and review again.' };
+    return service().openTerminal(args[0], event.sender.id, () => same(before));
+  });
 }
 module.exports = { register };

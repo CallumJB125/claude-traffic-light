@@ -8,7 +8,7 @@ const inFlight = new WeakSet();
 const hash = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 // A bounded run-bound adapter over the existing Tasks engine. No new authority
 // store: the original task tree, permission level and run lifetime are binding.
-export function createCollaboration({ tasks, current, save, create, deliver, messages, dispatchInbox = () => {}, now = Date.now }) {
+export function createCollaboration({ tasks, current, save, create, deliver, messages, saveOutput, dispatchInbox = () => {}, now = Date.now }) {
   const pending = new Map(), familyLocks = new Map();
   function family(task) {
     let root = task, depth = 0;
@@ -34,7 +34,26 @@ export function createCollaboration({ tasks, current, save, create, deliver, mes
     const fresh = () => current(task, run);
     if (!fresh()) fail('POLICY_DENIED', 'This task run is no longer authorised.');
     const all = [...tasks.values()].filter(t => t.id === task.id || related(task, t));
-    if (name === 'buddy_tasks') return { self: task.id, parent: task.parentId, tasks: all.slice(0, 5).map(t => ({ id: t.id, parent: t.parentId, title: t.title, provider: t.ai.id, state: t.state, branch: t.branch, result: t.lastAssistant ? redact(t.lastAssistant.slice(-2000), t.worktree) : null, resultIsReported: true, pendingMessages: messages(t.id).filter(m => m.deliveredAt == null).length })), receipts: collaborationReceipts(task, messages).slice(-10) };
+    if (name === 'buddy_tasks') return { self: task.id, parent: task.parentId,
+      // The exact caller can inspect its bounded, already-sanitized saved data
+      // after a lost save response. Peer checkpoints remain outside this view.
+      saved_output: { checkpoint_version: task.checkpoint?.version ?? 0, progress: task.checkpoint?.progress ?? '', result_cards: structuredClone(task.checkpoint?.resultCards ?? []), source: structuredClone(task.checkpoint?.resultCardsSource ?? null) },
+      tasks: all.slice(0, 5).map(t => ({ id: t.id, parent: t.parentId, title: t.title, provider: t.ai.id, state: t.state, checkpoint_version: t.checkpoint?.version ?? 0, branch: t.branch, result: t.lastAssistant ? redact(t.lastAssistant.slice(-2000), t.worktree) : null, resultIsReported: true, pendingMessages: messages(t.id).filter(m => m.deliveredAt == null).length })), receipts: collaborationReceipts(task, messages).slice(-10) };
+    if (name === 'buddy_save_output') {
+      const records = task.outputRequests ||= [], digest = hash(args);
+      const previous = records.find(r => r.id === args.request_id);
+      if (previous) {
+        if (previous.hash !== digest) fail('CONFLICT', 'Output request id already used for different content.');
+        if (previous.result) return previous.result;
+        fail('CONFLICT', 'Output save has an uncertain outcome. Inspect the saved checkpoint before retrying.');
+      }
+      if (records.length >= 100 || records.filter(r => now() - r.at < 60000).length >= 10) fail('RATE_LIMITED', 'Output save limit reached.');
+      if ((task.checkpoint?.version ?? 0) !== args.expected_version) fail('CONFLICT', 'Checkpoint changed. Refresh it before saving.');
+      const record = { id: args.request_id, hash: digest, at: now(), result: null };
+      records.push(record); save(task);
+      record.result = await saveOutput(task, args, fresh); save(task);
+      return record.result;
+    }
     if (name === 'check_messages') {
       const inbox = messages(task.id).filter(m => m.seq > (args.after_seq || 0)).slice(0, 20);
       // Same delivery boundary as a hook/stdin envelope: returned by this
