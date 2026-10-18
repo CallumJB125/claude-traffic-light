@@ -2078,11 +2078,11 @@ test('Setups is listed under Settings now that personal export/import, Apply and
 
 test('Calendar and Timeline are listed under Board by default; PLEXIFORM_SHOW_PLANNER=0 takes them off the sub-nav', () => {
   const board = SECTIONS.find((s) => s.id === 'board');
-  assert.deepEqual(board.pages, ['board', 'board:table', 'board:history', 'board:calendar', 'board:timeline', 'board:dashboard']);
+  assert.deepEqual(board.pages, ['board', 'tasks', 'board:table', 'board:history', 'board:calendar', 'board:timeline', 'board:dashboard']);
   assert.equal(pageById('board:calendar').view, 'calendar');
   assert.equal(pageById('board:timeline').view, 'timeline');
   const out = require('node:child_process').execFileSync(process.execPath, ['-e', "console.log(JSON.stringify(require('./buddy-window/pages').SECTIONS.find((s) => s.id === 'board').pages))"], { cwd: path.join(__dirname, '..'), env: { ...process.env, PLEXIFORM_SHOW_PLANNER: '0' } });
-  assert.deepEqual(JSON.parse(out), ['board', 'board:table', 'board:history', 'board:dashboard']);
+  assert.deepEqual(JSON.parse(out), ['board', 'tasks', 'board:table', 'board:history', 'board:dashboard']);
 });
 
 test('consumer pages use plain language: no "Runner", "observed" or "hub" in visible text', () => {

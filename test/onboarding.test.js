@@ -204,7 +204,10 @@ test('the default tray menu is 20 items or fewer, with debug controls only in de
   const labels = tray.map((i) => i.label);
   for (const gone of ['Knock now', 'Bigger', 'Smaller', 'Reinstall Claude Code Hooks', 'Override: Green (5 min)', 'Clear override']) assert.ok(!labels.includes(gone), gone);
   assert.equal(labels.filter((l) => /^Open .+…$/.test(l) && l !== 'Open Plexiform…').length, BuddyPages.sectionsFor().filter((sec) => sec.menu === undefined).length, 'one Open item per sidebar section that is in the menu');
-  assert.ok(!labels.includes('More'), 'six sections need no More submenu');
+  const more = tray.filter(item => item.label === 'More');
+  assert.equal(more.length, 1, 'secondary sections have one More submenu');
+  assert.deepEqual(Array.from(more[0].submenu, item => item.label), BuddyPages.sectionsFor().filter(sec => sec.menu === 'more').map(sec => `Open ${sec.title}…`), 'every secondary section remains reachable');
+  assert.equal(labels.filter(label => /^Open .+…$/.test(label) && label !== 'Open Plexiform…').length, 6, 'the tray keeps six primary sections');
   for (const kept of ['Open at Login', 'Quit', 'Floating Widget', 'What does this mean?…']) assert.ok(labels.includes(kept), kept);
   for (const advanced of [build('widget'), build('tray', true)]) assert.ok(advanced.some((i) => i.label === 'Knock now') && advanced.some((i) => i.label === 'Override: Red (5 min)'));
 });

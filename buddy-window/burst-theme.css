@@ -1,68 +1,68 @@
 /* Plexiform's look for Claude Burst's dashboard, injected with insertCSS into
    the Usage optimiser view only. Values are literal (the dashboard cannot read
-   tokens.css) and mirror tokens.css and shell.css: test/burst-theme.test.js
+   tokens.css) and mirror the shared dark and light tokens.css palettes: test/burst-theme.test.js
    keeps them in step. Everything is an override: if Burst renames a variable
    or a selector, the rule matches nothing and the page just stays as Burst
    drew it. */
 
 :root:root {
   color-scheme: dark;
-  --bg: #1c1a1f;
-  --panel: #221f27;
-  --panel-2: #2a2731;
-  --border: #35313d;
-  --text: #ece8e2;
-  --muted: #a8a293;
-  --faint: #979183;
-  --accent: #da7756;
-  --ok: #2fae3e;
-  --ok-bg: rgba(47, 174, 62, 0.14);
-  --pass: #2fae3e;
-  --pass-bg: rgba(47, 174, 62, 0.14);
-  --warn: #f2a200;
-  --warn-bg: rgba(242, 162, 0, 0.14);
-  --bad: #ff8a80;
-  --bad-bg: rgba(226, 35, 26, 0.16);
+  --bg: #17191d;
+  --panel: #202329;
+  --panel-2: #292d34;
+  --border: #343941;
+  --text: #f0f1f3;
+  --muted: #b0b7c2;
+  --faint: #9aa3b0;
+  --accent: #e49a78;
+  --ok: #67c4a6;
+  --ok-bg: rgba(103, 196, 166, 0.14);
+  --pass: #67c4a6;
+  --pass-bg: rgba(103, 196, 166, 0.14);
+  --warn: #e4b566;
+  --warn-bg: rgba(228, 181, 102, 0.14);
+  --bad: #ff9187;
+  --bad-bg: rgba(255, 145, 135, 0.14);
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
-  --radius: 7px;
-  --head-bg: #2a2731;
-  --thead-bg: #26232d;
+  --radius: 8px;
+  --head-bg: #292d34;
+  --thead-bg: #25282f;
   --shadow: none;
-  --pc-a: #da7756;
-  --pc-b: #da7756;
-  --pc-c: #e8a083;
-  --pcs-saved: #da7756;
-  --pcs-cost: #6fa8a0;
-  --grid: #35313d;
+  --pc-a: #e49a78;
+  --pc-b: #e49a78;
+  --pc-c: #efb59a;
+  --pcs-saved: #e49a78;
+  --pcs-cost: #67c4a6;
+  --grid: #343941;
 }
 
 @media (prefers-color-scheme: light) {
   :root:root {
     color-scheme: light;
-    --bg: #eceaf0;
-    --panel: #fbfafc;
-    --panel-2: #f3f1f6;
-    --border: #dedae4;
-    --text: #1d1a22;
-    --muted: #5b5566;
-    --faint: #6b6577;
-    --accent: #b4532f;
-    --ok: #23792e;
-    --ok-bg: rgba(35, 121, 46, 0.1);
-    --pass: #23792e;
-    --pass-bg: rgba(35, 121, 46, 0.1);
-    --warn: #8f5d00;
-    --warn-bg: rgba(143, 93, 0, 0.1);
-    --bad: #b3261e;
-    --bad-bg: rgba(179, 38, 30, 0.1);
-    --head-bg: #f3f1f6;
-    --thead-bg: #f0eef4;
-    --pc-a: #b4532f;
-    --pc-b: #b4532f;
-    --pc-c: #c8785a;
-    --pcs-saved: #b4532f;
-    --pcs-cost: #2f7d74;
-    --grid: #dedae4;
+    --bg: #f4f5f7;
+    --panel: #ffffff;
+    --panel-2: #eef0f3;
+    --border: #dde1e6;
+    --text: #20252d;
+    --muted: #556171;
+    --faint: #5c6879;
+    --accent: #a34425;
+    --ok: #187d63;
+    --ok-bg: rgba(24, 125, 99, 0.1);
+    --pass: #187d63;
+    --pass-bg: rgba(24, 125, 99, 0.1);
+    --warn: #945c12;
+    --warn-bg: rgba(148, 92, 18, 0.1);
+    --bad: #c2352b;
+    --bad-bg: rgba(194, 53, 43, 0.1);
+    --head-bg: #eef0f3;
+    --thead-bg: #f2f4f6;
+    --pc-a: #a34425;
+    --pc-b: #a34425;
+    --pc-c: #bd6649;
+    --pcs-saved: #a34425;
+    --pcs-cost: #187d63;
+    --grid: #dde1e6;
   }
 }
 

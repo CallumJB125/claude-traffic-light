@@ -1,6 +1,5 @@
-/* Buddy window chrome: the sidebar and the info page. Dark values come from
-   tokens.css; light matches the board web's cool lilac-grey paper so the two
-   halves of the window agree. */
+/* Buddy window chrome: the sidebar and the info page. Both appearances use
+   tokens.css, matching the Board's charcoal and neutral paper palette. */
 
 *, *::before, *::after { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
