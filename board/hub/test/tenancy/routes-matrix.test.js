@@ -265,6 +265,9 @@ const MATRIX = {
   'POST /api/boards/:board_id/cards': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/cards`, body: { title: 'pwned' } },
   'POST /api/boards/:board_id/work-capture': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/work-capture`, body: (fx) => ({ install_id: randomUUID(), provider: 'codex', session_id: 'foreign-session', repo_id: fx.B.repo, title: 'Foreign capture', status: 'working' }) },
   // Label registry and archive (D91, D94): B's board, label name and card, also named from A's board.
+  'PUT /api/boards/:board_id/pins': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/pins`, body: { pins: [{ kind: 'note', label: 'pwned', value: 'x' }] } },
+  'POST /api/boards/:board_id/pins': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/pins`, body: { pin: { kind: 'note', label: 'pwned', value: 'x' } } },
+  'DELETE /api/boards/:board_id/pins/:pin_id': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/pins/p1`, body: {}, alt: (fx) => [`/api/boards/${fx.A.board}/pins/p1`] },
   'GET /api/boards/:board_id/labels': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/labels` },
   'POST /api/boards/:board_id/labels': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/labels`, body: { name: 'pwned', color: 'red' } },
   'PATCH /api/boards/:board_id/labels/:name': {

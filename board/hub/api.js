@@ -596,6 +596,7 @@ export class Api {
       const now = this.hub.iso();
       const before = this.pinsOf(boardId);
       const stamp = (p) => { const old = before.find((x) => x.id === p.id); return { ...p, by: old?.by ?? member.display_name ?? 'A teammate', at: old?.at ?? now }; };
+      if (mode === 'remove' && !before.some((x) => x.id === body.id)) throw new HubError('NOT_FOUND', 'no such pin');
       let pins = mode === 'append' ? [...before.filter((x) => !items.some((p) => p.id === x.id)), ...items.map(stamp)] : mode === 'remove' ? before.filter((x) => x.id !== body.id) : items.map(stamp);
       if (pins.length > 20) throw new HubError('VALIDATION', 'a pinboard holds at most 20 pins');
       const settings = { ...json(this.hub.board(boardId).settings, {}), pins };
