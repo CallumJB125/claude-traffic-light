@@ -263,6 +263,16 @@ stands; click a row to open Agent mail. The × hides that set until it
 changes. The tooltip carries the counts too. Nothing new is sent or fetched:
 the panel reads the agent-mail inbox you already opted in to.
 
+## Team moments, shared views and what shipped
+
+With a team signed in, the team layer reaches past the board:
+
+- **Mark a moment** on one of your sessions (Sessions page) records a ship, decision, demo or moment on the linked team board. **Pin to project** sits beside it. Only the kind, the line you typed and an optional note are sent.
+- **Share view** on a saved filter in Team sessions posts that view (name and filter values only) to the team's board, where it shows under Shared views for everyone.
+- **Home › Team today** shows *Since you were away* (with the time you last looked, including teammates' moments) and *Shipped this week* (cards moved to Done, merged pull requests, shipped moments), all from the board snapshot Plexiform already reads.
+- **Team sessions** shows an availability badge per teammate (Active, Idle, Away, Offline) folded from what the page already displays, and lets you keep **collections**: named groups of sessions that live only on this device, like pins.
+- **Home › Inbox** offers quick decision buttons on waiting requests with plain options (Allow, Deny, a short choice). They go through the same checks as answering from the widget, and "Ask from the widget" off means off here too.
+
 ## Answer permission prompts from the widget
 
 Preferences → **Answer permission prompts from the widget** (off by default)
