@@ -61,7 +61,7 @@
   const stateText = (e, f) => f.freshness === 'recent' ? e.state : `${e.state} · ${f.freshness === 'stale' ? 'Stale' : 'Freshness unknown'}`;
   const tone = (e, f) => f.freshness !== 'recent' ? f.freshness : e.input ? 'waiting' : e.state === 'Working' ? 'working' : '';
   // Optional page helpers (src/session-pulse.js etc.); each feature is absent when its script is not loaded.
-  const Pulse = window.PlexiformPulse || null, Pins = window.PlexiformPins || null, Follow = window.PlexiformFollow || null, Requests = window.PlexiformRequests || null, Presence = window.PlexiformPresence || null, Palette = window.PlexiformPalette || null;
+  const Pulse = window.PlexiformPulse || null, Pins = window.PlexiformPins || null, Follow = window.PlexiformFollow || null, Requests = window.PlexiformRequests || null, Presence = window.PlexiformPresence || null, Palette = window.PlexiformPalette || null, Availability = window.PlexiformAvailability || null;
   // Per-viewer conveniences only (pins, follows, saved filters); sharing and permissions never live here.
   const store = { read(k, parse) { try { return parse(localStorage.getItem(k)); } catch { return parse(null); } }, write(k, v) { try { localStorage.setItem(k, v); } catch { /* unavailable */ } } };
   let pins = Pins ? store.read('plexiform.pins', Pins.parse) : null, follows = Follow ? store.read('plexiform.follows', Follow.parse) : null;
@@ -73,7 +73,8 @@
     const li = el('li', '', 'dir-entry'), head = el('div', '', 'row-heading'), who = el('div', '', 'dir-who');
     const avatar = el('span', '', 'avatar'); avatar.setAttribute('aria-hidden', 'true');
     const titles = el('div'), title = el('h3'), owner = el('p', '', 'muted'), tag = el('span', '', 'tag');
-    titles.append(title, owner); who.append(avatar, titles);
+    const collections = el('div', '', 'collection-chips'); collections.setAttribute('aria-label', 'In collections'); collections.hidden = true;
+    titles.append(title, owner, collections); who.append(avatar, titles);
     const presence = el('span', '', 'presence'); presence.setAttribute('aria-label', 'Teammates viewing now'); presence.hidden = true; who.append(presence);
     const tools = el('div', '', 'row-tools'), tagWrap = el('div', '', 'row-tools'); tagWrap.append(tag, tools); head.append(who, tagWrap);
     const pulse = el('p', '', 'dir-pulse'), pulseDot = el('span', '', 'pulse-dot'), pulseText = el('span'); pulseDot.setAttribute('aria-hidden', 'true'); pulse.append(pulseDot, pulseText); pulse.hidden = true;
@@ -86,7 +87,7 @@
     const childDetails = el('details', '', 'dir-children'), childSummary = el('summary'); childDetails.append(childSummary, children);
     const history = el('details', '', 'dir-history'); history.append(el('summary', 'Recent messages and handoffs'), handoffs, deliveries);
     li.append(head, meta, pulse, when, activity, childDetails, history, actions, receipt, why, notice, details);
-    return { li, avatar, title, owner, tag, tools, presence, pulse, pulseText, receipt, meta, badges, when, activity, self, children, handoffs, deliveries, actions, why, notice, capList, details, childDetails, childSummary, history, kind, composer: null, gone: false, entry: null, request: null };
+    return { li, avatar, title, owner, collections, tag, tools, presence, pulse, pulseText, receipt, meta, badges, when, activity, self, children, handoffs, deliveries, actions, why, notice, capList, details, childDetails, childSummary, history, kind, composer: null, gone: false, entry: null, request: null };
   }
   function updateRow(v, e, data) {
     v.entry = e; v.gone = false; v.li.classList.remove('gone');
@@ -105,6 +106,34 @@
     v.li.dataset.pinned = String(!!(Pins && Pins.pinned(pins, e)));
     if (Pins && !v.pin) { v.pin = button('Pin', () => { pins = Pins.togglePin(pins, v.entry); savePins(); render(v.kind); }); v.pin.className = 'session-pin'; v.tools.append(v.pin); }
     if (v.pin) { const on = Pins.pinned(pins, e); v.pin.setAttribute('aria-pressed', String(on)); set(v.pin, on ? 'Pinned' : 'Pin'); v.pin.setAttribute('aria-label', `${on ? 'Unpin' : 'Pin'}: ${v.title.textContent}`); }
+    if (Pins && v.kind === 'team' && !v.collect) {
+      const box = el('div', '', 'collect-picker'), select = el('select'), input = el('input'); box.hidden = true;
+      select.setAttribute('aria-label', 'Collection'); input.type = 'text'; input.maxLength = 60; input.placeholder = 'New collection name'; input.setAttribute('aria-label', 'New collection name'); input.hidden = true;
+      select.addEventListener('change', () => { input.hidden = select.value !== '\u0000new'; if (!input.hidden) input.focus(); });
+      const close = () => { box.hidden = true; v.collect.button.setAttribute('aria-expanded', 'false'); };
+      const add = button('Add', () => { const n = select.value === '\u0000new' ? input.value.trim() : select.value; if (!n) { (select.value === '\u0000new' ? input : select).focus(); return; } pins = Pins.addToCollection(pins, n, v.entry); savePins(); input.value = ''; close(); render('team'); });
+      const cancel = button('Cancel', () => { close(); v.collect.button.focus(); });
+      const toggle = button('Collect', () => {
+        if (!box.hidden) { close(); return; }
+        const names = pins.collections.map(c => c.name).filter(n => !Pins.inCollection(pins, n, v.entry));
+        select.replaceChildren(...names.map(n => Object.assign(el('option', n), { value: n })), Object.assign(el('option', 'New collection…'), { value: '\u0000new' }));
+        select.value = names.length ? names[0] : '\u0000new'; input.hidden = select.value !== '\u0000new';
+        box.hidden = false; toggle.setAttribute('aria-expanded', 'true'); (input.hidden ? select : input).focus();
+      });
+      toggle.className = 'session-collect'; toggle.setAttribute('aria-expanded', 'false'); toggle.title = 'Add this session to one of your collections. Collections are only on this device; they never share anything.';
+      box.addEventListener('keydown', ev => { if (ev.key === 'Escape') { close(); toggle.focus(); } });
+      box.append(select, input, add, cancel); v.collect = { button: toggle, box, select, input };
+      v.tools.append(toggle); v.li.firstChild.after(box);
+    }
+    if (v.collect) {
+      v.collect.button.setAttribute('aria-label', `Collect: ${v.title.textContent}`);
+      const names = Pins.collectionsOf(pins, e), nsig = JSON.stringify(names);
+      if (v.collSig !== nsig) {
+        v.collSig = nsig;
+        v.collections.replaceChildren(...names.map(n => { const chip = el('span', '', 'collection-chip'); const x = button('×', () => { pins = Pins.removeFromCollection(pins, n, v.entry); savePins(); render('team'); }); x.className = 'chip-x'; x.setAttribute('aria-label', `Remove from collection: ${n}`); chip.append(el('span', n), x); return chip; }));
+      }
+      v.collections.hidden = !names.length;
+    }
     if (Follow && v.kind === 'team' && !v.follow) { v.follow = button('Follow', () => { follows = Follow.toggle(follows, v.entry); saveFollows(); render('team'); }); v.follow.className = 'session-follow'; v.tools.append(v.follow); }
     if (v.follow) { const on = Follow.following(follows, e); v.follow.setAttribute('aria-pressed', String(on)); set(v.follow, on ? 'Following' : 'Follow'); v.follow.title = 'Tell me once when this session needs input, finishes or fails.'; v.follow.setAttribute('aria-label', `${on ? 'Unfollow' : 'Follow'}: ${v.title.textContent}`); }
     const viewers = Presence && Presence.validViewers(e.viewers) ? e.viewers.filter(x => !e.owner.self || x.name !== 'You') : [];
@@ -479,12 +508,13 @@
     if (!TEAM_FILTERS.every(f => !$(`team-${f}-filter`).value || keyOf(e, f) === $(`team-${f}-filter`).value)) return false;
     const query = $('team-search').value.trim().toLocaleLowerCase();
     if (query && ![e.task.title, e.owner.name, e.provider.label, e.device.label, e.board.label, e.card?.key || ''].join(' ').toLocaleLowerCase().includes(query)) return false;
+    if (activeCollection && !(Pins && Pins.inCollection(pins, activeCollection, e))) return false;
     const fresh = freshNow(e, data).freshness;
     return teamFocus === 'all' || teamFocus === 'attention' && needsInput(e, data) || teamFocus === 'working' && fresh === 'recent' && e.state === 'Working' || teamFocus === 'stale' && fresh !== 'recent';
   };
   function resetTeamFilters() {
     for (const f of TEAM_FILTERS) $(`team-${f}-filter`).value = '';
-    $('team-search').value = ''; teamFocus = 'all';
+    $('team-search').value = ''; teamFocus = 'all'; activeCollection = null;
     clearActivity(); render('team');
   }
 
@@ -521,6 +551,11 @@
     const blocks = [...groups.keys()].sort((a, b) => a === 'No longer listed' ? 1 : b === 'No longer listed' ? -1 : Number(pinnedGroup(b)) - Number(pinnedGroup(a)) || a.localeCompare(b)).map(k => {
       let g = l.groups.get(k); if (!g) { g = { box: el('section', '', 'dir-group'), head: el('h3', k), list: el('ul', '', 'dir-list') }; g.box.append(g.head, g.list); l.groups.set(k, g); }
       const ordered = groups.get(k).sort((a, b) => Number(!a.gone && !needsInput(a.entry, data)) - Number(!b.gone && !needsInput(b.entry, data)));
+      if (Availability && group === 'person' && k !== 'No longer listed') {
+        const a = Availability.availability(ordered.filter(v => !v.gone).map(v => v.entry), Date.now(), data.observed_at);
+        if (!g.badge) { g.badge = el('span', '', 'availability'); g.head.append(' ', g.badge); }
+        g.badge.dataset.level = a.level; set(g.badge, a.label); g.badge.title = a.detail;
+      } else if (g.badge) { g.badge.remove(); g.badge = null; }
       g.list.setAttribute('aria-label', k); place(g.list, (Pins ? Pins.order(pins, ordered.map(v => v.entry)).map(e => ordered.find(v => v.entry === e)) : ordered).map(v => v.li)); return g.box;
     });
     for (const [k, g] of l.groups) if (!groups.has(k)) l.groups.delete(k);
@@ -538,21 +573,40 @@
     $('team-search').value = values.search || ''; teamFocus = values.focus || 'all'; if (values.group) $('team-group').value = values.group;
     clearActivity(); render('team');
   }
-  let savedUi = null;
+  let savedUi = null, activeCollection = null;
+  function setCollection(name) { activeCollection = name; clearActivity(); render('team'); }
   function renderSavedFilters() {
     const box = $('saved-filters'); if (!box || !Pins) return;
     if (!savedUi) {
       const name = el('input'); name.type = 'text'; name.id = 'saved-filter-name'; name.maxLength = 60; name.placeholder = 'Name this view'; name.setAttribute('aria-label', 'Name for the current filters');
       const save = button('Save filters', () => { const n = name.value.trim(); if (!n) { name.focus(); return; } pins = Pins.saveFilter(pins, n, filterValues()); savePins(); name.value = ''; renderSavedFilters(); });
-      savedUi = { name, save, chips: el('div', '', 'saved-filters') }; savedUi.chips.setAttribute('role', 'group'); savedUi.chips.setAttribute('aria-label', 'Saved views');
-      box.append(savedUi.chips, name, save);
+      savedUi = { name, save, chips: el('div', '', 'saved-filters'), collections: el('div', '', 'collections'), active: el('p', '', 'collection-active') }; savedUi.chips.setAttribute('role', 'group'); savedUi.chips.setAttribute('aria-label', 'Saved views');
+      savedUi.collections.setAttribute('role', 'group'); savedUi.collections.setAttribute('aria-label', 'Collections'); savedUi.active.setAttribute('role', 'status'); savedUi.active.hidden = true;
+      box.append(savedUi.chips, name, save, savedUi.collections, savedUi.active);
     }
+    if (activeCollection && !pins.collections.some(c => c.name === activeCollection)) activeCollection = null;
+    savedUi.collections.replaceChildren(...pins.collections.map(c => {
+      const chip = el('span', '', 'chip'), on = c.name === activeCollection; chip.setAttribute('aria-pressed', String(on));
+      const show = button(c.name, () => setCollection(on ? null : c.name)); show.className = 'chip-apply'; show.setAttribute('aria-pressed', String(on)); show.setAttribute('aria-label', `${on ? 'Stop showing' : 'Show'} collection: ${c.name}`);
+      const x = button('×', () => { pins = Pins.removeCollection(pins, c.name); savePins(); if (activeCollection === c.name) setCollection(null); else renderSavedFilters(); }); x.className = 'chip-x'; x.setAttribute('aria-label', `Remove collection: ${c.name}`);
+      chip.append(show, x); return chip;
+    }));
+    savedUi.collections.hidden = !pins.collections.length;
+    if (activeCollection) { const clear = button('Clear', () => setCollection(null)); clear.className = 'chip-x'; clear.setAttribute('aria-label', 'Stop showing collection'); savedUi.active.replaceChildren(el('span', `Showing collection: ${activeCollection} · `), clear); }
+    savedUi.active.hidden = !activeCollection;
     const current = JSON.stringify(filterValues());
     savedUi.chips.replaceChildren(...pins.filters.map(f => {
       const chip = el('span', '', 'chip'); chip.setAttribute('aria-pressed', String(JSON.stringify({ ...filterValues(), ...Object.fromEntries(Object.keys(filterValues()).map(k => [k, f.values[k] || (k === 'focus' ? 'all' : k === 'group' ? $('team-group').value : '')])) }) === current));
       const apply = button(f.name, () => applyFilter(f.values)); apply.className = 'chip-apply'; apply.setAttribute('aria-label', `Show saved view: ${f.name}`);
       const x = button('×', () => { pins = Pins.removeFilter(pins, f.name); savePins(); renderSavedFilters(); }); x.className = 'chip-x'; x.setAttribute('aria-label', `Remove saved view: ${f.name}`);
-      chip.append(apply, x); return chip;
+      chip.append(apply);
+      // Share with the team being shown: main posts only the view's name and filter values to that team's board.
+      if (typeof api.shareView === 'function' && team) {
+        const share = button('Share', async () => { share.disabled = true; const r = await api.shareView({ team, name: f.name, values: { ...f.values } }).catch(() => null); set(savedUi.active, r?.ok ? `Shared "${f.name}" with the team (${r.count} shared views on its board).` : r?.error || 'That did not work.'); savedUi.active.hidden = false; share.disabled = false; });
+        share.className = 'chip-share'; share.setAttribute('aria-label', `Share saved view with the team: ${f.name}`); share.title = 'Everyone on this team\u2019s board sees the view. Only its name and filter values are sent.';
+        chip.append(share);
+      }
+      chip.append(x); return chip;
     }));
     savedUi.save.disabled = !Object.values(filterValues()).some((val, i) => val && !(['focus', 'group'].includes(Object.keys(filterValues())[i]) && (val === 'all' || val === 'person')));
   }

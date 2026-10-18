@@ -11,7 +11,7 @@ const { createInteractionMain } = require('../src/interaction-main');
 const { createOverviewMain } = require('../src/overview-main');
 const { createFakeTeamHub } = require('../src/team-hub-fake');
 const read = (f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
-const html = read('overview.html'), script = read('overview.js'), dirScript = read('overview-directory.js'), bridge = read('overview-preload.js');
+const html = read('overview.html'), script = read('overview.js'), dirScript = read('overview-directory.js'), availScript = read('src/availability.js'), bridge = read('overview-preload.js');
 const tick = async (n = 6) => { for (let i = 0; i < n; i++) await new Promise((r) => setImmediate(r)); };
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const HOSTILE = '<img src=x onerror="globalThis.pwned=1">';
@@ -38,7 +38,7 @@ const FIXTURE = {
   ],
 };
 
-function stack({ teamHub = createFakeTeamHub(structuredClone(FIXTURE)), observed = true, shares = [], channelAdapter = null, prepareChannel = null } = {}) {
+function stack({ teamHub = createFakeTeamHub(structuredClone(FIXTURE)), observed = true, shares = [], channelAdapter = null, prepareChannel = null, scripts = [] } = {}) {
   const handlers = new Map(), listeners = new Map(), results = [];
   const win = { isDestroyed: () => false, isVisible: () => true, isMinimized: () => false, isFocused: () => ctx.foreground };
   const contents = { id: 9, isDestroyed: () => false, mainFrame: {}, send: (ch, ...a) => { for (const fn of listeners.get(ch) ?? []) fn({}, ...structuredClone(a)); } };
@@ -64,10 +64,13 @@ function stack({ teamHub = createFakeTeamHub(structuredClone(FIXTURE)), observed
     removeListener: (ch, fn) => listeners.get(ch)?.delete(fn),
   } }) });
   let ready;
-  const dom = new JSDOM(html, { runScripts: 'outside-only', pretendToBeVisual: true });
+  // Optional page helpers (src/session-pins.js etc.) load only when a test asks; a URL gives the page a localStorage origin.
+  const dom = new JSDOM(html, { runScripts: 'outside-only', pretendToBeVisual: true, ...(scripts.length ? { url: 'http://localhost/' } : {}) });
   const intervals = [];
   dom.window.setInterval = (fn) => intervals.push(fn);
   dom.window.overviewApi = { ...api, onReady: (fn) => { ready = fn; return () => {}; } };
+  dom.window.eval(availScript);
+  for (const f of scripts) dom.window.eval(read(f));
   dom.window.eval(dirScript);
   dom.window.eval(script);
   const doc = dom.window.document;
@@ -140,8 +143,13 @@ test('Team sessions: explicit shares only, grouped by person, filters, reasons, 
     assert.deepEqual(picks, ['Dev team · Fake team hub (test data)'], 'only teams the viewer belongs to');
     assert.match(s.$('team-notice').textContent, /test data, not a real team/);
     assert.equal(s.rows('team-list').length, 2);
-    const groups = [...s.$('team-list').querySelectorAll('.dir-group > h3')].map((h) => h.textContent);
+    const groups = [...s.$('team-list').querySelectorAll('.dir-group > h3')].map((h) => h.firstChild.textContent);
     assert.deepEqual(groups, [`Bob ${HOSTILE}`, 'Cara']);
+    const heads = [...s.$('team-list').querySelectorAll('.dir-group > h3')];
+    const bobBadge = heads[0].querySelector('.availability'), caraBadge = heads[1].querySelector('.availability');
+    assert.equal(bobBadge.dataset.level, 'active', 'Bob is working and reported seconds ago'); assert.equal(bobBadge.textContent, 'Active');
+    assert.match(bobBadge.title, /Working in 1 session · last report \d+s ago/);
+    assert.equal(caraBadge.dataset.level, 'idle'); assert.equal(caraBadge.textContent, 'Idle');
     const bob = s.row('team-list', /Fix login/);
     assert.equal(s.doc.querySelector('img'), null, 'hostile names and titles are text');
     assert.equal(bob.querySelector('.avatar').textContent, 'B<');
@@ -269,5 +277,41 @@ test('board-run team composer distinguishes task-inbox queuing from agent acknow
     assert.match(row.querySelector('.composer').textContent, /Receipt unconfirmed/);
     assert.doesNotMatch(row.querySelector('.composer').textContent, /Not sent/);
     assert.match(row.querySelector('.composer').textContent, /Do not resend automatically/);
+  } finally { s.close(); }
+});
+
+test('Team sessions: per-viewer collections group rows locally, filter the list when active, and never leave this device', async () => {
+  const s = stack({ scripts: ['src/session-pins.js'] });
+  try {
+    await s.ready(); await s.team();
+    const bob = s.row('team-list', /Fix login/);
+    const collect = bob.querySelector('.session-collect'); assert.ok(collect, 'Collect button on a team row');
+    collect.click(); await tick();
+    const picker = bob.querySelector('.collect-picker'); assert.equal(picker.hidden, false);
+    const select = picker.querySelector('select'), input = picker.querySelector('input');
+    assert.deepEqual([...select.options].map((o) => o.textContent), ['New collection…'], 'no collections yet');
+    assert.equal(input.hidden, false); input.value = 'Release';
+    [...picker.querySelectorAll('button')].find((b) => b.textContent === 'Add').click(); await tick();
+    const bob2 = s.row('team-list', /Fix login/);
+    assert.deepEqual([...bob2.querySelectorAll('.collection-chip')].map((c) => c.firstChild.textContent), ['Release'], 'membership chip under the title');
+    const stored = JSON.parse(s.dom.window.localStorage.getItem('plexiform.pins'));
+    assert.equal(stored.collections.length, 1); assert.equal(stored.collections[0].name, 'Release'); assert.equal(stored.collections[0].keys.length, 1);
+    assert.equal(JSON.stringify(s.results).includes('Release'), false, 'collections never go to main');
+    const chips = s.$('saved-filters').querySelector('.collections');
+    assert.equal(chips.getAttribute('aria-label'), 'Collections');
+    const chip = chips.querySelector('.chip-apply'); assert.equal(chip.textContent, 'Release'); assert.equal(chip.getAttribute('aria-pressed'), 'false');
+    chip.click(); await tick();
+    assert.equal(chips.querySelector('.chip-apply').getAttribute('aria-pressed'), 'true');
+    assert.match(s.$('saved-filters').querySelector('.collection-active').textContent, /Showing collection: Release/);
+    assert.ok(s.row('team-list', /Fix login/), 'Bob stays'); assert.equal(s.row('team-list', /Write docs/), undefined, 'Cara is filtered out');
+    assert.match(s.$('team-count').textContent, /1 of 2/);
+    // Remove the collection: filter clears, both rows return, chip and storage are gone.
+    chips.querySelector('.chip-x').click(); await tick();
+    assert.equal(s.rows('team-list').length, 2);
+    assert.equal(s.$('saved-filters').querySelector('.collection-active').hidden, true);
+    assert.equal(s.$('saved-filters').querySelectorAll('.collections .chip').length, 0);
+    assert.equal(s.row('team-list', /Fix login/).querySelectorAll('.collection-chip').length, 0);
+    assert.deepEqual(JSON.parse(s.dom.window.localStorage.getItem('plexiform.pins')).collections, []);
+    assert.equal(s.doc.querySelector('img'), null);
   } finally { s.close(); }
 });

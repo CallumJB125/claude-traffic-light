@@ -34,6 +34,12 @@ contextBridge.exposeInMainWorld('overviewApi', {
     const text = messageText(request.text);
     return text === null ? denied() : ipcRenderer.invoke('overview:team-message', { id: request.id, text });
   },
+  // Share the current saved filters with the team being shown; main resolves the team and board.
+  shareView: request => {
+    if (!closed(request, ['team', 'name', 'values']) || typeof request.team !== 'string' || !/^[0-9a-f]{32}$/.test(request.team) || typeof request.name !== 'string' || !request.name.trim() || request.name.length > 60) return denied();
+    const values = request.values && typeof request.values === 'object' && !Array.isArray(request.values) ? Object.fromEntries(Object.entries(request.values).filter(([k, v]) => /^[a-z][a-z0-9_-]{0,23}$/i.test(k) && typeof v === 'string' && v && v.length <= 80).slice(0, 8)) : {};
+    return Object.keys(values).length ? ipcRenderer.invoke('overview:share-view', { team: request.team, name: request.name.trim(), values }) : denied();
+  },
   teamInspect: request => closed(request, ['id']) && typeof request.id === 'string' && /^[0-9a-f]{40}$/.test(request.id)
     ? ipcRenderer.invoke('overview:team-inspect', { id: request.id }) : denied(),
   followups: {

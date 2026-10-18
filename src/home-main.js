@@ -12,6 +12,8 @@ const LOCAL_BOARD = 'My board (this Mac)';
 const PAGES = new Set(['waiting', 'sessions', 'board', 'usage', 'settings', 'team', 'myday', 'overview', 'tasks']);
 const AITOOLS = /^aitools(?::[a-z]{2,12})?$/;
 const LIST_MAX = 20;
+const OPTIONS_MAX = 4;
+const OPTION_LABEL_MAX = 40;
 const TEAM_TTL_MS = 15000;
 const TOOLS_TTL_MS = 15000;
 const COSTS_TTL_MS = 60000;
@@ -34,12 +36,24 @@ function banner(tools) {
 
 // `paused` (the cost guard's pause view) sits above the waits: the person's own
 // limit stopped the work, so it needs them before any question does.
+// Quick decision options: only a request file the Waiting page could answer
+// with one click (answerable, not expired, a plain choice: no question form,
+// no elicitation schema, no free text). Ids only: main rebuilds the answer.
+function quickOptions(input, now) {
+  if (!InputView.canAnswer(input, now) || input.source !== 'hook' || typeof input.id !== 'string' || input.id.length > 100) return [];
+  if (input.questions || input.schema || input.freeText) return [];
+  return (Array.isArray(input.options) ? input.options : [])
+    .filter((o) => o && typeof o.id === 'string' && o.id && o.id !== 'answers' && o.id.length <= 100 && typeof o.label === 'string' && o.label.trim())
+    .slice(0, OPTIONS_MAX)
+    .map((o) => ({ id: o.id, label: text(o.label.trim(), OPTION_LABEL_MAX) }));
+}
+
 function needs(inputs, now, paused = null) {
   const queue = InputView.queue(inputs);
   return {
     paused: paused && typeof paused.text === 'string' ? { text: text(paused.text, 160), note: text(paused.note, 300), resumable: paused.resumable !== false } : null,
     total: queue.length,
-    items: queue.slice(0, LIST_MAX).map((i) => ({ kind: InputView.KIND_LABEL[i.kind] || 'Waiting', headline: InputView.headline(i), project: text(InputView.project(i), 100), age: InputView.ageText(i, now), late: InputView.escalated(i, now) })),
+    items: queue.slice(0, LIST_MAX).map((i) => ({ id: typeof i.id === 'string' ? i.id.slice(0, 100) : '', kind: InputView.KIND_LABEL[i.kind] || 'Waiting', headline: InputView.headline(i), project: text(InputView.project(i), 100), age: InputView.ageText(i, now), late: InputView.escalated(i, now), options: quickOptions(i, now) })),
   };
 }
 

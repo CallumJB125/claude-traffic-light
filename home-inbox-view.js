@@ -33,7 +33,16 @@
       const li = node('li'), text = node('div'); li.dataset.kind = row.kind;
       text.append(node('strong', row.title, 'title'), node('p', [row.meta, ago(row.ageMs)].filter(Boolean).join(' · '), 'muted'));
       const tag = node('span', r.label(row.kind), `tag ${['approval', 'question', 'blocker', 'failed'].includes(row.kind) ? 'waiting' : row.kind === 'finished' ? 'working' : ''}`);
-      const actions = node('div', '', 'actions'); actions.append(button(row.action.label, () => void act(row), row.kind === 'approval' ? 'primary' : ''));
+      const actions = node('div', '', 'actions');
+      if (row.options?.length && typeof api.answerInput === 'function') {
+        for (const [i, opt] of row.options.entries()) actions.append(button(opt.label, async () => {
+          for (const b of actions.querySelectorAll('button')) b.disabled = true;
+          const r = await api.answerInput(row.requestId, opt.id);
+          status.textContent = r?.ok ? 'Answered.' : (r?.error || 'Could not answer. Open the Waiting page.');
+          await load();
+        }, `quick-option${i === 0 && /^(allow|accept|yes|approve)/i.test(opt.id) ? ' primary' : ''}`));
+      }
+      actions.append(button(row.action.label, () => void act(row), row.kind === 'approval' && !row.options?.length ? 'primary' : ''));
       li.append(text, tag, actions); list.append(li);
     }
     body.replaceChildren(list);

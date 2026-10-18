@@ -48,13 +48,15 @@
         ? list('Working now', s.people.items, s.people.more, (p) => row(`${p.author} · ${p.title}`, [where(p), p.branch, ago(p.updated_at)].filter(Boolean).join(' · '), p.status, p.status === 'Waiting' ? 'waiting' : 'working'))
         : node('p', 'No teammate is working in your linked repositories right now.', 'muted'));
       if (s.overlaps.items.length) parts.push(list('Overlaps with your work', s.overlaps.items, s.overlaps.more, (o) => row(o.text, `${o.title} · ${where(o)}`, o.level === 'high' ? 'Conflict risk' : 'Nearby', o.level === 'high' ? 'waiting' : '')));
-      const changes = list('Since you last looked', s.changes.items, s.changes.more, (c) => {
+      const sinceLabel = s.since ? `Since you were away (${new Date(s.since).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })})` : 'Since you were away';
+      const changes = list(sinceLabel, s.changes.items, s.changes.more, (c) => {
         const li = row(c.text, [where(c), ago(c.at)].filter(Boolean).join(' · '));
         if (c.url) { const a = node('a', 'Open PR'); a.href = c.url; a.target = '_blank'; a.rel = 'noopener noreferrer'; li.append(a); }
         return li;
       });
       if (!s.changes.items.length) changes.append(node('p', 'Nothing new since you last looked.', 'muted'));
       parts.push(changes);
+      if (s.shipped?.items.length) parts.push(list('Shipped this week', s.shipped.items, s.shipped.more, (x) => row(x.text, [where(x), x.by, ago(x.at)].filter(Boolean).join(' · '), x.kind === 'merged' ? 'Merged' : x.kind === 'ship' ? 'Shipped' : 'Done', 'working')));
     }
     if (s.sharing_off?.length) parts.push(node('p', `You don’t share summaries with ${s.sharing_off.join(', ')}, so their sessions aren’t read back here.`, 'muted'));
     if (s.unreachable?.length && s.state !== 'error') parts.push(node('p', `Some of ${s.unreachable.join(', ')} could not be read just now.`, 'muted'));

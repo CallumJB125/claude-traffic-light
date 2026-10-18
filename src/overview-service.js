@@ -34,6 +34,9 @@ function createOverviewService({sessions=()=>[],work=async()=>({sources:[],captu
  const directoryModel=Directory.createSessionDirectory({now});
  const stable=parts=>crypto.createHmac('sha256',secret).update(JSON.stringify(parts)).digest('hex');
  const teamKey=(origin,teamId)=>stable(['team',origin,teamId]).slice(0,32);
+ // Opaque team key → the hub team it stands for, for the team the page is showing only (share view).
+ const teamIds=new Map();
+ const teamIdentity=key=>typeof key==='string'&&teamView===key&&teamIds.has(key)?{...teamIds.get(key)}:null;
  const permitted=()=>{try{return current()===true;}catch{return false;}};
  const actionPermitted=()=>{try{return permitted()&&actionCurrent()===true;}catch{return false;}};
  const sourcesData=async()=>{const registered=await work();const list=Array.isArray(registered?.sources)?registered.sources.slice(0,9):[];
@@ -243,7 +246,8 @@ function createOverviewService({sessions=()=>[],work=async()=>({sources:[],captu
   personalRefs.clear();for(const e of personal)personalRefs.set(e.id,e);
   const teams=new Map(),add=(key,name,source)=>{if(!teams.has(key))teams.set(key,{key,name:clean(name,80)||'Team',source});};
   let real=null;try{real=await hubTeams();}catch{real=null;}
-  if(typeof real?.origin==='string'&&Array.isArray(real.teams))for(const t of real.teams.slice(0,64))if(object(t)&&typeof t.id==='string')add(teamKey(real.origin,t.id),t.name,'hub');
+  teamIds.clear();
+  if(typeof real?.origin==='string'&&Array.isArray(real.teams))for(const t of real.teams.slice(0,64))if(object(t)&&typeof t.id==='string'){add(teamKey(real.origin,t.id),t.name,'hub');teamIds.set(teamKey(real.origin,t.id),{origin:real.origin,teamId:t.id});}
   for(const e of personal)for(const b of e.teams)add(b.key,b.name,'hub');
   const hub=safe(teamHub,null),viewer=viewerOf(hub);let fakeTeams=[];
   const adapterOrigin=hub?.fake!==true&&typeof hub?.origin==='string'?hub.origin:'adapter:';
@@ -285,7 +289,7 @@ function createOverviewService({sessions=()=>[],work=async()=>({sources:[],captu
   if(!alive())return{ok:false,status:'unconfirmed',error:'The view changed. Inspect the receipt before sending again.'};
   return out?.ok===true?out:{ok:false,status:['forbidden','stale','busy','unavailable','unconfirmed'].includes(out?.status)?out.status:'unavailable',error:clean(out?.error,300)||'The team hub did not accept the message.'};
  }
- return{snapshot,directory:async request=>{const out=await directory(request);return{...out,followupScope:followupScope()};},teamMessage,teamInspect:controls.inspect,teamAction:controls.action,
+ return{snapshot,directory:async request=>{const out=await directory(request);return{...out,followupScope:followupScope()};},teamMessage,teamInspect:controls.inspect,teamAction:controls.action,teamIdentity,
   followupReview,followupEnqueue,
   coordinatorRequestOwner:coordinator.requestOwner,coordinatorRemoteList:coordinator.remoteList,coordinatorRemoteSend:coordinator.remoteSend,coordinatorRemoteCancel:coordinator.remoteCancel,coordinatorRemoteReplace:coordinator.remoteReplace,
   coordinatorInventory:coordinator.inventory,coordinatorPropose:coordinator.propose,coordinatorConfirm:coordinator.confirm,coordinatorResults:coordinator.results,coordinatorCancel:coordinator.cancel,

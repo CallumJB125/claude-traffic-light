@@ -3,7 +3,7 @@ const {createOverviewService,response}=require('./overview-service');
 // Exact visible main-app Overview document owns passive reads.
 // Foreground focus remains required for every action and effect.
 // Directory inputs (owned, shares, hubTeams, teamHub) are main-only; see overview-service.
-function createOverviewMain({buddy,sessions,work,managed,openManaged,messageManaged,now,owned,shares,hubTeams,teamHub,followups,followupScope,followupLocal}){
+function createOverviewMain({buddy,sessions,work,managed,openManaged,messageManaged,now,owned,shares,hubTeams,teamHub,followups,followupScope,followupLocal,shareView=null}){
  let authority=null,stopped=false;
  function owner(readOnly=false){const b=buddy(),c=readOnly?(b?.overviewReadContext?.()??b?.overviewContext?.()):b?.overviewContext?.();if(!c||!readOnly&&!c.foreground||!c.window||!c.contents||c.window.isDestroyed()||c.contents.isDestroyed()||!c.contents.mainFrame||!Number.isSafeInteger(c.generation))return null;return{buddy:b,window:c.window,contents:c.contents,frame:c.contents.mainFrame,generation:c.generation,document:c.document??null};}
  const equal=(a,b)=>!!a&&!!b&&a.buddy===b.buddy&&a.window===b.window&&a.contents===b.contents&&a.frame===b.frame&&a.generation===b.generation&&a.document===b.document;
@@ -32,6 +32,10 @@ function createOverviewMain({buddy,sessions,work,managed,openManaged,messageMana
    ipc.handle('overview:followup-list',async(e,...args)=>{const before=owner(true);if(!allowed(e,before)||args.length)return response('unavailable');adopt(before);const result=await service.followupList();return same(before,true)?result:response('stale');});
    for(const [name,method]of [['review','followupReview'],['enqueue','followupEnqueue'],['cancel','followupCancel'],['discard','followupDiscard']])ipc.handle(`overview:followup-${name}`,async(e,...args)=>{const before=owner();if(!allowed(e,before)||!same(authority)||args.length!==1)return response('unavailable');const result=await service[method](args[0]);return same(before)?result:response('stale');});
    for(const [name,method]of [['inventory','coordinatorInventory'],['propose','coordinatorPropose'],['confirm','coordinatorConfirm'],['results','coordinatorResults'],['cancel','coordinatorCancel'],['request-owner','coordinatorRequestOwner'],['remote-list','coordinatorRemoteList'],['remote-send','coordinatorRemoteSend'],['remote-cancel','coordinatorRemoteCancel'],['remote-replace','coordinatorRemoteReplace']])ipc.handle(`overview:coordinator-${name}`,async(e,...args)=>{const passive=name==='inventory'||name==='results'||name==='remote-list',before=owner(passive);if(!allowed(e,before)||args.length!==1||!passive&&!same(authority))return response('unavailable');if(passive)adopt(before);const result=await service[method](args[0]);return same(before,passive)?result:{ok:false,status:name==='confirm'||name==='remote-send'?'unconfirmed':'stale',error:'The view changed. Check current receipts before acting again.'};});
+   // Share a saved filter view with the team the page is showing: main posts it to that team's board with the person's own sign-in.
+   ipc.handle('overview:share-view',async(e,...args)=>{const before=owner();if(!allowed(e,before)||!same(authority)||args.length!==1||!shareView)return{ok:false,error:'Focus Plexiform and try again.'};
+    const r=args[0],team=service.teamIdentity(r?.team);if(!team)return{ok:false,error:'Open the team in Team sessions first.'};
+    const result=await shareView({...team,name:r.name,values:r.values});return same(before)?result:{ok:false,error:'The view changed. Try again.'};});
    for(const action of ['open','message'])ipc.handle(`overview:${action}`,async(e,...args)=>{const before=owner();if(!allowed(e,before)||!same(authority)||args.length!==1)return response('unavailable');
     const result=await service[action](args[0]);return action==='open'?result:same(before)?result:response('stale');});
   },

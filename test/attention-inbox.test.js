@@ -36,3 +36,19 @@ test('inbox: nothing is invented when parts are missing, and the list is capped'
   assert.equal(many.items.length, MAX);
   assert.equal(many.total, 50);
 });
+
+test('inbox: quick decision options and the request id pass through, validated and capped at four; the Answer fallback stays', () => {
+  const options = Array.from({ length: 6 }, (_, i) => ({ id: `o${i}`, label: `Option ${i}` }));
+  const r = compose({ needs: { items: [
+    { id: 'req-1', headline: 'Allow git push?', kind: 'permission', options: [{ id: 'allow', label: 'Allow once' }, { id: 'deny', label: 'Deny' }, { id: 'x'.repeat(101), label: 'too long id' }, { id: 'bad', label: 'L'.repeat(41) }, { id: 'noLabel' }, null] },
+    { id: 'req-2', headline: 'Pick one', kind: 'question', options },
+    { headline: 'No id', kind: 'question', options: [{ id: 'yes', label: 'Yes' }] },
+    { id: 'req-4', headline: 'No options', kind: 'question' },
+  ] } });
+  assert.deepEqual(r.items[0].options, [{ id: 'allow', label: 'Allow once' }, { id: 'deny', label: 'Deny' }]);
+  assert.equal(r.items[0].requestId, 'req-1');
+  assert.deepEqual(r.items[0].action, { kind: 'navigate', destination: 'waiting', label: 'Answer' });
+  assert.equal(r.items[1].options.length, 4);
+  assert.deepEqual(r.items[2].options, [], 'no request id: nothing to answer');
+  assert.deepEqual(r.items[3].options, []);
+});

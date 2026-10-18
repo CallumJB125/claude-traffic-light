@@ -8,6 +8,7 @@
   const SEVERITY = Object.freeze({ approval: 0, question: 0, blocker: 1, failed: 2, handoff: 3, review: 4, waiting: 5, finished: 6 });
   const LABEL = Object.freeze({ approval: 'Approval', question: 'Question', blocker: 'Blocked', failed: 'Failed', handoff: 'Handoff', review: 'Ready for review', waiting: 'Waiting on', finished: 'Finished' });
   const MAX = 30;
+  const OPTIONS_MAX = 4;
   const str = (v, max) => typeof v === 'string' && v.length <= max ? v : '';
   const ageOf = (ms, now) => Number.isFinite(ms) ? Math.max(0, now - ms) : null;
   function compose({ needs = null, alerts = null, morning = null, teamToday = null, follow = [], now = Date.now() } = {}) {
@@ -15,7 +16,9 @@
     const push = r => { if (rows.length < 200) rows.push(r); };
     for (const [i, n] of (needs?.items || []).entries()) {
       const kind = /permission|approv/i.test(n.kind) ? 'approval' : 'question';
-      push({ kind, title: str(n.headline, 400) || 'Needs you', meta: [str(n.kind, 80), str(n.project, 200), str(n.age, 40)].filter(Boolean).join(' · '), ageMs: null, late: n.late === true, action: { kind: 'navigate', destination: 'waiting', label: 'Answer' }, key: `needs:${i}` });
+      const requestId = str(n.id, 100);
+      const options = requestId ? (Array.isArray(n.options) ? n.options : []).filter(o => o && str(o.id, 100) && str(o.label, 40)).slice(0, OPTIONS_MAX).map(o => ({ id: o.id, label: o.label })) : [];
+      push({ kind, title: str(n.headline, 400) || 'Needs you', meta: [str(n.kind, 80), str(n.project, 200), str(n.age, 40)].filter(Boolean).join(' · '), ageMs: null, late: n.late === true, requestId, options, action: { kind: 'navigate', destination: 'waiting', label: 'Answer' }, key: `needs:${i}` });
     }
     for (const s of alerts?.stuck || []) push({ kind: 'blocker', title: str(s.title, 400), meta: str(s.meta, 400), ageMs: null, action: s.canOpen ? { kind: 'alert', alert: 'stuck', op: 'open', handle: s.handle, label: 'Open session' } : { kind: 'alert', alert: 'stuck', op: 'dismiss', handle: s.handle, label: 'Dismiss' }, key: `stuck:${s.handle}` });
     for (const l of alerts?.limits || []) push({ kind: 'blocker', title: str(l.title, 400), meta: str(l.meta, 400), ageMs: null, action: l.canResume ? { kind: 'alert', alert: 'limit', op: 'resume', handle: l.handle, label: 'Resume at reset' } : { kind: 'alert', alert: 'limit', op: 'dismiss', handle: l.handle, label: 'Dismiss' }, key: `limit:${l.handle}` });
@@ -34,7 +37,7 @@
     rows.sort((a, b) => SEVERITY[a.kind] - SEVERITY[b.kind] || Number(b.late === true) - Number(a.late === true) || (b.ageMs ?? -1) - (a.ageMs ?? -1));
     return { items: rows.slice(0, MAX), total: rows.length, label: k => LABEL[k] };
   }
-  const api = { compose, SEVERITY, LABEL, MAX };
+  const api = { compose, SEVERITY, LABEL, MAX, OPTIONS_MAX };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.PlexiformInbox = Object.freeze(api);
 })(typeof globalThis !== 'undefined' ? globalThis : this);

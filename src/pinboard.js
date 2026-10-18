@@ -4,6 +4,7 @@
 // (the same route the work capture and agent mail use). Only label/value text
 // the person typed leaves this computer; the session's path never does.
 const KINDS = new Set(['link', 'command', 'note', 'priority']);
+const MOMENTS = new Set(['moment', 'ship', 'decision', 'demo']);
 function createPinboard({ resolve, fetch, log = () => {} }) {
   async function add({ cwd, kind, label, value }) {
     if (!KINDS.has(kind)) return { ok: false, error: 'Choose link, command, convention or priority.' };
@@ -24,7 +25,44 @@ function createPinboard({ resolve, fetch, log = () => {} }) {
       return { ok: true, count: json.pins.length, board: link.route.board_id };
     } catch (e) { log('[pinboard] add failed', e && e.code); return { ok: false, error: 'The team hub could not be reached. Try again.' }; }
   }
-  return { add };
+  // "Mark a moment" from a session: a ship, decision or demo for the team's timeline
+  // (board.settings.moments). Only the kind, label and note typed leave this computer.
+  async function moment({ cwd, kind, label, note }) {
+    if (!MOMENTS.has(kind)) return { ok: false, error: 'Choose moment, ship, decision or demo.' };
+    const text = (v, max) => (typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, max) : '');
+    const l = text(label, 120), n = text(note, 500);
+    if (!l) return { ok: false, error: 'Say what the moment was.' };
+    let link = null;
+    try { link = await resolve({ cwd }); } catch { link = null; }
+    if (!link?.route?.board_id || !link.route.hub) return { ok: false, error: 'This folder is not linked to a team board in Plexiform.' };
+    const tok = typeof link.token === 'function' ? link.token() : null;
+    if (!tok) return { ok: false, error: 'Sign in to your team in Plexiform first.' };
+    try {
+      const res = await fetch(`${link.route.hub}/api/boards/${encodeURIComponent(link.route.board_id)}/moments`, { method: 'POST', headers: { accept: 'application/json', authorization: `Bearer ${tok}`, 'content-type': 'application/json' }, body: JSON.stringify({ request_id: require('node:crypto').randomUUID(), moment: { kind, label: l, note: n } }), redirect: 'error' }); // privacy-flow: pinboard
+      let json = null; try { json = await res.json(); } catch { json = null; }
+      if (res.status !== 200 || !Array.isArray(json?.moments)) return { ok: false, error: json?.error?.message || 'The team hub refused that moment.' };
+      return { ok: true, count: json.moments.length, board: link.route.board_id };
+    } catch (e) { log('[pinboard] moment failed', e && e.code); return { ok: false, error: 'The team hub could not be reached. Try again.' }; }
+  }
+  // "Share view" from Team sessions: a saved filter set for everyone on that team's board
+  // (board.settings.views). Only the view's name and filter values travel.
+  async function view({ link, name, values }) {
+    const text = (v, max) => (typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, max) : '');
+    const n = text(name, 60);
+    const vals = values && typeof values === 'object' && !Array.isArray(values) ? Object.fromEntries(Object.entries(values).filter(([k, v]) => /^[a-z][a-z0-9_-]{0,23}$/i.test(k) && text(v, 80)).slice(0, 8).map(([k, v]) => [k, text(v, 80)])) : {};
+    if (!n) return { ok: false, error: 'Name the view.' };
+    if (!Object.keys(vals).length) return { ok: false, error: 'Set at least one filter first.' };
+    if (!link?.route?.board_id || !link.route.hub) return { ok: false, error: 'This team has no board linked in Plexiform.' };
+    const tok = typeof link.token === 'function' ? link.token() : null;
+    if (!tok) return { ok: false, error: 'Sign in to your team in Plexiform first.' };
+    try {
+      const res = await fetch(`${link.route.hub}/api/boards/${encodeURIComponent(link.route.board_id)}/views`, { method: 'POST', headers: { accept: 'application/json', authorization: `Bearer ${tok}`, 'content-type': 'application/json' }, body: JSON.stringify({ request_id: require('node:crypto').randomUUID(), view: { name: n, values: vals } }), redirect: 'error' }); // privacy-flow: pinboard
+      let json = null; try { json = await res.json(); } catch { json = null; }
+      if (res.status !== 200 || !Array.isArray(json?.views)) return { ok: false, error: json?.error?.message || 'The team hub refused that view.' };
+      return { ok: true, count: json.views.length, board: link.route.board_id };
+    } catch (e) { log('[pinboard] view failed', e && e.code); return { ok: false, error: 'The team hub could not be reached. Try again.' }; }
+  }
+  return { add, moment, view };
 }
 function register({ ipcMain, allowed, pinboard, cwdFor }) {
   ipcMain.handle('pins:add', async (e, key, kind, label, value) => {
@@ -33,5 +71,11 @@ function register({ ipcMain, allowed, pinboard, cwdFor }) {
     if (!cwd) return { ok: false, error: 'No folder is known for this session.' };
     try { return await pinboard.add({ cwd, kind, label, value }); } catch { return { ok: false, error: 'Something went wrong. Nothing was pinned.' }; }
   });
+  ipcMain.handle('moments:mark', async (e, key, kind, label, note) => {
+    if (!allowed(e)) return { ok: false, error: 'Not allowed.' };
+    const cwd = typeof key === 'string' && key.length <= 260 ? await cwdFor(key) : null;
+    if (!cwd) return { ok: false, error: 'No folder is known for this session.' };
+    try { return await pinboard.moment({ cwd, kind, label, note }); } catch { return { ok: false, error: 'Something went wrong. Nothing was marked.' }; }
+  });
 }
-module.exports = { createPinboard, register, KINDS };
+module.exports = { createPinboard, register, KINDS, MOMENTS };

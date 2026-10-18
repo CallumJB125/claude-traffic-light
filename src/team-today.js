@@ -35,6 +35,7 @@ function loadOverlap() { return import('../board/shared/overlap.js'); } // priva
 
 // Pure. teams: [{team, repo, repo_id, records:[team-activity record] | null}] (null: unreadable);
 // boards: [{team, board, cards:[CardView] | null}]; mine: local WorkRecords; seen: {looked_at, columns}.
+const WEEK_MS = 7 * 24 * 60 * 60_000, MAX_SHIPPED = 12, MOMENT_KINDS = { ship: 'Shipped', decision: 'Decision', demo: 'Demo', moment: 'Moment' };
 function compose({ teams = [], boards = [], mine = [], seen = {}, engine = null, now = Date.now() }) {
   const installs = new Set(mine.map((r) => r && r.install_id).filter(Boolean));
   const sessions = new Set(mine.map((r) => r && r.session_id).filter(Boolean));
@@ -84,19 +85,29 @@ function compose({ teams = [], boards = [], mine = [], seen = {}, engine = null,
     }
   }
 
-  const columns = {};
+  const columns = {}, shipped = [];
   for (const b of boards) {
+    // Moments teammates marked on the board (ship, decision, demo): new ones are changes, ships are shipped.
+    for (const m of Array.isArray(b.moments) ? b.moments.slice(0, 50) : []) {
+      if (!m || typeof m !== 'object' || !text(m.label, 120)) continue;
+      const at = time(m.at), kind = MOMENT_KINDS[m.kind] ? m.kind : 'moment';
+      const line = `${MOMENT_KINDS[kind]}: ${text(m.label, 120)}${text(m.by, 60) ? ` · ${text(m.by, 60)}` : ''}`;
+      if (at > since) changes.push({ kind: 'moment', text: line, board: b.board, team: b.team, at: m.at });
+      if (kind === 'ship' && now - at <= WEEK_MS) shipped.push({ kind: 'ship', text: text(m.label, 120), by: text(m.by, 60), board: b.board, team: b.team, at: m.at });
+    }
     if (!Array.isArray(b.cards)) continue;
     for (const c of b.cards) {
       if (!c || typeof c.id !== 'string' || c.archived) continue;
       if (Object.keys(columns).length < MAX_COLUMNS) columns[c.id] = c.column;
       const name = `${text(c.key, 20)} ${text(c.title, 120)}`.trim();
+      if (c.column === 'done' && Number.isFinite(c.state_age_ms) && c.state_age_ms <= WEEK_MS) shipped.push({ kind: 'done', text: name, board: b.board, team: b.team, at: new Date(now - c.state_age_ms).toISOString() });
       const was = seen.columns?.[c.id];
       if (was && was !== c.column && COLUMN[c.column]) changes.push({ kind: 'moved', text: `${name} moved to ${COLUMN[c.column]}`, board: b.board, team: b.team });
       const mergedAt = Number.isFinite(c.pr?.merged_age_ms) ? now - c.pr.merged_age_ms : null;
-      if (mergedAt != null && mergedAt > since && c.pr.number) {
+      if (mergedAt != null && c.pr.number) {
         const by = text(c.pr.merged_by, 60);
-        changes.push({ kind: 'merged', text: `PR #${c.pr.number} merged${by ? ` by ${by}` : ''} · ${name}`, board: b.board, team: b.team, at: new Date(mergedAt).toISOString(), url: typeof c.pr.url === 'string' && c.pr.url.startsWith('https://github.com/') ? c.pr.url : null });
+        if (now - mergedAt <= WEEK_MS) shipped.push({ kind: 'merged', text: `PR #${c.pr.number} · ${name}`, by, board: b.board, team: b.team, at: new Date(mergedAt).toISOString() });
+        if (mergedAt > since) changes.push({ kind: 'merged', text: `PR #${c.pr.number} merged${by ? ` by ${by}` : ''} · ${name}`, board: b.board, team: b.team, at: new Date(mergedAt).toISOString(), url: typeof c.pr.url === 'string' && c.pr.url.startsWith('https://github.com/') ? c.pr.url : null });
       }
     }
   }
@@ -105,7 +116,8 @@ function compose({ teams = [], boards = [], mine = [], seen = {}, engine = null,
   changes.sort((a, b) => time(b.at) - time(a.at));
   overlaps.sort((a, b) => ({ high: 3, medium: 2, low: 1 }[b.level] || 0) - ({ high: 3, medium: 2, low: 1 }[a.level] || 0));
   const cap = (list) => ({ items: list.slice(0, MAX_ROWS), more: Math.max(0, list.length - MAX_ROWS) });
-  return { people: cap(people), changes: cap(changes), overlaps: cap(overlaps), columns, since };
+  shipped.sort((a, b) => time(b.at) - time(a.at));
+  return { people: cap(people), changes: cap(changes), overlaps: cap(overlaps), shipped: { items: shipped.slice(0, MAX_SHIPPED), more: Math.max(0, shipped.length - MAX_SHIPPED) }, columns, since };
 }
 
 function readSeen(file) {
@@ -152,7 +164,8 @@ function createTeamToday({ links, board, mine = () => [], fetch, file = null, no
     const boards = await Promise.all([...boardsBy.values()].slice(0, MAX_BOARDS).map(async ({ l, team }) => {
       let snap = null;
       try { snap = await board(l.route); } catch { snap = null; }
-      return { team, board: text(snap?.board?.name || l.route.board_name, 60) || 'Board', cards: snap && snap.ok !== false && Array.isArray(snap.cards) ? snap.cards : null };
+      const settings = snap?.board?.settings && typeof snap.board.settings === 'object' ? snap.board.settings : {};
+      return { team, board: text(snap?.board?.name || l.route.board_name, 60) || 'Board', cards: snap && snap.ok !== false && Array.isArray(snap.cards) ? snap.cards : null, moments: Array.isArray(settings.moments) ? settings.moments : [] };
     }));
     let engine = null;
     try { engine = await overlap(); } catch (e) { log(`[team-today] overlap engine unavailable: ${e.message}`); }
@@ -171,7 +184,7 @@ function createTeamToday({ links, board, mine = () => [], fetch, file = null, no
       state: 'ok', teams: [...new Set(all.map((l) => text(l.route.team_name, 60) || 'Team'))],
       sharing_off: [...quiet].filter((t) => !teams.some((x) => x.team === t)),
       unreachable: [...new Set(failed.map((x) => x.team))],
-      people: view.people, changes: view.changes, overlaps: view.overlaps, since: view.since,
+      people: view.people, changes: view.changes, overlaps: view.overlaps, shipped: view.shipped, since: view.since,
     };
   }
 
@@ -232,4 +245,4 @@ function fixtureSources(fx) {
   };
 }
 
-module.exports = { createTeamToday, compose, wire, fixtureSources, REFRESH_MS };
+module.exports = { createTeamToday, compose, wire, fixtureSources, REFRESH_MS, WEEK_MS };

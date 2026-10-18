@@ -44,6 +44,7 @@ contextBridge.exposeInMainWorld('sessionsApi', {
   mailTeammates: (key) => ipcRenderer.invoke('mail:teammates', String(key)),
   mailHandoff: (key, to) => ipcRenderer.invoke('mail:handoff', String(key), String(to)),
   pinAdd: (key, kind, label, value) => ipcRenderer.invoke('pins:add', String(key), String(kind), String(label || ''), String(value || '')),
+  momentMark: (key, kind, label, note) => ipcRenderer.invoke('moments:mark', String(key), String(kind), String(label || ''), String(note || '')),
   mailLook: (key, to, question) => ipcRenderer.invoke('mail:look', String(key), String(to), String(question || '')),
   mailAcknowledge: (id) => ipcRenderer.invoke('mail:acknowledge', String(id)),
   mailResolve: (id, report) => ipcRenderer.invoke('mail:resolve', String(id), String(report || '')),

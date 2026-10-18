@@ -48,6 +48,7 @@ function handoverRow(section, h) {
     }
     row.append(document.createTextNode(' · '), continueButton(h.key));
     if (window.sessionsApi.pinAdd) row.append(document.createTextNode(' · '), pinButton(h.key));
+    if (window.sessionsApi.momentMark) row.append(document.createTextNode(' · '), momentButton(h.key));
   }
   const tl = node('button', 'Timeline', 'link'); tl.type = 'button';
   tl.addEventListener('click', async () => { const ok = await window.sessionsApi.timeline(h.key).catch(() => false); if (!ok) { tl.textContent = 'Unavailable'; setTimeout(() => { tl.textContent = 'Timeline'; }, 1500); } });
@@ -95,6 +96,23 @@ function continueButton(key) {
 }
 
 // Pin to project: one link, command, convention or priority onto the team board this folder is linked to.
+function momentButton(key) {
+  const wrap = node('span'), out = node('span', '', 'continue-note'); out.setAttribute('role', 'status');
+  const open = node('button', 'Mark a moment', 'link'); open.type = 'button';
+  open.addEventListener('click', () => {
+    if (wrap.querySelector('.moment-pick')) return;
+    const box = node('span', '', 'moment-pick teammate-pick');
+    const kind = node('select'); kind.setAttribute('aria-label', 'What kind of moment');
+    for (const [k, l] of [['ship', 'Shipped'], ['decision', 'Decision'], ['demo', 'Demo'], ['moment', 'Moment']]) { const o = node('option', l); o.value = k; kind.append(o); }
+    const label = node('input'); label.type = 'text'; label.maxLength = 120; label.placeholder = 'What happened'; label.setAttribute('aria-label', 'Moment');
+    const note = node('input'); note.type = 'text'; note.maxLength = 500; note.placeholder = 'Note for the team (optional)'; note.setAttribute('aria-label', 'Moment note');
+    const go = button('Mark', async () => { go.disabled = true; const r = await window.sessionsApi.momentMark(key, kind.value, label.value, note.value).catch(() => null); out.textContent = ` ${r?.ok ? `Marked on the project board (${r.count} moments).` : r?.error || 'That did not work.'}`; if (r?.ok) box.remove(); else go.disabled = false; }); go.className = 'small primary';
+    const cancel = button('Cancel', () => { box.remove(); out.textContent = ''; }); cancel.className = 'small';
+    box.append(kind, label, note, go, cancel); wrap.append(box); label.focus();
+  });
+  wrap.append(open, out);
+  return wrap;
+}
 function pinButton(key) {
   const wrap = node('span'), out = node('span', '', 'continue-note'); out.setAttribute('role', 'status');
   const open = node('button', 'Pin to project', 'link'); open.type = 'button';

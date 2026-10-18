@@ -1651,6 +1651,8 @@ const sessionFollowups=require('./src/session-followups').createSessionFollowups
 if(IS_DEV_RUN&&!app.isPackaged&&process.env.CLAUDE_BUDDY_FAKE_TEAM_HUB){try{overviewTeamHub=require('./src/team-hub-fake').createFakeTeamHub(JSON.parse(fs.readFileSync(process.env.CLAUDE_BUDDY_FAKE_TEAM_HUB,'utf8')));}catch(e){console.warn('[overview] fake team hub not loaded:',e.message);}}
 const OverviewMain=require('./src/overview-main').createOverviewMain({
   buddy:()=>buddyWin,sessions:()=>aggregateState().sessions||[],
+  // "Share view" from Team sessions: the team's board link with the person's own sign-in (same poster as pins).
+  shareView:async({origin,teamId,name,values})=>{const links=devMockReady?(await getBuddy().teamMemoryLinks?.())??[]:[];const link=links.find(l=>l?.route?.hub===origin&&l.route.team_id===teamId&&l.route.board_id)||null;return require('./src/pinboard.js').createPinboard({resolve:async()=>null,fetch:(...a)=>net.fetch(...a),log:m=>console.log(m)}).view({link,name,values});}, // privacy-flow: pinboard
   work:()=>buddyWin?.overviewWork()??Promise.resolve({sources:[],capture:[],partial:true}),
   managed:()=>{const service=getTasks();service.start();return service.snapshot();},
   openManaged:async(_id,fresh)=>{if(!fresh())return false;openBuddy('tasks');return true;},
@@ -4322,6 +4324,27 @@ ipcMain.handle('answer-input', (e, id, optionId, more = {}) => {
   if (!SHOW_RULE_NUDGE) return { ok: true };
   let n = null;
   try { n = String(optionId) === 'allow' ? nudger.record(req, loadConfig().autoAnswer.rules) : null; } catch (err) { console.warn('[nudge]', err.message); }
+  if (!n || !n.nudge) return { ok: true };
+  nudger.offer(n.key);
+  return { ok: true, nudge: { key: n.key, count: n.count, tools: n.nudge.tools, command: n.nudge.command || null, path: n.nudge.path || null } };
+});
+// Quick decision cards on the Home Inbox: same gates and the same rebuilt
+// answer as answer-input, from the Home page only; no extras, no Enter path.
+ipcMain.handle('home:answer-input', (e, id, optionId) => {
+  if (!fromUtilityPage(e, 'home')) return { ok: false, error: 'not allowed' };
+  if (!loadConfig().askFromWidget) return { ok: false, error: 'off' };
+  if (typeof id !== 'string' || id.length > 100 || typeof optionId !== 'string' || optionId.length > 100) return { ok: false, error: 'invalid' };
+  const req = readRequests().find((r) => r.id === id);
+  if (!req) return { ok: false, error: 'no longer waiting (answered, timed out, or answer it in the terminal)' };
+  const answer = PendingInputs.answerFor(req, optionId);
+  if (!answer) return { ok: false, error: 'not an option for this request' };
+  const w = AnswerFile.writeAnswer(REQUESTS_DIR, req.id, answer.decision, { by: 'home', extra: answer.extra, key: keyFor(req.id), decisionHash: req.decisionHash });
+  console.log(`[answer] ${req.kind || 'permission'} ${req.tool} ${req.id}: ${optionId} → ${w.ok ? answer.decision : `not sent (${w.error})`} (home)`);
+  setTimeout(broadcastStatus, 250);
+  if (!w.ok) return { ok: false, error: w.error };
+  if (!SHOW_RULE_NUDGE) return { ok: true };
+  let n = null;
+  try { n = optionId === 'allow' ? nudger.record(req, loadConfig().autoAnswer.rules) : null; } catch (err) { console.warn('[nudge]', err.message); }
   if (!n || !n.nudge) return { ok: true };
   nudger.offer(n.key);
   return { ok: true, nudge: { key: n.key, count: n.count, tools: n.nudge.tools, command: n.nudge.command || null, path: n.nudge.path || null } };

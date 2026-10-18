@@ -12,12 +12,13 @@ const tick = async (n = 6) => { for (let i = 0; i < n; i++) await new Promise((r
 const NOW = Date.UTC(2026, 9, 18, 12);
 const state = { observed_at: NOW, banner: null, needs: { total: 1, items: [{ headline: 'Allow git push?', kind: 'permission', project: 'app', age: '2 min', late: false }] }, running: { quiet: 0, items: [] }, today: { spend: null, longestWaitMs: null }, team: null, morning: { count: 1, costUsd: 0, items: [{ title: 'Nightly tests', state: 'failed', summary: 'exit 1' }], asks: [], more: 0 } };
 
-function setup({ calls = [], storage = {} } = {}) {
+function setup({ calls = [], storage = {}, st = state, answerInput = null } = {}) {
   const dom = new JSDOM(html, { runScripts: 'outside-only', pretendToBeVisual: true, url: 'http://plexiform.test/home.html' });
   for (const [k, v] of Object.entries(storage)) dom.window.localStorage.setItem(k, v);
   const intervals = []; dom.window.setInterval = (fn) => { intervals.push(fn); return intervals.length; };
   dom.window.homeApi = {
-    state: async () => state, navigate: async (d) => { calls.push(['navigate', d]); return true; }, openCard: async () => true,
+    ...(answerInput ? { answerInput } : {}),
+    state: async () => st, navigate: async (d) => { calls.push(['navigate', d]); return true; }, openCard: async () => true,
     alerts: async () => ({ stuck: [{ handle: 'h-stuck', title: 'Stuck: app silent for 12 min', meta: 'Codex', canOpen: true, canHand: true }], limits: [], mail: [] }),
     alertAct: async (kind, op, handle) => { calls.push(['alert', kind, op, handle]); return { ok: true }; },
     teamToday: async () => ({ people: { items: [], more: 0 }, changes: { items: [{ kind: 'handoff', text: 'Ana handed "Fix login" to the team', repo: 'app', team: 'Core', at: new Date(NOW - 60_000).toISOString() }], more: 0 }, overlaps: { items: [], more: 0 } }),
@@ -71,5 +72,22 @@ test('Home tour: shown once for a new account, labelled, four steps, dismissal p
     assert.equal(next.textContent, 'Done'); next.click();
     assert.equal(s.doc.querySelector('.tour'), null);
     assert.equal(JSON.parse(s.dom.window.localStorage.getItem('plexiform.tour')).done.local > 0, true);
+  } finally { s.close(); }
+});
+
+test('Home Inbox: a wait with simple options is a quick decision card; a click answers by request id and option id', async () => {
+  const quick = { ...state, needs: { total: 1, items: [{ id: 'req-9', headline: 'Allow git push?', kind: 'permission', project: 'app', age: '2 min', late: false, options: [{ id: 'allow', label: 'Allow once' }, { id: 'deny', label: 'Deny' }] }] } };
+  const calls = [];
+  const s = setup({ calls, st: quick, answerInput: async (id, optionId) => { calls.push(['answer', id, optionId]); return { ok: true }; } });
+  try {
+    await tick(12);
+    const row = s.$('inbox').querySelector('li[data-kind="approval"]');
+    const quickButtons = [...row.querySelectorAll('button.quick-option')];
+    assert.deepEqual(quickButtons.map((b) => b.textContent), ['Allow once', 'Deny']);
+    assert.ok(quickButtons[0].classList.contains('primary'));
+    assert.equal([...row.querySelectorAll('button')].at(-1).textContent, 'Answer', 'fallback stays');
+    quickButtons[1].click(); await tick(8);
+    assert.deepEqual(s.calls.find((c) => c[0] === 'answer'), ['answer', 'req-9', 'deny']);
+    assert.equal(s.$('inbox-status').textContent, 'Answered.');
   } finally { s.close(); }
 });
