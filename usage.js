@@ -282,57 +282,10 @@ function spend(turns, { days = 7, now = Date.now() } = {}) {
 }
 
 // ── Model mix ──────────────────────────────────────────────────────────────
-// Read-only: which models your turns ran on and what they cost, today and
-// over the last 7 days, plus one recommendation. A "routine" turn is one that
-// wrote a short reply on little new context (a tool round-trip, a quick
-// answer): the kind a cheaper model usually handles as well.
+// A "routine" turn wrote a short reply on little new context; the estimate
+// itself lives in src/model-mix.js (required lazily: it requires this file).
 const ROUTINE_OUTPUT = 400;
 const ROUTINE_NEW_INPUT = 4000;
-const isRoutine = (t) => t.output <= ROUTINE_OUTPUT && t.input + t.cacheWrite <= ROUTINE_NEW_INPUT;
-const family = (k) => (k === 'fable-5' ? 'fable' : k);
-const startOfDay = (ms) => { const d = new Date(ms); d.setHours(0, 0, 0, 0); return d.getTime(); };
-
-function modelMix(turns, { now = Date.now() } = {}) {
-  const r2 = (n) => Math.round(n * 100) / 100;
-  const windowOf = (from) => {
-    const models = {};
-    let cost = 0, count = 0;
-    for (const t of turns) {
-      if (t.ts < from || t.ts > now) continue;
-      const c = costOf(t);
-      if (c == null) continue;
-      const m = models[family(t.modelKey)] || (models[family(t.modelKey)] = { turns: 0, cost: 0 });
-      m.turns += 1;
-      m.cost += c;
-      cost += c;
-      count += 1;
-    }
-    const list = Object.entries(models).map(([name, m]) => ({ name, turns: m.turns, cost: r2(m.cost), share: count ? m.turns / count : 0 })).sort((a, b) => b.cost - a.cost);
-    return { from, turns: count, cost: r2(cost), models: list };
-  };
-  const today = windowOf(startOfDay(now));
-  const weekFrom = startOfDay(now - 6 * DAY_MS);
-  const week = windowOf(weekFrom);
-  let opus = 0, routine = 0, low = 0, high = 0;
-  for (const t of turns) {
-    if (t.ts < weekFrom || t.ts > now || t.modelKey !== 'opus') continue;
-    opus += 1;
-    if (!isRoutine(t)) continue;
-    routine += 1;
-    const cost = costOf(t);
-    const sonnet = costOf(t, 'sonnet');
-    low += Math.max(0, cost - sonnet * SLACK);
-    high += Math.max(0, cost - sonnet);
-  }
-  const share = opus ? routine / opus : 0;
-  const money = (v) => (v >= 100 ? `$${Math.round(v)}` : `$${v.toFixed(2)}`);
-  const range = money(low) === money(high) ? money(high) : `${money(low)}–${money(high)}`;
-  const recommendation = !opus
-    ? 'No Opus turns in the last 7 days — nothing to suggest.'
-    : !routine
-      ? 'Your Opus turns in the last 7 days all did substantial work — Opus looks well spent.'
-      : `${Math.round(share * 100)}% of your Opus turns in the last 7 days looked routine (short reply, little new context); on Sonnet they would have cost about ${range} less.`;
-  return { today, week, opus: { turns: opus, routine, share, saving: { low: r2(low), high: r2(high) } }, recommendation };
-}
+const modelMix = (...a) => require('./src/model-mix.js').modelMix(...a);
 
 module.exports = { PRICES, SLACK, ROUTINE_OUTPUT, ROUTINE_NEW_INPUT, modelKey, costOf, listJsonl, parseFile, readTurns, summarise, spend, modelMix };

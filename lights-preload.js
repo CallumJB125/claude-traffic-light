@@ -28,6 +28,7 @@ contextBridge.exposeInMainWorld('lightsApi', {
   usageBundle: (q) => ipcRenderer.invoke('usage-bundle', q),
   workCost: () => ipcRenderer.invoke('work-cost'),
   exportWorkCost: () => ipcRenderer.invoke('work-cost-export'),
+  costRollup: (range) => ipcRenderer.invoke('cost-rollup', range),
   costGuard: { report: () => ipcRenderer.invoke('cost-guard:report'), set: (v) => ipcRenderer.invoke('cost-guard:set', v), resume: () => ipcRenderer.invoke('cost-guard:resume') },
   previewSound: (name) => ipcRenderer.invoke('preview-sound', name),
   chooseSoundFile: () => ipcRenderer.invoke('choose-sound-file'),
