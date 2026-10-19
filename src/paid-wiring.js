@@ -4,6 +4,7 @@
 //
 // Contract for a package: its module exports register(ctx), where ctx is
 //   {app, ipcMain, rootDir, entitlements, buddy: () => buddyWin|null,
+//    openTimeline: ({adapter, sessionId}) => bool (src/session-timeline-main.js openSession),
 //    fromPage: (e, pageId) => bool, onQuit: (fn) => void, log: (msg) => void,
 //    setups: the team Setups service (main-only readForPlan),
 //    keyFor, requestsDir, interactionHost: () => host|null,

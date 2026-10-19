@@ -428,7 +428,7 @@ test('register(ctx): every handler checks the memory page sender; nothing regist
   const reg = Search.register({ ipcMain, rootDir: r.root, entitlements: { has: () => true, limits: () => ({ 'memory.days': 7 }), plan: () => 'free' },
     home: r.home, fromPage: (e, id) => id === 'memory' && e.sender === page, onQuit: (fn) => quits.push(fn), electron: { clipboard: clip(), shell: { openPath: async () => '' } } });
   try {
-    assert.deepEqual([...handlers.keys()].sort(), ['memory:clear', 'memory:end', 'memory:facets', 'memory:hand', 'memory:handover', 'memory:reindex', 'memory:reply', 'memory:search', 'memory:settings', 'memory:status', 'memory:team-search']);
+    assert.deepEqual([...handlers.keys()].sort(), ['memory:clear', 'memory:end', 'memory:facets', 'memory:hand', 'memory:handover', 'memory:open-timeline', 'memory:reindex', 'memory:reply', 'memory:search', 'memory:settings', 'memory:status', 'memory:team-search']);
     const stranger = { sender: { id: 'other' } };
     for (const [ch, fn] of handlers) assert.deepEqual(await fn(stranger, {}), { ok: false, error: 'Not allowed.' }, ch);
     page = { isDestroyed: () => false, send() {} };

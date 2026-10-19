@@ -33,6 +33,26 @@ function toMatch(q) {
   return parts.join(' ');
 }
 
+// Filters typed into the box: project:<name> (repo or folder name), tool:<id>,
+// after:/before:<YYYY-MM-DD> (local days, before is exclusive). Unknown or
+// malformed ones stay as words. → {text, project, tool, from, to}
+function parseQuery(q) {
+  const out = { text: '', project: null, tool: null, from: null, to: null };
+  const words = [];
+  for (const w of String(q ?? '').slice(0, 500).split(/(\s+)/)) {
+    const m = /^(project|repo|tool|after|before):(\S{1,200})$/i.exec(w);
+    const key = m && m[1].toLowerCase();
+    const day = m && /^\d{4}-\d{2}-\d{2}$/.test(m[2]) ? new Date(`${m[2]}T00:00:00`).getTime() : NaN;
+    if (key === 'project' || key === 'repo') out.project = m[2];
+    else if (key === 'tool' && TOOLS.includes(m[2].toLowerCase())) out.tool = m[2].toLowerCase();
+    else if (key === 'after' && Number.isFinite(day)) out.from = day;
+    else if (key === 'before' && Number.isFinite(day)) out.to = day - 1;
+    else words.push(w);
+  }
+  out.text = words.join('').replace(/^\s+/, '');
+  return out;
+}
+
 const tilde = (p, home) => (typeof p === 'string' && home && (p === home || p.startsWith(`${home}/`)) ? `~${p.slice(home.length)}` : p);
 
 // The earliest time a search may reach: the plan's window, narrowed by the person's own date filter.
@@ -45,11 +65,14 @@ function windowOf({ days = Infinity, from = null, now = Date.now() } = {}) {
 function query(ix, { q = '', tool = null, repo = null, from = null, to = null, limit = 30 } = {}, { days = Infinity, now = Date.now(), home = null } = {}) {
   const began = process.hrtime.bigint();
   const { since, limited } = windowOf({ days, from, now });
-  const until = Number.isFinite(to) ? to : 8.64e15;
-  const where = ['t.ts >= ?', 't.ts <= ?'], args = [since, until];
-  if (TOOLS.includes(tool)) { where.push('s.tool = ?'); args.push(tool); }
+  const typed = parseQuery(q);
+  const until = Math.min(Number.isFinite(to) ? to : 8.64e15, Number.isFinite(typed.to) ? typed.to : 8.64e15);
+  const where = ['t.ts >= ?', 't.ts <= ?'], args = [Math.max(since, Number.isFinite(typed.from) ? typed.from : 0), until];
+  const useTool = TOOLS.includes(tool) ? tool : typed.tool;
+  if (useTool) { where.push('s.tool = ?'); args.push(useTool); }
   if (typeof repo === 'string' && repo) { where.push('s.repo = ?'); args.push(repo.slice(0, 200)); }
-  const match = toMatch(q);
+  if (typed.project) { where.push("(lower(s.repo) = lower(?) OR s.cwd LIKE ? ESCAPE '\\')"); args.push(typed.project, `%/${typed.project.replace(/[\\%_]/g, (c) => `\\${c}`)}`); }
+  const match = toMatch(typed.text);
   const n = Math.max(1, Math.min(100, Number(limit) || 30));
   let hits = [];
   if (match) {
@@ -236,6 +259,11 @@ function register(ctx = {}) {
     const sender = e.sender;
     return handoff.hand(k, to, (ev) => { if (!sender.isDestroyed()) sender.send('memory:handoff-event', ev); });
   });
+  // A hit opens that session's Timeline page (src/session-timeline-main.js openSession).
+  handle('memory:open-timeline', async (_e, k) => {
+    if (!keyOk(k) || typeof ctx.openTimeline !== 'function') return { ok: false, error: 'Unknown session.' };
+    return { ok: ctx.openTimeline({ adapter: adapterOf(k.tool), sessionId: k.sid }) === true };
+  });
   handle('memory:reply', async (_e, id, text) => handoff.reply(id, text));
   handle('memory:end', async (_e, id) => handoff.end(id));
 
@@ -243,4 +271,4 @@ function register(ctx = {}) {
   return { pass, client, handoff };
 }
 
-module.exports = { register, query, facets, toMatch, windowOf, createClient, TOOLS, MARK_OPEN, MARK_CLOSE };
+module.exports = { register, query, facets, toMatch, parseQuery, windowOf, createClient, TOOLS, MARK_OPEN, MARK_CLOSE };

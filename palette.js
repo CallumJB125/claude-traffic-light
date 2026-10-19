@@ -29,7 +29,7 @@
     mark();
   }
   function mark() { for (const [i, li] of [...list.children].entries()) if (li.classList.contains('palette-item')) li.setAttribute('aria-selected', String(i === active)); input.setAttribute('aria-activedescendant', items.length ? `palette-opt-${active}` : ''); list.children[active]?.scrollIntoView?.({ block: 'nearest' }); }
-  function choose(i) { const it = items[i]; if (!it) return; close(); window.OverviewDirectory?.openFromPalette?.(it); }
+  function choose(i) { const it = items[i]; if (!it) return; close(); if (it.kind === 'command') { if (it.id === 'search-sessions') void window.overviewApi?.openSearch?.(); return; } window.OverviewDirectory?.openFromPalette?.(it); }
   function open() { if (!host.hidden) { input.focus(); return; } opener = document.activeElement; host.hidden = false; input.value = ''; active = 0; render(); input.focus(); }
   function close() { if (host.hidden) return; host.hidden = true; if (opener && typeof opener.focus === 'function') opener.focus(); opener = null; }
   input.addEventListener('input', () => { active = 0; render(); });

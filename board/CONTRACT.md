@@ -1166,3 +1166,13 @@ Local Electron IPC only; no network, no new file. Every channel checks its sende
 | `widget:recent-projects` | the Widget settings page only | none | `[{name, colour}]`, at most 12: folder names of live sessions, then projects that already have a colour |
 
 New config keys, all written only through `widget-page:set` (checked by `cleanPatch`) or the widget menu: `widgetSnap` (`corners`\|`edges`\|`off`, default `corners`), `widgetSize` (`normal`\|`compact`\|`dot`, default `normal`), `widgetShortcut` (Electron accelerator with a modifier, default empty = off), `projectColours` (`{folderName: '#rrggbb'}`, at most 40), `quietUntil` (epoch ms, "Quiet for 30 minutes").
+
+## Desktop session search IPC (Wave 2 lane 1)
+
+Local Electron IPC only; nothing reaches a hub or the network. The index itself is `src/memory/*` (flow `memory-index` in PRIVACY.md); these channels only search it and navigate. Query words may carry filters parsed by `src/memory/search.js parseQuery`: `project:<repo or folder name>`, `tool:<claude|codex|hermes|gemini|cursor>`, `after:<YYYY-MM-DD>`, `before:<YYYY-MM-DD>` (local days, before exclusive); anything else stays a search word.
+
+| Channel | Args | Result | Notes |
+|---|---|---|---|
+| `memory:search` | `{q, tool, repo, from, to}` | `{ok, hits:[{tool, sid, title, repo, branch, cwd, ts, role, snippet, matches}], limited, since, tookMs, days}` | Search everything page only (`fromPage(e,'memory')`). `snippet` marks matches with U+0002/U+0003; untrusted text, rendered with `textContent` only |
+| `memory:open-timeline` | `{tool, sid}` | `{ok}` | Search everything page only. `tool` ∈ the memory tools, `sid` matches `^[\w.:-]{1,200}$`, else `{ok:false}`. Opens the Session timeline page for `{adapter, sessionId}` (`src/session-timeline-main.js openSession`); a muted project shows no timeline |
+| `search:open-page` | — | `boolean` | Sessions (Overview) page only, from the ⌘K command "Search past sessions"; opens Search everything. Any argument → `false` |

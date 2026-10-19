@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('memoryApi', {
   reindex: () => ipcRenderer.invoke('memory:reindex'),
   clear: () => ipcRenderer.invoke('memory:clear'),
   setExperimental: (on) => ipcRenderer.invoke('memory:settings', { experimental: on === true }),
+  openTimeline: (k) => ipcRenderer.invoke('memory:open-timeline', key(k)),
   openHandover: (k) => ipcRenderer.invoke('memory:handover', 'open', key(k)),
   copyHandover: (k) => ipcRenderer.invoke('memory:handover', 'copy', key(k)),
   hand: (k, to) => ipcRenderer.invoke('memory:hand', key(k), to === 'claude' ? 'claude' : 'codex'),

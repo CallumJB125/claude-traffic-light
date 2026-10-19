@@ -84,6 +84,7 @@
       const note = el('p', 'note');
       const panel = el('div');
       const row = el('div', 'row-actions');
+      if (h.tool === 'claude' || h.tool === 'codex') row.append(button('Open timeline', 'small', () => act(note, () => api.openTimeline(k))));
       row.append(button('Open handover', 'small', () => act(note, () => api.openHandover(k))));
       row.append(button('Copy handover', 'small', async () => { const r = await act(note, () => api.copyHandover(k)); if (r.ok) note.textContent = 'Copied as a prompt. Paste it into any AI tool.'; }));
       row.append(window.ContinueMenu.button({

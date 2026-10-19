@@ -4,7 +4,9 @@
 // (only entries the directory showed it) and what Enter does.
 (function (root) {
   const LIMIT = 12;
-  const KINDS = Object.freeze({ person: 'Teammate', project: 'Project', session: 'Session', card: 'Result card' });
+  const KINDS = Object.freeze({ person: 'Teammate', project: 'Project', session: 'Session', card: 'Result card', command: 'Command' });
+  // Fixed actions, always offered; the page maps each id to what it does.
+  const COMMANDS = Object.freeze([{ kind: 'command', id: 'search-sessions', title: 'Search past sessions', subtitle: 'Full-text search of your prompts and replies on this computer', keywords: ['find', 'history', 'search everything', 'what did I ask'] }]);
   const norm = s => String(s ?? '').toLocaleLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '');
   // Subsequence match with a bonus for prefix, word-start and contiguous runs.
   function score(hay, needle) {
@@ -27,7 +29,7 @@
       const s = Math.max(score(item.title, q), ...(Array.isArray(item.keywords) ? item.keywords.map(k => score(k, q) * 0.8) : []), score(item.subtitle || '', q) * 0.6);
       if (s > 0) rows.push({ item, s });
     }
-    const order = { session: 0, person: 1, project: 2, card: 3 };
+    const order = { session: 0, person: 1, project: 2, card: 3, command: 4 };
     rows.sort((a, b) => b.s - a.s || order[a.item.kind] - order[b.item.kind] || a.item.title.localeCompare(b.item.title));
     return rows.slice(0, limit).map(r => r.item);
   }
@@ -45,9 +47,10 @@
     for (const [name, n] of people) out.push({ kind: 'person', id: name, title: name, subtitle: `${n} shared session${n === 1 ? '' : 's'}`, keywords: [] });
     for (const [name, n] of projects) out.push({ kind: 'project', id: name, title: name, subtitle: `${n} session${n === 1 ? '' : 's'}`, keywords: [] });
     for (const c of Array.isArray(cards) ? cards : []) if (c && typeof c.handle === 'string' && typeof c.title === 'string') out.push({ kind: 'card', id: c.handle, title: c.title, subtitle: c.meta || 'Result card', keywords: [] });
+    for (const c of COMMANDS) out.push({ ...c, keywords: [...c.keywords] });
     return out;
   }
-  const api = { search, score, indexOf, KINDS, LIMIT };
+  const api = { search, score, indexOf, KINDS, COMMANDS, LIMIT };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.PlexiformPalette = Object.freeze(api);
 })(typeof globalThis !== 'undefined' ? globalThis : this);

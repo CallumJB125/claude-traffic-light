@@ -11,6 +11,7 @@ const messageText = text => {
 };
 contextBridge.exposeInMainWorld('overviewApi', {
   state: () => ipcRenderer.invoke('overview:state'),
+  openSearch: () => ipcRenderer.invoke('search:open-page'),
   onReady: callback => {
     if (typeof callback !== 'function') return () => {};
     const listener = (_event, ...args) => { if (args.length === 0) callback(); };
