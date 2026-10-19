@@ -32,6 +32,7 @@ contextBridge.exposeInMainWorld('trafficLight', {
   onAim: (cb) => ipcRenderer.on('aim', (e, a) => cb(a)),
   onEvent: (cb) => ipcRenderer.on('event', (e, name) => cb(name)),
   onSoundFlash: (cb) => ipcRenderer.on('sound-flash', () => cb()),
+  onLaneEvent: (cb) => ipcRenderer.on('widget:lane-event', (e, ev) => cb(ev)), onRings: (cb) => ipcRenderer.on('widget:rings', (e, r) => cb(r)), laneState: () => ipcRenderer.invoke('widget:lane-state'),
   // PendingInput (docs/waiting-inputs.md): answer by option id; open = jump to its terminal.
   answerInput: (id, optionId, more) => ipcRenderer.invoke('answer-input', id, optionId, more),
   openInput: (id) => ipcRenderer.invoke('open-input', id),
