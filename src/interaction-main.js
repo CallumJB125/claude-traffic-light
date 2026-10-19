@@ -15,7 +15,9 @@
 const crypto = require('node:crypto');
 const path = require('node:path');
 const { createInteractionHub } = require('./session-interaction');
-const { createLocalModels } = require('./local-models');
+const { createLocalModels, probeEndpoint } = require('./local-models');
+const { createDetector } = require('./local-model-detect');
+const { localModelCard } = require('./local-model-card');
 
 const CHANNELS = Object.freeze({
   capabilities: 'interaction:capabilities', list: 'interaction:list', state: 'interaction:state',
@@ -24,6 +26,7 @@ const CHANNELS = Object.freeze({
   proposalList: 'interaction:proposal-list', proposalApprove: 'interaction:proposal-approve', proposalRevoke: 'interaction:proposal-revoke',
   shareList: 'interaction:share-list', shareCreate: 'interaction:share-create', shareStop: 'interaction:share-stop',
   channelSetup: 'interaction:channel-setup', openAiTools: 'interaction:open-aitools',
+  localEndpoints: 'interaction:local-endpoints', localEndpointSave: 'interaction:local-endpoint-save', localEndpointRemove: 'interaction:local-endpoint-remove',
 });
 const MAX_FANOUT = 6;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -63,10 +66,14 @@ function explainCapabilities(caps, rows) {
 }
 
 // shares: () => the remote interaction host (src/remote-interaction.js) or null; team sharing goes through it.
-function createInteractionMain({ context, readContext = context, adapters: given, owned = ownedAdapters, workspace, currentBoard = () => null, accountScope = () => null, now, localModelsFile = null, localModels: givenLocalModels, compaction = null, shares = () => null, prepareChannel = null, tools = () => null, openAiTools = null }) {
+function createInteractionMain({ context, readContext = context, adapters: given, owned = ownedAdapters, workspace, currentBoard = () => null, accountScope = () => null, now, localModelsFile = null, localModels: givenLocalModels, compaction = null, shares = () => null, prepareChannel = null, tools = () => null, openAiTools = null, endpointStore = null, fetch: fetchImpl = globalThis.fetch }) { // privacy-flow: local-models
   const adapters = { ...(owned ? owned() : {}), ...given };
   // Local models register into `adapters` as they are found.
-  const localModels = givenLocalModels !== undefined ? givenLocalModels : createLocalModels({ adapters, configFile: localModelsFile });
+  // The fixed loopback ports go through the detector (short timeout, backoff); endpoints the person added are probed as typed.
+  const detector = givenLocalModels === undefined && typeof fetchImpl === 'function' ? createDetector({ fetch: fetchImpl }) : null;
+  const secretFor = endpointStore ? (id) => endpointStore.secretFor(id) : null;
+  const localModels = givenLocalModels !== undefined ? givenLocalModels : createLocalModels({ adapters, configFile: localModelsFile, secretFor, ...(detector ? { probe: (e, opts) => (e.source === 'discovered' ? detector.probe(e) : probeEndpoint(e, opts)) } : {}) });
+  const withCard = (o) => (o && typeof o === 'object' ? { ...o, card: localModelCard(o) } : o);
   const documents = new Map();
   const ownedScopes = new Map();
   const boardCurrent = (b) => b !== null && b === boardKey(currentBoard());
@@ -256,7 +263,24 @@ function createInteractionMain({ context, readContext = context, adapters: given
       });
       ipc.handle(CHANNELS.list, async (e) => { const a = await actorOf(e, false); return a ? hub.list(a) : null; });
       // Local models register into `adapters` as they are found (read-only loopback probes + configured endpoints).
-      ipc.handle(CHANNELS.localModels, async (e) => ((await actorOf(e, false)) && localModels ? localModels.refresh() : null));
+      ipc.handle(CHANNELS.localModels, async (e) => ((await actorOf(e, false)) && localModels ? withCard(await localModels.refresh()) : null));
+      // Custom endpoints (src/local-model-endpoints.js): read from the Overview, changed only from the foreground Overview.
+      ipc.handle(CHANNELS.localEndpoints, async (e) => ((await actorOf(e, false)) && endpointStore ? endpointStore.list() : null));
+      ipc.handle(CHANNELS.localEndpointSave, async (e, ...args) => {
+        if (!(await actorOf(e, true)) || !endpointStore) return denied;
+        let r;
+        try { r = endpointStore.save(one(args)); } catch { r = { ok: false, error: 'Could not save that endpoint.' }; }
+        if (r.ok) await localModels?.refresh({ force: true }).catch(() => null);
+        return r;
+      });
+      ipc.handle(CHANNELS.localEndpointRemove, async (e, ...args) => {
+        if (!(await actorOf(e, true)) || !endpointStore) return denied;
+        const req = one(args);
+        let r;
+        try { r = endpointStore.remove(object(req) ? req.id : null); } catch { r = { ok: false, error: 'Could not remove that endpoint.' }; }
+        if (r.ok) await localModels?.refresh({ force: true }).catch(() => null);
+        return r;
+      });
       ipc.handle(CHANNELS.state, async (e, ...args) => { const a = await actorOf(e, false); return a ? hub.state(one(args), a) : null; });
       ipc.handle(CHANNELS.shareList, async (e) => { const a = await actorOf(e, false); return a ? sharing[CHANNELS.shareList](null, a) : null; });
       for (const [name, method] of [['proposalList', 'proposalList'], ['proposalApprove', 'proposalApprove'], ['proposalRevoke', 'proposalRevoke']]) {
@@ -285,6 +309,8 @@ function createInteractionMain({ context, readContext = context, adapters: given
         });
       }
     },
+    // App start: one read-only check of the fixed loopback ports so Overview opens with an answer.
+    detectLocalModels() { return localModels ? localModels.refresh({ force: true }).then(withCard, () => null) : Promise.resolve(null); },
     close() { hub.stopAll(); documents.clear(); ownedScopes.clear(); },
   };
 }

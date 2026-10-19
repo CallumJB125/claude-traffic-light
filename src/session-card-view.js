@@ -45,10 +45,10 @@ function initials(name) {
 
 /**
  * session: a row as the widget receives it ({sessionId, cwd, signal, tool,
- * updatedAt, signalSince, startedAt, remote, deviceName, pinned?}).
+ * updatedAt, signalSince, startedAt, remote, deviceName, model?, pinned?}).
  * spend: {cost_usd, unpriced} for this session, or null when unknown.
  * teammate: {name} when the session is a teammate's (team row), else null.
- * → {id, title, state, spend, teammate, actions, waiting, idle, remote}
+ * → {id, title, state, model, spend, teammate, actions, waiting, idle, remote}
  */
 function sessionCard(session, { now = Date.now(), spend = null, teammate = null } = {}) {
   const s = session && typeof session === 'object' ? session : {};
@@ -68,6 +68,9 @@ function sessionCard(session, { now = Date.now(), spend = null, teammate = null 
   const runFor = started ? words(now - started) : !waiting && !idle && since ? words(now - since) : '';
   if (runFor && !(waiting && !started)) parts.push(`${started ? 'running' : 'on it'} for ${runFor}`);
   if (s.remote) parts.push(`on ${str(s.deviceName, 60) || 'another device'}`);
+  // The model the session runs on (a local model's name, or the provider's model when its hooks report one).
+  const model = str(s.model, 80);
+  if (model) parts.push(model);
   const state = parts.join(' · ');
   const cost = spend && Number.isFinite(spend.cost_usd) ? spend.cost_usd : null;
   const spendLine = cost == null ? '' : `${money(cost)} this session${spend.unpriced > 0 ? ` (+${spend.unpriced} unpriced)` : ''}`;
@@ -77,7 +80,7 @@ function sessionCard(session, { now = Date.now(), spend = null, teammate = null 
   if (!mate && waiting && !s.remote) actions.push('answer');
   if (!mate) actions.push(s.pinned ? 'unpin' : 'pin');
   const id = str(s.sessionId, 200) || null;
-  return { id, title: str(s.title, MAX) || titleOf(s), state, spend: spendLine, teammate: mate, actions, waiting, idle, remote: !!s.remote, pinned: !!s.pinned };
+  return { id, title: str(s.title, MAX) || titleOf(s), state, model: model || null, spend: spendLine, teammate: mate, actions, waiting, idle, remote: !!s.remote, pinned: !!s.pinned };
 }
 
 module.exports = { sessionCard, titleOf, words, initials, WAITING, IDLE };

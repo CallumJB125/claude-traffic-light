@@ -296,7 +296,7 @@ test('IPC: local-models channel needs the Overview frame and returns the registr
   main.register({ handle: (ch, fn) => handlers.set(ch, fn) });
   assert.equal(await handlers.get(CHANNELS.localModels)({ sender: {}, senderFrame: {} }), null);
   assert.equal(refreshed, 0);
-  assert.deepEqual(await handlers.get(CHANNELS.localModels)({ sender: contents, senderFrame: contents.mainFrame }), { endpoints: [], models: [] });
+  assert.deepEqual(await handlers.get(CHANNELS.localModels)({ sender: contents, senderFrame: contents.mainFrame }), { endpoints: [], models: [], card: { headline: 'No local model server is running. Start Ollama or LM Studio to use a model on this computer.', backends: [], picker: [], defaultProvider: null } });
   main.close();
 });
 
