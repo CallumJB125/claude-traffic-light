@@ -7,6 +7,8 @@ import { createApi, createController, createE2E } from './phone-core.js';
 import { createVault, idbKv } from './phone-vault.js';
 import { phoneView } from './phone-render.js';
 import { createApprovals, approvalsView } from './phone-approvals.js';
+import { notifyNewRequests, parseFocus } from './phone-notify.js';
+import { speechSupported, dictateInto } from './phone-voice.js';
 
 const root = document.getElementById('app');
 const guessName = () => {
@@ -21,7 +23,7 @@ const vault = createVault({ kv: idbKv() });
 const e2e = createE2E({ store: vault });
 const api = createApi({ fetch: (...a) => fetch(...a), uuid: () => crypto.randomUUID(), e2e, origin: HUB_ORIGIN }); // privacy-flow: phone-control
 const ctl = createController({ api, vault, online: () => navigator.onLine, deviceName: guessName() });
-const ui = { confirmClose: false, browserSignin: null, browserSigningIn: false };
+const ui = { confirmClose: false, browserSignin: null, browserSigningIn: false, voice: speechSupported(globalThis), listening: false };
 
 // Phone approvals (phone-approvals.js). A pairing link's fragment is read once
 // and removed from the address bar; it never reaches a server.
@@ -37,16 +39,34 @@ const pushAdapter = 'PushManager' in globalThis ? {
 const appr = createApprovals({ api, e2e, vault, credentials: navigator.credentials, push: pushAdapter, origin: location.origin, hubOrigin: HUB_ORIGIN, rpId: location.hostname, uuid: () => crypto.randomUUID(), deviceName: guessName() });
 const signInResult = new URLSearchParams(location.hash.slice(1)).get('signin');
 let pendingPair = location.hash.startsWith('#pair=') ? location.hash.slice(1) : '';
-let wantApprovals = !!pendingPair || location.hash === '#approvals';
+let pendingFocus = parseFocus(location.hash);
+let wantApprovals = !!pendingPair || location.hash === '#approvals' || !!pendingFocus;
 if (location.hash) history.replaceState(null, '', '/phone/');
 const signedIn = () => !['boot', 'signin'].includes(ctl.state.view);
-function openApprovals() { wantApprovals = false; const text = pendingPair; pendingPair = ''; appr.open(text); }
+function openApprovals(focus = pendingFocus) { wantApprovals = false; ui.scrolledFocus = false; const text = pendingPair; pendingPair = ''; pendingFocus = null; appr.open(text, focus); }
+// While the app is open but in the background, name each newly waiting request
+// in its own notification (tool + computer only; Review just opens it here).
+const notified = new Set();
+let lastItems = null;
+appr.subscribe((st) => {
+  if (st.items === lastItems || !st.items) return;
+  lastItems = st.items;
+  if (document.visibilityState === 'visible' || globalThis.Notification?.permission !== 'granted') {
+    for (const x of st.items) notified.add(`${x.host}|${x.notice.requestId}`);
+    return;
+  }
+  swReg.then((reg) => reg && notifyNewRequests(reg, st.items, notified)).catch(() => {});
+});
 appr.subscribe(() => paint());
 const DEPTH = { sessions: 1, session: 2 };
 let lastView = null;
 
 function paint() {
-  if (appr.state.open && signedIn()) { render(root, approvalsView(appr.state, Date.now())); return; }
+  if (appr.state.open && signedIn()) {
+    render(root, approvalsView(appr.state, Date.now()));
+    if (appr.state.focus && !ui.scrolledFocus) { const el = root.querySelector('[data-focus]'); if (el) { ui.scrolledFocus = true; el.scrollIntoView?.({ block: 'center' }); } }
+    return;
+  }
   if (wantApprovals && signedIn()) { openApprovals(); return; }
   const st = ctl.state;
   if (st.view !== lastView) {
@@ -81,7 +101,7 @@ root.addEventListener('click', async (e) => {
       finally { ui.browserSigningIn = false; paint(); }
       return;
     }
-    case 'open-approvals': return openApprovals();
+    case 'open-approvals': return openApprovals(null);
     case 'approvals-back': appr.close(); lastView = null; return paint();
     case 'approvals-refresh': return appr.load();
     case 'approve': case 'deny': {
@@ -90,6 +110,11 @@ root.addEventListener('click', async (e) => {
     }
     case 'push-on': return appr.enablePush();
     case 'task-voice': return listen();
+    case 'voice-reply': {
+      const rec = dictateInto(document.getElementById('message'), { onEnd: () => { ui.listening = false; paint(); } });
+      if (rec) { ui.listening = true; paint(); }
+      return undefined;
+    }
     case 'dismiss': return ctl.dismissNotice();
     case 'restart-signin': return ctl.restartSignIn();
     case 'signout': return ctl.signOut();
@@ -159,7 +184,15 @@ function listen() {
 }
 
 // A notification tap while the app is open.
-navigator.serviceWorker?.addEventListener?.('message', (e) => { if (e.data?.type === 'plexiform-open-approvals') { if (signedIn()) openApprovals(); else wantApprovals = true; } });
+// Only ever opens the screen (focused on a request) or refreshes the list: no message decides anything.
+navigator.serviceWorker?.addEventListener?.('message', (e) => {
+  if (e.data?.type === 'plexiform-refresh-approvals') { if (signedIn() && document.visibilityState !== 'visible') appr.load(); return; }
+  if (e.data?.type !== 'plexiform-open-approvals') return;
+  const f = e.data.focus;
+  const focus = f && typeof f.host === 'string' && typeof f.requestId === 'string' ? { host: f.host, requestId: f.requestId } : null;
+  ui.scrolledFocus = false;
+  if (signedIn()) openApprovals(focus); else { pendingFocus = focus; wantApprovals = true; }
+});
 async function bootPhone() {
   if (signInResult) {
     try { pendingPair = await finishBrowserSignIn({ id: signInResult, api, storage: sessionStorage, vault }) || ''; wantApprovals = !!pendingPair; }

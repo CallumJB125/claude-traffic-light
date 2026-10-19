@@ -174,9 +174,11 @@ function session(st, now, ui) {
         h('label', { for: 'message', class: 'sr-only' }, v.canSteer ? 'Steer the running turn' : 'Message'),
         h('textarea', { id: 'message', name: 'text', rows: '3', maxlength: String(MAX_TEXT), placeholder: v.canSteer ? 'Steer the running turn…' : 'Message…', disabled: !v.canSend || null }),
         h('div', { class: 'actions' },
+          ui.voice ? btn('voice-reply', ui.listening ? 'Listening…' : 'Dictate', { kind: 'quiet', disabled: !v.canSend || !!ui.listening, extra: { 'aria-label': 'Dictate a reply with your voice' } }) : null,
           h('button', { type: 'submit', class: 'btn primary', disabled: !v.canSend || null }, sess.pending ? 'Sending…' : v.canSteer ? 'Steer' : 'Send'),
           v.working ? btn('interrupt', 'Interrupt', { disabled: !v.canInterrupt }) : null,
-          share ? null : btn('close', ui.confirmClose ? 'Tap again to close' : 'Close session', { kind: 'danger quiet', disabled: !v.live || !!sess.pending }))));
+          share ? null : btn('close', ui.confirmClose ? 'Tap again to close' : 'Close session', { kind: 'danger quiet', disabled: !v.live || !!sess.pending })),
+        ui.voice ? h('p', { class: 'muted small' }, 'Dictate uses your phone browser’s own speech recognition, which may send the audio to Apple or Google. Plexiform never gets the audio, and nothing is sent until you press Send.') : null));
 }
 
 export function phoneView(st, now, ui = { confirmClose: false }) {

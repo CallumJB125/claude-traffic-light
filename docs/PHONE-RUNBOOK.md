@@ -78,6 +78,25 @@ to type on the computer, fresh non-extractable signing key per pairing,
 platform passkey (`userVerification: 'required'`), sealed list/decide/task,
 push subscribe, voice via the browser's own `SpeechRecognition`.
 
+**Phone notifications and voice reply** (`board/web/phone-sw.js`, `board/web/js/phone-notify.js`, `board/web/js/phone-voice.js`, `board/web/js/phone-app.js`):
+
+- The hub's push stays empty. The service worker shows the fixed notice with
+  one action, Review, and tells an open app to refresh. An app that is open in
+  the background fetches what is waiting end to end, verifies it, and shows a
+  notification per new request built on the phone (`buildRequestNotification`):
+  tool name and computer name only, clipped to 120 characters, control and
+  bidi characters removed; never the command, path or folder.
+- Notification actions NEVER approve or deny. Lock-screen approve without the
+  passkey is deliberately not built. Review (or a plain tap, or any unknown
+  action) only opens `/phone/#approvals=<host>|<requestId>`, which lists that
+  request first and highlights it; Allow there runs the unchanged
+  `decide()` flow (signed decision, UV passkey assertion, sealed channel).
+- Session reply view: a Dictate button (shown only when the browser has
+  `SpeechRecognition`/`webkitSpeechRecognition`) appends the dictated words to
+  the reply box; the person still presses Send. The audio goes only to the
+  browser's own speech service (disclosed under the box and in PRIVACY.md,
+  flow `phone-voice-reply`).
+
 ## Owner-gated
 
 1. **Security review sign-off** for W2-A + W2-B before any release.
@@ -126,6 +145,18 @@ push subscribe, voice via the browser's own `SpeechRecognition`.
   of pairing could register a software key instead (and then approve without
   a biometric). The separate origin reduces hub-origin exposure but cannot prove hardware
   provenance. Requiring attestation needs an additional design and compatibility review.
+- Notifications have no answer buttons. Everything the phone receives as
+  "waiting" is a permission request (`approvals.list`), and the desktop has no
+  passkey-free phone path for answering other yes/no questions, so there is
+  nothing a button could safely answer. Approving from a notification without
+  the passkey is not allowed and not built.
+- Per-request notifications only appear while the app is alive in the
+  background (the service worker cannot decrypt anything); otherwise the phone
+  shows only the fixed "needs you" notice. iOS may suspend the app quickly, so
+  on iPhone expect mostly the fixed notice.
+- Dictation depends on the browser's speech service (Safari and Chrome send the
+  audio to Apple or Google); Firefox on Android has no speech recognition, so
+  the button is hidden there.
 
 ## 2026-10-14 implementation
 
