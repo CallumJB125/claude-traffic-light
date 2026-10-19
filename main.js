@@ -2368,6 +2368,7 @@ function createOnboardingWindow() {
   onboardingWin.once('ready-to-show', () => { onboardingWin?.show(); console.log('[onboarding] shown'); });
   onboardingWin.on('closed', () => {
     onboardingWin = null;
+    FirstRunTour.onboardingClosed();
     if (process.platform === 'darwin' && !buddyWin?.isOpen() && !lightsWin) app.dock.hide();
   });
   onboardingWin.loadFile('onboarding.html');
@@ -4487,6 +4488,7 @@ let strip = WidgetStrip.NONE;
 let applyingStrip = false;
 require('./src/widget-page.js').register({ utilityHandle, allowed: (e) => fromUtilityPage(e, 'widget'), loadConfig, commitConfig, widget: () => win, strip: () => strip, ensureWidget: () => { if (!win) createWindow(); applyWidgetVisibility(); }, resizeBy, busy: () => roamState.busy || !!gardenRun, stopGlide, saveBounds, screen, limits: { minWidth: MIN_WIDTH, maxWidth: MAX_WIDTH }, openPage: (id) => { openBuddy(id); if (id === 'settings') buddyWin?.sendToPage('settings', 'show-section', 'widget'); }, platform: process.platform });
 const WidgetPolish = require('./src/widget-polish-main.js').install({ ipcMain, globalShortcut, utilityHandle, config: loadConfig, commitConfig, widgetWindow: () => win, quiet: Quiet, widgetAllowed: (e) => widgetOnly(e), pageAllowed: (e) => fromUtilityPage(e, 'widget'), sessions: () => localSessions(aggregateState().sessions || []), strip: () => strip, saveBounds, stopGlide, screen, sizing: { aspect: WIDGET_ASPECT, minWidth: MIN_WIDTH }, log: console.log });
+const FirstRunTour = require('./src/first-run-tour-main.js').install({ ipcMain, config: loadConfig, saveConfig, demo: Demo, hasConnectedTool: () => AiTools.quick().some((t) => t.connected), windows: { widget: () => win, widgetShown: () => !!win && !win.isDestroyed() && win.isVisible(), lights: () => lightsWin, openLights: () => createLightsWindow(), openPage: (id) => openBuddy(id), sendToPage: (id, ch, p) => !!buddyWin?.sendToPage(id, ch, p) }, allowed: { widget: (e) => widgetOnly(e), lights: (e) => fromPage(e, lightsWin?.webContents), page: (e, id) => fromUtilityPage(e, id) }, log: console.log });
 let updateRowShown = false;
 ipcMain.on('update-row', (e, on) => {
   if (e.sender !== win?.webContents || !!on === updateRowShown) return;

@@ -80,3 +80,6 @@ contextBridge.exposeInMainWorld('userCharacters', {
   onChange: (cb) => ipcRenderer.on('characters:changed', () => cb()),
 });
 contextBridge.exposeInMainWorld('spritePacks', { list: () => ipcRenderer.invoke('widget:sprite-packs'), use: (name) => ipcRenderer.invoke('widget:use-sprite-pack', name), onChange: (cb) => ipcRenderer.on('sprite-pack:changed', () => cb()) });
+
+// First-run tour (src/first-run-tour-main.js): main pushes the step; the page answers Next / Skip / missing.
+contextBridge.exposeInMainWorld('tourApi', { onStep: (cb) => ipcRenderer.on('tour:step', (e, step) => cb(step)), action: (kind, id) => ipcRenderer.invoke('tour:action', String(kind), String(id)) });
