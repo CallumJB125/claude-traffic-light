@@ -1115,6 +1115,13 @@ export class Hub extends EventEmitter {
     return n;
   }
 
+  // A new comment on a card or a moment (team depth lane A): `card.comment` /
+  // `moment.comment` {board_id, card_id|moment_id, comment, mentions} to every
+  // browser on the board. Mentions are member ids, never names.
+  broadcastComment(boardId, key, payload) {
+    for (const b of this.browsers) if (b.boardId === boardId) b.send({ type: key, board_id: boardId, ...payload });
+  }
+
   broadcastRemove(boardId, cardId) {
     for (const b of this.browsers) if (b.boardId === boardId) b.send({ type: 'card.remove', board_id: boardId, card_id: cardId });
   }

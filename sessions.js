@@ -106,12 +106,26 @@ function momentButton(key) {
     for (const [k, l] of [['ship', 'Shipped'], ['decision', 'Decision'], ['demo', 'Demo'], ['moment', 'Moment']]) { const o = node('option', l); o.value = k; kind.append(o); }
     const label = node('input'); label.type = 'text'; label.maxLength = 120; label.placeholder = 'What happened'; label.setAttribute('aria-label', 'Moment');
     const note = node('input'); note.type = 'text'; note.maxLength = 500; note.placeholder = 'Note for the team (optional)'; note.setAttribute('aria-label', 'Moment note');
-    const go = button('Mark', async () => { go.disabled = true; const r = await window.sessionsApi.momentMark(key, kind.value, label.value, note.value).catch(() => null); out.textContent = ` ${r?.ok ? `Marked on the project board (${r.count} moments).` : r?.error || 'That did not work.'}`; if (r?.ok) box.remove(); else go.disabled = false; }); go.className = 'small primary';
+    const go = button('Mark', async () => { go.disabled = true; const r = await window.sessionsApi.momentMark(key, kind.value, label.value, note.value).catch(() => null); out.textContent = ` ${r?.ok ? `Marked on the project board (${r.count} moments).` : r?.error || 'That did not work.'}`; if (r?.ok) { box.remove(); if (r.moment_id && window.sessionsApi.commentAdd) wrap.append(momentCommentBox(key, r.moment_id, out)); } else go.disabled = false; }); go.className = 'small primary';
     const cancel = button('Cancel', () => { box.remove(); out.textContent = ''; }); cancel.className = 'small';
     box.append(kind, label, note, go, cancel); wrap.append(box); label.focus();
   });
   wrap.append(open, out);
   return wrap;
+}
+// The follow-up after a moment is marked: one comment on it (the hub turns @name into a mention for that teammate).
+function momentCommentBox(key, momentId, out) {
+  const box = node('span', '', 'moment-comment teammate-pick');
+  const text = node('input'); text.type = 'text'; text.maxLength = 500; text.placeholder = 'Add a comment (@name mentions a teammate)'; text.setAttribute('aria-label', 'Comment on the moment');
+  const go = button('Comment', async () => {
+    go.disabled = true;
+    const r = await window.sessionsApi.commentAdd(key, { moment_id: momentId }, text.value).catch(() => null);
+    out.textContent = ` ${r?.ok ? (r.mentions ? `Commented and mentioned ${r.mentions} teammate${r.mentions === 1 ? '' : 's'}.` : 'Commented on the moment.') : r?.error || 'That did not work.'}`;
+    if (r?.ok) box.remove(); else go.disabled = false;
+  }); go.className = 'small primary';
+  const skip = button('Skip', () => box.remove()); skip.className = 'small';
+  box.append(text, go, skip); text.focus();
+  return box;
 }
 function pinButton(key) {
   const wrap = node('span'), out = node('span', '', 'continue-note'); out.setAttribute('role', 'status');

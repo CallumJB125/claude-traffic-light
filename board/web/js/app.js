@@ -28,6 +28,7 @@ import { integrationsScreen, connectWindowTarget, takeInput } from './render-int
 import { createApiPanel } from './api-panel.js';
 import { saveSentrySettings } from './sentry-settings.js';
 import { slackChannelPatch } from './render-slack.js';
+import { pickerState, applyMention } from './comments.js';
 import { triggerActions } from './triggers-actions.js';
 import { teamScreen } from './render-team.js';
 import { emptyFold, pullJournal, windowMetrics, cardMetrics } from './metrics.js';
@@ -90,6 +91,9 @@ const state = {
   pinboardOpen: false,
   viewsOpen: false,
   momentsOpen: false,
+  momentOpen: new Set(), // moments whose comment thread is unfolded
+  momentThreads: new Map(), // moment id → {status, items}
+  mention: null, // the @ picker: {key, start, query, items}
   archived: null, // id → {view, rx} while showArchived
   // team.presence (D37b). `stale` from a socket drop until the next frame.
   presence: { members: [], loaded: false, stale: false },
@@ -462,6 +466,9 @@ function buildModel() {
     filtersActive: isFiltering(state.filters),
     viewsOpen: state.viewsOpen,
     momentsOpen: state.momentsOpen,
+    momentOpen: state.momentOpen,
+    momentThreads: state.momentThreads,
+    mention: state.mention,
     filterInfo: { total: filtered.total, shown: filtered.shown, options: filterOptions(entries, fctx), archived: state.archived?.size ?? null },
     labelColors,
     showArchived: state.showArchived,
@@ -747,7 +754,7 @@ async function switchBoard(id, { openCard = null, section = null } = {}) {
   if (!state.boards.some((b) => b.id === id)) return;
   socket?.close(); socket = null;
   state.board = null;
-  state.cards = new Map(); state.archived = null; state.members = new Map();
+  state.cards = new Map(); state.archived = null; state.members = new Map(); state.momentOpen = new Set(); state.momentThreads = new Map(); state.mention = null;
   state.cardsRev += 1;
   state.detail = null; state.dialog = null; state.selection = new Set();
   state.drag = null; state.kbd = null; state.quickAdd = null;
@@ -1051,6 +1058,17 @@ function onMessage(msg) {
       state.board = { ...state.board, settings: { ...(state.board.settings ?? {}), [key]: Array.isArray(msg[key]) ? msg[key] : [] } };
       break;
     }
+    case 'moment.comment': {
+      if (msg.board_id !== state.boardId) return;
+      const t = state.momentThreads.get(msg.moment_id);
+      if (t?.status === 'ready' && msg.comment && !t.items.some((c) => c.id === msg.comment.id)) state.momentThreads.set(msg.moment_id, { ...t, items: [...t.items, msg.comment] });
+      break;
+    }
+    case 'card.comment': {
+      const d = state.detail;
+      if (d?.cardId === msg.card_id && d.data && msg.comment && !(d.data.comments ?? []).some((c) => c.id === msg.comment.id)) d.data = { ...d.data, comments: [...(d.data.comments ?? []), msg.comment] };
+      break;
+    }
     case 'lease.tick': {
       const c = state.cards.get(msg.card_id);
       if (!c) return;
@@ -1188,6 +1206,47 @@ async function markMoment(moment, form) {
   state.board = { ...state.board, settings: { ...(state.board.settings ?? {}), moments: res.moments } };
   form?.reset?.();
   toast(`Marked “${moment.label}”.`);
+  update();
+}
+async function toggleMomentThread(id) {
+  if (!id) return;
+  if (state.momentOpen.has(id)) { state.momentOpen.delete(id); update(); return; }
+  state.momentOpen.add(id);
+  update();
+  if (state.momentThreads.get(id)?.status === 'ready') return;
+  state.momentThreads.set(id, { status: 'loading', items: [] });
+  const generation = boardGeneration;
+  try {
+    const res = await api.momentComments(state.boardId, id);
+    if (generation !== boardGeneration) return;
+    state.momentThreads.set(id, { status: 'ready', items: Array.isArray(res?.comments) ? res.comments : [] });
+  } catch (err) {
+    if (generation !== boardGeneration) return;
+    state.momentThreads.set(id, { status: 'error', items: [] });
+    if (err.code === 'UNAUTHENTICATED') boot();
+  }
+  update();
+}
+async function commentOnMoment(id, body, form) {
+  if (!id || !body) return;
+  const res = await withBusy(`moment:${id}`, () => api.momentComment(state.boardId, id, body));
+  if (!res?.comment) return;
+  const t = state.momentThreads.get(id) ?? { status: 'ready', items: [] };
+  if (!t.items.some((c) => c.id === res.comment.id)) state.momentThreads.set(id, { status: 'ready', items: [...t.items, res.comment] });
+  state.mention = null;
+  form?.reset?.();
+  update();
+}
+function pickMention(el) {
+  const key = el.dataset.mentionFor, m = state.mention;
+  const ta = key ? root.querySelector(`textarea[data-mentions="${CSS.escape(key)}"]`) : null;
+  if (!ta || !m || m.key !== key) { state.mention = null; update(); return; }
+  const caret = typeof ta.selectionStart === 'number' ? ta.selectionStart : ta.value.length;
+  const next = applyMention(ta.value, m.start, caret, { name: el.dataset.name });
+  ta.value = next.text;
+  try { ta.setSelectionRange(next.caret, next.caret); } catch { /* not focusable yet */ }
+  ta.focus();
+  state.mention = null;
   update();
 }
 async function removeMoment(id) {
@@ -1798,7 +1857,7 @@ async function submitDialogForm(form, submitter) {
     const body = String(fd.get('body') ?? '').trim();
     if (!body) return undefined;
     const res = await withBusy(`comment:${cardId}`, () => api.comment(cardId, body, fd.get('for_agent') === 'on'));
-    if (res) { form.reset(); refreshDetail(cardId); }
+    if (res) { form.reset(); state.mention = null; refreshDetail(cardId); }
     return undefined;
   }
   if (kind === 'devlogin') {
@@ -2240,6 +2299,8 @@ function onClick(e) {
     case 'view-apply': applyView(el.dataset.view); return;
     case 'view-remove': void removeView(el.dataset.view); return;
     case 'moment-remove': void removeMoment(el.dataset.moment); return;
+    case 'moment-comments': void toggleMomentThread(el.dataset.moment); return;
+    case 'mention-pick': pickMention(el); return;
     case 'archive': archiveCards([cardId]); return;
     case 'clear-idle': archiveCards((el.dataset.ids || '').split(',').filter(Boolean)); return;
     case 'restore': restoreCards([cardId]); return;
@@ -2314,6 +2375,11 @@ function onSubmit(e) {
     void saveView(String(fd.get('name') ?? '').trim(), form);
     return;
   }
+  if (form.dataset.form === 'moment-comment') {
+    const body = String(new FormData(form).get('body') ?? '').trim();
+    void commentOnMoment(form.dataset.moment, body, form);
+    return;
+  }
   if (form.dataset.form === 'moment-mark') {
     const fd = new FormData(form);
     void markMoment({ kind: String(fd.get('kind') ?? 'moment'), label: String(fd.get('label') ?? '').trim(), note: String(fd.get('note') ?? '').trim() }, form);
@@ -2333,6 +2399,11 @@ function onSubmit(e) {
 }
 
 function onInput(e) {
+  const ta = e.target.closest?.('textarea[data-mentions]');
+  if (ta) {
+    const next = pickerState(ta.dataset.mentions, ta.value, ta.selectionStart ?? ta.value.length, state.members);
+    if (next || state.mention) { state.mention = next; update(); }
+  }
   const form = e.target.closest?.('[data-form="task-packet"], [data-form="task-message"]');
   if (form && state.detail?.cardId === form.dataset.card) {
     const packet = form.dataset.form === 'task-packet';
@@ -2451,6 +2522,7 @@ function themeMenuKey(e) {
 }
 
 function onKeydown(e) {
+  if (state.mention && e.key === 'Escape' && e.target.closest?.('textarea[data-mentions]')) { state.mention = null; update(); return; }
   const hbar = e.target.closest?.('[data-history-bar]');
   if (hbar && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key) && !e.altKey && !e.ctrlKey && !e.metaKey) {
     const next = neighborBar(historyBars(), hbar.dataset.run, e.key);

@@ -1424,4 +1424,11 @@ dialog::backdrop { background: var(--backdrop); transition: opacity 200ms ease; 
 .shipped-week h4 { margin: 8px 0 2px; color: var(--muted); font-weight: 600; }
 .pin-ship .pin-label::before { content: '🚀 '; }
 .pin-moment-decision .pin-kind, .pin-moment-demo .pin-kind { color: var(--accent); }
+.pin-comments { grid-column: 2; justify-self: start; border: 0; background: none; color: var(--accent); cursor: pointer; font: inherit; font-size: var(--text-xs); padding: 0; }
+.moment-thread { grid-column: 1 / -1; padding: 4px 0 8px 12px; border-left: 2px solid var(--line); }
+.moment-thread .composer { margin-top: 8px; }
+.chip-mention { cursor: default; padding: 0 5px; min-height: 18px; color: var(--accent); background: color-mix(in oklab, var(--accent) 10%, transparent); border-color: color-mix(in oklab, var(--accent) 28%, transparent); font-weight: 600; }
+.mention-pick { list-style: none; margin: 2px 0 0; padding: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-sm); box-shadow: var(--shadow, 0 4px 16px rgba(0,0,0,.12)); max-width: 320px; }
+.mention-pick .mention-option { display: block; width: 100%; text-align: left; border: 0; background: none; color: var(--text); font: inherit; padding: 4px 8px; border-radius: var(--radius-sm); cursor: pointer; }
+.mention-pick [aria-selected="true"] .mention-option, .mention-pick .mention-option:hover, .mention-pick .mention-option:focus-visible { background: color-mix(in oklab, var(--accent) 12%, transparent); }
 @media (max-width: 720px) { .pin { grid-template-columns: 1fr auto; } .pin-kind, .pin-value, .pin-by { grid-column: 1; } .pin-remove { grid-column: 2; grid-row: 1; } .pin-form { grid-template-columns: 1fr 1fr; } }
