@@ -1228,3 +1228,11 @@ Local Electron IPC only; nothing reaches a hub. The one outbound flow is `voice-
 | `tasks:voice-draft` | Tasks page → main (`invoke`), the Tasks page only (`tasksSenderOk`) | none → `string \| null` | Returns the confirmed words once and clears them; the page fills the New task composer. The task is still created only by `tasks:create` after the user picks a folder and presses Start task |
 | `pointer:play` | main → pointer overlay (`pointer-overlay-preload.js`) | `{reduced, ms, from:{x,y}\|null, points:[{x, y, label ≤40}] ≤3}` in the display's own coordinates | One transparent, frameless, `focusable:false`, click-through (`setIgnoreMouseEvents(true)`) window per display with a point; main destroys every window by 6 s. The page sends nothing back |
 | `voice-status` (extended) | Preferences | none | adds `preset: 'Control+Alt+Space'` and `screenAccess` (`granted`\|`denied`\|`not-determined`\|`restricted`\|`unsupported`) |
+
+## Desktop first-run setup: persona and simple mode (`main.js`, `src/simple-mode.js`)
+
+Local Electron IPC only; no network, no new file, no new privacy flow. The answer is saved in `config.json` as `persona` and `simpleMode`; Preferences → General → Simple mode changes `simpleMode` through the existing `save-config`. `home:state` gains `simple` (boolean) and `buddy:pages` drops the Team and Integrations pages while simple mode is on.
+
+| Channel | Sender | Request | Response |
+|---|---|---|---|
+| `onboarding:persona` | the first-run setup window only | `id`: `'simple'` (Just me, building an app) \| `'developer'` (Developer / team); exactly one argument | `{persona, simple}` after saving; `null` from any other sender or for any other value |

@@ -8,14 +8,26 @@
   else root.PlexiformRuleTemplates = factory();
 })(typeof self !== 'undefined' ? self : this, function () {
   const WORKING = ['prompt-submit', 'tool-use', 'tool-done', 'subagent-start', 'subagent-done'];
+  // `wish: true` templates are phrased as things a person wants; simple mode
+  // shows them as one-click buttons above the rule editor.
   const TEMPLATES = Object.freeze([
+    {
+      id: 'chime-done', wish: true, name: 'Chime when it\u2019s done',
+      description: 'Plays the Glass sound each time Claude finishes and hands back to you.',
+      rule: { name: 'Chime when done', when: { signal: ['stop'] }, then: { sound: 'Glass' } },
+    },
+    {
+      id: 'ping-phone', wish: true, name: 'Ping my phone when Claude needs me',
+      description: 'A question or permission request: a notification on your phone (and this Mac until a phone is paired).',
+      rule: { name: 'Ping me when needed', when: { signal: ['permission-ask'] }, then: { notify: 'both' } },
+    },
     {
       id: 'stuck', name: 'Tell me when a session is stuck',
       description: 'No progress from a working session for 15 minutes: dizzy eyes and a desktop notification.',
       rule: { name: 'Session looks stuck', when: { signal: WORKING, forMinutes: 15 }, then: { eyes: 'dizzy', pose: 'facepalm', notify: 'desktop' } },
     },
     {
-      id: 'celebrate', name: 'Celebrate when a task finishes',
+      id: 'celebrate', wish: true, name: 'Celebrate when a task finishes',
       description: 'Confetti, a party pose and the Glass sound each time Claude finishes.',
       rule: { name: 'Celebrate finished tasks', when: { signal: ['stop'] }, then: { pose: 'party', screenFx: 'confetti', sound: 'Glass', celebrate: true } },
     },
@@ -40,7 +52,7 @@
       rule: { name: 'CI passed party', when: { signal: ['ci-passed', 'deploy-finished'] }, then: { pose: 'party', eyes: '#2fae3e', effect: 'fireworks' } },
     },
     {
-      id: 'nap', name: 'Dim when nothing is running',
+      id: 'nap', wish: true, name: 'Dim when nothing is running',
       description: 'With no sessions open, Claude sleeps under the stars.',
       rule: { name: 'Nap when idle', when: { signal: ['idle'] }, then: { pose: 'sleep', eyes: 'sleepy', effect: 'stars' } },
     },
@@ -59,6 +71,7 @@
   function list() {
     return TEMPLATES.map((t) => ({ id: t.id, name: t.name, description: t.description }));
   }
+  const wishes = () => TEMPLATES.filter((t) => t.wish).map((t) => ({ id: t.id, name: t.name, description: t.description }));
   // A new rule from a template: a deep copy, enabled, unlocked, with the id
   // makeId() gives it. null for an unknown template.
   function instantiate(id, makeId) {
@@ -75,5 +88,5 @@
     out.splice(at < 0 ? out.length : at, 0, rule);
     return out;
   }
-  return { TEMPLATES, list, instantiate, insert };
+  return { TEMPLATES, list, wishes, instantiate, insert };
 });

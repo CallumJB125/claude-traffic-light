@@ -75,7 +75,7 @@ function install({ ipcMain, config, saveConfig, windows, allowed, demo, hasConne
     if (s.status !== 'running' || Tour.STEPS[s.step].id !== id) return { ok: false };
     let next;
     if (kind === 'skip') next = Tour.skip(s, now());
-    else if (kind === 'next' && s.step === Tour.STEPS.length - 1) { next = Tour.finish(s, now()); if (id === 'team') windows.openPage('team'); }
+    else if (kind === 'next' && s.step === Tour.STEPS.length - 1) next = Tour.finish(s, now());
     else next = Tour.advance(s, { missing: missingWindow, now: now() });
     write(next);
     show();

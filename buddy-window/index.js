@@ -124,7 +124,7 @@ async function probeHub(origin, partition) {
   });
 }
 
-function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onClosed = () => {}, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged, devAccountsHub = null, captureEnabled = true, onCaptureChange = () => {}, onOverviewRetired = () => {}, isConstrained = () => false, handoverWriter = () => null, spendFor = () => null, openTimeline = () => false, continueIn = null, prFor = () => null } = {}) {
+function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onClosed = () => {}, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged, devAccountsHub = null, captureEnabled = true, onCaptureChange = () => {}, onOverviewRetired = () => {}, isConstrained = () => false, handoverWriter = () => null, spendFor = () => null, openTimeline = () => false, continueIn = null, prFor = () => null, simpleMode = () => false } = {}) {
   // The dev-only mock accounts hub runs on loopback; that one exact origin is
   // the only non-https hub ever accepted.
   const allowOrigins = devAccountsHub && isDev ? [devAccountsHub] : [];
@@ -1046,7 +1046,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   ipcMain.on('optimiser:link', (e, id) => { const url = Object.hasOwn(OptimiserTools.LINKS, id) ? OptimiserTools.LINKS[id] : null; if (fromOptimiser(e) && url) shell.openExternal(url); }); // privacy-flow: burst-dashboard-links
   ipcMain.on('optimiser:open-page', (e, id) => { if (fromOptimiser(e) && OptimiserTools.PAGES.includes(id) && pageById(id)) select(id); });
   ipcMain.on('buddy:optimiser-section', (e, id) => { if (fromSidebar(e) && typeof id === 'string') optimiser.section(id); });
-  ipcMain.handle('buddy:pages', (e) => (fromSidebar(e) ? { pages: PAGES, groups: GROUPS, sections: sectionsFor(), footer: FOOTER, brand: { name: BRAND.NAME, hubText: BRAND.HUB_TEXT } } : null));
+  ipcMain.handle('buddy:pages', (e) => (fromSidebar(e) ? { pages: PAGES, groups: GROUPS, sections: require('../src/simple-mode.js').sidebarSections(sectionsFor(), simpleMode() === true), footer: FOOTER, brand: { name: BRAND.NAME, hubText: BRAND.HUB_TEXT } } : null));
   for (const [op, fn] of Object.entries(flow.ACCT)) {
     ipcMain.handle(`buddy:acct:${op}`, async (e, ...args) => {
       if (!fromAccount(e)) return { ok: false, error: 'Not allowed.' };

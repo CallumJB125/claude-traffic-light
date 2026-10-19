@@ -49,6 +49,8 @@ test('applying a template inserts a new rule under the locked ones and never ove
 
 test('describeRule: one plain sentence for every template', () => {
   const want = {
+    'chime-done': 'When Claude finishes a task, play the Glass sound.',
+    'ping-phone': 'When Claude asks permission, notify you on your desktop and phone.',
     stuck: 'When you send a prompt, Claude uses a tool, a tool finishes, a subagent starts or a subagent finishes, and it stays that way for over 15 minutes, show the facepalm pose, give Claude dizzy eyes and send a desktop notification.',
     celebrate: 'When Claude finishes a task, show the party pose, add a confetti screen effect, play the Glass sound and burst confetti.',
     'ci-banner': 'When CI failed on your branch, show the banner pose reading "CI FAILED", recolour the eyes and send a desktop notification.',

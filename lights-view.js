@@ -584,7 +584,28 @@
       setDirty(true);
       select(r.id);
     });
+    // Simple mode's wishes: the same templates, one click each, then Save keeps them.
+    $('wish-list').replaceChildren(...T.wishes().map((t) => {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'btn'; b.id = `wish-${t.id}`;
+      const name = document.createElement('span'); name.textContent = t.name;
+      const why = document.createElement('small'); why.textContent = t.description;
+      b.append(name, why);
+      b.addEventListener('click', () => {
+        const r = R.normalizeRule(T.instantiate(t.id, R.uid));
+        rules = T.insert(rules, r);
+        setDirty(true);
+        select(r.id);
+        $('wish-status').textContent = `Added \u201C${t.name}\u201D. Press Try on widget to see it, then Save to keep it.`;
+      });
+      return b;
+    }));
   }
+  $('customise-btn').addEventListener('click', () => {
+    const on = document.body.classList.toggle('customising');
+    $('customise-btn').setAttribute('aria-expanded', String(on));
+    $('customise-btn').textContent = on ? 'Hide the details' : 'Customise this rule\u2026';
+  });
   $('celebrate').addEventListener('change', (e) => { const r = selected(); if (!r) return; r.then.celebrate = e.target.checked; setDirty(true); stageCelebrate(e.target.checked); });
   $('delete-btn').addEventListener('click', () => selectedId && remove(selectedId));
 
@@ -1752,6 +1773,7 @@
   const booted = (async () => {
     $('tool-list').innerHTML = R.TOOL_SUGGESTIONS.map((t) => `<option value="${t}">`).join('');
     config = await window.lightsApi.getConfig();
+    document.body.classList.toggle('simple', config.simpleMode === true);
     rules = config.rules.map(R.normalizeRule);
     templateId = config.template || null;
     const q = new URLSearchParams(location.search);

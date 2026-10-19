@@ -205,6 +205,15 @@
   .rule:hover { background: var(--panel-2); }
   .rule .words { grid-column: 3 / -1; font-size: 11px; line-height: 1.35; color: var(--faint); white-space: normal; }
   #rule-template { max-width: 100%; }
+  /* Simple mode (src/simple-mode.js): wishes first, the field editor behind Customise. */
+  #wishes { display: none; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  body.simple #wishes { display: block; }
+  body.simple:not(.customising) #editor { display: none; }
+  #wishes h3 { margin: 0 0 8px; font-size: 13px; font-weight: 600; }
+  .wish-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; margin-bottom: 8px; }
+  body.simple:not(.customising) #wishes { flex: 1; min-height: 0; overflow: auto; }
+  .wish-list button.btn { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: auto; height: auto; min-height: 0; padding: 8px 12px; text-align: left; white-space: normal; line-height: 1.3; }
+  .wish-list button small { color: var(--muted); font-weight: 400; }
   #rules footer { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
   #rule-words { margin-top: 6px; }
   .rule.selected { background: var(--accent-soft); }
@@ -1025,6 +1034,13 @@
             Try on widget
           </button>
         </div>
+      </div>
+
+      <div id="wishes" aria-labelledby="wishes-title">
+        <h3 id="wishes-title">What would you like Plexiform to do?</h3>
+        <div id="wish-list" class="wish-list"></div>
+        <p class="hint" id="wish-status" role="status" aria-live="polite"></p>
+        <button type="button" class="btn ghost" id="customise-btn" aria-expanded="false" aria-controls="editor">Customise this rule…</button>
       </div>
 
       <div id="editor">

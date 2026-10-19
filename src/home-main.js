@@ -107,7 +107,7 @@ function costs(report) {
 // Tasks finished while you were away (Plus). Null when there is nothing, or the plan lacks it.
 const morningReport = () => require('./morning-report.js').current();
 
-function register({ ipcMain, allowed, state, localSessions, tools, myDay, openPage, openAiTools, morning = morningReport, now = Date.now, collisions = null, costGuard = () => null, resumeCap = null, demo = null }) {
+function register({ ipcMain, allowed, state, localSessions, tools, myDay, openPage, openAiTools, morning = morningReport, now = Date.now, collisions = null, costGuard = () => null, resumeCap = null, demo = null, simple = () => false }) {
   let toolsMemo = { at: -Infinity, value: null };
   let costsMemo = { at: -Infinity, value: null };
   let teamMemo = { at: -Infinity, value: null, none: false };
@@ -138,6 +138,7 @@ function register({ ipcMain, allowed, state, localSessions, tools, myDay, openPa
       teamless: teamMemo.none,
       morning: part(() => morning()?.state() ?? null),
       costs: costsMemo.value,
+      simple: part(simple) === true,
     };
   }
   // The demo answers from its fixtures alone: no store is read while it is on.

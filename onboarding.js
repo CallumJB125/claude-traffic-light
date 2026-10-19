@@ -5,10 +5,14 @@ const api = window.onboardingApi;
 const $ = (id) => document.getElementById(id);
 const node = (tag, text, className) => { const el = document.createElement(tag); if (text) el.textContent = text; if (className) el.className = className; return el; };
 const button = (text, className) => { const b = node('button', text, className); b.type = 'button'; return b; };
+const Simple = window.PlexiformSimple;
+const Legend = window.PlexiformLegend;
 const NOT_SHOWING_MS = 20000;
 
 let view = null;
-let step = 'connect';
+let step = 'persona';
+let signalSince = 0;
+let diagnosisGoesTo = null;
 const unticked = new Set();   // tool ids the person unticked (or undid): never ticked again on a redraw
 const results = new Map();    // tool id -> error text from the last connect
 let notShowingTimer = null;
@@ -19,15 +23,15 @@ const list = (names) => (names.length > 1 ? `${names.slice(0, -1).join(', ')} or
 
 function show(next) {
   step = next;
-  for (const s of ['connect', 'signal', 'extras']) $(`step-${s}`).hidden = s !== next;
+  for (const s of ['persona', 'connect', 'signal', 'extras']) $(`step-${s}`).hidden = s !== next;
   clearTimeout(notShowingTimer);
   if (next === 'signal') {
     const names = view ? view.rows.filter((r) => r.connected).map((r) => r.label) : [];
     $('signal-title').textContent = `Start a session in ${list(names.length ? names : ['Claude Code', 'Codex'])}`;
-    $('not-showing').hidden = true;
-    notShowingTimer = setTimeout(() => { if (!view?.session) $('not-showing').hidden = false; }, NOT_SHOWING_MS);
+    signalSince = Date.now();
+    notShowingTimer = setTimeout(draw, NOT_SHOWING_MS);
   }
-  if (next === 'extras') $('team-box').hidden = !!view?.onTeam;
+  if (next === 'extras') $('team-box').hidden = !!view?.onTeam || !!view?.simple;
   draw();
   document.querySelector(`#step-${next} h1`)?.focus();
 }
@@ -73,7 +77,7 @@ function draw() {
   const found = view.rows.length > 0;
   $('connect-body').hidden = !found;
   const names = view.rows.map((r) => r.label);
-  $('connect-body').textContent = `We found ${names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names[0]} on this Mac. Plexiform only sees when a session starts, works, waits or finishes; it never reads your chats.`;
+  $('connect-body').textContent = `We found ${names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names[0]} on this Mac. We add a small note-taker to ${names.length > 1 ? 'each' : 'it'} so we know when it's busy or waiting for you. It never reads what you and your AI say. Undo with one click.`;
   $('tools').replaceChildren(...view.rows.map(toolRow));
   $('none').hidden = found;
   $('see-changes').parentElement.hidden = !found;
@@ -91,7 +95,14 @@ function draw() {
     $('seen-text').textContent = view.session ? view.session.text : '';
     $('signal-next').hidden = !view.session;
     $('skip-signal').hidden = !!view.session;
-    if (view.session) $('not-showing').hidden = true;
+    const d = Simple.diagnose({ rows: view.rows, missing: view.missing, session: view.session, waitedMs: Date.now() - signalSince });
+    $('not-showing').hidden = !d;
+    if (d) {
+      $('diagnosis-title').textContent = d.title;
+      $('diagnosis-body').textContent = d.body;
+      $('diagnosis-action').textContent = d.action.label;
+      diagnosisGoesTo = d.action.destination;
+    }
   }
 }
 
@@ -170,6 +181,28 @@ $('login-toggle').addEventListener('click', () => act(async () => {
   draw();
 }));
 
+async function choosePersona(id) {
+  const saved = await api.setPersona(id);
+  if (!saved) { $('persona-status').textContent = 'Could not save that. Try again.'; return; }
+  if (view) view.simple = saved.simple;
+  show('connect');
+}
+$('persona-simple').addEventListener('click', () => act(() => choosePersona('simple')));
+$('persona-developer').addEventListener('click', () => act(() => choosePersona('developer')));
+$('connect-back').addEventListener('click', () => show('persona'));
+$('test-prompt').value = Simple.TEST_PROMPT;
+$('legend-line').textContent = `That's your widget. ${Legend.SENTENCE}.`;
+$('copy-prompt').addEventListener('click', async () => {
+  let ok = false;
+  try { await navigator.clipboard.writeText(Simple.TEST_PROMPT); ok = true; } catch { /* selected below instead */ }
+  if (!ok) $('test-prompt').select?.();
+  $('copy-status').textContent = ok ? 'Copied. Now open Terminal.' : 'Press Command-C to copy it.';
+});
+$('diagnosis-action').addEventListener('click', () => {
+  const d = diagnosisGoesTo;
+  if (d === 'back') show('connect');
+  else if (d) go(d, $('signal-note'));
+});
 $('skip-connect').addEventListener('click', () => show('signal'));
 $('how-install').addEventListener('click', () => go('aitools', $('connect-status')));
 $('check-again').addEventListener('click', () => act(refresh));

@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('onboardingApi', {
   connect: (ids) => ipcRenderer.invoke('onboarding:connect', ids),
   undo: (id) => ipcRenderer.invoke('onboarding:undo', id),
   setLoginItem: (on) => ipcRenderer.invoke('onboarding:login-item', on),
+  setPersona: (id) => ipcRenderer.invoke('onboarding:persona', id),
   setDailyBudget: (dollars) => ipcRenderer.invoke('onboarding:budget', dollars),
   navigate: (destination) => ipcRenderer.invoke('onboarding:navigate', destination),
   onStatusChanged: (cb) => ipcRenderer.on('status-changed', () => cb()),
