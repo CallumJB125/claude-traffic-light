@@ -56,6 +56,11 @@ test('a busy spell ends in a recap of what happened, and the widget shows it', a
   // The window grows by the strip's 64 px (main.js AWAY_PX) to make room for
   // the card; shoot only once it has, not the squashed frame before.
   await expect.poll(() => widget.evaluate(() => innerHeight)).toBe(200 + 64);
+  // The notification lane (7d002cbe) announces each of the three for 8 s;
+  // shoot the recap once those rows have come and gone.
+  const lane = widget.locator('#event-lane .lane-row');
+  await expect(lane).toHaveCount(3, { timeout: 5000 });
+  await expect(lane).toHaveCount(0, { timeout: 15000 });
   await widget.waitForTimeout(600);
   await expect(widget).toHaveScreenshot('widget-away-recap.png', { threshold: 0.05 });
   await widget.evaluate(() => window.trafficLight.awayDismiss());
