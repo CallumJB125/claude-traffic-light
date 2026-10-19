@@ -227,7 +227,7 @@ test('burst:view: loose-ends, keep-awake, mods and finder answer {ok, view} from
 
   const old = await ipcHarness({ gateway: { '/api/state': { body: stateV019() }, '/api/upgrade-status': { body: {} }, '/api/settings': { body: {} } }, t });
   for (const name of ['loose-ends', 'keep-awake', 'mods', 'finder']) {
-    assert.deepEqual(await old.handlers['burst:view'](OPT, name), { ok: false, view: { kind: 'unsupported' }, unsupported: true, error: 'This Burst does not support that. Update Burst first.' }, name);
+    assert.deepEqual(await old.handlers['burst:view'](OPT, name), { ok: false, view: { kind: 'unsupported' }, unsupported: true, error: 'This Burst does not support that. Update Burst first.', reason: 'This Burst does not support that. Update Burst first.' }, name);
   }
 });
 
@@ -272,16 +272,16 @@ test('burst:action: each lane C kind shows its own consent sentence; cancel send
 
 test('burst:action: bad args never reach a dialog; 0.19 answers unsupported before the dialog; the widget is refused', async (t) => {
   const h = await ipcHarness({ gateway: routes020({ '/api/keep-awake': { body: {} } }), t });
-  assert.deepEqual(await h.handlers['burst:action'](OPT, { kind: 'keep-awake', args: { mode: 'on' } }), { ok: false, error: 'Bad request.' });
-  assert.deepEqual(await h.handlers['burst:action'](OPT, { kind: 'keep-awake', args: { mode: 'ac', idleMinutes: 9999 } }), { ok: false, error: 'Bad request.' });
-  assert.deepEqual(await h.handlers['burst:action'](OPT, { kind: 'finder-install', args: { keys: ['evil'] } }), { ok: false, error: 'Bad request.' });
-  assert.deepEqual(await h.handlers['burst:action'](OPT, { kind: 'install' }), { ok: false, error: 'Not available.' }, 'Terminal-script kinds stay settings-only');
+  assert.deepEqual(await h.handlers['burst:action'](OPT, { kind: 'keep-awake', args: { mode: 'on' } }), { ok: false, error: 'Bad request.', reason: 'Bad request.' });
+  assert.deepEqual(await h.handlers['burst:action'](OPT, { kind: 'keep-awake', args: { mode: 'ac', idleMinutes: 9999 } }), { ok: false, error: 'Bad request.', reason: 'Bad request.' });
+  assert.deepEqual(await h.handlers['burst:action'](OPT, { kind: 'finder-install', args: { keys: ['evil'] } }), { ok: false, error: 'Bad request.', reason: 'Bad request.' });
+  assert.deepEqual(await h.handlers['burst:action'](OPT, { kind: 'install' }), { ok: false, error: 'Not available.', reason: 'Not available.' }, 'Terminal-script kinds stay settings-only');
   assert.equal(await h.handlers['burst:action']({ from: 'widget' }, { kind: 'console-repair' }), null);
   assert.equal(h.dialogs.length, 0);
   assert.equal(posts(h.gw).length, 0);
 
   const old = await ipcHarness({ gateway: { '/api/state': { body: stateV019() }, '/api/upgrade-status': { body: {} }, '/api/keep-awake': { body: {} }, '/api/mod-action': { body: {} } }, console: { '/api/console': { body: consoleStatus('0.19.0') }, '/api/console/repair': { body: {} } }, t });
-  const unsupported = { ok: false, unsupported: true, error: 'This Burst does not support that. Update Burst first.' };
+  const unsupported = { ok: false, unsupported: true, error: 'This Burst does not support that. Update Burst first.', reason: 'This Burst does not support that. Update Burst first.' };
   assert.deepEqual(await old.handlers['burst:action'](OPT, { kind: 'keep-awake', args: { mode: 'off' } }), unsupported);
   assert.deepEqual(await old.handlers['burst:action'](OPT, { kind: 'mod-install' }), unsupported);
   assert.equal(old.dialogs.length, 0, 'gateway actions are refused before any dialog on 0.19');
