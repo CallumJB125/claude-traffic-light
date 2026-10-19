@@ -1649,8 +1649,11 @@ const followupScope=()=>{
 };
 const sessionFollowups=require('./src/session-followups').createSessionFollowups({file:path.join(app.getPath('userData'),'session-followups','outbox.bin'),storage:followupStorage,scope:followupScope,onChange:()=>OverviewMain.directoryChanged()});
 if(IS_DEV_RUN&&!app.isPackaged&&process.env.CLAUDE_BUDDY_FAKE_TEAM_HUB){try{overviewTeamHub=require('./src/team-hub-fake').createFakeTeamHub(JSON.parse(fs.readFileSync(process.env.CLAUDE_BUDDY_FAKE_TEAM_HUB,'utf8')));}catch(e){console.warn('[overview] fake team hub not loaded:',e.message);}}
+// Team depth lane C: board presence over the person's own hub sign-in (who views which card, who runs where); feeds Team sessions and beats this computer's open shared session.
+const PresenceLink=require('./src/team-presence-link').createPresenceLink({links:async()=>devMockReady?(await getBuddy().teamMemoryLinks?.())??[]:[],WebSocket:require('ws'),log:m=>console.log(m),onChange:()=>OverviewMain.directoryChanged()}); // privacy-flow: team-hub
 const OverviewMain=require('./src/overview-main').createOverviewMain({
   buddy:()=>buddyWin,sessions:()=>aggregateState().sessions||[],
+  presence:team=>{void PresenceLink.refresh();return PresenceLink.latest(team);},presenceView:r=>PresenceLink.view(r),
   // "Share view" from Team sessions: the team's board link with the person's own sign-in (same poster as pins).
   shareView:async({origin,teamId,name,values})=>{const links=devMockReady?(await getBuddy().teamMemoryLinks?.())??[]:[];const link=links.find(l=>l?.route?.hub===origin&&l.route.team_id===teamId&&l.route.board_id)||null;return require('./src/pinboard.js').createPinboard({resolve:async()=>null,fetch:(...a)=>net.fetch(...a),log:m=>console.log(m)}).view({link,name,values});}, // privacy-flow: pinboard
   work:()=>buddyWin?.overviewWork()??Promise.resolve({sources:[],capture:[],partial:true}),
@@ -1672,7 +1675,7 @@ overviewTeamHub?.onChange(()=>OverviewMain.directoryChanged());
 // A subscription reads the current identity immediately. Electron's secure
 // storage is unavailable before ready; do not construct the account vault then.
 app.whenReady().then(()=>{if(!overviewTeamHub)liveTeamHub.onChange(()=>OverviewMain.directoryChanged());});
-onQuit(app,()=>{liveTeamHub.close();OverviewMain.close();sessionFollowups.close();followupStorageProcess?.close();});
+onQuit(app,()=>{liveTeamHub.close();PresenceLink.stop();OverviewMain.close();sessionFollowups.close();followupStorageProcess?.close();});
 // Owned-session interaction: Plexiform starts its own provider sessions and
 // talks only to those. Existing unmanaged sessions stay observation-only.
 const CodexAppServer=require('./src/codex-app-server');

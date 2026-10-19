@@ -40,6 +40,8 @@ contextBridge.exposeInMainWorld('overviewApi', {
     const values = request.values && typeof request.values === 'object' && !Array.isArray(request.values) ? Object.fromEntries(Object.entries(request.values).filter(([k, v]) => /^[a-z][a-z0-9_-]{0,23}$/i.test(k) && typeof v === 'string' && v && v.length <= 80).slice(0, 8)) : {};
     return Object.keys(values).length ? ipcRenderer.invoke('overview:share-view', { team: request.team, name: request.name.trim(), values }) : denied();
   },
+  // Which shared session's details are open (null: none); the team's boards see it as card presence.
+  viewing: request => closed(request, ['id']) && (request.id === null || typeof request.id === 'string' && /^[0-9a-f]{40}$/.test(request.id)) ? ipcRenderer.invoke('overview:viewing', { id: request.id }) : denied(),
   teamInspect: request => closed(request, ['id']) && typeof request.id === 'string' && /^[0-9a-f]{40}$/.test(request.id)
     ? ipcRenderer.invoke('overview:team-inspect', { id: request.id }) : denied(),
   followups: {

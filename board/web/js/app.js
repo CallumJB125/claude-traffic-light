@@ -6,6 +6,7 @@ import { tacklePreference, rememberTackle, raisedBudget, tackleChoices, anotherA
 import { handoverPin, sameHandover } from './ai-handover.js';
 import { api, errorText, setOrg, currentOrg, setCsrf, requestId } from './api.js';
 import { connectBoard } from './socket.js';
+import { PRESENCE_KEEPALIVE_MS } from '../../shared/liveness.js';
 import { displayFace, alertsForViewer, needsYou, agedView, fmtUsd, observedLane } from './view.js';
 import { planMoves, moveSummary, dragModel, pruneSelection, idsToDrag, kbdStart, kbdKey, announcement } from './dnd.js';
 import { emptyFilters, isFiltering, parseFilters, writeFilters, toggleIn, applyFilters, filterOptions } from './filters.js';
@@ -93,11 +94,24 @@ const state = {
   archived: null, // id → {view, rx} while showArchived
   // team.presence (D37b). `stale` from a socket drop until the next frame.
   presence: { members: [], loaded: false, stale: false },
+  // board.presence viewers (team depth lane C): who is looking at which card, every connection.
+  viewers: [],
   overview: { status: 'idle', data: null, error: null, updatedAt: null },
 };
 
 let socket = null;
 let boardGeneration = 0;
+
+// ── presence.view (team depth lane C) ────────────────────────────────────────
+// One frame per card change (open, switch, close) and a keepalive while a card
+// is open; the hub forgets a silent viewer after PRESENCE_TTL_MS. Re-sent after
+// every snapshot, so a reconnect announces the open card again.
+let viewingCardId = null;
+function sendView(cardId) {
+  viewingCardId = cardId ?? null;
+  socket?.send({ type: 'presence.view', card_id: viewingCardId });
+}
+setInterval(() => { if (viewingCardId && socket) socket.send({ type: 'presence.view', card_id: viewingCardId }); }, PRESENCE_KEEPALIVE_MS);
 let plannerKey = null;
 let planner = null;
 function plannerState() {
@@ -498,6 +512,8 @@ function buildModel() {
     integrations: state.view === 'integrations' ? { ...state.integ, nowMs: Date.now(), local: state.authMode === 'local', openTeam: canOpenTeam() } : null,
     apiPanel: state.view === 'integrations' && state.authMode === 'accounts' ? state.pub : null,
     presence: { ...state.presence, stale: state.presence.stale || lost },
+    // Other people's open cards (never this member's own tabs).
+    viewers: state.viewers.filter((v) => v.member_id !== state.me?.member?.id),
     teamOverview: { ...state.overview, stale: lost || !!state.overview.error || (state.overview.updatedAt != null && Date.now() - state.overview.updatedAt > 45_000), ageMs: state.overview.updatedAt == null ? null : Date.now() - state.overview.updatedAt },
     // Presence ages freeze at the drop, like card ages.
     nowMs: lost && state.conn.lostAt ? state.conn.lostAt.getTime() : Date.now(),
@@ -726,6 +742,7 @@ async function boot() {
   rememberBoard();
   resetDashboard();
   state.presence = { members: [], loaded: false, stale: false };
+  state.viewers = [];
   state.overview = { status: 'idle', data: null, error: null, updatedAt: null };
   socket?.close();
   socket = connectBoard({ boardId: state.boardId, org: currentOrg(), onMessage: (m) => { if (current()) onMessage(m); }, onStatus: (...args) => { if (current()) onStatus(...args); } });
@@ -1012,10 +1029,17 @@ function onMessage(msg) {
       if (state.view === 'integrations' && state.integ.status === 'idle') loadIntegrations();
       presenceFallbackSoon();
       if (state.view === 'team' && state.overview.status === 'idle') loadTeamOverview();
+      if (state.detail?.cardId) sendView(state.detail.cardId);
+      else viewingCardId = null;
       break;
     }
     case 'team.presence':
       state.presence = { members: msg.members, loaded: true, stale: false };
+      break;
+    case 'board.presence':
+      if (msg.board_id !== state.boardId) return;
+      state.presence = { members: msg.members, loaded: true, stale: false };
+      state.viewers = msg.viewers;
       break;
     case 'card.upsert': {
       if (msg.board_id !== state.boardId) return;
@@ -1266,6 +1290,7 @@ async function openDetail(cardId, section = null) {
   const tab = drawerTab(section, same ? state.detail.tab : undefined);
   state.detail = { ...(same ? state.detail : {}), intent: ++drawerSession, cardId, data: same ? state.detail.data : null, rx: same ? state.detail.rx : null, tab, scrollTo: ['asks', 'overlaps', 'review'].includes(section) ? section : null, error: null };
   try { history.replaceState(null, '', `#card=${encodeURIComponent(cardId)}`); } catch { /* sandboxed */ }
+  if (!same) sendView(cardId);
   update();
   await refreshDetail(cardId);
 }
@@ -1366,6 +1391,7 @@ function refreshDetailSoon(cardId) {
 function closeDrawer() {
   const id = state.detail?.cardId;
   state.detail = null;
+  if (viewingCardId) sendView(null);
   try { history.replaceState(null, '', location.pathname + location.search); } catch { /* sandboxed */ }
   update();
   // Back to what opened it: the card or row, else a dashboard list entry.

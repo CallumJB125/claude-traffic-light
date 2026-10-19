@@ -1,6 +1,8 @@
 // /ws/board client (CONTRACT §5.3): hello → subscribe → snapshot + patches.
-// Read-only push. On a drop it reports `lost` once and reconnects with the
-// shared backoff; on reconnect the new snapshot replaces everything.
+// Read-only push, plus the one client frame after subscribe: `presence.view`
+// (which card this member is looking at). On a drop it reports `lost` once and
+// reconnects with the shared backoff; on reconnect the new snapshot replaces
+// everything (and the app re-sends its view).
 import { PROTOCOL_VERSION, WS_CLOSE, validate } from '../../shared/protocol.js';
 import { reconnectDelay } from '../../shared/liveness.js';
 
@@ -74,6 +76,11 @@ export function connectBoard({ boardId, org = null, onMessage, onStatus, url, We
       closed = true;
       if (timer) cancel(timer);
       ws?.close(1000);
+    },
+    /** Send one frame on the open socket; false when there is none (the caller re-sends after the next snapshot). */
+    send(frame) {
+      if (closed || !ws || !wasOpen) return false;
+      try { ws.send(JSON.stringify(frame)); return true; } catch { return false; }
     },
     get retryAt() { return retryAt; },
   };

@@ -29,7 +29,7 @@ const provider=(source,model)=>{const known=typeof source==='string'&&Object.has
 // Mac's live session shares; hubTeams() → {origin, teams} the signed-in
 // user's teams on the sharing hub; teamHub() → the team directory adapter
 // (src/session-directory.js interface) or null.
-function createOverviewService({sessions=()=>[],work=async()=>({sources:[],capture:[]}),managed=()=>({conn:{status:'offline'},tasks:[]}),openManaged=null,messageManaged=null,now=Date.now,current=()=>true,actionCurrent=current,navigationCurrent=()=>false,owned=()=>[],shares=()=>null,hubTeams=async()=>null,teamHub=()=>null,followups=null,followupScope=()=>null,followupLocal=null}){
+function createOverviewService({presence=()=>null,presenceView=()=>0,sessions=()=>[],work=async()=>({sources:[],capture:[]}),managed=()=>({conn:{status:'offline'},tasks:[]}),openManaged=null,messageManaged=null,now=Date.now,current=()=>true,actionCurrent=current,navigationCurrent=()=>false,owned=()=>[],shares=()=>null,hubTeams=async()=>null,teamHub=()=>null,followups=null,followupScope=()=>null,followupLocal=null}){
  let epoch=0,directoryEpoch=0,routeEpoch=0,teamView=null,handles=new Map(),teamRefs=new Map();const secret=crypto.randomBytes(32);
  const directoryModel=Directory.createSessionDirectory({now});
  const stable=parts=>crypto.createHmac('sha256',secret).update(JSON.stringify(parts)).digest('hex');
@@ -231,6 +231,13 @@ function createOverviewService({sessions=()=>[],work=async()=>({sources:[],captu
   return{hub,viewer,team:e.team,ref:e.ref,scope:e.scope,isCurrent:()=>fresh()&&e.expires>=now()&&safe(teamHub,null)===hub&&viewerOf(hub)?.id===viewer.id};
  }
  // My sessions / Team sessions. Team privacy is filtered here, never in the page.
+ // Team depth lane C: team entry id → the hub card id of its session (for presence.view), and the team they belong to.
+ const viewCards=new Map();let viewTeam=null,viewingSent=null;
+ // The person opened (id) or closed (null) a shared session's details: the team's boards hear which card is being looked at.
+ function viewing(request){if(!closed(request,['id'])||!(request.id===null||typeof request.id==='string'&&/^[0-9a-f]{40}$/.test(request.id)))return{ok:false,status:'invalid'};
+  if(!permitted()||!viewTeam)return{ok:false,status:'unavailable'};
+  const card=request.id?viewCards.get(request.id)??null:null;const sig=card?`${viewTeam}|${card}`:null;if(sig===viewingSent)return{ok:true,status:'unchanged'};viewingSent=sig;
+  try{presenceView({team:viewTeam,card_id:card});}catch{}return{ok:true,status:card?'viewing':'cleared'};}
  async function directory(request){
   const time=now(),view=request?.view;
   if(!(closed(request,['view'])&&view==='mine'||closed(request,['view','team'])&&view==='team'&&(request.team===null||typeof request.team==='string'&&/^[0-9a-f]{32}$/.test(request.team))))return unavailableDirectory('mine',time);
@@ -266,6 +273,14 @@ function createOverviewService({sessions=()=>[],work=async()=>({sources:[],captu
   if(!reading())return unavailableDirectory(view,time);
   if(hubEntries?.partial===true)status='partial';
   const model=directoryModel.team({team:{key:selected.key,name:selected.name,id:adapterTeam?.id??null},viewer:viewer??{id:''},member:!!adapterTeam,personal,hubEntries});
+  // Team depth lane C: the latest board.presence for this team (main-only link), folded onto the people shown.
+  viewCards.clear();viewTeam=adapterTeam?.id??null;
+  if(adapterTeam){let live=null;try{live=presence(adapterTeam.id);}catch{live=null;}
+   if(live&&typeof live==='object'){const members=Array.isArray(live.members)?live.members:[],viewers=Array.isArray(live.viewers)?live.viewers:[];
+    for(const e of model.entries){if(!e.owner||e.owner.self)continue;const m=members.find(p=>p&&p.name===e.owner.name),v=viewers.find(p=>p&&p.name===e.owner.name);if(!m&&!v)continue;
+     const running=[...new Set((Array.isArray(m?.sessions)?m.sessions:[]).map(s=>clean(s?.repo_short,80)).filter(Boolean))].slice(0,5);
+     e.presence={viewing:v?{key:clean(v.key,80)||null,title:clean(v.title,120)||'a card'}:null,running};}}
+   for(const [entryId,ref] of model.refs){const x=(Array.isArray(hubEntries)?hubEntries:[]).find(h=>h&&h.ref===ref.ref);const cardId=x&&x.card&&typeof x.card==='object'&&typeof x.card.id==='string'&&x.card.id&&x.card.id.length<=128?x.card.id:null;if(cardId)viewCards.set(entryId,cardId);}}
   teamRefs.clear();
   for(const [entryId,ref] of model.refs)teamRefs.set(entryId,{...ref,messageContract:model.entries.find(x=>x.id===entryId)?.messageContract,team:adapterTeam.id,teamKey:selected.key,hub,viewerId:viewer?.id,expires:time+45000});
   while(teamRefs.size>500)teamRefs.delete(teamRefs.keys().next().value);
@@ -289,7 +304,7 @@ function createOverviewService({sessions=()=>[],work=async()=>({sources:[],captu
   if(!alive())return{ok:false,status:'unconfirmed',error:'The view changed. Inspect the receipt before sending again.'};
   return out?.ok===true?out:{ok:false,status:['forbidden','stale','busy','unavailable','unconfirmed'].includes(out?.status)?out.status:'unavailable',error:clean(out?.error,300)||'The team hub did not accept the message.'};
  }
- return{snapshot,directory:async request=>{const out=await directory(request);return{...out,followupScope:followupScope()};},teamMessage,teamInspect:controls.inspect,teamAction:controls.action,teamIdentity,
+ return{snapshot,viewing,directory:async request=>{const out=await directory(request);return{...out,followupScope:followupScope()};},teamMessage,teamInspect:controls.inspect,teamAction:controls.action,teamIdentity,
   followupReview,followupEnqueue,
   coordinatorRequestOwner:coordinator.requestOwner,coordinatorRemoteList:coordinator.remoteList,coordinatorRemoteSend:coordinator.remoteSend,coordinatorRemoteCancel:coordinator.remoteCancel,coordinatorRemoteReplace:coordinator.remoteReplace,
   coordinatorInventory:coordinator.inventory,coordinatorPropose:coordinator.propose,coordinatorConfirm:coordinator.confirm,coordinatorResults:coordinator.results,coordinatorCancel:coordinator.cancel,

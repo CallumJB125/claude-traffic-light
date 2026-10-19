@@ -47,9 +47,12 @@ export function teamRows(model) {
   const presence = new Map((model.presence?.members ?? []).map((p) => [p.member_id, p]));
   for (const p of presence.values()) if (!byId.has(p.member_id)) byId.set(p.member_id, { member_id: p.member_id, name: p.name ?? '?' });
   const meId = model.me?.member?.id;
+  const viewing = new Map();
+  for (const v of model.viewers ?? []) if (!viewing.has(v.member_id)) viewing.set(v.member_id, v);
   const rows = [...byId.values()].map((m) => {
     const sessions = sessionsOf(presence.get(m.member_id), nowMs);
-    return { ...m, role: m.role ?? (m.member_id === meId ? model.me.member.role ?? null : null), is_me: m.member_id === meId, sessions, best: sessions.length ? Math.min(...sessions.map((s) => stateOf(s.state).rank)) : 9, jobs: jobsOf(m.member_id, model.entries) };
+    const v = viewing.get(m.member_id);
+    return { ...m, viewing: v ? { card_id: v.card_id, key: v.key ?? null, title: v.title ?? '' } : null, role: m.role ?? (m.member_id === meId ? model.me.member.role ?? null : null), is_me: m.member_id === meId, sessions, best: sessions.length ? Math.min(...sessions.map((s) => stateOf(s.state).rank)) : 9, jobs: jobsOf(m.member_id, model.entries) };
   });
   return rows.sort((a, b) => Number(b.is_me) - Number(a.is_me) || a.best - b.best || a.name.localeCompare(b.name));
 }
@@ -86,6 +89,16 @@ function jobButton(j) {
       pill(face)));
 }
 
+/** "running on <repo>" dot and "viewing <card>" from presence; null when neither. */
+function nowLine(m) {
+  const repos = [...new Set(m.sessions.map((s) => s.repo_short).filter(Boolean))];
+  const parts = [];
+  if (repos.length) parts.push(h('span', { class: 'team-now-item', 'data-kind': 'running' }, h('span', { class: 'team-now-dot', 'aria-hidden': 'true' }), `running on ${repos.join(', ')}`));
+  if (m.viewing) parts.push(h('button', { type: 'button', class: 'team-now-item team-now-viewing', 'data-kind': 'viewing', 'data-action': 'open', 'data-card': m.viewing.card_id, title: m.viewing.title || null },
+    icon('eye', 'icon-xs'), `viewing ${m.viewing.key ?? m.viewing.title ?? 'a card'}`));
+  return parts.length ? h('p', { class: 'team-now' }, parts) : null;
+}
+
 function memberCard(m, model, loaded) {
   const online = m.sessions.length > 0;
   const shown = m.jobs.slice(0, MAX_JOBS);
@@ -94,7 +107,8 @@ function memberCard(m, model, loaded) {
       avatar(m, { size: 'md' }),
       h('div', { class: 'team-member-id' },
         h('h3', { class: 'team-name', id: `tm-${m.member_id}` }, m.name, m.is_me ? h('span', { class: 'team-you' }, 'you') : null),
-        m.role ? h('span', { class: 'team-role' }, m.role) : null),
+        m.role ? h('span', { class: 'team-role' }, m.role) : null,
+        nowLine(m)),
       h('span', { class: `team-online${online ? ' is-on' : ''}` }, icon(online ? 'lamp' : 'ring', 'icon-xs'), online ? 'Online' : 'Not sharing')),
     online
       ? h('ul', { class: 'team-sessions', 'aria-label': `${m.name}'s live sessions` }, m.sessions.map((s, i) => sessionRow(s, i, model.board?.name ?? 'this board')))
