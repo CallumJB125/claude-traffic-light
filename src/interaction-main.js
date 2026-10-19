@@ -15,14 +15,18 @@
 const crypto = require('node:crypto');
 const path = require('node:path');
 const { createInteractionHub } = require('./session-interaction');
-const { createLocalModels } = require('./local-models');
+const { createLocalModels, probeEndpoint } = require('./local-models');
+const { createDetector } = require('./local-model-detect');
+const { localModelCard } = require('./local-model-card');
 
 const CHANNELS = Object.freeze({
   capabilities: 'interaction:capabilities', list: 'interaction:list', state: 'interaction:state',
   launch: 'interaction:launch', discover: 'interaction:discover', attach: 'interaction:attach', send: 'interaction:send', interrupt: 'interaction:interrupt', close: 'interaction:close',
   event: 'interaction:event', localModels: 'interaction:local-models', fanout: 'interaction:fanout',
+  proposalList: 'interaction:proposal-list', proposalApprove: 'interaction:proposal-approve', proposalRevoke: 'interaction:proposal-revoke',
   shareList: 'interaction:share-list', shareCreate: 'interaction:share-create', shareStop: 'interaction:share-stop',
   channelSetup: 'interaction:channel-setup', openAiTools: 'interaction:open-aitools',
+  localEndpoints: 'interaction:local-endpoints', localEndpointSave: 'interaction:local-endpoint-save', localEndpointRemove: 'interaction:local-endpoint-remove',
 });
 const MAX_FANOUT = 6;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -62,11 +66,16 @@ function explainCapabilities(caps, rows) {
 }
 
 // shares: () => the remote interaction host (src/remote-interaction.js) or null; team sharing goes through it.
-function createInteractionMain({ context, readContext = context, adapters: given, owned = ownedAdapters, workspace, currentBoard = () => null, now, localModelsFile = null, localModels: givenLocalModels, compaction = null, shares = () => null, prepareChannel = null, tools = () => null, openAiTools = null }) {
+function createInteractionMain({ context, readContext = context, adapters: given, owned = ownedAdapters, workspace, currentBoard = () => null, accountScope = () => null, now, localModelsFile = null, localModels: givenLocalModels, compaction = null, shares = () => null, prepareChannel = null, tools = () => null, openAiTools = null, endpointStore = null, fetch: fetchImpl = globalThis.fetch }) { // privacy-flow: local-models
   const adapters = { ...(owned ? owned() : {}), ...given };
   // Local models register into `adapters` as they are found.
-  const localModels = givenLocalModels !== undefined ? givenLocalModels : createLocalModels({ adapters, configFile: localModelsFile });
+  // The fixed loopback ports go through the detector (short timeout, backoff); endpoints the person added are probed as typed.
+  const detector = givenLocalModels === undefined && typeof fetchImpl === 'function' ? createDetector({ fetch: fetchImpl }) : null;
+  const secretFor = endpointStore ? (id) => endpointStore.secretFor(id) : null;
+  const localModels = givenLocalModels !== undefined ? givenLocalModels : createLocalModels({ adapters, configFile: localModelsFile, secretFor, ...(detector ? { probe: (e, opts) => (e.source === 'discovered' ? detector.probe(e) : probeEndpoint(e, opts)) } : {}) });
+  const withCard = (o) => (o && typeof o === 'object' ? { ...o, card: localModelCard(o) } : o);
   const documents = new Map();
+  const ownedScopes = new Map();
   const boardCurrent = (b) => b !== null && b === boardKey(currentBoard());
   const actorFor = (c) => `overview:${c.contents.id}:${c.document}`;
   // Workspace folder name per owned session, main-only: lets the Overview
@@ -106,7 +115,12 @@ function createInteractionMain({ context, readContext = context, adapters: given
       const fresh = () => { const c = context(); return !!c?.foreground && !c.contents.isDestroyed() && actorFor(c) === actor && currentBoard() === board; };
       return prepareChannel({ actor, board, fresh });
     },
-    launch: (req, actor) => (object(req) && !Object.hasOwn(req, 'board') ? hub.launch({ ...req, board: boardKey(currentBoard()) }, actor) : hub.launch(null, actor)),
+    async launch(req, actor) {
+      const owner = accountScope();
+      const out = await (object(req) && !Object.hasOwn(req, 'board') ? hub.launch({ ...req, board: boardKey(currentBoard()) }, actor) : hub.launch(null, actor));
+      if (out?.ok && out.state?.session) { ownedScopes.set(out.state.session, owner); while (ownedScopes.size > 64) ownedScopes.delete(ownedScopes.keys().next().value); }
+      return out;
+    },
     // Existing sessions on an opt-in provider (codex-daemon): metadata list, then subscribe to one by handle.
     discover: (req, actor) => hub.discover(req, actor),
     attach: (req, actor) => (object(req) && !Object.hasOwn(req, 'board') ? hub.attach({ ...req, board: boardKey(currentBoard()) }, actor) : hub.attach(null, actor)),
@@ -182,6 +196,30 @@ function createInteractionMain({ context, readContext = context, adapters: given
     },
     // Session directory: this document's owned sessions (public state + main-only folder name).
     listOwned() { const out = []; for (const actor of documents.keys()) for (const state of hub.list(actor)) out.push({ state, leaf: leaves.get(state.session) ?? null, nativeSessionId: hub.targetOf(state.session), nativeTurnId: hub.reportTurnOf(state.session) }); return out; },
+    // Main-only outbox route. Never attach/relaunch, borrow a new generation,
+    // or queue against an unmanaged terminal's permissions.
+    followupTarget(session) {
+      for (const actor of documents.keys()) {
+        const s = hub.state({ session }, actor);
+        if (s?.ownership !== 'plexiform-owned' || s.status === 'ended' || s.capabilities?.newTurn !== true || !boardCurrent(s.board) || !ownedScopes.has(session) || ownedScopes.get(session) !== accountScope()) continue;
+        return { kind: 'owned', route: { session, actor, board: s.board, account: ownedScopes.get(session) }, generation: s.generation, provider: s.provider.id };
+      }
+      return null;
+    },
+    resolveFollowup(target, fresh) {
+      const r = target?.route;
+      const s = r && documents.has(r.actor) ? hub.state({ session: r.session }, r.actor) : null;
+      if (!s || s.ownership !== 'plexiform-owned' || s.status === 'ended' || s.generation !== target.generation || s.provider.id !== target.provider || s.board !== r.board)
+        return { ok: false, terminal: true, error: 'The original session ended or changed. Plexiform will not recreate or reattach it.' };
+      if (!ownedScopes.has(r.session) || ownedScopes.get(r.session) !== r.account || r.account !== accountScope()) return { ok: false, error: 'Return to the account and board that started this session.' };
+      const current = () => fresh() === true && documents.has(r.actor) && boardCurrent(r.board) && accountScope() === r.account
+        && hub.state({ session: r.session }, r.actor)?.generation === target.generation;
+      if (!boardCurrent(r.board)) return { ok: false, error: BOARD_STALE };
+      if (s.capabilities.newTurn !== true) return { ok: false, terminal: true, error: 'This provider does not support a new-turn follow-up.' };
+      return { ok: true, ready: s.status === 'ready' && s.activeTurn === null, current,
+        reset: () => current() ? hub.resetEvidence(r.session, r.actor, target.generation) : null,
+        send: (text, _id, keep) => hub.send({ session: r.session, generation: target.generation, board: r.board, text }, r.actor, { fresh: () => current() && keep() }) };
+    },
     // Match native provider session identity, never a folder/project label.
     reportHooks(rows) {
       if(!Array.isArray(rows))return;
@@ -207,7 +245,7 @@ function createInteractionMain({ context, readContext = context, adapters: given
       }
     },
     // The Overview document was reloaded, crashed or destroyed: its sessions end now, not on the next request.
-    retireDocuments() { documents.clear(); return hub.reap(() => false); },
+    retireDocuments() { documents.clear(); ownedScopes.clear(); return hub.reap(() => false); },
     register(ipc) {
       // null (not []) when this document may not read, so the page keeps its last known state.
       ipc.handle(CHANNELS.capabilities, async (e) => {
@@ -225,9 +263,41 @@ function createInteractionMain({ context, readContext = context, adapters: given
       });
       ipc.handle(CHANNELS.list, async (e) => { const a = await actorOf(e, false); return a ? hub.list(a) : null; });
       // Local models register into `adapters` as they are found (read-only loopback probes + configured endpoints).
-      ipc.handle(CHANNELS.localModels, async (e) => ((await actorOf(e, false)) && localModels ? localModels.refresh() : null));
+      ipc.handle(CHANNELS.localModels, async (e) => ((await actorOf(e, false)) && localModels ? withCard(await localModels.refresh()) : null));
+      // Custom endpoints (src/local-model-endpoints.js): read from the Overview, changed only from the foreground Overview.
+      ipc.handle(CHANNELS.localEndpoints, async (e) => ((await actorOf(e, false)) && endpointStore ? endpointStore.list() : null));
+      ipc.handle(CHANNELS.localEndpointSave, async (e, ...args) => {
+        if (!(await actorOf(e, true)) || !endpointStore) return denied;
+        let r;
+        try { r = endpointStore.save(one(args)); } catch { r = { ok: false, error: 'Could not save that endpoint.' }; }
+        if (r.ok) await localModels?.refresh({ force: true }).catch(() => null);
+        return r;
+      });
+      ipc.handle(CHANNELS.localEndpointRemove, async (e, ...args) => {
+        if (!(await actorOf(e, true)) || !endpointStore) return denied;
+        const req = one(args);
+        let r;
+        try { r = endpointStore.remove(object(req) ? req.id : null); } catch { r = { ok: false, error: 'Could not remove that endpoint.' }; }
+        if (r.ok) await localModels?.refresh({ force: true }).catch(() => null);
+        return r;
+      });
       ipc.handle(CHANNELS.state, async (e, ...args) => { const a = await actorOf(e, false); return a ? hub.state(one(args), a) : null; });
       ipc.handle(CHANNELS.shareList, async (e) => { const a = await actorOf(e, false); return a ? sharing[CHANNELS.shareList](null, a) : null; });
+      for (const [name, method] of [['proposalList', 'proposalList'], ['proposalApprove', 'proposalApprove'], ['proposalRevoke', 'proposalRevoke']]) {
+        ipc.handle(CHANNELS[name], async (e, ...args) => {
+          const effect = name !== 'proposalList', a = await actorOf(e, effect), req = one(args), host = shares();
+          if (!a || !object(req) || typeof req.share !== 'string' || !host || typeof host[method] !== 'function') return denied;
+          const sh = host.shared().find(s => s.id === req.share);
+          if (!sh || !owns(sh.session, a)) return denied;
+          const c = effect ? context() : readContext(), board = currentBoard(), account = accountScope();
+          if (!c) return denied;
+          const fresh = () => { const x = effect ? context() : readContext(); return !!x && (!effect || x.foreground) && x.contents === c.contents && x.document === c.document && x.generation === c.generation
+            && currentBoard() === board && accountScope() === account && shares() === host && owns(sh.session, a); };
+          if (!fresh()) return denied;
+          const out = await host[method](name === 'proposalList' ? req.share : req, fresh);
+          return fresh() ? out : denied;
+        });
+      }
       for (const ch of [CHANNELS.shareCreate, CHANNELS.shareStop]) {
         ipc.handle(ch, async (e, ...args) => { const a = await actorOf(e, true); return a ? sharing[ch](one(args), a) : denied; });
       }
@@ -239,7 +309,9 @@ function createInteractionMain({ context, readContext = context, adapters: given
         });
       }
     },
-    close() { hub.stopAll(); documents.clear(); },
+    // App start: one read-only check of the fixed loopback ports so Overview opens with an answer.
+    detectLocalModels() { return localModels ? localModels.refresh({ force: true }).then(withCard, () => null) : Promise.resolve(null); },
+    close() { hub.stopAll(); documents.clear(); ownedScopes.clear(); },
   };
 }
 

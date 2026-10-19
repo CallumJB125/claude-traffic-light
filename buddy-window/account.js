@@ -188,8 +188,26 @@ function burstSection() {
   plConfirm.append(plConfirmText, el('button', { type: 'button', class: 'btn btn-primary', onclick: () => plSet({ enabled: true, confirmed: true }) }, 'Turn on'),
     el('button', { type: 'button', class: 'btn', onclick: () => { plConfirm.hidden = true; } }, 'Cancel'));
   const name = el('span', { class: 'acct-name' }, 'Claude Burst');
+  // Keep-awake, Remote Control and the mods list: one line each, drawn only when main sends them.
+  const facts = el('div', { class: 'burst-facts', hidden: true });
+  const factLine = (title, label, text) => el('div', { class: 'acct-item' }, el('div', { class: 'acct-who' }, el('span', { class: 'acct-name' }, `${title}: ${label}`), el('span', { class: 'acct-mail' }, text)));
+  const drawFacts = (v) => {
+    facts.textContent = '';
+    if (v.keepAwake) facts.append(factLine('Keep awake', v.keepAwake.label, v.keepAwake.text));
+    if (v.remoteControl) facts.append(factLine('Remote Control', v.remoteControl.label, v.remoteControl.text));
+    for (const m of v.mods || []) {
+      const row = el('div', { class: 'acct-item', 'data-mod': m.id }, el('div', { class: 'acct-who' }, el('span', { class: 'acct-name' }, m.name), el('span', { class: 'acct-mail' }, `${m.status}. ${m.what}`)));
+      if (m.action) row.append(el('button', { type: 'button', class: 'btn', 'data-action': m.action.kind, onclick: async () => {
+        const r = await api.burstAction(m.action.kind, '', m.action.args).catch(() => ({ ok: false, error: 'Something went wrong.' }));
+        result.textContent = r.cancelled ? 'Cancelled. Nothing changed.' : r.ok ? `${m.action.label === 'Update' ? 'Updating' : 'Installing'} ${m.name}…` : (r.error || '');
+        poll();
+      } }, m.action.label));
+      facts.append(row);
+    }
+    facts.hidden = !facts.childElementCount;
+  };
   const sec = el('section', { class: 'acct-section' }, el('h2', {}, 'Claude Burst'),
-    el('div', { class: 'acct-item' }, el('div', { class: 'acct-who' }, name, detail, chip)), buttons, pl, result);
+    el('div', { class: 'acct-item' }, el('div', { class: 'acct-who' }, name, detail, chip)), buttons, facts, pl, result);
   let timer = null;
   let seen = false;
   const poll = async () => {
@@ -202,7 +220,10 @@ function burstSection() {
       if (v) {
         detail.textContent = v.detail;
         chip.textContent = v.chip ? v.chip.label : '';
+        name.textContent = v.headline || 'Claude Burst';
+        sec.classList.toggle('dimmed', v.dimmed === true);
         plDraw(v.compaction);
+        drawFacts(v);
         buttons.textContent = '';
         for (const a of v.actions) {
           buttons.append(el('button', { type: 'button', class: a.primary ? 'btn btn-primary' : 'btn', onclick: async () => {

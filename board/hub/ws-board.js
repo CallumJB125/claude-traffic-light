@@ -64,6 +64,7 @@ export class BrowserConn {
   }
 
   revoked() {
+    this.hub.presence.dropConn(this);
     this.boardId = null;
     this.close(WS_CLOSE.REVOKED, 'no longer a member of this board');
   }
@@ -71,6 +72,7 @@ export class BrowserConn {
   onClose() {
     clearInterval(this.ping);
     this.hub.browsers.delete(this);
+    this.hub.presence.dropConn(this);
   }
 
   onMessage(data) {
@@ -119,6 +121,7 @@ export class BrowserConn {
           this.send({ type: 'error', code: 'NOT_FOUND', message: 'board not found' });
           return;
         }
+        if (this.boardId && this.boardId !== board.id) this.hub.presence.dropConn(this);
         this.member = m;
         this.boardId = board.id;
         this.ticks.clear();
@@ -127,7 +130,10 @@ export class BrowserConn {
         return;
       }
       case 'unsubscribe':
-        if (msg.board_id === this.boardId) this.boardId = null;
+        if (msg.board_id === this.boardId) { this.hub.presence.dropConn(this); this.boardId = null; }
+        return;
+      case 'presence.view':
+        this.hub.presence.updateView(this, msg);
         return;
       case 'ping':
         this.send({ type: 'pong' });

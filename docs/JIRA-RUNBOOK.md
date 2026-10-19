@@ -1,18 +1,9 @@
 # Jira connector runbook (team hub)
 
-Status: **built and tested, not offered.** Jira is in no hub's
-`connectorsFor()` (`board/hub/integrations/index.js`; a test in
-`board/hub/test/jira-connector.test.js` asserts it for every auth mode), and
-the signed-out pages show it as *Coming soon* (`LAUNCH_CONNECTORS` in
-`board/web/js/connectors.js` and `buddy-window/connectors.js` is still
-`['github']`). Like Sentry, it has a **go-live gate**: a real Jira delivery
-must be checked against `verify()` over its exact bytes before Jira is added
-anywhere. That gate, and enabling on any hub, is **owner-gated**. Nothing here
-has been done with a real Jira site.
-
-Scope: **Jira Cloud** (`<site>.atlassian.net`) admin webhooks with a secret.
-Jira Server / Data Center is not supported (issue links are only built for
-`*.atlassian.net`).
+Status: **implemented, opt-in, awaiting real provider acceptance.** The registry
+already supports `BOARD_CONNECTORS=slack,sentry,linear,jira`; it defaults to
+Slack/Sentry. Jira remains unadvertised until real signed deliveries and
+staging card creation/update are recorded. Synthetic tests are not that evidence.
 
 Code: `board/hub/integrations/jira/index.js` (verify, parsing, handler).
 UI: `board/web/js/render-tracker.js` (intake panel), `render-integrations.js`
@@ -126,6 +117,33 @@ its auth).
    `buddy-window/connectors.js` in one commit, and releases.
 9. Delete the capture endpoint and the test webhook.
 
+## Create issues from sessions (optional, outbound)
+
+Off unless an admin pastes the extra parts. With them, a member sees "Create
+Jira issue…" on a session in the Sessions page; it drafts a scrubbed title
+and description from the session handover, the member edits it, and only on
+Create the hub posts one Task to
+`https://api.atlassian.com/ex/jira/<cloud id>/rest/api/3/issue` (Basic auth,
+account email + scoped API token). Route: `POST /api/integrations/:id/issues`
+(member, not a viewer, `integration_issue_member` 10/h).
+
+Owner steps:
+
+1. At id.atlassian.com → Security → API tokens, create a token **with scopes**
+   for a service account that can create issues in the project; give it
+   `write:jira-work` (and `read:jira-work`). Scoped tokens must use
+   `api.atlassian.com`, which is the only host the connector may call.
+2. Find the site's cloud id: open `https://<site>.atlassian.net/_edge/tenant_info`
+   in a browser signed in to the site and copy `cloudId`.
+3. Connect (or reconnect) Jira and paste, separated by spaces:
+   `<webhook secret> <account email> <api token> <cloud id> <PROJECT key> <site>.atlassian.net`.
+   A secret alone still connects webhook-only. The project needs the `Task`
+   issue type.
+4. Hub deploy: this build, `jira` in `BOARD_CONNECTORS` (go-live gate above),
+   `api.atlassian.com` reachable from the hub.
+5. Check: create one issue from a test session; the link opens
+   `https://<site>.atlassian.net/browse/<KEY>`; the audit shows the key only.
+
 ## Rotate
 
 Make a new secret, disconnect Jira in Plexiform, connect again with the new
@@ -146,3 +164,22 @@ the `connectorsFor()` line and `LAUNCH_CONNECTORS`.
 | Deliveries 404 | Connection disconnected, or Jira not in `connectorsFor()` |
 | No cards | Target board archived or unset, the issue already in a Done category, the webhook's events or JQL exclude it, or the daily cap reached (connection Activity) |
 | No status comment | The issue has no card on this connection, or the update had no status change |
+
+## Current capture verification tool
+
+Store the signing secret in a private file outside the repository (0600), then run:
+
+```sh
+node board/hub/scripts/verify-connector-delivery.mjs PROVIDER create.bin headers.json /private/secret-file
+```
+
+Replace PROVIDER with the connector name in lowercase. The tool prints only a
+signature verdict, byte count, body hash and times. It never prints payloads,
+headers or secrets. For an archived capture, supply its independently recorded
+receipt time as the final ISO argument; this is historical verification. Capture
+provenance and a staging delivery with duplicate/update behavior must still be
+recorded separately. Do not commit customer payloads or live signing headers.
+
+The historical step asking for a registry code change is superseded: after
+acceptance, use BOARD_CONNECTORS on staging, then production. Public advertising
+is a separate launch change.

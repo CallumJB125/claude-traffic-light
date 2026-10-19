@@ -41,6 +41,11 @@ export const DEFAULT_LIMITS = Object.freeze({
   auth_start_email_hour: { capacity: 10, per_ms: 3_600_000 }, // over: silent
   auth_start_email_all: { capacity: 40, per_ms: 3_600_000 },  // per address, every network together; over: silent
   auth_start_ip: { capacity: 20, per_ms: 3_600_000 },
+  phone_start_ip: { capacity: 10, per_ms: 600000 },
+  phone_exchange_ip: { capacity: 30, per_ms: 600000 },
+  phone_approve_user: { capacity: 10, per_ms: 3600000 },
+  crash_ip: { capacity: 25, per_ms: 3600000 },
+  crash_global: { capacity: 60, per_ms: 60000 },
   auth_methods_ip: { capacity: 60, per_ms: 60_000 },          // GET /api/auth/methods (no auth)
   auth_turnstile_ip: { capacity: 20, per_ms: 3_600_000 },     // Turnstile tokens checked with Cloudflare, per /64
   auth_start_global: { capacity: 500, per_ms: 3_600_000 },
@@ -71,6 +76,7 @@ export const DEFAULT_LIMITS = Object.freeze({
   integration_prepare_org: { capacity: 10, per_ms: 86_400_000 },    // … per team
   integration_identity_member: { capacity: 10, per_ms: 3_600_000 }, // POST /api/integrations/:id/identity/start (D98), per member
   integration_link_fail_ip: { capacity: 30, per_ms: 10 * 60_000 },  // failed identity callbacks, per client network (/64)
+  integration_issue_member: { capacity: 10, per_ms: 3_600_000 },    // POST /api/integrations/:id/issues (create ticket), per member
   integration_install_member: { capacity: 10, per_ms: 3_600_000 },  // POST /api/integrations/:provider/install (GitHub App, step 4), per admin
   integration_app_repos_member: { capacity: 30, per_ms: 10 * 60_000 }, // list / link an installation's repositories, per admin
   github_card_action_member: { capacity: 10, per_ms: 10 * 60_000 },   // Open PR / Comment status from a card, per member

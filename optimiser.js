@@ -105,7 +105,8 @@
     if (verb === 'open') { if (api.openPage) api.openPage(arg); return undefined; }
     if (verb === 'tab' || verb === 'section') { api.act(kind).catch(() => {}); return undefined; }
     const r = await api.act(arg).catch(() => ({ ok: false, error: 'Something went wrong.' }));
-    notes.set(id, { text: r && r.ok ? 'Started in Terminal. This page updates when Burst answers.' : said(r) });
+    const viaBurst = arg === 'panel-install';
+    notes.set(id, { text: r && r.ok ? (viaBurst ? 'Burst is installing it. This page updates when Burst answers.' : 'Started in Terminal. This page updates when Burst answers.') : (r && r.cancelled ? 'Cancelled.' : said(r)) });
     renderTools();
     return undefined;
   }
@@ -126,6 +127,72 @@
     if (want && toolsPoll === null) { loadTools(); toolsPoll = setInterval(loadTools, TOOLS_MS); } else if (!want && toolsPoll !== null) { clearInterval(toolsPoll); toolsPoll = null; } else if (want) renderTools();
   }
 
+  // Guided setup in the empty state: one primary button per step, progress read back from main
+  // only while a step is running (same 5 s cadence as main's own status poll; no timer otherwise).
+  const SETUP_MS = 5000;
+  const MARKS = { todo: '', running: '', done: '✓', failed: '!', skipped: '–' };
+  let steps = null;
+  let setupPoll = null;
+  let setupBusy = false;
+
+  function renderSetup() {
+    const box = $('setup');
+    box.hidden = !steps || !steps.length;
+    box.textContent = '';
+    if (box.hidden) { syncSetupPoll(); return; }
+    for (const st of steps) {
+      const li = el('li', undefined, 'step');
+      li.dataset.step = st.id;
+      li.dataset.status = st.status;
+      const mark = el('span', MARKS[st.status] || '', 'step-mark');
+      mark.setAttribute('aria-hidden', 'true');
+      const body = el('div');
+      body.append(el('h4', `${st.title}${st.status === 'skipped' ? ' (not needed)' : ''}`), el('p', st.detail));
+      const what = el('details');
+      what.append(el('summary', 'What this changes on your Mac'));
+      const ul = el('ul');
+      for (const line of st.whatItChanges) ul.append(el('li', line));
+      what.append(ul);
+      body.append(what);
+      body.children[1].setAttribute('role', 'status');
+      const act = el('div', undefined, 'step-act');
+      if (st.primary) {
+        const b = el('button', st.primary.label, 'primary');
+        b.type = 'button';
+        b.disabled = setupBusy;
+        b.addEventListener('click', () => stepAct(st));
+        act.append(b);
+      }
+      li.append(mark, body, act);
+      box.append(li);
+    }
+    syncSetupPoll();
+  }
+
+  const TERMINAL = ['install', 'enable', 'repair', 'update'];
+  async function stepAct(st) {
+    if (!api.setupProgress || setupBusy) return;
+    setupBusy = true; renderSetup();
+    try {
+      const kind = st.primary.kind;
+      if (kind === 'retry') { await progress(st.status === 'failed' ? { step: st.id, retry: true } : { step: st.id, start: true }); return; }
+      if (!TERMINAL.includes(kind)) return;
+      const r = await api.act(kind).catch(() => ({ ok: false, error: 'Something went wrong.' }));
+      $('note').textContent = r && r.cancelled ? 'Cancelled. Nothing changed.' : r && r.ok ? 'Started in Terminal. This page updates when Burst answers.' : (r && (r.error || r.reason)) || '';
+      if (r && r.ok) await progress({ step: st.id, start: true });
+    } finally { setupBusy = false; renderSetup(); }
+  }
+  async function progress(req) {
+    const r = await api.setupProgress(req || {}).catch(() => null);
+    if (r && r.ok && Array.isArray(r.steps)) steps = r.steps;
+    else if (r && r.reason) $('note').textContent = r.reason;
+  }
+  function syncSetupPoll() {
+    const want = !$('setup').hidden && !!steps && steps.some((st) => st.status === 'running');
+    if (want && setupPoll === null) setupPoll = setInterval(async () => { if (setupBusy) return; await progress({}); renderSetup(); }, SETUP_MS);
+    else if (!want && setupPoll !== null) { clearInterval(setupPoll); setupPoll = null; }
+  }
+
   function render(s) {
     const ready = s.mode === 'ready';
     mode = s.mode;
@@ -136,6 +203,7 @@
     if (s.mode === 'loading') $('loading').textContent = s.headline && s.headline !== 'Usage optimiser' ? s.headline : 'Checking Burst…';
     if (s.mode !== 'empty') $('note').textContent = '';
     $('empty').hidden = !empty;
+    if (!empty) { steps = null; renderSetup(); }
     $('chip').hidden = !s.chip;
     if (s.chip) { $('chip').dataset.tone = s.chip.tone; $('chip-text').textContent = s.chip.label; }
     $('browser').hidden = !s.canBrowser;
@@ -145,14 +213,20 @@
     if (!empty) return;
     $('headline').textContent = s.headline;
     $('detail').textContent = s.detail;
+    $('empty').classList.toggle('dimmed', s.dimmed === true);
     $('docs').hidden = !s.docs;
+    steps = Array.isArray(s.setup) && s.setup.length ? s.setup : null;
+    renderSetup();
+    // The steps own their primaries; the legacy row keeps only the actions no step offers (Check again, Turn off).
+    const owned = new Set((steps || []).map((st) => st.primary && st.primary.kind).filter(Boolean));
     const box = $('actions');
     box.textContent = '';
     for (const a of s.actions) {
+      if (steps && owned.has(a.kind)) continue;
       const b = document.createElement('button');
       b.type = 'button';
       b.textContent = a.label;
-      if (a.primary) b.className = 'primary';
+      if (a.primary && !steps) b.className = 'primary';
       b.addEventListener('click', async () => {
         if (a.kind === 'retry') { $('note').textContent = 'Checking again…'; api.refresh(); return; }
         const r = await api.act(a.kind).catch(() => ({ ok: false, error: 'Something went wrong.' }));

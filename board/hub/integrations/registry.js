@@ -78,6 +78,10 @@ const PENDING_SWEEP_MS = 60_000;
 const PREPARE_TIMEOUT_MS = 30_000;
 const PREPARE_INPUT_MAX = 4096;
 const START_INPUT_MAX = 256;
+const ISSUE_TITLE_MAX = 200;
+const ISSUE_BODY_MAX = 8000;
+const ISSUE_TIMEOUT_MS = 20_000;
+const ISSUE_URL_MAX = 300;
 const AUTHORIZE_MAX = 5;
 const MATCH_MAX = 8;
 const MATCH_KEY = /^[a-z][a-z0-9_]{0,39}$/;
@@ -256,7 +260,15 @@ export function createIntegrations({
     scopes: safeJson(c.scopes, []), status: c.status, health: safeJson(c.health, null),
     settings: safeJson(c.settings, {}), created_at: c.created_at,
     target_board_id: c.target_board_id ?? null,
+    creates_issues: issuesReady(c),
   });
+  // A connector that creates issues, on a connection holding every secret kind it needs.
+  function issuesReady(c) {
+    const conn = connectors.get(c.provider);
+    if (!conn?.createIssue || c.status !== 'active') return false;
+    const have = new Set(db.all('SELECT kind FROM connection_secrets WHERE connection_id = ?', c.id).map((r) => r.kind));
+    return conn.issueSecrets.every((k) => have.has(k));
+  }
   const consumerName = (c) => `integration:${c.provider}:${c.id}`;
 
   // `pending` (D97): promote that pending row, which must be live, this
@@ -2281,6 +2293,39 @@ export function createIntegrations({
         hub.journal({ board_id: null, actor_kind: memberId ? 'member' : 'system', actor_id: memberId, kind: 'integration.settings', payload: { connection_id: c.id, provider: c.provider, changed } });
         return publicConnection(row(id));
       });
+    },
+    /**
+     * Create ticket (privacy-flow: create-ticket): one issue in the connected
+     * tool from the title and description the member approved, never stored
+     * here. Spends integration_issue_member first; a provider failure is a
+     * fixed PROVIDER_ERROR and one audit row (codes only, never the text).
+     */
+    async createIssue({ member, connectionId, title, description }) {
+      const c = row(connectionId);
+      if (!c || c.status !== 'active' || c.org_id !== member.org_id || !issuesReady(c)) throw new HubError('NOT_FOUND', 'no such integration');
+      if (!hub.canWrite(member)) throw new HubError('FORBIDDEN', 'viewers cannot create issues');
+      if (typeof title !== 'string' || !title.trim() || title.length > ISSUE_TITLE_MAX) throw new HubError('VALIDATION', `a title is 1–${ISSUE_TITLE_MAX} characters`);
+      if (description != null && (typeof description !== 'string' || description.length > ISSUE_BODY_MAX)) throw new HubError('VALIDATION', `a description is at most ${ISSUE_BODY_MAX} characters`);
+      limitOrThrow(hub, 'integration_issue_member', member.id);
+      const conn = connectors.get(c.provider);
+      const controller = new AbortController();
+      const once = restrictedFetch(conn);
+      const fetch = (u, init = {}) => once(u, { ...init, signal: controller.signal });
+      const audit = (decision, error, ref = null) => db.insert('integration_audit', { id: randomUUID(), connection_id: c.id, action: 'issue.create', decision, error, card_id: null, external_ref: auditRef(ref), detail: auditJson({ member_id: member.id }), undo: null, at: now() });
+      let out;
+      try {
+        out = await withTimeout(Promise.resolve().then(() => conn.createIssue({ title: title.trim(), description: description ?? '', secrets: secretsOf(c), provider: safeJson(c.settings, {})?.provider ?? {}, fetch })), ISSUE_TIMEOUT_MS, controller);
+      } catch (e) {
+        const code = SHORT_CODE.test(e?.code ?? '') ? e.code : SHORT_CODE.test(e?.healthCode ?? '') ? e.healthCode : 'provider_error';
+        audit('failed', code);
+        warn('integration issue create failed', c, e);
+        throw new HubError('PROVIDER_ERROR', `${conn.name} did not create the issue. Check the connection and try again.`);
+      }
+      const key = typeof out?.key === 'string' && AUDIT_ID.test(out.key) ? out.key : null;
+      let url = null;
+      try { const u = new URL(out?.url); if (u.protocol === 'https:' && !u.username && !u.password && out.url.length <= ISSUE_URL_MAX) url = u.href; } catch { url = null; }
+      audit('approved', null, key);
+      return { key, url };
     },
     audit: (id, { limit = 100 } = {}) => db.all('SELECT id, action, decision, error, card_id, external_ref, detail, undo, at FROM integration_audit WHERE connection_id = ? ORDER BY at DESC, rowid DESC LIMIT ?', id, Math.min(500, Math.max(1, Number(limit) || 100)))
       .map((a) => ({ ...a, detail: safeJson(a.detail, {}), undo: safeJson(a.undo, null) })),

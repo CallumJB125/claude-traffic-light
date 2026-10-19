@@ -110,7 +110,7 @@ test('opt-in defaults OFF, and the send hook runs only once opted in', () => {
 test('the send function is a stub that sends nothing', () => {
   const r = CrashReports.sendCrashReport({ kind: 'uncaughtException' });
   assert.equal(r.sent, false);
-  assert.match(r.reason, /only saved on this Mac/);
+  assert.match(r.reason, /saved locally/);
 });
 
 test('reading the ring keeps only allow-listed fields, so a hand-edited file cannot add more', () => {
@@ -150,10 +150,10 @@ test('nothing leaves the process: the file loads no network module and calls no 
   }
   const NET = /^(?:node:)?(?:https?|http2|net|tls|dgram|dns|undici|ws|electron|child_process)$/;
   assert.deepEqual(loaded.filter((m) => NET.test(m)), []);
-  assert.deepEqual([...new Set(loaded)].sort(), ['../brand.js', './scrub.js', './secret-patterns.js', 'crypto', 'fs', 'path', SRC].sort());
+  assert.deepEqual([...new Set(loaded)].sort(), ['../board/shared/crash-report.cjs', '../brand.js', './scrub.js', './secret-patterns.js', 'crypto', 'fs', 'path', SRC].sort());
 });
 
-test('Preferences: the switch starts off, shows the exact payload, saves on its own and says nothing is sent', async () => {
+test('Preferences: the switch starts off, shows the exact payload, saves on its own and describes the structural payload and renewed consent', async () => {
   const { JSDOM } = require('jsdom');
   const html = fs.readFileSync(path.join(ROOT, 'settings.html'), 'utf8');
   const dom = new JSDOM(html.replace(/<script src[^>]*><\/script>/g, ''), { url: 'file:///app/settings.html?section=privacy', runScripts: 'outside-only' });
@@ -174,7 +174,7 @@ test('Preferences: the switch starts off, shows the exact payload, saves on its 
   const toggle = doc.getElementById('crash-opt-in');
   assert.equal(toggle.checked, false);
   assert.equal(doc.getElementById('crash-payload').textContent, c.payload());
-  assert.match(doc.getElementById('crash-reports').textContent, /Reports are only saved on this Mac for now/);
+  assert.match(doc.getElementById('crash-reports').textContent, /Sends new crash reports to Plexiform/);
   assert.match(doc.querySelector('#crash-view summary').textContent, /View what would be sent/);
   toggle.checked = true;
   toggle.dispatchEvent(new w.Event('change', { bubbles: true }));

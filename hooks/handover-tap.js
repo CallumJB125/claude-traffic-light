@@ -43,6 +43,14 @@ function untag(v) {
     if (end < 0) return null;
     t = t.slice(end + m[1].length + 3).trim();
   }
+  // Codex's attachment envelope describes files before the person's request.
+  // Keep that request before applying prompt/title caps; file metadata is not
+  // the task. A truncated envelope has no recoverable request yet.
+  if (/^# Files mentioned by the user:\s*(?:\r?\n|$)/.test(t)) {
+    const heading = /^## My request:[ \t]*\r?$/m.exec(t);
+    if (!heading) return null;
+    t = t.slice(heading.index + heading[0].length).replace(/\n+<image\b[\s\S]*$/i, '').trim();
+  }
   return t || null;
 }
 

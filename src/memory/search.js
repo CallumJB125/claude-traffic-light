@@ -33,6 +33,26 @@ function toMatch(q) {
   return parts.join(' ');
 }
 
+// Filters typed into the box: project:<name> (repo or folder name), tool:<id>,
+// after:/before:<YYYY-MM-DD> (local days, before is exclusive). Unknown or
+// malformed ones stay as words. → {text, project, tool, from, to}
+function parseQuery(q) {
+  const out = { text: '', project: null, tool: null, from: null, to: null };
+  const words = [];
+  for (const w of String(q ?? '').slice(0, 500).split(/(\s+)/)) {
+    const m = /^(project|repo|tool|after|before):(\S{1,200})$/i.exec(w);
+    const key = m && m[1].toLowerCase();
+    const day = m && /^\d{4}-\d{2}-\d{2}$/.test(m[2]) ? new Date(`${m[2]}T00:00:00`).getTime() : NaN;
+    if (key === 'project' || key === 'repo') out.project = m[2];
+    else if (key === 'tool' && TOOLS.includes(m[2].toLowerCase())) out.tool = m[2].toLowerCase();
+    else if (key === 'after' && Number.isFinite(day)) out.from = day;
+    else if (key === 'before' && Number.isFinite(day)) out.to = day - 1;
+    else words.push(w);
+  }
+  out.text = words.join('').replace(/^\s+/, '');
+  return out;
+}
+
 const tilde = (p, home) => (typeof p === 'string' && home && (p === home || p.startsWith(`${home}/`)) ? `~${p.slice(home.length)}` : p);
 
 // The earliest time a search may reach: the plan's window, narrowed by the person's own date filter.
@@ -45,11 +65,14 @@ function windowOf({ days = Infinity, from = null, now = Date.now() } = {}) {
 function query(ix, { q = '', tool = null, repo = null, from = null, to = null, limit = 30 } = {}, { days = Infinity, now = Date.now(), home = null } = {}) {
   const began = process.hrtime.bigint();
   const { since, limited } = windowOf({ days, from, now });
-  const until = Number.isFinite(to) ? to : 8.64e15;
-  const where = ['t.ts >= ?', 't.ts <= ?'], args = [since, until];
-  if (TOOLS.includes(tool)) { where.push('s.tool = ?'); args.push(tool); }
+  const typed = parseQuery(q);
+  const until = Math.min(Number.isFinite(to) ? to : 8.64e15, Number.isFinite(typed.to) ? typed.to : 8.64e15);
+  const where = ['t.ts >= ?', 't.ts <= ?'], args = [Math.max(since, Number.isFinite(typed.from) ? typed.from : 0), until];
+  const useTool = TOOLS.includes(tool) ? tool : typed.tool;
+  if (useTool) { where.push('s.tool = ?'); args.push(useTool); }
   if (typeof repo === 'string' && repo) { where.push('s.repo = ?'); args.push(repo.slice(0, 200)); }
-  const match = toMatch(q);
+  if (typed.project) { where.push("(lower(s.repo) = lower(?) OR s.cwd LIKE ? ESCAPE '\\')"); args.push(typed.project, `%/${typed.project.replace(/[\\%_]/g, (c) => `\\${c}`)}`); }
+  const match = toMatch(typed.text);
   const n = Math.max(1, Math.min(100, Number(limit) || 30));
   let hits = [];
   if (match) {
@@ -91,11 +114,13 @@ const EVERY_MS = 10 * 60 * 1000;
 const STALE_MS = 2 * 60 * 1000;
 const PAGE = 'memory';
 
-// A request/response channel to the memory worker; restarted on next use if it dies.
+// A request/response channel to the memory worker; restarted on next use if it
+// dies naturally. Explicit stop is terminal and refuses every later request.
 function createClient({ file, workerData, Worker, log = () => {} }) {
-  let w = null, seq = 0;
+  let w = null, seq = 0, stopped = false, stopping = Promise.resolve();
   const pending = new Map();
   function ensure() {
+    if (stopped) throw new Error('The search index stopped.');
     if (w) return w;
     w = new Worker(file, { workerData }); // privacy-flow: memory-index
     const self = w;
@@ -117,6 +142,7 @@ function createClient({ file, workerData, Worker, log = () => {} }) {
     return self;
   }
   function call(type, args = {}, ms = 30000) {
+    if (stopped) return Promise.reject(new Error('The search index stopped.'));
     return new Promise((resolve, reject) => {
       const id = ++seq;
       const timer = setTimeout(() => { pending.delete(id); reject(new Error(`${type} timed out`)); }, ms);
@@ -125,11 +151,22 @@ function createClient({ file, workerData, Worker, log = () => {} }) {
     });
   }
   function stop() {
+    stopped = true;
     const x = w;
     w = null;
     for (const p of pending.values()) { clearTimeout(p.timer); p.reject(new Error('The search index stopped.')); }
     pending.clear();
-    if (x) x.terminate().catch(() => {});
+    if (x) {
+      let ending;
+      try { ending = x.terminate(); } catch (error) { ending = Promise.reject(error); }
+      // Pending requests are already invalidated. File cleanup must wait for
+      // every retired worker to actually exit (Windows retains SQLite locks).
+      stopping = Promise.all([stopping, ending]).then(() => undefined);
+      // Existing fire-and-forget quit callers remain safe; callers that await
+      // stop still see a termination failure rather than false completion.
+      stopping.catch(() => {});
+    }
+    return stopping;
   }
   return { call, stop };
 }
@@ -153,11 +190,12 @@ function register(ctx = {}) {
   const settings = () => { try { const s = JSON.parse(fs.readFileSync(settingsFile, 'utf8')); return { experimental: s.experimental === true }; } catch { return { experimental: false }; } };
   const saveSettings = (s) => { fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); fs.writeFileSync(settingsFile, JSON.stringify(s), { mode: 0o600 }); };
 
-  let passing = null, lastPass = 0, followUp = null;
+  let passing = null, lastPass = 0, followUp = null, stopped = false;
   function pass() {
+    if (stopped) return Promise.resolve(null);
     if (passing) return passing;
     passing = client.call('index', { home, rootDir, days: days(), experimental: settings().experimental }, 5 * 60 * 1000)
-      .then((r) => { lastPass = Date.now(); if (r && r.more && !followUp) { followUp = setTimeout(() => { followUp = null; pass(); }, 2000); followUp.unref?.(); } return r; })
+      .then((r) => { if (stopped) return null; lastPass = Date.now(); if (r && r.more && !followUp) { followUp = setTimeout(() => { followUp = null; pass(); }, 2000); followUp.unref?.(); } return r; })
       .catch((e) => { log(`[memory] index pass failed: ${e && e.message}`); return null; })
       .finally(() => { passing = null; });
     return passing;
@@ -175,7 +213,7 @@ function register(ctx = {}) {
   }
   const handoff = Handoff.create({ entitlements: E, clipboard, docFor: async (k) => (await docFor(k))?.text ?? null, adapters: Handoff.defaultAdapters({ version: ctx.app?.getVersion?.() ?? '0' }), log });
 
-  const allowed = (e) => fromPage(e, PAGE);
+  const allowed = (e) => !stopped && fromPage(e, PAGE);
   const handle = (ch, fn) => ipcMain.handle(ch, async (e, ...args) => {
     if (!allowed(e)) return { ok: false, error: 'Not allowed.' };
     try { return await fn(e, ...args); } catch (err) { log(`[memory] ${ch} failed: ${err && err.message}`); return { ok: false, error: 'Something went wrong. Try again.' }; }
@@ -221,11 +259,16 @@ function register(ctx = {}) {
     const sender = e.sender;
     return handoff.hand(k, to, (ev) => { if (!sender.isDestroyed()) sender.send('memory:handoff-event', ev); });
   });
+  // A hit opens that session's Timeline page (src/session-timeline-main.js openSession).
+  handle('memory:open-timeline', async (_e, k) => {
+    if (!keyOk(k) || typeof ctx.openTimeline !== 'function') return { ok: false, error: 'Unknown session.' };
+    return { ok: ctx.openTimeline({ adapter: adapterOf(k.tool), sessionId: k.sid }) === true };
+  });
   handle('memory:reply', async (_e, id, text) => handoff.reply(id, text));
   handle('memory:end', async (_e, id) => handoff.end(id));
 
-  onQuit(() => { clearTimeout(startup); clearInterval(every); if (followUp) clearTimeout(followUp); handoff.stop(); client.stop(); });
+  onQuit(() => { stopped = true; clearTimeout(startup); clearInterval(every); if (followUp) clearTimeout(followUp); handoff.stop(); return client.stop(); });
   return { pass, client, handoff };
 }
 
-module.exports = { register, query, facets, toMatch, windowOf, createClient, TOOLS, MARK_OPEN, MARK_CLOSE };
+module.exports = { register, query, facets, toMatch, parseQuery, windowOf, createClient, TOOLS, MARK_OPEN, MARK_CLOSE };

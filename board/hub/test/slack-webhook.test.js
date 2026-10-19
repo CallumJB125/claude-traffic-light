@@ -214,7 +214,9 @@ test('private_metadata: sealed to team, user and message; tampering, another use
   const [body, mac] = m.split('.');
   const edited = Buffer.from(JSON.stringify({ ...JSON.parse(Buffer.from(body, 'base64url')), c: 'C0OTHER' })).toString('base64url');
   assert.equal(openMeta(SECRET, `${edited}.${mac}`, { team: 'T0TEAM1', user: 'U0ALICE' }, now), null);
-  assert.equal(openMeta(SECRET, `${body}.${mac.slice(0, -2)}AA`, { team: 'T0TEAM1', user: 'U0ALICE' }, now), null);
+  const changedMac = mac.slice(0, -1) + (mac.endsWith('A') ? 'Q' : 'A');
+  assert.notEqual(changedMac, mac, 'tampering must change the random MAC');
+  assert.equal(openMeta(SECRET, `${body}.${changedMac}`, { team: 'T0TEAM1', user: 'U0ALICE' }, now), null);
   assert.equal(openMeta(SECRET, m, { team: 'T0TEAM1', user: 'U0MALLORY' }, now), null);
   assert.equal(openMeta(SECRET, m, { team: 'T0OTHER', user: 'U0ALICE' }, now), null);
   assert.equal(openMeta(signingSecret(), m, { team: 'T0TEAM1', user: 'U0ALICE' }, now), null);
@@ -229,7 +231,9 @@ test('F2: an authentic form left open past the hour is {expired}, told apart fro
   const m = sealMeta(SECRET, { team: 'T0TEAM1', channel: 'C0CHAN1', ts: '1759312700.000200', user: 'U0ALICE' }, now - 61 * 60_000);
   assert.deepEqual(openMeta(SECRET, m, at, now), { expired: true });
   const [body, mac] = m.split('.');
-  assert.equal(openMeta(SECRET, `${body}.${mac.slice(0, -2)}AA`, at, now), null, 'an old form with a bad MAC is tampering, not expiry');
+  const changedMac = mac.slice(0, -1) + (mac.endsWith('A') ? 'Q' : 'A');
+  assert.notEqual(changedMac, mac, 'tampering must change the random MAC');
+  assert.equal(openMeta(SECRET, `${body}.${changedMac}`, at, now), null, 'an old form with a bad MAC is tampering, not expiry');
   assert.equal(openMeta(signingSecret(), m, at, now), null);
   assert.equal(openMeta(SECRET, m, { team: 'T0TEAM1', user: 'U0MALLORY' }, now), null, 'another person\'s form is refused whatever its age');
   assert.equal(metaExpired(m, now), true);

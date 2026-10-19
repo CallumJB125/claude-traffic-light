@@ -14,6 +14,12 @@
   const act = (kind, label, primary = false) => ({ kind, label, ...(primary ? { primary: true } : {}) });
 
   // Burst's /api/mod-status, reduced to what the band row shows.
+  // raw: /api/mac.panel (the usage panel, claude-code-cost-sidebar). → facts only.
+  function panelStatus(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    return { installed: raw.installed === true };
+  }
+
   function bandStatus(raw) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
     return { supported: raw.supported === true, installed: raw.installed === true, current: raw.current === true, toasts: raw.toasts === true };
@@ -79,7 +85,11 @@
   function panelTool(b) {
     const base = { id: 'panel', name: 'Usage panel', by: BY_BURST, what: 'A Claude Code mod that shows spend, context and Burst\'s state in a sidebar beside each session.', saves: null, actions: [], link: 'panel' };
     if (b.kind === 'unsupported') return { ...base, status: st('', MAC_ONLY), available: false };
-    return { ...base, status: st('', 'Optional'), note: 'Burst\'s installer offers it at the end. Plexiform cannot see whether it is installed.' };
+    if (b.kind !== 'on') return { ...base, status: st('', 'Optional'), note: 'Burst\'s installer offers it at the end.' };
+    // b.panel: panelStatus() from /api/mac.panel on a 0.20 Burst; null when Burst did not say.
+    if (!b.panel) return { ...base, status: st('', 'Optional'), note: 'Burst did not say whether it is installed. Refresh to ask again.' };
+    if (!b.panel.installed) return { ...base, status: st('', 'Not installed'), note: 'Burst installs and updates it; nothing runs until you confirm.', actions: [act('burst:panel-install', 'Install usage panel', true)] };
+    return { ...base, status: st('green', 'Installed'), note: 'Opens as a sidebar in new Claude Code sessions. Burst updates it with its own updates.' };
   }
 
   function routerTool() {
@@ -118,7 +128,7 @@
   // Burst dashboard sections a card may jump to (claude-burst admin dashboard, v0.19 `.navlink` targets).
   const SECTIONS = Object.freeze(['sec-config', 'secondarySection', 'sec-compaction']);
 
-  const api = { toolsView, bandStatus, MAC_ONLY, LINKS, PAGES, SECTIONS };
+  const api = { toolsView, bandStatus, panelStatus, MAC_ONLY, LINKS, PAGES, SECTIONS };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.PlexiformOptimiserTools = Object.freeze(api);
 })(typeof globalThis !== 'undefined' ? globalThis : this);

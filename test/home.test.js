@@ -295,3 +295,13 @@ test('home:resume-cap forwards to the cost guard and re-reads the costs card at 
   assert.equal((await handlers.get('home:state')({})).needs.paused, null);
   assert.deepEqual(await handlers.get('home:resume-cap')({ }), { ok: false, error: 'nothing is paused' }, 'nothing to resume is reported honestly');
 });
+
+
+test('Home primary actions open the existing task and project workspaces', async () => {
+  const calls = [], ui = setup([fresh], calls);
+  await tick();
+  ui.document.getElementById('open-tasks').click();
+  ui.document.getElementById('open-projects').click();
+  assert.deepEqual(calls, [['navigate', 'tasks'], ['navigate', 'board']]);
+  ui.close();
+});

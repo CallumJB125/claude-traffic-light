@@ -8,6 +8,7 @@
 const fs = require('fs');
 const path = require('path');
 const TV = require('./tasks-view.js');
+const ResultCards = require('./result-cards.js');
 
 // A copy of board/shared/states.js STATES (ESM; this file is CommonJS),
 // pinned by test/tasks-guard.test.js.
@@ -36,6 +37,7 @@ function createGuard({ P, taskFace }) {
     }
     return {
       id: v.id,
+      parentId: typeof v.parentId === 'string' && v.parentId.length > 0 && v.parentId.length <= 128 ? v.parentId : null,
       title: str(v.title, 200),
       state,
       blockedKind: strOrNull(v.blockedKind, 40),
@@ -78,6 +80,14 @@ function createGuard({ P, taskFace }) {
     };
   }
 
+  function sanitizeCollaboration(r) {
+    if (!r || typeof r.requestId !== 'string' || !r.requestId || r.requestId.length > 256
+        || !['buddy_spin_off', 'buddy_message'].includes(r.kind) || !['pending', 'queued', 'delivered', 'uncertain'].includes(r.state)
+        || !Number.isSafeInteger(r.at) || r.at < 0) return null;
+    const id = v => typeof v === 'string' && v.length > 0 && v.length <= 128 ? v : null;
+    return { requestId: r.requestId, kind: r.kind, taskId: id(r.taskId), messageId: id(r.messageId), state: r.state, at: r.at };
+  }
+
   function sanitizeDetail(d, opts = {}) {
     const base = sanitizeTask(d, opts);
     if (!base) return null;
@@ -94,7 +104,8 @@ function createGuard({ P, taskFace }) {
         tests: strOrNull(ev.tests, 20), testCommand: strOrNull(ev.testCommand, 200), summary: strOrNull(ev.summary, 2000),
         diffStat: ev.diffStat ? { files: int(ev.diffStat.files), added: int(ev.diffStat.added), removed: int(ev.diffStat.removed) } : null,
       } : null,
-      pr: d.pr ? { number: int(d.pr.number), state: pick(d.pr.state, ['open', 'merged', 'closed'], 'open') } : null,
+      pr: d.pr ? { number: int(d.pr.number), state: pick(d.pr.state, ['open', 'merged', 'closed'], 'open'),
+        url: typeof d.pr.url === 'string' && /^https:\/\/github\.com\/[A-Za-z0-9][\w.-]*\/[A-Za-z0-9][\w.-]*\/pull\/[1-9][0-9]*$/.test(d.pr.url) && d.pr.url.endsWith(`/pull/${int(d.pr.number)}`) ? d.pr.url : null } : null,
       openApprovals: (Array.isArray(d.openApprovals) ? d.openApprovals : []).slice(0, 10).map((a) => ({ approvalId: str(a.approvalId, 128), tool: str(a.tool, 80), inputSummary: str(a.inputSummary, 500) })),
       openAsk: d.openAsk ? {
         askId: str(d.openAsk.askId, 128), kind: str(d.openAsk.kind, 20), text: str(d.openAsk.text, 4000),
@@ -105,6 +116,7 @@ function createGuard({ P, taskFace }) {
       } : null,
       limitResetsAtMs: Number.isFinite(d.limitResetsInMs) ? now + d.limitResetsInMs : null,
       messages: (Array.isArray(d.messages) ? d.messages : []).slice(-200).map(sanitizeMessage).filter(Boolean),
+      collaboration: (Array.isArray(d.collaboration) ? d.collaboration : []).slice(-50).map(sanitizeCollaboration).filter(Boolean),
     };
   }
 
@@ -149,7 +161,9 @@ function createGuard({ P, taskFace }) {
   const text = (v, max) => typeof v === 'string' && v.trim().length > 0 && [...v].length <= max;
   function checkpointData(v) {
     const fields = ['brief', 'decisions', 'progress', 'nextAction', 'artifacts', 'reportedChecks'];
-    if (!v || typeof v !== 'object' || Array.isArray(v) || Object.keys(v).length !== fields.length || Object.keys(v).some((k) => !fields.includes(k))) return null;
+    if (!v || typeof v !== 'object' || Array.isArray(v) || fields.some(k => !Object.hasOwn(v, k)) || Object.keys(v).some((k) => ![...fields, 'resultCards'].includes(k))) return null;
+    let resultCards;
+    if (Object.hasOwn(v, 'resultCards')) { try { resultCards = ResultCards.cleanResultCards(v.resultCards); } catch { return null; } }
     for (const [k, max] of [['brief', 4000], ['progress', 4000], ['nextAction', 2000]]) if (typeof v[k] !== 'string' || v[k].length > max) return null;
     for (const k of ['decisions', 'reportedChecks']) if (!Array.isArray(v[k]) || v[k].length > 20 || v[k].some((s) => typeof s !== 'string' || s.length > 500)) return null;
     if (!Array.isArray(v.artifacts) || v.artifacts.length > 32) return null;
@@ -159,14 +173,18 @@ function createGuard({ P, taskFace }) {
       if (!field || Object.keys(a).length !== 2 || Object.keys(a).some((k) => !['kind', field].includes(k)) || typeof a[field] !== 'string' || a[field].length > 1024) return null;
       artifacts.push({ kind: a.kind, [field]: a[field] });
     }
-    return { brief: v.brief, decisions: [...v.decisions], progress: v.progress, nextAction: v.nextAction, artifacts, reportedChecks: [...v.reportedChecks] };
+    return { brief: v.brief, decisions: [...v.decisions], progress: v.progress, nextAction: v.nextAction, artifacts, reportedChecks: [...v.reportedChecks], ...(resultCards !== undefined ? { resultCards } : {}) };
   }
   function sanitizeCheckpoint(p) {
     if (!p || p.schemaVersion !== 1 || !Number.isSafeInteger(p.version) || p.version < 1) return null;
-    const data = checkpointData(Object.fromEntries(['brief', 'decisions', 'progress', 'nextAction', 'artifacts', 'reportedChecks'].map((k) => [k, p[k]])));
+    const data = checkpointData(Object.fromEntries(['brief', 'decisions', 'progress', 'nextAction', 'artifacts', 'reportedChecks', ...(Object.hasOwn(p, 'resultCards') ? ['resultCards'] : [])].map((k) => [k, p[k]])));
     if (!data) return null;
+    const author = a => ({ kind: pick(a?.kind, ['human', 'agent', 'remote', 'supervisor'], 'supervisor'), source: pick(a?.source, [...P.SOURCES, 'engine'], 'engine') });
+    const source = p.resultCardsSource;
+    const resultCardsSource = source && Number.isSafeInteger(source.version) && source.version >= 1 && source.version <= p.version && Number.isSafeInteger(source.at) && source.at >= 0
+      ? { version: source.version, at: source.at, author: author(source.author) } : null;
     return { schemaVersion: 1, version: p.version, at: int(p.at),
-      author: { kind: pick(p.author?.kind, ['human', 'agent', 'remote', 'supervisor'], 'supervisor'), source: pick(p.author?.source, [...P.SOURCES, 'engine'], 'engine') },
+      author: author(p.author), ...(resultCardsSource ? { resultCardsSource } : {}),
       provenance: str(p.provenance, 40), ...data, observed: { state: pick(p.observed?.state, STATES, 'queued'), tests: pick(p.observed?.tests, ['pass', 'fail', 'none']) } };
   }
   function validateCheckpoint(req) {

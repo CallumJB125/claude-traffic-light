@@ -13,6 +13,7 @@ import { startAccounts } from './accounts-helpers.js';
 import { createLogger } from '../log.js';
 
 const require = createRequire(import.meta.url);
+const { spawnProviderFixture } = require('../../../test/helpers/provider-fixture-spawn');
 const { createRemoteInteractionHost } = require('../../../src/remote-interaction.js');
 const { createSessionMessagingHost, createMessagingClient } = require('../../../src/session-messaging.js');
 const { createCodexAppServer } = require('../../../src/codex-app-server.js');
@@ -37,7 +38,7 @@ export async function messagingRig({ limits } = {}) {
   const stops = [];
   // A Mac that opted in to hosting, with one owned (fake Codex) session and the message receiver.
   async function mac(dev = macA, { shares = () => null, start = true, ...opts } = {}) {
-    const adapter = createCodexAppServer({ bin: FAKE });
+    const adapter = createCodexAppServer({ bin: FAKE, spawn: spawnProviderFixture });
     const remote = createRemoteInteractionHost({ userId: dev.user, adapters: { codex: adapter }, boardCurrent: (b) => b === null });
     const st = await remote.enable({ baseUrl: h.base, token: dev.token, WebSocket });
     assert.equal(st.state, 'connected');

@@ -10,6 +10,7 @@
 
 const path = require('node:path');
 const Usage = require('../usage.js');
+const ModelMix = require('./model-mix.js');
 
 const DAYS = 7;
 const LIST_MAX = 8;
@@ -97,10 +98,29 @@ function sections({ records = [], tasks = [], turns = [], now = Date.now(), prs 
     return clean(`${name}: ${bits.join(', ')}`, 200);
   });
   if (rows.length > items.length) items.push(`And ${rows.length - items.length} more.`);
-  return [
+  const out = [
     { id: 'week-overview', heading: 'Your week', summary: null, items: lines },
     { id: 'by-repo', heading: 'By repo', summary: null, items },
   ];
+  const cost = whereItWent(repos, { turns, now });
+  if (cost.length) out.push({ id: 'where-it-went', heading: 'Where the money went', summary: null, items: cost.map((l) => clean(l, 240)) });
+  return out;
 }
 
-module.exports = { sections, byRepo, overview };
+// The three projects that cost the most this week, and the one saving suggestion.
+function whereItWent(repos, { turns = [], now = Date.now() } = {}) {
+  const spenders = [...repos.entries()].filter(([, r]) => r.usd > 0).sort((a, b) => b[1].usd - a[1].usd || a[0].localeCompare(b[0])).slice(0, 3);
+  const out = [];
+  if (spenders.length) {
+    const total = [...repos.values()].reduce((n, r) => n + r.usd, 0);
+    const named = spenders.map(([n, r]) => `${n} (${money(r.usd)})`);
+    out.push(spenders.length === 1
+      ? `All ${money(total)} went to ${named[0]}.`
+      : `Most went to ${list(named)}, out of ${money(total)}.`);
+  }
+  const saving = ModelMix.savingLine(ModelMix.routineEstimate(turns, { from: dayKey(now) - (DAYS - 1) * 86400000, now }));
+  if (saving) out.push(saving);
+  return out;
+}
+
+module.exports = { sections, byRepo, overview, whereItWent };

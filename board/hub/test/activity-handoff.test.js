@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { startHub } from './helpers.js';
-import { pendingHandoffs, HANDOFF_REQUESTED, HANDOFF_TAKEN } from '../activity-handoff.js';
+import { pendingHandoffs, handoffStates, HANDOFF_REQUESTED, HANDOFF_TAKEN, HANDOFF_DECLINED, HANDOFF_TTL_MS } from '../activity-handoff.js';
 
 const RID = 'inst-a:claude:sess-1';
 function fakeLog(current) {
@@ -86,4 +86,41 @@ test('pendingHandoffs: a later handoff to someone else replaces the earlier one'
   assert.deepEqual(pendingHandoffs([ev(1, HANDOFF_REQUESTED, 'b'), ev(2, HANDOFF_REQUESTED, 'c')], 'b'), []);
   assert.equal(pendingHandoffs([ev(1, HANDOFF_REQUESTED, 'c'), ev(2, HANDOFF_REQUESTED, 'b')], 'b')[0].seq, 2);
   assert.deepEqual(pendingHandoffs(null, 'b'), []);
+});
+
+const declinePath = (h, id = RID, team = h.ids.org) => `/api/teams/${team}/activity/v1/records/${encodeURIComponent(id)}/handoff/decline`;
+
+test('decline: only the addressee answers an open handoff, with a scrubbed note the sender can read', () => rig(async ({ h, log, alice, bob }) => {
+  assert.equal((await h.api(bob, 'POST', declinePath(h), {})).status, 404, 'nothing offered yet');
+  assert.equal((await h.api(alice, 'POST', handoffPath(h), { to_member_id: h.ids.bob })).status, 200);
+  assert.equal((await h.api(alice, 'POST', declinePath(h), {})).status, 404, 'the sender cannot answer it');
+  assert.equal((await h.api(bob, 'POST', declinePath(h), { note: 'x'.repeat(501) })).status, 400);
+  const r = await h.api(bob, 'POST', declinePath(h), { note: 'No time this week; key ghp_abcdefghijklmnopqrstuvwxyz0123456789' });
+  assert.equal(r.status, 200, r.text);
+  assert.equal(log.all.at(-1).type, HANDOFF_DECLINED);
+  assert.equal(r.body.declined.to_member_id, h.ids.alice);
+  assert.doesNotMatch(r.body.declined.note, /ghp_/);
+  const [st] = handoffStates(log.all);
+  assert.equal(st.state, 'declined');
+  assert.match(st.answer, /No time this week/);
+  assert.deepEqual(pendingHandoffs(log.all, h.ids.bob), []);
+  assert.equal((await h.api(bob, 'POST', declinePath(h), {})).status, 404, 'answered once');
+  assert.equal((await h.api(bob, 'POST', continuePath(h), {})).status, 200);
+  assert.equal(handoffStates(log.all)[0].state, 'declined', 'continuing later does not turn a decline into an accept');
+}));
+
+test('decline: another team reads as missing', () => rig(async ({ h, bob }) => {
+  assert.equal((await h.api(bob, 'POST', declinePath(h, 'inst-z:claude:other'), {})).status, 404);
+  assert.equal((await h.api(bob, 'POST', declinePath(h, RID, 'another-team'), {})).status, 404);
+}, (h) => [record(h), record(h, { record_id: 'inst-z:claude:other', team_id: 'another-team' })]));
+
+test('handoffStates: offered → accepted by the addressee only, and expired after a week unanswered', () => {
+  const at = Date.parse('2026-10-01T00:00:00Z');
+  const req = { seq: 1, type: HANDOFF_REQUESTED, payload: { record_id: RID, to_member_id: 'b', by_member_id: 'a', requested_at: new Date(at).toISOString() } };
+  const take = (by) => ({ seq: 2, type: HANDOFF_TAKEN, payload: { record_id: RID, by_member_id: by } });
+  assert.equal(handoffStates([req], { nowMs: at + 1000 })[0].state, 'offered');
+  assert.equal(handoffStates([req, take('c')], { nowMs: at + 1000 })[0].state, 'offered', 'someone else continuing does not accept it');
+  assert.equal(handoffStates([req, take('b')], { nowMs: at + 1000 })[0].state, 'accepted');
+  assert.equal(handoffStates([req], { nowMs: at + HANDOFF_TTL_MS + 1 })[0].state, 'expired');
+  assert.deepEqual(pendingHandoffs([req], 'b', { nowMs: at + HANDOFF_TTL_MS + 1 }), []);
 });

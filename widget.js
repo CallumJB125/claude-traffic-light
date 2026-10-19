@@ -1,5 +1,13 @@
 // ambient: the idle loops tick on a slow clock, not every display frame
 const rig = mountRig(document.getElementById('housing'), { ambient: true });
+// A user sprite pack (Settings or Lights pick it; main validates the files)
+// replaces the drawn character; any failure leaves the built-in one.
+function loadSpritePack() {
+  if (!window.spritePacks) return;
+  window.spritePacks.list().then((r) => rig.setSpritePack(r && r.current ? r.current : null)).catch(() => rig.setSpritePack(null));
+}
+loadSpritePack();
+if (window.spritePacks) window.spritePacks.onChange(loadSpritePack);
 rig.svg.classList.add('breathes');
 // Main does the window travel (roam, knock hops, garden, drag glide), so
 // it has to hear about reduced motion from here, now and on every change.
@@ -39,7 +47,7 @@ const app = document.getElementById('app');
 let lastRuleId = null;
 // The agents roster is a hover reveal, so it never covers Claude at rest.
 let hovering = false;
-app.addEventListener('mouseenter', () => { hovering = true; if (rig.look) rig.setLook({ ...rig.look, showRoster: rig.look.agentRoster !== false }); });
+app.addEventListener('mouseenter', () => { hovering = true; loadCards(); if (rig.look) rig.setLook({ ...rig.look, showRoster: rig.look.agentRoster !== false }); });
 app.addEventListener('mouseleave', () => { hovering = false; if (rig.look) rig.setLook({ ...rig.look, showRoster: false }); });
 let sleepSince = null;
 // when the current cigarette run started; the rig counts its 5-minute cigarettes from it
@@ -80,7 +88,7 @@ const bubble = window.InputBubble.create(bubbleEl, {
   mode: 'widget',
   maxRows: 2,
   api: {
-    answerInput: (id, optionId, more) => window.trafficLight.answerInput(id, optionId, more),
+    answerInput: (id, optionId, more) => (tourInput && id === tourInput.id ? tourAnswered() : window.trafficLight.answerInput(id, optionId, more)),
     openInput: (id) => window.trafficLight.openInput(id),
     copyCommand: (id) => window.trafficLight.copyInputCommand(id),
     openAutoRule: (id) => window.trafficLight.openAutoRule({ inputId: id }),
@@ -92,6 +100,23 @@ const bubble = window.InputBubble.create(bubbleEl, {
   },
   onLayout: () => reportBubble(),
   onScreen: () => stripAck === bubblePx,
+});
+// First-run tour, demo only: a made-up question in the bubble; answering it
+// moves the tour on and never reaches a hook (src/first-run-tour-main.js).
+let tourInput = null;
+const withTourInput = (inputs) => (tourInput ? [...inputs, tourInput] : inputs);
+function tourAnswered() {
+  const id = tourInput.id;
+  tourInput = null;
+  bubble.update(lastInputs);
+  window.tourApi?.action('answered', 'waiting');
+  return Promise.resolve({ ok: true, id });
+}
+document.addEventListener('plexiform-tour', (e) => {
+  const next = e.detail && e.detail.demoInput && typeof e.detail.demoInput.id === 'string' ? e.detail.demoInput : null;
+  if ((next && next.id) === (tourInput && tourInput.id)) return;
+  tourInput = next;
+  bubble.update(withTourInput(lastInputs));
 });
 window.trafficLight.onStripApplied((px) => { stripAck = px; if (px === bubblePx) bubble.revealed(); });
 // Also on resize: widening the window rewraps the text, so the height changes.
@@ -125,12 +150,16 @@ function applyStatus(data) {
   smokeSince = look.pose === 'smoke' ? (smokeSince ?? Date.now()) : null;
   if (smokeSince) look.smokeSince = smokeSince;
   rig.setLook(look);
+  lastSessions = data.sessions || [];
+  paintPolish();
   // A preview carries no inputs: keep what is showing rather than flicker.
+  lastInputs = Array.isArray(data.inputs) ? data.inputs : lastInputs;
+  if (hovering) loadCards();
   if (data.reason === 'travel') bubble.update([]);
-  else if (Array.isArray(data.inputs)) bubble.update(data.inputs, { scopes: window.WorkScopeView.scopesBySession(data.sessions) });
+  else if (Array.isArray(data.inputs)) bubble.update(withTourInput(data.inputs), { scopes: window.WorkScopeView.scopesBySession(data.sessions) });
   // A look preview carries no budget field: keep what is showing.
   if (data.budget !== undefined || data.reason === 'travel') renderBudget(data.reason === 'travel' ? null : data.budget);
-  renderAway(data.reason === 'travel' ? null : data.away);
+  renderAway(data.reason === 'travel' ? null : data.away, data.reason === 'travel' ? null : data.team);
   idleNow = data.reason === 'idle' && !(data.inputs && data.inputs.length);
   if (idleNow && !hintAsked) { hintAsked = true; window.trafficLight.teamHint().then((h) => { hintOffer = h; paintRow(); }).catch(() => {}); }
   else paintRow();
@@ -171,7 +200,8 @@ function applyStatus(data) {
   const reported = !['manual', 'preview', 'travel'].includes(data.reason) ? data.providerStatus?.headline : null;
   const reportAge = data.providerStatus?.latest_age_ms;
   const seen = reported ? Number.isFinite(reportAge) && reportAge >= 0 ? ` · Last seen ${Math.floor(reportAge / 1000)}s ago` : ' · Last seen unknown' : '';
-  tooltip.textContent = (reported ? `${reported} · Rule “${text}”` : text) + suffix + (data.paceLine ? ` — ${data.paceLine}` : '') + seen;
+  const team = data.team ? ` · ${data.team.looks.length ? `${data.team.looks.length} teammate${data.team.looks.length === 1 ? '' : 's'} asking you to look` : ''}${data.team.looks.length && data.team.waiting.length ? ', ' : ''}${data.team.waiting.length ? `waiting on ${data.team.waiting.length}` : ''}` : '';
+  tooltip.textContent = (reported ? `${reported} · Rule “${text}”` : text) + suffix + team + (data.paceLine ? ` — ${data.paceLine}` : '') + seen;
 }
 
 // In-app update row. Text only (textContent): a hub name is not ours.
@@ -290,14 +320,68 @@ document.getElementById('budget-x').addEventListener('click', (e) => { e.stopPro
 // The recap: needs-you first, then failures, then finished. Three lines
 // fit under the heading; past three items the last becomes "+N more".
 const AWAY_LINES = 3;
+// Widget polish (src/widget-polish-main.js): size, edge snapping, accents and the quiet moon.
+let polish = { snap: 'corners', size: 'normal', colours: {}, quiet: false };
+const projectKey = (cwd) => String(cwd || '').replace(/\/+$/, '').split('/').filter(Boolean).pop() || '';
+const accentFor = (cwd) => (cwd && Object.prototype.hasOwnProperty.call(polish.colours, projectKey(cwd)) ? polish.colours[projectKey(cwd)] : null);
+let lastSessions = [];
+function paintPolish() {
+  for (const k of ['normal', 'compact', 'dot']) document.body.classList.toggle(`size-${k}`, polish.size === k);
+  document.body.classList.toggle('quiet', !!polish.quiet);
+  const lit = (lastSessions || []).map((x) => accentFor(x && x.cwd)).find(Boolean) || null;
+  document.body.classList.toggle('has-accent', !!lit);
+  if (lit) document.body.style.setProperty('--project-accent', lit); else document.body.style.removeProperty('--project-accent');
+  document.body.style.setProperty('--dot', rig.svg.style.getPropertyValue('--lamp-on') || 'var(--lamp-off)');
+}
+async function refreshPolish() {
+  try { const p = await window.trafficLight.polish.state(); if (p) polish = { ...polish, ...p, colours: p.colours || {} }; } catch { /* keep the last one */ }
+  paintPolish();
+}
+
 const AWAY_WORDS = { 'needs-you': (x) => x.detail || 'needs you', failed: (x) => `failed${x.detail && x.detail !== 'error' ? ` (${x.detail})` : ''}`, done: () => 'done' };
 let awayKey = null;
-function renderAway(recap) {
-  document.body.classList.toggle('away', !!recap);
-  const key = recap ? `${recap.to}` : null;
+let teamDismissed = null; // the team panel the person closed; it returns when the requests change
+const teamKey = (team) => team ? [...team.looks.map((l) => `l:${l.id}:${l.handling ? 1 : 0}`), ...team.waiting.map((w) => `w:${w.id}:${w.state}`)].join('|') : null;
+// Teammates' requests take the recap's panel when there is no recap: who is asking me to look, and what I am waiting on.
+function renderTeam(team, rows) {
+  document.getElementById('away-head').textContent = 'Teammates';
+  document.getElementById('away-head').title = `${team.looks.length} asking you to look · ${team.waiting.length} you are waiting on — click a row to open agent mail`;
+  const els = [];
+  for (const l of team.looks.slice(0, AWAY_LINES)) {
+    const b = document.createElement('button');
+    b.className = `row look${l.handling ? ' handling' : ''}`;
+    b.title = `${l.from} asks: ${l.question}${l.handling ? ' — you said you would handle it' : ''}`;
+    const dot = document.createElement('i'); dot.className = 'dot';
+    const text = document.createElement('span'); text.textContent = `${l.from} · ${l.handling ? 'handling' : 'asks'} · ${l.question}`;
+    b.append(dot, text);
+    b.addEventListener('mousedown', (e) => e.stopPropagation());
+    b.addEventListener('click', async (e) => { e.stopPropagation(); if (!(await window.trafficLight.openMail())) showFeedback('Agent mail could not be opened'); });
+    els.push(b);
+  }
+  for (const w of team.waiting.slice(0, Math.max(0, AWAY_LINES - els.length))) {
+    const b = document.createElement('button');
+    b.className = 'row waiting';
+    b.title = `Waiting on ${w.to}: ${w.question} — ${w.state}`;
+    const dot = document.createElement('i'); dot.className = 'dot';
+    const text = document.createElement('span'); text.textContent = `Waiting on ${w.to} · ${w.state}`;
+    b.append(dot, text);
+    b.addEventListener('mousedown', (e) => e.stopPropagation());
+    b.addEventListener('click', async (e) => { e.stopPropagation(); if (!(await window.trafficLight.openMail())) showFeedback('Agent mail could not be opened'); });
+    els.push(b);
+  }
+  const extra = team.looks.length + team.waiting.length - els.length;
+  if (extra > 0) { const m = document.createElement('div'); m.className = 'more'; m.textContent = `+${extra} more`; els.push(m); }
+  rows.replaceChildren(...els);
+}
+function renderAway(recap, team = null) {
+  const showTeam = !recap && !!team && teamKey(team) !== teamDismissed;
+  document.body.classList.toggle('away', !!recap || showTeam);
+  document.body.classList.toggle('team', showTeam);
+  const key = recap ? `${recap.to}` : showTeam ? `team:${teamKey(team)}` : null;
   if (key === awayKey) return;
   awayKey = key;
   const rows = document.getElementById('away-rows');
+  if (showTeam) { renderTeam(team, rows); return; }
   if (!recap) { rows.replaceChildren(); return; }
   document.getElementById('away-head').textContent = 'While you were away';
   document.getElementById('away-head').title = `${recap.headline}${recap.reasons && recap.reasons.length ? ` — while busy (${recap.reasons.join(', ')})` : ''}`;
@@ -308,6 +392,8 @@ function renderAway(recap) {
     const b = document.createElement('button');
     b.className = `row ${x.kind}`;
     b.title = `${x.folder || 'session'}: ${AWAY_WORDS[x.kind](x)} — click to go there`;
+    const accent = x.folder && Object.prototype.hasOwnProperty.call(polish.colours, x.folder) ? polish.colours[x.folder] : null;
+    if (accent) b.style.setProperty('--row-accent', accent);
     const dot = document.createElement('i');
     dot.className = 'dot';
     const text = document.createElement('span');
@@ -334,12 +420,15 @@ function renderAway(recap) {
   rows.replaceChildren(...els);
 }
 document.getElementById('away-x').addEventListener('mousedown', (e) => e.stopPropagation());
-document.getElementById('away-x').addEventListener('click', (e) => { e.stopPropagation(); window.trafficLight.awayDismiss(); });
+document.getElementById('away-x').addEventListener('click', (e) => { e.stopPropagation(); if (document.body.classList.contains('team')) { teamDismissed = awayKey ? awayKey.slice('team:'.length) : null; awayKey = null; renderAway(null, null); } else window.trafficLight.awayDismiss(); });
 
 refresh();
 window.trafficLight.onStatusChanged(refresh);
 // Poll accepted metadata too: a dropped status push must not freeze the lamp.
 setInterval(refresh, 5000);
+refreshPolish();
+window.trafficLight.onStatusChanged(refreshPolish);
+setInterval(refreshPolish, 15000);
 window.trafficLight.onBurst((ms) => rig.burst(ms));
 // Aim updates arrive ~8x/s while a gun pose is live; re-apply the current
 // look with the new facing/angle without waiting for the next poll.
@@ -408,7 +497,7 @@ let clickThrough = null;
 const solidAt = (x, y) => {
   const el = document.elementFromPoint(x, y);
   if (!el) return false;
-  if (el.closest('#gear, #help, #bubble, #budget, #away, #update, .minion')) return true;
+  if (el.closest('#gear, #help, #bubble, #budget, #away, #update, #event-lane .lane-row, .minion, #strip, #session-card, #dot')) return true;
   return rig.solidAt(x, y);
 };
 const hitTest = (x, y) => {
@@ -452,6 +541,8 @@ function endDrag(e, released) {
   const y = e.screenY - d.grabY;
   window.trafficLight.setWindowPosition(x, y);
   dragTo = null;
+  // Snapping to edges places the widget where it was let go, then onto the nearest edge: no throw.
+  if (polish.snap === 'edges') { window.trafficLight.dragEnd(0, 0); window.trafficLight.polish.snap().catch(() => {}); return; }
   const v = window.BuddyMotion.releaseVelocity(d.samples, e.timeStamp);
   window.trafficLight.dragEnd(released ? v.vx : 0, released ? v.vy : 0);
 }
@@ -460,6 +551,7 @@ window.addEventListener('mouseup', (e) => { endPress(); endDrag(e, true); });
 let wheelAccum = 0;
 app.addEventListener('wheel', (e) => {
   e.preventDefault();
+  if (polish.size !== 'normal') return; // compact and dot are fixed sizes
   wheelAccum += e.deltaY;
   if (Math.abs(wheelAccum) < 12) return;
   const factor = wheelAccum < 0 ? 1.06 : 0.94;
@@ -480,6 +572,81 @@ function showFeedback(text) {
 
 window.trafficLight.onEvent((name) => rig.playEvent(name));
 
+// Notification lane and rings (src/widget-lane-view.js, src/widget-rings-view.js):
+// main sends one event per new thing and the rings when they change. Event
+// text comes from session folders, repos and teammates: textContent only.
+const laneEl = document.getElementById('event-lane');
+let laneEvents = [];
+let laneTimer = 0;
+const LANE_GO = new Set(['needs-you', 'finished']);
+function laneRow(r) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.dataset.id = r.id;
+  b.className = `lane-row ${r.kind}${LANE_GO.has(r.kind) ? ' go' : ''} enter`;
+  const dot = document.createElement('i'); dot.className = 'dot';
+  const text = document.createElement('span'); text.textContent = r.text;
+  b.title = r.text;
+  b.append(dot, text);
+  b.addEventListener('mousedown', stop);
+  b.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    if (!LANE_GO.has(r.kind)) return;
+    if (r.inputId) { window.trafficLight.openInput(r.inputId); return; }
+    const res = await window.trafficLight.goToNeedingSession().catch(() => null);
+    if (res && res.feedback) showFeedback(res.feedback);
+  });
+  requestAnimationFrame(() => b.classList.remove('enter'));
+  return b;
+}
+function paintLane() {
+  clearTimeout(laneTimer);
+  laneTimer = 0;
+  const now = Date.now();
+  laneEvents = window.WidgetLaneView.expire(laneEvents, now);
+  const rows = window.WidgetLaneView.laneModel(laneEvents, { now });
+  const have = new Map([...laneEl.children].map((el) => [el.dataset.id, el]));
+  const els = rows.map((r) => {
+    const el = have.get(r.id) || laneRow(r);
+    el.classList.toggle('fading', r.fading);
+    return el;
+  });
+  laneEl.replaceChildren(...els);
+  const next = window.WidgetLaneView.nextChangeMs(laneEvents, { now });
+  if (next !== null) laneTimer = setTimeout(paintLane, next);
+}
+window.trafficLight.onLaneEvent((ev) => {
+  laneEvents = window.WidgetLaneView.pushEvent(laneEvents, ev, Date.now());
+  paintLane();
+});
+const RING_C = { spend: 2 * Math.PI * 47, turn: 2 * Math.PI * 43.5 };
+const ringsEl = document.getElementById('rings');
+function paintRing(name, ring) {
+  const g = document.getElementById(`ring-${name}`);
+  const arc = document.getElementById(`ring-${name}-arc`);
+  g.hidden = !ring || !ring.show;
+  if (g.hidden) return;
+  arc.setAttribute('class', `arc ${ring.band || 'green'}`);
+  arc.setAttribute('stroke-dasharray', `${RING_C[name]}`);
+  arc.setAttribute('stroke-dashoffset', `${RING_C[name] * (1 - ring.fraction)}`);
+  const t = g.querySelector('title') || g.appendChild(document.createElementNS('http://www.w3.org/2000/svg', 'title'));
+  t.textContent = ring.label;
+}
+function paintRings(r) {
+  const show = !!(r && r.show);
+  ringsEl.hidden = !show;
+  if (!show) return;
+  paintRing('spend', r.spend);
+  paintRing('turn', r.turn);
+}
+window.trafficLight.onRings(paintRings);
+window.trafficLight.laneState().then((s) => {
+  if (!s) return;
+  if (Array.isArray(s.lane)) for (const r of s.lane.slice().reverse()) laneEvents = window.WidgetLaneView.pushEvent(laneEvents, { ...r, at: Date.now() - r.age }, Date.now());
+  paintLane();
+  paintRings(s.rings);
+}).catch(() => {});
+
 // Voice states from main: the mic badge while listening, what was heard
 // and the answer on the tooltip, and the mouth working while he talks.
 let voiceTimer = null;
@@ -490,13 +657,35 @@ function showVoiceText(text, ms) {
   tooltip.style.opacity = '1';
   if (ms) voiceTimer = setTimeout(() => { tooltip.style.opacity = ''; refresh(); }, ms);
 }
+// Agent mode: "Start a task: …?" waits for a click; nothing starts without one.
+let voiceOfferId = null;
+let voiceOfferTimer = null;
+function showVoiceOffer(o) {
+  clearTimeout(voiceOfferTimer);
+  voiceOfferId = o && typeof o.id === 'string' ? o.id : null;
+  document.body.classList.toggle('voice-offer', !!voiceOfferId);
+  if (!voiceOfferId) return;
+  document.getElementById('voice-offer-text').textContent = `Start a task: ${String(o.text || '')}?`;
+  voiceOfferTimer = setTimeout(() => showVoiceOffer(null), 120000);
+}
+for (const [id, action] of [['voice-offer-start', 'start'], ['voice-offer-cancel', 'cancel']]) {
+  const b = document.getElementById(id);
+  b.addEventListener('mousedown', (e) => e.stopPropagation());
+  b.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const offer = voiceOfferId;
+    showVoiceOffer(null);
+    if (offer) window.trafficLight.voiceOffer(offer, action).catch(() => {});
+  });
+}
 window.trafficLight.onVoice((st) => {
   const listening = st.state === 'listening';
   document.body.classList.toggle('listening', listening);
   rig.talking(st.state === 'talking');
   if (listening) showVoiceText(st.partial ? `“${st.partial}”` : 'Listening…');
   else if (st.state === 'authorizing') showVoiceText(`Allow ${window.Brand.name} in the macOS prompt`);
-  else if (st.state === 'thinking') showVoiceText(st.heard ? `“${st.heard}”` : '…');
+  else if (st.state === 'thinking') showVoiceText(st.text || (st.heard ? `“${st.heard}”` : '…'));
+  else if (st.state === 'offer') { showVoiceOffer(st.offer); return; }
   else if (st.state === 'talking') showVoiceText(st.text || '');
   else if (st.state === 'error') showVoiceText(st.error || 'Could not listen', 6000);
   else showVoiceText(tooltip.textContent, 4000);
@@ -538,3 +727,111 @@ app.addEventListener('contextmenu', (e) => {
   e.preventDefault();
   window.trafficLight.widgetMenu(e.shiftKey || e.altKey);
 });
+
+// Session strip and hover cards (wave 1, lane A). While the pointer is over
+// the widget, a strip of session chips shows at the top: the pinned one first,
+// idle sessions folded into "+N idle", teammates on a second row. Resting on a
+// chip (or focusing it) for 350 ms shows that session's card in place of the
+// one-line tooltip. Every string comes from session files or a teammate: text
+// only (textContent), never markup.
+const CARD_DELAY_MS = 350;
+const stripEl = document.getElementById('strip');
+const cardEl = document.getElementById('session-card');
+let lastInputs = [];
+let cardsSeq = 0;
+let cardsModel = null;
+let cardTimer = 0;
+let cardFor = null;
+let cardsAt = 0;
+function loadCards(force = false) {
+  if (!window.trafficLight.getSessionCards) return;
+  if (!force && Date.now() - cardsAt < 1000) return;
+  cardsAt = Date.now();
+  const seq = ++cardsSeq;
+  window.trafficLight.getSessionCards().then((m) => { if (seq === cardsSeq && m) { cardsModel = m; paintStrip(); } }).catch(() => {});
+}
+function chipFor(row) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  if (row.kind === 'idle') {
+    b.className = 'chip idle-count';
+    b.textContent = `+${row.count} idle`;
+    b.setAttribute('aria-label', `${row.count} idle sessions`);
+    return b;
+  }
+  const c = row.card;
+  b.className = `chip${c.waiting ? ' waiting' : c.idle ? ' idle' : ' active'}${row.pinned ? ' pinned' : ''}${row.team ? ' team' : ''}`;
+  b.dataset.id = row.id || '';
+  const dot = document.createElement('i'); dot.className = 'dot';
+  const label = document.createElement('span');
+  label.textContent = row.team && c.teammate ? c.teammate.initials : c.title;
+  b.append(dot, label);
+  b.setAttribute('aria-label', `${c.title}: ${c.state}`);
+  const show = () => { clearTimeout(cardTimer); cardTimer = setTimeout(() => showCard(row, b), CARD_DELAY_MS); };
+  b.addEventListener('mouseenter', show);
+  b.addEventListener('focus', () => { clearTimeout(cardTimer); showCard(row, b); });
+  b.addEventListener('mouseleave', () => { clearTimeout(cardTimer); cardTimer = setTimeout(hideCard, 200); });
+  b.addEventListener('blur', (e) => { if (!cardEl.contains(e.relatedTarget)) hideCard(); });
+  return b;
+}
+function paintStrip() {
+  const m = cardsModel;
+  const mine = m ? m.rows.map(chipFor) : [];
+  const team = m ? m.team.map(chipFor) : [];
+  const r1 = document.createElement('div'); r1.className = 'strip-row'; r1.replaceChildren(...mine);
+  const r2 = document.createElement('div'); r2.className = 'strip-row team'; r2.replaceChildren(...team);
+  stripEl.replaceChildren(...(mine.length ? [r1] : []), ...(team.length ? [r2] : []));
+  document.body.classList.toggle('has-strip', mine.length + team.length > 0);
+  for (const el of stripEl.querySelectorAll('button')) el.addEventListener('mousedown', stop);
+  if (cardFor && !(m && [...m.rows, ...m.team].some((r) => r.id === cardFor))) hideCard();
+}
+function cardButton(label, onClick) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.textContent = label;
+  b.addEventListener('mousedown', stop);
+  b.addEventListener('click', (e) => { e.stopPropagation(); onClick(); });
+  return b;
+}
+const CARD_ACTIONS = {
+  open: () => cardButton('Open', async () => { const r = await window.trafficLight.goToNeedingSession().catch(() => null); if (r && r.feedback) showFeedback(r.feedback); hideCard(); }),
+  answer: (c) => cardButton('Answer', async () => {
+    const input = lastInputs.find((i) => i && i.session === c.id);
+    const r = input ? await window.trafficLight.openInput(input.id).catch(() => null) : await window.trafficLight.goToNeedingSession().catch(() => null);
+    if (r && (r.note || r.feedback)) showFeedback(r.note || r.feedback);
+    hideCard();
+  }),
+  pin: (c) => cardButton('Pin', async () => { await window.trafficLight.pinSession(c.id).catch(() => null); loadCards(true); }),
+  unpin: () => cardButton('Unpin', async () => { await window.trafficLight.pinSession(null).catch(() => null); loadCards(true); }),
+};
+function showCard(row, anchor) {
+  const c = row.card;
+  cardFor = row.id;
+  const head = document.createElement('div'); head.className = 'card-head';
+  if (c.teammate) { const av = document.createElement('span'); av.className = 'avatar'; av.textContent = c.teammate.initials; av.title = c.teammate.name; head.append(av); }
+  const t = document.createElement('span'); t.className = 'card-title'; t.textContent = c.title; head.append(t);
+  const lines = [head];
+  const st = document.createElement('div'); st.className = 'card-state'; st.textContent = c.state; lines.push(st);
+  if (c.spend) { const sp = document.createElement('div'); sp.className = 'card-spend'; sp.textContent = c.spend; lines.push(sp); }
+  if (c.teammate) { const who = document.createElement('div'); who.className = 'card-spend'; who.textContent = c.teammate.name; lines.push(who); }
+  const acts = c.actions.map((a) => CARD_ACTIONS[a] && CARD_ACTIONS[a](c)).filter(Boolean);
+  if (acts.length) { const box = document.createElement('div'); box.className = 'card-acts'; box.append(...acts); lines.push(box); }
+  cardEl.replaceChildren(...lines);
+  const r = anchor.getBoundingClientRect();
+  cardEl.style.top = `${Math.round(r.bottom + 4)}px`;
+  cardEl.classList.add('shown');
+  cardEl.setAttribute('aria-hidden', 'false');
+  document.body.classList.add('carding');
+}
+function hideCard() {
+  clearTimeout(cardTimer);
+  cardFor = null;
+  cardEl.classList.remove('shown');
+  cardEl.setAttribute('aria-hidden', 'true');
+  document.body.classList.remove('carding');
+}
+cardEl.addEventListener('mouseenter', () => clearTimeout(cardTimer));
+cardEl.addEventListener('mouseleave', () => { cardTimer = setTimeout(hideCard, 200); });
+cardEl.addEventListener('mousedown', stop);
+cardEl.addEventListener('focusout', (e) => { if (!cardEl.contains(e.relatedTarget) && !stripEl.contains(e.relatedTarget)) hideCard(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && cardFor) hideCard(); });

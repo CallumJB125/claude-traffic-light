@@ -4,13 +4,16 @@
 //
 // Contract for a package: its module exports register(ctx), where ctx is
 //   {app, ipcMain, rootDir, entitlements, buddy: () => buddyWin|null,
+//    openTimeline: ({adapter, sessionId}) => bool (src/session-timeline-main.js openSession),
 //    fromPage: (e, pageId) => bool, onQuit: (fn) => void, log: (msg) => void,
 //    setups: the team Setups service (main-only readForPlan),
 //    keyFor, requestsDir, interactionHost: () => host|null,
 //    setInteractionHostExtras: (fn) => void (phone approvals: {e2e, extra} for the remote host),
 //    teamMemory: (req) => Promise (the hub's team memory for Search everything, src/team-activity.js memoryPage),
 //    setCostGuardReport: (fn) => void (cost guard: its report() for Home's cost card),
-//    gallery: {takePending} (a setup added from the community gallery, one use, or null)}
+//    gallery: {takePending} (a setup added from the community gallery, one use, or null),
+//    afterStartup: (fn) => void (runs fn once the widget and signal server are up; work that
+//    reads a project folder starts there)}
 // register gates its own work with ctx.entitlements.has(feature).
 'use strict';
 

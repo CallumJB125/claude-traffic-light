@@ -42,16 +42,16 @@ test('token map covers every custom property Burst declares on :root (repo list 
   for (const v of ['--bg', '--panel', '--text', '--accent', '--border', '--ok', '--warn', '--bad']) assert.ok(light.includes(v), `light ${v}`);
 });
 
-test('Plexiform values mirror tokens.css (dark) and shell.css (light)', () => {
+test('Plexiform values mirror the shared tokens.css dark and light palettes', () => {
   const tokens = fs.readFileSync(path.join(ROOT, 'tokens.css'), 'utf8');
-  const shell = fs.readFileSync(path.join(ROOT, 'buddy-window', 'shell.css'), 'utf8');
+  const lightTokens = tokens.slice(tokens.indexOf('@media (prefers-color-scheme: light)'));
   const val = (text, name) => new RegExp(`${name}:\\s*([^;]+);`).exec(text)[1].trim();
   const dark = blockOf(CSS, false);
   const light = blockOf(CSS, true);
-  const pairs = { '--bg': '--bg', '--panel': '--panel', '--panel-2': '--panel-2', '--border': '--line', '--text': '--text', '--muted': '--muted', '--faint': '--faint', '--accent': '--accent' };
+  const pairs = { '--bg': '--bg', '--panel': '--panel', '--panel-2': '--panel-2', '--border': '--line', '--text': '--text', '--muted': '--muted', '--faint': '--faint', '--accent': '--accent', '--ok': '--green', '--pass': '--green', '--warn': '--amber', '--bad': '--red', '--head-bg': '--panel-2', '--grid': '--line', '--pc-a': '--accent', '--pc-b': '--accent', '--pcs-saved': '--accent' };
   for (const [b, p] of Object.entries(pairs)) {
     assert.equal(dark[b], val(tokens, p), `dark ${b}`);
-    assert.equal(light[b], val(shell, p), `light ${b}`);
+    assert.equal(light[b], val(lightTokens, p), `light ${b}`);
   }
   assert.equal(dark['--radius'], val(tokens, '--radius'));
 });

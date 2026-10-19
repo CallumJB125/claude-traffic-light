@@ -33,15 +33,26 @@ const optional = (properties, required) => obj(properties, required);
 const ASK_KINDS = [...BLOCKED_KINDS, 'limit', 'auth'];
 const HANDOVER_PROVENANCE = ['continuous', 'checkpoint_complete', 'checkpoint_incomplete', 'takeover', 'frozen'];
 const packetArtifact = { oneOf: [obj({ kind: { const: 'path' }, path: str(PATH) }), obj({ kind: { const: 'commit' }, sha: str({ minLength: 40, maxLength: 64 }) }), obj({ kind: { const: 'pr' }, url: str({ maxLength: 1024 }) })] };
+const cardId = str({ minLength: 1, maxLength: 64 });
+const cardBase = { id: cardId, title: str({ maxLength: 120 }) };
+const resultCard = { oneOf: [
+  obj({ ...cardBase, kind: { const: 'checklist' }, items: arr(obj({ id: cardId, label: str({ maxLength: 240 }), done: bool })) }),
+  obj({ ...cardBase, kind: { const: 'metric' }, value: str({ maxLength: 80 }), unit: str({ maxLength: 40 }), note: str({ maxLength: 240 }) }),
+  obj({ ...cardBase, kind: { const: 'table' }, columns: arr(str({ maxLength: 80 }), { minItems: 1 }), rows: arr(arr(str({ maxLength: 240 }))) }),
+] };
 const packetDataProps = {
   brief: str({ maxLength: 4000 }), decisions: arr(str({ maxLength: 500 })), progress: str({ maxLength: 4000 }),
   nextAction: str({ maxLength: 2000 }), artifacts: arr(packetArtifact), reportedChecks: arr(str({ maxLength: 500 })),
+  resultCards: arr(resultCard, { description: 'Optional closed data cards. Runtime bounds: 8 cards / 24 KiB, 20 checklist items, 6 table columns and 20 equal-width rows. Omission preserves existing cards; [] clears them.' }),
 };
-const packet = obj({ schemaVersion: { const: 1 }, version: int({ minimum: 1 }), at: int(),
-  author: obj({ kind: en(['human', 'agent', 'remote', 'supervisor']), id: str(), source: en([...SOURCES, 'engine']) }),
+const packetAuthor = obj({ kind: en(['human', 'agent', 'remote', 'supervisor']), id: str(), source: en([...SOURCES, 'engine']) });
+const packetProps = { schemaVersion: { const: 1 }, version: int({ minimum: 1 }), at: int(),
+  author: packetAuthor,
   provenance: en([...HANDOVER_PROVENANCE, 'participant']), ...packetDataProps,
+  resultCardsSource: obj({ version: int({ minimum: 1 }), at: int(), author: packetAuthor }),
   observed: obj({ state: en(STATES), tests: nullable(en(['pass', 'fail', 'none'])) }),
-});
+};
+const packet = obj(packetProps, Object.keys(packetProps).filter(k => !['resultCards', 'resultCardsSource'].includes(k)));
 
 const faceProps = {
   green: bool,
@@ -88,6 +99,7 @@ const taskSpec = optional({
 
 const taskViewProps = {
   id: str(),
+  parentId: nullable(str()),
   title: str(),
   state: en(STATES),
   blockedKind: nullable(en(BLOCKED_KINDS)),
@@ -136,6 +148,7 @@ const taskDetailProps = {
   openAsk: nullable(openAsk),
   audit: arr(ref('AuditEntry')),
   messages: arr(ref('Message')),
+  collaboration: arr(obj({ requestId: str(), kind: en(['buddy_spin_off', 'buddy_message']), taskId: nullable(str()), messageId: nullable(str()), state: en(['pending', 'queued', 'delivered', 'uncertain']), at: int() })),
 };
 
 const party = obj({ kind: en(PARTY_KINDS), id: str({ minLength: 1 }), label: str() });
@@ -198,11 +211,11 @@ const payloads = {
   approve: optional({ approvalId: str(), scope: en(['once', 'task']) }, ['approvalId']),
   deny: optional({ approvalId: str(), message: str({ maxLength: 2000 }) }, ['approvalId']),
   answer: optional({ askId: str(), answer: str({ minLength: 1, maxLength: 20000 }) }, ['askId', 'answer']),
-  merge: optional({ strategy: en(['merge', 'squash', 'ff']), deleteBranch: bool }, []),
-  openPr: optional({ draft: bool, title: str(), body: str(LONG) }, []),
+  merge: { oneOf: [obj({ phase: { const: 'preview' } }), obj({ phase: { const: 'apply' }, reviewId: str({ minLength: 36, maxLength: 36 }), reviewHash: str({ minLength: 64, maxLength: 64 }), confirm: { const: true } })] },
+  openPr: { oneOf: [obj({ phase: { const: 'preview' }, title: str({minLength:1,maxLength:120}), body: str({maxLength:10000}) }), obj({ phase: { const: 'apply' }, reviewId: str({ minLength:36,maxLength:36 }), reviewHash: str({ minLength:64,maxLength:64 }), confirm: { const:true } }), obj({ phase: { const:'receipt' } })] },
   discard: optional({ confirm: { const: true } }, ['confirm']),
   retry: optional({ fresh: bool }, []),
-  switchAi: optional({ ai: en(AIS) }, ['ai']),
+  switchAi: optional({ ai: en(AIS), phase: en(['preview', 'apply']), reviewId: str({ maxLength: 128 }), reviewHash: str({ minLength: 64, maxLength: 64 }), confirm: bool }, []),
 };
 
 const errorObj = obj({ code: en(ERRORS), message: str({ maxLength: 1024 }), details: { type: 'object' } }, ['code', 'message']);
@@ -215,9 +228,9 @@ const schema = {
   $defs: {
     TaskSpec: taskSpec,
     LeaseView: leaseView,
-    TaskView: obj(taskViewProps),
-    TaskDetail: obj(taskDetailProps, Object.keys(taskDetailProps).filter((k) => k !== 'checkpoint')),
-    CheckpointData: obj(packetDataProps),
+    TaskView: obj(taskViewProps, Object.keys(taskViewProps).filter((k) => k !== 'parentId')),
+    TaskDetail: obj(taskDetailProps, Object.keys(taskDetailProps).filter((k) => !['checkpoint', 'parentId', 'collaboration'].includes(k))),
+    CheckpointData: obj(packetDataProps, Object.keys(packetDataProps).filter(k => k !== 'resultCards')),
     Checkpoint: packet,
     Capabilities: obj(Object.fromEntries(CAPABILITIES.map((c) => [c, bool]))),
     DiffStat: obj({ files: int(), added: int(), removed: int() }),
@@ -283,6 +296,8 @@ const schema = {
     ActParams: obj({ id: str(), action: en(ACTIONS), payload: { type: 'object' }, requestId: str({ minLength: 8, maxLength: 128 }) }, ['id', 'action', 'requestId']),
     ActResult: obj({
       ok: { const: true }, task: ref('TaskView'), messageId: str(), takeover: ref('TakeoverResult'), pr: obj({ number: int(), url: str() }),
+      integration: { type: 'object' },
+      providerChange: { type: 'object' },
     }, ['ok', 'task']),
     ListMessagesParams: obj({ id: str(), afterSeq: int() }, ['id']),
     ListMessagesResult: arr(ref('Message')),

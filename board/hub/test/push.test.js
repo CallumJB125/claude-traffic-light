@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { generateKeyPairSync } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { startAccounts } from './accounts-helpers.js';
 import { PushService, vapidKey, PUSH_HOSTS } from '../push.js';
 import { loadConfig } from '../config.js';
@@ -98,7 +99,7 @@ test('methods says whether this hub can wake a phone; a ping leaves one audit ro
 });
 
 test('scripts/gen-vapid.mjs prints a pair the hub accepts, writes nothing, and insists on a subject', () => {
-  const script = new URL('../scripts/gen-vapid.mjs', import.meta.url).pathname;
+  const script = fileURLToPath(new URL('../scripts/gen-vapid.mjs', import.meta.url));
   const out = execFileSync(process.execPath, [script, '--subject', 'mailto:ops@plexiform.test'], { encoding: 'utf8' });
   const env = Object.fromEntries(out.trim().split('\n').map((l) => l.split('=')));
   assert.deepEqual(Object.keys(env), ['BOARD_PUSH_VAPID_PUBLIC_KEY', 'BOARD_PUSH_VAPID_PRIVATE_KEY', 'BOARD_PUSH_VAPID_SUBJECT']);

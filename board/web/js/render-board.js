@@ -6,6 +6,9 @@ import { icon, pixelClaude, PILL_ICON, ALERT_ICON } from './icons.js';
 import { inline } from './markdown.js';
 import { VIEWS } from './views.js';
 import { filterBar } from './render-filters.js';
+import { pinboardPanel } from './pinboard.js';
+import { sharedViewsPanel, momentsPanel } from './moments.js';
+import { inboxBell } from './inbox.js';
 import { THEMES, BACKGROUNDS } from './themes.js';
 import { cardChips } from './chips.js';
 import { costText, boardCostRollup, dailyCapText } from './cost.js';
@@ -27,6 +30,27 @@ export function avatar(member, { size = 'sm', dim = false } = {}) {
   },
   h('span', { class: 'avatar-initials', 'aria-hidden': 'true' }, initials(name)),
   member.avatar_url ? h('img', { src: member.avatar_url, alt: '', loading: 'lazy', 'data-avatar': '' }) : null);
+}
+
+/** Teammates looking at this card right now (board.presence viewers, team depth lane C); one avatar per member. */
+export function viewersOf(cardId, model) {
+  const seen = new Map();
+  for (const v of model.viewers ?? []) {
+    if (v.card_id !== cardId || seen.has(v.member_id)) continue;
+    seen.set(v.member_id, model.members?.get(v.member_id) ?? { member_id: v.member_id, name: v.name ?? '?' });
+  }
+  return [...seen.values()];
+}
+
+export function viewerStack(cardId, model) {
+  const list = viewersOf(cardId, model);
+  if (!list.length) return null;
+  const names = list.map((m) => m.name ?? m.login ?? '?');
+  return h('span', { class: 'card-viewers', title: `${names.join(', ')} ${names.length === 1 ? 'is' : 'are'} viewing this card now` },
+    icon('eye', 'icon-xs'),
+    h('span', { class: 'avatars', 'aria-label': `Viewing now: ${names.join(', ')}` },
+      list.slice(0, 3).map((m) => avatar(m)),
+      list.length > 3 ? h('span', { class: 'avatar avatar-sm avatar-more' }, `+${list.length - 3}`) : null));
 }
 
 export function avatarStack(members, max = 3) {
@@ -176,6 +200,7 @@ export function card({ view, face, elapsed_ms = 0 }, model) {
     view.agent_suggested ? h('span', { class: 'label agent-suggested', title: 'Created by an agent; a person must assign it to an AI' }, 'agent-suggested') : null,
     via ? h('span', { class: 'label via-integration', title: `Created by the ${via} integration; a person must assign it to an AI` }, `via ${via}`) : null,
     rb ? h('span', { class: 'card-repo num', title: view.base_ref ? `base ${view.base_ref}` : null }, icon('branch', 'icon-xs'), rb) : null,
+    viewerStack(view.id, model),
     avatarStack(people)),
   h('h3', { class: 'card-title', id: `t-${view.id}` },
     h('button', { type: 'button', class: 'card-open', 'data-action': pending ? null : 'open', 'data-card': view.id, disabled: pending || null, 'aria-describedby': draggable ? 'dnd-help' : null }, view.title)),
@@ -404,6 +429,7 @@ export function topBar(model, lamps) {
           h('button', { type: 'button', class: 'btn btn-ghost btn-sm palette-open', 'data-action': 'palette', 'aria-keyshortcuts': 'Control+K Meta+K', 'aria-label': 'Search and commands' }, icon('search', 'icon-lead'), h('span', { class: 'palette-open-label' }, 'Search'), h('kbd', { class: 'kbd', 'aria-hidden': 'true' }, '⌘K')))),
       model.accounts && ['owner', 'admin'].includes(m?.role) && model.view !== 'team' ? h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-action': 'view', 'data-view': 'team' }, icon('person', 'icon-lead'), 'Invite') : null,
       model.readOnly ? null : h('button', { type: 'button', class: 'btn btn-primary btn-sm', 'data-action': 'new-card', 'aria-keyshortcuts': 'n' }, icon('plus', 'icon-lead'), 'New card'),
+      inboxBell(model),
       me ? h('span', { class: 'me', title: `${me.name ?? me.login}${me.email ? ` · ${me.email}` : ''}` }, avatar({ ...me, member_id: me.id }), h('span', { class: 'me-name' }, me.name ?? me.login)) : null));
 }
 
@@ -444,6 +470,9 @@ export function boardScreen(model, body = null) {
     alertsStrip(model.alerts, model),
     needsYouSection(model.needsYou, model),
     localCard(model),
+    pinboardPanel(model),
+    sharedViewsPanel(model),
+    momentsPanel(model),
     model.view === 'dashboard' ? null : filterBar(model),
     body ? null : stalledLane(cols.stalled, model),
     body ?? h('main', { class: 'board board-with-idle', id: 'board', 'aria-label': 'Board columns' },

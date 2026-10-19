@@ -37,12 +37,17 @@ on:
         description: 'Also run Windows installer/tests for acceptance; this does not enable Windows publication'
         type: boolean
         default: false
+      validation_platform:
+        description: 'Single-platform artifact-only validation; ignored for beta and tag releases'
+        type: choice
+        options: [all, linux, mac, win]
+        default: all
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.ref }}${{ inputs.native_only && '-native' || '' }}
+  group: release-${{ github.ref }}${{ inputs.native_only && '-native' || '' }}-${{ github.event_name == 'workflow_dispatch' && !inputs.beta && inputs.validation_platform || 'all' }}
   cancel-in-progress: false
 
 jobs:
@@ -64,7 +69,8 @@ jobs:
       # still runs on every dispatch; no assertions are skipped within a build.
       # validate_windows permits an unpublished acceptance build before that flag.
       matrix:
-        include: ${{ fromJSON((vars.WINDOWS_RELEASE == 'true' || (github.event_name == 'workflow_dispatch' && inputs.validate_windows)) && '[{"os":"macos-latest","platform":"mac"},{"os":"windows-latest","platform":"win"},{"os":"ubuntu-latest","platform":"linux"}]' || '[{"os":"macos-latest","platform":"mac"},{"os":"ubuntu-latest","platform":"linux"}]') }}
+        # A narrowed matrix is permitted only when no staging job can run.
+        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && !inputs.beta && (inputs.validation_platform == 'linux' && '[{"os":"ubuntu-latest","platform":"linux"}]' || inputs.validation_platform == 'mac' && '[{"os":"macos-latest","platform":"mac"}]' || inputs.validation_platform == 'win' && '[{"os":"windows-latest","platform":"win"}]') || (vars.WINDOWS_RELEASE == 'true' || (github.event_name == 'workflow_dispatch' && inputs.validate_windows)) && '[{"os":"macos-latest","platform":"mac"},{"os":"windows-latest","platform":"win"},{"os":"ubuntu-latest","platform":"linux"}]' || '[{"os":"macos-latest","platform":"mac"},{"os":"ubuntu-latest","platform":"linux"}]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     permissions:
@@ -136,6 +142,9 @@ jobs:
       # eat the job. The ICS tests assume SAST, and Electron-based tests need
       # a display and no sandbox on Linux runners.
       # WINDOWS_RELEASE still controls publication, never test success.
+      # Root files run serially: memory.test.js includes a wall-clock latency
+      # requirement that unrelated parallel SQLite/CPU fixtures distort. Keep
+      # its 200 ms assertion and every test in the mandatory gate.
       - name: Unit tests
         id: units
         shell: bash
@@ -147,14 +156,14 @@ jobs:
           run() { if [ "$RUNNER_OS" = Linux ]; then xvfb-run --auto-servernum "$@"; else "$@"; fi; }
           status=0
           mkdir -p work/windows-release
-          run node --test --test-timeout=120000 test/*.test.js test/adapters/*.test.js 2>&1 | tee work/windows-release/root-tests.log || status=1
-          node --test --test-timeout=120000 remote/test/*.test.js 2>&1 | tee work/windows-release/remote-tests.log || status=1
-          (cd board && node --test --test-timeout=120000 '*/test/**/*.test.js') 2>&1 | tee work/windows-release/board-tests.log || status=1
+          run node --test --test-concurrency=1 --test-timeout=120000 test/*.test.js test/adapters/*.test.js 2>&1 | tee work/windows-release/root-tests.log || status=1
+          node --test --test-concurrency=4 --test-timeout=120000 remote/test/*.test.js 2>&1 | tee work/windows-release/remote-tests.log || status=1
+          (cd board && node --test --test-concurrency=4 --test-timeout=120000 '*/test/**/*.test.js') 2>&1 | tee work/windows-release/board-tests.log || status=1
           exit $status
 
       - name: Native helpers (Mac)
         if: matrix.platform == 'mac'
-        run: npm run calendar-helper && npm run voice-helper
+        run: npm run calendar-helper && npm run voice-helper && npm run account-storage-parent
 
       - name: Build installers
         id: installers

@@ -74,8 +74,19 @@ function reason(config, { now, cwd = null } = {}) {
   const c = config || {};
   if (cwd && projectMuted(c.mutedProjects, cwd)) return 'project';
   if (Number.isFinite(c.snoozeUntil) && now < c.snoozeUntil) return 'snooze';
+  if (timedQuiet(c, now)) return 'quiet';
   if (inQuietHours(c.quietHours, now)) return 'quiet-hours';
   return null;
+}
+
+// "Quiet for 30 minutes" from the widget: quietUntil (epoch ms) holds pings
+// like a snooze, and the widget shows a moon while it or quiet hours hold.
+const QUIET_FOR_MIN = 30;
+const quietFor = (now, minutes = QUIET_FOR_MIN) => now + minutes * MIN;
+const timedQuiet = (c, now) => !!c && Number.isFinite(c.quietUntil) && now < c.quietUntil;
+function isQuiet(config, now) {
+  const c = config || {};
+  return timedQuiet(c, now) || inQuietHours(c.quietHours, now);
 }
 
 // Every live session sits in a muted project (and there is at least one): the
@@ -97,4 +108,4 @@ function snoozeLabel(until, now) {
   return `Snoozed until ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
-module.exports = { SNOOZES, snoozeEnd, normalizeQuietHours, inQuietHours, projectMuted, reason, allMuted, badgeFor, snoozeLabel };
+module.exports = { QUIET_FOR_MIN, quietFor, timedQuiet, isQuiet, SNOOZES, snoozeEnd, normalizeQuietHours, inQuietHours, projectMuted, reason, allMuted, badgeFor, snoozeLabel };

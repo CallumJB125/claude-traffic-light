@@ -491,7 +491,7 @@ test('minions: the app’s agentKinds filter decides which agents get chips', ()
 test('hit test: the elements index.html probes for are there and clickable', () => {
   const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8') + fs.readFileSync(path.join(ROOT, 'widget.js'), 'utf8');
   // #mic is pointer-events: none (a hold on it is a hold on the widget), so it isn't listed.
-  assert.match(html, /el\.closest\('#gear, #help, #bubble, #budget, #away, #update, \.minion'\)/, 'index.html hit test changed — update this test');
+  assert.match(html, /el\.closest\('#gear, #help, #bubble, #budget, #away, #update, #event-lane \.lane-row, \.minion, #strip, #session-card, #dot'\)/, 'index.html hit test changed — update this test');
   // rig parts go through rig.solidAt, which skips parts at opacity 0 (its
   // behaviour is in test-visual/characters.spec.js: jsdom has no elementsFromPoint)
   assert.match(html, /return rig\.solidAt\(x, y\);/);
@@ -908,4 +908,78 @@ test('rig: low-power keeps the lamp colour and effects, and stylesheet drops dec
   const rule = /\.rig\.low-power :is\(([^)]*)\)\s*\{ animation: none !important; \}/.exec(RIG_CSS.replace(/\n\s*/g, ' '));
   assert.ok(rule, 'decorative-loop rule exists');
   assert.ok(!/\blamp\b|sign-assembly|claude-body/.test(rule[1]), 'lamp and pose animations are not in the list');
+});
+
+// ── Wave-1 content and sprite packs ───────────────────────────────────────
+const W1 = {
+  costume: ['witch', 'viking', 'tricorn', 'beret', 'antlers', 'astronaut', 'heartband'],
+  pet: ['penguin', 'ghost', 'chick', 'owl'],
+  effect: ['fireworks', 'bats', 'lightning', 'clouds', 'aurora', 'embers'],
+  pose: ['dance', 'shrug', 'yawn'],
+};
+const noNaN = (root) => [root, ...root.querySelectorAll('*')].flatMap((el) => [...el.attributes].filter((a) => /NaN|undefined/.test(a.value)).map((a) => `<${el.tagName} ${a.name}="${a.value}">`));
+
+test('rig: the rig and rules catalogues agree, wave-1 content included', () => {
+  const { w } = mount();
+  assert.deepEqual([...w.RIG_COSTUMES], Rules.COSTUMES);
+  assert.deepEqual([...w.RIG_PETS], Rules.PETS);
+  assert.deepEqual([...w.RIG_EFFECTS], Rules.EFFECTS);
+  assert.deepEqual([...w.RIG_POSES], Rules.POSES);
+  for (const [ch, names] of Object.entries(W1)) for (const n of names) assert.ok(Rules[{ costume: 'COSTUMES', pet: 'PETS', effect: 'EFFECTS', pose: 'POSES' }[ch]].includes(n), `${ch} ${n}`);
+});
+
+test('rig: every wave-1 costume, pet and effect has drawn art, is shown by its class and has no NaN', () => {
+  for (const ch of ['costume', 'pet', 'effect']) {
+    for (const n of W1[ch]) {
+      const { svg, rig } = mount();
+      rig.setLook({ lamp: 'green', [ch]: n });
+      assert.ok(svg.classList.contains(`${ch}-${n}`), `${ch}-${n} on the rig`);
+      const el = svg.querySelector(`g.${ch}.${ch}-${n}`);
+      assert.ok(el, `${ch}-${n} is drawn`);
+      assert.ok(el.querySelectorAll('*').length > 0, `${ch}-${n} has shapes`);
+      assert.deepEqual(noNaN(el), [], `${ch}-${n}`);
+      assert.match(RIG_CSS, new RegExp(`\\.rig\\.${ch}-${n} \\.${ch}-${n}[^{]*\\{[^}]*opacity: 1`), `${ch}-${n} is made visible`);
+    }
+  }
+});
+
+test('rig: wave-1 poses set their class, have CSS, and swap cleanly', () => {
+  const { svg, rig } = mount();
+  for (const p of W1.pose) {
+    rig.setLook({ lamp: 'green', pose: p });
+    assert.deepEqual(classesWith(svg, 'pose-'), [`pose-${p}`]);
+    assert.match(RIG_CSS, new RegExp(`\\.rig\\.pose-${p} `), `pose-${p} styled`);
+  }
+  assert.ok(svg.querySelector('.shrug-hands') && svg.querySelector('.mouth-anchor .yawn-mouth'));
+  assert.deepEqual(noNaN(svg), []);
+});
+
+const PNG_URL = 'data:image/png;base64,iVBORw0KGgo=';
+const SVG_URL = 'data:image/svg+xml;base64,PHN2Zy8+';
+test('rig: a sprite pack replaces the character, follows the lamp state and cycles frames', () => {
+  const { svg, rig, clock } = mount();
+  const img = svg.querySelector('.sprite-frame');
+  assert.equal(rig.setSpritePack({ name: 'robo', fps: 4, frames: { idle: [PNG_URL], working: [PNG_URL, SVG_URL] } }), true);
+  assert.ok(svg.classList.contains('sprite-on'));
+  rig.setLook({ lamp: 'off' });
+  assert.equal(img.getAttribute('href'), PNG_URL);
+  rig.setLook({ lamp: 'green' });
+  assert.equal(img.getAttribute('href'), PNG_URL);
+  clock.advance(260);
+  assert.equal(img.getAttribute('href'), SVG_URL, 'next frame at 4 fps');
+  rig.setLook({ lamp: 'amber' });
+  assert.equal(img.getAttribute('href'), PNG_URL, 'no waiting frames: idle stands in');
+  assert.match(RIG_CSS, /\.rig\.sprite-on :is\([^)]*\.char-body[^)]*\) \{ display: none; \}/);
+});
+
+test('rig: a bad or failing sprite pack falls back to the drawn character', () => {
+  const { svg, rig, w } = mount();
+  assert.equal(rig.setSpritePack({ frames: { idle: ['file:///etc/passwd', 'javascript:alert(1)', 'https://x/y.png'] } }), false);
+  assert.ok(!svg.classList.contains('sprite-on'));
+  assert.equal(rig.setSpritePack(null), false);
+  rig.setSpritePack({ frames: { idle: [PNG_URL] } });
+  assert.ok(svg.classList.contains('sprite-on'));
+  svg.querySelector('.sprite-frame').dispatchEvent(new w.Event('error'));
+  assert.ok(!svg.classList.contains('sprite-on'), 'a frame that fails to load drops the pack');
+  assert.equal(svg.querySelector('.sprite-frame').getAttribute('href'), null);
 });

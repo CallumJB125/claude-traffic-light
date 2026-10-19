@@ -41,7 +41,10 @@ export const JOURNAL_KINDS = Object.freeze([
   'card_review.request', // {review_id, provider, independence}: AI review before Review (066)
   'card_review.result',  // {review_id, status, verdict, findings, cost_cents}: counts only, never findings text
   'card_review.action',  // {review_id, action:'fix'|'approve'|'dismiss', finding?}
-  'board.ai_review',     // {enabled, provider, model, spend_cap_usd, allow_uncapped, disclosure_ack}
+  'board.ai_review',
+  'card.handoff_requested', // {handoff_id, to, request_id}: a person handed the card to a teammate (team depth lane D)
+  'card.handoff_answered',  // {handoff_id, state:'accepted'|'declined', request_id}
+  'card.handoff_cancelled', // {handoff_id, request_id}     // {enabled, provider, model, spend_cap_usd, allow_uncapped, disclosure_ack}
 ]);
 
 // The card fields a transition writes (states.CARD_FIELDS + the derived column).

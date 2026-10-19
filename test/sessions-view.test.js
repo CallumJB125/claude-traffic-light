@@ -297,3 +297,58 @@ test('Hand off to another AI… stays open and lists the tools, and a pick sends
     assert.equal(fixture.document.querySelectorAll('[role="menu"]').length, 0);
   } finally { fixture.dom.window.close(); }
 });
+
+test('a newer exact-session selection event takes precedence over a late initial selection query', async () => {
+  let receiveSelection, resolveInitial;
+  const rows = ['first', 'second'].map(id => withActions({ project: id,
+    handover: { key: `codex-${id}`, updated: 'Handover: not written yet', note: 'Synthetic recorded session', ready: false, canWrite: false } }));
+  const fixture = setup({ state: async () => state({ sessions: rows }),
+    onSelection: callback => { receiveSelection = callback; },
+    selection: () => new Promise(resolve => { resolveInitial = resolve; }) });
+  try {
+    await tick(); receiveSelection('codex-second'); await tick();
+    const selected = () => fixture.document.querySelector('#content .session[aria-current="true"]');
+    assert.equal(selected()?.dataset.sessionKey, 'codex-second');
+    assert.equal(fixture.document.activeElement, selected());
+    resolveInitial('codex-first'); await tick();
+    assert.equal(selected()?.dataset.sessionKey, 'codex-second', 'a stale startup reply must not redirect the selected session');
+    assert.equal(fixture.document.querySelectorAll('#content .session[aria-current="true"]').length, 1);
+    assert.equal(fixture.document.activeElement, selected());
+  } finally { fixture.dom.window.close(); }
+});
+
+test('an exact-session selection focuses the requested existing row without discarding another row editor', async () => {
+  let receiveSelection;
+  const rows = ['first', 'second'].map(id => withActions({ project: id, actions: { handle: id },
+    handover: { key: `codex-${id}`, updated: 'Handover: not written yet', note: 'Synthetic recorded session', ready: false, canWrite: false } }));
+  const fixture = setup({ state: async () => state({ sessions: rows }), setup: async () => SETUP,
+    onSelection: callback => { receiveSelection = callback; }, selection: async () => 'codex-first' });
+  try {
+    await tick();
+    const first = fixture.document.querySelector('[data-session-key="codex-first"]');
+    [...first.querySelectorAll('button')].find(button => button.textContent === 'Make a card').click(); await tick();
+    const editor = first.querySelector('.row-panel'), chosenBoard = editor.querySelector('select');
+    assert.ok(editor); chosenBoard.value = 'b1';
+    receiveSelection('codex-second'); await tick();
+    const selected = fixture.document.querySelector('#content .session[aria-current="true"]');
+    assert.equal(selected?.dataset.sessionKey, 'codex-second');
+    assert.equal(fixture.document.activeElement, selected);
+    assert.equal(fixture.document.querySelectorAll('#content .session[aria-current="true"]').length, 1);
+    assert.equal(first.hasAttribute('aria-current'), false);
+    assert.equal(first.querySelector('.row-panel'), editor, 'preserve the open editor and its current selection');
+    assert.equal(editor.querySelector('select').value, 'b1');
+  } finally { fixture.dom.window.close(); }
+});
+
+
+test('session management filters local reports and the start shortcut only prepares its form', async () => {
+  let starts = 0;
+  const f = setup({ state: async () => state({ sessions: [withActions(), withActions({provider:'Claude Code',project:'website',freshness:'stale',actions:null})] }), setup: async () => SETUP, start: async () => { starts++; return {ok:true}; } });
+  try {
+    await tick(); const d=f.document, shown=()=>[...d.querySelectorAll('#content .session')].filter(x=>!x.hidden);
+    d.getElementById('session-provider').value='Claude Code'; d.getElementById('session-provider').dispatchEvent(new f.dom.window.Event('change')); assert.equal(shown().length,1); assert.match(shown()[0].textContent,/website/);
+    d.getElementById('session-search').value='nothing'; d.getElementById('session-search').dispatchEvent(new f.dom.window.Event('input')); assert.equal(shown().length,0); assert.equal(d.getElementById('session-filter-empty').hidden,false);
+    d.getElementById('session-empty-reset').click(); assert.equal(shown().length,2);
+    d.getElementById('start-session-shortcut').click(); await tick(); await tick(); assert.equal(d.getElementById('panel-start').hidden,false); assert.ok(d.querySelector('#panel-start textarea')); assert.equal(starts,0);
+  } finally { f.dom.window.close(); }
+});

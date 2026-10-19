@@ -251,6 +251,17 @@
           "type": "string",
           "maxLength": 256
         },
+        "parentId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "title": {
           "type": "string",
           "maxLength": 256
@@ -629,6 +640,17 @@
         "id": {
           "type": "string",
           "maxLength": 256
+        },
+        "parentId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "title": {
           "type": "string",
@@ -1333,6 +1355,67 @@
           "items": {
             "$ref": "#/$defs/Message"
           }
+        },
+        "collaboration": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "requestId": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "kind": {
+                "enum": [
+                  "buddy_spin_off",
+                  "buddy_message"
+                ]
+              },
+              "taskId": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 256
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "messageId": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 256
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "state": {
+                "enum": [
+                  "pending",
+                  "queued",
+                  "delivered",
+                  "uncertain"
+                ]
+              },
+              "at": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "requestId",
+              "kind",
+              "taskId",
+              "messageId",
+              "state",
+              "at"
+            ],
+            "additionalProperties": false
+          }
         }
       },
       "required": [
@@ -1469,6 +1552,145 @@
             "type": "string",
             "maxLength": 500
           }
+        },
+        "resultCards": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "minLength": 1
+                  },
+                  "title": {
+                    "type": "string",
+                    "maxLength": 120
+                  },
+                  "kind": {
+                    "const": "checklist"
+                  },
+                  "items": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "maxLength": 64,
+                          "minLength": 1
+                        },
+                        "label": {
+                          "type": "string",
+                          "maxLength": 240
+                        },
+                        "done": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "label",
+                        "done"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "id",
+                  "title",
+                  "kind",
+                  "items"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "minLength": 1
+                  },
+                  "title": {
+                    "type": "string",
+                    "maxLength": 120
+                  },
+                  "kind": {
+                    "const": "metric"
+                  },
+                  "value": {
+                    "type": "string",
+                    "maxLength": 80
+                  },
+                  "unit": {
+                    "type": "string",
+                    "maxLength": 40
+                  },
+                  "note": {
+                    "type": "string",
+                    "maxLength": 240
+                  }
+                },
+                "required": [
+                  "id",
+                  "title",
+                  "kind",
+                  "value",
+                  "unit",
+                  "note"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "minLength": 1
+                  },
+                  "title": {
+                    "type": "string",
+                    "maxLength": 120
+                  },
+                  "kind": {
+                    "const": "table"
+                  },
+                  "columns": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "maxLength": 80
+                    },
+                    "minItems": 1
+                  },
+                  "rows": {
+                    "type": "array",
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "maxLength": 240
+                      }
+                    }
+                  }
+                },
+                "required": [
+                  "id",
+                  "title",
+                  "kind",
+                  "columns",
+                  "rows"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "description": "Optional closed data cards. Runtime bounds: 8 cards / 24 KiB, 20 checklist items, 6 table columns and 20 equal-width rows. Omission preserves existing cards; [] clears them."
         }
       },
       "required": [
@@ -1624,6 +1846,199 @@
             "type": "string",
             "maxLength": 500
           }
+        },
+        "resultCards": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "minLength": 1
+                  },
+                  "title": {
+                    "type": "string",
+                    "maxLength": 120
+                  },
+                  "kind": {
+                    "const": "checklist"
+                  },
+                  "items": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "maxLength": 64,
+                          "minLength": 1
+                        },
+                        "label": {
+                          "type": "string",
+                          "maxLength": 240
+                        },
+                        "done": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "label",
+                        "done"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "id",
+                  "title",
+                  "kind",
+                  "items"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "minLength": 1
+                  },
+                  "title": {
+                    "type": "string",
+                    "maxLength": 120
+                  },
+                  "kind": {
+                    "const": "metric"
+                  },
+                  "value": {
+                    "type": "string",
+                    "maxLength": 80
+                  },
+                  "unit": {
+                    "type": "string",
+                    "maxLength": 40
+                  },
+                  "note": {
+                    "type": "string",
+                    "maxLength": 240
+                  }
+                },
+                "required": [
+                  "id",
+                  "title",
+                  "kind",
+                  "value",
+                  "unit",
+                  "note"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "minLength": 1
+                  },
+                  "title": {
+                    "type": "string",
+                    "maxLength": 120
+                  },
+                  "kind": {
+                    "const": "table"
+                  },
+                  "columns": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "maxLength": 80
+                    },
+                    "minItems": 1
+                  },
+                  "rows": {
+                    "type": "array",
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "maxLength": 240
+                      }
+                    }
+                  }
+                },
+                "required": [
+                  "id",
+                  "title",
+                  "kind",
+                  "columns",
+                  "rows"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "description": "Optional closed data cards. Runtime bounds: 8 cards / 24 KiB, 20 checklist items, 6 table columns and 20 equal-width rows. Omission preserves existing cards; [] clears them."
+        },
+        "resultCardsSource": {
+          "type": "object",
+          "properties": {
+            "version": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "at": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "author": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "human",
+                    "agent",
+                    "remote",
+                    "supervisor"
+                  ]
+                },
+                "id": {
+                  "type": "string",
+                  "maxLength": 256
+                },
+                "source": {
+                  "enum": [
+                    "local",
+                    "mcp",
+                    "cli",
+                    "board",
+                    "phone",
+                    "slack",
+                    "voice",
+                    "engine"
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "id",
+                "source"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "version",
+            "at",
+            "author"
+          ],
+          "additionalProperties": false
         },
         "observed": {
           "type": "object",
@@ -3603,39 +4018,115 @@
           "additionalProperties": false
         },
         "merge": {
-          "type": "object",
-          "properties": {
-            "strategy": {
-              "enum": [
-                "merge",
-                "squash",
-                "ff"
-              ]
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "phase": {
+                  "const": "preview"
+                }
+              },
+              "required": [
+                "phase"
+              ],
+              "additionalProperties": false
             },
-            "deleteBranch": {
-              "type": "boolean"
+            {
+              "type": "object",
+              "properties": {
+                "phase": {
+                  "const": "apply"
+                },
+                "reviewId": {
+                  "type": "string",
+                  "maxLength": 36,
+                  "minLength": 36
+                },
+                "reviewHash": {
+                  "type": "string",
+                  "maxLength": 64,
+                  "minLength": 64
+                },
+                "confirm": {
+                  "const": true
+                }
+              },
+              "required": [
+                "phase",
+                "reviewId",
+                "reviewHash",
+                "confirm"
+              ],
+              "additionalProperties": false
             }
-          },
-          "required": [],
-          "additionalProperties": false
+          ]
         },
         "openPr": {
-          "type": "object",
-          "properties": {
-            "draft": {
-              "type": "boolean"
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "phase": {
+                  "const": "preview"
+                },
+                "title": {
+                  "type": "string",
+                  "maxLength": 120,
+                  "minLength": 1
+                },
+                "body": {
+                  "type": "string",
+                  "maxLength": 10000
+                }
+              },
+              "required": [
+                "phase",
+                "title",
+                "body"
+              ],
+              "additionalProperties": false
             },
-            "title": {
-              "type": "string",
-              "maxLength": 256
+            {
+              "type": "object",
+              "properties": {
+                "phase": {
+                  "const": "apply"
+                },
+                "reviewId": {
+                  "type": "string",
+                  "maxLength": 36,
+                  "minLength": 36
+                },
+                "reviewHash": {
+                  "type": "string",
+                  "maxLength": 64,
+                  "minLength": 64
+                },
+                "confirm": {
+                  "const": true
+                }
+              },
+              "required": [
+                "phase",
+                "reviewId",
+                "reviewHash",
+                "confirm"
+              ],
+              "additionalProperties": false
             },
-            "body": {
-              "type": "string",
-              "maxLength": 20000
+            {
+              "type": "object",
+              "properties": {
+                "phase": {
+                  "const": "receipt"
+                }
+              },
+              "required": [
+                "phase"
+              ],
+              "additionalProperties": false
             }
-          },
-          "required": [],
-          "additionalProperties": false
+          ]
         },
         "discard": {
           "type": "object",
@@ -3668,11 +4159,27 @@
                 "codex",
                 "gemini"
               ]
+            },
+            "phase": {
+              "enum": [
+                "preview",
+                "apply"
+              ]
+            },
+            "reviewId": {
+              "type": "string",
+              "maxLength": 128
+            },
+            "reviewHash": {
+              "type": "string",
+              "maxLength": 64,
+              "minLength": 64
+            },
+            "confirm": {
+              "type": "boolean"
             }
           },
-          "required": [
-            "ai"
-          ],
+          "required": [],
           "additionalProperties": false
         }
       },
@@ -4276,6 +4783,12 @@
             "url"
           ],
           "additionalProperties": false
+        },
+        "integration": {
+          "type": "object"
+        },
+        "providerChange": {
+          "type": "object"
         }
       },
       "required": [

@@ -29,6 +29,42 @@ const TIME = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
 const isObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 const pad = (n) => String(n).padStart(2, '0');
+const FOLLOWUP_MAX_DELAY_MS = 7 * 86400 * 1000;
+const shape = (v, keys) => isObject(v) && Object.keys(v).length === keys.length && keys.every(k => Object.hasOwn(v, k));
+
+// Selected-session schedules are one-shot eligibility times on the existing
+// encrypted outbox/pump. They do not create recipes, background runners or a
+// second timer. A repeating recipe expression means its next occurrence only.
+function followupSchedule(request = { kind: 'ready' }, at = Date.now(), reset = null) {
+  if (!Number.isSafeInteger(at) || at < 0) return null;
+  if (shape(request, ['kind']) && request.kind === 'ready') return { kind: 'ready' };
+  let due, evidence;
+  if (shape(request, ['kind', 'atMs']) && request.kind === 'at') due = request.atMs;
+  else if (shape(request, ['kind', 'schedule']) && request.kind === 'next') {
+    const s = normalize(request.schedule);
+    if (!s || !shape(request.schedule, Object.keys(s)) || Object.keys(s).some(k => s[k] !== request.schedule[k]) || s.kind === 'off') return null;
+    due = nextRun(s, at);
+  } else if (shape(request, ['kind']) && request.kind === 'provider-reset') {
+    if (!shape(reset, ['id', 'atMs', 'observedAt']) || typeof reset.id !== 'string' || !/^[0-9a-f]{64}$/.test(reset.id)
+      || !Number.isSafeInteger(reset.observedAt) || reset.observedAt < 0 || reset.observedAt > at) return null;
+    due = reset.atMs; evidence = reset.id;
+  } else return null;
+  if (!Number.isSafeInteger(due) || due <= at || due >= at + FOLLOWUP_MAX_DELAY_MS) return null;
+  return evidence ? { kind: 'provider-reset', atMs: due, evidence } : { kind: 'at', atMs: due };
+}
+
+function validFollowupSchedule(s, createdAt) {
+  if (s === undefined || shape(s, ['kind']) && s.kind === 'ready') return true;
+  if (!(shape(s, ['kind', 'atMs']) && s.kind === 'at'
+    || shape(s, ['kind', 'atMs', 'evidence']) && s.kind === 'provider-reset' && typeof s.evidence === 'string' && /^[0-9a-f]{64}$/.test(s.evidence))) return false;
+  return Number.isSafeInteger(s.atMs) && s.atMs > createdAt && s.atMs < createdAt + FOLLOWUP_MAX_DELAY_MS;
+}
+
+function describeFollowup(s) {
+  if (!s || s.kind === 'ready') return 'When the original session is ready';
+  const at = new Date(s.atMs).toLocaleString(undefined, { timeZoneName: 'short' });
+  return s.kind === 'provider-reset' ? `After the provider-reported reset at ${at}` : `At or after ${at}`;
+}
 
 // → a clean schedule or null. Times are local 'HH:MM'; weekly has a day 0..6 (Sunday = 0).
 function normalize(s) {
@@ -226,4 +262,4 @@ function createScheduler({ store, run, exists = () => true, canSchedule = () => 
   return { set, pause, skipNext, remove, list, view: (id) => { const e = all()[id]; return e ? view(id, e) : null; }, runsBetween, tick, start, stop, wake, arm };
 }
 
-module.exports = { createStore, createScheduler, nextRun, normalize, describe, clock, KINDS, HOURS, DAYS, FILE, HISTORY_MAX };
+module.exports = { createStore, createScheduler, nextRun, normalize, describe, clock, KINDS, HOURS, DAYS, FILE, HISTORY_MAX, followupSchedule, validFollowupSchedule, describeFollowup };

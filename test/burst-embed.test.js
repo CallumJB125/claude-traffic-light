@@ -162,3 +162,35 @@ test('too old and Burst cannot update itself: no Update button that cannot work;
   const u = E.pageState({ kind: 'untrusted', reason: 'The program answering is not Burst.' }, { platform: 'darwin' });
   assert.match(u.detail, /installed somewhere other than ~\/\.local\/bin\/claude-burst/);
 });
+
+// Verifier fix 6: with the card's view, CA/hosts/console trouble is a `needs_attention` page (never `ready`,
+// so the dashboard is not loaded over a broken Burst), and a gateway that stopped answering is `stale` with
+// the last-known age and Repair, not the plain "Not responding".
+test('pageState with the card view: ca_untrusted / hosts_missing / console_down → needs_attention; gateway_stale → stale', () => {
+  const d = { kind: 'present', pid: 1, state: { version: '0.20.36', mode: 'transparent', active: true, route: 'PRIMARY', rejected: [], primaryFailures: 0, caTrusted: false, hostsEntry: true } };
+  const view = (kind, over = {}) => ({ kind, headline: `h ${kind}`, detail: `d ${kind}`, chip: { tone: 'amber', label: 'Needs attention' }, action: { kind: 'repair', label: 'Repair' }, dimmed: false, version: '0.20.36', ...over });
+  assert.equal(E.pageState(d, { platform: 'darwin' }).mode, 'ready', 'without the view the raw detection alone reads as ready (the bug this guards)');
+  for (const kind of E.ATTENTION_KINDS) {
+    const s = E.pageState(d, { platform: 'darwin', view: view(kind, kind === 'console_down' ? { action: { kind: 'repair', label: 'Start console' } } : {}) });
+    assert.equal(s.mode, 'empty', kind);
+    assert.equal(s.reason, 'needs_attention', kind);
+    assert.equal(s.kind, kind);
+    assert.equal(s.headline, `h ${kind}`); assert.equal(s.detail, `d ${kind}`);
+    assert.deepEqual(s.action, kind === 'console_down' ? { kind: 'repair', label: 'Start console' } : { kind: 'repair', label: 'Repair' });
+    assert.deepEqual(s.actions, [{ ...s.action, primary: true }], 'one button');
+    assert.equal(s.dimmed, false);
+    assert.equal(s.chip.label, 'Needs attention');
+  }
+  const stale = E.pageState({ kind: 'unreachable', installed: true, misses: 1 }, { platform: 'darwin', view: view('gateway_stale', { headline: 'Burst is not responding', detail: 'Showing the last known state from 5 min ago: on, transparent mode, version 0.20.36. Repair restarts it in the mode it was in.', chip: { tone: 'amber', label: 'Not responding' }, dimmed: true }) });
+  assert.equal(stale.mode, 'empty'); assert.equal(stale.reason, 'stale'); assert.equal(stale.dimmed, true);
+  assert.match(stale.detail, /last known state from 5 min ago/);
+  assert.deepEqual(stale.action, { kind: 'repair', label: 'Repair' });
+  assert.deepEqual(stale.actions, [{ kind: 'retry', label: 'Check again' }, { kind: 'repair', label: 'Repair', primary: true }]);
+  assert.equal(stale.version, '0.20.36');
+  // An action the page may not run falls back to Repair; a view of any other kind changes nothing.
+  assert.deepEqual(E.pageState(d, { platform: 'darwin', view: view('ca_untrusted', { action: { kind: 'console-restart', label: 'Start console' } }) }).action, { kind: 'repair', label: 'Repair' });
+  assert.equal(E.pageState(d, { platform: 'darwin', view: view('on') }).mode, 'ready');
+  assert.equal(E.pageState({ kind: 'unreachable', installed: true, misses: 1 }, { platform: 'darwin', view: view('off') }).reason, 'down');
+  assert.equal(E.pageState({ kind: 'not_installed' }, { platform: 'darwin', view: 'junk' }).reason, 'not_installed');
+  for (const s of [stale, E.pageState(d, { platform: 'darwin', view: view('hosts_missing') })]) for (const a of s.actions) assert.ok(E.PAGE_ACTIONS.includes(a.kind) || a.kind === 'retry', a.kind);
+});

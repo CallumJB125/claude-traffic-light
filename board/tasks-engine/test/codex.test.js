@@ -17,7 +17,7 @@ test('Codex default: real socket creates a worktree, observes edits/evidence, an
     assert.equal(t.ai.id, 'codex'); assert.equal(t.sessionId, '00000000-0000-4000-8000-000000000159');
     assert.equal(fs.readFileSync(path.join(t.worktree, 'codex-result.txt'), 'utf8'), 'fixture edit\n'); assert.equal(fs.existsSync(path.join(h.repo.checkout, 'codex-result.txt')), false);
     assert.match(t.evidence.summary, /fixture edit/); assert.ok(t.touched.includes('codex-result.txt')); assert.equal(t.cost.budgetUsd, null);
-    assert.equal(fs.existsSync(path.join(h.dataDir, 'run', id, 'ipc.sock')), false); assert.equal(fs.existsSync(path.join(h.dataDir, 'run', id, 'hook.token')), false);
+    assert.equal(fs.existsSync(path.join(h.dataDir, 'run', id, 'ipc.sock')), false); assert.equal(fs.statSync(path.join(h.dataDir, 'run', id, 'hook.token')).mode & 0o777, 0o600);
     const started = h.log().find((x) => x.kind === 'start'); assert.ok(started.argv.includes('--ignore-user-config')); assert.ok(!('BOARD_DEVICE_TOKEN' in started.env));
     assert.equal(t.gitRef, `refs/heads/${t.branch}`);
     assert.ok(started.argv.some((s) => s.includes(`${JSON.stringify(path.join(h.repo.checkout, '.git', t.gitRef))}="write"`)));

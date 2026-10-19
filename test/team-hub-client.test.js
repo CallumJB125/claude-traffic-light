@@ -122,7 +122,8 @@ test('sessions: state shapes the entry; broken state still lists; observed_at fr
 });
 
 test('send: state op then send op; generation fetched fresh; fresh UUID request_id; no auto-retry', async () => {
-  const { hub, r } = mk({ shared: [share()], callBody: { result: { ok: true, state: { session: SESSION, generation: 7, status: 'ready', observed_at: T0 - 5 }, delivery: { id: 'd1', text: 'hello there', by: 'Me', state: 'queued', response: '' } } } });
+  const receipt = { id: 'd1', text: 'hello there', by: 'Me', state: 'queued', response: '' };
+  const { hub, r } = mk({ shared: [share()], callBody: { result: { ok: true, state: { session: SESSION, generation: 7, status: 'ready', observed_at: T0 - 5, deliveries: [receipt] }, delivery: receipt } } });
   await hub.teams({ id: 'u-me' });
   const out = await hub.send({ id: 'u-me' }, 't1', SHARED, '  hello there  ');
   assert.deepEqual(out, { ok: true, status: 'queued', delivery: { id: 'd1', text: 'hello there', by: 'Me', state: 'queued', response: '' } });
@@ -160,7 +161,7 @@ test('send: invalid text and missing/mismatched team fail closed before any op c
 });
 
 test('send: the SEND op own non-200 mapping with state ok; error and reason both set; no hub text echoed', async () => {
-  for (const [status, want] of [[404, 'stale'], [403, 'forbidden'], [429, 'unavailable'], [500, 'unavailable'], [503, 'unavailable']]) {
+  for (const [status, want] of [[404, 'stale'], [403, 'forbidden'], [429, 'unavailable'], [500, 'unconfirmed'], [503, 'unconfirmed']]) {
     const r = rig({ shared: [share()], callBody: { result: { ok: true, state: { session: SESSION, generation: 1, status: 'ready' } } } });
     const base = r.fetch;
     let n = 0;

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// SessionStart team brief (docs/TEAM-CONTEXT-CONTRACT.md): asks the running app
+// Supported turn/start/reset team brief (docs/TEAM-CONTEXT-CONTRACT.md): asks the running app
 // for at most 1500 characters on who else is working in this repository and
 // hands it to the AI as session context. The app holds the hub sign-in and does
 // the gating (setting on, repo linked, sharing on); this side only checks the
@@ -11,6 +11,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const http = require('http'); // privacy-flow: local-server
+const Receipt = require('./team-brief-receipt');
 
 const TIMEOUT_MS = 800;
 const MAX = 1500;
@@ -18,6 +19,8 @@ const MAX_REPLY = 16 * 1024;
 // Adapters whose SessionStart output is documented to reach the model as
 // context, all in the same hookSpecificOutput shape.
 const CONTEXT_ADAPTERS = new Set(['claude', 'codex', 'gemini']);
+// Do not assume lifecycle reporting also supports model-context injection.
+const CONTEXT_EVENTS = { claude: new Set(['SessionStart', 'UserPromptSubmit']), codex: new Set(['SessionStart']), gemini: new Set(['SessionStart']) };
 
 const rootDir = (env = process.env) => env.CLAUDE_TRAFFIC_LIGHT_HOME || path.join(os.homedir(), '.claude-traffic-light');
 
@@ -52,42 +55,50 @@ function ask({ port, token }, body, timeoutMs = TIMEOUT_MS) {
   });
 }
 
-function output(brief) {
+function output(brief, event = 'SessionStart') {
   if (typeof brief !== 'string' || !brief.trim()) return null;
-  return { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: brief.slice(0, MAX) } };
+  return { hookSpecificOutput: { hookEventName: event, additionalContext: brief.slice(0, MAX) } };
 }
 
 // → the hook output object, or null for silence.
-async function run({ adapter = 'claude', payload = {}, root = rootDir(), timeoutMs = TIMEOUT_MS } = {}) {
+async function run({ adapter = 'claude', event, payload = {}, root = rootDir(), timeoutMs = TIMEOUT_MS } = {}) {
   try {
     if (!CONTEXT_ADAPTERS.has(adapter) || !enabled(root)) return null;
     const d = payload && typeof payload === 'object' ? payload : {};
-    // A compaction carries on the same work; the brief was given at the start.
-    if (d.source === 'compact') return null;
+    const hookEvent = event || d.hook_event_name || 'SessionStart';
+    if (!CONTEXT_EVENTS[adapter].has(hookEvent)) return null;
     const cwd = typeof d.cwd === 'string' && path.isAbsolute(d.cwd) ? d.cwd : process.cwd();
     const ep = endpoint(root);
     if (!ep) return null;
     const session = typeof d.session_id === 'string' ? d.session_id.slice(0, 120) : null;
-    const reply = await ask(ep, { op: 'brief', args: { cwd, session } }, timeoutMs);
-    return reply && reply.available === true ? output(reply.brief) : null;
+    const file = Receipt.fileFor(root, adapter, session, cwd);
+    // Start/resume/compact always restore context, even if its version is the
+    // same. Ordinary Claude turns receive only changed reports when possible.
+    const previous = hookEvent === 'UserPromptSubmit' ? Receipt.read(file) : null;
+    const preparedAt = Date.now();
+    const reply = await ask(ep, { op: 'brief', args: { cwd, session, ...(previous ? { since_version: previous.version } : {}) } }, timeoutMs);
+    if (!enabled(root) || !reply || reply.available !== true) return null;
+    return Receipt.prepare(output(reply.brief, hookEvent), file, reply.version, preparedAt);
   } catch { return null; }
 }
 
 // fs.writeSync, as set-status.js: stdout is an async pipe on macOS and the
 // caller exits right after.
 function print(out) {
-  if (!out) return;
+  if (!out) return false;
   const buf = Buffer.from(JSON.stringify(out));
   const sleeper = new Int32Array(new SharedArrayBuffer(4));
   for (let off = 0; off < buf.length;) {
     try { off += fs.writeSync(1, buf, off); } catch (e) {
-      if (e.code !== 'EAGAIN') break;
+      if (e.code !== 'EAGAIN') return false;
       Atomics.wait(sleeper, 0, 0, 5);
     }
   }
+  Receipt.recordDelivered(out);
+  return true;
 }
 
-module.exports = { run, output, print, enabled, endpoint, CONTEXT_ADAPTERS, TIMEOUT_MS, MAX };
+module.exports = { run, output, print, recordDelivered: Receipt.recordDelivered, enabled, endpoint, CONTEXT_ADAPTERS, CONTEXT_EVENTS, TIMEOUT_MS, MAX };
 
 if (require.main === module) {
   process.on('uncaughtException', () => process.exit(0));

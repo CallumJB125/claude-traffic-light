@@ -9,7 +9,7 @@
 // A group with `submenu` (its label) is listed as one submenu of its pages, under the group before it.
 'use strict';
 
-const ACCELERATORS = Object.freeze({ lights: 'CmdOrCtrl+L', settings: 'CmdOrCtrl+,' });
+const ACCELERATORS = Object.freeze({ lights: 'CmdOrCtrl+L', settings: 'CmdOrCtrl+,', memory: 'CmdOrCtrl+Shift+F' });
 
 // Where "Something's off / Idea…" slots in once a feedback window exists.
 // `feedback`: an item ({label, click}) or null.

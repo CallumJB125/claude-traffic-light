@@ -10,6 +10,14 @@ const { SOURCES } = require('../src/borrow/registry.js');
 const { blockedReason } = require('../src/borrow/blocklist.js');
 const { testTempDir } = require('./helpers/tmp');
 
+// These successful filesystem reads exercise POSIX host primitives. Selecting
+// Darwin registry entries does not supply those primitives on a Windows host.
+const safeReadFlags = [fs.constants.O_NOFOLLOW, fs.constants.O_NONBLOCK]
+  .every(value => Number.isInteger(value) && value > 0);
+const filesystemTest = (name, run) => test(name, {
+  skip: !safeReadFlags && 'Host lacks the scanner’s required no-follow/nonblocking file flags',
+}, run);
+
 // Every temp folder a test makes is removed when the file's tests finish.
 const made = [];
 test.after(() => { for (const d of made) fs.rmSync(d, { recursive: true, force: true }); });
@@ -59,7 +67,7 @@ const SECRETY = {
   '.kube/config': 'users: []',
 };
 
-test('reads registry files, skips what is absent, lists what it looked at', () => {
+filesystemTest('reads registry files, skips what is absent, lists what it looked at', () => {
   const home = tempHome({
     '.zshrc': 'alias ll="ls -la"\n',
     '.gitconfig': '[user]\n\tname = Tonde\n',
@@ -94,7 +102,7 @@ test('never touches a blocked path, not even to stat it, and never writes', () =
   assert.ok(!all.includes('PRIVATE') && !all.includes('transcript') && !all.includes('secret command'));
 });
 
-test('SSH config only when explicitly picked', () => {
+filesystemTest('SSH config only when explicitly picked', () => {
   const home = tempHome({ '.ssh/config': 'Host box\n  HostName 10.0.0.9\n', '.ssh/id_rsa': 'KEY' });
   assert.equal(scan({ home, platform: 'darwin', exec: null }).sources.find((s) => s.id === 'ssh-config'), undefined);
   const r = scan({ home, platform: 'darwin', exec: null, optIn: ['ssh-config'] });
@@ -103,7 +111,7 @@ test('SSH config only when explicitly picked', () => {
   assert.ok(!JSON.stringify(r).includes('KEY'));
 });
 
-test('~/.claude.json gives up only mcpServers', () => {
+filesystemTest('~/.claude.json gives up only mcpServers', () => {
   const home = tempHome({
     '.claude.json': JSON.stringify({ oauthAccount: { emailAddress: 'tonde@acme.co.za', accountUuid: 'u-1' }, projects: { '/Users/tonde/secret-client': { history: ['do the thing'] } }, userID: 'abc', mcpServers: { linear: { type: 'http', url: 'https://mcp.linear.app/sse' } } }),
   });
@@ -115,7 +123,7 @@ test('~/.claude.json gives up only mcpServers', () => {
   for (const leak of ['oauthAccount', 'tonde@acme', 'secret-client', 'do the thing', 'userID']) assert.ok(!all.includes(leak), leak);
 });
 
-test('links: followed inside home, refused outside it or into a blocked path', () => {
+filesystemTest('links: followed inside home, refused outside it or into a blocked path', () => {
   const outside = tempDir('borrow-outside-');
   fs.writeFileSync(path.join(outside, 'zshrc'), 'OUTSIDE\n');
   const home = tempHome({ 'dotfiles/zshrc': 'alias g=git\n', '.ssh/id_ed25519': 'KEY' }, {});
@@ -130,14 +138,14 @@ test('links: followed inside home, refused outside it or into a blocked path', (
   assert.ok(!all.includes('OUTSIDE') && !all.includes('KEY'));
 });
 
-test('large and binary files are skipped', () => {
+filesystemTest('large and binary files are skipped', () => {
   const home = tempHome({ '.zshrc': 'x'.repeat(300 * 1024), '.bashrc': 'a\0b' });
   const r = scan({ home, platform: 'darwin', exec: null });
   assert.equal(r.lookedAt.find((l) => l.path === '~/.zshrc').reason, 'larger than 256 KB');
   assert.equal(r.lookedAt.find((l) => l.path === '~/.bashrc').reason, 'binary file');
 });
 
-test('item lists: files parsed, only allow-listed commands run', () => {
+filesystemTest('item lists: files parsed, only allow-listed commands run', () => {
   const home = tempHome({
     '.vscode/extensions/extensions.json': JSON.stringify([{ identifier: { id: 'esbenp.prettier-vscode' }, version: '11.0.0' }]),
     '.claude/plugins/installed_plugins.json': JSON.stringify({ plugins: { 'commit-commands@claude-plugins-official': {} } }),
@@ -174,7 +182,7 @@ test('M4: blocklist folds case and Unicode forms as APFS does, and checks a back
   assert.equal(blockedReason('~/.config/nvim/init.lua'), null);
 });
 
-test('M4: a link in a folder on the path (~/.config/gh -> ~/.aws) is checked hop by hop', () => {
+filesystemTest('M4: a link in a folder on the path (~/.config/gh -> ~/.aws) is checked hop by hop', () => {
   const home = tempHome({ '.aws/config.yml': 'aws_secret_access_key: AWSSECRETVALUE\n' });
   fs.mkdirSync(path.join(home, '.config'), { recursive: true });
   fs.symlinkSync(path.join(home, '.aws'), path.join(home, '.config/gh'));
@@ -184,7 +192,7 @@ test('M4: a link in a folder on the path (~/.config/gh -> ~/.aws) is checked hop
   assert.ok(!JSON.stringify(r).includes('AWSSECRETVALUE'));
 });
 
-test('M4: a link to a case-folded blocked name is refused (APFS opens ~/.ſsh as ~/.ssh)', () => {
+filesystemTest('M4: a link to a case-folded blocked name is refused (APFS opens ~/.ſsh as ~/.ssh)', () => {
   const home = tempHome({ '.ssh/config': 'Host box\n  HostName SSHCONFIGBODY\n' });
   fs.mkdirSync(path.join(home, '.config/gh'), { recursive: true });
   fs.symlinkSync(path.join(home, '.ſsh', 'config'), path.join(home, '.config/gh/config.yml'));
@@ -193,7 +201,7 @@ test('M4: a link to a case-folded blocked name is refused (APFS opens ~/.ſsh as
   assert.match(r.lookedAt.find((l) => l.path === '~/.config/gh/config.yml').reason, /never read: ~\/\.ssh|SSH config/);
 });
 
-test('M4: a file with another hard link is skipped (its other name may be blocked)', () => {
+filesystemTest('M4: a file with another hard link is skipped (its other name may be blocked)', () => {
   const home = tempHome({ '.aws/credentials': '[default]\nHARDLINKED\n' });
   fs.mkdirSync(path.join(home, '.config/mise'), { recursive: true });
   fs.linkSync(path.join(home, '.aws/credentials'), path.join(home, '.config/mise/config.toml'));
@@ -202,7 +210,7 @@ test('M4: a file with another hard link is skipped (its other name may be blocke
   assert.ok(!JSON.stringify(r).includes('HARDLINKED'));
 });
 
-test('L5: links into a blocked folder never stat the target, so existence does not leak', () => {
+filesystemTest('L5: links into a blocked folder never stat the target, so existence does not leak', () => {
   const home = tempHome({ '.ssh/id_ed25519': 'KEY' });
   fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
   fs.symlinkSync(path.join(home, '.ssh/nope'), path.join(home, '.claude/CLAUDE.md'));
@@ -220,7 +228,7 @@ test('L5: links into a blocked folder never stat the target, so existence does n
   assert.deepEqual(touched.filter((t) => t.path.split(path.sep)[0] === '.ssh'), []);
 });
 
-test('L4: files are read through a descriptor that must be the file that was checked', () => {
+filesystemTest('L4: files are read through a descriptor that must be the file that was checked', () => {
   const home = tempHome({ '.zshrc': 'alias a=b\n' });
   const swapped = { ...fs, fstatSync: (fd) => ({ ...fs.fstatSync(fd), ino: -1, dev: fs.fstatSync(fd).dev, isFile: () => true }) };
   const r = scan({ home, platform: 'darwin', fsApi: swapped, exec: null, only: ['zsh'] });
@@ -228,7 +236,7 @@ test('L4: files are read through a descriptor that must be the file that was che
   assert.deepEqual(readPaths(r), []);
 });
 
-test('M4: a hard link created after the path check is rejected before reading bytes', () => {
+filesystemTest('M4: a hard link created after the path check is rejected before reading bytes', () => {
   const home = tempHome({ '.zshrc': 'NOT_FOR_SHARING\n' });
   fs.mkdirSync(path.join(home, '.aws'));
   let bytesRead = 0;
@@ -242,7 +250,7 @@ test('M4: a hard link created after the path check is rejected before reading by
   assert.deepEqual(readPaths(result), []);
 });
 
-test('F4: unreadable files, a missing home and garbage command output do not throw', () => {
+filesystemTest('F4: unreadable files, a missing home and garbage command output do not throw', () => {
   const home = tempHome({ '.zshrc': 'x\n' });
   const denied = { ...fs, openSync: () => { throw Object.assign(new Error('EACCES'), { code: 'EACCES' }); } };
   const r = scan({ home, platform: 'darwin', fsApi: denied, exec: null, only: ['zsh'] });
@@ -264,7 +272,7 @@ test('F4: unreadable files, a missing home and garbage command output do not thr
   assert.equal(at('brew leaves --installed-on-request').result, 'absent');
 });
 
-test('F5: a large ~/.claude.json still gives up its mcpServers, and says only that is used', () => {
+filesystemTest('F5: a large ~/.claude.json still gives up its mcpServers, and says only that is used', () => {
   const big = { projects: { '/x': { history: ['y'.repeat(400 * 1024)] } }, mcpServers: { a: { command: 'npx' } } };
   const home = tempHome({ '.claude.json': JSON.stringify(big) });
   const r = scan({ home, platform: 'darwin', exec: null, only: ['claude-code'] });
@@ -277,7 +285,7 @@ test('F5: a large ~/.claude.json still gives up its mcpServers, and says only th
   assert.equal(none.lookedAt.find((l) => l.path === '~/.claude.json').reason, 'no mcpServers in it');
 });
 
-test('H2: file records carry their format (registry override, else inferred)', () => {
+filesystemTest('H2: file records carry their format (registry override, else inferred)', () => {
   const home = tempHome({ '.bash_profile': 'export A=1\n', '.bashrc': 'x\n', '.claude/settings.json': '{}' });
   const r = scan({ home, platform: 'darwin', exec: null, only: ['bash', 'claude-code'] });
   const f = Object.fromEntries(r.sources.flatMap((s) => s.files).map((x) => [x.path, x]));
@@ -309,7 +317,7 @@ test('F6: the registry is sound: unique ids, known parsers, ~ paths, nothing blo
   assert.deepEqual([...EXEC_ALLOWED].sort(), [...exec].sort());
 });
 
-test('F7/F8: per-platform paths: Windows reads AppData, macOS never looks there', () => {
+filesystemTest('F7/F8: per-platform paths: Windows registry reads AppData when safe host reads are available', () => {
   const home = tempHome({ 'AppData/Roaming/Code/User/settings.json': '{"editor.fontSize": 14}' });
   const w = scan({ home, platform: 'win32', exec: null, only: ['vscode'] });
   assert.deepEqual(readPaths(w), ['~/AppData/Roaming/Code/User/settings.json']);
@@ -317,7 +325,7 @@ test('F7/F8: per-platform paths: Windows reads AppData, macOS never looks there'
   assert.ok(!d.lookedAt.some((l) => l.path.includes('AppData') || l.path.startsWith('~/.config/Code')));
 });
 
-test('F21/F24: depth and count limits are reported once; withheld names are counted, not named', () => {
+filesystemTest('F21/F24: depth and count limits are reported once; withheld names are counted, not named', () => {
   const files = { '.config/nvim/init.lua': 'x\n', '.config/nvim/lua/secrets.lua': 'S\n', '.config/nvim/lua/token.lua': 'T\n' };
   files['.config/nvim/a/b/c/d/e/deep.lua'] = 'deep\n';
   const home = tempHome(files);
@@ -330,4 +338,25 @@ test('F21/F24: depth and count limits are reported once; withheld names are coun
   const c = scan({ home: tempHome(many), platform: 'darwin', exec: null, only: ['neovim'] });
   assert.equal(c.sources[0].files.length, 200);
   assert.equal(c.lookedAt.filter((l) => /more than 200 files/.test(l.reason || '')).length, 1);
+});
+
+test('Windows scanner fails closed on real host flags without opening or returning file bytes', {
+  skip: process.platform !== 'win32' && 'Requires actual Windows filesystem and Node constants',
+}, () => {
+  const content = '{"editor.fontSize":14,"fixture":"synthetic Windows settings"}';
+  const home = tempHome({ 'AppData/Roaming/Code/User/settings.json': content });
+  let opens = 0, reads = 0;
+  const api = { ...fs,
+    openSync() { opens++; throw new Error('Unavailable safe reads must not open the file'); },
+    readSync() { reads++; throw new Error('Unavailable safe reads must not read the file'); },
+  };
+  const result = scan({ home, platform: process.platform, fsApi: api, exec: null, only: ['vscode'] });
+  assert.equal(opens, 0); assert.equal(reads, 0);
+  assert.deepEqual(readPaths(result), []);
+  assert.deepEqual(result.lookedAt.find(item => item.path === '~/AppData/Roaming/Code/User/settings.json'), {
+    path: '~/AppData/Roaming/Code/User/settings.json', result: 'skipped',
+    reason: 'safe nonblocking file reads are unavailable on this platform',
+  });
+  assert.ok(!JSON.stringify(result).includes(content));
+  assert.equal(fs.readFileSync(path.join(home, 'AppData/Roaming/Code/User/settings.json'), 'utf8'), content);
 });

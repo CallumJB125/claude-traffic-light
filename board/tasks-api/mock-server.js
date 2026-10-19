@@ -773,8 +773,9 @@ export async function startMockServer(opts = {}) {
 
   // ── act ────────────────────────────────────────────────────────────────────
   async function act({ id, action, payload = {}, requestId }) {
+    const requestHash=crypto.createHash('sha256').update(JSON.stringify([id,action,payload])).digest('hex');
     const cached = actCache.get(requestId);
-    if (cached) return cached.result;
+    if (cached) { if (cached.hash !== requestHash) throw new ApiError('CONFLICT','requestId was already used for different action content'); return cached.result; }
     const task = tasks.get(id);
     if (!task) throw new ApiError('NOT_FOUND', `no task ${id}`);
     const { f } = faceOf(task);
@@ -785,11 +786,11 @@ export async function startMockServer(opts = {}) {
     if (action === 'takeover' && f.confirm.includes('takeover') && payload.confirm !== true) throw new ApiError('CONFIRM_REQUIRED', 'the agent may still be running; take over needs {confirm:true}');
     const pe = validate(SCHEMA, 'ActPayloads', { [action]: payload });
     if (pe) throw new ApiError('VALIDATION', `${pe.path}: ${pe.message}`);
-    audit(task, 'user', 'local', action, Object.keys(payload).length ? JSON.stringify(payload).slice(0, 200) : null);
+    audit(task, 'user', 'local', action, action === 'openPr' ? payload.phase : Object.keys(payload).length ? JSON.stringify(payload).slice(0, 200) : null);
 
     const out = await doAct(task, action, payload);
     const result = { ok: true, task: view(task), ...out };
-    actCache.set(requestId, { result, at: now() });
+    actCache.set(requestId, { result, hash:requestHash, at: now() });
     return result;
   }
 
@@ -916,14 +917,38 @@ export async function startMockServer(opts = {}) {
         return {};
       }
       case 'merge': {
+        if (payload.phase === 'preview') {
+          const id = crypto.randomUUID(), hash = crypto.createHash('sha256').update(id).digest('hex'), expiresAt = Date.now() + 300000;
+          task.integrationReview = { id, hash, expiresAt };
+          return { integration: { status: 'review', canApply: true, id, hash, expiresAt, branch: task.baseBranch ?? 'main', files: [{ path: 'src/settings/theme.js', status: 'M' }], patch: PATCH, reason: 'Synthetic integration preview; no filesystem changes.' } };
+        }
+        const review = task.integrationReview; task.integrationReview = null;
+        if (!review || review.id !== payload.reviewId || review.hash !== payload.reviewHash || review.expiresAt <= Date.now()) throw new ApiError('CONFLICT', 'review changed');
         setState(task, 'done', { outcome: 'merged' });
-        return {};
+        return { integration: { status: 'merged', commit: 'a'.repeat(40), branch: task.baseBranch ?? 'main' } };
       }
       case 'openPr': {
+        // Protocol fixture only: preview/apply mirror production review fences;
+        // neither phase contacts GitHub or supplies external acceptance proof.
+        const fingerprint = () => crypto.createHash('sha256').update(JSON.stringify([task.id,task.state,task.stateSince,task.sessionId,task.branch,task.baseBranch,task.worktree,task.repo,task.ai,task.checkpoint,task.handover])).digest('hex');
+        if (payload.phase === 'preview') {
+          if (!payload.title.trim() || /[\r\n\0-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(payload.title) || /[\0-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(payload.body)) throw new ApiError('VALIDATION','Write a valid draft title and description.');
+          const id=crypto.randomUUID(),expiresAt=Date.now()+300000;
+          const review={status:'review',id,repo:'example/plexiform-mock-only',account:'mock-user',branch:task.branch,base:task.baseBranch??'main',head:'a'.repeat(40),baseHead:'b'.repeat(40),title:payload.title.trim(),
+            body:`${payload.body.trim()}\n\n<!-- Synthetic mock preview: no real GitHub pull request will be created. -->`,patch:PATCH,expiresAt,reason:'Synthetic review only; no GitHub request is made.'};
+          const binding=fingerprint(),hash=crypto.createHash('sha256').update(JSON.stringify([binding,review])).digest('hex');
+          task.pullRequestReview={...review,hash,binding};
+          return {mock:true,pullRequest:{...review,hash}};
+        }
+        if (payload.phase === 'receipt') {
+          return {mock:true,pullRequest:{status:'unconfirmed',reason:'No retained synthetic creation attempt. This mock never contacts GitHub.'}};
+        }
+        const review=task.pullRequestReview;task.pullRequestReview=null;
+        if (payload.phase !== 'apply' || payload.confirm !== true || !review || review.id !== payload.reviewId || review.hash !== payload.reviewHash || review.expiresAt <= Date.now() || review.binding !== fingerprint()) throw new ApiError('CONFLICT','The synthetic pull request review changed. Preview again.');
         prCounter += 1;
-        task.pr = { number: prCounter, url: `https://github.com/example/${task.repo.name}/pull/${prCounter}`, state: 'open' };
-        setState(task, 'done', { outcome: 'pr_opened' });
-        return { pr: { number: task.pr.number, url: task.pr.url } };
+        task.pr = { number:prCounter,url:`https://github.com/${review.repo}/pull/${prCounter}`,state:'open' };
+        setState(task,'done',{outcome:'pr_opened'});
+        return {mock:true,pullRequest:{status:'created',number:task.pr.number,url:task.pr.url,state:'open',draft:true,changed:false,head:review.head,reason:'Synthetic receipt only. No real GitHub pull request was created.'}};
       }
       case 'discard': {
         cancelScript(task);

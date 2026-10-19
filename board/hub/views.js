@@ -188,6 +188,7 @@ export function cardView(hub, row, viewerId) {
     state_age_ms: stateAge == null ? 0 : Math.round(stateAge),
     ask: ['blocked', 'parked'].includes(row.run_state) || row.resume_to === 'blocked' ? askView(hub, row) : null,
     handover: doc && (h || synced.length) ? { version: h?.version ?? 0, synced_age_ms: synced.length ? Math.min(...synced) : null } : null,
+    handoff: (() => { const ho = hub.latestHandoff?.(row.id); return ho ? { id: ho.id, state: ho.state, from: ho.from_member_id, to: ho.to_member_id, from_name: hub.memberName(ho.from_member_id), to_name: hub.memberName(ho.to_member_id), note: ho.note ?? null, created_at: ho.created_at, answered_at: ho.answered_at ?? null } : null; })(),
     handover_target_name: ht ? (ht.kind === 'queue' ? 'the queue' : hub.memberName(ht.member_id ?? ht.by)) : null,
     handover_hold: ht?.kind === 'hold',
     handover_provenance: ['checkpoint_complete', 'checkpoint_incomplete', 'takeover'].includes(row.handover_provenance) ? row.handover_provenance : null,
@@ -255,7 +256,7 @@ export function cardDetail(hub, row, viewerId, feedEventOf) {
     feed,
     comments: hub.db.all('SELECT * FROM comments WHERE card_id = ? ORDER BY created_at, rowid', row.id).map((c) => commentIdentity(hub, {
       id: c.id, author_name: c.author_member_id ? hub.memberName(c.author_member_id) : `${hub.memberName(hub.run(c.author_run_id)?.on_behalf_of) ?? '?'}'s ${AI_LABELS[aiOfDispatch(hub.run(c.author_run_id))]}`,
-      source: c.source, trusted: !!c.trusted, body: c.body, for_agent: !!c.for_agent, reply_to: c.reply_to,
+      source: c.source, trusted: !!c.trusted, body: c.body, for_agent: !!c.for_agent, reply_to: c.reply_to, mentions: json(c.mentions_json, []),
       delivered_age_ms: hub.ageOf(c.delivered_at), created_age_ms: hub.ageOf(c.created_at),
     })),
     permission_requests: hub.db.all('SELECT * FROM permission_requests WHERE card_id = ? ORDER BY created_at, rowid', row.id).map((p) => ({

@@ -4,6 +4,7 @@ const path = require('node:path'), { EventEmitter } = require('node:events');
 const { createInteractionHub } = require('../src/session-interaction');
 const { createCodexAppServer, APP_SERVER_ARGS } = require('../src/codex-app-server');
 const { createInteractionMain, CHANNELS } = require('../src/interaction-main');
+const { spawnProviderFixture } = require('./helpers/provider-fixture-spawn');
 
 const ACTOR = 'overview:1:1';
 const CURRENT = (b) => b === null;
@@ -31,7 +32,7 @@ async function memHub(over = {}) {
 
 // ── Integration through the real adapter code against a FAKE app-server process ──
 test('FAKE app-server: message reaches the selected owned thread only, with ack, echo and streamed reply', async () => {
-  const adapter = createCodexAppServer({ bin: FAKE });
+  const adapter = createCodexAppServer({ bin: FAKE, spawn: spawnProviderFixture });
   const events = [];
   const hub = createInteractionHub({ adapters: { codex: adapter }, boardCurrent: CURRENT, onEvent: (_a, s) => events.push(s) });
   try {
@@ -47,7 +48,7 @@ test('FAKE app-server: message reaches the selected owned thread only, with ack,
   } finally { hub.stopAll(); }
 });
 test('FAKE app-server: steer needs the current turn, new turn while busy is refused, interrupt ends the turn', async () => {
-  const hub = createInteractionHub({ adapters: { codex: createCodexAppServer({ bin: FAKE }) }, boardCurrent: CURRENT });
+  const hub = createInteractionHub({ adapters: { codex: createCodexAppServer({ bin: FAKE, spawn: spawnProviderFixture }) }, boardCurrent: CURRENT });
   try {
     const A = (await hub.launch({ provider: 'codex' }, ACTOR)).state;
     const base = { session: A.session, generation: A.generation };
@@ -65,7 +66,7 @@ test('FAKE app-server: steer needs the current turn, new turn while busy is refu
   } finally { hub.stopAll(); }
 });
 test('FAKE app-server: provider approval requests are refused, never auto-approved', async () => {
-  const adapter = createCodexAppServer({ bin: FAKE }), seen = [];
+  const adapter = createCodexAppServer({ bin: FAKE, spawn: spawnProviderFixture }), seen = [];
   adapter.on((e) => seen.push(e));
   try {
     const { target } = await adapter.open({ cwd: '/tmp' });

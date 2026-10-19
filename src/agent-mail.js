@@ -31,6 +31,7 @@ const unavailable = (reason, message) => ({ available: false, reason, message })
 const digest = (s) => crypto.createHash('sha256').update(String(s)).digest('hex');
 const origin = (u) => { try { return new URL(u).origin; } catch { return null; } };
 
+const LOOK_LABEL = 'Can you look at this?';
 function create({ identity, resolve, fetch, home = null, enabled = () => false, notify = () => {}, onChange = () => {},
   timers = { setInterval, clearInterval }, pollMs = POLL_MS, now = Date.now, log = () => {} }) {
   let mailMemo = null;
@@ -143,6 +144,66 @@ function create({ identity, resolve, fetch, home = null, enabled = () => false, 
   }
 
   // Only messages created here (they carry `via`), and only the replies to them: never the inbox.
+  // "Can you look at this?" (a person's own review request to a teammate): a handoff whose
+  // via label marks it, held and released in one go like sendHandoff so the hub scrubs it the
+  // same way. The teammate sees it in Agent mail with Seen / I'll handle this / Reply / Done /
+  // Decline; the sender sees its state under "Waiting on".
+  async function askLook({ cwd, to, question, context = '' } = {}) {
+    if (typeof question !== 'string' || !question.trim()) return { ok: false, error: 'Write what you want them to look at.' };
+    if (question.length > LIMITS.brief) return { ok: false, error: `Too long: keep it under ${LIMITS.brief} characters.` };
+    const t = await teammate(cwd, to);
+    if (t.fail) return { ok: false, error: t.fail.message, reason: t.fail.reason };
+    const body = `${LOOK_LABEL}\n\n${clean(question, LIMITS.brief)}${typeof context === 'string' && context.trim() ? `\n\nContext: ${clean(context, 300)}` : ''}`;
+    const h = await hold(t, body, { kind: 'handoff', handoff: { artifacts: [] }, via: via({ provider: 'plexiform', label: LOOK_LABEL }) }); // privacy-flow: handoff
+    if (!h.ask_id) return { ok: false, error: h.message || 'The team hub refused that.' };
+    const cur = await msg(t.id, 'GET', `/messages/${encodeURIComponent(h.ask_id)}`);
+    if (cur.status !== 200 || !cur.body?.message) return { ok: false, error: 'The team hub could not be reached. Try again.' };
+    const r = await release(h.ask_id, 'send', digest(cur.body.message.body));
+    waitingMemo = null;
+    return r.ok ? { ok: true, id: h.ask_id, to: t.member.display_name || 'your teammate' } : r;
+  }
+  const isLook = (m) => m && m.kind === 'handoff' && m.via?.label === LOOK_LABEL;
+  const questionOf = (m) => String(m.body || '').split('\n').map((l) => l.trim()).filter((l) => l && l !== LOOK_LABEL && !l.startsWith('Context:')).join(' ').slice(0, 300);
+  let waitingMemo = null;
+  // The sender's "Waiting on" list: look requests not yet done, declined or expired, with
+  // whether the teammate has seen them (delivered receipt) or said they will handle them.
+  async function waitingOn() {
+    const id = identity();
+    if (!id) return [];
+    const r = await msg(id, 'GET', '/messages?box=sent&limit=50');
+    if (r.status !== 200 || !Array.isArray(r.body?.messages)) return waitingMemo?.value ?? [];
+    const value = r.body.messages.filter((m) => isLook(m) && m.state !== 'held' && m.handoff && ['offered', 'accepted'].includes(m.handoff.state))
+      .map((m) => ({ id: m.id, to: m.to?.name ?? 'a teammate', question: questionOf(m), state: m.handoff.state === 'accepted' ? 'handling' : m.state === 'delivered' || m.state === 'replied' ? 'seen' : 'sent', created_at: m.created_at, expires_at: m.expires_at }));
+    waitingMemo = { key: keyOf(id), at: now(), value };
+    return value;
+  }
+  // The recipient says "I'll handle this" (handoff accept, no task starts), replies, or marks it done.
+  async function acknowledge(mid) {
+    const c = await current(mid);
+    if (!c || !isLook(c.m) || c.m.handoff?.state !== 'offered') return { ok: false, error: 'That request can no longer be taken.' };
+    const r = await msg(c.id, 'POST', `/messages/${encodeURIComponent(mid)}/handoff`, { decision: 'accept' });
+    if (r.status !== 200) return failed(r);
+    poke();
+    return { ok: true };
+  }
+  async function resolveLook(mid, report) {
+    const c = await current(mid);
+    if (!c || !isLook(c.m) || !['offered', 'accepted'].includes(c.m.handoff?.state)) return { ok: false, error: 'That request is already closed.' };
+    const note = typeof report === 'string' && report.trim() ? clean(report, 2000) : 'Looked at it.';
+    if (c.m.handoff.state === 'offered') { const a = await msg(c.id, 'POST', `/messages/${encodeURIComponent(mid)}/handoff`, { decision: 'accept' }); if (a.status !== 200) return failed(a); }
+    const r = await msg(c.id, 'POST', `/messages/${encodeURIComponent(mid)}/handoff`, { decision: 'done', report: note });
+    if (r.status !== 200) return failed(r);
+    drop(mid);
+    return { ok: true };
+  }
+  async function replyLook(mid, text) {
+    if (typeof text !== 'string' || !text.trim() || text.length > LIMITS.answer) return { ok: false, error: 'Write a reply first.' };
+    const c = await current(mid);
+    if (!c || !isLook(c.m)) return { ok: false, error: 'That request is gone.' };
+    const r = await msg(c.id, 'POST', '/messages', { request_id: crypto.randomUUID(), to: { user_id: c.m.source.user_id, org_id: c.m.org_id }, body: clean(text, LIMITS.answer), reply_to: c.m.id });
+    return r.status === 200 ? { ok: true } : failed(r);
+  }
+
   async function mail({ ask_id: askId } = {}) {
     const id = identity();
     if (!id) return unavailable('signed_out', 'Sign in to your team in Plexiform first.');
@@ -185,7 +246,8 @@ function create({ identity, resolve, fetch, home = null, enabled = () => false, 
   const keyOf = (id) => (id ? `${id.origin}\n${id.userId}` : null);
 
   const view = (m) => ({ id: m.id, kind: m.kind, from: m.source?.name ?? null, to: m.to?.name ?? null, body: m.body, digest: digest(m.body), via: m.via ?? null,
-    state: m.state, handoff: m.handoff ? { state: m.handoff.state, artifacts: (m.handoff.artifacts || []).map((a) => a.path) } : null, created_at: m.created_at, expires_at: m.expires_at });
+    state: m.state, handoff: m.handoff ? { state: m.handoff.state, artifacts: (m.handoff.artifacts || []).map((a) => a.path) } : null, created_at: m.created_at, expires_at: m.expires_at,
+    ...(isLook(m) ? { look: { question: questionOf(m) } } : {}) });
 
   async function held() {
     const id = identity();
@@ -202,13 +264,13 @@ function create({ identity, resolve, fetch, home = null, enabled = () => false, 
     if (!id) return [];
     const r = await msg(id, 'GET', '/messages?box=sent&limit=50');
     if (r.status !== 200 || !Array.isArray(r.body?.messages)) return [];
-    return r.body.messages.filter((m) => m && m.kind === 'handoff' && m.via && m.state !== 'held' && m.handoff)
+    return r.body.messages.filter((m) => m && m.kind === 'handoff' && m.via && !isLook(m) && m.state !== 'held' && m.handoff)
       .map((m) => ({ id: m.id, to: m.to?.name ?? null, goal: String(m.body || '').split('\n').find((l) => l && !l.startsWith('#'))?.trim().slice(0, 200) ?? '', state: m.handoff.state, report: m.handoff.report ?? null, created_at: m.created_at }));
   }
   async function list() {
     const id = identity();
     if (!id) return { ok: true, signedIn: false, held: [], inbox: [], sent: [], polling: false };
-    return { ok: true, signedIn: true, hub: origin(id.origin) ? new URL(id.origin).host : null, held: await held(), inbox: inbox.map(view), sent: await sent(), polling: !!timer };
+    return { ok: true, signedIn: true, hub: origin(id.origin) ? new URL(id.origin).host : null, held: await held(), inbox: inbox.map(view), sent: await sent(), waiting: await waitingOn(), polling: !!timer };
   }
 
   async function release(mid, decision, shownDigest, edited) {
@@ -336,7 +398,8 @@ function create({ identity, resolve, fetch, home = null, enabled = () => false, 
     const ids = (list) => list.map((m) => m.id).sort().join('\n');
     const before = ids(inbox);
     inbox = r.body.messages.filter((m) => m && m.via && m.source?.user_id !== id.userId
-      && (m.kind === 'handoff' ? m.handoff?.state === 'offered' : ['queued', 'delivered'].includes(m.state)));
+      && (m.kind === 'handoff' ? m.handoff?.state === 'offered' || (isLook(m) && m.handoff?.state === 'accepted') : ['queued', 'delivered'].includes(m.state)));
+    waitingMemo = null;
     for (const m of inbox) if (!seen.has(m.id)) { seen.add(m.id); notify({ kind: 'inbox', id: m.id, from: m.source?.name ?? null, handoff: m.kind === 'handoff' }); }
     // An unchanged inbox re-rendered the panel every tick, wiping half-written edits.
     if (ids(inbox) !== before) onChange();
@@ -367,9 +430,10 @@ function create({ identity, resolve, fetch, home = null, enabled = () => false, 
   }
   const poke = () => { if (running) poll().catch(() => {}); };
   // Home's "Needs you": what is known now, without asking the hub.
-  const pending = () => (identity() ? { held: heldIds.size, inbox: inbox.length } : { held: 0, inbox: 0 });
+  const looks = () => inbox.filter(isLook).map((m) => ({ id: m.id, from: m.source?.name ?? 'a teammate', question: questionOf(m), handling: m.handoff?.state === 'accepted' }));
+  const pending = () => (identity() ? { held: heldIds.size, inbox: inbox.length, waiting: waitingMemo?.value ?? [], looks: looks() } : { held: 0, inbox: 0, waiting: [], looks: [] });
 
-  return { OPS, op, list, release, open, answer, decline, askAi, accept, teammates, sendHandoff, sent, taskEnded, acceptedTasks, sync, stop, poke, pending, polling: () => running, held, LIMITS };
+  return { OPS, op, list, release, open, answer, decline, askAi, accept, teammates, sendHandoff, sent, askLook, waitingOn, acknowledge, resolveLook, replyLook, taskEnded, acceptedTasks, sync, stop, poke, pending, polling: () => running, held, LIMITS, LOOK_LABEL };
 }
 
 // Sessions page only. deps: tasks(), confirm(opts, e), pickFolder(e) → path|null,
@@ -395,6 +459,16 @@ function register({ ipcMain, allowed, mail, tasks, confirm, pickFolder, ask, sen
     const p = typeof key === 'string' && key.length <= 260 ? await packetFor(key) : null;
     return p ? mail.teammates(p.cwd) : { ok: false, error: 'No handover could be built for this session.', teammates: [] };
   });
+  on('mail:look', async (_e, key, to, question) => {
+    const p = typeof key === 'string' && key.length <= 260 ? await packetFor(key) : null;
+    if (!p) return { ok: false, error: 'No session context could be built for this session.' };
+    const r = await mail.askLook({ cwd: p.cwd, to, question: typeof question === 'string' ? question : '', context: p.packet?.goal || '' });
+    return r.ok ? { ...r, note: `Asked ${r.to} to look. Their Seen, I'll handle it and reply show under Waiting on.` } : r;
+  });
+  on('mail:acknowledge', (_e, id) => mail.acknowledge(id));
+  on('mail:resolve', (_e, id, report) => mail.resolveLook(id, report));
+  on('mail:reply', (_e, id, text) => mail.replyLook(id, text));
+  on('mail:waiting', () => mail.waitingOn());
   on('mail:handoff', async (_e, key, to) => {
     const p = typeof key === 'string' && key.length <= 260 ? await packetFor(key) : null;
     if (!p) return { ok: false, error: 'No handover could be built for this session.' };

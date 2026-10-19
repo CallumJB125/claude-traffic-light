@@ -285,11 +285,15 @@
     <label for="voice-hotkey">Hold to ask a question</label>
     <div class="row">
       <select id="voice-hotkey" aria-describedby="voice-hint"><option value="">Off — pick a key</option></select>
+      <button type="button" id="voice-preset" title="Sets the key to Control + Option + Space: hold all three while you ask, let go to send">Hold Control + Option + Space to talk</button>
     </div>
     <div class="hint" id="voice-hint" role="status" aria-live="polite">Hold the key, ask “What's blocked?”, “What's my Claude doing?”, “How much have I spent today?” or “What happened while I was out?”, and let go. Plexiform answers out loud. Speech is turned into text on this Mac; audio is never stored or sent.</div>
     <label class="row"><input type="checkbox" id="voice-longPress" /> Press and hold the widget to ask</label>
     <label class="row"><input type="checkbox" id="voice-askClaude" /> Other questions: ask my own Claude (Haiku)</label>
     <div class="hint">Anything outside the four questions goes to your own <code>claude</code> login, with no tools, settings or MCP servers, capped at 5 cents a question. It sees session states and today's spend, never your code.</div>
+    <label class="row"><input type="checkbox" id="voice-screen" /> Use the screen when I ask</label>
+    <label class="row"><input type="checkbox" id="voice-point" /> Point at things on screen</label>
+    <div class="hint" id="voice-screen-hint">When you let go of the key or the widget, Plexiform takes one picture of the display under your mouse and gives it to your own <code>claude</code> login with your question, so it can say where things are. The picture is only readable by that one run, never kept, and deleted as soon as the answer comes back, capped at 10 cents a question. Needs Screen Recording for Plexiform in System Settings, Privacy and Security. “Plexiform, build …” offers to start a task; nothing starts until you press Start.</div>
   </div>
   <!-- ── end Voice ── -->
   </div>
@@ -357,6 +361,8 @@
   <div class="field">
     <label class="row"><input type="checkbox" id="busyHold" /> Hold pings while I'm busy</label>
     <div class="hint">In a meeting or a Focus, amber and green sounds, notifications and knocks wait; red (permission asks, limits, offline) still comes through. The lights keep updating. When you're free a “While you were away” card sums up what happened — click a line to go there. Per rule, change it in Lights → <i>While you're busy</i>; <b>busy</b> and <b>free</b> are also rule conditions.</div>
+    <label class="row"><input type="checkbox" id="slackPresence" /> Set my Slack status from Plexiform (Working / AI waiting on me / Away)</label>
+    <div class="hint">Off by default. Not available yet: setting your own Slack status needs a Slack user token with the <code>users.profile:write</code> scope, and your team's Slack connection is a bot that cannot change a person's status. Ticking this sends nothing until that exists; when it does, your status changes at most once every 2 minutes and goes back to what it was when you untick it.</div>
     <div id="busy-sources" role="group" aria-label="Busy when">
       <label class="row"><input type="checkbox" id="busyCalendar" /> A calendar event marked busy (macOS Calendar — ticking this asks macOS for access)</label>
       <div class="busy-state" id="busy-calendar-state"></div>
@@ -598,7 +604,7 @@
   <div class="field" id="crash-reports">
     <h3 class="pv-h">Crash reports</h3>
     <label class="row"><input type="checkbox" id="crash-opt-in" /> Allow sending crash reports</label>
-    <div class="hint">Off by default. Reports are only saved on this Mac for now: nothing is sent, even with this on. Each report keeps the error type, its first line and the code locations, with home paths, names, tokens and emails scrubbed. Never prompts or file contents.</div>
+    <div class="hint">Off by default. Sends new crash reports to Plexiform: app version, OS family, processor type, time and error type or renderer exit reason/code. No messages, stack traces, paths, prompts, account identifiers or file contents are sent. Reports are kept for up to 30 days. Your network address is visible to the server and its hosting provider. Older consent must be renewed. Export diagnostics includes more local detail.</div>
     <details id="crash-view">
       <summary>View what would be sent</summary>
       <pre id="crash-payload" style="margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-xs); max-height: 240px; overflow: auto;"></pre>

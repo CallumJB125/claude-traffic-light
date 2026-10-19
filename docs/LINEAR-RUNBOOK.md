@@ -1,14 +1,9 @@
 # Linear connector runbook (team hub)
 
-Status: **built and tested, not offered.** Linear is in no hub's
-`connectorsFor()` (`board/hub/integrations/index.js`; a test in
-`board/hub/test/linear-connector.test.js` asserts it for every auth mode), and
-the signed-out pages show it as *Coming soon* (`LAUNCH_CONNECTORS` in
-`board/web/js/connectors.js` and `buddy-window/connectors.js` is still
-`['github']`). Like Sentry, it has a **go-live gate**: a real Linear delivery
-must be checked against `verify()` over its exact bytes before Linear is added
-anywhere. That gate, and enabling on any hub, is **owner-gated**. Nothing here
-has been done with a real Linear workspace.
+Status: **implemented, opt-in, awaiting real provider acceptance.** The registry
+already supports `BOARD_CONNECTORS=slack,sentry,linear,jira`; it defaults to
+Slack/Sentry. Linear remains unadvertised until real signed deliveries and
+staging card creation/update are recorded. Synthetic tests are not that evidence.
 
 Code: `board/hub/integrations/linear/index.js` (verify, parsing, handler).
 UI: `board/web/js/render-tracker.js` (intake panel), `render-integrations.js`
@@ -118,6 +113,33 @@ its auth).
    `buddy-window/connectors.js` in one commit, and releases.
 8. Delete the capture endpoint and the test webhook.
 
+## Create issues from sessions (optional, outbound)
+
+Off unless an admin pastes the extra parts. With them, a member sees "Create
+Linear issue…" on a session in the Sessions page; it drafts a scrubbed title
+and description from the session handover, the member edits it, and only on
+Create the hub calls `api.linear.app` (GraphQL `teams` lookup, then
+`issueCreate`). Route: `POST /api/integrations/:id/issues` (member, not a
+viewer, `integration_issue_member` 10/h). The connection's `creates_issues`
+is true once the API key is sealed.
+
+Owner steps:
+
+1. In Linear, Settings → Account → Security & access → Personal API keys,
+   create a key for a bot or service account that can create issues in the
+   target team (Linear personal keys act as that user; there is no narrower
+   scope). Note the team key (the issue prefix, e.g. `ENG`).
+2. Connect (or reconnect) Linear in the team's Integrations page and paste,
+   separated by spaces: `<webhook signing secret> <lin_api_… key> <TEAM key>`.
+   A secret alone still connects webhook-only.
+3. Hub deploy: the hub must run this build, with `linear` in
+   `BOARD_CONNECTORS` (the go-live gate above still applies) and
+   `api.linear.app` reachable from the hub.
+4. Check: create one issue from a test session; the connection's audit shows
+   `issue.create` / `approved` with the issue key, never the text.
+
+Rotate the key by reconnecting with the new one; disconnecting deletes it.
+
 ## Rotate
 
 Linear webhooks cannot rotate a secret in place: create a new webhook (new
@@ -138,3 +160,22 @@ revert the `connectorsFor()` line and `LAUNCH_CONNECTORS`.
 | Deliveries 404 | Connection disconnected, or Linear not in `connectorsFor()` |
 | No cards | Target board archived or unset, the issue already completed/canceled, the webhook not subscribed to Issues, or the daily cap reached (connection Activity) |
 | No status comment | The issue has no card on this connection, or the update did not change its state |
+
+## Current capture verification tool
+
+Store the signing secret in a private file outside the repository (0600), then run:
+
+```sh
+node board/hub/scripts/verify-connector-delivery.mjs PROVIDER create.bin headers.json /private/secret-file
+```
+
+Replace PROVIDER with the connector name in lowercase. The tool prints only a
+signature verdict, byte count, body hash and times. It never prints payloads,
+headers or secrets. For an archived capture, supply its independently recorded
+receipt time as the final ISO argument; this is historical verification. Capture
+provenance and a staging delivery with duplicate/update behavior must still be
+recorded separately. Do not commit customer payloads or live signing headers.
+
+The historical step asking for a registry code change is superseded: after
+acceptance, use BOARD_CONNECTORS on staging, then production. Public advertising
+is a separate launch change.

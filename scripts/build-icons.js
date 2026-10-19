@@ -26,6 +26,13 @@ const pageToPng = (html, png, w, h, scale = 1) => {
 };
 const out = (...p) => { const f = path.join(root, ...p); fs.mkdirSync(path.dirname(f), { recursive: true }); return f; };
 
+// All entry points share the editable master, including older app consumers.
+fs.copyFileSync(brand('icon.svg'), out('assets/icon.svg'));
+const favicon = fs.readFileSync(brand('icon.svg'), 'utf8')
+  .replace('viewBox="0 0 1024 1024" width="1024" height="1024"', 'viewBox="96 96 832 832" width="832" height="832"');
+fs.writeFileSync(out('board/web/favicon.svg'), favicon);
+for (const size of [192, 512]) svgToPng(brand('icon-square.svg'), out('board/web', `phone-icon-${size}.png`), size);
+
 // macOS app icon (16–512 @1x and @2x)
 const iconset = path.join(tmp, 'icon.iconset');
 fs.mkdirSync(iconset);
@@ -56,17 +63,17 @@ svgToPng(brand('icon.svg'), out('assets/logo.png'), 256);
 svgToPng(brand('icon.svg'), out('assets/logo@2x.png'), 512);
 
 // DMG window (540x380, and @2x) and the Windows installer art
-const page = (name, w, h, body) => { const f = path.join(tmp, `${name}.html`); fs.writeFileSync(f, `<!doctype html><meta charset="utf-8"><style>*{box-sizing:border-box}html,body{margin:0;width:${w}px;height:${h}px;overflow:hidden;font-family:-apple-system,'SF Pro Display','Helvetica Neue',sans-serif;background:#0f0e12;color:#eceee9}</style>${body}`); return f; };
-const field = (w, h) => `<svg width="${w}" height="${h}" style="position:absolute;inset:0" viewBox="0 0 ${w} ${h}"><g stroke="#7f9bd1" stroke-opacity=".16" stroke-width="1" fill="none"><path d="M0 ${h * .72} L${w * .22} ${h * .55} L${w * .4} ${h * .8} L${w * .63} ${h * .5} L${w * .85} ${h * .7} L${w} ${h * .46}"/><path d="M${w * .22} ${h * .55} L${w * .3} ${h * .3} L${w * .63} ${h * .5}"/><path d="M${w * .4} ${h * .8} L${w * .55} ${h * .96}"/><path d="M${w * .85} ${h * .7} L${w * .92} ${h * .94}"/></g><g fill="#a3b8e0" fill-opacity=".5"><circle cx="${w * .22}" cy="${h * .55}" r="2.5"/><circle cx="${w * .3}" cy="${h * .3}" r="2"/><circle cx="${w * .4}" cy="${h * .8}" r="2.5"/><circle cx="${w * .63}" cy="${h * .5}" r="3"/><circle cx="${w * .85}" cy="${h * .7}" r="2.5"/></g></svg>`;
-const dmg = page('dmg', 540, 380, `${field(540, 380)}<div style="position:absolute;left:0;right:0;top:34px;text-align:center;font-size:22px;font-weight:700;letter-spacing:-.01em">Plexiform</div><div style="position:absolute;left:0;right:0;top:66px;text-align:center;font-size:13px;color:#a9a4b0">Drag Plexiform to Applications</div><svg width="540" height="380" style="position:absolute;inset:0"><path d="M222 190 H318" stroke="#eceee9" stroke-opacity=".75" stroke-width="3" stroke-linecap="round" fill="none"/><path d="M306 177 L321 190 L306 203" stroke="#eceee9" stroke-opacity=".75" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>`);
+const page = (name, w, h, body) => { const f = path.join(tmp, `${name}.html`); fs.writeFileSync(f, `<!doctype html><meta charset="utf-8"><style>*{box-sizing:border-box}html,body{margin:0;width:${w}px;height:${h}px;overflow:hidden;font-family:-apple-system,'SF Pro Display','Helvetica Neue',sans-serif;background:#17191d;color:#f4f5f7}</style>${body}`); return f; };
+const field = (w, h) => `<svg width="${w}" height="${h}" style="position:absolute;inset:0" viewBox="0 0 ${w} ${h}"><g stroke="#e49a78" stroke-opacity=".16" stroke-width="1" fill="none"><path d="M0 ${h * .72} L${w * .22} ${h * .55} L${w * .4} ${h * .8} L${w * .63} ${h * .5} L${w * .85} ${h * .7} L${w} ${h * .46}"/><path d="M${w * .22} ${h * .55} L${w * .3} ${h * .3} L${w * .63} ${h * .5}"/><path d="M${w * .4} ${h * .8} L${w * .55} ${h * .96}"/><path d="M${w * .85} ${h * .7} L${w * .92} ${h * .94}"/></g><g fill="#e49a78" fill-opacity=".5"><circle cx="${w * .22}" cy="${h * .55}" r="2.5"/><circle cx="${w * .3}" cy="${h * .3}" r="2"/><circle cx="${w * .4}" cy="${h * .8}" r="2.5"/><circle cx="${w * .63}" cy="${h * .5}" r="3"/><circle cx="${w * .85}" cy="${h * .7}" r="2.5"/></g></svg>`;
+const dmg = page('dmg', 540, 380, `${field(540, 380)}<div style="position:absolute;left:0;right:0;top:34px;text-align:center;font-size:22px;font-weight:700;letter-spacing:-.01em">Plexiform</div><div style="position:absolute;left:0;right:0;top:66px;text-align:center;font-size:13px;color:#a7abb3">Drag Plexiform to Applications</div><svg width="540" height="380" style="position:absolute;inset:0"><path d="M222 190 H318" stroke="#f4f5f7" stroke-opacity=".75" stroke-width="3" stroke-linecap="round" fill="none"/><path d="M306 177 L321 190 L306 203" stroke="#f4f5f7" stroke-opacity=".75" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>`);
 pageToPng(dmg, out('build/dmg-background.png'), 540, 380);
 pageToPng(dmg, out('build/dmg-background@2x.png'), 540, 380, 2);
-const side = page('side', 164, 314, `${field(164, 314)}<img src="file://${brand('icon.svg')}" width="120" style="position:absolute;left:22px;top:40px"><div style="position:absolute;left:0;right:0;top:170px;text-align:center;font-size:20px;font-weight:700">Plexiform</div><div style="position:absolute;left:0;right:0;top:200px;text-align:center;font-size:11px;color:#a9a4b0">Know which coding agent<br>needs you</div>`);
+const side = page('side', 164, 314, `${field(164, 314)}<img src="file://${brand('icon.svg')}" width="120" style="position:absolute;left:22px;top:40px"><div style="position:absolute;left:0;right:0;top:170px;text-align:center;font-size:20px;font-weight:700">Plexiform</div><div style="position:absolute;left:0;right:0;top:200px;text-align:center;font-size:11px;color:#a7abb3">Your team.<br>Working together.</div>`);
 pageToPng(side, path.join(tmp, 'sidebar.png'), 164, 314);
-run('magick', [path.join(tmp, 'sidebar.png'), '-background', '#0f0e12', '-alpha', 'remove', `BMP3:${out('build/installerSidebar.bmp')}`]);
+run('magick', [path.join(tmp, 'sidebar.png'), '-background', '#17191d', '-alpha', 'remove', `BMP3:${out('build/installerSidebar.bmp')}`]);
 const head = page('head', 150, 57, `<img src="file://${brand('icon.svg')}" width="46" style="position:absolute;right:8px;top:5px">`);
 pageToPng(head, path.join(tmp, 'header.png'), 150, 57);
-run('magick', [path.join(tmp, 'header.png'), '-background', '#0f0e12', '-alpha', 'remove', `BMP3:${out('build/installerHeader.bmp')}`]);
+run('magick', [path.join(tmp, 'header.png'), '-background', '#17191d', '-alpha', 'remove', `BMP3:${out('build/installerHeader.bmp')}`]);
 
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log('icons rebuilt');

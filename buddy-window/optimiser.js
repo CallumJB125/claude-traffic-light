@@ -41,7 +41,10 @@ function createOptimiser({
     const b = burst();
     return b ? b.snapshot() : { d: { kind: platform === 'darwin' ? 'checking' : 'unsupported' }, url: null };
   }
-  const signature = ({ d }) => `${d.kind}|${d.state ? d.state.version : ''}|${d.pid ?? ''}|${(d.misses || 0) >= 3}`;
+  // The card's view rides along (burst-ipc snapshot().view): it carries the states the raw detection cannot
+  // (gateway_stale from the last good detection, console_down, CA/hosts), so the page changes with them.
+  const viewOf = (snap) => (snap && snap.view && typeof snap.view === 'object' ? snap.view : null);
+  const signature = (snap) => { const { d } = snap; const v = viewOf(snap); return `${d.kind}|${d.state ? d.state.version : ''}|${d.pid ?? ''}|${(d.misses || 0) >= 3}|${v ? v.kind : ''}`; };
 
   function drop() {
     const v = view;
@@ -125,7 +128,7 @@ function createOptimiser({
 
   // The handshake result decides everything: only `present` loads the dashboard.
   function apply(snap, { reload = false } = {}) {
-    let st = Embed.pageState(snap.d, { platform });
+    let st = Embed.pageState(snap.d, { platform, view: viewOf(snap) });
     let o = null;
     if (st.mode === 'ready') {
       try { o = new URL(snap.url).origin; } catch { /* no usable address */ }
@@ -155,6 +158,11 @@ function createOptimiser({
   }
 
   function stop() { if (timer !== null) { clearTimer(timer); timer = null; } }
+  function setupSteps() {
+    const b = burst();
+    if (!b || typeof b.setupView !== 'function') return null;
+    try { const s = b.setupView(); return Array.isArray(s) ? s : null; } catch { return null; }
+  }
 
   return {
     /** The page was selected: re-check trust now, then keep watching while it is shown. */
@@ -198,6 +206,12 @@ function createOptimiser({
         }
         return { ok: true };
       }
+      // Tools-tab mutations that Burst performs itself (consent dialog in burst-ipc, no Terminal).
+      if (Embed.TOOL_ACTIONS.includes(kind)) {
+        const b = burst();
+        if (!b) return { ok: false, error: 'Burst is not available.' };
+        return b.act(kind, undefined, {});
+      }
       if (!Embed.PAGE_ACTIONS.includes(kind)) return { ok: false, error: 'Unknown action.' };
       const b = burst();
       if (!b) return { ok: false, error: 'Burst is not available.' };
@@ -208,7 +222,8 @@ function createOptimiser({
       return b ? b.act('open-browser') : { ok: false };
     },
     tab: () => tab,
-    payload: () => (last ? { ...last, canBrowser: last.mode === 'ready', tab } : { mode: 'loading', headline: 'Usage optimiser', detail: '', chip: null, actions: [], docs: false }),
+    // The guided setup steps ride along with every empty state that is Burst's to fix.
+    payload: () => (last ? { ...last, canBrowser: last.mode === 'ready', tab, setup: last.mode === 'empty' && last.reason !== 'unsupported' ? setupSteps() : null } : { mode: 'loading', headline: 'Usage optimiser', detail: '', chip: null, actions: [], docs: false, setup: null }),
   };
 }
 

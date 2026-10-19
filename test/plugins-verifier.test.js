@@ -4,12 +4,14 @@ const {spawnSync}=require('node:child_process');
 const V=require('../src/plugins/index-verify'),{verifySource,readBounded,remoteURL}=require('../src/plugins/source-verify'),{createPluginPlanner,productionKeys,REQUIRED_COMMANDS}=require('../src/plugins/plan');
 const { testTempDir } = require('./helpers/tmp');
 const NOW=Date.parse('2026-10-01T12:00:00.000Z');
+// Bounded local source reads intentionally refuse unsupported Windows flags.
+const posixSourceTest=(name,run)=>test(name,{skip:process.platform==='win32'?'Plugin source reader requires POSIX no-follow/nonblocking filesystem primitives; Windows refuses source authority':false},run);
 const pair=crypto.generateKeyPairSync('ed25519'),keys=[{keyId:V.keyId(pair.publicKey),key:pair.publicKey}];
 const sign=bytes=>JSON.stringify({alg:'ed25519',keyId:keys[0].keyId,sig:crypto.sign(null,bytes,pair.privateKey).toString('base64')});
 const seal=index=>{const bytes=Buffer.from(JSON.stringify(index));return {bytes,signature:sign(bytes)};};
 const verifier=()=>V.createIndexVerifier({keys,now:()=>NOW});
-function fixture(t,{mcp=false}={}){
-  const dir=testTempDir('plugins-verifier-');t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+function fixture(t,{mcp=false,directory=null}={}){
+  const dir=directory??testTempDir('plugins-verifier-');t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
   const bundle=path.join(dir,'packages'),root=path.join(bundle,'delivery-review'),profile=path.join(dir,'profile'),binary=path.join(dir,'codex');fs.mkdirSync(path.join(root,'skills/delivery-review'),{recursive:true});fs.mkdirSync(profile);fs.writeFileSync(binary,'Synthetic binary. Never executed.');fs.writeFileSync(path.join(profile,'config.toml'),'# Synthetic private configuration\n');
   const content=new Map([
     ['plugin.json',Buffer.from(JSON.stringify({$schema:'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json',name:'delivery-review',version:'1.0.0',description:'Synthetic reviewed skill.'},null,2))],
@@ -25,6 +27,19 @@ function fixture(t,{mcp=false}={}){
   const options={snapshot,bundleRoot:bundle,loadIndex:async()=>seal(index),loadCatalog:async()=>catalog,verifyIndex:verifier(),now:()=>time};
   return {dir,bundle,root,profile,binary,content,descriptor,index,catalog,snapshot,options,setLive:value=>live=value,changeAccount:()=>accountGeneration++,changeConfig:()=>config+=' changed',changeCache:()=>cache+=' changed',setVersion:value=>version=value,advance:n=>time+=n};
 }
+test('actual Windows: private source bytes are not read and no planner handle is granted without a supported reader',{skip:process.platform!=='win32'?'Actual Windows fail-closed acceptance':false},async t=>{
+  const {privateFixtureDirectory}=await import('../board/shared/test-support/windows-acl.js');
+  const directory=privateFixtureDirectory(path.join(os.tmpdir(),'plugins-source-closed-'));
+  assert.match(require('../board/shared/windows-private-directory.cjs').ensureDirectory(directory).fileId,/^[a-f0-9]{32}$/);
+  const f=fixture(t,{directory}),before=fs.readFileSync(path.join(f.profile,'config.toml'));let reads=0;
+  const fsApi=new Proxy(fs,{get(object,key){if(['openSync','readSync','readFileSync'].includes(key))return(...args)=>{reads++;return object[key](...args);};return object[key];}});
+  assert.throws(()=>readBounded(path.join(f.root,'plugin.json'),V.LIMITS.fileBytes,fsApi));
+  assert.throws(()=>verifySource(f.descriptor,{bundleRoot:f.bundle,fsApi}));
+  const planner=createPluginPlanner({...f.options,fsApi}),result=await planner.plan('delivery-review');
+  assert.equal(result.ok,false);assert.equal(result.status,'unavailable');assert.equal(result.plan,null);
+  assert.equal(await planner.takeForTransaction(crypto.randomUUID()),null);assert.equal(reads,0);
+  assert.ok(fs.readFileSync(path.join(f.profile,'config.toml')).equals(before));
+});
 test('production trust fails closed; fixture verifier trust is injected only and raw bytes precede schema parsing',t=>{
   const f=fixture(t),raw=seal(f.index);assert.deepEqual(productionKeys(),[]);assert.equal(V.createIndexVerifier()(raw.bytes,raw.signature).reason,'no-production-key');assert.equal(verifier()(raw.bytes,raw.signature).status,'verified');
   const changed=Buffer.from(raw.bytes);changed[20]^=1;assert.equal(verifier()(changed,raw.signature).reason,'signature');assert.equal(verifier()(Buffer.from('{broken JSON'),raw.signature).reason,'signature');
@@ -53,16 +68,16 @@ test('descriptor enforces all byte/file/entry bounds before filesystem reads',t=
   assert.equal(V.descriptorValid({...f.descriptor,files:Array.from({length:1001},(_,i)=>({...f.descriptor.files[0],path:`x${i}.md`}))}),false);
   const raw=seal({...f.index,entries:Array(1001).fill(f.descriptor)});assert.equal(verifier()(raw.bytes,raw.signature).reason,'index-schema');assert.equal(verifier()(Buffer.alloc(V.LIMITS.indexBytes+1),raw.signature).reason,'index-bounds');
 });
-test('actual bounded local source matches full manifest/components/file bytes without writes',t=>{
+posixSourceTest('actual bounded local source matches full manifest/components/file bytes without writes',t=>{
   const f=fixture(t,{mcp:true}),before=fs.readFileSync(path.join(f.profile,'config.toml')),source=verifySource(f.descriptor,{bundleRoot:f.bundle});assert.equal(source.files.length,3);assert.equal(source.package_hash,f.descriptor.package_sha256);assert.deepEqual(source.servers,[{name:'docs',url:'https://docs.example.com/mcp'}]);assert.ok(fs.readFileSync(path.join(f.profile,'config.toml')).equals(before));
 });
-test('supplied bundle-root leaf links including trailing aliases are refused before any source content read',t=>{
+posixSourceTest('supplied bundle-root leaf links including trailing aliases are refused before any source content read',t=>{
   const f=fixture(t),alias=path.join(f.dir,'bundle-alias');fs.symlinkSync(f.bundle,alias);let reads=0;
   const fsApi=new Proxy(fs,{get(object,key){if(key==='readSync')return (...args)=>{reads++;return object.readSync(...args);};return object[key];}});
   for(const bundleRoot of [alias,alias+'/',alias+'/.'])assert.throws(()=>verifySource(f.descriptor,{bundleRoot,fsApi}));assert.equal(reads,0);
   assert.equal(verifySource(f.descriptor,{bundleRoot:f.bundle}).files.length,2);
 });
-for(const boundary of ['file-link','root-link','hardlink','extra-file','extra-directory','bytes','case-collision'])test(`actual source refuses ${boundary} without accepting foreign source bytes`,t=>{
+for(const boundary of ['file-link','root-link','hardlink','extra-file','extra-directory','bytes','case-collision'])posixSourceTest(`actual source refuses ${boundary} without accepting foreign source bytes`,t=>{
   const f=fixture(t),target=path.join(f.root,'skills/delivery-review/SKILL.md'),outside=path.join(f.dir,'outside.md');fs.writeFileSync(outside,f.content.get('skills/delivery-review/SKILL.md'));
   if(boundary==='file-link'){fs.unlinkSync(target);fs.symlinkSync(outside,target);}
   if(boundary==='root-link'){fs.renameSync(f.root,f.root+'-old');fs.symlinkSync(f.root+'-old',f.root);}
@@ -73,12 +88,12 @@ for(const boundary of ['file-link','root-link','hardlink','extra-file','extra-di
   if(boundary==='case-collision')fs.writeFileSync(path.join(f.root,'PLUGIN.JSON'),'{}');
   assert.throws(()=>verifySource(f.descriptor,{bundleRoot:f.bundle}));assert.ok(fs.readFileSync(outside).equals(f.content.get('skills/delivery-review/SKILL.md')));
 });
-test('actual source refuses opened-file race and finite deadline',t=>{
+posixSourceTest('actual source refuses opened-file race and finite deadline',t=>{
   const f=fixture(t),target=fs.realpathSync(path.join(f.root,'skills/delivery-review/SKILL.md'));
   const fsApi=new Proxy(fs,{get(object,key){if(key==='openSync')return (...args)=>{const fd=object.openSync(...args);if(args[0]===target)object.writeFileSync(target,'Changed after no-follow open');return fd;};return object[key];}});
   assert.throws(()=>verifySource(f.descriptor,{bundleRoot:f.bundle,fsApi}));assert.throws(()=>verifySource(f.descriptor,{bundleRoot:f.bundle,clock:(()=>{let n=0;return ()=>n++*10000;})()}));assert.throws(()=>readBounded(target,1));
 });
-for(const boundary of ['read-fifo','read-directory','read-symlink','walk-fifo','walk-file','walk-symlink'])test(`actual bounded child refuses ${boundary} replacement without any content read`,t=>{
+for(const boundary of ['read-fifo','read-directory','read-symlink','walk-fifo','walk-file','walk-symlink'])posixSourceTest(`actual bounded child refuses ${boundary} replacement without any content read`,t=>{
   const f=fixture(t),reading=boundary.startsWith('read-'),target=reading?path.join(f.root,'skills/delivery-review/SKILL.md'):f.root,replacement=path.join(f.dir,'replacement');
   if(boundary.endsWith('fifo')){const made=spawnSync('/usr/bin/mkfifo',[replacement],{shell:false,timeout:1000});assert.equal(made.status,0);}
   if(boundary.endsWith('directory'))fs.mkdirSync(replacement);
@@ -93,43 +108,43 @@ test('remote MCP descriptions accept canonical public DNS only, without network 
   assert.equal(remoteURL('https://docs.example.com/mcp'),true);
   for(const url of ['https://127.0.0.1/mcp','https://2130706433/mcp','https://0x7f000001/mcp','https://0177.0.0.1/mcp','https://[::1]/mcp','https://docs..example.com/mcp','https://docs.example.com./mcp','https://-docs.example.com/mcp','https://docs.local/mcp','https://docs.internal/mcp','https://docs.example.com:443/mcp','https://docs.example.com/mcp#fragment','https://docs.example.com/mcp?auth=opaque'])assert.equal(remoteURL(url),false,url);
 });
-test('source directory replacement during file reads cannot produce a verified result',t=>{
+posixSourceTest('source directory replacement during file reads cannot produce a verified result',t=>{
   const f=fixture(t),target=fs.realpathSync(path.join(f.root,'skills/delivery-review/SKILL.md'));let replaced=false;
   const fsApi=new Proxy(fs,{get(object,key){if(key==='readSync')return (...args)=>{const count=object.readSync(...args);if(!replaced){replaced=true;fs.renameSync(f.root,f.root+'-old');fs.symlinkSync(f.root+'-old',f.root);}return count;};return object[key];}});
   assert.throws(()=>verifySource(f.descriptor,{bundleRoot:f.bundle,fsApi}));assert.ok(fs.readFileSync(path.join(f.root+'-old','skills/delivery-review/SKILL.md')).equals(f.content.get('skills/delivery-review/SKILL.md')));assert.ok(target);
 });
-test('signed package refuses hidden executable components, filled MCP credentials, unsupported URLs and known embedded secrets',t=>{
+posixSourceTest('signed package refuses hidden executable components, filled MCP credentials, unsupported URLs and known embedded secrets',t=>{
   const f=fixture(t,{mcp:true});
   function replace(name,text){fs.writeFileSync(path.join(f.root,name),text);const file=f.descriptor.files.find(x=>x.path===name);file.bytes=Buffer.byteLength(text);file.sha256=V.hash(text);f.descriptor.package_sha256=V.packageHash(f.descriptor.files);}
   for(const value of [{url:'https://docs.example.com/mcp',headers:{Authorization:'opaque-password'}},{command:'node',args:['server.js']},{url:'http://docs.example.com/mcp'},{url:'https://user:password@docs.example.com/mcp'},{url:'https://docs.example.com/mcp?token=opaque-password'},{url:'https://127.0.0.1/mcp'}]){replace('mcp.json',JSON.stringify({mcpServers:{docs:value}}));assert.throws(()=>verifySource(f.descriptor,{bundleRoot:f.bundle}));}
   replace('mcp.json',JSON.stringify({mcpServers:{docs:{url:'https://docs.example.com/mcp'}}}));replace('plugin.json',JSON.stringify({$schema:'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json',name:'delivery-review',version:'1.0.0',description:'Synthetic',hooks:'hooks/command.sh'}));assert.throws(()=>verifySource(f.descriptor,{bundleRoot:f.bundle}));
   replace('plugin.json',f.content.get('plugin.json').toString());replace('skills/delivery-review/SKILL.md','Synthetic key ghp_abcdefghijklmnopqrstuvwxyz0123456789');assert.throws(()=>verifySource(f.descriptor,{bundleRoot:f.bundle}));
 });
-test('main read-only plan returns opaque ID/relative hashes with no credentials, paths, argv or mutation capability',async t=>{
+posixSourceTest('main read-only plan returns opaque ID/relative hashes with no credentials, paths, argv or mutation capability',async t=>{
   const f=fixture(t),planner=createPluginPlanner(f.options),before=fs.readFileSync(path.join(f.profile,'config.toml')),p=await planner.plan('delivery-review');assert.equal(p.ok,true,JSON.stringify(p));assert.equal(p.read_only,true);assert.equal(p.install_available,false);assert.equal(p.plan.scope,'user');assert.ok(!JSON.stringify(p).includes(f.dir));assert.ok(!JSON.stringify(p).includes('synthetic config'));assert.ok(!JSON.stringify(p).includes('u1'));assert.equal(typeof planner.apply,'undefined');assert.equal((await planner.check(p.plan.id)).ok,true);assert.ok(fs.readFileSync(path.join(f.profile,'config.toml')).equals(before));
   assert.equal((await planner.plan('delivery-review',{scope:'project'})).reason,'unsupported-selection');assert.equal((await planner.plan('delivery-review',{scope:'user',url:'https://renderer.invalid'})).ok,false);
 });
-for(const boundary of ['account','config','cache','binary','source','index','expiry','generation'])test(`existing private plan refuses current ${boundary} change`,async t=>{
+for(const boundary of ['account','config','cache','binary','source','index','expiry','generation'])posixSourceTest(`existing private plan refuses current ${boundary} change`,async t=>{
   const f=fixture(t),planner=createPluginPlanner(f.options),p=await planner.plan('delivery-review');assert.equal(p.ok,true,JSON.stringify(p));
   if(boundary==='account')f.changeAccount();if(boundary==='config')f.changeConfig();if(boundary==='cache')f.changeCache();if(boundary==='binary')fs.writeFileSync(f.binary,'Different observed binary');if(boundary==='source')fs.chmodSync(path.join(f.root,'plugin.json'),0o600);if(boundary==='index')f.index.generatedAt='2026-10-01T11:01:00.000Z';if(boundary==='expiry')f.advance(V.LIMITS.ttlMs+1);if(boundary==='generation')planner.invalidate();
   assert.equal((await planner.check(p.plan.id)).ok,false);
 });
-test('canonical profile alias binds one root and current account changes while index is pending withhold a plan',async t=>{
+posixSourceTest('canonical profile alias binds one root and current account changes while index is pending withhold a plan',async t=>{
   const f=fixture(t),alias=path.join(f.dir,'profile-alias');fs.symlinkSync(f.profile,alias);let root=f.profile;const planner=createPluginPlanner({...f.options,snapshot:()=>({...f.snapshot(),profile_root:root})}),p=await planner.plan('delivery-review');assert.equal(p.ok,true);root=alias;assert.equal((await planner.check(p.plan.id)).ok,true);
   let release;const pendingPlanner=createPluginPlanner({...f.options,loadIndex:()=>new Promise(r=>release=r)}),pending=pendingPlanner.plan('delivery-review');for(let i=0;i<20&&!release;i++)await new Promise(r=>setImmediate(r));f.setLive(false);release(seal(f.index));assert.equal((await pending).ok,false);
 });
-test('read-only plans cap count/concurrency, require matching catalog bytes and give concrete unsupported-host reason',async t=>{
+posixSourceTest('read-only plans cap count/concurrency, require matching catalog bytes and give concrete unsupported-host reason',async t=>{
   const f=fixture(t),planner=createPluginPlanner(f.options);for(let i=0;i<V.LIMITS.plans;i++)assert.equal((await planner.plan('delivery-review')).ok,true);assert.equal((await planner.plan('delivery-review')).reason,'plan-limit');
   const releases=[],held=createPluginPlanner({...f.options,loadIndex:()=>new Promise(r=>releases.push(r))}),pending=Array.from({length:4},()=>held.plan('delivery-review'));for(let i=0;i<20&&releases.length<4;i++)await new Promise(r=>setImmediate(r));assert.equal(releases.length,4);assert.equal((await held.plan('delivery-review')).reason,'busy');for(const release of releases)release(seal(f.index));assert.equal((await Promise.all(pending)).filter(p=>p.ok).length,4);
   assert.equal((await createPluginPlanner({...f.options,loadCatalog:async()=>Buffer.from('Changed catalog')}).plan('delivery-review')).reason,'catalog-changed');f.setVersion('0.158.0');const old=await createPluginPlanner(f.options).plan('delivery-review');assert.equal(old.reason,'unsupported-host');assert.equal(old.minimum_version,'0.159.2');
 });
-test('current captured owner change while catalog is pending withholds both plan and existing-plan replies',async t=>{
+posixSourceTest('current captured owner change while catalog is pending withholds both plan and existing-plan replies',async t=>{
   const f=fixture(t);let release,hold=false;
   const planner=createPluginPlanner({...f.options,loadCatalog:()=>hold?new Promise(resolve=>release=resolve):f.catalog}),p=await planner.plan('delivery-review');assert.equal(p.ok,true);
   hold=true;const checking=planner.check(p.plan.id);for(let i=0;i<20&&!release;i++)await new Promise(r=>setImmediate(r));assert.ok(release);f.setLive(false);release(f.catalog);assert.equal((await checking).ok,false);
   f.setLive(true);release=null;const planning=planner.plan('delivery-review');for(let i=0;i<20&&!release;i++)await new Promise(r=>setImmediate(r));assert.ok(release);planner.invalidate();release(f.catalog);assert.equal((await planning).ok,false);
 });
-test('fresh private snapshot after source validation refuses an account switch and a changed cache identity',async t=>{
+posixSourceTest('fresh private snapshot after source validation refuses an account switch and a changed cache identity',async t=>{
   const f=fixture(t);let calls=0;
   const planner=createPluginPlanner({...f.options,snapshot:()=>{if(++calls===2){f.changeAccount();f.changeCache();}return f.snapshot();}});
   const result=await planner.plan('delivery-review');assert.equal(result.ok,false);assert.equal(result.reason,'changed');assert.equal(JSON.stringify(result).includes(f.dir),false);
@@ -137,7 +152,7 @@ test('fresh private snapshot after source validation refuses an account switch a
 test('default fixed bundled index remains unavailable without production keys or index files',async t=>{
   const f=fixture(t),planner=createPluginPlanner({snapshot:f.snapshot,bundleRoot:f.bundle});const result=await planner.plan('delivery-review');assert.equal(result.ok,false);assert.equal(result.status,'unavailable');assert.equal(result.plan,null);
 });
-for(const phase of ['snapshot','index','catalog','final-snapshot'])test(`existing plan expiry during awaited ${phase} withholds the reply and retires its handle`,async t=>{
+for(const phase of ['snapshot','index','catalog','final-snapshot'])posixSourceTest(`existing plan expiry during awaited ${phase} withholds the reply and retires its handle`,async t=>{
   const f=fixture(t);let hold=false,release,captures=0;
   const options={...f.options,snapshot:()=>{captures++;return hold&&(phase==='snapshot'||phase==='final-snapshot'&&captures===4)?new Promise(r=>release=r):f.snapshot();},loadIndex:()=>hold&&phase==='index'?new Promise(r=>release=r):seal(f.index),loadCatalog:()=>hold&&phase==='catalog'?new Promise(r=>release=r):f.catalog};
   const planner=createPluginPlanner(options),p=await planner.plan('delivery-review');assert.equal(p.ok,true);hold=true;const checking=planner.check(p.plan.id);

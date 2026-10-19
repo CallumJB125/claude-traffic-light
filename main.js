@@ -1,3 +1,8 @@
+// Only a private stdio crypto service, before normal app startup touches data.
+if (process.argv.includes('--plexiform-account-storage-worker')) {
+  require('./buddy-window/account-storage-worker').start();
+  return;
+}
 // Windows hook commands in argv form run the exe with --buddy-hook: the hook
 // script runs here and the process exits before any of the app starts.
 if (process.argv.includes('--buddy-hook')) require('./src/buddy-hook-runner.js').run(process.argv);
@@ -184,9 +189,10 @@ require('./src/logging.js').installFileLogging({ rootDir: ROOT_DIR, isDevRun: IS
 if (pendingDeletion.ran) console.log(`[data] deleted: ${pendingDeletion.results.map((r) => `${r.id} ${r.status}`).join(', ')}`);
 // Anything that escapes a promise or a callback, from here on: log it (to
 // app.log too) instead of letting it kill a listener silently.
-// A scrubbed copy also goes to the local crash ring (src/crash-reports.js); nothing is sent.
+// A scrubbed copy also goes to the local crash ring; structural reports are sent only after renewed opt-in.
 const CrashReports = require('./src/crash-reports.js').create({
   dir: path.join(ROOT_DIR, 'crash-reports'),
+  send: require('./src/crash-report-sender.js').create({ fetch: (...args) => net.fetch(...args) }), // privacy-flow: crash-send
   app: { version: app.getVersion(), os: process.platform, osVersion: os.release(), arch: process.arch },
   scrubWith: () => {
     const names = [];
@@ -269,6 +275,8 @@ const DEFAULT_CONFIG = {
   paceTooltip: true,
   // Busy sources (F5): hold non-urgent pings while you're in a meeting or a Focus.
   busyHold: true,
+  // Slack presence sync (src/slack-presence.js): off until ticked; needs a Slack user token Plexiform does not have yet.
+  slackPresence: false,
   busyCalendar: false, // off until ticked in Settings, which is what asks macOS for access
   busyCalendarTitles: false,
   busyIcsUrl: '',
@@ -812,6 +820,8 @@ function sumTasks(sessions) {
 // the overlay, the garden, the roamer, the alert sound). Resolving it once and
 // handing out the same object for 200 ms turns that back into one pass.
 let stateMemo = { at: 0, key: null, value: null };
+// Teammates' open "Can you look at this?" requests and my Waiting on, for the widget. Set once agent mail exists.
+let teamRequests = () => null;
 
 // A dropped network otherwise only shows up as a failed turn, and Claude
 // Code's idle nudge a minute later used to paper over even that.
@@ -893,14 +903,11 @@ function computeState(opts = {}) {
     ? Rules.resolve(config.rules, [{ signal: 'permission-ask', cwd: pending[0].cwd }], Date.now(), env)
     : Rules.resolve(config.rules, sessions, Date.now(), env);
   const agentCount = Rules.liveAgents(sessions).length;
-  if (config.seasonal) {
-    if (look.costume === 'none') look.costume = Rules.seasonalCostume() || 'none';
-    if (look.effect === 'none') look.effect = Rules.seasonalEffect() || 'none';
-  }
+  require('./src/seasonal-main.js').apply(look, owned, config);
   const minions = config.showAgents ? Rules.filterAgentKinds(Rules.liveAgents(sessions), config.agentKinds).slice(0, 32) : [];
   const sNote = spendNote(config.rules, fired, sessions, spend);
   const stuck = Stuck.summary(sessions);
-  return { stuck, look: { ...Stuck.applyStuck(withNumber(look, sessions, tasks), stuck), tasks, minions, agentRoster: config.agentRoster !== false, agentChipSize: config.agentChipSize }, reason: sessions.length ? 'session' : 'idle', sessions, fired, owned, firedNames: Rules.firedNames(config.rules, fired, owned), tool: currentTool(sessions), agentCount, pending, inputs, tasks, minions, spend, spendNote: sNote, paceLine: config.paceTooltip !== false && spend && spend.pace && spend.pace.noteworthy && !sNote ? spend.pace.text : null, away: BusyWatch.recap(), budget: budgetView(), busy: BusyWatch.holding() };
+  return { stuck, look: { ...Stuck.applyStuck(withNumber(look, sessions, tasks), stuck), tasks, minions, agentRoster: config.agentRoster !== false, agentChipSize: config.agentChipSize }, reason: sessions.length ? 'session' : 'idle', sessions, fired, owned, firedNames: Rules.firedNames(config.rules, fired, owned), tool: currentTool(sessions), agentCount, pending, inputs, tasks, minions, spend, spendNote: sNote, paceLine: config.paceTooltip !== false && spend && spend.pace && spend.pace.noteworthy && !sNote ? spend.pace.text : null, away: BusyWatch.recap(), budget: budgetView(), busy: BusyWatch.holding(), team: teamRequests() };
 }
 
 // The tool of the most recently updated session that is using one.
@@ -943,6 +950,8 @@ const BusyWatch = require('./src/busy-watch.js')({
   tickMs: IS_DEV_RUN && Number(process.env.CLAUDE_BUDDY_BUSY_TICK_MS) ? Number(process.env.CLAUDE_BUDDY_BUSY_TICK_MS) : undefined,
   exec: (file, args, timeout) => new Promise((resolve, reject) => execFile(file, args, { timeout }, (err, out) => (err ? reject(err) : resolve(out)))), // privacy-flow: calendar-helper
   readFile: (f) => fs.readFileSync(f, 'utf8'),
+  // Protected folder (~/Library/DoNotDisturb): async, 3 s deadline, never on main's stack.
+  readProtected: (f) => Promise.race([fs.promises.readFile(f, 'utf8'), new Promise((_, rej) => setTimeout(() => rej(Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' })), 3000).unref())]),
   writeFile: (f, text) => { fs.mkdirSync(ROOT_DIR, { recursive: true }); fs.writeFileSync(f, text); },
   removeFile: (f) => fs.rmSync(f, { force: true }),
   exists: (f) => fs.existsSync(f),
@@ -962,6 +971,12 @@ function pingAllowed(ruleId, opts = {}) {
   BusyWatch.noteHeld(rule ? rule.name : null, opts.signal || firedSignal(rule));
   return false;
 }
+// Nudges nobody asked for (the "make it a rule?" nudge, the digest
+// notification) go through one gate: quiet (snooze, quiet hours) and a busy
+// spell (a meeting, a Focus mode: src/busy-watch.js) both hold them.
+const InterruptGate = require('./src/interrupt-gate.js').create({ quiet: () => quietHolds(null), busy: () => BusyWatch.holding() });
+// Slack presence sync (src/slack-presence.js): off by default; with no Slack user token it only reports 'needs_user_scope'.
+const SlackPresence = require('./src/slack-presence.js').create({ client: null, log: (...a) => console.warn(...a) });
 // Which of a rule's signals is live right now (a virtual one, like
 // long-running, isn't in the session list: then its first signal).
 function firedSignal(rule) {
@@ -981,6 +996,9 @@ function quietHolds(cwd) {
   if (why) return why;
   return !cwd && Quiet.allMuted(config, aggregateState({ ignoreTravel: true }).sessions) ? 'project' : null;
 }
+// Team depth lane B: the hub inbox rows (mentions, replies, moments, hand-offs)
+// folded into Home's Inbox and the dock badge; filled by the poll below.
+const teamInbox = require('./src/team-inbox.js').createTeamInbox({ now: Date.now });
 // The one thing quiet still does: a silent badge count of asks waiting on you.
 function syncQuietBadge(st) {
   const config = loadConfig();
@@ -991,6 +1009,7 @@ function syncQuietBadge(st) {
   for (const r of st.pending || []) if (r && r.sessionId) asking.set(r.sessionId, r.cwd);
   let n = 0;
   for (const cwd of asking.values()) if (Quiet.badgeFor(timed || Quiet.reason(config, { now, cwd }), 'permission-ask')) n += 1;
+  n += teamInbox.unread();
   try { app.setBadgeCount(n); } catch { /* no badge on this platform */ }
 }
 function notificationAllowed(n) {
@@ -1596,15 +1615,18 @@ if (IS_DEV_RUN && !app.isPackaged && process.env.CLAUDE_BUDDY_COLLISION_HOOK ===
 const ProviderStatus = require('./src/provider-status.js');
 const sessionsSender = e => fromUtilityPage(e, 'sessions');
 const WorktreeShare = require('./src/worktree-share.js').createWorktreeShare({ log: console.log });
-ipcMain.handle('sessions:state', e => {
-  if (!sessionsSender(e)) return null;
+ipcMain.handle('sessions:state', e => (sessionsSender(e) ? sessionsState() : null));
+async function sessionsState() {
   try {
     const configured = IS_DEV_RUN ? false : Adapters.get('codex').isActivityInstalled({ home: os.homedir(), runtime: HOOK_RUNTIME });
-    return SessionOverview.snapshot({ sessions: localSessions(aggregateState().sessions || []), activity: { configured, available: true }, now: Date.now(), enrich: BurstIpc.enrichSession, info: (row) => SessionActionsMain.rowInfo(row), handover: (row) => SessionHandoverMain.view(row), sharedTrees: (rows) => WorktreeShare.shared(rows), collisions: CollisionAlerts.rowCollisions(collisionAlerts), policy: (row) => require('./src/policy.js').rowInfo(row, ROOT_DIR) });
+    const sessions = localSessions(aggregateState().sessions || []);
+    const Policy = require('./src/policy.js');
+    const policies = new Map(await Promise.all(sessions.map(async (row) => [row, await Policy.rowInfo(row, ROOT_DIR).catch(() => null)])));
+    return SessionOverview.snapshot({ sessions, activity: { configured, available: true }, now: Date.now(), enrich: BurstIpc.enrichSession, info: (row) => SessionActionsMain.rowInfo(row), handover: (row) => SessionHandoverMain.view(row), sharedTrees: (rows) => WorktreeShare.shared(rows), collisions: CollisionAlerts.rowCollisions(collisionAlerts), policy: (row) => policies.get(row) ?? null });
   } catch {
     return SessionOverview.snapshot({ sessions: [], activity: { available: false }, available: false, now: Date.now() });
   }
-});
+}
 const SessionActionsMain = require('./src/session-actions-main.js').register({ ipcMain, sessionsAllowed: sessionsSender, sessions: () => localSessions(aggregateState().sessions || []), bridge: () => buddyWin?.sessionBridge, capture: () => buddyWin, tasks: () => { const t = getTasks(); t.start(); return t; }, clipboard, openPage: (id) => openBuddy(id), pageExists: (id) => !!BuddyPages.pageById(id), pickFolder: async () => { const r = await dialog.showOpenDialog(BrowserWindow.fromWebContents(buddyWin?.pageWebContents('sessions')) || undefined, { title: 'Choose the folder', properties: ['openDirectory'] }); return r.canceled ? null : r.filePaths[0]; } });
 ipcMain.handle('sessions:open-record', (e, recordId) => (sessionsSender(e) && typeof recordId === 'string' ? openCollisionRecord(recordId) : { ok: false }));
 ipcMain.handle('sessions:message', (e, session, text) => {
@@ -1623,10 +1645,33 @@ ipcMain.handle('sessions:aitools', e => { if (!sessionsSender(e)) return false; 
 let overviewTeams={host:null,at:0,value:null},overviewTeamHub=null;
 // Team brief + team_* MCP tools (src/team-activity.js), opt-in via teamBrief.
 const TeamActivity=require('./src/team-activity').createTeamActivity({enabled:()=>loadConfig().teamBrief===true,resolve:async(a)=>(devMockReady?(await getBuddy().teamActivityLink?.(a))??null:null),teams:async()=>(devMockReady?(await getBuddy().teamMemoryLinks?.())??[]:[]),fetch:(...a)=>net.fetch(...a),log:m=>console.log(m)}); // privacy-flow: team-brief
-const liveTeamHub=require('./src/team-hub-live').createLiveTeamHub({identity:()=>devMockReady?getBuddy().interactionHostIdentity?.()??null:null,fetch:(...a)=>net.fetch(...a)}); // privacy-flow: team-hub-directory
+const liveTeamHub=require('./src/team-hub-live').createLiveTeamHub({identity:()=>app.isReady()&&devMockReady?getBuddy().interactionHostIdentity?.()??null:null,fetch:(...a)=>net.fetch(...a)}); // privacy-flow: team-hub-directory
+// Private encrypted outbox, separate from remote hub persistence. Native
+// authorization runs off the main process on packaged Macs and cannot hold Quit.
+const followupNativeStorage=require('./buddy-window/secure-storage').createSecureStorage(require('electron').safeStorage);
+const followupStorageProcess=process.platform==='darwin'&&app.isPackaged?require('./buddy-window/account-storage-process').createAccountStorageProcess({ready:()=>app.isReady(),spawn(executable,args,options){ // privacy-flow: session-followups
+  const profile=fs.mkdtempSync(path.join(app.getPath('temp'),'plexiform-followup-storage-'));
+  let child;try{child=require('node:child_process').spawn(executable,[...args,`--user-data-dir=${profile}`],options);}catch(error){fs.rmSync(profile,{recursive:true,force:true});throw error;} // privacy-flow: session-followups
+  child.once('exit',()=>{try{fs.rmSync(profile,{recursive:true,force:true});}catch{}});return child;
+}}):null;
+const followupStorage=followupStorageProcess??(process.platform==='linux'?{encryptAsync:async s=>followupNativeStorage.encrypt(s),decryptAsync:async b=>followupNativeStorage.decrypt(b)}:followupNativeStorage);
+const followupScope=()=>{
+  if(!app.isReady()||!devMockReady)return null;
+  const b=getBuddy(),account=b.interactionHostIdentity?.()??null,board=b.status?.().workspace;
+  if(typeof board!=='string'||!board)return null;
+  return crypto.createHash('sha256').update(JSON.stringify([account?.origin??'signed-out-local',account?.userId??'signed-out-local',board])).digest('hex');
+};
+const sessionFollowups=require('./src/session-followups').createSessionFollowups({file:path.join(app.getPath('userData'),'session-followups','outbox.bin'),storage:followupStorage,scope:followupScope,onChange:()=>OverviewMain.directoryChanged()});
 if(IS_DEV_RUN&&!app.isPackaged&&process.env.CLAUDE_BUDDY_FAKE_TEAM_HUB){try{overviewTeamHub=require('./src/team-hub-fake').createFakeTeamHub(JSON.parse(fs.readFileSync(process.env.CLAUDE_BUDDY_FAKE_TEAM_HUB,'utf8')));}catch(e){console.warn('[overview] fake team hub not loaded:',e.message);}}
+// Team depth lane C: board presence over the person's own hub sign-in (who views which card, who runs where); feeds Team sessions and beats this computer's open shared session.
+const PresenceLink=require('./src/team-presence-link').createPresenceLink({links:async()=>devMockReady?(await getBuddy().teamMemoryLinks?.())??[]:[],WebSocket:require('ws'),log:m=>console.log(m),onChange:()=>OverviewMain.directoryChanged(),onInbox:(hub,item)=>ingestTeamInbox(hub,[item])}); // privacy-flow: team-hub
 const OverviewMain=require('./src/overview-main').createOverviewMain({
   buddy:()=>buddyWin,sessions:()=>aggregateState().sessions||[],
+  // Burst's loose ends per repository (BurstIpc is created further down; null until then and whenever Burst lacks the check).
+  looseEnds:()=>{try{return BurstIpc.looseEndsView();}catch{return null;}},
+  presence:team=>{void PresenceLink.refresh();return PresenceLink.latest(team);},presenceView:r=>PresenceLink.view(r),
+  // "Share view" from Team sessions: the team's board link with the person's own sign-in (same poster as pins).
+  shareView:async({origin,teamId,name,values})=>{const links=devMockReady?(await getBuddy().teamMemoryLinks?.())??[]:[];const link=links.find(l=>l?.route?.hub===origin&&l.route.team_id===teamId&&l.route.board_id)||null;return require('./src/pinboard.js').createPinboard({resolve:async()=>null,fetch:(...a)=>net.fetch(...a),log:m=>console.log(m)}).view({link,name,values});}, // privacy-flow: pinboard
   work:()=>buddyWin?.overviewWork()??Promise.resolve({sources:[],capture:[],partial:true}),
   managed:()=>{const service=getTasks();service.start();return service.snapshot();},
   openManaged:async(_id,fresh)=>{if(!fresh())return false;openBuddy('tasks');return true;},
@@ -1638,11 +1683,15 @@ const OverviewMain=require('./src/overview-main').createOverviewMain({
   hubTeams:async()=>{const h=hostSync.host(),origin=hostSync.origin();if(!h||!origin)return null;if(overviewTeams.host===h&&Date.now()-overviewTeams.at<30_000)return overviewTeams.value;
     const r=await h.listShares().catch(()=>null);overviewTeams={host:h,at:Date.now(),value:r?.ok?{origin,teams:r.teams}:null};return overviewTeams.value;},
   teamHub:()=>overviewTeamHub||liveTeamHub.current(),
+  followups:sessionFollowups,followupScope,
+  followupLocal:{target:session=>InteractionMain.followupTarget(session),resolve:(target,fresh)=>InteractionMain.resolveFollowup(target,fresh)},
 });
 OverviewMain.register(ipcMain);
 overviewTeamHub?.onChange(()=>OverviewMain.directoryChanged());
-if(!overviewTeamHub)liveTeamHub.onChange(()=>OverviewMain.directoryChanged());
-onQuit(app,()=>{liveTeamHub.close();OverviewMain.close();});
+// A subscription reads the current identity immediately. Electron's secure
+// storage is unavailable before ready; do not construct the account vault then.
+app.whenReady().then(()=>{if(!overviewTeamHub)liveTeamHub.onChange(()=>OverviewMain.directoryChanged());});
+onQuit(app,()=>{liveTeamHub.close();PresenceLink.stop();OverviewMain.close();sessionFollowups.close();followupStorageProcess?.close();});
 // Owned-session interaction: Plexiform starts its own provider sessions and
 // talks only to those. Existing unmanaged sessions stay observation-only.
 const CodexAppServer=require('./src/codex-app-server');
@@ -1662,6 +1711,7 @@ claudeChannel.attach=async args=>{
   return attachClaudeChannel(args);
 };
 const InteractionMain=require('./src/interaction-main').createInteractionMain({
+  accountScope:followupScope,
   compaction:Compaction.createSessionCompactor({settings:()=>loadConfig().compaction,ledger:CompactionLedger}),
   context:()=>buddyWin?.overviewContext?.()??null,
   readContext:()=>buddyWin?.overviewReadContext?.()??null,
@@ -1688,12 +1738,15 @@ const InteractionMain=require('./src/interaction-main').createInteractionMain({
   // The active workspace (My board or a team board) the sidebar shows.
   currentBoard:()=>buddyWin?.status?.().workspace??null,
   localModelsFile:path.join(app.getPath('userData'),'local-models.json'),
+  // Endpoints added in the Local models card; API keys encrypted with the OS secure storage, never in local-models.json.
+  endpointStore:require('./src/local-model-endpoints').createEndpointStore({file:path.join(app.getPath('userData'),'local-models.json'),keysFile:path.join(app.getPath('userData'),'local-model-keys.json'),secure:followupNativeStorage}),
   // Team sharing of Overview sessions goes through the remote host below (null while it is off).
   shares:()=>hostSync.host(),
   // Unavailable providers carry the AI tools page's reason and open its row (src/ai-tools.js nextStep).
   tools:()=>AiTools.quick(),openAiTools:(d)=>aiToolsOpen(d),
 });
 InteractionMain.register(ipcMain);
+app.whenReady().then(()=>InteractionMain.detectLocalModels()).catch(()=>{});
 onQuit(app,()=>InteractionMain.close());
 onQuit(app,retireClaudeChannels);
 ipcMain.handle('compaction-stats',async e=>settingsOnly(e)?{...CompactionLedger.summary(),settings:loadConfig().compaction,burstNote:BurstIpc.compactionNote(),burstLearned:BurstSpend.learnedThresholds(await BurstIpc.read('intelligentCompaction'))}:null);
@@ -1740,7 +1793,10 @@ const hostSync=require('./src/interaction-host-sync').createInteractionHostSync(
 // Agent mail (board/MESSAGING.md §6a): local AIs' asks to teammates, held on the hub until
 // Send on Sessions; the teammates' side is an opt-in inbox poll with hostSync's lifecycle.
 const AgentMail=require('./src/agent-mail').create({identity:()=>devMockReady?getBuddy().interactionHostIdentity?.()??null:null,resolve:async(a)=>(devMockReady?(await getBuddy().teamActivityLink?.(a))??null:null),
-  fetch:(...a)=>net.fetch(...a),home:os.homedir(),enabled:()=>loadConfig().agentMailInbox===true,notify:n=>notifyAgentMail(n),onChange:()=>buddyWin?.sendToPage('sessions','mail:changed'),log:m=>console.log(m)}); // privacy-flow: agent-mail
+  fetch:(...a)=>net.fetch(...a),home:os.homedir(),enabled:()=>loadConfig().agentMailInbox===true,notify:n=>notifyAgentMail(n),onChange:()=>{buddyWin?.sendToPage('sessions','mail:changed');stateMemo={at:0,key:null,value:null};broadcastStatus();},log:m=>console.log(m)}); // privacy-flow: agent-mail
+teamRequests = () => { const p = AgentMail.pending(); const looks = (p.looks || []).slice(0, 3), waiting = (p.waiting || []).slice(0, 3); return looks.length || waiting.length ? { looks, waiting } : null; };
+ipcMain.handle('open-mail', (e) => { if (!widgetOnly(e)) return false; openBuddy('sessions'); return true; });
+require('./src/pinboard.js').register({ipcMain,allowed:sessionsSender,pinboard:require('./src/pinboard.js').createPinboard({resolve:async(a)=>(devMockReady?(await getBuddy().teamActivityLink?.(a))??null:null),fetch:(...a)=>net.fetch(...a),log:m=>console.log(m)}),cwdFor:async(key)=>{try{const p=await teammatePacketFromDoc(SessionHandoverMain.writer.text(key));return p?.cwd??null;}catch{return null;}}}); // privacy-flow: pinboard
 require('./src/agent-mail').register({ipcMain,allowed:sessionsSender,mail:AgentMail,tasks:()=>{const t=getTasks();t.start();return t;},
   confirm:async(info,e)=>(await dialog.showMessageBox(BrowserWindow.fromWebContents(e.sender)||undefined,{type:'question',buttons:['Cancel',info.action],defaultId:0,cancelId:0,noLink:true,message:`${info.title}?`,detail:info.detail})).response===1,
   pickFolder:async e=>{
@@ -1775,6 +1831,19 @@ function localHandoffOp(op,args){
   if(op==='hand_off_status')return Promise.resolve(HandoffRequests.status({request_id:typeof a.request_id==='string'?a.request_id:undefined}));
   return Promise.resolve(HandoffRequests.request({from:a.from,to:a.to,reason:a.reason,title:a.title,brief:a.brief,files:a.files,branch:a.branch,cwd:typeof a.cwd==='string'?a.cwd:''}));
 }
+// A teammate handed you a card on the team board (src/handoff-people.js): the same "Needs you" card on Sessions, kind person.
+const HandoffPeople=require('./src/handoff-people.js').create({links:async()=>(devMockReady?(await getBuddy().teamMemoryLinks?.())??[]:[]),fetch:(...a)=>net.fetch(...a),log:m=>console.log(m), // privacy-flow: team-hub
+  onChange:()=>buddyWin?.sendToPage('sessions','handoff:changed'),notify:(r)=>notifyPersonHandoff(r)});
+setInterval(()=>{if(buddyWin?.isVisible?.())HandoffPeople.refresh().catch(()=>{});},60_000).unref?.();
+function notifyPersonHandoff(r){
+  console.log('[handoff-people] notify');
+  if(IS_DEV_RUN||!Notification.isSupported())return;
+  const note=new Notification({title:`${r.from} handed you ${r.card?.key||'a card'}`,body:'Accept or decline it on the Sessions page.',silent:true});
+  liveNotifications.add(note);
+  note.on('click',()=>{liveNotifications.delete(note);openBuddy('sessions');});
+  note.on('close',()=>liveNotifications.delete(note));
+  note.show();
+}
 function notifyHandoffRequest(r){
   console.log('[handoff-requests] notify');
   if(IS_DEV_RUN||!Notification.isSupported())return;
@@ -1784,7 +1853,9 @@ function notifyHandoffRequest(r){
   note.on('close',()=>liveNotifications.delete(note));
   note.show();
 }
-for(const[channel,fn]of[['handoff:list',()=>({ok:true,requests:HandoffRequests.list()})],
+for(const[channel,fn]of[['handoff:list',async()=>{await HandoffPeople.refresh().catch(()=>{});return{ok:true,requests:[...HandoffRequests.list(),...HandoffPeople.list()]};}],
+  ['handoff:person-accept',(_e,id)=>HandoffPeople.accept(id)],
+  ['handoff:person-decline',(_e,id)=>HandoffPeople.decline(id)],
   ['handoff:confirm',(_e,id)=>HandoffRequests.confirm(id,{continueIn,onEvent:(ev)=>continueToSessions(ev)})],
   ['handoff:dismiss',(_e,id)=>HandoffRequests.dismiss(id)]]){
   ipcMain.handle(channel,async(e,...args)=>{if(!sessionsSender(e))return{ok:false,error:'Not allowed.'};try{return await fn(e,...args);}catch{return{ok:false,error:'Something went wrong. Nothing was started.'};}});
@@ -1874,8 +1945,14 @@ require('./src/setups-folder.js').register({ipcMain,allowed:setupsSender,source:
 let costGuardReport = null;
 let costGuardResume = null;
 let taskStartGuard = null;
+// Work that may read a session's project folder waits for this: under ~/Desktop,
+// ~/Documents or ~/Downloads macOS can hold such a read on its privacy prompt,
+// and nothing may be ahead of the widget and the signal server.
+let startupUp;
+const startupDone = new Promise((resolve) => { startupUp = resolve; });
+const afterStartup = (fn) => { startupDone.then(fn).catch((err) => console.warn('[startup] deferred work failed:', err?.message ?? err)); };
 // Paid-tier packages (src/paid-wiring.js): each registers itself if present; nothing here may block startup.
-try { require('./src/paid-wiring.js').registerAll({ setCostGuardReport: (fn) => { costGuardReport = fn; }, setCostGuardResume: (fn) => { costGuardResume = fn; }, setTaskStartGuard: (fn) => { taskStartGuard = fn; }, app, ipcMain, rootDir: ROOT_DIR, buddy: () => buddyWin, fromPage: fromUtilityPage, setups: SetupsNative, onQuit: (fn) => onQuit(app, fn), log: (m) => console.warn(m), spend: () => spendSnapshot(loadConfig()), runawayStoppers: () => runawayStoppers, usageTurns: () => getUsageTurns(), ownedSessions: { list: () => InteractionMain.listOwned(), target: (s) => InteractionMain.sharedTarget(s) }, keyFor, requestsDir: REQUESTS_DIR, interactionHost: () => hostSync.host(), setInteractionHostExtras: (fn) => { interactionHostExtras = fn; }, teamMemory: (req) => TeamActivity.memoryPage(req), gallery: { takePending: () => galleryService?.takePending() ?? null } }); } catch (e) { console.warn('[paid] wiring failed:', e?.message ?? e); } // privacy-flow: team-memory
+try { require('./src/paid-wiring.js').registerAll({ afterStartup, setCostGuardReport: (fn) => { costGuardReport = fn; }, setCostGuardResume: (fn) => { costGuardResume = fn; }, setTaskStartGuard: (fn) => { taskStartGuard = fn; }, app, ipcMain, rootDir: ROOT_DIR, buddy: () => buddyWin, fromPage: fromUtilityPage, setups: SetupsNative, onQuit: (fn) => onQuit(app, fn), log: (m) => console.warn(m), spend: () => spendSnapshot(loadConfig()), runawayStoppers: () => runawayStoppers, usageTurns: () => getUsageTurns(), ownedSessions: { list: () => InteractionMain.listOwned(), target: (s) => InteractionMain.sharedTarget(s) }, keyFor, requestsDir: REQUESTS_DIR, interactionHost: () => hostSync.host(), setInteractionHostExtras: (fn) => { interactionHostExtras = fn; }, teamMemory: (req) => TeamActivity.memoryPage(req), gallery: { takePending: () => galleryService?.takePending() ?? null }, openTimeline: (s) => SessionTimelineMain.openSession(s) }); } catch (e) { console.warn('[paid] wiring failed:', e?.message ?? e); } // privacy-flow: team-memory
 
 // Settings → Account & team, and the widget's one-time Team hint. Each
 // handler checks its sender; the page to open is never taken from the renderer.
@@ -1914,6 +1991,7 @@ onQuit(app, () => BurstNotices.stop());
 let keepAwakeMain = null;
 keepAwakeMain = require('./src/keep-awake-ipc.js').register({ utilityHandle, allowed: (e) => fromPage(e, buddyWin?.accountWebContents?.()), isMac: IS_MAC, burst: BurstIpc, keepAwake: require('./src/keep-awake.js').createKeepAwake({ powerSaveBlocker }), dialog, getPref: () => { const v = loadConfig().keepAwake; return ['app', 'ac', 'always'].includes(v) ? v : 'off'; }, setPref: (v) => saveConfig({ keepAwake: v }), log: console.log });
 const SessionHandoverMain = require('./src/session-handover-main.js').register({ ipcMain, rootDir: ROOT_DIR, isExcluded: (cwd) => Quiet.projectMuted(loadConfig().mutedProjects, cwd), onRendered: (r) => onHandoverRendered(r), burstFor: (row) => { const h = BurstIpc.enrichSession({ sessionId: row.sessionId, cwd: row.cwd, source: row.adapter === 'claude-code' ? null : row.adapter }); return h && h.handover ? h.handover.text : null; }, home: os.homedir(), sessionsAllowed: sessionsSender, clipboard, shell, sessions: () => ({ live: localSessions(aggregateState().sessions || []), capture: buddyWin?.handoverSessions?.() ?? [] }), log: console.log });
+require('./src/session-search-main.js').register({ ipcMain, allowed: (e) => fromUtilityPage(e, 'overview'), openPage: (id) => openBuddy(id) });
 const SessionTimelineMain = require('./src/session-timeline-main.js').register({ ipcMain, rootDir: ROOT_DIR, home: os.homedir(), user: os.userInfo().username, hostname: os.hostname(), writer: () => SessionHandoverMain.writer, isExcluded: (cwd) => Quiet.projectMuted(loadConfig().mutedProjects, cwd), sessions: () => ({ live: localSessions(aggregateState().sessions || []), capture: buddyWin?.handoverSessions?.() ?? [] }), sessionsAllowed: sessionsSender, pageAllowed: (e) => fromUtilityPage(e, 'timeline'), openPage: (id) => openBuddy(id), pageContents: () => buddyWin?.pageWebContents('timeline'), dialog, BrowserWindow, downloads: () => app.getPath('downloads'), log: console.log });
 // "Try the demo" (src/demo-mode.js): fixtures only, a flag in memory. A dev run may start in it for screenshots.
 const Demo = require('./src/demo-mode.js').create();
@@ -1935,8 +2013,10 @@ ipcMain.handle('account-open', (e, which) => {
   return true;
 });
 const widgetOnly = (e) => fromPage(e, win?.webContents);
+require('./src/sprite-pack-main.js').register({ ipcMain, allowed: (e) => widgetOnly(e) || widgetConfigSender(e) || settingsOnly(e), home: os.homedir(), loadConfig, saveConfig, notify: () => { if (win && !win.isDestroyed()) win.webContents.send('sprite-pack:changed'); } });
 const teamHint = () => TeamEntry.hintFor(accountSummary(), loadConfig().hints?.teamSeen === true);
 ipcMain.handle('team-hint', (e) => widgetOnly(e) ? teamHint() : null);
+require('./src/widget-cards-main.js').install({ ipcMain, allowed: widgetOnly, getSessions: () => ({ sessions: aggregateState().sessions || [] }), getSpend: async (id) => WorkCost.sessionSpend(await getUsageTurns(), { provider: 'claude', session_id: id }), config: { load: loadConfig, save: saveConfig } }); // privacy-flow: widget-session-card
 ipcMain.handle('team-hint-done', (e, open) => {
   if (!widgetOnly(e)) return false;
   const hint = teamHint();
@@ -2015,6 +2095,7 @@ function getTasks() {
     detectedTools: () => AiTools.quick(),
     startGuard: (cwd) => (taskStartGuard ? taskStartGuard(cwd) : null),
     copy: (text) => clipboard.writeText(text),
+    ...(IS_MAC ? { launchTerminal: (descriptor, current) => require('./src/tasks-terminal').launchTaskTerminal(descriptor, { current }) } : {}),
     onChange: (snap) => {
       for (const wc of tasksPages()) wc.send('tasks:changed', snap);
       for (const id of AgentMail.acceptedTasks()) { const t = (snap?.tasks || []).find((x) => x && String(x.id) === id); if (t && ['done', 'in_review', 'failed'].includes(t.state)) AgentMail.taskEnded(id, t.state, t.reason || '').catch(() => {}); }
@@ -2025,12 +2106,13 @@ function getTasks() {
     confirmDialog: async (info, wcId) => {
       const wc = tasksPages().find((w) => w.id === wcId);
       const parent = (wc && BrowserWindow.fromWebContents(wc)) || undefined;
-      const r = await dialog.showMessageBox(parent, {
+      const show = async owner => dialog.showMessageBox(owner, {
         type: 'warning', buttons: ['Cancel', info.label], defaultId: 0, cancelId: 0, noLink: true,
         message: `${info.label}?`,
         detail: [`Task: ${info.title}`, info.where ? `Runs in: ${info.where}` : '', info.detail].filter(Boolean).join('\n'),
       });
-      return r.response === 1;
+      const r = ['merge', 'switchAi', 'openPr', 'takeover', 'openTerminal'].includes(info.action) || info.action === 'create' && wc ? await buddyWin?.tasksConfirm?.(show) : await show(parent);
+      return r?.response === 1;
     },
     seen: {
       load: () => { try { return JSON.parse(fs.readFileSync(TASKS_SEEN_FILE, 'utf8')); } catch { return {}; } },
@@ -2045,9 +2127,8 @@ ipcMain.handle('tasks:state', (e) => { if (!tasksSenderOk(e)) return null; const
 ipcMain.handle('tasks:retry', (e) => { if (tasksSenderOk(e)) getTasks().retryNow(); });
 ipcMain.handle('tasks:open', (e, id) => (tasksSenderOk(e) ? getTasks().openTask(id, e.sender.id) : null));
 ipcMain.handle('tasks:close', (e) => { if (tasksSenderOk(e)) return getTasks().closeTask(e.sender.id); return null; });
-ipcMain.handle('tasks:act', (e, req) => (tasksSenderOk(e) ? getTasks().act(req, e.sender.id) : null));
+require('./src/tasks-main').register({ipcMain,buddy:()=>buddyWin,service:getTasks});
 ipcMain.handle('tasks:checkpoint', (e, req) => (tasksSenderOk(e) ? getTasks().saveCheckpoint(req, e.sender.id) : null));
-ipcMain.handle('tasks:create', (e, draft) => (tasksSenderOk(e) ? getTasks().create(draft, { wcId: e.sender.id }) : null));
 ipcMain.handle('tasks:composer', (e) => (tasksSenderOk(e) ? getTasks().composerInfo() : null));
 ipcMain.handle('tasks:copy-takeover', (e, id) => !!tasksSenderOk(e) && typeof id === 'string' && getTasks().copyTakeover(id));
 // The folder comes back as an opaque handle plus a label: the page cannot name a path of its own.
@@ -2310,6 +2391,7 @@ function createOnboardingWindow() {
   onboardingWin.once('ready-to-show', () => { onboardingWin?.show(); console.log('[onboarding] shown'); });
   onboardingWin.on('closed', () => {
     onboardingWin = null;
+    FirstRunTour.onboardingClosed();
     if (process.platform === 'darwin' && !buddyWin?.isOpen() && !lightsWin) app.dock.hide();
   });
   onboardingWin.loadFile('onboarding.html');
@@ -3002,13 +3084,14 @@ function broadcastStatus() {
     if (statusPushWanted(widgetMotion.paused, asks, widgetAsksSent)) { widgetAsksSent = asks; win?.webContents.send('status-changed'); }
     if (!DEMO && devMockReady && localSessions(st.sessions).length) getBuddy().sessionsChanged(localSessions(st.sessions));
     else buddyWin?.sessionsChanged(localSessions(st.sessions));
+    void SlackPresence.setEnabled(loadConfig().slackPresence === true).then(() => SlackPresence.update({ sessions: localSessions(st.sessions), pending: st.pending, busy: BusyWatch.holding() })).catch(() => {});
     const recap = BusyWatch.observe(st.sessions);
     if (recap) { stateMemo = { at: 0, key: null, value: null }; showAwayRecap(recap); }
     maybeNotify(st);
     updateOverlay(st.look);
     const tk = JSON.stringify(WorkScopeView.trayItem(localSessions(st.sessions || []), { available: typeof WorkScope?.setSessionScope === 'function' }));
     if (tk !== trayScopeKey) { trayScopeKey = tk; refreshTrayMenu(); }
-    stripAway = !!st.away && !travelLook;
+    stripAway = (!!st.away || !!st.team) && !travelLook;
     stripBudget = budgetNotices.list().length > 0;
     applyStrip(travelLook ? 0 : bubblePx, stripAway, updateRowShown && !travelLook, stripBudget && !travelLook);
     updateGarden(st);
@@ -3335,7 +3418,7 @@ function createTray() {
       ...UsagePopOut.items(usageToday(), () => openBuddy('usage')),
       ...AppMenu.appItems({ pages: sectionItems(), groups: [{ id: 'sections' }, { id: 'more', submenu: 'More' }], open: openBuddy, openLabel: BRAND.OPEN_MENU_LABEL, feedback: { label: "Something's off / Idea…", click: createFeedbackWindow }, popOuts: { usage: () => openBuddy('usage') } }),
       { label: 'Open Claude', click: () => shell.openExternal('https://claude.ai') },
-      ...quietItems(),
+      ...quietItems(), ...WidgetPolish.menuItems(),
       ...captureItems(),
       ...(advanced ? [{ label: 'Show Widget Now', click: () => { saveConfig({ showWidget: true }); clearTimeout(snoozeTimer); if (!win) createWindow(); win.showInactive(); createTray(); } }] : []),
       { label: 'Reset Widget Position', click: () => { const wa = screen.getPrimaryDisplay().workArea; if (!win) createWindow(); strip = WidgetStrip.NONE; win.setMaximumSize(MAX_WIDTH, Math.round(MAX_WIDTH / WIDGET_ASPECT)); win.setAspectRatio(WIDGET_ASPECT); win.setBounds({ x: wa.x + wa.width - 140, y: wa.y + 46, width: 107, height: 137 }); win.showInactive(); broadcastStatus(); } },
@@ -3615,7 +3698,7 @@ function applyConfigEffects(prev, next, touched) {
   applyConfigSideEffects(prev, next, {
     installHooks,
     enableCalendar: () => BusyWatch.enableCalendar().catch((err) => console.warn('[busy]', err.message)),
-    applyWidgetVisibility, syncTailnetListener, createTray, applyVoiceHotkey, applyLowPower, syncFastHook, broadcastStatus, syncInteractionHost,
+    applyWidgetVisibility, syncTailnetListener, createTray, applyVoiceHotkey, applyLowPower, syncFastHook, broadcastStatus, syncInteractionHost, widgetPolish: (p, n) => WidgetPolish.configChanged(p, n),
     syncAgentMail: () => AgentMail.sync(),
   }, touched);
 }
@@ -3638,7 +3721,7 @@ function commitConfig(partial) {
 }
 
 utilityHandle('get-privacy', settingsOnly, () => { try { return fs.readFileSync(path.join(__dirname, 'PRIVACY.md'), 'utf8'); } catch { return null; } });
-utilityHandle('crash-reports:state', settingsOnly, () => ({ optedIn: CrashReports.isOptedIn(), count: CrashReports.list().length, latest: CrashReports.payload() }));
+utilityHandle('crash-reports:state', settingsOnly, () => ({ optedIn: CrashReports.isOptedIn(), count: CrashReports.list().length, latest: CrashReports.latest() ? JSON.stringify(require('./board/shared/crash-report.cjs').wireReport(CrashReports.latest()), null, 2) : '' }));
 utilityHandle('crash-reports:set-opt-in', settingsOnly, (_e, on) => ({ optedIn: CrashReports.setOptIn(on === true) }));
 utilityHandle('crash-reports:export', settingsOnly, async (e) => {
   const r = await dialog.showSaveDialog(BrowserWindow.fromWebContents(e.sender) || undefined, {
@@ -3858,6 +3941,15 @@ utilityHandle('work-cost', e => fromUtilityPage(e, 'usage'), async () => {
   const r = await workCostReport();
   const brief = (w) => ({ ...w, items: undefined, count: w.items.length });
   return { basis: r.basis, week: brief(r.week), month: brief(r.month) };
+});
+// Where it went (src/cost-rollup.js): the same local turns and cards rolled up by project, branch, PR and model, plus the week's saving line.
+utilityHandle('cost-rollup', e => fromUtilityPage(e, 'usage'), async (e, range) => {
+  const rows = buddyWin?.workCostRows?.() ?? { tasks: [], records: [] };
+  const turns = await getUsageTurns();
+  const now = Date.now();
+  const MM = require('./src/model-mix.js');
+  const r = require('./src/cost-rollup.js').rollup({ turns, tasks: rows.tasks, records: rows.records, range: typeof range === 'string' ? range : '7d', now });
+  return { ...r, basis: WorkCost.BASIS, saving: MM.savingLine(MM.routineEstimate(turns, { from: MM.startOfDay(now - 6 * MM.DAY_MS), now })) };
 });
 utilityHandle('work-cost-export', e => fromUtilityPage(e, 'usage'), async (e) => {
   const csv = WorkCost.toCsv(await workCostReport());
@@ -4170,12 +4262,38 @@ let awayFrom = null;
 let lastAway = null;
 const AWAY_FRESH_MS = 12 * 3600000;
 
+// Screen-aware questions and pointing (src/voice-capture-main.js,
+// src/pointer-overlay-main.js), and agent mode's confirm step (src/voice-offer.js).
+const voiceClaudeEnv = () => Voice.claudeEnv(process.env, `${path.join(os.homedir(), '.local', 'bin')}:/opt/homebrew/bin:/usr/local/bin`);
+const VoiceCapture = require('./src/voice-capture-main.js');
+const voiceScreen = VoiceCapture.create({
+  systemPreferences, desktopCapturer: require('electron').desktopCapturer, screen, fs, path, tmpdir: os.tmpdir(),
+  randomHex: () => crypto.randomBytes(6).toString('hex'), askClaude: VoiceHelper.askClaude, spawn, env: voiceClaudeEnv(), log: console.log,
+});
+const pointer = require('./src/pointer-overlay-main.js').create({
+  BrowserWindow, screen, htmlPath: path.join(__dirname, 'pointer-overlay.html'), preloadPath: path.join(__dirname, 'pointer-overlay-preload.js'),
+  reducedMotion: () => reducedMotion || prefersReducedMotion(), log: console.log,
+});
+const voiceOffers = require('./src/voice-offer.js').create();
+let voiceTaskDraft = null;
+function widgetCentre() {
+  if (!win || win.isDestroyed()) return null;
+  const b = win.getBounds();
+  return { x: b.x + Math.round(b.width / 2), y: b.y + Math.round(b.height / 2) };
+}
+
 async function voiceReply(text, onCancel) {
+  pointer.close();
   const intent = Voice.parseIntent(text);
   const cfg = Voice.normalizeConfig(loadConfig().voice);
-  const free = intent.intent === 'unknown' && cfg.askClaude;
+  const free = intent.intent === 'unknown' && (cfg.askClaude || cfg.screen);
   // The transcript itself stays out of app.log; the intent is enough to debug.
-  console.log(`[voice] intent ${intent.intent}${free ? ' (asking claude)' : ''}`);
+  console.log(`[voice] intent ${intent.intent}${free ? (cfg.screen ? ' (asking claude with the screen)' : ' (asking claude)') : ''}`);
+  if (intent.intent === 'agent') {
+    const o = voiceOffers.offer(intent.task);
+    if (o) sendVoice({ state: 'offer', offer: o });
+    return Voice.answer(intent, {});
+  }
   const st = aggregateState({ ignoreTravel: true });
   const now = Date.now();
   const ctx = { sessions: st.sessions || [], pending: st.pending || [], now };
@@ -4186,20 +4304,33 @@ async function voiceReply(text, onCancel) {
     ctx.since = away ? away.from : undefined;
     ctx.awayKnown = !!away;
   }
+  let prefix = '';
+  if (free && cfg.screen) {
+    sendVoice({ state: 'thinking', heard: text, text: 'Looking…' });
+    const looking = speak('Looking');
+    onCancel(() => { try { looking?.kill(); } catch { /* done */ } });
+    const r = await voiceScreen.ask({ question: text, snap: Voice.snapshot(ctx), point: cfg.point, onCancel });
+    if (r.text) {
+      if (r.points.length) pointer.show({ from: widgetCentre(), points: r.points });
+      return r.text;
+    }
+    if (r.permission) prefix = `${VoiceCapture.PERMISSION_TEXT} `;
+  }
   if (free) {
     const ask = VoiceHelper.askClaude({
       spawn, fs, tmpdir: os.tmpdir(), args: Voice.claudeArgs(), prompt: Voice.claudePrompt(text, Voice.snapshot(ctx)),
-      env: Voice.claudeEnv(process.env, `${path.join(os.homedir(), '.local', 'bin')}:/opt/homebrew/bin:/usr/local/bin`),
+      env: voiceClaudeEnv(),
     });
     onCancel(ask.cancel);
     const said = await ask.promise;
-    if (said) return said;
+    if (said) return prefix + said;
   }
-  return Voice.answer(intent, ctx);
+  return prefix + Voice.answer(intent, ctx);
 }
 
 function startListening(holdKey) {
   flow.interrupt();
+  pointer.close();
   const r = listener.start({ holdKey });
   if (!r.ok && r.reason !== 'already listening') sendVoice({ state: 'error', error: r.reason });
   return r;
@@ -4228,7 +4359,7 @@ function initVoice() {
   powerMonitor.on('unlock-screen', back);
   powerMonitor.on('resume', back);
   applyVoiceHotkey();
-  onQuit(app, () => { globalShortcut.unregisterAll(); listener.cancel(); });
+  onQuit(app, () => { globalShortcut.unregisterAll(); listener.cancel(); pointer.close(); });
 }
 
 // A long-press where voice can't work (not a Mac, helper not bundled) stays
@@ -4239,11 +4370,31 @@ ipcMain.handle('voice-start', () => {
 });
 ipcMain.handle('voice-enabled', () => listener.available() && Voice.normalizeConfig(loadConfig().voice).longPress);
 ipcMain.handle('voice-stop', () => listener.stop());
+// Agent mode: only the widget's Start on the current offer opens the Tasks
+// composer with the words filled in; the task itself is created there, after
+// the user picks a folder and presses Start task (tasks:create).
+ipcMain.handle('voice-offer', (e, id, action) => {
+  if (!widgetOnly(e)) return { ok: false };
+  const task = voiceOffers.take(typeof id === 'string' ? id : '', action === 'start' ? 'start' : 'cancel');
+  if (!task) return { ok: false };
+  voiceTaskDraft = task;
+  openBuddy('tasks');
+  for (const wc of tasksPages()) wc.send('tasks:voice-draft-ready');
+  return { ok: true };
+});
+ipcMain.handle('tasks:voice-draft', (e) => {
+  if (!tasksSenderOk(e)) return null;
+  const t = voiceTaskDraft;
+  voiceTaskDraft = null;
+  return t;
+});
 utilityHandle('voice-status', settingsOnly, () => ({
   available: listener.available(),
   reason: listener.available() ? null : listener.unavailableReason(),
   hotkeys: Voice.HOTKEYS.map(({ accelerator, label }) => ({ accelerator, label })),
   hotkeyTaken: voiceHotkeyTaken,
+  preset: Voice.PRESET_HOTKEY,
+  screenAccess: IS_MAC ? voiceScreen.permission() : 'unsupported',
 }));
 
 
@@ -4289,7 +4440,28 @@ ipcMain.handle('answer-input', (e, id, optionId, more = {}) => {
   if (!SHOW_RULE_NUDGE) return { ok: true };
   let n = null;
   try { n = String(optionId) === 'allow' ? nudger.record(req, loadConfig().autoAnswer.rules) : null; } catch (err) { console.warn('[nudge]', err.message); }
-  if (!n || !n.nudge) return { ok: true };
+  if (!n || !n.nudge || !InterruptGate.isInterruptible()) return { ok: true };
+  nudger.offer(n.key);
+  return { ok: true, nudge: { key: n.key, count: n.count, tools: n.nudge.tools, command: n.nudge.command || null, path: n.nudge.path || null } };
+});
+// Quick decision cards on the Home Inbox: same gates and the same rebuilt
+// answer as answer-input, from the Home page only; no extras, no Enter path.
+ipcMain.handle('home:answer-input', (e, id, optionId) => {
+  if (!fromUtilityPage(e, 'home')) return { ok: false, error: 'not allowed' };
+  if (!loadConfig().askFromWidget) return { ok: false, error: 'off' };
+  if (typeof id !== 'string' || id.length > 100 || typeof optionId !== 'string' || optionId.length > 100) return { ok: false, error: 'invalid' };
+  const req = readRequests().find((r) => r.id === id);
+  if (!req) return { ok: false, error: 'no longer waiting (answered, timed out, or answer it in the terminal)' };
+  const answer = PendingInputs.answerFor(req, optionId);
+  if (!answer) return { ok: false, error: 'not an option for this request' };
+  const w = AnswerFile.writeAnswer(REQUESTS_DIR, req.id, answer.decision, { by: 'home', extra: answer.extra, key: keyFor(req.id), decisionHash: req.decisionHash });
+  console.log(`[answer] ${req.kind || 'permission'} ${req.tool} ${req.id}: ${optionId} → ${w.ok ? answer.decision : `not sent (${w.error})`} (home)`);
+  setTimeout(broadcastStatus, 250);
+  if (!w.ok) return { ok: false, error: w.error };
+  if (!SHOW_RULE_NUDGE) return { ok: true };
+  let n = null;
+  try { n = optionId === 'allow' ? nudger.record(req, loadConfig().autoAnswer.rules) : null; } catch (err) { console.warn('[nudge]', err.message); }
+  if (!n || !n.nudge || !InterruptGate.isInterruptible()) return { ok: true };
   nudger.offer(n.key);
   return { ok: true, nudge: { key: n.key, count: n.count, tools: n.nudge.tools, command: n.nudge.command || null, path: n.nudge.path || null } };
 });
@@ -4407,6 +4579,9 @@ const WidgetStrip = require('./src/widget-strip.js');
 let strip = WidgetStrip.NONE;
 let applyingStrip = false;
 require('./src/widget-page.js').register({ utilityHandle, allowed: (e) => fromUtilityPage(e, 'widget'), loadConfig, commitConfig, widget: () => win, strip: () => strip, ensureWidget: () => { if (!win) createWindow(); applyWidgetVisibility(); }, resizeBy, busy: () => roamState.busy || !!gardenRun, stopGlide, saveBounds, screen, limits: { minWidth: MIN_WIDTH, maxWidth: MAX_WIDTH }, openPage: (id) => { openBuddy(id); if (id === 'settings') buddyWin?.sendToPage('settings', 'show-section', 'widget'); }, platform: process.platform });
+require('./src/rule-notify-main.js').install({ Notification, busy: () => BusyWatch.holding(), handle: utilityHandle, allowed: widgetConfigSender, config: loadConfig, sessions: () => aggregateState({ ignoreTravel: true }).sessions || [], env: () => { const c = loadConfig(); return { offline: !online, ...BusyWatch.env(), git: c.gitSignals !== false ? git.active() : [], spend: spendSnapshot(c) }; }, log: console.log });
+const WidgetPolish = require('./src/widget-polish-main.js').install({ ipcMain, globalShortcut, utilityHandle, config: loadConfig, commitConfig, widgetWindow: () => win, quiet: Quiet, widgetAllowed: (e) => widgetOnly(e), pageAllowed: (e) => fromUtilityPage(e, 'widget'), sessions: () => localSessions(aggregateState().sessions || []), strip: () => strip, saveBounds, stopGlide, screen, sizing: { aspect: WIDGET_ASPECT, minWidth: MIN_WIDTH }, log: console.log });
+const FirstRunTour = require('./src/first-run-tour-main.js').install({ ipcMain, config: loadConfig, saveConfig, demo: Demo, hasConnectedTool: () => AiTools.quick().some((t) => t.connected), windows: { widget: () => win, widgetShown: () => !!win && !win.isDestroyed() && win.isVisible(), lights: () => lightsWin, openLights: () => createLightsWindow(), openPage: (id) => openBuddy(id), sendToPage: (id, ch, p) => !!buddyWin?.sendToPage(id, ch, p) }, allowed: { widget: (e) => widgetOnly(e), lights: (e) => fromPage(e, lightsWin?.webContents), page: (e, id) => fromUtilityPage(e, id) }, log: console.log });
 let updateRowShown = false;
 ipcMain.on('update-row', (e, on) => {
   if (e.sender !== win?.webContents || !!on === updateRowShown) return;
@@ -4538,15 +4713,80 @@ utilityHandle('mcp-set-enabled', (e) => fromUtilityPage(e, 'aitools'), (_e, on) 
 const AiTools = require('./src/ai-tools-wire.js').wire({ ipcMain, shell, clipboard, home: os.homedir(), runtime: HOOK_RUNTIME, rootDir: ROOT_DIR, fromPage: (e) => fromUtilityPage(e, 'aitools'), askFromWidget: () => !!loadConfig().askFromWidget, ephemeral: EPHEMERAL, openPage: openBuddy, onClaudeConsent: (on) => saveConfig({ claudeAutoConnect: on }) });
 const aiToolsOpen = (destination) => AiTools.open(destination);
 require('./src/home-main.js').register({ ipcMain, allowed: (e) => fromUtilityPage(e, 'home'), state: () => aggregateState(), localSessions, tools: () => AiTools.quick(), myDay: MyDay, openPage: openBuddy, openAiTools: aiToolsOpen, collisions: CollisionAlerts.rowCollisions(collisionAlerts), costGuard: () => (costGuardReport ? costGuardReport() : null), resumeCap: () => (costGuardResume ? costGuardResume() : null), demo: Demo });
+require('./src/widget-lane-main.js').install({ ipcMain, send: (ch, v) => { if (win && !win.isDestroyed()) win.webContents.send(ch, v); }, allowed: (e) => !!win && !win.isDestroyed() && e.sender === win.webContents, sources: { state: () => aggregateState(), local: localSessions, collisions: collisionAlerts, git, spend: () => spendSnapshot(loadConfig()), warnAt: () => loadConfig().spend.warnAt } });
 // Home's "Start with a pack" card (src/starter-pack-main.js): the stack of recent folders, the matching gallery pack, one confirm, then its first recipe as a task.
 {
   const StarterMain = require('./src/starter-pack-main.js');
   const starter = StarterMain.create({ store: require('./src/starter-pack.js').createStore({ dir: ROOT_DIR }), gallery: galleryService, recipes, characters: characterStore, tasks: getTasks, confirm: tasksConfirm, turns: () => getUsageTurns(), sessions: () => localSessions(aggregateState().sessions || []), tools: () => AiTools.quick(), demo: () => Demo.active() });
   StarterMain.register({ ipcMain, allowed: (e) => fromUtilityPage(e, 'home'), starter });
+  onQuit(app, () => starter.close());
 }
-require('./src/home-alerts.js').wire({ ipcMain, dialog, clipboard, homeAllowed: (e) => fromUtilityPage(e, 'home'), usageAllowed: (e) => fromUtilityPage(e, 'usage'), sessions: () => aggregateState().sessions || [], burst: () => BurstIpc.snapshot().d, tasksRows: () => tasksSvc?.snapshot().tasks || [], tasksService: getTasks, handoverText: (key) => SessionHandoverMain.writer.text(key), jump: (s) => jumpToSession(s, Rules.folderOf(s.cwd), s.hostApp), mail: () => AgentMail.pending(), openMail: async () => { openBuddy('sessions'); } });
-require('./src/digest-main.js').register({ ipcMain, allowed: (e) => fromUtilityPage(e, 'home'), rootDir: ROOT_DIR, userData: app.getPath('userData'), safeStorage: require('electron').safeStorage, clipboard, dialog, shell, Notification, fetch: (...a) => net.fetch(...a), usageTurns: () => getUsageTurns(), costGuard: () => (costGuardReport ? costGuardReport() : null), workCost: () => workCostReport(), scheduledRuns: (from, to) => (recipeScheduler ? recipeScheduler.runsBetween(from, to).map((h) => ({ ...h, title: recipes.find(h.id)?.title || 'A recipe' })) : []), teamBrief: (cwd) => (loadConfig().teamBrief === true ? TeamActivity.call('team_brief', { cwd }) : null), openHome: () => openBuddy('home'), onQuit: (fn) => onQuit(app, fn), log: (m) => console.warn(m) }); // privacy-flow: digest-slack
+require('./src/home-alerts.js').wire({ ipcMain, dialog, clipboard, homeAllowed: (e) => fromUtilityPage(e, 'home'), usageAllowed: (e) => fromUtilityPage(e, 'usage'), sessions: () => aggregateState().sessions || [], burst: () => BurstIpc.snapshot().d, burstView: () => BurstIpc.status(), burstLooseEnds: () => BurstIpc.looseEndsView(), burstAct: async (kind) => { const r = await BurstIpc.act(kind); return r && r.error === 'Unknown action.' ? BurstIpc.runAction(kind) : r; }, tasksRows: () => tasksSvc?.snapshot().tasks || [], tasksService: getTasks, handoverText: (key) => SessionHandoverMain.writer.text(key), jump: (s) => jumpToSession(s, Rules.folderOf(s.cwd), s.hostApp), mail: () => AgentMail.pending(), openMail: async () => { openBuddy('sessions'); } });
+require('./src/digest-main.js').register({ ipcMain, allowed: (e) => fromUtilityPage(e, 'home'), rootDir: ROOT_DIR, userData: app.getPath('userData'), safeStorage: require('electron').safeStorage, clipboard, dialog, shell, Notification, fetch: (...a) => net.fetch(...a), usageTurns: () => getUsageTurns(), costGuard: () => (costGuardReport ? costGuardReport() : null), workCost: () => workCostReport(), scheduledRuns: (from, to) => (recipeScheduler ? recipeScheduler.runsBetween(from, to).map((h) => ({ ...h, title: recipes.find(h.id)?.title || 'A recipe' })) : []), teamBrief: (cwd) => (loadConfig().teamBrief === true ? TeamActivity.call('team_brief', { cwd }) : null), interruptible: () => InterruptGate.isInterruptible(), openHome: () => openBuddy('home'), onQuit: (fn) => onQuit(app, fn), log: (m) => console.warn(m) }); // privacy-flow: digest-slack
 { const TeamToday = require('./src/team-today.js'); const fake = IS_DEV_RUN && !app.isPackaged && process.env.CLAUDE_BUDDY_FAKE_TEAM_TODAY; TeamToday.wire({ ipcMain, allowed: (e) => fromUtilityPage(e, 'home'), file: path.join(ROOT_DIR, 'team-today.json'), log: (m) => console.log(m), ...(fake ? TeamToday.fixtureSources(JSON.parse(fs.readFileSync(fake, 'utf8'))) : { links: async () => (await buddyWin?.teamMemoryLinks?.()) ?? [], board: async (route) => (await buddyWin?.teamBoardSnapshot?.(route)) ?? null, mine: () => buddyWin?.workCostRows?.().records ?? [], fetch: (...a) => net.fetch(...a) }) }); } // privacy-flow: team-today
+// Team depth lane B: the hub inbox. Live rows arrive as `inbox.item` on the
+// lane C presence sockets (one per linked board, PresenceLink above) and are
+// ingested at once; main also polls GET /api/account/inbox on every linked hub
+// once a minute as the fallback and to reconcile read_at. Both paths fold the
+// rows into Home's Inbox and the dock badge and raise a silent notification
+// for a mention or a hand-off request (at most one per 30 s per hub).
+const TEAM_INBOX_POLL_MS = 60_000;
+function ingestTeamInbox(origin, items) {
+  const fresh = teamInbox.ingest(origin, items);
+  for (const n of teamInbox.toNotify(fresh)) {
+    if (IS_DEV_RUN || !Notification.isSupported()) continue;
+    const note = new Notification({ title: n.title, body: n.body, silent: true });
+    note.on('click', () => openBuddy('home'));
+    note.show();
+  }
+  syncQuietBadge(aggregateState());
+  return fresh;
+}
+async function teamInboxHubs() {
+  let links = [];
+  try { links = (await buddyWin?.teamMemoryLinks?.()) ?? []; } catch { links = []; }
+  const hubs = new Map();
+  for (const l of links) if (l?.route?.hub && typeof l.route.hub === 'string' && !hubs.has(l.route.hub)) hubs.set(l.route.hub, l.token);
+  return hubs;
+}
+async function pollTeamInbox() {
+  void PresenceLink.refresh(); // keeps a live socket per linked board open so inbox.item arrives without the poll
+  const hubs = await teamInboxHubs();
+  for (const [origin, token] of hubs) {
+    let res;
+    try {
+      const tok = typeof token === 'function' ? await token() : token;
+      if (!tok) continue;
+      const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 8000);
+      res = await net.fetch(`${origin}/api/account/inbox`, { method: 'GET', redirect: 'error', signal: ctl.signal, headers: { authorization: `Bearer ${tok}`, accept: 'application/json' } }).finally(() => clearTimeout(t)); // privacy-flow: team-hub
+    } catch { continue; }
+    if (!res || res.status !== 200) continue; // an older hub without the route (404) hides the feature
+    let body = null;
+    try { body = JSON.parse((await res.text()).slice(0, 1_000_000)); } catch { body = null; }
+    ingestTeamInbox(origin, Array.isArray(body?.items) ? body.items : []);
+  }
+  syncQuietBadge(aggregateState());
+}
+{ const t = setInterval(() => void pollTeamInbox(), TEAM_INBOX_POLL_MS); t.unref?.(); setTimeout(() => void pollTeamInbox(), 5000).unref?.(); }
+ipcMain.handle('home:team-inbox', (e) => (fromUtilityPage(e, 'home') ? teamInbox.items() : []));
+ipcMain.handle('home:inbox-read', async (e, keys) => {
+  if (!fromUtilityPage(e, 'home')) return { ok: false, error: 'not allowed' };
+  if (!Array.isArray(keys) || keys.length > 50 || keys.some((k) => typeof k !== 'string' || k.length > 300)) return { ok: false, error: 'invalid' };
+  const groups = teamInbox.markRead(keys);
+  syncQuietBadge(aggregateState());
+  const hubs = await teamInboxHubs();
+  let read = 0;
+  for (const { origin, ids } of groups) {
+    const token = hubs.get(origin);
+    try {
+      const tok = typeof token === 'function' ? await token() : token;
+      if (!tok) continue;
+      const res = await net.fetch(`${origin}/api/account/inbox/read`, { method: 'POST', redirect: 'error', headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json', accept: 'application/json' }, body: JSON.stringify({ request_id: require('crypto').randomUUID(), ids }) }); // privacy-flow: team-hub
+      if (res.status === 200) read += Number((await res.json())?.read) || 0;
+    } catch { /* the hub hears about it on the next poll */ }
+  }
+  return { ok: true, read };
+});
 // Preferences' "Connect other agents" buttons open the AI tools page on that
 // tool, where the exact change is previewed and confirmed (src/ai-tools.js).
 ipcMain.handle('connect-agent', async (e, which) => {
@@ -4996,6 +5236,7 @@ app.whenReady().then(() => {
   Watchdog.step('tray+signal-server');
   createTray();
   signalServer = startSignalServer();
+  startupUp();
   syncFastHook();
   signalServer.on('error', (e) => { signalServerError = e.code || e.message; });
   signalServer.on('listening', () => { signalServerError = null; });

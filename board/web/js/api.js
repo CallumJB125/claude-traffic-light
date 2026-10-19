@@ -57,6 +57,9 @@ export const api = {
   // Accounts mode (ACCOUNTS-API.md): which sign-ins the hub offers, a first team, joining one.
   methods: () => call('GET', '/api/auth/methods'),
   setupAccount: () => mut('POST', '/api/account/setup'),
+  // Team depth lane B: your hub inbox (CONTRACT GET /api/account/inbox, POST …/read).
+  inbox: () => call('GET', '/api/account/inbox'),
+  inboxRead: (body) => mut('POST', '/api/account/inbox/read', body),
   // Paid plans (billing.html): hosted Checkout / portal links come back as {url}.
   billing: () => call('GET', '/api/billing'),
   billingCheckout: (interval) => mut('POST', '/api/billing/checkout', { interval }),
@@ -106,6 +109,14 @@ export const api = {
   // The hub prints a per-process dev secret at startup (never behind a proxy/tunnel).
   devLogin: (github_login, secret) => call('POST', '/api/dev/login', { github_login }, { headers: { 'Board-Dev-Secret': secret ?? '' } }),
   board: (id, { includeArchived = false } = {}) => call('GET', `/api/boards/${enc(id)}${includeArchived ? '?include_archived=1' : ''}`),
+  addPin: (boardId, pin) => mut('POST', `/api/boards/${enc(boardId)}/pins`, { pin }),
+  removePin: (boardId, id) => mut('DELETE', `/api/boards/${enc(boardId)}/pins/${enc(id)}`),
+  saveView: (boardId, view) => mut('POST', `/api/boards/${enc(boardId)}/views`, { view }),
+  removeView: (boardId, id) => mut('DELETE', `/api/boards/${enc(boardId)}/views/${enc(id)}`),
+  markMoment: (boardId, moment) => mut('POST', `/api/boards/${enc(boardId)}/moments`, { moment }),
+  removeMoment: (boardId, id) => mut('DELETE', `/api/boards/${enc(boardId)}/moments/${enc(id)}`),
+  momentComments: (boardId, id) => call('GET', `/api/boards/${enc(boardId)}/moments/${enc(id)}/comments`),
+  momentComment: (boardId, id, body) => mut('POST', `/api/boards/${enc(boardId)}/moments/${enc(id)}/comments`, { body }),
   labels: (boardId) => call('GET', `/api/boards/${enc(boardId)}/labels`),
   createLabel: (boardId, name, color) => mut('POST', `/api/boards/${enc(boardId)}/labels`, { name, color }),
   patchLabel: (boardId, name, patch) => mut('PATCH', `/api/boards/${enc(boardId)}/labels/${enc(name)}`, patch),
@@ -130,6 +141,12 @@ export const api = {
     return call('GET', `/api/cards/${enc(id)}/overlap-preview${q.size ? `?${q}` : ''}`);
   },
   continueSeed: (id, recordId) => call('GET', `/api/cards/${enc(id)}/continue-seed${recordId ? `?${new URLSearchParams({ record_id: recordId })}` : ''}`),
+  // Person-to-person hand-off of a card (team depth lane D).
+  requestHandoff: (cardId, body) => mut('POST', `/api/cards/${enc(cardId)}/handoffs`, body),
+  answerHandoff: (cardId, handoffId, verb) => mut('POST', `/api/cards/${enc(cardId)}/handoffs/${enc(handoffId)}/${enc(verb)}`),
+  // Hand-offs teammates offered you through their AI (team_hand_off), and the ones you sent: CONTRACT messaging v1.
+  handoffMessages: (box) => call('GET', `/api/messaging/v1/messages?box=${enc(box)}&limit=50`),
+  decideHandoff: (id, decision, report) => call('POST', `/api/messaging/v1/messages/${enc(id)}/handoff`, { decision, ...(report ? { report } : {}) }),
   handoffRecord: (teamId, recordId, body) => mut('POST', `/api/teams/${enc(teamId)}/activity/v1/records/${enc(recordId)}/handoff`, body),
   repos: () => call('GET', '/api/repos'),
   // Integrations (team-level; admins connect, configure and disconnect).

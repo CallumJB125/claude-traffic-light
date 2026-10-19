@@ -91,7 +91,7 @@
   // ───────────────────────── detail ─────────────────────────
   async function openTask(id) {
     const my = id;
-    d = { id, loading: true, tab: 'transcript', tx: TV.newTranscript(), messages: [], follow: true, error: '', confirm: null, takeover: null, detail: null, shown: { dropped: 0 }, unreadMsg: 0 };
+    d = { id, loading: true, tab: 'overview', tx: TV.newTranscript(), messages: [], follow: true, error: '', confirm: null, takeover: null, detail: null, shown: { dropped: 0 }, unreadMsg: 0, diff: null };
     $('main').replaceChildren(Object.assign(el('div', 'center'), {}));
     $('main').firstChild.append(el('h2', null, 'Opening…'));
     const r = await api.open(id);
@@ -124,7 +124,7 @@
     root.children[1].id = 'd-banners';
     const tabs = root.children[2];
     tabs.setAttribute('role', 'tablist');
-    for (const [id, label] of [['transcript', 'Transcript'], ['messages', 'Messages'], ['details', 'Details']]) {
+    for (const [id, label] of [['overview', 'Overview'], ['transcript', 'Transcript'], ['messages', 'Messages'], ['details', 'Details']]) {
       const t = el('button', 'tab', label);
       t.type = 'button'; t.id = `tab-${id}`; t.setAttribute('role', 'tab');
       t.addEventListener('click', () => setTab(id));
@@ -139,19 +139,21 @@
     const thread = el('div', 'thread'); thread.id = 'thread';
     msgs.append(thread, buildSendForm());
     const det = el('section', 'pane'); det.id = 'pane-details';
-    root.append(tx, msgs, det);
+    const overview = el('section', 'pane'); overview.id = 'pane-overview';
+    root.append(overview, tx, msgs, det);
     main.append(root);
     setTab(d.tab);
   }
 
   function setTab(id) {
     d.tab = id;
-    for (const t of ['transcript', 'messages', 'details']) {
+    for (const t of ['overview', 'transcript', 'messages', 'details']) {
       $(`pane-${t}`).hidden = t !== id;
       $(`tab-${t}`).setAttribute('aria-selected', String(t === id));
     }
     if (id === 'messages') { d.unreadMsg = 0; scrollToEnd($('pane-messages')); }
     if (id === 'details') renderDetails();
+    if (id === 'overview') renderOverview();
     updateTabBadge();
   }
   function updateTabBadge() {
@@ -176,11 +178,16 @@
     head.append(actions);
     for (const a of actionButtons(t)) actions.append(a);
     if (d.confirm) head.append(confirmBar(t));
+    if (d.integration && t.state === 'in_review') head.append(integrationReview(d.integration));
+    if (d.providerChange && hasProviderChange(t)) head.append(providerChangeReview(d.providerChange));
+    if (d.prDraft && t.actions.includes('openPr')) head.append(pullRequestDraft());
+    if (d.pullRequest) head.append(pullRequestReview(d.pullRequest));
     const err = el('p', 'err', d.error); err.setAttribute('role', 'alert');
     head.append(err);
     renderBanners(t);
     $('send-box') && updateSendForm(t);
     if (d.tab === 'details') renderDetails();
+    if (d.tab === 'overview') renderOverview();
   }
 
   // Actions the supervisor allows right now, minus the ones with their own control (message, approve/deny/answer).
@@ -197,14 +204,15 @@
       if (t.parkReason === 'limit') out.push(go('resume', { when: 'reset' }, 'Resume when the limit resets'));
     }
     if (has('handback')) out.push(go('handback', {}, TV.ACTION_LABEL.handback, 'primary'));
-    if (has('merge')) out.push(go('merge', { strategy: 'merge' }, 'Merge into your branch', 'primary'));
-    if (has('openPr')) out.push(go('openPr', {}, TV.ACTION_LABEL.openPr));
+    if (has('merge')) { const review = btn(d.integrating ? 'Checking integration…' : 'Review integration', 'primary', () => runAct('merge', { phase: 'preview' })); review.disabled = !!d.integrating; out.push(review); }
+    if (has('openPr')) { const b=btn('Prepare draft pull request','',()=>{d.prDraft??={title:t.title||'',body:''};d.pullRequest=null;renderHead();});b.disabled=!!d.creatingPr;out.push(b); }
     if (has('retry')) { out.push(go('retry', {}, 'Retry')); out.push(go('retry', { fresh: true }, d.detail.checkpoint || d.detail.handover ? 'Restart from checkpoint' : 'Retry from scratch')); }
-    if (has('switchAi')) for (const id of Object.keys(TV.AI_NAME)) if (id !== t.ai.id) out.push(go('switchAi', { ai: id }, `Continue with ${TV.AI_NAME[id]}`));
+    if (has('switchAi')) for (const id of ['claude', 'codex']) if (id !== t.ai.id) out.push(go('switchAi', { phase: 'preview', ai: id }, `Continue with ${TV.AI_NAME[id]}`));
     if (has('pause')) out.push(go('pause', {}, TV.ACTION_LABEL.pause));
     if (has('takeover')) out.push(go('takeover', {}, TV.ACTION_LABEL.takeover));
     if (has('stop')) out.push(go('stop', {}, TV.ACTION_LABEL.stop, 'danger'));
     if (has('discard')) out.push(go('discard', {}, TV.ACTION_LABEL.discard, 'danger'));
+    if (d.switching) for (const button of out) button.disabled = true;
     return out;
   }
 
@@ -223,16 +231,90 @@
   }
 
   async function runAct(action, payload, confirmed = false) {
+    if (d.integrating || d.switching || d.creatingPr) return;
     d.error = '';
     d.takeover = null;
     const id = d.id;
-    const r = await api.act({ id, action, payload, confirmed });
+    if (action === 'merge') { d.integrating = true; if (payload.phase === 'apply') d.integration = null; renderHead(); }
+    else d.integration = null;
+    if (action === 'switchAi') { d.switching = true; if (payload.phase === 'apply') d.providerChange = null; renderHead(); }
+    else d.providerChange = null;
+    if (action === 'openPr') { d.creatingPr=true; renderHead(); }
+    else d.pullRequest=null;
+    let r;
+    try { r = await api.act({ id, action, payload, confirmed }); }
+    catch { r = { ok: false, text: action === 'merge' && payload.phase === 'apply' ? 'Integration receipt unconfirmed. Inspect your branch before reviewing another integration.' : TV.errorText('INTERNAL') }; }
     if (!d || d.id !== id) return r;
+    d.integrating = false;
+    d.switching = false;
+    d.creatingPr = false;
     if (r && r.cancelled) d.error = '';
     else if (!r || !r.ok) d.error = r?.text || TV.errorText('INTERNAL');
     else if (r.takeover) d.takeover = r.takeover;
+    else if (r.integration) { d.integration = r.integration.status === 'merged' ? null : r.integration; if (r.integration.status === 'merged') d.error = 'Reviewed changes integrated. Nothing was pushed; the task worktree is kept.'; }
+    else if (r.providerChange) { d.providerChange = r.providerChange.status === 'review' ? r.providerChange : null; if (r.providerChange.status === 'queued') d.error = `Reviewed handover queued for ${TV.AI_NAME[r.providerChange.to]}. Watch this task for the new session’s response.`; }
+    else if (r.pullRequest) { d.pullRequest=r.pullRequest;d.prDraft=null; }
     renderHead();
     return r;
+  }
+
+  const hasProviderChange = t => t.actions.includes('switchAi');
+  function pullRequestDraft() {
+    const box=el('section','integration-review pr-draft'),title=el('input'),body=el('textarea');
+    box.append(el('h3',null,'Prepare a GitHub draft'),el('p',null,'Commit and publish this task branch first. Plexiform checks its current GitHub destination and changes, then asks you to confirm the exact draft.'));
+    title.value=d.prDraft.title;title.maxLength=120;title.setAttribute('aria-label','Pull request title');
+    body.value=d.prDraft.body;body.maxLength=10000;body.rows=5;body.setAttribute('aria-label','Pull request description');
+    title.disabled=body.disabled=!!d.creatingPr;
+    title.addEventListener('input',()=>{d.prDraft.title=title.value;});body.addEventListener('input',()=>{d.prDraft.body=body.value;});
+    const review=btn(d.creatingPr?'Checking GitHub…':'Review draft pull request','primary',()=>runAct('openPr',{phase:'preview',title:title.value,body:body.value}));review.disabled=!!d.creatingPr;
+    const cancel=btn('Close draft','',()=>{d.prDraft=null;renderHead();});cancel.disabled=!!d.creatingPr;box.append(title,body,review,cancel);return box;
+  }
+  function pullRequestReview(r) {
+    const box=el('section','integration-review pr-review');box.append(el('h3',null,r.status==='created'?`Pull request #${r.number}`:'GitHub draft review'));
+    if(r.status==='created') {const link=el('a','btn','Open pull request on GitHub');link.href=r.url;link.target='_blank';link.rel='noopener noreferrer';box.append(el('p',null,r.draft?'Draft created.':'Pull request receipt recovered.'),link);if(r.changed)box.append(el('p','err','The remote branches changed. Review the current changes on GitHub before merging.'));return box;}
+    if(r.status==='review') {
+      box.append(el('p',null,`${r.account} · ${r.repo} · ${r.branch} → ${r.base}`),el('p','sub',`Head ${r.head} · Base ${r.baseHead}`),el('h4',null,r.title),el('pre',null,r.body),el('p',null,'Creates a draft only. Nothing is pushed. Later commits to these branches change the pull request.'));
+      const diff=el('details');diff.append(el('summary',null,'Review published changes'),el('pre','diff',r.patch));box.append(diff);
+      const apply=btn('Create reviewed draft…','primary',()=>runAct('openPr',{phase:'apply',review:r.review}));apply.disabled=!!d.creatingPr||Date.now()>=r.expiresAt;box.append(apply);
+    } else {box.append(el('p',null,r.reason));if(r.status==='unconfirmed'){const check=btn('Check saved GitHub receipt','',()=>runAct('openPr',{phase:'receipt'}));check.disabled=!!d.creatingPr;box.append(check);}}
+    const close=btn('Close pull request review','',()=>{d.pullRequest=null;renderHead();});close.disabled=!!d.creatingPr;box.append(close);return box;
+  }
+  function providerChangeReview(review) {
+    const box = el('section', 'integration-review provider-review');
+    box.append(el('h3', null, `${TV.AI_NAME[review.from]} → ${TV.AI_NAME[review.to]}`), el('p', null, `Start a new session in the same worktree on ${review.branch}, using reviewed task context v${review.contextVersion}.`),
+      el('p', null, `Permission: ${review.permissionLevel} · Model: ${TV.AI_NAME[review.to]} default · ${review.budgetUsd === null ? 'No task spend cap' : `$${review.budgetUsd} task cap; $${review.spentUsd} spent`}. ${review.planFirst ? 'The new AI must submit a fresh plan.' : ''}`));
+    const context = el('details'); context.append(el('summary', null, 'Task context to pass to the new AI'), el('pre', null, review.handover)); box.append(context);
+    if (review.messagesText) { const messages = el('details'); messages.append(el('summary', null, 'Queued task messages to pass to the new AI'), el('pre', null, review.messagesText)); box.append(messages); }
+    const changes = el('details'); changes.append(el('summary', null, `${review.files.length} changed file(s) in the worktree`), el('pre', 'diff', review.patch || 'No changes from the task’s starting revision.')); box.append(changes);
+    const apply = btn(`Start reviewed ${TV.AI_NAME[review.to]} session…`, 'primary', () => runAct('switchAi', { phase: 'apply', review: review.review }));
+    apply.disabled = !!d.switching || Date.now() >= review.expiresAt;
+    const cancel = btn('Close handover review', '', () => { d.providerChange = null; renderHead(); }); cancel.disabled = !!d.switching;
+    box.append(apply, cancel); return box;
+  }
+
+  function integrationReview(review) {
+    const box = el('section', 'integration-review');
+    box.append(el('h3', null, `Integration into ${review.branch}`), el('p', null, review.reason));
+    if (review.coordination) {
+      box.append(el('p', 'sub', `Task context v${review.coordination.decisionVersion} · ${review.coordination.observedClaims} other local task claim(s) checked. Claims report observed work; they are not filesystem locks.`));
+      for (const conflict of review.coordination.conflicts) {
+        const item = el('p');
+        const reason = conflict.reason === 'overlap' ? `Overlapping paths: ${conflict.paths.join(', ')}` : conflict.reason === 'destination-active' ? 'This task may still edit the destination checkout.' : 'This task’s current editing paths are not fully known.';
+        item.append(el('span', null, `${conflict.title} · ${conflict.state} · ${reason} `), btn('Inspect task', '', () => selectTask(conflict.taskId)));
+        box.append(item);
+      }
+    }
+    const list = el('ul');
+    for (const file of review.files) list.append(el('li', null, `${file.status} · ${file.path}`));
+    box.append(list);
+    if (review.patch) box.append(el('pre', 'diff', review.patch));
+    if (review.canApply && review.review) {
+      const confirm = btn('Integrate reviewed changes…', 'primary', () => runAct('merge', { phase: 'apply', review: review.review }));
+      confirm.disabled = !!d.integrating || Date.now() >= review.expiresAt;
+      box.append(confirm, el('p', 'sub', 'Plexiform asks you to confirm this exact review. A changed source or checkout requires a new review.'));
+    }
+    const cancel = btn('Close review', '', () => { d.integration = null; renderHead(); }); cancel.disabled = !!d.integrating; box.append(cancel);
+    return box;
   }
 
   // Permission requests, questions and the supervisor's own choices (wait for the limit, switch AI…).
@@ -281,10 +363,24 @@
     }
     if (d.takeover) {
       const c = el('div', 'takeover');
-      c.append(el('strong', null, 'Run this in your terminal to carry on'), (() => { const p = el('pre', null, d.takeover.command); return p; })());
+      c.append(el('strong', null, 'Continue this session in your terminal'), (() => { const p = el('pre', null, d.takeover.command); return p; })());
       if (d.takeover.note) c.append(el('p', null, d.takeover.note));
-      const copied = el('span', null, '');
-      c.append(btn('Copy command', '', async () => { copied.textContent = (await api.copyTakeover(d.id)) ? ' Copied.' : ' Could not copy.'; }), copied);
+      const copied = el('span', null, d.takeover.resultText || '');
+      const identity = d, handover = d.takeover;
+      const copy = btn('Copy command', '', async () => { const ok = await api.copyTakeover(identity.id); if (d !== identity || d.takeover !== handover) return; copied.textContent = handover.resultText = ok ? ' Copied. Run it once, then exit before handing back.' : ' This handover has expired or was already used.'; if (ok) { handover.used = true; copy.disabled = true; if (open) open.disabled = true; } });
+      const open = handover.canOpen && api.openTerminal ? btn('Open in Terminal…', 'primary', async () => {
+        handover.pending = true; open.disabled = true; copy.disabled = true;
+        let result;
+        try { result = await api.openTerminal(identity.id); } catch { result = { text: 'Terminal launch could not be confirmed. Check Terminal before handing the task back.' }; }
+        if (d !== identity || d.takeover !== handover) return;
+        handover.pending = false; handover.used = !result?.cancelled;
+        copied.textContent = handover.resultText = result?.text || '';
+        if (result?.cancelled) { open.disabled = false; copy.disabled = false; }
+      }) : null;
+      if (open) c.append(open);
+      copy.disabled = !!(handover.used || handover.pending);
+      if (open) open.disabled = copy.disabled;
+      c.append(copy, copied);
       box.append(c);
     }
   }
@@ -296,6 +392,7 @@
   function syncTranscript() {
     const box = $('tx');
     if (!box || !d) return;
+    if (d.tab === 'overview') renderOverview();
     const t = d.tx;
     for (; d.shown.dropped < t.dropped; d.shown.dropped++) box.firstElementChild?.remove();
     t.items.forEach((it, i) => {
@@ -330,6 +427,7 @@
     for (const m of d.messages) {
       const mine = TV.isMine(m);
       const b = el('div', `bubble ${mine ? 'out' : 'in'}${m.quarantined ? ' flagged' : ''}`);
+      b.dataset.messageId = m.id; b.tabIndex = -1;
       const peer = !mine && m.direction === 'in';
       b.append(el('div', 'who', mine ? 'You' : m.direction === 'out' ? `This task to ${TV.partyText(m.to)}` : `From ${TV.partyText(m.from)}${peer ? ' (untrusted)' : ''}`));
       b.append(el('div', 'body', m.body));
@@ -373,6 +471,188 @@
     hint.textContent = can ? (bytes > TV.LIMITS.message * 0.8 ? `${bytes.toLocaleString('en')} of ${TV.LIMITS.message.toLocaleString('en')} bytes · ` : '') + '⌘↵ to send' : `You can't message this task while it is "${t.label}".`;
   }
 
+  // A compact landing view of this exact task. Reports never imply independent
+  // verification, and all actions still go through the existing guarded flows.
+  function renderCollaboration(pane, task, live) {
+    const parentId = Object.hasOwn(live, 'parentId') ? live.parentId : task.parentId;
+    const children = (snap?.tasks || []).filter(row => row.parentId === task.id);
+    const receipts = Array.isArray(task.collaboration) ? task.collaboration.slice(-50).sort((a, b) => b.at - a.at) : [];
+    if (!parentId && !children.length && !receipts.length) return;
+    pane.append(el('h3', 'sect', 'Agent collaboration'));
+    const family = el('div', 'box');
+    const related = (id, label) => {
+      const row = byId(id), line = el('p');
+      line.append(el('span', null, `${label}: ${row ? `${row.title || 'Untitled task'} · ${row.label || row.state}` : 'Not available in the current task list'} `));
+      if (row) { const open = btn('Open task', 'small', () => selectTask(id)); open.setAttribute('aria-label', `Open task: ${row.title || 'Untitled task'}`); line.append(open); }
+      return line;
+    };
+    if (parentId) family.append(related(parentId, 'Requested by'));
+    for (const child of children.slice(0, 20)) family.append(related(child.id, 'Helping task'));
+    if (children.length > 20) family.append(el('p', 'tx-empty', `Showing 20 of ${children.length} helping tasks. All remain in the task list.`));
+    if (family.childNodes.length) pane.append(family);
+    if (!receipts.length) return;
+    pane.append(el('p', 'tx-empty', 'Request receipts track delivery. An agent response must be checked in the conversation.'));
+    const list = el('ol', 'box');
+    const earlier = el('details'), olderList = el('ol', 'box');
+    earlier.append(el('summary', null, `${Math.max(0, receipts.length - 5)} earlier request receipts`), olderList);
+    const labels = { pending: 'Pending · no delivery confirmed', queued: 'Queued · waiting for delivery', delivered: 'Delivered · no agent response confirmed', uncertain: 'Delivery uncertain · check the conversation before retrying' };
+    for (const [index, receipt] of receipts.entries()) {
+      const item = el('li');
+      item.append(el('strong', null, receipt.kind === 'buddy_spin_off' ? 'Delegated task' : 'Message to agent'), el('p', null, labels[receipt.state] || 'Delivery not confirmed'));
+      if (Number.isFinite(receipt.at)) item.append(el('p', 'tx-empty', new Date(receipt.at).toLocaleString()));
+      if (receipt.taskId) item.append(related(receipt.taskId, 'Recipient'));
+      const message = receipt.messageId && d.messages.find(m => m.id === receipt.messageId);
+      if (message) item.append(btn('View message', 'small', () => {
+        setTab('messages');
+        const bubble = [...$('thread').children].find(node => node.dataset.messageId === receipt.messageId);
+        bubble?.scrollIntoView({ block: 'center' }); bubble?.focus();
+      }));
+      const details = el('details');
+      details.append(el('summary', null, 'Delivery details'), el('p', null, `Request: ${receipt.requestId}`));
+      if (receipt.messageId) details.append(el('p', null, `Message: ${receipt.messageId}`));
+      item.append(details); (index < 5 ? list : olderList).append(item);
+    }
+    pane.append(list);
+    if (receipts.length > 5) pane.append(earlier);
+  }
+
+  function renderOverview() {
+    const pane = $('pane-overview');
+    if (!pane || !d?.detail) return;
+    // Streaming updates must not replace a card draft or move its caret.
+    if (d.cardDraft && $('result-card-editor')) return;
+    const t = d.detail, live = byId(d.id) || t, p = t.checkpoint;
+    pane.replaceChildren();
+    if (!connected()) pane.append(el('p', 'err', 'Offline. These are the last received details; reconnect before acting.'));
+    const section = (title, text) => {
+      pane.append(el('h3', 'sect', title), el('pre', 'box', text || 'Nothing reported yet.'));
+    };
+    const links = el('div', 'd-actions');
+    links.append(btn('Read conversation', '', () => setTab('transcript')), btn('Send a follow-up', '', () => { setTab('messages'); $('send-text')?.focus(); }), btn('Review saved context', '', () => setTab('details')));
+    pane.append(links);
+    section('Current request', t.text);
+    pane.append(el('p', 'tx-empty', t.workInPlace ? 'This task edits the original folder. Coordinate other writers before continuing.' : `Separate working copy${t.branch ? ` · ${t.branch}` : ''}. Changes are combined only through a separate review.`));
+    renderCollaboration(pane, t, live);
+    const latest = [...d.tx.items].reverse().find(i => i.kind === 'text' && i.role === 'assistant');
+    section(latest?.open ? 'Response in progress' : 'Latest reported result', (latest?.text ? (latest.text.length > 8000 ? '…' : '') + latest.text.slice(-8000) : '') || t.evidence?.summary || p?.progress);
+    renderSavedOutput(pane, t, latest);
+    renderResultCards(pane, t);
+    const stat = d.diff?.stat || t.evidence?.diffStat;
+    pane.append(el('h3', 'sect', 'Changes to review'));
+    if (stat) pane.append(el('p', null, `${stat.files} files · +${stat.added} −${stat.removed}`));
+    if (d.diff?.files?.length) {
+      const files = el('ul');
+      for (const f of d.diff.files.slice(0, 40)) files.append(el('li', null, `${f.status} · ${f.path}`));
+      pane.append(files);
+      if (d.diff.files.length > 40) pane.append(el('p', 'tx-empty', 'Showing the first 40 reported paths. Review integration for the current complete change.'));
+    } else pane.append(el('p', 'tx-empty', stat ? 'Open Review integration above for the current file changes.' : 'No file changes have been reported yet.'));
+    section('Checks reported by the task', [({ pass: 'Passed', fail: 'Failed', none: 'No checks reported' })[t.evidence?.tests] || '', ...(p?.reportedChecks || [])].filter(Boolean).join('\n') || 'No check results recorded.');
+    pane.append(el('p', 'tx-empty', 'Reported checks are not an independent verification. Inspect the changes and check output before integrating.'));
+    if (p?.decisions?.length) section('Saved decisions', p.decisions.join('\n'));
+    section('Next action', p?.nextAction || (live.state === 'in_review' ? 'Review the changes above, then integrate them or prepare a draft pull request.' : live.state === 'done' ? 'Review the recorded outcome and saved context.' : live.reason || 'Read the latest response or send a follow-up to this task.'));
+    if (t.pr?.url) { const link = el('a', 'btn', `Open pull request #${t.pr.number}`); link.href = t.pr.url; link.target = '_blank'; link.rel = 'noopener noreferrer'; pane.append(link); }
+    pane.append(el('p', 'tx-empty', 'This view uses the task history and saved checkpoint on this device.'));
+  }
+
+  const cardId = () => window.crypto?.randomUUID?.() || `card-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  function beginCardDraft(id, kind = null) {
+    if (!d || d.cardDraft || d.checkpointDraft || !connected() || !api.saveCheckpoint) return;
+    const p = d.detail.checkpoint;
+    let cards;
+    try { cards = window.ResultCards.cleanResultCards(p?.resultCards || []); } catch { d.cardError = 'Saved card data could not be read. Reload this task.'; renderOverview(); return; }
+    if (kind) {
+      if (cards.length >= 8) return;
+      id = cardId();
+      cards.push(kind === 'checklist' ? { id, kind, title: 'Checklist', items: [{ id: cardId(), label: '', done: false }] }
+        : kind === 'metric' ? { id, kind, title: 'Metric', value: '', unit: '', note: '' }
+        : { id, kind: 'table', title: 'Table', columns: ['Name', 'Value'], rows: [['', '']] });
+    }
+    if (!cards.some(c => c.id === id)) return;
+    d.cardDraft = { cardId: id, cards, expectedVersion: p?.version ?? d.detail.handover?.version ?? 0, busy: false, error: '',
+      data: { brief: p?.brief ?? d.detail.text.slice(0, 4000), decisions: [...(p?.decisions || [])], progress: p?.progress || '', nextAction: p?.nextAction || '', artifacts: (p?.artifacts || []).map(a => ({ ...a })), reportedChecks: [...(p?.reportedChecks || [])] } };
+  }
+  function redrawCardDraft() { $('result-card-editor')?.remove(); renderOverview(); }
+  async function saveCardDraft() {
+    const owner = d, draft = d?.cardDraft;
+    if (!draft || draft.busy || !connected()) return;
+    let cards;
+    try { cards = window.ResultCards.cleanResultCards(draft.cards); } catch (e) { draft.error = e.message; redrawCardDraft(); return; }
+    draft.busy = true; draft.error = ''; redrawCardDraft();
+    let r;
+    try { r = await api.saveCheckpoint({ id: owner.id, expectedVersion: draft.expectedVersion, data: { ...draft.data, resultCards: cards } }); }
+    catch { r = { ok: false, text: 'Could not save the card changes.' }; }
+    if (d !== owner || d.cardDraft !== draft) return;
+    draft.busy = false;
+    if (r?.ok) { d.detail.checkpoint = r.checkpoint; d.cardDraft = null; d.cardError = ''; }
+    else draft.error = r?.code === 'CONFLICT' ? 'The saved checkpoint changed. Your card draft is preserved; reload before reviewing and saving again.' : r?.text || 'Could not save the card changes.';
+    redrawCardDraft();
+  }
+  function renderResultCards(pane, task) {
+    if (!window.ResultCards || !window.ResultCardsView) return;
+    let cards;
+    try { cards = window.ResultCards.cleanResultCards(task.checkpoint?.resultCards || []); } catch { pane.append(el('p', 'err', 'Saved card data could not be displayed.')); return; }
+    if (d.cardDraft) {
+      const owner = d, draft = d.cardDraft;
+      pane.append(window.ResultCardsView.editor({ document, state: draft, newId: cardId, onRender: redrawCardDraft, onSave: saveCardDraft,
+        onCancel: () => { d.cardDraft = null; redrawCardDraft(); },
+        onRemove: () => { draft.cards = draft.cards.filter(c => c.id !== draft.cardId); saveCardDraft(); },
+        onReload: async () => {
+          if (draft.busy) return; draft.busy = true; redrawCardDraft();
+          let r; try { r = await api.open(owner.id); } catch { r = null; }
+          if (d !== owner || d.cardDraft !== draft) return;
+          if (r?.ok) { d.detail = r.detail; d.messages = [...r.detail.messages]; for (const e of r.replay || []) applyEvent(e, true); d.cardDraft = null; syncThread(); }
+          else { draft.busy = false; draft.error = r?.text || 'Could not reload this task.'; }
+          redrawCardDraft();
+        } }));
+      return;
+    }
+    const p = task.checkpoint, source = window.TaskOutputs?.cardsSource(task);
+    pane.append(window.ResultCardsView.render({ document, cards, disabled: !connected() || !api.saveCheckpoint || !!d.checkpointDraft,
+      provenance: p ? `Cards last saved by ${source?.author || 'Recorded participant'} at checkpoint version ${source?.version || p.version}. Included in checkpoint version ${p.version}. This records the saved data, not an independent verification.` : null,
+      onEdit: id => { beginCardDraft(id); redrawCardDraft(); }, onAdd: kind => { beginCardDraft(null, kind); redrawCardDraft(); },
+      onToggle: (id, itemId, done) => { beginCardDraft(id); const item = d.cardDraft?.cards.find(c => c.id === id)?.items.find(i => i.id === itemId); if (item) { item.done = done; saveCardDraft(); } },
+    }));
+    if (d.cardError) pane.append(el('p', 'err', d.cardError));
+  }
+
+  function renderSavedOutput(pane, task, latest) {
+    const output = window.TaskOutputs?.fromTask(task);
+    if (!window.TaskOutputs) return;
+    const card = el('section', 'box'); card.id = 'saved-output'; card.setAttribute('aria-label', 'Saved report and references');
+    card.append(el('h3', 'sect', 'Saved report and references'));
+    if (output) {
+      const stamp = output.at ? ` · ${new Date(output.at).toLocaleString()}` : '';
+      card.append(el('p', 'tx-empty', `${output.source} · version ${output.version} · ${output.author}${stamp}`));
+      card.append(el('pre', null, output.text || 'No report text saved yet.'));
+      if (output.artifacts.length) {
+        const refs = el('ul');
+        for (const a of output.artifacts) {
+          const item = el('li'); item.append(`${a.kind}: `);
+          if (a.href) { const link = el('a', null, a.text); link.href = a.href; link.target = '_blank'; link.rel = 'noopener noreferrer'; item.append(link); }
+          else item.append(el('span', null, a.text));
+          refs.append(item);
+        }
+        card.append(refs);
+      }
+      card.append(el('p', 'tx-empty', 'Saved on this device and restored with the task. A checkpoint version records the report; file references point to current files. Reports can be updated as work continues.'));
+    } else card.append(el('p', 'tx-empty', 'Keep a report or note with this task so it is available when you return.'));
+    const edit = (response) => {
+      setTab('details');
+      if (!d.checkpointDraft) $('checkpoint-edit')?.click();
+      const field = $('checkpoint-progress');
+      if (field && typeof response === 'string') { field.value = response; field.dispatchEvent(new Event('input', { bubbles: true })); }
+      field?.focus();
+    };
+    const actions = el('div', 'd-actions'), editButton = btn(output ? 'Edit saved report' : 'Write a report or note', '', () => edit());
+    editButton.disabled = !connected() || !api.saveCheckpoint || !!d.cardDraft; actions.append(editButton);
+    if (latest?.text && !latest.open && latest.text !== output?.text && latest.text.length <= 4000) {
+      const keep = btn('Keep this response', '', () => edit(latest.text));
+      keep.disabled = !connected() || !api.saveCheckpoint || !!d.checkpointDraft || !!d.cardDraft;
+      actions.append(keep);
+    } else if (latest?.text?.length > 4000) card.append(el('p', 'tx-empty', 'The latest response is longer than a saved note. Edit the report to keep a summary and add the report file to its references.'));
+    card.append(actions); pane.append(card);
+  }
+
   // ───────────────────────── details tab ─────────────────────────
   function renderDetails() {
     const pane = $('pane-details');
@@ -403,6 +683,7 @@
     }
     if (t.pr) fact('Pull request', `#${t.pr.number} (${t.pr.state})`);
     pane.append(dl);
+    if(t.pr?.url){const link=el('a','btn','Open pull request on GitHub');link.href=t.pr.url;link.target='_blank';link.rel='noopener noreferrer';pane.append(link);}
     pane.append(el('div', 'sect', 'What you asked'), el('pre', 'box', t.text));
     const p = t.checkpoint;
     pane.append(el('div', 'sect', p ? `Checkpoint · version ${p.version}` : 'Checkpoint'));
@@ -424,7 +705,7 @@
           paths: (p?.artifacts ?? []).filter((a) => a.kind === 'path').map((a) => a.path).join('\n'), otherArtifacts: (p?.artifacts ?? []).filter((a) => a.kind !== 'path'), reportedChecks: (p?.reportedChecks ?? []).join('\n'), busy: false };
         renderDetails(); $('checkpoint-brief')?.focus();
       });
-      edit.id = 'checkpoint-edit'; edit.disabled = !connected() || !api.saveCheckpoint; pane.append(edit);
+      edit.id = 'checkpoint-edit'; edit.disabled = !connected() || !api.saveCheckpoint || !!d.cardDraft; pane.append(edit);
     } else pane.append(checkpointEditor());
   }
 
@@ -464,6 +745,7 @@
 
   // ───────────────────────── live events ─────────────────────────
   function applyEvent(e, replay = false) {
+    if (e.type === 'diff') { d.diff = e; if (!replay && d.tab === 'overview') renderOverview(); return; }
     if (e.type === 'transcript' || e.type === 'tool' || e.type === 'error') { if (TV.addEvent(d.tx, e) && !replay) syncSoon(); return; }
     if (e.type === 'message' || e.type === 'message-state') {
       const changed = TV.mergeMessage(d.messages, e);
@@ -483,7 +765,7 @@
     view = 'composer';
     d && api.close();
     d = null;
-    comp = { folder: null, recent: [], ais: [], ai: 'auto', surface: 'background', perm: 'auto-edits', planFirst: false, when: 'now', repeat: 'off', repeatTime: '22:00', repeatDay: '1', repeatEvery: '4', budget: '', canSchedule: false, busy: false, error: '' };
+    comp = { folder: null, recent: [], ais: [], ai: 'auto', surface: 'background', perm: 'auto-edits', planFirst: false, when: 'now', repeat: 'off', repeatTime: '22:00', repeatDay: '1', repeatEvery: '4', budget: '', canSchedule: false, busy: false, error: '', preflight: null, checking: false, reviewedPeers: false, waiting: false };
     renderList();
     renderComposer();
     const info = await api.composer();
@@ -518,13 +800,13 @@
 
     const where = el('div', 'field');
     where.append(el('span', 'lbl', 'Which folder?'));
-    const pick = btn(comp.folder ? 'Change folder…' : 'Choose folder…', '', async () => { const f = await api.pickFolder(); if (f) { comp.folder = f; comp.error = ''; comp.held = false; renderComposer(true); } });
+    const pick = btn(comp.folder ? 'Change folder…' : 'Choose folder…', '', async () => { const owner = comp, f = await api.pickFolder(); if (f && comp === owner && view === 'composer' && !owner.busy) { comp.folder = f; comp.error = ''; comp.held = false; void checkProjectWork(); } });
     pick.id = 'c-folder-btn';
     const chosen = el('span', null, comp.folder ? `  ${comp.folder.label}` : '  None chosen'); chosen.id = 'c-folder';
     where.append(pick, chosen);
     if (comp.recent.length) {
       const chips = el('div', 'chips');
-      for (const r of comp.recent) { const c = el('button', 'chip', r.label); c.type = 'button'; c.setAttribute('aria-pressed', String(comp.folder?.handle === r.handle)); c.addEventListener('click', () => { comp.folder = r; comp.error = ''; comp.held = false; renderComposer(true); }); chips.append(c); }
+      for (const r of comp.recent) { const c = el('button', 'chip', r.label); c.type = 'button'; c.setAttribute('aria-pressed', String(comp.folder?.handle === r.handle)); c.addEventListener('click', () => { comp.folder = r; comp.error = ''; comp.held = false; void checkProjectWork(); }); chips.append(c); }
       where.append(chips);
     }
     where.append(el('div', 'sub', 'Git repositories use a separate worktree for review. A folder without git is edited in place.'));
@@ -598,7 +880,7 @@
     whenF.append(whenL, when, el('div', 'sub', comp.when === 'now' ? 'It schedules your own work for when your limit resets or overnight, under your own login on this Mac.' : comp.when === 'reset' ? 'It schedules your own work for when your limit resets. If you have not hit a limit it starts straight away.' : 'It schedules your own work for tonight and keeps this Mac awake (lid open) while the queue has work. It runs only while this Mac is awake.'));
 
     const foot = el('div', 'foot');
-    const go = btn('Start task', 'primary'); go.type = 'submit'; go.id = 'c-go'; go.disabled = !connected() || comp.busy;
+    const go = btn('Start task', 'primary'); go.type = 'submit'; go.id = 'c-go'; go.disabled = !connected() || comp.busy || comp.checking || comp.waiting;
     const cancel = btn('Cancel', '', closeComposer);
     const err = el('span', 'err', comp.error); err.id = 'c-err'; err.setAttribute('role', 'alert');
     foot.append(go, cancel, err);
@@ -606,10 +888,55 @@
       const override = btn('Start anyway…', '', () => submitComposer(true)); override.type = 'button'; override.id = 'c-override'; override.disabled = !connected() || comp.busy;
       foot.append(override);
     }
-    root.append(words, where, aiF, capF, surf, permF, whenF, repF, foot);
+    root.append(words, where, projectWorkPanel(), aiF, capF, surf, permF, whenF, repF, foot);
     main.append(root);
     updateCount();
+    if (comp.busy) for (const control of root.querySelectorAll('input,select,textarea,button')) control.disabled = true;
     if (!keepFocus || hadFocus || !text) ta.focus();
+  }
+
+  const peerKey = value => JSON.stringify(value?.peers ?? null);
+  async function checkProjectWork() {
+    const owner = comp, folder = owner?.folder?.handle;
+    if (!folder || owner.busy || view !== 'composer') return;
+    const inspection = owner.inspection = (owner.inspection || 0) + 1;
+    owner.preflight = null; owner.reviewedPeers = false; owner.checking = true; owner.waiting = false;
+    renderComposer(true);
+    let result; try { result = await api.preflight?.({ folder }); } catch { result = null; }
+    if (comp !== owner || view !== 'composer' || comp.folder?.handle !== folder || owner.inspection !== inspection) return;
+    owner.checking = false;
+    owner.preflight = result?.ok ? result.preflight : null;
+    owner.preflightError = owner.preflight ? '' : result?.text || 'Could not check current project work. Recheck before starting.';
+    renderComposer(true);
+  }
+  function projectWorkPanel() {
+    const box = el('section', 'field'); box.id = 'c-project-work';
+    if (!comp.folder) return box;
+    box.append(el('h3', null, 'Other work in this project'));
+    if (comp.checking) { box.append(el('p', null, 'Checking current local tasks…')); return box; }
+    const check = comp.preflight;
+    if (!check) box.append(el('p', 'err', comp.preflightError || 'Check the other local work before starting.'));
+    else {
+      box.append(el('p', 'sub', check.note));
+      if (!check.peers.length) box.append(el('p', null, 'No competing local tasks were reported.'));
+      for (const peer of check.peers) {
+        const row = el('details', 'box');
+        row.append(el('summary', null, `${peer.title} · ${peer.state}${peer.uncertain ? ' · activity unconfirmed' : ''}`));
+        if (peer.branch) row.append(el('p', null, `Branch: ${peer.branch}`));
+        row.append(el('pre', null, peer.paths.length ? peer.paths.join('\n') : 'No editing paths reported yet.'));
+        box.append(row);
+      }
+      if (check.peers.length) {
+        const label = el('label'), ack = el('input'); ack.type = 'checkbox'; ack.id = 'c-work-reviewed'; ack.checked = comp.reviewedPeers;
+        ack.addEventListener('change', () => { comp.reviewedPeers = ack.checked; });
+        label.append(ack, ' I have reviewed the tasks above and the scope of this task.'); box.append(label);
+        box.append(btn('Narrow this task', '', () => { $('c-text').focus(); }), btn('Keep draft and wait', '', () => { comp.waiting = true; comp.reviewedPeers = false; renderComposer(true); }));
+      }
+      box.append(el('p', 'sub', 'This checks current local work only. Scheduled work and other devices may change. Review integration before combining changes.'));
+    }
+    if (comp.waiting) box.append(el('p', null, 'Draft kept. Nothing will start automatically. Recheck when you are ready.'));
+    const recheck = btn('Recheck project work', '', () => void checkProjectWork()); recheck.disabled = comp.busy || !connected(); box.append(recheck);
+    return box;
   }
 
   function updateCount() {
@@ -618,15 +945,28 @@
   }
 
   async function submitComposer(overrideBudget = false) {
-    if (!comp || comp.busy || !connected()) return;
+    if (!comp || comp.busy || comp.checking || comp.waiting || !connected()) return;
+    const owner = comp;
     const text = $('c-text').value;
     const v = TV.validateDraft({ text, hasFolder: !!comp.folder, budget: comp.budget });
     if (!v.ok) { comp.error = v.error; $('c-err').textContent = v.error; return; }
+    if (!comp.preflight || comp.preflight.peers.length && !comp.reviewedPeers) {
+      comp.error = 'Check current project work and review its scope before starting.'; renderComposer(true); return;
+    }
     comp.busy = true; $('c-go').disabled = true; $('c-err').textContent = '';
+    const folder = comp.folder.handle, reviewed = peerKey(comp.preflight);
+    for (const control of document.querySelectorAll('.composer input,.composer select,.composer textarea,.composer button')) control.disabled = true;
+    let check; try { check = await api.preflight({ folder }); } catch { check = null; }
+    if (comp !== owner || view !== 'composer') return;
+    if (!check?.ok || folder !== comp.folder.handle || reviewed !== peerKey(check.preflight)) {
+      comp.busy = false; comp.preflight = check?.ok ? check.preflight : null; comp.reviewedPeers = false;
+      comp.error = check?.ok ? 'Project work changed. Review the updated tasks before starting.' : check?.text || 'Could not refresh project work. Your draft is kept.';
+      renderComposer(true); return;
+    }
     if (comp.repeat !== 'off') {
       const sched = comp.repeat === 'hours' ? { kind: 'hours', every: Number(comp.repeatEvery) } : comp.repeat === 'weekly' ? { kind: 'weekly', day: Number(comp.repeatDay), time: comp.repeatTime } : { kind: comp.repeat, time: comp.repeatTime };
       const k = await window.recipesApi.keepAndSchedule({ text, ai: comp.ai, permissionLevel: comp.perm }, sched, comp.folder.handle).catch(() => null);
-      if (!comp) return;
+      if (comp !== owner || view !== 'composer') return;
       comp.busy = false;
       if (k && k.cancelled) { renderComposer(true); return; }
       if (!k || !k.ok) { comp.error = k?.error || k?.text || TV.errorText('INTERNAL'); renderComposer(true); return; }
@@ -635,7 +975,7 @@
       return;
     }
     const r = await api.create({ text, folder: comp.folder.handle, ai: comp.ai, surface: comp.surface, permissionLevel: comp.perm, planFirst: comp.planFirst, when: comp.when, budgetUsd: comp.budget === '' ? undefined : Number(comp.budget), overrideBudget: overrideBudget === true });
-    if (!comp) return;
+    if (comp !== owner || view !== 'composer') return;
     comp.busy = false;
     if (r && r.cancelled) { renderComposer(true); return; }
     comp.held = r?.code === 'BUDGET_HELD';
@@ -681,4 +1021,18 @@
   setInterval(() => { if (document.visibilityState === 'visible' && snap) renderList(); }, 30000);
   api.state().then((s) => { onSnapshot(s); if (!snap) renderMain(); });
   renderMain();
+  // Agent mode: words spoken to the widget and confirmed there arrive as a
+  // filled-in composer; picking a folder and Start task still create it.
+  async function takeVoiceDraft() {
+    const text = api.voiceDraft ? await api.voiceDraft().catch(() => null) : null;
+    if (typeof text !== 'string' || !text.trim()) return;
+    void openComposer();
+    const ta = $('c-text');
+    if (!ta) return;
+    ta.value = text.slice(0, ta.maxLength > 0 ? ta.maxLength : text.length);
+    ta.dispatchEvent(new Event('input'));
+    ta.focus();
+  }
+  api.onVoiceDraft?.(() => { void takeVoiceDraft(); });
+  void takeVoiceDraft();
 })();

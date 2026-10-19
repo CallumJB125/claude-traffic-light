@@ -16,7 +16,7 @@ const KNOWN = {
     'stats.json', 'usage/daily/2026-10.json', 'compaction-stats.json', 'cost-guard.json', 'cost-guard-log.json', 'spend-gate.json',
     'memory/index.db', 'checkpoints/index.json', 'characters/u-nova/character.json', 'cameos/a.png', 'crash-reports/reports.jsonl', 'crash-reports/consent.json', 'feedback/draft.json',
     'token', 'port', 'approval-secret.json', 'entitlement.json', 'entitlement-clock.json', 'remote/identity.json', 'remote/audit.jsonl', 'remote.json', 'remote-state.json', 'sync/settings.json'],
-  userData: ['work-capture.json', 'work-records.json', 'session-links.json', 'board/board.db', 'board/board.db-wal', 'tasks/store/tasks.jsonl', 'tasks/tasks.token', 'runner/k/x', 'plexiform-tasks/x',
+  userData: ['work-capture.json', 'work-records.json', 'session-links.json', 'board/board.db', 'board/board.db-wal', 'tasks/store/tasks.jsonl', 'tasks/tasks.token', 'runner/k/x', 'plexiform-tasks/x', 'session-followups/outbox.bin',
     'buddy-accounts/a.sealed', 'buddy-devices/d.sealed', 'buddy-workspaces.json', 'setups-runtime-v2/t', 'native-board/x', 'updater.json', 'local-models.json',
     'Cookies', 'Local Storage/leveldb/1.log', 'Session Storage/1.log', 'Cache/x', 'GPUCache/x', 'Preferences', 'Local State', 'Partitions/p/x'],
 };
@@ -46,6 +46,7 @@ test('every known store lands in a named store, not the catch-all', (t) => {
   }
   assert.ok(byId.keys.paths.length && !byId.keys.exportable && byId.keys.deletable);
   assert.ok(byId.memory.bytes > 0 && byId.memory.deletable);
+  assert.ok(byId['session-followups'].bytes > 0 && byId['session-followups'].deletable && !byId['session-followups'].exportable);
 });
 
 test('the inventory list has unique ids and each named file has one home', () => {

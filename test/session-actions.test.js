@@ -91,15 +91,17 @@ test('board broker: a viewer cannot link; an admin-refused hub gives the ask-an-
   assert.equal((await sb.linkRepo(viewer.key, 'github.com/org/app')).needsAdmin, true);
   assert.equal(await sb.captureKey(team.key, 'github.com/org/app'), null);
 });
-test('account client routes for repo linking and the opt-in salvage send exist, and the hub page bridge is read-only plus show-Team, and sender-checked', () => {
+test('account client routes and card-id-only local session actions are sender checked', () => {
   const { ROUTES } = require('../buddy-window/accounts.js');
   assert.deepEqual([ROUTES.createRepo, ROUTES.addBoardRepo, ROUTES.salvageHandover], [['POST', '/api/repos'], ['POST', '/api/boards/:board/repos'], ['POST', '/api/cards/:card/handover/salvage']]);
   const pre = fs.readFileSync(path.join(__dirname, '../buddy-window/hub-preload.js'), 'utf8');
-  assert.equal((pre.match(/ipcRenderer\.invoke\(/g) || []).length, 2); assert.match(pre, /buddy:local-handover/);
+  assert.equal((pre.match(/ipcRenderer\.invoke\(/g) || []).length, 4); assert.match(pre, /buddy:local-handover/);
+  assert.deepEqual([...pre.matchAll(/ipcRenderer\.invoke\('([^']+)'/g)].map(m => m[1]), ['buddy:local-handover', 'buddy:continue-in', 'buddy:card-session-action', 'buddy:card-session-action']);
+  assert.match(pre, /\['refresh', 'copy', 'save'\]\.includes\(action\)/);
   assert.match(pre, /continueIn: \(cardId\) => ipcRenderer\.invoke\('buddy:continue-in', String\(cardId\)\.slice\(0, 100\)\)/, 'the card id is the only thing that crosses; main shows the menu');
   const idx = fs.readFileSync(path.join(__dirname, '../buddy-window/index.js'), 'utf8');
   assert.match(idx, /preload: path\.join\(DIR, 'hub-preload\.js'\)/);
-  assert.match(idx, /const fromHubView = \(e\) => !!hubView && e\.sender === hubView\.webContents && !!hubInfo && e\.senderFrame\?\.origin === hubInfo\.origin;/);
+  assert.match(idx, /const fromHubView = \(e\) => !!hubView && e\.sender === hubView\.webContents && !!hubInfo && hubBindingCurrent\(hubBinding\) && e\.senderFrame\?\.origin === hubInfo\.origin;/);
   assert.match(idx, /if \(!fromHubView\(e\)\) return null;\n\s+try \{ return await sessionBridge\.localHandover/);
   assert.match(idx, /ipcMain\.handle\('buddy:continue-in', async \(e, cardId\) => \{\n\s+if \(!fromHubView\(e\) \|\| !continueIn\) return null;/);
 });

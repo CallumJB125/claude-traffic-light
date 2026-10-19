@@ -28,7 +28,8 @@ async function launch(f, u, temp, { config = {}, env = {} } = {}) {
     CLAUDE_TRAFFIC_LIGHT_PORT: String(signalPort), CLAUDE_TRAFFIC_LIGHT_REMOTE_PORT: String(await port()),
     PLEXIFORM_PLANNER_TEST_HUB: f.h.base, PLEXIFORM_PLANNER_TEST_ACCOUNT: JSON.stringify({ hub: f.h.base, token: u.token, device_id: u.device_id, user: { id: u.id, email: u.email } }), ...env } });
   const account = await windowByFile(app, 'account.html');
-  await account.evaluate(() => window.buddyAccount.go('hub'));
+  // The IPC response can arrive after go() has navigated this page away.
+  await account.evaluate(() => { void window.buddyAccount.go('hub'); });
   await account.locator('input[name="url"]').fill(f.h.base);
   await account.getByRole('button', { name: 'Continue', exact: true }).click();
   const sidebar = await windowByFile(app, 'sidebar.html');

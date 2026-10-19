@@ -15,12 +15,15 @@
 const path = require('path');
 const Brand = require('./brand.js');
 const base = require('./package.json').build;
+const signing = require('./build/signing-policy').policy();
 
 
 const artifact = (ext) => `${Brand.name}-\${version}-\${os}-\${arch}.${ext}`;
 
 module.exports = {
   ...base,
+  forceCodeSigning: signing.required,
+  extraMetadata: { ...base.extraMetadata, plexiformSignedMac: process.platform === 'darwin' && signing.notarize },
   files: [...base.files, '!board/shared/test-support/**'],
   asarUnpack: [...base.asarUnpack, 'board/runner/windows-job.js'],
   // The board launcher runs unpacked ESM under Electron's Node mode. ESM
@@ -38,7 +41,8 @@ module.exports = {
     // skips the custom sign hook (build/sign.js) when it finds no identity,
     // which would leave only the linker's signature and the calendar helper
     // without its narrow entitlements; 25 called the hook regardless.
-    identity: process.env.CSC_LINK || process.env.CSC_NAME ? undefined : '-',
+    identity: signing.macIdentity ? undefined : '-',
+    notarize: signing.notarize,
     // The zip is what latest-mac.yml points at; the DMG is what people download.
     target: [
       { target: 'dmg', arch: ['arm64', 'x64'] },

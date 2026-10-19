@@ -30,10 +30,12 @@
 // (src/remote-interaction.js) and refuses anything else, so a hub alone
 // cannot widen a share. Per-user and per-team rate limits, the relay's
 // request_id replay refusal and size limits apply. No message text is
-// logged or stored here; session ids are Plexiform's own, never provider
+// logged or stored by live relay calls (the separate reviewed-proposal flow
+// retains its exact request for seven days); session ids are Plexiform's own, never provider
 // thread ids.
 
 import { randomUUID } from 'node:crypto';
+import { InteractionProposals } from './interaction-proposals.js';
 import { HubError } from './db.js';
 import { limitOrThrow } from './ratelimit.js';
 
@@ -52,12 +54,13 @@ const noShare = () => new HubError('NOT_FOUND', 'that shared session is not avai
 // A steer after the share joins a turn that may have begun before it: that turn's
 // response carries pre-share output, so it is withheld unless the turn began after.
 function sinceShared(result, since) {
-  if (!object(result) || !object(result.state) || !Array.isArray(result.state.deliveries)) return result;
-  const after = (d) => object(d) && Number.isFinite(d.sentAt) && d.sentAt >= since;
+  if (!object(result)) return result;
+  if (!object(result.state) || !Array.isArray(result.state.deliveries)) return Object.hasOwn(result, 'delivery') ? { ...result, delivery: null } : result;
+  const after = (d) => object(d) && Number.isFinite(d.sentAt) && d.sentAt > since;
   const fresh = new Set(result.state.deliveries.filter((d) => after(d) && d.mode === 'new-turn' && d.turn != null).map((d) => d.turn));
   const deliveries = result.state.deliveries.filter(after)
     .map((d) => (d.mode === 'new-turn' || fresh.has(d.turn) ? d : { ...d, response: '' }));
-  return { ...result, state: { ...result.state, deliveries } };
+  return { ...result, state: { ...result.state, deliveries }, ...(Object.hasOwn(result, 'delivery') ? { delivery: deliveries.find((d) => d.id === result.delivery?.id) ?? null } : {}) };
 }
 const ACTIVE_MEMBER = `SELECT m.id, m.role FROM members m JOIN orgs o ON o.id = m.org_id
   WHERE m.org_id = ? AND m.user_id = ? AND m.removed_at IS NULL AND o.deleted_at IS NULL`;
@@ -66,6 +69,7 @@ export class InteractionShares {
   constructor(hub, relay) {
     this.hub = hub;
     this.relay = relay;
+    this.proposals = new InteractionProposals(this);
   }
 
   get db() { return this.hub.db; }
@@ -155,6 +159,7 @@ export class InteractionShares {
   end(row, by) {
     if (row.revoked_at === null) {
       this.db.run('UPDATE interaction_shares SET revoked_at = ?, revoked_by = ? WHERE id = ? AND revoked_at IS NULL', this.now(), by, row.id);
+      this.db.run('DELETE FROM interaction_proposals WHERE share_id = ?', row.id);
       this.hub.log.info('session share stopped', { share: row.id });
     }
   }
@@ -194,7 +199,7 @@ export class InteractionShares {
     return { row, host, scope: ACTING_ROLES.includes(me.role) ? row.scope : 'watch' };
   }
 
-  async call(ident, shareId, body) {
+  async call(ident, shareId, body, proposal = null) {
     if (!closed(body, ['request_id', 'op', 'args']) || typeof body.request_id !== 'string' || !UUID.test(body.request_id)
       || !Object.hasOwn(ARGS, body.op) || !closed(body.args, ARGS[body.op])) throw invalid();
     if (Buffer.byteLength(JSON.stringify(body.args)) > this.relay.limits.argsBytes) throw new HubError('PAYLOAD_TOO_LARGE', 'message too large');
@@ -212,7 +217,7 @@ export class InteractionShares {
     const name = this.db.get('SELECT display_name FROM users WHERE id = ?', ident.user.id)?.display_name ?? 'Teammate';
     const frame = {
       type: 'relay.request', rid: body.request_id, user: row.owner_user_id, from: ident.cred.id, op: body.op, args: body.args,
-      share: { id: row.id, team: row.org_id, user: ident.user.id, name: name.slice(0, 80), scope },
+      share: { id: row.id, team: row.org_id, user: ident.user.id, name: name.slice(0, 80), scope, ...(proposal ? { proposal } : {}) },
     };
     const result = await this.relay.dispatch(host, frame, () => this.relay.unburn(ident.user.id, body.request_id));
     // Revoked, removed or expired while the host answered: the answer is withheld.
@@ -222,6 +227,7 @@ export class InteractionShares {
   }
 
   routes(route) {
+    this.proposals.routes(route);
     const size = { maxBody: this.relay.limits.argsBytes + 1024 };
     route('GET', '/api/interaction/v1/shares', ({ ident }) => this.list(ident), { auth: 'user', replay: false });
     route('POST', '/api/interaction/v1/shares', ({ ident, body }) => this.create(ident, body), { auth: 'user', replay: false, strictBody: true });

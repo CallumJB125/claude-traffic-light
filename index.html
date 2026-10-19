@@ -7,6 +7,7 @@
 <title>Plexiform</title>
 <link rel="stylesheet" href="tokens.css" />
 <link rel="stylesheet" href="rig.css" />
+<link rel="stylesheet" href="tour-coachmark.css" />
 <link rel="stylesheet" href="input-bubble.css" />
 <style>
   html, body {
@@ -96,12 +97,23 @@
   #away .row.needs-you .dot { background: var(--red); }
   #away .row.failed .dot { background: var(--amber); }
   #away .row.done .dot { background: var(--green); }
+  #away .row.look .dot { background: var(--red); }
+  #away .row.look.handling .dot, #away .row.waiting .dot { background: var(--accent); }
   #away .row span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #away .more { opacity: 0.65; }
   #away .row.held { cursor: default; opacity: 0.8; }
   #away .row.held:hover { text-decoration: none; color: inherit; }
   /* "Run reached its budget": a stop that needs the person, so it ranks right
      after the ask bubble and above the recap and the update row. */
+  /* Agent mode (src/voice-offer.js): a spoken task waits for Start or Cancel. */
+  #voice-offer { display: none; position: absolute; left: 4px; right: 4px; bottom: 2px; height: 60px; box-sizing: border-box; padding: 4px 6px; border-radius: var(--radius); background: rgba(20, 20, 22, 0.92); color: rgba(255, 255, 255, 0.92); font: 500 9px/1.25 -apple-system, system-ui, sans-serif; flex-direction: column; gap: 3px; overflow: hidden; z-index: 5; }
+  body.voice-offer #voice-offer { display: flex; }
+  body.voice-offer #app { height: calc(100% - 64px); }
+  #voice-offer .text { font-weight: 700; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  #voice-offer .acts { margin-top: auto; display: flex; gap: 4px; }
+  #voice-offer .acts button { height: 18px; padding: 0 8px; border: none; border-radius: var(--radius); background: var(--accent); color: var(--accent-ink); font: 600 9px -apple-system, system-ui, sans-serif; cursor: pointer; }
+  #voice-offer .acts button.quiet { background: rgba(255, 255, 255, 0.14); color: rgba(255, 255, 255, 0.85); font-weight: 500; }
+  #voice-offer .acts button:active { transform: scale(0.96); }
   #budget { display: none; position: absolute; left: 4px; right: 4px; bottom: 2px; height: 60px; box-sizing: border-box; padding: 4px 6px; border-radius: var(--radius); background: rgba(20, 20, 22, 0.92); color: rgba(255, 255, 255, 0.92); font: 500 9px/1.25 -apple-system, system-ui, sans-serif; flex-direction: column; gap: 3px; overflow: hidden; }
   body.budget:not(.asking) #budget { display: flex; }
   body.budget:not(.asking) #app { height: calc(100% - 64px); }
@@ -132,20 +144,105 @@
   body.listening #mic { display: grid; animation: mic-ring 1.2s ease-out infinite; }
   @keyframes mic-ring { from { box-shadow: 0 0 0 0 rgba(226, 35, 26, 0.55); } to { box-shadow: 0 0 0 7px rgba(226, 35, 26, 0); } }
   @media (prefers-reduced-motion: reduce) { body.listening #mic { animation: none; box-shadow: 0 0 0 2px rgba(226, 35, 26, 0.35); } }
+  /* Session strip + hover card (lane A): chips only while hovering, so the
+     strip never covers Claude at rest; the card replaces the tooltip. */
+  #strip { position: absolute; top: 2px; left: 2px; right: 44px; display: none; flex-direction: column; gap: 2px; z-index: 3; }
+  body:hover.has-strip #strip, body.has-strip #strip:focus-within { display: flex; }
+  #strip .strip-row { display: flex; flex-wrap: wrap; gap: 2px; }
+  #strip .chip { display: inline-flex; align-items: center; gap: 3px; max-width: 70px; height: 14px; padding: 0 4px; border: none; border-radius: 7px; background: rgba(20, 20, 22, 0.88); color: rgba(255, 255, 255, 0.9); font: 500 8px -apple-system, system-ui, sans-serif; cursor: pointer; }
+  #strip .chip span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  #strip .chip .dot { flex: none; width: 5px; height: 5px; border-radius: 50%; background: var(--green); }
+  #strip .chip.waiting .dot { background: var(--red); }
+  #strip .chip.idle .dot { background: var(--idle); }
+  #strip .chip.pinned { box-shadow: inset 0 0 0 1px var(--accent); }
+  #strip .chip.team { background: rgba(60, 60, 70, 0.88); }
+  #strip .chip.idle-count { opacity: 0.75; }
+  #strip .chip:focus-visible { outline: 1px solid var(--accent); }
+  #session-card { position: fixed; left: 4px; right: 4px; top: 20px; z-index: 4; box-sizing: border-box; padding: 4px 6px; border-radius: var(--radius); background: rgba(20, 20, 22, 0.95); color: rgba(255, 255, 255, 0.92); font: 500 9px/1.3 -apple-system, system-ui, sans-serif; opacity: 0; visibility: hidden; pointer-events: none; transition: opacity 140ms ease, visibility 0s linear 140ms; }
+  #session-card.shown { opacity: 1; visibility: visible; pointer-events: auto; transition: opacity 140ms ease; }
+  @media (prefers-reduced-motion: reduce) { #session-card, #session-card.shown { transition: none; } }
+  body.carding #tooltip { opacity: 0 !important; }
+  #session-card .card-head { display: flex; align-items: center; gap: 4px; font-weight: 700; }
+  #session-card .card-title { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  #session-card .avatar { flex: none; width: 14px; height: 14px; border-radius: 50%; background: var(--accent); color: var(--accent-ink); font: 700 7px/14px -apple-system, system-ui, sans-serif; text-align: center; }
+  #session-card .card-state, #session-card .card-spend { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  #session-card .card-spend { opacity: 0.7; }
+  #session-card .card-acts { display: flex; gap: 3px; margin-top: 3px; }
+  #session-card button { height: 16px; padding: 0 6px; border: none; border-radius: var(--radius); background: var(--accent); color: var(--accent-ink); font: 600 8px -apple-system, system-ui, sans-serif; cursor: pointer; }
+  #session-card button:focus-visible { outline: 1px solid #fff; }
+  /* Notification lane (src/widget-lane-view.js): the last three things that
+     happened, stacked top-left beside Claude; each fades out after ~8 s. */
+  #event-lane { position: absolute; top: 2px; left: 2px; display: flex; flex-direction: column; gap: 2px; max-width: calc(100% - 48px); z-index: 4; pointer-events: none; }
+  #event-lane:empty { display: none; }
+  #event-lane .lane-row { display: flex; align-items: center; gap: 3px; max-width: 100%; box-sizing: border-box; padding: 1px 5px; border: none; border-radius: var(--radius); background: rgba(20, 20, 22, 0.88); color: rgba(255, 255, 255, 0.92); font: 500 8.5px/1.3 -apple-system, system-ui, sans-serif; text-align: left; pointer-events: auto; cursor: default; opacity: 1; transform: none; transition: opacity 1.4s ease, transform 160ms ease-out; }
+  #event-lane .lane-row.go { cursor: pointer; }
+  #event-lane .lane-row.go:hover { color: #fff; text-decoration: underline; }
+  #event-lane .lane-row.enter { opacity: 0; transform: translateY(-3px); }
+  #event-lane .lane-row.fading { opacity: 0; }
+  #event-lane .lane-row span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  #event-lane .lane-row .dot { flex: none; width: 5px; height: 5px; border-radius: 2px; background: var(--idle); }
+  #event-lane .lane-row.needs-you .dot, #event-lane .lane-row.ci-failed .dot { background: var(--red); }
+  #event-lane .lane-row.stuck .dot, #event-lane .lane-row.collision .dot { background: var(--amber); }
+  #event-lane .lane-row.finished .dot { background: var(--green); }
+  #event-lane .lane-row.teammate .dot { background: var(--accent); }
+  body.asking #event-lane { display: none; }
+  /* Rings (src/widget-rings-view.js): turn length vs your usual (inner), today's
+     spend vs budget (outer). Drawn over Claude, never hit: pointer-events none. */
+  #app { position: relative; }
+  #rings { position: absolute; left: 50%; top: 50%; width: min(100%, 100vh); height: min(100%, 100vh); transform: translate(-50%, -50%); pointer-events: none; overflow: visible; }
+  #rings[hidden] { display: none; }
+  #rings circle { fill: none; stroke-width: 1.6; }
+  #rings .track { stroke: rgba(255, 255, 255, 0.10); }
+  #rings .arc { stroke-linecap: round; transition: stroke-dashoffset 600ms ease, stroke 300ms ease; }
+  #rings .arc.green { stroke: var(--green); }
+  #rings .arc.amber { stroke: var(--amber); }
+  #rings .arc.red { stroke: var(--red); }
+  #rings g[hidden] { display: none; }
+  body.low-power #rings .arc, body.low-power #event-lane .lane-row { transition: none; }
+  @media (prefers-reduced-motion: reduce) { #rings .arc, #event-lane .lane-row { transition: opacity 1.4s ease; transform: none; } #event-lane .lane-row.enter { transform: none; } }
+  /* Widget polish (src/widget-polish-main.js). Dot: the lamp alone, ~28 px.
+     Compact: a small Claude with nothing hanging under him but an ask. */
+  #dot { display: none; width: 28px; height: 28px; border-radius: 50%; background: var(--dot, var(--lamp-off)); box-shadow: 0 0 0 1.5px rgba(20, 20, 22, 0.85), 0 0 6px var(--dot, transparent); }
+  body.size-dot #dot { display: block; }
+  body.size-dot .housing, body.size-dot #gear, body.size-dot #help, body.size-dot #tooltip { display: none; }
+  body.size-compact #voice-offer,
+  body.size-compact #away, body.size-compact #update, body.size-compact #budget, body.size-compact .minion { display: none !important; }
+  body.size-compact:not(.asking) #app { height: 100% !important; }
+  body.size-dot.has-accent #dot { box-shadow: 0 0 0 2px var(--project-accent), 0 0 6px var(--dot, transparent); }
+  /* The accent of the project the widget is showing: a halo round the lamp side of the rig. */
+  body.has-accent .housing { filter: drop-shadow(0 0 3px var(--project-accent)); }
+  #away .row { box-shadow: inset 2px 0 0 var(--row-accent, transparent); padding-left: 3px; }
+  /* Quiet (timed or quiet hours): a small moon, never a sound. */
+  #moon { display: none; position: absolute; top: 2px; right: 26px; width: 14px; height: 14px; pointer-events: none; color: #e9e3c6; filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.8)); }
+  body.quiet #moon { display: block; }
+  body.listening #moon, body.size-dot #moon { display: none; }
 </style>
 </head>
 <body>
   <div id="app" title="">
     <div class="housing" id="housing"></div>
+    <svg id="rings" viewBox="0 0 100 100" hidden aria-hidden="true">
+      <g id="ring-spend" hidden><circle class="track" cx="50" cy="50" r="47" /><circle class="arc" id="ring-spend-arc" cx="50" cy="50" r="47" transform="rotate(-90 50 50)" /></g>
+      <g id="ring-turn" hidden><circle class="track" cx="50" cy="50" r="43.5" /><circle class="arc" id="ring-turn-arc" cx="50" cy="50" r="43.5" transform="rotate(-90 50 50)" /></g>
+    </svg>
+    <div id="dot" aria-hidden="true"></div>
     <div id="tooltip"></div>
   </div>
   <button id="gear" title="Lights — program what Claude does (right-click the widget also works)"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4"/></svg></button>
   <button id="help" title="What does this mean?">?</button>
   <div id="mic" role="status" aria-label="Listening" title="Listening — let go to ask"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5.5" y="1.8" width="5" height="8" rx="2.5"/><path d="M3.3 7.8a4.7 4.7 0 0 0 9.4 0M8 12.5v2"/></svg></div>
+  <div id="strip" role="toolbar" aria-label="Sessions"></div>
+  <div id="session-card" role="group" aria-label="Session details" aria-hidden="true"></div>
+  <div id="event-lane" role="status" aria-live="polite" aria-label="Recent events"></div>
+  <svg id="moon" viewBox="0 0 16 16" role="img" aria-label="Quiet"><title>Quiet: no sounds or notifications</title><path fill="currentColor" d="M10.5 2.2a6 6 0 1 0 3.3 9.8A5 5 0 0 1 10.5 2.2z"/></svg>
   <div id="bubble"></div>
   <div id="budget" role="status" aria-live="polite">
     <div class="top"><div class="text" id="budget-text"></div><button class="x" id="budget-x" title="Dismiss" aria-label="Dismiss">×</button></div>
     <div class="acts" id="budget-acts"></div>
+  </div>
+  <div id="voice-offer" role="group" aria-label="Start a task">
+    <div class="text" id="voice-offer-text"></div>
+    <div class="acts"><button id="voice-offer-start" type="button">Start</button><button id="voice-offer-cancel" class="quiet" type="button">Cancel</button></div>
   </div>
   <div id="away" role="status" aria-live="polite" aria-label="While you were away">
     <div class="head"><span id="away-head">While you were away</span><button class="x" id="away-x" title="Dismiss" aria-label="Dismiss">×</button></div>
@@ -171,6 +268,10 @@
   <script src="src/input-view.js"></script>
   <script src="src/work-scope-view.js"></script>
   <script src="input-bubble.js"></script>
+  <script src="src/widget-lane-view.js"></script>
+  <script src="src/widget-rings-view.js"></script>
+  <script src="tour-coachmark.js"></script>
+  <script src="tour-host.js"></script>
   <script src="widget.js"></script>
   <script src="burst-chip.js"></script>
 </body>

@@ -7,6 +7,7 @@
 <title>Lights</title>
 <link rel="stylesheet" href="tokens.css" />
 <link rel="stylesheet" href="rig.css" />
+<link rel="stylesheet" href="tour-coachmark.css" />
 <link rel="stylesheet" href="gallery-publish.css" />
 <style>
   * { box-sizing: border-box; }
@@ -202,6 +203,10 @@
     transition: background var(--t);
   }
   .rule:hover { background: var(--panel-2); }
+  .rule .words { grid-column: 3 / -1; font-size: 11px; line-height: 1.35; color: var(--faint); white-space: normal; }
+  #rule-template { max-width: 100%; }
+  #rules footer { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  #rule-words { margin-top: 6px; }
   .rule.selected { background: var(--accent-soft); }
   .rule.selected .name { color: #fff; }
   .rule.dragging { opacity: 0.4; }
@@ -634,6 +639,16 @@
   .cg-row { font-size: 12px; display: block; }
   .wc-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .wc-head .k { margin-right: auto; }
+  .ww-table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 12px; }
+  .ww-table th { text-align: left; font-weight: 500; }
+  .ww-table .ww-sort { background: none; border: 0; padding: 2px 0; color: var(--muted); font: inherit; cursor: pointer; }
+  .ww-table td { padding: 4px 6px 4px 0; vertical-align: top; }
+  .ww-name { max-width: 0; width: 60%; }
+  .ww-name .name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ww-name .wc-meta { display: block; font-size: 11px; color: var(--faint); }
+  .ww-name .bar { display: block; margin-top: 3px; height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
+  .ww-name .bar i { display: block; height: 100%; background: var(--accent); border-radius: 2px; }
+  .ww-other td { color: var(--muted); }
   .wc-status, .wc-tools { font-size: 12px; color: var(--muted); }
   .wc-list .wc-meta { grid-column: 1 / -1; font-size: 11px; color: var(--faint); }
   .cg-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
@@ -988,6 +1003,7 @@
           <svg viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></svg>
           New rule
         </button>
+        <select id="rule-template" class="select" aria-label="Start from a template: add a starter rule"><option value="">Start from a template…</option></select>
       </footer>
     </aside>
 
@@ -1023,6 +1039,7 @@
           <div class="field">
             <input type="text" id="name" maxlength="40" placeholder="What this rule is for" />
             <label class="toggle" title="A disabled rule is kept but never fires"><input type="checkbox" id="enabled" /> Enabled</label>
+            <div class="hint" id="rule-words" aria-live="polite"></div>
           </div>
         </div>
 
@@ -1054,6 +1071,14 @@
           <div class="field">
             <input type="text" id="cwd" placeholder="any project" spellcheck="false" />
             <div class="hint">Folder name of the session, or a prefix with <code>*</code> — e.g. <code>bondly*</code>.</div>
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="lbl">For at least</div>
+          <div class="field">
+            <input type="number" id="for-minutes" min="1" max="1440" step="1" placeholder="0" aria-label="Minutes the signal must hold before this rule fires" style="width:72px" /> minutes
+            <div class="hint">Blank: fires straight away. Set it to wait, e.g. 5 for “waiting on you over 5 minutes”.</div>
           </div>
         </div>
 
@@ -1202,6 +1227,19 @@
               <option value="mine">Red, only for my own cards</option>
             </select>
             <div class="hint">Busy = a calendar event or a Focus (Preferences → Busy &amp; Focus). Held pings are summed up in “While you were away”. The lights always update.</div>
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="lbl">Notify</div>
+          <div class="field">
+            <select id="notify" class="select" aria-label="Send a notification when this rule starts">
+              <option value="">No notification</option>
+              <option value="desktop">Desktop notification</option>
+              <option value="phone">Phone</option>
+              <option value="both">Desktop and phone</option>
+            </select>
+            <div class="hint" id="notify-hint">Once when the rule starts, at most every 2 minutes. Snooze and quiet hours hold it.</div>
           </div>
         </div>
 
@@ -1385,6 +1423,7 @@
         <div class="mix-rec" id="mix-rec"></div>
         <div class="note">Estimate — "routine" means a reply under 400 tokens on under 4k new tokens of context. The saving prices those same tokens at Sonnet rates; the low end allows 35% more tokens on the cheaper model. Quality effects aren't counted.</div>
       </div>
+      <div id="usage-where" aria-label="Where it went" hidden></div>
       <div id="usage-work" aria-label="Cost by work" hidden></div>
       <div id="usage-waste" class="cg" aria-label="Cost guard" hidden></div>
       <div id="usage-history" aria-label="Usage history"></div>
@@ -1505,12 +1544,17 @@
 
 <script src="hooks/session-machine.js"></script>
 <script src="rules.js"></script>
+<script src="src/rule-templates.js"></script>
+<script src="src/rule-words.js"></script>
 <script src="gallery-publish-view.js"></script>
 <script src="stats.js"></script>
 <script src="usage-insights.js"></script>
 <script src="usage-view.js"></script>
 <script src="usage-waste-view.js"></script>
+<script src="usage-where-view.js"></script>
 <script src="usage-work-view.js"></script>
+<script src="tour-coachmark.js"></script>
+<script src="tour-host.js"></script>
 <script src="lights-view.js"></script>
 <script src="lights-auto.js"></script>
 <script src="burst-chip.js"></script>

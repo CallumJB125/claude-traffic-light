@@ -8,9 +8,9 @@ set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 sha=$(git rev-parse HEAD)
-git diff --quiet HEAD -- board src/local-models.js || { echo "board/ has uncommitted changes; commit first" >&2; exit 1; }
+git diff --quiet HEAD -- board src/local-models.js src/result-cards.js || { echo "board/ has uncommitted changes; commit first" >&2; exit 1; }
 
-git archive --format=tar HEAD board src/local-models.js | $PI "set -e
+git archive --format=tar HEAD board src/local-models.js src/result-cards.js | $PI "set -e
   stage=\$(mktemp -d); tar -x -C \"\$stage\" -f -
   cd \"\$stage/board\" && npm ci --omit=dev --no-audit --no-fund >/dev/null
   echo $sha > \"\$stage/board/DEPLOYED_SHA\"

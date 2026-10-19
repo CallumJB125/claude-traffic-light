@@ -18,7 +18,7 @@ const { isPrivateHost } = require('./workspaces');
 
 const PAGES = [
   { id: 'overview', title: 'Overview', icon: 'layers', kind: 'local', file: 'overview.html', preload: 'overview-preload.js', group: 'work' },
-  // hidden until the sidebar lists it (and makes it the default) as its own section.
+  // The personal landing page is the sidebar default.
   { id: 'home', title: 'Home', icon: 'sun', kind: 'local', file: 'home.html', preload: 'home-preload.js', group: 'work' },
   { id: 'board', title: 'Board', icon: 'board', kind: 'hub', view: 'board', group: 'work',
     children: [
@@ -28,9 +28,9 @@ const PAGES = [
       { id: 'board:calendar', title: 'Calendar', kind: 'hub', view: 'calendar' },
       { id: 'board:timeline', title: 'Timeline', kind: 'hub', view: 'timeline' },
     ] },
-  // Home's "Needs you" and "Your cards" carry these; the pages stay for notifications and deep links.
-  { id: 'waiting', title: 'Waiting on you', icon: 'bell', kind: 'local', file: 'waiting.html', preload: 'waiting-preload.js', query: { embedded: '1' }, group: 'work', unlisted: true },
-  { id: 'myday', title: 'My day', icon: 'sun', kind: 'local', file: 'myday.html', preload: 'myday-preload.js', group: 'work', unlisted: true },
+  // Inbox keeps questions and daily priorities one click away; route IDs stay stable.
+  { id: 'waiting', title: 'Waiting on you', icon: 'bell', kind: 'local', file: 'waiting.html', preload: 'waiting-preload.js', query: { embedded: '1' }, group: 'work' },
+  { id: 'myday', title: 'My day', icon: 'sun', kind: 'local', file: 'myday.html', preload: 'myday-preload.js', group: 'work' },
   { id: 'sessions', title: 'Sessions', icon: 'team', kind: 'local', file: 'sessions.html', preload: 'sessions-preload.js', group: 'work' },
   { id: 'timeline', title: 'Session timeline', icon: 'layers', kind: 'local', file: 'timeline.html', preload: 'timeline-preload.js', group: 'work', unlisted: true },
   { id: 'checkpoints', title: 'What changed', icon: 'layers', kind: 'local', file: 'checkpoints.html', preload: 'checkpoints-preload.js', group: 'work' },
@@ -82,12 +82,15 @@ const GROUPS = [
 // An `unlisted` page belongs to its section (so the section lights up while it
 // is open) but has no sub-nav entry of its own.
 const SECTIONS = [
-  { id: 'home', title: 'Home', icon: 'sun', default: 'home', pages: ['home', 'overview', 'myday', 'waiting'] },
-  { id: 'board', title: 'Board', icon: 'board', default: 'board', pages: ['board', 'board:table', 'board:history', 'board:calendar', 'board:timeline', 'board:dashboard'] },
-  { id: 'sessions', title: 'Sessions', icon: 'team', default: 'sessions', pages: ['sessions', 'tasks', 'discover', 'timeline', 'checkpoints', 'memory'] },
-  { id: 'usage', title: 'Usage & cost', icon: 'chart', default: 'usage', heading: 'Spend', pages: ['usage', 'stats', 'optimiser', 'clients'] },
-  { id: 'team', title: 'Team', icon: 'team', default: 'team', heading: 'Team', pages: ['team', 'integrations', 'account'] },
-  { id: 'settings', title: 'Settings', icon: 'gear', default: 'settings', heading: 'You', pages: ['settings', 'thismac', 'aitools', 'widget', 'lights', 'hatch', 'phone'] },
+  { id: 'home', title: 'Home', icon: 'sun', default: 'home', pages: ['home'] },
+  { id: 'board', title: 'Projects', icon: 'board', default: 'board', pages: ['board', 'tasks', 'board:table', 'board:history', 'board:calendar', 'board:timeline', 'board:dashboard'] },
+  { id: 'sessions', title: 'Agents', icon: 'layers', default: 'overview', pages: ['overview', 'sessions', 'timeline', 'checkpoints', 'memory', 'discover'] },
+  { id: 'inbox', title: 'Inbox', icon: 'bell', default: 'waiting', pages: ['waiting', 'myday'] },
+  { id: 'team', title: 'Team', icon: 'team', default: 'team', pages: ['team', 'integrations', 'account'] },
+  { id: 'usage', title: 'Usage & cost', icon: 'chart', default: 'usage', heading: 'Workspace', menu: 'more', pages: ['usage', 'stats', 'clients'] },
+  // Claude Burst and the usage panel have their own entry (the optimiser page): its sections unfold beneath it while open.
+  { id: 'optimiser', title: 'Usage & Burst', icon: 'chart', default: 'optimiser', menu: 'more', pages: ['optimiser'] },
+  { id: 'settings', title: 'Settings', icon: 'gear', default: 'settings', pages: ['settings', 'thismac', 'aitools', 'widget', 'lights', 'hatch', 'phone'] },
 ];
 // `menu: false` keeps a section out of the tray and widget menus; `menu: 'more'` lists it in their More submenu.
 // At most six sections are primary; everything else is a page inside one of them.
@@ -104,10 +107,8 @@ if (process.env.PLEXIFORM_SHOW_SETUPS === '1' || (SETUPS_READY && require('../sr
   SECTIONS.find((s) => s.id === 'settings').pages.splice(7, 0, 'setups');
   PAGES.find((p) => p.id === 'setups').hidden = false;
 }
-// Plan & billing is listed once paid plans can work: a hub key pinned in
-// src/entitlement-keys.js (until then no token verifies and Upgrade could not
-// unlock anything). PLEXIFORM_SHOW_UPGRADE=1 lists it for testing.
-const UPGRADE_READY = (() => { try { return require('../src/entitlement-keys').ENTITLEMENT_KEYS.length > 0; } catch { return false; } })();
+// Plan & billing is listed after beta ends and a verification key is pinned. PLEXIFORM_SHOW_UPGRADE=1 lists it for testing.
+const UPGRADE_READY = (() => { try { return !require('../src/release-policy').BETA_ALL_FEATURES && require('../src/entitlement-keys').ENTITLEMENT_KEYS.length > 0; } catch { return false; } })();
 if (process.env.PLEXIFORM_SHOW_UPGRADE === '1' || UPGRADE_READY) {
   PAGES.find((p) => p.id === 'upgrade').hidden = false;
   SECTIONS.find((s) => s.id === 'team').pages.push('upgrade');

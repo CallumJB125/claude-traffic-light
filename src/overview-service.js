@@ -1,4 +1,5 @@
 'use strict';
+const LooseEnds=require('./burst-loose-ends-view');
 // Main-owned structured metadata projection. No transcripts, provider chats,
 // tokens, source session IDs, filesystem paths or authority objects cross IPC.
 const crypto=require('node:crypto');
@@ -7,6 +8,9 @@ const Machine=require('../hooks/session-machine');
 const AgentReports=require('./agent-self-report');
 const {clean}=require('./work-capture');
 const Directory=require('./session-directory');
+const {createTeamSessionControls}=require('./team-session-controls');
+const {personHandoffs}=require('./handoff-people');
+const FollowupSchedules=require('./recipe-schedules');
 const PROVIDERS=Object.freeze({codex:'Codex',claude:'Claude Code','claude-code':'Claude Code',cursor:'Cursor',gemini:'Gemini',hermes:'Hermes',opencode:'OpenCode',copilot:'Copilot',ollama:'Ollama',lmstudio:'LM Studio','llama.cpp':'llama.cpp',local:'Local model'});
 const LOCAL=new Set(['ollama','lmstudio','llama.cpp','local']);
 const ID=/^[A-Za-z0-9_.:-]{1,128}$/,UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -27,11 +31,16 @@ const provider=(source,model)=>{const known=typeof source==='string'&&Object.has
 // Mac's live session shares; hubTeams() → {origin, teams} the signed-in
 // user's teams on the sharing hub; teamHub() → the team directory adapter
 // (src/session-directory.js interface) or null.
-function createOverviewService({sessions=()=>[],work=async()=>({sources:[],capture:[]}),managed=()=>({conn:{status:'offline'},tasks:[]}),openManaged=null,messageManaged=null,now=Date.now,current=()=>true,actionCurrent=current,navigationCurrent=()=>false,owned=()=>[],shares=()=>null,hubTeams=async()=>null,teamHub=()=>null}){
- let epoch=0,handles=new Map(),teamRefs=new Map();const secret=crypto.randomBytes(32);
+function createOverviewService({presence=()=>null,presenceView=()=>0,sessions=()=>[],work=async()=>({sources:[],capture:[]}),managed=()=>({conn:{status:'offline'},tasks:[]}),openManaged=null,messageManaged=null,now=Date.now,current=()=>true,actionCurrent=current,navigationCurrent=()=>false,owned=()=>[],shares=()=>null,hubTeams=async()=>null,teamHub=()=>null,followups=null,followupScope=()=>null,followupLocal=null,looseEnds=()=>null}){
+ // Burst's loose ends (src/burst-loose-ends-view.js) matched to a session's working directory here in main: the page gets counts, never a path.
+ const looseBadge=cwd=>{let v=null;try{v=looseEnds();}catch{v=null;}const m=v?LooseEnds.forPath(v,cwd):null;return m?{uncommitted:m.uncommitted,unpushed:m.unpushed,stashes:m.stashes,stale:m.stale===true,text:LooseEnds.badgeText(m)}:null;};
+ let epoch=0,directoryEpoch=0,routeEpoch=0,teamView=null,handles=new Map(),teamRefs=new Map();const secret=crypto.randomBytes(32);
  const directoryModel=Directory.createSessionDirectory({now});
  const stable=parts=>crypto.createHmac('sha256',secret).update(JSON.stringify(parts)).digest('hex');
  const teamKey=(origin,teamId)=>stable(['team',origin,teamId]).slice(0,32);
+ // Opaque team key → the hub team it stands for, for the team the page is showing only (share view).
+ const teamIds=new Map();
+ const teamIdentity=key=>typeof key==='string'&&teamView===key&&teamIds.has(key)?{...teamIds.get(key)}:null;
  const permitted=()=>{try{return current()===true;}catch{return false;}};
  const actionPermitted=()=>{try{return permitted()&&actionCurrent()===true;}catch{return false;}};
  const sourcesData=async()=>{const registered=await work();const list=Array.isArray(registered?.sources)?registered.sources.slice(0,9):[];
@@ -78,7 +87,7 @@ function createOverviewService({sessions=()=>[],work=async()=>({sources:[],captu
    const identity=stable(['reported',raw.device??'local',raw.source??'unknown',raw.sessionId??null,raw.taskId??'session',card?.id??null,bound?actorOf(bound.data,bound.row):null,bound?.source.key??null,parentId]);
    const projected=Session.snapshot({sessions:[{...raw,remote:false,device:null}],now:time}).sessions[0];
    let status=projected?.status??'Unknown';if(raw.source==='codex'&&Machine.codexInputPending?.(raw,time))status='Waiting on you';
-   const dto={id:identity,handle:null,label:parentId?'Agent':'Session',provider:provider(raw.source,raw.model),device:{label:raw.remote||raw.device?clean(raw.deviceName||'Paired device',80):'This device',local:!raw.remote&&!raw.device},board:{label:bound?clean(bound.row.board_name,80)||'Board':raw.scope?.state==='personal'?'Personal':'Unassigned',kind:bound?bound.source.kind:raw.scope?.state==='personal'?'personal':'unknown'},project:Session.snapshot({sessions:[{cwd:raw.cwd}],now:time}).sessions[0]?.project??'Local project',status,freshness:fresh,age_ms:elapsed,task:task(card??(typeof raw.taskTitle==='string'?{title:raw.taskTitle}:null)),children:[],capabilities:{open:capability(!!bound,'Open card',bound?'':'No current tracked card is available.'),message:capability(!!bound&&liveOwn(bound.data,bound.row)&&fresh==='recent'&&!!card.repo?.id&&typeof bound.source.send==='function','Message',(!bound&&unmanaged(raw.source))||'A current owned runner with messaging is required.')}};
+   const dto={id:identity,handle:null,label:parentId?'Agent':'Session',provider:provider(raw.source,raw.model),device:{label:raw.remote||raw.device?clean(raw.deviceName||'Paired device',80):'This device',local:!raw.remote&&!raw.device},board:{label:bound?clean(bound.row.board_name,80)||'Board':raw.scope?.state==='personal'?'Personal':'Unassigned',kind:bound?bound.source.kind:raw.scope?.state==='personal'?'personal':'unknown'},project:Session.snapshot({sessions:[{cwd:raw.cwd}],now:time}).sessions[0]?.project??'Local project',looseEnds:parentId?null:looseBadge(raw.cwd),status,freshness:fresh,age_ms:elapsed,task:task(card??(typeof raw.taskTitle==='string'?{title:raw.taskTitle}:null)),children:[],handoffs:personHandoffs(card,bound?.data.principal?.member_id??null),capabilities:{open:capability(!!bound,'Open card',bound?'':'No current tracked card is available.'),message:capability(!!bound&&liveOwn(bound.data,bound.row)&&fresh==='recent'&&!!card.repo?.id&&typeof bound.source.send==='function','Message',(!bound&&unmanaged(raw.source))||'A current owned runner with messaging is required.')}};
    if(bound){usedCards.add(cardIdentity(bound.source,bound.data,bound.row));register(dto,{kind:'board',bound,pin:keyOf(bound.row)},next);meta.set(identity,{kind:'board',boardRunId:card.run?.id,...teamMeta(bound.source,bound.row)});}else{register(dto,{kind:'reported'},next);meta.set(identity,{kind:'reported',nativeSessionId:raw.sessionId,nativeTurnId:raw.codexTurnId??null});}
    const children=Array.isArray(raw.source==='codex'?raw.codexAgents:raw.agents)?(raw.source==='codex'?raw.codexAgents:raw.agents):[];
    for(const child of children.slice(0,64)){
@@ -101,7 +110,7 @@ function createOverviewService({sessions=()=>[],work=async()=>({sources:[],captu
   for(const {source,data}of good){for(const row of data.cards){const card=row?.card;if(!object(card)||!id(card.id)||!id(row.board_id)||!id(row.member_id)||card.archived||!card.run||!id(card.run.id)||!data.agents.some(a=>a.card_id===card.id&&a.board_id===row.board_id&&a.member_id===row.member_id))continue;
    const identity=cardIdentity(source,data,row);if(usedCards.has(identity)||rows.some(r=>r.id===identity))continue;if(rows.length>=200){omitted++;continue;}
    const live=liveOwn(data,row),elapsed=Number.isFinite(card.live?.hb_age_ms)&&card.live.hb_age_ms>=0?card.live.hb_age_ms:null;
-   const dto={id:identity,handle:null,label:'Managed session',provider:provider(card.run.ai,card.run.model),device:{label:clean(card.run.device_name,80)||'Runner device',local:source.kind==='personal'},board:{label:clean(row.board_name,80)||'Board',kind:source.kind},project:clean(card.repo?.short_name,100)||'Project not reported',status:managedStatus(data,row),freshness:freshness(elapsed),age_ms:elapsed,task:task(card),children:[],capabilities:{open:capability(true,'Open card',''),message:capability(live&&!!card.repo?.id&&typeof source.send==='function','Message','A current owned runner with messaging is required.')}};
+   const dto={id:identity,handle:null,label:'Managed session',provider:provider(card.run.ai,card.run.model),device:{label:clean(card.run.device_name,80)||'Runner device',local:source.kind==='personal'},board:{label:clean(row.board_name,80)||'Board',kind:source.kind},project:clean(card.repo?.short_name,100)||'Project not reported',status:managedStatus(data,row),freshness:freshness(elapsed),age_ms:elapsed,task:task(card),children:[],handoffs:personHandoffs(card,data.principal?.member_id??null),capabilities:{open:capability(true,'Open card',''),message:capability(live&&!!card.repo?.id&&typeof source.send==='function','Message','A current owned runner with messaging is required.')}};
    register(dto,{kind:'board',bound:{source,data,row},pin:keyOf(row)},next);rows.push(dto);meta.set(identity,{kind:'board',boardRunId:card.run.id,...teamMeta(source,row)});
   }}
   const local=managed();if(local?.conn?.status==='connected'&&Array.isArray(local.tasks))for(const t of local.tasks.slice(0,200)){
@@ -138,38 +147,146 @@ function createOverviewService({sessions=()=>[],work=async()=>({sources:[],captu
  const safe=(fn,fallback)=>{try{return fn()??fallback;}catch{return fallback;}};
  const viewerOf=hub=>{const v=safe(()=>hub?.viewer?.(),null);return object(v)&&typeof v.id==='string'&&v.id?{id:v.id,name:clean(v.name,80)||'You'}:null;};
  const unavailableDirectory=(view,time)=>({schema:1,view,status:'unavailable',observed_at:time,teams:[],team:null,notice:'',entries:[],counts:directoryModel.counts([])});
+ const controls=createTeamSessionControls({resolve:resolveTeam,current:permitted,actionCurrent:actionPermitted,now});
+ let coordinator=null;
+ coordinator=require('./team-coordinator').createTeamCoordinator({inventory:request=>directory({view:'team',team:request.team}),inspect:controls.inspect,action:controls.action,resolve:resolveTeam,current:permitted,actionCurrent:actionPermitted,now});
+ const personalRefs=new Map(),followupSelections=new Map();
+ const followupUnavailable=()=>({ok:false,status:'unavailable',error:'Encrypted local follow-ups are unavailable for this account or session.'});
+ const pinned=raw=>({...raw,key:crypto.createHash('sha256').update(JSON.stringify([raw.kind,raw.route,raw.generation,raw.provider])).digest('hex')});
+ const exactTarget=t=>object(t)&&pinned(t).key===t.key;
+ async function followupReview(request){
+  if(!followups||!(closed(request,['id','text'])||closed(request,['id','text','when']))||typeof request.id!=='string'||!/^[0-9a-f]{40}$/.test(request.id)||typeof request.text!=='string'||!request.text.trim()||request.text.includes('\0')||request.text.trim().length>4000||Buffer.byteLength(request.text.trim())>8192||!actionPermitted())return followupUnavailable();
+  if(Object.hasOwn(request,'when')&&!object(request.when))return response('invalid');
+  const text=request.text.trim();
+  const epoch=routeEpoch,owner=followupScope();
+  const fresh=()=>actionPermitted()&&epoch===routeEpoch&&owner===followupScope();
+  let target,label;
+  const own=personalRefs.get(request.id);
+  if(own?.interact?.kind==='owned'){
+   const raw=followupLocal?.target?.(own.interact.ref);
+   if(raw){target=pinned(raw);label=`Your ${own.provider.label} session: ${own.task.title}`;}
+  }else{
+   const r=await resolveTeam(request.id,false);
+   if(!fresh()||!r?.hub||r.scope!=='interact'||typeof r.hub.inspect!=='function'||typeof r.hub.act!=='function'||typeof r.hub.origin!=='string')return followupUnavailable();
+   let out;try{out=await r.hub.inspect(r.viewer,r.team,r.ref);}catch{return followupUnavailable();}
+   const s=out?.state;
+   if(!fresh()||r.isCurrent()!==true||!out?.ok||!s||s.status==='ended'||s.capabilities?.newTurn!==true||!Number.isSafeInteger(s.generation)||typeof s.provider?.id!=='string')return followupUnavailable();
+   target=pinned({kind:'team',route:{origin:r.hub.origin,viewer:r.viewer.id,team:r.team,ref:r.ref},generation:s.generation,provider:s.provider.id});
+   label=`Shared ${s.provider.label||s.provider.id} session in the selected team`;
+  }
+  if(!target||!fresh()||typeof owner!=='string')return followupUnavailable();
+  const when=request.when??{kind:'ready'};
+  let reset=null;
+  if(when?.kind==='provider-reset'){
+   const resolved=await resolveFollowup(target);
+   if(!fresh()||!resolved?.ok||resolved.current?.()!==true)return followupUnavailable();
+   reset=resolved.reset?.()??null;
+  }
+  const schedule=FollowupSchedules.followupSchedule(when,now(),reset);
+  if(!schedule)return{ok:false,status:'unavailable',error:when?.kind==='provider-reset'?'This exact session has no future provider-reported reset time. Choose a time yourself or wait for a provider limit report.':'Choose a future time within seven days.'};
+  const scheduleLabel=FollowupSchedules.describeFollowup(schedule);
+  const selection=crypto.randomUUID();followupSelections.set(selection,{target,label:label.slice(0,240),epoch,owner,expires:now()+45000,schedule,text});
+  for(const[k,v]of followupSelections)if(v.expires<now())followupSelections.delete(k);
+  while(followupSelections.size>64)followupSelections.delete(followupSelections.keys().next().value);
+  return{ok:true,status:'review',selection,label:label.slice(0,240),schedule:{kind:schedule.kind,atMs:schedule.atMs??null,label:scheduleLabel},notice:`${scheduleLabel}. One attempt only, in queue order. Keep Plexiform open and Overview focused on this account and board; a missed time waits for that view and the original session to be ready. A provider reset report predicts availability, not successful completion. May use AI credits. Saved encrypted for at most seven days; restart cannot restore an ended session. Requires OS encryption and durable filesystem sync.`};
+ }
+ async function followupEnqueue(request){
+  if(!followups||!closed(request,['selection','requestId','text'])||!UUID.test(request.selection)||!UUID.test(request.requestId)||typeof request.text!=='string')return followupUnavailable();
+  const chosen=followupSelections.get(request.selection);followupSelections.delete(request.selection);
+  const fresh=()=>!!chosen&&actionPermitted()&&chosen.epoch===routeEpoch&&chosen.owner===followupScope()&&chosen.expires>=now();
+  if(!fresh()||request.text!==chosen.text)return response('stale');
+  const still=await resolveFollowup(chosen.target);
+  if(!fresh()||!still?.ok||still.current()!==true)return{ok:false,status:'stale',error:still?.error||'The original session changed. Review it again.'};
+  const scheduledCurrent=()=>fresh()&&still.current()===true&&(!chosen.schedule?.atMs||chosen.schedule.atMs>now())&&(chosen.schedule?.kind!=='provider-reset'||still.reset?.()?.id===chosen.schedule.evidence);
+  if(!scheduledCurrent())return{ok:false,status:'stale',error:'The reviewed time or provider reset report changed. Review the follow-up again.'};
+  return followups.enqueue({id:request.requestId,target:chosen.target,label:chosen.label,text:chosen.text,schedule:chosen.schedule,current:scheduledCurrent});
+ }
+ async function resolveFollowup(t){
+  if(!exactTarget(t)||!actionPermitted())return{ok:false,error:'Focus this account and board in Overview to continue.'};
+  const owner=followupScope(),epoch=routeEpoch;
+  const fresh=()=>actionPermitted()&&owner===followupScope()&&epoch===routeEpoch;
+  if(t.kind==='owned')return followupLocal?.resolve?.(t,fresh)??{ok:false,terminal:true,error:'The original session is no longer held by Plexiform.'};
+  const hub=safe(teamHub,null),viewer=viewerOf(hub),r=t.route;
+  if(!hub||hub.origin!==r.origin||viewer?.id!==r.viewer)return{ok:false,error:'Return to the original signed-in hub account.'};
+  if(teamView!==teamKey(r.origin,r.team))return{ok:false,error:'Open the original team in Team sessions to continue.'};
+  const current=()=>fresh()&&safe(teamHub,null)===hub&&viewerOf(hub)?.id===r.viewer;
+  let out;try{out=await hub.inspect(viewer,r.team,r.ref);}catch{return{ok:false,error:'The shared session is temporarily unavailable.'};}
+  if(!current())return{ok:false,error:'The view or account changed.'};
+  if(!out?.ok)return{ok:false,terminal:['forbidden','stale'].includes(out?.status),error:clean(out?.error,400)||'The original share is unavailable.'};
+  const s=out.state;
+  if(!s||s.generation!==t.generation||s.provider?.id!==t.provider||s.status==='ended')return{ok:false,terminal:true,error:'The original shared session ended or changed. Nothing will be sent.'};
+  // The client/host reauthorize interact scope for every act. inspect alone
+  // does not confer sending rights; no cached share grant is resurrected.
+  if(s.capabilities?.newTurn!==true||typeof hub.act!=='function')return{ok:false,terminal:true,error:'This connection does not support a new-turn follow-up.'};
+  return{ok:true,ready:s.status==='ready'&&s.activeTurn===null,current,
+   send:(text,id,keep)=>hub.act(viewer,r.team,r.ref,{operation:'send',generation:t.generation,turn:null,text},id,()=>current()&&keep())};
+ }
+ async function resolveTeam(entryId,effect=false){
+  const e=teamRefs.get(entryId),generation=routeEpoch;
+  const fresh=()=>permitted()&&(!effect||actionPermitted())&&generation===routeEpoch&&teamView===e?.teamKey;
+  if(!e||e.expires<now()||!fresh())return response('stale');
+  const hub=safe(teamHub,null),viewer=viewerOf(hub);
+  if(!hub||hub!==e.hub||!viewer||viewer.id!==e.viewerId)return response('stale');
+  // Board-run task inboxes keep their own durable contract; they never acquire
+  // provider-turn controls merely by appearing alongside live session shares.
+  if(e.messageContract==='task-inbox')return{ok:false,status:'unsupported',error:'This board run uses its task inbox. Open its card or use Message.'};
+  // inspect/act freshly authorize the exact share. Re-reading every teammate's
+  // state here would fan out N relay calls for each selected-session read.
+  return{hub,viewer,team:e.team,ref:e.ref,scope:e.scope,isCurrent:()=>fresh()&&e.expires>=now()&&safe(teamHub,null)===hub&&viewerOf(hub)?.id===viewer.id};
+ }
  // My sessions / Team sessions. Team privacy is filtered here, never in the page.
+ // Team depth lane C: team entry id → the hub card id of its session (for presence.view), and the team they belong to.
+ const viewCards=new Map();let viewTeam=null,viewingSent=null;
+ // The person opened (id) or closed (null) a shared session's details: the team's boards hear which card is being looked at.
+ function viewing(request){if(!closed(request,['id'])||!(request.id===null||typeof request.id==='string'&&/^[0-9a-f]{40}$/.test(request.id)))return{ok:false,status:'invalid'};
+  if(!permitted()||!viewTeam)return{ok:false,status:'unavailable'};
+  const card=request.id?viewCards.get(request.id)??null:null;const sig=card?`${viewTeam}|${card}`:null;if(sig===viewingSent)return{ok:true,status:'unchanged'};viewingSent=sig;
+  try{presenceView({team:viewTeam,card_id:card});}catch{}return{ok:true,status:card?'viewing':'cleared'};}
  async function directory(request){
   const time=now(),view=request?.view;
   if(!(closed(request,['view'])&&view==='mine'||closed(request,['view','team'])&&view==='team'&&(request.team===null||typeof request.team==='string'&&/^[0-9a-f]{32}$/.test(request.team))))return unavailableDirectory('mine',time);
+  const readGeneration=++directoryEpoch,reading=()=>readGeneration===directoryEpoch&&permitted();
+  if(view==='mine'&&teamView!==null||view==='team'&&request.team!==null&&teamView!==request.team){routeEpoch++;teamView=view==='mine'?null:request.team;teamRefs.clear();controls.invalidate();coordinator?.invalidate();}
   if(!permitted())return unavailableDirectory(view,time);
-  const built=await build(time,permitted);
-  if(!built||!permitted())return unavailableDirectory(view,time);
+  const built=await build(time,reading);
+  if(!built||!reading())return unavailableDirectory(view,time);
   const sh=safe(shares,null),origin=typeof sh?.origin==='string'?sh.origin:null;
   const shareList=(origin&&Array.isArray(sh.list)?sh.list:[]).filter(x=>object(x)&&typeof x.session==='string'&&object(x.team)&&typeof x.team.id==='string').map(x=>({session:x.session,scope:x.scope,teamKey:teamKey(origin,x.team.id),teamName:clean(x.team.name,80)||'Team'}));
   const ownedList=(()=>{const v=safe(owned,[]);return Array.isArray(v)?v.slice(0,50):[];})();
   const personal=directoryModel.mine({work:built.rows,meta:built.meta,owned:ownedList,shares:shareList});
+  personalRefs.clear();for(const e of personal)personalRefs.set(e.id,e);
   const teams=new Map(),add=(key,name,source)=>{if(!teams.has(key))teams.set(key,{key,name:clean(name,80)||'Team',source});};
   let real=null;try{real=await hubTeams();}catch{real=null;}
-  if(typeof real?.origin==='string'&&Array.isArray(real.teams))for(const t of real.teams.slice(0,64))if(object(t)&&typeof t.id==='string')add(teamKey(real.origin,t.id),t.name,'hub');
+  teamIds.clear();
+  if(typeof real?.origin==='string'&&Array.isArray(real.teams))for(const t of real.teams.slice(0,64))if(object(t)&&typeof t.id==='string'){add(teamKey(real.origin,t.id),t.name,'hub');teamIds.set(teamKey(real.origin,t.id),{origin:real.origin,teamId:t.id});}
   for(const e of personal)for(const b of e.teams)add(b.key,b.name,'hub');
   const hub=safe(teamHub,null),viewer=viewerOf(hub);let fakeTeams=[];
   const adapterOrigin=hub?.fake!==true&&typeof hub?.origin==='string'?hub.origin:'adapter:';
   if(hub&&viewer){try{fakeTeams=(await hub.teams(viewer)).filter(t=>object(t)&&typeof t.id==='string').slice(0,64);}catch{fakeTeams=[];}
    for(const t of fakeTeams)add(teamKey(adapterOrigin,t.id),t.name,hub.fake===true?'fake':'adapter');}
-  if(!permitted())return unavailableDirectory(view,time);
+  if(!reading())return unavailableDirectory(view,time);
   const teamList=[...teams.values()].map(t=>({...t,label:t.source==='fake'?clean(hub?.label,80)||'Fake team hub':''}));
   let status=built.partial||built.omitted?'partial':'complete';
   if(view==='mine')return{schema:1,view,status,observed_at:time,teams:teamList,team:null,notice:'',entries:personal,counts:directoryModel.counts(personal)};
   const selected=teams.get(request.team)??teams.values().next().value??null;
+  if(teamView!==(selected?.key??null)){routeEpoch++;teamView=selected?.key??null;teamRefs.clear();controls.invalidate();coordinator?.invalidate();}
   if(!selected)return{schema:1,view,status,observed_at:time,teams:teamList,team:null,notice:'You are not in a team yet, or no team is connected.',entries:[],counts:directoryModel.counts([])};
   const adapterTeam=fakeTeams.find(t=>teamKey(adapterOrigin,t.id)===selected.key)??null;
   let hubEntries=[];
   if(adapterTeam){try{hubEntries=await hub.sessions(viewer,adapterTeam.id);}catch{hubEntries=[];}}
-  if(!permitted())return unavailableDirectory(view,time);
+  if(!reading())return unavailableDirectory(view,time);
   if(hubEntries?.partial===true)status='partial';
   const model=directoryModel.team({team:{key:selected.key,name:selected.name,id:adapterTeam?.id??null},viewer:viewer??{id:''},member:!!adapterTeam,personal,hubEntries});
-  for(const [entryId,ref] of model.refs)teamRefs.set(entryId,{...ref,team:adapterTeam.id,teamKey:selected.key,hub,expires:time+45000});
+  // Team depth lane C: the latest board.presence for this team (main-only link), folded onto the people shown.
+  viewCards.clear();viewTeam=adapterTeam?.id??null;
+  if(adapterTeam){let live=null;try{live=presence(adapterTeam.id);}catch{live=null;}
+   if(live&&typeof live==='object'){const members=Array.isArray(live.members)?live.members:[],viewers=Array.isArray(live.viewers)?live.viewers:[];
+    for(const e of model.entries){if(!e.owner||e.owner.self)continue;const m=members.find(p=>p&&p.name===e.owner.name),v=viewers.find(p=>p&&p.name===e.owner.name);if(!m&&!v)continue;
+     const running=[...new Set((Array.isArray(m?.sessions)?m.sessions:[]).map(s=>clean(s?.repo_short,80)).filter(Boolean))].slice(0,5);
+     e.presence={viewing:v?{key:clean(v.key,80)||null,title:clean(v.title,120)||'a card'}:null,running};}}
+   for(const [entryId,ref] of model.refs){const x=(Array.isArray(hubEntries)?hubEntries:[]).find(h=>h&&h.ref===ref.ref);const cardId=x&&x.card&&typeof x.card==='object'&&typeof x.card.id==='string'&&x.card.id&&x.card.id.length<=128?x.card.id:null;if(cardId)viewCards.set(entryId,cardId);}}
+  teamRefs.clear();
+  for(const [entryId,ref] of model.refs)teamRefs.set(entryId,{...ref,messageContract:model.entries.find(x=>x.id===entryId)?.messageContract,team:adapterTeam.id,teamKey:selected.key,hub,viewerId:viewer?.id,expires:time+45000});
   while(teamRefs.size>500)teamRefs.delete(teamRefs.keys().next().value);
   const notice=adapterTeam?(hub.fake===true?`${clean(hub.label,80)||'Fake team hub'}: these teammates and sessions are test data, not a real team.`:''):'Your own sessions in this team are shown. Teammates\' shared sessions appear once your team hub\'s shared-session directory is connected.';
   return{schema:1,view,status,observed_at:time,teams:teamList,team:{key:selected.key,name:selected.name,source:selected.source},notice,entries:model.entries,counts:directoryModel.counts(model.entries)};
@@ -177,19 +294,28 @@ function createOverviewService({sessions=()=>[],work=async()=>({sources:[],captu
  // Message a teammate's session shared with the selected team to send.
  async function teamMessage(request){
   if(!closed(request,['id','text'])||typeof request.id!=='string'||!/^[0-9a-f]{40}$/.test(request.id)||typeof request.text!=='string'||request.text.includes('\0')||!request.text.trim()||request.text.trim().length>4000||Buffer.byteLength(request.text.trim())>8192)return response('invalid');
-  const e=teamRefs.get(request.id);if(!e||e.expires<now()||!actionPermitted())return response('stale');
+  const e=teamRefs.get(request.id),generation=routeEpoch;if(!e||e.expires<now()||!actionPermitted())return response('stale');
   if(e.scope!=='interact')return{...response('unavailable'),error:'Shared with you to watch only.'};
-  const hub=safe(teamHub,null),viewer=viewerOf(hub);if(!hub||hub!==e.hub||!viewer)return response('stale');
+  const hub=safe(teamHub,null),viewer=viewerOf(hub);if(!hub||hub!==e.hub||!viewer||viewer.id!==e.viewerId||teamView!==e.teamKey)return response('stale');
+  const alive=()=>actionPermitted()&&generation===routeEpoch&&teamView===e.teamKey&&safe(teamHub,null)===hub&&viewerOf(hub)?.id===viewer.id&&e.expires>=now();
   // Re-check the share right before sending: revoked, expired or removed members refuse.
   let fresh;try{fresh=await hub.sessions(viewer,e.team);}catch{fresh=[];}
-  if(!actionPermitted())return response('stale');
+  if(!alive())return response('stale');
   const again=directoryModel.team({team:{key:e.teamKey,name:'',id:e.team},viewer,member:true,personal:[],hubEntries:fresh});
   const now2=again.refs.get(request.id);if(!now2||now2.ref!==e.ref||now2.scope!=='interact')return{ok:false,status:'stale',error:'This session is no longer shared with you to send.'};
   const target=again.entries.find(x=>x.id===request.id);if(target?.capabilities.receive.available!==true)return{ok:false,status:'unavailable',error:target?.capabilities.receive.reason||'Unavailable.'};
-  let out;try{out=await hub.send(viewer,e.team,e.ref,request.text.trim(),crypto.randomUUID());}catch{out=null;}
-  if(!actionPermitted())return response('stale');
-  return out?.ok===true?response('queued'):{ok:false,status:['forbidden','stale','unavailable','unconfirmed'].includes(out?.status)?out.status:'unavailable',error:clean(out?.error,300)||'The team hub did not accept the message.'};
+  let out;try{out=await hub.send(viewer,e.team,e.ref,request.text.trim(),crypto.randomUUID(),alive);}catch{return{ok:false,status:'unconfirmed',error:'No receipt yet. Inspect the task inbox before sending again.'};}
+  if(!alive())return{ok:false,status:'unconfirmed',error:'The view changed. Inspect the receipt before sending again.'};
+  return out?.ok===true?out:{ok:false,status:['forbidden','stale','busy','unavailable','unconfirmed'].includes(out?.status)?out.status:'unavailable',error:clean(out?.error,300)||'The team hub did not accept the message.'};
  }
- return{snapshot,directory,teamMessage,open:r=>action(r),message:r=>action(r,true),invalidate(){epoch++;handles.clear();teamRefs.clear();}};
+ return{snapshot,viewing,directory:async request=>{const out=await directory(request);return{...out,followupScope:followupScope()};},teamMessage,teamInspect:controls.inspect,teamAction:controls.action,teamIdentity,
+  followupReview,followupEnqueue,
+  coordinatorRequestOwner:coordinator.requestOwner,coordinatorRemoteList:coordinator.remoteList,coordinatorRemoteSend:coordinator.remoteSend,coordinatorRemoteCancel:coordinator.remoteCancel,coordinatorRemoteReplace:coordinator.remoteReplace,
+  coordinatorInventory:coordinator.inventory,coordinatorPropose:coordinator.propose,coordinatorConfirm:coordinator.confirm,coordinatorResults:coordinator.results,coordinatorCancel:coordinator.cancel,
+  followupList:()=>{const owner=followupScope(),epoch=routeEpoch;return permitted()&&followups?followups.list(()=>permitted()&&owner===followupScope()&&epoch===routeEpoch):followupUnavailable();},
+  followupCancel:r=>{const owner=followupScope(),epoch=routeEpoch;return actionPermitted()&&closed(r,['id'])&&followups?followups.cancel(r.id,()=>actionPermitted()&&owner===followupScope()&&epoch===routeEpoch):followupUnavailable();},
+  followupDiscard:r=>{const owner=followupScope(),epoch=routeEpoch;return actionPermitted()&&closed(r,['id'])&&followups?followups.discard(r.id,()=>actionPermitted()&&owner===followupScope()&&epoch===routeEpoch):followupUnavailable();},
+  pumpFollowups:()=>actionPermitted()&&followups?followups.advance(resolveFollowup):Promise.resolve(),
+  open:r=>action(r),message:r=>action(r,true),invalidate(){epoch++;directoryEpoch++;routeEpoch++;teamView=null;handles.clear();teamRefs.clear();personalRefs.clear();followupSelections.clear();controls.invalidate();coordinator?.invalidate();}};
 }
 module.exports={createOverviewService,PROVIDERS,provider,response};

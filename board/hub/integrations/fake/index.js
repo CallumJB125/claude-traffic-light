@@ -71,5 +71,15 @@ export default defineConnector({
     'issue.close': { default: 'ask' },
   },
 
+  // Create ticket: one POST to the fake tracker (tests inject fetch).
+  issueSecrets: ['api_token'],
+  async createIssue({ title, description, secrets, fetch }) {
+    const res = await fetch('https://api.fake.example/issues', { method: 'POST', headers: { authorization: `Bearer ${secrets.api_token}`, 'content-type': 'application/json' }, body: JSON.stringify({ title, description }) }); // privacy-flow: create-ticket
+    if (!res.ok) throw new Error('fake tracker refused');
+    const b = await res.json();
+    if (!/^FAKE-\d{1,9}$/.test(b?.key ?? '')) throw new Error('fake tracker answered oddly');
+    return { key: b.key, url: `https://fake.example/issue/${b.key}` };
+  },
+
   async health() { return { ok: true }; },
 });

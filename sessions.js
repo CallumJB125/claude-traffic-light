@@ -2,6 +2,17 @@
 const content = document.getElementById('content'), status = document.getElementById('status');
 const activity = document.getElementById('activity-status');
 let generation = 0;
+let selectedSessionKey = null, selectionPending = false;
+function selectSession(key) { if (typeof key !== 'string' || !/^[\w.-]{1,200}$/.test(key)) return; selectedSessionKey = key; selectionPending = true; for (const id of ['session-search', 'session-provider', 'session-freshness']) { const control = document.getElementById(id); if (control) control.value = ''; } applyLocalFilters(); void refresh(); }
+let selectionEventSeen = false;
+window.sessionsApi.onSelection?.(key => { selectionEventSeen = true; selectSession(key); });
+window.sessionsApi.selection?.().then(key => { if (!selectionEventSeen) selectSession(key); }).catch(() => {});
+function focusSelectedSession() {
+  const rows = [...content.querySelectorAll('[data-session-key]')], selected = rows.find(r => r.dataset.sessionKey === selectedSessionKey);
+  if (!selected) { status.textContent = 'Close the open editor to load the selected session.'; return; }
+  for (const row of rows) { if (row === selected) row.setAttribute('aria-current', 'true'); else row.removeAttribute('aria-current'); }
+  selected.tabIndex = -1; selected.scrollIntoView?.({ block: 'center' }); selected.focus({ preventScroll: true }); selectionPending = false;
+}
 const node = (tag, text, className) => { const el = document.createElement(tag); if (text) el.textContent = text; if (className) el.className = className; return el; };
 const age = value => value == null ? 'Age unknown' : value < 60_000 ? `${Math.floor(value / 1000)}s ago` : value < 3_600_000 ? `${Math.floor(value / 60_000)}m ago` : `${Math.floor(value / 3_600_000)}h ago`;
 const usd = v => `$${Math.abs(v).toFixed(2)}`;
@@ -36,6 +47,8 @@ function handoverRow(section, h) {
       row.append(document.createTextNode(' · '), b);
     }
     row.append(document.createTextNode(' · '), continueButton(h.key));
+    if (window.sessionsApi.pinAdd) row.append(document.createTextNode(' · '), pinButton(h.key));
+    if (window.sessionsApi.momentMark) row.append(document.createTextNode(' · '), momentButton(h.key));
   }
   const tl = node('button', 'Timeline', 'link'); tl.type = 'button';
   tl.addEventListener('click', async () => { const ok = await window.sessionsApi.timeline(h.key).catch(() => false); if (!ok) { tl.textContent = 'Unavailable'; setTimeout(() => { tl.textContent = 'Timeline'; }, 1500); } });
@@ -82,6 +95,56 @@ function continueButton(key) {
   return wrap;
 }
 
+// Pin to project: one link, command, convention or priority onto the team board this folder is linked to.
+function momentButton(key) {
+  const wrap = node('span'), out = node('span', '', 'continue-note'); out.setAttribute('role', 'status');
+  const open = node('button', 'Mark a moment', 'link'); open.type = 'button';
+  open.addEventListener('click', () => {
+    if (wrap.querySelector('.moment-pick')) return;
+    const box = node('span', '', 'moment-pick teammate-pick');
+    const kind = node('select'); kind.setAttribute('aria-label', 'What kind of moment');
+    for (const [k, l] of [['ship', 'Shipped'], ['decision', 'Decision'], ['demo', 'Demo'], ['moment', 'Moment']]) { const o = node('option', l); o.value = k; kind.append(o); }
+    const label = node('input'); label.type = 'text'; label.maxLength = 120; label.placeholder = 'What happened'; label.setAttribute('aria-label', 'Moment');
+    const note = node('input'); note.type = 'text'; note.maxLength = 500; note.placeholder = 'Note for the team (optional)'; note.setAttribute('aria-label', 'Moment note');
+    const go = button('Mark', async () => { go.disabled = true; const r = await window.sessionsApi.momentMark(key, kind.value, label.value, note.value).catch(() => null); out.textContent = ` ${r?.ok ? `Marked on the project board (${r.count} moments).` : r?.error || 'That did not work.'}`; if (r?.ok) { box.remove(); if (r.moment_id && window.sessionsApi.commentAdd) wrap.append(momentCommentBox(key, r.moment_id, out)); } else go.disabled = false; }); go.className = 'small primary';
+    const cancel = button('Cancel', () => { box.remove(); out.textContent = ''; }); cancel.className = 'small';
+    box.append(kind, label, note, go, cancel); wrap.append(box); label.focus();
+  });
+  wrap.append(open, out);
+  return wrap;
+}
+// The follow-up after a moment is marked: one comment on it (the hub turns @name into a mention for that teammate).
+function momentCommentBox(key, momentId, out) {
+  const box = node('span', '', 'moment-comment teammate-pick');
+  const text = node('input'); text.type = 'text'; text.maxLength = 500; text.placeholder = 'Add a comment (@name mentions a teammate)'; text.setAttribute('aria-label', 'Comment on the moment');
+  const go = button('Comment', async () => {
+    go.disabled = true;
+    const r = await window.sessionsApi.commentAdd(key, { moment_id: momentId }, text.value).catch(() => null);
+    out.textContent = ` ${r?.ok ? (r.mentions ? `Commented and mentioned ${r.mentions} teammate${r.mentions === 1 ? '' : 's'}.` : 'Commented on the moment.') : r?.error || 'That did not work.'}`;
+    if (r?.ok) box.remove(); else go.disabled = false;
+  }); go.className = 'small primary';
+  const skip = button('Skip', () => box.remove()); skip.className = 'small';
+  box.append(text, go, skip); text.focus();
+  return box;
+}
+function pinButton(key) {
+  const wrap = node('span'), out = node('span', '', 'continue-note'); out.setAttribute('role', 'status');
+  const open = node('button', 'Pin to project', 'link'); open.type = 'button';
+  open.addEventListener('click', () => {
+    if (wrap.querySelector('.pin-pick')) return;
+    const box = node('span', '', 'pin-pick teammate-pick');
+    const kind = node('select'); kind.setAttribute('aria-label', 'What kind of pin');
+    for (const [k, l] of [['link', 'Link'], ['command', 'Command'], ['note', 'Convention'], ['priority', 'Priority']]) { const o = node('option', l); o.value = k; kind.append(o); }
+    const label = node('input'); label.type = 'text'; label.maxLength = 80; label.placeholder = 'Label'; label.setAttribute('aria-label', 'Pin label');
+    const value = node('input'); value.type = 'text'; value.maxLength = 500; value.placeholder = 'https://… or a command or note'; value.setAttribute('aria-label', 'Pin value');
+    const go = button('Pin', async () => { go.disabled = true; const r = await window.sessionsApi.pinAdd(key, kind.value, label.value, value.value).catch(() => null); out.textContent = ` ${r?.ok ? `Pinned to the project board (${r.count} pinned).` : r?.error || 'That did not work.'}`; if (r?.ok) box.remove(); else go.disabled = false; }); go.className = 'small primary';
+    const cancel = button('Cancel', () => { box.remove(); out.textContent = ''; }); cancel.className = 'small';
+    box.append(kind, label, value, go, cancel); wrap.append(box); label.focus();
+  });
+  wrap.append(open, out);
+  return wrap;
+}
+
 // Hand off to a teammate: a small inline picker (names from the team hub for this session's folder), then the
 // same native preview-and-confirm as a tool hand-off, and the packet goes through agent mail.
 async function teammatePicker(key, wrap, out) {
@@ -93,6 +156,14 @@ async function teammatePicker(key, wrap, out) {
   const box = node('span', '', 'teammate-pick');
   const pick = node('select'); pick.setAttribute('aria-label', 'Which teammate');
   for (const t of r.teammates) { const o = node('option', t.name); o.value = t.user_id; pick.append(o); }
+  const q = node('input'); q.type = 'text'; q.maxLength = 500; q.placeholder = 'What should they look at?'; q.setAttribute('aria-label', 'What should they look at?'); q.className = 'look-question';
+  const look = button('Can you look at this?', async () => {
+    if (!q.value.trim()) { q.focus(); out.textContent = ' Write what they should look at.'; return; }
+    look.disabled = true; out.textContent = ' Sending your request…';
+    const res = await window.sessionsApi.mailLook?.(key, pick.value, q.value).catch(() => null);
+    out.textContent = ` ${res?.ok ? res.note || 'Asked.' : res?.error || 'That did not work.'}`;
+    box.remove();
+  }); look.className = 'small';
   const go = button('Hand off…', async () => {
     go.disabled = true; out.textContent = ' Waiting for your confirmation…';
     const res = await window.sessionsApi.mailHandoff(key, pick.value).catch(() => null);
@@ -100,7 +171,7 @@ async function teammatePicker(key, wrap, out) {
     box.remove();
   }); go.className = 'small primary';
   const cancel = button('Cancel', () => { box.remove(); out.textContent = ''; }); cancel.className = 'small';
-  box.append(pick, go, cancel);
+  box.append(pick, q, look, go, cancel);
   wrap.append(box);
   pick.focus();
 }
@@ -260,6 +331,27 @@ function rowPanel(section, kind, item) {
     api.linkFromSession(a.handle).then(pre => { linkPanel(host, pre, null); host.append(close); });
     return;
   }
+  if (kind === 'ticket') {
+    say(out, 'Drafting from the handover…', true); host.append(out, close);
+    api.ticketDraft(a.handle).then(d => {
+      if (!d?.ok) return say(out, d?.text ?? 'Could not draft the issue.', false);
+      const where = select(d.targets.map(t => ({ value: t.ref, label: t.label })), 'No connection');
+      const title = document.createElement('input'); title.type = 'text'; title.maxLength = 200; title.value = d.title;
+      const body = document.createElement('textarea'); body.maxLength = 8000; body.rows = 10; body.value = d.description;
+      const link = node('a', '', 'issue-link'); link.hidden = true;
+      const go = button('Create', async () => {
+        if (!where.value || !title.value.trim()) return say(out, 'Choose where, and give it a title.', false);
+        go.disabled = true;
+        try {
+          const r = await api.ticketCreate(where.value, title.value, body.value);
+          say(out, r?.text ?? 'Could not create the issue.', r?.ok);
+          if (r?.ok && r.url) { link.href = r.url; link.textContent = r.url; link.target = '_blank'; link.rel = 'noopener'; link.hidden = false; } else if (!r?.ok) go.disabled = false;
+        } catch { go.disabled = false; }
+      });
+      host.replaceChildren(field('Create in', where), field('Title', title), field('Description (edit before sending; only this text leaves your computer)', body), go, out, link, close);
+    });
+    return;
+  }
   loadSetup(true).then(d => {
     if (kind === 'card') {
       const board = select(d.boards.map(b => ({ value: b.key, label: b.label })), 'No boards available');
@@ -283,6 +375,7 @@ function rowActions(section, item) {
   if (a.card) section.append(node('p', a.card.how === 'attached' ? `Attached to ${a.card.label} (saved on this computer only)` : 'A board card was made from this session', 'card-line'));
   const row = node('div', '', 'row-actions');
   row.append(button('Make a card', () => rowPanel(section, 'card', item)), button('Attach to card…', () => rowPanel(section, 'attach', item)), button('Link repo to board', () => rowPanel(section, 'link', item)));
+  if (a.ticket?.length) row.append(button(`Create ${a.ticket.join(' / ')} issue…`, () => rowPanel(section, 'ticket', item)));
   if (a.share) {
     const check = document.createElement('input'); check.type = 'checkbox'; check.checked = a.share.on;
     check.addEventListener('change', async () => { check.disabled = true; try { await api.share(a.handle, check.checked); } finally { check.disabled = false; } });
@@ -311,6 +404,10 @@ function render(snapshot) {
   document.getElementById('coord').hidden = !(snapshot.sessions ?? []).some(i => i.burst?.coordination);
   for (const item of snapshot.sessions ?? []) {
     const section = node('section', '', 'session');
+    section.dataset.search = `${item.provider} ${item.project}`.toLocaleLowerCase(); section.dataset.provider = item.provider; section.dataset.freshness = item.freshness;
+    if (item.handover?.key) section.dataset.sessionKey = item.handover.key;
+    const selected = item.handover?.key === selectedSessionKey;
+    if (selected) { section.setAttribute('aria-current', 'true'); section.tabIndex = -1; }
     const heading = node('h2', `${item.provider} · ${item.project}`);
     heading.append(node('span', item.freshness === 'recent' ? 'Recent' : item.freshness === 'stale' ? 'Stale' : 'Freshness unknown', 'freshness'));
     if (item.policy?.name) heading.append(node('span', `Policy: ${item.policy.name}`, 'freshness policy'));
@@ -334,19 +431,43 @@ function render(snapshot) {
     sessionTools(section, item);
     rowActions(section, item);
     content.append(section);
+    if (selected && selectionPending) { selectionPending = false; section.scrollIntoView?.({ block: 'center' }); section.focus({ preventScroll: true }); }
   }
   if (!snapshot.sessions?.length) {
     content.append(node('p', snapshot.status === 'unavailable' ? 'Local session reports are unavailable. Try Refresh.' : 'No local sessions are visible yet.', 'muted'));
     if (snapshot.status !== 'unavailable') content.append(emptyState());
   }
+  updateLocalFilters(snapshot.sessions ?? []);
   // The Add sessions panel stays open while there is nothing to show and folds once sessions exist, unless the person chose.
   if (!addTouched) document.getElementById('add').open = !snapshot.sessions?.length;
   status.textContent = snapshot.status === 'unavailable' ? 'Local activity is unavailable. Try Refresh.'
     : `Updated ${new Date(snapshot.observed_at).toLocaleTimeString()}. Refreshes every 5 seconds while this page is visible.${snapshot.omitted ? ` ${snapshot.omitted} additional reports exceed the display limit.` : ''}`;
 }
+function applyLocalFilters() {
+  const query = document.getElementById('session-search').value.trim().toLocaleLowerCase();
+  const provider = document.getElementById('session-provider').value, freshness = document.getElementById('session-freshness').value;
+  const rows = [...content.querySelectorAll('.session')]; let shown = 0;
+  for (const row of rows) {
+    row.hidden = !!(query && !row.dataset.search.includes(query) || provider && row.dataset.provider !== provider || freshness && row.dataset.freshness !== freshness);
+    if (!row.hidden) shown++;
+  }
+  document.getElementById('session-count').textContent = `${shown} of ${rows.length} ${rows.length === 1 ? 'session' : 'sessions'}`;
+  document.getElementById('session-filter-empty').hidden = !rows.length || shown > 0;
+}
+function updateLocalFilters(sessions) {
+  const provider = document.getElementById('session-provider'), previous = provider.value;
+  const values = [...new Set(sessions.map(s => s.provider))].sort((a, b) => a.localeCompare(b));
+  provider.replaceChildren(new Option('All tools', ''), ...values.map(v => new Option(v, v)));
+  if (previous && !values.includes(previous)) provider.append(new Option(`${previous} · none now`, previous));
+  provider.value = previous; applyLocalFilters();
+}
+function resetLocalFilters() {
+  for (const id of ['session-search', 'session-provider', 'session-freshness']) document.getElementById(id).value = '';
+  applyLocalFilters();
+}
 async function refresh({ clear = false } = {}) {
   const request = ++generation;
-  if (clear) { content.replaceChildren(); status.textContent = 'Checking local sessions…'; activity.textContent = 'Checking local activity…'; }
+  if (clear) { content.replaceChildren(); updateLocalFilters([]); status.textContent = 'Checking local sessions…'; activity.textContent = 'Checking local activity…'; }
   try {
     let timer;
     const snapshot = await Promise.race([window.sessionsApi.state(), new Promise((_, reject) => {
@@ -354,10 +475,10 @@ async function refresh({ clear = false } = {}) {
     })]).finally(() => clearTimeout(timer));
     if (request !== generation || document.hidden) return;
     if (!snapshot) throw new Error('unavailable');
-    if (editing) return; // an open row panel would be wiped by a redraw
+    if (editing) { if (selectionPending) focusSelectedSession(); return; } // preserve an open editor while navigating to an existing row
     render(snapshot);
   } catch {
-    if (request === generation && !document.hidden) { content.replaceChildren(); activity.textContent = 'Codex activity is unavailable. Check Codex on the AI tools page.'; status.textContent = 'Local activity is unavailable. Try Refresh.'; }
+    if (request === generation && !document.hidden) { content.replaceChildren(); updateLocalFilters([]); activity.textContent = 'Codex activity is unavailable. Check Codex on the AI tools page.'; status.textContent = 'Local activity is unavailable. Try Refresh.'; }
   }
 }
 const COORD_LABELS = { shared: 'shared', refused: 'refused', held: 'held for a commit', stopped: 'stopped with uncommitted files', errors: 'hook errors' };
@@ -379,6 +500,10 @@ async function loadCoordination() {
 }
 document.getElementById('coord').addEventListener('toggle', e => { if (e.currentTarget.open) void loadCoordination(); });
 document.getElementById('coord-days').addEventListener('change', () => { void loadCoordination(); });
+document.getElementById('session-search').addEventListener('input', applyLocalFilters);
+for (const id of ['session-provider', 'session-freshness']) document.getElementById(id).addEventListener('change', applyLocalFilters);
+for (const id of ['session-reset', 'session-empty-reset']) document.getElementById(id).addEventListener('click', resetLocalFilters);
+document.getElementById('start-session-shortcut').addEventListener('click', () => { const add = document.getElementById('add'), host = document.getElementById('panel-start'); add.open = true; addTouched = true; host.hidden = false; startPanel(host); host.scrollIntoView?.({ block: 'center' }); });
 document.getElementById('refresh').addEventListener('click', () => { editing = false; refresh({ clear: true }); });
 document.getElementById('add').addEventListener('toggle', () => { addTouched = true; });
 document.getElementById('add-connect').addEventListener('click', async () => {
@@ -395,7 +520,7 @@ document.getElementById('codex-aitools').addEventListener('click', async event =
 });
 document.addEventListener('visibilitychange', () => {
   // A hidden page must not retain a status that appears current on return.
-  editing = false; ++generation; content.replaceChildren(); status.textContent = 'Checking local sessions…'; activity.textContent = 'Checking local activity…';
+  editing = false; ++generation; content.replaceChildren(); updateLocalFilters([]); status.textContent = 'Checking local sessions…'; activity.textContent = 'Checking local activity…';
   if (!document.hidden) void refresh();
 });
 setInterval(() => { if (!document.hidden) void refresh(); }, 5000);

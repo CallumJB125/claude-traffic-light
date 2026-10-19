@@ -19,6 +19,8 @@ const Inspect = require('./burst-inspect.js');
 const Snapshot = require('./burst-snapshot.js');
 const ContextBreakdown = require('./context-breakdown.js');
 const Tools = require('./optimiser-tools.js');
+const Setup = require('./burst-setup.js');
+const LooseEnds = require('./burst-loose-ends-view.js');
 
 const POLL_BASE_MS = 5000;
 const POLL_MAX_MS = 60000;
@@ -46,32 +48,129 @@ const ACTIONS = Object.freeze({
   'codex-enable': { consent: () => ({ title: 'Route Codex through Burst', detail: 'Burst adds its own block to ~/.codex/config.toml, after saving a copy of the file, so Codex sessions you start from now on send their requests through Burst. Running Codex sessions are not changed.' }) },
   'codex-disable': { consent: () => ({ title: 'Stop routing Codex through Burst', detail: 'Burst removes its block from ~/.codex/config.toml, after saving a copy of the file. Codex sessions you start from now on talk to OpenAI directly again.' }) },
   'console-diagnose': { console: true, consent: () => ({ title: 'Diagnose Burst', detail: 'Burst\'s support console opens a Terminal window and writes a diagnose report you can copy.' }) },
+  // Burst v0.20 (lane C). `capability` is the detect() flag the running Burst must report; without it
+  // the action answers "not supported" before any dialog. Each sentence says what changes on the Mac.
+  'keep-awake': {
+    capability: 'keepAwake',
+    consent: (a) => (a.mode === 'off'
+      ? { title: 'Let this Mac sleep', detail: 'Burst turns its keep-awake setting off in ~/.config/claude-burst/config.json and opens a Terminal window that asks for your password to put the Mac\'s power settings back (lid-awake-root.sh remove). The Mac sleeps again when the lid is shut.' }
+      : { title: 'Keep this Mac awake', detail: `Burst saves keep-awake "${a.mode === 'always' ? 'always' : 'plugged in only'}"${a.idleMinutes ? ` with a ${a.idleMinutes}-minute idle limit` : ''} in ~/.config/claude-burst/config.json, turns App Nap off for Ghostty, and opens a Terminal window that asks for your password to apply the machine-wide half (lid-awake-root.sh): the Mac then stays awake with the lid shut, ${a.mode === 'always' ? 'on battery too' : 'while plugged in'}. "Let this Mac sleep" undoes it.` }),
+  },
+  'mod-action': {
+    capability: 'mods',
+    consent: (a) => ({
+      install: { title: 'Install Burst\'s session mod', detail: 'Burst runs its update-mod.sh: it copies the burst-session mod into ~/.local/share/claude-burst/marketplace and installs or updates it as a Claude Code plugin (the band above the prompt and its toasts). Sessions you start from now on load it; running ones are not changed. Burst reports progress under mod status.' },
+      remove: { title: 'Remove Burst\'s session mod', detail: 'Burst runs its update-mod.sh uninstall: the burst-session plugin is removed from Claude Code. Sessions you start from now on have no Burst band; running ones keep it until they end.' },
+      toasts: { title: a.on ? 'Turn session toasts on' : 'Turn session toasts off', detail: `Burst saves toasts=${a.on === true} in its mod settings file (~/.config/claude-burst). Only the mod's own pop-ups inside Claude Code change; nothing else on the Mac.` },
+      handoff: { title: a.on ? 'Let the mod hand off summaries' : 'Stop the mod handing off summaries', detail: `Burst saves handoff=${a.on === true} in its mod settings file (~/.config/claude-burst). This decides whether the band passes Burst's compaction summary into a session; nothing else on the Mac changes.` },
+      handoff_in_path: { title: a.on ? 'Write handoffs in the repository' : 'Stop writing handoffs in the repository', detail: `Burst saves handoff_in_path=${a.on === true} in its mod settings file (~/.config/claude-burst). It decides whether the mod writes its handoff note inside the repository; nothing else on the Mac changes.` },
+    }[a.action] || { title: 'Change Burst\'s mod', detail: 'Burst changes its session mod.' }),
+  },
+  'panel-install': {
+    capability: 'mods',
+    consent: (a) => (a.action === 'remove'
+      ? { title: 'Remove the usage panel', detail: 'Burst runs the usage panel\'s own claude-panel-uninstall.sh from its checkout, which removes the panel\'s hooks and files from this Mac. Running Claude Code sessions keep it until they end.' }
+      : { title: 'Install the usage panel', detail: 'Burst installs the Claude Code usage panel (claude-code-cost-sidebar): if no checkout exists it fetches the latest signed release into ~/.local/share/claude-burst, then runs its claude-panel-setup.sh, which adds the panel\'s hooks to Claude Code and its settings file under ~/.config. It can take a few minutes; Burst reports progress under mod status.' }),
+  },
+  'finder-install': {
+    capability: 'finder',
+    consent: (a) => (a.action === 'remove'
+      ? { title: 'Remove Finder shortcuts', detail: `Burst deletes ${a.keys ? `the ${a.keys.length} ticked` : 'its'} Quick Action${a.keys && a.keys.length === 1 ? '' : 's'} from ~/Library/Services and the matching launcher scripts under ~/.local/bin. Only shortcuts Burst itself made are removed.` }
+      : a.action === 'bypass'
+        ? { title: a.on ? 'Skip permission prompts from these shortcuts' : 'Ask permission again from these shortcuts', detail: `Burst saves bypass ${a.on ? 'on' : 'off'} for ${(a.keys || []).join(', ')} in ~/.config/claude-burst. ${a.on ? 'Sessions started from those Finder shortcuts then run with permission prompts skipped (the tool\'s own bypass flag).' : 'Sessions started from those Finder shortcuts ask for permission as usual again.'}` }
+        : { title: 'Add Finder shortcuts', detail: `Burst writes ${a.keys ? `${a.keys.length} ticked` : 'its'} Quick Action${a.keys && a.keys.length === 1 ? '' : 's'} into ~/Library/Services (they appear in Finder\'s right-click menu) and the launcher script each one runs under ~/.local/bin. They open Ghostty in the chosen folder and start the tool; nothing runs until you use one.` }),
+  },
+  'console-repair': { console: true, capability: 'consoleRepair', consent: () => ({ title: 'Repair Burst', detail: 'Burst\'s support console opens a Terminal window running its repair.sh: it syncs the checkout, stops stale processes on Burst\'s ports, reinstalls Burst in the mode it was in, re-arms the watchdog and the CA, and asks for your password where /etc/hosts and pf change. It asks before stopping any session.' }) },
+  'console-restore-config': { console: true, capability: 'consoleRepair', consent: () => ({ title: 'Restore last good config', detail: 'Burst\'s support console puts back the last ~/.config/claude-burst/config.json that loaded, keeping the file that would not load next to it. Nothing changes if the current file loads. Restart Burst afterwards if its checks stay red.' }) },
 });
 
-function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usageAllowed = () => false, sessionsAllowed = () => false, accountAllowed = () => false, optimiserAllowed = () => false, aitoolsAllowed = () => false, stateFile = null, snapshotFile = null, transcriptFor = () => null, hubSend = null, runner = null, isMac, dialog, shell, scriptDir, home = os.homedir(), launch, client: injected, onView = () => {}, log = () => {} }) {
+// `burst:action` kinds (the renderer's vocabulary) that map onto the allow-listed mutations above.
+const ACTION_KINDS = Object.freeze({
+  'keep-awake': (a) => ['keep-awake', { mode: a.mode, idleMinutes: a.idleMinutes }],
+  // The card names the mod in args.mod (burst-view.js modsView): the usage panel
+  // (claude-code-cost-sidebar) installs through /api/panel-install, the session mod through /api/mod-action.
+  'mod-install': (a) => [a.mod === 'usage-panel' ? 'panel-install' : 'mod-action', { action: 'install' }],
+  'mod-update': (a) => [a.mod === 'usage-panel' ? 'panel-install' : 'mod-action', { action: 'install' }], // Burst's install also updates
+  'mod-remove': (a) => [a.mod === 'usage-panel' ? 'panel-install' : 'mod-action', { action: 'remove' }],
+  'panel-install': () => ['panel-install', { action: 'install' }],
+  'panel-update': () => ['panel-install', { action: 'install' }],
+  'panel-remove': () => ['panel-install', { action: 'remove' }],
+  'finder-install': (a) => ['finder-install', { action: 'install', ...(a.keys !== undefined ? { keys: a.keys } : {}) }],
+  'finder-remove': (a) => ['finder-install', { action: 'remove', ...(a.keys !== undefined ? { keys: a.keys } : {}) }],
+  'console-repair': () => ['console-repair', {}],
+  'console-restore-config': () => ['console-restore-config', {}],
+});
+
+// D1: every burst:* channel answers {ok:boolean, ...} and never throws into the renderer.
+// A handler's own object keeps its shape and gains `ok` (false when it carries `error`);
+// null/undefined and thrown errors become {ok:false, reason}.
+const REASONS = { timeout: 'Burst did not answer in time.', unreachable: 'Burst is not answering.', not_present: 'Burst is not answering.', pid_changed: 'Burst restarted; nothing was sent. Try again.', denied: 'Not allowed.' };
+function contract(r) {
+  if (r && typeof r === 'object' && !Array.isArray(r)) {
+    if (r.ok === true) return r;
+    if (r.ok === false) {
+      if (typeof r.reason === 'string') return r;
+      if (typeof r.error === 'string') return { ...r, reason: r.error };
+      return r.cancelled === true ? { ...r, reason: 'Cancelled.' } : r;
+    }
+    return r.error ? { ...r, ok: false, reason: typeof r.reason === 'string' ? r.reason : String(r.error) } : { ...r, ok: true };
+  }
+  return { ok: false, reason: 'Not available.' };
+}
+function guarded(utilityHandle, log) {
+  return (channel, allowed, handler) => utilityHandle(channel, allowed, async (e, ...args) => {
+    try { return contract(await handler(e, ...args)); } catch (err) {
+      log('[burst] ipc failed', channel, err && (err.code || err.message));
+      return { ok: false, reason: (err && REASONS[err.code]) || 'Burst did not do that. Nothing was changed.' };
+    }
+  });
+}
+
+function register({ utilityHandle: rawHandle, settingsOnly, chipAllowed = () => false, usageAllowed = () => false, sessionsAllowed = () => false, accountAllowed = () => false, optimiserAllowed = () => false, aitoolsAllowed = () => false, stateFile = null, snapshotFile = null, transcriptFor = () => null, hubSend = null, runner = null, isMac, dialog, shell, scriptDir, home = os.homedir(), launch, client: injected, onView = () => {}, log = () => {} }) {
   const platform = isMac ? 'darwin' : 'other';
+  const utilityHandle = guarded(rawHandle, log);
   const client = isMac ? (injected || require('./burst-client.js').createBurstClient({ home })) : null;
   const backoff = createProbeBackoff({ base: POLL_BASE_MS, max: POLL_MAX_MS });
   let last = { kind: isMac ? 'checking' : 'unsupported' };
   let misses = 0;
+  let lastGood = null; // { at, state }: the last `present` detection, shown dimmed while the gateway is not answering
   let lastView = View.statusView(last, { platform });
   let inflight = null;
   let trayAt = -Infinity;
   let opener = null;
 
+  // A client that throws synchronously must fail the same way as one that rejects.
+  const detectOnce = () => { try { return Promise.resolve(client.detect()); } catch (e) { return Promise.reject(e); } };
+
   async function refresh(force = false) {
     if (!isMac) return lastView;
     if (!force && !backoff.due(Date.now())) return lastView;
-    inflight = inflight || client.detect().then((d) => {
+    inflight = inflight || detectOnce().then((d) => {
       misses = d.kind === 'unreachable' ? misses + 1 : 0;
+      if (d.kind === 'present') lastGood = { at: Date.now(), state: d.state };
       last = d.kind === 'unreachable' ? { ...d, misses } : d;
-      lastView = View.statusView(last, { platform });
+      lastView = viewOf(last);
       try { onView(lastView); } catch (e) { log('[burst] onView failed', e && e.message); }
       writeSnapshot().catch((e) => log('[burst] snapshot failed', e && (e.code || e.message)));
       backoff.probed({ ok: d.kind === 'present' || d.kind === 'not_installed', why: d.kind }, Date.now());
       return lastView;
     }).catch((e) => { log('[burst] detect failed', e && e.code); return lastView; }).finally(() => { inflight = null; });
     return inflight;
+  }
+
+  // The card's view: `lastGood` makes `gateway_stale`, `console` makes `console_down`. The console
+  // is read in the background (same 30 s cache as Health) and only for a Burst that has a console
+  // to repair (0.20+), so a 0.19 install never shows a console state it cannot act on.
+  function viewOf(d) {
+    const con = d.kind === 'present' && d.capabilities && d.capabilities.consoleRepair ? cached('console', () => client.consoleDetect()) : null;
+    const v = View.statusView({ ...d, lastGood: d.kind === 'unreachable' ? lastGood : null, console: con }, { platform });
+    // `console-restart` goes through the console itself, which is the part that is down: the one
+    // action that can land is the Terminal repair (burst-actions), which reinstalls both LaunchAgents.
+    if (v.kind === 'console_down') {
+      v.action = { kind: 'repair', label: 'Start console' };
+      v.actions = v.actions.filter((a) => a.kind !== 'console-restart').map((a) => (a.kind === 'repair' ? { ...a, label: 'Start console', primary: true } : a));
+    }
+    return v;
   }
 
   const modeOf = (mode) => (Actions.MODES.includes(mode) ? mode : (last.state && last.state.mode) || 'base-url');
@@ -91,8 +190,12 @@ function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usag
     return r.response === 1;
   }
 
-  async function act(kind, mode) {
+  async function act(kind, mode, args) {
     if (!isMac) return { ok: false, error: View.MAC_ONLY };
+    if (typeof kind === 'string' && Object.prototype.hasOwnProperty.call(ACTION_KINDS, kind)) {
+      const [id, input] = ACTION_KINDS[kind](args && typeof args === 'object' && !Array.isArray(args) ? args : {});
+      return runAction(id, input);
+    }
     // The dashboard lives in Plexiform's Usage optimiser page; the browser is the secondary way in.
     if (kind === 'retry') { backoff.reset(); await refresh(true); return { ok: true, retried: true }; }
     if (kind === 'open-dashboard' && opener) { opener(); return { ok: true }; }
@@ -117,15 +220,60 @@ function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usag
   }
 
   const card = (e) => settingsOnly(e) || accountAllowed(e);
-  utilityHandle('burst:status', card, async () => ({ ...(await refresh()), nextPollMs: isMac ? backoff.gap : 0 }));
+  const anyPage = (e) => card(e) || usageAllowed(e) || sessionsAllowed(e) || optimiserAllowed(e);
+  // The card (This Mac page): statusView plus keep-awake, Remote Control and the mods list,
+  // each from a cached read gated on the running Burst's capability (null when hidden).
+  utilityHandle('burst:status', card, async () => {
+    const v = await refresh();
+    const caps = present() || {};
+    const mac = caps.keepAwake || caps.mods ? cached('mac', () => client.mac()) : null;
+    const modStatus = caps.mods ? cached('modStatus', () => client.modStatus()) : null;
+    return { ...View.cardView(last, { platform, mac, modStatus, view: v }), nextPollMs: isMac ? backoff.gap : 0 };
+  });
   utilityHandle('burst:consent-text', card, async (_e, kind, mode) => {
     if (!isMac) return null;
     try { return await consentFor(kind, mode); } catch { return null; }
   });
-  utilityHandle('burst:action', card, async (_e, req) => act(req && req.kind, req && req.mode));
+  utilityHandle('burst:action', (e) => card(e) || optimiserAllowed(e), async (e, req) => (card(e) || (req && Object.prototype.hasOwnProperty.call(ACTION_KINDS, req.kind)) ? act(req && req.kind, req && req.mode, req && req.args) : { ok: false, error: 'Not available.' }));
   utilityHandle('burst:test', card, async () => {
-    if (!isMac || last.kind !== 'present' || !last.capabilities.testConnection) return { ok: false, detail: 'Not available.' };
-    try { return await client.testConnection(); } catch { return { ok: false, detail: 'Burst did not answer.' }; }
+    if (!isMac || last.kind !== 'present' || !last.capabilities.testConnection) return { ok: false, detail: 'Not available.', reason: 'Not available.' };
+    try { return await client.testConnection(); } catch { return { ok: false, detail: 'Burst did not answer.', reason: 'Burst did not answer.' }; }
+  });
+
+  // Guided setup (optimiser empty state): main keeps the marks, the renderer only says which step
+  // it started or wants to retry. Progress reads (/api/upgrade-status, consoleDetect, mod status)
+  // happen only while a step is running, so an idle page costs nothing beyond the status poll.
+  let setup = Setup.initial();
+  // console: undefined until a read has answered (the step offers Run check); null only when the setup probe
+  // found no console to read at all (a client without consoleDetect), which counts as the check passing.
+  let setupConsole; // the setup probe's own last console answer, kept apart from the card's cache (null there means "read failed")
+  const cachedConsole = () => { const c = extras.get('console'); return c && c.value ? c.value : undefined; };
+  const setupProbe = (extra = {}) => ({ detect: last, console: setupConsole !== undefined ? setupConsole : cachedConsole(), upgrade: last.kind === 'present' ? last.upgrade : null, modStatus: extras.get('modStatus') ? extras.get('modStatus').value : null, ...extra });
+  const setupView = () => { setup = Setup.next(setup, setupProbe()); return setup.steps; };
+  utilityHandle('burst:setup-progress', (e) => optimiserAllowed(e) || card(e), async (_e, req) => {
+    if (!isMac) return { ok: false, reason: View.MAC_ONLY, steps: setupView() };
+    const r = req && typeof req === 'object' ? req : {};
+    const step = Setup.STEPS.includes(r.step) ? r.step : null;
+    if (step && r.start === true) setup = Setup.start(setup, step, Date.now());
+    if (step && r.retry === true) setup = Setup.reset(setup, step);
+    backoff.reset();
+    await refresh(true);
+    const extra = {};
+    if (Setup.running(Setup.next(setup, setupProbe()))) {
+      const attempt = async (fn) => { try { return await fn(); } catch { return null; } };
+      if (last.kind === 'present') {
+        const u = await attempt(() => client.request('GET', '/api/upgrade-status'));
+        extra.upgrade = u ? { canUpgrade: u.can_upgrade === true, upToDate: u.up_to_date === true, latestVersion: typeof u.latest_version === 'string' ? u.latest_version : '' } : null;
+        // The console exists on 0.19 too, so it is read on every version here; only the card's console_down
+        // state is gated on consoleRepair (viewOf). A failed read leaves the step unconfirmed (it times out).
+        if (typeof client.consoleDetect !== 'function') setupConsole = null;
+        else { const con = await attempt(() => client.consoleDetect()); if (con) { setupConsole = con; extras.set('console', { at: Date.now(), value: con }); } }
+        if (setupConsole !== undefined) extra.console = setupConsole;
+        if (last.capabilities.mods && client.modStatus) extra.modStatus = await attempt(() => fresh('modStatus', () => client.modStatus()));
+      }
+    }
+    setup = Setup.next(setup, setupProbe(extra));
+    return { ok: true, steps: setup.steps, running: Setup.running(setup), current: Setup.current(setup) };
   });
 
   // Pauseless compaction switch. Turning it on needs the renderer's inline confirm (`confirmed`),
@@ -147,17 +295,30 @@ function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usag
     return { ok: true, view, note: r.enabled ? View.COMPACTION_OWN_OFF : '' };
   });
 
+  // Loose ends (uncommitted files, unpushed commits, stashes per repository), raw and scrubbed, for the
+  // optimiser's own section. {ok:false, reason} whenever the running Burst cannot answer it.
+  // Lane C's client.looseEnds() is used when present; client.get is the fallback seam.
+  async function looseEndsRaw() {
+    const caps = present();
+    if (!caps) return { ok: false, reason: 'Burst is not answering.', report: null };
+    if (!caps.looseEnds) return { ok: false, reason: 'This Burst has no loose-ends check (needs v0.20 or newer).', report: null };
+    try { return { ok: true, report: await fresh('looseEnds', () => (client.looseEnds ? client.looseEnds() : client.get('/api/loose-ends'))) }; } catch (e) { log('[burst] loose ends failed', e && e.code); return { ok: false, reason: 'Burst did not answer.', report: null }; }
+  }
+  utilityHandle('burst:loose-ends', (e) => anyPage(e), looseEndsRaw);
+
   // Usage optimiser tool list: status facts only, never the card's actions or anything raw.
   utilityHandle('burst:tools', optimiserAllowed, async () => {
     if (!isMac) return { kind: 'unsupported' };
     const v = await refresh();
     let band = null;
+    let panel = null;
     let compactionVerdict = '';
     if (present()) {
       try { band = Tools.bandStatus(await fresh('modStatus', () => client.modStatus())); } catch { band = null; }
+      try { const caps = present() || {}; panel = caps.mods ? Tools.panelStatus((await fresh('mac', () => client.mac()) || {}).panel) : null; } catch { panel = null; }
       try { const l = Spend.learnedThresholds(await fresh('intelligentCompaction', () => client.intelligentCompaction())); compactionVerdict = (l && l.repos.find((r) => r.reason) || {}).reason || ''; } catch { compactionVerdict = ''; }
     }
-    return { compactionVerdict, kind: v.kind, detected: last.kind, misses: last.misses || 0, version: v.version, route: v.route, updateAvailable: v.updateAvailable, compaction: v.compaction, secondaryReady: present() ? last.state.secondaryReady === true : null, band };
+    return { compactionVerdict, panel, kind: v.kind, detected: last.kind, misses: last.misses || 0, version: v.version, route: v.route, updateAvailable: v.updateAvailable, compaction: v.compaction, secondaryReady: present() ? last.state.secondaryReady === true : null, band };
   });
 
   // Widget and Usage header: the chip only, never the card's actions or anything raw. Null on other platforms.
@@ -174,7 +335,7 @@ function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usag
     if (client.codex) { try { codex = Codex.codexView(await client.codex()); } catch { codex = null; } }
     let history = null;
     if (client.history) { try { history = Requests.historyView(await fresh('history', () => client.history({ days: 14 }))); } catch { history = null; } }
-    try { return { view: Spend.throughBurstView(await client.usage({ range })), codex, history, nextPollMs: backoff.gap }; } catch { return { view: null, nextPollMs: backoff.gap }; }
+    try { return { view: Spend.throughBurstView(await client.usage({ range })), codex, history, nextPollMs: backoff.gap }; } catch { return { view: null, nextPollMs: backoff.gap, error: 'Burst did not answer.' }; }
   });
 
   // Sessions page: per-session compaction stats and the handover of observed Claude sessions.
@@ -244,11 +405,11 @@ function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usag
 
   // Allow-listed mutations: one native consent dialog each, then exactly one POST through burst-client.
   const actions = new Map();
-  function registerAction(id, { consent, run, console: viaConsole = false }) {
+  function registerAction(id, { consent, run, console: viaConsole = false, capability = null }) {
     if (typeof id !== 'string' || typeof consent !== 'function' || typeof run !== 'function') throw new Error('bad action');
-    actions.set(id, { consent, run, viaConsole });
+    actions.set(id, { consent, run, viaConsole, capability });
   }
-  for (const [id, a] of Object.entries(ACTIONS)) registerAction(id, { consent: a.consent, console: a.console === true, run: (args) => client.mutate(id, args) });
+  for (const [id, a] of Object.entries(ACTIONS)) registerAction(id, { consent: a.consent, console: a.console === true, capability: a.capability, run: (args) => client.mutate(id, args) });
 
   async function runAction(id, args) {
     if (!isMac) return { ok: false, error: View.MAC_ONLY };
@@ -258,6 +419,9 @@ function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usag
     const spec = require('./burst-client.js').MUTATE_ALLOW[id];
     if (spec) { try { spec.body(input); } catch { return { ok: false, error: 'Bad request.' }; } }
     if (!a.viaConsole && !present()) return { ok: false, error: 'Burst is not answering.' };
+    // Gateway actions are gated on the last detection; console ones are re-checked by burst-client
+    // against the console's own version, since the console answers when the gateway is down.
+    if (a.capability && !a.viaConsole && !present()[a.capability]) return { ok: false, unsupported: true, error: 'This Burst does not support that. Update Burst first.' };
     const c = a.consent(input);
     const r = await dialog.showMessageBox({ type: 'warning', title: c.title, message: c.title, detail: c.detail, buttons: ['Cancel', c.title], defaultId: 0, cancelId: 0, noLink: true });
     if (r.response !== 1) return { ok: false, cancelled: true };
@@ -268,17 +432,17 @@ function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usag
       return { ok: true, data: out && out.data !== undefined ? out.data : null };
     } catch (e) {
       log('[burst] action failed', id, e && e.code);
+      if (e.code === 'unsupported') return { ok: false, unsupported: true, error: 'This Burst does not support that. Update Burst first.' };
       return { ok: false, error: e.code === 'http' && e.detail ? `Burst refused it: ${e.detail}` : e.code === 'timeout' ? 'Burst did not answer in time.' : e.code === 'pid_changed' ? 'Burst restarted; nothing was sent. Try again.' : 'Burst did not do that. Nothing was changed.' };
     }
   }
-  const anyPage = (e) => card(e) || usageAllowed(e) || sessionsAllowed(e) || optimiserAllowed(e);
   const CODEX_ACTIONS = new Set(['codex-enable', 'codex-disable']);
   utilityHandle('burst-action', (e) => anyPage(e) || aitoolsAllowed(e), async (e, id, args) => (anyPage(e) || CODEX_ACTIONS.has(id) ? runAction(id, args) : { ok: false, error: 'Not available.' }));
 
   // AI tools page, Codex row: whether Codex goes through Burst. Null whenever Burst is not present.
   utilityHandle('burst:codex-routing', aitoolsAllowed, async () => {
     if (!present()) return { view: null };
-    try { return { view: await client.codexRouting() }; } catch (err) { log('[burst] codex routing failed', err && err.code); return { view: null }; }
+    try { return { view: await client.codexRouting() }; } catch (err) { log('[burst] codex routing failed', err && err.code); return { view: null, error: 'Burst did not answer.' }; }
   });
 
   // Read-only views for the Usage optimiser and Sessions pages. Each name has its own senders.
@@ -290,12 +454,21 @@ function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usag
     history: { allowed: optimiserOrUsage, get: async (a) => Requests.historyView(await client.history({ days: int(a.days, 14) })) },
     inspect: { allowed: sessionsAllowed, get: async (a) => Inspect.inspectView(await client.inspect({ session: a.session, engine: a.engine }), { engine: a.engine === 'codex' ? 'codex' : 'claude' }) },
     coordination: { allowed: sessionsAllowed, get: async (a) => client.coordination({ days: int(a.days, 1) }) },
+    // Burst v0.20 (lane C): whitelisted by burst-client's normalizers; `{kind:'unsupported'}` on an older Burst.
+    'loose-ends': { allowed: anyPage, get: () => fresh('looseEnds', () => client.looseEnds()) },
+    'keep-awake': { allowed: anyPage, get: () => client.keepAwake() },
+    mods: { allowed: anyPage, get: () => fresh('mods', () => client.mods()) },
+    finder: { allowed: anyPage, get: () => fresh('finder', () => client.finder()) },
   };
   utilityHandle('burst:view', (e) => anyPage(e), async (e, name, args) => {
     const v = typeof name === 'string' && Object.prototype.hasOwnProperty.call(VIEWS, name) ? VIEWS[name] : null;
-    if (!v || !v.allowed(e)) return { view: null, error: 'Not available.' };
-    if (!present()) return { view: null, error: 'Burst is not answering.' };
-    try { return { view: await v.get(args && typeof args === 'object' ? args : {}) }; } catch (err) { log('[burst] view failed', name, err && err.code); return { view: null, error: 'Burst did not answer.' }; }
+    if (!v || !v.allowed(e)) return { ok: false, view: null, error: 'Not available.' };
+    if (!present()) return { ok: false, view: null, error: 'Burst is not answering.' };
+    try {
+      const view = await v.get(args && typeof args === 'object' ? args : {});
+      if (view && view.kind === 'unsupported') return { ok: false, view, unsupported: true, error: 'This Burst does not support that. Update Burst first.' };
+      return { ok: true, view };
+    } catch (err) { log('[burst] view failed', name, err && err.code); return { ok: false, view: null, error: 'Burst did not answer.' }; }
   });
 
   // Standalone (any platform, no Burst): the transcript breakdown of one Claude Code session.
@@ -307,7 +480,7 @@ function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usag
   });
 
   utilityHandle('burst:handover-share', sessionsAllowed, async (_e, repo, on) => {
-    if (typeof repo !== 'string' || !/^[0-9a-f]{16}$/.test(repo)) return { ok: false };
+    if (typeof repo !== 'string' || !/^[0-9a-f]{16}$/.test(repo)) return { ok: false, error: 'Bad repository id.' };
     if (on === true) shared = { ...shared, [repo]: true }; else { shared = { ...shared }; delete shared[repo]; }
     try { if (stateFile) fs.writeFileSync(stateFile, JSON.stringify({ share: shared }), { mode: 0o600 }); } catch (e) { log('[burst] could not save the share choice'); }
     return { ok: true };
@@ -363,7 +536,9 @@ function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usag
     },
     status: () => lastView,
     // For the Usage optimiser page: the last detection (version+pid handshake result) and the trusted address.
-    snapshot: () => ({ d: last, url: isMac && last.kind === 'present' ? client.adminUrl() : null }),
+    snapshot: () => ({ d: last, url: isMac && last.kind === 'present' ? client.adminUrl() : null, view: lastView }),
+    // Optimiser empty state: the guided setup steps from caches, no probe.
+    setupView,
     refresh,
     act,
     // Health fix: the support console's fixed loopback address, usable even when Burst is untrusted.
@@ -381,13 +556,21 @@ function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usag
     },
     // This Mac and notices: scrubbed raw reads for their own normalizers; null when Burst is not present.
     async read(name) {
-      const READS = { mac: () => client.mac(), automask: () => client.automask(), settings: () => client.settings(), modStatus: () => client.modStatus(), intelligentCompaction: () => client.intelligentCompaction() };
+      const READS = { mac: () => client.mac(), automask: () => client.automask(), settings: () => client.settings(), modStatus: () => client.modStatus(), intelligentCompaction: () => client.intelligentCompaction(), looseEnds: () => (present().looseEnds ? client.looseEnds() : Promise.resolve(null)) };
       if (!present() || !Object.prototype.hasOwnProperty.call(READS, name)) return null;
       try { return await fresh(name, READS[name]); } catch (e) { log('[burst] read failed', name, e && e.code); return null; }
     },
+    // Overview and Home (synchronous, from the cache warmed in the background): loose ends keyed by
+    // repository root, null when the running Burst has no loose-ends check or has not answered yet.
+    looseEndsView() {
+      const caps = present();
+      if (!caps || !caps.looseEnds) return null;
+      return LooseEnds.looseEndsView(cached('looseEnds', () => (client.looseEnds ? client.looseEnds() : client.get('/api/loose-ends'))));
+    },
+    looseEndsRaw,
     compactionActive: () => !!(present() && last.state.compaction.active),
     compactionNote: () => (present() && last.state.compaction.active ? Spend.COMPACTION_NOTE : ''),
   };
 }
 
-module.exports = { register, scriptDirFor: (userData) => path.join(userData, 'burst-scripts') };
+module.exports = { register, contract, guarded, ACTION_KINDS, scriptDirFor: (userData) => path.join(userData, 'burst-scripts') };

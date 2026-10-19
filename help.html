@@ -60,6 +60,7 @@
       <button class="primary" id="start-setup">Run setup again</button>
       <button id="start-privacy">What leaves your machine</button>
       <button id="start-demo">Try the demo</button>
+      <button id="start-tour">Take the tour again</button>
     </div>
     <p class="start-notice" id="start-notice" role="status" aria-live="polite"></p>
   </section>
@@ -189,6 +190,11 @@
         $('start-notice').textContent = opened ? '' : 'Could not open this page. Reopen Help and try again.';
       });
     }
+    $('start-tour').addEventListener('click', async () => {
+      let ok = false;
+      try { ok = !!(await window.helpApi.tourRestart()); } catch {}
+      $('start-notice').textContent = ok ? '' : 'Could not start the tour. Reopen Help and try again.';
+    });
 
     $('lights').addEventListener('click', () => window.helpApi.openLights());
     if (new URLSearchParams(location.search).get('embedded') === '1') $('close').hidden = true;

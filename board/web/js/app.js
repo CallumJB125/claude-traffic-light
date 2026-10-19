@@ -6,6 +6,7 @@ import { tacklePreference, rememberTackle, raisedBudget, tackleChoices, anotherA
 import { handoverPin, sameHandover } from './ai-handover.js';
 import { api, errorText, setOrg, currentOrg, setCsrf, requestId } from './api.js';
 import { connectBoard } from './socket.js';
+import { PRESENCE_KEEPALIVE_MS } from '../../shared/liveness.js';
 import { displayFace, alertsForViewer, needsYou, agedView, fmtUsd, observedLane } from './view.js';
 import { planMoves, moveSummary, dragModel, pruneSelection, idsToDrag, kbdStart, kbdKey, announcement } from './dnd.js';
 import { emptyFilters, isFiltering, parseFilters, writeFilters, toggleIn, applyFilters, filterOptions } from './filters.js';
@@ -28,11 +29,13 @@ import { integrationsScreen, connectWindowTarget, takeInput } from './render-int
 import { createApiPanel } from './api-panel.js';
 import { saveSentrySettings } from './sentry-settings.js';
 import { slackChannelPatch } from './render-slack.js';
+import { pickerState, applyMention } from './comments.js';
 import { triggerActions } from './triggers-actions.js';
 import { teamScreen } from './render-team.js';
 import { emptyFold, pullJournal, windowMetrics, cardMetrics } from './metrics.js';
 import { VIEWS, plannerEnabled } from './views.js';
-import { drawer } from './render-drawer.js';
+import { drawer, drawerTab } from './render-drawer.js';
+import { reportedContextDraft, withLocalHandover } from './local-session-context.js';
 import { colorMap } from './labels.js';
 import { dialog, CLOUD } from './render-dialogs.js';
 import { decodeFeedback, sendFeedback, canSend, ARM_MS, FRAGMENT_PREFIX } from './feedback-send.js';
@@ -86,14 +89,35 @@ const state = {
   quickAdd: null, // inline add-a-card: {open, seed, confirm: titles|null, keep}
   // Archived cards (D94) are not in the snapshot: "Show archived" fetches them into their own map.
   showArchived: false,
+  pinboardOpen: false,
+  viewsOpen: false,
+  momentsOpen: false,
+  momentOpen: new Set(), // moments whose comment thread is unfolded
+  momentThreads: new Map(), // moment id → {status, items}
+  mention: null, // the @ picker: {key, start, query, items}
+  handoffs: null, // accounts mode: {incoming, sent} hand-off messages for this team, from messaging v1
+  inbox: null, // accounts mode: {items, open} from GET /api/account/inbox, live via inbox.item (team depth lane B)
   archived: null, // id → {view, rx} while showArchived
   // team.presence (D37b). `stale` from a socket drop until the next frame.
   presence: { members: [], loaded: false, stale: false },
+  // board.presence viewers (team depth lane C): who is looking at which card, every connection.
+  viewers: [],
   overview: { status: 'idle', data: null, error: null, updatedAt: null },
 };
 
 let socket = null;
 let boardGeneration = 0;
+
+// ── presence.view (team depth lane C) ────────────────────────────────────────
+// One frame per card change (open, switch, close) and a keepalive while a card
+// is open; the hub forgets a silent viewer after PRESENCE_TTL_MS. Re-sent after
+// every snapshot, so a reconnect announces the open card again.
+let viewingCardId = null;
+function sendView(cardId) {
+  viewingCardId = cardId ?? null;
+  socket?.send({ type: 'presence.view', card_id: viewingCardId });
+}
+setInterval(() => { if (viewingCardId && socket) socket.send({ type: 'presence.view', card_id: viewingCardId }); }, PRESENCE_KEEPALIVE_MS);
 let plannerKey = null;
 let planner = null;
 function plannerState() {
@@ -205,7 +229,7 @@ function setView(v) {
   if (v === 'dashboard') loadJournal();
   if (v === 'history') loadHistory();
   if (v === 'integrations') loadIntegrations();
-  if (v === 'team' && state.board) { presenceFallbackSoon(); loadTeamOverview(); loadCloud(); }
+  if (v === 'team' && state.board) { presenceFallbackSoon(); loadTeamOverview(); loadCloud(); loadHandoffs(); }
   // Team pages are opened from the app sidebar; only board views are remembered.
   if (VIEWS.find((x) => x.id === v)?.switcher !== false) { try { localStorage.setItem('board-view', v); } catch { /* private mode */ } }
   try {
@@ -455,6 +479,13 @@ function buildModel() {
     entries,
     visible: filtered.entries,
     filters: state.filters,
+    filtersActive: isFiltering(state.filters),
+    viewsOpen: state.viewsOpen,
+    momentsOpen: state.momentsOpen,
+    momentOpen: state.momentOpen,
+    momentThreads: state.momentThreads,
+    mention: state.mention,
+    inbox: state.inbox,
     filterInfo: { total: filtered.total, shown: filtered.shown, options: filterOptions(entries, fctx), archived: state.archived?.size ?? null },
     labelColors,
     showArchived: state.showArchived,
@@ -487,10 +518,13 @@ function buildModel() {
     openTeam: canOpenTeam(),
     accounts: state.authMode === 'accounts',
     invite: state.invite,
+    handoffs: state.view === 'team' && state.authMode === 'accounts' ? state.handoffs : null,
     cloud: state.cloud,
     integrations: state.view === 'integrations' ? { ...state.integ, nowMs: Date.now(), local: state.authMode === 'local', openTeam: canOpenTeam() } : null,
     apiPanel: state.view === 'integrations' && state.authMode === 'accounts' ? state.pub : null,
     presence: { ...state.presence, stale: state.presence.stale || lost },
+    // Other people's open cards (never this member's own tabs).
+    viewers: state.viewers.filter((v) => v.member_id !== state.me?.member?.id),
     teamOverview: { ...state.overview, stale: lost || !!state.overview.error || (state.overview.updatedAt != null && Date.now() - state.overview.updatedAt > 45_000), ageMs: state.overview.updatedAt == null ? null : Date.now() - state.overview.updatedAt },
     // Presence ages freeze at the drop, like card ages.
     nowMs: lost && state.conn.lostAt ? state.conn.lostAt.getTime() : Date.now(),
@@ -616,7 +650,7 @@ function screen() {
   if (state.auth === 'loading') return loadingScreen();
   if (state.auth === 'no_team') return h('div', { class: 'app-shell' }, noTeamScreen({ invites: state.me?.pending_invites ?? [], onboard: state.onboard }), toasts());
   if (state.auth !== 'ok') {
-    return signinScreen({ status: state.auth, error: state.authError, devLogin: state.authMode === 'dev', accounts: state.authMode === 'accounts', emailOff: state.methods?.email === false, devSecretKnown: !!devSecret(), busy: state.authBusy, email: state.email });
+    return signinScreen({ status: state.auth, error: state.authError, devLogin: state.authMode === 'dev', accounts: state.authMode === 'accounts', emailOff: state.methods?.email === false, web: state.methods?.web, devSecretKnown: !!devSecret(), busy: state.authBusy, email: state.email });
   }
   if (state.conn.status === 'upgrade') return loadingScreen('This page is older than the board. Reload to get the new version.');
   if (!state.board) return h('div', { class: 'app-shell' }, loadingScreen(state.conn.status === 'connecting' && state.conn.retryAt ? 'Can’t reach the board yet. Retrying…' : 'Loading the board…'), toasts());
@@ -670,6 +704,7 @@ async function boot() {
     const me = await api.me();
     if (!current()) return;
     state.me = me;
+    if (state.authMode === 'accounts') void loadInbox();
   } catch (err) {
     if (!current()) return;
     // A sign-in in several orgs: the hub lists them; take ?org= or the first.
@@ -719,6 +754,7 @@ async function boot() {
   rememberBoard();
   resetDashboard();
   state.presence = { members: [], loaded: false, stale: false };
+  state.viewers = [];
   state.overview = { status: 'idle', data: null, error: null, updatedAt: null };
   socket?.close();
   socket = connectBoard({ boardId: state.boardId, org: currentOrg(), onMessage: (m) => { if (current()) onMessage(m); }, onStatus: (...args) => { if (current()) onStatus(...args); } });
@@ -740,7 +776,7 @@ async function switchBoard(id, { openCard = null, section = null } = {}) {
   if (!state.boards.some((b) => b.id === id)) return;
   socket?.close(); socket = null;
   state.board = null;
-  state.cards = new Map(); state.archived = null; state.members = new Map();
+  state.cards = new Map(); state.archived = null; state.members = new Map(); state.momentOpen = new Set(); state.momentThreads = new Map(); state.mention = null;
   state.cardsRev += 1;
   state.detail = null; state.dialog = null; state.selection = new Set();
   state.drag = null; state.kbd = null; state.quickAdd = null;
@@ -1005,10 +1041,17 @@ function onMessage(msg) {
       if (state.view === 'integrations' && state.integ.status === 'idle') loadIntegrations();
       presenceFallbackSoon();
       if (state.view === 'team' && state.overview.status === 'idle') loadTeamOverview();
+      if (state.detail?.cardId) sendView(state.detail.cardId);
+      else viewingCardId = null;
       break;
     }
     case 'team.presence':
       state.presence = { members: msg.members, loaded: true, stale: false };
+      break;
+    case 'board.presence':
+      if (msg.board_id !== state.boardId) return;
+      state.presence = { members: msg.members, loaded: true, stale: false };
+      state.viewers = msg.viewers;
       break;
     case 'card.upsert': {
       if (msg.board_id !== state.boardId) return;
@@ -1017,6 +1060,15 @@ function onMessage(msg) {
       state.cardsRev += 1;
       if (state.detail?.cardId === msg.card.id) refreshDetailSoon(msg.card.id);
       dashboardSoon();
+      break;
+    }
+    case 'card.handoff': {
+      // The card.upsert that follows carries the same `handoff`; patch now so the banner does not lag it.
+      const e = state.cards.get(msg.card_id);
+      if (msg.board_id !== state.boardId || !e || !msg.handoff) return;
+      const ho = msg.handoff;
+      e.view = { ...e.view, handoff: { id: ho.id, state: ho.state, from: ho.from_member_id, to: ho.to_member_id, from_name: ho.from_name, to_name: ho.to_name, note: ho.note ?? null, created_at: ho.created_at, answered_at: ho.answered_at ?? null } };
+      state.cardsRev += 1;
       break;
     }
     case 'card.remove': {
@@ -1033,6 +1085,33 @@ function onMessage(msg) {
       if (msg.board_id !== state.boardId || !state.board) return;
       state.board = { ...state.board, labels: msg.labels };
       break;
+    case 'board.pins':
+      if (msg.board_id !== state.boardId || !state.board) return;
+      state.board = { ...state.board, settings: { ...(state.board.settings ?? {}), pins: Array.isArray(msg.pins) ? msg.pins : [] } };
+      break;
+    case 'inbox.item': {
+      if (!state.inbox || !msg.item?.id) return;
+      state.inbox = { ...state.inbox, items: [msg.item, ...state.inbox.items.filter((i) => i.id !== msg.item.id)].slice(0, 100) };
+      break;
+    }
+    case 'board.views':
+    case 'board.moments': {
+      if (msg.board_id !== state.boardId || !state.board) return;
+      const key = msg.type === 'board.views' ? 'views' : 'moments';
+      state.board = { ...state.board, settings: { ...(state.board.settings ?? {}), [key]: Array.isArray(msg[key]) ? msg[key] : [] } };
+      break;
+    }
+    case 'moment.comment': {
+      if (msg.board_id !== state.boardId) return;
+      const t = state.momentThreads.get(msg.moment_id);
+      if (t?.status === 'ready' && msg.comment && !t.items.some((c) => c.id === msg.comment.id)) state.momentThreads.set(msg.moment_id, { ...t, items: [...t.items, msg.comment] });
+      break;
+    }
+    case 'card.comment': {
+      const d = state.detail;
+      if (d?.cardId === msg.card_id && d.data && msg.comment && !(d.data.comments ?? []).some((c) => c.id === msg.comment.id)) d.data = { ...d.data, comments: [...(d.data.comments ?? []), msg.comment] };
+      break;
+    }
     case 'lease.tick': {
       const c = state.cards.get(msg.card_id);
       if (!c) return;
@@ -1070,6 +1149,30 @@ async function loadTeamOverview() {
   }
 }
 
+// Hand-offs offered through teammates' AIs (team_hand_off). Accepting starts the work in a git
+// worktree, which only the desktop app can do; the web shows them and can decline with a note.
+async function loadHandoffs() {
+  if (state.authMode !== 'accounts' || state.auth !== 'ok') return;
+  const org = currentOrg();
+  try {
+    const [inbox, sent] = await Promise.all([api.handoffMessages('inbox'), api.handoffMessages('sent')]);
+    if (org !== currentOrg()) return;
+    const mine = (r) => (r?.messages ?? []).filter((m) => m && m.kind === 'handoff' && m.handoff && (!m.org_id || m.org_id === org));
+    state.handoffs = { incoming: mine(inbox).filter((m) => m.to?.user_id !== m.source?.user_id), sent: mine(sent), busy: null, error: null };
+  } catch (err) {
+    state.handoffs = err.status === 404 ? null : { ...(state.handoffs ?? { incoming: [], sent: [] }), error: errorText(err) };
+  }
+  update();
+}
+async function declineHandoff(id) {
+  if (!state.handoffs || state.handoffs.busy) return;
+  const note = root.querySelector(`[data-handoff-note="${CSS.escape(id)}"]`)?.value?.trim() ?? '';
+  state.handoffs = { ...state.handoffs, busy: id }; update();
+  try { await api.decideHandoff(id, 'decline', note.slice(0, 500)); toast('Declined. The sender sees your note.'); } catch (err) { toast(errorText(err), 'error'); }
+  state.handoffs = { ...state.handoffs, busy: null };
+  void loadHandoffs();
+}
+
 let presenceFallbackFor = null;
 function presenceFallbackSoon() {
   if (state.view !== 'team' || presenceFallbackFor === state.boardId) return;
@@ -1102,6 +1205,143 @@ async function loadArchived() {
   update();
 }
 
+// ── project pinboard ────────────────────────────────────────────────────────
+async function addPin(pin, form) {
+  if (!pin.label) { toast('Give the pin a label.', 'error'); return; }
+  if (pin.kind === 'link' && !/^https:\/\/\S+$/i.test(pin.value)) { toast('A link pin needs an https:// address.', 'error'); return; }
+  if (pin.kind !== 'priority' && !pin.value) { toast('Add the link, command or note to pin.', 'error'); return; }
+  state.pinboardOpen = true;
+  const res = await withBusy('pin:add', () => api.addPin(state.boardId, pin));
+  if (!res?.pins) return;
+  state.board = { ...state.board, settings: { ...(state.board.settings ?? {}), pins: res.pins } };
+  form?.reset?.();
+  toast(`Pinned “${pin.label}”.`);
+  update();
+}
+async function removePin(id) {
+  const res = await withBusy(`pin:${id}`, () => api.removePin(state.boardId, id));
+  if (!res?.pins) return;
+  state.board = { ...state.board, settings: { ...(state.board.settings ?? {}), pins: res.pins } };
+  update();
+}
+// ── hub inbox (team depth lane B) ───────────────────────────────────────────
+// An older hub without the route (404) leaves the bell out; nothing else changes.
+async function loadInbox() {
+  try {
+    const r = await api.inbox();
+    state.inbox = { items: Array.isArray(r?.items) ? r.items : [], open: state.inbox?.open ?? false };
+  } catch (err) {
+    state.inbox = err.status === 404 ? null : (state.inbox ?? { items: [], open: false });
+  }
+  update();
+}
+async function readInbox(body) {
+  if (!state.inbox) return;
+  const at = new Date().toISOString();
+  const ids = body.all ? null : new Set(body.ids);
+  state.inbox = { ...state.inbox, items: state.inbox.items.map((i) => (i.read_at || (ids && !ids.has(i.id)) ? i : { ...i, read_at: at })) };
+  update();
+  try { await api.inboxRead(body); } catch (err) { toast(errorText(err), 'error'); void loadInbox(); }
+}
+
+// ── shared views and moments ────────────────────────────────────────────────
+function viewValues(f) {
+  const out = {};
+  if (f.q.trim()) out.q = f.q.trim();
+  if (f.chips.length) out.chips = f.chips.join(',');
+  if (f.labels.length) out.labels = f.labels.join(',');
+  if (f.assignee) out.assignee = f.assignee;
+  return out;
+}
+function filtersFromView(values) {
+  const f = emptyFilters();
+  if (typeof values.q === 'string') f.q = values.q;
+  if (typeof values.chips === 'string') f.chips = values.chips.split(',').filter(Boolean);
+  if (typeof values.labels === 'string') f.labels = values.labels.split(',').filter(Boolean);
+  if (typeof values.assignee === 'string') f.assignee = values.assignee;
+  return f;
+}
+async function saveView(name, form) {
+  if (!name) { toast('Name the view first.', 'error'); return; }
+  const values = viewValues(state.filters);
+  if (!Object.keys(values).length) { toast('Set some filters first, then save them as a view.', 'error'); return; }
+  state.viewsOpen = true;
+  const res = await withBusy('view:save', () => api.saveView(state.boardId, { name, values }));
+  if (!res?.views) return;
+  state.board = { ...state.board, settings: { ...(state.board.settings ?? {}), views: res.views } };
+  form?.reset?.();
+  toast(`Saved “${name}” for the team.`);
+  update();
+}
+function applyView(id) {
+  const v = (state.board?.settings?.views ?? []).find((x) => x.id === id);
+  if (!v) return;
+  setFilters(filtersFromView(v.values));
+  toast(`Showing “${v.name}”.`);
+}
+async function removeView(id) {
+  const res = await withBusy(`view:${id}`, () => api.removeView(state.boardId, id));
+  if (!res?.views) return;
+  state.board = { ...state.board, settings: { ...(state.board.settings ?? {}), views: res.views } };
+  update();
+}
+async function markMoment(moment, form) {
+  if (!moment.label) { toast('Say what happened.', 'error'); return; }
+  state.momentsOpen = true;
+  const res = await withBusy('moment:mark', () => api.markMoment(state.boardId, moment));
+  if (!res?.moments) return;
+  state.board = { ...state.board, settings: { ...(state.board.settings ?? {}), moments: res.moments } };
+  form?.reset?.();
+  toast(`Marked “${moment.label}”.`);
+  update();
+}
+async function toggleMomentThread(id) {
+  if (!id) return;
+  if (state.momentOpen.has(id)) { state.momentOpen.delete(id); update(); return; }
+  state.momentOpen.add(id);
+  update();
+  if (state.momentThreads.get(id)?.status === 'ready') return;
+  state.momentThreads.set(id, { status: 'loading', items: [] });
+  const generation = boardGeneration;
+  try {
+    const res = await api.momentComments(state.boardId, id);
+    if (generation !== boardGeneration) return;
+    state.momentThreads.set(id, { status: 'ready', items: Array.isArray(res?.comments) ? res.comments : [] });
+  } catch (err) {
+    if (generation !== boardGeneration) return;
+    state.momentThreads.set(id, { status: 'error', items: [] });
+    if (err.code === 'UNAUTHENTICATED') boot();
+  }
+  update();
+}
+async function commentOnMoment(id, body, form) {
+  if (!id || !body) return;
+  const res = await withBusy(`moment:${id}`, () => api.momentComment(state.boardId, id, body));
+  if (!res?.comment) return;
+  const t = state.momentThreads.get(id) ?? { status: 'ready', items: [] };
+  if (!t.items.some((c) => c.id === res.comment.id)) state.momentThreads.set(id, { status: 'ready', items: [...t.items, res.comment] });
+  state.mention = null;
+  form?.reset?.();
+  update();
+}
+function pickMention(el) {
+  const key = el.dataset.mentionFor, m = state.mention;
+  const ta = key ? root.querySelector(`textarea[data-mentions="${CSS.escape(key)}"]`) : null;
+  if (!ta || !m || m.key !== key) { state.mention = null; update(); return; }
+  const caret = typeof ta.selectionStart === 'number' ? ta.selectionStart : ta.value.length;
+  const next = applyMention(ta.value, m.start, caret, { name: el.dataset.name });
+  ta.value = next.text;
+  try { ta.setSelectionRange(next.caret, next.caret); } catch { /* not focusable yet */ }
+  ta.focus();
+  state.mention = null;
+  update();
+}
+async function removeMoment(id) {
+  const res = await withBusy(`moment:${id}`, () => api.removeMoment(state.boardId, id));
+  if (!res?.moments) return;
+  state.board = { ...state.board, settings: { ...(state.board.settings ?? {}), moments: res.moments } };
+  update();
+}
 function setShowArchived(on) {
   state.showArchived = on;
   if (on) loadArchived();
@@ -1153,12 +1393,26 @@ async function continueIn(cardId) {
   toast(r.note || (r.mode === 'launched' ? `${r.label} started. Its replies are on the Sessions page.` : 'Copied.'));
 }
 
+async function localSessionAction(cardId, action) {
+  const detail = state.detail, generation = boardGeneration;
+  if (!detail || detail.cardId !== cardId) return;
+  await withBusy(`session-action:${cardId}`, async () => {
+    const bridge = globalThis.plexiformDesktop;
+    const result = action === 'open' ? await bridge?.openSession?.(cardId) : await bridge?.handoverAction?.(cardId, action);
+    if (generation !== boardGeneration || state.detail?.intent !== detail.intent || state.detail?.cardId !== cardId) return;
+    if (!result?.ok) { if (action === 'refresh') { state.detail = withLocalHandover(state.detail, null); update(); } if (!result?.cancelled) toast(result?.error || 'This session action is unavailable.', 'error'); return; }
+    if (action === 'refresh') { state.detail = withLocalHandover(state.detail, result, canOpenTimeline()); update(); }
+    if (action !== 'open') toast(({ refresh: 'Session handover refreshed.', copy: 'Handover copied as a prompt.', save: 'Session handover saved.' })[action]);
+  });
+}
+
 async function openDetail(cardId, section = null) {
   if (!state.cards.has(cardId) && !state.archived?.has(cardId)) return;
   const same = state.detail?.cardId === cardId;
-  const tab = ['handover', 'comments', 'packet', 'messages', 'ownership'].includes(section) ? section : (same ? state.detail.tab : 'activity');
+  const tab = drawerTab(section, same ? state.detail.tab : undefined);
   state.detail = { ...(same ? state.detail : {}), intent: ++drawerSession, cardId, data: same ? state.detail.data : null, rx: same ? state.detail.rx : null, tab, scrollTo: ['asks', 'overlaps', 'review'].includes(section) ? section : null, error: null };
   try { history.replaceState(null, '', `#card=${encodeURIComponent(cardId)}`); } catch { /* sandboxed */ }
+  if (!same) sendView(cardId);
   update();
   await refreshDetail(cardId);
 }
@@ -1174,13 +1428,14 @@ async function refreshDetail(cardId, { communication = false, ownership = false 
     state.detail = { ...state.detail, data, rx: perf(), error: null };
     // Only the desktop app can answer: the handover it wrote locally for a session attached to this card.
     if (typeof globalThis.plexiformDesktop?.localHandover === 'function') {
-      Promise.resolve(globalThis.plexiformDesktop.localHandover(cardId)).then((r) => {
-        const markdown = r?.markdown ?? null;
-        if (!current() || !markdown || state.detail.localHandover?.markdown === markdown) return;
-        const local_handover = { markdown, timeline: canOpenTimeline() };
-        state.detail = { ...state.detail, localHandover: local_handover, data: { ...state.detail.data, local_handover } };
+      const applyLocal = r => {
+        if (!current()) return;
+        const next = withLocalHandover(state.detail, r, canOpenTimeline());
+        if (next.localHandover?.markdown === state.detail.localHandover?.markdown) return;
+        state.detail = next;
         update();
-      }, () => {});
+      };
+      Promise.resolve(globalThis.plexiformDesktop.localHandover(cardId)).then(applyLocal, () => applyLocal(null));
     }
     if (state.detail.tab === 'ownership' && !data.card.archived
       && (ownership || !state.detail.ownershipLoaded || perf() - (state.detail.ownershipRx ?? 0) >= 5000)) {
@@ -1194,7 +1449,7 @@ async function refreshDetail(cardId, { communication = false, ownership = false 
         state.detail = { ...state.detail, ownershipLoaded: true, ownership: null, ownershipError: errorText(err) };
       }
     }
-    if (['packet', 'messages'].includes(state.detail.tab) && !data.card.archived
+    if (['overview', 'packet', 'messages'].includes(state.detail.tab) && !data.card.archived
       && (communication || !state.detail.packetLoaded || perf() - (state.detail.communicationRx ?? 0) >= 5000)) {
       const [packet, messages] = await Promise.allSettled([api.packet(cardId), api.messages(cardId)]);
       if (!current()) return;
@@ -1225,7 +1480,8 @@ async function submitCommunication(form, kind) {
   const detail = state.detail, cardId = form.dataset.card, generation = boardGeneration;
   if (!detail || detail.cardId !== cardId || boardReadOnly()) return;
   const packet = kind === 'task-packet', key = packet ? 'packetDraft' : 'messageDraft', errorKey = packet ? 'packetSaveError' : 'messageSaveError';
-  const draft = detail[key] ?? communicationDraft(form, kind), intent = detail.intent;
+  const previous = detail[key] ?? communicationDraft(form, kind);
+  const draft = { ...previous, request_id: previous.request_id ?? crypto.randomUUID() }, intent = detail.intent;
   state.detail = { ...detail, [key]: draft, [errorKey]: null };
   const current = () => generation === boardGeneration && state.detail?.intent === intent && state.detail.cardId === cardId;
   const lines = (v) => v.split('\n').map((s) => s.trim()).filter(Boolean);
@@ -1257,6 +1513,7 @@ function refreshDetailSoon(cardId) {
 function closeDrawer() {
   const id = state.detail?.cardId;
   state.detail = null;
+  if (viewingCardId) sendView(null);
   try { history.replaceState(null, '', location.pathname + location.search); } catch { /* sandboxed */ }
   update();
   // Back to what opened it: the card or row, else a dashboard list entry.
@@ -1370,6 +1627,17 @@ function applyCard(res) {
 
 const viewOf = (id) => (state.cards.get(id) ?? state.archived?.get(id))?.view;
 const keyOf = (id) => viewOf(id)?.key ?? 'Card';
+
+// Person-to-person hand-off (team depth lane D): accept / decline by the recipient, cancel by the sender.
+async function answerHandoff(cardId, handoffId, verb) {
+  const res = await withBusy(`${cardId}:handoff:${verb}`, () => api.answerHandoff(cardId, handoffId, verb));
+  if (res) {
+    applyCard(res);
+    toast(verb === 'accept' ? `${keyOf(cardId)} is yours. The handover tab has what was left for you.` : verb === 'decline' ? `You declined ${keyOf(cardId)}; ${state.members?.get?.(res.handoff?.from_member_id)?.name ?? 'the sender'} is told.` : `${keyOf(cardId)} is back with you.`);
+    if (state.detail?.cardId === cardId) refreshDetailSoon(cardId);
+  }
+  return res;
+}
 
 async function doAction(cardId, action, body = {}, done) {
   const res = await withBusy(`${cardId}:${action}`, () => api.action(cardId, action, body));
@@ -1655,6 +1923,10 @@ async function submitDialogForm(form, submitter) {
     return run(() => api.action(cardId, 'hand_over', { target: { kind: 'hold' },
       expected_fence: d.expected_fence, prior_run_id: d.prior_run_id }), `${keyOf(cardId)} is preparing its handover. Choose the next AI after its runner confirms the stop.`);
   }
+  if (kind === 'hand-to-person') {
+    const to = String(fd.get('to_member_id') ?? ''), note = String(fd.get('note') ?? '').trim();
+    return run(() => api.requestHandoff(cardId, { to_member_id: to, ...(note ? { note } : {}) }), `${keyOf(cardId)} is handed to ${state.members?.get?.(to)?.name ?? 'your teammate'}. They are asked to accept.`);
+  }
   if (kind === 'hand-to-teammate') {
     const to = String(fd.get('member_id') ?? ''), note = String(fd.get('note') ?? '').trim();
     return run(() => api.handoffRecord(state.me?.org?.id, d.recordId, { to_member_id: to, ...(note ? { note } : {}) }), `${keyOf(cardId)} is handed to ${state.members?.get?.(to)?.name ?? 'your teammate'}. It shows in their session brief.`);
@@ -1689,7 +1961,7 @@ async function submitDialogForm(form, submitter) {
     const body = String(fd.get('body') ?? '').trim();
     if (!body) return undefined;
     const res = await withBusy(`comment:${cardId}`, () => api.comment(cardId, body, fd.get('for_agent') === 'on'));
-    if (res) { form.reset(); refreshDetail(cardId); }
+    if (res) { form.reset(); state.mention = null; refreshDetail(cardId); }
     return undefined;
   }
   if (kind === 'devlogin') {
@@ -2042,7 +2314,8 @@ function onClick(e) {
     case 'switch-board': switchBoard(el.dataset.board); return;
     case 'open': e.preventDefault(); openDetail(cardId, el.dataset.section ?? null); return;
     case 'continue-in': continueIn(cardId); return;
-    case 'team-overview-refresh': loadTeamOverview(); return;
+    case 'team-overview-refresh': loadTeamOverview(); loadHandoffs(); return;
+    case 'handoff-msg-decline': void declineHandoff(el.dataset.id); return;
     case 'team-open-card': openSearchResult({ id: cardId, boardId: el.dataset.board }); return;
     case 'watch': openDetail(cardId, 'activity'); return;
     case 'allow': case 'deny': case 'answer': case 'approve_plan': case 'resolve_conflict': case 'continue':
@@ -2067,6 +2340,8 @@ function onClick(e) {
     case 'review-fix': case 'review-approve': case 'review-dismiss': reviewAction(cardId, action, el.dataset.review, el.dataset.index); return;
     case 'review-settings': openReviewSettings(el.dataset.board); return;
     case 'hand_over': state.dialog = { kind: 'handover', cardId, kind_: 'queue' }; update(); return;
+    case 'hand_to_person': state.dialog = { kind: 'hand-to-person', cardId }; update(); return;
+    case 'handoff-accept': case 'handoff-decline': case 'handoff-cancel': answerHandoff(cardId, el.dataset.handoff, action.slice('handoff-'.length)); return;
     case 'permission': {
       const prId = el.dataset.pr;
       withBusy(`pr:${prId}`, () => api.answerPermission(prId, el.dataset.decision, el.dataset.scope)).then((res) => {
@@ -2077,7 +2352,8 @@ function onClick(e) {
       });
       return;
     }
-    case 'tab': if (state.detail) { state.detail = { ...state.detail, tab: el.dataset.tab }; update(); if (['packet', 'messages', 'ownership'].includes(el.dataset.tab)) refreshDetail(state.detail.cardId); } return;
+    case 'tab': if (state.detail) { state.detail = { ...state.detail, tab: el.dataset.tab }; update(); if (['overview', 'packet', 'messages', 'ownership'].includes(el.dataset.tab)) refreshDetail(state.detail.cardId); } return;
+    case 'packet-use-report': if (state.detail && !boardReadOnly()) { const draft = reportedContextDraft(state.detail); if (draft) { state.detail = { ...state.detail, packetDraft: draft, packetSaveError: null }; update(); toast('Reported context added to your draft. Review it, then save.'); } } return;
     case 'ownership-reload': if (state.detail) refreshDetail(state.detail.cardId, { ownership: true }); return;
     case 'packet-reload': if (state.detail) state.detail = { ...state.detail, packetDraft: null, packetSaveError: null }; // explicit discard
     case 'communication-reload': if (state.detail) refreshDetail(state.detail.cardId, { communication: true }); return;
@@ -2126,6 +2402,15 @@ function onClick(e) {
     case 'filter-clear': setFilters(emptyFilters()); return;
     case 'toggle-done': state.showAllDone = !state.showAllDone; update(); return;
     case 'toggle-archived': setShowArchived(!state.showArchived); return;
+    case 'pin-remove': void removePin(el.dataset.pin); return;
+    case 'view-apply': applyView(el.dataset.view); return;
+    case 'view-remove': void removeView(el.dataset.view); return;
+    case 'moment-remove': void removeMoment(el.dataset.moment); return;
+    case 'moment-comments': void toggleMomentThread(el.dataset.moment); return;
+    case 'mention-pick': pickMention(el); return;
+    case 'inbox-read': void readInbox({ ids: [el.dataset.inbox] }); return;
+    case 'inbox-read-all': void readInbox({ all: true }); return;
+    case 'inbox-open': void readInbox({ ids: [el.dataset.inbox] }); if (el.dataset.card) void openDetail(el.dataset.card); return;
     case 'archive': archiveCards([cardId]); return;
     case 'clear-idle': archiveCards((el.dataset.ids || '').split(',').filter(Boolean)); return;
     case 'restore': restoreCards([cardId]); return;
@@ -2135,6 +2420,10 @@ function onClick(e) {
     case 'history-open': state.history.selected = el.dataset.run; update(); openDetail(cardId); return;
     case 'open-team': if (canOpenTeam()) globalThis.plexiformDesktop.openTeam(); return;
     case 'open-timeline': if (canOpenTimeline() && cardId) globalThis.plexiformDesktop.openTimeline(cardId); return;
+    case 'open-session': if (cardId) localSessionAction(cardId, 'open'); return;
+    case 'local-handover-refresh': if (cardId) localSessionAction(cardId, 'refresh'); return;
+    case 'local-handover-copy': if (cardId) localSessionAction(cardId, 'copy'); return;
+    case 'local-handover-save': if (cardId) localSessionAction(cardId, 'save'); return;
     case 'local-card-dismiss':
       state.localCardDismissed = true;
       try { localStorage.setItem('board-local-card', 'dismissed'); } catch { /* private mode */ }
@@ -2186,6 +2475,26 @@ function onSubmit(e) {
   const form = e.target.closest('form[data-form]');
   if (!form) return;
   e.preventDefault();
+  if (form.dataset.form === 'pin-add') {
+    const fd = new FormData(form);
+    void addPin({ kind: String(fd.get('kind') ?? 'note'), label: String(fd.get('label') ?? '').trim(), value: String(fd.get('value') ?? '').trim() }, form);
+    return;
+  }
+  if (form.dataset.form === 'view-save') {
+    const fd = new FormData(form);
+    void saveView(String(fd.get('name') ?? '').trim(), form);
+    return;
+  }
+  if (form.dataset.form === 'moment-comment') {
+    const body = String(new FormData(form).get('body') ?? '').trim();
+    void commentOnMoment(form.dataset.moment, body, form);
+    return;
+  }
+  if (form.dataset.form === 'moment-mark') {
+    const fd = new FormData(form);
+    void markMoment({ kind: String(fd.get('kind') ?? 'moment'), label: String(fd.get('label') ?? '').trim(), note: String(fd.get('note') ?? '').trim() }, form);
+    return;
+  }
   if (form.dataset.form === 'planning-zone') {
     const zone = String(new FormData(form).get('zone') ?? '').trim();
     if (!validZone(zone)) { toast('Use an IANA timezone such as Europe/London or Africa/Johannesburg.', 'error'); return; }
@@ -2200,6 +2509,11 @@ function onSubmit(e) {
 }
 
 function onInput(e) {
+  const ta = e.target.closest?.('textarea[data-mentions]');
+  if (ta) {
+    const next = pickerState(ta.dataset.mentions, ta.value, ta.selectionStart ?? ta.value.length, state.members);
+    if (next || state.mention) { state.mention = next; update(); }
+  }
   const form = e.target.closest?.('[data-form="task-packet"], [data-form="task-message"]');
   if (form && state.detail?.cardId === form.dataset.card) {
     const packet = form.dataset.form === 'task-packet';
@@ -2318,6 +2632,7 @@ function themeMenuKey(e) {
 }
 
 function onKeydown(e) {
+  if (state.mention && e.key === 'Escape' && e.target.closest?.('textarea[data-mentions]')) { state.mention = null; update(); return; }
   const hbar = e.target.closest?.('[data-history-bar]');
   if (hbar && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key) && !e.altKey && !e.ctrlKey && !e.metaKey) {
     const next = neighborBar(historyBars(), hbar.dataset.run, e.key);
@@ -2366,7 +2681,7 @@ function onKeydown(e) {
     e.preventDefault();
     state.detail = { ...state.detail, tab: tabs[i].dataset.tab };
     update();
-    if (['packet', 'messages', 'ownership'].includes(tabs[i].dataset.tab)) refreshDetail(state.detail.cardId);
+    if (['overview', 'packet', 'messages', 'ownership'].includes(tabs[i].dataset.tab)) refreshDetail(state.detail.cardId);
     queueMicrotask(() => root.querySelector(`#tab-${tabs[i].dataset.tab}`)?.focus());
   }
 }
@@ -2387,6 +2702,7 @@ function onImgError(e) {
 
 document.addEventListener('click', onClick);
 document.addEventListener('submit', onSubmit);
+document.addEventListener('toggle', (e) => { const t = e.target?.dataset?.actionToggle; if (t === 'pinboard') state.pinboardOpen = e.target.open; else if (t === 'views') state.viewsOpen = e.target.open; else if (t === 'moments') state.momentsOpen = e.target.open; else if (t === 'inbox' && state.inbox) state.inbox = { ...state.inbox, open: e.target.open }; }, true);
 document.addEventListener('change', onChange);
 document.addEventListener('input', onInput);
 document.addEventListener('keydown', onKeydown);
@@ -2415,18 +2731,18 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => up
 setInterval(() => { if (state.auth === 'ok' && state.board) update(); }, 1000);
 setInterval(() => { if (state.view === 'history' && state.board && document.visibilityState === 'visible' && state.history.status === 'ok') loadHistory(); }, 30_000);
 setInterval(() => { if (state.view === 'dashboard' && state.board && document.visibilityState === 'visible') loadJournal(); }, DASH_REFRESH_MS);
-setInterval(() => { if (state.view === 'team' && document.visibilityState === 'visible') loadTeamOverview(); }, 15_000);
+setInterval(() => { if (state.view === 'team' && document.visibilityState === 'visible') { loadTeamOverview(); loadHandoffs(); } }, 15_000);
 setInterval(()=>{
   const d=state.dialog;
   if(d?.journey&&d.mode==='execution-status'&&!d.busy&&workflowJourney.current(d)&&document.visibilityState==='visible')void workflowJourney.status(d.execution.id);
 },5000);
-let ownershipPollBusy = false;
+let detailPollBusy = false;
 setInterval(async () => {
-  if (ownershipPollBusy || state.auth !== 'ok' || state.conn.status !== 'open' || document.visibilityState !== 'visible'
-    || state.detail?.tab !== 'ownership' || !state.detail.data || state.detail.data.card.archived) return;
-  ownershipPollBusy = true;
-  try { await refreshDetail(state.detail.cardId, { ownership: true }); }
-  finally { ownershipPollBusy = false; }
+  if (detailPollBusy || state.auth !== 'ok' || state.conn.status !== 'open' || document.visibilityState !== 'visible'
+    || !['overview', 'ownership', 'messages', 'handover'].includes(state.detail?.tab) || !state.detail.data || state.detail.data.card.archived) return;
+  detailPollBusy = true;
+  try { await refreshDetail(state.detail.cardId, { ownership: state.detail.tab === 'ownership', communication: ['overview', 'messages'].includes(state.detail.tab) }); }
+  finally { detailPollBusy = false; }
 }, 5000);
 
 loadTheme();

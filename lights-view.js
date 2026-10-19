@@ -192,7 +192,8 @@
           ${t.effect && t.effect !== 'none' ? `<span class="chip pose" title="effect: ${t.effect}">${ICON.effect}</span>` : ''}
           ${t.pet && t.pet !== 'none' ? `<span class="chip pose" title="pet: ${t.pet}">${ICON.pet}</span>` : ''}
           ${t.sound ? `<span class="chip pose" title="sound: ${escape(t.sound.replace(/^file:/, ''))}">${ICON.sound}</span>` : ''}
-        </span>`;
+        </span>
+        <span class="words">${escape(ruleWords(r))}</span>`;
       li.querySelector('input').addEventListener('change', (e) => {
         r.enabled = e.target.checked;
         setDirty(true);
@@ -236,6 +237,7 @@
       ul.appendChild(li);
     }
   }
+  function ruleWords(r) { return window.PlexiformRuleWords ? window.PlexiformRuleWords.describeRule(r, R.SIGNALS) : ''; }
   function focusRow(id) { document.querySelector(`.rule[data-id="${id}"]`)?.focus(); }
   function escape(s) { return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 
@@ -527,6 +529,9 @@
     $('sound-play').disabled = !r.then.sound;
     $('celebrate').checked = !!r.then.celebrate;
     $('busy-ping').value = r.then.busyPing || '';
+    $('for-minutes').value = r.when.forMinutes || '';
+    $('notify').value = r.then.notify || '';
+    $('rule-words').textContent = ruleWords(r);
     $('text-row').hidden = !(r.then.pose === 'banner' || r.then.pose === 'bubble');
     $('text-row').querySelector('.lbl').textContent = r.then.pose === 'bubble' ? 'Bubble says' : 'Banner says';
     $('text').value = r.then.text || '';
@@ -535,6 +540,7 @@
   function touch() {
     setDirty(true);
     renderList();
+    const sr = selected(); if (sr) $('rule-words').textContent = ruleWords(sr);
     renderEditor();
     renderStage();
   }
@@ -553,7 +559,32 @@
   $('agents-color').addEventListener('input', (e) => { const r = selected(); if (!r) return; r.then.agentsColor = e.target.value; touch(); });
   $('source').addEventListener('change', (e) => { const r = selected(); if (!r) return; r.when.source = e.target.value || null; setDirty(true); });
   $('cwd').addEventListener('input', (e) => { const r = selected(); if (!r) return; r.when.cwd = e.target.value.trim() || null; setDirty(true); renderList(); });
-  $('busy-ping').addEventListener('change', (e) => { const r = selected(); if (!r) return; if (e.target.value) r.then.busyPing = e.target.value; else delete r.then.busyPing; setDirty(true); });
+  $('busy-ping').addEventListener('change', (e) => { const r = selected(); if (!r) return; if (e.target.value) r.then.busyPing = e.target.value; else delete r.then.busyPing; touch(); });
+  $('for-minutes').addEventListener('input', (e) => { const r = selected(); if (!r) return; const n = Number(e.target.value); if (Number.isInteger(n) && n >= 1 && n <= R.FOR_MINUTES_MAX) r.when.forMinutes = n; else delete r.when.forMinutes; setDirty(true); renderList(); $('rule-words').textContent = ruleWords(r); });
+  $('notify').addEventListener('change', (e) => { const r = selected(); if (!r) return; if (e.target.value) r.then.notify = e.target.value; else delete r.then.notify; touch(); });
+  // Phone choices stay greyed out until main says a paired device can take them.
+  (async () => {
+    let st = null;
+    try { st = await window.lightsApi.ruleNotifyStatus?.(); } catch { st = null; }
+    const phone = !!(st && st.phone);
+    for (const o of $('notify').options) if (o.value === 'phone' || o.value === 'both') { o.disabled = !phone; if (!phone) o.textContent = `${o.value === 'phone' ? 'Phone' : 'Desktop and phone'} (Pair a phone first)`; }
+    if (!phone) $('notify-hint').textContent = 'Once when the rule starts, at most every 2 minutes. Snooze and quiet hours hold it. Phone: pair a phone first; until then “Desktop and phone” sends the desktop one.';
+  })();
+  // Starter rules (src/rule-templates.js): each adds a new unlocked rule, never replaces one.
+  if (window.PlexiformRuleTemplates) {
+    const T = window.PlexiformRuleTemplates;
+    $('rule-template').insertAdjacentHTML('beforeend', T.list().map((t) => `<option value="${escape(t.id)}" title="${escape(t.description)}">${escape(t.name)}</option>`).join(''));
+    $('rule-template').addEventListener('change', (e) => {
+      const id = e.target.value;
+      e.target.value = '';
+      const raw = id && T.instantiate(id, R.uid);
+      if (!raw) return;
+      const r = R.normalizeRule(raw);
+      rules = T.insert(rules, r);
+      setDirty(true);
+      select(r.id);
+    });
+  }
   $('celebrate').addEventListener('change', (e) => { const r = selected(); if (!r) return; r.then.celebrate = e.target.checked; setDirty(true); stageCelebrate(e.target.checked); });
   $('delete-btn').addEventListener('click', () => selectedId && remove(selectedId));
 
@@ -1646,6 +1677,7 @@
   async function renderMix() {
     renderUsageHistory();
     if (window.UsageWasteView) window.UsageWasteView.render($('usage-waste'), window.lightsApi);
+    if (window.UsageWhereView) window.UsageWhereView.render($('usage-where'), window.lightsApi);
     if (window.UsageWorkView) window.UsageWorkView.render($('usage-work'), window.lightsApi);
     let mix = null;
     try { mix = await window.lightsApi.modelMix(); } catch { /* shown as empty below */ }

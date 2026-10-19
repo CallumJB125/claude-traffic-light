@@ -15,9 +15,12 @@ const { testTempDir } = require('./helpers/tmp');
 
 const SID = '0f6e3c1a-2b4d-4e5f-8a9b-0c1d2e3f4a5b';
 
-async function harness({ answer = 1 } = {}) {
+async function harness({ answer = 1, t } = {}) {
   const fake = await createFakeBurst({ '/api/state': { body: stateV019() }, '/api/upgrade-status': { body: {} }, '/api/coordination-act': { body: { ok: 'queued' } }, '/api/requests': { body: [] }, '/api/coordination': { body: {} }, '/api/codex': { body: { status: { path: '/Users/me/.codex/config.toml', installed: true, enabled: false }, listening: true } }, '/api/codex/enable': { body: { ok: 'enabled' } }, '/api/reset': { body: { ok: 'reset' } } });
-  const home = testTempDir('burst-ipc-');
+  let home, closing;
+  const done = () => closing || (closing = (async () => { await fake.close(); if (home) fs.rmSync(home, { recursive: true, force: true }); })());
+  t?.after(done); // Assertion or startup failure must not leave the HTTP fixture alive.
+  home = testTempDir('burst-ipc-');
   const bin = path.join(home, '.local', 'bin', 'claude-burst');
   fs.mkdirSync(path.dirname(bin), { recursive: true });
   fs.writeFileSync(bin, '#!/bin/sh\n', { mode: 0o755 });
@@ -34,21 +37,21 @@ async function harness({ answer = 1 } = {}) {
     isMac: true, client, home, snapshotFile, dialog: { showMessageBox: async (o) => { dialogs.push(o); return { response: answer }; } }, shell: {}, scriptDir: '/x',
   });
   await api.refresh(true);
-  return { fake, api, handlers, dialogs, snapshotFile, done: async () => { await fake.close(); fs.rmSync(home, { recursive: true, force: true }); } };
+  return { fake, api, handlers, dialogs, snapshotFile, done };
 }
 const posts = (h) => h.fake.requests.filter((r) => r.method === 'POST');
 
-test('burst-action: cancel sends nothing; confirm sends exactly one POST; the wording is main\'s', async () => {
-  const h = await harness({ answer: 0 });
+test('burst-action: cancel sends nothing; confirm sends exactly one POST; the wording is main\'s', async (t) => {
+  const h = await harness({ answer: 0, t });
   const args = { session: SID, message: 'please commit', title: 'Renderer title', detail: 'renderer text' };
-  assert.deepEqual(await h.handlers['burst-action']({ from: 'sessions' }, 'coord-message', args), { ok: false, cancelled: true });
+  assert.deepEqual(await h.handlers['burst-action']({ from: 'sessions' }, 'coord-message', args), { ok: false, cancelled: true, reason: 'Cancelled.' });
   assert.equal(posts(h).length, 0);
   assert.equal(h.dialogs[0].title, 'Send message');
   assert.match(h.dialogs[0].detail, /^Burst queues this message for session 0f6e3c1a/);
   assert.ok(!JSON.stringify(h.dialogs).includes('renderer text') && !JSON.stringify(h.dialogs).includes('Renderer title'));
   await h.done();
 
-  const y = await harness({ answer: 1 });
+  const y = await harness({ answer: 1, t });
   const r = await y.handlers['burst-action']({ from: 'sessions' }, 'coord-message', args);
   assert.deepEqual(r, { ok: true, data: { ok: 'queued' } });
   assert.equal(posts(y).length, 1);
@@ -56,10 +59,10 @@ test('burst-action: cancel sends nothing; confirm sends exactly one POST; the wo
   await y.done();
 });
 
-test('burst-action: bad args and unknown ids never reach a dialog or Burst; other pages are refused', async () => {
-  const h = await harness();
-  assert.deepEqual(await h.handlers['burst-action']({ from: 'sessions' }, 'coord-message', { session: SID, message: 'x'.repeat(501) }), { ok: false, error: 'Bad request.' });
-  assert.deepEqual(await h.handlers['burst-action']({ from: 'sessions' }, 'secondary-key', { api_key: 'k' }), { ok: false, error: 'Unknown action.' });
+test('burst-action: bad args and unknown ids never reach a dialog or Burst; other pages are refused', async (t) => {
+  const h = await harness({ t });
+  assert.deepEqual(await h.handlers['burst-action']({ from: 'sessions' }, 'coord-message', { session: SID, message: 'x'.repeat(501) }), { ok: false, error: 'Bad request.', reason: 'Bad request.' });
+  assert.deepEqual(await h.handlers['burst-action']({ from: 'sessions' }, 'secondary-key', { api_key: 'k' }), { ok: false, error: 'Unknown action.', reason: 'Unknown action.' });
   assert.equal(await h.handlers['burst-action']({ from: 'widget' }, 'reset', {}), null);
   assert.deepEqual((await h.handlers['burst:view']({ from: 'sessions' }, 'route')).view, null);
   assert.equal(h.dialogs.length, 0);
@@ -67,19 +70,19 @@ test('burst-action: bad args and unknown ids never reach a dialog or Burst; othe
   await h.done();
 });
 
-test('AI tools page: reads Codex routing and may only turn it on or off, behind consent', async () => {
+test('AI tools page: reads Codex routing and may only turn it on or off, behind consent', async (t) => {
   const AIT = { from: 'aitools' };
-  const h = await harness({ answer: 0 });
-  assert.deepEqual(await h.handlers['burst:codex-routing'](AIT), { view: { installed: true, enabled: false, problem: '' } });
+  const h = await harness({ answer: 0, t });
+  assert.deepEqual(await h.handlers['burst:codex-routing'](AIT), { ok: true, view: { installed: true, enabled: false, problem: '' } });
   assert.equal(await h.handlers['burst:codex-routing']({ from: 'sessions' }), null);
-  assert.deepEqual(await h.handlers['burst-action'](AIT, 'reset', {}), { ok: false, error: 'Not available.' });
-  assert.deepEqual(await h.handlers['burst-action'](AIT, 'codex-enable', {}), { ok: false, cancelled: true });
+  assert.deepEqual(await h.handlers['burst-action'](AIT, 'reset', {}), { ok: false, error: 'Not available.', reason: 'Not available.' });
+  assert.deepEqual(await h.handlers['burst-action'](AIT, 'codex-enable', {}), { ok: false, cancelled: true, reason: 'Cancelled.' });
   assert.equal(h.dialogs.length, 1);
   assert.equal(h.dialogs[0].title, 'Route Codex through Burst');
   assert.equal(posts(h).length, 0);
   await h.done();
 
-  const y = await harness({ answer: 1 });
+  const y = await harness({ answer: 1, t });
   assert.equal((await y.handlers['burst-action'](AIT, 'codex-enable', {})).ok, true);
   assert.deepEqual(posts(y).map((p) => p.url), ['/api/codex/enable']);
   await y.done();
@@ -88,12 +91,12 @@ test('AI tools page: reads Codex routing and may only turn it on or off, behind 
 test('AI tools page: off macOS no Burst is read and no action runs', async () => {
   const handlers = {};
   Ipc.register({ utilityHandle: (c, a, f) => { handlers[c] = (e, ...x) => (a(e) ? f(e, ...x) : null); }, settingsOnly: () => false, aitoolsAllowed: () => true, isMac: false, dialog: { showMessageBox: () => { throw new Error('no dialog'); } }, shell: {}, scriptDir: '/x' });
-  assert.deepEqual(await handlers['burst:codex-routing']({}), { view: null });
+  assert.deepEqual(await handlers['burst:codex-routing']({}), { ok: true, view: null });
   assert.equal((await handlers['burst-action']({}, 'codex-enable', {})).ok, false);
 });
 
-test('snapshot: written 0600 after a poll and readable until stale', async () => {
-  const h = await harness();
+test('snapshot: written 0600 after a poll and readable until stale', async (t) => {
+  const h = await harness({ t });
   for (let i = 0; i < 50 && !fs.existsSync(h.snapshotFile); i++) await new Promise((r) => setTimeout(r, 10));
   assert.equal(fs.statSync(h.snapshotFile).mode & 0o777, 0o600);
   const s = Snapshot.readSnapshot(h.snapshotFile);

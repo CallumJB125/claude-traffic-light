@@ -30,23 +30,43 @@ async function fixture(t, options = {}) {
   return { adapter, origin, grant, call, linked, link: connected.value.link };
 }
 
-test('terminal channel: write alone is unconfirmed; exact provider accept and reply provide receipt', async t => {
+test('terminal channel: write alone is unconfirmed; exact provider accept and reply provide receipt', { timeout: 10_000 }, async t => {
   const f = await fixture(t), id = crypto.randomUUID(), received = [];
-  f.adapter.on(e => received.push(e));
+  // Control only the send deadline, so this success path follows actual HTTP
+  // and receipt events without racing CI scheduling against 100 ms. Restore
+  // native timers before HTTP; deadline refusal is tested below with real timers.
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let resolveReceipt, resolveCompletion;
+  const receipt = new Promise(resolve => { resolveReceipt = resolve; });
+  const completion = new Promise(resolve => { resolveCompletion = resolve; });
+  f.adapter.on(e => {
+    received.push(e);
+    if (e.target !== f.grant.target || e.turnId !== id) return;
+    if (e.kind === 'input-recorded') resolveReceipt(e);
+    if (e.kind === 'turn-completed') resolveCompletion(e);
+  });
+  let settled = false;
   const sending = f.adapter.send({ target: f.grant.target, text: 'selected terminal only', clientId: id });
-  let settled = false; sending.then(() => { settled = true; });
+  // Observe rejection immediately, including if a later assertion fails and
+  // fixture cleanup revokes a still-pending send. Do not leave a rejecting
+  // success-only .then() child promise behind.
+  const outcome = sending.then(value => { settled = true; return { value }; }, error => { settled = true; return { error }; });
+  t.mock.timers.reset();
   const next = await f.linked('/next');
   assert.deepEqual(next.value, { message_id: id, content: 'selected terminal only' });
-  await new Promise(resolve => setImmediate(resolve)); assert.equal(settled, false); assert.deepEqual(received, []);
+  assert.equal(settled, false); assert.deepEqual(received, []);
   assert.equal((await f.linked('/accept', { message_id: id, text: 'altered text' })).status, 409);
   assert.equal((await f.linked('/reply', { message_id: id, text: 'premature' })).status, 409);
+  assert.equal(settled, false); assert.deepEqual(received, []);
   assert.equal((await f.linked('/accept', { message_id: id, text: 'selected terminal only' })).status, 200);
-  assert.deepEqual(await sending, { turnId: id, mode: 'new-turn' });
-  assert.equal(received.find(e => e.kind === 'input-recorded').text, 'selected terminal only');
+  const acknowledged = await outcome;
+  assert.ifError(acknowledged.error);
+  assert.deepEqual(acknowledged.value, { turnId: id, mode: 'new-turn' });
+  assert.equal((await receipt).text, 'selected terminal only');
   assert.equal((await f.linked('/accept', { message_id: id, text: 'selected terminal only' })).status, 409, 'receipt cannot be replayed');
   assert.equal((await f.linked('/reply', { message_id: id, text: 'answer' })).status, 200);
   assert.equal(received.find(e => e.kind === 'message').text, 'answer');
-  assert.equal(received.find(e => e.kind === 'turn-completed').status, 'completed');
+  assert.equal((await completion).status, 'completed');
   assert.equal((await f.linked('/reply', { message_id: id, text: 'replayed answer' })).status, 409);
   await assert.rejects(f.adapter.send({ target: f.grant.target, text: 'replayed id', clientId: id }), e => e.code !== 'DELIVERY_UNCONFIRMED', 'reused ID is rejected before a send deadline');
 });

@@ -14,7 +14,7 @@ const Usage = require('../usage.js');
 const { redactSecretsPass } = require('./scrub.js');
 
 const MAX_EVENTS = 3000;
-const CAP = { prompt: 2000, reply: 600, command: 500, path: 500 };
+const CAP = { prompt: 2000, reply: 8000, command: 500, path: 500 };
 const EDIT = /^(?:Edit|Write|MultiEdit|NotebookEdit|apply_patch|write_file|replace|edit_file|create_file)$/i;
 const READ = /^(?:Read|Grep|Glob|LS|NotebookRead|view_image|read_file|list_dir|search)$/i;
 const DENIED = /doesn't want to proceed|tool use was rejected|permission (?:was )?denied|user (?:denied|rejected)/i;
@@ -27,6 +27,8 @@ const parse = (s) => { if (typeof s !== 'string' || s.length > 512 * 1024) retur
 const clip = (s, n) => { const t = String(s).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, ' ').trim(); return t.length > n ? `${t.slice(0, n)}…` : t; };
 const textOf = (content) => (typeof content === 'string' ? content : Array.isArray(content) ? content.filter((c) => c && typeof c.text === 'string').map((c) => c.text).join('\n') : '');
 
+// A model name as the timeline header shows it (letters, digits and . _ : / @ + -).
+const MODEL = /^[A-Za-z0-9._:/@+-]{1,80}$/;
 function usageCost(model, u) {
   const key = Usage.modelKey(model);
   if (!key || !obj(u)) return null;
@@ -36,6 +38,13 @@ function usageCost(model, u) {
 }
 
 function toolEvent(at, name, input) {
+  // Only the parent transcript's explicit tool call is inspected. No child
+  // transcript is discovered or read, and a request is not proof of execution.
+  const delegated = /^(?:functions\.)?(?:collaboration\.)?(?:spawn_agent|followup_task|send_message|interrupt_agent|send_input|resume_agent|close_agent|wait_agent)$/.test(name)
+    || /^(?:Agent|Task)$/.test(name);
+  if (delegated) return { at, kind: 'delegation', tool: clip(name, 80),
+    text: clip(input.prompt || input.message || '', CAP.prompt),
+    target: clip(input.target || input.task_name || input.id || input.description || input.subagent_type || 'New subagent', 200) };
   const file = str(input.file_path) || str(input.notebook_path) || str(input.filePath) || str(input.path);
   const cmd = Transcripts.commandOf(input.command ?? input.cmd);
   if (str(cmd)) return { at, kind: 'command', text: clip(cmd, CAP.command) };
@@ -45,7 +54,8 @@ function toolEvent(at, name, input) {
 }
 
 function claudeEvents(lines) {
-  const out = [], names = new Map(), usage = new Map();
+  const out = [], names = new Map(), delegated = new Map(), usage = new Map();
+  let model = null;
   let reply = null;
   const push = (e) => { if (out.length < MAX_EVENTS) out.push(e); };
   const turnEnd = (at) => { if (out[out.length - 1]?.kind !== 'turn-end') push({ at, kind: 'turn-end', text: reply ? clip(reply, CAP.reply) : null }); reply = null; };
@@ -58,7 +68,9 @@ function claudeEvents(lines) {
     if (d.type === 'user' && m && !d.isMeta) {
       const blocks = Array.isArray(m.content) ? m.content : [];
       for (const r of blocks) {
-        if (!r || r.type !== 'tool_result' || !r.is_error) continue;
+        if (!r || r.type !== 'tool_result') continue;
+        if (delegated.has(r.tool_use_id)) { push({ at, kind: 'delegation-result', tool: names.get(r.tool_use_id), target: delegated.get(r.tool_use_id), text: clip(textOf(r.content), CAP.reply), failed: !!r.is_error }); delegated.delete(r.tool_use_id); }
+        if (!r.is_error) continue;
         const tool = names.get(r.tool_use_id) || null;
         push(DENIED.test(textOf(r.content)) ? { at, kind: 'approval', answer: 'denied', tool } : { at, kind: 'failed', tool });
       }
@@ -68,20 +80,25 @@ function claudeEvents(lines) {
       const p = Transcripts.promptText(text);
       if (p) push({ at, kind: 'prompt', text: clip(p, CAP.prompt) });
     } else if (d.type === 'assistant' && m && Array.isArray(m.content)) {
+      if (MODEL.test(m.model ?? '') && m.model !== '<synthetic>') model = m.model;
       if (obj(m.usage)) usage.set(m.id && d.requestId ? `${m.id}:${d.requestId}` : d.uuid || `n${usage.size}`, { at, usd: usageCost(m.model, m.usage) });
       for (const c of m.content) {
         if (!c || typeof c !== 'object') continue;
-        if (c.type === 'tool_use' && str(c.name)) { if (typeof c.id === 'string' && names.size < 5000) names.set(c.id, c.name); push(toolEvent(at, c.name, obj(c.input) || {})); }
+        if (c.type === 'tool_use' && str(c.name)) {
+          const event = toolEvent(at, c.name, obj(c.input) || {});
+          if (typeof c.id === 'string' && names.size < 5000) { names.set(c.id, c.name); if (event.kind === 'delegation') delegated.set(c.id, event.target); }
+          push(event);
+        }
         else if (c.type === 'text' && str(c.text)) reply = c.text;
       }
       if (m.stop_reason === 'end_turn') turnEnd(at);
     } else if (d.type === 'system' && (d.subtype === 'stop_hook_summary' || d.subtype === 'turn_duration')) turnEnd(at);
   }
-  return { events: out, usage: [...usage.values()] };
+  return { events: out, usage: [...usage.values()], model };
 }
 
 function codexEvents(lines) {
-  const out = [];
+  const out = [], delegated = new Map();
   let reply = null, lastPrompt = null;
   const push = (e) => { if (out.length < MAX_EVENTS) out.push(e); };
   const command = (c, at) => { const t = Transcripts.commandOf(c); if (!str(t)) return; const text = clip(t, CAP.command); const prev = out[out.length - 1]; if (!(prev && prev.kind === 'command' && prev.text === text)) push({ at, kind: 'command', text }); };
@@ -98,7 +115,14 @@ function codexEvents(lines) {
       else if (p.type === 'message' && p.role === 'assistant') { const t = textOf(p.content); if (str(t)) reply = t; }
       else if (p.type === 'function_call' && str(p.name)) {
         const args = obj(typeof p.arguments === 'string' ? parse(p.arguments) : p.arguments) || {};
-        if (args.command || args.cmd) command(args.command || args.cmd, at); else push(toolEvent(at, p.name, args));
+        if (args.command || args.cmd) command(args.command || args.cmd, at); else {
+          const event = toolEvent(at, p.name, args);
+          if (event.kind === 'delegation' && typeof p.call_id === 'string' && delegated.size < 5000) delegated.set(p.call_id, event);
+          push(event);
+        }
+      } else if (p.type === 'function_call_output' && delegated.has(p.call_id)) {
+        const event = delegated.get(p.call_id); delegated.delete(p.call_id);
+        push({ at, kind: 'delegation-result', tool: event.tool, target: event.target, text: clip(typeof p.output === 'string' ? p.output : textOf(p.output), CAP.reply) });
       } else if (p.type === 'local_shell_call') command(p.action && p.action.command, at);
       else if (p.type === 'custom_tool_call' && p.name === 'apply_patch' && typeof p.input === 'string') for (const m of p.input.matchAll(/^\*\*\* (?:Update|Add|Delete) File: (.+)$/gm)) edit(m[1].trim(), at);
       else if (p.type === 'custom_tool_call' && str(p.name)) push({ at, kind: 'tool', tool: clip(p.name, 80) });
@@ -227,6 +251,7 @@ function build({ adapter, sessionId, cwd = '', branch = null, state = null, fact
   return {
     v: 1, adapter: String(adapter || ''), sessionId: String(sessionId || ''), cwd: root, project: root ? path.basename(root) : '',
     branch: str(branch) || str(f.branch) || null,
+    model: (transcript && MODEL.test(transcript.model ?? '') ? transcript.model : null) || (obj(state) && MODEL.test(state.model ?? '') ? state.model : null),
     source: transcript ? 'transcript' : Object.keys(f).length ? 'hooks' : 'state',
     partial: !!(transcript && transcript.partial),
     startedAt: started,
@@ -245,6 +270,11 @@ const usd = (n) => `$${n < 0.01 && n > 0 ? n.toFixed(4) : n.toFixed(2)}`;
 // One event → what a page shows: { label, text, mono, files, spend }. text null: nothing to show.
 function describe(e) {
   const k = e.kind;
+  if (k === 'delegation' || k === 'delegation-result') return {
+    label: k === 'delegation' ? 'Subagent request recorded' : e.failed ? 'Subagent tool reported an error' : 'Subagent tool result recorded',
+    text: e.text == null ? null : `${e.target || 'Subagent'}${e.tool ? ` · ${e.tool}` : ''}\n${e.text}`,
+    hidden: e.text == null,
+  };
   if (k === 'prompt') return { label: 'Asked', text: e.text ?? null, hidden: e.text == null };
   if (k === 'edit') return { label: 'Edited', text: e.path, mono: true };
   if (k === 'read') return { label: 'Read', text: (e.paths || []).join(', '), mono: true };

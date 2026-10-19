@@ -4,6 +4,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { normalizeRemoteUrl } from '../shared/scope.js';
+import { parseMentions } from '../shared/mentions.js';
 import { PLAN_APPROVAL_LABEL, isReservedLabel } from '../shared/states.js';
 import { LABEL_COLORS, CODEX_PLAN_PERMISSION } from '../shared/protocol.js';
 import { classifyPair, kindOf, hintPaths } from '../shared/overlap.js';
@@ -25,6 +26,14 @@ import { WorkflowExecutor } from './workflow-executor.js';
 import { requireStorage } from './storage-watch.js';
 import { observationContext, validObservation, sentryStatus } from './integrations/sentry/observation.js';
 import { cardSeed } from './activity-handoff.js';
+
+// Team depth (step 0): hub inbox kinds and bounds, shared by lanes A, B and D.
+export const INBOX_KINDS = new Set(['mention', 'reply', 'moment', 'handoff_request', 'handoff_answer', 'input_answered']);
+export const INBOX_MAX = 500;
+const INBOX_REF_MAX = 2048;
+const INBOX_READ_TAIL = 50;
+const INBOX_READ_MAX = 200;
+const inboxView = (r) => ({ id: r.id, org_id: r.org_id, kind: r.kind, ref: json(r.ref_json, {}), created_at: r.created_at, read_at: r.read_at ?? null });
 
 const ACTION_EVENTS = {
   dispatch: 'dispatch', cancel: 'cancel', stop: 'stop', retry: 'retry', take_over: 'take_over', hand_over: 'hand_over',
@@ -570,6 +579,119 @@ export class Api {
     }, { member, cred });
   }
 
+  // Project pinboard (board.settings.pins): staging URL, designs, commands, conventions, priorities.
+  // Any writer may add or remove a pin; viewers read. Append-only journal, same scrub as labels.
+  pinsOf(boardId) { return Array.isArray(json(this.hub.board(boardId).settings, {}).pins) ? json(this.hub.board(boardId).settings, {}).pins : []; }
+  // Shared saved views (board.settings.views): a named filter combination any writer can save for the team.
+  viewsOf(boardId) { return Array.isArray(json(this.hub.board(boardId).settings, {}).views) ? json(this.hub.board(boardId).settings, {}).views : []; }
+  async setViews(member, boardId, body, { cred = null, mode = 'append' } = {}) {
+    member = this.currentWriter(member, cred);
+    this.boardFor(member, boardId);
+    this.requireLabel(member, 'label.write');
+    const clean = (v) => {
+      if (!v || typeof v !== 'object') throw new HubError('VALIDATION', 'view must be an object');
+      const name = str(v.name, 60, 'view.name', { required: true });
+      if (!v.values || typeof v.values !== 'object' || Array.isArray(v.values)) throw new HubError('VALIDATION', 'view.values must be an object of filter values');
+      const entries = Object.entries(v.values).filter(([k, val]) => /^[a-z][a-z0-9_-]{0,23}$/i.test(k) && typeof val === 'string' && val.trim()).slice(0, 8).map(([k, val]) => [k, val.trim().slice(0, 80)]);
+      if (!entries.length) throw new HubError('VALIDATION', 'a view needs at least one filter value');
+      const id = typeof v.id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(v.id) ? v.id : randomUUID();
+      return { id, name, values: Object.fromEntries(entries) };
+    };
+    const item = mode === 'remove' ? null : clean(body.view);
+    return this.withWritableBoard(boardId, (current) => {
+      member = current;
+      this.requireLabel(member, 'label.write');
+      const now = this.hub.iso();
+      const before = this.viewsOf(boardId);
+      if (mode === 'remove' && !before.some((x) => x.id === body.id)) throw new HubError('NOT_FOUND', 'no such view');
+      const views = mode === 'remove' ? before.filter((x) => x.id !== body.id)
+        : [...before.filter((x) => x.id !== item.id && x.name.toLowerCase() !== item.name.toLowerCase()), { ...item, by: member.display_name ?? 'A teammate', at: now }];
+      if (views.length > 20) throw new HubError('VALIDATION', 'a board holds at most 20 shared views');
+      const settings = { ...json(this.hub.board(boardId).settings, {}), views };
+      this.hub.txn(() => {
+        this.db.run('UPDATE boards SET settings = ? WHERE id = ?', JSON.stringify(settings), boardId);
+        this.hub.journal({ board_id: boardId, actor_kind: 'member', actor_id: member.id, kind: 'board.views_set', payload: { count: views.length, mode, request_id: body.request_id ?? null } });
+        this.hub.later(() => this.hub.broadcastSettings(boardId, 'views'));
+      });
+      return { views };
+    }, { member, cred });
+  }
+  // Moments (board.settings.moments): "mark a moment" — a dated note the team keeps (a demo, a decision, a ship).
+  momentsOf(boardId) { return Array.isArray(json(this.hub.board(boardId).settings, {}).moments) ? json(this.hub.board(boardId).settings, {}).moments : []; }
+  async setMoments(member, boardId, body, { cred = null, mode = 'append' } = {}) {
+    member = this.currentWriter(member, cred);
+    this.boardFor(member, boardId);
+    this.requireLabel(member, 'label.write');
+    const KINDS = ['moment', 'ship', 'decision', 'demo'];
+    const clean = (m) => {
+      if (!m || typeof m !== 'object') throw new HubError('VALIDATION', 'moment must be an object');
+      const kind = KINDS.includes(m.kind) ? m.kind : 'moment';
+      const label = str(m.label, 120, 'moment.label', { required: true });
+      const note = str(m.note, 500, 'moment.note') ?? '';
+      const id = typeof m.id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(m.id) ? m.id : randomUUID();
+      return { id, kind, label, note };
+    };
+    const item = mode === 'remove' ? null : clean(body.moment);
+    return this.withWritableBoard(boardId, (current) => {
+      member = current;
+      this.requireLabel(member, 'label.write');
+      const now = this.hub.iso();
+      const before = this.momentsOf(boardId);
+      if (mode === 'remove' && !before.some((x) => x.id === body.id)) throw new HubError('NOT_FOUND', 'no such moment');
+      const moments = mode === 'remove' ? before.filter((x) => x.id !== body.id) : [{ ...item, by: member.display_name ?? 'A teammate', at: now }, ...before].slice(0, 50);
+      const settings = { ...json(this.hub.board(boardId).settings, {}), moments };
+      this.hub.txn(() => {
+        // The `moments` table (migration 076) is the durable row; the settings
+        // list is a mirror old desktops still read (same ids, one release).
+        if (mode === 'remove') {
+          this.db.run('DELETE FROM comments WHERE moment_id = ?', body.id);
+          this.db.run('DELETE FROM moments WHERE id = ? AND board_id = ?', body.id, boardId);
+        } else {
+          this.db.insert('moments', { id: item.id, board_id: boardId, kind: item.kind, label: item.label, note: item.note || null, author_member_id: member.id, created_at: now });
+        }
+        this.db.run('UPDATE boards SET settings = ? WHERE id = ?', JSON.stringify(settings), boardId);
+        this.hub.journal({ board_id: boardId, actor_kind: 'member', actor_id: member.id, kind: mode === 'remove' ? 'board.moment_removed' : 'board.moment_marked', payload: { kind: item?.kind ?? null, request_id: body.request_id ?? null } });
+        this.hub.later(() => this.hub.broadcastSettings(boardId, 'moments'));
+      });
+      return { moments };
+    }, { member, cred });
+  }
+  async setPins(member, boardId, body, { cred = null, mode = 'replace' } = {}) {
+    member = this.currentWriter(member, cred);
+    this.boardFor(member, boardId);
+    this.requireLabel(member, 'label.write');
+    const incoming = mode === 'remove' ? [] : Array.isArray(body.pins) ? body.pins : body.pin ? [body.pin] : null;
+    if (!incoming && mode !== 'remove') throw new HubError('VALIDATION', 'pins must be a list');
+    const clean = (p, i) => {
+      if (!p || typeof p !== 'object') throw new HubError('VALIDATION', `pins[${i}] must be an object`);
+      const kind = ['link', 'command', 'note', 'priority'].includes(p.kind) ? p.kind : null;
+      if (!kind) throw new HubError('VALIDATION', `pins[${i}].kind must be link, command, note or priority`);
+      const label = str(p.label, 80, `pins[${i}].label`, { required: true });
+      const value = str(p.value, 500, `pins[${i}].value`, { required: kind !== 'priority' }) ?? '';
+      if (kind === 'link' && !/^https:\/\/[^\s]+$/i.test(value)) throw new HubError('VALIDATION', `pins[${i}].value must be an https link`);
+      const id = typeof p.id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(p.id) ? p.id : randomUUID();
+      return { id, kind, label, value };
+    };
+    const items = (incoming || []).map(clean);
+    return this.withWritableBoard(boardId, (current) => {
+      member = current;
+      this.requireLabel(member, 'label.write');
+      const now = this.hub.iso();
+      const before = this.pinsOf(boardId);
+      const stamp = (p) => { const old = before.find((x) => x.id === p.id); return { ...p, by: old?.by ?? member.display_name ?? 'A teammate', at: old?.at ?? now }; };
+      if (mode === 'remove' && !before.some((x) => x.id === body.id)) throw new HubError('NOT_FOUND', 'no such pin');
+      let pins = mode === 'append' ? [...before.filter((x) => !items.some((p) => p.id === x.id)), ...items.map(stamp)] : mode === 'remove' ? before.filter((x) => x.id !== body.id) : items.map(stamp);
+      if (pins.length > 20) throw new HubError('VALIDATION', 'a pinboard holds at most 20 pins');
+      const settings = { ...json(this.hub.board(boardId).settings, {}), pins };
+      this.hub.txn(() => {
+        this.db.run('UPDATE boards SET settings = ? WHERE id = ?', JSON.stringify(settings), boardId);
+        this.hub.journal({ board_id: boardId, actor_kind: 'member', actor_id: member.id, kind: 'board.pins_set', payload: { count: pins.length, mode, request_id: body.request_id ?? null } });
+        this.hub.later(() => this.hub.broadcastPins(boardId));
+      });
+      return { pins };
+    }, { member, cred });
+  }
+
   async patchLabel(member, boardId, name, body, { cred = null } = {}) {
     member = this.currentWriter(member, cred);
     this.boardFor(member, boardId);
@@ -816,6 +938,7 @@ export class Api {
           const r = this.db.run("UPDATE asks SET state = 'answered', answer = ?, answered_by = ?, answered_at = ? WHERE id = ? AND state = 'open'", answer, me, this.hub.iso(), ask.id);
           if (Number(r.changes) === 0) throw new HubError('ALREADY_ANSWERED', 'already answered');
           this.hub.journal({ board_id: row.board_id, card_id: cardId, run_id: ask.run_id, actor_kind: 'member', actor_id: me, kind: 'ask.answer', payload: { ask_id: ask.id, by: me } });
+          this.notifyInputAnswered(ask.run_id, me, { card_id: cardId, board_id: row.board_id, ask_id: ask.id });
         };
         break;
       }
@@ -861,6 +984,7 @@ export class Api {
           const r = this.db.run("UPDATE permission_requests SET state = ?, scope = ?, answered_by = ?, answered_at = ? WHERE id = ? AND state IN ('open','parked')", state, scope, member.id, this.hub.iso(), prId);
           if (Number(r.changes) === 0) throw new HubError('ALREADY_ANSWERED', 'another approver answered first');
           this.hub.journal({ card_id: cardId, run_id: pr.run_id, actor_kind: 'member', actor_id: member.id, kind: 'permission.answer', payload: { permission_request_id: prId, decision: body.decision, scope } });
+          this.notifyInputAnswered(pr.run_id, member.id, { card_id: cardId, board_id: this.hub.card(cardId)?.board_id ?? null, permission_request_id: prId });
           if(pr.tool===CODEX_PLAN_PERMISSION)this.hub.workflowGuard.planAnswer(pr.run_id,pr,body.decision);
         },
       }));
@@ -894,18 +1018,288 @@ export class Api {
     }, { member, cred });
   }
 
+  // ── inbox (team depth, step 0) ────────────────────────────────────────────
+  // One "look here" row for a member (plan .omc/plans/team-depth-2026-10-19.md
+  // §B). Called from inside other routes' transactions (comments, hand-offs,
+  // answered inputs), so it never throws: a bad kind, an unknown member or a
+  // storage error is logged and dropped, and the caller's write goes through.
+  // Rows per member are capped at INBOX_MAX: the oldest read rows go first,
+  // then, if still over, the oldest unread. Returns the new row's id or null.
+  // The live push to the member's own sockets is hub.broadcastMember(member_id,
+  // 'inbox.item', { item }); lane B owns the read/list routes.
+  notify(memberId, kind, ref = {}) {
+    try {
+      if (!INBOX_KINDS.has(kind)) throw new Error(`unknown inbox kind ${kind}`);
+      const member = this.db.get('SELECT id, org_id FROM members WHERE id = ? AND removed_at IS NULL', memberId);
+      if (!member) return null;
+      const refJson = JSON.stringify(ref && typeof ref === 'object' && !Array.isArray(ref) ? ref : {});
+      if (Buffer.byteLength(refJson) > INBOX_REF_MAX) throw new Error('inbox ref over size');
+      const id = randomUUID();
+      this.db.insert('inbox', { id, org_id: member.org_id, member_id: member.id, kind, ref_json: refJson, created_at: this.hub.iso(), read_at: null });
+      const over = this.db.get('SELECT COUNT(*) AS n FROM inbox WHERE member_id = ?', member.id).n - INBOX_MAX;
+      if (over > 0) {
+        this.db.run('DELETE FROM inbox WHERE id IN (SELECT id FROM inbox WHERE member_id = ? AND read_at IS NOT NULL ORDER BY created_at, id LIMIT ?)', member.id, over);
+        const still = this.db.get('SELECT COUNT(*) AS n FROM inbox WHERE member_id = ?', member.id).n - INBOX_MAX;
+        if (still > 0) this.db.run('DELETE FROM inbox WHERE id IN (SELECT id FROM inbox WHERE member_id = ? ORDER BY created_at, id LIMIT ?)', member.id, still);
+      }
+      return id;
+    } catch (e) {
+      this.hub.log?.warn?.('inbox notify dropped', { member_id: memberId, kind, error: e.message });
+      return null;
+    }
+  }
+
+  // ── hand-offs (team depth, lane D) ────────────────────────────────────────
+  // A person hands a card to a teammate: the latest handover version is
+  // attached, `to` joins the assignees, and `to` decides (accept / decline).
+  // handover_id is handovers.version as text at request time (NULL when the
+  // card has no handover yet). One `requested` hand-off per card at a time.
+  handoffView(row) {
+    return row ? { id: row.id, card_id: row.card_id, from_member_id: row.from_member_id, to_member_id: row.to_member_id, state: row.state, note: row.note ?? null,
+      handover_id: row.handover_id ?? null, created_at: row.created_at, answered_at: row.answered_at ?? null,
+      from_name: this.hub.memberName(row.from_member_id), to_name: this.hub.memberName(row.to_member_id) } : null;
+  }
+
+  handoffRow(member, cardId, handoffId) {
+    const row = this.db.get('SELECT * FROM handoffs WHERE id = ? AND card_id = ?', String(handoffId ?? ''), cardId);
+    if (!row) throw new HubError('NOT_FOUND', 'hand-off not found');
+    return row;
+  }
+
+  // After commit: the person's own sockets get the inbox item, the board gets card.handoff and the card.upsert.
+  announceHandoff(row, inboxMemberId, inboxId) {
+    const card = this.hub.card(row.card_id);
+    this.hub.later(() => {
+      if (inboxId) {
+        const item = this.db.get('SELECT * FROM inbox WHERE id = ?', inboxId);
+        if (item) this.hub.broadcastMember(inboxMemberId, 'inbox.item', { item: { id: item.id, org_id: item.org_id, kind: item.kind, ref: json(item.ref_json, {}), created_at: item.created_at, read_at: item.read_at } });
+      }
+      const h = this.handoffView(this.db.get('SELECT * FROM handoffs WHERE id = ?', row.id));
+      for (const b of this.hub.browsers) if (b.boardId === card.board_id) b.send({ type: 'card.handoff', board_id: card.board_id, card_id: card.id, handoff: h });
+      this.hub.broadcastCard(card.id);
+    });
+  }
+
+  async requestHandoff(member, cardId, body, { cred = null } = {}) {
+    member = this.currentWriter(member, cred);
+    const row0 = this.cardFor(member, cardId);
+    const to = this.orgMember(member, body.to_member_id);
+    if (to.id === member.id) throw new HubError('VALIDATION', 'hand the card to someone else');
+    if (!this.hub.canWrite(to)) throw new HubError('VALIDATION', 'a viewer cannot take a card');
+    const note = str(body.note, 2000, 'note');
+    return this.withWritableBoard(row0.board_id, (current) => {
+      member = current;
+      const row = this.cardFor(member, cardId);
+      if (row.board_id !== row0.board_id) throw new HubError('CONFLICT', 'card moved while waiting');
+      if (row.archived_at) throw archivedError();
+      if (this.db.get("SELECT 1 AS x FROM handoffs WHERE card_id = ? AND state = 'requested'", cardId)) throw new HubError('CONFLICT', 'this card already has a hand-off waiting for an answer', { reason: 'HANDOFF_PENDING' });
+      const id = randomUUID();
+      let inboxId = null;
+      this.hub.txn(() => {
+        const handover = this.hub.latestHandover(cardId);
+        this.db.insert('handoffs', { id, card_id: cardId, from_member_id: member.id, to_member_id: to.id, state: 'requested', note, handover_id: handover ? String(handover.version) : null, created_at: this.hub.iso(), answered_at: null });
+        const before = this.hub.assignees(cardId);
+        if (!before.includes(to.id)) {
+          this.db.run("INSERT OR IGNORE INTO card_assignees (card_id, member_id, role) VALUES (?, ?, 'collaborator')", cardId, to.id);
+          this.db.run('UPDATE cards SET version = version + 1, updated_at = ? WHERE id = ?', this.hub.iso(), cardId);
+          this.hub.journal({ board_id: row.board_id, card_id: cardId, actor_kind: 'member', actor_id: member.id, kind: 'card.update', payload: { fields: { assignees: [before, [...before, to.id]] }, request_id: body.request_id ?? null, cause: 'handoff' } });
+        }
+        this.hub.journal({ board_id: row.board_id, card_id: cardId, actor_kind: 'member', actor_id: member.id, kind: 'card.handoff_requested', payload: { handoff_id: id, to: to.id, request_id: body.request_id ?? null } });
+        inboxId = this.notify(to.id, 'handoff_request', { board_id: row.board_id, card_id: cardId, handoff_id: id, by: member.id });
+        this.announceHandoff({ id, card_id: cardId }, to.id, inboxId);
+      });
+      return { handoff: this.handoffView(this.db.get('SELECT * FROM handoffs WHERE id = ?', id)), card: cardView(this.hub, this.hub.card(cardId), member.id) };
+    }, { member, cred });
+  }
+
+  // accept / decline: only `to`. cancel: `from` or an admin. All three need state `requested`.
+  async answerHandoff(member, cardId, handoffId, decision, body = {}, { cred = null } = {}) {
+    if (!['accepted', 'declined', 'cancelled'].includes(decision)) throw new HubError('VALIDATION', 'bad decision');
+    member = this.currentWriter(member, cred);
+    const row0 = this.cardFor(member, cardId);
+    this.handoffRow(member, cardId, handoffId);
+    return this.withWritableBoard(row0.board_id, (current) => {
+      member = current;
+      const row = this.cardFor(member, cardId);
+      if (row.board_id !== row0.board_id) throw new HubError('CONFLICT', 'card moved while waiting');
+      const h = this.handoffRow(member, cardId, handoffId);
+      if (decision === 'cancelled') {
+        if (h.from_member_id !== member.id && !this.hub.isAdmin(member)) throw new HubError('FORBIDDEN', 'only the person who handed the card over, or an admin, can cancel');
+      } else if (h.to_member_id !== member.id) throw new HubError('FORBIDDEN', 'only the person the card was handed to can answer');
+      if (h.state !== 'requested') throw new HubError('CONFLICT', `this hand-off was already ${h.state}`, { reason: 'HANDOFF_ANSWERED' });
+      let inboxId = null, inboxTo = null;
+      this.hub.txn(() => {
+        const now = this.hub.iso();
+        this.db.run('UPDATE handoffs SET state = ?, answered_at = ? WHERE id = ?', decision, now, h.id);
+        if (decision === 'cancelled') {
+          // An unread request is withdrawn with the hand-off; a read one stays as history.
+          this.db.run("DELETE FROM inbox WHERE member_id = ? AND kind = 'handoff_request' AND read_at IS NULL AND json_extract(ref_json, '$.handoff_id') = ?", h.to_member_id, h.id);
+          this.hub.journal({ board_id: row.board_id, card_id: cardId, actor_kind: 'member', actor_id: member.id, kind: 'card.handoff_cancelled', payload: { handoff_id: h.id, request_id: body.request_id ?? null } });
+        } else {
+          this.hub.journal({ board_id: row.board_id, card_id: cardId, actor_kind: 'member', actor_id: member.id, kind: 'card.handoff_answered', payload: { handoff_id: h.id, state: decision, request_id: body.request_id ?? null } });
+          inboxTo = h.from_member_id;
+          inboxId = this.notify(h.from_member_id, 'handoff_answer', { board_id: row.board_id, card_id: cardId, handoff_id: h.id, by: member.id, state: decision });
+        }
+        this.announceHandoff(h, inboxTo, inboxId);
+      });
+      return { handoff: this.handoffView(this.db.get('SELECT * FROM handoffs WHERE id = ?', h.id)), card: cardView(this.hub, this.hub.card(cardId), member.id) };
+    }, { member, cred });
+  }
+
+  // Lane B: the member's own inbox as the routes return it (CONTRACT: GET /api/account/inbox).
+  inboxItem(id) {
+    const r = id ? this.db.get('SELECT * FROM inbox WHERE id = ?', id) : null;
+    return r ? inboxView(r) : null;
+  }
+
+  // GET /api/account/inbox?since=: every unread row plus the last 50 read, newest
+  // first, across all of this user's memberships (one sign-in may sit in several
+  // orgs, like /api/account/devices spans the user, not one member).
+  listInbox(members, query = null) {
+    const ids = (members || []).map((m) => m.id);
+    if (!ids.length) return { items: [], unread: 0 };
+    const sinceRaw = query && typeof query.get === 'function' ? query.get('since') : query?.since ?? null;
+    let since = null;
+    if (sinceRaw != null && sinceRaw !== '') {
+      if (typeof sinceRaw !== 'string' || sinceRaw.length > 40 || Number.isNaN(Date.parse(sinceRaw))) throw new HubError('VALIDATION', 'since must be an ISO date');
+      since = new Date(Date.parse(sinceRaw)).toISOString();
+    }
+    const marks = ids.map(() => '?').join(',');
+    const where = `member_id IN (${marks})${since ? ' AND created_at > ?' : ''}`;
+    const args = since ? [...ids, since] : ids;
+    const unread = this.db.all(`SELECT * FROM inbox WHERE ${where} AND read_at IS NULL ORDER BY created_at DESC, id DESC`, ...args);
+    const read = this.db.all(`SELECT * FROM inbox WHERE ${where} AND read_at IS NOT NULL ORDER BY created_at DESC, id DESC LIMIT ${INBOX_READ_TAIL}`, ...args);
+    const items = [...unread, ...read].sort((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : a.id < b.id ? 1 : -1)).map(inboxView);
+    return { items, unread: unread.length };
+  }
+
+  // POST /api/account/inbox/read {ids|all:true}: marks the caller's own unread rows;
+  // ids that are not the caller's are ignored (never 404, nothing to learn).
+  readInbox(members, body = {}) {
+    const ids = (members || []).map((m) => m.id);
+    const all = body?.all === true;
+    const list = Array.isArray(body?.ids) ? body.ids : null;
+    if (!all && !list) throw new HubError('VALIDATION', 'ids or all required');
+    if (list && (list.length > INBOX_READ_MAX || list.some((x) => typeof x !== 'string' || !x || x.length > 100))) throw new HubError('VALIDATION', `ids must be at most ${INBOX_READ_MAX} strings`);
+    if (!ids.length || (list && !list.length)) return { read: 0 };
+    const marks = ids.map(() => '?').join(',');
+    const r = all
+      ? this.db.run(`UPDATE inbox SET read_at = ? WHERE member_id IN (${marks}) AND read_at IS NULL`, this.hub.iso(), ...ids)
+      : this.db.run(`UPDATE inbox SET read_at = ? WHERE member_id IN (${marks}) AND read_at IS NULL AND id IN (${list.map(() => '?').join(',')})`, this.hub.iso(), ...ids, ...list);
+    return { read: Number(r.changes) || 0 };
+  }
+
+  // A teammate answered an input (question or permission) that a run on someone
+  // else's machine raised: tell the machine's owner. Call inside the answering
+  // transaction; the live push follows the commit (hub.later).
+  notifyInputAnswered(runId, answeredBy, ref) {
+    const run = this.hub.run(runId);
+    const owner = run?.on_behalf_of ?? this.hub.device(run?.device_id)?.member_id ?? null;
+    if (!owner || owner === answeredBy) return null;
+    const id = this.notify(owner, 'input_answered', { ...ref, by: answeredBy });
+    if (id) this.hub.later(() => { const item = this.inboxItem(id); if (item) this.hub.broadcastMember(owner, 'inbox.item', { item }); });
+    return id;
+  }
+
   // ── comments ──────────────────────────────────────────────────────────────
+  // Mentions (team depth lane A): `@name` / `@email-local-part` against the
+  // org's current members, parsed on write and stored as member ids
+  // (comments.mentions_json). Every mentioned member other than the author
+  // gets an inbox row `mention`; the parent comment's author gets `reply`
+  // (one row per member per comment). The live `inbox.item` push to each
+  // member's own sockets runs after commit.
+  orgMembersForMentions(orgId) {
+    return this.db.all('SELECT id, display_name, email, github_login FROM members WHERE org_id = ? AND removed_at IS NULL', orgId);
+  }
+
+  inboxItem(id) {
+    const r = id ? this.db.get('SELECT * FROM inbox WHERE id = ?', id) : null;
+    return r ? { id: r.id, org_id: r.org_id, kind: r.kind, ref: json(r.ref_json, {}), created_at: r.created_at, read_at: r.read_at } : null;
+  }
+
+  // Writes the inbox rows for one new comment and schedules their push; returns the mention ids.
+  notifyComment(member, orgId, { comment_id, body, reply_to, ref }) {
+    const mentions = parseMentions(body, this.orgMembersForMentions(orgId)).map((m) => m.member_id);
+    const notified = new Map();
+    for (const id of mentions) if (id !== member.id) notified.set(id, 'mention');
+    const parent = reply_to ? this.db.get('SELECT author_member_id FROM comments WHERE id = ?', reply_to) : null;
+    if (parent?.author_member_id && parent.author_member_id !== member.id && !notified.has(parent.author_member_id)) notified.set(parent.author_member_id, 'reply');
+    for (const [id, kind] of notified) {
+      const rowId = this.notify(id, kind, { ...ref, comment_id, by: member.id });
+      if (rowId) this.hub.later(() => { const item = this.inboxItem(rowId); if (item) this.hub.broadcastMember(id, 'inbox.item', { item }); });
+    }
+    return mentions;
+  }
+
+  commentView(c) {
+    return {
+      id: c.id, author_member_id: c.author_member_id, author_name: c.author_member_id ? this.hub.memberName(c.author_member_id) ?? 'Former member' : null,
+      source: c.source, trusted: !!c.trusted, body: c.body, for_agent: !!c.for_agent, reply_to: c.reply_to, mentions: json(c.mentions_json, []),
+      created_at: c.created_at, created_age_ms: this.hub.ageOf(c.created_at), ...(c.moment_id ? { moment_id: c.moment_id } : {}),
+    };
+  }
+
   insertComment(member, cardId, { body, for_agent = false, reply_to = null }) {
-    requireRows(this.hub, this.hub.board(this.hub.card(cardId).board_id).org_id, 'comments');
+    const boardId = this.hub.card(cardId).board_id;
+    const orgId = this.hub.board(boardId).org_id;
+    requireRows(this.hub, orgId, 'comments');
     const id = randomUUID();
     const replyTo = reply_to && this.db.get('SELECT 1 AS x FROM comments WHERE id = ? AND card_id = ?', reply_to, cardId) ? reply_to : null;
     // Text an integration wrote (inside its actVia scope) is outside text:
     // never trusted, so it can never reach a running agent (deliverComments).
     const byIntegration = this.hub.viaScope.getStore()?.member_id === member.id;
     const source = byIntegration ? 'integration' : 'web';
-    this.db.insert('comments', { id, card_id: cardId, author_member_id: member.id, source, trusted: byIntegration ? 0 : 1, body, for_agent: for_agent ? 1 : 0, reply_to: replyTo, created_at: this.hub.iso() });
+    const mentions = this.notifyComment(member, orgId, { comment_id: id, body, reply_to: replyTo, ref: { board_id: boardId, card_id: cardId } });
+    this.db.insert('comments', { id, card_id: cardId, author_member_id: member.id, source, trusted: byIntegration ? 0 : 1, body, for_agent: for_agent ? 1 : 0, reply_to: replyTo, mentions_json: JSON.stringify(mentions), created_at: this.hub.iso() });
     this.hub.journal({ card_id: cardId, actor_kind: 'member', actor_id: member.id, kind: 'comment.create', payload: { comment_id: id, source, for_agent: !!for_agent } });
+    this.hub.later(() => { const c = this.db.get('SELECT * FROM comments WHERE id = ?', id); if (c) this.hub.broadcastComment(boardId, 'card.comment', { card_id: cardId, comment: this.commentView(c), mentions }); });
     return id;
+  }
+
+  // Comments on a moment (CONTRACT: GET/POST /api/boards/:board_id/moments/:moment_id/comments).
+  // A moment is looked up in its table; one still only in the settings mirror
+  // (marked before migration 076) is given its row on first use.
+  momentFor(member, boardId, momentId) {
+    this.boardFor(member, boardId);
+    const row = typeof momentId === 'string' ? this.db.get('SELECT * FROM moments WHERE id = ? AND board_id = ?', momentId, boardId) : null;
+    if (row) return row;
+    const mirrored = this.momentsOf(boardId).find((m) => m.id === momentId);
+    if (!mirrored) throw new HubError('NOT_FOUND', 'no such moment');
+    const kind = ['moment', 'ship', 'decision', 'demo'].includes(mirrored.kind) ? mirrored.kind : 'moment';
+    const created = Number.isFinite(Date.parse(mirrored.at)) ? new Date(mirrored.at).toISOString() : this.hub.iso();
+    const backfill = { id: mirrored.id, board_id: boardId, kind, label: String(mirrored.label ?? '').slice(0, 120) || 'Moment', note: mirrored.note ? String(mirrored.note).slice(0, 500) : null, author_member_id: null, created_at: created };
+    this.hub.txn(() => this.db.run('INSERT OR IGNORE INTO moments (id, board_id, kind, label, note, author_member_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', backfill.id, backfill.board_id, backfill.kind, backfill.label, backfill.note, backfill.author_member_id, backfill.created_at));
+    return backfill;
+  }
+
+  momentComments(member, boardId, momentId) {
+    const moment = this.momentFor(member, boardId, momentId);
+    const rows = this.db.all('SELECT * FROM comments WHERE moment_id = ? ORDER BY created_at, rowid', moment.id);
+    return { comments: rows.map((c) => this.commentView(c)) };
+  }
+
+  async addMomentComment(member, boardId, momentId, body, { cred = null } = {}) {
+    member = this.currentWriter(member, cred);
+    this.momentFor(member, boardId, momentId);
+    this.requireLabel(member, 'label.write');
+    const text = str(body.body, 10_000, 'body', { required: true });
+    return this.withWritableBoard(boardId, (current) => {
+      member = current;
+      const moment = this.momentFor(member, boardId, momentId);
+      this.requireLabel(member, 'label.write');
+      const orgId = this.hub.board(boardId).org_id;
+      const id = randomUUID();
+      this.hub.txn(() => {
+        requireRows(this.hub, orgId, 'comments');
+        const replyTo = body.reply_to && this.db.get('SELECT 1 AS x FROM comments WHERE id = ? AND moment_id = ?', body.reply_to, moment.id) ? body.reply_to : null;
+        const byIntegration = this.hub.viaScope.getStore()?.member_id === member.id;
+        const mentions = this.notifyComment(member, orgId, { comment_id: id, body: text, reply_to: replyTo, ref: { board_id: boardId, moment_id: moment.id } });
+        this.db.insert('comments', { id, card_id: null, moment_id: moment.id, author_member_id: member.id, source: byIntegration ? 'integration' : 'web', trusted: byIntegration ? 0 : 1, body: text, for_agent: 0, reply_to: replyTo, mentions_json: JSON.stringify(mentions), created_at: this.hub.iso() });
+        this.hub.journal({ board_id: boardId, actor_kind: 'member', actor_id: member.id, kind: 'comment.create', payload: { comment_id: id, source: byIntegration ? 'integration' : 'web', for_agent: false, moment_id: moment.id, request_id: body.request_id ?? null } });
+        this.hub.later(() => { const c = this.db.get('SELECT * FROM comments WHERE id = ?', id); if (c) this.hub.broadcastComment(boardId, 'moment.comment', { moment_id: moment.id, comment: this.commentView(c), mentions }); });
+      });
+      return { comment: this.commentView(this.db.get('SELECT * FROM comments WHERE id = ?', id)) };
+    }, { member, cred });
   }
 
   async comment(member, cardId, body, { cred = null, remote = null, integrationObservation = null } = {}) {
@@ -968,7 +1362,7 @@ export class Api {
       });
       if (!replay && body.for_agent === true) this.hub.deliverComments(cardId);
       const c = this.db.get('SELECT * FROM comments WHERE id = ?', id);
-      return { comment: { id, author_name: this.hub.member(c.author_member_id)?.display_name ?? 'Former member', source: c.source, trusted: !!c.trusted, body: c.body, for_agent: !!c.for_agent, reply_to: c.reply_to, created_age_ms: this.hub.ageOf(c.created_at) }, ...(observation ? { coalesced, replay } : {}) };
+      return { comment: this.commentView(c), ...(observation ? { coalesced, replay } : {}) };
     }, { member, cred, remote });
   }
 

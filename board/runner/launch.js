@@ -14,6 +14,7 @@ export const onDisk = (p) => p.replace(/([\\/])app\.asar([\\/])/, '$1app.asar.un
 export const HOOK_SHIM = onDisk(path.join(HERE, 'hook-shim.js'));
 export const MCP_SERVER = onDisk(path.join(BOARD_DIR, 'mcp', 'server.js'));
 export const CODEX_MCP_SERVER = onDisk(path.join(BOARD_DIR, 'mcp', 'codex-run.js'));
+export const TASK_MCP_SERVER = onDisk(path.join(BOARD_DIR, 'mcp', 'task-run.js'));
 
 // CLI 2.1.285 has no TodoWrite in -p mode (the init tools list drops it): the
 // task list is TaskCreate/TaskUpdate/TaskList/TaskGet. `Task` is the subagent tool.

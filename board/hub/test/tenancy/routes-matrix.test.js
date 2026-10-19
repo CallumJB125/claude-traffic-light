@@ -63,6 +63,14 @@ const MATRIX = {
   'DELETE /api/interaction/v1/shares/:share_id': { kind: 'cross', path: f => `/api/interaction/v1/shares/${f.B.share}` },
   'DELETE /api/teams/:team_id/interaction-shares/:share_id': { kind: 'cross', path: f => `/api/teams/${f.B.team}/interaction-shares/${f.B.share}` },
   'GET /api/interaction/v1/shared': { kind: 'self' },
+  'GET /api/interaction/v1/shared/:share_id/proposals': { kind: 'cross', path:f=>`/api/interaction/v1/shared/${f.B.share}/proposals` },
+  'POST /api/interaction/v1/shared/:share_id/proposals': { kind: 'cross', bare:true, path:f=>`/api/interaction/v1/shared/${f.B.share}/proposals`, body:()=>({id:randomUUID(),decision:randomUUID(),version:1,generation:1,title:'Foreign request',text:'Do not execute'}) },
+  'DELETE /api/interaction/v1/shared/:share_id/proposals/:proposal_id': { kind: 'cross', path:f=>`/api/interaction/v1/shared/${f.B.share}/proposals/${f.B.proposal}` },
+  'POST /api/interaction/v1/shared/:share_id/proposals/:proposal_id/send': { kind: 'cross', path:f=>`/api/interaction/v1/shared/${f.B.share}/proposals/${f.B.proposal}/send`, body:()=>({version:1,digest:'a'.repeat(64)}) },
+  'GET /api/interaction/v1/shares/:share_id/proposals': { kind: 'cross', status:403, path:f=>`/api/interaction/v1/shares/${f.B.share}/proposals` },
+  'POST /api/interaction/v1/shares/:share_id/proposals/:proposal_id/approve': { kind: 'cross', status:403, path:f=>`/api/interaction/v1/shares/${f.B.share}/proposals/${f.B.proposal}/approve` },
+  'DELETE /api/interaction/v1/shares/:share_id/proposals/:proposal_id': { kind: 'cross', status:403, path:f=>`/api/interaction/v1/shares/${f.B.share}/proposals/${f.B.proposal}` },
+
   // Phone approvals (W2-B): a foreign computer is "not available"; ping and push are the caller's own.
   'POST /api/approvals/v1/hosts/:host_id/call': { kind: 'cross', path: f => `/api/approvals/v1/hosts/${f.users.ub.device_id}/call`, body: { op: 'pair.poll', args: { pid: 'x' } } },
   'POST /api/approvals/v1/ping': { kind: 'self' },
@@ -91,6 +99,7 @@ const MATRIX = {
   'GET /api/activity/v1/feed': { kind: 'cross', path: (fx) => `/api/activity/v1/feed?repo_id=${fx.B.repo}` },
   'GET /api/activity/v1/current': { kind: 'cross', path: (fx) => `/api/activity/v1/current?repo_id=${fx.B.repo}` },
   'POST /api/teams/:team_id/activity/v1/records/:record_id/handoff': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/activity/v1/records/${encodeURIComponent('x:claude:y')}/handoff`, body: {} },
+  'POST /api/teams/:team_id/activity/v1/records/:record_id/handoff/decline': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/activity/v1/records/${encodeURIComponent('x:claude:y')}/handoff/decline`, body: {} },
   'POST /api/teams/:team_id/activity/v1/records/:record_id/continue': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/activity/v1/records/${encodeURIComponent('x:claude:y')}/continue`, body: {} },
   'GET /api/cards/:card_id/continue-seed': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/continue-seed?record_id=${encodeURIComponent('x:claude:y')}` },
   'GET /api/activity/v1/stream': { kind: 'cross', path: (fx) => `/api/activity/v1/stream?repo_id=${fx.B.repo}` },
@@ -114,6 +123,9 @@ const MATRIX = {
   'DELETE /api/account': { kind: 'self' },
   'GET /api/account/devices': { kind: 'self' },
   'DELETE /api/account/devices/:id': { kind: 'cross', path: (fx) => `/api/account/devices/${fx.users.ub.device_id}` },
+  // team-depth: implemented by lane B (hub inbox; own rows only, auth 'user')
+  'GET /api/account/inbox': { kind: 'self' },
+  'POST /api/account/inbox/read': { kind: 'self' },
   'PATCH /api/cards/:card_id/planning': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/planning`, body: (fx) => ({ request_id: randomUUID(), version: fx.h.hub.card(fx.B.card).version, due_date: '2026-10-02' }) },
   'GET /api/me': { kind: 'team' },
   'POST /api/teams': { kind: 'create' },
@@ -257,6 +269,16 @@ const MATRIX = {
   'POST /api/boards/:board_id/cards': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/cards`, body: { title: 'pwned' } },
   'POST /api/boards/:board_id/work-capture': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/work-capture`, body: (fx) => ({ install_id: randomUUID(), provider: 'codex', session_id: 'foreign-session', repo_id: fx.B.repo, title: 'Foreign capture', status: 'working' }) },
   // Label registry and archive (D91, D94): B's board, label name and card, also named from A's board.
+  'PUT /api/boards/:board_id/pins': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/pins`, body: { pins: [{ kind: 'note', label: 'pwned', value: 'x' }] } },
+  'POST /api/boards/:board_id/pins': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/pins`, body: { pin: { kind: 'note', label: 'pwned', value: 'x' } } },
+  'DELETE /api/boards/:board_id/pins/:pin_id': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/pins/p1`, body: {}, alt: (fx) => [`/api/boards/${fx.A.board}/pins/p1`] },
+  'POST /api/boards/:board_id/views': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/views`, body: { view: { name: 'pwned', values: { q: 'x' } } } },
+  'DELETE /api/boards/:board_id/views/:view_id': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/views/v1`, body: {}, alt: (fx) => [`/api/boards/${fx.A.board}/views/v1`] },
+  'POST /api/boards/:board_id/moments': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/moments`, body: { moment: { label: 'pwned' } } },
+  'DELETE /api/boards/:board_id/moments/:moment_id': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/moments/m1`, body: {}, alt: (fx) => [`/api/boards/${fx.A.board}/moments/m1`] },
+  // team-depth: implemented by lane A (comments on moments, migration 076)
+  'GET /api/boards/:board_id/moments/:moment_id/comments': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/moments/m1/comments`, alt: (fx) => [`/api/boards/${fx.A.board}/moments/m1/comments`] },
+  'POST /api/boards/:board_id/moments/:moment_id/comments': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/moments/m1/comments`, body: { body: 'pwned' }, alt: (fx) => [`/api/boards/${fx.A.board}/moments/m1/comments`] },
   'GET /api/boards/:board_id/labels': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/labels` },
   'POST /api/boards/:board_id/labels': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/labels`, body: { name: 'pwned', color: 'red' } },
   'PATCH /api/boards/:board_id/labels/:name': {
@@ -276,6 +298,11 @@ const MATRIX = {
   'POST /api/cards/:card_id/actions/:action': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/actions/stop`, body: {} },
   'POST /api/cards/:card_id/handover/salvage': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/handover/salvage`, body: { text: 'pwned' } },
   'POST /api/cards/:card_id/comments': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/comments`, body: { body: 'pwned' } },
+  // team-depth: implemented by lane D (person-to-person hand-off); B's hand-off id also tried under A's own card
+  'POST /api/cards/:card_id/handoffs': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/handoffs`, body: (fx) => ({ to_member_id: fx.B.s, note: 'pwned' }) },
+  'POST /api/cards/:card_id/handoffs/:handoff_id/accept': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/handoffs/${randomUUID()}/accept`, alt: (fx) => [`/api/cards/${fx.A.card}/handoffs/${randomUUID()}/accept`] },
+  'POST /api/cards/:card_id/handoffs/:handoff_id/decline': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/handoffs/${randomUUID()}/decline`, alt: (fx) => [`/api/cards/${fx.A.card}/handoffs/${randomUUID()}/decline`] },
+  'POST /api/cards/:card_id/handoffs/:handoff_id/cancel': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/handoffs/${randomUUID()}/cancel`, alt: (fx) => [`/api/cards/${fx.A.card}/handoffs/${randomUUID()}/cancel`] },
   'GET /api/cards/:card_id/messages': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/messages` },
   'GET /api/cards/:card_id/ownership': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/ownership` },
   'GET /api/boards/:board_id/work-context': {kind:'cross',path:fx=>`/api/boards/${fx.B.board}/work-context`},
@@ -313,6 +340,7 @@ const MATRIX = {
   'POST /api/integrations/:id/authorize': { kind: 'cross', path: (fx) => `/api/integrations/${fx.B.pending}/authorize` },
   'PATCH /api/integrations/:id': { kind: 'cross', path: (fx) => `/api/integrations/${fx.B.connection}`, body: (fx) => ({ autonomy: {}, target_board_id: fx.B.board }), alt: (fx) => [`/api/integrations/${fx.B.pending}`] },
   'DELETE /api/integrations/:id': { kind: 'cross', path: (fx) => `/api/integrations/${fx.B.connection}`, alt: (fx) => [`/api/integrations/${fx.B.pending}`] },
+  'POST /api/integrations/:id/issues': { kind: 'cross', path: (fx) => `/api/integrations/${fx.B.connection}/issues`, body: { title: 'pwned', description: 'x' }, alt: (fx) => [`/api/integrations/${fx.B.pending}/issues`] },
   'GET /api/integrations/:id/audit': { kind: 'cross', path: (fx) => `/api/integrations/${fx.B.connection}/audit` },
   // Identity links (D98): B's connection (and B's member) from team A or no team.
   'POST /api/integrations/:id/identity/start': { kind: 'cross', path: (fx) => `/api/integrations/${fx.B.connection}/identity/start` },
@@ -403,6 +431,9 @@ async function sweep(fx, caller) {
   // A live share of a B member's session with team B.
   fx.B.share = randomUUID(); fx.B.shareSession = randomUUID();
   fx.db.insert('interaction_shares', { id: fx.B.share, owner_user_id: fx.users.ub.id, host_device_id: fx.users.ub.device_id, session_id: fx.B.shareSession, org_id: fx.B.team, scope: 'interact', created_at: fx.h.hub.iso() });
+  fx.B.proposal=randomUUID();
+  fx.db.insert('interaction_proposals',{id:fx.B.proposal,share_id:fx.B.share,requester_user_id:fx.users.s.id,decision_id:randomUUID(),decision_version:1,generation:1,title:MARK,message:MARK,digest:'a'.repeat(64),action:'send',action_budget:1,status:'pending',created_at:fx.h.hub.iso(),retain_until:new Date(fx.h.hub.wallMs()+86400000).toISOString()});
+  const proposalsBefore=JSON.stringify(fx.db.all('SELECT * FROM interaction_proposals ORDER BY id'));
   // B's messaging: a live session target of B's owner shared with B, a message and a handoff to S (both in B).
   fx.B.msgTarget = randomUUID();
   fx.db.run("UPDATE user_devices SET interaction_role = 'host' WHERE id = ?", fx.users.ub.device_id);
@@ -437,6 +468,7 @@ async function sweep(fx, caller) {
   }
   assert.deepEqual(leaks, []);
   assert.ok(calls >= 30, `only ${calls} cross-team calls made`);
+  assert.equal(JSON.stringify(fx.db.all('SELECT * FROM interaction_proposals ORDER BY id')),proposalsBefore,'foreign proposals are unchanged');
   assert.equal(fx.snapshotB(), before, "team B's rows changed");
   assert.equal(JSON.stringify([fx.db.all('SELECT * FROM msg_messages ORDER BY seq'), fx.db.all('SELECT * FROM msg_targets ORDER BY id')]), messagesBefore, 'no message or target was added or changed');
   assert.equal(JSON.stringify(fx.db.all('SELECT * FROM setup_versions WHERE profile_id=?',fx.B.setupProfile)),setupsBefore,'foreign sealed setups are unchanged');

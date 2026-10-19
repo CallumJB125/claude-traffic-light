@@ -50,8 +50,9 @@ function rig({ signedIn = true } = {}) {
   return { root, k, clock, claims, hub, refresher, state, tokenFile, periodEnd };
 }
 
-test('the pinned key list ships empty, and the verifier pins it by default', () => {
-  assert.deepEqual(ENTITLEMENT_KEYS, []);
+test('the shipped verification key is Ed25519 and the verifier pins it by default', () => {
+  assert.ok(ENTITLEMENT_KEYS.length > 0);
+  for (const pem of ENTITLEMENT_KEYS) assert.equal(crypto.createPublicKey(pem).asymmetricKeyType, 'ed25519');
   assert.ok(Object.isFrozen(ENTITLEMENT_KEYS));
   const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'entitlements.js'), 'utf8');
   assert.match(src, /require\('\.\/entitlement-keys'\)/);
@@ -190,7 +191,7 @@ test('the refresh is a paid-wiring package, and the Plan & billing page is regis
   const page = pageById('upgrade');
   assert.equal(page.file, 'upgrade.html');
   assert.equal(page.preload, 'upgrade-preload.js');
-  // Listed only once a hub key is pinned (none ships), or with PLEXIFORM_SHOW_UPGRADE=1.
+  // Listed only after beta ends, or with PLEXIFORM_SHOW_UPGRADE=1.
   assert.equal(page.hidden, true);
   assert.equal(sectionOf('upgrade'), null);
   const shown = require('node:child_process').execFileSync(process.execPath, ['-e', "const p=require('./buddy-window/pages');console.log(JSON.stringify([p.pageById('upgrade').hidden,p.sectionOf('upgrade')]))"], { cwd: path.join(__dirname, '..'), env: { ...process.env, PLEXIFORM_SHOW_UPGRADE: '1' }, encoding: 'utf8' });

@@ -11,11 +11,16 @@ contextBridge.exposeInMainWorld('tasksApi', {
   act: (req) => ipcRenderer.invoke('tasks:act', req),
   saveCheckpoint: (req) => ipcRenderer.invoke('tasks:checkpoint', req),
   create: (draft) => ipcRenderer.invoke('tasks:create', draft),
+  preflight: (req) => ipcRenderer.invoke('tasks:preflight', req),
   composer: () => ipcRenderer.invoke('tasks:composer'),
   pickFolder: () => ipcRenderer.invoke('tasks:pick-folder'),
   copyTakeover: (id) => ipcRenderer.invoke('tasks:copy-takeover', id),
+  openTerminal: (id) => ipcRenderer.invoke('tasks:open-terminal', id),
   onChanged: (cb) => ipcRenderer.on('tasks:changed', (_e, snap) => cb(snap)),
   onEvent: (cb) => ipcRenderer.on('tasks:event', (_e, m) => cb(m)),
+  // A task offered by voice (agent mode) and started from the widget: its words, once.
+  voiceDraft: () => ipcRenderer.invoke('tasks:voice-draft'),
+  onVoiceDraft: (cb) => ipcRenderer.on('tasks:voice-draft-ready', () => cb()),
 });
 contextBridge.exposeInMainWorld('recipesApi', {
   list: () => ipcRenderer.invoke('recipes:list'),

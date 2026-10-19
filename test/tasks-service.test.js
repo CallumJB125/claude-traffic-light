@@ -11,6 +11,7 @@ const { pathToFileURL } = require('node:url');
 const { createTasksService } = require('../src/tasks-service.js');
 
 const mockUrl = pathToFileURL(path.join(__dirname, '..', 'board', 'tasks-api', 'mock-server.js')).href;
+const fixtureHome = path.resolve('/Users/demo');
 // Short base: AF_UNIX paths are capped at 104 bytes on macOS.
 const tmp = () => fs.mkdtempSync(path.join(process.platform === 'darwin' ? '/tmp' : os.tmpdir(), 'pt-'));
 const until = async (fn, ms = 8000) => { const end = Date.now() + ms; for (;;) { const v = await fn(); if (v) return v; if (Date.now() > end) throw new Error('timed out'); await new Promise((r) => setTimeout(r, 20)); } };
@@ -29,7 +30,7 @@ test.before(async () => {
   srv = await startMockServer({ dir, speed: 40, hbMs: 200 });
   snaps = []; events = [];
   dialogs = [];
-  svc = createTasksService({ boardHome: dir, homeDir: '/Users/demo', copy: () => {}, isDir: () => dirOk, confirmDialog: async (info) => { dialogs.push(info); return answer; }, onChange: (s) => snaps.push(s), onEvent: (wc, id, e) => events.push([id, e, wc]) });
+  svc = createTasksService({ boardHome: dir, homeDir: fixtureHome, copy: () => {}, isDir: () => dirOk, confirmDialog: async (info) => { dialogs.push(info); return answer; }, onChange: (s) => snaps.push(s), onEvent: (wc, id, e) => events.push([id, e, wc]) });
   svc.start();
   await until(() => svc.snapshot().conn.status === 'connected');
 });
@@ -73,7 +74,9 @@ test('act: a refused action never reaches the supervisor and comes back as plain
 });
 
 test('send a message to a task round-trips into its thread', async () => {
-  const t = await until(() => svc.snapshot().tasks.find((x) => x.actions.includes('message')));
+  // Demo runs advance at speed40. A running row can lose its message action
+  // while openTask awaits the socket; review waits for this deliberate action.
+  const t = await until(() => svc.snapshot().tasks.find((x) => x.state === 'in_review' && x.actions.includes('message')));
   const opened = await svc.openTask(t.id);
   const r = await svc.act({ id: t.id, action: 'message', payload: { body: 'please also add tests' } });
   assert.equal(r.ok, true, JSON.stringify(r));
@@ -105,9 +108,9 @@ test('an action round-trips: stop a task and its row changes', async () => {
 test('create: the folder must be a handle main gave out; the page cannot pass a path', async () => {
   const bad = await svc.create({ text: 'do a thing', folder: '/etc' });
   assert.equal(bad.ok, false);
-  const f = svc.registerFolder('/Users/demo/Development/acme-web');
+  const f = svc.registerFolder(path.join(fixtureHome, 'Development', 'acme-web'));
   assert.match(f.handle, /^[0-9a-f-]{36}$/);
-  assert.equal(f.label, '~/Development/acme-web');
+  assert.equal(f.label, `~${path.sep}Development${path.sep}acme-web`);
   const ok = await svc.create({ text: 'do a thing', folder: f.handle, ai: 'claude' });
   assert.equal(ok.ok, true, JSON.stringify(ok));
   const info = await svc.composerInfo();
@@ -131,12 +134,15 @@ test('create: a reset task can carry main\'s known reset time; other tasks and t
   } finally { c.close(); }
 });
 
-test('takeover: main asks in a native dialog first; the copy holds no token, is single use, and the screen is masked', async () => {
+test('takeover: main asks in a native dialog first; the copy holds no token, is single use, and the screen is masked', async context => {
   const copied = [];
-  const t = await until(() => svc.snapshot().tasks.find((x) => x.actions.includes('takeover')));
+  // The fast demo can finish a running row while the two dialogs are checked.
+  // A stopped row keeps this copy/confirmation check independent of demo timing.
+  const t = await until(() => svc.snapshot().tasks.find((x) => ['parked', 'failed', 'orphaned'].includes(x.state) && x.actions.includes('takeover')));
   const dlg = [];
   let yes = false;
   const s2 = createTasksService({ boardHome: dir, homeDir: '', copy: (x) => copied.push(x), confirmDialog: async (i) => { dlg.push(i); return yes; }, resolveBin: (n) => `/opt/bin/${n}` });
+  context.after(() => s2.stop());
   s2.start();
   await until(() => s2.snapshot().conn.status === 'connected');
   const no = await s2.act({ id: t.id, action: 'takeover', confirmed: true });
@@ -230,9 +236,16 @@ test('composer AI list: AIs found on this Mac that the helper does not list are 
   assert.deepEqual((await broken.composerInfo()).ais, []);
 });
 
-test('no supervisor: an offline snapshot with the plain empty-state words, retried by itself', async () => {
-  const absent = path.join(tmp(), 'nothing-here');
-  const s = createTasksService({ boardHome: absent, homeDir: '' });
+test('no supervisor: a verified token without a listener gives the plain offline state', async (t) => {
+  const absent = tmp();
+  let s;
+  t.after(() => { s?.stop(); fs.rmSync(absent, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+  // Isolate listener absence from failed private-token verification on Windows.
+  // A closed real mock leaves its verified token and removes the listener.
+  const { startMockServer } = await import(mockUrl);
+  const stopped = await startMockServer({ dir: absent, demo: false });
+  await stopped.close();
+  s = createTasksService({ boardHome: absent, homeDir: '' });
   s.start();
   const snap = await until(() => { const x = s.snapshot(); return x.conn.status === 'offline' && x; });
   assert.equal(snap.conn.code, 'SUPERVISOR_UNREACHABLE');
@@ -240,6 +253,17 @@ test('no supervisor: an offline snapshot with the plain empty-state words, retri
   assert.deepEqual(snap.tasks, []);
   assert.equal((await s.act({ id: 'x', action: 'pause' })).code, 'SUPERVISOR_UNREACHABLE');
   s.stop();
+});
+
+test('missing unverified private token keeps the host-specific refusal and never starts a task', async (t) => {
+  const root = tmp();
+  const s = createTasksService({ boardHome: path.join(root, 'nothing-here'), homeDir: '' });
+  t.after(() => { s.stop(); fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+  s.start();
+  const snap = await until(() => { const x = s.snapshot(); return x.conn.status === 'offline' && x; });
+  assert.equal(snap.conn.code, process.platform === 'win32' ? 'FORBIDDEN' : 'SUPERVISOR_UNREACHABLE');
+  assert.deepEqual(snap.tasks, []);
+  assert.equal((await s.act({ id: 'x', action: 'pause' })).ok, false);
 });
 
 test('a dropped connection marks every live task "Connection lost" and never green, then reconnects', async () => {

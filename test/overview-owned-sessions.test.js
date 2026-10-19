@@ -218,15 +218,16 @@ test('Unmanaged Codex parent keeps Message disabled with the exact reason, even 
   const snap = await svc.snapshot();
   const msg = snap.sessions[0].capabilities.message;
   assert.equal(msg.enabled, false);
-  assert.equal(msg.reason, 'Plexiform can message sessions it starts itself. This one was started in Codex, which has no supported way for another app to send to it.');
-  assert.doesNotMatch(msg.reason, /opt|daemon/, 'no promise of a setting that does not exist');
+  assert.equal(msg.reason, require('../src/provider-capabilities.json').platforms.find(p => p.id === 'codex').reasons.existing);
+  assert.match(msg.reason, /shared daemon needs the Preferences opt-in and explicit attachment/);
+  assert.match(msg.reason, /Codex desktop conversations cannot be reached/);
   snap.observed_at = Date.now() - 200_000; // stale on the page
   const s = stack({ snapshot: snap });
   try {
     await s.ready();
     const button = [...s.doc.querySelectorAll('#content button')].find((b) => b.textContent === 'Message');
     assert.equal(button.disabled, true);
-    assert.match(s.doc.getElementById('content').textContent, /This one was started in Codex, which has no supported way for another app to send to it\./);
+    assert.match(s.doc.getElementById('content').textContent, /Activity hooks cannot send to this Codex session/);
   } finally { s.close(); }
 });
 
@@ -307,7 +308,9 @@ test('Picker lists every provider with availability and the exact reason; capabi
     s.setLastUsed(Date.now() - 120_000); await s.poll();
     assert.match(ep.querySelector('.model-list').textContent, /llama3\.2 · last used 2m ago/);
     assert.match(s.doc.getElementById('local-section').textContent, /local-models\.json/);
-    assert.equal(s.doc.querySelector('#local-section input, #local-section textarea, #local-section select'), null, 'read-only: no editing UI');
+    // Editing UI only in the model picker and the "Add your own endpoint" form; the endpoint list stays read-only.
+    for (const el of s.doc.querySelectorAll('#local-section input, #local-section textarea, #local-section select')) assert.ok(el.closest('#local-quick, #local-form'), `unexpected control ${el.id}`);
+    assert.equal(s.doc.querySelector('#local-endpoints input, #local-endpoints textarea, #local-endpoints select'), null, 'endpoint list is read-only');
     for (const ch of s.invoked) assert(ALLOWED.has(ch), ch);
   } finally { s.close(); }
 });

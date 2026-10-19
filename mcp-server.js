@@ -383,7 +383,7 @@ function buddyPendingRequests({ root, now = Date.now() } = {}) {
 async function buddyModelMix({ now = Date.now(), projectsDir } = {}) {
   const Usage = require('./usage.js');
   const { turns, files, skipped } = await Usage.readTurns({ since: now - 8 * 86400000, ...(projectsDir ? { root: projectsDir } : {}) });
-  return { ...Usage.modelMix(turns, { now }), transcripts: { files, turns: turns.length, overSizeCap: skipped.length } };
+  return { ...require('./src/model-mix.js').modelMix(turns, { now }), transcripts: { files, turns: turns.length, overSizeCap: skipped.length } };
 }
 
 // What the Git and CI poller last saw, from the state file main.js writes.

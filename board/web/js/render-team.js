@@ -47,9 +47,12 @@ export function teamRows(model) {
   const presence = new Map((model.presence?.members ?? []).map((p) => [p.member_id, p]));
   for (const p of presence.values()) if (!byId.has(p.member_id)) byId.set(p.member_id, { member_id: p.member_id, name: p.name ?? '?' });
   const meId = model.me?.member?.id;
+  const viewing = new Map();
+  for (const v of model.viewers ?? []) if (!viewing.has(v.member_id)) viewing.set(v.member_id, v);
   const rows = [...byId.values()].map((m) => {
     const sessions = sessionsOf(presence.get(m.member_id), nowMs);
-    return { ...m, role: m.role ?? (m.member_id === meId ? model.me.member.role ?? null : null), is_me: m.member_id === meId, sessions, best: sessions.length ? Math.min(...sessions.map((s) => stateOf(s.state).rank)) : 9, jobs: jobsOf(m.member_id, model.entries) };
+    const v = viewing.get(m.member_id);
+    return { ...m, viewing: v ? { card_id: v.card_id, key: v.key ?? null, title: v.title ?? '' } : null, role: m.role ?? (m.member_id === meId ? model.me.member.role ?? null : null), is_me: m.member_id === meId, sessions, best: sessions.length ? Math.min(...sessions.map((s) => stateOf(s.state).rank)) : 9, jobs: jobsOf(m.member_id, model.entries) };
   });
   return rows.sort((a, b) => Number(b.is_me) - Number(a.is_me) || a.best - b.best || a.name.localeCompare(b.name));
 }
@@ -86,6 +89,16 @@ function jobButton(j) {
       pill(face)));
 }
 
+/** "running on <repo>" dot and "viewing <card>" from presence; null when neither. */
+function nowLine(m) {
+  const repos = [...new Set(m.sessions.map((s) => s.repo_short).filter(Boolean))];
+  const parts = [];
+  if (repos.length) parts.push(h('span', { class: 'team-now-item', 'data-kind': 'running' }, h('span', { class: 'team-now-dot', 'aria-hidden': 'true' }), `running on ${repos.join(', ')}`));
+  if (m.viewing) parts.push(h('button', { type: 'button', class: 'team-now-item team-now-viewing', 'data-kind': 'viewing', 'data-action': 'open', 'data-card': m.viewing.card_id, title: m.viewing.title || null },
+    icon('eye', 'icon-xs'), `viewing ${m.viewing.key ?? m.viewing.title ?? 'a card'}`));
+  return parts.length ? h('p', { class: 'team-now' }, parts) : null;
+}
+
 function memberCard(m, model, loaded) {
   const online = m.sessions.length > 0;
   const shown = m.jobs.slice(0, MAX_JOBS);
@@ -94,7 +107,8 @@ function memberCard(m, model, loaded) {
       avatar(m, { size: 'md' }),
       h('div', { class: 'team-member-id' },
         h('h3', { class: 'team-name', id: `tm-${m.member_id}` }, m.name, m.is_me ? h('span', { class: 'team-you' }, 'you') : null),
-        m.role ? h('span', { class: 'team-role' }, m.role) : null),
+        m.role ? h('span', { class: 'team-role' }, m.role) : null,
+        nowLine(m)),
       h('span', { class: `team-online${online ? ' is-on' : ''}` }, icon(online ? 'lamp' : 'ring', 'icon-xs'), online ? 'Online' : 'Not sharing')),
     online
       ? h('ul', { class: 'team-sessions', 'aria-label': `${m.name}'s live sessions` }, m.sessions.map((s, i) => sessionRow(s, i, model.board?.name ?? 'this board')))
@@ -228,6 +242,34 @@ function overviewList(label, data, stale, empty) {
     data.truncated ? h('p', { class: 'team-overview-meta' }, 'Showing the latest 20. Search all boards to find older tasks.') : null);
 }
 
+const HANDOFF_STATE = { offered: 'Waiting for an answer', accepted: 'Accepted', declined: 'Declined', done: 'Done', failed: 'Did not finish', expired: 'Expired' };
+const goalOf = (m) => String(m.body ?? '').split('\n').find((l) => l && !l.startsWith('#'))?.trim().slice(0, 200) || 'A piece of work';
+
+/** Hand-offs through teammates' AIs (team_hand_off): incoming ones to answer, and how the ones you sent went. */
+export function handoffsPanel(model) {
+  const ho = model.handoffs;
+  if (!ho) return null;
+  const open = ho.incoming.filter((m) => m.handoff.state === 'offered');
+  const sent = ho.sent.slice(0, 10);
+  if (!open.length && !sent.length && !ho.error) return null;
+  return h('section', { class: 'team-overview team-handoffs', 'aria-labelledby': 'team-handoffs-h' },
+    h('h2', { id: 'team-handoffs-h' }, 'Hand-offs'),
+    ho.error ? h('p', { class: 'form-error', role: 'alert' }, ho.error) : null,
+    open.length ? [h('h3', null, 'Offered to you'),
+      h('p', { class: 'team-overview-meta' }, 'Accept in Plexiform on your Mac: it starts the work in its own git worktree. You can decline here.'),
+      h('ul', { class: 'team-overview-list' }, open.map((m) => h('li', { key: m.id, class: 'team-handoff' },
+        h('strong', null, goalOf(m)),
+        h('span', { class: 'team-overview-meta' }, `From ${m.source?.name ?? 'a teammate'}${(m.handoff.artifacts ?? []).length ? ` · ${m.handoff.artifacts.map((a) => a.path).slice(0, 3).join(', ')}` : ''}`),
+        model.readOnly ? null : h('div', { class: 'drawer-actions' },
+          h('input', { type: 'text', class: 'input input-sm', maxlength: '500', placeholder: 'Note for the sender (optional)', 'aria-label': 'Note for the sender', 'data-handoff-note': m.id }),
+          h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'handoff-msg-decline', 'data-id': m.id, disabled: ho.busy === m.id || null }, ho.busy === m.id ? 'Declining…' : 'Decline')))))] : null,
+    sent.length ? [h('h3', null, 'You handed off'),
+      h('ul', { class: 'team-overview-list' }, sent.map((m) => h('li', { key: m.id, class: 'team-handoff' },
+        h('strong', null, goalOf(m)),
+        h('span', { class: 'team-overview-meta' }, `To ${m.to?.name ?? 'a teammate'} · ${HANDOFF_STATE[m.handoff.state] ?? m.handoff.state}`),
+        m.handoff.report ? h('p', { class: 'handoff-note' }, m.handoff.report) : null)))] : null);
+}
+
 export function overviewPanel(model) {
   const overview = model.teamOverview;
   if (!overview) return null;
@@ -267,6 +309,7 @@ export function teamScreen(model) {
         h('summary', null, 'How sessions are counted'),
         h('p', null, SCOPE_RULE))),
     overviewPanel(model),
+    handoffsPanel(model),
     invitePanel(model),
     cloudPanel(model),
     h('h2', { class: 'team-needs-h' }, `On ${model.board?.name ?? 'this board'}`),

@@ -181,7 +181,7 @@ test('Home: signed out hides the card; a busy team shows who, overlaps, changes 
   assert.match(t, /Updated \d/);
   assert.match(t, /Working now.*Bob · Bob's task/s);
   assert.match(t, /Overlaps with your work.*Bob is also editing src\/auth\/login\.js/s);
-  assert.match(t, /Since you last looked.*Eve finished "Fix CI"/s);
+  assert.match(t, /Since you were away.*Eve finished "Fix CI"/s);
   [...q.sec.querySelectorAll('button')].find((b) => b.textContent === 'Mark as seen').click();
   await tick(); await tick();
   assert.deepEqual(q.sent, ['seen']);
@@ -199,5 +199,46 @@ test('Home: an unreachable hub says so plainly; an empty team says nobody is wor
   assert.match(q.sec.textContent, /No teammate is working/);
   assert.match(q.sec.textContent, /Nothing new since you last looked/);
   assert.doesNotMatch(fs.readFileSync(path.join(ROOT, 'home-team-today-view.js'), 'utf8'), /innerHTML/);
+  q.dom.window.close();
+});
+
+test('shipped this week and since you were away: done cards, merged PRs and moments teammates marked', async () => {
+  const DAY = 24 * 60 * MIN;
+  const moments = [
+    { id: 'm1', kind: 'ship', label: 'Billing v2 live', by: 'Fay', at: iso(NOW - 2 * DAY) },
+    { id: 'm2', kind: 'decision', label: 'Keep SQLite', by: 'Bob', at: iso(NOW - 10 * MIN) },
+    { id: 'm3', kind: 'ship', label: 'Old launch', by: 'Hal', at: iso(NOW - 9 * DAY) },
+    { id: 'm4', kind: 'weird', label: '', at: iso(NOW) },
+  ];
+  const cards = [card('w-1', 'done', { state_age_ms: 3 * DAY }), card('w-2', 'done', { state_age_ms: 20 * DAY }), card('w-3', 'in_progress', { pr: { number: 7, url: 'https://github.com/acme/widget/pull/7', state: 'merged', merged_by: 'carol', merged_age_ms: 1 * DAY } })];
+  const view = TeamToday.compose({ boards: [{ team: 'Acme', board: 'Widget', cards, moments }], seen: { looked_at: NOW - 60 * MIN, columns: {} }, now: NOW });
+  assert.deepEqual(view.shipped.items.map((x) => [x.kind, x.text]), [['merged', 'PR #7 · W-3 Card w-3'], ['ship', 'Billing v2 live'], ['done', 'W-1 Card w-1']], 'newest first; older than a week and the junk moment are left out');
+  assert.deepEqual(view.changes.items.filter((c) => c.kind === 'moment').map((c) => c.text), ['Decision: Keep SQLite · Bob'], 'only moments marked since you last looked are changes');
+  const r = make({ boards: {} });
+  const s = await r.today.refresh();
+  assert.deepEqual(s.shipped, { items: [], more: 0 }, 'the live card always carries a shipped list');
+});
+
+test('Home: the standup card copies plain text, and the heat map shows folders, counts, who and shared files', async () => {
+  const r = make({ current: { 'repo-a': [
+    rec('b1', 'Bob', { title: 'Session refresh', files: { edited: ['src/auth/login.js'], read: [] } }),
+    rec('c1', 'Carol', { title: 'Upgrade deps', status: 'waiting', files: { edited: ['src/auth/login.js', 'src/auth/token.js'], read: [] } }),
+    rec('e1', 'Eve', { status: 'ended', title: 'Fix CI', files: { edited: ['ci/build.yml'], read: [] } }),
+  ] } });
+  const reply = await r.today.refresh();
+  assert.deepEqual(reply.heat['24h'].shared, ['src/auth/login.js']);
+  assert.ok(reply.standup.some((x) => x.author === 'Eve' && x.yesterday[0] === 'Finished "Fix CI"'));
+  const q = page(() => reply);
+  let copied = null;
+  Object.defineProperty(q.dom.window.navigator, 'clipboard', { value: { writeText: async (t) => { copied = t; } } });
+  await tick(); await tick();
+  const t = q.sec.textContent;
+  assert.match(t, /Standup.*Carol.*Blocked: "Upgrade deps" is waiting for an answer/s);
+  assert.match(t, /Where the team is working.*src\/auth\/ · 3.*login\.js · 2 Bob, Carol2\+ people/s);
+  assert.match(t, /ci\/ · 1 Eve/);
+  [...q.sec.querySelectorAll('button')].find((b) => b.textContent === 'Copy').click();
+  await tick(); await tick();
+  assert.match(copied, /^Carol\n {2}Yesterday: nothing shared\n {2}Today: On "Upgrade deps"/m);
+  assert.match(q.sec.textContent, /Copied\./);
   q.dom.window.close();
 });

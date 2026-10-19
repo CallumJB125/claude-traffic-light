@@ -43,6 +43,7 @@ import { Activity } from './activity/index.js';
 import { oauthProviders } from './config.js';
 import { RemoteAuthority } from './remote/authority.js';
 import { StorageWatch } from './storage-watch.js';
+import { CrashReports } from './crash-reports.js';
 import { PublicApi } from './public-api/index.js';
 
 // Sync lapse notices and purges run hourly (sync.js sweep).
@@ -66,6 +67,7 @@ function buildApp(config, { db, clock, log, github, fetchImpl, timers, mailer })
   }
   const hub = new Hub({ db, config, clock, log, github: gh });
   hub.storage = new StorageWatch(hub);
+  hub.crashReports = config.crashReports && config.auth === 'accounts' ? new CrashReports({ dataDir: config.dataDir, now: () => clock.wall() }) : null;
   // Dev login needs this per-process secret (header Board-Dev-Secret), printed
   // at startup: a loopback bind alone does not prove who is asking.
   hub.devLoginSecret = config.auth === 'dev' ? (config.devLoginSecret ?? randomBytes(18).toString('base64url')) : null;
@@ -141,6 +143,9 @@ function buildApp(config, { db, clock, log, github, fetchImpl, timers, mailer })
   let ticking = false;
   let closed = false;
   function startTimers() {
+    if (hub.crashReports) intervals.push(setInterval(() => {
+      try { hub.crashReports.sweep(); } catch { log.warn('crash report sweep failed'); }
+    }, 3600000));
     intervals.push(setInterval(async () => {
       if (ticking || closed) return;
       ticking = true;

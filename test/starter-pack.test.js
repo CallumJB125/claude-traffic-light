@@ -111,6 +111,7 @@ function harness(t, { entries, cached = entries, confirmAnswer = true } = {}) {
     confirm: async (info) => { confirms.push(info); return confirmAnswer; },
     turns: async () => [{ cwd: web, ts: NOW }], sessions: () => [], tools: () => [{ id: 'claude', connected: true }], now: () => NOW,
   });
+  t.after(() => starter.close());
   return { starter, root, web, mine, chars, created, confirms, fetched, recipes };
 }
 

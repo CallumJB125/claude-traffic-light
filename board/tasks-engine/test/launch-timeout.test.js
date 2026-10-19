@@ -11,7 +11,15 @@ import { TaskStore } from '../store.js';
 import { testTempDir } from '../../shared/test-support/tmp.js';
 
 const turn = () => new Promise((r) => setImmediate(r));
-async function until(pred) { for (let i = 0; i < 20000 && !pred(); i++) await new Promise((r) => setImmediate(r)); assert.ok(pred(), 'condition reached'); }
+// Child-process startup needs real wall time; a fixed number of immediate
+// turns can finish before git returns on a busy CI runner. Capture the real
+// timer before mocking the engine's launch deadline below.
+const realSetTimeout = setTimeout;
+async function until(pred) {
+  const deadline = performance.now() + 10000;
+  while (!pred() && performance.now() < deadline) await new Promise((r) => realSetTimeout(r, 10));
+  assert.ok(pred(), 'condition reached within 10 seconds');
+}
 
 async function fixture(hangFirst) {
   const root = fs.realpathSync(testTempDir('plt-'));

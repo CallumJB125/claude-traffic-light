@@ -1,6 +1,6 @@
 /* Plexiform team board.
    Dark is the widget's own world (tokens.css at the repo root, copied value
-   for value so the two windows agree); light is a cool lilac-grey paper.
+   for value so the two windows agree); light is a neutral paper.
    Status colour comes only from the widget's OKLCH lamp tokens, and follows
    the widget's rhythm: a lamp that is green by both hub and browser breathes,
    amber holds, red blinks three times and holds. */
@@ -12,18 +12,18 @@
   color-scheme: dark;
 
   /* ── incumbent window tokens (tokens.css) ── */
-  --bg: #1c1a1f;
-  --panel: #221f27;
-  --panel-2: #2a2731;
-  --line: #35313d;
-  --line-strong: #46414f;
-  --line-input: #7a748a;
-  --text: #ece8e2;
-  --muted: #a8a293;
-  --faint: #979183;
-  --accent: #da7756;
-  --accent-ink: #211f1c;
-  --accent-soft: rgba(218, 119, 86, 0.14);
+  --bg: #17191d;
+  --panel: #202329;
+  --panel-2: #292d34;
+  --line: #343941;
+  --line-strong: #4b535f;
+  --line-input: #78818e;
+  --text: #f0f1f3;
+  --muted: #b0b7c2;
+  --faint: #9aa3b0;
+  --accent: #e49a78;
+  --accent-ink: #251c18;
+  --accent-soft: rgba(228, 154, 120, 0.14);
   --danger: #b8443a;
   --danger-text: #ff8a80;
 
@@ -45,27 +45,27 @@
   --tone-done: oklch(0.62 0.035 174);
   --tone-unknown: oklch(0.55 0.015 300);
 
-  --bg-deep: #17151a;
+  --bg-deep: #121417;
   --shadow: 0 1px 0 rgba(0, 0, 0, 0.25), 0 8px 24px -12px rgba(0, 0, 0, 0.55);
   --shadow-pop: 0 24px 64px -16px rgba(0, 0, 0, 0.7), 0 2px 6px rgba(0, 0, 0, 0.3);
   --backdrop: rgba(12, 10, 14, 0.62);
-  --px-body: #da7756;
-  --px-eye: #211f1c;
+  --px-body: #e49a78;
+  --px-eye: #251c18;
   --px-post: #726c62;
 
   --radius-sm: 4px;
-  --radius: 7px;
-  --radius-lg: 10px;
+  --radius: 8px;
+  --radius-lg: 12px;
   --radius-pill: 999px;
 
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
   --text-xs: 11px;
   --text-sm: 12px;
-  --text-base: 13px;
+  --text-base: 14px;
   --text-md: 14px;
   --text-lg: 16px;
-  --text-xl: 20px;
+  --text-xl: 22px;
 
   --shadow-lift-color: light-dark(rgba(40, 30, 60, 0.32), rgba(0, 0, 0, 0.66));
   --shadow-lift: 0 18px 34px -12px var(--shadow-lift-color), 0 3px 8px -2px var(--shadow-lift-color);
@@ -80,19 +80,19 @@
    3:1 on white; the pixel Claude keeps the exact lamp values. */
 :root[data-theme="light"] {
   color-scheme: light;
-  --bg: #eceaf0;
-  --bg-deep: #e3e0e8;
-  --panel: #fbfafc;
-  --panel-2: #f3f1f6;
-  --line: #dedae4;
-  --line-strong: #c8c3d1;
-  --line-input: #8a8497;
-  --text: #1d1a22;
-  --muted: #5b5566;
-  --faint: #6b6577;
-  --accent: #b4532f;
+  --bg: #f4f5f7;
+  --bg-deep: #e9ecf0;
+  --panel: #ffffff;
+  --panel-2: #eef0f3;
+  --line: #dde1e6;
+  --line-strong: #c3cad3;
+  --line-input: #8792a0;
+  --text: #20252d;
+  --muted: #556171;
+  --faint: #5c6879;
+  --accent: #a34425;
   --accent-ink: #ffffff;
-  --accent-soft: rgba(180, 83, 47, 0.1);
+  --accent-soft: rgba(163, 68, 37, 0.08);
   --danger: #b3261e;
   --danger-text: #b3261e;
   --tone-green: oklch(0.53 0.11 174);
@@ -113,19 +113,19 @@
 @media (prefers-color-scheme: light) {
   :root:not([data-theme]) {
     color-scheme: light;
-    --bg: #eceaf0;
-    --bg-deep: #e3e0e8;
-    --panel: #fbfafc;
-    --panel-2: #f3f1f6;
-    --line: #dedae4;
-    --line-strong: #c8c3d1;
-    --line-input: #8a8497;
-    --text: #1d1a22;
-    --muted: #5b5566;
-    --faint: #6b6577;
-    --accent: #b4532f;
+    --bg: #f4f5f7;
+    --bg-deep: #e9ecf0;
+    --panel: #ffffff;
+    --panel-2: #eef0f3;
+    --line: #dde1e6;
+    --line-strong: #c3cad3;
+    --line-input: #8792a0;
+    --text: #20252d;
+    --muted: #556171;
+    --faint: #5c6879;
+    --accent: #a34425;
     --accent-ink: #ffffff;
-    --accent-soft: rgba(180, 83, 47, 0.1);
+    --accent-soft: rgba(163, 68, 37, 0.08);
     --danger: #b3261e;
     --danger-text: #b3261e;
     --tone-green: oklch(0.53 0.11 174);
@@ -253,6 +253,19 @@ select.input { appearance: none; padding-right: 28px; background-image: linear-g
 .conn-open .conn-dot { background: var(--muted); }
 .conn-lost .conn-dot { background: transparent; box-shadow: inset 0 0 0 1.5px var(--tone-unknown); }
 .topbar-actions { display: flex; align-items: center; gap: 8px; }
+.inbox-bell { position: relative; list-style: none; }
+.inbox-bell::-webkit-details-marker { display: none; }
+.inbox-bell .icon { margin: 0; }
+.inbox-count { position: absolute; top: -4px; right: -4px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--accent, #d9480f); color: #fff; font-size: 10px; line-height: 16px; text-align: center; }
+.inbox-menu { right: 0; left: auto; min-width: 320px; max-width: min(420px, 90vw); max-height: 60vh; overflow: auto; padding: 8px; }
+.inbox-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 4px 8px; }
+.inbox-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.inbox-item { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; padding: 6px 4px; border-top: 1px solid var(--line); }
+.inbox-item.is-read .inbox-title { color: var(--muted); }
+.inbox-text { display: grid; gap: 2px; min-width: 0; }
+.inbox-title { overflow-wrap: anywhere; }
+.inbox-actions { display: flex; gap: 4px; flex: none; }
+.inbox-empty { padding: 6px 4px; margin: 0; }
 .me { display: inline-flex; align-items: center; gap: 8px; padding-left: 8px; margin-left: 4px; border-left: 1px solid var(--line); font-size: var(--text-sm); color: var(--muted); }
 
 /* pixel Claude: body + sign, lamps lit like the widget's */
@@ -694,6 +707,15 @@ a.cchip { cursor: pointer; }
 
 .avatars { display: inline-flex; flex: none; }
 .avatars .avatar + .avatar { margin-left: -5px; }
+/* Who is looking at this card now (board.presence viewers). */
+.card-viewers { display: inline-flex; align-items: center; gap: 3px; margin-left: auto; color: var(--muted); }
+.card-viewers + .avatars { margin-left: 6px; }
+.card-viewers .avatars { margin-left: 0; }
+.team-now { display: flex; flex-wrap: wrap; gap: 4px 10px; margin: 2px 0 0; font-size: var(--text-sm); color: var(--muted); }
+.team-now-item { display: inline-flex; align-items: center; gap: 4px; }
+.team-now-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--tone-green); box-shadow: 0 0 0 2px color-mix(in srgb, var(--tone-green) 25%, transparent); }
+button.team-now-viewing { background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer; }
+button.team-now-viewing:hover { text-decoration: underline; }
 .avatar {
   position: relative; display: inline-grid; place-items: center; flex: none;
   width: 20px; height: 20px; border-radius: 50%;
@@ -1370,3 +1392,65 @@ dialog::backdrop { background: var(--backdrop); transition: opacity 200ms ease; 
 .review-disclosure p { line-height: 1.45; }
 .needs-you-chip { font-size: 12px; padding: 0 6px; border-radius: 999px; border: 1px solid var(--line); white-space: nowrap; }
 .needs-you-chip[data-tone="amber"] { color: var(--tone-amber); border-color: color-mix(in oklab, var(--tone-amber) 40%, var(--line)); }
+
+/* Workspace finish: match the desktop without changing board interactions. */
+.topbar { min-height: 68px; padding-inline: 24px; background: var(--panel); gap: 14px; }
+.brand-board { font-size: 17px; letter-spacing: -.025em; }
+.topbar-actions { gap: 10px; }
+.btn { min-height: 36px; }
+.btn-sm { min-height: 30px; }
+.btn-icon { width: 36px; }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+@media (hover: hover) and (pointer: fine) { .btn-primary:hover:not(:disabled) { background: color-mix(in oklab, var(--accent) 90%, var(--text)); border-color: var(--accent); } }
+.board { gap: 18px; padding: 20px 24px 24px; }
+.column-head { min-height: 42px; padding: 0 4px 10px; }
+.column-head h2 { letter-spacing: -.01em; }
+.column-body { gap: 10px; }
+.card { padding: 15px; gap: 10px; box-shadow: 0 1px 2px rgba(0,0,0,.07); }
+.column-empty { padding: 20px 16px; line-height: 1.6; background: color-mix(in oklab, var(--panel) 45%, transparent); }
+.alerts { padding-block: 12px; background: var(--bg); }
+.drawer-title { font-size: 28px; line-height: 1.2; letter-spacing: -.035em; margin-top: 24px; }
+.drawer-head { min-height: 60px; }
+.drawer-actions { gap: 10px; }
+.dsec { padding-block: 20px; }
+.dsec-title { font-size: var(--text-base); color: var(--text); }
+.task-workspace .prose { line-height: 1.65; }
+.task-workspace .muted.small { margin-block: 8px; line-height: 1.6; }
+.task-workspace .dsec:first-child { padding: 18px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--bg); margin-top: 18px; }
+.task-workspace .details { line-height: 1.6; }
+.task-workspace .dsec > .btn { margin-top: 10px; }
+.menu-item { min-height: 38px; }
+@media (max-width: 900px) { .topbar { padding-inline: 16px; flex-wrap: wrap; padding-block: 12px; } .topbar-actions { margin-left: auto; } .board { padding: 16px; gap: 14px; } }
+@media (max-width: 560px) { .topbar { gap: 10px; } .topbar-actions { flex-wrap: wrap; gap: 6px; } .drawer-title { font-size: 24px; } .drawer-actions .btn { white-space: normal; line-height: 1.3; padding-block: 8px; } }
+
+/* Project pinboard */
+.pinboard { margin: 0 var(--gutter, 16px) 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-2); padding: 0 12px; }
+.pinboard-summary { display: flex; gap: 10px; align-items: baseline; min-height: 38px; padding: 8px 0; cursor: pointer; list-style: none; }
+.pinboard-summary::-webkit-details-marker { display: none; }
+.pinboard-title { font-weight: 600; }
+.pin-list { list-style: none; margin: 0; padding: 0 0 10px; display: grid; gap: 6px; }
+.pin { display: grid; grid-template-columns: 84px minmax(0, 1fr) auto auto; gap: 8px 12px; align-items: baseline; padding: 6px 0; border-top: 1px solid var(--line); font-size: var(--text-sm); }
+.pin-kind { color: var(--muted); font-size: var(--text-xs); text-transform: uppercase; letter-spacing: .06em; }
+.pin-label { font-weight: 600; overflow-wrap: anywhere; }
+.pin-value { grid-column: 2; overflow-wrap: anywhere; color: var(--text); }
+.pin-code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: var(--text-xs); background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 1px 6px; }
+.pin-priority .pin-label::before { content: '★ '; color: var(--accent); }
+.pin-by { grid-column: 3; white-space: nowrap; }
+.pin-remove { grid-column: 4; border: 0; background: none; color: var(--muted); cursor: pointer; min-height: 28px; }
+.pin-remove:hover, .pin-remove:focus-visible { color: var(--text); }
+.pin-form { display: grid; grid-template-columns: 120px 1fr 2fr auto; gap: 8px; padding: 6px 0 12px; border-top: 1px solid var(--line); }
+.pin-form input, .pin-form select { font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line-input, var(--line)); border-radius: var(--radius-sm); padding: 6px 8px; min-width: 0; }
+.pin-empty { padding: 0 0 10px; }
+.shared-views .pin-form { grid-template-columns: 1fr auto; }
+.pin-view .pin-label.link { border: 0; background: none; color: var(--accent); cursor: pointer; font: inherit; text-align: left; padding: 0; }
+.shipped-week h4 { margin: 8px 0 2px; color: var(--muted); font-weight: 600; }
+.pin-ship .pin-label::before { content: '🚀 '; }
+.pin-moment-decision .pin-kind, .pin-moment-demo .pin-kind { color: var(--accent); }
+.pin-comments { grid-column: 2; justify-self: start; border: 0; background: none; color: var(--accent); cursor: pointer; font: inherit; font-size: var(--text-xs); padding: 0; }
+.moment-thread { grid-column: 1 / -1; padding: 4px 0 8px 12px; border-left: 2px solid var(--line); }
+.moment-thread .composer { margin-top: 8px; }
+.chip-mention { cursor: default; padding: 0 5px; min-height: 18px; color: var(--accent); background: color-mix(in oklab, var(--accent) 10%, transparent); border-color: color-mix(in oklab, var(--accent) 28%, transparent); font-weight: 600; }
+.mention-pick { list-style: none; margin: 2px 0 0; padding: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-sm); box-shadow: var(--shadow, 0 4px 16px rgba(0,0,0,.12)); max-width: 320px; }
+.mention-pick .mention-option { display: block; width: 100%; text-align: left; border: 0; background: none; color: var(--text); font: inherit; padding: 4px 8px; border-radius: var(--radius-sm); cursor: pointer; }
+.mention-pick [aria-selected="true"] .mention-option, .mention-pick .mention-option:hover, .mention-pick .mention-option:focus-visible { background: color-mix(in oklab, var(--accent) 12%, transparent); }
+@media (max-width: 720px) { .pin { grid-template-columns: 1fr auto; } .pin-kind, .pin-value, .pin-by { grid-column: 1; } .pin-remove { grid-column: 2; grid-row: 1; } .pin-form { grid-template-columns: 1fr 1fr; } }

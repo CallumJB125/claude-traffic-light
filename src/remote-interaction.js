@@ -133,6 +133,8 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
   let handling = 0, watching = 0, sharedHandling = 0, sharedWatching = 0;
   const byTeammate = new Map(); // teammate user id -> calls in flight
   const clock = now ?? Date.now;
+  const proposalOperations = new Map();
+  const proposalGrants = new Map(); // owner-reviewed grants; ended process/session never restores execution authority
   const shares = new Map();   // share id -> {id, session, team, teamName, scope, createdAt, expiresAt, ownerName, users: Map(user id -> {name, act})}
   const prints = new Map();   // share id -> {text, version}
   const sharedWaits = new Set(); // exact share watches; revocation releases capacity immediately
@@ -213,8 +215,10 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
   // was created (never earlier history), never the owner's board key. A steer
   // into a turn that began before the share shows no response: it holds pre-share output.
   function project(state, sh) {
-    const { board, reporting, task_title, input_needed, ...rest } = state;
-    const after = rest.deliveries.filter((d) => d.sentAt >= sh.createdAt);
+    const { board, reporting, task_title, input_needed, activity, ...rest } = state;
+    // Same-millisecond ordering cannot be proved from these timestamps, so
+    // exclude the boundary instead of exposing a prompt sent before sharing.
+    const after = rest.deliveries.filter((d) => d.sentAt > sh.createdAt);
     const fresh = new Set(after.filter((d) => d.mode === 'new-turn' && d.turn != null).map((d) => d.turn));
     // A fresh host receipt or a repeated old hook report cannot expose metadata
     // from before the share. Child creation is independently gated as well:
@@ -224,7 +228,7 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
     const task = visible(reporting?.task) ? reporting.task : null;
     const input = visible(reporting?.input) ? reporting.input : null;
     const children = (Array.isArray(reporting?.children) ? reporting.children : []).filter((c) => visible(c) && Number.isSafeInteger(c.created_at) && c.created_at > sh.createdAt).slice(0, 20);
-    return { ...rest, task_title: task?.title ?? null, input_needed: input_needed === true && input?.needed === true && input.observed_at >= 0 && at - input.observed_at <= 90_000, reporting: { task, input, children }, deliveries: after.map((d) => (d.mode === 'new-turn' || fresh.has(d.turn) ? d : { ...d, response: '' })) };
+    return { ...rest, activity: visible(activity) ? activity : null, task_title: task?.title ?? null, input_needed: input_needed === true && input?.needed === true && input.observed_at >= 0 && at - input.observed_at <= 90_000, reporting: { task, input, children }, deliveries: after.map((d) => (d.mode === 'new-turn' || fresh.has(d.turn) ? d : { ...d, response: '' })) };
   }
   function sharedRead(t, sh) {
     const st = t.hub.state({ session: sh.session }, t.actor);
@@ -237,12 +241,19 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
     // it does not claim new provider activity or refresh child report times.
     return { ok: true, version: p.version, state: { ...out, observed_at: clock() } };
   }
+  function projectResult(result, sh) {
+    if (!object(result?.state)) return Object.hasOwn(result ?? {}, 'delivery') ? { ...result, delivery: null } : result;
+    const state = project(result.state, sh);
+    // The immediate send receipt carries the same response as the transcript;
+    // derive it from the filtered transcript so steering cannot leak history.
+    return { ...result, state, ...(Object.hasOwn(result, 'delivery') ? { delivery: state.deliveries.find((d) => d.id === result.delivery?.id) ?? null } : {}) };
+  }
   const liveShare = (sh) => !!sh && shares.get(sh.id) === sh && (sh.expiresAt === null || clock() < sh.expiresAt);
 
   // A relayed teammate call: served only against this Mac's own copy of the share.
   async function runShared(frame) {
     const s = frame.share, args = frame.args;
-    if (!closed(s, ['id', 'team', 'user', 'name', 'scope']) || typeof s.id !== 'string' || typeof s.team !== 'string' || typeof s.user !== 'string' || typeof args.session !== 'string') return REFUSED.invalid;
+    if (!closed(s, ['id', 'team', 'user', 'name', 'scope', 'proposal']) || typeof s.id !== 'string' || typeof s.team !== 'string' || typeof s.user !== 'string' || typeof args.session !== 'string') return REFUSED.invalid;
     const sh = shares.get(s.id);
     const member = sh?.users.get(s.user);
     if (!sh || s.user === userId || sh.team !== s.team || !member || sh.session !== args.session || !SCOPE_OPS[member.act ? sh.scope : 'watch'].includes(frame.op)) return REFUSED.notShared;
@@ -257,15 +268,30 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
     if (frame.op === 'watch') return sharedWatch(sh, t, args);
     if (frame.op === 'send') {
       if (!closed(args, ['session', 'generation', 'text', 'expectedTurn'])) return REFUSED.invalid;
+      let grant = null;
+      if (s.proposal !== undefined) {
+        const p = s.proposal;
+        grant = p && proposalGrants.get(p.id);
+        if (!closed(p, ['id', 'digest', 'version']) || !grant || grant.used || grant.share !== sh.id || grant.requester !== s.user || grant.digest !== p.digest || grant.version !== p.version
+          || grant.generation !== args.generation || grant.text !== args.text || args.expectedTurn !== undefined || clock() >= grant.expiresAt) return REFUSED.notShared;
+        // Check the persisted decision after admission as well. The server
+        // consumes it before relay; a superseded/revoked decision is refused.
+        const listed = await proposalList(sh.id, () => liveShare(sh) && proposalGrants.get(p.id) === grant && clock() < grant.expiresAt);
+        const persisted = listed.proposals?.find(x => x.id === p.id);
+        if (!persisted || persisted.status !== 'dispatching' || persisted.digest !== grant.digest || persisted.version !== grant.version || !liveShare(sh) || proposalGrants.get(p.id) !== grant || grant.used) return REFUSED.notShared;
+        grant.used = true;
+      }
+      const fresh = () => liveShare(sh) && targetFor(sh.session)?.hub === t.hub && sh.users.get(s.user)?.act === true
+        && (!grant || proposalGrants.get(s.proposal.id) === grant && clock() < grant.expiresAt);
       const st = t.hub.state({ session: sh.session }, t.actor);
       const req = { session: sh.session, generation: args.generation, board: st.board, text: args.text };
       if (args.expectedTurn !== undefined) req.expectedTurn = args.expectedTurn;
-      const result = await t.hub.send(req, t.actor, { by: member.name });
-      return result.state ? { ...result, state: project(result.state, sh) } : result;
+      const result = await t.hub.send(req, t.actor, { by: member.name, fresh });
+      return projectResult(result, sh);
     }
     if (!closed(args, ['session', 'generation', 'turn'])) return REFUSED.invalid;
     const result = await t.hub.interrupt(args, t.actor);
-    return result.state ? { ...result, state: project(result.state, sh) } : result;
+    return projectResult(result, sh);
   }
 
   function sharedWatch(sh, t, args) {
@@ -296,6 +322,8 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
     const sh = shares.get(id);
     if (!sh) return;
     shares.delete(id);
+    for (const [key, g] of proposalGrants) if (g.share === id) proposalGrants.delete(key);
+    for (const [key, o] of proposalOperations) if (o.share === id) proposalOperations.delete(key);
     prints.delete(id);
     for (const wait of [...sharedWaits]) if (wait.share === id) wait.finish(REFUSED.gone);
     if (tellHub) hubCall('DELETE', `/api/interaction/v1/shares/${encodeURIComponent(id)}`, {}).catch(() => {});
@@ -368,6 +396,64 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
     for (const id of [...shares.keys()]) if (!onHub.has(id)) dropShare(id, { tellHub: false });
     const teams = (Array.isArray(r.body.teams) ? r.body.teams : []).filter((x) => object(x) && typeof x.id === 'string').map((x) => ({ id: x.id, name: typeof x.name === 'string' ? x.name.slice(0, 120) : 'Team' }));
     return { ok: true, teams, shares: [...shares.values()].map(shareView) };
+  }
+
+  // Exact proposal approval belongs to the host that owns this session.
+  // The hub persists the review; this host separately enforces its own copy.
+  const validProposal = p => object(p) && UUID.test(p.id) && typeof p.share === 'string' && object(p.requester) && typeof p.requester.id === 'string'
+    && typeof p.text === 'string' && p.text.length <= 4000 && typeof p.title === 'string' && p.title.length <= 120
+    && /^[a-f0-9]{64}$/.test(p.digest) && Number.isSafeInteger(p.version) && p.version > 0 && Number.isSafeInteger(p.generation) && p.generation > 0;
+  async function proposalList(share, current = () => true) {
+    const sh = shares.get(share);
+    if (!liveShare(sh) || !targetFor(sh.session) || !current()) return REFUSED.gone;
+    let r; try { r = await hubCall('GET', `/api/interaction/v1/shares/${encodeURIComponent(share)}/proposals`); } catch { r = null; }
+    if (!current() || !liveShare(sh)) return REFUSED.gone;
+    if (r?.status !== 200 || !Array.isArray(r.body?.proposals)) return hubError(r, 'Proposals are unavailable on this hub.');
+    return { ok: true, proposals: r.body.proposals.filter(p => validProposal(p) && p.share === share).slice(0, 64) };
+  }
+  async function proposalApprove(req, current = () => true) {
+    if (!closed(req, ['share', 'id', 'version', 'digest', 'expiresInS']) || !UUID.test(req?.id) || !Number.isSafeInteger(req.expiresInS) || req.expiresInS < 60 || req.expiresInS > 3600 || !current()) return REFUSED.invalid;
+    const started = clock();
+    for (const [id, pending] of proposalOperations) if (pending.expiresAt <= started) proposalOperations.delete(id);
+    if (proposalOperations.size >= 128) return REFUSED.busy;
+    const ticket = { share: req.share, expiresAt: started + req.expiresInS * 1000 };
+    proposalOperations.set(req.id, ticket);
+    const finish = result => { if (proposalOperations.get(req.id) === ticket) proposalOperations.delete(req.id); return result; };
+    const fresh = () => current() && proposalOperations.get(req.id) === ticket && clock() < ticket.expiresAt;
+    const sh = shares.get(req.share), listed = await proposalList(req.share, fresh);
+    const p = listed.proposals?.find(p => p.id === req.id), t = sh && targetFor(sh.session), state = t?.hub.state({ session: sh.session }, t.actor);
+    if (!fresh() || !liveShare(sh) || sh.scope !== 'interact' || !p || p.status !== 'pending' || p.digest !== req.digest || p.version !== req.version
+      || state?.status === 'ended' || state?.generation !== p.generation || !sh.users.get(p.requester.id)?.act) return finish(REFUSED.gone);
+    let r; try { r = await hubCall('POST', `/api/interaction/v1/shares/${encodeURIComponent(req.share)}/proposals/${encodeURIComponent(req.id)}/approve`,
+      { version: p.version, digest: p.digest, generation: p.generation, expires_in_s: req.expiresInS }); } catch { r = null; }
+    const out = r?.body?.proposal;
+    // An approval response can arrive after revocation or a newer decision.
+    // Re-read the persisted version before installing any local authority.
+    const verified = r?.status === 200 ? await proposalList(req.share, fresh) : null;
+    const persisted = verified?.proposals?.find(x => x.id === p.id);
+    if (!persisted || persisted.status !== 'approved' || persisted.digest !== p.digest || persisted.version !== p.version) return finish(REFUSED.gone);
+    const latest = t.hub.state({ session: sh.session }, t.actor);
+    if (!fresh() || !liveShare(sh) || targetFor(sh.session)?.hub !== t.hub || latest?.generation !== p.generation || latest?.status === 'ended' || !sh.users.get(p.requester.id)?.act
+      || r?.status !== 200 || !validProposal(out) || out.id !== p.id || out.share !== p.share || out.requester.id !== p.requester.id || out.version !== p.version || out.generation !== p.generation || out.digest !== p.digest || out.text !== p.text
+      || out.status !== 'approved' || !Number.isFinite(Date.parse(out.expiresAt))) return finish(REFUSED.gone);
+    const expiresAt = Math.min(Date.parse(out.expiresAt), started + req.expiresInS * 1000, sh.expiresAt ?? Infinity);
+    if (expiresAt <= clock()) return finish(REFUSED.gone);
+    for (const [id,g] of proposalGrants) if (g.expiresAt <= clock()) proposalGrants.delete(id);
+    if (proposalGrants.size >= 128) return finish(refuse('unavailable', 'Too many reviewed grants. Revoke an older grant first.'));
+    proposalGrants.set(p.id, { share: sh.id, requester: p.requester.id, digest: p.digest, version: p.version, generation: p.generation, text: p.text, expiresAt, used: false });
+    return finish({ ok: true, proposal: out });
+  }
+  async function proposalRevoke(req, current = () => true) {
+    if (!closed(req, ['share', 'id']) || !UUID.test(req?.id) || !current()) return REFUSED.invalid;
+    const sh = shares.get(req.share);
+    if (!liveShare(sh)) return REFUSED.gone;
+    const grant = proposalGrants.get(req.id), pending = proposalOperations.get(req.id);
+    if (grant && grant.share !== sh.id || pending && pending.share !== sh.id) return REFUSED.invalid;
+    // Local authority disappears before any network await.
+    proposalOperations.delete(req.id);
+    proposalGrants.delete(req.id);
+    let r; try { r = await hubCall('DELETE', `/api/interaction/v1/shares/${encodeURIComponent(req.share)}/proposals/${encodeURIComponent(req.id)}`, {}); } catch { r = null; }
+    return current() && liveShare(sh) && r?.status === 200 && validProposal(r.body?.proposal) && r.body.proposal.id === req.id && r.body.proposal.share === req.share ? r.body : refuse('unavailable', 'Revoked on this computer. Hub confirmation is unavailable; refresh before further action.');
   }
 
   /** Owner: stop sharing now (this Mac refuses at once; the hub is told). */
@@ -447,7 +533,7 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
   // Not hosting any more: every share ends here (the hub drops them with the device or on the next list).
   function stopRunning(next) {
     running = null; state = next;
-    shares.clear(); prints.clear();
+    shares.clear(); prints.clear(); proposalGrants.clear(); proposalOperations.clear();
     for (const wait of [...sharedWaits]) wait.finish(REFUSED.gone);
     clearTimeout(retryTimer); retryTimer = null;
     clearTimeout(idleTimer); idleTimer = null;
@@ -571,7 +657,7 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
   // `hub` is a main-only seam (tests and proof logs), never exposed remotely.
   const onState = (fn) => { stateListeners.add(fn); return () => stateListeners.delete(fn); };
   // forgetDevice(dev): drop a revoked device's end-to-end sessions now (its peer() should already return null).
-  return { handle, connect, enable, disable, status, disconnect, close, onState, hub, actor, connected: () => socket?.readyState === 1, shareSession, listShares, stopSharing, shared: () => [...shares.values()].map(shareView), forgetDevice: (dev) => channel?.forget(dev) };
+  return { handle, connect, enable, disable, status, disconnect, close, onState, hub, actor, connected: () => socket?.readyState === 1, shareSession, listShares, stopSharing, proposalList, proposalApprove, proposalRevoke, shared: () => [...shares.values()].map(shareView), forgetDevice: (dev) => channel?.forget(dev) };
 }
 
 /** PUT role=client with this token, bounded. → true once the hub has no host role for it. */

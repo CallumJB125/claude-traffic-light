@@ -8,6 +8,8 @@ const when = ms => new Date(ms).toLocaleString([], { month: 'short', day: 'numer
 const folder = p => String(p || '').split(/[\\/]/).filter(Boolean).pop() || p || 'Unknown folder';
 const SKIP = { 'not-git': 'This folder is not a git repository, so it has no checkpoints.', filters: 'This repository defines its own git filters or includes, so Plexiform does not checkpoint it.', 'no-git': 'git was not found on this computer.', unknown: 'No checkpoints for this session yet.', error: 'Checkpoints for this session could not be read.' };
 const REASON = { busy: 'An AI turn is still running in this folder. Try again when it finishes.', missing: 'That checkpoint is gone (it may have been cleaned up).', cancelled: null, moved: 'The project folder has moved.', unknown: 'No checkpoints for this session.', failed: 'Restoring failed. Your files were not changed past the safety checkpoint.' };
+const UNDO_REASON = { ...REASON, failed: 'Undo did not finish. Refresh and inspect the saved safety checkpoint before trying again.', stale: 'The review changed or expired. Review this turn again before undoing it.', unavailable: 'This turn is no longer available for Undo.', unattributed: 'Undo needs an exact start and end captured by this version of Plexiform.', overlap: 'Another observed session worked in this folder during this turn. Review and integrate isolated work instead.', attributes: 'Undo cannot safely reproduce this repository’s Git content transformations.', interrupted: 'Work changed while Undo ran. Some files may have been restored; inspect the safety checkpoint before continuing.' };
+const SKIPPED = { 'later-change': 'Keep: changed after this turn', 'unsupported-path': 'Keep: linked, large or unsupported path', attributes: 'Keep: Git content transformations', metadata: 'Keep: deleted files and permission changes need their original filesystem metadata' };
 let current = null, generation = 0, state = null;
 
 function renderPatch(text, truncated) {
@@ -39,6 +41,31 @@ async function restore(target) {
   await loadTurns();
 }
 
+async function reviewUndo(holder, turn) {
+  const id = current, request = generation;
+  holder.querySelector('.undo-review')?.remove();
+  const r = await api.previewUndo(id, turn).catch(() => null);
+  if (current !== id || generation !== request || !holder.isConnected) return;
+  if (!r?.ok) { status.textContent = UNDO_REASON[r?.reason] || 'This turn could not be reviewed.'; return; }
+  const panel = node('section', null, 'undo-review');
+  panel.setAttribute('aria-label', `Review Undo for turn ${turn}`);
+  panel.append(node('h4', `Undo turn ${turn}`), node('p', `${r.eligible} file(s) to undo · ${r.skipped} kept. Later edits are preserved. This review expires in 45 seconds.`, 'muted'), node('p', 'Check every path: a turn captures project changes during that time, including edits made outside the agent. Stop other writers before continuing.', 'note'));
+  const files = node('ul', null, 'files');
+  for (const f of r.files) files.append(node('li', `${f.path} — ${f.reason ? SKIPPED[f.reason] || 'Keep' : f.action === 'remove' ? 'Remove the unchanged file added by this turn' : 'Restore its content from before this turn'}`));
+  const apply = button('Undo reviewed files', async () => {
+    if (current !== id || generation !== request || !panel.isConnected) return;
+    apply.disabled = true;
+    const result = await api.undo(id, r.token).catch(() => null);
+    if (current !== id) return;
+    await loadTurns();
+    if (current !== id) return;
+    status.textContent = result?.ok ? `Turn undone: ${result.written} restored, ${result.removed} removed, ${result.skipped} kept.${result.safety ? ' A safety checkpoint is available below.' : ''}` : UNDO_REASON[result?.reason] || 'Undo could not be completed. Refresh before trying again.';
+  });
+  apply.disabled = !r.eligible;
+  panel.append(files, apply, button('Cancel', () => { panel.remove(); void api.cancelUndo?.(id, r.token).catch(() => {}); }));
+  holder.append(panel);
+}
+
 function renderTurn(t) {
   const el = node('div', null, 'turn');
   const head = node('div', null, 'turn-head');
@@ -52,11 +79,13 @@ function renderTurn(t) {
   title.append(summary);
   const actions = node('div', null, 'actions');
   if (t.files?.length) actions.append(button('Show all changes', () => showDiff(el, t.turn, null)));
-  if (t.hasBefore) actions.append(button(`Restore to before turn ${t.turn}`, () => restore({ turn: t.turn, which: 'before' })));
-  if (t.hasAfter) actions.append(button(`Restore to after turn ${t.turn}`, () => restore({ turn: t.turn, which: 'after' })));
+  if (t.files?.length && t.undoAvailable) actions.append(button('Review Undo this turn', () => reviewUndo(el, t.turn)));
+  if (t.hasBefore) actions.append(button(`Restore whole project before turn ${t.turn}`, () => restore({ turn: t.turn, which: 'before' })));
+  if (t.hasAfter) actions.append(button(`Restore whole project after turn ${t.turn}`, () => restore({ turn: t.turn, which: 'after' })));
   head.append(title, actions);
   el.append(head);
   if (t.approx) el.append(node('p', 'Plexiform did not see this turn start, so "before" is the end of the turn before it and may include your own edits.', 'note'));
+  if (t.files?.length && !t.running && !t.undoAvailable) el.append(node('p', UNDO_REASON[t.undoReason] || UNDO_REASON.unattributed, 'note'));
   if (files.length) {
     const list = node('ul', null, 'files');
     for (const f of files) {

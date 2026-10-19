@@ -10,8 +10,11 @@ const path = require('node:path');
 const Limits = require('./limit-resets.js');
 const SessionHandover = require('./session-handover.js');
 const { isRemote } = require('./remote-devices.js');
+const BurstView = require('./burst-view.js');
+const LooseEnds = require('./burst-loose-ends-view.js');
 
 const MAX_CARDS = 5;
+const ATTENTION_KINDS = new Set(['broken', 'too_old', 'ca_untrusted', 'hosts_missing', 'console_down', 'gateway_stale']);
 const MAIL_HANDLE = 'agent-mail';
 const TASK_TEXT_MAX = 20000;
 const AIS = ['claude', 'codex', 'gemini'];
@@ -34,7 +37,9 @@ async function queueResume({ tasks, doc, session, provider, resetAtMs, sleep = (
 // sessions(): live session rows; burst(): BurstIpc.snapshot().d; tasks(): tasks snapshot rows.
 // jump(s), copyHandover(s) → {ok}, docFor(s) → markdown|null, confirm(info) → bool, resume({session, provider, resetAtMs, doc}) → {ok, id|error}.
 // mail() → {held, inbox} agent mail waiting (src/agent-mail.js pending), openMail() shows it on Sessions.
-function createHomeAlerts({ sessions = () => [], burst = () => null, tasks = () => [], jump, copyHandover, docFor, confirm, resume, mail = () => null, openMail = async () => {}, now = Date.now, newHandle = () => crypto.randomUUID() }) {
+// burstLooseEnds(): the loose-ends view model (src/burst-loose-ends-view.js) or null; burstAct(kind) → {ok…} runs one
+// card action through Burst's own consent dialog (BurstIpc.act / runAction); openOptimiser() shows Usage & Burst.
+function createHomeAlerts({ sessions = () => [], burst = () => null, burstView = null, tasks = () => [], jump, copyHandover, docFor, confirm, resume, mail = () => null, openMail = async () => {}, burstLooseEnds = () => null, burstAct = null, platform = process.platform, now = Date.now, newHandle = () => crypto.randomUUID() }) {
   const handles = new Map(); // episode key -> handle
   const byHandle = new Map(); // handle -> card
   const dismissed = new Set();
@@ -97,7 +102,25 @@ function createHomeAlerts({ sessions = () => [], burst = () => null, tasks = () 
   function snapshot() {
     const c = cards();
     const view = (list) => list.map((x) => ({ handle: handleOf(x.key), ...x.view }));
-    return { stuck: view(c.stuck), limits: view(c.limits), mail: mailCards() };
+    return { stuck: view(c.stuck), limits: view(c.limits), mail: mailCards(), waiting: waitingCards(), burst: burstCard() };
+  }
+
+  // Home's one Burst card (src/attention-inbox.js burstRow decides whether to show it): the status view's
+  // headline, detail, chip and next step, plus loose-ends totals. Null off macOS or before the first check.
+  // `attention` is true only for a state worth a Home row: broken, too old, CA/hosts/console trouble, a gateway
+  // that stopped answering (stale, or three misses in a row) or an update; the action is withheld otherwise, so
+  // not installed, off on purpose, or one missed poll never put a card on Home.
+  function burstCard() {
+    const d = safe(burst, null);
+    if (!d || typeof d !== 'object' || d.kind === 'unsupported' || d.kind === 'checking') return null;
+    const cv = typeof burstView === 'function' ? safe(burstView, null) : null;
+    const v = cv && typeof cv === 'object' && typeof cv.kind === 'string' && cv.kind !== 'checking' ? cv : BurstView.statusView(d, { platform, now });
+    const attention = ATTENTION_KINDS.has(v.kind) || (d.kind === 'unreachable' && (d.misses || 0) >= BurstView.RETRY_BEFORE_REPAIR) || v.updateAvailable === true;
+    const le = safe(burstLooseEnds, null);
+    return {
+      view: { kind: v.kind, headline: v.headline, detail: v.detail, chip: v.chip, action: attention ? v.action : null, dimmed: v.dimmed === true, attention },
+      looseEnds: le && le.totals && le.totals.repos > 0 ? { ...le.totals, text: LooseEnds.summaryText(le) } : null,
+    };
   }
 
   // One card while agent mail waits: your AI's asks for your OK, and teammates' AIs' questions.
@@ -108,8 +131,25 @@ function createHomeAlerts({ sessions = () => [], burst = () => null, tasks = () 
     return [{ handle: MAIL_HANDLE, title: `Agent mail: ${held + inbox} waiting`, meta: [held ? `${held} from your AI waiting for your OK` : null, inbox ? `${inbox} from teammates' AIs` : null].filter(Boolean).join(' · ') }];
   }
 
+  // One row per look request this person sent that a teammate has not finished (src/agent-mail.js waitingOn).
+  const WAIT_TEXT = { sent: 'sent, not seen yet', seen: 'seen', handling: 'they’ll handle it' };
+  function waitingCards() {
+    const m = safe(mail, null);
+    return (Array.isArray(m?.waiting) ? m.waiting : []).slice(0, MAX_CARDS).map((w) => ({ handle: `${MAIL_HANDLE}:${String(w.id).slice(0, 60)}`, title: `Waiting on ${w.to}: ${w.question || 'a look'}`, meta: WAIT_TEXT[w.state] || String(w.state), state: w.state }));
+  }
   async function act(kind, action, handle) {
     if (typeof handle !== 'string') return { ok: false, error: 'That card has changed. Home refreshes in a moment.' };
+    if (kind === 'burst') {
+      // Only the step the card is showing right now; `handle` is that action's kind, never free text.
+      const c = burstCard();
+      if (action !== 'act' || !c || !c.view.action || c.view.action.kind !== handle || typeof burstAct !== 'function') return { ok: false, error: 'That card has changed. Home refreshes in a moment.' };
+      try { const r = await burstAct(handle); return r && typeof r === 'object' ? r : { ok: false, error: 'Burst could not do that.' }; } catch { return { ok: false, error: 'Burst could not do that.' }; }
+    }
+    if (kind === 'waiting') {
+      if (action !== 'open' || !waitingCards().some((c) => c.handle === handle)) return { ok: false, error: 'That card has changed. Home refreshes in a moment.' };
+      await openMail();
+      return { ok: true };
+    }
     if (kind === 'mail') {
       if (handle !== MAIL_HANDLE || action !== 'open' || !mailCards().length) return { ok: false, error: 'That card has changed. Home refreshes in a moment.' };
       await openMail();
@@ -158,12 +198,12 @@ function register({ ipcMain, homeAllowed, usageAllowed, alerts }) {
 }
 
 // Main's one call. The confirmation is a native dialog with Cancel as the default, like Tasks' risky actions.
-function wire({ ipcMain, dialog, clipboard, homeAllowed, usageAllowed, sessions, burst, tasksRows, tasksService, handoverText, jump, mail, openMail, entitlements = require('./entitlements.js') }) {
+function wire({ ipcMain, dialog, clipboard, homeAllowed, usageAllowed, sessions, burst, burstView = null, burstLooseEnds, burstAct, tasksRows, tasksService, handoverText, jump, mail, openMail, entitlements = require('./entitlements.js') }) {
   const Handoff = require('./handoff.js');
   const docFor = (s) => handoverText(docKey(s)) || null;
   const handoff = Handoff.create({ entitlements, clipboard, docFor: async (key) => handoverText(key) || null, adapters: {} });
   const alerts = createHomeAlerts({
-    sessions, burst, tasks: tasksRows, jump, docFor, mail, openMail,
+    sessions, burst, burstView, burstLooseEnds, burstAct, tasks: tasksRows, jump, docFor, mail, openMail,
     copyHandover: (s) => handoff.copy(docKey(s)),
     confirm: async (info) => (await dialog.showMessageBox({
       type: 'question', buttons: ['Cancel', 'Queue task'], defaultId: 0, cancelId: 0, noLink: true,

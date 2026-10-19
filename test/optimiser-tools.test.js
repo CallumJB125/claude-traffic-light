@@ -172,7 +172,7 @@ test('page: a Burst action from a tool card goes through main\'s consent flow by
 test('burst:tools answers only the optimiser page, with status facts and the band, and nothing on other platforms', async () => {
   const off = {};
   Ipc.register({ utilityHandle: (c, allowed, f) => { off[c] = (e, ...a) => (allowed(e) ? f(e, ...a) : null); }, settingsOnly: () => false, optimiserAllowed: (e) => e.from === 'optimiser', isMac: false, dialog: {}, shell: {}, scriptDir: '/x' });
-  assert.deepEqual(await off['burst:tools']({ from: 'optimiser' }), { kind: 'unsupported' });
+  assert.deepEqual(await off['burst:tools']({ from: 'optimiser' }), { ok: true, kind: 'unsupported' });
   assert.equal(await off['burst:tools']({ from: 'usage' }), null);
 
   const h = pauselessRoutes();
@@ -214,4 +214,18 @@ test('band card: Burst on but its mod status unknown says so, not "comes with Bu
   const off = T2.toolsView({ burst: { kind: 'on', detected: 'present', band: { supported: true, installed: false } } }).groups[0].tools.find((t) => t.id === 'band');
   assert.equal(off.status.label, 'Not installed');
   assert.match(off.note, /nothing runs until you confirm/);
+});
+
+test('usage panel card reads Burst\'s panel state: installed, not installed with Install, or unknown', () => {
+  const lib = require('../src/optimiser-tools.js');
+  const on = { kind: 'on', version: '0.20.36', band: null };
+  const inst = lib.toolsView({ burst: { ...on, panel: { installed: true } } }).groups[0].tools.find((t) => t.id === 'panel');
+  assert.equal(inst.status.label, 'Installed');
+  const no = lib.toolsView({ burst: { ...on, panel: { installed: false } } }).groups[0].tools.find((t) => t.id === 'panel');
+  assert.equal(no.status.label, 'Not installed');
+  assert.deepEqual(no.actions.map((a) => a.kind), ['burst:panel-install']);
+  const unk = lib.toolsView({ burst: { ...on, panel: null } }).groups[0].tools.find((t) => t.id === 'panel');
+  assert.match(unk.note, /did not say/);
+  assert.deepEqual(lib.panelStatus({ installed: true, repo_dir: '/x' }), { installed: true });
+  assert.equal(lib.panelStatus(null), null);
 });

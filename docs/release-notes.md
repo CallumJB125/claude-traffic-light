@@ -1,32 +1,84 @@
-Plexiform 1.0.1: the first release for macOS and Linux.
+Plexiform app update — 19 October 2026 (1.0.2-beta.97)
 
-**What's new**
-- **A workspace after sign-in.** Eligible first-time accounts get a personal team and board automatically. Invitations take priority, and signing in after opening an invite resumes the join.
-- **A new name.** The app is now called Plexiform. The first time it starts it copies your settings and data from the old app (copied, not moved; the old app's data is left in place) and points Claude Code's hooks at the new one. It keeps `.pre-plexiform` backups of what it changes. It offers to move the old app to the Bin; the default is to keep it.
-- **Team and Integrations are visible before you sign in**, so you can see what they do first.
-- **Sign in with Google or GitHub, or with an email code**, then create or join a team. Teams have roles and invites by link or code. <!-- email code: keep this line only once the mail service is deployed; until then say "Email code sign-in is coming" -->
-- **GitHub can be connected** from Integrations once you've joined a team, including as an organisation-owned app. (GitHub's own rules decide where a private app can be installed; if it won't install on your organisation, tell us.)
-- **Backups and restore** of your local settings, in Settings → Backups.
-- **Updates in the app.** The app can check for a newer version and install it.
-- **Jumping to a session running in a detached tmux session** no longer switches the terminal tab you are on. If the session's terminal can't be found, Plexiform tells you and shows the command to attach.
+For macOS (Apple silicon and Intel) and Linux (x64).
 
-<!-- Usage pop-out: built (src/usage-popout.js, wired in main.js tray menu); confirm in the installed app before keeping the release line. -->
-<!-- DRAFT additions. Uncomment a line only when it is on main AND in the build being tagged; they are all on main now except where noted.
-- **Characters.** New characters to pick as your Body in Lights: a rubber duck, octopus, CRT monitor, blob, capybara and cactus, then an owl, penguin, fox, bee, axolotl and mushroom, and an egg, toaster, cloud, astronaut, sloth, T-rex and cyclops.
-- **Hatch a character.** In Lights, under Body, "+ Hatch" opens a small window: choose a shape, size, arms, accessory and colour (or "Surprise me"), watch it on the real character as you go, and save it. It is made on your computer from templates and kept in `~/.claude-traffic-light/characters`. Describing a character to an AI is not in this release.
-- **Right-click the widget** to open the Plexiform window. Shift- or Option-right-click still opens the full menu.
-- **Send feedback.** A "Something's off / Idea" form in the app. It saves your report on your computer (a folder with the note, optional diagnostics and an optional screenshot of Plexiform's own windows), and you can copy it. If you're signed in to a team whose hub has a board called "Plexiform feedback", you can press Send to file it there as a card, which your team can see; the screenshot stays on your computer, and nothing is sent until you press Send.
--->
+What changed
 
-**Known limits**
-- This release is not signed by Apple. Opening it the first time takes a few extra steps (see Install).
-- macOS may ask to use the keychain. Enter your Mac password and choose **Always Allow**. It may ask again after an update while the app is unsigned.
-- Linear and Jira are not offered in this release (Slack and Sentry are, from 2026-10-13).
-- Signing in by email needs your address verified until we move out of the email sandbox.
-- Windows is not included in this release. Linux installers pass CI smoke checks; wider device testing continues.
+- Search past sessions. Find what you asked an AI about, across your past sessions on this Mac, from the command palette or the Memory page, with project and date filters. Results open the session's timeline. The index stays on this Mac and is scrubbed of secrets.
+- Where the money went. The Usage page breaks spend down by project, branch and pull request, compares it with the period before, and suggests one saving each week: the share of Opus turns that looked routine and what Sonnet would have cost. The weekly digest carries the top projects and the same suggestion.
+- Rules made easy. Start a rule from a template ("Tell me when a session is stuck", "Red banner when CI fails" and more), read each rule as a plain sentence, and have a rule send a desktop notification. Notifications respect quiet hours and meetings.
+- A first-run tour. Five short steps on the demo board within half a minute of setup: the widget, answering a question, rules, spend and team. Skip it any time; take it again from Help.
+- Local models in two clicks. Plexiform finds Ollama and LM Studio running on this Mac, lists their models, starts a session with the one you pick, and says what to do when none is pulled. Sessions show which model they use. You can add your own OpenAI-compatible endpoint; its key is kept in secure storage.
+- Phone. A waiting permission request on your phone's lock screen now has a Review button that opens it straight away; approving still needs your passkey. You can dictate a reply with the microphone and press Send yourself.
+- Team. A heat map of the files your team is working in, with files two people touch flagged; an automatic standup per teammate you can copy; and handoffs that can be declined with a note, with the outcome shown to the sender.
+- Create a Linear or Jira issue from a session. Plexiform drafts it from the session's handover, you edit it, and nothing is sent until you press Create.
+- Ask about your screen. Turn on "Use the screen when I ask" in Voice settings, hold your talk key or long-press Claude, and ask out loud ("where is the Wi-Fi setting?"). Plexiform captures the display under your mouse, asks your own Claude through the `claude` command (no API key), speaks the answer, and Claude flies to the thing it means on screen. The screenshot is deleted as soon as the answer comes back. macOS asks for Screen Recording permission the first time.
+- Say "Plexiform, do …" to offer a new Task. It starts only when you press Start.
+- The widget no longer fails to appear after an update when macOS asks for permission to a folder your sessions use, such as Desktop or Documents. Plexiform keeps running while that prompt waits for your answer.
+- Fewer interruptions in meetings. Nudges and rule notifications wait while Plexiform sees a meeting or screen share.
 
-**Install**
-- Mac: open the .dmg (Apple Silicon: `mac-arm64`; Intel: `mac-x64`) and drag Plexiform to Applications. Open it and choose Done, then go to System Settings → Privacy & Security and choose Open Anyway. On macOS 14 and earlier, right-click → Open instead.
-- Linux: the .AppImage (`chmod +x`, then run it) or the .deb (`sudo apt install ./Plexiform-*.deb`).
+What has been verified
 
-Checksums are in SHA256SUMS.txt.
+Desktop, remote, site and board test suites pass on this build (desktop 5,499 tests, board 3,278, 0 failures), with the privacy census and the hub tenancy matrix.
+
+Current limits
+
+- Setting your Slack status from Plexiform is built but not available yet: it needs a Slack user permission the team's Slack app does not ask for today. The Slack runbook has the owner step.
+- Phone notification and voice changes reach phones after the team hub is updated.
+- Mac builds remain ad-hoc signed and are not Apple-notarized.
+- The limits listed for earlier betas below still apply.
+
+Plexiform widget update — 19 October 2026 (1.0.2-beta.92)
+
+For macOS (Apple silicon and Intel) and Linux (x64).
+
+What changed
+
+- Session cards on the widget. Hovering a session on the widget's strip opens a card with the project, what it is doing and for how long, how long it has been waiting on you, this session's spend when known, and a teammate's initials for shared sessions. The card's buttons open the session, answer its waiting input, or pin it.
+- A smarter strip. A pinned session stays first, idle sessions fold into one "+N idle" chip, and teammates' sessions sit on their own row.
+- What just happened, at a glance. A small lane beside Claude shows the last three events (needs you, finished, stuck, teammate collision, CI failed) and fades each one after a few seconds. Click one to jump to it.
+- Two rings round Claude: how long the current turn has run against your usual turn, and today's spend against your budget. They hide when there is nothing to show and respect reduced motion and low power.
+- Widget settings: snap to any screen edge, not just corners; Normal, Compact or Dot size (Dot is the lamp alone); a global shortcut to summon or hide the widget; an accent colour per project; and "Quiet for 30 minutes" from the widget menu, shown by a small moon.
+- More character content: costumes witch, viking, tricorn, beret, antlers, astronaut and heartband; pets penguin, ghost, chick and owl; effects fireworks, bats, lightning, clouds, aurora and embers; poses dance, shrug and yawn. All appear in the Lights rule editor.
+- Seasonal pack: around New Year, Valentine's Day, spring, Halloween and winter the character picks up a matching costume, pet and effect, but only on channels no rule sets. Turn it off with `"seasonalPack": false` in config.json (the older Seasonal looks setting still works).
+- Sprite packs: put a folder with `pack.json` and PNG/SVG frames in `~/.plexiform/sprites/<pack>/` and set `"spritePack": "<pack>"` in config.json to show your own frames instead of the drawn character. Packs are checked strictly (plain file names, no links, 512 KB a frame, 64 frames a state, 8 MB a pack; SVGs with scripts or external references are refused) and never run; any problem falls back to the drawn character.
+- Keep-awake on the Burst card now says "Saved, not applied yet" while Burst's machine-wide half waits for the password step in Terminal, instead of "On".
+
+What has been verified
+
+Desktop, remote and site test suites pass on this build (desktop 5,430 tests, 0 failures). The visual regression suite was run on this build and on beta.91's source: the only difference is the character baselines, which grew to include the new costumes and poses. The suite's other failing screenshots fail identically on beta.91's source and are tracked separately.
+
+Current limits
+
+- Mac builds remain ad-hoc signed and are not Apple-notarized. A changed build may require fresh authorization for Plexiform's own permissions.
+- Sprite packs and project colours are set per Mac; they do not sync.
+- The limits listed for beta.91 below still apply.
+
+Plexiform Claude Burst preview — 19 October 2026
+
+For macOS (Apple silicon and Intel) and Linux (x64). Claude Burst itself is macOS only.
+
+What changed
+
+- Claude Burst inside Plexiform, verified against Burst v0.20.36. Plexiform now reads Burst's newer state (primary health, Remote Control expectation, hosts entry, certificate trust) and gates every feature on a capability flag, so a 0.19 install keeps working with the newer parts hidden rather than broken.
+- Usage & Burst in the sidebar. One entry opens the Usage optimiser: Burst's status, its dashboard in a locked-down view, and the tools it adds.
+- Guided setup. The optimiser's empty state walks through Install, Trust, Enable and First check, says what each step changes on your Mac (from Burst's own README), and reads progress back from Burst while a step runs instead of sending you to a Terminal and asking you to come back.
+- One cause, one action. Every Burst state names what is wrong and offers one next step: not installed → Install; too old → Update; gateway not answering → Repair, with the last known state shown dimmed and its age; certificate or hosts entry not trusted → Fix; console down → Start console; usage panel not installed → Install. An unknown listener on Burst's port is named and nothing is read from it. Every Burst call from a page answers {ok, reason} and never throws.
+- Home tells you when to look. A single Burst row appears in Home's attention list only when something needs you: broken, too old, not trusted, not responding after several checks, an update available, a limit near, or loose ends. A healthy Burst, an intentionally off Burst or no Burst at all adds nothing.
+- Loose ends on Overview. Each repository row carries Burst's counts of uncommitted files, unpushed commits and stashes for repositories your sessions use; file names only, never contents, diffs or stash names.
+- Keep-awake, Remote Control and mods on the Burst card and the Tools tab. The card shows whether this Mac is being kept awake and whether Remote Control is expected, and lists Burst's session mod and the usage panel (claude-code-cost-sidebar) with Install or Update per mod. Every change to the Mac goes through the same native consent sheet as before. Burst's hotspot settings are never read or written by Plexiform.
+
+What has been verified
+
+Desktop, remote and site test suites pass on this build (desktop 5,340 tests, 0 failures) including a contract test that drives every Burst channel with a failing client, a 0.19 and a 0.20.36 fixture captured from a real install, and the privacy flow checks. On a Mac running the real Claude Burst v0.20.36: detection, all fourteen capability flags, the new state keys, the console, mods, keep-awake, Remote Control, the sidebar entry, the optimiser's Primary chip and embedded dashboard, the This Mac card and the healthy Home page were exercised live and screenshotted. Not exercised live: the setup flow's Install and Update steps and every Burst mutation (keep-awake, mod and panel install, Finder shortcuts, console repair), which rest on unit tests and the consent dialog; the non-empty loose-ends path, which rests on the captured fixture because the live scan found no loose ends.
+
+Current limits
+
+- Claude Burst is Andrew Baker's project; its install, update and repair run its own scripts in a Terminal after you confirm. Plexiform only reads its loopback admin API through a field-by-field whitelist.
+- Mac builds remain ad-hoc signed and are not Apple-notarized; Apple Developer ID signing is still open. A changed build may require fresh authorization for Plexiform's own permissions.
+- Public registration remains closed; invited teams use the sign-in methods offered by their hub.
+- Real second-person acceptance of beta.90's team features, external teammate/device, real-device updater and rollback acceptance remain open, as recorded for beta.90.
+
+Install
+
+Use https://plexiform.dev/download for the published beta. Release assets include SHA256SUMS.txt. A signed update manifest verifies release bytes; it does not establish platform code signing or a completed device update check.

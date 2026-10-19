@@ -28,8 +28,11 @@ contextBridge.exposeInMainWorld('lightsApi', {
   usageBundle: (q) => ipcRenderer.invoke('usage-bundle', q),
   workCost: () => ipcRenderer.invoke('work-cost'),
   exportWorkCost: () => ipcRenderer.invoke('work-cost-export'),
+  costRollup: (range) => ipcRenderer.invoke('cost-rollup', range),
   costGuard: { report: () => ipcRenderer.invoke('cost-guard:report'), set: (v) => ipcRenderer.invoke('cost-guard:set', v), resume: () => ipcRenderer.invoke('cost-guard:resume') },
   previewSound: (name) => ipcRenderer.invoke('preview-sound', name),
+  // Rule notify (src/rule-notify-main.js): {desktop, phone, phoneNote}; phone stays off until a paired-device path exists.
+  ruleNotifyStatus: () => ipcRenderer.invoke('rule-notify:status'),
   chooseSoundFile: () => ipcRenderer.invoke('choose-sound-file'),
   exportRules: (rules) => ipcRenderer.invoke('export-rules', rules),
   importRules: () => ipcRenderer.invoke('import-rules'),
@@ -69,3 +72,6 @@ contextBridge.exposeInMainWorld('userCharacters', {
   list: () => ipcRenderer.invoke('characters:list'),
   onChange: (cb) => ipcRenderer.on('characters:changed', () => cb()),
 });
+
+// First-run tour (src/first-run-tour-main.js): main pushes the step; the page answers Next / Skip / missing.
+contextBridge.exposeInMainWorld('tourApi', { onStep: (cb) => ipcRenderer.on('tour:step', (e, step) => cb(step)), action: (kind, id) => ipcRenderer.invoke('tour:action', String(kind), String(id)) });

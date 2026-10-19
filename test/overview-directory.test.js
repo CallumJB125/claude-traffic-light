@@ -11,7 +11,7 @@ const { createInteractionMain } = require('../src/interaction-main');
 const { createOverviewMain } = require('../src/overview-main');
 const { createFakeTeamHub } = require('../src/team-hub-fake');
 const read = (f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
-const html = read('overview.html'), script = read('overview.js'), dirScript = read('overview-directory.js'), bridge = read('overview-preload.js');
+const html = read('overview.html'), script = read('overview.js'), dirScript = read('overview-directory.js'), availScript = read('src/availability.js'), bridge = read('overview-preload.js');
 const tick = async (n = 6) => { for (let i = 0; i < n; i++) await new Promise((r) => setImmediate(r)); };
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const HOSTILE = '<img src=x onerror="globalThis.pwned=1">';
@@ -31,14 +31,14 @@ const FIXTURE = {
   viewer: 'u-me', users: { 'u-me': 'Me', 'u-bob': `Bob ${HOSTILE}`, 'u-cara': 'Cara', 'u-eve': 'Eve' },
   teams: [{ id: 't-dev', name: 'Dev team', members: ['u-me', 'u-bob', 'u-cara'] }, { id: 't-ops', name: 'Ops (not mine)', members: ['u-eve', 'u-bob'] }],
   sessions: [
-    { ref: 'bob-1', owner: 'u-bob', provider: { id: 'claude', label: 'Claude Code' }, device: { label: 'Bob’s Windows PC' }, card: { key: 'DEV-7', title: `Fix login ${HOSTILE}`, edited_by: 'human' }, task_title: 'agent title', state: 'working', observed_ago_ms: 2000, capabilities: { interrupt: true }, children: [{ ref: 'k1', name: 'Reviewer', state: 'input', task_title: 'Review diff', observed_ago_ms: 1000 }], handoffs: [{ direction: 'in', with: 'Cara', state: 'offered', summary: 'Take over tests' }], shares: [{ team: 't-dev', scope: 'interact' }] },
+    { ref: 'bob-1', owner: 'u-bob', provider: { id: 'claude', label: 'Claude Code' }, device: { label: 'Bob’s Windows PC' }, card: { key: 'DEV-7', title: `Fix login ${HOSTILE}`, edited_by: 'human' }, task_title: 'agent title', state: 'working', observed_ago_ms: 2000, capabilities: { interrupt: true }, children: [{ ref: 'k1', name: 'Reviewer', state: 'input', task_title: 'Review diff', observed_ago_ms: 1000 }], handoffs: [{ direction: 'in', with: 'Cara', state: 'offered', summary: 'Take over tests' }, { direction: 'out', with: 'Dan', state: 'offered', summary: '' }], shares: [{ team: 't-dev', scope: 'interact' }] },
     { ref: 'cara-1', owner: 'u-cara', provider: { id: 'codex', label: 'Codex' }, device: { label: 'Cara’s Mac' }, task_title: 'Write docs', state: 'idle', observed_ago_ms: 3000, shares: [{ team: 't-dev', scope: 'watch' }] },
     { ref: 'bob-private', owner: 'u-bob', provider: { id: 'cursor', label: 'Cursor' }, device: { label: 'Bob’s Windows PC' }, task_title: 'PRIVATE personal side project', state: 'working', observed_ago_ms: 1000, shares: [] },
     { ref: 'eve-ops', owner: 'u-eve', provider: { id: 'gemini', label: 'Gemini' }, device: { label: 'Eve’s laptop' }, task_title: 'OPS-ONLY incident work', state: 'working', observed_ago_ms: 1000, shares: [{ team: 't-ops', scope: 'interact' }] },
   ],
 };
 
-function stack({ teamHub = createFakeTeamHub(structuredClone(FIXTURE)), observed = true, shares = [], channelAdapter = null, prepareChannel = null } = {}) {
+function stack({ teamHub = createFakeTeamHub(structuredClone(FIXTURE)), observed = true, shares = [], channelAdapter = null, prepareChannel = null, scripts = [], presence = null, presenceView = null, looseEnds = null } = {}) {
   const handlers = new Map(), listeners = new Map(), results = [];
   const win = { isDestroyed: () => false, isVisible: () => true, isMinimized: () => false, isFocused: () => ctx.foreground };
   const contents = { id: 9, isDestroyed: () => false, mainFrame: {}, send: (ch, ...a) => { for (const fn of listeners.get(ch) ?? []) fn({}, ...structuredClone(a)); } };
@@ -54,6 +54,7 @@ function stack({ teamHub = createFakeTeamHub(structuredClone(FIXTURE)), observed
     buddy: () => buddy, sessions: () => raw, work: async () => ({ sources: [], capture: [] }), now,
     owned: () => interaction.listOwned(), shares: () => ({ origin: 'https://hub.example', list: shares }),
     hubTeams: async () => ({ origin: 'https://hub.example', teams: [] }), teamHub: () => teamHub,
+    ...(presence ? { presence } : {}), ...(presenceView ? { presenceView } : {}), ...(looseEnds ? { looseEnds } : {}),
   });
   overview.register({ handle: (ch, fn) => handlers.set(ch, fn) });
   teamHub?.onChange(() => overview.directoryChanged());
@@ -64,10 +65,13 @@ function stack({ teamHub = createFakeTeamHub(structuredClone(FIXTURE)), observed
     removeListener: (ch, fn) => listeners.get(ch)?.delete(fn),
   } }) });
   let ready;
-  const dom = new JSDOM(html, { runScripts: 'outside-only', pretendToBeVisual: true });
+  // Optional page helpers (src/session-pins.js etc.) load only when a test asks; a URL gives the page a localStorage origin.
+  const dom = new JSDOM(html, { runScripts: 'outside-only', pretendToBeVisual: true, ...(scripts.length ? { url: 'http://localhost/' } : {}) });
   const intervals = [];
   dom.window.setInterval = (fn) => intervals.push(fn);
   dom.window.overviewApi = { ...api, onReady: (fn) => { ready = fn; return () => {}; } };
+  dom.window.eval(availScript);
+  for (const f of scripts) dom.window.eval(read(f));
   dom.window.eval(dirScript);
   dom.window.eval(script);
   const doc = dom.window.document;
@@ -94,7 +98,7 @@ test('My sessions: an owned session and an observed Codex session, each with hon
     assert.ok(owned && observed, 'both rows');
     assert.equal(s.rows('mine-list').length, 2);
     assert.match(owned.querySelector('.tag').textContent, /Ready/);
-    assert.match(observed.textContent, /Codex, which has no supported way for another app to send to it/);
+    assert.match(observed.textContent, /Activity hooks cannot send to this Codex session/);
     assert.equal([...observed.querySelectorAll('button')].filter((b) => !b.hidden && /Message/.test(b.textContent)).length, 0, 'no message control without a channel');
     assert.match(observed.querySelector('.caps').textContent, /Activity reports: available/);
     assert.match(observed.querySelector('.caps').textContent, /Interrupt: unavailable/);
@@ -140,14 +144,20 @@ test('Team sessions: explicit shares only, grouped by person, filters, reasons, 
     assert.deepEqual(picks, ['Dev team · Fake team hub (test data)'], 'only teams the viewer belongs to');
     assert.match(s.$('team-notice').textContent, /test data, not a real team/);
     assert.equal(s.rows('team-list').length, 2);
-    const groups = [...s.$('team-list').querySelectorAll('.dir-group > h3')].map((h) => h.textContent);
+    const groups = [...s.$('team-list').querySelectorAll('.dir-group > h3')].map((h) => h.firstChild.textContent);
     assert.deepEqual(groups, [`Bob ${HOSTILE}`, 'Cara']);
+    const heads = [...s.$('team-list').querySelectorAll('.dir-group > h3')];
+    const bobBadge = heads[0].querySelector('.availability'), caraBadge = heads[1].querySelector('.availability');
+    assert.equal(bobBadge.dataset.level, 'active', 'Bob is working and reported seconds ago'); assert.equal(bobBadge.textContent, 'Active');
+    assert.match(bobBadge.title, /Working in 1 session · last report \d+s ago/);
+    assert.equal(caraBadge.dataset.level, 'idle'); assert.equal(caraBadge.textContent, 'Idle');
     const bob = s.row('team-list', /Fix login/);
     assert.equal(s.doc.querySelector('img'), null, 'hostile names and titles are text');
     assert.equal(bob.querySelector('.avatar').textContent, 'B<');
     assert.match(bob.textContent, /task title edited by a person/);
     assert.match(bob.textContent, /Reviewer: Review diff/); assert.match(bob.textContent, /Needs input/);
     assert.match(bob.textContent, /Handoff from Cara · offered · Take over tests/);
+    assert.match(bob.textContent, /Handed to Dan, waiting/, 'a card handed to a person reads as the board shows it');
     assert.match(bob.textContent, /Shared with this team by its owner/);
     const cara = s.row('team-list', /Write docs/);
     assert.match(cara.textContent, /Cara shared this session with your team to watch only/);
@@ -256,7 +266,7 @@ test('board-run team composer distinguishes task-inbox queuing from agent acknow
     const row = s.row('team-list', /Fix login/);
     assert.ok(row); assert.match(row.textContent, /Queued does not mean received or acknowledged/);
     assert.match(s.$('team-status').textContent, /Some activity is unavailable/);
-    row.querySelector('.actions button').click(); await tick();
+    [...row.querySelectorAll('.actions button')].find(b => b.textContent === 'Message').click(); await tick();
     assert.match(row.querySelector('.composer').textContent, /Sending does not resume a paused run/);
     row.querySelector('textarea').value = 'Read this task message';
     row.querySelector('.composer button').click(); await tick();
@@ -269,5 +279,135 @@ test('board-run team composer distinguishes task-inbox queuing from agent acknow
     assert.match(row.querySelector('.composer').textContent, /Receipt unconfirmed/);
     assert.doesNotMatch(row.querySelector('.composer').textContent, /Not sent/);
     assert.match(row.querySelector('.composer').textContent, /Do not resend automatically/);
+  } finally { s.close(); }
+});
+
+test('Team sessions: per-viewer collections group rows locally, filter the list when active, and never leave this device', async () => {
+  const s = stack({ scripts: ['src/session-pins.js'] });
+  try {
+    await s.ready(); await s.team();
+    const bob = s.row('team-list', /Fix login/);
+    const collect = bob.querySelector('.session-collect'); assert.ok(collect, 'Collect button on a team row');
+    collect.click(); await tick();
+    const picker = bob.querySelector('.collect-picker'); assert.equal(picker.hidden, false);
+    const select = picker.querySelector('select'), input = picker.querySelector('input');
+    assert.deepEqual([...select.options].map((o) => o.textContent), ['New collection…'], 'no collections yet');
+    assert.equal(input.hidden, false); input.value = 'Release';
+    [...picker.querySelectorAll('button')].find((b) => b.textContent === 'Add').click(); await tick();
+    const bob2 = s.row('team-list', /Fix login/);
+    assert.deepEqual([...bob2.querySelectorAll('.collection-chip')].map((c) => c.firstChild.textContent), ['Release'], 'membership chip under the title');
+    const stored = JSON.parse(s.dom.window.localStorage.getItem('plexiform.pins'));
+    assert.equal(stored.collections.length, 1); assert.equal(stored.collections[0].name, 'Release'); assert.equal(stored.collections[0].keys.length, 1);
+    assert.equal(JSON.stringify(s.results).includes('Release'), false, 'collections never go to main');
+    const chips = s.$('saved-filters').querySelector('.collections');
+    assert.equal(chips.getAttribute('aria-label'), 'Collections');
+    const chip = chips.querySelector('.chip-apply'); assert.equal(chip.textContent, 'Release'); assert.equal(chip.getAttribute('aria-pressed'), 'false');
+    chip.click(); await tick();
+    assert.equal(chips.querySelector('.chip-apply').getAttribute('aria-pressed'), 'true');
+    assert.match(s.$('saved-filters').querySelector('.collection-active').textContent, /Showing collection: Release/);
+    assert.ok(s.row('team-list', /Fix login/), 'Bob stays'); assert.equal(s.row('team-list', /Write docs/), undefined, 'Cara is filtered out');
+    assert.match(s.$('team-count').textContent, /1 of 2/);
+    // Remove the collection: filter clears, both rows return, chip and storage are gone.
+    chips.querySelector('.chip-x').click(); await tick();
+    assert.equal(s.rows('team-list').length, 2);
+    assert.equal(s.$('saved-filters').querySelector('.collection-active').hidden, true);
+    assert.equal(s.$('saved-filters').querySelectorAll('.collections .chip').length, 0);
+    assert.equal(s.row('team-list', /Fix login/).querySelectorAll('.collection-chip').length, 0);
+    assert.deepEqual(JSON.parse(s.dom.window.localStorage.getItem('plexiform.pins')).collections, []);
+    assert.equal(s.doc.querySelector('img'), null);
+  } finally { s.close(); }
+});
+
+// Team depth lane C (C3): the person group header shows what that teammate is looking at or running,
+// from the latest board.presence the main-side link holds; opening a shared session's details tells
+// the hub its card id (presence.view) and collapsing clears it.
+test('Team sessions: "viewing <card title>" / "running <repo>" next to the availability badge, and presence.view on open/close', async () => {
+  const hub = createFakeTeamHub(structuredClone({ ...FIXTURE, sessions: FIXTURE.sessions.map((s) => (s.ref === 'bob-1' ? { ...s, card: { ...s.card, id: 'card-7' } } : s)) }));
+  let live = {
+    members: [
+      { member_id: 'm-bob', name: `Bob ${HOSTILE}`, sessions: [{ agent: 'claude', repo_short: `bondly ${HOSTILE}`, branch: 'main', state: 'working' }], viewing: { card_id: 'card-7', since: '2026-10-19T10:00:00Z' } },
+      { member_id: 'm-cara', name: 'Cara', sessions: [{ agent: 'codex', repo_short: 'docs', branch: null, state: 'idle' }, { agent: 'codex', repo_short: 'docs', branch: null, state: 'working' }], viewing: null },
+      { member_id: 'm-me', name: 'Me', sessions: [{ agent: 'claude', repo_short: 'mine', branch: null, state: 'working' }], viewing: null },
+    ],
+    viewers: [{ member_id: 'm-bob', name: `Bob ${HOSTILE}`, card_id: 'card-7', key: 'DEV-7', title: `Fix login ${HOSTILE}`, at: '2026-10-19T10:00:00Z' }],
+  };
+  const asked = [], views = [];
+  const s = stack({ teamHub: hub, presence: (team) => { asked.push(team); return live; }, presenceView: (r) => { views.push(r); return 1; } });
+  try {
+    await s.ready(); await s.team();
+    assert.deepEqual([...new Set(asked)], ['t-dev'], 'presence is read for the selected team only');
+    const heads = [...s.$('team-list').querySelectorAll('.dir-group > h3')];
+    assert.deepEqual(heads.map((h) => h.firstChild.textContent), [`Bob ${HOSTILE}`, 'Cara']);
+    const bobNow = heads[0].querySelector('.presence-now'), caraNow = heads[1].querySelector('.presence-now');
+    assert.ok(heads[0].querySelector('.availability'), 'the availability badge stays');
+    assert.equal(bobNow.textContent, `viewing Fix login ${HOSTILE}`, 'viewing wins over running');
+    assert.equal(bobNow.dataset.kind, 'viewing');
+    assert.match(bobNow.title, /^DEV-7 · Fix login .* · running bondly /);
+    assert.equal(caraNow.textContent, 'running docs', 'each repo once');
+    assert.equal(caraNow.dataset.kind, 'running');
+    assert.equal(s.doc.querySelector('img'), null, 'hostile names, titles and repos are text');
+    // The page never learns member ids or the card id from presence; only what the header shows.
+    const wire = JSON.stringify(s.results.filter(([ch]) => ch === 'overview:directory'));
+    for (const leak of ['m-bob', 'card-7', 'since']) assert.equal(wire.includes(leak), false, leak);
+
+    // Opening Bob's details → presence.view for his session's card; closing → cleared; a session without a card id sends null.
+    const bob = s.row('team-list', /Fix login/), cara = s.row('team-list', /Write docs/);
+    const toggle = (row, open) => { const d = row.querySelector('details.caps'); d.open = open; d.dispatchEvent(new s.dom.window.Event('toggle')); };
+    toggle(bob, true); await tick();
+    assert.deepEqual(views, [{ team: 't-dev', card_id: 'card-7' }]);
+    toggle(bob, true); await tick();
+    assert.equal(views.length, 1, 'a repeat changes nothing');
+    toggle(bob, false); await tick();
+    assert.deepEqual(views.at(-1), { team: 't-dev', card_id: null });
+    toggle(cara, true); await tick();
+    assert.equal(views.length, 2, 'no card id on Cara\'s session: nothing new to send (already cleared)');
+    toggle(cara, false); await tick();
+    assert.equal(views.length, 2);
+
+    // Presence gone (link closed): the header line disappears, the badge stays.
+    live = null;
+    s.overview.directoryChanged(); await tick(); await s.poll();
+    const heads2 = [...s.$('team-list').querySelectorAll('.dir-group > h3')];
+    assert.equal(heads2[0].querySelector('.presence-now'), null);
+    assert.ok(heads2[0].querySelector('.availability'));
+    // Grouping by something other than person never shows it.
+    live = { members: [], viewers: [{ member_id: 'm-cara', name: 'Cara', card_id: 'c-9', key: 'DEV-9', title: 'Docs', at: '2026-10-19T10:00:00Z' }] };
+    s.change('team-group', 'status'); await tick();
+    assert.equal(s.$('team-list').querySelector('.presence-now'), null);
+  } finally { s.close(); }
+});
+
+// B3: Burst's loose ends per repository, matched in main to the session's working directory; the page gets counts only.
+test('My sessions: a loose-ends badge "n uncommitted · n unpushed · n stashes" per repo row; hidden without Burst\'s report', async () => {
+  const LE = require('../src/burst-loose-ends-view.js');
+  const AT = 1_792_401_162;
+  let report = { report: { at: AT, scanned: 2, repos: [
+    { root: '/Users/me/private-repo', branch: 'main', uncommitted: [{ path: '/Users/me/private-repo/a.js', status: ' M', mtime: AT - 100 }, { path: '/Users/me/private-repo/b.js', status: '??', mtime: AT - 100 }], unpushed: [{ hash: 'abc', when: AT - 50, subject: 'SECRET subject' }], ahead: 1, stashes: [{ ref: 'stash@{0}', when: AT - 60 * 3600, subject: 'wip' }] },
+    { root: '/Users/me/other', branch: 'dev', uncommitted: [{ path: 'x', status: ' M', mtime: AT }] },
+  ] }, stale_hours: 24 };
+  const s = stack({ looseEnds: () => (report ? LE.looseEndsView(report) : null) });
+  try {
+    await s.ready(); await s.poll();
+    const observed = s.row('mine-list', /Observed from activity hooks/);
+    const badge = observed.querySelector('.loose-ends');
+    assert.equal(badge.hidden, false);
+    assert.equal(badge.textContent, 'Loose ends: 2 uncommitted · 1 unpushed · 1 stash · left for a day or more', 'the checkout under /Users/me/private-repo matches that repo; the 60 h stash makes it stale');
+    assert.equal(badge.classList.contains('stale'), true);
+    // A session in a repository with nothing loose, and one outside any reported repository: no badge.
+    s.raw.push({ sessionId: 'claude-1', signal: 'tool-use', updatedAt: new Date().toISOString(), cwd: '/Users/me/other/sub' });
+    s.raw.push({ sessionId: 'claude-2', signal: 'tool-use', updatedAt: new Date().toISOString(), cwd: '/Users/me/elsewhere' });
+    await s.poll();
+    const rowsNow = s.rows('mine-list');
+    const texts = rowsNow.map((r) => r.querySelector('.loose-ends')).map((b) => (b.hidden ? '' : b.textContent));
+    assert.deepEqual(texts.filter(Boolean).sort(), ['Loose ends: 1 uncommitted', 'Loose ends: 2 uncommitted · 1 unpushed · 1 stash · left for a day or more']);
+    // Counts only ever reach the page: no path, branch, file name or commit subject.
+    const wire = JSON.stringify(s.results.filter(([ch]) => ch === 'overview:directory'));
+    for (const leak of ['/Users/me', 'private-repo', 'a.js', 'SECRET subject', 'stash@', 'branch']) assert.equal(wire.includes(leak), false, leak);
+    assert.match(wire, /"looseEnds":\{"uncommitted":2,"unpushed":1,"stashes":1,"stale":true,"text":"2 uncommitted · 1 unpushed · 1 stash"\}/);
+    // Capability gone (0.19 Burst, or Burst not answering): the view model is null and every badge hides.
+    report = null;
+    await s.poll();
+    for (const r of s.rows('mine-list')) assert.equal(r.querySelector('.loose-ends').hidden, true);
+    assert.equal(JSON.stringify(s.results.at(-1)[1]).includes('"looseEnds":{'), false, 'null, never a zero badge');
   } finally { s.close(); }
 });

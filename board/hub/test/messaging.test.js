@@ -179,3 +179,19 @@ test('AI-to-AI handoff between opted-in team sessions: delivered, decided by the
     assert.equal(back.body.error.reason, 'LOOP');
   } finally { await r.close(); }
 });
+
+test('a teammate declines a handoff with a note; the sender reads the outcome; nobody else can answer it', async () => {
+  const r = await messagingRig();
+  try {
+    const alice = r.client(r.winA), bob = r.client(r.bob);
+    const m = (await alice.send({ to: { user_id: r.bob.user, org_id: r.org }, body: 'please take the parser', kind: 'handoff', handoff: { artifacts: [] } })).body.message;
+    assert.equal((await alice.handoff(m.id, 'decline', 'no')).status, 404, 'only the addressee answers');
+    const d = await bob.handoff(m.id, 'decline', 'Out this week; ask Carol');
+    assert.equal(d.status, 200, JSON.stringify(d.body));
+    assert.equal(d.body.message.handoff.state, 'declined');
+    const seen = (await alice.list('sent')).body.messages.find((x) => x.id === m.id);
+    assert.equal(seen.handoff.state, 'declined');
+    assert.equal(seen.handoff.report, 'Out this week; ask Carol');
+    assert.equal((await bob.handoff(m.id, 'accept')).status, 409, 'a declined handoff stays declined');
+  } finally { await r.close(); }
+});

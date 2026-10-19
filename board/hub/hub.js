@@ -1033,6 +1033,7 @@ export class Hub extends EventEmitter {
     this.enrolments?.recheck();
     this.oauth?.sweep();
     this.sweepIntegrationsPending?.();
+    this.interactionShares?.proposals.prune();
     this.reviews.sweep();
     this.presence.sweep();
     await this.idle();
@@ -1098,8 +1099,42 @@ export class Hub extends EventEmitter {
     }
   }
 
+  // One member's own sockets only (team depth, step 0): a socket belongs to the
+  // member it subscribed as, or, in accounts mode, to a user whose live
+  // members include that id (candidates are that same person's memberships).
+  // Never widened to the org: inbox items and hand-off answers are private.
+  // Sends {type:key, ...payload}; returns how many sockets received it.
+  broadcastMember(memberId, key, payload = {}) {
+    let n = 0;
+    for (const b of this.browsers) {
+      if (b.ws?.readyState !== 1) continue;
+      if (b.member?.id !== memberId && !b.liveCandidates().some((m) => m.id === memberId)) continue;
+      b.send({ type: key, ...payload });
+      n++;
+    }
+    return n;
+  }
+
+  // A new comment on a card or a moment (team depth lane A): `card.comment` /
+  // `moment.comment` {board_id, card_id|moment_id, comment, mentions} to every
+  // browser on the board. Mentions are member ids, never names.
+  broadcastComment(boardId, key, payload) {
+    for (const b of this.browsers) if (b.boardId === boardId) b.send({ type: key, board_id: boardId, ...payload });
+  }
+
   broadcastRemove(boardId, cardId) {
     for (const b of this.browsers) if (b.boardId === boardId) b.send({ type: 'card.remove', board_id: boardId, card_id: cardId });
+  }
+
+  // One board.settings list (views, moments) to every browser on the board.
+  broadcastSettings(boardId, key) {
+    const s = json(this.board(boardId).settings, {});
+    const list = Array.isArray(s[key]) ? s[key] : [];
+    for (const b of this.browsers) if (b.boardId === boardId) b.send({ type: `board.${key}`, board_id: boardId, [key]: list });
+  }
+  broadcastPins(boardId) {
+    const pins = Array.isArray(json(this.board(boardId).settings, {}).pins) ? json(this.board(boardId).settings, {}).pins : [];
+    for (const b of this.browsers) if (b.boardId === boardId) b.send({ type: 'board.pins', board_id: boardId, pins });
   }
 
   broadcastLabels(boardId) {
@@ -1126,6 +1161,11 @@ export class Hub extends EventEmitter {
   }
 
   // ── handover ──────────────────────────────────────────────────────────────
+  // Person-to-person hand-off (team depth, lane D): the newest row for the card, any state.
+  latestHandoff(cardId) {
+    return this.db.get('SELECT * FROM handoffs WHERE card_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1', cardId);
+  }
+
   latestHandover(cardId) {
     return this.db.get('SELECT * FROM handovers WHERE card_id = ? ORDER BY version DESC LIMIT 1', cardId);
   }

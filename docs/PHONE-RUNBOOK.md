@@ -78,36 +78,49 @@ to type on the computer, fresh non-extractable signing key per pairing,
 platform passkey (`userVerification: 'required'`), sealed list/decide/task,
 push subscribe, voice via the browser's own `SpeechRecognition`.
 
+**Phone notifications and voice reply** (`board/web/phone-sw.js`, `board/web/js/phone-notify.js`, `board/web/js/phone-voice.js`, `board/web/js/phone-app.js`):
+
+- The hub's push stays empty. The service worker shows the fixed notice with
+  one action, Review, and tells an open app to refresh. An app that is open in
+  the background fetches what is waiting end to end, verifies it, and shows a
+  notification per new request built on the phone (`buildRequestNotification`):
+  tool name and computer name only, clipped to 120 characters, control and
+  bidi characters removed; never the command, path or folder.
+- Notification actions NEVER approve or deny. Lock-screen approve without the
+  passkey is deliberately not built. Review (or a plain tap, or any unknown
+  action) only opens `/phone/#approvals=<host>|<requestId>`, which lists that
+  request first and highlights it; Allow there runs the unchanged
+  `decide()` flow (signed decision, UV passkey assertion, sealed channel).
+- Session reply view: a Dictate button (shown only when the browser has
+  `SpeechRecognition`/`webkitSpeechRecognition`) appends the dictated words to
+  the reply box; the person still presses Send. The audio goes only to the
+  browser's own speech service (disclosed under the box and in PRIVACY.md,
+  flow `phone-voice-reply`).
+
 ## Owner-gated
 
 1. **Security review sign-off** for W2-A + W2-B before any release.
-2. **VAPID key pair into the hub env.** Generate on a trusted machine with
-   `node board/hub/scripts/gen-vapid.mjs --subject mailto:<ops address>` (it
-   prints the three lines below and writes nothing), then set on the hub
-   only, never in git:
-   - `BOARD_PUSH_VAPID_PUBLIC_KEY` — base64url, 65-byte uncompressed point
-   - `BOARD_PUSH_VAPID_PRIVATE_KEY` — base64url, 32-byte scalar (hidden in config dumps, deleted from `process.env` at start)
-   - `BOARD_PUSH_VAPID_SUBJECT` — `mailto:` or `https:` contact for push services
-   The hub refuses to start with only some of them, or with a mismatched pair.
-   Rotating the pair invalidates every phone's subscription (they re-subscribe
-   on "Turn on notifications").
+2. **VAPID key pair into the hub env.** The 2026-10-14 pair is installed on
+   staging and production; keep it stable. For a new installation generate
+   with `node board/hub/scripts/gen-vapid.mjs --out <private-file> --subject https://plexiform.dev`.
+   The exclusive 0600 output avoids printing secrets. Install all three
+   `BOARD_PUSH_VAPID_PUBLIC_KEY`, `BOARD_PUSH_VAPID_PRIVATE_KEY` and
+   `BOARD_PUSH_VAPID_SUBJECT` settings together. A rotation invalidates existing
+   subscriptions until the phone subscribes again.
 3. **Deploy migration 061** with the hub and check the Litestream → R2 backup
    includes `push_subscriptions`.
-4. **Separate static PWA origin** (THREAT_MODEL §11 R1; closes W2-A residual
-   risk 2): DNS for e.g. `phone.plexiform.dev`, a Cloudflare Pages project
-   built from pinned releases the hub operator can't write, the hub only a
-   `connect-src` (CORS for that origin on the phone routes, which today assume
-   same-origin). Then set the desktop's pinned phone origin (`settings.json`
-   `phoneOrigin` in `<data>/remote/`, used for the passkey origin and rp id and
-   the pairing link) to that origin. Passkeys registered on the hub origin will
-   not work on the new origin: phones must pair again. The phone code also
-   assumes it is served by the hub today (relative API paths;
-   `parsePairingLink` checks the link's hub against its own origin): point
-   `createApi({origin})` and that check at the hub when moving.
-5. **CSP pins on that origin:** `default-src 'none'; script-src 'self'` with
-   SRI on every script, `connect-src https://app.plexiform.dev`,
-   `img-src 'self'`, `style-src 'self'`, `manifest-src 'self'`,
-   `worker-src 'self'`, `frame-ancestors 'none'`, `base-uri 'none'`.
+4. **Separate static PWA origin.** Hosted beta files are at
+   `https://plexiform-phone.pages.dev`; the API is pinned to
+   `https://app.plexiform.dev`. `npm run build:phone` produces the upload in
+   `dist/phone-site`. Set `BOARD_PHONE_ORIGIN` to the static origin. The desktop
+   maps the production hub to this origin at build time. Existing passkeys
+   from the hub origin require pairing again. Self-hosted hubs use their own
+   origin unless explicitly configured. Account-operator separation remains
+   a review consideration because both deployments currently share an owner.
+5. **CSP and SRI.** The builder generates the exact script hash in CSP and
+   SRI for the script and stylesheet. `connect-src` allows only the static
+   site's own service-worker cache requests and the pinned hub API. Compare
+   deployed asset hashes with `build-evidence.json` after each upload.
 6. **Legal:** PRIVACY.md now names Apple, Google, Mozilla and Microsoft push
    services; fill the POPIA s72 / GDPR Chapter V transfer-basis placeholder.
 7. **Real-device check (O4):** iOS 16.4+ home-screen PWA: P-256 WebCrypto,
@@ -130,5 +143,46 @@ push subscribe, voice via the browser's own `SpeechRecognition`.
   data, and the UP/UV flags, but cannot prove they came from a real platform
   authenticator. Script running on the phone app's origin within 10 minutes
   of pairing could register a software key instead (and then approve without
-  a biometric). Closed by the separate pinned origin (owner-gated item 4), or
-  by requiring and verifying attestation.
+  a biometric). The separate origin reduces hub-origin exposure but cannot prove hardware
+  provenance. Requiring attestation needs an additional design and compatibility review.
+- Notifications have no answer buttons. Everything the phone receives as
+  "waiting" is a permission request (`approvals.list`), and the desktop has no
+  passkey-free phone path for answering other yes/no questions, so there is
+  nothing a button could safely answer. Approving from a notification without
+  the passkey is not allowed and not built.
+- Per-request notifications only appear while the app is alive in the
+  background (the service worker cannot decrypt anything); otherwise the phone
+  shows only the fixed "needs you" notice. iOS may suspend the app quickly, so
+  on iPhone expect mostly the fixed notice.
+- Dictation depends on the browser's speech service (Safari and Chrome send the
+  audio to Apple or Google); Firefox on Android has no speech recognition, so
+  the button is hidden there.
+
+## 2026-10-14 implementation
+
+`npm run build:phone` creates `dist/phone-site` for a separate static host. Set
+`PLEXIFORM_PHONE_HUB` at build time to pin the API origin (default
+`https://app.plexiform.dev`). The bundle has SRI and a CSP script hash; no imported
+module is loaded from the hub. Set `BOARD_PHONE_ORIGIN` on the hub to the exact
+HTTPS origin. CORS accepts only the phone API routes, never cookies or full
+desktop tokens. The hub may only receive the phone's relay-scoped credential.
+
+Google/GitHub sign-in is available through `/phone-connect`: five-minute PKCE
+request, explicit browser consent with matching code, single-use exchange.
+The device token stays out of URLs. Email-code sign-in is hidden when disabled.
+Physical iOS/Android PWA redirect/storage acceptance remains outstanding.
+
+Generate VAPID without printing its secret:
+
+```sh
+node board/hub/scripts/gen-vapid.mjs --subject https://plexiform.dev --out /private/vapid.env
+```
+
+Publish the static site under credentials unavailable to the hub operator.
+Pin that origin in the desktop build/settings for pairing and passkeys. Existing
+same-origin pairings may need to be recreated. Keep the public phone flag off
+until independent security review and real phone approval/deny/revoke tests pass.
+
+Hosted beta origin: `https://plexiform-phone.pages.dev`. It is pinned in the
+desktop release policy for `https://app.plexiform.dev`; self-hosted hubs keep
+their own origin or explicit operator override. The marketing phone flag stays off.

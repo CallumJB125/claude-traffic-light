@@ -79,6 +79,21 @@ test('native page: the empty state renders from the view model with textContent 
   assert.equal(d.getElementById('detail').children.length, 0, 'no HTML from main is ever parsed');
   assert.equal(d.getElementById('chip').dataset.tone, 'red');
   assert.equal(d.getElementById('browser').hidden, true);
+  assert.equal(d.getElementById('empty').classList.contains('dimmed'), false);
+  // Verifier fix 6/7: a stale state renders dimmed with its one primary; a needs_attention state renders its one button.
+  push({ mode: 'empty', reason: 'stale', headline: 'Burst is not responding', detail: 'Showing the last known state from 7 s ago.', chip: { tone: 'amber', label: 'Not responding' }, actions: [{ kind: 'retry', label: 'Check again' }, { kind: 'repair', label: 'Repair', primary: true }], dimmed: true, docs: true, canBrowser: false });
+  assert.equal(d.getElementById('empty').classList.contains('dimmed'), true);
+  assert.equal(d.getElementById('headline').textContent, 'Burst is not responding');
+  assert.deepEqual([...d.querySelectorAll('#actions button')].map((b) => [b.textContent, b.className]), [['Check again', ''], ['Repair', 'primary']]);
+  assert.match(read('optimiser.html'), /\.empty\.dimmed \{ opacity: \.6; \}/);
+  push({ mode: 'empty', reason: 'needs_attention', headline: "Burst's certificate is not trusted", detail: 'd', chip: { tone: 'amber', label: 'Needs attention' }, actions: [{ kind: 'repair', label: 'Repair', primary: true }], dimmed: false, docs: true, canBrowser: false });
+  assert.equal(d.getElementById('empty').classList.contains('dimmed'), false);
+  assert.deepEqual([...d.querySelectorAll('#actions button')].map((b) => b.textContent), ['Repair']);
+  d.querySelector('#actions button').click();
+  await settle();
+  assert.deepEqual(acted, ['repair']);
+  acted.length = 0;
+  push({ mode: 'empty', reason: 'down', headline: "Burst isn't answering", detail: '<img src=x onerror=alert(1)>', chip: { tone: 'red', label: 'Burst off' }, actions: [{ kind: 'repair', label: 'Repair', primary: true }], docs: true, canBrowser: false });
   d.querySelector('#actions button').click();
   await settle();
   assert.deepEqual(acted, ['repair']);
@@ -99,7 +114,7 @@ test('page and preload are locked down: strict CSP, a closed bridge, packaged', 
   const bridge = read('optimiser-preload.js');
   assert.match(bridge, /exposeInMainWorld\('optimiserApi'/);
   const channels = [...bridge.matchAll(/ipcRenderer\.\w+\('([^']+)'/g)].map((m) => m[1]);
-  assert.ok(channels.length >= 5 && channels.every((c) => c.startsWith('optimiser:') || ['burst:view', 'burst-action', 'burst:tools', 'burst:set-compaction', 'cost-guard:report'].includes(c)), channels.join());
+  assert.ok(channels.length >= 5 && channels.every((c) => c.startsWith('optimiser:') || ['burst:view', 'burst-action', 'burst:tools', 'burst:set-compaction', 'burst:setup-progress', 'cost-guard:report'].includes(c)), channels.join());
   const files = JSON.parse(read('package.json')).build.files;
   for (const f of ['optimiser.html', 'optimiser.js', 'optimiser-preload.js']) assert.ok(files.includes(f), f);
 });
@@ -117,12 +132,13 @@ test('sidebar: the optimiser\'s sections unfold under its entry only while it is
     const leaves = [...d.querySelectorAll('.nav-leaf')];
     assert.deepEqual(leaves.map((b) => b.textContent), ['Burst: Overview', 'Spend']);
     assert.equal(leaves[0].getAttribute('aria-current'), 'location');
-    assert.equal(d.querySelector('[data-section="usage"]').hasAttribute('data-active'), true);
+    assert.equal(d.querySelector('[data-section="optimiser"]').hasAttribute('data-active'), true);
+    assert.equal(d.querySelector('[data-section="usage"]').hasAttribute('data-active'), false, 'Usage & cost is a separate entry');
     leaves[1].click();
     assert.deepEqual(clicks, ['sec-models']);
     onState({ selected: 'usage', optimiser: null });
     assert.equal(d.querySelectorAll('.nav-leaf').length, 0);
-    const li = [...d.querySelectorAll('.nav-sub .nav-item')].find((b) => b.textContent === 'Usage optimiser').parentElement;
+    const li = d.querySelector('[data-section="optimiser"]').parentElement;
     assert.equal(li.hidden, false, 'listed without Burst too: the tool hub is for everyone');
     onState({ selected: 'usage', burst: true });
     assert.equal(li.hidden, false);

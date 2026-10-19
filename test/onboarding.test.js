@@ -194,7 +194,7 @@ test('first run opens setup (not Help) once; an install that already saw Help is
 test('the default tray menu is 20 items or fewer, with debug controls only in dev or the widget menu', () => {
   const build = (from, devRun = false) => {
     const ctx = { buddyWin: { captureState: () => ({ enabled: true }) }, refreshTrayMenu: () => {}, IS_DEV_RUN: devRun, IS_MAC: true, BuddyPages, AppMenu: require('../src/app-menu.js'), UsagePopOut: require('../src/usage-popout.js'), usageMemo: { turns: [] }, getUsageTurns: () => Promise.resolve(), Usage: { modelMix: () => ({ today: null }) }, BRAND: { OPEN_MENU_LABEL: 'Open Plexiform…' },
-      Menu: { buildFromTemplate: (t) => t }, budgetItems: () => [], scopeItem: () => [], BurstIpc: { trayItems: () => [] }, quietItems: () => [{ label: 'Snooze Notifications' }],
+      Menu: { buildFromTemplate: (t) => t }, budgetItems: () => [], scopeItem: () => [], BurstIpc: { trayItems: () => [] }, quietItems: () => [{ label: 'Snooze Notifications' }], WidgetPolish: { menuItems: () => [{ label: 'Quiet for 30 minutes' }] },
       loadConfig: () => ({ showWidget: true, menuBarMode: false }), LoginItem: { get: () => true }, updaterTrayItems: () => [{ label: 'Check for Updates…' }], hooksLabel: 'Reinstall Claude Code Hooks' };
     for (const fn of ['openBuddy', 'createFeedbackWindow', 'createHelpWindow', 'showHealth', 'knockNow', 'resizeBy', 'installHooks', 'createTray', 'setManual', 'clearManual', 'saveConfig', 'createWindow', 'applyWidgetVisibility', 'broadcastStatus', 'updateTrayMode']) ctx[fn] = () => {};
     return vm.runInNewContext(`${slice('  const sectionItems = ', '\n  // Rebuilt in place')}\nbuildMenu(${JSON.stringify(from)});`, ctx).filter((i) => i.type !== 'separator');
@@ -204,7 +204,10 @@ test('the default tray menu is 20 items or fewer, with debug controls only in de
   const labels = tray.map((i) => i.label);
   for (const gone of ['Knock now', 'Bigger', 'Smaller', 'Reinstall Claude Code Hooks', 'Override: Green (5 min)', 'Clear override']) assert.ok(!labels.includes(gone), gone);
   assert.equal(labels.filter((l) => /^Open .+…$/.test(l) && l !== 'Open Plexiform…').length, BuddyPages.sectionsFor().filter((sec) => sec.menu === undefined).length, 'one Open item per sidebar section that is in the menu');
-  assert.ok(!labels.includes('More'), 'six sections need no More submenu');
+  const more = tray.filter(item => item.label === 'More');
+  assert.equal(more.length, 1, 'secondary sections have one More submenu');
+  assert.deepEqual(Array.from(more[0].submenu, item => item.label), BuddyPages.sectionsFor().filter(sec => sec.menu === 'more').map(sec => `Open ${sec.title}…`), 'every secondary section remains reachable');
+  assert.equal(labels.filter(label => /^Open .+…$/.test(label) && label !== 'Open Plexiform…').length, 6, 'the tray keeps six primary sections');
   for (const kept of ['Open at Login', 'Quit', 'Floating Widget', 'What does this mean?…']) assert.ok(labels.includes(kept), kept);
   for (const advanced of [build('widget'), build('tray', true)]) assert.ok(advanced.some((i) => i.label === 'Knock now') && advanced.some((i) => i.label === 'Override: Red (5 min)'));
 });
@@ -214,7 +217,7 @@ test('the tray pauses and resumes automatic work cards, and turning them on the 
     const calls = [];
     const ctx = { buddyWin: { captureState: () => capture, setCapture: (on) => { calls.push(['setCapture', on]); return true; } }, refreshTrayMenu: () => calls.push(['refresh']),
       IS_DEV_RUN: false, IS_MAC: true, BuddyPages, AppMenu: require('../src/app-menu.js'), UsagePopOut: require('../src/usage-popout.js'), usageMemo: { turns: [] }, getUsageTurns: () => Promise.resolve(), Usage: { modelMix: () => ({ today: null }) }, BRAND: { OPEN_MENU_LABEL: 'Open Plexiform…' },
-      Menu: { buildFromTemplate: (t) => t }, budgetItems: () => [], scopeItem: () => [], BurstIpc: { trayItems: () => [] }, quietItems: () => [],
+      Menu: { buildFromTemplate: (t) => t }, budgetItems: () => [], scopeItem: () => [], BurstIpc: { trayItems: () => [] }, quietItems: () => [], WidgetPolish: { menuItems: () => [] },
       loadConfig: () => ({ showWidget: true, menuBarMode: false, ...config }), LoginItem: { get: () => true }, updaterTrayItems: () => [], hooksLabel: 'x' };
     for (const fn of ['openBuddy', 'createFeedbackWindow', 'createHelpWindow', 'showHealth', 'knockNow', 'resizeBy', 'installHooks', 'createTray', 'setManual', 'clearManual', 'saveConfig', 'createWindow', 'applyWidgetVisibility', 'broadcastStatus', 'updateTrayMode']) ctx[fn] = (...a) => calls.push([fn, ...a]);
     const items = vm.runInNewContext(`${slice('  const sectionItems = ', '\n  // Rebuilt in place')}\nbuildMenu('tray');`, ctx);

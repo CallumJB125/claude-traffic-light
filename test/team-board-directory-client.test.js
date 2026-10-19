@@ -10,14 +10,14 @@ const message = () => ({ id: MSG, thread_id: THREAD, card_id: 'card-1', repo_id:
   author: { kind: 'member', member_id: 'm-ana', account_id: 'u-ana', name: 'Ana', identity_source: 'staff_credential' },
   deliveries: [{ recipient_run_id: RUN, recipient_card_id: 'card-1', recipient_member_id: 'm-bob', fence: 4, current_recipient: true, state: 'pending', received_at: null, acknowledged_at: null, receipt_connection_current: false, acknowledgement_source: null }] });
 function rig() {
-  const s = { now: NOW, dto: directory(), calls: [], messages: [], post: message(), postStatus: 200, directoryStatus: 200, afterDirectory: null };
+  const s = { now: NOW, dto: directory(), calls: [], messages: [], post: message(), postStatus: 200, directoryStatus: 200, afterDirectory: null, afterPost: null };
   const json = (status, body) => ({ status, headers: { get: () => null }, body: null, text: async () => JSON.stringify(body) });
   const fetch = async (url, init) => {
     s.calls.push({ url, init, body: init.body ? JSON.parse(init.body) : null });
     if (url.endsWith('/shared')) return json(200, { shared: [] });
     if (url.endsWith('/account')) return json(200, { user: { id: 'u-ana' }, teams: [{ id: 'team-1', name: 'Engineering', token: 'SECRET' }] });
     if (url.endsWith('/team-session-directory')) { s.afterDirectory?.(); return json(s.directoryStatus, s.dto); }
-    if (init.method === 'POST') { if (s.postStatus === 'throw') throw new Error('credential SECRET'); return json(s.postStatus, { message: s.post }); }
+    if (init.method === 'POST') { s.afterPost?.(); if (s.postStatus === 'throw') throw new Error('credential SECRET'); return json(s.postStatus, { message: s.post }); }
     return json(200, { messages: s.messages, auto_resume: false });
   };
   const hub = createTeamHubClient({ baseUrl: 'https://hub.test', viewerId: 'u-ana', token: () => 'SECRET', fetch, boardDirectory: true }, { now: () => s.now, pollMs: 20, timeoutMs: 500, deadlineMs: 1000 });
@@ -117,6 +117,31 @@ test('lost or 5xx POST response may already be durably queued; never retry or cl
     const out = await hub.send(hub.viewer(), 'team-1', r.ref, 'Hello Bob', RID);
     assert.equal(out.status, 'unconfirmed'); assert.equal(posts(s).length, 1); assert.match(out.reason, /Do not resend/); assert.equal(JSON.stringify(out).includes('SECRET'), false);
   }
+});
+
+test('task inbox authority guard stops dispatch after an awaited directory refresh', async () => {
+  const { s, hub } = rig(), r = await chosen(hub); let alive = true;
+  s.afterDirectory = () => { alive = false; };
+  const out = await hub.send(hub.viewer(), 'team-1', r.ref, 'Hello Bob', RID, () => alive);
+  assert.equal(out.status, 'forbidden');
+  assert.equal(posts(s).length, 0);
+});
+
+test('task inbox authority guard rejects an already retired view without a request', async () => {
+  const { s, hub } = rig(), r = await chosen(hub); s.calls.length = 0;
+  const out = await hub.send(hub.viewer(), 'team-1', r.ref, 'Hello Bob', RID, () => false);
+  assert.equal(out.status, 'forbidden');
+  assert.equal(s.calls.length, 0);
+});
+
+test('task inbox withholds receipt after authority changes during the POST', async () => {
+  const { s, hub } = rig(), r = await chosen(hub); let alive = true;
+  s.afterPost = () => { alive = false; };
+  const out = await hub.send(hub.viewer(), 'team-1', r.ref, 'Hello Bob', RID, () => alive);
+  assert.equal(out.status, 'unconfirmed');
+  assert.match(out.reason, /do not resend automatically/);
+  assert.equal(Object.hasOwn(out, 'delivery'), false);
+  assert.equal(posts(s).length, 1);
 });
 
 test('journal requires current transport receipt and agent ack; replies correlate exact target/thread/message', async () => {

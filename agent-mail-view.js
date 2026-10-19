@@ -89,6 +89,31 @@
     return li;
   }
 
+  // A teammate's "Can you look at this?": Seen is the delivered receipt on open; the rest are theirs to choose.
+  function lookItem(m) {
+    const li = node('li', null, 'mail-item look-item');
+    li.append(node('h3', `${m.from || 'A teammate'} asks: can you look at this?`));
+    li.append(node('p', m.look?.question || m.body, 'mail-body'));
+    const ctx = String(m.body || '').split('\n').find((l) => l.startsWith('Context:'));
+    if (ctx) li.append(node('p', ctx, 'muted'));
+    const handling = m.handoff?.state === 'accepted';
+    li.append(node('p', handling ? 'You said you’ll handle this. Mark it done when you have looked.' : 'They can see you have seen it. Say you’ll handle it, reply, or decline.', 'muted'));
+    const reply = node('textarea'); reply.rows = 3; reply.maxLength = 4000; reply.placeholder = 'Reply (optional)'; reply.setAttribute('aria-label', 'Reply'); keep(m.id, 'reply', reply);
+    const actions = node('div', null, 'row-actions');
+    if (!handling) actions.append(btn('I’ll handle this', (b) => run(b, () => api.mailAcknowledge(m.id), 'They can see you’ll handle it.'), true));
+    actions.append(btn('Send reply', (b) => run(b, () => api.mailReply(m.id, reply.value), 'Reply sent.')));
+    actions.append(btn('Done', (b) => run(b, () => api.mailResolve(m.id, reply.value), 'Marked done. They can see it.'), handling));
+    actions.append(btn('Decline', (b) => run(b, () => api.mailDecline(m.id, reply.value), 'Declined.')));
+    li.append(reply, actions);
+    return li;
+  }
+  const WAITING = { sent: 'Sent, not seen yet', seen: 'Seen', handling: 'They’ll handle it' };
+  function waitingItem(w) {
+    const li = node('li', null, 'mail-item waiting-item');
+    li.append(node('h3', `Waiting on ${w.to}: ${w.question || 'a look'}`));
+    li.append(node('span', WAITING[w.state] || w.state, `tag ${w.state === 'handling' ? 'working' : w.state === 'sent' ? 'waiting' : ''}`));
+    return li;
+  }
   function handoffItem(m) {
     const li = node('li', null, 'mail-item');
     li.append(node('h3', `${m.from || 'A teammate'}'s AI offered you work`));
@@ -129,7 +154,7 @@
       return out.replaceChildren(node('p', 'Agent mail lets your AI ask a teammate a question or hand them work, and shows what teammates’ AIs ask you. Nothing is sent until you press Send.', 'muted'),
         btn('Sign in to use agent mail', (b) => run(b, async () => ((await api.openAccount?.()) ? { ok: true } : { ok: false, error: 'The Account page could not be opened. Open it from Team in the sidebar.' }), '', false), true));
     }
-    section.hidden = !s || !s.signedIn || (!held.length && !inbox.length && !sent.length && !s.polling);
+    section.hidden = !s || !s.signedIn || (!held.length && !inbox.length && !sent.length && !(s.waiting || []).length && !s.polling);
     if (section.hidden) return out.replaceChildren();
     const live = new Set([...held, ...inbox].map((m) => m.id));
     for (const id of drafts.keys()) if (!live.has(id)) drafts.delete(id);
@@ -137,9 +162,11 @@
     for (const m of held) list.append(heldItem(m, s.hub));
     for (const m of inbox) {
       if (!opened.has(m.id)) { opened.add(m.id); void api.mailOpen(m.id); }
-      list.append(m.kind === 'handoff' ? handoffItem(m) : questionItem(m));
+      list.append(m.look ? lookItem(m) : m.kind === 'handoff' ? handoffItem(m) : questionItem(m));
     }
     const parts = [list];
+    const waiting = (s && s.waiting) || [];
+    if (waiting.length) { parts.push(node('h3', 'Waiting on')); const wl = node('ul', null, 'mail-list'); for (const w of waiting) wl.append(waitingItem(w)); parts.push(wl); }
     if (sent.length) { parts.push(node('h3', 'Hand-offs you sent')); const sl = node('ul', null, 'mail-list'); for (const m of sent) sl.append(sentItem(m)); parts.push(sl); }
     if (!held.length && !inbox.length) parts.push(node('p', 'Nothing waiting. Questions your AI drafts for teammates, and teammates’ AIs’ questions to you, show up here.', 'muted'));
     if (!s.polling) parts.push(node('p', 'To see teammates’ AI questions here, turn on “Show my teammates’ AI questions” in Preferences.', 'muted'));
@@ -150,7 +177,7 @@
     const request = ++generation;
     let s;
     try { s = await api.mailList(); } catch { s = null; }
-    if (tools === null) { try { tools = (await api.continueMenu())?.choices || []; } catch { tools = []; } }
+    if (tools === null) { try { const menu = await api.continueMenu(); tools = menu?.mailChoices || menu?.choices || []; } catch { tools = []; } }
     // Never re-render under someone typing an answer or editing a held message.
     if (request !== generation || busy || (section.contains(document.activeElement) && /^(TEXTAREA|INPUT|SELECT)$/.test(document.activeElement.tagName))) return;
     render(s);

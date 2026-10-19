@@ -155,7 +155,7 @@ test('Files column actions: Message and Hand on, cancel sends nothing, confirm s
     ['coord-release', { release: '/r/a.js', session: 'ignored' }, { release: '/r/a.js' }],
   ]) {
     const no = await actionHarness(0);
-    assert.deepEqual(await no.handlers['burst-action'](SESSIONS, id, args), { ok: false, cancelled: true });
+    assert.deepEqual(await no.handlers['burst-action'](SESSIONS, id, args), { ok: false, cancelled: true, reason: 'Cancelled.' });
     assert.equal(no.dialogs.length, 1);
     assert.equal(no.posts().length, 0, `${id} cancel`);
     await no.done();

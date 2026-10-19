@@ -8,6 +8,7 @@
 // docs/PHONE-RUNBOOK.md). Writes no file. Rotating the pair invalidates every
 // phone's subscription; phones re-subscribe with "Turn on notifications".
 
+import { writeFileSync } from 'node:fs';
 import { generateKeyPairSync } from 'node:crypto';
 
 const args = process.argv.slice(2);
@@ -19,4 +20,10 @@ if (!subject || !/^(mailto:[^@\s]+@[^@\s]+|https:\/\/\S+)$/.test(subject)) {
 }
 const jwk = generateKeyPairSync('ec', { namedCurve: 'P-256' }).privateKey.export({ format: 'jwk' });
 const pub = Buffer.concat([Buffer.from([4]), Buffer.from(jwk.x, 'base64url'), Buffer.from(jwk.y, 'base64url')]).toString('base64url');
-process.stdout.write(`BOARD_PUSH_VAPID_PUBLIC_KEY=${pub}\nBOARD_PUSH_VAPID_PRIVATE_KEY=${jwk.d}\nBOARD_PUSH_VAPID_SUBJECT=${subject}\n`);
+const settings = `BOARD_PUSH_VAPID_PUBLIC_KEY=${pub}\nBOARD_PUSH_VAPID_PRIVATE_KEY=${jwk.d}\nBOARD_PUSH_VAPID_SUBJECT=${subject}\n`;
+const outAt = args.indexOf('--out');
+if (outAt >= 0) {
+  if (!args[outAt + 1]) throw new Error('--out requires a private file path');
+  writeFileSync(args[outAt + 1], settings, { mode: 0o600, flag: 'wx' });
+  process.stdout.write('VAPID settings written privately. Existing keys are never overwritten.\n');
+} else process.stdout.write(settings);

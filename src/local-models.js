@@ -112,17 +112,20 @@ function apiBase(endpoint) {
   const base = endpoint.url.replace(/\/+$/, '');
   return endpoint.kind === 'openai' && !/\/v1$/.test(base) ? `${base}/v1` : base;
 }
-function authHeaders(endpoint, env) {
-  const key = endpoint.apiKeyEnv ? env[endpoint.apiKeyEnv] : null;
+// A key saved in Settings (secure storage, read through `secretFor`) wins over a named environment variable.
+function authHeaders(endpoint, env, secretFor = null) {
+  let key = null;
+  if (endpoint.apiKeyStored && typeof secretFor === 'function') { try { key = secretFor(endpoint.id); } catch { key = null; } }
+  if (!key) key = endpoint.apiKeyEnv ? env[endpoint.apiKeyEnv] : null;
   return typeof key === 'string' && key ? { authorization: `Bearer ${key}` } : {};
 }
 
 // Read-only model listing with a short timeout.
-async function probeEndpoint(endpoint, { env = process.env, limits = LIMITS, lookup } = {}) {
+async function probeEndpoint(endpoint, { env = process.env, limits = LIMITS, lookup, secretFor = null } = {}) {
   const url = endpoint.kind === 'ollama' ? `${apiBase(endpoint)}/api/tags` : `${apiBase(endpoint)}/models`;
   const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), limits.probeMs);
   try {
-    const { res } = await openRequest(url, { headers: { accept: 'application/json', ...authHeaders(endpoint, env) }, allowPublic: endpoint.allowPublic === true, headersMs: limits.probeMs, signal: ctl.signal, lookup });
+    const { res } = await openRequest(url, { headers: { accept: 'application/json', ...authHeaders(endpoint, env, secretFor) }, allowPublic: endpoint.allowPublic === true, headersMs: limits.probeMs, signal: ctl.signal, lookup });
     const body = JSON.parse(await readCapped(res, limits.probeBytes, limits.probeMs));
     const raw = endpoint.kind === 'ollama' ? body?.models?.map((m) => m?.name ?? m?.model) : body?.data?.map((m) => m?.id);
     const models = [...new Set((Array.isArray(raw) ? raw : []).filter((m) => typeof m === 'string' && m && m.length <= 200))].slice(0, limits.modelsPerEndpoint);
@@ -152,7 +155,7 @@ function streamParser(kind) {
 }
 
 // One adapter per endpoint+model. `profile` may be updated by the registry.
-function createLocalModelAdapter({ profile, model, label, env = process.env, now = Date.now, limits = LIMITS, lookup }) {
+function createLocalModelAdapter({ profile, model, label, env = process.env, now = Date.now, limits = LIMITS, lookup, secretFor = null }) {
   const events = new EventEmitter();
   const targets = new Map();
   let stopped = false;
@@ -197,7 +200,7 @@ function createLocalModelAdapter({ profile, model, label, env = process.env, now
     t.busy = { turnId, ctl };
     let res;
     try {
-      ({ res } = await openRequest(url, { method: 'POST', body, headers: { accept: p.kind === 'ollama' ? 'application/x-ndjson' : 'text/event-stream', ...authHeaders(p, env) }, allowPublic: p.allowPublic === true, headersMs: limits.headersMs, signal: ctl.signal, lookup }));
+      ({ res } = await openRequest(url, { method: 'POST', body, headers: { accept: p.kind === 'ollama' ? 'application/x-ndjson' : 'text/event-stream', ...authHeaders(p, env, secretFor) }, allowPublic: p.allowPublic === true, headersMs: limits.headersMs, signal: ctl.signal, lookup }));
     } catch (e) { if (t.busy?.turnId === turnId) t.busy = null; throw e; }
     if (targets.get(target) !== t || t.busy?.turnId !== turnId) { res.destroy(); throw new Error('Conversation closed'); }
     t.lastUsed = now();
@@ -294,7 +297,7 @@ function validEndpoint(e) {
   if (e.label != null && (typeof e.label !== 'string' || e.label.length > 60)) return null;
   if (e.system != null && (typeof e.system !== 'string' || e.system.length > 4000)) return null;
   if (e.apiKeyEnv != null && !/^[A-Z_][A-Z0-9_]{0,63}$/.test(e.apiKeyEnv)) return null;
-  return { id: e.id, label: e.label || e.id, url: e.url, kind: e.kind, apiKeyEnv: e.apiKeyEnv ?? null, allowPublic: e.allowPublic === true, system: e.system ?? '' };
+  return { id: e.id, label: e.label || e.id, url: e.url, kind: e.kind, apiKeyEnv: e.apiKeyEnv ?? null, apiKeyStored: e.apiKeyStored === true, allowPublic: e.allowPublic === true, system: e.system ?? '' };
 }
 function readConfig(file) {
   if (!file) return {};
@@ -304,7 +307,7 @@ function readConfig(file) {
 // Registers one interaction adapter per reachable endpoint+model into the
 // shared `adapters` map (provider id `local-<endpoint>-<hash>`), keeps the same
 // adapter object across refreshes so live conversations keep their history.
-function createLocalModels({ adapters, configFile = null, config = null, discovery = DISCOVERY, env = process.env, now = Date.now, limits = LIMITS, lookup, probe = probeEndpoint, maxAgeMs = 15_000 } = {}) {
+function createLocalModels({ adapters, configFile = null, config = null, discovery = DISCOVERY, env = process.env, now = Date.now, limits = LIMITS, lookup, probe = probeEndpoint, maxAgeMs = 15_000, secretFor = null } = {}) {
   const entries = new Map(); // provider id -> { adapter, endpoint, model, source, listed }
   const status = new Map();  // endpoint id -> { endpoint, source, reachable, error, checkedAt }
   let refreshing = null, checkedAt = 0;
@@ -320,7 +323,7 @@ function createLocalModels({ adapters, configFile = null, config = null, discove
 
   async function run() {
     const list = endpointsNow();
-    const results = await Promise.all(list.map((e) => probe(e, { env, limits, lookup })));
+    const results = await Promise.all(list.map((e) => probe(e, { env, limits, lookup, secretFor })));
     const ids = new Set(list.map((e) => e.id));
     for (const id of status.keys()) if (!ids.has(id)) status.delete(id);
     for (const entry of entries.values()) entry.listed = false;
@@ -336,7 +339,7 @@ function createLocalModels({ adapters, configFile = null, config = null, discove
           if (entries.size + added >= MAX_ENTRIES) continue;
           added++;
           const label = `${model} · ${endpoint.label}`.slice(0, 120);
-          const adapter = createLocalModelAdapter({ profile: endpoint, model, label, env, now, limits, lookup });
+          const adapter = createLocalModelAdapter({ profile: endpoint, model, label, env, now, limits, lookup, secretFor });
           entry = { adapter, model };
           Object.defineProperty(adapter, 'available', { enumerable: true, get: () => entry.listed && status.get(entry.endpoint.id)?.reachable === true });
           Object.defineProperty(adapter, 'reason', { enumerable: true, get: () => (status.get(entry.endpoint.id)?.reachable ? 'Model no longer listed' : 'Not reachable') });
@@ -363,12 +366,14 @@ function createLocalModels({ adapters, configFile = null, config = null, discove
   function overview() {
     const endpoints = [...status.values()].filter((s) => s.source === 'configured' || s.reachable).map((s) => ({
       id: s.endpoint.id, label: s.endpoint.label, kind: s.endpoint.kind, source: s.source, reachable: s.reachable, error: s.error, checkedAt: s.checkedAt,
-      host: parseEndpointUrl(s.endpoint.url).host, publicOptIn: s.endpoint.allowPublic, keyFromEnv: s.endpoint.apiKeyEnv ? { name: s.endpoint.apiKeyEnv, set: !!env[s.endpoint.apiKeyEnv], plainHttp: /^http:/i.test(s.endpoint.url) && !/^http:\/\/(127\.|\[::1\]|localhost)/i.test(s.endpoint.url) } : null,
+      host: parseEndpointUrl(s.endpoint.url).host, publicOptIn: s.endpoint.allowPublic, keyStored: s.endpoint.apiKeyStored === true, keyFromEnv: s.endpoint.apiKeyEnv ? { name: s.endpoint.apiKeyEnv, set: !!env[s.endpoint.apiKeyEnv], plainHttp: /^http:/i.test(s.endpoint.url) && !/^http:\/\/(127\.|\[::1\]|localhost)/i.test(s.endpoint.url) } : null,
     }));
     const models = [...entries].filter(([, e]) => status.has(e.endpoint.id)).map(([provider, e]) => ({
       provider, model: e.model, endpoint: e.endpoint.id, endpointLabel: e.endpoint.label, reachable: e.adapter.available, lastUsed: e.adapter.lastUsed(),
     }));
-    return { endpoints, models, checkedAt };
+    // Every fixed loopback endpoint, answering or not, for the "not running" health line.
+    const detected = [...status.values()].filter((s) => s.source === 'discovered').map((s) => ({ id: s.endpoint.id, label: s.endpoint.label, kind: s.endpoint.kind, reachable: s.reachable, error: s.error }));
+    return { endpoints, models, detected, checkedAt };
   }
   return { refresh, overview };
 }

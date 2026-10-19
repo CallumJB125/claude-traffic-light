@@ -8,12 +8,15 @@ contextBridge.exposeInMainWorld('homeApi', {
   morningSeen: () => ipcRenderer.invoke('home:morning-seen'),
   resumeCap: () => ipcRenderer.invoke('home:resume-cap'),
   alerts: () => ipcRenderer.invoke('home:alerts'),
-  alertAct: (kind, action, handle) => (['stuck', 'limit', 'mail'].includes(kind) && ['open', 'handoff', 'dismiss', 'resume'].includes(action) && typeof handle === 'string' && handle.length <= 100 ? ipcRenderer.invoke('home:alert', kind, action, handle) : Promise.resolve({ ok: false })),
+  alertAct: (kind, action, handle) => (['stuck', 'limit', 'mail', 'waiting', 'burst'].includes(kind) && ['open', 'handoff', 'dismiss', 'resume', 'act'].includes(action) && typeof handle === 'string' && handle.length <= 100 ? ipcRenderer.invoke('home:alert', kind, action, handle) : Promise.resolve({ ok: false })),
   teamToday: () => ipcRenderer.invoke('home:team-today'),
   teamTodaySeen: () => ipcRenderer.invoke('home:team-today-seen'),
   teamTodayRefresh: () => ipcRenderer.invoke('home:team-today-refresh'),
   starter: () => ipcRenderer.invoke('home:starter'),
   starterAct: (action) => (['look', 'add', 'run', 'dismiss'].includes(action) ? ipcRenderer.invoke('home:starter-act', action) : Promise.resolve({ ok: false })),
+  teamInbox: () => ipcRenderer.invoke('home:team-inbox'),
+  inboxRead: (keys) => (Array.isArray(keys) && keys.length <= 50 && keys.every((k) => typeof k === 'string' && k.length <= 300) ? ipcRenderer.invoke('home:inbox-read', keys) : Promise.resolve({ ok: false, error: 'invalid' })),
+  answerInput: (id, optionId) => (typeof id === 'string' && id.length <= 100 && typeof optionId === 'string' && optionId.length <= 100 ? ipcRenderer.invoke('home:answer-input', id, optionId) : Promise.resolve({ ok: false, error: 'invalid' })),
   openCard: (handle) => (typeof handle === 'string' && handle.length <= 100 ? ipcRenderer.invoke('home:open-card', handle) : Promise.resolve(false)),
   digest: {
     get: (period) => ipcRenderer.invoke('digest:get', period === 'week' ? 'week' : 'day'),
@@ -32,3 +35,6 @@ contextBridge.exposeInMainWorld('demoApi', {
   start: () => ipcRenderer.invoke('demo:start'),
   exit: () => ipcRenderer.invoke('demo:exit'),
 });
+
+// First-run tour (src/first-run-tour-main.js): main pushes the step; the page answers Next / Skip / missing.
+contextBridge.exposeInMainWorld('tourApi', { onStep: (cb) => ipcRenderer.on('tour:step', (e, step) => cb(step)), action: (kind, id) => ipcRenderer.invoke('tour:action', String(kind), String(id)) });

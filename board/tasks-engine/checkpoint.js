@@ -4,6 +4,8 @@ import path from 'node:path';
 import { redact, filterPath } from '../shared/scope.js';
 import { realish } from '../runner/paths.js';
 import { cleanPacketText } from '../shared/packet-text.js';
+import ResultCards from '../../src/result-cards.js';
+import { SOURCES } from '../tasks-api/protocol.js';
 
 export const PACKET_SCHEMA = 1;
 export const PACKET_MAX_BYTES = 64 * 1024;
@@ -47,8 +49,13 @@ function artifact(a, ctx) {
 
 /** Full editable data shape; authority/provenance is never accepted here. */
 export function cleanPacketData(data, ctx) {
-  if (!keys(data, PACKET_FIELDS) || PACKET_FIELDS.some((k) => !Object.hasOwn(data, k))) invalid('Invalid checkpoint fields.');
+  if (!keys(data, [...PACKET_FIELDS, 'resultCards']) || PACKET_FIELDS.some((k) => !Object.hasOwn(data, k))) invalid('Invalid checkpoint fields.');
   if (!Array.isArray(data.decisions) || data.decisions.length > 20 || !Array.isArray(data.artifacts) || data.artifacts.length > 32 || !Array.isArray(data.reportedChecks) || data.reportedChecks.length > 20) invalid('Too many checkpoint entries.');
+  let resultCards;
+  if (Object.hasOwn(data, 'resultCards')) {
+    try { resultCards = ResultCards.cleanResultCards(data.resultCards, (v, max) => text(v, max, ctx.root)); }
+    catch { invalid('Saved cards have invalid fields or exceed their size limit.'); }
+  }
   return {
     brief: text(data.brief, 4000, ctx.root),
     decisions: data.decisions.map((s) => text(s, 500, ctx.root)),
@@ -56,18 +63,25 @@ export function cleanPacketData(data, ctx) {
     nextAction: text(data.nextAction, 2000, ctx.root),
     artifacts: data.artifacts.map((a) => artifact(a, ctx)),
     reportedChecks: data.reportedChecks.map((s) => text(s, 500, ctx.root)),
+    ...(resultCards !== undefined ? { resultCards } : {}),
   };
 }
 
 export function packetData(packet) {
-  return Object.fromEntries(PACKET_FIELDS.map((k) => [k, packet[k]]));
+  return Object.fromEntries([...PACKET_FIELDS, ...(Object.hasOwn(packet, 'resultCards') ? ['resultCards'] : [])].map((k) => [k, packet[k]]));
 }
 
 /** The supervisor alone supplies version, authenticated author and observation. */
-export function buildPacket(data, ctx, { version, at, author, provenance, observed }) {
+export function buildPacket(data, ctx, { version, at, author, provenance, observed, resultCardsSource }) {
   if (!Number.isSafeInteger(version) || version < 1 || !Number.isSafeInteger(at) || at < 0 || !PROVENANCE.has(provenance)) invalid('Invalid checkpoint metadata.');
   const clean = cleanPacketData(data, ctx);
   const packet = { schemaVersion: PACKET_SCHEMA, version, at, author, provenance, ...clean, observed };
+  if (resultCardsSource !== undefined) {
+    const s = resultCardsSource, a = s?.author;
+    if (!keys(s, ['version', 'at', 'author']) || !Number.isSafeInteger(s.version) || s.version < 1 || s.version > version || !Number.isSafeInteger(s.at) || s.at < 0
+        || !keys(a, ['kind', 'id', 'source']) || !['human', 'agent', 'remote', 'supervisor'].includes(a.kind) || typeof a.id !== 'string' || ![...SOURCES, 'engine'].includes(a.source)) invalid('Invalid saved card provenance.');
+    packet.resultCardsSource = { version: s.version, at: s.at, author: { kind: a.kind, id: a.id, source: a.source } };
+  }
   if (Buffer.byteLength(JSON.stringify(packet)) > PACKET_MAX_BYTES) throw new PacketError('PAYLOAD_TOO_LARGE', 'Checkpoint exceeds 64 KiB.');
   return packet;
 }

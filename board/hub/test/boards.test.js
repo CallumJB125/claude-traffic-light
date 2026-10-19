@@ -224,3 +224,66 @@ test('migration029 refuses legacy duplicate prefixes atomically; read-only audit
     assert.equal(prefixAudit(db).ready, true);
   } finally { db.close(); }
 });
+
+test('pinboard: writers add and remove pins, viewers only read, links must be https, the board broadcasts and journals', async () => {
+  const fx = await tenancy();
+  try {
+    const { as, users, A, h } = fx;
+    const socket = await h.browser({ token: users.aviewer.token });
+    await socket.subscribe(A.board);
+    const added = await as(users.amember, 'POST', `/api/boards/${A.board}/pins`, { pin: { kind: 'link', label: 'Staging', value: 'https://staging.example.test' } });
+    assert.equal(added.status, 200, added.text);
+    assert.equal(added.body.pins.length, 1);
+    assert.equal(added.body.pins[0].by, h.hub.member(A.member).display_name);
+    const event = await socket.next('board.pins');
+    assert.equal(event.pins[0].label, 'Staging');
+    assert.equal((await as(users.amember, 'POST', `/api/boards/${A.board}/pins`, { pin: { kind: 'link', label: 'Bad', value: 'http://insecure' } })).status, 400);
+    assert.equal((await as(users.amember, 'POST', `/api/boards/${A.board}/pins`, { pin: { kind: 'shell', label: 'Bad', value: 'x' } })).status, 400);
+    assert.equal((await as(users.aviewer, 'POST', `/api/boards/${A.board}/pins`, { pin: { kind: 'note', label: 'No', value: 'x' } })).status, 403);
+    const replaced = await as(users.aadmin, 'PUT', `/api/boards/${A.board}/pins`, { pins: [...added.body.pins, { kind: 'priority', label: 'Ship checkout' }, { kind: 'command', label: 'Tests', value: 'npm test' }] });
+    assert.equal(replaced.status, 200, replaced.text);
+    assert.deepEqual(replaced.body.pins.map((p) => p.kind), ['link', 'priority', 'command']);
+    assert.equal(replaced.body.pins[0].by, h.hub.member(A.member).display_name, 'the original pinner is kept');
+    const snap = await as(users.aviewer, 'GET', `/api/boards/${A.board}`);
+    assert.equal(snap.body.board.settings.pins.length, 3);
+    const removed = await as(users.amember, 'DELETE', `/api/boards/${A.board}/pins/${added.body.pins[0].id}`, {});
+    assert.equal(removed.status, 200, removed.text);
+    assert.equal(removed.body.pins.length, 2);
+    assert.deepEqual(h.db.all("SELECT kind FROM journal WHERE board_id = ? AND kind = 'board.pins_set'", A.board).length, 3);
+  } finally { await fx.h.close(); }
+});
+
+test('shared views and moments: writers save and remove, names replace, viewers only read, the board broadcasts and journals', async () => {
+  const fx = await tenancy();
+  try {
+    const { as, users, A, h } = fx;
+    const socket = await h.browser({ token: users.aviewer.token });
+    await socket.subscribe(A.board);
+    const saved = await as(users.amember, 'POST', `/api/boards/${A.board}/views`, { view: { name: 'Needs me', values: { q: 'login', chips: 'needs-you', junk$: 'x', empty: '  ' } } });
+    assert.equal(saved.status, 200, saved.text);
+    assert.deepEqual(Object.keys(saved.body.views[0].values), ['q', 'chips'], 'only well-formed, non-empty filter values are kept');
+    assert.equal(saved.body.views[0].by, h.hub.member(A.member).display_name);
+    assert.equal((await socket.next('board.views')).views[0].name, 'Needs me');
+    const again = await as(users.aadmin, 'POST', `/api/boards/${A.board}/views`, { view: { name: 'needs me', values: { q: 'checkout' } } });
+    assert.equal(again.body.views.length, 1, 'the same name (case-insensitive) replaces');
+    assert.equal(again.body.views[0].values.q, 'checkout');
+    assert.equal((await as(users.amember, 'POST', `/api/boards/${A.board}/views`, { view: { name: 'Empty', values: {} } })).status, 400);
+    assert.equal((await as(users.aviewer, 'POST', `/api/boards/${A.board}/views`, { view: { name: 'No', values: { q: 'x' } } })).status, 403);
+    assert.equal((await as(users.amember, 'DELETE', `/api/boards/${A.board}/views/nope`, {})).status, 404);
+    assert.equal((await as(users.amember, 'DELETE', `/api/boards/${A.board}/views/${again.body.views[0].id}`, {})).body.views.length, 0);
+
+    const marked = await as(users.amember, 'POST', `/api/boards/${A.board}/moments`, { moment: { kind: 'ship', label: 'Checkout went live', note: 'Behind the flag for 10% of users.' } });
+    assert.equal(marked.status, 200, marked.text);
+    assert.equal(marked.body.moments[0].kind, 'ship');
+    assert.equal((await socket.next('board.moments')).moments[0].label, 'Checkout went live');
+    const second = await as(users.aadmin, 'POST', `/api/boards/${A.board}/moments`, { moment: { kind: 'bogus', label: 'Decided on Postgres' } });
+    assert.equal(second.body.moments[0].kind, 'moment', 'an unknown kind becomes a plain moment and the newest comes first');
+    assert.equal(second.body.moments[1].label, 'Checkout went live');
+    assert.equal((await as(users.aviewer, 'POST', `/api/boards/${A.board}/moments`, { moment: { label: 'No' } })).status, 403);
+    assert.equal((await as(users.amember, 'POST', `/api/boards/${A.board}/moments`, { moment: { note: 'no label' } })).status, 400);
+    assert.equal((await as(users.amember, 'DELETE', `/api/boards/${A.board}/moments/nope`, {})).status, 404);
+    const snap = await as(users.aviewer, 'GET', `/api/boards/${A.board}`);
+    assert.equal(snap.body.board.settings.moments.length, 2);
+    assert.equal(h.db.all("SELECT kind FROM journal WHERE board_id = ? AND kind IN ('board.views_set', 'board.moment_marked')", A.board).length, 5);
+  } finally { await fx.h.close(); }
+});

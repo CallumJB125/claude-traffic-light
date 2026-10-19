@@ -103,6 +103,12 @@ async function askForCode() {
 
 async function continueSignedIn(data) {
   enterPhase('continuing');
+  let phoneFlow = null;
+  try {
+    phoneFlow = sessionStorage.getItem('plexiform-phone-return');
+    sessionStorage.removeItem('plexiform-phone-return');
+  } catch { /* Storage restrictions must not break normal board sign-in. */ }
+  if (/^[A-Za-z0-9_-]{32}$/.test(phoneFlow || '')) { location.replace(`/phone-connect#${phoneFlow}`); return; }
   if (clientInvite) {
     const joined = await call('POST', '/api/client-invites/accept', { t: clientInvite }, { csrf: data?.csrf_token });
     if (joined.ok && joined.data?.workspace?.id) {

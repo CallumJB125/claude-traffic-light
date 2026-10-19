@@ -2,6 +2,8 @@
 const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('sessionsApi', {
   state: () => ipcRenderer.invoke('sessions:state'),
+  selection: () => ipcRenderer.invoke('buddy:session-selection'),
+  onSelection: cb => { const listener = (_e, key) => { if (typeof key === 'string' && /^[\w.-]{1,200}$/.test(key)) cb(key); }; ipcRenderer.on('sessions:selection', listener); return () => ipcRenderer.removeListener('sessions:selection', listener); },
   aiTools: () => ipcRenderer.invoke('sessions:aitools'),
   handover: (action, key) => ipcRenderer.invoke('sessions:handover', action, key),
   timeline: key => ipcRenderer.invoke('timeline:open', key),
@@ -15,6 +17,8 @@ contextBridge.exposeInMainWorld('sessionsApi', {
   attach: (handle, ref) => ipcRenderer.invoke('sessions:attach', handle, ref),
   share: (handle, on) => ipcRenderer.invoke('sessions:share', handle, on),
   connect: () => ipcRenderer.invoke('sessions:connect'),
+  ticketDraft: (handle) => ipcRenderer.invoke('sessions:ticket-draft', handle),
+  ticketCreate: (ref, title, description) => ipcRenderer.invoke('sessions:ticket-create', String(ref), String(title), String(description)),
   burstShare: (repo, on) => ipcRenderer.invoke('burst:handover-share', repo, on),
   burstView: (name, args) => ipcRenderer.invoke('burst:view', name, args),
   burstAction: (id, args) => ipcRenderer.invoke('burst-action', id, args),
@@ -41,9 +45,20 @@ contextBridge.exposeInMainWorld('sessionsApi', {
   // A hand-off the person starts to a teammate (same packet preview as a tool hand-off; sent through the team hub).
   mailTeammates: (key) => ipcRenderer.invoke('mail:teammates', String(key)),
   mailHandoff: (key, to) => ipcRenderer.invoke('mail:handoff', String(key), String(to)),
+  pinAdd: (key, kind, label, value) => ipcRenderer.invoke('pins:add', String(key), String(kind), String(label || ''), String(value || '')),
+  momentMark: (key, kind, label, note) => ipcRenderer.invoke('moments:mark', String(key), String(kind), String(label || ''), String(note || '')),
+  // A comment on a moment (or a card) of the board that session's folder is linked to (src/pinboard.js comment).
+  commentAdd: (key, target, body) => ipcRenderer.invoke('comments:add', String(key), { card_id: typeof target?.card_id === 'string' ? target.card_id : undefined, moment_id: typeof target?.moment_id === 'string' ? target.moment_id : undefined }, String(body || '')),
+  mailLook: (key, to, question) => ipcRenderer.invoke('mail:look', String(key), String(to), String(question || '')),
+  mailAcknowledge: (id) => ipcRenderer.invoke('mail:acknowledge', String(id)),
+  mailResolve: (id, report) => ipcRenderer.invoke('mail:resolve', String(id), String(report || '')),
+  mailReply: (id, text) => ipcRenderer.invoke('mail:reply', String(id), String(text || '')),
   // Hand-off requests from a running AI (src/handoff-requests.js): the person confirms, dismisses, or reads the outcome.
   handoffRequests: () => ipcRenderer.invoke('handoff:list'),
   handoffConfirm: (id) => ipcRenderer.invoke('handoff:confirm', String(id)),
   handoffDismiss: (id) => ipcRenderer.invoke('handoff:dismiss', String(id)),
+  // A teammate handed you a card (src/handoff-people.js): accept reads its handover packet; decline tells them.
+  handoffPersonAccept: (id) => ipcRenderer.invoke('handoff:person-accept', String(id)),
+  handoffPersonDecline: (id) => ipcRenderer.invoke('handoff:person-decline', String(id)),
   onHandoffRequests: (cb) => ipcRenderer.on('handoff:changed', () => cb()),
 });

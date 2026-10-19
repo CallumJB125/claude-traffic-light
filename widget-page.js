@@ -21,6 +21,9 @@
     for (const box of document.querySelectorAll('input[data-key]')) box.checked = !!c[box.dataset.key];
     for (const box of document.querySelectorAll('input[data-kind]')) { box.checked = !!c.agentKinds[box.dataset.kind]; box.disabled = !c.showAgents; }
     $('chips').value = c.agentChipSize;
+    $('snap').value = c.widgetSnap || 'corners';
+    $('wsize').value = c.widgetSize || 'normal';
+    if (document.activeElement !== $('shortcut')) $('shortcut').value = c.widgetShortcut || '';
     const size = $('size');
     size.min = String(s.limits.minWidth);
     size.max = String(s.limits.maxWidth);
@@ -58,6 +61,43 @@
   $('size').addEventListener('input', () => { dragging = true; $('size-label').textContent = `${$('size').value} px`; });
   $('size').addEventListener('change', () => { dragging = false; send(api.size(Number($('size').value)), 'size-note'); });
   for (const b of document.querySelectorAll('.corner')) b.addEventListener('click', () => send(api.move(b.dataset.corner), 'where-note'));
+  $('snap').addEventListener('change', () => send(api.set({ widgetSnap: $('snap').value }), 'where-note'));
+  $('wsize').addEventListener('change', () => send(api.set({ widgetSize: $('wsize').value }), 'size-note'));
+  $('shortcut-save').addEventListener('click', () => send(api.set({ widgetShortcut: $('shortcut').value.trim() }), 'where-note').then((r) => {
+    if (r && !r.ok) $('where-note').textContent = 'That shortcut is not one the system accepts. Try something like CmdOrCtrl+Shift+Space.';
+  }));
+
+  // One swatch per project a session has run in lately; main lists them.
+  let coloursKey = null;
+  function paintColours(list) {
+    const key = JSON.stringify(list);
+    if (key === coloursKey) return;
+    coloursKey = key;
+    const box = $('colours');
+    $('colours-empty').hidden = list.length > 0;
+    box.replaceChildren(...list.map((p) => {
+      const label = document.createElement('label');
+      const pick = document.createElement('input');
+      pick.type = 'color';
+      pick.value = p.colour || '#7a7a85';
+      pick.setAttribute('aria-label', `Colour for ${p.name}`);
+      pick.addEventListener('change', () => send(api.set({ projectColours: { [p.name]: pick.value } }), 'colours-note').then(loadColours));
+      const name = document.createElement('span');
+      name.className = 'name';
+      name.textContent = p.name;
+      label.append(pick, name);
+      if (p.colour) {
+        const clear = document.createElement('button');
+        clear.type = 'button';
+        clear.className = 'link';
+        clear.textContent = 'Clear';
+        clear.addEventListener('click', (e) => { e.preventDefault(); send(api.set({ projectColours: { [p.name]: null } }), 'colours-note').then(loadColours); });
+        label.append(clear);
+      }
+      return label;
+    }));
+  }
+  const loadColours = () => (api.recentProjects ? api.recentProjects() : Promise.resolve([])).then((l) => paintColours(Array.isArray(l) ? l : [])).catch(() => {});
   $('lights').addEventListener('click', () => api.open('lights'));
   $('prefs').addEventListener('click', () => api.open('settings'));
 
@@ -67,6 +107,7 @@
     timers = [];
     if (document.hidden) return;
     refresh().then(shoot);
+    loadColours();
     timers = [setInterval(refresh, STATE_MS), setInterval(shoot, PREVIEW_MS)];
   }
   document.addEventListener('visibilitychange', sync);

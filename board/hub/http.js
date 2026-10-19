@@ -44,6 +44,8 @@ import { Messaging } from './messaging.js';
 import { handleWebhook as billingWebhook } from './billing/webhook.js';
 import { registerHandoffRoutes } from './activity-handoff.js';
 import { registerReviewRoutes } from './reviews.js';
+import { PhoneAuth } from './identity/phone-auth.js';
+import { phoneCors } from './phone-cors.js';
 import { registerTriggerRoutes } from './triggers.js';
 
 const MAX_BODY = 1024 * 1024;
@@ -72,7 +74,7 @@ const requestBinding = (route, params, body) => createHash('sha256').update(JSON
 const PREPARE_REPLAY = Object.freeze({ status: 409, body: { error: { code: 'CONFLICT', message: 'This request was already sent. Reload the page.', reason: 'REPLAYED' } } });
 // An invite's answer is its link and code, shown once: the replay entry never holds them.
 const INVITE_REPLAY = Object.freeze({ status: 409, body: { error: { code: 'CONFLICT', message: 'This invite was already made. Resend it to get a new link.', reason: 'REPLAYED' } } });
-const SHARED_BROWSER = new Set(['states', 'liveness', 'fence', 'scope', 'overlap', 'cardface', 'handover', 'protocol', 'brand', 'ai', 'planning', 'workflow-execution', 'workflow-execution-controls', 'packet-text', 'capture-lane', 'review']);
+const SHARED_BROWSER = new Set(['states', 'liveness', 'fence', 'scope', 'overlap', 'cardface', 'handover', 'protocol', 'brand', 'ai', 'planning', 'workflow-execution', 'workflow-execution-controls', 'packet-text', 'capture-lane', 'review', 'mentions']);
 const CSP = "default-src 'self'; connect-src 'self'; img-src 'self' https://avatars.githubusercontent.com; style-src 'self'; script-src 'self'; base-uri 'none'; frame-ancestors 'none'";
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.md': 'text/markdown; charset=utf-8', '.webmanifest': 'application/manifest+json' };
 
@@ -107,7 +109,7 @@ export const RELAY_SCOPE_ROUTES = new Set([
 ]);
 // Accounts mode: pages served without auth (their JS talks to /api/auth/*;
 // tokens ride in the URL fragment, which never reaches the server).
-const ACCOUNT_PAGES = { '/signin': 'signin.html', '/auth/email': 'signin.html', '/invite': 'invite.html', '/clients': 'clients.html', '/client-invite': 'client-invite.html', '/remote-consent': 'remote-consent.html', '/connections': 'remote-grants.html', '/billing': 'billing.html',
+const ACCOUNT_PAGES = { '/phone-connect': 'phone-connect.html', '/signin': 'signin.html', '/auth/email': 'signin.html', '/invite': 'invite.html', '/clients': 'clients.html', '/client-invite': 'client-invite.html', '/remote-consent': 'remote-consent.html', '/connections': 'remote-grants.html', '/billing': 'billing.html',
   // Phone control PWA (PHONE.md): its service worker lives under /phone/ so its scope is /phone/ only.
   '/phone': 'phone.html', '/phone/': 'phone.html', '/phone/sw.js': 'phone-sw.js', '/phone/manifest.webmanifest': 'phone.webmanifest' };
 
@@ -357,6 +359,11 @@ export function createHttpHandler({ hub, api, config, integrations = null, githu
 
   // `mail` appears only on a hub that can send mail; it says when a send last failed, and whether
   // sends are failing in a row (email is then off in /api/auth/methods), never to whom or why.
+  if (hub.crashReports) route('POST', '/api/crash-reports/v1', ({ body, ip }) => {
+    limitOrThrow(hub, 'crash_ip', ipKey(ip));
+    limitOrThrow(hub, 'crash_global', 'all');
+    return hub.crashReports.accept(body);
+  }, { auth: 'none', maxBody: 2048, strictBody: true });
   route('GET', '/api/health', ({ req }) => {
     // A tunnel also connects from loopback: proxy metadata excludes this
     // local operator field. Never expose sizes, limits, paths or error text.
@@ -389,6 +396,13 @@ export function createHttpHandler({ hub, api, config, integrations = null, githu
     hub.messaging.routes(route);
     hub.publicApi?.routes(route);
     const acc = hub.accounts;
+    if (config.publicUrl) {
+      const phoneAuth = new PhoneAuth(hub);
+      route('POST', '/api/auth/phone/start', (ctx) => phoneAuth.start(ctx.body, ctx), { auth: 'none', replay: false });
+      route('GET', '/api/auth/phone/:id', ({ params }) => phoneAuth.describe(params.id), { auth: 'user' });
+      route('POST', '/api/auth/phone/approve', (ctx) => phoneAuth.approve(ctx.body, ctx), { auth: 'user', replay: false });
+      route('POST', '/api/auth/phone/exchange', (ctx) => phoneAuth.exchange(ctx.body, ctx), { auth: 'none', replay: false });
+    }
     route('GET', '/api/auth/methods', ({ ip }) => acc.methods({ ip }), { auth: 'none' });
     route('POST', '/api/auth/email/start', async ({ body, ip, ident, req, res }) => acc.start(body, { ip, ident, req, res, human: await acc.human(body, { ip }) }), { auth: 'optional' });
     route('POST', '/api/auth/email/verify', ({ body, ip, ident, req, res }) => acc.verify(body, { ip, ident, req, res }), { auth: 'optional' });
@@ -405,6 +419,9 @@ export function createHttpHandler({ hub, api, config, integrations = null, githu
     route('DELETE', '/api/account', ({ ident, body, ip }) => acc.deleteAccount(ident, body, { ip }), { auth: 'user' });
     route('GET', '/api/account/devices', ({ ident }) => acc.listDevices(ident), { auth: 'user' });
     route('DELETE', '/api/account/devices/:id', ({ ident, params, ip }) => acc.revokeDevice(ident, params.id, { ip }), { auth: 'user' });
+    // Team depth lane B: the signed-in person's hub inbox, across all their memberships.
+    route('GET', '/api/account/inbox', ({ ident, query }) => api.listInbox(userMembers(hub, ident.user.id), query), { auth: 'user' });
+    route('POST', '/api/account/inbox/read', ({ ident, body }) => api.readInbox(userMembers(hub, ident.user.id), body), { auth: 'user', replay: false });
     // The older web asks /api/me: the account plus, once the user is in a
     // team, the legacy {member, org, boards} of the chosen one.
     route('GET', '/api/me', ({ ident, req, query }) => {
@@ -538,6 +555,15 @@ export function createHttpHandler({ hub, api, config, integrations = null, githu
   route('POST', '/api/boards/:board_id/archive', ({ member, params }) => api.setBoardArchived(member, params.board_id, true));
   route('POST', '/api/boards/:board_id/restore', ({ member, params }) => api.setBoardArchived(member, params.board_id, false));
   route('GET', '/api/boards/:board_id', ({ member, params, query }) => selectedContext(hub, api.snapshot(member, params.board_id, { includeArchived: query.get('include_archived') === '1' }), communicationOptions(query).boardIds));
+  route('PUT', '/api/boards/:board_id/pins', ({ member, params, body, ident }) => api.setPins(member, params.board_id, body, { cred: ident?.cred ?? null }), { writeScope: 'board' });
+  route('POST', '/api/boards/:board_id/pins', ({ member, params, body, ident }) => api.setPins(member, params.board_id, body, { cred: ident?.cred ?? null, mode: 'append' }), { writeScope: 'board' });
+  route('POST', '/api/boards/:board_id/views', ({ member, params, body, ident }) => api.setViews(member, params.board_id, body, { cred: ident?.cred ?? null }), { writeScope: 'board' });
+  route('DELETE', '/api/boards/:board_id/views/:view_id', ({ member, params, body, ident }) => api.setViews(member, params.board_id, { ...body, id: params.view_id }, { cred: ident?.cred ?? null, mode: 'remove' }), { writeScope: 'board' });
+  route('POST', '/api/boards/:board_id/moments', ({ member, params, body, ident }) => api.setMoments(member, params.board_id, body, { cred: ident?.cred ?? null }), { writeScope: 'board' });
+  route('DELETE', '/api/boards/:board_id/moments/:moment_id', ({ member, params, body, ident }) => api.setMoments(member, params.board_id, { ...body, id: params.moment_id }, { cred: ident?.cred ?? null, mode: 'remove' }), { writeScope: 'board' });
+  route('GET', '/api/boards/:board_id/moments/:moment_id/comments', ({ member, params }) => api.momentComments(member, params.board_id, params.moment_id));
+  route('POST', '/api/boards/:board_id/moments/:moment_id/comments', ({ member, params, body, ident }) => api.addMomentComment(member, params.board_id, params.moment_id, body, { cred: ident?.cred ?? null }), { writeScope: 'board' });
+  route('DELETE', '/api/boards/:board_id/pins/:pin_id', ({ member, params, body, ident }) => api.setPins(member, params.board_id, { ...body, id: params.pin_id }, { cred: ident?.cred ?? null, mode: 'remove' }), { writeScope: 'board' });
   route('GET', '/api/boards/:board_id/labels', ({ member, params }) => api.listLabels(member, params.board_id));
   route('POST', '/api/boards/:board_id/labels', ({ member, params, body, ident }) => api.createLabel(member, params.board_id, body, { cred: ident?.cred ?? null }), { writeScope: 'board' });
   route('PATCH', '/api/boards/:board_id/labels/:name', ({ member, params, body, ident }) => api.patchLabel(member, params.board_id, params.name, body, { cred: ident?.cred ?? null }), { writeScope: 'label' });
@@ -548,7 +574,7 @@ export function createHttpHandler({ hub, api, config, integrations = null, githu
   route('POST', '/api/boards/:board_id/cards', ({ member, params, body, ident }) => api.createCard(member, params.board_id, body, { cred: ident?.cred ?? null }), { collaboration: true });
   route('POST', '/api/boards/:board_id/work-capture', ({ member, params, body, ident }) => workCapture.observe(member, params.board_id, body, ident?.cred), { replay: false, maxBody: 12 * 1024 });
   route('POST', '/api/boards/:board_id/repos', ({ member, params, body }) => api.addBoardRepo(member, params.board_id, body));
-  route('GET', '/api/boards/:board_id/presence', ({ member, params }) => { api.boardFor(member, params.board_id); return hub.presence.view(params.board_id); }, { limit: 'presence_member' });
+  route('GET', '/api/boards/:board_id/presence', ({ member, params }) => { api.boardFor(member, params.board_id); return hub.presence.boardView(params.board_id); }, { limit: 'presence_member' });
   route('GET', '/api/my-day', ({ member, ident }) => myDay(hub, ident ? { userId: ident.user.id, cred: ident.cred } : { member }), { auth: config.auth === 'accounts' ? 'user' : 'member', replay: false });
   route('GET', '/api/team-session-directory', ({ member, ident }) => teamSessionDirectory(hub, member, ident?.cred ?? null), { replay: false, limit: 'communication_read_member', responseGuard: (_ctx, out) => guardTeamSessionDirectory(hub, out) });
   route('GET', '/api/cards/:card_id', ({ member, params, query }) => selectedContext(hub, api.detail(member, params.card_id), communicationOptions(query).boardIds));
@@ -580,6 +606,11 @@ export function createHttpHandler({ hub, api, config, integrations = null, githu
   route('GET', '/api/cards/:card_id/messages', ({ member, params, ident, query }) => communication.staffListMessages(member, params.card_id, ident?.cred, communicationOptions(query)), { limit: 'communication_read_member' });
   route('POST', '/api/cards/:card_id/messages', ({ member, params, body, ident, query }) => communication.staffSendMessage(member, params.card_id, body, ident?.cred, communicationOptions(query)), { replay: false });
   route('POST', '/api/cards/:card_id/comments', ({ member, params, body, ident }) => api.comment(member, params.card_id, body, { cred: ident?.cred ?? null }), { collaboration: true });
+  // Person-to-person hand-off (team depth, lane D).
+  route('POST', '/api/cards/:card_id/handoffs', ({ member, params, body, ident }) => api.requestHandoff(member, params.card_id, body, { cred: ident?.cred ?? null }), { collaboration: true, maxBody: 4096 });
+  route('POST', '/api/cards/:card_id/handoffs/:handoff_id/accept', ({ member, params, body, ident }) => api.answerHandoff(member, params.card_id, params.handoff_id, 'accepted', body, { cred: ident?.cred ?? null }), { collaboration: true, maxBody: 1024 });
+  route('POST', '/api/cards/:card_id/handoffs/:handoff_id/decline', ({ member, params, body, ident }) => api.answerHandoff(member, params.card_id, params.handoff_id, 'declined', body, { cred: ident?.cred ?? null }), { collaboration: true, maxBody: 1024 });
+  route('POST', '/api/cards/:card_id/handoffs/:handoff_id/cancel', ({ member, params, body, ident }) => api.answerHandoff(member, params.card_id, params.handoff_id, 'cancelled', body, { cred: ident?.cred ?? null }), { collaboration: true, maxBody: 1024 });
   route('POST', '/api/cards/:card_id/handover/salvage', ({ member, params, body, ident }) => api.appendSalvage(member, params.card_id, body, { cred: ident?.cred ?? null }), { collaboration: true, limit: 'handover_salvage_member', maxBody: 16_384 });
   route('GET', '/api/cards/:card_id/handover', ({ member, params, query, res }) => {
     const h = api.handover(member, params.card_id);
@@ -736,6 +767,13 @@ export function createHttpHandler({ hub, api, config, integrations = null, githu
       if (!t || t.org_id !== member.org_id) throw new HubError('NOT_FOUND', 'member not found');
       return integrations.identityUnlink({ connectionId: params.id, memberId: t.id, by: 'admin', actorId: member.id });
     }, { integrationAccess: 'admin' });
+    // Create ticket from a session: the member approved this exact title and description.
+    route('POST', '/api/integrations/:id/issues', async ({ member, params, body, integrationCurrent }) => {
+      own(member, params.id);
+      const out = await integrations.createIssue({ member, connectionId: params.id, title: body.title, description: body.description });
+      integrationCurrent();
+      return { issue: out };
+    }, { integrationAccess: 'member' });
     route('GET', '/api/integrations/:id/audit', ({ member, params, query }) => {
       api.requireAdmin(member);
       own(member, params.id);
@@ -828,6 +866,9 @@ export function createHttpHandler({ hub, api, config, integrations = null, githu
       // Validate the original path before URL's dot-segment normalization.
       decodeURIComponent(rawPath);
     } catch { return sendJson(res, 400, { error: { code: 'VALIDATION', message: 'bad request path' } }); }
+    const fromPhone = phoneCors(req, res, config, url.pathname, RELAY_SCOPE_ROUTES);
+    if (req.method === 'OPTIONS' && fromPhone) { res.writeHead(204); res.end(); return; }
+    if (config.phoneOrigin && req.headers.origin === config.phoneOrigin && config.phoneOrigin !== config.publicUrl && !fromPhone) return sendJson(res, 403, { error: { code: 'FORBIDDEN', message: 'phone origin is not allowed here' } });
     if (loopbackOnly(config) && !devRequestOk(req)) return sendJson(res, 403, { error: { code: 'FORBIDDEN', message: `${config.auth} auth serves direct loopback requests only` } });
     if (config.auth === 'local' && !localCookieOk(hub, req)) return sendJson(res, 401, { error: { code: 'UNAUTHENTICATED', message: 'not signed in' } });
     try {
@@ -1011,7 +1052,7 @@ export function createHttpHandler({ hub, api, config, integrations = null, githu
       const ip = clientIp(req, config);
       if (r.mutating) limitOrThrow(hub, r.auth === 'none' ? 'login_ip' : 'mutate_ip', ipKey(ip));
       if (r.mutating) {
-        if (!sameOrigin(req, config.publicUrl)) throw new HubError('FORBIDDEN', 'cross-origin request');
+        if (!fromPhone && !sameOrigin(req, config.publicUrl)) throw new HubError('FORBIDDEN', 'cross-origin request');
         if (!/^application\/json\b/i.test(req.headers['content-type'] ?? '')) throw new HubError('VALIDATION', 'Content-Type must be application/json');
       }
       const pick = { resourceOrg: resourceOrg(r, params), requestedOrg: req.headers['board-org'] || url.searchParams.get('org') || null };
@@ -1026,6 +1067,7 @@ export function createHttpHandler({ hub, api, config, integrations = null, githu
           // A phone's relay-scoped sign-in works only on the relay and sign-out (migration 056).
           if (ident?.cred.scope === 'relay' && !RELAY_SCOPE_ROUTES.has(`${r.method} ${r.pattern}`)) throw new HubError('FORBIDDEN', 'this phone sign-in can only use remote sessions');
         }
+        if (fromPhone && ident && (ident.cred.kind !== 'device' || ident.cred.scope !== 'relay')) throw new HubError('FORBIDDEN', 'phone requests require a relay device');
         if (ident?.setCookie) appendCookie(res, ident.setCookie);
         // Bearer (desktop) requests carry no ambient credential: no CSRF token.
         // On an optional-auth route a cookie that fails CSRF is just ignored.

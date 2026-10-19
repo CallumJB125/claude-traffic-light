@@ -30,7 +30,10 @@ Source of facts: hooks + `src/handover-transcripts.js` (`factsFrom`), the same f
 
 ## Reading it back (every AI)
 
-- `hooks/team-brief.js` (SessionStart, all adapters that support context injection): prints ≤1500 chars: who is working on what in this repo, last 5 changes, open handovers, collisions. Silent and fast (<1 s, 800 ms hub timeout) when offline, unlinked or sharing is off.
+- `hooks/team-brief.js`: prints ≤1500 characters at supported context boundaries. Claude, Codex lifecycle and Gemini `SessionStart` hooks restore a current brief on start/resume and provider-reported post-compaction starts. Claude `UserPromptSubmit` also refreshes changed shared context before a new turn. Codex/Gemini ordinary-turn injection is not claimed. No hook controls when the provider compacts.
+- The brief contains permission-filtered reports for this repository: current work, recently shared summaries/goals, open handovers and reported path overlaps. Shared text is data, not instructions or permission to edit/integrate. Details remain available through the existing memory tools; private transcripts are never injected.
+- Each response has an opaque version. After stdout is fully written, a private local receipt stores only that version, its times and `hook_output_written`; agent acknowledgement is explicitly `not_observed`. An ordinary Claude turn can receive bounded changed records since that version; unchanged context is silent. A reset, receipt expiry, app restart or missing version falls back to a current snapshot. A changed context version is not a write lease and does not imply all uncapped records were read by the agent.
+- Before and after a brief's hub read, the app resolves current sign-in, linked repo and sharing permission again. Offline, revoked or changed routes produce no cached context. The hook gives up after 800 ms. Claude turn briefs bypass the status-only fast hook, whose stdout is discarded. Hooks remain silent when disabled; no new sharing default is introduced.
 - MCP tools in `src/mcp-server.js`: `team_activity({repo?, since_seq?})`, `who_touched({path})`, `team_handover({record_id})` (returns the scrubbed handover the author chose to share), `team_brief()`, `team_memory_search({query, here?, repo?, since?, limit?})`, `team_memory_get({record_id})`.
 
 ## Team memory (`board/hub/activity/memory.js`, migration 064)

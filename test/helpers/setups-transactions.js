@@ -12,10 +12,10 @@ function fixture(t,options={}) {
   // and mixed-case mkdtemp suffixes can legitimately trip the entropy guard.
   // Keep that guard unchanged; exclusively create a private lowercase UUID
   // directory under the canonical POSIX temporary root for this one fixture.
-  const temp=options.lowEntropyPath
+  const temp=options.directory??(options.lowEntropyPath
     ?path.join(fs.realpathSync(process.platform==='win32'?os.tmpdir():'/tmp'),'pf-'+crypto.randomUUID())
-    :testTempDir('plexiform-setups-transaction-');
-  if(options.lowEntropyPath)fs.mkdirSync(temp,{mode:0o700});t.after(()=>fs.rmSync(temp,{recursive:true,force:true}));
+    :testTempDir('plexiform-setups-transaction-'));
+  if(options.lowEntropyPath&&!options.directory)fs.mkdirSync(temp,{mode:0o700});t.after(()=>fs.rmSync(temp,{recursive:true,force:true}));
   const home=path.join(temp,'profile'),appData=path.join(temp,'app-data');fs.mkdirSync(home,{mode:0o700});fs.mkdirSync(appData,{mode:0o700});
   const root=path.join(appData,'setups-transactions');
   const file={id:crypto.randomUUID(),source_id:options.source??'codex',relative_path:options.relative??'.codex/AGENTS.md',format:options.format??'text',content:options.content??'Write useful notes.\n',note:''};

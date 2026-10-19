@@ -61,7 +61,7 @@ function stack({ host = fakeHost(), extra = {} } = {}) {
   const card = () => doc.querySelector('.owned-session');
   const start = async () => { const o = doc.querySelector('#provider-list input[value="codex"]'); o.checked = true; o.dispatchEvent(new dom.window.Event('change')); doc.getElementById('start-session').click(); await tick(); };
   const btn = (label) => [...(card()?.querySelectorAll('button') ?? [])].find((b) => b.textContent === label);
-  return { dom, doc, main, host, card, btn, api, start, ready: async () => { ready(); await tick(); }, close: () => { main.close(); dom.window.close(); } };
+  return { dom, doc, main, host, card, btn, api, ctx, start, ready: async () => { ready(); await tick(); }, close: () => { main.close(); dom.window.close(); } };
 }
 
 test('Overview Share…: off by default; share with a team, see who has access, stop sharing', async () => {
@@ -153,4 +153,19 @@ test('Overview Share…: a session started outside Plexiform (codex-daemon) is n
     assert.equal(s.main.sharedTarget(session), null);
     assert.ok(!s.host.calls.some(([k]) => k === 'share'));
   } finally { s.close(); }
+});
+
+test('owned-session Share panel displays exact remote decision and grants/revokes through actual IPC',async()=>{
+ const crypto=require('node:crypto'), host=fakeHost();let p;
+ host.shareSession=async req=>{const share={id:crypto.randomUUID(),session:req.session,team:{id:req.team,name:'Dev team'},scope:'interact',expiresAt:null,members:[{id:'bob',name:'Bob',canSend:true}]};host.shares.set(share.id,share);p={id:crypto.randomUUID(),share:share.id,title:'Review parser',text:'Inspect only this parser',requester:{id:'bob',name:'Bob'},version:2,generation:1,digest:'a'.repeat(64),status:'pending',acknowledgedAt:null,expiresAt:null};return{ok:true,share};};
+ host.proposalList=async(_share,fresh)=>fresh()?{ok:true,proposals:[{...p}]}:{ok:false};
+ host.proposalApprove=async(req,fresh)=>{assert.equal(req.digest,p.digest);assert.equal(req.version,2);assert.equal(fresh(),true);host.calls.push(['approve',req]);p.status='approved';p.acknowledgedAt=new Date().toISOString();p.expiresAt=new Date(Date.now()+600000).toISOString();return{ok:true,proposal:{...p}};};
+ host.proposalRevoke=async(req,fresh)=>{assert.equal(fresh(),true);host.calls.push(['revoke',req]);p.status='revoked';return{ok:true,proposal:{...p}};};
+ const s=stack({host});try{
+  await s.ready();await s.start();s.btn('Share…').click();await tick();const selects=[...s.card().querySelectorAll('.share-panel select')];selects[1].value='interact';s.btn('Share').click();await tick();
+  s.btn('Review team proposals').click();await tick();assert.match(s.card().textContent,/Inspect only this parser/);assert.match(s.card().textContent,/Requested by Bob · decision version 2/);
+  s.btn('Approve this message for 10 minutes').click();await tick();assert.equal(host.calls.filter(c=>c[0]==='approve').length,1);
+  s.btn('Revoke grant').click();await tick();assert.equal(host.calls.filter(c=>c[0]==='revoke').length,1);assert.match(s.card().textContent,/revoked/);
+  s.ctx.foreground=false;assert.equal((await s.api.interaction.proposalApprove({share:p.share,id:p.id,version:2,digest:p.digest,expiresInS:600})).ok,false);
+ }finally{s.close();}
 });

@@ -40,8 +40,8 @@ too-long `runner.sock` path refuses to start (`SOCKET_PATH_TOO_LONG`).
 
 Opening the sidebar Tasks page or Tasks window lazily starts
 `board/tasks-engine/utility-entry.js` under `src/tasks-process.js`. The helper
-uses the private `<userData>/tasks` folder and detects only Codex by default;
-opening the page does not invoke Claude. The backend registry still supports
+uses the private `<userData>/tasks` folder and detects Codex and Claude Code on macOS/Linux, with Codex as the default.
+Native Windows only enables Codex because Claude lacks a supported provider sandbox. The backend registry still supports
 explicit provider integrations. The service reads its private token and
 connects through the real socket. Packaged builds never use the mock service.
 
@@ -117,6 +117,48 @@ their processes for restart recovery and only closes this engine's IPC and store
   finished tasks pruned after 30 days / beyond the newest 500, per-task package
   caches (global caches are not writable).
 
-Not yet: `merge`, `openPr`, `switchAi`, tmux/tab surfaces, task-to-task
+Local isolated tasks also support reviewed `merge`: `phase:preview` snapshots
+the exact source through a private index and computes the integration without
+editing either checkout. `phase:apply` requires the matching one-use review ID,
+hash and explicit confirmation within five minutes. Dirty destinations,
+conflicts, stale source/index/branch/HEAD/config, custom filters/merge drivers,
+symlink/gitlink changes and untracked credential-shaped files are held for
+manual resolution. Successful integration creates a local merge commit and
+keeps the source worktree. Nothing is pushed. Only the full local-user credential
+may use this path; relay participants cannot integrate. Independent writers do
+not share the helper's repository lock, so this is not a global filesystem lock.
+Integration also binds the existing task checkpoint/decision version and local
+state/claims journal sequence. Overlapping, unknown, truncated or in-place
+active claims block review with named tasks to inspect. A missing heartbeat,
+terminal handoff or unconfirmed stop does not release the claim. This inventory
+covers this Tasks engine; it does not assert cross-device or hub ownership.
+
+Provider handover uses `switchAi` preview/apply on stopped, isolated Git tasks
+in `parked` or `failed{limit}`. Review shows the source diff, existing checkpoint,
+queued task messages, exact next AI, retained permission level and spend cap.
+The renderer handle is opaque; native confirmation consumes a five-minute,
+single-use helper review bound to source tree/index/config/branch, context,
+pending messages and provider availability. The queued launch checks the same
+workspace and expiry again. Pending notes are marked delivered only at dispatch.
+An expired/changed review, cancellation, restart, timeout or launch error before
+dispatch restores the original stopped provider; another switch needs a fresh
+review. Claude and Codex are the supported targets; an AI
+that cannot retain the approval mode or native spend cap is refused. In-place,
+non-Git, unsupported/unsafe/binary or oversized changes need manual handover.
+The new provider uses a fresh session and its default model. Existing worktree,
+files, total spend and task history remain; prior plan approval does not carry
+over. A queued receipt is not proof of a provider response. Fixtures exercise
+actual adapters with offline CLI processes; real provider/native acceptance
+remains separate.
+
+Draft pull requests use `openPr` preview/apply/receipt. Commit and publish the
+task branch before review: this path never commits or pushes. It pins the
+github.com origin, account, base/head, task context and exact draft text for
+five minutes. An uncertain request consumes the attempt durably; only a
+read-only receipt lookup follows. GitHub branches remain mutable after review,
+and changed receipt revisions are shown explicitly. Review and native dialog
+acceptance are local evidence; real GitHub creation acceptance is separate.
+
+Not yet: tmux/tab creation surfaces, task-to-task
 messaging tools, `.buddy/claims.json`, approval/ask timeouts, sleep detection,
 transient-429 retries, the per-project `bypass` opt-in.

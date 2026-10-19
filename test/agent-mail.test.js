@@ -242,7 +242,7 @@ test('accept: the native confirm shows the full packet, the task is created only
 test('register: every mail channel is refused outside the sessions page', async () => {
   const handlers = new Map();
   AgentMail.register({ ipcMain: { handle: (c, fn) => handlers.set(c, fn) }, allowed: (e) => e.page === 'sessions', mail: { list: async () => ({ ok: true }) }, tasks: () => ({}), confirm: async () => true, pickFolder: async () => null, ask: async () => ({}) });
-  assert.deepEqual([...handlers.keys()].sort(), ['mail:accept', 'mail:answer', 'mail:ask-ai', 'mail:decline', 'mail:handoff', 'mail:list', 'mail:open', 'mail:pick-folder', 'mail:release', 'mail:teammates']);
+  assert.deepEqual([...handlers.keys()].sort(), ['mail:accept', 'mail:acknowledge', 'mail:answer', 'mail:ask-ai', 'mail:decline', 'mail:handoff', 'mail:list', 'mail:look', 'mail:open', 'mail:pick-folder', 'mail:release', 'mail:reply', 'mail:resolve', 'mail:teammates', 'mail:waiting']);
   for (const fn of handlers.values()) assert.deepEqual(await fn({ page: 'tasks' }), { ok: false, error: 'Not allowed.' });
   assert.deepEqual(await handlers.get('mail:list')({ page: 'sessions' }), { ok: true });
 });
@@ -448,4 +448,32 @@ test('mail:teammates and mail:handoff: no packet, unknown teammate, cancel, then
   assert.equal(r.ok, true);
   assert.match(r.note, /Handed off to Bob/);
   assert.deepEqual(log, [['confirm', 'Bob (teammate)'], ['confirm', 'Bob (teammate)'], ['send', 'u1']]);
+});
+
+test('Can you look at this?: sent as a marked handoff, seen on open, I’ll handle it, reply and done flow back to the sender’s Waiting on', async (t) => {
+  const { r, mailFor } = await rig(t);
+  const a = mailFor(r.winA);
+  const b = mailFor(r.bob, { enabled: () => true });
+  const sent = await a.askLook({ to: 'bob', question: 'Is the retry loop in src/export.js safe?', context: 'Export streaming' });
+  assert.equal(sent.ok, true, JSON.stringify(sent));
+  assert.equal(sent.to, 'Bob');
+  assert.deepEqual((await a.sent()), [], 'look requests are not listed as hand-offs');
+  let w = await a.waitingOn();
+  assert.equal(w.length, 1); assert.equal(w[0].state, 'sent'); assert.match(w[0].question, /retry loop/);
+  b.sync(); await new Promise((res) => setTimeout(res, 50));
+  const inbox = (await b.list()).inbox;
+  assert.equal(inbox.length, 1); assert.equal(inbox[0].look.question.includes('retry loop'), true);
+  assert.equal((await b.open(inbox[0].id)).ok, true);
+  a.poke(); await new Promise((res) => setTimeout(res, 20));
+  assert.equal((await a.waitingOn())[0].state, 'seen');
+  assert.equal((await b.acknowledge(inbox[0].id)).ok, true);
+  await new Promise((res) => setTimeout(res, 50));
+  assert.equal((await b.list()).inbox.length, 1, 'still in the inbox until done');
+  assert.equal((await a.waitingOn())[0].state, 'handling');
+  assert.equal((await b.replyLook(inbox[0].id, 'Looks fine, one nit.')).ok, true);
+  assert.equal((await b.resolveLook(inbox[0].id, 'Reviewed. One nit left as a comment.')).ok, true);
+  await new Promise((res) => setTimeout(res, 50));
+  assert.deepEqual(await a.waitingOn(), []);
+  assert.equal((await b.list()).inbox.length, 0);
+  b.stop();
 });

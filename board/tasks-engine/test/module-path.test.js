@@ -13,13 +13,17 @@ test('engine imports its complete schema from an escaped installation directory'
   const root = testTempDir('pf-module-');
   try {
     const fixture = path.join(root, 'Plexiform space #100% café');
-    const engineDir = path.join(fixture, 'tasks-engine');
+    const fixtureBoard = path.join(fixture, 'board');
+    const engineDir = path.join(fixtureBoard, 'tasks-engine');
     fs.mkdirSync(engineDir, { recursive: true });
-    fs.writeFileSync(path.join(fixture, 'package.json'), JSON.stringify({ type: 'module' }));
+    fs.writeFileSync(path.join(fixture, 'package.json'), JSON.stringify({ type: 'commonjs' }));
+    fs.copyFileSync(path.join(board, 'package.json'), path.join(fixtureBoard, 'package.json'));
+    fs.mkdirSync(path.join(fixture, 'src'));
+    fs.copyFileSync(path.join(board, '../src/result-cards.js'), path.join(fixture, 'src/result-cards.js'));
     // Existing source and dependencies stay read-only. Junctions also let the
     // same import fixture run on Windows without symbolic-link privileges.
     for (const name of ['tasks-api', 'shared', 'runner', 'mcp']) {
-      fs.symlinkSync(path.join(board, name), path.join(fixture, name), process.platform === 'win32' ? 'junction' : 'dir');
+      fs.symlinkSync(path.join(board, name), path.join(fixtureBoard, name), process.platform === 'win32' ? 'junction' : 'dir');
     }
     const engineFile = path.join(engineDir, 'engine.js');
     for (const name of fs.readdirSync(path.join(board, 'tasks-engine'))) {

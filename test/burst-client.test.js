@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { createBurstClient, isAllowed, parseAdminAddress, atLeast } = require('../src/burst-client.js');
+const { createBurstClient, isAllowed, parseAdminAddress, atLeast, capabilitiesFor, CAPABILITY_NAMES } = require('../src/burst-client.js');
 const { createFakeBurst, stateV019, stateV012, upgradeStatus } = require('./fixtures/fake-burst.js');
 const { testTempDir } = require('./helpers/tmp');
 
@@ -41,7 +41,7 @@ test('v0.19 answering as the LaunchAgent: present, whitelisted snapshot, full ca
   assert.equal(d.state.version, '0.19.0');
   assert.equal(d.state.active, true);
   assert.equal(d.state.mode, 'base-url');
-  assert.deepEqual(d.capabilities, { state: true, usage: true, upgradeStatus: true, handoverAudit: true, handoverFile: true, testConnection: true });
+  assert.deepEqual(d.capabilities, { state: true, usage: true, upgradeStatus: true, handoverAudit: true, handoverFile: true, testConnection: true, looseEnds: false, keepAwake: false, mods: false, finder: false, handoffTaken: false, consoleRepair: false, remoteControl: false, intelligentCompaction: false, codex: false });
   assert.deepEqual(d.upgrade, { canUpgrade: true, upToDate: false, latestVersion: '0.20.0', behind: 3, error: '' });
   assert.ok(!JSON.stringify(d).includes('"secret"'));
   for (const r of t.fake.requests) { assert.equal(r.method, 'GET'); assert.equal(r.headers.host, '127.0.0.1'); assert.equal(r.headers['x-claude-burst-admin'], undefined); }
@@ -242,7 +242,12 @@ const okRoutes = () => Object.fromEntries(Object.values(MUTATE_ALLOW).filter((m)
 test('allow-list: inspect-item, log and every secret path stay unreachable; the new reads are allowed', () => {
   for (const p of ['/api/inspect-item?i=1', '/api/inspect-item', '/api/log', '/api/secondary-key', '/api/settings-save', '/api/hotspot-password', '/api/responses', '/api/inspect?i=1', '/api/settings?x=1']) assert.equal(isAllowed('GET', p), false, p);
   for (const p of ['/api/requests?limit=50', '/api/history?days=7', '/api/inspect?session=s&engine=codex', '/api/automask', '/api/mac', '/api/settings', '/api/audit?limit=50', '/api/mod-status', '/api/intelligent-compaction']) assert.ok(isAllowed('GET', p), p);
-  for (const m of Object.values(MUTATE_ALLOW)) assert.ok(!/secondary-key|settings-save|hotspot|secondary$|force|revert|install|config/.test(m.path), m.path);
+  // Burst's own installer, config writer, secondary-provider and heal-install routes stay out; the
+  // v0.20 panel/finder installers and the console's restore-config are the only "install"/"config" paths allowed.
+  for (const m of Object.values(MUTATE_ALLOW)) {
+    assert.ok(!/secondary-key|settings-save|hotspot|secondary$|force|revert|\/api\/install$|\/api\/config$|handover-install|heal-install/.test(m.path), m.path);
+    assert.ok(!/install|config/.test(m.path) || ['/api/panel-install', '/api/finder-install', '/api/console/restore-config'].includes(m.path), m.path);
+  }
 });
 
 test('/api/secondary-key is not reachable through any exported function', async () => {

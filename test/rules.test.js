@@ -1385,3 +1385,12 @@ test('one character: migration picks the most common non-default body, else clau
   assert.deepEqual(R.characterFromRules([rule('claude'), rule(undefined)]), { body: 'claude', bodyColor: null });
   assert.deepEqual(R.characterFromRules(undefined), { body: 'claude', bodyColor: null });
 });
+
+test('wave-1 content is in the catalogue and survives normalizeRule', () => {
+  const R = require('../rules.js');
+  const add = { costume: ['witch', 'viking', 'tricorn', 'beret', 'antlers', 'astronaut', 'heartband'], pet: ['penguin', 'ghost', 'chick', 'owl'], effect: ['fireworks', 'bats', 'lightning', 'clouds', 'aurora', 'embers'], pose: ['dance', 'shrug', 'yawn'] };
+  for (const [ch, names] of Object.entries(add)) {
+    for (const n of names) assert.equal(R.normalizeRule({ then: { [ch]: n } }).then[ch], n, `${ch} ${n}`);
+  }
+  for (const list of [R.COSTUMES, R.PETS, R.EFFECTS, R.POSES]) assert.equal(new Set(list).size, list.length, 'no duplicates');
+});
