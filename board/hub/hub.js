@@ -1154,6 +1154,11 @@ export class Hub extends EventEmitter {
   }
 
   // ── handover ──────────────────────────────────────────────────────────────
+  // Person-to-person hand-off (team depth, lane D): the newest row for the card, any state.
+  latestHandoff(cardId) {
+    return this.db.get('SELECT * FROM handoffs WHERE card_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1', cardId);
+  }
+
   latestHandover(cardId) {
     return this.db.get('SELECT * FROM handovers WHERE card_id = ? ORDER BY version DESC LIMIT 1', cardId);
   }

@@ -373,6 +373,34 @@ export function canMarkDone(view) {
   return view.run_state === 'in_review' && view.run?.child_alive !== true;
 }
 
+// Person-to-person hand-off (team depth lane D). The recipient answers here;
+// the sender sees "waiting" and may cancel; everyone else sees who holds it.
+export function handoffBanner(view, model) {
+  const ho = view.handoff;
+  if (!ho || view.archived) return null;
+  const meId = model.me?.member?.id;
+  const name = (id, fallback) => model.members?.get?.(id)?.name ?? fallback ?? 'a teammate';
+  const from = name(ho.from, ho.from_name), to = name(ho.to, ho.to_name);
+  const busy = (verb) => model.busy?.has(`${view.id}:handoff:${verb}`) || null;
+  const btn = (verb, label, primary) => h('button', { type: 'button', class: `btn btn-sm${primary ? ' btn-primary' : ''}`, 'data-action': `handoff-${verb}`, 'data-card': view.id, 'data-handoff': ho.id, disabled: busy(verb) }, label);
+  if (ho.state === 'requested') {
+    if (ho.to === meId) {
+      return h('section', { class: 'dsec dsec-handoff', role: 'alert', 'aria-label': 'Handed to you' },
+        h('h3', { class: 'dsec-title' }, `${from} handed this to you`),
+        ho.note ? h('p', { class: 'handoff-note' }, ho.note) : null,
+        h('p', { class: 'muted small' }, 'Accepting keeps the card with you; the handover tab has what they left.'),
+        model.readOnly ? null : h('div', { class: 'drawer-actions' }, btn('accept', 'Accept', true), btn('decline', 'Decline')));
+    }
+    return h('section', { class: 'dsec dsec-handoff', role: 'status', 'aria-label': 'Hand-off waiting' },
+      h('p', null, ho.from === meId ? `Handed to ${to}, waiting for their answer.` : `${from} handed this to ${to}, waiting for their answer.`),
+      ho.note && ho.from === meId ? h('p', { class: 'handoff-note muted' }, ho.note) : null,
+      !model.readOnly && (ho.from === meId || model.me?.member?.role === 'admin' || model.me?.member?.role === 'owner') ? h('div', { class: 'drawer-actions' }, btn('cancel', 'Take it back')) : null);
+  }
+  if (ho.state === 'cancelled') return null;
+  const outcome = ho.state === 'accepted' ? `${ho.to === meId ? 'You' : to} accepted the hand-off from ${ho.from === meId ? 'you' : from}.` : `${ho.to === meId ? 'You' : to} declined the hand-off from ${ho.from === meId ? 'you' : from}.`;
+  return h('p', { class: 'handoff-outcome muted small', role: 'status' }, outcome);
+}
+
 function budgetBanner(view, model) {
   if (model.readOnly || view.archived || view.fail_kind !== 'budget' || view.run?.budget_stop !== 'card' || model.budgetStopped?.has(view.id)) return null;
   const spent = view.budget?.spent_usd ?? 0;
@@ -421,6 +449,7 @@ export function drawer(model) {
     }
     if (!model.readOnly && !archived && view.github?.open_pr) extra.push(githubButton(view, model, 'pr', 'Open PR on GitHub'));
     if (!model.readOnly && !archived && view.github?.comment) extra.push(githubButton(view, model, 'comment', 'Comment status'));
+    if (!model.readOnly && !archived && view.handoff?.state !== 'requested') extra.push(h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'hand_to_person', 'data-card': view.id }, icon('person', 'icon-lead'), 'Hand to…'));
     extra.push(archiveButton(view, model));
     const hypothesis = det.data?.handover?.doc?.sections?.hypothesis;
     const activeTab = det.tab ?? 'overview';
@@ -440,6 +469,7 @@ export function drawer(model) {
         archived ? h('p', { class: 'archived-note', role: 'note' }, `Archived${view.archived.by_name ? ` by ${view.archived.by_name}` : ''}${view.archived.at_age_ms != null ? ` ${ago(view.archived.at_age_ms + elapsed)}` : ''}. Restore it to change anything.`) : null,
         model.readOnly ? null : h('div', { class: 'drawer-actions' }, archived ? null : cardActions({ ...face, actions: face.actions.filter((a) => !OPENS_DRAWER.has(a) && !ADVANCED_ACTIONS.has(a)) }, view, model.busy), extra)),
       budgetBanner(view, model),
+      handoffBanner(view, model),
       whoBlock(view, face, model),
       requests,
       det.data ? h('section', { class: 'dsec dsec-tabs' },

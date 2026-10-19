@@ -136,6 +136,9 @@ export const api = {
     return call('GET', `/api/cards/${enc(id)}/overlap-preview${q.size ? `?${q}` : ''}`);
   },
   continueSeed: (id, recordId) => call('GET', `/api/cards/${enc(id)}/continue-seed${recordId ? `?${new URLSearchParams({ record_id: recordId })}` : ''}`),
+  // Person-to-person hand-off of a card (team depth lane D).
+  requestHandoff: (cardId, body) => mut('POST', `/api/cards/${enc(cardId)}/handoffs`, body),
+  answerHandoff: (cardId, handoffId, verb) => mut('POST', `/api/cards/${enc(cardId)}/handoffs/${enc(handoffId)}/${enc(verb)}`),
   handoffRecord: (teamId, recordId, body) => mut('POST', `/api/teams/${enc(teamId)}/activity/v1/records/${enc(recordId)}/handoff`, body),
   repos: () => call('GET', '/api/repos'),
   // Integrations (team-level; admins connect, configure and disconnect).

@@ -53,5 +53,8 @@ contextBridge.exposeInMainWorld('sessionsApi', {
   handoffRequests: () => ipcRenderer.invoke('handoff:list'),
   handoffConfirm: (id) => ipcRenderer.invoke('handoff:confirm', String(id)),
   handoffDismiss: (id) => ipcRenderer.invoke('handoff:dismiss', String(id)),
+  // A teammate handed you a card (src/handoff-people.js): accept reads its handover packet; decline tells them.
+  handoffPersonAccept: (id) => ipcRenderer.invoke('handoff:person-accept', String(id)),
+  handoffPersonDecline: (id) => ipcRenderer.invoke('handoff:person-decline', String(id)),
   onHandoffRequests: (cb) => ipcRenderer.on('handoff:changed', () => cb()),
 });

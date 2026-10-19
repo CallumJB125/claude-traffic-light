@@ -145,7 +145,8 @@
     const sig = JSON.stringify(e.children.map(c => [c.id, c.state, c.task.title, freshNow(c, data).freshness, Math.floor((freshNow(c, data).ageMs ?? -1) / 1000)]));
     if (v.childSig !== sig) { v.childSig = sig; v.children.replaceChildren(...kids); }
     v.children.hidden = !kids.length; v.childDetails.hidden = !kids.length; set(v.childSummary, `${kids.length} child ${kids.length === 1 ? 'agent' : 'agents'}${e.children.some(c => c.input && freshNow(c, data).freshness === 'recent') ? ' · input needed' : ''}`);
-    const hs = (e.handoffs ?? []).map(h => el('li', `${h.direction === 'out' ? 'Handoff to' : 'Handoff from'} ${h.with} · ${h.state}${h.summary ? ` · ${h.summary}` : ''}`));
+    // A card handed to a person and not yet answered reads as the sender sees it on the board.
+    const hs = (e.handoffs ?? []).map(h => el('li', h.direction === 'out' && h.state === 'offered' ? `Handed to ${h.with}, waiting${h.summary ? ` · ${h.summary}` : ''}` : `${h.direction === 'out' ? 'Handoff to' : 'Handoff from'} ${h.with} · ${h.state}${h.summary ? ` · ${h.summary}` : ''}`));
     const hsig = JSON.stringify(e.handoffs ?? []); if (v.hsig !== hsig) { v.hsig = hsig; v.handoffs.replaceChildren(...hs); } v.handoffs.hidden = !hs.length;
     const ds = (e.deliveries ?? []).map(d => { const li = el('li', '', 'delivery'), h = el('div', '', 'delivery-head'); h.append(el('strong', d.by ? `Sent by ${d.by}` : 'You'), el('span', d.state, `tag ${d.state}`)); li.append(h, el('p', d.text, 'delivery-text')); if (d.response) li.append(el('p', d.response, 'delivery-response')); return li; });
     const dsig = JSON.stringify(e.deliveries ?? []); if (v.dsig !== dsig) { v.dsig = dsig; v.deliveries.replaceChildren(...ds); } v.deliveries.hidden = !ds.length; v.history.hidden = !ds.length && !hs.length;
