@@ -21,6 +21,12 @@ async function setState(sig, lamp) {
   await signal(h, { signal: 'session-end', session: 'visual', source: 'claude' });
   if (sig) await signal(h, { signal: sig, session: 'visual', source: 'claude', cwd: '/visual', tool: 'Bash' });
   await expect.poll(async () => (await status(h.port)).look.lamp).toBe(lamp);
+  // The notification lane (src/widget-lane-main.js) announces a needs-you
+  // signal for 8 s on a 2 s poll; shoot the state once that row has come and
+  // gone, so the baseline doesn't depend on where in its life it is.
+  const lane = widget.locator('#event-lane .lane-row');
+  if (sig === 'limit-hit' || sig === 'idle-nudge') await expect(lane.first()).toBeVisible({ timeout: 5000 });
+  await expect(lane).toHaveCount(0, { timeout: 15000 });
   // The widget repaints on the status push; let the rig settle.
   await widget.waitForTimeout(600);
 }

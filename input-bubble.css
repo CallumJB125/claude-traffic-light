@@ -27,7 +27,7 @@
 .ib-opt { flex: 1 1 auto; min-height: 20px; padding: 2px 6px; border: 1px solid transparent; border-radius: var(--radius); font: 600 9.5px var(--font); cursor: pointer; color: #fff; background: var(--panel-2); border-color: var(--line-strong); }
 .ib-opt:disabled { opacity: 0.45; cursor: default; }
 .ib-opt:not(:disabled):active { transform: scale(0.96); }
-.ib-opt.tone-yes { background: var(--green); border-color: var(--green); }
+.ib-opt.tone-yes { background: var(--green); border-color: var(--green); color: var(--bg); }
 .ib-opt.tone-risky { background: var(--panel-2); border-color: var(--green); color: #b9f0c0; }
 .ib-opt.tone-wide { background: var(--panel-2); border-color: #3f7a47; }
 .ib-opt.tone-no { background: var(--danger); border-color: var(--danger); }
@@ -58,14 +58,18 @@
 .ib-page .ib-row { padding: 8px 10px; gap: 8px; }
 .ib-page .ib-icon { width: 15px; height: 15px; }
 .ib-page .ib-proj { max-width: 30%; }
-.ib-page .ib-head { font-size: var(--text-xs); }
+.ib-page .ib-head { font-size: var(--text-xs); color: var(--muted); }
 .ib-page .ib-age { font-size: var(--text-xs); }
 .ib-page .ib-body { padding: 0 10px 10px; gap: 6px; }
-.ib-page .ib-text { font-size: var(--text-xs); max-height: 160px; padding: 8px; }
+.ib-page .ib-text { font-size: var(--text-xs); max-height: 160px; padding: 8px; background: var(--panel-2); }
 .ib-page .ib-text.full { max-height: 480px; }
 .ib-page .ib-link, .ib-page .ib-field, .ib-page .ib-flabel { font-size: var(--text-xs); }
 .ib-page .ib-field { min-height: 26px; padding: 3px 8px; }
 .ib-page .ib-opt { min-height: 28px; padding: 3px 12px; font-size: var(--text-sm); flex: 0 1 auto; }
+/* The page follows the system appearance; the widget's white-on-dark ink would vanish on paper. */
+.ib-page .ib-opt.tone-plain, .ib-page .ib-opt.tone-wide { color: var(--text); }
+.ib-page .ib-opt.tone-risky { color: var(--green); }
+.ib-page .ib-scope { background: var(--panel-2); }
 .ib-page .ib-more, .ib-page .ib-pill, .ib-page .ib-nudge { font-size: var(--text-sm); }
 .ib-page .ib-nudge-rule { font-size: var(--text-xs); }
 

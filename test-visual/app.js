@@ -61,6 +61,7 @@ async function launchApp({ extraArgs = [], config = {}, files = {}, env = {} } =
       CLAUDE_TRAFFIC_LIGHT_REMOTE_PORT: String(remotePort),
       CLAUDE_TRAFFIC_LIGHT_PROJECTS: projects,
       CLAUDE_TRAFFIC_LIGHT_BACKUPS: backups,
+      CLAUDE_TRAFFIC_LIGHT_BURST_HOME: home,
       ...env,
     },
   });

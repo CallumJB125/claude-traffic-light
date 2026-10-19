@@ -48,9 +48,10 @@
 
 :focus-visible { outline: none; box-shadow: var(--focus); }
 
-/* Native pages follow the system appearance; status ink stays readable on paper. */
+/* Native pages follow the system appearance; status ink stays readable on paper.
+   The widget's chrome is always dark, so index.html opts out with data-theme="dark". */
 @media (prefers-color-scheme: light) {
-  :root {
+  :root:not([data-theme="dark"]) {
     color-scheme: light;
     --bg: #f4f5f7;
     --panel: #ffffff;
