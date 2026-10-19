@@ -95,6 +95,7 @@ const state = {
   momentOpen: new Set(), // moments whose comment thread is unfolded
   momentThreads: new Map(), // moment id → {status, items}
   mention: null, // the @ picker: {key, start, query, items}
+  handoffs: null, // accounts mode: {incoming, sent} hand-off messages for this team, from messaging v1
   inbox: null, // accounts mode: {items, open} from GET /api/account/inbox, live via inbox.item (team depth lane B)
   archived: null, // id → {view, rx} while showArchived
   // team.presence (D37b). `stale` from a socket drop until the next frame.
@@ -228,7 +229,7 @@ function setView(v) {
   if (v === 'dashboard') loadJournal();
   if (v === 'history') loadHistory();
   if (v === 'integrations') loadIntegrations();
-  if (v === 'team' && state.board) { presenceFallbackSoon(); loadTeamOverview(); loadCloud(); }
+  if (v === 'team' && state.board) { presenceFallbackSoon(); loadTeamOverview(); loadCloud(); loadHandoffs(); }
   // Team pages are opened from the app sidebar; only board views are remembered.
   if (VIEWS.find((x) => x.id === v)?.switcher !== false) { try { localStorage.setItem('board-view', v); } catch { /* private mode */ } }
   try {
@@ -517,6 +518,7 @@ function buildModel() {
     openTeam: canOpenTeam(),
     accounts: state.authMode === 'accounts',
     invite: state.invite,
+    handoffs: state.view === 'team' && state.authMode === 'accounts' ? state.handoffs : null,
     cloud: state.cloud,
     integrations: state.view === 'integrations' ? { ...state.integ, nowMs: Date.now(), local: state.authMode === 'local', openTeam: canOpenTeam() } : null,
     apiPanel: state.view === 'integrations' && state.authMode === 'accounts' ? state.pub : null,
@@ -1145,6 +1147,30 @@ async function loadTeamOverview() {
   } catch (error) {
     if (current()) { state.overview = { ...state.overview, status: 'error', error: errorText(error) }; update(); }
   }
+}
+
+// Hand-offs offered through teammates' AIs (team_hand_off). Accepting starts the work in a git
+// worktree, which only the desktop app can do; the web shows them and can decline with a note.
+async function loadHandoffs() {
+  if (state.authMode !== 'accounts' || state.auth !== 'ok') return;
+  const org = currentOrg();
+  try {
+    const [inbox, sent] = await Promise.all([api.handoffMessages('inbox'), api.handoffMessages('sent')]);
+    if (org !== currentOrg()) return;
+    const mine = (r) => (r?.messages ?? []).filter((m) => m && m.kind === 'handoff' && m.handoff && (!m.org_id || m.org_id === org));
+    state.handoffs = { incoming: mine(inbox).filter((m) => m.to?.user_id !== m.source?.user_id), sent: mine(sent), busy: null, error: null };
+  } catch (err) {
+    state.handoffs = err.status === 404 ? null : { ...(state.handoffs ?? { incoming: [], sent: [] }), error: errorText(err) };
+  }
+  update();
+}
+async function declineHandoff(id) {
+  if (!state.handoffs || state.handoffs.busy) return;
+  const note = root.querySelector(`[data-handoff-note="${CSS.escape(id)}"]`)?.value?.trim() ?? '';
+  state.handoffs = { ...state.handoffs, busy: id }; update();
+  try { await api.decideHandoff(id, 'decline', note.slice(0, 500)); toast('Declined. The sender sees your note.'); } catch (err) { toast(errorText(err), 'error'); }
+  state.handoffs = { ...state.handoffs, busy: null };
+  void loadHandoffs();
 }
 
 let presenceFallbackFor = null;
@@ -2288,7 +2314,8 @@ function onClick(e) {
     case 'switch-board': switchBoard(el.dataset.board); return;
     case 'open': e.preventDefault(); openDetail(cardId, el.dataset.section ?? null); return;
     case 'continue-in': continueIn(cardId); return;
-    case 'team-overview-refresh': loadTeamOverview(); return;
+    case 'team-overview-refresh': loadTeamOverview(); loadHandoffs(); return;
+    case 'handoff-msg-decline': void declineHandoff(el.dataset.id); return;
     case 'team-open-card': openSearchResult({ id: cardId, boardId: el.dataset.board }); return;
     case 'watch': openDetail(cardId, 'activity'); return;
     case 'allow': case 'deny': case 'answer': case 'approve_plan': case 'resolve_conflict': case 'continue':
@@ -2704,7 +2731,7 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => up
 setInterval(() => { if (state.auth === 'ok' && state.board) update(); }, 1000);
 setInterval(() => { if (state.view === 'history' && state.board && document.visibilityState === 'visible' && state.history.status === 'ok') loadHistory(); }, 30_000);
 setInterval(() => { if (state.view === 'dashboard' && state.board && document.visibilityState === 'visible') loadJournal(); }, DASH_REFRESH_MS);
-setInterval(() => { if (state.view === 'team' && document.visibilityState === 'visible') loadTeamOverview(); }, 15_000);
+setInterval(() => { if (state.view === 'team' && document.visibilityState === 'visible') { loadTeamOverview(); loadHandoffs(); } }, 15_000);
 setInterval(()=>{
   const d=state.dialog;
   if(d?.journey&&d.mode==='execution-status'&&!d.busy&&workflowJourney.current(d)&&document.visibilityState==='visible')void workflowJourney.status(d.execution.id);

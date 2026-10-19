@@ -99,6 +99,7 @@ const MATRIX = {
   'GET /api/activity/v1/feed': { kind: 'cross', path: (fx) => `/api/activity/v1/feed?repo_id=${fx.B.repo}` },
   'GET /api/activity/v1/current': { kind: 'cross', path: (fx) => `/api/activity/v1/current?repo_id=${fx.B.repo}` },
   'POST /api/teams/:team_id/activity/v1/records/:record_id/handoff': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/activity/v1/records/${encodeURIComponent('x:claude:y')}/handoff`, body: {} },
+  'POST /api/teams/:team_id/activity/v1/records/:record_id/handoff/decline': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/activity/v1/records/${encodeURIComponent('x:claude:y')}/handoff/decline`, body: {} },
   'POST /api/teams/:team_id/activity/v1/records/:record_id/continue': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/activity/v1/records/${encodeURIComponent('x:claude:y')}/continue`, body: {} },
   'GET /api/cards/:card_id/continue-seed': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/continue-seed?record_id=${encodeURIComponent('x:claude:y')}` },
   'GET /api/activity/v1/stream': { kind: 'cross', path: (fx) => `/api/activity/v1/stream?repo_id=${fx.B.repo}` },

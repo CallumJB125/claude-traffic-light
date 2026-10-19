@@ -10,7 +10,7 @@
   const node = (tag, text, className) => { const el = document.createElement(tag); if (text != null) el.textContent = text; if (className) el.className = className; return el; };
   const clock = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const ago = (iso) => { const ms = Date.now() - (Date.parse(iso || '') || NaN); return !(ms >= 0) ? '' : ms < 60_000 ? 'just now' : ms < 3_600_000 ? `${Math.floor(ms / 60_000)} min ago` : `${Math.floor(ms / 3_600_000)} h ago`; };
-  let generation = 0, busy = false;
+  let generation = 0, busy = false, heatWindow = '24h';
 
   function button(label, focus, onClick, primary) {
     const b = node('button', label, primary ? 'primary' : ''); b.type = 'button'; b.dataset.focus = focus;
@@ -33,6 +33,66 @@
     return wrap;
   }
   const where = (x) => [x.team, x.repo || x.board].filter(Boolean).join(' · ');
+  const names = (xs) => (xs.length > 2 ? `${xs.slice(0, 2).join(', ')} +${xs.length - 2}` : xs.join(', '));
+
+  // Compact tree: folder → hottest files, with counts and who. "2+ people" marks a file two teammates are editing.
+  function heatMap(heat) {
+    const h = heat?.[heatWindow];
+    if (!h) return null;
+    const wrap = node('div', null, 'heatmap');
+    const head = node('h3', 'Where the team is working');
+    const toggle = node('div', null, 'actions');
+    for (const w of ['24h', '7d']) {
+      const b = button(w === '24h' ? 'Last 24 h' : 'Last 7 days', `teamtoday:heat:${w}`, () => { heatWindow = w; void refresh(); });
+      b.setAttribute('aria-pressed', String(w === heatWindow));
+      toggle.append(b);
+    }
+    wrap.append(head, toggle);
+    if (!h.dirs.length) { wrap.append(node('p', 'No shared file activity in this window. Files show here only when teammates share them.', 'muted')); return wrap; }
+    const tree = node('ul', null, 'heat-tree'); tree.setAttribute('aria-label', 'File heat map');
+    for (const d of h.dirs) {
+      const li = node('li');
+      li.append(node('strong', `${d.path === '.' ? '(root)' : `${d.path}/`} · ${d.count}`, 'title'), node('span', ` ${names(d.people)}`, 'muted'));
+      const files = node('ul');
+      for (const f of d.files) {
+        const fl = node('li');
+        fl.append(node('span', `${f.name} · ${f.count}`), node('span', ` ${names(f.people)}`, 'muted'));
+        if (f.shared) fl.append(node('span', '2+ people', 'tag waiting'));
+        files.append(fl);
+      }
+      if (d.more) files.append(node('li', `and ${d.more} more`, 'muted'));
+      li.append(files);
+      tree.append(li);
+    }
+    wrap.append(tree);
+    if (h.more) wrap.append(node('p', `And ${h.more} more folders.`, 'muted'));
+    return wrap;
+  }
+
+  function standupText(rows) {
+    if (!rows.length) return 'Standup: nothing shared by the team in the last two days.';
+    const part = (label, xs, none) => `  ${label}: ${xs.length ? xs.join('; ') : none}`;
+    return rows.map((p) => [p.author, part('Yesterday', p.yesterday, 'nothing shared'), part('Today', p.today, 'nothing shared'), part('Blocked', p.blocked, 'nothing')].join('\n')).join('\n\n');
+  }
+  function standupCard(rows) {
+    if (!Array.isArray(rows)) return null;
+    const wrap = node('div', null, 'standup');
+    wrap.append(node('h3', 'Standup'));
+    if (!rows.length) wrap.append(node('p', 'Nothing shared by the team in the last two days.', 'muted'));
+    for (const p of rows) {
+      const dl = node('dl');
+      dl.append(node('dt', p.author, 'title'));
+      for (const [label, xs, none] of [['Yesterday', p.yesterday, 'Nothing shared'], ['Today', p.today, 'Nothing shared'], ['Blocked', p.blocked, 'Nothing']]) dl.append(node('dd', `${label}: ${xs.length ? xs.join('; ') : none}`, xs.length || label !== 'Blocked' ? '' : 'muted'));
+      wrap.append(dl);
+    }
+    const copied = node('span', '', 'muted'); copied.setAttribute('role', 'status');
+    const actions = node('div', null, 'actions');
+    actions.append(button('Copy', 'teamtoday:standup-copy', async () => {
+      try { await navigator.clipboard.writeText(standupText(rows)); copied.textContent = ' Copied.'; } catch { copied.textContent = ' Could not copy.'; }
+    }), copied);
+    wrap.append(actions);
+    return wrap;
+  }
 
   function render(s) {
     section.hidden = !s;
@@ -56,6 +116,8 @@
       });
       if (!s.changes.items.length) changes.append(node('p', 'Nothing new since you last looked.', 'muted'));
       parts.push(changes);
+      const stand = standupCard(s.standup); if (stand) parts.push(stand);
+      const heat = heatMap(s.heat); if (heat) parts.push(heat);
       if (s.shipped?.items.length) parts.push(list('Shipped this week', s.shipped.items, s.shipped.more, (x) => row(x.text, [where(x), x.by, ago(x.at)].filter(Boolean).join(' · '), x.kind === 'merged' ? 'Merged' : x.kind === 'ship' ? 'Shipped' : 'Done', 'working')));
     }
     if (s.sharing_off?.length) parts.push(node('p', `You don’t share summaries with ${s.sharing_off.join(', ')}, so their sessions aren’t read back here.`, 'muted'));

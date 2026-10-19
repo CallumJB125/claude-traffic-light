@@ -13,6 +13,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { createActivityClient } = require('./team-activity');
 const { clean } = require('./work-capture');
+const { heatmap } = require('./team-heatmap');
+const { standup } = require('./team-standup');
 
 const REFRESH_MS = 60_000;
 const DEADLINE_MS = 5000;
@@ -42,10 +44,11 @@ function compose({ teams = [], boards = [], mine = [], seen = {}, engine = null,
   const ours = (r) => sessions.has(r.session_id) || [...installs].some((i) => r.record_id.startsWith(`${i}:`));
   const since = Number.isFinite(seen.looked_at) ? seen.looked_at : now - FIRST_LOOK_MS;
 
-  const people = [], changes = [], overlaps = [];
+  const people = [], changes = [], overlaps = [], shared = [];
   for (const t of teams) {
     if (!Array.isArray(t.records)) continue;
     const others = t.records.filter((r) => !ours(r));
+    shared.push(...others);
     for (const r of others.filter((x) => ACTIVE.has(x.status))) {
       people.push({ author: r.author, adapter: r.adapter, title: r.title, status: STATUS[r.status], repo: t.repo, team: t.team, branch: r.branch, updated_at: r.updated_at });
     }
@@ -117,7 +120,9 @@ function compose({ teams = [], boards = [], mine = [], seen = {}, engine = null,
   overlaps.sort((a, b) => ({ high: 3, medium: 2, low: 1 }[b.level] || 0) - ({ high: 3, medium: 2, low: 1 }[a.level] || 0));
   const cap = (list) => ({ items: list.slice(0, MAX_ROWS), more: Math.max(0, list.length - MAX_ROWS) });
   shipped.sort((a, b) => time(b.at) - time(a.at));
-  return { people: cap(people), changes: cap(changes), overlaps: cap(overlaps), shipped: { items: shipped.slice(0, MAX_SHIPPED), more: Math.max(0, shipped.length - MAX_SHIPPED) }, columns, since };
+  const heatFor = (window) => { const x = heatmap(shared, { window, now }); return { window: x.window, dirs: x.dirs, more: x.more, shared: x.shared.slice(0, 10), total: x.total }; };
+  const heat = { '24h': heatFor('24h'), '7d': heatFor('7d') };
+  return { heat, standup: standup(shared, { now }), people: cap(people), changes: cap(changes), overlaps: cap(overlaps), shipped: { items: shipped.slice(0, MAX_SHIPPED), more: Math.max(0, shipped.length - MAX_SHIPPED) }, columns, since };
 }
 
 function readSeen(file) {
@@ -184,7 +189,7 @@ function createTeamToday({ links, board, mine = () => [], fetch, file = null, no
       state: 'ok', teams: [...new Set(all.map((l) => text(l.route.team_name, 60) || 'Team'))],
       sharing_off: [...quiet].filter((t) => !teams.some((x) => x.team === t)),
       unreachable: [...new Set(failed.map((x) => x.team))],
-      people: view.people, changes: view.changes, overlaps: view.overlaps, shipped: view.shipped, since: view.since,
+      heat: view.heat, standup: view.standup, people: view.people, changes: view.changes, overlaps: view.overlaps, shipped: view.shipped, since: view.since,
     };
   }
 
