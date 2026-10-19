@@ -58,6 +58,9 @@
       const b = el('button', k === current ? 'on' : '', text);
       b.type = 'button';
       b.setAttribute('aria-pressed', String(k === current));
+      // The page's history panel has its own Today / 7 days / 30 days buttons;
+      // this name keeps the two sets apart (it starts with the visible text).
+      b.setAttribute('aria-label', `${text}, where it went`);
       b.addEventListener('click', () => pick(k));
       g.append(b);
     }
