@@ -47,9 +47,12 @@ export function teamRows(model) {
   const presence = new Map((model.presence?.members ?? []).map((p) => [p.member_id, p]));
   for (const p of presence.values()) if (!byId.has(p.member_id)) byId.set(p.member_id, { member_id: p.member_id, name: p.name ?? '?' });
   const meId = model.me?.member?.id;
+  const viewing = new Map();
+  for (const v of model.viewers ?? []) if (!viewing.has(v.member_id)) viewing.set(v.member_id, v);
   const rows = [...byId.values()].map((m) => {
     const sessions = sessionsOf(presence.get(m.member_id), nowMs);
-    return { ...m, role: m.role ?? (m.member_id === meId ? model.me.member.role ?? null : null), is_me: m.member_id === meId, sessions, best: sessions.length ? Math.min(...sessions.map((s) => stateOf(s.state).rank)) : 9, jobs: jobsOf(m.member_id, model.entries) };
+    const v = viewing.get(m.member_id);
+    return { ...m, viewing: v ? { card_id: v.card_id, key: v.key ?? null, title: v.title ?? '' } : null, role: m.role ?? (m.member_id === meId ? model.me.member.role ?? null : null), is_me: m.member_id === meId, sessions, best: sessions.length ? Math.min(...sessions.map((s) => stateOf(s.state).rank)) : 9, jobs: jobsOf(m.member_id, model.entries) };
   });
   return rows.sort((a, b) => Number(b.is_me) - Number(a.is_me) || a.best - b.best || a.name.localeCompare(b.name));
 }
@@ -86,6 +89,16 @@ function jobButton(j) {
       pill(face)));
 }
 
+/** "running on <repo>" dot and "viewing <card>" from presence; null when neither. */
+function nowLine(m) {
+  const repos = [...new Set(m.sessions.map((s) => s.repo_short).filter(Boolean))];
+  const parts = [];
+  if (repos.length) parts.push(h('span', { class: 'team-now-item', 'data-kind': 'running' }, h('span', { class: 'team-now-dot', 'aria-hidden': 'true' }), `running on ${repos.join(', ')}`));
+  if (m.viewing) parts.push(h('button', { type: 'button', class: 'team-now-item team-now-viewing', 'data-kind': 'viewing', 'data-action': 'open', 'data-card': m.viewing.card_id, title: m.viewing.title || null },
+    icon('eye', 'icon-xs'), `viewing ${m.viewing.key ?? m.viewing.title ?? 'a card'}`));
+  return parts.length ? h('p', { class: 'team-now' }, parts) : null;
+}
+
 function memberCard(m, model, loaded) {
   const online = m.sessions.length > 0;
   const shown = m.jobs.slice(0, MAX_JOBS);
@@ -94,7 +107,8 @@ function memberCard(m, model, loaded) {
       avatar(m, { size: 'md' }),
       h('div', { class: 'team-member-id' },
         h('h3', { class: 'team-name', id: `tm-${m.member_id}` }, m.name, m.is_me ? h('span', { class: 'team-you' }, 'you') : null),
-        m.role ? h('span', { class: 'team-role' }, m.role) : null),
+        m.role ? h('span', { class: 'team-role' }, m.role) : null,
+        nowLine(m)),
       h('span', { class: `team-online${online ? ' is-on' : ''}` }, icon(online ? 'lamp' : 'ring', 'icon-xs'), online ? 'Online' : 'Not sharing')),
     online
       ? h('ul', { class: 'team-sessions', 'aria-label': `${m.name}'s live sessions` }, m.sessions.map((s, i) => sessionRow(s, i, model.board?.name ?? 'this board')))
@@ -148,6 +162,137 @@ export function invitePanel(model) {
         h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'copy-invite', 'data-what': 'code' }, 'Copy code'))) : null);
 }
 
+// " · $1.20 today of $3.00 cap · over cap" (Team plan roll-up); nothing without the field.
+export function boardSpendText(spend) {
+  if (!spend) return '';
+  const cap = spend.cap_usd != null ? ` of $${spend.cap_usd.toFixed(2)} cap` : '';
+  return ` · $${(spend.today_usd ?? 0).toFixed(2)} today${cap}${spend.over ? ' · over cap' : ''}`;
+}
+
+const ACTIVITY = { working: 'Working', waiting: 'Waiting for a person', quiet: 'Quiet', idle: 'Idle · task still open', disconnected: 'Runner disconnected', no_live_run: 'No active AI run' };
+const TASK_STATE = { todo: 'To do', queued: 'Queued', claimed: 'Starting', running: 'In progress', quiet: 'In progress', blocked: 'Blocked', parked: 'Waiting', suspended: 'Paused', reconnecting: 'Reconnecting', unresponsive: 'Not responding', orphaned: 'Run lost', handing_over: 'Moving to another AI', handed_over: 'Moved to another AI', in_review: 'In review', done: 'Done', failed: 'Failed' };
+// The team's cloud runner (docs/CLOUD-RUNNER-RUNBOOK.md): admins add one (its
+// token is shown once, for the server) and store the provider keys hosted runs
+// use. Keys go in and never come back: the hub answers only "has a key".
+const HOSTED_PROVIDERS = [['claude', 'Claude Code'], ['codex', 'Codex'], ['hermes-dgx', 'Hermes · DGX (tailnet model)']];
+
+export function cloudPanel(model) {
+  if (!model.accounts || !CAN_INVITE.has(model.me?.member?.role)) return null;
+  const c = model.cloud ?? {};
+  const data = c.data;
+  const runners = data?.runners ?? [];
+  return h('section', { class: 'team-cloud', 'aria-labelledby': 'team-cloud-h' },
+    h('h2', { class: 'team-needs-h', id: 'team-cloud-h' }, icon('sync', 'icon-xs'), 'Cloud runner'),
+    h('p', { class: 'hint' }, 'An always-on runner on your own server keeps cards working while laptops are closed. Choose "Run in the cloud" when you send a card to an AI.'),
+    c.status === 'loading' && !data ? h('p', { class: 'hint', role: 'status' }, 'Checking…') : null,
+    c.status === 'error' ? h('p', { class: 'form-error', role: 'alert' }, c.error) : null,
+    data ? (runners.length
+      ? h('ul', { class: 'team-cloud-list' }, runners.map((r) => h('li', { key: r.id },
+        h('strong', null, r.name), ` · ${r.owner?.name ?? ''} · `,
+        r.online ? `online${r.active_runs ? `, ${r.active_runs} running` : ''}` : r.last_seen_at ? `offline, last seen ${formatAge(Date.now() - Date.parse(r.last_seen_at))} ago` : 'never connected')))
+      : h('p', { class: 'hint' }, 'No cloud runner yet.')) : null,
+    h('form', { class: 'signin-row', 'data-form': 'cloud-runner-add' },
+      h('label', { class: 'sr-only', for: 'cloud-name' }, 'Cloud runner name'),
+      h('input', { id: 'cloud-name', name: 'name', class: 'input', placeholder: 'Pi 5', maxlength: '100', autocomplete: 'off' }),
+      h('button', { type: 'submit', class: 'btn btn-primary', disabled: c.busy || null }, 'Add cloud runner')),
+    c.made ? h('div', { class: 'team-invite-made', role: 'status' },
+      h('p', null, 'Runner token for the server. It shows only this once: put it in /etc/buddy-runner/runner.token (root, 0600) as the runbook says, then forget it here.'),
+      h('div', { class: 'signin-row' },
+        h('code', { class: 'team-invite-code num', 'aria-label': 'Runner token' }, c.made.runner_token),
+        h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'copy-cloud-token' }, 'Copy token')),
+      h('p', { class: 'hint' }, `Team id for BUDDY_RUNNER_TEAM: ${c.made.team_id}`)) : null,
+    h('h3', { class: 'team-needs-h' }, 'Provider keys for cloud runs'),
+    data && !data.providers?.length ? h('p', { class: 'hint' }, 'None stored: cloud runs use the server CLI\'s own sign-in.') : null,
+    data?.providers?.length ? h('ul', { class: 'team-cloud-list' }, data.providers.map((p) => h('li', { key: p.provider },
+      h('strong', null, p.label ?? p.provider), p.has_key ? ' · key stored' : ' · no key', p.model ? ` · ${p.model}` : '', p.base_url ? ` · ${p.base_url}` : '', ' ',
+      h('button', { type: 'button', class: 'btn btn-sm btn-ghost', 'data-action': 'cloud-provider-remove', 'data-provider': p.provider, disabled: c.busy || null }, 'Remove')))) : null,
+    h('form', { class: 'signin-row', 'data-form': 'cloud-provider-save' },
+      h('label', { class: 'sr-only', for: 'cloud-provider' }, 'Provider'),
+      h('select', { id: 'cloud-provider', name: 'provider', class: 'input' }, HOSTED_PROVIDERS.map(([v, label]) => h('option', { key: v, value: v }, label))),
+      h('label', { class: 'sr-only', for: 'cloud-key' }, 'API key'),
+      h('input', { id: 'cloud-key', name: 'api_key', type: 'password', class: 'input', placeholder: 'API key (kept sealed on the hub)', autocomplete: 'off' }),
+      h('label', { class: 'sr-only', for: 'cloud-url' }, 'Model server URL'),
+      h('input', { id: 'cloud-url', name: 'base_url', class: 'input', placeholder: 'Hermes only: model server URL (tailnet IP)', autocomplete: 'off', spellcheck: 'false' }),
+      h('label', { class: 'sr-only', for: 'cloud-model' }, 'Model'),
+      h('input', { id: 'cloud-model', name: 'model', class: 'input', placeholder: 'Model (optional)', autocomplete: 'off', spellcheck: 'false' }),
+      h('button', { type: 'submit', class: 'btn', disabled: c.busy || null }, 'Save')),
+    data && !data.encryption ? h('p', { class: 'hint' }, 'This hub has no encryption key, so it cannot store provider keys.') : null);
+}
+
+function overviewTask(item, stale) {
+  const change = item.evidence?.verification === 'hub_verified' ? 'Change verified' : item.evidence ? 'Change self-reported' : 'No change evidence';
+  const tests = item.evidence?.tests ? ` · Tests reported: ${item.evidence.tests}` : '';
+  return h('li', { key: item.id, class: 'team-overview-task' },
+    h('button', { type: 'button', class: 'team-overview-open', 'data-action': 'team-open-card', 'data-card': item.id, 'data-board': item.board.id },
+      h('span', { class: 'team-overview-task-title' }, h('span', { class: 'card-key num' }, item.key), item.title),
+      h('span', { class: 'team-overview-meta' }, item.board.name, ' · ', item.owner ? `${item.owner.name}’s ${item.ai_label ?? 'AI'}` : item.assignees?.length ? `Assigned to ${item.assignees.map((m) => m.name).join(', ')}` : item.ai_label ?? 'Unassigned',
+        ' · ', stale ? `Last snapshot: ${ACTIVITY[item.activity] ?? item.state}` : ACTIVITY[item.activity] ?? item.state)),
+    h('span', { class: 'team-overview-meta' }, TASK_STATE[item.state] ?? item.column ?? '', item.attention?.kind ? ` · ${item.attention.kind}` : '', item.attention?.can_approve ? ' · Your approval is needed' : ''),
+    h('span', { class: 'team-overview-proof' }, change, tests, item.cost ? item.cost.cost_usd == null ? ' · Cost unavailable' : ` · $${item.cost.cost_usd.toFixed(2)} reported` : ''),
+    item.attention?.summary ? h('p', { class: 'team-overview-meta' }, item.attention.summary) : null,
+    item.overlap_count ? h('span', { class: 'team-overview-meta' }, `${item.overlap_count} overlapping path ${item.overlap_count === 1 ? 'claim' : 'claims'}`) : null);
+}
+
+function overviewList(label, data, stale, empty) {
+  const items = data.items;
+  return h('section', { class: 'team-overview-panel', 'aria-label': label },
+    h('h3', null, label),
+    items.length ? h('ul', { class: 'team-overview-list' }, items.slice(0, 6).map((item) => overviewTask(item, stale))) : h('p', { class: 'team-empty' }, empty),
+    items.length > 6 ? h('details', { class: 'team-overview-more' }, h('summary', null, `Show ${items.length - 6} more`), h('ul', { class: 'team-overview-list' }, items.slice(6).map((item) => overviewTask(item, stale)))) : null,
+    data.truncated ? h('p', { class: 'team-overview-meta' }, 'Showing the latest 20. Search all boards to find older tasks.') : null);
+}
+
+const HANDOFF_STATE = { offered: 'Waiting for an answer', accepted: 'Accepted', declined: 'Declined', done: 'Done', failed: 'Did not finish', expired: 'Expired' };
+const goalOf = (m) => String(m.body ?? '').split('\n').find((l) => l && !l.startsWith('#'))?.trim().slice(0, 200) || 'A piece of work';
+
+/** Hand-offs through teammates' AIs (team_hand_off): incoming ones to answer, and how the ones you sent went. */
+export function handoffsPanel(model) {
+  const ho = model.handoffs;
+  if (!ho) return null;
+  const open = ho.incoming.filter((m) => m.handoff.state === 'offered');
+  const sent = ho.sent.slice(0, 10);
+  if (!open.length && !sent.length && !ho.error) return null;
+  return h('section', { class: 'team-overview team-handoffs', 'aria-labelledby': 'team-handoffs-h' },
+    h('h2', { id: 'team-handoffs-h' }, 'Hand-offs'),
+    ho.error ? h('p', { class: 'form-error', role: 'alert' }, ho.error) : null,
+    open.length ? [h('h3', null, 'Offered to you'),
+      h('p', { class: 'team-overview-meta' }, 'Accept in Plexiform on your Mac: it starts the work in its own git worktree. You can decline here.'),
+      h('ul', { class: 'team-overview-list' }, open.map((m) => h('li', { key: m.id, class: 'team-handoff' },
+        h('strong', null, goalOf(m)),
+        h('span', { class: 'team-overview-meta' }, `From ${m.source?.name ?? 'a teammate'}${(m.handoff.artifacts ?? []).length ? ` · ${m.handoff.artifacts.map((a) => a.path).slice(0, 3).join(', ')}` : ''}`),
+        model.readOnly ? null : h('div', { class: 'drawer-actions' },
+          h('input', { type: 'text', class: 'input input-sm', maxlength: '500', placeholder: 'Note for the sender (optional)', 'aria-label': 'Note for the sender', 'data-handoff-note': m.id }),
+          h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'handoff-msg-decline', 'data-id': m.id, disabled: ho.busy === m.id || null }, ho.busy === m.id ? 'Declining…' : 'Decline')))))] : null,
+    sent.length ? [h('h3', null, 'You handed off'),
+      h('ul', { class: 'team-overview-list' }, sent.map((m) => h('li', { key: m.id, class: 'team-handoff' },
+        h('strong', null, goalOf(m)),
+        h('span', { class: 'team-overview-meta' }, `To ${m.to?.name ?? 'a teammate'} · ${HANDOFF_STATE[m.handoff.state] ?? m.handoff.state}`),
+        m.handoff.report ? h('p', { class: 'handoff-note' }, m.handoff.report) : null)))] : null);
+}
+
+export function overviewPanel(model) {
+  const overview = model.teamOverview;
+  if (!overview) return null;
+  const data = overview.data;
+  return h('section', { class: 'team-overview', 'aria-labelledby': 'team-overview-h' },
+    h('header', { class: 'team-overview-head' },
+      h('div', null, h('h2', { id: 'team-overview-h' }, 'Across the team'), h('p', { class: 'team-overview-meta' }, data ? `${data.team.name} · ${data.board_count} active ${data.board_count === 1 ? 'board' : 'boards'}` : 'Checking work across your team’s active boards…')),
+      h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'team-overview-refresh', disabled: overview.status === 'loading' || null }, overview.status === 'loading' ? 'Refreshing…' : 'Refresh')),
+    overview.error ? h('p', { class: 'form-error', role: 'alert' }, overview.error) : null,
+    overview.stale && data ? h('p', { class: 'teamview-stale', role: 'status' }, 'Overview may be out of date. Refresh to check current activity.') : null,
+    data ? [
+      h('div', { class: 'team-overview-stats' }, [['Open tasks', data.totals.open], ['Need attention', data.totals.attention], ['Ready for review', data.totals.review], ['Done', data.totals.done], ...(data.totals.spend ? [['Spent today', `$${data.totals.spend.today_usd.toFixed(2)}`]] : [])].map(([label, n]) => h('div', { key: label, class: 'team-overview-stat' }, h('strong', { class: 'num' }, String(n)), h('span', null, label)))),
+      data.totals.spend?.boards_over_cap ? h('p', { class: 'team-overview-meta team-overview-over' }, `${data.totals.spend.boards_over_cap} ${data.totals.spend.boards_over_cap === 1 ? 'board is' : 'boards are'} over its daily cap: new AI starts there wait until tomorrow.`) : null,
+      h('p', { class: 'team-overview-meta' }, 'Live activity comes from current connected runners. Change verification checks the attached commit or pull request; test results remain the AI’s report.'),
+      h('div', { class: 'team-overview-columns' },
+        overviewList('Needs attention', data.attention, overview.stale, 'No blocked or failed tasks in this snapshot.'),
+        overviewList('AI tasks', data.work, overview.stale, 'No queued or active AI tasks in this snapshot.'),
+        overviewList('Ready for review', data.review, overview.stale, 'Nothing waiting for review in this snapshot.')),
+      h('details', { class: 'team-overview-projects' }, h('summary', null, 'Board overview'), h('ul', { class: 'team-overview-list' }, data.boards.map((board) => h('li', { key: board.id, class: 'team-overview-board' }, h('strong', null, board.name), h('span', { class: 'team-overview-meta' }, `${board.open} open · ${board.attention} need attention · ${board.review} in review · ${board.done} done${boardSpendText(board.spend)}`)))), data.boards_truncated ? h('p', { class: 'team-overview-meta' }, 'Showing the first 60 active boards; totals include all active boards.') : null),
+      h('details', { class: 'team-overview-projects' }, h('summary', null, 'Recently changed tasks'), h('ul', { class: 'team-overview-list' }, data.recent.items.map((item) => overviewTask(item, overview.stale))))
+    ] : null);
+}
+
 export function teamScreen(model) {
   const p = model.presence ?? { members: [], loaded: false, stale: false };
   const rows = teamRows(model);
@@ -158,11 +303,17 @@ export function teamScreen(model) {
         h('h1', { class: 'teamview-h' }, 'Team'),
         h('span', { class: 'teamview-count num', role: 'status' }, p.loaded ? `${online} online` : 'Checking…'),
         p.stale ? h('span', { class: 'teamview-stale' }, icon('sync', 'icon-xs'), 'Presence may be out of date') : null),
-      h('p', { class: 'teamview-line' }, 'Live sessions in repos linked to this board. Only members who turned on sharing appear. Read-only sessions never show.'),
+      h('p', { class: 'teamview-line' }, 'Work, blockers and reviews across your team. Shared live sessions below count for the current board.'),
+      model.accounts ? h('a', { href: '/connections', target: '_blank', rel: 'noopener noreferrer', class: 'btn btn-sm' }, 'Your connections') : null,
       h('details', { class: 'team-scope' },
         h('summary', null, 'How sessions are counted'),
         h('p', null, SCOPE_RULE))),
+    overviewPanel(model),
+    handoffsPanel(model),
     invitePanel(model),
+    cloudPanel(model),
+    h('h2', { class: 'team-needs-h' }, `On ${model.board?.name ?? 'this board'}`),
+    h('p', { class: 'teamview-line' }, 'Live sessions in repos linked to this board. Only members who turned on sharing appear. Read-only sessions never show.'),
     p.loaded ? needsYou(rows, model) : null,
     h('div', { class: 'team-grid' }, rows.map((m) => memberCard(m, model, p.loaded))));
 }

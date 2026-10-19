@@ -27,10 +27,16 @@ describe('tool schemas', () => {
 
   test('read-only tools carry readOnlyHint, writers do not', () => {
     const ro = Object.entries(TOOLS).filter(([, d]) => d.annotations?.readOnlyHint).map(([n]) => n).sort();
-    assert.deepEqual(ro, ['board_check_overlap', 'board_get_card', 'board_list_cards', 'board_recall']);
+    assert.deepEqual(ro, ['board_check_overlap', 'board_get_card', 'board_list_cards', 'board_read_packet', 'board_recall']);
   });
 
+  const packet = { brief:'brief', decisions:[], progress:'progress', nextAction:'review', artifacts:[], reportedChecks:[] };
   const accept = {
+    board_list_messages: [{}],
+    board_send_message: [{request_id:'00000000-0000-4000-8000-000000000001',kind:'coordination',body:'Please review',recipient_run_ids:['00000000-0000-4000-8000-000000000002']}],
+    board_ack_message: [{receipt_id:'00000000-0000-4000-8000-000000000001',receipt_token:'fixture-receipt'}],
+    board_read_packet: [{}, {version:1}],
+    board_write_packet: [{request_id:'00000000-0000-4000-8000-000000000001', expected_version:0, data:packet}],
     board_get_card: [{}, { key: 'DEV-12' }],
     board_list_cards: [{}, { column: 'in_review', mine: true }],
     board_update_status: [{ summary: 'Tracing the submit payload' }],
@@ -41,7 +47,7 @@ describe('tool schemas', () => {
     board_attach_evidence: [{ kind: 'test_run', ref: 'npm test', summary: '42 passed', result: 'pass' }, { kind: 'no_tests_reason', ref: 'docs', summary: 'docs only' }],
     board_complete: [{ summary: 'done', evidence_ids: ['e1'] }],
     board_release: [{ reason: 'stuck', requeue: false }],
-    board_declare_plan: [{ summary: 's', paths: ['src/**', 'a/b.js'], areas: ['auth'] }],
+    board_declare_plan: [{ summary: 's', paths: ['src/**', 'a/b.js'], areas: ['auth'] }, { summary: 'release intent', paths: [] }],
     board_check_overlap: [{}],
     board_recall: [{}, { paths: ['src/x.js'], query: 'q', kinds: ['handoff'] }],
     board_create_card: [{ title: 'Handle cents in the bank client' }, { title: 't', body: 'why', acceptance: 'tests pass' }],
@@ -49,6 +55,11 @@ describe('tool schemas', () => {
     approval: [{ tool_name: 'Bash', input: { command: 'ls' }, tool_use_id: 'toolu_1' }, { tool_name: 'Bash', input: {} }],
   };
   const reject = {
+    board_list_messages: [{run_id:'other'}],
+    board_send_message: [{}, {request_id:'00000000-0000-4000-8000-000000000001',kind:'coordination',body:'Please review',recipient_run_ids:[]}, {request_id:'00000000-0000-4000-8000-000000000001',kind:'coordination',body:'Please review',recipient_run_ids:['00000000-0000-4000-8000-000000000002'],provider:'codex'}],
+    board_ack_message: [{}, {receipt_id:'00000000-0000-4000-8000-000000000001',receipt_token:'fixture-receipt',connection_generation:'claimed'}],
+    board_read_packet: [{version:0}, {run_id:'other'}],
+    board_write_packet: [{}, {request_id:'not-uuid', expected_version:0, data:packet}, {request_id:'00000000-0000-4000-8000-000000000001', expected_version:0, data:{...packet, approval:'allow'}}],
     board_get_card: [{ key: '' }, { key: 5 }, { other: 1 }],
     board_list_cards: [{ column: 'doing' }, { mine: 'yes' }],
     board_update_status: [{}, { summary: '' }, { summary: 'x'.repeat(141) }],
@@ -59,7 +70,7 @@ describe('tool schemas', () => {
     board_attach_evidence: [{ kind: 'vibes', ref: 'x', summary: 'x' }, { kind: 'pr', ref: 'x' }, { kind: 'test_run', ref: 'x', summary: 'y', result: 'ok' }],
     board_complete: [{ summary: 'done', evidence_ids: [] }, { summary: 'done' }],
     board_release: [{ reason: 'x' }, { reason: 'x', requeue: 'no' }],
-    board_declare_plan: [{ summary: 's', paths: [] }, { summary: 's', paths: ['/etc/passwd'] }, { summary: 's', paths: ['../other/x'] }, { summary: 's', paths: ['~/.ssh/id'] }],
+    board_declare_plan: [{ summary: 's', paths: ['src'], ownership_generation: 'model-claim' }, { summary: 's', paths: ['/etc/passwd'] }, { summary: 's', paths: ['../other/x'] }, { summary: 's', paths: ['~/.ssh/id'] }],
     board_check_overlap: [{ x: 1 }],
     board_recall: [{ kinds: ['secret'] }, { paths: ['/abs'] }],
     board_create_card: [{}, { title: '' }, { title: 'x'.repeat(201) }, { title: 't', repo_id: 'other' }, { title: 't', labels: ['x'] }, { title: 't', assignees: ['m'] }, { title: 't', budget_usd: 5 }, { title: 't', column: 'in_progress' }, { title: 't', board_id: 'b2' }],

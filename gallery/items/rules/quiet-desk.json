@@ -1,0 +1,99 @@
+{
+  "schema": 1,
+  "author": {
+    "name": "Plexiform",
+    "github": "CallumJB125"
+  },
+  "license": "CC0-1.0",
+  "added": "2026-10-11",
+  "updated": "2026-10-11",
+  "kind": "rules",
+  "id": "quiet-desk",
+  "title": "Quiet desk",
+  "summary": "Calm widget rules for a shared office: no sounds, amber with a wave when your AI needs you, green with a small party when it is done.",
+  "tags": [
+    "quiet",
+    "office"
+  ],
+  "stacks": [
+    "any"
+  ],
+  "tools": [],
+  "payload": {
+    "rulesVersion": 11,
+    "rules": [
+      {
+        "id": "quiet-ask",
+        "name": "Needs you, quietly",
+        "locked": false,
+        "enabled": true,
+        "when": {
+          "signal": [
+            "permission-ask"
+          ],
+          "tool": null,
+          "cwd": null,
+          "source": null
+        },
+        "then": {
+          "lamp": "amber",
+          "lampColor": null,
+          "lampFx": null,
+          "sign": null,
+          "lampShape": null,
+          "signFx": null,
+          "number": null,
+          "screenFx": null,
+          "eyes": null,
+          "pose": "wave",
+          "sound": null,
+          "celebrate": false,
+          "text": null,
+          "costume": null,
+          "cameo": null,
+          "effect": null,
+          "pet": null,
+          "agents": null,
+          "agentsColor": null,
+          "clicks": {}
+        }
+      },
+      {
+        "id": "quiet-done",
+        "name": "Done, quietly",
+        "locked": false,
+        "enabled": true,
+        "when": {
+          "signal": [
+            "stop"
+          ],
+          "tool": null,
+          "cwd": null,
+          "source": null
+        },
+        "then": {
+          "lamp": "green",
+          "lampColor": null,
+          "lampFx": null,
+          "sign": null,
+          "lampShape": null,
+          "signFx": null,
+          "number": null,
+          "screenFx": null,
+          "eyes": null,
+          "pose": "party",
+          "sound": null,
+          "celebrate": false,
+          "text": null,
+          "costume": null,
+          "cameo": null,
+          "effect": null,
+          "pet": null,
+          "agents": null,
+          "agentsColor": null,
+          "clicks": {}
+        }
+      }
+    ]
+  }
+}

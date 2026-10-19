@@ -7,6 +7,7 @@ const P = (d, extra = {}) => h('path', { d, ...extra });
 const stroke = { fill: 'none', stroke: 'currentColor', 'stroke-width': '1.5', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' };
 
 const SHAPES = {
+  calendar: () => [h('rect', { x: 2.5, y: 3.5, width: 11, height: 10, rx: 1.5 }), P('M5 2.5v3M11 2.5v3M2.5 7h11')],
   clock: () => [h('circle', { cx: 8, cy: 8, r: 5.75 }), P('M8 5v3.2l2 1.3')],
   ring: () => [h('circle', { cx: 8, cy: 8, r: 5.25, 'stroke-dasharray': '2.2 2.2' })],
   lamp: () => [h('rect', { x: 3, y: 3, width: 10, height: 10, rx: 2.5, fill: 'currentColor' })],
@@ -17,6 +18,7 @@ const SHAPES = {
   sync: () => [P('M12.5 6.5A4.75 4.75 0 0 0 4 5.2M3.5 9.5A4.75 4.75 0 0 0 12 10.8'), P('M4 2.8v2.6h2.6M12 13.2v-2.6H9.4')],
   cross: () => [h('rect', { x: 3, y: 3, width: 10, height: 10, rx: 2.5 }), P('M6.2 6.2l3.6 3.6M9.8 6.2l-3.6 3.6')],
   swap: () => [P('M3 5.5h9l-2.2-2.2M13 10.5H4l2.2 2.2')],
+  bell: () => [P('M4 11.5h8l-1-1.6V7.2A3 3 0 0 0 8 4.2a3 3 0 0 0-3 3v2.7zM6.6 13.2a1.5 1.5 0 0 0 2.8 0M8 2.8v1.4')],
   diamond: () => [P('M8 2.8l5.2 5.2L8 13.2 2.8 8z')],
   check: () => [P('M3.5 8.5l3 3 6-7')],
   warn: () => [P('M8 2.75l5.75 10.25H2.25z'), P('M8 6.75v2.75M8 11.2v.05')],
@@ -44,7 +46,7 @@ const SHAPES = {
 export const PILL_ICON = {
   queued: 'clock', claimed: 'ring', running: 'lamp', quiet: 'half', blocked: 'hand', parked: 'pause',
   suspended: 'moon', reconnecting: 'sync', unresponsive: 'ring', orphaned: 'cross', handing_over: 'swap',
-  handed_over: 'swap', failed: 'cross', failed_limit: 'cross', in_review: 'diamond', done: 'check',
+  handed_over: 'swap', failed: 'cross', failed_limit: 'cross', stalled: 'warn', in_review: 'diamond', done: 'check',
 };
 
 export const ALERT_ICON = { blocked: 'hand', overlap: 'warn', orphaned: 'cross', failed: 'cross' };

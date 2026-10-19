@@ -6,6 +6,7 @@
 <title>Hatch a character</title>
 <link rel="stylesheet" href="tokens.css" />
 <link rel="stylesheet" href="rig.css" />
+<link rel="stylesheet" href="gallery-publish.css" />
 <style>
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: var(--text-base)/1.4 var(--font); -webkit-font-smoothing: antialiased; }
@@ -46,7 +47,8 @@
     <div>
       <label class="lbl" for="desc">Describe it</label>
       <textarea id="desc" maxlength="160" placeholder="a sleepy otter who loves coffee" disabled></textarea>
-      <p class="hint" id="desc-hint">Describing a character needs an AI, and none is connected yet. Pick a look below.</p>
+      <p class="hint" id="desc-hint">Describing a character needs an AI: install Claude Code (the claude command) to use it, or pick a look below.</p>
+      <div class="row" id="describe-row" style="margin-top:var(--space-2)" hidden><button type="button" id="describe">Describe it</button></div>
     </div>
     <fieldset><legend>Shape</legend><div class="seg" id="shape"></div></fieldset>
     <fieldset><legend>Size</legend><div class="seg" id="size"></div></fieldset>
@@ -54,6 +56,8 @@
     <fieldset><legend>Accessory</legend><div class="seg" id="accessory"></div></fieldset>
     <div class="row"><label class="lbl" for="color" style="margin:0">Colour</label><input type="color" id="color" value="#e0885f" /><button type="button" id="surprise">Surprise me</button></div>
     <div class="row"><button type="submit" class="primary" id="save">Save character</button><button type="button" id="close">Close</button></div>
+    <div class="row" id="share-row" hidden><select id="share-pick" aria-label="A saved character to share"></select><button type="button" id="share-gallery">Share to the gallery…</button></div>
+    <p class="hint" id="share-hint" hidden>Puts one of your characters in the community gallery, by a pull request you open in your browser. You see the exact file first.</p>
   </form>
   <aside>
     <div id="stage" role="img" aria-label="A live preview of your character"></div>
@@ -67,6 +71,7 @@
 <script src="characters/builtin/wave3.js"></script>
 <script src="characters/builtin/starter.js"></script>
 <script src="rig.js"></script>
+<script src="gallery-publish-view.js"></script>
 <script src="hatch-view.js"></script>
 </body>
 </html>

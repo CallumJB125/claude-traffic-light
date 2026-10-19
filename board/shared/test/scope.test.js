@@ -120,6 +120,8 @@ test('assertNoForeignBytes: exit (f) — non-repo session and out-of-repo paths 
 test('assertNoForeignBytes: exit (j) — no credential pattern in any hub-bound byte', () => {
   const scope = { repo_id: 'r' };
   const samples = {
+    integration_token: 'pfi_' + 'R'.repeat(43),
+    message_receipt: `bmr1.00000000-0000-4000-8000-000000000001.${'A'.repeat(42)}-`,
     anthropic_key: 'sk-ant-oat01-AbCdEfGhIjKlMnOp',
     openai_key: 'sk-proj-abcdefghijklmnopqrstuvwx',
     aws_access_key: 'AKIAIOSFODNN7EXAMPLE',
@@ -137,4 +139,45 @@ test('assertNoForeignBytes: exit (j) — no credential pattern in any hub-bound 
     assert.throws(() => serializeOutbound({ repo_id: 'r', deep: [{ text: `x ${s} y` }] }, scope), new RegExp(kind), kind);
   }
   assert.doesNotThrow(() => serializeOutbound({ repo_id: 'r', text: 'sk-ant is a prefix; skills; task-antique; PASSWORD_MIN_LEN = 8' }, scope));
+});
+
+test('all remote capability shapes redact from ordinary data and fail unredacted outbound bytes', () => {
+  for (const prefix of ['pfi_', 'pfm_', 'pfr_', 'pfc_', 'pfcode_']) {
+    const token = prefix + 'S'.repeat(43);
+    assert.equal(redact(`reported ${token}`, null), 'reported <redacted:integration_token>');
+    assert.throws(() => assertNoForeignBytes({ body: token }, { repo_id: 'r' }), /credential pattern integration_token/);
+  }
+});
+
+test('message receipt credentials redact in ordinary free text and fail outbound serialization without redaction', () => {
+  const capability = `bmr1.00000000-0000-4000-8000-000000000002.${'_'.repeat(43)}`;
+  const text = `copied(${capability}); another=${capability}`;
+  assert.equal(redact(text), 'copied(<redacted:message_receipt>); another=<redacted:message_receipt>');
+  assert.throws(() => serializeOutbound({ repo_id: 'r', items: [{ cmd: text, tail: text }] }, { repo_id: 'r' }), /message_receipt/);
+  assert.doesNotThrow(() => serializeOutbound({ repo_id: 'r', items: [{ cmd: redact(text), tail: redact(text) }] }, { repo_id: 'r' }));
+  assert.equal(redact('bmr1 receipt stage and 00000000-0000-4000-8000-000000000002'), 'bmr1 receipt stage and 00000000-0000-4000-8000-000000000002');
+});
+
+test('receipt serialization permits only exact private acknowledgement and host receipt fields', () => {
+  const receipt_id = '00000000-0000-4000-8000-000000000002';
+  const receipt_token = `bmr1.${receipt_id}.${'_'.repeat(43)}`;
+  const receipt = { receipt_id, receipt_token };
+  const rpc = { type: 'rpc', repo_id: 'r', method: 'board_ack_message', params: receipt };
+  const scope = { repo_id: 'r' };
+  assert.deepEqual(JSON.parse(serializeOutbound(rpc, scope)).params, receipt);
+  const host = { ...rpc, method: 'runner_messages_received', params: { receipts: [receipt] } };
+  assert.deepEqual(JSON.parse(serializeOutbound(host, scope)).params.receipts, [receipt]);
+  for (const bad of [
+    { ...rpc, type: 'out' },
+    { ...rpc, method: 'board_comment' },
+    { ...rpc, params: { ...receipt, receipt_id: 'other-id' } },
+    { ...rpc, params: { ...receipt, receipt_token: `${receipt_token}suffix` } },
+    { ...rpc, params: { ...receipt, body: 'extra' } },
+    { ...rpc, params: { nested: receipt } },
+    { ...rpc, narrative: receipt_token },
+    { ...host, params: { receipts: [{ ...receipt, body: receipt_token }] } },
+    { ...host, params: { receipts: [receipt], extra: true } },
+    { ...host, params: { receipts: Array(21).fill(receipt) } },
+  ]) assert.throws(() => serializeOutbound(bad, scope), /message_receipt/);
+  assert.throws(() => serializeOutbound(rpc, { repo_id: 'foreign' }), /does not match/);
 });

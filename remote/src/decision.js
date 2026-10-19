@@ -89,6 +89,7 @@ const MESSAGES = {
   'approve-at-desk': 'This one can only be approved at your desk.',
   expired: 'Too late — the request expired. Not applied.',
   'no-such-request': 'That request is no longer waiting. Not applied.',
+  'passkey-required': 'Your passkey check (Face ID, Touch ID or fingerprint) did not go through — not applied.',
 };
 
 // ── Phone: what to tell the human ───────────────────────────────────────────

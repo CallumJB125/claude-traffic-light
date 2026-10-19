@@ -113,11 +113,11 @@ export class Invites {
   }
 
   checkQuota(org, { replacing = null } = {}) {
-    const pending = this.pendingCount(org.id) - (replacing ? 1 : 0);
+    const pending = this.pendingCount(org.id) + (this.hub.clients?.pendingCount(org.id) ?? 0) - (replacing ? 1 : 0);
     const pLimit = quotaFor(org.plan, 'pending_invites');
     if (pending >= pLimit) throw new HubError('QUOTA_EXCEEDED', `at most ${pLimit} pending invites per team`, { resource: 'pending_invites', limit: pLimit });
-    const mLimit = quotaFor(org.plan, 'members');
-    if (this.teams.activeMembers(org.id) + pending >= mLimit) throw new HubError('QUOTA_EXCEEDED', `this team's plan allows at most ${mLimit} members (pending invites count)`, { resource: 'members', limit: mLimit });
+    const mLimit = this.hub.billing?.memberLimit(org) ?? quotaFor(org.plan, 'members');
+    if (this.teams.activeSeats(org.id) + pending >= mLimit) throw new HubError('QUOTA_EXCEEDED', `this team's plan allows at most ${mLimit} members (pending invites count)`, { resource: 'members', limit: mLimit });
   }
 
   limits(member, ip) {
@@ -253,8 +253,8 @@ export class Invites {
     if (this.db.get('SELECT 1 AS x FROM members WHERE org_id = ? AND user_id = ? AND removed_at IS NULL', org.id, user.id)) {
       throw new HubError('ALREADY_MEMBER', 'you are already in this team', { team: { id: org.id, name: org.name } });
     }
-    const limit = quotaFor(org.plan, 'members');
-    if (this.teams.activeMembers(org.id) >= limit) throw new HubError('QUOTA_EXCEEDED', `this team's plan allows at most ${limit} members`, { resource: 'members', limit });
+    const limit = this.hub.billing?.memberLimit(org) ?? quotaFor(org.plan, 'members');
+    if (this.teams.activeSeats(org.id) >= limit) throw new HubError('QUOTA_EXCEEDED', `this team's plan allows at most ${limit} members`, { resource: 'members', limit });
     const now = this.now();
     let memberId;
     this.hub.txn(() => {

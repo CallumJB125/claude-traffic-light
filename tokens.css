@@ -2,29 +2,29 @@
 :root {
   color-scheme: dark;
 
-  --bg: #1c1a1f;
-  --panel: #221f27;
-  --panel-2: #2a2731;
-  --line: #35313d;
-  --line-strong: #46414f;
-  --line-input: #7a748a;
-  --text: #ece8e2;
-  --muted: #a8a293;
-  --faint: #979183;
-  --accent: #da7756;
-  --accent-ink: #211f1c;
-  --accent-soft: rgba(218, 119, 86, 0.14);
+  --bg: #17191d;
+  --panel: #202329;
+  --panel-2: #292d34;
+  --line: #343941;
+  --line-strong: #4b535f;
+  --line-input: #78818e;
+  --text: #f0f1f3;
+  --muted: #b0b7c2;
+  --faint: #9aa3b0;
+  --accent: #e49a78;
+  --accent-ink: #251c18;
+  --accent-soft: rgba(228, 154, 120, 0.14);
 
-  --green: #2fae3e;
-  --amber: #f2a200;
-  --red: #e2231a;
+  --green: #67c4a6;
+  --amber: #e4b566;
+  --red: #ff9187;
   --danger: #b8443a;
   --danger-text: #ff8a80;
   --idle: #726c62;
 
   --radius-sm: 4px;
-  --radius: 7px;
-  --radius-lg: 10px;
+  --radius: 8px;
+  --radius-lg: 12px;
   --radius-pill: 999px;
 
   --space-1: 4px;
@@ -34,12 +34,12 @@
   --space-5: 20px;
   --space-6: 24px;
 
-  --font: -apple-system, system-ui, sans-serif;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   --text-xs: 11px;
   --text-sm: 12px;
-  --text-base: 13px;
-  --text-lg: 15px;
-  --text-xl: 18px;
+  --text-base: 14px;
+  --text-lg: 16px;
+  --text-xl: 22px;
 
   --focus: 0 0 0 2px var(--accent);
   --t: 160ms ease;
@@ -47,6 +47,31 @@
 }
 
 :focus-visible { outline: none; box-shadow: var(--focus); }
+
+/* Native pages follow the system appearance; status ink stays readable on paper.
+   The widget's chrome is always dark, so index.html opts out with data-theme="dark". */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+    --bg: #f4f5f7;
+    --panel: #ffffff;
+    --panel-2: #eef0f3;
+    --line: #dde1e6;
+    --line-strong: #c3cad3;
+    --line-input: #8792a0;
+    --text: #20252d;
+    --muted: #556171;
+    --faint: #5c6879;
+    --accent: #a34425;
+    --accent-ink: #ffffff;
+    --accent-soft: rgba(163, 68, 37, 0.08);
+    --green: #187d63;
+    --amber: #945c12;
+    --red: #c2352b;
+    --danger: #b3261e;
+    --danger-text: #b3261e;
+  }
+}
 
 /* ── Lamps ────────────────────────────────────────────────────────────────
    The traffic-light palette, kept apart from the window tokens above. Built

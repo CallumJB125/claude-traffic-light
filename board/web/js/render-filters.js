@@ -36,7 +36,6 @@ export function filterBar(model) {
       h('select', { class: 'input input-sm', 'data-change': 'filter-assignee', value: f.assignee ?? '' },
         h('option', { value: '' }, 'Anyone'),
         people.map((p) => h('option', { key: p.id, value: p.id, selected: f.assignee === p.id }, p.name)))) : null,
-    h('button', { type: 'button', class: 'btn btn-sm btn-ghost', 'data-action': 'labels-open', 'aria-haspopup': 'dialog' }, 'Labels'),
     h('button', {
       type: 'button', class: 'fchip', 'data-action': 'toggle-archived', 'aria-pressed': model.showArchived ? 'true' : 'false',
       title: 'Archived cards are hidden from the board; show them to restore one',

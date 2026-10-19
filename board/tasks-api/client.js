@@ -2,13 +2,13 @@
 // main process), the `buddy` CLI and the buddy_spin_off MCP tool. Node only
 // (unix socket; a Windows named pipe path works the same through net).
 //
-//   const c = await connect();                   // BOARD_HOME/runner.sock + tasks.token
+//   const c = await connect();                   // BOARD_HOME/tasks.sock + tasks.token
 //   const { id } = await c.createTask({ text, cwd });
 //   const s = await c.subscribe(id, { fromSeq }, (event) => …);
 //   c.isGreen(id)                                // the green lease rule (§6.2); never infer it elsewhere
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import net from 'node:net';
+import net from '../shared/local-sockets.cjs'; // protected Windows local transport; POSIX Unix sockets
 import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
@@ -30,6 +30,11 @@ export function defaultPaths(env = process.env) {
 
 /** Reads the token, refusing a file other users could read or that another user owns (§9.1). */
 export function readToken(tokenPath) {
+  if (process.platform === 'win32') {
+    if (path.basename(tokenPath) !== TOKEN_NAME) throw new TasksError('FORBIDDEN', 'Unexpected private token name');
+    try { return net.token(path.join(path.dirname(tokenPath), SOCKET_NAME), false); }
+    catch { throw new TasksError('FORBIDDEN', 'Private Tasks token could not be verified'); }
+  }
   const st = fs.statSync(tokenPath);
   if (process.platform !== 'win32') {
     if ((st.mode & 0o077) !== 0) throw new TasksError('FORBIDDEN', `${tokenPath} must be 0600 (is ${(st.mode & 0o777).toString(8)})`);
@@ -124,7 +129,12 @@ export class TasksClient extends EventEmitter {
       case 'lagged': {
         // Dropped for backpressure: resubscribe from where we got to; the ring replays the gap.
         const s = this.subs.get(msg.sub);
-        if (!s) return;
+        if (!s) {
+          // A paged replay can say "lagged" before subscribe() has seen its reply.
+          if (!this.early.has(msg.sub)) this.early.set(msg.sub, []);
+          this.early.get(msg.sub).push({ lagged: msg });
+          return;
+        }
         this.subs.delete(msg.sub);
         this.emit('lagged', msg);
         this.#resubscribe(s, msg.sub).catch((e) => this.emit('error', e));
@@ -163,7 +173,12 @@ export class TasksClient extends EventEmitter {
     this.early.delete(sub);
     for (const e of early) {
       if (e.reset) this.#reset(s, e.reset);
-      else this.#dispatch(s, e);
+      else if (e.lagged) {
+        this.subs.delete(sub);
+        this.emit('lagged', e.lagged);
+        this.#resubscribe(s, sub).catch((err) => this.emit('error', err));
+        return;
+      } else this.#dispatch(s, e);
     }
   }
 
@@ -194,8 +209,19 @@ export class TasksClient extends EventEmitter {
   }
 
   createTask(spec, { requestId = newRequestId() } = {}) { return this.call('createTask', { requestId, spec }); }
-  listTasks(opts = {}) { return this.call('listTasks', opts); }
+  /** All tasks, paged (`after` = last id, `limit` per page) so no reply nears the frame cap. */
+  async listTasks(opts = {}) {
+    const out = [];
+    let after;
+    for (;;) {
+      const page = await this.call('listTasks', { ...opts, limit: 200, ...(after ? { after } : {}) });
+      out.push(...page);
+      if (page.length < 200) return out;
+      after = page.at(-1).id;
+    }
+  }
   getTask(id) { return this.call('getTask', { id }); }
+  saveCheckpoint(id, expectedVersion, data, { requestId = newRequestId() } = {}) { return this.call('saveCheckpoint', { id, expectedVersion, data, requestId }); }
   listMessages(id, { afterSeq } = {}) { return this.call('listMessages', afterSeq == null ? { id } : { id, afterSeq }); }
   detectAIs() { return this.call('detectAIs'); }
   getLimits() { return this.call('getLimits'); }
@@ -250,11 +276,12 @@ export async function connect(opts = {}) {
   const socketPath = opts.socketPath ?? d.socketPath;
   const token = opts.token ?? readToken(opts.tokenPath ?? d.tokenPath);
   const sock = await new Promise((resolve, reject) => {
-    const s = net.createConnection(socketPath);
+    const s = net.createConnection(socketPath); // privacy-flow: tasks-local
     s.once('connect', () => { s.off('error', reject); resolve(s); });
     s.once('error', (e) => reject(new TasksError('SUPERVISOR_UNREACHABLE', `Buddy supervisor not reachable at ${socketPath}: ${e.code ?? e.message}`)));
   });
   const c = new TasksClient(sock, token, opts);
-  await c.hello(opts.client);
+  // A failed hello (hung supervisor, refused token) must not leak the socket on the caller's retry.
+  try { await c.hello(opts.client); } catch (e) { c.close(); throw e; }
   return c;
 }

@@ -1,0 +1,17 @@
+model: sonnet
+dark-mode: true
+auto-commits: false
+read: ~/CONVENTIONS.md
+openai-api-key: @@SEED:openai_key@@
+anthropic-api-key: @@SEED:anthropic_key@@
+api-key:
+  - openrouter=@@SEED:openai_key@@
+set-env:
+  - AZURE_API_KEY=@@SEED:env_secret@@
+  - AZURE_API_BASE=https://acme.openai.azure.com
+user-instructions: |
+  Prefer small diffs.
+  Use the staging token @@SEED:github_token@@ when calling the API.
+password: @@SEED:keyed_spaced@@
+gitlab-token: @@SEED:gitlab_token@@
+auth: @@SEED:keyed_exact@@

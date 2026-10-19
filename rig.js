@@ -95,14 +95,9 @@
     <!-- front: in front of the body, under cameos and a photo (a screen's
          glass is front; the photo goes on it) -->
     <g class="char-front"></g>
+    <!-- a user sprite pack (setSpritePack) stands in for the drawn character -->
+    <g class="sprite-pack"><image class="sprite-frame" x="6" y="16" width="52" height="54" preserveAspectRatio="xMidYMax meet" /></g>
     <!-- cameos (back layer): hair, facial hair and collar, under the eyes so they stay alive -->
-    <g class="cameo cameo-neo">
-      <path d="M4 52h24l4 6 4-6h24v7H4z" fill="#2a2a33" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" /><path d="M28 52l4 6 4-6z" fill="#0c0c10" /><path d="M4.6 52.8h22.6l3.8 5.6M59.4 52.8H36.8l-3.8 5.6" stroke="#5a5a6a" stroke-width="0.7" fill="none" />
-      <polygon points="14,53 14,47.5 18,47.5 21,53" fill="#2a2a33" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" /><polygon points="50,53 50,47.5 46,47.5 43,53" fill="#2a2a33" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" />
-      <rect x="14.6" y="48.2" width="0.9" height="4.4" fill="#5a5a6a" /><rect x="48.5" y="48.2" width="0.9" height="4.4" fill="#5a5a6a" />
-      <polygon points="15,51 15,38 16,38 16,36 18,36 18,35 46,35 46,36 48,36 48,38 49,38 49,51 46,51 46,43 44.5,43 44.5,41.5 40,41.5 40,40.5 34,40.5 34,42 31.5,42 31.5,40 28,40 28,41.5 23,41.5 23,42 19.5,42 19.5,43 18,43 18,51" fill="#15151b" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" />
-      <rect x="21" y="36" width="8" height="1" fill="#3a3a46" /><rect x="35" y="36.5" width="7" height="0.8" fill="#3a3a46" /><rect x="16" y="40" width="0.8" height="8" fill="#3a3a46" />
-    </g>
     <g class="cameo cameo-alfred">
       <rect x="4" y="52" width="56" height="7" fill="#3a3a42" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" /><path d="M4.6 52.8h21M38.4 52.8h21" stroke="#62626e" stroke-width="0.7" />
       <polygon points="26,52 38,52 35,59 29,59" fill="#f2efe8" />
@@ -116,48 +111,6 @@
       <rect x="20.5" y="41.8" width="3" height="1.1" fill="#e8e5de" /><rect x="23.3" y="41.1" width="3.7" height="1.1" fill="#e8e5de" />
       <rect x="37" y="41.1" width="3.7" height="1.1" fill="#e8e5de" /><rect x="40.5" y="41.8" width="3" height="1.1" fill="#e8e5de" />
       <rect x="27" y="49.1" width="10" height="1.4" fill="#dcd8cf" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" /><rect x="26.2" y="49.9" width="1.4" height="1.2" fill="#dcd8cf" /><rect x="36.4" y="49.9" width="1.4" height="1.2" fill="#dcd8cf" />
-    </g>
-    <g class="cameo cameo-mcafee">
-      <polygon points="24,52 30,52 32,56 28,55.2" fill="#f2efe8" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" /><polygon points="40,52 34,52 32,56 36,55.2" fill="#f2efe8" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" />
-      <polygon points="15,45 15,38.5 12.5,36.5 15.8,35.6 14.6,31.8 19,33.6 18.8,29.4 23,32.4 24.8,27.6 28,32 31,26.6 33.6,31.4 37.2,27.2 38.6,32 42.4,28.8 42.6,33 47.4,31.2 46.2,35 50.4,35 48,38.4 49,38.6 49,45 47,45 47,40.2 44,39.6 20,39.6 17,40.2 17,45" fill="#cfcbc3" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" />
-      <path d="M21 34.5l2 3.5M27.5 31.5l1 5M34 31l0.2 5.5M39.5 32l-1 4.5M44.5 34l-1.8 3.5M16 39.5v4.5M48 39.5v4.5" stroke="#8e8a82" stroke-width="0.9" fill="none" />
-      <rect x="36.8" y="42.8" width="5.9" height="5.9" fill="#f2efe8" />
-      <rect x="20.8" y="41.4" width="6.4" height="1.1" fill="#8e8a82" /><rect x="36.6" y="39.6" width="6.4" height="1.1" fill="#8e8a82" /><rect x="42.2" y="40.4" width="1.2" height="1" fill="#8e8a82" />
-      <g fill="#8e8a82" opacity="0.85"><rect x="20" y="49.5" width="1" height="1" /><rect x="22" y="50.8" width="1" height="1" /><rect x="24" y="49.6" width="1" height="1" /><rect x="25.6" y="51" width="1" height="1" /><rect x="38.4" y="51" width="1" height="1" /><rect x="40" y="49.6" width="1" height="1" /><rect x="42" y="50.8" width="1" height="1" /><rect x="44" y="49.5" width="1" height="1" /></g>
-      <rect x="27.5" y="48.6" width="9" height="1.4" fill="#9a958d" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" />
-      <rect x="29.5" y="50.4" width="5" height="4.6" fill="#9a958d" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" /><rect class="cameo-lips" x="30.3" y="50.4" width="3.4" height="0.7" fill="#211f1c" /><rect x="30.4" y="52.2" width="1" height="2.2" fill="#bdb9b1" /><rect x="32.6" y="52.6" width="1" height="2" fill="#6f6b64" />
-    </g>
-    <g class="cameo cameo-spagni">
-      <rect x="4" y="52" width="56" height="7" fill="#5b5e66" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" />
-      <polygon points="26,52 38,52 34.5,59 29.5,59" fill="#22232a" /><polygon class="cameo-skin" points="29.6,52 34.4,52 32,54.6" fill="var(--body-color, #da7756)" />
-      <path d="M26 52l3.5 7M38 52l-3.5 7" stroke="#44474e" stroke-width="0.8" fill="none" />
-      <circle cx="42" cy="55" r="1.6" fill="#f26822" stroke="#211f1c" stroke-width="0.35" /><rect x="40.6" y="55.4" width="2.8" height="1" fill="#4c4c4c" /><path d="M41 55.4v-1.2l1 0.8l1-0.8v1.2" stroke="#f2efe8" stroke-width="0.35" fill="none" />
-      <rect class="cameo-skin" x="15" y="44.5" width="3" height="7" rx="1.2" fill="var(--body-color, #da7756)" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" /><rect class="cameo-skin" x="46" y="44.5" width="3" height="7" rx="1.2" fill="var(--body-color, #da7756)" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" />
-      <rect class="cameo-skin" x="17" y="45" width="1.4" height="6.2" fill="var(--body-color, #da7756)" /><rect class="cameo-skin" x="45.6" y="45" width="1.4" height="6.2" fill="var(--body-color, #da7756)" />
-      <polygon points="16,44 16,38 17,38 17,35 19,35 19,33.5 22,33.5 22,32.6 24.5,32.6 25.5,30.6 27,32.4 28.5,30.2 30,32.2 31.5,30 33,32.2 35,30.8 36,32.6 41,32.6 41,33.5 45,33.5 45,35 47,35 47,38 48,38 48,44 46.6,44 46.6,40.2 44,39.6 20,39.6 17.4,40.2 17.4,44" fill="#2e2019" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" />
-      <rect x="22" y="34.6" width="10" height="0.8" fill="#4f3a2c" /><rect x="33" y="35.2" width="8" height="0.8" fill="#4f3a2c" /><rect x="26" y="32.8" width="7" height="0.7" fill="#4f3a2c" />
-      <g class="cameo-lips" fill="#211f1c"><rect x="29" y="50.2" width="5.2" height="0.8" /><rect x="34" y="49.5" width="1.4" height="0.8" /></g>
-    </g>
-    <g class="cameo cameo-powell">
-      <rect x="4" y="52" width="56" height="7" fill="#1e2a44" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" />
-      <polygon points="26.5,52 37.5,52 32,59" fill="#f7f5f0" />
-      <polygon points="30.8,52.2 33.2,52.2 32.8,53.9 31.2,53.9" fill="#8f1219" /><polygon points="31.2,53.9 32.8,53.9 33.4,57.6 32,58.8 30.6,57.6" fill="#c8202a" />
-      <path d="M26.5 52l5.5 7M37.5 52l-5.5 7" stroke="#131b2e" stroke-width="0.7" fill="none" />
-      <polygon points="16,44 16,38 17,38 17,36.5 19,36.5 19,35.5 45,35.5 45,36.5 47,36.5 47,38 48,38 48,44 46.5,44 46.5,40.6 44,40.6 26,40.6 26,39.6 24.4,39.6 24.4,40.2 19.5,40.2 17.5,40.6 17.5,44" fill="#eeece6" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" />
-      <rect x="23.8" y="36" width="0.9" height="3.8" fill="#a9a59c" />
-      <rect x="26.5" y="37.2" width="15" height="0.8" fill="#d2cec6" /><rect x="28" y="39" width="13" height="0.7" fill="#d2cec6" /><rect x="16.6" y="40.5" width="0.8" height="3" fill="#c3bfb6" />
-    </g>
-    <g class="cameo cameo-baker">
-      <rect x="4" y="52" width="56" height="7" fill="#b9d3ec" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" />
-      <polygon class="cameo-skin" points="29,52 35,52 32,55.6" fill="var(--body-color, #da7756)" />
-      <polygon points="24.5,52 29,52 32,55.6 28.4,54.9" fill="#dbe8f5" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" /><polygon points="39.5,52 35,52 32,55.6 35.6,54.9" fill="#dbe8f5" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" />
-      <rect x="31.6" y="55.6" width="0.8" height="3.4" fill="#8fb3d9" /><rect x="10" y="52.5" width="0.8" height="6" fill="#8fb3d9" /><rect x="53.2" y="52.5" width="0.8" height="6" fill="#8fb3d9" />
-      <polygon points="16,45 16,38 17,38 17,35.5 19,35.5 19,34 23,34 23,32.8 36,32.8 36,33.5 42,33.5 42,34.6 45,34.6 45,36 47,36 47,38 48,38 48,45 46.4,45 46.4,40 44,39.4 31,39.4 31,40.4 25,40.4 25,39.4 20,39.4 17.6,40 17.6,45" fill="#4a3a2c" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" />
-      <rect x="21" y="35.2" width="9" height="0.8" fill="#6a5646" /><rect x="31" y="34.4" width="8" height="0.8" fill="#6a5646" /><rect x="24" y="37" width="15" height="0.7" fill="#6a5646" />
-      <rect x="16.4" y="38.5" width="1.4" height="6.2" fill="#9a938a" /><rect x="46.2" y="38.5" width="1.4" height="6.2" fill="#9a938a" /><rect x="17.6" y="37" width="2.4" height="1.6" fill="#9a938a" /><rect x="44" y="37" width="2.4" height="1.6" fill="#9a938a" />
-      <g fill="#8a7f73" opacity="0.8"><rect x="19.5" y="49" width="1" height="1" /><rect x="21" y="50.6" width="1" height="1" /><rect x="23" y="49.4" width="1" height="1" /><rect x="25" y="50.8" width="1" height="1" /><rect x="27" y="49.4" width="1" height="1" /><rect x="29" y="50.6" width="1" height="1" /><rect x="31" y="49.2" width="1" height="1" /><rect x="33" y="50.6" width="1" height="1" /><rect x="35" y="49.4" width="1" height="1" /><rect x="37" y="50.8" width="1" height="1" /><rect x="39" y="49.4" width="1" height="1" /><rect x="41" y="50.6" width="1" height="1" /><rect x="43" y="49" width="1" height="1" /></g>
-      <g fill="#c9c2b8" opacity="0.8"><rect x="22" y="49.2" width="1" height="1" /><rect x="26" y="49.9" width="1" height="1" /><rect x="30" y="49.8" width="1" height="1" /><rect x="34" y="49.9" width="1" height="1" /><rect x="38" y="49.9" width="1" height="1" /><rect x="42" y="49.2" width="1" height="1" /></g>
-      <rect class="cameo-lips" x="28.5" y="50.6" width="7" height="0.8" fill="#211f1c" opacity="0.7" />
     </g>
     <!-- generic bearded wizard: long hair, robe collar and a great beard -->
     <g class="cameo cameo-wizard">
@@ -289,6 +242,12 @@
       <rect x="23" y="41" width="18" height="11" rx="3" fill="var(--body-color, #da7756)" stroke="#211f1c" stroke-width="0.5" />
       <path d="M27 41.5v10M31 41v10.5M35 41v10.5M39 41.5v10" stroke="#b85f3c" stroke-width="0.7" />
     </g>
+    <!-- shrug: both palms up at the sides -->
+    <g class="shrug-hands" fill="var(--body-color, #da7756)" stroke="#211f1c" stroke-width="0.5">
+      <rect x="2" y="50" width="9" height="4" rx="2" transform="rotate(-18 10 52)" /><rect x="53" y="50" width="9" height="4" rx="2" transform="rotate(18 54 52)" />
+    </g>
+    <!-- yawn: a tall round mouth (the eyes close with it) -->
+    <g class="mouth-anchor"><g class="yawn-mouth"><ellipse cx="32" cy="50.5" rx="2.6" ry="3.2" fill="#211f1c" /><ellipse cx="32" cy="52" rx="1.6" ry="1.1" fill="#c2574a" /></g></g>
     <!-- everything at the eyes: moves onto a photo cameo's own eyes -->
     <g class="eye-anchor">
     <!-- eye-track: the plain eyes follow the cursor by whole units (rig.lookAt) -->
@@ -384,16 +343,6 @@
     </g><!-- /eye-anchor -->
     <g class="char-face"></g>
     <!-- cameos (front layer): eyewear, over the eyes -->
-    <g class="cameo cameo-neo">
-      <rect x="18" y="44.4" width="3.2" height="0.7" fill="#0a0a0d" /><rect x="42.8" y="44.4" width="3.2" height="0.7" fill="#0a0a0d" /><rect x="27.2" y="44.6" width="9.6" height="0.8" fill="#0a0a0d" />
-      <g class="cameo-lens">
-        <rect x="20.8" y="43.4" width="6.8" height="4.4" rx="1.8" fill="#0a0a0d" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" /><rect x="36.4" y="43.4" width="6.8" height="4.4" rx="1.8" fill="#0a0a0d" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" />
-        <rect x="22" y="44.2" width="2.2" height="0.8" fill="#7cf29a" opacity="0.75" /><rect x="37.6" y="44.2" width="2.2" height="0.8" fill="#7cf29a" opacity="0.75" />
-      </g>
-    </g>
-    <g class="cameo cameo-powell" fill="none" stroke="#d5dbe0" stroke-width="0.6">
-      <rect x="20.8" y="42.6" width="7" height="6.2" rx="1" /><rect x="36.2" y="42.6" width="7" height="6.2" rx="1" /><path d="M27.8 44.4h8.4M20.8 44.2h-2.6M43.2 44.2h2.6" />
-    </g>
     <!-- pirate eyepatch (front layer): covers the left eye, strap over the brow -->
     <g class="cameo cameo-pirate">
       <path d="M17 43 h11 v3.4 l-11 1.2 z" fill="#141319" stroke="#211f1c" stroke-width="0.4" stroke-linejoin="round" />
@@ -590,6 +539,42 @@
     <path d="M22 37.8h22" stroke="#b8cee0" stroke-width="0.6" />
     <circle class="pom" cx="32" cy="24" r="3" fill="#dbe8f5" stroke="#211f1c" stroke-width="0.4" />
   </g>
+  <!-- wave-1 costumes -->
+  <g class="costume costume-witch">
+    <polygon points="22,38 42,38 36,26 40,19 33,24" fill="#2b2238" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" />
+    <rect x="15" y="37" width="34" height="3" rx="1.5" fill="#2b2238" stroke="#211f1c" stroke-width="0.5" />
+    <rect x="23" y="34.5" width="18" height="2.5" fill="#8b5cf6" /><rect x="30.5" y="34.2" width="3" height="3" fill="#f2d16b" />
+  </g>
+  <g class="costume costume-viking">
+    <path d="M20 39 q12 -16 24 0 z" fill="#9aa3ad" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" />
+    <rect x="19" y="37" width="26" height="3" rx="1" fill="#7a828c" stroke="#211f1c" stroke-width="0.4" />
+    <path d="M20 35 q-6 -2 -6 -11 q4 6 8 7 z" fill="#f2efe8" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" />
+    <path d="M44 35 q6 -2 6 -11 q-4 6 -8 7 z" fill="#f2efe8" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" />
+    <circle cx="24" cy="38.5" r="0.7" fill="#4a4a52" /><circle cx="32" cy="38.5" r="0.7" fill="#4a4a52" /><circle cx="40" cy="38.5" r="0.7" fill="#4a4a52" />
+  </g>
+  <g class="costume costume-tricorn">
+    <polygon points="15,39 49,39 42,30 32,33 22,30" fill="#3b2a1e" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" />
+    <path d="M16 38.6 L22.4 30.6 M48 38.6 L41.6 30.6" stroke="#f2d16b" stroke-width="0.8" />
+    <circle cx="32" cy="36" r="1.6" fill="#f2efe8" /><rect x="31" y="37.2" width="2" height="0.8" fill="#f2efe8" />
+  </g>
+  <g class="costume costume-beret">
+    <ellipse cx="30" cy="36.5" rx="13" ry="4" fill="#c2302a" stroke="#211f1c" stroke-width="0.5" />
+    <rect x="29.4" y="31.2" width="1.2" height="2.4" rx="0.6" fill="#211f1c" />
+  </g>
+  <g class="costume costume-antlers" fill="none" stroke="#7d5230" stroke-width="1.6" stroke-linecap="round">
+    <path d="M23 39 L19 28 M20.5 32 L16 30 M19.8 30 L22 26" /><path d="M41 39 L45 28 M43.5 32 L48 30 M44.2 30 L42 26" />
+    <g class="antler-bells" stroke="none"><circle cx="16" cy="30" r="1.1" fill="#f2d16b" /><circle cx="48" cy="30" r="1.1" fill="#f2d16b" /></g>
+  </g>
+  <g class="costume costume-astronaut">
+    <circle cx="32" cy="50" r="21" fill="#bfe3ff" fill-opacity="0.16" stroke="#e8eef5" stroke-width="1.4" />
+    <path d="M19 40 q4 -8 11 -10" fill="none" stroke="#ffffff" stroke-width="1.2" stroke-linecap="round" opacity="0.8" />
+    <rect x="31.2" y="24" width="1.6" height="5" fill="#9aa3ad" /><circle class="astro-led" cx="32" cy="23.5" r="1.4" fill="#e2231a" />
+  </g>
+  <g class="costume costume-heartband">
+    <path d="M18 39 q14 -9 28 0" fill="none" stroke="#f472b6" stroke-width="1.6" />
+    <path d="M24 34 L22 26 M40 34 L42 26" stroke="#211f1c" stroke-width="0.6" />
+    <use class="hb-heart" href="#fx-heart" x="22" y="25" fill="#e2231a" /><use class="hb-heart h2" href="#fx-heart" x="42" y="25" fill="#e2231a" />
+  </g>
   <!-- the finished cigarette: flicked from the mouth, lands on the ground, gets
        stomped flat; one element, reused every cycle -->
   <g class="cig-butt">
@@ -628,6 +613,24 @@
   </g>
   <g class="pet pet-dragon">
     <rect x="53" y="60" width="11" height="7" rx="3" fill="#8b5cf6" /><rect x="60" y="56" width="6" height="5" rx="2" fill="#8b5cf6" /><polygon class="wing" points="55,60 51,53 58,58" fill="#a78bfa" /><rect x="63" y="57.5" width="1" height="1" fill="#f2d16b" /><rect x="50" y="62" width="4" height="2" rx="1" fill="#8b5cf6" /><polygon class="fire" points="66,58 71,56.5 69,59 72,60 67,60.5" fill="#f28c28" />
+  </g>
+  <g class="pet pet-penguin">
+    <ellipse cx="60" cy="63" rx="4.5" ry="5.5" fill="#1f2430" /><ellipse cx="60.8" cy="64" rx="2.8" ry="4" fill="#f2efe8" />
+    <rect x="59.6" y="59.5" width="1" height="1" fill="#f2efe8" /><rect x="61.6" y="59.5" width="1" height="1" fill="#f2efe8" /><rect x="60" y="59.8" width="0.6" height="0.6" fill="#211f1c" /><rect x="62" y="59.8" width="0.6" height="0.6" fill="#211f1c" />
+    <polygon points="61,61 64.5,61.6 61,62.4" fill="#f28c28" /><rect x="57.5" y="68" width="2.4" height="0.9" fill="#f28c28" /><rect x="61" y="68" width="2.4" height="0.9" fill="#f28c28" />
+  </g>
+  <g class="pet pet-ghost">
+    <g class="ghost-float"><path d="M55 68 v-7 q0 -5 5 -5 q5 0 5 5 v7 l-1.7 -1.4 l-1.6 1.4 l-1.7 -1.4 l-1.7 1.4 l-1.6 -1.4 z" fill="#f2efe8" fill-opacity="0.9" stroke="#c9c6bf" stroke-width="0.4" />
+    <rect x="58" y="60" width="1.2" height="1.8" rx="0.6" fill="#211f1c" /><rect x="61.4" y="60" width="1.2" height="1.8" rx="0.6" fill="#211f1c" /></g>
+  </g>
+  <g class="pet pet-chick">
+    <circle cx="60" cy="65" r="3.3" fill="#f2d16b" /><circle cx="61.5" cy="61.6" r="2.2" fill="#f2d16b" />
+    <rect x="62" y="61" width="0.8" height="0.8" fill="#211f1c" /><polygon points="63.5,61.6 65.4,62.1 63.5,62.6" fill="#f28c28" /><path d="M58 63 q-2 1 -1 2.6" fill="none" stroke="#e0b040" stroke-width="0.6" />
+  </g>
+  <g class="pet pet-owl">
+    <rect x="55.5" y="58" width="9" height="10" rx="4" fill="#8a6a4a" /><polygon points="55.5,59.5 56.5,56 58.5,58.5" fill="#8a6a4a" /><polygon points="64.5,59.5 63.5,56 61.5,58.5" fill="#8a6a4a" />
+    <circle cx="58.2" cy="61" r="1.9" fill="#f2efe8" /><circle cx="61.8" cy="61" r="1.9" fill="#f2efe8" /><circle class="owl-pupil" cx="58.2" cy="61" r="0.9" fill="#211f1c" /><circle class="owl-pupil" cx="61.8" cy="61" r="0.9" fill="#211f1c" />
+    <polygon points="59.4,62.6 60.6,62.6 60,64" fill="#f2a200" /><path d="M57.5 65.5 q2.5 1 5 0" fill="none" stroke="#6b4e33" stroke-width="0.5" />
   </g>
   <!-- pet reaction bubble -->
   <text class="pet-mark" x="62" y="54" text-anchor="middle" font-size="6" font-weight="700" fill="#f2efe8">!</text>
@@ -733,6 +736,42 @@
     <use class="petal" href="#fx-petal" fill="#fbd3e1" style="--x:60px;--ry:18px;--d:-5.6875s;--s:-5px;--r:-240deg" />
   </g>
   <!-- speech bubble pose -->
+  <!-- fireworks: three bursts popping over the sign -->
+  <g class="effect effect-fireworks">
+    <g class="fw fw1" stroke="#f472b6" stroke-width="0.8" stroke-linecap="round"><path d="M12 10 v-4 M12 10 v4 M12 10 h-4 M12 10 h4 M12 10 l-3 -3 M12 10 l3 3 M12 10 l3 -3 M12 10 l-3 3" /></g>
+    <g class="fw fw2" stroke="#f2d16b" stroke-width="0.8" stroke-linecap="round"><path d="M32 6 v-4 M32 6 v4 M32 6 h-4 M32 6 h4 M32 6 l-3 -3 M32 6 l3 3 M32 6 l3 -3 M32 6 l-3 3" /></g>
+    <g class="fw fw3" stroke="#38bdf8" stroke-width="0.8" stroke-linecap="round"><path d="M52 11 v-4 M52 11 v4 M52 11 h-4 M52 11 h4 M52 11 l-3 -3 M52 11 l3 3 M52 11 l3 -3 M52 11 l-3 3" /></g>
+  </g>
+  <!-- bats: three little bats flitting about -->
+  <g class="effect effect-bats" fill="#2b2238">
+    <g class="bat" style="--x:10px;--ry:8px;--d:0s;--s:6px"><path d="M0 0 l-3 -2 l-1 2 l-2 -1 l2 3 l4 -1 l4 1 l2 -3 l-2 1 l-1 -2 z" /></g>
+    <g class="bat" style="--x:34px;--ry:3px;--d:-1.3s;--s:-6px"><path d="M0 0 l-3 -2 l-1 2 l-2 -1 l2 3 l4 -1 l4 1 l2 -3 l-2 1 l-1 -2 z" /></g>
+    <g class="bat" style="--x:54px;--ry:12px;--d:-2.6s;--s:5px"><path d="M0 0 l-3 -2 l-1 2 l-2 -1 l2 3 l4 -1 l4 1 l2 -3 l-2 1 l-1 -2 z" /></g>
+  </g>
+  <!-- lightning: a storm cloud and a flashing bolt -->
+  <g class="effect effect-lightning">
+    <path d="M40 6 a5 5 0 0 1 9 -2 a4 4 0 0 1 7 3 h-16 z" fill="#5a606b" /><rect x="38" y="6" width="20" height="3" rx="1.5" fill="#5a606b" />
+    <polygon class="bolt" points="47,9 44,15 47,15 45,21 51,13 48,13 50,9" fill="#f2d16b" />
+  </g>
+  <!-- clouds: two soft clouds drifting past -->
+  <g class="effect effect-clouds" fill="#f2efe8">
+    <g class="cloud" style="--x:4px;--ry:4px;--d:0s;--s:10px"><rect x="0" y="2" width="14" height="4" rx="2" /><circle cx="5" cy="2.5" r="2.6" /><circle cx="9" cy="1.8" r="3" /></g>
+    <g class="cloud" style="--x:38px;--ry:10px;--d:-4s;--s:-10px" opacity="0.8"><rect x="0" y="2" width="12" height="3.6" rx="1.8" /><circle cx="4" cy="2.4" r="2.2" /><circle cx="8" cy="1.8" r="2.6" /></g>
+  </g>
+  <!-- aurora: soft green and violet bands over the sky -->
+  <g class="effect effect-aurora" fill="none" stroke-linecap="round">
+    <path class="aurora-band" d="M2 10 q10 -8 20 0 t20 0 t20 0" stroke="#4ade80" stroke-width="2.4" opacity="0.55" />
+    <path class="aurora-band a2" d="M2 15 q10 -7 20 0 t20 0 t20 0" stroke="#a78bfa" stroke-width="2" opacity="0.45" />
+  </g>
+  <!-- embers: sparks rising off the ground -->
+  <g class="effect effect-embers">
+    <rect class="ember" x="-0.6" y="-0.6" width="1.2" height="1.2" fill="#f28c28" style="--x:8px;--ry:60px;--d:0s;--s:2px" />
+    <rect class="ember" x="-0.6" y="-0.6" width="1.2" height="1.2" fill="#f2a200" style="--x:17px;--ry:30px;--d:-0.9s;--s:-2px" />
+    <rect class="ember" x="-0.6" y="-0.6" width="1.2" height="1.2" fill="#f28c28" style="--x:26px;--ry:50px;--d:-1.8s;--s:2px" />
+    <rect class="ember" x="-0.6" y="-0.6" width="1.2" height="1.2" fill="#f2d16b" style="--x:37px;--ry:20px;--d:-2.7s;--s:-2px" />
+    <rect class="ember" x="-0.6" y="-0.6" width="1.2" height="1.2" fill="#f28c28" style="--x:46px;--ry:44px;--d:-0.45s;--s:2px" />
+    <rect class="ember" x="-0.6" y="-0.6" width="1.2" height="1.2" fill="#f2a200" style="--x:56px;--ry:26px;--d:-1.35s;--s:-2px" />
+  </g>
   <g class="prop prop-bubble">
     <rect x="30" y="0" width="34" height="13" rx="4" fill="#f2efe8" stroke="#211f1c" stroke-width="0.8" />
     <polygon points="40,12.6 44,12.6 42,18" fill="#f2efe8" stroke="#211f1c" stroke-width="0.8" /><rect x="40.5" y="11.5" width="3" height="2" fill="#f2efe8" />
@@ -763,15 +802,13 @@
   <g class="agents-label"></g>
 </svg>`;
 
-  const POSES = ['none', 'think', 'wave', 'thumbs', 'sleep', 'blink', 'nod', 'bounce', 'look', 'spin', 'party', 'guitar', 'ak47', 'sniper', 'banner', 'bubble', 'tap', 'arms', 'run', 'knock', 'munch', 'kickflip', 'selfie', 'grin', 'smoke', 'zyn', 'line', 'juice', 'dead', 'cheer', 'facepalm'];
+  const POSES = ['none', 'think', 'wave', 'thumbs', 'sleep', 'blink', 'nod', 'bounce', 'look', 'spin', 'party', 'guitar', 'ak47', 'sniper', 'banner', 'bubble', 'tap', 'arms', 'run', 'knock', 'munch', 'kickflip', 'selfie', 'grin', 'smoke', 'zyn', 'line', 'juice', 'dead', 'cheer', 'facepalm', 'dance', 'shrug', 'yawn'];
   const EVENTS = ['ufo', 'portal', 'meteor'];
   const LAMP_FX = ['none', 'pulse', 'strobe', 'breathe', 'flicker', 'chase', 'police', 'rainbow', 'all', 'sos'];
-  const COSTUMES = ['none', 'dog', 'cat', 'unicorn', 'crown', 'partyhat', 'shades', 'halo', 'devil', 'wizard', 'tophat', 'santa', 'pumpkin', 'bunny', 'headphones', 'graduate', 'chef', 'cowboy', 'propeller', 'detective', 'flowercrown', 'beanie'];
-  // Built-in slots. Most ship a photo (assets/cameos/built, delivered like a
-  // user photo); the drawings below are the fallback, and alfred's the face.
-  const CAMEOS = ['none', 'neo', 'alfred', 'mcafee', 'spagni', 'powell', 'baker', 'ellison', 'saylor', 'wizard', 'scientist', 'pirate', 'punk'];
-  // cameos whose eyewear is opaque: the eyes underneath are hidden, like the shades costume
-  const CAMEOS_HIDE_EYES = new Set(['neo']);
+  const COSTUMES = ['none', 'dog', 'cat', 'unicorn', 'crown', 'partyhat', 'shades', 'halo', 'devil', 'wizard', 'tophat', 'santa', 'pumpkin', 'bunny', 'headphones', 'graduate', 'chef', 'cowboy', 'propeller', 'detective', 'flowercrown', 'beanie', 'witch', 'viking', 'tricorn', 'beret', 'antlers', 'astronaut', 'heartband'];
+  // Built-in slots, all drawn. A saved rule naming a cameo that is no longer
+  // here (and has no photo) renders as no cameo.
+  const CAMEOS = ['none', 'alfred', 'wizard', 'scientist', 'pirate', 'punk'];
   // Photo cameos: any id the user added (cameos.js). A built-in id with a
   // photo shows the photo instead of its drawing.
   const CAMEO_ID = /^[a-z0-9-]{1,32}$/;
@@ -816,8 +853,8 @@
   // Characters register themselves (characters/contract.js, loaded first).
   const Characters = window.BuddyCharacters;
   const EYE_MOODS = ['heart', 'happy', 'angry', 'sad', 'surprised', 'wink', 'star', 'money', 'sleepy', 'suspicious', 'roll', 'googly', 'dizzy', 'x', 'tears', 'laser', 'loading', 'scan', 'wide', 'content', 'side', 'glow'];
-  const EFFECTS = ['none', 'rain', 'sun', 'snow', 'sparkles', 'fire', 'beard', 'garden', 'stars', 'bubbles', 'leaves', 'matrix', 'hearts', 'fireflies', 'rainbow', 'petals'];
-  const PETS = ['none', 'duck', 'cat', 'blob', 'dog', 'bunny', 'parrot', 'frog', 'snail', 'dragon'];
+  const EFFECTS = ['none', 'rain', 'sun', 'snow', 'sparkles', 'fire', 'beard', 'garden', 'stars', 'bubbles', 'leaves', 'matrix', 'hearts', 'fireflies', 'rainbow', 'petals', 'fireworks', 'bats', 'lightning', 'clouds', 'aurora', 'embers'];
+  const PETS = ['none', 'duck', 'cat', 'blob', 'dog', 'bunny', 'parrot', 'frog', 'snail', 'dragon', 'penguin', 'ghost', 'chick', 'owl'];
   const DEFAULT_TEXT = 'INPUT NEEDED';
   // The three state lamps take the colour-vision-safe palette from tokens.css.
   const SLOT_COLORS = { red: 'var(--lamp-red)', amber: 'var(--lamp-amber)', green: 'var(--lamp-green)', blue: '#2f6bff', pink: '#f472b6' };
@@ -900,6 +937,59 @@
         anim.onfinish = () => { if (settles.get(el) === anim) settles.delete(el); };
       }
     }
+
+    // A sprite pack (src/sprite-pack.js, validated in main) replaces the drawn
+    // character: frames per state, cycled at the pack's fps. Only data: URLs of
+    // PNG or SVG are shown; anything else, or an image that fails to load,
+    // drops back to the built-in character.
+    const SPRITE_SRC = /^data:image\/(?:png|svg\+xml);base64,[A-Za-z0-9+/=]+$/;
+    const SPRITE_FOR_LAMP = { green: ['working', 'idle'], amber: ['waiting', 'idle'], red: ['blocked', 'waiting', 'idle'], off: ['idle'] };
+    const spriteImg = svg.querySelector('.sprite-frame');
+    let sprite = null;
+    let spriteTimer = null;
+    let spriteKey = '';
+    function cleanSprite(pack) {
+      if (!pack || typeof pack !== 'object' || !pack.frames || typeof pack.frames !== 'object') return null;
+      const frames = {};
+      for (const [state, list] of Object.entries(pack.frames)) {
+        if (!Array.isArray(list)) continue;
+        const ok = list.filter((f) => typeof f === 'string' && SPRITE_SRC.test(f)).slice(0, 64);
+        if (ok.length) frames[state] = ok;
+      }
+      if (!Object.keys(frames).length) return null;
+      const fps = Math.max(1, Math.min(24, Number(pack.fps) || 6));
+      return { name: String(pack.name || ''), fps, frames };
+    }
+    function spriteFrames(look) {
+      const order = SPRITE_FOR_LAMP[(look && look.lamp) || 'off'] || ['idle'];
+      for (const st of order) if (sprite.frames[st]) return [st, sprite.frames[st]];
+      const first = Object.keys(sprite.frames)[0];
+      return [first, sprite.frames[first]];
+    }
+    function showSprite(look) {
+      if (!sprite) return;
+      const [state, frames] = spriteFrames(look);
+      if (spriteKey === state) return;
+      spriteKey = state;
+      clearInterval(spriteTimer);
+      spriteTimer = null;
+      let i = 0;
+      spriteImg.setAttribute('href', frames[0]);
+      if (frames.length > 1 && !reduceMotion()) {
+        spriteTimer = setInterval(() => { i = (i + 1) % frames.length; spriteImg.setAttribute('href', frames[i]); }, Math.round(1000 / sprite.fps));
+      }
+    }
+    function setSpritePack(pack) {
+      clearInterval(spriteTimer);
+      spriteTimer = null;
+      spriteKey = '';
+      sprite = cleanSprite(pack);
+      svg.classList.toggle('sprite-on', !!sprite);
+      if (!sprite) { spriteImg.removeAttribute('href'); return false; }
+      showSprite(current);
+      return true;
+    }
+    spriteImg.addEventListener('error', () => { if (sprite) setSpritePack(null); });
 
     function setLook(look) {
       const lamp = look.lamp || 'off';
@@ -1003,7 +1093,6 @@
       if (!current || current.cameo !== cameo || current.photoKey !== photoKey) {
         for (const c of CAMEOS) svg.classList.remove(`cameo-${c}`);
         if (!photo && cameo !== 'none') svg.classList.add(`cameo-${cameo}`);
-        svg.classList.toggle('cameo-hides-eyes', !photo && CAMEOS_HIDE_EYES.has(cameo));
         wearPhoto(photo);
       }
       const text = (look.text || DEFAULT_TEXT).toUpperCase().slice(0, 24);
@@ -1024,6 +1113,7 @@
       if (current && nextBloom && nextBloom !== bloomKey) bloom(svg.querySelector(`.sign.sign-${sign} .lamp.on`));
       bloomKey = nextBloom;
       current = { ...look, body, bodyRev, pose, costume, cameo, photoKey, lampFx: fx, signFx, smokeKey };
+      if (sprite) showSprite(look);
       if (ambient) ambient.scan();
     }
 
@@ -1241,11 +1331,13 @@
         });
       }, M.nextBlinkDelay(Math.random(), B.minMs, B.maxMs));
     }
+    let blinksAsked = false;
     function blinks(on) {
+      blinksAsked = !!on;
       clearTimeout(blinkTimer);
       blinkTimer = null;
       svg.classList.remove('blinking');
-      blinking = !!on && !reduceMotion();
+      blinking = !!on && !reduceMotion() && !lowPower;
       if (blinking) scheduleBlink();
     }
 
@@ -1388,8 +1480,21 @@
     // owns until it's back.
     let blinksWanted = false;
     function setHidden(hidden) {
+      svg.classList.toggle('held', !!hidden);
+      if (hidden) holdFrames();
       if (ambient) ambient.setPaused(!!hidden);
       if (hidden) { blinksWanted = blinksWanted || blinking; blinks(false); } else if (blinksWanted) { blinksWanted = false; blinks(true); }
+    }
+    // Low-power: decorative loops, confetti and idle blinks stop (rig.css does
+    // the loops); status lights and pose animations are untouched.
+    let lowPower = false;
+    function setLowPower(on) {
+      if (!!on === lowPower) return;
+      lowPower = !!on;
+      svg.classList.toggle('low-power', lowPower);
+      const asked = blinksAsked;
+      if (lowPower) blinks(false); else if (asked) blinks(true);
+      blinksAsked = asked;
     }
     let reactTimer = null;
     // Short reaction that temporarily overrides the look (poke, pet, feed).
@@ -1610,6 +1715,12 @@
     // settled.
     const mover = svg.querySelector('.mover');
     const walk = { x: 0, v: 0, target: 0, speed: 1, raf: 0, last: 0 };
+    // Hidden or occluded: no requestAnimationFrame loop keeps running for a
+    // window nobody can see. Each settles at its target; the next move restarts it.
+    function holdFrames() {
+      if (sway.raf) { cancelAnimationFrame(sway.raf); sway.raf = 0; sway.x = sway.target; sway.v = 0; placeSwing(sway.x); }
+      if (walk.raf) { cancelAnimationFrame(walk.raf); walk.raf = 0; walk.x = walk.target; walk.v = 0; placeMover(walk.target); }
+    }
     const placeMover = (x) => { mover.style.transform = x ? `translateX(${x}px)` : ''; };
     function walkFrame(now) {
       const M = window.BuddyMotion;
@@ -1834,6 +1945,7 @@
     }
 
     function celebrate() {
+      if (lowPower) return;
       svg.querySelectorAll('.confetti').forEach((el) => {
         el.classList.remove('burst');
         void el.getBoundingClientRect();
@@ -1864,7 +1976,7 @@
       return false;
     }
 
-    return { svg, solidAt, setLook, celebrate, burst, playEvent, react, flash, pokePet, squash, lean, swing, lookAt, blinks, setHidden, setAmbient, talking, get look() { return current; } };
+    return { svg, solidAt, setLook, setSpritePack, get spritePack() { return sprite; }, celebrate, burst, playEvent, react, flash, pokePet, squash, lean, swing, lookAt, blinks, setHidden, setLowPower, setAmbient, talking, get look() { return current; } };
   }
 
   window.mountRig = mountRig;

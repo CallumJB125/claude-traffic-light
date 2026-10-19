@@ -6,9 +6,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync, statSync } from 'node:fs';
+import { rmSync, statSync } from 'node:fs';
 import { request as httpRequest } from 'node:http';
-import { tmpdir, userInfo } from 'node:os';
+import { userInfo } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
@@ -17,10 +17,11 @@ import { createApp } from '../app.js';
 import { loadConfig } from '../config.js';
 import { silentLogger } from '../log.js';
 import { fakeClock, fakeGitHub, testConfig, startHub, FakeRunner, FakeBrowser } from './helpers.js';
+import { testTempDir } from '../../shared/test-support/tmp.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SERVER = resolve(HERE, '..', 'server.js');
-const PRELOAD = resolve(HERE, 'fixtures', 'fake-parent-port.js');
+const PRELOAD = new URL('./fixtures/fake-parent-port.js', import.meta.url).href;
 const SECRET = 'l'.repeat(64);
 
 async function startLocal({ dataDir } = {}) {
@@ -121,7 +122,7 @@ test('local auth refuses proxy headers and a non-loopback Host even with the rig
 });
 
 test('local auth seeds one org, "My board" and an email-less owner once; /api/me answers with it', async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'board-local-'));
+  const dataDir = testTempDir('board-local-');
   try {
     let h = await startLocal({ dataDir });
     const me = (await h.get('/api/me', { cookie: h.cookie })).body;
@@ -161,7 +162,7 @@ function runServer(env, { preload = true } = {}) {
 }
 
 test('server.js under a parentPort: board.listening with the real port (BOARD_PORT=0) and the secret, which never reaches the logs', async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'board-local-'));
+  const dataDir = testTempDir('board-local-');
   const s = runServer({ BOARD_AUTH: 'local', BOARD_PORT: '0', BOARD_DATA_DIR: dataDir, BOARD_LOG_LEVEL: 'debug' });
   try {
     const m = await s.message();
@@ -185,7 +186,7 @@ test('server.js under a parentPort: board.listening with the real port (BOARD_PO
 });
 
 test('server.js under a parentPort: board.enc_key is accepted once, bad keys are refused, and the key never reaches the logs (D36)', async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'board-local-'));
+  const dataDir = testTempDir('board-local-');
   const s = runServer({ BOARD_AUTH: 'local', BOARD_PORT: '0', BOARD_DATA_DIR: dataDir, BOARD_LOG_LEVEL: 'debug' });
   const reply = () => new Promise((ok) => s.child.once('message', ok));
   try {
@@ -210,7 +211,7 @@ test('server.js under a parentPort: board.enc_key is accepted once, bad keys are
 });
 
 test('server.js under a parentPort: startup errors send board.fatal and exit non-zero; dev mode sends no local_secret', async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'board-local-'));
+  const dataDir = testTempDir('board-local-');
   try {
     const bad = runServer({ BOARD_AUTH: 'local', BOARD_BIND: '0.0.0.0', BOARD_DATA_DIR: dataDir });
     const m = await bad.message();
@@ -227,7 +228,7 @@ test('server.js under a parentPort: startup errors send board.fatal and exit non
     await blocker.app.close({ graceMs: 200 });
     rmSync(blocker.cfg.dataDir, { recursive: true, force: true });
 
-    const devDir = mkdtempSync(join(tmpdir(), 'board-local-'));
+    const devDir = testTempDir('board-local-');
     const dev = runServer({ BOARD_AUTH: 'dev', BOARD_PORT: '0', BOARD_DATA_DIR: devDir });
     const d = await dev.message();
     assert.equal(d.type, 'board.listening');
@@ -241,7 +242,7 @@ test('server.js under a parentPort: startup errors send board.fatal and exit non
 });
 
 test('server.js without a parentPort behaves as before (no message, starts normally)', async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'board-local-'));
+  const dataDir = testTempDir('board-local-');
   const s = runServer({ BOARD_AUTH: 'local', BOARD_PORT: '0', BOARD_DATA_DIR: dataDir }, { preload: false });
   try {
     const deadline = Date.now() + 10_000;
@@ -258,7 +259,7 @@ test('server.js without a parentPort behaves as before (no message, starts norma
 });
 
 test('L1: a database created in local mode refuses to start in dev/access mode, and dev login never yields a local: member', async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'board-local-'));
+  const dataDir = testTempDir('board-local-');
   try {
     const h = await startLocal({ dataDir });
     await h.app.close({ graceMs: 200 });
@@ -299,7 +300,7 @@ test('L2: BOARD_LOCAL_SECRET is refused under a parentPort and scrubbed from the
 });
 
 test('L3: a stored local owner that is missing or removed is fatal at startup', async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'board-local-'));
+  const dataDir = testTempDir('board-local-');
   try {
     const h = await startLocal({ dataDir });
     const id = h.app.hub.localMemberId;
@@ -328,7 +329,7 @@ test('L4: createMember rejects a local: github_login like email:', async () => {
 });
 
 test('db file is created 0600 in a 0700 data dir', async () => {
-  const dataDir = join(mkdtempSync(join(tmpdir(), 'board-local-')), 'nested');
+  const dataDir = join(testTempDir('board-local-'), 'nested');
   try {
     const h = await startLocal({ dataDir });
     await h.app.close({ graceMs: 200 });

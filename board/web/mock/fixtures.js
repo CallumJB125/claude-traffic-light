@@ -212,7 +212,13 @@ export function buildCards(now) {
     run_state: 'in_review', fence: 1, branch: 'board/BDL-135-r1', assignee_ids: ['m-alice'], run: run(135, 'm-alice', 'm-alice', { device_name: 'MacBook Pro' }), live: null,
     state_since: ago(38 * M), pr: { number: 1042, url: 'https://github.com/pistorventures/bondly/pull/1042', state: 'open' },
     evidence: { tests: 'pass', verification: 'hub_verified' }, budget: { spent_usd: 1.45, cap_usd: 5 },
-    detail: { evidence: [{ id: 'evd-1', kind: 'test_run', summary: 'jest applications.submit — 14 passed' }], feed: feed(['in_review', 38 * M, { run_n: 1 }]) },
+    review: { id: 'rv-135', status: 'done', verdict: 'changes_requested', provider: 'codex', provider_label: 'Codex', independence: 'other_provider', open_findings: 2, findings_count: 2, cost_usd: null, human_action: null },
+    detail: { evidence: [{ id: 'evd-1', kind: 'test_run', summary: 'jest applications.submit — 14 passed' }], feed: feed(['in_review', 38 * M, { run_n: 1 }]),
+      reviews: [{ id: 'rv-135', run_id: 'run-135', status: 'done', verdict: 'changes_requested', summary: 'The zero check runs after the amount is parsed, so "0.00" still passes.', flags: [],
+        findings: [{ index: 0, file: 'backend/routes/applications.js', line: 88, severity: 'high', rationale: 'parseFloat("0.00") is 0 but the check compares the raw string, so "0.00" is accepted.' },
+          { index: 1, file: 'backend/test/applications.test.js', line: 41, severity: 'medium', rationale: 'No test covers a decimal zero such as "0.00".' }],
+        open_findings: 2, provider: 'codex', provider_label: 'Codex', model: null, author_ai: 'claude', author_label: 'Claude Code', independence: 'other_provider', device_name: 'MacBook Pro',
+        cap_usd: null, cost_usd: null, error: null, human_action: null, human_action_by_name: null, created_age_ms: 30 * M, completed_age_ms: 29 * M }] },
   });
 
   add({

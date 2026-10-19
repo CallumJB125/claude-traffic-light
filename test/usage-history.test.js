@@ -6,8 +6,9 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 const History = require('../usage-history.js');
 const Usage = require('../usage.js');
+const { testTempDir } = require('./helpers/tmp');
 
-const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'cb-history-'));
+const tmp = () => testTempDir('cb-history-');
 const at = (s) => new Date(s).getTime();
 let n = 0;
 const turn = (over = {}) => ({

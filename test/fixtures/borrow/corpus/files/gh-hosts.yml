@@ -1,0 +1,11 @@
+github.com:
+    users:
+        @@USER@@:
+            oauth_token: @@SEED:github_token@@
+    git_protocol: ssh
+    oauth_token: @@SEED:github_token@@
+    user: @@USER@@
+git.@@INTHOST@@:
+    oauth_token: @@SEED:gitlab_token@@
+    user: @@USER@@
+    git_protocol: https

@@ -133,6 +133,22 @@
 //   // (Slack: response_url). Errors are swallowed; the answer was already sent.
 //   async onAckedFailure({ payload, headers, error_code, fetch }) → void,
 //
+//   // Optional (step 4): the hub's own provider app, set up by the operator
+//   // (GitHub: integrations/github/app.js, withApp). Every installation's
+//   // deliveries arrive at POST /api/integrations/<id>/webhook signed with the
+//   // app's secret; the registry runs one for the live connection whose
+//   // external_id route() names, only about a repository linked on it
+//   // (integration_app_repos), through the same dedupe, lease, buckets and
+//   // handleWebhook as a per-connection delivery.
+//   app: {
+//     verify({ headers, rawBody }) → { ok, dedupe_key } | { ok: false, reason },
+//     route({ headers, payload }) → { external_id, repo_id } | { lifecycle: { external_id, op, repo_ids? } } | null,
+//     async installUrl({ state }) → 'https://<one of hosts>/…',   // the install page; state comes back to /callback
+//     async install({ query }) → { external_id, display_name, scopes, settings },   // must confirm the browser's installation id
+//     async repositories(connection) → [{ id, full_name, private }],
+//     installationOf(connection) → installation id | null,
+//   },
+//
 //   // Optional: the provider's published webhook source ranges (GitHub's
 //   // `hooks` from https://api.github.com/meta). A delivery from one of them
 //   // skips the per-connection in-flight read cap (it still needs a valid
@@ -172,13 +188,18 @@
 //   // through PATCH (1–32 names, ^[A-Za-z][A-Za-z0-9_-]{0,63}$). Undeclared: any such name.
 //   configKeys: ['default_board_id'],
 //
-//   // PLANNED, built in Sentry slice S-A (CONTRACT D42 addendum "the Sentry
-//   // connector"); defineConnector does not check it yet, so declaring it
-//   // today does nothing. A token connector that takes webhooks: admins (only)
-//   // get the connection's webhook_url in GET /api/integrations and in the
-//   // token connect answer, to paste into the provider. The URL is not a
-//   // secret (members see the connection id); verify() is the gate.
+//   // Optional (CONTRACT D42 addendum "the Sentry connector"), a token
+//   // connector that takes webhooks only: admins (only) get the connection's
+//   // webhook_url in GET /api/integrations and in the token connect answer,
+//   // to paste into the provider. The URL is not a secret (members see the
+//   // connection id); verify() is the gate.
 //   showsWebhookUrl: true,
+//
+//   // Optional, an integer 1–10000 (same addendum): createCard also spends
+//   // integration_card_day_conn, this many new cards per day per connection
+//   // (rateLimits.integration_card_day_conn wins when a hub sets it). Without
+//   // it the rule is never spent.
+//   dailyCardCap: 100,
 //
 //   // PLANNED, built in S-C3 (CONTRACT D99); not checked or honoured yet.
 //   // The kinds s.signal(kind, {card_id}) may raise inside act() (a subset of
@@ -187,6 +208,15 @@
 //   // card_id}, at most one per card and 6/day per connection. A hint for
 //   // other consumers: it never moves a card, dispatches or notifies by itself.
 //   signals: ['incident'],
+//
+//   // Optional (create-ticket): a member's explicit "Create issue" from a
+//   // session. Called only by POST /api/integrations/:id/issues with the text
+//   // the member approved, never from a webhook or a bus event. `fetch` is the
+//   // restricted fetch without retries (creating an issue is not idempotent).
+//   // Throw fixed text only. The connection offers it once every kind in
+//   // issueSecrets is sealed on it.
+//   issueSecrets: ['api_key'],
+//   async createIssue({ title, description, secrets, provider, fetch }) → { key, url },
 //
 //   async health(ctx) → { ok, detail? },
 //
@@ -199,6 +229,9 @@
 //   // only; never a member id). actAs for a linked member who can no longer act
 //   // throws { code: 'ACTOR_UNAVAILABLE', scope: 'member' } ('connection' for
 //   // created_by): answer the user with fixed text (D42 addendum C2).
+//   // ctx.lastCreatedCard() → {id, board_id, archived} | null: the card of this
+//   // connection's newest createCard request (integration_requests), so always
+//   // one this connection made; never a person's or another connection's.
 //   // ctx.hubUrl → the hub's https origin (BOARD_PUBLIC_URL, read at boot) | null:
 //   // the only base for a link to the hub (never config, provider.hub_url or a payload).
 //   // ctx.connection.settings.provider → what the provider said at connect time
@@ -215,6 +248,8 @@ const PREPARE_KEY_RE = /^[a-z][a-z0-9_]{0,39}$/;
 const PREPARE_INPUTS_MAX = 8;
 const START_INPUTS_MAX = 4;
 const CONFIG_KEYS_MAX = 32;
+const DAILY_CARD_CAP_MAX = 10_000;
+const APP_HOOKS = Object.freeze(['verify', 'route', 'installUrl', 'install', 'repositories', 'installationOf']);
 // A settings.config key an admin may write (D42 addendum C1): never a path, a
 // prototype key or the name of another settings namespace, in any case.
 export const CONFIG_KEY_RE = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
@@ -299,6 +334,15 @@ export function defineConnector(spec) {
     errs.push('ingressCidrs lists CIDR ranges (IPv4 /16 or narrower, IPv6 /32 or narrower), for a connector that takes webhooks');
   }
   if (spec?.workspaceUnique !== undefined && typeof spec.workspaceUnique !== 'boolean') errs.push('workspaceUnique is a boolean');
+  if (spec?.showsWebhookUrl !== undefined && (typeof spec.showsWebhookUrl !== 'boolean' || (spec.showsWebhookUrl && (spec.connect?.kind !== 'token' || !spec.handleWebhook)))) {
+    errs.push('showsWebhookUrl is a boolean, true only for a token connector that takes webhooks');
+  }
+  if (spec?.dailyCardCap !== undefined && !(Number.isInteger(spec.dailyCardCap) && spec.dailyCardCap >= 1 && spec.dailyCardCap <= DAILY_CARD_CAP_MAX)) {
+    errs.push(`dailyCardCap is an integer 1–${DAILY_CARD_CAP_MAX} (new cards per day per connection)`);
+  }
+  if (spec?.app !== undefined && (!spec.app || typeof spec.app !== 'object' || !spec.handleWebhook || APP_HOOKS.some((k) => typeof spec.app[k] !== 'function'))) {
+    errs.push(`app holds ${APP_HOOKS.join(', ')} (functions), for a connector that takes webhooks`);
+  }
   if (spec?.configKeys !== undefined) {
     const k = spec.configKeys;
     if (!Array.isArray(k) || !k.length || k.length > CONFIG_KEYS_MAX || new Set(k).size !== k.length || !k.every(configKeyOk)) {
@@ -322,6 +366,10 @@ export function defineConnector(spec) {
       if (!(idn.subjectRe instanceof RegExp) || idn.subjectRe.global || idn.subjectRe.sticky) errs.push('identity.subjectRe is a RegExp without the g or y flag');
       if (typeof idn.authorizeUrl !== 'function' || typeof idn.exchange !== 'function') errs.push('identity.authorizeUrl and identity.exchange are functions');
     }
+  }
+  if (spec?.createIssue !== undefined || spec?.issueSecrets !== undefined) {
+    if (typeof spec.createIssue !== 'function') errs.push('createIssue is a function, declared together with issueSecrets');
+    if (!Array.isArray(spec.issueSecrets) || !spec.issueSecrets.length || spec.issueSecrets.some((k) => !spec.secrets?.includes?.(k))) errs.push('issueSecrets lists 1+ of the declared secrets that createIssue needs');
   }
   if (spec?.consumes && typeof spec.onEvent !== 'function') errs.push('consumes needs onEvent()');
   for (const [name, a] of Object.entries(spec?.actions ?? {})) {

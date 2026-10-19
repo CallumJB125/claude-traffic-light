@@ -1,0 +1,25 @@
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: var(--text-base)/1.5 var(--font); }
+h2 { margin: 0 0 8px; font-size: var(--text-lg); } h3 { margin: 0; font-size: var(--text-base); }
+section { margin-top: 20px; padding: 16px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-lg); }
+p { margin: 4px 0; } .muted, #status { color: var(--muted); }
+code { font: var(--text-sm) ui-monospace, monospace; }
+button, select { font: inherit; color: inherit; min-height: 36px; padding: 6px 12px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--panel-2); cursor: pointer; }
+select { max-width: 100%; }
+button:disabled, input:disabled + * { opacity: .5; cursor: default; }
+button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--focus, var(--accent)); outline-offset: 2px; }
+.toggle { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
+.row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 8px 0; }
+.turn { padding: 12px 0; border-top: 1px solid var(--line); }
+.turn-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.files { list-style: none; padding: 0; margin: 8px 0; }
+.files li { display: flex; gap: 8px; align-items: baseline; padding: 2px 0; overflow-wrap: anywhere; }
+.files .st { width: 1.5em; color: var(--muted); font: var(--text-sm) ui-monospace, monospace; }
+.files button { min-height: 28px; padding: 2px 8px; text-align: left; }
+.add { color: var(--green); } .del { color: var(--red); }
+.review { margin: 8px 0; padding: 8px 12px; border-left: 3px solid var(--accent); white-space: pre-wrap; }
+.patch { margin: 8px 0; padding: 10px; max-height: 480px; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg); font: var(--text-sm)/1.45 ui-monospace, monospace; white-space: pre; }
+.patch .a { color: var(--green); } .patch .d { color: var(--red); } .patch .h { color: var(--muted); }
+.note { color: var(--muted); font-size: var(--text-sm); }
+@media (max-width: 600px) { section { padding: 12px; } }

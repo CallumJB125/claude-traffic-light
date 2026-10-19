@@ -4,22 +4,50 @@ import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import crypto from 'node:crypto';
 import { INTERRUPT_WAIT_MS, STOP_GRACE_MS } from '../../shared/liveness.js';
-import { lstartOf, killTree, processTable, treeGroups, killGroups, isAlive } from '../procs.js';
+import { lstartOf, killTree, processTable, treeGroups, killGroups, isAlive, waitForStopped, STOP_VERIFY_MS } from '../procs.js';
 import { buildArgv, userMessage, interruptRequest } from '../launch.js';
 import { lineReader } from '../util.js';
+import { detectCli } from './detect.js';
+import path from 'node:path';
 
 /**
  * Normalised events (design §3.2.2):
  *  init {session_id, tools, mcp_servers}
  *  tool_start {id, name, input} · tool_end {id, ok}
  *  assistant {text} · result {subtype, is_error, total_cost_usd, num_turns, terminal_reason, permission_denials, result}
+ *  usage {inputTokens, outputTokens, costUsd} (with each result that reports usage)
  *  rate_limit {info} · control_response {request_id, subtype} · compact {} · exit {code, signal, sawResult}
+ * A spend cap hit (--max-budget-usd) is a result with terminal_reason 'budget'.
  */
 export class ClaudeBackend extends EventEmitter {
-  constructor({ bin, cwd, env, runDir, sessionId, budgetUsd, maxTurns, systemPrompt, model, resume = false, log, boardHome = null,
-    interruptWaitMs = INTERRUPT_WAIT_MS, stopGraceMs = STOP_GRACE_MS }) {
+  static describe(platform = process.platform) {
+    return {
+      id: 'claude',
+      label: 'Claude Code',
+      startable: platform !== 'win32',
+      ...(platform === 'win32' ? { reason: 'Claude managed tasks require a provider sandbox, which Claude does not support on native Windows.' } : {}),
+      capabilities: {
+        budget: 'native', budgetUnit: 'usd',      // --max-budget-usd
+        resume: true, interrupt: true, structuredEvents: true,
+        permissions: 'hooks',                     // PreToolUse gate + --permission-prompt-tool
+        systemPrompt: true, model: true, maxTurns: true,
+      },
+    };
+  }
+
+  /** Signed in: an API key in the env, or the CLI's documented credentials file exists (macOS keeps it in the keychain: 'unknown'). */
+  static async detect(opts = {}) {
+    if ((opts.platform ?? process.platform) === 'win32') return { id: 'claude', installed: false, startable: false, signedIn: 'unknown', reason: 'unsupported_windows_sandbox', detail: 'Claude managed tasks require a provider sandbox. Native Windows is unsupported; external sessions remain visible.' };
+    const d = await detectCli('claude', { ...opts, authFiles: (env) => (env.HOME ? [path.join(env.HOME, '.claude', '.credentials.json')] : []) });
+    return d.installed && !d.reason && (opts.env ?? process.env).ANTHROPIC_API_KEY ? { ...d, signedIn: true } : d;
+  }
+
+  // budget {amount, unit:'usd'} (adapter contract §4) or the older budgetUsd; permissionMode defaults to the board profile.
+  constructor({ bin, cwd, env, runDir, sessionId, budgetUsd, budget = null, maxTurns, systemPrompt, model, resume = false, log, boardHome = null,
+    platform = process.platform, permissionMode = 'acceptEdits', extraDisallowed = [], interruptWaitMs = INTERRUPT_WAIT_MS, stopGraceMs = STOP_GRACE_MS }) {
     super();
-    Object.assign(this, { bin, cwd, env, runDir, sessionId, budgetUsd, maxTurns, systemPrompt, model, resume, log, boardHome, interruptWaitMs, stopGraceMs });
+    if (budgetUsd == null && budget?.unit === 'usd' && Number.isFinite(budget.amount)) budgetUsd = budget.amount;
+    Object.assign(this, { bin, cwd, env, runDir, sessionId, budgetUsd, maxTurns, systemPrompt, model, resume, log, boardHome, platform, permissionMode, extraDisallowed, interruptWaitMs, stopGraceMs });
     this.child = null;
     this.pid = null;
     this.lstart = null;
@@ -33,15 +61,23 @@ export class ClaudeBackend extends EventEmitter {
 
   argv() {
     return buildArgv({ runDir: this.runDir, sessionId: this.sessionId, resume: this.resume, budgetUsd: this.budgetUsd,
-      maxTurns: this.maxTurns, systemPrompt: this.systemPrompt, model: this.model, boardHome: this.boardHome });
+      maxTurns: this.maxTurns, systemPrompt: this.systemPrompt, model: this.model, boardHome: this.boardHome,
+      permissionMode: this.permissionMode, extraDisallowed: this.extraDisallowed });
   }
 
   start(firstPromptText) {
+    if (this.platform === 'win32') throw Object.assign(new Error('Claude managed tasks require a provider sandbox, unavailable on native Windows. External sessions remain visible.'), { code: 'NOT_AVAILABLE' });
     const child = spawn(this.bin, this.argv(), { cwd: this.cwd, env: this.env, stdio: ['pipe', 'pipe', 'pipe'], detached: true }); // privacy-flow: runner-claude
     this.child = child;
     this.pid = child.pid;
     this.lstart = lstartOf(child.pid);
     this.pgid = child.pid;   // detached ⇒ own session and process group
+    this.attachChild(child);
+    if (firstPromptText) this.send(firstPromptText);
+    return this;
+  }
+
+  attachChild(child) {
     child.stdin.on('error', () => { /* EPIPE after exit */ });
     child.stdout.setEncoding('utf8');
     child.stdout.on('data', lineReader((l) => this.#onLine(l)));
@@ -52,8 +88,6 @@ export class ClaudeBackend extends EventEmitter {
       if (!this.exited) this.#exit(null, null, err.message);
     });
     child.on('exit', (code, signal) => this.#exit(code, signal));
-    if (firstPromptText) this.send(firstPromptText);
-    return this;
   }
 
   #exit(code, signal, error) {
@@ -67,7 +101,7 @@ export class ClaudeBackend extends EventEmitter {
   #onLine(line) {
     let m;
     try { m = JSON.parse(line); } catch { return; }
-    this.emit('raw', m);
+    if (!m || typeof m !== 'object') return;
     switch (m.type) {
       case 'system':
         if (m.subtype === 'init') {
@@ -92,9 +126,13 @@ export class ClaudeBackend extends EventEmitter {
       case 'result':
         this.sawResult = true;
         this.turnActive = false;
+        if (m.usage && typeof m.usage === 'object') {
+          const n = (x) => (Number.isSafeInteger(x) && x >= 0 ? x : 0);
+          this.emit('usage', { inputTokens: n(m.usage.input_tokens), outputTokens: n(m.usage.output_tokens), ...(Number.isFinite(m.total_cost_usd) ? { costUsd: m.total_cost_usd } : {}) });
+        }
         this.emit('result', {
           subtype: m.subtype, is_error: !!m.is_error, total_cost_usd: m.total_cost_usd, num_turns: m.num_turns,
-          terminal_reason: m.terminal_reason ?? null, permission_denials: m.permission_denials ?? [], result: m.result ?? null,
+          terminal_reason: m.subtype === 'error_max_budget_usd' ? 'budget' : (m.terminal_reason ?? null), permission_denials: m.permission_denials ?? [], result: m.result ?? null,
           errors: m.errors ?? null,
         });
         break;
@@ -177,15 +215,15 @@ export class ClaudeBackend extends EventEmitter {
    * killed too (tool trees reparent to 1 and outlive claude, spike 5b).
    */
   async stop() {
-    if (this.stopping) return this.#waitExit(this.interruptWaitMs + this.stopGraceMs + 5000);
+    if (this.stopping) { await this.#waitExit(this.interruptWaitMs + this.stopGraceMs + 5000); return this.#confirmStopped(); }
     this.stopping = true;
-    if (!this.alive()) { this.#reapLeftovers(); return true; }
+    if (!this.alive()) { this.#reapLeftovers(); return this.#confirmStopped(); }
     if (this.turnActive) {
       await this.interrupt();
       await this.#waitTurnEnd(this.interruptWaitMs);
     }
     const before = treeGroups(this.pid, processTable());
-    this.#leftovers = before.groups.filter((g) => g !== this.pgid);
+    this.#leftovers = [...new Set([...this.#leftovers, ...before.groups.filter((g) => g !== this.pgid)])];
     this.endInput();
     try { process.kill(this.pid, 'SIGTERM'); } catch { /* gone */ }
     const exited = await this.#waitExit(this.stopGraceMs);
@@ -194,7 +232,12 @@ export class ClaudeBackend extends EventEmitter {
       await this.#waitExit(2000);
     }
     this.#reapLeftovers();
-    return true;
+    return this.#confirmStopped();
+  }
+
+  async #confirmStopped() {
+    const observed = await waitForStopped({ pid: this.pid, groups: [...new Set([this.pgid, ...this.#leftovers].filter((g) => g != null))] }, { timeoutMs: STOP_VERIFY_MS });
+    return observed && !this.alive();
   }
 
   #leftovers = [];

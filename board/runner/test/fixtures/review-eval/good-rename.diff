@@ -1,0 +1,17 @@
+diff --git a/src/queue.js b/src/queue.js
+index 5555555..6666666 100644
+--- a/src/queue.js
++++ b/src/queue.js
+@@ -4,9 +4,9 @@ export class Queue {
+   constructor() {
+-    this.q = [];
++    this.items = [];
+   }
+   push(x) {
+-    this.q.push(x);
++    this.items.push(x);
+   }
+   get size() {
+-    return this.q.length;
++    return this.items.length;
+   }

@@ -6,12 +6,14 @@ const assert = require('node:assert/strict');
 const os = require('os');
 const fs = require('fs');
 const path = require('path');
+const vm = require('node:vm');
 
 const Brand = require('../brand.js');
 const config = require('../electron-builder.config.js');
 const pkg = require('../package.json');
 const R2 = require('../scripts/release-r2.js');
 const Smoke = require('../src/smoke.js');
+const { testTempDir } = require('./helpers/tmp');
 
 test('installer names say the brand, and so do productName and appId', () => {
   assert.equal(config.productName, Brand.name);
@@ -23,15 +25,19 @@ test('installer names say the brand, and so do productName and appId', () => {
   assert.match(config.dmg.title, new RegExp(`^${Brand.name} `));
 });
 
-test('every platform builds what it can update from, and nothing that cannot', () => {
+test('every platform builds its update target; Windows portable has a distinct manual-download name', () => {
   assert.deepEqual(config.mac.target.map((t) => t.target), ['dmg', 'zip']);
   assert.deepEqual(config.mac.target[0].arch, ['arm64', 'x64']);
-  assert.deepEqual(config.win.target.map((t) => t.target), ['nsis']);
+  assert.deepEqual(config.win.target.map((t) => t.target), ['nsis', 'portable']);
+  assert.ok(config.win.target.every(t => t.arch.length === 1 && t.arch[0] === 'x64'));
+  assert.equal(config.portable.artifactName, `${Brand.name}-\${version}-win-\${arch}-portable.exe`);
+  assert.notEqual(config.portable.artifactName, config.nsis.artifactName);
+  assert.equal(config.nsis.deleteAppDataOnUninstall, false);
   assert.deepEqual(config.linux.target.map((t) => t.target), ['AppImage', 'deb']);
   assert.equal(config.publish[0].provider, 'generic');
   assert.match(config.publish[0].url, /^https:\/\//);
   // The layered config keeps package.json's file list, so other branches' additions still ship.
-  assert.deepEqual(config.files, pkg.build.files);
+  assert.deepEqual(config.files, [...pkg.build.files, '!board/shared/test-support/**']);
   assert.equal(config.mac.sign, './build/sign.js');
 });
 
@@ -104,7 +110,7 @@ test('N2: without WINDOWS_RELEASE no Windows file or latest.yml is staged, fetch
   // a Windows-only staging has nothing to promote
   assert.throws(() => R2.promotePlan('1.2.0', WIN_NAMES), /no feed file/);
 
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stage-win-'));
+  const dir = testTempDir('stage-win-');
   for (const n of names) fs.writeFileSync(path.join(dir, n), n);
   const off = fakeAws(new Map());
   R2.main(['stage', '1.2.0', dir], off.run, () => {}, R2_ENV);
@@ -115,7 +121,7 @@ test('N2: without WINDOWS_RELEASE no Windows file or latest.yml is staged, fetch
   assert.deepEqual(keys(on).sort(), names.map((n) => `1.2.0/${n}`).sort());
 
   const bucket = () => new Map(names.map((n) => [`1.2.0/${n}`, n]));
-  const signed = fs.mkdtempSync(path.join(os.tmpdir(), 'signed-win-'));
+  const signed = testTempDir('signed-win-');
   fs.writeFileSync(path.join(signed, 'release.json'), 'm');
   fs.writeFileSync(path.join(signed, 'release.json.sig'), 's');
   const roots = (b) => [...b.keys()].filter((k) => !k.includes('/')).sort();
@@ -126,10 +132,10 @@ test('N2: without WINDOWS_RELEASE no Windows file or latest.yml is staged, fetch
   R2.main(['promote', '1.2.0', '--manifest-dir', signed], fakeAws(pOn).run, () => {}, R2_WIN);
   assert.deepEqual(roots(pOn), [...names, 'release.json', 'release.json.sig'].sort());
 
-  const fOff = fs.mkdtempSync(path.join(os.tmpdir(), 'fetch-win-'));
+  const fOff = testTempDir('fetch-win-');
   R2.main(['fetch-staged', '1.2.0', fOff], fakeAws(bucket()).run, () => {}, R2_ENV);
   assert.deepEqual(fs.readdirSync(fOff).sort(), [...OTHER_NAMES].sort());
-  const fOn = fs.mkdtempSync(path.join(os.tmpdir(), 'fetch-win-'));
+  const fOn = testTempDir('fetch-win-');
   R2.main(['fetch-staged', '1.2.0', fOn], fakeAws(bucket()).run, () => {}, R2_WIN);
   assert.deepEqual(fs.readdirSync(fOn).sort(), [...names].sort());
   // only the exact string 'true' turns it on
@@ -142,7 +148,7 @@ test('N2: without WINDOWS_RELEASE no Windows file or latest.yml is staged, fetch
 test('R2 promote copies the staged files, then uploads the manifest signed now: <version>/ first, the root last', () => {
   const bucket = new Map([['1.1.0/latest.yml', 'y'], ['1.1.0/Plexiform-1.1.0-win-x64.exe', 'e']]);
   const { run, calls } = fakeAws(bucket);
-  const signed = fs.mkdtempSync(path.join(os.tmpdir(), 'signed-'));
+  const signed = testTempDir('signed-');
   fs.writeFileSync(path.join(signed, 'release.json'), 'm');
   fs.writeFileSync(path.join(signed, 'release.json.sig'), 's');
   R2.main(['promote', '1.1.0', '--manifest-dir', signed], run, () => {}, R2_WIN);
@@ -162,7 +168,7 @@ test('R2 promote copies the staged files, then uploads the manifest signed now: 
 
 // M7 (code review): re-running a tag must not change a release that is live.
 test('R2 stage refuses a version that was already promoted', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stage-'));
+  const dir = testTempDir('stage-');
   fs.writeFileSync(path.join(dir, 'latest.yml'), 'y');
   const { run } = fakeAws(new Map([['1.2.0/release.json', 'm'], ['1.2.0/latest.yml', 'y']]));
   assert.throws(() => R2.main(['stage', '1.2.0', dir], run, () => {}, R2_WIN), /already promoted/);
@@ -186,14 +192,14 @@ test('R2: only staging may run without its secrets; promote and the fetches fail
 });
 
 test('R2 fetch-live and fetch-staged download what is there, and nothing when nothing is live', () => {
-  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'live-'));
+  const out = testTempDir('live-');
   const empty = fakeAws(new Map());
   R2.main(['fetch-live', out], empty.run, () => {}, R2_ENV);
   assert.deepEqual(fs.readdirSync(out), []);
   const { run } = fakeAws(new Map([['beta/release.json', 'm'], ['beta/release.json.sig', 's'], ['beta/1.0.0-beta.2/beta.yml', 'y'], ['beta/1.0.0-beta.2/release.json', 'm']]));
   R2.main(['fetch-live', out, '--beta'], run, () => {}, R2_ENV);
   assert.deepEqual(fs.readdirSync(out).sort(), ['release.json', 'release.json.sig']);
-  const staged = fs.mkdtempSync(path.join(os.tmpdir(), 'staged-'));
+  const staged = testTempDir('staged-');
   R2.main(['fetch-staged', '1.0.0-beta.2', staged, '--beta'], run, () => {}, R2_WIN);
   assert.deepEqual(fs.readdirSync(staged), ['beta.yml'], 'the staged files, never a manifest');
 });
@@ -201,14 +207,14 @@ test('R2 fetch-live and fetch-staged download what is there, and nothing when no
 // N4 (security re-review): a failed listing read as "nothing there" could stage over a promoted version.
 test('N4: an aws ls failure is an error with its stderr; only a genuinely empty prefix is empty', () => {
   const failing = (err) => () => { throw err; };
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stage-ls-'));
+  const dir = testTempDir('stage-ls-');
   fs.writeFileSync(path.join(dir, 'latest-mac.yml'), 'y');
   const denied = awsFail(255, 'An error occurred (AccessDenied) when calling the ListObjectsV2 operation: Access Denied');
   assert.throws(() => R2.main(['stage', '1.2.0', dir], failing(denied), () => {}, R2_ENV), /aws s3 ls s3:\/\/bk\/1\.2\.0\/ failed \(exit 255\): An error occurred \(AccessDenied\)/);
   // exit 1 with something on stderr is a failure too, not an empty prefix
   assert.throws(() => R2.main(['fetch-live', dir], failing(awsFail(1, 'Could not connect to the endpoint URL')), () => {}, R2_ENV), /exit 1\): Could not connect/);
   assert.throws(() => R2.main(['fetch-staged', '1.2.0', dir], failing(Object.assign(new Error('spawn aws ENOENT'), { code: 'ENOENT' })), () => {}, R2_ENV), /failed: spawn aws ENOENT/);
-  const signed = fs.mkdtempSync(path.join(os.tmpdir(), 'signed-ls-'));
+  const signed = testTempDir('signed-ls-');
   for (const n of ['release.json', 'release.json.sig']) fs.writeFileSync(path.join(signed, n), n);
   assert.throws(() => R2.main(['promote', '1.2.0', '--manifest-dir', signed], failing(denied), () => {}, R2_ENV), /AccessDenied/);
   // stage asks for stderr to be piped to it, so it can say what went wrong
@@ -221,11 +227,11 @@ test('N4: an aws ls failure is an error with its stderr; only a genuinely empty 
 
 test('N4: fetch-live --version downloads the release.json that version was promoted with', () => {
   const { run } = fakeAws(new Map([['release.json', 'live'], ['release.json.sig', 'ls'], ['1.2.0/release.json', 'old'], ['1.2.0/release.json.sig', 'os'], ['1.2.0/latest-mac.yml', 'y']]));
-  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'promoted-'));
+  const out = testTempDir('promoted-');
   R2.main(['fetch-live', out, '--version', '1.2.0'], run, () => {}, R2_ENV);
   assert.equal(fs.readFileSync(path.join(out, 'release.json'), 'utf8'), 'old');
   assert.equal(fs.readFileSync(path.join(out, 'release.json.sig'), 'utf8'), 'os');
-  const none = fs.mkdtempSync(path.join(os.tmpdir(), 'promoted-'));
+  const none = testTempDir('promoted-');
   const logs = [];
   R2.main(['fetch-live', none, '--version', '1.1.0'], run, (m) => logs.push(m), R2_ENV);
   assert.deepEqual(fs.readdirSync(none), []);
@@ -234,7 +240,7 @@ test('N4: fetch-live --version downloads the release.json that version was promo
 });
 
 test('the smoke test refuses a real home or data folder', () => {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'smoke-t-'));
+  const tmp = testTempDir('smoke-t-');
   assert.equal(Smoke.unsafeReason({ home: tmp, dataDir: tmp, tmp: os.tmpdir() }), null);
   assert.match(Smoke.unsafeReason({ home: os.homedir(), dataDir: tmp, tmp: os.tmpdir() }), /HOME .* is not a temp folder/);
   assert.match(Smoke.unsafeReason({ home: tmp, dataDir: undefined, tmp: os.tmpdir() }), /not set/);
@@ -247,7 +253,7 @@ test('uninstall: NSIS and the .deb take the hooks out before the binary goes, an
   assert.equal(config.nsis.include, 'build/installer.nsh');
   const nsh = fs.readFileSync(path.join(__dirname, '..', config.nsis.include), 'utf8');
   // customUnInstall runs after $INSTDIR is deleted; customRemoveFiles runs before.
-  assert.match(nsh, /!macro customRemoveFiles[\s\S]*\$\{ifNot\} \$\{isUpdated\}\s*[\s\S]*--uninstall-hooks[\s\S]*RMDir \/r \$INSTDIR\s*!macroend/);
+  assert.match(nsh, /!macro customRemoveFiles[\s\S]*\$\{ifNot\} \$\{isUpdated\}\s*[\s\S]*--uninstall-hooks[\s\S]*RMDir \/r \$INSTDIR[\s\S]*!macroend/);
   assert.ok(!/!macro customUnInstall\b/.test(nsh));
   const at = config.deb.fpm.indexOf('--before-remove');
   assert.ok(at >= 0);
@@ -287,6 +293,101 @@ function jobsOf(yml) {
   return out;
 }
 
+// Evaluate only the closed matrix expression that selects accepted platforms.
+// It is workflow configuration, never a value interpolated into shell code.
+function releaseMatrixExpression(yml) {
+  const include = require('js-yaml').load(yml).jobs.build.strategy.matrix.include;
+  assert.equal(typeof include, 'string');
+  const match = /^\$\{\{ (.+) \}\}$/.exec(include);
+  assert.ok(match, 'one expression selects the release matrix');
+  assert.match(match[1], /^fromJSON\(.+\)$/);
+  assert.match(match[1], /vars\.WINDOWS_RELEASE == 'true'/);
+  return match[1];
+}
+
+function assertNoShellInputInterpolation(yml, file) {
+  const lines = yml.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const run = /^(\s+)(-\s+)?run:\s*(.*)$/.exec(lines[i]);
+    if (!run) continue;
+    assert.ok(!/\$\{\{[^}]*inputs\./.test(run[3]), `${file}: inline run must use quoted environment variables`);
+    if (!/^[|>]/.test(run[3])) continue;
+    const indent = run[1].length + (run[2]?.length || 0);
+    for (let j = i + 1; j < lines.length; j++) {
+      if (!lines[j].trim()) continue;
+      if (/^\s*/.exec(lines[j])[0].length <= indent) break;
+      assert.ok(!/\$\{\{[^}]*inputs\./.test(lines[j]), `${file}: run block must use quoted environment variables`);
+    }
+  }
+}
+
+test('release scope: macOS/Linux by default; Windows diagnostics cannot enable publication', () => {
+  const yml = readText('.github/workflows/release.yml');
+  const expression = releaseMatrixExpression(yml);
+  for (const [flag, event, diagnostic, wanted] of [
+    [undefined, 'workflow_dispatch', false, ['mac', 'linux']],
+    ['false', 'workflow_dispatch', false, ['mac', 'linux']],
+    ['TRUE', 'workflow_dispatch', false, ['mac', 'win', 'linux']],
+    ['true', 'workflow_dispatch', false, ['mac', 'win', 'linux']],
+    [undefined, 'workflow_dispatch', true, ['mac', 'win', 'linux']],
+    ['false', 'workflow_dispatch', true, ['mac', 'win', 'linux']],
+    [undefined, 'push', true, ['mac', 'linux']],
+    ['true', 'push', false, ['mac', 'win', 'linux']],
+  ]) {
+    const rows = vm.runInNewContext(expression, { vars: { WINDOWS_RELEASE: typeof flag === 'string' ? flag.toLowerCase() : flag }, github: { event_name: event }, inputs: { validate_windows: diagnostic }, fromJSON: JSON.parse });
+    assert.deepEqual(rows.map(row => row.platform), wanted);
+    assert.deepEqual(rows.map(row => row.os), wanted.map(p => ({ mac: 'macos-latest', win: 'windows-latest', linux: 'ubuntu-latest' }[p])));
+  }
+  const jobs = jobsOf(yml);
+  assert.match(jobs['native-directory'], /uses: \.\/\.github\/workflows\/windows-native\.yml/);
+  assert.ok(!/\n {4}if:/.test(jobs['native-directory']), 'native SDK acceptance always runs');
+  for (const name of ['stage', 'stage-beta']) {
+    assert.match(jobs[name], /needs: \[build, native-directory\]/);
+    assert.ok(!/inputs\.validate_windows/.test(jobs[name]), `${name}: diagnostics never grant publication`);
+  }
+  for (const [event, beta, platform, flag, wanted] of [
+    ['workflow_dispatch', false, 'linux', undefined, ['linux']],
+    ['workflow_dispatch', false, 'mac', undefined, ['mac']],
+    ['workflow_dispatch', false, 'win', undefined, ['win']],
+    ['workflow_dispatch', true, 'linux', undefined, ['mac', 'linux']],
+    ['workflow_dispatch', true, 'win', 'true', ['mac', 'win', 'linux']],
+    ['push', false, 'linux', undefined, ['mac', 'linux']],
+    ['push', false, 'mac', 'true', ['mac', 'win', 'linux']],
+  ]) {
+    const rows = vm.runInNewContext(expression, { vars: { WINDOWS_RELEASE: flag }, github: { event_name: event }, inputs: { beta, validation_platform: platform }, fromJSON: JSON.parse });
+    assert.deepEqual(rows.map(row => row.platform), wanted, `${event} beta=${beta} platform=${platform}`);
+  }
+});
+
+test('focused installer acceptance selects one platform and cannot stage a release', () => {
+  const yml = readText('.github/workflows/windows-acceptance.yml');
+  const doc = require('js-yaml').load(yml);
+  assert.deepEqual(Object.keys(doc.jobs), ['build']);
+  assert.deepEqual(doc.permissions, { contents: 'read' });
+  assert.deepEqual(doc.on.workflow_dispatch.inputs.platform.options, ['win', 'linux', 'mac']);
+  assert.equal(doc.on.workflow_dispatch.inputs.platform.default, 'win');
+  const expression = /^\$\{\{ (.+) \}\}$/.exec(doc.jobs.build.strategy.matrix.include)[1];
+  for (const [platform, os] of [['win', 'windows-latest'], ['linux', 'ubuntu-latest'], ['mac', 'macos-latest']]) {
+    const rows = vm.runInNewContext(expression, { inputs: { platform }, fromJSON: JSON.parse });
+    assert.deepEqual(rows, [{ os, platform }]);
+  }
+  const steps = doc.jobs.build.steps;
+  assert.match(steps.find(s => s.name === 'Build installers').run, /--publish never/);
+  assert.equal(steps.some(s => s.name === 'Beta version'), false, 'artifact-only acceptance has no beta input or versioning step');
+  const release = require('js-yaml').load(readText('.github/workflows/release.yml'));
+  assert.equal(steps.find(s => s.name === 'Unit tests').run, release.jobs.build.steps.find(s => s.name === 'Unit tests').run);
+  assert.ok(!/release-r2|gh release|release-promote|secrets\./.test(yml));
+  assertNoShellInputInterpolation(yml, 'installer acceptance');
+});
+
+test('workflow input guard rejects both inline and multiline shell interpolation', () => {
+  for (const source of [
+    '      - run: echo ${{ inputs.version }}\n',
+    '      - run: |\n          INPUT: ${{ inputs.version }}\n',
+  ]) assert.throws(() => assertNoShellInputInterpolation(source, 'hostile fixture'), /environment variables/);
+  assertNoShellInputInterpolation('      - run: |\n          echo safe\n        env:\n          INPUT: ${{ inputs.version }}\n', 'allowed fixture');
+});
+
 // B1 / M1 (reviews): the key must not be reachable from a branch push or a branch-name condition.
 test('release.yml: tags and manual runs only, nothing signed, no branch conditions', () => {
   const yml = readText('.github/workflows/release.yml');
@@ -301,16 +402,18 @@ test('release.yml: tags and manual runs only, nothing signed, no branch conditio
   for (const j of ['stage', 'stage-beta']) assert.match(jobs[j], /permissions:\n {6}contents: write/, j);
   // the bounded unit tests (a hang on Windows ate the whole job once)
   assert.match(jobs.build, /timeout-minutes: 60/);
+  assert.doesNotMatch(jobs.build, /--test-force-exit/, 'forced exit can silently discard completed child-test verdicts');
   assert.match(jobs.build, /name: Unit tests\n(?:.*\n)*? {8}timeout-minutes: 20\n/);
-  assert.match(jobs.build, /node --test --test-force-exit --test-timeout=120000 test\/\*\.test\.js test\/adapters\/\*\.test\.js/);
-  assert.match(jobs.build, /node --test --test-force-exit --test-timeout=120000 remote\/test\//);
+  assert.match(jobs.build, /node --test --test-concurrency=1 --test-timeout=120000 test\/\*\.test\.js test\/adapters\/\*\.test\.js/);
+  assert.match(jobs.build, /node --test --test-concurrency=4 --test-timeout=120000 remote\/test\//);
   assert.ok(!/npm test/.test(jobs.build));
-  // macOS-first: Windows only reports; Mac and Linux block for tags and candidates
-  const coe = /name: Unit tests\n(?:.*\n)*? {8}continue-on-error: (.*)\n/.exec(jobs.build)[1];
-  assert.equal(coe, "${{ matrix.platform == 'win' }}");
+  // Every selected platform blocks staging; artifacts/evidence remain for debugging.
+  assert.ok(!/continue-on-error:/.test(jobs.build));
   // No dispatch exception: a dry or beta candidate must not hide a Mac/Linux failure
-  assert.deepEqual([...jobs.build.matchAll(/platform: (\w+)/g)].map((m) => m[1]), ['mac', 'win', 'linux']);
-  assert.equal((coe.match(/matrix\.platform == '(\w+)'/g) || []).join(), "matrix.platform == 'win'");
+  releaseMatrixExpression(yml); // semantics and native/stage gates are exercised above
+  assert.match(jobs.build, /name: Windows installer lifecycle/);
+  assert.match(jobs.build, /run: node scripts\/windows-install-smoke\.js/);
+  assert.match(jobs.build, /node --test --test-concurrency=4 --test-timeout=120000 '\*\/test\/\*\*\/\*\.test\.js'/, 'the board authority suite is mandatory too');
   assert.match(jobs.build, /dist\/\*\.yml/, 'beta*.yml as well as latest*.yml');
   // N2: both stage jobs read the repo variable and drop Windows before the checksums and every upload
   for (const j of ['stage', 'stage-beta']) {
@@ -351,32 +454,72 @@ test('promotion input validation accepts an omitted rollback list and rejects ma
   }
 });
 
+// Local reusable workflows come from the same reviewed workflow commit.
+// They must be real, flat files in the fixed workflow directory, callable
+// by a workflow; external actions still require an immutable commit SHA.
+function assertWorkflowUsePinned(use, caller) {
+  const label = `${caller}: ${use}`;
+  if (!use.startsWith('./')) {
+    assert.match(use, /@[0-9a-f]{40}$/, label);
+    return;
+  }
+  assert.match(use, /^\.\/\.github\/workflows\/[A-Za-z0-9][A-Za-z0-9_-]*\.ya?ml$/, label);
+  const relative = use.slice(2);
+  assert.ok(fs.lstatSync(path.join(ROOT, relative)).isFile(), label);
+  const trigger = require('js-yaml').load(readText(relative)).on;
+  assert.ok(trigger && typeof trigger === 'object' && Object.hasOwn(trigger, 'workflow_call'), label);
+}
+
+test('workflow pin policy allows checked local reusable files and refuses paths and mutable external actions', () => {
+  const sha = '34e114876b0b11c390a56381ad16ebd13914f8d5';
+  assertWorkflowUsePinned(`actions/checkout@${sha}`, 'synthetic');
+  assertWorkflowUsePinned('./.github/workflows/windows-native.yml', 'synthetic');
+  for (const use of [
+    'actions/checkout@main', 'actions/checkout@v4', 'actions/checkout',
+    './.github/workflows/../windows-native.yml', './scripts/build.yml',
+    './.github/workflows/windows-native.yml@main', './.github/workflows/missing.yml',
+    './.github/workflows/release-promote.yml', './.github/workflows/release.yml',
+  ]) assert.throws(() => assertWorkflowUsePinned(use, 'synthetic'), undefined, use);
+});
+
 // M4 / #6 (reviews): workflow inputs reach the shell only through env.
 test('workflows: inputs never interpolated into a run script; every action pinned to a commit', () => {
-  for (const f of ['.github/workflows/release.yml', '.github/workflows/release-promote.yml']) {
+  for (const f of ['.github/workflows/release.yml', '.github/workflows/release-promote.yml', '.github/workflows/windows-native.yml']) {
     const yml = readText(f);
+    assertNoShellInputInterpolation(yml, f);
     for (const line of yml.split('\n')) {
       if (!/\$\{\{[^}]*inputs\./.test(line)) continue;
+      if (f === '.github/workflows/release.yml' && line === '        include: ${{ ' + releaseMatrixExpression(yml) + ' }}') {
+        releaseMatrixExpression(yml); // only this closed configuration expression
+        continue;
+      }
       assert.match(line, /^\s+(?:[A-Z_]+|ref|if|group):\s|^\s+if:\s|^\s+ref:\s/, `${f}: ${line.trim()}`);
     }
     // every job that names a signing key runs in the release environment
     for (const [name, body] of Object.entries(jobsOf(yml))) {
       if (/SIGNING_KEY/.test(body)) assert.match(body, /\n {4}environment: release\n/, `${f} ${name}`);
     }
-    for (const m of yml.matchAll(/uses: (\S+)/g)) assert.match(m[1], /@[0-9a-f]{40}$/, `${f}: ${m[1]}`);
+    for (const m of yml.matchAll(/uses: (\S+)/g)) assertWorkflowUsePinned(m[1], f);
   }
 });
 
-// M9 (code review): the copied NSIS block must stay electron-builder's own.
-test('installer.nsh: the copied removal block is exactly electron-builder\'s default for the pinned version', () => {
+// M9: preserve all pinned default commands; isolate only the removal error flag.
+test('installer.nsh: the removal block retains pinned defaults plus exactly one isolated removal error reset', () => {
   const ours = readText('build/installer.nsh');
   const tpl = fs.readFileSync(require.resolve('app-builder-lib/templates/nsis/uninstaller.nsh'), 'utf8');
   const norm = (s) => s.split('\n').map((l) => l.trim()).filter(Boolean).join('\n');
   const def = /!ifmacrodef customRemoveFiles\s*\n\s*!insertmacro customRemoveFiles\s*\n\s*!else\n([\s\S]*?)\n\s*!endif/.exec(tpl);
   assert.ok(def, 'electron-builder still has a default customRemoveFiles block');
-  const copy = /; ---- electron-builder's default block from here ----\n([\s\S]*?)!macroend/.exec(ours);
+  const start = "; ---- electron-builder's default block from here ----";
+  const end = "; ---- electron-builder's default block ends here ----";
+  assert.equal(ours.split(start).length, 2, 'one complete copied block starts');
+  assert.equal(ours.split(end).length, 2, 'one complete copied block ends');
+  const copy = /; ---- electron-builder's default block from here ----\n([\s\S]*?)\n\s*; ---- electron-builder's default block ends here ----/.exec(ours);
   assert.ok(copy);
-  assert.equal(norm(copy[1]), norm(def[1]));
+  const removalBoundary = '  ; Atomic enumeration ends with FindNext EOF setting the error flag.\n  ; The refusal below must observe this removal, not that earlier EOF.\n  ClearErrors\n';
+  assert.equal(copy[1].split(removalBoundary).length, 2, 'one exact removal error reset');
+  assert.ok(copy[1].includes(removalBoundary + '  RMDir /r $INSTDIR'));
+  assert.equal(norm(copy[1].replace(removalBoundary, '')), norm(def[1]));
   assert.match(ours, /nsExec::Exec \/TIMEOUT=\d+ '"\$INSTDIR\\\$\{APP_EXECUTABLE_FILENAME\}" --uninstall-hooks'/);
   assert.ok(!/ExecWait/.test(ours.replace(/^;.*$/gm, '')), 'no unbounded wait');
 });
@@ -399,7 +542,7 @@ test('the builder config has no update-feed override: the feed is brand.js', () 
 // M10 (code review): prerm against stub getent, runuser, readlink and timeout.
 test('prerm: only login accounts and root with Plexiform data, each run as itself under a time limit; never on upgrade', { skip: process.platform === 'win32' && 'POSIX sh' }, () => {
   const { execFileSync } = require('child_process');
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'prerm-'));
+  const root = testTempDir('prerm-');
   const bin = path.join(root, 'bin');
   const log = path.join(root, 'calls.log');
   fs.mkdirSync(bin);
@@ -510,12 +653,23 @@ test('release.yml passes test files, never a bare directory, to node --test', ()
   assert.match(yml, /remote\/test\/\*\.test\.js/);
 });
 
-// A failing Windows smoke test must not fail the Windows job: stage needs every
-// build job, so it would block the macOS release while Windows doesn't ship.
-test('release.yml: the Mac/Windows smoke test only reports on Windows; Mac and Linux block', () => {
+test('release.yml: every smoke test blocks release staging, with explicit Windows lifecycle evidence', () => {
   const yml = readText('.github/workflows/release.yml');
-  const step = yml.slice(yml.indexOf('- name: Smoke test (Mac, Windows)'), yml.indexOf('- uses: actions/upload-artifact'));
-  assert.match(step, /continue-on-error: \$\{\{ matrix\.platform == 'win' \}\}/);
-  const linux = yml.slice(yml.indexOf('- name: Smoke test (Linux)'), yml.indexOf('- name: Smoke test (Mac, Windows)'));
-  assert.doesNotMatch(linux, /continue-on-error/);
+  const step = yml.slice(yml.indexOf('- name: Smoke test (Linux)'), yml.indexOf('- name: Test and lifecycle evidence'));
+  assert.doesNotMatch(step, /continue-on-error/);
+  assert.match(step, /Windows installer lifecycle[\s\S]*timeout-minutes: 15[\s\S]*windows-install-smoke\.js/);
+});
+
+test('manual native-only diagnostics cannot stage artifacts or omit the native gate', () => {
+  const doc = require('js-yaml').load(readText('.github/workflows/release.yml'));
+  assert.deepEqual(doc.on.workflow_dispatch.inputs.native_only, { description: 'Run native acceptance only; no installers or staging', type: 'boolean', default: false });
+  assert.equal(doc.concurrency.group, "release-${{ github.ref }}${{ inputs.native_only && '-native' || '' }}-${{ github.event_name == 'workflow_dispatch' && !inputs.beta && inputs.validation_platform || 'all' }}");
+  assert.equal(doc.concurrency['cancel-in-progress'], false);
+  assert.equal(doc.jobs.build.if, "github.event_name != 'workflow_dispatch' || !inputs.native_only");
+  assert.equal(doc.jobs['native-directory'].if, undefined);
+  assert.equal(doc.jobs['native-directory'].uses, './.github/workflows/windows-native.yml');
+  for (const name of ['stage', 'stage-beta']) {
+    assert.deepEqual(doc.jobs[name].needs, ['build', 'native-directory']);
+    assert.doesNotMatch(doc.jobs[name].if, /always\(|failure\(|cancelled\(/);
+  }
 });

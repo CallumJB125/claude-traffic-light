@@ -81,6 +81,43 @@
     const sending = new Set();
     const answered = new Set();
     const errors = new Map();
+    // Explain mode (src/explain-main.js): id → 'pending' | {ok, sentence, rating, recommend} | {ok:false}.
+    const explained = new Map();
+    let explainOn = false;
+    function refreshExplain() {
+      if (!api.explainStatus) return;
+      Promise.resolve().then(() => api.explainStatus()).then((r) => { const v = !!(r && r.on); if (v !== explainOn) { explainOn = v; render(); } }, () => {});
+    }
+    async function explain(input) {
+      if (explained.get(input.id) === 'pending') return;
+      explained.set(input.id, 'pending'); render();
+      let r;
+      try { r = await api.explainInput(input.id); } catch { r = null; }
+      explained.set(input.id, r && r.ok ? r : { ok: false, reason: r && r.reason });
+      render();
+    }
+    const EXPLAIN_FAIL = { busy: 'Already explaining another request. Try again in a moment.', 'no-cli': 'Install Claude Code to explain this one.', off: 'Explain mode is off in Settings.' };
+    function explainBlock(input) {
+      if (!explainOn || !api.explainInput || input.kind !== 'permission') return null;
+      const box = el('div', 'ib-explain');
+      const r = explained.get(input.id);
+      if (!r) {
+        const b = el('button', 'ib-opt tone-plain ib-explain-btn', 'Explain this');
+        b.type = 'button';
+        b.addEventListener('click', (ev) => { ev.stopPropagation(); explain(input); });
+        box.appendChild(b);
+      } else if (r === 'pending') box.appendChild(el('div', 'ib-hint', 'Explaining…'));
+      else if (!r.ok) box.appendChild(el('div', 'ib-hint', EXPLAIN_FAIL[r.reason] || 'Couldn’t explain this one.'));
+      else {
+        box.setAttribute('role', 'note');
+        box.appendChild(el('div', 'ib-explain-text', r.sentence));
+        const meta = el('div', `ib-explain-meta rating-${String(r.rating).replace(/\s+/g, '-')}`);
+        meta.appendChild(el('span', 'ib-explain-rating', r.rating === 'safe' ? 'Safe' : r.rating === 'risky' ? 'Risky' : 'Be careful'));
+        meta.appendChild(el('span', 'ib-explain-rec', `Suggested: ${r.recommend}`));
+        box.appendChild(meta);
+      }
+      return box;
+    }
     const commands = new Map();
     const full = new Set();
     const notes = new Map(); // id → explanation shown under a blocked input
@@ -370,6 +407,8 @@
         body.appendChild(x);
       }
       if (input.kind !== 'question') { const tb = textBlock(input); if (tb) body.appendChild(tb); }
+      const xb = explainBlock(input);
+      if (xb) body.appendChild(xb);
       if (input.cwd && mode === 'page') body.appendChild(el('div', 'ib-hint', input.cwd));
       switch (input.kind) {
         case 'permission': case 'plan':
@@ -494,7 +533,7 @@
         pill.addEventListener('click', (e) => { e.stopPropagation(); dismissedKey = null; render(); });
         kids.push(pill);
       } else if (list.length) {
-        const { shown, more } = V.visible(list, maxRows, now());
+        const { shown, more } = V.visible(list, maxRows, now(), mode === 'page');
         const openItem = expanded && list.find((i) => i.id === expanded);
         // An expanded input beyond the cap swaps in for the last row.
         const rows = openItem && !shown.includes(openItem) ? [...shown.slice(0, -1), openItem] : shown;
@@ -525,14 +564,14 @@
       scopes = extra.scopes && typeof extra.scopes === 'object' ? extra.scopes : {};
       const ids = new Set(inputs.map((i) => i.id));
       for (const s of [answered, sending, full, scopeMore, denyOpen, noAutoExpand]) for (const id of [...s]) if (!ids.has(id)) s.delete(id);
-      for (const m of [errors, commands, notes, picked, typed, formValues, reasons, shownAt, shownKey]) for (const id of [...m.keys()]) if (!ids.has(id)) m.delete(id);
+      for (const m of [errors, explained, commands, notes, picked, typed, formValues, reasons, shownAt, shownKey]) for (const id of [...m.keys()]) if (!ids.has(id)) m.delete(id);
       const list = live_();
       if (expanded && !list.some((i) => i.id === expanded)) expanded = null;
       // One waiting input opens straight away, like the old Allow/Deny strip
       // (not right after an answer: the next one waits for a deliberate open).
       if (!expanded && !collapsedByUser && list.length === 1 && mode === 'widget' && !noAutoExpand.has(list[0].id)) expanded = list[0].id;
       if (mode === 'page' && !expanded && list.length && !collapsedByUser) {
-        const first = V.visible(list, 1, now()).shown[0];
+        const first = V.visible(list, 1, now(), true).shown[0];
         if (!noAutoExpand.has(first.id)) expanded = first.id;
       }
       const key = keyOf(list);
@@ -542,6 +581,7 @@
         if (list.length <= 1) collapsedByUser = false;
       }
       render();
+      refreshExplain();
     }
 
     // The keyboard, for whichever window has focus (the widget only once
@@ -571,8 +611,20 @@
         if (!cur || !settled(cur.id)) return false;
         e.preventDefault();
         const p = V.primary(cur, now());
-        if (!p) { setError(cur.id, cur.kind === 'permission' ? (cur.enterNote ? `Enter skips this (${cur.enterNote}): click Allow if you mean it.` : 'Enter only allows read-only commands and edits inside the project: click Allow if you mean it.') : 'Pick an option.'); return true; }
-        if (p.type === 'open') open(cur); else send(cur, p.id, undefined);
+        if (!p) { setError(cur.id, cur.kind === 'permission' ? (cur.enterNote ? `Enter skips this (${cur.enterNote}): click Allow if you mean it.` : 'Enter only allows read-only requests, and only with one-key approval on in Preferences: click Allow if you mean it.') : 'Pick an option.'); return true; }
+        if (p.type === 'open') open(cur); else send(cur, p.id, { oneKey: true });
+        return true;
+      }
+      // Attention queue: next / previous waiting item, oldest first.
+      const nav = !typing && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && tag !== 'BUTTON' && tag !== 'PRE' ? ({ ArrowDown: 1, j: 1, ArrowUp: -1, k: -1 })[e.key] : 0;
+      if (nav) {
+        const id = V.step(live_(), expanded, nav);
+        if (!id) return false;
+        e.preventDefault();
+        expanded = id; collapsedByUser = false;
+        render();
+        const sec = [...container.querySelectorAll('.ib-item')].find((n) => n.dataset.id === id);
+        if (sec && sec.scrollIntoView) sec.scrollIntoView({ block: 'nearest' });
         return true;
       }
       return false;

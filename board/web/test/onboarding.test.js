@@ -8,6 +8,17 @@ import { signinScreen, noTeamScreen } from '../js/render-signin.js';
 import { invitePanel, teamScreen } from '../js/render-team.js';
 import { topBar } from '../js/render-board.js';
 import { EMAIL_OFF, INVITE_REPLAYED } from '../js/account-text.js';
+
+test('board entry offers enabled browser OAuth when email codes are disabled', () => {
+  for (const [web, label] of [[{google:true,github:true}, 'Google or GitHub'], [{google:true}, 'Google'], [{github:true}, 'GitHub']]) {
+    const tree=signinScreen({status:'signed_out',accounts:true,emailOff:true,web});
+    assert.match(textOf(tree),new RegExp(`Sign in with ${label}`));
+    assert.equal(byAttr(tree,'href','/signin').length,1);
+    assert.doesNotMatch(textOf(tree),/Sign in with the Plexiform app instead/);
+  }
+  const off=signinScreen({status:'signed_out',accounts:true,emailOff:true,web:{google:'true',github:1}});
+  assert.equal(byAttr(off,'href','/signin').length,0);
+});
 import { model } from './fixtures.js';
 
 test('signed out: email sign-in when the hub mails; the app pointer when it does not', () => {

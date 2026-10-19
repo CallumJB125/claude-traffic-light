@@ -12,8 +12,6 @@ import { createServer } from 'node:http';
 import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
 import { spawn } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inspect } from 'node:util';
@@ -25,6 +23,7 @@ import { createLogger, silentLogger } from '../log.js';
 import { seedDev } from '../seed.js';
 import { testConfig, fakeGitHub, fakeClock } from './helpers.js';
 import { startAccounts } from './accounts-helpers.js';
+import { testTempDir } from '../../shared/test-support/tmp.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const sha256 = (s) => createHash('sha256').update(s).digest('hex');
@@ -299,7 +298,7 @@ test('SES through Accounts: a failed sign-in mail logs the fixed text and the ma
   const mailer = sesMailer({ region: 'af-south-1', ...c, from: FROM, fetchImpl: ses.fetchImpl, now: CLOCK });
   const h = await startAccounts({ mailer, log });
   try {
-    assert.deepEqual((await h.call('GET', '/api/auth/methods')).body, { google: false, github: false, email: true, web: { google: false, github: false } }, 'an SES mailer turns email on');
+    assert.deepEqual((await h.call('GET', '/api/auth/methods')).body, { google: false, github: false, email: true, web: { google: false, github: false }, push: false }, 'an SES mailer turns email on');
     const s = await h.start('new-person@example.com');
     assert.equal(s.status, 200);
     for (let i = 0; i < 100 && !lines.some((l) => l.includes('sign-in mail failed')); i++) await new Promise((r) => setTimeout(r, 10));
@@ -398,9 +397,10 @@ test('config: SES validation fails with fixed texts that never repeat a value', 
   assert.doesNotThrow(() => validateConfig(sesBase({ sesSessionToken: randomBytes(600).toString('base64'), sesFromFormat: 'bare' })));
 });
 
-test('config: SES counts as a mailer for an exposed hub; the console mailer is still refused there', () => {
-  const exposed = (over = {}) => sesBase({ publicUrl: 'https://buddy.acme.test', trustCfIp: true, signinMethods: [], accountsDev: false, ...over });
-  assert.doesNotThrow(() => validateConfig(exposed()), 'SES alone is a sign-in method');
+test('config: SES counts as a sign-in method for an exposed hub only with BOARD_EMAIL_SIGNIN; the console mailer is still refused there', () => {
+  const exposed = (over = {}) => sesBase({ publicUrl: 'https://buddy.acme.test', trustCfIp: true, signinMethods: [], accountsDev: false, emailSignin: true, ...over });
+  assert.doesNotThrow(() => validateConfig(exposed()), 'SES with BOARD_EMAIL_SIGNIN=1 is a sign-in method');
+  assert.throws(() => validateConfig(exposed({ emailSignin: false })), /needs a sign-in method/, 'a mailer alone (invites) is not a sign-in method');
   assert.equal(createMailer(exposed(), { fetchImpl: async () => new Response('{}') }).kind, 'ses');
   assert.throws(() => validateConfig(exposed({ mailProvider: null, sesRegion: null, sesAccessKeyId: null, sesSecretAccessKey: null })), /needs a sign-in method/);
   assert.throws(() => validateConfig(exposed({ consoleMailer: true })), /BOARD_CONSOLE_MAILER is for a loopback hub that is not exposed/);
@@ -411,7 +411,7 @@ test('configured SES: createApp builds it from config, /api/auth/methods says em
   const c = creds();
   const calls = [];
   const fetchImpl = async (url, init) => { calls.push({ url, init }); return new Response(JSON.stringify({ MessageId: 'm-1' }), { status: 200 }); };
-  const cfg = testConfig({ auth: 'accounts', devLoginSecret: null, accountsDev: true, signup: 'open', mailProvider: 'ses', sesRegion: 'me-south-1', sesAccessKeyId: c.accessKeyId, sesSecretAccessKey: c.secretAccessKey, mailFrom: FROM });
+  const cfg = testConfig({ auth: 'accounts', devLoginSecret: null, accountsDev: true, signup: 'open', emailSignin: true, mailProvider: 'ses', sesRegion: 'me-south-1', sesAccessKeyId: c.accessKeyId, sesSecretAccessKey: c.secretAccessKey, mailFrom: FROM });
   const clock = fakeClock();
   const app = createApp(cfg, { clock, log: silentLogger, github: fakeGitHub(), timers: false, fetchImpl });
   seedDev(app.hub);
@@ -419,7 +419,7 @@ test('configured SES: createApp builds it from config, /api/auth/methods says em
     assert.equal(app.hub.accounts.mailer.kind, 'ses');
     const addr = await app.listen(0, '127.0.0.1');
     const base = `http://127.0.0.1:${addr.port}`;
-    assert.deepEqual(await (await fetch(`${base}/api/auth/methods`)).json(), { google: false, github: false, email: true, web: { google: false, github: false } });
+    assert.deepEqual(await (await fetch(`${base}/api/auth/methods`)).json(), { google: false, github: false, email: true, web: { google: false, github: false }, push: false });
     const r = await fetch(`${base}/api/auth/email/start`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: 'jo@example.com', client: 'buddy_desktop' }) });
     assert.equal(r.status, 200);
     for (let i = 0; i < 100 && !calls.length; i++) await new Promise((res) => setTimeout(res, 10));
@@ -453,7 +453,7 @@ function runServer(env, { until = null } = {}) {
 test('boot: the hub with SES starts, logs, stops, and its output never contains the secret, token or key id', async () => {
   const c = creds();
   const token = randomBytes(40).toString('base64');
-  const dir = mkdtempSync(join(tmpdir(), 'board-ses-'));
+  const dir = testTempDir('board-ses-');
   const ok = await runServer({ ...sesEnv(c, { BOARD_SES_SESSION_TOKEN: token }), BOARD_PORT: '0', BOARD_DATA_DIR: dir, BOARD_LOG_LEVEL: 'debug' }, { until: 'hub listening' });
   assert.match(ok.out, /hub listening/);
   for (const f of [c.secretAccessKey, token, c.accessKeyId]) assert.ok(!ok.out.includes(f), 'boot output leaked a credential');

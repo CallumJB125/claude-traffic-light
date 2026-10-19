@@ -26,6 +26,7 @@ export function paletteDialog(dlg, model) {
   const results = paletteResults(dlg, model);
   const index = results.length ? Math.min(dlg.index ?? 0, results.length - 1) : -1;
   const give = dlg.scope === 'give';
+  const search = dlg.scope === 'search';
   let lastKind = null;
   const rows = [];
   results.forEach(({ item, indices }, i) => {
@@ -38,24 +39,25 @@ export function paletteDialog(dlg, model) {
       'data-action': 'palette-run', 'data-index': String(i), 'data-kind': item.kind, 'data-tone': item.tone ?? null,
     },
     h('span', { class: 'pal-icon' }, item.kind === 'card' ? icon('diamond', 'icon-xs') : icon(item.icon ?? 'chevron', 'icon-xs')),
-    h('span', { class: 'pal-title' }, titleWithHits(item.title, indices)),
+    h('span', { class: 'pal-title' }, titleWithHits(item.title, indices), item.snippet ? h('small', { class: 'pal-snippet' }, item.snippet) : null),
     item.hint ? h('span', { class: `pal-hint${item.kind === 'command' ? ' num' : ''}` }, item.hint) : null));
   });
-  return h('dialog', { class: 'palette', role: 'dialog', 'aria-modal': 'true', 'aria-label': give ? 'Give a card to Claude' : 'Command palette', 'data-dialog': 'palette' },
+  return h('dialog', { class: 'palette', role: 'dialog', 'aria-modal': 'true', 'aria-label': search ? 'Search team work' : give ? 'Tackle a card with AI' : 'Command palette', 'data-dialog': 'palette' },
     h('div', { class: 'pal-field' },
       icon('search', 'icon-xs'),
       h('input', {
         class: 'pal-input', type: 'text', role: 'combobox', 'aria-expanded': 'true', 'aria-controls': 'pal-list', 'aria-autocomplete': 'list',
-        'aria-activedescendant': index >= 0 ? `pal-opt-${index}` : null, 'aria-label': give ? 'Pick a card to give to Claude' : 'Search cards and commands',
-        placeholder: give ? 'Pick a card to give to Claude' : 'Jump to a card or run a command', value: dlg.query ?? '',
+        'aria-activedescendant': index >= 0 ? `pal-opt-${index}` : null, 'aria-label': search ? 'Search cards, comments, handoffs and artifact names' : give ? 'Pick a card to tackle with AI' : 'Search cards and commands',
+        placeholder: search ? 'Search this team’s work across all boards' : give ? 'Pick a card to tackle with AI' : 'Jump to a card or run a command', value: dlg.query ?? '', maxlength: search ? 120 : null,
         'data-input': 'palette-q', autofocus: true, autocomplete: 'off', spellcheck: 'false',
       }),
       h('kbd', { class: 'kbd', 'aria-hidden': 'true' }, 'Esc')),
     h('ul', { id: 'pal-list', class: 'pal-list', role: 'listbox', 'aria-label': 'Results' },
-      rows.length ? rows : h('li', { key: 'none', role: 'presentation', class: 'pal-empty' }, give ? 'No card can be given to Claude right now.' : 'Nothing matches.')),
+      rows.length ? rows : h('li', { key: 'none', role: 'presentation', class: 'pal-empty' }, search ? dlg.searchError ?? (dlg.searchLoading ? 'Searching…' : dlg.query.trim().length < 2 ? 'Type at least two characters.' : 'No matching work in this team.') : give ? 'No card can be assigned to an AI right now.' : 'Nothing matches.')),
+    search && dlg.search?.truncated ? h('p', { class: 'pal-foot' }, 'Showing the first 20 matches. Add another word to narrow your search.') : null,
     h('p', { class: 'pal-foot', 'aria-hidden': 'true' },
       h('span', null, h('kbd', { class: 'kbd' }, '↑↓'), ' move'),
       h('span', null, h('kbd', { class: 'kbd' }, '↵'), ' choose'),
-      give ? null : h('span', null, h('kbd', { class: 'kbd' }, '⌘↵'), ' give card to Claude')),
+      give || search ? null : h('span', null, h('kbd', { class: 'kbd' }, '⌘↵'), ' tackle card with AI')),
     h('p', { class: 'sr-only', role: 'status', 'aria-live': 'polite' }, results.length ? `${results.length} result${results.length === 1 ? '' : 's'}` : 'No results'));
 }

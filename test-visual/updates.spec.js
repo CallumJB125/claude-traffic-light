@@ -2,6 +2,7 @@
 // updater service here: a dev run with CLAUDE_BUDDY_UPDATER_STUB serves one
 // fixture over the same IPC contract (src/update-stub.js), and the tests push
 // every other state to the renderers the way the service does.
+const path = require('path');
 const { test, expect } = require('@playwright/test');
 const { launchApp, windowByFile } = require('./app');
 const states = require('../test/fixtures/updater-states.json').states;
@@ -142,6 +143,8 @@ test('a repeated identical state does not repaint the page', async () => {
 
 const bodyH = () => widget.evaluate(() => innerHeight);
 
+const WIDGET_SHOT = { threshold: 0.05, stylePath: path.join(__dirname, 'no-session-strip.css') };
+
 test('the widget shows a quiet "Update ready" row only when ready', async () => {
   await push(fresh('available-manual-download'));
   await widget.waitForTimeout(300);
@@ -153,13 +156,13 @@ test('the widget shows a quiet "Update ready" row only when ready', async () => 
   // a fixed pointer, so the hover-only gear and ? look the same whatever ran before
   await widget.mouse.move(100, 20);
   await widget.waitForTimeout(600);
-  await expect(widget).toHaveScreenshot('widget-update-ready.png', { threshold: 0.05 });
+  await expect(widget).toHaveScreenshot('widget-update-ready.png', WIDGET_SHOT);
   await widget.locator('#update-btn').click();
   await expect.poll(() => log.filter((l) => l.includes('[updater-stub] install {"when":"idle"}')).length).toBeGreaterThan(1);
   await expect(widget.locator('#update-sub')).toHaveText("Will restart when you're not working with Claude");
   await expect(widget.locator('#update-btn')).toBeHidden();
   await widget.waitForTimeout(300);
-  await expect(widget).toHaveScreenshot('widget-update-armed.png', { threshold: 0.05 });
+  await expect(widget).toHaveScreenshot('widget-update-armed.png', WIDGET_SHOT);
   await push(fresh('idle-up-to-date'));
   await expect.poll(bodyH).toBe(200);
 });
@@ -197,7 +200,6 @@ test('a waiting input takes the strip; the update row comes back after it, solid
 
 test('resizing with the update row showing resizes the widget and keeps the row, clickable; saved bounds stay the widget’s own', async () => {
   const fs = require('fs');
-  const path = require('path');
   await push(fresh('ready-restart'));
   await expect.poll(bodyH).toBe(200 + 72);
   const w0 = await widget.evaluate(() => innerWidth);
@@ -240,7 +242,7 @@ test('the widget asks for a one-click update when the team board needs one', asy
   await expect(widget.locator('#update-text')).toHaveText('Update Plexiform to keep using your team board (Acme team needs 1.2.0)');
   await widget.mouse.move(100, 20);
   await widget.waitForTimeout(600);
-  await expect(widget).toHaveScreenshot('widget-update-hub.png', { threshold: 0.05 });
+  await expect(widget).toHaveScreenshot('widget-update-hub.png', WIDGET_SHOT);
   const before = log.filter((l) => l.includes('install {"when":"now"}')).length;
   await widget.locator('#update-btn').click();
   // a session is working (the stub says so): it does not interrupt, it waits for a quiet moment and says so

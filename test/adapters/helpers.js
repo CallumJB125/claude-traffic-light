@@ -7,12 +7,13 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const { testTempDir } = require('../helpers/tmp');
 
 const EMIT = path.join(__dirname, '..', '..', 'hooks', 'emit.js');
 const HOST = os.hostname().split('.')[0];
 const CAPABILITIES = ['working', 'yourTurn', 'blocked', 'answer', 'subagents', 'limits', 'cost'];
 
-const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-adapter-'));
+const tmp = () => testTempDir('ctl-adapter-');
 const fixtures = (id) => JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', `${id}.json`), 'utf8'));
 const sessionFiles = (home) => { try { return fs.readdirSync(path.join(home, 'sessions')).filter((f) => f.endsWith('.json')); } catch { return []; } };
 const readSession = (home, f) => JSON.parse(fs.readFileSync(path.join(home, 'sessions', f), 'utf8'));

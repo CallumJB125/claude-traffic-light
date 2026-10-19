@@ -1,0 +1,19 @@
+{
+  "type": "message_action",
+  "token": "fixtureVerificationTokenNotASecret",
+  "action_ts": "1759312800.123456",
+  "callback_id": "plex_create_card",
+  "trigger_id": "13345224610.8534564801.0a1b2c3d4e5f60718293a4b5c6d7e8f9",
+  "response_url": "https://hooks.slack.com/app-actions/T0TEAM1/21974584944/yk1S9ndf35Q1flupVG5Jbp",
+  "team": { "id": "T0TEAM1", "domain": "acme" },
+  "channel": { "id": "C0CHAN1", "name": "general" },
+  "user": { "id": "U0ALICE", "name": "alice", "team_id": "T0TEAM1" },
+  "message": {
+    "type": "message",
+    "user": "U0BOBBYX",
+    "ts": "1759312700.000200",
+    "text": "Fix the &lt;flaky&gt; login test <@U0CAROL|carol>\nslackfixture-marker-body-91c2 the rest of this message must never be stored"
+  },
+  "message_ts": "1759312700.000200",
+  "is_enterprise_install": false
+}

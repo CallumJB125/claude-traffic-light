@@ -14,13 +14,13 @@ const dir = path.join(__dirname, '..', 'buddy-window');
 const read = (...p) => fs.readFileSync(path.join(...p), 'utf8');
 
 test('only the connectors enabled on the team hub today are "Available"; the rest are "Coming soon"', () => {
-  assert.deepEqual([...LAUNCH_CONNECTORS], ['github']);
-  assert.deepEqual(CONNECTORS.map((c) => c.id), ['github', 'slack', 'sentry', 'linear', 'jira', 'google']);
-  for (const c of CONNECTORS) assert.equal(connectorStatus(c.id), c.id === 'github' ? 'available' : 'soon', c.id);
+  assert.deepEqual([...LAUNCH_CONNECTORS], ['github', 'slack', 'sentry']);
+  assert.deepEqual(CONNECTORS.map((c) => c.id), ['github', 'slack', 'sentry', 'linear', 'jira']);
+  for (const c of CONNECTORS) assert.equal(connectorStatus(c.id), LAUNCH_CONNECTORS.includes(c.id) ? 'available' : 'soon', c.id);
   const rows = connectorRows();
-  assert.deepEqual(rows.filter((r) => r.status === 'available').map((r) => r.id), ['github']);
-  assert.equal(rows.find((r) => r.id === 'github').statusText, 'Available after you join a team');
-  for (const r of rows.filter((x) => x.id !== 'github')) assert.equal(r.statusText, 'Coming soon', r.id);
+  assert.deepEqual(rows.filter((r) => r.status === 'available').map((r) => r.id), ['github', 'slack', 'sentry']);
+  for (const id of ['github', 'slack', 'sentry']) assert.equal(rows.find((r) => r.id === id).statusText, 'Available after you join a team', id);
+  for (const r of rows.filter((x) => !LAUNCH_CONNECTORS.includes(x.id))) assert.equal(r.statusText, 'Coming soon', r.id);
   assert.equal(connectorStatus('nope'), 'soon', 'an unknown tool is never "available"');
   assert.deepEqual(STATUS_TEXT, { available: 'Available after you join a team', soon: 'Coming soon' });
   for (const c of CONNECTORS) assert.ok(c.value.length > 0 && c.value.length < 90, c.id);
@@ -41,7 +41,7 @@ test('the sidebar lists Team and Integrations whatever the account or hub state'
   assert.equal(pageById('integrations').localScreen, 'integrations');
   assert.ok(PAGES.filter((p) => p.group === 'team').map((p) => p.id).includes('integrations'));
   const sidebar = read(dir, 'sidebar.js');
-  assert.match(sidebar, /const list = pages\.filter\(\(p\) => p\.group === g\.id\);/);
+  assert.match(sidebar, /for \(const s of sections\)/);
   assert.ok(!/signedIn|hub\.mode|workspaces/.test(sidebar.split('function build()')[1].split('function paint()')[0]), 'build() does not look at account state');
 });
 
@@ -65,13 +65,22 @@ test('the sign-in buttons use the account page bridge: one new composed action, 
   assert.match(acct, /api\.signInWith\(p\)/);
   assert.match(acct, /Continue with Google/);
   assert.match(acct, /Continue with GitHub/);
-  assert.match(acct, /Join with an invite link', \(\) => api\.go\('join'\)|onclick: \(\) => api\.go\('join'\) \}, 'Join with an invite link'/);
+  assert.match(acct, /onclick: \(\) => api\.go\('join'\) \}, 'Paste your invite link'/);
 });
 
-test('signed-out Team and Integrations copy: plain, names the hub from the brand, status is words', () => {
+test('signed-out Account offers the same sign-in as Team, not a second sign-in screen', () => {
   const acct = read(dir, 'account.js');
-  assert.match(acct, /Sign in to create a team or join one: invite teammates, see their agents live\./);
-  assert.match(acct, /Teams and integrations live on the team hub \(\$\{s\.brand\.defaultHost\}\)/);
+  const body = acct.split('  account(s) {')[1].split('const out = [heading(')[0];
+  assert.match(body, /signedOutActions\(\)/);
+  assert.doesNotMatch(body, /api\.go\('hub'\)/);
+  const team = acct.split('  team(s) {')[1].split('if (!s.team) {')[0];
+  assert.match(team, /signedOutActions\(\)/);
+});
+
+test('signed-out Team and Integrations copy: plain, no hub address, status is words', () => {
+  const acct = read(dir, 'account.js');
+  assert.match(acct, /heading\('Work with a team', 'Share one board with your teammates and see what their AI sessions are working on\. My board stays on this Mac; only team boards are shared\.'\)/);
+  assert.doesNotMatch(acct, /team’s address/);
   assert.ok(!/app\.plexiform\.dev/.test(acct), 'the host comes from the brand, not the page');
   assert.match(acct, /el\('p', \{ class: 'acct-connector-status' \}, c\.statusText\)/);
   assert.match(acct, /el\('ul', \{ class: 'acct-connectors', 'aria-label'/);

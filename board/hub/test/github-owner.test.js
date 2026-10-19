@@ -128,7 +128,7 @@ test('start input: a connector that declares none refuses any input; input reach
     // The callback checks the signed value again with the connector's rule.
     accept = false;
     const refused = await cb('with-inputs', st2, r2.body.bind);
-    assert.deepEqual(refused, { ok: false, error: 'This link is not valid. Start again from Buddy.' });
+    assert.deepEqual(refused, { ok: false, error: 'This link is not valid. Start again from Plexiform.' });
     accept = true;
     const r3 = await h.api(alice, 'POST', '/api/integrations/with-inputs/start', { request_id: randomUUID(), input: { team: 'red' } });
     assert.equal((await cb('with-inputs', new URL(r3.body.form.action).searchParams.get('state'), r3.body.bind)).ok, true);
@@ -313,7 +313,7 @@ test('callback: a tampered or swapped state can\'t move the org (MAC and bind), 
     const a = await start(h, alice, { input: { org: 'acme-co' } });
     const b = await start(h, alice, { input: { org: 'evil-org' } });
     const plain = await start(h, alice);
-    const invalid = { ok: false, error: 'This link is not valid. Start again from Buddy.' };
+    const invalid = { ok: false, error: 'This link is not valid. Start again from Plexiform.' };
     const [sa, sb, sp] = [stateOf(a), stateOf(b), stateOf(plain)];
     // The org changed or added under the old MAC.
     assert.deepEqual(await callback(h, reencode(sa, (p) => ({ ...p, si: { org: 'evil-org' } })), a.body.bind), invalid);

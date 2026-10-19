@@ -7,6 +7,8 @@ contextBridge.exposeInMainWorld('waitingApi', {
   getInputs: () => ipcRenderer.invoke('get-inputs'),
   answerInput: (id, optionId, more) => ipcRenderer.invoke('answer-input', id, optionId, more),
   openInput: (id) => ipcRenderer.invoke('open-input', id),
+  explainStatus: () => ipcRenderer.invoke('explain:status'),
+  explainInput: (id) => (typeof id === 'string' && id.length <= 100 ? ipcRenderer.invoke('explain:input', id) : Promise.resolve({ ok: false })),
   copyInputCommand: (id) => ipcRenderer.invoke('copy-input-command', id),
   openAutoRule: (from) => ipcRenderer.invoke('open-auto-rule', from),
   nudgeMute: (key) => ipcRenderer.invoke('nudge-mute', key),

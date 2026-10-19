@@ -1,0 +1,120 @@
+/* Plexiform's look for Claude Burst's dashboard, injected with insertCSS into
+   the Usage optimiser view only. Values are literal (the dashboard cannot read
+   tokens.css) and mirror the shared dark and light tokens.css palettes: test/burst-theme.test.js
+   keeps them in step. Everything is an override: if Burst renames a variable
+   or a selector, the rule matches nothing and the page just stays as Burst
+   drew it. */
+
+:root:root {
+  color-scheme: dark;
+  --bg: #17191d;
+  --panel: #202329;
+  --panel-2: #292d34;
+  --border: #343941;
+  --text: #f0f1f3;
+  --muted: #b0b7c2;
+  --faint: #9aa3b0;
+  --accent: #e49a78;
+  --ok: #67c4a6;
+  --ok-bg: rgba(103, 196, 166, 0.14);
+  --pass: #67c4a6;
+  --pass-bg: rgba(103, 196, 166, 0.14);
+  --warn: #e4b566;
+  --warn-bg: rgba(228, 181, 102, 0.14);
+  --bad: #ff9187;
+  --bad-bg: rgba(255, 145, 135, 0.14);
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  --radius: 8px;
+  --head-bg: #292d34;
+  --thead-bg: #25282f;
+  --shadow: none;
+  --pc-a: #e49a78;
+  --pc-b: #e49a78;
+  --pc-c: #efb59a;
+  --pcs-saved: #e49a78;
+  --pcs-cost: #67c4a6;
+  /* Compaction-threshold chart (Burst v0.20): Claude Code alone / fixed threshold / Burst as it ran. */
+  --st-default: #9aa3b0;
+  --st-fixed: #efb59a;
+  --st-actual: #67c4a6;
+  --grid: #343941;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:root {
+    color-scheme: light;
+    --bg: #f4f5f7;
+    --panel: #ffffff;
+    --panel-2: #eef0f3;
+    --border: #dde1e6;
+    --text: #20252d;
+    --muted: #556171;
+    --faint: #5c6879;
+    --accent: #a34425;
+    --ok: #187d63;
+    --ok-bg: rgba(24, 125, 99, 0.1);
+    --pass: #187d63;
+    --pass-bg: rgba(24, 125, 99, 0.1);
+    --warn: #945c12;
+    --warn-bg: rgba(148, 92, 18, 0.1);
+    --bad: #c2352b;
+    --bad-bg: rgba(194, 53, 43, 0.1);
+    --head-bg: #eef0f3;
+    --thead-bg: #f2f4f6;
+    --pc-a: #a34425;
+    --pc-b: #a34425;
+    --pc-c: #bd6649;
+    --pcs-saved: #a34425;
+    --pcs-cost: #187d63;
+    --st-default: #5c6879;
+    --st-fixed: #bd6649;
+    --st-actual: #187d63;
+    --grid: #dde1e6;
+  }
+}
+
+/* Plexiform's own navigation and header replace Burst's. */
+aside.side, .wrap > header { display: none !important; }
+.app { display: block !important; min-height: 0; }
+.wrap { max-width: none; padding: 16px 20px 48px; }
+
+body {
+  font: 400 13px/1.45 -apple-system, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  background: var(--bg);
+  color: var(--text);
+}
+h1, h2, h3 { letter-spacing: normal; }
+section, .card { border-radius: var(--radius); box-shadow: none; }
+section > h2 { font-size: 13px; font-weight: 600; }
+.card h3 { letter-spacing: 0.04em; }
+.stat { font-size: 22px; }
+a { color: var(--accent); }
+
+button, select, input, textarea {
+  font: inherit;
+  color: var(--text);
+  border-radius: var(--radius);
+}
+button {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  padding: 4px 11px;
+  min-height: 28px;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+button:hover:not(:disabled) { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+button.primary, button.go { background: var(--accent); border-color: var(--accent); color: #211f1c; }
+button:disabled { opacity: 0.5; }
+input, select, textarea { background: var(--bg); border: 1px solid var(--border); padding: 4px 8px; }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, a:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent); }
+
+table { border-collapse: collapse; }
+th { font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--faint); background: var(--thead-bg); }
+td, th { border-color: var(--border); }
+
+::selection { background: color-mix(in srgb, var(--accent) 35%, transparent); }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; border: 2px solid var(--bg); }
+::-webkit-scrollbar-thumb:hover { background: var(--faint); }
+::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }

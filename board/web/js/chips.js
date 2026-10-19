@@ -6,6 +6,7 @@
 // is "Alice's Claude · editing deals.ts" while running), the overlap chip, and
 // the agent-suggested badge. CardView has no self-driven field.
 import { fmtUsd, formatAge } from './view.js';
+import { prChip } from './pr-status.js';
 
 // A live run whose handover has not synced for this long would lose that
 // narrative if the machine died: worth a nudge, not an alarm.
@@ -16,6 +17,7 @@ const HANDOVER_IN_REASON = new Set(['orphaned', 'handed_over']);
 const HANDOVER_SHOWN = new Set(['claimed', 'running', 'quiet', 'blocked', 'parked', 'suspended', 'reconnecting', 'unresponsive', 'handing_over']);
 const HANDOVER_WARN = new Set(['running', 'quiet', 'blocked']);
 
+// The PR itself has its own chip (pr-status.js); proof is the tests and who verified them.
 function proofChip(view, face) {
   if (face.state !== 'in_review' && face.state !== 'done') return null;
   const ev = view.evidence;
@@ -23,7 +25,6 @@ function proofChip(view, face) {
   if (ev?.tests === 'pass') parts.push('tests ✓');
   else if (ev?.tests === 'fail') parts.push('tests ✗');
   else if (ev?.tests === 'none') parts.push('no tests');
-  if (view.pr?.number) parts.push(`PR #${view.pr.number}`);
   if (!parts.length) return null;
   const verified = ev?.verification === 'hub_verified';
   // In review the verification status is the point; once done it is history.
@@ -32,9 +33,7 @@ function proofChip(view, face) {
   const icon = ev?.tests === 'fail' ? 'cross' : ev?.tests === 'pass' || view.pr?.state === 'merged' ? 'check' : 'warn';
   return {
     id: 'proof', text: parts.join(' · '), tone, icon,
-    title: [ev?.tests ? `Tests: ${ev.tests}` : null, ev ? (verified ? 'Verified by the hub against GitHub' : 'Self-reported by the agent, not verified') : null,
-      view.pr?.number ? `PR #${view.pr.number} ${view.pr.state ?? ''}`.trim() : null].filter(Boolean).join(' · '),
-    href: view.pr?.url ?? null,
+    title: [ev?.tests ? `Tests: ${ev.tests}` : null, ev ? (verified ? 'Verified by the hub against GitHub' : 'Self-reported by the agent, not verified') : null].filter(Boolean).join(' · '),
   };
 }
 
@@ -49,9 +48,22 @@ function handoverChip(view, face, elapsed_ms) {
   };
 }
 
+// Observed local work (My board only): what its session cost at API prices.
+// A "+" says the figure undercounts because some requests had no price.
+function observedCostChip(view) {
+  const c = view.capture?.cost;
+  if (!c || !Number.isFinite(c.usd) || (c.usd <= 0 && !c.unpriced)) return null;
+  const unpriced = c.unpriced > 0 ? ` · ${c.unpriced} request${c.unpriced === 1 ? '' : 's'} could not be priced` : '';
+  return {
+    id: 'cost', text: `${fmtUsd(c.usd)}${c.unpriced > 0 ? '+' : ''}`, tone: c.unpriced > 0 ? 'amber' : 'quiet',
+    title: `This work cost about ${fmtUsd(c.usd)} at API list prices (API-price equivalent, not a bill)${view.pr?.number ? ` · PR #${view.pr.number}` : ''}${unpriced}`,
+  };
+}
+
 function costChip(view, face) {
+  if (!face.budget) return observedCostChip(view);
   // An unspent budget on a card nobody is running is noise; the drawer shows it.
-  if (!face.budget || !(view.run || view.budget?.spent_usd > 0)) return null;
+  if (!(view.run || view.budget?.spent_usd > 0)) return null;
   const { spent_usd = 0, cap_usd } = view.budget;
   return {
     id: 'cost', text: `${fmtUsd(spent_usd)}/${fmtUsd(cap_usd)}`, ratio: face.budget.ratio,
@@ -60,6 +72,17 @@ function costChip(view, face) {
   };
 }
 
+// The verdict of the second AI's review (cardface review), with who reviewed.
+function reviewChipOf(view, face) {
+  const r = face.review;
+  if (!r) return null;
+  const who = view.review?.provider_label;
+  return {
+    id: 'review', text: r.text, tone: r.tone, icon: r.verdict === 'approve' ? 'check' : r.verdict ? 'warn' : 'dot',
+    title: `${who ? `Reviewed by ${who}${view.review?.independence === 'same_provider' ? ' (the same AI as the author)' : ''}` : 'AI review'}${view.review?.cost_usd != null ? ` · ${fmtUsd(view.review.cost_usd)}` : ''}. Open the card to see the findings.`,
+  };
+}
+
 export function cardChips(view, face, { elapsed_ms = 0 } = {}) {
-  return [proofChip(view, face), handoverChip(view, face, elapsed_ms), costChip(view, face)].filter(Boolean);
+  return [prChip(view), proofChip(view, face), reviewChipOf(view, face), handoverChip(view, face, elapsed_ms), costChip(view, face)].filter(Boolean);
 }

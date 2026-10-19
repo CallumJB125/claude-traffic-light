@@ -1,0 +1,2 @@
+/* The session strip (fcc83fbc) shows under a resting pointer only once a session has reported; shots that keep the hover-only gear and ? hide just the strip. */
+#strip { display: none !important; }

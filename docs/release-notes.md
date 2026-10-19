@@ -1,3 +1,32 @@
+Plexiform app update — 20 October 2026 (1.0.2-beta.99)
+
+For macOS (Apple silicon and Intel) and Linux (x64).
+
+What changed
+
+- Project safety. Plexiform checks what your AI changed after every turn. It warns when a turn adds what looks like a password or API key, when a secret would end up in the browser (for example behind NEXT_PUBLIC_ or VITE_), and when a .env file is not ignored by git. You see a blanked-out preview, a link to make a new key, and a one-click undo of that turn. Secrets are never saved or shown.
+- Careful with destructive commands. When an AI asks to run something like rm -rf, a force push, a database reset or a production deploy, the light turns red and Home shows an "Approve with care" card with what it would affect. With restore points on, Plexiform saves one first.
+- Database rules that only look locked. Turn it on per project and Plexiform flags Supabase and Firebase rules that let anyone read or write, and tables without row-level security, with a plain-English fix.
+- Spend safety. "This session burned $X in Y minutes" alerts, daily caps per project, a projected total for today, and a warning when an AI keeps retrying the same failing step. A new rule template alerts when a session crosses an amount.
+- Your Claude plan, not API dollars. Pro and Max users see estimated bars for how close they are to their 5-hour and weekly Claude limits. API-price equivalents are behind "Show what this would cost on the API".
+- Explain mode (off until you turn it on). "Explain this" on permission questions gives one plain sentence, a safe / be careful / risky rating and a suggested answer. Common commands are explained on this Mac; others go to your own claude login with a 2-cent cap. Home shows "What did my AI just do?" after each turn, with "Test it now" when a local dev server is running, and one-click prompts to copy when a session is stuck.
+- Deploys. Plexiform finds Vercel, Netlify and Cloudflare projects and shows building, live with a link, or failed next to the session, using the command-line tools you are already signed in to or a token you paste. A failed build gets a plain-English reason and "Send this error to Claude", which copies a ready prompt. Claude celebrates when a deploy goes live.
+- Easier for people new to coding. Setup asks "Just me, building an app" or "Developer / team", explains in plain words what it adds to Claude Code, and gives a test prompt to copy with help if nothing shows up. Simple mode hides team and developer settings and keeps Home to what matters. Each light colour now means one thing, with a key in Help, Preferences and the More menu. Rule templates read as wishes, such as "Chime when it's done".
+- Build logs and starter kits. Turn a session into a build log, review every line before anything leaves your Mac, then save it as a file or publish a link with "Made with Plexiform — remix this". Anyone can "Start from this" to install a starter kit (repo, CLAUDE.md, skills, MCP servers) after a consent sheet that lists what it may do. Discover now has one catalogue for starters, skills and MCP servers.
+- Fixes. Light-mode text is readable again in the widget bubble, the Waiting page, Settings and Lights. A saved sign-in is restored when you enter a hub address.
+
+What has been verified
+
+Desktop, remote, site and board test suites pass on this build (desktop 5,570 tests, board 3,282, 0 failures), with the privacy census and the hub tenancy matrix. The team hubs already run this build's hub code.
+
+Current limits
+
+- Claude limit bars are estimates from this Mac's usage. Anthropic does not publish the limits, and use on other devices is not counted.
+- Deploy status has been tested with simulated Vercel, Netlify and Cloudflare responses, not live accounts.
+- "What did my AI just do?" recaps are kept until Plexiform quits.
+- Mac builds remain ad-hoc signed and are not Apple-notarized.
+- The limits listed for earlier betas below still apply.
+
 Plexiform app update — 19 October 2026 (1.0.2-beta.97)
 
 For macOS (Apple silicon and Intel) and Linux (x64).

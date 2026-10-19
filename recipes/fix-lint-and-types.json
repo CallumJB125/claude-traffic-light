@@ -1,0 +1,9 @@
+{
+  "id": "fix-lint-and-types",
+  "title": "Fix lint and type errors",
+  "what": "Runs the project's linter and type checker, fixes what they report without changing behaviour, and commits the clean-up in its own branch.",
+  "prompt": "Fix the lint and type errors in this repository.\n\n1. Find the project's own lint and type-check commands (package.json scripts, Makefile, pyproject, CI config) and run them.\n2. Fix the reported problems with the smallest change that keeps behaviour the same. Do not turn rules off, add blanket ignore comments or loosen the config.\n3. If a fix would change behaviour, leave it and list it instead.\n4. Run the linter, the type checker and the tests again to confirm they pass, then commit.\n\nSummarise how many problems were fixed, by kind, and anything left for a person to decide.",
+  "tool": "codex",
+  "edits": true,
+  "cost": "Low to medium: depends on how many problems the linter reports."
+}

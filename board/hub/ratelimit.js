@@ -8,11 +8,29 @@ import { HubError } from './db.js';
 
 // {capacity, per_ms}: at most `capacity` at once, refilled at capacity/per_ms.
 export const DEFAULT_LIMITS = Object.freeze({
+  remote_public_ip: { capacity: 60, per_ms: 60_000 },
+  remote_request_ip: { capacity: 120, per_ms: 60_000 },
+  remote_request_grant: { capacity: 120, per_ms: 60_000 },
+  client_feedback_guest: { capacity: 10, per_ms: 3_600_000 }, // new client tasks; persistent retries do not spend it
   login_ip: { capacity: 10, per_ms: 60_000 },
   mutate_ip: { capacity: 300, per_ms: 60_000 },
   mutate_member: { capacity: 120, per_ms: 60_000 },
   dispatch_member: { capacity: 30, per_ms: 60_000 },   // dispatch, retry, take_over_with_claude
   presence_member: { capacity: 60, per_ms: 60_000 },   // GET /api/boards/:id/presence (D37b)
+  handover_salvage_member: { capacity: 30, per_ms: 3_600_000 }, // POST /api/cards/:id/handover/salvage (opt-in local session handover share)
+  communication_write_member: { capacity: 60, per_ms: 3_600_000 },
+  communication_read_member: { capacity: 60, per_ms: 60_000 },
+  ownership_read_member: { capacity: 60, per_ms: 60_000 }, // staff/runner projections, including declaration responses
+  search_member: { capacity: 60, per_ms: 60_000 },     // bounded staff search, including invalid queries
+  overview_member: { capacity: 30, per_ms: 60_000 },   // bounded selected-team overview
+  workflow_member: { capacity: 20, per_ms: 3_600_000 }, // new definitions/versions/task sets
+  capture_routes_user: { capacity: 30, per_ms: 60_000 },
+  messaging_read_user: { capacity: 120, per_ms: 60_000 },   // GET /api/messaging/v1/* (MESSAGING.md §4), per user
+  capture_report_user: { capacity: 120, per_ms: 60_000 }, // across all of this user's memberships
+  activity_write_user: { capacity: 120, per_ms: 60_000 },  // POST /api/activity/v1/events, per user
+  activity_read_user: { capacity: 120, per_ms: 60_000 },   // GET /api/activity/v1/feed and /current, per user
+  activity_stream_user: { capacity: 20, per_ms: 60_000 },  // GET /api/activity/v1/stream opens, per user
+  memory_read_user: { capacity: 60, per_ms: 60_000 },      // GET /api/teams/:id/memory/v1/*, per user, including invalid queries
   label_rewrite_board: { capacity: 10, per_ms: 3_600_000 },  // label rename / delete with strip: each rewrites up to 2,000 cards (D91), per board
   agent_card_member: { capacity: 20, per_ms: 3_600_000 },    // board_create_card, per member the runs are for
   agent_lesson_member: { capacity: 30, per_ms: 3_600_000 },  // board_add_lesson, per member the runs are for
@@ -23,7 +41,16 @@ export const DEFAULT_LIMITS = Object.freeze({
   auth_start_email_hour: { capacity: 10, per_ms: 3_600_000 }, // over: silent
   auth_start_email_all: { capacity: 40, per_ms: 3_600_000 },  // per address, every network together; over: silent
   auth_start_ip: { capacity: 20, per_ms: 3_600_000 },
+  phone_start_ip: { capacity: 10, per_ms: 600000 },
+  phone_exchange_ip: { capacity: 30, per_ms: 600000 },
+  phone_approve_user: { capacity: 10, per_ms: 3600000 },
+  crash_ip: { capacity: 25, per_ms: 3600000 },
+  build_log_public_ip: { capacity: 120, per_ms: 60_000 },   // GET/POST /b/<slug>* (build-logs.js), no sign-in
+  build_log_remix_ip: { capacity: 10, per_ms: 3_600_000 },
+  build_log_report_ip: { capacity: 5, per_ms: 3_600_000 },
+  crash_global: { capacity: 60, per_ms: 60000 },
   auth_methods_ip: { capacity: 60, per_ms: 60_000 },          // GET /api/auth/methods (no auth)
+  auth_turnstile_ip: { capacity: 20, per_ms: 3_600_000 },     // Turnstile tokens checked with Cloudflare, per /64
   auth_start_global: { capacity: 500, per_ms: 3_600_000 },
   auth_verify_ip: { capacity: 10, per_ms: 10 * 60_000 },
   auth_verify_email: { capacity: 10, per_ms: 15 * 60_000 },   // verify attempts per address AND network; the lockout is the failure budget
@@ -44,6 +71,7 @@ export const DEFAULT_LIMITS = Object.freeze({
   webhook_conn: { capacity: 600, per_ms: 60_000 },          // inbound webhooks, per connection
   integration_conn: { capacity: 120, per_ms: 60_000 },      // actAs calls, per connection (never mutate_member)
   integration_card_conn: { capacity: 20, per_ms: 3_600_000 }, // actAs().createCard, per connection
+  integration_card_day_conn: { capacity: 100, per_ms: 86_400_000 }, // … and per day, only for a connector that declares dailyCardCap (its cap, unless set here)
   integration_card_subject: { capacity: 5, per_ms: 3_600_000 }, // … and per (connection, provider user) when act() names meta.subject
   integration_user_cmd: { capacity: 30, per_ms: 60_000 },   // webhooks per (connection, provider user) a connector's rateSubject names (D42 addendum C3)
   integration_rate_audit_conn: { capacity: 6, per_ms: 60_000 }, // … its refusals audited, per connection
@@ -51,8 +79,21 @@ export const DEFAULT_LIMITS = Object.freeze({
   integration_prepare_org: { capacity: 10, per_ms: 86_400_000 },    // … per team
   integration_identity_member: { capacity: 10, per_ms: 3_600_000 }, // POST /api/integrations/:id/identity/start (D98), per member
   integration_link_fail_ip: { capacity: 30, per_ms: 10 * 60_000 },  // failed identity callbacks, per client network (/64)
+  integration_issue_member: { capacity: 10, per_ms: 3_600_000 },    // POST /api/integrations/:id/issues (create ticket), per member
+  integration_install_member: { capacity: 10, per_ms: 3_600_000 },  // POST /api/integrations/:provider/install (GitHub App, step 4), per admin
+  integration_app_repos_member: { capacity: 30, per_ms: 10 * 60_000 }, // list / link an installation's repositories, per admin
+  github_card_action_member: { capacity: 10, per_ms: 10 * 60_000 },   // Open PR / Comment status from a card, per member
+  github_card_action_card: { capacity: 3, per_ms: 60_000 },            // … per card
+  runner_repo_token_ip: { capacity: 60, per_ms: 10 * 60_000 },         // GET /api/runner/v1/repo-token, every attempt, per client network
+  runner_repo_token_runner: { capacity: 20, per_ms: 10 * 60_000 },     // … minted or refused, per hosted runner (it caches each token ~55 min)
   webhook_fail_ip: { capacity: 30, per_ms: 60_000 },        // failed webhook deliveries, per connection + client IP (/64)
+  public_api_token: { capacity: 120, per_ms: 60_000 },     // /api/public/v1/*, per API token (public-api/)
+  public_api_fail_ip: { capacity: 30, per_ms: 60_000 },    // … missing/unknown/expired/revoked tokens, per client network (/64)
+  webhook_test_member: { capacity: 10, per_ms: 60_000 },   // "Send test event" on an outbound webhook, per admin
   vault_health_conn: { capacity: 1, per_ms: 60_000 },       // 'vault_error' health write + log, per connection
+  share_write_user: { capacity: 60, per_ms: 3_600_000 },    // POST /api/interaction/v1/shares (interaction-shares.js)
+  share_call_user: { capacity: 240, per_ms: 60_000 },       // shared-session calls, per teammate (a watch long-polls)
+  share_call_team: { capacity: 1200, per_ms: 60_000 },      // … and per team, all its teammates together
   ws_browser: { capacity: 60, per_ms: 10_000 },
   ws_runner: { capacity: 3000, per_ms: 10_000 },
 });
@@ -66,9 +107,9 @@ export class RateLimiter {
     this.buckets = new Map();
   }
 
-  /** → {ok:true} or {ok:false, retry_after_ms}. */
-  take(rule, key) {
-    const lim = this.limits[rule];
+  /** → {ok:true} or {ok:false, retry_after_ms}. `over`: {capacity, per_ms} in place of the rule's own. */
+  take(rule, key, over = null) {
+    const lim = over ?? this.limits[rule];
     if (!lim) throw new Error(`unknown rate limit ${rule}`);
     const now = this.now();
     const k = `${rule}|${key}`;
@@ -174,8 +215,8 @@ export class FailureBudget {
 }
 
 /** Take one token or throw RATE_LIMITED with retry_after_s (HTTP routes and runner RPCs). */
-export function limitOrThrow(hub, rule, key) {
-  const r = hub.limiter.take(rule, key);
+export function limitOrThrow(hub, rule, key, over = null) {
+  const r = hub.limiter.take(rule, key, over);
   if (!r.ok) {
     const s = Math.max(1, Math.ceil(r.retry_after_ms / 1000));
     throw new HubError('RATE_LIMITED', `too many requests; retry in ${s} s`, { retry_after_s: s });

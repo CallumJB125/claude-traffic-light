@@ -1,0 +1,7 @@
+{
+  "format": "plexiform-age-pins-v1",
+  "version": "v1.3.2",
+  "age_sha256": {
+    "darwin-arm64": "4012dfc2725883beafb710894af4f599b7a94f8c8e0f51f02cc96ab8df33915e"
+  }
+}

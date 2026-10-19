@@ -57,10 +57,10 @@ test('pingsWhileBusy: red through by default, per-rule override, mine as a stub'
   assert.equal(R.pingsWhileBusy(undefined, { lamp: 'amber' }), false);
 });
 
-test('default locked rules still ping while busy; finished and nudges wait', () => {
+test('default red rules (blocked or broken) still ping while busy; finished and nudges wait', () => {
   const byId = Object.fromEntries(R.defaultRules().map((r) => [r.id, R.normalizeRule(r)]));
-  for (const id of ['limit', 'permission', 'offline']) assert.equal(R.pingsWhileBusy(byId[id]), true, id);
-  for (const id of ['done', 'nudge', 'failed-turn', 'working']) assert.equal(R.pingsWhileBusy(byId[id]), false, id);
+  for (const id of ['limit', 'permission', 'offline', 'failed-turn']) assert.equal(R.pingsWhileBusy(byId[id]), true, id);
+  for (const id of ['done', 'nudge', 'working']) assert.equal(R.pingsWhileBusy(byId[id]), false, id);
 });
 
 // ── busyAt ──────────────────────────────────────────────────────────────────
@@ -617,6 +617,12 @@ test('main: git rule sounds and spend notifications go through the busy gate', (
   const notify = main.slice(main.indexOf('function maybeNotify'), main.indexOf('function maybeNotify') + 800);
   assert.match(notify, /spend: st\.spend/);
   assert.match(notify, /for \(const n of fire\) \{\n\s+if \(!notificationAllowed\(/);
+  const budget = main.slice(main.indexOf('function notifyBudget'), main.indexOf('note.show();', main.indexOf('function notifyBudget')));
+  assert.match(budget, /if \(!pingAllowed\(null, \{ signal: 'budget' \}\)\) return;\n\s+const note = new Notification/);
+  assert.match(main, /await performKnock\(appName, target, base, force \|\| pingAllowed\(st\.owned\?\.sound, \{ lamp: base\.lamp \}\)\);/);
+  assert.match(main, /const knockSound = loadConfig\(\)\.sounds && mayPing/);
+  assert.doesNotMatch(main, /(?<!delete )config\.soundOnAmber|\(\)\.soundOnAmber/, 'the old key is only migrated, never read');
+  assert.match(main, /if \(typeof saved\.sounds !== 'boolean' && typeof saved\.soundOnAmber === 'boolean'\) config\.sounds = saved\.soundOnAmber;\n\s+delete config\.soundOnAmber;/);
 });
 
 // ── Help ────────────────────────────────────────────────────────────────────
@@ -644,4 +650,23 @@ test('ICS fetch refuses redirects off HTTPS and follows HTTPS ones', async () =>
   assert.equal((await fetchHttpsOnly('https://a.test/cal.ics', null, fake)).status, 200);
   await assert.rejects(fetchHttpsOnly('https://c.test/cal.ics', null, fake), /off HTTPS/);
   await assert.rejects(fetchHttpsOnly('https://d.test/cal.ics', null, fake), /too many redirects/);
+});
+
+test('Focus files (a macOS-protected folder) are read through readProtected, never the sync readFile', async () => {
+  // A sync read there blocks main while any privacy prompt of this app is open (beta.96 froze at startup).
+  const syncHits = [];
+  const asyncHits = [];
+  const on = JSON.stringify({ data: [{ storeAssertionRecords: [{ assertionDetails: { assertionDetailsModeIdentifier: 'com.apple.focus.work' } }] }] });
+  const w = busyWatch({
+    rootDir: '/buddy', home: '/home', helperPath: '/app/none', loadConfig: () => ({ busyFocus: true }), isDevRun: false,
+    exec: async () => { throw new Error('no helper'); },
+    readFile: (f) => { if (f.includes('DoNotDisturb')) syncHits.push(f); const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; },
+    readProtected: async (f) => { asyncHits.push(f); if (f.endsWith('Assertions.json')) return on; throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); },
+    writeFile: () => {}, exists: () => false, fetch: async () => { throw new Error('no network'); }, now: () => Date.parse('2026-10-19T12:00:00Z'),
+  });
+  await w.tick();
+  assert.deepEqual(syncHits, [], 'no synchronous read of ~/Library/DoNotDisturb');
+  assert.ok(asyncHits.some((f) => f.endsWith('/home/Library/DoNotDisturb/DB/Assertions.json')));
+  const main = require('fs').readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  assert.match(main, /readProtected: \(f\) => Promise\.race\(\[fs\.promises\.readFile/, 'main wires an async, deadline-bound reader');
 });

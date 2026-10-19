@@ -1,2 +1,8 @@
 /* Screenshots after a click: the widget's hover-only buttons stay hidden. */
 #gear, #help { opacity: 0 !important; }
+/* The session strip (fcc83fbc) also shows only while the pointer is over the widget. */
+#strip { display: none !important; }
+/* A native checkbox is tinted only while its window is the key window; a fixed accent draws it the same either way. */
+input[type="checkbox"] { accent-color: #0a84ff; }
+/* Usage charts tint the column under the pointer, wherever the cursor happens to rest. */
+.uv-hit:hover { fill: transparent !important; }

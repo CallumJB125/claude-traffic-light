@@ -1,0 +1,164 @@
+# Tasks engine ("Hand it off")
+
+The real engine behind `board/TASKS-CONTRACT.md` (protocol v1). It serves the
+same socket API as `tasks-api/mock-server.js`, so the UI, the `buddy` CLI and
+the MCP tools use `tasks-api/client.js` against either one unchanged.
+
+```
+startTasksEngine({ dataDir, backends?, log?, now?, env?, maxParallel?, retentionDays?, retentionMax?, hbMs? })
+  → { socketPath, tokenPath, token, epoch, tasks, engine, close({ leaveRuns? }) }
+```
+
+| File | What it does |
+|---|---|
+| `index.js` | `startTasksEngine`: private data dir, store, engine, transport |
+| `transport.js` | unix socket (0600 in the 0700 data dir), token (`tasks.token`, 0600), NDJSON ≤ 1 MiB, schema validation, subscribe replay / reset / lagged, hb green lease push |
+| `engine.js` | tasks, states, events (seq), faces, `act`, scheduling, runs through the runner's backends |
+| `store.js` | append-only `store/tasks.jsonl` + `store/events.jsonl`, torn-line safe, compacted to the 10 000-event ring |
+
+## Data dir layout
+
+```
+<dataDir>/              0700, must not be a symlink or another user's dir
+  tasks.sock            0600 (refuses to start over a live socket, a non-socket, or another user's socket)
+  tasks.token           0600 btk_…; reused across restarts, replaced if it was loosened or malformed
+  relay-tokens.json     0600, sha256 hashes and bound source/sender/parent of relay tokens
+  policy.json           optional, written by the UI: {accept_from:[userId], repos:{<path|canonical>:{remote_tasks:true}}}
+  store/                tasks.jsonl, events.jsonl (0600)
+  mesh/<taskId>.ndjson  human messages (tasks-api/mesh.js MessageStore)
+  run/<taskId>/         per-run dir: settings.json, mcp.json, hook.token, ipc.sock, shell/
+```
+
+Worktrees live next to the repo (`<repo>-buddy-<id>`, branch `buddy/<slug>-<id>`),
+never inside the data dir, and the whole data dir is denied to the agent
+(sandbox `denyRead` + `Read/Edit/Write` disallow rules + the PreToolUse
+confinement to the worktree). Keep `dataDir` short: `run/<taskId>/ipc.sock`
+must fit in 103 bytes. A too-long path fails the task with a fixed reason; a
+too-long `runner.sock` path refuses to start (`SOCKET_PATH_TOO_LONG`).
+
+## Starting it from the desktop
+
+Opening the sidebar Tasks page or Tasks window lazily starts
+`board/tasks-engine/utility-entry.js` under `src/tasks-process.js`. The helper
+uses the private `<userData>/tasks` folder and detects Codex and Claude Code on macOS/Linux, with Codex as the default.
+Native Windows only enables Codex because Claude lacks a supported provider sandbox. The backend registry still supports
+explicit provider integrations. The service reads its private token and
+connects through the real socket. Packaged builds never use the mock service.
+
+1. The small entry `board/tasks-engine/utility-entry.js` runs
+   `startTasksEngine({ dataDir, log })` and reports
+   `{type:'tasks.listening', socket, epoch}` over `process.parentPort`; on
+   `SIGTERM` it calls `close()` (live runs get the stop recipe and become
+   `orphaned`, resumable with `retry`).
+2. `main.js` starts it with `utilityProcess.fork(entry, [], { serviceName, env })`
+   through an injected `fork`, the same way `hub-process.js` is supervised
+   (restart window, bounded restarts, readiness = the `tasks.listening` message).
+   Pass an env built for it (`HOME`, `PATH`, `LANG`, `TMPDIR`): the CLI env
+   allowlist is built from it, and it must not carry hub or runner tokens.
+3. `dataDir`: a short private dir of its own in the user data folder, e.g.
+   `<userData>/tasks`. The API is on `tasks.sock` there (TASKS-CONTRACT §3),
+   separate from the runner's control socket.
+4. `board/tasks-engine/**` and `board/tasks-api/**` ship in package `files`;
+   the fork and Codex invocation are documented in `PRIVACY.md`.
+5. The UI connects with `tasks-api/client.js` (`connect({ socketPath, tokenPath })`).
+
+Pre-release battle test (manual, not in CI): from inside a real sandboxed
+Bash tool of a running task, `nc -U <dataDir>/tasks.sock` (and reading
+`tasks.token`) must fail. The settings tests only assert that the sandbox
+grants no `allowUnixSockets`; the real sandbox is the proof.
+
+A restart of the engine changes `epoch`; clients get `reset {reason:'epoch'}`
+and refetch. Background runs can't be re-adopted (their stdio pipes died with
+the old process): a CLI that is still alive is killed (pid + lstart checked)
+and its task becomes `orphaned`; nothing restarts on its own. Closing a Tasks
+window leaves the helper running. Quitting the app gracefully stops active
+runs, which can be retried after restarting; a utilityProcess does not outlive
+Electron. The UI states this explicitly.
+
+Shutdown rejects new or replayed mutations and prevents further backend starts
+as soon as closing begins. It joins accepted task creation and task locks,
+including local Git workspace preparation, before closing the store. Prepared
+worktrees remain available as orphaned tasks for retry. Concurrent close callers
+share completion and the first caller's `leaveRuns` choice. Git keeps its existing
+60-second per-command timeout; custom backends must honor their own stop bounds.
+There is no total-deadline shortcut that reports success while admitted work can
+still modify a workspace. Normal shutdown stops existing runs; `leaveRuns` leaves
+their processes for restart recovery and only closes this engine's IPC and store.
+
+## What E1 implements
+
+- Methods: all twelve. `act`: `stop`, `pause`, `resume` (`now`, and `reset`
+  for a usage-limit pause with a known reset time), `approve`/`deny` (remote
+  start and permission prompts), `answer` (plan-first), `message`,
+  `takeover`/`handback`, `discard`, `retry`. `actions` lists only these.
+- AIs: Codex exec (CLI 0.159+) through `runner/backends/codex.js`, using its
+  existing login, JSON events and session resume. Other registered providers
+  retain their explicit integrations. Codex's workspace sandbox blocks command
+  network access, Unix sockets and private auth/engine files, ignores config
+  and rules, and makes trusted instruction files and git config/hooks read only.
+  Plan approval resumes the real session under the permitted editable profile;
+  a child capped to `plan` stays read only, even after its plan is approved.
+  Codex has no native spend cap, interactive approvals or hooks; asking for
+  those capabilities fails before spawn. User messages sent mid-turn are
+  queued for the next turn, rather than claiming live steering.
+- Trust (§3, §9.2): `tasks.token` is the UI/CLI's; relays get scoped `btr_`
+  tokens (`relay-tokens.js addRelayToken`) that bind their source and verified sender
+  (`userId`), or require their active parent session (`parentSessionId` for MCP).
+  MCP reads/actions/pushes stay on that parent and its children; other sources
+  need explicit task grants or creation repos, and own only their created tasks.
+  Grants expire (24h default) and revoke per token/source; queued actions and
+  live pushes recheck authority. Relays cannot impersonate local-user messages,
+  approve, answer, take over, accept a start or set device limits. `bypass` refused; `mcp` and
+  remote sources clamped to `auto-edits` (spin-offs also to the parent's level,
+  in the parent's repo); remote work needs `policy.json`
+  `repos[<path|canonical>].remote_tasks: true`, is forced plan-first and waits
+  for a local accept unless the sender is in `policy.json accept_from`.
+- Limits: `maxParallel` ≤ 8, 100 waiting tasks per source, `listTasks` paged,
+  finished tasks pruned after 30 days / beyond the newest 500, per-task package
+  caches (global caches are not writable).
+
+Local isolated tasks also support reviewed `merge`: `phase:preview` snapshots
+the exact source through a private index and computes the integration without
+editing either checkout. `phase:apply` requires the matching one-use review ID,
+hash and explicit confirmation within five minutes. Dirty destinations,
+conflicts, stale source/index/branch/HEAD/config, custom filters/merge drivers,
+symlink/gitlink changes and untracked credential-shaped files are held for
+manual resolution. Successful integration creates a local merge commit and
+keeps the source worktree. Nothing is pushed. Only the full local-user credential
+may use this path; relay participants cannot integrate. Independent writers do
+not share the helper's repository lock, so this is not a global filesystem lock.
+Integration also binds the existing task checkpoint/decision version and local
+state/claims journal sequence. Overlapping, unknown, truncated or in-place
+active claims block review with named tasks to inspect. A missing heartbeat,
+terminal handoff or unconfirmed stop does not release the claim. This inventory
+covers this Tasks engine; it does not assert cross-device or hub ownership.
+
+Provider handover uses `switchAi` preview/apply on stopped, isolated Git tasks
+in `parked` or `failed{limit}`. Review shows the source diff, existing checkpoint,
+queued task messages, exact next AI, retained permission level and spend cap.
+The renderer handle is opaque; native confirmation consumes a five-minute,
+single-use helper review bound to source tree/index/config/branch, context,
+pending messages and provider availability. The queued launch checks the same
+workspace and expiry again. Pending notes are marked delivered only at dispatch.
+An expired/changed review, cancellation, restart, timeout or launch error before
+dispatch restores the original stopped provider; another switch needs a fresh
+review. Claude and Codex are the supported targets; an AI
+that cannot retain the approval mode or native spend cap is refused. In-place,
+non-Git, unsupported/unsafe/binary or oversized changes need manual handover.
+The new provider uses a fresh session and its default model. Existing worktree,
+files, total spend and task history remain; prior plan approval does not carry
+over. A queued receipt is not proof of a provider response. Fixtures exercise
+actual adapters with offline CLI processes; real provider/native acceptance
+remains separate.
+
+Draft pull requests use `openPr` preview/apply/receipt. Commit and publish the
+task branch before review: this path never commits or pushes. It pins the
+github.com origin, account, base/head, task context and exact draft text for
+five minutes. An uncertain request consumes the attempt durably; only a
+read-only receipt lookup follows. GitHub branches remain mutable after review,
+and changed receipt revisions are shown explicitly. Review and native dialog
+acceptance are local evidence; real GitHub creation acceptance is separate.
+
+Not yet: tmux/tab creation surfaces, task-to-task
+messaging tools, `.buddy/claims.json`, approval/ask timeouts, sleep detection,
+transient-429 retries, the per-project `bypass` opt-in.

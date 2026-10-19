@@ -23,7 +23,7 @@ test('L9: runners resume at launch only in a packaged app, or a dev run that opt
   assert.match(src, /const resumeRunners = app\.isPackaged \? !IS_DEV_RUN : process\.env\.BUDDY_RESUME_RUNNERS === '1';\n\s+if \(resumeRunners\) \{ try \{ getBuddy\(\)\.resumeDevices\(\);/);
   const side = fs.readFileSync(path.join(__dirname, '..', 'buddy-window', 'sidebar.js'), 'utf8');
   assert.match(side, /HUB_TEXT\.running \?\? ''\)\.replace\('\{teams\}', runners\.join\(', '\)\)/);
-  assert.equal(require('../buddy-window/brand').HUB_TEXT.running, 'This Mac is running cards for {teams}');
+  assert.equal(require('../buddy-window/brand').HUB_TEXT.running, 'Running team tasks for {teams}');
 });
 
 test('deep links: main registers plexiform:// and claudebuddy:// and routes both; the bundle lists both schemes', () => {
@@ -74,6 +74,9 @@ test('the runner and the board MCP ship in the app; what runs as its own process
   const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
   for (const f of ['board/package.json', 'board/shared/**/*', 'board/runner/**/*', 'board/mcp/**/*', '!board/**/test/**', '!board/runner/scripts/**']) assert.ok(pkg.build.files.includes(f), f);
   for (const f of ['board/package.json', 'board/mcp/**', 'board/shared/**', 'board/runner/hook-shim.js', 'board/runner/procs.js', 'board/runner/ipc.js', 'board/runner/launch.js', 'node_modules/**']) assert.ok(pkg.build.asarUnpack.includes(f), f);
+  const config = require('../electron-builder.config.js');
+  assert.ok(config.asarUnpack.includes('board/runner/windows-job.js'), 'unpacked procs.js can load its Windows Job dependency');
+  assert.ok(config.files.includes('!board/shared/test-support/**'), 'synthetic ACL fixtures are not shipped');
   // What the runner and the MCP server import from npm is a root dependency (the package has no board/node_modules).
   for (const d of ['@modelcontextprotocol/sdk', 'ws', 'zod']) assert.ok(pkg.dependencies[d], d);
 });

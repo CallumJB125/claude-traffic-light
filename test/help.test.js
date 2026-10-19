@@ -4,20 +4,28 @@ const Help = require('../help.js');
 const Rules = require('../rules.js');
 
 // ── First run ──────────────────────────────────────────────────────────────
-test('help auto-shows only on a real run with no marker yet', () => {
-  assert.equal(Help.shouldAutoShow({ markerExists: false, devRun: false }), true);
-  assert.equal(Help.shouldAutoShow({ markerExists: true, devRun: false }), false);
-  assert.equal(Help.shouldAutoShow({ markerExists: false, devRun: true }), false);
+test('setup auto-shows only on a real run of a brand-new install', () => {
+  assert.equal(Help.shouldOnboard({ onboarded: false, helpShown: false, devRun: false }), true);
+  assert.equal(Help.shouldOnboard({ onboarded: true, helpShown: false, devRun: false }), false);
+  assert.equal(Help.shouldOnboard({ onboarded: false, helpShown: true, devRun: false }), false, 'an install that already saw Help is not re-onboarded');
+  assert.equal(Help.shouldOnboard({ onboarded: false, helpShown: false, devRun: true }), false);
   assert.equal(Help.MARKER, '.help-shown');
+  assert.equal(Help.ONBOARDED_MARKER, '.onboarded');
+});
+
+test('a brand-new install holds Claude Code\'s hooks and Open at Login until setup\'s Connect', () => {
+  assert.deepEqual(Help.firstRunStart({ firstRun: true, claudeAutoConnect: undefined }), { holdClaude: true, setLoginItem: false });
+  assert.deepEqual(Help.firstRunStart({ firstRun: true, claudeAutoConnect: true }), { holdClaude: false, setLoginItem: false }, 'a choice already made is kept');
+  assert.deepEqual(Help.firstRunStart({ firstRun: false, claudeAutoConnect: undefined }), { holdClaude: false, setLoginItem: true }, 'existing installs are unchanged');
 });
 
 // ── Notification config ────────────────────────────────────────────────────
 test('notifications default to on for every state, and a saved partial breakdown keeps the rest on', () => {
-  assert.deepEqual(Help.notifyConfig(undefined), { on: true, kinds: { 'permission-ask': true, 'turn-failed': true, offline: true } });
+  assert.deepEqual(Help.notifyConfig(undefined), { on: true, kinds: { 'permission-ask': true, 'turn-failed': true, offline: true, stuck: true } });
   assert.deepEqual(Help.notifyConfig({}), { on: true, kinds: Help.NOTIFY_DEFAULTS });
   const c = Help.notifyConfig({ notifyOnStates: false, notifyStates: { offline: false } });
   assert.equal(c.on, false);
-  assert.deepEqual(c.kinds, { 'permission-ask': true, 'turn-failed': true, offline: false });
+  assert.deepEqual(c.kinds, { 'permission-ask': true, 'turn-failed': true, offline: false, stuck: true });
 });
 
 // ── Notification dedup ─────────────────────────────────────────────────────
@@ -134,5 +142,19 @@ test('a rule the user repurposed gets a generic line built from its signals', ()
   const { look, fired, owned } = Rules.resolve(custom, [{ ...working('a'), tool: 'Bash' }]);
   const h = Help.explain({ look, fired, owned, firedNames: Rules.firedNames(custom, fired, owned), reason: 'session', sessions: [working('a')] }, custom);
   assert.equal(h.headline, 'Deploying');
-  assert.equal(h.meaning, 'Your rule — it fires when Claude uses a tool.');
+  assert.equal(h.meaning, 'Your rule — it fires when An AI agent uses a tool.');
+});
+
+test('a stuck session notifies once per silent stretch, under the Alerts switches', () => {
+  const quiet = (since, min, extra = {}) => ({ sessionId: 's', cwd: '/work/app', signal: 'tool-use', updatedAt: since, stuck: { sinceMs: min * 60000, tool: 'Bash' }, ...extra });
+  let r = run(null, { sessions: [working('s')] });
+  r = run(r.keys, { sessions: [quiet('2026-10-08T10:00:00Z', 6, { hostApp: 'Ghostty' })] });
+  assert.deepEqual(r.fire.map((f) => [f.key, f.kind, f.title, f.body]), [['stuck:2026-10-08T10:00:00Z:s', 'stuck', 'Stuck? — app', 'Silent for 6 min, last tool Bash. Click to jump to its terminal.']]);
+  assert.equal(r.fire[0].sessionId, 's');
+  assert.deepEqual(run(r.keys, { sessions: [quiet('2026-10-08T10:00:00Z', 9)] }).fire, [], 'still the same silence');
+  const again = run(r.keys, { sessions: [quiet('2026-10-08T10:20:00Z', 5)] });
+  assert.equal(again.fire.length, 1, 'it stirred and went quiet again');
+  assert.equal(again.fire[0].body, 'Silent for 5 min, last tool Bash.');
+  assert.deepEqual(run(new Set(), { sessions: [quiet('t', 6)] }, { notifyStates: { stuck: false } }).fire, []);
+  assert.deepEqual(run(new Set(), { sessions: [quiet('t', 6)] }, { notifyOnStates: false }).fire, []);
 });

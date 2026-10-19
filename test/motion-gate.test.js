@@ -87,3 +87,21 @@ test('a work-scope change on a waiting session reaches a paused widget', () => {
   assert.notEqual(st(null), st('counting'));
   assert.equal(st('counting'), st('counting'));
 });
+
+test('background throttling is allowed while paused and off again when the gate lifts', () => {
+  const { syncBackgroundThrottling } = require('../src/motion-gate.js');
+  const seen = [];
+  const wc = { setBackgroundThrottling: (v) => seen.push(v), isDestroyed: () => false };
+  syncBackgroundThrottling(wc, true);
+  syncBackgroundThrottling(wc, false);
+  assert.deepEqual(seen, [true, false]);
+});
+
+test('background throttling sync tolerates a destroyed or missing page', () => {
+  const { syncBackgroundThrottling } = require('../src/motion-gate.js');
+  syncBackgroundThrottling(null, true);
+  syncBackgroundThrottling({ setBackgroundThrottling: () => { throw new Error('gone'); } }, true);
+  let called = false;
+  syncBackgroundThrottling({ setBackgroundThrottling: () => { called = true; }, isDestroyed: () => true }, true);
+  assert.equal(called, false);
+});

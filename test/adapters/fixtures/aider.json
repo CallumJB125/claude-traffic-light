@@ -1,0 +1,61 @@
+[
+  {
+    "name": "ready on its own: your turn, session from aider's pid",
+    "event": "ready",
+    "payload": {
+      "session": "aider-4242",
+      "pid": 4242,
+      "cwd": "/w/aider"
+    },
+    "expect": [
+      {
+        "signal": "stop",
+        "sessionId": "aider-4242",
+        "cwd": "/w/aider",
+        "tool": null
+      }
+    ]
+  },
+  {
+    "name": "ready with only a pid",
+    "event": "ready",
+    "payload": {
+      "pid": 515,
+      "cwd": "/w/aider"
+    },
+    "expect": [
+      {
+        "signal": "stop",
+        "sessionId": "aider-515",
+        "cwd": "/w/aider",
+        "tool": null
+      }
+    ]
+  },
+  {
+    "name": "a hostile session id is dropped",
+    "event": "ready",
+    "payload": {
+      "session": "../x",
+      "pid": 7,
+      "cwd": "/w/aider"
+    },
+    "expect": [
+      {
+        "signal": "stop",
+        "sessionId": "aider-7",
+        "cwd": "/w/aider",
+        "tool": null
+      }
+    ]
+  },
+  {
+    "name": "nothing else is an aider event",
+    "event": "start",
+    "payload": {
+      "pid": 7,
+      "cwd": "/w/aider"
+    },
+    "expect": []
+  }
+]

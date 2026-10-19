@@ -7,9 +7,10 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { forgetLocalBuild, LSREGISTER } = require('../scripts/forget-local-build.js');
+const { testTempDir } = require('./helpers/tmp');
 
 function fakeBuild() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'forget-build-'));
+  const root = testTempDir('forget-build-');
   const dist = path.join(root, 'dist');
   const app = path.join(dist, 'mac-arm64', 'Plexiform.app');
   fs.mkdirSync(path.join(app, 'Contents', 'Frameworks', 'Plexiform Helper.app', 'Contents'), { recursive: true });

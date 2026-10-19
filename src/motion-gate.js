@@ -51,4 +51,13 @@ function statusPushWanted(paused, key, lastKey) {
   return !paused || key !== lastKey;
 }
 
-module.exports = { createMotionGate, staleMachineReasons, askKey, statusPushWanted };
+// backgroundThrottling is created off so a visible-but-occluded window keeps
+// animating. While the gate holds (nobody can see the window) Chromium may
+// throttle it again; it goes back off the moment the gate lifts.
+function syncBackgroundThrottling(wc, paused) {
+  try {
+    if (wc && typeof wc.setBackgroundThrottling === 'function' && !(typeof wc.isDestroyed === 'function' && wc.isDestroyed())) wc.setBackgroundThrottling(!!paused);
+  } catch { /* the page is gone */ }
+}
+
+module.exports = { syncBackgroundThrottling, createMotionGate, staleMachineReasons, askKey, statusPushWanted };

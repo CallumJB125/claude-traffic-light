@@ -4,25 +4,41 @@
 // main passes the actions in and adds the widget-only items around it.
 // `popOuts`: page ids whose menu entry opens a small pop-out instead of the
 // page (Usage); the sidebar still opens the page itself.
+// `whileSoon`: page id → opener, used only while the registry still marks the
+// page 'soon' (Tasks has its own window before its sidebar entry is wired).
+// A group with `submenu` (its label) is listed as one submenu of its pages, under the group before it.
 'use strict';
+const Legend = require('./colour-legend.js');
 
-const ACCELERATORS = Object.freeze({ lights: 'CmdOrCtrl+L', settings: 'CmdOrCtrl+,' });
+const ACCELERATORS = Object.freeze({ lights: 'CmdOrCtrl+L', settings: 'CmdOrCtrl+,', memory: 'CmdOrCtrl+Shift+F' });
 
 // Where "Something's off / Idea…" slots in once a feedback window exists.
 // `feedback`: an item ({label, click}) or null.
-function appItems({ pages, groups, open, openLabel, openAccelerator = 'CmdOrCtrl+B', feedback = null, popOuts = {} }) {
+function appItems({ pages, groups, open, openLabel, openAccelerator = 'CmdOrCtrl+B', feedback = null, popOuts = {}, whileSoon = {} }) {
   const out = [{ label: openLabel, accelerator: openAccelerator, click: () => open() }, { type: 'separator' }];
   for (const g of groups) {
     const ps = pages.filter((p) => p.group === g.id);
     if (!ps.length) continue;
+    if (g.submenu) {
+      const item = { label: g.submenu, submenu: ps.filter((p) => p.kind !== 'soon').map((p) => ({ label: `Open ${p.title}…`, click: () => (popOuts[p.id] || (() => open(p.id)))() })) };
+      if (out.length > 2 && out[out.length - 1].type === 'separator') out.splice(out.length - 1, 0, item); else out.push(item, { type: 'separator' });
+      continue;
+    }
     for (const p of ps) {
-      if (p.kind === 'soon') { out.push({ label: `Open ${p.title}… (soon)`, enabled: false }); continue; }
+      if (p.kind === 'soon') {
+        out.push(whileSoon[p.id] ? { label: `Open ${p.title}…`, click: () => whileSoon[p.id]() } : { label: `Open ${p.title}… (soon)`, enabled: false });
+        continue;
+      }
       const item = { label: `Open ${p.title}…`, click: () => (popOuts[p.id] || (() => open(p.id)))() };
       if (ACCELERATORS[p.id]) item.accelerator = ACCELERATORS[p.id];
       out.push(item);
     }
     out.push({ type: 'separator' });
   }
+  // The colour key (src/colour-legend.js): at the foot of More, or on its own without one.
+  const legend = { label: 'What the colours mean', submenu: Legend.menuItems() };
+  const more = out.find((i) => Array.isArray(i.submenu));
+  if (more) more.submenu.push({ type: 'separator' }, legend); else out.push(legend, { type: 'separator' });
   if (feedback) out.push(feedback, { type: 'separator' });
   return out;
 }

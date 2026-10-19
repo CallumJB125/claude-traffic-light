@@ -6,19 +6,21 @@ import { h } from './h.js';
 import { pixelClaude } from './icons.js';
 import { EMAIL_OFF } from './account-text.js';
 
-export function signinScreen({ status, error, devLogin, devSecretKnown = false, busy, email, accounts = false, emailOff = false }) {
+export function signinScreen({ status, error, devLogin, devSecretKnown = false, busy, email, accounts = false, emailOff = false, web = null }) {
   const forbidden = status === 'forbidden';
+  const providers = [web?.google === true ? 'Google' : null, web?.github === true ? 'GitHub' : null].filter(Boolean);
+  const label = providers.length ? `Sign in with ${providers.join(' or ')}` : 'Sign in with email';
   return h('div', { class: 'app app-center' },
     h('main', { class: 'signin', 'aria-labelledby': 'signin-title' },
       pixelClaude({ eyes: forbidden ? 'shut' : 'open', lamps: forbidden ? { red: true } : { amber: true }, cls: 'signin-mark' }),
       h('h1', { id: 'signin-title' }, forbidden ? 'Not on this board yet' : 'Sign in to the board'),
       forbidden
         ? h('p', null, `${email ? `You're signed in as ${email}, but that` : 'Your account'} isn't a member of this board. Ask a board admin to add your GitHub login and email.`)
-        : h('p', null, accounts ? (emailOff ? EMAIL_OFF : 'Sign in with your email to see cards and give work to Claude.') : 'The team board sits behind Cloudflare Access. Sign in with GitHub to see cards and give work to Claude.'),
+        : h('p', null, accounts ? (providers.length ? 'Continue to sign in and open your team board.' : emailOff ? EMAIL_OFF : 'Sign in with your email to see cards and give work to Claude.') : 'The team board sits behind Cloudflare Access. Sign in with GitHub to see cards and give work to Claude.'),
       forbidden
         ? (accounts ? null : h('a', { class: 'btn', href: '/cdn-cgi/access/logout' }, 'Sign in with another account'))
         : accounts
-          ? (emailOff ? null : h('a', { class: 'btn btn-primary', href: '/signin' }, 'Sign in with email'))
+          ? (emailOff && !providers.length ? null : h('a', { class: 'btn btn-primary', href: '/signin' }, label))
           : h('a', { class: 'btn btn-primary', href: '/', 'data-action': 'access-login' }, 'Sign in with GitHub'),
       error ? h('p', { class: 'form-error', role: 'alert' }, error) : null,
       devLogin && !forbidden ? h('form', { class: 'devlogin', 'data-form': 'devlogin', 'aria-labelledby': 'devlogin-title' },

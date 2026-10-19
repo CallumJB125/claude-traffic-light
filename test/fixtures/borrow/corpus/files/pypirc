@@ -1,0 +1,19 @@
+[distutils]
+index-servers =
+    pypi
+    testpypi
+    acme
+
+[pypi]
+username = __token__
+password = @@SEED:pypi_token@@
+
+[testpypi]
+repository = https://test.pypi.org/legacy/
+username = __token__
+password = @@SEED:pypi_token@@
+
+[acme]
+repository = https://pypi.@@INTHOST@@/simple/
+username = @@USER@@
+password = @@SEED:keyed@@

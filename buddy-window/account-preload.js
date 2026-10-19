@@ -4,9 +4,21 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 const call = (op, ...args) => ipcRenderer.invoke(`buddy:acct:${op}`, ...args);
 const str = (v) => String(v ?? '');
+const strArgs = (args) => Object.fromEntries(Object.entries(args && typeof args === 'object' ? args : {}).filter(([k, v]) => /^[a-z]{1,20}$/.test(k) && typeof v === 'string' && v.length <= 60));
 
 contextBridge.exposeInMainWorld('buddyAccount', {
   state: () => call('state'),
+  burstStatus: () => ipcRenderer.invoke('burst:status'),
+  // Card actions, Terminal kinds and the v0.20 kinds (mod-install, mod-update → burst-ipc ACTION_KINDS) alike:
+  // args, when given, are a plain object of short string fields (the mod's id).
+  burstAction: (kind, mode, args) => ipcRenderer.invoke('burst:action', { kind: str(kind), mode: str(mode), ...(args && typeof args === 'object' ? { args: strArgs(args) } : {}) }),
+  // Allow-listed mutation ids with their own consent dialog, by id (e.g. 'mod-action', {action:'toasts', on:'false'}).
+  burstRunAction: (kind, args) => ipcRenderer.invoke('burst-action', str(kind), strArgs(args)),
+  burstSetCompaction: (req) => ipcRenderer.invoke('burst:set-compaction', { enabled: !!(req && req.enabled), confirmed: !!(req && req.confirmed), ...(req && req.mode ? { mode: str(req.mode) } : {}) }),
+  keepAwakeGet: () => ipcRenderer.invoke('keepawake:get'),
+  macView: () => ipcRenderer.invoke('keepawake:mac'),
+  keepAwakeSet: (enabled, mode) => ipcRenderer.invoke('keepawake:set', { enabled: !!enabled, ...(mode ? { mode: str(mode) } : {}) }),
+  openClients: () => call('openClients'),
   go: (screen) => call('go', str(screen)),
   hub: (address) => call('hub', str(address)),
   confirm: (yes) => call('confirm', !!yes),
@@ -14,6 +26,7 @@ contextBridge.exposeInMainWorld('buddyAccount', {
   code: (code) => call('code', str(code)),
   oauth: (provider) => call('oauth', str(provider)),
   signInWith: (provider) => call('signInWith', str(provider)),
+  signInOther: () => call('signInOther'),
   cancelOAuth: () => call('cancelOAuth'),
   resend: () => call('resend'),
   createTeam: (name) => call('createTeam', str(name)),
@@ -49,5 +62,7 @@ contextBridge.exposeInMainWorld('buddyAccount', {
   revokeRunner: (team, id) => call('revokeRunner', str(team), str(id)),
   presence: (host, on) => call('presence', str(host), !!on),
   summaries: (host, on) => call('summaries', str(host), !!on),
+  captureEnabled: (on) => call('captureEnabled', !!on),
+  captureDefault: (repo, key) => call('captureDefault', str(repo), str(key)),
   onChanged: (fn) => ipcRenderer.on('buddy:acct:changed', () => fn()),
 });

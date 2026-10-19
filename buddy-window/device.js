@@ -10,10 +10,12 @@
 // log line or a plaintext file. The account's device token never reaches the
 // runner.
 'use strict';
+const { storageHelp } = require('./secure-storage');
 
 const fs = require('node:fs');
 const path = require('node:path');
 const { RUNNER_SERVICE } = require('./brand');
+const WindowsPrivate = require('../board/shared/windows-private-directory.cjs');
 
 const RESTART_WINDOW_MS = 10 * 60_000;
 const MAX_RESTARTS = 5;
@@ -28,7 +30,7 @@ function defaultDeviceName(userName, hostName) {
 // A runner entry that is missing, or exits this soon without saying it's
 // ready, isn't in this build (70's board/runner/app-entry.js lands with P4).
 const NO_RUNNER_MS = 5_000;
-const NO_RUNNER = 'Runner not available in this build';
+const NO_RUNNER = 'Running team tasks is not available in this build';
 // SIGTERM parks live runs within about 25 s (70's runner); then we kill.
 const STOP_GRACE_MS = 30_000;
 const RUNNER_STATES = ['connected', 'backoff', 'unavailable', 'stopping'];
@@ -107,8 +109,9 @@ function hubUrlOk(url) {
  * The runner's data_dir: created 0700, then checked, not trusted: a real
  * directory (not a symlink), ours, and 0700. → null, or why it isn't safe.
  */
-function ensurePrivateDir(dir, { uid = process.getuid?.() } = {}) {
+function ensurePrivateDir(dir, { uid = process.getuid?.(), platform = process.platform, windowsPrivate = WindowsPrivate } = {}) {
   try {
+    if (platform === 'win32') { windowsPrivate.ensureDirectory(dir); return null; }
     // Look before making: mkdir would follow a symlink or trip over a file.
     let st = null;
     try { st = fs.lstatSync(dir); } catch (e) { if (e.code !== 'ENOENT') throw e; }
@@ -181,9 +184,9 @@ function createDeviceController({ account, teamId, credsFile, seal, unseal, canS
   async function start() {
     if (child || !creds || !wanted) return;
     if (!entryExists()) { setRunner('missing', NO_RUNNER); return; }
-    if (!hubUrlOk(account.origin)) { setRunner('failed', 'This team hub isn’t on https, so the runner won’t send it this Mac’s runner key.'); return; }
+    if (!hubUrlOk(account.origin)) { setRunner('failed', 'This team address isn’t on https, so this Mac won’t send it its device key.'); return; }
     const unsafe = ensurePrivateDir(dataDir);
-    if (unsafe) { log('runner data folder refused', unsafe); setRunner('failed', 'The runner’s folder on this Mac isn’t private to you, so it won’t start.'); return; }
+    if (unsafe) { log('runner data folder refused', unsafe); setRunner('failed', 'The folder this Mac runs team tasks in isn’t private to you, so it won’t start.'); return; }
     // No args and no cwd: the entry refuses to run without a parentPort, and a
     // cwd inside app.asar makes the fork fail silently. The env is a fixed few
     // names: nothing secret is in it.
@@ -208,7 +211,7 @@ function createDeviceController({ account, teamId, credsFile, seal, unseal, canS
       } else if (m.type === 'runner.event') {
         const ev = runnerEventFrom(m);
         if (ev) { try { onEvent({ ...ev, team_id: teamId }); } catch { /* a listener's error never reaches the runner loop */ } }
-      } else if (m.type === 'runner.fatal') { c.fatal = true; setRunner('failed', scrubTokens(m.message ?? 'The runner stopped.').slice(0, 200)); }
+      } else if (m.type === 'runner.fatal') { c.fatal = true; setRunner('failed', scrubTokens(m.message ?? 'Running team tasks stopped.').slice(0, 200)); }
     });
     c.once('exit', (code) => onExit(c, code));
     // Exactly these five: no device id, account token or Access service token.
@@ -235,7 +238,7 @@ function createDeviceController({ account, teamId, credsFile, seal, unseal, canS
     if (code === 2) return;
     const t = now();
     while (restarts.length && t - restarts[0] > RESTART_WINDOW_MS) restarts.shift();
-    if (restarts.length >= MAX_RESTARTS) { setRunner('failed', `The runner keeps stopping (last exit code ${code}).`); return; }
+    if (restarts.length >= MAX_RESTARTS) { setRunner('failed', `Running team tasks keeps stopping (last exit code ${code}).`); return; }
     restarts.push(t);
     const delay = Math.min(30_000, 1000 * 2 ** (restarts.length - 1));
     setRunner('restarting', null);
@@ -272,7 +275,7 @@ function createDeviceController({ account, teamId, credsFile, seal, unseal, canS
     const r = await account.unenrol(teamId).catch(() => ({ ok: false }));
     // 404: the hub had already dropped it. Unreached: no one holds the token any more, so it can't run.
     if (r.ok || r.status === 404 || r.signedOut) return { ok: true };
-    return { ok: true, notice: `Turned off on this Mac. ${new URL(account.origin).host} didn’t hear it, so this Mac may still be listed as a runner there.` };
+    return { ok: true, notice: `Turned off on this Mac. ${new URL(account.origin).host} didn’t hear it, so this Mac may still be listed there as running team tasks.` };
   }
 
   return {
@@ -288,7 +291,7 @@ function createDeviceController({ account, teamId, credsFile, seal, unseal, canS
       // No enrolment the hub would list for a runner that can't start here.
       if (!entryExists()) { setRunner('missing', NO_RUNNER); return { ok: false, error: `${NO_RUNNER}.` }; }
       // Nothing the hub would count as enrolled unless we can keep its token sealed.
-      if (!canSeal()) return { ok: false, error: 'This Mac can’t store the runner’s key securely right now, so it can’t run cards.' };
+      if (!canSeal()) return { ok: false, error: `Plexiform can’t save this device’s key securely, so running cards stays off. ${storageHelp()}` };
       busy = true;
       const old = child;
       const asked = epoch;
@@ -311,7 +314,7 @@ function createDeviceController({ account, teamId, credsFile, seal, unseal, canS
           // Enrolled on the hub but nothing this Mac can run with (and any old token is dead now): undo it.
           await dropLocal();
           await account.unenrol(teamId).catch(() => {});
-          return { ok: false, error: 'The team hub didn’t set this Mac up. Try again.' };
+          return { ok: false, error: 'The team address didn’t set this Mac up. Try again.' };
         }
         const prev = creds;
         creds = { hub: account.origin, team_id: teamId, enrollment_id: r.enrollment_id, runner_token: token, name: n };
@@ -323,7 +326,7 @@ function createDeviceController({ account, teamId, credsFile, seal, unseal, canS
           creds = prev;
           await dropLocal();
           await account.unenrol(teamId).catch(() => {});
-          return { ok: false, error: 'This Mac couldn’t store the runner’s key securely. Nothing was turned on.' };
+          return { ok: false, error: `Plexiform couldn’t save this device’s key securely. Nothing was turned on. ${storageHelp()}` };
         }
         wanted = true;
         ended = null;
@@ -354,6 +357,8 @@ function createDeviceController({ account, teamId, credsFile, seal, unseal, canS
       if (runner.state !== 'removed') setRunner('off');
     },
     running: () => wanted && RUNNING.has(runner.state),
+    /** Burst's secondary-provider spend and readiness for the runner's budget and limit handling (numbers only, local pipe). */
+    sendBurst(facts) { if (child?.ready) { try { child.postMessage({ type: 'runner.burst', ...facts }); } catch { /* exiting */ } } }, // privacy-flow: team-hub-runner
     /** Share (or stop sharing) the live sessions list; `enabled:false` clears at once. Summaries need both switches. */
     setPresence(enabled, sessions = [], { shareSummaries = false } = {}) {
       const summaries = !!enabled && shareSummaries === true;

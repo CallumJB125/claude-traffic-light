@@ -1,7 +1,6 @@
 // The update UI against the REAL updater service and its per-page sender
-// allowlist (no stub): the page embedded in the Plexiform window, the
-// standalone window and the widget must each be let in, and only as far as
-// their page is trusted. Nothing here touches the network: no check is run.
+// allowlist (no stub): the page embedded in the Plexiform window and the
+// widget must each be let in, and only as far as their page is trusted. Nothing here touches the network: no check is run.
 const { test, expect } = require('@playwright/test');
 const { launchApp, windowByFile } = require('./app');
 
@@ -46,17 +45,16 @@ test('the Updates page embedded in the Plexiform window gets real state and may 
   expect((await poll('updates.html', false, 'window.updates.getState()')).status).toBe('idle');
 });
 
-test('the standalone window and the widget are let in too, the widget only as far as it is trusted', async () => {
+// There is no standalone Updates window any more: the widget's openUpdates lands on the embedded page.
+test('the widget is let in too, only as far as it is trusted', async () => {
   const widget = await windowByFile(h.app, 'index.html');
-  await widget.evaluate(() => window.trafficLight.openUpdates());
-  await windowByFile(h.app, 'updates.html');
-  const state = await poll('updates.html', true, 'window.updates.getState()');
-  expect(state.status).toBe('idle');
-  expect(await poll('updates.html', true, 'window.updates.setAutoDownload(false)')).toEqual({ ok: true });
   expect((await widget.evaluate(() => window.trafficLight.getUpdaterState())).status).toBe('idle');
 });
 
 test('no page of ours loads the updater page in a frame', async () => {
-  const frames = await h.app.evaluate(({ webContents }) => webContents.getAllWebContents().flatMap((c) => c.mainFrame.framesInSubtree.filter((f) => f !== c.mainFrame).map((f) => f.url)));
+  // A page torn down mid-walk (a navigation) has no frames to read.
+  const frames = await h.app.evaluate(({ webContents }) => webContents.getAllWebContents().flatMap((c) => {
+    try { return c.isDestroyed() ? [] : c.mainFrame.framesInSubtree.filter((f) => f !== c.mainFrame).map((f) => f.url); } catch (e) { if (c.isDestroyed()) return []; throw e; }
+  }));
   expect(frames.filter((u) => u.includes('updates.html'))).toEqual([]);
 });

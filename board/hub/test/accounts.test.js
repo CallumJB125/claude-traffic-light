@@ -47,9 +47,11 @@ test('desktop sign-up = sign-in: code mail names the device, token is shown once
 
     const acct = await h.call('GET', '/api/account', { token: v.body.device_token });
     assert.equal(acct.status, 200);
-    assert.deepEqual(Object.keys(acct.body).sort(), ['identities', 'pending_invites', 'teams', 'user']);
+    assert.deepEqual(Object.keys(acct.body).sort(), ['client_workspaces', 'identities', 'pending_client_invites', 'pending_invites', 'teams', 'user']);
     assert.deepEqual(acct.body.identities, [{ provider: 'email' }], 'provider names only (D78)');
     assert.deepEqual(acct.body.pending_invites, []);
+    assert.deepEqual(acct.body.client_workspaces, []);
+    assert.deepEqual(acct.body.pending_client_invites, []);
     assert.equal(acct.body.teams[0].slug, 'dev', 'teams made by the legacy seed get a slug (P2 backfill)');
 
     // Signing in again: same user, a second device.

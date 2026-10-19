@@ -13,12 +13,13 @@ const Remote = require('../hooks/remote.js');
 const SessionState = require('../hooks/session-state.js');
 const Rules = require('../rules.js');
 const createRemoteDevices = require('../src/remote-devices.js');
+const { testTempDir } = require('./helpers/tmp');
 
 const ROOT = path.join(__dirname, '..');
 const EMIT = path.join(ROOT, 'hooks', 'emit.js');
 const REMOTE_CLI = path.join(ROOT, 'hooks', 'remote.js');
 const HOST = os.hostname().split('.')[0];
-const tmp = (p = 'ctl-remote-') => fs.mkdtempSync(path.join(os.tmpdir(), p));
+const tmp = (p = 'ctl-remote-') => testTempDir(p);
 const TOKEN = 'ab'.repeat(32);
 const ch = (...codes) => String.fromCharCode(...codes);
 
@@ -33,6 +34,26 @@ async function waitFor(fn, ms = 10000) {
     if (v || Date.now() > end) return v;
     await new Promise((r) => setTimeout(r, 20));
   }
+}
+
+// A deliberately silent TCP fixture must also release accepted sockets after
+// an assertion or startup failure; server.close() alone can wait on them.
+async function hangingServer(t, onConnect = () => {}) {
+  const peers = new Set();
+  const server = net.createServer((peer) => {
+    peers.add(peer);
+    peer.on('close', () => peers.delete(peer));
+    peer.on('error', () => {});
+    onConnect();
+  });
+  const closed = new Promise((resolve) => server.once('close', resolve));
+  t.after(() => {
+    for (const peer of peers) peer.destroy();
+    server.close(() => {});
+    return closed;
+  });
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  return server;
 }
 
 // ── Protocol ────────────────────────────────────────────────────────────────
@@ -682,17 +703,19 @@ test('transport: each transport validates its own fields; hub is not built', () 
   assert.equal(Transport.validate({ socketPath: 'relative.sock', device: 'd', token: TOKEN }), null);
   const priv = tmp('ctl-sock-');
   fs.chmodSync(priv, 0o700);
-  assert.equal(Transport.validate({ socketPath: path.join(priv, 's.sock'), device: 'd', token: TOKEN }).socketPath, path.join(priv, 's.sock'));
+  const privateConfig = Transport.validate({ socketPath: path.join(priv, 's.sock'), device: 'd', token: TOKEN });
+  if (process.platform === 'win32') {
+    assert.equal(privateConfig, null, 'Windows refuses Unix socket authority even in a private fixture');
+    assert.equal(Transport.create({ socketPath: path.join(priv, 's.sock'), device: 'd', token: TOKEN }), null, 'refused config cannot construct a transport');
+  } else assert.equal(privateConfig.socketPath, path.join(priv, 's.sock'));
 });
 
-test('transport: send settles within its timeout against a server that never answers', async () => {
-  const hang = net.createServer(() => {}).listen(0, '127.0.0.1');
-  await new Promise((r) => hang.once('listening', r));
+test('transport: send settles within its timeout against a server that never answers', async (t) => {
+  const hang = await hangingServer(t);
   const start = Date.now();
   const r = await Transport.create({ url: `http://127.0.0.1:${hang.address().port}`, device: 'devbox-a1b2c3', token: TOKEN, timeoutMs: 150 }).send({ v: 1 });
   assert.equal(r.error, 'timeout');
   assert.ok(Date.now() - start < 1000);
-  hang.close();
 });
 
 test('transport: an unsigned 200 (a squatter on the tunnel port) is a failure', async () => {
@@ -707,14 +730,16 @@ test('transport: an unsigned 200 (a squatter on the tunnel port) is a failure', 
   } finally { fake.close(); }
 });
 
-test('transport: end to end over a unix socket in a private directory', async () => {
+test('transport: end to end over a unix socket in a private directory', { skip: process.platform === 'win32' ? 'Reporter Unix socket transport intentionally refuses Windows; direct HTTP and refusal checks remain active' : false }, async (t) => {
   const dir = tmp('ctl-sock-');
   fs.chmodSync(dir, 0o700);
   const sock = path.join(dir, 'buddy.sock');
   const desk = await deviceListener();
+  t.after(() => desk.close());
   // What `ssh -R <sock>:127.0.0.1:47173` gives the reporter: a socket that reaches the listener.
-  const bridge = net.createServer((c) => { const up = net.connect(desk.port, '127.0.0.1'); c.pipe(up).pipe(c); up.on('error', () => c.destroy()); c.on('error', () => up.destroy()); }).listen(sock);
-  await new Promise((r) => bridge.once('listening', r));
+  const bridge = net.createServer((c) => { const up = net.connect(desk.port, '127.0.0.1'); c.pipe(up).pipe(c); up.on('error', () => c.destroy()); c.on('error', () => up.destroy()); });
+  t.after(() => new Promise((resolve) => bridge.close(() => resolve())));
+  await new Promise((resolve, reject) => { bridge.once('error', reject); bridge.listen(sock, resolve); });
   try {
     const home = tmp('ctl-reporter-');
     const pc = Protocol.parsePairingCode(desk.R.pair('devbox').code);
@@ -722,7 +747,7 @@ test('transport: end to end over a unix socket in a private directory', async ()
     const r = await Remote.send('ping', {}, { rootDir: home, ignoreBackoff: true });
     assert.equal(r.ok, true);
     assert.deepEqual(r.body, { ok: true, name: 'devbox' });
-  } finally { bridge.close(); desk.close(); }
+  } finally { desk.close(); }
 });
 
 // ── Reporter side ───────────────────────────────────────────────────────────
@@ -778,17 +803,22 @@ test('reporter: agentPid walks one ps listing past shells, and trusts a cached p
 
 test('reporter hooks: every Claude Code event runs emit.js; set-status and foreign hooks are left alone', () => {
   const { apply, strip, Claude, Runtime } = Remote.reporterHooks();
-  const rt = Runtime.make({ execPath: null, hooksDir: '/opt/buddy/hooks', dataDir: '/home/me/.claude-traffic-light' });
-  const foreign = { matcher: '', hooks: [{ type: 'command', command: 'echo mine' }] };
-  const desktop = Claude.apply({ hooks: { Stop: [foreign] } }, rt);
-  const once = apply(desktop, rt);
-  assert.deepEqual(apply(once, rt), once, 'idempotent');
-  for (const [event] of Claude.HOOK_EVENTS) {
-    const cmds = once.hooks[event].flatMap((g) => g.hooks.map((h) => h.command));
-    assert.ok(cmds.includes(`node "/opt/buddy/hooks/emit.js" --adapter claude ${event}`), event);
-    assert.ok(cmds.some((c) => c.includes('set-status.js')), `${event}: the app's own hook stays`);
+  for (const fixture of [
+    { platform: 'darwin', hooksDir: '/opt/buddy/hooks', dataDir: '/home/me/.claude-traffic-light', script: '/opt/buddy/hooks/emit.js' },
+    { platform: 'win32', hooksDir: String.raw`C:\Plexiform\hooks`, dataDir: String.raw`C:\Users\fixture\.claude-traffic-light`, script: String.raw`C:\Plexiform\hooks\emit.js` },
+  ]) {
+    const rt = Runtime.make({ execPath: null, ...fixture });
+    const foreign = { matcher: '', hooks: [{ type: 'command', command: 'echo mine' }] };
+    const desktop = Claude.apply({ hooks: { Stop: [foreign] } }, rt);
+    const once = apply(desktop, rt);
+    assert.deepEqual(apply(once, rt), once, `${fixture.platform}: idempotent`);
+    for (const [event] of Claude.HOOK_EVENTS) {
+      const cmds = once.hooks[event].flatMap((g) => g.hooks.map((h) => h.command));
+      assert.ok(cmds.includes(`node "${fixture.script}" --adapter claude ${event}`), `${fixture.platform}: ${event}`);
+      assert.ok(cmds.some((c) => c.includes('set-status.js')), `${fixture.platform}: ${event}: the app's own hook stays`);
+    }
+    assert.deepEqual(strip(once), desktop, `${fixture.platform}: unpair leaves exactly what the app installed`);
   }
-  assert.deepEqual(strip(once), desktop, 'unpair leaves exactly what the app installed');
 });
 
 test('reporter: a Buddy app on the same machine is detected', () => {
@@ -881,7 +911,7 @@ test('e2e: a hook on the reporter lights a namespaced session on the desktop; th
     assert.ok(await waitFor(() => one(desk.R)?.signal === 'stop'));
     await runEmit(rep.home, ['--adapter', 'claude', 'SessionEnd'], payload());
     assert.ok(await waitFor(() => desk.R.readSessions().length === 0));
-    await runEmit(rep.home, ['stop', '--source', 'Aider', '--session', 'x1', '--cwd', '/w']);
+    await runEmit(rep.home, ['stop', '--source', 'Amp', '--session', 'x1', '--cwd', '/w']);
     assert.ok(await waitFor(() => one(desk.R)?.sessionId === `remote:${rep.device}:custom-x1`), 'bare signals forward, source lowered');
   } finally { desk.close(); }
 });
@@ -901,7 +931,7 @@ test('e2e: over HTTP, a browser Origin and a replayed request are refused; nothi
   } finally { desk.close(); }
 });
 
-test('e2e: ping and heartbeat talk to the desktop, and the heartbeat resyncs a lost session', async () => {
+test('e2e: signed ping works and heartbeat resyncs only a session with verified agent liveness', async () => {
   const desk = await deviceListener();
   try {
     const rep = pairReporter(desk);
@@ -913,6 +943,14 @@ test('e2e: ping and heartbeat talk to the desktop, and the heartbeat resyncs a l
     // The heartbeat vouches only for sessions whose agent pid is on file; a
     // ps that timed out under load leaves none, so give the hook another go.
     const localFile = path.join(rep.home, 'sessions', `${HOST}-remote-sess-1.json`);
+    if (process.platform === 'win32') {
+      assert.equal(SessionState.readJson(localFile).claudePid, undefined, 'Windows reporter does not invent POSIX process provenance');
+      assert.deepEqual(Remote.liveSessions(rep.home), [], 'an unverified session is never vouched for');
+      fs.rmSync(path.join(desk.R.remoteDir, rep.device), { recursive: true });
+      assert.equal((await Remote.heartbeat({ rootDir: rep.home })).ok, true, 'signed HTTP heartbeat still works');
+      assert.equal(desk.R.readSessions().length, 0, 'no unverified session is resurrected');
+      return;
+    }
     for (let i = 0; i < 3 && !SessionState.readJson(localFile)?.claudePid; i++) await runEmit(rep.home, ['--adapter', 'claude', 'UserPromptSubmit'], payload());
     assert.ok(SessionState.readJson(localFile).claudePid, 'the reporter recorded the agent pid');
     // Let any sender still in flight land before the desktop "loses" the session.
@@ -933,9 +971,8 @@ test('e2e: ping and heartbeat talk to the desktop, and the heartbeat resyncs a l
 });
 
 // Paired, a hook costs a spawn, not a round trip; unpaired, nothing changes.
-test('hook: exits 0 fast paired and unpaired; latencies are reported', async () => {
-  const hang = net.createServer(() => {}).listen(0, '127.0.0.1');
-  await new Promise((r) => hang.once('listening', r));
+test('hook: exits 0 fast paired and unpaired; latencies are reported', async (t) => {
+  const hang = await hangingServer(t);
   try {
     const plain = tmp('ctl-plain-');
     const paired = tmp('ctl-reporter-');
@@ -957,10 +994,9 @@ test('hook: exits 0 fast paired and unpaired; latencies are reported', async () 
   } finally { hang.close(); }
 });
 
-test('hook: an unreachable desktop backs off: the next hook sends nothing', async () => {
+test('hook: an unreachable desktop backs off: the next hook sends nothing', async (t) => {
   let connections = 0;
-  const hang = net.createServer(() => { connections += 1; }).listen(0, '127.0.0.1');
-  await new Promise((r) => hang.once('listening', r));
+  const hang = await hangingServer(t, () => { connections += 1; });
   try {
     const home = tmp('ctl-reporter-');
     Remote.saveConfig(home, { url: `http://127.0.0.1:${hang.address().port}`, device: 'devbox-a1b2c3', token: TOKEN, timeoutMs: 200 });

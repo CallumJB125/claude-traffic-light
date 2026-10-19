@@ -3,8 +3,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { byClass, textOf, findAll } from '../js/h.js';
-import { displayFace } from '../js/view.js';
-import { column, boardScreen, card, selectionActions } from '../js/render-board.js';
+import { displayFace, columnFor } from '../js/view.js';
+import { column, boardScreen, card } from '../js/render-board.js';
 import {
   planMoves, moveSummary, dropSlot, dragModel, toggleSelection, pruneSelection, idsToDrag, selectionBar,
   kbdStart, kbdKey, announcement,
@@ -24,6 +24,23 @@ test('planMoves: human cards move, same-column ones are unchanged, run-driven on
   assert.deepEqual(plan.moves.map((m) => [m.id, m.from]), [['a', 'todo']]);
   assert.deepEqual(plan.unchanged, ['b']);
   assert.deepEqual(plan.skipped, [{ id: 'c', key: 'C', reason: 'run' }]);
+});
+
+test('planMoves: an observed card whose AI is still reporting work can move between open columns but never to Done', () => {
+  const capture = { source: 'local_observation', fresh: true, status: 'working' };
+  const w = human('w', { column: 'in_progress', capture });
+  const plan = planMoves(['w'], lookup(w), 'done');
+  assert.deepEqual(plan.moves, []);
+  assert.deepEqual(plan.skipped, [{ id: 'w', key: 'W', reason: 'working' }]);
+  assert.match(moveSummary(plan, 'done'), /Skipped W: an AI is still working/);
+  assert.equal(dragModel({ ids: ['w'], over: 'done' }, [entry(w)]).ok, false);
+  assert.equal(planMoves(['w'], lookup(w), 'in_review').moves.length, 1);
+  const stale = human('s', { column: 'in_progress', capture: { ...capture, fresh: false, status: 'unknown' } });
+  assert.equal(planMoves(['s'], lookup(stale), 'done').moves.length, 1, 'a stale report no longer holds the card');
+  // A person's earlier Done does not hide live work: it renders in In progress.
+  const done = human('d', { column: 'done', capture });
+  assert.equal(columnFor(done, displayFace(done)), 'in_progress');
+  assert.equal(columnFor({ ...done, capture: { ...capture, status: 'review' } }, displayFace(done)), 'done');
 });
 
 test('moveSummary: one sentence for a move, a partial move and a no-op', () => {
@@ -114,15 +131,11 @@ test('announcements name the card and the column', () => {
 
 // ── what the board renders ──────────────────────────────────────────────────
 
-test('cards: only human-owned ones carry data-draggable, selected ones show a mark', () => {
+test('cards: only human-owned ones carry data-draggable', () => {
   const m = model([]);
   assert.equal(card(entry(agent('r')), m).props['data-draggable'], null);
   assert.equal(card(entry(human('a')), m).props['data-draggable'], 'true');
   assert.equal(card(entry(human('a')), model([], { readOnly: true })).props['data-draggable'], null, 'viewers cannot move cards');
-  const picked = card(entry(human('a')), model([], { selection: new Set(['a']) }));
-  assert.match(picked.props.class, /is-selected/);
-  assert.equal(byClass(picked, 'sel-mark').length, 1);
-  assert.match(textOf(picked), /Selected/);
 });
 
 test('column: a droppable hover lights the column and draws one line at the derived slot', () => {
@@ -148,15 +161,11 @@ test('column: dropping on a run-driven-only hold shows the not-allowed state', (
   assert.match(column('done', [], m).props.class, /is-drop-none/);
 });
 
-test('selection bar: count, move-to select, clear; run-driven selected cards are called out', () => {
-  const entries = [human('a'), human('b'), agent('r')].map(entry);
-  const bar = selectionActions(model(entries, { selection: new Set(['a', 'b', 'r']) }));
-  assert.match(textOf(bar), /3 selected/);
-  assert.match(textOf(bar), /1 run-driven won't move/);
-  assert.equal(findAll(bar, (n) => n.props['data-change'] === 'bulk-move').length, 1);
-  assert.equal(findAll(bar, (n) => n.props['data-action'] === 'clear-selection').length, 1);
-  assert.equal(selectionActions(model(entries, { selection: new Set() })), null);
-  assert.equal(byClass(boardScreen(model(entries, { selection: new Set(['a']) })), 'selbar').length, 1);
+test('no multi-select bulk bar: a selection set never renders bulk actions', () => {
+  const entries = [human('a'), human('b')].map(entry);
+  const screen = boardScreen(model(entries, { selection: new Set(['a', 'b']) }));
+  assert.equal(byClass(screen, 'selbar').length, 0);
+  assert.equal(findAll(screen, (n) => n.props['data-change'] === 'bulk-move').length, 0);
 });
 
 test('the board has a live region for announcements and a hint for assistive tech', () => {

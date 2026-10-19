@@ -130,6 +130,19 @@ Stale windows: \`workingStaleMinutes\` for a working signal,
 or a quiet one (${[...M.QUIET].map((s) => `\`${s}\``).join(', ')}: open, no prompt yet);
 a promoted session lives while any working agent is younger than
 ${M.AGENT_KEEPALIVE_MS / 3600000} h or anything moved within the working window.
+
+### Stuck?
+
+A working signal (never a waiting-on-you, quiet or closed-turn one) whose file
+has not been touched by any hook or activity event for \`stuckMinutes\`
+(Preferences, default ${M.STUCK_DEFAULT_MINUTES}, 0 = off) is shown as before but carries
+\`stuck: { sinceMs, tool }\`; the widget lamp turns amber ("Stuck?") unless
+something redder is already showing, and Sessions lists the last tool and
+"since 7m". Any hook write moves \`updatedAt\` and clears it. It shares the
+working window rather than adding a second clock: while the flag is on, the
+session stays live for the later of \`workingStaleMinutes\` and
+\`stuckMinutes\` + ${M.STUCK_VISIBLE_MS / 60000} min, so a 5 min threshold is not cut short by the
+6 min working window.
 `;
 }
 

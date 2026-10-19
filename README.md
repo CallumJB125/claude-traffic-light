@@ -152,6 +152,10 @@ Resolution: rules apply top to bottom; the first rule that lights a lamp is
 the state, and rules above it may layer accents (eyes, pose, sound) on top.
 A rule below the lamp owner never leaks into the look.
 
+There is one character for everything, chosen once in Lights (the Character
+row above the rules). Rules drive pose, eyes, lamp, effects, costume, pet and
+sound, never the body.
+
 ## Share your rules
 
 Presets menu → **Copy share code** puts your whole ruleset on the clipboard
@@ -162,13 +166,52 @@ JSON.
 ## Other agents, not just Claude Code
 
 Every session is tagged with its **source**, and rules can be scoped to one
-agent (**Only agent**). Preferences → **Connect other agents** writes the
-hook config for:
+agent (**Only agent**). **More → AI tools** lists every supported tool on this
+Mac: whether it is installed (and which version), whether it is connected, when
+it last reported, and what Plexiform can show for it. **Connect all detected**
+or a row's **Connect** shows the exact lines to be added to the tool's config,
+saves a copy beside the file (`<file>.plexiform-backup-<time>`), writes it,
+reads it back to check, and offers **Undo**. Claude Code still connects by
+itself at launch; its status is on the same page. It also works from a
+development checkout: the hook commands point at that checkout's `hooks/`.
+The page writes the hook config for:
 
 - **Cursor** — `~/.cursor/hooks.json` (prompt, shell, MCP, file edits, stop)
-- **Codex CLI** — `notify` in `~/.codex/config.toml` (turn complete); Codex runs
-  one notify command, so if another tool already set one Buddy leaves it and says so
+- **Codex desktop and CLI** — lifecycle hooks in `~/.codex/hooks.json` for
+  session activity, waiting, completed turns and subagents. Existing hooks and
+  the separate `notify` command in `config.toml` are preserved. Review and trust
+  the Plexiform hook definitions in Codex before starting a new turn (the CLI
+  provides `/hooks`). Preferences → Health distinguishes configured hooks from
+  received activity. Installing hooks cannot reconstruct an already running
+  turn; no private chat history is read. This adapter records activity only and
+  cannot answer permissions. See [Codex hook review](https://learn.chatgpt.com/docs/hooks).
 - **Gemini CLI** — `hooks` in `~/.gemini/settings.json` (best effort)
+- **Hermes** — the `plexiform-activity` plugin, enabled through Hermes' own CLI
+  (installed app only)
+- **Copilot CLI** — Plexiform's own hooks file, `~/.copilot/hooks/plexiform.json`
+  (session, prompt, tool, subagent and stop events; observe only, it never
+  answers a permission)
+- **OpenCode** — Plexiform's own plugin, `~/.config/opencode/plugins/plexiform.js`
+  (session created/idle/error, tool before/after, permission asked)
+- **Goose** — a hook plugin of Plexiform's own, `~/.agents/plugins/plexiform/`
+  (session, prompt, tool and stop events; observe only)
+- **Cline** — one script per hook in `~/Documents/Cline/Hooks/` (task start,
+  resume, complete, cancel, prompt, tool use). Only empty slots are used; a
+  hook you wrote yourself is never replaced. macOS and Linux only.
+- **Aider** — two marked lines in `~/.aider.conf.yml` (`notifications` and
+  `notifications-command`) report "waiting for you" after each answer. Aider
+  has no prompt or tool hooks, so run it as `plexiform-run aider` to see
+  working and done as well; the wrapper exports `PLEXIFORM_SESSION` so both
+  land in one session.
+
+**Tools with no hooks (Amp, Windsurf and others).** *Add a custom
+tool* on the AI tools page installs `~/.local/bin/plexiform-run`. Launch the
+tool through it, `plexiform-run aider --model sonnet`, and the widget shows it
+working, then done or failed from the exit code. That is all the wrapper can
+see: it cannot answer prompts or show tool use. Its events are the generic
+adapter's (`adapters/generic.js`, also `POST /hook/generic?event=start|stop|exit`).
+Gemini CLI and Cursor report working and finished only; no "needs input" state
+is claimed for them.
 
 Claude Code's own hooks always run `set-status.js`. Posting Claude's payload to
 `/hook/claude` (or `emit.js --adapter claude`) works but records less — no host
@@ -202,6 +245,19 @@ Preferences → Remote devices, then from a checkout on that machine run
 signed with the device's own key, and its sessions show under the device's
 name. Recipes, wire format and threat notes: [docs/remote-reporter.md](docs/remote-reporter.md).
 
+## Claude Burst inside Plexiform
+
+[Claude Burst](https://github.com/andrewbakercloudscale/claude-burst) by Andrew Baker keeps Claude Code working through limits: overflow to a provider you pay for, pauseless compaction, session coordination and handover, keep-awake with the lid shut, and a dashboard for cost and health. Plexiform is verified against Burst **v0.20.36** and still works with 0.19 (newer features simply stay hidden). macOS only, and only if you install it.
+
+- **Usage & Burst in the sidebar.** One entry opens the Usage optimiser: Burst's status, its dashboard in a locked-down view, and the tools it adds. Nothing is read until Burst is installed and answering on its loopback port.
+- **Guided setup.** The empty state walks through Install → Trust → Enable → First check, says what each step changes on your Mac (from Burst's own README), and reads progress back from Burst while a step runs, so you are not sent to a Terminal and asked to come back.
+- **One cause, one action.** Every state names what is wrong and offers exactly one next step: not installed → Install; too old → Update; gateway not answering → Repair, with the last known state shown dimmed and its age; CA or hosts entry not trusted → Fix; console down → Start console; usage panel out of date → Update panel. An untrusted listener on Burst's port is named and nothing is read from it.
+- **Home tells you when to look.** A single Burst card appears in Home's attention list only when something needs you: not running, update available, a limit near, or loose ends (uncommitted files, unpushed commits or stashes Burst noticed in your repositories). Healthy means no card.
+- **Loose ends on Overview.** Each repository row carries Burst's counts of uncommitted files, unpushed commits and stashes; file names only, never contents or diffs, and only for repositories your sessions use.
+- **Keep-awake, Remote Control and mods on the Burst card.** The card shows whether this Mac is being kept awake and whether Remote Control is expected, and lists Burst's session mod and the usage panel (claude-code-cost-sidebar) with Install or Update per mod. Every change to the Mac goes through the same native consent sheet as before; Burst's hotspot settings are never read or written by Plexiform.
+
+Privacy: all Burst reads are loopback-only and whitelisted field by field (see PRIVACY.md, *Claude Burst*).
+
 ## Windows
 
 `npm run dist:win` builds an x64 installer and a portable exe (cross-built
@@ -209,6 +265,37 @@ from macOS works). The widget,
 Lights, rules, overlay effects, sounds (system beep or a file), speech and
 the local endpoint all work; Dock-icon roaming, macOS Shortcuts and the
 menu-bar template icon are macOS-only.
+
+## Teammates on the widget
+
+When a teammate sends you "Can you look at this?", or you are waiting on one,
+the widget shows a small **Teammates** panel under the character (the same
+spot as the "While you were away" recap, which takes precedence). Each row
+names who is asking and what about, or who you are waiting on and where that
+stands; click a row to open Agent mail. The × hides that set until it
+changes. The tooltip carries the counts too. Nothing new is sent or fetched:
+the panel reads the agent-mail inbox you already opted in to.
+
+## Team moments, shared views and what shipped
+
+With a team signed in, the team layer reaches past the board:
+
+- **Mark a moment** on one of your sessions (Sessions page) records a ship, decision, demo or moment on the linked team board. **Pin to project** sits beside it. Only the kind, the line you typed and an optional note are sent.
+- **Share view** on a saved filter in Team sessions posts that view (name and filter values only) to the team's board, where it shows under Shared views for everyone.
+- **Home › Team today** shows *Since you were away* (with the time you last looked, including teammates' moments) and *Shipped this week* (cards moved to Done, merged pull requests, shipped moments), all from the board snapshot Plexiform already reads.
+- **Team sessions** shows an availability badge per teammate (Active, Idle, Away, Offline) folded from what the page already displays, and lets you keep **collections**: named groups of sessions that live only on this device, like pins.
+- **Home › Inbox** offers quick decision buttons on waiting requests with plain options (Allow, Deny, a short choice). They go through the same checks as answering from the widget, and "Ask from the widget" off means off here too.
+
+## Talk about work, get told when to look, hand it over
+
+None of this applies until you join a team; with no team signed in the pages look as they did. All of it needs the team hub on the version that ships with this release: against an older hub the desktop skips the new routes quietly (no inbox rows, no bell, no presence) and the Comment follow-up on a moment says the hub does not take comments there yet.
+
+- **Comments and @mentions.** Every card and every moment on the web board has a thread. Type `@` in the composer and pick a teammate (by name, GitHub login or the part of their email before the `@`, up to ten per comment); the mention renders as a chip with their current name. On the desktop, the Sessions page shows a **Comment** input right after you mark a moment, so the note goes on the moment you just made. Only the comment text and the ids of the people you mentioned are sent.
+- **Inbox in Home.** Mentions, replies to your comments, teammates' moments, hand-off requests and answers, and inputs someone else answered on your run land in **Home › Inbox** with an **Open** button (Overview or Sessions) and a quiet **Mark read**. The dock badge counts them with your local items. Plexiform asks each linked hub for new rows once a minute, so an item can take up to a minute to arrive.
+- **Two silent macOS notifications.** Only a mention and a hand-off request raise a notification, never a sound, and at most one per 30 seconds per hub. Everything else waits in the inbox.
+- **Bell on the web board.** The same inbox, live, in the board's top bar: open an item to jump to its card, or mark all read.
+- **Who is looking, who is running.** On the web board a card shows a small avatar stack when teammates have it open, and the team list says *running on <repo>* or *viewing <card>* per member. On the desktop, **Team sessions** person headers show the same line next to the availability badge. Opening a teammate's row tells the hub you are viewing that card; closing it clears you. Presence lives in the hub's memory only and expires after 90 seconds without a beat; nothing is journaled.
+- **Hand a card to a teammate.** **Hand to…** in the card drawer picks a teammate and takes a note (up to 2,000 characters). The latest handover packet for that card goes with it and the teammate is added as an assignee. They see **Accept** / **Decline** on the card and, on the desktop, a *Needs you* card on the Sessions page with a notification "<name> handed you <key>"; Accept opens the packet there. You see "Handed to <name>, waiting" with **Take it back** until they answer, and the outcome after. One open request per card at a time.
 
 ## Answer permission prompts from the widget
 

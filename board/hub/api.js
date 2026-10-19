@@ -4,17 +4,36 @@
 
 import { randomUUID } from 'node:crypto';
 import { normalizeRemoteUrl } from '../shared/scope.js';
+import { parseMentions } from '../shared/mentions.js';
 import { PLAN_APPROVAL_LABEL, isReservedLabel } from '../shared/states.js';
-import { LABEL_COLORS } from '../shared/protocol.js';
-import { classifyPair, kindOf } from '../shared/overlap.js';
+import { LABEL_COLORS, CODEX_PLAN_PERMISSION } from '../shared/protocol.js';
+import { classifyPair, kindOf, hintPaths } from '../shared/overlap.js';
 import { sponsorLine, alertsFor } from '../shared/cardface.js';
 import { HubError, json } from './db.js';
 import { newDeviceToken, sha256hex } from './auth.js';
-import { cardView, cardDetail, boardSnapshot, publicLogin, labelDef, EMAIL_ONLY, LOCAL_ONLY, emailOnlyIdentity } from './views.js';
+import { runCost, cardView, cardDetail, boardSnapshot, publicLogin, labelDef, EMAIL_ONLY, LOCAL_ONLY, emailOnlyIdentity } from './views.js';
 import { feedEvent, isFeedKind } from './hub.js';
 import { can } from './permissions.js';
 import { limitOrThrow } from './ratelimit.js';
-import { quotaFor } from './identity/teams.js';
+import { quotaFor, teamName, createTeamBoard } from './identity/teams.js';
+import { AI_IDS, AI_BACKENDS, AI_CAPABILITIES, AI_LABELS, aiOfDispatch, BUDGET_MAX_USD, runnerAis, readiness } from '../shared/ai.js';
+import { insertCardRecord } from './card-record.js';
+import { workCaptureView } from './work-capture-view.js';
+import { requireRows } from './quotas.js';
+import { redactSecrets } from '../shared/secret-patterns.mjs';
+import { remoteScope, remoteMutation } from './remote/context.js';
+import { WorkflowExecutor } from './workflow-executor.js';
+import { requireStorage } from './storage-watch.js';
+import { observationContext, validObservation, sentryStatus } from './integrations/sentry/observation.js';
+import { cardSeed } from './activity-handoff.js';
+
+// Team depth (step 0): hub inbox kinds and bounds, shared by lanes A, B and D.
+export const INBOX_KINDS = new Set(['mention', 'reply', 'moment', 'handoff_request', 'handoff_answer', 'input_answered']);
+export const INBOX_MAX = 500;
+const INBOX_REF_MAX = 2048;
+const INBOX_READ_TAIL = 50;
+const INBOX_READ_MAX = 200;
+const inboxView = (r) => ({ id: r.id, org_id: r.org_id, kind: r.kind, ref: json(r.ref_json, {}), created_at: r.created_at, read_at: r.read_at ?? null });
 
 const ACTION_EVENTS = {
   dispatch: 'dispatch', cancel: 'cancel', stop: 'stop', retry: 'retry', take_over: 'take_over', hand_over: 'hand_over',
@@ -54,12 +73,27 @@ function labelName(v) {
 // past this many it is refused before anything is written (D91).
 export const LABEL_REWRITE_MAX = 2000;
 
+const SALVAGE_MAX = 8_000;
 const archivedError = () => new HubError('CONFLICT', 'this card is archived: restore it first', { reason: 'ARCHIVED' });
+
+const HISTORY_MAX_WINDOW_MS = 31 * 86_400_000, HISTORY_MAX_ROWS = 500;
+const STOPPED = new Set(['stopped', 'released', 'released_requeue', 'taken_over', 'parked']);
+// How a run ended, in the History view's six words (plus 'running').
+function runOutcome(r) {
+  if (!r.ended_at) return r.card_run_state === 'unresponsive' || r.card_run_state === 'orphaned' ? 'stalled' : 'running';
+  const why = r.end_reason ?? '';
+  if (r.terminal_reason || why === 'failed:budget') return 'budget';
+  if (why === 'failed:limit') return 'limit';
+  if (why === 'complete' || why === 'handed_over') return 'finished';
+  if (STOPPED.has(why)) return 'stopped';
+  return 'failed';
+}
 
 export class Api {
   constructor(hub) {
     this.hub = hub;
     this.db = hub.db;
+    this.workflowExecutor = new WorkflowExecutor(this);
   }
 
   // ── access ────────────────────────────────────────────────────────────────
@@ -104,9 +138,23 @@ export class Api {
     return current;
   }
 
-  currentWriter(member, cred = null) {
+  currentWriter(member, cred = null, remote = null) {
+    if (remote != null) {
+      if (this.hub.viaScope.getStore()) throw new HubError('FORBIDDEN', 'remote authority cannot replace an integration actor');
+      remoteScope(remote, member, true);
+    }
     const current = this.currentMember(member, cred);
     if (!this.hub.canWrite(current)) throw new HubError('FORBIDDEN', 'current membership cannot change this board');
+    const via = this.hub.viaScope.getStore();
+    if (via) {
+      const connection = this.db.get('SELECT org_id, created_by, status FROM connections WHERE id = ?', via.connection_id);
+      if (!connection || connection.status !== 'active' || connection.org_id !== current.org_id || via.member_id !== current.id) throw Object.assign(new HubError('FORBIDDEN', 'current integration cannot act'), { cacheable: false });
+      // Private registry context, never a request field. It checks the current
+      // action, settings and linked provider identity again after the queue.
+      if (typeof via.authorize === 'function') via.authorize();
+      else if (connection.created_by !== current.id) throw new HubError('FORBIDDEN', 'integration actor unavailable');
+      return this.hub.isAdmin(current) ? { ...current, role: 'member' } : current;
+    }
     return current;
   }
 
@@ -127,19 +175,83 @@ export class Api {
     if (this.hub.board(boardId)?.archived_at) throw new HubError('CONFLICT', 'this board is archived: restore it first', { reason: 'BOARD_ARCHIVED' });
   }
 
-  withWritableBoard(boardId, fn, { member = null, cred = null } = {}) {
+  withWritableBoard(boardId, fn, { member = null, cred = null, remote = null } = {}) {
     return this.hub.withBoard(boardId, () => {
-      const current = member ? this.currentWriter(member, cred) : null;
+      const current = member ? this.currentWriter(member, cred, remote) : null;
       if (current) this.boardFor(current, boardId);
       this.writableBoard(boardId);
+      if (remote != null) {
+        const scope = remoteScope(remote, member, true);
+        if (!scope.boardIds.includes(boardId)) throw new HubError('NOT_FOUND', 'selected board unavailable');
+        return this.hub.txn(() => remoteMutation(remote, member, () => fn(current)));
+      }
       return fn(current);
     });
+  }
+
+  listBoards(member, { includeArchived = false } = {}) {
+    return { boards: this.hub.boardList(member.org_id, { includeArchived }) };
+  }
+
+  createBoard(member, body) {
+    return createTeamBoard(this.hub, member, body, (id) => this.audit(member.id, 'board.create', id));
+  }
+
+  updateBoard(member, boardId, body) {
+    if (!can(member, 'board.rename')) throw new HubError('FORBIDDEN', 'only admins can rename boards');
+    this.boardFor(member, boardId);
+    const capGiven = body.daily_cap_usd !== undefined;
+    if (capGiven && body.daily_cap_usd !== null && !(typeof body.daily_cap_usd === 'number' && body.daily_cap_usd >= 0.5 && body.daily_cap_usd <= 100000)) throw new HubError('VALIDATION', 'daily_cap_usd must be between 0.5 and 100000, or null');
+    const name = body.name === undefined && capGiven ? this.hub.board(boardId).name : teamName(body.name);
+    return this.withWritableBoard(boardId, () => this.hub.txn(() => {
+      if (!can(this.hub.activeMember(member.id), 'board.rename')) throw new HubError('FORBIDDEN', 'only admins can rename boards');
+      const before = this.hub.board(boardId);
+      if (capGiven) {
+        const settings = { ...json(before.settings, {}) };
+        if (body.daily_cap_usd === null) delete settings.daily_cap_usd; else settings.daily_cap_usd = body.daily_cap_usd;
+        if (JSON.stringify(settings) !== JSON.stringify(json(before.settings, {}))) {
+          this.db.run('UPDATE boards SET settings = ? WHERE id = ?', JSON.stringify(settings), boardId);
+          this.audit(member.id, 'board.daily_cap', boardId);
+          this.hub.journal({ board_id: boardId, actor_kind: 'member', actor_id: member.id, kind: 'board.daily_cap_set', payload: { daily_cap_usd: body.daily_cap_usd } });
+        }
+      }
+      if (before.name !== name) {
+        this.db.run('UPDATE boards SET name = ? WHERE id = ?', name, boardId);
+        this.audit(member.id, 'board.rename', boardId);
+        this.hub.journal({ board_id: boardId, actor_kind: 'member', actor_id: member.id, kind: 'board.rename', payload: { name: [before.name, name] } });
+        this.hub.later(() => this.hub.broadcastBoards(member.org_id));
+      }
+      return { board: this.hub.boardList(member.org_id).find((b) => b.id === boardId) };
+    }));
+  }
+
+  setBoardArchived(member, boardId, archived) {
+    if (!can(member, 'board.archive')) throw new HubError('FORBIDDEN', 'only admins can archive or restore boards');
+    this.boardFor(member, boardId);
+    return this.hub.withBoard(boardId, () => this.hub.txn(() => {
+      if (!can(this.hub.activeMember(member.id), 'board.archive')) throw new HubError('FORBIDDEN', 'only admins can archive or restore boards');
+      const board = this.hub.board(boardId);
+      if (!!board.archived_at === archived) return { board: this.hub.boardList(member.org_id, { includeArchived: true }).find((b) => b.id === boardId) };
+      if (archived) {
+        if (this.db.get('SELECT COUNT(*) AS n FROM boards WHERE org_id = ? AND archived_at IS NULL', member.org_id).n <= 1) throw new HubError('CONFLICT', 'the last active board cannot be archived', { reason: 'LAST_ACTIVE_BOARD' });
+        if (this.db.get(`SELECT 1 AS x FROM cards c LEFT JOIN runs r ON r.card_id = c.id
+          WHERE c.board_id = ? AND (r.ended_at IS NULL AND r.id IS NOT NULL OR c.active_run_id IS NOT NULL
+          OR c.run_state IN ('queued','claimed','running','quiet','blocked','parked','suspended','reconnecting','unresponsive','orphaned','handing_over')) LIMIT 1`, boardId)) throw new HubError('CONFLICT', 'stop active runs before archiving this board', { reason: 'ACTIVE_RUN' });
+      }
+      const at = archived ? this.hub.iso() : null;
+      this.db.run('UPDATE boards SET archived_at = ? WHERE id = ?', at, boardId);
+      const kind = archived ? 'board.archive' : 'board.restore';
+      this.audit(member.id, kind, boardId);
+      this.hub.journal({ board_id: boardId, actor_kind: 'member', actor_id: member.id, kind, payload: { archived_at: at } });
+      this.hub.later(() => this.hub.broadcastBoards(member.org_id));
+      return { board: this.hub.boardList(member.org_id, { includeArchived: true }).find((b) => b.id === boardId) };
+    }));
   }
 
   // ── reads ─────────────────────────────────────────────────────────────────
   me(member) {
     const org = this.db.get('SELECT id, name FROM orgs WHERE id = ?', member.org_id);
-    const boards = this.db.all('SELECT id, name, key_prefix FROM boards WHERE org_id = ? ORDER BY name', member.org_id);
+    const boards = this.hub.boardList(member.org_id);
     return { member: publicMember(member), org, boards };
   }
 
@@ -151,6 +263,11 @@ export class Api {
   detail(member, cardId) {
     const row = this.cardFor(member, cardId);
     return cardDetail(this.hub, row, member.id, (e) => (isFeedKind(e.kind) ? feedEvent(this.hub, e) : null));
+  }
+
+  // continue_with_another_ai: what the new session starts from (activity-handoff.js).
+  continueSeed(member, cardId, recordId = null, log = null) {
+    return cardSeed({ hub: this.hub, log }, member, this.cardFor(member, cardId), recordId || null);
   }
 
   handover(member, cardId) {
@@ -169,6 +286,33 @@ export class Api {
     return { rows, next_after_seq: rows.length ? rows.at(-1).seq : after };
   }
 
+  // GET /api/boards/:id/runs?from=&to= — runs overlapping a bounded window, read-only,
+  // for the History view. Costs are provider-reported or null (never $0 by default).
+  runsInRange(member, boardId, { from, to } = {}) {
+    this.boardFor(member, boardId);
+    const t1 = to == null || to === '' ? Date.now() : Date.parse(to), t0 = from == null || from === '' ? t1 - 86_400_000 : Date.parse(from);
+    if (!Number.isFinite(t0) || !Number.isFinite(t1) || t1 <= t0) throw new HubError('VALIDATION', 'from and to must be ISO times with from before to');
+    if (t1 - t0 > HISTORY_MAX_WINDOW_MS) throw new HubError('VALIDATION', 'the window is at most 31 days');
+    const lo = new Date(t0).toISOString(), hi = new Date(t1).toISOString();
+    const runs = this.db.all(`SELECT r.*, c.key AS card_key, c.title AS card_title, c.run_state AS card_run_state FROM runs r JOIN cards c ON c.id = r.card_id
+      WHERE c.board_id = ? AND r.started_at < ? AND (r.ended_at IS NULL OR r.ended_at >= ?) ORDER BY r.started_at DESC LIMIT ?`, boardId, hi, lo, HISTORY_MAX_ROWS + 1);
+    const truncated = runs.length > HISTORY_MAX_ROWS;
+    const observed = this.db.all(`SELECT w.card_id, w.provider, w.reported_status, w.tracking, w.created_at, w.received_at, c.key AS card_key, c.title AS card_title
+      FROM work_capture_cards w JOIN cards c ON c.id = w.card_id
+      WHERE w.board_id = ? AND w.tracking != 'deleted' AND w.created_at < ? AND w.received_at >= ? ORDER BY w.created_at DESC LIMIT ?`, boardId, hi, lo, HISTORY_MAX_ROWS);
+    return {
+      from: lo, to: hi, now: new Date().toISOString(), truncated,
+      runs: runs.slice(0, HISTORY_MAX_ROWS).map((r) => {
+        const ai = aiOfDispatch(r), cost = runCost(this.hub, r);
+        return { id: r.id, card_id: r.card_id, key: r.card_key, title: r.card_title, ai, ai_label: AI_LABELS[ai] ?? ai,
+          started_at: r.started_at, ended_at: r.ended_at ?? null, outcome: runOutcome(r), end_reason: r.end_reason ?? null,
+          cost_usd: cost.cost_usd, has_handover: !!this.hub.latestHandover(r.card_id) };
+      }),
+      observed: observed.map((o) => ({ card_id: o.card_id, key: o.card_key, title: o.card_title, provider: o.provider, started_at: o.created_at,
+        ended_at: o.reported_status === 'ended' || o.tracking !== 'active' ? o.received_at : null, last_seen_at: o.received_at, status: o.reported_status })),
+    };
+  }
+
   alerts(member, boardId) {
     const snap = this.snapshot(member, boardId);
     return {
@@ -177,33 +321,50 @@ export class Api {
     };
   }
 
-  overlapPreview(member, cardId, targetMemberId) {
+  overlapPreview(member, cardId, targetMemberId, repoId) {
     const row = this.cardFor(member, cardId);
+    if (repoId && !this.db.get('SELECT 1 AS x FROM board_repos WHERE board_id = ? AND repo_id = ?', row.board_id, repoId)) throw new HubError('NOT_FOUND', 'repo not on this board');
+    const selectedRepo = repoId || row.repo_id;
     const tid = targetMemberId || member.id;
     const target = this.orgMember(member, tid);
     const prev = this.hub.latestRun(cardId);
+    const hints = hintPaths(`${row.title}\n${row.body ?? ''}`);
     const self = {
-      run_id: 'preview', repo_id: row.repo_id, branch: null, title: row.title, body: row.body,
-      touched_paths: prev ? json(prev.touched_paths, []) : [], planned_paths: prev ? json(prev.planned_paths, []) : [],
+      run_id: 'preview', repo_id: selectedRepo, branch: null, title: row.title, body: row.body,
+      touched_paths: prev ? json(prev.touched_paths, []) : [], planned_paths: [...(prev ? json(prev.planned_paths, []) : []), ...hints],
     };
     const overlaps = [];
-    if (row.repo_id) {
-      for (const other of this.hub.liveRunsInRepo(row.repo_id)) {
+    const unknown = [];
+    let others = 0;
+    // Only this org's repos are compared: a live run elsewhere is never read.
+    if (selectedRepo && this.db.get('SELECT 1 AS x FROM repos WHERE id = ? AND org_id = ?', selectedRepo, member.org_id)) {
+      for (const other of this.hub.liveRunsInRepo(selectedRepo)) {
         if (other.card_id === row.id) continue;
+        others++;
+        if (!other.touched_paths.length && !other.planned_paths.length && !other.locked_paths.length) unknown.push({ card_key: other.card_key, owner: other.owner_name });
         const sig = classifyPair(self, other);
         if (!sig.length) continue;
         const level = sig.reduce((a, s) => ({ high: 3, medium: 2, low: 1 }[s.level] > { high: 3, medium: 2, low: 1 }[a] ? s.level : a), 'low');
-        overlaps.push({ other_card_id: other.card_id, other_key: other.card_key, other_owner: other.owner_name, level, kind: kindOf(level), reasons: sig.map((s) => s.reason), paths: [...new Set(sig.flatMap((s) => s.paths))], age_ms: 0 });
+        overlaps.push({ other_card_id: other.card_id, other_key: other.card_key, other_owner: other.owner_name, other_provider_label: other.provider_label ?? 'Agent', level, kind: kindOf(level), reasons: sig.map((s) => s.reason), paths: [...new Set(sig.flatMap((s) => s.paths))], age_ms: 0 });
       }
     }
-    const dev = [...this.hub.runners.values()].find((c) => c.member_id === tid && c.repos.has(row.repo_id));
+    const selfKnown = self.touched_paths.length > 0 || self.planned_paths.length > 0;
+    // 'unknown' = live work exists that this card cannot be compared against: never reported as clear.
+    const check = { status: overlaps.length ? 'overlap' : !others ? 'clear' : !selfKnown || unknown.length ? 'unknown' : 'clear', self_known: selfKnown, unknown_runs: unknown.slice(0, 10) };
+    const dev = [...this.hub.runners.values()].find((c) => c.member_id === tid && !c.hosted && c.repos.has(selectedRepo));
     const sponsor = sponsorLine({ target: { member_id: tid, name: target.display_name, is_viewer: tid === member.id, device_name: dev?.device.name } }) ?? '';
-    return { overlaps, sponsor };
+    const runners = [...this.hub.runners.values()].filter((c) => c.ready && c.member_id === tid && !c.hosted && c.repos.has(selectedRepo)).map((c) => ({
+      device_name: c.device.name,
+      ai: (c.ai ?? runnerAis(undefined)).map((a) => ({ id: a.id, label: a.label, available: [null, 'may_need_sign_in'].includes(readiness(a)), reason: readiness(a), budget: a.capabilities.budget, legacy: a.legacy })),
+    }));
+    // The caller's own cloud runner, for "Run in the cloud": honest when none is enrolled or it is offline.
+    const hosted = tid === member.id && this.hub.hostedRunners ? this.hub.hostedRunners.previewFor(member, selectedRepo) : null;
+    return { overlaps, check, sponsor, runners, can_use_no_budget: tid === member.id || this.hub.isAdmin(member), ...(hosted ? { hosted } : {}) };
   }
 
   // ── cards ─────────────────────────────────────────────────────────────────
-  async createCard(member, boardId, body, { cred = null } = {}) {
-    member = this.currentWriter(member, cred);
+  async createCard(member, boardId, body, { cred = null, remote = null } = {}) {
+    member = this.currentWriter(member, cred, remote);
     this.boardFor(member, boardId);
     const title = str(body.title, 200, 'title', { required: true });
     const text = str(body.body, 20_000, 'body') ?? '';
@@ -231,14 +392,10 @@ export class Api {
       this.hub.txn(() => {
         prior = once && this.db.get('SELECT card_id FROM integration_requests WHERE connection_id = ? AND request_id = ?', once.connection_id, once.request_id)?.card_id;
         if (prior) return;
-        const b = this.hub.board(boardId);
-        this.db.run('UPDATE boards SET next_key = next_key + 1 WHERE id = ?', boardId);
-        this.db.insert('cards', {
-          id, board_id: boardId, key: `${b.key_prefix}-${b.next_key}`, title, body: text, acceptance, repo_id: body.repo_id ?? null,
+        insertCardRecord(this.hub, boardId, member.id, {
+          title, body: text, acceptance, repo_id: body.repo_id ?? null,
           base_ref: baseRef, labels: JSON.stringify(labels), budget_cents: body.budget_usd != null ? Math.round(body.budget_usd * 100) : null, cover,
-          created_by: member.id, created_at: now, updated_at: now, state_since: now,
-        });
-        for (const a of new Set(assignees)) this.db.insert('card_assignees', { card_id: id, member_id: a, role: 'collaborator' });
+        }, { id, now, assignees });
         if (once) this.db.insert('integration_requests', { ...once, card_id: id, created_at: now });
         const c = this.hub.card(id);
         // An integration's card text and external identifiers (the act()
@@ -262,11 +419,11 @@ export class Api {
       // The same request naming another board is not a replay of this one.
       if (prior && this.hub.card(prior).board_id !== boardId) throw new HubError('CONFLICT', 'this request_id already created a card on another board');
       return { card: cardView(this.hub, this.hub.card(prior ?? id), member.id) };
-    }, { member, cred });
+    }, { member, cred, remote });
   }
 
-  async patchCard(member, cardId, body, { cred = null } = {}) {
-    member = this.currentWriter(member, cred);
+  async patchCard(member, cardId, body, { cred = null, remote = null } = {}) {
+    member = this.currentWriter(member, cred, remote);
     const row0 = this.cardFor(member, cardId);
     return this.withWritableBoard(row0.board_id, (current) => {
       member = current;
@@ -289,6 +446,10 @@ export class Api {
       if ('column' in body && body.column !== row.column_name) {
         if (row.run_state != null) throw new HubError('CONFLICT', 'column is driven by the run while a run state exists');
         if (!['todo', 'in_progress', 'in_review', 'done'].includes(body.column)) throw new HubError('VALIDATION', 'bad column');
+        if (body.column === 'done') {
+          const capture = workCaptureView(this.hub, cardId);
+          if (capture?.fresh && capture.status === 'working') throw new HubError('CONFLICT', 'an AI is still working on this card; stop it or wait for it to finish before marking it done', { reason: 'CAPTURE_WORKING' });
+        }
         set.column_name = body.column;
       }
       if ('assignees' in body) {
@@ -300,6 +461,7 @@ export class Api {
       // as keyed hashes under *_hmac names (replay never reads them as text).
       const external = this.externalCard(cardId);
       this.hub.txn(() => {
+        this.hub.workflowGuard.edit(cardId);
         const fields = {};
         for (const k of Object.keys(set)) {
           if (set[k] === row[k]) continue;
@@ -319,14 +481,14 @@ export class Api {
         this.hub.later(() => this.hub.broadcastCard(cardId));
       });
       return { card: cardView(this.hub, this.hub.card(cardId), member.id) };
-    }, { member, cred });
+    }, { member, cred, remote });
   }
 
-  // An integration created it (an integration_requests row or an integration
-  // card.create): its text and labels only ever reach the journal hashed (D41).
+  // External integration/client feedback/workflow context never enters the permanent
+  // journal in the clear, including when staff later edit its card (D41).
   externalCard(cardId) {
     return !!this.db.get(
-      "SELECT 1 AS x FROM integration_requests WHERE card_id = ? UNION ALL SELECT 1 FROM journal WHERE card_id = ? AND kind = 'card.create' AND actor_kind = 'integration' LIMIT 1",
+      "SELECT 1 AS x FROM integration_requests WHERE card_id = ? UNION ALL SELECT 1 FROM journal WHERE card_id = ? AND kind = 'card.create' AND (actor_kind = 'integration' OR json_extract(payload, '$.client_feedback_id') IS NOT NULL OR json_extract(payload, '$.workflow_instance_id') IS NOT NULL OR json_extract(payload, '$.capture_id') IS NOT NULL) LIMIT 1",
       cardId, cardId);
   }
 
@@ -414,6 +576,119 @@ export class Api {
         this.hub.later(() => this.hub.broadcastLabels(boardId));
       });
       return { label: labelDef(this.db.get('SELECT * FROM board_labels WHERE id = ?', id)) };
+    }, { member, cred });
+  }
+
+  // Project pinboard (board.settings.pins): staging URL, designs, commands, conventions, priorities.
+  // Any writer may add or remove a pin; viewers read. Append-only journal, same scrub as labels.
+  pinsOf(boardId) { return Array.isArray(json(this.hub.board(boardId).settings, {}).pins) ? json(this.hub.board(boardId).settings, {}).pins : []; }
+  // Shared saved views (board.settings.views): a named filter combination any writer can save for the team.
+  viewsOf(boardId) { return Array.isArray(json(this.hub.board(boardId).settings, {}).views) ? json(this.hub.board(boardId).settings, {}).views : []; }
+  async setViews(member, boardId, body, { cred = null, mode = 'append' } = {}) {
+    member = this.currentWriter(member, cred);
+    this.boardFor(member, boardId);
+    this.requireLabel(member, 'label.write');
+    const clean = (v) => {
+      if (!v || typeof v !== 'object') throw new HubError('VALIDATION', 'view must be an object');
+      const name = str(v.name, 60, 'view.name', { required: true });
+      if (!v.values || typeof v.values !== 'object' || Array.isArray(v.values)) throw new HubError('VALIDATION', 'view.values must be an object of filter values');
+      const entries = Object.entries(v.values).filter(([k, val]) => /^[a-z][a-z0-9_-]{0,23}$/i.test(k) && typeof val === 'string' && val.trim()).slice(0, 8).map(([k, val]) => [k, val.trim().slice(0, 80)]);
+      if (!entries.length) throw new HubError('VALIDATION', 'a view needs at least one filter value');
+      const id = typeof v.id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(v.id) ? v.id : randomUUID();
+      return { id, name, values: Object.fromEntries(entries) };
+    };
+    const item = mode === 'remove' ? null : clean(body.view);
+    return this.withWritableBoard(boardId, (current) => {
+      member = current;
+      this.requireLabel(member, 'label.write');
+      const now = this.hub.iso();
+      const before = this.viewsOf(boardId);
+      if (mode === 'remove' && !before.some((x) => x.id === body.id)) throw new HubError('NOT_FOUND', 'no such view');
+      const views = mode === 'remove' ? before.filter((x) => x.id !== body.id)
+        : [...before.filter((x) => x.id !== item.id && x.name.toLowerCase() !== item.name.toLowerCase()), { ...item, by: member.display_name ?? 'A teammate', at: now }];
+      if (views.length > 20) throw new HubError('VALIDATION', 'a board holds at most 20 shared views');
+      const settings = { ...json(this.hub.board(boardId).settings, {}), views };
+      this.hub.txn(() => {
+        this.db.run('UPDATE boards SET settings = ? WHERE id = ?', JSON.stringify(settings), boardId);
+        this.hub.journal({ board_id: boardId, actor_kind: 'member', actor_id: member.id, kind: 'board.views_set', payload: { count: views.length, mode, request_id: body.request_id ?? null } });
+        this.hub.later(() => this.hub.broadcastSettings(boardId, 'views'));
+      });
+      return { views };
+    }, { member, cred });
+  }
+  // Moments (board.settings.moments): "mark a moment" — a dated note the team keeps (a demo, a decision, a ship).
+  momentsOf(boardId) { return Array.isArray(json(this.hub.board(boardId).settings, {}).moments) ? json(this.hub.board(boardId).settings, {}).moments : []; }
+  async setMoments(member, boardId, body, { cred = null, mode = 'append' } = {}) {
+    member = this.currentWriter(member, cred);
+    this.boardFor(member, boardId);
+    this.requireLabel(member, 'label.write');
+    const KINDS = ['moment', 'ship', 'decision', 'demo'];
+    const clean = (m) => {
+      if (!m || typeof m !== 'object') throw new HubError('VALIDATION', 'moment must be an object');
+      const kind = KINDS.includes(m.kind) ? m.kind : 'moment';
+      const label = str(m.label, 120, 'moment.label', { required: true });
+      const note = str(m.note, 500, 'moment.note') ?? '';
+      const id = typeof m.id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(m.id) ? m.id : randomUUID();
+      return { id, kind, label, note };
+    };
+    const item = mode === 'remove' ? null : clean(body.moment);
+    return this.withWritableBoard(boardId, (current) => {
+      member = current;
+      this.requireLabel(member, 'label.write');
+      const now = this.hub.iso();
+      const before = this.momentsOf(boardId);
+      if (mode === 'remove' && !before.some((x) => x.id === body.id)) throw new HubError('NOT_FOUND', 'no such moment');
+      const moments = mode === 'remove' ? before.filter((x) => x.id !== body.id) : [{ ...item, by: member.display_name ?? 'A teammate', at: now }, ...before].slice(0, 50);
+      const settings = { ...json(this.hub.board(boardId).settings, {}), moments };
+      this.hub.txn(() => {
+        // The `moments` table (migration 076) is the durable row; the settings
+        // list is a mirror old desktops still read (same ids, one release).
+        if (mode === 'remove') {
+          this.db.run('DELETE FROM comments WHERE moment_id = ?', body.id);
+          this.db.run('DELETE FROM moments WHERE id = ? AND board_id = ?', body.id, boardId);
+        } else {
+          this.db.insert('moments', { id: item.id, board_id: boardId, kind: item.kind, label: item.label, note: item.note || null, author_member_id: member.id, created_at: now });
+        }
+        this.db.run('UPDATE boards SET settings = ? WHERE id = ?', JSON.stringify(settings), boardId);
+        this.hub.journal({ board_id: boardId, actor_kind: 'member', actor_id: member.id, kind: mode === 'remove' ? 'board.moment_removed' : 'board.moment_marked', payload: { kind: item?.kind ?? null, request_id: body.request_id ?? null } });
+        this.hub.later(() => this.hub.broadcastSettings(boardId, 'moments'));
+      });
+      return { moments };
+    }, { member, cred });
+  }
+  async setPins(member, boardId, body, { cred = null, mode = 'replace' } = {}) {
+    member = this.currentWriter(member, cred);
+    this.boardFor(member, boardId);
+    this.requireLabel(member, 'label.write');
+    const incoming = mode === 'remove' ? [] : Array.isArray(body.pins) ? body.pins : body.pin ? [body.pin] : null;
+    if (!incoming && mode !== 'remove') throw new HubError('VALIDATION', 'pins must be a list');
+    const clean = (p, i) => {
+      if (!p || typeof p !== 'object') throw new HubError('VALIDATION', `pins[${i}] must be an object`);
+      const kind = ['link', 'command', 'note', 'priority'].includes(p.kind) ? p.kind : null;
+      if (!kind) throw new HubError('VALIDATION', `pins[${i}].kind must be link, command, note or priority`);
+      const label = str(p.label, 80, `pins[${i}].label`, { required: true });
+      const value = str(p.value, 500, `pins[${i}].value`, { required: kind !== 'priority' }) ?? '';
+      if (kind === 'link' && !/^https:\/\/[^\s]+$/i.test(value)) throw new HubError('VALIDATION', `pins[${i}].value must be an https link`);
+      const id = typeof p.id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(p.id) ? p.id : randomUUID();
+      return { id, kind, label, value };
+    };
+    const items = (incoming || []).map(clean);
+    return this.withWritableBoard(boardId, (current) => {
+      member = current;
+      this.requireLabel(member, 'label.write');
+      const now = this.hub.iso();
+      const before = this.pinsOf(boardId);
+      const stamp = (p) => { const old = before.find((x) => x.id === p.id); return { ...p, by: old?.by ?? member.display_name ?? 'A teammate', at: old?.at ?? now }; };
+      if (mode === 'remove' && !before.some((x) => x.id === body.id)) throw new HubError('NOT_FOUND', 'no such pin');
+      let pins = mode === 'append' ? [...before.filter((x) => !items.some((p) => p.id === x.id)), ...items.map(stamp)] : mode === 'remove' ? before.filter((x) => x.id !== body.id) : items.map(stamp);
+      if (pins.length > 20) throw new HubError('VALIDATION', 'a pinboard holds at most 20 pins');
+      const settings = { ...json(this.hub.board(boardId).settings, {}), pins };
+      this.hub.txn(() => {
+        this.db.run('UPDATE boards SET settings = ? WHERE id = ?', JSON.stringify(settings), boardId);
+        this.hub.journal({ board_id: boardId, actor_kind: 'member', actor_id: member.id, kind: 'board.pins_set', payload: { count: pins.length, mode, request_id: body.request_id ?? null } });
+        this.hub.later(() => this.hub.broadcastPins(boardId));
+      });
+      return { pins };
     }, { member, cred });
   }
 
@@ -539,7 +814,7 @@ export class Api {
       const row = this.cardFor(current, cardId);
       if (row.board_id !== row0.board_id) throw new HubError('CONFLICT', 'card moved while waiting');
       this.requireActionRepo(row, action);
-      return this.actionLocked(current, cardId, action, type, body);
+      return this.hub.workflowGuard.human(current,cred,()=>this.actionLocked(current,cardId,action,type,body));
     }, { member, cred });
   }
 
@@ -552,12 +827,22 @@ export class Api {
     const row = this.hub.card(cardId);
     if (row.archived_at) throw archivedError();
     const rel = this.relations(row);
+    const strictHandover = action === 'hand_over' && body.target?.kind === 'hold'
+      || action === 'take_over_with_claude' && json(row.handover_target, null)?.kind === 'hold';
+    if (strictHandover && (!Number.isSafeInteger(body.expected_fence) || body.expected_fence !== row.fence
+      || typeof body.prior_run_id !== 'string' || body.prior_run_id !== (rel.run?.id ?? this.hub.latestRun(cardId)?.id))) {
+      throw new HubError('CONFLICT', 'This run changed. Reopen the card before moving it to another AI.');
+    }
+    if (action === 'approve_done') {
+      const last = rel.run ?? this.hub.latestRun(cardId);
+      if (last && this.hub.endedChildAlive(last.id)) throw new HubError('CONFLICT', 'the AI process is still finishing; mark it done once it has exited', { reason: 'CHILD_ALIVE' });
+    }
     const me = member.id;
     const admin = this.hub.isAdmin(member);
     const involved = (...ids) => admin || ids.flat().includes(me);
     const ctx = {
       has_repo: !!row.repo_id, can_write: this.hub.canWrite(member), policy_ok: this.policyOk(row),
-      can_cancel: involved(rel.dispatch?.state === 'pending' ? rel.dispatch.dispatched_by : null, rel.assignees),
+      can_cancel: involved(rel.dispatch?.state === 'pending' ? rel.dispatch.dispatched_by : null, rel.assignees) || this.hub.workflowGuard.cleanupCancel(member,row),
       can_stop: involved(rel.dispatcher, rel.owner, rel.assignees),
       can_hand_over: [rel.owner, rel.dispatcher, ...rel.assignees].includes(me),
       confirmed: body.confirm === true,
@@ -571,35 +856,60 @@ export class Api {
       case 'retry':
       case 'take_over_with_claude': {
         if (!body.request_id) throw new HubError('VALIDATION', 'request_id required');
-        if (body.backend != null && body.backend !== 'claude_cli') throw new HubError('VALIDATION', 'only claude_cli is dispatchable in Phase 1');
+        const ai = body.ai ?? (body.backend === 'codex_cli' ? 'codex' : action === 'retry' ? aiOfDispatch(rel.dispatch ?? rel.run) : 'claude');
+        if (!AI_IDS.includes(ai) || (body.backend != null && body.backend !== AI_BACKENDS[ai])) throw new HubError('VALIDATION', 'invalid AI or mismatched backend');
         let target = body.target_member_id ?? null;
         if (target == null && action === 'retry') target = rel.run?.on_behalf_of ?? null;
         if (target != null) this.orgMember(member, target);
+        // "Run in the cloud": the caller's own hosted runner, never a teammate's machine.
+        const placement = body.placement === undefined ? (action === 'retry' ? rel.dispatch?.placement ?? null : null) : body.placement;
+        if (placement != null && placement !== 'hosted') throw new HubError('VALIDATION', 'placement must be "hosted" or null');
+        if (placement === 'hosted' && (target ?? me) !== me) throw new HubError('POLICY_DENIED', 'cloud runs use your own cloud runner', { reason: 'HOSTED_SELF_ONLY' });
         const existing = this.db.get('SELECT * FROM dispatches WHERE request_id = ?', body.request_id);
         if (existing && existing.card_id !== cardId) throw new HubError('CONFLICT', 'request_id belongs to another card');
         ctx.duplicate_request = !!existing;
         ctx.needs_confirm = this.hub.needsConfirm(me, target ?? me, row.repo_id);
-        Object.assign(event, { request_id: body.request_id, target_member_id: target, backend: 'claude_cli' });
-        // A budget given with the dispatch becomes the card's cap: the offer
-        // carries it and the runner passes it to --max-budget-usd.
-        if (body.budget_usd != null) {
-          if (!(typeof body.budget_usd === 'number' && Number.isFinite(body.budget_usd) && body.budget_usd > 0)) throw new HubError('VALIDATION', 'budget_usd must be > 0');
-          const cents = Math.round(body.budget_usd * 100);
-          ctx.policy_ok = this.policyOk(row, cents);
-          if (!existing && cents !== row.budget_cents) {
+        const supplied = Object.hasOwn(body, 'budget_usd');
+        const mode = supplied ? (body.budget_usd === null ? 'none' : 'cap') : action === 'retry' ? rel.dispatch?.budget_mode ?? null : null;
+        let cents = supplied && body.budget_usd === null ? null : row.budget_cents;
+        if (supplied && body.budget_usd !== null) {
+          const max = this.hub.boardSettings(row.board_id).max_budget_usd;
+          if (!(typeof body.budget_usd === 'number' && Number.isFinite(body.budget_usd) && body.budget_usd >= 0.5 && body.budget_usd <= BUDGET_MAX_USD) || (!admin && Number.isFinite(max) && body.budget_usd > max)) throw new HubError('VALIDATION', 'budget must be between $0.50 and the allowed maximum');
+          cents = Math.round(body.budget_usd * 100);
+        }
+        if (AI_CAPABILITIES[ai].ownMachineOnly && (target ?? me) !== me) throw new HubError('POLICY_DENIED', `${AI_LABELS[ai]} has no sandbox and runs only on your own machine`, { reason: 'OWN_MACHINE_ONLY' });
+        if (mode === 'none' && (target ?? me) !== me && !admin) throw new HubError('POLICY_DENIED', 'a budget is required on a teammate’s machine', { reason: 'BUDGET_REQUIRED' });
+        if (AI_CAPABILITIES[ai].budget === 'none' && mode !== 'none') throw new HubError('POLICY_DENIED', `${AI_LABELS[ai]} does not provide a native spend cap; explicitly choose no budget`, { reason: 'BUDGET_UNSUPPORTED' });
+        const oldDefault = this.hub.boardSettings(row.board_id).default_budget_usd;
+        const beforeCap = rel.dispatch?.budget_mode === 'none' ? null : row.budget_cents ?? (Number.isFinite(oldDefault) ? Math.round(oldDefault * 100) : null);
+        if (supplied && this.hub.cardSpentCents(cardId) > 0 && beforeCap != null && (cents == null || cents > beforeCap) && !involved(rel.dispatcher, rel.owner)) throw new HubError('FORBIDDEN', 'only the runner owner, dispatcher or an admin may raise the budget');
+        ctx.policy_ok = this.policyOk(row, mode === 'none' ? null : cents);
+        if (mode !== 'none') {
+          const effective = cents ?? Math.round((this.hub.boardSettings(row.board_id).default_budget_usd ?? 5) * 100);
+          if (effective - this.hub.cardSpentCents(cardId) < 50) ctx.policy_ok = false;
+        }
+        if ((this.hub.dailyRemainingCents(row.board_id) ?? 50) < 50) throw new HubError('BUDGET_EXCEEDED', 'the board’s daily spend cap is reached; new runs wait until tomorrow or an admin raises it');
+        if (row.fail_kind === 'budget' && rel.run?.terminal_reason === 'budget_device') throw new HubError('POLICY_DENIED', 'the machine owner must change their local limit', { reason: 'DEVICE_LIMIT' });
+        if (!existing && row.fail_kind === 'budget' && (!involved(rel.dispatcher, rel.owner) || mode === 'none' || cents == null || cents < Math.max(row.budget_cents ?? 0, this.hub.cardSpentCents(cardId)) + 50)) throw new HubError('POLICY_DENIED', 'increase the budget as its owner before continuing', { reason: 'BUDGET_TOO_LOW' });
+        if (existing && (existing.backend !== AI_BACKENDS[ai] || existing.target_member_id !== target || existing.budget_mode !== mode || (mode === 'cap' && existing.budget_cents !== cents) || (existing.placement ?? null) !== placement)) throw new HubError('CONFLICT', 'request_id already belongs to another dispatch choice');
+        Object.assign(event, { request_id: body.request_id, target_member_id: target, backend: AI_BACKENDS[ai], ai, budget_mode: mode, budget_cents: mode === 'cap' ? cents : null, placement });
+        if (supplied && !existing && cents !== row.budget_cents) {
             opts.pre = () => {
               this.db.run('UPDATE cards SET budget_cents = ? WHERE id = ?', cents, cardId);
               this.hub.journal({ board_id: row.board_id, card_id: cardId, actor_kind: 'member', actor_id: me, kind: 'card.update', payload: { fields: { budget_cents: [row.budget_cents, cents] }, request_id: body.request_id } });
             };
-          }
         }
         break;
       }
       case 'hand_over': {
         const t = body.target;
-        if (!t || !['queue', 'member', 'self'].includes(t.kind)) throw new HubError('VALIDATION', 'target.kind must be queue|member|self');
+        if (!t || !['queue', 'member', 'self', 'hold'].includes(t.kind)) throw new HubError('VALIDATION', 'target.kind must be queue|member|self|hold');
         if (t.kind === 'member') this.orgMember(member, t.member_id);
-        event.target = { kind: t.kind, ...(t.kind === 'member' ? { member_id: t.member_id } : t.kind === 'self' ? { member_id: me } : {}), by: me };
+        event.target = { kind: t.kind, ...(t.kind === 'member' ? { member_id: t.member_id } : t.kind === 'self' ? { member_id: me } : {}), by: me,
+          ...(t.kind === 'hold' ? {
+            narrative_version: this.hub.latestHandover(cardId)?.version ?? 0,
+            snapshot_event_id: this.db.get("SELECT MAX(id) AS id FROM events WHERE run_id = ? AND kind = 'snapshot'", rel.run.id)?.id ?? 0,
+          } : {}) };
         break;
       }
       case 'request_changes': {
@@ -607,7 +917,12 @@ export class Api {
         if (!body.request_id) throw new HubError('VALIDATION', 'request_id required');
         if (body.target_member_id != null) this.orgMember(member, body.target_member_id);
         const target = body.target_member_id ?? rel.run?.on_behalf_of ?? null;
-        Object.assign(event, { request_id: body.request_id, target_member_id: target, comment });
+        if (AI_CAPABILITIES[aiOfDispatch(rel.dispatch ?? rel.run)]?.ownMachineOnly && (target ?? me) !== me) throw new HubError('POLICY_DENIED', 'this AI has no sandbox and runs only on your own machine', { reason: 'OWN_MACHINE_ONLY' });
+        if (rel.dispatch?.budget_mode === 'none' && target !== me && !admin) throw new HubError('POLICY_DENIED', 'only the machine owner or an admin can assign uncapped work');
+        ctx.needs_confirm = this.hub.needsConfirm(me, target ?? me, row.repo_id);
+        const remaining = this.hub.remainingBudgetCents(row, rel.dispatch);
+        ctx.policy_ok = this.policyOk(row, rel.dispatch?.budget_mode === 'none' ? null : row.budget_cents) && (remaining == null || remaining >= 50);
+        Object.assign(event, { request_id: body.request_id, target_member_id: target, comment, ai: aiOfDispatch(rel.dispatch ?? rel.run), backend: rel.dispatch?.backend ?? rel.run?.backend ?? 'claude_cli', budget_mode: rel.dispatch?.budget_mode ?? null, budget_cents: rel.dispatch?.budget_cents ?? null, placement: rel.dispatch?.placement ?? null });
         opts.pre = () => this.insertComment(member, cardId, { body: comment, for_agent: true });
         break;
       }
@@ -623,6 +938,7 @@ export class Api {
           const r = this.db.run("UPDATE asks SET state = 'answered', answer = ?, answered_by = ?, answered_at = ? WHERE id = ? AND state = 'open'", answer, me, this.hub.iso(), ask.id);
           if (Number(r.changes) === 0) throw new HubError('ALREADY_ANSWERED', 'already answered');
           this.hub.journal({ board_id: row.board_id, card_id: cardId, run_id: ask.run_id, actor_kind: 'member', actor_id: me, kind: 'ask.answer', payload: { ask_id: ask.id, by: me } });
+          this.notifyInputAnswered(ask.run_id, me, { card_id: cardId, board_id: row.board_id, ask_id: ask.id });
         };
         break;
       }
@@ -649,6 +965,7 @@ export class Api {
       if (!pr || pr.card_id !== row0.id) throw new HubError('NOT_FOUND', 'permission request not found');
       const row = this.cardFor(member, pr.card_id);
       if (row.board_id !== row0.board_id) throw new HubError('CONFLICT', 'card moved while waiting');
+      if (pr.tool === CODEX_PLAN_PERMISSION && this.hub.viaScope.getStore()) throw new HubError('FORBIDDEN', 'a human must authorize Codex edits');
       if (!['open', 'parked'].includes(pr.state)) {
         throw new HubError('ALREADY_ANSWERED', 'another approver answered first', { answered_by: this.hub.memberName(pr.answered_by), state: pr.state });
       }
@@ -660,15 +977,17 @@ export class Api {
         open_asks_remaining: this.hub.openAsks(cardId).length + this.hub.openPermissions(cardId).filter((p) => p.id !== prId).length,
       };
       const state = body.decision === 'allow' ? 'allowed' : 'denied';
-      const res = this.hub.apply(cardId, { type: 'answer', by: member.id }, {
+      const res = this.hub.workflowGuard.human(member,cred,()=>this.hub.apply(cardId, { type: 'answer', by: member.id }, {
         ctx, actor: member.id,
         extra: { answer: { permission_request_id: prId, decision: body.decision, scope, answered_by: { member_id: member.id, name: member.display_name } } },
         pre: () => {
           const r = this.db.run("UPDATE permission_requests SET state = ?, scope = ?, answered_by = ?, answered_at = ? WHERE id = ? AND state IN ('open','parked')", state, scope, member.id, this.hub.iso(), prId);
           if (Number(r.changes) === 0) throw new HubError('ALREADY_ANSWERED', 'another approver answered first');
           this.hub.journal({ card_id: cardId, run_id: pr.run_id, actor_kind: 'member', actor_id: member.id, kind: 'permission.answer', payload: { permission_request_id: prId, decision: body.decision, scope } });
+          this.notifyInputAnswered(pr.run_id, member.id, { card_id: cardId, board_id: this.hub.card(cardId)?.board_id ?? null, permission_request_id: prId });
+          if(pr.tool===CODEX_PLAN_PERMISSION)this.hub.workflowGuard.planAnswer(pr.run_id,pr,body.decision);
         },
-      });
+      }));
       if (!res.ok) throw new HubError(res.error.code, res.error.message, stripErr(res.error));
       const after = this.db.get('SELECT * FROM permission_requests WHERE id = ?', prId);
       return {
@@ -678,37 +997,373 @@ export class Api {
     }, { member, cred });
   }
 
+  // POST /api/cards/:card_id/handover/salvage: the desktop's opt-in "Share handover with team".
+  // Append-only: one 'salvage' feed row written_by 'system', so the human and
+  // agent layers of the handover are never touched. Same authority as a
+  // comment (a viewer, a removed member or another team's card is refused),
+  // size capped, and secrets are removed here as well as on the desktop.
+  async appendSalvage(member, cardId, body, { cred = null } = {}) {
+    member = this.currentWriter(member, cred);
+    const row0 = this.cardFor(member, cardId);
+    const raw = str(body.text, SALVAGE_MAX, 'text', { required: true });
+    const date = str(body.date, 10, 'date');
+    const text = redactSecrets(raw, { classes: ['credential', 'likely'], docExamples: false, replace: () => '[redacted]' }).slice(0, SALVAGE_MAX);
+    return this.withWritableBoard(row0.board_id, (current) => {
+      member = current;
+      const row = this.cardFor(member, cardId);
+      if (row.board_id !== row0.board_id) throw new HubError('CONFLICT', 'card moved while waiting');
+      if (row.archived_at) throw archivedError();
+      this.hub.feed(cardId, 'salvage', { kind: 'local_session', written_by: 'system', text: `Local session handover (written by Plexiform from hook events, not by the AI)${date ? `, ${date}` : ''}:\n${text}`, ref: null }, { actor: member.id });
+      return { ok: true };
+    }, { member, cred });
+  }
+
+  // ── inbox (team depth, step 0) ────────────────────────────────────────────
+  // One "look here" row for a member (plan .omc/plans/team-depth-2026-10-19.md
+  // §B). Called from inside other routes' transactions (comments, hand-offs,
+  // answered inputs), so it never throws: a bad kind, an unknown member or a
+  // storage error is logged and dropped, and the caller's write goes through.
+  // Rows per member are capped at INBOX_MAX: the oldest read rows go first,
+  // then, if still over, the oldest unread. Returns the new row's id or null.
+  // The live push to the member's own sockets is hub.broadcastMember(member_id,
+  // 'inbox.item', { item }); lane B owns the read/list routes.
+  notify(memberId, kind, ref = {}) {
+    try {
+      if (!INBOX_KINDS.has(kind)) throw new Error(`unknown inbox kind ${kind}`);
+      const member = this.db.get('SELECT id, org_id FROM members WHERE id = ? AND removed_at IS NULL', memberId);
+      if (!member) return null;
+      const refJson = JSON.stringify(ref && typeof ref === 'object' && !Array.isArray(ref) ? ref : {});
+      if (Buffer.byteLength(refJson) > INBOX_REF_MAX) throw new Error('inbox ref over size');
+      const id = randomUUID();
+      this.db.insert('inbox', { id, org_id: member.org_id, member_id: member.id, kind, ref_json: refJson, created_at: this.hub.iso(), read_at: null });
+      const over = this.db.get('SELECT COUNT(*) AS n FROM inbox WHERE member_id = ?', member.id).n - INBOX_MAX;
+      if (over > 0) {
+        this.db.run('DELETE FROM inbox WHERE id IN (SELECT id FROM inbox WHERE member_id = ? AND read_at IS NOT NULL ORDER BY created_at, id LIMIT ?)', member.id, over);
+        const still = this.db.get('SELECT COUNT(*) AS n FROM inbox WHERE member_id = ?', member.id).n - INBOX_MAX;
+        if (still > 0) this.db.run('DELETE FROM inbox WHERE id IN (SELECT id FROM inbox WHERE member_id = ? ORDER BY created_at, id LIMIT ?)', member.id, still);
+      }
+      return id;
+    } catch (e) {
+      this.hub.log?.warn?.('inbox notify dropped', { member_id: memberId, kind, error: e.message });
+      return null;
+    }
+  }
+
+  // ── hand-offs (team depth, lane D) ────────────────────────────────────────
+  // A person hands a card to a teammate: the latest handover version is
+  // attached, `to` joins the assignees, and `to` decides (accept / decline).
+  // handover_id is handovers.version as text at request time (NULL when the
+  // card has no handover yet). One `requested` hand-off per card at a time.
+  handoffView(row) {
+    return row ? { id: row.id, card_id: row.card_id, from_member_id: row.from_member_id, to_member_id: row.to_member_id, state: row.state, note: row.note ?? null,
+      handover_id: row.handover_id ?? null, created_at: row.created_at, answered_at: row.answered_at ?? null,
+      from_name: this.hub.memberName(row.from_member_id), to_name: this.hub.memberName(row.to_member_id) } : null;
+  }
+
+  handoffRow(member, cardId, handoffId) {
+    const row = this.db.get('SELECT * FROM handoffs WHERE id = ? AND card_id = ?', String(handoffId ?? ''), cardId);
+    if (!row) throw new HubError('NOT_FOUND', 'hand-off not found');
+    return row;
+  }
+
+  // After commit: the person's own sockets get the inbox item, the board gets card.handoff and the card.upsert.
+  announceHandoff(row, inboxMemberId, inboxId) {
+    const card = this.hub.card(row.card_id);
+    this.hub.later(() => {
+      if (inboxId) {
+        const item = this.db.get('SELECT * FROM inbox WHERE id = ?', inboxId);
+        if (item) this.hub.broadcastMember(inboxMemberId, 'inbox.item', { item: { id: item.id, org_id: item.org_id, kind: item.kind, ref: json(item.ref_json, {}), created_at: item.created_at, read_at: item.read_at } });
+      }
+      const h = this.handoffView(this.db.get('SELECT * FROM handoffs WHERE id = ?', row.id));
+      for (const b of this.hub.browsers) if (b.boardId === card.board_id) b.send({ type: 'card.handoff', board_id: card.board_id, card_id: card.id, handoff: h });
+      this.hub.broadcastCard(card.id);
+    });
+  }
+
+  async requestHandoff(member, cardId, body, { cred = null } = {}) {
+    member = this.currentWriter(member, cred);
+    const row0 = this.cardFor(member, cardId);
+    const to = this.orgMember(member, body.to_member_id);
+    if (to.id === member.id) throw new HubError('VALIDATION', 'hand the card to someone else');
+    if (!this.hub.canWrite(to)) throw new HubError('VALIDATION', 'a viewer cannot take a card');
+    const note = str(body.note, 2000, 'note');
+    return this.withWritableBoard(row0.board_id, (current) => {
+      member = current;
+      const row = this.cardFor(member, cardId);
+      if (row.board_id !== row0.board_id) throw new HubError('CONFLICT', 'card moved while waiting');
+      if (row.archived_at) throw archivedError();
+      if (this.db.get("SELECT 1 AS x FROM handoffs WHERE card_id = ? AND state = 'requested'", cardId)) throw new HubError('CONFLICT', 'this card already has a hand-off waiting for an answer', { reason: 'HANDOFF_PENDING' });
+      const id = randomUUID();
+      let inboxId = null;
+      this.hub.txn(() => {
+        const handover = this.hub.latestHandover(cardId);
+        this.db.insert('handoffs', { id, card_id: cardId, from_member_id: member.id, to_member_id: to.id, state: 'requested', note, handover_id: handover ? String(handover.version) : null, created_at: this.hub.iso(), answered_at: null });
+        const before = this.hub.assignees(cardId);
+        if (!before.includes(to.id)) {
+          this.db.run("INSERT OR IGNORE INTO card_assignees (card_id, member_id, role) VALUES (?, ?, 'collaborator')", cardId, to.id);
+          this.db.run('UPDATE cards SET version = version + 1, updated_at = ? WHERE id = ?', this.hub.iso(), cardId);
+          this.hub.journal({ board_id: row.board_id, card_id: cardId, actor_kind: 'member', actor_id: member.id, kind: 'card.update', payload: { fields: { assignees: [before, [...before, to.id]] }, request_id: body.request_id ?? null, cause: 'handoff' } });
+        }
+        this.hub.journal({ board_id: row.board_id, card_id: cardId, actor_kind: 'member', actor_id: member.id, kind: 'card.handoff_requested', payload: { handoff_id: id, to: to.id, request_id: body.request_id ?? null } });
+        inboxId = this.notify(to.id, 'handoff_request', { board_id: row.board_id, card_id: cardId, handoff_id: id, by: member.id });
+        this.announceHandoff({ id, card_id: cardId }, to.id, inboxId);
+      });
+      return { handoff: this.handoffView(this.db.get('SELECT * FROM handoffs WHERE id = ?', id)), card: cardView(this.hub, this.hub.card(cardId), member.id) };
+    }, { member, cred });
+  }
+
+  // accept / decline: only `to`. cancel: `from` or an admin. All three need state `requested`.
+  async answerHandoff(member, cardId, handoffId, decision, body = {}, { cred = null } = {}) {
+    if (!['accepted', 'declined', 'cancelled'].includes(decision)) throw new HubError('VALIDATION', 'bad decision');
+    member = this.currentWriter(member, cred);
+    const row0 = this.cardFor(member, cardId);
+    this.handoffRow(member, cardId, handoffId);
+    return this.withWritableBoard(row0.board_id, (current) => {
+      member = current;
+      const row = this.cardFor(member, cardId);
+      if (row.board_id !== row0.board_id) throw new HubError('CONFLICT', 'card moved while waiting');
+      const h = this.handoffRow(member, cardId, handoffId);
+      if (decision === 'cancelled') {
+        if (h.from_member_id !== member.id && !this.hub.isAdmin(member)) throw new HubError('FORBIDDEN', 'only the person who handed the card over, or an admin, can cancel');
+      } else if (h.to_member_id !== member.id) throw new HubError('FORBIDDEN', 'only the person the card was handed to can answer');
+      if (h.state !== 'requested') throw new HubError('CONFLICT', `this hand-off was already ${h.state}`, { reason: 'HANDOFF_ANSWERED' });
+      let inboxId = null, inboxTo = null;
+      this.hub.txn(() => {
+        const now = this.hub.iso();
+        this.db.run('UPDATE handoffs SET state = ?, answered_at = ? WHERE id = ?', decision, now, h.id);
+        if (decision === 'cancelled') {
+          // An unread request is withdrawn with the hand-off; a read one stays as history.
+          this.db.run("DELETE FROM inbox WHERE member_id = ? AND kind = 'handoff_request' AND read_at IS NULL AND json_extract(ref_json, '$.handoff_id') = ?", h.to_member_id, h.id);
+          this.hub.journal({ board_id: row.board_id, card_id: cardId, actor_kind: 'member', actor_id: member.id, kind: 'card.handoff_cancelled', payload: { handoff_id: h.id, request_id: body.request_id ?? null } });
+        } else {
+          this.hub.journal({ board_id: row.board_id, card_id: cardId, actor_kind: 'member', actor_id: member.id, kind: 'card.handoff_answered', payload: { handoff_id: h.id, state: decision, request_id: body.request_id ?? null } });
+          inboxTo = h.from_member_id;
+          inboxId = this.notify(h.from_member_id, 'handoff_answer', { board_id: row.board_id, card_id: cardId, handoff_id: h.id, by: member.id, state: decision });
+        }
+        this.announceHandoff(h, inboxTo, inboxId);
+      });
+      return { handoff: this.handoffView(this.db.get('SELECT * FROM handoffs WHERE id = ?', h.id)), card: cardView(this.hub, this.hub.card(cardId), member.id) };
+    }, { member, cred });
+  }
+
+  // Lane B: the member's own inbox as the routes return it (CONTRACT: GET /api/account/inbox).
+  inboxItem(id) {
+    const r = id ? this.db.get('SELECT * FROM inbox WHERE id = ?', id) : null;
+    return r ? inboxView(r) : null;
+  }
+
+  // GET /api/account/inbox?since=: every unread row plus the last 50 read, newest
+  // first, across all of this user's memberships (one sign-in may sit in several
+  // orgs, like /api/account/devices spans the user, not one member).
+  listInbox(members, query = null) {
+    const ids = (members || []).map((m) => m.id);
+    if (!ids.length) return { items: [], unread: 0 };
+    const sinceRaw = query && typeof query.get === 'function' ? query.get('since') : query?.since ?? null;
+    let since = null;
+    if (sinceRaw != null && sinceRaw !== '') {
+      if (typeof sinceRaw !== 'string' || sinceRaw.length > 40 || Number.isNaN(Date.parse(sinceRaw))) throw new HubError('VALIDATION', 'since must be an ISO date');
+      since = new Date(Date.parse(sinceRaw)).toISOString();
+    }
+    const marks = ids.map(() => '?').join(',');
+    const where = `member_id IN (${marks})${since ? ' AND created_at > ?' : ''}`;
+    const args = since ? [...ids, since] : ids;
+    const unread = this.db.all(`SELECT * FROM inbox WHERE ${where} AND read_at IS NULL ORDER BY created_at DESC, id DESC`, ...args);
+    const read = this.db.all(`SELECT * FROM inbox WHERE ${where} AND read_at IS NOT NULL ORDER BY created_at DESC, id DESC LIMIT ${INBOX_READ_TAIL}`, ...args);
+    const items = [...unread, ...read].sort((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : a.id < b.id ? 1 : -1)).map(inboxView);
+    return { items, unread: unread.length };
+  }
+
+  // POST /api/account/inbox/read {ids|all:true}: marks the caller's own unread rows;
+  // ids that are not the caller's are ignored (never 404, nothing to learn).
+  readInbox(members, body = {}) {
+    const ids = (members || []).map((m) => m.id);
+    const all = body?.all === true;
+    const list = Array.isArray(body?.ids) ? body.ids : null;
+    if (!all && !list) throw new HubError('VALIDATION', 'ids or all required');
+    if (list && (list.length > INBOX_READ_MAX || list.some((x) => typeof x !== 'string' || !x || x.length > 100))) throw new HubError('VALIDATION', `ids must be at most ${INBOX_READ_MAX} strings`);
+    if (!ids.length || (list && !list.length)) return { read: 0 };
+    const marks = ids.map(() => '?').join(',');
+    const r = all
+      ? this.db.run(`UPDATE inbox SET read_at = ? WHERE member_id IN (${marks}) AND read_at IS NULL`, this.hub.iso(), ...ids)
+      : this.db.run(`UPDATE inbox SET read_at = ? WHERE member_id IN (${marks}) AND read_at IS NULL AND id IN (${list.map(() => '?').join(',')})`, this.hub.iso(), ...ids, ...list);
+    return { read: Number(r.changes) || 0 };
+  }
+
+  // A teammate answered an input (question or permission) that a run on someone
+  // else's machine raised: tell the machine's owner. Call inside the answering
+  // transaction; the live push follows the commit (hub.later).
+  notifyInputAnswered(runId, answeredBy, ref) {
+    const run = this.hub.run(runId);
+    const owner = run?.on_behalf_of ?? this.hub.device(run?.device_id)?.member_id ?? null;
+    if (!owner || owner === answeredBy) return null;
+    const id = this.notify(owner, 'input_answered', { ...ref, by: answeredBy });
+    if (id) this.hub.later(() => { const item = this.inboxItem(id); if (item) this.hub.broadcastMember(owner, 'inbox.item', { item }); });
+    return id;
+  }
+
   // ── comments ──────────────────────────────────────────────────────────────
+  // Mentions (team depth lane A): `@name` / `@email-local-part` against the
+  // org's current members, parsed on write and stored as member ids
+  // (comments.mentions_json). Every mentioned member other than the author
+  // gets an inbox row `mention`; the parent comment's author gets `reply`
+  // (one row per member per comment). The live `inbox.item` push to each
+  // member's own sockets runs after commit.
+  orgMembersForMentions(orgId) {
+    return this.db.all('SELECT id, display_name, email, github_login FROM members WHERE org_id = ? AND removed_at IS NULL', orgId);
+  }
+
+  inboxItem(id) {
+    const r = id ? this.db.get('SELECT * FROM inbox WHERE id = ?', id) : null;
+    return r ? { id: r.id, org_id: r.org_id, kind: r.kind, ref: json(r.ref_json, {}), created_at: r.created_at, read_at: r.read_at } : null;
+  }
+
+  // Writes the inbox rows for one new comment and schedules their push; returns the mention ids.
+  notifyComment(member, orgId, { comment_id, body, reply_to, ref }) {
+    const mentions = parseMentions(body, this.orgMembersForMentions(orgId)).map((m) => m.member_id);
+    const notified = new Map();
+    for (const id of mentions) if (id !== member.id) notified.set(id, 'mention');
+    const parent = reply_to ? this.db.get('SELECT author_member_id FROM comments WHERE id = ?', reply_to) : null;
+    if (parent?.author_member_id && parent.author_member_id !== member.id && !notified.has(parent.author_member_id)) notified.set(parent.author_member_id, 'reply');
+    for (const [id, kind] of notified) {
+      const rowId = this.notify(id, kind, { ...ref, comment_id, by: member.id });
+      if (rowId) this.hub.later(() => { const item = this.inboxItem(rowId); if (item) this.hub.broadcastMember(id, 'inbox.item', { item }); });
+    }
+    return mentions;
+  }
+
+  commentView(c) {
+    return {
+      id: c.id, author_member_id: c.author_member_id, author_name: c.author_member_id ? this.hub.memberName(c.author_member_id) ?? 'Former member' : null,
+      source: c.source, trusted: !!c.trusted, body: c.body, for_agent: !!c.for_agent, reply_to: c.reply_to, mentions: json(c.mentions_json, []),
+      created_at: c.created_at, created_age_ms: this.hub.ageOf(c.created_at), ...(c.moment_id ? { moment_id: c.moment_id } : {}),
+    };
+  }
+
   insertComment(member, cardId, { body, for_agent = false, reply_to = null }) {
+    const boardId = this.hub.card(cardId).board_id;
+    const orgId = this.hub.board(boardId).org_id;
+    requireRows(this.hub, orgId, 'comments');
     const id = randomUUID();
     const replyTo = reply_to && this.db.get('SELECT 1 AS x FROM comments WHERE id = ? AND card_id = ?', reply_to, cardId) ? reply_to : null;
     // Text an integration wrote (inside its actVia scope) is outside text:
     // never trusted, so it can never reach a running agent (deliverComments).
     const byIntegration = this.hub.viaScope.getStore()?.member_id === member.id;
     const source = byIntegration ? 'integration' : 'web';
-    this.db.insert('comments', { id, card_id: cardId, author_member_id: member.id, source, trusted: byIntegration ? 0 : 1, body, for_agent: for_agent ? 1 : 0, reply_to: replyTo, created_at: this.hub.iso() });
+    const mentions = this.notifyComment(member, orgId, { comment_id: id, body, reply_to: replyTo, ref: { board_id: boardId, card_id: cardId } });
+    this.db.insert('comments', { id, card_id: cardId, author_member_id: member.id, source, trusted: byIntegration ? 0 : 1, body, for_agent: for_agent ? 1 : 0, reply_to: replyTo, mentions_json: JSON.stringify(mentions), created_at: this.hub.iso() });
     this.hub.journal({ card_id: cardId, actor_kind: 'member', actor_id: member.id, kind: 'comment.create', payload: { comment_id: id, source, for_agent: !!for_agent } });
+    this.hub.later(() => { const c = this.db.get('SELECT * FROM comments WHERE id = ?', id); if (c) this.hub.broadcastComment(boardId, 'card.comment', { card_id: cardId, comment: this.commentView(c), mentions }); });
     return id;
   }
 
-  async comment(member, cardId, body, { cred = null } = {}) {
+  // Comments on a moment (CONTRACT: GET/POST /api/boards/:board_id/moments/:moment_id/comments).
+  // A moment is looked up in its table; one still only in the settings mirror
+  // (marked before migration 076) is given its row on first use.
+  momentFor(member, boardId, momentId) {
+    this.boardFor(member, boardId);
+    const row = typeof momentId === 'string' ? this.db.get('SELECT * FROM moments WHERE id = ? AND board_id = ?', momentId, boardId) : null;
+    if (row) return row;
+    const mirrored = this.momentsOf(boardId).find((m) => m.id === momentId);
+    if (!mirrored) throw new HubError('NOT_FOUND', 'no such moment');
+    const kind = ['moment', 'ship', 'decision', 'demo'].includes(mirrored.kind) ? mirrored.kind : 'moment';
+    const created = Number.isFinite(Date.parse(mirrored.at)) ? new Date(mirrored.at).toISOString() : this.hub.iso();
+    const backfill = { id: mirrored.id, board_id: boardId, kind, label: String(mirrored.label ?? '').slice(0, 120) || 'Moment', note: mirrored.note ? String(mirrored.note).slice(0, 500) : null, author_member_id: null, created_at: created };
+    this.hub.txn(() => this.db.run('INSERT OR IGNORE INTO moments (id, board_id, kind, label, note, author_member_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', backfill.id, backfill.board_id, backfill.kind, backfill.label, backfill.note, backfill.author_member_id, backfill.created_at));
+    return backfill;
+  }
+
+  momentComments(member, boardId, momentId) {
+    const moment = this.momentFor(member, boardId, momentId);
+    const rows = this.db.all('SELECT * FROM comments WHERE moment_id = ? ORDER BY created_at, rowid', moment.id);
+    return { comments: rows.map((c) => this.commentView(c)) };
+  }
+
+  async addMomentComment(member, boardId, momentId, body, { cred = null } = {}) {
     member = this.currentWriter(member, cred);
+    this.momentFor(member, boardId, momentId);
+    this.requireLabel(member, 'label.write');
+    const text = str(body.body, 10_000, 'body', { required: true });
+    return this.withWritableBoard(boardId, (current) => {
+      member = current;
+      const moment = this.momentFor(member, boardId, momentId);
+      this.requireLabel(member, 'label.write');
+      const orgId = this.hub.board(boardId).org_id;
+      const id = randomUUID();
+      this.hub.txn(() => {
+        requireRows(this.hub, orgId, 'comments');
+        const replyTo = body.reply_to && this.db.get('SELECT 1 AS x FROM comments WHERE id = ? AND moment_id = ?', body.reply_to, moment.id) ? body.reply_to : null;
+        const byIntegration = this.hub.viaScope.getStore()?.member_id === member.id;
+        const mentions = this.notifyComment(member, orgId, { comment_id: id, body: text, reply_to: replyTo, ref: { board_id: boardId, moment_id: moment.id } });
+        this.db.insert('comments', { id, card_id: null, moment_id: moment.id, author_member_id: member.id, source: byIntegration ? 'integration' : 'web', trusted: byIntegration ? 0 : 1, body: text, for_agent: 0, reply_to: replyTo, mentions_json: JSON.stringify(mentions), created_at: this.hub.iso() });
+        this.hub.journal({ board_id: boardId, actor_kind: 'member', actor_id: member.id, kind: 'comment.create', payload: { comment_id: id, source: byIntegration ? 'integration' : 'web', for_agent: false, moment_id: moment.id, request_id: body.request_id ?? null } });
+        this.hub.later(() => { const c = this.db.get('SELECT * FROM comments WHERE id = ?', id); if (c) this.hub.broadcastComment(boardId, 'moment.comment', { moment_id: moment.id, comment: this.commentView(c), mentions }); });
+      });
+      return { comment: this.commentView(this.db.get('SELECT * FROM comments WHERE id = ?', id)) };
+    }, { member, cred });
+  }
+
+  async comment(member, cardId, body, { cred = null, remote = null, integrationObservation = null } = {}) {
+    member = this.currentWriter(member, cred, remote);
     const row0 = this.cardFor(member, cardId);
     const text = str(body.body, 10_000, 'body', { required: true });
+    const via = this.hub.viaScope.getStore();
+    const observation = observationContext(integrationObservation);
+    if (integrationObservation != null && !observation) throw new HubError('FORBIDDEN', 'private integration observation required');
+    const once = via?.member_id === member.id && typeof body.request_id === 'string' && body.request_id
+      ? { connection_id: via.connection_id, request_id: body.request_id } : null;
     return this.withWritableBoard(row0.board_id, (current) => {
       member = current;
       const row = this.cardFor(member, cardId);
       if (row.board_id !== row0.board_id) throw new HubError('CONFLICT', 'card moved while waiting');
       if (row.archived_at) throw archivedError();
-      let id;
+      let id, replay = false, coalesced = false;
       this.hub.txn(() => {
+        let link;
+        if (observation) {
+          // Revalidate current private authority/link inside the same synchronous
+          // queued transaction, before either durable or cached replay effects.
+          member = this.currentWriter(member, cred, remote);
+          const connection = this.db.get('SELECT provider FROM connections WHERE id=?', via?.connection_id);
+          if (!validObservation(observation) || !once || once.request_id !== observation.request_id || connection?.provider !== 'sentry' || typeof via?.authorize !== 'function' || body.for_agent === true
+            || via.connection_id !== observation.connection_id || via.member_id !== observation.member_id || via.action !== observation.action
+            || member.id !== observation.member_id || (member.user_id ?? null) !== observation.user_id || cardId !== observation.card_id) {
+            throw Object.assign(new HubError('FORBIDDEN', 'current Sentry observation unavailable'), { cacheable: false });
+          }
+          link = this.db.get('SELECT status FROM external_links WHERE connection_id=? AND card_id=? AND kind=? AND external_id=?', observation.connection_id, cardId, observation.kind, observation.external_id);
+          if (!link) throw Object.assign(new HubError('NOT_FOUND', 'current Sentry link unavailable'), { cacheable: false });
+        }
+        const prior = once && this.db.get('SELECT c.* FROM integration_comment_requests r JOIN comments c ON c.id=r.comment_id WHERE r.connection_id=? AND r.request_id=?', once.connection_id, once.request_id);
+        if (prior) {
+          if (prior.card_id !== cardId) throw new HubError('CONFLICT', 'this request_id already commented on another card');
+          if (observation && (prior.source !== 'integration' || prior.trusted !== 0 || prior.for_agent !== 0)) throw new HubError('CONFLICT', 'observation receipt is not an integration comment');
+          id = prior.id; replay = true; return;
+        }
+        const previous = observation ? sentryStatus(json(link.status, {}), observation.kind) : null;
+        if (observation && previous.sentry_state === observation.state && previous.sentry_comment_id) {
+          const old = this.db.get('SELECT c.id FROM comments c WHERE c.id=? AND c.card_id=? AND c.source=\'integration\' AND c.trusted=0 AND c.for_agent=0 AND EXISTS (SELECT 1 FROM integration_comment_requests r WHERE r.connection_id=? AND r.comment_id=c.id)', previous.sentry_comment_id, cardId, observation.connection_id);
+          if (old) {
+            requireStorage(this.hub);
+            id = old.id; coalesced = true;
+            this.db.insert('integration_comment_requests', { ...once, comment_id: id, created_at: this.hub.iso() });
+            return;
+          }
+          // A missing/tampered pointer cannot adopt somebody else's comment.
+          // Create an ordinary new observation with its own receipt instead.
+        }
         id = this.insertComment(member, cardId, { body: text, for_agent: body.for_agent === true, reply_to: body.reply_to });
+        if (once) this.db.insert('integration_comment_requests', { ...once, comment_id: id, created_at: this.hub.iso() });
+        if (observation) {
+          const status = JSON.stringify({ sentry_state: observation.state, hub_observed_at: this.hub.iso(), sentry_comment_id: id });
+          if (Buffer.byteLength(status) > 512) throw new HubError('VALIDATION', 'observation status over 512 bytes');
+          this.db.run('UPDATE external_links SET status=? WHERE connection_id=? AND card_id=? AND kind=? AND external_id=?', status, observation.connection_id, cardId, observation.kind, observation.external_id);
+          this.hub.later(() => this.hub.broadcastCard(cardId));
+        }
         this.hub.feed(cardId, 'comment', { comment_id: id }, { actor: member.id });
       });
-      if (body.for_agent === true) this.hub.deliverComments(cardId);
+      if (!replay && body.for_agent === true) this.hub.deliverComments(cardId);
       const c = this.db.get('SELECT * FROM comments WHERE id = ?', id);
-      return { comment: { id, author_name: member.display_name, source: c.source, trusted: !!c.trusted, body: c.body, for_agent: !!c.for_agent, reply_to: c.reply_to, created_age_ms: 0 } };
-    }, { member, cred });
+      return { comment: this.commentView(c), ...(observation ? { coalesced, replay } : {}) };
+    }, { member, cred, remote });
   }
 
   // ── devices, repos, members ───────────────────────────────────────────────
@@ -765,9 +1420,11 @@ export class Api {
     this.boardFor(member, boardId);
     const repo = this.hub.repo(body.repo_id);
     if (!repo || repo.org_id !== member.org_id) throw new HubError('NOT_FOUND', 'repo not found');
-    this.db.run('INSERT OR IGNORE INTO board_repos (board_id, repo_id) VALUES (?, ?)', boardId, repo.id);
-    this.audit(member.id, 'board.repo.add', `${boardId}:${repo.id}`);
-    return { ok: true };
+    return this.withWritableBoard(boardId, () => {
+      this.db.run('INSERT OR IGNORE INTO board_repos (board_id, repo_id) VALUES (?, ?)', boardId, repo.id);
+      this.audit(member.id, 'board.repo.add', `${boardId}:${repo.id}`);
+      return { ok: true };
+    });
   }
 
   // Access maps members by email only (any IdP, e.g. the one-time PIN), so a

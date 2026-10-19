@@ -1,0 +1,56 @@
+// The one place main.js hands the paid-tier packages their hooks. Each package
+// lands on its own, in any order: a module that is not there yet is skipped,
+// and one that throws is logged and skipped, so no package can stop startup.
+//
+// Contract for a package: its module exports register(ctx), where ctx is
+//   {app, ipcMain, rootDir, entitlements, buddy: () => buddyWin|null,
+//    openTimeline: ({adapter, sessionId}) => bool (src/session-timeline-main.js openSession),
+//    fromPage: (e, pageId) => bool, onQuit: (fn) => void, log: (msg) => void,
+//    setups: the team Setups service (main-only readForPlan),
+//    keyFor, requestsDir, interactionHost: () => host|null,
+//    setInteractionHostExtras: (fn) => void (phone approvals: {e2e, extra} for the remote host),
+//    teamMemory: (req) => Promise (the hub's team memory for Search everything, src/team-activity.js memoryPage),
+//    setCostGuardReport: (fn) => void (cost guard: its report() for Home's cost card),
+//    gallery: {takePending} (a setup added from the community gallery, one use, or null),
+//    afterStartup: (fn) => void (runs fn once the widget and signal server are up; work that
+//    reads a project folder starts there)}
+// register gates its own work with ctx.entitlements.has(feature).
+'use strict';
+
+const Entitlements = require('./entitlements');
+
+// Literal requires only: the privacy tripwire treats a computed require as a channel.
+const PACKAGES = [
+  ['cost-guard', () => require.resolve('./spend-enforce'), () => require('./spend-enforce')],
+  ['checkpoints', () => require.resolve('./checkpoints'), () => require('./checkpoints')],
+  ['memory', () => require.resolve('./memory/search'), () => require('./memory/search')],
+  ['morning-report', () => require.resolve('./morning-report'), () => require('./morning-report')],
+  ['client-billing', () => require.resolve('./clients'), () => require('./clients')],
+  ['setups-personal', () => require.resolve('./setups-personal'), () => require('./setups-personal')],
+  ['entitlement-refresh', () => require.resolve('./entitlement-refresh'), () => require('./entitlement-refresh')],
+  ['phone-approvals', () => require.resolve('./remote-approvals-main'), () => require('./remote-approvals-main')],
+  ['sync', () => require.resolve('./sync'), () => require('./sync')],
+  ['policy', () => require.resolve('./policy'), () => require('./policy')],
+];
+
+/** Calls every present package's register(ctx). → [{name, status:'absent'|'ok'|'skipped'|'failed'}]. Never throws. */
+function registerAll(ctx = {}, packages = PACKAGES) {
+  const log = typeof ctx.log === 'function' ? ctx.log : (m) => console.warn(m);
+  const full = { ...ctx, entitlements: ctx.entitlements ?? Entitlements, log };
+  const out = [];
+  for (const [name, resolve, load] of packages) {
+    try { resolve(); } catch { out.push({ name, status: 'absent' }); continue; }
+    try {
+      const mod = load();
+      if (typeof mod?.register !== 'function') { out.push({ name, status: 'skipped' }); continue; }
+      mod.register(full);
+      out.push({ name, status: 'ok' });
+    } catch (e) {
+      log(`[paid] ${name} failed to register: ${e?.message ?? e}`);
+      out.push({ name, status: 'failed' });
+    }
+  }
+  return out;
+}
+
+module.exports = { registerAll, PACKAGES };

@@ -56,8 +56,10 @@
     { id: 'pr-changes-requested', label: 'Changes requested on your PR', hook: null, kind: 'git' },
     { id: 'ci-failed', label: 'CI failed on your branch', hook: null, kind: 'git' },
     { id: 'ci-passed', label: 'CI passed on your branch', hook: null, kind: 'git' },
-    { id: 'deploy-failed', label: 'A deploy workflow failed', hook: null, kind: 'git' },
+    { id: 'deploy-failed', label: 'A deploy failed (GitHub Actions, Vercel, Netlify or Cloudflare)', hook: null, kind: 'git' },
     { id: 'deploy-finished', label: 'A deploy workflow finished', hook: null, kind: 'git' },
+    // src/deploy-status.js: a Vercel, Netlify or Cloudflare deployment is serving.
+    { id: 'deploy-live', label: 'A deploy is live (Vercel, Netlify or Cloudflare)', hook: null, kind: 'git' },
   ];
   SIGNALS.push(...GIT_SIGNALS);
   function gitDefaultRules() {
@@ -73,7 +75,10 @@
   // env.git: [{ signal, cwd, repo, pr, branch, … }] — the events still live.
   function gitSessions(env) {
     const known = new Set(GIT_SIGNALS.map((x) => x.id));
-    return (env && Array.isArray(env.git) ? env.git : []).filter((e) => e && known.has(e.signal))
+    const list = (env && Array.isArray(env.git) ? env.git : []).filter((e) => e && known.has(e.signal));
+    // A live hosted deploy also counts as a finished deploy, so the stock
+    // "Deploy finished" rule celebrates it without a rules migration.
+    return list.flatMap((e) => (e.signal === 'deploy-live' ? [e, { ...e, signal: 'deploy-finished' }] : [e]))
       .map((e) => ({ signal: e.signal, cwd: e.cwd || null, repo: e.repo || null, pr: e.pr || null, branch: e.branch || null, virtual: true, git: true }));
   }
   // v7: the git rules slot in just under "No network", above the accents.
@@ -145,15 +150,16 @@
 
   // ── Blocked (v9) ──────────────────────────────────────────────────────────
   // Auto mode's classifier refused a call (PermissionDenied). Not a prompt:
-  // the turn carries on, but a person has to decide (run it, switch mode, add
-  // a rule), so it is red like any other "needs your decision". Kept as long
-  // as the bubble shows it: until the next prompt, at most 30 minutes
-  // (src/pending-inputs.js BLOCKED_KEEP_MS).
+  // the harness carries on with other work, so since v10 the stock rule is
+  // off — red means a session needs you now (a real ask) or something broke,
+  // and a denial is neither; the bubble still lists it. Switched on, it stays
+  // red as long as the bubble shows it: until the next prompt, at most 30
+  // minutes (src/pending-inputs.js BLOCKED_KEEP_MS).
   const BLOCKED_KEEP_MS = 30 * 60 * 1000;
   SIGNALS.splice(SIGNALS.findIndex((s) => s.id === 'idle'), 0,
     { id: 'blocked', label: 'A call needs your decision (auto mode refused it)', hook: null, kind: 'virtual' });
   // Lamp only: the bubble carries the words, so no sound, banner or pose.
-  const BLOCKED_RULE = { id: 'blocked', name: 'Needs your decision', enabled: true, when: { signal: ['blocked'] }, then: { lamp: 'red' } };
+  const BLOCKED_RULE = { id: 'blocked', name: 'Needs your decision', enabled: false, when: { signal: ['blocked'] }, then: { lamp: 'red' } };
   function blockedSessions(sessions, now) {
     const out = [];
     for (const s of sessions) {
@@ -186,7 +192,7 @@
   // ── Other agents ──────────────────────────────────────────────────────────
   // A session file may carry `agents` (every subagent / teammate / ralph or
   // ultrawork worker it knows about) and `mode` (the OMC execution mode).
-  // Anything that has finished stops counting as live.
+  // Anything finished, stopped or gone stale stops counting as live.
   const AGENT_KINDS = ['subagent', 'teammate', 'ralph', 'ultrawork'];
   const AGENT_STATUSES = Machine.AGENT_STATUSES;
   const MODES = ['ralph', 'team', 'ultrawork'];
@@ -194,7 +200,7 @@
   function normalizeAgent(a, i = 0) {
     if (!a || typeof a !== 'object') return null;
     const kind = AGENT_KINDS.includes(a.kind) ? a.kind : 'subagent';
-    const status = AGENT_STATUSES.includes(a.status) ? a.status : 'working';
+    const status = AGENT_STATUSES.includes(a.status) ? a.status : 'stale';
     return {
       id: String(a.id || `${kind}-${i}`).slice(0, 80),
       name: String(a.name || a.id || kind).slice(0, 40),
@@ -213,7 +219,7 @@
       if (!Array.isArray(s.agents)) continue;
       s.agents.forEach((a, i) => {
         const n = normalizeAgent(a, i);
-        if (n && n.status !== 'done') out.push({ ...n, cwd: s.cwd || null });
+        if (n && (n.status === 'working' || n.status === 'waiting')) out.push({ ...n, cwd: s.cwd || null });
       });
     }
     return out;
@@ -302,18 +308,18 @@
   const SIGN_FX = ['none', 'wobble', 'spin', 'rattle', 'cracked', 'neon'];
   const NUMBERS = ['none', 'sessions', 'minutes', 'tasks', 'agents', 'ralph'];
   const SCREEN_FX = ['none', 'vignette', 'confetti', 'spotlight'];
-  const POSES = ['none', 'think', 'wave', 'thumbs', 'sleep', 'blink', 'nod', 'bounce', 'look', 'spin', 'party', 'guitar', 'ak47', 'sniper', 'banner', 'bubble', 'tap', 'arms', 'run', 'knock', 'munch', 'kickflip', 'selfie', 'grin', 'smoke', 'zyn', 'line', 'juice', 'dead', 'cheer', 'facepalm'];
-  const COSTUMES = ['none', 'dog', 'cat', 'unicorn', 'crown', 'partyhat', 'shades', 'halo', 'devil', 'wizard', 'tophat', 'santa', 'pumpkin', 'bunny', 'headphones', 'graduate', 'chef', 'cowboy', 'propeller', 'detective', 'flowercrown', 'beanie'];
-  // Famous faces drawn over Claude's head; independent of costume, so a cameo can wear a hat.
-  const CAMEOS = ['none', 'neo', 'alfred', 'mcafee', 'spagni', 'powell', 'baker', 'ellison', 'saylor', 'wizard', 'scientist', 'pirate', 'punk'];
+  const POSES = ['none', 'think', 'wave', 'thumbs', 'sleep', 'blink', 'nod', 'bounce', 'look', 'spin', 'party', 'guitar', 'ak47', 'sniper', 'banner', 'bubble', 'tap', 'arms', 'run', 'knock', 'munch', 'kickflip', 'selfie', 'grin', 'smoke', 'zyn', 'line', 'juice', 'dead', 'cheer', 'facepalm', 'dance', 'shrug', 'yawn'];
+  const COSTUMES = ['none', 'dog', 'cat', 'unicorn', 'crown', 'partyhat', 'shades', 'halo', 'devil', 'wizard', 'tophat', 'santa', 'pumpkin', 'bunny', 'headphones', 'graduate', 'chef', 'cowboy', 'propeller', 'detective', 'flowercrown', 'beanie', 'witch', 'viking', 'tricorn', 'beret', 'antlers', 'astronaut', 'heartband'];
+  // Faces drawn over Claude's head; independent of costume, so a cameo can wear a hat.
+  const CAMEOS = ['none', 'alfred', 'wizard', 'scientist', 'pirate', 'punk'];
   const CAMEO_ID = /^[a-z0-9-]{1,32}$/;
   // The built-in characters; a rule may also name an installed one (u-…),
   // which the widget shows once it's installed and as Claude until then.
   const BODIES = Characters.ids().filter(Characters.isBuiltin);
   const isBody = (id) => BODIES.includes(id) || (typeof id === 'string' && /^u-[a-z][a-z0-9-]{1,31}$/.test(id));
   const EYE_MOODS = ['heart', 'happy', 'angry', 'sad', 'surprised', 'wink', 'star', 'money', 'sleepy', 'suspicious', 'roll', 'googly', 'dizzy', 'x', 'tears', 'laser', 'loading', 'scan', 'wide', 'content', 'side', 'glow'];
-  const EFFECTS = ['none', 'rain', 'sun', 'snow', 'sparkles', 'fire', 'beard', 'garden', 'stars', 'bubbles', 'leaves', 'matrix', 'hearts', 'fireflies', 'rainbow', 'petals'];
-  const PETS = ['none', 'duck', 'cat', 'blob', 'dog', 'bunny', 'parrot', 'frog', 'snail', 'dragon'];
+  const EFFECTS = ['none', 'rain', 'sun', 'snow', 'sparkles', 'fire', 'beard', 'garden', 'stars', 'bubbles', 'leaves', 'matrix', 'hearts', 'fireflies', 'rainbow', 'petals', 'fireworks', 'bats', 'lightning', 'clouds', 'aurora', 'embers'];
+  const PETS = ['none', 'duck', 'cat', 'blob', 'dog', 'bunny', 'parrot', 'frog', 'snail', 'dragon', 'penguin', 'ghost', 'chick', 'owl'];
   const AGENT_STYLES = ['robot', 'duck', 'blob', 'ghost', 'cat', 'star', 'dot'];
   // What a gesture on the avatar can do. `arg` is free text where noted.
   const ACTIONS = [
@@ -375,6 +381,30 @@
   }
   const F5_EXPORTS = { busySignals, BUSY_PINGS, pingsWhileBusy };
 
+  // ── Rule notify + forMinutes (rules builder) ──────────────────────────────
+  // then.notify asks src/rule-notify-main.js for a notification when the rule
+  // starts matching a session. when.forMinutes holds a rule back until the
+  // session has shown that signal for N minutes (from its updatedAt), so
+  // "waiting on you for over 5 minutes" is one rule. Both keys are only
+  // present when set, so saved rules without them are unchanged.
+  const NOTIFY_TARGETS = ['desktop', 'phone', 'both'];
+  const FOR_MINUTES_MAX = 1440;
+  const cleanForMinutes = (v) => { const n = Number(v); return Number.isInteger(n) && n >= 1 && n <= FOR_MINUTES_MAX ? n : null; };
+  function heldLongEnough(rule, session, now) {
+    const m = rule.when.forMinutes;
+    if (!m) return true;
+    const since = Date.parse((session && (session.signalSince || session.updatedAt)) || '');
+    return Number.isFinite(since) && now - since >= m * 60000;
+  }
+  // Every session a rule can match: the real ones plus the virtual, spend,
+  // git and busy ones resolve() builds. Shared with the notifier.
+  function liveSessions(sessions, now = Date.now(), env = {}) {
+    const real = sessions.filter((s) => sessionSignal(s));
+    return (real.length ? real.concat(virtualSessions(real, now, env))
+      : [{ signal: 'idle' }].concat(env.offline ? [{ signal: 'offline', virtual: true }] : [], busySignals(env))).concat(gitSessions(env));
+  }
+  // ── end rule notify
+
   // Seasonal costume for a date, or null. Applied by the app only when no
   // rule set a costume, and only if the seasonal toggle is on.
   function seasonalCostume(now = Date.now()) {
@@ -396,8 +426,8 @@
   }
 
   // The lamp answers one question — do I need to look? Green: working, leave
-  // it. Amber: your turn (finished, waiting, or a failed turn to retry). Red:
-  // blocked until you act (a permission ask, a limit, no network). Off:
+  // it. Amber: your turn (finished or waiting). Red: blocked until you act (a
+  // permission ask, a limit) or broken (a failed turn, no network). Off:
   // nothing running.
   function defaultRules() {
     return placeBlockedRule(placeSpendRules([ // F1 spend
@@ -455,7 +485,7 @@
       {
         id: 'failed-turn', name: 'Turn failed', enabled: true,
         when: { signal: ['turn-failed'] },
-        then: { lamp: 'amber', eyes: 'dizzy', pose: 'banner', text: '{fail}' },
+        then: { lamp: 'red', eyes: 'dizzy', pose: 'banner', text: '{fail}' },
       },
       {
         id: 'done', name: 'Task finished', enabled: true,
@@ -488,13 +518,34 @@
   // Rules added to the defaults after people already had saved configs. Each
   // is slotted in once, keyed by the saved rulesVersion, so deleting one
   // afterwards sticks.
-  const RULES_VERSION = 9;
+  const RULES_VERSION = 11;
   // v4 recoloured four default lamps (see defaultRules). A saved rule that
   // still has the old default colour, and no custom lampColor, follows.
   const V4_LAMPS = { permission: ['amber', 'red'], done: ['green', 'amber'], nudge: ['green', 'amber'], idle: ['amber', 'off'] };
   // v6: the router's signals went with the router.
   const DEAD_SIGNALS = ['routed-cheap', 'escalated', 'delegated-read'];
   const DEAD_DEFAULT_IDS = ['routed', 'delegated'];
+  // One character for everything (v11): rules no longer carry a body. The
+  // global character is the user's most common non-default body, else claude.
+  const normalizeCharacter = (c) => ({
+    body: isBody(c && c.body) ? c.body : 'claude',
+    bodyColor: /^#[0-9a-f]{6}$/i.test((c && c.bodyColor) || '') ? c.bodyColor : null,
+  });
+  function characterFromRules(rawRules) {
+    const counts = new Map();
+    for (const r of Array.isArray(rawRules) ? rawRules : []) {
+      const t = r && r.then;
+      if (t && isBody(t.body) && t.body !== 'claude') {
+        const e = counts.get(t.body) || { n: 0, color: null };
+        e.n += 1;
+        if (!e.color && /^#[0-9a-f]{6}$/i.test(t.bodyColor || '')) e.color = t.bodyColor;
+        counts.set(t.body, e);
+      }
+    }
+    let best = null;
+    for (const [body, e] of counts) if (!best || e.n > best.n) best = { body, n: e.n, color: e.color };
+    return best ? { body: best.body, bodyColor: best.color } : { body: 'claude', bodyColor: null };
+  }
   function migrateRules(rules, version, template) {
     if (version >= RULES_VERSION) return rules;
     const out = rules.slice();
@@ -551,6 +602,16 @@
     if (version < 8) out.splice(0, out.length, ...placeSpendRules(out, SPEND_RULES.map(normalizeRule).map((r) => fitForTemplate(template, r)).filter(Boolean)));
     // v9: a classifier denial ("blocked: needs your decision") is red.
     if (version < 9) out.splice(0, out.length, ...placeBlockedRule(out, fitForTemplate(template, normalizeRule(BLOCKED_RULE))));
+    // v10: red is "needs you now" or "broken". A classifier denial is neither
+    // (the stock blocked rule goes off); a failed turn is broken (amber → red).
+    // Only a rule still as shipped changes.
+    if (version < 10) {
+      for (let i = 0; i < out.length; i += 1) {
+        const r = out[i];
+        if (r.id === 'blocked' && r.enabled && r.then && r.then.lamp === 'red' && !r.then.lampColor) out[i] = { ...r, enabled: false };
+        if (r.id === 'failed-turn' && r.then && r.then.lamp === 'amber' && !r.then.lampColor) out[i] = { ...r, then: { ...r.then, lamp: 'red' } };
+      }
+    }
     // Nothing to add: the caller keeps the very list it gave (callers compare identity).
     return out.length === rules.length && out.every((r, i) => r === rules[i]) ? rules : out;
   }
@@ -615,7 +676,7 @@
         const d = defaultRules().map((r) => (r.id === 'failed' || r.id === 'shell' ? { ...r, enabled: true } : r));
         const set = (id, then) => Object.assign(d.find((x) => x.id === id).then, then);
         set('permission', { pose: 'sniper', lampFx: 'strobe', sound: 'Hero', screenFx: 'vignette', eyes: 'laser' });
-        set('limit', { pose: 'ak47', lampFx: 'sos', sound: 'Sosumi', body: 'robot', screenFx: 'vignette' });
+        set('limit', { pose: 'ak47', lampFx: 'sos', sound: 'Sosumi', screenFx: 'vignette' });
         set('working', { pose: 'run', lampFx: 'chase', pet: 'dragon', effect: 'fire' });
         set('done', { pose: 'party', lampFx: 'rainbow', screenFx: 'confetti', costume: 'partyhat', eyes: 'star', sound: 'Glass' });
         set('failed', { eyes: 'dizzy', effect: 'fire', signFx: 'rattle' });
@@ -657,7 +718,7 @@
       name: r.name || 'Untitled rule',
       locked: !!r.locked,
       enabled: r.enabled !== false,
-      when: { signal, tool: (r.when?.tool || '').trim() || null, cwd: (r.when?.cwd || '').trim() || null, source: (r.when?.source || '').trim().toLowerCase() || null },
+      when: { signal, tool: (r.when?.tool || '').trim() || null, cwd: (r.when?.cwd || '').trim() || null, source: (r.when?.source || '').trim().toLowerCase() || null, ...(cleanForMinutes(r.when?.forMinutes) ? { forMinutes: cleanForMinutes(r.when.forMinutes) } : {}) },
       then: {
         lamp: LAMPS.includes(r.then?.lamp) ? r.then.lamp : null,
         lampColor: /^#[0-9a-f]{6}$/i.test(r.then?.lampColor || '') ? r.then.lampColor : null,
@@ -676,14 +737,13 @@
         // Built-ins, or a photo cameo the user added (cameos.js ids); a photo
         // that has since been removed just renders as no cameo.
         cameo: typeof r.then?.cameo === 'string' && (CAMEOS.includes(r.then.cameo) || CAMEO_ID.test(r.then.cameo)) ? r.then.cameo : null,
-        body: isBody(r.then?.body) ? r.then.body : null,
-        bodyColor: /^#[0-9a-f]{6}$/i.test(r.then?.bodyColor || '') ? r.then.bodyColor : null,
         effect: EFFECTS.includes(r.then?.effect) ? r.then.effect : null,
         pet: PETS.includes(r.then?.pet) ? r.then.pet : null,
         agents: AGENT_STYLES.includes(r.then?.agents) ? r.then.agents : null,
         agentsColor: /^#[0-9a-f]{6}$/i.test(r.then?.agentsColor || '') ? r.then.agentsColor : null,
         clicks: normalizeClicks(r.then?.clicks),
         ...(BUSY_PINGS.includes(r.then?.busyPing) ? { busyPing: r.then.busyPing } : {}),
+        ...(NOTIFY_TARGETS.includes(r.then?.notify) ? { notify: r.then.notify } : {}),
       },
     };
   }
@@ -753,8 +813,9 @@
       .slice(0, 24);
   }
 
-  function ruleMatches(rule, session) {
+  function ruleMatches(rule, session, now = Date.now()) {
     if (!rule.enabled) return false;
+    if (!heldLongEnough(rule, session, now)) return false;
     const sig = sessionSignal(session);
     if (!sig || !rule.when.signal.includes(sig)) return false;
     const src = (session.source || 'claude').toLowerCase();
@@ -782,13 +843,15 @@
     const real = sessions.filter((s) => sessionSignal(s));
     // F1 spend adds nothing on an empty desk (spendSessions needs a live
     // session), so only offline, F5 busy and F2 git ride on idle.
-    const live = (real.length ? real.concat(virtualSessions(real, now, env))
-      : [{ signal: 'idle' }].concat(env.offline ? [{ signal: 'offline', virtual: true }] : [], busySignals(env))).concat(gitSessions(env));
+    const live = liveSessions(sessions, now, env);
     const fired = [];
     const look = { lamp: 'off', lampColor: null, lampFx: 'none', sign: 'h3', lampShape: 'square', signFx: 'none', numberOf: null, screenFx: 'none', eyes: 'default', pose: 'none', text: null, costume: 'none', cameo: 'none', body: 'claude', bodyColor: null, effect: 'none', pet: 'none', agents: 'robot', agentsColor: null, sound: null, celebrate: false, name: null, ruleId: null, waitMinutes: waitMinutes(real, now), minions: [], clicks: {} };
     const owned = {};
+    const ch = normalizeCharacter(env && env.character);
+    look.body = ch.body;
+    look.bodyColor = ch.bodyColor;
     for (const rule of list) {
-      const matching = live.filter((s) => ruleMatches(rule, s));
+      const matching = live.filter((s) => ruleMatches(rule, s, now));
       if (!matching.length) continue;
       fired.push(rule.id);
       const t = rule.then;
@@ -796,8 +859,6 @@
       if (!owned.pose && t.pose) { look.pose = t.pose; look.text = fillText(t.text, matching[0]); owned.pose = rule.id; }
       if (!owned.costume && t.costume) { look.costume = t.costume; owned.costume = rule.id; }
       if (!owned.cameo && t.cameo) { look.cameo = t.cameo; owned.cameo = rule.id; }
-      if (!owned.body && t.body) { look.body = t.body; owned.body = rule.id; }
-      if (!owned.bodyColor && t.bodyColor) { look.bodyColor = t.bodyColor; owned.bodyColor = rule.id; }
       if (!owned.effect && t.effect) { look.effect = t.effect; owned.effect = rule.id; }
       if (!owned.pet && t.pet) { look.pet = t.pet; owned.pet = rule.id; }
       if (!owned.agents && t.agents) { look.agents = t.agents; owned.agents = rule.id; }
@@ -829,7 +890,7 @@
   }
 
   // The look a single rule would produce on its own — for the editor preview.
-  function previewLook(rule) {
+  function previewLook(rule, character) {
     const r = normalizeRule(rule);
     return {
       lamp: r.then.lamp || 'off',
@@ -846,8 +907,8 @@
       text: r.then.text,
       costume: r.then.costume || 'none',
       cameo: r.then.cameo || 'none',
-      body: r.then.body || 'claude',
-      bodyColor: r.then.bodyColor,
+      body: normalizeCharacter(character).body,
+      bodyColor: normalizeCharacter(character).bodyColor,
       effect: r.then.effect || 'none',
       pet: r.then.pet || 'none',
       agents: r.then.agents || 'robot',
@@ -858,5 +919,5 @@
     };
   }
 
-  return { AGENT_KINDS, AGENT_STATUSES, MODES, normalizeAgent, liveAgents, filterAgentKinds, sessionMode, ralphIteration, fillText, seasonalCostume, seasonalEffect, ACTIONS, GESTURES, DEFAULT_CLICKS, SIGNALS, TOOL_SUGGESTIONS, LAMPS, LAMP_FX, SIGNS, LAMP_SHAPES, SIGN_FX, NUMBERS, SCREEN_FX, POSES, COSTUMES, CAMEOS, CAMEO_ID, BODIES, EYE_MOODS, EFFECTS, PETS, AGENT_STYLES, SOUNDS, WAITING_ON_YOU, TURN_END, effectiveSignal, presentSignal, TRANSIENT_ASK_MS, AGENT_KEEPALIVE_MS: Machine.AGENT_KEEPALIVE_MS, classifySession: Machine.classify, LONG_RUNNING_MS, defaultRules, RULES_VERSION, LEGACY_RULES_VERSION, rulesVersionOf, migrateRules, templatePrefs, shareFile, templates, applyTemplate, normalizeRule, clickCommands, orderedRules, ruleMatches, toolMatches, cwdMatches, folderOf, resolve, firedNames, previewLook, sessionSignal, virtualSessions, uid, GIT_SIGNALS, gitDefaultRules, gitSessions, SPEND_RULES, placeSpendRules, spendSessions, BLOCKED_RULE, BLOCKED_KEEP_MS, placeBlockedRule, ...F5_EXPORTS };
+  return { AGENT_KINDS, AGENT_STATUSES, MODES, normalizeAgent, liveAgents, filterAgentKinds, sessionMode, ralphIteration, fillText, seasonalCostume, seasonalEffect, ACTIONS, GESTURES, DEFAULT_CLICKS, SIGNALS, TOOL_SUGGESTIONS, LAMPS, LAMP_FX, SIGNS, LAMP_SHAPES, SIGN_FX, NUMBERS, SCREEN_FX, POSES, COSTUMES, CAMEOS, CAMEO_ID, BODIES, EYE_MOODS, EFFECTS, PETS, AGENT_STYLES, SOUNDS, WAITING_ON_YOU, TURN_END, effectiveSignal, presentSignal, TRANSIENT_ASK_MS, AGENT_KEEPALIVE_MS: Machine.AGENT_KEEPALIVE_MS, classifySession: Machine.classify, LONG_RUNNING_MS, defaultRules, RULES_VERSION, LEGACY_RULES_VERSION, rulesVersionOf, migrateRules, normalizeCharacter, characterFromRules, templatePrefs, shareFile, templates, applyTemplate, normalizeRule, clickCommands, orderedRules, ruleMatches, toolMatches, cwdMatches, folderOf, resolve, firedNames, previewLook, sessionSignal, virtualSessions, uid, GIT_SIGNALS, gitDefaultRules, gitSessions, SPEND_RULES, placeSpendRules, spendSessions, BLOCKED_RULE, BLOCKED_KEEP_MS, placeBlockedRule, NOTIFY_TARGETS, FOR_MINUTES_MAX, liveSessions, ...F5_EXPORTS };
 });

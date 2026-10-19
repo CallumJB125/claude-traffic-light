@@ -1,15 +1,15 @@
-// Label colours, covers and archive in the web (D91, D93, D94): pure helpers,
-// render tests for the card face, drawer, filter bar, label manager, selection
-// bar and table, and the CSS tokens (classes only, AA in both themes).
+// Label colours and archive in the web (D91, D94): pure helpers, render
+// tests for the card face, drawer, filter bar and table, and the CSS tokens
+// (classes only, AA in both themes). Covers, the label manager and the
+// multi-select bar were removed from the UI; their APIs remain.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { byAttr, byClass, findAll, hasClass, textOf } from '../js/h.js';
 import { displayFace } from '../js/view.js';
 import { LABEL_COLORS, colorMap, labelColor, labelClass, coverClass, canArchive, managerRows } from '../js/labels.js';
-import { card, selectionActions } from '../js/render-board.js';
+import { card } from '../js/render-board.js';
 import { drawer } from '../js/render-drawer.js';
-import { labelsDialog } from '../js/render-dialogs.js';
 import { filterBar } from '../js/render-filters.js';
 import { tableScreen } from '../js/render-table.js';
 import { DEFAULT_SORT } from '../js/table.js';
@@ -50,17 +50,15 @@ test('helpers: registry colours match names ignoring case, beat the hub\'s as-of
     [['Bug', 'red', true], ['ui', 'teal', true], ['later', null, false]]);
 });
 
-test('card face: label chips coloured by class, cover strip by class (none while the connection is lost), never an inline style', () => {
+test('card face: label chips coloured by class, no cover strip (covers are gone), never an inline style', () => {
   const v = todo({ labels: ['bug', 'later', 'never_auto', 'via:github'], cover: 'purple' });
   const m = model([entry(v)], { labelColors: colors });
   const c = card(entry(v), m);
-  assert.ok(hasClass(c, 'has-cover') && hasClass(c, 'cover-purple'));
+  assert.equal(hasClass(c, 'has-cover') || hasClass(c, 'cover-purple'), false);
   const labels = byClass(c, 'card-labels')[0];
   assert.deepEqual(labels.children.map((n) => [textOf(n), n.props.class]), [['bug', 'label label-c-red'], ['later', 'label'], ['never_auto', 'label is-policy']]);
   assert.equal(byClass(c, 'via-integration').length, 1, 'via stays a badge');
   assert.deepEqual(noInlineStyle(c), []);
-  const lost = card(entry(v), { ...m, conn: { status: 'lost' } });
-  assert.equal(hasClass(lost, 'has-cover'), false);
 });
 
 test('card face: an archived card is muted, says so, only offers Restore and cannot be dragged; viewers get no button', () => {
@@ -80,20 +78,16 @@ function drawerModel(v, data = {}, extra = {}) {
   return model([entry(v)], { labelColors: colors, detail: { cardId: v.id, data: { card: v, feed: [], comments: [], asks: [], permission_requests: [], ...data }, elapsed_ms: 0, tab: 'comments' }, ...extra });
 }
 
-test('drawer: cover picker (none + ten tokens, the current one pressed), Archive for a card with no live run, coloured labels', () => {
+test('drawer: no cover picker, Archive for a card with no live run, coloured labels', () => {
   const v = todo({ cover: 'green', labels: ['Bug'] });
   const d = drawer(drawerModel(v));
-  const opts = byAttr(d, 'data-action', 'set-cover');
-  assert.deepEqual(opts.map((o) => o.props['data-cover']), ['', ...LABEL_COLORS]);
-  assert.deepEqual(opts.filter((o) => o.props['aria-pressed'] === 'true').map((o) => o.props['data-cover']), ['green']);
-  assert.ok(opts.every((o) => o.props['aria-label']), 'every swatch has a name');
+  assert.equal(byAttr(d, 'data-action', 'set-cover').length, 0);
   assert.equal(byAttr(d, 'data-action', 'archive').length, 1);
   assert.equal(byAttr(d, 'data-action', 'restore').length, 0);
   assert.equal(byClass(d, 'label-c-red').length, 1);
   assert.deepEqual(noInlineStyle(d), []);
   const running = drawer(drawerModel(view({ labels: [] })));
   assert.equal(byAttr(running, 'data-action', 'archive').length, 0, 'a live run cannot be archived');
-  assert.equal(byAttr(drawer(drawerModel(v, {}, { readOnly: true })), 'data-action', 'set-cover').length, 0, 'viewers get no picker');
 });
 
 test('drawer: an archived card shows who archived it, Restore, and no cover picker, card actions or comment box', () => {
@@ -107,7 +101,7 @@ test('drawer: an archived card shows who archived it, Restore, and no cover pick
   assert.equal(byAttr(d, 'data-form', 'comment').length, 0);
 });
 
-test('filter bar: a Labels button, a "Show archived" toggle with its count, and label filters carry their colour dot and name', () => {
+test('filter bar: no label registry button, a "Show archived" toggle with its count, and label filters carry their colour dot and name', () => {
   const v = todo({ labels: ['bug', 'later'] });
   const entries = [entry(v)];
   const ctx = { viewerId: 'm-alice', members: MEMBERS, labelColors: colors };
@@ -115,7 +109,7 @@ test('filter bar: a Labels button, a "Show archived" toggle with its count, and 
   assert.deepEqual(opts.labels, [{ label: 'bug', n: 1, color: 'red' }, { label: 'later', n: 1 }]);
   const mk = (over) => model(entries, { filters: { ...emptyFilters(), ...over.filters }, labelColors: colors, filterInfo: { total: 1, shown: 1, options: opts, archived: over.archived ?? null }, showArchived: over.showArchived ?? false });
   const off = filterBar(mk({ filters: { labels: ['bug'] } }));
-  assert.equal(byAttr(off, 'data-action', 'labels-open').length, 1);
+  assert.equal(byAttr(off, 'data-action', 'labels-open').length, 0);
   assert.equal(byAttr(off, 'data-action', 'toggle-archived')[0].props['aria-pressed'], 'false');
   assert.equal(byClass(byAttr(off, 'data-action', 'filter-label-off')[0], 'ldot-red').length, 1);
   assert.match(textOf(findAll(off, (n) => n.tag === 'option' && n.props.value === 'later')[0]), /^later \(1\)$/);
@@ -124,43 +118,6 @@ test('filter bar: a Labels button, a "Show archived" toggle with its count, and 
   assert.equal(t.props['aria-pressed'], 'true');
   assert.match(textOf(t), /Show archived\s*3/);
   assert.match(textOf(findAll(on, (n) => n.tag === 'option' && n.props.value === 'bug')[0]), /bug \(1\) · red/, 'the colour is in the text too');
-});
-
-test('label manager: viewers read, members create and recolour, admins and owners also rename and delete (with a two-way confirm)', () => {
-  const v = todo({ labels: ['bug', 'later', 'never_auto'] });
-  const base = (role, dlg = {}) => labelsDialog({ kind: 'labels', ...dlg }, model([entry(v)], { board: { id: 'b', name: 'B', key_prefix: 'B', labels: REGISTRY }, me: { member: { id: 'm-alice', role } }, readOnly: role === 'viewer' }));
-  const viewer = base('viewer');
-  assert.deepEqual(byClass(viewer, 'labels-row').map((r) => textOf(r.children[0])), ['Bug', 'ui', 'later']);
-  assert.equal(byAttr(viewer, 'data-form', 'label-create').length, 0);
-  assert.ok(byAttr(viewer, 'data-change', 'label-color').every((s) => s.props.disabled === true));
-  const member = base('member');
-  assert.equal(byAttr(member, 'data-form', 'label-create').length, 1);
-  assert.equal(byAttr(member, 'data-action', 'label-rename-ask').length, 0);
-  assert.equal(byAttr(member, 'data-action', 'label-delete-ask').length, 0);
-  assert.match(textOf(member), /Admins can rename or delete a label/);
-  const selects = byAttr(member, 'data-change', 'label-color');
-  assert.deepEqual(selects.map((s) => [s.props['data-label'], s.props['data-registered'], s.props.disabled]), [['Bug', '1', null], ['ui', '1', null], ['later', null, null]]);
-  for (const role of ['admin', 'owner']) {
-    const a = base(role);
-    assert.equal(byAttr(a, 'data-action', 'label-rename-ask').length, 2, role);
-    assert.equal(byAttr(a, 'data-action', 'label-delete-ask').length, 2, role);
-  }
-  const confirm = base('admin', { confirmDelete: 'Bug' });
-  assert.deepEqual(byAttr(confirm, 'data-action', 'label-delete').map((b) => [b.props['data-label'], b.props['data-strip'] ?? null]), [['Bug', null], ['Bug', '1']]);
-  const rename = base('admin', { rename: 'ui' });
-  assert.equal(byAttr(rename, 'data-form', 'label-rename')[0].props['data-label'], 'ui');
-  assert.deepEqual(noInlineStyle(member), []);
-});
-
-test('selection bar: Archive for the cards with no live run, Restore for the archived ones', () => {
-  const a = todo({ id: 'a' });
-  const b = view({ id: 'b' });
-  const c = archivedView({ id: 'c' });
-  const m = model([a, b, c].map(entry), { selection: new Set(['a', 'b', 'c']) });
-  const bar = selectionActions(m);
-  assert.match(textOf(byAttr(bar, 'data-action', 'bulk-archive')[0]), /Archive 1/);
-  assert.match(textOf(byAttr(bar, 'data-action', 'bulk-restore')[0]), /Restore 1/);
-  assert.equal(byAttr(selectionActions({ ...m, readOnly: true }), 'data-action', 'bulk-archive').length, 0);
 });
 
 test('table: archived rows are muted and badged; labels are coloured by class', () => {

@@ -1,0 +1,70 @@
+[Unit]
+Description=Plexiform cloud runner (board runner, hosted mode)
+Documentation=file:///opt/buddy-runner/board/deploy/pi/README.md
+After=network-online.target tailscaled.service buddy-hub.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=buddyrunner
+Group=buddyrunner
+WorkingDirectory=/opt/buddy-runner/board
+EnvironmentFile=/etc/buddy-runner/runner.env
+Environment=BUDDY_RUNNER_HOME=/var/lib/buddy-runner
+Environment=HOME=/var/lib/buddy-runner/home
+Environment=PATH=/opt/buddy-runner/cli/bin:/usr/local/bin:/usr/bin:/bin
+# The runner token: root-only on disk, handed to this service alone (never in the env file).
+LoadCredential=runner-token:/etc/buddy-runner/runner.token
+ExecStart=/usr/bin/node runner/cli.js hosted
+Restart=on-failure
+RestartSec=10
+# SIGTERM parks live runs (handover, snapshot, requeue) within 25 s; then everything left is killed.
+KillMode=mixed
+TimeoutStopSec=40
+
+# Per-run sandbox (runner/hosted/cgroup.js): this unprivileged service owns its
+# cgroup subtree and puts every agent CLI in a child cgroup of its own with CPU,
+# task (and, once the kernel has the memory controller, memory) limits.
+Delegate=yes
+DelegateSubgroup=supervisor
+CPUQuota=300%
+TasksMax=2048
+# Needs the memory cgroup controller: Raspberry Pi OS boots with
+# cgroup_disable=memory, so this is inert until cgroup_enable=memory is added
+# (runbook). The runner's per-run memory watchdog applies either way.
+MemoryMax=10G
+LimitNOFILE=65536
+
+# Hardening: writable only its own state dir; the hub's data and secrets are not visible.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+UMask=0077
+ReadWritePaths=/var/lib/buddy-runner
+InaccessiblePaths=-/var/lib/buddy-hub -/var/lib/buddy-hub-staging -/etc/buddy-hub -/etc/litestream.yml -/etc/cloudflared -/opt/redteam -/root
+# Deliberately not set, and why:
+#  ProtectControlGroups / ProtectKernelTunables: Delegate= needs the delegated
+#    cgroup subtree writable (an unprivileged user cannot write sysctls anyway).
+#  RestrictNamespaces: Claude Code's Linux sandbox (bubblewrap) and Codex's
+#    sandbox create user, mount and network namespaces for each tool call.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+
+# Egress: the public internet (GitHub, the model APIs) and this host's loopback
+# hub; no LAN, link-local or tailnet peers except Tailscale's DNS resolver.
+# A tailnet model server (Hermes · DGX) is allowed by the hermes-dgx.conf drop-in.
+IPAddressDeny=10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 100.64.0.0/10 fc00::/7 fe80::/10
+IPAddressAllow=localhost 100.100.100.100 fd7a:115c:a1e0::53
+
+[Install]
+WantedBy=multi-user.target

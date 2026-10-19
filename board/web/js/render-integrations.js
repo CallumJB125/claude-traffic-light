@@ -5,6 +5,11 @@ import { h } from './h.js';
 import { icon } from './icons.js';
 import { formatAge } from './view.js';
 import { CONNECTORS, STATUS_TEXT, connectorStatus } from './connectors.js';
+import { sentryRouting } from './render-sentry.js';
+import { slackChannel } from './render-slack.js';
+import { trackerIntake } from './render-tracker.js';
+import { apiPanel } from './render-api.js';
+import { triggersPanel } from './render-triggers.js';
 
 const MODE_LABEL = { auto: 'Automatic', ask: 'Ask first', off: 'Off' };
 const DECISION_LABEL = { attempted: 'In progress', auto: 'Done automatically', failed: 'Failed', asked: 'Waiting for a yes', approved: 'Approved', denied: 'Denied', skipped: 'Skipped (off)' };
@@ -29,6 +34,21 @@ const ACTION_LABEL = {
   'system.pr_merged': 'Mark a card Done when its PR merges',
   'system.pr_closed': 'Send a card back when its PR is closed',
   'notify.post': 'Post updates to channels',
+  'sentry.card': 'Create cards from new Sentry issues',
+  'sentry.notice': 'Comment when new issues exceed the card limit',
+  'sentry.suppressed': 'Record issues that were not turned into cards',
+  'sentry.status': 'Comment on issue status and regressions',
+  'sentry.incident': 'Create cards from critical metric alerts',
+  'sentry.incident-status': 'Comment on incident status updates',
+  'linear.card': 'Create cards from new and updated Linear issues',
+  'linear.status': 'Comment when a Linear issue changes status',
+  'jira.card': 'Create cards from new and updated Jira issues',
+  'jira.status': 'Comment when a Jira issue changes status',
+  'pr.link': 'Link a card’s pull request',
+  'pr.status': 'Show checks and review on the card',
+  'pr.comment_notice': 'Note new PR comments on the card',
+  'pr.create': 'Open a PR from a card (when a member asks)',
+  'pr.comment': 'Comment a card’s status on its PR (when a member asks)',
 };
 export const actionLabel = (id) => ACTION_LABEL[id] ?? id;
 
@@ -96,8 +116,36 @@ function ownerLine(conn, name) {
   const p = conn.settings?.provider;
   const org = typeof p?.org === 'string' && LOGIN_RE.test(p.org) ? p.org : null;
   const login = typeof p?.login === 'string' && LOGIN_RE.test(p.login) ? p.login : null;
+  if (p?.mode === 'app' && login) return `Installed on the ${name} ${p.account_type === 'Organization' ? 'organization' : 'account'} ${login}`;
   if (org) return `Created under the ${name} organization ${org}`;
   return login ? `Created under the ${name} account ${login}` : null;
+}
+
+function webhookUrlSection(conn, name) {
+  return h('section', { class: 'integ-section', 'aria-label': 'Webhook URL' },
+    h('h4', null, 'Webhook URL'),
+    conn.webhook_url
+      ? [h('p', { key: 'p', class: 'small' }, `Paste this URL into ${name} as the integration's Webhook URL:`),
+        h('p', { key: 'u', class: 'integ-webhook-url' }, h('code', { class: 'num' }, conn.webhook_url), ' ',
+          h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'integ-copy-url', 'data-url': conn.webhook_url }, 'Copy'))]
+      : h('p', { class: 'muted small' }, 'This hub has no public address. Ask its administrator to configure one before connecting webhooks.'));
+}
+
+// An installation of the hub's own app (step 4): which of its repositories
+// this team links. Only linked ones reach cards; linking one also adds it to
+// the open board. Admins only (the list comes from the provider).
+function reposSection(conn, m) {
+  const list = m.repos?.[conn.id];
+  const busy = m.busy.has(`integ-repos:${conn.id}`);
+  return h('section', { class: 'integ-section', 'aria-label': 'Repositories' },
+    h('h4', null, 'Repositories'),
+    h('button', { type: 'button', class: 'link small', 'data-action': 'integ-repos', 'data-conn': conn.id, 'aria-expanded': list ? 'true' : 'false', disabled: busy || null }, list ? 'Hide repositories' : 'Choose repositories'),
+    list ? (list.length
+      ? h('ul', { class: 'integ-linked' }, list.map((r) => h('li', { key: r.id },
+        h('span', { class: 'num' }, r.full_name), r.private ? h('span', { class: 'muted small' }, ' · private') : null, ' ',
+        h('button', { type: 'button', class: r.linked ? 'btn btn-sm btn-quiet-danger' : 'btn btn-sm', 'data-action': 'integ-repo-link', 'data-conn': conn.id, 'data-repo': String(r.id), 'data-link': r.linked ? '0' : '1', disabled: busy || null },
+          r.linked ? 'Unlink' : 'Link'))))
+      : h('p', { class: 'muted small' }, 'This installation has no repositories yet: add some on GitHub.')) : null);
 }
 
 function connectedCard(conn, m) {
@@ -116,7 +164,16 @@ function connectedCard(conn, m) {
     h('section', { class: 'integ-section', 'aria-label': 'What it may do on its own' },
       h('h4', null, 'On its own'),
       autonomyRows(conn, connector, m.canEdit, m.busy.has(`integ:${conn.id}`))),
+    conn.provider === 'sentry' ? sentryRouting(conn, m) : h('section', { class: 'integ-section' },
+      h('label', { class: 'field' }, h('span', null, 'New cards go to'),
+        m.canEdit ? h('select', { class: 'input input-sm', 'aria-label': `Target board for ${connector?.name ?? conn.provider}`, 'data-change': 'integ-board', 'data-conn': conn.id, disabled: m.busy.has(`integ:${conn.id}`) || null },
+          (m.boards ?? []).filter((b) => !b.archived_at || b.id === conn.target_board_id).map((b) => h('option', { key: b.id, value: b.id, selected: b.id === conn.target_board_id }, `${b.name}${b.archived_at ? ' (Archived — intake paused)' : ''}`)))
+          : h('span', null, (m.boards ?? []).find((b) => b.id === conn.target_board_id)?.name ?? 'Team board'))),
+    conn.provider === 'slack' ? slackChannel(conn, m) : null,
+    conn.provider === 'linear' || conn.provider === 'jira' ? trackerIntake(conn, m, connector?.name ?? conn.provider) : null,
     connector?.identity ? identitySection(conn, connector.name ?? conn.provider, m) : null,
+    m.canEdit && Object.hasOwn(conn, 'webhook_url') ? webhookUrlSection(conn, connector?.name ?? conn.provider) : null,
+    m.canEdit && conn.settings?.provider?.mode === 'app' ? reposSection(conn, m) : null,
     h('div', { class: 'integ-card-actions' },
       m.canEdit ? h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'integ-activity', 'data-conn': conn.id, 'aria-expanded': open ? 'true' : 'false' }, open ? 'Hide activity' : 'Activity') : null,
       m.canEdit ? (confirming
@@ -253,14 +310,19 @@ function availableCard(c, m) {
     m.local ? null
       : !m.canEdit ? h('p', { class: 'muted small' }, 'A team admin can connect this.')
       : !m.vault ? null
+      : c.app ? h('div', null,
+        h('p', { class: 'muted small' }, `Install the Plexiform app on a ${c.name} account or organization, then choose which repositories this team links.`),
+        h('button', { type: 'button', class: 'btn btn-sm btn-primary', 'data-action': 'integ-install', 'data-provider': c.id, disabled: busy || null, 'aria-busy': busy ? 'true' : null }, `Install on ${c.name}`))
       : manifest ? manifestForm(c, manifest)
       : Array.isArray(c.start) && c.start.length && c.connect !== 'token' ? startForm(c, busy)
       : Array.isArray(c.prepare) && c.connect !== 'token' ? prepareForm(c, busy)
       : c.connect === 'token'
         ? (tokenOpen
           ? h('form', { class: 'integ-token', 'data-form': 'integ-token', 'data-provider': c.id },
-            h('label', { class: 'field' }, h('span', null, `${c.name} token`),
+            h('label', { class: 'field' }, h('span', null, c.shows_webhook_url ? `${c.name} ${c.id === 'sentry' ? 'client secret' : 'webhook signing secret'}` : `${c.name} token`),
               h('input', { class: 'input', name: 'token', type: 'password', autocomplete: 'new-password', ...NO_MANAGER, required: true, autofocus: true, spellcheck: 'false' })),
+            c.shows_webhook_url ? h('p', { class: 'muted small' }, `Plexiform stores this secret encrypted and never displays it again. Rotate the secret in ${c.name} before reconnecting so old signed requests cannot be reused.`) : null,
+            c.shows_webhook_url ? h('p', { class: 'muted small' }, `After connecting, this page shows the webhook URL to paste into ${c.name}.`) : null,
             h('div', { class: 'integ-card-actions' },
               h('button', { type: 'submit', class: 'btn btn-sm btn-primary', disabled: busy || null, 'aria-busy': busy ? 'true' : null }, 'Connect'),
               h('button', { type: 'button', class: 'btn btn-sm btn-ghost', 'data-action': 'integ-token-cancel' }, 'Cancel')))
@@ -291,21 +353,25 @@ export function connectWindowTarget(provider, bind, userAgent) {
 export function integrationsScreen(model) {
   const m = model.integrations;
   const main = (...kids) => h('main', { class: 'integview', id: 'board', 'aria-label': 'Integrations' }, ...kids);
-  if (!m || m.status === 'loading' && !m.data) return main(h('p', { class: 'muted', role: 'status' }, 'Loading integrations…'));
+  if (!m || !m.data && m.status !== 'error') return main(h('p', { class: 'muted', role: 'status' }, 'Loading integrations…'));
   if (m.status === 'error' && !m.data) {
     return main(h('div', { class: 'callout callout-warn', role: 'alert' }, h('p', null, m.error ?? 'Couldn’t load integrations.'),
       h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'integ-reload' }, 'Try again')));
   }
   const data = m.data;
   const vm = {
+    boards: model.boards ?? model.me?.boards ?? [],
     available: data.available ?? [], vault: !!data.vault, canEdit: ['owner', 'admin'].includes(model.me?.member?.role),
     canWrite: ['owner', 'admin', 'member'].includes(model.me?.member?.role), linked: m.linked ?? {},
-    local: !!m.local, nowMs: m.nowMs ?? Date.now(), open: m.open, audit: m.audit ?? {}, tokenFor: m.tokenFor, manifest: m.manifest, confirmDisconnect: m.confirmDisconnect, busy: model.busy,
-    meId: model.me?.member?.id, needs: m.needs ?? {}, confirmCancel: m.confirmCancel,
+    local: !!m.local, openTeam: !!m.openTeam, nowMs: m.nowMs ?? Date.now(), open: m.open, audit: m.audit ?? {}, tokenFor: m.tokenFor, manifest: m.manifest, confirmDisconnect: m.confirmDisconnect, busy: model.busy,
+    meId: model.me?.member?.id, needs: m.needs ?? {}, confirmCancel: m.confirmCancel, repos: m.repos ?? {},
+    sentryErrors: m.sentryErrors ?? {},
+    slackErrors: m.slackErrors ?? {},
   };
   const connected = data.connections ?? [];
   const pending = vm.canEdit ? data.pending ?? [] : [];
-  const notYet = vm.available.filter((c) => !connected.some((x) => x.provider === c.id) && !pending.some((p) => p.provider === c.id));
+  // An app connector takes one installation per account or organization: always another one to add.
+  const notYet = vm.available.filter((c) => c.app || (!connected.some((x) => x.provider === c.id) && !pending.some((p) => p.provider === c.id)));
   return main(
     h('header', { class: 'integview-head' },
       h('h1', null, 'Integrations'),
@@ -316,13 +382,16 @@ export function integrationsScreen(model) {
       h('h2', { id: 'integ-connected' }, 'Connected'),
       connected.length ? h('div', { class: 'integ-grid' }, connected.map((c) => connectedCard(c, vm)))
         : h('p', { class: 'muted' }, 'Nothing connected yet.')),
+    vm.local ? null : triggersPanel(m.triggers, vm, model.members),
     pending.length ? h('section', { class: 'integ-group', 'aria-labelledby': 'integ-pending' },
       h('h2', { id: 'integ-pending' }, 'Being set up'),
       h('div', { class: 'integ-grid' }, pending.map((p) => pendingCard(p, vm)))) : null,
     h('section', { class: 'integ-group', 'aria-labelledby': 'integ-available' },
       h('h2', { id: 'integ-available' }, 'Add a tool'),
-      vm.local ? h('p', { class: 'integ-local muted' }, 'Integrations live on a team hub. Open Team in the sidebar to sign in, then create a team or join one.') : null,
+      vm.local ? h('p', { class: 'integ-local muted' }, vm.openTeam ? 'Integrations live on a team. Sign in to create a team or join one.' : 'Integrations live on a team. Open Team in the app’s sidebar to sign in, then create a team or join one.') : null,
+      vm.local && vm.openTeam ? h('button', { type: 'button', class: 'btn btn-sm btn-primary', 'data-action': 'open-team' }, 'Sign in or create a team') : null,
       vm.local ? h('div', { class: 'integ-grid', 'data-grid': 'local-connectors' }, CONNECTORS.map(localCard))
         : notYet.length ? h('div', { class: 'integ-grid' }, notYet.map((c) => availableCard(c, vm)))
-        : h('p', { class: 'muted' }, vm.available.length ? 'Everything available is connected.' : 'No tools are available on this board yet.')));
+        : h('p', { class: 'muted' }, vm.available.length ? 'Everything available is connected.' : 'No tools are available on this board yet.')),
+    vm.canEdit && !vm.local && model.apiPanel ? apiPanel(model.apiPanel, { nowMs: vm.nowMs, busy: vm.busy }) : null);
 }

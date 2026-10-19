@@ -1,0 +1,9 @@
+{
+  "id": "explain-repo",
+  "title": "Explain this repo to a new teammate",
+  "what": "Reads the codebase and explains it the way you would on someone's first day: what it does, how it is laid out, how to run it and where to start.",
+  "prompt": "Explain this repository to a new teammate on their first day.\n\nCover, in this order:\n1. What it does and who uses it, in two or three sentences.\n2. How to install, run and test it locally (exact commands, taken from the repo, not guessed).\n3. The layout: the five to ten most important folders and files, one line each.\n4. How a typical request or action flows through the code, naming the real files and functions.\n5. Conventions worth knowing (style, naming, error handling, how tests are written).\n6. Three good first tasks for someone new.\n\nUse plain language and keep it under 800 words. Do not change any files.",
+  "tool": "auto",
+  "edits": false,
+  "cost": "Medium: reads a broad sample of the codebase once."
+}

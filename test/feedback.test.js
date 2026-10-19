@@ -4,8 +4,9 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const F = require('../src/feedback.js');
+const { testTempDir } = require('./helpers/tmp');
 
-const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'cbuddy-feedback-'));
+const tmp = () => testTempDir('cbuddy-feedback-');
 // Assembled from fragments so no token-shaped literal sits in the source.
 const fakeToken = () => ['gh', 'p_', 'a1B2c3D4e5'.repeat(3), 'x1Y2z3'].join('');
 const base = { kind: 'off', text: 'The lamp stayed red', version: '1.2.3', os: 'darwin 15 arm64', at: '2026-10-01T10:00:00.000Z' };

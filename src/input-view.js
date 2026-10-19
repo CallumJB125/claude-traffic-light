@@ -164,8 +164,24 @@
 
   // What can be answered here first (so it never hides behind "+N more"),
   // then oldest first; capped for the widget, the rest become "+N more".
-  function visible(inputs, max = 2, now = Date.now()) {
-    const list = (Array.isArray(inputs) ? inputs : []).slice().sort((a, b) => (canAnswer(b, now) - canAnswer(a, now)) || String(a.created_at).localeCompare(String(b.created_at)));
+  // The attention queue: whoever has waited longest first, answerable or not.
+  const byWait = (a, b) => (Date.parse(a.created_at) || Infinity) - (Date.parse(b.created_at) || Infinity) || String(a.id).localeCompare(String(b.id));
+  function queue(inputs) {
+    return (Array.isArray(inputs) ? inputs : []).slice().sort(byWait);
+  }
+  // The neighbour of `id` in the queue, wrapping round; the first when nothing is open.
+  function step(inputs, id, dir) {
+    const q = queue(inputs);
+    if (!q.length) return null;
+    const at = q.findIndex((i) => i.id === id);
+    if (at < 0) return q[dir < 0 ? q.length - 1 : 0].id;
+    return q[(at + (dir < 0 ? -1 : 1) + q.length) % q.length].id;
+  }
+
+  // strict: the Waiting page, where the order is purely by wait. The widget
+  // keeps answerable ones first, since its few rows are for answering.
+  function visible(inputs, max = 2, now = Date.now(), strict = false) {
+    const list = strict ? queue(inputs) : (Array.isArray(inputs) ? inputs : []).slice().sort((a, b) => (canAnswer(b, now) - canAnswer(a, now)) || String(a.created_at).localeCompare(String(b.created_at)));
     return { shown: list.slice(0, max), more: Math.max(0, list.length - max) };
   }
 
@@ -175,5 +191,5 @@
     return `${KIND_LABEL[input?.kind] || 'Waiting'} in ${project(input)}: ${headline(input)}${age ? `, ${age}` : ''}${expired(input, now) ? ', answer in terminal' : ''}`;
   }
 
-  return { ESCALATE_MS, KIND_LABEL, project, headline, ageMs, ageText, escalated, expired, canAnswer, canOpen, primary, denyOption, optionTone, questionAnswer, formFields, formContent, visible, rowLabel };
+  return { ESCALATE_MS, KIND_LABEL, project, headline, ageMs, ageText, escalated, expired, canAnswer, canOpen, primary, denyOption, optionTone, questionAnswer, formFields, formContent, visible, queue, step, rowLabel };
 });

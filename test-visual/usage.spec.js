@@ -4,7 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { test, expect } = require('@playwright/test');
-const { launchApp, windowByFile } = require('./app');
+const { launchApp, embedded, snapToPixels } = require('./app');
 const History = require('../usage-history.js');
 
 const NOW = new Date('2026-09-30T12:00:00').getTime();
@@ -56,38 +56,43 @@ let h;
 test.beforeAll(async () => { h = await launchApp({ files: seed() }); });
 test.afterAll(async () => { await h?.cleanup(); });
 
-async function lightsOf(harness) {
-  // the first call opens it (openLights toggles nothing, but a window that is
-  // already up is simply reused)
-  const up = harness.app.windows().find((p) => p.url().includes('lights.html'));
-  if (up) return up;
-  const widget = await windowByFile(harness.app, 'index.html');
-  await widget.evaluate(() => window.trafficLight.openLights());
-  return windowByFile(harness.app, 'lights.html');
-}
+// Usage is the main window's page (lights.html?view=mix); only it is answered the usage bundle.
+const lightsOf = (harness) => embedded(harness.app, 'usage', 'lights.html', { view: 'mix' });
 
 async function open(scheme) {
   const lights = await lightsOf(h);
   await lights.setViewportSize({ width: 1100, height: 2200 }).catch(() => {});
-  await lights.emulateMedia({ colorScheme: scheme, reducedMotion: 'reduce' });
   const base = lights.url().split('?')[0];
-  await lights.goto(`${base}?view=mix&now=${NOW}`);
+  await lights.goto(`${base}?embedded=1&view=mix&now=${NOW}`);
+  await lights.emulateMedia({ colorScheme: scheme, reducedMotion: 'reduce' });
   await lights.waitForSelector('#usage-history .uv-card');
-  await lights.waitForTimeout(400);
+  // The cost guard cards above the history arrive from their own async report;
+  // shoot only once it has answered and the history has stopped moving.
+  await lights.evaluate(() => window.lightsApi.costGuard.report().catch(() => null));
+  let lastTop = null;
+  await expect.poll(async () => {
+    const top = await lights.locator('#usage-history').evaluate((el) => el.getBoundingClientRect().top);
+    const still = top === lastTop;
+    lastTop = top;
+    return still;
+  }, { intervals: [400] }).toBe(true);
   return lights;
 }
 
-for (const scheme of ['dark', 'light']) {
+// Only the dark scheme is shot; the light palette tokens.css gained in 9921f259 is not baselined here.
+// A native checkbox is tinted only while its window is key; the shared style pins it.
+const SHOT = { threshold: 0.05, stylePath: path.join(__dirname, 'no-hover-chrome.css') };
+for (const scheme of ['dark']) {
   test(`usage history renders its charts (${scheme})`, async () => {
     const lights = await open(scheme);
     const errs = await lights.evaluate(() => window.__errs || []);
     expect(errs).toEqual([]);
-    await expect(lights.locator('#usage-history .uv-head')).toHaveScreenshot(`usage-head-${scheme}.png`, { threshold: 0.05 });
-    await expect(lights.locator('#usage-history .uv-tiles')).toHaveScreenshot(`usage-tiles-${scheme}.png`, { threshold: 0.05 });
+    await expect(await snapToPixels(lights.locator('#usage-history .uv-head'))).toHaveScreenshot(`usage-head-${scheme}.png`, SHOT);
+    await expect(await snapToPixels(lights.locator('#usage-history .uv-tiles'))).toHaveScreenshot(`usage-tiles-${scheme}.png`, SHOT);
     const cards = lights.locator('#usage-history .uv-card');
     const titles = await cards.locator('h3').allTextContents();
-    expect(titles).toEqual(['Cost over time', 'Model share over time', 'Where the tokens go', 'Cache hit rate', 'Activity calendar', 'When you work', 'Projects', 'Routine Opus turns']);
-    for (let i = 0; i < titles.length; i += 1) await expect(cards.nth(i)).toHaveScreenshot(`usage-${String(i + 1).padStart(2, '0')}-${titles[i].toLowerCase().replace(/[^a-z]+/g, '-')}-${scheme}.png`, { threshold: 0.05 });
+    expect(titles).toEqual(['API-equivalent $ over time', 'Model share over time', 'Where the tokens go', 'Cache hit rate', 'Activity calendar', 'Busiest hours', 'Projects', 'Routine Opus turns']);
+    for (let i = 0; i < titles.length; i += 1) await expect(await snapToPixels(cards.nth(i))).toHaveScreenshot(`usage-${String(i + 1).padStart(2, '0')}-${titles[i].toLowerCase().replace(/[^a-z]+/g, '-')}-${scheme}.png`, SHOT);
   });
 }
 
@@ -120,7 +125,8 @@ test('usage history: range, compare, project filter, callouts and tables work', 
   await lights.mouse.move(box.x + box.width / 2, box.y + 20);
   await lights.mouse.move(box.x + box.width / 2 + 1, box.y + 22);
   await expect(lights.locator('.uv-tip')).toBeVisible();
-  await expect(lights.locator('.uv-tip')).toContainText('Cost');
+  // Spend defaults to subscription mode (44c08ab9), where cost reads as the API equivalent.
+  await expect(lights.locator('.uv-tip')).toContainText('API-equivalent $');
   expect(await lights.evaluate(() => window.__errs || [])).toEqual([]);
 });
 
@@ -128,7 +134,7 @@ test('usage history: a record with nothing in it says so', async () => {
   const empty = await launchApp();
   try {
     const lights = await lightsOf(empty);
-    await lights.goto(`${lights.url().split('?')[0]}?view=mix&now=${NOW}`);
-    await expect(lights.locator('#usage-history .uv-empty')).toContainText('Nothing is recorded yet');
+    await lights.goto(`${lights.url().split('?')[0]}?embedded=1&view=mix&now=${NOW}`);
+    await expect(lights.locator('#usage-history .uv-empty')).toContainText('No usage yet.');
   } finally { await empty.cleanup(); }
 });

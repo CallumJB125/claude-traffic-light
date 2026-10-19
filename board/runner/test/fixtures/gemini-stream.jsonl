@@ -1,0 +1,13 @@
+{"type":"init","timestamp":"2026-10-06T10:00:00Z","session_id":"3f2b8c1e-5a4d-4e6f-9b7a-1c2d3e4f5a6b","model":"gemini-2.5-pro"}
+{"type":"message","role":"user","content":"task"}
+{"type":"message","role":"assistant","content":"Looking at ","delta":true}
+{"type":"message","role":"assistant","content":"the repo.","delta":true}
+{"type":"tool_use","tool_name":"run_shell_command","tool_id":"t1","parameters":{"command":"git status --short"}}
+{"type":"tool_result","tool_id":"t1","status":"success","output":" M README.md"}
+{"type":"tool_use","tool_name":"write_file","tool_id":"t2","parameters":{"file_path":"notes.txt","content":"x"}}
+{"type":"tool_result","tool_id":"t2","status":"success"}
+{"type":"tool_use","tool_name":"mcp_board_board_update_status","tool_id":"t3","parameters":{"text":"working"}}
+{"type":"error","severity":"warning","message":"loop detected"}
+{"type":"tool_result","tool_id":"t3","status":"error","error":{"type":"x","message":"denied"}}
+{"type":"message","role":"assistant","content":"Done.","delta":true}
+{"type":"result","status":"success","stats":{"total_tokens":1280,"input_tokens":1200,"output_tokens":80}}

@@ -8,6 +8,7 @@ const os = require('os');
 const path = require('path');
 const Sign = require('../scripts/release-sign.js');
 const V = require('../src/updater/verify.js');
+const { testTempDir } = require('./helpers/tmp');
 
 const stable = crypto.generateKeyPairSync('ed25519');
 const beta = crypto.generateKeyPairSync('ed25519');
@@ -18,7 +19,7 @@ const keys = V.loadKeyring({ stable: [stable.publicKey.export({ type: 'spki', fo
 const sha = (b) => crypto.createHash('sha512').update(b).digest('base64');
 const quiet = { log() {} };
 const run = (argv, e = env, log = quiet) => Sign.main(argv, e, log, keys);
-const tmp = (tag) => fs.mkdtempSync(path.join(os.tmpdir(), `release-sign-${tag}-`));
+const tmp = (tag) => testTempDir(`release-sign-${tag}-`);
 const readSigned = (dir, channel = 'stable') => V.openManifest(fs.readFileSync(path.join(dir, 'release.json')), fs.readFileSync(path.join(dir, 'release.json.sig'), 'utf8'), keys, { channel });
 
 function dist(version = '1.2.0', { feed = 'latest' } = {}) {
@@ -63,6 +64,18 @@ test('build fails without the key, or with a key that is not the one this repo s
   const other = crypto.generateKeyPairSync('ed25519');
   assert.throws(() => run(['build', dir, '--channel', 'stable', '--version', '1.2.0'], { PLEXIFORM_UPDATE_SIGNING_KEY: b64(other) }), /does not match/);
   assert.ok(!fs.existsSync(path.join(dir, 'release.json')));
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('portable download never replaces the NSIS file in the signed legacy update manifest or feed', () => {
+  const dir = dist();
+  const portable = 'Plexiform-1.2.0-win-x64-portable.exe';
+  fs.writeFileSync(path.join(dir, portable), 'Synthetic portable download');
+  const m = Sign.buildManifest({ dir, channel: 'stable', version: '1.2.0', windows: true });
+  assert.equal(m.files.some(f => f.name === portable), false);
+  assert.equal(V.pickFile(m, { platform: 'win32', arch: 'x64', kind: 'nsis' }).name, 'Plexiform-1.2.0-win-x64.exe');
+  assert.ok(Sign.releaseNames(fs.readdirSync(dir), true).includes(portable), 'the manual artifact remains in release checksums/uploads');
+  assert.ok(!Sign.releaseNames(fs.readdirSync(dir), false).includes(portable), 'publication still refuses all Windows artifacts unless enabled');
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

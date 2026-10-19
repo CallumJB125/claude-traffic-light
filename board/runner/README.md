@@ -73,6 +73,9 @@ every `/`-rooted run of two or more segments becomes `<path>`, and it is clipped
 | `policy.js` | Offer decision, advertise set, approval answerer re-check |
 | `app-entry.js` | Desktop-app entry (D37a): config over `parentPort`, ready/status/fatal replies, SIGTERM → park live runs, exit 0 |
 | `presence.js` | Team presence reporter (D37b): cwd → repo, default deny, hashing, redaction, throttle + keepalive |
+| `hosted/index.js` | Cloud runner mode (`cli.js hosted`, buddy-runner.service): config from env, configured repos opted in on welcome, on-demand clone, per-run provider credential, caps (wall clock, tokens, memory watchdog), branch push at the end |
+| `hosted/cgroup.js` | Per-run cgroup v2 child of the delegated service cgroup: cpu.max, pids.max, memory.max (when the kernel has it), exec wrapper, cgroup.kill |
+| `hosted/repo-token.js` | Short-lived GitHub App tokens from `GET /api/runner/v1/repo-token`, memory only; askpass helper; git env and auth-failure retry |
 
 ## Tests
 

@@ -11,6 +11,8 @@ const path = require('path');
 const ROOT = path.join(__dirname, '..');
 
 const FIXED_CONFIG = {
+  // 'auto' holds motion on battery (c54dd6e8); a baseline must not depend on the power cable.
+  lowPower: 'off',
   roam: false,
   randomEvents: false,
   seasonal: false,
@@ -61,8 +63,26 @@ async function launchApp({ extraArgs = [], config = {}, files = {}, env = {} } =
       CLAUDE_TRAFFIC_LIGHT_REMOTE_PORT: String(remotePort),
       CLAUDE_TRAFFIC_LIGHT_PROJECTS: projects,
       CLAUDE_TRAFFIC_LIGHT_BACKUPS: backups,
+      CLAUDE_TRAFFIC_LIGHT_BURST_HOME: home,
+      // A dev run's profile is os.tmpdir()/plexiform-dev-<pid> (main.js), and Tasks puts
+      // per-run sockets at <profile>/tasks/run/<id>/ipc.sock. Under macOS's /var/folders
+      // temp dir that is 103 or 104 bytes depending on the pid; AF_UNIX allows 103.
+      ...(process.platform === 'darwin' ? { TMPDIR: '/tmp' } : {}),
       ...env,
     },
+  });
+  // Pin the main window (a BaseWindow holding the sidebar and page views) to a whole-pixel
+  // origin on the primary display, so embedded pages lay out the same every run.
+  await app.evaluate(({ BaseWindow, BrowserWindow, screen }) => {
+    const pinned = new WeakSet();
+    setInterval(() => {
+      for (const w of BaseWindow.getAllWindows()) {
+        if (pinned.has(w) || w.isDestroyed() || w instanceof BrowserWindow) continue;
+        pinned.add(w);
+        const wa = screen.getPrimaryDisplay().workArea;
+        w.setBounds({ x: Math.round(wa.x), y: Math.round(wa.y), width: 1320, height: 860 });
+      }
+    }, 50);
   });
   const cleanup = async () => {
     try { await app.close(); } catch { /* already gone */ }
@@ -94,4 +114,53 @@ async function windowByFile(app, file, timeout = 15000) {
   throw new Error(`no window for ${file}`);
 }
 
-module.exports = { launchApp, signal, status, windowByFile };
+// Utilities are pages inside the main window now: open it (Help is the
+// widget's route in), pick `id` in the sidebar and return the embedded page.
+// `view` tells apart the lights.html pages (usage is view=mix, stats view=stats).
+async function embedded(app, id, file, { view = null, timeout = 15000 } = {}) {
+  if (!app.windows().some((p) => p.url().split('?')[0].endsWith('/sidebar.html'))) {
+    const widget = await windowByFile(app, 'index.html');
+    await widget.evaluate(() => window.trafficLight.openHelp());
+  }
+  const sidebar = await windowByFile(app, 'sidebar.html');
+  await sidebar.waitForFunction(() => !!window.buddy);
+  await sidebar.evaluate((x) => window.buddy.select(x), id);
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    const w = app.windows().find((p) => {
+      try { const u = new URL(p.url()); return u.pathname.endsWith(`/${file}`) && (!view || u.searchParams.get('view') === view); } catch { return false; }
+    });
+    if (w) { await w.waitForLoadState('load'); return w; }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new Error(`no embedded ${file} for ${id}`);
+}
+
+// Preferences shows one pane at a time (General by default).
+async function openSettingsPane(settings, id) {
+  await settings.locator(`#section-nav button[data-go="${id}"]`).click();
+  await settings.locator(`.pane[data-section="${id}"]`).waitFor({ state: 'visible' });
+}
+
+// An embedded page can sit at a fractional offset, so an element shot comes out
+// 1px taller or shorter run to run. Nudge the element onto whole pixels first.
+async function snapToPixels(locator) {
+  await locator.scrollIntoViewIfNeeded();
+  await locator.evaluate((el) => {
+    el.style.transform = '';
+    const r = el.getBoundingClientRect();
+    el.style.transform = `translate(${Math.round(r.left) - r.left}px, ${Math.round(r.top) - r.top}px)`;
+  });
+  return locator;
+}
+
+// Tasks effects are accepted only from the focused owner window (src/tasks-main.js);
+// when another app is frontmost (a busy desktop) the harness has to bring it forward.
+async function focusMainWindow(app) {
+  await app.evaluate(({ app: a, BaseWindow, BrowserWindow }) => {
+    a.focus({ steal: true });
+    for (const w of BaseWindow.getAllWindows()) if (!w.isDestroyed() && !(w instanceof BrowserWindow) && w.isVisible()) w.focus();
+  });
+}
+
+module.exports = { focusMainWindow, launchApp, signal, status, windowByFile, embedded, openSettingsPane, snapToPixels };

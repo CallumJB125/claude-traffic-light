@@ -15,12 +15,17 @@
 const path = require('path');
 const Brand = require('./brand.js');
 const base = require('./package.json').build;
+const signing = require('./build/signing-policy').policy();
 
 
 const artifact = (ext) => `${Brand.name}-\${version}-\${os}-\${arch}.${ext}`;
 
 module.exports = {
   ...base,
+  forceCodeSigning: signing.required,
+  extraMetadata: { ...base.extraMetadata, plexiformSignedMac: process.platform === 'darwin' && signing.notarize },
+  files: [...base.files, '!board/shared/test-support/**'],
+  asarUnpack: [...base.asarUnpack, 'board/runner/windows-job.js'],
   // The board launcher runs unpacked ESM under Electron's Node mode. ESM
   // package lookup cannot cross back into app.asar for SDK transitives, so
   // the entire shipped production dependency closure must stay beside it.
@@ -36,7 +41,8 @@ module.exports = {
     // skips the custom sign hook (build/sign.js) when it finds no identity,
     // which would leave only the linker's signature and the calendar helper
     // without its narrow entitlements; 25 called the hook regardless.
-    identity: process.env.CSC_LINK || process.env.CSC_NAME ? undefined : '-',
+    identity: signing.macIdentity ? undefined : '-',
+    notarize: signing.notarize,
     // The zip is what latest-mac.yml points at; the DMG is what people download.
     target: [
       { target: 'dmg', arch: ['arm64', 'x64'] },
@@ -47,9 +53,17 @@ module.exports = {
 
   win: {
     ...base.win,
-    // NSIS only: a portable .exe cannot update itself.
-    target: [{ target: 'nsis', arch: ['x64'] }],
+    extraResources: [...(base.win?.extraResources ?? []), { from: 'native/bin/windows-private-directory.exe', to: 'native/windows-private-directory.exe' }, { from: 'native/bin/windows-local-transport.exe', to: 'native/windows-local-transport.exe' }, { from: 'native/bin/windows-process-job.exe', to: 'native/windows-process-job.exe' }],
+    // The installed copy updates through NSIS. The portable copy is a separate
+    // manual download and cannot replace itself through electron-updater.
+    target: [{ target: 'nsis', arch: ['x64'] }, { target: 'portable', arch: ['x64'] }],
     icon: 'assets/icon.ico',
+  },
+  portable: {
+    artifactName: `${Brand.name}-\${version}-win-\${arch}-portable.exe`,
+    // In locked builder 26.16.1, true uses a separate NSIS plugin directory
+    // per launch: a hook can start the launcher while its GUI is still open.
+    unpackDirName: true,
   },
   nsis: {
     ...base.nsis,

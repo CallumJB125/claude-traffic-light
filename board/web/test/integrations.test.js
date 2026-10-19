@@ -139,38 +139,50 @@ test('local hub (no accounts): a plain note says where to connect, and no connec
   const v = integrationsScreen(m({ local: true, manifest: { provider: 'github', action: 'https://github.com/settings/apps/new?state=s', fields: { manifest: '{}' } } }));
   const note = findAll(v, (n) => n.props?.class === 'integ-local muted');
   assert.equal(note.length, 1);
-  assert.equal(textOf(note[0]), 'Integrations live on a team hub. Open Team in the sidebar to sign in, then create a team or join one.');
+  assert.equal(textOf(note[0]), 'Integrations live on a team. Open Team in the app’s sidebar to sign in, then create a team or join one.');
   assert.equal(note[0].tag, 'p');
   assert.equal(byAttr(v, 'data-action', 'integ-connect').length, 0);
   assert.equal(findAll(v, (n) => n.tag === 'form').length, 0);
-  assert.equal(findAll(v, (n) => n.tag === 'a').length, 0, 'text only');
+  assert.equal(findAll(v, (n) => n.tag === 'a').length, 0, 'no links');
   const team = integrationsScreen(m());
   assert.equal(findAll(team, (n) => n.props?.class === 'integ-local muted').length, 0, 'a team hub shows no note');
   assert.equal(byAttr(team, 'data-action', 'integ-connect').length, 1);
 });
 
-test('local hub: a grid of the six tools with a one-line value and a status in words; only GitHub is "Available after you join a team"', () => {
+test('local hub: a grid of the tools with a one-line value and a status in words; GitHub, Slack and Sentry are "Available after you join a team"', () => {
   const v = integrationsScreen(m({ local: true }));
   const cards = findAll(v, (n) => n.props?.['data-connector']);
-  assert.deepEqual(cards.map((c) => c.props['data-connector']), ['github', 'slack', 'sentry', 'linear', 'jira', 'google']);
+  assert.deepEqual(cards.map((c) => c.props['data-connector']), ['github', 'slack', 'sentry', 'linear', 'jira']);
   const status = (id) => textOf(findAll(cards.find((c) => c.props['data-connector'] === id), (n) => n.props?.class === 'integ-status small')[0]);
-  assert.equal(status('github'), 'Available after you join a team');
-  for (const id of ['slack', 'sentry', 'linear', 'jira', 'google']) assert.equal(status(id), 'Coming soon', id);
+  for (const id of ['github', 'slack', 'sentry']) assert.equal(status(id), 'Available after you join a team', id);
+  for (const id of ['linear', 'jira']) assert.equal(status(id), 'Coming soon', id);
   assert.match(textOf(cards[0]), /Cards update when pull requests merge/);
-  assert.deepEqual(findAll(byAttr(v, 'data-grid', 'local-connectors')[0], (n) => n.tag === 'h3').map(textOf), ['GitHub', 'Slack', 'Sentry', 'Linear', 'Jira', 'Google'], 'tool names are headings');
+  assert.deepEqual(findAll(byAttr(v, 'data-grid', 'local-connectors')[0], (n) => n.tag === 'h3').map(textOf), ['GitHub', 'Slack', 'Sentry', 'Linear', 'Jira'], 'tool names are headings');
   assert.equal(byAttr(integrationsScreen(m()), 'data-grid', 'local-connectors').length, 0, 'a team hub shows no local grid');
+});
+
+test('local hub in the app: a Sign in or create a team button opens the Team page; in a browser the text says where Team is', () => {
+  const inApp = integrationsScreen(m({ local: true, openTeam: true }));
+  const [b] = byAttr(inApp, 'data-action', 'open-team');
+  assert.equal(textOf(b), 'Sign in or create a team');
+  assert.equal(b.tag, 'button');
+  assert.doesNotMatch(textOf(inApp), /sidebar/);
+  const browser = integrationsScreen(m({ local: true }));
+  assert.equal(byAttr(browser, 'data-action', 'open-team').length, 0);
+  assert.match(textOf(browser), /Open Team in the app’s sidebar to sign in/);
+  assert.equal(byAttr(integrationsScreen(m({ openTeam: true })), 'data-action', 'open-team').length, 0, 'a team hub has no button');
 });
 
 test('the web list of tools: only the launch connectors are available', async () => {
   const { LAUNCH_CONNECTORS, connectorStatus } = await import('../js/connectors.js');
-  assert.deepEqual([...LAUNCH_CONNECTORS], ['github']);
-  assert.deepEqual(['github', 'slack', 'sentry', 'linear', 'jira', 'google', 'x'].map(connectorStatus), ['available', 'soon', 'soon', 'soon', 'soon', 'soon', 'soon']);
+  assert.deepEqual([...LAUNCH_CONNECTORS], ['github', 'slack', 'sentry']);
+  assert.deepEqual(['github', 'slack', 'sentry', 'linear', 'jira', 'x'].map(connectorStatus), ['available', 'available', 'available', 'soon', 'soon', 'soon']);
 });
 
 test('the app tells the Integrations page it is on the local hub from /api/health’s auth', async () => {
   const { readFileSync } = await import('node:fs');
   const src = readFileSync(new URL('../js/app.js', import.meta.url), 'utf8');
-  assert.match(src, /integrations: state\.view === 'integrations' \? \{ \.\.\.state\.integ, nowMs: Date\.now\(\), local: state\.authMode === 'local' \} : null,/);
+  assert.match(src, /integrations: state\.view === 'integrations' \? \{ \.\.\.state\.integ, nowMs: Date\.now\(\), local: state\.authMode === 'local', openTeam: canOpenTeam\(\) \} : null,/);
   assert.match(src, /state\.authMode = \(await api\.health\(\)\)\.auth/);
 });
 
@@ -339,3 +351,100 @@ test('start input: the typed org leaves the form at once and never enters state 
   assert.match(app, /manifest: \{ provider, \.\.\.res\.form, target: connectWindowTarget\(provider, res\.bind, navigator\.userAgent\) \}/);
   assert.match(api, /startConnect: \(provider, input\) => mut\('POST', `\/api\/integrations\/\$\{enc\(provider\)\}\/start`, input && Object\.keys\(input\)\.length \? \{ input \} : undefined\),/);
 });
+
+// ── Sentry slice S-A: the webhook URL (G1) and the secret note ────────────
+
+const sentry = { id: 'sentry', name: 'Sentry', scopes: ['event:read'], connect: 'token', shows_webhook_url: true, actions: { 'sentry.card': { default: 'auto' }, 'sentry.notice': { default: 'auto' }, 'sentry.suppressed': { default: 'auto' } } };
+const sentryConn = (over = {}) => ({ id: 's1', provider: 'sentry', display_name: 'Sentry', status: 'active', health: null, settings: { autonomy: {} }, ...over });
+const URL_S1 = 'https://hub.example/integrations/s1/webhook';
+
+test('Sentry: admins see the connection\'s webhook URL as plain text with a Copy button; members never do', () => {
+  const v = integrationsScreen(m({ data: { available: [sentry], connections: [sentryConn({ webhook_url: URL_S1 })], vault: true } }));
+  const t = textOf(v);
+  assert.match(t, /Paste this URL into Sentry as the integration's Webhook URL/);
+  assert.ok(t.includes(URL_S1));
+  const [copy] = byAttr(v, 'data-action', 'integ-copy-url');
+  assert.equal(copy.tag, 'button');
+  assert.equal(copy.props['data-url'], URL_S1);
+  assert.equal(findAll(v, (n) => n.tag === 'a' && String(n.props?.href ?? '').includes('/webhook')).length, 0, 'text, not a link');
+  // A member's list has no webhook_url; even if one slipped in, it is not shown to them.
+  const mv = integrationsScreen(m({ data: { available: [sentry], connections: [sentryConn({ webhook_url: URL_S1 })], vault: true } }, 'member'));
+  assert.ok(!textOf(mv).includes(URL_S1));
+  assert.equal(byAttr(mv, 'data-action', 'integ-copy-url').length, 0);
+  // No public URL on the hub: says how to get one, no button.
+  const nv = integrationsScreen(m({ data: { available: [sentry], connections: [sentryConn({ webhook_url: null })], vault: true } }));
+  assert.match(textOf(nv), /Ask its administrator to configure one before connecting webhooks/);
+  assert.equal(byAttr(nv, 'data-action', 'integ-copy-url').length, 0);
+  // A connector without it shows nothing of the kind.
+  assert.equal(byAttr(integrationsScreen(m()), 'data-action', 'integ-copy-url').length, 0);
+});
+
+test('Sentry: the token form says the secret is never shown again and to rotate it in Sentry before reconnecting', () => {
+  const v = integrationsScreen(m({ tokenFor: 'sentry', data: { available: [sentry], connections: [], vault: true } }));
+  const [form] = byAttr(v, 'data-form', 'integ-token');
+  const t = textOf(form);
+  assert.match(t, /Sentry client secret/);
+  assert.match(t, /Plexiform stores this secret encrypted and never displays it again\./);
+  assert.match(t, /Rotate the secret in Sentry before reconnecting so old signed requests cannot be reused\./);
+  assert.equal(findAll(form, (n) => n.tag === 'input')[0].props.type, 'password');
+  // The fake token connector keeps its plain form.
+  assert.doesNotMatch(textOf(integrationsScreen(m({ tokenFor: 'fake' }))), /never shows it again/);
+});
+
+test('Sentry: its actions have plain names, and the copy button writes only the URL from the button', async () => {
+  assert.equal(actionLabel('sentry.card'), 'Create cards from new Sentry issues');
+  assert.equal(actionLabel('sentry.notice'), 'Comment when new issues exceed the card limit');
+  assert.equal(actionLabel('sentry.suppressed'), 'Record issues that were not turned into cards');
+  const { readFileSync } = await import('node:fs');
+  const app = readFileSync(new URL('../js/app.js', import.meta.url), 'utf8');
+  assert.match(app, /case 'integ-copy-url': copyText\(el\.dataset\.url\); return;/);
+});
+
+test('step 4: with the hub\'s own GitHub App, admins install it (always another installation to add) and choose an installation\'s repositories', () => {
+  const app = [{ ...available[0], app: true, scopes: ['pull_requests:write', 'metadata:read'] }, available[1]];
+  const inst = { ...conn, id: 'c2', health: { ok: true }, settings: { autonomy: {}, provider: { mode: 'app', installation_id: 7, login: 'acme', account_type: 'Organization' } } };
+  const v = integrationsScreen(m({ data: { available: app, connections: [inst], vault: true }, repos: { c2: [{ id: 1, full_name: 'acme/app', private: true, linked: true }, { id: 2, full_name: 'acme/site', private: false, linked: false }] } }));
+  const t = textOf(v);
+  assert.deepEqual(byAttr(v, 'data-action', 'integ-install').map((b) => b.props['data-provider']), ['github'], 'still offered while one is connected');
+  assert.match(t, /Installed on the GitHub organization acme/);
+  const links = byAttr(v, 'data-action', 'integ-repo-link');
+  assert.deepEqual(links.map((b) => [b.props['data-repo'], b.props['data-link'], textOf(b)]), [['1', '0', 'Unlink'], ['2', '1', 'Link']]);
+  const member = integrationsScreen(m({ data: { available: app, connections: [{ ...inst, settings: { autonomy: {} } }], vault: true } }, 'member'));
+  assert.equal(byAttr(member, 'data-action', 'integ-install').length, 0);
+  assert.equal(byAttr(member, 'data-action', 'integ-repos').length, 0);
+});
+
+// ── Linear and Jira: the intake panel, the secret label and action names ──
+
+for (const [id, name, where] of [['linear', 'Linear', /Settings → API → Webhooks/], ['jira', 'Jira', /Settings → System → WebHooks/]]) {
+  const avail = { id, name, scopes: [], connect: 'token', shows_webhook_url: true, actions: { [`${id}.card`]: { default: 'auto' }, [`${id}.status`]: { default: 'auto' } } };
+  const c = (over = {}) => ({ id: `${id}1`, provider: id, display_name: name, status: 'active', health: null, settings: { autonomy: {} }, target_board_id: 'b1', webhook_url: `https://hub.example/integrations/${id}1/webhook`, ...over });
+  const boards = [{ id: 'b1', name: 'Main' }, { id: 'b2', name: 'Old', archived_at: '2026-01-01T00:00:00Z' }];
+  const screen = (conn, role = 'owner') => { const x = m({ data: { available: [avail], connections: [conn], vault: true } }, role); return integrationsScreen({ ...x, boards }); };
+
+  test(`${name}: admins see the intake rule, setup hint and webhook URL; no AI start is promised`, () => {
+    const v = screen(c());
+    const [panel] = findAll(v, (n) => n.props?.['aria-label'] === `${name} intake`);
+    const t = textOf(panel);
+    assert.match(t, new RegExp(`New and updated ${name} issues become Todo cards, one per issue\\.`));
+    assert.match(t, /they never move it or start an AI/);
+    assert.match(t, where);
+    assert.doesNotMatch(t, /paused/);
+    assert.match(textOf(v), new RegExp(`Paste this URL into ${name}`));
+    assert.match(textOf(v), new RegExp(`Create cards from new and updated ${name} issues`));
+    assert.equal(actionLabel(`${id}.status`), `Comment when a ${name} issue changes status`);
+  });
+
+  test(`${name}: an archived or missing board says intake is paused; members get no setup hint`, () => {
+    assert.match(textOf(screen(c({ target_board_id: 'b2' }))), /New intake is paused until you choose an active board above\./);
+    const mv = screen(c({ target_board_id: null }), 'member');
+    const [panel] = findAll(mv, (n) => n.props?.['aria-label'] === `${name} intake`);
+    assert.match(textOf(panel), /paused until an admin chooses an active board/);
+    assert.doesNotMatch(textOf(panel), where);
+  });
+
+  test(`${name}: the token form asks for the webhook signing secret`, () => {
+    const v = integrationsScreen(m({ tokenFor: id, data: { available: [avail], connections: [], vault: true } }));
+    assert.match(textOf(byAttr(v, 'data-form', 'integ-token')[0]), new RegExp(`${name} webhook signing secret`));
+  });
+}

@@ -43,7 +43,7 @@ export class Enrolments {
   }
 
   active(userDeviceId, orgId) {
-    return this.db.get('SELECT * FROM runner_enrollments WHERE user_device_id = ? AND org_id = ? AND revoked_at IS NULL', userDeviceId, orgId);
+    return this.db.get('SELECT * FROM runner_enrollments WHERE user_device_id = ? AND org_id = ? AND revoked_at IS NULL AND hosted = 0', userDeviceId, orgId);
   }
 
   /**
@@ -122,8 +122,8 @@ export class Enrolments {
     return {
       enrolments: rows.map((e) => ({
         id: e.id, user: { id: e.user_id, display_name: e.display_name }, name: e.name, created_at: e.created_at, last_seen_at: e.last_seen_at,
-        revoked_at: e.revoked_at, online: !e.revoked_at && this.hub.runners.get(e.device_id)?.enrollmentId === e.id,
-        current: ident?.cred.kind === 'device' && ident.cred.id === e.user_device_id && !e.revoked_at,
+        revoked_at: e.revoked_at, online: !e.revoked_at && this.hub.runners.get(e.device_id)?.enrollmentId === e.id, hosted: e.hosted === 1,
+        current: ident?.cred.kind === 'device' && ident.cred.id === e.user_device_id && !e.revoked_at && e.hosted !== 1,
       })),
     };
   }
@@ -152,8 +152,10 @@ export class Enrolments {
     const epoch = this.accounts.epoch();
     if (!e) return { close: WS_CLOSE.REVOKED, reason: 'runner revoked' };
     // The install signed out (which also revokes its enrolments), the account went, or a restore: 4401.
-    const ud = this.db.get('SELECT revoked_at, token_hash, session_epoch FROM user_devices WHERE id = ?', e.user_device_id);
-    if (!ud || ud.revoked_at || !ud.token_hash || ud.session_epoch !== epoch || e.session_epoch !== epoch || !this.accounts.liveUser(e.user_id)) {
+    // A hosted runner outlives the install that created it (a closed or signed-out laptop).
+    const ud = e.hosted === 1 ? null : this.db.get('SELECT revoked_at, token_hash, session_epoch FROM user_devices WHERE id = ?', e.user_device_id);
+    const installGone = e.hosted !== 1 && (!ud || ud.revoked_at || !ud.token_hash || ud.session_epoch !== epoch);
+    if (installGone || e.session_epoch !== epoch || !this.accounts.liveUser(e.user_id)) {
       return { close: WS_CLOSE.UNAUTHENTICATED, reason: 'signed out' };
     }
     if (e.revoked_at || !e.token_hash) return { close: WS_CLOSE.REVOKED, reason: 'runner revoked' };
@@ -192,6 +194,6 @@ export class Enrolments {
 
   /** Signing an install out (or revoking it) ends its runner enrolments too, inside the caller's transaction. */
   revokeForUserDevice(userDeviceId, reason) {
-    this.db.run("UPDATE runner_enrollments SET revoked_at = ?, revoked_reason = ?, token_hash = NULL WHERE user_device_id = ? AND revoked_at IS NULL", this.hub.iso(), reason, userDeviceId);
+    this.db.run("UPDATE runner_enrollments SET revoked_at = ?, revoked_reason = ?, token_hash = NULL WHERE user_device_id = ? AND revoked_at IS NULL AND hosted = 0", this.hub.iso(), reason, userDeviceId);
   }
 }

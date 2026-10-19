@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('trafficLight', {
   openClaude: () => ipcRenderer.invoke('open-claude'),
   goToNeedingSession: () => ipcRenderer.invoke('go-to-needing-session'),
+  getSessionCards: () => ipcRenderer.invoke('widget:session-cards'), pinSession: (id) => ipcRenderer.invoke('widget:pin-session', typeof id === 'string' ? id : null),
   getAggregateStatus: () => ipcRenderer.invoke('get-aggregate-status'),
   cursorInWindow: () => ipcRenderer.invoke('cursor-in-window'),
   getWindowPosition: () => ipcRenderer.invoke('get-window-position'),
@@ -14,7 +15,11 @@ contextBridge.exposeInMainWorld('trafficLight', {
   onSway: (cb) => ipcRenderer.on('sway', (e, degPerSec) => cb(degPerSec)),
   onLean: (cb) => ipcRenderer.on('lean', (e, vx) => cb(vx)),
   onEyes: (cb) => ipcRenderer.on('eyes', (e, x, y) => cb(x, y)),
+  getLowPower: () => ipcRenderer.invoke('get-low-power'),
+  onLowPower: (cb) => ipcRenderer.on('low-power', (e, on) => cb(on)),
   onMotionPaused: (cb) => ipcRenderer.on('motion-paused', (e, paused) => cb(paused)),
+  // Chromium's own online/offline events; main only re-checks on a slow timer otherwise.
+  netChanged: () => ipcRenderer.send('net-changed'),
   setReducedMotion: (on) => ipcRenderer.send('reduced-motion', on),
   setClickThrough: (ignore) => ipcRenderer.send('set-click-through', ignore),
   // Linux only: main reports the cursor while clicks pass through (src/click-through.js).
@@ -28,8 +33,11 @@ contextBridge.exposeInMainWorld('trafficLight', {
   onAim: (cb) => ipcRenderer.on('aim', (e, a) => cb(a)),
   onEvent: (cb) => ipcRenderer.on('event', (e, name) => cb(name)),
   onSoundFlash: (cb) => ipcRenderer.on('sound-flash', () => cb()),
+  onLaneEvent: (cb) => ipcRenderer.on('widget:lane-event', (e, ev) => cb(ev)), onRings: (cb) => ipcRenderer.on('widget:rings', (e, r) => cb(r)), laneState: () => ipcRenderer.invoke('widget:lane-state'),
   // PendingInput (docs/waiting-inputs.md): answer by option id; open = jump to its terminal.
   answerInput: (id, optionId, more) => ipcRenderer.invoke('answer-input', id, optionId, more),
+  explainStatus: () => ipcRenderer.invoke('explain:status'),
+  explainInput: (id) => (typeof id === 'string' && id.length <= 100 ? ipcRenderer.invoke('explain:input', id) : Promise.resolve({ ok: false })),
   openInput: (id) => ipcRenderer.invoke('open-input', id),
   copyInputCommand: (id) => ipcRenderer.invoke('copy-input-command', id),
   // The bubble's height: main grows the window by it so Claude keeps his size.
@@ -51,6 +59,7 @@ contextBridge.exposeInMainWorld('trafficLight', {
   updaterInstall: (when) => ipcRenderer.invoke('updater:install', { when: when === 'now' ? 'now' : 'idle' }),
   openUpdates: () => ipcRenderer.invoke('open-updates'),
   updateRowShown: (on) => ipcRenderer.send('update-row', !!on),
+  openMail: () => ipcRenderer.invoke('open-mail'),
   awayOpen: (i) => ipcRenderer.invoke('away-open', i),
   awayDismiss: () => ipcRenderer.invoke('away-dismiss'),
   // Budget notice: the widget names a run and an action; main builds the fragment.
@@ -59,10 +68,14 @@ contextBridge.exposeInMainWorld('trafficLight', {
   // listening / thinking / talking / idle / error back for the mic badge and the mouth.
   teamHint: () => ipcRenderer.invoke('team-hint'),
   teamHintDone: (open) => ipcRenderer.invoke('team-hint-done', open === true),
+  burstChip: () => ipcRenderer.invoke('burst:chip'),
   voiceEnabled: () => ipcRenderer.invoke('voice-enabled'),
   voiceStart: () => ipcRenderer.invoke('voice-start'),
   voiceStop: () => ipcRenderer.invoke('voice-stop'),
   onVoice: (cb) => ipcRenderer.on('voice-state', (e, st) => cb(st)),
+  // Agent mode: Start or Cancel on the spoken task offer, by its id only.
+  voiceOffer: (id, action) => ipcRenderer.invoke('voice-offer', String(id), action === 'start' ? 'start' : 'cancel'),
+  polish: { state: () => ipcRenderer.invoke('widget-polish:state'), snap: () => ipcRenderer.invoke('widget-polish:snap') },
 });
 
 // User characters: the list main has validated, and a nudge when it changes.
@@ -70,3 +83,7 @@ contextBridge.exposeInMainWorld('userCharacters', {
   list: () => ipcRenderer.invoke('characters:list'),
   onChange: (cb) => ipcRenderer.on('characters:changed', () => cb()),
 });
+contextBridge.exposeInMainWorld('spritePacks', { list: () => ipcRenderer.invoke('widget:sprite-packs'), use: (name) => ipcRenderer.invoke('widget:use-sprite-pack', name), onChange: (cb) => ipcRenderer.on('sprite-pack:changed', () => cb()) });
+
+// First-run tour (src/first-run-tour-main.js): main pushes the step; the page answers Next / Skip / missing.
+contextBridge.exposeInMainWorld('tourApi', { onStep: (cb) => ipcRenderer.on('tour:step', (e, step) => cb(step)), action: (kind, id) => ipcRenderer.invoke('tour:action', String(kind), String(id)) });

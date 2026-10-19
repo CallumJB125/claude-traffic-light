@@ -1,7 +1,7 @@
 // Per-run local IPC server (CONTRACT §7.2): unix socket in the 0700 run dir,
 // socket 0600, NDJSON ≤ 1 MiB/line, every request carries the run token
 // (constant-time compare; mismatch → BAD_RUN_TOKEN and the connection closes).
-import net from 'node:net'; // privacy-flow: local-board-sockets
+import net from '../shared/local-sockets.cjs'; // protected Windows local transport; POSIX Unix sockets
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { validate } from '../shared/protocol.js';
@@ -20,8 +20,8 @@ export function tokenEquals(a, b) {
  * each returns a result (or throws {code, message}). ctx = {connId, reqId}.
  */
 export function startIpcServer({ socketPath, token, handler, log }) {
-  if (Buffer.byteLength(socketPath) > 103) throw new Error(`socket path too long for AF_UNIX: ${socketPath}`);
-  try { fs.unlinkSync(socketPath); } catch { /* none */ }
+  if (process.platform !== 'win32' && Buffer.byteLength(socketPath) > 103) throw new Error(`socket path too long for AF_UNIX: ${socketPath}`);
+  try { if (process.platform !== 'win32') fs.unlinkSync(socketPath); } catch { /* none */ }
   let connSeq = 0;
   const conns = new Set();
   const server = net.createServer((sock) => {
@@ -84,12 +84,12 @@ export function startIpcServer({ socketPath, token, handler, log }) {
   return new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(socketPath, () => {
-      try { fs.chmodSync(socketPath, 0o600); } catch { /* raced close */ }
+      try { if (process.platform !== 'win32') fs.chmodSync(socketPath, 0o600); } catch { /* raced close */ }
       resolve({
         server,
         close: () => new Promise((r) => {
           for (const c of conns) c.destroy();
-          server.close(() => { try { fs.unlinkSync(socketPath); } catch { /* gone */ } r(); });
+          server.close(() => { try { if (process.platform !== 'win32') fs.unlinkSync(socketPath); } catch { /* gone */ } r(); });
         }),
       });
     });

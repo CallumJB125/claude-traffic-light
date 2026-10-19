@@ -8,7 +8,7 @@ const readline = require('readline');
 const FRIENDLY = {
   'speech-denied': 'Speech recognition is off for Plexiform. Turn it on in System Settings, Privacy and Security, Speech Recognition.',
   'mic-denied': 'The microphone is off for Plexiform. Turn it on in System Settings, Privacy and Security, Microphone.',
-  'hold-unsupported': "Buddy can't tell when that key is let go. Pick another key in Preferences, or press and hold the widget instead.",
+  'hold-unsupported': "Plexiform can't tell when that key is let go. Pick another key in Preferences, or press and hold the widget instead.",
 };
 const friendly = (e) => FRIENDLY[e] || String(e || 'Listening failed.');
 
@@ -116,7 +116,9 @@ function createFlow({ reply, speak, send, speakable = (t) => t }) {
 // ── Free-form: the user's own `claude`, isolated ─────────────────────────────
 // A fresh empty folder as cwd (removed afterwards) so no project CLAUDE.md or
 // memory applies, an allowlisted env, the question on stdin, never in argv.
-function askClaude({ spawn, fs, tmpdir, args, env, prompt, timeoutMs = 30000, setTimer = setTimeout, clearTimer = clearTimeout }) {
+// A screen question (src/voice-capture-main.js) passes its own args, which
+// allow Read on the one screenshot file, and room for its POINT tags.
+function askClaude({ spawn, fs, tmpdir, args, env, prompt, timeoutMs = 30000, maxChars = 400, setTimer = setTimeout, clearTimer = clearTimeout }) {
   let child = null;
   let dir = null;
   let settled = false;
@@ -138,7 +140,7 @@ function askClaude({ spawn, fs, tmpdir, args, env, prompt, timeoutMs = 30000, se
   let out = '';
   child.stdout.on('data', (d) => { if (out.length < 256 * 1024) out += d; });
   child.on('error', () => done(null));
-  child.on('close', (code) => done(code === 0 ? String(out).trim().slice(0, 400) || null : null));
+  child.on('close', (code) => done(code === 0 ? String(out).trim().slice(0, maxChars) || null : null));
   child.stdin.on('error', () => {});
   child.stdin.end(prompt);
   return { promise, cancel };

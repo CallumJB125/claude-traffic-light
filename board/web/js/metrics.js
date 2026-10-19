@@ -7,6 +7,7 @@
 // whole journal. windowMetrics reads the histories (once a minute or on new
 // rows); cardMetrics joins them with the live cards (on every card change).
 import { STATES } from '../../shared/states.js';
+import { hasLiveCapture } from './view.js';
 
 export const HOUR = 3_600_000;
 export const DAY = 24 * HOUR;
@@ -260,6 +261,13 @@ const top = (list, n = 5) => list.slice().sort((a, b) => b.value - a.value || co
 
 /** Join the window metrics with the live cards (aged CardViews): cheap, run on every card change. */
 export function cardMetrics(win, fold, cards) {
+  // A card an AI is still working on is not finished, whatever its column says.
+  const unfinished = cards.filter((v) => hasLiveCapture(v) && fold.cards.get(v.id)?.done_at != null).map((v) => v.id);
+  if (unfinished.length) {
+    const hist = new Map(fold.cards);
+    for (const id of unfinished) hist.set(id, { ...hist.get(id), done_at: null, done_by: null });
+    win = windowMetrics({ ...fold, cards: hist }, win.now, { windowMs: win.window_ms, weeks: win.throughput.weeks.length });
+  }
   const cardsById = new Map(cards.map((v) => [v.id, v]));
   const ref = (id) => cardRef(id, cardsById, fold.cards.get(id));
   // The hub sends budget: null for a card with no cap, spend included, so

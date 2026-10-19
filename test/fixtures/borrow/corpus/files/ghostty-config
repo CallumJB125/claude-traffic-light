@@ -1,0 +1,11 @@
+font-family = JetBrains Mono
+font-size = 14
+theme = catppuccin-mocha
+window-padding-x = 8
+macos-option-as-alt = true
+command = /opt/homebrew/bin/fish
+working-directory = @@HOME@@/dev
+keybind = cmd+d=new_split:right
+title = @@USER@@@@@HOSTSHORT@@
+env = OPENAI_API_KEY=@@SEED:openai_key@@
+env = GITHUB_TOKEN=@@SEED:github_pat@@

@@ -64,7 +64,7 @@ try {
   await page.keyboard.press('Escape');
   await settle(page);
 
-  // 5. Give to Claude with an overlap warning (BDL-150 names applications.js, which BDL-142 is editing)
+  // 5. Tackle with AI with an overlap warning (BDL-150 names applications.js, which BDL-142 is editing)
   await page.locator('[data-card-id="c-150"] [data-action="give_to_claude"]').click();
   await page.locator('.callout-warn').waitFor();
   await settle(page);

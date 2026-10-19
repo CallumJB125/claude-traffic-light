@@ -18,6 +18,9 @@ test('offer for a repo whose checkout does not scope (remote not on the allowlis
   const sup = await startRunner({ hub, home: path.join(root, 'home'), repo, scenario: { steps: [{ result: 'success' }] } });
   try {
     // The advertise already carries nothing about it beyond the allowlist match (it is opted in by id only).
+    // The runner sends advertise + hb as it connects; on a loaded machine the
+    // hub reads them after `connected` is true, so wait for them before counting.
+    await waitFor(() => hub.frames.some((f) => f.type === 'advertise') && hub.frames.some((f) => f.type === 'hb'), { what: 'connect frames at the hub' });
     const rawBefore = hub.raw.length;
     const bytesBefore = hub.bytes;
     const obBefore = outboxBytes(sup);

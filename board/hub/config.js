@@ -2,8 +2,12 @@
 // hub/README.md; keep the two in sync.
 
 import { isIP } from 'node:net'; // privacy-flow: local-board-sockets
+import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { githubAppConfig } from './integrations/github/app.js';
 import { fileURLToPath } from 'node:url';
+import { parseStorageMax, validateStorageMax } from './storage-watch.js';
+import { r2Config } from './sync-store.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -32,6 +36,7 @@ export function loadConfig(env = process.env) {
     port: int(env.BOARD_PORT, 8787),
     dataDir,
     dbPath: env.BOARD_DB ? resolve(env.BOARD_DB) : join(dataDir, 'board.db'),
+    dbSizeMaxMb: parseStorageMax(env.DB_SIZE_MAX_MB),
     auth,
     accessTeam: env.BOARD_ACCESS_TEAM || null,
     accessAud: env.BOARD_ACCESS_AUD || null,
@@ -45,7 +50,12 @@ export function loadConfig(env = process.env) {
     sesFromFormat: env.BOARD_SES_FROM_FORMAT || null,
     downloadUrl: env.BOARD_DOWNLOAD_URL || null,
     consoleMailer: flag(env.BOARD_CONSOLE_MAILER),
+    // Email one-time-code sign-in is off unless asked for: a mailer configured for invites never turns it on.
+    emailSignin: flag(env.BOARD_EMAIL_SIGNIN),
     signinMethods: (env.BOARD_SIGNIN_METHODS || '').split(',').map((s) => s.trim()).filter(Boolean),
+    // The connectors offered besides GitHub (integrations/index.js). Unset: slack and sentry. Linear and
+    // jira join only after their runbook check; unknown ids are ignored.
+    connectors: [...new Set((env.BOARD_CONNECTORS ?? 'slack,sentry').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean))],
     signup: env.BOARD_SIGNUP || null,
     googleClientId: env.BOARD_GOOGLE_CLIENT_ID || null,
     googleClientSecret: env.BOARD_GOOGLE_CLIENT_SECRET || null,
@@ -53,6 +63,8 @@ export function loadConfig(env = process.env) {
     githubClientSecret: env.BOARD_GITHUB_CLIENT_SECRET || null,
     googleWebClientId: env.BOARD_GOOGLE_WEB_CLIENT_ID || null,
     githubWebClientId: env.BOARD_GITHUB_WEB_CLIENT_ID || null,
+    // Cloudflare Turnstile on new email-code accounts: off unless both the site key and BOARD_TURNSTILE_SECRET are set.
+    turnstileSiteKey: env.BOARD_TURNSTILE_SITE_KEY || null,
     accountsDev: flag(env.BOARD_ACCOUNTS_DEV),
     authFailBudget: int(env.BOARD_AUTH_FAIL_BUDGET, 20),
     mailDailyCap: int(env.BOARD_MAIL_DAILY_CAP, 2000),
@@ -73,18 +85,41 @@ export function loadConfig(env = process.env) {
     logLevel: env.BOARD_LOG_LEVEL || 'info',
     shutdownGraceMs: int(env.BOARD_SHUTDOWN_GRACE_MS, 5_000),
     ...(env.BOARD_WEBHOOK_READ_MS ? { webhookReads: { deadlineMs: int(env.BOARD_WEBHOOK_READ_MS, 3_000) } } : {}),
+    // Paid plans (board/hub/billing/): off unless a provider is named; price ids are public, the keys below are hidden.
+    billingProvider: env.BOARD_BILLING_PROVIDER || null,
+    billingPrices: {
+      'plus:month': env.BOARD_BILLING_PRICE_PLUS_MONTH || null, 'plus:year': env.BOARD_BILLING_PRICE_PLUS_YEAR || null,
+      'team:month': env.BOARD_BILLING_PRICE_TEAM_MONTH || null, 'team:year': env.BOARD_BILLING_PRICE_TEAM_YEAR || null,
+    },
+    phoneOrigin: env.BOARD_PHONE_ORIGIN || null,
+    crashReports: env.BOARD_CRASH_REPORTS === '1',
+    entitlementKeyFile: env.BOARD_ENTITLEMENT_KEY_FILE ? resolve(env.BOARD_ENTITLEMENT_KEY_FILE) : null,
+    // Phone push (board/hub/push.js): off unless the operator sets a VAPID key pair (docs/PHONE-RUNBOOK.md).
+    pushVapidPublicKey: env.BOARD_PUSH_VAPID_PUBLIC_KEY || null,
+    pushVapidSubject: env.BOARD_PUSH_VAPID_SUBJECT || null,
+    // Encrypted sync (sync.js): off unless an R2 bucket is named; the object keys below are hidden.
+    syncR2Endpoint: env.BOARD_SYNC_R2_ENDPOINT || null,
+    syncR2Bucket: env.BOARD_SYNC_R2_BUCKET || null,
   };
   // Non-enumerable, so JSON.stringify, util.inspect and spreads of the config never carry them.
   const hidden = (value) => ({ value, enumerable: false, writable: false, configurable: false });
   Object.defineProperties(cfg, {
     googleWebClientSecret: hidden(env.BOARD_GOOGLE_WEB_CLIENT_SECRET || null),
     githubWebClientSecret: hidden(env.BOARD_GITHUB_WEB_CLIENT_SECRET || null),
+    turnstileSecret: hidden(env.BOARD_TURNSTILE_SECRET || null),
     sesAccessKeyId: hidden(env.BOARD_SES_ACCESS_KEY_ID || null),
     sesSecretAccessKey: hidden(env.BOARD_SES_SECRET_ACCESS_KEY || null),
     sesSessionToken: hidden(env.BOARD_SES_SESSION_TOKEN || null),
     secret: hidden(env.BOARD_SECRET || null),
     // Who may sign up is the operator's business: never in a log line or a dump of the config.
     signupAllow: hidden(env.BOARD_SIGNUP_ALLOW || null),
+    billingApiKey: hidden(env.BOARD_BILLING_API_KEY || null),
+    billingWebhookSecret: hidden(env.BOARD_BILLING_WEBHOOK_SECRET || null),
+    pushVapidPrivateKey: hidden(env.BOARD_PUSH_VAPID_PRIVATE_KEY || null),
+    syncR2AccessKeyId: hidden(env.BOARD_SYNC_R2_ACCESS_KEY_ID || null),
+    syncR2SecretAccessKey: hidden(env.BOARD_SYNC_R2_SECRET_ACCESS_KEY || null),
+    // The hub's own GitHub App (step 4): its key, webhook and client secrets are non-enumerable inside.
+    githubApp: hidden(githubAppConfig(env, { readFile: (p) => readFileSync(p, 'utf8') })),
   });
   // Only from the real environment (nothing started later inherits them); a test's env object stays as given.
   if (env === process.env) {
@@ -99,6 +134,14 @@ export function loadConfig(env = process.env) {
   delete env.BOARD_GITHUB_CLIENT_SECRET;
   delete env.BOARD_GOOGLE_WEB_CLIENT_SECRET;
   delete env.BOARD_GITHUB_WEB_CLIENT_SECRET;
+  delete env.BOARD_TURNSTILE_SECRET;
+  delete env.BOARD_BILLING_API_KEY;
+  delete env.BOARD_BILLING_WEBHOOK_SECRET;
+  delete env.BOARD_PUSH_VAPID_PRIVATE_KEY;
+  delete env.BOARD_SYNC_R2_ACCESS_KEY_ID;
+  delete env.BOARD_SYNC_R2_SECRET_ACCESS_KEY;
+  delete env.GITHUB_APP_WEBHOOK_SECRET;
+  delete env.GITHUB_APP_CLIENT_SECRET;
   validateConfig(cfg);
   return cfg;
 }
@@ -188,6 +231,9 @@ const SECRET_VARS = Object.freeze([
   ['BOARD_RESEND_API_KEY', 'resendApiKey'], ['BOARD_GOOGLE_CLIENT_SECRET', 'googleClientSecret'], ['BOARD_GITHUB_CLIENT_SECRET', 'githubClientSecret'],
   ['BOARD_GITHUB_TOKEN', 'githubToken'],
   ['BOARD_GOOGLE_WEB_CLIENT_SECRET', 'googleWebClientSecret'], ['BOARD_GITHUB_WEB_CLIENT_SECRET', 'githubWebClientSecret'],
+  ['BOARD_BILLING_API_KEY', 'billingApiKey'], ['BOARD_BILLING_WEBHOOK_SECRET', 'billingWebhookSecret'],
+  ['BOARD_PUSH_VAPID_PRIVATE_KEY', 'pushVapidPrivateKey'], ['BOARD_TURNSTILE_SECRET', 'turnstileSecret'],
+  ['BOARD_SYNC_R2_ACCESS_KEY_ID', 'syncR2AccessKeyId'], ['BOARD_SYNC_R2_SECRET_ACCESS_KEY', 'syncR2SecretAccessKey'],
 ]);
 
 export const SIGNUP_MODES = Object.freeze(['open', 'allowlist']);
@@ -238,7 +284,7 @@ export function webOauthProviders(cfg) {
 // BOARD_AUTH=accounts (D51, D66): the hub runs its own sign-in. Exposed, it
 // must be https behind cloudflared (per-IP limits key on CF-Connecting-IP,
 // trusted only from a loopback peer) with at least one sign-in method; the
-// email code is optional (only with a real mailer) and the console mailer is
+// email code is optional (only with a real mailer and BOARD_EMAIL_SIGNIN=1) and the console mailer is
 // never allowed there. Without a public URL it is a loopback try-out, and only
 // with BOARD_ACCOUNTS_DEV=1.
 function validateAccounts(cfg) {
@@ -276,7 +322,7 @@ function validateAccounts(cfg) {
   if (exposed) {
     if (url?.protocol !== 'https:') throw new Error('an exposed BOARD_AUTH=accounts hub (BOARD_PUBLIC_URL off loopback, or BOARD_TUNNEL_PROBE_URL) needs an https BOARD_PUBLIC_URL');
     if (!cfg.trustCfIp) throw new Error('an exposed BOARD_AUTH=accounts hub needs BOARD_TRUST_CF_IP=1 (cloudflared on loopback), so per-IP limits see the client');
-    if (!mailProvider(cfg) && !methods.length && !oauthProviders(cfg).length && !webOauthProviders(cfg).length) throw new Error('an exposed BOARD_AUTH=accounts hub needs a sign-in method: BOARD_GOOGLE_CLIENT_ID/_SECRET, BOARD_GITHUB_CLIENT_ID/_SECRET, BOARD_GOOGLE_WEB_CLIENT_ID/_SECRET, BOARD_GITHUB_WEB_CLIENT_ID/_SECRET, BOARD_SIGNIN_METHODS (google, github) or a mailer (BOARD_RESEND_API_KEY + BOARD_MAIL_FROM, or BOARD_MAIL_PROVIDER=ses with BOARD_SES_*)');
+    if (!(mailProvider(cfg) && cfg.emailSignin) && !methods.length && !oauthProviders(cfg).length && !webOauthProviders(cfg).length) throw new Error('an exposed BOARD_AUTH=accounts hub needs a sign-in method: BOARD_GOOGLE_CLIENT_ID/_SECRET, BOARD_GITHUB_CLIENT_ID/_SECRET, BOARD_GOOGLE_WEB_CLIENT_ID/_SECRET, BOARD_GITHUB_WEB_CLIENT_ID/_SECRET, BOARD_SIGNIN_METHODS (google, github) or BOARD_EMAIL_SIGNIN=1 with a mailer (BOARD_RESEND_API_KEY + BOARD_MAIL_FROM, or BOARD_MAIL_PROVIDER=ses with BOARD_SES_*)');
   }
   if (cfg.devSeed || cfg.bootstrap?.includes(',')) throw new Error('BOARD_AUTH=accounts takes BOARD_BOOTSTRAP=<email> only, and no BOARD_DEV_SEED');
   if (cfg.authFailBudget != null && (!Number.isInteger(cfg.authFailBudget) || cfg.authFailBudget < 1 || cfg.authFailBudget > 100)) throw new Error('BOARD_AUTH_FAIL_BUDGET must be an integer from 1 to 100');
@@ -289,8 +335,29 @@ function validateAccounts(cfg) {
 }
 
 export function validateConfig(cfg) {
+  validateStorageMax(cfg.dbSizeMaxMb);
   if (!['access', 'dev', 'local', 'accounts'].includes(cfg.auth)) throw new Error(`BOARD_AUTH must be access, dev or local (or accounts), got ${cfg.auth}`);
   if (cfg.auth === 'accounts') validateAccounts(cfg);
+  if (cfg.billingProvider != null) {
+    if (cfg.billingProvider !== 'stripe') throw new Error(`BOARD_BILLING_PROVIDER must be stripe, got ${cfg.billingProvider}`);
+    if (cfg.auth !== 'accounts') throw new Error('BOARD_BILLING_PROVIDER needs BOARD_AUTH=accounts');
+    if (!cfg.billingApiKey || !cfg.billingWebhookSecret) throw new Error('BOARD_BILLING_PROVIDER needs BOARD_BILLING_API_KEY and BOARD_BILLING_WEBHOOK_SECRET');
+  }
+  if (cfg.phoneOrigin) {
+    const u = new URL(cfg.phoneOrigin);
+    if (u.protocol !== 'https:' || u.origin !== cfg.phoneOrigin || u.username || u.password) throw new Error('BOARD_PHONE_ORIGIN must be an exact HTTPS origin');
+  }
+  const push = [cfg.pushVapidPublicKey, cfg.pushVapidPrivateKey, cfg.pushVapidSubject];
+  if (push.some(Boolean)) {
+    if (!push.every(Boolean)) throw new Error('phone push needs BOARD_PUSH_VAPID_PUBLIC_KEY, BOARD_PUSH_VAPID_PRIVATE_KEY and BOARD_PUSH_VAPID_SUBJECT together');
+    if (cfg.auth !== 'accounts') throw new Error('phone push needs BOARD_AUTH=accounts');
+    if (!/^(mailto:[^\s@]+@[^\s@]+|https:\/\/\S+)$/.test(cfg.pushVapidSubject)) throw new Error('BOARD_PUSH_VAPID_SUBJECT must be a mailto: or https: address');
+  }
+  if (cfg.syncR2Bucket != null) {
+    if (cfg.auth !== 'accounts') throw new Error('BOARD_SYNC_R2_BUCKET needs BOARD_AUTH=accounts');
+    if (!cfg.syncR2Endpoint || !cfg.syncR2AccessKeyId || !cfg.syncR2SecretAccessKey) throw new Error('BOARD_SYNC_R2_BUCKET needs BOARD_SYNC_R2_ENDPOINT, BOARD_SYNC_R2_ACCESS_KEY_ID and BOARD_SYNC_R2_SECRET_ACCESS_KEY');
+    r2Config({ endpoint: cfg.syncR2Endpoint, bucket: cfg.syncR2Bucket, accessKeyId: cfg.syncR2AccessKeyId, secretAccessKey: cfg.syncR2SecretAccessKey });
+  }
   // Local = the hub embedded in the desktop app: only its own window may reach it.
   if (cfg.auth === 'local') {
     if (!LOCAL_BINDS.has(cfg.bind)) throw new Error(`BOARD_AUTH=local needs BOARD_BIND=127.0.0.1, ::1 or localhost (got ${cfg.bind})`);

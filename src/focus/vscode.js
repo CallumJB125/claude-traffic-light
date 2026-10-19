@@ -22,7 +22,7 @@ module.exports = {
   async focus(s, { exec, isDir }) {
     const app = ideOf(s);
     const dir = Ids.launchCwd(s);
-    const r = await exec('/usr/bin/open', dir && isDir(dir) ? ['-a', app, dir] : ['-a', app]);
+    const r = await exec('/usr/bin/open', dir && (await isDir(dir)) ? ['-a', app, dir] : ['-a', app]);
     if (!r.ok) return { ok: false, reason: (r.stderr || 'open failed').trim().slice(0, 120) };
     return { ok: true, exact: false, app, reason: 'window only: no way to pick the terminal without an extension' };
   },

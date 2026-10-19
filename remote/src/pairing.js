@@ -1,13 +1,17 @@
 // QR device pairing. The desktop shows a QR with its public key, a one-time
 // secret, the hub URL and an expiry; the phone answers through the hub.
 //
-//   phone → desktop  pair-init    {pid, devicePub, deviceName, commit=H(nP)}  + HMAC(secret) + device signature
-//   desktop → phone  pair-challenge {pid, devicePub, commit, nD}              signed by the desktop key
+//   phone → desktop  pair-init    {pid, devicePub, deviceAgree, deviceName, commit=H(nP)}  + HMAC(secret) + device signature
+//   desktop → phone  pair-challenge {pid, devicePub, deviceAgree, desktopAgree, commit, nD} signed by the desktop key
 //   phone → desktop  pair-reveal  {pid, nP}                                   + HMAC(secret)
-//   phone screen     SAS = 6 digits of H(pid, did, dpk, devicePub, nP, nD)
+//   phone screen     SAS = 6 digits of H(pid, did, dpk, devicePub, deviceAgree, desktopAgree, nP, nD)
 //   human TYPES that code into the desktop; the desktop compares it with its
 //   own SAS (never displayed) → registry.add
-//   desktop → phone  pair-complete {pid, devicePub, deviceId, ownerId}         signed by the desktop key
+//   desktop → phone  pair-complete {pid, devicePub, deviceAgree, desktopAgree, deviceId, ownerId} signed by the desktop key
+//
+// deviceAgree / desktopAgree are the two static ECDH P-256 public keys of the
+// end-to-end relay (envelope.js). They are covered by the same MAC, signatures
+// and SAS as the signing keys, so the hub can't swap either one in.
 //
 // Why each piece:
 // - The secret never crosses the hub (it is read optically), so the HMAC
@@ -25,6 +29,7 @@ import { b64url, fromB64url, utf8, randomBytes, concatBytes } from './encoding.j
 import { canonicalize, sha256Hex } from './canonical.js';
 import { importPublicRaw, exportPublicRaw, fingerprint, signObject, verifyObject, signBytes, verifyBytes, generateSigningKey } from './keys.js';
 import { cleanName } from './registry.js';
+import { generateAgreementKey, exportAgreementPublic, importAgreementPublic } from './envelope.js';
 
 export const PAIRING_TTL_MS = 3 * 60 * 1000;
 const MAX_OPEN_PAIRINGS = 4;
@@ -42,8 +47,8 @@ async function macOk(secret, obj, tag) {
 }
 const commitOf = (nP) => sha256Hex(concatBytes(utf8('buddy.pair.commit:'), fromB64url(nP)));
 
-export async function shortCode({ pid, did, dpk, devicePub, nP, nD }) {
-  const h = await sha256Hex(canonicalize({ t: 'buddy.pair.sas', pid, did, dpk, devicePub, nP, nD }));
+export async function shortCode({ pid, did, dpk, devicePub, deviceAgree, desktopAgree, nP, nD }) {
+  const h = await sha256Hex(canonicalize({ t: 'buddy.pair.sas', pid, did, dpk, devicePub, deviceAgree, desktopAgree, nP, nD }));
   return String(parseInt(h.slice(0, 8), 16) % 1000000).padStart(6, '0');
 }
 
@@ -58,8 +63,9 @@ const str = (v, max = 256) => typeof v === 'string' && v.length > 0 && v.length 
 
 // ── Desktop side ────────────────────────────────────────────────────────────
 export class PairingHost {
-  // identity: { privateKey, publicRaw, desktopId } (see keys.js createIdentity)
+  // identity: { privateKey, publicRaw, desktopId, agreePublicRaw } (see keys.js createIdentity)
   constructor({ identity, registry, ownerId, hubUrl, clock = () => Date.now(), ttlMs = PAIRING_TTL_MS, audit = () => {} }) {
+    if (typeof identity?.agreePublicRaw !== 'string') throw new TypeError('the desktop identity needs its agreement key (keys.js createIdentity)');
     Object.assign(this, { identity, registry, ownerId, hubUrl, clock, ttlMs, audit });
     this.open = new Map();
     this.completed = new Map(); // pid → { complete, exp }: the phone polls for it
@@ -116,16 +122,17 @@ export class PairingHost {
   async handleInit(msg) {
     const { s, error } = this.#session(msg?.pid, 'init');
     if (error) return error === 'unknown-pairing' || error === 'malformed' ? { ok: false, reason: error } : this.#fail(msg.pid, error);
-    const { pid, devicePub, deviceName, commit, mac: tag, pop } = msg;
-    if (!str(devicePub, 100) || !str(commit, 64) || typeof deviceName !== 'string' || deviceName.length > 200 || !str(tag, 64) || !str(pop, 100)) return this.#fail(pid, 'malformed');
-    const body = { t: 'pair-init', pid, did: this.identity.desktopId, devicePub, deviceName, commit };
+    const { pid, devicePub, deviceAgree, deviceName, commit, mac: tag, pop } = msg;
+    if (!str(devicePub, 100) || !str(deviceAgree, 100) || !str(commit, 64) || typeof deviceName !== 'string' || deviceName.length > 200 || !str(tag, 64) || !str(pop, 100)) return this.#fail(pid, 'malformed');
+    const body = { t: 'pair-init', pid, did: this.identity.desktopId, devicePub, deviceAgree, deviceName, commit };
     if (!(await macOk(s.secret, body, tag))) return this.#fail(pid, 'bad-mac');
     let key;
-    try { key = await importPublicRaw(devicePub); } catch { return this.#fail(pid, 'bad-key'); }
+    try { key = await importPublicRaw(devicePub); await importAgreementPublic(deviceAgree); } catch { return this.#fail(pid, 'bad-key'); }
     if (!(await verifyBytes(key, pop, utf8(canonicalize(body))))) return this.#fail(pid, 'bad-proof-of-possession');
     const nD = b64url(randomBytes(32));
-    Object.assign(s, { state: 'reveal', devicePub, deviceName: cleanName(deviceName), commit, nD });
-    const challenge = await signObject(this.identity.privateKey, { t: 'pair-challenge', pid, did: this.identity.desktopId, devicePub, commit, nD });
+    const desktopAgree = this.identity.agreePublicRaw;
+    Object.assign(s, { state: 'reveal', devicePub, deviceAgree, deviceName: cleanName(deviceName), commit, nD });
+    const challenge = await signObject(this.identity.privateKey, { t: 'pair-challenge', pid, did: this.identity.desktopId, devicePub, deviceAgree, desktopAgree, commit, nD });
     return { ok: true, challenge };
   }
 
@@ -140,7 +147,7 @@ export class PairingHost {
     let c;
     try { c = await commitOf(nP); } catch { return this.#fail(pid, 'malformed'); }
     if (c !== s.commit) return this.#fail(pid, 'commit-mismatch');
-    s.sas = await shortCode({ pid, did: this.identity.desktopId, dpk: this.identity.publicRaw, devicePub: s.devicePub, nP, nD: s.nD });
+    s.sas = await shortCode({ pid, did: this.identity.desktopId, dpk: this.identity.publicRaw, devicePub: s.devicePub, deviceAgree: s.deviceAgree, desktopAgree: this.identity.agreePublicRaw, nP, nD: s.nD });
     s.state = 'confirm';
     return { ok: true, deviceName: s.deviceName, deviceNameUntrusted: true };
   }
@@ -153,8 +160,8 @@ export class PairingHost {
     const typed = typeof typedCode === 'string' ? typedCode.replace(/\s+/g, '') : '';
     if (!/^\d{6}$/.test(typed) || !constantTimeEqual(typed, s.sas)) return this.#fail(pid, 'wrong-code');
     this.open.delete(pid);
-    const device = await this.registry.add({ publicKey: s.devicePub, name: s.deviceName, ownerId: this.ownerId });
-    const complete = await signObject(this.identity.privateKey, { t: 'pair-complete', pid, did: this.identity.desktopId, devicePub: s.devicePub, deviceId: device.deviceId, ownerId: this.ownerId });
+    const device = await this.registry.add({ publicKey: s.devicePub, agreeKey: s.deviceAgree, name: s.deviceName, ownerId: this.ownerId });
+    const complete = await signObject(this.identity.privateKey, { t: 'pair-complete', pid, did: this.identity.desktopId, devicePub: s.devicePub, deviceAgree: s.deviceAgree, desktopAgree: this.identity.agreePublicRaw, deviceId: device.deviceId, ownerId: this.ownerId });
     this.completed.set(pid, { complete, exp: this.clock() + this.ttlMs });
     this.audit({ type: 'remote.pair.completed', at: this.clock(), pid, deviceId: device.deviceId, deviceName: device.name, ownerId: this.ownerId });
     return { ok: true, device, complete };
@@ -176,22 +183,25 @@ export function parsePairingQr(text, { now = Date.now(), allowInsecureHub = fals
 }
 
 export class PairingClient {
-  static async begin(qr, { deviceName = 'Phone', keyPair } = {}) {
+  // agreeKeyPair: the phone's static ECDH key (non-extractable; phone-vault.js agreementKey()).
+  static async begin(qr, { deviceName = 'Phone', keyPair, agreeKeyPair } = {}) {
     const c = new PairingClient();
     c.qr = qr;
     c.keyPair = keyPair || (await generateSigningKey());
     c.devicePub = await exportPublicRaw(c.keyPair.publicKey);
+    c.agreeKeyPair = agreeKeyPair || (await generateAgreementKey());
+    c.deviceAgree = await exportAgreementPublic(c.agreeKeyPair.publicKey);
     // The QR's desktop key must hash to its advertised id.
     if ((await fingerprint(qr.dpk)) !== qr.did) throw new Error('pairing code is inconsistent');
     c.desktopKey = await importPublicRaw(qr.dpk);
     c.secret = fromB64url(qr.s);
     c.nP = b64url(randomBytes(32));
     const commit = await commitOf(c.nP);
-    const body = { t: 'pair-init', pid: qr.pid, did: qr.did, devicePub: c.devicePub, deviceName: String(deviceName), commit };
+    const body = { t: 'pair-init', pid: qr.pid, did: qr.did, devicePub: c.devicePub, deviceAgree: c.deviceAgree, deviceName: String(deviceName), commit };
     c.commit = commit;
     // `did` is covered by the MAC and signature but not sent: the desktop
     // fills in its own id, so an init relayed to another desktop fails.
-    c.init = { t: 'pair-init', pid: qr.pid, devicePub: c.devicePub, deviceName: body.deviceName, commit, mac: await mac(c.secret, body), pop: await signBytes(c.keyPair.privateKey, utf8(canonicalize(body))) };
+    c.init = { t: 'pair-init', pid: qr.pid, devicePub: c.devicePub, deviceAgree: c.deviceAgree, deviceName: body.deviceName, commit, mac: await mac(c.secret, body), pop: await signBytes(c.keyPair.privateKey, utf8(canonicalize(body))) };
     return c;
   }
 
@@ -199,19 +209,23 @@ export class PairingClient {
   async onChallenge(env) {
     const ch = await verifyObject(this.desktopKey, env);
     if (!ch || ch.t !== 'pair-challenge' || ch.pid !== this.qr.pid || ch.did !== this.qr.did) throw new Error('pairing challenge not signed by this desktop');
-    if (ch.devicePub !== this.devicePub || ch.commit !== this.commit) throw new Error('pairing was tampered with in transit — do not confirm on the desktop');
+    if (ch.devicePub !== this.devicePub || ch.deviceAgree !== this.deviceAgree || ch.commit !== this.commit) throw new Error('pairing was tampered with in transit — do not confirm on the desktop');
+    try { await importAgreementPublic(ch.desktopAgree); } catch { throw new Error('pairing challenge not signed by this desktop'); }
+    this.desktopAgree = ch.desktopAgree;
     this.nD = ch.nD;
     const reveal = { t: 'pair-reveal', pid: this.qr.pid, nP: this.nP, mac: await mac(this.secret, { t: 'pair-reveal', pid: this.qr.pid, nP: this.nP }) };
-    this.sas = await shortCode({ pid: this.qr.pid, did: this.qr.did, dpk: this.qr.dpk, devicePub: this.devicePub, nP: this.nP, nD: this.nD });
+    this.sas = await shortCode({ pid: this.qr.pid, did: this.qr.did, dpk: this.qr.dpk, devicePub: this.devicePub, deviceAgree: this.deviceAgree, desktopAgree: this.desktopAgree, nP: this.nP, nD: this.nD });
     return { reveal, sas: this.sas };
   }
 
-  // What the phone stores once paired (the private key stays a CryptoKey).
+  // What the phone stores once paired (the private keys stay CryptoKeys).
+  // For the relay: phone-vault savePairing(host, {did: desktopId, dev: deviceId, desktopAgree}).
   async onComplete(env) {
     const done = await verifyObject(this.desktopKey, env);
     if (!done || done.t !== 'pair-complete' || done.pid !== this.qr.pid || done.did !== this.qr.did || done.devicePub !== this.devicePub) throw new Error('pairing completion not valid');
+    if (done.deviceAgree !== this.deviceAgree || !this.desktopAgree || done.desktopAgree !== this.desktopAgree) throw new Error('pairing completion not valid');
     if (done.deviceId !== (await fingerprint(this.devicePub))) throw new Error('pairing completion not valid');
     this.secret = null;
-    return { deviceId: done.deviceId, ownerId: done.ownerId, desktopId: this.qr.did, desktopPub: this.qr.dpk, hub: this.qr.hub, keyPair: this.keyPair };
+    return { deviceId: done.deviceId, ownerId: done.ownerId, desktopId: this.qr.did, desktopPub: this.qr.dpk, desktopAgree: done.desktopAgree, hub: this.qr.hub, keyPair: this.keyPair, agreeKeyPair: this.agreeKeyPair };
   }
 }

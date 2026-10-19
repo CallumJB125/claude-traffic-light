@@ -9,6 +9,7 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const { storageHelp } = require('./secure-storage');
 const http = require('node:http'); // privacy-flow: team-hub-account
 const https = require('node:https'); // privacy-flow: team-hub-account
 const dns = require('node:dns'); // privacy-flow: team-hub-account
@@ -44,6 +45,33 @@ const ROUTES = {
   unenrol: ['DELETE', '/api/teams/:team/enrol'],
   enrolments: ['GET', '/api/teams/:team/enrolments'],
   revokeEnrolment: ['DELETE', '/api/teams/:team/enrolments/:enrollment'],
+  nativeSnapshot: ['GET', '/api/boards/:board'],
+  nativeCard: ['GET', '/api/cards/:card'],
+  nativeCreate: ['POST', '/api/boards/:board/cards'],
+  nativePatch: ['PATCH', '/api/cards/:card'],
+  nativeComment: ['POST', '/api/cards/:card/comments'],
+  nativeReadPacket: ['GET', '/api/cards/:card/packet'],
+  nativeWritePacket: ['POST', '/api/cards/:card/packet'],
+  nativeMessages: ['GET', '/api/cards/:card/messages'],
+  nativeSendMessage: ['POST', '/api/cards/:card/messages'],
+  nativeWorkContext: ['GET', '/api/boards/:board/work-context'],
+  captureRoutes: ['GET', '/api/work-capture/routes'],
+  myDay: ['GET', '/api/my-day'],
+  setupsList: ['GET','/api/teams/:team/setups'],
+  setupsPublish: ['POST','/api/teams/:team/setups'],
+  setupsRead: ['GET','/api/setup-profiles/:profile/versions/:version'],
+  setupsExport: ['GET','/api/setup-profiles/:profile/export'],
+  setupsUnpublish: ['DELETE','/api/setup-profiles/:profile'],
+  setupsActivity: ['GET','/api/setup-profiles/:profile/activity'],
+  setupsBaseline: ['PUT','/api/teams/:team/setup-baseline'],
+  setupsReceipt: ['POST','/api/setup-profiles/:profile/borrow-receipts'],
+  captureWork: ['POST', '/api/boards/:board/work-capture'],
+  repos: ['GET', '/api/repos'],
+  createRepo: ['POST', '/api/repos'],
+  addBoardRepo: ['POST', '/api/boards/:board/repos'],
+  salvageHandover: ['POST', '/api/cards/:card/handover/salvage'],
+  integrations: ['GET', '/api/integrations'],
+  createIssue: ['POST', '/api/integrations/:integration/issues'],
 };
 
 const ROLES = ['owner', 'admin', 'member', 'viewer'];
@@ -200,11 +228,19 @@ function deleteOutcome(r, { again = 'Send a new code and do the check again.' } 
  * createAccountClient({origin, fetchImpl, store:{load(), save(obj), clear()}, now, onSignedOut})
  * Every method resolves `{ok:true, ...}` or `{ok:false, error:<sentence>, code?, signedOut?}`.
  * `store.load()` → `{hub, token, device_id, user}` or null.
+ * `store.save(record, {keep})` may return a promise; async stores check `keep`
+ * before committing so a cancelled sign-in cannot outlive its owner.
  */
 function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Date.now(), onSignedOut = () => {}, pin = null }) {
   const host = new URL(origin).host;
   let flow = null; // {id, email, purpose:'signin'|'delete', at, verifiedAt?}: the email-code flow in progress
   const asked = new Map(); // email → when sign-in codes were asked for, this run only
+  let credentialGeneration = 0;
+
+  function clearSaved() {
+    credentialGeneration += 1;
+    try { store.clear(); } catch { /* already gone */ }
+  }
 
   function saved() {
     let s = null;
@@ -216,14 +252,26 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
 
   // `token`: a token that must not be stored, sent in place of the saved one (the revoke of a cancelled sign-in).
   // `via`: a transport for this one call in place of fetchImpl (a provider sign-in's pinned address).
-  async function call(name, { params, body, auth = true, token = null, via = null } = {}) {
+  async function call(name, { params, body, auth = true, token = null, via = null, accountOwner = null, memberOwner = null } = {}) {
     const [method] = ROUTES[name];
     let url;
     try { url = origin + routePath(name, params); } catch { return { ok: false, error: 'That isn’t a valid id.' }; }
+    if (name.startsWith('native') && params?.boardIds) {
+      const narrowed = new URL(url);
+      for (const id of params.boardIds) narrowed.searchParams.append('board_id', id);
+      if(name==='nativeWorkContext')for(const key of ['repo_id','limit','cursor'])if(params[key]!=null)narrowed.searchParams.set(key,String(params[key]));
+      url = narrowed.href;
+    }
     const headers = { Accept: 'application/json' };
     const s = token ? { token } : auth ? saved() : null;
     if (auth && !s) return { ok: false, signedOut: true, error: 'Sign in first.' };
     if (s) headers.Authorization = `Bearer ${s.token}`;
+    if(name.startsWith('setups')) {
+      if(typeof accountOwner!=='string'||!ID_RE.test(accountOwner))return {ok:false,error:'Refresh your current account before using Setups.'};
+      if(typeof memberOwner!=='string'||!ID_RE.test(memberOwner))return {ok:false,error:'Refresh your current team membership before using Setups.'};
+      headers['X-Plexiform-Account']=accountOwner;
+      headers['X-Plexiform-Member']=memberOwner;
+    }
     // The team the call acts in; a URL id in another team makes the hub answer 404.
     if (params?.team) headers['X-Board-Team'] = String(params.team);
     if (body !== undefined) headers['Content-Type'] = 'application/json';
@@ -235,12 +283,18 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
       return { ok: false, error: `Couldn’t reach ${host}. Check the address and your connection.` };
     }
     let json = null;
-    try { json = await res.json(); } catch { json = null; }
+    try {
+      if(name.startsWith('setups') && res.body?.getReader) {
+        const reader=res.body.getReader(),parts=[];let size=0;
+        try {for(;;){const next=await reader.read();if(next.done)break;size+=next.value.byteLength;if(size>3*1024*1024)throw new Error('Setups response too large');parts.push(Buffer.from(next.value));}json=JSON.parse(Buffer.concat(parts).toString('utf8'));}
+        catch(error){await reader.cancel().catch(()=>{});throw error;}
+      } else {json=await res.json();if(name.startsWith('setups')&&Buffer.byteLength(JSON.stringify(json))>3*1024*1024)json=null;}
+    } catch { json = null; }
     // STEP_UP_REQUIRED is also a 401, but only means "do the check again".
     if (res.status === 401 && s && (json?.error?.code ?? 'UNAUTHENTICATED') === 'UNAUTHENTICATED') {
       // No refresh in this model: a 401 on the device token means it was
       // revoked (signed out elsewhere, account deleted, device removed).
-      if (saved()?.token === s.token) { try { store.clear(); } catch { /* already gone */ } try { onSignedOut(); } catch { /* UI gone */ } }
+      if (saved()?.token === s.token) { clearSaved(); try { onSignedOut(); } catch { /* UI gone */ } }
       return { ok: false, signedOut: true, error: 'You’ve been signed out. Sign in again.' };
     }
     if (res.status < 200 || res.status >= 300 || !json || typeof json !== 'object') {
@@ -256,12 +310,30 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
     const at = typeof v === 'string' ? Date.parse(v) : typeof v === 'number' ? (v < 1e12 ? v * 1000 : v) : NaN;
     return Number.isFinite(at) && at > t ? Math.min(at, t + STEP_UP_MS) : t + STEP_UP_MS;
   }
-  function signedInWith(r) {
-    if (typeof r.device_token !== 'string' || !r.device_token) return { ok: false, error: `${host} didn’t sign you in.` };
+  async function signedInWith(r, { keep = () => true, generation = credentialGeneration } = {}) {
+    const hasToken = typeof r.device_token === 'string' && !!r.device_token;
+    const wanted = () => generation === credentialGeneration && keep();
+    async function discard() {
+      // Another sign-in may now own the vault. Never clear its credential.
+      if (saved()?.token === r.device_token) clearSaved();
+      await call('signOut', { body: {}, token: r.device_token });
+    }
+    if (!wanted()) {
+      if (hasToken) await discard();
+      return { ok: false, cancelled: true };
+    }
+    if (!hasToken) return { ok: false, error: `${host} didn’t sign you in.` };
     try {
-      store.save({ hub: origin, token: r.device_token, device_id: r.device_id ?? null, user: r.user ?? null });
+      await store.save({ hub: origin, token: r.device_token, device_id: r.device_id ?? null, user: r.user ?? null }, { keep: wanted });
     } catch {
-      return { ok: false, error: 'This Mac couldn’t store your sign-in securely. Try again.' };
+      const cancelled = !wanted();
+      await discard();
+      if (cancelled) return { ok: false, cancelled: true };
+      return { ok: false, error: `Plexiform couldn’t save your sign-in securely. ${storageHelp()}` };
+    }
+    if (!wanted()) {
+      await discard();
+      return { ok: false, cancelled: true };
     }
     return { ok: true, user: r.user ?? null, teams: Array.isArray(r.teams) ? r.teams : [] };
   }
@@ -297,13 +369,14 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
     async verifyCode(code, dev = {}) {
       const c = String(code ?? '').replace(/\D/g, '');
       if (!flow || flow.purpose !== 'signin') return { ok: false, error: 'Start again: enter your email.' };
+      const currentFlow = flow, generation = credentialGeneration;
       const bad = need(c.length === 6, 'The code is 6 digits.');
       if (bad) return bad;
-      const r = await call('emailVerify', { body: { flow_id: flow.id, code: c, ...device(dev) }, auth: false });
+      const r = await call('emailVerify', { body: { flow_id: currentFlow.id, code: c, ...device(dev) }, auth: false });
       // The flow stays on a bad code: "Send a new code" reuses its email.
       if (!r.ok) return r.code === 'METHOD_DISABLED' ? { ...r, error: `Email sign-in is turned off on ${host}.` } : r;
-      const email = flow.email;
-      const done = signedInWith(r);
+      const email = currentFlow.email;
+      const done = await signedInWith(r, { generation, keep: () => flow === currentFlow });
       if (done.ok) flow = null;
       return done.ok ? { ...done, email } : done;
     },
@@ -341,10 +414,11 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
 
     /**
      * Step 2: the loopback's code plus the verifier; the answer is the same as a verified email code.
-     * `keep()` is asked once the hub has answered: false (the member cancelled, or another sign-in
-     * replaced this one) and the new token is revoked on the hub without ever being stored.
+     * `keep()` is asked once the hub has answered and while saving: false (the member cancelled,
+     * or another sign-in replaced this one) and the new token is revoked on the hub.
      */
     async exchangeOAuth({ flowId, code, state, verifier, provider, purpose = 'signin' }, dev = {}, { keep = () => true, transport = null } = {}) {
+      const generation = credentialGeneration;
       if (STEP_UP_PURPOSES.includes(purpose)) {
         // A deletion check proves who you are to the hub and nothing more: whatever else the answer
         // holds, only its expiry is read, and the vault is never touched.
@@ -357,13 +431,12 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
         return { ok: true, flowId, stepupUntil: stepUpUntil(r.stepup_until) };
       }
       const r = await call('oauthExchange', { body: { flow_id: flowId, code, state, code_verifier: verifier, ...device(dev) }, auth: false, via: transport });
-      if (!keep()) {
-        if (r.ok && typeof r.device_token === 'string' && r.device_token) await call('signOut', { body: {}, token: r.device_token });
-        return { ok: false, cancelled: true };
-      }
+      if (!keep() && !r.ok) return { ok: false, cancelled: true };
       if (!r.ok) return oauthOutcome(r, provider, host);
-      const done = signedInWith(r);
-      return done.ok ? { ...done, email: r.user?.email ?? null } : done;
+      const done = await signedInWith(r, { keep, generation });
+      // The hub made a second account (another one holds this address; no linking yet): the member must hear it.
+      const notice = r.notice?.code === 'SEPARATE_ACCOUNT' && typeof r.notice.message === 'string' ? { notice: r.notice.message.slice(0, 500) } : {};
+      return done.ok ? { ...done, email: r.user?.email ?? null, ...notice } : done;
     },
 
     pendingEmail: () => (flow?.purpose === 'signin' ? flow.email : null),
@@ -376,6 +449,33 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
       return call('createTeam', { body: { name: n, request_id: crypto.randomUUID() } });
     },
     getTeam: (team) => call('team', { params: { team } }),
+    captureRoutes: () => call('captureRoutes'),
+    myDay: () => call('myDay'),
+    setups(op, team, {profile,version,body}={}, owner=saved()?.user?.id, memberOwner=null) {
+      const name={list:'setupsList',publish:'setupsPublish',read:'setupsRead',export:'setupsExport',unpublish:'setupsUnpublish',activity:'setupsActivity',baseline:'setupsBaseline',receipt:'setupsReceipt'}[op];
+      if(!name || typeof team!=='string' || !ID_RE.test(team)) return Promise.resolve({ok:false});
+      return call(name,{params:{team,profile,version},body:ROUTES[name][0]==='GET'?undefined:body,accountOwner:owner,memberOwner});
+    },
+    captureWork: (team, board, body) => call('captureWork', { params: { team, board }, body }),
+    // Linking a repo to a board (owners and admins; the hub answers 403 otherwise) and the opt-in handover share.
+    listRepos: (team) => call('repos', { params: { team } }),
+    createRepo: (team, url) => call('createRepo', { params: { team }, body: { request_id: crypto.randomUUID(), url } }),
+    addBoardRepo: (team, board, repoId) => call('addBoardRepo', { params: { team, board }, body: { repo_id: repoId } }),
+    salvageHandover: (team, card, body) => call('salvageHandover', { params: { team, card }, body }),
+    // Create ticket from a session (src/create-ticket.js): the team's connections, and one issue from approved text.
+    integrations: (team) => call('integrations', { params: { team } }),
+    createIssue: (team, integration, { title, description }) => call('createIssue', { params: { team, integration }, body: { request_id: crypto.randomUUID(), title, description } }),
+    // Main-only board broker: fixed routes and team header; never an arbitrary
+    // URL or bearer credential supplied by an MCP client.
+    nativeBoard(operation, params, body) {
+      const name = { snapshot: 'nativeSnapshot', card: 'nativeCard', create: 'nativeCreate', patch: 'nativePatch', comment: 'nativeComment',
+        readPacket: 'nativeReadPacket', writePacket: 'nativeWritePacket', messages: 'nativeMessages', sendMessage: 'nativeSendMessage', workContext:'nativeWorkContext' }[operation];
+      if (!name || !ID_RE.test(String(params?.team ?? ''))) return Promise.resolve({ ok: false, error: 'Invalid board operation.' });
+      if (['readPacket', 'writePacket', 'messages', 'sendMessage','workContext'].includes(operation)
+        && (!Array.isArray(params.boardIds) || params.boardIds.length < 1 || params.boardIds.length > 32
+          || params.boardIds.some((id) => typeof id !== 'string' || !ID_RE.test(id)))) return Promise.resolve({ ok: false, error: 'Choose the permitted boards.' });
+      return call(name, { params, body });
+    },
     renameTeam(team, name) {
       const n = String(name ?? '').trim();
       if (!n || n.length > 60) return Promise.resolve({ ok: false, error: 'Give the team a name (up to 60 characters).' });
@@ -493,9 +593,10 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
     revokeEnrolment: (team, enrollment) => call('revokeEnrolment', { params: { team, enrollment }, body: {} }),
 
     async signOut() {
+      credentialGeneration += 1;
       const r = saved() ? await call('signOut', { body: {} }) : { ok: true };
       // Forget the token whatever the hub said: signing out must always work offline.
-      try { store.clear(); } catch { /* already gone */ }
+      clearSaved();
       flow = null;
       return { ok: true, revoked: r.ok };
     },
@@ -525,7 +626,7 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
         if (r.code === 'STEP_UP_REQUIRED') flow = null;
         return deleteOutcome(r);
       }
-      try { store.clear(); } catch { /* already gone */ }
+      clearSaved();
       flow = null;
       return { ok: true };
     },
@@ -535,7 +636,7 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
       if (typeof flowId !== 'string' || !flowId) return { ok: false, stepUp: true, error: 'Confirm it’s you first.' };
       const r = await call('deleteAccount', { body: { flow_id: flowId } });
       if (!r.ok) return deleteOutcome(r, { again: 'Confirm it’s you again.' });
-      try { store.clear(); } catch { /* already gone */ }
+      clearSaved();
       flow = null;
       return { ok: true };
     },

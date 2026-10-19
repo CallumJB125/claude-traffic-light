@@ -44,13 +44,31 @@ const TEAM_MEMBER_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 // never picked up its first message: it was spawned but never ran.
 const NEVER_STARTED_MS = 5 * 60 * 1000;
 
-function readJson(file) {
-  try {
-    return JSON.parse(fs.readFileSync(file, 'utf8'));
-  } catch {
-    return null;
-  }
+// The 2 s agent poll re-reads the same few .omc/state files for every session.
+// A file whose mtime and size are unchanged is served from memory; one written
+// in the last RACY_MS is always re-read, since a same-size rewrite inside the
+// timestamp's resolution would otherwise be missed. Callers only read the result.
+const RACY_MS = 2000;
+const CACHE_MAX = 512;
+
+function createJsonReader(fsImpl = fs, now = Date.now) {
+  const cache = new Map();
+  return function readJsonCached(file) {
+    let st;
+    try { st = fsImpl.statSync(file); } catch { cache.delete(file); return null; }
+    const hit = cache.get(file);
+    if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit.value;
+    let value = null;
+    try { value = JSON.parse(fsImpl.readFileSync(file, 'utf8')); } catch { value = null; }
+    if (now() - st.mtimeMs > RACY_MS) {
+      if (cache.size >= CACHE_MAX) cache.delete(cache.keys().next().value);
+      cache.set(file, { mtimeMs: st.mtimeMs, size: st.size, value });
+    } else cache.delete(file);
+    return value;
+  };
 }
+
+const readJson = createJsonReader();
 
 function neverStarted(teamDir, name, now) {
   const inbox = readJson(path.join(teamDir, 'inboxes', `${path.basename(String(name || ''))}.json`));
@@ -156,6 +174,9 @@ function kindOf(parentMode) {
 // session: { sessionId, cwd, agents }. opts.stateDir / opts.teamsDir exist so the
 // tests can point at fixtures.
 function scanAgents(session, opts = {}) {
+  // Other providers report their own roster through their adapter. Never
+  // inspect Claude/OMC state or transcript metadata for a Codex session.
+  if (session?.source && session.source !== 'claude') return { mode: null, iteration: 0, agents: [] };
   const cwd = (session && session.cwd) || '';
   const id = (session && session.sessionId) || '';
   const stateDir = opts.stateDir || (cwd ? path.join(cwd, '.omc', 'state') : null);
@@ -303,4 +324,4 @@ function sweepStaleFiles(dir, maxAgeMs, now = Date.now()) {
   return removed;
 }
 
-module.exports = { scanAgents, mergeAgents, agentStatus, readJson, sweepStaleFiles, TEAMS_DIR, PROJECTS_DIR, TEAM_MEMBER_MAX_AGE_MS, NEVER_STARTED_MS, IDLE_AFTER_MS, RESOLVE_RETRY_MS, NULL_BEAT_RETRY_MS };
+module.exports = { createJsonReader, scanAgents, mergeAgents, agentStatus, readJson, sweepStaleFiles, TEAMS_DIR, PROJECTS_DIR, TEAM_MEMBER_MAX_AGE_MS, NEVER_STARTED_MS, IDLE_AFTER_MS, RESOLVE_RETRY_MS, NULL_BEAT_RETRY_MS };

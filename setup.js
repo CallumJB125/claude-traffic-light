@@ -76,6 +76,8 @@ function cleanConfig(c) {
   const rules = cleanRules(c.rules);
   // A file whose rules all fail to parse must not wipe the user's.
   if (rules.length) out.rules = rules;
+  if (isObj(c.character)) out.character = Rules.normalizeCharacter(c.character);
+  else if (Array.isArray(c.rules)) { const ch = Rules.characterFromRules(c.rules); if (ch.body !== 'claude') out.character = ch; }
   if (Array.isArray(c.presets)) out.presets = cleanPresets(c.presets);
   for (const k of ['showAgents', 'agentRoster']) if (typeof c[k] === 'boolean') out[k] = c[k];
   if (isObj(c.agentKinds)) {

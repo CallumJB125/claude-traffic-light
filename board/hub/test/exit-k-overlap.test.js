@@ -26,8 +26,8 @@ test('exit (k): same file in two runs → card.upsert overlaps on both + context
 
     const ca = await ra.next('context.update', (m) => m.run_id === runA.run_id);
     const cb = await rb.next('context.update', (m) => m.run_id === runB.run_id);
-    assert.match(ca.team_context.text, new RegExp(`\\[overlapping\\] ${runB.key} \\(Bob's Claude\\) is also editing src/api/submit.ts`));
-    assert.match(cb.team_context.text, new RegExp(`${runA.key} \\(Alice's Claude\\)`));
+    assert.match(ca.team_context.text, new RegExp(`\\[overlapping\\] ${runB.key} \\(Bob's Claude Code\\) is also editing src/api/submit.ts`));
+    assert.match(cb.team_context.text, new RegExp(`${runA.key} \\(Alice's Claude Code\\)`));
     assert.match(ca.delta, /Heads-up/);
     assert.ok(ca.team_context.tokens <= 700);
     assert.equal(ca.overlap_ids.length, 1);

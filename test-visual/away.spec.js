@@ -42,21 +42,25 @@ test('a busy spell ends in a recap of what happened, and the widget shows it', a
   // A notification ask shows only once it has held past TRANSIENT_ASK_MS.
   await expect.poll(async () => (await aggregate()).sessions.find((s) => s.cwd === '/work/api')?.signal).toBe('permission-ask');
   expect((await aggregate()).away).toBeNull();
-  // Notifications go out on the next status broadcast: let both land (the
-  // failure held, the ask through) before the spell ends.
-  await expect.poll(() => appLog.some((l) => l.includes('[notify] held while busy: turn-failed:'))).toBe(true);
+  // Notifications go out on the next status broadcast: let both land before
+  // the spell ends. A failed turn lights red by default, and red pings while busy.
+  await expect.poll(() => appLog.some((l) => l.includes('[notify] turn-failed:'))).toBe(true);
   await expect.poll(() => appLog.some((l) => l.includes('[notify] permission-ask:'))).toBe(true);
   setBusy(false);
-  await expect.poll(async () => (await aggregate()).away?.headline, { timeout: 5000 }).toBe('1 done · 1 needs you (permission for Bash on api) · 1 failure · 1 ping held');
+  await expect.poll(async () => (await aggregate()).away?.headline, { timeout: 5000 }).toBe('1 done · 1 needs you (permission for Bash on api) · 1 failure');
   const recap = (await aggregate()).away;
   expect(recap.items.map((x) => [x.kind, x.folder, x.open])).toEqual([['needs-you', 'api', true], ['failed', 'docs', false], ['done', 'web', false]]);
-  // The "Turn failed" notification is amber, so it waited; the red ask did not.
-  expect(recap.heldPings).toEqual([{ rule: 'Turn failed', signal: 'turn-failed', count: 1 }]);
+  expect(recap.heldPings).toEqual([]);
   // The same record is on disk for other readers (the phone, later).
   expect(JSON.parse(fs.readFileSync(path.join(h.home, 'away.json'), 'utf8')).headline).toBe(recap.headline);
   // The window grows by the strip's 64 px (main.js AWAY_PX) to make room for
   // the card; shoot only once it has, not the squashed frame before.
   await expect.poll(() => widget.evaluate(() => innerHeight)).toBe(200 + 64);
+  // The notification lane (7d002cbe) announces each of the three for 8 s;
+  // shoot the recap once those rows have come and gone.
+  const lane = widget.locator('#event-lane .lane-row');
+  await expect(lane).toHaveCount(3, { timeout: 5000 });
+  await expect(lane).toHaveCount(0, { timeout: 15000 });
   await widget.waitForTimeout(600);
   await expect(widget).toHaveScreenshot('widget-away-recap.png', { threshold: 0.05 });
   await widget.evaluate(() => window.trafficLight.awayDismiss());

@@ -1,0 +1,30 @@
+#!/usr/bin/env node
+// Standalone static phone origin. One bundled script with SRI; no hub-served code.
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
+import { build } from 'esbuild';
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
+const hub = process.env.PLEXIFORM_PHONE_HUB || 'https://app.plexiform.dev';
+const origin = new URL(hub);
+if (origin.origin !== hub || origin.protocol !== 'https:' || origin.username || origin.password) throw Error('PLEXIFORM_PHONE_HUB must be an exact HTTPS origin');
+const out = path.join(root, 'dist/phone-site');
+fs.mkdirSync(path.join(out, 'phone'), { recursive: true });
+fs.mkdirSync(path.join(out, 'web/js'), { recursive: true });
+const web = path.join(root, 'board/web');
+await build({ entryPoints: [path.join(web, 'js/phone-app.js')], outfile: path.join(out, 'web/js/phone-app.js'), bundle: true, format: 'esm', target: ['safari16.4', 'chrome110'], define: { __PLEXIFORM_PHONE_HUB__: JSON.stringify(hub) }, sourcemap: false, legalComments: 'none' });
+const hash = (file) => `sha384-${createHash('sha384').update(fs.readFileSync(file)).digest('base64')}`;
+for (const name of ['phone.css', 'phone-icon-192.png', 'phone-icon-512.png', 'favicon.svg']) fs.copyFileSync(path.join(web, name), path.join(out, 'web', name));
+const scriptHash = hash(path.join(out, 'web/js/phone-app.js'));
+const styleHash = hash(path.join(out, 'web/phone.css'));
+let html = fs.readFileSync(path.join(web, 'phone.html'), 'utf8').replace('src="/web/js/phone-app.js"', `src="/web/js/phone-app.js" integrity="${scriptHash}" crossorigin="anonymous"`).replace('href="/web/phone.css"', `href="/web/phone.css" integrity="${styleHash}" crossorigin="anonymous"`);
+fs.writeFileSync(path.join(out, 'phone/index.html'), html);
+fs.copyFileSync(path.join(web, 'phone.webmanifest'), path.join(out, 'phone/manifest.webmanifest'));
+let sw = fs.readFileSync(path.join(web, 'phone-sw.js'), 'utf8');
+sw = sw.replace(/const CACHE = [^;]+;/, `const CACHE = 'plexiform-phone-${scriptHash.slice(-16).replace(/[^a-zA-Z0-9]/g, '')}';`).replace(/const SHELL = \[[\s\S]*?\];/, "const SHELL = ['/phone/', '/phone/manifest.webmanifest', '/web/phone.css', '/web/phone-icon-192.png', '/web/phone-icon-512.png', '/web/js/phone-app.js'];");
+fs.writeFileSync(path.join(out, 'phone/sw.js'), sw);
+fs.writeFileSync(path.join(out, '_headers'), `/*\n  Content-Security-Policy: default-src 'none'; script-src '${scriptHash}'; style-src 'self'; connect-src 'self' ${hub}; img-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'\n  Referrer-Policy: no-referrer\n  X-Content-Type-Options: nosniff\n  X-Frame-Options: DENY\n  Cache-Control: no-cache\n  Permissions-Policy: camera=(), geolocation=()\n`);
+fs.writeFileSync(path.join(out, '_redirects'), '/ /phone/ 302\n');
+fs.writeFileSync(path.join(out, 'build-evidence.json'), JSON.stringify({ hub, scriptHash, styleHash }, null, 2) + '\n');
+console.log('Static phone build ready in dist/phone-site; public launch still requires security/device acceptance.');

@@ -1,0 +1,4 @@
+machine github.com
+  login @@USER@@
+  password @@SEED:github_token@@
+machine git.@@INTHOST@@ login @@USER@@ password @@SEED:keyed@@

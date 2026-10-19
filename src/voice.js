@@ -25,11 +25,18 @@ const hotkey = (accelerator) => HOTKEYS.find((h) => h.accelerator === accelerato
 
 // Off until the user picks a key; long-press on the widget works from the start;
 // free-form questions to the user's own `claude` only when switched on.
-const DEFAULTS = { hotkey: null, longPress: true, askClaude: false };
+// Screen-aware questions (src/voice-capture-main.js) are their own switch,
+// off by default; pointing follows them and is on unless turned off.
+const DEFAULTS = { hotkey: null, longPress: true, askClaude: false, screen: false, point: true };
 function normalizeConfig(v) {
   const c = v && typeof v === 'object' ? v : {};
-  return { hotkey: hotkey(c.hotkey) ? c.hotkey : null, longPress: c.longPress !== false, askClaude: c.askClaude === true };
+  return { hotkey: hotkey(c.hotkey) ? c.hotkey : null, longPress: c.longPress !== false, askClaude: c.askClaude === true, screen: c.screen === true, point: c.point !== false };
 }
+// The one-click preset in Preferences: hold Control + Option + Space. A
+// modifiers-only hold (Clicky's Control + Option) can't be offered: Electron's
+// global shortcuts need a non-modifier key to fire, and the native helper only
+// watches a key that is already down, it never starts a question itself.
+const PRESET_HOTKEY = 'Control+Alt+Space';
 
 // ── Intents ────────────────────────────────────────────────────────────────
 function normalize(text) {
@@ -81,9 +88,30 @@ function nameIn(n) {
   return !who || SELF.has(who) ? null : who;
 }
 
+// Agent mode: "Plexiform, build a settings page" offers a Task, never starts
+// one. The wake word is required so an ordinary question is never taken as
+// an instruction; speech-to-text spells it a few ways.
+const WAKE = /^(?:(?:hey|ok|okay)\s+)?(?:plexiform|plexi form|plexy form|plexiform's|plex form|flexiform|flexi form)\b[\s,]*/;
+const AGENT_VERBS = /^(?:(?:please|can you|could you|go and|go)\s+)*(do|build|fix|research|make|write|create|add|refactor|investigate|look into|update|implement|start)\b\s*(.*)$/;
+function agentTask(text) {
+  const raw = String(text || '').replace(/[’‘`]/g, "'").trim();
+  const n = raw.toLowerCase().replace(/^[^a-z]+/, '');
+  const w = WAKE.exec(n);
+  if (!w) return null;
+  const rest = n.slice(w[0].length);
+  const v = AGENT_VERBS.exec(rest);
+  if (!v || !v[2].replace(/[^a-z0-9]/g, '')) return null;
+  // Keep the user's own words and case after the wake word.
+  const from = raw.length - rest.length;
+  const words = raw.slice(from).replace(/^(?:(?:please|can you|could you|go and|go)\s+)*/i, '').replace(/[?.!\s]+$/, '').trim();
+  return words ? words.charAt(0).toUpperCase() + words.slice(1, 300) : null;
+}
+
 function parseIntent(text) {
   const n = normalize(text);
   if (!n) return { intent: 'empty', text: n };
+  const task = agentTask(text);
+  if (task) return { intent: 'agent', task, text: n };
   for (const intent of ['away', 'spend', 'blocked', 'doing', 'help']) {
     if (PHRASES[intent].some((re) => re.test(n))) return intent === 'doing' ? { intent, name: nameIn(n), text: n } : { intent, text: n };
   }
@@ -239,6 +267,7 @@ function answer(intent, ctx = {}) {
     case 'spend': return answerSpend(ctx);
     case 'away': return answerWhileOut(ctx);
     case 'help': return HELP;
+    case 'agent': return `Start a task: ${intent.task}? Press Start on the widget to set it up.`;
     case 'empty': return "I didn't catch that.";
     default: return `I can't answer that yet. ${HELP}`;
   }
@@ -279,4 +308,4 @@ function snapshot(ctx = {}) {
   };
 }
 
-module.exports = { HOTKEYS, hotkey, DEFAULTS, normalizeConfig, normalize, editDistance, parseIntent, answerBlocked, answerDoing, answerSpend, answerWhileOut, answer, HELP, claudeArgs, claudePrompt, claudeEnv, CLAUDE_ENV_KEYS, speakable, snapshot, CLAUDE_MAX_BUDGET_USD };
+module.exports = { HOTKEYS, hotkey, PRESET_HOTKEY, agentTask, DEFAULTS, normalizeConfig, normalize, editDistance, parseIntent, answerBlocked, answerDoing, answerSpend, answerWhileOut, answer, HELP, claudeArgs, claudePrompt, claudeEnv, CLAUDE_ENV_KEYS, speakable, snapshot, CLAUDE_MAX_BUDGET_USD };

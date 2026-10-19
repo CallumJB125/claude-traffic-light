@@ -21,7 +21,7 @@ test('comments: @claude comment → comment.deliver → comment.delivered; agent
     await r.out({ kind: 'comment.create', ...runMsg(run), text: 'Done: added the empty case', reply_to: c.body.comment.id });
     const d = (await h.api(alice, 'GET', `/api/cards/${run.card_id}`)).body;
     assert.ok(d.comments[0].delivered_age_ms != null, 'seen by Claude');
-    assert.deepEqual([d.comments[1].source, d.comments[1].trusted, d.comments[1].author_name, d.comments[1].reply_to], ['agent', true, "Alice's Claude", c.body.comment.id]);
+    assert.deepEqual([d.comments[1].source, d.comments[1].trusted, d.comments[1].author_name, d.comments[1].reply_to], ['agent', true, "Alice's Claude Code", c.body.comment.id]);
 
     const got = await r.rpc(run, 'board_get_card');
     assert.equal(got.result.card.key, run.key);

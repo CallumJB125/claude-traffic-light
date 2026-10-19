@@ -1,8 +1,8 @@
     const workingInput = document.getElementById('workingStaleMinutes');
     const waitingInput = document.getElementById('waitingStaleHours');
-    const soundInput = document.getElementById('soundOnAmber');
+    const soundInput = document.getElementById('sounds');
     const status = document.getElementById('status');
-    const NOTIFY_KINDS = ['permission-ask', 'turn-failed', 'offline'];
+    const NOTIFY_KINDS = ['permission-ask', 'turn-failed', 'offline', 'stuck'];
     const syncNotifyKinds = () => { const on = document.getElementById('notifyOnStates').checked; for (const k of NOTIFY_KINDS) document.getElementById(`notify-${k}`).disabled = !on; };
     document.getElementById('notifyOnStates').addEventListener('change', syncNotifyKinds);
 
@@ -10,14 +10,24 @@
       const config = await window.settingsApi.getConfig();
       workingInput.value = config.workingStaleMinutes;
       waitingInput.value = config.waitingStaleHours;
-      soundInput.checked = config.soundOnAmber;
+      document.getElementById('stuckMinutes').value = config.stuckMinutes ?? 5;
+      soundInput.checked = config.sounds !== false;
       document.getElementById('notifyOnStates').checked = config.notifyOnStates !== false;
       for (const k of NOTIFY_KINDS) document.getElementById(`notify-${k}`).checked = (config.notifyStates || {})[k] !== false;
       syncNotifyKinds();
+      const q = config.quietHours || {};
+      document.getElementById('quietEnabled').checked = q.enabled === true;
+      document.getElementById('quietStart').value = q.start || '22:00';
+      document.getElementById('quietEnd').value = q.end || '07:00';
+      const qDays = Array.isArray(q.days) ? q.days : [0, 1, 2, 3, 4, 5, 6];
+      for (const box of document.querySelectorAll('#quiet-days input')) box.checked = qDays.includes(Number(box.dataset.day));
+      document.getElementById('mutedProjects').value = (config.mutedProjects || []).join('\n');
       document.getElementById('showWidget').checked = config.showWidget !== false;
       document.getElementById('menuBarMode').checked = !!config.menuBarMode;
+      document.getElementById('lowPower').value = ['auto', 'on', 'off'].includes(config.lowPower) ? config.lowPower : 'auto';
       document.getElementById('seasonal').checked = config.seasonal !== false;
       document.getElementById('askFromWidget').checked = !!config.askFromWidget;
+      document.getElementById('oneKeyApprove').checked = config.oneKeyApprove === true;
       document.getElementById('showTasks').checked = config.showTasks !== false;
       document.getElementById('showAgents').checked = config.showAgents !== false;
       document.getElementById('agentRoster').checked = config.agentRoster !== false;
@@ -33,19 +43,38 @@
       document.getElementById('gitDeployWorkflows').value = (config.gitDeployWorkflows || []).join(', ');
       loadSpend(config.spend || {}); // F1 spend
       document.getElementById('remoteTailscale').checked = !!config.remoteTailscale;
+      document.getElementById('teamSessionSharing').checked = config.teamSessionSharing !== false;
+      document.getElementById('teamBrief').checked = config.teamBrief === true;
+      document.getElementById('explainMode').checked = config.explainMode === true;
+      document.getElementById('agentMailInbox').checked = config.agentMailInbox === true;
+      document.getElementById('remoteInteractionHost').checked = config.remoteInteractionHost === true;
+      document.getElementById('codexDaemonMessaging').checked = config.codexDaemonMessaging === true;
       document.getElementById('busyHold').checked = config.busyHold !== false;
+      document.getElementById('slackPresence').checked = config.slackPresence === true;
       document.getElementById('busyCalendar').checked = !!config.busyCalendar;
       document.getElementById('busyCalendarTitles').checked = !!config.busyCalendarTitles;
       document.getElementById('busyFocus').checked = config.busyFocus !== false;
       document.getElementById('busyIcsUrl').value = config.busyIcsUrl || '';
       document.getElementById('busyFocusShortcut').value = config.busyFocusShortcut || '';
+      document.getElementById('simpleMode').checked = config.simpleMode === true;
+      document.body.classList.toggle('simple', config.simpleMode === true);
       showBusy();
+    }
+    document.getElementById('simpleMode').addEventListener('change', (e) => document.body.classList.toggle('simple', e.target.checked));
+    // The colour key (src/colour-legend.js): one meaning per lamp colour, the same everywhere.
+    if (window.PlexiformLegend) {
+      document.getElementById('legend').replaceChildren(...window.PlexiformLegend.LEGEND.map((e) => {
+        const li = document.createElement('li');
+        const g = document.createElement('span'); g.className = `glyph ${e.colour}`; g.textContent = e.glyph; g.setAttribute('aria-hidden', 'true');
+        const t = document.createElement('span'); t.textContent = `${e.label}: ${e.meaning}. ${e.detail}`;
+        li.append(g, t); return li;
+      }));
     }
 
     // One click: ticking the calendar saves it at once, and that save is what
     // shows macOS's one-time access prompt. It is off until then.
     document.getElementById('busyCalendar').addEventListener('change', async (e) => {
-      try { await window.settingsApi.saveConfig({ busyCalendar: e.target.checked }); } catch { /* Save reports errors */ }
+      try { await window.settingsApi.saveConfig({ busyCalendar: e.target.checked }); flash(); } catch (err) { flash(err); }
       setTimeout(showBusy, 1500);
     });
 
@@ -55,7 +84,7 @@
       notDetermined: ['Waiting for macOS calendar access. If no prompt appeared, untick and tick this again.', false],
       denied: ['Calendar access is off. Turn on Plexiform in System Settings › Privacy & Security › Calendars.', false],
       restricted: ['Calendar access is blocked on this Mac (a profile or Screen Time).', false],
-      writeOnly: ['Buddy has “Add Events Only” access, which can’t see when you’re busy. Switch it to Full Access in System Settings › Privacy & Security › Calendars.', false],
+      writeOnly: ['Plexiform has “Add Events Only” access, which can’t see when you’re busy. Switch it to Full Access in System Settings › Privacy & Security › Calendars.', false],
       missing: ['Not available in this build (the calendar helper is missing). An ICS feed still works.', false],
     };
     const hhmm = (t) => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -69,7 +98,7 @@
       // macOS dropped a grant it had given (an update signed differently does
       // that): one click asks again, instead of untick-and-tick.
       if (st.calendar.on && st.calendar.reset) {
-        cal.textContent = 'macOS forgot Buddy’s calendar access (this can happen after an update).';
+        cal.textContent = 'macOS forgot Plexiform’s calendar access (this can happen after an update).';
         cal.className = 'busy-state';
         const again = document.createElement('button');
         again.type = 'button';
@@ -137,18 +166,28 @@
     }).catch(() => {});
     // ── end F1 spend ──
 
-    document.getElementById('save').addEventListener('click', async () => {
+    async function saveAll() {
       try {
       await window.settingsApi.saveConfig({
         workingStaleMinutes: Math.max(1, Math.min(60, Number(workingInput.value) || 6)),
+        stuckMinutes: Math.max(0, Math.min(60, Math.round(Number(document.getElementById('stuckMinutes').value) || 0))),
         waitingStaleHours: Math.max(1, Math.min(24, Number(waitingInput.value) || 4)),
-        soundOnAmber: soundInput.checked,
+        sounds: soundInput.checked,
+        quietHours: {
+          enabled: document.getElementById('quietEnabled').checked,
+          start: document.getElementById('quietStart').value || '22:00',
+          end: document.getElementById('quietEnd').value || '07:00',
+          days: [...document.querySelectorAll('#quiet-days input')].filter((b) => b.checked).map((b) => Number(b.dataset.day)),
+        },
+        mutedProjects: document.getElementById('mutedProjects').value.split('\n').map((x) => x.trim()).filter(Boolean),
         notifyOnStates: document.getElementById('notifyOnStates').checked,
         notifyStates: Object.fromEntries(NOTIFY_KINDS.map((k) => [k, document.getElementById(`notify-${k}`).checked])),
         showWidget: document.getElementById('showWidget').checked,
         menuBarMode: document.getElementById('menuBarMode').checked,
+        lowPower: document.getElementById('lowPower').value,
         seasonal: document.getElementById('seasonal').checked,
         askFromWidget: document.getElementById('askFromWidget').checked,
+        oneKeyApprove: document.getElementById('oneKeyApprove').checked,
         showTasks: document.getElementById('showTasks').checked,
         showAgents: document.getElementById('showAgents').checked,
         agentRoster: document.getElementById('agentRoster').checked,
@@ -166,40 +205,72 @@
         gitDeployWorkflows: commaList('gitDeployWorkflows'),
         spend: spendSettings(), // F1 spend
         busyHold: document.getElementById('busyHold').checked,
+        slackPresence: document.getElementById('slackPresence').checked,
         busyCalendar: document.getElementById('busyCalendar').checked,
         busyCalendarTitles: document.getElementById('busyCalendarTitles').checked,
         busyFocus: document.getElementById('busyFocus').checked,
         busyIcsUrl: document.getElementById('busyIcsUrl').value.trim().slice(0, 2000),
         busyFocusShortcut: document.getElementById('busyFocusShortcut').value.trim().slice(0, 100),
         remoteTailscale: document.getElementById('remoteTailscale').checked,
+        teamSessionSharing: document.getElementById('teamSessionSharing').checked,
+        teamBrief: document.getElementById('teamBrief').checked,
+        explainMode: document.getElementById('explainMode').checked,
+        agentMailInbox: document.getElementById('agentMailInbox').checked,
+        remoteInteractionHost: document.getElementById('remoteInteractionHost').checked,
+        codexDaemonMessaging: document.getElementById('codexDaemonMessaging').checked,
+        simpleMode: document.getElementById('simpleMode').checked,
       });
+      setTimeout(showInteractionHost, 1500);
       setTimeout(showBusy, 1500);
       showRemote(await window.settingsApi.remoteDevices());
-      status.className = '';
-      status.textContent = 'Saved';
-      setTimeout(() => (status.textContent = ''), 2500);
-      } catch (err) {
-        status.className = 'err';
-        status.textContent = `Save failed — ${err.message}`;
-        status.setAttribute('role', 'alert');
-        setTimeout(() => { status.textContent = ''; status.className = ''; status.setAttribute('role', 'status'); }, 6000);
-      }
+      flash();
+      } catch (err) { flash(err); }
+    }
+
+    let flashTimer = null;
+    function flash(err) {
+      clearTimeout(flashTimer);
+      status.className = err ? 'err' : '';
+      status.setAttribute('role', err ? 'alert' : 'status');
+      status.textContent = err ? `Save failed — ${err.message}` : 'Saved';
+      flashTimer = setTimeout(() => { status.textContent = ''; status.className = ''; status.setAttribute('role', 'status'); }, err ? 6000 : 2500);
+    }
+    window.showSaved = flash;
+
+    // Every control saves when it changes. Voice, Compactor, crash reports and
+    // the calendar tick keep their own saves (and say Saved themselves); boards
+    // and the device name only fill in a form for their button.
+    let saving = Promise.resolve();
+    const OWN_SAVE = /^(voice-|compact-|native-board-|remote-name$|busyCalendar$)/;
+    document.addEventListener('change', (e) => {
+      const t = e.target;
+      if (!t.matches || !t.matches('input, select, textarea') || OWN_SAVE.test(t.id || '') || t.closest('#backups, #health, #privacy')) return;
+      saving = saving.then(saveAll);
     });
 
-    document.querySelectorAll('[data-agent]').forEach((b) => b.addEventListener('click', async () => {
-      const r = await window.settingsApi.connectAgent(b.dataset.agent);
-      document.getElementById('connect-hint').textContent = r && r.ok ? `Connected ${b.textContent}: wrote ${r.file}. Restart it to pick up the hooks.`
-        : r && r.error ? `Did not connect ${b.textContent}: in ${r.file}, ${r.error}` : 'Could not connect.';
-    }));
-    const mcpToggle = document.getElementById('mcp-toggle');
-    const showMcp = (st) => {
-      mcpToggle.dataset.on = st.installed ? '1' : '';
-      mcpToggle.textContent = st.installed ? 'Disable Claude integration' : 'Enable Claude integration';
-      if (st.error) document.getElementById('mcp-hint').textContent = `Could not update ${st.path}: ${st.error}`;
-      else if (st.installed && !st.current) document.getElementById('mcp-hint').textContent = 'Registered, but pointing at an older copy of Buddy. Disable and enable again to update it.';
+    const SECTIONS = ['general', 'notifications', 'spend', 'widget', 'privacy', 'advanced'];
+    function showSection(id) {
+      if (!SECTIONS.includes(id)) id = 'general';
+      for (const p of document.querySelectorAll('.pane')) p.hidden = p.dataset.section !== id;
+      for (const b of document.querySelectorAll('#section-nav button')) { if (b.dataset.go === id) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); }
+      try { history.replaceState(null, '', `?${new URLSearchParams({ ...Object.fromEntries(new URLSearchParams(location.search)), section: id })}`); } catch { /* embedded pages may refuse */ }
+    }
+    window.showSettingsSection = showSection;
+    for (const b of document.querySelectorAll('#section-nav button')) b.addEventListener('click', () => { showSection(b.dataset.go); document.body.scrollTop = 0; });
+    showSection(new URLSearchParams(location.search).get('section') || location.hash.slice(1));
+
+
+    const showCli = (r) => {
+      const el = document.getElementById('cli-status');
+      if (!r) return;
+      if (r.cancelled) { el.textContent = 'Not installed.'; return; }
+      if (r.error) { el.textContent = r.error; return; }
+      if (r.installed || r.ok) el.textContent = `Installed at ${r.link}. If your shell can't find plexiform, add ~/.local/bin to your PATH.`;
+      else if (r.blocked) el.textContent = `Something else is already at ${r.link}; Plexiform won't replace it.`;
+      else el.textContent = `Creates a link at ${r.link}. You'll be asked to confirm first.`;
     };
-    mcpToggle.addEventListener('click', async () => showMcp(await window.settingsApi.mcpSetEnabled(!mcpToggle.dataset.on)));
-    window.settingsApi.mcpStatus().then(showMcp);
+    window.settingsApi.cliStatus().then(showCli);
+    document.getElementById('cli-install').addEventListener('click', async () => showCli(await window.settingsApi.cliInstall()));
     window.settingsApi.signalEndpoint().then((e) => { document.getElementById('endpoint').textContent = `http://127.0.0.1:${e.port}/signal`; document.getElementById('emit-path').textContent = e.emit; if (e.token) document.getElementById('token-path').textContent = e.token; });
     const showGit = (g) => {
       if (!g) return;
@@ -230,7 +301,7 @@
         const meta = document.createElement('span');
         meta.textContent = d.pairing === 'expired' ? 'Code expired unused: revoke and pair again'
           : d.pairing === 'waiting' ? 'Waiting for the device to use its code'
-          : `${d.lastSeenAt ? `seen ${ago(d.lastSeenAt)}` : 'not seen since Buddy started'} · ${d.sessions} live session${d.sessions === 1 ? '' : 's'}`;
+          : `${d.lastSeenAt ? `seen ${ago(d.lastSeenAt)}` : 'not seen since Plexiform started'} · ${d.sessions} live session${d.sessions === 1 ? '' : 's'}`;
         who.append(name, meta);
         const revoke = document.createElement('button');
         revoke.type = 'button'; revoke.className = 'secondary'; revoke.textContent = 'Revoke';
@@ -277,6 +348,8 @@
     remoteEl('copy').addEventListener('click', async () => { if (await window.settingsApi.remoteCopyCode(remoteEl('code-text').textContent)) remoteEl('pair-status').textContent = 'Code copied; the clipboard forgets it in a minute.'; });
     remoteEl('done').addEventListener('click', () => { remoteEl('code-text').textContent = ''; remoteEl('code').hidden = true; });
     window.settingsApi.remoteDevices().then(showRemote);
+    async function showInteractionHost() { document.getElementById('interaction-host-status').textContent = (await window.settingsApi.interactionHostStatus().catch(() => null)) ?? ''; }
+    showInteractionHost();
     const pvStatus = document.getElementById('privacy-status');
     const pvDone = (r) => { pvStatus.textContent = !r ? '' : r.error ? r.error : (r.file || r.path) ? `Saved ${r.file || r.path}` : typeof r === 'string' && r ? `Could not open the folder: ${r}` : ''; };
     document.getElementById('privacy-export-stats').addEventListener('click', async () => pvDone(await window.settingsApi.exportStats('json', 60)));
@@ -367,33 +440,28 @@
       } catch (err) { hint.textContent = `Couldn't copy: ${err.message}`; }
     });
     window.settingsApi.onShowSection((id) => {
+      if (id === 'widget') { showSection('widget'); return; }
       if (id !== 'health') return;
+      showSection('advanced');
       refreshHealth();
       document.getElementById('health').scrollIntoView({ block: 'start' });
     });
     // ── end Health ──
 
-    // ── Account & team ── main reads no auth by itself: the line is neutral unless the Plexiform window can say.
-    const showAccount = async () => {
-      const v = await window.settingsApi.accountView().catch(() => null);
-      if (!v) return;
-      const line = document.getElementById('account-line');
-      line.textContent = v.line;
-      line.title = v.line; // the clamp may hide the tail
-      document.getElementById('account-signin').hidden = !v.signIn;
-    };
-    document.getElementById('account-team').addEventListener('click', () => window.settingsApi.accountOpen('team'));
-    document.getElementById('account-signin').addEventListener('click', () => window.settingsApi.accountOpen('signin'));
-    document.getElementById('account-open').addEventListener('click', () => window.settingsApi.accountOpen('account'));
-    window.settingsApi.onAccountChanged(showAccount);
-    showAccount();
     load();
+    // The Widget page and the tray change some of these keys too: re-read on return so a later save keeps them.
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) load().catch(() => {}); });
 
-    // ── Voice (F7) ── its own saves, so the Save button's list stays untouched.
+    // ── Voice (F7) ── its own saves, kept out of the page-wide list.
     (async () => {
       const hotkey = document.getElementById('voice-hotkey');
       const longPress = document.getElementById('voice-longPress');
       const askClaude = document.getElementById('voice-askClaude');
+      const screenOn = document.getElementById('voice-screen');
+      const point = document.getElementById('voice-point');
+      const preset = document.getElementById('voice-preset');
+      const screenHint = document.getElementById('voice-screen-hint');
+      const screenIntro = screenHint.textContent;
       const hint = document.getElementById('voice-hint');
       const intro = hint.textContent;
       const [config, st] = await Promise.all([window.settingsApi.getConfig(), window.settingsApi.voiceStatus()]);
@@ -402,17 +470,104 @@
       hotkey.value = v.hotkey || '';
       longPress.checked = v.longPress !== false;
       askClaude.checked = !!v.askClaude;
+      screenOn.checked = v.screen === true;
+      point.checked = v.point !== false;
+      const syncScreen = (access) => {
+        point.disabled = !st.available || !screenOn.checked;
+        screenHint.textContent = screenOn.checked && access && access !== 'granted' && access !== 'unsupported'
+          ? 'Turn on Screen Recording for Plexiform in System Settings, Privacy and Security, Screen Recording. Until then questions are answered without the screen.'
+          : screenIntro;
+      };
+      syncScreen(st.screenAccess);
       const show = (cur) => {
         hint.textContent = !st.available ? st.reason
           : cur.taken ? `${cur.taken} is taken by another app — pick another key.`
             : intro;
       };
       show({ taken: st.hotkeyTaken });
-      if (!st.available) for (const el of [hotkey, longPress, askClaude]) el.disabled = true;
+      if (!st.available) for (const el of [hotkey, longPress, askClaude, screenOn, point, preset]) el.disabled = true;
+      // Pointing starts on with the screen switch; turning the screen on resets it to on.
+      screenOn.addEventListener('change', () => { if (screenOn.checked) point.checked = true; });
       const save = async () => {
-        await window.settingsApi.saveConfig({ voice: { hotkey: hotkey.value || null, longPress: longPress.checked, askClaude: askClaude.checked } });
+        await window.settingsApi.saveConfig({ voice: { hotkey: hotkey.value || null, longPress: longPress.checked, askClaude: askClaude.checked, screen: screenOn.checked, point: point.checked } });
+        flash();
         const now = await window.settingsApi.voiceStatus();
         show({ taken: now.hotkeyTaken });
+        syncScreen(now.screenAccess);
       };
-      for (const el of [hotkey, longPress, askClaude]) el.addEventListener('change', () => save().catch((err) => { hint.textContent = `Save failed — ${err.message}`; }));
+      const fail = (err) => { flash(err); hint.textContent = `Save failed — ${err.message}`; };
+      for (const el of [hotkey, longPress, askClaude, screenOn, point]) el.addEventListener('change', () => save().catch(fail));
+      preset.addEventListener('click', () => { hotkey.value = st.preset; save().catch(fail); });
+    })();
+
+    // ── Compactor ── its own saves. Numbers come only from recorded before/after counts.
+    (async () => {
+      const $ = (id) => document.getElementById(`compact-${id}`);
+      const NAMES = { codex: 'Codex', claude: 'Claude Code', gemini: 'Gemini', local: 'Local model' };
+      const fmt = (n) => Math.abs(n).toLocaleString();
+      const showThreshold = () => { $('threshold-value').textContent = `${$('threshold').value}%`; };
+      const plural = (n, w) => `${n.toLocaleString()} ${w}${n === 1 ? '' : 's'}`;
+      // Payback: turns until the one-time reduction has paid for the compaction itself.
+      const payback = (p) => (!p ? '' : p.kind === 'about' ? `pays back after about ${plural(p.turns, 'more turn')}`
+        : p.kind === 'at-least' ? `pays back after at least ${plural(p.turns, 'more turn')} (estimate: its cost was not reported, so this counts only the context it had to read)`
+        : p.kind === 'never' ? 'never pays back: the context did not get smaller'
+        : p.kind === 'unknown' ? 'payback unknown: its cost was not reported' : '');
+      const show = (st) => {
+        const saved = $('saved'), last = $('last');
+        if (!st) { saved.textContent = 'Not available right now.'; last.textContent = ''; return; }
+        const t = st.total;
+        if (!t.compactions) saved.textContent = 'Nothing compacted yet.';
+        else if (!t.measured) saved.textContent = `${plural(t.compactions, 'compaction')}, not measured yet: the reduction is known after the next turn reports its token count.`;
+        else {
+          const parts = [];
+          if (t.providerMeasured) {
+            parts.push(t.reducedTokens >= 0
+              ? `Context reduced by ${fmt(t.reducedTokens)} tokens a turn across ${plural(t.providerMeasured, 'compaction')} (the provider's own counts, the turn before vs the turn after)`
+              : `Context grew by ${fmt(t.reducedTokens)} tokens: the summaries were larger than what they replaced`);
+            if (t.costReported) parts.push(`The compactions themselves cost ${fmt(t.costTokens)} tokens (reported by the provider)`);
+            if (t.costUnknown) parts.push(`${plural(t.costUnknown, 'compaction')} did not report ${t.costUnknown === 1 ? 'its' : 'their'} own cost${t.unknownCostFloorTokens ? `; ${t.costUnknown === 1 ? 'it' : 'each'} read its whole context, so at least ${fmt(t.unknownCostFloorTokens)} tokens (estimate)` : ''}`);
+            const pb = payback(t.payback);
+            if (pb) parts.push(pb[0].toUpperCase() + pb.slice(1));
+          }
+          if (t.estimatedReducedTokens) parts.push(`Local models: about ${fmt(t.estimatedReducedTokens)} tokens reduced for about ${fmt(t.estimatedCostTokens)} tokens of summarising (estimates, ~4 characters a token)`);
+          saved.textContent = parts.length ? `${parts.join('. ')}.` : 'No measured change yet.';
+        }
+        const l = st.last;
+        if (!l) { last.textContent = ''; return; }
+        const src = l.source === 'provider' ? 'reported by the provider' : 'estimated';
+        const what = l.reduced === null ? 'not measured (the provider reported no token counts)'
+          : `context ${fmt(l.before)} → ${fmt(l.after)} tokens (${src}); compaction cost ${l.costSource === 'unknown' ? 'not reported' : `${fmt(l.cost)} tokens (${l.costSource === 'provider' ? 'reported by the provider' : 'estimated'})`}${payback(l.payback) ? `; ${payback(l.payback)}` : ''}`;
+        last.textContent = `Last: ${NAMES[l.provider] || l.provider}, ${new Date(l.at).toLocaleString()}, ${what}.`;
+      };
+      const SOURCES = { learned: 'learned', override: 'your own setting', fixed: 'the one setting', off: 'never compacted' };
+      const showLearned = (l) => {
+        const box = $('burst-learned');
+        box.replaceChildren();
+        box.hidden = !l || !l.repos.length;
+        if (box.hidden) return;
+        box.append(document.createTextNode(l.intelligent ? `Burst's learned Compact at per repository (from the last ${plural(l.windowDays, 'day')}; change it in the Burst dashboard):` : 'Burst\'s Compact at per repository (change it in the Burst dashboard):'));
+        const ul = document.createElement('ul');
+        for (const r of l.repos) {
+          const li = document.createElement('li');
+          li.textContent = `${r.name}: ${r.source === 'off' || !r.inForce ? 'never compacted' : `${fmt(r.inForce)} tokens (${SOURCES[r.source]})`}`;
+          ul.append(li);
+        }
+        box.append(ul);
+      };
+      const withNote = (st) => { show(st); showLearned(st?.burstLearned); if (st?.burstNote) $('saved').textContent = `${st.burstNote}, so Plexiform's own Claude compactor is off. ${$('saved').textContent}`; };
+      const st = await window.settingsApi.compactionStats().catch(() => null);
+      const s = st?.settings || {};
+      $('enabled').checked = s.enabled === true;
+      $('codex').checked = s.providers?.codex === true;
+      $('threshold').value = Math.round((s.threshold || 0.55) * 100);
+      showThreshold();
+      withNote(st);
+      const save = async () => {
+        const cur = (await window.settingsApi.getConfig()).compaction || {};
+        await window.settingsApi.saveConfig({ compaction: { ...cur, enabled: $('enabled').checked, providers: { ...cur.providers, codex: $('codex').checked }, threshold: Number($('threshold').value) / 100 } });
+        flash();
+        withNote(await window.settingsApi.compactionStats().catch(() => null));
+      };
+      $('threshold').addEventListener('input', showThreshold);
+      for (const el of [$('enabled'), $('codex'), $('threshold')]) el.addEventListener('change', () => save().catch((err) => { flash(err); $('saved').textContent = `Save failed — ${err.message}`; }));
     })();

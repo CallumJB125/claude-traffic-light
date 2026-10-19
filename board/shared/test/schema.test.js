@@ -1,11 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { migrate, loadMigrations, currentVersion, applyRestoreBump, directives } from '../migrate.js';
 import { step, toDb, STATES, DARK } from '../states.js';
+import { testTempDir } from '../test-support/tmp.js';
 
 const NOW = '2026-09-30T10:00:00.000Z';
 
@@ -46,7 +46,7 @@ test('migrate: applies 001 and the shipped migrations once, records them, is ide
 });
 
 test('migrate: later files apply in order in their own transaction; a failing one rolls back', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'board-mig-'));
+  const dir = testTempDir('board-mig-');
   try {
     writeFileSync(join(dir, '002_add_x.sql'), 'CREATE TABLE x (a INTEGER);');
     const db = new DatabaseSync(':memory:');
@@ -61,7 +61,7 @@ test('migrate: later files apply in order in their own transaction; a failing on
 });
 
 test('migrate: gaps are allowed and a reserved lower version landing later is still applied (D50)', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'board-mig-'));
+  const dir = testTempDir('board-mig-');
   try {
     writeFileSync(join(dir, '002_a.sql'), 'CREATE TABLE a (x INTEGER);');
     writeFileSync(join(dir, '005_c.sql'), 'CREATE TABLE c (x INTEGER);');
@@ -78,7 +78,7 @@ test('migrate: gaps are allowed and a reserved lower version landing later is st
 });
 
 test('migrate: `-- migrate: foreign_keys=off` rebuilds a referenced table with ids intact; a broken reference rolls back', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'board-mig-'));
+  const dir = testTempDir('board-mig-');
   try {
     writeFileSync(join(dir, '002_base.sql'), `
       CREATE TABLE people (id TEXT PRIMARY KEY, login TEXT NOT NULL);
@@ -113,7 +113,7 @@ test('migrate: `-- migrate: foreign_keys=off` rebuilds a referenced table with i
 });
 
 test('migrate: `-- migrate: rebuilds` is refused after a higher version, applies in order, and plain gap-fills still land', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'board-mig-'));
+  const dir = testTempDir('board-mig-');
   try {
     writeFileSync(join(dir, '002_base.sql'), 'CREATE TABLE t (x INTEGER);');
     writeFileSync(join(dir, '009_trig.sql'), "CREATE TRIGGER t_guard BEFORE DELETE ON t BEGIN SELECT RAISE(ABORT, 'kept'); END;");
@@ -149,7 +149,7 @@ test('migrate: directives are read from the whole leading comment block, past a 
   assert.deepEqual([...directives('\n\r\n-- 014: a note first\n--\n-- migrate: foreign_keys=off, rebuilds\r\nSELECT 1;')], ['foreign_keys=off', 'rebuilds']);
   assert.deepEqual([...directives('SELECT 1;\n-- migrate: rebuilds\n')], [], 'after the first SQL line it is just a comment');
   assert.deepEqual([...directives('/* block */\n-- migrate: rebuilds')], [], 'only -- comments open the block');
-  const dir = mkdtempSync(join(tmpdir(), 'board-mig-'));
+  const dir = testTempDir('board-mig-');
   try {
     writeFileSync(join(dir, '002_base.sql'), 'CREATE TABLE t (x INTEGER);');
     writeFileSync(join(dir, '009_later.sql'), 'CREATE TABLE u (x INTEGER);');

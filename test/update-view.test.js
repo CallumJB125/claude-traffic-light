@@ -78,7 +78,8 @@ test('plain-English errors', () => {
 
 test('idle, checking, available, downloading', () => {
   assert.equal(view('idle-never-checked').lastChecked, 'Not checked yet');
-  assert.equal(view('idle-never-checked').headline, 'Not checked yet');
+  assert.equal(view('idle-never-checked').headline, 'Check for updates');
+  assert.notEqual(view('idle-never-checked').headline, view('idle-never-checked').lastChecked, 'What\'s new must not say the same thing twice');
   assert.equal(view('idle-up-to-date').headline, "You're up to date");
   assert.equal(view('idle-up-to-date').lastChecked, 'Last checked 2 hours ago');
   assert.deepEqual(labels(view('idle-up-to-date')), ['Check now']);
@@ -96,6 +97,14 @@ test('idle, checking, available, downloading', () => {
   const dl = view('downloading');
   assert.deepEqual(dl.progress, { percent: 42, label: '42%' });
   assert.deepEqual(dl.buttons, []);
+});
+
+test('portable update UI gives replacement instructions without an install or download action', () => {
+  const vm = V.view({ ...states['idle-up-to-date'], status: 'error', error: { code: 'portable' }, installKind: 'portable', available: { version: '1.2.0', notes: '' }, canRevert: false });
+  assert.match(vm.message.text, /latest portable copy/);
+  assert.match(vm.message.text, /https:\/\/plexiform\.dev\/download/);
+  assert.ok(!vm.buttons.some(b => b.id.startsWith('install') || b.id === 'download'));
+  assert.equal(vm.revert, null);
 });
 
 test('ready: buttons follow the install kind', () => {

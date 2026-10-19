@@ -5,6 +5,7 @@ const os = require('os');
 const path = require('path');
 
 const U = require('../usage.js');
+const { testTempDir } = require('./helpers/tmp');
 
 const T0 = new Date(2026, 8, 10, 12, 0, 0).getTime();
 const iso = (t) => new Date(t).toISOString();
@@ -19,7 +20,7 @@ const line = (over = {}) => {
 const near = (a, b) => assert.ok(Math.abs(a - b) < 1e-9, `${a} ≈ ${b}`);
 
 function fixture(files) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-'));
+  const root = testTempDir('usage-');
   for (const [rel, lines] of Object.entries(files)) {
     const f = path.join(root, rel);
     fs.mkdirSync(path.dirname(f), { recursive: true });

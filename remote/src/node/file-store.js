@@ -33,14 +33,16 @@ export function fileStorage(file) {
   };
 }
 
+// File: {v:2, sign: <ECDSA JWK>, agree: <ECDH JWK>}. A v1 file (the bare
+// signing JWK) keeps its id and gains an agreement key, written back.
 export async function loadOrCreateIdentity(file) {
-  try {
-    return await identityFromJwk(JSON.parse(fs.readFileSync(file, 'utf8')));
-  } catch (e) {
+  let saved = null;
+  try { saved = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) {
     if (e.code !== 'ENOENT') throw e;
   }
-  const id = await createIdentity();
-  writePrivate(file, JSON.stringify(id.jwk));
+  if (saved?.v === 2) return identityFromJwk(saved.sign, saved.agree);
+  const id = saved ? await identityFromJwk(saved) : await createIdentity();
+  writePrivate(file, JSON.stringify({ v: 2, sign: id.jwk, agree: id.agreeJwk }));
   return id;
 }
 

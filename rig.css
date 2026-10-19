@@ -6,6 +6,18 @@
 
 /* Out of view (rig.js observes every rig): nothing to draw, so nothing ticks. */
 .rig.offscreen, .rig.offscreen * { animation-play-state: paused !important; }
+/* The window is hidden, minimised, locked or occluded (rig.setHidden): hold every loop. */
+.rig.held, .rig.held * { animation-play-state: paused !important; }
+/* Low-power mode (rig.setLowPower): decorative loops and one-shots stop; the lamp
+   colours, lamp effects and pose animations that carry status keep working, and
+   the lamp's soft glow drops to its plain colour. */
+.rig.low-power.breathes .claude-body { animation: none !important; }
+.rig.low-power :is(.pet-frog, .pet-snail, .pet-dragon, .pet-tail, .pet-bunny, .pet-parrot, .tongue, .wing, .fire,
+  .twinkle, .bubble, .floatheart, .leaf, .petal, .glyph, .firefly, .drop, .rays, .flake, .spk, .flame,
+  .hp-led, .tassel, .propeller, .pom, .dog-tail, .halo, .sparkle, .devil-tail, .fox-tail, .bee-hover, .bee-wing, .axo-tail, .wag, .antenna, .cat-tail,
+  .hb-heart, .astro-led, .antler-bells, .ghost-float, .owl-pupil, .fw, .bat, .bolt, .cloud, .aurora-band, .ember) { animation: none !important; }
+.rig.low-power .confetti { display: none; }
+.rig.low-power .lamp.on { filter: none; }
 
 .rig {
   width: 100%;
@@ -549,19 +561,11 @@
 /* Sunglasses sit over the eyes; the eyes' own colour is hidden underneath. */
 .rig.costume-shades .eye-open { opacity: 0; }
 
-/* Cameos: a famous face over Claude's head, independent of costume. They
+/* Cameos: a drawn face over Claude's head, independent of costume. They
    live inside .claude-body so they bob with every pose; hats (costumes) are
    drawn after, so a crown sits on the hair. */
 .rig .cameo { opacity: 0; transition: opacity 150ms ease; }
-.rig.cameo-neo .cameo-neo, .rig.cameo-alfred .cameo-alfred, .rig.cameo-mcafee .cameo-mcafee,
-.rig.cameo-spagni .cameo-spagni, .rig.cameo-powell .cameo-powell, .rig.cameo-baker .cameo-baker,
-.rig.cameo-wizard .cameo-wizard, .rig.cameo-scientist .cameo-scientist, .rig.cameo-pirate .cameo-pirate, .rig.cameo-punk .cameo-punk { opacity: 1; }
-/* Opaque shades (neo) hide only plain eyes. Any other eye state — closed, a
-   mood, or a pose that works the eyes (zyn, line, juice, smoke, grin, dead) —
-   shows through lenses gone smoky, so no pose ever loses its eyes. */
-.rig .cameo-lens { transition: opacity 150ms ease; }
-.rig.cameo-hides-eyes:not(.eyes-closed, .eyes-heart, .eyes-happy, .eyes-angry, .eyes-sad, .eyes-surprised, .eyes-wink, .eyes-star, .eyes-money, .eyes-sleepy, .eyes-suspicious, .eyes-roll, .eyes-googly, .eyes-dizzy, .eyes-x, .eyes-tears, .eyes-laser, .pose-sleep, .pose-dead, .pose-zyn, .pose-line, .pose-juice, .pose-smoke, .pose-grin, .pose-selfie, .lounging, .grumpy) .eye-open { opacity: 0; }
-.rig.cameo-hides-eyes:is(.eyes-closed, .eyes-heart, .eyes-happy, .eyes-angry, .eyes-sad, .eyes-surprised, .eyes-wink, .eyes-star, .eyes-money, .eyes-sleepy, .eyes-suspicious, .eyes-roll, .eyes-googly, .eyes-dizzy, .eyes-x, .eyes-tears, .eyes-laser, .pose-sleep, .pose-dead, .pose-zyn, .pose-line, .pose-juice, .pose-smoke, .pose-grin, .pose-selfie, .lounging, .grumpy) .cameo-lens { opacity: 0.4; }
+.rig.cameo-alfred .cameo-alfred, .rig.cameo-wizard .cameo-wizard, .rig.cameo-scientist .cameo-scientist, .rig.cameo-pirate .cameo-pirate, .rig.cameo-punk .cameo-punk { opacity: 1; }
 /* Mouth poses bring their own mouth: the cameo's lips step aside (moustaches
    and beards stay; the cigarette, pouch or grin is drawn over them). */
 .rig:is(.pose-grin, .pose-selfie, .pose-smoke, .pose-zyn, .pose-munch, .eating, .grumpy, .eyes-surprised) .cameo-lips { opacity: 0; }
@@ -1026,6 +1030,7 @@
   .rig .twinkle, .rig .bubble, .rig .leaf, .rig .glyph, .rig .floatheart, .rig .firefly, .rig .petal,
   .rig .spin-eye, .rig .scanbar, .rig .glow-eye, .rig .cheer-arms,
   .rig .fox-tail, .rig .bee-hover, .rig .bee-wing, .rig .axo-tail,
+  .rig .shrug-hands, .rig .yawn-mouth, .rig .hb-heart, .rig .astro-led, .rig .antler-bells, .rig .ghost-float, .rig .owl-pupil, .rig .fw, .rig .bat, .rig .bolt, .rig .cloud, .rig .aurora-band, .rig .ember,
   .rig.body-blob .body-blob,
   .rig .char-back *, .rig .char-body *, .rig .char-front *, .rig .char-face *, .rig .cp-leg-a, .rig .cp-leg-b {
     animation: none !important;
@@ -1040,5 +1045,67 @@
      stop roaming, hopping and gliding. */
 }
 
+
+/* Wave-1 content: costumes, pets, effects and poses added 2026-10 (rules.js
+   lists them, so the Lights editor offers them). Same drawing grid as above. */
+.rig.costume-witch .costume-witch, .rig.costume-viking .costume-viking, .rig.costume-tricorn .costume-tricorn,
+.rig.costume-beret .costume-beret, .rig.costume-antlers .costume-antlers, .rig.costume-astronaut .costume-astronaut,
+.rig.costume-heartband .costume-heartband { opacity: 1; }
+.rig.costume-heartband .hb-heart { animation: rig-w1-boing 1.4s ease-in-out infinite; transform-box: fill-box; transform-origin: bottom center; }
+.rig.costume-heartband .hb-heart.h2 { animation-delay: 0.7s; }
+@keyframes rig-w1-boing { 0%, 100% { transform: translateY(0) scale(1); } 50% { transform: translateY(-1.5px) scale(1.12); } }
+.rig.costume-astronaut .astro-led { animation: rig-w1-blinker 1.6s steps(1) infinite; }
+@keyframes rig-w1-blinker { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+.rig.costume-antlers .antler-bells { animation: rig-w1-jingle 0.9s ease-in-out infinite alternate; transform-origin: 32px 30px; }
+@keyframes rig-w1-jingle { from { transform: rotate(-2deg); } to { transform: rotate(2deg); } }
+
+.rig.pet-penguin .pet-penguin, .rig.pet-ghost .pet-ghost, .rig.pet-chick .pet-chick, .rig.pet-owl .pet-owl { opacity: 1; animation: rig-pet-bob 1.1s ease-in-out infinite; }
+.rig.pet-penguin .pet-penguin { animation: rig-w1-waddle 0.8s ease-in-out infinite alternate; transform-origin: 60px 68px; }
+@keyframes rig-w1-waddle { from { transform: rotate(-5deg); } to { transform: rotate(5deg); } }
+.rig.pet-ghost .ghost-float { animation: rig-w1-hover 2.6s ease-in-out infinite; }
+@keyframes rig-w1-hover { 0%, 100% { transform: translateY(0); opacity: 0.95; } 50% { transform: translateY(-3px); opacity: 0.7; } }
+.rig.pet-chick .pet-chick { animation: rig-hop 1.2s ease-in-out infinite; }
+.rig.pet-owl .owl-pupil { animation: rig-w1-owl 4s steps(1) infinite; }
+@keyframes rig-w1-owl { 0%, 90%, 100% { transform: translateX(0); } 45%, 60% { transform: translateX(0.6px); } }
+
+.rig.effect-fireworks .effect-fireworks, .rig.effect-bats .effect-bats, .rig.effect-lightning .effect-lightning,
+.rig.effect-clouds .effect-clouds, .rig.effect-aurora .effect-aurora, .rig.effect-embers .effect-embers { opacity: 1; }
+.rig.effect-fireworks .fw { transform-box: fill-box; transform-origin: center; animation: rig-w1-pop 1.8s ease-out infinite; }
+.rig.effect-fireworks .fw2 { animation-delay: 0.6s; } .rig.effect-fireworks .fw3 { animation-delay: 1.2s; }
+@keyframes rig-w1-pop { 0% { opacity: 0; transform: scale(0.2); } 20% { opacity: 1; } 70% { opacity: 0.8; transform: scale(1); } 100% { opacity: 0; transform: scale(1.15); } }
+.rig :is(.bat, .cloud, .ember) { transform: translate(var(--x, 0px), var(--ry, 0px)); }
+.rig.effect-bats .bat { animation: rig-fx-drift 3.9s ease-in-out var(--d, 0s) infinite; }
+.rig.effect-clouds .cloud { animation: rig-w1-cloud 12s ease-in-out var(--d, 0s) infinite; }
+@keyframes rig-w1-cloud { 0%, 100% { transform: translate(var(--x), var(--ry)); } 50% { transform: translate(calc(var(--x) + var(--s, 0px)), var(--ry)); } }
+.rig.effect-lightning .bolt { animation: rig-w1-flash 2.8s steps(1) infinite; }
+@keyframes rig-w1-flash { 0%, 100% { opacity: 0; } 70%, 76% { opacity: 1; } 73% { opacity: 0.2; } }
+.rig.effect-aurora .aurora-band { animation: rig-w1-aurora 5s ease-in-out infinite; }
+.rig.effect-aurora .aurora-band.a2 { animation-delay: -2.5s; }
+@keyframes rig-w1-aurora { 0%, 100% { opacity: 0.25; transform: translateX(0); } 50% { opacity: 0.7; transform: translateX(-3px); } }
+.rig.effect-embers .ember { animation: rig-fx-rise 3s linear var(--d, 0s) infinite; }
+
+/* dance: a side-to-side shimmy with a little hop */
+.rig.pose-dance .claude-body { animation: rig-w1-dance 0.8s ease-in-out infinite; transform-origin: 32px 68px; }
+@keyframes rig-w1-dance { 0%, 100% { transform: rotate(-6deg) translateY(0); } 25% { transform: rotate(0) translateY(-2px); } 50% { transform: rotate(6deg) translateY(0); } 75% { transform: rotate(0) translateY(-2px); } }
+/* shrug: palms up, shoulders lift */
+.rig .shrug-hands, .rig .yawn-mouth { opacity: 0; }
+.rig.pose-shrug .shrug-hands { opacity: 1; animation: rig-w1-shrug 1.8s ease-in-out infinite; }
+.rig.pose-shrug .claude-body { animation: rig-w1-shrug 1.8s ease-in-out infinite; transform-origin: 32px 68px; }
+@keyframes rig-w1-shrug { 0%, 60%, 100% { transform: translateY(0); } 20%, 40% { transform: translateY(-1.5px); } }
+.rig.char-no-hands .shrug-hands { display: none; }
+/* yawn: eyes shut, mouth opens wide and the body stretches */
+.rig.pose-yawn .eye-open { opacity: 0; }
+.rig.pose-yawn .eye-closed { opacity: 1; }
+.rig.pose-yawn .yawn-mouth { opacity: 1; animation: rig-w1-yawn 3.2s ease-in-out infinite; transform-origin: 32px 50px; }
+.rig.pose-yawn .claude-body { animation: rig-w1-stretch 3.2s ease-in-out infinite; transform-origin: 32px 68px; }
+@keyframes rig-w1-yawn { 0%, 100% { transform: scale(0.5); } 40%, 60% { transform: scale(1.1); } }
+@keyframes rig-w1-stretch { 0%, 100% { transform: scale(1, 1); } 45% { transform: scale(0.98, 1.04); } }
+
+/* A user sprite pack stands in for the drawn character (rig.setSpritePack). */
+.rig .sprite-pack { display: none; }
+.rig.sprite-on .sprite-pack { display: inline; }
+.rig.sprite-on :is(.char-back, .char-body, .char-front, .char-face, .eye-anchor, .eye-track, .cameo, .cameo-photo, .mouth-anchor) { display: none; }
+
 /* Last in the file so it beats the grin, grumpy and munch mouths it replaces. */
+.rig.talking .yawn-mouth { opacity: 0; }
 .rig.talking :is(.grin, .grumpy-mouth, .cameo-lips) { opacity: 0; }

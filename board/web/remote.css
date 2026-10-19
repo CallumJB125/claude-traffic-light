@@ -1,0 +1,3 @@
+.remote-page{max-width:48rem;margin:3rem auto;padding:0 1.5rem;line-height:1.6}
+.remote-page h1,.remote-page h2{margin:1.4rem 0 .6rem}.remote-page section,.remote-page form{margin:1.5rem 0;padding:1.25rem;border:1px solid var(--line);border-radius:var(--radius)}
+.remote-page label,.remote-page fieldset{display:block;margin:.75rem 0}.remote-page fieldset{padding:1rem;border:1px solid var(--line)}.remote-page input[type=checkbox]{margin-right:.5rem}.remote-page .btn{margin:.5rem .5rem .5rem 0}.remote-page .input{width:100%}.remote-page li{margin:.75rem 0}.remote-page code{overflow-wrap:anywhere}.remote-page [hidden]{display:none!important}

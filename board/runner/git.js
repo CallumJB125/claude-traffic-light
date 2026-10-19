@@ -11,7 +11,24 @@ import { CREDENTIAL_PATTERNS } from '../shared/scope.js';
 export const FILE_CAP = 5 * 1024 * 1024;
 export const TOTAL_CAP = 25 * 1024 * 1024;
 
-export function git(cwd, args, { env, input, timeoutMs = 120000 } = {}) {
+// The hosted runner (hosted/index.js) sets this: networked git gets a fresh
+// short-lived repo token in its env, and one retry with a new token when the
+// remote refuses the old one (it expired mid-run). Unset everywhere else.
+let gitAuth = null;
+export function setGitAuth(auth) { gitAuth = auth; }
+
+export async function git(cwd, args, opts = {}) {
+  if (!gitAuth?.applies(args)) return runGit(cwd, args, opts);
+  const withToken = async (fresh) => runGit(cwd, args, { ...opts, env: { ...opts.env, ...(await gitAuth.env(cwd, { fresh })) } });
+  try {
+    return await withToken(false);
+  } catch (e) {
+    if (!gitAuth.isAuthFailure(e)) throw e;
+    return withToken(true);
+  }
+}
+
+function runGit(cwd, args, { env, input, timeoutMs = 120000 } = {}) {
   return new Promise((resolve, reject) => {
     const child = execFile('git', args, { // privacy-flow: runner-local
       cwd, env: { ...process.env, GIT_TERMINAL_PROMPT: '0', ...env }, timeout: timeoutMs, maxBuffer: 64 << 20, encoding: 'utf8',
@@ -54,6 +71,20 @@ export async function createWorktree({ localPath, wt, key, fence, baseRef, fromS
   }
   await git(localPath, ['worktree', 'add', '--quiet', '-b', branch, wt, start]);
   return { branch, base_sha: (await git(wt, ['rev-parse', 'HEAD'])).trim(), worktree: fs.realpathSync(wt) };
+}
+
+// Resolve once during preparation. Resumes retain this exact grant; they may
+// never widen it to another branch or the complete shared metadata directory.
+export async function runGitAccess(wt, branch) {
+  const gitRef = `refs/heads/${branch}`;
+  await git(wt, ['check-ref-format', gitRef]);
+  const actual = (await git(wt, ['symbolic-ref', 'HEAD'])).trim();
+  if (actual !== gitRef) throw new Error('run branch does not match its worktree');
+  const gitDir = fs.realpathSync((await git(wt, ['rev-parse', '--absolute-git-dir'])).trim());
+  const common = (await git(wt, ['rev-parse', '--git-common-dir'])).trim();
+  const commonGitDir = fs.realpathSync(path.resolve(wt, common));
+  if (!fs.statSync(gitDir).isDirectory() || !fs.statSync(commonGitDir).isDirectory()) throw new Error('run git metadata unavailable');
+  return Object.freeze({ gitDir, commonGitDir, gitRef });
 }
 
 export async function gitFacts(wt) {
