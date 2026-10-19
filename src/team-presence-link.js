@@ -7,6 +7,10 @@
 // beats for the shared session this computer is looking at, every BEAT_MS
 // (src/session-presence.js) while one is open, `null` when it closes. Nothing
 // is stored; a hub without the frame just answers VALIDATION and shows nothing.
+// The same socket is one of the person's own member sockets, so the hub also
+// pushes `inbox.item` (team depth lane B, hub.broadcastMember) down it; that
+// frame goes to `onInbox(hub, item)` at once, so the badge and Home's Inbox do
+// not wait for the 60 s poll in main.js (plan acceptance E3).
 const { BEAT_MS } = require('./session-presence');
 
 const PROTOCOL_VERSION = 1;              // board/shared/protocol.js (ESM; the number is the contract)
@@ -29,7 +33,7 @@ function reduce(msg) {
   return { members, viewers };
 }
 
-function createPresenceLink({ links = async () => [], WebSocket, now = Date.now, setTimeout = globalThis.setTimeout, clearTimeout = globalThis.clearTimeout, log = () => {}, onChange = () => {} } = {}) {
+function createPresenceLink({ links = async () => [], WebSocket, now = Date.now, setTimeout = globalThis.setTimeout, clearTimeout = globalThis.clearTimeout, log = () => {}, onChange = () => {}, onInbox = () => {} } = {}) {
   const conns = new Map();   // key → {route, ws, attempt, timer, beat, open, viewing, latest}
   let stopped = false;
 
@@ -67,7 +71,8 @@ function createPresenceLink({ links = async () => [], WebSocket, now = Date.now,
       if (!msg || typeof msg !== 'object') return;
       if (msg.type === 'snapshot' && msg.board_id === c.route.board_id) { c.attempt = 0; if (c.viewing) sendView(c); return; }
       if (msg.type === 'board.presence' && msg.board_id === c.route.board_id) { c.latest = { ...reduce(msg), at: now() }; onChange(); return; }
-      if (msg.type === 'team.presence' && !c.latest) { c.latest = { ...reduce({ members: msg.members, viewers: [] }), at: now() }; onChange(); }
+      if (msg.type === 'team.presence' && !c.latest) { c.latest = { ...reduce({ members: msg.members, viewers: [] }), at: now() }; onChange(); return; }
+      if (msg.type === 'inbox.item' && msg.item && typeof msg.item === 'object' && str(msg.item.id, 100) && str(msg.item.kind, 40)) { try { onInbox(c.route.hub, msg.item); } catch { /* the poll reconciles */ } }
     });
     ws.on('error', () => {});
     ws.on('close', () => {

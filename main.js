@@ -1654,7 +1654,7 @@ const followupScope=()=>{
 const sessionFollowups=require('./src/session-followups').createSessionFollowups({file:path.join(app.getPath('userData'),'session-followups','outbox.bin'),storage:followupStorage,scope:followupScope,onChange:()=>OverviewMain.directoryChanged()});
 if(IS_DEV_RUN&&!app.isPackaged&&process.env.CLAUDE_BUDDY_FAKE_TEAM_HUB){try{overviewTeamHub=require('./src/team-hub-fake').createFakeTeamHub(JSON.parse(fs.readFileSync(process.env.CLAUDE_BUDDY_FAKE_TEAM_HUB,'utf8')));}catch(e){console.warn('[overview] fake team hub not loaded:',e.message);}}
 // Team depth lane C: board presence over the person's own hub sign-in (who views which card, who runs where); feeds Team sessions and beats this computer's open shared session.
-const PresenceLink=require('./src/team-presence-link').createPresenceLink({links:async()=>devMockReady?(await getBuddy().teamMemoryLinks?.())??[]:[],WebSocket:require('ws'),log:m=>console.log(m),onChange:()=>OverviewMain.directoryChanged()}); // privacy-flow: team-hub
+const PresenceLink=require('./src/team-presence-link').createPresenceLink({links:async()=>devMockReady?(await getBuddy().teamMemoryLinks?.())??[]:[],WebSocket:require('ws'),log:m=>console.log(m),onChange:()=>OverviewMain.directoryChanged(),onInbox:(hub,item)=>ingestTeamInbox(hub,[item])}); // privacy-flow: team-hub
 const OverviewMain=require('./src/overview-main').createOverviewMain({
   buddy:()=>buddyWin,sessions:()=>aggregateState().sessions||[],
   presence:team=>{void PresenceLink.refresh();return PresenceLink.latest(team);},presenceView:r=>PresenceLink.view(r),
@@ -4626,12 +4626,24 @@ require('./src/home-main.js').register({ ipcMain, allowed: (e) => fromUtilityPag
 require('./src/home-alerts.js').wire({ ipcMain, dialog, clipboard, homeAllowed: (e) => fromUtilityPage(e, 'home'), usageAllowed: (e) => fromUtilityPage(e, 'usage'), sessions: () => aggregateState().sessions || [], burst: () => BurstIpc.snapshot().d, tasksRows: () => tasksSvc?.snapshot().tasks || [], tasksService: getTasks, handoverText: (key) => SessionHandoverMain.writer.text(key), jump: (s) => jumpToSession(s, Rules.folderOf(s.cwd), s.hostApp), mail: () => AgentMail.pending(), openMail: async () => { openBuddy('sessions'); } });
 require('./src/digest-main.js').register({ ipcMain, allowed: (e) => fromUtilityPage(e, 'home'), rootDir: ROOT_DIR, userData: app.getPath('userData'), safeStorage: require('electron').safeStorage, clipboard, dialog, shell, Notification, fetch: (...a) => net.fetch(...a), usageTurns: () => getUsageTurns(), costGuard: () => (costGuardReport ? costGuardReport() : null), workCost: () => workCostReport(), scheduledRuns: (from, to) => (recipeScheduler ? recipeScheduler.runsBetween(from, to).map((h) => ({ ...h, title: recipes.find(h.id)?.title || 'A recipe' })) : []), teamBrief: (cwd) => (loadConfig().teamBrief === true ? TeamActivity.call('team_brief', { cwd }) : null), openHome: () => openBuddy('home'), onQuit: (fn) => onQuit(app, fn), log: (m) => console.warn(m) }); // privacy-flow: digest-slack
 { const TeamToday = require('./src/team-today.js'); const fake = IS_DEV_RUN && !app.isPackaged && process.env.CLAUDE_BUDDY_FAKE_TEAM_TODAY; TeamToday.wire({ ipcMain, allowed: (e) => fromUtilityPage(e, 'home'), file: path.join(ROOT_DIR, 'team-today.json'), log: (m) => console.log(m), ...(fake ? TeamToday.fixtureSources(JSON.parse(fs.readFileSync(fake, 'utf8'))) : { links: async () => (await buddyWin?.teamMemoryLinks?.()) ?? [], board: async (route) => (await buddyWin?.teamBoardSnapshot?.(route)) ?? null, mine: () => buddyWin?.workCostRows?.().records ?? [], fetch: (...a) => net.fetch(...a) }) }); } // privacy-flow: team-today
-// Team depth lane B: the hub inbox. The desktop keeps no hub socket in the main
-// process (the board socket lives in the Plexiform window), so main polls
-// GET /api/account/inbox on every linked hub once a minute, folds the rows into
-// Home's Inbox and the dock badge, and raises a silent notification for a
-// mention or a hand-off request (at most one per 30 s per hub).
+// Team depth lane B: the hub inbox. Live rows arrive as `inbox.item` on the
+// lane C presence sockets (one per linked board, PresenceLink above) and are
+// ingested at once; main also polls GET /api/account/inbox on every linked hub
+// once a minute as the fallback and to reconcile read_at. Both paths fold the
+// rows into Home's Inbox and the dock badge and raise a silent notification
+// for a mention or a hand-off request (at most one per 30 s per hub).
 const TEAM_INBOX_POLL_MS = 60_000;
+function ingestTeamInbox(origin, items) {
+  const fresh = teamInbox.ingest(origin, items);
+  for (const n of teamInbox.toNotify(fresh)) {
+    if (IS_DEV_RUN || !Notification.isSupported()) continue;
+    const note = new Notification({ title: n.title, body: n.body, silent: true });
+    note.on('click', () => openBuddy('home'));
+    note.show();
+  }
+  syncQuietBadge(aggregateState());
+  return fresh;
+}
 async function teamInboxHubs() {
   let links = [];
   try { links = (await buddyWin?.teamMemoryLinks?.()) ?? []; } catch { links = []; }
@@ -4640,6 +4652,7 @@ async function teamInboxHubs() {
   return hubs;
 }
 async function pollTeamInbox() {
+  void PresenceLink.refresh(); // keeps a live socket per linked board open so inbox.item arrives without the poll
   const hubs = await teamInboxHubs();
   for (const [origin, token] of hubs) {
     let res;
@@ -4652,13 +4665,7 @@ async function pollTeamInbox() {
     if (!res || res.status !== 200) continue; // an older hub without the route (404) hides the feature
     let body = null;
     try { body = JSON.parse((await res.text()).slice(0, 1_000_000)); } catch { body = null; }
-    const fresh = teamInbox.ingest(origin, Array.isArray(body?.items) ? body.items : []);
-    for (const n of teamInbox.toNotify(fresh)) {
-      if (IS_DEV_RUN || !Notification.isSupported()) continue;
-      const note = new Notification({ title: n.title, body: n.body, silent: true });
-      note.on('click', () => openBuddy('home'));
-      note.show();
-    }
+    ingestTeamInbox(origin, Array.isArray(body?.items) ? body.items : []);
   }
   syncQuietBadge(aggregateState());
 }

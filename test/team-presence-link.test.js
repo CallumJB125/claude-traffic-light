@@ -126,3 +126,32 @@ test('a missing token or a throwing constructor just backs off; frames are reduc
   assert.deepEqual(r, { members: [{ member_id: 'm', name: 'N', sessions: [{ agent: 'claude', repo_short: 'r', branch: 'b', state: 'working' }], viewing: { card_id: 'c', since: 's' } }], viewers: [{ member_id: 'm', name: 'N', card_id: 'c', key: 'K', title: 'T', at: 'a' }] });
   assert.equal(JSON.stringify(r).includes('SECRET'), false, 'summaries never reach the page');
 });
+
+test('E3: an inbox.item pushed down the presence socket reaches the badge count at once, with no timer and no poll', async () => {
+  FakeWS.all = [];
+  const t = timers();
+  const { createTeamInbox } = require('../src/team-inbox');
+  const inbox = createTeamInbox({ now: t.now });
+  const seen = [];
+  const link = createPresenceLink({ links: async () => [route()], WebSocket: FakeWS, ...t, onInbox: (hub, item) => { seen.push(hub); inbox.ingest(hub, [item]); } });
+  await link.refresh();
+  const [ws] = FakeWS.all;
+  open(ws);
+  assert.equal(inbox.unread(), 0);
+  const before = t.pending();
+  push(ws, { type: 'inbox.item', item: { id: 'i1', org_id: 'o', kind: 'mention', ref: { by_name: 'Ana', title: 'Fix login' }, created_at: new Date(t.now()).toISOString(), read_at: null } });
+  assert.equal(inbox.unread(), 1, 'badge count rose on the frame itself');
+  assert.deepEqual(seen, ['https://hub.example'], 'tagged with the socket\'s hub origin, not anything in the frame');
+  assert.equal(t.pending(), before, 'no timer was armed or needed');
+  assert.equal(inbox.items()[0].title, 'Ana mentioned you: Fix login');
+  // Malformed frames never reach the inbox; a repeat of the same id is not a second row.
+  push(ws, { type: 'inbox.item', item: { kind: 'mention' } });
+  push(ws, { type: 'inbox.item', item: 'nope' });
+  push(ws, { type: 'inbox.item', item: { id: 'i1', kind: 'mention', ref: {} } });
+  assert.equal(seen.length, 2);
+  assert.equal(inbox.unread(), 1);
+  // The poll later reconciling read_at for the same key drops it from the badge.
+  inbox.ingest('https://hub.example', [{ id: 'i1', kind: 'mention', ref: {}, created_at: 'x', read_at: '2026-10-19T12:00:00Z' }]);
+  assert.equal(inbox.unread(), 0);
+  link.stop();
+});
