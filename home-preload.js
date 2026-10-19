@@ -19,6 +19,11 @@ contextBridge.exposeInMainWorld('homeApi', {
   answerInput: (id, optionId) => (typeof id === 'string' && id.length <= 100 && typeof optionId === 'string' && optionId.length <= 100 ? ipcRenderer.invoke('home:answer-input', id, optionId) : Promise.resolve({ ok: false, error: 'invalid' })),
   guardrails: () => ipcRenderer.invoke('guardrails:list'),
   guardrailsAct: (id, action) => (typeof id === 'string' && id.length <= 100 && ['dismiss', 'rotate', 'restore', 'recheck', 'db-on', 'db-off'].includes(action) ? ipcRenderer.invoke('guardrails:act', id, action) : Promise.resolve({ ok: false })),
+  explain: {
+    recaps: () => ipcRenderer.invoke('explain:recaps'),
+    copy: (handle) => (typeof handle === 'string' && handle.length <= 40 ? ipcRenderer.invoke('explain:copy', handle) : Promise.resolve({ ok: false })),
+    openTest: (handle) => (typeof handle === 'string' && handle.length <= 40 ? ipcRenderer.invoke('explain:open-test', handle) : Promise.resolve({ ok: false })),
+  },
   openCard: (handle) => (typeof handle === 'string' && handle.length <= 100 ? ipcRenderer.invoke('home:open-card', handle) : Promise.resolve(false)),
   digest: {
     get: (period) => ipcRenderer.invoke('digest:get', period === 'week' ? 'week' : 'day'),

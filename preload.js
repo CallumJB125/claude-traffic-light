@@ -36,6 +36,8 @@ contextBridge.exposeInMainWorld('trafficLight', {
   onLaneEvent: (cb) => ipcRenderer.on('widget:lane-event', (e, ev) => cb(ev)), onRings: (cb) => ipcRenderer.on('widget:rings', (e, r) => cb(r)), laneState: () => ipcRenderer.invoke('widget:lane-state'),
   // PendingInput (docs/waiting-inputs.md): answer by option id; open = jump to its terminal.
   answerInput: (id, optionId, more) => ipcRenderer.invoke('answer-input', id, optionId, more),
+  explainStatus: () => ipcRenderer.invoke('explain:status'),
+  explainInput: (id) => (typeof id === 'string' && id.length <= 100 ? ipcRenderer.invoke('explain:input', id) : Promise.resolve({ ok: false })),
   openInput: (id) => ipcRenderer.invoke('open-input', id),
   copyInputCommand: (id) => ipcRenderer.invoke('copy-input-command', id),
   // The bubble's height: main grows the window by it so Claude keeps his size.

@@ -90,6 +90,8 @@ const bubble = window.InputBubble.create(bubbleEl, {
   api: {
     answerInput: (id, optionId, more) => (tourInput && id === tourInput.id ? tourAnswered() : window.trafficLight.answerInput(id, optionId, more)),
     openInput: (id) => window.trafficLight.openInput(id),
+    explainInput: (id) => window.trafficLight.explainInput(id),
+    explainStatus: () => window.trafficLight.explainStatus(),
     copyCommand: (id) => window.trafficLight.copyInputCommand(id),
     openAutoRule: (id) => window.trafficLight.openAutoRule({ inputId: id }),
     openWaiting: () => window.trafficLight.openWaiting(),

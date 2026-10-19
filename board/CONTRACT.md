@@ -1248,3 +1248,14 @@ Local Electron IPC only. Findings never carry a secret (redacted preview only), 
 |---|---|---|---|
 | `guardrails:list` | the Home page only (`fromUtilityPage(e, 'home')`) | none | `{findings: [{id, type: 'secret'\|'browser'\|'db'\|'env', status: 'new'\|'open'\|'resolved', title, fix, preview, project, canRotate, canRestore}], offers: [{id: 'db:…', project, title, fix}], careful: [{id: 'danger:…', title, target, project, note}]}`; listing marks `new` findings `open` (the lamp stops being red for them) |
 | `guardrails:act` | the Home page only | `id: string ≤ 100`, `action: 'dismiss'\|'rotate'\|'restore'\|'recheck'\|'db-on'\|'db-off'` | `{ok, note?, error?, cancelled?}`; `restore` puts files back to before the finding's turn via `src/checkpoints.js` restore (safety checkpoint first); `db-on`/`db-off` answer a per-project database-rules offer |
+## Desktop explain mode IPC (`src/explain-main.js`)
+
+Local Electron IPC only; the one outbound flow is `explain-mode` in PRIVACY.md (an unrecognised permission request, scrubbed, to the user's own `claude`). Config key `explainMode` (default absent = off), written by Preferences through `save-config`. Every channel checks its sender.
+
+| Channel | Sender | Request | Response |
+|---|---|---|---|
+| `explain:status` | the widget, the Waiting page, or Home | none | `{on}`; the bubble shows "Explain this" only while `on`. Anyone else gets `null` |
+| `explain:input` | the widget or the Waiting page (`inputSenderOk`) | `id: string ≤ 100` (a pending permission input) | `{ok:true, sentence, rating ∈ safe\|be careful\|risky, recommend, source ∈ local\|ai}` or `{ok:false, reason ∈ off\|invalid\|gone\|busy\|no-cli\|empty\|failed\|not allowed}`. Local rules first (`src/explain.js` over `src/deny/`); otherwise one `claude -p --model haiku` call at a time, cached per input |
+| `explain:recaps` | Home only | none | `{on, recaps:[{headline, lines, risky, at, test:{label, handle}\|null}] ≤ 10, help:[{project, why, prompts:[{label, handle}]}] ≤ 5}`; recaps are built in memory at each turn end from the transcript and the checkpoint file list; `null` to anyone else |
+| `explain:copy` | Home only | `handle: string ≤ 40` | `{ok, text}`; copies the fixed suggested prompt the handle stands for to the clipboard |
+| `explain:open-test` | Home only | `handle: string ≤ 40` | `{ok}`; opens the handle's `http://localhost:<port>/` in the browser, nothing else |
