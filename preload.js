@@ -76,3 +76,4 @@ contextBridge.exposeInMainWorld('userCharacters', {
   list: () => ipcRenderer.invoke('characters:list'),
   onChange: (cb) => ipcRenderer.on('characters:changed', () => cb()),
 });
+contextBridge.exposeInMainWorld('spritePacks', { list: () => ipcRenderer.invoke('widget:sprite-packs'), use: (name) => ipcRenderer.invoke('widget:use-sprite-pack', name), onChange: (cb) => ipcRenderer.on('sprite-pack:changed', () => cb()) });

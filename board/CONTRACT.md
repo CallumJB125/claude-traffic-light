@@ -1127,3 +1127,12 @@ Only Sentry's exact declared `sentry.status` and `sentry.incident-status` action
 The reply is untrusted data. `parseReviewOutput` keeps only `{verdict ∈ approve|changes_requested|needs_human, summary ≤ 500, findings ≤ 20 × {file ∈ the diff's paths, line, severity ∈ high|medium|low, rationale ≤ 200, one line}}`, and its guards only ever make a verdict stricter: an injection signal, a medium/high finding, a truncated diff or failing tests each stop an `approve`. The hub also removes secrets from every stored string. A review never moves the card: `approve` is advice, and Done stays a human's `approve_done`.
 
 Routes (all through the card's board, so another team's card is `404`): `GET /api/cards/:card_id/reviews`, `POST /api/cards/:card_id/reviews/:review_id/fix` (a `request_changes` to the author's original AI, its comment built by `reviewFixComment` from the open findings), `POST /api/cards/:card_id/reviews/:review_id/approve` (a person only: `approve_done`; refused for an integration actor), `POST /api/cards/:card_id/reviews/:review_id/findings/:index/dismiss`, `GET`/`PATCH /api/boards/:board_id/review-settings` (PATCH admin only; turning it on needs `acknowledge_disclosure:true`). `CardView.review` = the latest review (`{id, status, verdict, provider, provider_label, independence, open_findings, cost_usd}`); `CardDetail.reviews` = every review of the card, newest first. Eval: `board/runner/scripts/review-eval.js` over `board/runner/test/fixtures/review-eval/` (good diffs, subtly buggy diffs, injection attempts) with a fake provider for CI.
+
+## Desktop widget IPC: sprite packs
+
+Main-process handlers in `src/sprite-pack-main.js`, callable from the widget, the Lights editor and Settings (any other sender gets `null`). Packs live in `~/.plexiform/sprites/<pack>/pack.json` and are validated by `src/sprite-pack.js` on every call; no network.
+
+| Channel | Args | Returns | Notes |
+|---|---|---|---|
+| `widget:sprite-packs` | — | `{packs:[{name, version, fps, bytes, frames:{state: count}}], errors:[{pack, reason}], active: name\|null, current: {name, fps, frames:{state:[dataUrl]}}\|null}` | `current` is the active pack's frames as `data:image/png` or `data:image/svg+xml` base64 URLs; an active pack that no longer validates is `current:null` plus an error, and the widget keeps the drawn character |
+| `widget:use-sprite-pack` | `name: string\|null` | `{ok, active, reason?}` | Saves `config.spritePack` only for a pack that validates now; `null` restores the drawn character. Pushes `sprite-pack:changed` to the widget |

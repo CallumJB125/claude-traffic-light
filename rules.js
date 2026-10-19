@@ -303,8 +303,8 @@
   const SIGN_FX = ['none', 'wobble', 'spin', 'rattle', 'cracked', 'neon'];
   const NUMBERS = ['none', 'sessions', 'minutes', 'tasks', 'agents', 'ralph'];
   const SCREEN_FX = ['none', 'vignette', 'confetti', 'spotlight'];
-  const POSES = ['none', 'think', 'wave', 'thumbs', 'sleep', 'blink', 'nod', 'bounce', 'look', 'spin', 'party', 'guitar', 'ak47', 'sniper', 'banner', 'bubble', 'tap', 'arms', 'run', 'knock', 'munch', 'kickflip', 'selfie', 'grin', 'smoke', 'zyn', 'line', 'juice', 'dead', 'cheer', 'facepalm'];
-  const COSTUMES = ['none', 'dog', 'cat', 'unicorn', 'crown', 'partyhat', 'shades', 'halo', 'devil', 'wizard', 'tophat', 'santa', 'pumpkin', 'bunny', 'headphones', 'graduate', 'chef', 'cowboy', 'propeller', 'detective', 'flowercrown', 'beanie'];
+  const POSES = ['none', 'think', 'wave', 'thumbs', 'sleep', 'blink', 'nod', 'bounce', 'look', 'spin', 'party', 'guitar', 'ak47', 'sniper', 'banner', 'bubble', 'tap', 'arms', 'run', 'knock', 'munch', 'kickflip', 'selfie', 'grin', 'smoke', 'zyn', 'line', 'juice', 'dead', 'cheer', 'facepalm', 'dance', 'shrug', 'yawn'];
+  const COSTUMES = ['none', 'dog', 'cat', 'unicorn', 'crown', 'partyhat', 'shades', 'halo', 'devil', 'wizard', 'tophat', 'santa', 'pumpkin', 'bunny', 'headphones', 'graduate', 'chef', 'cowboy', 'propeller', 'detective', 'flowercrown', 'beanie', 'witch', 'viking', 'tricorn', 'beret', 'antlers', 'astronaut', 'heartband'];
   // Faces drawn over Claude's head; independent of costume, so a cameo can wear a hat.
   const CAMEOS = ['none', 'alfred', 'wizard', 'scientist', 'pirate', 'punk'];
   const CAMEO_ID = /^[a-z0-9-]{1,32}$/;
@@ -313,8 +313,8 @@
   const BODIES = Characters.ids().filter(Characters.isBuiltin);
   const isBody = (id) => BODIES.includes(id) || (typeof id === 'string' && /^u-[a-z][a-z0-9-]{1,31}$/.test(id));
   const EYE_MOODS = ['heart', 'happy', 'angry', 'sad', 'surprised', 'wink', 'star', 'money', 'sleepy', 'suspicious', 'roll', 'googly', 'dizzy', 'x', 'tears', 'laser', 'loading', 'scan', 'wide', 'content', 'side', 'glow'];
-  const EFFECTS = ['none', 'rain', 'sun', 'snow', 'sparkles', 'fire', 'beard', 'garden', 'stars', 'bubbles', 'leaves', 'matrix', 'hearts', 'fireflies', 'rainbow', 'petals'];
-  const PETS = ['none', 'duck', 'cat', 'blob', 'dog', 'bunny', 'parrot', 'frog', 'snail', 'dragon'];
+  const EFFECTS = ['none', 'rain', 'sun', 'snow', 'sparkles', 'fire', 'beard', 'garden', 'stars', 'bubbles', 'leaves', 'matrix', 'hearts', 'fireflies', 'rainbow', 'petals', 'fireworks', 'bats', 'lightning', 'clouds', 'aurora', 'embers'];
+  const PETS = ['none', 'duck', 'cat', 'blob', 'dog', 'bunny', 'parrot', 'frog', 'snail', 'dragon', 'penguin', 'ghost', 'chick', 'owl'];
   const AGENT_STYLES = ['robot', 'duck', 'blob', 'ghost', 'cat', 'star', 'dot'];
   // What a gesture on the avatar can do. `arg` is free text where noted.
   const ACTIONS = [

@@ -11,6 +11,9 @@ What changed
 - Home tells you when to look. A single Burst row appears in Home's attention list only when something needs you: broken, too old, not trusted, not responding after several checks, an update available, a limit near, or loose ends. A healthy Burst, an intentionally off Burst or no Burst at all adds nothing.
 - Loose ends on Overview. Each repository row carries Burst's counts of uncommitted files, unpushed commits and stashes for repositories your sessions use; file names only, never contents, diffs or stash names.
 - Keep-awake, Remote Control and mods on the Burst card and the Tools tab. The card shows whether this Mac is being kept awake and whether Remote Control is expected, and lists Burst's session mod and the usage panel (claude-code-cost-sidebar) with Install or Update per mod. Every change to the Mac goes through the same native consent sheet as before. Burst's hotspot settings are never read or written by Plexiform.
+- More character content: costumes witch, viking, tricorn, beret, antlers, astronaut and heartband; pets penguin, ghost, chick and owl; effects fireworks, bats, lightning, clouds, aurora and embers; poses dance, shrug and yawn. All appear in the Lights rule editor.
+- Seasonal pack: around New Year, Valentine's Day, spring, Halloween and winter the character picks up a matching costume, pet and effect, but only on channels no rule sets. Turn it off with `"seasonalPack": false` in config.json (the older Seasonal looks setting still works).
+- Sprite packs: put a folder with `pack.json` and PNG/SVG frames in `~/.plexiform/sprites/<pack>/` and set `"spritePack": "<pack>"` in config.json to show your own frames instead of the drawn character. Packs are checked strictly (plain file names, no links, 512 KB a frame, 64 frames a state, 8 MB a pack; SVGs with scripts or external references are refused) and never run; any problem falls back to the drawn character.
 
 What has been verified
 
