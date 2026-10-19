@@ -190,6 +190,21 @@
   #rings g[hidden] { display: none; }
   body.low-power #rings .arc, body.low-power #event-lane .lane-row { transition: none; }
   @media (prefers-reduced-motion: reduce) { #rings .arc, #event-lane .lane-row { transition: opacity 1.4s ease; transform: none; } #event-lane .lane-row.enter { transform: none; } }
+  /* Widget polish (src/widget-polish-main.js). Dot: the lamp alone, ~28 px.
+     Compact: a small Claude with nothing hanging under him but an ask. */
+  #dot { display: none; width: 28px; height: 28px; border-radius: 50%; background: var(--dot, var(--lamp-off)); box-shadow: 0 0 0 1.5px rgba(20, 20, 22, 0.85), 0 0 6px var(--dot, transparent); }
+  body.size-dot #dot { display: block; }
+  body.size-dot .housing, body.size-dot #gear, body.size-dot #help, body.size-dot #tooltip { display: none; }
+  body.size-compact #away, body.size-compact #update, body.size-compact #budget, body.size-compact .minion { display: none !important; }
+  body.size-compact:not(.asking) #app { height: 100% !important; }
+  body.size-dot.has-accent #dot { box-shadow: 0 0 0 2px var(--project-accent), 0 0 6px var(--dot, transparent); }
+  /* The accent of the project the widget is showing: a halo round the lamp side of the rig. */
+  body.has-accent .housing { filter: drop-shadow(0 0 3px var(--project-accent)); }
+  #away .row { box-shadow: inset 2px 0 0 var(--row-accent, transparent); padding-left: 3px; }
+  /* Quiet (timed or quiet hours): a small moon, never a sound. */
+  #moon { display: none; position: absolute; top: 2px; right: 26px; width: 14px; height: 14px; pointer-events: none; color: #e9e3c6; filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.8)); }
+  body.quiet #moon { display: block; }
+  body.listening #moon, body.size-dot #moon { display: none; }
 </style>
 </head>
 <body>
@@ -199,6 +214,7 @@
       <g id="ring-spend" hidden><circle class="track" cx="50" cy="50" r="47" /><circle class="arc" id="ring-spend-arc" cx="50" cy="50" r="47" transform="rotate(-90 50 50)" /></g>
       <g id="ring-turn" hidden><circle class="track" cx="50" cy="50" r="43.5" /><circle class="arc" id="ring-turn-arc" cx="50" cy="50" r="43.5" transform="rotate(-90 50 50)" /></g>
     </svg>
+    <div id="dot" aria-hidden="true"></div>
     <div id="tooltip"></div>
   </div>
   <button id="gear" title="Lights — program what Claude does (right-click the widget also works)"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4"/></svg></button>
@@ -207,6 +223,7 @@
   <div id="strip" role="toolbar" aria-label="Sessions"></div>
   <div id="session-card" role="group" aria-label="Session details" aria-hidden="true"></div>
   <div id="event-lane" role="status" aria-live="polite" aria-label="Recent events"></div>
+  <svg id="moon" viewBox="0 0 16 16" role="img" aria-label="Quiet"><title>Quiet: no sounds or notifications</title><path fill="currentColor" d="M10.5 2.2a6 6 0 1 0 3.3 9.8A5 5 0 0 1 10.5 2.2z"/></svg>
   <div id="bubble"></div>
   <div id="budget" role="status" aria-live="polite">
     <div class="top"><div class="text" id="budget-text"></div><button class="x" id="budget-x" title="Dismiss" aria-label="Dismiss">×</button></div>

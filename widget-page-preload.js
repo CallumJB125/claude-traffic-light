@@ -8,4 +8,5 @@ contextBridge.exposeInMainWorld('widgetPageApi', {
   size: (width) => ipcRenderer.invoke('widget-page:size', Number(width)),
   move: (corner) => ipcRenderer.invoke('widget-page:move', String(corner)),
   open: (id) => ipcRenderer.invoke('widget-page:open', String(id)),
+  recentProjects: () => ipcRenderer.invoke('widget:recent-projects'),
 });

@@ -124,7 +124,7 @@ test('registry: Widget lives in the Settings section with Widget rules, packaged
   const files = JSON.parse(read('package.json')).build.files;
   for (const f of ['widget-page.html', 'widget-page.js', 'widget-page-preload.js']) assert.ok(files.includes(f), f);
   const channels = [...read('widget-page-preload.js').matchAll(/ipcRenderer\.\w+\('([^']+)'/g)].map((m) => m[1]);
-  assert.ok(channels.length === 6 && channels.every((c) => c.startsWith('widget-page:')), channels.join());
+  assert.ok(channels.length === 7 && channels.every((c) => c.startsWith('widget-page:') || c === 'widget:recent-projects'), channels.join());
   assert.match(read('main.js'), /require\('\.\/src\/widget-page\.js'\)\.register\(\{ utilityHandle, allowed: \(e\) => fromUtilityPage\(e, 'widget'\)/);
 });
 
@@ -162,4 +162,75 @@ test('page: draws main\'s state, sends only fixed requests, and shows the previe
   assert.equal(d.querySelector('#stage img'), null);
   assert.match(d.getElementById('off').textContent, /hidden/);
   assert.equal(d.getElementById('toggle').textContent, 'Show widget');
+});
+
+test('polish keys: snap, size, shortcut and colours are checked; defaults keep today\'s widget', () => {
+  assert.deepEqual(W.cleanPatch({ widgetSnap: 'edges', widgetSize: 'dot', widgetShortcut: 'cmdorctrl+shift+space' }), { widgetSnap: 'edges', widgetSize: 'dot', widgetShortcut: 'CmdOrCtrl+Shift+Space' });
+  assert.equal(W.cleanPatch({ widgetSnap: 'middle', widgetSize: 'huge', widgetShortcut: 'P' }), null);
+  assert.deepEqual(W.cleanPatch({ widgetShortcut: '' }), { widgetShortcut: '' });
+  assert.equal(W.cleanPatch({ widgetShortcut: 'Shift+Shift+A' }), null);
+  assert.equal(W.cleanPatch({ widgetShortcut: 'Hyper+A' }), null);
+  assert.deepEqual(W.cleanPatch({ projectColours: { web: '#AABBCC', api: null, 'a/b': '#000000', bad: 'red' } }, { projectColours: { api: '#111111', keep: '#222222' } }), { projectColours: { keep: '#222222', web: '#aabbcc' } });
+  assert.equal(W.cleanPatch({ projectColours: { nope: 'blue' } }), null);
+  const v = W.configView({});
+  assert.equal(v.widgetSnap, 'corners');
+  assert.equal(v.widgetSize, 'normal');
+  assert.equal(v.widgetShortcut, '');
+  assert.deepEqual(v.projectColours, {});
+  assert.deepEqual(W.configView({ projectColours: { api: '#ABCDEF', x: 3 } }).projectColours, { api: '#abcdef' });
+});
+
+test('snapPoint: within the threshold of an edge it slides onto it; near two it lands in the corner; far away it stays', () => {
+  const at = (x, y) => ({ x, y, width: 100, height: 128 });
+  assert.deepEqual(W.snapPoint(at(40, 400), WA), { x: 24, y: 400, edge: 'left' });
+  assert.deepEqual(W.snapPoint(at(1300, 400), WA), { x: 1316, y: 400, edge: 'right' });
+  assert.deepEqual(W.snapPoint(at(700, 60), WA), { x: 700, y: 49, edge: 'top' });
+  assert.deepEqual(W.snapPoint(at(700, 740), WA), { x: 700, y: 748, edge: 'bottom' });
+  assert.deepEqual(W.snapPoint(at(30, 760), WA), { ...W.cornerPoint(at(30, 760), WA, 'bottom-left'), edge: 'bottom-left' });
+  assert.deepEqual(W.snapPoint(at(600, 400), WA), { x: 600, y: 400, edge: null });
+  assert.deepEqual(W.snapPoint(at(600, 300), WA, { threshold: 1000 }).edge, 'top-left');
+  assert.deepEqual(W.snapPoint(at(-30, 400), WA), { x: 24, y: 400, edge: 'left' }, 'a widget dragged past the edge comes back onto it');
+});
+
+test('projectAccent: the colour of the cwd\'s last folder, only when it is a valid hex', () => {
+  const map = { api: '#AA0000', web: 'red' };
+  assert.equal(W.projectAccent('/Users/me/work/api', map), '#aa0000');
+  assert.equal(W.projectAccent('/Users/me/work/api/', map), '#aa0000');
+  assert.equal(W.projectAccent('/Users/me/work/web', map), null);
+  assert.equal(W.projectAccent('/Users/me/work/toString', map), null);
+  assert.equal(W.projectAccent(null, map), null);
+  assert.equal(W.projectAccent('/x/api', null), null);
+});
+
+test('page: polish controls send checked requests and draw a swatch per recent project', async (t) => {
+  const dom = new JSDOM(read('widget-page.html'), { runScripts: 'outside-only', pretendToBeVisual: true, url: 'file:///synthetic/widget-page.html' });
+  t.after(() => dom.window.close());
+  const sent = [];
+  const state = { config: W.configView({ widgetSnap: 'edges', widgetSize: 'dot', widgetShortcut: 'Alt+Space' }), visible: true, width: 120, corner: 'top-right', limits: { minWidth: 80, maxWidth: 320 }, held: false, platform: 'darwin' };
+  dom.window.widgetPageApi = {
+    state: async () => state, preview: async () => null,
+    set: async (p) => { sent.push(JSON.parse(JSON.stringify(p))); return p.widgetShortcut === 'nope' ? { ok: false, error: 'Nothing to change.', state } : { ok: true, state }; },
+    size: async () => ({ ok: true, state }), move: async () => ({ ok: true, state }), open: async () => {},
+    recentProjects: async () => [{ name: 'api', colour: '#aa0000' }, { name: 'web', colour: null }],
+  };
+  dom.window.eval(read('widget-page.js'));
+  await settle();
+  const d = dom.window.document;
+  assert.equal(d.getElementById('snap').value, 'edges');
+  assert.equal(d.getElementById('wsize').value, 'dot');
+  assert.equal(d.getElementById('shortcut').value, 'Alt+Space');
+  const picks = d.querySelectorAll('#colours input[type="color"]');
+  assert.equal(picks.length, 2);
+  assert.equal(picks[0].value, '#aa0000');
+  assert.equal(d.getElementById('colours-empty').hidden, true);
+  d.getElementById('wsize').value = 'compact';
+  d.getElementById('wsize').dispatchEvent(new dom.window.Event('change'));
+  d.getElementById('shortcut').value = 'nope';
+  d.getElementById('shortcut-save').click();
+  picks[1].value = '#00ff00';
+  picks[1].dispatchEvent(new dom.window.Event('change'));
+  d.querySelector('#colours button.link').click();
+  await settle();
+  assert.deepEqual(sent, [{ widgetSize: 'compact' }, { widgetShortcut: 'nope' }, { projectColours: { web: '#00ff00' } }, { projectColours: { api: null } }]);
+  assert.match(d.getElementById('where-note').textContent, /not one the system accepts/);
 });

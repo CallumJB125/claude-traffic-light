@@ -81,3 +81,20 @@ test('only a held needs-input ask earns the silent badge', () => {
   assert.equal(Q.badgeFor('quiet-hours', 'turn-failed'), false);
   assert.equal(Q.badgeFor(null, 'permission-ask'), false);
 });
+
+test('quiet for 30 minutes: holds pings like a snooze, ends on the clock, and counts as quiet with quiet hours', () => {
+  const now = at(MON, 12, 0);
+  const until = Q.quietFor(now);
+  assert.equal(until, now + 30 * 60000);
+  const cfg = { quietUntil: until };
+  assert.equal(Q.reason(cfg, { now }), 'quiet');
+  assert.equal(Q.reason(cfg, { now: until }), null);
+  assert.equal(Q.isQuiet(cfg, now), true);
+  assert.equal(Q.isQuiet(cfg, until), false);
+  assert.equal(Q.isQuiet({ quietUntil: 0, quietHours: night }, at(MON, 23)), true);
+  assert.equal(Q.isQuiet({}, now), false);
+  assert.equal(Q.isQuiet(null, now), false);
+  assert.equal(Q.timedQuiet({ quietUntil: 'soon' }, now), false);
+  assert.equal(Q.reason({ ...cfg, mutedProjects: ['api'] }, { now, cwd: '/x/api' }), 'project', 'a project mute still ranks first');
+  assert.equal(Q.badgeFor(Q.reason(cfg, { now }), 'permission-ask'), true, 'asks held by timed quiet still badge');
+});

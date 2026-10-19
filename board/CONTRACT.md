@@ -1155,3 +1155,14 @@ Main-process handlers in `src/sprite-pack-main.js`, callable from the widget, th
 |---|---|---|---|
 | `widget:sprite-packs` | — | `{packs:[{name, version, fps, bytes, frames:{state: count}}], errors:[{pack, reason}], active: name\|null, current: {name, fps, frames:{state:[dataUrl]}}\|null}` | `current` is the active pack's frames as `data:image/png` or `data:image/svg+xml` base64 URLs; an active pack that no longer validates is `current:null` plus an error, and the widget keeps the drawn character |
 | `widget:use-sprite-pack` | `name: string\|null` | `{ok, active, reason?}` | Saves `config.spritePack` only for a pack that validates now; `null` restores the drawn character. Pushes `sprite-pack:changed` to the widget |
+## Desktop widget polish IPC (`src/widget-polish-main.js`)
+
+Local Electron IPC only; no network, no new file. Every channel checks its sender and returns `null` to anyone else.
+
+| Channel | Sender | Request | Response |
+|---|---|---|---|
+| `widget-polish:state` | the widget window only | none | `{snap, size, colours, quiet, quietUntil, shortcut, shortcutTaken}`; also registers the saved global shortcut once the app is ready and applies the saved size |
+| `widget-polish:snap` | the widget window only | none | `{ok, edge}`; with `widgetSnap: 'edges'` moves the dropped widget onto the nearest work-area edge(s) within 48 px and saves its bounds, otherwise `{ok:false}` |
+| `widget:recent-projects` | the Widget settings page only | none | `[{name, colour}]`, at most 12: folder names of live sessions, then projects that already have a colour |
+
+New config keys, all written only through `widget-page:set` (checked by `cleanPatch`) or the widget menu: `widgetSnap` (`corners`\|`edges`\|`off`, default `corners`), `widgetSize` (`normal`\|`compact`\|`dot`, default `normal`), `widgetShortcut` (Electron accelerator with a modifier, default empty = off), `projectColours` (`{folderName: '#rrggbb'}`, at most 40), `quietUntil` (epoch ms, "Quiet for 30 minutes").
