@@ -1613,15 +1613,18 @@ if (IS_DEV_RUN && !app.isPackaged && process.env.CLAUDE_BUDDY_COLLISION_HOOK ===
 const ProviderStatus = require('./src/provider-status.js');
 const sessionsSender = e => fromUtilityPage(e, 'sessions');
 const WorktreeShare = require('./src/worktree-share.js').createWorktreeShare({ log: console.log });
-ipcMain.handle('sessions:state', e => {
-  if (!sessionsSender(e)) return null;
+ipcMain.handle('sessions:state', e => (sessionsSender(e) ? sessionsState() : null));
+async function sessionsState() {
   try {
     const configured = IS_DEV_RUN ? false : Adapters.get('codex').isActivityInstalled({ home: os.homedir(), runtime: HOOK_RUNTIME });
-    return SessionOverview.snapshot({ sessions: localSessions(aggregateState().sessions || []), activity: { configured, available: true }, now: Date.now(), enrich: BurstIpc.enrichSession, info: (row) => SessionActionsMain.rowInfo(row), handover: (row) => SessionHandoverMain.view(row), sharedTrees: (rows) => WorktreeShare.shared(rows), collisions: CollisionAlerts.rowCollisions(collisionAlerts), policy: (row) => require('./src/policy.js').rowInfo(row, ROOT_DIR) });
+    const sessions = localSessions(aggregateState().sessions || []);
+    const Policy = require('./src/policy.js');
+    const policies = new Map(await Promise.all(sessions.map(async (row) => [row, await Policy.rowInfo(row, ROOT_DIR).catch(() => null)])));
+    return SessionOverview.snapshot({ sessions, activity: { configured, available: true }, now: Date.now(), enrich: BurstIpc.enrichSession, info: (row) => SessionActionsMain.rowInfo(row), handover: (row) => SessionHandoverMain.view(row), sharedTrees: (rows) => WorktreeShare.shared(rows), collisions: CollisionAlerts.rowCollisions(collisionAlerts), policy: (row) => policies.get(row) ?? null });
   } catch {
     return SessionOverview.snapshot({ sessions: [], activity: { available: false }, available: false, now: Date.now() });
   }
-});
+}
 const SessionActionsMain = require('./src/session-actions-main.js').register({ ipcMain, sessionsAllowed: sessionsSender, sessions: () => localSessions(aggregateState().sessions || []), bridge: () => buddyWin?.sessionBridge, capture: () => buddyWin, tasks: () => { const t = getTasks(); t.start(); return t; }, clipboard, openPage: (id) => openBuddy(id), pageExists: (id) => !!BuddyPages.pageById(id), pickFolder: async () => { const r = await dialog.showOpenDialog(BrowserWindow.fromWebContents(buddyWin?.pageWebContents('sessions')) || undefined, { title: 'Choose the folder', properties: ['openDirectory'] }); return r.canceled ? null : r.filePaths[0]; } });
 ipcMain.handle('sessions:open-record', (e, recordId) => (sessionsSender(e) && typeof recordId === 'string' ? openCollisionRecord(recordId) : { ok: false }));
 ipcMain.handle('sessions:message', (e, session, text) => {
@@ -1940,8 +1943,14 @@ require('./src/setups-folder.js').register({ipcMain,allowed:setupsSender,source:
 let costGuardReport = null;
 let costGuardResume = null;
 let taskStartGuard = null;
+// Work that may read a session's project folder waits for this: under ~/Desktop,
+// ~/Documents or ~/Downloads macOS can hold such a read on its privacy prompt,
+// and nothing may be ahead of the widget and the signal server.
+let startupUp;
+const startupDone = new Promise((resolve) => { startupUp = resolve; });
+const afterStartup = (fn) => { startupDone.then(fn).catch((err) => console.warn('[startup] deferred work failed:', err?.message ?? err)); };
 // Paid-tier packages (src/paid-wiring.js): each registers itself if present; nothing here may block startup.
-try { require('./src/paid-wiring.js').registerAll({ setCostGuardReport: (fn) => { costGuardReport = fn; }, setCostGuardResume: (fn) => { costGuardResume = fn; }, setTaskStartGuard: (fn) => { taskStartGuard = fn; }, app, ipcMain, rootDir: ROOT_DIR, buddy: () => buddyWin, fromPage: fromUtilityPage, setups: SetupsNative, onQuit: (fn) => onQuit(app, fn), log: (m) => console.warn(m), spend: () => spendSnapshot(loadConfig()), runawayStoppers: () => runawayStoppers, usageTurns: () => getUsageTurns(), ownedSessions: { list: () => InteractionMain.listOwned(), target: (s) => InteractionMain.sharedTarget(s) }, keyFor, requestsDir: REQUESTS_DIR, interactionHost: () => hostSync.host(), setInteractionHostExtras: (fn) => { interactionHostExtras = fn; }, teamMemory: (req) => TeamActivity.memoryPage(req), gallery: { takePending: () => galleryService?.takePending() ?? null }, openTimeline: (s) => SessionTimelineMain.openSession(s) }); } catch (e) { console.warn('[paid] wiring failed:', e?.message ?? e); } // privacy-flow: team-memory
+try { require('./src/paid-wiring.js').registerAll({ afterStartup, setCostGuardReport: (fn) => { costGuardReport = fn; }, setCostGuardResume: (fn) => { costGuardResume = fn; }, setTaskStartGuard: (fn) => { taskStartGuard = fn; }, app, ipcMain, rootDir: ROOT_DIR, buddy: () => buddyWin, fromPage: fromUtilityPage, setups: SetupsNative, onQuit: (fn) => onQuit(app, fn), log: (m) => console.warn(m), spend: () => spendSnapshot(loadConfig()), runawayStoppers: () => runawayStoppers, usageTurns: () => getUsageTurns(), ownedSessions: { list: () => InteractionMain.listOwned(), target: (s) => InteractionMain.sharedTarget(s) }, keyFor, requestsDir: REQUESTS_DIR, interactionHost: () => hostSync.host(), setInteractionHostExtras: (fn) => { interactionHostExtras = fn; }, teamMemory: (req) => TeamActivity.memoryPage(req), gallery: { takePending: () => galleryService?.takePending() ?? null }, openTimeline: (s) => SessionTimelineMain.openSession(s) }); } catch (e) { console.warn('[paid] wiring failed:', e?.message ?? e); } // privacy-flow: team-memory
 
 // Settings → Account & team, and the widget's one-time Team hint. Each
 // handler checks its sender; the page to open is never taken from the renderer.
@@ -5166,6 +5175,7 @@ app.whenReady().then(() => {
   Watchdog.step('tray+signal-server');
   createTray();
   signalServer = startSignalServer();
+  startupUp();
   syncFastHook();
   signalServer.on('error', (e) => { signalServerError = e.code || e.message; });
   signalServer.on('listening', () => { signalServerError = null; });

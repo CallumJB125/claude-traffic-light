@@ -43,7 +43,7 @@ function handlers() {
     CollisionAlerts: require('../src/collision-alerts.js'), collisionAlerts: require('../src/collision-alerts.js').createCollisions(),
     SessionOverview: { snapshot: input => { observed.push(input); return { status: input.available === false ? 'unavailable' : 'complete' }; } },
     localSessions: sessions => sessions, aggregateState: () => ({ sessions: [{ fixture: 'metadata' }] }),
-    IS_DEV_RUN: false, Adapters: { get: () => ({ isActivityInstalled: () => true }) }, os: { homedir: () => '/synthetic' }, HOOK_RUNTIME: {},
+    IS_DEV_RUN: false, Adapters: { get: () => ({ isActivityInstalled: () => true }) }, os: { homedir: () => '/synthetic' }, HOOK_RUNTIME: {}, ROOT_DIR: '/synthetic/.claude-traffic-light',
     createSettingsWindow: () => opened.push('settings'), aiToolsOpen: (d) => opened.push(d), openBuddy: (id) => opened.push(id), Date,
     InteractionMain: { sendLocal: async (session, text) => { messaged.push([session, text]); return { ok: true, status: 'acknowledged', error: null }; } },
   };
@@ -74,14 +74,14 @@ test('actual main IPC allows analytics reads but refuses unrelated page and subf
   assert.equal(f.registered.get('get-config')(event(f.pages.sessions)), null);
 });
 
-test('actual Sessions refresh and AI tools IPC require current main-frame Sessions owner', () => {
+test('actual Sessions refresh and AI tools IPC require current main-frame Sessions owner', async () => {
   const f = handlers();
   const refresh = f.registered.get('sessions:state'); const preferences = f.registered.get('sessions:aitools');
   for (const e of [event(f.widget), event(f.popup), event(f.pages.settings), { sender: f.pages.sessions, senderFrame: {} }, {}]) {
     assert.equal(refresh(e), null); assert.equal(preferences(e), false);
   }
   assert.equal(f.observed.length, 0); assert.equal(f.opened.length, 0);
-  assert.equal(refresh(event(f.pages.sessions)).status, 'complete');
+  assert.equal((await refresh(event(f.pages.sessions))).status, 'complete');
   assert.equal(f.observed[0].activity.configured, true);
   assert.equal(preferences(event(f.pages.sessions)), true);
   assert.deepEqual(f.opened, ['aitools:codex']);
@@ -110,8 +110,8 @@ test('actual Sessions Message IPC requires the Sessions owner and bounded text b
   assert.deepEqual(f.messaged, [[id, 'hi']]);
 });
 
-test('Sessions observation failure stays unavailable and never returns the exception', () => {
+test('Sessions observation failure stays unavailable and never returns the exception', async () => {
   const f = handlers(); f.context.aggregateState = () => { throw new Error('private failure'); };
-  assert.equal(f.registered.get('sessions:state')(event(f.pages.sessions)).status, 'unavailable');
+  assert.equal((await f.registered.get('sessions:state')(event(f.pages.sessions))).status, 'unavailable');
   assert.equal(JSON.stringify(f.observed).includes('private failure'), false);
 });

@@ -469,5 +469,5 @@ function hookOutput(out) {
 module.exports = {
   decide, hookOutput, loadFor, findRepo, readPolicyFile, normalize, checkTool, checkPrompt, scanPrompt, readSpendGate,
   recordBlock, denyMessage, splitCommands, words, globRe, parsePattern, pathMatches, loadDetectors,
-  REPO_FILE, DEFAULT_FILE, SPEND_FILE, BLOCKS_DIR, MAX_TTL_MS, safeId,
+  REPO_FILE, DEFAULT_FILE, SPEND_FILE, BLOCKS_DIR, MAX_TTL_MS, MAX_WALK, safeId,
 };

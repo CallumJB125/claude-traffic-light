@@ -166,14 +166,14 @@ test('pack Read-only reviewer: no edits, no write commands, no network', () => {
 
 // ── The deny message, end to end through the hook ────────────────────────────
 
-test('the deny message is plain: "Blocked by policy: <rule>", where it came from, and how to change it', (t) => {
+test('the deny message is plain: "Blocked by policy: <rule>", where it came from, and how to change it', async (t) => {
   const { repo, data } = repoWith(t, Packs.packPolicy('careful'));
   const out = Gate.decide({ rootDir: data, signal: 'tool-use', data: { session_id: 's-1', cwd: repo, tool_name: 'Bash', tool_input: { command: 'git push --force' } } });
   const h = out.hookSpecificOutput;
   assert.equal(h.hookEventName, 'PreToolUse');
   assert.equal(h.permissionDecision, 'deny');
   assert.equal(h.permissionDecisionReason, 'Blocked by policy: Bash "git push*--force*" is denied. ("Careful" in .plexiform/policy.json; Change it in Plexiform → Settings → Privacy and data → Policies.)');
-  const row = Policy.rowInfo({ sessionId: 's-1', cwd: path.join(repo, 'src') }, data);
+  const row = await Policy.rowInfo({ sessionId: 's-1', cwd: path.join(repo, 'src') }, data);
   assert.equal(row.name, 'Careful');
   assert.equal(row.source, 'repo');
   assert.equal(row.blocked.text, 'Blocked by policy: Bash "git push*--force*" is denied');
@@ -213,31 +213,31 @@ test('set-status.js with a malformed policy warns on the prompt and allows the t
 
 // ── App side ─────────────────────────────────────────────────────────────────
 
-test('apply writes only the exact content that was reviewed', (t) => {
+test('apply writes only the exact content that was reviewed', async (t) => {
   const { repo, data } = repoWith(t);
-  const pv = Policy.preview(data, { target: repo, pack: 'careful' });
+  const pv = await Policy.preview(data, { target: repo, pack: 'careful' });
   assert.equal(pv.path, path.join(repo, '.plexiform', 'policy.json'));
   assert.equal(pv.current, null);
   assert.deepEqual(JSON.parse(pv.content), Packs.packPolicy('careful'));
-  assert.match(Policy.apply(data, { target: repo, pack: 'careful' }).error, /Review it again/);
-  assert.match(Policy.apply(data, { target: repo, pack: 'careful', content: pv.content.replace('Careful', 'Lax') }).error, /Review it again/);
+  assert.match((await Policy.apply(data, { target: repo, pack: 'careful' })).error, /Review it again/);
+  assert.match((await Policy.apply(data, { target: repo, pack: 'careful', content: pv.content.replace('Careful', 'Lax') })).error, /Review it again/);
   assert.ok(!fs.existsSync(pv.path), 'nothing written without the confirmed content');
-  assert.deepEqual(Policy.apply(data, { target: repo, pack: 'careful', content: pv.content }), { ok: true, path: pv.path });
+  assert.deepEqual(await Policy.apply(data, { target: repo, pack: 'careful', content: pv.content }), { ok: true, path: pv.path });
   assert.equal(fs.readFileSync(pv.path, 'utf8'), pv.content);
-  assert.equal(Policy.preview(data, { target: repo, pack: 'careful' }).current, pv.content);
-  assert.match(Policy.preview(data, { target: '/', pack: 'careful' }).error, /folder/);
-  assert.match(Policy.preview(data, { target: 'relative', pack: 'careful' }).error, /folder/);
-  assert.match(Policy.preview(data, { target: repo, pack: 'nope' }).error, /packs/);
-  const def = Policy.preview(data, { target: 'default', pack: 'read-only-reviewer' });
-  assert.ok(Policy.apply(data, { target: 'default', pack: 'read-only-reviewer', content: def.content }).ok);
-  assert.equal(Policy.state(data).default.name, 'Read-only reviewer');
+  assert.equal((await Policy.preview(data, { target: repo, pack: 'careful' })).current, pv.content);
+  assert.match((await Policy.preview(data, { target: '/', pack: 'careful' })).error, /folder/);
+  assert.match((await Policy.preview(data, { target: 'relative', pack: 'careful' })).error, /folder/);
+  assert.match((await Policy.preview(data, { target: repo, pack: 'nope' })).error, /packs/);
+  const def = await Policy.preview(data, { target: 'default', pack: 'read-only-reviewer' });
+  assert.ok((await Policy.apply(data, { target: 'default', pack: 'read-only-reviewer', content: def.content })).ok);
+  assert.equal((await Policy.state(data)).default.name, 'Read-only reviewer');
 });
 
-test('the per-repo daily cap: over-cap repos are written to the gate the hook reads', (t) => {
+test('the per-repo daily cap: over-cap repos are written to the gate the hook reads', async (t) => {
   const { repo, data } = repoWith(t, { version: 1, name: 'Capped', dailySpendCapUsd: 5 });
   const now = Date.now();
   const turns = [{ ts: now - 1000, cwd: path.join(repo, 'src') }, { ts: now - 2000, cwd: repo }, { ts: now - 3 * 86400000, cwd: repo }];
-  const repos = Policy.overCaps({ rootDir: data, turns, now, costOf: () => 3 });
+  const repos = await Policy.overCaps({ rootDir: data, turns, now, costOf: () => 3 });
   assert.deepEqual(Object.keys(repos), [repo]);
   assert.match(repos[repo], /daily spend cap of \$5\.00 is reached \(\$6\.00 today\)/);
   Policy.writeSpendGate(data, repos, now);
@@ -246,7 +246,7 @@ test('the per-repo daily cap: over-cap repos are written to the gate the hook re
   assert.equal(Gate.decide({ rootDir: data, signal: 'tool-use', now: now + Gate.MAX_TTL_MS + 1, data: { cwd: repo, tool_name: 'Read' } }), null, 'a stale gate allows');
   Policy.writeSpendGate(data, {}, now);
   assert.ok(!fs.existsSync(path.join(data, Gate.SPEND_FILE)));
-  assert.deepEqual(Policy.overCaps({ rootDir: data, turns, now, costOf: () => 1 }), {});
+  assert.deepEqual(await Policy.overCaps({ rootDir: data, turns, now, costOf: () => 1 }), {});
 });
 
 test('Sessions rows carry the policy name and the latest refusal; none when there is no policy', () => {
@@ -260,25 +260,25 @@ test('Sessions rows carry the policy name and the latest refusal; none when ther
   assert.doesNotThrow(() => Overview.snapshot({ sessions: [{ sessionId: 'a', cwd: '/w' }], policy: () => { throw new Error('x'); } }));
 });
 
-test('startHold: only a policy that opts in holds new tasks, for a repo cap or the overall budget', (t) => {
+test('startHold: only a policy that opts in holds new tasks, for a repo cap or the overall budget', async (t) => {
   const { repo, data } = repoWith(t, { version: 1, name: 'Held', dailySpendCapUsd: 5, weeklySpendCapUsd: 20, holdTasksAtLimit: true });
   const now = Date.now();
   const costOf = () => 3;
   const hold = (turns, budget) => Policy.startHold({ rootDir: data, cwd: path.join(repo, 'src'), turns, now, costOf, budget });
-  assert.equal(hold([{ ts: now - 1000, cwd: repo }]), null, 'under both caps');
-  const day = hold([{ ts: now - 1000, cwd: repo }, { ts: now - 2000, cwd: repo }]);
+  assert.equal(await hold([{ ts: now - 1000, cwd: repo }]), null, 'under both caps');
+  const day = await hold([{ ts: now - 1000, cwd: repo }, { ts: now - 2000, cwd: repo }]);
   assert.match(day.text, /on hold: this repo's daily cap of \$5\.00 is reached \(\$6\.00 today\)\. Tasks already running are not affected/);
-  const budget = hold([], { level: 'exceeded', which: 'week', text: '$80 of $75 this week' });
+  const budget = await hold([], { level: 'exceeded', which: 'week', text: '$80 of $75 this week' });
   assert.match(budget.text, /your weekly spend limit is reached \(\$80 of \$75 this week\)/);
-  assert.equal(hold([], { level: 'warning', which: 'day' }), null, 'a warning is not a limit');
-  assert.equal(hold([{ ts: now - 1000, cwd: '/elsewhere' }, { ts: now - 1000, cwd: '/elsewhere' }]), null, 'other repos do not count');
+  assert.equal(await hold([], { level: 'warning', which: 'day' }), null, 'a warning is not a limit');
+  assert.equal(await hold([{ ts: now - 1000, cwd: '/elsewhere' }, { ts: now - 1000, cwd: '/elsewhere' }]), null, 'other repos do not count');
 });
 
-test('startHold: without holdTasksAtLimit nothing is held, even over a cap', (t) => {
+test('startHold: without holdTasksAtLimit nothing is held, even over a cap', async (t) => {
   const { repo, data } = repoWith(t, { version: 1, name: 'Soft', dailySpendCapUsd: 1 });
   const now = Date.now();
-  assert.equal(Policy.startHold({ rootDir: data, cwd: repo, turns: [{ ts: now - 1, cwd: repo }], now, costOf: () => 9, budget: { level: 'exceeded', which: 'day' } }), null);
-  assert.equal(Policy.startHold({ rootDir: data, cwd: '/definitely/not/here', turns: [], now, costOf: () => 1 }), null);
+  assert.equal(await Policy.startHold({ rootDir: data, cwd: repo, turns: [{ ts: now - 1, cwd: repo }], now, costOf: () => 9, budget: { level: 'exceeded', which: 'day' } }), null);
+  assert.equal(await Policy.startHold({ rootDir: data, cwd: '/definitely/not/here', turns: [], now, costOf: () => 1 }), null);
 });
 
 test('the weekly cap and hold flag are read; a bad value is dropped with a warning', () => {
