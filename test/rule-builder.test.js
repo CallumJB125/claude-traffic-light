@@ -106,7 +106,7 @@ test('engine: when.forMinutes holds a rule until the signal has lasted that long
   assert.deepEqual(R.liveSessions([], now, {}).map((s) => s.signal), ['idle']);
 });
 
-function rig({ rules, config = {}, phone = false } = {}) {
+function rig({ rules, config = {}, phone = false, busy = () => false } = {}) {
   let t = Date.parse('2026-10-19T12:00:00Z');
   let sessions = [];
   const shown = [];
@@ -116,6 +116,7 @@ function rig({ rules, config = {}, phone = false } = {}) {
     sessions: () => sessions,
     desktop: (title, body) => shown.push({ title, body }),
     phoneReady: () => phone,
+    busy,
   });
   return {
     n, shown,
@@ -232,4 +233,20 @@ test('main installs the notifier in one line and the Lights page carries the pic
   assert.ok(html.indexOf('src="rules.js"') < html.indexOf('src="src/rule-words.js"') && html.indexOf('src="src/rule-words.js"') < html.indexOf('src="lights-view.js"'));
   assert.match(fs.readFileSync(path.join(ROOT, 'lights-preload.js'), 'utf8'), /rule-notify:status/);
   assert.match(fs.readFileSync(path.join(ROOT, 'board', 'CONTRACT.md'), 'utf8'), /`rule-notify:status`/);
+});
+
+test('a meeting or screen share holds notify like a nudge (dropped, not replayed)', () => {
+  let inMeeting = true;
+  const r = rig({ rules: [WAITING], busy: () => inMeeting });
+  r.n.tick();
+  r.set([{ signal: 'permission-ask', sessionId: 'a', cwd: '/x/proj', updatedAt: iso(r.now()) }]);
+  r.n.tick();
+  assert.equal(r.shown.length, 0, 'held during the meeting');
+  inMeeting = false;
+  r.advance(RATE_MS); r.n.tick();
+  assert.equal(r.shown.length, 0, 'still the same activation: not replayed after the meeting');
+  r.set([]); r.n.tick();
+  r.set([{ signal: 'permission-ask', sessionId: 'a', cwd: '/x/proj', updatedAt: iso(r.now()) }]);
+  r.n.tick();
+  assert.equal(r.shown.length, 1, 'a new activation after the meeting notifies');
 });

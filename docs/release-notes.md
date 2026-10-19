@@ -1,3 +1,30 @@
+Plexiform app update — 19 October 2026 (1.0.2-beta.93)
+
+For macOS (Apple silicon and Intel) and Linux (x64).
+
+What changed
+
+- Search past sessions. Find what you asked an AI about, across your past sessions on this Mac, from the command palette or the Memory page, with project and date filters. Results open the session's timeline. The index stays on this Mac and is scrubbed of secrets.
+- Where the money went. The Usage page breaks spend down by project, branch and pull request, compares it with the period before, and suggests one saving each week: the share of Opus turns that looked routine and what Sonnet would have cost. The weekly digest carries the top projects and the same suggestion.
+- Rules made easy. Start a rule from a template ("Tell me when a session is stuck", "Red banner when CI fails" and more), read each rule as a plain sentence, and have a rule send a desktop notification. Notifications respect quiet hours and meetings.
+- A first-run tour. Five short steps on the demo board within half a minute of setup: the widget, answering a question, rules, spend and team. Skip it any time; take it again from Help.
+- Local models in two clicks. Plexiform finds Ollama and LM Studio running on this Mac, lists their models, starts a session with the one you pick, and says what to do when none is pulled. Sessions show which model they use. You can add your own OpenAI-compatible endpoint; its key is kept in secure storage.
+- Phone. A waiting permission request on your phone's lock screen now has a Review button that opens it straight away; approving still needs your passkey. You can dictate a reply with the microphone and press Send yourself.
+- Team. A heat map of the files your team is working in, with files two people touch flagged; an automatic standup per teammate you can copy; and handoffs that can be declined with a note, with the outcome shown to the sender.
+- Create a Linear or Jira issue from a session. Plexiform drafts it from the session's handover, you edit it, and nothing is sent until you press Create.
+- Fewer interruptions in meetings. Nudges and rule notifications wait while Plexiform sees a meeting or screen share.
+
+What has been verified
+
+Desktop, remote, site and board test suites pass on this build (desktop 5,478 tests, board 3,278, 0 failures), with the privacy census and the hub tenancy matrix.
+
+Current limits
+
+- Setting your Slack status from Plexiform is built but not available yet: it needs a Slack user permission the team's Slack app does not ask for today. The Slack runbook has the owner step.
+- Phone notification and voice changes reach phones after the team hub is updated.
+- Mac builds remain ad-hoc signed and are not Apple-notarized.
+- The limits listed for earlier betas below still apply.
+
 Plexiform widget update — 19 October 2026 (1.0.2-beta.92)
 
 For macOS (Apple silicon and Intel) and Linux (x64).

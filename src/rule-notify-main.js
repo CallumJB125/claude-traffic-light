@@ -21,7 +21,8 @@ const sessionKey = (s) => s.sessionId || (s.virtual ? `${s.signal}|${s.cwd || ''
 
 /**
  * deps: { config() → {rules, …quiet keys}, sessions() → raw session list, env?() → resolve env,
- *         desktop(title, body), phoneReady?() → bool, now?, quiet?, rules? }
+ *         desktop(title, body), phoneReady?() → bool, busy?() → bool (a meeting or
+ *         screen share: hold notifications like nudges), now?, quiet?, rules? }
  */
 function createRuleNotify(deps) {
   const R = deps.rules || Rules;
@@ -29,6 +30,7 @@ function createRuleNotify(deps) {
   const now = deps.now || Date.now;
   const env = deps.env || (() => ({}));
   const phoneReady = deps.phoneReady || (() => false);
+  const busy = deps.busy || (() => false);
   let active = null; // Set of `${ruleId}\n${sessionKey}` live last tick; null until primed
   const lastFired = new Map();
 
@@ -51,6 +53,7 @@ function createRuleNotify(deps) {
         next.add(key);
         if (!active || active.has(key)) continue; // first tick primes; still active is not an edge
         if (Q.reason(c, { now: t, cwd: s.cwd || null })) continue;
+        if (busy()) continue; // in a meeting: held, and not replayed afterwards (edge-triggered)
         if (t - (lastFired.get(rule.id) ?? -Infinity) < RATE_MS) continue;
         lastFired.set(rule.id, t);
         const body = `${label(R.sessionSignal(s) || s.signal)}${s.cwd ? ` in ${R.folderOf(s.cwd)}` : ''}`;
@@ -73,9 +76,9 @@ function createRuleNotify(deps) {
 
 // main.js: one line. Polls every 15 s and answers the Lights page's
 // `rule-notify:status` so it can grey out the phone choices.
-function install({ Notification, handle, allowed, config, sessions, env, log }) {
+function install({ Notification, handle, allowed, config, sessions, env, busy, log }) {
   const notifier = createRuleNotify({
-    config, sessions, env,
+    config, sessions, env, busy,
     desktop: (title, body) => {
       try { if (Notification.isSupported()) new Notification({ title, body, silent: true }).show(); } catch (err) { if (log) log('[rule-notify]', err.message); }
     },
