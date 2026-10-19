@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('lightsApi', {
   burstChip: () => ipcRenderer.invoke('burst:chip'),
   burstUsage: (range) => ipcRenderer.invoke('burst:usage', range),
   limits: () => ipcRenderer.invoke('usage:limits'),
+  spendSafety: { get: () => ipcRenderer.invoke('spend-safety:get'), set: (v) => ipcRenderer.invoke('spend-safety:set', v) },
   getAggregateStatus: () => ipcRenderer.invoke('get-aggregate-status'),
   getStats: (days) => ipcRenderer.invoke('get-stats', days),
   exportStats: (format, days) => ipcRenderer.invoke('export-stats', format, days),

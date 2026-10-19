@@ -72,6 +72,10 @@ function createWatcher(sources = {}, { now = Date.now } = {}) {
     for (const n of (Array.isArray(st.budget) ? st.budget : [])) {
       if (n && typeof n.runId === 'string') out.push({ key: `b|${n.runId}`, kind: 'needs-you', sessionId: `run:${n.runId}`, text: n.text || 'A run reached its budget' });
     }
+    // Spend safety (src/spend-safety-main.js): burn alerts, project caps, retry loops.
+    for (const a of safe(() => require('./spend-safety-main.js').alerts(), []) || []) {
+      if (a && typeof a.key === 'string') out.push({ key: `x|${a.key}`, kind: a.kind, sessionId: a.sessionId, text: a.text });
+    }
     return out;
   }
 

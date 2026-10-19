@@ -102,6 +102,8 @@
       "burst-chip.js",
       "burst-usage.js",
       "limits-panel.js",
+      "spend-safety-panel.js",
+      "settings-spend-safety.js",
       "feedback.html",
       "feedback.js",
       "feedback-preload.js",
