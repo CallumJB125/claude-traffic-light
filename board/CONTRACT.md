@@ -1166,3 +1166,16 @@ Local Electron IPC only; no network, no new file. Every channel checks its sende
 | `widget:recent-projects` | the Widget settings page only | none | `[{name, colour}]`, at most 12: folder names of live sessions, then projects that already have a colour |
 
 New config keys, all written only through `widget-page:set` (checked by `cleanPatch`) or the widget menu: `widgetSnap` (`corners`\|`edges`\|`off`, default `corners`), `widgetSize` (`normal`\|`compact`\|`dot`, default `normal`), `widgetShortcut` (Electron accelerator with a modifier, default empty = off), `projectColours` (`{folderName: '#rrggbb'}`, at most 40), `quietUntil` (epoch ms, "Quiet for 30 minutes").
+
+## Desktop local models IPC (`src/interaction-main.js`, wave 2 lane 7)
+
+Local Electron IPC from the Overview page only (`overview-preload.js`); the sender must be the current Overview document, and the write channels need it in the foreground, else `{ok:false, status:'forbidden'}` (reads return `null`). Network: read-only model-list probes of the fixed loopback ports (`127.0.0.1` 11434, 1234, 8000, 8888; `src/local-model-detect.js`, 1.5 s timeout, backoff 15 s doubling to 5 min per port while it keeps failing the same way) on app start and while Overview is open, plus the endpoints the person added. Documented under PRIVACY.md `flow:local-models`.
+
+| Channel | Sender | Request | Response |
+|---|---|---|---|
+| `interaction:local-models` (extended) | Overview | none | `{endpoints, models, detected, checkedAt, card}`; `detected` = every fixed loopback endpoint `{id, label, kind, reachable, error}` (error in plain words); `card` = `src/local-model-card.js` `{headline, backends:[{id, label, kind, source, host, health ∈ reachable\|not-running\|no-models, healthText, next:{text, command\|null}\|null, models:[{provider, model, label}]}], picker:[{provider, label}], defaultProvider}`. `next.command` is copyable text, never run |
+| `interaction:local-endpoints` | Overview | none | `[{id, label, url, kind, keyStored, lan}]`, the endpoints added in the card (`custom: true` in `local-models.json`); never a key |
+| `interaction:local-endpoint-save` | foreground Overview | `{id\|null, label ≤ 60, url ≤ 300, kind ∈ openai\|ollama, apiKey\|null ≤ 400, clearKey}` | `{ok, endpoint, lan}` or `{ok:false, error}`. URL: http(s), no credentials, query or fragment; a literal IP must be loopback, RFC1918 or Tailscale (public refused); a host name is checked when connecting. `id` null adds (`custom-<slug>`), else edits an added endpoint. `apiKey` is encrypted with `safeStorage` (`buddy-window/secure-storage.js`) into `local-model-keys.json` (0600) and the entry gets `apiKeyStored: true`; with secure storage unavailable nothing is saved. Re-probes on success |
+| `interaction:local-endpoint-remove` | foreground Overview | `{id}` | `{ok}` or `{ok:false, error}`; deletes the entry and its stored key |
+
+Session state `provider` gains an optional `model` (the local model's name) for local-model sessions; the Overview directory row's `provider.model` mirrors it. The widget session card (`src/session-card-view.js`) adds `model` and appends it to `state`; the timeline view model adds `model` (last assistant model in the transcript, else the hook state's `model`).

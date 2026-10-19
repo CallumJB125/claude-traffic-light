@@ -308,7 +308,9 @@ test('Picker lists every provider with availability and the exact reason; capabi
     s.setLastUsed(Date.now() - 120_000); await s.poll();
     assert.match(ep.querySelector('.model-list').textContent, /llama3\.2 · last used 2m ago/);
     assert.match(s.doc.getElementById('local-section').textContent, /local-models\.json/);
-    assert.equal(s.doc.querySelector('#local-section input, #local-section textarea, #local-section select'), null, 'read-only: no editing UI');
+    // Editing UI only in the model picker and the "Add your own endpoint" form; the endpoint list stays read-only.
+    for (const el of s.doc.querySelectorAll('#local-section input, #local-section textarea, #local-section select')) assert.ok(el.closest('#local-quick, #local-form'), `unexpected control ${el.id}`);
+    assert.equal(s.doc.querySelector('#local-endpoints input, #local-endpoints textarea, #local-endpoints select'), null, 'endpoint list is read-only');
     for (const ch of s.invoked) assert(ALLOWED.has(ch), ch);
   } finally { s.close(); }
 });

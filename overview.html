@@ -108,9 +108,29 @@
     </section>
   </section>
   <section id="local-section" data-view="mine" class="local-models" aria-labelledby="local-title" hidden>
-    <div class="section-header"><h2 id="local-title">Integrated local models</h2></div>
-    <p id="local-status" class="muted" role="status" aria-live="polite">Checking for local model endpoints…</p>
+    <div class="section-header"><h2 id="local-title">Local models</h2></div>
+    <p id="local-headline" role="status" aria-live="polite">Checking for Ollama and LM Studio on this computer…</p>
+    <div id="local-quick" class="actions" hidden>
+      <label for="local-picker">Model</label> <select id="local-picker"></select>
+      <button id="local-start" type="button">Start a session</button>
+    </div>
+    <ul id="local-backends" class="local-backends"></ul>
+    <p id="local-status" class="muted">Checking for local model endpoints…</p>
     <div id="local-endpoints"></div>
+    <details id="local-custom" class="reason"><summary>Add your own endpoint</summary>
+      <p>An Ollama or OpenAI-compatible server (vLLM, LM Studio, llama.cpp, litellm) on this computer, your network or your tailnet. A server on another machine receives the messages you send it: they leave this computer.</p>
+      <form id="local-form" autocomplete="off">
+        <input id="local-form-id" type="hidden">
+        <label for="local-form-label">Name</label> <input id="local-form-label" maxlength="60" required>
+        <label for="local-form-url">Address</label> <input id="local-form-url" maxlength="300" placeholder="http://127.0.0.1:8080" required>
+        <label for="local-form-kind">Type</label> <select id="local-form-kind"><option value="openai">OpenAI-compatible</option><option value="ollama">Ollama</option></select>
+        <label for="local-form-key">API key (optional)</label> <input id="local-form-key" type="password" maxlength="400" placeholder="Saved in your system's secure storage">
+        <label><input id="local-form-clear" type="checkbox"> Forget the saved API key</label>
+        <div class="actions"><button id="local-form-save" type="submit">Save endpoint</button> <button id="local-form-cancel" type="button">Clear form</button></div>
+        <p id="local-form-status" class="muted" role="status" aria-live="polite"></p>
+      </form>
+      <ul id="local-custom-list"></ul>
+    </details>
     <details class="reason"><summary>How to add a local model endpoint</summary><p>To add an endpoint, add it to <code>local-models.json</code> in Plexiform's data folder (userData), for example <code>{"endpoints":[{"id":"my-box","label":"My box","url":"http://127.0.0.1:11434","kind":"ollama"}]}</code>. <code>kind</code> is <code>ollama</code> or <code>openai</code>. An API key is never stored there: name an environment variable with <code>apiKeyEnv</code> instead.</p></details>
   </section>
   <section class="work" aria-labelledby="work-title" data-view="mine">

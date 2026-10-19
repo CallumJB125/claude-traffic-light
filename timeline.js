@@ -22,7 +22,7 @@ function lineCounts(f) {
 function render(r) {
   rendered = r;
   const v = r.view;
-  $('subtitle').textContent = `${r.title}${v.branch ? ` · branch ${v.branch}` : ''}`;
+  $('subtitle').textContent = `${r.title}${v.branch ? ` · branch ${v.branch}` : ''}${typeof v.model === 'string' && v.model ? ` · model ${v.model}` : ''}`;
   const facts = [['Status', v.status], ['Started', when(v.startedAt)], ['Last activity', when(v.lastActive)], ['Spend so far', v.spend ? `${usd(v.spend.usd)}${v.spend.partial ? '+' : ''}` : 'Not known'], ['Files edited', String(v.counts.files)], ['Commands run', String(v.counts.commands)], ['Approvals', `${v.counts.approvals} asked · ${v.counts.answered + v.counts.denied} answered`]];
   $('facts-list').replaceChildren(...facts.flatMap(([k, val]) => { const d = node('div'); d.append(node('dt', k), node('dd', val)); return [d]; }));
   $('source').textContent = `${SOURCE[v.source] || ''}${v.partial ? ' The transcript is large, so only its start and latest part were read.' : ''}${v.spend ? ' Spend is an API-equivalent estimate from the transcript’s token counts.' : ''}`;

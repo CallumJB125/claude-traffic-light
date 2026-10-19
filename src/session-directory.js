@@ -141,7 +141,7 @@ function createSessionDirectory({ now = Date.now, staleMs = STALE_MS, secret = c
       id: publicId(['owned', s.session]), kind: 'owned', owner: { name: 'You', self: true, initials: 'Y' },
       scope: mine.length ? 'team' : 'personal', teams: teamBadges(mine.map((x) => ({ key: x.teamKey, name: x.teamName }))),
       board: { label: existing ? 'Started outside Plexiform' : 'Started by Plexiform', kind: 'personal' }, card: null,
-      provider: { id: str(s.provider?.id, 80) || 'unknown', label, kind: /^local-/.test(String(s.provider?.id)) ? 'local' : 'integrated' },
+      provider: { id: str(s.provider?.id, 80) || 'unknown', label, kind: /^local-/.test(String(s.provider?.id)) ? 'local' : 'integrated', ...(str(s.provider?.model, 200) ? { model: str(s.provider.model, 200) } : {}) },
       device: { label: 'This device', local: true }, project: null,
       task: taskOf({ reported: s.reporting?.task?.title }), state: staleInput ? 'Last reported: Needs input' : live && s.input_needed === true ? 'Needs input' : status, input: live && !staleInput && s.input_needed === true, ...t, selfReported: null, provenance: ['owned'],
       capabilities: capabilities({

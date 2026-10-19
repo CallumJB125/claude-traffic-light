@@ -119,6 +119,15 @@ contextBridge.exposeInMainWorld('overviewApi', {
     interrupt: request => closed(request, ['session', 'generation', 'turn']) && uuid(request.session) && generation(request.generation) && uuid(request.turn) ? ipcRenderer.invoke('interaction:interrupt', { session: request.session, generation: request.generation, turn: request.turn }) : denied(),
     close: request => closed(request, ['session', 'generation']) && uuid(request.session) && generation(request.generation) ? ipcRenderer.invoke('interaction:close', { session: request.session, generation: request.generation }) : denied(),
     localModels: () => ipcRenderer.invoke('interaction:local-models'),
+    // Endpoints the person adds (main validates again; an API key goes to secure storage in main, never back here).
+    localEndpoints: () => ipcRenderer.invoke('interaction:local-endpoints'),
+    saveLocalEndpoint: request => {
+      if (!closed(request, ['id', 'label', 'url', 'kind', 'apiKey', 'clearKey'])) return denied();
+      const strOr = (v, max) => v === null || (typeof v === 'string' && v.length <= max);
+      if (!strOr(request.id, 40) || !strOr(request.label, 60) || !strOr(request.url, 300) || !['openai', 'ollama'].includes(request.kind) || !strOr(request.apiKey, 400) || typeof request.clearKey !== 'boolean') return denied();
+      return ipcRenderer.invoke('interaction:local-endpoint-save', { id: request.id, label: request.label, url: request.url, kind: request.kind, apiKey: request.apiKey, clearKey: request.clearKey });
+    },
+    removeLocalEndpoint: request => closed(request, ['id']) && typeof request.id === 'string' && request.id.length <= 40 ? ipcRenderer.invoke('interaction:local-endpoint-remove', { id: request.id }) : denied(),
     // An unavailable provider's next step: main opens that tool's AI tools row, if it lists one.
     openAiTools: id => typeof id === 'string' && /^[a-z]{2,12}$/.test(id) ? ipcRenderer.invoke('interaction:open-aitools', id) : Promise.resolve(false),
     // Ask all: one message to up to 6 distinct owned sessions; main sends each through the per-session guards.

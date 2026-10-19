@@ -27,6 +27,8 @@ const parse = (s) => { if (typeof s !== 'string' || s.length > 512 * 1024) retur
 const clip = (s, n) => { const t = String(s).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, ' ').trim(); return t.length > n ? `${t.slice(0, n)}…` : t; };
 const textOf = (content) => (typeof content === 'string' ? content : Array.isArray(content) ? content.filter((c) => c && typeof c.text === 'string').map((c) => c.text).join('\n') : '');
 
+// A model name as the timeline header shows it (letters, digits and . _ : / @ + -).
+const MODEL = /^[A-Za-z0-9._:/@+-]{1,80}$/;
 function usageCost(model, u) {
   const key = Usage.modelKey(model);
   if (!key || !obj(u)) return null;
@@ -53,6 +55,7 @@ function toolEvent(at, name, input) {
 
 function claudeEvents(lines) {
   const out = [], names = new Map(), delegated = new Map(), usage = new Map();
+  let model = null;
   let reply = null;
   const push = (e) => { if (out.length < MAX_EVENTS) out.push(e); };
   const turnEnd = (at) => { if (out[out.length - 1]?.kind !== 'turn-end') push({ at, kind: 'turn-end', text: reply ? clip(reply, CAP.reply) : null }); reply = null; };
@@ -77,6 +80,7 @@ function claudeEvents(lines) {
       const p = Transcripts.promptText(text);
       if (p) push({ at, kind: 'prompt', text: clip(p, CAP.prompt) });
     } else if (d.type === 'assistant' && m && Array.isArray(m.content)) {
+      if (MODEL.test(m.model ?? '') && m.model !== '<synthetic>') model = m.model;
       if (obj(m.usage)) usage.set(m.id && d.requestId ? `${m.id}:${d.requestId}` : d.uuid || `n${usage.size}`, { at, usd: usageCost(m.model, m.usage) });
       for (const c of m.content) {
         if (!c || typeof c !== 'object') continue;
@@ -90,7 +94,7 @@ function claudeEvents(lines) {
       if (m.stop_reason === 'end_turn') turnEnd(at);
     } else if (d.type === 'system' && (d.subtype === 'stop_hook_summary' || d.subtype === 'turn_duration')) turnEnd(at);
   }
-  return { events: out, usage: [...usage.values()] };
+  return { events: out, usage: [...usage.values()], model };
 }
 
 function codexEvents(lines) {
@@ -247,6 +251,7 @@ function build({ adapter, sessionId, cwd = '', branch = null, state = null, fact
   return {
     v: 1, adapter: String(adapter || ''), sessionId: String(sessionId || ''), cwd: root, project: root ? path.basename(root) : '',
     branch: str(branch) || str(f.branch) || null,
+    model: (transcript && MODEL.test(transcript.model ?? '') ? transcript.model : null) || (obj(state) && MODEL.test(state.model ?? '') ? state.model : null),
     source: transcript ? 'transcript' : Object.keys(f).length ? 'hooks' : 'state',
     partial: !!(transcript && transcript.partial),
     startedAt: started,

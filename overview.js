@@ -553,10 +553,87 @@
   // ── Integrated local models: what main found, read-only.
   const validEndpoint = e => obj(e) && text(e.id, 40) && text(e.label, 80) && ['openai', 'ollama'].includes(e.kind) && text(e.host, 300) && typeof e.reachable === 'boolean' && (e.error === null || text(e.error, 300)) && ['configured', 'discovered'].includes(e.source);
   const validModel = m => obj(m) && providerId(m.provider) && text(m.model, 200) && text(m.endpoint, 40) && (m.lastUsed === null || stamp(m.lastUsed));
+  // The Local models card (src/local-model-card.js, built in main): health per backend, one next step, a model picker.
+  const validBackend = b => obj(b) && text(b.id, 40) && text(b.label, 80) && text(b.healthText, 400) && ['reachable', 'not-running', 'no-models'].includes(b.health) && Array.isArray(b.models) && b.models.length <= 64 && b.models.every(m => obj(m) && providerId(m.provider) && text(m.model, 200)) && (b.next === null || obj(b.next) && text(b.next.text, 300) && (b.next.command === null || text(b.next.command, 120)));
+  function copyButton(command) {
+    const b = node('button', 'Copy'); b.type = 'button';
+    b.addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(command); b.textContent = 'Copied'; } catch { b.textContent = 'Select and copy it'; }
+    });
+    return b;
+  }
+  function renderCard(card) {
+    if (!obj(card) || !text(card.headline, 300) || !Array.isArray(card.backends) || card.backends.length > 64 || !Array.isArray(card.picker)) return;
+    $('local-headline').textContent = card.headline;
+    const picker = $('local-picker'), keep = picker.value;
+    const options = card.picker.filter(p => obj(p) && providerId(p.provider) && text(p.label, 300)).slice(0, 200);
+    picker.replaceChildren(...options.map(p => Object.assign(node('option', p.label), { value: p.provider })));
+    if (options.some(p => p.provider === keep)) picker.value = keep;
+    $('local-quick').hidden = !options.length;
+    $('local-start').textContent = options.length ? `Start a session with ${picker.selectedOptions[0]?.textContent.split(' · ')[0] ?? 'this model'}` : 'Start a session';
+    $('local-backends').replaceChildren(...card.backends.filter(validBackend).map(b => {
+      const li = node('li', '', `local-backend ${b.health}`);
+      li.append(node('strong', b.label), node('span', ` · ${b.healthText}`, b.health === 'reachable' ? 'tag completed' : 'tag stale'));
+      if (b.next) {
+        const p = node('p', b.next.text, 'reason');
+        if (b.next.command) { p.append(' ', node('code', b.next.command), ' ', copyButton(b.next.command)); }
+        li.append(p);
+      }
+      if (b.models.length) {
+        const ul = node('ul', '', 'model-list');
+        for (const m of b.models) {
+          const go = node('button', `Start a session with ${m.model}`); go.type = 'button';
+          go.addEventListener('click', () => startLocal(m.provider));
+          const row = node('li'); row.append(go); ul.append(row);
+        }
+        li.append(ul);
+      }
+      return li;
+    }));
+  }
+  function startLocal(id) {
+    if (!usableProvider(id)) { $('local-headline').textContent = 'That model is not ready to start yet. Checking again…'; void refreshOwned(); return; }
+    void launch(id);
+  }
+  // ── Custom endpoints: saved in main (local-models.json; any API key in secure storage).
+  function resetLocalForm() {
+    for (const id of ['local-form-id', 'local-form-label', 'local-form-url', 'local-form-key']) $(id).value = '';
+    $('local-form-kind').value = 'openai'; $('local-form-clear').checked = false;
+  }
+  async function renderCustom() {
+    if (typeof ix?.localEndpoints !== 'function') return;
+    let list;
+    try { list = await ix.localEndpoints(); } catch { list = null; }
+    if (!Array.isArray(list)) return;
+    $('local-custom-list').replaceChildren(...list.filter(e => obj(e) && text(e.id, 40) && text(e.label, 80) && text(e.url, 300)).map(e => {
+      const li = node('li', `${e.label} · ${e.url}${e.keyStored ? ' · API key saved' : ''}${e.lan ? ' · on another machine: messages leave this computer' : ''} `);
+      const edit = node('button', 'Edit'); edit.type = 'button';
+      edit.addEventListener('click', () => { $('local-form-id').value = e.id; $('local-form-label').value = e.label; $('local-form-url').value = e.url; $('local-form-kind').value = e.kind === 'ollama' ? 'ollama' : 'openai'; $('local-form-key').value = ''; $('local-form-clear').checked = false; $('local-form-label').focus(); });
+      const del = node('button', 'Remove'); del.type = 'button';
+      del.addEventListener('click', async () => {
+        let r; try { r = await ix.removeLocalEndpoint({ id: e.id }); } catch { r = null; }
+        $('local-form-status').textContent = r?.ok ? `Removed ${e.label}.` : text(r?.error, 300) ? r.error : 'Could not remove it.';
+        void renderCustom(); void refreshOwned();
+      });
+      li.append(edit, ' ', del);
+      return li;
+    }));
+  }
+  async function saveCustom(ev) {
+    ev.preventDefault();
+    const request = { id: $('local-form-id').value || null, label: $('local-form-label').value.trim(), url: $('local-form-url').value.trim(), kind: $('local-form-kind').value, apiKey: $('local-form-key').value || null, clearKey: $('local-form-clear').checked };
+    $('local-form-save').disabled = true; $('local-form-status').textContent = 'Saving…';
+    let r; try { r = await ix.saveLocalEndpoint(request); } catch { r = null; } finally { $('local-form-save').disabled = false; }
+    if (r?.ok) {
+      $('local-form-status').textContent = `Saved ${request.label}.${r.lan ? ' It is on another machine: messages you send it leave this computer.' : ''}`;
+      resetLocalForm(); void renderCustom(); void refreshOwned();
+    } else $('local-form-status').textContent = text(r?.error, 300) ? r.error : 'Could not save it. Nothing was changed.';
+  }
   function renderLocal(data) {
     if (!obj(data) || !Array.isArray(data.endpoints) || !Array.isArray(data.models) || data.endpoints.length > 64 || data.models.length > 500) {
       $('local-status').textContent = 'Local model status is unavailable right now. Showing the last known state.'; return;
     }
+    renderCard(data.card);
     const models = data.models.filter(validModel), seen = new Set();
     for (const e of data.endpoints) {
       if (!validEndpoint(e) || seen.has(e.id)) continue;
@@ -634,7 +711,16 @@
   }
   if (ix) {
     $('owned-section').hidden = false;
-    if (typeof ix.localModels === 'function') $('local-section').hidden = false;
+    if (typeof ix.localModels === 'function') {
+      $('local-section').hidden = false;
+      $('local-start').addEventListener('click', () => { if ($('local-picker').value) startLocal($('local-picker').value); });
+      $('local-picker').addEventListener('change', () => { $('local-start').textContent = `Start a session with ${$('local-picker').selectedOptions[0]?.textContent.split(' · ')[0] ?? 'this model'}`; });
+    }
+    if (typeof ix.localEndpoints === 'function') {
+      $('local-form').addEventListener('submit', ev => void saveCustom(ev));
+      $('local-form-cancel').addEventListener('click', () => { resetLocalForm(); $('local-form-status').textContent = ''; });
+      void renderCustom();
+    } else $('local-custom').hidden = true;
     $('start-session').addEventListener('click', () => void launch(selectedProvider));
     $('existing-provider').addEventListener('change',()=>{const cap=existingCaps.get($('existing-provider').value);$('existing-list').replaceChildren();if(cap)renderExisting(cap);});
     $('claude-channel-setup').addEventListener('click',async()=>{

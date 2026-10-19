@@ -169,7 +169,7 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
     const shown = active && (!r.existing || r.own.has(r.activeTurn)) ? active : null;
     const activityTurn = r.turns.get(r.activityTurn), activity = activityTurn?.activity;
     return {
-      session: r.id, generation: r.generation, provider: { id: r.provider, label: r.adapter.label },
+      session: r.id, generation: r.generation, provider: { id: r.provider, label: r.adapter.label, ...(typeof r.adapter.model === 'string' && r.adapter.model ? { model: r.adapter.model.slice(0, 200) } : {}) },
       ownership: r.existing ? 'existing-unmanaged' : 'plexiform-owned', label: r.existing ? `Unmanaged — started outside Plexiform · ${r.adapter.label}` : `Started by Plexiform · ${r.adapter.label}`,
       ...(r.existing ? { thread: { ...r.existing, warnings: [...r.existing.warnings] } } : {}),
       board: r.board, status: r.ended ? 'ended' : active || r.foreignBusy ? 'working' : compaction?.inFlight(r) ? 'compacting' : 'ready', activeTurn: shown?.tag ?? null,

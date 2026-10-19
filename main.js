@@ -1725,12 +1725,15 @@ const InteractionMain=require('./src/interaction-main').createInteractionMain({
   // The active workspace (My board or a team board) the sidebar shows.
   currentBoard:()=>buddyWin?.status?.().workspace??null,
   localModelsFile:path.join(app.getPath('userData'),'local-models.json'),
+  // Endpoints added in the Local models card; API keys encrypted with the OS secure storage, never in local-models.json.
+  endpointStore:require('./src/local-model-endpoints').createEndpointStore({file:path.join(app.getPath('userData'),'local-models.json'),keysFile:path.join(app.getPath('userData'),'local-model-keys.json'),secure:followupNativeStorage}),
   // Team sharing of Overview sessions goes through the remote host below (null while it is off).
   shares:()=>hostSync.host(),
   // Unavailable providers carry the AI tools page's reason and open its row (src/ai-tools.js nextStep).
   tools:()=>AiTools.quick(),openAiTools:(d)=>aiToolsOpen(d),
 });
 InteractionMain.register(ipcMain);
+app.whenReady().then(()=>InteractionMain.detectLocalModels()).catch(()=>{});
 onQuit(app,()=>InteractionMain.close());
 onQuit(app,retireClaudeChannels);
 ipcMain.handle('compaction-stats',async e=>settingsOnly(e)?{...CompactionLedger.summary(),settings:loadConfig().compaction,burstNote:BurstIpc.compactionNote(),burstLearned:BurstSpend.learnedThresholds(await BurstIpc.read('intelligentCompaction'))}:null);
