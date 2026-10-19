@@ -47,6 +47,7 @@ import { registerReviewRoutes } from './reviews.js';
 import { PhoneAuth } from './identity/phone-auth.js';
 import { phoneCors } from './phone-cors.js';
 import { registerTriggerRoutes } from './triggers.js';
+import { BuildLogs, registerBuildLogRoutes } from './build-logs.js';
 
 const MAX_BODY = 1024 * 1024;
 // A payment-provider event is a few KiB; unverified reads in flight are capped like connector webhooks.
@@ -329,6 +330,7 @@ export function createHttpHandler({ hub, api, config, integrations = null, githu
     if (params.plan_id) return hub.db.get('SELECT p.org_id FROM workflow_execution_plans p JOIN orgs o ON o.id=p.org_id WHERE p.id=? AND o.deleted_at IS NULL',params.plan_id)?.org_id ?? null;
     if (params.execution_preview_id) return hub.db.get('SELECT p.org_id FROM workflow_control_previews p JOIN orgs o ON o.id=p.org_id WHERE p.id=? AND o.deleted_at IS NULL',params.execution_preview_id)?.org_id ?? null;
     if (params.trigger_id) return hub.db.get('SELECT t.org_id FROM event_triggers t JOIN orgs o ON o.id = t.org_id WHERE t.id = ? AND t.deleted_at IS NULL AND o.deleted_at IS NULL', params.trigger_id)?.org_id ?? null;
+    if (params.log_id) return hub.db.get('SELECT l.org_id FROM build_logs l JOIN orgs o ON o.id = l.org_id WHERE l.id = ? AND o.deleted_at IS NULL', params.log_id)?.org_id ?? null;
     if (params.execution_id) return hub.db.get('SELECT e.org_id FROM workflow_executions e JOIN orgs o ON o.id=e.org_id WHERE e.id=? AND o.deleted_at IS NULL',params.execution_id)?.org_id ?? null;
     if (r.pattern.startsWith('/api/client-items/:item_id')) return hub.db.get('SELECT p.workspace_id FROM client_items i JOIN client_projects p ON p.id = i.project_id WHERE i.id = ?', params.item_id)?.workspace_id ?? null;
     if (r.pattern.startsWith('/api/client-approval-requests/:approval_id')) return hub.db.get('SELECT p.workspace_id FROM client_approval_requests a JOIN client_items i ON i.id = a.item_id JOIN client_projects p ON p.id = i.project_id WHERE a.id = ?', params.approval_id)?.workspace_id ?? null;
@@ -395,6 +397,8 @@ export function createHttpHandler({ hub, api, config, integrations = null, githu
     hub.messaging ??= new Messaging(hub, config.messagingLimits);
     hub.messaging.routes(route);
     hub.publicApi?.routes(route);
+    hub.buildLogs ??= new BuildLogs(hub);
+    registerBuildLogRoutes(route, { hub });
     const acc = hub.accounts;
     if (config.publicUrl) {
       const phoneAuth = new PhoneAuth(hub);
@@ -880,6 +884,19 @@ export function createHttpHandler({ hub, api, config, integrations = null, githu
     }
     // Public API v1 (public-api/): a team API token is its only credential.
     if (hub.publicApi && url.pathname.startsWith('/api/public/')) return hub.publicApi.handle(req, res, url, clientIp(req, config));
+    // Published build logs (build-logs.js): the unguessable link is the only credential; no sign-in, no script.
+    if (hub.buildLogs && url.pathname.startsWith('/b/')) {
+      try {
+        let base = null; try { base = publicBase(req); } catch { base = null; }
+        const out = await hub.buildLogs.handlePublic({ method: req.method, pathname: url.pathname, ip: clientIp(req, config), base,
+          readBody: async (max) => { const got = await readRaw(req, readLimits.deadlineMs, max); if (got.error) { cutIfUnread(req, res); throw new HubError('VALIDATION', 'body not readable'); } return got.body.toString('utf8'); } });
+        if (out) return sendRaw(res, out.status, out.type, out.body, out.csp ? { 'content-security-policy': out.csp } : {});
+      } catch (e) {
+        if (e instanceof HubError) return sendJson(res, httpStatus(e.code), errorBody(e), retryHeader(e));
+        hub.log.error('build log page failed', { err: redact(e?.message ?? e) });
+        return sendJson(res, 500, { error: { code: 'INTERNAL', message: 'internal error' } });
+      }
+    }
     // These two paths bypass Cloudflare Access (providers can't sign in):
     // the signed state and the webhook signature are their only auth.
     const cb = integrations && req.method === 'GET' ? /^\/integrations\/([a-z][a-z0-9-]{1,31})\/callback$/.exec(url.pathname) : null;

@@ -45,6 +45,9 @@ export const DEFAULT_LIMITS = Object.freeze({
   phone_exchange_ip: { capacity: 30, per_ms: 600000 },
   phone_approve_user: { capacity: 10, per_ms: 3600000 },
   crash_ip: { capacity: 25, per_ms: 3600000 },
+  build_log_public_ip: { capacity: 120, per_ms: 60_000 },   // GET/POST /b/<slug>* (build-logs.js), no sign-in
+  build_log_remix_ip: { capacity: 10, per_ms: 3_600_000 },
+  build_log_report_ip: { capacity: 5, per_ms: 3_600_000 },
   crash_global: { capacity: 60, per_ms: 60000 },
   auth_methods_ip: { capacity: 60, per_ms: 60_000 },          // GET /api/auth/methods (no auth)
   auth_turnstile_ip: { capacity: 20, per_ms: 3_600_000 },     // Turnstile tokens checked with Cloudflare, per /64

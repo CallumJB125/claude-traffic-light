@@ -1274,3 +1274,38 @@ Local Electron IPC; the network it leads to is flow `deploy-status` in PRIVACY.m
 
 Rule signals: `deploy-live` (new, kind `git`) and `deploy-failed` (now also hosted deploys) arrive in `env.git` as `{id:'host:<provider>:<deployment>:<signal>', signal, provider, name, title, url, cwd, summary?, at, firedAt}`; a `deploy-live` event also matches `deploy-finished`, so the stock "Deploy finished" rule celebrates it. Holds: failed 10 min, live 2 min. `widget:lane-event` gains `kind: 'deployed'` (`Live · <Host> · <project>`); a hosted failure is `ci-failed` with `Deploy failed · <Host> · <project> · <summary>`. Session files gain `deployAt` (ISO time a Vercel/Netlify/Wrangler deploy command last finished in that session, written by `hooks/set-status.js` via `hooks/deploy-hint.js`; the command is never stored).
 
+## Build logs, starter kits and the unified Discover catalogue (lane F: `board/hub/build-logs.js`, `src/build-log-main.js`)
+
+Migration `079_build_logs.sql` adds `build_logs` (one published log: team, author member and user, unguessable 22-character `slug`, the reviewed log as JSON, `remix_count`, `report_count`, `hidden`) and `build_log_reports` (one row per keyed-hash reporter). Accounts mode only. The log shape is closed (`validateLog`): `{schema:1, title ≤120, summary, project, tools ≤8, started_at, ended_at, cost_usd, deployed_url (https), before, after, timeline ≤200 [{at, kind ∈ prompt|edit|command|checkpoint|note|deploy|tool|failed, text ≤500}], prompts ≤100 [{at, text ≤2000}], files ≤200 [{path (relative, no ..), edits, add, del}], kit: null | {repo (https), claude_md ≤20k, skills ≤20 [{name, content}], mcp ≤20 [{name, command | url, args}], budget_usd, permissions ≤50}}`, at most 300,000 bytes; anything `hasCredential` matches is refused (400), never edited.
+
+| Method + path | Auth | Body | 200 response | Errors |
+|---|---|---|---|---|
+| `GET /api/build-logs` | member (`X-Board-Team`) | — | `{logs:[{id, slug, title, author_member_id, remix_count, report_count, hidden, created_at, path:'/b/<slug>'}]}` (≤200, newest first) | 404 |
+| `POST /api/build-logs` | member, not viewer (`X-Board-Team`) | `{request_id, log}` | `{log: summary}` | `VALIDATION` (shape, credential), `QUOTA_EXCEEDED` (200 per team), 403 viewer, 404 |
+| `DELETE /api/build-logs/:log_id` | its author or a team admin | `{request_id}` | `{ok, id}`; the row and its reports are deleted | 403, 404 (another team's id) |
+| `POST /api/build-logs/:log_id/restore` | team admin | `{request_id}` | `{log}`; clears reports and `hidden` | 403, 404 |
+| `GET /b/<slug>` | none (pre-route; the link is the credential) | — | HTML page, `default-src 'none'` CSP, no script, `noindex`, "Made with Plexiform — remix this" | 404 page (unknown, hidden, unpublished, team/author gone), 429 |
+| `GET /b/<slug>/kit.json` | none | — | `{schema:1, slug, title, author, remix_count, summary, kit}` | 404, 429 |
+| `POST /b/<slug>/remix` | none | — | `{ok, remix_count}` | 404, 429 (`build_log_remix_ip` 10/h) |
+| `POST /b/<slug>/report` | none | `{reason ≤500}` (≤2 KiB) | `{ok, message}`; one count per keyed-hash /64 or address; 3 distinct reporters set `hidden` | 404, 429 (`build_log_report_ip` 5/h) |
+
+All `/b/*` requests also spend `build_log_public_ip` (120/min). Tenancy: `routes-matrix.test.js` covers the four API routes (B's log id from team A → 404; A's team header cannot list or publish into B), `/b/*` is listed in `PRE_ROUTE`.
+
+Desktop IPC (Discover page only, `discover-preload.js` → `vibeApi`; any other sender gets `null`):
+
+| Channel | Request | Response / effect |
+|---|---|---|
+| `vibe:catalog` | `team\|null` | `{ok, fetched, tabs:[{id:'starters'\|'skills'\|'mcp', label, items:[{source:'gallery'\|'build-log', id, sha256?, title, what, cost, permissions[], author, used, install:'add'\|'pack'\|'remix'\|null, report?, link?}]}]}` from the cached verified gallery and (with a team) the team's published logs |
+| `vibe:install` | `(id, sha256, 'add'\|'pack')` | delegates to `gallery.add` / `gallery.addPack` (their native consent sheet) |
+| `vibe:report` | `id` | consent sheet, then opens a prefilled GitHub issue (`labels=gallery-report`) in the browser |
+| `vibe:sessions` | none | `{ok, sessions:[{key, label, project}]}` (the Timeline page's list) |
+| `vibe:draft` | `(keys[] ≤20, {kit})` | review model `{ok, fields, tools, cost_usd, items:[{id, section, include, …}], final, digest, problems[]}`; nothing is sent |
+| `vibe:review` | `{fields, items:[{id, include, text?}]}` | the same review model after the edits |
+| `vibe:kit-from-folder` | none (folder picker) | review model with the folder's starter kit as kit items |
+| `vibe:export` | `digest` | must equal the current reviewed digest and have no `problems`; save dialog; one self-contained HTML file |
+| `vibe:teams` | none | `{ok, teams:[{id, name, role}]}` from `GET /api/account` |
+| `vibe:publish` | `(digest, team)` | digest check, no problems, consent sheet, then `POST /api/build-logs`; `{ok, id, url}` |
+| `vibe:published` / `vibe:unpublish` | `team` / `(team, id)` | list; Unpublish after a consent sheet (`DELETE /api/build-logs/:id`) |
+| `vibe:remix-preview` | pasted link (`https://…/b/<22>` or loopback http) | fetches `kit.json` without credentials, validates it; `{ok, title, author, remix_count, permissions[], kit}`; held 10 min for one install |
+| `vibe:remix-install` | none | consent sheet listing the manifest, folder picker, writes without overwriting (author credited in CLAUDE.md), then `POST /b/<slug>/remix`; `{ok, written[], skipped[]}` |
+| `vibe:report-link` | `(link, reason)` | consent sheet, then `POST /b/<slug>/report` |
