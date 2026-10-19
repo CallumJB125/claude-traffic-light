@@ -251,8 +251,10 @@ function modsView({ modStatus, mac } = {}) {
  * cardView(d, {platform, now, mac, modStatus}) → statusView(d) plus keepAwake, remoteControl, mods
  * (each null when hidden). Reads are gated on d.capabilities so a 0.19 Burst shows the plain card.
  */
-function cardView(d, { platform = process.platform, now = Date.now, mac = null, modStatus = null } = {}) {
-  const v = statusView(d, { platform, now });
+// `view` lets the caller pass a statusView it already built with extra inputs (burst-ipc's viewOf
+// adds lastGood for gateway_stale and the console probe for console_down); the card then keeps those states.
+function cardView(d, { platform = process.platform, now = Date.now, mac = null, modStatus = null, view = null } = {}) {
+  const v = view && typeof view === 'object' ? { ...view } : statusView(d, { platform, now });
   const caps = (d && d.kind === 'present' && obj(d.capabilities)) || {};
   v.keepAwake = caps.keepAwake === true ? keepAwakeView(mac) : null;
   v.remoteControl = d && d.kind === 'present' ? remoteControlView(d.state) : null;

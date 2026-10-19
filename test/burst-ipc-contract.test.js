@@ -31,6 +31,7 @@ function harness(client, { answer = 1 } = {}) {
 // Arguments that get each channel past its input checks, so the client is actually reached.
 const CALLS = {
   'burst:status': [],
+  'burst:loose-ends': [],
   'burst:consent-text': ['enable'],
   'burst:action': [{ kind: 'enable' }],
   'burst:test': [],

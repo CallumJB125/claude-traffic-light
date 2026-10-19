@@ -87,9 +87,11 @@ const ACTIONS = Object.freeze({
 // `burst:action` kinds (the renderer's vocabulary) that map onto the allow-listed mutations above.
 const ACTION_KINDS = Object.freeze({
   'keep-awake': (a) => ['keep-awake', { mode: a.mode, idleMinutes: a.idleMinutes }],
-  'mod-install': () => ['mod-action', { action: 'install' }],
-  'mod-update': () => ['mod-action', { action: 'install' }], // Burst's install also updates
-  'mod-remove': () => ['mod-action', { action: 'remove' }],
+  // The card names the mod in args.mod (burst-view.js modsView): the usage panel
+  // (claude-code-cost-sidebar) installs through /api/panel-install, the session mod through /api/mod-action.
+  'mod-install': (a) => [a.mod === 'usage-panel' ? 'panel-install' : 'mod-action', { action: 'install' }],
+  'mod-update': (a) => [a.mod === 'usage-panel' ? 'panel-install' : 'mod-action', { action: 'install' }], // Burst's install also updates
+  'mod-remove': (a) => [a.mod === 'usage-panel' ? 'panel-install' : 'mod-action', { action: 'remove' }],
   'panel-install': () => ['panel-install', { action: 'install' }],
   'panel-update': () => ['panel-install', { action: 'install' }],
   'panel-remove': () => ['panel-install', { action: 'remove' }],
@@ -222,7 +224,7 @@ function register({ utilityHandle: rawHandle, settingsOnly, chipAllowed = () => 
     const caps = present() || {};
     const mac = caps.keepAwake || caps.mods ? cached('mac', () => client.mac()) : null;
     const modStatus = caps.mods ? cached('modStatus', () => client.modStatus()) : null;
-    return { ...View.cardView(last, { platform, mac, modStatus }), nextPollMs: isMac ? backoff.gap : 0 };
+    return { ...View.cardView(last, { platform, mac, modStatus, view: v }), nextPollMs: isMac ? backoff.gap : 0 };
   });
   utilityHandle('burst:consent-text', card, async (_e, kind, mode) => {
     if (!isMac) return null;
@@ -558,4 +560,4 @@ function register({ utilityHandle: rawHandle, settingsOnly, chipAllowed = () => 
   };
 }
 
-module.exports = { register, contract, guarded, scriptDirFor: (userData) => path.join(userData, 'burst-scripts') };
+module.exports = { register, contract, guarded, ACTION_KINDS, scriptDirFor: (userData) => path.join(userData, 'burst-scripts') };

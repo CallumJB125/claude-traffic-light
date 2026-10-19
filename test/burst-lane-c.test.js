@@ -290,3 +290,11 @@ test('burst:action: bad args never reach a dialog; 0.19 answers unsupported befo
   assert.equal(old.dialogs.length, 1);
   assert.equal(posts(old.gw).length + posts(old.con).length, 0);
 });
+
+test('burst:action mod-install routes the usage panel to panel-install and the session mod to mod-action (lane B card seam)', () => {
+  const { ACTION_KINDS } = require('../src/burst-ipc.js');
+  assert.deepEqual(ACTION_KINDS['mod-install']({ mod: 'usage-panel' }), ['panel-install', { action: 'install' }]);
+  assert.deepEqual(ACTION_KINDS['mod-update']({ mod: 'usage-panel' }), ['panel-install', { action: 'install' }]);
+  assert.deepEqual(ACTION_KINDS['mod-install']({ mod: 'burst-session' }), ['mod-action', { action: 'install' }]);
+  assert.deepEqual(ACTION_KINDS['mod-install']({}), ['mod-action', { action: 'install' }]);
+});
