@@ -3,6 +3,7 @@
 // applying one sets this browser's filters. Moments are dated notes the team
 // keeps — a ship, a decision, a demo (board.settings.moments). Text only.
 import { h } from './h.js';
+import { momentThread } from './comments.js';
 
 export const MOMENT_KINDS = Object.freeze([['moment', 'Moment'], ['ship', 'Shipped'], ['decision', 'Decision'], ['demo', 'Demo']]);
 const KIND_LABEL = Object.fromEntries(MOMENT_KINDS);
@@ -36,6 +37,8 @@ export function shippedThisWeek(entries, moments, now = Date.now()) {
   return [...done, ...shipped].sort((a, b) => b.at - a.at).slice(0, 12);
 }
 
+const commentsLabel = (t) => (t?.status === 'ready' ? (t.items.length ? `${t.items.length} comment${t.items.length === 1 ? '' : 's'}` : 'Comment') : 'Comments');
+
 export function momentsPanel(model, now = Date.now()) {
   if (model.view !== 'board' || !model.board || model.localCard) return null;
   const moments = Array.isArray(model.board.settings?.moments) ? model.board.settings.moments : [];
@@ -50,7 +53,9 @@ export function momentsPanel(model, now = Date.now()) {
       h('span', { class: 'pin-label' }, m.label),
       m.note ? h('span', { class: 'pin-value' }, m.note) : null,
       h('span', { class: 'pin-by muted small' }, [m.by ? `by ${m.by}` : '', when(m.at)].filter(Boolean).join(' · ')),
-      model.readOnly ? null : h('button', { type: 'button', class: 'pin-remove', 'data-action': 'moment-remove', 'data-moment': m.id, 'aria-label': `Remove moment: ${m.label}`, title: 'Remove moment' }, '×'))))
+      model.readOnly ? null : h('button', { type: 'button', class: 'pin-remove', 'data-action': 'moment-remove', 'data-moment': m.id, 'aria-label': `Remove moment: ${m.label}`, title: 'Remove moment' }, '×'),
+      h('button', { type: 'button', class: 'link small pin-comments', 'data-action': 'moment-comments', 'data-moment': m.id, 'aria-expanded': model.momentOpen?.has?.(m.id) ? 'true' : 'false' }, commentsLabel(model.momentThreads?.get?.(m.id))),
+      model.momentOpen?.has?.(m.id) ? momentThread(model, m.id) : null)))
       : h('p', { class: 'muted small pin-empty' }, 'No moments yet. Teammates can also mark one from a session in Plexiform.'),
     model.readOnly ? null : h('form', { class: 'pin-form', 'data-form': 'moment-mark', 'aria-label': 'Mark a moment' },
       h('select', { name: 'kind', 'aria-label': 'What kind of moment' }, MOMENT_KINDS.map(([k, l]) => h('option', { value: k }, l))),

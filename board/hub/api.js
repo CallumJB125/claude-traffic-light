@@ -4,6 +4,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { normalizeRemoteUrl } from '../shared/scope.js';
+import { parseMentions } from '../shared/mentions.js';
 import { PLAN_APPROVAL_LABEL, isReservedLabel } from '../shared/states.js';
 import { LABEL_COLORS, CODEX_PLAN_PERMISSION } from '../shared/protocol.js';
 import { classifyPair, kindOf, hintPaths } from '../shared/overlap.js';
@@ -637,6 +638,14 @@ export class Api {
       const moments = mode === 'remove' ? before.filter((x) => x.id !== body.id) : [{ ...item, by: member.display_name ?? 'A teammate', at: now }, ...before].slice(0, 50);
       const settings = { ...json(this.hub.board(boardId).settings, {}), moments };
       this.hub.txn(() => {
+        // The `moments` table (migration 076) is the durable row; the settings
+        // list is a mirror old desktops still read (same ids, one release).
+        if (mode === 'remove') {
+          this.db.run('DELETE FROM comments WHERE moment_id = ?', body.id);
+          this.db.run('DELETE FROM moments WHERE id = ? AND board_id = ?', body.id, boardId);
+        } else {
+          this.db.insert('moments', { id: item.id, board_id: boardId, kind: item.kind, label: item.label, note: item.note || null, author_member_id: member.id, created_at: now });
+        }
         this.db.run('UPDATE boards SET settings = ? WHERE id = ?', JSON.stringify(settings), boardId);
         this.hub.journal({ board_id: boardId, actor_kind: 'member', actor_id: member.id, kind: mode === 'remove' ? 'board.moment_removed' : 'board.moment_marked', payload: { kind: item?.kind ?? null, request_id: body.request_id ?? null } });
         this.hub.later(() => this.hub.broadcastSettings(boardId, 'moments'));
@@ -1133,17 +1142,104 @@ export class Api {
   }
 
   // ── comments ──────────────────────────────────────────────────────────────
+  // Mentions (team depth lane A): `@name` / `@email-local-part` against the
+  // org's current members, parsed on write and stored as member ids
+  // (comments.mentions_json). Every mentioned member other than the author
+  // gets an inbox row `mention`; the parent comment's author gets `reply`
+  // (one row per member per comment). The live `inbox.item` push to each
+  // member's own sockets runs after commit.
+  orgMembersForMentions(orgId) {
+    return this.db.all('SELECT id, display_name, email, github_login FROM members WHERE org_id = ? AND removed_at IS NULL', orgId);
+  }
+
+  inboxItem(id) {
+    const r = id ? this.db.get('SELECT * FROM inbox WHERE id = ?', id) : null;
+    return r ? { id: r.id, org_id: r.org_id, kind: r.kind, ref: json(r.ref_json, {}), created_at: r.created_at, read_at: r.read_at } : null;
+  }
+
+  // Writes the inbox rows for one new comment and schedules their push; returns the mention ids.
+  notifyComment(member, orgId, { comment_id, body, reply_to, ref }) {
+    const mentions = parseMentions(body, this.orgMembersForMentions(orgId)).map((m) => m.member_id);
+    const notified = new Map();
+    for (const id of mentions) if (id !== member.id) notified.set(id, 'mention');
+    const parent = reply_to ? this.db.get('SELECT author_member_id FROM comments WHERE id = ?', reply_to) : null;
+    if (parent?.author_member_id && parent.author_member_id !== member.id && !notified.has(parent.author_member_id)) notified.set(parent.author_member_id, 'reply');
+    for (const [id, kind] of notified) {
+      const rowId = this.notify(id, kind, { ...ref, comment_id, by: member.id });
+      if (rowId) this.hub.later(() => { const item = this.inboxItem(rowId); if (item) this.hub.broadcastMember(id, 'inbox.item', { item }); });
+    }
+    return mentions;
+  }
+
+  commentView(c) {
+    return {
+      id: c.id, author_member_id: c.author_member_id, author_name: c.author_member_id ? this.hub.memberName(c.author_member_id) ?? 'Former member' : null,
+      source: c.source, trusted: !!c.trusted, body: c.body, for_agent: !!c.for_agent, reply_to: c.reply_to, mentions: json(c.mentions_json, []),
+      created_at: c.created_at, created_age_ms: this.hub.ageOf(c.created_at), ...(c.moment_id ? { moment_id: c.moment_id } : {}),
+    };
+  }
+
   insertComment(member, cardId, { body, for_agent = false, reply_to = null }) {
-    requireRows(this.hub, this.hub.board(this.hub.card(cardId).board_id).org_id, 'comments');
+    const boardId = this.hub.card(cardId).board_id;
+    const orgId = this.hub.board(boardId).org_id;
+    requireRows(this.hub, orgId, 'comments');
     const id = randomUUID();
     const replyTo = reply_to && this.db.get('SELECT 1 AS x FROM comments WHERE id = ? AND card_id = ?', reply_to, cardId) ? reply_to : null;
     // Text an integration wrote (inside its actVia scope) is outside text:
     // never trusted, so it can never reach a running agent (deliverComments).
     const byIntegration = this.hub.viaScope.getStore()?.member_id === member.id;
     const source = byIntegration ? 'integration' : 'web';
-    this.db.insert('comments', { id, card_id: cardId, author_member_id: member.id, source, trusted: byIntegration ? 0 : 1, body, for_agent: for_agent ? 1 : 0, reply_to: replyTo, created_at: this.hub.iso() });
+    const mentions = this.notifyComment(member, orgId, { comment_id: id, body, reply_to: replyTo, ref: { board_id: boardId, card_id: cardId } });
+    this.db.insert('comments', { id, card_id: cardId, author_member_id: member.id, source, trusted: byIntegration ? 0 : 1, body, for_agent: for_agent ? 1 : 0, reply_to: replyTo, mentions_json: JSON.stringify(mentions), created_at: this.hub.iso() });
     this.hub.journal({ card_id: cardId, actor_kind: 'member', actor_id: member.id, kind: 'comment.create', payload: { comment_id: id, source, for_agent: !!for_agent } });
+    this.hub.later(() => { const c = this.db.get('SELECT * FROM comments WHERE id = ?', id); if (c) this.hub.broadcastComment(boardId, 'card.comment', { card_id: cardId, comment: this.commentView(c), mentions }); });
     return id;
+  }
+
+  // Comments on a moment (CONTRACT: GET/POST /api/boards/:board_id/moments/:moment_id/comments).
+  // A moment is looked up in its table; one still only in the settings mirror
+  // (marked before migration 076) is given its row on first use.
+  momentFor(member, boardId, momentId) {
+    this.boardFor(member, boardId);
+    const row = typeof momentId === 'string' ? this.db.get('SELECT * FROM moments WHERE id = ? AND board_id = ?', momentId, boardId) : null;
+    if (row) return row;
+    const mirrored = this.momentsOf(boardId).find((m) => m.id === momentId);
+    if (!mirrored) throw new HubError('NOT_FOUND', 'no such moment');
+    const kind = ['moment', 'ship', 'decision', 'demo'].includes(mirrored.kind) ? mirrored.kind : 'moment';
+    const created = Number.isFinite(Date.parse(mirrored.at)) ? new Date(mirrored.at).toISOString() : this.hub.iso();
+    const backfill = { id: mirrored.id, board_id: boardId, kind, label: String(mirrored.label ?? '').slice(0, 120) || 'Moment', note: mirrored.note ? String(mirrored.note).slice(0, 500) : null, author_member_id: null, created_at: created };
+    this.hub.txn(() => this.db.run('INSERT OR IGNORE INTO moments (id, board_id, kind, label, note, author_member_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', backfill.id, backfill.board_id, backfill.kind, backfill.label, backfill.note, backfill.author_member_id, backfill.created_at));
+    return backfill;
+  }
+
+  momentComments(member, boardId, momentId) {
+    const moment = this.momentFor(member, boardId, momentId);
+    const rows = this.db.all('SELECT * FROM comments WHERE moment_id = ? ORDER BY created_at, rowid', moment.id);
+    return { comments: rows.map((c) => this.commentView(c)) };
+  }
+
+  async addMomentComment(member, boardId, momentId, body, { cred = null } = {}) {
+    member = this.currentWriter(member, cred);
+    this.momentFor(member, boardId, momentId);
+    this.requireLabel(member, 'label.write');
+    const text = str(body.body, 10_000, 'body', { required: true });
+    return this.withWritableBoard(boardId, (current) => {
+      member = current;
+      const moment = this.momentFor(member, boardId, momentId);
+      this.requireLabel(member, 'label.write');
+      const orgId = this.hub.board(boardId).org_id;
+      const id = randomUUID();
+      this.hub.txn(() => {
+        requireRows(this.hub, orgId, 'comments');
+        const replyTo = body.reply_to && this.db.get('SELECT 1 AS x FROM comments WHERE id = ? AND moment_id = ?', body.reply_to, moment.id) ? body.reply_to : null;
+        const byIntegration = this.hub.viaScope.getStore()?.member_id === member.id;
+        const mentions = this.notifyComment(member, orgId, { comment_id: id, body: text, reply_to: replyTo, ref: { board_id: boardId, moment_id: moment.id } });
+        this.db.insert('comments', { id, card_id: null, moment_id: moment.id, author_member_id: member.id, source: byIntegration ? 'integration' : 'web', trusted: byIntegration ? 0 : 1, body: text, for_agent: 0, reply_to: replyTo, mentions_json: JSON.stringify(mentions), created_at: this.hub.iso() });
+        this.hub.journal({ board_id: boardId, actor_kind: 'member', actor_id: member.id, kind: 'comment.create', payload: { comment_id: id, source: byIntegration ? 'integration' : 'web', for_agent: false, moment_id: moment.id, request_id: body.request_id ?? null } });
+        this.hub.later(() => { const c = this.db.get('SELECT * FROM comments WHERE id = ?', id); if (c) this.hub.broadcastComment(boardId, 'moment.comment', { moment_id: moment.id, comment: this.commentView(c), mentions }); });
+      });
+      return { comment: this.commentView(this.db.get('SELECT * FROM comments WHERE id = ?', id)) };
+    }, { member, cred });
   }
 
   async comment(member, cardId, body, { cred = null, remote = null, integrationObservation = null } = {}) {
@@ -1206,7 +1302,7 @@ export class Api {
       });
       if (!replay && body.for_agent === true) this.hub.deliverComments(cardId);
       const c = this.db.get('SELECT * FROM comments WHERE id = ?', id);
-      return { comment: { id, author_name: this.hub.member(c.author_member_id)?.display_name ?? 'Former member', source: c.source, trusted: !!c.trusted, body: c.body, for_agent: !!c.for_agent, reply_to: c.reply_to, created_age_ms: this.hub.ageOf(c.created_at) }, ...(observation ? { coalesced, replay } : {}) };
+      return { comment: this.commentView(c), ...(observation ? { coalesced, replay } : {}) };
     }, { member, cred, remote });
   }
 

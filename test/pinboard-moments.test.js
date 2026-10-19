@@ -15,7 +15,7 @@ function make(status = 200, body = { moments: [{ id: 'm1' }] }) {
 test('a moment travels as kind, label and note only, and the folder path never leaves', async () => {
   const { pb, calls } = make();
   const r = await pb.moment({ cwd: '/Users/me/secret/repo', kind: 'ship', label: '  Billing v2   live ', note: 'went out at 10' });
-  assert.deepEqual(r, { ok: true, count: 1, board: 'b1' });
+  assert.deepEqual(r, { ok: true, count: 1, board: 'b1', moment_id: 'm1' });
   assert.equal(calls[0].url, 'https://hub.example.test/api/boards/b1/moments');
   const sent = JSON.parse(calls[0].init.body);
   assert.deepEqual(sent.moment, { kind: 'ship', label: 'Billing v2 live', note: 'went out at 10' });

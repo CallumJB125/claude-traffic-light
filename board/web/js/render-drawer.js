@@ -13,6 +13,7 @@ import { packetPanel, messagePanel } from './render-communication.js';
 import { captureBadge } from './render-capture.js';
 import { ownershipPanel } from './render-ownership.js';
 import { reportedSessionContext } from './local-session-context.js';
+import { commentBody, mentionPicker } from './comments.js';
 import { taskWorkspacePanel } from './render-task-workspace.js';
 
 const ago = (ms) => (ms == null ? 'never' : `${formatAge(ms)} ago`);
@@ -208,12 +209,13 @@ function tabPanel(tab, detail, model, elapsed) {
           c.identity_source === 'remote_grant' ? h('span', { class: 'muted small' }, `via ${c.application ?? 'Remote application'} · unverified application`) : null,
           c.for_agent ? h('span', { class: 'label' }, 'For the agent') : null,
           h('span', { class: 'num muted' }, ago(add(c.created_age_ms, elapsed)))),
-        h('p', { class: 'comment-body' }, c.body),
+        commentBody(c.body, c.mentions, model.members),
         c.for_agent ? h('p', { class: 'comment-seen' }, c.delivered_age_ms != null ? `Delivered to the agent ${ago(add(c.delivered_age_ms, elapsed))}` : 'Waiting for the agent to receive it') : null)))
         : h('p', { class: 'muted' }, 'No comments yet.'),
       d.card.archived ? null : h('form', { class: 'composer', 'data-form': 'comment', 'data-card': d.card.id },
         h('label', { class: 'sr-only', for: 'comment-body' }, 'Comment'),
-        h('textarea', { id: 'comment-body', name: 'body', class: 'input', rows: 3, required: true, placeholder: 'Write a comment…' }),
+        h('textarea', { id: 'comment-body', name: 'body', class: 'input', rows: 3, required: true, placeholder: 'Write a comment… @ mentions a teammate', 'data-mentions': `card:${d.card.id}` }),
+        mentionPicker(model, `card:${d.card.id}`),
         h('div', { class: 'composer-row' },
           d.run && !['failed', 'stopped', 'released', 'in_review', 'done', 'cancelled'].includes(d.card.run_state) ? h('label', { class: 'check' }, h('input', { type: 'checkbox', name: 'for_agent' }), 'Send to the current agent at its next step') : h('span', { class: 'muted small' }, 'Saved on this card. Use Messages for supported agent delivery.'),
           h('button', { type: 'submit', class: 'btn btn-primary btn-sm', disabled: busy || null }, 'Add comment'))));
