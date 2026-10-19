@@ -1,4 +1,4 @@
-Plexiform app update — 20 October 2026 (1.0.2-beta.98)
+Plexiform app update — 20 October 2026 (1.0.2-beta.99)
 
 For macOS (Apple silicon and Intel) and Linux (x64).
 
