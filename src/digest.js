@@ -81,7 +81,7 @@ function weeklyOf({ records, tasks, turns, now, shipped, clean }) {
   const ship = shipped ? Shipped.sections({ records, cost: shipped.cost, prs: shipped.prs, now, clean }) : [];
   const prs = ship.find((x) => x.id === 'prs');
   const w = Weekly.sections({ records, tasks, turns, now, prs: prs ? prs.items.filter((i) => i.startsWith('PR #')).length : 0, clean });
-  return w.length ? { overview: w[0], repos: w[1] } : null;
+  return w.length ? { overview: w[0], repos: w[1], cost: w.find((x) => x.id === 'where-it-went') || null } : null;
 }
 
 const sessionName = (r) => [PROVIDER[r.adapter] || 'AI', r.folder ? `session in ${r.folder}` : 'session', r.branch ? `(branch ${r.branch})` : ''].filter(Boolean).join(' ');
@@ -173,6 +173,7 @@ function compose(data) {
   sections.push({ id: 'spend', heading: 'Spend (at API list prices)', summary: null, items: spend });
   if (Array.isArray(d.shipped)) sections.push(...d.shipped);
   if (d.weekly?.repos) sections.push(d.weekly.repos);
+  if (d.weekly?.cost) sections.push(d.weekly.cost);
   if (d.saved) sections.push({ id: 'saved', heading: 'Saved by Plexiform', summary: null, items: [d.saved] });
   if (d.waste) sections.push({ id: 'waste', heading: 'Top waste finding', summary: null, items: [d.waste] });
   const lines = (sec) => [sec.summary, ...sec.items].filter(Boolean);

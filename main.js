@@ -3917,6 +3917,15 @@ utilityHandle('work-cost', e => fromUtilityPage(e, 'usage'), async () => {
   const brief = (w) => ({ ...w, items: undefined, count: w.items.length });
   return { basis: r.basis, week: brief(r.week), month: brief(r.month) };
 });
+// Where it went (src/cost-rollup.js): the same local turns and cards rolled up by project, branch, PR and model, plus the week's saving line.
+utilityHandle('cost-rollup', e => fromUtilityPage(e, 'usage'), async (e, range) => {
+  const rows = buddyWin?.workCostRows?.() ?? { tasks: [], records: [] };
+  const turns = await getUsageTurns();
+  const now = Date.now();
+  const MM = require('./src/model-mix.js');
+  const r = require('./src/cost-rollup.js').rollup({ turns, tasks: rows.tasks, records: rows.records, range: typeof range === 'string' ? range : '7d', now });
+  return { ...r, basis: WorkCost.BASIS, saving: MM.savingLine(MM.routineEstimate(turns, { from: MM.startOfDay(now - 6 * MM.DAY_MS), now })) };
+});
 utilityHandle('work-cost-export', e => fromUtilityPage(e, 'usage'), async (e) => {
   const csv = WorkCost.toCsv(await workCostReport());
   const r = await dialog.showSaveDialog(BrowserWindow.fromWebContents(e.sender) || undefined, {

@@ -153,6 +153,7 @@
       "usage-insights.js",
       "usage-view.js",
       "usage-waste-view.js",
+      "usage-where-view.js",
       "usage-work-view.js",
       "spend.js",
       "mcp-server.js",
