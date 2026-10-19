@@ -218,3 +218,27 @@ test('shipped this week and since you were away: done cards, merged PRs and mome
   const s = await r.today.refresh();
   assert.deepEqual(s.shipped, { items: [], more: 0 }, 'the live card always carries a shipped list');
 });
+
+test('Home: the standup card copies plain text, and the heat map shows folders, counts, who and shared files', async () => {
+  const r = make({ current: { 'repo-a': [
+    rec('b1', 'Bob', { title: 'Session refresh', files: { edited: ['src/auth/login.js'], read: [] } }),
+    rec('c1', 'Carol', { title: 'Upgrade deps', status: 'waiting', files: { edited: ['src/auth/login.js', 'src/auth/token.js'], read: [] } }),
+    rec('e1', 'Eve', { status: 'ended', title: 'Fix CI', files: { edited: ['ci/build.yml'], read: [] } }),
+  ] } });
+  const reply = await r.today.refresh();
+  assert.deepEqual(reply.heat['24h'].shared, ['src/auth/login.js']);
+  assert.ok(reply.standup.some((x) => x.author === 'Eve' && x.yesterday[0] === 'Finished "Fix CI"'));
+  const q = page(() => reply);
+  let copied = null;
+  Object.defineProperty(q.dom.window.navigator, 'clipboard', { value: { writeText: async (t) => { copied = t; } } });
+  await tick(); await tick();
+  const t = q.sec.textContent;
+  assert.match(t, /Standup.*Carol.*Blocked: "Upgrade deps" is waiting for an answer/s);
+  assert.match(t, /Where the team is working.*src\/auth\/ · 3.*login\.js · 2 Bob, Carol2\+ people/s);
+  assert.match(t, /ci\/ · 1 Eve/);
+  [...q.sec.querySelectorAll('button')].find((b) => b.textContent === 'Copy').click();
+  await tick(); await tick();
+  assert.match(copied, /^Carol\n {2}Yesterday: nothing shared\n {2}Today: On "Upgrade deps"/m);
+  assert.match(q.sec.textContent, /Copied\./);
+  q.dom.window.close();
+});

@@ -144,6 +144,9 @@ export const api = {
   // Person-to-person hand-off of a card (team depth lane D).
   requestHandoff: (cardId, body) => mut('POST', `/api/cards/${enc(cardId)}/handoffs`, body),
   answerHandoff: (cardId, handoffId, verb) => mut('POST', `/api/cards/${enc(cardId)}/handoffs/${enc(handoffId)}/${enc(verb)}`),
+  // Hand-offs teammates offered you through their AI (team_hand_off), and the ones you sent: CONTRACT messaging v1.
+  handoffMessages: (box) => call('GET', `/api/messaging/v1/messages?box=${enc(box)}&limit=50`),
+  decideHandoff: (id, decision, report) => call('POST', `/api/messaging/v1/messages/${enc(id)}/handoff`, { decision, ...(report ? { report } : {}) }),
   handoffRecord: (teamId, recordId, body) => mut('POST', `/api/teams/${enc(teamId)}/activity/v1/records/${enc(recordId)}/handoff`, body),
   repos: () => call('GET', '/api/repos'),
   // Integrations (team-level; admins connect, configure and disconnect).

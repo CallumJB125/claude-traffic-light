@@ -13,9 +13,13 @@
 
 import { HubError } from './db.js';
 import { redactSecrets } from '../shared/secret-patterns.mjs';
+import { limitOrThrow } from './ratelimit.js';
 
 export const HANDOFF_REQUESTED = 'record.handoff_requested';
 export const HANDOFF_TAKEN = 'record.handoff_taken';
+export const HANDOFF_DECLINED = 'record.handoff_declined';
+// An unanswered handoff stops being offered after a week (the activity log keeps events 30 days).
+export const HANDOFF_TTL_MS = 7 * 86_400_000;
 const RECORD_RE = /^[A-Za-z0-9_-]{1,64}:(claude|codex|gemini|hermes|cursor):[^\s]{1,200}$/;
 const NOTE_MAX = 500;
 const HANDOVER_MAX = 20_000;
@@ -63,6 +67,19 @@ export function continueRecord({ hub, log }, member, recordId, { pending = null 
   return { record: row.payload, handover: sharedHandover(log, recordId) };
 }
 
+// POST …/records/:record_id/handoff/decline {note?}: only the person it was handed to,
+// only while it is open. Anyone else, or a closed one, reads as missing.
+export function declineHandoff({ hub, log }, member, recordId, body = {}, { pending = null } = {}) {
+  const row = teamRecord(log, member, recordId);
+  const mine = pending?.find((h) => h.record_id === recordId && h.to_member_id === member.id);
+  if (!mine) throw new HubError('NOT_FOUND', 'no open handoff of this record to you');
+  if (body.note != null && (typeof body.note !== 'string' || body.note.length > NOTE_MAX)) throw new HubError('VALIDATION', `note must be a string ≤ ${NOTE_MAX}`);
+  const note = body.note?.trim() ? redactSecrets(body.note.trim()) : null;
+  const payload = { record_id: recordId, by_member_id: member.id, by_name: member.display_name, to_member_id: mine.by_member_id ?? null, note, declined_at: hub.iso() };
+  const res = log.append({ team_id: row.team_id, repo_id: row.repo_id, record_id: recordId, rev: row.rev, type: HANDOFF_DECLINED, payload });
+  return { declined: payload, seq: res?.seq ?? null };
+}
+
 // A card's continue_with_another_ai: the card's shared handover, plus its
 // WorkRecord when the caller names one in the card's own repo.
 export function cardSeed({ hub, log }, member, row, recordId = null) {
@@ -77,20 +94,26 @@ export function cardSeed({ hub, log }, member, row, recordId = null) {
   return { record, handover: recordHandover ?? (typeof doc?.markdown === 'string' && doc.markdown.trim() ? doc.markdown.slice(0, HANDOVER_MAX) : null) };
 }
 
-// Open handoffs to one member from feed events (oldest first, as the feed
-// pages them). A later handoff of the same record to someone else, or the
-// member continuing it, closes it. → newest first.
-export function pendingHandoffs(events, memberId) {
-  const open = new Map();
+// Every handoff in feed events (oldest first, as the feed pages them) with its
+// state: offered → accepted (continued) | declined | expired (unanswered past
+// HANDOFF_TTL_MS, when nowMs is given). A later handoff of the same record replaces the earlier one.
+export function handoffStates(events, { nowMs = null } = {}) {
+  const all = new Map();
   for (const e of Array.isArray(events) ? events : []) {
     const p = e && parse(e.payload);
     if (!p || typeof p.record_id !== 'string') continue;
-    if (e.type === HANDOFF_REQUESTED) {
-      open.delete(p.record_id);
-      if (p.to_member_id === memberId) open.set(p.record_id, { ...p, seq: e.seq ?? null });
-    } else if (e.type === HANDOFF_TAKEN) open.delete(p.record_id);
+    const cur = all.get(p.record_id);
+    if (e.type === HANDOFF_REQUESTED) all.set(p.record_id, { ...p, seq: e.seq ?? null, state: 'offered', answer: null });
+    else if (cur?.state === 'offered' && e.type === HANDOFF_TAKEN && p.by_member_id === cur.to_member_id) all.set(p.record_id, { ...cur, state: 'accepted', answered_at: p.taken_at ?? null });
+    else if (cur?.state === 'offered' && e.type === HANDOFF_DECLINED && p.by_member_id === cur.to_member_id) all.set(p.record_id, { ...cur, state: 'declined', answer: p.note ?? null, answered_at: p.declined_at ?? null });
   }
-  return [...open.values()].reverse();
+  if (nowMs != null) for (const h of all.values()) if (h.state === 'offered' && nowMs - (Date.parse(h.requested_at) || nowMs) > HANDOFF_TTL_MS) h.state = 'expired';
+  return [...all.values()].reverse();
+}
+
+// Open handoffs to one member. → newest first.
+export function pendingHandoffs(events, memberId, opts) {
+  return handoffStates(events, opts).filter((h) => h.state === 'offered' && h.to_member_id === memberId);
 }
 
 // Routes are team-scoped so a multi-team sign-in resolves the right member.
@@ -104,8 +127,15 @@ export function registerHandoffRoutes(route, { hub, api, getLog }) {
   route('POST', '/api/teams/:team_id/activity/v1/records/:record_id/continue', ({ member, params }) => {
     team(member, params);
     const log = getLog();
-    const pending = typeof log?.events === 'function' ? pendingHandoffs(log.events({ record_id: params.record_id }), member.id) : null;
+    const pending = typeof log?.events === 'function' ? pendingHandoffs(log.events({ record_id: params.record_id }), member.id, { nowMs: hub.wallMs() }) : null;
     return continueRecord({ hub, log }, member, params.record_id, { pending });
   }, { replay: false, maxBody: 256 });
+  route('POST', '/api/teams/:team_id/activity/v1/records/:record_id/handoff/decline', ({ member, params, body }) => {
+    team(member, params);
+    limitOrThrow(hub, 'activity_write_user', member.user_id ?? member.id);
+    const log = getLog();
+    const pending = typeof log?.events === 'function' ? pendingHandoffs(log.events({ record_id: params.record_id }), member.id, { nowMs: hub.wallMs() }) : null;
+    return declineHandoff({ hub, log }, member, params.record_id, body, { pending });
+  }, { replay: false, maxBody: 1024 });
   route('GET', '/api/cards/:card_id/continue-seed', ({ member, params, query }) => api.continueSeed(member, params.card_id, query.get('record_id'), getLog()));
 }
