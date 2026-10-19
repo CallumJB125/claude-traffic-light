@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('settingsApi', {
   nativeBoardDisconnect: (target) => ipcRenderer.invoke('native-board-disconnect', target),
   gitStatus: () => ipcRenderer.invoke('git-status'),
   spend: () => ipcRenderer.invoke('get-spend'),
+  spendSafety: { get: () => ipcRenderer.invoke('spend-safety:get'), set: (v) => ipcRenderer.invoke('spend-safety:set', v) },
   busyStatus: () => ipcRenderer.invoke('busy-status'),
   busyOpenPrivacy: () => ipcRenderer.invoke('busy-open-privacy'),
   busyReconnectCalendar: () => ipcRenderer.invoke('busy-reconnect-calendar'),

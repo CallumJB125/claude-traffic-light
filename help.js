@@ -228,7 +228,7 @@ function message(kind, s, text) {
   const where = device ? `${folder ? `${folder} ` : ''}on ${device}` : folder;
   // A remote session's terminal is on its own machine.
   const retry = device ? `Retry it on ${device}.` : 'Retry in the terminal.';
-  if (kind === 'runaway') return { title: `Runaway session${where ? ` — ${where}` : ''}`, body: `${s.burn}. Click to jump to its terminal.` };
+  if (kind === 'runaway') return { title: `Runaway session${where ? ` — ${where}` : ''}`, body: `This session burned ${s.burn}. Click to jump to its terminal.` };
   if (kind === 'budget-exceeded') return { title: 'Over budget', body: `${text || 'Spend is over your budget'}.` };
   if (kind === 'budget-warning') return { title: 'Nearing your budget', body: `${text || 'Spend is close to your budget'}.` };
   if (kind === 'stuck') return { title: `Stuck?${where ? ` — ${where}` : ''}`, body: `Silent for ${Math.max(1, Math.round(s.stuck.sinceMs / 60000))} min${s.stuck.tool ? `, last tool ${s.stuck.tool}` : ''}.${s.hostApp && !device ? ' Click to jump to its terminal.' : ''}` };

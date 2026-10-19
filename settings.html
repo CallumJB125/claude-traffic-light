@@ -399,6 +399,30 @@
   </div>
 
   <div class="field">
+    <label for="safety-plan">Your Claude plan</label>
+    <div class="row">
+      <select id="safety-plan" aria-describedby="safety-detected">
+        <option value="auto">Work it out from Claude Code</option>
+        <option value="pro">Claude Pro</option>
+        <option value="max5">Claude Max 5x</option>
+        <option value="max20">Claude Max 20x</option>
+        <option value="api">API key (pay per token)</option>
+      </select>
+    </div>
+    <div class="hint" id="safety-detected"></div>
+    <label class="row"><input type="checkbox" id="safety-show-api" /> Show what this would cost on the API</label>
+    <div class="hint">On Pro or Max you are not charged per token. Plexiform then shows an estimate of how close you are to your plan's 5-hour and weekly limits instead of dollar amounts.</div>
+  </div>
+
+  <div class="field">
+    <label for="safety-caps">Daily cap per project</label>
+    <textarea id="safety-caps" rows="3" placeholder="my-app = 20" aria-describedby="hint-safety-caps"></textarea>
+    <div class="hint" id="hint-safety-caps">One project folder per line, then = and dollars a day. Over its cap, you get one notification that day and an alert on the widget.</div>
+    <label class="row"><input type="checkbox" id="safety-loops" /> Tell me when a session repeats the same failing tool call (a retry loop)</label>
+    <div class="hint" id="safety-status" role="status" aria-live="polite"></div>
+  </div>
+
+  <div class="field">
     <div id="budget-label" class="group-label">Budget</div>
     <div class="row wrap" role="group" aria-labelledby="budget-label">
       <label class="row" for="spend-daily">$ <input type="number" id="spend-daily" min="0" step="1" /> a day</label>
@@ -792,6 +816,7 @@
   <script src="settings-policies.js"></script>
   <script src="settings-data.js"></script>
   <script src="settings.js"></script>
+  <script src="settings-spend-safety.js"></script>
   <script src="native-board/settings.js"></script>
 </body>
 </html>

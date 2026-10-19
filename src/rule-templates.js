@@ -50,6 +50,11 @@
       rule: { name: 'Over budget flag', when: { signal: ['budget-exceeded', 'runaway'] }, then: { pose: 'banner', text: 'OVER BUDGET', eyes: 'money', notify: 'desktop' } },
     },
     {
+      id: 'burn-alert', name: 'Alert when a session crosses $N',
+      description: 'A session spends more than your runaway amount in a short time (set $N in Preferences → Spend): a BURNING banner and a desktop notification.',
+      rule: { name: 'Session crossed my spend line', when: { signal: ['runaway'] }, then: { pose: 'banner', text: 'BURNING', eyes: 'money', notify: 'desktop' } },
+    },
+    {
       id: 'question-2', name: 'Nudge me when a question sits for 2 minutes',
       description: 'A permission ask unanswered for 2 minutes rings the Ping sound and notifies you.',
       rule: { name: 'Unanswered question', when: { signal: ['permission-ask'], forMinutes: 2 }, then: { pose: 'wave', sound: 'Ping', notify: 'desktop' } },

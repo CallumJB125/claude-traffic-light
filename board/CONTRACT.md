@@ -1203,6 +1203,17 @@ Local Electron IPC only; no network, no new file. Rule notifications are desktop
 
 New rule keys, saved with the rules through `save-config` and checked by `rules.js normalizeRule`: `then.notify` (`desktop`\|`phone`\|`both`, absent = none) and `when.forMinutes` (integer 1-1440, absent = fire at once; the session's signal must have held that long since its `updatedAt`). Firing is edge-triggered per session, at most one per rule per 2 minutes, and held (dropped) by snooze, quiet hours, "Quiet for 30 minutes" and project mutes.
 
+## Desktop spend safety IPC (`src/spend-safety-main.js`, lane B)
+
+Local Electron IPC only; no network. Settings live in `spend-safety.json` (0600) in the data folder; the plan tier is read from `~/.claude.json` `oauthAccount` tier fields only. Senders other than the Usage page or Preferences get `null`.
+
+| Channel | Sender | Request | Response |
+|---|---|---|---|
+| `spend-safety:get` | Usage page (`analyticsSender`) or Preferences (`settingsOnly`) | none | `{settings:{plan, showApiPrices, projectCaps:{folder: usd}, notifyLoops}, plan ∈ api\|pro\|max5\|max20, planLabel, detected: plan\|null, subscriber, showDollars, limits:{plan, label, fiveHour:{percent, fraction, band, resetsAt, text}, week:{…}, estimate:true, note}\|null, projected:{spent, projected, ready, text}, projects:[{project, cap, spent, level: null\|'warning'\|'over', text}], loops:[{sessionId, tool, count, text}]}`. `limits` is an estimate (API-price equivalent of local turns against a rough per-plan reference), always labelled so |
+| `spend-safety:set` | same | `{plan?, showApiPrices?, projectCaps?, notifyLoops?}` merged over the saved settings and normalised (≤ 50 caps, each > 0) | `{ok:true, settings}` or `{error}` |
+
+The widget lane (`widget:lane-event`) also carries spend safety alerts from `alerts()`: `needs-you` for "This session burned $X in Y min" and a project over its cap, `stuck` for a retry loop (the same failing tool call 3+ times in a row). Text is untrusted (folder names) and rendered with `textContent`.
+
 ## Desktop local models IPC (`src/interaction-main.js`, wave 2 lane 7)
 
 Local Electron IPC from the Overview page only (`overview-preload.js`); the sender must be the current Overview document, and the write channels need it in the foreground, else `{ok:false, status:'forbidden'}` (reads return `null`). Network: read-only model-list probes of the fixed loopback ports (`127.0.0.1` 11434, 1234, 8000, 8888; `src/local-model-detect.js`, 1.5 s timeout, backoff 15 s doubling to 5 min per port while it keeps failing the same way) on app start and while Overview is open, plus the endpoints the person added. Documented under PRIVACY.md `flow:local-models`.
