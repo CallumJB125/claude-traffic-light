@@ -69,6 +69,7 @@ contextBridge.exposeInMainWorld('trafficLight', {
   voiceStart: () => ipcRenderer.invoke('voice-start'),
   voiceStop: () => ipcRenderer.invoke('voice-stop'),
   onVoice: (cb) => ipcRenderer.on('voice-state', (e, st) => cb(st)),
+  polish: { state: () => ipcRenderer.invoke('widget-polish:state'), snap: () => ipcRenderer.invoke('widget-polish:snap') },
 });
 
 // User characters: the list main has validated, and a nudge when it changes.

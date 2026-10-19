@@ -12,6 +12,81 @@ const CHIP_SIZES = ['small', 'normal', 'large'];
 const CORNERS = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
 const PAGES = ['lights', 'settings'];
 const MARGIN = 24;
+const SNAPS = ['corners', 'edges', 'off'];
+const SIZES = ['normal', 'compact', 'dot'];
+const SNAP_THRESHOLD = 48;
+const HEX = /^#[0-9a-f]{6}$/i;
+const MAX_PROJECTS = 40;
+const MODIFIERS = ['Command', 'Cmd', 'Control', 'Ctrl', 'CommandOrControl', 'CmdOrCtrl', 'Alt', 'Option', 'AltGr', 'Shift', 'Super', 'Meta'];
+const NAMED_KEYS = ['Space', 'Tab', 'Backspace', 'Delete', 'Insert', 'Return', 'Enter', 'Up', 'Down', 'Left', 'Right', 'Home', 'End', 'PageUp', 'PageDown', 'Escape', 'Esc', 'Plus'];
+const KEY = /^([A-Z0-9]|F([1-9]|1[0-9]|2[0-4])|[`~!@#$%^&*()\-=\[\]\\;',./])$/i;
+const keyName = (k) => (KEY.test(k) ? k.toUpperCase() : NAMED_KEYS.find((n) => n.toLowerCase() === k.toLowerCase()) || null);
+
+/** An Electron accelerator with at least one modifier and exactly one key, or null. Empty means off. */
+function cleanAccelerator(v) {
+  if (typeof v !== 'string') return null;
+  const s = v.trim();
+  if (!s || s.length > 60) return null;
+  const parts = s.split('+');
+  const key = parts.pop();
+  const name = key ? keyName(key) : null;
+  if (!parts.length || !name) return null;
+  const mods = parts.map((p) => MODIFIERS.find((m) => m.toLowerCase() === p.toLowerCase()));
+  if (mods.some((m) => !m) || new Set(mods).size !== mods.length) return null;
+  return [...mods, name].join('+');
+}
+
+/** A project's key for its accent: the last folder of its cwd. */
+const projectKey = (cwd) => String(cwd || '').replace(/\/+$/, '').split('/').filter(Boolean).pop() || '';
+
+/** The accent colour for a session's cwd from {basename: '#hex'}, or null. */
+function projectAccent(cwd, map) {
+  const k = projectKey(cwd);
+  if (!k || !map || typeof map !== 'object' || !Object.prototype.hasOwnProperty.call(map, k)) return null;
+  return typeof map[k] === 'string' && HEX.test(map[k]) ? map[k].toLowerCase() : null;
+}
+
+const savedColours = (m) => Object.fromEntries(Object.entries(m && typeof m === 'object' && !Array.isArray(m) ? m : {})
+  .filter(([k, c]) => projectKey(k) === k && typeof c === 'string' && HEX.test(c)).map(([k, c]) => [k, c.toLowerCase()]));
+
+/** Merges a colour patch into the saved map: '#hex' sets, null removes, anything else is dropped. */
+function cleanColours(v, current = {}) {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+  const out = savedColours(current);
+  let any = false;
+  for (const [k, c] of Object.entries(v)) {
+    if (typeof k !== 'string' || !k || k.length > 120 || projectKey(k) !== k) continue;
+    if (c === null) { if (k in out) { delete out[k]; any = true; } continue; }
+    if (typeof c === 'string' && HEX.test(c)) { out[k] = c.toLowerCase(); any = true; }
+  }
+  if (!any || Object.keys(out).length > MAX_PROJECTS) return null;
+  return out;
+}
+
+/**
+ * Where a widget dropped at `base` settles with snapping to any edge: each
+ * axis within `threshold` of an edge (inset by `margin`) moves onto it, so it
+ * slides along an edge and lands in a corner when near two. → {x, y, edge}.
+ */
+function snapPoint(base, workArea, { margin = MARGIN, threshold = SNAP_THRESHOLD } = {}) {
+  const left = workArea.x + margin;
+  const right = workArea.x + workArea.width - base.width - margin;
+  const top = workArea.y + margin;
+  const bottom = workArea.y + workArea.height - base.height - margin;
+  let x = base.x, y = base.y;
+  const edges = [];
+  // Dropped past an edge counts as on it.
+  const dl = Math.max(0, base.x - left), dr = Math.max(0, right - base.x);
+  if (Math.min(dl, dr) <= threshold) { x = dl <= dr ? left : right; edges.push(dl <= dr ? 'left' : 'right'); }
+  const dt = Math.max(0, base.y - top), db = Math.max(0, bottom - base.y);
+  if (Math.min(dt, db) <= threshold) { y = dt <= db ? top : bottom; edges.unshift(dt <= db ? 'top' : 'bottom'); }
+  // Snapped onto an edge: keep it on screen along that edge too.
+  if (edges.length) {
+    x = Math.min(Math.max(x, left), Math.max(left, right));
+    y = Math.min(Math.max(y, top), Math.max(top, bottom));
+  }
+  return { x: Math.round(x), y: Math.round(y), edge: edges.length ? edges.join('-') : null };
+}
 
 /** The config keys this page may change, checked; anything else is dropped. → partial or null. */
 function cleanPatch(v, current = {}) {
@@ -19,6 +94,11 @@ function cleanPatch(v, current = {}) {
   const out = {};
   for (const k of BOOLS) if (typeof v[k] === 'boolean') out[k] = v[k];
   if (CHIP_SIZES.includes(v.agentChipSize)) out.agentChipSize = v.agentChipSize;
+  if (SNAPS.includes(v.widgetSnap)) out.widgetSnap = v.widgetSnap;
+  if (SIZES.includes(v.widgetSize)) out.widgetSize = v.widgetSize;
+  if (v.widgetShortcut === '') out.widgetShortcut = '';
+  else if (cleanAccelerator(v.widgetShortcut)) out.widgetShortcut = cleanAccelerator(v.widgetShortcut);
+  if ('projectColours' in v) { const c = cleanColours(v.projectColours, current.projectColours); if (c) out.projectColours = c; }
   if (v.agentKinds && typeof v.agentKinds === 'object' && !Array.isArray(v.agentKinds)) {
     const kinds = { ...(current.agentKinds || {}) };
     let any = false;
@@ -53,6 +133,10 @@ function configView(c) {
     agentRoster: c.agentRoster !== false, paceTooltip: c.paceTooltip !== false,
     agentChipSize: CHIP_SIZES.includes(c.agentChipSize) ? c.agentChipSize : 'normal',
     agentKinds: { subagent: kinds.subagent !== false, teammate: kinds.teammate !== false, ralph: kinds.ralph !== false || kinds.ultrawork !== false },
+    widgetSnap: SNAPS.includes(c.widgetSnap) ? c.widgetSnap : 'corners',
+    widgetSize: SIZES.includes(c.widgetSize) ? c.widgetSize : 'normal',
+    widgetShortcut: cleanAccelerator(c.widgetShortcut) || '',
+    projectColours: savedColours(c.projectColours),
   };
 }
 
@@ -135,4 +219,4 @@ function register(ctx) {
   return { state };
 }
 
-module.exports = { register, cleanPatch, cornerPoint, nearestCorner, configView, CORNERS, PAGES, MARGIN };
+module.exports = { register, cleanPatch, cornerPoint, nearestCorner, configView, snapPoint, projectAccent, projectKey, cleanColours, cleanAccelerator, CORNERS, PAGES, MARGIN, SNAPS, SIZES, SNAP_THRESHOLD };

@@ -3394,7 +3394,7 @@ function createTray() {
       ...UsagePopOut.items(usageToday(), () => openBuddy('usage')),
       ...AppMenu.appItems({ pages: sectionItems(), groups: [{ id: 'sections' }, { id: 'more', submenu: 'More' }], open: openBuddy, openLabel: BRAND.OPEN_MENU_LABEL, feedback: { label: "Something's off / Idea…", click: createFeedbackWindow }, popOuts: { usage: () => openBuddy('usage') } }),
       { label: 'Open Claude', click: () => shell.openExternal('https://claude.ai') },
-      ...quietItems(),
+      ...quietItems(), ...WidgetPolish.menuItems(),
       ...captureItems(),
       ...(advanced ? [{ label: 'Show Widget Now', click: () => { saveConfig({ showWidget: true }); clearTimeout(snoozeTimer); if (!win) createWindow(); win.showInactive(); createTray(); } }] : []),
       { label: 'Reset Widget Position', click: () => { const wa = screen.getPrimaryDisplay().workArea; if (!win) createWindow(); strip = WidgetStrip.NONE; win.setMaximumSize(MAX_WIDTH, Math.round(MAX_WIDTH / WIDGET_ASPECT)); win.setAspectRatio(WIDGET_ASPECT); win.setBounds({ x: wa.x + wa.width - 140, y: wa.y + 46, width: 107, height: 137 }); win.showInactive(); broadcastStatus(); } },
@@ -3674,7 +3674,7 @@ function applyConfigEffects(prev, next, touched) {
   applyConfigSideEffects(prev, next, {
     installHooks,
     enableCalendar: () => BusyWatch.enableCalendar().catch((err) => console.warn('[busy]', err.message)),
-    applyWidgetVisibility, syncTailnetListener, createTray, applyVoiceHotkey, applyLowPower, syncFastHook, broadcastStatus, syncInteractionHost,
+    applyWidgetVisibility, syncTailnetListener, createTray, applyVoiceHotkey, applyLowPower, syncFastHook, broadcastStatus, syncInteractionHost, widgetPolish: (p, n) => WidgetPolish.configChanged(p, n),
     syncAgentMail: () => AgentMail.sync(),
   }, touched);
 }
@@ -4487,6 +4487,7 @@ const WidgetStrip = require('./src/widget-strip.js');
 let strip = WidgetStrip.NONE;
 let applyingStrip = false;
 require('./src/widget-page.js').register({ utilityHandle, allowed: (e) => fromUtilityPage(e, 'widget'), loadConfig, commitConfig, widget: () => win, strip: () => strip, ensureWidget: () => { if (!win) createWindow(); applyWidgetVisibility(); }, resizeBy, busy: () => roamState.busy || !!gardenRun, stopGlide, saveBounds, screen, limits: { minWidth: MIN_WIDTH, maxWidth: MAX_WIDTH }, openPage: (id) => { openBuddy(id); if (id === 'settings') buddyWin?.sendToPage('settings', 'show-section', 'widget'); }, platform: process.platform });
+const WidgetPolish = require('./src/widget-polish-main.js').install({ ipcMain, globalShortcut, utilityHandle, config: loadConfig, commitConfig, widgetWindow: () => win, quiet: Quiet, widgetAllowed: (e) => widgetOnly(e), pageAllowed: (e) => fromUtilityPage(e, 'widget'), sessions: () => localSessions(aggregateState().sessions || []), strip: () => strip, saveBounds, stopGlide, screen, sizing: { aspect: WIDGET_ASPECT, minWidth: MIN_WIDTH }, log: console.log });
 let updateRowShown = false;
 ipcMain.on('update-row', (e, on) => {
   if (e.sender !== win?.webContents || !!on === updateRowShown) return;

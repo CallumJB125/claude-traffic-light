@@ -1127,3 +1127,15 @@ Only Sentry's exact declared `sentry.status` and `sentry.incident-status` action
 The reply is untrusted data. `parseReviewOutput` keeps only `{verdict ∈ approve|changes_requested|needs_human, summary ≤ 500, findings ≤ 20 × {file ∈ the diff's paths, line, severity ∈ high|medium|low, rationale ≤ 200, one line}}`, and its guards only ever make a verdict stricter: an injection signal, a medium/high finding, a truncated diff or failing tests each stop an `approve`. The hub also removes secrets from every stored string. A review never moves the card: `approve` is advice, and Done stays a human's `approve_done`.
 
 Routes (all through the card's board, so another team's card is `404`): `GET /api/cards/:card_id/reviews`, `POST /api/cards/:card_id/reviews/:review_id/fix` (a `request_changes` to the author's original AI, its comment built by `reviewFixComment` from the open findings), `POST /api/cards/:card_id/reviews/:review_id/approve` (a person only: `approve_done`; refused for an integration actor), `POST /api/cards/:card_id/reviews/:review_id/findings/:index/dismiss`, `GET`/`PATCH /api/boards/:board_id/review-settings` (PATCH admin only; turning it on needs `acknowledge_disclosure:true`). `CardView.review` = the latest review (`{id, status, verdict, provider, provider_label, independence, open_findings, cost_usd}`); `CardDetail.reviews` = every review of the card, newest first. Eval: `board/runner/scripts/review-eval.js` over `board/runner/test/fixtures/review-eval/` (good diffs, subtly buggy diffs, injection attempts) with a fake provider for CI.
+
+## Desktop widget polish IPC (`src/widget-polish-main.js`)
+
+Local Electron IPC only; no network, no new file. Every channel checks its sender and returns `null` to anyone else.
+
+| Channel | Sender | Request | Response |
+|---|---|---|---|
+| `widget-polish:state` | the widget window only | none | `{snap, size, colours, quiet, quietUntil, shortcut, shortcutTaken}`; also registers the saved global shortcut once the app is ready and applies the saved size |
+| `widget-polish:snap` | the widget window only | none | `{ok, edge}`; with `widgetSnap: 'edges'` moves the dropped widget onto the nearest work-area edge(s) within 48 px and saves its bounds, otherwise `{ok:false}` |
+| `widget:recent-projects` | the Widget settings page only | none | `[{name, colour}]`, at most 12: folder names of live sessions, then projects that already have a colour |
+
+New config keys, all written only through `widget-page:set` (checked by `cleanPatch`) or the widget menu: `widgetSnap` (`corners`\|`edges`\|`off`, default `corners`), `widgetSize` (`normal`\|`compact`\|`dot`, default `normal`), `widgetShortcut` (Electron accelerator with a modifier, default empty = off), `projectColours` (`{folderName: '#rrggbb'}`, at most 40), `quietUntil` (epoch ms, "Quiet for 30 minutes").

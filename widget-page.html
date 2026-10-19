@@ -49,6 +49,11 @@
   label.check input { margin: 2px 0 0; accent-color: var(--accent); }
   .sub { margin-left: 22px; }
   .note { margin-top: var(--space-2); font-size: var(--text-xs); color: var(--muted); min-height: 1.45em; }
+  input[type="text"] { font: inherit; color: var(--text); background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius); min-height: 28px; padding: 0 8px; flex: 1; min-width: 160px; }
+  .colours { display: grid; gap: var(--space-2); margin-top: var(--space-3); }
+  .colours label { display: flex; align-items: center; gap: var(--space-2); }
+  .colours input[type="color"] { width: 28px; height: 22px; padding: 0; border: 1px solid var(--line); border-radius: var(--radius-sm); background: none; }
+  .colours .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -77,6 +82,12 @@
           <button type="button" class="corner" data-corner="bottom-right" aria-pressed="false">Bottom right</button>
         </div>
         <label class="check"><input type="checkbox" data-key="menuBarMode" /> <span>Claude in the menu bar too</span></label>
+        <div class="row"><label for="snap">When you drop it</label>
+          <select id="snap"><option value="corners">Stay where it lands</option><option value="edges">Snap to the nearest edge</option><option value="off">Never snap</option></select></div>
+        <div class="row"><label for="shortcut">Show or hide from anywhere</label>
+          <input type="text" id="shortcut" placeholder="e.g. CmdOrCtrl+Shift+Space" spellcheck="false" autocomplete="off" aria-describedby="shortcut-hint" />
+          <button type="button" id="shortcut-save">Save</button></div>
+        <p class="hint" id="shortcut-hint">Leave empty to turn the shortcut off.</p>
         <p class="note" id="where-note" role="status"></p>
       </section>
 
@@ -86,6 +97,8 @@
         <div class="row"><input type="range" id="size" min="80" max="320" step="4" aria-labelledby="h-size" aria-describedby="size-label" /><span class="size-label" id="size-label"></span></div>
         <div class="row"><label for="chips">Agent chip size</label>
           <select id="chips" data-key="agentChipSize"><option value="small">Small (up to 7)</option><option value="normal">Normal (up to 5)</option><option value="large">Large (up to 4)</option></select></div>
+        <div class="row"><label for="wsize">Widget style</label>
+          <select id="wsize"><option value="normal">Normal</option><option value="compact">Compact (small, nothing underneath)</option><option value="dot">Dot (the lamp only)</option></select></div>
         <p class="note" id="size-note" role="status"></p>
       </section>
 
@@ -103,6 +116,14 @@
         <label class="check"><input type="checkbox" data-key="agentRoster" /> <span>Who's doing what, when you hover</span></label>
         <div class="row"><button type="button" id="lights">Which state lights which lamp…</button><button type="button" class="link" id="prefs">More in Preferences</button></div>
         <p class="note" id="shows-note" role="status"></p>
+      </section>
+
+      <section class="card" aria-labelledby="h-colours">
+        <h2 id="h-colours">Project colours</h2>
+        <p>A colour per project, shown as a halo on the widget and on its rows.</p>
+        <div id="colours" class="colours"></div>
+        <p class="hint" id="colours-empty">Projects show up here once a session runs in them.</p>
+        <p class="note" id="colours-note" role="status"></p>
       </section>
     </div>
   </main>

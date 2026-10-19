@@ -125,6 +125,8 @@ function applyStatus(data) {
   smokeSince = look.pose === 'smoke' ? (smokeSince ?? Date.now()) : null;
   if (smokeSince) look.smokeSince = smokeSince;
   rig.setLook(look);
+  lastSessions = data.sessions || [];
+  paintPolish();
   // A preview carries no inputs: keep what is showing rather than flicker.
   if (data.reason === 'travel') bubble.update([]);
   else if (Array.isArray(data.inputs)) bubble.update(data.inputs, { scopes: window.WorkScopeView.scopesBySession(data.sessions) });
@@ -291,6 +293,24 @@ document.getElementById('budget-x').addEventListener('click', (e) => { e.stopPro
 // The recap: needs-you first, then failures, then finished. Three lines
 // fit under the heading; past three items the last becomes "+N more".
 const AWAY_LINES = 3;
+// Widget polish (src/widget-polish-main.js): size, edge snapping, accents and the quiet moon.
+let polish = { snap: 'corners', size: 'normal', colours: {}, quiet: false };
+const projectKey = (cwd) => String(cwd || '').replace(/\/+$/, '').split('/').filter(Boolean).pop() || '';
+const accentFor = (cwd) => (cwd && Object.prototype.hasOwnProperty.call(polish.colours, projectKey(cwd)) ? polish.colours[projectKey(cwd)] : null);
+let lastSessions = [];
+function paintPolish() {
+  for (const k of ['normal', 'compact', 'dot']) document.body.classList.toggle(`size-${k}`, polish.size === k);
+  document.body.classList.toggle('quiet', !!polish.quiet);
+  const lit = (lastSessions || []).map((x) => accentFor(x && x.cwd)).find(Boolean) || null;
+  document.body.classList.toggle('has-accent', !!lit);
+  if (lit) document.body.style.setProperty('--project-accent', lit); else document.body.style.removeProperty('--project-accent');
+  document.body.style.setProperty('--dot', rig.svg.style.getPropertyValue('--lamp-on') || 'var(--lamp-off)');
+}
+async function refreshPolish() {
+  try { const p = await window.trafficLight.polish.state(); if (p) polish = { ...polish, ...p, colours: p.colours || {} }; } catch { /* keep the last one */ }
+  paintPolish();
+}
+
 const AWAY_WORDS = { 'needs-you': (x) => x.detail || 'needs you', failed: (x) => `failed${x.detail && x.detail !== 'error' ? ` (${x.detail})` : ''}`, done: () => 'done' };
 let awayKey = null;
 let teamDismissed = null; // the team panel the person closed; it returns when the requests change
@@ -345,6 +365,8 @@ function renderAway(recap, team = null) {
     const b = document.createElement('button');
     b.className = `row ${x.kind}`;
     b.title = `${x.folder || 'session'}: ${AWAY_WORDS[x.kind](x)} — click to go there`;
+    const accent = x.folder && Object.prototype.hasOwnProperty.call(polish.colours, x.folder) ? polish.colours[x.folder] : null;
+    if (accent) b.style.setProperty('--row-accent', accent);
     const dot = document.createElement('i');
     dot.className = 'dot';
     const text = document.createElement('span');
@@ -377,6 +399,9 @@ refresh();
 window.trafficLight.onStatusChanged(refresh);
 // Poll accepted metadata too: a dropped status push must not freeze the lamp.
 setInterval(refresh, 5000);
+refreshPolish();
+window.trafficLight.onStatusChanged(refreshPolish);
+setInterval(refreshPolish, 15000);
 window.trafficLight.onBurst((ms) => rig.burst(ms));
 // Aim updates arrive ~8x/s while a gun pose is live; re-apply the current
 // look with the new facing/angle without waiting for the next poll.
@@ -445,7 +470,7 @@ let clickThrough = null;
 const solidAt = (x, y) => {
   const el = document.elementFromPoint(x, y);
   if (!el) return false;
-  if (el.closest('#gear, #help, #bubble, #budget, #away, #update, .minion')) return true;
+  if (el.closest('#gear, #help, #bubble, #budget, #away, #update, .minion, #dot')) return true;
   return rig.solidAt(x, y);
 };
 const hitTest = (x, y) => {
@@ -489,6 +514,8 @@ function endDrag(e, released) {
   const y = e.screenY - d.grabY;
   window.trafficLight.setWindowPosition(x, y);
   dragTo = null;
+  // Snapping to edges places the widget where it was let go, then onto the nearest edge: no throw.
+  if (polish.snap === 'edges') { window.trafficLight.dragEnd(0, 0); window.trafficLight.polish.snap().catch(() => {}); return; }
   const v = window.BuddyMotion.releaseVelocity(d.samples, e.timeStamp);
   window.trafficLight.dragEnd(released ? v.vx : 0, released ? v.vy : 0);
 }
@@ -497,6 +524,7 @@ window.addEventListener('mouseup', (e) => { endPress(); endDrag(e, true); });
 let wheelAccum = 0;
 app.addEventListener('wheel', (e) => {
   e.preventDefault();
+  if (polish.size !== 'normal') return; // compact and dot are fixed sizes
   wheelAccum += e.deltaY;
   if (Math.abs(wheelAccum) < 12) return;
   const factor = wheelAccum < 0 ? 1.06 : 0.94;
