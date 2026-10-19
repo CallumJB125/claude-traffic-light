@@ -45,6 +45,7 @@
       document.getElementById('remoteTailscale').checked = !!config.remoteTailscale;
       document.getElementById('teamSessionSharing').checked = config.teamSessionSharing !== false;
       document.getElementById('teamBrief').checked = config.teamBrief === true;
+      document.getElementById('explainMode').checked = config.explainMode === true;
       document.getElementById('agentMailInbox').checked = config.agentMailInbox === true;
       document.getElementById('remoteInteractionHost').checked = config.remoteInteractionHost === true;
       document.getElementById('codexDaemonMessaging').checked = config.codexDaemonMessaging === true;
@@ -201,6 +202,7 @@
         remoteTailscale: document.getElementById('remoteTailscale').checked,
         teamSessionSharing: document.getElementById('teamSessionSharing').checked,
         teamBrief: document.getElementById('teamBrief').checked,
+        explainMode: document.getElementById('explainMode').checked,
         agentMailInbox: document.getElementById('agentMailInbox').checked,
         remoteInteractionHost: document.getElementById('remoteInteractionHost').checked,
         codexDaemonMessaging: document.getElementById('codexDaemonMessaging').checked,

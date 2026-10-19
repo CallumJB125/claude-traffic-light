@@ -84,6 +84,7 @@
       "home-preload.js",
       "home-alerts-view.js",
       "home-starter.js",
+      "home-explain.js",
       "demo-banner.js",
       "tour-coachmark.js",
       "tour-coachmark.css",

@@ -80,3 +80,11 @@
 .ib-scope-line { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; }
 .ib-scope-line .ib-scope { max-width: none; }
 .ib-page .ib-scope { font-size: var(--text-xs); padding: 1px 8px; }
+/* Explain mode (src/explain-main.js) */
+.ib-explain { display: grid; gap: 3px; padding: 4px 6px; border-radius: var(--radius-sm); background: rgba(127, 127, 127, 0.12); }
+.ib-explain-text { white-space: pre-wrap; word-break: break-word; }
+.ib-explain-meta { display: flex; flex-wrap: wrap; gap: 8px; color: var(--muted); }
+.ib-explain-rating { font-weight: 600; }
+.rating-safe .ib-explain-rating { color: var(--green); }
+.rating-be-careful .ib-explain-rating { color: var(--amber); }
+.rating-risky .ib-explain-rating { color: var(--danger-text); }

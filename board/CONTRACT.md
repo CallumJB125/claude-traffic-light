@@ -1228,3 +1228,15 @@ Local Electron IPC only; nothing reaches a hub. The one outbound flow is `voice-
 | `tasks:voice-draft` | Tasks page → main (`invoke`), the Tasks page only (`tasksSenderOk`) | none → `string \| null` | Returns the confirmed words once and clears them; the page fills the New task composer. The task is still created only by `tasks:create` after the user picks a folder and presses Start task |
 | `pointer:play` | main → pointer overlay (`pointer-overlay-preload.js`) | `{reduced, ms, from:{x,y}\|null, points:[{x, y, label ≤40}] ≤3}` in the display's own coordinates | One transparent, frameless, `focusable:false`, click-through (`setIgnoreMouseEvents(true)`) window per display with a point; main destroys every window by 6 s. The page sends nothing back |
 | `voice-status` (extended) | Preferences | none | adds `preset: 'Control+Alt+Space'` and `screenAccess` (`granted`\|`denied`\|`not-determined`\|`restricted`\|`unsupported`) |
+
+## Desktop explain mode IPC (`src/explain-main.js`)
+
+Local Electron IPC only; the one outbound flow is `explain-mode` in PRIVACY.md (an unrecognised permission request, scrubbed, to the user's own `claude`). Config key `explainMode` (default absent = off), written by Preferences through `save-config`. Every channel checks its sender.
+
+| Channel | Sender | Request | Response |
+|---|---|---|---|
+| `explain:status` | the widget, the Waiting page, or Home | none | `{on}`; the bubble shows "Explain this" only while `on`. Anyone else gets `null` |
+| `explain:input` | the widget or the Waiting page (`inputSenderOk`) | `id: string ≤ 100` (a pending permission input) | `{ok:true, sentence, rating ∈ safe\|be careful\|risky, recommend, source ∈ local\|ai}` or `{ok:false, reason ∈ off\|invalid\|gone\|busy\|no-cli\|empty\|failed\|not allowed}`. Local rules first (`src/explain.js` over `src/deny/`); otherwise one `claude -p --model haiku` call at a time, cached per input |
+| `explain:recaps` | Home only | none | `{on, recaps:[{headline, lines, risky, at, test:{label, handle}\|null}] ≤ 10, help:[{project, why, prompts:[{label, handle}]}] ≤ 5}`; recaps are built in memory at each turn end from the transcript and the checkpoint file list; `null` to anyone else |
+| `explain:copy` | Home only | `handle: string ≤ 40` | `{ok, text}`; copies the fixed suggested prompt the handle stands for to the clipboard |
+| `explain:open-test` | Home only | `handle: string ≤ 40` | `{ok}`; opens the handle's `http://localhost:<port>/` in the browser, nothing else |
