@@ -273,6 +273,17 @@ With a team signed in, the team layer reaches past the board:
 - **Team sessions** shows an availability badge per teammate (Active, Idle, Away, Offline) folded from what the page already displays, and lets you keep **collections**: named groups of sessions that live only on this device, like pins.
 - **Home › Inbox** offers quick decision buttons on waiting requests with plain options (Allow, Deny, a short choice). They go through the same checks as answering from the widget, and "Ask from the widget" off means off here too.
 
+## Talk about work, get told when to look, hand it over
+
+None of this applies until you join a team; with no team signed in the pages look as they did. All of it needs the team hub on the version that ships with this release: against an older hub the desktop skips the new routes quietly (no inbox rows, no bell, no presence) and the Comment follow-up on a moment says the hub does not take comments there yet.
+
+- **Comments and @mentions.** Every card and every moment on the web board has a thread. Type `@` in the composer and pick a teammate (by name, GitHub login or the part of their email before the `@`, up to ten per comment); the mention renders as a chip with their current name. On the desktop, the Sessions page shows a **Comment** input right after you mark a moment, so the note goes on the moment you just made. Only the comment text and the ids of the people you mentioned are sent.
+- **Inbox in Home.** Mentions, replies to your comments, teammates' moments, hand-off requests and answers, and inputs someone else answered on your run land in **Home › Inbox** with an **Open** button (Overview or Sessions) and a quiet **Mark read**. The dock badge counts them with your local items. Plexiform asks each linked hub for new rows once a minute, so an item can take up to a minute to arrive.
+- **Two silent macOS notifications.** Only a mention and a hand-off request raise a notification, never a sound, and at most one per 30 seconds per hub. Everything else waits in the inbox.
+- **Bell on the web board.** The same inbox, live, in the board's top bar: open an item to jump to its card, or mark all read.
+- **Who is looking, who is running.** On the web board a card shows a small avatar stack when teammates have it open, and the team list says *running on <repo>* or *viewing <card>* per member. On the desktop, **Team sessions** person headers show the same line next to the availability badge. Opening a teammate's row tells the hub you are viewing that card; closing it clears you. Presence lives in the hub's memory only and expires after 90 seconds without a beat; nothing is journaled.
+- **Hand a card to a teammate.** **Hand to…** in the card drawer picks a teammate and takes a note (up to 2,000 characters). The latest handover packet for that card goes with it and the teammate is added as an assignee. They see **Accept** / **Decline** on the card and, on the desktop, a *Needs you* card on the Sessions page with a notification "<name> handed you <key>"; Accept opens the packet there. You see "Handed to <name>, waiting" with **Take it back** until they answer, and the outcome after. One open request per card at a time.
+
 ## Answer permission prompts from the widget
 
 Preferences → **Answer permission prompts from the widget** (off by default)
