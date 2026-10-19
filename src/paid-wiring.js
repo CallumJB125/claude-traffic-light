@@ -11,7 +11,9 @@
 //    setInteractionHostExtras: (fn) => void (phone approvals: {e2e, extra} for the remote host),
 //    teamMemory: (req) => Promise (the hub's team memory for Search everything, src/team-activity.js memoryPage),
 //    setCostGuardReport: (fn) => void (cost guard: its report() for Home's cost card),
-//    gallery: {takePending} (a setup added from the community gallery, one use, or null)}
+//    gallery: {takePending} (a setup added from the community gallery, one use, or null),
+//    afterStartup: (fn) => void (runs fn once the widget and signal server are up; work that
+//    reads a project folder starts there)}
 // register gates its own work with ctx.entitlements.has(feature).
 'use strict';
 
