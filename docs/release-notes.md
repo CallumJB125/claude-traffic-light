@@ -1,4 +1,4 @@
-Plexiform app update — 19 October 2026 (1.0.2-beta.96)
+Plexiform app update — 19 October 2026 (1.0.2-beta.97)
 
 For macOS (Apple silicon and Intel) and Linux (x64).
 
@@ -14,12 +14,12 @@ What changed
 - Create a Linear or Jira issue from a session. Plexiform drafts it from the session's handover, you edit it, and nothing is sent until you press Create.
 - Ask about your screen. Turn on "Use the screen when I ask" in Voice settings, hold your talk key or long-press Claude, and ask out loud ("where is the Wi-Fi setting?"). Plexiform captures the display under your mouse, asks your own Claude through the `claude` command (no API key), speaks the answer, and Claude flies to the thing it means on screen. The screenshot is deleted as soon as the answer comes back. macOS asks for Screen Recording permission the first time.
 - Say "Plexiform, do …" to offer a new Task. It starts only when you press Start.
-- The widget no longer fails to appear after an update when macOS asks for permission to a folder your sessions use, such as Desktop or Documents.
+- The widget no longer fails to appear after an update when macOS asks for permission to a folder your sessions use, such as Desktop or Documents. Plexiform keeps running while that prompt waits for your answer.
 - Fewer interruptions in meetings. Nudges and rule notifications wait while Plexiform sees a meeting or screen share.
 
 What has been verified
 
-Desktop, remote, site and board test suites pass on this build (desktop 5,498 tests, board 3,278, 0 failures), with the privacy census and the hub tenancy matrix.
+Desktop, remote, site and board test suites pass on this build (desktop 5,499 tests, board 3,278, 0 failures), with the privacy census and the hub tenancy matrix.
 
 Current limits
 

@@ -651,3 +651,22 @@ test('ICS fetch refuses redirects off HTTPS and follows HTTPS ones', async () =>
   await assert.rejects(fetchHttpsOnly('https://c.test/cal.ics', null, fake), /off HTTPS/);
   await assert.rejects(fetchHttpsOnly('https://d.test/cal.ics', null, fake), /too many redirects/);
 });
+
+test('Focus files (a macOS-protected folder) are read through readProtected, never the sync readFile', async () => {
+  // A sync read there blocks main while any privacy prompt of this app is open (beta.96 froze at startup).
+  const syncHits = [];
+  const asyncHits = [];
+  const on = JSON.stringify({ data: [{ storeAssertionRecords: [{ assertionDetails: { assertionDetailsModeIdentifier: 'com.apple.focus.work' } }] }] });
+  const w = busyWatch({
+    rootDir: '/buddy', home: '/home', helperPath: '/app/none', loadConfig: () => ({ busyFocus: true }), isDevRun: false,
+    exec: async () => { throw new Error('no helper'); },
+    readFile: (f) => { if (f.includes('DoNotDisturb')) syncHits.push(f); const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; },
+    readProtected: async (f) => { asyncHits.push(f); if (f.endsWith('Assertions.json')) return on; throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); },
+    writeFile: () => {}, exists: () => false, fetch: async () => { throw new Error('no network'); }, now: () => Date.parse('2026-10-19T12:00:00Z'),
+  });
+  await w.tick();
+  assert.deepEqual(syncHits, [], 'no synchronous read of ~/Library/DoNotDisturb');
+  assert.ok(asyncHits.some((f) => f.endsWith('/home/Library/DoNotDisturb/DB/Assertions.json')));
+  const main = require('fs').readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  assert.match(main, /readProtected: \(f\) => Promise\.race\(\[fs\.promises\.readFile/, 'main wires an async, deadline-bound reader');
+});

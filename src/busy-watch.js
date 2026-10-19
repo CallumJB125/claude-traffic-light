@@ -45,6 +45,11 @@ module.exports = function busyWatch(deps) {
   const {
     rootDir, helperPath, loadConfig, isDevRun, onChange = () => {}, log = () => {},
     exec, readFile, writeFile, removeFile = () => {}, exists, fetch, home,
+    // The Focus files sit in a macOS-protected folder. A synchronous read there
+    // waits on the privacy daemon, which holds every protected access while any
+    // of this app's prompts (say, for Desktop) is unanswered: main must never
+    // block on it. Async with a deadline; tests may pass the sync readFile only.
+    readProtected = async (f) => readFile(f),
     now = () => Date.now(), fakeFile = null, tickMs = TICK_MS,
   } = deps;
   const ICS_CACHE = path.join(rootDir, 'busy-ics-cache.json');
@@ -230,9 +235,9 @@ module.exports = function busyWatch(deps) {
     if (!config.busyFocus) { focus.via = null; focus.reading = { focused: false, mode: null }; focus.fails = 0; return; }
     let fileError;
     try {
-      const text = readFile(path.join(DND_DIR, 'Assertions.json'));
+      const text = await readProtected(path.join(DND_DIR, 'Assertions.json'));
       let modes = null;
-      try { modes = readFile(path.join(DND_DIR, 'ModeConfigurations.json')); } catch { /* names are optional */ }
+      try { modes = await readProtected(path.join(DND_DIR, 'ModeConfigurations.json')); } catch { /* names are optional */ }
       const reading = Busy.parseFocusAssertions(text, modes);
       if (!reading.error) { focusOk('assertions', reading); return; }
       fileError = 'unreadable';
