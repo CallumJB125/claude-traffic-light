@@ -253,6 +253,19 @@ select.input { appearance: none; padding-right: 28px; background-image: linear-g
 .conn-open .conn-dot { background: var(--muted); }
 .conn-lost .conn-dot { background: transparent; box-shadow: inset 0 0 0 1.5px var(--tone-unknown); }
 .topbar-actions { display: flex; align-items: center; gap: 8px; }
+.inbox-bell { position: relative; list-style: none; }
+.inbox-bell::-webkit-details-marker { display: none; }
+.inbox-bell .icon { margin: 0; }
+.inbox-count { position: absolute; top: -4px; right: -4px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--accent, #d9480f); color: #fff; font-size: 10px; line-height: 16px; text-align: center; }
+.inbox-menu { right: 0; left: auto; min-width: 320px; max-width: min(420px, 90vw); max-height: 60vh; overflow: auto; padding: 8px; }
+.inbox-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 4px 8px; }
+.inbox-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.inbox-item { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; padding: 6px 4px; border-top: 1px solid var(--line); }
+.inbox-item.is-read .inbox-title { color: var(--muted); }
+.inbox-text { display: grid; gap: 2px; min-width: 0; }
+.inbox-title { overflow-wrap: anywhere; }
+.inbox-actions { display: flex; gap: 4px; flex: none; }
+.inbox-empty { padding: 6px 4px; margin: 0; }
 .me { display: inline-flex; align-items: center; gap: 8px; padding-left: 8px; margin-left: 4px; border-left: 1px solid var(--line); font-size: var(--text-sm); color: var(--muted); }
 
 /* pixel Claude: body + sign, lamps lit like the widget's */

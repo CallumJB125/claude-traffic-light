@@ -52,3 +52,25 @@ test('inbox: quick decision options and the request id pass through, validated a
   assert.deepEqual(r.items[2].options, [], 'no request id: nothing to answer');
   assert.deepEqual(r.items[3].options, []);
 });
+
+test('inbox: hub inbox rows (mention, reply, moment, handoff) merge with their Open and Mark read actions; malformed rows are dropped', () => {
+  const team = [
+    { kind: 'mention', title: 'Ana mentioned you: Fix login', meta: 'Core', ageMs: 5 * 60_000, action: { kind: 'navigate', destination: 'overview', label: 'Open' }, read: { kind: 'inbox-read', ids: ['https://hub:i1'] }, key: 'team:https://hub:i1' },
+    { kind: 'handoff', title: 'Ben handed you a card: Retries', meta: 'Core', ageMs: 60_000, action: { kind: 'navigate', destination: 'sessions', label: 'Open' }, read: { kind: 'inbox-read', ids: ['https://hub:i2'] }, key: 'team:https://hub:i2' },
+    { kind: 'moment', title: 'Cy marked a moment', meta: '', ageMs: 40 * 60_000, action: { kind: 'navigate', destination: 'elsewhere' }, read: { kind: 'inbox-read', ids: ['https://hub:i3'] }, key: 'team:https://hub:i3' },
+    { kind: 'reply', title: 'Ana replied to you', ageMs: null, action: {}, read: { kind: 'inbox-read', ids: ['https://hub:i4'] }, key: 'team:https://hub:i4' },
+    { kind: 'spam', title: 'x', read: { kind: 'inbox-read', ids: ['k'] }, key: 'team:x' },
+    { kind: 'mention', title: 'no key', read: { kind: 'inbox-read', ids: ['k'] } },
+    { kind: 'mention', title: 'no read ids', key: 'team:y' },
+    null,
+  ];
+  const r = compose({ needs: { items: [{ headline: 'Allow git push?', kind: 'permission' }] }, team, now });
+  assert.deepEqual(r.items.map(i => i.kind), ['approval', 'mention', 'handoff', 'reply', 'moment'], 'same severity: older first');
+  assert.deepEqual(r.items[1].action, { kind: 'navigate', destination: 'overview', label: 'Open' });
+  assert.deepEqual(r.items[1].read, { kind: 'inbox-read', ids: ['https://hub:i1'] });
+  assert.equal(r.items[2].action.destination, 'sessions');
+  assert.equal(r.items[4].action.destination, 'overview', 'an unknown destination falls back to Overview');
+  assert.equal(r.items[3].ageMs, null);
+  assert.equal(r.total, 5);
+  assert.deepEqual([r.label('mention'), r.label('reply'), r.label('moment')], ['Mention', 'Reply', 'Moment']);
+});

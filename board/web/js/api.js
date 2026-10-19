@@ -57,6 +57,9 @@ export const api = {
   // Accounts mode (ACCOUNTS-API.md): which sign-ins the hub offers, a first team, joining one.
   methods: () => call('GET', '/api/auth/methods'),
   setupAccount: () => mut('POST', '/api/account/setup'),
+  // Team depth lane B: your hub inbox (CONTRACT GET /api/account/inbox, POST …/read).
+  inbox: () => call('GET', '/api/account/inbox'),
+  inboxRead: (body) => mut('POST', '/api/account/inbox/read', body),
   // Paid plans (billing.html): hosted Checkout / portal links come back as {url}.
   billing: () => call('GET', '/api/billing'),
   billingCheckout: (interval) => mut('POST', '/api/billing/checkout', { interval }),

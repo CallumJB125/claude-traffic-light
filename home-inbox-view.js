@@ -10,7 +10,7 @@
   const button = (label, fn, cls) => { const b = node('button', label, cls); b.type = 'button'; b.addEventListener('click', fn); return b; };
   const store = { read(k, parse) { try { return parse(localStorage.getItem(k)); } catch { return parse(null); } }, write(k, v) { try { localStorage.setItem(k, v); } catch { /* unavailable */ } } };
   const ago = ms => ms == null ? '' : ms < 60_000 ? 'just now' : ms < 3_600_000 ? `${Math.floor(ms / 60_000)} min ago` : `${Math.floor(ms / 3_600_000)} h ago`;
-  let state = null, alerts = null, teamToday = null, busy = false;
+  let state = null, alerts = null, teamToday = null, team = [], busy = false;
   const body = section.querySelector('.body'), count = $('inbox-count'), status = $('inbox-status');
 
   async function act(row) {
@@ -24,7 +24,7 @@
   }
   function render() {
     const follow = Follow ? Follow.unseen(store.read('plexiform.follows', Follow.parse)) : [];
-    const r = Inbox.compose({ needs: state?.needs, alerts, morning: state?.morning, teamToday, follow, now: Date.now() });
+    const r = Inbox.compose({ needs: state?.needs, alerts, morning: state?.morning, teamToday, follow, team, now: Date.now() });
     section.hidden = false;
     count.textContent = r.total ? `${r.total} item${r.total === 1 ? '' : 's'}` : '';
     if (!r.items.length) { body.replaceChildren(node('p', 'Nothing needs a person right now. Approvals, questions, blockers, failures and teammates’ handoffs land here with one action each.', 'muted')); return; }
@@ -32,7 +32,7 @@
     for (const row of r.items) {
       const li = node('li'), text = node('div'); li.dataset.kind = row.kind;
       text.append(node('strong', row.title, 'title'), node('p', [row.meta, ago(row.ageMs)].filter(Boolean).join(' · '), 'muted'));
-      const tag = node('span', r.label(row.kind), `tag ${['approval', 'question', 'blocker', 'failed'].includes(row.kind) ? 'waiting' : row.kind === 'finished' ? 'working' : ''}`);
+      const tag = node('span', r.label(row.kind), `tag ${['approval', 'question', 'blocker', 'failed'].includes(row.kind) ? 'waiting' : row.kind === 'finished' ? 'working' : Inbox.TEAM_KINDS?.includes(row.kind) && row.read ? 'team' : ''}`);
       const actions = node('div', '', 'actions');
       if (row.options?.length && typeof api.answerInput === 'function') {
         for (const [i, opt] of row.options.entries()) actions.append(button(opt.label, async () => {
@@ -43,6 +43,12 @@
         }, `quick-option${i === 0 && /^(allow|accept|yes|approve)/i.test(opt.id) ? ' primary' : ''}`));
       }
       actions.append(button(row.action.label, () => void act(row), row.kind === 'approval' && !row.options?.length ? 'primary' : ''));
+      if (row.read?.kind === 'inbox-read' && typeof api.inboxRead === 'function') actions.append(button('Mark read', async () => {
+        for (const b of actions.querySelectorAll('button')) b.disabled = true;
+        const r = await api.inboxRead(row.read.ids);
+        status.textContent = r?.ok ? '' : (r?.error || 'Could not mark that read. Home refreshes in a moment.');
+        await load();
+      }, 'quiet'));
       li.append(text, tag, actions); list.append(li);
     }
     body.replaceChildren(list);
@@ -50,7 +56,8 @@
   }
   async function load() {
     if (busy || document.hidden) return; busy = true;
-    try { [alerts, teamToday] = await Promise.all([api.alerts?.().catch(() => null) ?? null, api.teamToday?.().catch(() => null) ?? null]); } finally { busy = false; }
+    try { [alerts, teamToday, team] = await Promise.all([api.alerts?.().catch(() => null) ?? null, api.teamToday?.().catch(() => null) ?? null, api.teamInbox?.().catch(() => []) ?? []]); } finally { busy = false; }
+    if (!Array.isArray(team)) team = [];
     render();
   }
   document.addEventListener('home:state', ev => { state = ev.detail; render(); });

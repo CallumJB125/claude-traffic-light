@@ -30,6 +30,9 @@ import { cardSeed } from './activity-handoff.js';
 export const INBOX_KINDS = new Set(['mention', 'reply', 'moment', 'handoff_request', 'handoff_answer', 'input_answered']);
 export const INBOX_MAX = 500;
 const INBOX_REF_MAX = 2048;
+const INBOX_READ_TAIL = 50;
+const INBOX_READ_MAX = 200;
+const inboxView = (r) => ({ id: r.id, org_id: r.org_id, kind: r.kind, ref: json(r.ref_json, {}), created_at: r.created_at, read_at: r.read_at ?? null });
 
 const ACTION_EVENTS = {
   dispatch: 'dispatch', cancel: 'cancel', stop: 'stop', retry: 'retry', take_over: 'take_over', hand_over: 'hand_over',
@@ -926,6 +929,7 @@ export class Api {
           const r = this.db.run("UPDATE asks SET state = 'answered', answer = ?, answered_by = ?, answered_at = ? WHERE id = ? AND state = 'open'", answer, me, this.hub.iso(), ask.id);
           if (Number(r.changes) === 0) throw new HubError('ALREADY_ANSWERED', 'already answered');
           this.hub.journal({ board_id: row.board_id, card_id: cardId, run_id: ask.run_id, actor_kind: 'member', actor_id: me, kind: 'ask.answer', payload: { ask_id: ask.id, by: me } });
+          this.notifyInputAnswered(ask.run_id, me, { card_id: cardId, board_id: row.board_id, ask_id: ask.id });
         };
         break;
       }
@@ -971,6 +975,7 @@ export class Api {
           const r = this.db.run("UPDATE permission_requests SET state = ?, scope = ?, answered_by = ?, answered_at = ? WHERE id = ? AND state IN ('open','parked')", state, scope, member.id, this.hub.iso(), prId);
           if (Number(r.changes) === 0) throw new HubError('ALREADY_ANSWERED', 'another approver answered first');
           this.hub.journal({ card_id: cardId, run_id: pr.run_id, actor_kind: 'member', actor_id: member.id, kind: 'permission.answer', payload: { permission_request_id: prId, decision: body.decision, scope } });
+          this.notifyInputAnswered(pr.run_id, member.id, { card_id: cardId, board_id: this.hub.card(cardId)?.board_id ?? null, permission_request_id: prId });
           if(pr.tool===CODEX_PLAN_PERMISSION)this.hub.workflowGuard.planAnswer(pr.run_id,pr,body.decision);
         },
       }));
@@ -1033,6 +1038,61 @@ export class Api {
       this.hub.log?.warn?.('inbox notify dropped', { member_id: memberId, kind, error: e.message });
       return null;
     }
+  }
+
+  // Lane B: the member's own inbox as the routes return it (CONTRACT: GET /api/account/inbox).
+  inboxItem(id) {
+    const r = id ? this.db.get('SELECT * FROM inbox WHERE id = ?', id) : null;
+    return r ? inboxView(r) : null;
+  }
+
+  // GET /api/account/inbox?since=: every unread row plus the last 50 read, newest
+  // first, across all of this user's memberships (one sign-in may sit in several
+  // orgs, like /api/account/devices spans the user, not one member).
+  listInbox(members, query = null) {
+    const ids = (members || []).map((m) => m.id);
+    if (!ids.length) return { items: [], unread: 0 };
+    const sinceRaw = query && typeof query.get === 'function' ? query.get('since') : query?.since ?? null;
+    let since = null;
+    if (sinceRaw != null && sinceRaw !== '') {
+      if (typeof sinceRaw !== 'string' || sinceRaw.length > 40 || Number.isNaN(Date.parse(sinceRaw))) throw new HubError('VALIDATION', 'since must be an ISO date');
+      since = new Date(Date.parse(sinceRaw)).toISOString();
+    }
+    const marks = ids.map(() => '?').join(',');
+    const where = `member_id IN (${marks})${since ? ' AND created_at > ?' : ''}`;
+    const args = since ? [...ids, since] : ids;
+    const unread = this.db.all(`SELECT * FROM inbox WHERE ${where} AND read_at IS NULL ORDER BY created_at DESC, id DESC`, ...args);
+    const read = this.db.all(`SELECT * FROM inbox WHERE ${where} AND read_at IS NOT NULL ORDER BY created_at DESC, id DESC LIMIT ${INBOX_READ_TAIL}`, ...args);
+    const items = [...unread, ...read].sort((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : a.id < b.id ? 1 : -1)).map(inboxView);
+    return { items, unread: unread.length };
+  }
+
+  // POST /api/account/inbox/read {ids|all:true}: marks the caller's own unread rows;
+  // ids that are not the caller's are ignored (never 404, nothing to learn).
+  readInbox(members, body = {}) {
+    const ids = (members || []).map((m) => m.id);
+    const all = body?.all === true;
+    const list = Array.isArray(body?.ids) ? body.ids : null;
+    if (!all && !list) throw new HubError('VALIDATION', 'ids or all required');
+    if (list && (list.length > INBOX_READ_MAX || list.some((x) => typeof x !== 'string' || !x || x.length > 100))) throw new HubError('VALIDATION', `ids must be at most ${INBOX_READ_MAX} strings`);
+    if (!ids.length || (list && !list.length)) return { read: 0 };
+    const marks = ids.map(() => '?').join(',');
+    const r = all
+      ? this.db.run(`UPDATE inbox SET read_at = ? WHERE member_id IN (${marks}) AND read_at IS NULL`, this.hub.iso(), ...ids)
+      : this.db.run(`UPDATE inbox SET read_at = ? WHERE member_id IN (${marks}) AND read_at IS NULL AND id IN (${list.map(() => '?').join(',')})`, this.hub.iso(), ...ids, ...list);
+    return { read: Number(r.changes) || 0 };
+  }
+
+  // A teammate answered an input (question or permission) that a run on someone
+  // else's machine raised: tell the machine's owner. Call inside the answering
+  // transaction; the live push follows the commit (hub.later).
+  notifyInputAnswered(runId, answeredBy, ref) {
+    const run = this.hub.run(runId);
+    const owner = run?.on_behalf_of ?? this.hub.device(run?.device_id)?.member_id ?? null;
+    if (!owner || owner === answeredBy) return null;
+    const id = this.notify(owner, 'input_answered', { ...ref, by: answeredBy });
+    if (id) this.hub.later(() => { const item = this.inboxItem(id); if (item) this.hub.broadcastMember(owner, 'inbox.item', { item }); });
+    return id;
   }
 
   // ── comments ──────────────────────────────────────────────────────────────

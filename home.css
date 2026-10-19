@@ -86,6 +86,8 @@ button.row-link:active { transform: none; }
 /* Inbox and first-run tour */
 #inbox li[data-kind="approval"] .title, #inbox li[data-kind="question"] .title { color: var(--text); }
 #inbox .tag.waiting { background: color-mix(in oklab, var(--amber) 9%, transparent); }
+#inbox .tag.team { color: var(--accent, var(--text)); background: color-mix(in oklab, var(--accent, var(--text)) 9%, transparent); border-color: color-mix(in oklab, var(--accent, var(--text)) 28%, var(--line)); }
+#inbox button.quiet { color: var(--muted); background: transparent; }
 .tour { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; padding: 16px; background: color-mix(in oklab, var(--bg) 70%, transparent); }
 .tour-dialog { width: min(480px, 100%); background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--radius-lg); padding: 20px 22px; box-shadow: 0 24px 60px color-mix(in oklab, var(--bg) 60%, transparent); animation: tour-in var(--t); }
 .tour-dialog h2 { margin: 0 0 8px; font-size: var(--text-xl); }

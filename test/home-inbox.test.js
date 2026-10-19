@@ -12,12 +12,12 @@ const tick = async (n = 6) => { for (let i = 0; i < n; i++) await new Promise((r
 const NOW = Date.UTC(2026, 9, 18, 12);
 const state = { observed_at: NOW, banner: null, needs: { total: 1, items: [{ headline: 'Allow git push?', kind: 'permission', project: 'app', age: '2 min', late: false }] }, running: { quiet: 0, items: [] }, today: { spend: null, longestWaitMs: null }, team: null, morning: { count: 1, costUsd: 0, items: [{ title: 'Nightly tests', state: 'failed', summary: 'exit 1' }], asks: [], more: 0 } };
 
-function setup({ calls = [], storage = {}, st = state, answerInput = null } = {}) {
+function setup({ calls = [], storage = {}, st = state, answerInput = null, teamInbox = null, inboxRead = null } = {}) {
   const dom = new JSDOM(html, { runScripts: 'outside-only', pretendToBeVisual: true, url: 'http://plexiform.test/home.html' });
   for (const [k, v] of Object.entries(storage)) dom.window.localStorage.setItem(k, v);
   const intervals = []; dom.window.setInterval = (fn) => { intervals.push(fn); return intervals.length; };
   dom.window.homeApi = {
-    ...(answerInput ? { answerInput } : {}),
+    ...(answerInput ? { answerInput } : {}), ...(teamInbox ? { teamInbox } : {}), ...(inboxRead ? { inboxRead } : {}),
     state: async () => st, navigate: async (d) => { calls.push(['navigate', d]); return true; }, openCard: async () => true,
     alerts: async () => ({ stuck: [{ handle: 'h-stuck', title: 'Stuck: app silent for 12 min', meta: 'Codex', canOpen: true, canHand: true }], limits: [], mail: [] }),
     alertAct: async (kind, op, handle) => { calls.push(['alert', kind, op, handle]); return { ok: true }; },
@@ -89,5 +89,34 @@ test('Home Inbox: a wait with simple options is a quick decision card; a click a
     quickButtons[1].click(); await tick(8);
     assert.deepEqual(s.calls.find((c) => c[0] === 'answer'), ['answer', 'req-9', 'deny']);
     assert.equal(s.$('inbox-status').textContent, 'Answered.');
+  } finally { s.close(); }
+});
+
+test('Home Inbox: hub inbox rows render with Open and Mark read; Mark read sends the row keys and reloads; the badge-free list drops the row', async () => {
+  const calls = [];
+  let rows = [
+    { kind: 'mention', title: 'Ana mentioned you: Fix login', meta: 'Core', ageMs: 5 * 60_000, action: { kind: 'navigate', destination: 'overview', label: 'Open' }, read: { kind: 'inbox-read', ids: ['https://hub.test:i1'] }, key: 'team:https://hub.test:i1' },
+    { kind: 'handoff', title: 'Ben handed you a card: Retries', meta: 'Core', ageMs: 60_000, action: { kind: 'navigate', destination: 'sessions', label: 'Open' }, read: { kind: 'inbox-read', ids: ['https://hub.test:i2'] }, key: 'team:https://hub.test:i2' },
+  ];
+  const s = setup({ calls, storage: { 'plexiform.tour': JSON.stringify({ done: { local: 1 } }) }, teamInbox: async () => rows, inboxRead: async (ids) => { calls.push(['inbox-read', ids]); rows = rows.filter((r) => !ids.includes(r.read.ids[0])); return { ok: true, read: ids.length }; } });
+  try {
+    await tick(12);
+    const li = [...s.$('inbox').querySelectorAll('li')];
+    assert.deepEqual(li.map((r) => r.dataset.kind).sort(), ['approval', 'blocker', 'failed', 'handoff', 'handoff', 'mention']);
+    const mention = li.find((r) => r.dataset.kind === 'mention');
+    assert.match(mention.textContent, /Ana mentioned you: Fix login/);
+    assert.ok(mention.querySelector('.tag.team'), 'team rows carry the team tag');
+    const buttons = [...mention.querySelectorAll('button')].map((b) => b.textContent);
+    assert.deepEqual(buttons, ['Open', 'Mark read']);
+    mention.querySelectorAll('button')[0].click(); await tick();
+    assert.deepEqual(calls.at(-1), ['navigate', 'overview']);
+    const handoff = li.filter((r) => r.dataset.kind === 'handoff').find((r) => /Ben handed/.test(r.textContent));
+    handoff.querySelectorAll('button')[0].click(); await tick();
+    assert.deepEqual(calls.at(-1), ['navigate', 'sessions']);
+    mention.querySelectorAll('button')[1].click(); await tick(10);
+    assert.deepEqual(calls.find((c) => c[0] === 'inbox-read'), ['inbox-read', ['https://hub.test:i1']]);
+    assert.doesNotMatch(s.$('inbox').textContent, /Ana mentioned you/);
+    assert.equal(s.$('inbox-count').textContent, '5 items');
+    assert.equal([...s.$('inbox').querySelectorAll('li')].find((r) => /Ana handed/.test(r.textContent)).querySelectorAll('button').length, 1, 'team-today handoffs have no Mark read');
   } finally { s.close(); }
 });

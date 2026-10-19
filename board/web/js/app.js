@@ -90,6 +90,7 @@ const state = {
   pinboardOpen: false,
   viewsOpen: false,
   momentsOpen: false,
+  inbox: null, // accounts mode: {items, open} from GET /api/account/inbox, live via inbox.item (team depth lane B)
   archived: null, // id → {view, rx} while showArchived
   // team.presence (D37b). `stale` from a socket drop until the next frame.
   presence: { members: [], loaded: false, stale: false },
@@ -462,6 +463,7 @@ function buildModel() {
     filtersActive: isFiltering(state.filters),
     viewsOpen: state.viewsOpen,
     momentsOpen: state.momentsOpen,
+    inbox: state.inbox,
     filterInfo: { total: filtered.total, shown: filtered.shown, options: filterOptions(entries, fctx), archived: state.archived?.size ?? null },
     labelColors,
     showArchived: state.showArchived,
@@ -677,6 +679,7 @@ async function boot() {
     const me = await api.me();
     if (!current()) return;
     state.me = me;
+    if (state.authMode === 'accounts') void loadInbox();
   } catch (err) {
     if (!current()) return;
     // A sign-in in several orgs: the hub lists them; take ?org= or the first.
@@ -1044,6 +1047,11 @@ function onMessage(msg) {
       if (msg.board_id !== state.boardId || !state.board) return;
       state.board = { ...state.board, settings: { ...(state.board.settings ?? {}), pins: Array.isArray(msg.pins) ? msg.pins : [] } };
       break;
+    case 'inbox.item': {
+      if (!state.inbox || !msg.item?.id) return;
+      state.inbox = { ...state.inbox, items: [msg.item, ...state.inbox.items.filter((i) => i.id !== msg.item.id)].slice(0, 100) };
+      break;
+    }
     case 'board.views':
     case 'board.moments': {
       if (msg.board_id !== state.boardId || !state.board) return;
@@ -1139,6 +1147,26 @@ async function removePin(id) {
   state.board = { ...state.board, settings: { ...(state.board.settings ?? {}), pins: res.pins } };
   update();
 }
+// ── hub inbox (team depth lane B) ───────────────────────────────────────────
+// An older hub without the route (404) leaves the bell out; nothing else changes.
+async function loadInbox() {
+  try {
+    const r = await api.inbox();
+    state.inbox = { items: Array.isArray(r?.items) ? r.items : [], open: state.inbox?.open ?? false };
+  } catch (err) {
+    state.inbox = err.status === 404 ? null : (state.inbox ?? { items: [], open: false });
+  }
+  update();
+}
+async function readInbox(body) {
+  if (!state.inbox) return;
+  const at = new Date().toISOString();
+  const ids = body.all ? null : new Set(body.ids);
+  state.inbox = { ...state.inbox, items: state.inbox.items.map((i) => (i.read_at || (ids && !ids.has(i.id)) ? i : { ...i, read_at: at })) };
+  update();
+  try { await api.inboxRead(body); } catch (err) { toast(errorText(err), 'error'); void loadInbox(); }
+}
+
 // ── shared views and moments ────────────────────────────────────────────────
 function viewValues(f) {
   const out = {};
@@ -2240,6 +2268,9 @@ function onClick(e) {
     case 'view-apply': applyView(el.dataset.view); return;
     case 'view-remove': void removeView(el.dataset.view); return;
     case 'moment-remove': void removeMoment(el.dataset.moment); return;
+    case 'inbox-read': void readInbox({ ids: [el.dataset.inbox] }); return;
+    case 'inbox-read-all': void readInbox({ all: true }); return;
+    case 'inbox-open': void readInbox({ ids: [el.dataset.inbox] }); if (el.dataset.card) void openDetail(el.dataset.card); return;
     case 'archive': archiveCards([cardId]); return;
     case 'clear-idle': archiveCards((el.dataset.ids || '').split(',').filter(Boolean)); return;
     case 'restore': restoreCards([cardId]); return;
@@ -2520,7 +2551,7 @@ function onImgError(e) {
 
 document.addEventListener('click', onClick);
 document.addEventListener('submit', onSubmit);
-document.addEventListener('toggle', (e) => { const t = e.target?.dataset?.actionToggle; if (t === 'pinboard') state.pinboardOpen = e.target.open; else if (t === 'views') state.viewsOpen = e.target.open; else if (t === 'moments') state.momentsOpen = e.target.open; }, true);
+document.addEventListener('toggle', (e) => { const t = e.target?.dataset?.actionToggle; if (t === 'pinboard') state.pinboardOpen = e.target.open; else if (t === 'views') state.viewsOpen = e.target.open; else if (t === 'moments') state.momentsOpen = e.target.open; else if (t === 'inbox' && state.inbox) state.inbox = { ...state.inbox, open: e.target.open }; }, true);
 document.addEventListener('change', onChange);
 document.addEventListener('input', onInput);
 document.addEventListener('keydown', onKeydown);

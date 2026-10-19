@@ -419,6 +419,9 @@ export function createHttpHandler({ hub, api, config, integrations = null, githu
     route('DELETE', '/api/account', ({ ident, body, ip }) => acc.deleteAccount(ident, body, { ip }), { auth: 'user' });
     route('GET', '/api/account/devices', ({ ident }) => acc.listDevices(ident), { auth: 'user' });
     route('DELETE', '/api/account/devices/:id', ({ ident, params, ip }) => acc.revokeDevice(ident, params.id, { ip }), { auth: 'user' });
+    // Team depth lane B: the signed-in person's hub inbox, across all their memberships.
+    route('GET', '/api/account/inbox', ({ ident, query }) => api.listInbox(userMembers(hub, ident.user.id), query), { auth: 'user' });
+    route('POST', '/api/account/inbox/read', ({ ident, body }) => api.readInbox(userMembers(hub, ident.user.id), body), { auth: 'user', replay: false });
     // The older web asks /api/me: the account plus, once the user is in a
     // team, the legacy {member, org, boards} of the chosen one.
     route('GET', '/api/me', ({ ident, req, query }) => {

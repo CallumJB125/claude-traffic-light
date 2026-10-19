@@ -989,6 +989,9 @@ function quietHolds(cwd) {
   if (why) return why;
   return !cwd && Quiet.allMuted(config, aggregateState({ ignoreTravel: true }).sessions) ? 'project' : null;
 }
+// Team depth lane B: the hub inbox rows (mentions, replies, moments, hand-offs)
+// folded into Home's Inbox and the dock badge; filled by the poll below.
+const teamInbox = require('./src/team-inbox.js').createTeamInbox({ now: Date.now });
 // The one thing quiet still does: a silent badge count of asks waiting on you.
 function syncQuietBadge(st) {
   const config = loadConfig();
@@ -999,6 +1002,7 @@ function syncQuietBadge(st) {
   for (const r of st.pending || []) if (r && r.sessionId) asking.set(r.sessionId, r.cwd);
   let n = 0;
   for (const cwd of asking.values()) if (Quiet.badgeFor(timed || Quiet.reason(config, { now, cwd }), 'permission-ask')) n += 1;
+  n += teamInbox.unread();
   try { app.setBadgeCount(n); } catch { /* no badge on this platform */ }
 }
 function notificationAllowed(n) {
@@ -4604,6 +4608,62 @@ require('./src/home-main.js').register({ ipcMain, allowed: (e) => fromUtilityPag
 require('./src/home-alerts.js').wire({ ipcMain, dialog, clipboard, homeAllowed: (e) => fromUtilityPage(e, 'home'), usageAllowed: (e) => fromUtilityPage(e, 'usage'), sessions: () => aggregateState().sessions || [], burst: () => BurstIpc.snapshot().d, tasksRows: () => tasksSvc?.snapshot().tasks || [], tasksService: getTasks, handoverText: (key) => SessionHandoverMain.writer.text(key), jump: (s) => jumpToSession(s, Rules.folderOf(s.cwd), s.hostApp), mail: () => AgentMail.pending(), openMail: async () => { openBuddy('sessions'); } });
 require('./src/digest-main.js').register({ ipcMain, allowed: (e) => fromUtilityPage(e, 'home'), rootDir: ROOT_DIR, userData: app.getPath('userData'), safeStorage: require('electron').safeStorage, clipboard, dialog, shell, Notification, fetch: (...a) => net.fetch(...a), usageTurns: () => getUsageTurns(), costGuard: () => (costGuardReport ? costGuardReport() : null), workCost: () => workCostReport(), scheduledRuns: (from, to) => (recipeScheduler ? recipeScheduler.runsBetween(from, to).map((h) => ({ ...h, title: recipes.find(h.id)?.title || 'A recipe' })) : []), teamBrief: (cwd) => (loadConfig().teamBrief === true ? TeamActivity.call('team_brief', { cwd }) : null), openHome: () => openBuddy('home'), onQuit: (fn) => onQuit(app, fn), log: (m) => console.warn(m) }); // privacy-flow: digest-slack
 { const TeamToday = require('./src/team-today.js'); const fake = IS_DEV_RUN && !app.isPackaged && process.env.CLAUDE_BUDDY_FAKE_TEAM_TODAY; TeamToday.wire({ ipcMain, allowed: (e) => fromUtilityPage(e, 'home'), file: path.join(ROOT_DIR, 'team-today.json'), log: (m) => console.log(m), ...(fake ? TeamToday.fixtureSources(JSON.parse(fs.readFileSync(fake, 'utf8'))) : { links: async () => (await buddyWin?.teamMemoryLinks?.()) ?? [], board: async (route) => (await buddyWin?.teamBoardSnapshot?.(route)) ?? null, mine: () => buddyWin?.workCostRows?.().records ?? [], fetch: (...a) => net.fetch(...a) }) }); } // privacy-flow: team-today
+// Team depth lane B: the hub inbox. The desktop keeps no hub socket in the main
+// process (the board socket lives in the Plexiform window), so main polls
+// GET /api/account/inbox on every linked hub once a minute, folds the rows into
+// Home's Inbox and the dock badge, and raises a silent notification for a
+// mention or a hand-off request (at most one per 30 s per hub).
+const TEAM_INBOX_POLL_MS = 60_000;
+async function teamInboxHubs() {
+  let links = [];
+  try { links = (await buddyWin?.teamMemoryLinks?.()) ?? []; } catch { links = []; }
+  const hubs = new Map();
+  for (const l of links) if (l?.route?.hub && typeof l.route.hub === 'string' && !hubs.has(l.route.hub)) hubs.set(l.route.hub, l.token);
+  return hubs;
+}
+async function pollTeamInbox() {
+  const hubs = await teamInboxHubs();
+  for (const [origin, token] of hubs) {
+    let res;
+    try {
+      const tok = typeof token === 'function' ? await token() : token;
+      if (!tok) continue;
+      const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 8000);
+      res = await net.fetch(`${origin}/api/account/inbox`, { method: 'GET', redirect: 'error', signal: ctl.signal, headers: { authorization: `Bearer ${tok}`, accept: 'application/json' } }).finally(() => clearTimeout(t)); // privacy-flow: team-hub
+    } catch { continue; }
+    if (!res || res.status !== 200) continue; // an older hub without the route (404) hides the feature
+    let body = null;
+    try { body = JSON.parse((await res.text()).slice(0, 1_000_000)); } catch { body = null; }
+    const fresh = teamInbox.ingest(origin, Array.isArray(body?.items) ? body.items : []);
+    for (const n of teamInbox.toNotify(fresh)) {
+      if (IS_DEV_RUN || !Notification.isSupported()) continue;
+      const note = new Notification({ title: n.title, body: n.body, silent: true });
+      note.on('click', () => openBuddy('home'));
+      note.show();
+    }
+  }
+  syncQuietBadge(aggregateState());
+}
+{ const t = setInterval(() => void pollTeamInbox(), TEAM_INBOX_POLL_MS); t.unref?.(); setTimeout(() => void pollTeamInbox(), 5000).unref?.(); }
+ipcMain.handle('home:team-inbox', (e) => (fromUtilityPage(e, 'home') ? teamInbox.items() : []));
+ipcMain.handle('home:inbox-read', async (e, keys) => {
+  if (!fromUtilityPage(e, 'home')) return { ok: false, error: 'not allowed' };
+  if (!Array.isArray(keys) || keys.length > 50 || keys.some((k) => typeof k !== 'string' || k.length > 300)) return { ok: false, error: 'invalid' };
+  const groups = teamInbox.markRead(keys);
+  syncQuietBadge(aggregateState());
+  const hubs = await teamInboxHubs();
+  let read = 0;
+  for (const { origin, ids } of groups) {
+    const token = hubs.get(origin);
+    try {
+      const tok = typeof token === 'function' ? await token() : token;
+      if (!tok) continue;
+      const res = await net.fetch(`${origin}/api/account/inbox/read`, { method: 'POST', redirect: 'error', headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json', accept: 'application/json' }, body: JSON.stringify({ request_id: require('crypto').randomUUID(), ids }) }); // privacy-flow: team-hub
+      if (res.status === 200) read += Number((await res.json())?.read) || 0;
+    } catch { /* the hub hears about it on the next poll */ }
+  }
+  return { ok: true, read };
+});
 // Preferences' "Connect other agents" buttons open the AI tools page on that
 // tool, where the exact change is previewed and confirmed (src/ai-tools.js).
 ipcMain.handle('connect-agent', async (e, which) => {

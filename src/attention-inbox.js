@@ -5,13 +5,16 @@
 // teammates' shared work, agent mail, followed-session events); teammates' rows
 // therefore only ever describe sessions their owners explicitly shared.
 (function (root) {
-  const SEVERITY = Object.freeze({ approval: 0, question: 0, blocker: 1, failed: 2, handoff: 3, review: 4, waiting: 5, finished: 6 });
-  const LABEL = Object.freeze({ approval: 'Approval', question: 'Question', blocker: 'Blocked', failed: 'Failed', handoff: 'Handoff', review: 'Ready for review', waiting: 'Waiting on', finished: 'Finished' });
+  const SEVERITY = Object.freeze({ approval: 0, question: 0, blocker: 1, failed: 2, handoff: 3, mention: 3, review: 4, reply: 4, waiting: 5, moment: 5, finished: 6 });
+  const LABEL = Object.freeze({ approval: 'Approval', question: 'Question', blocker: 'Blocked', failed: 'Failed', handoff: 'Handoff', mention: 'Mention', review: 'Ready for review', reply: 'Reply', waiting: 'Waiting on', moment: 'Moment', finished: 'Finished' });
+  const TEAM_KINDS = Object.freeze(['mention', 'reply', 'moment', 'handoff']);
   const MAX = 30;
   const OPTIONS_MAX = 4;
   const str = (v, max) => typeof v === 'string' && v.length <= max ? v : '';
   const ageOf = (ms, now) => Number.isFinite(ms) ? Math.max(0, now - ms) : null;
-  function compose({ needs = null, alerts = null, morning = null, teamToday = null, follow = [], now = Date.now() } = {}) {
+  // team: rows from the hub inbox (src/team-inbox.js items()), already shaped; each carries
+  // its Open action and the keys Mark read sends back ({read:{kind:'inbox-read', ids}}).
+  function compose({ needs = null, alerts = null, morning = null, teamToday = null, follow = [], team = [], now = Date.now() } = {}) {
     const rows = [];
     const push = r => { if (rows.length < 200) rows.push(r); };
     for (const [i, n] of (needs?.items || []).entries()) {
@@ -34,10 +37,14 @@
     }
     for (const [i, p] of (teamToday?.people?.items || []).entries()) if (p.status === 'Waiting') push({ kind: 'question', title: `${str(p.author, 200)}'s "${str(p.title, 300)}" is waiting`, meta: [str(p.repo, 200), str(p.branch, 200)].filter(Boolean).join(' · '), ageMs: ageOf(Date.parse(p.updated_at), now), action: { kind: 'navigate', destination: 'overview', label: 'Open shared sessions' }, key: `waiting:${i}` });
     for (const f of Array.isArray(follow) ? follow : []) push({ kind: f.transition === 'attention' ? 'question' : f.transition === 'failed' ? 'failed' : 'finished', title: `${str(f.owner, 200)}'s "${str(f.title, 400)}" ${f.transition === 'attention' ? 'needs input' : f.transition}`, meta: 'Session you follow', ageMs: ageOf(f.at, now), action: { kind: 'navigate', destination: 'overview', label: 'Open session' }, key: `follow:${f.key}:${f.transition}` });
+    for (const t of Array.isArray(team) ? team : []) {
+      if (!t || !TEAM_KINDS.includes(t.kind) || !str(t.key, 400) || !Array.isArray(t.read?.ids) || !t.read.ids.every(k => str(k, 300))) continue;
+      push({ kind: t.kind, title: str(t.title, 400) || 'A teammate needs you to look', meta: str(t.meta, 400), ageMs: Number.isFinite(t.ageMs) ? Math.max(0, t.ageMs) : null, action: { kind: 'navigate', destination: t.action?.destination === 'sessions' ? 'sessions' : 'overview', label: 'Open' }, read: { kind: 'inbox-read', ids: t.read.ids.slice(0, 50) }, key: t.key });
+    }
     rows.sort((a, b) => SEVERITY[a.kind] - SEVERITY[b.kind] || Number(b.late === true) - Number(a.late === true) || (b.ageMs ?? -1) - (a.ageMs ?? -1));
     return { items: rows.slice(0, MAX), total: rows.length, label: k => LABEL[k] };
   }
-  const api = { compose, SEVERITY, LABEL, MAX, OPTIONS_MAX };
+  const api = { compose, SEVERITY, LABEL, MAX, OPTIONS_MAX, TEAM_KINDS };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.PlexiformInbox = Object.freeze(api);
 })(typeof globalThis !== 'undefined' ? globalThis : this);
