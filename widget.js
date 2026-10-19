@@ -447,7 +447,7 @@ let clickThrough = null;
 const solidAt = (x, y) => {
   const el = document.elementFromPoint(x, y);
   if (!el) return false;
-  if (el.closest('#gear, #help, #bubble, #budget, #away, #update, .minion, #strip, #session-card')) return true;
+  if (el.closest('#gear, #help, #bubble, #budget, #away, #update, #event-lane .lane-row, .minion, #strip, #session-card')) return true;
   return rig.solidAt(x, y);
 };
 const hitTest = (x, y) => {
@@ -518,6 +518,81 @@ function showFeedback(text) {
 }
 
 window.trafficLight.onEvent((name) => rig.playEvent(name));
+
+// Notification lane and rings (src/widget-lane-view.js, src/widget-rings-view.js):
+// main sends one event per new thing and the rings when they change. Event
+// text comes from session folders, repos and teammates: textContent only.
+const laneEl = document.getElementById('event-lane');
+let laneEvents = [];
+let laneTimer = 0;
+const LANE_GO = new Set(['needs-you', 'finished']);
+function laneRow(r) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.dataset.id = r.id;
+  b.className = `lane-row ${r.kind}${LANE_GO.has(r.kind) ? ' go' : ''} enter`;
+  const dot = document.createElement('i'); dot.className = 'dot';
+  const text = document.createElement('span'); text.textContent = r.text;
+  b.title = r.text;
+  b.append(dot, text);
+  b.addEventListener('mousedown', stop);
+  b.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    if (!LANE_GO.has(r.kind)) return;
+    if (r.inputId) { window.trafficLight.openInput(r.inputId); return; }
+    const res = await window.trafficLight.goToNeedingSession().catch(() => null);
+    if (res && res.feedback) showFeedback(res.feedback);
+  });
+  requestAnimationFrame(() => b.classList.remove('enter'));
+  return b;
+}
+function paintLane() {
+  clearTimeout(laneTimer);
+  laneTimer = 0;
+  const now = Date.now();
+  laneEvents = window.WidgetLaneView.expire(laneEvents, now);
+  const rows = window.WidgetLaneView.laneModel(laneEvents, { now });
+  const have = new Map([...laneEl.children].map((el) => [el.dataset.id, el]));
+  const els = rows.map((r) => {
+    const el = have.get(r.id) || laneRow(r);
+    el.classList.toggle('fading', r.fading);
+    return el;
+  });
+  laneEl.replaceChildren(...els);
+  const next = window.WidgetLaneView.nextChangeMs(laneEvents, { now });
+  if (next !== null) laneTimer = setTimeout(paintLane, next);
+}
+window.trafficLight.onLaneEvent((ev) => {
+  laneEvents = window.WidgetLaneView.pushEvent(laneEvents, ev, Date.now());
+  paintLane();
+});
+const RING_C = { spend: 2 * Math.PI * 47, turn: 2 * Math.PI * 43.5 };
+const ringsEl = document.getElementById('rings');
+function paintRing(name, ring) {
+  const g = document.getElementById(`ring-${name}`);
+  const arc = document.getElementById(`ring-${name}-arc`);
+  g.hidden = !ring || !ring.show;
+  if (g.hidden) return;
+  arc.setAttribute('class', `arc ${ring.band || 'green'}`);
+  arc.setAttribute('stroke-dasharray', `${RING_C[name]}`);
+  arc.setAttribute('stroke-dashoffset', `${RING_C[name] * (1 - ring.fraction)}`);
+  const t = g.querySelector('title') || g.appendChild(document.createElementNS('http://www.w3.org/2000/svg', 'title'));
+  t.textContent = ring.label;
+}
+function paintRings(r) {
+  const show = !!(r && r.show);
+  ringsEl.hidden = !show;
+  if (!show) return;
+  paintRing('spend', r.spend);
+  paintRing('turn', r.turn);
+}
+window.trafficLight.onRings(paintRings);
+window.trafficLight.laneState().then((s) => {
+  if (!s) return;
+  if (Array.isArray(s.lane)) for (const r of s.lane.slice().reverse()) laneEvents = window.WidgetLaneView.pushEvent(laneEvents, { ...r, at: Date.now() - r.age }, Date.now());
+  paintLane();
+  paintRings(s.rings);
+}).catch(() => {});
 
 // Voice states from main: the mic badge while listening, what was heard
 // and the answer on the tooltip, and the mouth working while he talks.

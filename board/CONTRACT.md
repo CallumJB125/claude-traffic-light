@@ -1136,3 +1136,13 @@ Electron `ipcMain.handle` channels the widget window calls through `preload.js`.
 |---|---|---|---|
 | `widget:session-cards` | — | `{rows:[{kind:'session', id, pinned, waiting, idle, team:false, card} \| {kind:'idle', count, ids, team:false}], team:[{kind:'session', id, name, team:true, card}], pinnedId, collapsed}`; `card = {id, title, state, spend, teammate:{name, initials}\|null, actions:('open'\|'answer'\|'pin'\|'unpin')[], waiting, idle, remote, pinned}` | `src/widget-cards-main.js` over `src/widget-strip.js sessionRows` and `src/session-card-view.js`. Pinned row first, then active (waiting first), idle rows fold into one `idle` chip past 4 rows. `title` is the project folder name only; the raw session row and its path stay in main. All strings are untrusted text: the renderer writes them with `textContent` only |
 | `widget:pin-session` | `id: string \| null` | `{ok, pinned}` | Saves `widgetPinnedSession` in the local config (`null` unpins). An id not matching `^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$` → `{ok:false}` and nothing is saved |
+
+## Desktop widget IPC: notification lane and rings (widget wave 1, lane B)
+
+Local Electron IPC between main and the widget window (`index.html`, `preload.js`); nothing here reaches the hub, the network or disk. Source: `src/widget-lane-main.js`, views `src/widget-lane-view.js` and `src/widget-rings-view.js`.
+
+| Channel | Direction | Payload | Notes |
+|---|---|---|---|
+| `widget:lane-event` | main → widget (`webContents.send`) | `{id, kind, sessionId, inputId, text ≤90, at}`; `kind` ∈ `needs-you`\|`finished`\|`stuck`\|`collision`\|`ci-failed`\|`teammate` | One per new thing seen in main's in-memory sources (session rows, collision alerts, GitHub signals, teammates' look requests, run budget notices); nothing already present at startup is announced. `text` is untrusted (folders, repos, teammate names): the widget renders it with `textContent` only. The widget keeps the last 3 for 8 s, deduped by `(kind, sessionId)` |
+| `widget:rings` | main → widget (`webContents.send`) | `{show, turn:{show, fraction 0..1, over, band, label}, spend:{show, fraction 0..1, over, band, label}}`; `band` ∈ `green`\|`amber`\|`red`\|`null` | Sent only when it changes. Turn: the newest working turn against the median of the last ≤30 closed turns (≥3 needed, turns under 5 s ignored, kept in memory only). Spend: today against `spend.dailyBudget`, amber from `spend.warnAt` |
+| `widget:lane-state` | widget → main (`invoke`) | — → `{lane:[{id, kind, text, age, fading, sessionId, inputId}], rings}` or `null` | Answers the widget's own `webContents` only; a reloaded widget catches up with it |
