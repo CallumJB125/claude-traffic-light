@@ -4,5 +4,6 @@ contextBridge.exposeInMainWorld('helpApi', {
   getHelp: () => ipcRenderer.invoke('get-help'),
   navigate: (destination) => ipcRenderer.invoke('help:navigate', destination),
   openLights: () => ipcRenderer.invoke('open-lights'),
+  tourRestart: () => ipcRenderer.invoke('tour:restart'),
   onStatusChanged: (cb) => ipcRenderer.on('status-changed', () => cb()),
 });

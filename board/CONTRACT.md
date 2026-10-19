@@ -1155,6 +1155,18 @@ Main-process handlers in `src/sprite-pack-main.js`, callable from the widget, th
 |---|---|---|---|
 | `widget:sprite-packs` | — | `{packs:[{name, version, fps, bytes, frames:{state: count}}], errors:[{pack, reason}], active: name\|null, current: {name, fps, frames:{state:[dataUrl]}}\|null}` | `current` is the active pack's frames as `data:image/png` or `data:image/svg+xml` base64 URLs; an active pack that no longer validates is `current:null` plus an error, and the widget keeps the drawn character |
 | `widget:use-sprite-pack` | `name: string\|null` | `{ok, active, reason?}` | Saves `config.spritePack` only for a pack that validates now; `null` restores the drawn character. Pushes `sprite-pack:changed` to the widget |
+## Desktop first-run tour IPC (`src/first-run-tour-main.js`)
+
+Local Electron IPC only; no network, no new file, no new privacy flow. The tour runs on the demo fixtures (`src/demo-mode.js`) when no AI tool is connected. Every channel checks its sender and returns `null` to anyone else.
+
+| Channel | Sender | Request | Response |
+|---|---|---|---|
+| `tour:step` (main → renderer) | sent to the widget, the Widget rules window, and the Home and Usage pages | none | `null` (clear) or `{id, index, total, title, body, primary, skip, last, selector, pointsTo}` for the window hosting the callout; the widget gets `{id, highlight, demoInput, title}` (`demoInput` is the made-up demo question, or `null`) |
+| `tour:action` | the widget, the Widget rules window, the Home or Usage page | `(kind, stepId)`: kind `next`\|`skip`\|`missing`\|`answered`, stepId the current step's id (a stale id is ignored) | `{ok, status, step}`, or `{ok:false}` when no tour is running or the id is stale |
+| `tour:restart` | the Help page only | none | `{ok:true}`; starts the tour again from step 1 |
+
+New config key: `tourState` (`{status: 'not-started'|'running'|'finished'|'skipped', step, at}`), written only by `src/first-run-tour-main.js`. Finished or skipped never starts again on its own.
+
 ## Desktop widget polish IPC (`src/widget-polish-main.js`)
 
 Local Electron IPC only; no network, no new file. Every channel checks its sender and returns `null` to anyone else.

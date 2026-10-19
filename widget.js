@@ -88,7 +88,7 @@ const bubble = window.InputBubble.create(bubbleEl, {
   mode: 'widget',
   maxRows: 2,
   api: {
-    answerInput: (id, optionId, more) => window.trafficLight.answerInput(id, optionId, more),
+    answerInput: (id, optionId, more) => (tourInput && id === tourInput.id ? tourAnswered() : window.trafficLight.answerInput(id, optionId, more)),
     openInput: (id) => window.trafficLight.openInput(id),
     copyCommand: (id) => window.trafficLight.copyInputCommand(id),
     openAutoRule: (id) => window.trafficLight.openAutoRule({ inputId: id }),
@@ -100,6 +100,23 @@ const bubble = window.InputBubble.create(bubbleEl, {
   },
   onLayout: () => reportBubble(),
   onScreen: () => stripAck === bubblePx,
+});
+// First-run tour, demo only: a made-up question in the bubble; answering it
+// moves the tour on and never reaches a hook (src/first-run-tour-main.js).
+let tourInput = null;
+const withTourInput = (inputs) => (tourInput ? [...inputs, tourInput] : inputs);
+function tourAnswered() {
+  const id = tourInput.id;
+  tourInput = null;
+  bubble.update(lastInputs);
+  window.tourApi?.action('answered', 'waiting');
+  return Promise.resolve({ ok: true, id });
+}
+document.addEventListener('plexiform-tour', (e) => {
+  const next = e.detail && e.detail.demoInput && typeof e.detail.demoInput.id === 'string' ? e.detail.demoInput : null;
+  if ((next && next.id) === (tourInput && tourInput.id)) return;
+  tourInput = next;
+  bubble.update(withTourInput(lastInputs));
 });
 window.trafficLight.onStripApplied((px) => { stripAck = px; if (px === bubblePx) bubble.revealed(); });
 // Also on resize: widening the window rewraps the text, so the height changes.
@@ -139,7 +156,7 @@ function applyStatus(data) {
   lastInputs = Array.isArray(data.inputs) ? data.inputs : lastInputs;
   if (hovering) loadCards();
   if (data.reason === 'travel') bubble.update([]);
-  else if (Array.isArray(data.inputs)) bubble.update(data.inputs, { scopes: window.WorkScopeView.scopesBySession(data.sessions) });
+  else if (Array.isArray(data.inputs)) bubble.update(withTourInput(data.inputs), { scopes: window.WorkScopeView.scopesBySession(data.sessions) });
   // A look preview carries no budget field: keep what is showing.
   if (data.budget !== undefined || data.reason === 'travel') renderBudget(data.reason === 'travel' ? null : data.budget);
   renderAway(data.reason === 'travel' ? null : data.away, data.reason === 'travel' ? null : data.team);

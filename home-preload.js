@@ -35,3 +35,6 @@ contextBridge.exposeInMainWorld('demoApi', {
   start: () => ipcRenderer.invoke('demo:start'),
   exit: () => ipcRenderer.invoke('demo:exit'),
 });
+
+// First-run tour (src/first-run-tour-main.js): main pushes the step; the page answers Next / Skip / missing.
+contextBridge.exposeInMainWorld('tourApi', { onStep: (cb) => ipcRenderer.on('tour:step', (e, step) => cb(step)), action: (kind, id) => ipcRenderer.invoke('tour:action', String(kind), String(id)) });
