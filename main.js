@@ -904,6 +904,7 @@ function computeState(opts = {}) {
     : Rules.resolve(config.rules, sessions, Date.now(), env);
   const agentCount = Rules.liveAgents(sessions).length;
   require('./src/seasonal-main.js').apply(look, owned, config);
+  require('./src/guardrails-main.js').applyLamp(look, requests);
   const minions = config.showAgents ? Rules.filterAgentKinds(Rules.liveAgents(sessions), config.agentKinds).slice(0, 32) : [];
   const sNote = spendNote(config.rules, fired, sessions, spend);
   const stuck = Stuck.summary(sessions);
@@ -4714,6 +4715,7 @@ utilityHandle('mcp-set-enabled', (e) => fromUtilityPage(e, 'aitools'), (_e, on) 
 const AiTools = require('./src/ai-tools-wire.js').wire({ ipcMain, shell, clipboard, home: os.homedir(), runtime: HOOK_RUNTIME, rootDir: ROOT_DIR, fromPage: (e) => fromUtilityPage(e, 'aitools'), askFromWidget: () => !!loadConfig().askFromWidget, ephemeral: EPHEMERAL, openPage: openBuddy, onClaudeConsent: (on) => saveConfig({ claudeAutoConnect: on }) });
 const aiToolsOpen = (destination) => AiTools.open(destination);
 require('./src/home-main.js').register({ ipcMain, allowed: (e) => fromUtilityPage(e, 'home'), state: () => aggregateState(), localSessions, tools: () => AiTools.quick(), myDay: MyDay, openPage: openBuddy, openAiTools: aiToolsOpen, collisions: CollisionAlerts.rowCollisions(collisionAlerts), costGuard: () => (costGuardReport ? costGuardReport() : null), resumeCap: () => (costGuardResume ? costGuardResume() : null), demo: Demo });
+require('./src/guardrails-main.js').install({ ipcMain, dialog, shell, BrowserWindow, rootDir: ROOT_DIR, allowed: (e) => fromUtilityPage(e, 'home'), broadcast: () => broadcastStatus(), log: console.log });
 require('./src/widget-lane-main.js').install({ ipcMain, send: (ch, v) => { if (win && !win.isDestroyed()) win.webContents.send(ch, v); }, allowed: (e) => !!win && !win.isDestroyed() && e.sender === win.webContents, sources: { state: () => aggregateState(), local: localSessions, collisions: collisionAlerts, git, spend: () => spendSnapshot(loadConfig()), warnAt: () => loadConfig().spend.warnAt } });
 // Home's "Start with a pack" card (src/starter-pack-main.js): the stack of recent folders, the matching gallery pack, one confirm, then its first recipe as a task.
 {

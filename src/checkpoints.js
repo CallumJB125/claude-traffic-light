@@ -17,6 +17,11 @@ const CheckpointGit = require('./checkpoint-git');
 const DiffReview = require('./diff-review');
 const TurnUndo = require('./checkpoint-undo');
 const crypto = require('node:crypto');
+const { EventEmitter } = require('node:events');
+
+// 'turn-end' {sessionId, top, turn, before, after} after each saved turn, and
+// 'ready' with the instance register() made (src/guardrails-main.js listens).
+const events = new EventEmitter();
 
 const { REF_ROOT } = CheckpointGit;
 const CONFIG_FILE = 'checkpoints.json';
@@ -236,6 +241,7 @@ function createCheckpoints({ rootDir, entitlements, git = CheckpointGit.createGi
         return { turn: n, before: parent, after: end };
       });
       notify();
+      try { events.emit('turn-end', { sessionId, top: repo.top, turn: done.turn, before: done.before, after: done.after }); } catch (e) { log(`[checkpoints] turn-end listener: ${e?.message ?? e}`); }
       if (done.before) void reviewTurn(repo, sessionId, done);
       return { turn: done.turn };
     });
@@ -443,6 +449,7 @@ function register(ctx) {
     return false;
   };
   const cps = createCheckpoints({ rootDir, entitlements, git, notify, isBusy, log });
+  events.instance = cps; events.emit('ready', cps);
   watcher = createTurnWatcher({ dir: path.join(rootDir, 'sessions'), log,
     onEvent: (ev, s) => { (ev === 'start' ? cps.turnStart(s) : cps.turnEnd(s)).catch((e) => log(`[checkpoints] ${ev}: ${e?.message ?? e}`)); } });
   const sweep = () => cps.gcAll().catch((e) => log(`[checkpoints] clean-up: ${e?.message ?? e}`));
@@ -518,4 +525,4 @@ function register(ctx) {
   return cps;
 }
 
-module.exports = { register, createCheckpoints, createTurnWatcher, turnStep, turnRef, safetyRef, refSid, END };
+module.exports = { events, register, createCheckpoints, createTurnWatcher, turnStep, turnRef, safetyRef, refSid, END };

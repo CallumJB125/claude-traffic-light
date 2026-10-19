@@ -83,6 +83,7 @@
       "home-digest.js",
       "home-preload.js",
       "home-alerts-view.js",
+      "home-guardrails-view.js",
       "home-starter.js",
       "demo-banner.js",
       "tour-coachmark.js",

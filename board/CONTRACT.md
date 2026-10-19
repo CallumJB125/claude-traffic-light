@@ -1228,3 +1228,12 @@ Local Electron IPC only; nothing reaches a hub. The one outbound flow is `voice-
 | `tasks:voice-draft` | Tasks page → main (`invoke`), the Tasks page only (`tasksSenderOk`) | none → `string \| null` | Returns the confirmed words once and clears them; the page fills the New task composer. The task is still created only by `tasks:create` after the user picks a folder and presses Start task |
 | `pointer:play` | main → pointer overlay (`pointer-overlay-preload.js`) | `{reduced, ms, from:{x,y}\|null, points:[{x, y, label ≤40}] ≤3}` in the display's own coordinates | One transparent, frameless, `focusable:false`, click-through (`setIgnoreMouseEvents(true)`) window per display with a point; main destroys every window by 6 s. The page sends nothing back |
 | `voice-status` (extended) | Preferences | none | adds `preset: 'Control+Alt+Space'` and `screenAccess` (`granted`\|`denied`\|`not-determined`\|`restricted`\|`unsupported`) |
+
+## Home IPC: project safety (`src/guardrails-main.js`)
+
+Local Electron IPC only. Findings never carry a secret (redacted preview only), a session id or an absolute path; ids are opaque hex. Restoring files asks in a native dialog first; "Make a new key" opens only a fixed provider URL from `src/guardrails.js`.
+
+| Channel | Sender | Request | Response |
+|---|---|---|---|
+| `guardrails:list` | the Home page only (`fromUtilityPage(e, 'home')`) | none | `{findings: [{id, type: 'secret'\|'browser'\|'db'\|'env', status: 'new'\|'open'\|'resolved', title, fix, preview, project, canRotate, canRestore}], offers: [{id: 'db:…', project, title, fix}], careful: [{id: 'danger:…', title, target, project, note}]}`; listing marks `new` findings `open` (the lamp stops being red for them) |
+| `guardrails:act` | the Home page only | `id: string ≤ 100`, `action: 'dismiss'\|'rotate'\|'restore'\|'recheck'\|'db-on'\|'db-off'` | `{ok, note?, error?, cancelled?}`; `restore` puts files back to before the finding's turn via `src/checkpoints.js` restore (safety checkpoint first); `db-on`/`db-off` answer a per-project database-rules offer |

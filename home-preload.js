@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld('homeApi', {
   teamInbox: () => ipcRenderer.invoke('home:team-inbox'),
   inboxRead: (keys) => (Array.isArray(keys) && keys.length <= 50 && keys.every((k) => typeof k === 'string' && k.length <= 300) ? ipcRenderer.invoke('home:inbox-read', keys) : Promise.resolve({ ok: false, error: 'invalid' })),
   answerInput: (id, optionId) => (typeof id === 'string' && id.length <= 100 && typeof optionId === 'string' && optionId.length <= 100 ? ipcRenderer.invoke('home:answer-input', id, optionId) : Promise.resolve({ ok: false, error: 'invalid' })),
+  guardrails: () => ipcRenderer.invoke('guardrails:list'),
+  guardrailsAct: (id, action) => (typeof id === 'string' && id.length <= 100 && ['dismiss', 'rotate', 'restore', 'recheck', 'db-on', 'db-off'].includes(action) ? ipcRenderer.invoke('guardrails:act', id, action) : Promise.resolve({ ok: false })),
   openCard: (handle) => (typeof handle === 'string' && handle.length <= 100 ? ipcRenderer.invoke('home:open-card', handle) : Promise.resolve(false)),
   digest: {
     get: (period) => ipcRenderer.invoke('digest:get', period === 'week' ? 'week' : 'day'),
