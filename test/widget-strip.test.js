@@ -81,3 +81,45 @@ test('the widget is only told its bubble has room when the window was not clampe
   assert.equal(W.shouldAck({ kind: 'away', px: 64 }, 120, null, 300), false);
   assert.equal(W.shouldAck(W.NONE, 120, null, 300), false);
 });
+
+// ── Session rows (wave 1, lane A) ───────────────────────────────────────────
+const row = (id, signal, min = 0) => ({ sessionId: id, signal, cwd: `/p/${id}`, updatedAt: new Date(Date.parse('2026-10-19T12:00:00Z') - min * 60000).toISOString() });
+
+test('session rows: pinned first, then waiting, then working, then idle', () => {
+  const m = W.sessionRows([row('i1', 'idle'), row('w1', 'tool-use', 1), row('a1', 'permission-ask', 5), row('p1', 'idle')], { pinnedId: 'p1' });
+  assert.deepEqual(m.rows.map((r) => r.id), ['p1', 'a1', 'w1', 'i1']);
+  assert.equal(m.rows[0].pinned, true);
+  assert.equal(m.pinnedId, 'p1');
+  assert.equal(m.collapsed, false);
+  assert.ok(m.rows.every((r) => r.team === false));
+});
+
+test('session rows: idle sessions fold into one "+N idle" chip past the threshold', () => {
+  const list = [row('a', 'tool-use'), row('b', 'tool-use'), row('c', 'idle', 1), row('d', 'idle', 2), row('e', 'idle', 3)];
+  const m = W.sessionRows(list);
+  assert.equal(m.collapsed, true);
+  assert.deepEqual(m.rows.map((r) => r.kind), ['session', 'session', 'idle']);
+  assert.deepEqual(m.rows[2], { kind: 'idle', count: 3, ids: ['c', 'd', 'e'], team: false });
+  assert.equal(W.sessionRows(list, { collapseAfter: 10 }).collapsed, false);
+  assert.equal(W.COLLAPSE_AFTER, 4);
+});
+
+test('session rows: a pin to a session that is gone is ignored', () => {
+  const m = W.sessionRows([row('a', 'tool-use')], { pinnedId: 'gone' });
+  assert.equal(m.pinnedId, null);
+  assert.equal(m.rows[0].pinned, false);
+});
+
+test('session rows: teammates are a second row marked team', () => {
+  const m = W.sessionRows([row('a', 'tool-use')], { teammates: [{ member_id: 'm1', name: 'Ann', sessions: [{ agent: 'codex', repo_short: 'plex', state: 'waiting' }, { agent: 'claude', repo_short: 'site', state: 'idle' }] }] });
+  assert.equal(m.team.length, 2);
+  assert.ok(m.team.every((r) => r.team === true && r.name === 'Ann'));
+  assert.equal(m.team[0].session.signal, 'permission-ask');
+  assert.equal(m.team[1].session.signal, 'idle');
+  assert.equal(m.rows.length, 1);
+});
+
+test('session rows: junk input yields an empty model', () => {
+  assert.deepEqual(W.sessionRows(null), { rows: [], team: [], pinnedId: null, collapsed: false });
+  assert.deepEqual(W.sessionRows([null, 3, 'x'], { teammates: [null, { sessions: [null] }] }).rows, []);
+});

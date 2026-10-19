@@ -55,4 +55,43 @@ function resizeBase(current, strip = NONE, factor, limits, workArea = null) {
   return stripBounds(next, NONE, { kind: strip.kind, px: strip.px, minWidth: strip.minWidth }, workArea);
 }
 
-module.exports = { NONE, baseOf, stripBounds, sameStrip, blocksTravel, resizeBase, shouldAck };
+// ── Session rows (wave 1, lane A) ───────────────────────────────────────────
+// The strip of session chips under Claude, as a model the renderer paints:
+// the pinned session first, then active sessions, then idle ones, which fold
+// into one "+N idle" chip once the strip would hold more than `collapseAfter`
+// rows (default 4). Teammates' sessions (board presence) are a second row,
+// every entry marked `team: true`. Pure: nothing here touches the DOM.
+const { WAITING, IDLE } = require('./session-card-view.js');
+const COLLAPSE_AFTER = 4;
+const rowId = (s) => (s && typeof s.sessionId === 'string' && s.sessionId) || null;
+const isIdle = (s) => IDLE.has(String(s && s.signal || '')) && !WAITING.has(String(s && s.signal || ''));
+const byRecent = (a, b) => (Date.parse(b.updatedAt || '') || 0) - (Date.parse(a.updatedAt || '') || 0);
+
+// sessions: the widget's own rows; teammates: [{name, sessions:[{agent, repo_short, branch, state}]}].
+// → { rows: [{kind:'session', id, session, pinned, waiting, idle, team:false} | {kind:'idle', count, ids, team:false}],
+//     team: [{kind:'session', id, session, name, team:true}], pinnedId, collapsed }
+function sessionRows(sessions = [], { pinnedId = null, teammates = [], collapseAfter = COLLAPSE_AFTER } = {}) {
+  const list = (Array.isArray(sessions) ? sessions : []).filter((s) => s && typeof s === 'object');
+  const row = (s) => ({ kind: 'session', id: rowId(s), session: s, pinned: !!pinnedId && rowId(s) === pinnedId, waiting: WAITING.has(String(s.signal || '')), idle: isIdle(s), team: false });
+  const pinned = pinnedId ? list.filter((s) => rowId(s) === pinnedId) : [];
+  const rest = list.filter((s) => !pinned.includes(s));
+  const active = rest.filter((s) => !isIdle(s)).sort((a, b) => Number(b.signal && WAITING.has(b.signal)) - Number(a.signal && WAITING.has(a.signal)) || byRecent(a, b));
+  const idle = rest.filter(isIdle).sort(byRecent);
+  const total = pinned.length + active.length + idle.length;
+  const collapsed = idle.length > 1 && total > Math.max(0, collapseAfter);
+  const rows = [...pinned.map(row), ...active.map(row)];
+  if (collapsed) rows.push({ kind: 'idle', count: idle.length, ids: idle.map(rowId).filter(Boolean), team: false });
+  else rows.push(...idle.map(row));
+  const team = [];
+  for (const m of Array.isArray(teammates) ? teammates : []) {
+    if (!m || typeof m !== 'object') continue;
+    const name = typeof m.name === 'string' ? m.name : '';
+    for (const [i, s] of (Array.isArray(m.sessions) ? m.sessions : []).entries()) {
+      if (!s || typeof s !== 'object') continue;
+      team.push({ kind: 'session', id: `team:${m.member_id || name}:${i}`, session: { cwd: s.repo_short || '', tool: s.agent || '', signal: s.state === 'waiting' ? 'permission-ask' : s.state === 'idle' ? 'idle' : 'tool-use', branch: s.branch || null }, name, team: true });
+    }
+  }
+  return { rows, team, pinnedId: pinned.length ? pinnedId : null, collapsed };
+}
+
+module.exports = { NONE, baseOf, stripBounds, sameStrip, blocksTravel, resizeBase, shouldAck, sessionRows, COLLAPSE_AFTER };

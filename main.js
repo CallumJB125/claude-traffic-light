@@ -1995,6 +1995,7 @@ ipcMain.handle('account-open', (e, which) => {
 const widgetOnly = (e) => fromPage(e, win?.webContents);
 const teamHint = () => TeamEntry.hintFor(accountSummary(), loadConfig().hints?.teamSeen === true);
 ipcMain.handle('team-hint', (e) => widgetOnly(e) ? teamHint() : null);
+require('./src/widget-cards-main.js').install({ ipcMain, allowed: widgetOnly, getSessions: () => ({ sessions: aggregateState().sessions || [] }), getSpend: async (id) => WorkCost.sessionSpend(await getUsageTurns(), { provider: 'claude', session_id: id }), config: { load: loadConfig, save: saveConfig } }); // privacy-flow: widget-session-card
 ipcMain.handle('team-hint-done', (e, open) => {
   if (!widgetOnly(e)) return false;
   const hint = teamHint();

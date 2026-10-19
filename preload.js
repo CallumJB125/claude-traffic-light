@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('trafficLight', {
   openClaude: () => ipcRenderer.invoke('open-claude'),
   goToNeedingSession: () => ipcRenderer.invoke('go-to-needing-session'),
+  getSessionCards: () => ipcRenderer.invoke('widget:session-cards'), pinSession: (id) => ipcRenderer.invoke('widget:pin-session', typeof id === 'string' ? id : null),
   getAggregateStatus: () => ipcRenderer.invoke('get-aggregate-status'),
   cursorInWindow: () => ipcRenderer.invoke('cursor-in-window'),
   getWindowPosition: () => ipcRenderer.invoke('get-window-position'),

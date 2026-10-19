@@ -39,7 +39,7 @@ const app = document.getElementById('app');
 let lastRuleId = null;
 // The agents roster is a hover reveal, so it never covers Claude at rest.
 let hovering = false;
-app.addEventListener('mouseenter', () => { hovering = true; if (rig.look) rig.setLook({ ...rig.look, showRoster: rig.look.agentRoster !== false }); });
+app.addEventListener('mouseenter', () => { hovering = true; loadCards(); if (rig.look) rig.setLook({ ...rig.look, showRoster: rig.look.agentRoster !== false }); });
 app.addEventListener('mouseleave', () => { hovering = false; if (rig.look) rig.setLook({ ...rig.look, showRoster: false }); });
 let sleepSince = null;
 // when the current cigarette run started; the rig counts its 5-minute cigarettes from it
@@ -126,6 +126,8 @@ function applyStatus(data) {
   if (smokeSince) look.smokeSince = smokeSince;
   rig.setLook(look);
   // A preview carries no inputs: keep what is showing rather than flicker.
+  lastInputs = Array.isArray(data.inputs) ? data.inputs : lastInputs;
+  if (hovering) loadCards();
   if (data.reason === 'travel') bubble.update([]);
   else if (Array.isArray(data.inputs)) bubble.update(data.inputs, { scopes: window.WorkScopeView.scopesBySession(data.sessions) });
   // A look preview carries no budget field: keep what is showing.
@@ -445,7 +447,7 @@ let clickThrough = null;
 const solidAt = (x, y) => {
   const el = document.elementFromPoint(x, y);
   if (!el) return false;
-  if (el.closest('#gear, #help, #bubble, #budget, #away, #update, .minion')) return true;
+  if (el.closest('#gear, #help, #bubble, #budget, #away, #update, .minion, #strip, #session-card')) return true;
   return rig.solidAt(x, y);
 };
 const hitTest = (x, y) => {
@@ -575,3 +577,111 @@ app.addEventListener('contextmenu', (e) => {
   e.preventDefault();
   window.trafficLight.widgetMenu(e.shiftKey || e.altKey);
 });
+
+// Session strip and hover cards (wave 1, lane A). While the pointer is over
+// the widget, a strip of session chips shows at the top: the pinned one first,
+// idle sessions folded into "+N idle", teammates on a second row. Resting on a
+// chip (or focusing it) for 350 ms shows that session's card in place of the
+// one-line tooltip. Every string comes from session files or a teammate: text
+// only (textContent), never markup.
+const CARD_DELAY_MS = 350;
+const stripEl = document.getElementById('strip');
+const cardEl = document.getElementById('session-card');
+let lastInputs = [];
+let cardsSeq = 0;
+let cardsModel = null;
+let cardTimer = 0;
+let cardFor = null;
+let cardsAt = 0;
+function loadCards(force = false) {
+  if (!window.trafficLight.getSessionCards) return;
+  if (!force && Date.now() - cardsAt < 1000) return;
+  cardsAt = Date.now();
+  const seq = ++cardsSeq;
+  window.trafficLight.getSessionCards().then((m) => { if (seq === cardsSeq && m) { cardsModel = m; paintStrip(); } }).catch(() => {});
+}
+function chipFor(row) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  if (row.kind === 'idle') {
+    b.className = 'chip idle-count';
+    b.textContent = `+${row.count} idle`;
+    b.setAttribute('aria-label', `${row.count} idle sessions`);
+    return b;
+  }
+  const c = row.card;
+  b.className = `chip${c.waiting ? ' waiting' : c.idle ? ' idle' : ' active'}${row.pinned ? ' pinned' : ''}${row.team ? ' team' : ''}`;
+  b.dataset.id = row.id || '';
+  const dot = document.createElement('i'); dot.className = 'dot';
+  const label = document.createElement('span');
+  label.textContent = row.team && c.teammate ? c.teammate.initials : c.title;
+  b.append(dot, label);
+  b.setAttribute('aria-label', `${c.title}: ${c.state}`);
+  const show = () => { clearTimeout(cardTimer); cardTimer = setTimeout(() => showCard(row, b), CARD_DELAY_MS); };
+  b.addEventListener('mouseenter', show);
+  b.addEventListener('focus', () => { clearTimeout(cardTimer); showCard(row, b); });
+  b.addEventListener('mouseleave', () => { clearTimeout(cardTimer); cardTimer = setTimeout(hideCard, 200); });
+  b.addEventListener('blur', (e) => { if (!cardEl.contains(e.relatedTarget)) hideCard(); });
+  return b;
+}
+function paintStrip() {
+  const m = cardsModel;
+  const mine = m ? m.rows.map(chipFor) : [];
+  const team = m ? m.team.map(chipFor) : [];
+  const r1 = document.createElement('div'); r1.className = 'strip-row'; r1.replaceChildren(...mine);
+  const r2 = document.createElement('div'); r2.className = 'strip-row team'; r2.replaceChildren(...team);
+  stripEl.replaceChildren(...(mine.length ? [r1] : []), ...(team.length ? [r2] : []));
+  document.body.classList.toggle('has-strip', mine.length + team.length > 0);
+  for (const el of stripEl.querySelectorAll('button')) el.addEventListener('mousedown', stop);
+  if (cardFor && !(m && [...m.rows, ...m.team].some((r) => r.id === cardFor))) hideCard();
+}
+function cardButton(label, onClick) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.textContent = label;
+  b.addEventListener('mousedown', stop);
+  b.addEventListener('click', (e) => { e.stopPropagation(); onClick(); });
+  return b;
+}
+const CARD_ACTIONS = {
+  open: () => cardButton('Open', async () => { const r = await window.trafficLight.goToNeedingSession().catch(() => null); if (r && r.feedback) showFeedback(r.feedback); hideCard(); }),
+  answer: (c) => cardButton('Answer', async () => {
+    const input = lastInputs.find((i) => i && i.session === c.id);
+    const r = input ? await window.trafficLight.openInput(input.id).catch(() => null) : await window.trafficLight.goToNeedingSession().catch(() => null);
+    if (r && (r.note || r.feedback)) showFeedback(r.note || r.feedback);
+    hideCard();
+  }),
+  pin: (c) => cardButton('Pin', async () => { await window.trafficLight.pinSession(c.id).catch(() => null); loadCards(true); }),
+  unpin: () => cardButton('Unpin', async () => { await window.trafficLight.pinSession(null).catch(() => null); loadCards(true); }),
+};
+function showCard(row, anchor) {
+  const c = row.card;
+  cardFor = row.id;
+  const head = document.createElement('div'); head.className = 'card-head';
+  if (c.teammate) { const av = document.createElement('span'); av.className = 'avatar'; av.textContent = c.teammate.initials; av.title = c.teammate.name; head.append(av); }
+  const t = document.createElement('span'); t.className = 'card-title'; t.textContent = c.title; head.append(t);
+  const lines = [head];
+  const st = document.createElement('div'); st.className = 'card-state'; st.textContent = c.state; lines.push(st);
+  if (c.spend) { const sp = document.createElement('div'); sp.className = 'card-spend'; sp.textContent = c.spend; lines.push(sp); }
+  if (c.teammate) { const who = document.createElement('div'); who.className = 'card-spend'; who.textContent = c.teammate.name; lines.push(who); }
+  const acts = c.actions.map((a) => CARD_ACTIONS[a] && CARD_ACTIONS[a](c)).filter(Boolean);
+  if (acts.length) { const box = document.createElement('div'); box.className = 'card-acts'; box.append(...acts); lines.push(box); }
+  cardEl.replaceChildren(...lines);
+  const r = anchor.getBoundingClientRect();
+  cardEl.style.top = `${Math.round(r.bottom + 4)}px`;
+  cardEl.classList.add('shown');
+  cardEl.setAttribute('aria-hidden', 'false');
+  document.body.classList.add('carding');
+}
+function hideCard() {
+  clearTimeout(cardTimer);
+  cardFor = null;
+  cardEl.classList.remove('shown');
+  cardEl.setAttribute('aria-hidden', 'true');
+  document.body.classList.remove('carding');
+}
+cardEl.addEventListener('mouseenter', () => clearTimeout(cardTimer));
+cardEl.addEventListener('mouseleave', () => { cardTimer = setTimeout(hideCard, 200); });
+cardEl.addEventListener('mousedown', stop);
+cardEl.addEventListener('focusout', (e) => { if (!cardEl.contains(e.relatedTarget) && !stripEl.contains(e.relatedTarget)) hideCard(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && cardFor) hideCard(); });

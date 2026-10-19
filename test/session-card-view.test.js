@@ -1,0 +1,61 @@
+// The widget's per-session hover card (src/session-card-view.js).
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const V = require('../src/session-card-view.js');
+
+const NOW = Date.parse('2026-10-19T12:00:00Z');
+const ago = (min) => new Date(NOW - min * 60000).toISOString();
+
+test('the title is the project folder name, never the path', () => {
+  const c = V.sessionCard({ sessionId: 's1', cwd: '/Users/me/work/plexiform', signal: 'tool-use', tool: 'Bash' }, { now: NOW });
+  assert.equal(c.title, 'plexiform');
+  assert.ok(!JSON.stringify(c).includes('/Users/me'));
+  assert.equal(V.sessionCard({ cwd: '/' }, { now: NOW }).title, 'session');
+});
+
+test('a working session says its tool and how long it has run, in words', () => {
+  const c = V.sessionCard({ sessionId: 's1', cwd: '/p/a', signal: 'tool-use', tool: 'Edit', startedAt: ago(75) }, { now: NOW });
+  assert.equal(c.state, 'Edit · running for 1 h 15');
+  assert.deepEqual(c.actions, ['open', 'pin']);
+});
+
+test('a waiting session says since when and offers Answer', () => {
+  const c = V.sessionCard({ sessionId: 's1', cwd: '/p/a', signal: 'permission-ask', tool: 'Bash', updatedAt: ago(7) }, { now: NOW });
+  assert.match(c.state, /^waiting on you since 7 min/);
+  assert.equal(c.waiting, true);
+  assert.deepEqual(c.actions, ['open', 'answer', 'pin']);
+});
+
+test('spend shows when known, with unpriced requests counted', () => {
+  assert.equal(V.sessionCard({ sessionId: 's', signal: 'idle' }, { now: NOW, spend: { cost_usd: 1.234, unpriced: 0 } }).spend, '$1.23 this session');
+  assert.equal(V.sessionCard({ sessionId: 's', signal: 'idle' }, { now: NOW, spend: { cost_usd: 140, unpriced: 2 } }).spend, '$140 this session (+2 unpriced)');
+  assert.equal(V.sessionCard({ sessionId: 's', signal: 'idle' }, { now: NOW }).spend, '');
+});
+
+test('a teammate card carries initials and no local actions', () => {
+  const c = V.sessionCard({ cwd: 'repo', signal: 'tool-use', tool: 'codex' }, { now: NOW, teammate: { name: 'Ann Lee' } });
+  assert.deepEqual(c.teammate, { name: 'Ann Lee', initials: 'AL' });
+  assert.deepEqual(c.actions, []);
+  assert.equal(V.initials('zoe'), 'ZO');
+  assert.equal(V.initials(''), '?');
+});
+
+test('pinned sessions offer Unpin; remote ones cannot be opened here', () => {
+  assert.deepEqual(V.sessionCard({ sessionId: 's', signal: 'idle', pinned: true }, { now: NOW }).actions, ['open', 'unpin']);
+  const r = V.sessionCard({ sessionId: 'remote:x', signal: 'permission-ask', remote: true, deviceName: 'Laptop' }, { now: NOW });
+  assert.deepEqual(r.actions, ['pin']);
+  assert.match(r.state, /on Laptop/);
+});
+
+test('control and bidi characters are stripped from untrusted text', () => {
+  const c = V.sessionCard({ cwd: '/p/evil‮exe\u0007', signal: 'tool-use', tool: 'Ba\u0000sh' }, { now: NOW });
+  assert.equal(c.title, 'evilexe');
+  assert.match(c.state, /^Bash/);
+});
+
+test('words is coarse', () => {
+  assert.equal(V.words(30000), 'under a minute');
+  assert.equal(V.words(120 * 60000), '2 h');
+  assert.equal(V.words(3 * 86400000), '3 days');
+  assert.equal(V.words(-1), '');
+});
