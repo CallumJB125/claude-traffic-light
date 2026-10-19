@@ -657,13 +657,35 @@ function showVoiceText(text, ms) {
   tooltip.style.opacity = '1';
   if (ms) voiceTimer = setTimeout(() => { tooltip.style.opacity = ''; refresh(); }, ms);
 }
+// Agent mode: "Start a task: …?" waits for a click; nothing starts without one.
+let voiceOfferId = null;
+let voiceOfferTimer = null;
+function showVoiceOffer(o) {
+  clearTimeout(voiceOfferTimer);
+  voiceOfferId = o && typeof o.id === 'string' ? o.id : null;
+  document.body.classList.toggle('voice-offer', !!voiceOfferId);
+  if (!voiceOfferId) return;
+  document.getElementById('voice-offer-text').textContent = `Start a task: ${String(o.text || '')}?`;
+  voiceOfferTimer = setTimeout(() => showVoiceOffer(null), 120000);
+}
+for (const [id, action] of [['voice-offer-start', 'start'], ['voice-offer-cancel', 'cancel']]) {
+  const b = document.getElementById(id);
+  b.addEventListener('mousedown', (e) => e.stopPropagation());
+  b.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const offer = voiceOfferId;
+    showVoiceOffer(null);
+    if (offer) window.trafficLight.voiceOffer(offer, action).catch(() => {});
+  });
+}
 window.trafficLight.onVoice((st) => {
   const listening = st.state === 'listening';
   document.body.classList.toggle('listening', listening);
   rig.talking(st.state === 'talking');
   if (listening) showVoiceText(st.partial ? `“${st.partial}”` : 'Listening…');
   else if (st.state === 'authorizing') showVoiceText(`Allow ${window.Brand.name} in the macOS prompt`);
-  else if (st.state === 'thinking') showVoiceText(st.heard ? `“${st.heard}”` : '…');
+  else if (st.state === 'thinking') showVoiceText(st.text || (st.heard ? `“${st.heard}”` : '…'));
+  else if (st.state === 'offer') { showVoiceOffer(st.offer); return; }
   else if (st.state === 'talking') showVoiceText(st.text || '');
   else if (st.state === 'error') showVoiceText(st.error || 'Could not listen', 6000);
   else showVoiceText(tooltip.textContent, 4000);

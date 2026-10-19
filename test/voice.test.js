@@ -45,8 +45,8 @@ test('edit distance and hotkeys', () => {
 });
 
 test('voice config: hotkey off until picked, long-press on, free-form off', () => {
-  assert.deepEqual(V.normalizeConfig(undefined), { hotkey: null, longPress: true, askClaude: false });
-  assert.deepEqual(V.normalizeConfig({ hotkey: 'F15', longPress: false, askClaude: true }), { hotkey: 'F15', longPress: false, askClaude: true });
+  assert.deepEqual(V.normalizeConfig(undefined), { hotkey: null, longPress: true, askClaude: false, screen: false, point: true });
+  assert.deepEqual(V.normalizeConfig({ hotkey: 'F15', longPress: false, askClaude: true }), { hotkey: 'F15', longPress: false, askClaude: true, screen: false, point: true });
   assert.equal(V.normalizeConfig({ hotkey: 'Command+Q' }).hotkey, null, 'only offered keys');
   assert.equal(V.normalizeConfig({ askClaude: 'yes' }).askClaude, false, 'only an explicit true');
 });

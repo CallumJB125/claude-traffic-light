@@ -285,11 +285,15 @@
     <label for="voice-hotkey">Hold to ask a question</label>
     <div class="row">
       <select id="voice-hotkey" aria-describedby="voice-hint"><option value="">Off — pick a key</option></select>
+      <button type="button" id="voice-preset" title="Sets the key to Control + Option + Space: hold all three while you ask, let go to send">Hold Control + Option + Space to talk</button>
     </div>
     <div class="hint" id="voice-hint" role="status" aria-live="polite">Hold the key, ask “What's blocked?”, “What's my Claude doing?”, “How much have I spent today?” or “What happened while I was out?”, and let go. Plexiform answers out loud. Speech is turned into text on this Mac; audio is never stored or sent.</div>
     <label class="row"><input type="checkbox" id="voice-longPress" /> Press and hold the widget to ask</label>
     <label class="row"><input type="checkbox" id="voice-askClaude" /> Other questions: ask my own Claude (Haiku)</label>
     <div class="hint">Anything outside the four questions goes to your own <code>claude</code> login, with no tools, settings or MCP servers, capped at 5 cents a question. It sees session states and today's spend, never your code.</div>
+    <label class="row"><input type="checkbox" id="voice-screen" /> Use the screen when I ask</label>
+    <label class="row"><input type="checkbox" id="voice-point" /> Point at things on screen</label>
+    <div class="hint" id="voice-screen-hint">When you let go of the key or the widget, Plexiform takes one picture of the display under your mouse and gives it to your own <code>claude</code> login with your question, so it can say where things are. The picture is only readable by that one run, never kept, and deleted as soon as the answer comes back, capped at 10 cents a question. Needs Screen Recording for Plexiform in System Settings, Privacy and Security. “Plexiform, build …” offers to start a task; nothing starts until you press Start.</div>
   </div>
   <!-- ── end Voice ── -->
   </div>

@@ -4251,12 +4251,38 @@ let awayFrom = null;
 let lastAway = null;
 const AWAY_FRESH_MS = 12 * 3600000;
 
+// Screen-aware questions and pointing (src/voice-capture-main.js,
+// src/pointer-overlay-main.js), and agent mode's confirm step (src/voice-offer.js).
+const voiceClaudeEnv = () => Voice.claudeEnv(process.env, `${path.join(os.homedir(), '.local', 'bin')}:/opt/homebrew/bin:/usr/local/bin`);
+const VoiceCapture = require('./src/voice-capture-main.js');
+const voiceScreen = VoiceCapture.create({
+  systemPreferences, desktopCapturer: require('electron').desktopCapturer, screen, fs, path, tmpdir: os.tmpdir(),
+  randomHex: () => crypto.randomBytes(6).toString('hex'), askClaude: VoiceHelper.askClaude, spawn, env: voiceClaudeEnv(), log: console.log,
+});
+const pointer = require('./src/pointer-overlay-main.js').create({
+  BrowserWindow, screen, htmlPath: path.join(__dirname, 'pointer-overlay.html'), preloadPath: path.join(__dirname, 'pointer-overlay-preload.js'),
+  reducedMotion: () => reducedMotion || prefersReducedMotion(), log: console.log,
+});
+const voiceOffers = require('./src/voice-offer.js').create();
+let voiceTaskDraft = null;
+function widgetCentre() {
+  if (!win || win.isDestroyed()) return null;
+  const b = win.getBounds();
+  return { x: b.x + Math.round(b.width / 2), y: b.y + Math.round(b.height / 2) };
+}
+
 async function voiceReply(text, onCancel) {
+  pointer.close();
   const intent = Voice.parseIntent(text);
   const cfg = Voice.normalizeConfig(loadConfig().voice);
-  const free = intent.intent === 'unknown' && cfg.askClaude;
+  const free = intent.intent === 'unknown' && (cfg.askClaude || cfg.screen);
   // The transcript itself stays out of app.log; the intent is enough to debug.
-  console.log(`[voice] intent ${intent.intent}${free ? ' (asking claude)' : ''}`);
+  console.log(`[voice] intent ${intent.intent}${free ? (cfg.screen ? ' (asking claude with the screen)' : ' (asking claude)') : ''}`);
+  if (intent.intent === 'agent') {
+    const o = voiceOffers.offer(intent.task);
+    if (o) sendVoice({ state: 'offer', offer: o });
+    return Voice.answer(intent, {});
+  }
   const st = aggregateState({ ignoreTravel: true });
   const now = Date.now();
   const ctx = { sessions: st.sessions || [], pending: st.pending || [], now };
@@ -4267,20 +4293,33 @@ async function voiceReply(text, onCancel) {
     ctx.since = away ? away.from : undefined;
     ctx.awayKnown = !!away;
   }
+  let prefix = '';
+  if (free && cfg.screen) {
+    sendVoice({ state: 'thinking', heard: text, text: 'Looking…' });
+    const looking = speak('Looking');
+    onCancel(() => { try { looking?.kill(); } catch { /* done */ } });
+    const r = await voiceScreen.ask({ question: text, snap: Voice.snapshot(ctx), point: cfg.point, onCancel });
+    if (r.text) {
+      if (r.points.length) pointer.show({ from: widgetCentre(), points: r.points });
+      return r.text;
+    }
+    if (r.permission) prefix = `${VoiceCapture.PERMISSION_TEXT} `;
+  }
   if (free) {
     const ask = VoiceHelper.askClaude({
       spawn, fs, tmpdir: os.tmpdir(), args: Voice.claudeArgs(), prompt: Voice.claudePrompt(text, Voice.snapshot(ctx)),
-      env: Voice.claudeEnv(process.env, `${path.join(os.homedir(), '.local', 'bin')}:/opt/homebrew/bin:/usr/local/bin`),
+      env: voiceClaudeEnv(),
     });
     onCancel(ask.cancel);
     const said = await ask.promise;
-    if (said) return said;
+    if (said) return prefix + said;
   }
-  return Voice.answer(intent, ctx);
+  return prefix + Voice.answer(intent, ctx);
 }
 
 function startListening(holdKey) {
   flow.interrupt();
+  pointer.close();
   const r = listener.start({ holdKey });
   if (!r.ok && r.reason !== 'already listening') sendVoice({ state: 'error', error: r.reason });
   return r;
@@ -4309,7 +4348,7 @@ function initVoice() {
   powerMonitor.on('unlock-screen', back);
   powerMonitor.on('resume', back);
   applyVoiceHotkey();
-  onQuit(app, () => { globalShortcut.unregisterAll(); listener.cancel(); });
+  onQuit(app, () => { globalShortcut.unregisterAll(); listener.cancel(); pointer.close(); });
 }
 
 // A long-press where voice can't work (not a Mac, helper not bundled) stays
@@ -4320,11 +4359,31 @@ ipcMain.handle('voice-start', () => {
 });
 ipcMain.handle('voice-enabled', () => listener.available() && Voice.normalizeConfig(loadConfig().voice).longPress);
 ipcMain.handle('voice-stop', () => listener.stop());
+// Agent mode: only the widget's Start on the current offer opens the Tasks
+// composer with the words filled in; the task itself is created there, after
+// the user picks a folder and presses Start task (tasks:create).
+ipcMain.handle('voice-offer', (e, id, action) => {
+  if (!widgetOnly(e)) return { ok: false };
+  const task = voiceOffers.take(typeof id === 'string' ? id : '', action === 'start' ? 'start' : 'cancel');
+  if (!task) return { ok: false };
+  voiceTaskDraft = task;
+  openBuddy('tasks');
+  for (const wc of tasksPages()) wc.send('tasks:voice-draft-ready');
+  return { ok: true };
+});
+ipcMain.handle('tasks:voice-draft', (e) => {
+  if (!tasksSenderOk(e)) return null;
+  const t = voiceTaskDraft;
+  voiceTaskDraft = null;
+  return t;
+});
 utilityHandle('voice-status', settingsOnly, () => ({
   available: listener.available(),
   reason: listener.available() ? null : listener.unavailableReason(),
   hotkeys: Voice.HOTKEYS.map(({ accelerator, label }) => ({ accelerator, label })),
   hotkeyTaken: voiceHotkeyTaken,
+  preset: Voice.PRESET_HOTKEY,
+  screenAccess: IS_MAC ? voiceScreen.permission() : 'unsupported',
 }));
 
 

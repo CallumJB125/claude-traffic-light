@@ -442,6 +442,11 @@
       const hotkey = document.getElementById('voice-hotkey');
       const longPress = document.getElementById('voice-longPress');
       const askClaude = document.getElementById('voice-askClaude');
+      const screenOn = document.getElementById('voice-screen');
+      const point = document.getElementById('voice-point');
+      const preset = document.getElementById('voice-preset');
+      const screenHint = document.getElementById('voice-screen-hint');
+      const screenIntro = screenHint.textContent;
       const hint = document.getElementById('voice-hint');
       const intro = hint.textContent;
       const [config, st] = await Promise.all([window.settingsApi.getConfig(), window.settingsApi.voiceStatus()]);
@@ -450,20 +455,34 @@
       hotkey.value = v.hotkey || '';
       longPress.checked = v.longPress !== false;
       askClaude.checked = !!v.askClaude;
+      screenOn.checked = v.screen === true;
+      point.checked = v.point !== false;
+      const syncScreen = (access) => {
+        point.disabled = !st.available || !screenOn.checked;
+        screenHint.textContent = screenOn.checked && access && access !== 'granted' && access !== 'unsupported'
+          ? 'Turn on Screen Recording for Plexiform in System Settings, Privacy and Security, Screen Recording. Until then questions are answered without the screen.'
+          : screenIntro;
+      };
+      syncScreen(st.screenAccess);
       const show = (cur) => {
         hint.textContent = !st.available ? st.reason
           : cur.taken ? `${cur.taken} is taken by another app — pick another key.`
             : intro;
       };
       show({ taken: st.hotkeyTaken });
-      if (!st.available) for (const el of [hotkey, longPress, askClaude]) el.disabled = true;
+      if (!st.available) for (const el of [hotkey, longPress, askClaude, screenOn, point, preset]) el.disabled = true;
+      // Pointing starts on with the screen switch; turning the screen on resets it to on.
+      screenOn.addEventListener('change', () => { if (screenOn.checked) point.checked = true; });
       const save = async () => {
-        await window.settingsApi.saveConfig({ voice: { hotkey: hotkey.value || null, longPress: longPress.checked, askClaude: askClaude.checked } });
+        await window.settingsApi.saveConfig({ voice: { hotkey: hotkey.value || null, longPress: longPress.checked, askClaude: askClaude.checked, screen: screenOn.checked, point: point.checked } });
         flash();
         const now = await window.settingsApi.voiceStatus();
         show({ taken: now.hotkeyTaken });
+        syncScreen(now.screenAccess);
       };
-      for (const el of [hotkey, longPress, askClaude]) el.addEventListener('change', () => save().catch((err) => { flash(err); hint.textContent = `Save failed — ${err.message}`; }));
+      const fail = (err) => { flash(err); hint.textContent = `Save failed — ${err.message}`; };
+      for (const el of [hotkey, longPress, askClaude, screenOn, point]) el.addEventListener('change', () => save().catch(fail));
+      preset.addEventListener('click', () => { hotkey.value = st.preset; save().catch(fail); });
     })();
 
     // ── Compactor ── its own saves. Numbers come only from recorded before/after counts.

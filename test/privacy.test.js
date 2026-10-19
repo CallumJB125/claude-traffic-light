@@ -342,7 +342,7 @@ test('every BrowserWindow turns spellcheck off and every embedded session is cov
     if (n) windows.set(rel(f), n);
     assert.equal((src.match(/spellcheck:\s*false/g) || []).length, n, `${rel(f)}: every new BrowserWindow needs webPreferences.spellcheck: false`);
   }
-  assert.deepEqual([...windows.entries()].sort(), [['buddy-window/index.js', 1], ['main.js', 5], ['src/invoice.js', 1]]); // main: widget, Lights, overlay, tray renderer, first-run setup; invoice: hidden offline PDF printer
+  assert.deepEqual([...windows.entries()].sort(), [['buddy-window/index.js', 1], ['main.js', 5], ['src/invoice.js', 1], ['src/pointer-overlay-main.js', 1]]); // main: widget, Lights, overlay, tray renderer, first-run setup; invoice: hidden offline PDF printer; pointer: voice pointing overlay
   const main = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8');
   assert.match(main, /require\('\.\/src\/spellcheck\.js'\)\.keepOffline\(\{ app, getDefaultSession: \(\) => require\('electron'\)\.session\.defaultSession \}\)/);
   const policy = fs.readFileSync(path.join(ROOT, 'src/spellcheck.js'), 'utf8');

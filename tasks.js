@@ -1021,4 +1021,18 @@
   setInterval(() => { if (document.visibilityState === 'visible' && snap) renderList(); }, 30000);
   api.state().then((s) => { onSnapshot(s); if (!snap) renderMain(); });
   renderMain();
+  // Agent mode: words spoken to the widget and confirmed there arrive as a
+  // filled-in composer; picking a folder and Start task still create it.
+  async function takeVoiceDraft() {
+    const text = api.voiceDraft ? await api.voiceDraft().catch(() => null) : null;
+    if (typeof text !== 'string' || !text.trim()) return;
+    void openComposer();
+    const ta = $('c-text');
+    if (!ta) return;
+    ta.value = text.slice(0, ta.maxLength > 0 ? ta.maxLength : text.length);
+    ta.dispatchEvent(new Event('input'));
+    ta.focus();
+  }
+  api.onVoiceDraft?.(() => { void takeVoiceDraft(); });
+  void takeVoiceDraft();
 })();

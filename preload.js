@@ -71,6 +71,8 @@ contextBridge.exposeInMainWorld('trafficLight', {
   voiceStart: () => ipcRenderer.invoke('voice-start'),
   voiceStop: () => ipcRenderer.invoke('voice-stop'),
   onVoice: (cb) => ipcRenderer.on('voice-state', (e, st) => cb(st)),
+  // Agent mode: Start or Cancel on the spoken task offer, by its id only.
+  voiceOffer: (id, action) => ipcRenderer.invoke('voice-offer', String(id), action === 'start' ? 'start' : 'cancel'),
   polish: { state: () => ipcRenderer.invoke('widget-polish:state'), snap: () => ipcRenderer.invoke('widget-polish:snap') },
 });
 

@@ -116,7 +116,9 @@ function createFlow({ reply, speak, send, speakable = (t) => t }) {
 // ── Free-form: the user's own `claude`, isolated ─────────────────────────────
 // A fresh empty folder as cwd (removed afterwards) so no project CLAUDE.md or
 // memory applies, an allowlisted env, the question on stdin, never in argv.
-function askClaude({ spawn, fs, tmpdir, args, env, prompt, timeoutMs = 30000, setTimer = setTimeout, clearTimer = clearTimeout }) {
+// A screen question (src/voice-capture-main.js) passes its own args, which
+// allow Read on the one screenshot file, and room for its POINT tags.
+function askClaude({ spawn, fs, tmpdir, args, env, prompt, timeoutMs = 30000, maxChars = 400, setTimer = setTimeout, clearTimer = clearTimeout }) {
   let child = null;
   let dir = null;
   let settled = false;
@@ -138,7 +140,7 @@ function askClaude({ spawn, fs, tmpdir, args, env, prompt, timeoutMs = 30000, se
   let out = '';
   child.stdout.on('data', (d) => { if (out.length < 256 * 1024) out += d; });
   child.on('error', () => done(null));
-  child.on('close', (code) => done(code === 0 ? String(out).trim().slice(0, 400) || null : null));
+  child.on('close', (code) => done(code === 0 ? String(out).trim().slice(0, maxChars) || null : null));
   child.stdin.on('error', () => {});
   child.stdin.end(prompt);
   return { promise, cancel };

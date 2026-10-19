@@ -1215,3 +1215,16 @@ Local Electron IPC from the Overview page only (`overview-preload.js`); the send
 | `interaction:local-endpoint-remove` | foreground Overview | `{id}` | `{ok}` or `{ok:false, error}`; deletes the entry and its stored key |
 
 Session state `provider` gains an optional `model` (the local model's name) for local-model sessions; the Overview directory row's `provider.model` mirrors it. The widget session card (`src/session-card-view.js`) adds `model` and appends it to `state`; the timeline view model adds `model` (last assistant model in the transcript, else the hook state's `model`).
+
+## Desktop voice IPC: screen-aware questions, pointing and agent mode (`src/voice-capture-main.js`, `src/pointer-overlay-main.js`, `src/voice-offer.js`)
+
+Local Electron IPC only; nothing reaches a hub. The one outbound flow is `voice-screen` in PRIVACY.md (the screenshot to the user's own `claude`). Config keys `voice.screen` (default `false`) and `voice.point` (default `true`), normalised by `src/voice.js normalizeConfig`.
+
+| Channel | Direction / sender | Payload | Notes |
+|---|---|---|---|
+| `voice-state` (extended) | main → widget | `{state:'thinking', heard, text:'Looking…'}` while a screen question is out; `{state:'offer', offer:{id, text ≤300}}` for agent mode | `text` is the user's own words; the widget writes it with `textContent` only |
+| `voice-offer` | widget → main (`invoke`), the widget window only (`widgetOnly`) | `(id: string, action: 'start'\|'cancel')` → `{ok}` | Only the current, unexpired (2 min) offer's id counts, once. `start` opens the Tasks page and hands it main's copy of the words; any other sender, a stale id or `cancel` → `{ok:false}`. Never creates a task itself |
+| `tasks:voice-draft-ready` | main → Tasks page | none | A voice draft is waiting |
+| `tasks:voice-draft` | Tasks page → main (`invoke`), the Tasks page only (`tasksSenderOk`) | none → `string \| null` | Returns the confirmed words once and clears them; the page fills the New task composer. The task is still created only by `tasks:create` after the user picks a folder and presses Start task |
+| `pointer:play` | main → pointer overlay (`pointer-overlay-preload.js`) | `{reduced, ms, from:{x,y}\|null, points:[{x, y, label ≤40}] ≤3}` in the display's own coordinates | One transparent, frameless, `focusable:false`, click-through (`setIgnoreMouseEvents(true)`) window per display with a point; main destroys every window by 6 s. The page sends nothing back |
+| `voice-status` (extended) | Preferences | none | adds `preset: 'Control+Alt+Space'` and `screenAccess` (`granted`\|`denied`\|`not-determined`\|`restricted`\|`unsupported`) |
