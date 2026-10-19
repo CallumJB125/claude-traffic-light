@@ -43,14 +43,29 @@ function initials(name) {
   return (first + last).toUpperCase() || '?';
 }
 
+const DEPLOY_WORD = { live: 'live', failed: 'failed', building: 'building', canceled: 'cancelled' };
+// The deploy state line for a session's project, when a host row is known.
+// deploy: {label, name, state, summary?} from src/deploy-status.js status().
+function deployLine(deploy) {
+  const d = deploy && typeof deploy === 'object' ? deploy : null;
+  const word = d && DEPLOY_WORD[d.state];
+  if (!word) return '';
+  const who = [str(d.label, 30), str(d.name, 60)].filter(Boolean).join(' · ') || 'Deploy';
+  const why = d.state === 'failed' && str(d.summary, 100) ? `: ${str(d.summary, 100)}` : '';
+  return `${who}: ${word}${why}`;
+}
+
 /**
  * session: a row as the widget receives it ({sessionId, cwd, signal, tool,
  * updatedAt, signalSince, startedAt, remote, deviceName, model?, pinned?}).
  * spend: {cost_usd, unpriced} for this session, or null when unknown.
  * teammate: {name} when the session is a teammate's (team row), else null.
- * → {id, title, state, model, spend, teammate, actions, waiting, idle, remote}
+ * explain: {recap:{headline, line}|null, help:[{label, handle}], why} from explain mode, or null.
+ * deploy: the project's deploy row (see deployLine), or null. nudgesPaused: a
+ * "pause nudges" rule holds this burning session's nudges.
+ * → {id, title, state, model, spend, teammate, actions, waiting, idle, remote, recap, deploy, help, helpWhy, nudgesPaused}
  */
-function sessionCard(session, { now = Date.now(), spend = null, teammate = null } = {}) {
+function sessionCard(session, { now = Date.now(), spend = null, teammate = null, explain = null, deploy = null, nudgesPaused = false } = {}) {
   const s = session && typeof session === 'object' ? session : {};
   const signal = str(s.signal, 40);
   const tool = str(s.tool, 60);
@@ -79,8 +94,14 @@ function sessionCard(session, { now = Date.now(), spend = null, teammate = null 
   if (!mate && !s.remote) actions.push('open');
   if (!mate && waiting && !s.remote) actions.push('answer');
   if (!mate) actions.push(s.pinned ? 'unpin' : 'pin');
+  const paused = !mate && nudgesPaused === true;
+  if (paused) actions.push('resume-nudges');
   const id = str(s.sessionId, 200) || null;
-  return { id, title: str(s.title, MAX) || titleOf(s), state, model: model || null, spend: spendLine, teammate: mate, actions, waiting, idle, remote: !!s.remote, pinned: !!s.pinned };
+  const ex = !mate && explain && typeof explain === 'object' ? explain : null;
+  const recap = ex && ex.recap && str(ex.recap.headline, 120) ? { headline: str(ex.recap.headline, 120), line: str(ex.recap.line, 160) } : null;
+  const help = (ex && Array.isArray(ex.help) ? ex.help : []).filter((h) => h && str(h.label, 60) && typeof h.handle === 'string' && /^[\w-]{1,40}$/.test(h.handle)).slice(0, 3).map((h) => ({ label: str(h.label, 60), handle: h.handle }));
+  return { id, title: str(s.title, MAX) || titleOf(s), state, model: model || null, spend: spendLine, teammate: mate, actions, waiting, idle, remote: !!s.remote, pinned: !!s.pinned,
+    recap, deploy: mate ? '' : deployLine(deploy), help, helpWhy: help.length ? str(ex.why, 100) : '', nudgesPaused: paused };
 }
 
-module.exports = { sessionCard, titleOf, words, initials, WAITING, IDLE };
+module.exports = { deployLine, sessionCard, titleOf, words, initials, WAITING, IDLE };

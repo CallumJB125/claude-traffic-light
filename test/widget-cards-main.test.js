@@ -13,9 +13,9 @@ function rig({ sessions = [], cfg = {}, spend = () => null, allowed = () => true
   return { handlers, saved, cfg, api, call: (ch, e, ...a) => handlers.get(ch)(e || {}, ...a) };
 }
 
-test('registers exactly the two widget channels', () => {
+test('registers exactly the four widget channels', () => {
   const { handlers } = rig();
-  assert.deepEqual([...handlers.keys()].sort(), ['widget:pin-session', 'widget:session-cards']);
+  assert.deepEqual([...handlers.keys()].sort(), ['widget:card-help', 'widget:pin-session', 'widget:resume-nudges', 'widget:session-cards']);
 });
 
 test('cards carry the view, the spend for local rows, and never the raw row or path', async () => {
@@ -65,4 +65,25 @@ test('teammates come back as a team row with initials; spend failures do not bre
 
 test('install refuses without a config store', () => {
   assert.throws(() => Cards.install({ ipcMain: { handle() {} } }), /config/);
+});
+
+test('cards take explain, deploy and paused-nudge slices; help and resume go through their own channels', async () => {
+  const handlers = new Map();
+  const calls = [];
+  Cards.install({ ipcMain: { handle: (ch, fn) => handlers.set(ch, fn) }, config: { load: () => ({}), save: () => {} }, now: () => NOW,
+    getSessions: () => [{ sessionId: 's1', cwd: '/w/shop', signal: 'stop', updatedAt: new Date(NOW).toISOString() }],
+    getExplain: (s) => ({ recap: { headline: `recap ${s.sessionId}`, line: 'l' }, help: [], why: null }),
+    getDeploy: (cwd) => (cwd === '/w/shop' ? { label: 'Vercel', name: 'shop', state: 'live' } : null),
+    nudgesPaused: (id) => id === 's1', copyHelp: (h) => { calls.push(['help', h]); return { ok: true }; }, resumeNudges: (id) => { calls.push(['resume', id]); return { ok: true }; } });
+  const m = await handlers.get('widget:session-cards')({});
+  const card = m.rows[0].card;
+  assert.equal(card.recap.headline, 'recap s1');
+  assert.equal(card.deploy, 'Vercel · shop: live');
+  assert.equal(card.nudgesPaused, true);
+  assert.ok(!JSON.stringify(m).includes('/w/shop'));
+  assert.deepEqual(await handlers.get('widget:card-help')({}, 'h1'), { ok: true });
+  assert.deepEqual(await handlers.get('widget:card-help')({}, 7), { ok: false });
+  assert.deepEqual(await handlers.get('widget:resume-nudges')({}, 's1'), { ok: true });
+  assert.deepEqual(await handlers.get('widget:resume-nudges')({}, '../x'), { ok: false });
+  assert.deepEqual(calls, [['help', 'h1'], ['resume', 's1']]);
 });

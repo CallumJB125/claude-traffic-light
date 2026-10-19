@@ -4,6 +4,8 @@ contextBridge.exposeInMainWorld('trafficLight', {
   openClaude: () => ipcRenderer.invoke('open-claude'),
   goToNeedingSession: () => ipcRenderer.invoke('go-to-needing-session'),
   getSessionCards: () => ipcRenderer.invoke('widget:session-cards'), pinSession: (id) => ipcRenderer.invoke('widget:pin-session', typeof id === 'string' ? id : null),
+  cardHelp: (h) => (typeof h === 'string' && h.length <= 40 ? ipcRenderer.invoke('widget:card-help', h) : Promise.resolve({ ok: false })),
+  resumeNudges: (id) => (typeof id === 'string' ? ipcRenderer.invoke('widget:resume-nudges', id) : Promise.resolve({ ok: false })),
   getAggregateStatus: () => ipcRenderer.invoke('get-aggregate-status'),
   cursorInWindow: () => ipcRenderer.invoke('cursor-in-window'),
   getWindowPosition: () => ipcRenderer.invoke('get-window-position'),
