@@ -64,6 +64,7 @@ export function parsePairingLink(text, { origin, hubOrigin: expectedHub = origin
 
 const blank = () => ({
   open: false, busy: false, notice: null,
+  focus: null, // {host, requestId} from a notification's Review: shown first, highlighted, never decided
   items: null, loadedAt: null, error: null,
   results: {}, // `${host}|${requestId}` -> {applied, message}
   pairing: { stage: 'idle', sas: null, error: null, text: '' },
@@ -246,7 +247,7 @@ export function createApprovals({ api, e2e, vault, credentials, push = null, ori
   return {
     get state() { return state; },
     subscribe(fn) { subs.add(fn); return () => subs.delete(fn); },
-    open(prefill = '') { set({ open: true, notice: null, pairing: { ...state.pairing, text: prefill || state.pairing.text } }); if (push) set({ push: { state: push.state() } }); return load(); },
+    open(prefill = '', focus = null) { set({ open: true, notice: null, focus, pairing: { ...state.pairing, text: prefill || state.pairing.text } }); if (push) set({ push: { state: push.state() } }); return load(); },
     close() { set({ open: false }); },
     reset() { state = blank(); },
     load, pair, registerPasskey, decide, startTask, enablePush,
@@ -297,7 +298,9 @@ function requestRow(x, st, now) {
   const key = `${x.host}|${n.requestId}`;
   const res = st.results[key];
   const secs = Math.max(0, Math.round((n.expiresAt - now) / 1000));
-  return h('li', { key, class: 'approval' },
+  const focused = st.focus && st.focus.host === x.host && st.focus.requestId === n.requestId;
+  return h('li', { key, class: focused ? 'approval focused' : 'approval', 'data-focus': focused ? 'true' : null, 'aria-current': focused ? 'true' : null },
+    focused ? h('p', { class: 'muted small' }, 'From your notification. Check it, then Allow (with your passkey) or Deny.') : null,
     h('p', { class: 'row-title' }, `${n.toolName} on ${x.hostName}`),
     n.deskOnly ? h('p', { class: 'pill warn' }, `Desk only: ${n.deskOnly.reason}`) : null,
     h('pre', { class: 'approval-input' }, describeInput(n)),
@@ -329,6 +332,8 @@ function taskSection(st) {
       st.task.message ? h('p', { role: 'status' }, st.task.message) : null));
 }
 
+const focusFirst = (items, f) => (f ? [...items.filter((x) => x.host === f.host && x.notice.requestId === f.requestId), ...items.filter((x) => !(x.host === f.host && x.notice.requestId === f.requestId))] : items);
+
 const PUSH_TEXT = { on: 'Notifications are on.', denied: 'Notifications are blocked for this site in your phone’s settings.', unsupported: 'This browser can’t show notifications. On iPhone, add Plexiform to your Home Screen first.', unavailable: 'Your hub doesn’t send notifications yet.' };
 
 export function approvalsView(st, now) {
@@ -342,11 +347,11 @@ export function approvalsView(st, now) {
     h('section', { 'aria-labelledby': 'waiting-title' },
       h('h2', { id: 'waiting-title' }, 'Waiting on you'),
       items == null ? h('p', { class: 'muted' }, 'Loading…')
-        : items.length ? h('ul', { class: 'list', role: 'list' }, items.map((x) => requestRow(x, st, now)))
+        : items.length ? h('ul', { class: 'list', role: 'list' }, focusFirst(items, st.focus).map((x) => requestRow(x, st, now)))
           : h('p', { class: 'muted' }, st.hosts.some((x) => x.paired) ? 'Nothing is waiting.' : 'Pair this phone with a computer to answer its requests here.')),
     h('section', { 'aria-labelledby': 'push-title' },
       h('h2', { id: 'push-title' }, 'Notifications'),
-      h('p', { class: 'muted small' }, 'A notification only says that something needs you. What it is stays encrypted until you open it here.'),
+      h('p', { class: 'muted small' }, 'A notification from the hub only says that something needs you. While this app is open in the background it can also name the tool and computer (never the command). Notification buttons only open this screen: approving always needs your passkey here.'),
       PUSH_TEXT[st.push.state] ? h('p', { role: 'status' }, PUSH_TEXT[st.push.state]) : null,
       st.push.state === 'on' || st.push.state === 'unsupported' ? null : btn('push-on', 'Turn on notifications', { kind: 'small' })),
     taskSection(st),

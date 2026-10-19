@@ -8,12 +8,19 @@
 // Push (W2-B, board/hub/push.js): the hub sends an EMPTY push. This worker
 // never reads a payload: it shows a fixed "needs you" notification, and a
 // tap opens the approvals screen, which fetches what is waiting through the
-// end-to-end relay. Nothing about the request is in the push.
-const CACHE = 'plexiform-phone-v3';
+// end-to-end relay. Nothing about the request is in the push. An open app is
+// told to refresh, so it can show a per-request notification it built itself
+// from what it fetched end to end (phone-notify.js).
+//
+// Notification actions NEVER approve or deny: there is no lock-screen approve
+// without the passkey. Every action (and a plain tap) only opens the approvals
+// screen, focused on that request when the notification names one; Allow
+// there still needs the passkey and the paired end-to-end channel.
+const CACHE = 'plexiform-phone-v4';
 const SHELL = [
   '/phone/', '/phone/manifest.webmanifest', '/web/phone.css', '/web/phone-icon-192.png', '/web/phone-icon-512.png',
   '/web/js/phone-app.js', '/web/js/phone-core.js', '/web/js/phone-render.js', '/web/js/phone-vault.js', '/web/js/phone-e2e.js', '/web/js/h.js',
-  '/web/js/phone-approvals.js', '/web/js/remote/encoding.js', '/web/js/remote/canonical.js', '/web/js/remote/envelope.js',
+  '/web/js/phone-approvals.js', '/web/js/phone-notify.js', '/web/js/phone-voice.js', '/web/js/remote/encoding.js', '/web/js/remote/canonical.js', '/web/js/remote/envelope.js',
   '/web/js/remote/keys.js', '/web/js/remote/registry.js', '/web/js/remote/decision.js', '/web/js/remote/pairing.js',
 ];
 
@@ -55,18 +62,32 @@ self.addEventListener('fetch', (e) => {
 
 // Content-free: whatever a push carries is ignored.
 self.addEventListener('push', (e) => {
-  e.waitUntil(self.registration.showNotification('Plexiform', {
-    body: 'Something on your computer needs you.', tag: 'plexiform-needs-you', renotify: true,
-    icon: '/web/phone-icon-192.png', badge: '/web/phone-icon-192.png',
-  }));
+  e.waitUntil((async () => {
+    await self.registration.showNotification('Plexiform', {
+      body: 'Something on your computer needs you.', tag: 'plexiform-needs-you', renotify: true,
+      icon: '/web/phone-icon-192.png', badge: '/web/phone-icon-192.png',
+      actions: [{ action: 'review', title: 'Review' }],
+    });
+    for (const w of await self.clients.matchAll({ type: 'window' })) w.postMessage({ type: 'plexiform-refresh-approvals' });
+  })());
 });
+
+// Where a tap or an action goes. Only ever "open the approvals screen";
+// nothing here can decide a request, whatever action or data arrives.
+function notificationTarget(data) {
+  const host = data && typeof data.host === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(data.host) ? data.host : null;
+  const rid = data && typeof data.requestId === 'string' && /^[A-Za-z0-9_.:-]{1,200}$/.test(data.requestId) ? data.requestId : null;
+  const focus = data && data.kind === 'permission' && host && rid ? { host, requestId: rid } : null;
+  return { url: focus ? `/phone/#approvals=${encodeURIComponent(`${host}|${rid}`)}` : '/phone/#approvals', focus };
+}
 
 self.addEventListener('notificationclick', (e) => {
   e.notification.close();
+  const { url, focus } = notificationTarget(e.notification.data);
   e.waitUntil((async () => {
     const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     const open = wins.find((w) => new URL(w.url).pathname.startsWith('/phone/'));
-    if (open) { open.postMessage({ type: 'plexiform-open-approvals' }); return open.focus(); }
-    return self.clients.openWindow('/phone/#approvals');
+    if (open) { open.postMessage({ type: 'plexiform-open-approvals', focus }); return open.focus(); }
+    return self.clients.openWindow(url);
   })());
 });
