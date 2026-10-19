@@ -306,6 +306,9 @@ const DEFAULT_CONFIG = {
 };
 const REQUESTS_DIR = path.join(ROOT_DIR, 'requests');
 const git = GitSignals.create({ stateFile: path.join(ROOT_DIR, 'git-signals.json'), log: (m) => console.log(m) });
+// Live git events plus hosted deploy events (src/deploy-status-main.js, installed with the other page IPC below).
+let deployStatus = null;
+const gitEvents = (config) => (config.gitSignals !== false ? git.active() : []).concat(deployStatus ? deployStatus.active() : []);
 const STATS_FILE = path.join(ROOT_DIR, 'stats.json');
 
 // loadConfig() is called several times per status broadcast (and a broadcast
@@ -898,7 +901,7 @@ function computeState(opts = {}) {
   // the session files say (the hook blocks before Notification fires). It
   // replaces the look only; the chips, number and season still apply.
   const spend = spendSnapshot(config);
-  const env = { character: config.character, offline: !online, ...BusyWatch.env(), git: config.gitSignals !== false ? git.active() : [], spend };
+  const env = { character: config.character, offline: !online, ...BusyWatch.env(), git: gitEvents(config), spend };
   const { look, fired, owned } = pending.length
     ? Rules.resolve(config.rules, [{ signal: 'permission-ask', cwd: pending[0].cwd }], Date.now(), env)
     : Rules.resolve(config.rules, sessions, Date.now(), env);
@@ -4583,6 +4586,7 @@ let applyingStrip = false;
 require('./src/widget-page.js').register({ utilityHandle, allowed: (e) => fromUtilityPage(e, 'widget'), loadConfig, commitConfig, widget: () => win, strip: () => strip, ensureWidget: () => { if (!win) createWindow(); applyWidgetVisibility(); }, resizeBy, busy: () => roamState.busy || !!gardenRun, stopGlide, saveBounds, screen, limits: { minWidth: MIN_WIDTH, maxWidth: MAX_WIDTH }, openPage: (id) => { openBuddy(id); if (id === 'settings') buddyWin?.sendToPage('settings', 'show-section', 'widget'); }, platform: process.platform });
 require('./src/rule-notify-main.js').install({ Notification, busy: () => BusyWatch.holding(), handle: utilityHandle, allowed: widgetConfigSender, config: loadConfig, sessions: () => aggregateState({ ignoreTravel: true }).sessions || [], env: () => { const c = loadConfig(); return { offline: !online, ...BusyWatch.env(), git: c.gitSignals !== false ? git.active() : [], spend: spendSnapshot(c) }; }, log: console.log });
 require('./src/spend-safety-main.js').install({ Notification, handle: utilityHandle, allowed: (e) => analyticsSender(e) || settingsOnly(e), rootDir: ROOT_DIR, projectsDir: PROJECTS_DIR, home: os.homedir(), env: process.env, config: loadConfig, turns: () => getUsageTurns(), spend: () => spendSnapshot(loadConfig()), silent: IS_DEV_RUN, log: console.log });
+require('./src/rule-notify-main.js').install({ Notification, busy: () => BusyWatch.holding(), handle: utilityHandle, allowed: widgetConfigSender, config: loadConfig, sessions: () => aggregateState({ ignoreTravel: true }).sessions || [], env: () => { const c = loadConfig(); return { offline: !online, ...BusyWatch.env(), git: gitEvents(c), spend: spendSnapshot(c) }; }, log: console.log });
 const WidgetPolish = require('./src/widget-polish-main.js').install({ ipcMain, globalShortcut, utilityHandle, config: loadConfig, commitConfig, widgetWindow: () => win, quiet: Quiet, widgetAllowed: (e) => widgetOnly(e), pageAllowed: (e) => fromUtilityPage(e, 'widget'), sessions: () => localSessions(aggregateState().sessions || []), strip: () => strip, saveBounds, stopGlide, screen, sizing: { aspect: WIDGET_ASPECT, minWidth: MIN_WIDTH }, log: console.log });
 const FirstRunTour = require('./src/first-run-tour-main.js').install({ ipcMain, config: loadConfig, saveConfig, demo: Demo, hasConnectedTool: () => AiTools.quick().some((t) => t.connected), windows: { widget: () => win, widgetShown: () => !!win && !win.isDestroyed() && win.isVisible(), lights: () => lightsWin, openLights: () => createLightsWindow(), openPage: (id) => openBuddy(id), sendToPage: (id, ch, p) => !!buddyWin?.sendToPage(id, ch, p) }, allowed: { widget: (e) => widgetOnly(e), lights: (e) => fromPage(e, lightsWin?.webContents), page: (e, id) => fromUtilityPage(e, id) }, log: console.log });
 let updateRowShown = false;
@@ -4719,6 +4723,8 @@ require('./src/home-main.js').register({ ipcMain, allowed: (e) => fromUtilityPag
 require('./src/guardrails-main.js').install({ ipcMain, dialog, shell, BrowserWindow, rootDir: ROOT_DIR, allowed: (e) => fromUtilityPage(e, 'home'), broadcast: () => broadcastStatus(), log: console.log });
 require('./src/explain-main.js').install({ ipcMain, rootDir: ROOT_DIR, home: os.homedir(), config: loadConfig, inputs: () => aggregateState().inputs || [], sessions: () => aggregateState().sessions || [], inputAllowed: inputSenderOk, homeAllowed: (e) => fromUtilityPage(e, 'home'), clipboard, shell, Notification, openHome: () => openBuddy('home'), onQuit: (fn) => onQuit(app, fn), log: (m) => console.warn(m) }); // explain mode (opt-in, config.explainMode)
 require('./src/widget-lane-main.js').install({ ipcMain, send: (ch, v) => { if (win && !win.isDestroyed()) win.webContents.send(ch, v); }, allowed: (e) => !!win && !win.isDestroyed() && e.sender === win.webContents, sources: { state: () => aggregateState(), local: localSessions, collisions: collisionAlerts, git, spend: () => spendSnapshot(loadConfig()), warnAt: () => loadConfig().spend.warnAt } });
+require('./src/widget-lane-main.js').install({ ipcMain, send: (ch, v) => { if (win && !win.isDestroyed()) win.webContents.send(ch, v); }, allowed: (e) => !!win && !win.isDestroyed() && e.sender === win.webContents, sources: { state: () => aggregateState(), local: localSessions, collisions: collisionAlerts, git: { active: () => gitEvents(loadConfig()) }, spend: () => spendSnapshot(loadConfig()), warnAt: () => loadConfig().spend.warnAt } });
+deployStatus = require('./src/deploy-status-main.js').install({ ipcMain, file: path.join(ROOT_DIR, 'deploy-status.json'), safeStorage: require('electron').safeStorage, fetch: (...a) => net.fetch(...a), clipboard, shell, sessions: () => readSessions(loadConfig()), online: () => online, allowedHome: (e) => fromUtilityPage(e, 'home'), allowedSettings: settingsOnly, scrub: (t) => require('./src/scrub.js').scrub(t, { home: os.homedir() }), paused: IS_DEV_RUN, onFired: () => { stateMemo = { at: 0, key: null, value: null }; broadcastStatus(); maybePlayAlertSound(); }, log: (m) => console.log(m) }); // privacy-flow: deploy-status
 // Home's "Start with a pack" card (src/starter-pack-main.js): the stack of recent folders, the matching gallery pack, one confirm, then its first recipe as a task.
 {
   const StarterMain = require('./src/starter-pack-main.js');
@@ -5069,7 +5075,7 @@ function maybePlayAlertSound() {
   const config = loadConfig();
   const { look, reason, owned } = aggregateState();
   if (reason === 'preview') return;
-  const { key, restored } = GitSignals.soundKey(look, owned, config.rules, config.gitSignals !== false ? git.active() : []);
+  const { key, restored } = GitSignals.soundKey(look, owned, config.rules, gitEvents(config));
   // F5: a git rule's sound is held while you're busy like any other rule's.
   if (config.sounds && key && key !== lastSoundKey && !restored && pingAllowed(owned.sound, { lamp: look.lamp })) playSound(look.sound);
   lastSoundKey = key;

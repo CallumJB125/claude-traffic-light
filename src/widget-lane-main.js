@@ -61,7 +61,14 @@ function createWatcher(sources = {}, { now = Date.now } = {}) {
       if (c && typeof c.key === 'string') out.push({ key: `c|${c.key}`, kind: 'collision', sessionId: c.mine && c.mine.session_id ? `collision:${c.mine.session_id}` : null, text: CollisionAlerts.text(c) });
     }
     for (const e of safe(() => sources.git.active(), []) || []) {
-      if (!e || !FAILED_CI.has(e.signal) || e.restored || typeof e.id !== 'string') continue;
+      if (!e || e.restored || typeof e.id !== 'string') continue;
+      // Hosted deploys (src/deploy-status.js) name the host and project instead of a repo.
+      if (e.provider && typeof e.title === 'string') {
+        if (e.signal === 'deploy-live') out.push({ key: `g|${e.id}`, kind: 'deployed', sessionId: `deploy:${e.title}`, text: `Live · ${e.title}` });
+        else if (e.signal === 'deploy-failed') out.push({ key: `g|${e.id}`, kind: 'ci-failed', sessionId: `deploy:${e.title}`, text: `Deploy failed · ${e.title}${e.summary ? ` · ${e.summary}` : ''}` });
+        continue;
+      }
+      if (!FAILED_CI.has(e.signal)) continue;
       const what = e.signal === 'deploy-failed' ? 'Deploy failed' : 'CI failed';
       out.push({ key: `g|${e.id}`, kind: 'ci-failed', sessionId: `ci:${e.repo || ''}:${e.branch || ''}`, text: `${what}${e.repo ? ` · ${e.repo}` : ''}${e.branch ? ` (${e.branch})` : ''}` });
     }

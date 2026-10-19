@@ -33,8 +33,8 @@ const STORES = Object.freeze([
   { id: 'recipes', root: 'data', kind: 'settings', label: 'Your recipes', detail: 'Recipes you saved as your own.', names: ['recipes'] },
   { id: 'gallery', root: 'data', kind: 'cache', label: 'Community gallery list', detail: 'The last gallery list you fetched from plexiform.dev, kept so it opens without fetching again.', names: ['gallery'] },
   { id: 'team-today', root: 'data', kind: 'cache', label: 'Team today summary', detail: 'The last Team today summary fetched from your team, kept so Home opens fast.', names: ['team-today.json'] },
-  { id: 'keys', root: 'data', kind: 'secret', export: false, label: 'Keys and local tokens', detail: 'The local signal token, paired-device keys, licence and sync keys. Never exported.',
-    names: ['token', 'port', 'hook.sock', 'approval-secret.json', 'entitlement.json', 'entitlement-clock.json', 'remote', 'remote.json', 'remote-state.json', 'sync'] },
+  { id: 'keys', root: 'data', kind: 'secret', export: false, label: 'Keys and local tokens', detail: 'The local signal token, paired-device keys, licence and sync keys, and deploy host tokens you pasted (sealed). Never exported.',
+    names: ['token', 'port', 'hook.sock', 'approval-secret.json', 'entitlement.json', 'entitlement-clock.json', 'remote', 'remote.json', 'remote-state.json', 'sync', 'deploy-status.json'] },
   { id: 'data-other', root: 'data', kind: 'other', rest: true, label: 'Other files in the data folder', detail: 'Anything else Plexiform wrote to its data folder.' },
 
   { id: 'work', root: 'userData', kind: 'work', label: 'Captured work and cost records', detail: 'Cards, branches and pull requests matched to sessions, and their costs.',

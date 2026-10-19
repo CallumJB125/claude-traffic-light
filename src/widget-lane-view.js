@@ -8,7 +8,7 @@
   if (typeof module === 'object' && module.exports) module.exports = factory();
   else root.WidgetLaneView = factory();
 })(typeof self !== 'undefined' ? self : this, function () {
-  const KINDS = Object.freeze(['needs-you', 'finished', 'stuck', 'collision', 'ci-failed', 'teammate']);
+  const KINDS = Object.freeze(['needs-you', 'finished', 'stuck', 'collision', 'ci-failed', 'teammate', 'deployed']);
   const MAX = 3;
   const TTL_MS = 8000;
   // The last stretch of a row's life, when the CSS fade runs.

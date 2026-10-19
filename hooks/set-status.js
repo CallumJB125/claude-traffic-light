@@ -32,6 +32,7 @@ const REQUESTS_DIR = path.join(ROOT_DIR, 'requests');
 const { withLock, writeJsonAtomic } = require('./session-state.js');
 const Machine = require('./session-machine.js');
 const Input = require('./pending-input.js');
+const { deployCommandOf } = require('./deploy-hint.js');
 // Sessions started under an older install still call `<colour> <reason>`
 // (e.g. `green tool-use`); the reason is the signal we want.
 const LEGACY_REASONS = { 'prompt-submit': 'prompt-submit', 'tool-use': 'tool-use', notification: 'notification', stop: 'stop', 'session-end': 'session-end' };
@@ -521,6 +522,9 @@ function nextSession(prev, { hostApp, pid, terminal, owned }) {
     claudeInputOverflow: inputs.overflow,
     claudeInputKey: inputKey,
     blocked: blockedOf(prev, now),
+    // A deploy command just ran (deploy-hint.js): which host and when, never the command.
+    // The app looks at that project's deploy status sooner (src/deploy-status.js).
+    deployAt: (resolved === 'tool-done' || resolved === 'tool-failed') && deployCommandOf(data) ? now : prev?.deployAt,
     // Buddy launched this session (owned.js): decided at SessionStart only.
     owned: owned !== undefined ? (owned || undefined) : prev?.owned,
   };

@@ -56,8 +56,10 @@
     { id: 'pr-changes-requested', label: 'Changes requested on your PR', hook: null, kind: 'git' },
     { id: 'ci-failed', label: 'CI failed on your branch', hook: null, kind: 'git' },
     { id: 'ci-passed', label: 'CI passed on your branch', hook: null, kind: 'git' },
-    { id: 'deploy-failed', label: 'A deploy workflow failed', hook: null, kind: 'git' },
+    { id: 'deploy-failed', label: 'A deploy failed (GitHub Actions, Vercel, Netlify or Cloudflare)', hook: null, kind: 'git' },
     { id: 'deploy-finished', label: 'A deploy workflow finished', hook: null, kind: 'git' },
+    // src/deploy-status.js: a Vercel, Netlify or Cloudflare deployment is serving.
+    { id: 'deploy-live', label: 'A deploy is live (Vercel, Netlify or Cloudflare)', hook: null, kind: 'git' },
   ];
   SIGNALS.push(...GIT_SIGNALS);
   function gitDefaultRules() {
@@ -73,7 +75,10 @@
   // env.git: [{ signal, cwd, repo, pr, branch, … }] — the events still live.
   function gitSessions(env) {
     const known = new Set(GIT_SIGNALS.map((x) => x.id));
-    return (env && Array.isArray(env.git) ? env.git : []).filter((e) => e && known.has(e.signal))
+    const list = (env && Array.isArray(env.git) ? env.git : []).filter((e) => e && known.has(e.signal));
+    // A live hosted deploy also counts as a finished deploy, so the stock
+    // "Deploy finished" rule celebrates it without a rules migration.
+    return list.flatMap((e) => (e.signal === 'deploy-live' ? [e, { ...e, signal: 'deploy-finished' }] : [e]))
       .map((e) => ({ signal: e.signal, cwd: e.cwd || null, repo: e.repo || null, pr: e.pr || null, branch: e.branch || null, virtual: true, git: true }));
   }
   // v7: the git rules slot in just under "No network", above the accents.
