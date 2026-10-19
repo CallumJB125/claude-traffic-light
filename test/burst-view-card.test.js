@@ -22,7 +22,7 @@ test('cardView = statusView + keepAwake, remoteControl, mods from the v0.20.36 f
   const v = card(present());
   assert.equal(v.kind, 'on');
   assert.equal(v.action, null);
-  assert.deepEqual(v.keepAwake, { mode: 'off', on: false, held: true, label: 'Off', text: 'Burst is not keeping this Mac awake: a closed lid is held open by another program right now.' });
+  assert.deepEqual(v.keepAwake, { mode: 'off', on: false, held: true, pending: false, label: 'Off', text: 'Burst is not keeping this Mac awake: a closed lid is held open by another program right now.' });
   assert.deepEqual(v.remoteControl, { expected: false, label: 'Off while Burst is on', text: 'Claude Code’s Remote Control is off while Burst is in base-URL mode. Reinstall Burst in transparent mode to have both.'.replace('’', '\'') });
   assert.deepEqual(v.mods.map((m) => [m.id, m.installed, m.current, m.version, m.supported, m.action]), [
     ['burst-session', true, true, '0.12.4', true, null],
@@ -34,7 +34,7 @@ test('cardView = statusView + keepAwake, remoteControl, mods from the v0.20.36 f
 
 test('keep-awake and Remote Control read back the states a person needs to act on', () => {
   const on = card(present({ keepAwake: true, mods: true }, { mode: 'transparent', remoteControlExpected: true }), { mac: { keep_awake: { mode: 'always', live: { sleep_disabled: true } } }, modStatus: null });
-  assert.deepEqual(on.keepAwake, { mode: 'always', on: true, held: true, label: 'On: plugged in and on battery', text: 'Burst keeps this Mac awake while AI is working, on battery too. Right now the Mac stays awake with the lid shut.' });
+  assert.deepEqual(on.keepAwake, { mode: 'always', on: true, held: true, pending: false, label: 'On: plugged in and on battery', text: 'Burst keeps this Mac awake while AI is working, on battery too. Right now the Mac stays awake with the lid shut.' });
   assert.equal(on.remoteControl.label, 'Expected to work');
   assert.match(on.remoteControl.text, /transparent mode/);
   const ac = View.keepAwakeView({ keep_awake: { mode: 'ac', live: { sleep_disabled: false } } });
@@ -197,4 +197,14 @@ test('This Mac page: the Burst card root carries class dimmed when the view is, 
   assert.equal(sec.querySelector('.acct-name').textContent, 'Burst is not responding', 'per-state headline (verifier fix 8)');
   assert.match(read('buddy-window/shell.css'), /\.acct-section\.dimmed \{ opacity: \.6; \}/);
   dom.window.close();
+});
+
+test('keepAwakeView: a saved mode whose daemon is missing or stopped is "Saved, not applied yet" and names the Terminal password step', () => {
+  const View = require('../src/burst-view.js');
+  const v = View.keepAwakeView({ keep_awake: { mode: 'ac', daemon: 'missing', live: { sleep_disabled: false, daemon_installed: false } } });
+  assert.equal(v.pending, true);
+  assert.equal(v.label, 'Saved, not applied yet');
+  assert.match(v.text, /password/);
+  assert.equal(View.keepAwakeView({ keep_awake: { mode: 'ac', daemon: 'ok', live: { sleep_disabled: true } } }).pending, false);
+  assert.equal(View.keepAwakeView({ keep_awake: { mode: 'off', daemon: 'off', live: {} } }).pending, false);
 });

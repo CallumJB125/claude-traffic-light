@@ -215,11 +215,19 @@ function keepAwakeView(mac) {
   const live = obj(ka.live) || {};
   const on = mode !== 'off';
   const held = live.sleep_disabled === true;
+  // Burst applies a mode in two halves: the setting (saved at once) and a machine-wide daemon that a Terminal
+  // window installs after asking for the password. Until that runs, the daemon is `missing` and the Mac is not kept awake.
+  const daemon = typeof ka.daemon === 'string' ? ka.daemon : (live.daemon_installed === false && on ? 'missing' : 'ok');
+  const pending = on && (daemon === 'missing' || daemon === 'stopped');
+  if (pending) {
+    return { mode, on, held, pending: true, label: 'Saved, not applied yet',
+      text: `Keep-awake "${mode === 'always' ? 'always' : 'plugged in only'}" is saved, but the machine-wide half is not running: a Terminal window on this Mac is asking for your password to install it. Finish that, then check again.` };
+  }
   const label = on ? (mode === 'always' ? 'On: plugged in and on battery' : 'On: plugged in only') : 'Off';
   const text = on
     ? `Burst keeps this Mac awake while AI is working${mode === 'always' ? ', on battery too' : ' when it is plugged in'}. Right now the Mac ${held ? 'stays awake with the lid shut' : 'would sleep with the lid shut'}.`
     : `Burst is not keeping this Mac awake: a closed lid ${held ? 'is held open by another program right now' : 'puts it to sleep, which stops running sessions'}.`;
-  return { mode, on, held, label, text };
+  return { mode, on, held, pending: false, label, text };
 }
 
 function remoteControlView(state) {
