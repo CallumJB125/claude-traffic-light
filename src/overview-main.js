@@ -3,12 +3,12 @@ const {createOverviewService,response}=require('./overview-service');
 // Exact visible main-app Overview document owns passive reads.
 // Foreground focus remains required for every action and effect.
 // Directory inputs (owned, shares, hubTeams, teamHub) are main-only; see overview-service.
-function createOverviewMain({buddy,sessions,work,managed,openManaged,messageManaged,now,owned,shares,hubTeams,teamHub,followups,followupScope,followupLocal,shareView=null,presence,presenceView}){
+function createOverviewMain({buddy,sessions,work,managed,openManaged,messageManaged,now,owned,shares,hubTeams,teamHub,followups,followupScope,followupLocal,shareView=null,presence,presenceView,looseEnds=null}){
  let authority=null,stopped=false;
  function owner(readOnly=false){const b=buddy(),c=readOnly?(b?.overviewReadContext?.()??b?.overviewContext?.()):b?.overviewContext?.();if(!c||!readOnly&&!c.foreground||!c.window||!c.contents||c.window.isDestroyed()||c.contents.isDestroyed()||!c.contents.mainFrame||!Number.isSafeInteger(c.generation))return null;return{buddy:b,window:c.window,contents:c.contents,frame:c.contents.mainFrame,generation:c.generation,document:c.document??null};}
  const equal=(a,b)=>!!a&&!!b&&a.buddy===b.buddy&&a.window===b.window&&a.contents===b.contents&&a.frame===b.frame&&a.generation===b.generation&&a.document===b.document;
  function same(a,readOnly=false){return!stopped&&equal(a,owner(readOnly));}
- const service=createOverviewService({sessions,work,managed,openManaged,messageManaged,now,owned,shares,hubTeams,teamHub,followups,followupScope,followupLocal,...(presence?{presence}:{}),...(presenceView?{presenceView}:{}),current:()=>same(authority,true),actionCurrent:()=>same(authority),navigationCurrent:()=>!stopped&&!!authority&&buddy()===authority.buddy&&!authority.window.isDestroyed()&&!authority.contents.isDestroyed()&&authority.window.isVisible()&&!authority.window.isMinimized()&&authority.window.isFocused()});
+ const service=createOverviewService({sessions,work,managed,openManaged,messageManaged,now,owned,shares,hubTeams,teamHub,followups,followupScope,followupLocal,...(presence?{presence}:{}),...(presenceView?{presenceView}:{}),...(looseEnds?{looseEnds}:{}),current:()=>same(authority,true),actionCurrent:()=>same(authority),navigationCurrent:()=>!stopped&&!!authority&&buddy()===authority.buddy&&!authority.window.isDestroyed()&&!authority.contents.isDestroyed()&&authority.window.isVisible()&&!authority.window.isMinimized()&&authority.window.isFocused()});
  let pumping=false;
  const pump=followups?setInterval(()=>{if(pumping||stopped)return;pumping=true;Promise.resolve(service.pumpFollowups()).catch(()=>{}).finally(()=>{pumping=false;});},1500):null;
  pump?.unref?.();

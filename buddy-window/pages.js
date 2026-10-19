@@ -87,7 +87,9 @@ const SECTIONS = [
   { id: 'sessions', title: 'Agents', icon: 'layers', default: 'overview', pages: ['overview', 'sessions', 'timeline', 'checkpoints', 'memory', 'discover'] },
   { id: 'inbox', title: 'Inbox', icon: 'bell', default: 'waiting', pages: ['waiting', 'myday'] },
   { id: 'team', title: 'Team', icon: 'team', default: 'team', pages: ['team', 'integrations', 'account'] },
-  { id: 'usage', title: 'Usage & cost', icon: 'chart', default: 'usage', heading: 'Workspace', menu: 'more', pages: ['usage', 'stats', 'optimiser', 'clients'] },
+  { id: 'usage', title: 'Usage & cost', icon: 'chart', default: 'usage', heading: 'Workspace', menu: 'more', pages: ['usage', 'stats', 'clients'] },
+  // Claude Burst and the usage panel have their own entry (the optimiser page): its sections unfold beneath it while open.
+  { id: 'optimiser', title: 'Usage & Burst', icon: 'chart', default: 'optimiser', menu: 'more', pages: ['optimiser'] },
   { id: 'settings', title: 'Settings', icon: 'gear', default: 'settings', pages: ['settings', 'thismac', 'aitools', 'widget', 'lights', 'hatch', 'phone'] },
 ];
 // `menu: false` keeps a section out of the tray and widget menus; `menu: 'more'` lists it in their More submenu.

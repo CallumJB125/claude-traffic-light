@@ -36,8 +36,8 @@ test('the sidebar has at most six primary sections and every page id still resol
 });
 
 test('the sidebar lists every main feature as its own section and reaches every page exactly once', () => {
-  assert.deepEqual(SECTIONS.map((s) => s.id), ['home', 'board', 'sessions', 'inbox', 'team', 'usage', 'settings']);
-  assert.deepEqual(SECTIONS.map((s) => s.title), ['Home', 'Projects', 'Agents', 'Inbox', 'Team', 'Usage & cost', 'Settings']);
+  assert.deepEqual(SECTIONS.map((s) => s.id), ['home', 'board', 'sessions', 'inbox', 'team', 'usage', 'optimiser', 'settings']);
+  assert.deepEqual(SECTIONS.map((s) => s.title), ['Home', 'Projects', 'Agents', 'Inbox', 'Team', 'Usage & cost', 'Usage & Burst', 'Settings']);
   assert.deepEqual(FOOTER, ['help', 'feedback', 'updates']);
   const listed = [...SECTIONS.flatMap((s) => s.pages), ...FOOTER];
   assert.equal(new Set(listed).size, listed.length, 'no page in two sections');
@@ -46,7 +46,7 @@ test('the sidebar lists every main feature as its own section and reaches every 
   assert.equal(sectionOf('board:calendar'), 'board');
   assert.equal(sectionOf('waiting'), 'inbox');
   assert.equal(sectionOf('sessions'), 'sessions');
-  assert.equal(sectionOf('optimiser'), 'usage', 'Usage optimiser is a page of Usage & cost');
+  assert.equal(sectionOf('optimiser'), 'optimiser', 'the Usage optimiser is the Usage & Burst entry\'s page');
   assert.equal(sectionOf('tasks'), 'board');
   assert.equal(pageById('sessions').title, 'Sessions');
   assert.equal(pageById('tasks').title, 'Tasks');

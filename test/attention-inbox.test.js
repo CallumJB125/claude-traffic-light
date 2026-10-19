@@ -74,3 +74,37 @@ test('inbox: hub inbox rows (mention, reply, moment, handoff) merge with their O
   assert.equal(r.total, 5);
   assert.deepEqual([r.label('mention'), r.label('reply'), r.label('moment')], ['Mention', 'Reply', 'Moment']);
 });
+
+// B2: exactly one Burst card, only when Burst names a next step, loose ends are reported, or a limit is near.
+test('inbox: one Burst card when statusView has an action, with that action as its one button; none when healthy', () => {
+  const view = (over = {}) => ({ kind: 'on', headline: 'Claude Burst', detail: 'On, base-url mode, version 0.20.36. Route: primary.', chip: { tone: 'green', label: 'Primary' }, action: null, dimmed: false, ...over });
+  assert.deepEqual(compose({ alerts: { burst: { view: view(), looseEnds: null } }, now }).items, [], 'healthy: nothing');
+  assert.deepEqual(compose({ alerts: { burst: null }, now }).items, [], 'no Burst on this computer: nothing');
+  const update = compose({ alerts: { burst: { view: view({ action: { kind: 'update', label: 'Update' }, detail: 'An update is ready.' }), looseEnds: null } }, now });
+  assert.equal(update.items.length, 1);
+  assert.deepEqual(update.items[0], { kind: 'burst', title: 'Claude Burst', meta: 'An update is ready.', ageMs: null, action: { kind: 'burst', op: 'update', label: 'Update' }, key: 'burst:update' });
+  assert.equal(update.label('burst'), 'Burst');
+  const down = compose({ alerts: { burst: { view: view({ kind: 'off', headline: 'Claude Burst', detail: 'Not responding: Burst is installed but its gateway did not answer just now.', chip: { tone: 'amber', label: 'Not responding' }, action: { kind: 'retry', label: 'Check again' } }), looseEnds: { repos: 3, text: 'x' } } }, now });
+  assert.equal(down.items.length, 1, 'never two Burst cards: the next step wins over loose ends');
+  assert.equal(down.items[0].action.op, 'retry');
+});
+
+test('inbox: loose ends alone, or "Limit near" alone, give one Burst card whose button opens Usage & Burst; ordered with blockers', () => {
+  const healthy = { kind: 'on', headline: 'Claude Burst', detail: 'On.', chip: { tone: 'green', label: 'Primary' }, action: null };
+  const loose = compose({ alerts: { burst: { view: healthy, looseEnds: { repos: 2, uncommitted: 3, unpushed: 1, stashes: 0, text: '3 uncommitted files, 1 unpushed commit in 2 repositories.' } } }, now });
+  assert.deepEqual(loose.items.map((i) => [i.title, i.meta, i.action]), [['Loose ends in 2 repositories', '3 uncommitted files, 1 unpushed commit in 2 repositories. Commit or push before closing those sessions.', { kind: 'navigate', destination: 'optimiser', label: 'Open Usage & Burst' }]]);
+  const near = compose({ alerts: { burst: { view: { ...healthy, chip: { tone: 'amber', label: 'Limit near' } }, looseEnds: null } }, now });
+  assert.equal(near.items[0].title, 'Claude is near its limit');
+  assert.equal(near.items[0].action.destination, 'optimiser');
+  assert.equal(near.items[0].key, 'burst:limit-near');
+  assert.deepEqual(compose({ alerts: { burst: { view: healthy, looseEnds: { repos: 0 } } }, now }).items, [], 'zero repositories is not loose');
+  const mixed = compose({
+    needs: { items: [{ headline: 'Allow git push?', kind: 'permission' }] },
+    alerts: { stuck: [{ handle: 's1', title: 'Stuck', meta: '', canOpen: true }], burst: { view: { ...healthy, action: { kind: 'repair', label: 'Repair' } } } },
+    morning: { items: [{ title: 'Nightly', state: 'failed', summary: 'exit 1' }] },
+    now,
+  });
+  assert.deepEqual(mixed.items.map((i) => i.kind), ['approval', 'blocker', 'burst', 'failed'], 'a Burst that needs a hand sits with the blockers, after approvals');
+  // Malformed views never invent a card.
+  for (const bad of [{ view: { action: { kind: 'x'.repeat(41), label: 'y' } } }, { view: { action: { kind: 'update' } } }, 'nope', { looseEnds: { repos: 'many' } }]) assert.deepEqual(compose({ alerts: { burst: bad }, now }).items, [], JSON.stringify(bad));
+});

@@ -9,7 +9,7 @@ const { finding } = require('../usage-waste-view.js');
 const { summary } = require('./ai-tools.js');
 
 const LOCAL_BOARD = 'My board (this Mac)';
-const PAGES = new Set(['waiting', 'sessions', 'board', 'usage', 'settings', 'team', 'myday', 'overview', 'tasks']);
+const PAGES = new Set(['waiting', 'sessions', 'board', 'usage', 'optimiser', 'settings', 'team', 'myday', 'overview', 'tasks']);
 const AITOOLS = /^aitools(?::[a-z]{2,12})?$/;
 const LIST_MAX = 20;
 const OPTIONS_MAX = 4;

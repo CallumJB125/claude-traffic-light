@@ -230,3 +230,64 @@ test('agent mail: one Needs-you card counts held asks and teammates\' questions;
   assert.equal(alerts.snapshot().mail[0].meta, '1 from teammates\' AIs');
   assert.deepEqual(HomeAlerts.createHomeAlerts({ mail: () => { throw new Error('x'); } }).snapshot().mail, []);
 });
+
+// B2 (main side): the Burst card facts Home composes its one Burst row from, and the one action it may run.
+test('Burst card: statusView facts plus loose-ends totals; the one action runs only the step the card shows, through Burst\'s own consent', async () => {
+  const LE = require('../src/burst-loose-ends-view.js');
+  const acted = [];
+  const state = { burst: null, loose: null };
+  const alerts = HomeAlerts.createHomeAlerts({ sessions: () => [], burst: () => state.burst, tasks: () => [], platform: 'darwin', now: () => NOW,
+    burstLooseEnds: () => state.loose, burstAct: async (kind) => { acted.push(kind); return { ok: true, retried: kind === 'retry' }; },
+    jump: async () => {}, copyHandover: async () => ({ ok: true }), docFor: async () => null, confirm: async () => true, resume: async () => ({ ok: true }) });
+  assert.equal(alerts.snapshot().burst, null, 'before the first detection: no card');
+  state.burst = { kind: 'checking' };
+  assert.equal(alerts.snapshot().burst, null);
+  state.burst = { kind: 'present', installed: true, capabilities: { upgradeStatus: true, looseEnds: true }, upgrade: { canUpgrade: true, upToDate: false }, state: { version: '0.20.36', mode: 'base-url', active: true, route: 'PRIMARY', until: '', rejected: [], primaryFailures: 0, compaction: null } };
+  state.loose = LE.looseEndsView({ report: { at: 1, scanned: 1, repos: [{ root: '/r', uncommitted: [{ path: 'a' }], unpushed: [], ahead: 2, stashes: [] }] } });
+  const b = alerts.snapshot().burst;
+  assert.equal(b.view.kind, 'on');
+  assert.deepEqual(b.view.action, { kind: 'update', label: 'Update' });
+  assert.deepEqual(b.view.chip, { tone: 'green', label: 'Primary' });
+  assert.deepEqual(b.looseEnds, { repos: 1, uncommitted: 1, unpushed: 2, stashes: 0, text: '1 uncommitted file, 2 unpushed commits in 1 repository.' });
+  assert.deepEqual(Object.keys(b.view).sort(), ['action', 'chip', 'detail', 'dimmed', 'headline', 'kind'], 'facts only: no actions list, no version string the page did not ask for');
+  // The action: only the kind the card is showing.
+  assert.deepEqual(await alerts.act('burst', 'act', 'update'), { ok: true, retried: false });
+  assert.deepEqual(acted, ['update']);
+  assert.equal((await alerts.act('burst', 'act', 'uninstall')).ok, false, 'not the shown step');
+  assert.equal((await alerts.act('burst', 'open', 'update')).ok, false, 'only "act"');
+  assert.equal((await alerts.act('burst', 'act', 42)).ok, false);
+  assert.deepEqual(acted, ['update'], 'nothing else ran');
+  state.burst = { kind: 'present', installed: true, capabilities: {}, upgrade: null, state: { version: '0.20.36', mode: 'base-url', active: true, route: 'PRIMARY', until: '', rejected: ['x'], primaryFailures: 0, compaction: null } };
+  state.loose = null;
+  const near = alerts.snapshot().burst;
+  assert.equal(near.view.action, null);
+  assert.equal(near.view.chip.label, 'Limit near');
+  assert.equal(near.looseEnds, null);
+  assert.equal((await alerts.act('burst', 'act', 'update')).ok, false, 'no step shown: nothing to run');
+});
+
+test('Home renders the Burst row with its one button, which sends only the action kind through alertAct', async () => {
+  const read = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8');
+  const dom = new JSDOM(read('home.html'), { runScripts: 'outside-only', url: 'http://localhost/', pretendToBeVisual: true });
+  dom.window.setInterval = () => 0;
+  const calls = [];
+  dom.window.homeApi = {
+    state: async () => ({}), navigate: async (d) => { calls.push(['navigate', d]); return true; },
+    alerts: async () => ({ stuck: [], limits: [], mail: [], waiting: [], burst: { view: { kind: 'off', headline: 'Claude Burst', detail: 'Installed, and not in Claude Code’s path.', chip: { tone: 'grey', label: 'Off' }, action: { kind: 'enable', label: 'Turn on' }, dimmed: false }, looseEnds: null } }),
+    alertAct: async (kind, action, handle) => { calls.push(['alertAct', kind, action, handle]); return { ok: true }; },
+    teamToday: async () => null, teamInbox: async () => [],
+  };
+  for (const f of ['src/attention-inbox.js', 'home-inbox-view.js']) dom.window.eval(read(f));
+  await new Promise((r) => setTimeout(r, 20));
+  const li = dom.window.document.querySelector('#inbox li[data-kind="burst"]');
+  assert.ok(li, 'the Burst row is in the Inbox');
+  assert.equal(li.querySelector('.title').textContent, 'Claude Burst');
+  assert.match(li.querySelector('.muted').textContent, /not in Claude Code/);
+  assert.equal(li.querySelector('.tag').textContent, 'Burst');
+  const buttons = [...li.querySelectorAll('button')];
+  assert.deepEqual(buttons.map((b) => b.textContent), ['Turn on'], 'one button');
+  buttons[0].click();
+  await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual(calls.filter((c) => c[0] === 'alertAct'), [['alertAct', 'burst', 'act', 'enable']]);
+  dom.window.close();
+});

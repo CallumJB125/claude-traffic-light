@@ -100,6 +100,9 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .
 .avatar { flex: none; display: inline-grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; background: var(--panel-2); border: 1px solid var(--line-strong); font-size: var(--text-sm); font-weight: 600; }
 .badges { font-size: var(--text-sm); color: var(--muted); margin: 2px 0; overflow-wrap: anywhere; }
 .badges:empty, .reason:empty { display: none; }
+/* Burst's loose ends for the row's repository: a quiet one-line badge, amber once something has sat a day or more. */
+.loose-ends { font-size: var(--text-sm); color: var(--muted); margin: 2px 0; overflow-wrap: anywhere; }
+.loose-ends.stale { color: var(--amber, var(--muted)); }
 .dir-group > h3 { font-size: var(--text-base); margin: 16px 0 8px; color: var(--muted); }
 .handoffs { margin: 6px 0; padding-left: 18px; font-size: var(--text-sm); }
 .caps { margin-top: 8px; font-size: var(--text-sm); }

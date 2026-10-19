@@ -5,13 +5,28 @@
 // teammates' shared work, agent mail, followed-session events); teammates' rows
 // therefore only ever describe sessions their owners explicitly shared.
 (function (root) {
-  const SEVERITY = Object.freeze({ approval: 0, question: 0, blocker: 1, failed: 2, handoff: 3, mention: 3, review: 4, reply: 4, waiting: 5, moment: 5, finished: 6 });
-  const LABEL = Object.freeze({ approval: 'Approval', question: 'Question', blocker: 'Blocked', failed: 'Failed', handoff: 'Handoff', mention: 'Mention', review: 'Ready for review', reply: 'Reply', waiting: 'Waiting on', moment: 'Moment', finished: 'Finished' });
+  const SEVERITY = Object.freeze({ approval: 0, question: 0, blocker: 1, burst: 1, failed: 2, handoff: 3, mention: 3, review: 4, reply: 4, waiting: 5, moment: 5, finished: 6 });
+  const LABEL = Object.freeze({ approval: 'Approval', question: 'Question', blocker: 'Blocked', burst: 'Burst', failed: 'Failed', handoff: 'Handoff', mention: 'Mention', review: 'Ready for review', reply: 'Reply', waiting: 'Waiting on', moment: 'Moment', finished: 'Finished' });
   const TEAM_KINDS = Object.freeze(['mention', 'reply', 'moment', 'handoff']);
   const MAX = 30;
   const OPTIONS_MAX = 4;
   const str = (v, max) => typeof v === 'string' && v.length <= max ? v : '';
   const ageOf = (ms, now) => Number.isFinite(ms) ? Math.max(0, now - ms) : null;
+  // One Burst row, at most (src/home-alerts.js burstCard): when Burst's statusView names a next step
+  // (not running, update, repair…), when loose ends are reported, or when the chip says a limit is near.
+  // The row's one button runs that step through main's consent dialog, or opens Usage & Burst.
+  function burstRow(b) {
+    if (!b || typeof b !== 'object') return null;
+    const v = b.view && typeof b.view === 'object' ? b.view : null;
+    const action = v && v.action && str(v.action.kind, 40) && str(v.action.label, 60) ? { kind: v.action.kind, label: v.action.label } : null;
+    const loose = b.looseEnds && typeof b.looseEnds === 'object' && Number.isSafeInteger(b.looseEnds.repos) && b.looseEnds.repos > 0 ? b.looseEnds : null;
+    const limitNear = !!(v && v.chip && v.chip.label === 'Limit near');
+    if (!action && !loose && !limitNear) return null;
+    const open = { kind: 'navigate', destination: 'optimiser', label: 'Open Usage & Burst' };
+    if (action) return { kind: 'burst', title: str(v.headline, 200) || 'Claude Burst needs attention', meta: str(v.detail, 400), ageMs: null, action: { kind: 'burst', op: action.kind, label: action.label }, key: `burst:${action.kind}` };
+    if (limitNear) return { kind: 'burst', title: 'Claude is near its limit', meta: str(v.detail, 400) || 'Burst reports rejected requests or primary failures; it moves to your secondary provider when the limit is hit.', ageMs: null, action: open, key: 'burst:limit-near' };
+    return { kind: 'burst', title: `Loose ends in ${loose.repos} ${loose.repos === 1 ? 'repository' : 'repositories'}`, meta: `${str(loose.text, 300) || 'Uncommitted files, unpushed commits or stashes.'} Commit or push before closing those sessions.`, ageMs: null, action: open, key: 'burst:loose-ends' };
+  }
   // team: rows from the hub inbox (src/team-inbox.js items()), already shaped; each carries
   // its Open action and the keys Mark read sends back ({read:{kind:'inbox-read', ids}}).
   function compose({ needs = null, alerts = null, morning = null, teamToday = null, follow = [], team = [], now = Date.now() } = {}) {
@@ -25,6 +40,8 @@
     }
     for (const s of alerts?.stuck || []) push({ kind: 'blocker', title: str(s.title, 400), meta: str(s.meta, 400), ageMs: null, action: s.canOpen ? { kind: 'alert', alert: 'stuck', op: 'open', handle: s.handle, label: 'Open session' } : { kind: 'alert', alert: 'stuck', op: 'dismiss', handle: s.handle, label: 'Dismiss' }, key: `stuck:${s.handle}` });
     for (const l of alerts?.limits || []) push({ kind: 'blocker', title: str(l.title, 400), meta: str(l.meta, 400), ageMs: null, action: l.canResume ? { kind: 'alert', alert: 'limit', op: 'resume', handle: l.handle, label: 'Resume at reset' } : { kind: 'alert', alert: 'limit', op: 'dismiss', handle: l.handle, label: 'Dismiss' }, key: `limit:${l.handle}` });
+    const burst = burstRow(alerts?.burst);
+    if (burst) push(burst);
     for (const w of alerts?.waiting || []) push({ kind: 'waiting', title: str(w.title, 400), meta: str(w.meta, 400), ageMs: null, action: { kind: 'alert', alert: 'waiting', op: 'open', handle: w.handle, label: 'Open request' }, key: `waiting:${w.handle}` });
     for (const m of alerts?.mail || []) push({ kind: 'question', title: str(m.title, 400), meta: str(m.meta, 400), ageMs: null, action: { kind: 'alert', alert: 'mail', op: 'open', handle: m.handle, label: 'Open agent mail' }, key: `mail:${m.handle}` });
     for (const [i, t] of (morning?.items || []).entries()) {
@@ -44,7 +61,7 @@
     rows.sort((a, b) => SEVERITY[a.kind] - SEVERITY[b.kind] || Number(b.late === true) - Number(a.late === true) || (b.ageMs ?? -1) - (a.ageMs ?? -1));
     return { items: rows.slice(0, MAX), total: rows.length, label: k => LABEL[k] };
   }
-  const api = { compose, SEVERITY, LABEL, MAX, OPTIONS_MAX, TEAM_KINDS };
+  const api = { compose, burstRow, SEVERITY, LABEL, MAX, OPTIONS_MAX, TEAM_KINDS };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.PlexiformInbox = Object.freeze(api);
 })(typeof globalThis !== 'undefined' ? globalThis : this);

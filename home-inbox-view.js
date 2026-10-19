@@ -16,6 +16,12 @@
   async function act(row) {
     const a = row.action;
     if (a.kind === 'navigate') { void api.navigate(a.destination); return; }
+    if (a.kind === 'burst' && typeof api.alertAct === 'function') {
+      const r = await api.alertAct('burst', 'act', a.op);
+      status.textContent = r?.ok ? (r.note || (r.retried ? 'Checked again.' : 'Started.')) : r?.cancelled ? 'Cancelled. Nothing changed.' : (r?.error || 'Burst could not do that. Open Usage & Burst to see why.');
+      await load();
+      return;
+    }
     if (a.kind === 'alert' && typeof api.alertAct === 'function') {
       const r = await api.alertAct(a.alert, a.op, a.handle);
       status.textContent = r?.ok ? (r.note || '') : (r?.error || 'That card has changed. Home refreshes in a moment.');
@@ -32,7 +38,7 @@
     for (const row of r.items) {
       const li = node('li'), text = node('div'); li.dataset.kind = row.kind;
       text.append(node('strong', row.title, 'title'), node('p', [row.meta, ago(row.ageMs)].filter(Boolean).join(' · '), 'muted'));
-      const tag = node('span', r.label(row.kind), `tag ${['approval', 'question', 'blocker', 'failed'].includes(row.kind) ? 'waiting' : row.kind === 'finished' ? 'working' : Inbox.TEAM_KINDS?.includes(row.kind) && row.read ? 'team' : ''}`);
+      const tag = node('span', r.label(row.kind), `tag ${['approval', 'question', 'blocker', 'failed', 'burst'].includes(row.kind) ? 'waiting' : row.kind === 'finished' ? 'working' : Inbox.TEAM_KINDS?.includes(row.kind) && row.read ? 'team' : ''}`);
       const actions = node('div', '', 'actions');
       if (row.options?.length && typeof api.answerInput === 'function') {
         for (const [i, opt] of row.options.entries()) actions.append(button(opt.label, async () => {

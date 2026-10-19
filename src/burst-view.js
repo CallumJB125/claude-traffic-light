@@ -184,4 +184,80 @@ function statusViewInner(d, { platform, now }) {
   }
 }
 
-module.exports = { MIN_VERSION, ageText, RETRY_BEFORE_REPAIR, COMPACTION_ON_CONFIRM, COMPACTION_OWN_OFF, statusView, consent, chipFor, MAC_ONLY, TERMS_URL, CHANGES_ALWAYS, CHANGES_TRANSPARENT, TERMS };
+// ── The Burst card's extra rows (B4): keep-awake, Remote Control, mods ──────
+// Each is null when the running Burst lacks the capability or the read failed, so the
+// card never shows an empty row. `mac` is the scrubbed /api/mac answer, `modStatus` the
+// scrubbed /api/mod-status answer; the card only emits actions, burst-ipc runs them.
+const obj = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : null);
+
+function keepAwakeView(mac) {
+  const ka = obj(mac) && obj(mac.keep_awake);
+  if (!ka) return null;
+  const mode = typeof ka.mode === 'string' && ka.mode ? ka.mode : 'off';
+  const live = obj(ka.live) || {};
+  const on = mode !== 'off';
+  const held = live.sleep_disabled === true;
+  const label = on ? (mode === 'always' ? 'On: plugged in and on battery' : 'On: plugged in only') : 'Off';
+  const text = on
+    ? `Burst keeps this Mac awake while AI is working${mode === 'always' ? ', on battery too' : ' when it is plugged in'}. Right now the Mac ${held ? 'stays awake with the lid shut' : 'would sleep with the lid shut'}.`
+    : `Burst is not keeping this Mac awake: a closed lid ${held ? 'is held open by another program right now' : 'puts it to sleep, which stops running sessions'}.`;
+  return { mode, on, held, label, text };
+}
+
+function remoteControlView(state) {
+  const s = obj(state);
+  if (!s || typeof s.remoteControlExpected !== 'boolean') return null;
+  const expected = s.remoteControlExpected;
+  const transparent = s.mode === 'transparent';
+  return {
+    expected,
+    label: expected ? 'Expected to work' : 'Off while Burst is on',
+    text: expected
+      ? `Claude Code's Remote Control keeps working${transparent ? ': Burst is in transparent mode' : ''}.`
+      : 'Claude Code\'s Remote Control is off while Burst is in base-URL mode. Reinstall Burst in transparent mode to have both.',
+  };
+}
+
+// One row per mod Burst knows: the session mod (burst-session, from /api/mod-status) and the
+// usage panel (claude-code-cost-sidebar, from /api/mac.panel). action.kind is mod-install or
+// mod-update with the mod's id in args; burst-ipc maps those to /api/mod-action and /api/panel-install.
+function modsView({ modStatus, mac } = {}) {
+  const rows = [];
+  const ms = obj(modStatus);
+  if (ms) {
+    const installed = ms.installed === true, current = ms.current === true, supported = ms.supported !== false;
+    const version = typeof ms.version === 'string' ? ms.version : '';
+    rows.push({
+      id: 'burst-session', name: 'Burst session mod', what: 'Shows Burst\'s route and limits inside Claude Code, and tells Burst when a session compacts.',
+      installed, current, version, supported,
+      status: !supported ? `Not supported by Claude Code ${typeof ms.claude === 'string' && ms.claude ? ms.claude : 'this version'}` : !installed ? 'Not installed' : current ? `Installed, version ${version || 'unknown'}, up to date` : `Installed, version ${version || 'unknown'}, update available`,
+      action: !supported ? null : !installed ? { kind: 'mod-install', label: 'Install', args: { mod: 'burst-session' } } : !current ? { kind: 'mod-update', label: 'Update', args: { mod: 'burst-session' } } : null,
+    });
+  }
+  const panel = obj(mac) && obj(mac.panel);
+  if (panel) {
+    const installed = panel.installed === true;
+    rows.push({
+      id: 'usage-panel', name: 'Usage panel (cost sidebar)', what: 'Andrew\'s cost sidebar: spend, tokens and alerts next to each Claude Code session.',
+      installed, current: installed, version: '', supported: true,
+      status: !installed ? 'Not installed' : panel.running === true ? 'Installed and running' : 'Installed, not running',
+      action: installed ? null : { kind: 'mod-install', label: 'Install', args: { mod: 'usage-panel' } },
+    });
+  }
+  return rows.length ? rows : null;
+}
+
+/**
+ * cardView(d, {platform, now, mac, modStatus}) → statusView(d) plus keepAwake, remoteControl, mods
+ * (each null when hidden). Reads are gated on d.capabilities so a 0.19 Burst shows the plain card.
+ */
+function cardView(d, { platform = process.platform, now = Date.now, mac = null, modStatus = null } = {}) {
+  const v = statusView(d, { platform, now });
+  const caps = (d && d.kind === 'present' && obj(d.capabilities)) || {};
+  v.keepAwake = caps.keepAwake === true ? keepAwakeView(mac) : null;
+  v.remoteControl = d && d.kind === 'present' ? remoteControlView(d.state) : null;
+  v.mods = caps.mods === true ? modsView({ modStatus, mac }) : null;
+  return v;
+}
+
+module.exports = { cardView, keepAwakeView, remoteControlView, modsView, MIN_VERSION, ageText, RETRY_BEFORE_REPAIR, COMPACTION_ON_CONFIRM, COMPACTION_OWN_OFF, statusView, consent, chipFor, MAC_ONLY, TERMS_URL, CHANGES_ALWAYS, CHANGES_TRANSPARENT, TERMS };

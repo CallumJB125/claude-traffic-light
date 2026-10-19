@@ -20,6 +20,7 @@ const Snapshot = require('./burst-snapshot.js');
 const ContextBreakdown = require('./context-breakdown.js');
 const Tools = require('./optimiser-tools.js');
 const Setup = require('./burst-setup.js');
+const LooseEnds = require('./burst-loose-ends-view.js');
 
 const POLL_BASE_MS = 5000;
 const POLL_MAX_MS = 60000;
@@ -213,7 +214,16 @@ function register({ utilityHandle: rawHandle, settingsOnly, chipAllowed = () => 
   }
 
   const card = (e) => settingsOnly(e) || accountAllowed(e);
-  utilityHandle('burst:status', card, async () => ({ ...(await refresh()), nextPollMs: isMac ? backoff.gap : 0 }));
+  const anyPage = (e) => card(e) || usageAllowed(e) || sessionsAllowed(e) || optimiserAllowed(e);
+  // The card (This Mac page): statusView plus keep-awake, Remote Control and the mods list,
+  // each from a cached read gated on the running Burst's capability (null when hidden).
+  utilityHandle('burst:status', card, async () => {
+    const v = await refresh();
+    const caps = present() || {};
+    const mac = caps.keepAwake || caps.mods ? cached('mac', () => client.mac()) : null;
+    const modStatus = caps.mods ? cached('modStatus', () => client.modStatus()) : null;
+    return { ...View.cardView(last, { platform, mac, modStatus }), nextPollMs: isMac ? backoff.gap : 0 };
+  });
   utilityHandle('burst:consent-text', card, async (_e, kind, mode) => {
     if (!isMac) return null;
     try { return await consentFor(kind, mode); } catch { return null; }
@@ -271,6 +281,17 @@ function register({ utilityHandle: rawHandle, settingsOnly, chipAllowed = () => 
     const view = await refresh(true);
     return { ok: true, view, note: r.enabled ? View.COMPACTION_OWN_OFF : '' };
   });
+
+  // Loose ends (uncommitted files, unpushed commits, stashes per repository), raw and scrubbed, for the
+  // optimiser's own section. {ok:false, reason} whenever the running Burst cannot answer it.
+  // Lane C's client.looseEnds() is used when present; client.get is the fallback seam.
+  async function looseEndsRaw() {
+    const caps = present();
+    if (!caps) return { ok: false, reason: 'Burst is not answering.', report: null };
+    if (!caps.looseEnds) return { ok: false, reason: 'This Burst has no loose-ends check (needs v0.20 or newer).', report: null };
+    try { return { ok: true, report: await fresh('looseEnds', () => (client.looseEnds ? client.looseEnds() : client.get('/api/loose-ends'))) }; } catch (e) { log('[burst] loose ends failed', e && e.code); return { ok: false, reason: 'Burst did not answer.', report: null }; }
+  }
+  utilityHandle('burst:loose-ends', (e) => anyPage(e), looseEndsRaw);
 
   // Usage optimiser tool list: status facts only, never the card's actions or anything raw.
   utilityHandle('burst:tools', optimiserAllowed, async () => {
@@ -400,7 +421,6 @@ function register({ utilityHandle: rawHandle, settingsOnly, chipAllowed = () => 
       return { ok: false, error: e.code === 'http' && e.detail ? `Burst refused it: ${e.detail}` : e.code === 'timeout' ? 'Burst did not answer in time.' : e.code === 'pid_changed' ? 'Burst restarted; nothing was sent. Try again.' : 'Burst did not do that. Nothing was changed.' };
     }
   }
-  const anyPage = (e) => card(e) || usageAllowed(e) || sessionsAllowed(e) || optimiserAllowed(e);
   const CODEX_ACTIONS = new Set(['codex-enable', 'codex-disable']);
   utilityHandle('burst-action', (e) => anyPage(e) || aitoolsAllowed(e), async (e, id, args) => (anyPage(e) || CODEX_ACTIONS.has(id) ? runAction(id, args) : { ok: false, error: 'Not available.' }));
 
@@ -521,10 +541,18 @@ function register({ utilityHandle: rawHandle, settingsOnly, chipAllowed = () => 
     },
     // This Mac and notices: scrubbed raw reads for their own normalizers; null when Burst is not present.
     async read(name) {
-      const READS = { mac: () => client.mac(), automask: () => client.automask(), settings: () => client.settings(), modStatus: () => client.modStatus(), intelligentCompaction: () => client.intelligentCompaction() };
+      const READS = { mac: () => client.mac(), automask: () => client.automask(), settings: () => client.settings(), modStatus: () => client.modStatus(), intelligentCompaction: () => client.intelligentCompaction(), looseEnds: () => (present().looseEnds ? client.looseEnds() : Promise.resolve(null)) };
       if (!present() || !Object.prototype.hasOwnProperty.call(READS, name)) return null;
       try { return await fresh(name, READS[name]); } catch (e) { log('[burst] read failed', name, e && e.code); return null; }
     },
+    // Overview and Home (synchronous, from the cache warmed in the background): loose ends keyed by
+    // repository root, null when the running Burst has no loose-ends check or has not answered yet.
+    looseEndsView() {
+      const caps = present();
+      if (!caps || !caps.looseEnds) return null;
+      return LooseEnds.looseEndsView(cached('looseEnds', () => (client.looseEnds ? client.looseEnds() : client.get('/api/loose-ends'))));
+    },
+    looseEndsRaw,
     compactionActive: () => !!(present() && last.state.compaction.active),
     compactionNote: () => (present() && last.state.compaction.active ? Spend.COMPACTION_NOTE : ''),
   };
