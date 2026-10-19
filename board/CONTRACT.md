@@ -1166,3 +1166,13 @@ Local Electron IPC only; no network, no new file. Every channel checks its sende
 | `widget:recent-projects` | the Widget settings page only | none | `[{name, colour}]`, at most 12: folder names of live sessions, then projects that already have a colour |
 
 New config keys, all written only through `widget-page:set` (checked by `cleanPatch`) or the widget menu: `widgetSnap` (`corners`\|`edges`\|`off`, default `corners`), `widgetSize` (`normal`\|`compact`\|`dot`, default `normal`), `widgetShortcut` (Electron accelerator with a modifier, default empty = off), `projectColours` (`{folderName: '#rrggbb'}`, at most 40), `quietUntil` (epoch ms, "Quiet for 30 minutes").
+
+## Desktop Lights IPC: rule notify (`src/rule-notify-main.js`)
+
+Local Electron IPC only; no network, no new file. Rule notifications are desktop `Notification`s built on this machine from the rule's name and the signal's label; nothing is sent to the hub or a phone (the hub's phone push carries approval pings only, so `phone` sends nothing until a paired-device path for other notifications exists).
+
+| Channel | Sender | Request | Response |
+|---|---|---|---|
+| `rule-notify:status` | the Lights window only (`widgetConfigSender`) | none | `{desktop: true, phone: boolean, phoneNote: 'Pair a phone first'\|null}`; the editor greys out the phone choices while `phone` is false |
+
+New rule keys, saved with the rules through `save-config` and checked by `rules.js normalizeRule`: `then.notify` (`desktop`\|`phone`\|`both`, absent = none) and `when.forMinutes` (integer 1-1440, absent = fire at once; the session's signal must have held that long since its `updatedAt`). Firing is edge-triggered per session, at most one per rule per 2 minutes, and held (dropped) by snooze, quiet hours, "Quiet for 30 minutes" and project mutes.

@@ -376,6 +376,30 @@
   }
   const F5_EXPORTS = { busySignals, BUSY_PINGS, pingsWhileBusy };
 
+  // ── Rule notify + forMinutes (rules builder) ──────────────────────────────
+  // then.notify asks src/rule-notify-main.js for a notification when the rule
+  // starts matching a session. when.forMinutes holds a rule back until the
+  // session has shown that signal for N minutes (from its updatedAt), so
+  // "waiting on you for over 5 minutes" is one rule. Both keys are only
+  // present when set, so saved rules without them are unchanged.
+  const NOTIFY_TARGETS = ['desktop', 'phone', 'both'];
+  const FOR_MINUTES_MAX = 1440;
+  const cleanForMinutes = (v) => { const n = Number(v); return Number.isInteger(n) && n >= 1 && n <= FOR_MINUTES_MAX ? n : null; };
+  function heldLongEnough(rule, session, now) {
+    const m = rule.when.forMinutes;
+    if (!m) return true;
+    const since = Date.parse((session && (session.signalSince || session.updatedAt)) || '');
+    return Number.isFinite(since) && now - since >= m * 60000;
+  }
+  // Every session a rule can match: the real ones plus the virtual, spend,
+  // git and busy ones resolve() builds. Shared with the notifier.
+  function liveSessions(sessions, now = Date.now(), env = {}) {
+    const real = sessions.filter((s) => sessionSignal(s));
+    return (real.length ? real.concat(virtualSessions(real, now, env))
+      : [{ signal: 'idle' }].concat(env.offline ? [{ signal: 'offline', virtual: true }] : [], busySignals(env))).concat(gitSessions(env));
+  }
+  // ── end rule notify
+
   // Seasonal costume for a date, or null. Applied by the app only when no
   // rule set a costume, and only if the seasonal toggle is on.
   function seasonalCostume(now = Date.now()) {
@@ -689,7 +713,7 @@
       name: r.name || 'Untitled rule',
       locked: !!r.locked,
       enabled: r.enabled !== false,
-      when: { signal, tool: (r.when?.tool || '').trim() || null, cwd: (r.when?.cwd || '').trim() || null, source: (r.when?.source || '').trim().toLowerCase() || null },
+      when: { signal, tool: (r.when?.tool || '').trim() || null, cwd: (r.when?.cwd || '').trim() || null, source: (r.when?.source || '').trim().toLowerCase() || null, ...(cleanForMinutes(r.when?.forMinutes) ? { forMinutes: cleanForMinutes(r.when.forMinutes) } : {}) },
       then: {
         lamp: LAMPS.includes(r.then?.lamp) ? r.then.lamp : null,
         lampColor: /^#[0-9a-f]{6}$/i.test(r.then?.lampColor || '') ? r.then.lampColor : null,
@@ -714,6 +738,7 @@
         agentsColor: /^#[0-9a-f]{6}$/i.test(r.then?.agentsColor || '') ? r.then.agentsColor : null,
         clicks: normalizeClicks(r.then?.clicks),
         ...(BUSY_PINGS.includes(r.then?.busyPing) ? { busyPing: r.then.busyPing } : {}),
+        ...(NOTIFY_TARGETS.includes(r.then?.notify) ? { notify: r.then.notify } : {}),
       },
     };
   }
@@ -783,8 +808,9 @@
       .slice(0, 24);
   }
 
-  function ruleMatches(rule, session) {
+  function ruleMatches(rule, session, now = Date.now()) {
     if (!rule.enabled) return false;
+    if (!heldLongEnough(rule, session, now)) return false;
     const sig = sessionSignal(session);
     if (!sig || !rule.when.signal.includes(sig)) return false;
     const src = (session.source || 'claude').toLowerCase();
@@ -812,8 +838,7 @@
     const real = sessions.filter((s) => sessionSignal(s));
     // F1 spend adds nothing on an empty desk (spendSessions needs a live
     // session), so only offline, F5 busy and F2 git ride on idle.
-    const live = (real.length ? real.concat(virtualSessions(real, now, env))
-      : [{ signal: 'idle' }].concat(env.offline ? [{ signal: 'offline', virtual: true }] : [], busySignals(env))).concat(gitSessions(env));
+    const live = liveSessions(sessions, now, env);
     const fired = [];
     const look = { lamp: 'off', lampColor: null, lampFx: 'none', sign: 'h3', lampShape: 'square', signFx: 'none', numberOf: null, screenFx: 'none', eyes: 'default', pose: 'none', text: null, costume: 'none', cameo: 'none', body: 'claude', bodyColor: null, effect: 'none', pet: 'none', agents: 'robot', agentsColor: null, sound: null, celebrate: false, name: null, ruleId: null, waitMinutes: waitMinutes(real, now), minions: [], clicks: {} };
     const owned = {};
@@ -821,7 +846,7 @@
     look.body = ch.body;
     look.bodyColor = ch.bodyColor;
     for (const rule of list) {
-      const matching = live.filter((s) => ruleMatches(rule, s));
+      const matching = live.filter((s) => ruleMatches(rule, s, now));
       if (!matching.length) continue;
       fired.push(rule.id);
       const t = rule.then;
@@ -889,5 +914,5 @@
     };
   }
 
-  return { AGENT_KINDS, AGENT_STATUSES, MODES, normalizeAgent, liveAgents, filterAgentKinds, sessionMode, ralphIteration, fillText, seasonalCostume, seasonalEffect, ACTIONS, GESTURES, DEFAULT_CLICKS, SIGNALS, TOOL_SUGGESTIONS, LAMPS, LAMP_FX, SIGNS, LAMP_SHAPES, SIGN_FX, NUMBERS, SCREEN_FX, POSES, COSTUMES, CAMEOS, CAMEO_ID, BODIES, EYE_MOODS, EFFECTS, PETS, AGENT_STYLES, SOUNDS, WAITING_ON_YOU, TURN_END, effectiveSignal, presentSignal, TRANSIENT_ASK_MS, AGENT_KEEPALIVE_MS: Machine.AGENT_KEEPALIVE_MS, classifySession: Machine.classify, LONG_RUNNING_MS, defaultRules, RULES_VERSION, LEGACY_RULES_VERSION, rulesVersionOf, migrateRules, normalizeCharacter, characterFromRules, templatePrefs, shareFile, templates, applyTemplate, normalizeRule, clickCommands, orderedRules, ruleMatches, toolMatches, cwdMatches, folderOf, resolve, firedNames, previewLook, sessionSignal, virtualSessions, uid, GIT_SIGNALS, gitDefaultRules, gitSessions, SPEND_RULES, placeSpendRules, spendSessions, BLOCKED_RULE, BLOCKED_KEEP_MS, placeBlockedRule, ...F5_EXPORTS };
+  return { AGENT_KINDS, AGENT_STATUSES, MODES, normalizeAgent, liveAgents, filterAgentKinds, sessionMode, ralphIteration, fillText, seasonalCostume, seasonalEffect, ACTIONS, GESTURES, DEFAULT_CLICKS, SIGNALS, TOOL_SUGGESTIONS, LAMPS, LAMP_FX, SIGNS, LAMP_SHAPES, SIGN_FX, NUMBERS, SCREEN_FX, POSES, COSTUMES, CAMEOS, CAMEO_ID, BODIES, EYE_MOODS, EFFECTS, PETS, AGENT_STYLES, SOUNDS, WAITING_ON_YOU, TURN_END, effectiveSignal, presentSignal, TRANSIENT_ASK_MS, AGENT_KEEPALIVE_MS: Machine.AGENT_KEEPALIVE_MS, classifySession: Machine.classify, LONG_RUNNING_MS, defaultRules, RULES_VERSION, LEGACY_RULES_VERSION, rulesVersionOf, migrateRules, normalizeCharacter, characterFromRules, templatePrefs, shareFile, templates, applyTemplate, normalizeRule, clickCommands, orderedRules, ruleMatches, toolMatches, cwdMatches, folderOf, resolve, firedNames, previewLook, sessionSignal, virtualSessions, uid, GIT_SIGNALS, gitDefaultRules, gitSessions, SPEND_RULES, placeSpendRules, spendSessions, BLOCKED_RULE, BLOCKED_KEEP_MS, placeBlockedRule, NOTIFY_TARGETS, FOR_MINUTES_MAX, liveSessions, ...F5_EXPORTS };
 });
