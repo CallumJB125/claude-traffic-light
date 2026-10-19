@@ -242,7 +242,12 @@ const okRoutes = () => Object.fromEntries(Object.values(MUTATE_ALLOW).filter((m)
 test('allow-list: inspect-item, log and every secret path stay unreachable; the new reads are allowed', () => {
   for (const p of ['/api/inspect-item?i=1', '/api/inspect-item', '/api/log', '/api/secondary-key', '/api/settings-save', '/api/hotspot-password', '/api/responses', '/api/inspect?i=1', '/api/settings?x=1']) assert.equal(isAllowed('GET', p), false, p);
   for (const p of ['/api/requests?limit=50', '/api/history?days=7', '/api/inspect?session=s&engine=codex', '/api/automask', '/api/mac', '/api/settings', '/api/audit?limit=50', '/api/mod-status', '/api/intelligent-compaction']) assert.ok(isAllowed('GET', p), p);
-  for (const m of Object.values(MUTATE_ALLOW)) assert.ok(!/secondary-key|settings-save|hotspot|secondary$|force|revert|install|config/.test(m.path), m.path);
+  // Burst's own installer, config writer, secondary-provider and heal-install routes stay out; the
+  // v0.20 panel/finder installers and the console's restore-config are the only "install"/"config" paths allowed.
+  for (const m of Object.values(MUTATE_ALLOW)) {
+    assert.ok(!/secondary-key|settings-save|hotspot|secondary$|force|revert|\/api\/install$|\/api\/config$|handover-install|heal-install/.test(m.path), m.path);
+    assert.ok(!/install|config/.test(m.path) || ['/api/panel-install', '/api/finder-install', '/api/console/restore-config'].includes(m.path), m.path);
+  }
 });
 
 test('/api/secondary-key is not reachable through any exported function', async () => {
