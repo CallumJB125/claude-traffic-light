@@ -101,7 +101,7 @@
     background: var(--panel-2);
     transition: background var(--t), border-color var(--t), transform 80ms ease;
   }
-  .btn:hover { background: #322e3a; border-color: #544f5e; }
+  .btn:hover { background: var(--line); border-color: var(--line-strong); }
   .btn:active { transform: scale(0.97); }
   .btn:disabled { opacity: 0.45; cursor: default; transform: none; }
   .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
@@ -208,7 +208,7 @@
   #rules footer { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
   #rule-words { margin-top: 6px; }
   .rule.selected { background: var(--accent-soft); }
-  .rule.selected .name { color: #fff; }
+  .rule.selected .name { color: var(--text); }
   .rule.dragging { opacity: 0.4; }
   .rule.drop-before::before, .rule.drop-after::after {
     content: '';

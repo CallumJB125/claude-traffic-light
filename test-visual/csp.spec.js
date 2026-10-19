@@ -220,6 +220,8 @@ test('tasks: the list, a task with its transcript and thread, and the composer r
   await watch(tasks, 'tasks');
   await expect(tasks.locator('#list .row')).toHaveCount(5, { timeout: 15000 });
   await tasks.locator('#list .row', { hasText: 'Add a dark mode toggle' }).click();
+  // A task opens on Overview since 3a88b399; the transcript is its own tab.
+  await tasks.locator('#tab-transcript').click();
   await expect(tasks.locator('#tx .msg').first()).toBeVisible({ timeout: 10000 });
   await tasks.locator('#tab-messages').click();
   await tasks.locator('#tab-details').click();

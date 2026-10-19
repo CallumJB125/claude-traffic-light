@@ -70,7 +70,7 @@ async function open(scheme) {
   return lights;
 }
 
-// tokens.css has no light palette: the Lights page is dark-only, so there is no light variant to shoot.
+// Only the dark scheme is shot; the light palette tokens.css gained in 9921f259 is not baselined here.
 for (const scheme of ['dark']) {
   test(`usage history renders its charts (${scheme})`, async () => {
     const lights = await open(scheme);
@@ -81,7 +81,7 @@ for (const scheme of ['dark']) {
     const cards = lights.locator('#usage-history .uv-card');
     const titles = await cards.locator('h3').allTextContents();
     expect(titles).toEqual(['API-equivalent $ over time', 'Model share over time', 'Where the tokens go', 'Cache hit rate', 'Activity calendar', 'Busiest hours', 'Projects', 'Routine Opus turns']);
-    for (let i = 0; i < titles.length; i += 1) await expect(cards.nth(i)).toHaveScreenshot(`usage-${String(i + 1).padStart(2, '0')}-${titles[i].toLowerCase().replace(/[^a-z]+/g, '-')}-${scheme}.png`, { threshold: 0.05 });
+    for (let i = 0; i < titles.length; i += 1) await expect(await snapToPixels(cards.nth(i))).toHaveScreenshot(`usage-${String(i + 1).padStart(2, '0')}-${titles[i].toLowerCase().replace(/[^a-z]+/g, '-')}-${scheme}.png`, { threshold: 0.05 });
   });
 }
 
