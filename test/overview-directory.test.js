@@ -38,7 +38,7 @@ const FIXTURE = {
   ],
 };
 
-function stack({ teamHub = createFakeTeamHub(structuredClone(FIXTURE)), observed = true, shares = [], channelAdapter = null, prepareChannel = null, scripts = [] } = {}) {
+function stack({ teamHub = createFakeTeamHub(structuredClone(FIXTURE)), observed = true, shares = [], channelAdapter = null, prepareChannel = null, scripts = [], presence = null, presenceView = null } = {}) {
   const handlers = new Map(), listeners = new Map(), results = [];
   const win = { isDestroyed: () => false, isVisible: () => true, isMinimized: () => false, isFocused: () => ctx.foreground };
   const contents = { id: 9, isDestroyed: () => false, mainFrame: {}, send: (ch, ...a) => { for (const fn of listeners.get(ch) ?? []) fn({}, ...structuredClone(a)); } };
@@ -54,6 +54,7 @@ function stack({ teamHub = createFakeTeamHub(structuredClone(FIXTURE)), observed
     buddy: () => buddy, sessions: () => raw, work: async () => ({ sources: [], capture: [] }), now,
     owned: () => interaction.listOwned(), shares: () => ({ origin: 'https://hub.example', list: shares }),
     hubTeams: async () => ({ origin: 'https://hub.example', teams: [] }), teamHub: () => teamHub,
+    ...(presence ? { presence } : {}), ...(presenceView ? { presenceView } : {}),
   });
   overview.register({ handle: (ch, fn) => handlers.set(ch, fn) });
   teamHub?.onChange(() => overview.directoryChanged());
@@ -314,5 +315,64 @@ test('Team sessions: per-viewer collections group rows locally, filter the list 
     assert.equal(s.row('team-list', /Fix login/).querySelectorAll('.collection-chip').length, 0);
     assert.deepEqual(JSON.parse(s.dom.window.localStorage.getItem('plexiform.pins')).collections, []);
     assert.equal(s.doc.querySelector('img'), null);
+  } finally { s.close(); }
+});
+
+// Team depth lane C (C3): the person group header shows what that teammate is looking at or running,
+// from the latest board.presence the main-side link holds; opening a shared session's details tells
+// the hub its card id (presence.view) and collapsing clears it.
+test('Team sessions: "viewing <card title>" / "running <repo>" next to the availability badge, and presence.view on open/close', async () => {
+  const hub = createFakeTeamHub(structuredClone({ ...FIXTURE, sessions: FIXTURE.sessions.map((s) => (s.ref === 'bob-1' ? { ...s, card: { ...s.card, id: 'card-7' } } : s)) }));
+  let live = {
+    members: [
+      { member_id: 'm-bob', name: `Bob ${HOSTILE}`, sessions: [{ agent: 'claude', repo_short: `bondly ${HOSTILE}`, branch: 'main', state: 'working' }], viewing: { card_id: 'card-7', since: '2026-10-19T10:00:00Z' } },
+      { member_id: 'm-cara', name: 'Cara', sessions: [{ agent: 'codex', repo_short: 'docs', branch: null, state: 'idle' }, { agent: 'codex', repo_short: 'docs', branch: null, state: 'working' }], viewing: null },
+      { member_id: 'm-me', name: 'Me', sessions: [{ agent: 'claude', repo_short: 'mine', branch: null, state: 'working' }], viewing: null },
+    ],
+    viewers: [{ member_id: 'm-bob', name: `Bob ${HOSTILE}`, card_id: 'card-7', key: 'DEV-7', title: `Fix login ${HOSTILE}`, at: '2026-10-19T10:00:00Z' }],
+  };
+  const asked = [], views = [];
+  const s = stack({ teamHub: hub, presence: (team) => { asked.push(team); return live; }, presenceView: (r) => { views.push(r); return 1; } });
+  try {
+    await s.ready(); await s.team();
+    assert.deepEqual([...new Set(asked)], ['t-dev'], 'presence is read for the selected team only');
+    const heads = [...s.$('team-list').querySelectorAll('.dir-group > h3')];
+    assert.deepEqual(heads.map((h) => h.firstChild.textContent), [`Bob ${HOSTILE}`, 'Cara']);
+    const bobNow = heads[0].querySelector('.presence-now'), caraNow = heads[1].querySelector('.presence-now');
+    assert.ok(heads[0].querySelector('.availability'), 'the availability badge stays');
+    assert.equal(bobNow.textContent, `viewing Fix login ${HOSTILE}`, 'viewing wins over running');
+    assert.equal(bobNow.dataset.kind, 'viewing');
+    assert.match(bobNow.title, /^DEV-7 · Fix login .* · running bondly /);
+    assert.equal(caraNow.textContent, 'running docs', 'each repo once');
+    assert.equal(caraNow.dataset.kind, 'running');
+    assert.equal(s.doc.querySelector('img'), null, 'hostile names, titles and repos are text');
+    // The page never learns member ids or the card id from presence; only what the header shows.
+    const wire = JSON.stringify(s.results.filter(([ch]) => ch === 'overview:directory'));
+    for (const leak of ['m-bob', 'card-7', 'since']) assert.equal(wire.includes(leak), false, leak);
+
+    // Opening Bob's details → presence.view for his session's card; closing → cleared; a session without a card id sends null.
+    const bob = s.row('team-list', /Fix login/), cara = s.row('team-list', /Write docs/);
+    const toggle = (row, open) => { const d = row.querySelector('details.caps'); d.open = open; d.dispatchEvent(new s.dom.window.Event('toggle')); };
+    toggle(bob, true); await tick();
+    assert.deepEqual(views, [{ team: 't-dev', card_id: 'card-7' }]);
+    toggle(bob, true); await tick();
+    assert.equal(views.length, 1, 'a repeat changes nothing');
+    toggle(bob, false); await tick();
+    assert.deepEqual(views.at(-1), { team: 't-dev', card_id: null });
+    toggle(cara, true); await tick();
+    assert.equal(views.length, 2, 'no card id on Cara\'s session: nothing new to send (already cleared)');
+    toggle(cara, false); await tick();
+    assert.equal(views.length, 2);
+
+    // Presence gone (link closed): the header line disappears, the badge stays.
+    live = null;
+    s.overview.directoryChanged(); await tick(); await s.poll();
+    const heads2 = [...s.$('team-list').querySelectorAll('.dir-group > h3')];
+    assert.equal(heads2[0].querySelector('.presence-now'), null);
+    assert.ok(heads2[0].querySelector('.availability'));
+    // Grouping by something other than person never shows it.
+    live = { members: [], viewers: [{ member_id: 'm-cara', name: 'Cara', card_id: 'c-9', key: 'DEV-9', title: 'Docs', at: '2026-10-19T10:00:00Z' }] };
+    s.change('team-group', 'status'); await tick();
+    assert.equal(s.$('team-list').querySelector('.presence-now'), null);
   } finally { s.close(); }
 });

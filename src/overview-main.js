@@ -3,12 +3,12 @@ const {createOverviewService,response}=require('./overview-service');
 // Exact visible main-app Overview document owns passive reads.
 // Foreground focus remains required for every action and effect.
 // Directory inputs (owned, shares, hubTeams, teamHub) are main-only; see overview-service.
-function createOverviewMain({buddy,sessions,work,managed,openManaged,messageManaged,now,owned,shares,hubTeams,teamHub,followups,followupScope,followupLocal,shareView=null}){
+function createOverviewMain({buddy,sessions,work,managed,openManaged,messageManaged,now,owned,shares,hubTeams,teamHub,followups,followupScope,followupLocal,shareView=null,presence,presenceView}){
  let authority=null,stopped=false;
  function owner(readOnly=false){const b=buddy(),c=readOnly?(b?.overviewReadContext?.()??b?.overviewContext?.()):b?.overviewContext?.();if(!c||!readOnly&&!c.foreground||!c.window||!c.contents||c.window.isDestroyed()||c.contents.isDestroyed()||!c.contents.mainFrame||!Number.isSafeInteger(c.generation))return null;return{buddy:b,window:c.window,contents:c.contents,frame:c.contents.mainFrame,generation:c.generation,document:c.document??null};}
  const equal=(a,b)=>!!a&&!!b&&a.buddy===b.buddy&&a.window===b.window&&a.contents===b.contents&&a.frame===b.frame&&a.generation===b.generation&&a.document===b.document;
  function same(a,readOnly=false){return!stopped&&equal(a,owner(readOnly));}
- const service=createOverviewService({sessions,work,managed,openManaged,messageManaged,now,owned,shares,hubTeams,teamHub,followups,followupScope,followupLocal,current:()=>same(authority,true),actionCurrent:()=>same(authority),navigationCurrent:()=>!stopped&&!!authority&&buddy()===authority.buddy&&!authority.window.isDestroyed()&&!authority.contents.isDestroyed()&&authority.window.isVisible()&&!authority.window.isMinimized()&&authority.window.isFocused()});
+ const service=createOverviewService({sessions,work,managed,openManaged,messageManaged,now,owned,shares,hubTeams,teamHub,followups,followupScope,followupLocal,...(presence?{presence}:{}),...(presenceView?{presenceView}:{}),current:()=>same(authority,true),actionCurrent:()=>same(authority),navigationCurrent:()=>!stopped&&!!authority&&buddy()===authority.buddy&&!authority.window.isDestroyed()&&!authority.contents.isDestroyed()&&authority.window.isVisible()&&!authority.window.isMinimized()&&authority.window.isFocused()});
  let pumping=false;
  const pump=followups?setInterval(()=>{if(pumping||stopped)return;pumping=true;Promise.resolve(service.pumpFollowups()).catch(()=>{}).finally(()=>{pumping=false;});},1500):null;
  pump?.unref?.();
@@ -23,6 +23,7 @@ function createOverviewMain({buddy,sessions,work,managed,openManaged,messageMana
     return result;});
    ipc.handle('overview:directory',async(e,...args)=>{const before=owner(true);if(!allowed(e,before)||args.length!==1)return null;
     adopt(before);const result=await service.directory(args[0]);return same(before,true)?result:null;});
+   ipc.handle('overview:viewing',async(e,...args)=>{const before=owner(true);if(!allowed(e,before)||args.length!==1)return response('unavailable');adopt(before);return service.viewing(args[0]);});
    ipc.handle('overview:team-inspect',async(e,...args)=>{const before=owner(true);if(!allowed(e,before)||args.length!==1)return response('unavailable');
     adopt(before);const result=await service.teamInspect(args[0]);return same(before,true)?result:response('stale');});
    ipc.handle('overview:team-action',async(e,...args)=>{const before=owner();if(!allowed(e,before)||!same(authority)||args.length!==1)return response('unavailable');

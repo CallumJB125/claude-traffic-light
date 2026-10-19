@@ -208,6 +208,8 @@ export const SHAPES = Object.freeze({
     hello: { protocol: 'int' },
     subscribe: { board_id: 'string' },
     unsubscribe: { board_id: 'string' },
+    // Team depth lane C: which card this socket's member is looking at (null clears).
+    'presence.view': { card_id: 'string?' },
     ping: {},
   },
   // hub → browser
@@ -223,6 +225,7 @@ export const SHAPES = Object.freeze({
     'lease.tick': { card_id: 'string', live: 'object', state_age_ms: 'int' },
     'event.append': { card_id: 'string', event: 'object' },
     'team.presence': { members: 'array' },
+    'board.presence': { board_id: 'string', members: 'array', viewers: 'array' },
     pong: {},
     error: { code: 'string', message: 'string' },
   },

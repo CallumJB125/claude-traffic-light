@@ -87,7 +87,11 @@
     const childDetails = el('details', '', 'dir-children'), childSummary = el('summary'); childDetails.append(childSummary, children);
     const history = el('details', '', 'dir-history'); history.append(el('summary', 'Recent messages and handoffs'), handoffs, deliveries);
     li.append(head, meta, pulse, when, activity, childDetails, history, actions, receipt, why, notice, details);
-    return { li, avatar, title, owner, collections, tag, tools, presence, pulse, pulseText, receipt, meta, badges, when, activity, self, children, handoffs, deliveries, actions, why, notice, capList, details, childDetails, childSummary, history, kind, composer: null, gone: false, entry: null, request: null };
+    // Team rows: opening any details panel tells the hub this session's card is being looked at (presence.view); closing them all clears it.
+    const sync = () => { if (kind !== 'team' || !out.entry || typeof window.overviewApi?.viewing !== 'function') return; const id = [details, childDetails, history].some(d => d.open) ? out.entry.id : null; if (out.viewingId === id) return; out.viewingId = id; void window.overviewApi.viewing({ id }); };
+    for (const d of [details, childDetails, history]) d.addEventListener('toggle', sync);
+    const out = { viewingId: null, li, avatar, title, owner, collections, tag, tools, presence, pulse, pulseText, receipt, meta, badges, when, activity, self, children, handoffs, deliveries, actions, why, notice, capList, details, childDetails, childSummary, history, kind, composer: null, gone: false, entry: null, request: null };
+    return out;
   }
   function updateRow(v, e, data) {
     v.entry = e; v.gone = false; v.li.classList.remove('gone');
@@ -557,6 +561,14 @@
         if (!g.badge) { g.badge = el('span', '', 'availability'); g.head.append(' ', g.badge); }
         g.badge.dataset.level = a.level; set(g.badge, a.label); g.badge.title = a.detail;
       } else if (g.badge) { g.badge.remove(); g.badge = null; }
+      // Live presence from the team's board (board.presence): what this person is looking at or running right now.
+      const now = group === 'person' ? ordered.filter(v => !v.gone).map(v => v.entry.presence).find(p => p && (p.viewing || (p.running || []).length)) : null;
+      if (now) {
+        if (!g.now) { g.now = el('span', '', 'presence-now'); g.head.append(' ', g.now); }
+        const text = now.viewing ? `viewing ${now.viewing.title}` : `running ${now.running.join(', ')}`;
+        g.now.dataset.kind = now.viewing ? 'viewing' : 'running'; set(g.now, text);
+        g.now.title = now.viewing && now.viewing.key ? `${now.viewing.key} · ${now.viewing.title}${now.running.length ? ` · running ${now.running.join(', ')}` : ''}` : text;
+      } else if (g.now) { g.now.remove(); g.now = null; }
       g.list.setAttribute('aria-label', k); place(g.list, (Pins ? Pins.order(pins, ordered.map(v => v.entry)).map(e => ordered.find(v => v.entry === e)) : ordered).map(v => v.li)); return g.box;
     });
     for (const [k, g] of l.groups) if (!groups.has(k)) l.groups.delete(k);

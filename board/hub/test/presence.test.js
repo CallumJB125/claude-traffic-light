@@ -30,7 +30,7 @@ test('presence: board-linked repos only, exact browser shape, same view over HTT
     assert.deepEqual(f, { type: 'team.presence', members: [{ member_id: h.ids.alice, name: 'Alice', sessions: [{ agent: 'claude', repo_short: 'app', branch: 'feat/a', state: 'working', since: '2026-09-30T10:00:00Z', summary: 'editing the parser' }] }] });
     const http = await h.api(alice, 'GET', `/api/boards/${h.ids.board}/presence`);
     assert.equal(http.status, 200);
-    assert.deepEqual(http.body, { members: f.members });
+    assert.deepEqual(http.body, { board_id: h.ids.board, members: f.members, viewers: [] }, 'HTTP is the board.presence body');
     assert.equal(JSON.stringify(f).includes('secret project'), false);
     assert.equal(h.db.get('SELECT COUNT(*) AS n FROM journal').n, journal0, 'presence is never journaled');
 
@@ -38,7 +38,7 @@ test('presence: board-linked repos only, exact browser shape, same view over HTT
     h.db.insert('boards', { id: 'b2', org_id: h.ids.org, name: 'Other', key_prefix: 'OTH' });
     const b2 = await h.browser(alice, 'b2');
     assert.deepEqual((await b2.next('team.presence')).members, []);
-    assert.deepEqual((await h.api(alice, 'GET', '/api/boards/b2/presence')).body, { members: [] });
+    assert.deepEqual((await h.api(alice, 'GET', '/api/boards/b2/presence')).body, { board_id: 'b2', members: [], viewers: [] });
   } finally {
     await h.destroy();
   }
@@ -269,6 +269,116 @@ test('presence: markup stays text, control and bidi characters are stripped, a s
     assert.deepEqual(f.members[0].sessions, [{ agent: 'claude', repo_short: 'app', branch: '<img src=x onerror=alert(1)>', state: 'working', since: '2026-09-30T10:00:00Z', summary: 'gnp.exe <b>done</b>' }],
       'markup is passed through as text for textContent rendering; controls and bidi are gone; the path-carrying session is dropped');
     assert.doesNotMatch(JSON.stringify(b.all('team.presence')), /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]|\/Users\//);
+  } finally {
+    await h.destroy();
+  }
+});
+
+// ── viewing a card (team depth lane C) ────────────────────────────────────────
+const latestBoard = (b) => b.all('board.presence').at(-1);
+
+test('C1 presence.view: a card_id reaches the board\'s other subscribers as a viewer, not another board, not another org', async () => {
+  const { h, alice, b } = await setup();
+  try {
+    const bob = await h.login('bob');
+    const bb = await h.browser(bob);
+    const first = await bb.next('board.presence');
+    assert.deepEqual({ board_id: first.board_id, members: first.members, viewers: first.viewers }, { board_id: h.ids.board, members: [], viewers: [] }, 'a subscriber gets the (empty) board view right after its snapshot');
+    const card = await h.createCard(alice, { title: 'Parser ‮rewrite' });
+    bb.send({ type: 'presence.view', card_id: card.id });
+    const pushed = await b.next('board.presence', (m) => m.viewers.length === 1, { fresh: true });
+    const [v] = pushed.viewers;
+    assert.equal(typeof v.at, 'string');
+    assert.deepEqual({ ...v, at: undefined }, { member_id: h.ids.bob, name: 'Bob', card_id: card.id, key: card.key, title: 'Parser rewrite', at: undefined }, 'card title is pushed without bidi controls');
+    assert.deepEqual(pushed.members, [{ member_id: h.ids.bob, name: 'Bob', sessions: [], viewing: { card_id: card.id, since: v.at } }], 'members keeps its D37b fields and gains viewing');
+    assert.equal(b.all('team.presence').length, 1, 'team.presence (old shape) is not re-sent for a viewer change');
+    assert.deepEqual((await h.api(alice, 'GET', `/api/boards/${h.ids.board}/presence`)).body.viewers.map((x) => x.member_id), [h.ids.bob]);
+    assert.equal(h.db.get("SELECT COUNT(*) AS n FROM journal WHERE kind LIKE '%presence%'").n, 0, 'never journaled');
+
+    // Another board of the same org never hears about it; a card of another board is not accepted.
+    h.db.insert('boards', { id: 'b2', org_id: h.ids.org, name: 'Other', key_prefix: 'OTH' });
+    const b2 = await h.browser(alice, 'b2');
+    assert.deepEqual((await b2.next('board.presence')).viewers, []);
+    b2.send({ type: 'presence.view', card_id: card.id });
+    await h.tick(PRESENCE_PUSH_MS);
+    await settle(50);
+    assert.deepEqual(latestBoard(b2).viewers, [], 'a card on another board is dropped');
+    assert.deepEqual((await h.api(alice, 'GET', '/api/boards/b2/presence')).body.viewers, []);
+
+    // Another org's browser sees nothing of it either.
+    const now = new Date().toISOString();
+    h.db.insert('orgs', { id: 'o2', name: 'other', created_at: now });
+    h.db.insert('members', { id: 'm-eve', org_id: 'o2', github_id: 99, github_login: 'eve', email: 'eve@x.io', display_name: 'Eve', role: 'owner', created_at: now });
+    h.db.insert('boards', { id: 'b-eve', org_id: 'o2', name: 'Eve', key_prefix: 'EVE' });
+    const eve = await h.login('eve');
+    const be = await h.browser(eve, 'b-eve');
+    assert.deepEqual((await be.next('board.presence')).viewers, []);
+    assert.equal(JSON.stringify(be.msgs).includes(card.id), false);
+
+    // Clearing (null) drops the viewer at once; closing the socket too.
+    bb.send({ type: 'presence.view', card_id: null });
+    const cleared = b.next('board.presence', (m) => m.viewers.length === 0, { fresh: true });
+    await h.tick(PRESENCE_PUSH_MS);
+    await cleared;
+    bb.send({ type: 'presence.view', card_id: card.id });
+    await h.tick(PRESENCE_PUSH_MS);
+    await b.next('board.presence', (m) => m.viewers.length === 1, { fresh: true });
+    bb.terminate();
+    const gone = b.next('board.presence', (m) => m.viewers.length === 0, { fresh: true });
+    await h.tick(PRESENCE_PUSH_MS);
+    await gone;
+  } finally {
+    await h.destroy();
+  }
+});
+
+test('C2 presence.view: a silent viewer expires after PRESENCE_TTL_MS; a repeat inside PRESENCE_MIN_MS/2 is dropped, a card change is not', async () => {
+  const { h, alice, b } = await setup();
+  try {
+    const bob = await h.login('bob');
+    const bb = await h.browser(bob);
+    const c1 = await h.createCard(alice, { title: 'One' });
+    const c2 = await h.createCard(alice, { title: 'Two' });
+    bb.send({ type: 'presence.view', card_id: c1.id });
+    await b.next('board.presence', (m) => m.viewers.length === 1, { fresh: true });
+    // A card change inside the flood window is accepted, a same-card repeat is not a refresh.
+    bb.send({ type: 'presence.view', card_id: c2.id });
+    const moved = b.next('board.presence', (m) => m.viewers[0]?.card_id === c2.id, { fresh: true });
+    await h.tick(PRESENCE_PUSH_MS);
+    await moved;
+    await h.tick(PRESENCE_TTL_MS - 1000);
+    await settle(50);
+    assert.equal(latestBoard(b).viewers.length, 1, 'still shown before the TTL');
+    bb.send({ type: 'presence.view', card_id: c2.id });   // keepalive refreshes it
+    await settle(50);
+    await h.tick(2000);
+    await settle(50);
+    assert.equal(latestBoard(b).viewers.length, 1, 'a keepalive just before the TTL keeps it');
+    bb.send({ type: 'presence.view', card_id: c2.id });   // repeat inside PRESENCE_MIN_MS/2: dropped, so it does not refresh
+    await settle(50);
+    await h.tick(PRESENCE_TTL_MS - 3000);   // the keepalive is 2 s old already: 89 s after it, still there
+    await settle(50);
+    assert.equal(latestBoard(b).viewers.length, 1, 'the dropped repeat did not matter yet');
+    const gone = b.next('board.presence', (m) => m.viewers.length === 0, { fresh: true });
+    await h.tick(2000);                      // 91 s after the keepalive: the repeat was dropped, so it expires
+    await gone;
+    assert.deepEqual((await h.api(alice, 'GET', `/api/boards/${h.ids.board}/presence`)).body.viewers, []);
+  } finally {
+    await h.destroy();
+  }
+});
+
+test('presence.view: a bad shape is a VALIDATION error, an unsubscribed socket is ignored', async () => {
+  const { h, b } = await setup();
+  try {
+    b.send({ type: 'presence.view', card_id: 7 });
+    const err = await b.next('error', () => true, { fresh: true });
+    assert.equal(err.code, 'VALIDATION');
+    b.send({ type: 'unsubscribe', board_id: h.ids.board });
+    b.send({ type: 'presence.view', card_id: 'c' });
+    await h.tick(PRESENCE_PUSH_MS);
+    await settle(50);
+    assert.equal(h.hub.presence.byConn.size, 0);
   } finally {
     await h.destroy();
   }

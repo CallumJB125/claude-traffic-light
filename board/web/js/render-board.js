@@ -32,6 +32,27 @@ export function avatar(member, { size = 'sm', dim = false } = {}) {
   member.avatar_url ? h('img', { src: member.avatar_url, alt: '', loading: 'lazy', 'data-avatar': '' }) : null);
 }
 
+/** Teammates looking at this card right now (board.presence viewers, team depth lane C); one avatar per member. */
+export function viewersOf(cardId, model) {
+  const seen = new Map();
+  for (const v of model.viewers ?? []) {
+    if (v.card_id !== cardId || seen.has(v.member_id)) continue;
+    seen.set(v.member_id, model.members?.get(v.member_id) ?? { member_id: v.member_id, name: v.name ?? '?' });
+  }
+  return [...seen.values()];
+}
+
+export function viewerStack(cardId, model) {
+  const list = viewersOf(cardId, model);
+  if (!list.length) return null;
+  const names = list.map((m) => m.name ?? m.login ?? '?');
+  return h('span', { class: 'card-viewers', title: `${names.join(', ')} ${names.length === 1 ? 'is' : 'are'} viewing this card now` },
+    icon('eye', 'icon-xs'),
+    h('span', { class: 'avatars', 'aria-label': `Viewing now: ${names.join(', ')}` },
+      list.slice(0, 3).map((m) => avatar(m)),
+      list.length > 3 ? h('span', { class: 'avatar avatar-sm avatar-more' }, `+${list.length - 3}`) : null));
+}
+
 export function avatarStack(members, max = 3) {
   const list = members.filter(Boolean);
   if (!list.length) return null;
@@ -179,6 +200,7 @@ export function card({ view, face, elapsed_ms = 0 }, model) {
     view.agent_suggested ? h('span', { class: 'label agent-suggested', title: 'Created by an agent; a person must assign it to an AI' }, 'agent-suggested') : null,
     via ? h('span', { class: 'label via-integration', title: `Created by the ${via} integration; a person must assign it to an AI` }, `via ${via}`) : null,
     rb ? h('span', { class: 'card-repo num', title: view.base_ref ? `base ${view.base_ref}` : null }, icon('branch', 'icon-xs'), rb) : null,
+    viewerStack(view.id, model),
     avatarStack(people)),
   h('h3', { class: 'card-title', id: `t-${view.id}` },
     h('button', { type: 'button', class: 'card-open', 'data-action': pending ? null : 'open', 'data-card': view.id, disabled: pending || null, 'aria-describedby': draggable ? 'dnd-help' : null }, view.title)),

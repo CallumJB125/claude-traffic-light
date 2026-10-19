@@ -222,7 +222,7 @@ test('T-PRESENCE: team presence stays in its team over WS and HTTP; a revoked de
     assert.equal((await as(users.amember, 'DELETE', '/api/account', { flow_id: flow })).status, 200);
     await settle();
     assert.equal(h.hub.presence.byDevice.has(devM.device_id), false);
-    assert.deepEqual((await as(users.ua, 'GET', `/api/boards/${A.board}/presence`)).body, { members: [] });
+    assert.deepEqual((await as(users.ua, 'GET', `/api/boards/${A.board}/presence`)).body, { board_id: A.board, members: [], viewers: [] });
     // Team deletion drops the team's.
     const del = await as(users.ub, 'DELETE', `/api/teams/${B.team}`, { confirm_slug: fx.db.get('SELECT slug FROM orgs WHERE id = ?', B.team).slug, flow_id: await h.stepUp(users.ub.token, users.ub.email, 'delete_team') });
     assert.equal(del.status, 200, del.text);
