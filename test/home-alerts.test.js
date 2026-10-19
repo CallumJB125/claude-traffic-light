@@ -313,7 +313,7 @@ test('Burst card gating: not installed, off on purpose and one missed poll give 
   assert.equal(card({ kind: 'checking' }), null);
   assert.equal(card({ kind: 'unsupported' }), null);
   // Shown.
-  assert.deepEqual(card({ kind: 'unreachable', installed: true, misses: 3 }).view.action, { kind: 'enable', label: 'Turn on' }, 'three misses');
+  assert.deepEqual(card({ kind: 'unreachable', installed: true, misses: 3 }).view.action, { kind: 'repair', label: 'Repair' }, 'three misses');
   assert.deepEqual(card({ kind: 'broken', installed: true, state: { version: '0.20.36' } }).view.action, { kind: 'repair', label: 'Repair' });
   assert.equal(card(present({ version: '0.12.1' })).view.kind, 'too_old');
   assert.deepEqual(card(present({ version: '0.12.1' })).view.action, { kind: 'update', label: 'Update Burst' });

@@ -18,7 +18,7 @@ const TABLE = [
   ['checking', { kind: 'checking' }, 'checking', null],
   ['not installed', { kind: 'not_installed' }, 'not_installed', 'install'],
   ['unreachable, first misses', { kind: 'unreachable', installed: true, misses: 1 }, 'off', 'retry'],
-  ['unreachable, many misses', { kind: 'unreachable', installed: true, misses: 3 }, 'off', 'enable'],
+  ['unreachable, many misses', { kind: 'unreachable', installed: true, misses: 3 }, 'off', 'repair'],
   ['gateway stale', { kind: 'unreachable', installed: true, misses: 2, lastGood: { at: NOW - 5 * 60 * 1000, state: state() } }, 'gateway_stale', 'repair', (v) => { assert.equal(v.dimmed, true); assert.match(v.detail, /last known state from 5 min ago/); assert.equal(v.version, '0.20.36'); assert.equal(v.active, true); assert.deepEqual(v.chip, { tone: 'amber', label: 'Not responding' }); }],
   ['untrusted', { kind: 'untrusted', installed: true, reason: 'Another program answered.' }, 'untrusted', 'off', (v) => assert.match(v.detail, /^Another program answered\. Plexiform read nothing/)],
   ['broken', { kind: 'broken', installed: true, state: { version: '0.20.36' } }, 'broken', 'repair'],
@@ -77,7 +77,7 @@ test('headline per kind, never the constant "Claude Burst" for a state that need
   const H = {
     not_installed: 'Claude Burst is not installed', off: 'Burst is off', too_old: 'Update Burst', ca_untrusted: 'Burst\'s certificate is not trusted',
     hosts_missing: 'Burst\'s hosts entry is missing', console_down: 'Burst\'s console is not running', gateway_stale: 'Burst is not responding',
-    unreachable: 'Burst is not responding', broken: 'Burst needs repair', untrusted: 'Something else is on Burst\'s port', on: 'Claude Burst',
+    unreachable: 'Burst is not responding', broken: 'Burst needs repair', untrusted: 'Something else is on Burst\'s port', on: 'Burst is on', update: 'Update available',
   };
   assert.deepEqual(View.HEADLINES, H);
   const cases = [
@@ -91,4 +91,15 @@ test('headline per kind, never the constant "Claude Burst" for a state that need
   assert.equal(sv({ kind: 'checking' }).headline, 'Claude Burst');
   assert.equal(sv({ kind: 'unsupported' }).headline, 'Claude Burst');
   assert.equal(View.headlineFor('surprise'), 'Claude Burst');
+});
+
+test('headlines: on says Burst is on, update available names it; not responding after several misses leads with Repair', () => {
+  const View = require('../src/burst-view.js');
+  const state = { version: '0.20.36', active: true, mode: 'base-url', route: 'PRIMARY', rejected: [], primaryFailures: 0, caTrusted: true, hostsEntry: true };
+  const present = (upgrade) => View.statusView({ kind: 'present', state, capabilities: { consoleRepair: false }, upgrade }, { platform: 'darwin' });
+  assert.equal(present({ canUpgrade: false, upToDate: true }).headline, 'Burst is on');
+  assert.equal(present({ canUpgrade: true, upToDate: false }).headline, 'Update available');
+  const nr = View.statusView({ kind: 'unreachable', misses: 5 }, { platform: 'darwin' });
+  assert.equal(nr.actions[0].kind, 'repair');
+  assert.equal(nr.actions.find((a) => a.primary).kind, 'repair');
 });

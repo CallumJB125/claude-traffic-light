@@ -24,9 +24,9 @@ function normalizeRoot(p) {
 }
 
 function repoCounts(repo, { at, staleMs }) {
-  // Normalized shape: counts already, no item times (so never stale).
+  // Normalized shape: counts already; `oldest` (seconds) carries the one time the stale badge needs.
   if (Number.isSafeInteger(repo.uncommitted) || Number.isSafeInteger(repo.unpushed) || Number.isSafeInteger(repo.stashes)) {
-    return { uncommitted: count(repo.uncommitted), unpushed: count(repo.unpushed), stashes: count(repo.stashes), branch: typeof repo.branch === 'string' ? repo.branch.slice(0, 120) : '', noRemote: repo.noRemote === true || repo.no_remote === true, stale: false };
+    return { uncommitted: count(repo.uncommitted), unpushed: count(repo.unpushed), stashes: count(repo.stashes), branch: typeof repo.branch === 'string' ? repo.branch.slice(0, 120) : '', noRemote: repo.noRemote === true || repo.no_remote === true, stale: secs(repo.oldest) !== null && at !== null && at - secs(repo.oldest) >= staleMs };
   }
   const uncommitted = list(repo.uncommitted);
   const unpushed = list(repo.unpushed);

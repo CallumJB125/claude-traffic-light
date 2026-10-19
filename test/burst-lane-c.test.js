@@ -61,9 +61,9 @@ test('normalizeLooseEnds: counts and names only, in a fixed key set; the 0.20.36
   assert.deepEqual(Object.keys(v).sort(), ['kind', 'repos', 'scanned', 'stale', 'staleHours', 'withinDays']);
   assert.deepEqual({ ...v, repos: undefined }, { kind: 'ok', scanned: 4, stale: { files: 1, commits: 2, stashes: 0 }, staleHours: 24, withinDays: 30, repos: undefined });
   assert.equal(v.repos.length, 2, 'a repo without a root is dropped');
-  assert.deepEqual(v.repos[0], { path: '/Users/owner/code/plexiform', branch: 'main', noRemote: false, uncommitted: 2, unpushed: 2, stashes: 1, names: ['a.js', 'secret plan.md'], reason: '' });
+  assert.deepEqual(v.repos[0], { path: '/Users/owner/code/plexiform', branch: 'main', noRemote: false, uncommitted: 2, unpushed: 2, stashes: 1, names: ['a.js', 'secret plan.md'], oldest: 1, reason: '' });
   assert.ok(!JSON.stringify(v).includes('WIP on main'), 'stash subjects never pass');
-  assert.deepEqual(v.repos[1], { path: '/Users/owner/code/other', branch: 'feat', noRemote: true, uncommitted: 0, unpushed: 0, stashes: 0, names: [], reason: 'timeout' });
+  assert.deepEqual(v.repos[1], { path: '/Users/owner/code/other', branch: 'feat', noRemote: true, uncommitted: 0, unpushed: 0, stashes: 0, names: [], oldest: null, reason: 'timeout' });
   assert.ok(!JSON.stringify(v).includes('git:'), 'free-text error never passes');
   const text = JSON.stringify(v);
   assert.ok(!text.includes('abc123') && !text.includes(' M') && !text.includes('mtime'), 'no hashes, statuses or times');
@@ -317,5 +317,5 @@ test('normalizeLooseEnds: no stash names, no free-text error; reason is one of a
   const st = one('', [{ ref: 'stash@{0}', subject: 'WIP: password reset flow' }, { ref: 'stash@{1}', subject: 'x' }]);
   assert.equal(st.stashes, 2);
   assert.ok(!JSON.stringify(st).includes('password'), 'stash subjects are counted, never read out');
-  assert.deepEqual(Object.keys(st).sort(), ['branch', 'names', 'noRemote', 'path', 'reason', 'stashes', 'uncommitted', 'unpushed']);
+  assert.deepEqual(Object.keys(st).sort(), ['branch', 'names', 'noRemote', 'oldest', 'path', 'reason', 'stashes', 'uncommitted', 'unpushed']);
 });

@@ -117,14 +117,15 @@ const HEADLINES = Object.freeze({
   unreachable: 'Burst is not responding',
   broken: 'Burst needs repair',
   untrusted: 'Something else is on Burst\'s port',
-  on: 'Claude Burst',
+  on: 'Burst is on',
+  update: 'Update available',
 });
 const headlineFor = (kind) => HEADLINES[kind] || 'Claude Burst';
 
 // Every result: { kind, headline, detail (never empty), action: {kind,label}|null, actions[], chip, active, dimmed, ... }.
 function statusView(d, { platform = process.platform, now = Date.now } = {}) {
   const v = statusViewInner(d, { platform, now });
-  if (v.kind !== 'unsupported' && v.kind !== 'checking') v.headline = headlineFor(d && d.kind === 'unreachable' && v.kind === 'off' ? 'unreachable' : v.kind);
+  if (v.kind !== 'unsupported' && v.kind !== 'checking') v.headline = headlineFor(d && d.kind === 'unreachable' && v.kind === 'off' ? 'unreachable' : v.kind === 'on' && v.updateAvailable ? 'update' : v.kind);
   if (!('action' in v)) v.action = v.kind === 'on' ? (v.updateAvailable ? { kind: 'update', label: 'Update' } : null) : firstAction(v.actions);
   if (!v.detail) v.detail = 'Burst state is not known yet.';
   if (typeof v.active !== 'boolean') v.active = false;
@@ -154,7 +155,7 @@ function statusViewInner(d, { platform, now }) {
       }
       return (d.misses || 0) < RETRY_BEFORE_REPAIR
         ? { ...base, kind: 'off', detail: 'Not responding: Burst is installed but its gateway did not answer just now. A busy or restarting gateway usually answers on the next check.', actions: [A('retry', 'Check again', { primary: true })] }
-        : { ...base, kind: 'off', detail: 'Not responding: Burst is installed but its gateway has not answered several checks in a row. If Claude Code is failing, take Burst out of its path.', actions: [A('retry', 'Check again'), A('enable', 'Turn on', { primary: true }), A('repair', 'Repair'), A('off', 'Turn Burst off'), A('uninstall', 'Uninstall…')] };
+        : { ...base, kind: 'off', detail: 'Not responding: Burst is installed but its gateway has not answered several checks in a row. If Claude Code is failing, take Burst out of its path.', actions: [A('repair', 'Repair', { primary: true }), A('retry', 'Check again'), A('enable', 'Turn on'), A('off', 'Turn Burst off'), A('uninstall', 'Uninstall…')] };
     }    case 'untrusted':
       return { ...base, detail: `${d.reason} Plexiform read nothing from it. This usually means Burst was installed somewhere other than ~/.local/bin/claude-burst, or another program is using Burst\'s port.`, actions: [A('off', 'Turn Burst off'), A('uninstall', 'Uninstall…')] };
     case 'broken':

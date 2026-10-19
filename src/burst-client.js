@@ -245,6 +245,11 @@ const count = (v) => (Number.isInteger(v) && v >= 0 ? v : 0);
 // contents, a commit hash, a stash's subject or Burst's free-text error (`reason` is a fixed word
 // matched from it). `stale` is Burst's own count of what is older than `staleHours`.
 const LOOSE_ENDS_REASONS = Object.freeze(['unreadable', 'not-a-repo', 'timeout']);
+// Seconds of the oldest valid time among Burst's item times (RFC3339 strings or epoch numbers); null when none.
+function oldestSecs(times) {
+  const secs = times.map((t) => (typeof t === 'number' && Number.isFinite(t) ? (t > 1e12 ? t / 1000 : t) : typeof t === 'string' ? Date.parse(t) / 1000 : NaN)).filter((n) => Number.isFinite(n) && n > 0);
+  return secs.length ? Math.min(...secs) : null;
+}
 function looseEndsReason(err) {
   const e = typeof err === 'string' ? err.toLowerCase() : '';
   if (!e) return '';
@@ -268,6 +273,8 @@ function normalizeLooseEnds(raw) {
       unpushed: count(repo.ahead),
       stashes: stashes.length,
       names: files.slice(0, 20).map((f) => path.basename(text(asObj(f).path, 1000))).filter(Boolean),
+      // Oldest item time in seconds (the view's stale badge), never the items themselves.
+      oldest: oldestSecs([...files.map((f) => asObj(f).mtime), ...asArr(repo.unpushed).map((c) => asObj(c).when), ...stashes.map((x) => asObj(x).when)]),
       reason: looseEndsReason(repo.error),
     };
   }).filter((repo) => repo.path);

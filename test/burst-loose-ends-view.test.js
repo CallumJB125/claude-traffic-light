@@ -109,3 +109,13 @@ test('BurstIpc.looseEndsView(): client normalizer → view, byRepo has the repo 
   assert.deepEqual([...v.byRepo.entries()].map(([k, c]) => [k, c.uncommitted, c.unpushed, c.stashes]), [['/Users/me/app', 1, 1, 0]]);
   assert.equal(v.totals.repos, 1);
 });
+
+test('normalized repos carry `oldest` (seconds) so the stale badge works on the client shape', () => {
+  const { looseEndsView } = require('../src/burst-loose-ends-view.js');
+  const now = 1_800_000_000_000; // ms
+  const old = { kind: 'ok', staleHours: 24, repos: [{ path: '/r/old', uncommitted: 2, unpushed: 0, stashes: 0, oldest: now / 1000 - 48 * 3600 }, { path: '/r/new', uncommitted: 1, unpushed: 0, stashes: 0, oldest: now / 1000 - 3600 }, { path: '/r/none', uncommitted: 1, unpushed: 0, stashes: 0, oldest: null }] };
+  const v = looseEndsView(old, { now: () => now });
+  assert.equal(v.byRepo.get('/r/old').stale, true);
+  assert.equal(v.byRepo.get('/r/new').stale, false);
+  assert.equal(v.byRepo.get('/r/none').stale, false);
+});
