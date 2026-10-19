@@ -9,15 +9,15 @@
 // (the widget is too small to hold one, so its steps are explained from Home).
 const STEPS = Object.freeze([
   { id: 'widget', target: { window: 'widget', selector: '#housing' }, host: { window: 'main', page: 'home' },
-    title: 'This is your widget', body: 'The lamp shows what your AI is doing: green working, amber waiting on you, red stuck. The character acts it out.', primary: 'Next' },
+    title: 'This is your widget', body: 'The lamp shows what your AI is doing: green working, amber your turn (\u231B if it has gone quiet), red needs you now. The character acts it out.', primary: 'Next' },
   { id: 'waiting', target: { window: 'widget', selector: '#bubble' }, host: { window: 'main', page: 'home' },
     title: 'Answer from the widget', body: 'When an AI asks you something, the question appears under the widget. Pick an answer there and it carries on.', primary: 'Next' },
-  { id: 'rules', target: { window: 'lights', selector: '#rule-list' }, host: { window: 'lights' },
-    title: 'Make it yours', body: 'Rules decide what the widget does for each state. Change a colour, a pose or a sound and try it live.', primary: 'Next' },
   { id: 'spend', target: { window: 'main', page: 'usage', selector: '#mix' }, host: { window: 'main', page: 'usage' }, also: { window: 'widget', selector: '#rings' },
     title: 'See what it costs', body: 'Usage shows what each day costs, worked out on this Mac. The ring round the widget fills as you near your daily budget.', primary: 'Next' },
-  { id: 'team', target: { window: 'main', page: 'home', selector: '#cards, #teamwork, #teamtoday' }, host: { window: 'main', page: 'home' },
-    title: 'Bring your team', body: 'Invite teammates to share boards and hand work over. Try Team when you are ready.', primary: 'Open Team' },
+  { id: 'rules', target: { window: 'lights', selector: '#rule-list' }, host: { window: 'lights' },
+    title: 'Rules: when this happens, do that', body: 'Each rule pairs a moment with a reaction, like \u201Cwhen Claude is working, turn the lamp green\u201D. The higher a rule sits, the more it wins.', primary: 'Next' },
+  { id: 'sound', target: { window: 'lights', selector: '#rule-template, #wish-chime-done' }, host: { window: 'lights' },
+    title: 'Try a sound when Claude finishes', body: 'Add \u201CChime when it\u2019s done\u201D (it is also under Start from a template), press Try on widget, then Save.', primary: 'Done' },
 ]);
 
 const STATUSES = ['not-started', 'running', 'finished', 'skipped'];

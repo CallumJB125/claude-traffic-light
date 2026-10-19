@@ -104,12 +104,13 @@
   </details>
   <details>
     <summary>“Needs your input” vs “Waiting for you”</summary>
-    <p><b>Needs your input</b> (amber, waving): An AI agent has paused mid-task on a permission prompt or a question. Nothing moves until you answer in the terminal.</p>
+    <p><b>Needs your input</b> (red, waving): An AI agent has paused mid-task on a permission prompt or a question. Nothing moves until you answer in the terminal.</p>
     <p><b>Waiting for you</b>: An AI agent finished its turn. It's simply your turn to type — nothing is stuck.</p>
   </details>
   <details>
-    <summary>What the colours usually mean</summary>
-    <p><b>Green</b>: working, or just finished. <b>Amber</b>: needs you, a failed turn, or nothing running. <b>Red</b>: out of tokens, offline, a runaway session, or over budget. Every colour is programmable in Widget rules, so yours may differ.</p>
+    <summary>What the colours mean</summary>
+    <ul class="legend" id="legend"><li><b>Green</b>: working.</li><li><b>Amber</b>: your turn. Claude finished or is waiting for your next message.</li><li><b>Amber with ⌛</b>: gone quiet. Still working but silent for a while; take a look.</li><li><b>Red</b>: needs you now. A question or permission, or something stopped it: a failed turn, no network, out of tokens or over budget.</li><li><b>Off</b>: nothing running.</li></ul>
+    <p>Every colour is programmable in Widget rules, so yours may differ.</p>
   </details>
   <details>
     <summary>Spend: budgets and runaway sessions</summary>

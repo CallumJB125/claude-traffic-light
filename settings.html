@@ -235,6 +235,12 @@
     * { transition: none !important; }
     button:active { transform: none; }
   }
+  /* Simple mode (src/simple-mode.js): developer knobs step out of the way. */
+  body.simple .dev-only { display: none !important; }
+  .legend { margin: 6px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
+  .legend li { display: flex; gap: 8px; align-items: baseline; }
+  .legend .glyph { width: 1.2em; text-align: center; }
+  .legend .glyph.green { color: var(--green); } .legend .glyph.amber { color: var(--amber); } .legend .glyph.red { color: var(--danger-text); } .legend .glyph.off { color: var(--muted); }
 </style>
 </head>
 <body>
@@ -250,9 +256,9 @@
   <div class="hint" id="autosave-hint">Changes save as you make them.</div>
 
   <div class="pane" id="pane-general" data-section="general">
-  <h2>Sessions</h2>
+  <h2 class="dev-only">Sessions</h2>
 
-  <div class="field">
+  <div class="field dev-only">
     <label for="workingStaleMinutes">Working session considered closed after</label>
     <div class="row">
       <input type="number" id="workingStaleMinutes" min="1" max="60" aria-describedby="hint-working" />
@@ -261,16 +267,16 @@
     <div class="hint" id="hint-working">A green (actively working) session pings constantly, so silence this long really does mean it's gone.</div>
   </div>
 
-  <div class="field">
+  <div class="field dev-only">
     <label for="stuckMinutes">Show "Stuck?" after</label>
     <div class="row">
       <input type="number" id="stuckMinutes" min="0" max="60" aria-describedby="hint-stuck" />
       <span aria-hidden="true">minutes with no activity (0 = off)</span>
     </div>
-    <div class="hint" id="hint-stuck">A working session that has sent no hook or activity event for this long turns the light amber and says "Stuck?" with its last tool. It clears the moment the session moves, and never applies to a session that is waiting for you or finished. It is part of the closed-after window above, not a second timer: the session stays listed for the longer of the two.</div>
+    <div class="hint" id="hint-stuck">A working session that has sent no hook or activity event for this long turns the light amber with an hourglass (⌛) and says "Stuck?" with its last tool. It clears the moment the session moves, and never applies to a session that is waiting for you or finished. It is part of the closed-after window above, not a second timer: the session stays listed for the longer of the two.</div>
   </div>
 
-  <div class="field">
+  <div class="field dev-only">
     <label for="waitingStaleHours">Waiting session considered closed after</label>
     <div class="row">
       <input type="number" id="waitingStaleHours" min="1" max="24" aria-describedby="hint-waiting" />
@@ -306,7 +312,7 @@
     <div class="hint">Every sound Plexiform makes: a rule's alert when the light turns amber or red, and the knock. Off silences them all.</div>
   </div>
 
-  <div class="field" id="agent-mail">
+  <div class="field dev-only" id="agent-mail">
     <label class="row"><input type="checkbox" id="agentMailInbox" aria-describedby="agent-mail-hint" /> Show teammates' AI questions and hand-offs to me (agent mail)</label>
     <div class="hint" id="agent-mail-hint">Off by default. When on, while you are signed in to your team, Plexiform asks your team server every minute for questions and hand-offs teammates' AIs sent you and shows them on Sessions → Agent mail, with a notification for each. Nothing reaches your AI unless you choose Ask my AI (it sees only the question, never your code), and a hand-off runs only after you accept it and confirm its full text. Messages your own AI drafts for teammates, and hand-offs your AI asks for, are never sent or started until you press Send or Confirm, whether this is on or off. See the privacy notice, "Agent mail".</div>
   </div>
@@ -441,7 +447,7 @@
     <div id="runaway-label" class="group-label">Runaway session</div>
     <div class="row wrap" role="group" aria-labelledby="runaway-label">
       <label class="row" for="spend-runaway-dollars">$ <input type="number" id="spend-runaway-dollars" min="0" step="1" /></label>
-      <label class="row" for="spend-runaway-tokens">or <input type="number" id="spend-runaway-tokens" min="0" step="100" /> k tokens</label>
+      <label class="row dev-only" for="spend-runaway-tokens">or <input type="number" id="spend-runaway-tokens" min="0" step="100" /> k tokens</label>
       <label class="row" for="spend-runaway-minutes">in <input type="number" id="spend-runaway-minutes" min="1" max="240" /> min</label>
     </div>
     <div class="hint">One session spending this fast turns the light pulsing red (hover Claude for its burn rate) and sends one notification that jumps to its terminal. Plexiform never stops or types into a session you started. 0 turns a limit off.</div>
@@ -452,6 +458,12 @@
   </div>
 
   <div class="pane" id="pane-widget" data-section="widget" hidden>
+  <h2>How much to show</h2>
+  <div class="field">
+    <label class="row"><input type="checkbox" id="simpleMode" aria-describedby="hint-simple" /> Simple mode</label>
+    <div class="hint" id="hint-simple">For building apps with Claude on your own. Hides team features, the detailed rule fields, helper chips, session timers and token limits, and keeps Home to what needs you. Turn it off to see everything.</div>
+  </div>
+
   <h2>Widget</h2>
   <div class="hint">A live preview, its size and the corner it sits in are on the <b>Widget</b> page in the sidebar. Both pages change the same settings.</div>
 
@@ -496,14 +508,14 @@
     <div class="hint">A UFO, a portal or a meteor, roughly once an hour while working, and on milestones.</div>
   </div>
 
-  <h2>Claude Code helpers</h2>
-  <div class="field">
+  <h2 class="dev-only">Claude Code helpers</h2>
+  <div class="field dev-only">
     <div class="hint">When a Claude Code session starts subagents, teammates or background workers, each gets a small chip under Claude while it runs. Hover Claude to see who's doing what.</div>
     <label class="row"><input type="checkbox" id="showAgents" /> Show helper chips under Claude</label>
     <label class="row"><input type="checkbox" id="agentRoster" /> Show the list of helpers when hovering</label>
   </div>
 
-  <div class="field">
+  <div class="field dev-only">
     <div id="which-agents" class="group-label">Which Claude Code helpers</div>
     <div role="group" aria-labelledby="which-agents" class="stack">
     <label class="row"><input type="checkbox" id="kind-subagent" /> Subagents</label>
@@ -512,7 +524,7 @@
     </div>
   </div>
 
-  <div class="field">
+  <div class="field dev-only">
     <label for="agentChipSize">Chip size</label>
     <div class="row">
       <select id="agentChipSize">
@@ -524,8 +536,9 @@
   </div>
 
   <div class="field">
-    <div class="group-label">What the lights mean</div>
-    <div class="hint">Which signal lights which lamp, eye colours and poses now live in <b>Settings → Widget rules</b> in the sidebar.</div>
+    <div class="group-label" id="legend-title">What the lights mean</div>
+    <ul class="legend" id="legend" aria-labelledby="legend-title"></ul>
+    <div class="hint">To change what the widget does for each, open <b>Settings → Widget rules</b> in the sidebar.</div>
   </div>
   </div>
 
@@ -609,8 +622,8 @@
     <div class="hint" id="data-receipt"></div>
   </section>
 
-  <h2>Sharing and remote control</h2>
-  <div class="field" id="sharing">
+  <h2 class="dev-only">Sharing and remote control</h2>
+  <div class="field dev-only" id="sharing">
     <label class="row"><input type="checkbox" id="teamSessionSharing" /> Share sessions started on a team workspace with that team</label>
     <div class="hint">Team members can send messages using your provider account and quota; viewers can watch. The team server relays message and reply text. Personal sessions stay separate. Stop an individual share from Overview.</div>
     <label class="row"><input type="checkbox" id="explainMode" aria-describedby="explain-mode-hint" /> Explain mode: plain-English help for people who don't read code</label>
@@ -828,6 +841,7 @@
   <script src="settings-deploys.js"></script>
   <script src="settings-policies.js"></script>
   <script src="settings-data.js"></script>
+  <script src="src/colour-legend.js"></script>
   <script src="settings.js"></script>
   <script src="settings-spend-safety.js"></script>
   <script src="native-board/settings.js"></script>

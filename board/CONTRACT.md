@@ -1309,3 +1309,10 @@ Desktop IPC (Discover page only, `discover-preload.js` → `vibeApi`; any other 
 | `vibe:remix-preview` | pasted link (`https://…/b/<22>` or loopback http) | fetches `kit.json` without credentials, validates it; `{ok, title, author, remix_count, permissions[], kit}`; held 10 min for one install |
 | `vibe:remix-install` | none | consent sheet listing the manifest, folder picker, writes without overwriting (author credited in CLAUDE.md), then `POST /b/<slug>/remix`; `{ok, written[], skipped[]}` |
 | `vibe:report-link` | `(link, reason)` | consent sheet, then `POST /b/<slug>/report` |
+## Desktop first-run setup: persona and simple mode (`main.js`, `src/simple-mode.js`)
+
+Local Electron IPC only; no network, no new file, no new privacy flow. The answer is saved in `config.json` as `persona` and `simpleMode`; Preferences → General → Simple mode changes `simpleMode` through the existing `save-config`. `home:state` gains `simple` (boolean) and `buddy:pages` drops the Team and Integrations pages while simple mode is on.
+
+| Channel | Sender | Request | Response |
+|---|---|---|---|
+| `onboarding:persona` | the first-run setup window only | `id`: `'simple'` (Just me, building an app) \| `'developer'` (Developer / team); exactly one argument | `{persona, simple}` after saving; `null` from any other sender or for any other value |

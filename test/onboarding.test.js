@@ -39,6 +39,7 @@ function rig({ claudeAuto = false } = {}) {
   let config = { spend: { dailyBudget: 0, warnAt: 0.8 }, claudeAutoConnect: undefined };
   const ctx = {
     require: (p) => ({ './src/ai-tools.js': AiToolsLib, './src/setup-checklist.js': SetupChecklist })[p],
+    SimpleMode: require('../src/simple-mode.js'),
     ipcMain: { handle: (name, fn) => registered.set(name, fn) },
     fromPage, BuddyPages, setupChecklist: () => { throw new Error('the Help checklist is not the setup view'); },
     AiTools: { tools, quick: () => tools.quick() },
@@ -65,7 +66,7 @@ function rig({ claudeAuto = false } = {}) {
 test('every onboarding channel answers only its own window', async () => {
   const r = rig();
   const foreign = event(contents());
-  for (const [name, args] of [['onboarding:state', []], ['onboarding:preview', ['codex']], ['onboarding:connect', [['codex']]], ['onboarding:undo', ['codex']], ['onboarding:login-item', [false]], ['onboarding:budget', [20]], ['onboarding:navigate', ['home']]]) {
+  for (const [name, args] of [['onboarding:state', []], ['onboarding:preview', ['codex']], ['onboarding:connect', [['codex']]], ['onboarding:undo', ['codex']], ['onboarding:login-item', [false]], ['onboarding:budget', [20]], ['onboarding:navigate', ['home']], ['onboarding:persona', ['simple']]]) {
     assert.ok([null, false].includes(await r.registered.get(name)(foreign, ...args)), name);
   }
   assert.equal(r.ctx.LoginItem.on, true);
@@ -193,7 +194,7 @@ test('first run opens setup (not Help) once; an install that already saw Help is
 
 test('the default tray menu is 20 items or fewer, with debug controls only in dev or the widget menu', () => {
   const build = (from, devRun = false) => {
-    const ctx = { buddyWin: { captureState: () => ({ enabled: true }) }, refreshTrayMenu: () => {}, IS_DEV_RUN: devRun, IS_MAC: true, BuddyPages, AppMenu: require('../src/app-menu.js'), UsagePopOut: require('../src/usage-popout.js'), usageMemo: { turns: [] }, getUsageTurns: () => Promise.resolve(), Usage: { modelMix: () => ({ today: null }) }, BRAND: { OPEN_MENU_LABEL: 'Open Plexiform…' },
+    const ctx = { buddyWin: { captureState: () => ({ enabled: true }) }, refreshTrayMenu: () => {}, IS_DEV_RUN: devRun, IS_MAC: true, BuddyPages, AppMenu: require('../src/app-menu.js'), SimpleMode: require('../src/simple-mode.js'), UsagePopOut: require('../src/usage-popout.js'), usageMemo: { turns: [] }, getUsageTurns: () => Promise.resolve(), Usage: { modelMix: () => ({ today: null }) }, BRAND: { OPEN_MENU_LABEL: 'Open Plexiform…' },
       Menu: { buildFromTemplate: (t) => t }, budgetItems: () => [], scopeItem: () => [], BurstIpc: { trayItems: () => [] }, quietItems: () => [{ label: 'Snooze Notifications' }], WidgetPolish: { menuItems: () => [{ label: 'Quiet for 30 minutes' }] },
       loadConfig: () => ({ showWidget: true, menuBarMode: false }), LoginItem: { get: () => true }, updaterTrayItems: () => [{ label: 'Check for Updates…' }], hooksLabel: 'Reinstall Claude Code Hooks' };
     for (const fn of ['openBuddy', 'createFeedbackWindow', 'createHelpWindow', 'showHealth', 'knockNow', 'resizeBy', 'installHooks', 'createTray', 'setManual', 'clearManual', 'saveConfig', 'createWindow', 'applyWidgetVisibility', 'broadcastStatus', 'updateTrayMode']) ctx[fn] = () => {};
@@ -206,7 +207,8 @@ test('the default tray menu is 20 items or fewer, with debug controls only in de
   assert.equal(labels.filter((l) => /^Open .+…$/.test(l) && l !== 'Open Plexiform…').length, BuddyPages.sectionsFor().filter((sec) => sec.menu === undefined).length, 'one Open item per sidebar section that is in the menu');
   const more = tray.filter(item => item.label === 'More');
   assert.equal(more.length, 1, 'secondary sections have one More submenu');
-  assert.deepEqual(Array.from(more[0].submenu, item => item.label), BuddyPages.sectionsFor().filter(sec => sec.menu === 'more').map(sec => `Open ${sec.title}…`), 'every secondary section remains reachable');
+  assert.deepEqual(Array.from(more[0].submenu, item => item.label).filter(l => l && l.startsWith('Open ')), BuddyPages.sectionsFor().filter(sec => sec.menu === 'more').map(sec => `Open ${sec.title}…`), 'every secondary section remains reachable');
+  assert.deepEqual(more[0].submenu.at(-1).submenu.map((i) => [i.label.slice(2), i.enabled]), require('../src/colour-legend.js').LEGEND.map((e) => [`${e.label}: ${e.meaning}`, false]), 'the colour key sits at the foot of More');
   assert.equal(labels.filter(label => /^Open .+…$/.test(label) && label !== 'Open Plexiform…').length, 6, 'the tray keeps six primary sections');
   for (const kept of ['Open at Login', 'Quit', 'Floating Widget', 'What does this mean?…']) assert.ok(labels.includes(kept), kept);
   for (const advanced of [build('widget'), build('tray', true)]) assert.ok(advanced.some((i) => i.label === 'Knock now') && advanced.some((i) => i.label === 'Override: Red (5 min)'));
@@ -216,7 +218,7 @@ test('the tray pauses and resumes automatic work cards, and turning them on the 
   const build = (capture, config = {}) => {
     const calls = [];
     const ctx = { buddyWin: { captureState: () => capture, setCapture: (on) => { calls.push(['setCapture', on]); return true; } }, refreshTrayMenu: () => calls.push(['refresh']),
-      IS_DEV_RUN: false, IS_MAC: true, BuddyPages, AppMenu: require('../src/app-menu.js'), UsagePopOut: require('../src/usage-popout.js'), usageMemo: { turns: [] }, getUsageTurns: () => Promise.resolve(), Usage: { modelMix: () => ({ today: null }) }, BRAND: { OPEN_MENU_LABEL: 'Open Plexiform…' },
+      IS_DEV_RUN: false, IS_MAC: true, BuddyPages, AppMenu: require('../src/app-menu.js'), SimpleMode: require('../src/simple-mode.js'), UsagePopOut: require('../src/usage-popout.js'), usageMemo: { turns: [] }, getUsageTurns: () => Promise.resolve(), Usage: { modelMix: () => ({ today: null }) }, BRAND: { OPEN_MENU_LABEL: 'Open Plexiform…' },
       Menu: { buildFromTemplate: (t) => t }, budgetItems: () => [], scopeItem: () => [], BurstIpc: { trayItems: () => [] }, quietItems: () => [], WidgetPolish: { menuItems: () => [] },
       loadConfig: () => ({ showWidget: true, menuBarMode: false, ...config }), LoginItem: { get: () => true }, updaterTrayItems: () => [], hooksLabel: 'x' };
     for (const fn of ['openBuddy', 'createFeedbackWindow', 'createHelpWindow', 'showHealth', 'knockNow', 'resizeBy', 'installHooks', 'createTray', 'setManual', 'clearManual', 'saveConfig', 'createWindow', 'applyWidgetVisibility', 'broadcastStatus', 'updateTrayMode']) ctx[fn] = (...a) => calls.push([fn, ...a]);
@@ -257,22 +259,26 @@ function page(r) {
     ipcRenderer: { on: (ch, cb) => { if (ch === 'status-changed') statusCb = cb; }, invoke: async (ch, ...a) => { calls.push([ch, ...a]); return r.call(ch, ...a); } },
   }) });
   const document = { getElementById: (id) => els.get(id), createElement: () => el(), querySelectorAll: () => [], querySelector: () => ({ focus() {} }) };
-  vm.runInNewContext(fs.readFileSync(path.join(root, 'onboarding.js'), 'utf8'), { window: { onboardingApi: api }, document, console, setTimeout, clearTimeout });
+  vm.runInNewContext(fs.readFileSync(path.join(root, 'onboarding.js'), 'utf8'), { window: { onboardingApi: api, PlexiformSimple: require('../src/simple-mode.js'), PlexiformLegend: require('../src/colour-legend.js') }, document, console, setTimeout, clearTimeout, Date });
   const settle = () => new Promise((res) => setTimeout(res, 20));
   return { els, calls, settle, click: async (id) => { await els.get(id).listeners.click(); await settle(); }, status: async () => { statusCb(); await settle(); } };
 }
 
-test('the page: connect two tools in one click, then the first session flips step 2, then Home in three clicks', async () => {
+test('the page: pick a persona, connect two tools in one click, then the first session flips step 3, then Home in four clicks', async () => {
   const r = rig();
   const p = page(r);
   await p.settle();
   const $ = (id) => p.els.get(id);
+  assert.equal($('step-persona').hidden, false);
+  assert.equal($('step-connect').hidden, true);
+  await p.click('persona-developer');                         // click 1
+  assert.deepEqual([r.config().persona, r.config().simpleMode], ['developer', false]);
   assert.equal($('step-connect').hidden, false);
   assert.equal($('step-signal').hidden, true);
   assert.equal($('connect').textContent, 'Connect 2 tools');
   assert.equal($('login-text').textContent, 'Plexiform opens when you log in.');
   assert.equal($('missing-title').textContent, 'Not installed (8)');
-  await p.click('connect');                                   // click 1
+  await p.click('connect');                                   // click 2
   assert.deepEqual(p.calls.find((c) => c[0] === 'onboarding:connect'), ['onboarding:connect', ['codex', 'gemini']]);
   assert.equal($('step-connect').hidden, true);
   assert.equal($('step-signal').hidden, false);
@@ -286,9 +292,11 @@ test('the page: connect two tools in one click, then the first session flips ste
   assert.equal($('seen-text').textContent, 'Gemini CLI is working in plexiform-release.');
   assert.equal($('waiting').hidden, true);
   assert.equal($('signal-next').hidden, false);
-  await p.click('signal-next');                               // click 2
+  assert.equal($('not-showing').hidden, true);
+  await p.click('signal-next');                               // click 3
   assert.equal($('step-extras').hidden, false);
-  await p.click('finish');                                    // click 3
+  assert.equal($('team-box').hidden, false, 'developers are offered the team');
+  await p.click('finish');                                    // click 4
   assert.equal(r.ctx.onboardingWin.closed, true);
   assert.equal(r.opened.length, 1);
 });
@@ -307,4 +315,34 @@ test('the page: the login toggle and Undo work from step 1, and nothing found of
   assert.equal(p.els.get('connect').textContent, 'Next');
   await p.click('how-install');
   assert.deepEqual(r.toolsOpened, ['aitools']);
+});
+
+test('persona: only the setup window saves it, only the two known answers, and simple mode follows', async () => {
+  const r = rig();
+  assert.equal(await r.call('onboarding:persona', 'admin'), null);
+  assert.equal(await r.call('onboarding:persona', 'simple', 'extra'), null);
+  assert.equal(r.config().simpleMode, undefined);
+  assert.deepEqual({ ...await r.call('onboarding:persona', 'simple') }, { persona: 'simple', simple: true });
+  assert.equal((await r.call('onboarding:state')).simple, true);
+  assert.deepEqual({ ...await r.call('onboarding:persona', 'developer') }, { persona: 'developer', simple: false });
+});
+
+test('the page: "Just me" hides the team offer, the test prompt is there, and a missing signal is explained', async () => {
+  const r = rig();
+  const p = page(r);
+  await p.settle();
+  const $ = (id) => p.els.get(id);
+  await p.click('persona-simple');
+  assert.equal(r.config().simpleMode, true);
+  await p.click('skip-connect');
+  assert.equal($('step-signal').hidden, false);
+  assert.equal($('test-prompt').value, require('../src/simple-mode.js').TEST_PROMPT);
+  assert.equal($('not-showing').hidden, false, 'nothing connected: says so at once');
+  assert.equal($('diagnosis-title').textContent, 'Plexiform isn\u2019t connected yet', 'Codex and Gemini are installed but not connected');
+  await p.click('diagnosis-action');
+  assert.equal($('step-connect').hidden, false, 'the fix goes back to Connect');
+  await p.click('skip-connect');
+  await p.click('skip-signal');
+  assert.equal($('team-box').hidden, true);
+  assert.equal($('legend-line').textContent, `That's your widget. ${require('../src/colour-legend.js').SENTENCE}.`);
 });

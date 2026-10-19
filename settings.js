@@ -56,7 +56,19 @@
       document.getElementById('busyFocus').checked = config.busyFocus !== false;
       document.getElementById('busyIcsUrl').value = config.busyIcsUrl || '';
       document.getElementById('busyFocusShortcut').value = config.busyFocusShortcut || '';
+      document.getElementById('simpleMode').checked = config.simpleMode === true;
+      document.body.classList.toggle('simple', config.simpleMode === true);
       showBusy();
+    }
+    document.getElementById('simpleMode').addEventListener('change', (e) => document.body.classList.toggle('simple', e.target.checked));
+    // The colour key (src/colour-legend.js): one meaning per lamp colour, the same everywhere.
+    if (window.PlexiformLegend) {
+      document.getElementById('legend').replaceChildren(...window.PlexiformLegend.LEGEND.map((e) => {
+        const li = document.createElement('li');
+        const g = document.createElement('span'); g.className = `glyph ${e.colour}`; g.textContent = e.glyph; g.setAttribute('aria-hidden', 'true');
+        const t = document.createElement('span'); t.textContent = `${e.label}: ${e.meaning}. ${e.detail}`;
+        li.append(g, t); return li;
+      }));
     }
 
     // One click: ticking the calendar saves it at once, and that save is what
@@ -206,6 +218,7 @@
         agentMailInbox: document.getElementById('agentMailInbox').checked,
         remoteInteractionHost: document.getElementById('remoteInteractionHost').checked,
         codexDaemonMessaging: document.getElementById('codexDaemonMessaging').checked,
+        simpleMode: document.getElementById('simpleMode').checked,
       });
       setTimeout(showInteractionHost, 1500);
       setTimeout(showBusy, 1500);

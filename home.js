@@ -169,6 +169,7 @@
   function render(s) {
     const focus = document.activeElement?.dataset?.focus;
     demoOn = s.demo === true;
+    document.body.classList.toggle('simple', s.simple === true);
     renderBanner(s.banner, s.canDemo === true); renderMorning(s.morning); renderNeeds(s.needs); renderRunning(s.running, s.banner); renderToday(s.today, s.running); renderCosts(s.costs); renderCards(s.team); renderTeamwork(s.teamless === true);
     if (focus) [...document.querySelectorAll('[data-focus]')].find(el => el.dataset.focus === focus)?.focus();
     $('status').textContent = `Updated ${new Date(s.observed_at).toLocaleTimeString()}. Refreshes every 5 seconds.`;

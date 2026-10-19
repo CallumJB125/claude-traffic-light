@@ -49,46 +49,76 @@
   .seen { font-size: var(--text-lg); font-weight: 600; color: var(--green); }
   form { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   input[type="number"] { width: 90px; font: inherit; min-height: 36px; padding: 6px 8px; color: var(--text); background: var(--panel); border: 1px solid var(--line-input); border-radius: var(--radius); }
+  .personas { display: grid; gap: 10px; }
+  button.persona { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 14px 16px; text-align: left; background: var(--panel); border-color: var(--line); }
+  button.persona span { color: var(--muted); font-size: var(--text-sm); }
+  button.persona:hover { border-color: var(--accent); }
+  .howto { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 10px; }
+  .prompt-row { display: flex; gap: 8px; margin-top: 6px; }
+  .prompt-row input { flex: 1; min-width: 0; font: inherit; min-height: 36px; padding: 6px 8px; color: var(--text); background: var(--panel); border: 1px solid var(--line-input); border-radius: var(--radius); }
+  .diagnosis { padding: 12px 14px; background: var(--panel); border: 1px solid var(--amber); border-radius: var(--radius); display: flex; flex-direction: column; gap: 8px; }
+  .diagnosis h2 { margin: 0; }
   [hidden] { display: none !important; }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; } .spinner { animation: none; } button:active { transform: none; } }
 </style>
 </head>
 <body><main>
-<section id="step-connect" aria-labelledby="connect-title">
-  <p class="step">Step 1 of 3</p>
-  <h1 id="connect-title" tabindex="-1">Let's connect your AI tools</h1>
-  <p id="connect-body">We found these on this Mac. Plexiform only sees when a session starts, works, waits or finishes; it never reads your chats.</p>
-  <p id="loading" class="muted" role="status">Looking for your AI tools…</p>
+<section id="step-persona" aria-labelledby="persona-title">
+  <p class="step">Step 1 of 4</p>
+  <h1 id="persona-title" tabindex="-1">Who is Plexiform for?</h1>
+  <p>Pick the one that sounds like you. You can switch any time in Preferences.</p>
+  <div class="personas" role="group" aria-labelledby="persona-title">
+    <button type="button" class="persona" id="persona-simple"><strong>Just me, building an app</strong><span>I ask Claude to build things for me. Keep it simple.</span></button>
+    <button type="button" class="persona" id="persona-developer"><strong>Developer / team</strong><span>I write code, use several AI tools or work with a team. Show me everything.</span></button>
+  </div>
+  <p id="persona-status" class="error" role="status" aria-live="polite"></p>
+</section>
+
+<section id="step-connect" aria-labelledby="connect-title" hidden>
+  <p class="step">Step 2 of 4</p>
+  <h1 id="connect-title" tabindex="-1">Let Plexiform listen to Claude</h1>
+  <p id="connect-body">We add a small note-taker to Claude Code so we know when it's busy or waiting for you. It never reads what you and Claude say. Undo with one click.</p>
+  <p id="loading" class="muted" role="status">Looking for Claude Code on this Mac…</p>
   <ul id="tools" class="tools" aria-label="AI tools found on this Mac"></ul>
   <div id="none" hidden>
-    <p>No AI tools found yet. Plexiform works with Claude Code, Codex, Gemini CLI, Cursor, Hermes, Copilot CLI, OpenCode, Goose, Cline and Aider.</p>
+    <p>We couldn't find Claude Code or another AI coding tool on this Mac yet.</p>
     <div class="row" style="margin-top:8px"><button type="button" id="how-install">How to install</button><button type="button" id="check-again">Check again</button></div>
   </div>
   <details id="missing-box" hidden><summary id="missing-title"></summary><ul id="missing"></ul></details>
   <p><button type="button" class="link" id="see-changes" aria-expanded="false" aria-controls="changes">See exactly what changes</button></p>
   <div id="changes" hidden></div>
-  <p class="note">Connecting edits only each tool's own hook settings. A copy of each file is kept first (<code>.plexiform-backup-…</code>) and Undo puts it back.</p>
+  <p class="note">We save a copy of each setting we touch first, so Undo puts everything back exactly as it was.</p>
   <p class="note" id="login-line"><span id="login-text"></span> <button type="button" class="link" id="login-toggle"></button></p>
   <p id="connect-status" role="status" aria-live="polite"></p>
-  <div class="actions"><button type="button" class="link" id="skip-connect">Skip for now</button><button type="button" class="primary" id="connect">Connect</button></div>
+  <div class="actions"><button type="button" class="link" id="connect-back">Back</button><button type="button" class="link" id="skip-connect">Skip for now</button><button type="button" class="primary" id="connect">Connect</button></div>
 </section>
 
 <section id="step-signal" aria-labelledby="signal-title" hidden>
-  <p class="step">Step 2 of 3</p>
+  <p class="step">Step 3 of 4</p>
   <h1 id="signal-title" tabindex="-1"></h1>
-  <p>Run any prompt. It will show up here and on the widget as soon as it starts.</p>
-  <p id="waiting" class="waiting" role="status" aria-live="polite"><span class="spinner" aria-hidden="true"></span><span>Waiting for your first session…</span></p>
+  <ol class="howto">
+    <li><span>Copy this test prompt.</span>
+      <div class="prompt-row"><input type="text" id="test-prompt" readonly aria-label="Test prompt"><button type="button" id="copy-prompt">Copy</button></div></li>
+    <li><span id="howto-open">Open Terminal, type <code>claude</code> and press Return.</span></li>
+    <li><span>Paste the prompt and press Return. It shows up here as soon as Claude starts.</span></li>
+  </ol>
+  <p id="copy-status" class="note" role="status" aria-live="polite"></p>
+  <p id="waiting" class="waiting" role="status" aria-live="polite"><span class="spinner" aria-hidden="true"></span><span>Waiting for Claude to start…</span></p>
   <div id="seen" hidden>
     <p id="seen-text" class="seen" role="status" aria-live="polite"></p>
-    <p>That's your widget. Green = working, amber = needs you.</p>
+    <p id="legend-line">That's your widget. Green = working · Amber = your turn · Amber ⌛ = gone quiet · Red = needs you now.</p>
   </div>
-  <p id="not-showing" hidden>Not showing? <button type="button" class="link" id="check-connection">Check connection</button></p>
+  <div id="not-showing" class="diagnosis" role="status" aria-live="polite" hidden>
+    <h2 id="diagnosis-title"></h2>
+    <p id="diagnosis-body"></p>
+    <div class="row"><button type="button" id="diagnosis-action"></button><button type="button" class="link" id="check-connection">Open AI tools</button></div>
+  </div>
   <p id="signal-note" class="note"></p>
   <div class="actions"><button type="button" class="link" id="signal-back">Back</button><button type="button" id="skip-signal">Skip</button><button type="button" class="primary" id="signal-next" hidden>Next</button></div>
 </section>
 
 <section id="step-extras" aria-labelledby="extras-title" hidden>
-  <p class="step">Step 3 of 3 · optional</p>
+  <p class="step">Step 4 of 4 · optional</p>
   <h1 id="extras-title" tabindex="-1">Two last things</h1>
   <h2 id="budget-title">Set a daily spending alert?</h2>
   <form id="budget-form" aria-labelledby="budget-title"><label for="budget">$</label><input id="budget" type="number" min="1" max="100000" step="1" value="20" inputmode="decimal"><span>a day</span><button type="submit" id="budget-set">Set</button></form>
@@ -102,4 +132,4 @@
   <p id="extras-status" class="error" role="status" aria-live="polite"></p>
   <div class="actions"><button type="button" class="link" id="back">Back</button><button type="button" class="primary" id="finish">Open Home</button></div>
 </section>
-</main><script src="onboarding.js"></script></body></html>
+</main><script src="src/colour-legend.js"></script><script src="src/simple-mode.js"></script><script src="onboarding.js"></script></body></html>

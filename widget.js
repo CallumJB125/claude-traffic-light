@@ -176,6 +176,8 @@ function applyStatus(data) {
     confettiTimer = null;
   }
   lastRuleId = look.ruleId;
+  // Stuck is amber like "your turn", so it carries its own glyph (src/colour-legend.js).
+  document.body.classList.toggle('stuck', !!look.stuck);
 
   const count = data.sessions?.length || 0;
   const agents = data.agentCount || 0;

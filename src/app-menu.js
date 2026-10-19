@@ -8,6 +8,7 @@
 // page 'soon' (Tasks has its own window before its sidebar entry is wired).
 // A group with `submenu` (its label) is listed as one submenu of its pages, under the group before it.
 'use strict';
+const Legend = require('./colour-legend.js');
 
 const ACCELERATORS = Object.freeze({ lights: 'CmdOrCtrl+L', settings: 'CmdOrCtrl+,', memory: 'CmdOrCtrl+Shift+F' });
 
@@ -34,6 +35,10 @@ function appItems({ pages, groups, open, openLabel, openAccelerator = 'CmdOrCtrl
     }
     out.push({ type: 'separator' });
   }
+  // The colour key (src/colour-legend.js): at the foot of More, or on its own without one.
+  const legend = { label: 'What the colours mean', submenu: Legend.menuItems() };
+  const more = out.find((i) => Array.isArray(i.submenu));
+  if (more) more.submenu.push({ type: 'separator' }, legend); else out.push(legend, { type: 'separator' });
   if (feedback) out.push(feedback, { type: 'separator' });
   return out;
 }

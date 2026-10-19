@@ -10,13 +10,16 @@ const ROOT = path.join(__dirname, '..');
 const read = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8');
 
 test('model: five steps in order, each with a target, a short body and a primary action', () => {
-  assert.deepEqual(T.STEPS.map((s) => s.id), ['widget', 'waiting', 'rules', 'spend', 'team']);
+  assert.deepEqual(T.STEPS.map((s) => s.id), ['widget', 'waiting', 'spend', 'rules', 'sound']);
   for (const s of T.STEPS) {
     assert.ok(s.target.window && s.target.selector && s.title && s.primary, s.id);
     assert.ok((s.body.match(/[.!?](\s|$)/g) || []).length <= 2, `${s.id}: at most two sentences`);
   }
-  assert.equal(T.STEPS[2].target.window, 'lights');
-  assert.equal(T.STEPS[3].target.page, 'usage');
+  assert.equal(T.STEPS[2].target.page, 'usage');
+  assert.equal(T.STEPS[3].target.window, 'lights');
+  assert.equal(T.STEPS.at(-1).title, 'Try a sound when Claude finishes', 'the tour ends on a sound, not Team');
+  assert.ok(!T.STEPS.some((s) => /team/i.test(`${s.title} ${s.body} ${s.primary}`)), 'no step sells Team');
+  assert.match(T.STEPS[3].body, /when Claude is working, turn the lamp green/, 'the rules step gives a real example');
   assert.equal(T.view(T.start(1)).skip, 'Skip tour');
 });
 
@@ -167,18 +170,19 @@ test('main: setup closing starts the tour on the demo within 30 s; steps go to t
   assert.deepEqual(h.invoke('tour:action', 'home', 'next', 'widget').step, 1);
   assert.equal(h.last('widget').demoInput.id, Main.DEMO_INPUT.id);
   assert.equal(h.invoke('tour:action', 'widget', 'answered', 'waiting').step, 2);
-  assert.equal(h.last('widget'), null, 'the demo question leaves the widget');
-  assert.ok(h.opened.includes('lights'));
-  assert.equal(h.last('lights').selector, '#rule-list');
-  h.invoke('tour:action', 'lights', 'next', 'rules');
+  assert.equal(h.last('widget').demoInput, null, 'the demo question leaves the widget');
   assert.equal(h.last('usage').selector, '#mix');
   assert.equal(h.last('widget').highlight, '#rings');
   h.invoke('tour:action', 'usage', 'next', 'spend');
-  assert.equal(h.last('home').id, 'team');
-  const r = h.invoke('tour:action', 'home', 'next', 'team');
+  assert.ok(h.opened.includes('lights'));
+  assert.equal(h.last('lights').selector, '#rule-list');
+  h.invoke('tour:action', 'lights', 'next', 'rules');
+  assert.equal(h.last('lights').id, 'sound');
+  assert.equal(h.last('lights').selector, '#rule-template, #wish-chime-done');
+  const r = h.invoke('tour:action', 'lights', 'next', 'sound');
   assert.equal(r.status, 'finished');
-  assert.equal(h.opened.at(-1), 'team');
-  assert.equal(h.last('home'), null);
+  assert.ok(!h.opened.includes('team'), 'finishing never opens Team');
+  assert.equal(h.last('lights'), null);
   assert.equal(h.api.onboardingClosed(), false, 'never repeats on its own');
 });
 
@@ -202,9 +206,9 @@ test('main: a hidden widget skips the widget steps; a missing page target is pas
   const h = harness({ widgetShown: false });
   h.api.onboardingClosed(); h.c.tick(30_000);
   assert.equal(h.cfg().tourState.step, 2, 'widget and waiting steps skipped');
+  assert.equal(h.last('usage').id, 'spend');
+  assert.equal(h.invoke('tour:action', 'usage', 'missing', 'spend').step, 3);
   assert.equal(h.last('lights').id, 'rules');
-  h.invoke('tour:action', 'lights', 'next', 'rules');
-  assert.equal(h.invoke('tour:action', 'usage', 'missing', 'spend').step, 4);
 });
 
 test('wiring: one install line in main, preloads, pages, Help and CONTRACT rows', () => {

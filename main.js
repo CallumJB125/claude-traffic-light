@@ -303,6 +303,10 @@ const DEFAULT_CONFIG = {
   // Auto-answer rules (src/auto-rules.js). Saved and shown in Lights; nothing
   // answers from them until the hook side evaluates them.
   autoAnswer: { v: 1, sealed: null, rules: [] },
+  // Setup's "who is this for" answer (src/simple-mode.js): 'simple' | 'developer' | null.
+  persona: null,
+  // Simple mode hides the team, rule fields, helper chips, session timers and token knobs.
+  simpleMode: false,
 };
 const REQUESTS_DIR = path.join(ROOT_DIR, 'requests');
 const git = GitSignals.create({ stateFile: path.join(ROOT_DIR, 'git-signals.json'), log: (m) => console.log(m) });
@@ -1499,6 +1503,7 @@ const { createBuddyWindow } = require('./buddy-window');
 const BRAND = require('./buddy-window/brand');
 const BuddyPages = require('./buddy-window/pages');
 const AppMenu = require('./src/app-menu.js');
+const SimpleMode = require('./src/simple-mode.js');
 const UsagePopOut = require('./src/usage-popout.js');
 const { fromPage } = require('./src/utility-pages.js');
 const fromUtilityPage = (e, id) => fromPage(e, buddyWin?.pageWebContents(id));
@@ -1525,6 +1530,7 @@ function getBuddy() {
   if (!buddyWin) {
     buddyWin = createBuddyWindow({
       isConstrained: () => lowPowerOn,
+      simpleMode: () => loadConfig().simpleMode === true,
       onOverviewRetired: () => { InteractionMain.retireDocuments().catch(() => {}); retireClaudeChannels(); },
       openWindow: (which) => {
         if (which === 'lights') createLightsWindow();
@@ -2424,7 +2430,8 @@ const ONBOARDING_TOOLS = new Set(require('./src/ai-tools.js').TOOLS.map((t) => t
 const homePage = () => (BuddyPages.pageById('home') ? 'home' : BuddyPages.SECTIONS[0].default);
 function onboardingState() {
   const view = require('./src/setup-checklist.js').onboardingView({ tools: AiTools.quick(), sessions: localSessions(aggregateState({ ignoreTravel: true }).sessions || []), loginItem: LoginItem.get(), claudeAuto: claudeAutoConnect() });
-  return { ...view, dailyBudget: loadConfig().spend.dailyBudget, onTeam: !!accountSummary()?.teamName };
+  const config = loadConfig();
+  return { ...view, dailyBudget: config.spend.dailyBudget, onTeam: !!accountSummary()?.teamName, persona: config.persona || null, simple: config.simpleMode === true };
 }
 ipcMain.handle('onboarding:state', (e) => (onboardingOnly(e) ? onboardingState() : null));
 ipcMain.handle('onboarding:preview', (e, id) => (onboardingOnly(e) && ONBOARDING_TOOLS.has(id) ? AiTools.tools.preview(id) : null));
@@ -2454,6 +2461,13 @@ ipcMain.handle('onboarding:login-item', (e, on) => {
   if (!onboardingOnly(e) || typeof on !== 'boolean') return null;
   LoginItem.set(on);
   return LoginItem.get();
+});
+// "Just me" turns simple mode on; "Developer / team" leaves the app as it was (src/simple-mode.js).
+ipcMain.handle('onboarding:persona', (e, ...args) => {
+  const patch = onboardingOnly(e) && args.length === 1 ? SimpleMode.personaPatch(args[0]) : null;
+  if (!patch) return null;
+  const next = commitConfig(patch);
+  return { persona: next.persona, simple: next.simpleMode === true };
 });
 ipcMain.handle('onboarding:budget', (e, dollars) => {
   if (!onboardingOnly(e) || typeof dollars !== 'number' || !Number.isFinite(dollars) || dollars < 0 || dollars > 1e6) return null;
@@ -3416,7 +3430,7 @@ function createTray() {
   // The default menu is the everyday handful (the app's sections, not every
   // page). Debug and resize controls show in dev runs and in the widget's
   // Option/Shift-right-click menu only.
-  const sectionItems = () => BuddyPages.sectionsFor().filter((sec) => sec.menu !== false).map((sec) => ({ id: sec.default, title: sec.title, group: sec.menu === 'more' ? 'more' : 'sections', kind: 'local' }));
+  const sectionItems = () => SimpleMode.sidebarSections(BuddyPages.sectionsFor(), loadConfig().simpleMode === true).filter((sec) => sec.menu !== false).map((sec) => ({ id: sec.default, title: sec.title, group: sec.menu === 'more' ? 'more' : 'sections', kind: 'local' }));
   // Pausing is one click; turning cards on for the first time goes through This Mac, which explains what they send.
   const captureItems = () => {
     const capture = buddyWin?.captureState?.();
@@ -4734,7 +4748,7 @@ utilityHandle('mcp-set-enabled', (e) => fromUtilityPage(e, 'aitools'), (_e, on) 
 
 const AiTools = require('./src/ai-tools-wire.js').wire({ ipcMain, shell, clipboard, home: os.homedir(), runtime: HOOK_RUNTIME, rootDir: ROOT_DIR, fromPage: (e) => fromUtilityPage(e, 'aitools'), askFromWidget: () => !!loadConfig().askFromWidget, ephemeral: EPHEMERAL, openPage: openBuddy, onClaudeConsent: (on) => saveConfig({ claudeAutoConnect: on }) });
 const aiToolsOpen = (destination) => AiTools.open(destination);
-require('./src/home-main.js').register({ ipcMain, allowed: (e) => fromUtilityPage(e, 'home'), state: () => aggregateState(), localSessions, tools: () => AiTools.quick(), myDay: MyDay, openPage: openBuddy, openAiTools: aiToolsOpen, collisions: CollisionAlerts.rowCollisions(collisionAlerts), costGuard: () => (costGuardReport ? costGuardReport() : null), resumeCap: () => (costGuardResume ? costGuardResume() : null), demo: Demo });
+require('./src/home-main.js').register({ ipcMain, allowed: (e) => fromUtilityPage(e, 'home'), state: () => aggregateState(), localSessions, tools: () => AiTools.quick(), myDay: MyDay, openPage: openBuddy, openAiTools: aiToolsOpen, collisions: CollisionAlerts.rowCollisions(collisionAlerts), costGuard: () => (costGuardReport ? costGuardReport() : null), resumeCap: () => (costGuardResume ? costGuardResume() : null), demo: Demo, simple: () => loadConfig().simpleMode === true });
 require('./src/guardrails-main.js').install({ ipcMain, dialog, shell, BrowserWindow, rootDir: ROOT_DIR, allowed: (e) => fromUtilityPage(e, 'home'), broadcast: () => broadcastStatus(), log: console.log });
 require('./src/explain-main.js').install({ ipcMain, rootDir: ROOT_DIR, home: os.homedir(), config: loadConfig, inputs: () => aggregateState().inputs || [], sessions: () => aggregateState().sessions || [], inputAllowed: inputSenderOk, homeAllowed: (e) => fromUtilityPage(e, 'home'), clipboard, shell, Notification, openHome: () => openBuddy('home'), onQuit: (fn) => onQuit(app, fn), log: (m) => console.warn(m) }); // explain mode (opt-in, config.explainMode)
 require('./src/widget-lane-main.js').install({ ipcMain, send: (ch, v) => { if (win && !win.isDestroyed()) win.webContents.send(ch, v); }, allowed: (e) => !!win && !win.isDestroyed() && e.sender === win.webContents, sources: { state: () => aggregateState(), local: localSessions, collisions: collisionAlerts, git: { active: () => gitEvents(loadConfig()) }, spend: () => spendSnapshot(loadConfig()), warnAt: () => loadConfig().spend.warnAt } });
