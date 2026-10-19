@@ -206,6 +206,12 @@ function createOptimiser({
         }
         return { ok: true };
       }
+      // Tools-tab mutations that Burst performs itself (consent dialog in burst-ipc, no Terminal).
+      if (Embed.TOOL_ACTIONS.includes(kind)) {
+        const b = burst();
+        if (!b) return { ok: false, error: 'Burst is not available.' };
+        return b.act(kind, undefined, {});
+      }
       if (!Embed.PAGE_ACTIONS.includes(kind)) return { ok: false, error: 'Unknown action.' };
       const b = burst();
       if (!b) return { ok: false, error: 'Burst is not available.' };

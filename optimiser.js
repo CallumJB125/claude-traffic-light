@@ -105,7 +105,8 @@
     if (verb === 'open') { if (api.openPage) api.openPage(arg); return undefined; }
     if (verb === 'tab' || verb === 'section') { api.act(kind).catch(() => {}); return undefined; }
     const r = await api.act(arg).catch(() => ({ ok: false, error: 'Something went wrong.' }));
-    notes.set(id, { text: r && r.ok ? 'Started in Terminal. This page updates when Burst answers.' : said(r) });
+    const viaBurst = arg === 'panel-install';
+    notes.set(id, { text: r && r.ok ? (viaBurst ? 'Burst is installing it. This page updates when Burst answers.' : 'Started in Terminal. This page updates when Burst answers.') : (r && r.cancelled ? 'Cancelled.' : said(r)) });
     renderTools();
     return undefined;
   }

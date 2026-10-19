@@ -311,12 +311,14 @@ function register({ utilityHandle: rawHandle, settingsOnly, chipAllowed = () => 
     if (!isMac) return { kind: 'unsupported' };
     const v = await refresh();
     let band = null;
+    let panel = null;
     let compactionVerdict = '';
     if (present()) {
       try { band = Tools.bandStatus(await fresh('modStatus', () => client.modStatus())); } catch { band = null; }
+      try { const caps = present() || {}; panel = caps.mods ? Tools.panelStatus((await fresh('mac', () => client.mac()) || {}).panel) : null; } catch { panel = null; }
       try { const l = Spend.learnedThresholds(await fresh('intelligentCompaction', () => client.intelligentCompaction())); compactionVerdict = (l && l.repos.find((r) => r.reason) || {}).reason || ''; } catch { compactionVerdict = ''; }
     }
-    return { compactionVerdict, kind: v.kind, detected: last.kind, misses: last.misses || 0, version: v.version, route: v.route, updateAvailable: v.updateAvailable, compaction: v.compaction, secondaryReady: present() ? last.state.secondaryReady === true : null, band };
+    return { compactionVerdict, panel, kind: v.kind, detected: last.kind, misses: last.misses || 0, version: v.version, route: v.route, updateAvailable: v.updateAvailable, compaction: v.compaction, secondaryReady: present() ? last.state.secondaryReady === true : null, band };
   });
 
   // Widget and Usage header: the chip only, never the card's actions or anything raw. Null on other platforms.

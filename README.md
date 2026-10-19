@@ -245,6 +245,19 @@ Preferences → Remote devices, then from a checkout on that machine run
 signed with the device's own key, and its sessions show under the device's
 name. Recipes, wire format and threat notes: [docs/remote-reporter.md](docs/remote-reporter.md).
 
+## Claude Burst inside Plexiform
+
+[Claude Burst](https://github.com/andrewbakercloudscale/claude-burst) by Andrew Baker keeps Claude Code working through limits: overflow to a provider you pay for, pauseless compaction, session coordination and handover, keep-awake with the lid shut, and a dashboard for cost and health. Plexiform is verified against Burst **v0.20.36** and still works with 0.19 (newer features simply stay hidden). macOS only, and only if you install it.
+
+- **Usage & Burst in the sidebar.** One entry opens the Usage optimiser: Burst's status, its dashboard in a locked-down view, and the tools it adds. Nothing is read until Burst is installed and answering on its loopback port.
+- **Guided setup.** The empty state walks through Install → Trust → Enable → First check, says what each step changes on your Mac (from Burst's own README), and reads progress back from Burst while a step runs, so you are not sent to a Terminal and asked to come back.
+- **One cause, one action.** Every state names what is wrong and offers exactly one next step: not installed → Install; too old → Update; gateway not answering → Repair, with the last known state shown dimmed and its age; CA or hosts entry not trusted → Fix; console down → Start console; usage panel out of date → Update panel. An untrusted listener on Burst's port is named and nothing is read from it.
+- **Home tells you when to look.** A single Burst card appears in Home's attention list only when something needs you: not running, update available, a limit near, or loose ends (uncommitted files, unpushed commits or stashes Burst noticed in your repositories). Healthy means no card.
+- **Loose ends on Overview.** Each repository row carries Burst's counts of uncommitted files, unpushed commits and stashes; file names only, never contents or diffs, and only for repositories your sessions use.
+- **Keep-awake, Remote Control and mods on the Burst card.** The card shows whether this Mac is being kept awake and whether Remote Control is expected, and lists Burst's session mod and the usage panel (claude-code-cost-sidebar) with Install or Update per mod. Every change to the Mac goes through the same native consent sheet as before; Burst's hotspot settings are never read or written by Plexiform.
+
+Privacy: all Burst reads are loopback-only and whitelisted field by field (see PRIVACY.md, *Claude Burst*).
+
 ## Windows
 
 `npm run dist:win` builds an x64 installer and a portable exe (cross-built

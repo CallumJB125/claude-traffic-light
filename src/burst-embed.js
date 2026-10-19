@@ -157,5 +157,7 @@ function atLeast(version, min) {
 
 // The one allow-list for what the page may ask main to run (consent dialogs are main's).
 const PAGE_ACTIONS = Object.freeze(['install', 'enable', 'repair', 'off', 'update']);
+// Tools-tab actions Burst carries out itself over its admin API (burst-ipc ACTION_KINDS), behind the consent dialog.
+const TOOL_ACTIONS = Object.freeze(['panel-install']);
 
-module.exports = { navDecision, openDecision, requestAllowed, extractSubnav, sectionScript, pageState, NAV_SCRIPT, EXTERNAL_HOSTS, DOCS_URL, PAGE_ACTIONS, ATTENTION_KINDS, MAX_ITEMS };
+module.exports = { navDecision, openDecision, requestAllowed, extractSubnav, sectionScript, pageState, NAV_SCRIPT, EXTERNAL_HOSTS, DOCS_URL, PAGE_ACTIONS, TOOL_ACTIONS, ATTENTION_KINDS, MAX_ITEMS };

@@ -215,3 +215,17 @@ test('band card: Burst on but its mod status unknown says so, not "comes with Bu
   assert.equal(off.status.label, 'Not installed');
   assert.match(off.note, /nothing runs until you confirm/);
 });
+
+test('usage panel card reads Burst\'s panel state: installed, not installed with Install, or unknown', () => {
+  const lib = require('../src/optimiser-tools.js');
+  const on = { kind: 'on', version: '0.20.36', band: null };
+  const inst = lib.toolsView({ burst: { ...on, panel: { installed: true } } }).groups[0].tools.find((t) => t.id === 'panel');
+  assert.equal(inst.status.label, 'Installed');
+  const no = lib.toolsView({ burst: { ...on, panel: { installed: false } } }).groups[0].tools.find((t) => t.id === 'panel');
+  assert.equal(no.status.label, 'Not installed');
+  assert.deepEqual(no.actions.map((a) => a.kind), ['burst:panel-install']);
+  const unk = lib.toolsView({ burst: { ...on, panel: null } }).groups[0].tools.find((t) => t.id === 'panel');
+  assert.match(unk.note, /did not say/);
+  assert.deepEqual(lib.panelStatus({ installed: true, repo_dir: '/x' }), { installed: true });
+  assert.equal(lib.panelStatus(null), null);
+});
