@@ -115,8 +115,44 @@ const messageArg = (v) => {
 };
 const fileArg = (v) => { if (typeof v !== 'string' || !path.isAbsolute(v) || v.length > 1024 || /[\u0000-\u001f]/.test(v)) throw badRequest('bad path'); return v; };
 
+// Burst v0.20 mutation vocabularies (internal/admin/mac.go, modband.go, finder.go). A value
+// outside these lists never reaches a body; Burst would refuse it too, but nothing is sent.
+const KEEP_AWAKE_MODES = Object.freeze(['off', 'ac', 'always']);
+const KEEP_AWAKE_MAX_IDLE = 1440; // config.MaxKeepAwakeIdleMinutes
+const MOD_ACTIONS = Object.freeze(['install', 'remove', 'toasts', 'handoff', 'handoff_in_path']); // "install" also updates
+const PANEL_ACTIONS = Object.freeze(['install', 'remove']);
+const FINDER_ACTIONS = Object.freeze(['install', 'remove', 'bypass']);
+const FINDER_KEYS = Object.freeze(['claude', 'claude-continue', 'claude-resume', 'omc', 'omc-interop', 'codex', 'codex-continue', 'opencode', 'opencode-continue', 'ghostty']);
+const oneOf = (list, v, what) => { if (!list.includes(v)) throw badRequest(`bad ${what}`); return v; };
+const keepAwakeBody = (a) => {
+  const mode = oneOf(KEEP_AWAKE_MODES, a.mode, 'keep-awake mode');
+  const idle = a.idleMinutes === undefined ? 0 : a.idleMinutes;
+  if (!Number.isInteger(idle) || idle < 0 || idle > KEEP_AWAKE_MAX_IDLE) throw badRequest('bad idle limit');
+  return { mode, idle_minutes: mode === 'off' ? 0 : idle };
+};
+const modActionBody = (a) => {
+  const action = oneOf(MOD_ACTIONS, a.action, 'mod action');
+  if (action === 'install' || action === 'remove') return { action };
+  if (typeof a.on !== 'boolean') throw badRequest('bad mod option');
+  return { action, [action]: a.on };
+};
+const finderInstallBody = (a) => {
+  const action = oneOf(FINDER_ACTIONS, a.action, 'finder action');
+  const keys = a.keys === undefined ? undefined : a.keys;
+  if (keys !== undefined && (!Array.isArray(keys) || !keys.length || keys.length > FINDER_KEYS.length || keys.some((k) => !FINDER_KEYS.includes(k)))) throw badRequest('bad finder keys');
+  if (action === 'bypass') {
+    if (!keys || typeof a.on !== 'boolean') throw badRequest('bypass needs keys and on');
+    return { action, keys, on: a.on };
+  }
+  return keys ? { action, keys } : { action };
+};
+
 // The only POSTs besides upgrade and compaction: fixed path, body built here from validated args.
-// `console` targets the support console; everything else the gateway.
+// `console` targets the support console; everything else the gateway. `capability` names the
+// detect() flag the target must report, so a 0.19 Burst never sees a 0.20 route.
+// Not here on purpose: /api/handoff/taken is the burst-session mod's own callback (it tells the
+// gateway that a session took in another session's handoff summary); Plexiform never compacts or
+// hands off on a session's behalf, so it has no true statement to make. The Wi-Fi tethering routes: never.
 const MUTATE_ALLOW = Object.freeze({
   reset: { path: '/api/reset', body: () => ({}) },
   'compaction-drop': { path: '/api/compaction/drop', body: (a) => ({ session: sessionArg(a.session) }) },
@@ -130,6 +166,17 @@ const MUTATE_ALLOW = Object.freeze({
   // Burst writes or removes its own block in ~/.codex/config.toml, backing the file up first.
   'codex-enable': { path: '/api/codex/enable', body: () => ({}) },
   'codex-disable': { path: '/api/codex/disable', body: () => ({}) },
+  // v0.20: Burst saves the mode in its config and opens a Terminal window for the root half (lid-awake-root.sh).
+  'keep-awake': { path: '/api/keep-awake', body: keepAwakeBody, capability: 'keepAwake', timeoutMs: 10000 },
+  // v0.20: install (= update) or remove the burst-session mod via update-mod.sh, or save one mod option.
+  'mod-action': { path: '/api/mod-action', body: modActionBody, capability: 'mods', timeoutMs: 10000 },
+  // v0.20: install (fetching the usage panel's signed release when no checkout exists) or remove it.
+  'panel-install': { path: '/api/panel-install', body: (a) => ({ action: oneOf(PANEL_ACTIONS, a.action, 'panel action') }), capability: 'mods', timeoutMs: 10000 },
+  // v0.20: Finder Quick Actions in ~/Library/Services and their launcher scripts.
+  'finder-install': { path: '/api/finder-install', body: finderInstallBody, capability: 'finder', timeoutMs: 15000 },
+  // v0.20 console: repair.sh in a Terminal window; restore the last config.json that loaded.
+  'console-repair': { target: 'console', path: '/api/console/repair', body: () => ({}), capability: 'consoleRepair', timeoutMs: 10000 },
+  'console-restore-config': { target: 'console', path: '/api/console/restore-config', body: () => ({}), capability: 'consoleRepair', timeoutMs: 10000 },
 });
 
 function isAllowed(method, urlPath) {
@@ -186,6 +233,102 @@ const systemInspect = {
   },
 };
 
+// v0.20 read normalizers: whitelisted fields only, so a new Burst key never reaches a renderer by
+// accident. Pure, so lanes and tests can run them on fixtures.
+const asObj = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {});
+const asArr = (v) => (Array.isArray(v) ? v : []);
+const text = (v, n = 200) => (typeof v === 'string' ? v.slice(0, n) : '');
+const count = (v) => (Number.isInteger(v) && v >= 0 ? v : 0);
+
+// /api/loose-ends → counts per repository and file/stash names only: never a diff, a path's
+// contents or a commit hash. `stale` is Burst's own count of what is older than `staleHours`.
+function normalizeLooseEnds(raw) {
+  const r = asObj(raw);
+  const report = asObj(r.report);
+  const stale = asObj(r.stale);
+  const repos = asArr(report.repos).slice(0, 100).map((x) => {
+    const repo = asObj(x);
+    const files = asArr(repo.uncommitted);
+    const stashes = asArr(repo.stashes);
+    return {
+      path: text(repo.root, 1000),
+      branch: text(repo.branch, 200),
+      noRemote: repo.no_remote === true,
+      uncommitted: files.length,
+      unpushed: count(repo.ahead),
+      stashes: stashes.length,
+      names: files.slice(0, 20).map((f) => path.basename(text(asObj(f).path, 1000))).filter(Boolean),
+      stashNames: stashes.slice(0, 10).map((st) => text(asObj(st).subject, 120)).filter(Boolean),
+      error: text(repo.error, 300),
+    };
+  }).filter((repo) => repo.path);
+  return {
+    kind: 'ok',
+    scanned: count(report.scanned),
+    stale: { files: count(stale.files), commits: count(stale.commits), stashes: count(stale.stashes) },
+    staleHours: count(r.stale_hours),
+    withinDays: count(r.within_days),
+    repos,
+  };
+}
+
+// /api/mac `keep_awake` → mode, idle limit, whether sleep is held off right now, the daemon's state.
+function normalizeKeepAwake(raw) {
+  const ka = asObj(asObj(raw).keep_awake);
+  const live = asObj(ka.live);
+  const mode = KEEP_AWAKE_MODES.includes(ka.mode) ? ka.mode : 'off';
+  return {
+    kind: 'ok',
+    mode,
+    idleLimit: count(ka.idle_minutes),
+    held: live.sleep_disabled === true,
+    heldKnown: live.sleep_disabled_known === true,
+    onAc: live.on_ac === true,
+    appliedMode: KEEP_AWAKE_MODES.includes(live.applied_mode) ? live.applied_mode : '',
+    daemon: ['off', 'ok', 'stale', 'missing', 'stopped'].includes(ka.daemon) ? ka.daemon : 'off',
+    problem: text(ka.problem, 300),
+  };
+}
+
+// /api/mod-status (the burst-session mod) + /api/mac `panel` (the usage panel) → one list.
+// Burst reports no version or currency for the panel, so `current` mirrors `installed` there.
+function normalizeMods(modStatusRaw, macRaw) {
+  const m = asObj(modStatusRaw);
+  const p = asObj(asObj(macRaw).panel);
+  const run = (x) => (x && typeof x === 'object' ? { action: text(x.action, 20), running: !x.finished, ok: x.ok === true } : null);
+  return {
+    kind: 'ok',
+    claudeVersion: text(m.claude, 40),
+    mods: [
+      { id: 'burst-session', name: 'Burst session mod', installed: m.installed === true, current: m.current === true, version: text(m.version, 40), supported: m.supported === true, source: text(m.source, 1000), error: text(m.error, 300), hint: text(m.hint, 300), options: { toasts: m.toasts === true, handoff: m.handoff === true, handoffInPath: m.handoff_in_path === true }, last: run(m.last) },
+      { id: 'usage-panel', name: 'Usage panel', installed: p.installed === true, current: p.installed === true, version: '', supported: true, source: text(p.repo_dir, 1000), error: '', hint: '', running: p.running === true, last: run(p.last_run) },
+    ],
+  };
+}
+
+// /api/finder → whether Ghostty is there and, per shortcut, its install state. Notes and script text stay out.
+function normalizeFinder(raw) {
+  const r = asObj(raw);
+  return {
+    kind: 'ok',
+    ghostty: r.ghostty === true,
+    shortcuts: asArr(r.shortcuts).slice(0, 40).map(asObj).filter((s) => FINDER_KEYS.includes(s.key)).map((s) => ({
+      key: s.key,
+      name: text(s.name, 120),
+      group: text(s.group, 60),
+      option: text(s.option, 60),
+      tool: text(s.tool, 40),
+      installed: s.installed === true,
+      ours: s.ours === true,
+      launcher: s.launcher === true,
+      toolFound: s.tool_found === true,
+      missing: text(s.missing, 40),
+      bypassOn: s.bypass_on === true,
+      bypassOk: s.bypass_ok === true,
+    })),
+  };
+}
+
 function createBurstClient({ home = os.homedir(), platform = process.platform, inspect = systemInspect, now = Date.now, timeoutMs = TIMEOUT_MS, stateTimeoutMs = Math.max(timeoutMs, STATE_TIMEOUT_MS), stateRetryMs = STATE_RETRY_MS, configTimeoutMs = TIMEOUT_MS, readConfigFile = (file, encoding) => fs.promises.readFile(file, encoding) } = {}) {
   const binPath = path.join(home, '.local', 'bin', 'claude-burst');
   const configPath = path.join(home, '.config', 'claude-burst', 'config.json');
@@ -193,6 +336,7 @@ function createBurstClient({ home = os.homedir(), platform = process.platform, i
   let consoleAddr = null;
   let upgradeCache = null;
   let probeCache = null; // { version, looseEnds }
+  let caps = null; // the last present detection's capabilities; reads of v0.20 features are gated on it
   let configInFlight = null;
   let authorityEpoch = 0;
 
@@ -329,6 +473,12 @@ function createBurstClient({ home = os.homedir(), platform = process.platform, i
   }
 
   async function detect() {
+    const d = await detectInner();
+    caps = d.kind === 'present' ? d.capabilities : null;
+    return d;
+  }
+
+  async function detectInner() {
     if (platform !== 'darwin') return { kind: 'unsupported' };
     if (!installed()) return { kind: 'not_installed' };
     const epoch = authorityEpoch;
@@ -443,8 +593,13 @@ function createBurstClient({ home = os.homedir(), platform = process.platform, i
   const mac = async () => request('GET', '/api/mac');
   const settings = async () => request('GET', '/api/settings');
   const modStatus = async () => request('GET', '/api/mod-status');
-  const looseEnds = async () => request('GET', '/api/loose-ends');
-  const finder = async () => request('GET', '/api/finder');
+  // v0.20 reads, whitelisted here (burst-ipc hands them to the renderer as they are). Each answers
+  // `{kind:'unsupported'}` when the last detection did not report the capability.
+  const unsupported = { kind: 'unsupported' };
+  const looseEnds = async () => (caps && caps.looseEnds ? normalizeLooseEnds(await request('GET', '/api/loose-ends')) : unsupported);
+  const keepAwake = async () => (caps && caps.keepAwake ? normalizeKeepAwake(await request('GET', '/api/mac')) : unsupported);
+  const mods = async () => (caps && caps.mods ? normalizeMods(await request('GET', '/api/mod-status'), await request('GET', '/api/mac')) : unsupported);
+  const finder = async () => (caps && caps.finder ? normalizeFinder(await request('GET', '/api/finder')) : unsupported);
   const intelligentCompaction = async () => request('GET', '/api/intelligent-compaction');
 
   // The support console answers when the gateway is down, so it gets its own trust check:
@@ -494,12 +649,14 @@ function createBurstClient({ home = os.homedir(), platform = process.platform, i
     if (spec.target === 'console') {
       const c = await consoleDetect();
       if (c.kind !== 'present') throw Object.assign(new Error('Burst\'s console is not trusted right now'), { code: 'not_present' });
+      if (spec.capability && !capabilitiesFor(c.status.version)[spec.capability]) throw Object.assign(new Error('This Burst console is too old for that'), { code: 'unsupported' });
       to = consoleAddr;
       epoch = authorityEpoch;
       if (!to || await inspect.listenerPid(to.port) !== c.pid) throw Object.assign(new Error('Burst\'s console changed; try again'), { code: 'pid_changed' });
     } else {
       const d = await detect();
       if (d.kind !== 'present') throw Object.assign(new Error('Burst is not trusted right now'), { code: 'not_present' });
+      if (spec.capability && !d.capabilities[spec.capability]) throw Object.assign(new Error('This Burst is too old for that'), { code: 'unsupported' });
       to = addr;
       epoch = authorityEpoch;
       const raw = await send('GET', '/api/state', { to });
@@ -523,10 +680,14 @@ function createBurstClient({ home = os.homedir(), platform = process.platform, i
 
   return {
     detect, request, testConnection, requestUpgrade, setCompaction, usage, sessionSecondaryUsd, codex, codexRouting, coordination, handoverAudit, handoverFile,
-    requests, history, inspect: inspectContext, audit, automask, mac, settings, modStatus, looseEnds, finder, intelligentCompaction, consoleDetect, mutate,
+    requests, history, inspect: inspectContext, audit, automask, mac, settings, modStatus, looseEnds, keepAwake, mods, finder, intelligentCompaction, consoleDetect, mutate,
+    capabilities: () => (caps ? { ...caps } : null),
     binPath,
     adminUrl: () => (addr ? `http://${addr.host === '::1' ? '[::1]' : addr.host}:${addr.port}/` : null),
   };
 }
 
-module.exports = { createBurstClient, isAllowed, parseAdminAddress, atLeast, parseVersion, scrub, capabilitiesFor, CAPABILITY_FLOORS, CAPABILITY_NAMES, GET_ALLOW, MUTATE_ALLOW, LABEL, CONSOLE_LABEL };
+module.exports = {
+  createBurstClient, isAllowed, parseAdminAddress, atLeast, parseVersion, scrub, capabilitiesFor, CAPABILITY_FLOORS, CAPABILITY_NAMES, GET_ALLOW, MUTATE_ALLOW, LABEL, CONSOLE_LABEL,
+  normalizeLooseEnds, normalizeKeepAwake, normalizeMods, normalizeFinder, KEEP_AWAKE_MODES, MOD_ACTIONS, PANEL_ACTIONS, FINDER_ACTIONS, FINDER_KEYS,
+};
