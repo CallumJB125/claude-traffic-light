@@ -254,6 +254,24 @@ export function handToTeammateDialog(dlg, model) {
       h('button', { type: 'submit', class: 'btn btn-primary', disabled: dlg.busy || !others.length || null }, dlg.busy ? 'Handing over…' : 'Hand to teammate'))));
 }
 
+// Hand a card to a teammate (team depth lane D): they get it in their inbox and
+// on the card, with the card's latest handover attached, and accept or decline.
+export function handToPersonDialog(dlg, model) {
+  const view = model.entries.find((e) => e.view.id === dlg.cardId)?.view;
+  if (!view) return null;
+  const meId = model.me?.member?.id;
+  const others = [...model.members.values()].filter((m) => m.member_id !== meId);
+  return shell('hand-to-person', `Hand ${view.key} to…`, h('form', { class: 'modal-body', 'data-form': 'hand-to-person', 'data-card': view.id },
+    h('p', null, 'They are added to the card and asked to accept. The card\'s latest handover goes with it; nothing stops or starts here.'),
+    others.length ? field('htp-member', 'Teammate', h('select', { id: 'htp-member', name: 'to_member_id', class: 'input', required: true },
+      others.map((m) => h('option', { key: m.member_id, value: m.member_id }, m.name)))) : h('p', { class: 'hint' }, 'Invite a teammate first.'),
+    field('htp-note', 'Note (optional)', h('textarea', { id: 'htp-note', name: 'note', class: 'input', rows: 3, maxlength: 2000, placeholder: 'Where it is and what is left.' })),
+    errorLine(dlg),
+    h('div', { class: 'modal-foot' },
+      h('button', { type: 'button', class: 'btn', 'data-action': 'close-dialog' }, 'Cancel'),
+      h('button', { type: 'submit', class: 'btn btn-primary', disabled: dlg.busy || !others.length || null }, dlg.busy ? 'Handing over…' : 'Hand it over'))));
+}
+
 export function changesDialog(dlg, model) {
   const view = model.entries.find((e) => e.view.id === dlg.cardId)?.view;
   if (!view) return null;
@@ -314,6 +332,7 @@ export function dialog(model) {
     case 'confirm': return confirmDialog(d, model);
     case 'handover': return handOverDialog(d, model);
     case 'hand-to-teammate': return handToTeammateDialog(d, model);
+    case 'hand-to-person': return handToPersonDialog(d, model);
     case 'switch-ai': return switchAiDialog(d, model);
     case 'changes': return changesDialog(d, model);
     case 'new': return newCardDialog(d, model);

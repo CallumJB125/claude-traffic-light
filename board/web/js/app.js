@@ -1026,6 +1026,15 @@ function onMessage(msg) {
       dashboardSoon();
       break;
     }
+    case 'card.handoff': {
+      // The card.upsert that follows carries the same `handoff`; patch now so the banner does not lag it.
+      const e = state.cards.get(msg.card_id);
+      if (msg.board_id !== state.boardId || !e || !msg.handoff) return;
+      const ho = msg.handoff;
+      e.view = { ...e.view, handoff: { id: ho.id, state: ho.state, from: ho.from_member_id, to: ho.to_member_id, from_name: ho.from_name, to_name: ho.to_name, note: ho.note ?? null, created_at: ho.created_at, answered_at: ho.answered_at ?? null } };
+      state.cardsRev += 1;
+      break;
+    }
     case 'card.remove': {
       state.cards.delete(msg.card_id);
       state.cardsRev += 1;
@@ -1480,6 +1489,17 @@ function applyCard(res) {
 const viewOf = (id) => (state.cards.get(id) ?? state.archived?.get(id))?.view;
 const keyOf = (id) => viewOf(id)?.key ?? 'Card';
 
+// Person-to-person hand-off (team depth lane D): accept / decline by the recipient, cancel by the sender.
+async function answerHandoff(cardId, handoffId, verb) {
+  const res = await withBusy(`${cardId}:handoff:${verb}`, () => api.answerHandoff(cardId, handoffId, verb));
+  if (res) {
+    applyCard(res);
+    toast(verb === 'accept' ? `${keyOf(cardId)} is yours. The handover tab has what was left for you.` : verb === 'decline' ? `You declined ${keyOf(cardId)}; ${state.members?.get?.(res.handoff?.from_member_id)?.name ?? 'the sender'} is told.` : `${keyOf(cardId)} is back with you.`);
+    if (state.detail?.cardId === cardId) refreshDetailSoon(cardId);
+  }
+  return res;
+}
+
 async function doAction(cardId, action, body = {}, done) {
   const res = await withBusy(`${cardId}:${action}`, () => api.action(cardId, action, body));
   if (res) {
@@ -1763,6 +1783,10 @@ async function submitDialogForm(form, submitter) {
   if (kind === 'switch-ai') {
     return run(() => api.action(cardId, 'hand_over', { target: { kind: 'hold' },
       expected_fence: d.expected_fence, prior_run_id: d.prior_run_id }), `${keyOf(cardId)} is preparing its handover. Choose the next AI after its runner confirms the stop.`);
+  }
+  if (kind === 'hand-to-person') {
+    const to = String(fd.get('to_member_id') ?? ''), note = String(fd.get('note') ?? '').trim();
+    return run(() => api.requestHandoff(cardId, { to_member_id: to, ...(note ? { note } : {}) }), `${keyOf(cardId)} is handed to ${state.members?.get?.(to)?.name ?? 'your teammate'}. They are asked to accept.`);
   }
   if (kind === 'hand-to-teammate') {
     const to = String(fd.get('member_id') ?? ''), note = String(fd.get('note') ?? '').trim();
@@ -2176,6 +2200,8 @@ function onClick(e) {
     case 'review-fix': case 'review-approve': case 'review-dismiss': reviewAction(cardId, action, el.dataset.review, el.dataset.index); return;
     case 'review-settings': openReviewSettings(el.dataset.board); return;
     case 'hand_over': state.dialog = { kind: 'handover', cardId, kind_: 'queue' }; update(); return;
+    case 'hand_to_person': state.dialog = { kind: 'hand-to-person', cardId }; update(); return;
+    case 'handoff-accept': case 'handoff-decline': case 'handoff-cancel': answerHandoff(cardId, el.dataset.handoff, action.slice('handoff-'.length)); return;
     case 'permission': {
       const prId = el.dataset.pr;
       withBusy(`pr:${prId}`, () => api.answerPermission(prId, el.dataset.decision, el.dataset.scope)).then((res) => {

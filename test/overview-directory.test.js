@@ -31,7 +31,7 @@ const FIXTURE = {
   viewer: 'u-me', users: { 'u-me': 'Me', 'u-bob': `Bob ${HOSTILE}`, 'u-cara': 'Cara', 'u-eve': 'Eve' },
   teams: [{ id: 't-dev', name: 'Dev team', members: ['u-me', 'u-bob', 'u-cara'] }, { id: 't-ops', name: 'Ops (not mine)', members: ['u-eve', 'u-bob'] }],
   sessions: [
-    { ref: 'bob-1', owner: 'u-bob', provider: { id: 'claude', label: 'Claude Code' }, device: { label: 'Bob’s Windows PC' }, card: { key: 'DEV-7', title: `Fix login ${HOSTILE}`, edited_by: 'human' }, task_title: 'agent title', state: 'working', observed_ago_ms: 2000, capabilities: { interrupt: true }, children: [{ ref: 'k1', name: 'Reviewer', state: 'input', task_title: 'Review diff', observed_ago_ms: 1000 }], handoffs: [{ direction: 'in', with: 'Cara', state: 'offered', summary: 'Take over tests' }], shares: [{ team: 't-dev', scope: 'interact' }] },
+    { ref: 'bob-1', owner: 'u-bob', provider: { id: 'claude', label: 'Claude Code' }, device: { label: 'Bob’s Windows PC' }, card: { key: 'DEV-7', title: `Fix login ${HOSTILE}`, edited_by: 'human' }, task_title: 'agent title', state: 'working', observed_ago_ms: 2000, capabilities: { interrupt: true }, children: [{ ref: 'k1', name: 'Reviewer', state: 'input', task_title: 'Review diff', observed_ago_ms: 1000 }], handoffs: [{ direction: 'in', with: 'Cara', state: 'offered', summary: 'Take over tests' }, { direction: 'out', with: 'Dan', state: 'offered', summary: '' }], shares: [{ team: 't-dev', scope: 'interact' }] },
     { ref: 'cara-1', owner: 'u-cara', provider: { id: 'codex', label: 'Codex' }, device: { label: 'Cara’s Mac' }, task_title: 'Write docs', state: 'idle', observed_ago_ms: 3000, shares: [{ team: 't-dev', scope: 'watch' }] },
     { ref: 'bob-private', owner: 'u-bob', provider: { id: 'cursor', label: 'Cursor' }, device: { label: 'Bob’s Windows PC' }, task_title: 'PRIVATE personal side project', state: 'working', observed_ago_ms: 1000, shares: [] },
     { ref: 'eve-ops', owner: 'u-eve', provider: { id: 'gemini', label: 'Gemini' }, device: { label: 'Eve’s laptop' }, task_title: 'OPS-ONLY incident work', state: 'working', observed_ago_ms: 1000, shares: [{ team: 't-ops', scope: 'interact' }] },
@@ -156,6 +156,7 @@ test('Team sessions: explicit shares only, grouped by person, filters, reasons, 
     assert.match(bob.textContent, /task title edited by a person/);
     assert.match(bob.textContent, /Reviewer: Review diff/); assert.match(bob.textContent, /Needs input/);
     assert.match(bob.textContent, /Handoff from Cara · offered · Take over tests/);
+    assert.match(bob.textContent, /Handed to Dan, waiting/, 'a card handed to a person reads as the board shows it');
     assert.match(bob.textContent, /Shared with this team by its owner/);
     const cara = s.row('team-list', /Write docs/);
     assert.match(cara.textContent, /Cara shared this session with your team to watch only/);

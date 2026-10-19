@@ -1809,6 +1809,19 @@ function localHandoffOp(op,args){
   if(op==='hand_off_status')return Promise.resolve(HandoffRequests.status({request_id:typeof a.request_id==='string'?a.request_id:undefined}));
   return Promise.resolve(HandoffRequests.request({from:a.from,to:a.to,reason:a.reason,title:a.title,brief:a.brief,files:a.files,branch:a.branch,cwd:typeof a.cwd==='string'?a.cwd:''}));
 }
+// A teammate handed you a card on the team board (src/handoff-people.js): the same "Needs you" card on Sessions, kind person.
+const HandoffPeople=require('./src/handoff-people.js').create({links:async()=>(devMockReady?(await getBuddy().teamMemoryLinks?.())??[]:[]),fetch:(...a)=>net.fetch(...a),log:m=>console.log(m), // privacy-flow: team-hub
+  onChange:()=>buddyWin?.sendToPage('sessions','handoff:changed'),notify:(r)=>notifyPersonHandoff(r)});
+setInterval(()=>{if(buddyWin?.isVisible?.())HandoffPeople.refresh().catch(()=>{});},60_000).unref?.();
+function notifyPersonHandoff(r){
+  console.log('[handoff-people] notify');
+  if(IS_DEV_RUN||!Notification.isSupported())return;
+  const note=new Notification({title:`${r.from} handed you ${r.card?.key||'a card'}`,body:'Accept or decline it on the Sessions page.',silent:true});
+  liveNotifications.add(note);
+  note.on('click',()=>{liveNotifications.delete(note);openBuddy('sessions');});
+  note.on('close',()=>liveNotifications.delete(note));
+  note.show();
+}
 function notifyHandoffRequest(r){
   console.log('[handoff-requests] notify');
   if(IS_DEV_RUN||!Notification.isSupported())return;
@@ -1818,7 +1831,9 @@ function notifyHandoffRequest(r){
   note.on('close',()=>liveNotifications.delete(note));
   note.show();
 }
-for(const[channel,fn]of[['handoff:list',()=>({ok:true,requests:HandoffRequests.list()})],
+for(const[channel,fn]of[['handoff:list',async()=>{await HandoffPeople.refresh().catch(()=>{});return{ok:true,requests:[...HandoffRequests.list(),...HandoffPeople.list()]};}],
+  ['handoff:person-accept',(_e,id)=>HandoffPeople.accept(id)],
+  ['handoff:person-decline',(_e,id)=>HandoffPeople.decline(id)],
   ['handoff:confirm',(_e,id)=>HandoffRequests.confirm(id,{continueIn,onEvent:(ev)=>continueToSessions(ev)})],
   ['handoff:dismiss',(_e,id)=>HandoffRequests.dismiss(id)]]){
   ipcMain.handle(channel,async(e,...args)=>{if(!sessionsSender(e))return{ok:false,error:'Not allowed.'};try{return await fn(e,...args);}catch{return{ok:false,error:'Something went wrong. Nothing was started.'};}});

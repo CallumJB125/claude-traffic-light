@@ -26,7 +26,31 @@
     void refresh();
   }
 
+  const PERSON = { pending: 'Waiting for your answer', accepted: 'Accepted', declined: 'Declined', cancelled: 'Taken back or answered elsewhere' };
+  // A teammate handed you a card on the team board (src/handoff-people.js), or you handed one over.
+  function person(r) {
+    const li = node('li', null, 'mail-item');
+    const card = r.card?.key ? `${r.card.key} · ${r.card.title}` : r.card?.title || 'a card';
+    li.append(node('h3', r.direction === 'in' ? `${r.from} handed you ${card}` : `Handed to ${r.to}: ${card}`));
+    if (r.reason) li.append(node('p', `Note: ${r.reason}`, 'muted'));
+    if (r.direction === 'in' && r.state === 'pending' && api.handoffPersonAccept) {
+      const actions = node('div', null, 'row-actions');
+      actions.append(
+        btn('Accept', (b) => run(b, () => api.handoffPersonAccept(r.id), 'Accepted. The handover is shown on this card.'), true),
+        btn('Decline', (b) => run(b, () => api.handoffPersonDecline(r.id), 'Declined. They are told.')),
+      );
+      li.append(node('p', 'Accepting keeps the card with you and shows its handover packet here.', 'muted'), actions);
+    } else if (r.direction === 'out' && r.state === 'pending') {
+      li.append(node('p', `Handed to ${r.to}, waiting for their answer.`, 'muted'));
+    } else {
+      li.append(node('p', PERSON[r.state] || r.state, 'muted'));
+    }
+    if (r.note) li.append(node('pre', r.note, 'mail-body'));
+    return li;
+  }
+
   function item(r) {
+    if (r.kind === 'person') return person(r);
     const li = node('li', null, 'mail-item');
     li.append(node('h3', `${name(r.from)} asks to hand off to ${r.label || name(r.to)}`));
     if (r.reason) li.append(node('p', `Why: ${r.reason}`, 'muted'));

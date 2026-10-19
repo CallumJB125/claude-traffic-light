@@ -1035,6 +1035,103 @@ export class Api {
     }
   }
 
+  // ── hand-offs (team depth, lane D) ────────────────────────────────────────
+  // A person hands a card to a teammate: the latest handover version is
+  // attached, `to` joins the assignees, and `to` decides (accept / decline).
+  // handover_id is handovers.version as text at request time (NULL when the
+  // card has no handover yet). One `requested` hand-off per card at a time.
+  handoffView(row) {
+    return row ? { id: row.id, card_id: row.card_id, from_member_id: row.from_member_id, to_member_id: row.to_member_id, state: row.state, note: row.note ?? null,
+      handover_id: row.handover_id ?? null, created_at: row.created_at, answered_at: row.answered_at ?? null,
+      from_name: this.hub.memberName(row.from_member_id), to_name: this.hub.memberName(row.to_member_id) } : null;
+  }
+
+  handoffRow(member, cardId, handoffId) {
+    const row = this.db.get('SELECT * FROM handoffs WHERE id = ? AND card_id = ?', String(handoffId ?? ''), cardId);
+    if (!row) throw new HubError('NOT_FOUND', 'hand-off not found');
+    return row;
+  }
+
+  // After commit: the person's own sockets get the inbox item, the board gets card.handoff and the card.upsert.
+  announceHandoff(row, inboxMemberId, inboxId) {
+    const card = this.hub.card(row.card_id);
+    this.hub.later(() => {
+      if (inboxId) {
+        const item = this.db.get('SELECT * FROM inbox WHERE id = ?', inboxId);
+        if (item) this.hub.broadcastMember(inboxMemberId, 'inbox.item', { item: { id: item.id, org_id: item.org_id, kind: item.kind, ref: json(item.ref_json, {}), created_at: item.created_at, read_at: item.read_at } });
+      }
+      const h = this.handoffView(this.db.get('SELECT * FROM handoffs WHERE id = ?', row.id));
+      for (const b of this.hub.browsers) if (b.boardId === card.board_id) b.send({ type: 'card.handoff', board_id: card.board_id, card_id: card.id, handoff: h });
+      this.hub.broadcastCard(card.id);
+    });
+  }
+
+  async requestHandoff(member, cardId, body, { cred = null } = {}) {
+    member = this.currentWriter(member, cred);
+    const row0 = this.cardFor(member, cardId);
+    const to = this.orgMember(member, body.to_member_id);
+    if (to.id === member.id) throw new HubError('VALIDATION', 'hand the card to someone else');
+    if (!this.hub.canWrite(to)) throw new HubError('VALIDATION', 'a viewer cannot take a card');
+    const note = str(body.note, 2000, 'note');
+    return this.withWritableBoard(row0.board_id, (current) => {
+      member = current;
+      const row = this.cardFor(member, cardId);
+      if (row.board_id !== row0.board_id) throw new HubError('CONFLICT', 'card moved while waiting');
+      if (row.archived_at) throw archivedError();
+      if (this.db.get("SELECT 1 AS x FROM handoffs WHERE card_id = ? AND state = 'requested'", cardId)) throw new HubError('CONFLICT', 'this card already has a hand-off waiting for an answer', { reason: 'HANDOFF_PENDING' });
+      const id = randomUUID();
+      let inboxId = null;
+      this.hub.txn(() => {
+        const handover = this.hub.latestHandover(cardId);
+        this.db.insert('handoffs', { id, card_id: cardId, from_member_id: member.id, to_member_id: to.id, state: 'requested', note, handover_id: handover ? String(handover.version) : null, created_at: this.hub.iso(), answered_at: null });
+        const before = this.hub.assignees(cardId);
+        if (!before.includes(to.id)) {
+          this.db.run("INSERT OR IGNORE INTO card_assignees (card_id, member_id, role) VALUES (?, ?, 'collaborator')", cardId, to.id);
+          this.db.run('UPDATE cards SET version = version + 1, updated_at = ? WHERE id = ?', this.hub.iso(), cardId);
+          this.hub.journal({ board_id: row.board_id, card_id: cardId, actor_kind: 'member', actor_id: member.id, kind: 'card.update', payload: { fields: { assignees: [before, [...before, to.id]] }, request_id: body.request_id ?? null, cause: 'handoff' } });
+        }
+        this.hub.journal({ board_id: row.board_id, card_id: cardId, actor_kind: 'member', actor_id: member.id, kind: 'card.handoff_requested', payload: { handoff_id: id, to: to.id, request_id: body.request_id ?? null } });
+        inboxId = this.notify(to.id, 'handoff_request', { board_id: row.board_id, card_id: cardId, handoff_id: id, by: member.id });
+        this.announceHandoff({ id, card_id: cardId }, to.id, inboxId);
+      });
+      return { handoff: this.handoffView(this.db.get('SELECT * FROM handoffs WHERE id = ?', id)), card: cardView(this.hub, this.hub.card(cardId), member.id) };
+    }, { member, cred });
+  }
+
+  // accept / decline: only `to`. cancel: `from` or an admin. All three need state `requested`.
+  async answerHandoff(member, cardId, handoffId, decision, body = {}, { cred = null } = {}) {
+    if (!['accepted', 'declined', 'cancelled'].includes(decision)) throw new HubError('VALIDATION', 'bad decision');
+    member = this.currentWriter(member, cred);
+    const row0 = this.cardFor(member, cardId);
+    this.handoffRow(member, cardId, handoffId);
+    return this.withWritableBoard(row0.board_id, (current) => {
+      member = current;
+      const row = this.cardFor(member, cardId);
+      if (row.board_id !== row0.board_id) throw new HubError('CONFLICT', 'card moved while waiting');
+      const h = this.handoffRow(member, cardId, handoffId);
+      if (decision === 'cancelled') {
+        if (h.from_member_id !== member.id && !this.hub.isAdmin(member)) throw new HubError('FORBIDDEN', 'only the person who handed the card over, or an admin, can cancel');
+      } else if (h.to_member_id !== member.id) throw new HubError('FORBIDDEN', 'only the person the card was handed to can answer');
+      if (h.state !== 'requested') throw new HubError('CONFLICT', `this hand-off was already ${h.state}`, { reason: 'HANDOFF_ANSWERED' });
+      let inboxId = null, inboxTo = null;
+      this.hub.txn(() => {
+        const now = this.hub.iso();
+        this.db.run('UPDATE handoffs SET state = ?, answered_at = ? WHERE id = ?', decision, now, h.id);
+        if (decision === 'cancelled') {
+          // An unread request is withdrawn with the hand-off; a read one stays as history.
+          this.db.run("DELETE FROM inbox WHERE member_id = ? AND kind = 'handoff_request' AND read_at IS NULL AND json_extract(ref_json, '$.handoff_id') = ?", h.to_member_id, h.id);
+          this.hub.journal({ board_id: row.board_id, card_id: cardId, actor_kind: 'member', actor_id: member.id, kind: 'card.handoff_cancelled', payload: { handoff_id: h.id, request_id: body.request_id ?? null } });
+        } else {
+          this.hub.journal({ board_id: row.board_id, card_id: cardId, actor_kind: 'member', actor_id: member.id, kind: 'card.handoff_answered', payload: { handoff_id: h.id, state: decision, request_id: body.request_id ?? null } });
+          inboxTo = h.from_member_id;
+          inboxId = this.notify(h.from_member_id, 'handoff_answer', { board_id: row.board_id, card_id: cardId, handoff_id: h.id, by: member.id, state: decision });
+        }
+        this.announceHandoff(h, inboxTo, inboxId);
+      });
+      return { handoff: this.handoffView(this.db.get('SELECT * FROM handoffs WHERE id = ?', h.id)), card: cardView(this.hub, this.hub.card(cardId), member.id) };
+    }, { member, cred });
+  }
+
   // ── comments ──────────────────────────────────────────────────────────────
   insertComment(member, cardId, { body, for_agent = false, reply_to = null }) {
     requireRows(this.hub, this.hub.board(this.hub.card(cardId).board_id).org_id, 'comments');

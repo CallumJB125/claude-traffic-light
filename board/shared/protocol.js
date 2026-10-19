@@ -217,6 +217,7 @@ export const SHAPES = Object.freeze({
     snapshot: { board_id: 'string', board: 'object', cards: 'array', members: 'array' },
     'card.upsert': { board_id: 'string', card: 'object' },
     'card.remove': { board_id: 'string', card_id: 'string' },
+    'card.handoff': { board_id: 'string', card_id: 'string', handoff: 'object' },
     'board.labels': { board_id: 'string', labels: 'array' },
     'team.boards': { org_id: 'string', boards: 'array' },
     'lease.tick': { card_id: 'string', live: 'object', state_age_ms: 'int' },
