@@ -275,6 +275,8 @@ const DEFAULT_CONFIG = {
   paceTooltip: true,
   // Busy sources (F5): hold non-urgent pings while you're in a meeting or a Focus.
   busyHold: true,
+  // Slack presence sync (src/slack-presence.js): off until ticked; needs a Slack user token Plexiform does not have yet.
+  slackPresence: false,
   busyCalendar: false, // off until ticked in Settings, which is what asks macOS for access
   busyCalendarTitles: false,
   busyIcsUrl: '',
@@ -967,6 +969,12 @@ function pingAllowed(ruleId, opts = {}) {
   BusyWatch.noteHeld(rule ? rule.name : null, opts.signal || firedSignal(rule));
   return false;
 }
+// Nudges nobody asked for (the "make it a rule?" nudge, the digest
+// notification) go through one gate: quiet (snooze, quiet hours) and a busy
+// spell (a meeting, a Focus mode: src/busy-watch.js) both hold them.
+const InterruptGate = require('./src/interrupt-gate.js').create({ quiet: () => quietHolds(null), busy: () => BusyWatch.holding() });
+// Slack presence sync (src/slack-presence.js): off by default; with no Slack user token it only reports 'needs_user_scope'.
+const SlackPresence = require('./src/slack-presence.js').create({ client: null, log: (...a) => console.warn(...a) });
 // Which of a rule's signals is live right now (a virtual one, like
 // long-running, isn't in the session list: then its first signal).
 function firedSignal(rule) {
@@ -3065,6 +3073,7 @@ function broadcastStatus() {
     if (statusPushWanted(widgetMotion.paused, asks, widgetAsksSent)) { widgetAsksSent = asks; win?.webContents.send('status-changed'); }
     if (!DEMO && devMockReady && localSessions(st.sessions).length) getBuddy().sessionsChanged(localSessions(st.sessions));
     else buddyWin?.sessionsChanged(localSessions(st.sessions));
+    void SlackPresence.setEnabled(loadConfig().slackPresence === true).then(() => SlackPresence.update({ sessions: localSessions(st.sessions), pending: st.pending, busy: BusyWatch.holding() })).catch(() => {});
     const recap = BusyWatch.observe(st.sessions);
     if (recap) { stateMemo = { at: 0, key: null, value: null }; showAwayRecap(recap); }
     maybeNotify(st);
@@ -4361,7 +4370,7 @@ ipcMain.handle('answer-input', (e, id, optionId, more = {}) => {
   if (!SHOW_RULE_NUDGE) return { ok: true };
   let n = null;
   try { n = String(optionId) === 'allow' ? nudger.record(req, loadConfig().autoAnswer.rules) : null; } catch (err) { console.warn('[nudge]', err.message); }
-  if (!n || !n.nudge) return { ok: true };
+  if (!n || !n.nudge || !InterruptGate.isInterruptible()) return { ok: true };
   nudger.offer(n.key);
   return { ok: true, nudge: { key: n.key, count: n.count, tools: n.nudge.tools, command: n.nudge.command || null, path: n.nudge.path || null } };
 });
@@ -4382,7 +4391,7 @@ ipcMain.handle('home:answer-input', (e, id, optionId) => {
   if (!SHOW_RULE_NUDGE) return { ok: true };
   let n = null;
   try { n = optionId === 'allow' ? nudger.record(req, loadConfig().autoAnswer.rules) : null; } catch (err) { console.warn('[nudge]', err.message); }
-  if (!n || !n.nudge) return { ok: true };
+  if (!n || !n.nudge || !InterruptGate.isInterruptible()) return { ok: true };
   nudger.offer(n.key);
   return { ok: true, nudge: { key: n.key, count: n.count, tools: n.nudge.tools, command: n.nudge.command || null, path: n.nudge.path || null } };
 });
@@ -4643,7 +4652,7 @@ require('./src/widget-lane-main.js').install({ ipcMain, send: (ch, v) => { if (w
   onQuit(app, () => starter.close());
 }
 require('./src/home-alerts.js').wire({ ipcMain, dialog, clipboard, homeAllowed: (e) => fromUtilityPage(e, 'home'), usageAllowed: (e) => fromUtilityPage(e, 'usage'), sessions: () => aggregateState().sessions || [], burst: () => BurstIpc.snapshot().d, burstView: () => BurstIpc.status(), burstLooseEnds: () => BurstIpc.looseEndsView(), burstAct: async (kind) => { const r = await BurstIpc.act(kind); return r && r.error === 'Unknown action.' ? BurstIpc.runAction(kind) : r; }, tasksRows: () => tasksSvc?.snapshot().tasks || [], tasksService: getTasks, handoverText: (key) => SessionHandoverMain.writer.text(key), jump: (s) => jumpToSession(s, Rules.folderOf(s.cwd), s.hostApp), mail: () => AgentMail.pending(), openMail: async () => { openBuddy('sessions'); } });
-require('./src/digest-main.js').register({ ipcMain, allowed: (e) => fromUtilityPage(e, 'home'), rootDir: ROOT_DIR, userData: app.getPath('userData'), safeStorage: require('electron').safeStorage, clipboard, dialog, shell, Notification, fetch: (...a) => net.fetch(...a), usageTurns: () => getUsageTurns(), costGuard: () => (costGuardReport ? costGuardReport() : null), workCost: () => workCostReport(), scheduledRuns: (from, to) => (recipeScheduler ? recipeScheduler.runsBetween(from, to).map((h) => ({ ...h, title: recipes.find(h.id)?.title || 'A recipe' })) : []), teamBrief: (cwd) => (loadConfig().teamBrief === true ? TeamActivity.call('team_brief', { cwd }) : null), openHome: () => openBuddy('home'), onQuit: (fn) => onQuit(app, fn), log: (m) => console.warn(m) }); // privacy-flow: digest-slack
+require('./src/digest-main.js').register({ ipcMain, allowed: (e) => fromUtilityPage(e, 'home'), rootDir: ROOT_DIR, userData: app.getPath('userData'), safeStorage: require('electron').safeStorage, clipboard, dialog, shell, Notification, fetch: (...a) => net.fetch(...a), usageTurns: () => getUsageTurns(), costGuard: () => (costGuardReport ? costGuardReport() : null), workCost: () => workCostReport(), scheduledRuns: (from, to) => (recipeScheduler ? recipeScheduler.runsBetween(from, to).map((h) => ({ ...h, title: recipes.find(h.id)?.title || 'A recipe' })) : []), teamBrief: (cwd) => (loadConfig().teamBrief === true ? TeamActivity.call('team_brief', { cwd }) : null), interruptible: () => InterruptGate.isInterruptible(), openHome: () => openBuddy('home'), onQuit: (fn) => onQuit(app, fn), log: (m) => console.warn(m) }); // privacy-flow: digest-slack
 { const TeamToday = require('./src/team-today.js'); const fake = IS_DEV_RUN && !app.isPackaged && process.env.CLAUDE_BUDDY_FAKE_TEAM_TODAY; TeamToday.wire({ ipcMain, allowed: (e) => fromUtilityPage(e, 'home'), file: path.join(ROOT_DIR, 'team-today.json'), log: (m) => console.log(m), ...(fake ? TeamToday.fixtureSources(JSON.parse(fs.readFileSync(fake, 'utf8'))) : { links: async () => (await buddyWin?.teamMemoryLinks?.()) ?? [], board: async (route) => (await buddyWin?.teamBoardSnapshot?.(route)) ?? null, mine: () => buddyWin?.workCostRows?.().records ?? [], fetch: (...a) => net.fetch(...a) }) }); } // privacy-flow: team-today
 // Team depth lane B: the hub inbox. Live rows arrive as `inbox.item` on the
 // lane C presence sockets (one per linked board, PresenceLink above) and are

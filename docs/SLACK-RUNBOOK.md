@@ -100,6 +100,26 @@ needs what every connector needs:
    in **both** `board/web/js/connectors.js` and `buddy-window/connectors.js`
    in one commit (a root test fails if they drift), and release.
 
+## Presence sync (Slack status from Plexiform) — not available yet
+
+The desktop has a per-user Preferences switch ("Set my Slack status from
+Plexiform", off by default; `src/slack-presence.js`): Working with AI / AI
+waiting on me / Away, at most one change per 2 minutes, the previous status
+restored when turned off. It sends nothing today, by design: setting a
+person's status needs a **user** token with `users.profile:write`, and this
+connector is bot-only (install refuses user scopes; the identity link asks
+only `openid` and keeps no token). The desktop reports `needs_user_scope`.
+
+To make it real (owner decision, not built):
+
+1. Add `users.profile:write` (and `users.profile:read`, to save the previous
+   status) to the app manifest's **user** scopes and accept the changed
+   install check in `spec.js` (`authed_user.scope` is refused today).
+2. Store each member's user token sealed per member (a new secret kind keyed
+   by member), revoke it on unlink, and add a hub route the desktop calls to
+   set/restore the status; update PRIVACY.md `flow:slack-presence`.
+3. Reinstall the Slack app in the workspace so members can grant the scope.
+
 ## Rotate
 
 - **Signing secret / client secret**: regenerate on the app's *Basic

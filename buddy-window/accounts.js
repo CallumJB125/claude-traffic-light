@@ -70,6 +70,8 @@ const ROUTES = {
   createRepo: ['POST', '/api/repos'],
   addBoardRepo: ['POST', '/api/boards/:board/repos'],
   salvageHandover: ['POST', '/api/cards/:card/handover/salvage'],
+  integrations: ['GET', '/api/integrations'],
+  createIssue: ['POST', '/api/integrations/:integration/issues'],
 };
 
 const ROLES = ['owner', 'admin', 'member', 'viewer'];
@@ -460,6 +462,9 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
     createRepo: (team, url) => call('createRepo', { params: { team }, body: { request_id: crypto.randomUUID(), url } }),
     addBoardRepo: (team, board, repoId) => call('addBoardRepo', { params: { team, board }, body: { repo_id: repoId } }),
     salvageHandover: (team, card, body) => call('salvageHandover', { params: { team, card }, body }),
+    // Create ticket from a session (src/create-ticket.js): the team's connections, and one issue from approved text.
+    integrations: (team) => call('integrations', { params: { team } }),
+    createIssue: (team, integration, { title, description }) => call('createIssue', { params: { team, integration }, body: { request_id: crypto.randomUUID(), title, description } }),
     // Main-only board broker: fixed routes and team header; never an arbitrary
     // URL or bearer credential supplied by an MCP client.
     nativeBoard(operation, params, body) {

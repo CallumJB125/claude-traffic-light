@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld('sessionsApi', {
   attach: (handle, ref) => ipcRenderer.invoke('sessions:attach', handle, ref),
   share: (handle, on) => ipcRenderer.invoke('sessions:share', handle, on),
   connect: () => ipcRenderer.invoke('sessions:connect'),
+  ticketDraft: (handle) => ipcRenderer.invoke('sessions:ticket-draft', handle),
+  ticketCreate: (ref, title, description) => ipcRenderer.invoke('sessions:ticket-create', String(ref), String(title), String(description)),
   burstShare: (repo, on) => ipcRenderer.invoke('burst:handover-share', repo, on),
   burstView: (name, args) => ipcRenderer.invoke('burst:view', name, args),
   burstAction: (id, args) => ipcRenderer.invoke('burst-action', id, args),

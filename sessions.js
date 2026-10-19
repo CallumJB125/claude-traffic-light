@@ -331,6 +331,27 @@ function rowPanel(section, kind, item) {
     api.linkFromSession(a.handle).then(pre => { linkPanel(host, pre, null); host.append(close); });
     return;
   }
+  if (kind === 'ticket') {
+    say(out, 'Drafting from the handover…', true); host.append(out, close);
+    api.ticketDraft(a.handle).then(d => {
+      if (!d?.ok) return say(out, d?.text ?? 'Could not draft the issue.', false);
+      const where = select(d.targets.map(t => ({ value: t.ref, label: t.label })), 'No connection');
+      const title = document.createElement('input'); title.type = 'text'; title.maxLength = 200; title.value = d.title;
+      const body = document.createElement('textarea'); body.maxLength = 8000; body.rows = 10; body.value = d.description;
+      const link = node('a', '', 'issue-link'); link.hidden = true;
+      const go = button('Create', async () => {
+        if (!where.value || !title.value.trim()) return say(out, 'Choose where, and give it a title.', false);
+        go.disabled = true;
+        try {
+          const r = await api.ticketCreate(where.value, title.value, body.value);
+          say(out, r?.text ?? 'Could not create the issue.', r?.ok);
+          if (r?.ok && r.url) { link.href = r.url; link.textContent = r.url; link.target = '_blank'; link.rel = 'noopener'; link.hidden = false; } else if (!r?.ok) go.disabled = false;
+        } catch { go.disabled = false; }
+      });
+      host.replaceChildren(field('Create in', where), field('Title', title), field('Description (edit before sending; only this text leaves your computer)', body), go, out, link, close);
+    });
+    return;
+  }
   loadSetup(true).then(d => {
     if (kind === 'card') {
       const board = select(d.boards.map(b => ({ value: b.key, label: b.label })), 'No boards available');
@@ -354,6 +375,7 @@ function rowActions(section, item) {
   if (a.card) section.append(node('p', a.card.how === 'attached' ? `Attached to ${a.card.label} (saved on this computer only)` : 'A board card was made from this session', 'card-line'));
   const row = node('div', '', 'row-actions');
   row.append(button('Make a card', () => rowPanel(section, 'card', item)), button('Attach to card…', () => rowPanel(section, 'attach', item)), button('Link repo to board', () => rowPanel(section, 'link', item)));
+  if (a.ticket?.length) row.append(button(`Create ${a.ticket.join(' / ')} issue…`, () => rowPanel(section, 'ticket', item)));
   if (a.share) {
     const check = document.createElement('input'); check.type = 'checkbox'; check.checked = a.share.on;
     check.addEventListener('change', async () => { check.disabled = true; try { await api.share(a.handle, check.checked); } finally { check.disabled = false; } });

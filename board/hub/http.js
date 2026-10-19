@@ -767,6 +767,13 @@ export function createHttpHandler({ hub, api, config, integrations = null, githu
       if (!t || t.org_id !== member.org_id) throw new HubError('NOT_FOUND', 'member not found');
       return integrations.identityUnlink({ connectionId: params.id, memberId: t.id, by: 'admin', actorId: member.id });
     }, { integrationAccess: 'admin' });
+    // Create ticket from a session: the member approved this exact title and description.
+    route('POST', '/api/integrations/:id/issues', async ({ member, params, body, integrationCurrent }) => {
+      own(member, params.id);
+      const out = await integrations.createIssue({ member, connectionId: params.id, title: body.title, description: body.description });
+      integrationCurrent();
+      return { issue: out };
+    }, { integrationAccess: 'member' });
     route('GET', '/api/integrations/:id/audit', ({ member, params, query }) => {
       api.requireAdmin(member);
       own(member, params.id);

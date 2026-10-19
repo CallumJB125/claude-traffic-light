@@ -81,7 +81,9 @@ async function post(fetch, url, text) {
  * keychain. fetch: the network (only ever called with a validated Slack URL).
  * digest(period) → a composed digest. notify(digest) shows the notification.
  */
-function createDelivery({ dir, seal, unseal, fetch, digest, notify = () => {}, now = Date.now, log = () => {} }) {
+// interruptible(): src/interrupt-gate.js; while it says no (a meeting, quiet
+// hours) the notification waits for a later tick, unsent and unmarked.
+function createDelivery({ dir, seal, unseal, fetch, digest, notify = () => {}, interruptible = () => true, now = Date.now, log = () => {} }) {
   const settingsFile = path.join(dir, SETTINGS_FILE), webhookFile = path.join(dir, WEBHOOK_FILE);
   let busy = false;
   const read = () => { try { return sanitize(JSON.parse(fs.readFileSync(settingsFile, 'utf8'))); } catch { return sanitize(null); } };
@@ -108,6 +110,7 @@ function createDelivery({ dir, seal, unseal, fetch, digest, notify = () => {}, n
     try {
       let s = read();
       for (const { channel, slot } of due(s, now())) {
+        if (channel === 'notify' && !interruptible()) continue;
         s = write({ ...s, sent: { ...s.sent, [channel]: slot } });
         try {
           const d = await digest(s.period);

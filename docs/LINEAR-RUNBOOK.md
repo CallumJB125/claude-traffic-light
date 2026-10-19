@@ -113,6 +113,33 @@ its auth).
    `buddy-window/connectors.js` in one commit, and releases.
 8. Delete the capture endpoint and the test webhook.
 
+## Create issues from sessions (optional, outbound)
+
+Off unless an admin pastes the extra parts. With them, a member sees "Create
+Linear issue…" on a session in the Sessions page; it drafts a scrubbed title
+and description from the session handover, the member edits it, and only on
+Create the hub calls `api.linear.app` (GraphQL `teams` lookup, then
+`issueCreate`). Route: `POST /api/integrations/:id/issues` (member, not a
+viewer, `integration_issue_member` 10/h). The connection's `creates_issues`
+is true once the API key is sealed.
+
+Owner steps:
+
+1. In Linear, Settings → Account → Security & access → Personal API keys,
+   create a key for a bot or service account that can create issues in the
+   target team (Linear personal keys act as that user; there is no narrower
+   scope). Note the team key (the issue prefix, e.g. `ENG`).
+2. Connect (or reconnect) Linear in the team's Integrations page and paste,
+   separated by spaces: `<webhook signing secret> <lin_api_… key> <TEAM key>`.
+   A secret alone still connects webhook-only.
+3. Hub deploy: the hub must run this build, with `linear` in
+   `BOARD_CONNECTORS` (the go-live gate above still applies) and
+   `api.linear.app` reachable from the hub.
+4. Check: create one issue from a test session; the connection's audit shows
+   `issue.create` / `approved` with the issue key, never the text.
+
+Rotate the key by reconnecting with the new one; disconnecting deletes it.
+
 ## Rotate
 
 Linear webhooks cannot rotate a secret in place: create a new webhook (new

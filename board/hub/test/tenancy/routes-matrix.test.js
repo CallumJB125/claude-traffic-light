@@ -339,6 +339,7 @@ const MATRIX = {
   'POST /api/integrations/:id/authorize': { kind: 'cross', path: (fx) => `/api/integrations/${fx.B.pending}/authorize` },
   'PATCH /api/integrations/:id': { kind: 'cross', path: (fx) => `/api/integrations/${fx.B.connection}`, body: (fx) => ({ autonomy: {}, target_board_id: fx.B.board }), alt: (fx) => [`/api/integrations/${fx.B.pending}`] },
   'DELETE /api/integrations/:id': { kind: 'cross', path: (fx) => `/api/integrations/${fx.B.connection}`, alt: (fx) => [`/api/integrations/${fx.B.pending}`] },
+  'POST /api/integrations/:id/issues': { kind: 'cross', path: (fx) => `/api/integrations/${fx.B.connection}/issues`, body: { title: 'pwned', description: 'x' }, alt: (fx) => [`/api/integrations/${fx.B.pending}/issues`] },
   'GET /api/integrations/:id/audit': { kind: 'cross', path: (fx) => `/api/integrations/${fx.B.connection}/audit` },
   // Identity links (D98): B's connection (and B's member) from team A or no team.
   'POST /api/integrations/:id/identity/start': { kind: 'cross', path: (fx) => `/api/integrations/${fx.B.connection}/identity/start` },

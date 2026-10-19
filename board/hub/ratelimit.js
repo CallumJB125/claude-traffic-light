@@ -76,6 +76,7 @@ export const DEFAULT_LIMITS = Object.freeze({
   integration_prepare_org: { capacity: 10, per_ms: 86_400_000 },    // … per team
   integration_identity_member: { capacity: 10, per_ms: 3_600_000 }, // POST /api/integrations/:id/identity/start (D98), per member
   integration_link_fail_ip: { capacity: 30, per_ms: 10 * 60_000 },  // failed identity callbacks, per client network (/64)
+  integration_issue_member: { capacity: 10, per_ms: 3_600_000 },    // POST /api/integrations/:id/issues (create ticket), per member
   integration_install_member: { capacity: 10, per_ms: 3_600_000 },  // POST /api/integrations/:provider/install (GitHub App, step 4), per admin
   integration_app_repos_member: { capacity: 30, per_ms: 10 * 60_000 }, // list / link an installation's repositories, per admin
   github_card_action_member: { capacity: 10, per_ms: 10 * 60_000 },   // Open PR / Comment status from a card, per member

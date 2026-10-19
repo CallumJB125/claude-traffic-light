@@ -357,6 +357,8 @@
   <div class="field">
     <label class="row"><input type="checkbox" id="busyHold" /> Hold pings while I'm busy</label>
     <div class="hint">In a meeting or a Focus, amber and green sounds, notifications and knocks wait; red (permission asks, limits, offline) still comes through. The lights keep updating. When you're free a “While you were away” card sums up what happened — click a line to go there. Per rule, change it in Lights → <i>While you're busy</i>; <b>busy</b> and <b>free</b> are also rule conditions.</div>
+    <label class="row"><input type="checkbox" id="slackPresence" /> Set my Slack status from Plexiform (Working / AI waiting on me / Away)</label>
+    <div class="hint">Off by default. Not available yet: setting your own Slack status needs a Slack user token with the <code>users.profile:write</code> scope, and your team's Slack connection is a bot that cannot change a person's status. Ticking this sends nothing until that exists; when it does, your status changes at most once every 2 minutes and goes back to what it was when you untick it.</div>
     <div id="busy-sources" role="group" aria-label="Busy when">
       <label class="row"><input type="checkbox" id="busyCalendar" /> A calendar event marked busy (macOS Calendar — ticking this asks macOS for access)</label>
       <div class="busy-state" id="busy-calendar-state"></div>
