@@ -80,6 +80,10 @@ export async function tenancy({ config = {}, ...opts } = {}) {
   B.label = `${MARK}-label`;
   const lb = await as(users.ub, 'POST', `/api/boards/${B.board}/labels`, { request_id: randomUUID(), name: B.label, color: 'red' });
   if (lb.status !== 200) throw new Error(`label create: ${lb.text}`);
+  // B: a published build log (build-logs.js).
+  const bl = await as(users.ub, 'POST', '/api/build-logs', { request_id: randomUUID(), log: { schema: 1, title: `${MARK} build log`, timeline: [{ at: null, kind: 'note', text: MARK }], prompts: [], files: [] } }, { 'x-board-team': B.team });
+  if (bl.status !== 200) throw new Error(`build log publish: ${bl.text}`);
+  B.buildLog = bl.body.log.id;
 
   // B: a runner device, a run on its card, an open permission request and an ask.
   B.device = randomUUID();
@@ -163,6 +167,7 @@ export async function tenancy({ config = {}, ...opts } = {}) {
       q('SELECT id, org_id, role, removed_at, display_name FROM members WHERE org_id = ?', B.team),
       q('SELECT c.* FROM cards c JOIN boards b ON b.id = c.board_id WHERE b.org_id = ?', B.team),
       q('SELECT * FROM comments WHERE card_id = ?', B.card),
+      q('SELECT * FROM build_logs WHERE org_id = ?', B.team),
       q('SELECT * FROM workflow_recipes WHERE org_id = ?', B.team),
       q('SELECT v.* FROM workflow_versions v JOIN workflow_recipes r ON r.id = v.recipe_id WHERE r.org_id = ?', B.team),
       q('SELECT i.* FROM workflow_instances i JOIN workflow_recipes r ON r.id = i.recipe_id WHERE r.org_id = ?', B.team),

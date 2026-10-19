@@ -2195,6 +2195,22 @@ let galleryService = null;
   const discoverSenderOk = (e) => fromUtilityPage(e, 'discover');
   Gallery.register({ ipcMain, allowed: (e) => discoverSenderOk(e) || tasksSenderOk(e), gallery, openDiscover: () => openBuddy('discover') });
 }
+// Build logs, "Start from this" remixes and the unified catalogue on the Discover page (src/build-log-main.js).
+{
+  let blSession = null;
+  const blFetch = (...a) => { if (!blSession) { blSession = require('electron').session.fromPartition('build-logs'); blSession.setUserAgent('Plexiform-BuildLog'); } return blSession.fetch(...a); }; // privacy-flow: build-log-publish
+  const BuildLogMain = require('./src/build-log-main.js');
+  const service = BuildLogMain.create({
+    timelines: { list: () => SessionTimelineMain.listedRows(), timelineOf: (k) => SessionTimelineMain.timelineFor(k) },
+    gallery: galleryService, fetch: blFetch, confirm: tasksConfirm, demo: () => Demo.active(),
+    hub: () => (app.isReady() ? getBuddy().interactionHostIdentity?.() ?? null : null),
+    pickSave: async (e, name) => { const r = await dialog.showSaveDialog(BrowserWindow.fromWebContents(e.sender) || undefined, { title: 'Save build log', buttonLabel: 'Save', defaultPath: path.join(app.getPath('downloads'), name), filters: [{ name: 'Web page', extensions: ['html'] }] }); return r.canceled ? null : r.filePath || null; },
+    pickFolder: async (e, title) => { const r = await dialog.showOpenDialog(BrowserWindow.fromWebContents(e.sender) || undefined, { title, properties: ['openDirectory', 'createDirectory'] }); return r.canceled ? null : r.filePaths?.[0] || null; },
+    openExternal: (url) => shell.openExternal(url), // privacy-flow: discover-report
+    home: os.homedir(), user: os.userInfo().username, hostname: os.hostname(), author: () => loadConfig().galleryAuthor?.name || 'Me',
+  });
+  BuildLogMain.register({ ipcMain, allowed: (e) => fromUtilityPage(e, 'discover'), service });
+}
 // "Share to gallery…" (src/gallery-publish.js): a recipe of mine, a saved character or widget rules as a
 // gallery item, checked here, handed over as a prefilled GitHub new-file page or JSON on the clipboard.
 {

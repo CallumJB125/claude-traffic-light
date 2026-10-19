@@ -316,6 +316,11 @@ const MATRIX = {
   'POST /api/cards/:card_id/reviews/:review_id/fix': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/reviews/${fx.B.review}/fix`, alt: (fx) => [`/api/cards/${fx.A.card}/reviews/${fx.B.review}/fix`] },
   'POST /api/cards/:card_id/reviews/:review_id/approve': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/reviews/${fx.B.review}/approve`, alt: (fx) => [`/api/cards/${fx.A.card}/reviews/${fx.B.review}/approve`] },
   'POST /api/cards/:card_id/reviews/:review_id/findings/:index/dismiss': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/reviews/${fx.B.review}/findings/0/dismiss`, alt: (fx) => [`/api/cards/${fx.A.card}/reviews/${fx.B.review}/findings/0/dismiss`] },
+  // Build logs (lane F): B's log by id, and B's log id under A's team header; the public /b/<slug> page is PRE_ROUTE.
+  'GET /api/build-logs': { kind: 'team' },
+  'POST /api/build-logs': { kind: 'team', body: { log: { schema: 1, title: 'pwned', timeline: [], prompts: [], files: [] } } },
+  'DELETE /api/build-logs/:log_id': { kind: 'cross', path: (fx) => `/api/build-logs/${fx.B.buildLog}`, alt: (fx) => [`/api/build-logs/${fx.B.buildLog}?team=${fx.A.team}`] },
+  'POST /api/build-logs/:log_id/restore': { kind: 'cross', path: (fx) => `/api/build-logs/${fx.B.buildLog}/restore` },
   'GET /api/triggers': { kind: 'team' },
   'GET /api/triggers/activity': { kind: 'team' },
   'POST /api/triggers': { kind: 'team', body: { event: 'github.pr.opened', action: 'add_comment', params: { text: 'pwned' } } },
@@ -373,6 +378,7 @@ const PRE_ROUTE = {
   'POST /api/integrations/:provider/webhook': 'the hub\'s own provider app (GitHub App, step 4): the app\'s webhook secret signs every delivery, and it runs only for the connection its installation was linked to, about a repository linked on it (github-app.test.js)',
   'GET /integrations/:provider/callback': 'the provider redirects here; the signed OAuth state plus the bind cookie are the auth',
   'GET /api/public/v1/*': 'the public API (public-api/index.js): a team API token is the only credential; it reads and comments only in its own team (public-api.test.js)',
+  'GET /b/*': 'a published build log (build-logs.js): its unguessable 128-bit link is the only credential, chosen by its author with an explicit Publish; GET page and kit.json, POST remix and report (rate-limited per IP); build-logs.test.js',
   'GET /integrations/:provider/identity/callback': 'the provider redirects a linking member here (D98); the signed identity state plus the bind cookie are the auth, and the member and credential it names are re-checked',
 };
 

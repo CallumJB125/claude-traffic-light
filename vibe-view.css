@@ -1,0 +1,29 @@
+/* The Discover page's catalogue, build log and remix views (vibe-view.js). */
+body.discover { display: flex; flex-direction: column; }
+body.discover .recipes { height: auto; flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+.vb-nav { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+.vb-tab[aria-pressed="true"] { background: var(--text); border-color: var(--text); color: var(--bg); }
+.vb-panel { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 16px; box-sizing: border-box; }
+.vb-panel[hidden], #cg-gallery[hidden] { display: none; }
+.vb-h { margin: 0 0 4px; font-size: var(--text-xl); }
+.vb-subtabs, .vb-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0; }
+.vb-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+.vb-card { border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; background: var(--panel); min-width: 0; }
+.vb-card h3 { margin: 0 0 4px; }
+.vb-facts { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-size: var(--text-sm); margin: 8px 0; }
+.vb-facts dt { color: var(--muted); }
+.vb-facts dd { margin: 0; overflow-wrap: anywhere; }
+.vb-label { font-size: var(--text-xs); text-transform: uppercase; color: var(--muted); margin: 6px 0 2px; }
+.vb-list { margin: 0; padding-left: 18px; font-size: var(--text-sm); }
+.vb-pick, .vb-items { border: 1px solid var(--line); border-radius: var(--radius); margin: 10px 0; padding: 8px 12px; }
+.vb-check { display: block; margin: 4px 0; }
+.vb-field { display: grid; gap: 4px; margin: 8px 0; font-size: var(--text-sm); }
+.vb-field input, .vb-field textarea, .vb-item textarea, .vb-link, .vb-team { font: inherit; padding: 4px 8px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--bg); color: var(--text); min-width: 0; }
+.vb-link { width: 100%; box-sizing: border-box; }
+.vb-item { display: flex; align-items: start; gap: 8px; margin: 6px 0; }
+.vb-item textarea { flex: 1 1 auto; }
+.vb-item code, .vb-row code { overflow-wrap: anywhere; }
+.vb-preview { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 8px; }
+.vb-problem { color: var(--danger-text); }
+.vb-status { min-height: 1.2em; color: var(--muted); }
+.vb-kit pre { white-space: pre-wrap; max-height: 240px; overflow: auto; background: var(--panel-2); padding: 8px; border-radius: var(--radius); }

@@ -152,7 +152,10 @@ function register({ ipcMain, rootDir, home, user = null, hostname = null, writer
     return { ok: true, name: path.basename(pick.filePath) };
   });
 
-  return { openSession, timelineOf, current: () => current };
+  // The Discover page's build log (src/build-log-main.js) names listed sessions by key, like this page.
+  const listedRows = () => listed().map((r) => ({ key: keyOf(r), label: label(r), cwd: r.cwd || '' }));
+  const timelineFor = async (key) => { const r = typeof key === 'string' && KEY.test(key) ? listed().find((x) => keyOf(x) === key) : null; return r ? timelineOf(r) : null; };
+  return { openSession, timelineOf, current: () => current, listedRows, timelineFor };
 }
 
 module.exports = { register };

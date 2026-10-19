@@ -191,6 +191,8 @@
       "gallery-view.css",
       "discover.html",
       "discover-preload.js",
+      "vibe-view.js",
+      "vibe-view.css",
       "gallery-publish.css",
       "gallery-publish-view.js",
       "recipes/**/*",
