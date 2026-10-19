@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld('buddyAccount', {
   state: () => call('state'),
   burstStatus: () => ipcRenderer.invoke('burst:status'),
   burstAction: (kind, mode) => ipcRenderer.invoke('burst:action', { kind: str(kind), mode: str(mode) }),
+  // Allow-listed mutations with their own consent dialog (mod-install, mod-update): args are a plain object of strings.
+  burstRunAction: (kind, args) => ipcRenderer.invoke('burst-action', str(kind), Object.fromEntries(Object.entries(args && typeof args === 'object' ? args : {}).filter(([k, v]) => /^[a-z]{1,20}$/.test(k) && typeof v === 'string' && v.length <= 60))),
   burstSetCompaction: (req) => ipcRenderer.invoke('burst:set-compaction', { enabled: !!(req && req.enabled), confirmed: !!(req && req.confirmed), ...(req && req.mode ? { mode: str(req.mode) } : {}) }),
   keepAwakeGet: () => ipcRenderer.invoke('keepawake:get'),
   macView: () => ipcRenderer.invoke('keepawake:mac'),

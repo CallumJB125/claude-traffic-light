@@ -38,7 +38,7 @@ const FIXTURE = {
   ],
 };
 
-function stack({ teamHub = createFakeTeamHub(structuredClone(FIXTURE)), observed = true, shares = [], channelAdapter = null, prepareChannel = null, scripts = [], presence = null, presenceView = null } = {}) {
+function stack({ teamHub = createFakeTeamHub(structuredClone(FIXTURE)), observed = true, shares = [], channelAdapter = null, prepareChannel = null, scripts = [], presence = null, presenceView = null, looseEnds = null } = {}) {
   const handlers = new Map(), listeners = new Map(), results = [];
   const win = { isDestroyed: () => false, isVisible: () => true, isMinimized: () => false, isFocused: () => ctx.foreground };
   const contents = { id: 9, isDestroyed: () => false, mainFrame: {}, send: (ch, ...a) => { for (const fn of listeners.get(ch) ?? []) fn({}, ...structuredClone(a)); } };
@@ -54,7 +54,7 @@ function stack({ teamHub = createFakeTeamHub(structuredClone(FIXTURE)), observed
     buddy: () => buddy, sessions: () => raw, work: async () => ({ sources: [], capture: [] }), now,
     owned: () => interaction.listOwned(), shares: () => ({ origin: 'https://hub.example', list: shares }),
     hubTeams: async () => ({ origin: 'https://hub.example', teams: [] }), teamHub: () => teamHub,
-    ...(presence ? { presence } : {}), ...(presenceView ? { presenceView } : {}),
+    ...(presence ? { presence } : {}), ...(presenceView ? { presenceView } : {}), ...(looseEnds ? { looseEnds } : {}),
   });
   overview.register({ handle: (ch, fn) => handlers.set(ch, fn) });
   teamHub?.onChange(() => overview.directoryChanged());
@@ -374,5 +374,40 @@ test('Team sessions: "viewing <card title>" / "running <repo>" next to the avail
     live = { members: [], viewers: [{ member_id: 'm-cara', name: 'Cara', card_id: 'c-9', key: 'DEV-9', title: 'Docs', at: '2026-10-19T10:00:00Z' }] };
     s.change('team-group', 'status'); await tick();
     assert.equal(s.$('team-list').querySelector('.presence-now'), null);
+  } finally { s.close(); }
+});
+
+// B3: Burst's loose ends per repository, matched in main to the session's working directory; the page gets counts only.
+test('My sessions: a loose-ends badge "n uncommitted · n unpushed · n stashes" per repo row; hidden without Burst\'s report', async () => {
+  const LE = require('../src/burst-loose-ends-view.js');
+  const AT = 1_792_401_162;
+  let report = { report: { at: AT, scanned: 2, repos: [
+    { root: '/Users/me/private-repo', branch: 'main', uncommitted: [{ path: '/Users/me/private-repo/a.js', status: ' M', mtime: AT - 100 }, { path: '/Users/me/private-repo/b.js', status: '??', mtime: AT - 100 }], unpushed: [{ hash: 'abc', when: AT - 50, subject: 'SECRET subject' }], ahead: 1, stashes: [{ ref: 'stash@{0}', when: AT - 60 * 3600, subject: 'wip' }] },
+    { root: '/Users/me/other', branch: 'dev', uncommitted: [{ path: 'x', status: ' M', mtime: AT }] },
+  ] }, stale_hours: 24 };
+  const s = stack({ looseEnds: () => (report ? LE.looseEndsView(report) : null) });
+  try {
+    await s.ready(); await s.poll();
+    const observed = s.row('mine-list', /Observed from activity hooks/);
+    const badge = observed.querySelector('.loose-ends');
+    assert.equal(badge.hidden, false);
+    assert.equal(badge.textContent, 'Loose ends: 2 uncommitted · 1 unpushed · 1 stash · left for a day or more', 'the checkout under /Users/me/private-repo matches that repo; the 60 h stash makes it stale');
+    assert.equal(badge.classList.contains('stale'), true);
+    // A session in a repository with nothing loose, and one outside any reported repository: no badge.
+    s.raw.push({ sessionId: 'claude-1', signal: 'tool-use', updatedAt: new Date().toISOString(), cwd: '/Users/me/other/sub' });
+    s.raw.push({ sessionId: 'claude-2', signal: 'tool-use', updatedAt: new Date().toISOString(), cwd: '/Users/me/elsewhere' });
+    await s.poll();
+    const rowsNow = s.rows('mine-list');
+    const texts = rowsNow.map((r) => r.querySelector('.loose-ends')).map((b) => (b.hidden ? '' : b.textContent));
+    assert.deepEqual(texts.filter(Boolean).sort(), ['Loose ends: 1 uncommitted', 'Loose ends: 2 uncommitted · 1 unpushed · 1 stash · left for a day or more']);
+    // Counts only ever reach the page: no path, branch, file name or commit subject.
+    const wire = JSON.stringify(s.results.filter(([ch]) => ch === 'overview:directory'));
+    for (const leak of ['/Users/me', 'private-repo', 'a.js', 'SECRET subject', 'stash@', 'branch']) assert.equal(wire.includes(leak), false, leak);
+    assert.match(wire, /"looseEnds":\{"uncommitted":2,"unpushed":1,"stashes":1,"stale":true,"text":"2 uncommitted · 1 unpushed · 1 stash"\}/);
+    // Capability gone (0.19 Burst, or Burst not answering): the view model is null and every badge hides.
+    report = null;
+    await s.poll();
+    for (const r of s.rows('mine-list')) assert.equal(r.querySelector('.loose-ends').hidden, true);
+    assert.equal(JSON.stringify(s.results.at(-1)[1]).includes('"looseEnds":{'), false, 'null, never a zero badge');
   } finally { s.close(); }
 });

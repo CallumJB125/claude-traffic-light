@@ -117,12 +117,13 @@ test('sidebar: the optimiser\'s sections unfold under its entry only while it is
     const leaves = [...d.querySelectorAll('.nav-leaf')];
     assert.deepEqual(leaves.map((b) => b.textContent), ['Burst: Overview', 'Spend']);
     assert.equal(leaves[0].getAttribute('aria-current'), 'location');
-    assert.equal(d.querySelector('[data-section="usage"]').hasAttribute('data-active'), true);
+    assert.equal(d.querySelector('[data-section="optimiser"]').hasAttribute('data-active'), true);
+    assert.equal(d.querySelector('[data-section="usage"]').hasAttribute('data-active'), false, 'Usage & cost is a separate entry');
     leaves[1].click();
     assert.deepEqual(clicks, ['sec-models']);
     onState({ selected: 'usage', optimiser: null });
     assert.equal(d.querySelectorAll('.nav-leaf').length, 0);
-    const li = [...d.querySelectorAll('.nav-sub .nav-item')].find((b) => b.textContent === 'Usage optimiser').parentElement;
+    const li = d.querySelector('[data-section="optimiser"]').parentElement;
     assert.equal(li.hidden, false, 'listed without Burst too: the tool hub is for everyone');
     onState({ selected: 'usage', burst: true });
     assert.equal(li.hidden, false);

@@ -79,19 +79,28 @@
     const tools = el('div', '', 'row-tools'), tagWrap = el('div', '', 'row-tools'); tagWrap.append(tag, tools); head.append(who, tagWrap);
     const pulse = el('p', '', 'dir-pulse'), pulseDot = el('span', '', 'pulse-dot'), pulseText = el('span'); pulseDot.setAttribute('aria-hidden', 'true'); pulse.append(pulseDot, pulseText); pulse.hidden = true;
     const receipt = el('p', '', 'ask-receipt'); receipt.hidden = true; receipt.setAttribute('role', 'status');
-    const meta = el('p', '', 'row-meta'), badges = el('p', '', 'badges'), when = el('p', '', 'muted'), activity = el('p', '', 'dir-activity'), self = el('p', '', 'muted');
+    const meta = el('p', '', 'row-meta'), badges = el('p', '', 'badges'), loose = el('p', '', 'loose-ends'), when = el('p', '', 'muted'), activity = el('p', '', 'dir-activity'), self = el('p', '', 'muted');
     const children = el('ul', '', 'agent-list'), handoffs = el('ul', '', 'handoffs'), deliveries = el('ol', '', 'deliveries');
     children.setAttribute('aria-label', 'Child agents'); handoffs.setAttribute('aria-label', 'Handoffs'); deliveries.setAttribute('aria-label', 'Messages and responses');
     const actions = el('div', '', 'actions'), why = el('p', '', 'reason'), notice = el('p', '', 'reason'); notice.setAttribute('role', 'status');
     const details = el('details', '', 'caps'), capList = el('ul', '', 'cap-list'); details.append(el('summary', 'Permissions and report details'), badges, self, capList);
     const childDetails = el('details', '', 'dir-children'), childSummary = el('summary'); childDetails.append(childSummary, children);
     const history = el('details', '', 'dir-history'); history.append(el('summary', 'Recent messages and handoffs'), handoffs, deliveries);
-    li.append(head, meta, pulse, when, activity, childDetails, history, actions, receipt, why, notice, details);
+    loose.hidden = true; loose.setAttribute('role', 'status');
+    li.append(head, meta, loose, pulse, when, activity, childDetails, history, actions, receipt, why, notice, details);
     // Team rows: opening any details panel tells the hub this session's card is being looked at (presence.view); closing them all clears it.
     const sync = () => { if (kind !== 'team' || !out.entry || typeof window.overviewApi?.viewing !== 'function') return; const id = [details, childDetails, history].some(d => d.open) ? out.entry.id : null; if (out.viewingId === id) return; out.viewingId = id; void window.overviewApi.viewing({ id }); };
     for (const d of [details, childDetails, history]) d.addEventListener('toggle', sync);
-    const out = { viewingId: null, li, avatar, title, owner, collections, tag, tools, presence, pulse, pulseText, receipt, meta, badges, when, activity, self, children, handoffs, deliveries, actions, why, notice, capList, details, childDetails, childSummary, history, kind, composer: null, gone: false, entry: null, request: null };
+    const out = { viewingId: null, li, avatar, title, owner, collections, tag, tools, presence, pulse, pulseText, receipt, meta, badges, loose, when, activity, self, children, handoffs, deliveries, actions, why, notice, capList, details, childDetails, childSummary, history, kind, composer: null, gone: false, entry: null, request: null };
     return out;
+  }
+  // Burst's loose ends for this session's repository (counts only, matched in main): hidden when Burst cannot report them.
+  function looseEndsBadge(v, le) {
+    const text = le && typeof le.text === 'string' ? le.text : '';
+    v.loose.hidden = !text;
+    if (!text) { set(v.loose, ''); return; }
+    set(v.loose, `Loose ends: ${text}${le.stale ? ' · left for a day or more' : ''}`);
+    v.loose.classList.toggle('stale', le.stale === true);
   }
   function updateRow(v, e, data) {
     v.entry = e; v.gone = false; v.li.classList.remove('gone');
@@ -104,6 +113,7 @@
     set(v.tag, stateText(e, f)); v.tag.className = `tag ${tone(e, f)}`;
     set(v.meta, [e.provider.label + (e.provider.kind === 'local' ? ' · local model' : ''), e.device.label + (e.device.local && e.device.label !== 'This device' ? ' (this device)' : ''), e.board.label, e.card?.key ? `Card ${e.card.key}` : ''].filter(Boolean).join(' · '));
     set(v.badges, [...e.teams.map(t => `Team: ${t.name}`), ...e.provenance.map(p => PROVENANCE[p]), ...(e.task.source === 'human' ? ['task title edited by a person'] : [])].join(' · '));
+    looseEndsBadge(v, e.looseEnds);
     set(v.when, `Last observed ${age(f.ageMs)}${f.freshness === 'stale' ? ' · stale' : f.freshness === 'unknown' ? ' · freshness unknown' : ''}`);
     const p = Pulse ? Pulse.pulse(e, Date.now(), data.observed_at) : null;
     if (p) { set(v.pulseText, p.line); v.pulse.hidden = false; v.li.dataset.pulse = p.freshness; v.when.hidden = true; } else delete v.li.dataset.pulse;

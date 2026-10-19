@@ -66,6 +66,10 @@ function createSessionDirectory({ now = Date.now, staleMs = STALE_MS, secret = c
   const timing = (key, at, time) => { const observedAt = observe(key, at, time); return { observedAt, ...freshness(observedAt, time, staleMs) }; };
   const activityOf = (a, time) => validActivity(a) && a.observed_at <= time ? { label: a.label, phase: a.phase, observedAt: a.observed_at, ...freshness(a.observed_at, time, staleMs) } : null;
 
+  // Counts only (Burst's loose ends for the session's repository, matched in main); never a file, branch or path.
+  const count = (n) => (Number.isSafeInteger(n) && n >= 0 ? n : 0);
+  const looseEndsOf = (v) => (object(v) && (count(v.uncommitted) || count(v.unpushed) || count(v.stashes)) ? { uncommitted: count(v.uncommitted), unpushed: count(v.unpushed), stashes: count(v.stashes), stale: v.stale === true, text: str(v.text, 120) } : null);
+
   function teamBadges(list) {
     const out = [], keys = new Set();
     for (const t of Array.isArray(list) ? list : []) if (object(t) && typeof t.key === 'string' && !keys.has(t.key)) { keys.add(t.key); out.push({ key: t.key, name: str(t.name, 80) || 'Team' }); }
@@ -88,6 +92,7 @@ function createSessionDirectory({ now = Date.now, staleMs = STALE_MS, secret = c
       board: { label: str(row.board?.label, 80) || 'Unassigned', kind: ['personal', 'team'].includes(row.board?.kind) ? row.board.kind : 'unknown' },
       card: row.task?.status === 'tracked' && kind !== 'reported' ? { key: str(row.task.key, 80) || null, title: str(row.task.title, 200) } : null,
       provider, device: { label: str(row.device?.label, 80) || 'Unknown device', local: row.device?.local === true }, project: str(row.project, 100) || null,
+      looseEnds: looseEndsOf(row.looseEnds),
       task: taskOf({ human: m.humanTitle, card: row.task?.status === 'tracked' && kind !== 'reported' ? row.task.title : null, reported: row.task?.status === 'tracked' && kind === 'reported' ? row.task.title : null }),
       state, input: state === 'Waiting on you', ...t, nativeSessionId:m.nativeSessionId,nativeTurnId:m.nativeTurnId,selfReported: null,
       provenance: kind === 'reported' ? ['observed'] : kind === 'board' ? ['board'] : ['plexiform-tasks'],
