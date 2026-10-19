@@ -1228,3 +1228,19 @@ Local Electron IPC only; nothing reaches a hub. The one outbound flow is `voice-
 | `tasks:voice-draft` | Tasks page → main (`invoke`), the Tasks page only (`tasksSenderOk`) | none → `string \| null` | Returns the confirmed words once and clears them; the page fills the New task composer. The task is still created only by `tasks:create` after the user picks a folder and presses Start task |
 | `pointer:play` | main → pointer overlay (`pointer-overlay-preload.js`) | `{reduced, ms, from:{x,y}\|null, points:[{x, y, label ≤40}] ≤3}` in the display's own coordinates | One transparent, frameless, `focusable:false`, click-through (`setIgnoreMouseEvents(true)`) window per display with a point; main destroys every window by 6 s. The page sends nothing back |
 | `voice-status` (extended) | Preferences | none | adds `preset: 'Control+Alt+Space'` and `screenAccess` (`granted`\|`denied`\|`not-determined`\|`restricted`\|`unsupported`) |
+
+## Desktop deploy status IPC (`src/deploy-status-main.js`, vibe lane E)
+
+Local Electron IPC; the network it leads to is flow `deploy-status` in PRIVACY.md (the user's own `vercel`/`netlify`/`wrangler` CLI, or `api.vercel.com`/`api.netlify.com`/`api.cloudflare.com` with a token the user pasted, sealed with safeStorage in `deploy-status.json`). Nothing reaches the hub. Every channel checks its sender and returns `null`/`{ok:false}` to anyone else.
+
+| Channel | Sender | Request | Response |
+|---|---|---|---|
+| `home:deploys` | the Home page only | none | `{rows:[{handle, provider, label, name, folder, state, url, at, summary, problem, checks:[{file, missing:[name], text}]}]}`; `state` ∈ `building`\|`live`\|`failed`\|`canceled`\|`none`\|`unknown`; `null` when deploys are off |
+| `home:deploy-act` | the Home page only | `(action, handle)`; `action` ∈ `copy-prompt`\|`open`, `handle` ≤ 200 chars from `home:deploys` | `{ok, note?, error?}`. `copy-prompt` writes the failed deploy's prompt (summary + scrubbed log tail) to the clipboard; `open` opens the live deployment's own https URL with `shell.openExternal` |
+| `deploy:settings` | Preferences only | none | `{enabled, saved:{vercel, netlify, cloudflare: boolean}}`; never a token |
+| `deploy:set-enabled` | Preferences only | `on: boolean` | `{ok, enabled}` |
+| `deploy:token-save` | Preferences only | `(provider ∈ vercel\|netlify\|cloudflare, token ≤ 400, no whitespace)` | `{ok}` or `{ok:false, error}` (no keychain, or not a token) |
+| `deploy:token-remove` | Preferences only | `provider` | `{ok}` |
+
+Rule signals: `deploy-live` (new, kind `git`) and `deploy-failed` (now also hosted deploys) arrive in `env.git` as `{id:'host:<provider>:<deployment>:<signal>', signal, provider, name, title, url, cwd, summary?, at, firedAt}`; a `deploy-live` event also matches `deploy-finished`, so the stock "Deploy finished" rule celebrates it. Holds: failed 10 min, live 2 min. `widget:lane-event` gains `kind: 'deployed'` (`Live · <Host> · <project>`); a hosted failure is `ci-failed` with `Deploy failed · <Host> · <project> · <summary>`. Session files gain `deployAt` (ISO time a Vercel/Netlify/Wrangler deploy command last finished in that session, written by `hooks/set-status.js` via `hooks/deploy-hint.js`; the command is never stored).
+

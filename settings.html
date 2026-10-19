@@ -699,6 +699,16 @@
     <div class="hint" id="hint-git-deploy">Workflow names that count as a deploy, comma-separated.</div>
   </div>
 
+  <div class="field" id="deploys">
+    <label class="row"><input type="checkbox" id="deploySignals" /> Show deploys for Vercel, Netlify and Cloudflare projects</label>
+    <div class="hint">For an open session's project that has been linked with <code>vercel</code>, <code>netlify</code> or <code>wrangler</code>, Plexiform asks that host for the latest deploy with your own signed-in CLI, or with a token you paste below. Building, live and failed show on Home and in the widget.</div>
+    <div class="row"><label for="deploy-token-vercel">Vercel token</label> <input type="password" id="deploy-token-vercel" autocomplete="off" data-provider="vercel" /> <button type="button" data-save="vercel">Use token</button> <button type="button" data-remove="vercel">Remove</button></div>
+    <div class="row"><label for="deploy-token-netlify">Netlify token</label> <input type="password" id="deploy-token-netlify" autocomplete="off" data-provider="netlify" /> <button type="button" data-save="netlify">Use token</button> <button type="button" data-remove="netlify">Remove</button></div>
+    <div class="row"><label for="deploy-token-cloudflare">Cloudflare API token</label> <input type="password" id="deploy-token-cloudflare" autocomplete="off" data-provider="cloudflare" /> <button type="button" data-save="cloudflare">Use token</button> <button type="button" data-remove="cloudflare">Remove</button></div>
+    <div class="hint">Optional. Tokens are kept in this computer's keychain and only ever sent to that host. Without one, the host's own CLI is used.</div>
+    <div class="hint" id="deploy-status" role="status" aria-live="polite"></div>
+  </div>
+
   <!-- Compactor (src/compaction.js) -->
   <h2>Compactor</h2>
   <div class="field">
@@ -789,6 +799,7 @@
   <script src="privacy-render.js"></script>
   <script src="settings-backups.js"></script>
   <script src="settings-crash-reports.js"></script>
+  <script src="settings-deploys.js"></script>
   <script src="settings-policies.js"></script>
   <script src="settings-data.js"></script>
   <script src="settings.js"></script>

@@ -183,7 +183,7 @@
   #event-lane .lane-row .dot { flex: none; width: 5px; height: 5px; border-radius: 2px; background: var(--idle); }
   #event-lane .lane-row.needs-you .dot, #event-lane .lane-row.ci-failed .dot { background: var(--red); }
   #event-lane .lane-row.stuck .dot, #event-lane .lane-row.collision .dot { background: var(--amber); }
-  #event-lane .lane-row.finished .dot { background: var(--green); }
+  #event-lane .lane-row.finished .dot, #event-lane .lane-row.deployed .dot { background: var(--green); }
   #event-lane .lane-row.teammate .dot { background: var(--accent); }
   body.asking #event-lane { display: none; }
   /* Rings (src/widget-rings-view.js): turn length vs your usual (inner), today's
