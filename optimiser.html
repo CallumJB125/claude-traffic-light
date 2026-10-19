@@ -34,6 +34,7 @@
   .group-title { margin: var(--space-4) 0 0; font-size: var(--text-xs); font-weight: 650; text-transform: uppercase; letter-spacing: 0.06em; color: var(--faint); }
   #tools { display: flex; flex-direction: column; gap: var(--space-3); }
   .tool, .empty { padding: var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); }
+  .empty.dimmed { opacity: .6; } /* the last known state while Burst's gateway is not answering, as Burst's dashboard does */
   .tool-head { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
   .tool-head h3, .empty h3 { margin: 0; font-size: var(--text-lg); font-weight: 650; }
   .by { color: var(--faint); font-size: var(--text-xs); }

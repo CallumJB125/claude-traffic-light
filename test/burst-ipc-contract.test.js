@@ -83,7 +83,7 @@ test('with Burst present and every other call throwing, each data channel fails 
 
 test('contract(): a handler result keeps its shape and gains ok; error becomes reason; null/undefined fail closed', () => {
   assert.deepEqual(Ipc.contract({ view: null }), { ok: true, view: null });
-  assert.deepEqual(Ipc.contract({ ok: false, cancelled: true }), { ok: false, cancelled: true });
+  assert.deepEqual(Ipc.contract({ ok: false, cancelled: true }), { ok: false, cancelled: true, reason: 'Cancelled.' });
   assert.deepEqual(Ipc.contract({ view: null, error: 'Not available.' }), { ok: false, view: null, error: 'Not available.', reason: 'Not available.' });
   assert.deepEqual(Ipc.contract({ error: 'x', reason: 'why' }), { ok: false, error: 'x', reason: 'why' });
   assert.deepEqual(Ipc.contract(null), { ok: false, reason: 'Not available.' });
@@ -105,4 +105,16 @@ test('guarded(): a handler that throws (sync or async) answers ok:false with a r
   assert.deepEqual(await handlers['burst:ok']({}), { ok: true, data: 1 });
   assert.equal(await handlers['burst:denied']({}), null, 'the sender check stays outside the contract: main answers null to the wrong page');
   assert.deepEqual(logs.map((l) => l[1]), ['burst:sync', 'burst:async']);
+});
+
+// Verifier fix 10: a cancelled consent dialog is an {ok:false} with a reason too, so a page never shows an empty line.
+test('contract(): {ok:false, cancelled:true} gains reason "Cancelled."', async () => {
+  assert.deepEqual(Ipc.contract({ ok: false, cancelled: true }), { ok: false, cancelled: true, reason: 'Cancelled.' });
+  assert.deepEqual(Ipc.contract({ ok: false, cancelled: true, reason: 'Mine.' }), { ok: false, cancelled: true, reason: 'Mine.' }, 'an existing reason wins');
+  assert.deepEqual(Ipc.contract({ ok: false, cancelled: true, error: 'E.' }), { ok: false, cancelled: true, error: 'E.', reason: 'E.' }, 'error still maps first');
+  assert.deepEqual(Ipc.contract({ ok: false }), { ok: false }, 'no cancel, no error: unchanged (callers add their own)');
+  const h = harness(presentThenThrowing(), { answer: 0 });
+  await h.api.refresh(true);
+  const r = await h.handlers['burst-action']({}, 'reset', {});
+  assert.deepEqual(r, { ok: false, cancelled: true, reason: 'Cancelled.' });
 });

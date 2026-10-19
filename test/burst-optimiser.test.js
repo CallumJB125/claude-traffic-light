@@ -389,3 +389,37 @@ test('dev shots: the embedded dashboard is captured on its own, only while it is
   await r.o.act('tab:tools');
   assert.equal(await r.o.capture(), null);
 });
+
+// Verifier fix 6 (wiring): the controller passes the card's view from BurstIpc.snapshot() into pageState, so a
+// Burst with CA/hosts/console trouble never gets its dashboard loaded, a stale gateway shows the dimmed last state
+// with Repair, and the page re-renders when only the view's kind changes.
+test('controller: needs_attention and stale states from the card view, no dashboard view, one button through act', async () => {
+  const view = (kind, over = {}) => ({ kind, headline: `h ${kind}`, detail: `d ${kind}`, chip: { tone: 'amber', label: 'Needs attention' }, action: { kind: 'repair', label: 'Repair' }, dimmed: false, version: '0.19.0', ...over });
+  const r = rig({ snap: { ...present({ state: { version: '0.20.36', active: true, route: 'PRIMARY', rejected: [], primaryFailures: 0, until: '', mode: 'transparent', compaction: null, caTrusted: false } }), view: view('ca_untrusted') } });
+  await r.o.open();
+  assert.equal(r.views.length, 0, 'no dashboard over a Burst whose certificate is not trusted');
+  let p = r.o.payload();
+  assert.equal(p.mode, 'empty'); assert.equal(p.reason, 'needs_attention'); assert.equal(p.headline, 'h ca_untrusted'); assert.equal(p.detail, 'd ca_untrusted');
+  assert.deepEqual(p.actions, [{ kind: 'repair', label: 'Repair', primary: true }]);
+  assert.deepEqual(await r.o.act('repair'), { ok: true });
+  assert.deepEqual(r.acts, ['repair'], 'the one button runs through burst.act (burst:action in main)');
+  // Only the view's kind changes (same detection): the page follows it.
+  r.snap = { ...r.snap, view: view('on', { action: null }) };
+  await r.tick();
+  assert.equal(r.o.state().mode, 'ready');
+  assert.equal(r.views.length, 1);
+  r.snap = { ...r.snap, view: view('console_down', { action: { kind: 'repair', label: 'Start console' } }) };
+  await r.tick();
+  assert.equal(r.o.state().reason, 'needs_attention'); assert.equal(r.o.hasView(), false, 'the dashboard is dropped');
+  assert.deepEqual(r.o.payload().actions, [{ kind: 'repair', label: 'Start console', primary: true }]);
+  // Stale: dimmed last-known state with Check again and Repair.
+  r.snap = { d: { kind: 'unreachable', installed: true, misses: 1 }, url: null, view: view('gateway_stale', { headline: 'Burst is not responding', detail: 'Showing the last known state from 7 s ago: on, transparent mode, version 0.20.36.', chip: { tone: 'amber', label: 'Not responding' }, dimmed: true, version: '0.20.36' }) };
+  await r.tick();
+  p = r.o.payload();
+  assert.equal(p.reason, 'stale'); assert.equal(p.dimmed, true); assert.match(p.detail, /last known state from 7 s ago/); assert.equal(p.version, '0.20.36');
+  assert.deepEqual(p.actions.map((a) => a.kind), ['retry', 'repair']);
+  // Without a view (older burst api) nothing changes from before.
+  r.snap = down();
+  await r.tick();
+  assert.equal(r.o.state().reason, 'down'); assert.equal(r.o.state().headline, 'Not responding');
+});

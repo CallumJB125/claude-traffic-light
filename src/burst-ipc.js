@@ -108,7 +108,11 @@ const REASONS = { timeout: 'Burst did not answer in time.', unreachable: 'Burst 
 function contract(r) {
   if (r && typeof r === 'object' && !Array.isArray(r)) {
     if (r.ok === true) return r;
-    if (r.ok === false) return typeof r.reason === 'string' || typeof r.error !== 'string' ? r : { ...r, reason: r.error };
+    if (r.ok === false) {
+      if (typeof r.reason === 'string') return r;
+      if (typeof r.error === 'string') return { ...r, reason: r.error };
+      return r.cancelled === true ? { ...r, reason: 'Cancelled.' } : r;
+    }
     return r.error ? { ...r, ok: false, reason: typeof r.reason === 'string' ? r.reason : String(r.error) } : { ...r, ok: true };
   }
   return { ok: false, reason: 'Not available.' };
@@ -240,7 +244,11 @@ function register({ utilityHandle: rawHandle, settingsOnly, chipAllowed = () => 
   // it started or wants to retry. Progress reads (/api/upgrade-status, consoleDetect, mod status)
   // happen only while a step is running, so an idle page costs nothing beyond the status poll.
   let setup = Setup.initial();
-  const setupProbe = (extra = {}) => ({ detect: last, console: extras.get('console') ? extras.get('console').value : null, upgrade: last.kind === 'present' ? last.upgrade : null, modStatus: extras.get('modStatus') ? extras.get('modStatus').value : null, ...extra });
+  // console: undefined until a read has answered (the step offers Run check); null only when the setup probe
+  // found no console to read at all (a client without consoleDetect), which counts as the check passing.
+  let setupConsole; // the setup probe's own last console answer, kept apart from the card's cache (null there means "read failed")
+  const cachedConsole = () => { const c = extras.get('console'); return c && c.value ? c.value : undefined; };
+  const setupProbe = (extra = {}) => ({ detect: last, console: setupConsole !== undefined ? setupConsole : cachedConsole(), upgrade: last.kind === 'present' ? last.upgrade : null, modStatus: extras.get('modStatus') ? extras.get('modStatus').value : null, ...extra });
   const setupView = () => { setup = Setup.next(setup, setupProbe()); return setup.steps; };
   utilityHandle('burst:setup-progress', (e) => optimiserAllowed(e) || card(e), async (_e, req) => {
     if (!isMac) return { ok: false, reason: View.MAC_ONLY, steps: setupView() };
@@ -256,8 +264,11 @@ function register({ utilityHandle: rawHandle, settingsOnly, chipAllowed = () => 
       if (last.kind === 'present') {
         const u = await attempt(() => client.request('GET', '/api/upgrade-status'));
         extra.upgrade = u ? { canUpgrade: u.can_upgrade === true, upToDate: u.up_to_date === true, latestVersion: typeof u.latest_version === 'string' ? u.latest_version : '' } : null;
-        if (last.capabilities.consoleRepair) extra.console = await attempt(() => client.consoleDetect());
-        if (extra.console) extras.set('console', { at: Date.now(), value: extra.console });
+        // The console exists on 0.19 too, so it is read on every version here; only the card's console_down
+        // state is gated on consoleRepair (viewOf). A failed read leaves the step unconfirmed (it times out).
+        if (typeof client.consoleDetect !== 'function') setupConsole = null;
+        else { const con = await attempt(() => client.consoleDetect()); if (con) { setupConsole = con; extras.set('console', { at: Date.now(), value: con }); } }
+        if (setupConsole !== undefined) extra.console = setupConsole;
         if (last.capabilities.mods && client.modStatus) extra.modStatus = await attempt(() => fresh('modStatus', () => client.modStatus()));
       }
     }
@@ -523,7 +534,7 @@ function register({ utilityHandle: rawHandle, settingsOnly, chipAllowed = () => 
     },
     status: () => lastView,
     // For the Usage optimiser page: the last detection (version+pid handshake result) and the trusted address.
-    snapshot: () => ({ d: last, url: isMac && last.kind === 'present' ? client.adminUrl() : null }),
+    snapshot: () => ({ d: last, url: isMac && last.kind === 'present' ? client.adminUrl() : null, view: lastView }),
     // Optimiser empty state: the guided setup steps from caches, no probe.
     setupView,
     refresh,

@@ -82,7 +82,9 @@ function facts(state, probe) {
 
   const c = probe.console;
   if (!out.enable.done) out.check = { detail: 'Confirms that the gateway and its support console both answer. This comes after Burst is on.', primary: null };
-  else if (!c || c.kind === 'checking') out.check = { detail: 'Checks that the gateway and its support console both answer.', primary: A('retry', 'Run check') };
+  else if (c === undefined || (c && c.kind === 'checking')) out.check = { detail: 'Checks that the gateway and its support console both answer.', primary: A('retry', 'Run check') };
+  // Probed, and there was no console to read (null) while the gateway answers: that is the check.
+  else if (!c) out.check = { done: true, detail: 'Burst answers. It reported no support console to check, so repairs run from Terminal.', primary: null };
   else if (c.kind === 'unreachable') out.check = { failed: true, detail: 'The gateway answers, but Burst\'s support console (the part that repairs and restarts it) does not. Repair starts it again.', primary: A('repair', 'Start console') };
   else if (c.kind === 'untrusted') out.check = { failed: true, detail: `${c.reason || 'The program on the console port is not Burst\'s console.'} Plexiform stops here.`, primary: null };
   else if (c.kind === 'off') out.check = { done: true, detail: 'Burst answers. Its support console is switched off in its config, so repairs run from Terminal.', primary: null };

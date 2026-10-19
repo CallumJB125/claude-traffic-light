@@ -71,3 +71,24 @@ test('ageText reads like a person', () => {
   assert.equal(View.ageText(72 * 3600_000), '3 days ago');
   assert.equal(View.ageText(NaN), 'a moment ago');
 });
+
+// Verifier fix 8: one headline per state, so the card and the Home row name the problem first.
+test('headline per kind, never the constant "Claude Burst" for a state that needs a hand', () => {
+  const H = {
+    not_installed: 'Claude Burst is not installed', off: 'Burst is off', too_old: 'Update Burst', ca_untrusted: 'Burst\'s certificate is not trusted',
+    hosts_missing: 'Burst\'s hosts entry is missing', console_down: 'Burst\'s console is not running', gateway_stale: 'Burst is not responding',
+    unreachable: 'Burst is not responding', broken: 'Burst needs repair', untrusted: 'Something else is on Burst\'s port', on: 'Claude Burst',
+  };
+  assert.deepEqual(View.HEADLINES, H);
+  const cases = [
+    [{ kind: 'not_installed' }, H.not_installed], [present({ active: false }), H.off], [present({ version: '0.12.1' }), H.too_old],
+    [present({ mode: 'transparent', caTrusted: false, hostsEntry: true }), H.ca_untrusted], [present({ mode: 'transparent', caTrusted: true, hostsEntry: false }), H.hosts_missing],
+    [present({}, { console: { kind: 'unreachable' } }), H.console_down], [{ kind: 'unreachable', installed: true, misses: 2, lastGood: { at: NOW - 1000, state: state() } }, H.gateway_stale],
+    [{ kind: 'unreachable', installed: true, misses: 1 }, H.unreachable], [{ kind: 'unreachable', installed: true, misses: 3 }, H.unreachable],
+    [{ kind: 'broken', installed: true, state: { version: '0.20.36' } }, H.broken], [{ kind: 'untrusted', installed: true, reason: 'x.' }, H.untrusted], [present(), H.on],
+  ];
+  for (const [d, headline] of cases) assert.equal(sv(d).headline, headline, d.kind);
+  assert.equal(sv({ kind: 'checking' }).headline, 'Claude Burst');
+  assert.equal(sv({ kind: 'unsupported' }).headline, 'Claude Burst');
+  assert.equal(View.headlineFor('surprise'), 'Claude Burst');
+});

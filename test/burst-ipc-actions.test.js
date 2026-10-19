@@ -44,7 +44,7 @@ const posts = (h) => h.fake.requests.filter((r) => r.method === 'POST');
 test('burst-action: cancel sends nothing; confirm sends exactly one POST; the wording is main\'s', async (t) => {
   const h = await harness({ answer: 0, t });
   const args = { session: SID, message: 'please commit', title: 'Renderer title', detail: 'renderer text' };
-  assert.deepEqual(await h.handlers['burst-action']({ from: 'sessions' }, 'coord-message', args), { ok: false, cancelled: true });
+  assert.deepEqual(await h.handlers['burst-action']({ from: 'sessions' }, 'coord-message', args), { ok: false, cancelled: true, reason: 'Cancelled.' });
   assert.equal(posts(h).length, 0);
   assert.equal(h.dialogs[0].title, 'Send message');
   assert.match(h.dialogs[0].detail, /^Burst queues this message for session 0f6e3c1a/);
@@ -76,7 +76,7 @@ test('AI tools page: reads Codex routing and may only turn it on or off, behind 
   assert.deepEqual(await h.handlers['burst:codex-routing'](AIT), { ok: true, view: { installed: true, enabled: false, problem: '' } });
   assert.equal(await h.handlers['burst:codex-routing']({ from: 'sessions' }), null);
   assert.deepEqual(await h.handlers['burst-action'](AIT, 'reset', {}), { ok: false, error: 'Not available.', reason: 'Not available.' });
-  assert.deepEqual(await h.handlers['burst-action'](AIT, 'codex-enable', {}), { ok: false, cancelled: true });
+  assert.deepEqual(await h.handlers['burst-action'](AIT, 'codex-enable', {}), { ok: false, cancelled: true, reason: 'Cancelled.' });
   assert.equal(h.dialogs.length, 1);
   assert.equal(h.dialogs[0].title, 'Route Codex through Burst');
   assert.equal(posts(h).length, 0);

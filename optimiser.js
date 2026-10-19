@@ -212,6 +212,7 @@
     if (!empty) return;
     $('headline').textContent = s.headline;
     $('detail').textContent = s.detail;
+    $('empty').classList.toggle('dimmed', s.dimmed === true);
     $('docs').hidden = !s.docs;
     steps = Array.isArray(s.setup) && s.setup.length ? s.setup : null;
     renderSetup();

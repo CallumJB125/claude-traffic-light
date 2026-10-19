@@ -37,6 +37,7 @@
     const list = node('ul'); list.setAttribute('aria-label', 'Inbox');
     for (const row of r.items) {
       const li = node('li'), text = node('div'); li.dataset.kind = row.kind;
+      if (row.dimmed === true) li.classList.add('dimmed');
       text.append(node('strong', row.title, 'title'), node('p', [row.meta, ago(row.ageMs)].filter(Boolean).join(' · '), 'muted'));
       const tag = node('span', r.label(row.kind), `tag ${['approval', 'question', 'blocker', 'failed', 'burst'].includes(row.kind) ? 'waiting' : row.kind === 'finished' ? 'working' : Inbox.TEAM_KINDS?.includes(row.kind) && row.read ? 'team' : ''}`);
       const actions = node('div', '', 'actions');

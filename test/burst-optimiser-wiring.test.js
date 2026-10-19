@@ -79,6 +79,21 @@ test('native page: the empty state renders from the view model with textContent 
   assert.equal(d.getElementById('detail').children.length, 0, 'no HTML from main is ever parsed');
   assert.equal(d.getElementById('chip').dataset.tone, 'red');
   assert.equal(d.getElementById('browser').hidden, true);
+  assert.equal(d.getElementById('empty').classList.contains('dimmed'), false);
+  // Verifier fix 6/7: a stale state renders dimmed with its one primary; a needs_attention state renders its one button.
+  push({ mode: 'empty', reason: 'stale', headline: 'Burst is not responding', detail: 'Showing the last known state from 7 s ago.', chip: { tone: 'amber', label: 'Not responding' }, actions: [{ kind: 'retry', label: 'Check again' }, { kind: 'repair', label: 'Repair', primary: true }], dimmed: true, docs: true, canBrowser: false });
+  assert.equal(d.getElementById('empty').classList.contains('dimmed'), true);
+  assert.equal(d.getElementById('headline').textContent, 'Burst is not responding');
+  assert.deepEqual([...d.querySelectorAll('#actions button')].map((b) => [b.textContent, b.className]), [['Check again', ''], ['Repair', 'primary']]);
+  assert.match(read('optimiser.html'), /\.empty\.dimmed \{ opacity: \.6; \}/);
+  push({ mode: 'empty', reason: 'needs_attention', headline: "Burst's certificate is not trusted", detail: 'd', chip: { tone: 'amber', label: 'Needs attention' }, actions: [{ kind: 'repair', label: 'Repair', primary: true }], dimmed: false, docs: true, canBrowser: false });
+  assert.equal(d.getElementById('empty').classList.contains('dimmed'), false);
+  assert.deepEqual([...d.querySelectorAll('#actions button')].map((b) => b.textContent), ['Repair']);
+  d.querySelector('#actions button').click();
+  await settle();
+  assert.deepEqual(acted, ['repair']);
+  acted.length = 0;
+  push({ mode: 'empty', reason: 'down', headline: "Burst isn't answering", detail: '<img src=x onerror=alert(1)>', chip: { tone: 'red', label: 'Burst off' }, actions: [{ kind: 'repair', label: 'Repair', primary: true }], docs: true, canBrowser: false });
   d.querySelector('#actions button').click();
   await settle();
   assert.deepEqual(acted, ['repair']);

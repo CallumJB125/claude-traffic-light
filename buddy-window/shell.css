@@ -128,6 +128,7 @@ ul { padding: 0; list-style: none; }
 .acct-actions:empty { display: none; }
 .acct-actions .btn { margin-top: 0; }
 .acct-section { display: flex; flex-direction: column; gap: 8px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
+.acct-section.dimmed { opacity: .6; } /* Burst card: the last known state while its gateway is not answering */
 .acct-list { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); overflow: hidden; }
 .acct-item { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 12px; padding: 10px 12px; min-height: 52px; }
 .acct-list .acct-item + .acct-item { border-top: 1px solid var(--line); }

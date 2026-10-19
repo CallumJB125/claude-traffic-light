@@ -105,9 +105,26 @@ const firstAction = (actions) => { const a = actions.find((x) => x.primary) || a
 const COMPACTION_ON_CONFIRM = 'Burst will use your Claude subscription tokens to write summaries in the background, which counts against your plan limits and can raise cost slightly when a summary is made.';
 const COMPACTION_OWN_OFF = 'While this is on, Plexiform\'s own Claude compactor is off, so the two never compete.';
 
+// One headline per state, so the card and the Home row say what is wrong before the detail does.
+const HEADLINES = Object.freeze({
+  not_installed: 'Claude Burst is not installed',
+  off: 'Burst is off',
+  too_old: 'Update Burst',
+  ca_untrusted: 'Burst\'s certificate is not trusted',
+  hosts_missing: 'Burst\'s hosts entry is missing',
+  console_down: 'Burst\'s console is not running',
+  gateway_stale: 'Burst is not responding',
+  unreachable: 'Burst is not responding',
+  broken: 'Burst needs repair',
+  untrusted: 'Something else is on Burst\'s port',
+  on: 'Claude Burst',
+});
+const headlineFor = (kind) => HEADLINES[kind] || 'Claude Burst';
+
 // Every result: { kind, headline, detail (never empty), action: {kind,label}|null, actions[], chip, active, dimmed, ... }.
 function statusView(d, { platform = process.platform, now = Date.now } = {}) {
   const v = statusViewInner(d, { platform, now });
+  if (v.kind !== 'unsupported' && v.kind !== 'checking') v.headline = headlineFor(d && d.kind === 'unreachable' && v.kind === 'off' ? 'unreachable' : v.kind);
   if (!('action' in v)) v.action = v.kind === 'on' ? (v.updateAvailable ? { kind: 'update', label: 'Update' } : null) : firstAction(v.actions);
   if (!v.detail) v.detail = 'Burst state is not known yet.';
   if (typeof v.active !== 'boolean') v.active = false;
@@ -257,9 +274,10 @@ function cardView(d, { platform = process.platform, now = Date.now, mac = null, 
   const v = view && typeof view === 'object' ? { ...view } : statusView(d, { platform, now });
   const caps = (d && d.kind === 'present' && obj(d.capabilities)) || {};
   v.keepAwake = caps.keepAwake === true ? keepAwakeView(mac) : null;
-  v.remoteControl = d && d.kind === 'present' ? remoteControlView(d.state) : null;
+  // Remote Control is only known on a 0.20 Burst that is on (0.19 and an off/unknown mode read nothing).
+  v.remoteControl = caps.remoteControl === true && d.state && d.state.active === true && (d.state.mode === 'transparent' || d.state.mode === 'base-url') ? remoteControlView(d.state) : null;
   v.mods = caps.mods === true ? modsView({ modStatus, mac }) : null;
   return v;
 }
 
-module.exports = { cardView, keepAwakeView, remoteControlView, modsView, MIN_VERSION, ageText, RETRY_BEFORE_REPAIR, COMPACTION_ON_CONFIRM, COMPACTION_OWN_OFF, statusView, consent, chipFor, MAC_ONLY, TERMS_URL, CHANGES_ALWAYS, CHANGES_TRANSPARENT, TERMS };
+module.exports = { HEADLINES, headlineFor, cardView, keepAwakeView, remoteControlView, modsView, MIN_VERSION, ageText, RETRY_BEFORE_REPAIR, COMPACTION_ON_CONFIRM, COMPACTION_OWN_OFF, statusView, consent, chipFor, MAC_ONLY, TERMS_URL, CHANGES_ALWAYS, CHANGES_TRANSPARENT, TERMS };

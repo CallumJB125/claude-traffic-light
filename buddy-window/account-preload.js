@@ -4,13 +4,16 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 const call = (op, ...args) => ipcRenderer.invoke(`buddy:acct:${op}`, ...args);
 const str = (v) => String(v ?? '');
+const strArgs = (args) => Object.fromEntries(Object.entries(args && typeof args === 'object' ? args : {}).filter(([k, v]) => /^[a-z]{1,20}$/.test(k) && typeof v === 'string' && v.length <= 60));
 
 contextBridge.exposeInMainWorld('buddyAccount', {
   state: () => call('state'),
   burstStatus: () => ipcRenderer.invoke('burst:status'),
-  burstAction: (kind, mode) => ipcRenderer.invoke('burst:action', { kind: str(kind), mode: str(mode) }),
-  // Allow-listed mutations with their own consent dialog (mod-install, mod-update): args are a plain object of strings.
-  burstRunAction: (kind, args) => ipcRenderer.invoke('burst-action', str(kind), Object.fromEntries(Object.entries(args && typeof args === 'object' ? args : {}).filter(([k, v]) => /^[a-z]{1,20}$/.test(k) && typeof v === 'string' && v.length <= 60))),
+  // Card actions, Terminal kinds and the v0.20 kinds (mod-install, mod-update → burst-ipc ACTION_KINDS) alike:
+  // args, when given, are a plain object of short string fields (the mod's id).
+  burstAction: (kind, mode, args) => ipcRenderer.invoke('burst:action', { kind: str(kind), mode: str(mode), ...(args && typeof args === 'object' ? { args: strArgs(args) } : {}) }),
+  // Allow-listed mutation ids with their own consent dialog, by id (e.g. 'mod-action', {action:'toasts', on:'false'}).
+  burstRunAction: (kind, args) => ipcRenderer.invoke('burst-action', str(kind), strArgs(args)),
   burstSetCompaction: (req) => ipcRenderer.invoke('burst:set-compaction', { enabled: !!(req && req.enabled), confirmed: !!(req && req.confirmed), ...(req && req.mode ? { mode: str(req.mode) } : {}) }),
   keepAwakeGet: () => ipcRenderer.invoke('keepawake:get'),
   macView: () => ipcRenderer.invoke('keepawake:mac'),

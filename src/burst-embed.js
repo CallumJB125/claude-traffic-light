@@ -98,16 +98,31 @@ function sectionScript(id) {
   return `(function(id){var l=document.querySelector('.navlink[data-target="'+id+'"]');if(l){l.click();return 'click'}var e=document.getElementById(id);if(e){e.scrollIntoView({block:'start'});return 'scroll'}return 'none'})(${j})`;
 }
 
+// Card states that must not load the dashboard as `ready`: the page shows the card's own headline,
+// detail and one action instead (`needs_attention`), or the dimmed last-known state (`stale`).
+const ATTENTION_KINDS = Object.freeze(['ca_untrusted', 'hosts_missing', 'console_down']);
+
 /**
  * What the Usage optimiser page shows for a Burst detection result.
- * → { mode: 'ready' | 'empty', reason, headline, detail, chip, actions[], version }
+ * → { mode: 'ready' | 'empty', reason, headline, detail, chip, actions[], version, action? }
  * `ready` only for a trusted, current Burst; every other state is a native empty state.
+ * `view` is the card's statusView built by burst-ipc (it knows the last good detection and the
+ * console); with it, ca_untrusted / hosts_missing / console_down become `needs_attention` and
+ * gateway_stale becomes `stale`, each carrying the card's headline, detail and one action.
  */
-function pageState(d, { platform = process.platform } = {}) {
+function pageState(d, { platform = process.platform, view = null } = {}) {
   const v = View.statusView(d, { platform });
   const base = { mode: 'empty', reason: d.kind, chip: v.chip, version: v.version || '', actions: [], docs: true };
   const act = (kind, label, primary = false) => ({ kind, label, ...(primary ? { primary: true } : {}) });
   if (platform !== 'darwin' || d.kind === 'unsupported') return { ...base, reason: 'unsupported', headline: 'Not available on this computer', detail: View.MAC_ONLY };
+  const cv = view && typeof view === 'object' && typeof view.kind === 'string' ? view : null;
+  if (cv && (ATTENTION_KINDS.includes(cv.kind) || cv.kind === 'gateway_stale')) {
+    const one = cv.action && PAGE_ACTIONS.includes(cv.action.kind) ? cv.action : { kind: 'repair', label: 'Repair' };
+    const stale = cv.kind === 'gateway_stale';
+    return { ...base, reason: stale ? 'stale' : 'needs_attention', kind: cv.kind, chip: cv.chip || base.chip, version: cv.version || base.version, dimmed: cv.dimmed === true,
+      headline: cv.headline, detail: cv.detail, action: { kind: one.kind, label: one.label },
+      actions: [...(stale ? [act('retry', 'Check again')] : []), act(one.kind, one.label, true)] };
+  }
   switch (d.kind) {
     case 'checking':
       return { ...base, mode: 'loading', headline: 'Checking Burst…', detail: '', docs: false };
@@ -143,4 +158,4 @@ function atLeast(version, min) {
 // The one allow-list for what the page may ask main to run (consent dialogs are main's).
 const PAGE_ACTIONS = Object.freeze(['install', 'enable', 'repair', 'off', 'update']);
 
-module.exports = { navDecision, openDecision, requestAllowed, extractSubnav, sectionScript, pageState, NAV_SCRIPT, EXTERNAL_HOSTS, DOCS_URL, PAGE_ACTIONS, MAX_ITEMS };
+module.exports = { navDecision, openDecision, requestAllowed, extractSubnav, sectionScript, pageState, NAV_SCRIPT, EXTERNAL_HOSTS, DOCS_URL, PAGE_ACTIONS, ATTENTION_KINDS, MAX_ITEMS };

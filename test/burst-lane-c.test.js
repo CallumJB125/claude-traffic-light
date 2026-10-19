@@ -61,8 +61,10 @@ test('normalizeLooseEnds: counts and names only, in a fixed key set; the 0.20.36
   assert.deepEqual(Object.keys(v).sort(), ['kind', 'repos', 'scanned', 'stale', 'staleHours', 'withinDays']);
   assert.deepEqual({ ...v, repos: undefined }, { kind: 'ok', scanned: 4, stale: { files: 1, commits: 2, stashes: 0 }, staleHours: 24, withinDays: 30, repos: undefined });
   assert.equal(v.repos.length, 2, 'a repo without a root is dropped');
-  assert.deepEqual(v.repos[0], { path: '/Users/owner/code/plexiform', branch: 'main', noRemote: false, uncommitted: 2, unpushed: 2, stashes: 1, names: ['a.js', 'secret plan.md'], stashNames: ['WIP on main: try thing'], error: '' });
-  assert.deepEqual(v.repos[1], { path: '/Users/owner/code/other', branch: 'feat', noRemote: true, uncommitted: 0, unpushed: 0, stashes: 0, names: [], stashNames: [], error: 'git: timed out' });
+  assert.deepEqual(v.repos[0], { path: '/Users/owner/code/plexiform', branch: 'main', noRemote: false, uncommitted: 2, unpushed: 2, stashes: 1, names: ['a.js', 'secret plan.md'], reason: '' });
+  assert.ok(!JSON.stringify(v).includes('WIP on main'), 'stash subjects never pass');
+  assert.deepEqual(v.repos[1], { path: '/Users/owner/code/other', branch: 'feat', noRemote: true, uncommitted: 0, unpushed: 0, stashes: 0, names: [], reason: 'timeout' });
+  assert.ok(!JSON.stringify(v).includes('git:'), 'free-text error never passes');
   const text = JSON.stringify(v);
   assert.ok(!text.includes('abc123') && !text.includes(' M') && !text.includes('mtime'), 'no hashes, statuses or times');
   assert.deepEqual(normalizeLooseEnds(FIXTURE['/api/loose-ends']), { kind: 'ok', scanned: 4, stale: { files: 0, commits: 0, stashes: 0 }, staleHours: 24, withinDays: 30, repos: [] });
@@ -249,7 +251,7 @@ test('burst:action: each lane C kind shows its own consent sentence; cancel send
     [{ kind: 'console-restore-config' }, 'Restore last good config', /config\.json that loaded/],
   ];
   for (const [req, title, detail] of cases) {
-    assert.deepEqual(await no.handlers['burst:action'](OPT, req), { ok: false, cancelled: true }, req.kind);
+    assert.deepEqual(await no.handlers['burst:action'](OPT, req), { ok: false, cancelled: true, reason: 'Cancelled.' }, req.kind);
     const d = no.dialogs.at(-1);
     assert.equal(d.title, title, req.kind);
     assert.match(d.detail, detail, req.kind);
@@ -297,4 +299,23 @@ test('burst:action mod-install routes the usage panel to panel-install and the s
   assert.deepEqual(ACTION_KINDS['mod-update']({ mod: 'usage-panel' }), ['panel-install', { action: 'install' }]);
   assert.deepEqual(ACTION_KINDS['mod-install']({ mod: 'burst-session' }), ['mod-action', { action: 'install' }]);
   assert.deepEqual(ACTION_KINDS['mod-install']({}), ['mod-action', { action: 'install' }]);
+});
+
+// Verifier fix 9 (privacy): the loose-ends normalizer keeps the repo path, counts and uncommitted file
+// names only; a stash's subject and Burst's free-text repo error never pass (the error becomes a fixed word).
+test('normalizeLooseEnds: no stash names, no free-text error; reason is one of a fixed set', () => {
+  const { LOOSE_ENDS_REASONS } = require('../src/burst-client.js');
+  assert.deepEqual(LOOSE_ENDS_REASONS, ['unreadable', 'not-a-repo', 'timeout']);
+  const one = (error, stashes = []) => normalizeLooseEnds({ report: { repos: [{ root: '/r', error, stashes }] } }).repos[0];
+  for (const [err, reason] of [['git: timed out', 'timeout'], ['context deadline exceeded', 'timeout'], ['fatal: not a git repository', 'not-a-repo'], ['no such file or directory', 'not-a-repo'], ['permission denied: /Users/owner/secret', 'unreadable'], ['', ''], [undefined, '']]) {
+    const r = one(err);
+    assert.equal(r.reason, reason, String(err));
+    assert.ok(reason === '' || LOOSE_ENDS_REASONS.includes(r.reason));
+    assert.ok(!('error' in r) && !('stashNames' in r), 'dropped keys');
+    assert.ok(!JSON.stringify(r).includes('secret'), 'the error text itself never passes');
+  }
+  const st = one('', [{ ref: 'stash@{0}', subject: 'WIP: password reset flow' }, { ref: 'stash@{1}', subject: 'x' }]);
+  assert.equal(st.stashes, 2);
+  assert.ok(!JSON.stringify(st).includes('password'), 'stash subjects are counted, never read out');
+  assert.deepEqual(Object.keys(st).sort(), ['branch', 'names', 'noRemote', 'path', 'reason', 'stashes', 'uncommitted', 'unpushed']);
 });

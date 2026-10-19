@@ -74,3 +74,32 @@ test('console answering, or switched off in config, leaves the card on', async (
     assert.equal(h.api.status().kind, 'on', kind);
   }
 });
+
+// Verifier fix 5: the guided setup's "First check" reads the console on every version (0.19 has one),
+// so the step completes on a 0.19 Burst; before, the read was gated on consoleRepair and it never did.
+test('setup progress on a 0.19 Burst: the console is read and First check reaches done; off-by-config is done too', async () => {
+  for (const [kind, status, note] of [['present', 'done', /both answer/], ['off', 'done', /switched off in its config/]]) {
+    const h = harness({ detects: [present({ capabilities: { consoleRepair: false }, state: { version: '0.19.0' } })], console: () => ({ kind }) });
+    await h.api.refresh(true);
+    let r = await h.handlers['burst:setup-progress']({}, { step: 'check', start: true });
+    const check = r.steps.find((s) => s.id === 'check');
+    assert.equal(check.status, status, kind);
+    assert.match(check.detail, note, kind);
+    assert.ok(h.consoleCalls.length >= 1, `${kind}: the console was read on 0.19`);
+    assert.equal(h.api.status().kind, 'on', `${kind}: the card itself stays gated on consoleRepair (never console_down on 0.19)`);
+    r = await h.handlers['burst:setup-progress']({}, {});
+    assert.equal(r.steps.find((s) => s.id === 'check').status, status, `${kind}: stays after the probe`);
+  }
+  // A console that does not answer keeps the step waiting (it times out with Retry), never done.
+  const down = harness({ detects: [present({ capabilities: { consoleRepair: false }, state: { version: '0.19.0' } })], console: () => ({ kind: 'unreachable' }) });
+  await down.api.refresh(true);
+  assert.equal((await down.handlers['burst:setup-progress']({}, { step: 'check', start: true })).steps.find((s) => s.id === 'check').status, 'running');
+  // A client with no console to read at all: the gateway answering is the check.
+  const client = { detect: async () => present({ capabilities: { consoleRepair: false }, state: { version: '0.19.0' } }), adminUrl: () => 'http://127.0.0.1:7788', requests: async () => [] };
+  const handlers = {};
+  Ipc.register({ utilityHandle: (c, a, f) => { handlers[c] = (e, ...x) => (a(e) ? f(e, ...x) : null); }, settingsOnly: () => true, optimiserAllowed: () => true, isMac: true, client, dialog: {}, shell: {}, scriptDir: '/x', log: () => {} });
+  await tick();
+  const r = await handlers['burst:setup-progress']({}, { step: 'check', start: true });
+  assert.equal(r.steps.find((s) => s.id === 'check').status, 'done');
+  assert.match(r.steps.find((s) => s.id === 'check').detail, /reported no support console/);
+});

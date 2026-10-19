@@ -3,7 +3,9 @@
 // Loose ends per repository, from Burst's raw /api/loose-ends answer
 // (claude-burst internal/looseends: report.repos[] = {root, branch, uncommitted[],
 // unpushed[], ahead, stashes[]}; only repositories with something loose are listed).
-// Pure: takes the scrubbed raw answer, gives counts keyed by repository root.
+// Pure: takes the scrubbed raw answer, or the client's normalized one
+// (burst-client normalizeLooseEnds: {kind:'ok', repos:[{path, uncommitted:n, unpushed:n, stashes:n}]}),
+// and gives counts keyed by repository root.
 // Nothing here reads a file name, a diff or a stash's contents: counts and age only.
 
 const HOUR_MS = 3_600_000;
@@ -22,6 +24,10 @@ function normalizeRoot(p) {
 }
 
 function repoCounts(repo, { at, staleMs }) {
+  // Normalized shape: counts already, no item times (so never stale).
+  if (Number.isSafeInteger(repo.uncommitted) || Number.isSafeInteger(repo.unpushed) || Number.isSafeInteger(repo.stashes)) {
+    return { uncommitted: count(repo.uncommitted), unpushed: count(repo.unpushed), stashes: count(repo.stashes), branch: typeof repo.branch === 'string' ? repo.branch.slice(0, 120) : '', noRemote: repo.noRemote === true || repo.no_remote === true, stale: false };
+  }
   const uncommitted = list(repo.uncommitted);
   const unpushed = list(repo.unpushed);
   const stashes = list(repo.stashes);
@@ -44,14 +50,16 @@ function repoCounts(repo, { at, staleMs }) {
  */
 function looseEndsView(raw, { now = Date.now } = {}) {
   const r = obj(raw);
-  const report = r && obj(r.report);
+  const normalized = r && r.kind === 'ok' && Array.isArray(r.repos);
+  const report = normalized ? r : r && obj(r.report);
   if (!report) return null;
-  const staleHours = Number.isFinite(r.stale_hours) && r.stale_hours > 0 ? r.stale_hours : DEFAULT_STALE_HOURS;
+  const hours = normalized ? r.staleHours : r.stale_hours;
+  const staleHours = Number.isFinite(hours) && hours > 0 ? hours : DEFAULT_STALE_HOURS;
   const at = secs(report.at) ?? (typeof now === 'function' ? now() : null);
   const byRepo = new Map();
   for (const repo of list(report.repos)) {
     const o = obj(repo);
-    const root = o && normalizeRoot(o.root);
+    const root = o && normalizeRoot(normalized ? o.path : o.root);
     if (!root) continue;
     const c = repoCounts(o, { at, staleMs: staleHours * HOUR_MS });
     if (!c.uncommitted && !c.unpushed && !c.stashes) continue;

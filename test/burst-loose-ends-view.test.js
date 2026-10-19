@@ -68,3 +68,44 @@ test('anything that is not a report is null, so callers hide the section instead
   assert.equal(v.staleHours, LE.DEFAULT_STALE_HOURS);
   assert.equal(v.byRepo.get('/r').stale, false, 'a file with no mtime is never called stale');
 });
+
+// Verifier fix 1: BurstIpc.looseEndsView() feeds the client's normalized answer (counts per repo, `path`
+// not `root`) into this view; it used to expect only the raw report and answered null, so the Overview
+// badges and the Home loose-ends line never showed.
+test('the client normalizer\'s shape (counts, path) is accepted as well as the raw report', () => {
+  const { normalizeLooseEnds } = require('../src/burst-client.js');
+  const withRepos = { ...FIXTURE['/api/loose-ends'], report: { ...FIXTURE['/api/loose-ends'].report, repos: [
+    repo('/Users/me/app', { uncommitted: [{ path: '/Users/me/app/a.js', mtime: AT - H }], unpushed: [{ hash: 'x', when: AT - H }], ahead: 2, stashes: [{ ref: 'stash@{0}', when: AT, subject: 'wip' }] }),
+    repo('/Users/me/clean'),
+  ] } };
+  const n = normalizeLooseEnds(withRepos);
+  assert.equal(n.kind, 'ok');
+  const v = LE.looseEndsView(n);
+  assert.ok(v, 'normalized shape is a report too');
+  assert.deepEqual([...v.byRepo.keys()], ['/Users/me/app']);
+  assert.deepEqual(v.byRepo.get('/Users/me/app'), { uncommitted: 1, unpushed: 2, stashes: 1, branch: 'main', noRemote: false, stale: false });
+  assert.deepEqual(v.totals, { repos: 1, uncommitted: 1, unpushed: 2, stashes: 1 });
+  assert.equal(v.staleHours, 24);
+  assert.equal(v.scanned, 4);
+  assert.equal(LE.badgeText(v.byRepo.get('/Users/me/app')), '1 uncommitted · 2 unpushed · 1 stash');
+  // Same counts either way in.
+  const r = LE.looseEndsView(withRepos).byRepo.get('/Users/me/app'), c = v.byRepo.get('/Users/me/app');
+  assert.deepEqual([r.uncommitted, r.unpushed, r.stashes], [c.uncommitted, c.unpushed, c.stashes]);
+  assert.equal(LE.looseEndsView({ kind: 'unsupported' }), null);
+});
+
+test('BurstIpc.looseEndsView(): client normalizer → view, byRepo has the repo with its counts', async () => {
+  const Ipc = require('../src/burst-ipc.js');
+  const { normalizeLooseEnds } = require('../src/burst-client.js');
+  const raw = { ...FIXTURE['/api/loose-ends'], report: { ...FIXTURE['/api/loose-ends'].report, repos: [repo('/Users/me/app', { uncommitted: [{ path: '/Users/me/app/a.js', mtime: AT }], ahead: 1 })] } };
+  const detect = { kind: 'present', installed: true, pid: 1, upgrade: null, capabilities: { looseEnds: true }, state: { version: '0.20.36', mode: 'base-url', active: true, route: 'PRIMARY', rejected: [], primaryFailures: 0, compaction: { pauseless: null, sessions: [], active: false }, contextFill: [] } };
+  const client = { detect: async () => detect, adminUrl: () => 'http://127.0.0.1:7788', looseEnds: async () => normalizeLooseEnds(raw), requests: async () => [] };
+  const api = Ipc.register({ utilityHandle: () => {}, settingsOnly: () => true, isMac: true, client, dialog: {}, shell: {}, scriptDir: '/x', log: () => {} });
+  await api.refresh(true);
+  assert.equal(api.looseEndsView(), null, 'first call warms the cache in the background');
+  await new Promise((r) => setTimeout(r, 10));
+  const v = api.looseEndsView();
+  assert.ok(v && v.byRepo instanceof Map, 'a view, not null');
+  assert.deepEqual([...v.byRepo.entries()].map(([k, c]) => [k, c.uncommitted, c.unpushed, c.stashes]), [['/Users/me/app', 1, 1, 0]]);
+  assert.equal(v.totals.repos, 1);
+});

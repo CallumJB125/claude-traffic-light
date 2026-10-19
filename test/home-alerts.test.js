@@ -249,7 +249,8 @@ test('Burst card: statusView facts plus loose-ends totals; the one action runs o
   assert.deepEqual(b.view.action, { kind: 'update', label: 'Update' });
   assert.deepEqual(b.view.chip, { tone: 'green', label: 'Primary' });
   assert.deepEqual(b.looseEnds, { repos: 1, uncommitted: 1, unpushed: 2, stashes: 0, text: '1 uncommitted file, 2 unpushed commits in 1 repository.' });
-  assert.deepEqual(Object.keys(b.view).sort(), ['action', 'chip', 'detail', 'dimmed', 'headline', 'kind'], 'facts only: no actions list, no version string the page did not ask for');
+  assert.deepEqual(Object.keys(b.view).sort(), ['action', 'attention', 'chip', 'detail', 'dimmed', 'headline', 'kind'], 'facts only: no actions list, no version string the page did not ask for');
+  assert.equal(b.view.attention, true, 'an update is worth a Home row');
   // The action: only the kind the card is showing.
   assert.deepEqual(await alerts.act('burst', 'act', 'update'), { ok: true, retried: false });
   assert.deepEqual(acted, ['update']);
@@ -273,7 +274,7 @@ test('Home renders the Burst row with its one button, which sends only the actio
   const calls = [];
   dom.window.homeApi = {
     state: async () => ({}), navigate: async (d) => { calls.push(['navigate', d]); return true; },
-    alerts: async () => ({ stuck: [], limits: [], mail: [], waiting: [], burst: { view: { kind: 'off', headline: 'Claude Burst', detail: 'Installed, and not in Claude Code’s path.', chip: { tone: 'grey', label: 'Off' }, action: { kind: 'enable', label: 'Turn on' }, dimmed: false }, looseEnds: null } }),
+    alerts: async () => ({ stuck: [], limits: [], mail: [], waiting: [], burst: { view: { kind: 'off', headline: 'Burst is not responding', detail: 'Not responding: Burst is installed but its gateway has not answered several checks in a row. If Claude Code is failing, take Burst out of its path.', chip: { tone: 'amber', label: 'Not responding' }, action: { kind: 'enable', label: 'Turn on' }, dimmed: true, attention: true }, looseEnds: null } }),
     alertAct: async (kind, action, handle) => { calls.push(['alertAct', kind, action, handle]); return { ok: true }; },
     teamToday: async () => null, teamInbox: async () => [],
   };
@@ -281,13 +282,52 @@ test('Home renders the Burst row with its one button, which sends only the actio
   await new Promise((r) => setTimeout(r, 20));
   const li = dom.window.document.querySelector('#inbox li[data-kind="burst"]');
   assert.ok(li, 'the Burst row is in the Inbox');
-  assert.equal(li.querySelector('.title').textContent, 'Claude Burst');
-  assert.match(li.querySelector('.muted').textContent, /not in Claude Code/);
+  assert.equal(li.querySelector('.title').textContent, 'Burst is not responding');
+  assert.match(li.querySelector('.muted').textContent, /take Burst out of its path/);
   assert.equal(li.querySelector('.tag').textContent, 'Burst');
+  assert.ok(li.classList.contains('dimmed'), 'verifier fix 7: the row carries the card\'s dimmed state as a class');
+  assert.match(read('home.css'), /#inbox li\.dimmed \{ opacity: \.6; \}/);
   const buttons = [...li.querySelectorAll('button')];
   assert.deepEqual(buttons.map((b) => b.textContent), ['Turn on'], 'one button');
   buttons[0].click();
   await new Promise((r) => setTimeout(r, 20));
   assert.deepEqual(calls.filter((c) => c[0] === 'alertAct'), [['alertAct', 'burst', 'act', 'enable']]);
   dom.window.close();
+});
+
+// Verifier fix 3 (main side): the card withholds the action unless the state is worth a hand, and prefers the
+// ipc's own view (which knows gateway_stale and console_down) over a fresh statusView of the raw detection.
+test('Burst card gating: not installed, off on purpose and one missed poll give no action; three misses, broken, too old, stale and an update do', () => {
+  const state = { burst: null, view: null };
+  const mk = (over = {}) => HomeAlerts.createHomeAlerts({ sessions: () => [], burst: () => state.burst, burstView: () => state.view, tasks: () => [], platform: 'darwin', now: () => NOW, jump: async () => {}, copyHandover: async () => ({ ok: true }), docFor: async () => null, confirm: async () => true, resume: async () => ({ ok: true }), ...over });
+  const alerts = mk();
+  const st = (over = {}) => ({ version: '0.20.36', mode: 'base-url', active: true, route: 'PRIMARY', until: '', rejected: [], primaryFailures: 0, compaction: null, caTrusted: true, hostsEntry: true, ...over });
+  const present = (over = {}, extra = {}) => ({ kind: 'present', installed: true, capabilities: {}, upgrade: null, state: st(over), ...extra });
+  const card = (d, view = null) => { state.burst = d; state.view = view; return alerts.snapshot().burst; };
+  // Never.
+  assert.equal(card({ kind: 'not_installed' }).view.action, null, 'not installed: no card action');
+  assert.equal(card({ kind: 'not_installed' }).view.attention, false);
+  assert.equal(card(present({ active: false })).view.action, null, 'off on purpose');
+  assert.equal(card({ kind: 'unreachable', installed: true, misses: 1 }).view.action, null, 'one missed poll');
+  assert.equal(card({ kind: 'unreachable', installed: true, misses: 2 }).view.attention, false);
+  assert.equal(card({ kind: 'checking' }), null);
+  assert.equal(card({ kind: 'unsupported' }), null);
+  // Shown.
+  assert.deepEqual(card({ kind: 'unreachable', installed: true, misses: 3 }).view.action, { kind: 'enable', label: 'Turn on' }, 'three misses');
+  assert.deepEqual(card({ kind: 'broken', installed: true, state: { version: '0.20.36' } }).view.action, { kind: 'repair', label: 'Repair' });
+  assert.equal(card(present({ version: '0.12.1' })).view.kind, 'too_old');
+  assert.deepEqual(card(present({ version: '0.12.1' })).view.action, { kind: 'update', label: 'Update Burst' });
+  assert.equal(card(present({ mode: 'transparent', caTrusted: false })).view.kind, 'ca_untrusted');
+  assert.equal(card(present({ mode: 'transparent', hostsEntry: false })).view.kind, 'hosts_missing');
+  assert.equal(card(present({}, { console: { kind: 'unreachable' } })).view.kind, 'console_down');
+  assert.deepEqual(card(present({}, { upgrade: { canUpgrade: true, upToDate: false } })).view.action, { kind: 'update', label: 'Update' }, 'update available');
+  // The ipc's view wins: gateway_stale (dimmed) is only known there.
+  const stale = card({ kind: 'unreachable', installed: true, misses: 1 }, { kind: 'gateway_stale', headline: 'Burst is not responding', detail: 'last known state from 5 s ago', chip: { tone: 'amber', label: 'Not responding' }, action: { kind: 'repair', label: 'Repair' }, dimmed: true, updateAvailable: false });
+  assert.equal(stale.view.kind, 'gateway_stale'); assert.equal(stale.view.dimmed, true); assert.equal(stale.view.attention, true); assert.deepEqual(stale.view.action, { kind: 'repair', label: 'Repair' });
+  // A healthy ipc view keeps the card quiet, and a `checking` one falls back to the detection.
+  assert.equal(card(present(), { kind: 'on', headline: 'Claude Burst', detail: 'On.', chip: { tone: 'green', label: 'Primary' }, action: null, dimmed: false }).view.action, null);
+  assert.equal(card(present({ version: '0.12.1' }), { kind: 'checking' }).view.kind, 'too_old');
+  // The one action still runs only the step shown.
+  state.view = null; state.burst = { kind: 'unreachable', installed: true, misses: 1 };
+  return alerts.act('burst', 'act', 'retry').then((r) => assert.equal(r.ok, false, 'a withheld action cannot be run from Home'));
 });

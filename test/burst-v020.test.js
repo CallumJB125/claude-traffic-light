@@ -12,7 +12,7 @@ const { createFakeBurst, stateV019, stateV012 } = require('./fixtures/fake-burst
 const { testTempDir } = require('./helpers/tmp');
 
 const FIXTURE = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'burst-0.20.36.json'), 'utf8'));
-const NEW_FLAGS = ['looseEnds', 'keepAwake', 'mods', 'finder', 'handoffTaken', 'consoleRepair', 'intelligentCompaction', 'codex'];
+const NEW_FLAGS = ['looseEnds', 'keepAwake', 'mods', 'finder', 'handoffTaken', 'consoleRepair', 'remoteControl', 'intelligentCompaction', 'codex'];
 const OLD_FLAGS = ['usage', 'upgradeStatus', 'handoverAudit', 'handoverFile', 'testConnection'];
 
 // The exact snapshot key set. Anything new from /api/state must be added here on purpose.

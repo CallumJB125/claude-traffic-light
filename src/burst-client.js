@@ -50,6 +50,7 @@ const CAPABILITY_FLOORS = Object.freeze({
   finder: [0, 20, 0],
   handoffTaken: [0, 20, 0],
   consoleRepair: [0, 20, 0],
+  remoteControl: [0, 20, 0],
   intelligentCompaction: [0, 20, 0],
   codex: [0, 20, 0],
 });
@@ -240,8 +241,17 @@ const asArr = (v) => (Array.isArray(v) ? v : []);
 const text = (v, n = 200) => (typeof v === 'string' ? v.slice(0, n) : '');
 const count = (v) => (Number.isInteger(v) && v >= 0 ? v : 0);
 
-// /api/loose-ends → counts per repository and file/stash names only: never a diff, a path's
-// contents or a commit hash. `stale` is Burst's own count of what is older than `staleHours`.
+// /api/loose-ends → counts per repository and uncommitted file names only: never a diff, a path's
+// contents, a commit hash, a stash's subject or Burst's free-text error (`reason` is a fixed word
+// matched from it). `stale` is Burst's own count of what is older than `staleHours`.
+const LOOSE_ENDS_REASONS = Object.freeze(['unreadable', 'not-a-repo', 'timeout']);
+function looseEndsReason(err) {
+  const e = typeof err === 'string' ? err.toLowerCase() : '';
+  if (!e) return '';
+  if (/timed? ?out|deadline/.test(e)) return 'timeout';
+  if (/not a git repo|not a repo|no such|does not exist|not found/.test(e)) return 'not-a-repo';
+  return 'unreadable';
+}
 function normalizeLooseEnds(raw) {
   const r = asObj(raw);
   const report = asObj(r.report);
@@ -258,8 +268,7 @@ function normalizeLooseEnds(raw) {
       unpushed: count(repo.ahead),
       stashes: stashes.length,
       names: files.slice(0, 20).map((f) => path.basename(text(asObj(f).path, 1000))).filter(Boolean),
-      stashNames: stashes.slice(0, 10).map((st) => text(asObj(st).subject, 120)).filter(Boolean),
-      error: text(repo.error, 300),
+      reason: looseEndsReason(repo.error),
     };
   }).filter((repo) => repo.path);
   return {
@@ -689,5 +698,5 @@ function createBurstClient({ home = os.homedir(), platform = process.platform, i
 
 module.exports = {
   createBurstClient, isAllowed, parseAdminAddress, atLeast, parseVersion, scrub, capabilitiesFor, CAPABILITY_FLOORS, CAPABILITY_NAMES, GET_ALLOW, MUTATE_ALLOW, LABEL, CONSOLE_LABEL,
-  normalizeLooseEnds, normalizeKeepAwake, normalizeMods, normalizeFinder, KEEP_AWAKE_MODES, MOD_ACTIONS, PANEL_ACTIONS, FINDER_ACTIONS, FINDER_KEYS,
+  normalizeLooseEnds, normalizeKeepAwake, normalizeMods, normalizeFinder, LOOSE_ENDS_REASONS, KEEP_AWAKE_MODES, MOD_ACTIONS, PANEL_ACTIONS, FINDER_ACTIONS, FINDER_KEYS,
 };

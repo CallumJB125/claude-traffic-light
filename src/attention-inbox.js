@@ -12,20 +12,27 @@
   const OPTIONS_MAX = 4;
   const str = (v, max) => typeof v === 'string' && v.length <= max ? v : '';
   const ageOf = (ms, now) => Number.isFinite(ms) ? Math.max(0, now - ms) : null;
-  // One Burst row, at most (src/home-alerts.js burstCard): when Burst's statusView names a next step
-  // (not running, update, repair…), when loose ends are reported, or when the chip says a limit is near.
-  // The row's one button runs that step through main's consent dialog, or opens Usage & Burst.
+  // One Burst row, at most (src/home-alerts.js burstCard): only when Burst is in a state worth a hand
+  // (broken, too old, CA/hosts/console trouble, a gateway that stopped answering or missed three checks in
+  // a row, an update available), when loose ends are reported, or when the chip says a limit is near.
+  // Never for not installed, off on purpose, checking or unsupported. The row's one button runs that
+  // step through main's consent dialog, or opens Usage & Burst. `dimmed` mirrors the card (stale state).
+  const ATTENTION_KINDS = Object.freeze(['broken', 'too_old', 'ca_untrusted', 'hosts_missing', 'console_down', 'gateway_stale']);
+  const NEVER_KINDS = Object.freeze(['not_installed', 'checking', 'unsupported']);
   function burstRow(b) {
     if (!b || typeof b !== 'object') return null;
     const v = b.view && typeof b.view === 'object' ? b.view : null;
-    const action = v && v.action && str(v.action.kind, 40) && str(v.action.label, 60) ? { kind: v.action.kind, label: v.action.label } : null;
+    if (v && NEVER_KINDS.includes(v.kind)) return null;
+    const flagged = !!v && (ATTENTION_KINDS.includes(v.kind) || v.attention === true);
+    const action = flagged && v.action && str(v.action.kind, 40) && str(v.action.label, 60) ? { kind: v.action.kind, label: v.action.label } : null;
     const loose = b.looseEnds && typeof b.looseEnds === 'object' && Number.isSafeInteger(b.looseEnds.repos) && b.looseEnds.repos > 0 ? b.looseEnds : null;
     const limitNear = !!(v && v.chip && v.chip.label === 'Limit near');
     if (!action && !loose && !limitNear) return null;
+    const dimmed = !!(v && v.dimmed === true);
     const open = { kind: 'navigate', destination: 'optimiser', label: 'Open Usage & Burst' };
-    if (action) return { kind: 'burst', title: str(v.headline, 200) || 'Claude Burst needs attention', meta: str(v.detail, 400), ageMs: null, action: { kind: 'burst', op: action.kind, label: action.label }, key: `burst:${action.kind}` };
-    if (limitNear) return { kind: 'burst', title: 'Claude is near its limit', meta: str(v.detail, 400) || 'Burst reports rejected requests or primary failures; it moves to your secondary provider when the limit is hit.', ageMs: null, action: open, key: 'burst:limit-near' };
-    return { kind: 'burst', title: `Loose ends in ${loose.repos} ${loose.repos === 1 ? 'repository' : 'repositories'}`, meta: `${str(loose.text, 300) || 'Uncommitted files, unpushed commits or stashes.'} Commit or push before closing those sessions.`, ageMs: null, action: open, key: 'burst:loose-ends' };
+    if (action) return { kind: 'burst', title: str(v.headline, 200) || 'Claude Burst needs attention', meta: str(v.detail, 400), ageMs: null, dimmed, action: { kind: 'burst', op: action.kind, label: action.label }, key: `burst:${action.kind}` };
+    if (limitNear) return { kind: 'burst', title: 'Claude is near its limit', meta: str(v.detail, 400) || 'Burst reports rejected requests or primary failures; it moves to your secondary provider when the limit is hit.', ageMs: null, dimmed, action: open, key: 'burst:limit-near' };
+    return { kind: 'burst', title: `Loose ends in ${loose.repos} ${loose.repos === 1 ? 'repository' : 'repositories'}`, meta: `${str(loose.text, 300) || 'Uncommitted files, unpushed commits or stashes.'} Commit or push before closing those sessions.`, ageMs: null, dimmed, action: open, key: 'burst:loose-ends' };
   }
   // team: rows from the hub inbox (src/team-inbox.js items()), already shaped; each carries
   // its Open action and the keys Mark read sends back ({read:{kind:'inbox-read', ids}}).
@@ -61,7 +68,7 @@
     rows.sort((a, b) => SEVERITY[a.kind] - SEVERITY[b.kind] || Number(b.late === true) - Number(a.late === true) || (b.ageMs ?? -1) - (a.ageMs ?? -1));
     return { items: rows.slice(0, MAX), total: rows.length, label: k => LABEL[k] };
   }
-  const api = { compose, burstRow, SEVERITY, LABEL, MAX, OPTIONS_MAX, TEAM_KINDS };
+  const api = { compose, burstRow, SEVERITY, LABEL, MAX, OPTIONS_MAX, TEAM_KINDS, ATTENTION_KINDS };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.PlexiformInbox = Object.freeze(api);
 })(typeof globalThis !== 'undefined' ? globalThis : this);

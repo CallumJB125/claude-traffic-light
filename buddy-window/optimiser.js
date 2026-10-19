@@ -41,7 +41,10 @@ function createOptimiser({
     const b = burst();
     return b ? b.snapshot() : { d: { kind: platform === 'darwin' ? 'checking' : 'unsupported' }, url: null };
   }
-  const signature = ({ d }) => `${d.kind}|${d.state ? d.state.version : ''}|${d.pid ?? ''}|${(d.misses || 0) >= 3}`;
+  // The card's view rides along (burst-ipc snapshot().view): it carries the states the raw detection cannot
+  // (gateway_stale from the last good detection, console_down, CA/hosts), so the page changes with them.
+  const viewOf = (snap) => (snap && snap.view && typeof snap.view === 'object' ? snap.view : null);
+  const signature = (snap) => { const { d } = snap; const v = viewOf(snap); return `${d.kind}|${d.state ? d.state.version : ''}|${d.pid ?? ''}|${(d.misses || 0) >= 3}|${v ? v.kind : ''}`; };
 
   function drop() {
     const v = view;
@@ -125,7 +128,7 @@ function createOptimiser({
 
   // The handshake result decides everything: only `present` loads the dashboard.
   function apply(snap, { reload = false } = {}) {
-    let st = Embed.pageState(snap.d, { platform });
+    let st = Embed.pageState(snap.d, { platform, view: viewOf(snap) });
     let o = null;
     if (st.mode === 'ready') {
       try { o = new URL(snap.url).origin; } catch { /* no usable address */ }

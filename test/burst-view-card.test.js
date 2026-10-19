@@ -15,7 +15,7 @@ const read = (f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
 const MAC = FIXTURE['/api/mac'];
 const MODS = FIXTURE['/api/mod-status'];
 const state = (over = {}) => ({ version: '0.20.36', mode: 'base-url', active: true, route: 'PRIMARY', until: '', rejected: [], primaryFailures: 0, caTrusted: false, hostsEntry: false, remoteControlExpected: false, compaction: null, ...over });
-const present = (caps = { keepAwake: true, mods: true, looseEnds: true }, over = {}, extra = {}) => ({ kind: 'present', installed: true, capabilities: { upgradeStatus: true, ...caps }, upgrade: null, state: state(over), ...extra });
+const present = (caps = { keepAwake: true, mods: true, looseEnds: true }, over = {}, extra = {}) => ({ kind: 'present', installed: true, capabilities: { upgradeStatus: true, remoteControl: caps.remoteControl ?? true, ...caps }, upgrade: null, state: state(over), ...extra });
 const card = (d, o = {}) => View.cardView(d, { platform: 'darwin', mac: MAC, modStatus: MODS, ...o });
 
 test('cardView = statusView + keepAwake, remoteControl, mods from the v0.20.36 fixture', () => {
@@ -61,11 +61,11 @@ test('mods: one Install or Update action per mod, action kinds mod-install / mod
 });
 
 test('hidden when the capability is false: a 0.19 Burst shows the plain card, as does a Burst that is off or not installed', () => {
-  const old = card(present({ keepAwake: false, mods: false, looseEnds: false }, { version: '0.19.0' }));
+  const old = card(present({ keepAwake: false, mods: false, looseEnds: false, remoteControl: false }, { version: '0.19.0' }));
   assert.equal(old.kind, 'on');
   assert.equal(old.keepAwake, null);
   assert.equal(old.mods, null);
-  assert.deepEqual(old.remoteControl, { expected: false, label: 'Off while Burst is on', text: old.remoteControl.text }, 'the state key is whitelisted on every version, so the row stays');
+  assert.equal(old.remoteControl, null, 'verifier fix 4: a 0.19 Burst never reports Remote Control, so there is no row');
   assert.equal(card(present({ keepAwake: false, mods: false }, { remoteControlExpected: undefined })).remoteControl, null);
   for (const d of [{ kind: 'not_installed' }, { kind: 'checking' }, { kind: 'unreachable', installed: true, misses: 1 }, { kind: 'unsupported' }]) {
     const v = card(d);
@@ -105,14 +105,96 @@ test('burst:status carries the card rows from cached reads, gated on the detecte
   assert.deepEqual(none, { ok: false, reason: 'This Burst has no loose-ends check (needs v0.20 or newer).', report: null });
 });
 
-test('This Mac page draws the rows and sends a mod action as burst-action with the kind and the mod id only', () => {
+test('This Mac page draws the rows and sends a mod action as burst:action with the kind and the mod id only', () => {
   const page = read('buddy-window/account.js');
   assert.match(page, /factLine\('Keep awake', v\.keepAwake\.label, v\.keepAwake\.text\)/);
   assert.match(page, /factLine\('Remote Control', v\.remoteControl\.label, v\.remoteControl\.text\)/);
   assert.match(page, /for \(const m of v\.mods \|\| \[\]\)/);
-  assert.match(page, /api\.burstRunAction\(m\.action\.kind, m\.action\.args\)/);
+  assert.match(page, /api\.burstAction\(m\.action\.kind, '', m\.action\.args\)/, 'verifier fix 2: mod kinds are burst:action kinds (ACTION_KINDS), not allow-list ids');
   assert.match(page, /drawFacts\(v\);/);
   const bridge = read('buddy-window/account-preload.js');
-  assert.match(bridge, /burstRunAction: \(kind, args\) => ipcRenderer\.invoke\('burst-action', str\(kind\), Object\.fromEntries\(/);
+  assert.match(bridge, /burstAction: \(kind, mode, args\) => ipcRenderer\.invoke\('burst:action', \{ kind: str\(kind\), mode: str\(mode\), \.\.\.\(args && typeof args === 'object' \? \{ args: strArgs\(args\) \} : \{\}\) \}\)/);
   assert.match(bridge, /\/\^\[a-z\]\{1,20\}\$\/\.test\(k\) && typeof v === 'string' && v\.length <= 60/, 'args are short string fields only');
+});
+
+// Verifier fix 2, end to end: a click on a mod row's button reaches burst-ipc's `burst:action` handler as
+// {kind:'mod-install', args:{mod}} and lands on the right mutation after exactly one native dialog. Before,
+// the row went over `burst-action` with the kind as an id, which only knows allow-list ids: "Unknown action."
+test('This Mac page: clicking Install on a mod row opens one dialog and sends panel-install (usage panel) or mod-action (session mod)', async () => {
+  const { JSDOM } = require('jsdom');
+  const handlers = {};
+  let dialogs = 0;
+  const mutated = [];
+  const detect = present({ keepAwake: true, mods: true, looseEnds: true });
+  const client = { detect: async () => detect, adminUrl: () => 'http://127.0.0.1:7788/', mac: async () => ({ ...MAC, panel: { installed: false } }), modStatus: async () => ({ ...MODS, installed: false }), mutate: async (id, args) => { mutated.push([id, args]); return { data: null }; } };
+  Ipc.register({ utilityHandle: (ch, allowed, fn) => { handlers[ch] = (e, ...a) => (allowed(e) ? fn(e, ...a) : null); }, settingsOnly: () => true, isMac: true, client, home: '/nonexistent', scriptDir: '/nonexistent', launch: async () => {}, dialog: { showMessageBox: async () => { dialogs++; return { response: 1 }; } }, shell: { openExternal: async () => {} }, snapshotFile: null });
+  await handlers['burst:status']({});
+  await new Promise((r) => setTimeout(r, 10));
+  const dom = new JSDOM('<!doctype html><main id="acct"></main>', { url: 'file:///account.html?screen=thismac', runScripts: 'outside-only', pretendToBeVisual: true });
+  const unexpected = [];
+  dom.window.buddyAccount = new Proxy({
+    state: async () => ({ ok: true, brand: { name: 'Plexiform', copy: {}, defaultHost: 'app.plexiform.dev' }, signedInHubs: [], accounts: [], hubs: [], workCapture: null }),
+    onChanged() {},
+    burstStatus: () => handlers['burst:status']({}),
+    burstAction: (kind, mode, args) => handlers['burst:action']({}, { kind: String(kind), mode: String(mode), ...(args && typeof args === 'object' ? { args } : {}) }),
+    burstRunAction: (...a) => { unexpected.push(a); return Promise.resolve({ ok: false, error: 'Unknown action.' }); },
+    keepAwakeGet: async () => ({ on: false, label: '' }), macView: async () => null, burstSetCompaction: async () => ({ ok: true }),
+  }, { get: (t, k) => t[k] ?? (async () => ({ ok: true })) });
+  dom.window.eval(read('buddy-window/account.js'));
+  await new Promise((r) => setTimeout(r, 30));
+  const d = dom.window.document;
+  const rows = [...d.querySelectorAll('[data-mod]')];
+  assert.deepEqual(rows.map((r) => r.dataset.mod), ['burst-session', 'usage-panel']);
+  rows.find((r) => r.dataset.mod === 'usage-panel').querySelector('button[data-action]').click();
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(dialogs, 1, 'one consent dialog');
+  assert.deepEqual(mutated, [['panel-install', { action: 'install' }]]);
+  const status = d.querySelector('.acct-section.burst-card p[role="status"]') || [...d.querySelectorAll('p[role="status"]')].find((p) => /Installing/.test(p.textContent));
+  assert.ok(status && /Installing Usage panel/.test(status.textContent), 'the row reports what started, not "Unknown action."');
+  rows.find((r) => r.dataset.mod === 'burst-session').querySelector('button[data-action]').click();
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(dialogs, 2);
+  assert.deepEqual(mutated[1], ['mod-action', { action: 'install' }]);
+  assert.deepEqual(unexpected, [], 'nothing went over burst-action by kind');
+  // The card root is the Burst section; it is not dimmed while Burst answers (verifier fix 7).
+  const sec = [...d.querySelectorAll('.acct-section')].find((x) => x.querySelector('h2') && x.querySelector('h2').textContent === 'Claude Burst');
+  assert.ok(sec && !sec.classList.contains('dimmed'));
+  dom.window.close();
+});
+
+
+// Verifier fix 4: the Remote Control row is built only for a Burst that is on, in a known mode, with the
+// `remoteControl` capability (0.20+). 0.19, off and an unknown mode give null, so the card never claims it.
+test('remoteControl row: only on + known mode + 0.20 capability; 0.19, off and an unknown mode give null', () => {
+  const on = card(present({ keepAwake: false, mods: false }, { mode: 'transparent', remoteControlExpected: true }));
+  assert.equal(on.remoteControl.label, 'Expected to work');
+  assert.equal(card(present({ keepAwake: false, mods: false }, { mode: 'base-url', remoteControlExpected: false })).remoteControl.label, 'Off while Burst is on');
+  assert.equal(card(present({ keepAwake: false, mods: false, remoteControl: false }, { version: '0.19.0', remoteControlExpected: false })).remoteControl, null, '0.19');
+  assert.equal(card(present({ keepAwake: false, mods: false }, { active: false, remoteControlExpected: false })).remoteControl, null, 'off');
+  assert.equal(card(present({ keepAwake: false, mods: false }, { mode: '', remoteControlExpected: false })).remoteControl, null, 'unknown mode');
+  assert.equal(card(present({ keepAwake: false, mods: false }, { mode: 'weird', remoteControlExpected: true })).remoteControl, null, 'unknown mode');
+  const { CAPABILITY_FLOORS, capabilitiesFor } = require('../src/burst-client.js');
+  assert.deepEqual(CAPABILITY_FLOORS.remoteControl, [0, 20, 0]);
+  assert.equal(capabilitiesFor('0.19.0').remoteControl, false);
+  assert.equal(capabilitiesFor('0.20.36').remoteControl, true);
+});
+
+// Verifier fix 7: the card root gets class `dimmed` (CSS opacity .6) when the view is dimmed (gateway_stale).
+test('This Mac page: the Burst card root carries class dimmed when the view is, and its headline is the view\'s', async () => {
+  const { JSDOM } = require('jsdom');
+  const stale = { ok: true, kind: 'gateway_stale', headline: 'Burst is not responding', detail: 'Showing the last known state from 9 s ago.', chip: { tone: 'amber', label: 'Not responding' }, actions: [{ kind: 'repair', label: 'Repair', primary: true }], action: { kind: 'repair', label: 'Repair' }, dimmed: true, compaction: null, keepAwake: null, remoteControl: null, mods: null, nextPollMs: 0 };
+  const dom = new JSDOM('<!doctype html><main id="acct"></main>', { url: 'file:///account.html?screen=thismac', runScripts: 'outside-only', pretendToBeVisual: true });
+  dom.window.buddyAccount = new Proxy({
+    state: async () => ({ ok: true, brand: { name: 'Plexiform', copy: {}, defaultHost: 'app.plexiform.dev' }, signedInHubs: [], accounts: [], hubs: [], workCapture: null }),
+    onChanged() {}, burstStatus: async () => stale, keepAwakeGet: async () => ({ on: false, label: '' }), macView: async () => null,
+  }, { get: (t, k) => t[k] ?? (async () => ({ ok: true })) });
+  dom.window.eval(read('buddy-window/account.js'));
+  await new Promise((r) => setTimeout(r, 30));
+  const d = dom.window.document;
+  const sec = [...d.querySelectorAll('.acct-section')].find((x) => x.querySelector('h2') && x.querySelector('h2').textContent === 'Claude Burst');
+  assert.ok(sec, 'the Burst card');
+  assert.ok(sec.classList.contains('dimmed'), 'dimmed class on the card root');
+  assert.equal(sec.querySelector('.acct-name').textContent, 'Burst is not responding', 'per-state headline (verifier fix 8)');
+  assert.match(read('buddy-window/shell.css'), /\.acct-section\.dimmed \{ opacity: \.6; \}/);
+  dom.window.close();
 });

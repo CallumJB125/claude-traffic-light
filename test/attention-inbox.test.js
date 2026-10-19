@@ -80,13 +80,16 @@ test('inbox: one Burst card when statusView has an action, with that action as i
   const view = (over = {}) => ({ kind: 'on', headline: 'Claude Burst', detail: 'On, base-url mode, version 0.20.36. Route: primary.', chip: { tone: 'green', label: 'Primary' }, action: null, dimmed: false, ...over });
   assert.deepEqual(compose({ alerts: { burst: { view: view(), looseEnds: null } }, now }).items, [], 'healthy: nothing');
   assert.deepEqual(compose({ alerts: { burst: null }, now }).items, [], 'no Burst on this computer: nothing');
-  const update = compose({ alerts: { burst: { view: view({ action: { kind: 'update', label: 'Update' }, detail: 'An update is ready.' }), looseEnds: null } }, now });
+  const update = compose({ alerts: { burst: { view: view({ action: { kind: 'update', label: 'Update' }, detail: 'An update is ready.', attention: true }), looseEnds: null } }, now });
   assert.equal(update.items.length, 1);
-  assert.deepEqual(update.items[0], { kind: 'burst', title: 'Claude Burst', meta: 'An update is ready.', ageMs: null, action: { kind: 'burst', op: 'update', label: 'Update' }, key: 'burst:update' });
+  assert.deepEqual(update.items[0], { kind: 'burst', title: 'Claude Burst', meta: 'An update is ready.', ageMs: null, dimmed: false, action: { kind: 'burst', op: 'update', label: 'Update' }, key: 'burst:update' });
   assert.equal(update.label('burst'), 'Burst');
-  const down = compose({ alerts: { burst: { view: view({ kind: 'off', headline: 'Claude Burst', detail: 'Not responding: Burst is installed but its gateway did not answer just now.', chip: { tone: 'amber', label: 'Not responding' }, action: { kind: 'retry', label: 'Check again' } }), looseEnds: { repos: 3, text: 'x' } } }, now });
+  // One missed poll (kind off, no attention flag) is never a card, even with an action; three misses (flagged) are, and win over loose ends.
+  const blip = compose({ alerts: { burst: { view: view({ kind: 'off', headline: 'Burst is not responding', detail: 'Not responding: Burst is installed but its gateway did not answer just now.', chip: { tone: 'amber', label: 'Not responding' }, action: { kind: 'retry', label: 'Check again' } }), looseEnds: null } }, now });
+  assert.deepEqual(blip.items, [], 'a single missed poll is not a card');
+  const down = compose({ alerts: { burst: { view: view({ kind: 'off', headline: 'Burst is not responding', detail: 'Not responding: several checks in a row.', chip: { tone: 'amber', label: 'Not responding' }, action: { kind: 'enable', label: 'Turn on' }, attention: true }), looseEnds: { repos: 3, text: 'x' } } }, now });
   assert.equal(down.items.length, 1, 'never two Burst cards: the next step wins over loose ends');
-  assert.equal(down.items[0].action.op, 'retry');
+  assert.equal(down.items[0].action.op, 'enable');
 });
 
 test('inbox: loose ends alone, or "Limit near" alone, give one Burst card whose button opens Usage & Burst; ordered with blockers', () => {
@@ -100,11 +103,41 @@ test('inbox: loose ends alone, or "Limit near" alone, give one Burst card whose 
   assert.deepEqual(compose({ alerts: { burst: { view: healthy, looseEnds: { repos: 0 } } }, now }).items, [], 'zero repositories is not loose');
   const mixed = compose({
     needs: { items: [{ headline: 'Allow git push?', kind: 'permission' }] },
-    alerts: { stuck: [{ handle: 's1', title: 'Stuck', meta: '', canOpen: true }], burst: { view: { ...healthy, action: { kind: 'repair', label: 'Repair' } } } },
+    alerts: { stuck: [{ handle: 's1', title: 'Stuck', meta: '', canOpen: true }], burst: { view: { ...healthy, kind: 'broken', action: { kind: 'repair', label: 'Repair' } } } },
     morning: { items: [{ title: 'Nightly', state: 'failed', summary: 'exit 1' }] },
     now,
   });
   assert.deepEqual(mixed.items.map((i) => i.kind), ['approval', 'blocker', 'burst', 'failed'], 'a Burst that needs a hand sits with the blockers, after approvals');
   // Malformed views never invent a card.
-  for (const bad of [{ view: { action: { kind: 'x'.repeat(41), label: 'y' } } }, { view: { action: { kind: 'update' } } }, 'nope', { looseEnds: { repos: 'many' } }]) assert.deepEqual(compose({ alerts: { burst: bad }, now }).items, [], JSON.stringify(bad));
+  for (const bad of [{ view: { kind: 'broken', action: { kind: 'x'.repeat(41), label: 'y' } } }, { view: { kind: 'broken', action: { kind: 'update' } } }, 'nope', { looseEnds: { repos: 'many' } }]) assert.deepEqual(compose({ alerts: { burst: bad }, now }).items, [], JSON.stringify(bad));
+});
+
+// Verifier fix 3: the Home card shows only for a state worth a hand. Each kind is tested.
+test('inbox: Burst row only for broken, too_old, ca_untrusted, hosts_missing, console_down, gateway_stale, three misses, an update, loose ends or Limit near; never not_installed, off, checking, unsupported', () => {
+  const { burstRow, ATTENTION_KINDS } = require('../src/attention-inbox.js');
+  assert.deepEqual(ATTENTION_KINDS, ['broken', 'too_old', 'ca_untrusted', 'hosts_missing', 'console_down', 'gateway_stale']);
+  const v = (kind, over = {}) => ({ kind, headline: `h ${kind}`, detail: 'd', chip: { tone: 'amber', label: 'x' }, action: { kind: 'repair', label: 'Repair' }, dimmed: false, ...over });
+  for (const kind of ATTENTION_KINDS) {
+    const r = burstRow({ view: v(kind), looseEnds: null });
+    assert.ok(r, kind); assert.equal(r.title, `h ${kind}`); assert.deepEqual(r.action, { kind: 'burst', op: 'repair', label: 'Repair' });
+  }
+  // unreachable with misses >= 3 and an update arrive as kind off/on with the card's `attention` flag (src/home-alerts.js).
+  assert.equal(burstRow({ view: v('off', { attention: true, action: { kind: 'enable', label: 'Turn on' } }) }).action.op, 'enable', 'three misses');
+  assert.equal(burstRow({ view: v('on', { attention: true, action: { kind: 'update', label: 'Update' } }) }).action.op, 'update', 'update available');
+  assert.equal(burstRow({ view: v('on', { action: null, chip: { tone: 'amber', label: 'Limit near' } }) }).key, 'burst:limit-near');
+  assert.equal(burstRow({ view: v('on', { action: null, chip: { tone: 'green', label: 'Primary' } }), looseEnds: { repos: 1, text: 't' } }).key, 'burst:loose-ends');
+  // Never: not installed, off on purpose, checking, unsupported, one missed poll (off with an action but no flag).
+  for (const kind of ['not_installed', 'off', 'checking', 'unsupported']) assert.equal(burstRow({ view: v(kind, { action: { kind: 'install', label: 'Install' } }), looseEnds: null }), null, kind);
+  for (const kind of ['not_installed', 'checking', 'unsupported']) assert.equal(burstRow({ view: v(kind, { chip: { tone: 'amber', label: 'Limit near' } }), looseEnds: { repos: 2, text: 't' } }), null, `${kind}: not even for loose ends or the chip`);
+  assert.equal(burstRow({ view: v('on', { action: { kind: 'uninstall', label: 'Uninstall…' } }) }), null, 'healthy on: an action without the flag is not a card');
+  assert.equal(burstRow({ view: v('on', { action: null, updateAvailable: false }) }), null);
+});
+
+// Verifier fix 7: the row carries `dimmed` from the card (stale last-known state) for the page to render as a class.
+test('inbox: the Burst row mirrors the card\'s dimmed flag', () => {
+  const { burstRow } = require('../src/attention-inbox.js');
+  const stale = burstRow({ view: { kind: 'gateway_stale', headline: 'Burst is not responding', detail: 'd', chip: null, action: { kind: 'repair', label: 'Repair' }, dimmed: true } });
+  assert.equal(stale.dimmed, true);
+  assert.equal(burstRow({ view: { kind: 'broken', headline: 'h', detail: 'd', chip: null, action: { kind: 'repair', label: 'Repair' }, dimmed: false } }).dimmed, false);
+  assert.equal(burstRow({ view: { kind: 'on', headline: 'h', detail: 'd', chip: null, action: null, dimmed: 'yes' }, looseEnds: { repos: 1, text: 't' } }).dimmed, false, 'only a real true');
 });
