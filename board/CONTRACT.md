@@ -1146,3 +1146,12 @@ Local Electron IPC between main and the widget window (`index.html`, `preload.js
 | `widget:lane-event` | main → widget (`webContents.send`) | `{id, kind, sessionId, inputId, text ≤90, at}`; `kind` ∈ `needs-you`\|`finished`\|`stuck`\|`collision`\|`ci-failed`\|`teammate` | One per new thing seen in main's in-memory sources (session rows, collision alerts, GitHub signals, teammates' look requests, run budget notices); nothing already present at startup is announced. `text` is untrusted (folders, repos, teammate names): the widget renders it with `textContent` only. The widget keeps the last 3 for 8 s, deduped by `(kind, sessionId)` |
 | `widget:rings` | main → widget (`webContents.send`) | `{show, turn:{show, fraction 0..1, over, band, label}, spend:{show, fraction 0..1, over, band, label}}`; `band` ∈ `green`\|`amber`\|`red`\|`null` | Sent only when it changes. Turn: the newest working turn against the median of the last ≤30 closed turns (≥3 needed, turns under 5 s ignored, kept in memory only). Spend: today against `spend.dailyBudget`, amber from `spend.warnAt` |
 | `widget:lane-state` | widget → main (`invoke`) | — → `{lane:[{id, kind, text, age, fading, sessionId, inputId}], rings}` or `null` | Answers the widget's own `webContents` only; a reloaded widget catches up with it |
+
+## Desktop widget IPC: sprite packs
+
+Main-process handlers in `src/sprite-pack-main.js`, callable from the widget, the Lights editor and Settings (any other sender gets `null`). Packs live in `~/.plexiform/sprites/<pack>/pack.json` and are validated by `src/sprite-pack.js` on every call; no network.
+
+| Channel | Args | Returns | Notes |
+|---|---|---|---|
+| `widget:sprite-packs` | — | `{packs:[{name, version, fps, bytes, frames:{state: count}}], errors:[{pack, reason}], active: name\|null, current: {name, fps, frames:{state:[dataUrl]}}\|null}` | `current` is the active pack's frames as `data:image/png` or `data:image/svg+xml` base64 URLs; an active pack that no longer validates is `current:null` plus an error, and the widget keeps the drawn character |
+| `widget:use-sprite-pack` | `name: string\|null` | `{ok, active, reason?}` | Saves `config.spritePack` only for a pack that validates now; `null` restores the drawn character. Pushes `sprite-pack:changed` to the widget |

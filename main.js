@@ -901,10 +901,7 @@ function computeState(opts = {}) {
     ? Rules.resolve(config.rules, [{ signal: 'permission-ask', cwd: pending[0].cwd }], Date.now(), env)
     : Rules.resolve(config.rules, sessions, Date.now(), env);
   const agentCount = Rules.liveAgents(sessions).length;
-  if (config.seasonal) {
-    if (look.costume === 'none') look.costume = Rules.seasonalCostume() || 'none';
-    if (look.effect === 'none') look.effect = Rules.seasonalEffect() || 'none';
-  }
+  require('./src/seasonal-main.js').apply(look, owned, config);
   const minions = config.showAgents ? Rules.filterAgentKinds(Rules.liveAgents(sessions), config.agentKinds).slice(0, 32) : [];
   const sNote = spendNote(config.rules, fired, sessions, spend);
   const stuck = Stuck.summary(sessions);
@@ -1993,6 +1990,7 @@ ipcMain.handle('account-open', (e, which) => {
   return true;
 });
 const widgetOnly = (e) => fromPage(e, win?.webContents);
+require('./src/sprite-pack-main.js').register({ ipcMain, allowed: (e) => widgetOnly(e) || widgetConfigSender(e) || settingsOnly(e), home: os.homedir(), loadConfig, saveConfig, notify: () => { if (win && !win.isDestroyed()) win.webContents.send('sprite-pack:changed'); } });
 const teamHint = () => TeamEntry.hintFor(accountSummary(), loadConfig().hints?.teamSeen === true);
 ipcMain.handle('team-hint', (e) => widgetOnly(e) ? teamHint() : null);
 require('./src/widget-cards-main.js').install({ ipcMain, allowed: widgetOnly, getSessions: () => ({ sessions: aggregateState().sessions || [] }), getSpend: async (id) => WorkCost.sessionSpend(await getUsageTurns(), { provider: 'claude', session_id: id }), config: { load: loadConfig, save: saveConfig } }); // privacy-flow: widget-session-card

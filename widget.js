@@ -1,5 +1,13 @@
 // ambient: the idle loops tick on a slow clock, not every display frame
 const rig = mountRig(document.getElementById('housing'), { ambient: true });
+// A user sprite pack (Settings or Lights pick it; main validates the files)
+// replaces the drawn character; any failure leaves the built-in one.
+function loadSpritePack() {
+  if (!window.spritePacks) return;
+  window.spritePacks.list().then((r) => rig.setSpritePack(r && r.current ? r.current : null)).catch(() => rig.setSpritePack(null));
+}
+loadSpritePack();
+if (window.spritePacks) window.spritePacks.onChange(loadSpritePack);
 rig.svg.classList.add('breathes');
 // Main does the window travel (roam, knock hops, garden, drag glide), so
 // it has to hear about reduced motion from here, now and on every change.
