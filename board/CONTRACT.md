@@ -1176,3 +1176,13 @@ Local Electron IPC only; nothing reaches a hub or the network. The index itself 
 | `memory:search` | `{q, tool, repo, from, to}` | `{ok, hits:[{tool, sid, title, repo, branch, cwd, ts, role, snippet, matches}], limited, since, tookMs, days}` | Search everything page only (`fromPage(e,'memory')`). `snippet` marks matches with U+0002/U+0003; untrusted text, rendered with `textContent` only |
 | `memory:open-timeline` | `{tool, sid}` | `{ok}` | Search everything page only. `tool` ∈ the memory tools, `sid` matches `^[\w.:-]{1,200}$`, else `{ok:false}`. Opens the Session timeline page for `{adapter, sessionId}` (`src/session-timeline-main.js openSession`); a muted project shows no timeline |
 | `search:open-page` | — | `boolean` | Sessions (Overview) page only, from the ⌘K command "Search past sessions"; opens Search everything. Any argument → `false` |
+
+## Desktop Lights IPC: rule notify (`src/rule-notify-main.js`)
+
+Local Electron IPC only; no network, no new file. Rule notifications are desktop `Notification`s built on this machine from the rule's name and the signal's label; nothing is sent to the hub or a phone (the hub's phone push carries approval pings only, so `phone` sends nothing until a paired-device path for other notifications exists).
+
+| Channel | Sender | Request | Response |
+|---|---|---|---|
+| `rule-notify:status` | the Lights window only (`widgetConfigSender`) | none | `{desktop: true, phone: boolean, phoneNote: 'Pair a phone first'\|null}`; the editor greys out the phone choices while `phone` is false |
+
+New rule keys, saved with the rules through `save-config` and checked by `rules.js normalizeRule`: `then.notify` (`desktop`\|`phone`\|`both`, absent = none) and `when.forMinutes` (integer 1-1440, absent = fire at once; the session's signal must have held that long since its `updatedAt`). Firing is edge-triggered per session, at most one per rule per 2 minutes, and held (dropped) by snooze, quiet hours, "Quiet for 30 minutes" and project mutes.

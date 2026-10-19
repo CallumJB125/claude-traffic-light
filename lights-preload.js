@@ -31,6 +31,8 @@ contextBridge.exposeInMainWorld('lightsApi', {
   costRollup: (range) => ipcRenderer.invoke('cost-rollup', range),
   costGuard: { report: () => ipcRenderer.invoke('cost-guard:report'), set: (v) => ipcRenderer.invoke('cost-guard:set', v), resume: () => ipcRenderer.invoke('cost-guard:resume') },
   previewSound: (name) => ipcRenderer.invoke('preview-sound', name),
+  // Rule notify (src/rule-notify-main.js): {desktop, phone, phoneNote}; phone stays off until a paired-device path exists.
+  ruleNotifyStatus: () => ipcRenderer.invoke('rule-notify:status'),
   chooseSoundFile: () => ipcRenderer.invoke('choose-sound-file'),
   exportRules: (rules) => ipcRenderer.invoke('export-rules', rules),
   importRules: () => ipcRenderer.invoke('import-rules'),
