@@ -79,6 +79,7 @@ test('actual main My day opens own work and Calendar/Timeline persist real plans
     await expect.poll(() => pane('location.hash'), { timeout: 15000 }).toBe(`#card=${id}`);
     await sidebar.evaluate(() => window.buddy.select('board:calendar'));
     await expect.poll(() => pane("document.querySelector('.calendar-grid')?.getAttribute('aria-label')"), { timeout: 15000 }).toBe('month calendar');
+    await expect.poll(() => pane(`!!document.querySelector('[data-action="planning-edit"][data-card="${id}"]')`)).toBe(true);
     await pane(`document.querySelector('[data-action="planning-edit"][data-card="${id}"]').click()`);
     await expect.poll(() => pane("document.querySelector('.planning-editor h2')?.textContent")).toBe(`Plan ${own.body.card.key}`);
     await pane(`(() => { const form = document.querySelector('[data-form="planning-card"]'); form.elements.start.value = '${day(1)}'; form.elements.due.value = '${day(3)}'; form.elements.dependencies.querySelector('[value="${predecessorId}"]').selected = true; form.requestSubmit(); })()`);
@@ -93,7 +94,11 @@ test('actual main My day opens own work and Calendar/Timeline persist real plans
     await expect.poll(() => pane("document.querySelector('.calendar-grid')?.getAttribute('aria-label')")).toBe('month calendar');
     const boardPage = app.windows().find(page => page.url().startsWith(`${f.h.base}/?`));
     expect(boardPage).toBeTruthy();
-    await boardPage.locator(`[data-planning-card="${id}"]`).dragTo(boardPage.locator(`[data-planning-day="${day(6)}"]`));
+    // A real mouse drag in steps: dragTo's single jump does not start Chromium's
+    // HTML5 drag session inside the embedded board view (no dragstart fires).
+    { const a = await boardPage.locator(`[data-planning-card="${id}"]`).boundingBox(); const b = await boardPage.locator(`[data-planning-day="${day(6)}"]`).boundingBox();
+      await boardPage.mouse.move(a.x + a.width / 2, a.y + a.height / 2); await boardPage.mouse.down();
+      await boardPage.mouse.move(a.x + a.width / 2 + 10, a.y + a.height / 2, { steps: 5 }); await boardPage.mouse.move(b.x + b.width / 2, b.y + 30, { steps: 20 }); await boardPage.mouse.up(); }
     await expect.poll(() => f.h.hub.card(id).due_date).toBe(day(6));
     expect(f.h.hub.card(id).start_date).toBe(day(4));
     await boardPage.locator(`[data-action="planning-edit"][data-card="${predecessorId}"]`).click();

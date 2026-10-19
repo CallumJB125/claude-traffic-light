@@ -48,9 +48,11 @@
 
 :focus-visible { outline: none; box-shadow: var(--focus); }
 
-/* Native pages follow the system appearance; status ink stays readable on paper. */
+/* Native pages follow the system appearance; status ink stays readable on paper.
+   The desktop widget (index.html, data-scheme="dark") floats over any wallpaper
+   on its own dark cards, so it keeps the dark palette. */
 @media (prefers-color-scheme: light) {
-  :root {
+  :root:not([data-scheme="dark"]) {
     color-scheme: light;
     --bg: #f4f5f7;
     --panel: #ffffff;

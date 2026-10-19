@@ -78,6 +78,9 @@ test('captured session tabs show useful context and save only a reviewed explici
       await pane(`document.querySelector('.drawer [data-action="tab"][data-tab="${tab}"]').click()`);
       await expect.poll(() => pane('document.querySelector(".drawer [role=tab][aria-selected=true]")?.dataset.tab')).toBe(tab);
     };
+    // A card opens on its Overview since 3a88b399; the report is on Activity.
+    await expect.poll(() => pane(`!!document.querySelector('.drawer [data-action="tab"][data-tab="activity"]')`), { timeout: 15000 }).toBe(true);
+    await choose('activity');
     await expect.poll(panelText).toContain('Reported session activity');
     const activity = await panelText();
     expect(activity).toContain(GOAL); expect(activity).toContain(PROGRESS); expect(activity).toContain('src/selected-session.js');

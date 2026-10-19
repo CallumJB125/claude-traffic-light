@@ -172,6 +172,13 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     return v;
   }
   const signedIn = (origin) => !!vault(origin).load();
+  // Waits for a restore that has not started or is in flight; a locked vault
+  // is not retried here (that needs the owner's explicit retry).
+  async function settledSignedIn(origin) {
+    const v = vault(origin);
+    if (v.state() === 'unread' || v.state() === 'restoring') await v.retry();
+    return !!v.load();
+  }
   const tokenFor = (origin) => vault(origin).load()?.token ?? null;
   const userOf = (origin) => vault(origin).load()?.user ?? null;
 
@@ -628,7 +635,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   // Dev only: the walk stands in for the system browser (main.js gates it on !app.isPackaged).
   let devBrowser = null;
   const flow = createAccountFlow({
-    store, clientFor, signedIn, userOf, normHub: norm, normLink,
+    store, clientFor, signedIn, settledSignedIn, userOf, normHub: norm, normLink,
     // The provider's sign-in page, in the system browser: Google refuses embedded views.
     openBrowser: (url) => (devBrowser ? devBrowser(url) : shell.openExternal(url)), // privacy-flow: team-hub-account
     oauthAllowOrigins: allowOrigins,
