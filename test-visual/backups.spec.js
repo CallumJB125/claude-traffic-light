@@ -9,7 +9,7 @@ const path = require('path');
 const { launchApp, windowByFile, openSettingsPane, snapToPixels } = require('./app');
 const Backups = require('../src/backups.js');
 
-const CFG = { roam: false, randomEvents: false, seasonal: false, showTasks: false, showAgents: false, hints: { teamSeen: true } };
+const CFG = { lowPower: 'off', roam: false, randomEvents: false, seasonal: false, showTasks: false, showAgents: false, hints: { teamSeen: true } };
 const SEEDED = ['2026-09-28T09-15-00.000Z', '2026-09-30T18-40-00.000Z', '2026-09-29T10-00-00.000Z'];
 
 let h;

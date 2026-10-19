@@ -14,7 +14,7 @@ async function launchPlannerApp(f, temp) {
   const home = path.join(temp, 'signals'), backups = path.join(temp, 'backups'), projects = path.join(temp, 'projects');
   for (const dir of [home, backups, projects, path.join(home, 'sessions')]) fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(home, '.help-shown'), '2000-01-01T00:00:00.000Z');
-  fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ roam: false, randomEvents: false, seasonal: false, hints: { teamSeen: true } }));
+  fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ lowPower: 'off', roam: false, randomEvents: false, seasonal: false, hints: { teamSeen: true } }));
   const u = f.users.amember;
   const app = await electron.launch({ args: [path.join(__dirname, 'planner-fixture-main.js'), '--demo', 'visual', '--buddy-mock-accounts', '--buddy', 'account'], env: { ...process.env,
     CLAUDE_TRAFFIC_LIGHT_HOME: home, CLAUDE_TRAFFIC_LIGHT_BACKUPS: backups, CLAUDE_TRAFFIC_LIGHT_PROJECTS: projects,

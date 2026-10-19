@@ -66,22 +66,33 @@ async function open(scheme) {
   await lights.goto(`${base}?embedded=1&view=mix&now=${NOW}`);
   await lights.emulateMedia({ colorScheme: scheme, reducedMotion: 'reduce' });
   await lights.waitForSelector('#usage-history .uv-card');
-  await lights.waitForTimeout(400);
+  // The cost guard cards above the history arrive from their own async report;
+  // shoot only once it has answered and the history has stopped moving.
+  await lights.evaluate(() => window.lightsApi.costGuard.report().catch(() => null));
+  let lastTop = null;
+  await expect.poll(async () => {
+    const top = await lights.locator('#usage-history').evaluate((el) => el.getBoundingClientRect().top);
+    const still = top === lastTop;
+    lastTop = top;
+    return still;
+  }, { intervals: [400] }).toBe(true);
   return lights;
 }
 
 // Only the dark scheme is shot; the light palette tokens.css gained in 9921f259 is not baselined here.
+// A native checkbox is tinted only while its window is key; the shared style pins it.
+const SHOT = { threshold: 0.05, stylePath: path.join(__dirname, 'no-hover-chrome.css') };
 for (const scheme of ['dark']) {
   test(`usage history renders its charts (${scheme})`, async () => {
     const lights = await open(scheme);
     const errs = await lights.evaluate(() => window.__errs || []);
     expect(errs).toEqual([]);
-    await expect(await snapToPixels(lights.locator('#usage-history .uv-head'))).toHaveScreenshot(`usage-head-${scheme}.png`, { threshold: 0.05 });
-    await expect(await snapToPixels(lights.locator('#usage-history .uv-tiles'))).toHaveScreenshot(`usage-tiles-${scheme}.png`, { threshold: 0.05 });
+    await expect(await snapToPixels(lights.locator('#usage-history .uv-head'))).toHaveScreenshot(`usage-head-${scheme}.png`, SHOT);
+    await expect(await snapToPixels(lights.locator('#usage-history .uv-tiles'))).toHaveScreenshot(`usage-tiles-${scheme}.png`, SHOT);
     const cards = lights.locator('#usage-history .uv-card');
     const titles = await cards.locator('h3').allTextContents();
     expect(titles).toEqual(['API-equivalent $ over time', 'Model share over time', 'Where the tokens go', 'Cache hit rate', 'Activity calendar', 'Busiest hours', 'Projects', 'Routine Opus turns']);
-    for (let i = 0; i < titles.length; i += 1) await expect(await snapToPixels(cards.nth(i))).toHaveScreenshot(`usage-${String(i + 1).padStart(2, '0')}-${titles[i].toLowerCase().replace(/[^a-z]+/g, '-')}-${scheme}.png`, { threshold: 0.05 });
+    for (let i = 0; i < titles.length; i += 1) await expect(await snapToPixels(cards.nth(i))).toHaveScreenshot(`usage-${String(i + 1).padStart(2, '0')}-${titles[i].toLowerCase().replace(/[^a-z]+/g, '-')}-${scheme}.png`, SHOT);
   });
 }
 

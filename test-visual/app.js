@@ -11,6 +11,8 @@ const path = require('path');
 const ROOT = path.join(__dirname, '..');
 
 const FIXED_CONFIG = {
+  // 'auto' holds motion on battery (c54dd6e8); a baseline must not depend on the power cable.
+  lowPower: 'off',
   roam: false,
   randomEvents: false,
   seasonal: false,
