@@ -19,6 +19,7 @@ const Inspect = require('./burst-inspect.js');
 const Snapshot = require('./burst-snapshot.js');
 const ContextBreakdown = require('./context-breakdown.js');
 const Tools = require('./optimiser-tools.js');
+const Setup = require('./burst-setup.js');
 
 const POLL_BASE_MS = 5000;
 const POLL_MAX_MS = 60000;
@@ -97,30 +98,72 @@ const ACTION_KINDS = Object.freeze({
   'console-restore-config': () => ['console-restore-config', {}],
 });
 
-function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usageAllowed = () => false, sessionsAllowed = () => false, accountAllowed = () => false, optimiserAllowed = () => false, aitoolsAllowed = () => false, stateFile = null, snapshotFile = null, transcriptFor = () => null, hubSend = null, runner = null, isMac, dialog, shell, scriptDir, home = os.homedir(), launch, client: injected, onView = () => {}, log = () => {} }) {
+// D1: every burst:* channel answers {ok:boolean, ...} and never throws into the renderer.
+// A handler's own object keeps its shape and gains `ok` (false when it carries `error`);
+// null/undefined and thrown errors become {ok:false, reason}.
+const REASONS = { timeout: 'Burst did not answer in time.', unreachable: 'Burst is not answering.', not_present: 'Burst is not answering.', pid_changed: 'Burst restarted; nothing was sent. Try again.', denied: 'Not allowed.' };
+function contract(r) {
+  if (r && typeof r === 'object' && !Array.isArray(r)) {
+    if (r.ok === true) return r;
+    if (r.ok === false) return typeof r.reason === 'string' || typeof r.error !== 'string' ? r : { ...r, reason: r.error };
+    return r.error ? { ...r, ok: false, reason: typeof r.reason === 'string' ? r.reason : String(r.error) } : { ...r, ok: true };
+  }
+  return { ok: false, reason: 'Not available.' };
+}
+function guarded(utilityHandle, log) {
+  return (channel, allowed, handler) => utilityHandle(channel, allowed, async (e, ...args) => {
+    try { return contract(await handler(e, ...args)); } catch (err) {
+      log('[burst] ipc failed', channel, err && (err.code || err.message));
+      return { ok: false, reason: (err && REASONS[err.code]) || 'Burst did not do that. Nothing was changed.' };
+    }
+  });
+}
+
+function register({ utilityHandle: rawHandle, settingsOnly, chipAllowed = () => false, usageAllowed = () => false, sessionsAllowed = () => false, accountAllowed = () => false, optimiserAllowed = () => false, aitoolsAllowed = () => false, stateFile = null, snapshotFile = null, transcriptFor = () => null, hubSend = null, runner = null, isMac, dialog, shell, scriptDir, home = os.homedir(), launch, client: injected, onView = () => {}, log = () => {} }) {
   const platform = isMac ? 'darwin' : 'other';
+  const utilityHandle = guarded(rawHandle, log);
   const client = isMac ? (injected || require('./burst-client.js').createBurstClient({ home })) : null;
   const backoff = createProbeBackoff({ base: POLL_BASE_MS, max: POLL_MAX_MS });
   let last = { kind: isMac ? 'checking' : 'unsupported' };
   let misses = 0;
+  let lastGood = null; // { at, state }: the last `present` detection, shown dimmed while the gateway is not answering
   let lastView = View.statusView(last, { platform });
   let inflight = null;
   let trayAt = -Infinity;
   let opener = null;
 
+  // A client that throws synchronously must fail the same way as one that rejects.
+  const detectOnce = () => { try { return Promise.resolve(client.detect()); } catch (e) { return Promise.reject(e); } };
+
   async function refresh(force = false) {
     if (!isMac) return lastView;
     if (!force && !backoff.due(Date.now())) return lastView;
-    inflight = inflight || client.detect().then((d) => {
+    inflight = inflight || detectOnce().then((d) => {
       misses = d.kind === 'unreachable' ? misses + 1 : 0;
+      if (d.kind === 'present') lastGood = { at: Date.now(), state: d.state };
       last = d.kind === 'unreachable' ? { ...d, misses } : d;
-      lastView = View.statusView(last, { platform });
+      lastView = viewOf(last);
       try { onView(lastView); } catch (e) { log('[burst] onView failed', e && e.message); }
       writeSnapshot().catch((e) => log('[burst] snapshot failed', e && (e.code || e.message)));
       backoff.probed({ ok: d.kind === 'present' || d.kind === 'not_installed', why: d.kind }, Date.now());
       return lastView;
     }).catch((e) => { log('[burst] detect failed', e && e.code); return lastView; }).finally(() => { inflight = null; });
     return inflight;
+  }
+
+  // The card's view: `lastGood` makes `gateway_stale`, `console` makes `console_down`. The console
+  // is read in the background (same 30 s cache as Health) and only for a Burst that has a console
+  // to repair (0.20+), so a 0.19 install never shows a console state it cannot act on.
+  function viewOf(d) {
+    const con = d.kind === 'present' && d.capabilities && d.capabilities.consoleRepair ? cached('console', () => client.consoleDetect()) : null;
+    const v = View.statusView({ ...d, lastGood: d.kind === 'unreachable' ? lastGood : null, console: con }, { platform });
+    // `console-restart` goes through the console itself, which is the part that is down: the one
+    // action that can land is the Terminal repair (burst-actions), which reinstalls both LaunchAgents.
+    if (v.kind === 'console_down') {
+      v.action = { kind: 'repair', label: 'Start console' };
+      v.actions = v.actions.filter((a) => a.kind !== 'console-restart').map((a) => (a.kind === 'repair' ? { ...a, label: 'Start console', primary: true } : a));
+    }
+    return v;
   }
 
   const modeOf = (mode) => (Actions.MODES.includes(mode) ? mode : (last.state && last.state.mode) || 'base-url');
@@ -177,8 +220,37 @@ function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usag
   });
   utilityHandle('burst:action', (e) => card(e) || optimiserAllowed(e), async (e, req) => (card(e) || (req && Object.prototype.hasOwnProperty.call(ACTION_KINDS, req.kind)) ? act(req && req.kind, req && req.mode, req && req.args) : { ok: false, error: 'Not available.' }));
   utilityHandle('burst:test', card, async () => {
-    if (!isMac || last.kind !== 'present' || !last.capabilities.testConnection) return { ok: false, detail: 'Not available.' };
-    try { return await client.testConnection(); } catch { return { ok: false, detail: 'Burst did not answer.' }; }
+    if (!isMac || last.kind !== 'present' || !last.capabilities.testConnection) return { ok: false, detail: 'Not available.', reason: 'Not available.' };
+    try { return await client.testConnection(); } catch { return { ok: false, detail: 'Burst did not answer.', reason: 'Burst did not answer.' }; }
+  });
+
+  // Guided setup (optimiser empty state): main keeps the marks, the renderer only says which step
+  // it started or wants to retry. Progress reads (/api/upgrade-status, consoleDetect, mod status)
+  // happen only while a step is running, so an idle page costs nothing beyond the status poll.
+  let setup = Setup.initial();
+  const setupProbe = (extra = {}) => ({ detect: last, console: extras.get('console') ? extras.get('console').value : null, upgrade: last.kind === 'present' ? last.upgrade : null, modStatus: extras.get('modStatus') ? extras.get('modStatus').value : null, ...extra });
+  const setupView = () => { setup = Setup.next(setup, setupProbe()); return setup.steps; };
+  utilityHandle('burst:setup-progress', (e) => optimiserAllowed(e) || card(e), async (_e, req) => {
+    if (!isMac) return { ok: false, reason: View.MAC_ONLY, steps: setupView() };
+    const r = req && typeof req === 'object' ? req : {};
+    const step = Setup.STEPS.includes(r.step) ? r.step : null;
+    if (step && r.start === true) setup = Setup.start(setup, step, Date.now());
+    if (step && r.retry === true) setup = Setup.reset(setup, step);
+    backoff.reset();
+    await refresh(true);
+    const extra = {};
+    if (Setup.running(Setup.next(setup, setupProbe()))) {
+      const attempt = async (fn) => { try { return await fn(); } catch { return null; } };
+      if (last.kind === 'present') {
+        const u = await attempt(() => client.request('GET', '/api/upgrade-status'));
+        extra.upgrade = u ? { canUpgrade: u.can_upgrade === true, upToDate: u.up_to_date === true, latestVersion: typeof u.latest_version === 'string' ? u.latest_version : '' } : null;
+        if (last.capabilities.consoleRepair) extra.console = await attempt(() => client.consoleDetect());
+        if (extra.console) extras.set('console', { at: Date.now(), value: extra.console });
+        if (last.capabilities.mods && client.modStatus) extra.modStatus = await attempt(() => fresh('modStatus', () => client.modStatus()));
+      }
+    }
+    setup = Setup.next(setup, setupProbe(extra));
+    return { ok: true, steps: setup.steps, running: Setup.running(setup), current: Setup.current(setup) };
   });
 
   // Pauseless compaction switch. Turning it on needs the renderer's inline confirm (`confirmed`),
@@ -227,7 +299,7 @@ function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usag
     if (client.codex) { try { codex = Codex.codexView(await client.codex()); } catch { codex = null; } }
     let history = null;
     if (client.history) { try { history = Requests.historyView(await fresh('history', () => client.history({ days: 14 }))); } catch { history = null; } }
-    try { return { view: Spend.throughBurstView(await client.usage({ range })), codex, history, nextPollMs: backoff.gap }; } catch { return { view: null, nextPollMs: backoff.gap }; }
+    try { return { view: Spend.throughBurstView(await client.usage({ range })), codex, history, nextPollMs: backoff.gap }; } catch { return { view: null, nextPollMs: backoff.gap, error: 'Burst did not answer.' }; }
   });
 
   // Sessions page: per-session compaction stats and the handover of observed Claude sessions.
@@ -335,7 +407,7 @@ function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usag
   // AI tools page, Codex row: whether Codex goes through Burst. Null whenever Burst is not present.
   utilityHandle('burst:codex-routing', aitoolsAllowed, async () => {
     if (!present()) return { view: null };
-    try { return { view: await client.codexRouting() }; } catch (err) { log('[burst] codex routing failed', err && err.code); return { view: null }; }
+    try { return { view: await client.codexRouting() }; } catch (err) { log('[burst] codex routing failed', err && err.code); return { view: null, error: 'Burst did not answer.' }; }
   });
 
   // Read-only views for the Usage optimiser and Sessions pages. Each name has its own senders.
@@ -373,7 +445,7 @@ function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usag
   });
 
   utilityHandle('burst:handover-share', sessionsAllowed, async (_e, repo, on) => {
-    if (typeof repo !== 'string' || !/^[0-9a-f]{16}$/.test(repo)) return { ok: false };
+    if (typeof repo !== 'string' || !/^[0-9a-f]{16}$/.test(repo)) return { ok: false, error: 'Bad repository id.' };
     if (on === true) shared = { ...shared, [repo]: true }; else { shared = { ...shared }; delete shared[repo]; }
     try { if (stateFile) fs.writeFileSync(stateFile, JSON.stringify({ share: shared }), { mode: 0o600 }); } catch (e) { log('[burst] could not save the share choice'); }
     return { ok: true };
@@ -430,6 +502,8 @@ function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usag
     status: () => lastView,
     // For the Usage optimiser page: the last detection (version+pid handshake result) and the trusted address.
     snapshot: () => ({ d: last, url: isMac && last.kind === 'present' ? client.adminUrl() : null }),
+    // Optimiser empty state: the guided setup steps from caches, no probe.
+    setupView,
     refresh,
     act,
     // Health fix: the support console's fixed loopback address, usable even when Burst is untrusted.
@@ -456,4 +530,4 @@ function register({ utilityHandle, settingsOnly, chipAllowed = () => false, usag
   };
 }
 
-module.exports = { register, scriptDirFor: (userData) => path.join(userData, 'burst-scripts') };
+module.exports = { register, contract, guarded, scriptDirFor: (userData) => path.join(userData, 'burst-scripts') };

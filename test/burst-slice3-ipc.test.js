@@ -81,7 +81,7 @@ test('opt-in per repo shares once per dated section, persists, and is revocable'
   t.api.enrichSession(row); await settle();
   t.api.enrichSession(row); await settle();
   assert.deepEqual(await t.handlers['burst:handover-share']({ sessions: false }, H.repoKey('/work/plex'), true), null);
-  assert.deepEqual(await t.handlers['burst:handover-share']({ sessions: true }, '../bad', true), { ok: false });
+  assert.deepEqual(await t.handlers['burst:handover-share']({ sessions: true }, '../bad', true), { ok: false, error: 'Bad repository id.', reason: 'Bad repository id.' });
   assert.deepEqual(await t.handlers['burst:handover-share']({ sessions: true }, H.repoKey('/work/plex'), true), { ok: true });
   assert.equal(JSON.parse(fs.readFileSync(path.join(t.dir, 's.json'), 'utf8')).share[H.repoKey('/work/plex')], true);
   await t.handlers['burst:handover-share']({ sessions: true }, H.repoKey('/work/other'), true);

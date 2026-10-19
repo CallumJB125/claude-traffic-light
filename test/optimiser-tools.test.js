@@ -172,7 +172,7 @@ test('page: a Burst action from a tool card goes through main\'s consent flow by
 test('burst:tools answers only the optimiser page, with status facts and the band, and nothing on other platforms', async () => {
   const off = {};
   Ipc.register({ utilityHandle: (c, allowed, f) => { off[c] = (e, ...a) => (allowed(e) ? f(e, ...a) : null); }, settingsOnly: () => false, optimiserAllowed: (e) => e.from === 'optimiser', isMac: false, dialog: {}, shell: {}, scriptDir: '/x' });
-  assert.deepEqual(await off['burst:tools']({ from: 'optimiser' }), { kind: 'unsupported' });
+  assert.deepEqual(await off['burst:tools']({ from: 'optimiser' }), { ok: true, kind: 'unsupported' });
   assert.equal(await off['burst:tools']({ from: 'usage' }), null);
 
   const h = pauselessRoutes();

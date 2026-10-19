@@ -1308,7 +1308,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     devPage: (js) => (content === accountView && accountView ? accountView.webContents.executeJavaScript(js) : Promise.resolve(null)),
     // A local page's webContents, for main's sender checks (null if not open).
     // main.js hands over the Burst wiring (a thunk, so creation order does not matter).
-    attachBurst: (get) => { burstApi = { snapshot: () => get().snapshot(), refresh: (f) => get().refresh(f), act: (k) => get().act(k) }; },
+    attachBurst: (get) => { burstApi = { snapshot: () => get().snapshot(), refresh: (f) => get().refresh(f), act: (k) => get().act(k), setupView: () => get().setupView() }; },
     pageWebContents: (id) => localViews.get(id)?.webContents ?? null,
     accountWebContents: () => accountView?.webContents ?? null,
     // Fixed page ids from main only; queued callbacks never jump to a replacement renderer.

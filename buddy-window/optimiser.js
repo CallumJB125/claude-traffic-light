@@ -155,6 +155,11 @@ function createOptimiser({
   }
 
   function stop() { if (timer !== null) { clearTimer(timer); timer = null; } }
+  function setupSteps() {
+    const b = burst();
+    if (!b || typeof b.setupView !== 'function') return null;
+    try { const s = b.setupView(); return Array.isArray(s) ? s : null; } catch { return null; }
+  }
 
   return {
     /** The page was selected: re-check trust now, then keep watching while it is shown. */
@@ -208,7 +213,8 @@ function createOptimiser({
       return b ? b.act('open-browser') : { ok: false };
     },
     tab: () => tab,
-    payload: () => (last ? { ...last, canBrowser: last.mode === 'ready', tab } : { mode: 'loading', headline: 'Usage optimiser', detail: '', chip: null, actions: [], docs: false }),
+    // The guided setup steps ride along with every empty state that is Burst's to fix.
+    payload: () => (last ? { ...last, canBrowser: last.mode === 'ready', tab, setup: last.mode === 'empty' && last.reason !== 'unsupported' ? setupSteps() : null } : { mode: 'loading', headline: 'Usage optimiser', detail: '', chip: null, actions: [], docs: false, setup: null }),
   };
 }
 
