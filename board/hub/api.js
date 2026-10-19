@@ -26,6 +26,11 @@ import { requireStorage } from './storage-watch.js';
 import { observationContext, validObservation, sentryStatus } from './integrations/sentry/observation.js';
 import { cardSeed } from './activity-handoff.js';
 
+// Team depth (step 0): hub inbox kinds and bounds, shared by lanes A, B and D.
+export const INBOX_KINDS = new Set(['mention', 'reply', 'moment', 'handoff_request', 'handoff_answer', 'input_answered']);
+export const INBOX_MAX = 500;
+const INBOX_REF_MAX = 2048;
+
 const ACTION_EVENTS = {
   dispatch: 'dispatch', cancel: 'cancel', stop: 'stop', retry: 'retry', take_over: 'take_over', hand_over: 'hand_over',
   take_over_with_claude: 'redispatch', take_over_myself: 'take_myself', request_changes: 'request_changes',
@@ -997,6 +1002,37 @@ export class Api {
       this.hub.feed(cardId, 'salvage', { kind: 'local_session', written_by: 'system', text: `Local session handover (written by Plexiform from hook events, not by the AI)${date ? `, ${date}` : ''}:\n${text}`, ref: null }, { actor: member.id });
       return { ok: true };
     }, { member, cred });
+  }
+
+  // ── inbox (team depth, step 0) ────────────────────────────────────────────
+  // One "look here" row for a member (plan .omc/plans/team-depth-2026-10-19.md
+  // §B). Called from inside other routes' transactions (comments, hand-offs,
+  // answered inputs), so it never throws: a bad kind, an unknown member or a
+  // storage error is logged and dropped, and the caller's write goes through.
+  // Rows per member are capped at INBOX_MAX: the oldest read rows go first,
+  // then, if still over, the oldest unread. Returns the new row's id or null.
+  // The live push to the member's own sockets is hub.broadcastMember(member_id,
+  // 'inbox.item', { item }); lane B owns the read/list routes.
+  notify(memberId, kind, ref = {}) {
+    try {
+      if (!INBOX_KINDS.has(kind)) throw new Error(`unknown inbox kind ${kind}`);
+      const member = this.db.get('SELECT id, org_id FROM members WHERE id = ? AND removed_at IS NULL', memberId);
+      if (!member) return null;
+      const refJson = JSON.stringify(ref && typeof ref === 'object' && !Array.isArray(ref) ? ref : {});
+      if (Buffer.byteLength(refJson) > INBOX_REF_MAX) throw new Error('inbox ref over size');
+      const id = randomUUID();
+      this.db.insert('inbox', { id, org_id: member.org_id, member_id: member.id, kind, ref_json: refJson, created_at: this.hub.iso(), read_at: null });
+      const over = this.db.get('SELECT COUNT(*) AS n FROM inbox WHERE member_id = ?', member.id).n - INBOX_MAX;
+      if (over > 0) {
+        this.db.run('DELETE FROM inbox WHERE id IN (SELECT id FROM inbox WHERE member_id = ? AND read_at IS NOT NULL ORDER BY created_at, id LIMIT ?)', member.id, over);
+        const still = this.db.get('SELECT COUNT(*) AS n FROM inbox WHERE member_id = ?', member.id).n - INBOX_MAX;
+        if (still > 0) this.db.run('DELETE FROM inbox WHERE id IN (SELECT id FROM inbox WHERE member_id = ? ORDER BY created_at, id LIMIT ?)', member.id, still);
+      }
+      return id;
+    } catch (e) {
+      this.hub.log?.warn?.('inbox notify dropped', { member_id: memberId, kind, error: e.message });
+      return null;
+    }
   }
 
   // ── comments ──────────────────────────────────────────────────────────────

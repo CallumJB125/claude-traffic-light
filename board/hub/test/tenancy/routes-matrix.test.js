@@ -122,6 +122,9 @@ const MATRIX = {
   'DELETE /api/account': { kind: 'self' },
   'GET /api/account/devices': { kind: 'self' },
   'DELETE /api/account/devices/:id': { kind: 'cross', path: (fx) => `/api/account/devices/${fx.users.ub.device_id}` },
+  // team-depth: implemented by lane B (hub inbox; own rows only, auth 'user')
+  'GET /api/account/inbox': { kind: 'self' },
+  'POST /api/account/inbox/read': { kind: 'self' },
   'PATCH /api/cards/:card_id/planning': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/planning`, body: (fx) => ({ request_id: randomUUID(), version: fx.h.hub.card(fx.B.card).version, due_date: '2026-10-02' }) },
   'GET /api/me': { kind: 'team' },
   'POST /api/teams': { kind: 'create' },
@@ -272,6 +275,9 @@ const MATRIX = {
   'DELETE /api/boards/:board_id/views/:view_id': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/views/v1`, body: {}, alt: (fx) => [`/api/boards/${fx.A.board}/views/v1`] },
   'POST /api/boards/:board_id/moments': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/moments`, body: { moment: { label: 'pwned' } } },
   'DELETE /api/boards/:board_id/moments/:moment_id': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/moments/m1`, body: {}, alt: (fx) => [`/api/boards/${fx.A.board}/moments/m1`] },
+  // team-depth: implemented by lane A (comments on moments, migration 076)
+  'GET /api/boards/:board_id/moments/:moment_id/comments': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/moments/m1/comments`, alt: (fx) => [`/api/boards/${fx.A.board}/moments/m1/comments`] },
+  'POST /api/boards/:board_id/moments/:moment_id/comments': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/moments/m1/comments`, body: { body: 'pwned' }, alt: (fx) => [`/api/boards/${fx.A.board}/moments/m1/comments`] },
   'GET /api/boards/:board_id/labels': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/labels` },
   'POST /api/boards/:board_id/labels': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/labels`, body: { name: 'pwned', color: 'red' } },
   'PATCH /api/boards/:board_id/labels/:name': {
@@ -291,6 +297,11 @@ const MATRIX = {
   'POST /api/cards/:card_id/actions/:action': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/actions/stop`, body: {} },
   'POST /api/cards/:card_id/handover/salvage': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/handover/salvage`, body: { text: 'pwned' } },
   'POST /api/cards/:card_id/comments': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/comments`, body: { body: 'pwned' } },
+  // team-depth: implemented by lane D (person-to-person hand-off); B's hand-off id also tried under A's own card
+  'POST /api/cards/:card_id/handoffs': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/handoffs`, body: (fx) => ({ to_member_id: fx.B.s, note: 'pwned' }) },
+  'POST /api/cards/:card_id/handoffs/:handoff_id/accept': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/handoffs/${randomUUID()}/accept`, alt: (fx) => [`/api/cards/${fx.A.card}/handoffs/${randomUUID()}/accept`] },
+  'POST /api/cards/:card_id/handoffs/:handoff_id/decline': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/handoffs/${randomUUID()}/decline`, alt: (fx) => [`/api/cards/${fx.A.card}/handoffs/${randomUUID()}/decline`] },
+  'POST /api/cards/:card_id/handoffs/:handoff_id/cancel': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/handoffs/${randomUUID()}/cancel`, alt: (fx) => [`/api/cards/${fx.A.card}/handoffs/${randomUUID()}/cancel`] },
   'GET /api/cards/:card_id/messages': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/messages` },
   'GET /api/cards/:card_id/ownership': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/ownership` },
   'GET /api/boards/:board_id/work-context': {kind:'cross',path:fx=>`/api/boards/${fx.B.board}/work-context`},

@@ -1099,6 +1099,22 @@ export class Hub extends EventEmitter {
     }
   }
 
+  // One member's own sockets only (team depth, step 0): a socket belongs to the
+  // member it subscribed as, or, in accounts mode, to a user whose live
+  // members include that id (candidates are that same person's memberships).
+  // Never widened to the org: inbox items and hand-off answers are private.
+  // Sends {type:key, ...payload}; returns how many sockets received it.
+  broadcastMember(memberId, key, payload = {}) {
+    let n = 0;
+    for (const b of this.browsers) {
+      if (b.ws?.readyState !== 1) continue;
+      if (b.member?.id !== memberId && !b.liveCandidates().some((m) => m.id === memberId)) continue;
+      b.send({ type: key, ...payload });
+      n++;
+    }
+    return n;
+  }
+
   broadcastRemove(boardId, cardId) {
     for (const b of this.browsers) if (b.boardId === boardId) b.send({ type: 'card.remove', board_id: boardId, card_id: cardId });
   }

@@ -192,7 +192,7 @@ test('073 keeps rows, seq, via_json and the indexes, and allows the done and fai
   const cols = Object.keys(row);
   db.prepare(`INSERT INTO msg_messages (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`).run(...Object.values(row));
   assert.throws(() => db.prepare("UPDATE msg_messages SET handoff_state = 'done'").run(), /CHECK/);
-  assert.deepEqual(migrate(db, { migrations: all }), [73, 75]);
+  assert.deepEqual(migrate(db, { migrations: all }), [73, 75, 76]);
   assert.deepEqual({ ...db.prepare('SELECT seq, body, handoff_state, via_json FROM msg_messages').get() }, { seq: 1, body: 'kept', handoff_state: 'accepted', via_json: '{"surface":"local"}' });
   db.prepare("UPDATE msg_messages SET handoff_state = 'done'").run();
   db.prepare("UPDATE msg_messages SET handoff_state = 'failed'").run();
