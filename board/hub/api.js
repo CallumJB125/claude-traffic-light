@@ -1144,6 +1144,8 @@ export class Api {
       });
       return { handoff: this.handoffView(this.db.get('SELECT * FROM handoffs WHERE id = ?', h.id)), card: cardView(this.hub, this.hub.card(cardId), member.id) };
     }, { member, cred });
+  }
+
   // Lane B: the member's own inbox as the routes return it (CONTRACT: GET /api/account/inbox).
   inboxItem(id) {
     const r = id ? this.db.get('SELECT * FROM inbox WHERE id = ?', id) : null;
