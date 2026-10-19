@@ -1,3 +1,29 @@
+Plexiform widget update — 19 October 2026 (1.0.2-beta.92)
+
+For macOS (Apple silicon and Intel) and Linux (x64).
+
+What changed
+
+- Session cards on the widget. Hovering a session on the widget's strip opens a card with the project, what it is doing and for how long, how long it has been waiting on you, this session's spend when known, and a teammate's initials for shared sessions. The card's buttons open the session, answer its waiting input, or pin it.
+- A smarter strip. A pinned session stays first, idle sessions fold into one "+N idle" chip, and teammates' sessions sit on their own row.
+- What just happened, at a glance. A small lane beside Claude shows the last three events (needs you, finished, stuck, teammate collision, CI failed) and fades each one after a few seconds. Click one to jump to it.
+- Two rings round Claude: how long the current turn has run against your usual turn, and today's spend against your budget. They hide when there is nothing to show and respect reduced motion and low power.
+- Widget settings: snap to any screen edge, not just corners; Normal, Compact or Dot size (Dot is the lamp alone); a global shortcut to summon or hide the widget; an accent colour per project; and "Quiet for 30 minutes" from the widget menu, shown by a small moon.
+- More character content: costumes witch, viking, tricorn, beret, antlers, astronaut and heartband; pets penguin, ghost, chick and owl; effects fireworks, bats, lightning, clouds, aurora and embers; poses dance, shrug and yawn. All appear in the Lights rule editor.
+- Seasonal pack: around New Year, Valentine's Day, spring, Halloween and winter the character picks up a matching costume, pet and effect, but only on channels no rule sets. Turn it off with `"seasonalPack": false` in config.json (the older Seasonal looks setting still works).
+- Sprite packs: put a folder with `pack.json` and PNG/SVG frames in `~/.plexiform/sprites/<pack>/` and set `"spritePack": "<pack>"` in config.json to show your own frames instead of the drawn character. Packs are checked strictly (plain file names, no links, 512 KB a frame, 64 frames a state, 8 MB a pack; SVGs with scripts or external references are refused) and never run; any problem falls back to the drawn character.
+- Keep-awake on the Burst card now says "Saved, not applied yet" while Burst's machine-wide half waits for the password step in Terminal, instead of "On".
+
+What has been verified
+
+Desktop, remote and site test suites pass on this build (desktop 5,430 tests, 0 failures). The visual regression suite was run on this build and on beta.91's source: the only difference is the character baselines, which grew to include the new costumes and poses. The suite's other failing screenshots fail identically on beta.91's source and are tracked separately.
+
+Current limits
+
+- Mac builds remain ad-hoc signed and are not Apple-notarized. A changed build may require fresh authorization for Plexiform's own permissions.
+- Sprite packs and project colours are set per Mac; they do not sync.
+- The limits listed for beta.91 below still apply.
+
 Plexiform Claude Burst preview — 19 October 2026
 
 For macOS (Apple silicon and Intel) and Linux (x64). Claude Burst itself is macOS only.
